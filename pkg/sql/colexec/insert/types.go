@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var _ vm.Operator = new(Insert)
@@ -115,11 +117,17 @@ type InsertCtx struct {
 	ExternalConfig externalwrite.WriterConfig
 }
 
-func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
+func (insert *Insert) closeControlledS3() {
 	if insert.ctr.controlled != nil {
-		_ = insert.ctr.controlled.close()
+		if err := insert.ctr.controlled.close(); err != nil {
+			logutil.Error("controlled INSERT teardown failed", zap.Error(err))
+		}
 		insert.ctr.controlled = nil
 	}
+}
+
+func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	insert.closeControlledS3()
 	//@todo need add Reset method for s3Writer
 	if insert.ctr.s3Writer != nil {
 		insert.ctr.s3Writer.Close()
@@ -149,10 +157,7 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if insert.ctr.controlled != nil {
-		_ = insert.ctr.controlled.close()
-		insert.ctr.controlled = nil
-	}
+	insert.closeControlledS3()
 	if insert.ctr.s3Writer != nil {
 		insert.ctr.s3Writer.Close()
 		insert.ctr.s3Writer = nil

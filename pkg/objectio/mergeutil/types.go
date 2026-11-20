@@ -16,6 +16,7 @@ package mergeutil
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -43,6 +44,7 @@ func MergeSortBatches(
 	if len(byteLimits) > 0 && byteLimits[0] > 0 {
 		byteLimit = byteLimits[0]
 	}
+	bounded := byteLimit != math.MaxInt64
 	var merge mergeInterface
 	nulls := make([]*nulls.Nulls, len(batches))
 	for i, b := range batches {
@@ -141,9 +143,11 @@ func MergeSortBatches(
 	}
 	// Bitmap-bearing sources retain the exact null/grouping growth forecast.
 	var hasBitmaps bool
-	for _, b := range batches {
-		for _, vec := range b.Vecs {
-			hasBitmaps = hasBitmaps || !vec.GetNulls().EmptyByFlag() || !vec.GetGrouping().EmptyByFlag()
+	if bounded {
+		for _, b := range batches {
+			for _, vec := range b.Vecs {
+				hasBitmaps = hasBitmaps || !vec.GetNulls().EmptyByFlag() || !vec.GetGrouping().EmptyByFlag()
+			}
 		}
 	}
 	allocated, dataRows := 0, 0
@@ -175,12 +179,12 @@ func MergeSortBatches(
 			mayGrow = mayGrow || area > cap(backing)-len(backing)
 		}
 		var growth int64
-		if mayGrow || hasBitmaps {
+		if bounded && (mayGrow || hasBitmaps) {
 			for i, v := range buffer.Vecs {
 				growth += v.AppendWindowAllocation(batches[batchIndex].Vecs[i], rowIndex, rowIndex+1)
 			}
 		}
-		if lens > 0 && int64(allocated)+growth > byteLimit {
+		if bounded && lens > 0 && int64(allocated)+growth > byteLimit {
 			buffer.SetRowCount(lens)
 			var err error
 			buffer, err = sinker(buffer)
@@ -191,7 +195,7 @@ func MergeSortBatches(
 			refreshCapacity()
 			mayGrow = true
 		}
-		if lens == 0 && int64(allocated) > byteLimit {
+		if bounded && lens == 0 && int64(allocated) > byteLimit {
 			buffer.FreeColumns(mp)
 			mayGrow = true
 		}

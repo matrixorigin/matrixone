@@ -32,6 +32,7 @@ type memorySample struct {
 	limit          int64
 	current        int64
 	inactiveFile   int64
+	cgroupHeadroom *int64
 	rssErr         error
 	cgroupObserved bool
 	cgroupErr      error
@@ -57,7 +58,7 @@ func readProcessMemory() memorySample {
 	}
 	s.rssErr = err
 	s.err = err
-	s.limit, s.current, s.inactiveFile, err = readCgroupMemory()
+	err = readCgroupMemory(&s)
 	s.cgroupObserved = err == nil
 	s.cgroupErr = err
 	s.err = errors.Join(s.err, err)

@@ -16,6 +16,7 @@ package mergeutil
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -396,7 +397,7 @@ func TestMergeSortByteBoundAcrossBufferReuse(t *testing.T) {
 					return buf, nil
 				}
 				var err error
-				for _, limit = range []int64{4096, 256, 4096} {
+				for _, limit = range []int64{4096, 256, math.MaxInt64, 4096} {
 					got = nil
 					out, err = MergeSortBatches(inputs, 0, out, sink, mp, nil, limit)
 					require.NoError(t, err)

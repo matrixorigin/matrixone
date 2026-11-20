@@ -416,7 +416,7 @@ func (m *memThrottler) WorkingSetHeadroom() WorkingSetHeadroomSnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := WorkingSetHeadroomSnapshot{Limit: int64(m.actualTotalMemory.Load())}
-	s.Available = max(0, s.Limit-m.physicalUsed()-c.dataReserved.Load()-c.inputPromise.Load()-c.workspacePromise.Load())
+	s.Available = max(0, m.physicalHeadroom()-c.dataReserved.Load()-c.inputPromise.Load()-c.workspacePromise.Load())
 	if m.sampleInvalid.Load() {
 		s.Available = 0
 	}
@@ -623,7 +623,7 @@ func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []
 					continue
 				}
 				if retryDOP {
-					available := max(0, int64(m.actualTotalMemory.Load())-m.physicalUsed()-c.inputPromise.Load()-c.workspacePromise.Load()-max(c.dataReserved.Load(), m.reserved.Load()))
+					available := cnFlushS3PhysicalAvailable(m, m.reserved.Load())
 					if m.sampleInvalid.Load() {
 						available = 0
 					}
@@ -652,16 +652,26 @@ func (m *memThrottler) physicalUsed() int64 {
 	return max(m.rss.Load(), max(0, m.cgroupUsage.Load()-m.cgroupInactiveFile.Load()))
 }
 
+func (m *memThrottler) physicalHeadroom() int64 {
+	remaining := int64(math.MaxInt64)
+	if total := int64(m.actualTotalMemory.Load()); total > 0 && total < math.MaxInt64 {
+		remaining = max(0, total-m.physicalUsed())
+	}
+	if bound := m.cgroupHeadroom.Load(); bound != nil {
+		remaining = min(remaining, *bound)
+	}
+	return remaining
+}
+
 func (m *memThrottler) physicalFits(ask int64) bool {
 	if m.sampleInvalid.Load() {
 		return false
 	}
-	total := int64(m.actualTotalMemory.Load())
-	if total <= 0 || total == math.MaxInt64 {
+	remaining := m.physicalHeadroom()
+	if remaining == math.MaxInt64 {
 		return true
 	}
 	c := m.memoryCoordinator()
-	remaining := total - m.physicalUsed()
 	for _, value := range []int64{c.inputPromise.Load(), c.workspacePromise.Load(), max(c.dataReserved.Load(), m.reserved.Load()), ask} {
 		if value < 0 || value > remaining {
 			return false

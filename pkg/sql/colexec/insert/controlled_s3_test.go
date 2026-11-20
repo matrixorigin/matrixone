@@ -17,6 +17,7 @@ package insert
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -149,6 +150,139 @@ func (op *observingInsert) Call(proc *process.Process) (vm.CallResult, error) {
 		op.onOutput(result.Batch)
 	}
 	return result, err
+}
+
+type controlledInsertFailingInput struct {
+	*colexec.MockOperator
+	end func() error
+}
+
+func (op *controlledInsertFailingInput) Call(proc *process.Process) (vm.CallResult, error) {
+	result, err := op.MockOperator.Call(proc)
+	if err == nil && result.Batch == nil {
+		return result, op.end()
+	}
+	return result, err
+}
+
+func controlledInsertObjectNames(t *testing.T, fs fileservice.FileService) []string {
+	t.Helper()
+	names := make([]string, 0, 3)
+	for entry, err := range fs.List(context.Background(), "") {
+		require.NoError(t, err)
+		names = append(names, entry.Name)
+	}
+	return names
+}
+
+func TestControlledInsertBuildFailureDeletesCompletedObject(t *testing.T) {
+	proc, op, _ := controlledInsertFixture(t, &controlledTestThrottler{t: t})
+	s := op.ctr.controlled
+	fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	s.fs = fs
+	readErr := errors.New("upstream read failed")
+	op.AppendChild(&controlledInsertFailingInput{
+		MockOperator: controlledInput(t, proc, 1, 1),
+		end: func() error {
+			// Join any borrowed upload, then let Flush take ownership while
+			// Insert is still building and no result has reached its consumer.
+			require.NoError(t, s.flush(proc, op.OpAnalyzer))
+			require.Len(t, controlledInsertObjectNames(t, fs), 1)
+			return readErr
+		},
+	})
+	_, err = op.Call(proc)
+	require.ErrorIs(t, err, readErr)
+	require.Empty(t, controlledInsertObjectNames(t, fs))
+}
+
+type controlledInsertDeleteFailureFS struct {
+	fileservice.FileService
+	failedName string
+	err        error
+}
+
+func (fs *controlledInsertDeleteFailureFS) Delete(ctx context.Context, names ...string) error {
+	for _, name := range names {
+		if name == fs.failedName {
+			return fs.err
+		}
+	}
+	return fs.FileService.Delete(ctx, names...)
+}
+
+func TestControlledInsertPartialEvalDeletesUnreadObjects(t *testing.T) {
+	for _, mode := range []string{"memory", "spool", "delete failure"} {
+		t.Run(mode, func(t *testing.T) {
+			proc, op, _ := controlledInsertFixture(t, &controlledTestThrottler{t: t})
+			s := op.ctr.controlled
+			fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			s.fs = fs
+			op.AppendChild(controlledInput(t, proc, 3, 1))
+			result, err := op.Call(proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			firstStats := objectio.ObjectStats(result.Batch.Vecs[1].GetBytesAt(0))
+			first := firstStats.ObjectName().String()
+			names := controlledInsertObjectNames(t, fs)
+			require.Len(t, names, 3)
+			if mode != "memory" {
+				require.NoError(t, s.spoolStats(proc.Ctx))
+			}
+			wantRemaining := []string{first}
+			var deleteErr error
+			if mode == "delete failure" {
+				deleteErr = errors.New("object deletion denied")
+				var unread objectio.ObjectStats
+				_, err := s.statsSpool.ReadAt(unread[:], 0)
+				require.NoError(t, err)
+				failedName := unread.ObjectName().String()
+				s.fs = &controlledInsertDeleteFailureFS{FileService: fs, failedName: failedName, err: deleteErr}
+				wantRemaining = append(wantRemaining, failedName)
+			}
+			ctx, cancel := context.WithCancel(proc.Ctx)
+			proc.Ctx = ctx
+			cancel()
+			_, err = op.Call(proc)
+			require.ErrorIs(t, err, context.Canceled)
+			if deleteErr != nil {
+				require.ErrorIs(t, err, deleteErr)
+			}
+			require.ElementsMatch(t, wantRemaining, controlledInsertObjectNames(t, fs))
+			_, err = fs.StatFile(context.Background(), first)
+			require.NoError(t, err, "the downstream consumer owns the emitted object")
+		})
+	}
+}
+
+func TestControlledInsertSpoolQuotaFailureDeletesCollectedAndUnstoredObjects(t *testing.T) {
+	proc, op, _ := controlledInsertFixture(t, &controlledTestThrottler{t: t})
+	s := op.ctr.controlled
+	fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	s.fs = fs
+	proc.Base.Lim.SpillSize = int64(objectio.ObjectStatsLen)
+	require.NoError(t, s.spoolStats(proc.Ctx))
+	stats := make([]objectio.ObjectStats, 3)
+	for i := range stats {
+		id := objectio.NewObjectid()
+		stats[i] = *objectio.NewObjectStatsWithObjectID(&id, false, true, true)
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats[i], 1))
+		require.NoError(t, fs.Write(proc.Ctx, fileservice.IOVector{
+			FilePath: stats[i].ObjectName().String(),
+			Entries:  []fileservice.IOEntry{{Size: 1, Data: []byte{1}}},
+		}))
+	}
+	require.ErrorIs(t, s.collectStats(proc.Ctx, stats), process.ErrHashBuildBudgetAdmission)
+	require.EqualValues(t, 1, s.statsCount, "the first upload has already moved to the spool")
+	require.NoError(t, s.close())
+	require.Empty(t, controlledInsertObjectNames(t, fs))
+	budget, err := proc.GetHashBuildBudget()
+	require.NoError(t, err)
+	require.Zero(t, budget.SpillDiskUsed())
+	require.Zero(t, budget.SpillFDUsed())
 }
 
 func TestControlledInsertZeroDataCreditsStreamsCompleteObjectFrames(t *testing.T) {

@@ -30,49 +30,50 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-func readCgroupMemory() (limit, current, inactive int64, err error) {
+func readCgroupMemory(sample *memorySample) error {
 	mode := cgroups.Mode()
 	if mode == cgroups.Unavailable {
 		if _, statErr := os.Stat("/sys/fs/cgroup"); errors.Is(statErr, os.ErrNotExist) {
-			return 0, 0, 0, errNoMemoryController
+			return errNoMemoryController
 		}
-		return 0, 0, 0, moerr.NewInternalErrorNoCtx("cannot determine cgroup mount state")
+		return moerr.NewInternalErrorNoCtx("cannot determine cgroup mount state")
 	}
 	if mode == cgroups.Unified {
 		_, group, e := cgroups.ParseCgroupFileUnified("/proc/self/cgroup")
 		if e != nil {
-			return 0, 0, 0, e
+			return e
 		}
 		if e = cgroup2.VerifyGroupPath(group); e != nil {
-			return 0, 0, 0, e
+			return e
 		}
 		mount, e := readMemoryCgroupMount("/sys/fs/cgroup", "cgroup2", "")
 		if e != nil {
-			return 0, 0, 0, e
+			return e
 		}
 		path, e := resolveMemoryCgroupPath(group, mount)
 		if e != nil {
-			return 0, 0, 0, e
+			return e
 		}
-		return readUnifiedMemory(path)
+		return readUnifiedMemoryHierarchy(sample, path, mount.mountpoint)
 	}
 	groups, e := cgroup1.ParseCgroupFile("/proc/self/cgroup")
 	if e != nil {
-		return 0, 0, 0, e
+		return e
 	}
 	subsystems, e := cgroup1.SingleSubsystem(cgroup1.Default, cgroup1.Memory)()
 	if e != nil {
-		return 0, 0, 0, legacyMemoryError(e)
+		return legacyMemoryError(e)
 	}
 	mountpoint, e := legacyMemoryControllerPath(subsystems)
 	if e != nil {
-		return 0, 0, 0, e
+		return e
 	}
 	mount, e := readMemoryCgroupMount(mountpoint, "cgroup", "memory")
 	if e != nil {
-		return 0, 0, 0, e
+		return e
 	}
-	return readLegacyMemory(groups[string(cgroup1.Memory)], mount, cgroup1.PidPath(os.Getpid()), func() ([]cgroup1.Subsystem, error) { return subsystems, nil })
+	sample.limit, sample.current, sample.inactiveFile, e = readLegacyMemory(groups[string(cgroup1.Memory)], mount, cgroup1.PidPath(os.Getpid()), func() ([]cgroup1.Subsystem, error) { return subsystems, nil })
+	return e
 }
 
 // readLegacyMemory retains the existing controller and Stat implementation.
@@ -149,28 +150,59 @@ func legacyMemoryError(err error) error {
 	return err
 }
 
+// path has already been resolved inside mountpoint. Ancestors above the visible
+// mount can still constrain the process, but cannot be sampled here.
+func readUnifiedMemoryHierarchy(sample *memorySample, path, mountpoint string) error {
+	limit, headroom := int64(math.MaxInt64), int64(math.MaxInt64)
+	var observed bool
+	for dir := path; ; dir = filepath.Dir(dir) {
+		maxBytes, current, inactive, err := readUnifiedMemory(dir)
+		if err == nil {
+			observed = true
+			if dir == path {
+				sample.current, sample.inactiveFile = current, inactive
+			}
+			if maxBytes < math.MaxInt64 {
+				limit = min(limit, maxBytes)
+				headroom = min(headroom, max(0, maxBytes-max(0, current-inactive)))
+			}
+		} else if !errors.Is(err, errNoMemoryController) {
+			return err
+		}
+		if dir == mountpoint {
+			break
+		}
+	}
+	if !observed {
+		return errNoMemoryController
+	}
+	sample.limit = limit
+	if headroom != math.MaxInt64 {
+		sample.cgroupHeadroom = &headroom
+	}
+	return nil
+}
+
 // cgroup2.Manager.Stat masks missing memory.stat and scalar read failures as
 // zero. Read the three required accounting files explicitly so an incomplete
 // sample cannot release container pressure or erase a previously known limit.
 func readUnifiedMemory(path string) (limit, current, inactive int64, err error) {
 	names := []string{"memory.max", "memory.current", "memory.stat"}
-	data := make([][]byte, len(names))
-	missing := 0
+	var data [3][]byte
+	var readErrors [3]error
 	for i, name := range names {
-		var e error
-		data[i], e = os.ReadFile(filepath.Join(path, name))
-		if errors.Is(e, os.ErrNotExist) {
-			missing++
-		}
-		err = errors.Join(err, e)
+		data[i], readErrors[i] = os.ReadFile(filepath.Join(path, name))
 	}
-	if missing == len(names) {
+	// The global root can have memory.stat without controller limit or usage
+	// files. A missing whole controller does not end the ancestor walk.
+	if errors.Is(readErrors[0], os.ErrNotExist) && errors.Is(readErrors[1], os.ErrNotExist) &&
+		(readErrors[2] == nil || errors.Is(readErrors[2], os.ErrNotExist)) {
 		info, e := os.Stat(path)
 		if e == nil && info.IsDir() {
 			return 0, 0, 0, errNoMemoryController
 		}
 	}
-	if err != nil {
+	if err = errors.Join(readErrors[:]...); err != nil {
 		return 0, 0, 0, err
 	}
 	value := strings.TrimSpace(string(data[0]))

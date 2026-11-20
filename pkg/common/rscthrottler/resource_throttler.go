@@ -86,6 +86,7 @@ type memThrottler struct {
 	coordinator        *memoryCoordinator
 	cgroupUsage        atomic.Int64
 	cgroupInactiveFile atomic.Int64
+	cgroupHeadroom     atomic.Pointer[int64]
 	sampleInvalid      atomic.Bool
 	refreshMu          sync.Mutex
 	limit              atomic.Int64
@@ -216,6 +217,7 @@ func (m *memThrottler) refresh(force bool) {
 	if sample.cgroupErr == nil || noController {
 		m.cgroupUsage.Store(sample.current)
 		m.cgroupInactiveFile.Store(sample.inactiveFile)
+		m.cgroupHeadroom.Store(sample.cgroupHeadroom)
 	}
 	// Freed reservations do not retain RSS credit. The conservative admission
 	// model adds commitments without assuming allocator reuse or residency.
@@ -649,12 +651,12 @@ func AcquirePolicyForCNFlushS3(
 }
 
 func cnFlushS3PhysicalAvailable(m *memThrottler, reserved int64) int64 {
-	total := int64(m.actualTotalMemory.Load())
-	if total <= 0 || total == math.MaxInt64 {
+	remaining := m.physicalHeadroom()
+	if remaining == math.MaxInt64 {
 		return math.MaxInt64
 	}
 	c := m.memoryCoordinator()
-	return max(0, total-m.physicalUsed()-c.inputPromise.Load()-c.workspacePromise.Load()-max(c.dataReserved.Load(), reserved))
+	return max(0, remaining-c.inputPromise.Load()-c.workspacePromise.Load()-max(c.dataReserved.Load(), reserved))
 }
 
 // ShouldRefreshBeforeRelease remains for older consumers. No sampled credit
@@ -665,7 +667,6 @@ func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 	limit := throttler.limit.Load()
 	smallBatchCap := int64(float64(limit) * cnFlushS3PinnedSmallBatchRate)
 	hardCap := int64(float64(limit) * cnFlushS3PinnedRejectRate)
-	total := int64(throttler.actualTotalMemory.Load())
 
 	for {
 		observed := throttler.reserved.Load()
@@ -708,7 +709,6 @@ func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 		// Capacity or a freed reservation is never assumed to be resident
 		// coverage; only a new sample/reclaim can restore physical headroom.
 		if !throttler.options.allowOutOfMemoryAcquire &&
-			total > 0 && total != math.MaxInt64 &&
 			!throttler.physicalFits(ask) {
 			return min(avail, cnFlushS3PhysicalAvailable(throttler, reserved)), false
 		}
