@@ -454,7 +454,7 @@ func (h *AObjectHandle) nextPrefetchTarget(
 		blk = uint16(h.blkOffsetCursor)
 		changes := h.p.changesHandle
 		if blk == 0 && changes.enableCommitTSBlockPrune &&
-			changes.pkFilter != nil && changes.pkFilter.PrefetchObjectMeta {
+			changes.pkFilter != nil && changes.pkFilter.PrefetchObjectMeta && h.needsBlockPlan(obj) {
 			h.prefetchBlockPlans(ctx)
 		}
 		h.blkOffsetCursor++
@@ -479,20 +479,39 @@ func (h *AObjectHandle) prefetchBlockPlans(ctx context.Context) {
 	if _, ok := h.blockPlans[h.objects[first].ObjectShortName().ShortString()]; ok {
 		return
 	}
-	var reads sync.WaitGroup
+	readCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var pending [LoadParallism]struct {
+		read sync.WaitGroup
+		obj  *objectio.ObjectEntry
+		plan *aobjBlockPlan
+	}
+	count := 0
 	last := min(first+LoadParallism, len(h.objects))
 	for _, obj := range h.objects[first:last] {
 		key := obj.ObjectShortName().ShortString()
-		if _, ok := h.blockPlans[key]; ok {
+		if _, ok := h.blockPlans[key]; ok || !h.needsBlockPlan(obj) {
 			continue
 		}
 		plan := &aobjBlockPlan{}
 		h.blockPlans[key] = plan
-		reads.Go(func() {
-			plan.err = h.buildBlockPlan(ctx, obj, plan)
+		entry := &pending[count]
+		entry.obj, entry.plan = obj, plan
+		count++
+		entry.read.Go(func() {
+			plan.err = h.buildBlockPlan(readCtx, obj, plan)
 		})
 	}
-	reads.Wait()
+	// Only a failure in replay order can stop later speculative reads.
+	// Join them all before letting the caller inspect the cached plans.
+	for i := range count {
+		entry := &pending[i]
+		entry.read.Wait()
+		if entry.plan.err != nil || h.requiresCommitTSFallback(entry.obj, entry.plan) {
+			cancel()
+		}
+	}
 }
 
 // shouldReadBlock decides whether one block may contain rows in [start, end].
@@ -510,10 +529,9 @@ func (h *AObjectHandle) shouldReadBlock(
 	if obj == nil {
 		return false, nil
 	}
-	changes := h.p.changesHandle
 	// Appendable objects do not use commit-TS block pruning, but persisted
 	// appendable objects in a checkpoint can still be pruned by their PK column.
-	if !h.pruneByCommitTS(obj) && (changes.pkFilter == nil || len(changes.pkFilter.Segments) == 0) {
+	if !h.needsBlockPlan(obj) {
 		return true, nil
 	}
 	key := obj.ObjectShortName().ShortString()
@@ -529,7 +547,7 @@ func (h *AObjectHandle) shouldReadBlock(
 		return false, plan.err
 	}
 	if !plan.evaluable {
-		if h.pruneByCommitTS(obj) && changes.strictCommitTSBlockPrune {
+		if h.requiresCommitTSFallback(obj, plan) {
 			logutil.Warn(
 				"ChangesHandle-CommitTSBlockPlan strict fallback",
 				zap.String("object", obj.ObjectShortName().ShortString()),
@@ -557,6 +575,15 @@ func (h *AObjectHandle) shouldReadBlock(
 
 func (h *AObjectHandle) pruneByCommitTS(obj *objectio.ObjectEntry) bool {
 	return h.p.changesHandle.enableCommitTSBlockPrune && !obj.GetAppendable() && !obj.GetCNCreated()
+}
+
+func (h *AObjectHandle) needsBlockPlan(obj *objectio.ObjectEntry) bool {
+	filter := h.p.changesHandle.pkFilter
+	return h.pruneByCommitTS(obj) || (filter != nil && len(filter.Segments) > 0)
+}
+
+func (h *AObjectHandle) requiresCommitTSFallback(obj *objectio.ObjectEntry, plan *aobjBlockPlan) bool {
+	return !plan.evaluable && h.p.changesHandle.strictCommitTSBlockPrune && h.pruneByCommitTS(obj)
 }
 
 func (h *AObjectHandle) buildBlockPlan(
