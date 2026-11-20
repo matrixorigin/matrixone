@@ -68,6 +68,7 @@ const (
 
 type container struct {
 	dictionaryBoundary vm.DictionaryOutputState
+	probeOutput        *identityProbeOutput
 	state              int
 	itr                hashmap.Iterator
 	rightBats          []*batch.Batch
@@ -79,8 +80,13 @@ type container struct {
 	joinDiagnosticActivation []colexec.ExpressionExecutor
 	joinDiagnosticActivated  bool
 
-	leftBat *batch.Batch
-	resBat  *batch.Batch
+	leftBat          *batch.Batch
+	resBat           *batch.Batch
+	outputRowLimit   int
+	buildAreaChecked bool
+	checkBuildArea   bool
+	checkProbeArea   bool
+	pendingOutput    outputRow
 
 	lastIdx int
 	// process idx for zvs and vs, which returned by hashmap.Iterator.Find()
@@ -397,6 +403,7 @@ func (hashJoin *HashJoin) Release() {
 }
 
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	hashJoin.observeProbeOutput()
 	if hashJoin.JoinDiagnostic != nil {
 		hashJoin.JoinDiagnostic.Reset()
 	}
@@ -438,6 +445,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	hashJoin.observeProbeOutput()
 	if hashJoin.JoinDiagnostic != nil {
 		hashJoin.JoinDiagnostic.Reset()
 	}
@@ -514,6 +522,10 @@ func (ctr *container) cleanNonEqCondExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
+	if ctr.probeOutput != nil {
+		ctr.probeOutput.free(proc)
+		ctr.probeOutput = nil
+	}
 	ctr.rightBats = nil
 	if ctr.resBat != nil {
 		ctr.resBat.Clean(proc.GetMPool())
@@ -543,6 +555,10 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 }
 
 func (ctr *container) cleanHashMap() {
+	ctr.buildAreaChecked = false
+	ctr.checkBuildArea = false
+	ctr.checkProbeArea = false
+	ctr.pendingOutput = outputRow{}
 	hashmap.IteratorClearOwner(ctr.itr)
 	ctr.itr = nil
 	if ctr.mp != nil {
