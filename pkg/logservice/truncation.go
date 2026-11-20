@@ -394,13 +394,14 @@ func (l *store) importSnapshot(
 		zap.Uint64("index", lsn),
 		zap.String("dir", dir),
 	)
+	// The import has already compacted Raft state. Cleanup may need a later
+	// retry, but it must not hold back the in-memory truncation watermark.
+	l.shardSnapshotInfo.forwardTruncate(shardID, lsn)
 	// Then remove the exported snapshot in manager.
 	if err := l.snapshotMgr.Remove(shardID, replicaID, lsn); err != nil {
 		l.runtime.Logger().Error("remove exported snapshots failed")
 		return err
 	}
-	// forward the truncate lsn.
-	l.shardSnapshotInfo.forwardTruncate(shardID, lsn)
 	return nil
 }
 

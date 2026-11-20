@@ -71,11 +71,6 @@ func (si *snapshotItem) Exists() bool {
 	return err == nil
 }
 
-// Remove implements the ISnapshotItem interface.
-func (si *snapshotItem) Remove() error {
-	return si.fs.RemoveAll(si.dir)
-}
-
 // Valid implements the ISnapshotItem interface.
 func (si *snapshotItem) Valid() (bool, error) {
 	names, err := si.fs.List(si.dir)
@@ -183,16 +178,38 @@ func (ss *snapshotRecord) add(index snapshotIndex, dir string) error {
 	return nil
 }
 
+// removeAt renames a completed export before deleting its contents. Once the
+// canonical name is gone, the item must leave the inventory even if cleanup
+// fails: the durable .removing name owns the retry across a process restart.
+func (ss *snapshotRecord) removeAt(i int) error {
+	item := ss.items[i]
+	parent := filepath.Dir(item.dir)
+	removing := ss.fs.PathJoin(parent,
+		fmt.Sprintf(snapshotPathPattern+"-%d.removing", item.index, ss.nodeID.replicaID))
+	if err := ss.fs.Rename(item.dir, removing); err != nil {
+		return err
+	}
+	copy(ss.items[i:], ss.items[i+1:])
+	ss.items[len(ss.items)-1] = nil
+	ss.items = ss.items[:len(ss.items)-1]
+	putSnapshotItem(item)
+	if err := syncExportDir(ss.fs, parent); err != nil {
+		ss.failedExportCleanup = true
+		return err
+	}
+	if err := ss.fs.RemoveAll(removing); err != nil {
+		ss.failedExportCleanup = true
+		return err
+	}
+	return nil
+}
+
 // removeFirst removes the first snapshot from snapshot item list.
 func (ss *snapshotRecord) removeFirst() error {
-	if first := ss.first(); first != nil {
-		if err := first.Remove(); err != nil {
-			return err
-		}
+	if len(ss.items) == 0 {
+		return nil
 	}
-	putSnapshotItem(ss.items[0])
-	ss.items = ss.items[1:]
-	return nil
+	return ss.removeAt(0)
 }
 
 // removeLast removes the last (newest) snapshot from the snapshot item
@@ -204,13 +221,7 @@ func (ss *snapshotRecord) removeLast() error {
 	if l == 0 {
 		return nil
 	}
-	last := ss.items[l-1]
-	if err := last.Remove(); err != nil {
-		return err
-	}
-	putSnapshotItem(last)
-	ss.items = ss.items[:l-1]
-	return nil
+	return ss.removeAt(l - 1)
 }
 
 // removeIndex removes a known unusable export without disturbing newer or
@@ -220,13 +231,9 @@ func (ss *snapshotRecord) removeIndex(index snapshotIndex) (bool, error) {
 		if item.index != index {
 			continue
 		}
-		if err := item.Remove(); err != nil {
+		if err := ss.removeAt(i); err != nil {
 			return false, err
 		}
-		copy(ss.items[i:], ss.items[i+1:])
-		ss.items[len(ss.items)-1] = nil
-		ss.items = ss.items[:len(ss.items)-1]
-		putSnapshotItem(item)
 		return true, nil
 	}
 	return false, nil
@@ -333,7 +340,7 @@ func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64)
 			name == fmt.Sprintf(snapshotPathPattern+"-%d.removing", index, replicaID) {
 			// A previous parent sync may have failed. Make the tombstone durable
 			// before a retry can remove the flag and metadata beneath it.
-			if err := sm.syncExportDir(path); err != nil {
+			if err := syncExportDir(sm.cfg.FS, path); err != nil {
 				return err
 			}
 			if err := sm.cfg.FS.RemoveAll(sm.cfg.FS.PathJoin(path, name)); err != nil {
@@ -370,7 +377,7 @@ func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64)
 		}
 		// Make the recovery name durable before RemoveAll can erase the flag
 		// and metadata that identified the original directory.
-		if err := sm.syncExportDir(path); err != nil {
+		if err := syncExportDir(sm.cfg.FS, path); err != nil {
 			return err
 		}
 		if err := sm.cfg.FS.RemoveAll(removing); err != nil {
@@ -380,8 +387,8 @@ func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64)
 	return nil
 }
 
-func (sm *snapshotManager) syncExportDir(path string) error {
-	parent, err := sm.cfg.FS.OpenDir(path)
+func syncExportDir(fs vfs.FS, path string) error {
+	parent, err := fs.OpenDir(path)
 	if err != nil {
 		return err
 	}
@@ -639,6 +646,9 @@ func (sm *snapshotManager) ReconcileUncertainExports(shardID, replicaID uint64, 
 	trimmed := false
 	for len(next.items) > limit {
 		if err := next.removeLast(); err != nil {
+			if next.failedExportCleanup {
+				ss.failedExportCleanup = true
+			}
 			next.release()
 			return 0, trimmed, err
 		}
