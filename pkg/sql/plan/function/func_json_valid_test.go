@@ -2269,6 +2269,57 @@ func TestJsonExtractIgnoreAllRows(t *testing.T) {
 	require.True(t, vec.IsNull(1))
 }
 
+type cancelDuringExtractRows struct {
+	context.Context
+	cancel context.CancelFunc
+	checks int
+}
+
+func (ctx *cancelDuringExtractRows) Err() error {
+	ctx.checks++
+	if ctx.checks == 3 {
+		ctx.cancel()
+	}
+	return ctx.Context.Err()
+}
+
+func TestJsonExtractChecksCancellationInUnvisitedRows(t *testing.T) {
+	for _, name := range []string{"masked", "sql null"} {
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			baseline := proc.Mp().CurrNB()
+			func() {
+				const rows = 129
+				docs := make([]string, rows)
+				nulls := make([]bool, rows)
+				mask := &FunctionSelectList{}
+				for i := range docs {
+					docs[i] = "invalid JSON"
+					nulls[i] = name == "sql null"
+				}
+				if name == "masked" {
+					mask = &FunctionSelectList{AnyNull: true, SelectList: make([]bool, rows)}
+					mask.SelectList[rows-1] = true
+				}
+				test := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestInput(types.T_text.ToType(), docs, nulls),
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.a"}, []bool{false}),
+				}, NewFunctionTestResult(types.T_json.ToType(), true, nil, nil), newOpBuiltInJsonExtract().jsonExtract)
+				defer test.Free()
+				require.NoError(t, test.result.PreExtendAndReset(test.fnLength))
+
+				parent, cancel := context.WithCancel(proc.Ctx)
+				defer cancel()
+				proc.Ctx = &cancelDuringExtractRows{Context: parent, cancel: cancel}
+				err := test.fn(test.parameters, test.result, proc, test.fnLength, mask)
+				require.ErrorIs(t, err, context.Canceled)
+				require.Equal(t, 64, test.result.GetResultVector().Length())
+			}()
+			require.Equal(t, baseline, proc.Mp().CurrNB())
+		})
+	}
+}
+
 func TestJsonExtractMultiplePathsPreserveJSONNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	vec := runJsonFunctionWithSelectList(t, proc,
