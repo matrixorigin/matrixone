@@ -61,6 +61,12 @@ func MakeDefaultTestPath(module string, t *testing.T) string {
 
 type TestDisttaeEngineOptions func(*TestDisttaeEngine)
 
+// WithFixedWorkspaceBudget keeps accounting enabled while isolating a test
+// from host-wide physical headroom fluctuations.
+func WithFixedWorkspaceBudget(capacity uint64) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) { e.testWorkspaceBudgetCap = capacity }
+}
+
 func WithDisttaeEngineMPool(mp *mpool.MPool) TestDisttaeEngineOptions {
 	return func(e *TestDisttaeEngine) {
 		e.mp = mp

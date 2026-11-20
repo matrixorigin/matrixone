@@ -55,6 +55,7 @@ type SinkPool struct {
 }
 
 type poolSinkJob struct {
+	capacityHook   UncommittedCapacityHook
 	data           []*batch.Batch
 	factory        FileSinkerFactory
 	mp             *mpool.MPool
@@ -86,10 +87,11 @@ func (job *poolSinkJob) discard() {
 }
 
 type poolSyncJob struct {
-	fSinker   FileSinker
-	result    *pipelineResult
-	workspace *rscthrottler.WorkspaceLease
-	ioMP      *mpool.MPool
+	capacityHook UncommittedCapacityHook
+	fSinker      FileSinker
+	result       *pipelineResult
+	workspace    *rscthrottler.WorkspaceLease
+	ioMP         *mpool.MPool
 }
 
 // pipelineResult tracks accumulated results and errors for one Sinker's
@@ -98,9 +100,10 @@ type pipelineResult struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu        sync.RWMutex
-	persisted []objectio.ObjectStats
-	err       error
+	mu          sync.RWMutex
+	persisted   []objectio.ObjectStats
+	unpublished []string
+	err         error
 
 	pending sync.WaitGroup // tracks in-flight jobs for this Sinker
 
@@ -223,7 +226,7 @@ func (p *SinkPool) runSinkWorker() {
 		// the sync worker calls it after completing the IO.
 		forwarded := workspace.Transfer()
 		job.lease, job.ioMP = nil, nil
-		_ = p.enqueueSync(&poolSyncJob{fSinker: fSinker, result: r, workspace: forwarded, ioMP: ioMP})
+		_ = p.enqueueSync(&poolSyncJob{fSinker: fSinker, result: r, workspace: forwarded, ioMP: ioMP, capacityHook: job.capacityHook})
 	}
 }
 
@@ -268,9 +271,38 @@ func (p *SinkPool) runSyncWorker() {
 			continue
 		}
 
+		// The hook gate runs before the pool's Sync exactly like
+		// syncFileSinker runs it on the sync path: a refusal aborts the
+		// object before anything goes durable — nothing lands in
+		// r.unpublished because the object never met storage — and the
+		// error fails the writer's Sync through result.getError (issue
+		// #25590 round-19 review).
+		if job.capacityHook != nil {
+			if name := activeFileSinkerObjectName(job.fSinker); name != "" {
+				if err := job.capacityHook(name); err != nil {
+					job.fSinker.Close()
+					mpool.DeleteMPool(job.ioMP)
+					if job.workspace != nil {
+						job.workspace.Release()
+					}
+					r.setError(err)
+					r.pending.Done()
+					continue
+				}
+			}
+		}
+
+		name := activeFileSinkerObjectName(job.fSinker)
 		syncStart := time.Now()
 		stats, err := job.fSinker.Sync(r.ctx)
 		atomic.AddInt64(&r.syncNs, int64(time.Since(syncStart)))
+		if err != nil {
+			if name != "" {
+				r.mu.Lock()
+				r.unpublished = append(r.unpublished, name)
+				r.mu.Unlock()
+			}
+		}
 		job.fSinker.Close()
 		mpool.DeleteMPool(job.ioMP)
 		if job.workspace != nil {

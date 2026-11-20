@@ -649,29 +649,30 @@ type service struct {
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error
-	cancelMoServerFunc     context.CancelFunc
-	mo                     frontend.Server
-	initHakeeperClientOnce sync.Once
-	_hakeeperClient        logservice.CNHAKeeperClient
-	hakeeperConnected      chan struct{}
-	initTxnSenderOnce      sync.Once
-	_txnSender             rpc.TxnSender
-	initTxnClientOnce      sync.Once
-	_txnClient             client.TxnClient
-	timestampWaiter        client.TimestampWaiter
-	storeEngine            engine.Engine
-	colexecServer          *colexec.Server
-	distributeTaeMp        *mpool.MPool
-	metadataFS             fileservice.ReplaceableFileService
-	etlFS                  fileservice.FileService
-	fileService            fileservice.FileService
-	pu                     *config.ParameterUnit
-	moCluster              clusterservice.MOCluster
-	lockService            lockservice.LockService
-	shardService           shardservice.ShardService
-	partitionService       partitionservice.PartitionService
-	sqlExecutor            executor.SQLExecutor
-	sessionMgr             *queryservice.SessionManager
+	cancelMoServerFunc      context.CancelFunc
+	mo                      frontend.Server
+	initHakeeperClientOnce  sync.Once
+	_hakeeperClient         logservice.CNHAKeeperClient
+	hakeeperConnected       chan struct{}
+	initTxnSenderOnce       sync.Once
+	_txnSender              rpc.TxnSender
+	initTxnClientOnce       sync.Once
+	_txnClient              client.TxnClient
+	timestampWaiter         client.TimestampWaiter
+	storeEngine             engine.Engine
+	workspaceHandoffHandler *moruntime.WorkspaceHandoffHandler
+	colexecServer           *colexec.Server
+	distributeTaeMp         *mpool.MPool
+	metadataFS              fileservice.ReplaceableFileService
+	etlFS                   fileservice.FileService
+	fileService             fileservice.FileService
+	pu                      *config.ParameterUnit
+	moCluster               clusterservice.MOCluster
+	lockService             lockservice.LockService
+	shardService            shardservice.ShardService
+	partitionService        partitionservice.PartitionService
+	sqlExecutor             executor.SQLExecutor
+	sessionMgr              *queryservice.SessionManager
 	// queryService is used to handle query request from other CN service.
 	queryService queryservice.QueryService
 	// queryClient is used to send query request to other CN services.

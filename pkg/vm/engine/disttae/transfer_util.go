@@ -234,6 +234,9 @@ func (flow *TransferFlow) fillDefaults() {
 		)
 	}
 
+	if flow.table != nil && flow.table.getTxn() != nil {
+		flow.table.getTxn().SinkerCapacityOption()(flow.sinker)
+	}
 	flow.transferred.objDetails = make(map[string]int)
 }
 

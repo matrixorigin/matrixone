@@ -150,7 +150,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	data, err := encodeProcessInfo(proc, "", map[string]uint32{
 		"cn-a:6001": 2,
 		"cn-b:6001": 1,
-	}, remoteExecutionID)
+	}, remoteExecutionID, uuid.MustParse("01010101-0101-0101-0101-010101010101"))
 	require.Nil(t, err)
 	restored := new(pipeline.ProcessInfo)
 	require.NoError(t, restored.Unmarshal(data))
@@ -161,10 +161,15 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	restoredExecutionID, err := uuid.FromBytes(restored.RemoteExecutionId)
 	require.NoError(t, err)
 	require.Equal(t, remoteExecutionID, restoredExecutionID)
+	require.EqualValues(t, 1, restored.WorkspaceHandoffVersion)
+	require.Equal(t, []byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, restored.WorkspaceHandoffFragment)
 }
 
 func TestGenerateProcessHelperRejectsIncompleteRemoteLifecycleMetadata(t *testing.T) {
 	tests := []pipeline.ProcessInfo{
+		{WorkspaceHandoffVersion: 1},
+		{WorkspaceHandoffFragment: []byte{1}},
+		{WorkspaceHandoffAttempt: 1},
 		{RemoteFragmentCounts: map[string]uint32{"cn-a:6001": 1}},
 		{RemoteExecutionId: func() []byte {
 			id := uuid.New()

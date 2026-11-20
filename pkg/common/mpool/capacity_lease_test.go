@@ -23,28 +23,37 @@ import (
 
 func TestCapacityReservationCommitAndRelease(t *testing.T) {
 	registry, account := newTestAllocationAccount(t, 1024, 1)
-	reservation, err := account.ReserveCapacity(800, AllocationOwnerMin, 1)
+	reservation, err := account.ReserveCapacity(800, AllocationOwner(13), 1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(800), account.Snapshot().Used)
+	require.Zero(t, registry.CommittedCapacity(), "admission is not backing publication")
 
 	lease, err := reservation.Commit(512)
 	require.NoError(t, err)
 	require.Equal(t, uint64(512), lease.Capacity())
 	require.Equal(t, uint64(512), account.Snapshot().Used)
-	other, err := account.ReserveCapacity(64, AllocationOwnerMin, 1)
+	require.Equal(t, uint64(512), registry.CommittedCapacity())
+	sample := registry.SnapshotBacking()
+	require.Equal(t, uint64(512), sample.RetainedCapacity())
+	other, err := account.ReserveCapacity(64, AllocationOwner(13), 1)
 	require.NoError(t, err)
 	otherLease, err := other.Commit(64)
 	require.NoError(t, err)
+	// Backing acquired after the sample must not replace its credited backing.
+	require.Equal(t, uint64(512), sample.RetainedCapacity())
 	lease.Release()
 	lease.Release()
+	require.Zero(t, sample.RetainedCapacity())
+	require.Equal(t, uint64(64), registry.CommittedCapacity())
 	otherLease.Release()
 	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, registry.CommittedCapacity())
 	finalizeTestAllocationAccount(t, registry, account)
 }
 
 func TestCapacityReservationAbortAndOversizedCommit(t *testing.T) {
 	registry, account := newTestAllocationAccount(t, 1024, 1)
-	reservation, err := account.ReserveCapacity(128, AllocationOwnerMin, 2)
+	reservation, err := account.ReserveCapacity(128, AllocationOwner(13), 2)
 	require.NoError(t, err)
 	_, err = reservation.Commit(129)
 	require.ErrorIs(t, err, ErrAllocationAccountCapacity)
@@ -52,13 +61,14 @@ func TestCapacityReservationAbortAndOversizedCommit(t *testing.T) {
 	reservation.Abort()
 	reservation.Abort()
 	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, registry.CommittedCapacity())
 	finalizeTestAllocationAccount(t, registry, account)
 }
 
 func TestCapacityReservationCommitAbortRace(t *testing.T) {
 	for range 100 {
 		registry, account := newTestAllocationAccount(t, 16, 1)
-		reservation, err := account.ReserveCapacity(16, AllocationOwnerMin, 3)
+		reservation, err := account.ReserveCapacity(16, AllocationOwner(13), 3)
 		require.NoError(t, err)
 
 		var wg sync.WaitGroup
@@ -77,6 +87,7 @@ func TestCapacityReservationCommitAbortRace(t *testing.T) {
 			lease.Release()
 		}
 		require.Zero(t, account.Snapshot().Used)
+		require.Zero(t, registry.CommittedCapacity())
 		finalizeTestAllocationAccount(t, registry, account)
 	}
 }
@@ -84,7 +95,7 @@ func TestCapacityReservationCommitAbortRace(t *testing.T) {
 func TestCapacityReservationRejectsAfterSeal(t *testing.T) {
 	registry, account := newTestAllocationAccount(t, 16, 1)
 	account.Seal()
-	_, err := account.ReserveCapacity(1, AllocationOwnerMin, 1)
+	_, err := account.ReserveCapacity(1, AllocationOwner(13), 1)
 	require.ErrorIs(t, err, ErrAllocationAccountSealed)
 	_, err = registry.Finalize(account)
 	require.NoError(t, err)

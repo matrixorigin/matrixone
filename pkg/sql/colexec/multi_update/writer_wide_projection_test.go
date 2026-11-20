@@ -66,6 +66,7 @@ func TestCommittedDeleteWorkspaceSerializesWideProjections(t *testing.T) {
 	w.memController.throttler = deny
 	var observed int
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(nil).AnyTimes()
 	txnOp.EXPECT().Txn().DoAndReturn(func() txn.TxnMeta {
 		observed++
 		for _, pending := range w.deleteBatches {

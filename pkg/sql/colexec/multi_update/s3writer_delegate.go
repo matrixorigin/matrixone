@@ -86,6 +86,8 @@ func newDeleteBlockData(inputBatch *batch.Batch, pkIdx int) *deleteBlockData {
 }
 
 type s3WriterDelegate struct {
+	unrecordedSinkNames []string
+	workspaceOwned      bool
 	// persistent per-table insert sinkers, created lazily on first append.
 	insertSinkers []*colexec.CNS3Writer
 	// per-table delete column accumulators (rowid + pk only).
@@ -232,6 +234,11 @@ func newS3Writer(
 // on first call. Requires proc for Mp() and fileservice.
 func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error {
 	if writer.insertSinkers[0] != nil {
+		for _, w := range writer.insertSinkers {
+			if w != nil {
+				w.RebindWorkspaceSinkerCapacity(proc)
+			}
+		}
 		return nil
 	}
 	fs, err := colexec.GetSharedFSFromProc(proc)
@@ -256,6 +263,10 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		}
 		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
 			opts = append(opts, ioutil.WithPipelineFlush())
+		}
+		if opt := colexec.WorkspaceSinkerCapacityOption(proc); opt != nil {
+			opts = append(opts, opt)
+			writer.workspaceOwned = true
 		}
 		threshold := -1
 		if writer.pipelineInsert(proc) {
@@ -326,6 +337,9 @@ func (writer *s3WriterDelegate) releaseMemory() {
 func (writer *s3WriterDelegate) closeInsertSinkers(mp *mpool.MPool) (err error) {
 	for i, s3w := range writer.insertSinkers {
 		if s3w != nil {
+			if s3w.HasUncommittedCapacityHook() {
+				writer.unrecordedSinkNames = append(writer.unrecordedSinkNames, s3w.AbandonAndRetainableNames()...)
+			}
 			err = errors.Join(err, s3w.Close())
 			writer.insertSinkers[i] = nil
 		}
@@ -1163,6 +1177,10 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	if proc.Base.ImportMemory != nil && writer.activeWorkspace == nil {
 		opts = append(opts, ioutil.WithMemoryWorkspace(proc.Base.ImportMemory.WorkingSet))
 	}
+	if opt := colexec.WorkspaceSinkerCapacityOption(proc); opt != nil {
+		opts = append(opts, opt)
+		writer.workspaceOwned = true
+	}
 
 	if isTombstone {
 		pkCol := plan2.PkColByTableDef(tblDef)
@@ -1174,7 +1192,10 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	}
 
 	defer func() {
-		if err != nil && writer.cleanupUnpublished {
+		if s3Writer.HasUncommittedCapacityHook() {
+			writer.unrecordedSinkNames = append(writer.unrecordedSinkNames, s3Writer.AbandonAndRetainableNames()...)
+			err = errors.Join(err, s3Writer.Close())
+		} else if err != nil && writer.cleanupUnpublished {
 			ctx, cancel := pendingObjectCleanupContext(proc)
 			defer cancel()
 			err = errors.Join(err, s3Writer.Discard(ctx))
@@ -1651,6 +1672,13 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 	// A new execution must not inherit private buffers with released grants.
 	// Normal append calls still share persistent sinkers within an execution.
 	err = writer.closeInsertSinkers(writer.memoryPool(proc))
+	if writer.workspaceOwned {
+		if retainErr := writer.retainUnrecordedSinkObjects(proc); retainErr != nil {
+			err = errors.Join(err, retainErr)
+		} else {
+			writer.workspaceOwned = false
+		}
+	}
 
 	for i, bat := range writer.insertBlockInfo {
 		if bat != nil {
@@ -1702,10 +1730,13 @@ func (writer *s3WriterDelegate) freeWithCleanupContext(proc *process.Process, cl
 	writer.cleanDeleteBatches(writer.memoryPool(proc))
 	mp := writer.memoryPool(proc)
 
-	if writer.cleanupUnpublished {
+	if writer.cleanupUnpublished && !writer.workspaceOwned {
 		err = writer.cleanupPendingObjects(proc, cleanupCtx)
 	}
 	err = errors.Join(err, writer.closeInsertSinkers(mp))
+	if writer.workspaceOwned {
+		err = errors.Join(err, writer.retainUnrecordedSinkObjects(proc))
+	}
 	writer.insertSinkers = nil
 
 	writer.insertFreeLists = nil
@@ -1844,6 +1875,22 @@ func resetMergeBlockForOldCN(proc *process.Process, bat *batch.Batch) error {
 
 		vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool())
 	}
+	return nil
+}
+
+func (writer *s3WriterDelegate) retainUnrecordedSinkObjects(proc *process.Process) error {
+	if len(writer.unrecordedSinkNames) == 0 {
+		return nil
+	}
+	if proc == nil || proc.GetTxnOperator() == nil {
+		return moerr.NewInvalidStateNoCtx("workspace object cleanup has no transaction")
+	}
+	retainer, ok := proc.GetTxnOperator().GetWorkspace().(ioutil.UnrecordedSinkerObjectsRetainer)
+	if !ok {
+		return moerr.NewInvalidStateNoCtx("workspace object cleanup owner is unavailable")
+	}
+	retainer.RetainUnrecordedS3Objects(writer.unrecordedSinkNames, "multi update writer cleanup")
+	writer.unrecordedSinkNames = nil
 	return nil
 }
 

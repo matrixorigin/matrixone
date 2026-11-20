@@ -73,6 +73,8 @@ message Message {
   uint64 accepted_batch_credit_bytes = 16;
   uint64 batch_sequence = 17;
   uint64 batch_ack_sequence = 18;
+  // Receiver capability advertised when attaching to a remote dispatch.
+  uint32 workspace_handoff_version = 19;
 }
 
 message Connector {
@@ -665,6 +667,10 @@ message ProcessInfo {
   // Statement-level INSERT IGNORE semantics used by casts in remote pipelines.
   // Absent in messages from older CNs, which safely decodes as false.
   bool statement_runtime_ignore = 13;
+  // Set only after the caller has probed the destination's handoff support.
+  uint32 workspace_handoff_version = 14;
+  bytes workspace_handoff_fragment = 15;
+  uint32 workspace_handoff_attempt = 16;
 }
 
 message QuerySchedulingIntent {

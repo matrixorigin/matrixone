@@ -155,11 +155,16 @@ message CoreDumpConfigResponse {
 }
 
 message GetProtocolVersionRequest {
+  // Optional internal workspace ownership operation; old CNs ignore it.
+  bytes WorkspaceHandoffRequest = 1;
 }
 
 message GetProtocolVersionResponse {
   // ProtocolVersion is the version of the protocol
   int64 Version = 1;
+  // Zero on older CNs; checked before using workspace handoff messages.
+  uint32 WorkspaceHandoffVersion = 2;
+  bytes WorkspaceHandoffResponse = 3;
 }
 
 message SetProtocolVersionRequest {

@@ -259,7 +259,9 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	s3Bat := batch.NewWithSize(2)
 	s3Bat.SetRowCount(8193)
 	s3Bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
+	proc := testutil.NewProc(t)
 	txn := &Transaction{
+		proc: proc,
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 		op:            txnOp,
 		deletedBlocks: &deletedBlocks{},
@@ -277,10 +279,20 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	// This batch can be obtained by 'insert into db.t2 values (1);'
 	normalBat := batch.NewWithSize(1)
 	normalBat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	m := mpool.MustNewZero()
+	m := proc.Mp()
 	normalBat.SetRowCount(1)
-	vector.AppendFixed(normalBat.Vecs[0], int32(1), false, m)
-	txn.WriteBatch(INSERT, "", 0, 11, 23, "db", "t2", normalBat, DNStore{})
+	require.NoError(t, vector.AppendFixed(normalBat.Vecs[0], int32(1), false, m))
+	_, writeErr := txn.WriteBatch(INSERT, "", 0, 11, 23, "db", "t2", normalBat, DNStore{})
+	require.NoError(t, writeErr)
+	t.Cleanup(func() {
+		for i := range txn.writes {
+			if txn.writes[i].bat != nil {
+				txn.writes[i].bat.Clean(m)
+			}
+		}
+		require.Zero(t, txn.workspaceAccount.Snapshot().Used)
+		txn.closeWorkspaceAllocation()
+	})
 
 	txnOp.AddWorkspace(txn)
 
@@ -300,6 +312,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 
 	outBatch := batch.NewWithSize(1)
 	outBatch.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	t.Cleanup(func() { outBatch.Clean(m) })
 	err := ls.filterInMemUnCommittedInserts(ctx, []uint16{0}, -1, m, outBatch)
 	require.NoError(t, err)
 	require.Equal(t, 1, outBatch.RowCount())

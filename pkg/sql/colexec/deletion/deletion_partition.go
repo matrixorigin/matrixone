@@ -61,6 +61,10 @@ func (op *PartitionDelete) OpType() vm.OpType {
 	return vm.PartitionDelete
 }
 
+func (op *PartitionDelete) ProducesRemoteWorkspaceObjects() bool {
+	return op.raw != nil && op.raw.ProducesRemoteWorkspaceObjects()
+}
+
 func (op *PartitionDelete) Prepare(
 	proc *process.Process,
 ) error {

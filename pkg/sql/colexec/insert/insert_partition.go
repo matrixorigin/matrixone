@@ -62,6 +62,10 @@ func (op *PartitionInsert) OpType() vm.OpType {
 	return vm.PartitionInsert
 }
 
+func (op *PartitionInsert) ProducesRemoteWorkspaceObjects() bool {
+	return op.raw != nil && op.raw.ProducesRemoteWorkspaceObjects()
+}
+
 func (op *PartitionInsert) Prepare(
 	proc *process.Process,
 ) error {

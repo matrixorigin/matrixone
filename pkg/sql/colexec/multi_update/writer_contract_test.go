@@ -86,6 +86,7 @@ func TestCommittedDeleteFutureGrowthRemainsAdmitted(t *testing.T) {
 	}
 	var observed int
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(nil).AnyTimes()
 	txnOp.EXPECT().Txn().DoAndReturn(func() txn.TxnMeta {
 		observed++
 		require.LessOrEqual(t, w.retainedBytes(), credits.reserved, "observe real buffers and per-block bitmap growth before each next mutation")
@@ -259,6 +260,7 @@ func TestPartitionReplayRetiresAllSourceCredits(t *testing.T) {
 			t.Cleanup(cancel)
 			proc.Ctx = ctx
 			opTxn := mock_frontend.NewMockTxnOperator(ctrl)
+			opTxn.EXPECT().GetWorkspace().Return(nil).AnyTimes()
 			opTxn.EXPECT().Txn().Return(txn.TxnMeta{ID: []byte{1}}).AnyTimes()
 			opTxn.EXPECT().TxnOptions().Return(txn.TxnOptions{Autocommit: true}).AnyTimes()
 			proc.Base.TxnOperator = opTxn

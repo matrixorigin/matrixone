@@ -461,6 +461,12 @@ func (s *service) closeService() error {
 			s.closePipelineAdmission,
 			s.server.Close,
 			s.stopRPCs,
+			func() error {
+				if s.workspaceHandoffHandler != nil {
+					runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(runtime.WorkspaceHandoffHandlerKey, s.workspaceHandoffHandler)
+				}
+				return nil
+			},
 			s.waitPipelineHandlers,
 			s.closeIncrService,
 			s.closeTxnTraceService,
@@ -785,6 +791,12 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, ai
 	err = s.initEngine(ctx, cancelMoServerCtx, pu)
 	if err != nil {
 		return err
+	}
+	if resolver, ok := s.storeEngine.(ioutil.RemoteWorkspaceHandoffResolver); ok {
+		s.workspaceHandoffHandler = &runtime.WorkspaceHandoffHandler{Handle: func(data []byte) ([]byte, error) {
+			return ioutil.ExecuteRemoteWorkspaceHandoff(data, s.pipelineServiceServiceAddr(), resolver)
+		}}
+		runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.WorkspaceHandoffHandlerKey, s.workspaceHandoffHandler)
 	}
 
 	s.createMOServer(cancelMoServerCtx, pu, aicm)

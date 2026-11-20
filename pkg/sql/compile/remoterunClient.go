@@ -30,7 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -66,6 +68,21 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		}
 	}()
 	s.ScopeAnalyzer.Stop()
+	encodedScope, _ := getScopeForRemoteRunEncoding(s)
+	mayPersist, err := remoteScopeMayPersistWorkspaceObjects(encodedScope, s.NodeInfo.Addr)
+	if err != nil {
+		return nil, err
+	}
+	var handoffFragment uuid.UUID
+	if mayPersist {
+		if c.remoteExecutionID == uuid.Nil {
+			return nil, moerr.NewInvalidStateNoCtx("remote workspace writer has no execution identity")
+		}
+		if err := colexec.ProbeRemoteWorkspaceHandoff(s.Proc.Ctx, s.Proc, s.NodeInfo.Addr); err != nil {
+			return nil, err
+		}
+		handoffFragment = uuid.New()
+	}
 
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
@@ -76,6 +93,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		c.proc,
 		c.remoteFragmentCounts,
 		c.remoteExecutionID,
+		handoffFragment,
 	)
 	if err != nil {
 		return nil, err
@@ -100,6 +118,13 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 			c.sql, c.proc.GetTxnOperator().Txn().DebugString(), err)
 
 		return nil, err
+	}
+	if handoffFragment != uuid.Nil {
+		sender.workspaceHandoffExpected = &ioutil.RemoteWorkspaceHandoffScope{
+			Version: ioutil.RemoteWorkspaceHandoffVersion1,
+			TxnID:   string(s.Proc.GetTxnOperator().Txn().ID), ExecutionID: c.remoteExecutionID,
+			FragmentID: handoffFragment, ProducerCN: s.NodeInfo.Addr,
+		}
 	}
 
 	debugMsg := ""
@@ -223,6 +248,7 @@ func prepareRemoteRunSendingData(
 	proc *process.Process,
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
+	workspaceHandoffFragment ...uuid.UUID,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
 	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
 	encodedScope = copyBlockFiltersForRemoteRun(encodedScope)
@@ -242,6 +268,7 @@ func prepareRemoteRunSendingData(
 		sqlStr,
 		remoteFragmentCounts,
 		remoteExecutionID,
+		workspaceHandoffFragment...,
 	); err != nil {
 		return nil, false, nil, false, err
 	}
@@ -428,8 +455,9 @@ type messageSenderOnClient struct {
 	anal *AnalyzeModule
 
 	// message sender and its data receiver.
-	streamSender morpc.Stream
-	receiveCh    chan morpc.Message
+	streamSender             morpc.Stream
+	receiveCh                chan morpc.Message
+	workspaceHandoffExpected *ioutil.RemoteWorkspaceHandoffScope
 
 	// Two Flags to help us know the sender status.
 	//
@@ -711,6 +739,13 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		   			return bat, false, err
 		   		} */
 		if err == nil {
+			if sender.workspaceHandoffExpected != nil {
+				scope, present, scopeErr := ioutil.ParseRemoteWorkspaceHandoffScope(bat.ExtraBuf)
+				if scopeErr != nil || !present || scope != *sender.workspaceHandoffExpected {
+					bat.Clean(sender.mp)
+					return nil, false, moerr.NewInvalidStateNoCtx("remote workspace result has missing or mismatched handoff provenance")
+				}
+			}
 			if sender.pendingBatchAck != 0 {
 				bat.Clean(sender.mp)
 				return nil, false, moerr.NewInvalidStateNoCtx(

@@ -407,14 +407,16 @@ type Sinker struct {
 		sortKeyIdx int
 	}
 	config struct {
-		allMergeSorted   bool
-		dedupAll         bool
-		tailSizeCap      int
-		offHeap          bool
-		byteBoundedRuns  bool
-		cleanupFailedRun bool
-		bufferBytes      int64
-		preExtendBuffer  bool
+		allMergeSorted        bool
+		dedupAll              bool
+		tailSizeCap           int
+		offHeap               bool
+		byteBoundedRuns       bool
+		cleanupFailedRun      bool
+		capacityHook          UncommittedCapacityHook
+		workspaceOwnedCleanup bool
+		bufferBytes           int64
+		preExtendBuffer       bool
 	}
 	fSinker struct {
 		executor FileSinker
@@ -427,6 +429,7 @@ type Sinker struct {
 		// sorted run is staged. They include physical and expanded payload.
 		inMemoryBounds      []int
 		persisted           []objectio.ObjectStats
+		unpublished         []string
 		inMemorySize        int
 		memorySizeThreshold int
 		aborted             bool
@@ -547,36 +550,22 @@ func DeleteUnpublishedObjects(
 // when a larger operation aborts after one or more spills. The tracked object
 // references are retained when deletion fails so the caller may retry.
 func (sinker *Sinker) DeletePersisted(ctx context.Context) (int, error) {
-	if sinker.pipe.enabled && sinker.pipe.result != nil {
-		// A failed pipeline may still have successful sibling writes. Wait for
-		// all of them before taking the ownership snapshot.
-		_ = sinker.drainPipeline()
+	if sinker.config.workspaceOwnedCleanup {
+		return 0, moerr.NewInternalErrorNoCtx("workspace owns unpublished spill cleanup")
 	}
-
-	files := make([]string, 0,
-		len(sinker.staged.persisted)+len(sinker.result.persisted))
-	appendStats := func(stats []objectio.ObjectStats) {
-		for i := range stats {
-			files = append(files, stats[i].ObjectName().String())
-		}
-	}
-	appendStats(sinker.staged.persisted)
-	appendStats(sinker.result.persisted)
-	if sinker.pipe.result != nil {
-		sinker.pipe.result.mu.RLock()
-		appendStats(sinker.pipe.result.persisted)
-		sinker.pipe.result.mu.RUnlock()
-	}
+	files := sinker.persistedSnapshot()
 	count, err := DeleteUnpublishedObjects(ctx, sinker.fs, files...)
 	if err != nil {
 		return count, err
 	}
 
 	sinker.staged.persisted = sinker.staged.persisted[:0]
+	sinker.staged.unpublished = nil
 	sinker.result.persisted = sinker.result.persisted[:0]
 	if sinker.pipe.result != nil {
 		sinker.pipe.result.mu.Lock()
 		sinker.pipe.result.persisted = sinker.pipe.result.persisted[:0]
+		sinker.pipe.result.unpublished = nil
 		sinker.pipe.result.mu.Unlock()
 	}
 	return count, nil
@@ -736,17 +725,12 @@ func (sinker *Sinker) WriteBorrowedToFile(ctx context.Context, data *batch.Batch
 			sinker.initPipelineResult(ctx)
 			r := sinker.pipe.result
 			r.pending.Add(1)
-			job := &poolSyncJob{fSinker: f, result: r, workspace: uploadLease, ioMP: ioMP}
+			job := &poolSyncJob{fSinker: f, result: r, workspace: uploadLease, ioMP: ioMP, capacityHook: sinker.config.capacityHook}
 			f, ioMP = nil, nil
 			return GetDefaultSinkPool().enqueueSync(job)
 		}
 	}
-	stats, err := f.Sync(ctx)
-	if err != nil {
-		return err
-	}
-	sinker.staged.persisted = append(sinker.staged.persisted, *stats)
-	return nil
+	return sinker.syncFileSinker(ctx, f)
 }
 
 func (sinker *Sinker) putBackBuffer(bat *batch.Batch) {
@@ -851,10 +835,15 @@ func (sinker *Sinker) cleanupUnpublishedRun(ctx context.Context) error {
 		_ = sinker.drainPipeline()
 		sinker.pipe.result.mu.Lock()
 		sinker.staged.persisted = append(sinker.staged.persisted, sinker.pipe.result.persisted...)
+		sinker.staged.unpublished = append(sinker.staged.unpublished, sinker.pipe.result.unpublished...)
+		sinker.pipe.result.unpublished = nil
 		sinker.pipe.result.persisted = nil
 		sinker.pipe.result.mu.Unlock()
 	}
-	names := make([]string, 0, len(sinker.staged.persisted))
+	if sinker.config.workspaceOwnedCleanup {
+		return nil
+	}
+	names := append([]string(nil), sinker.staged.unpublished...)
 	for i := range sinker.staged.persisted {
 		names = append(names, sinker.staged.persisted[i].ObjectName().String())
 	}
@@ -877,6 +866,7 @@ func (sinker *Sinker) cleanupUnpublishedRun(ctx context.Context) error {
 	}
 	if err == nil {
 		sinker.staged.persisted = sinker.staged.persisted[:0]
+		sinker.staged.unpublished = nil
 	}
 	return err
 }
@@ -964,7 +954,7 @@ func (sinker *Sinker) pipelineSubmitOwned(ctx context.Context, data []*batch.Bat
 	job := &poolSinkJob{
 		data: data, factory: sinker.fSinker.factory, mp: mp, fs: sinker.fs,
 		result: sinker.pipe.result, lease: lease, ioMP: ioMP,
-		sourceReleased: sourceReleased,
+		sourceReleased: sourceReleased, capacityHook: sinker.config.capacityHook,
 	}
 	if sinker.workspace != nil {
 		var payload int64
@@ -1176,10 +1166,21 @@ func (sinker *Sinker) trySpillMergeSortBounded(ctx context.Context, workspace *r
 // responsible for cleanup via resetFileSinker(); the executor is eventually
 // closed in Sinker.Close().
 func (sinker *Sinker) syncFileSinker(ctx context.Context, fSinker FileSinker) error {
+	name := activeFileSinkerObjectName(fSinker)
 	syncStart := time.Now()
+	if sinker.config.capacityHook != nil {
+		if name != "" {
+			if err := sinker.config.capacityHook(name); err != nil {
+				return err
+			}
+		}
+	}
 	stats, err := fSinker.Sync(ctx)
 	atomic.AddInt64(&sinker.timing.syncNs, int64(time.Since(syncStart)))
 	if err != nil {
+		if name != "" {
+			sinker.staged.unpublished = append(sinker.staged.unpublished, name)
+		}
 		return err
 	}
 	sinker.staged.persisted = append(sinker.staged.persisted, *stats)
@@ -1768,6 +1769,8 @@ func (sinker *Sinker) sync(ctx context.Context) error {
 		}
 		sinker.pipe.result.mu.Lock()
 		sinker.staged.persisted = append(sinker.staged.persisted, sinker.pipe.result.persisted...)
+		sinker.staged.unpublished = append(sinker.staged.unpublished, sinker.pipe.result.unpublished...)
+		sinker.pipe.result.unpublished = nil
 		sinker.pipe.result.persisted = nil
 		sinker.pipe.result.mu.Unlock()
 	}
@@ -1842,6 +1845,11 @@ func (sinker *Sinker) TakeCompletedResults() ([]objectio.ObjectStats, error) {
 		r.persisted = nil
 	}
 	stats := append(sinker.result.persisted, sinker.staged.persisted...)
+	if sinker.config.workspaceOwnedCleanup {
+		for i := range stats {
+			sinker.staged.unpublished = append(sinker.staged.unpublished, stats[i].ObjectName().String())
+		}
+	}
 	sinker.result.persisted = nil
 	sinker.staged.persisted = nil
 	return stats, nil
@@ -1859,6 +1867,14 @@ func (sinker *Sinker) SyncAndTakeResults(ctx context.Context) ([]objectio.Object
 	}
 	persisted := sinker.result.persisted
 	tail := sinker.result.tail
+	if sinker.config.workspaceOwnedCleanup {
+		// The caller takes the result batches but has not necessarily recorded
+		// their objects in its workspace yet. Keep the names available to the
+		// workspace cleanup owner even after the result slice is transferred.
+		for i := range persisted {
+			sinker.staged.unpublished = append(sinker.staged.unpublished, persisted[i].ObjectName().String())
+		}
+	}
 	sinker.result.persisted = nil
 	sinker.result.tail = nil
 	return persisted, tail, nil
@@ -1908,6 +1924,9 @@ func (sinker *Sinker) CleanupPersisted(ctx context.Context) error {
 
 func (sinker *Sinker) Close() error {
 	sinker.closed = true
+	if sinker.runSizeLimit() > 0 {
+		sinker.CancelPending()
+	}
 	var cleanupErr error
 	if sinker.config.cleanupFailedRun && sinker.runSizeLimit() > 0 {
 		cleanupErr = sinker.cleanupUnpublishedRun(context.Background())
@@ -1918,6 +1937,7 @@ func (sinker *Sinker) Close() error {
 			sinker.pipe.result.cancel()
 		}
 		drainErr = sinker.drainPipeline()
+		sinker.pipe.result.cancel()
 	}
 	sinker.cleanupInMemoryStaged()
 	if sinker.buf.buffers != nil {
@@ -1952,6 +1972,7 @@ func (sinker *Sinker) Close() error {
 		return cleanupErr
 	}
 	sinker.staged.persisted = nil
+	sinker.staged.unpublished = nil
 	sinker.fs = nil
 	return drainErr
 }
@@ -1965,8 +1986,11 @@ func (sinker *Sinker) Reset() {
 	if sinker.closed {
 		return
 	}
+	if sinker.runSizeLimit() > 0 {
+		sinker.CancelPending()
+	}
 	if sinker.config.cleanupFailedRun && sinker.runSizeLimit() > 0 &&
-		(len(sinker.staged.persisted) > 0 || sinker.pipe.result != nil) {
+		(len(sinker.staged.persisted) > 0 || len(sinker.staged.unpublished) > 0 || sinker.pipe.result != nil) {
 		if err := sinker.cleanupUnpublishedRun(context.Background()); err != nil {
 			sinker.staged.aborted = true
 			sinker.cleanupInMemoryStaged()
@@ -1982,11 +2006,13 @@ func (sinker *Sinker) Reset() {
 			sinker.pipe.result.cancel()
 		}
 		sinker.drainPipeline()
+		sinker.pipe.result.cancel()
 		sinker.pipe.result = nil
 	}
 
 	sinker.cleanupInMemoryStaged()
 	sinker.staged.persisted = sinker.staged.persisted[:0]
+	sinker.staged.unpublished = nil
 	sinker.staged.aborted = false
 
 	for i := range sinker.result.tail {
