@@ -721,7 +721,7 @@ insert into enum01 values (1);
 alter table enum01 add column name enum ('A','B','C');
 show create table enum01;
 Table    Create Table
-enum01    CREATE TABLE `enum01` (\n  `id` int DEFAULT NULL,\n  `name` enum('A','B','C') DEFAULT NULL\n)
+enum01    CREATE TABLE `enum01` (\n  `id` int DEFAULT NULL,\n  `name` enum('A','B','C') COLLATE utf8mb4_general_ci DEFAULT NULL\n)
 desc enum01;
 Field    Type    Null    Key    Default    Extra    Comment
 id    int    YES        null        

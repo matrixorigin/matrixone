@@ -153,6 +153,15 @@ func constructCreateTableSQLWithCommentFormat(
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
+	if tableDef.EnumUnsupportedDefault != "" {
+		if tableDef.DefaultCharset == uint32(types.CharsetLegacy) || tableDef.TableType == catalog.SystemExternalRel {
+			return "", nil, moerr.NewNotSupportedNoCtx("cannot replay split ENUM and text table defaults")
+		}
+		identity, ok := collationForName(tableDef.EnumUnsupportedDefault)
+		if !ok || identity != tableDef.DefaultCharset {
+			return "", nil, moerr.NewInvalidInputNoCtx("conflicting ENUM table collation metadata")
+		}
+	}
 	dbTblName := sqlquote.Ident(tblName)
 	if useDbName {
 		dbTblName = sqlquote.QualifiedIdent(schemaName, tblName)
@@ -172,6 +181,11 @@ func constructCreateTableSQLWithCommentFormat(
 	var pkDefs []string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
 	displayTableCharset := effectiveTableCharsetForShowCreate(tableDef)
+	legacyEnumTableDefault := !legacyStoredComments && tableDef.DefaultCharset == uint32(types.CharsetLegacy) &&
+		tableDef.EnumUnsupportedDefault == "" && hasLegacyEnumColumn(tableDef)
+	if legacyEnumTableDefault {
+		displayTableCharset = uint32(types.CharsetLegacy)
+	}
 	columnTableCharset := displayTableCharset
 	if tableDef.TableType == catalog.SystemExternalRel {
 		// External-table grammar has no table charset option. Use a sentinel
@@ -226,7 +240,7 @@ func constructCreateTableSQLWithCommentFormat(
 			typeStr = strings.ToLower(typeStr)
 		}
 		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
-		appendTextCharsetForShowCreate(buf, col.Typ, columnTableCharset)
+		appendTextCharsetForShowCreate(buf, col.Typ, columnTableCharset, legacyStoredComments)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
@@ -457,7 +471,11 @@ func constructCreateTableSQLWithCommentFormat(
 					}
 
 					if col := functionalIndexPartColumn(tableDef, indexdef, ordinal); col != nil {
-						if err := validateFunctionalTable(ctx.GetContext(), tableDef); err != nil {
+						validationCtx := context.Background()
+						if ctx != nil {
+							validationCtx = ctx.GetContext()
+						}
+						if err := validateFunctionalTable(validationCtx, tableDef); err != nil {
 							return "", nil, err
 						}
 						expressionPart := "(" + col.GeneratedCol.OriginString + ")"
@@ -713,7 +731,13 @@ func constructCreateTableSQLWithCommentFormat(
 				charsetContext = nil
 			}
 		}
-		createStr += tableCharsetForShowCreate(charsetContext, displayTableCharset)
+		if legacyEnumTableDefault {
+			createStr += " COLLATE=" + legacyTableCollationName
+		} else if tableDef.EnumUnsupportedDefault != "" {
+			createStr += " COLLATE=" + sqlquote.Ident(tableDef.EnumUnsupportedDefault)
+		} else {
+			createStr += tableCharsetForShowCreate(charsetContext, displayTableCharset)
+		}
 	}
 
 	var comment string
@@ -950,7 +974,24 @@ func constructCreateTableSQLWithCommentFormat(
 	return createStr, stmt, err
 }
 
-func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableCharset uint32) {
+func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableCharset uint32, legacySchemaHash bool) {
+	if isEnumPlanType(&typ) {
+		switch typ.EnumCollation {
+		case types.EnumCollationLegacy:
+			if !legacySchemaHash {
+				buf.WriteString(" COLLATE " + legacyEnumCollationName)
+			}
+		case types.EnumCollationUTF8Bin:
+			buf.WriteString(" COLLATE utf8mb4_bin")
+		case types.EnumCollationGeneralCI:
+			buf.WriteString(" COLLATE utf8mb4_general_ci")
+		case types.EnumCollationUTF8UnicodeCI:
+			buf.WriteString(" COLLATE utf8_unicode_ci")
+		case types.EnumCollationUTF8MB4UnicodeCI:
+			buf.WriteString(" COLLATE utf8mb4_unicode_ci")
+		}
+		return
+	}
 	switch types.T(typ.Id) {
 	case types.T_char, types.T_varchar, types.T_text:
 	default:

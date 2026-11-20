@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -109,6 +110,8 @@ var (
 
 // TableColumn describes one column in a user table schema.
 type TableColumn struct {
+	// NativeType retains the validated catalog type before SQL display projection.
+	NativeType       *types.Type
 	Name             string // SQL column name
 	SQLType          string // SQL type string (e.g. "BIGINT", "VARCHAR(100)")
 	Position         int    // SQL ordinal position
@@ -116,18 +119,19 @@ type TableColumn struct {
 	Unsigned         bool
 	// Zerofill is the SECOND numeric attribute bit of a DECIMAL column
 	// (catalog mask 3). It renders only with Unsigned and only on DECIMAL.
-	Zerofill        bool
-	NotNull         bool
-	Default         string
-	HasDefault      bool
-	OnUpdate        string
-	Generated       string
-	GeneratedStored bool
-	Comment         string
-	ConstraintType  string
-	AutoIncrement   bool
-	ClusterBy       bool
-	EnumValues      string
+	Zerofill               bool
+	NotNull                bool
+	Default                string
+	HasDefault             bool
+	expressionReplayProved bool // proved once from typed catalog flags and expression bytes
+	OnUpdate               string
+	Generated              string
+	GeneratedStored        bool
+	Comment                string
+	ConstraintType         string
+	AutoIncrement          bool
+	ClusterBy              bool
+	EnumValues             string
 }
 
 type TableUniqueKey struct {
@@ -152,17 +156,20 @@ type TableForeignKey struct {
 
 // TableSchema holds the decoded schema for one user table.
 type TableSchema struct {
-	TableName    string
-	DatabaseName string
-	AccountID    uint32
-	Columns      []TableColumn // sorted by Position
-	CreateSQL    string        // raw CREATE TABLE from mo_tables.rel_createsql
-	Comment      string
-	UniqueKeys   []TableUniqueKey
-	PrimaryKey   []string
-	ForeignKeys  []TableForeignKey
-	Partition    string
-	ClusterBy    []string
+	// SchemaExtra is nil when the checkpoint does not prove its table defaults.
+	SchemaExtra      *api.SchemaExtra
+	schemaExtraError error
+	TableName        string
+	DatabaseName     string
+	AccountID        uint32
+	Columns          []TableColumn // sorted by Position
+	CreateSQL        string        // raw CREATE TABLE from mo_tables.rel_createsql
+	Comment          string
+	UniqueKeys       []TableUniqueKey
+	PrimaryKey       []string
+	ForeignKeys      []TableForeignKey
+	Partition        string
+	ClusterBy        []string
 }
 
 type TableCatalogEntry struct {
@@ -477,10 +484,10 @@ func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment stri
 }
 
 func renderCreateTableDDLFullWithForeignKeys(tableName string, cols []TableColumn, comment string, partition string, primaryKey []string, uniqueKeys []TableUniqueKey, foreignKeys []TableForeignKey) string {
-	return renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName, cols, comment, partition, primaryKey, uniqueKeys, foreignKeys, nil)
+	return renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName, cols, comment, partition, primaryKey, uniqueKeys, foreignKeys, nil, "")
 }
 
-func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols []TableColumn, comment string, partition string, primaryKey []string, uniqueKeys []TableUniqueKey, foreignKeys []TableForeignKey, clusterBy []string) string {
+func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols []TableColumn, comment string, partition string, primaryKey []string, uniqueKeys []TableUniqueKey, foreignKeys []TableForeignKey, clusterBy []string, tableCollation string) string {
 	if tableName == "" || len(cols) == 0 {
 		return ""
 	}
@@ -596,6 +603,10 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 		}
 	}
 	sb.WriteString(")")
+	if tableCollation != "" {
+		sb.WriteString(" COLLATE=")
+		sb.WriteString(quoteDDLIdent(tableCollation))
+	}
 	if comment != "" {
 		sb.WriteString(" COMMENT=")
 		sb.WriteString(quoteDDLString(comment))
@@ -890,6 +901,13 @@ func formatDDLDefault(defaultExpr string) string {
 // RenderCreateTableDDLFromSchema renders a CREATE TABLE statement from resolved
 // checkpoint column metadata.
 func RenderCreateTableDDLFromSchema(schema *TableSchema) string {
+	return RenderCreateTableDDLFromSchemaWithCollation(schema, "")
+}
+
+// RenderCreateTableDDLFromSchemaWithCollation renders a verified table default
+// in the table-option position, before PARTITION and CLUSTER BY. SQL restore
+// callers must validate the default with RestoreTableCollation first.
+func RenderCreateTableDDLFromSchemaWithCollation(schema *TableSchema, tableCollation string) string {
 	if schema == nil {
 		return ""
 	}
@@ -916,7 +934,7 @@ func RenderCreateTableDDLFromSchema(schema *TableSchema) string {
 			return ""
 		}
 	}
-	return renderCreateTableDDLFullWithForeignKeysAndClusterBy(schema.TableName, schema.Columns, schema.Comment, schema.Partition, schema.PrimaryKey, schema.UniqueKeys, schema.ForeignKeys, schema.ClusterBy)
+	return renderCreateTableDDLFullWithForeignKeysAndClusterBy(schema.TableName, schema.Columns, schema.Comment, schema.Partition, schema.PrimaryKey, schema.UniqueKeys, schema.ForeignKeys, schema.ClusterBy, tableCollation)
 }
 
 func inferBuiltinCatalogLayout(
@@ -1590,12 +1608,14 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		return nil
 	}
 	clone := &TableSchema{
-		TableName:    strings.Clone(schema.TableName),
-		DatabaseName: strings.Clone(schema.DatabaseName),
-		AccountID:    schema.AccountID,
-		CreateSQL:    strings.Clone(schema.CreateSQL),
-		Comment:      strings.Clone(schema.Comment),
-		Partition:    strings.Clone(schema.Partition),
+		SchemaExtra:      api.CloneExtra(schema.SchemaExtra),
+		schemaExtraError: schema.schemaExtraError,
+		TableName:        strings.Clone(schema.TableName),
+		DatabaseName:     strings.Clone(schema.DatabaseName),
+		AccountID:        schema.AccountID,
+		CreateSQL:        strings.Clone(schema.CreateSQL),
+		Comment:          strings.Clone(schema.Comment),
+		Partition:        strings.Clone(schema.Partition),
 	}
 	if len(schema.PrimaryKey) > 0 {
 		clone.PrimaryKey = make([]string, len(schema.PrimaryKey))
@@ -1613,6 +1633,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		clone.Columns = make([]TableColumn, len(schema.Columns))
 		for i, col := range schema.Columns {
 			clone.Columns[i] = TableColumn{
+				Zerofill:         col.Zerofill,
 				Name:             strings.Clone(col.Name),
 				SQLType:          strings.Clone(col.SQLType),
 				Position:         col.Position,
@@ -1629,6 +1650,11 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 				AutoIncrement:    col.AutoIncrement,
 				ClusterBy:        col.ClusterBy,
 				EnumValues:       strings.Clone(col.EnumValues),
+			}
+			clone.Columns[i].expressionReplayProved = col.expressionReplayProved
+			if col.NativeType != nil {
+				typ := *col.NativeType
+				clone.Columns[i].NativeType = &typ
 			}
 		}
 	}
@@ -3352,7 +3378,25 @@ func buildSchemaFromMoTablesRowAt(
 	accountIDIdx int,
 ) *TableSchema {
 	schema := &TableSchema{}
+	if len(fullRow) < logicalViewDataOffset(view) {
+		return schema
+	}
 	dataRow := fullRow[logicalViewDataOffset(view):]
+	// Only an explicitly mapped field proves its association with this row.
+	// Unknown historical layouts remain available for raw CSV, not SQL replay.
+	if extraIdx := uniqueCatalogColumnIndex(view, catalog.SystemRelAttr_ExtraInfo); extraIdx >= 0 && extraIdx < len(dataRow) &&
+		uniqueCatalogColumnIndex(view, catalog.SystemRelAttr_ID) >= 0 &&
+		relNameIdx == uniqueCatalogColumnIndex(view, "relname") &&
+		relDBIdx == uniqueCatalogColumnIndex(view, "reldatabase") {
+		var extra api.SchemaExtra
+		if err := extra.Unmarshal([]byte(dataRow[extraIdx])); err != nil {
+			schema.schemaExtraError = err
+		} else if err := extra.ValidateCollation(); err != nil {
+			schema.schemaExtraError = err
+		} else {
+			schema.SchemaExtra = &extra
+		}
+	}
 
 	if relNameIdx >= 0 && relNameIdx < len(dataRow) {
 		schema.TableName = strings.Clone(dataRow[relNameIdx])
@@ -3932,7 +3976,16 @@ func buildColumnsFromMoColumnsRowsAt(
 			col.Name = row[nameCol]
 		}
 		if typCol >= 0 && typCol < len(row) {
-			if sqlType, ok := decodeMoColumnSQLType(row[typCol]); ok {
+			var native types.Type
+			if typCol == uniqueCatalogColumnIndex(view, catalog.SystemColAttr_Type) &&
+				relnameIDCol == uniqueCatalogColumnIndex(view, catalog.SystemColAttr_RelID) &&
+				nameCol == uniqueCatalogColumnIndex(view, catalog.SystemColAttr_Name) &&
+				len(row[typCol]) >= native.ProtoSize() && types.Decode([]byte(row[typCol]), &native) == nil && native.Oid != types.T_any && native.ValidateCollation() == nil {
+				col.NativeType = &native
+			}
+			if col.NativeType != nil {
+				col.SQLType = sqlTypeFromMOType(*col.NativeType)
+			} else if sqlType, ok := decodeMoColumnSQLType(row[typCol]); ok {
 				col.SQLType = sqlType
 			} else {
 				typeDecodeFailures++
@@ -3958,9 +4011,11 @@ func buildColumnsFromMoColumnsRowsAt(
 			col.HasDefault = isTruthyCatalogValue(row[hasDefaultCol])
 		}
 		if defaultCol >= 0 && defaultCol < len(row) {
-			if defaultExpr := decodeMoColumnDefault(row[defaultCol]); defaultExpr != "" {
-				col.Default = defaultExpr
-			}
+			var implicitNullable bool
+			col.Default, implicitNullable = decodeMoColumnDefault(row[defaultCol])
+			col.expressionReplayProved = col.NativeType != nil &&
+				defaultCol == uniqueCatalogColumnIndex(view, catalog.SystemColAttr_DefaultExpr) &&
+				provedColumnExpressionReplay(view, row, implicitNullable)
 		}
 		if constraintCol >= 0 && constraintCol < len(row) {
 			col.ConstraintType = row[constraintCol]
@@ -5306,7 +5361,7 @@ func buildCreateTableFromMoColumnsAt(
 	if len(cols) == 0 {
 		return ""
 	}
-	return renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName, cols, tableComment, partition, primaryKey, uniqueKeys, foreignKeys, clusterBy)
+	return renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName, cols, tableComment, partition, primaryKey, uniqueKeys, foreignKeys, clusterBy, "")
 }
 
 func isPrintableSQLType(sqlType string) bool {
@@ -5343,18 +5398,21 @@ func decodeMoColumnSQLType(raw string) (string, bool) {
 	return "", false
 }
 
-func decodeMoColumnDefault(raw string) string {
+func decodeMoColumnDefault(raw string) (display string, implicitNullable bool) {
 	if raw == "" {
-		return ""
+		return "", false
 	}
 	var def plan.Default
 	if err := types.Decode([]byte(raw), &def); err == nil {
-		return strings.TrimSpace(def.OriginString)
+		// An implicit nullable default has no expression to rebind. Do not
+		// infer this from an empty display string or a textual NULL spelling.
+		return strings.TrimSpace(def.OriginString), def.NullAbility &&
+			def.Expr == nil && def.OriginString == "" && len(def.XXX_unrecognized) == 0
 	}
 	if isPrintableDDLExpression(raw) {
-		return strings.TrimSpace(raw)
+		return strings.TrimSpace(raw), false
 	}
-	return ""
+	return "", false
 }
 
 func decodeMoColumnOnUpdate(raw string) string {

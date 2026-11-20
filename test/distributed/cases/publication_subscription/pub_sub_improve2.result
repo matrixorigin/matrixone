@@ -751,7 +751,7 @@ count(*)
 5
 show create table t3;
 Table    Create Table
-t3    CREATE TABLE `t3` (\n  `col1` enum('red','blue','green') DEFAULT NULL\n)
+t3    CREATE TABLE `t3` (\n  `col1` enum('red','blue','green') COLLATE utf8mb4_general_ci DEFAULT NULL\n)
 drop database sub17;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments

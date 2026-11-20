@@ -19,6 +19,11 @@ import (
 
 func TestSchemaExtraCollationRoundTrip(t *testing.T) {
 	for _, extra := range []*SchemaExtra{{}, {DefaultCharset: 3},
+		{DefaultCharset: 3, EnumUnsupportedDefault: "utf8mb4_0900_ai_ci"},
+		{DefaultCharset: 3, EnumUnsupportedDefault: "utf8mb3_general_ci"},
+		{DefaultCharset: 2, EnumUnsupportedDefault: "utf32_bin"},
+		{DefaultCharset: 9, CollationVersion: 1, EnumUnsupportedDefault: "utf8_unicode_ci"},
+		{EnumUnsupportedDefault: "utf8mb4_unicode_ci"},
 		{DefaultCharset: 4, CollationVersion: 1, KeyFormat: 1, AutoIdCache: 7, XXX_unrecognized: []byte{0x98, 0x06, 0x07}}} {
 		wire, err := extra.Marshal()
 		require.NoError(t, err)
@@ -27,7 +32,10 @@ func TestSchemaExtraCollationRoundTrip(t *testing.T) {
 		require.True(t, proto.Equal(extra, &restored))
 		require.True(t, proto.Equal(extra, CloneExtra(&restored)))
 	}
-	for _, extra := range []*SchemaExtra{{DefaultCharset: 259}, {CollationVersion: 2}, {KeyFormat: 2}} {
+	for _, extra := range []*SchemaExtra{{DefaultCharset: 259}, {CollationVersion: 2}, {KeyFormat: 2},
+		{DefaultCharset: 3, EnumUnsupportedDefault: "utf8mb4_bin"},
+		{DefaultCharset: 2, EnumUnsupportedDefault: "utf8mb4_bin"},
+		{DefaultCharset: 3, EnumUnsupportedDefault: "unknown"}} {
 		wire, err := extra.Marshal()
 		require.NoError(t, err)
 		var restored SchemaExtra

@@ -26,7 +26,9 @@ import (
 )
 
 func TestAlterTableCharsetContract(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion118)
+	// ENUM-incompatible table defaults retain their persisted marker on the
+	// existing homogeneous-cluster protocol.
+	databaseDefaultsProtocol(t, defines.MORPCLatestVersion)
 	for _, tc := range []struct {
 		name, source, option, failure string
 		algorithm                     plan.AlterTable_AlgorithmType

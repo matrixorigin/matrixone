@@ -419,6 +419,8 @@ message SchemaExtra {
     // Zero retains legacy physical keys and text semantics.
     uint32 key_format = 21;
     uint32 collation_version = 22;
+    // Original table collation when its exact ENUM semantics are unsupported.
+    string enum_unsupported_default = 23;
 }
 
 // Int64Map mainly used in unit test

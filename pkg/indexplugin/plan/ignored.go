@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -31,6 +32,11 @@ func BuildIgnoredTableDefs(
 	indexParts []string,
 	pk *plan.ColDef,
 ) (*plan.IndexDef, *plan.TableDef, error) {
+	// Ignored-row SQL transports an ENUM ordinal without its collation identity.
+	// A collated scalar PK cannot safely use that maintenance representation.
+	if pk != nil && pk.Typ.Id == int32(types.T_enum) && pk.Typ.EnumCollation != 0 {
+		return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(), "index %s cannot preserve collated ENUM primary key %s in ignored-row maintenance", indexInfo.Name, pk.Name)
+	}
 	indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
 	if err != nil {
 		return nil, nil, err

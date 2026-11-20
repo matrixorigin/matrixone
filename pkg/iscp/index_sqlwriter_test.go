@@ -604,3 +604,28 @@ func testHnswSqlWriterNarrow[T types.ArrayElement](t *testing.T, typ types.T, ve
 	require.Len(t, cdc.Data, 1)
 	require.Equal(t, vec, cdc.Data[0].Vec)
 }
+
+func TestIvfflatWriterRejectsCollatedEnumSources(t *testing.T) {
+	for _, identity := range []uint32{0, 2, 3, 10, 255} {
+		for _, role := range []string{"pk", "status"} {
+			t.Run(fmt.Sprintf("%s/%d", role, identity), func(t *testing.T) {
+				table := newTestIvfflatTableDef("pk", types.T_enum, "vec", types.T_array_float64, 3, ivfflatIncludeColSpec{name: "status", typ: types.T_enum})
+				for _, name := range []string{"pk", "status"} {
+					col := table.Cols[table.Name2ColIndex[name]]
+					col.Typ.Enumvalues = "a,A"
+					if name == role {
+						col.Typ.EnumCollation = identity
+					}
+				}
+				writer, err := NewIvfflatSqlWriter("ivfflat", newTestJobID(), newTestConsumerInfo(), table, table.Indexes)
+				if identity == 0 {
+					require.NoError(t, err)
+					require.NotNil(t, writer)
+				} else {
+					require.Error(t, err)
+					require.Nil(t, writer)
+				}
+			})
+		}
+	}
+}

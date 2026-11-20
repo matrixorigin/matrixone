@@ -166,7 +166,7 @@ t    text    YES        null
 e    enum('Y','N')    NO        Y
 show create table t3;
 Table    Create Table
-t3    CREATE TABLE `t3` (\n  `id` int NOT NULL,\n  `i` int DEFAULT NULL,\n  `j` int DEFAULT NULL,\n  `t` text DEFAULT NULL,\n  `e` enum('Y','N') NOT NULL DEFAULT 'Y',\n  PRIMARY KEY (`id`)\n)
+t3    CREATE TABLE `t3` (\n  `id` int NOT NULL,\n  `i` int DEFAULT NULL,\n  `j` int DEFAULT NULL,\n  `t` text DEFAULT NULL,\n  `e` enum('Y','N') COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'Y',\n  PRIMARY KEY (`id`)\n)
 INSERT INTO t3 (id, i, j, t, e) VALUES (4, NULL, 50, 'Example text 4', null);
 constraint violation: Column 'e' cannot be null
 select * from t3 order by id;

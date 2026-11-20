@@ -178,9 +178,9 @@ func sameHistoricalFloatBoundExpression(stored, candidate *planpb.Expr) bool {
 	return sameProjectedBoundExpression(stored, candidate, boundExpressionHistorical)
 }
 
-// SQL-origin proof also recovers missing explicit-cast syntax markers from the
-// AST before rewriting. DUMP uses only the coercibility-only historical candidate
-// and continues to require exact syntax provenance.
+// SQL-origin proof also recovers missing explicit-conversion markers before
+// rewriting. DUMP separately admits missing native display markers but keeps
+// CAST syntax provenance exact.
 func sameLegacyFloatOrigin(stored, candidate *planpb.Expr) bool {
 	return sameProjectedBoundExpression(stored, candidate, boundExpressionLegacyOrigin)
 }
@@ -636,6 +636,7 @@ func rebindFloatStringFunction(ctx context.Context, original *planpb.Expr, args 
 		}
 		applyIfNullCommonValueContract(bound, bound.GetF().Args)
 	}
+	preserveExplicitMySQLSpecialTypeDisplayMetadata(fn, bound.GetF())
 	return bound, nil
 }
 

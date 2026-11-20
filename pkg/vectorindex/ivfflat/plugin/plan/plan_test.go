@@ -173,8 +173,9 @@ func TestBuildSecondaryIndexDefs_PreservesEnumMetadata(t *testing.T) {
 	colMap["status"] = &planpb.ColDef{
 		Name: "status",
 		Typ: planpb.Type{
-			Id:         int32(types.T_enum),
-			Enumvalues: "cold,hot",
+			Id:            int32(types.T_enum),
+			Enumvalues:    "a,A,",
+			EnumCollation: types.EnumCollationUTF8Bin,
 		},
 	}
 	colMap["id"].Typ.AutoIncr = true
@@ -182,7 +183,8 @@ func TestBuildSecondaryIndexDefs_PreservesEnumMetadata(t *testing.T) {
 	_, tableDefs, err := Hooks{}.BuildSecondaryIndexDefs(ctx, indexInfo, colMap, nil, "id")
 	require.NoError(t, err)
 	entries := tableDefs[2]
-	require.Equal(t, "cold,hot", entries.Cols[4].Typ.Enumvalues)
+	require.Equal(t, "a,A,", entries.Cols[4].Typ.Enumvalues)
+	require.Equal(t, types.EnumCollationUTF8Bin, entries.Cols[4].Typ.EnumCollation)
 	// Copying the physical type must not carry source-table auto-increment or
 	// constraint state into the hidden entries relation.
 	require.False(t, entries.Cols[2].Typ.AutoIncr)
@@ -191,9 +193,19 @@ func TestBuildSecondaryIndexDefs_PreservesEnumMetadata(t *testing.T) {
 		"status": colMap["status"],
 		"vec":    colMap["vec"],
 	}
+	physical := copyIvfflatColumnType(colMap["status"].Typ)
+	require.Equal(t, "a,A,", physical.Enumvalues)
+	require.Equal(t, types.EnumCollationUTF8Bin, physical.EnumCollation)
+	_, _, err = Hooks{}.BuildSecondaryIndexDefs(ctx, indexOn("vec"), pkMap, nil, "status")
+	require.ErrorContains(t, err, "primary key")
+	indexInfo.IndexOption.Async = true
+	_, _, err = Hooks{}.BuildSecondaryIndexDefs(ctx, indexInfo, colMap, nil, "id")
+	require.ErrorContains(t, err, "asynchronous maintenance")
+	colMap["status"].Typ.EnumCollation = types.EnumCollationLegacy
 	_, pkTables, err := Hooks{}.BuildSecondaryIndexDefs(ctx, indexOn("vec"), pkMap, nil, "status")
 	require.NoError(t, err)
-	require.Equal(t, "cold,hot", pkTables[2].Cols[2].Typ.Enumvalues)
+	require.Equal(t, "a,A,", pkTables[2].Cols[2].Typ.Enumvalues)
+	require.Equal(t, types.EnumCollationLegacy, pkTables[2].Cols[2].Typ.EnumCollation)
 }
 
 // --- schema.go: BuildFullTextIndexDefs ------------------------------------

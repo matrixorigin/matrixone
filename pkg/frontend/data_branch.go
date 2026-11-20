@@ -1347,6 +1347,7 @@ func getTableStuff(
 
 		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
 		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
+		tblStuff.def.enumValues = append(tblStuff.def.enumValues, col.Typ.Enumvalues)
 
 		if isDataBranchUserVisibleColumn(col) {
 			tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, len(tblStuff.def.colNames)-1)
@@ -1732,6 +1733,7 @@ func dataBranchColumnTypeAttributesEqual(left, right plan.Type) bool {
 	return left.Width == right.Width &&
 		left.Scale == right.Scale &&
 		left.Enumvalues == right.Enumvalues &&
+		left.EnumCollation == right.EnumCollation &&
 		left.AutoIncr == right.AutoIncr &&
 		left.NotNullable == right.NotNullable
 }

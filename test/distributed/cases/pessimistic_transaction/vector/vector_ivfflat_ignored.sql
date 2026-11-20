@@ -94,13 +94,13 @@ show index ignored from c;
 show index status from c;
 
 -- an ENUM key is recorded by the build, DML and an asynchronous index
-create table e(k enum('a','b','c','d') primary key, v vecf32(2));
+create table e(k enum('a','b','c','d') collate __mo_enum_legacy_main_v1 primary key, v vecf32(2));
 insert into e values ('a','[1,1]'),('b','[100000,1]');
 create index ie using ivfflat on e(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 5;
 insert into e values ('c','[200000,1]');
 -- @ignore:4
 show index ignored from e;
-create table ea(k enum('a','b','c','d') primary key, v vecf32(2));
+create table ea(k enum('a','b','c','d') collate __mo_enum_legacy_main_v1 primary key, v vecf32(2));
 insert into ea values ('a','[1,1]'),('b','[100000,1]');
 create index iea using ivfflat on ea(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 1 async;
 -- @ignore:4
@@ -112,15 +112,15 @@ insert into ea values ('c','[200000,1]');
 show index status from ea;
 
 -- an ENUM key that names no member, as INSERT IGNORE stores it, is recorded in strict mode
-create table e0(k enum('a','b') primary key, v vecf32(2));
+create table e0(k enum('','b') collate __mo_enum_legacy_main_v1 primary key, v vecf32(2));
 insert ignore into e0 values ('zz','[100000,1]');
-insert into e0 values ('a','[1,1]');
+insert into e0 values (1,'[1,1]');
 create index ie0 using ivfflat on e0(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 1;
 select cast(k as int) from e0;
 -- @ignore:4
 show index ignored from e0;
-create table ea0(k enum('a','b') primary key, v vecf32(2));
-insert into ea0 values ('a','[1,1]');
+create table ea0(k enum('','b') collate __mo_enum_legacy_main_v1 primary key, v vecf32(2));
+insert into ea0 values (1,'[1,1]');
 create index iea0 using ivfflat on ea0(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 1 async;
 insert ignore into ea0 values ('zz','[100000,1]');
 -- @ignore:4
@@ -132,6 +132,12 @@ delete from ea0 where cast(k as int) = 0;
 show index ignored from ea0;
 
 -- a composite key reads as the hex literal of its serial
+create table collated_pk(k enum('a','A') collate utf8mb4_bin primary key, v vecf32(2));
+insert into collated_pk values(1,'[1,1]'),(2,'[100000,1]');
+-- @regex("collated ENUM primary key", true)
+create index denied using ivfflat on collated_pk(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 1;
+select count(*) as indexes_created from mo_catalog.mo_indexes where name='denied' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase='ivf_ignored' and relname='collated_pk');
+
 create table ce(a int, e enum('x','y'), v vecf32(2), primary key(a, e));
 insert into ce values (1,'x','[1,1]'),(2,'y','[100000,1]');
 create index ice using ivfflat on ce(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 5;

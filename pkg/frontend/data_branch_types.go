@@ -260,6 +260,7 @@ type tableStuff struct {
 	def struct {
 		colNames      []string     // all columns
 		colTypes      []types.Type // all columns
+		enumValues    []string     // declared ENUM domains, aligned with colTypes
 		visibleIdxes  []int
 		writableIdxes []int
 		pkColIdx      int

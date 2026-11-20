@@ -690,6 +690,7 @@ func TestBuildCreateTableAcceptsUTF32CompatibilityAliases(t *testing.T) {
 		name      string
 		sql       string
 		wantTable uint32
+		wantShow  string
 	}{
 		{
 			name:      "JeecgBoot column declaration",
@@ -700,11 +701,13 @@ func TestBuildCreateTableAcceptsUTF32CompatibilityAliases(t *testing.T) {
 			name:      "table default",
 			sql:       "create table t_charset_alias (name varchar(20)) default character set utf32",
 			wantTable: uint32(types.CharsetUTF8),
+			wantShow:  "utf32_general_ci",
 		},
 		{
 			name:      "binary collation",
 			sql:       "create table t_charset_alias (name varchar(20)) character set utf32 collate utf32_bin",
 			wantTable: uint32(types.CharsetUTF8MB4Bin),
+			wantShow:  "utf32_bin",
 		},
 	}
 
@@ -723,7 +726,12 @@ func TestBuildCreateTableAcceptsUTF32CompatibilityAliases(t *testing.T) {
 
 			showSQL, _, err := ConstructCreateTableSQL(ctx, tableDef, nil, false, nil)
 			require.NoError(t, err)
-			require.NotContains(t, strings.ToLower(showSQL), "utf32")
+			if tc.wantShow == "" {
+				require.NotContains(t, strings.ToLower(showSQL), "utf32")
+			} else {
+				// Preserve unsupported ENUM inheritance through SHOW/CREATE replay.
+				require.Contains(t, strings.ToLower(showSQL), tc.wantShow)
+			}
 		})
 	}
 }
@@ -4173,6 +4181,7 @@ func TestOutputColumnProvenanceSnapshotsCatalogMetadataOnce(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	addMySQLSpecialTypeColumns(ctx)
 	priorityCol := ctx.tables["nation"].Cols[len(ctx.tables["nation"].Cols)-2]
+	priorityCol.Typ.EnumCollation = types.EnumCollationUTF8Bin
 	priorityCol.Default = &plan.Default{
 		Expr:         makePlan2StringConstExprWithType("low"),
 		OriginString: "'low'",
@@ -4190,12 +4199,36 @@ func TestOutputColumnProvenanceSnapshotsCatalogMetadataOnce(t *testing.T) {
 	require.NotNil(t, provenance.Source)
 
 	priorityCol.Typ.Enumvalues = "changed"
+	priorityCol.Typ.EnumCollation = types.EnumCollationGeneralCI
 	priorityCol.Default.OriginString = "'changed'"
 	priorityCol.Default.Expr.GetLit().Value = &plan.Literal_Sval{Sval: "changed"}
 	require.Equal(t, "low,medium,high", provenance.Source.Metadata.Typ.Enumvalues)
+	require.Equal(t, types.EnumCollationUTF8Bin, provenance.Source.Metadata.Typ.EnumCollation)
 	require.NotNil(t, provenance.Source.Metadata.Default)
 	require.Equal(t, "'low'", provenance.Source.Metadata.Default.GetOriginString())
 	require.Equal(t, "low", provenance.Source.Metadata.Default.GetExpr().GetLit().GetSval())
+}
+
+func TestCTASPreservesSourceEnumCollation(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	addMySQLSpecialTypeColumns(ctx)
+	priority := ctx.tables["nation"].Cols[len(ctx.tables["nation"].Cols)-2]
+	for _, identity := range []uint32{types.EnumCollationLegacy, types.EnumCollationUTF8Bin, types.EnumCollationGeneralCI, types.EnumCollationUTF8MB4UnicodeCI} {
+		priority.Typ.EnumCollation = identity
+		for _, statement := range []string{
+			"create table copied as select priority from nation",
+			"create table copied as select priority from (select priority from nation) d",
+		} {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, statement, 1)
+			require.NoError(t, err)
+			p, err := BuildPlan(ctx, stmt, false, nil)
+			stmt.Free()
+			require.NoError(t, err, statement)
+			cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.NotEmpty(t, cols)
+			require.Equal(t, identity, cols[0].Typ.EnumCollation, statement)
+		}
+	}
 }
 
 func TestTransparentOutputSourceExprRejectsSemanticExpressions(t *testing.T) {

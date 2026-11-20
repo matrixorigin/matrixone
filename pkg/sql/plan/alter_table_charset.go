@@ -85,7 +85,9 @@ func applyAlterTableCharsetDefault(ctx CompilerContext, table *plan.TableDef, op
 	if err != nil {
 		return err
 	}
+	marker := enumUnsupportedTableDefault(ctx, defaults, false)
 	table.DefaultCharset = identity
+	table.EnumUnsupportedDefault = marker
 	table.CollationVersion = uint32(types.CollationVersionLegacy)
 	// V1 physical unique keys also own this schema marker; changing only
 	// inheritance must not revoke optimizer-pruned native-unique table shells.
@@ -99,6 +101,11 @@ func applyAlterTableCharsetDefault(ctx CompilerContext, table *plan.TableDef, op
 // only the Type tag. COPY owns row validation, index rebuild, publication and
 // failure cleanup. The parsed replay schema and its added attributes stay local.
 func convertAlterTableCharacterColumns(ctx CompilerContext, alter *plan.AlterTable, state *AlterTableContext, conversion *plan.DatabaseDefaults) error {
+	for _, col := range alter.CopyTableDef.Cols {
+		if isEnumPlanType(&col.Typ) {
+			return moerr.NewNotSupported(ctx.GetContext(), "ALTER TABLE CONVERT with ENUM columns")
+		}
+	}
 	_, parsed, err := constructCreateTableSQL(ctx, alter.CopyTableDef, nil, true, nil, true, nil, false, *parserSQLModeFromContext(ctx))
 	if err != nil {
 		return err

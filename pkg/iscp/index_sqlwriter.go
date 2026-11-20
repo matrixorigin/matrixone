@@ -740,6 +740,17 @@ func NewIvfflatSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef 
 		w.srcType[i+1] = w.partsType[i]
 	}
 
+	// Persisted source metadata is authoritative. Refuse an unsupported
+	// pre-release index too, before emitting identity-losing writer SQL.
+	for _, pos := range w.srcPos {
+		col := tabledef.Cols[pos]
+		if err := col.Typ.ValidateCollation(); err != nil {
+			return nil, err
+		}
+		if col.Typ.Id == int32(types.T_enum) && col.Typ.EnumCollation != 0 {
+			return nil, moerr.NewNotSupportedNoCtxf("index %s cannot preserve collated ENUM source column %s in asynchronous maintenance", idxdef.IndexName, col.Name)
+		}
+	}
 	w.centroids_tbl = centroids_tbl
 	w.entries_tbl = entries_tbl
 	w.meta_tbl = meta_tbl

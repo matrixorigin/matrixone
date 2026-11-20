@@ -1682,3 +1682,21 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
+
+func TestCreateMysqlSinker2RejectsUnfencedCollatedEnum(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	mock.ExpectClose()
+	stub := gostub.Stub(&OpenDbConn, func(context.Context, string, string, string, int, string) (*sql.DB, error) {
+		return db, nil
+	})
+	defer stub.Reset()
+	table := &plan.TableDef{Cols: []*plan.ColDef{{
+		Name: "e", Typ: plan.Type{Id: int32(types.T_enum), EnumCollation: types.EnumCollationUTF8Bin},
+	}}}
+	sinker, err := CreateMysqlSinker2(t.Context(), UriInfo{}, 1, "task", &DbTableInfo{}, nil,
+		table, 0, 0, NewCdcActiveRoutine(), 1024, CDCDefaultSendSqlTimeout)
+	require.Nil(t, sinker)
+	require.ErrorContains(t, err, "collation-aware ENUM requires fenced target verification")
+	require.NoError(t, mock.ExpectationsWereMet())
+}

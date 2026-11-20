@@ -49,6 +49,19 @@ func uca400Weights(dst, value []byte) []byte {
 	}
 }
 
+// EnumMemberWeights returns the non-padding UCA4 primary-weight stream used
+// for ENUM member lookup. Callers apply input-only ASCII space handling;
+// Domain.Key deliberately has different PAD SPACE semantics.
+func EnumMemberWeights(d Domain, value []byte) ([]byte, error) {
+	if d != UTF8MB4UnicodeCI && d != UTF8MB3UnicodeCI {
+		return nil, ErrDomain
+	}
+	if err := d.ValidateValue(value); err != nil {
+		return nil, err
+	}
+	return uca400Weights(nil, value), nil
+}
+
 func (d Domain) uca400Key(scratch, value []byte) ([]byte, error) {
 	if err := d.ValidateValue(value); err != nil {
 		return nil, err

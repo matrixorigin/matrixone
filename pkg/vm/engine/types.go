@@ -187,14 +187,15 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		exeDefs = append(exeDefs, propDef)
 	}
 	extra := &api.SchemaExtra{
-		FeatureFlag:      tableDef.FeatureFlag,
-		AutoIncrOffset:   tableDef.AutoIncrOffset,
-		AutoIncrEpoch:    tableDef.AutoIncrEpoch,
-		AutoIdCache:      tableDef.AutoIdCache,
-		Checks:           tableDef.Checks,
-		DefaultCharset:   tableDef.DefaultCharset,
-		CollationVersion: tableDef.CollationVersion,
-		KeyFormat:        tableDef.KeyFormat,
+		FeatureFlag:            tableDef.FeatureFlag,
+		AutoIncrOffset:         tableDef.AutoIncrOffset,
+		AutoIncrEpoch:          tableDef.AutoIncrEpoch,
+		AutoIdCache:            tableDef.AutoIdCache,
+		Checks:                 tableDef.Checks,
+		DefaultCharset:         tableDef.DefaultCharset,
+		EnumUnsupportedDefault: tableDef.EnumUnsupportedDefault,
+		CollationVersion:       tableDef.CollationVersion,
+		KeyFormat:              tableDef.KeyFormat,
 	}
 	propDef.Properties = append(
 		propDef.Properties,

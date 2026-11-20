@@ -53,7 +53,7 @@ func AddColumn(
 			"column name %s is reserved for external table scans", newColName)
 	}
 
-	colType, err := getColumnTypeFromAst(ctx.GetContext(), specNewColumn, tableDef.DefaultCharset, nil)
+	colType, err := getColumnTypeFromAstWithEnumDefault(ctx.GetContext(), specNewColumn, tableDef.DefaultCharset, nil, tableDef.EnumUnsupportedDefault)
 	if err != nil {
 		return false, err
 	}

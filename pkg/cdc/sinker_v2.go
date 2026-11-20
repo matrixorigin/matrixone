@@ -181,6 +181,10 @@ func createMysqlSinker2(
 	if err != nil {
 		return nil, err
 	}
+	if ownerFence == nil && cdcHasKnownEnumCollation(tableDef) {
+		executor.Close()
+		return nil, moerr.NewNotSupported(ctx, "CDC for collation-aware ENUM requires fenced target verification")
+	}
 
 	// 3. Execute DDL initialization (same as old version). Stable tasks pass
 	// the table-callback lifecycle context so pause/cancel can interrupt target
@@ -708,6 +712,20 @@ func cdcTargetColumnTypeMatches(source plan.Type, target, sinkType string, numer
 
 func expectedCDCTargetCollation(typ plan.Type) string {
 	switch types.T(typ.Id) {
+	case types.T_enum:
+		switch typ.EnumCollation {
+		case types.EnumCollationLegacy:
+			// Historical catalogs did not retain the member-lookup identity.
+			return ""
+		case types.EnumCollationUTF8Bin:
+			return "utf8mb4_bin"
+		case types.EnumCollationGeneralCI:
+			return "utf8mb4_general_ci"
+		case types.EnumCollationUTF8MB4UnicodeCI:
+			return "utf8mb4_unicode_ci"
+		default:
+			return "unsupported source ENUM collation"
+		}
 	case types.T_char, types.T_varchar, types.T_text:
 		switch typ.Charset {
 		case uint32(types.CharsetLegacy), uint32(types.CharsetUTF8MB4Bin):
@@ -720,6 +738,18 @@ func expectedCDCTargetCollation(typ plan.Type) string {
 		return "unsupported source collation"
 	}
 	return ""
+}
+
+func cdcHasKnownEnumCollation(table *plan.TableDef) bool {
+	if table == nil {
+		return false
+	}
+	for _, col := range table.Cols {
+		if col != nil && !col.Hidden && types.T(col.Typ.Id) == types.T_enum && col.Typ.EnumCollation != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // NewMysqlSinker2 creates a new improved MySQL sinker

@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
@@ -161,7 +162,7 @@ var (
 			FROM_USER char(32) NOT NULL DEFAULT '',
 			TO_HOST char(255) NOT NULL DEFAULT '',
 			TO_USER char(32) NOT NULL DEFAULT '',
-			WITH_ADMIN_OPTION enum('N','Y') NOT NULL DEFAULT 'N',
+			WITH_ADMIN_OPTION enum('N','Y') COLLATE ` + collation.LegacyEnumReplayName + ` NOT NULL DEFAULT 'N',
 			PRIMARY KEY (FROM_HOST,FROM_USER,TO_HOST,TO_USER)
 		)`
 )
@@ -1361,7 +1362,7 @@ var (
 		"IS_DEFAULT varchar(3) NOT NULL DEFAULT ''," +
 		"IS_COMPILED varchar(3) NOT NULL DEFAULT ''," +
 		"SORTLEN int unsigned NOT NULL," +
-		"PAD_ATTRIBUTE enum('PAD SPACE','NO PAD') NOT NULL" +
+		"PAD_ATTRIBUTE enum('PAD SPACE','NO PAD') COLLATE " + collation.LegacyEnumReplayName + " NOT NULL" +
 		")"
 
 	InformationSchemaCollationsData = informationSchemaCollationsDataSQL()
@@ -1440,7 +1441,7 @@ var (
 		"EVENT_TYPE varchar(9) NOT NULL DEFAULT ''," +
 		"EXECUTE_AT datetime," +
 		"INTERVAL_VALUE varchar(256)," +
-		"INTERVAL_FIELD enum('YEAR','QUARTER','MONTH','DAY','HOUR','MINUTE','WEEK','SECOND','MICROSECOND','YEAR_MONTH','DAY_HOUR','DAY_MINUTE','DAY_SECOND','HOUR_MINUTE','HOUR_SECOND','MINUTE_SECOND','DAY_MICROSECOND','HOUR_MICROSECOND','MINUTE_MICROSECOND','SECOND_MICROSECOND')," +
+		"INTERVAL_FIELD enum('YEAR','QUARTER','MONTH','DAY','HOUR','MINUTE','WEEK','SECOND','MICROSECOND','YEAR_MONTH','DAY_HOUR','DAY_MINUTE','DAY_SECOND','HOUR_MINUTE','HOUR_SECOND','MINUTE_SECOND','DAY_MICROSECOND','HOUR_MICROSECOND','MINUTE_MICROSECOND','SECOND_MICROSECOND') COLLATE " + collation.LegacyEnumReplayName + "," +
 		"SQL_MODE varchar(64) NOT NULL," +
 		"STARTS datetime," +
 		"ENDS datetime," +

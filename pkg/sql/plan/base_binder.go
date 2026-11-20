@@ -148,6 +148,15 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 	case *tree.FuncExpr:
 		expr, err = b.bindFuncExpr(exprImpl, depth, isRoot)
+		if ref, ok := exprImpl.Func.FunctionReference.(*tree.UnresolvedName); err == nil && ok && expr != nil {
+			name := strings.ToLower(ref.ColName())
+			if (name == moEnumCastIndexToValueFun || name == moSetCastIndexToValueFun) && isEnumOrSetDisplayValueExpr(expr) {
+				// An explicit display call is text chosen by the SQL author. Retain that
+				// boundary with existing conversion provenance, without inserting
+				// a runtime cast or changing the native result declaration.
+				expr.GetF().SyntaxExplicitCast = true
+			}
+		}
 
 	case *tree.RangeCond:
 		expr, err = b.bindRangeCond(exprImpl, depth, isRoot)
@@ -930,9 +939,9 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	preserveSpecialValue := typ != nil && b.mysqlSpecialTargetType != nil &&
-		typ.Enumvalues == b.mysqlSpecialTargetType.Enumvalues &&
 		((isEnumPlanType(typ) && isEnumPlanType(b.mysqlSpecialTargetType)) ||
-			(isSetPlanType(typ) && isSetPlanType(b.mysqlSpecialTargetType)))
+			(isSetPlanType(typ) && isSetPlanType(b.mysqlSpecialTargetType) &&
+				typ.Enumvalues == b.mysqlSpecialTargetType.Enumvalues))
 	// ENUM and SET have distinct storage and display representations. Keep their
 	// display value by default. Numeric and bitwise expression binders explicitly
 	// enable raw storage binding so they follow MySQL's numeric semantics.
@@ -4950,6 +4959,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
+	args = useStoredMySQLSpecialColumnsForSerial(name, astArgs, args)
 	rewrittenArgs, rewriteErr := b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 		b.GetContext(), name, args)
 	if rewriteErr != nil {
@@ -6341,6 +6351,56 @@ func isPositiveIntegerLiteral(lit *plan.Literal) bool {
 	default:
 		return false
 	}
+}
+
+// Serial functions encode typed storage, not column presentation. Only a
+// direct column (optionally parenthesized) with an implicit wrapper proves
+// column storage. An alias may expand to an authored function; preserve its
+// explicit marker, just as for an authored function or CHAR cast in the SQL.
+func useStoredMySQLSpecialColumnsForSerial(name string, astArgs []tree.Expr, args []*Expr) []*Expr {
+	switch name {
+	case "serial", "serial_full", "physical_serial", "physical_serial_full":
+	default:
+		return args
+	}
+	if len(astArgs) != len(args) {
+		return args
+	}
+	var result []*Expr
+	for i, ast := range astArgs {
+		for {
+			paren, ok := ast.(*tree.ParenExpr)
+			if !ok {
+				break
+			}
+			ast = paren.Expr
+		}
+		if _, ok := ast.(*tree.UnresolvedName); !ok || args[i] == nil {
+			continue
+		}
+		fn := args[i].GetF()
+		if fn == nil || fn.Func == nil || fn.SyntaxExplicitCast || len(fn.Args) != 2 || fn.Args[1] == nil ||
+			(fn.Args[1].GetCol() == nil && fn.Args[1].GetCorr() == nil) {
+			continue
+		}
+		var storage *Expr
+		switch {
+		case fn.Func.ObjName == moEnumCastIndexToValueFun && isEnumPlanType(&fn.Args[1].Typ):
+			storage = DeepCopyExpr(fn.Args[1])
+		case fn.Func.ObjName == moSetCastIndexToValueFun && isSetPlanType(&fn.Args[1].Typ):
+			storage, _ = storedSetBitmapExpr(args[i])
+		default:
+			continue
+		}
+		if result == nil {
+			result = append([]*Expr(nil), args...)
+		}
+		result[i] = storage
+	}
+	if result == nil {
+		return args
+	}
+	return result
 }
 
 func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) (*plan.Expr, bool, error) {
@@ -13023,7 +13083,7 @@ func storedMySQLSpecialTypeExpr(expr *Expr) (*Expr, bool) {
 		return expr, false
 	}
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.ObjName != moEnumCastIndexToValueFun || len(fn.Args) != 2 || fn.Args[1] == nil {
+	if fn == nil || fn.Func == nil || fn.SyntaxExplicitCast || fn.Func.ObjName != moEnumCastIndexToValueFun || len(fn.Args) != 2 || fn.Args[1] == nil {
 		return expr, false
 	}
 	return DeepCopyExpr(fn.Args[1]), true
@@ -13310,7 +13370,7 @@ func isSetDisplayValueExpr(expr *Expr) bool {
 		return false
 	}
 	fn := expr.GetF()
-	return fn != nil && fn.Func != nil && fn.Func.ObjName == moSetCastIndexToValueFun
+	return fn != nil && fn.Func != nil && !fn.SyntaxExplicitCast && fn.Func.ObjName == moSetCastIndexToValueFun
 }
 
 func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
@@ -13321,7 +13381,24 @@ func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
 		return false
 	}
 	fn := expr.GetF()
-	return fn != nil && fn.Func != nil && fn.Func.ObjName == moEnumCastIndexToValueFun
+	return fn != nil && fn.Func != nil && !fn.SyntaxExplicitCast && fn.Func.ObjName == moEnumCastIndexToValueFun
+}
+
+func isExplicitMySQLSpecialTypeDisplayFunction(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil || !fn.SyntaxExplicitCast {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	return id == function.CAST_INDEX_TO_VALUE || id == function.CAST_INDEX_TO_SET_VALUE
+}
+
+// Rebinding a helper may update its arguments, but cannot turn an authored
+// text conversion into an implicit adapter. A different overload owns new semantics.
+func preserveExplicitMySQLSpecialTypeDisplayMetadata(original, rebound *plan.Function) {
+	if isExplicitMySQLSpecialTypeDisplayFunction(original) && rebound != nil && rebound.Func != nil &&
+		original.Func.Obj == rebound.Func.Obj {
+		rebound.SyntaxExplicitCast = true
+	}
 }
 
 func quoteEnumOrSetDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, error) {

@@ -1,0 +1,58 @@
+drop database if exists enum_external_collation;
+create database enum_external_collation;
+use enum_external_collation;
+set @saved_sql_mode=@@sql_mode;
+set session sql_mode='STRICT_TRANS_TABLES';
+create table bin_serial(e enum('a','A') collate utf8mb4_bin);
+load data infile '$resources/load_data/enum_collation_valid.csv' into table bin_serial fields terminated by ',' parallel 'false' strict 'true';
+select hex(cast(e as char)),e+0 from bin_serial order by e+0,cast(e as char);
+➤ hex(cast(e as varchar))[-1,16383,0]  ¦  e + 0[-5,64,0]  𝄀
+61  ¦  1  𝄀
+61  ¦  1  𝄀
+41  ¦  2
+create table bin_parallel(e enum('a','A') collate utf8mb4_bin);
+load data infile '$resources/load_data/enum_collation_valid.csv' into table bin_parallel fields terminated by ',' parallel 'true' strict 'true';
+select hex(cast(e as char)),e+0 from bin_parallel order by e+0,cast(e as char);
+➤ hex(cast(e as varchar))[-1,16383,0]  ¦  e + 0[-5,64,0]  𝄀
+61  ¦  1  𝄀
+61  ¦  1  𝄀
+41  ¦  2
+load data infile '$resources/load_data/enum_collation_invalid_nbsp.csv' into table bin_serial fields terminated by ',' parallel 'false' strict 'true';
+internal error: convert to MySQL enum failed: item a  is not in enum [a A]
+select count(*) from bin_serial;
+➤ count(*)[-5,64,0]  𝄀
+3
+load data infile '$resources/load_data/enum_collation_invalid_nbsp.csv' into table bin_parallel fields terminated by ',' parallel 'true' strict 'true';
+internal error: convert to MySQL enum failed: item a  is not in enum [a A]
+select count(*) from bin_parallel;
+➤ count(*)[-5,64,0]  𝄀
+3
+create table general_ci(e enum('a','b') collate utf8mb4_general_ci);
+load data infile '$resources/load_data/enum_collation_ci.csv' into table general_ci fields terminated by ',' parallel 'false' strict 'true';
+select hex(cast(e as char)),e+0 from general_ci;
+➤ hex(cast(e as varchar))[-1,16383,0]  ¦  e + 0[-5,64,0]  𝄀
+61  ¦  1
+load data infile '$resources/load_data/enum_collation_invalid_nbsp.csv' into table general_ci fields terminated by ',' parallel 'false' strict 'true';
+internal error: convert to MySQL enum failed: item a  is not in enum [a b]
+select count(*) from general_ci;
+➤ count(*)[-5,64,0]  𝄀
+1
+create table bin_parquet(e enum('a','A') collate utf8mb4_bin);
+load data infile {'filepath'='$resources/load_data/enum_collation_valid.parquet','format'='parquet'} into table bin_parquet;
+select hex(cast(e as char)),e+0 from bin_parquet order by e+0,cast(e as char);
+➤ hex(cast(e as varchar))[-1,16383,0]  ¦  e + 0[-5,64,0]  𝄀
+61  ¦  1  𝄀
+61  ¦  1  𝄀
+41  ¦  2
+load data infile {'filepath'='$resources/load_data/enum_collation_invalid_nbsp.parquet','format'='parquet'} into table bin_parquet;
+internal error: convert to MySQL enum failed: item a  is not in enum [a A]
+select count(*) from bin_parquet;
+➤ count(*)[-5,64,0]  𝄀
+3
+create table unicode_empty(e enum('́') collate utf8mb4_unicode_ci);
+load data infile '$resources/load_data/enum_collation_empty_quoted.csv' into table unicode_empty fields terminated by ',' optionally enclosed by '"' parallel 'false' strict 'true';
+select hex(cast(e as char)),e+0,e is null from unicode_empty;
+➤ hex(cast(e as varchar))[-1,16383,0]  ¦  e + 0[-5,64,0]  ¦  e is null[-6,8,0]  𝄀
+CC81  ¦  1  ¦  0
+set session sql_mode=@saved_sql_mode;
+drop database enum_external_collation;

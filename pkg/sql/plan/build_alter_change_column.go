@@ -140,6 +140,13 @@ func buildColumnAndConstraint(
 		return nil, err
 	}
 
+	if (isEnumPlanType(&oldCol.Typ) || isEnumPlanType(&colType)) &&
+		(oldCol.Typ.Id != colType.Id || oldCol.Typ.Enumvalues != colType.Enumvalues || oldCol.Typ.EnumCollation != colType.EnumCollation) &&
+		(containsLegacyCRC32(oldCol.GetGeneratedCol().GetExpr()) ||
+			(preserveCRC32Default(oldCol.Default) && (containsLegacyCRC32(oldCol.GetDefault().GetExpr()) || crc32OriginMayCallFunction(oldCol.GetDefault().GetOriginString())))) {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "changing an ENUM domain with a legacy CRC32 JSON expression requires an explicit table rebuild")
+	}
+
 	newCol := &ColDef{
 		ColId:      oldCol.ColId,
 		Seqnum:     oldCol.Seqnum,
@@ -398,6 +405,7 @@ func checkIndexedColumnTypeChange(ctx context.Context, tableDef *plan.TableDef, 
 	if oldCol == nil || newCol == nil || oldCol.Name == "" ||
 		(oldCol.Typ.Id == newCol.Typ.Id &&
 			oldCol.Typ.Charset == newCol.Typ.Charset &&
+			oldCol.Typ.EnumCollation == newCol.Typ.EnumCollation &&
 			oldCol.Typ.CollationVersion == newCol.Typ.CollationVersion) {
 		return nil
 	}

@@ -80,13 +80,14 @@ func snapshotSourceColumnMetadata(col *plan.ColDef) SourceColumnMetadata {
 	metadata := SourceColumnMetadata{
 		NullAbility: col.Default == nil || col.Default.NullAbility,
 		Typ: plan.Type{
-			Id:          typ.Id,
-			NotNullable: typ.NotNullable,
-			AutoIncr:    typ.AutoIncr,
-			Width:       typ.Width,
-			Scale:       typ.Scale,
-			Table:       typ.Table,
-			Enumvalues:  typ.Enumvalues,
+			Id:            typ.Id,
+			NotNullable:   typ.NotNullable,
+			AutoIncr:      typ.AutoIncr,
+			Width:         typ.Width,
+			Scale:         typ.Scale,
+			Table:         typ.Table,
+			Enumvalues:    typ.Enumvalues,
+			EnumCollation: typ.EnumCollation,
 		},
 	}
 	if col.Default == nil {
@@ -164,7 +165,7 @@ func transparentOutputSourceExpr(expr *plan.Expr) (*plan.Expr, bool) {
 		return nil, false
 	}
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[1] == nil || fn.Args[1].GetCol() == nil {
+	if fn == nil || fn.Func == nil || fn.SyntaxExplicitCast || len(fn.Args) != 2 || fn.Args[1] == nil || fn.Args[1].GetCol() == nil {
 		return nil, false
 	}
 

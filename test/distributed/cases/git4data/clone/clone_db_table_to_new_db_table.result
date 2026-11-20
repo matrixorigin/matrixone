@@ -185,7 +185,7 @@ count(*)
 4
 show create table enum01;
 Table    Create Table
-enum01    CREATE TABLE `enum01` (\n  `col1` enum('red','blue','green') DEFAULT NULL,\n  `col2` blob DEFAULT NULL,\n  `col3` json DEFAULT NULL\n)
+enum01    CREATE TABLE `enum01` (\n  `col1` enum('red','blue','green') COLLATE utf8mb4_general_ci DEFAULT NULL,\n  `col2` blob DEFAULT NULL,\n  `col3` json DEFAULT NULL\n)
 desc enum01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    enum('red','blue','green')    YES        null

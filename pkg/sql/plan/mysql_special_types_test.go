@@ -20,9 +20,11 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -43,6 +45,175 @@ func TestFuncCastForEnumTypeKeepsMatchingErrorMember(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, expr, got)
 	require.Equal(t, uint32(0), got.GetLit().GetEnumVal())
+}
+
+func TestFuncCastForEnumTypeRemapsDistinctDomainsWithEnumBranches(t *testing.T) {
+	for _, target := range []plan.Type{
+		{Id: int32(types.T_enum), Enumvalues: "x,", EnumCollation: types.EnumCollationUTF8Bin},
+		{Id: int32(types.T_enum), Enumvalues: ",x", EnumCollation: types.EnumCollationGeneralCI},
+	} {
+		source := plan.Type{Id: int32(types.T_enum), Enumvalues: ",x", EnumCollation: types.EnumCollationUTF8Bin}
+		expr := &plan.Expr{Typ: source, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "e"}}}
+		got, err := funcCastForEnumType(context.Background(), expr, target)
+		require.NoError(t, err)
+		require.Equal(t, target, got.Typ)
+		fn := got.GetF()
+		require.NotNil(t, fn)
+		require.Equal(t, "case", fn.Func.ObjName)
+		require.Len(t, fn.Args, 3)
+		require.Equal(t, target, fn.Args[1].Typ)
+		require.Equal(t, uint32(0), fn.Args[1].GetLit().GetEnumVal())
+		require.Equal(t, target, fn.Args[2].Typ)
+		require.Equal(t, moEnumCastValueToIndexFun, fn.Args[2].GetF().Func.ObjName)
+	}
+}
+
+func TestFuncCastForEnumTypeRetainsExistingAssignmentDomain(t *testing.T) {
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A", EnumCollation: types.EnumCollationUTF8Bin}
+	converted, err := BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
+		makePlan2StringConstExprWithType(target.Enumvalues), makePlan2StringConstExprWithType("A"),
+		makePlan2Int64ConstExprWithType(0), makePlan2Int64ConstExprWithType(int64(target.EnumCollation)),
+	})
+	require.NoError(t, err)
+	got, err := funcCastForEnumType(context.Background(), converted, target)
+	require.NoError(t, err)
+	require.Equal(t, target, got.Typ)
+	require.Equal(t, moEnumCastValueToIndexFun, got.GetF().Func.ObjName)
+}
+
+func TestFuncCastForEnumTypeRemapsRuntimeIdentity(t *testing.T) {
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A"}
+	dynamicIdentity := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	converted, err := BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
+		makePlan2StringConstExprWithType(target.Enumvalues), makePlan2StringConstExprWithType("A"),
+		makePlan2Int64ConstExprWithType(0), dynamicIdentity,
+	})
+	require.NoError(t, err)
+
+	got, err := funcCastForEnumType(context.Background(), converted, target)
+	require.NoError(t, err)
+	require.Equal(t, target, got.Typ)
+	identityCase := got.GetF()
+	require.NotNil(t, identityCase)
+	require.Equal(t, "case", identityCase.Func.ObjName)
+	require.Len(t, identityCase.Args, 3)
+	require.Equal(t, "=", identityCase.Args[0].GetF().Func.ObjName)
+	require.Equal(t, dynamicIdentity, identityCase.Args[0].GetF().Args[0])
+	require.Equal(t, uint32(target.EnumCollation), uint32(identityCase.Args[0].GetF().Args[1].GetLit().GetI64Val()))
+	require.Equal(t, target, identityCase.Args[1].Typ, "the matching identity must retain the raw physical ordinal")
+	require.Equal(t, converted.GetF(), identityCase.Args[1].GetF(), "the raw branch must retain the original helper")
+	remap := identityCase.Args[2].GetF()
+	require.NotNil(t, remap)
+	require.Equal(t, "case", remap.Func.ObjName, "ordinal zero must remain distinct while remapping")
+	require.Len(t, remap.Args, 3)
+	convertedTarget := remap.Args[2].GetF()
+	require.NotNil(t, convertedTarget)
+	require.Equal(t, moEnumCastValueToIndexFun, convertedTarget.Func.ObjName)
+	require.Equal(t, target.Enumvalues, convertedTarget.Args[0].GetLit().GetSval())
+	display := convertedTarget.Args[1].GetF()
+	require.NotNil(t, display)
+	require.Equal(t, moEnumCastIndexToValueFun, display.Func.ObjName)
+	require.Equal(t, target.Enumvalues, display.Args[1].Typ.Enumvalues)
+	require.Equal(t, converted.GetF(), display.Args[1].GetF())
+}
+
+func TestFuncCastForEnumTypeRemapsRuntimeIdentityAcrossReorderedDomain(t *testing.T) {
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A"}
+	dynamicIdentity := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	converted, err := BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
+		makePlan2StringConstExprWithType("A,a"), makePlan2StringConstExprWithType("A"),
+		makePlan2Int64ConstExprWithType(0), dynamicIdentity,
+	})
+	require.NoError(t, err)
+
+	got, err := funcCastForEnumType(context.Background(), converted, target)
+	require.NoError(t, err)
+	require.Equal(t, target, got.Typ)
+	zeroCase := got.GetF()
+	require.NotNil(t, zeroCase)
+	require.Equal(t, "case", zeroCase.Func.ObjName)
+	require.NotEqual(t, dynamicIdentity, zeroCase.Args[0].GetF().Args[0],
+		"matching the identity is insufficient when the member ordering differs")
+	remap := zeroCase.Args[2].GetF()
+	require.NotNil(t, remap)
+	require.Equal(t, moEnumCastValueToIndexFun, remap.Func.ObjName)
+	require.Equal(t, target.Enumvalues, remap.Args[0].GetLit().GetSval())
+	require.Equal(t, moEnumCastIndexToValueFun, remap.Args[1].GetF().Func.ObjName)
+}
+
+func TestFuncCastForEnumTypeRejectsVolatileRemapInputs(t *testing.T) {
+	ctx := context.Background()
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A"}
+	random, err := BindFuncExprImplByPlanExpr(ctx, "rand", nil)
+	require.NoError(t, err)
+	condition, err := BindFuncExprImplByPlanExpr(ctx, ">", []*plan.Expr{random, makePlan2Int64ConstExprWithType(0)})
+	require.NoError(t, err)
+	identity, err := BindFuncExprImplByPlanExpr(ctx, "case", []*plan.Expr{
+		condition, makePlan2Int64ConstExprWithType(0), makePlan2Int64ConstExprWithType(2),
+	})
+	require.NoError(t, err)
+	converted, err := BindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, []*plan.Expr{
+		makePlan2StringConstExprWithType(target.Enumvalues), makePlan2StringConstExprWithType("A"),
+		makePlan2Int64ConstExprWithType(0), identity,
+	})
+	require.NoError(t, err)
+	_, err = funcCastForEnumType(ctx, converted, target)
+	require.ErrorContains(t, err, "volatile conversion input")
+}
+
+func TestFuncCastForEnumTypeDefersInvalidIdentityWhenEncodingCanBeNull(t *testing.T) {
+	ctx := context.Background()
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A"}
+	encoding := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	converted, err := BindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, []*plan.Expr{
+		makePlan2StringConstExprWithType(target.Enumvalues), makePlan2StringConstExprWithType("A"),
+		encoding, makePlan2Int64ConstExprWithType(999),
+	})
+	require.NoError(t, err)
+	got, err := funcCastForEnumType(ctx, converted, target)
+	require.NoError(t, err, "the runtime helper returns SQL NULL when encoding metadata is NULL")
+	require.Equal(t, target, got.Typ)
+}
+
+func TestFuncCastForEnumTypeRejectsRuntimeSourceMemberList(t *testing.T) {
+	ctx := context.Background()
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "", EnumCollation: types.EnumCollationUTF8Bin}
+	domain := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 16}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	converted, err := BindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, []*plan.Expr{
+		domain,
+		makePlan2StringConstExprWithType("b"),
+		makePlan2Int64ConstExprWithType(0),
+		makePlan2Int64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	_, err = funcCastForEnumType(ctx, converted, target)
+	require.ErrorContains(t, err, "runtime source member list")
+}
+
+func TestFuncCastForEnumTypeKeepsNullSourceMemberListHelper(t *testing.T) {
+	ctx := context.Background()
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b", EnumCollation: types.EnumCollationUTF8Bin}
+	nullDomain := makePlan2NullConstExprWithType()
+	nullDomain.Typ = plan.Type{Id: int32(types.T_varchar), Width: 16}
+	converted, err := BindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, []*plan.Expr{
+		nullDomain,
+		makePlan2StringConstExprWithType("a"),
+		makePlan2Int64ConstExprWithType(0),
+		makePlan2Int64ConstExprWithType(999),
+	})
+	require.NoError(t, err)
+
+	got, err := funcCastForEnumType(ctx, converted, target)
+	require.NoError(t, err)
+	require.Equal(t, target, got.Typ)
+	fn := got.GetF()
+	require.NotNil(t, fn, "retain runtime metadata validation for the NULL result")
+	require.Equal(t, moEnumCastValueToIndexFun, fn.Func.ObjName)
+	require.True(t, fn.Args[0].GetLit().Isnull)
+	require.Equal(t, int64(999), fn.Args[3].GetLit().GetI64Val())
 }
 
 func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
@@ -1011,6 +1182,180 @@ func TestGeometrySRIDNullShortCircuit(t *testing.T) {
 			require.NoError(t, err)
 			_, err = funcCastForGeometryType(context.Background(), expr, target)
 			require.NoError(t, err, "NULL result must short-circuit SRID mismatch validation")
+		})
+	}
+}
+
+func TestExplicitEnumSetDisplayRemainsTextForSerialization(t *testing.T) {
+	ctx := context.Background()
+	for _, display := range []string{
+		"cast_index_to_value('x,y',cast_value_to_index('a,b','b'))",
+		"cast_index_to_set_value('x,y',2)",
+	} {
+		for _, name := range []string{"serial", "serial_full", "physical_serial", "physical_serial_full"} {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select "+name+"("+display+")", 1)
+			require.NoError(t, err)
+			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			bound, err := NewDefaultBinder(ctx, nil, nil, plan.Type{}, nil).BindExpr(ast, 0, true)
+			require.NoError(t, err)
+			input := bound.GetF().Args[0]
+			require.Equal(t, int32(types.T_varchar), input.Typ.Id)
+			require.NotNil(t, input.GetF())
+			require.Contains(t, []string{moEnumCastIndexToValueFun, moSetCastIndexToValueFun}, input.GetF().Func.ObjName)
+			require.True(t, input.GetF().SyntaxExplicitCast)
+			require.Equal(t, int32(types.MaxVarcharLen), input.Typ.Width, "conversion provenance must retain native metadata")
+			_, recovered := storedMySQLSpecialTypeExpr(input)
+			require.False(t, recovered, "explicit display conversion must not become a stored ordinal")
+			stmt.Free()
+		}
+	}
+}
+
+func TestExplicitEnumSetDisplayPlanningBoundaries(t *testing.T) {
+	ctx := context.Background()
+	for _, typ := range []plan.Type{
+		{Id: int32(types.T_enum), Enumvalues: "x,y", EnumCollation: types.EnumCollationUTF8Bin},
+		{Id: int32(types.T_uint64), Enumvalues: "x,y"},
+	} {
+		column := &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "e", ColPos: 0}}}
+		implicit, err := makeEnumOrSetDisplayValue(ctx, column)
+		require.NoError(t, err)
+		authored := DeepCopyExpr(implicit)
+		authored.GetF().SyntaxExplicitCast = true
+		source, transparent := transparentOutputSourceExpr(implicit)
+		require.True(t, transparent)
+		require.True(t, proto.Equal(column, source))
+		_, transparent = transparentOutputSourceExpr(authored)
+		require.False(t, transparent)
+		require.False(t, exprStructuralEqual(authored, implicit), "optimizer equality must retain the conversion boundary")
+		require.True(t, exprStructuralEqual(authored, DeepCopyExpr(authored)))
+		data, err := authored.Marshal()
+		require.NoError(t, err)
+		var decoded plan.Expr
+		require.NoError(t, decoded.Unmarshal(data))
+		for _, restored := range []*plan.Expr{DeepCopyExpr(authored), &decoded} {
+			_, stored := storedMySQLSpecialTypeExpr(restored)
+			require.False(t, stored)
+			require.True(t, isExplicitPreparedValueBoundary(restored))
+			require.False(t, isExplicitPreparedCast(restored))
+			rebound, err := rebindFloatStringFunction(ctx, restored, DeepCopyExpr(restored).GetF().Args)
+			require.NoError(t, err)
+			_, stored = storedMySQLSpecialTypeExpr(rebound)
+			require.False(t, stored, "catalog rebind must retain authored text")
+			prepared, err := BindFuncExprImplByPlanExpr(ctx, restored.GetF().Func.ObjName, DeepCopyExpr(restored).GetF().Args)
+			require.NoError(t, err)
+			preserveReboundFunctionMetadata(restored.GetF(), prepared.GetF())
+			_, stored = storedMySQLSpecialTypeExpr(prepared)
+			require.False(t, stored, "prepared rebind must retain authored text")
+		}
+		require.False(t, implicit.GetF().SyntaxExplicitCast, "shared column adapters must remain unchanged")
+	}
+}
+
+func TestExplicitEnumSetDisplayConditionalValues(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	for _, helper := range []string{moEnumCastIndexToValueFun, moSetCastIndexToValueFun} {
+		index := "1"
+		if helper == moEnumCastIndexToValueFun {
+			index = "cast_value_to_index('a','a')"
+		}
+		display := helper + "('hello'," + index + ")"
+		for _, tc := range []struct{ sql, want string }{
+			{"if(true," + display + ",'x')", "hello"},
+			{"if(false," + display + ",'x')", "x"},
+			{"case when true then " + display + " else 'x' end", "hello"},
+			{"case when false then " + display + " else 'x' end", "x"},
+			{"coalesce(null," + display + ",'x')", "hello"},
+			{"coalesce('x'," + display + ")", "x"},
+		} {
+			t.Run(tc.sql, func(t *testing.T) {
+				stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "select "+tc.sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+				bound, err := NewDefaultBinder(proc.Ctx, nil, nil, plan.Type{}, nil).BindExpr(ast, 0, true)
+				require.NoError(t, err)
+				executor, err := colexec.NewExpressionExecutor(proc, bound)
+				require.NoError(t, err)
+				defer executor.Free()
+				result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, string(result.GetBytesAt(0)), tc.sql)
+			})
+		}
+	}
+}
+
+func TestMarkerlessDisplayDumpBindings(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression string
+		legacyFloat      bool
+	}{
+		{"enum", "cast_index_to_value('hello',cast_value_to_index('a','a'))", false},
+		{"set", "cast_index_to_set_value('hello',1)", false},
+		{"legacy float set", "cast_index_to_set_value(1.23456789e0,1)", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			ctx := NewMockCompilerContext(false, proc)
+			stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "create table display_history(v varchar(40) default("+tc.expression+"))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, false, nil)
+			require.NoError(t, err)
+			target := built.GetDdl().GetCreateTable().GetTableDef()
+			stored := proto.Clone(target).(*plan.TableDef)
+			if tc.legacyFloat {
+				item := tableDumpExpressions(stored)[0]
+				parsed, ast, _, err := parseTableDumpExpression(proc.Ctx, item.origin, "")
+				require.NoError(t, err)
+				defer parsed.Free()
+				item.col.Default.Expr, err = bindTableDumpExpression(ctx, stored, item, ast, 4, tableDumpBindingLegacyFloat, &tableDumpDefaultSession{captureUnfolded: true})
+				require.NoError(t, err)
+			}
+			expr := FindColumn(stored.Cols, "v").Default.Expr
+			markers := 0
+			require.NoError(t, plan.VisitExprTree(expr, func(node *plan.Expr) error {
+				if isExplicitMySQLSpecialTypeDisplayFunction(node.GetF()) {
+					node.GetF().SyntaxExplicitCast = false
+					markers++
+				}
+				return nil
+			}))
+			require.Positive(t, markers)
+			before := DeepCopyExpr(expr)
+			require.False(t, sameTableDumpBoundExpression(expr, FindColumn(target.Cols, "v").Default.Expr), "ordinary comparison must remain strict")
+			_, err = AnalyzeTableDumpBindings(ctx, target, stored)
+			require.NoError(t, err, "historical marker absence must be proved from SQL origin")
+			require.True(t, proto.Equal(before, expr), "proof cannot mutate catalog or supplied bindings")
+			if tc.legacyFloat {
+				owned := CloneTableDefForPlan(stored, true)
+				require.True(t, hasLegacyFloatStringCast(expr), "exercise the historical float migration")
+				value := func(expr *plan.Expr) string {
+					executor, err := colexec.NewExpressionExecutor(proc, expr)
+					require.NoError(t, err)
+					defer executor.Free()
+					result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+					require.NoError(t, err)
+					return result.GetStringAt(0)
+				}
+				want := value(expr)
+				require.NoError(t, MigrateLegacyFloatStringTableDef(ctx, owned))
+				migrated := FindColumn(owned.Cols, "v").Default.Expr
+				require.False(t, proto.Equal(expr, migrated), "the historical fixture must actually migrate")
+				require.Equal(t, want, value(migrated))
+				require.True(t, proto.Equal(before, expr), "migration must detach shared catalog expressions")
+			} else {
+				forged := proto.Clone(stored).(*plan.TableDef)
+				require.NoError(t, plan.VisitExprTree(FindColumn(forged.Cols, "v").Default.Expr, func(node *plan.Expr) error {
+					if fn := node.GetF(); fn != nil && fn.Func != nil && (fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun) {
+						fn.Args[0].GetLit().Value = &plan.Literal_Sval{Sval: "other"}
+					}
+					return nil
+				}))
+				_, err = AnalyzeTableDumpBindings(ctx, target, forged)
+				require.ErrorContains(t, err, "cannot verify bound default")
+			}
 		})
 	}
 }

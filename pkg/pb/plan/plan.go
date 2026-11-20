@@ -92,7 +92,7 @@ func (t *Type) IsEmpty() bool {
 		t.Width == 0 &&
 		t.Scale == 0 &&
 		t.Table == "" &&
-		t.Enumvalues == "")
+		t.Enumvalues == "" && t.EnumCollation == 0)
 }
 
 func (def *ColDef) GetOriginCaseName() string {

@@ -23,10 +23,14 @@ import (
 
 type boundExpressionProjection uint8
 
+// Independent comparison permissions compose without adding binding eras.
+// Only SQL-origin proof enables either syntax-marker recovery permission.
 const (
-	boundExpressionNormalized boundExpressionProjection = iota
-	boundExpressionHistorical
-	boundExpressionLegacyOrigin
+	boundExpressionNormalized    boundExpressionProjection = 0
+	boundExpressionHistorical    boundExpressionProjection = 1 << 0
+	boundExpressionCastOrigin    boundExpressionProjection = 1 << 1
+	boundExpressionDisplayOrigin boundExpressionProjection = 1 << 2
+	boundExpressionLegacyOrigin                            = boundExpressionHistorical | boundExpressionCastOrigin | boundExpressionDisplayOrigin
 )
 
 // sameProjectedBoundExpression compares read-only views instead of cloning whole
@@ -45,7 +49,7 @@ func sameProjectedBoundExpression(a, b *planpb.Expr, projection boundExpressionP
 		return proto.Equal(a, b)
 	}
 	left, right := *a, *b
-	if projection != boundExpressionNormalized {
+	if projection&boundExpressionHistorical != 0 {
 		omitHistoricalFloatCoercibility(&left, &right)
 	}
 	normalizeBoundExpressionType(&left.Typ)
@@ -59,13 +63,12 @@ func sameProjectedBoundExpression(a, b *planpb.Expr, projection boundExpressionP
 			lf, rf := *x.F, *y.F
 			leftChildren, rightChildren = lf.Args, rf.Args
 			lf.Args, rf.Args = nil, nil
-			if projection == boundExpressionLegacyOrigin {
+			if projection&(boundExpressionCastOrigin|boundExpressionDisplayOrigin) != 0 {
 				// The old marker recovery did not descend through a missing Func.
 				if rf.Func == nil {
 					childProjection = boundExpressionNormalized
 				} else {
-					id, overload := function.DecodeOverloadID(rf.Func.Obj)
-					if id == function.CAST && overload == 0 && !lf.SyntaxExplicitCast {
+					if boundExpressionRecoversSyntax(&lf, &rf, projection) {
 						rf.SyntaxExplicitCast = false
 					}
 				}
@@ -128,16 +131,26 @@ func boundExpressionNeedsHistoricalProjection(a, b *planpb.Expr, projection boun
 	if projection == boundExpressionNormalized {
 		return false
 	}
-	candidate := *b
-	omitHistoricalFloatCoercibility(a, &candidate)
-	if candidate.Typ.CollationCoercibility != b.Typ.CollationCoercibility || candidate.Typ.CollationCoercibilitySet != b.Typ.CollationCoercibilitySet {
-		return true
-	}
-	if projection == boundExpressionLegacyOrigin {
-		if x, y := a.GetF(), b.GetF(); x != nil && y != nil && y.Func != nil {
-			id, overload := function.DecodeOverloadID(y.Func.Obj)
-			return id == function.CAST && overload == 0 && !x.SyntaxExplicitCast && y.SyntaxExplicitCast
+	if projection&boundExpressionHistorical != 0 {
+		candidate := *b
+		omitHistoricalFloatCoercibility(a, &candidate)
+		if candidate.Typ.CollationCoercibility != b.Typ.CollationCoercibility || candidate.Typ.CollationCoercibilitySet != b.Typ.CollationCoercibilitySet {
+			return true
 		}
 	}
-	return false
+	return boundExpressionRecoversSyntax(a.GetF(), b.GetF(), projection)
+}
+
+// Only a complete SQL-origin witness may account for a missing syntax marker.
+// All other fields and argument edges still participate in protobuf equality.
+func boundExpressionRecoversSyntax(stored, candidate *planpb.Function, projection boundExpressionProjection) bool {
+	if stored == nil || candidate == nil || stored.Func == nil || candidate.Func == nil ||
+		stored.Func.Obj != candidate.Func.Obj || stored.SyntaxExplicitCast || !candidate.SyntaxExplicitCast {
+		return false
+	}
+	if projection&boundExpressionDisplayOrigin != 0 && isExplicitMySQLSpecialTypeDisplayFunction(candidate) {
+		return true
+	}
+	id, overload := function.DecodeOverloadID(candidate.Func.Obj)
+	return projection&boundExpressionCastOrigin != 0 && id == function.CAST && overload == 0
 }

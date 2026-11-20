@@ -37,7 +37,11 @@ func TypeFromPlan(typ plan.Type) (Type, error) {
 	if err := typ.ValidateCollation(); err != nil {
 		return Type{}, err
 	}
-	result := NewWithCharset(T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	charset := typ.Charset
+	if T(typ.Id) == T_enum {
+		charset = typ.EnumCollation
+	}
+	result := NewWithCharset(T(typ.Id), typ.Width, typ.Scale, uint8(charset))
 	result.CollationVersion = uint8(typ.CollationVersion)
 	return result, nil
 }
@@ -55,6 +59,9 @@ func MustTypeFromPlan(typ plan.Type) Type {
 // PlanType carries runtime identity/revision; expression provenance remains
 // owned by the source plan and must be copied with that plan, not invented here.
 func (t Type) PlanType() plan.Type {
+	if t.Oid == T_enum {
+		return plan.Type{Id: int32(t.Oid), Width: t.Width, Scale: t.Scale, EnumCollation: t.GetEnumCollation()}
+	}
 	return plan.Type{Id: int32(t.Oid), Width: t.Width, Scale: t.Scale,
 		Charset: uint32(t.Charset), CollationVersion: uint32(t.CollationVersion)}
 }

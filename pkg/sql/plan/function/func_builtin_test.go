@@ -227,6 +227,25 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 	}
 }
 
+func TestInternalCharacterSetEnumCollation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	encoded := make([]string, 0, 4)
+	for _, identity := range []uint8{0, uint8(types.EnumCollationUTF8Bin), uint8(types.EnumCollationGeneralCI), uint8(types.EnumCollationUTF8MB4UnicodeCI)} {
+		typ := types.T_enum.ToType()
+		typ.Charset = identity
+		data, err := typ.Marshal()
+		require.NoError(t, err)
+		encoded = append(encoded, string(data))
+	}
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), encoded, nil)},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 1, 3, 5}, []bool{true, false, false, false}),
+		builtInInternalCharacterSet,
+	)
+	ok, info := tc.RunAndFree()
+	require.True(t, ok, info)
+}
+
 func TestBuiltInInternalNumericPrecisionUsesMySQLDigits(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typesToEncode := []types.Type{

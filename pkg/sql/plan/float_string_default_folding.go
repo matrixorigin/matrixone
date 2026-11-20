@@ -70,10 +70,17 @@ func freezeVerifiedFloatDefault(ctx context.Context, folded, old, current *planp
 	f, o, n := folded.GetF(), old.GetF(), current.GetF()
 	if f != nil || o != nil || n != nil {
 		if f == nil || o == nil || n == nil || f.Func == nil || o.Func == nil || n.Func == nil ||
-			f.Func.Obj != o.Func.Obj || f.Func.Obj != n.Func.Obj || f.SyntaxExplicitCast != o.SyntaxExplicitCast || f.SyntaxExplicitCast != n.SyntaxExplicitCast ||
+			f.Func.Obj != o.Func.Obj || f.Func.Obj != n.Func.Obj ||
 			len(f.Args) != len(o.Args) || len(f.Args) != len(n.Args) {
 			return nil, false, errLegacyFloatStringRebind
 		}
+		if (f.SyntaxExplicitCast != o.SyntaxExplicitCast || f.SyntaxExplicitCast != n.SyntaxExplicitCast) &&
+			(f.SyntaxExplicitCast || !isExplicitMySQLSpecialTypeDisplayFunction(n)) {
+			return nil, false, errLegacyFloatStringRebind
+		}
+		// The complete SQL-origin witness above established this native
+		// conversion. Its old missing planner marker does not change the
+		// frozen argument values retained below.
 		args := make([]*planpb.Expr, len(n.Args))
 		changed := false
 		for i := range args {

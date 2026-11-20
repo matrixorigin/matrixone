@@ -99,6 +99,29 @@ func atomicStringBatch(t *testing.T, mp *mpool.MPool, values []string) *AtomicBa
 
 func unpaddedSQL(sql []byte) string { return string(sql[v2SQLBufReserved:]) }
 
+func TestCDCStatementBuilderEnumOrdinalInsertAndDelete(t *testing.T) {
+	def := &plan.TableDef{
+		Cols:          []*plan.ColDef{{Name: "e", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "2,x", EnumCollation: types.EnumCollationUTF8Bin}}},
+		Name2ColIndex: map[string]int32{"e": 0},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"e"}},
+	}
+	builder, err := NewCDCStatementBuilder("dst", "t", def, 1<<20, true)
+	require.NoError(t, err)
+	row, err := builder.formatInsertRow(context.Background(), []any{types.Enum(2)})
+	require.NoError(t, err)
+	require.Equal(t, "(2)", string(row))
+	key, err := builder.formatDeleteRow(context.Background(), types.Enum(2))
+	require.NoError(t, err)
+	require.Equal(t, "(2)", string(key))
+	_, err = builder.formatInsertRow(context.Background(), []any{types.Enum(0)})
+	require.ErrorContains(t, err, "ENUM error ordinal 0")
+	_, err = builder.formatDeleteRow(context.Background(), types.Enum(0))
+	require.ErrorContains(t, err, "ENUM error ordinal 0")
+	row, err = builder.formatInsertRow(context.Background(), []any{nil})
+	require.NoError(t, err)
+	require.Equal(t, "(NULL)", string(row))
+}
+
 func TestNewCDCStatementBuilder_ValidationAndStrategy(t *testing.T) {
 	t.Run("pk only uses upsert and quotes once", func(t *testing.T) {
 		def := &plan.TableDef{

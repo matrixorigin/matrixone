@@ -3339,15 +3339,40 @@ func TestLCAProbeJoinCastType(t *testing.T) {
 func TestAppendLCAProbeValue(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	t.Run("restores enum code from right join label", func(t *testing.T) {
-		src := vector.NewVec(types.T_varchar.ToType())
+	t.Run("restores physical enum ordinal from SQL projection", func(t *testing.T) {
+		src := vector.NewVec(types.T_uint64.ToType())
 		dst := vector.NewVec(types.T_enum.ToType())
 		defer src.Free(mp)
 		defer dst.Free(mp)
 
-		require.NoError(t, vector.AppendBytes(src, []byte("blue"), false, mp))
-		require.NoError(t, appendLCAProbeValue(dst, src, 0, "red,blue,green", mp))
-		require.Equal(t, []types.Enum{2}, vector.MustFixedColWithTypeCheck[types.Enum](dst))
+		for _, ordinal := range []uint64{0, 1, 2, 3} {
+			require.NoError(t, vector.AppendFixed(src, ordinal, false, mp))
+		}
+		require.NoError(t, vector.AppendFixed(src, uint64(0), true, mp))
+		for row := 0; row < 5; row++ {
+			require.NoError(t, appendLCAProbeValue(dst, src, row, mp))
+		}
+		require.Equal(t, []types.Enum{0, 1, 2, 3, 0}, vector.MustFixedColWithTypeCheck[types.Enum](dst))
+		require.True(t, dst.GetNulls().Contains(4))
+	})
+
+	t.Run("rejects out of range enum ordinal", func(t *testing.T) {
+		src := vector.NewVec(types.T_uint64.ToType())
+		dst := vector.NewVec(types.T_enum.ToType())
+		defer src.Free(mp)
+		defer dst.Free(mp)
+		require.NoError(t, vector.AppendFixed(src, uint64(65536), false, mp))
+		require.ErrorContains(t, appendLCAProbeValue(dst, src, 0, mp), "exceeds uint16")
+		require.Zero(t, dst.Length())
+	})
+
+	t.Run("rejects ambiguous enum label", func(t *testing.T) {
+		src := vector.NewVec(types.T_varchar.ToType())
+		dst := vector.NewVec(types.T_enum.ToType())
+		defer src.Free(mp)
+		defer dst.Free(mp)
+		require.NoError(t, vector.AppendBytes(src, []byte("a"), false, mp))
+		require.ErrorContains(t, appendLCAProbeValue(dst, src, 0, mp), "unexpected LCA probe type conversion")
 	})
 
 	t.Run("rejects unsupported storage conversion", func(t *testing.T) {
@@ -3357,7 +3382,7 @@ func TestAppendLCAProbeValue(t *testing.T) {
 		defer dst.Free(mp)
 
 		require.NoError(t, vector.AppendBytes(src, []byte("2"), false, mp))
-		err := appendLCAProbeValue(dst, src, 0, "", mp)
+		err := appendLCAProbeValue(dst, src, 0, mp)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "unexpected LCA probe type conversion")
 	})
@@ -3369,7 +3394,7 @@ func TestAppendLCAProbeValue(t *testing.T) {
 		defer dst.Free(mp)
 
 		require.NoError(t, vector.AppendBytes(src, []byte("2"), false, mp))
-		err := appendLCAProbeValue(dst, src, 0, "", mp)
+		err := appendLCAProbeValue(dst, src, 0, mp)
 		require.ErrorContains(t, err, "unexpected LCA probe type conversion")
 	})
 }

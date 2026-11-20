@@ -16,5 +16,8 @@ func (s *SchemaExtra) ValidateCollation() error {
 	if err := collation.ValidateMetadata(s.DefaultCharset, s.CollationVersion); err != nil {
 		return err
 	}
+	if err := collation.ValidateEnumUnsupportedDefault(s.DefaultCharset, s.EnumUnsupportedDefault); err != nil {
+		return err
+	}
 	return collation.ValidateKeyFormat(s.KeyFormat)
 }

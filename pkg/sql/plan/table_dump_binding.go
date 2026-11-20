@@ -1135,8 +1135,12 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 						budget.rememberSession(proc.GetSessionInfo().TimeZone, proc.GetSessionInfo().LCTimeNames)
 					}
 				}()
+				projection := boundExpressionDisplayOrigin
+				if mode&tableDumpBindingLegacyFloat != 0 {
+					projection |= boundExpressionHistorical
+				}
 				if sameTableDumpBoundExpression(want, candidate) ||
-					mode&tableDumpBindingLegacyFloat != 0 && sameHistoricalFloatBoundExpression(want, candidate) {
+					sameProjectedBoundExpression(want, candidate, projection) {
 					return true, nil
 				}
 				if !integerDecimal || mode&tableDumpBindingFrozenFloatDefaults == 0 || candidate == nil {

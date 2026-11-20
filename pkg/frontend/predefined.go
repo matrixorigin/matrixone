@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 )
@@ -132,17 +133,19 @@ var (
 				primary key(configuration_id)
 			)`
 
+	// Bootstrap runs before the authoring gate opens. Keep the catalog ENUM's
+	// historical semantics without introducing new collation metadata.
 	MoCatalogMoSnapshotsDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
 			snapshot_id uuid unique key,
 			sname varchar(64) primary key,
 			ts bigint,
-			level enum('cluster','account','database','table'),
+			level enum('cluster','account','database','table') COLLATE %s,
 	        account_name varchar(300),
 			database_name varchar(5000),
 			table_name  varchar(5000),
 			obj_id bigint unsigned,
     		kind varchar(32) not null default 'user'
-			)`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS)
+			)`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, collation.LegacyEnumReplayName)
 	MoCatalogSysSnapshotQuotaIndexDDL = fmt.Sprintf(
 		"create index idx_snapshot_quota_target on %s.%s(account_name, level, obj_id, kind)",
 		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,

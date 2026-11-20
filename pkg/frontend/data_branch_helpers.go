@@ -52,14 +52,16 @@ func isDataBranchFloatType(typ types.Type) bool {
 }
 
 // dataBranchSQLKeyEqual returns the SQL predicate for Data Branch key
-// identity. MatrixOne primary keys preserve FLOAT/DOUBLE bits, so scalar
-// equality is insufficient: it collapses signed zero and cannot distinguish
-// NaN payloads. serial() is the same bit-preserving encoding used by key paths.
+// identity. FLOAT/DOUBLE keys preserve their bits, and ENUM keys preserve
+// ordinals even when error ordinal 0 and a valid empty member display alike.
 func dataBranchSQLKeyEqual(left, right string, typ types.Type) string {
-	if !isDataBranchFloatType(typ) {
-		return fmt.Sprintf("%s = %s", left, right)
+	if isDataBranchFloatType(typ) {
+		return fmt.Sprintf("serial(%s) = serial(%s)", left, right)
 	}
-	return fmt.Sprintf("serial(%s) = serial(%s)", left, right)
+	if typ.Oid == types.T_enum {
+		return fmt.Sprintf("cast(%s as unsigned) = cast(%s as unsigned)", left, right)
+	}
+	return fmt.Sprintf("%s = %s", left, right)
 }
 
 // dataBranchFloatPKIdentityAt returns the exact storage identity used to order

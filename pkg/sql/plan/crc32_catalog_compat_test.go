@@ -871,3 +871,47 @@ func TestCRC32DefaultRetainsJSONTextContract(t *testing.T) {
 		}()
 	}
 }
+
+func TestLegacyCRC32EnumDomainAlterRejectsBeforePublication(t *testing.T) {
+	for _, clause := range []string{
+		"default (if(crc32(j)>0,'a','b'))",
+		"generated always as (if(crc32(j)>0,'a','b')) stored",
+		"generated always as (if(crc32(j)>0,'a','b')) virtual",
+	} {
+		for _, action := range []string{
+			"modify e enum('a','b') collate utf8mb4_general_ci",
+			"change e changed enum('b','a') collate utf8mb4_bin",
+		} {
+			t.Run(clause+"/"+action, func(t *testing.T) {
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				built, err := runOneStmt(mock, t, "create table t_on_update_gen(j json,e enum('a','b') collate utf8mb4_bin "+clause+")")
+				require.NoError(t, err)
+				base := built.GetDdl().GetCreateTable().TableDef
+				e := FindColumn(base.Cols, "e")
+				expr := e.GetDefault().GetExpr()
+				if e.GeneratedCol != nil {
+					expr = e.GeneratedCol.Expr
+				}
+				require.NotNil(t, expr)
+				// A released catalog owns the old CRC32(JSON) computation. This fixture
+				// preserves its binding instead of pretending today's CREATE authors it.
+				require.NoError(t, planpb.VisitExprTree(expr, func(node *planpb.Expr) error {
+					f := node.GetF()
+					if f != nil && f.Func != nil && f.Func.Obj == function.EncodeOverloadID(function.CRC32, 0) && len(f.Args) == 1 {
+						cast := f.Args[0].GetF()
+						if cast != nil && len(cast.Args) > 0 && cast.Args[0].Typ.Id == int32(types.T_json) {
+							f.Args[0] = DeepCopyExpr(cast.Args[0])
+						}
+					}
+					return nil
+				}))
+				require.True(t, containsLegacyCRC32(expr))
+				mock.ctxt.tables["t_on_update_gen"] = base
+				before := proto.Clone(base).(*planpb.TableDef)
+				_, err = runOneStmt(mock, t, "alter table constraint_test.t_on_update_gen "+action)
+				require.ErrorContains(t, err, "ENUM domain with a legacy CRC32")
+				require.True(t, proto.Equal(before, base), "failed ALTER must not change catalog or bound expression")
+			})
+		}
+	}
+}
