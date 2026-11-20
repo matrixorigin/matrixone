@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
-	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -86,13 +85,9 @@ func (builder *QueryBuilder) buildIndexStats(_ *tree.TableFunction, ctx *BindCon
 				return 0, err
 			}
 		} else {
-			p, ok := indexplugin.Get(cfg.Algorithm)
-			if !ok {
-				return 0, moerr.NewNotSupportedf(builder.GetContext(), "mo_index_stats: index type '%s' is not supported", idx.IndexAlgo)
-			}
-			hooks, ok := p.Plan().(planplugin.IndexStatsHooks)
-			if !ok {
-				return 0, moerr.NewNotSupportedf(builder.GetContext(), "mo_index_stats: index type '%s' is not supported", idx.IndexAlgo)
+			hooks, err := indexplugin.IndexStats(builder.GetContext(), cfg.Algorithm)
+			if err != nil {
+				return 0, err
 			}
 			if err := hooks.ConfigureIndexStats(builder.GetContext(), source, defs, &cfg); err != nil {
 				return 0, err
@@ -104,6 +99,17 @@ func (builder *QueryBuilder) buildIndexStats(_ *tree.TableFunction, ctx *BindCon
 	}
 	if source.Pkey != nil {
 		cfg.PrimaryKey = source.Pkey.PkeyColName
+		for _, col := range source.Cols {
+			if col.Name == cfg.PrimaryKey {
+				// SERIAL receives an ENUM label from the expression binder.
+				// Decode that label so the comparison uses the same collation.
+				cfg.SerializedKeyType = FormatColType(col.Typ)
+				if types.T(col.Typ.Id) == types.T_enum {
+					cfg.SerializedKeyType = "VARCHAR"
+				}
+				break
+			}
+		}
 	}
 	param, err := json.Marshal(cfg)
 	if err != nil {

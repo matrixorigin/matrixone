@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package table_function
+package sqlreader
 
 import (
 	"context"
@@ -33,7 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (s *indexStatsState) analyzeIndex(proc *process.Process, sp *sqlexec.SqlProcess) (map[string]any, []indexstats.Suggestion, error) {
+func (s *ivfStats) analyzeIndex(proc *process.Process, sp *sqlexec.SqlProcess) (map[string]any, []indexstats.Suggestion, error) {
 	ctx := proc.GetTopContext()
 	out := map[string]any{}
 	unavailable := func(status string, err error) (map[string]any, []indexstats.Suggestion, error) {
@@ -141,8 +141,7 @@ func (s *indexStatsState) analyzeIndex(proc *process.Process, sp *sqlexec.SqlPro
 		return unavailable("exact_neighbors_unavailable", err)
 	}
 	membership := map[string]int64{}
-	err = runIndexKeyLookup(sp, exact.Keys(), func(list string, n int) string {
-		selected := "(SELECT " + sqlquote.Ident(s.config.PrimaryKey) + " FROM " + source + " AS src WHERE " + indexSourceKey("src", s.config.PrimaryKey) + " IN (" + list + ") LIMIT " + strconv.Itoa(n) + ") AS sampled"
+	err = runIndexKeyLookup(sp, s.config, exact.Keys(), func(selected string) string {
 		return "SELECT " + indexSourceKey("sampled", s.config.PrimaryKey) + ",e." + sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_id) +
 			" FROM " + sqlquote.QualifiedIdent(s.config.Database, s.config.Entries) + " AS e JOIN " + selected + " ON e." + sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk) + "=" + sqlquote.QualifiedIdent("sampled", s.config.PrimaryKey) +
 			" WHERE e." + sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_version) + "=" + fmt.Sprint(s.version)

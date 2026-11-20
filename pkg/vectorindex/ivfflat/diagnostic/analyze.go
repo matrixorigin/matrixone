@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/balanced"
@@ -44,6 +45,7 @@ func (h neighborHeap) Less(i, j int) bool {
 	}
 	return h[i].Key > h[j].Key
 }
+
 func (h neighborHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 func (h *neighborHeap) Push(x any)   { *h = append(*h, x.(neighbor)) }
 func (h *neighborHeap) Pop() any     { old := *h; x := old[len(old)-1]; *h = old[:len(old)-1]; return x }
@@ -139,7 +141,9 @@ func ProbeCounts(k int) []int {
 	if k <= 0 {
 		return nil
 	}
-	seen := map[int]bool{k: true, max(1, k/8): true}
+	cut := min(catalog.MaxIVFProbeLimit, max(1, k/8))
+	k = min(k, catalog.MaxIVFProbeLimit)
+	seen := map[int]bool{k: true, cut: true}
 	for p := 1; p < k; {
 		seen[p] = true
 		if p > k/2 {
@@ -271,7 +275,7 @@ func (a *ExactNeighbors) Coverage(ctx context.Context, buckets []*Bucket, member
 		}
 	}
 	recommended := 0
-	cut := max(1, len(buckets)/8)
+	cut := min(catalog.MaxIVFProbeLimit, max(1, len(buckets)/8))
 	for i, p := range probes {
 		if recommended == 0 && sums[i]/float64(count) >= target {
 			recommended = p
@@ -292,6 +296,8 @@ func (a *ExactNeighbors) Coverage(ctx context.Context, buckets []*Bucket, member
 		if recommended != currentProbe {
 			advice = append(advice, indexstats.Suggestion{Action: "SET", Reason: "recall_target", Variable: "probe_limit", Value: recommended})
 		}
+	} else {
+		out["status"] = "target_unreachable_within_probe_limit"
 	}
 	return out, advice, nil
 }

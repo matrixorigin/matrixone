@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	"github.com/stretchr/testify/require"
 )
 
@@ -172,4 +173,27 @@ func TestSampleRetrain(t *testing.T) {
 	cancel()
 	_, _, err = Retrain(cancelled, samples, buckets)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestCoverageAtProbeLimit(t *testing.T) {
+	const maxProbe = 80000
+	buckets := make([]*Bucket, maxProbe+1)
+	for i := range buckets {
+		buckets[i] = NewBucket(int64(i), []float64{float64(i)})
+	}
+	exact := NewExactNeighbors([]Sample{{Key: "query", Vector: []float64{0}}})
+	require.NoError(t, exact.Observe(t.Context(), "neighbor", []float64{1}))
+	check := func(id int) (map[string]any, []indexstats.Suggestion) {
+		m, advice, err := exact.Coverage(t.Context(), buckets, map[string]int64{"neighbor": int64(id)}, nil, 1, 1)
+		require.NoError(t, err)
+		return m, advice
+	}
+	unreachable, advice := check(maxProbe)
+	require.NotContains(t, unreachable, "recommended_probe_limit")
+	require.Equal(t, "target_unreachable_within_probe_limit", unreachable["status"])
+	for _, a := range advice {
+		require.NotEqual(t, "SET", a.Action)
+	}
+	reachable, _ := check(maxProbe - 1)
+	require.Equal(t, maxProbe, reachable["recommended_probe_limit"])
 }

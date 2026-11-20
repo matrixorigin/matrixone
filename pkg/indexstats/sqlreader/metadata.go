@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package table_function
+package sqlreader
 
 import (
 	"context"
@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
-	"github.com/matrixorigin/matrixone/pkg/iscp"
 	iscpmeta "github.com/matrixorigin/matrixone/pkg/iscp/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -39,7 +38,7 @@ import (
 
 // Resolve storage under the same tenant and transaction snapshot as the entry
 // scan. These names came from the authorized source definition, never SQL args.
-func indexStatsDatabase(proc *process.Process, sqlproc *sqlexec.SqlProcess, cfg indexstats.Config) (context.Context, engine.Database, error) {
+func Database(proc *process.Process, sqlproc *sqlexec.SqlProcess, cfg indexstats.Config) (context.Context, engine.Database, error) {
 	ctx := proc.Ctx
 	if sqlproc.SnapshotAccountID != nil {
 		ctx = defines.AttachAccountId(ctx, *sqlproc.SnapshotAccountID)
@@ -95,7 +94,7 @@ func indexStatsRelationStorage(ctx context.Context, rel indexStatsStorageRelatio
 }
 
 func readIndexStatsStorage(proc *process.Process, sqlproc *sqlexec.SqlProcess, cfg indexstats.Config) (map[string]any, error) {
-	ctx, db, err := indexStatsDatabase(proc, sqlproc, cfg)
+	ctx, db, err := Database(proc, sqlproc, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +127,7 @@ func readIndexStatsStorage(proc *process.Process, sqlproc *sqlexec.SqlProcess, c
 }
 
 func readIndexStatsSourceCommit(proc *process.Process, sqlproc *sqlexec.SqlProcess, cfg indexstats.Config) (types.TS, error) {
-	ctx, db, err := indexStatsDatabase(proc, sqlproc, cfg)
+	ctx, db, err := Database(proc, sqlproc, cfg)
 	if err != nil {
 		return types.TS{}, err
 	}
@@ -200,11 +199,11 @@ func readIndexStatsMaintenanceObserved(proc *process.Process, sqlproc *sqlexec.S
 			metrics["error_message"] = status.ErrorMsg
 		}
 		metrics["status"] = "checkpoint_unavailable"
-		if status.Stage == nil || *status.Stage != iscp.JobStage_Init && *status.Stage != iscp.JobStage_Running {
+		if status.Stage == nil || *status.Stage != iscpmeta.StageInit && *status.Stage != iscpmeta.StageRunning {
 			metrics["status"] = "job_status_unavailable"
 			return metrics, nil
 		}
-		if *status.Stage == iscp.JobStage_Init {
+		if *status.Stage == iscpmeta.StageInit {
 			metrics["status"] = "initializing"
 			metrics["caught_up"] = false
 			return metrics, nil
@@ -231,3 +230,43 @@ func readIndexStatsMaintenanceObserved(proc *process.Process, sqlproc *sqlexec.S
 }
 
 func indexStatsWatermark(value string) (types.TS, bool) { return iscpmeta.ParseWatermark(value) }
+
+var (
+	indexStatsRunSQL        = sqlexec.RunSql
+	indexStatsRunCurrentSQL = sqlexec.RunSqlAutoCommit
+	indexStatsRunStreaming  = sqlexec.RunStreamingSql
+	indexStatsReadStorage   = readIndexStatsStorage
+	indexStatsSourceCommit  = readIndexStatsSourceCommit
+)
+
+type metadataState struct {
+	config               indexstats.Config
+	health               map[string]any
+	suggestions          []indexstats.Suggestion
+	storage, maintenance map[string]any
+}
+
+func (s *metadataState) readMetadata(proc *process.Process, sqlproc *sqlexec.SqlProcess) error {
+	var err error
+	s.storage, err = indexStatsReadStorage(proc, sqlproc, s.config)
+	if err != nil {
+		return err
+	}
+	if s.config.Async {
+		s.maintenance, err = readIndexStatsMaintenance(proc, sqlproc, s.config)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *metadataState) attachHealth(metrics map[string]any) map[string]any {
+	for k, v := range s.health {
+		metrics[k] = v
+	}
+	if s.suggestions != nil {
+		metrics["suggestions"] = s.suggestions
+	}
+	return metrics
+}

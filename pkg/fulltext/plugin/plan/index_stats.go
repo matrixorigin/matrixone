@@ -23,7 +23,9 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
+	"github.com/matrixorigin/matrixone/pkg/indexstats/sqlreader"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 var _ planplugin.IndexStatsHooks = Hooks{}
@@ -74,4 +76,8 @@ func (Hooks) ConfigureIndexStats(ctx context.Context, source *plan.TableDef, def
 		return moerr.NewInvalidInput(ctx, "mo_index_stats: incomplete fulltext index definition")
 	}
 	return nil
+}
+
+func (Hooks) ReadIndexStats(sp *sqlexec.SqlProcess, cfg indexstats.Config) (indexstats.Rows, error) {
+	return sqlreader.ReadFullText(sp, cfg)
 }

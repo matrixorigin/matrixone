@@ -19,13 +19,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 // IndexStatsHooks is an optional capability of an algorithm's Plan hooks.
 // The SQL layer resolves and authorizes the source and groups the definitions
 // belonging to one named index. The owner validates its private table layout
 // and fills the diagnostic configuration, including parameter defaults.
+// The owner also produces the public rows for the same configuration.
 // Algorithms without this capability do not support mo_index_stats.
 type IndexStatsHooks interface {
+	ReadIndexStats(*sqlexec.SqlProcess, indexstats.Config) (indexstats.Rows, error)
 	ConfigureIndexStats(context.Context, *plan.TableDef, []*plan.IndexDef, *indexstats.Config) error
 }

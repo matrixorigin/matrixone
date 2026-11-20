@@ -113,8 +113,8 @@ type ISCPData struct {
 }
 
 const (
-	JobStage_Init int8 = iota
-	JobStage_Running
+	JobStage_Init    = iscpmeta.StageInit
+	JobStage_Running = iscpmeta.StageRunning
 )
 
 // atomicInitLifecycleVersion marks generations whose InitSQL effects and

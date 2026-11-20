@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package table_function
+package sqlreader
 
 import (
 	"fmt"
@@ -24,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
-	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	iscpmeta "github.com/matrixorigin/matrixone/pkg/iscp/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/diagnostic"
@@ -33,25 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (s *indexStatsState) readHealth(proc *process.Process, sp *sqlexec.SqlProcess) error {
-	if s.config.KeyKind != "" || s.config.TableID == 0 {
+func (s *ivfStats) readHealth(proc *process.Process, sp *sqlexec.SqlProcess) error {
+	if s.config.TableID == 0 {
 		return nil
 	}
-	if s.config.FullTextVersion > 0 {
-		if p, ok := indexplugin.Get(s.config.Algorithm); ok {
-			if owner, ok := p.Idxcron().(idxcronplugin.HealthInspector); ok {
-				var err error
-				s.health, s.suggestions, err = owner.IndexHealth(sp, s.config)
-				if err != nil {
-					if proc.Ctx.Err() != nil {
-						return proc.Ctx.Err()
-					}
-					s.health = map[string]any{"health_status": "maintenance_measurement_unavailable"}
-				}
-			}
-		}
-		return nil
-	}
+
 	if !s.hasVersion {
 		s.health = map[string]any{"baseline_status": "baseline_missing"}
 		s.suggestions = make([]indexstats.Suggestion, 0)
@@ -156,6 +140,7 @@ func sampleKeys(samples []diagnostic.Sample) []string {
 	}
 	return keys
 }
+
 func indexSourceKey(alias, pk string) string {
 	return "HEX(SERIAL(" + sqlquote.QualifiedIdent(alias, pk) + "))"
 }
@@ -170,7 +155,7 @@ func readIndexOldKeys(proc *process.Process, sp *sqlexec.SqlProcess, cfg indexst
 	historic := *sp
 	snapshot := ts.ToTimestamp()
 	historic.SnapshotTS = &snapshot
-	ctx, db, err := indexStatsDatabase(proc, &historic, cfg)
+	ctx, db, err := Database(proc, &historic, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -182,9 +167,8 @@ func readIndexOldKeys(proc *process.Process, sp *sqlexec.SqlProcess, cfg indexst
 		return nil, moerr.NewInvalidInput(proc.Ctx, "historical source identity changed")
 	}
 	found := map[string]bool{}
-	err = runIndexKeyLookup(sp, keys, func(list string, n int) string {
-		source := sqlquote.QualifiedIdent(cfg.Database, cfg.Table)
-		selected := "(SELECT " + sqlquote.Ident(cfg.PrimaryKey) + " FROM " + source + " AS c WHERE " + indexSourceKey("c", cfg.PrimaryKey) + " IN (" + list + ") LIMIT " + fmt.Sprint(n) + ") AS sampled"
+	source := sqlquote.QualifiedIdent(cfg.Database, cfg.Table)
+	err = runIndexKeyLookup(sp, cfg, keys, func(selected string) string {
 		return "SELECT " + indexSourceKey("sampled", cfg.PrimaryKey) + " FROM " + source + " {MO_TS=" + sqlquote.String(base.BuildTS) + "} AS old JOIN " + selected + " ON " + sqlquote.QualifiedIdent("old", cfg.PrimaryKey) + "=" + sqlquote.QualifiedIdent("sampled", cfg.PrimaryKey)
 	}, func(bat *batch.Batch) error {
 		for row := 0; row < bat.RowCount(); row++ {
@@ -195,7 +179,7 @@ func readIndexOldKeys(proc *process.Process, sp *sqlexec.SqlProcess, cfg indexst
 	return found, err
 }
 
-func runIndexKeyLookup(sp *sqlexec.SqlProcess, keys []string, query func(string, int) string, consume func(*batch.Batch) error) error {
+func runIndexKeyLookup(sp *sqlexec.SqlProcess, cfg indexstats.Config, keys []string, query func(string) string, consume func(*batch.Batch) error) error {
 	unique := map[string]bool{}
 	for _, key := range keys {
 		unique[key] = true
@@ -205,23 +189,34 @@ func runIndexKeyLookup(sp *sqlexec.SqlProcess, keys []string, query func(string,
 		ordered = append(ordered, key)
 	}
 	sort.Strings(ordered)
+	pk := sqlquote.Ident(cfg.PrimaryKey)
+	predicate := pk
+	if cfg.SerializedKeyType == "" {
+		// A plan produced before typed lookups contains only the encoded keys.
+		predicate = "HEX(SERIAL(" + pk + "))"
+	}
+	source := sqlquote.QualifiedIdent(cfg.Database, cfg.Table)
 	for start := 0; start < len(ordered); {
 		end, bytes := start, 0
-		parts := make([]string, 0, 128)
-		for end < len(ordered) && end-start < 128 {
-			escaped := sqlquote.String(ordered[end])
-			if len(escaped) > 256<<10 {
+		parts := make([]string, 0, len(ordered)-start)
+		for end < len(ordered) {
+			literal := sqlquote.String(ordered[end])
+			if cfg.SerializedKeyType != "" {
+				literal = "SERIAL_EXTRACT(X" + literal + ", 0 AS " + cfg.SerializedKeyType + ")"
+			}
+			if len(literal) > 256<<10 {
 				return moerr.NewInvalidInput(sp.GetContext(), "analysis key exceeds lookup budget")
 			}
-			if bytes+len(escaped) > 256<<10 {
+			if bytes+len(literal) > 256<<10 {
 				break
 			}
-			parts = append(parts, escaped)
-			bytes += len(escaped) + 1
+			parts = append(parts, literal)
+			bytes += len(literal) + 1
 			end++
 		}
 		if err := func() error {
-			result, err := indexStatsRunSQL(sp, query(strings.Join(parts, ","), end-start))
+			selected := fmt.Sprintf("(SELECT %s FROM %s WHERE %s IN (%s) LIMIT %d) AS sampled", pk, source, predicate, strings.Join(parts, ","), len(parts))
+			result, err := indexStatsRunSQL(sp, query(selected))
 			if err != nil {
 				return err
 			}
@@ -238,14 +233,4 @@ func runIndexKeyLookup(sp *sqlexec.SqlProcess, keys []string, query func(string,
 		start = end
 	}
 	return nil
-}
-
-func (s *indexStatsState) attachHealth(metrics map[string]any) map[string]any {
-	for k, v := range s.health {
-		metrics[k] = v
-	}
-	if s.suggestions != nil {
-		metrics["suggestions"] = s.suggestions
-	}
-	return metrics
 }
