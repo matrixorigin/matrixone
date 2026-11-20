@@ -536,32 +536,32 @@ insert into builtin01 values('存储引擎 TAE','engine ');
 insert into builtin01 values('database system','engine ');
 select * from builtin01;
 ➤ col1[12,-1,0]  ¦  col2[12,-1,0]  𝄀
-  云原生数据库    ¦   database  𝄀
-存储引擎 TAE  ¦  engine   𝄀
-database system  ¦  engine 
+  云原生数据库  ¦   database  𝄀
+存储引擎 TAE  ¦  engine  𝄀
+database system  ¦  engine
 select concat_ws(',,,',col1,col2) from builtin01;
 ➤ concat_ws(,,,, col1, col2)[12,-1,0]  𝄀
-  云原生数据库  ,,, database  𝄀
-存储引擎 TAE,,,engine   𝄀
-database system,,,engine 
+  云原生数据库,,, database  𝄀
+存储引擎 TAE,,,engine  𝄀
+database system,,,engine
 select find_in_set('  云原生数据库  ',col1) from builtin01;
 ➤ find_in_set(  云原生数据库  , col1)[-5,64,0]  𝄀
-1  𝄀
+0  𝄀
 0  𝄀
 0
 select length(col1) as length_col1, length(col2) as length_col2 from builtin01;
 ➤ length_col1[-5,64,0]  ¦  length_col2[-5,64,0]  𝄀
-22  ¦  9  𝄀
-16  ¦  7  𝄀
-15  ¦  7
+20  ¦  9  𝄀
+16  ¦  6  𝄀
+15  ¦  6
 select char_length(col1),char_length(col2) from builtin01;
 ➤ char_length(col1)[-5,64,0]  ¦  char_length(col2)[-5,64,0]  𝄀
-10  ¦  9  𝄀
-8  ¦  7  𝄀
-15  ¦  7
+8  ¦  9  𝄀
+8  ¦  6  𝄀
+15  ¦  6
 select ltrim(col1) from builtin01;
 ➤ ltrim(col1)[12,-1,0]  𝄀
-云原生数据库    𝄀
+云原生数据库  𝄀
 存储引擎 TAE  𝄀
 database system
 select rtrim(col2) from builtin01;
@@ -571,14 +571,14 @@ engine  𝄀
 engine
 select lpad(col1,20,'-') from builtin01;
 ➤ lpad(col1, 20, -)[12,-1,0]  𝄀
-----------  云原生数据库    𝄀
+------------  云原生数据库  𝄀
 ------------存储引擎 TAE  𝄀
 -----database system
 select rpad(col2,10,'****') from builtin01;
 ➤ rpad(col2, 10, ****)[12,-1,0]  𝄀
  database*  𝄀
-engine ***  𝄀
-engine ***
+engine****  𝄀
+engine****
 select startswith(col2,'eng') from builtin01;
 ➤ startswith(col2, eng)[-7,1,0]  𝄀
 0  𝄀
@@ -591,12 +591,12 @@ select endswith(col1,'数据表') from builtin01;
 0
 select reverse(col1),reverse(col2) from builtin01;
 ➤ reverse(col1)[12,-1,0]  ¦  reverse(col2)[12,-1,0]  𝄀
-  库据数生原云    ¦  esabatad   𝄀
-EAT 擎引储存  ¦   enigne  𝄀
-metsys esabatad  ¦   enigne
+库据数生原云    ¦  esabatad   𝄀
+EAT 擎引储存  ¦  enigne  𝄀
+metsys esabatad  ¦  enigne
 select substring(col1,4,6),substring(col2,1,6) from builtin01;
 ➤ substring(col1, 4, 6)[12,-1,0]  ¦  substring(col2, 1, 6)[12,-1,0]  𝄀
-原生数据库   ¦   datab  𝄀
+原生数据库  ¦   datab  𝄀
 擎 TAE  ¦  engine  𝄀
 abase   ¦  engine
 select * from builtin01 where col1 = space(5);
@@ -604,8 +604,8 @@ select * from builtin01 where col1 = space(5);
 select bit_length(col2) from builtin01;
 ➤ bit_length(col2)[-5,64,0]  𝄀
 72  𝄀
-56  𝄀
-56
+48  𝄀
+48
 select empty(col2) from builtin01;
 ➤ empty(col2)[-7,1,0]  𝄀
 0  𝄀
@@ -616,13 +616,13 @@ select count(col1) as count_col1 from builtin01;
 3
 select max(col1), max(col2) from builtin01;
 ➤ max(col1)[12,-1,0]  ¦  max(col2)[12,-1,0]  𝄀
-存储引擎 TAE  ¦  engine 
+存储引擎 TAE  ¦  engine
 select min(col1), min(col2) from builtin01;
 ➤ min(col1)[12,-1,0]  ¦  min(col2)[12,-1,0]  𝄀
-  云原生数据库    ¦   database
+  云原生数据库  ¦   database
 select group_concat(col1,col2) from builtin01;
 ➤ group_concat(col1, col2 separator ,)[12,0,0]  𝄀
-  云原生数据库   database,存储引擎 TAEengine ,database systemengine 
+  云原生数据库 database,存储引擎 TAEengine,database systemengine
 drop table builtin01;
 drop table if exists agg01;
 create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'));

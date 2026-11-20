@@ -155,7 +155,7 @@ func TestBatchesShrinkPreservesAllocationAndRollback(t *testing.T) {
 		account, err := registry.Open(limit)
 		require.NoError(t, err)
 		selection, err := vector.NewAllocationAccountSelection(
-			account, 1, 1, 2, 3, 4)
+			account, 1, 1, 2)
 		require.NoError(t, err)
 		var batches Batches
 		require.NoError(t, batches.CopyIntoBatchesWithAllocation(input, proc, selection))
@@ -201,9 +201,9 @@ func TestCopyIntoBatchesAcceptsEquivalentAllocationSelection(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	first, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	first, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
-	second, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	second, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	require.NotSame(t, first, second)
 	input := testutil.NewBatch(
@@ -236,7 +236,7 @@ func TestCopyIntoBatchesAllocationFailureRollsBackPartialTail(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.OpenWithController(1<<60, controller)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 
 	typesInTail := []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}
@@ -285,7 +285,7 @@ func TestCopyIntoBatchesFailureRollsBackEarlierTailChunk(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.OpenWithController(1<<60, controller)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 
 	typesInTail := []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}

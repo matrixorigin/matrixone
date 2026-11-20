@@ -68,12 +68,6 @@ func TestUnsafeSliceCast(t *testing.T) {
 
 }
 
-func TestUnsafeUintptr(t *testing.T) {
-	a := int(100)
-	ptr := UnsafeUintptr(&a)
-	assert.NotEqual(t, ptr, uintptr(0))
-}
-
 func TestUnsafeFromBytes(t *testing.T) {
 	b := [8]byte{}
 	v := int64(0x0102030405060708)

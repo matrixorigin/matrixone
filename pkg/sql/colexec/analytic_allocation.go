@@ -44,12 +44,12 @@ func (a *AnalyticAllocation) Set(account *mpool.AllocationAccount) error {
 	if a.Account == account {
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerWindow, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerWindow, 1, 2)
 	if err != nil {
 		return err
 	}
 	aggregate, err := aggexec.NewAllocationAccount(account, mpool.AllocationOwnerWindow, aggexec.AllocationAccountSites{
-		VectorData: 5, VectorArea: 6, VectorNulls: 7, VectorGrouping: 8, ArgumentCount: 9, ArgumentArena: 10})
+		VectorData: 5, VectorArea: 6, ArgumentCount: 9, ArgumentArena: 10})
 	if err != nil {
 		return err
 	}

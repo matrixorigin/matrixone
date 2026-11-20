@@ -246,7 +246,7 @@ func TestDictionaryProducerCopyFailureAndReuse(t *testing.T) {
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	})
-	op.allocation, err = vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	op.allocation, err = vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	require.NoError(t, Prepare(op, proc))
 	_, err = Exec(op, proc)

@@ -539,8 +539,8 @@ func TestGetTimeoutRemoveTxn(t *testing.T) {
 
 	// s1(now-10s), s2(now-5s)
 	now := time.Now()
-	hold.mu.remoteServices["s1"].Value.time = now.Add(-time.Second * 10)
-	hold.mu.remoteServices["s2"].Value.time = now.Add(-time.Second * 5)
+	hold.mu.remoteServices["s1"].Value.(*remote).time = now.Add(-time.Second * 10)
+	hold.mu.remoteServices["s2"].Value.(*remote).time = now.Add(-time.Second * 5)
 
 	fenceTSByTxn := make(map[string]timestamp.Timestamp)
 	txns := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, fenceTSByTxn, time.Second*20)
@@ -584,8 +584,8 @@ func TestGetTimeoutRemoveTxnWithValid(t *testing.T) {
 
 	// s1(now-10s), s2(now-5s)
 	now := time.Now()
-	hold.mu.remoteServices["s1"].Value.time = now.Add(-time.Second * 10)
-	hold.mu.remoteServices["s2"].Value.time = now.Add(-time.Second * 5)
+	hold.mu.remoteServices["s1"].Value.(*remote).time = now.Add(-time.Second * 10)
+	hold.mu.remoteServices["s2"].Value.(*remote).time = now.Add(-time.Second * 5)
 
 	fenceTSByTxn := make(map[string]timestamp.Timestamp)
 	txns := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, fenceTSByTxn, time.Second*20)
@@ -630,7 +630,7 @@ func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyOK(t *testing.T) {
 
 	// s1(now-10s)
 	now := time.Now()
-	hold.mu.remoteServices["s1"].Value.time = now.Add(-time.Second * 10)
+	hold.mu.remoteServices["s1"].Value.(*remote).time = now.Add(-time.Second * 10)
 
 	// s1 timeout
 	fenceTSByTxn := make(map[string]timestamp.Timestamp)
@@ -660,7 +660,7 @@ func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyFailed(t *testing.T) {
 
 	// s1(now-10s)
 	now := time.Now()
-	hold.mu.remoteServices["s1"].Value.time = now.Add(-time.Second * 10)
+	hold.mu.remoteServices["s1"].Value.(*remote).time = now.Add(-time.Second * 10)
 
 	// s1 timeout
 	fenceTSByTxn := make(map[string]timestamp.Timestamp)
