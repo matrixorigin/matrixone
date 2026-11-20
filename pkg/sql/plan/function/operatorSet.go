@@ -1702,6 +1702,16 @@ func unaryMinusMatch(overloads []overload, inputs []types.Type) checkResult {
 		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 			// The low-precision floats widen losslessly to float32 (overload 4).
 			return newCheckResultWithCast(4, []types.Type{types.T_float32.ToType()})
+		case types.T_date:
+			// MySQL negates the numeric value of a temporal operand, using
+			// the same domains as binary arithmetic (`0 - d`): DATE as
+			// BIGINT YYYYMMDD, TIME/DATETIME/TIMESTAMP as DECIMAL keeping
+			// the fractional-second precision.
+			return newCheckResultWithCast(3, []types.Type{types.T_int64.ToType()})
+		case types.T_time:
+			return newCheckResultWithCast(6, []types.Type{types.New(types.T_decimal64, 18, inputs[0].Scale)})
+		case types.T_datetime, types.T_timestamp:
+			return newCheckResultWithCast(7, []types.Type{types.New(types.T_decimal128, 38, inputs[0].Scale)})
 		}
 	}
 	return fixedTypeMatch(overloads, inputs)

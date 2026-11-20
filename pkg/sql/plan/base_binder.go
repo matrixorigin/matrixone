@@ -8436,6 +8436,12 @@ func bindFuncExprImplByPlanExpr(
 		if isNullExpr(args[1]) {
 			return args[1], nil
 		}
+	case "unary_plus":
+		// MySQL's parser drops unary plus, so +<temporal> keeps the operand's
+		// native value and type instead of looking for a numeric overload.
+		if len(args) == 1 && isUnaryPlusTemporalOperand(args[0]) {
+			return args[0], nil
+		}
 	case "unary_minus":
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
@@ -14081,4 +14087,12 @@ func (b *baseBinder) defaultNumericOuterType() *plan.Type {
 		return &typ
 	}
 	return nil
+}
+
+func isUnaryPlusTemporalOperand(expr *Expr) bool {
+	switch types.T(expr.Typ.Id) {
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+		return true
+	}
+	return false
 }
