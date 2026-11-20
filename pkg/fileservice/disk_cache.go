@@ -1036,9 +1036,17 @@ func (d *DiskCache) writeFileTo(
 	if target == nil {
 		target = diskFillTarget{d: d, diskPath: diskPath}
 	}
+	callerCtx := ctx
 	defer func() {
-		d.evictForDiskFull(ctx, err)
+		d.evictForDiskFull(callerCtx, err)
 	}()
+	// A whole-object download is a FilePrefetchObject, not registered after a delete of
+	// the object from here on.
+	var whole *filePrefetchObject
+	if fill == storageFill {
+		whole = d.newWholeObject(ctx, diskPath)
+		defer func() { whole.endWhole(err) }()
+	}
 	if target.heldBeforeLock(ctx) {
 		return false, nil
 	}
@@ -1055,34 +1063,22 @@ func (d *DiskCache) writeFileTo(
 			}
 		}()
 	}
-	// A download holds its object-storage connections for long; it reserves them so
-	// range reads keep theirs. It takes the connection of its first part before it holds
-	// the path, so its wait for a connection holds nothing else; each later part takes its
-	// own when it starts. A range download holds the connection its FilePrefetchObject
-	// took.
+	// A whole-object download registers once it holds the connection of its first part,
+	// before it holds the path; each later part takes its own when it starts. A range
+	// download holds the connection its FilePrefetchObject took.
 	var bounds []int64
-	var conns int64
+	releaseConns := func() {}
 	if fill == storageFill {
 		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads) {
 			if size, splitAt, err := objectSize(ctx); err == nil {
 				bounds = d.objectSplit.bounds(size, splitAt)
 			}
 		}
-		if !d.reserveDownloadConns(1) {
-			// Without a connection to hold, the download is skipped; otherwise it waits for one.
-			if d.maxDownloadConns < 1 {
-				metric.FSDiskCacheDownloadSkippedCounter.Inc()
-				return false, nil
-			}
-			if err := d.waitDownloadConns(ctx, 1); err != nil {
-				return false, err
-			}
+		var ok bool
+		if ok, err = whole.admitWhole(whole.ctx); !ok {
+			return false, err
 		}
-		conns = 1
-	}
-	releaseConns := func() {
-		d.releaseDownloadConns(conns)
-		conns = 0
+		ctx, releaseConns = whole.ctx, whole.releaseConn
 	}
 	defer releaseConns()
 

@@ -1728,10 +1728,8 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	}
 	started := make(chan admittedDownload, 1)
 	setDone := make(chan error, 1)
-	// The download is a FilePrefetchObject of the whole object.
-	prefetchCtx, endPrefetch := s.diskCache.startFilePrefetch(fillCtx, diskPath, 0, math.MaxInt64)
 	go func() {
-		err := s.diskCache.fillFileTo(prefetchCtx, vector.FilePath, func(ctx context.Context) (io.ReadCloser, error) {
+		err := s.diskCache.fillFileTo(fillCtx, vector.FilePath, func(ctx context.Context) (io.ReadCloser, error) {
 			// The reader holds the download's file before any byte is fetched, so the
 			// bytes stay readable whatever the download does next.
 			var admitted admittedDownload
@@ -1744,7 +1742,6 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 			started <- admitted
 			return &lazyObjectReader{ctx: ctx, read: getReader}, nil
 		}, s.asyncUpdate, storageFill, s.prefetchedSize(file, firstNeeded(vector)), s.fillTarget(vector.Policy, vector.FilePath))
-		endPrefetch(err)
 		setDone <- err
 	}()
 	var setErr error

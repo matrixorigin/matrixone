@@ -411,12 +411,16 @@ func TestCoveringSkipsPartNotBegun(t *testing.T) {
 	fs, _, _ := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
 	diskPath := d.pathForFile("object")
-	ctx, end := d.startFilePrefetch(context.Background(), diskPath, 0, 8)
-	defer end(nil)
+	p := newFilePrefetchObject(context.Background(), 0, 8)
+	f := &d.prefetchObjects
+	f.mu.Lock()
+	f.registerLocked(diskPath, p)
+	f.mu.Unlock()
+	defer d.endFilePrefetch(diskPath, p)(nil)
+	ctx := p.ctx
 	o := newObjectDownload("", false, []int64{0, 4, 8})
 	o.begin(0)
 	fileDownloadStarted(ctx, o)
-	f := &d.prefetchObjects
 	covering := func(lo, hi int64) prefetchObject {
 		f.mu.Lock()
 		defer f.mu.Unlock()

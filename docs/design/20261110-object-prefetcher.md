@@ -79,7 +79,10 @@ once it may register, a prefetch object holding its bytes joins it instead. A ru
 least `disk-prefetch-object-split-min` bytes is split, when it is made, into
 `disk-prefetch-object-split` parts aligned to 64 KiB, each its own prefetch object of the
 kind its size gives and cached as its own range file; a read of bytes across parts reads
-each part's file.
+each part's file. A whole-object download, a prefetch's or a read's, is a
+FilePrefetchObject of the same life: after its cache-write slot, it waits for the
+connection of its first part, then registers; one of an object deleted since it was
+created is not registered.
 
 The choice is made from the request, before any byte is downloaded. Every range read
 that misses the cache takes its bytes from a prefetch object under way, or starts a
