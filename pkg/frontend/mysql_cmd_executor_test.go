@@ -47,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -3854,7 +3853,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			bat := genBatch()
 			for i := 0; i < len(bat.Attrs); i++ {
 				for j := 0; j < bat.Vecs[0].Length(); j++ {
-					nulls.Add(bat.Vecs[i].GetNulls(), uint64(j))
+					bat.Vecs[i].GetNulls().Add(uint64(j))
 				}
 			}
 			return bat
@@ -3928,7 +3927,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 			for i := 0; i < len(bat.Attrs); i++ {
 				for j := 0; j < 1; j++ {
-					nulls.Add(bat.Vecs[i].GetNulls(), uint64(j))
+					bat.Vecs[i].GetNulls().Add(uint64(j))
 				}
 			}
 			return bat

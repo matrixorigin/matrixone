@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -2693,7 +2692,7 @@ func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrap
 
 	// selectList: ignore all rows
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 

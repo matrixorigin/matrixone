@@ -15,12 +15,12 @@
 package vector
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"math"
 )
 
 // unionDictionaryBatch runs after ordinary destination preflight/admission.
@@ -59,7 +59,7 @@ func (v *Vector) unionDictionaryBatch(w *Vector, offset int64, count int, flags 
 			}
 			logical := int(offset) + row
 			if w.IsNull(uint64(logical)) {
-				nulls.Add(&v.nsp, uint64(next))
+				v.nsp.Add(uint64(next))
 				if v.typ.IsVarlen() {
 					dstValues[next] = types.Varlena{}
 				}
@@ -96,7 +96,7 @@ func (v *Vector) unionDictionaryBatch(w *Vector, offset int64, count int, flags 
 func gatherDictionarySelection[S int32 | int64](v, w *Vector, sels []S, offset int, areaWasDisjoint bool, mp *mpool.MPool) error {
 	base := w.dictionaryState().base.vec
 	if base.IsConstNull() {
-		nulls.AddRange(&v.nsp, uint64(offset), uint64(v.length))
+		v.nsp.AddRange(uint64(offset), uint64(v.length))
 		clear(v.data[offset*v.typ.TypeSize() : v.length*v.typ.TypeSize()])
 		if v.typ.IsVarlen() {
 			v.areaDisjoint = areaWasDisjoint
@@ -129,7 +129,7 @@ func gatherDictionarySelection[S int32 | int64](v, w *Vector, sels []S, offset i
 				target := v.data[(offset+i)*view.Width : (offset+i+1)*view.Width]
 				if w.nsp.Contains(uint64(row)) {
 					clear(target)
-					nulls.Add(&v.nsp, uint64(offset+i))
+					v.nsp.Add(uint64(offset + i))
 					continue
 				}
 				physical := int(view.Selection[row])
@@ -167,7 +167,7 @@ func gatherDictionarySelection[S int32 | int64](v, w *Vector, sels []S, offset i
 	for i, row := range sels {
 		if view.Nulls.Contains(uint64(row)) {
 			target[offset+i] = types.Varlena{}
-			nulls.Add(&v.nsp, uint64(offset+i))
+			v.nsp.Add(uint64(offset + i))
 			continue
 		}
 		physical := int(view.Selection[row])
@@ -200,7 +200,7 @@ func gatherDictionaryFixed[T any, S int32 | int64](v, w *Vector, sels []S, offse
 		for i, row := range sels {
 			if w.nsp.Contains(uint64(row)) {
 				target[offset+i] = zero
-				nulls.Add(&v.nsp, uint64(offset+i))
+				v.nsp.Add(uint64(offset + i))
 				continue
 			}
 			physical := int(mapping[row])
@@ -309,7 +309,7 @@ func copyDictionaryFixedRows[T any](dst, src *Vector, start, count int, flags []
 	target := types.DecodeSlice[T](dst.data[:dst.length*dst.typ.TypeSize()])[offset : offset+added]
 	if base.IsConstNull() {
 		clear(target)
-		nulls.AddRange(&dst.nsp, uint64(offset), uint64(offset+added))
+		dst.nsp.AddRange(uint64(offset), uint64(offset+added))
 		return
 	}
 	physicalRows := base.length
@@ -353,7 +353,7 @@ func copyDictionaryFixedRows[T any](dst, src *Vector, start, count int, flags []
 		logical := start + i
 		if src.nsp.Contains(uint64(logical)) {
 			target[next] = zero
-			nulls.Add(&dst.nsp, uint64(offset+next))
+			dst.nsp.Add(uint64(offset + next))
 		} else {
 			physical := int(mapping[logical])
 			if base.IsConst() {
@@ -444,8 +444,8 @@ func unionDictionaryRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPoo
 		v,
 		len(sels),
 		mp,
-		w.IsConstNull() || !w.nsp.EmptyByFlag(),
-		w.IsGrouping() || !w.gsp.EmptyByFlag(),
+		w.IsConstNull() || !w.nsp.IsEmpty(),
+		w.IsGrouping() || !w.gsp.IsEmpty(),
 	); err != nil {
 		return err
 	}
@@ -544,8 +544,8 @@ func (v *Vector) admitDictionaryBatch(
 			v,
 			addCnt,
 			mp,
-			w.IsConstNull() || !w.nsp.EmptyByFlag(),
-			w.IsGrouping() || !w.gsp.EmptyByFlag(),
+			w.IsConstNull() || !w.nsp.IsEmpty(),
+			w.IsGrouping() || !w.gsp.IsEmpty(),
 		); err != nil {
 			return err
 		}
