@@ -1055,22 +1055,19 @@ func (d *DiskCache) writeFileTo(
 		}()
 	}
 	// A download holds its object-storage connections for long; it reserves them so
-	// range reads keep theirs, before it holds the path, so its wait for a connection
-	// holds nothing else.
+	// range reads keep theirs. It takes the connection of its first part before it holds
+	// the path, so its wait for a connection holds nothing else; each later part takes its
+	// own when it starts. A range download holds the connection its FilePrefetchObject
+	// took.
 	var bounds []int64
 	var conns int64
-	// A range download holds the connection its FilePrefetchObject took.
 	if fill == storageFill {
 		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads) {
 			if size, splitAt, err := objectSize(ctx); err == nil {
 				bounds = d.objectSplit.bounds(size, splitAt)
 			}
 		}
-		conns = max(int64(len(bounds))-1, 1)
-		if conns > 1 && !d.reserveDownloadConns(conns) {
-			bounds, conns = nil, 1
-		}
-		if conns == 1 && !d.reserveDownloadConns(1) {
+		if !d.reserveDownloadConns(1) {
 			// Without a connection to hold, the download is skipped; otherwise it waits for one.
 			if d.maxDownloadConns < 1 {
 				metric.FSDiskCacheDownloadSkippedCounter.Inc()
@@ -1080,6 +1077,7 @@ func (d *DiskCache) writeFileTo(
 				return false, err
 			}
 		}
+		conns = 1
 	}
 	releaseConns := func() {
 		d.releaseDownloadConns(conns)
@@ -1167,7 +1165,7 @@ func (d *DiskCache) writeFileTo(
 
 	var n int64
 	if l, ok := from.(*lazyObjectReader); ok && len(bounds) > 2 {
-		n, err = copyParts(ctx, f, download, l.openRange, bounds)
+		n, err = copyParts(ctx, f, download, l.openRange, bounds, d.partConn, releaseConns)
 	} else {
 		var buf []byte
 		put := ioBufferPool.Get(&buf)

@@ -219,8 +219,8 @@ func TestS3FSFullObjectReadSkipsMergeWait(t *testing.T) {
 	require.Less(t, time.Since(t0), 2*time.Second)
 }
 
-// A download releases its connections once its transfer ends, and a split that cannot
-// reserve a connection for each part downloads the object as one range.
+// The parts of a split download each hold a connection while they read: with one
+// connection free they read one after the other, and each releases it once it ends.
 func TestS3FSDownloadConnsReservedPerPart(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
@@ -229,9 +229,9 @@ func TestS3FSDownloadConnsReservedPerPart(t *testing.T) {
 	got, err := readFullObjectOf(fs, 100, 10)
 	require.NoError(t, err)
 	require.Equal(t, data[100:110], got)
-	require.Equal(t, int64(1), storage.reads.Load())
-	require.Empty(t, storage.starts, "one open-ended range with one connection free")
-	require.Equal(t, int64(1), d.downloadConns.Load(), "its connection is released")
+	require.Equal(t, int64(2), storage.reads.Load())
+	require.ElementsMatch(t, []int64{0, 192 << 10}, storage.starts, "the split stays with one connection free")
+	require.Equal(t, int64(1), d.downloadConns.Load(), "its connections are released")
 	require.True(t, d.cache.Contains(d.pathForFile("object")))
 }
 
@@ -323,4 +323,49 @@ func TestS3FSConfiguredConnsBoundDownloads(t *testing.T) {
 		require.Equal(t, tc.download, d.cache.Contains(d.pathForFile("object")), "conns %d", tc.conns)
 		fs.Close(ctx)
 	}
+}
+
+// More concurrent split downloads than the connections downloads may hold all cache their
+// objects: each part holds a connection only while it reads, so no download holds one
+// while it waits for another, and none stays held.
+func TestS3FSObjectSplitDownloadsShareFewConnections(t *testing.T) {
+	const (
+		objects = 6
+		size    = 300<<10 + 17
+	)
+	fs, _, _ := newPrefetchRangeFS(t, 0, 1)
+	fs.diskCache.objectSplit = objectSplitConfig{parts: 2, min: 128 << 10}
+	fs.diskCache.maxDownloadConns = 2
+	ctx := context.Background()
+	contents := make([][]byte, objects)
+	for i := range objects {
+		name := fmt.Sprintf("object-%d", i)
+		contents[i] = make([]byte, size)
+		for j := range contents[i] {
+			contents[i][j] = byte(i + j*13)
+		}
+		require.NoError(t, fs.Write(ctx, IOVector{FilePath: name, Entries: []IOEntry{{Size: size, Data: contents[i]}}, Policy: SkipDiskCache | SkipMemoryCache}))
+		fs.diskCache.prefetched.store(fs.diskCache.pathForFile(name), size)
+	}
+	errs := make(chan error, objects)
+	for i := range objects {
+		go func() {
+			vec := &IOVector{FilePath: fmt.Sprintf("object-%d", i), Policy: SkipMemoryCache, Entries: []IOEntry{{Offset: 250 << 10, Size: 10}}}
+			err := fs.Read(ctx, vec)
+			if err == nil && !slices.Equal(contents[i][250<<10:250<<10+10], vec.Entries[0].Data) {
+				err = errors.New("wrong bytes")
+			}
+			vec.Release()
+			errs <- err
+		}()
+	}
+	for range objects {
+		select {
+		case err := <-errs:
+			require.NoError(t, err)
+		case <-time.After(diskCacheLifecycleTestTimeout):
+			t.Fatal("a read did not return")
+		}
+	}
+	require.Eventually(t, func() bool { return fs.diskCache.downloadConns.Load() == 0 }, 5*time.Second, time.Millisecond)
 }

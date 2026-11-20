@@ -586,8 +586,10 @@ func (l *lazyObjectReader) openRange(ctx context.Context, start, end int64) (io.
 }
 
 // copyParts writes the parts of download between bounds into f at once, each read through
-// open, and returns the bytes written. A failed part fails the copy.
-func copyParts(ctx context.Context, f *os.File, download *objectDownload, open rangeOpener, bounds []int64) (int64, error) {
+// open, and returns the bytes written. The first part holds the connection the download
+// took, which first frees once the part ends; each other part holds one conn takes,
+// waiting for it holding nothing, until it ends. A failed part fails the copy.
+func copyParts(ctx context.Context, f *os.File, download *objectDownload, open rangeOpener, bounds []int64, conn func(context.Context) (func(), error), first func()) (int64, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	errs := make([]error, len(bounds)-1)
@@ -596,6 +598,17 @@ func copyParts(ctx context.Context, f *os.File, download *objectDownload, open r
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if i == 0 {
+				defer first()
+			} else {
+				release, err := conn(ctx)
+				if err != nil {
+					errs[i] = err
+					cancel()
+					return
+				}
+				defer release()
+			}
 			if errs[i] = copyPart(ctx, f, download, open, i, bounds[i], bounds[i+1], i == len(bounds)-2); errs[i] != nil {
 				cancel()
 			}
@@ -744,6 +757,15 @@ func (d *DiskCache) downloadConnsFreed() chan struct{} {
 
 // reserveDownloadConns reserves n of the connections downloads may hold, half the
 // connections to the object storage host, or reports that they are taken.
+// partConn takes one of the connections downloads may hold for a part of a download,
+// waiting for it, and returns the function freeing it.
+func (d *DiskCache) partConn(ctx context.Context) (func(), error) {
+	if err := d.waitDownloadConns(ctx, 1); err != nil {
+		return nil, err
+	}
+	return func() { d.releaseDownloadConns(1) }, nil
+}
+
 func (d *DiskCache) reserveDownloadConns(n int64) bool {
 	limit := d.maxDownloadConns
 	for {

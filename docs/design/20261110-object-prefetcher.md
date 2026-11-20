@@ -294,6 +294,9 @@ object.
   are in flight.
 - A read-started download splits at the read's first needed block, so that read does
   not wait for the bytes before it.
+- The download takes its first part's object-storage connection before it starts; each
+  other part waits for its own, holding nothing, and a part frees its connection once it
+  ends, so no download holds a connection while it waits for another.
 - A read of the object waits only for the part that holds its bytes.
 - The size is the one the prefetch passed. When no prefetch passed a size, the
   download is one stream and makes no size request.
