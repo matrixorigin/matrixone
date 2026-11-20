@@ -87,6 +87,7 @@ func (projection *Projection) Release() {
 }
 
 type container struct {
+	jsonFrame          *colexec.ProjectionJSONFrame
 	dictionaryInputs   *colexec.DictionaryInputFrame
 	dictionaryBoundary vm.DictionaryOutputState
 	outputAllocation   *vector.AllocationAccountSelection
@@ -131,6 +132,7 @@ func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, e
 		}
 	}
 	projection.ctr.projExecutors = nil
+	projection.ctr.jsonFrame = nil
 	projection.ctr.buf = nil
 	projection.ctr.expandBuf = nil
 }
