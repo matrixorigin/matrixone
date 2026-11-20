@@ -1026,13 +1026,13 @@ func (d *DiskCache) writeFileTo(
 			return false, err
 		}
 		ctx, releaseConns = whole.ctx, whole.releaseConn
+		w.releaseConns = releaseConns
 		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads) {
 			if size, splitAt, err := objectSize(ctx); err == nil {
 				bounds = d.objectSplit.bounds(size, splitAt)
 			}
 		}
 	}
-	defer releaseConns()
 
 	cleanup := func() error { return d.removeUnindexedFile(diskPath) }
 	if asyncFinalize {
@@ -1123,7 +1123,7 @@ func (d *DiskCache) writeFileTo(
 
 	if asyncFinalize {
 		d.scheduleReservedAsyncFileFinalize(diskPath, f, w.owner, target)
-		w = fileWrite{}
+		w = fileWrite{releaseConns: w.releaseConns}
 		return true, nil
 	}
 
@@ -1137,9 +1137,10 @@ func (d *DiskCache) writeFileTo(
 // fileWrite is what a write of a cache file holds until it publishes the file or hands it
 // to an async finalize.
 type fileWrite struct {
-	slot  bool // an async finalize slot
-	owner *pathOwner
-	file  *os.File
+	slot         bool // an async finalize slot
+	owner        *pathOwner
+	file         *os.File
+	releaseConns func()
 }
 
 // endFileWrite releases what w holds, joining the errors into err.
@@ -1149,6 +1150,9 @@ func (d *DiskCache) endFileWrite(diskPath string, w *fileWrite, err *error) {
 	}
 	if w.owner != nil {
 		d.mergeWriteCleanupError(diskPath, err, w.owner.release())
+	}
+	if w.releaseConns != nil {
+		w.releaseConns()
 	}
 	if w.slot {
 		d.releaseAsyncFileFinalizeReservation(diskPath)

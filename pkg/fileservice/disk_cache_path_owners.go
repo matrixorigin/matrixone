@@ -195,6 +195,9 @@ func (p *pathOwners) startRead(ctx context.Context, path string, deadline *time.
 		if deadline.IsZero() {
 			*deadline = time.Now().Add(shortIOWaitDuration)
 		}
+		if !time.Now().Before(*deadline) {
+			return 0, false
+		}
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, *deadline)
 		defer cancel()

@@ -1052,8 +1052,8 @@ func (d *DiskCache) readCachedRange(ctx context.Context, r cachedRange, offset i
 	}
 	opened, ok := d.paths.open(ctx, r.diskPath, generation)
 	if !ok {
-		d.paths.endRead(r.diskPath, generation)
 		d.ranges.remove(r.diskPath)
+		d.paths.endRead(r.diskPath, generation)
 		return false
 	}
 	defer d.paths.close(r.diskPath, opened)
