@@ -118,7 +118,7 @@ func SyncAggregatorsToChunkSize[T AggFuncExec](as []T, syncLimit int) {
 	}
 }
 
-type Vectors[T numeric | types.Decimal64 | types.Decimal128] struct {
+type Vectors[T numeric | types.Decimal64 | types.Decimal128 | types.Decimal256] struct {
 	vecs []*vector.Vector
 	// allocation is the accounted MPool view the vectors grow through, or nil
 	// when they grow through the caller's pool.
@@ -138,14 +138,14 @@ const (
 	MaxVectorLength = 262144
 )
 
-func NewVectors[T numeric | types.Decimal64 | types.Decimal128](typ types.Type) *Vectors[T] {
+func NewVectors[T numeric | types.Decimal64 | types.Decimal128 | types.Decimal256](typ types.Type) *Vectors[T] {
 	vec := vector.NewOffHeapVecWithType(typ)
 	return &Vectors[T]{vecs: []*vector.Vector{vec}}
 }
 
 // newAccountedVectors creates vectors that grow through view, an accounted
 // view of the owning executor's pool.
-func newAccountedVectors[T numeric | types.Decimal64 | types.Decimal128](
+func newAccountedVectors[T numeric | types.Decimal64 | types.Decimal128 | types.Decimal256](
 	typ types.Type,
 	view *mpool.MPool,
 ) (*Vectors[T], error) {
@@ -329,7 +329,7 @@ func (vs *Vectors[T]) Size() int64 {
 	return size
 }
 
-func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs *Vectors[T], vals T, isNull bool, cnt int, mp *mpool.MPool) error {
+func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128 | types.Decimal256](vecs *Vectors[T], vals T, isNull bool, cnt int, mp *mpool.MPool) error {
 	leftRow := cnt
 	for {
 		vec, err := vecs.getAppendableVector()

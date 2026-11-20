@@ -4056,7 +4056,36 @@ func requireModernClusterInsertPlan(
 
 	if wantAccountID != nil {
 		accountExpr := writeExpr("account_id")
-		require.True(t, exprContainsIntegerLiteral(accountExpr, *wantAccountID),
+		var containsAccountLiteral func(*plan.Expr, *plan.Node, int) bool
+		containsAccountLiteral = func(expr *plan.Expr, owner *plan.Node, depth int) bool {
+			if expr == nil || depth > len(query.Nodes) || exprContainsIntegerLiteral(expr, *wantAccountID) {
+				return expr != nil && exprContainsIntegerLiteral(expr, *wantAccountID)
+			}
+			if fn := expr.GetF(); fn != nil {
+				for _, arg := range fn.Args {
+					if containsAccountLiteral(arg, owner, depth+1) {
+						return true
+					}
+				}
+			}
+			if col := expr.GetCol(); col != nil {
+				if col.RelPos == 0 && len(owner.Children) == 1 {
+					child := query.Nodes[owner.Children[0]]
+					if col.ColPos >= 0 && int(col.ColPos) < len(child.ProjectList) {
+						return containsAccountLiteral(child.ProjectList[col.ColPos], child, depth+1)
+					}
+				}
+				for _, node := range query.Nodes {
+					for _, tag := range node.BindingTags {
+						if tag == col.RelPos && col.ColPos >= 0 && int(col.ColPos) < len(node.ProjectList) {
+							return containsAccountLiteral(node.ProjectList[col.ColPos], node, depth+1)
+						}
+					}
+				}
+			}
+			return false
+		}
+		require.True(t, containsAccountLiteral(accountExpr, rowImage, 0),
 			"account_id must remain in its target column position: %s", accountExpr.String())
 	}
 

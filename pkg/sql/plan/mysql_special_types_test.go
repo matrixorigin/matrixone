@@ -92,6 +92,71 @@ func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
 	require.True(t, mysqlYearLiteralIsValid(tree.NewNumVal("ignored", "ignored", false, tree.P_hexnum)))
 }
 
+func TestPreparedUpdateEnumSetMarkers(t *testing.T) {
+	for _, target := range []struct {
+		name string
+		oid  types.T
+	}{
+		{"enum", types.T_enum},
+		{"set", types.T_uint64},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			for _, col := range mock.ctxt.tables["emp"].Cols {
+				if col.Name == "sal" {
+					col.Typ.Id = int32(target.oid)
+					col.Typ.Enumvalues = "low,high"
+				}
+			}
+			query := buildPreparedQuery(t, mock,
+				"prepare special_update from 'update constraint_test.emp set sal=? where empno=?'")
+			require.NotNil(t, query)
+		})
+	}
+}
+
+func TestPreparedInsertSetMarker(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, col := range mock.ctxt.tables["emp"].Cols {
+		if col.Name == "sal" {
+			col.Typ.Id = int32(types.T_uint64)
+			col.Typ.Enumvalues = "low,high"
+		}
+	}
+	query := buildPreparedQuery(t, mock,
+		"prepare special_insert from 'insert into constraint_test.emp (empno,sal) values (?,?)'")
+	require.NotNil(t, query)
+	require.NotEmpty(t, queryFunctionsNamed(query, moSetCastValueToIndexFun))
+}
+
+func TestPreparedSetAssignmentUsesSourceDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql, converter string
+		source               types.Type
+		value                any
+	}{
+		{"insert label", "insert into constraint_test.emp (empno,sal) values (1,?)", moSetCastValueToIndexFun, types.T_varchar.ToType(), "low,high"},
+		{"insert bitmap", "insert into constraint_test.emp (empno,sal) values (1,?)", moSetCastIndexValueToIndexFun, types.T_int64.ToType(), int64(3)},
+		{"update label", "update constraint_test.emp set sal=? where empno=1", moSetCastValueToIndexFun, types.T_varchar.ToType(), "low,high"},
+		{"update bitmap", "update constraint_test.emp set sal=? where empno=1", moSetCastIndexValueToIndexFun, types.T_int64.ToType(), int64(3)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			for _, col := range mock.ctxt.tables["emp"].Cols {
+				if col.Name == "sal" {
+					col.Typ.Id = int32(types.T_uint64)
+					col.Typ.Enumvalues = "low,high"
+				}
+			}
+			mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(),
+				[]PreparedSourceBinding{{Position: 0, Type: tc.source}}, []any{tc.value}))
+			p, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			require.NotEmpty(t, queryFunctionsNamed(p.GetQuery(), tc.converter))
+		})
+	}
+}
+
 func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {
 	enum := &plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,c"}
 	emptyLabelEnum := &plan.Type{Id: int32(types.T_enum), Enumvalues: ",a"}

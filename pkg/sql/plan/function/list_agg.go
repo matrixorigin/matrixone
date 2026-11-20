@@ -507,6 +507,10 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 && inputs[0].Oid == types.T_decimal256 &&
+				(inputs[0].Width >= 76 || inputs[0].Scale >= 76) {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
 			return fixedUnaryAggTypeCheck(inputs, aggexec.MedianSupportedType)
 		},
 
@@ -528,7 +532,8 @@ var supportedAggInNewFramework = []FuncNew{
 				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
 
-			// check Arg[0]: must be numeric (same as median)
+			// APPROX_PERCENTILE has its own executor domain; MEDIAN also
+			// accepts DECIMAL256 results from a preceding MEDIAN.
 			finalTypes := append([]types.Type(nil), inputs...)
 			needCast := false
 			if finalTypes[0].Oid == types.T_any {
@@ -537,7 +542,7 @@ var supportedAggInNewFramework = []FuncNew{
 			} else {
 				supported := false
 				for _, st := range aggexec.MedianSupportedType {
-					if finalTypes[0].Oid == st {
+					if st != types.T_decimal256 && finalTypes[0].Oid == st {
 						supported = true
 						break
 					}

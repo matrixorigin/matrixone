@@ -120,11 +120,14 @@ func TestGroupedOuterDomain(t *testing.T) {
 }
 
 func TestGroupedOuterIntegerSumBound(t *testing.T) {
-	for _, scenario := range []string{"bounded", "missing-key", "wide-suffix"} {
+	for _, scenario := range []string{"bounded", "wide-but-safe", "missing-key", "wide-suffix"} {
 		t.Run(scenario, func(t *testing.T) {
 			b, root := groupedOuterDomainTestBuilder(t)
 			probe, scan := b.qry.Nodes[1], b.qry.Nodes[0]
 			intType := plan.Type{Id: int32(types.T_int32)}
+			if scenario == "wide-suffix" {
+				intType.Id = int32(types.T_int64)
+			}
 			scan.TableDef.Cols[1].Typ = intType
 			scan.TableDef.Cols = append(scan.TableDef.Cols, &plan.ColDef{Name: "ticket", Typ: intType})
 			scan.TableDef.Name2ColIndex = map[string]int32{"k": 0, "v": 1, "ticket": 2}
@@ -135,15 +138,15 @@ func TestGroupedOuterIntegerSumBound(t *testing.T) {
 			require.NoError(t, err)
 			if scenario == "missing-key" {
 				scan.TableDef.Pkey = nil
-			} else if scenario == "wide-suffix" {
+			} else if scenario == "wide-suffix" || scenario == "wide-but-safe" {
 				scan.TableDef.Cols[2].Typ.Id = int32(types.T_int64)
 			}
 			before := len(b.qry.Nodes)
 			b.pruneGroupedOuterDomains(root)
-			if scenario == "bounded" {
-				require.Greater(t, len(b.qry.Nodes), before, "2^32 INT32 values fit INT64 in every partial-sum order")
+			if scenario == "bounded" || scenario == "wide-but-safe" {
+				require.Greater(t, len(b.qry.Nodes), before, "the PK suffix bounds every partial SUM within DECIMAL(32,0)")
 			} else {
-				require.Len(t, b.qry.Nodes, before, "sampled small row counts cannot prove SUM totality")
+				require.Len(t, b.qry.Nodes, before, "the PK suffix cannot prove SUM totality")
 			}
 		})
 	}
