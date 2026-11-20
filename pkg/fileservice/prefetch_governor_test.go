@@ -386,3 +386,71 @@ func TestPrefetchConcurrentMultiRunReadsUnderTightBudget(t *testing.T) {
 	defer f.mu.Unlock()
 	require.Zero(t, f.bytes)
 }
+
+// A read whose entry spans a block another read's run is reading and a block no run reads
+// takes the first block from that run and reads the other; once both reads return, no
+// buffer stays counted.
+func TestPrefetchReadOfJoinedBlockReleasesIt(t *testing.T) {
+	const unit = 64 << 10
+	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
+	storage := &suffixGateStorage{ObjectStorage: fs.storage, from: unit, release: make(chan struct{})}
+	fs.storage = storage
+	f := &fs.diskCache.prefetchObjects
+	read := func(off, size int64, done chan<- error) {
+		vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
+			Entries: []IOEntry{{Offset: off, Size: size}}}
+		err := fs.Read(context.Background(), vec)
+		if err == nil && !bytes.Equal(data[off:off+size], vec.Entries[0].Data) {
+			err = errors.New("wrong bytes")
+		}
+		vec.Release()
+		done <- err
+	}
+	first := make(chan error, 1)
+	go read(unit+100, 10, first)
+	require.Eventually(t, func() bool { return storage.held.Load() == 1 }, 10*time.Second, time.Millisecond,
+		"the first read's run waits for storage")
+	second := make(chan error, 1)
+	go read(2*unit-5, 10, second)
+	require.Eventually(t, func() bool { return storage.held.Load() == 2 }, 10*time.Second, time.Millisecond,
+		"the second read reads the block no run reads")
+	close(storage.release)
+	require.NoError(t, <-first)
+	require.NoError(t, <-second)
+	f.reads.Wait()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	require.Zero(t, f.bytes, "no buffer stays counted")
+}
+
+// A read of units of which it takes some blocks, with buffers for one run, returns: it
+// holds no run of blocks it takes no bytes of while its next run waits for buffers.
+func TestPrefetchReadHoldsNoUnneededRun(t *testing.T) {
+	const (
+		block = 64 << 10
+		unit  = 4 * block
+	)
+	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
+	fs.diskCache.prefetchFlightBytes = flightBufSize(2 * block)
+	f := &fs.diskCache.prefetchObjects
+	// Each entry is in the third block of a unit, the units apart: the read takes the
+	// third and fourth blocks of each as one run, and reads the first two as another.
+	entries := []IOEntry{{Offset: 2*block + 100, Size: 10}, {Offset: 2*unit + 2*block + 100, Size: 10}}
+	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: entries}
+	done := make(chan error, 1)
+	go func() { done <- fs.Read(context.Background(), vec) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the read did not return")
+	}
+	for _, e := range vec.Entries {
+		require.Equal(t, data[e.Offset:e.Offset+e.Size], e.Data)
+	}
+	vec.Release()
+	f.reads.Wait()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	require.Zero(t, f.bytes)
+}
