@@ -21,7 +21,7 @@ jobs:
       actions: write
       pull-requests: read
     outputs:
-      child: ${{ steps.select.outputs.child || steps.green.outputs.child }}
+      child: ${{ steps.select.outputs.child }}
     steps:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       with:
@@ -52,16 +52,7 @@ jobs:
         name: real-pr-retry-${{ github.run_id }}-attempt-${{ github.run_attempt }}-group-${{ inputs.group }}
         path: ${{ runner.temp }}/real-pr-authorization.json
         if-no-files-found: error
-    - id: green
-      name: Reuse the already-passed group 0 worker, never schedule a duplicate
-      if: inputs.group == 0
-      env:
-        HEAD: ${{ inputs.head }}
-        SOURCE: ${{ inputs.source }}
-        ACTIONS_TOKEN: ${{ github.token }}
-      run: python3 .github/standby-trial/green_receipt.py
     - id: select
-      if: inputs.group == 1
       timeout-minutes: 85
       env:
         PR: "32922"
@@ -71,7 +62,6 @@ jobs:
         ACTIONS_TOKEN: ${{ github.token }}
       run: python3 -I .github/standby-trial/coverage_standby.py choose
     - name: Release exactly one worker
-      if: inputs.group == 1
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: coverage-admit-${{ steps.select.outputs.child }}
@@ -82,7 +72,7 @@ jobs:
     # now create a new child for this group, not a new poll of the dead child.
     - name: Wait for selected group, including its UT result
       env:
-        CHILD: ${{ steps.select.outputs.child || steps.green.outputs.child }}
+        CHILD: ${{ steps.select.outputs.child }}
         ACTIONS_TOKEN: ${{ github.token }}
       run: python3 -I .github/standby-trial/coverage_standby.py wait
   collect:

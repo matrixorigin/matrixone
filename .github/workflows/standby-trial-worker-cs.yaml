@@ -44,11 +44,6 @@ jobs:
         GROUP: ${{ inputs.group }}
         POOL: cs
       run: python3 -I .standby/.github/standby-trial/coverage_standby.py admit
-    - name: Drill only - fail group 1 after admission on parent attempt 1
-      if: inputs.group == 1 && fromJSON(inputs.ticket).attempt == 1
-      run: |
-        echo "::error::Intentional first-attempt reservation failure; no UT result produced"
-        exit 1
     - id: reader
       name: Verify assigned reader before checkout
       shell: bash
