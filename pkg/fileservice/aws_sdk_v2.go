@@ -998,7 +998,7 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 			defer LogEvent(ctx, str_retryable_reader_new_reader_end)
 			var rang string
 			if max != nil {
-				rang = fmt.Sprintf("bytes=%d-%d", offset, *max)
+				rang = fmt.Sprintf("bytes=%d-%d", offset, *max-1) // HTTP includes the last byte
 			} else {
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}
