@@ -1,6 +1,6 @@
 module github.com/matrixorigin/matrixone/pkg/iceberg/adapter/iceberggo
 
-go 1.27.0
+go 1.26.4
 
 require (
 	github.com/apache/iceberg-go v0.5.0
