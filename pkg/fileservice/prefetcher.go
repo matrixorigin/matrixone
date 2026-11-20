@@ -329,18 +329,28 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		}
 		if q := e.queue; q != nil {
 			// What scans that all ended asked for is replaced by req, not merged into it.
-			merged := req
-			if e.live() {
-				merged = e.req.merge(req)
-			}
-			if grow := merged.Size - e.req.Size; grow > 0 && !p.roomLocked(grow, e) {
+			var merged ObjectPrefetch
+			for {
+				live := e.live()
+				merged = req
+				if live {
+					merged = e.req.merge(req)
+				}
+				if grow := merged.Size - e.req.Size; grow <= 0 || p.roomLocked(grow, e) {
+					break
+				}
+				// Making room may have ended the scans of e.
+				if e.live() != live {
+					continue
+				}
 				// Past the queues' bytes, a queued download in use keeps what it downloads,
 				// needed as soon as req; one whose reads all ended is not kept by req.
 				metric.FSPrefetchDroppedCounter.Inc()
-				if !e.live() {
+				if !live {
 					return
 				}
 				merged.Size, merged.Ranges = e.req.Size, e.req.Ranges
+				break
 			}
 			e.addScan(req.Scan)
 			q.bytes += merged.Size - e.req.Size
@@ -546,13 +556,15 @@ func (p *prefetcher) remove(filePath string) bool {
 		return false
 	}
 	p.removeLocked(e)
+	p.startLocked()
 	return true
 }
 
 // join returns, when want accepts the request of the download of filePath, a channel
 // closed once reads can join the download, or it ended, and leave, to call once when the
 // read stops waiting. A download still waiting in the prefetch queue moves to the live
-// queue. A queued download is dropped when its last read leaves and its scans have ended.
+// queue. When its last read leaves, a queued download is dropped if its scans have ended,
+// and otherwise goes back to the prefetch queue.
 func (p *prefetcher) join(filePath string, want func(ObjectPrefetch) bool) (started <-chan struct{}, leave func(), ok bool) {
 	if p.known.Load() == 0 {
 		return nil, nil, false
@@ -576,10 +588,17 @@ func (p *prefetcher) join(filePath string, want func(ObjectPrefetch) bool) (star
 			p.mu.Lock()
 			defer p.mu.Unlock()
 			e.joiners--
-			if e.queue != nil && !e.live() {
-				p.dropLocked(e)
-				p.startLocked()
+			if e.queue == nil || e.joiners > 0 {
+				return
 			}
+			// A download no read waits for leaves the live queue.
+			if !e.live() {
+				p.dropLocked(e)
+			} else if e.queue == &p.live {
+				p.live.remove(e)
+				p.prefetch.push(e)
+			}
+			p.startLocked()
 		})
 	}, true
 }
@@ -682,6 +701,16 @@ func (s *S3FS) haveObject(req ObjectPrefetch) bool {
 
 // prefetchObject downloads the whole object of req at its known size, or its ranges.
 func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
+	path, err := parseFilePathAtService(req.FilePath, s.name)
+	if err != nil {
+		return
+	}
+	// A request queued again after its object was deleted downloads nothing.
+	objectPath := s.diskCache.pathForFile(path.File)
+	if s.diskCache.deletes.since(objectPath, req.deletes) {
+		metric.FSPrefetchEndedCounter.Inc()
+		return
+	}
 	if closing := s.diskCache.async.ctx; closing != nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(ctx)
@@ -692,12 +721,7 @@ func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
 		s.prefetchRanges(ctx, req)
 		return
 	}
-	path, err := parseFilePathAtService(req.FilePath, s.name)
-	if err != nil {
-		return
-	}
 	// A size told before an object was deleted may be another object's at that path.
-	objectPath := s.diskCache.pathForFile(path.File)
 	s.diskCache.storePrefetchedSize(objectPath, req.Size, req.deletes)
 	ctx, done := s.diskCache.startFilePrefetch(ctx, objectPath, 0, req.Size)
 	if req.indexObject {
@@ -789,6 +813,11 @@ func (s *S3FS) prefetchFiles(ctx context.Context, filePath string, deletes uint6
 			defer running.Done()
 			mark := sync.OnceFunc(started.Done)
 			defer mark()
+			// The prefetch counts as started once a range of it is under way.
+			underWay := func() {
+				mark()
+				downloadStarted(ctx)
+			}
 			for i := int(next.Add(1) - 1); i < len(ranges); i = int(next.Add(1) - 1) {
 				if err := ctx.Err(); err != nil {
 					errs[i] = err
@@ -799,7 +828,7 @@ func (s *S3FS) prefetchFiles(ctx context.Context, filePath string, deletes uint6
 					continue
 				}
 				r := ranges[i]
-				_, errs[i] = s.diskCache.prefetchFile(withDownloadStarted(ctx, mark), filePath, r.Offset, r.Offset+r.Size, open)
+				_, errs[i] = s.diskCache.prefetchFile(withDownloadStarted(ctx, underWay), filePath, r.Offset, r.Offset+r.Size, open)
 			}
 		}()
 	}

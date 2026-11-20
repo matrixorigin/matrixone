@@ -1360,7 +1360,10 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 			open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 				return getReader(ctx, &start, &end)
 			}
-			content, reads, ok := s.diskCache.prefetchRead(ctx, path.File, vector.Policy, vector.Entries, *min, *max, unit, open)
+			content, reads, ok, err := s.diskCache.prefetchRead(ctx, path.File, vector.Policy, vector.Entries, *min, *max, unit, open)
+			if err != nil {
+				return err
+			}
 			prefetchReads = reads
 			if ok {
 				prefetchContent = content

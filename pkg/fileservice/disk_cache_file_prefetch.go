@@ -19,6 +19,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // filePrefetchObject is a FilePrefetchObject of the bytes [start, end) of an object: they
@@ -100,10 +101,16 @@ func (d *DiskCache) endFilePrefetch(objectPath string, p *filePrefetchObject) fu
 
 // fileObjectLocked returns the FilePrefetchObject of the object at objectPath holding the
 // bytes [start, end), registering a new one for a read, whose download runs under ctx,
-// when none does; created reports which.
-func (f *prefetchObjects) fileObjectLocked(ctx context.Context, objectPath string, start, end int64) (p *filePrefetchObject, created bool) {
+// when none does; created reports which. One a read started is shared by the reads of its
+// bytes; another is joined only when its bytes arrive no more than extraWait later than a
+// range read could fetch them.
+func (f *prefetchObjects) fileObjectLocked(ctx context.Context, objectPath string, start, end int64, now time.Time, extraWait time.Duration) (p *filePrefetchObject, created bool) {
 	for _, o := range f.m[objectPath] {
-		if p, ok := o.(*filePrefetchObject); ok && p.start <= start && end <= p.end {
+		p, ok := o.(*filePrefetchObject)
+		if !ok || p.start > start || end > p.end {
+			continue
+		}
+		if p.readStarted || p.joinable() && p.eta(now, start, end) <= rangeReadCosts.cost(end-start)+extraWait {
 			return p, false
 		}
 	}

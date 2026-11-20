@@ -120,7 +120,7 @@ func TestS3FSPrefetchRangeSkipsCanceledRead(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var opens atomic.Int64
-	_, reads, ok := fs.diskCache.prefetchRead(ctx, "object", 0, []IOEntry{{Offset: 5000, Size: 2}}, 5000, 5002, 4096,
+	_, reads, ok, _ := fs.diskCache.prefetchRead(ctx, "object", 0, []IOEntry{{Offset: 5000, Size: 2}}, 5000, 5002, 4096,
 		func(context.Context, int64, int64) (io.ReadCloser, error) {
 			opens.Add(1)
 			return nil, context.Canceled
@@ -542,7 +542,7 @@ func TestPrefetchReadOutlivesItsReader(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	entries := []IOEntry{{Offset: 100, Size: 10}}
-	content, reads, ok := d.prefetchRead(ctx, "object", SkipFullFilePreloads, entries, 100, 110, 128<<10, open)
+	content, reads, ok, _ := d.prefetchRead(ctx, "object", SkipFullFilePreloads, entries, 100, 110, 128<<10, open)
 	require.True(t, ok)
 	require.Equal(t, 1, reads)
 	require.Equal(t, data[100:110], content)

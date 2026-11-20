@@ -171,8 +171,8 @@ func (h *suffixGateStorage) Read(ctx context.Context, key string, min, max *int6
 	return h.ObjectStorage.Read(ctx, key, min, max)
 }
 
-// A MemoryPrefetchObject whose read ended stays counted while a read that copies from it
-// waits for another of its ranges, and stops being counted once that read returns.
+// A MemoryPrefetchObject whose read ended stops being counted once the read copying from
+// it copied its bytes, while that read waits for another of its ranges.
 func TestPrefetchBufferCountedUntilLastRelease(t *testing.T) {
 	const unit = 64 << 10
 	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
@@ -204,7 +204,7 @@ func TestPrefetchBufferCountedUntilLastRelease(t *testing.T) {
 	go func() { done <- fs.Read(context.Background(), vec) }()
 	require.Eventually(t, func() bool { return storage.held.Load() == 1 && memoryObjects() == 1 },
 		10*time.Second, time.Millisecond, "the first range's object ended; the second waits")
-	require.Equal(t, 2*flightBufSize(unit), bytes(), "the ended object's buffer is still held by the read")
+	require.Equal(t, flightBufSize(unit), bytes(), "the read copied from the ended object and released its buffer")
 
 	close(storage.release)
 	require.NoError(t, <-done)

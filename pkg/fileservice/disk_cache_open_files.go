@@ -130,9 +130,11 @@ func (o *openFilePool) dropLocked(path string) *os.File {
 	return nil
 }
 
-// dropAllLocked forgets every file, and returns those no read holds to close.
+// dropAllLocked forgets every file, and returns those no read holds to close. No file is
+// kept after it.
 func (o *openFilePool) dropAllLocked() (files []*os.File) {
 	o.missing = nil
+	o.limit = -1
 	for p := range o.m {
 		if f := o.dropLocked(p); f != nil {
 			files = append(files, f)
