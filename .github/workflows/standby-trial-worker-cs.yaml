@@ -146,6 +146,27 @@ jobs:
         python3 .ci-workflow/scripts/node_cache_native_pvc_catalog.py materialize
         python3 .ci-workflow/scripts/node_compile_cache.py configure --catalog "$RUNNER_TEMP/cs-reviewed-persistent-catalog.json"
         python3 .ci-workflow/scripts/node_cache_pr_source.py record
+    - name: Load optional read-only cache observer
+      id: refresh_helper
+      if: github.ref == 'refs/heads/weilu-runner-test'
+      continue-on-error: true
+      timeout-minutes: 2
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
+        repository: matrixorigin/CI
+        ref: 4c49f94cbd82a470038e307f4054b862f3f962c3
+        path: .refresh-observer
+        sparse-checkout: scripts/cache_refresh_demand.py
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
+    - name: Record cache profile hint (not a publish request)
+      if: github.ref == 'refs/heads/weilu-runner-test' && steps.refresh_helper.outcome == 'success'
+      continue-on-error: true
+      timeout-minutes: 1
+      run: |
+        set -euo pipefail
+        python3 -I .refresh-observer/scripts/cache_refresh_demand.py observe --temp "$RUNNER_TEMP" --repo "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/cache-refresh-hint.partial"
+        mv "$RUNNER_TEMP/cache-refresh-hint.partial" "$RUNNER_TEMP/cache-refresh-hint.json"
     - id: coverage_ut
       name: Run coverage unit tests
       timeout-minutes: 190
@@ -782,6 +803,7 @@ jobs:
           ${{ runner.temp }}/cs-reviewed-persistent-catalog.json
           ${{ runner.temp }}/cs-node-cache/persistent-authorization.json
           ${{ runner.temp }}/go-rebuild-counts.json
+          ${{ runner.temp }}/cache-refresh-hint.json
         if-no-files-found: warn
         retention-days: 7
     - id: upload_coverage_diagnostics
