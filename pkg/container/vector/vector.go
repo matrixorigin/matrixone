@@ -13626,7 +13626,13 @@ func Union2VectorValen(
 }
 
 func (v *Vector) FillRawPtrLen(dest []uintptr) {
-	dest[0], dest[1] = v.nsp.RawPtrLen()
+	// The null map's first word and its length in bits; (0, 0) when it has
+	// no storage.
+	dest[0], dest[1] = 0, 0
+	if ptr := nulls.Ptr(&v.nsp); ptr != nil {
+		dest[0] = uintptr(unsafe.Pointer(ptr))
+		dest[1] = uintptr(v.nsp.GetBitmap().Len())
+	}
 	ds := v.UnsafeGetRawData()
 	dest[2] = uintptr(unsafe.Pointer(&ds[0]))
 	dest[3] = uintptr(len(ds))

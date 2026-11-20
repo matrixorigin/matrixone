@@ -22,7 +22,6 @@ package nulls
 import (
 	"fmt"
 	"io"
-	"unsafe"
 
 	"golang.org/x/exp/constraints"
 )
@@ -32,21 +31,6 @@ func Ptr(nsp *Nulls) *uint64 {
 		return nil
 	}
 	return nsp.GetBitmap().Ptr()
-}
-
-// RawPtrLen returns the address of the first bitmap word and the logical
-// length in bits, for passing the null map to C. It returns (0, 0) when there
-// is no bitmap storage.
-func (nsp *Nulls) RawPtrLen() (uintptr, uintptr) {
-	if nsp == nil {
-		return 0, 0
-	}
-	bm := nsp.GetBitmap()
-	ptr := bm.Ptr()
-	if ptr == nil {
-		return 0, 0
-	}
-	return uintptr(unsafe.Pointer(ptr)), uintptr(bm.Len())
 }
 
 func String(nsp *Nulls) string {
