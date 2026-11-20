@@ -77,13 +77,9 @@ type fixedMetadataPreflightSnapshot struct {
 }
 
 type fixedMetadataPreflightVectorSnapshot struct {
-	length, capacity, sourceCapacity int
-	values                           []int64
-	nulls                            []bool
-	rowSources                       []types.StringSource
-	sourceSidecar                    bool
-	source                           types.StringSource
-	sources                          []types.StringSource
+	length, capacity int
+	values           []int64
+	nulls            []bool
 }
 
 func snapshotFixedMetadataPreflight(f *fixedMetadataPreflightFixture) fixedMetadataPreflightSnapshot {
@@ -93,31 +89,15 @@ func snapshotFixedMetadataPreflight(f *fixedMetadataPreflightFixture) fixedMetad
 			v := states[i].vecs[0]
 			s := fixedMetadataPreflightVectorSnapshot{
 				length: v.Length(), capacity: v.Capacity(),
-				sourceCapacity: cap(v.GetStringSources()),
-				values:         append([]int64(nil), vector.MustFixedColNoTypeCheck[int64](v)...),
-				sourceSidecar:  v.GetStringSources() != nil,
-				source:         v.GetStringSource(), sources: append([]types.StringSource(nil), v.GetStringSources()...),
+				values: append([]int64(nil), vector.MustFixedColNoTypeCheck[int64](v)...),
 			}
 			for row := 0; row < v.Length(); row++ {
 				s.nulls = append(s.nulls, v.IsNull(uint64(row)))
-				s.rowSources = append(s.rowSources, v.GetStringSourceAt(row))
 			}
 			result.vecs = append(result.vecs, s)
 		}
 	}
 	return result
-}
-
-func requireFixedPreflightRowsUnchanged(t testing.TB, before, after fixedMetadataPreflightSnapshot) {
-	t.Helper()
-	require.Equal(t, before.groups, after.groups)
-	require.Len(t, after.vecs, len(before.vecs))
-	for i, v := range before.vecs {
-		require.Equal(t, v.length, after.vecs[i].length)
-		require.Equal(t, v.values, after.vecs[i].values)
-		require.Equal(t, v.nulls, after.vecs[i].nulls)
-		require.Equal(t, v.rowSources, after.vecs[i].rowSources)
-	}
 }
 
 func TestFixedMinMaxPlainMetadataPreflight(t *testing.T) {
@@ -127,8 +107,6 @@ func TestFixedMinMaxPlainMetadataPreflight(t *testing.T) {
 			require.NoError(t, f.exec.GroupGrow(3))
 			seed := f.intInput(t, []int64{8, -2, 0}, []bool{false, false, true})
 			require.NoError(t, f.exec.BatchFill(0, []uint64{1, 2, 3}, []*vector.Vector{seed}))
-			target := f.base.state[0].vecs[0]
-			require.False(t, target.HasStringSourceMetadata())
 			input := f.intInput(t, []int64{99, -5, 7, 7, 0, 100}, []bool{false, false, false, false, true, false})
 			groups := []uint64{1, 2, 2, AggBatchSize + 1, GroupNotMatched}
 			before := snapshotFixedMetadataPreflight(f)
@@ -153,9 +131,6 @@ func TestFixedMinMaxPlainMetadataPreflight(t *testing.T) {
 			}
 			require.Equal(t, want, vector.MustFixedColNoTypeCheck[int64](result[0])[:2])
 			require.True(t, result[0].IsNull(2))
-			for row := range 3 {
-				require.Equal(t, types.StringSourceExpression, result[0].GetStringSourceAt(row))
-			}
 		})
 	}
 }
@@ -237,87 +212,6 @@ func TestFixedMinMaxTargetShapePreflight(t *testing.T) {
 	}
 }
 
-func TestFixedMinMaxTargetMetadataPreflight(t *testing.T) {
-	for _, kind := range []string{"source-second-chunk", "empty-source-sidecar", "source"} {
-		t.Run(kind, func(t *testing.T) {
-			f := newFixedMetadataPreflightFixture(t, AggIdOfMin, types.T_int64.ToType())
-			input := f.intInput(t, []int64{4, 4}, nil)
-			groups := []uint64{1}
-			future := 0
-			if kind == "empty-source-sidecar" {
-				future = 128
-				require.NoError(t, f.exec.PreAllocateGroups(future))
-				v := f.base.standby[0].vecs[0]
-				require.NoError(t, v.PreflightSetStringSourceAtLength(0, 2, types.StringSourceLiteral, f.mp))
-				require.NotNil(t, v.GetStringSources())
-				require.Empty(t, v.GetStringSources())
-				groups = []uint64{1, uint64(future)}
-			} else {
-				count := 2
-				first := uint64(1)
-				if kind == "source-second-chunk" {
-					count = AggBatchSize + 2
-					first = AggBatchSize + 1
-				}
-				require.NoError(t, f.exec.GroupGrow(count))
-				if first > 1 {
-					plain := f.intInput(t, []int64{8}, nil)
-					require.NoError(t, f.exec.BatchFill(0, []uint64{1}, []*vector.Vector{plain}))
-					groups = []uint64{1, first}
-				}
-				seed := f.intInput(t, []int64{5, 5}, nil)
-				require.NoError(t, seed.SetStringSource(types.StringSourceLiteral))
-				require.NoError(t, f.exec.BatchFill(0, []uint64{first, first + 1}, []*vector.Vector{seed}))
-			}
-			before := snapshotFixedMetadataPreflight(f)
-			used := f.account.Snapshot().Used
-			f.controller.failAt = f.controller.calls + 1
-			require.ErrorIs(t, f.exec.PreflightBatchFill(0, groups, []*vector.Vector{input}), mpool.ErrAllocationAccountCapacity)
-			require.True(t, f.controller.rejected)
-			require.Equal(t, before, snapshotFixedMetadataPreflight(f), "failed admission cannot publish")
-			require.Equal(t, used, f.account.Snapshot().Used)
-			f.controller.failAt, f.controller.rejected = 0, false
-			require.NoError(t, f.exec.PreflightBatchFill(0, groups, []*vector.Vector{input}))
-			requireFixedPreflightRowsUnchanged(t, before, snapshotFixedMetadataPreflight(f))
-			if future > 0 {
-				require.NoError(t, f.exec.GroupGrow(future))
-			}
-			admitted, calls := f.account.Snapshot().Used, f.controller.calls
-			f.controller.failAt = calls + 1
-			require.NoError(t, f.exec.BatchFill(0, groups, []*vector.Vector{input}))
-			require.Equal(t, calls, f.controller.calls)
-			require.False(t, f.controller.rejected)
-			require.LessOrEqual(t, f.account.Snapshot().Used, admitted)
-			for _, group := range groups {
-				x, y := f.base.getXY(group - 1)
-				v := f.base.state[x].vecs[0]
-				require.Equal(t, int64(4), vector.GetFixedAtNoTypeCheck[int64](v, int(y)))
-				require.False(t, v.IsNull(uint64(y)))
-				require.Equal(t, types.StringSourceExpression, v.GetStringSourceAt(int(y)))
-			}
-			if future == 0 {
-				last := f.base.state[len(f.base.state)-1].vecs[0]
-				require.Equal(t, int64(5), vector.GetFixedAtNoTypeCheck[int64](last, 1))
-				require.Equal(t, types.StringSourceLiteral, last.GetStringSourceAt(1))
-			}
-			for x := range f.base.state {
-				v := f.base.state[x].vecs[0]
-				for row := 0; row < v.Length(); row++ {
-					group := uint64(x*AggBatchSize + row + 1)
-					wantNull := true
-					for _, changed := range groups {
-						wantNull = wantNull && group != changed
-					}
-					if future == 0 && row == 1 && x == len(f.base.state)-1 {
-						wantNull = false // the untouched seeded representative
-					}
-					require.Equal(t, wantNull, v.IsNull(uint64(row)), "group %d", group)
-				}
-			}
-		})
-	}
-}
-
 func TestFixedMinMaxPlainConstPreflight(t *testing.T) {
 	f := newFixedMetadataPreflightFixture(t, AggIdOfMax, types.T_int64.ToType())
 	require.NoError(t, f.exec.GroupGrow(2))
@@ -389,7 +283,6 @@ func BenchmarkFixedMinMaxPlainMetadataPreflight(b *testing.B) {
 						want[group], present[group] = value, true
 					}
 				}
-				require.False(b, input.HasStringSourceMetadata())
 				vectors := []*vector.Vector{input}
 				if tc.standby {
 					require.NoError(b, f.exec.PreAllocateGroups(tc.groups))
@@ -397,8 +290,6 @@ func BenchmarkFixedMinMaxPlainMetadataPreflight(b *testing.B) {
 					require.NoError(b, f.exec.GroupGrow(tc.groups))
 					require.NoError(b, f.exec.PreflightBatchFill(0, groups, vectors))
 					require.NoError(b, f.exec.BatchFill(0, groups, vectors))
-					target := f.base.state[0].vecs[0]
-					require.False(b, target.HasStringSourceMetadata())
 				}
 				used, calls := f.account.Snapshot().Used, f.controller.calls
 				b.ReportAllocs()
@@ -431,7 +322,6 @@ func BenchmarkFixedMinMaxPlainMetadataPreflight(b *testing.B) {
 					if present[row] {
 						require.Equal(b, want[row], vector.GetFixedAtNoTypeCheck[float64](result[0], row))
 					}
-					require.Equal(b, types.StringSourceExpression, result[0].GetStringSourceAt(row))
 				}
 			})
 		}

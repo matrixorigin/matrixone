@@ -90,7 +90,6 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 				}
 				payload.GetGrouping().Add(2)
 				payload.SetIsBinaryString(true)
-				require.NoError(t, payload.SetStringSource(types.StringSourceLiteral))
 				build := makeInt32Batch(tc.proc, buildValues)
 				inputs = append(inputs, build)
 				probe.Vecs[0].GetNulls().Add(0)
@@ -129,7 +128,6 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 						nullPayload := next == 3 && generation != 3
 						require.Equal(t, nullPayload, output.IsNull(uint64(row)))
 						require.Equal(t, next == 2, output.GetGrouping().Contains(uint64(row)))
-						require.Equal(t, types.StringSourceLiteral, output.GetStringSourceAt(row))
 						if !nullPayload {
 							expected := strconv.Itoa(next)
 							if generation == 3 {

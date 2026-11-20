@@ -588,11 +588,6 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 			return moerr.NewInvalidStateNoCtx(
 				"aggregate explicit-text metadata requires MORPCVersion23")
 		}
-		if vec := aggResultVectorForChunk(ctr.spillAggList[i], 0); vec != nil &&
-			vec.HasStringSourceMetadata() && !stringSourceWireEnabled(proc) {
-			return moerr.NewInvalidStateNoCtx(
-				"aggregate string source metadata requires MORPCVersion37")
-		}
 		if err := validateDecodedAggregateGroupCount(
 			ctr.spillAggList[i], bat.RowCount()); err != nil {
 			return err

@@ -300,11 +300,10 @@ type container struct {
 	// groupByPreflights holds, for the current (last) group-by batch and the
 	// standby batch, each column's SelectedBatchPreflight for the next
 	// append into that batch.
-	groupByPreflights            [2]groupByPreflight
-	groupingRollup               []*vector.Vector
-	groupByHashKey               []int32
-	hashKeyVecs                  []*vector.Vector
-	groupKeyStringSourceMetadata bool
+	groupByPreflights [2]groupByPreflight
+	groupingRollup    []*vector.Vector
+	groupByHashKey    []int32
+	hashKeyVecs       []*vector.Vector
 
 	// MergeGroup locks the partial wire metadata on the first input. It must
 	// survive resident spills, because later partials and queued spill records
@@ -704,7 +703,6 @@ func (ctr *container) freeGroupByBatches() {
 		}
 	}
 	ctr.groupByBatches = nil
-	ctr.groupKeyStringSourceMetadata = false
 	if ctr.groupByStandby != nil {
 		ctr.groupByStandby.Clean(ctr.mp)
 		ctr.groupByStandby = nil

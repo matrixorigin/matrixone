@@ -561,7 +561,7 @@ func specializePreparedTemporalDecimalCasts(proc *process.Process, state *prepar
 		if warned || vec == nil || vec.Length() == 0 {
 			return nil
 		}
-		literal := rule.GetConstantValue(vec, false, 0)
+		literal := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(child, proc))
 		if literal != nil {
 			rule.PreserveFoldedDecimalLiteralSemantics(child, literal)
 			child.Expr = &plan.Expr_Lit{Lit: literal}

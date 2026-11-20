@@ -72,10 +72,7 @@ func plainBetweenSelectionDate(value *vector.Vector, literal bool) bool {
 		value.HasNull() || value.HasGrouping() || value.HasBinaryStringMetadata() {
 		return false
 	}
-	// DATE literals carry scalar literal provenance. It has no effect on DATE
-	// comparison; dynamic/row string provenance still uses the ordinary kernel.
-	return !value.HasStringSourceMetadata() || literal &&
-		value.GetStringSource() == types.StringSourceLiteral && len(value.GetStringSources()) == 0
+	return true
 }
 
 func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

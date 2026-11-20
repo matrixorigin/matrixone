@@ -81,7 +81,7 @@ func TestMergeGroupExtraBufCollationAdmission(t *testing.T) {
 					extra.Write(payload)
 				}
 				partial.ExtraBuf = extra.Bytes()
-				wire, err := partial.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
+				wire, err := partial.MarshalBinaryForPipeline(new(bytes.Buffer), true)
 				require.NoError(t, err)
 				decoded := batch.NewOffHeapEmpty()
 				require.NoError(t, decoded.UnmarshalBinaryForPipeline(wire, proc.Mp()))

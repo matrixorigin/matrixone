@@ -351,7 +351,7 @@ func TestSortRollupCancellationRetainsPublishedOutputForCleanup(t *testing.T) {
 	}
 }
 
-func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T) {
+func TestSortRollupMinReuseAndFallbackAcrossBatches(t *testing.T) {
 	for _, sameGroup := range []bool{false, true} {
 		for _, forceFallback := range []bool{false, true} {
 			t.Run(fmt.Sprintf("same=%t/fallback=%t", sameGroup, forceFallback), func(t *testing.T) {
@@ -379,7 +379,6 @@ func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T)
 				second := batch.NewWithSize(3)
 				second.Vecs[0] = testutil.MakeInt32Vector([]int32{key}, nil, proc.Mp())
 				second.Vecs[1] = testutil.MakeInt32Vector([]int32{3}, nil, proc.Mp())
-				require.NoError(t, second.Vecs[1].SetStringSource(types.StringSourceCOMStmt))
 				second.Vecs[2] = testutil.MakeInt64Vector([]int64{3}, nil, proc.Mp())
 				second.SetRowCount(1)
 				child.WithBatchs([]*batch.Batch{first, second})
@@ -390,7 +389,9 @@ func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T)
 				}
 				result, err := vm.Exec(g, proc)
 				require.NoError(t, err)
-				require.False(t, g.ctr.sortRollup.reuseSingleGroup)
+				// Fixed-width MIN input carries no per-row metadata that would
+				// force a downgrade, so reuse stays on unless forced off.
+				require.Equal(t, !forceFallback, g.ctr.sortRollup.reuseSingleGroup)
 				out := result.Batch
 				if sameGroup {
 					require.Equal(t, 2, out.RowCount())
@@ -412,7 +413,7 @@ func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T)
 	}
 }
 
-func TestSortRollupMinDowngradeAtFullOutputBoundary(t *testing.T) {
+func TestSortRollupMinReuseAtFullOutputBoundary(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	child := colexec.NewMockOperator()
 	minAgg := aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(1, types.T_int32)}, nil)
@@ -441,7 +442,6 @@ func TestSortRollupMinDowngradeAtFullOutputBoundary(t *testing.T) {
 	second := batch.NewWithSize(3)
 	second.Vecs[0] = testutil.MakeInt32Vector([]int32{int32(aggBatchSize)}, nil, proc.Mp())
 	second.Vecs[1] = testutil.MakeInt32Vector([]int32{-1}, nil, proc.Mp())
-	require.NoError(t, second.Vecs[1].SetStringSource(types.StringSourceCOMStmt))
 	second.Vecs[2] = testutil.MakeInt64Vector([]int64{-1}, nil, proc.Mp())
 	second.SetRowCount(1)
 	child.WithBatchs([]*batch.Batch{first, second})
@@ -453,7 +453,7 @@ func TestSortRollupMinDowngradeAtFullOutputBoundary(t *testing.T) {
 		require.Equal(t, int32(i), vector.GetFixedAtNoTypeCheck[int32](res.Batch.Vecs[1], i))
 		require.Equal(t, types.Decimal128FromInt64(int64(i)), vector.GetFixedAtNoTypeCheck[types.Decimal128](res.Batch.Vecs[2], i))
 	}
-	require.False(t, g.ctr.sortRollup.reuseSingleGroup)
+	require.True(t, g.ctr.sortRollup.reuseSingleGroup)
 	res, err = vm.Exec(g, proc)
 	require.NoError(t, err)
 	require.Equal(t, 2, res.Batch.RowCount())

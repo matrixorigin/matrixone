@@ -98,19 +98,6 @@ func explicitTextWireEnabled(proc *process.Process) bool {
 	return ok && version >= defines.MORPCVersion23
 }
 
-func stringSourceWireEnabled(proc *process.Process) bool {
-	if proc == nil {
-		return false
-	}
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	if rt == nil {
-		return false
-	}
-	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion37
-}
-
 func groupConcatSourceRowWireEnabled(proc *process.Process) bool {
 	if proc == nil {
 		return false
@@ -150,35 +137,6 @@ func aggResultVectorForChunk(agg aggexec.AggFuncExec, chunk int) *vector.Vector 
 		return accessor.ResultVectorForChunk(chunk)
 	}
 	return nil
-}
-
-type aggregateStringSourceProtocolWriter interface {
-	SaveIntermediateResultOfChunkWithStringSource(
-		chunk int,
-		writer io.Writer,
-		includeStringSource bool,
-	) error
-}
-
-func saveAggregateChunkForProtocol(
-	agg aggexec.AggFuncExec,
-	chunk int,
-	writer io.Writer,
-	includeStringSource bool,
-) error {
-	if includeStringSource {
-		return agg.SaveIntermediateResultOfChunk(chunk, writer)
-	}
-	protocolWriter, ok := agg.(aggregateStringSourceProtocolWriter)
-	if !ok {
-		if vec := aggResultVectorForChunk(agg, chunk); vec != nil && vec.HasStringSourceMetadata() {
-			return moerr.NewInternalErrorNoCtx(
-				"aggregate cannot omit string source for an older peer")
-		}
-		return agg.SaveIntermediateResultOfChunk(chunk, writer)
-	}
-	return protocolWriter.SaveIntermediateResultOfChunkWithStringSource(
-		chunk, writer, false)
 }
 
 // readRowMetadataTrailer consumes one retired row-metadata trailer written by

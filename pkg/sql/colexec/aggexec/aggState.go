@@ -20,7 +20,6 @@ import (
 	"fmt"
 	io "io"
 	"math"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -42,7 +41,10 @@ const (
 	spillMagicNumber            = uint64(0x4752505350494c4c) // "GRPSPILL"
 	aggBinaryStringTrailerMagic = uint64(0x4147474253545231)
 	aggStringDomainTrailerMagic = uint64(0x4147474253545232)
-	aggStringStateTrailerMagic  = uint64(0x4147474253545233)
+	// aggStringStateTrailerMagic is the retired trailer that packed a string
+	// source above the runtime domain in each row byte. Writers no longer emit
+	// it; readers still accept it from older peers/spills and drop the source.
+	aggStringStateTrailerMagic = uint64(0x4147474253545233)
 	// aggGroupConcatSourceRowTrailerMagic carries provenance independently of
 	// aggregate values. This matters for empty and NULL-only partials: their
 	// source rows still consume input ordinals even though no payload entry is
@@ -127,7 +129,7 @@ type aggInfo struct {
 	groupConcatSourceRowWire           bool
 	groupConcatSourceRowTrusted        bool
 	groupConcatSourceRowProvenanceWire bool
-	// preserveStringMetadata keeps row-level string domain/source metadata with
+	// preserveStringMetadata keeps row-level string domain metadata with
 	// saved aggregate arguments. Aggregates whose result is a selected input
 	// value (currently discrete percentile) need this because saveArg otherwise
 	// retains only raw bytes and loses the selected value's runtime semantics.
@@ -1953,7 +1955,6 @@ func (ag *aggState) fillArgWithStringMetadata(
 	y uint16,
 	val []byte,
 	domain types.RuntimeStringDomain,
-	source types.StringSource,
 	distinct bool,
 ) error {
 	header := kAggArgPrefixSz
@@ -1974,7 +1975,9 @@ func (ag *aggState) fillArgWithStringMetadata(
 	payload[2] = aggStringMetadataMagic2
 	payload[3] = aggStringMetadataVersion
 	payload[4] = byte(domain)
-	payload[5] = byte(source)
+	// Byte 5 used to carry a string source. It is always written as 0 (the
+	// default source), which every reader accepts as "no source".
+	payload[5] = 0
 	copy(payload[aggStringMetadataHeaderSize:], val)
 	if !distinct {
 		binary.BigEndian.PutUint32(k[kAggArgPrefixSz:kAggArgPrefixSz+kAggArgOrdinalSz], ag.argCnt[y])
@@ -2007,7 +2010,6 @@ func (ag *aggState) fillArgPayload(mp *mpool.MPool, y uint16, val []byte, distin
 func decodeAggStringMetadata(payload []byte) (
 	raw []byte,
 	domain types.RuntimeStringDomain,
-	source types.StringSource,
 	encoded bool,
 	error error,
 ) {
@@ -2015,20 +2017,21 @@ func decodeAggStringMetadata(payload []byte) (
 		payload[0] != aggStringMetadataMagic0 ||
 		payload[1] != aggStringMetadataMagic1 ||
 		payload[2] != aggStringMetadataMagic2 {
-		return nil, types.RuntimeStringInherit, types.StringSourceExpression, false,
+		return nil, types.RuntimeStringInherit, false,
 			moerr.NewInvalidInputNoCtx("aggregate string metadata envelope is missing")
 	}
 	if payload[3] != aggStringMetadataVersion {
-		return nil, types.RuntimeStringInherit, types.StringSourceExpression, false,
+		return nil, types.RuntimeStringInherit, false,
 			moerr.NewInvalidInputNoCtx("invalid aggregate string metadata version")
 	}
 	domain = types.RuntimeStringDomain(payload[4])
-	source = types.StringSource(payload[5])
-	if !domain.Valid() || !source.Valid() {
-		return nil, types.RuntimeStringInherit, types.StringSourceExpression, false,
+	// Wire compatibility: older writers stored a string source in byte 5.
+	// Validate it so corrupt envelopes are still rejected, then drop it.
+	if !domain.Valid() || !types.StringSource(payload[5]).Valid() {
+		return nil, types.RuntimeStringInherit, false,
 			moerr.NewInvalidInputNoCtx("invalid aggregate string metadata")
 	}
-	return payload[aggStringMetadataHeaderSize:], domain, source, true, nil
+	return payload[aggStringMetadataHeaderSize:], domain, true, nil
 }
 
 func (ag *aggState) fillDistinctArgWithValue(
@@ -2673,30 +2676,6 @@ func (ae *aggExec) requiresModernDistinctFloatKeyWire() bool {
 	return ae != nil && distinctFloatArgument(&ae.aggInfo) &&
 		!ae.legacyDistinctFloatKeys
 }
-func (ae *aggExec) finalizeStringSourcePreflights(groups []uint64) {
-	if ae == nil {
-		return
-	}
-	// Only vectors touched by this work unit can hold row sources written
-	// during it. Normalize each touched state chunk once: normalization scans
-	// the sidecar, so repeating it per group would be quadratic.
-	var seenBuf [8]int
-	seen := seenBuf[:0]
-	for _, group := range groups {
-		if group == GroupNotMatched {
-			continue
-		}
-		x, _ := ae.getXY(group - 1)
-		if x < 0 || x >= len(ae.state) || slices.Contains(seen, x) {
-			continue
-		}
-		seen = append(seen, x)
-		for _, vec := range ae.state[x].vecs {
-			vec.NormalizeStringSources()
-		}
-	}
-}
-
 func (ae *aggExec) SetAllocationAccount(allocation *AllocationAccount) error {
 	if ae == nil || allocation == nil || allocation.account == nil {
 		return mpool.ErrAllocationAccountInvalid
@@ -2902,14 +2881,12 @@ func (ae *aggExec) PreAllocateGroups(more int) error {
 // SetExtraInformation also implemented by each agg.
 
 func (ae *aggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
-	return ae.SaveIntermediateResultWithStringSource(cnt, flags, writer, true)
+	return ae.saveIntermediateResult(flags, writer)
 }
 
-func (ae *aggExec) SaveIntermediateResultWithStringSource(
-	cnt int64,
+func (ae *aggExec) saveIntermediateResult(
 	flags [][]uint8,
 	writer io.Writer,
-	includeStringSource bool,
 ) error {
 	magic := magicNumber
 	if err := types.WriteUint64(writer, magic); err != nil {
@@ -2943,7 +2920,7 @@ func (ae *aggExec) SaveIntermediateResultWithStringSource(
 			return err
 		}
 	}
-	if err := ae.writeBinaryStringTrailerForSelection(flags, writer, includeStringSource); err != nil {
+	if err := ae.writeBinaryStringTrailerForSelection(flags, writer); err != nil {
 		return err
 	}
 	if err := ae.writeGroupConcatSourceRowTrailer(writer); err != nil {
@@ -3023,14 +3000,6 @@ func (ae *aggExec) UnmarshalSpillFromReader(
 }
 
 func (ae *aggExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
-	return ae.SaveIntermediateResultOfChunkWithStringSource(chunk, writer, true)
-}
-
-func (ae *aggExec) SaveIntermediateResultOfChunkWithStringSource(
-	chunk int,
-	writer io.Writer,
-	includeStringSource bool,
-) error {
 	if chunk < 0 || chunk >= len(ae.state) {
 		return moerr.NewInternalErrorNoCtx("chunk index out of range")
 	}
@@ -3047,7 +3016,7 @@ func (ae *aggExec) SaveIntermediateResultOfChunkWithStringSource(
 		ae.mp, writer, &ae.aggInfo); err != nil {
 		return err
 	}
-	if err := ae.writeBinaryStringTrailerForChunk(chunk, writer, includeStringSource); err != nil {
+	if err := ae.writeBinaryStringTrailerForChunk(chunk, writer); err != nil {
 		return err
 	}
 	if err := ae.writeGroupConcatSourceRowTrailer(writer); err != nil {
@@ -3077,11 +3046,9 @@ func writeAggBinaryStringByte(writer io.Writer, value byte) error {
 func (ae *aggExec) writeBinaryStringTrailerForSelection(
 	flags [][]uint8,
 	writer io.Writer,
-	includeStringSource bool,
 ) error {
 	hasBinaryString := false
 	hasTextString := false
-	hasStringSource := false
 	var rowCount int32
 	for chunk, chunkFlags := range flags {
 		if chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
@@ -3097,19 +3064,14 @@ func (ae *aggExec) writeBinaryStringTrailerForSelection(
 				hasBinaryString = true
 				hasTextString = hasTextString || vec.GetRuntimeStringDomainAt(row) == types.RuntimeStringText
 			}
-			hasStringSource = includeStringSource && (hasStringSource ||
-				(vec != nil && vec.GetStringSourceAt(row) != types.StringSourceExpression))
 		}
 	}
-	if !hasBinaryString && !hasStringSource {
+	if !hasBinaryString {
 		return nil
 	}
 	marker := aggBinaryStringTrailerMagic
 	if hasTextString {
 		marker = aggStringDomainTrailerMagic
-	}
-	if hasStringSource {
-		marker = aggStringStateTrailerMagic
 	}
 	if err := types.WriteUint64(writer, marker); err != nil {
 		return err
@@ -3128,10 +3090,7 @@ func (ae *aggExec) writeBinaryStringTrailerForSelection(
 			}
 			value := byte(0)
 			if vec != nil {
-				if marker == aggStringStateTrailerMagic {
-					value = byte(vec.GetRuntimeStringDomainAt(row)) |
-						byte(vec.GetStringSourceAt(row))<<2
-				} else if hasTextString {
+				if hasTextString {
 					value = byte(vec.GetRuntimeStringDomainAt(row))
 				} else if vec.GetRuntimeStringDomainAt(row) == types.RuntimeStringBinary {
 					value = 1
@@ -3148,21 +3107,16 @@ func (ae *aggExec) writeBinaryStringTrailerForSelection(
 func (ae *aggExec) writeBinaryStringTrailerForChunk(
 	chunk int,
 	writer io.Writer,
-	includeStringSource bool,
 ) error {
 	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 ||
 		ae.state[chunk].vecs[0] == nil ||
-		(!ae.state[chunk].vecs[0].HasBinaryStringMetadata() &&
-			(!includeStringSource || !ae.state[chunk].vecs[0].HasStringSourceMetadata())) {
+		!ae.state[chunk].vecs[0].HasBinaryStringMetadata() {
 		return nil
 	}
 	vec := ae.state[chunk].vecs[0]
 	marker := aggBinaryStringTrailerMagic
 	if vec.HasExplicitTextStringMetadata() {
 		marker = aggStringDomainTrailerMagic
-	}
-	if includeStringSource && vec.HasStringSourceMetadata() {
-		marker = aggStringStateTrailerMagic
 	}
 	if err := types.WriteUint64(writer, marker); err != nil {
 		return err
@@ -3172,9 +3126,7 @@ func (ae *aggExec) writeBinaryStringTrailerForChunk(
 	}
 	for row := 0; row < vec.Length(); row++ {
 		value := byte(0)
-		if marker == aggStringStateTrailerMagic {
-			value = byte(vec.GetRuntimeStringDomainAt(row)) | byte(vec.GetStringSourceAt(row))<<2
-		} else if marker == aggStringDomainTrailerMagic {
+		if marker == aggStringDomainTrailerMagic {
 			value = byte(vec.GetRuntimeStringDomainAt(row))
 		} else if vec.GetRuntimeStringDomainAt(row) == types.RuntimeStringBinary {
 			value = 1
@@ -3355,14 +3307,17 @@ func (ae *aggExec) readBinaryStringTrailerAndMagic(reader io.Reader, mp *mpool.M
 					return err
 				}
 				domain := encoded
-				source := types.StringSourceExpression
+				sourceValid := true
 				if marker == aggStringStateTrailerMagic {
+					// Wire compatibility: the retired string-state trailer
+					// packs a string source in bits >= 2. Validate it so
+					// corrupt rows are still rejected, then drop it.
 					domain = encoded & 0x03
-					source = types.StringSource(encoded >> 2)
+					sourceValid = types.StringSource(encoded >> 2).Valid()
 				}
 				if marker == aggBinaryStringTrailerMagic && domain > 1 ||
 					(marker == aggStringDomainTrailerMagic || marker == aggStringStateTrailerMagic) &&
-						types.RuntimeStringDomain(domain) > types.RuntimeStringBinary || !source.Valid() {
+						types.RuntimeStringDomain(domain) > types.RuntimeStringBinary || !sourceValid {
 					return moerr.NewInvalidInputNoCtx("invalid aggregate binary provenance row")
 				}
 				runtimeDomain := types.RuntimeStringDomain(domain)
@@ -3372,11 +3327,7 @@ func (ae *aggExec) readBinaryStringTrailerAndMagic(reader io.Reader, mp *mpool.M
 				if err := vec.SetRuntimeStringDomainAtWithMP(row, runtimeDomain, mp); err != nil {
 					return err
 				}
-				if err := vec.SetStringSourceAtWithMP(row, source, mp); err != nil {
-					return err
-				}
 			}
-			vec.NormalizeStringSources()
 		}
 		marker, err = types.ReadUint64(reader)
 		if err != nil {
@@ -3801,12 +3752,11 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 			var fillErr error
 			if ae.preserveStringMetadata && vectors[0].GetType().Oid.IsMySQLString() {
 				domain := vectors[0].GetRuntimeStringDomainAt(row)
-				source := vectors[0].GetStringSourceAt(row)
 				// Every retained string carries the envelope, including rows with
 				// default metadata. Otherwise raw user bytes beginning with the
 				// metadata magic are indistinguishable from an encoded payload.
 				fillErr = ae.state[x].fillArgWithStringMetadata(
-					ae.mp, y, bs, domain, source, distinct)
+					ae.mp, y, bs, domain, distinct)
 			} else {
 				fillErr = ae.state[x].fillArg(ae.mp, y, bs, distinct)
 			}

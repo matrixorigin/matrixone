@@ -1805,9 +1805,6 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewWrongArguments(reqCtx, "EXECUTE")
 		}
 		paramCount := prepareStmt.params.Length()
-		if err = prepareStmt.params.SetStringSource(types.StringSourceCOMStmt); err != nil {
-			return nil, nil, nil, originSQL, false, err
-		}
 		if cap(prepareStmt.paramKinds) < paramCount {
 			prepareStmt.paramKinds = make([]types.StringConversionKind, paramCount)
 		} else {
@@ -1851,6 +1848,7 @@ func initExecuteStmtParamWithResolverInSession(
 		} else {
 			cwft.proc.SetPrepareParams(prepareStmt.params)
 		}
+		cwft.proc.SetPrepareParamsStringSource(types.StringSourceCOMStmt)
 		cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes, prepareStmt.paramKinds,
 			prepareStmt.inetNtoaParamPositions, prepareStmt.temporalRuntimeParamPositions)
 		if err != nil {
@@ -1875,11 +1873,8 @@ func initExecuteStmtParamWithResolverInSession(
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		if err = params.SetStringSource(types.StringSourceSQLPrepare); err != nil {
-			params.Free(cwft.proc.Mp())
-			return nil, nil, nil, originSQL, false, err
-		}
 		cwft.proc.SetOwnedPrepareParamsWithMetadata(params, paramIsBin, paramBinaryString)
+		cwft.proc.SetPrepareParamsStringSource(types.StringSourceSQLPrepare)
 		cwft.paramVals = paramVals
 		if !sourceBindingQuery {
 			applyPreparedConversionRuntimeTypes(cwft.paramVals, prepareStmt.conversionParamPositions)

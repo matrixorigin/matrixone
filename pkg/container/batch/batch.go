@@ -47,12 +47,10 @@ const (
 )
 
 type batchMetadataRecord struct {
-	mode                 byte
-	encodedRows          []byte
-	binaryString         bool
-	textString           bool
-	stringSource         types.StringSource
-	encodedStringSources []byte
+	mode         byte
+	encodedRows  []byte
+	binaryString bool
+	textString   bool
 }
 
 func setBatchVectorRuntimeStringDomain(
@@ -159,17 +157,6 @@ func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, 
 // (binary/text string domains, string sources) that the plain Batch encoding
 // omits.
 func (bat *Batch) HasTransportMetadata() bool {
-	return bat.hasTransportMetadata(true)
-}
-
-// HasTransportMetadataWithoutStringSources reports whether the batch
-// contains provenance understood before string-source transport was added.
-// Protocol gates use this to let older peers drop only string sources.
-func (bat *Batch) HasTransportMetadataWithoutStringSources() bool {
-	return bat.hasTransportMetadata(false)
-}
-
-func (bat *Batch) hasTransportMetadata(includeStringSources bool) bool {
 	if bat == nil {
 		return false
 	}
@@ -177,22 +164,7 @@ func (bat *Batch) hasTransportMetadata(includeStringSources bool) bool {
 		if vec == nil {
 			continue
 		}
-		if includeStringSources && vec.HasStringSourceMetadata() {
-			return true
-		}
 		if vec.GetIsBinaryString() || vec.HasBinaryStringRows() {
-			return true
-		}
-	}
-	return false
-}
-
-func (bat *Batch) HasStringSourceMetadata() bool {
-	if bat == nil {
-		return false
-	}
-	for _, vec := range bat.Vecs {
-		if vec != nil && vec.HasStringSourceMetadata() {
 			return true
 		}
 	}
@@ -243,16 +215,15 @@ func hasUniformExplicitTextStringMetadata(vec *vector.Vector) bool {
 // TransportMetadataSize validates the transient trailer and returns its
 // exact wire size. Zero means that no trailer is required.
 func (bat *Batch) TransportMetadataSize() (int, error) {
-	return bat.transportMetadataSize(true)
+	return bat.transportMetadataSize()
 }
 
-func (bat *Batch) transportMetadataSize(includeStringSources bool) (int, error) {
-	if bat == nil || !bat.hasTransportMetadata(includeStringSources) {
+func (bat *Batch) transportMetadataSize() (int, error) {
+	if bat == nil || !bat.HasTransportMetadata() {
 		return 0, nil
 	}
 	// magic/version + vector count + batch row count + trailing size.
 	total := uint64(4 + 4 + 8 + 4)
-	hasStringSources := includeStringSources && bat.HasStringSourceMetadata()
 	for _, vec := range bat.Vecs {
 		if vec == nil {
 			return 0, moerr.NewInvalidInputNoCtx("cannot encode prepared parameter metadata for nil vector")
@@ -266,19 +237,6 @@ func (bat *Batch) transportMetadataSize(includeStringSources bool) (int, error) 
 		} else {
 			total++
 		}
-		if hasStringSources {
-			sources := vec.GetStringSources()
-			if len(sources) != 0 {
-				if len(sources) != vec.Length() || int64(vec.Length()) > int64(batchMetadataMaxRows) {
-					return 0, moerr.NewInvalidInputNoCtx("invalid string source metadata row count")
-				}
-				total += 1 + 4 + uint64(len(sources))
-			} else if vec.GetStringSource() != types.StringSourceExpression {
-				total += 2
-			} else {
-				total++
-			}
-		}
 	}
 	if total > uint64(^uint32(0)) || total > uint64(^uint(0)>>1) {
 		return 0, moerr.NewInvalidInputNoCtx("prepared parameter metadata exceeds wire limit")
@@ -290,21 +248,16 @@ func (bat *Batch) transportMetadataSize(includeStringSources bool) (int, error) 
 // trailer after the stable Batch bytes. It is intentionally not part of
 // MarshalBinaryTo: persisted/stable Vector and Batch bytes remain unchanged.
 func (bat *Batch) AppendTransportMetadataTo(w io.Writer) error {
-	return bat.appendTransportMetadataTo(w, true)
-}
-
-func (bat *Batch) appendTransportMetadataTo(w io.Writer, includeStringSources bool) error {
-	size, err := bat.transportMetadataSize(includeStringSources)
+	size, err := bat.transportMetadataSize()
 	if err != nil || size == 0 {
 		return err
 	}
 	if w == nil {
 		return io.ErrClosedPipe
 	}
+	// Version 2 adds a per-vector string-source section, which is retired:
+	// writers emit version 1 and readers drop a version-2 section.
 	version := batchMetadataVersionV1
-	if includeStringSources && bat.HasStringSourceMetadata() {
-		version = batchMetadataVersion
-	}
 	if err := types.WriteFull(w, []byte{
 		batchMetadataMagic0, batchMetadataMagic1,
 		batchMetadataMagic2, version,
@@ -352,37 +305,6 @@ func (bat *Batch) appendTransportMetadataTo(w io.Writer, includeStringSources bo
 				return err
 			}
 		}
-		if version >= batchMetadataVersion {
-			sources := vec.GetStringSources()
-			switch {
-			case len(sources) != 0:
-				if err := writeBatchMarshalByte(w, batchMetadataModeRows); err != nil {
-					return err
-				}
-				if err := writeBatchMarshalInt32(w, int32(len(sources))); err != nil {
-					return err
-				}
-				for _, source := range sources {
-					if !source.Valid() {
-						return moerr.NewInvalidInputNoCtxf("invalid string source %d", source)
-					}
-					if err := writeBatchMarshalByte(w, byte(source)); err != nil {
-						return err
-					}
-				}
-			case vec.GetStringSource() != types.StringSourceExpression:
-				if err := writeBatchMarshalByte(w, batchMetadataModeUniform); err != nil {
-					return err
-				}
-				if err := writeBatchMarshalByte(w, byte(vec.GetStringSource())); err != nil {
-					return err
-				}
-			default:
-				if err := writeBatchMarshalByte(w, batchMetadataModeNone); err != nil {
-					return err
-				}
-			}
-		}
 	}
 	return writeBatchMarshalUint32(w, uint32(size))
 }
@@ -400,19 +322,6 @@ func (bat *Batch) AppendTransportMetadata(w io.Writer) error {
 // With no significant provenance it is byte-for-byte identical to the stable
 // Batch encoder.
 func (bat *Batch) MarshalBinaryWithMetadata(w *bytes.Buffer, reset bool) ([]byte, error) {
-	return bat.MarshalBinaryWithMetadataForProtocol(w, reset, true)
-}
-
-// MarshalBinaryWithMetadataForProtocol omits string-source metadata
-// for an older peer while preserving every provenance axis that peer already
-// understands. Source is observational metadata until both peers advertise
-// its capability; dropping it at that rolling-upgrade boundary restores the
-// pre-capability behavior instead of rejecting an otherwise executable query.
-func (bat *Batch) MarshalBinaryWithMetadataForProtocol(
-	w *bytes.Buffer,
-	reset bool,
-	includeStringSources bool,
-) ([]byte, error) {
 	if w == nil {
 		return nil, io.ErrClosedPipe
 	}
@@ -422,7 +331,7 @@ func (bat *Batch) MarshalBinaryWithMetadataForProtocol(
 	if err := bat.MarshalBinaryTo(w); err != nil {
 		return nil, err
 	}
-	if err := bat.appendTransportMetadataTo(w, includeStringSources); err != nil {
+	if err := bat.AppendTransportMetadataTo(w); err != nil {
 		return nil, err
 	}
 	return w.Bytes(), nil
@@ -647,7 +556,6 @@ func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
 func (bat *Batch) clearTransportMetadata(mp *mpool.MPool) {
 	for _, vec := range bat.Vecs {
 		if vec != nil {
-			_ = vec.SetStringSource(types.StringSourceExpression)
 			vec.SetIsBinaryString(false)
 		}
 	}
@@ -706,16 +614,6 @@ func (bat *Batch) unmarshalBinaryWithMetadataAtPrefix(data []byte, prefixLen int
 			}
 		default:
 			applyErr = moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata mode")
-		}
-		if applyErr != nil {
-			bat.clearTransportMetadata(mp)
-			return applyErr
-		}
-		if len(record.encodedStringSources) != 0 {
-			applyErr = vec.SetStringSourcesFromReader(
-				bytes.NewReader(record.encodedStringSources), len(record.encodedStringSources), mp)
-		} else {
-			applyErr = vec.SetStringSource(record.stringSource)
 		}
 		if applyErr != nil {
 			bat.clearTransportMetadata(mp)
@@ -895,19 +793,15 @@ func (bat *Batch) unmarshalFromReaderWithMetadata(
 			if err != nil {
 				return fail(err)
 			}
+			// The string-source section is retired: validate an older writer's
+			// section and drop it.
 			switch sourceMode {
 			case batchMetadataModeNone:
-				if err := bat.Vecs[i].SetStringSource(types.StringSourceExpression); err != nil {
-					return fail(err)
-				}
 			case batchMetadataModeUniform:
 				encoded, err := readByte()
 				source := types.StringSource(encoded)
 				if err != nil || !source.Valid() || source == types.StringSourceExpression {
 					return fail(moerr.NewInvalidInputNoCtx("invalid uniform string source metadata"))
-				}
-				if err := bat.Vecs[i].SetStringSource(source); err != nil {
-					return fail(err)
 				}
 			case batchMetadataModeRows:
 				count, err := types.ReadInt32(limited)
@@ -915,8 +809,14 @@ func (bat *Batch) unmarshalFromReaderWithMetadata(
 					count > batchMetadataMaxRows || int64(count) > limited.N-4 {
 					return fail(moerr.NewInvalidInputNoCtx("invalid string source metadata row count"))
 				}
-				if err := bat.Vecs[i].SetStringSourcesFromReader(limited, int(count), mp); err != nil {
-					return fail(err)
+				for row := int32(0); row < count; row++ {
+					encoded, err := readByte()
+					if err != nil {
+						return fail(err)
+					}
+					if !types.StringSource(encoded).Valid() {
+						return fail(moerr.NewInvalidInputNoCtx("invalid string source metadata"))
+					}
 				}
 			default:
 				return fail(moerr.NewInvalidInputNoCtx("invalid string source metadata mode"))
@@ -1096,14 +996,12 @@ func parseBatchMetadataTrailer(
 			}
 			switch sourceMode {
 			case batchMetadataModeNone:
-				records[i].stringSource = types.StringSourceExpression
 			case batchMetadataModeUniform:
 				encoded, err := types.ReadByte(reader)
 				source := types.StringSource(encoded)
 				if err != nil || !source.Valid() || source == types.StringSourceExpression {
 					return nil, 0, moerr.NewInvalidInputNoCtx("invalid uniform string source metadata")
 				}
-				records[i].stringSource = source
 			case batchMetadataModeRows:
 				count, err := types.ReadInt32(reader)
 				if err != nil || count < 0 || vecs[i] == nil || count != int32(vecs[i].Length()) ||
@@ -1112,8 +1010,7 @@ func parseBatchMetadataTrailer(
 				}
 				rowStart := len(ext) - reader.Len()
 				rowEnd := rowStart + int(count)
-				records[i].encodedStringSources = ext[rowStart:rowEnd]
-				for _, encoded := range records[i].encodedStringSources {
+				for _, encoded := range ext[rowStart:rowEnd] {
 					if !types.StringSource(encoded).Valid() {
 						return nil, 0, moerr.NewInvalidInputNoCtx("invalid string source metadata")
 					}
@@ -2055,16 +1952,6 @@ func (bat *Batch) CloneTo(toBat *Batch, mp *mpool.MPool) (err error) {
 			return
 		}
 		toVec.SetSorted(srcVec.GetSorted())
-		if srcVec.IsConst() {
-			// UnionBatch copies the provenance for ordinary vectors while it
-			// appends their rows.  Keep the explicit copy for constants: their
-			// value is represented by one logical cell and the const fast path
-			// does not materialize the row sidecar.
-			if err = srcVec.CopyStringSourceToWithMP(toVec, mp); err != nil {
-				toBat.Clean(mp)
-				return
-			}
-		}
 	}
 	toBat.rowCount = bat.rowCount
 	toBat.ShuffleIDX = bat.ShuffleIDX
@@ -2128,21 +2015,11 @@ func (bat *Batch) selectedColumnsHaveAllocationAccount(selectCols []int) bool {
 	return false
 }
 
-func normalizeStringSources(vecs []*vector.Vector) {
-	for _, vec := range vecs {
-		vec.NormalizeStringSources()
-	}
-}
-
 func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
-	defer normalizeStringSources(bat.Vecs)
 	// Provenance can require an allocation even when every payload vector is
 	// already pre-sized. Admit that state for every column before the first
 	// column publishes rows, so a provenance OOM cannot split batch lengths.
 	for i, vec := range bat.Vecs {
-		if err := vec.PreflightUnionStringSources(bat2.Vecs[i], sels, m); err != nil {
-			return err
-		}
 		if err := vec.PreflightUnionBinaryString(bat2.Vecs[i], sels, m); err != nil {
 			return err
 		}
@@ -2159,12 +2036,7 @@ func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
 }
 
 func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) error {
-	defer normalizeStringSources(bat.Vecs)
 	for i, vec := range bat.Vecs {
-		if err := vec.PreflightUnionBatchStringSources(
-			bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
-			return err
-		}
 		if err := vec.PreflightUnionBatchBinaryString(
 			bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
 			return err
@@ -2180,11 +2052,7 @@ func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) erro
 }
 
 func (bat *Batch) UnionOne(bat2 *Batch, pos int64, m *mpool.MPool) error {
-	defer normalizeStringSources(bat.Vecs)
 	for i, vec := range bat.Vecs {
-		if err := vec.PreflightUnionOneStringSources(bat2.Vecs[i], pos, m); err != nil {
-			return err
-		}
 		if err := vec.PreflightUnionOneBinaryString(bat2.Vecs[i], pos, m); err != nil {
 			return err
 		}
@@ -2220,13 +2088,8 @@ func (bat *Batch) AppendWithCopy(ctx context.Context, mp *mpool.MPool, b *Batch)
 	if len(bat.Vecs) == 0 {
 		return bat, nil
 	}
-	defer normalizeStringSources(bat.Vecs)
 
 	for i := range bat.Vecs {
-		if err := bat.Vecs[i].PreflightUnionBatchStringSources(
-			b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
-			return bat, err
-		}
 		if err := bat.Vecs[i].PreflightUnionBatchBinaryString(
 			b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
 			return bat, err
@@ -2252,13 +2115,8 @@ func (bat *Batch) Append(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch
 	if len(bat.Vecs) == 0 {
 		return bat, nil
 	}
-	defer normalizeStringSources(bat.Vecs)
 
 	for i := range bat.Vecs {
-		if err := bat.Vecs[i].PreflightUnionBatchStringSources(
-			b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
-			return bat, err
-		}
 		if err := bat.Vecs[i].PreflightUnionBatchBinaryString(
 			b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
 			return bat, err

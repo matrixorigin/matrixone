@@ -536,8 +536,12 @@ type BaseProcess struct {
 	// typedPrepareParams carries each prepared parameter as one row of its
 	// source SQL type (column i is parameter i). It is nil when the caller
 	// only supplied the legacy text transport.
-	typedPrepareParams              *batch.Batch
-	typedPrepareParamsOwned         bool
+	typedPrepareParams      *batch.Batch
+	typedPrepareParamsOwned bool
+	// prepareParamsStringSource records where this execution's parameter
+	// values came from (SQL PREPARE or COM_STMT_EXECUTE). Constant folding
+	// stamps it on literals built from parameters.
+	prepareParamsStringSource       types.StringSource
 	QueryClient                     qclient.QueryClient
 	Hakeeper                        logservice.CNHAKeeperClient
 	UdfService                      udf.Service

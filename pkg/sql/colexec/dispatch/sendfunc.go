@@ -76,10 +76,6 @@ func explicitTextRemoteWireEnabled(proc *process.Process) bool {
 	return remoteBatchWireVersion(proc) >= defines.MORPCVersion23
 }
 
-func stringSourceRemoteWireEnabled(proc *process.Process) bool {
-	return remoteBatchWireVersion(proc) >= defines.MORPCVersion37
-}
-
 func remoteBatchWireVersion(proc *process.Process) int64 {
 	if proc == nil {
 		return 0
@@ -118,8 +114,7 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 			"explicit-text provenance requires MORPCVersion23 for remote dispatch")
 	}
 	if wireEnabled {
-		return bat.MarshalBinaryForPipeline(
-			buf, true, stringSourceRemoteWireEnabled(proc))
+		return bat.MarshalBinaryForPipeline(buf, true)
 	}
 	return bat.MarshalBinaryWithBuffer(buf, true)
 }

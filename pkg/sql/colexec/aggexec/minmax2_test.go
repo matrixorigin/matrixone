@@ -353,67 +353,6 @@ func TestMinMaxJSONFixtureOrder(t *testing.T) {
 	require.JSONEq(t, `{"key_56":78.9,"芝士面包":"12abc"}`, string(maxText))
 }
 
-func TestFixedMinMaxPreservesAndMergesStringSources(t *testing.T) {
-	for _, valueType := range []struct {
-		name       string
-		typ        types.Type
-		low, high  any
-		equalValue any
-	}{
-		{name: "int64", typ: types.T_int64.ToType(), low: int64(1), high: int64(2), equalValue: int64(7)},
-		{name: "date", typ: types.T_date.ToType(), low: types.Date(1), high: types.Date(2), equalValue: types.Date(7)},
-		{name: "decimal64", typ: types.T_decimal64.ToType(), low: types.Decimal64(1), high: types.Decimal64(2), equalValue: types.Decimal64(7)},
-	} {
-		for _, aggID := range []int64{AggIdOfMin, AggIdOfMax} {
-			t.Run(fmt.Sprintf("%s/%d", valueType.name, aggID), func(t *testing.T) {
-				mp := mpool.MustNewZero()
-				input := vector.NewVec(valueType.typ)
-				require.NoError(t, vector.AppendAny(input, valueType.low, false, mp))
-				require.NoError(t, vector.AppendAny(input, valueType.high, false, mp))
-				require.NoError(t, input.SetStringSourcesWithMP([]types.StringSource{
-					types.StringSourceSQLPrepare, types.StringSourceCOMStmt,
-				}, mp))
-				exec := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, valueType.typ)
-				require.NoError(t, exec.GroupGrow(1))
-				require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
-				results, err := exec.Flush()
-				require.NoError(t, err)
-				want := types.StringSourceSQLPrepare
-				if aggID == AggIdOfMax {
-					want = types.StringSourceCOMStmt
-				}
-				require.Equal(t, want, results[0].GetStringSourceAt(0))
-				results[0].Free(mp)
-				exec.Free()
-				input.Free(mp)
-
-				leftInput := vector.NewVec(valueType.typ)
-				rightInput := vector.NewVec(valueType.typ)
-				require.NoError(t, vector.AppendAny(leftInput, valueType.equalValue, false, mp))
-				require.NoError(t, vector.AppendAny(rightInput, valueType.equalValue, false, mp))
-				require.NoError(t, leftInput.SetStringSource(types.StringSourceLiteral))
-				require.NoError(t, rightInput.SetStringSource(types.StringSourceUserVariable))
-				left := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, valueType.typ)
-				right := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, valueType.typ)
-				require.NoError(t, left.GroupGrow(1))
-				require.NoError(t, right.GroupGrow(1))
-				require.NoError(t, left.BulkFill(0, []*vector.Vector{leftInput}))
-				require.NoError(t, right.BulkFill(0, []*vector.Vector{rightInput}))
-				require.NoError(t, left.Merge(right, 0, 0))
-				results, err = left.Flush()
-				require.NoError(t, err)
-				require.Equal(t, types.StringSourceExpression, results[0].GetStringSourceAt(0))
-				results[0].Free(mp)
-				left.Free()
-				right.Free()
-				leftInput.Free(mp)
-				rightInput.Free(mp)
-				require.Zero(t, mp.CurrNB())
-			})
-		}
-	}
-}
-
 func TestTextMinMaxUsesGeneralCICollation(t *testing.T) {
 	values := []string{"a", "b", "c", "E", "C", "D"}
 	testCases := []struct {
@@ -884,33 +823,28 @@ func TestMinEqualMergePreservesExplicitText(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestMinMaxFixedBatchPreflightsExistingMetadataAndSkipsNull(t *testing.T) {
+func TestMinMaxFixedBatchSkipsNullAndBroadcastsConst(t *testing.T) {
 	mp := mpool.MustNewZero()
 	agg := makeMinMaxExec(mp, AggIdOfMin, true, types.T_int64.ToType())
 	require.NoError(t, agg.GroupGrow(2))
 
 	seed := vector.NewVec(types.T_int64.ToType())
 	require.NoError(t, vector.AppendFixed(seed, int64(10), false, mp))
-	require.NoError(t, seed.SetStringSource(types.StringSourceCOMStmt))
 	require.NoError(t, agg.BatchFill(0, []uint64{1}, []*vector.Vector{seed}))
 
 	input := vector.NewVec(types.T_int64.ToType())
 	require.NoError(t, vector.AppendFixed(input, int64(5), false, mp))
 	require.NoError(t, vector.AppendFixed(input, int64(0), true, mp))
-	require.False(t, input.HasStringSourceMetadata())
 	require.NoError(t, agg.BatchFill(0, []uint64{1, 2}, []*vector.Vector{input}))
 
 	constant, err := vector.NewConstFixed(types.T_int64.ToType(), int64(3), 2, mp)
 	require.NoError(t, err)
-	require.NoError(t, constant.SetStringSource(types.StringSourceLiteral))
 	require.NoError(t, agg.BatchFill(0, []uint64{1, 2}, []*vector.Vector{constant}))
 
 	results, err := agg.Flush()
 	require.NoError(t, err)
 	for row := range 2 {
 		require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](results[0], row))
-		require.Equal(t, types.StringSourceLiteral,
-			results[0].GetStringSourceAt(row))
 	}
 	results[0].Free(mp)
 	agg.Free()
@@ -920,7 +854,7 @@ func TestMinMaxFixedBatchPreflightsExistingMetadataAndSkipsNull(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestMinMaxFixedBatchOverflowSlotsPreservesSourceMetadata(t *testing.T) {
+func TestMinMaxFixedBatchOverflowSlots(t *testing.T) {
 	mp := mpool.MustNewZero()
 	const groupsCount = 256
 	input := vector.NewVec(types.T_int64.ToType())
@@ -929,7 +863,6 @@ func TestMinMaxFixedBatchOverflowSlotsPreservesSourceMetadata(t *testing.T) {
 		require.NoError(t, vector.AppendFixed(input, int64(10), false, mp))
 		groups[row] = uint64(row + 1)
 	}
-	require.NoError(t, input.SetStringSource(types.StringSourceCOMStmt))
 	agg := makeMinMaxExec(mp, AggIdOfMin, true, types.T_int64.ToType())
 	require.NoError(t, agg.GroupGrow(groupsCount))
 	require.NoError(t, agg.BatchFill(0, groups, []*vector.Vector{input}))
@@ -937,17 +870,13 @@ func TestMinMaxFixedBatchOverflowSlotsPreservesSourceMetadata(t *testing.T) {
 	for row := range groupsCount {
 		vector.MustFixedColNoTypeCheck[int64](input)[row] = 5
 	}
-	require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
 	require.NoError(t, agg.BatchFill(0, groups, []*vector.Vector{input}))
-	require.NoError(t, input.SetStringSource(types.StringSourceUserVariable))
 	require.NoError(t, agg.BatchFill(0, groups, []*vector.Vector{input}))
 
 	results, err := agg.Flush()
 	require.NoError(t, err)
 	for row := range groupsCount {
 		require.Equal(t, int64(5), vector.GetFixedAtNoTypeCheck[int64](results[0], row))
-		require.Equal(t, types.StringSourceExpression,
-			results[0].GetStringSourceAt(row))
 	}
 	results[0].Free(mp)
 	agg.Free()
@@ -955,28 +884,28 @@ func TestMinMaxFixedBatchOverflowSlotsPreservesSourceMetadata(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestMinMaxExtraSourceOwnershipForWinsAndLosses(t *testing.T) {
+func TestMinMaxExtraWinsAndLosses(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		typ       types.Type
 		input     any
 		extra     any
-		want      types.StringSource
+		want      any
 		appendVal func(*vector.Vector, any, *mpool.MPool) error
 	}{
-		{name: "fixed wins", typ: types.T_int64.ToType(), input: int64(5), extra: int64(3), want: types.StringSourceExpression,
+		{name: "fixed wins", typ: types.T_int64.ToType(), input: int64(5), extra: int64(3), want: int64(3),
 			appendVal: func(vec *vector.Vector, value any, mp *mpool.MPool) error {
 				return vector.AppendFixed(vec, value.(int64), false, mp)
 			}},
-		{name: "fixed loses", typ: types.T_int64.ToType(), input: int64(5), extra: int64(7), want: types.StringSourceCOMStmt,
+		{name: "fixed loses", typ: types.T_int64.ToType(), input: int64(5), extra: int64(7), want: int64(5),
 			appendVal: func(vec *vector.Vector, value any, mp *mpool.MPool) error {
 				return vector.AppendFixed(vec, value.(int64), false, mp)
 			}},
-		{name: "bytes wins", typ: types.T_text.ToType(), input: []byte("5"), extra: []byte("3"), want: types.StringSourceExpression,
+		{name: "bytes wins", typ: types.T_text.ToType(), input: []byte("5"), extra: []byte("3"), want: []byte("3"),
 			appendVal: func(vec *vector.Vector, value any, mp *mpool.MPool) error {
 				return vector.AppendBytes(vec, value.([]byte), false, mp)
 			}},
-		{name: "bytes loses", typ: types.T_text.ToType(), input: []byte("5"), extra: []byte("7"), want: types.StringSourceCOMStmt,
+		{name: "bytes loses", typ: types.T_text.ToType(), input: []byte("5"), extra: []byte("7"), want: []byte("5"),
 			appendVal: func(vec *vector.Vector, value any, mp *mpool.MPool) error {
 				return vector.AppendBytes(vec, value.([]byte), false, mp)
 			}},
@@ -985,14 +914,17 @@ func TestMinMaxExtraSourceOwnershipForWinsAndLosses(t *testing.T) {
 			mp := mpool.MustNewZero()
 			input := vector.NewVec(test.typ)
 			require.NoError(t, test.appendVal(input, test.input, mp))
-			require.NoError(t, input.SetStringSource(types.StringSourceCOMStmt))
 			agg := makeMinMaxExec(mp, AggIdOfMin, true, test.typ)
 			require.NoError(t, agg.GroupGrow(1))
 			require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
 			require.NoError(t, agg.SetExtraInformation(test.extra, 0))
 			results, err := agg.Flush()
 			require.NoError(t, err)
-			require.Equal(t, test.want, results[0].GetStringSourceAt(0))
+			if test.typ.IsVarlen() {
+				require.Equal(t, test.want, results[0].GetBytesAt(0))
+			} else {
+				require.Equal(t, test.want, vector.GetFixedAtNoTypeCheck[int64](results[0], 0))
+			}
 			results[0].Free(mp)
 			agg.Free()
 			input.Free(mp)
@@ -1001,7 +933,7 @@ func TestMinMaxExtraSourceOwnershipForWinsAndLosses(t *testing.T) {
 	}
 }
 
-func TestMinMaxExtraPopulatesEmptyGroupsWithExpressionSource(t *testing.T) {
+func TestMinMaxExtraPopulatesEmptyGroups(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		typ   types.Type
@@ -1021,8 +953,6 @@ func TestMinMaxExtraPopulatesEmptyGroupsWithExpressionSource(t *testing.T) {
 			require.Equal(t, 2, results[0].Length())
 			for row := range 2 {
 				require.False(t, results[0].IsNull(uint64(row)))
-				require.Equal(t, types.StringSourceExpression,
-					results[0].GetStringSourceAt(row))
 				if tc.typ.IsVarlen() {
 					require.Equal(t, tc.want, results[0].GetBytesAt(row))
 				} else {
@@ -1037,50 +967,6 @@ func TestMinMaxExtraPopulatesEmptyGroupsWithExpressionSource(t *testing.T) {
 	}
 }
 
-func TestMinMaxExtraEqualValueResetsStringSource(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		id     int64
-		isByte bool
-	}{
-		{name: "fixed", id: AggIdOfMin},
-		{name: "bytes", id: AggIdOfMax, isByte: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			var input *vector.Vector
-			var typ types.Type
-			var extra any
-			if tc.isByte {
-				typ = types.T_text.ToType()
-				input = vector.NewVec(typ)
-				require.NoError(t, vector.AppendBytes(input, []byte("5"), false, mp))
-				extra = []byte("5")
-			} else {
-				typ = types.T_int64.ToType()
-				input = vector.NewVec(typ)
-				require.NoError(t, vector.AppendFixed(input, int64(5), false, mp))
-				extra = int64(5)
-			}
-			require.NoError(t, input.SetStringSource(types.StringSourceCOMStmt))
-			agg := makeMinMaxExec(mp, tc.id, tc.id == AggIdOfMin, typ)
-			require.NoError(t, agg.GroupGrow(1))
-			require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
-			require.NoError(t, agg.SetExtraInformation(extra, 0))
-			results, err := agg.Flush()
-			require.NoError(t, err)
-			require.Equal(t, types.StringSourceExpression, results[0].GetStringSourceAt(0))
-			results[0].Free(mp)
-			agg.Free()
-			input.Free(mp)
-			require.Zero(t, mp.CurrNB())
-		})
-	}
-}
-
-// The unchanged legacy byte executor is the exact factory destination in the
-// inherited pre-fix source for JSON. This establishes its ordering mechanism;
-// it does not run a separate old executable or a remote topology.
 func TestMinMaxJSONLegacyByteExecutorCounterexample(t *testing.T) {
 	for _, id := range []int64{AggIdOfMin, AggIdOfMax} {
 		mp := mpool.MustNewZero()

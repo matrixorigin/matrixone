@@ -76,13 +76,10 @@ func TestResultCloneBytesAccountsForSharedPayload(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, measured, uint64(nullClone.Size()))
 
-	sources := make([]types.StringSource, rows)
 	binary := make([]bool, rows)
 	for i := 0; i < rows; i += 2 {
-		sources[i] = types.StringSourceLiteral
 		binary[i] = true
 	}
-	require.NoError(t, flat.SetStringSourcesWithMP(sources, mp))
 	require.NoError(t, flat.SetBinaryStringRowsWithMP(binary, mp))
 	metadataClone, err := cloneInternalExecutorResultBatch(source, mp, false)
 	require.NoError(t, err)

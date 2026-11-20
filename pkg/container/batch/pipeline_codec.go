@@ -44,8 +44,8 @@ func (bat *Batch) HasGrouping() bool {
 // MarshalBinaryForPipeline preserves aggregate ExtraBuf as well as expression
 // provenance. Callers must gate grouping-bearing batches on MORPCVersion87.
 // Batches without grouping retain the previous transport bytes exactly.
-func (bat *Batch) MarshalBinaryForPipeline(w *bytes.Buffer, reset, includeStringSources bool) ([]byte, error) {
-	if _, err := bat.MarshalBinaryWithMetadataForProtocol(w, reset, includeStringSources); err != nil {
+func (bat *Batch) MarshalBinaryForPipeline(w *bytes.Buffer, reset bool) ([]byte, error) {
+	if _, err := bat.MarshalBinaryWithMetadata(w, reset); err != nil {
 		return nil, err
 	}
 	if !bat.HasGrouping() {

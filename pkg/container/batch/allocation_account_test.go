@@ -16,7 +16,6 @@ package batch
 
 import (
 	"bytes"
-	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -241,7 +240,6 @@ func TestBatchAccountedWindowBroadcastsScalarConstant(t *testing.T) {
 		types.T_varchar.ToType(), []byte("prepared"), 1, mp,
 	)
 	require.NoError(t, err)
-	require.NoError(t, source.Vecs[1].SetStringSource(types.StringSourceSQLPrepare))
 	source.SetRowCount(4)
 
 	window, err := source.WindowWithAllocation(2, 4, mp, state.selection)
@@ -250,7 +248,6 @@ func TestBatchAccountedWindowBroadcastsScalarConstant(t *testing.T) {
 	require.Same(t, state.selection, window.AllocationAccountSelection())
 	require.Equal(t, 2, window.Vecs[1].Length())
 	require.Equal(t, []byte("prepared"), window.Vecs[1].GetBytesAt(1))
-	require.Equal(t, types.StringSourceSQLPrepare, window.Vecs[1].GetStringSourceAt(1))
 	window.Clean(mp)
 	require.Zero(t, state.account.Snapshot().Used)
 
@@ -806,13 +803,11 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 64)
 	mp := mpool.MustNewZero()
 	source := newBatchAllocationTestSource(t, mp, nil)
-	sources := make([]types.StringSource, source.RowCount())
-	for i := range sources {
-		if i%2 == 0 {
-			sources[i] = types.StringSourceLiteral
-		}
+	binaryRows := make([]bool, source.RowCount())
+	for i := range binaryRows {
+		binaryRows[i] = i%2 == 0
 	}
-	require.NoError(t, source.Vecs[1].SetStringSourcesWithMP(sources, mp))
+	require.NoError(t, source.Vecs[1].SetBinaryStringRowsWithMP(binaryRows, mp))
 
 	destination := NewWithSchema(
 		true,
@@ -823,12 +818,11 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 	require.NoError(t, source.CloneTo(destination, mp))
 	require.NotZero(t, state.account.Snapshot().Used)
 	require.Equal(t, source.RowCount(), destination.RowCount())
-	for i, stringSource := range sources {
-		require.Equal(t, stringSource, destination.Vecs[1].GetStringSourceAt(i))
+	for i, binary := range binaryRows {
+		require.Equal(t, binary, destination.Vecs[1].GetIsBinaryStringAt(i))
 	}
-	// UnionBatch owns the one destination sidecar. A second metadata copy
-	// would temporarily raise the account high-water mark above its final
-	// live usage and can fail under a tight allocation cap.
+	// A clone must not stage a second copy that would temporarily raise the
+	// account high-water mark above its final live usage.
 	snapshot := state.account.Snapshot()
 	require.Equal(t, snapshot.Used, snapshot.Peak)
 
@@ -876,49 +870,7 @@ func TestBatchAllocationAccountCloneRollback(t *testing.T) {
 	finalizeTestBatchAllocationAccount(t, state)
 }
 
-func TestBatchUnionOneRetainsAllStringSourcePreflightsUntilPublication(t *testing.T) {
-	mp := mpool.MustNewZero()
-	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
-	require.NoError(t, err)
-	controller := &rejectNextBatchAllocation{}
-	account, err := registry.OpenWithController(1<<20, controller)
-	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
-	require.NoError(t, err)
-	destination := NewWithSize(2)
-	source := NewWithSize(2)
-	for i := range destination.Vecs {
-		destination.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
-		require.NoError(t, destination.Vecs[i].SetAllocationAccount(selection))
-		require.NoError(t, destination.Vecs[i].PreExtend(2, mp))
-		require.NoError(t, vector.AppendFixed(destination.Vecs[i], int64(1), false, mp))
-		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
-		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(2), false, mp))
-		require.NoError(t, source.Vecs[i].SetStringSource(types.StringSourceLiteral))
-	}
-	destination.SetRowCount(1)
-	source.SetRowCount(1)
-	// Two preflight allocations reserve the two mixed sidecars. Reject the next
-	// allocation to prove neither column reallocates after any length is visible.
-	controller.failAt = controller.calls + 3
-	require.NoError(t, destination.UnionOne(source, 0, mp))
-	require.False(t, controller.rejected)
-	require.Equal(t, 2, destination.RowCount())
-	for _, vec := range destination.Vecs {
-		require.Equal(t, 2, vec.Length())
-		require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(1))
-	}
-	destination.Clean(mp)
-	source.Clean(mp)
-	snapshot := account.Seal()
-	require.Zero(t, snapshot.Used)
-	require.Zero(t, registry.LiveAllocationMetadata())
-	_, err = registry.Finalize(account)
-	require.NoError(t, err)
-	require.Zero(t, mp.CurrNB())
-}
-
-func TestBufferedMetadataDecodeFailureClearsEarlierStringSources(t *testing.T) {
+func TestBufferedMetadataDecodeFailureClearsEarlierStringDomains(t *testing.T) {
 	sourceMP := mpool.MustNewZero()
 	source := NewWithSize(2)
 	for i := range source.Vecs {
@@ -926,10 +878,8 @@ func TestBufferedMetadataDecodeFailureClearsEarlierStringSources(t *testing.T) {
 		require.NoError(t, vector.AppendBytes(source.Vecs[i], []byte("a"), false, sourceMP))
 		require.NoError(t, vector.AppendBytes(source.Vecs[i], []byte("b"), false, sourceMP))
 	}
-	require.NoError(t, source.Vecs[0].SetStringSource(types.StringSourceLiteral))
+	source.Vecs[0].SetIsBinaryString(true)
 	require.NoError(t, source.Vecs[1].SetBinaryStringRowsWithMP([]bool{true, false}, sourceMP))
-	require.NoError(t, source.Vecs[1].SetStringSourcesWithMP(
-		[]types.StringSource{types.StringSourceCOMStmt, types.StringSourceSQLPrepare}, sourceMP))
 	source.SetRowCount(2)
 	var wire bytes.Buffer
 	encoded, err := source.MarshalBinaryWithMetadata(&wire, true)
@@ -938,8 +888,8 @@ func TestBufferedMetadataDecodeFailureClearsEarlierStringSources(t *testing.T) {
 	require.Zero(t, sourceMP.CurrNB())
 
 	// Stable vector payloads alias encoded bytes and consume no MPool capacity.
-	// Leaving one byte free rejects column 2's mixed string-source sidecar
-	// after column 1's uniform Literal source has already been applied.
+	// Leaving one byte free rejects column 2's mixed binary-string sidecar
+	// after column 1's uniform binary flag has already been applied.
 	const decodeCap = 1 << 20
 	decodeMP, err := mpool.NewMPool("batch-metadata-cleanup", decodeCap, mpool.NoFixed)
 	require.NoError(t, err)
@@ -950,93 +900,12 @@ func TestBufferedMetadataDecodeFailureClearsEarlierStringSources(t *testing.T) {
 	require.Error(t, err)
 	require.Len(t, decoded.Vecs, 2)
 	for _, vec := range decoded.Vecs {
-		require.Equal(t, types.StringSourceExpression, vec.GetStringSourceAt(0))
+		require.False(t, vec.GetIsBinaryString())
 		require.False(t, vec.HasBinaryStringMetadata())
 	}
 	decoded.Clean(decodeMP)
 	decodeMP.Free(held)
 	require.Zero(t, decodeMP.CurrNB())
-}
-
-func TestBatchUnionStringSourceAllocationFailureDoesNotPublishRows(t *testing.T) {
-	tests := []struct {
-		name string
-		run  func(destination, source *Batch, mp *mpool.MPool) error
-	}{
-		{
-			name: "union-one",
-			run: func(destination, source *Batch, mp *mpool.MPool) error {
-				return destination.UnionOne(source, 0, mp)
-			},
-		},
-		{
-			name: "union",
-			run: func(destination, source *Batch, mp *mpool.MPool) error {
-				return destination.Union(source, []int64{0}, mp)
-			},
-		},
-		{
-			name: "union-window",
-			run: func(destination, source *Batch, mp *mpool.MPool) error {
-				return destination.UnionWindow(source, 0, 1, mp)
-			},
-		},
-		{
-			name: "append",
-			run: func(destination, source *Batch, mp *mpool.MPool) error {
-				_, err := destination.Append(context.Background(), mp, source)
-				return err
-			},
-		},
-		{
-			name: "append-with-copy",
-			run: func(destination, source *Batch, mp *mpool.MPool) error {
-				_, err := destination.AppendWithCopy(context.Background(), mp, source)
-				return err
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			state := newTestBatchAllocationAccount(t, 2)
-			mp := mpool.MustNewZero()
-			typ := types.T_varchar.ToType()
-			destination := NewWithSchema(
-				true, []string{"plain", "tagged"}, []types.Type{typ, typ})
-			require.NoError(t, destination.SetAllocationAccount(state.selection))
-			for _, vec := range destination.Vecs {
-				require.NoError(t, vec.PreExtend(2, mp))
-				require.NoError(t, vector.AppendBytes(vec, []byte("6"), false, mp))
-			}
-			destination.SetRowCount(1)
-
-			source := NewWithSchema(
-				true, []string{"plain", "tagged"}, []types.Type{typ, typ})
-			for _, vec := range source.Vecs {
-				require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, mp))
-			}
-			require.NoError(t, source.Vecs[1].SetStringSource(types.StringSourceLiteral))
-			source.SetRowCount(1)
-
-			before := state.account.Snapshot().Used
-			err := test.run(destination, source, mp)
-			require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
-			require.Equal(t, 1, destination.RowCount())
-			for _, vec := range destination.Vecs {
-				require.Equal(t, 1, vec.Length())
-				require.Equal(t, []byte("6"), vec.GetBytesAt(0))
-				require.Nil(t, vec.GetStringSources())
-				require.Equal(t, types.StringSourceExpression, vec.GetStringSourceAt(0))
-			}
-			require.Equal(t, before, state.account.Snapshot().Used)
-
-			source.Clean(mp)
-			destination.Clean(mp)
-			finalizeTestBatchAllocationAccount(t, state)
-			require.Zero(t, mp.CurrNB())
-		})
-	}
 }
 
 func TestBatchAllocationAccountConfigurationIsAtomic(t *testing.T) {

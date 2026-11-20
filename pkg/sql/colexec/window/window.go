@@ -235,7 +235,7 @@ func materializeWindowBound(
 
 	runtimeBound.Val = &plan.Expr{
 		Typ:  planned.Val.Typ,
-		Expr: &plan.Expr_Lit{Lit: rule.GetConstantValue(vec, false, 0)},
+		Expr: &plan.Expr_Lit{Lit: rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(planned.Val, proc))},
 	}
 	return runtimeBound, nil
 }

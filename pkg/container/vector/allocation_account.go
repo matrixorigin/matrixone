@@ -396,7 +396,6 @@ func (v *Vector) CanSetAllocationAccount(
 func (v *Vector) hasBackingStorage() bool {
 	return v.IsDictionary() || cap(v.data) != 0 ||
 		cap(v.area) != 0 ||
-		cap(v.stringSources) != 0 ||
 		(v.binaryStringRows != nil && v.binaryStringRows.Size() != 0) ||
 		(v.textStringRows != nil && v.textStringRows.Size() != 0) ||
 		v.nsp.GetBitmap().Size() != 0 ||
@@ -410,8 +409,7 @@ func (v *Vector) hasBackingStorage() bool {
 func (v *Vector) hasOwnedBackingStorage() bool {
 	return v.IsDictionary() || v.dataLease != nil || v.areaLease != nil ||
 		cap(v.data) != 0 && !v.cantFreeData ||
-		cap(v.area) != 0 && !v.cantFreeArea ||
-		cap(v.stringSources) != 0
+		cap(v.area) != 0 && !v.cantFreeArea
 }
 
 // SetAllocationAccount selects the account used by future owned allocations.

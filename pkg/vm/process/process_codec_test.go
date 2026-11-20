@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -973,12 +974,8 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("1"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("0"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("true"), false, proc.Mp()))
-	require.NoError(t, frameParams.SetStringSourcesWithMP([]types.StringSource{
-		types.StringSourceCOMStmt,
-		types.StringSourceSQLPrepare,
-		types.StringSourceUserVariable,
-	}, proc.Mp()))
 	proc.SetPrepareParamsWithIsBin(frameParams, []bool{true, false, false})
+	proc.SetPrepareParamsStringSource(types.StringSourceCOMStmt)
 	require.NoError(t, frameParams.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
 		types.RuntimeStringInherit, types.RuntimeStringText, types.RuntimeStringBinary,
 	}, proc.Mp()))
@@ -990,7 +987,7 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	info := pipeline.ProcessInfo{}
 	require.NoError(t, info.Unmarshal(payload))
 	require.Equal(t, []bool{true, false, false}, info.PrepareParams.IsBin)
-	require.Equal(t, []uint32{4, 3, 2}, info.PrepareParams.StringSources)
+	require.Equal(t, []uint32{4, 4, 4}, info.PrepareParams.StringSources)
 	require.Equal(t, []uint32{0, 1, 2}, info.PrepareParams.RuntimeStringDomains)
 	decodedProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
@@ -1008,9 +1005,7 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	require.Equal(t, "1", decodedParams.GetStringAt(0))
 	require.Equal(t, "0", decodedParams.GetStringAt(1))
 	require.Equal(t, "true", decodedParams.GetStringAt(2))
-	require.Equal(t, types.StringSourceCOMStmt, decodedParams.GetStringSourceAt(0))
-	require.Equal(t, types.StringSourceSQLPrepare, decodedParams.GetStringSourceAt(1))
-	require.Equal(t, types.StringSourceUserVariable, decodedParams.GetStringSourceAt(2))
+	require.Equal(t, types.StringSourceCOMStmt, decodedProc.GetPrepareParamsStringSource())
 	require.Equal(t, types.RuntimeStringInherit, decodedParams.GetRuntimeStringDomainAt(0))
 	require.Equal(t, types.RuntimeStringText, decodedParams.GetRuntimeStringDomainAt(1))
 	require.Equal(t, types.RuntimeStringBinary, decodedParams.GetRuntimeStringDomainAt(2))
@@ -1136,4 +1131,186 @@ func TestDMLStatementProfileCodecRoundTrip(t *testing.T) {
 			require.ErrorContains(t, err, "conflicting SELECT and DML")
 		})
 	}
+}
+
+func TestCodecServiceRoundTripsPrepareParamsStringSource(t *testing.T) {
+	svc := NewCodecService(
+		fakeCodecTxnClient{op: fakeCodecTxnOperator{}},
+		nil, nil, nil, nil, nil, nil, nil,
+	).(*codecService)
+	for _, source := range []types.StringSource{
+		types.StringSourceExpression,
+		types.StringSourceLiteral,
+		types.StringSourceUserVariable,
+		types.StringSourceSQLPrepare,
+		types.StringSourceCOMStmt,
+	} {
+		t.Run(fmt.Sprintf("source_%d", source), func(t *testing.T) {
+			proc, _ := newCodecTestProcess(t)
+			defer proc.Free()
+			require.Equal(t, int64(2), int64(proc.GetPrepareParams().Length()))
+			proc.SetPrepareParamsStringSource(source)
+			require.Equal(t, source, proc.GetPrepareParamsStringSource())
+
+			payload, err := svc.Encode(proc, "select ?, ?")
+			require.NoError(t, err)
+			info := pipeline.ProcessInfo{}
+			require.NoError(t, info.Unmarshal(payload))
+			if source == types.StringSourceExpression {
+				require.Nil(t, info.PrepareParams.StringSources,
+					"the default source must not change the payload")
+			} else {
+				require.Equal(t, []uint32{uint32(source), uint32(source)}, info.PrepareParams.StringSources,
+					"the wire keeps one equal entry per parameter")
+			}
+
+			decoded, err := svc.Decode(context.Background(), info)
+			require.NoError(t, err)
+			defer decoded.Free()
+			require.Equal(t, source, decoded.GetPrepareParamsStringSource())
+			require.Equal(t, 2, decoded.GetPrepareParams().Length())
+		})
+	}
+}
+
+func TestBuildProcessInfoOmitsStringSourceForOldProtocol(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	proc.SetPrepareParamsStringSource(types.StringSourceSQLPrepare)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion36)
+	info, err := proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+	require.Nil(t, info.PrepareParams.StringSources)
+}
+
+func TestCodecServiceMergesPerParamStringSourcesFromOldPeer(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	info, err := proc.BuildProcessInfo("select ?, ?")
+	require.NoError(t, err)
+	require.Nil(t, info.PrepareParams.StringSources)
+	require.Equal(t, int64(2), info.PrepareParams.Length)
+
+	svc := NewCodecService(
+		fakeCodecTxnClient{op: fakeCodecTxnOperator{}},
+		nil, nil, nil, nil, nil, nil, nil,
+	).(*codecService)
+	for _, test := range []struct {
+		name    string
+		sources []uint32
+		want    types.StringSource
+	}{
+		{
+			name:    "equal entries",
+			sources: []uint32{uint32(types.StringSourceCOMStmt), uint32(types.StringSourceCOMStmt)},
+			want:    types.StringSourceCOMStmt,
+		},
+		{
+			name:    "differing entries merge to expression",
+			sources: []uint32{uint32(types.StringSourceCOMStmt), uint32(types.StringSourceSQLPrepare)},
+			want:    types.StringSourceExpression,
+		},
+		{
+			name:    "expression mixed with a source",
+			sources: []uint32{uint32(types.StringSourceExpression), uint32(types.StringSourceLiteral)},
+			want:    types.StringSourceExpression,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			old := info
+			old.PrepareParams.StringSources = test.sources
+			payload, err := old.Marshal()
+			require.NoError(t, err)
+			var wire pipeline.ProcessInfo
+			require.NoError(t, wire.Unmarshal(payload))
+
+			decoded, err := svc.Decode(context.Background(), wire)
+			require.NoError(t, err)
+			defer decoded.Free()
+			require.Equal(t, test.want, decoded.GetPrepareParamsStringSource())
+			want := test.want
+			merged := types.StringSource(test.sources[0])
+			for _, raw := range test.sources[1:] {
+				merged, err = types.MergeStringSources(merged, types.StringSource(raw))
+				require.NoError(t, err)
+			}
+			require.Equal(t, want, merged, "decode must agree with types.MergeStringSources")
+			// Other parameter metadata is restored independently of the source.
+			params := decoded.GetPrepareParams()
+			require.Equal(t, 2, params.Length())
+			require.Equal(t, proc.GetPrepareParams().GetNulls().Contains(1), params.GetNulls().Contains(1))
+			require.Equal(t, proc.GetPrepareParamIsBin(0), decoded.GetPrepareParamIsBin(0))
+			require.Equal(t, proc.GetPrepareParamIsBinaryString(1), decoded.GetPrepareParamIsBinaryString(1))
+		})
+	}
+}
+
+func TestPrepareParamsStringSourceLifecycle(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	mp := proc.Mp()
+
+	newParams := func() *vector.Vector {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte("x"), false, mp))
+		return params
+	}
+
+	// Every TEXT transport install resets the source to Expression.
+	resets := []struct {
+		name    string
+		install func(*vector.Vector)
+	}{
+		{"SetPrepareParams", func(v *vector.Vector) { proc.SetPrepareParams(v) }},
+		{"SetPrepareParamsWithIsBin", func(v *vector.Vector) { proc.SetPrepareParamsWithIsBin(v, []bool{false}) }},
+		{"SetPrepareParamsWithMetadata", func(v *vector.Vector) {
+			proc.SetPrepareParamsWithMetadata(v, []bool{false}, []bool{false})
+		}},
+		{"SetOwnedPrepareParamsWithIsBin", func(v *vector.Vector) {
+			proc.SetOwnedPrepareParamsWithIsBin(v, []bool{false})
+		}},
+		{"SetOwnedPrepareParamsWithMetadata", func(v *vector.Vector) {
+			proc.SetOwnedPrepareParamsWithMetadata(v, []bool{false}, []bool{false})
+		}},
+	}
+	var borrowed []*vector.Vector
+	for _, reset := range resets {
+		proc.SetPrepareParamsStringSource(types.StringSourceCOMStmt)
+		params := newParams()
+		reset.install(params)
+		require.Equal(t, types.StringSourceExpression, proc.GetPrepareParamsStringSource(), reset.name)
+		if !strings.HasPrefix(reset.name, "SetOwned") {
+			borrowed = append(borrowed, params)
+		}
+	}
+	defer func() {
+		for _, v := range borrowed {
+			v.Free(mp)
+		}
+	}()
+
+	// Detach / Borrow / Restore carry the source.
+	proc.SetPrepareParamsStringSource(types.StringSourceSQLPrepare)
+	state := proc.DetachPrepareParams()
+	require.Equal(t, types.StringSourceSQLPrepare, state.source)
+
+	child, _ := newCodecTestProcess(t)
+	defer child.Free()
+	child.BorrowPrepareParams(state)
+	require.Equal(t, types.StringSourceSQLPrepare, child.GetPrepareParamsStringSource())
+	child.SetPrepareParams(nil)
+	require.Equal(t, types.StringSourceExpression, child.GetPrepareParamsStringSource())
+
+	proc.RestorePrepareParams(state)
+	require.Equal(t, types.StringSourceSQLPrepare, proc.GetPrepareParamsStringSource())
 }

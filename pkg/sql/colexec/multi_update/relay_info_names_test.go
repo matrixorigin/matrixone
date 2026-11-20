@@ -160,7 +160,7 @@ func TestIssue25590RelayS3InfoNameExtraction(t *testing.T) {
 	// MarshalBinaryForPipeline and the client decodes them with
 	// UnmarshalBinaryForPipeline before this recognizer runs.
 	var transport bytes.Buffer
-	data, err := bat.MarshalBinaryForPipeline(&transport, false, true)
+	data, err := bat.MarshalBinaryForPipeline(&transport, false)
 	require.NoError(t, err)
 	wire := batch.NewOffHeapEmpty()
 	require.NoError(t, wire.UnmarshalBinaryForPipeline(data, mp))

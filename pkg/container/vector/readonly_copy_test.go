@@ -250,18 +250,15 @@ func TestCopyWithReadonlyAreaMutations(t *testing.T) {
 					extra.CleanOnlyData()
 					replacement := bytes.Repeat([]byte{'x'}, size)
 					require.NoError(t, AppendBytes(extra, replacement, false, mp))
-					require.NoError(t, extra.SetStringSource(types.StringSourceLiteral))
 					require.NoError(t, mutation.run(destination, extra, mp))
 					require.GreaterOrEqual(t, len(destination.GetData()), destination.Length()*types.VarlenaSize)
 					if mutation.copy {
 						require.Equal(t, 3, destination.Length())
 						require.Equal(t, replacement, destination.GetBytesAt(0))
-						require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(0))
 						require.Equal(t, values[1], destination.GetBytesAt(1))
 						require.Equal(t, values[2], destination.GetBytesAt(2))
 					} else {
 						require.Equal(t, replacement, destination.GetBytesAt(destination.Length()-1))
-						require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(destination.Length()-1))
 						require.Equal(t, values[0], destination.GetBytesAt(0))
 						require.Equal(t, values[1], destination.GetBytesAt(1))
 					}
@@ -293,7 +290,6 @@ func TestCopyWithReadonlyAreaPreflightWithinCapacity(t *testing.T) {
 	require.NoError(t, destination.CopyWithReadonlyArea(source, mp))
 	require.NoError(t, destination.Shrink([]int64{2}, true, mp))
 	require.NoError(t, AppendBytes(extra, []byte("inline"), false, mp))
-	require.NoError(t, extra.SetStringSource(types.StringSourceLiteral))
 	before := mp.CurrNB()
 	flags := []uint8{0}
 	preflight, err := destination.PreExtendSelectedBatch(extra, 0, 1, flags, 2, mp)
@@ -310,7 +306,6 @@ func TestCopyWithReadonlyAreaPreflightWithinCapacity(t *testing.T) {
 	require.Equal(t, before, mp.CurrNB(), "publication must not repeat admission")
 	require.Equal(t, 3, destination.Length())
 	require.Equal(t, "inline", destination.GetStringAt(2))
-	require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(2))
 }
 
 func TestCopyWithReadonlyAreaCopyAliasedSource(t *testing.T) {

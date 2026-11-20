@@ -322,7 +322,6 @@ func TestAggExecSpillDecodeUsesExactSourceCapacity(t *testing.T) {
 		require.Equal(t, float64(9), vector.GetFixedAtNoTypeCheck[float64](results[0], 2))
 		for row := range 3 {
 			require.Equal(t, row == 1, results[0].IsNull(uint64(row)))
-			require.Equal(t, types.StringSourceExpression, results[0].GetStringSourceAt(row))
 		}
 	})
 }

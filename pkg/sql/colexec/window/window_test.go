@@ -2670,8 +2670,6 @@ func TestCumulativePrefixWithinOutputChunk(t *testing.T) {
 			}
 			bat.SetRowCount(8)
 			if tc.function == "max" {
-				require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
-				require.NoError(t, input.SetStringSourceAtWithMP(6, types.StringSourceUserVariable, proc.Mp()))
 				if tc.typ.IsVarlen() {
 					require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, proc.Mp()))
 				}
@@ -2707,7 +2705,6 @@ func TestCumulativePrefixWithinOutputChunk(t *testing.T) {
 					require.Equal(t, want[0].IsNull(uint64(expected)), got.IsNull(uint64(row)))
 					if !got.IsNull(uint64(row)) {
 						require.Equal(t, want[0].GetRawBytesAt(expected), got.GetRawBytesAt(row))
-						require.Equal(t, want[0].GetStringSourceAt(expected), got.GetStringSourceAt(row))
 						require.Equal(t, want[0].GetRuntimeStringDomainAt(expected), got.GetRuntimeStringDomainAt(row))
 					}
 				}

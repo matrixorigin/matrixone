@@ -82,7 +82,6 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 						require.NoError(t, want.UnionOne(row.Vec, row.Row, mp))
 					}
 					require.Equal(t, want.length, got.length)
-					require.Equal(t, want.stringSource, got.stringSource)
 					width := oid.TypeLen()
 					for i := 0; i < got.length; i++ {
 						require.Equal(t, want.IsNull(uint64(i)), got.IsNull(uint64(i)))
