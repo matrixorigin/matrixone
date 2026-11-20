@@ -32,7 +32,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -4487,7 +4486,6 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			defer ctrl.Finish()
 
 			proc := testutil.NewProcess(t)
-			proc.Base.SessionInfo.Buf = buffer.New()
 			proc.Base.SessionInfo.TimeZone = time.Local
 
 			serviceID := "alter-copy-pipeline-flush-" + tc.name
@@ -4807,7 +4805,6 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Base.SessionInfo.TimeZone = time.Local
 
 	serviceID := "alter-copy-pk-precheck"
@@ -5039,7 +5036,6 @@ func newAlterCopyPrecheckCompile(
 	serviceSuffix ...string,
 ) *Compile {
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Base.SessionInfo.TimeZone = time.Local
 
 	serviceID := "alter-copy-precheck-" + t.Name()
@@ -6051,7 +6047,6 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
@@ -6092,7 +6087,6 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
@@ -6148,7 +6142,6 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
@@ -6204,7 +6197,6 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
@@ -6475,7 +6467,6 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
@@ -6514,7 +6505,6 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
@@ -6568,7 +6558,6 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()

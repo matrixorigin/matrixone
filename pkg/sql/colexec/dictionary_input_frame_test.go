@@ -227,7 +227,7 @@ func TestDictionaryInputFrameAccountAndWidthCleanup(t *testing.T) {
 			require.Zero(t, stats.Used)
 			require.NoError(t, err)
 		})
-		selections[i], err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+		selections[i], err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 		require.NoError(t, err)
 	}
 	var frame DictionaryInputFrame

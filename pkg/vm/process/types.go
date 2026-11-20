@@ -25,7 +25,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hayageek/threadsafe"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -213,7 +212,6 @@ type SessionInfo struct {
 	// CompilerContext is request-local and never serialized. Origin-only metadata
 	// operators use it to bind View definitions in the executing transaction.
 	CompilerContext any
-	Buf             *buffer.Buffer
 	LogLevel        zapcore.Level
 	SessionId       uuid.UUID
 }

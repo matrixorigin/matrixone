@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 )
 
 // BitmapMailbox is the single ownership boundary for the parallel right-join
@@ -79,8 +78,7 @@ func (m *BitmapMailbox) SealAndDrain(mp *mpool.MPool) {
 	m.sealed = true
 	for {
 		select {
-		case value := <-m.ch:
-			colexec.FreeAccountedBitmap(value, mp)
+		case <-m.ch:
 		default:
 			m.mu.Unlock()
 			return

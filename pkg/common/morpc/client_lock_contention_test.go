@@ -152,37 +152,27 @@ func TestGetBackendConcurrentWithSlowConnection(t *testing.T) {
 // TestGetBackendWithCircuitBreaker tests that circuit breaker prevents
 // repeated attempts to bad backends
 func TestGetBackendWithCircuitBreaker(t *testing.T) {
-	factory := &testBackendFactoryWithDelay{
-		delay:      10 * time.Millisecond,
-		shouldFail: true,
-	}
+	const remote = "bad-backend"
+	factory := &testBackendFactoryWithDelay{shouldFail: true}
 
 	rc, err := NewClient(
 		"test-client",
 		factory,
 		WithClientMaxBackendPerHost(2),
 		WithClientEnableAutoCreateBackend(),
+		WithClientCircuitBreaker(CircuitBreakerConfig{
+			Enabled: true, FailureThreshold: 1, ResetTimeout: time.Hour, HalfOpenMaxRequests: 1,
+		}),
 	)
 	require.NoError(t, err)
-	defer rc.Close()
+	t.Cleanup(func() { require.NoError(t, rc.Close()) })
 
 	c := rc.(*client)
-
-	// Trigger circuit breaker by recording failures
-	for i := 0; i < 10; i++ {
-		c.circuitBreakers.RecordFailure("bad-backend")
-	}
-
-	// getBackend should fail fast
-	start := time.Now()
-	b, err := c.getBackend("bad-backend", false)
-	elapsed := time.Since(start)
-
-	assert.Error(t, err)
-	assert.Nil(t, b)
-	// Should fail fast (either circuit breaker or no backend available)
-	assert.Less(t, elapsed, 20*time.Millisecond,
-		"Should fail fast with circuit breaker or no backend")
+	c.circuitBreakers.RecordFailure(remote)
+	b, err := c.getBackend(remote, false)
+	require.ErrorIs(t, err, ErrCircuitOpen)
+	require.Nil(t, b)
+	require.Zero(t, factory.createCount.Load())
 }
 
 // TestGetBackendWithClientClosed tests that getBackend handles

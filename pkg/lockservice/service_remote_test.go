@@ -1591,9 +1591,9 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 		assert.Equal(t, "s1", txn.remoteService)
 		assert.Equal(t, 1, len(hold.mu.remoteServices))
 		assert.Equal(t, 1, hold.mu.dequeue.Len())
-		e := hold.mu.dequeue.PopFront()
-		assert.Equal(t, "s1", e.Value.id)
-		assert.True(t, e.Value.time.After(st))
+		r := hold.mu.dequeue.Front().Value.(*remote)
+		assert.Equal(t, "s1", r.id)
+		assert.True(t, r.time.After(st))
 	})
 }
 
@@ -2269,18 +2269,16 @@ func TestKeepRemoteActiveTxn(t *testing.T) {
 		hold.getActiveTxn(txnID1, true, "s1")
 		hold.getActiveTxn(txnID2, true, "s2")
 		var ids []string
-		hold.mu.dequeue.Iter(0, func(r remote) bool {
-			ids = append(ids, r.id)
-			return true
-		})
+		for e := hold.mu.dequeue.Front(); e != nil; e = e.Next() {
+			ids = append(ids, e.Value.(*remote).id)
+		}
 		assert.Equal(t, []string{"s1", "s2"}, ids)
 
 		hold.keepRemoteActiveTxn("s1")
 		ids = ids[:0]
-		hold.mu.dequeue.Iter(0, func(r remote) bool {
-			ids = append(ids, r.id)
-			return true
-		})
+		for e := hold.mu.dequeue.Front(); e != nil; e = e.Next() {
+			ids = append(ids, e.Value.(*remote).id)
+		}
 		assert.Equal(t, []string{"s2", "s1"}, ids)
 	})
 }
