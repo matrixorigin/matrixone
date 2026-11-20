@@ -2028,16 +2028,14 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	// A bound projection leaf reads original logical rows, including when
-	// a parent supplies a sparse mask. The dictionary parameter wrapper
-	// maps those logical rows without copying or flattening unused values.
-	if bound := expr.jsonProjection; bound != nil && bound.group.frame.input == batches[0] &&
+	// Share extraction only for unmasked consumers of this batch.
+	if bound := expr.jsonProjection; bound != nil && selectList == nil && bound.group.frame.input == batches[0] &&
 		expr.parameterResults[0].GetType().Oid != types.T_json {
 		expr.resetResultType(expr.resultVector)
 		if err := expr.resultVector.PreExtendAndReset(rowCount); err != nil {
 			return nil, err
 		}
-		if err := bound.eval(proc, expr.parameterResults, expr.resultVector, rowCount, selectList); err != nil {
+		if err := bound.eval(proc, expr.parameterResults, expr.resultVector, rowCount); err != nil {
 			return nil, err
 		}
 		return expr.resultVector.GetResultVector(), nil

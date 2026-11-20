@@ -16,7 +16,9 @@ package colexec
 
 import (
 	"context"
+	"encoding/binary"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,24 +32,30 @@ const (
 	jsonProjectionPageSize   = 32 << 10
 	jsonProjectionCacheLimit = 4 << 20
 	jsonProjectionValueLimit = 4 << 10
+	// Offset (4), length (2), and ByteJSON type (1).
+	jsonProjectionRecordSize = 7
 )
 
 type jsonDocumentColumn struct{ relation, column int32 }
 
-// ProjectionJSONFrame owns only this invocation's small extracted values.
+// ProjectionJSONFrame owns this invocation's extraction metadata and values.
 // Executable bindings are immutable between invocations.
 type ProjectionJSONFrame struct {
-	groups []*jsonProjectionGroup
-	pages  [][]byte
-	input  *batch.Batch
-	parse  func(context.Context, []byte) (bytejson.ByteJson, error)
+	groups     []*jsonProjectionGroup
+	pages      [][]byte
+	input      *batch.Batch
+	mp         *mpool.MPool
+	allocation *vector.AllocationAccountSelection
+	cacheBytes int
+	pagesFull  bool
+	parse      func(context.Context, []byte) (bytejson.ByteJson, error)
 }
 
 type jsonProjectionGroup struct {
-	frame  *ProjectionJSONFrame
-	paths  []bytejson.Path
-	ready  []bool
-	values []jsonProjectionValue
+	frame     *ProjectionJSONFrame
+	paths     []bytejson.Path
+	metadata  []byte
+	attempted bool
 }
 
 type jsonProjectionBinding struct {
@@ -55,18 +63,14 @@ type jsonProjectionBinding struct {
 	slot  int
 }
 
-type jsonProjectionValue struct {
-	offset int32
-	// Zero means missing, -1 means the value exceeded the cache budget.
-	length int16
-	kind   bytejson.TpCode
-}
-
 // NewProjectionExecutors binds repeated text JSON_EXTRACT leaves in the final
 // physical project list. Other callers of the expression builder stay local
 // to a single expression.
 func NewProjectionExecutors(proc *process.Process, exprs []*plan.Expr, allocation *vector.AllocationAccountSelection) ([]ExpressionExecutor, *ProjectionJSONFrame, error) {
 	bindings, frame := bindProjectionJSON(exprs)
+	if frame != nil {
+		frame.mp, frame.allocation = proc.Mp(), allocation
+	}
 	executors, err := newExpressionExecutorsWithBindings(proc, exprs, allocation, expressionDiagnosticScope{}, bindings)
 	return executors, frame, err
 }
@@ -85,6 +89,16 @@ func bindProjectionJSON(exprs []*plan.Expr) (map[*plan.Function]*jsonProjectionB
 		}
 		if f := expr.GetF(); f != nil {
 			fid, overload := function.DecodeOverloadID(f.GetFunc().GetObj())
+			// These executors can mask their arguments per row. A shared
+			// group would query their paths even when the branch is unused.
+			switch fid {
+			case function.CASE, function.IFF, function.COALESCE:
+				return
+			case function.ELT:
+				if overload == 1 {
+					return
+				}
+			}
 			if fid == function.JSON_EXTRACT && overload == 0 && len(f.Args) == 2 {
 				doc, arg := f.Args[0], f.Args[1]
 				col, lit := doc.GetCol(), arg.GetLit()
@@ -137,47 +151,120 @@ func (f *ProjectionJSONFrame) Begin(input *batch.Batch) {
 
 func (f *ProjectionJSONFrame) End() {
 	f.input = nil
+	for _, page := range f.pages {
+		f.mp.Free(page)
+	}
 	f.pages = nil
 	for _, group := range f.groups {
-		group.ready, group.values = nil, nil
+		if group.metadata != nil {
+			f.mp.Free(group.metadata)
+		}
+		group.metadata, group.attempted = nil, false
 	}
+	f.cacheBytes, f.pagesFull = 0, false
 }
 
-func (f *ProjectionJSONFrame) keep(value bytejson.ByteJson) jsonProjectionValue {
-	n := len(value.Data)
-	if n > jsonProjectionValueLimit {
-		return jsonProjectionValue{length: -1}
-	}
-	if len(f.pages) == 0 || cap(f.pages[len(f.pages)-1])-len(f.pages[len(f.pages)-1]) < n {
-		if len(f.pages) == jsonProjectionCacheLimit/jsonProjectionPageSize {
-			return jsonProjectionValue{length: -1}
+// allocate admits the retained capacity before allocating either metadata or
+// payload. Storage belongs to the same MPool and execution selection as the
+// projection, including when an error exits the batch early.
+func (f *ProjectionJSONFrame) allocate(size, headroom int) []byte {
+	capacity := int64(size)
+	if f.allocation != nil {
+		var ok bool
+		capacity, ok = mpool.GrowCapacity(0, capacity)
+		if !ok {
+			return nil
 		}
-		f.pages = append(f.pages, make([]byte, 0, jsonProjectionPageSize))
+	}
+	if capacity > int64(jsonProjectionCacheLimit-f.cacheBytes-headroom) {
+		return nil
+	}
+
+	var data []byte
+	if f.allocation == nil {
+		var err error
+		data, err = f.mp.Alloc(size, true)
+		if err != nil {
+			return nil
+		}
+	} else {
+		buf, err := f.allocation.NewAccountedBuffer(f.mp)
+		if err != nil {
+			return nil
+		}
+		if err = buf.Resize(size); err != nil {
+			buf.Free()
+			return nil
+		}
+		data, _, err = buf.Detach()
+		if err != nil {
+			buf.Free()
+			return nil
+		}
+	}
+	f.cacheBytes += cap(data)
+	return data
+}
+
+func (g *jsonProjectionGroup) admit() {
+	g.attempted = true
+	rows := g.frame.input.RowCount()
+	// Check the shape before multiplying. Leave room for a payload page.
+	if g.frame.pagesFull || rows == 0 || len(g.paths) > (jsonProjectionCacheLimit/rows-1)/jsonProjectionRecordSize {
+		return
+	}
+	g.metadata = g.frame.allocate(rows*(1+len(g.paths)*jsonProjectionRecordSize), jsonProjectionPageSize)
+	clear(g.metadata)
+}
+
+func (f *ProjectionJSONFrame) keep(record []byte, value bytejson.ByteJson) {
+	size := len(value.Data)
+	// A zero length is a missing path. A negative length is a matched
+	// value that needs to be evaluated directly for this consumer.
+	binary.LittleEndian.PutUint16(record[4:], ^uint16(0))
+	if size > jsonProjectionValueLimit {
+		return
+	}
+	if len(f.pages) == 0 || len(f.pages[len(f.pages)-1])+size > jsonProjectionPageSize {
+		page := f.allocate(jsonProjectionPageSize, 0)
+		if page == nil {
+			f.pagesFull = true
+			return
+		}
+		f.pages = append(f.pages, page[:0])
 	}
 	last := len(f.pages) - 1
 	page := f.pages[last]
 	offset := last*jsonProjectionPageSize + len(page)
 	f.pages[last] = append(page, value.Data...)
-	return jsonProjectionValue{offset: int32(offset), length: int16(n), kind: value.Type}
+	binary.LittleEndian.PutUint32(record, uint32(offset))
+	binary.LittleEndian.PutUint16(record[4:], uint16(size))
+	record[6] = value.Type
 }
 
 func (b *jsonProjectionBinding) extract(ctx context.Context, row int, raw []byte) (bytejson.ByteJson, bool, error) {
 	g := b.group
-	if g.ready == nil {
-		rows := g.frame.input.RowCount()
-		g.ready = make([]bool, rows)
-		g.values = make([]jsonProjectionValue, rows*len(g.paths))
+	if !g.attempted {
+		g.admit()
 	}
-	start := row * len(g.paths)
-	if g.ready[row] {
-		value := g.values[start+b.slot]
-		switch {
-		case value.length == 0:
-			return bytejson.ByteJson{}, false, nil
-		case value.length > 0:
-			page := g.frame.pages[value.offset/jsonProjectionPageSize]
-			offset := int(value.offset % jsonProjectionPageSize)
-			return bytejson.ByteJson{Type: value.kind, Data: page[offset : offset+int(value.length)]}, true, nil
+	var rowCache []byte
+	if g.metadata != nil {
+		stride := 1 + len(g.paths)*jsonProjectionRecordSize
+		cached := g.metadata[row*stride : (row+1)*stride]
+		if cached[0] != 0 {
+			record := cached[1+b.slot*jsonProjectionRecordSize:]
+			length := int16(binary.LittleEndian.Uint16(record[4:]))
+			if length > 0 {
+				offset := int(binary.LittleEndian.Uint32(record))
+				page := g.frame.pages[offset/jsonProjectionPageSize]
+				start := offset % jsonProjectionPageSize
+				return bytejson.ByteJson{Type: record[6], Data: page[start : start+int(length)]}, true, nil
+			}
+			if length == 0 {
+				return bytejson.ByteJson{}, false, nil
+			}
+		} else if !g.frame.pagesFull {
+			rowCache = cached
 		}
 	}
 	if err := function.CheckJSONExtractRow(ctx, 0); err != nil {
@@ -189,7 +276,7 @@ func (b *jsonProjectionBinding) extract(ctx context.Context, row int, raw []byte
 	}
 	paths := [1]*bytejson.Path{&g.paths[b.slot]}
 	out, exists := doc.QuerySimpleWithExists(paths[:])
-	if !g.ready[row] {
+	if rowCache != nil {
 		for slot := range g.paths {
 			if err := function.CheckJSONExtractRow(ctx, slot); err != nil {
 				return bytejson.ByteJson{}, false, err
@@ -200,26 +287,30 @@ func (b *jsonProjectionBinding) extract(ctx context.Context, row int, raw []byte
 				value, present = doc.QuerySimpleWithExists(paths[:])
 			}
 			if present {
-				g.values[start+slot] = g.frame.keep(value)
+				g.frame.keep(rowCache[1+slot*jsonProjectionRecordSize:], value)
+				if g.frame.pagesFull {
+					// With no payload page, this group's speculative
+					// metadata can be returned to the execution budget.
+					if len(g.frame.pages) == 0 {
+						g.frame.cacheBytes -= cap(g.metadata)
+						g.frame.mp.Free(g.metadata)
+						g.metadata = nil
+					}
+					return out, exists, nil
+				}
 			}
 		}
-		g.ready[row] = true
+		rowCache[0] = 1
 	}
 	return out, exists, nil
 }
 
-func (b *jsonProjectionBinding) eval(proc *process.Process, arguments []*vector.Vector, result vector.FunctionResultWrapper, rows int, mask []bool) error {
+func (b *jsonProjectionBinding) eval(proc *process.Process, arguments []*vector.Vector, result vector.FunctionResultWrapper, rows int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	input := vector.GenerateFunctionStrParameter(arguments[0])
 	for row := 0; row < rows; row++ {
 		if err := function.CheckJSONExtractRow(proc.Ctx, row); err != nil {
 			return err
-		}
-		if mask != nil && !mask[row] {
-			if err := rs.AppendByteJson(bytejson.ByteJson{}, true); err != nil {
-				return err
-			}
-			continue
 		}
 		raw, null := input.GetStrValue(uint64(row))
 		if null {

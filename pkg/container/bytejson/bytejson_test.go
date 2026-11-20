@@ -16,6 +16,7 @@ package bytejson
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -469,6 +470,73 @@ func TestQuery(t *testing.T) {
 			require.JSONEq(t, kase.outStr, out2.String())
 		}
 	}
+}
+
+type cancelJSONQueryAfter struct {
+	context.Context
+	remaining int
+}
+
+func (ctx *cancelJSONQueryAfter) Err() error {
+	ctx.remaining--
+	if ctx.remaining <= 0 {
+		return context.Canceled
+	}
+	return ctx.Context.Err()
+}
+
+func TestQueryWithExistsContext(t *testing.T) {
+	doc, err := ParseFromString(`{"a":[1,null,{"v":4}],"nested":{"a":[5,6]},"v":9}`)
+	require.NoError(t, err)
+	for _, paths := range [][]string{
+		{"$.a[*]", "$.missing", "$.v"},
+		{"$.a[1 to last]"},
+		{"$**.v"},
+		{"$.*"},
+		{"$.a[1]"},
+		{"$.missing"},
+	} {
+		t.Run(strings.Join(paths, ", "), func(t *testing.T) {
+			queries := make([]*Path, 0, len(paths))
+			for _, path := range paths {
+				query, err := ParseJsonPath(path)
+				require.NoError(t, err)
+				queries = append(queries, &query)
+			}
+			want, matched := doc.QueryWithExists(queries)
+			got, exists, err := doc.QueryWithExistsContext(context.Background(), queries)
+			require.NoError(t, err)
+			require.Equal(t, matched, exists)
+			require.Equal(t, want, got)
+		})
+	}
+}
+
+func TestJSONQueryCancellationDuringTraversalAndMerge(t *testing.T) {
+	doc, err := ParseFromString("[" + strings.Repeat("1,", 4096) + "null]")
+	require.NoError(t, err)
+	for _, path := range []string{"$[*]", "$[0 to last]", "$**.missing"} {
+		t.Run(path, func(t *testing.T) {
+			query, err := ParseJsonPath(path)
+			require.NoError(t, err)
+			ctx := &cancelJSONQueryAfter{Context: context.Background(), remaining: 4}
+			got, exists, err := doc.QueryWithExistsContext(ctx, []*Path{&query})
+			require.ErrorIs(t, err, context.Canceled)
+			require.False(t, exists)
+			require.Equal(t, Null, got)
+		})
+	}
+
+	t.Run("packing a large matched value", func(t *testing.T) {
+		payload, err := ParseFromString(`"` + strings.Repeat("x", 1<<18) + `"`)
+		require.NoError(t, err)
+		// Sizing, the allocation boundary, and the element boundary succeed.
+		// The next check must run within the first element's payload copy.
+		ctx := &cancelJSONQueryAfter{Context: context.Background(), remaining: 4}
+		got, err := mergeToArrayWithContext(ctx, []ByteJson{payload})
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, Null, got)
+	})
 }
 
 func TestQueryWithExistsPreservesJSONNull(t *testing.T) {

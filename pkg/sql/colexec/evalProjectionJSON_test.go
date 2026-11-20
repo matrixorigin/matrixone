@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,7 +37,7 @@ func jsonProjectionTestCol(col int32, typ types.T) *plan.Expr {
 	return &plan.Expr{Typ: plan.Type{Id: int32(typ)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: col}}}
 }
 
-func jsonProjectionTestCall(t *testing.T, proc *process.Process, name string, result types.T, args ...*plan.Expr) *plan.Expr {
+func jsonProjectionTestCall(t testing.TB, proc *process.Process, name string, result types.T, args ...*plan.Expr) *plan.Expr {
 	t.Helper()
 	inputs := make([]types.Type, len(args))
 	for i, arg := range args {
@@ -49,7 +50,7 @@ func jsonProjectionTestCall(t *testing.T, proc *process.Process, name string, re
 	}}}
 }
 
-func jsonProjectionTestExtract(t *testing.T, proc *process.Process, col int32, path string) *plan.Expr {
+func jsonProjectionTestExtract(t testing.TB, proc *process.Process, col int32, path string) *plan.Expr {
 	doc := jsonProjectionTestCol(col, types.T_text)
 	literal := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: path}}}}
 	return jsonProjectionTestCall(t, proc, "json_extract", types.T_json, doc, literal)
@@ -107,6 +108,17 @@ func TestProjectionJSONSharesSevenConsumers(t *testing.T) {
 			}
 			require.Nil(t, projection.jsonFrame.input)
 			require.Empty(t, projection.jsonFrame.pages)
+			require.Nil(t, projection.jsonFrame.groups[0].metadata)
+			projection.ResetProjection(proc)
+
+			input.Vecs[0].ResetWithSameType()
+			require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{doc, "invalid JSON", doc}, nil, proc.Mp()))
+			_, err = projection.EvalProjection(input, proc)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			require.Nil(t, projection.jsonFrame.input)
+			require.Empty(t, projection.jsonFrame.pages)
+			require.Nil(t, projection.jsonFrame.groups[0].metadata)
+			require.Zero(t, projection.jsonFrame.cacheBytes)
 			projection.ResetProjection(proc)
 		}
 	}()
@@ -138,7 +150,7 @@ func TestProjectionJSONSparseMasksUseOriginalRows(t *testing.T) {
 	p := Projection{ProjectList: []*plan.Expr{build(0, 1, "$.a"), build(0, 2, "$.b"), build(3, 1, "$.a"), build(3, 2, "$.b")}}
 	require.NoError(t, p.PrepareProjection(proc))
 	defer p.FreeProjection(proc)
-	count := countProjectionParses(t, &p)
+	require.Nil(t, p.jsonFrame, "masked leaves must not precompute their siblings' paths")
 
 	// Reorder both document vectors without flattening. Rows 0 and 4 also
 	// change their physical identity relative to the Boolean masks.
@@ -156,7 +168,6 @@ func TestProjectionJSONSparseMasksUseOriginalRows(t *testing.T) {
 	input.Vecs[0], input.Vecs[3] = dict[0], dict[1]
 	result, err := p.EvalProjection(input, proc)
 	require.NoError(t, err)
-	require.Equal(t, 8, *count, "four distinct demanded rows in each document column")
 	for col, want := range [][]string{
 		{"40", "", "20", "null", ""}, {"", "", "21", "", "11"},
 		{"40", "", "20", "null", ""}, {"", "", "21", "", "11"},
@@ -174,15 +185,188 @@ func TestProjectionJSONSparseMasksUseOriginalRows(t *testing.T) {
 	vector.MustFixedColNoTypeCheck[bool](input.Vecs[1])[1] = true
 	_, err = p.EvalProjection(input, proc)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
-	require.Nil(t, p.jsonFrame.input)
-	require.Empty(t, p.jsonFrame.pages)
 
 	p.ResetProjection(proc)
 	vector.MustFixedColNoTypeCheck[bool](input.Vecs[1])[1] = false
-	*count = 0
 	result, err = p.EvalProjection(input, proc)
 	require.NoError(t, err)
-	require.Equal(t, 8, *count, "the failed invocation's partially populated cache must be discarded")
 	require.True(t, result.Vecs[0].IsNull(1))
 	require.Equal(t, "40", types.DecodeJson(result.Vecs[0].GetBytesAt(0)).String())
+}
+
+func TestProjectionJSONCombinedCacheAdmission(t *testing.T) {
+	tests := []struct {
+		name        string
+		rows, paths int
+		account     uint64
+		admitted    bool
+	}{
+		{name: "dense", rows: 1024, paths: 7, account: jsonProjectionCacheLimit, admitted: true},
+		{name: "wide batch", rows: 8192, paths: 128, account: 2 * jsonProjectionCacheLimit},
+		{name: "metadata denied", rows: 1024, paths: 7, account: 4096},
+		{name: "pages denied", rows: 1024, paths: 7, account: 65536},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			pool := proc.Mp()
+			start := pool.CurrNB()
+			registry, err := mpool.NewAllocationAccountRegistry(1, 256)
+			require.NoError(t, err)
+			account, err := registry.Open(tt.account)
+			require.NoError(t, err)
+			defer func() {
+				require.Zero(t, account.Snapshot().Used)
+				require.Equal(t, start, pool.CurrNB())
+				account.Seal()
+				_, err := registry.Finalize(account)
+				require.NoError(t, err)
+			}()
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2)
+			require.NoError(t, err)
+			frame := &ProjectionJSONFrame{mp: pool, allocation: selection, parse: bytejson.ParseFromByteSliceWithCancellation}
+			group := &jsonProjectionGroup{frame: frame, paths: make([]bytejson.Path, tt.paths)}
+			frame.groups = append(frame.groups, group)
+			path, err := bytejson.ParseJsonPath("$.a")
+			require.NoError(t, err)
+			for i := range group.paths {
+				group.paths[i] = path
+			}
+			input := batch.NewWithSize(0)
+			input.SetRowCount(tt.rows)
+			frame.Begin(input)
+			defer frame.End()
+			first := jsonProjectionBinding{group: group}
+			value, exists, err := first.extract(proc.Ctx, 0, []byte(`{"a":1}`))
+			require.NoError(t, err)
+			require.True(t, exists)
+			require.Equal(t, "1", value.String())
+			require.Equal(t, tt.admitted, group.metadata != nil)
+			require.EqualValues(t, frame.cacheBytes, pool.CurrNB()-start)
+			require.EqualValues(t, frame.cacheBytes, account.Snapshot().Used)
+			require.LessOrEqual(t, frame.cacheBytes, jsonProjectionCacheLimit)
+			if tt.name == "pages denied" {
+				require.True(t, frame.pagesFull)
+				require.Empty(t, frame.pages)
+			}
+			if !tt.admitted {
+				require.Zero(t, frame.cacheBytes)
+			}
+
+			last := jsonProjectionBinding{group: group, slot: tt.paths - 1}
+			value, exists, err = last.extract(proc.Ctx, 0, []byte(`{"a":1}`))
+			require.NoError(t, err)
+			require.True(t, exists)
+			require.Equal(t, "1", value.String())
+		})
+	}
+}
+
+func TestProjectionJSONCombinedCacheLimit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	pool := proc.Mp()
+	start := pool.CurrNB()
+	firstLeaf := jsonProjectionTestExtract(t, proc, 0, "$.a")
+	lastLeaf := jsonProjectionTestExtract(t, proc, 0, "$.b")
+	bindings, frame := bindProjectionJSON([]*plan.Expr{firstLeaf, lastLeaf})
+	frame.mp = pool
+	first, last := bindings[firstLeaf.GetF()], bindings[lastLeaf.GetF()]
+	input := batch.NewWithSize(0)
+	input.SetRowCount(1024)
+	frame.Begin(input)
+	defer func() {
+		frame.End()
+		require.Equal(t, start, pool.CurrNB())
+	}()
+
+	payload := strings.Repeat("x", 3072)
+	raw := []byte(fmt.Sprintf(`{"a":%q,"b":%q}`, payload, payload))
+	for row := range input.RowCount() {
+		_, _, err := first.extract(proc.Ctx, row, raw)
+		require.NoError(t, err)
+	}
+	require.True(t, frame.pagesFull)
+	require.EqualValues(t, frame.cacheBytes, pool.CurrNB()-start)
+	require.NotEmpty(t, first.group.metadata)
+	require.Less(t, len(frame.pages)*jsonProjectionPageSize, jsonProjectionCacheLimit)
+	require.LessOrEqual(t, frame.cacheBytes, jsonProjectionCacheLimit)
+
+	// The first row is served from cached bytes even after the cache fills.
+	got, exists, err := last.extract(proc.Ctx, 0, nil)
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.Equal(t, payload, string(got.GetString()))
+	// A row that did not fit is still available through direct extraction.
+	got, exists, err = last.extract(proc.Ctx, input.RowCount()-1, raw)
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.Equal(t, payload, string(got.GetString()))
+}
+
+func BenchmarkProjectionJSON(b *testing.B) {
+	const rows = 1024
+	for _, workload := range []struct {
+		name   string
+		leaves int
+		sparse bool
+	}{
+		{name: "dense-seven", leaves: 7},
+		{name: "sparse-case", leaves: 64, sparse: true},
+	} {
+		for _, mode := range []string{"projection", "ordinary"} {
+			b.Run(workload.name+"/"+mode, func(b *testing.B) {
+				proc := testutil.NewProcess(b)
+				columns := 1
+				if workload.sparse {
+					columns += workload.leaves
+				}
+				input := batch.NewWithSize(columns)
+				defer input.Clean(proc.Mp())
+				input.SetRowCount(rows)
+				input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+				fields := make([]string, workload.leaves)
+				for i := range workload.leaves {
+					fields[i] = fmt.Sprintf(`"k%d":"value-%d"`, i, i)
+				}
+				if !workload.sparse {
+					fields = append(fields, `"padding":"`+strings.Repeat("x", 4096)+`"`)
+				}
+				doc := "{" + strings.Join(fields, ",") + "}"
+				docs := make([]string, rows)
+				for i := range docs {
+					docs[i] = doc
+				}
+				require.NoError(b, vector.AppendStringList(input.Vecs[0], docs, nil, proc.Mp()))
+				projection := Projection{}
+				for col := range workload.leaves {
+					leaf := jsonProjectionTestExtract(b, proc, 0, fmt.Sprintf("$.k%d", col))
+					if workload.sparse {
+						input.Vecs[col+1] = vector.NewVec(types.T_bool.ToType())
+						mask := make([]bool, rows)
+						for row := col; row < rows; row += workload.leaves {
+							mask[row] = true
+						}
+						require.NoError(b, vector.AppendFixedList(input.Vecs[col+1], mask, nil, proc.Mp()))
+						leaf = jsonProjectionTestCall(b, proc, "case", types.T_json, jsonProjectionTestCol(int32(col+1), types.T_bool), leaf)
+					} else {
+						leaf = jsonProjectionTestCall(b, proc, "json_unquote", types.T_varchar, leaf)
+					}
+					projection.ProjectList = append(projection.ProjectList, leaf)
+				}
+				require.NoError(b, projection.PrepareProjection(proc))
+				defer projection.FreeProjection(proc)
+				if mode == "ordinary" {
+					projection.jsonFrame = nil
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					_, err := projection.EvalProjection(input, proc)
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
 }
