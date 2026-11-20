@@ -551,11 +551,11 @@ func TestColumnCacheConstructorValidatesAndMarksV2(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "value longer than inline storage", obj.(*vector.Vector).GetStringAt(0))
 
-	target := vector.NewVecFromReuse()
+	target := new(vector.Vector)
 	require.NoError(t, MustVectorToCached(target, cacheData))
 	require.Equal(t, "value longer than inline storage", target.GetStringAt(0))
 
-	ownedTarget := vector.NewVecFromReuse()
+	ownedTarget := new(vector.Vector)
 	require.NoError(t, MustVectorToCachedWithMpool(ownedTarget, cacheData, mp))
 	require.False(t, ownedTarget.NeedDup())
 	require.Equal(t, "value longer than inline storage", ownedTarget.GetStringAt(0))

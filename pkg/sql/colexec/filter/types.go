@@ -78,6 +78,8 @@ type container struct {
 	allExecutors              []colexec.ExpressionExecutor // = executors + runtimeExecutor, do not free this executors
 	subjectReuseAdmissionDone bool
 	selection                 selectionState
+	// flatSels is the compacting path's row-number scratch.
+	flatSels []int64
 }
 
 func (filter *Filter) SetRuntimeFilterExprs(proc *process.Process, exes []*plan.Expr) (err error) {

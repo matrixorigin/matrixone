@@ -45,6 +45,7 @@ type container struct {
 	earlyColumns              []int
 	lateColumns               []int
 	filterRows                []int64
+	flatSels                  []int64
 	filterReadMetrics         bool
 	filterLateMaterialized    bool
 	membershipPrepared        bool

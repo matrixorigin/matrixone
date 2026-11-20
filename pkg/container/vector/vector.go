@@ -676,7 +676,7 @@ func GetAny(vec *Vector, i int, deepCopy bool) any {
 }
 
 func NewVec(typ types.Type) *Vector {
-	vec := NewVecFromReuse()
+	vec := new(Vector)
 	vec.typ = typ
 	vec.class = FLAT
 	vec.areaDisjoint = true
@@ -690,7 +690,7 @@ func NewOffHeapVecWithType(typ types.Type) *Vector {
 }
 
 func NewOffHeapVec() *Vector {
-	vec := NewVecFromReuse()
+	vec := new(Vector)
 	vec.offHeap = true
 	vec.areaDisjoint = true
 	return vec
@@ -753,7 +753,7 @@ func NewVecWithDataCopy(
 }
 
 func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
-	vec := NewVecFromReuse()
+	vec := new(Vector)
 	vec.typ = typ
 	vec.class = CONSTANT
 	vec.length = length
@@ -761,7 +761,7 @@ func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 }
 
 func NewRollupConst(typ types.Type, length int, mp *mpool.MPool) *Vector {
-	vec := NewVecFromReuse()
+	vec := new(Vector)
 	vec.gsp.AddRange(0, uint64(length))
 	vec.typ = typ
 	vec.class = CONSTANT
@@ -770,7 +770,7 @@ func NewRollupConst(typ types.Type, length int, mp *mpool.MPool) *Vector {
 }
 
 func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) (vec *Vector, err error) {
-	vec = NewVecFromReuse()
+	vec = new(Vector)
 	vec.typ = typ
 	vec.class = CONSTANT
 
@@ -782,7 +782,7 @@ func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) (v
 }
 
 func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec *Vector, err error) {
-	vec = NewVecFromReuse()
+	vec = new(Vector)
 	vec.typ = typ
 	vec.class = CONSTANT
 
@@ -795,7 +795,7 @@ func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec
 
 // NewConstArray Creates a Const_Array Vector
 func NewConstArray[T types.ArrayElement](typ types.Type, val []T, length int, mp *mpool.MPool) (vec *Vector, err error) {
-	vec = NewVecFromReuse()
+	vec = new(Vector)
 	vec.typ = typ
 	vec.class = CONSTANT
 
@@ -1090,7 +1090,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.allocationAccount = nil
 	v.areaDisjoint = true
 
-	//reuse.Free[Vector](v, nil)
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
@@ -2260,7 +2259,7 @@ func (v *Vector) dup(
 	areaOffHeap bool,
 	selection *AllocationAccountSelection,
 ) (*Vector, error) {
-	w := NewVecFromReuse()
+	w := new(Vector)
 	w.offHeap = offHeap
 	if selection != nil {
 		if err := w.SetAllocationAccount(selection); err != nil {

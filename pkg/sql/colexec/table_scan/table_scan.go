@@ -337,12 +337,8 @@ func (tableScan *TableScan) evalFilter(
 	}
 
 	analyzer := tableScan.OpAnalyzer
-	var sels []int64
-	defer func() {
-		if sels != nil {
-			vector.PutSels(sels)
-		}
-	}()
+	sels := tableScan.ctr.flatSels[:0]
+	defer func() { tableScan.ctr.flatSels = sels }()
 
 	tableScan.ctr.filterRows = tableScan.ctr.filterRows[:0]
 	hasSelection := false
@@ -387,9 +383,6 @@ func (tableScan *TableScan) evalFilter(
 				break
 			}
 		} else {
-			if sels == nil {
-				sels = vector.GetSels()
-			}
 			sels = sels[:0]
 
 			values := vector.MustFixedColNoTypeCheck[bool](vec)

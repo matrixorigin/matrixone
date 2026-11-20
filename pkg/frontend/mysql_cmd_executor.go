@@ -2335,7 +2335,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			}
 
 			bs := vector.MustFixedColWithTypeCheck[bool](vec)
-			sels := vector.GetSels()
+			var sels []int64
 			for i, b := range bs {
 				if b {
 					sels = append(sels, int64(i))
@@ -2343,7 +2343,6 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			}
 
 			err = bat.Shrink(sels, false, ses.proc.Mp())
-			vector.PutSels(sels)
 			if err != nil {
 				return err
 			}
@@ -3924,7 +3923,7 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 			}
 
 			bs := vector.MustFixedColWithTypeCheck[bool](vec)
-			sels := vector.GetSels()
+			var sels []int64
 			for i, b := range bs {
 				if b {
 					sels = append(sels, int64(i))
@@ -3932,7 +3931,6 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 			}
 
 			err = bat.Shrink(sels, false, proc.Mp())
-			vector.PutSels(sels)
 			if err != nil {
 				return err
 			}

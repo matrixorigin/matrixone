@@ -909,7 +909,7 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 			if bat.offHeap {
 				vecs[i] = vector.NewOffHeapVec()
 			} else {
-				vecs[i] = vector.NewVecFromReuse()
+				vecs[i] = new(vector.Vector)
 			}
 		} else if vecs[i].Allocated() > 0 || vecs[i].NeedDup() {
 			if mp == nil && !vecs[i].NeedDup() {
@@ -1235,7 +1235,7 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 			if bat.offHeap {
 				vec = vector.NewOffHeapVec()
 			} else {
-				vec = vector.NewVecFromReuse()
+				vec = new(vector.Vector)
 			}
 		} else if vec.NeedDup() {
 			vec.Free(mp)

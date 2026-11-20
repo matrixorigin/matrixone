@@ -100,12 +100,8 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	filterBat := inputResult.Batch
-	var sels []int64
-	defer func() {
-		if sels != nil {
-			vector.PutSels(sels)
-		}
-	}()
+	sels := filter.ctr.flatSels[:0]
+	defer func() { filter.ctr.flatSels = sels }()
 	firstInvocation := !filter.ctr.subjectReuseAdmissionDone
 	filter.ctr.subjectReuseAdmissionDone = true
 	for i := range filter.ctr.allExecutors {
@@ -159,9 +155,6 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 		} else {
-			if sels == nil {
-				sels = vector.GetSels()
-			}
 			sels = sels[:0]
 
 			l := uint64(vec.Length())

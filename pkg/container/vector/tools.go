@@ -283,7 +283,7 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 	if err != nil {
 		return nil, err
 	}
-	rvec := NewVecFromReuse()
+	rvec := new(Vector)
 	rvec.area = vec.Area
 	rvec.length = int(vec.Len)
 	rvec.typ = typ
