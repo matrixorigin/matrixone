@@ -1075,6 +1075,9 @@ read_s3:
 func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) error {
 	// Read exact entry ranges when a full-object cache fill cannot serve this
 	// request, without fetching the potentially much larger sparse envelope.
+	// Only a fully consumed and validated buffered entry proves that later
+	// offsets are beyond an otherwise readable object.
+	firstValidatedOffset := int64(math.MaxInt64)
 	for i := range vector.Entries {
 		if vector.Entries[i].done {
 			continue
@@ -1088,10 +1091,14 @@ func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) er
 			ExpireAt: vector.ExpireAt,
 			Policy:   vector.Policy,
 		}
-		if err := s.read(ctx, single, true, false); err != nil {
+		if err := s.read(ctx, single, true, single.Entries[0].Offset > firstValidatedOffset); err != nil {
 			return err
 		}
 		vector.Entries[i] = single.Entries[0]
+		entry := &vector.Entries[i]
+		if entry.WriterForRead == nil && entry.ReadCloserForRead == nil {
+			firstValidatedOffset = min(firstValidatedOffset, entry.Offset)
+		}
 	}
 	return nil
 }
@@ -1173,22 +1180,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 			}
 		}
 		if expensive && buffered && ordered && misses <= 4 {
-			for i := range vector.Entries {
-				entry := &vector.Entries[i]
-				if entry.done {
-					continue
-				}
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				single := &IOVector{FilePath: vector.FilePath, Entries: []IOEntry{*entry},
-					ExpireAt: vector.ExpireAt, Policy: vector.Policy}
-				if err := s.read(ctx, single, true, entry.Offset > *min); err != nil {
-					return err
-				}
-				*entry = single.Entries[0]
-			}
-			return nil
+			return s.readEntriesIndividually(ctx, vector)
 		}
 	}
 

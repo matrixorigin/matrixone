@@ -522,10 +522,6 @@ func cutIfByteSlice(value any, forCompose bool) any {
 	return value
 }
 
-func EstimateMergeSize(objs iter.Seq[*objectio.ObjectStats]) int {
-	return EstimateMergeSizeWithBlockRows(objs, objectio.BlockMaxRows)
-}
-
 // EstimateMergeSizeWithBlockRows estimates admission using the table's block capacity.
 func EstimateMergeSizeWithBlockRows(objs iter.Seq[*objectio.ObjectStats], blockRows uint32) int {
 	// Existing input objects can have default-sized blocks even when the
