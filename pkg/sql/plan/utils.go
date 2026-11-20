@@ -1906,6 +1906,37 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		bat, expr, proc, varAndParamIsConst, foldInExpr, containsDynamicParam(expr), false, false)
 }
 
+func foldBoundConstant(ctx context.Context, expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+	if proc != nil && ctx != nil && containsJSONExtraction(expr) {
+		// A binder fold can run after the previous pipeline has stopped.
+		// Use the current request for this expression, including any JSON
+		// extraction the executor still has to evaluate inside a parent call.
+		proc = proc.NewNoContextChildProc(0)
+		proc.Ctx = ctx
+	}
+	return ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+}
+
+func containsJSONExtraction(expr *plan.Expr) bool {
+	if fn := expr.GetF(); fn != nil {
+		id, _ := function.DecodeOverloadID(fn.GetFunc().GetObj())
+		if id == function.JSON_EXTRACT {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if containsJSONExtraction(arg) {
+				return true
+			}
+		}
+	}
+	for _, item := range expr.GetList().GetList() {
+		if containsJSONExtraction(item) {
+			return true
+		}
+	}
+	return false
+}
+
 func constantFoldWithPreparedExactSource(
 	bat *batch.Batch,
 	expr *plan.Expr,

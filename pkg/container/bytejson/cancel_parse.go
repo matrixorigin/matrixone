@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
-	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -458,53 +457,82 @@ func (b *jsonWriteBudget) check(ctx context.Context, bytes int) error {
 	return nil
 }
 
-type cancellableJSONKeySort struct {
+type jsonKeySort struct {
 	*groupSortKeys
 	ctx    context.Context
 	budget *jsonWriteBudget
 }
 
-// sort.Sort has no error return. Recover only the private interruption value
-// raised by its comparator, leaving unrelated panics to the normal owner.
-type jsonKeySortInterrupted struct{ err error }
-
-func (g cancellableJSONKeySort) Less(i, j int) bool {
+func (g jsonKeySort) less(i, j int) (bool, error) {
 	a, b := g.Keys[i], g.Keys[j]
 	n := min(len(a), len(b))
 	for begin := 0; begin < n; begin += jsonParseChunk {
 		end := min(n, begin+jsonParseChunk)
 		if err := g.budget.check(g.ctx, end-begin); err != nil {
-			panic(jsonKeySortInterrupted{err})
+			return false, err
 		}
 		if cmp := strings.Compare(a[begin:end], b[begin:end]); cmp != 0 {
-			return cmp < 0
+			return cmp < 0, nil
 		}
 	}
 	if err := g.budget.check(g.ctx, 0); err != nil {
-		panic(jsonKeySortInterrupted{err})
+		return false, err
 	}
-	return len(a) < len(b)
+	return len(a) < len(b), nil
 }
 
-func (g cancellableJSONKeySort) Swap(i, j int) {
-	// sort.Sort can reverse an ordered run without comparing keys.
-	if err := g.budget.check(g.ctx, 0); err != nil {
-		panic(jsonKeySortInterrupted{err})
-	}
-	g.groupSortKeys.Swap(i, j)
-}
-
-func sortJSONKeysCancellable(ctx context.Context, budget *jsonWriteBudget, g *Group) (err error) {
-	defer func() {
-		if caught := recover(); caught != nil {
-			if interrupted, ok := caught.(jsonKeySortInterrupted); ok {
-				err = interrupted.err
-				return
+// siftDown restores the max heap below root. Every swap follows a comparison,
+// so the comparison budget also bounds work spent moving key/value pairs.
+func (g jsonKeySort) siftDown(root, end int) error {
+	for root < end/2 {
+		child := 2*root + 1
+		if child+1 < end {
+			less, err := g.less(child, child+1)
+			if err != nil {
+				return err
 			}
-			panic(caught)
+			if less {
+				child++
+			}
 		}
-	}()
-	sort.Sort(cancellableJSONKeySort{(*groupSortKeys)(g), ctx, budget})
+		less, err := g.less(root, child)
+		if err != nil || !less {
+			return err
+		}
+		g.Swap(root, child)
+		root = child
+	}
+	return nil
+}
+
+func sortJSONKeysCancellable(ctx context.Context, budget *jsonWriteBudget, group *Group) error {
+	g := jsonKeySort{(*groupSortKeys)(group), ctx, budget}
+	n := g.Len()
+	i := 1
+	for ; i < n; i++ {
+		less, err := g.less(i, i-1)
+		if err != nil {
+			return err
+		}
+		if less {
+			break
+		}
+	}
+	if i == n {
+		return nil
+	}
+	// Heap sort bounds worst-case work without allocating scratch space.
+	for root := n/2 - 1; root >= 0; root-- {
+		if err := g.siftDown(root, n); err != nil {
+			return err
+		}
+	}
+	for end := n - 1; end > 0; end-- {
+		g.Swap(0, end)
+		if err := g.siftDown(0, end); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
