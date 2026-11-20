@@ -466,6 +466,40 @@ func Test_extractRowFromEveryVector(t *testing.T) {
 	assert.Equal(t, []any{nil, int64(1), int32(1)}, row)
 }
 
+func TestCDCYearExtractionAndSerialization(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	vec := vector.NewVec(types.T_year.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, types.MoYear(2024), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.MoYear(0), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.MoYear(0), true, mp))
+
+	tests := []struct {
+		rowIndex int
+		want     any
+		wantSQL  string
+	}{
+		{rowIndex: 0, want: types.MoYear(2024), wantSQL: "'2024'"},
+		{rowIndex: 1, want: types.MoYear(0), wantSQL: "'0000'"},
+		{rowIndex: 2, want: nil},
+	}
+
+	for _, tt := range tests {
+		row := make([]any, 1)
+		require.NoError(t, extractRowFromVector(context.Background(), vec, 0, row, tt.rowIndex))
+		require.Equal(t, tt.want, row[0])
+		if tt.want == nil {
+			continue
+		}
+
+		got, err := convertColIntoSql(context.Background(), row[0], &types.Type{Oid: types.T_year}, nil)
+		require.NoError(t, err)
+		require.Equal(t, tt.wantSQL, string(got))
+	}
+}
+
 func Test_extractRowFromVector(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	defer mpool.DeleteMPool(mp)
