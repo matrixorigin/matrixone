@@ -236,3 +236,73 @@ func TestPublishedPlannerBorrowKeepsVersionsAndCopiesIsolated(t *testing.T) {
 	copyDef.Cols[0].Name = "changed"
 	require.Equal(t, "old", peer.GetTableDef(ctx).Cols[0].Name)
 }
+
+func TestPublishedRelationPrimaryKeys(t *testing.T) {
+	base := newTxnTableForTest()
+	eng := base.eng.(*Engine)
+	op, txn := newResetTxnForTest(t, eng)
+	db := &txnDatabase{op: op}
+	ctx := context.Background()
+
+	ordinaryType := types.T_int64.ToType()
+	ordinary, err := ordinaryType.Marshal()
+	require.NoError(t, err)
+	keyType := types.T_varchar.ToType()
+	keyType.Size++ // Preserve the catalog type when the planner cannot round-trip it.
+	key, err := keyType.Marshal()
+	require.NoError(t, err)
+	defaultExpr, err := (&plan.Default{OriginString: "'original'"}).Marshal()
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		key  string
+	}{
+		{name: "none"},
+		{name: "single", key: "a"},
+		{name: "hidden composite", key: catalog.CPrimaryKeyColName},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := cache.TableItem{Name: "t"}
+			cols := cache.Columns{
+				{Name: "a", Num: 1, Typ: ordinary},
+				{Name: "b", Num: 2, Seqnum: 1, Typ: ordinary},
+			}
+			switch tc.key {
+			case "a":
+				cols[0].ConstraintType = catalog.SystemColPKConstraint
+				cols[0].HasDef = 1
+				cols[0].DefaultExpr = defaultExpr
+			case catalog.CPrimaryKeyColName:
+				cols = append(cols, catalog.Column{
+					Name: tc.key, Num: 3, Seqnum: 2, Typ: key,
+					IsHidden: 1, ConstraintType: catalog.SystemColPKConstraint,
+				})
+			}
+			cache.InitTableItemWithColumns(&item, cols)
+			require.True(t, item.SchemaSource().Valid())
+			rel := newTxnTableWithItem(db, item, txn.proc, eng)
+
+			keys, err := rel.GetPrimaryKeys(ctx)
+			require.NoError(t, err)
+			if tc.key == "" {
+				require.Empty(t, keys)
+				return
+			}
+			require.Len(t, keys, 1)
+			require.Equal(t, tc.key, keys[0].Name)
+			require.True(t, keys[0].Primary)
+			if tc.key == catalog.CPrimaryKeyColName {
+				require.True(t, keys[0].IsHidden)
+				require.Equal(t, keyType, keys[0].Type)
+				require.EqualValues(t, 2, keys[0].Seqnum)
+				return
+			}
+			require.Equal(t, "'original'", keys[0].Default.OriginString)
+			keys[0].Default.OriginString = "changed"
+			keys, err = rel.GetPrimaryKeys(ctx)
+			require.NoError(t, err)
+			require.Equal(t, "'original'", keys[0].Default.OriginString)
+		})
+	}
+}

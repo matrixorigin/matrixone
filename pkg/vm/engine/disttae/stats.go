@@ -1655,8 +1655,7 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	}
 
 	// Get table definition
-	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
-	tableDef := table.BuildPlanTableDef()
+	tableDef := gs.engine.GetLatestCatalogCache().ReadPlanTableDefByID(key.AccId, key.DatabaseID, key.TableID)
 	if tableDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("table not found")
 	}
@@ -1782,9 +1781,7 @@ func (gs *GlobalStats) publishAnalyzedStats(
 			"manual statistics publication crossed subscription boundary for table %d", key.TableID)
 	}
 
-	table := gs.engine.GetLatestCatalogCache().GetTableById(
-		key.AccId, key.DatabaseID, key.TableID)
-	tableDef := table.BuildPlanTableDef()
+	tableDef := gs.engine.GetLatestCatalogCache().ReadPlanTableDefByID(key.AccId, key.DatabaseID, key.TableID)
 	if tableDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("table not found")
 	}
@@ -2123,9 +2120,7 @@ func (gs *GlobalStats) publishStatsForGenerationAtTableVersion(
 }
 
 func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay.PartitionState, key pb.StatsInfoKey, stats *pb.StatsInfo) (bool, float64) {
-	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
-	// table or its definition is nil, means that the table is created but not committed yet.
-	tableDef := table.BuildPlanTableDef()
+	tableDef := gs.engine.GetLatestCatalogCache().ReadPlanTableDefByID(key.AccId, key.DatabaseID, key.TableID)
 	if tableDef == nil {
 		logutil.Errorf("cannot get table by ID %v", key)
 		return false, 0
@@ -2542,11 +2537,11 @@ func CollectAndCalculateStats(ctx context.Context, req *updateStatsRequest, exec
 			}
 		}
 	}
-	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
-	info := plan2.NewTableStatsInfo(lenCols)
 	if req.approxObjectNum == 0 {
 		return 1.0, nil
 	}
+	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
+	info := plan2.NewTableStatsInfo(lenCols)
 	info.ApproxObjectNumber = req.approxObjectNum
 	baseTableDef := req.tableDef
 

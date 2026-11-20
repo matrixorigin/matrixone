@@ -104,7 +104,7 @@ func (s *candidateSchema) engineParts() ([]types.Type, []compress.T, []bool) {
 	return ts, algs, rows
 }
 
-// engineDefs reconstructs a private view from the candidate's planner and
+// expanded reconstructs a temporary view from the candidate's planner and
 // sparse engine-only fields.
 func (s *candidateSchema) expanded() *prototypeSchema {
 	ts, algs, rows := s.engineParts()
@@ -122,9 +122,46 @@ func (s *candidateSchema) expanded() *prototypeSchema {
 	}
 	p := &prototypeSchema{planner: &template, constraint: s.constraint, columns: make([]catalogColumn, len(s.planner.Cols))}
 	for i, c := range s.planner.Cols {
-		p.columns[i] = catalogColumn{typ: ts[i], plannerType: c.Typ, name: c.Name, originName: c.OriginName, comment: c.Comment, colID: c.ColId, seqnum: c.Seqnum, alg: algs[i], defaultValue: c.Default, onUpdate: c.OnUpdate, generated: c.GeneratedCol, rowID: rows[i], hidden: c.Hidden, primary: c.Primary, clusterBy: c.ClusterBy}
+		p.columns[i] = candidateColumn(c, ts[i], algs[i], rows[i])
 	}
 	return p
+}
+
+func candidateColumn(c *plan.ColDef, typ types.Type, alg compress.T, rowID bool) catalogColumn {
+	return catalogColumn{typ: typ, plannerType: c.Typ, name: c.Name, originName: c.OriginName, comment: c.Comment, colID: c.ColId, seqnum: c.Seqnum, alg: alg, defaultValue: c.Default, onUpdate: c.OnUpdate, generated: c.GeneratedCol, rowID: rowID, hidden: c.Hidden, primary: c.Primary, clusterBy: c.ClusterBy}
+}
+
+func (s *candidateSchema) primaryColumns() []*engine.Attribute {
+	n := 0
+	for _, c := range s.planner.Cols {
+		if c.Primary {
+			n++
+		}
+	}
+	values := make([]engine.Attribute, n)
+	keys := make([]*engine.Attribute, n)
+	residuals := s.residual
+	k := 0
+	for i, c := range s.planner.Cols {
+		if !c.Primary {
+			continue
+		}
+		for len(residuals) > 0 && residuals[0].index < i {
+			residuals = residuals[1:]
+		}
+		var typ types.Type
+		alg, rowID := compress.T(compress.Lz4), false
+		if len(residuals) > 0 && residuals[0].index == i {
+			r := residuals[0]
+			typ, alg, rowID = r.typ, r.alg, r.rowID
+		} else {
+			typ, _ = candidateType(c.Typ)
+		}
+		values[k] = candidateColumn(c, typ, alg, rowID).attribute()
+		keys[k] = &values[k]
+		k++
+	}
+	return keys
 }
 
 func (s *candidateSchema) engineDefs(item *TableItem) ([]engine.TableDef, error) {

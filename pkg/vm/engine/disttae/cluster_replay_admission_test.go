@@ -63,7 +63,6 @@ func TestClusterReplayDispatcherBindsCatalogGeneration(t *testing.T) {
 	}{
 		{"ordinary", func() { installClusterReplaySchema(t, item, "ordinary") }},
 		{"not_hidden", func() { installClusterReplaySchema(t, item, "not_hidden") }},
-		{"not_clustered", func() { installClusterReplaySchema(t, item, "ordinary") }},
 		{"wrong_table", func() { frame.Table.TbId = 23 }},
 		{"wrong_tenant", func() { frame.Table.AccId = 8 }},
 	} {

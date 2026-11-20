@@ -86,6 +86,39 @@ func TestCandidateUnsupportedTypeIsResidual(t *testing.T) {
 	require.True(t, rows[0])
 }
 
+func TestCandidatePrimaryColumnsPreserveSelectedMetadata(t *testing.T) {
+	typ := types.T_int64.ToType()
+	original := types.Type{Oid: types.T(255), Size: 17}
+	s := SchemaSource{schema: &prototypeSchema{candidate: &candidateSchema{
+		planner: &plan.TableDef{Cols: []*plan.ColDef{
+			{OriginName: "payload", Typ: plan.Type{Id: int32(typ.Oid)}},
+			{OriginName: "first", Typ: plan.Type{Id: int32(typ.Oid)}, Primary: true, Default: &plan.Default{OriginString: "7"}},
+			{OriginName: "hidden_key", Typ: plan.Type{Id: int32(original.Oid)}, Primary: true, Hidden: true,
+				OnUpdate: &plan.OnUpdate{OriginString: "8"}, GeneratedCol: &plan.GeneratedCol{OriginString: "9"}},
+		}},
+		residual: []candidateResidual{
+			{index: 0, typ: typ, alg: compress.None},
+			{index: 2, typ: original, alg: compress.None, rowID: true},
+		},
+	}}}
+	keys := s.Columns(true)
+	require.Len(t, keys, 2)
+	require.Equal(t, "first", keys[0].Name)
+	require.Equal(t, typ, keys[0].Type)
+	require.Equal(t, "hidden_key", keys[1].Name)
+	require.Equal(t, original, keys[1].Type)
+	require.Equal(t, compress.T(compress.None), keys[1].Alg)
+	require.True(t, keys[1].IsHidden)
+	require.True(t, keys[1].IsRowId)
+	keys[0].Default.OriginString = "changed"
+	keys[1].OnUpdate.OriginString = "changed"
+	keys[1].GeneratedCol.OriginString = "changed"
+	again := s.Columns(true)
+	require.Equal(t, "7", again[0].Default.OriginString)
+	require.Equal(t, "8", again[1].OnUpdate.OriginString)
+	require.Equal(t, "9", again[1].GeneratedCol.OriginString)
+}
+
 // Exercise every representable OID, including values outside the known type set.
 // The engine value is the oracle: reconstructing from the planner must never
 // silently discard fields that the planner does not represent.

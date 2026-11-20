@@ -188,6 +188,9 @@ func (s SchemaSource) Columns(primaryOnly bool) []*engine.Attribute {
 	}
 	schema := s.schema
 	if schema.candidate != nil {
+		if primaryOnly {
+			return schema.candidate.primaryColumns()
+		}
 		schema = schema.candidate.expanded()
 	}
 	n := 0
@@ -226,7 +229,7 @@ func (s SchemaSource) ConstraintBytes() []byte {
 // PlanTableDef returns a private planner projection.
 func (s SchemaSource) PlanTableDef() *plan.TableDef { return s.schema.projection() }
 
-// BorrowPlanTableDef returns the published planner for read-only use by a relation.
+// BorrowPlanTableDef returns the published planner for read-only use by catalog consumers.
 // Callers must copy before modifying any part of the returned graph.
 func (s SchemaSource) BorrowPlanTableDef() *plan.TableDef {
 	if s.schema == nil || s.schema.candidate == nil {

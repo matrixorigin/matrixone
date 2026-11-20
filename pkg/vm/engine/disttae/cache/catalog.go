@@ -442,6 +442,19 @@ func (cc *CatalogCache) GetTableById(aid uint32, databaseId, tblId uint64) *Tabl
 		aid, databaseId, tblId, types.MaxTs().ToTimestamp())
 }
 
+// ReadPlanTableDefByID captures the current planner definition under the same
+// guard as column publication. The returned graph is read-only and can outlive
+// the lock because catalog publication replaces the graph as a unit.
+func (cc *CatalogCache) ReadPlanTableDefByID(accountID uint32, databaseID, tableID uint64) *plan.TableDef {
+	cc.tableChange.RLock()
+	defer cc.tableChange.RUnlock()
+	item := cc.GetTableById(accountID, databaseID, tableID)
+	if def := item.SchemaSource().BorrowPlanTableDef(); def != nil {
+		return def
+	}
+	return item.BuildPlanTableDef()
+}
+
 // WithTableVersion runs fn only when the current table identity still has the
 // expected schema version. The table-change read lock remains held through fn,
 // making the version check and the caller's publication one linearizable
