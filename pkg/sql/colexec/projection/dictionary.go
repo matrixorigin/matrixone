@@ -46,7 +46,7 @@ func (projection *Projection) SetAllocationAccount(account *mpool.AllocationAcco
 	if projection.ctr.buf != nil || len(projection.ctr.projExecutors) > 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 9, 10, 11, 12)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 9, 10)
 	if err != nil {
 		return err
 	}

@@ -243,7 +243,7 @@ func TestMinMaxJSONExtraFailureAtomicityAndGenerationCleanup(t *testing.T) {
 		account, err := registry.OpenWithController(1<<20, controller)
 		require.NoError(t, err)
 		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-			VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4,
+			VectorData: 1, VectorArea: 2,
 			ArgumentCount: 5, ArgumentArena: 6,
 		})
 		require.NoError(t, err)

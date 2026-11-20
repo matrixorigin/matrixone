@@ -62,7 +62,7 @@ func BenchmarkDependentExecutionScaling(b *testing.B) {
 				_, err := registry.Finalize(account)
 				require.NoError(b, err)
 			}()
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2, 3, 4)
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2)
 			require.NoError(b, err)
 			compiled, tableOpened, sourceOpened, sourceClosed, scanned := 0, 0, 0, 0, 0
 			template, err := dependent.Compile(proc.Ctx, p.GetQuery(), func(node *plan.Node) (dependent.SourceFactory, error) {
