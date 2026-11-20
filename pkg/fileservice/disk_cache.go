@@ -908,7 +908,7 @@ func (d *DiskCache) writeEntryAsync(ctx context.Context, filePath, diskPath stri
 	target := entryFillTarget{diskFillTarget: diskFillTarget{d: d, diskPath: diskPath}, filePath: filePath, readDeletes: entry.readDeletes}
 	_, err := d.writeFileTo(ctx, diskPath, func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(entry.Data)), nil
-	}, true, nil, notWholeFill, nil, target)
+	}, true, nil, notWholeFill, nil, target, nil)
 	if err != nil {
 		_ = d.observeWriteResult(diskPath, err)
 	}
@@ -1017,11 +1017,11 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	fill wholeFill,
 	objectSize objectLayout,
 ) (written bool, err error) {
-	return d.writeFileTo(ctx, diskPath, openReader, asyncFinalize, claimPublication, fill, objectSize, nil)
+	return d.writeFileTo(ctx, diskPath, openReader, asyncFinalize, claimPublication, fill, objectSize, nil, nil)
 }
 
 // writeFileTo writes the file of the object at diskPath and publishes it into target, the
-// disk cache when nil.
+// disk cache when nil. copied, when set, is called once the bytes are read.
 func (d *DiskCache) writeFileTo(
 	ctx context.Context,
 	diskPath string,
@@ -1031,6 +1031,7 @@ func (d *DiskCache) writeFileTo(
 	fill wholeFill,
 	objectSize objectLayout,
 	target fillTarget,
+	copied func(),
 ) (written bool, err error) {
 	if target == nil {
 		target = diskFillTarget{d: d, diskPath: diskPath}
@@ -1181,10 +1182,8 @@ func (d *DiskCache) writeFileTo(
 		}
 	}
 	releaseConns()
-	// A range download frees the connection its FilePrefetchObject took once its bytes
-	// are read.
-	if p, ok := ctx.Value(fileDownloadKey{}).(*filePrefetchObject); ok && fill == rangeFill {
-		p.releaseConn()
+	if copied != nil {
+		copied()
 	}
 	if download != nil {
 		download.end(err == nil)
@@ -1803,7 +1802,7 @@ func (d *DiskCache) fillFileTo(
 	if target == nil {
 		d.wholeFills.Add(1)
 	}
-	written, writeErr := d.writeFileTo(ctx, diskPath, openReader, asyncFinalize, nil, fill, objectSize, target)
+	written, writeErr := d.writeFileTo(ctx, diskPath, openReader, asyncFinalize, nil, fill, objectSize, target, nil)
 	if target == nil {
 		d.wholeFills.Add(-1)
 	}

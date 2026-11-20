@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
@@ -766,6 +767,8 @@ type prefetchTarget struct {
 	closing            context.Context
 	state              objectState
 	since              time.Time
+	// waitedFrom is when it began to wait for its resources, zero if it has not.
+	waitedFrom time.Time
 }
 
 func (t *prefetchTarget) target() *prefetchTarget { return t }
@@ -785,14 +788,41 @@ func (s objectState) String() string {
 	return [...]string{"created", "waiting for a file slot", "waiting for a buffer", "waiting for a connection", "registered"}[s]
 }
 
-// setStateLocked moves o to state s, listing it among the waiting objects while it waits.
+// waitingGauge returns the gauge of the objects in state s, nil when s is not a wait.
+func (s objectState) waitingGauge() prometheus.Gauge {
+	switch s {
+	case objectWaitingFileSlot:
+		return metric.FSPrefetchObjectWaitingFileSlot
+	case objectWaitingBuffer:
+		return metric.FSPrefetchObjectWaitingBuffer
+	case objectWaitingConn:
+		return metric.FSPrefetchObjectWaitingConnection
+	}
+	return nil
+}
+
+// setStateLocked moves o to state s, listing it among the waiting objects while it waits,
+// and counts its wait.
 func setStateLocked(o waitingObject, s objectState) {
 	t := o.target()
 	f := &t.d.prefetchObjects
 	if t.state != s {
-		t.state, t.since = s, time.Now()
+		now := time.Now()
+		if g := t.state.waitingGauge(); g != nil {
+			g.Dec()
+		}
+		if g := s.waitingGauge(); g != nil {
+			g.Inc()
+			if t.waitedFrom.IsZero() {
+				t.waitedFrom = now
+			}
+		}
+		if s == objectRegistered && !t.waitedFrom.IsZero() {
+			metric.FSPrefetchObjectWaitDuration.Observe(now.Sub(t.waitedFrom).Seconds())
+		}
+		t.state, t.since = s, now
 	}
-	if s == objectWaitingFileSlot || s == objectWaitingBuffer || s == objectWaitingConn {
+	if s.waitingGauge() != nil {
 		if f.waiting == nil {
 			f.waiting = make(map[waitingObject]struct{})
 		}

@@ -437,6 +437,30 @@ var (
 	FSPrefetchEndedCounter      = FSPrefetchObjectCounter.WithLabelValues("ended")
 	FSPrefetchDroppedCounter    = FSPrefetchObjectCounter.WithLabelValues("dropped")
 
+	// FSPrefetchObjectWaitingGauge is the prefetch objects of runs waiting for their
+	// resources, by what they wait for: a file slot, a buffer or a connection.
+	FSPrefetchObjectWaitingGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "prefetch_object_waiting",
+			Help:      "Prefetch objects of runs waiting for their resources, by what they wait for",
+		}, []string{"for"})
+	FSPrefetchObjectWaitingFileSlot   = FSPrefetchObjectWaitingGauge.WithLabelValues("file_slot")
+	FSPrefetchObjectWaitingBuffer     = FSPrefetchObjectWaitingGauge.WithLabelValues("buffer")
+	FSPrefetchObjectWaitingConnection = FSPrefetchObjectWaitingGauge.WithLabelValues("connection")
+
+	// FSPrefetchObjectWaitDuration is how long the prefetch objects of runs that waited for
+	// their resources waited before they registered.
+	FSPrefetchObjectWaitDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "prefetch_object_wait_duration_seconds",
+			Help:      "Time prefetch objects of runs that waited for their resources waited before they registered",
+			Buckets:   getDurationBuckets(),
+		})
+
 	// FSDiskCacheDownloadSkippedCounter counts the whole-object downloads not started
 	// because the most downloads allowed were in flight.
 	FSDiskCacheDownloadSkippedCounter = prometheus.NewCounter(

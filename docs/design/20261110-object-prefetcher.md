@@ -398,7 +398,11 @@ idle timeout" ([#32792](https://github.com/matrixorigin/matrixone/issues/32792))
   8 MiB), the most bytes of a MemoryPrefetchObject.
 - **Metrics:** `mo_fs_prefetch_object_total{result}` counts prefetch requests and
   their outcomes: queued, merged, cached, downloaded, failed, missed (a read reached
-  the object first), ended and dropped. A warning is logged, at most once per
+  the object first), ended and dropped. `mo_fs_prefetch_object_waiting{for}` is the
+  prefetch objects of runs waiting for a file slot, a buffer or a connection, and
+  `mo_fs_prefetch_object_wait_duration_seconds` how long those that waited waited before
+  they registered; `/debug/prefetch_objects` lists the prefetch objects registered and
+  waiting, with their state and age. A warning is logged, at most once per
   interval, when object-storage requests wait long for an HTTP connection.
 - The HTTP pool allows 128 connections per host, up from 100, which TPC-H reads
   exceeded.

@@ -23,11 +23,15 @@ import (
 	"testing"
 	"time"
 
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
 // /debug/prefetch_objects lists a prefetch object waiting for a connection, and the
-// download holding it.
+// download holding it; the gauge of objects waiting for a connection counts it until it
+// registers, and its wait is observed then.
 func TestDebugPrefetchObjectsListsWaitingObjects(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	ctx := context.Background()
@@ -41,6 +45,8 @@ func TestDebugPrefetchObjectsListsWaitingObjects(t *testing.T) {
 	defer release()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "other", Size: int64(len(data)), Scan: &PrefetchScan{}}))
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(otherKey); return cur == 1 }, 5*time.Second, time.Millisecond)
+	waiting := testutil.ToFloat64(metric.FSPrefetchObjectWaitingConnection)
+	observed := histogramCount(t)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 2 << 10, Ranges: columnRanges(1, 40<<10, 1<<10), Scan: &PrefetchScan{}}))
 	page := func() string {
 		w := httptest.NewRecorder()
@@ -54,7 +60,17 @@ func TestDebugPrefetchObjectsListsWaitingObjects(t *testing.T) {
 	out := page()
 	require.Contains(t, out, "file "+fs.diskCache.pathForFile("other")+" [0, ")
 	require.Contains(t, out, "download connections 1 of 1")
+	require.Equal(t, waiting+1, testutil.ToFloat64(metric.FSPrefetchObjectWaitingConnection))
 	release()
 	require.Eventually(t, func() bool { return !strings.Contains(page(), objectPath) }, 5*time.Second, time.Millisecond,
 		"an object that ended is not listed")
+	require.Equal(t, waiting, testutil.ToFloat64(metric.FSPrefetchObjectWaitingConnection))
+	require.Equal(t, observed+1, histogramCount(t), "its wait is observed")
+}
+
+// histogramCount returns the waits FSPrefetchObjectWaitDuration observed.
+func histogramCount(t *testing.T) uint64 {
+	var m dto.Metric
+	require.NoError(t, metric.FSPrefetchObjectWaitDuration.Write(&m))
+	return m.GetHistogram().GetSampleCount()
 }
