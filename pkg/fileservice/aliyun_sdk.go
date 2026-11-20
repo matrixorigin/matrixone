@@ -505,7 +505,7 @@ func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *
 			}
 			var rang string
 			if max != nil {
-				rang = fmt.Sprintf("%d-%d", offset, *max)
+				rang = fmt.Sprintf("%d-%d", offset, *max-1) // HTTP includes the last byte
 			} else {
 				rang = fmt.Sprintf("%d-", offset)
 			}

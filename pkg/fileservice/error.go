@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/minio/minio-go/v7"
 	"github.com/tencentyun/cos-go-sdk-v5"
@@ -35,7 +36,29 @@ func isHTTPRangeNotSatisfiable(err error) bool {
 		return status.HTTPStatusCode() == http.StatusRequestedRangeNotSatisfiable
 	}
 	var resp minio.ErrorResponse
-	return errors.As(err, &resp) && resp.StatusCode == http.StatusRequestedRangeNotSatisfiable
+	if errors.As(err, &resp) {
+		return resp.StatusCode == http.StatusRequestedRangeNotSatisfiable
+	}
+	var ossErr oss.ServiceError
+	if errors.As(err, &ossErr) {
+		return ossErr.StatusCode == http.StatusRequestedRangeNotSatisfiable
+	}
+	var cosErr *cos.ErrorResponse
+	if errors.As(err, &cosErr) {
+		return cosErr.Response != nil && cosErr.Response.StatusCode == http.StatusRequestedRangeNotSatisfiable
+	}
+	// COS RetryError does not implement Unwrap. Don't turn cancellation or a
+	// mixed transport failure into a successful (empty) range response.
+	var retry *cos.RetryError
+	if errors.As(err, &retry) && len(retry.Errs) != 0 {
+		for _, attempt := range retry.Errs {
+			if !isHTTPRangeNotSatisfiable(attempt) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func IsRetryableError(err error) bool {

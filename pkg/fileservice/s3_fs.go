@@ -733,7 +733,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
 	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
-	forceMinimalRangeRead := false
+	readMode := s3ReadDefault
 	forcePerEntryRangeRead := false
 read_memory_cache:
 	if s.memCache != nil {
@@ -819,6 +819,9 @@ read_disk_cache:
 				counter.FileService.DiskReadSize.Add(actualDiskReadBytes)
 			})
 		}
+		if readMode == s3ReadAfterSkippedFill && ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if vector.allDone() {
 			return nil
 		}
@@ -852,6 +855,11 @@ read_disk_cache:
 
 	}
 
+	if readMode == s3ReadAfterSkippedFill {
+		// Retry only the disk lookup. Keep the original merge owner and cache
+		// update callbacks; do not rejoin the merge or republish the file.
+		goto read_s3
+	}
 	if s.remoteCache != nil {
 		t0 := time.Now()
 		LogEvent(ctx, str_read_remote_cache_Caches_begin)
@@ -866,7 +874,7 @@ read_disk_cache:
 		}
 	}
 
-	if forcePerEntryRangeRead || forceMinimalRangeRead {
+	if forcePerEntryRangeRead || readMode == s3ReadMinimal {
 		goto read_s3
 	}
 	if mayReadMemoryCache || mayReadDiskCache {
@@ -937,7 +945,7 @@ read_disk_cache:
 					forcePerEntryRangeRead = true
 					goto read_s3
 				}
-				forceMinimalRangeRead = true
+				readMode = s3ReadMinimal
 				if rangeKey, ok := s.singleEntryRangeMergeKey(vector); ok {
 					LogEvent(ctx, str_ioMerger_Merge_begin)
 					rangeMergeStart := time.Now()
@@ -994,7 +1002,19 @@ read_s3:
 	if forcePerEntryRangeRead {
 		err = s.readEntriesIndividually(ctx, vector)
 	} else {
-		err = s.read(ctx, vector, forceMinimalRangeRead)
+		err = s.read(ctx, vector, readMode)
+		if err == errFullObjectFillSkipped {
+			if err = ctx.Err(); err != nil {
+				return err
+			}
+			readMode = s3ReadAfterSkippedFill
+			// A failed shared disk conversion already saw the cached bytes and
+			// selected a different tier. Don't retry that converter on disk.
+			if decodeScope != nil && decodeScope.bypassSharing && !vector.Entries[decodeScope.index].done {
+				goto read_s3
+			}
+			goto read_disk_cache
+		}
 	}
 	if err != nil {
 		return err
@@ -1026,7 +1046,7 @@ func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) er
 			ExpireAt: vector.ExpireAt,
 			Policy:   vector.Policy,
 		}
-		if err := s.read(ctx, single, true); err != nil {
+		if err := s.read(ctx, single, s3ReadMinimal); err != nil {
 			return err
 		}
 		vector.Entries[i] = single.Entries[0]
@@ -1070,7 +1090,16 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
-func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead bool) (err error) {
+type s3ReadMode uint8
+
+const (
+	s3ReadDefault s3ReadMode = iota
+	s3ReadMinimal
+	s3ReadAfterSkippedFill
+)
+const errFullObjectFillSkipped = errorStr("full-object fill did not supply requested entries")
+
+func (s *S3FS) read(ctx context.Context, vector *IOVector, mode s3ReadMode) (err error) {
 	if vector.allDone() {
 		// all cache hit
 		return nil
@@ -1082,7 +1111,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	}
 
 	min, max, readFullObject := vector.readRange()
-	if readFullObject && forceMinimalRangeRead {
+	if readFullObject && mode != s3ReadDefault {
 		min, max = vector.readMinimalRange()
 		readFullObject = false
 	}
@@ -1124,13 +1153,40 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		if done {
 			return nil
 		}
-		// A concurrent fill can publish after our disk cache miss. SetFile then
-		// skips the fill; fetch only the missing ranges, not the entire object.
+		return errFullObjectFillSkipped
+	}
+	if mode == s3ReadAfterSkippedFill {
 		if _, _, expensive := vector.expensiveMinimalRangeRead(); expensive {
-			return s.readEntriesIndividually(ctx, vector)
+			const maxSerialRangeReads = 8
+			missing := 0
+			for _, e := range vector.Entries {
+				if !e.done {
+					missing++
+				}
+			}
+			if missing <= maxSerialRangeReads {
+				return s.readEntriesIndividually(ctx, vector)
+			}
+			// Bound round trips for a large sparse miss. Stream the envelope
+			// rather than retaining the gaps in memory or creating a cache file.
+			r, err := getReader(ctx, min, max)
+			if err != nil {
+				if isHTTPRangeNotSatisfiable(err) {
+					return moerr.NewUnexpectedEOFNoCtx(path.File)
+				}
+				return err
+			}
+			defer r.Close()
+			stream := newFullObjectDiskCacheReader(vector)
+			stream.reader, stream.offset = r, *min
+			if _, err := io.Copy(io.Discard, stream); err != nil {
+				return err
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return stream.fillVector(ctx, s, path.File)
 		}
-		min, max = vector.readMinimalRange()
-		readFullObject = false
 	}
 
 	// a function to get data lazily

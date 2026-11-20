@@ -902,7 +902,7 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 		func(offset int64) (io.ReadCloser, error) {
 			var rang string
 			if max != nil {
-				rang = fmt.Sprintf("bytes=%d-%d", offset, *max)
+				rang = fmt.Sprintf("bytes=%d-%d", offset, *max-1) // HTTP includes the last byte
 			} else {
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}

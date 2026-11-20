@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -39,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tencentyun/cos-go-sdk-v5"
 	"go.uber.org/zap"
 )
 
@@ -1994,6 +1997,9 @@ func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
 		wantOpens               int
 		wantErr                 error
 	}{
+		{"many-published", far, 1, 0, 0, nil},
+		{"many-missing", far, 1, far - 4096 + 1, 1, nil},
+		{"partly-published", far, 17, 17, 1, nil},
 		{"sparse", far, 17, 30, 2, nil},
 		{"dense", 4112, 17, 33, 1, nil},
 		{"to-end", far, -1, 4096, 1, nil},
@@ -2017,6 +2023,12 @@ func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
 			if tc.size < 0 {
 				v.Entries = v.Entries[1:]
 			}
+			if strings.HasPrefix(tc.name, "many-") {
+				v.Entries = nil
+				for i := int64(0); i < 64; i++ {
+					v.Entries = append(v.Entries, IOEntry{Offset: 4096 + i*(far-4096)/63, Size: 1})
+				}
+			}
 			// Preserve a real partial cache hit in the sparse fallback.
 			if tc.name == "sparse" {
 				hit := IOEntry{Offset: 100, Size: 3, Data: data[100:103]}
@@ -2031,6 +2043,15 @@ func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
 				require.Equal(t, int64(len(data)), m.bytes.Load())
 				require.Equal(t, 1, m.opens)
 				require.Equal(t, 1, m.closes)
+				if tc.name != "many-published" {
+					// A short local file cannot satisfy the requested ranges. SetFile
+					// still skips it; the foreground request must fall back to storage.
+					usable := int64(3)
+					if tc.name == "partly-published" {
+						usable = 4109
+					} // covers only the first missing entry
+					require.NoError(t, os.Truncate(fs.diskCache.pathForFile(path), usable))
+				}
 				if tc.wantErr == context.Canceled {
 					m.afterClose = cancel
 					m.beforeOpen = func() error {
@@ -2061,10 +2082,10 @@ func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
 			require.Equal(t, tc.wantBytes, m.bytes.Load()-int64(len(data)), "foreground bytes consumed")
 			require.Equal(t, tc.wantOpens, m.opens-1)
 			require.Equal(t, m.opens, m.closes)
-			warm := &IOVector{FilePath: path, Entries: []IOEntry{{Offset: far, Size: 17}}}
+			warm := &IOVector{FilePath: path, Entries: []IOEntry{{Offset: 0, Size: 3}}}
 			defer warm.Release()
 			require.NoError(t, fs.Read(t.Context(), warm))
-			require.Equal(t, data[far:far+17], warm.Entries[0].Data)
+			require.Equal(t, data[:3], warm.Entries[0].Data)
 			require.Equal(t, tc.wantOpens, m.opens-1, "a new read should hit the published file")
 		})
 	}
@@ -2093,7 +2114,7 @@ func TestS3FSSkippedFillHTTPRanges(t *testing.T) {
 	const far = 9 << 20
 	data := make([]byte, 16<<20)
 	data[0], data[far] = 'a', 'b'
-	for _, backend := range []string{"minio", "aws"} {
+	for _, backend := range []string{"minio", "aws", "cos", "oss"} {
 		for _, mode := range []string{"sparse", "at-eof", "past-eof-fixed", "not-found"} {
 			t.Run(backend+"/"+mode, func(t *testing.T) {
 				var mu sync.Mutex
@@ -2112,8 +2133,15 @@ func TestS3FSSkippedFillHTTPRanges(t *testing.T) {
 							bodyBytes += out.n
 						}
 					}()
-					if mode == "not-found" {
-						http.Error(out, `<Error><Code>NoSuchKey</Code></Error>`, http.StatusNotFound)
+					if mode == "not-found" || mode == "at-eof" || mode == "past-eof-fixed" {
+						w.Header().Set("Content-Type", "application/xml")
+						if mode == "not-found" {
+							out.WriteHeader(http.StatusNotFound)
+							_, _ = io.WriteString(out, `<Error><Code>NoSuchKey</Code><Message>Not found</Message></Error>`)
+						} else {
+							out.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+							_, _ = io.WriteString(out, `<Error><Code>InvalidRange</Code><Message>Outside object</Message></Error>`)
+						}
 						return
 					}
 					http.ServeContent(out, r, "object", time.Unix(1, 0), bytes.NewReader(data))
@@ -2128,8 +2156,24 @@ func TestS3FSSkippedFillHTTPRanges(t *testing.T) {
 				}, nil, false, true)
 				require.NoError(t, err)
 				defer fs.Close(ctx)
+				// The production router recognizes vendor hostnames; point the real
+				// clients directly at the loopback endpoint instead.
+				switch backend {
+				case "cos":
+					u, err := url.Parse(srv.URL)
+					require.NoError(t, err)
+					c := cos.NewClient(&cos.BaseURL{BucketURL: u}, srv.Client())
+					c.Conf.RetryOpt.Count = 0
+					fs.storage = &QCloudSDK{client: c}
+				case "oss":
+					c, err := oss.New(srv.URL, "id", "secret", oss.UseCname(true), oss.HTTPClient(srv.Client()))
+					require.NoError(t, err)
+					b, err := c.Bucket("bucket")
+					require.NoError(t, err)
+					fs.storage = &AliyunSDK{bucket: b}
+				}
 				fs.remoteCache = NewRemoteCache(nil, func() client.KeyRouter[fscache.CacheKey] {
-					require.NoError(t, fs.diskCache.SetFile(ctx, "object", func(context.Context) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }))
+					require.NoError(t, fs.diskCache.SetFile(ctx, "object", func(context.Context) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(nil)), nil }))
 					return nil
 				})
 				v := IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 0, Size: 1}, {Offset: far, Size: 1}}}
