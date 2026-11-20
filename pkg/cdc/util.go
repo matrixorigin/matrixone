@@ -382,9 +382,9 @@ func convertColIntoSql(
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_enum:
 		value := data.(types.Enum)
-		sqlBuff = appendByte(sqlBuff, '\'')
+		// Use an integer literal so MySQL assigns the ENUM by ordinal. A quoted
+		// ordinal can instead match a numeric label and silently change members.
 		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '\'')
 	default:
 		logutil.Error(
 			"Failed to extract row from vector, unsupported type",
