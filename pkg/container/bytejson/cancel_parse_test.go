@@ -177,12 +177,36 @@ func TestCancellableJSONParseStopsWhileSorting(t *testing.T) {
 	const entries = 4 * jsonParseItems
 	group := &Group{Obj: true, Keys: make([]string, entries), Values: make([]Node, entries)}
 	for i := range group.Keys {
-		group.Keys[i] = fmt.Sprintf("key%04d", entries-i)
+		group.Keys[i] = fmt.Sprintf("key%04d", i)
+		group.Values[i] = Node{group.Keys[i]}
 	}
+	last := group.Keys[entries-1]
 	w := byteJsonWriter{buf: make([]byte, 0, jsonParseChunk), cancel: &jsonWriteBudget{}}
+	// The first pair is an inversion, so the sort immediately builds its heap.
+	(*groupSortKeys)(group).Swap(0, 1)
 	_, _, err := w.writeNodeWithContext(ctx, true, Node{group})
 	require.ErrorIs(t, err, context.Canceled)
 	require.Len(t, w.buf, 1+headerSize)
-	require.Equal(t, "key0001", group.Keys[0])
-	require.False(t, sort.StringsAreSorted(group.Keys), "cancellation must interrupt the reversal itself")
+	require.NotEqual(t, last, group.Keys[entries-1], "heap construction must have started")
+	require.False(t, sort.StringsAreSorted(group.Keys), "cancellation must interrupt the sort")
+	for i, key := range group.Keys {
+		require.Equal(t, key, group.Values[i].V)
+	}
+}
+
+func TestCancellableJSONKeySortKeepsValuesWithKeys(t *testing.T) {
+	const entries = 257
+	for _, stride := range []int{1, entries - 1, 79} {
+		g := &Group{Obj: true, Keys: make([]string, entries), Values: make([]Node, entries)}
+		for i := range g.Keys {
+			value := (i * stride) % entries
+			g.Keys[i] = fmt.Sprintf("key%03d", value)
+			g.Values[i] = Node{value}
+		}
+		require.NoError(t, sortJSONKeysCancellable(t.Context(), &jsonWriteBudget{}, g))
+		for i := range g.Keys {
+			require.Equal(t, fmt.Sprintf("key%03d", i), g.Keys[i])
+			require.Equal(t, i, g.Values[i].V)
+		}
+	}
 }

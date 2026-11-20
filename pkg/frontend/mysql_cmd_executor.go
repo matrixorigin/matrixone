@@ -4434,13 +4434,6 @@ func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.Compile
 		}
 		ses.SetAccountId(accId)
 	}
-	if compiler, ok := ctx.(*TxnCompilerContext); ok {
-		if proc := compiler.GetProcess(); proc != nil {
-			// Binding may execute constant expressions before physical compilation
-			// installs this request's pipeline context on the session process.
-			defer bindFrontendExpressionContext(proc, planContext)()
-		}
-	}
 	return build()
 }
 
