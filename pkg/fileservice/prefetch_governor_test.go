@@ -520,3 +520,25 @@ func TestPrefetchReadOfRunCutAtStaleSizeReturns(t *testing.T) {
 	}
 	vec.Release()
 }
+
+// A read of an object deleted while it reads returns none of the bytes it assembled: they
+// may be of two objects at the path, so the caller reads them again.
+func TestPrefetchReadAcrossDeleteReturnsNoBytes(t *testing.T) {
+	const unit = 64 << 10
+	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
+	d := fs.diskCache
+	diskPath := d.pathForFile("object")
+	var opens atomic.Int64
+	open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+		// The second run opens once the object is deleted.
+		if opens.Add(1) == 2 {
+			d.deletes.deleted(diskPath)
+		}
+		return io.NopCloser(bytes.NewReader(data[start:end])), nil
+	}
+	entries := []IOEntry{{Offset: 100, Size: 10}, {Offset: 2*unit + 100, Size: 10}}
+	_, _, ok, err := d.prefetchRead(context.Background(), "object", SkipFullFilePreloads|SkipMemoryCache, entries, 100, 2*unit+110, unit, open)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), opens.Load())
+	require.False(t, ok, "no bytes read across a delete are returned")
+}

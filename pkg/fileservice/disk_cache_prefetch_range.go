@@ -171,8 +171,8 @@ type prefetchBlock struct {
 // block first, or from a new read: each run of blocks in units the entries take bytes
 // of that are neither cached nor being read and holds a needed block is read from
 // object storage through open as one range, served to other reads as its bytes arrive,
-// and cached. It returns false when the bytes are not all read, and the error of a failed
-// read of object storage it waited on.
+// and cached. It returns false when the bytes are not all read, or the object was deleted
+// since it began, and the error of a failed read of object storage it waited on.
 func (d *DiskCache) prefetchRead(
 	ctx context.Context,
 	filePath string,
@@ -415,6 +415,10 @@ func (d *DiskCache) prefetchRead(
 		default:
 			return nil, memoryRuns, false, nil
 		}
+	}
+	// Bytes copied across a delete of the object may be of two objects at the path.
+	if d.deletes.since(diskPath, deletes) {
+		return nil, memoryRuns, false, nil
 	}
 	return out, memoryRuns, true, nil
 }
