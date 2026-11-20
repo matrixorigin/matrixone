@@ -577,98 +577,129 @@ func validateRestoredFunctionCatalogHeads(
 	bh BackgroundExec,
 	targetCtx context.Context,
 ) error {
-	query := `select cast(f.function_id as char), cast(f.active_revision as char), cast(f.namespace_version as char),
+	// Bound the head page before the join, and restrict the revision side to
+	// the page's exact active keys. An outer LIMIT alone permits building an
+	// unbounded hash table of revision bodies before any rows are returned.
+	const pagePrefix = `with head_page as (
+		select function_id, active_revision, namespace_version,
+			canonical_input_descriptor, return_descriptor, signature_key_schema_version,
+			signature_fingerprint, language, security_type
+		from mo_catalog.mo_user_defined_function
+		where lower(language) in ("python", "sql")`
+	const validatePage = `
+		select cast(f.function_id as char), cast(f.active_revision as char), cast(f.namespace_version as char),
 		cast(coalesce(r.revision, 0) as char), cast(coalesce(r.namespace_version, 0) as char),
 		f.canonical_input_descriptor, f.return_descriptor,
 		cast(f.signature_key_schema_version as char), f.signature_fingerprint,
 		coalesce(r.arg_types, ''), coalesce(r.rettype, ''), coalesce(r.body, ''),
 		lower(f.language), coalesce(r.definition_fingerprint, ''),
 		coalesce(r.security_type, ''), coalesce(f.security_type, '')
-		from mo_catalog.mo_user_defined_function f
-		left join mo_catalog.mo_function_revisions r
+		from head_page f
+		left join (
+			select function_id, revision, namespace_version, arg_types, rettype,
+				body, definition_fingerprint, security_type
+			from mo_catalog.mo_function_revisions
+			where (function_id, revision) in (select function_id, active_revision from head_page)
+		) r
 			on r.function_id = f.function_id and r.revision = f.active_revision
 			and r.namespace_version = f.namespace_version
-		where lower(f.language) in ("python", "sql")
 		order by f.function_id;`
-	rows, err := getStringColsList(targetCtx, bh, query, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
-	if err != nil {
-		return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: restored routine catalog heads cannot be validated")
+	defer bh.ClearExecResultSet()
+	var lastFunction uint64
+	var rowIndex int
+	for {
+		if err := targetCtx.Err(); err != nil {
+			return err
+		}
+		query := pagePrefix
+		if rowIndex != 0 {
+			query += fmt.Sprintf(" and function_id > %d", lastFunction)
+		}
+		query += fmt.Sprintf(" order by function_id limit %d)", restoredFunctionRevisionPageSize) + validatePage
+		rows, err := getStringColsList(targetCtx, bh, query, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+		if err != nil {
+			return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: restored routine catalog heads cannot be validated")
+		}
+		for _, row := range rows {
+			if len(row) != 16 {
+				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored routine catalog head row %d has %d columns", rowIndex, len(row))
+			}
+			functionID, err := strconv.ParseUint(row[0], 10, 64)
+			if err != nil || functionID <= lastFunction {
+				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored routine catalog head row %d has an invalid or non-increasing function identity", rowIndex)
+			}
+			lastFunction = functionID
+			rowIndex++
+			activeRevision, err := strconv.ParseUint(row[1], 10, 64)
+			if err != nil {
+				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored routine function %d has an invalid active revision: %v", functionID, err)
+			}
+			namespaceVersion, err := strconv.ParseUint(row[2], 10, 64)
+			if err != nil {
+				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored routine function %d has an invalid namespace version: %v", functionID, err)
+			}
+			language := strings.ToLower(row[12])
+			if (language == udf.LanguageSQL || language == udf.LanguagePython) && activeRevision == 0 && namespaceVersion == 0 {
+				// Legacy SQL rows predate the shared revision table and retain their
+				// old execution path. Legacy Python demo rows are preserved as inert
+				// catalog data as well: the current Python resolver has no execution
+				// path for them and rejects them before user code, while DROP/CREATE
+				// can replace the row explicitly. A current head is validated below.
+				continue
+			}
+			if activeRevision == 0 {
+				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored %s function %d has no active immutable revision", language, functionID)
+			}
+			if namespaceVersion == 0 {
+				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored %s function %d has an invalid namespace version", language, functionID)
+			}
+			revision, err := strconv.ParseUint(row[3], 10, 64)
+			if err != nil || revision != activeRevision {
+				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored %s function %d active revision does not exist", language, functionID)
+			}
+			revisionNamespace, err := strconv.ParseUint(row[4], 10, 64)
+			if err != nil || revisionNamespace != namespaceVersion {
+				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored %s function %d head namespace does not match its revision", language, functionID)
+			}
+			if language == udf.LanguageSQL {
+				if row[10] == "" || row[11] == "" {
+					return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored SQL function %d has incomplete active revision", functionID)
+				}
+				if !strings.EqualFold(row[14], "DEFINER") || !strings.EqualFold(row[15], "DEFINER") {
+					return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored SQL function %d has inconsistent security contract", functionID)
+				}
+				expectedFingerprint, fingerprintErr := function.SQLRoutineFingerprint(row[11], row[9], row[10])
+				if fingerprintErr != nil || row[13] == "" || row[13] != expectedFingerprint {
+					return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored SQL function %d head fingerprint does not match its active revision", functionID)
+				}
+				continue
+			}
+			if language != udf.LanguagePython {
+				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored function %d has unsupported language %q", functionID, row[12])
+			}
+			if row[5] == "" || row[6] == "" || row[7] == "" || row[8] == "" || row[9] == "" || row[10] == "" || row[11] == "" || row[13] == "" ||
+				!strings.EqualFold(row[14], "INVOKER") || !strings.EqualFold(row[15], "INVOKER") ||
+				!strings.EqualFold(row[14], row[15]) {
+				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d has incomplete head identity", functionID)
+			}
+			body, err := function.DecodePythonRoutineBody(row[11])
+			if err != nil {
+				return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: restored Python function %d head body is invalid", functionID)
+			}
+			input, output, signature, err := function.PythonSignatureMetadata(body.ArgTypes, body.ReturnType)
+			if err != nil {
+				return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: restored Python function %d head signature is invalid", functionID)
+			}
+			bodyFingerprint, fingerprintErr := function.PythonRoutineFingerprint(row[11])
+			if fingerprintErr != nil || row[13] != bodyFingerprint ||
+				row[5] != input || row[6] != output || row[7] != strconv.Itoa(udf.PythonSignatureKeySchemaVersion) || row[8] != signature || row[9] != input {
+				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d head identity does not match its active revision", functionID)
+			}
+		}
+		if len(rows) < restoredFunctionRevisionPageSize {
+			return nil
+		}
 	}
-	for rowIndex, row := range rows {
-		if len(row) != 16 {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored routine catalog head row %d has %d columns", rowIndex, len(row))
-		}
-		functionID, err := strconv.ParseUint(row[0], 10, 64)
-		if err != nil || functionID == 0 {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored routine catalog head row %d has an invalid function identity", rowIndex)
-		}
-		activeRevision, err := strconv.ParseUint(row[1], 10, 64)
-		if err != nil {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored routine function %d has an invalid active revision: %v", functionID, err)
-		}
-		namespaceVersion, err := strconv.ParseUint(row[2], 10, 64)
-		if err != nil {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored routine function %d has an invalid namespace version: %v", functionID, err)
-		}
-		language := strings.ToLower(row[12])
-		if (language == udf.LanguageSQL || language == udf.LanguagePython) && activeRevision == 0 && namespaceVersion == 0 {
-			// Legacy SQL rows predate the shared revision table and retain their
-			// old execution path. Legacy Python demo rows are preserved as inert
-			// catalog data as well: the current Python resolver has no execution
-			// path for them and rejects them before user code, while DROP/CREATE
-			// can replace the row explicitly. A current head is validated below.
-			continue
-		}
-		if activeRevision == 0 {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored %s function %d has no active immutable revision", language, functionID)
-		}
-		if namespaceVersion == 0 {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored %s function %d has an invalid namespace version", language, functionID)
-		}
-		revision, err := strconv.ParseUint(row[3], 10, 64)
-		if err != nil || revision != activeRevision {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored %s function %d active revision does not exist", language, functionID)
-		}
-		revisionNamespace, err := strconv.ParseUint(row[4], 10, 64)
-		if err != nil || revisionNamespace != namespaceVersion {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored %s function %d head namespace does not match its revision", language, functionID)
-		}
-		if language == udf.LanguageSQL {
-			if row[10] == "" || row[11] == "" {
-				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored SQL function %d has incomplete active revision", functionID)
-			}
-			if !strings.EqualFold(row[14], "DEFINER") || !strings.EqualFold(row[15], "DEFINER") {
-				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored SQL function %d has inconsistent security contract", functionID)
-			}
-			expectedFingerprint, fingerprintErr := function.SQLRoutineFingerprint(row[11], row[9], row[10])
-			if fingerprintErr != nil || row[13] == "" || row[13] != expectedFingerprint {
-				return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored SQL function %d head fingerprint does not match its active revision", functionID)
-			}
-			continue
-		}
-		if language != udf.LanguagePython {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored function %d has unsupported language %q", functionID, row[12])
-		}
-		if row[5] == "" || row[6] == "" || row[7] == "" || row[8] == "" || row[9] == "" || row[10] == "" || row[11] == "" || row[13] == "" ||
-			!strings.EqualFold(row[14], "INVOKER") || !strings.EqualFold(row[15], "INVOKER") ||
-			!strings.EqualFold(row[14], row[15]) {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d has incomplete head identity", functionID)
-		}
-		body, err := function.DecodePythonRoutineBody(row[11])
-		if err != nil {
-			return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: restored Python function %d head body is invalid", functionID)
-		}
-		input, output, signature, err := function.PythonSignatureMetadata(body.ArgTypes, body.ReturnType)
-		if err != nil {
-			return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: restored Python function %d head signature is invalid", functionID)
-		}
-		bodyFingerprint, fingerprintErr := function.PythonRoutineFingerprint(row[11])
-		if fingerprintErr != nil || row[13] != bodyFingerprint ||
-			row[5] != input || row[6] != output || row[7] != strconv.Itoa(udf.PythonSignatureKeySchemaVersion) || row[8] != signature || row[9] != input {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: restored Python function %d head identity does not match its active revision", functionID)
-		}
-	}
-	return nil
 }
 
 // restoreFunctionRevisionCatalogWithCurrentSchema restores only a revision

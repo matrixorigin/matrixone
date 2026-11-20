@@ -872,6 +872,42 @@ func TestGatewayValidatesIdentityBeforeResolvingArtifact(t *testing.T) {
 	require.Zero(t, resolver.calls, "a malformed typed plan must not probe an account-scoped artifact")
 }
 
+func TestGatewayRejectsSaturatedInvocationBeforeArtifactResolution(t *testing.T) {
+	resolver := &recordingArtifactResolver{}
+	gateway, err := NewGatewayWithArtifactStore(ClientConfig{
+		Enabled:              true,
+		AllowUnisolated:      true,
+		ServerAddress:        "127.0.0.1:1",
+		MaxActiveInvocations: 1,
+	}, resolver)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
+	release, err := gateway.reserveInvocationSlot()
+	require.NoError(t, err)
+	defer release()
+
+	in := validInvocation()
+	in.Source = ""
+	in.Length = 1
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	input, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, mp)
+	require.NoError(t, err)
+	defer input.Free(mp)
+	in.Inputs[0] = input
+	result := vector.NewFunctionResultWrapper(in.ReturnType, mp)
+	defer result.Free()
+
+	require.ErrorContains(t, gateway.Execute(t.Context(), in, result, mp), "active invocation slots are full")
+	require.Zero(t, resolver.calls)
+	release()
+	require.ErrorContains(t, gateway.Execute(t.Context(), in, result, mp), "handler and source are required")
+	require.Equal(t, 1, resolver.calls)
+	require.Empty(t, gateway.active, "artifact validation failure releases the slot")
+	entries, _ := gateway.ledger.Counts()
+	require.Zero(t, entries, "preparation never publishes a protocol identity")
+}
+
 func TestGatewayResolvesArtifactOnlyAfterHeaderValidation(t *testing.T) {
 	base := validInvocation()
 	resolver := &recordingArtifactResolver{source: base.Source}

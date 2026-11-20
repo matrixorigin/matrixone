@@ -308,6 +308,10 @@ On cancel, timeout, or transport failure, Gateway cancels/closes the exchange be
 local K or ledger ownership; the worker retains H and cleanup ownership until
 the child is terminated and reaped. STARTED work is not transparently replayed.
 
+An unexpected managed worker exit leaves the CN and ordinary SQL running.
+Python calls report a runtime or transport failure while the worker endpoint
+is unavailable. The launcher does not automatically restart the worker.
+
 Worker handler children are process-group scoped and must be terminated and
 reaped by the worker's cleanup owner before H is returned. A failed or partial
 cleanup retains bounded cleanup ownership instead of releasing H early. Linux
@@ -321,7 +325,7 @@ The current defaults are:
 
 | Resource | Owner and default | Contract |
 | --- | --- | --- |
-| K, active invocations | CN Gateway: 8 per CN | Non-blocking admission; a full budget rejects rather than queueing while holding input vectors. |
+| K, active invocations | CN Gateway: 8 per CN | Non-blocking admission for nonempty calls before artifact reads or capability negotiation. The slot is held through preparation and any exchange. |
 | W, stream window | Gateway/worker: 1 batch | No multiple in-flight batches or cumulative ACK. |
 | H, handler subprocesses | Worker: 8 total, 8/account, 4/owner | Worker constants and capability contract; admission is all-or-nothing. |
 | Batch | CN/worker: 16 MiB and 65,536 rows | Each Arrow batch is bounded before transfer. |

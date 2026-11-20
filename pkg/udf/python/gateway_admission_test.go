@@ -17,11 +17,12 @@ package python
 import (
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/protocol"
 	"github.com/stretchr/testify/require"
 )
@@ -50,17 +51,29 @@ func newAdmissionTestGateway(t *testing.T, maxActive int) *Gateway {
 	return gateway
 }
 
+func admitTestInvocation(g *Gateway, invocation *udf.Invocation) (*invocationAdmission, error) {
+	release, err := g.reserveInvocationSlot()
+	if err != nil {
+		return nil, err
+	}
+	admission, err := g.admitInvocation(invocation, release)
+	if err != nil {
+		release()
+	}
+	return admission, err
+}
+
 func TestGatewayAdmissionFencesDuplicateAndReleasesOnce(t *testing.T) {
-	gateway := newAdmissionTestGateway(t, 1)
+	gateway := newAdmissionTestGateway(t, 2)
 	in := validInvocation()
-	admission, err := gateway.admitInvocation(in)
+	admission, err := admitTestInvocation(gateway, in)
 	require.NoError(t, err)
 	registered, active, inFlight := admission.group.Counts()
 	require.Equal(t, 1, registered)
 	require.Equal(t, 1, active)
 	require.Equal(t, 0, inFlight)
 
-	_, err = gateway.admitInvocation(in)
+	_, err = admitTestInvocation(gateway, in)
 	require.ErrorIs(t, err, protocol.ErrDuplicate)
 	entries, _ := gateway.ledger.Counts()
 	require.Equal(t, 1, entries)
@@ -72,7 +85,7 @@ func TestGatewayAdmissionFencesDuplicateAndReleasesOnce(t *testing.T) {
 	require.Equal(t, 1, entries, "accepted execution keeps its tombstone")
 	require.Len(t, gateway.active, 0, "group owner releases K exactly once")
 	require.Equal(t, protocol.GroupReleased, admission.group.State())
-	_, err = gateway.admitInvocation(in)
+	_, err = admitTestInvocation(gateway, in)
 	require.ErrorIs(t, err, protocol.ErrDuplicate)
 }
 
@@ -80,7 +93,7 @@ func TestGatewayAdmissionRejectsAfterClose(t *testing.T) {
 	gateway := newAdmissionTestGateway(t, 1)
 	require.NoError(t, gateway.Close())
 
-	_, err := gateway.admitInvocation(validInvocation())
+	_, err := admitTestInvocation(gateway, validInvocation())
 	require.ErrorIs(t, err, errGatewayClosed)
 	if gateway.ledger != nil {
 		entries, _ := gateway.ledger.Counts()
@@ -92,20 +105,20 @@ func TestGatewayAdmissionRejectsAfterClose(t *testing.T) {
 func TestGatewayAdmissionRejectsAtKWithoutLeavingLedgerEntry(t *testing.T) {
 	gateway := newAdmissionTestGateway(t, 1)
 	first := validInvocation()
-	firstAdmission, err := gateway.admitInvocation(first)
+	firstAdmission, err := admitTestInvocation(gateway, first)
 	require.NoError(t, err)
 
 	second := validInvocation()
 	second.Tuple.GroupID = testGroupID("second-group")
 	second.Tuple.InvocationID = "second-invocation"
-	_, err = gateway.admitInvocation(second)
+	_, err = admitTestInvocation(gateway, second)
 	require.ErrorContains(t, err, "active invocation slots are full")
 	entries, _ := gateway.ledger.Counts()
-	require.Equal(t, 1, entries, "K rejection abandons the speculative ledger entry")
+	require.Equal(t, 1, entries, "K rejection never creates a ledger entry")
 	require.Len(t, gateway.active, 1)
 
 	require.NoError(t, firstAdmission.finish(true, protocol.ReasonFailure))
-	secondAdmission, err := gateway.admitInvocation(second)
+	secondAdmission, err := admitTestInvocation(gateway, second)
 	require.NoError(t, err)
 	require.NoError(t, secondAdmission.finish(false, protocol.ReasonPartialOpenError))
 	entries, _ = gateway.ledger.Counts()
@@ -120,7 +133,7 @@ func TestGatewayAdmissionReclaimsOnlyClosedEpochTombstones(t *testing.T) {
 	first := validInvocation()
 	first.Tuple.GroupID = testGroupID("reclaim-first")
 	first.Tuple.InvocationID = "reclaim-first-invocation"
-	firstAdmission, err := gateway.admitInvocation(first)
+	firstAdmission, err := admitTestInvocation(gateway, first)
 	require.NoError(t, err)
 	require.NoError(t, firstAdmission.finish(true, protocol.ReasonInputEOF))
 	entries, _ := gateway.ledger.Counts()
@@ -130,13 +143,13 @@ func TestGatewayAdmissionReclaimsOnlyClosedEpochTombstones(t *testing.T) {
 	replay := validInvocation()
 	replay.Tuple.GroupID = testGroupID(first.Tuple.GroupID)
 	replay.Tuple.InvocationID = "reclaim-replay"
-	_, err = gateway.admitInvocation(replay)
+	_, err = admitTestInvocation(gateway, replay)
 	require.ErrorIs(t, err, protocol.ErrDuplicate, "a closed group epoch remains fenced after its TTL")
 
 	second := validInvocation()
 	second.Tuple.GroupID = testGroupID("reclaim-second")
 	second.Tuple.InvocationID = "reclaim-second-invocation"
-	secondAdmission, err := gateway.admitInvocation(second)
+	secondAdmission, err := admitTestInvocation(gateway, second)
 	require.NoError(t, err, "an owner-closed tombstone can release bounded ledger capacity")
 	require.NoError(t, secondAdmission.finish(false, protocol.ReasonPartialOpenError))
 	entries, _ = gateway.ledger.Counts()
@@ -146,10 +159,10 @@ func TestGatewayAdmissionReclaimsOnlyClosedEpochTombstones(t *testing.T) {
 func TestGatewayAdmissionAcceptedSendIsTerminalOnTransportFailure(t *testing.T) {
 	gateway := newAdmissionTestGateway(t, 1)
 	in := validInvocation()
-	admission, err := gateway.admitInvocation(in)
+	admission, err := admitTestInvocation(gateway, in)
 	require.NoError(t, err)
 	require.NoError(t, admission.finish(true, protocol.ReasonFailure))
-	_, err = gateway.admitInvocation(in)
+	_, err = admitTestInvocation(gateway, in)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, protocol.ErrDuplicate))
 	require.Len(t, gateway.active, 0)
@@ -198,13 +211,13 @@ func TestGatewayAdmissionReservesClosedGroupCapacityWhileActive(t *testing.T) {
 	first := validInvocation()
 	first.Tuple.GroupID = testGroupID("reserved-first")
 	first.Tuple.InvocationID = "first"
-	firstAdmission, err := gateway.admitInvocation(first)
+	firstAdmission, err := admitTestInvocation(gateway, first)
 	require.NoError(t, err)
 
 	second := validInvocation()
 	second.Tuple.GroupID = testGroupID("reserved-second")
 	second.Tuple.InvocationID = "second"
-	_, err = gateway.admitInvocation(second)
+	_, err = admitTestInvocation(gateway, second)
 	require.ErrorIs(t, err, protocol.ErrLedgerFull)
 	gateway.admissionMu.Lock()
 	require.Len(t, gateway.admittedGroups, 1)
@@ -224,11 +237,11 @@ func TestGatewayAdmissionReservesClosedGroupCapacityWhileActive(t *testing.T) {
 	reentry.Tuple.GroupID = testGroupID(first.Tuple.GroupID)
 	reentry.Tuple.GroupEpoch = 2
 	reentry.Tuple.InvocationID = "reentry"
-	reentryAdmission, err := gateway.admitInvocation(reentry)
+	reentryAdmission, err := admitTestInvocation(gateway, reentry)
 	require.NoError(t, err)
 	require.NoError(t, reentryAdmission.finish(false, protocol.ReasonPartialOpenError))
 
-	_, err = gateway.admitInvocation(second)
+	_, err = admitTestInvocation(gateway, second)
 	require.ErrorIs(t, err, protocol.ErrLedgerFull)
 }
 
@@ -242,9 +255,9 @@ func TestGatewayAdmissionScopesGroupByAccount(t *testing.T) {
 	second.Tuple.GroupID = testGroupID(first.Tuple.GroupID)
 	second.Tuple.InvocationID = "account-two"
 
-	firstAdmission, err := gateway.admitInvocation(first)
+	firstAdmission, err := admitTestInvocation(gateway, first)
 	require.NoError(t, err)
-	secondAdmission, err := gateway.admitInvocation(second)
+	secondAdmission, err := admitTestInvocation(gateway, second)
 	require.NoError(t, err)
 	require.Len(t, gateway.active, 2)
 
@@ -278,7 +291,7 @@ func TestGatewayAdmissionRetiresExpiredGroups(t *testing.T) {
 			if oldestID == "" {
 				oldestID = oldID
 			}
-			admission, err := gateway.admitInvocation(in)
+			admission, err := admitTestInvocation(gateway, in)
 			require.NoError(t, err)
 			require.NoError(t, admission.finish(true, protocol.ReasonInputEOF))
 			require.LessOrEqual(t, len(gateway.closedGroups), 2)
@@ -289,7 +302,7 @@ func TestGatewayAdmissionRetiresExpiredGroups(t *testing.T) {
 			replay.Tuple.GroupID = oldID
 			replay.Tuple.GroupEpoch = epoch
 			replay.Tuple.InvocationID = "late-new-member"
-			_, err := gateway.admitInvocation(replay)
+			_, err := admitTestInvocation(gateway, replay)
 			require.ErrorIs(t, err, protocol.ErrGroupClosed)
 		}
 	}
@@ -297,13 +310,13 @@ func TestGatewayAdmissionRetiresExpiredGroups(t *testing.T) {
 	var err error
 	fresh.Tuple.GroupID, err = protocol.NewGroupIdentity(now)
 	require.NoError(t, err)
-	admitted, err := gateway.admitInvocation(fresh)
+	admitted, err := admitTestInvocation(gateway, fresh)
 	require.NoError(t, err)
 	require.NoError(t, admitted.finish(false, protocol.ReasonPartialOpenError))
 	require.NotContains(t, gateway.closedGroups, scopedGroupKey(1, oldestID))
 	replay := validInvocation()
 	replay.Tuple.GroupID, replay.Tuple.GroupEpoch = oldestID, 2
-	_, err = gateway.admitInvocation(replay)
+	_, err = admitTestInvocation(gateway, replay)
 	require.ErrorIs(t, err, protocol.ErrGroupClosed)
 	require.Empty(t, gateway.active)
 	require.Empty(t, gateway.admittedGroups)
@@ -323,18 +336,18 @@ func TestGatewayAdmissionKeepsActiveExpiredGroup(t *testing.T) {
 	var err error
 	first.Tuple.GroupID, err = protocol.NewGroupIdentity(now)
 	require.NoError(t, err)
-	a, err := gateway.admitInvocation(first)
+	a, err := admitTestInvocation(gateway, first)
 	require.NoError(t, err)
 	require.NoError(t, a.finish(true, protocol.ReasonInputEOF))
 	first.Tuple.GroupEpoch++
 	first.Tuple.InvocationID = "active-next-epoch"
-	a, err = gateway.admitInvocation(first)
+	a, err = admitTestInvocation(gateway, first)
 	require.NoError(t, err)
 	now = now.Add(protocol.GroupIdentityLifetime + time.Second)
 	second := validInvocation()
 	second.Tuple.GroupID, err = protocol.NewGroupIdentity(now)
 	require.NoError(t, err)
-	b, err := gateway.admitInvocation(second)
+	b, err := admitTestInvocation(gateway, second)
 	require.NoError(t, err)
 	require.Len(t, gateway.active, 2, "expiry must not release live K")
 	require.Contains(t, gateway.closedGroups, scopedGroupKey(1, first.Tuple.GroupID))
@@ -345,7 +358,7 @@ func TestGatewayAdmissionKeepsActiveExpiredGroup(t *testing.T) {
 	third := validInvocation()
 	third.Tuple.GroupID, err = protocol.NewGroupIdentity(now)
 	require.NoError(t, err)
-	c, err := gateway.admitInvocation(third)
+	c, err := admitTestInvocation(gateway, third)
 	require.NoError(t, err)
 	require.NotContains(t, gateway.closedGroups, scopedGroupKey(1, first.Tuple.GroupID))
 	require.NoError(t, c.finish(false, protocol.ReasonPartialOpenError))
@@ -363,7 +376,7 @@ func TestGatewayAdmissionRejectsInvalidGroupDeadline(t *testing.T) {
 	for _, id := range []string{"legacy-group", expired, farFuture} {
 		in := validInvocation()
 		in.Tuple.GroupID = id
-		_, err := gateway.admitInvocation(in)
+		_, err := admitTestInvocation(gateway, in)
 		require.Error(t, err)
 		require.Empty(t, gateway.admittedGroups)
 		require.Empty(t, gateway.active)
@@ -373,7 +386,7 @@ func TestGatewayAdmissionRejectsInvalidGroupDeadline(t *testing.T) {
 	require.NoError(t, err)
 	in := validInvocation()
 	in.Tuple.GroupID = boundary
-	a, err := gateway.admitInvocation(in)
+	a, err := admitTestInvocation(gateway, in)
 	require.NoError(t, err, "exact maximum future deadline remains admissible")
 	require.NoError(t, a.finish(false, protocol.ReasonPartialOpenError))
 }

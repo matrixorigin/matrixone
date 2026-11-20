@@ -3088,11 +3088,9 @@ function run_tests(){
     fi
     mark_ut_stage "routing" "validate shard and package partition" finish 0
 
-    # The Python UDF package belongs to the light stage. Split shards execute
-    # only their selected stage groups; preparing a repository-relative
-    # requirements file in a synthetic heavy-plan harness is both unnecessary
-    # and invalid because that harness intentionally contains no pkg tree.
-    if should_run_ut_stage light; then
+    # The light stage runs the Python adapter tests. The embedded stage runs
+    # pkg/tests/upgrade, including worker-backed SQL tests.
+    if should_run_ut_stage light || should_run_ut_stage embedded; then
         mark_ut_stage "prepare" "prepare Python UDF dependencies" start
         prepare_python_udf_dependencies
         local python_udf_dependency_status=$?

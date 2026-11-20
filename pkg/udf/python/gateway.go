@@ -660,18 +660,28 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 		return udferr.Newf("python udf: nil invocation, result, or memory pool")
 	}
 	execution := *invocation
-	if g.artifactResolver != nil {
-		if execution.Source != "" {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed Python invocation contains source; use its immutable artifact digest")
-		}
-		// Validate the identity, semantic contract, descriptors, and resource
-		// shape before resolving an account-scoped artifact.  Resolution is a
-		// read with tenant-sensitive error/latency behavior; it must not become
-		// the first operation performed on an untrusted or stale plan.  The
-		// source-dependent digest check is repeated after the resolver returns.
-		if err := validateInvocationHeader(&execution); err != nil {
+	// Validate the source-independent contract before any tenant-sensitive
+	// lookup. Reserve K before blocking preparation for nonempty invocations.
+	if g.artifactResolver != nil && execution.Source != "" {
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed Python invocation contains source; use its immutable artifact digest")
+	}
+	if err := validateInvocationHeader(&execution); err != nil {
+		return err
+	}
+	var releaseSlot func()
+	var admitted bool
+	if execution.Length != 0 {
+		releaseSlot, err = g.reserveInvocationSlot()
+		if err != nil {
 			return err
 		}
+		defer func() {
+			if !admitted {
+				releaseSlot()
+			}
+		}()
+	}
+	if g.artifactResolver != nil {
 		execution.Source, err = g.artifactResolver.Resolve(
 			streamCtx,
 			execution.FunctionRef.AccountID,
@@ -774,10 +784,11 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	if err != nil {
 		return err
 	}
-	admission, err := g.admitInvocation(&execution)
+	admission, err := g.admitInvocation(&execution, releaseSlot)
 	if err != nil {
 		return err
 	}
+	admitted = true
 	openAttempted := false
 	defer func() {
 		reason := admissionReason(streamCtx, openAttempted, err)
@@ -913,17 +924,35 @@ type invocationAdmission struct {
 	memberOpen bool
 }
 
-func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmission, error) {
+// reserveInvocationSlot claims an existing K slot without creating protocol
+// state. The caller releases it on preparation failure or transfers it to the
+// execution group after checking the negotiated worker lease.
+func (g *Gateway) reserveInvocationSlot() (func(), error) {
+	if err := g.ensureAdmissionState(); err != nil {
+		return nil, err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return nil, errGatewayClosed
+	}
+	active := g.active
+	select {
+	case active <- struct{}{}:
+		var once sync.Once
+		return func() { once.Do(func() { <-active }) }, nil
+	default:
+		return nil, udferr.Newf("RESOURCE_EXHAUSTED: Python UDF active invocation slots are full")
+	}
+}
+
+func (g *Gateway) admitInvocation(invocation *udf.Invocation, releaseSlot func()) (*invocationAdmission, error) {
 	if invocation == nil {
 		return nil, udferr.Newf("python udf: cannot admit a nil invocation")
 	}
 	if err := invocation.Tuple.Validate(); err != nil {
 		return nil, err
 	}
-	if err := g.ensureAdmissionState(); err != nil {
-		return nil, err
-	}
-
 	key, err := invocationLedgerKey(invocation.Tuple)
 	if err != nil {
 		return nil, err
@@ -933,7 +962,7 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 	// order so a concurrent shutdown cannot return while this invocation is
 	// still being admitted. Keep g.mu held until the complete claim is either
 	// published or rolled back; otherwise Close could return in the gap between
-	// the group claim and the ledger/K reservation becoming owned.
+	// the group claim and the ledger reservation becoming owned.
 	g.mu.Lock()
 	if g.closed {
 		g.mu.Unlock()
@@ -942,14 +971,13 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 	g.admissionMu.Lock()
 	ledger := g.ledger
 	ttl := g.ledgerTTL
-	active := g.active
 	if err := g.claimGroupLocked(groupKey, invocation.Tuple.GroupEpoch); err != nil {
 		g.admissionMu.Unlock()
 		g.mu.Unlock()
 		return nil, err
 	}
 	g.admissionMu.Unlock()
-	if ledger == nil || active == nil {
+	if ledger == nil {
 		g.releaseGroupClaim(groupKey, invocation.Tuple.GroupEpoch)
 		g.mu.Unlock()
 		return nil, udferr.Newf("python udf: admission state is not initialized")
@@ -973,30 +1001,13 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 		g.mu.Unlock()
 		return nil, err
 	}
-	select {
-	case active <- struct{}{}:
-		// The group release callback returns this slot after the member is
-		// terminal. No queue is created, so caller vectors are never held while
-		// waiting for K.
-	default:
-		_ = ledger.Abandon(key)
-		credit.ReleaseUnused()
-		g.releaseGroupClaim(groupKey, invocation.Tuple.GroupEpoch)
-		g.mu.Unlock()
-		return nil, udferr.Newf("RESOURCE_EXHAUSTED: Python UDF active invocation slots are full")
-	}
-
-	var releaseOnce sync.Once
 	release := func() error {
-		releaseOnce.Do(func() {
-			<-active
-		})
+		releaseSlot()
 		credit.ReleaseUnused()
 		return nil
 	}
 	group, err := protocol.NewExecutionGroup(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch, 1, release)
 	if err != nil {
-		<-active
 		_ = ledger.Abandon(key)
 		credit.ReleaseUnused()
 		g.releaseGroupClaim(groupKey, invocation.Tuple.GroupEpoch)

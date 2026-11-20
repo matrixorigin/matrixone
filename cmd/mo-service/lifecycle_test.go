@@ -18,12 +18,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,6 +55,38 @@ func TestServiceSupervisorStopsRolesInDependencyOrder(t *testing.T) {
 
 	require.NoError(t, s.shutdown(context.Background()))
 	require.Equal(t, roles, stopped)
+}
+
+func TestManagedPythonWorkerExitDoesNotFailServiceSupervisor(t *testing.T) {
+	for _, exit := range []string{"0", "17"} {
+		t.Run(exit, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "worker.py"), []byte("exit "+exit+"\n"), 0600))
+			lifecycle := newServiceSupervisor()
+			tasks := stopper.NewStopper("worker-exit-test")
+			t.Cleanup(tasks.Stop)
+			require.NoError(t, startManagedPythonWorker(python.Config{
+				Address: "127.0.0.1:0", Path: dir, Python: "/bin/sh",
+			}, tasks, lifecycle))
+
+			done := make(chan struct{})
+			go func() {
+				lifecycle.roles[serviceRolePython].wg.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Python worker role did not finish")
+			}
+			select {
+			case err := <-lifecycle.failureC():
+				t.Fatalf("worker exit delivered a database service failure: %v", err)
+			default:
+			}
+			require.NoError(t, lifecycle.stopRole(t.Context(), serviceRolePython))
+		})
+	}
 }
 
 func TestServiceSupervisorKeepsPythonProviderUntilCNDrains(t *testing.T) {

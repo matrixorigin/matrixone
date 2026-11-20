@@ -1229,6 +1229,31 @@ func TestValidateRestoredSharedRevisionCatalogAcceptsSQLAndRejectsTampering(t *t
 	)
 }
 
+// Match the bounded SQL issued through the background executor.
+const restoredHeadPageFixtureQuery = `with head_page as (
+		select function_id, active_revision, namespace_version,
+			canonical_input_descriptor, return_descriptor, signature_key_schema_version,
+			signature_fingerprint, language, security_type
+		from mo_catalog.mo_user_defined_function
+		where lower(language) in ("python", "sql") order by function_id limit 128)
+		select cast(f.function_id as char), cast(f.active_revision as char), cast(f.namespace_version as char),
+		cast(coalesce(r.revision, 0) as char), cast(coalesce(r.namespace_version, 0) as char),
+		f.canonical_input_descriptor, f.return_descriptor,
+		cast(f.signature_key_schema_version as char), f.signature_fingerprint,
+		coalesce(r.arg_types, ''), coalesce(r.rettype, ''), coalesce(r.body, ''),
+		lower(f.language), coalesce(r.definition_fingerprint, ''),
+		coalesce(r.security_type, ''), coalesce(f.security_type, '')
+		from head_page f
+		left join (
+			select function_id, revision, namespace_version, arg_types, rettype,
+				body, definition_fingerprint, security_type
+			from mo_catalog.mo_function_revisions
+			where (function_id, revision) in (select function_id, active_revision from head_page)
+		) r
+			on r.function_id = f.function_id and r.revision = f.active_revision
+			and r.namespace_version = f.namespace_version
+		order by f.function_id;`
+
 func TestValidateRestoredPythonCatalogHeadsBindsIdentityToActiveRevision(t *testing.T) {
 	body := pythonCatalogTestBody(t, types.T_int64)
 	decoded, err := function.DecodePythonRoutineBody(body)
@@ -1237,19 +1262,7 @@ func TestValidateRestoredPythonCatalogHeadsBindsIdentityToActiveRevision(t *test
 	require.NoError(t, err)
 	fingerprint, err := function.PythonRoutineFingerprint(body)
 	require.NoError(t, err)
-	query := `select cast(f.function_id as char), cast(f.active_revision as char), cast(f.namespace_version as char),
-		cast(coalesce(r.revision, 0) as char), cast(coalesce(r.namespace_version, 0) as char),
-		f.canonical_input_descriptor, f.return_descriptor,
-		cast(f.signature_key_schema_version as char), f.signature_fingerprint,
-		coalesce(r.arg_types, ''), coalesce(r.rettype, ''), coalesce(r.body, ''),
-		lower(f.language), coalesce(r.definition_fingerprint, ''),
-		coalesce(r.security_type, ''), coalesce(f.security_type, '')
-		from mo_catalog.mo_user_defined_function f
-		left join mo_catalog.mo_function_revisions r
-			on r.function_id = f.function_id and r.revision = f.active_revision
-			and r.namespace_version = f.namespace_version
-		where lower(f.language) in ("python", "sql")
-		order by f.function_id;`
+	query := restoredHeadPageFixtureQuery
 	newResult := func() *MysqlResultSet {
 		result := &MysqlResultSet{}
 		for index := 0; index < 16; index++ {
@@ -1272,6 +1285,28 @@ func TestValidateRestoredPythonCatalogHeadsBindsIdentityToActiveRevision(t *test
 	b.sql2result[query] = newResult()
 	require.NoError(t, validateRestoredFunctionCatalogHeads(context.Background(), b, context.Background()))
 
+	// The artifact digest does not bound the number of active heads that
+	// reference it. Exercise another page using the same valid body.
+	firstPage := newResult()
+	for id := 45; id < 44+restoredFunctionRevisionPageSize; id++ {
+		row := append([]interface{}(nil), firstPage.Data[0]...)
+		row[0] = strconv.Itoa(id)
+		firstPage.AddRow(row)
+	}
+	nextQuery := strings.Replace(query, " order by function_id limit 128)", " and function_id > 171 order by function_id limit 128)", 1)
+	later := newResult()
+	later.Data[0][0] = "172"
+	b.init()
+	b.executedSQLs = nil
+	b.sql2result[query], b.sql2result[nextQuery] = firstPage, later
+	require.NoError(t, validateRestoredFunctionCatalogHeads(context.Background(), b, context.Background()))
+	require.Equal(t, []string{query, nextQuery}, b.executedSQLs)
+
+	later.Data[0][8] = "stale-signature"
+	require.ErrorContains(t, validateRestoredFunctionCatalogHeads(context.Background(), b, context.Background()), "head identity does not match")
+	later.Data[0][0] = "171"
+	require.ErrorContains(t, validateRestoredFunctionCatalogHeads(context.Background(), b, context.Background()), "non-increasing function identity")
+
 	mutated := newResult()
 	mutated.Data[0][1] = "1"
 	b.init()
@@ -1292,19 +1327,7 @@ func TestValidateRestoredPythonCatalogHeadsBindsIdentityToActiveRevision(t *test
 }
 
 func TestValidateRestoredLegacyPythonHeadIsPreservedButInert(t *testing.T) {
-	query := `select cast(f.function_id as char), cast(f.active_revision as char), cast(f.namespace_version as char),
-		cast(coalesce(r.revision, 0) as char), cast(coalesce(r.namespace_version, 0) as char),
-		f.canonical_input_descriptor, f.return_descriptor,
-		cast(f.signature_key_schema_version as char), f.signature_fingerprint,
-		coalesce(r.arg_types, ''), coalesce(r.rettype, ''), coalesce(r.body, ''),
-		lower(f.language), coalesce(r.definition_fingerprint, ''),
-		coalesce(r.security_type, ''), coalesce(f.security_type, '')
-		from mo_catalog.mo_user_defined_function f
-		left join mo_catalog.mo_function_revisions r
-			on r.function_id = f.function_id and r.revision = f.active_revision
-			and r.namespace_version = f.namespace_version
-		where lower(f.language) in ("python", "sql")
-		order by f.function_id;`
+	query := restoredHeadPageFixtureQuery
 	legacy := func(active, namespace string) *MysqlResultSet {
 		result := &MysqlResultSet{}
 		for index := 0; index < 16; index++ {
@@ -1341,19 +1364,7 @@ func TestValidateRestoredSharedCatalogHeadsChecksSQLRevision(t *testing.T) {
 	retType := "bigint"
 	fingerprint, err := function.SQLRoutineFingerprint(body, argTypes, retType)
 	require.NoError(t, err)
-	query := `select cast(f.function_id as char), cast(f.active_revision as char), cast(f.namespace_version as char),
-		cast(coalesce(r.revision, 0) as char), cast(coalesce(r.namespace_version, 0) as char),
-		f.canonical_input_descriptor, f.return_descriptor,
-		cast(f.signature_key_schema_version as char), f.signature_fingerprint,
-		coalesce(r.arg_types, ''), coalesce(r.rettype, ''), coalesce(r.body, ''),
-		lower(f.language), coalesce(r.definition_fingerprint, ''),
-		coalesce(r.security_type, ''), coalesce(f.security_type, '')
-		from mo_catalog.mo_user_defined_function f
-		left join mo_catalog.mo_function_revisions r
-			on r.function_id = f.function_id and r.revision = f.active_revision
-			and r.namespace_version = f.namespace_version
-		where lower(f.language) in ("python", "sql")
-		order by f.function_id;`
+	query := restoredHeadPageFixtureQuery
 	newResult := func(body, digest string) *MysqlResultSet {
 		result := &MysqlResultSet{}
 		for index := 0; index < 16; index++ {
