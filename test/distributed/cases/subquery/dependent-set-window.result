@@ -90,4 +90,13 @@ union select 2 from outer_keys b where b.id = 2 and b.id = o.id
 ) order by o.id;
 ➤ id[4,32,0]  𝄀
 2
+create table medium_keys (k mediumint, i int);
+insert into medium_keys values (1, 2), (3, 4);
+select o.k, 1 in (
+select o.k from medium_keys a where a.k = o.k
+union select b.i from medium_keys b
+) as v from medium_keys o order by o.k;
+➤ k[4,9,0]  ¦  v[-6,8,0]  𝄀
+1  ¦  1  𝄀
+3  ¦  0
 drop database dependent_set_window;

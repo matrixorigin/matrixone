@@ -5160,17 +5160,22 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					(argsType[idx].IsMediumInt() || targetArgType.IsMediumInt()) &&
 					argsType[idx].Scale == targetArgType.Scale &&
 					argsType[idx].Width != targetArgType.Width
+				node := builder.qry.Nodes[tmpID]
 				if !needsCast && sameMediumIntStorageWidth {
-					// MEDIUMINT and INT share the same physical int32/uint32
-					// vector. Widen the branch metadata without adding a per-row
-					// conversion or mutating an expression shared by another node.
-					projected := builder.qry.Nodes[tmpID].ProjectList[columnIdx]
-					widened := *projected
-					widened.Typ.Width = targetArgType.Width
-					builder.qry.Nodes[tmpID].ProjectList[columnIdx] = &widened
+					projected := node.ProjectList[columnIdx]
+					if projected.GetCorr() != nil {
+						// Keep the capture's declared type on the leaf. Only the
+						// branch result has the set operation's common width.
+						needsCast = true
+					} else {
+						// MEDIUMINT and INT share a physical vector type. Widen
+						// the branch metadata without a per-row conversion.
+						widened := *projected
+						widened.Typ.Width = targetArgType.Width
+						node.ProjectList[columnIdx] = &widened
+					}
 				}
 				if needsCast {
-					node := builder.qry.Nodes[tmpID]
 					source := node.ProjectList[columnIdx]
 					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
 						node.ProjectList[columnIdx].Typ = targetType
