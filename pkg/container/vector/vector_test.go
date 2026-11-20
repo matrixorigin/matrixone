@@ -4224,7 +4224,7 @@ func TestRowToString(t *testing.T) {
 		// Test 4: Const vector with null
 		v4, err := NewConstFixed(types.T_datetime.ToType(), 1*scale, 1, mp)
 		require.NoError(t, err)
-		nulls.Add(&v4.nsp, 0)
+		v4.nsp.Add(0)
 		require.Equal(t, "null", v4.RowToString(0))
 		v4.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -4272,7 +4272,7 @@ func TestRowToString(t *testing.T) {
 		// Ensure it's not const null (has data)
 		require.False(t, v9.IsConstNull())
 		// Ensure nsp doesn't contain 0 (line 2745 check should be false)
-		require.False(t, nulls.Contains(&v9.nsp, 0))
+		require.False(t, v9.nsp.Contains(0))
 		result9 := v9.RowToString(0)
 		require.Contains(t, result9, "0001-01-04")
 		v9.Free(mp)
@@ -6354,7 +6354,7 @@ func TestUnionAppendMetadataTransitions(t *testing.T) {
 					[]byte("value"), nil, []byte(strings.Repeat("long", 16)),
 				}, []bool{false, true, false}, mp))
 				require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
-				nulls.Add(source.GetGrouping(), 1)
+				source.GetGrouping().Add(1)
 				changed, err := source.Dup(mp)
 				require.NoError(t, err)
 				switch metadata {
@@ -7469,7 +7469,7 @@ func TestCloneWindowToConstNullBorrowedData(t *testing.T) {
 }
 
 func BenchmarkConstSetSelection(b *testing.B) {
-	for _, shape := range []string{"flat", "flat_null", "constant", "constant_null", "borrowed_null", "text", "zero"} {
+	for _, shape := range []string{"flat", "flat_null", "constant", "constant_null", "text", "zero"} {
 		b.Run(shape, func(b *testing.B) {
 			mp := mpool.MustNewZero()
 			b.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(b, mp.CurrNB()) })
@@ -7495,13 +7495,6 @@ func BenchmarkConstSetSelection(b *testing.B) {
 			b.Cleanup(func() { source.Free(mp) })
 			if shape == "flat_null" {
 				source.GetNulls().Add(1)
-			}
-			if shape == "borrowed_null" {
-				validity := []byte{1}
-				lease, err := NewRefCountedBufferLease(validity, 1, nil)
-				require.NoError(b, err)
-				b.Cleanup(lease.Release)
-				require.NoError(b, source.GetNulls().InstallBorrowedValidity(validity, 0, 2, 1, lease))
 			}
 			destination := NewConstNull(typ, 0, mp)
 			b.Cleanup(func() { destination.Free(mp) })

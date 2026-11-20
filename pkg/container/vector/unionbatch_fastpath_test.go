@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
@@ -186,7 +185,7 @@ func TestUnionBatchVarlenContiguousRangeFastPath(t *testing.T) {
 		}
 		require.NoError(t, AppendArray(src, value, isNull, mp))
 	}
-	nulls.Add(&src.gsp, uint64(start+3), uint64(start+count-1))
+	src.gsp.Add(uint64(start+3), uint64(start+count-1))
 
 	dst := NewVec(types.T_array_float32.ToType())
 	require.NoError(t, AppendArray(dst, []float32{1, 2, 3}, false, mp))
@@ -362,7 +361,7 @@ func newForcedGrowthAliasVector(
 		selectedRows := len(values) - 1
 		if len(vec.area)+payloadBytes > cap(vec.area) &&
 			len(vec.data)+selectedRows*vec.typ.TypeSize() > cap(vec.data) {
-			nulls.Add(&vec.gsp, 2)
+			vec.gsp.Add(2)
 			return vec, values, isNull
 		}
 	}
@@ -653,7 +652,7 @@ func TestUnionBatchNullFastPath(t *testing.T) {
 			require.NoError(t, AppendBytes(w, b, null, mp))
 		}
 		// set a few grouping bits (independent of nulls)
-		nulls.Add(&w.gsp, 3, 7, 100, 299)
+		w.gsp.Add(3, 7, 100, 299)
 		return w
 	}
 	w := build()
@@ -718,8 +717,8 @@ func TestUnionBatchFastPathStaleBitmapBits(t *testing.T) {
 		}
 		// in-range bits (must propagate) plus stale bits >= the shrunk length
 		// (must be ignored, exactly as the per-row path ignores them).
-		nulls.Add(&w.nsp, 3, 15, 18)
-		nulls.Add(&w.gsp, 5, 12, 17)
+		w.nsp.Add(3, 15, 18)
+		w.gsp.Add(5, 12, 17)
 		w.SetLength(10) // length 10; bits 12,15,17,18 are now stale (>= length)
 		return w
 	}
@@ -782,7 +781,7 @@ func TestUnionPregrowSkipsNullRows(t *testing.T) {
 	const staleLen = 1 << 20 // 1 MiB of dead payload per null row
 	for i := 1; i < n; i += 2 {
 		wCol[i].SetOffsetLen(0, staleLen)
-		nulls.Add(&w.nsp, uint64(i))
+		w.nsp.Add(uint64(i))
 	}
 
 	// Union all rows (sels-gather -> the pre-grow path). Pre-fix this reserves
@@ -839,13 +838,13 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 				require.NoError(t, AppendBytes(src, value, i == 6, mp))
 			}
 			if kind == "null-dead-payload" {
-				nulls.Add(&src.nsp, 0)
+				src.nsp.Add(0)
 			}
 			if kind == "reordered" {
 				col := MustFixedColNoTypeCheck[types.Varlena](src)
 				col[2], col[4] = col[4], col[2]
 			}
-			nulls.Add(&src.gsp, 3)
+			src.gsp.Add(3)
 			require.NoError(t, src.SetStringSource(types.StringSourceLiteral))
 			input := src
 			offset, count := 0, 8
