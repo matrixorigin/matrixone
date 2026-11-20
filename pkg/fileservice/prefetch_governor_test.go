@@ -215,9 +215,9 @@ func TestPrefetchBufferCountedUntilLastRelease(t *testing.T) {
 	require.Zero(t, bytes())
 }
 
-// A cold read whose entries make more runs than the buffers may hold reads the runs past
-// the bound as FilePrefetchObjects: the buffers never exceed the bound, each run is read
-// once, and the read gets its bytes.
+// A cold read whose entries make more runs than the buffers may hold reads the runs that
+// fit, the others waiting, in order, for buffers; the buffers never exceed the bound, each
+// run is read once, and the read gets its bytes.
 func TestPrefetchMemoryBoundForColdMultiRunRead(t *testing.T) {
 	const (
 		unit   = 64 << 10
@@ -237,13 +237,14 @@ func TestPrefetchMemoryBoundForColdMultiRunRead(t *testing.T) {
 	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: entries}
 	done := make(chan error, 1)
 	go func() { done <- fs.Read(context.Background(), vec) }()
-	require.Eventually(t, func() bool { return storage.opens.Load() == runs }, 10*time.Second, time.Millisecond,
-		"every run is read at once")
+	require.Eventually(t, func() bool { return storage.opens.Load() == budget/unit }, 10*time.Second, time.Millisecond,
+		"the runs that fit are read")
+	require.Never(t, func() bool { return storage.opens.Load() > budget/unit }, 100*time.Millisecond, time.Millisecond,
+		"the others wait for buffers")
 	f.mu.Lock()
 	inMemory := f.bytes
 	f.mu.Unlock()
 	require.LessOrEqual(t, inMemory, int64(budget))
-	require.NotZero(t, inMemory)
 
 	close(storage.release)
 	select {
@@ -314,4 +315,74 @@ func TestColumnPrefetchMemoryBoundForColdRanges(t *testing.T) {
 	}
 	require.Equal(t, int64(ranges), opens.Load(), "no range is read twice")
 	require.Equal(t, int64(1), started.Load())
+}
+
+// Concurrent cold reads, each of more runs than the buffers may hold, all return with
+// their bytes: a read holds only runs under way while its later runs wait for buffers, so
+// no read waits for buffers another read holds while it waits. The buffers never exceed
+// the bound, and none stays counted.
+func TestPrefetchConcurrentMultiRunReadsUnderTightBudget(t *testing.T) {
+	const (
+		unit    = 64 << 10
+		runs    = 6
+		readers = 16
+		budget  = 2 * unit
+	)
+	fs, _, data := newPrefetchRangeFS(t, unit, 2*runs*unit*2)
+	fs.diskCache.prefetchFlightBytes = budget
+	f := &fs.diskCache.prefetchObjects
+	var peak atomic.Int64
+	stop := make(chan struct{})
+	sampled := make(chan struct{})
+	go func() {
+		defer close(sampled)
+		for {
+			f.mu.Lock()
+			if f.bytes > peak.Load() {
+				peak.Store(f.bytes)
+			}
+			f.mu.Unlock()
+			select {
+			case <-stop:
+				return
+			default:
+				runtime.Gosched()
+			}
+		}
+	}()
+	errs := make(chan error, readers)
+	for r := range readers {
+		go func() {
+			entries := make([]IOEntry, runs)
+			for i := range entries {
+				// Readers overlap: each reads every other unit, shifted by r%2.
+				entries[i] = IOEntry{Offset: int64(2*i+r%2)*unit + int64(r), Size: 10}
+			}
+			vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: entries}
+			err := fs.Read(context.Background(), vec)
+			for i := range vec.Entries {
+				off := vec.Entries[i].Offset
+				if err == nil && !bytes.Equal(data[off:off+10], vec.Entries[i].Data) {
+					err = errors.New("wrong bytes")
+				}
+			}
+			vec.Release()
+			errs <- err
+		}()
+	}
+	for range readers {
+		select {
+		case err := <-errs:
+			require.NoError(t, err)
+		case <-time.After(diskCacheLifecycleTestTimeout):
+			t.Fatal("a read did not return")
+		}
+	}
+	f.reads.Wait()
+	close(stop)
+	<-sampled
+	require.LessOrEqual(t, peak.Load(), int64(budget))
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	require.Zero(t, f.bytes)
 }

@@ -105,6 +105,9 @@ func (p *filePrefetchObject) admit() (prefetchObject, error) {
 	key := d.rangeObjectKey(p.filePath)
 	f := &d.prefetchObjects
 	for {
+		if err := p.ctx.Err(); err != nil {
+			return nil, err
+		}
 		f.mu.Lock()
 		closing, ok := f.openLocked()
 		if !ok {

@@ -147,6 +147,8 @@ const (
 	blockMissing blockState = iota
 	blockCached
 	blockInFlight
+	// blockJoined is a block another prefetch object was reading when the read began.
+	blockJoined
 )
 
 // prefetchBlock is a block of a prefetch window and where its bytes come from.
@@ -156,8 +158,8 @@ type prefetchBlock struct {
 	wanted     bool  // the block is in a unit the read takes bytes of
 	state      blockState
 	cached     cachedRange
-	// object is the prefetch object holding the block's bytes.
-	object prefetchObject
+	// run is the run of the read reading the block's bytes.
+	run *readRun
 }
 
 // prefetchRead returns a buffer of the bytes [lo, hi) of filePath that holds the bytes
@@ -223,202 +225,117 @@ func (d *DiskCache) prefetchRead(
 		blocks = append(blocks, b)
 	}
 
-	// Find the blocks being read and register the runs to read under one lock, so
-	// concurrent reads never read a block twice.
-	type run struct {
-		first, last int // block indexes
-		flight      *memoryPrefetchObject
-	}
-	var runs []run
-	// The flights the bytes are copied from keep their buffers until the copy ends.
-	var held []prefetchObject
-	budget := d.flightBytes()
-	defer func() {
-		for _, fl := range held {
-			fl.release()
-		}
-	}()
+	// Find the blocks being read under one lock, and make a prefetch object of each run of
+	// the others: a MemoryPrefetchObject of a run of at most disk-prefetch-memory-max
+	// bytes, otherwise the parts of the run, each a FilePrefetchObject the reads of its
+	// bytes share. The read holds no prefetch object while it waits for one of its own to
+	// be admitted: it holds the one reading a block it joined only to copy the block.
 	f := &d.prefetchObjects
 	f.mu.Lock()
-	var (
-		closing context.Context
-		now     time.Time
-		pending [][2]int
-		files   [][2]int
-	)
-	for {
-		var ok bool
-		if closing, ok = f.openLocked(); !ok {
-			f.mu.Unlock()
-			return nil, 0, false, nil
-		}
-		now = time.Now()
-		for i := range blocks {
-			b := &blocks[i]
-			if b.state != blockMissing {
-				continue
-			}
-			if o := f.fastestLocked(diskPath, b.start, b.end, now, d.downloadMaxExtraWait, true); o != nil {
-				b.state, b.object = blockInFlight, o
-				o.hold()
-				held = append(held, o)
-			}
-		}
-		pending, files = pending[:0], files[:0]
-		for i := 0; i < len(blocks); {
-			if blocks[i].state != blockMissing || !blocks[i].wanted {
-				i++
-				continue
-			}
-			j, first := i, -1
-			for j < len(blocks) && blocks[j].state == blockMissing && blocks[j].wanted {
-				if first < 0 && blocks[j].needed {
-					first = j
-				}
-				j++
-			}
-			if first >= 0 {
-				pending = append(pending, [2]int{first, j - 1})
-				if first > i {
-					pending = append(pending, [2]int{i, first - 1})
-				}
-			}
-			i = j
-		}
-		// A run past the bytes of a MemoryPrefetchObject is a FilePrefetchObject.
-		var need int64
-		memory := pending[:0]
-		for _, p := range pending {
-			if size := int64(p[1]-p[0]+1) * block; size > d.memoryPrefetchMax {
-				files = append(files, p)
-			} else {
-				memory = append(memory, p)
-				need += flightBufSize(size)
-			}
-		}
-		pending = memory
-		if need == 0 || f.bytes+need <= budget {
-			break
-		}
-		if f.bytes == 0 {
-			// With no run under way, the runs that fit in the budget are read in memory
-			// and the others as FilePrefetchObjects.
-			var admitted int64
-			memory := pending[:0]
-			for _, p := range pending {
-				size := flightBufSize(int64(p[1]-p[0]+1) * block)
-				if len(memory) > 0 && admitted+size > budget {
-					files = append(files, p)
-					continue
-				}
-				admitted += size
-				memory = append(memory, p)
-			}
-			pending = memory
-			break
-		}
-		// Past the bytes of the runs under way, the read waits for runs to end, then
-		// looks again at what is cached or being read.
-		released := held
-		held = nil
-		for i := range blocks {
-			if blocks[i].state == blockInFlight {
-				blocks[i].state, blocks[i].object = blockMissing, nil
-			}
-		}
-		if f.freed == nil {
-			f.freed = make(chan struct{})
-		}
-		freed := f.freed
+	if _, ok := f.openLocked(); !ok {
 		f.mu.Unlock()
-		for _, fl := range released {
-			fl.release()
-		}
-		select {
-		case <-freed:
-		case <-ctx.Done():
-			return nil, 0, false, nil
-		}
-		budget = d.flightBytes()
-		f.mu.Lock()
+		return nil, 0, false, nil
 	}
+	now := time.Now()
+	for i := range blocks {
+		b := &blocks[i]
+		if b.state != blockMissing {
+			continue
+		}
+		if f.fastestLocked(diskPath, b.start, b.end, now, d.downloadMaxExtraWait, true) != nil {
+			b.state = blockJoined
+		}
+	}
+	f.mu.Unlock()
+	var pending [][2]int
+	for i := 0; i < len(blocks); {
+		if blocks[i].state != blockMissing || !blocks[i].wanted {
+			i++
+			continue
+		}
+		j, first := i, -1
+		for j < len(blocks) && blocks[j].state == blockMissing && blocks[j].wanted {
+			if first < 0 && blocks[j].needed {
+				first = j
+			}
+			j++
+		}
+		if first >= 0 {
+			pending = append(pending, [2]int{first, j - 1})
+			if first > i {
+				pending = append(pending, [2]int{i, first - 1})
+			}
+		}
+		i = j
+	}
+	var runs []*readRun
+	memoryRuns := 0
 	for _, p := range pending {
 		start, end := windowStart+int64(p[0])*block, windowStart+int64(p[1]+1)*block
-		fl := d.newFlight(filePath, start, end, policy, open, flightNeeds{caching: true})
-		fl.registerLocked(ctx, closing, now)
-		fl.hold()
-		held = append(held, fl)
-		runs = append(runs, run{first: p[0], last: p[1], flight: fl})
-	}
-	// A run past the bytes of a MemoryPrefetchObject joins the prefetch object holding it,
-	// or is read as parts, each a FilePrefetchObject the reads of its bytes share; one that
-	// finds another holding its bytes once it holds a connection joins it, so concurrent
-	// reads download a part once.
-	var started []*filePrefetchObject
-	for _, p := range files {
-		start, end := windowStart+int64(p[0])*block, windowStart+int64(p[1]+1)*block
+		if end-start <= d.memoryPrefetchMax {
+			fl := d.newFlight(filePath, start, end, policy, open, flightNeeds{caching: true})
+			runs = append(runs, &readRun{first: p[0], last: p[1], object: fl, admitted: make(chan struct{})})
+			memoryRuns++
+			continue
+		}
 		if size, ok := d.prefetched.size(diskPath); ok && start < size && size < end {
 			// A run downloads to the object's end, not past it.
 			end = size
-		}
-		if o := f.holdingLocked(diskPath, start, end, now, d.downloadMaxExtraWait); o != nil {
-			o.hold()
-			held = append(held, o)
-			for j := p[0]; j <= p[1]; j++ {
-				if blocks[j].needed {
-					blocks[j].state, blocks[j].object = blockInFlight, o
-				}
-			}
-			continue
 		}
 		for _, part := range d.rangeParts(start, end, block) {
 			o := d.newFileObject(context.WithoutCancel(ctx), filePath, part[0], part[1], open, flightNeeds{})
 			o.readStarted = true
 			o.hold()
-			held = append(held, o)
-			started = append(started, o)
+			r := &readRun{first: -1, object: o, admitted: make(chan struct{})}
 			for j := p[0]; j <= p[1]; j++ {
-				if b := &blocks[j]; b.needed && part[0] <= b.start && b.start < part[1] {
-					b.state, b.object = blockInFlight, o
+				if b := &blocks[j]; part[0] <= b.start && b.start < part[1] {
+					if r.first < 0 {
+						r.first = j
+					}
+					r.last = j
 				}
 			}
+			if r.first < 0 {
+				o.release()
+				continue
+			}
+			runs = append(runs, r)
 		}
 	}
-	f.mu.Unlock()
 
-	// Read the runs. A run serves its bytes to waiting reads as they arrive and stays
-	// registered until its range file is cached, so no read reads it again. A run
-	// outlives the read that starts it, which may return before its last bytes arrive.
-	for i, r := range runs {
-		go r.flight.run()
+	// The runs are admitted in order, each by its own goroutine once the one before it is,
+	// and read once registered. A run serves its bytes to waiting reads as they arrive and
+	// stays registered until it is cached; it outlives the read, which may return before
+	// its last bytes arrive.
+	admitCtx, cancelAdmits := context.WithCancel(ctx)
+	defer func() {
+		cancelAdmits()
+		for _, r := range runs {
+			r.done()
+		}
+	}()
+	prev := make(chan struct{})
+	close(prev)
+	for _, r := range runs {
+		r.unneeded = true
 		for j := r.first; j <= r.last; j++ {
 			if blocks[j].needed {
-				blocks[j].state, blocks[j].object = blockInFlight, runs[i].flight
+				blocks[j].state, blocks[j].run = blockInFlight, r
+				r.unneeded = false
 			}
 		}
-	}
-	for _, o := range started {
-		go func() { _, _ = o.prefetch() }()
+		go r.admit(admitCtx, prev)
+		prev = r.admitted
 	}
 
-	// Assemble the bytes. A prefetch object is held until the last needed block it holds
-	// is copied.
-	remaining := make(map[prefetchObject]int)
+	// Assemble the bytes. A prefetch object is released once the last needed block it
+	// holds is copied.
+	remaining := make(map[*readRun]int)
 	for i := range blocks {
-		if blocks[i].needed && blocks[i].state == blockInFlight {
-			remaining[blocks[i].object]++
+		if r := blocks[i].run; r != nil {
+			remaining[r]++
 		}
 	}
-	releaseCopied := func() {
-		held = slices.DeleteFunc(held, func(o prefetchObject) bool {
-			if remaining[o] > 0 {
-				return false
-			}
-			o.release()
-			return true
-		})
-	}
-	releaseCopied()
 	out := make([]byte, hi-lo)
 	var deadline time.Time
 	for i := 0; i < len(blocks); i++ {
@@ -428,27 +345,57 @@ func (d *DiskCache) prefetchRead(
 		}
 		dst := out[b.start-lo : b.end-lo]
 		switch b.state {
-		case blockInFlight:
-			err := b.object.readAt(ctx, b.start, dst)
-			if remaining[b.object]--; remaining[b.object] == 0 {
-				releaseCopied()
+		case blockInFlight, blockJoined:
+			var o prefetchObject
+			if r := b.run; r != nil {
+				select {
+				case <-r.admitted:
+				case <-ctx.Done():
+					return nil, memoryRuns, false, ctx.Err()
+				}
+				if r.err != nil {
+					if ctx.Err() != nil {
+						return nil, memoryRuns, false, ctx.Err()
+					}
+					return nil, memoryRuns, false, nil
+				}
+				o = r.got
+			} else {
+				f.mu.Lock()
+				if o = f.fastestLocked(diskPath, b.start, b.end, time.Now(), d.downloadMaxExtraWait, true); o != nil {
+					o.hold()
+				}
+				f.mu.Unlock()
+			}
+			var err error
+			if o == nil {
+				err = errPrefetchMissed
+			} else {
+				err = o.readAt(ctx, b.start, dst)
+			}
+			if r := b.run; r != nil {
+				if remaining[r]--; remaining[r] == 0 {
+					r.done()
+				}
+			} else if o != nil {
+				o.release()
 			}
 			if err != nil {
 				// A failed read of object storage fails the read. An object that caches its
 				// bytes and ended before the read reached the block left them in a cached
 				// range.
 				if ctx.Err() != nil {
-					return nil, len(runs), false, ctx.Err()
+					return nil, memoryRuns, false, ctx.Err()
 				}
 				if !errors.Is(err, errPrefetchMissed) {
-					return nil, len(runs), false, err
+					return nil, memoryRuns, false, err
 				}
-				if !b.object.caches() {
-					return nil, len(runs), false, nil
+				if o != nil && !o.caches() {
+					return nil, memoryRuns, false, nil
 				}
 				r, ok := smallestContaining(d.ranges.of(key), b.start, b.end-b.start, nil)
 				if !ok || !d.cache.Contains(r.diskPath) || !d.readCachedRange(ctx, r, b.start, dst, &deadline) {
-					return nil, len(runs), false, nil
+					return nil, memoryRuns, false, nil
 				}
 			}
 		case blockCached:
@@ -459,14 +406,71 @@ func (d *DiskCache) prefetchRead(
 			}
 			dst = out[b.start-lo : blocks[j].end-lo]
 			if !d.readCachedRange(ctx, b.cached, b.start, dst, &deadline) {
-				return nil, len(runs), false, nil
+				return nil, memoryRuns, false, nil
 			}
 			i = j
 		default:
-			return nil, len(runs), false, nil
+			return nil, memoryRuns, false, nil
 		}
 	}
-	return out, len(runs), true, nil
+	return out, memoryRuns, true, nil
+}
+
+// readRun is a run of blocks of a read, read by its own prefetch object.
+type readRun struct {
+	first, last int // block indexes
+	object      prefetchObject
+	// admitted is closed once object is registered, joined the prefetch object got holding
+	// its bytes, or will not be read, with err; got is held until done.
+	admitted chan struct{}
+	got      prefetchObject
+	err      error
+	doneOnce sync.Once
+	// unneeded is set when the read takes no bytes of the run.
+	unneeded bool
+}
+
+// admit admits the object of r once prev is closed, then reads it once registered.
+func (r *readRun) admit(ctx context.Context, prev <-chan struct{}) {
+	<-prev
+	// The read holds no run it takes no bytes of.
+	if r.unneeded {
+		defer r.done()
+	}
+	switch o := r.object.(type) {
+	case *memoryPrefetchObject:
+		r.got, r.err = o.admit(ctx)
+		close(r.admitted)
+		if r.got == prefetchObject(o) {
+			o.run()
+		}
+	case *filePrefetchObject:
+		got, err := o.admit()
+		if got == prefetchObject(o) {
+			o.hold()
+		}
+		r.got, r.err = got, err
+		close(r.admitted)
+		if got == prefetchObject(o) {
+			_, _ = o.run()
+		} else {
+			o.endJoined(nil, err)
+		}
+	}
+}
+
+// done releases what r holds for the read, once.
+func (r *readRun) done() {
+	r.doneOnce.Do(func() {
+		// The read's hold of a FilePrefetchObject stops it while it waits.
+		if o, ok := r.object.(*filePrefetchObject); ok {
+			o.release()
+		}
+		<-r.admitted
+		if r.got != nil {
+			r.got.release()
+		}
+	})
 }
 
 // rangeParts returns the parts [start, end) of an object is read as, each by its own
@@ -814,6 +818,9 @@ func (fl *memoryPrefetchObject) admit(ctx context.Context) (prefetchObject, erro
 	}
 	f := &d.prefetchObjects
 	for waited := false; ; waited = true {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		budget := d.flightBytes()
 		f.mu.Lock()
 		closing, ok := f.openLocked()
