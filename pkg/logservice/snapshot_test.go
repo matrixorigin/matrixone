@@ -368,6 +368,7 @@ func TestCompletedSnapshotRemovalRecoversAfterPartialDeleteAndRestart(t *testing
 	for _, tc := range []struct {
 		name          string
 		remove        func(*snapshotManager, nodeID) error
+		failIndex     snapshotIndex
 		remaining     int
 		preserveOlder bool
 	}{
@@ -377,6 +378,7 @@ func TestCompletedSnapshotRemovalRecoversAfterPartialDeleteAndRestart(t *testing
 				_, err := mgr.DropInvalid(nid.shardID, nid.replicaID, 200)
 				return err
 			},
+			failIndex:     200,
 			remaining:     1,
 			preserveOlder: true,
 		},
@@ -385,6 +387,7 @@ func TestCompletedSnapshotRemovalRecoversAfterPartialDeleteAndRestart(t *testing
 			remove: func(mgr *snapshotManager, nid nodeID) error {
 				return mgr.Remove(nid.shardID, nid.replicaID, 200)
 			},
+			failIndex: 100,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -395,7 +398,7 @@ func TestCompletedSnapshotRemovalRecoversAfterPartialDeleteAndRestart(t *testing
 			testPrepareSnapshot(t, mgr, nid, 100)
 			testPrepareSnapshot(t, mgr, nid, 200)
 			require.NoError(t, mgr.Init(nid.shardID, nid.replicaID))
-			final := mgr.snapshotPath(nid, 200)
+			final := mgr.snapshotPath(nid, tc.failIndex)
 			removing := final + "-2.removing"
 			fs.failPath = removing
 
@@ -406,6 +409,10 @@ func TestCompletedSnapshotRemovalRecoversAfterPartialDeleteAndRestart(t *testing
 			require.ErrorIs(t, err, os.ErrNotExist)
 			_, err = fs.Stat(removing)
 			require.NoError(t, err)
+			if !tc.preserveOlder {
+				_, err = fs.Stat(mgr.snapshotPath(nid, 200))
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
 			_, err = fs.Stat(fs.PathJoin(removing, "snapshot.metadata"))
 			require.ErrorIs(t, err, os.ErrNotExist)
 

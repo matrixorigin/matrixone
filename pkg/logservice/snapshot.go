@@ -241,18 +241,21 @@ func (ss *snapshotRecord) removeIndex(index snapshotIndex) (bool, error) {
 
 // remove the snapshots whose index is LE than the index.
 func (ss *snapshotRecord) remove(index snapshotIndex) error {
-	items := make([]*snapshotItem, len(ss.items))
-	copy(items, ss.items)
-	for _, si := range items {
-		if si.index <= index {
-			if err := ss.removeFirst(); err != nil {
-				return err
+	var cleanupErr error
+	for first := ss.first(); first != nil && first.index <= index; first = ss.first() {
+		count := len(ss.items)
+		if err := ss.removeFirst(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			if len(ss.items) == count {
+				// Rename failed, so the current item is still canonical and
+				// retained in the inventory for an explicit retry.
+				return cleanupErr
 			}
-		} else {
-			break
+			// A tombstone owns this item's retry. Finish removing the other
+			// images already covered by the successful Raft import.
 		}
 	}
-	return nil
+	return cleanupErr
 }
 
 // snapshotManager manages the exported snapshots created by dragonboat.
