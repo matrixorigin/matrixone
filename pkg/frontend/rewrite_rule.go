@@ -1487,13 +1487,14 @@ func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string) (*rewrit
 	if s == nil {
 		return nil, false
 	}
-	clause, ok := rewriteRuleSimpleClause(s)
+	shape, ok := rewriteRuleMergeShapeForSelect(s)
 	if !ok {
-		// The query block itself precludes a union of row filters. No need
-		// to locate a predicate or interpret a catalog-mode expression.
+		// An ineligible rule (e.g. an aggregate projection) cannot contribute
+		// a row filter, whether or not it has a WHERE. Use only that fact
+		// from the catalog parse, never its decoded values or source name.
 		return nil, true
 	}
-	span := sources[clause.Where]
+	span := sources[shape.clause.Where]
 	prefix, _, suffix, available := span.Split(rule, true)
 	if !available {
 		return nil, false
@@ -1510,12 +1511,11 @@ func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string) (*rewrit
 	if s == nil {
 		return nil, false
 	}
-	clause, ok = s.Select.(*tree.SelectClause)
+	clause, ok := s.Select.(*tree.SelectClause)
 	if !ok || newSources[clause.Where].Start != span.Start || newSources[clause.Where].End != len(prefix)+len(" true") {
 		return nil, false
 	}
-	// Reuse the ordinary eligibility test, including grouping, DISTINCT and
-	// aggregate projections. The neutral statement is proof, never executable.
+	// Only the session-mode parse may supply a shape for comparison.
 	return rewriteRulePrecedenceShape(st, neutral)
 }
 
