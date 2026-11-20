@@ -1446,7 +1446,35 @@ func sameDecodedRewriteRule(ctx context.Context, oldSQL, newSQL, oldMode, newMod
 		return false
 	}
 	defer next.Free()
-	return reflect.DeepEqual(old, next)
+	if reflect.DeepEqual(old, next) {
+		return true
+	}
+	a, okA := rewriteRuleMergeShapeForStatement(old)
+	b, okB := rewriteRuleMergeShapeForStatement(next)
+	if !okA || !okB || !reflect.DeepEqual(a.withoutProjection(), b.withoutProjection()) {
+		return false
+	}
+	// Equal merge projections need not expose identical result metadata. An
+	// explicit alias supplies the heading; otherwise retain the original AST.
+	if !slices.EqualFunc(a.clause.Exprs, b.clause.Exprs, func(x, y tree.SelectExpr) bool {
+		if x.As != nil && !x.As.Empty() && y.As != nil && !y.As.Empty() {
+			return x.As.Origin() == y.As.Origin()
+		}
+		return reflect.DeepEqual(x, y)
+	}) {
+		return false
+	}
+	same, err := sameRewriteProjection(ctx, oldSQL, newSQL, oldMode, newMode, lower)
+	return err == nil && same
+}
+
+// Leave the original statement untouched: FROM, WHERE and all other clauses
+// must agree as decoded, never after folding tokens for projection comparison.
+func (s *rewriteRuleMergeShape) withoutProjection() *tree.Select {
+	stmt, clause := *s.stmt, *s.clause
+	clause.Exprs = nil
+	stmt.Select = &clause
+	return &stmt
 }
 
 func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string) (*rewriteRuleMergeShape, bool) {
@@ -1459,12 +1487,11 @@ func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string) (*rewrit
 	if s == nil {
 		return nil, false
 	}
-	if !rewriteRuleSelectModifiersAllowMerge(s) {
-		return nil, true
-	}
-	clause, ok := s.Select.(*tree.SelectClause)
+	clause, ok := rewriteRuleSimpleClause(s)
 	if !ok {
-		return nil, false
+		// The query block itself precludes a union of row filters. No need
+		// to locate a predicate or interpret a catalog-mode expression.
+		return nil, true
 	}
 	span := sources[clause.Where]
 	prefix, _, suffix, available := span.Split(rule, true)
@@ -1499,14 +1526,18 @@ func sameRewriteShape(ctx context.Context, l, r *rewriteRuleMergeShape, mode str
 	if l.clause != nil && r.clause != nil && reflect.DeepEqual(l.clause.Exprs, r.clause.Exprs) {
 		return true, nil
 	}
-	// Only the comparison parse folds identifier spelling. Keep literal type,
-	// bytes and expression structure, rather than comparing display SQL.
-	left, err := mysql.ParseOneForIdentifierComparison(ctx, l.source, 1, mode)
+	return sameRewriteProjection(ctx, l.source, r.source, mode, mode, 1)
+}
+
+// Only the comparison parse folds identifier spelling. Keep literal type,
+// bytes and expression structure, rather than comparing display SQL.
+func sameRewriteProjection(ctx context.Context, leftSQL, rightSQL, leftMode, rightMode string, lower int64) (bool, error) {
+	left, err := mysql.ParseOneForIdentifierComparison(ctx, leftSQL, lower, leftMode)
 	if err != nil {
 		return false, err
 	}
 	defer left.Free()
-	right, err := mysql.ParseOneForIdentifierComparison(ctx, r.source, 1, mode)
+	right, err := mysql.ParseOneForIdentifierComparison(ctx, rightSQL, lower, rightMode)
 	if err != nil {
 		return false, err
 	}
@@ -1553,20 +1584,21 @@ func rewriteRuleSelect(stmt tree.Statement) *tree.Select {
 	}
 }
 
-func rewriteRuleSelectModifiersAllowMerge(stmt *tree.Select) bool {
-	return len(stmt.OrderBy) == 0 && stmt.Limit == nil && stmt.With == nil && stmt.TimeWindow == nil && stmt.RankOption == nil && stmt.Ep == nil && stmt.SelectLockInfo == nil
-}
-
-func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, bool) {
-	if stmt == nil || !rewriteRuleSelectModifiersAllowMerge(stmt) {
+// Structural eligibility does not depend on decoding expression values or names.
+func rewriteRuleSimpleClause(stmt *tree.Select) (*tree.SelectClause, bool) {
+	if stmt == nil || len(stmt.OrderBy) != 0 || stmt.Limit != nil || stmt.With != nil || stmt.TimeWindow != nil || stmt.RankOption != nil || stmt.Ep != nil || stmt.SelectLockInfo != nil {
 		return nil, false
 	}
 
 	clause, ok := stmt.Select.(*tree.SelectClause)
-	if !ok || !rewriteRuleSelectClauseIsMergeable(clause) {
+	return clause, ok && clause != nil && !clause.Distinct && clause.Option == 0 && clause.GroupBy == nil && clause.Having == nil
+}
+
+func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, bool) {
+	clause, ok := rewriteRuleSimpleClause(stmt)
+	if !ok || !rewriteRuleSelectExprsAreMergeable(clause.Exprs) {
 		return nil, false
 	}
-
 	table, ok := rewriteRuleSingleTableSource(clause.From)
 	if !ok {
 		return nil, false
@@ -1578,15 +1610,6 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, 
 		table:      table,
 		unfiltered: clause.Where == nil || clause.Where.Expr == nil,
 	}, true
-}
-
-func rewriteRuleSelectClauseIsMergeable(clause *tree.SelectClause) bool {
-	return clause != nil &&
-		!clause.Distinct &&
-		clause.Option == 0 &&
-		clause.GroupBy == nil &&
-		clause.Having == nil &&
-		rewriteRuleSelectExprsAreMergeable(clause.Exprs)
 }
 
 func rewriteRuleSelectExprsAreMergeable(exprs tree.SelectExprs) bool {

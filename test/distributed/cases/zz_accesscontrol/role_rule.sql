@@ -504,6 +504,12 @@ alter role test_rule_role_dup_projection_a add rule "select 'docs\\'notes' as n 
 select a from db1.t_dup order by a;
 -- @session
 
+-- A structural disqualifier is enough even with no outer WHERE to replace.
+alter role test_rule_role_dup_projection_a add rule "select distinct 'docs\\'notes' as n from db1.t_dup" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
 -- A handle must not retain the wider interpretation of the same rule source.
 alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where 'x\\ty' = _utf8mb4 X'780979'" on table db1.t_dup;
 -- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
@@ -522,14 +528,15 @@ alter role test_rule_role_dup_projection_b add rule "select X'414A' as 'n' from 
 select hex(n) as label_bytes, count(*) as visible_rows from db1.t_dup group by n;
 -- @session
 
--- A later unfiltered rule can keep its original spelling across a mode reload.
-alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
-alter role test_rule_role_dup_projection_b add rule 'SELECT a FROM db1.t_dup' on table db1.t_dup;
+-- A later unfiltered rule exposes the same named projections across a mode reload.
+alter role test_rule_role_dup_projection_a add rule "select a as n, X'414a' as label from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "SELECT A as n, X'414A' as label FROM db1.t_dup" on table db1.t_dup;
 -- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
 set sql_mode = '';
 prepare spelling_handle from 'select 1';
 set sql_mode = 'NO_BACKSLASH_ESCAPES';
 execute spelling_handle;
+select n, hex(label) as label_bytes from db1.t_dup order by n;
 deallocate prepare spelling_handle;
 -- @session
 
