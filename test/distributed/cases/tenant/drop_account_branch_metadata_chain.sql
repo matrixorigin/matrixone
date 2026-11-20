@@ -53,6 +53,10 @@ set @issue_27660_chain_c_id = (
   select account_id from mo_catalog.mo_account
   where account_name = 'issue_27660_chain_c'
 );
+-- The sys connection can be on a different CN from all three tenant sessions.
+set @_activate = (select mo_ctl('cn', 'ActivateTenantCatalog', cast(@issue_27660_chain_b_id as char)));
+set @_activate = (select mo_ctl('cn', 'ActivateTenantCatalog', cast(@issue_27660_chain_a_id as char)));
+set @_activate = (select mo_ctl('cn', 'ActivateTenantCatalog', cast(@issue_27660_chain_c_id as char)));
 set @issue_27660_chain_b_tid = (
   select rel_id from mo_catalog.mo_tables
   where account_id = @issue_27660_chain_b_id
