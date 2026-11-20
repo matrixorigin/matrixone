@@ -430,7 +430,14 @@ func checkFrontendIndexTargetWithResolver(execCtx *ExecCtx, stmt tree.Statement,
 	case *tree.LoadTable:
 		return checkTableInScope(st.Table, true)
 	case *tree.Load:
-		return checkTable(st.Table)
+		// The reserved prefix alone cannot distinguish an external table from a
+		// physical index. Defer LOAD to catalog-aware admission and resolution.
+		if resolve == nil || st.Table == nil {
+			return nil
+		}
+		return resolve(explicitIndexTarget{
+			database: string(st.Table.SchemaName), table: string(st.Table.ObjectName),
+		})
 	case *tree.AnalyzeStmt:
 		for _, entry := range st.Entries {
 			if entry != nil {

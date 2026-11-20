@@ -6325,16 +6325,22 @@ func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
 	)
 
 	for _, tc := range []struct {
-		name     string
-		viewPath []*plan.ViewStep
+		name           string
+		viewPath       []*plan.ViewStep
+		reservedPrefix bool
 	}{
 		{name: "direct table"},
+		{name: "reserved prefix direct table", reservedPrefix: true},
 		{
 			name:     "view",
 			viewPath: []*plan.ViewStep{{DatabaseName: dbName, ViewName: viewName, Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			objectName := tableName
+			if tc.reservedPrefix {
+				objectName = catalog.IndexTableNamePrefix + objectName
+			}
 			p := &plan2.Plan{
 				Plan: &plan2.Plan_Query{
 					Query: &plan2.Query{
@@ -6344,7 +6350,7 @@ func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
 								NodeType: plan.Node_EXTERNAL_SCAN,
 								ObjRef: &plan2.ObjectRef{
 									SchemaName: dbName,
-									ObjName:    tableName,
+									ObjName:    objectName,
 								},
 								ExternScan: &plan.ExternScan{
 									Type: int32(plan.ExternType_MONGODB_TB),
@@ -6367,7 +6373,7 @@ func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
 			require.Equal(t, PrivilegeTypeSelect, arr[0].typ)
 			require.Equal(t, objectTypeTable, arr[0].objType)
 			require.Equal(t, dbName, arr[0].databaseName)
-			require.Equal(t, tableName, arr[0].tableName)
+			require.Equal(t, objectName, arr[0].tableName)
 			require.Equal(t, tc.viewPath, arr[0].viewPath)
 		})
 	}
@@ -6405,10 +6411,13 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 		viewPath       []*plan.ViewStep
 		tableSelect    bool
 		addRevokedView bool
+		reservedPrefix bool
 		want           bool
 	}{
 		{name: "table select revoked"},
 		{name: "table select granted", tableSelect: true, want: true},
+		{name: "reserved prefix table select revoked", reservedPrefix: true},
+		{name: "reserved prefix table select granted", reservedPrefix: true, tableSelect: true, want: true},
 		{
 			name:           "view select revoked",
 			viewPath:       []*plan.ViewStep{{DatabaseName: dbName, ViewName: viewName, Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
@@ -6417,6 +6426,10 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			objectName := tableName
+			if tc.reservedPrefix {
+				objectName = catalog.IndexTableNamePrefix + objectName
+			}
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
@@ -6434,7 +6447,7 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 			sql2result := makeSql2ExecResult2(userID, [][]interface{}{
 				{roleID, false},
 			}, nil, nil, nil, nil, nil, nil, nil)
-			addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, tableName, map[PrivilegeType]bool{
+			addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, objectName, map[PrivilegeType]bool{
 				PrivilegeTypeSelect: tc.tableSelect,
 			})
 			if tc.addRevokedView {
@@ -6453,7 +6466,7 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 						NodeType: plan.Node_EXTERNAL_SCAN,
 						ObjRef: &plan.ObjectRef{
 							SchemaName: dbName,
-							ObjName:    tableName,
+							ObjName:    objectName,
 						},
 						ExternScan: &plan.ExternScan{
 							Type:        int32(plan.ExternType_MONGODB_TB),
@@ -7088,16 +7101,23 @@ type namedWindowAuthorizationCompilerContext struct {
 	*plan2.MockCompilerContext
 	mongoObject *plan.ObjectRef
 	mongoTable  *plan.TableDef
+	csvObject   *plan.ObjectRef
+	csvTable    *plan.TableDef
 }
 
 func (c *namedWindowAuthorizationCompilerContext) DatabaseExists(name string, snapshot *plan2.Snapshot) bool {
-	return name == "mongo_window_auth" || c.MockCompilerContext.DatabaseExists(name, snapshot)
+	return name == "mongo_window_auth" || name == "csv_window_auth" || c.MockCompilerContext.DatabaseExists(name, snapshot)
 }
 
 func (c *namedWindowAuthorizationCompilerContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 	borrowOutput.Reset()
-	if dbName == "mongo_window_auth" && tableName == "events" {
-		return plan2.DeepCopyObjectRef(c.mongoObject), plan2.DeepCopyTableDef(c.mongoTable, true), nil
+	if tableName == "events" {
+		switch dbName {
+		case "mongo_window_auth":
+			return plan2.DeepCopyObjectRef(c.mongoObject), plan2.DeepCopyTableDef(c.mongoTable, true), nil
+		case "csv_window_auth":
+			return plan2.DeepCopyObjectRef(c.csvObject), plan2.DeepCopyTableDef(c.csvTable, true), nil
+		}
 	}
 	return c.MockCompilerContext.Resolve(dbName, tableName, snapshot, nil)
 }
@@ -7133,15 +7153,24 @@ func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
 				Createsql: sqlmongodb.BuildCreateSQLEnvelope(mongoMapping),
 				Cols:      []*plan.ColDef{{Name: "event_id", Typ: plan.Type{Id: int32(types.T_int64)}}},
 			},
+			csvObject: &plan.ObjectRef{
+				Db: 3, Obj: 4, SchemaName: "csv_window_auth", ObjName: "events",
+			},
+			csvTable: &plan.TableDef{
+				Name: "events", DbName: "csv_window_auth", DbId: 3, TblId: 4,
+				TableType: catalog.SystemExternalRel,
+				Cols:      []*plan.ColDef{{Name: "event_id", Typ: plan.Type{Id: int32(types.T_int64)}}},
+			},
 		}
 	}
 
 	tests := []struct {
-		name      string
-		sql       string
-		database  string
-		table     string
-		grantScan bool
+		name         string
+		sql          string
+		database     string
+		table        string
+		grantScan    bool
+		resultTables string
 	}{
 		{
 			name:     "unused MongoDB definition is rejected without select",
@@ -7155,8 +7184,23 @@ func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
 		},
 		{
 			name:     "used MongoDB window control succeeds with select",
-			database: "mongo_window_auth", table: "events", grantScan: true,
+			database: "mongo_window_auth", table: "events", grantScan: true, resultTables: "nation, events",
 			sql: "select sum(n_nationkey) over w from nation window w as (order by (select event_id from mongo_window_auth.events limit 1))",
+		},
+		{
+			name:     "unused CSV definition is rejected without select",
+			database: "csv_window_auth", table: "events",
+			sql: "select 1 from nation window w as (order by (select event_id from csv_window_auth.events limit 1))",
+		},
+		{
+			name:     "unused CSV definition succeeds with select",
+			database: "csv_window_auth", table: "events", grantScan: true,
+			sql: "select 1 from nation window w as (order by (select event_id from csv_window_auth.events limit 1))",
+		},
+		{
+			name:     "used CSV window control succeeds with select",
+			database: "csv_window_auth", table: "events", grantScan: true, resultTables: "nation, events",
+			sql: "select sum(n_nationkey) over w from nation window w as (order by (select event_id from csv_window_auth.events limit 1))",
 		},
 		{
 			name:     "unused table_changes definition is rejected without select",
@@ -7181,6 +7225,11 @@ func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
 			require.NoError(t, err)
 			queryPlan, err := plan2.BuildPlan(newCompilerContext(), stmt, false, nil)
 			require.NoError(t, err)
+			expectedResultTables := tc.resultTables
+			if expectedResultTables == "" {
+				expectedResultTables = "nation"
+			}
+			require.Equal(t, expectedResultTables, getTablesFromPlan(queryPlan), "validation-only carriers must not add empty result-table names")
 
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
@@ -9327,6 +9376,40 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 		})
 	}
 
+	t.Run("index prefixed external table uses locked catalog metadata", func(t *testing.T) {
+		const tableName = "__mo_index_events"
+		grantSQL, err := lockedGrantRelationSQL(ctx, "d", tableName, 42)
+		require.NoError(t, err)
+		for _, tc := range []struct {
+			name, kind, extra string
+			wantErr           bool
+		}{
+			{name: "external table", kind: catalog.SystemExternalRel},
+			{name: "physical index", kind: catalog.SystemOrdinaryRel, wantErr: true},
+			{name: "external relation with physical index marker", kind: catalog.SystemExternalRel,
+				extra: string(api.MustMarshalTblExtra(&api.SchemaExtra{FeatureFlag: features.IndexTable})), wantErr: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				bh := &backgroundExecTest{}
+				bh.init()
+				bh.sql2result[lockedDatabaseSQL("d")] = newMrsForCheckDatabase([][]interface{}{{int64(11)}})
+				bh.sql2result[lockedTableSQL(tableName)] = newMrsForCheckDatabaseTable([][]interface{}{{int64(42)}})
+				bh.sql2result[grantSQL] = newMrsForLockedGrantRelation(42, tc.kind, tc.extra)
+
+				_, objectID, err := checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+					ctx, ses, bh, tree.OBJECT_TYPE_TABLE,
+					tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: tableName})
+				if tc.wantErr {
+					require.ErrorContains(t, err, "internal relation")
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, int64(42), objectID)
+				}
+				require.Equal(t, []string{lockedDatabaseSQL("d"), lockedTableSQL(tableName), grantSQL}, bh.executedSQLs)
+			})
+		}
+	})
+
 	t.Run("renamed physical relation cannot receive an exact grant", func(t *testing.T) {
 		for _, tc := range []struct {
 			name, kind string
@@ -9374,6 +9457,12 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 	t.Run("hidden index relation cannot become an authorization object", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
+		tableName := catalog.IndexTableNamePrefix + "legacy"
+		grantSQL, grantErr := lockedGrantRelationSQL(ctx, "d", tableName, 42)
+		require.NoError(t, grantErr)
+		bh.sql2result[lockedDatabaseSQL("d")] = newMrsForCheckDatabase([][]interface{}{{int64(11)}})
+		bh.sql2result[lockedTableSQL(tableName)] = newMrsForCheckDatabaseTable([][]interface{}{{int64(42)}})
+		bh.sql2result[grantSQL] = newMrsForLockedGrantRelation(42, catalog.SystemIndexRel, "")
 		_, _, err := checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
 			ctx,
 			ses,
@@ -9382,11 +9471,11 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 			tree.PrivilegeLevel{
 				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
 				DbName:  "d",
-				TabName: catalog.IndexTableNamePrefix + "legacy",
+				TabName: tableName,
 			},
 		)
 		require.ErrorContains(t, err, "cannot grant privileges on internal relation")
-		require.Empty(t, bh.executedSQLs)
+		require.Equal(t, []string{lockedDatabaseSQL("d"), lockedTableSQL(tableName), grantSQL}, bh.executedSQLs)
 	})
 
 	for _, testCase := range []struct {

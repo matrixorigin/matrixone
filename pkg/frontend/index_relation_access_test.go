@@ -336,6 +336,48 @@ func TestCloneDestinationDeferredOnlyForExplicitAccount(t *testing.T) {
 	require.ErrorContains(t, err, "privilege", "reserved destination names are denied before deferral")
 }
 
+func TestLoadExternalTableWithIndexPrefixUsesCatalogMetadata(t *testing.T) {
+	ses := &Session{}
+	ses.SetFromRealUser(true)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "tenant", User: "reader", DefaultRole: "public"})
+	execCtx := &ExecCtx{reqCtx: context.Background(), ses: ses}
+	table := tree.NewTableName(
+		tree.Identifier("__mo_index_events"),
+		tree.ObjectNamePrefix{SchemaName: "db", ExplicitSchema: true},
+		nil,
+	)
+	load := &tree.Load{Table: table}
+
+	t.Run("initial admission defers to catalog resolution", func(t *testing.T) {
+		require.NoError(t, checkFrontendIndexTarget(context.Background(), ses, load))
+	})
+
+	for _, tc := range []struct {
+		name    string
+		kind    string
+		flags   uint64
+		wantErr bool
+	}{
+		{name: "external table", kind: catalog.SystemExternalRel},
+		{name: "physical index", kind: catalog.SystemOrdinaryRel, wantErr: true},
+		{name: "external relation with physical index marker", kind: catalog.SystemExternalRel, flags: features.IndexTable, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved := false
+			err := checkFrontendIndexTargetWithResolver(execCtx, load, func(target explicitIndexTarget) error {
+				resolved = true
+				return checkResolvedIndexRelation(execCtx, target.table, target.table, tc.kind, tc.flags)
+			})
+			require.True(t, resolved, "catalog metadata must decide access")
+			if tc.wantErr {
+				require.ErrorContains(t, err, "privilege")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestIndexRelationAccessFrontendTargets(t *testing.T) {
 	ses := &Session{}
 	ses.SetFromRealUser(true)

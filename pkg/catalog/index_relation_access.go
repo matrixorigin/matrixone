@@ -48,6 +48,12 @@ func RequiresPrivilegedRelationAccess(name, kind string, flags uint64) bool {
 	if features.IsIndexTable(flags) {
 		return true
 	}
+	// Resolved external relations are independent catalog objects, even when
+	// their names use the reserved index prefix. The durable index flag above
+	// still protects physical index children.
+	if strings.EqualFold(kind, SystemExternalRel) {
+		return false
+	}
 	if len(name) >= len(IndexTableNamePrefix) && strings.EqualFold(name[:len(IndexTableNamePrefix)], IndexTableNamePrefix) {
 		return true
 	}

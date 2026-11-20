@@ -734,6 +734,9 @@ func getTablesFromPlan(p *plan.Plan) string {
 	cnt := 0
 	if q, ok := p.Plan.(*plan.Plan_Query); ok {
 		for _, n := range q.Query.Nodes {
+			if n == nil || n.GetTableDef().GetName() == "" {
+				continue
+			}
 			if n.NodeType == plan.Node_EXTERNAL_SCAN || n.NodeType == plan.Node_TABLE_SCAN {
 				if cnt > 0 {
 					buf.WriteString(", ")
