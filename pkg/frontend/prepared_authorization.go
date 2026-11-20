@@ -40,38 +40,9 @@ type planAuthorization struct {
 	dynamic                        bool
 }
 
-func insertAuthorizationTarget(ses FeSession, stmt *tree.Insert, p *plan.Plan) (string, string, bool) {
-	if q := p.GetQuery(); q != nil {
-		for _, node := range q.GetNodes() {
-			if q.GetStmtType() == plan.Query_INSERT && node.GetNodeType() == plan.Node_MULTI_UPDATE {
-				// The modern INSERT binder puts the statement target first; later
-				// contexts maintain internal indexes.
-				if contexts := node.GetUpdateCtxList(); len(contexts) > 0 {
-					ref := contexts[0].GetObjRef()
-					if ref.GetSchemaName() != "" && ref.GetObjName() != "" {
-						return ref.GetSchemaName(), ref.GetObjName(), true
-					}
-				}
-			}
-			insertCtx := node.GetInsertCtx()
-			if node.GetNodeType() != plan.Node_INSERT || insertCtx == nil || !insertCtx.GetAddAffectedRows() {
-				continue
-			}
-			ref := insertCtx.GetRef()
-			if ref == nil {
-				ref = node.GetObjRef()
-			}
-			if ref.GetSchemaName() != "" && ref.GetObjName() != "" {
-				return ref.GetSchemaName(), ref.GetObjName(), true
-			}
-		}
-	}
-	return getInsertTargetTableName(stmt, ses)
-}
-
 func derivePlanAuthorization(ses FeSession, stmt tree.Statement, p *plan.Plan, admission *privilege) planAuthorization {
 	result := planAuthorization{privilege: *admission, moCtrl: hasMoCtrl(p), sysWhitelist: isTargetSysWhiteList(p)}
-	arr := extractPrivilegeTipsFromPlan(p)
+	arr, insertTarget := extractPrivilegeTipsAndInsertTarget(p)
 	if _, ok := stmt.(*tree.Replace); ok {
 		arr = addReplaceDeletePrivilegeTips(arr, p)
 	}
@@ -80,23 +51,21 @@ func derivePlanAuthorization(ses FeSession, stmt tree.Statement, p *plan.Plan, a
 		result.dynamic = true
 	}
 	if ins, ok := stmt.(*tree.Insert); ok {
-		db, table, hasTarget := insertAuthorizationTarget(ses, ins, p)
-		hasConcreteRequirement := false
-		hasTargetInsert := false
-		for _, tip := range arr {
-			if tip.viewOnly {
-				continue
-			}
-			hasConcreteRequirement = true
-			if hasTarget && tip.typ == PrivilegeTypeInsert && tip.databaseName == db && tip.tableName == table {
-				hasTargetInsert = true
-			}
-		}
-		// Source requirements cannot stand in for the statement target. If the
-		// plan omitted the target INSERT tip, recover it from the resolved AST.
-		needsFallback := !hasConcreteRequirement
+		var db, table string
+		hasTarget := insertTarget != nil
 		if hasTarget {
-			needsFallback = !hasTargetInsert
+			db, table = insertTarget.GetSchemaName(), insertTarget.GetObjName()
+		} else {
+			db, table, hasTarget = getInsertTargetTableName(ins, ses)
+		}
+		// Source requirements cannot stand in for the statement target.
+		needsFallback := true
+		for _, tip := range arr {
+			if !tip.viewOnly && (!hasTarget ||
+				(tip.typ == PrivilegeTypeInsert && tip.databaseName == db && tip.tableName == table)) {
+				needsFallback = false
+				break
+			}
 		}
 		if needsFallback {
 			result.dynamic = true
