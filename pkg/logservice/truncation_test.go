@@ -51,6 +51,20 @@ type failExportRenameOnceFS struct {
 	failed atomic.Bool
 }
 
+type failImportedSnapshotRenameOnceFS struct {
+	vfs.FS
+	attempts atomic.Int32
+}
+
+func (fs *failImportedSnapshotRenameOnceFS) Rename(oldname, newname string) error {
+	if strings.HasSuffix(newname, ".removing") &&
+		strings.Contains(oldname, "/shard-1/replica-2/snapshot-") &&
+		fs.attempts.Add(1) == 1 {
+		return syscall.EIO
+	}
+	return fs.FS.Rename(oldname, newname)
+}
+
 type failExportFlagCleanupFS struct {
 	vfs.FS
 	failed       atomic.Bool
@@ -1155,6 +1169,55 @@ func TestTruncationImportSnapshot(t *testing.T) {
 		assert.Equal(t, 0, s.store.snapshotMgr.Count(1, 1))
 	}
 	runServiceTest(t, false, true, fn)
+}
+
+func TestTruncationRetriesPostImportRenameFailure(t *testing.T) {
+	cfg := getStoreTestConfig()
+	cfg.TruncateInterval.Duration = time.Hour
+	cfg.HAKeeperTruncateInterval.Duration = time.Hour
+	cfg.MaxExportedSnapshot = 1
+	fs := &failImportedSnapshotRenameOnceFS{FS: cfg.FS}
+	cfg.FS = fs
+	l, err := getTestStore(func() Config { return cfg }, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, l.close())
+		vfs.ReportLeakedFD(fs, t)
+	})
+	require.NoError(t, l.startHAKeeperReplica(1,
+		map[uint64]dragonboat.Target{1: l.nh.ID()}, false))
+
+	const shardID, replicaID, tnID = uint64(1), uint64(2), uint64(100)
+	ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+	defer cancel()
+	require.NoError(t, l.getOrExtendTNLease(ctx, shardID, tnID))
+	for range 10 {
+		_, err := l.append(ctx, shardID, getTestUserEntry())
+		require.NoError(t, err)
+	}
+	require.NoError(t, l.truncateLog(ctx, shardID, 4, tnID))
+	require.NoError(t, l.processShardTruncateLogWithReplica(ctx, shardID, replicaID))
+	importIndex := l.snapshotMgr.NewestIndex(shardID, replicaID)
+	require.NotZero(t, importIndex)
+	require.Equal(t, 1, l.snapshotMgr.Count(shardID, replicaID))
+
+	for range 10 {
+		_, err := l.append(ctx, shardID, getTestUserEntry())
+		require.NoError(t, err)
+	}
+	require.NoError(t, l.truncateLog(ctx, shardID, importIndex+1, tnID))
+	require.ErrorIs(t, l.processShardTruncateLogWithReplica(ctx, shardID, replicaID), syscall.EIO)
+	require.Equal(t, int32(1), fs.attempts.Load())
+	require.Equal(t, importIndex, l.shardSnapshotInfo.getTruncatedLsn(shardID))
+	require.Equal(t, 1, l.snapshotMgr.Count(shardID, replicaID))
+
+	// An ordinary tick retries the canonical directory, frees the sole slot,
+	// and can export a newer snapshot without re-importing the old one.
+	require.NoError(t, l.processShardTruncateLogWithReplica(ctx, shardID, replicaID))
+	require.Equal(t, int32(2), fs.attempts.Load())
+	require.Equal(t, importIndex, l.shardSnapshotInfo.getTruncatedLsn(shardID))
+	require.Equal(t, 1, l.snapshotMgr.Count(shardID, replicaID))
+	require.Greater(t, l.snapshotMgr.NewestIndex(shardID, replicaID), importIndex)
 }
 
 func TestTruncationFallsBackFromCorruptExport(t *testing.T) {

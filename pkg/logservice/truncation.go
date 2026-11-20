@@ -565,9 +565,7 @@ func (l *store) shouldDoImport(
 		}
 	}
 	if lsn <= l.shardSnapshotInfo.getTruncatedLsn(shardID) {
-		// Normal path: EvalImportSnapshot picked the same snapshot that
-		// was already imported on a previous tick. DEBUG to avoid log
-		// spam while waiting for TN to advance.
+		// Defensive guard if the watermark changed after candidate cleanup.
 		l.runtime.Logger().Debug("skip import snapshot: lsn not greater than last truncated",
 			zap.Uint64("shardID", shardID),
 			zap.Uint64("lsnInSM", lsnInSM),
@@ -757,6 +755,15 @@ func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID 
 		if dir == "" {
 			break
 		}
+		if lsn <= l.shardSnapshotInfo.getTruncatedLsn(shardID) {
+			// Raft already imported this snapshot. A prior cleanup may have
+			// failed before renaming its canonical directory; retry without
+			// validating or re-importing it. The TN watermark still admits it.
+			if err := l.snapshotMgr.Remove(shardID, replicaID, lsn); err != nil {
+				return err
+			}
+			continue
+		}
 		valid, err := l.importCandidateValid(ctx, dir)
 		if err != nil {
 			return err
@@ -795,18 +802,10 @@ func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID 
 		return nil
 	}
 
-	// Note on non-timeout-path escape valves: an earlier iteration tried
-	// to free quota slots here by calling snapshotMgr.Remove(..., lsnInSM)
-	// whenever shouldDoImport declined. That was never safe: the <= lsnInSM
-	// items are exactly the importable candidates, and deleting them
-	// would leave a quiescent shard with no import possible until fresh
-	// traffic arrived. A truncatedLsn-based variant is theoretically
-	// safe but unreachable in practice -- importSnapshot itself already
-	// removes every item <= the imported lsn as its last step, so there
-	// is no obsolete residue for a post-hoc purge to clean up.
-	//
-	// The quota-full / no-import stall is therefore handled exclusively
-	// by the timeout-path DropNewest escape valve above. See #24315.
+	// Keep snapshots above truncatedLsn: TN may still need them for its
+	// replay watermark. The loop above removes only snapshots already
+	// covered by a successful Raft import. If SyncRead times out before
+	// the watermark is available, DropNewest handles a full quota. See #24315.
 
 	exportCtx, cancelExport := context.WithTimeoutCause(ctx, 3*time.Second, moerr.CauseProcessShardTruncateLog)
 	defer cancelExport()
