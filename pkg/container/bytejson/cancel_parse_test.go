@@ -16,6 +16,8 @@ package bytejson
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -73,20 +75,23 @@ func TestCancellableJSONParseStopsWithinTokenAndContainer(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		input      string
+		checks     int
+		wantAfter  int
 		wantBefore int
 	}{
-		{"plain string", `"` + strings.Repeat("x", 3*jsonParseChunk) + "bad suffix", 2 * jsonParseChunk},
-		{"escaped string", `"` + strings.Repeat(`\n`, 2*jsonParseChunk) + "bad suffix", 2 * jsonParseChunk},
-		{"number", "0." + strings.Repeat("2", 3*jsonParseChunk) + "bad suffix", 2 * jsonParseChunk},
-		{"array", "[" + strings.Repeat("1,", 2*jsonParseItems+jsonParseChunk) + "bad suffix", 4 * jsonParseItems},
+		{"plain string", `"` + strings.Repeat("x", 3*jsonParseChunk) + "bad suffix", 1, jsonParseChunk, 2 * jsonParseChunk},
+		{"escaped string", `"` + strings.Repeat(`\n`, 2*jsonParseChunk) + "bad suffix", 2, jsonParseChunk, 2 * jsonParseChunk},
+		{"number", "0." + strings.Repeat("2", 3*jsonParseChunk) + "bad suffix", 1, jsonParseChunk, 2 * jsonParseChunk},
+		{"array", "[" + strings.Repeat("1,", 2*jsonParseItems+jsonParseChunk) + "bad suffix", 1, jsonParseItems, 4 * jsonParseItems},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			parent, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			ctx := &cancelAfterJSONChecks{parent, cancel, 1}
+			ctx := &cancelAfterJSONChecks{parent, cancel, test.checks}
 			p := cancelJSONParser{ctx: ctx, data: []byte(test.input), nextCheck: jsonParseChunk}
 			_, err := p.value(0)
 			require.ErrorIs(t, err, context.Canceled)
+			require.GreaterOrEqual(t, p.pos, test.wantAfter)
 			require.Less(t, p.pos, test.wantBefore)
 			require.Less(t, p.pos, len(p.data))
 		})
@@ -103,4 +108,21 @@ func TestCancellableJSONParseStopsWhileWriting(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.GreaterOrEqual(t, len(writer.buf), jsonParseChunk)
 	require.Less(t, len(writer.buf), 2*jsonParseChunk)
+}
+
+func TestCancellableJSONParseStopsWhileSorting(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &cancelAfterJSONChecks{parent, cancel, 1}
+	const entries = 4 * jsonParseItems
+	group := &Group{Obj: true, Keys: make([]string, entries), Values: make([]Node, entries)}
+	for i := range group.Keys {
+		group.Keys[i] = fmt.Sprintf("key%04d", entries-i)
+	}
+	w := byteJsonWriter{buf: make([]byte, 0, jsonParseChunk), cancel: &jsonWriteBudget{}}
+	_, _, err := w.writeNodeWithContext(ctx, true, Node{group})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, w.buf, 1+headerSize)
+	require.Equal(t, "key0001", group.Keys[0])
+	require.False(t, sort.StringsAreSorted(group.Keys), "cancellation must interrupt the reversal itself")
 }
