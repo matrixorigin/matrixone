@@ -1214,7 +1214,10 @@ func TestHandleDelsOnLCA_SQLFallbackKeepsSnapshotRelation(t *testing.T) {
 
 			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 			probeTxn := mock_frontend.NewMockTxnOperator(ctrl)
-			txnOp.EXPECT().CloneSnapshotOp(snapshot.ToTimestamp()).Return(probeTxn).Times(2)
+			txnOp.EXPECT().CloneSnapshotOp(snapshot.ToTimestamp()).Return(probeTxn)
+			if definitionLookupHits {
+				txnOp.EXPECT().CloneSnapshotOp(snapshot.ToTimestamp()).Return(probeTxn)
+			}
 			storage := mock_frontend.NewMockEngine(ctrl)
 			ses.txnHandler = &TxnHandler{storage: storage, txnOp: txnOp}
 			bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -1228,13 +1231,26 @@ func TestHandleDelsOnLCA_SQLFallbackKeepsSnapshotRelation(t *testing.T) {
 					[]any{int64(1), "historical", "h1"})
 			} else {
 				firstLookup.Return("", "", nil, lookupErr)
-				live.EXPECT().GetTableDef(gomock.Any()).Return(def)
+				live.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("reused_name", "name")).AnyTimes()
 			}
-			gomock.InOrder(
-				firstLookup,
-				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(moerr.NewBadDBNoCtx("db1")),
-				storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, tableID).Return("", "", nil, lookupErr),
-			)
+			if definitionLookupHits {
+				gomock.InOrder(
+					firstLookup,
+					bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(moerr.NewBadDBNoCtx("db1")),
+					storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, tableID).Return("", "", nil, lookupErr),
+				)
+			} else {
+				// At the fork, the endpoint's current name belongs to a different table.
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).
+					DoAndReturn(func(_ context.Context, sql string) error {
+						t.Errorf("unverified table name reached historical SQL: %s", sql)
+						return nil
+					}).AnyTimes()
+				bh.EXPECT().GetExecResultSet().Return([]interface{}{buildLCAProbeResultSetWithRows(
+					[]interface{}{int64(0), int64(1), "decoy", "h1"},
+				)}).AnyTimes()
+				bh.EXPECT().ClearExecResultSet().AnyTimes()
+			}
 
 			tombstones := buildIntDataBatch(t, mp, []string{"id"}, tables.def.colTypes[:1], [][]any{{int64(1)}})
 			defer tombstones.Clean(mp)
@@ -1242,6 +1258,7 @@ func TestHandleDelsOnLCA_SQLFallbackKeepsSnapshotRelation(t *testing.T) {
 			if !definitionLookupHits {
 				require.ErrorIs(t, err, lookupErr)
 				require.Nil(t, deleted)
+				require.Equal(t, 1, tombstones.RowCount())
 				return
 			}
 			require.NoError(t, err)
@@ -1335,13 +1352,14 @@ func TestLCAProbeColumnLayoutExcludesTargetOnlyColumns(t *testing.T) {
 		{Name: "added", ColId: 3, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int64)}},
 	}}
 
-	layout, err := lcaProbeColumnLayout(
+	layout, err := buildLCAProbeColumnLayout(
 		lcaDef,
 		targetDef,
 		[]string{"id", "name", "added"},
 		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()},
 		[]int{2},
 		nil,
+		false,
 	)
 
 	require.NoError(t, err)
@@ -1351,13 +1369,14 @@ func TestLCAProbeColumnLayoutExcludesTargetOnlyColumns(t *testing.T) {
 }
 
 func TestLCAProbeColumnLayoutExcludesTargetOnlyColumnsWithoutLCAMetadata(t *testing.T) {
-	layout, err := lcaProbeColumnLayout(
+	layout, err := buildLCAProbeColumnLayout(
 		&plan.TableDef{},
 		&plan.TableDef{},
 		[]string{"a", "c"},
 		[]types.Type{types.T_int64.ToType(), types.T_int32.ToType()},
 		[]int{1},
 		nil,
+		false,
 	)
 
 	require.NoError(t, err)
@@ -1375,13 +1394,14 @@ func TestLCAProbeColumnLayoutUsesLineageResolvedRename(t *testing.T) {
 		{Name: "bb", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
 	}}
 
-	layout, err := lcaProbeColumnLayout(
+	layout, err := buildLCAProbeColumnLayout(
 		lcaDef,
 		targetDef,
 		[]string{"a", "bb"},
 		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
 		nil,
 		[]string{"a", "b"},
+		false,
 	)
 
 	require.NoError(t, err)
@@ -1397,13 +1417,14 @@ func TestLCAProbeColumnLayoutKeepsHistoricalNameAfterEndpointRename(t *testing.T
 		{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
 	}}
 
-	layout, err := lcaProbeColumnLayout(
+	layout, err := buildLCAProbeColumnLayout(
 		lcaDef,
 		targetDef,
 		[]string{"id"},
 		[]types.Type{types.T_int64.ToType()},
 		nil,
 		[]string{"id"},
+		false,
 	)
 
 	require.NoError(t, err)
@@ -1425,8 +1446,7 @@ func TestLCAProbeRenamedSnapshotSQLAndReaderParity(t *testing.T) {
 		{name: "SQL zero logical time"},
 		{name: "SQL nonzero logical time", logical: 2},
 		{name: "forced Reader nonzero logical time", logical: 2, reader: true},
-		{name: "SQL with live endpoint metadata", logical: 2, lookupFails: true},
-		{name: "SQL with matching historical metadata", logical: 2, lookupFails: true, matchingFallback: true},
+		{name: "reader selected after lookup failure with matching historical metadata", logical: 2, lookupFails: true, matchingFallback: true},
 		{name: "Reader with matching historical relation", logical: 2, reader: true, lookupFails: true, matchingFallback: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1467,9 +1487,9 @@ func TestLCAProbeRenamedSnapshotSQLAndReaderParity(t *testing.T) {
 					Return("", "", nil, moerr.NewInternalErrorNoCtx("cannot reopen historical relation"))
 			} else {
 				historicalRel := mock_frontend.NewMockRelation(ctrl)
-				historicalRel.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("lca_tbl", "v"))
+				historicalRel.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("original_name", "v"))
 				storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, uint64(77)).
-					Return("db1", "lca_tbl", historicalRel, nil)
+					Return("db1", "original_name", historicalRel, nil)
 				wantRangeFallback = historicalRel
 			}
 			ses.txnHandler = &TxnHandler{storage: storage, txnOp: txnOp}
@@ -1478,6 +1498,8 @@ func TestLCAProbeRenamedSnapshotSQLAndReaderParity(t *testing.T) {
 			if tc.reader {
 				tables.lcaReaderProbeMode = &atomic.Bool{}
 				tables.lcaReaderProbeMode.Store(true)
+			}
+			if tc.reader || tc.matchingFallback {
 				original := scanSnapshotRelationByIDWithFallback
 				t.Cleanup(func() { scanSnapshotRelationByIDWithFallback = original })
 				read := false
@@ -1500,6 +1522,7 @@ func TestLCAProbeRenamedSnapshotSQLAndReaderParity(t *testing.T) {
 			} else {
 				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
 					require.Contains(t, sql, fmt.Sprintf("{MO_TS='10-%d'}", tc.logical))
+					require.Contains(t, sql, "`db1`.`original_name`")
 					require.Contains(t, sql, "lca.`v`")
 					require.NotContains(t, sql, "lca.`w`")
 					return nil
@@ -1752,13 +1775,14 @@ func TestLCAProbeColumnLayoutExcludesIncompatibleTargetOnlyColumn(t *testing.T) 
 		{Name: "c", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
 	}}
 
-	layout, err := lcaProbeColumnLayout(
+	layout, err := buildLCAProbeColumnLayout(
 		lcaDef,
 		targetDef,
 		[]string{"a", "c"},
 		[]types.Type{types.T_int64.ToType(), types.New(types.T_varchar, 20, 0)},
 		[]int{1},
 		nil,
+		false,
 	)
 
 	require.NoError(t, err)
@@ -1776,13 +1800,14 @@ func TestLCAProbeColumnLayoutRejectsIncompatibleCommonColumn(t *testing.T) {
 		{Name: "b", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
 	}}
 
-	_, err := lcaProbeColumnLayout(
+	_, err := buildLCAProbeColumnLayout(
 		lcaDef,
 		targetDef,
 		[]string{"a", "b"},
 		[]types.Type{types.T_int64.ToType(), types.New(types.T_varchar, 20, 0)},
 		nil,
 		nil,
+		false,
 	)
 
 	require.ErrorContains(t, err, "column b has a different type")
@@ -1798,13 +1823,14 @@ func TestLCAProbeColumnLayoutIgnoresTargetOnlyRowIDCollision(t *testing.T) {
 		{Name: "c", ColId: 3, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int32)}},
 	}}
 
-	layout, err := lcaProbeColumnLayout(
+	layout, err := buildLCAProbeColumnLayout(
 		lcaDef,
 		targetDef,
 		[]string{"a", "c"},
 		[]types.Type{types.T_int64.ToType(), types.T_int32.ToType()},
 		[]int{1},
 		nil,
+		false,
 	)
 
 	require.NoError(t, err)
@@ -1822,13 +1848,14 @@ func TestLCAProbeColumnLayoutIgnoresUnrelatedIdentityCollision(t *testing.T) {
 		{Name: "c", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
 	}}
 
-	layout, err := lcaProbeColumnLayout(
+	layout, err := buildLCAProbeColumnLayout(
 		lcaDef,
 		targetDef,
 		[]string{"a", "c"},
 		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
 		nil,
 		nil,
+		false,
 	)
 
 	require.NoError(t, err)
@@ -1950,6 +1977,25 @@ func decodeCapturedRows(t *testing.T, bat *batch.Batch, colTypes []types.Type) [
 	return rows
 }
 
+func stubLCAHistoricalLookup(t *testing.T, ctrl *gomock.Controller, ses *Session, id uint64, def *plan.TableDef) {
+	t.Helper()
+	original := ses.txnHandler
+	var txnOp *mock_frontend.MockTxnOperator
+	if original != nil && original.GetTxn() != nil {
+		txnOp = original.GetTxn().(*mock_frontend.MockTxnOperator)
+	} else {
+		txnOp = mock_frontend.NewMockTxnOperator(ctrl)
+	}
+	snapshotTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().CloneSnapshotOp(types.BuildTS(10, 0).ToTimestamp()).Return(snapshotTxn).AnyTimes()
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+	storage := mock_frontend.NewMockEngine(ctrl)
+	storage.EXPECT().GetRelationById(gomock.Any(), snapshotTxn, id).Return(def.DbName, def.Name, rel, nil).AnyTimes()
+	ses.txnHandler = &TxnHandler{storage: storage, txnOp: txnOp}
+	t.Cleanup(func() { ses.txnHandler = original })
+}
+
 func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 	ses := newValidateSession(t)
 
@@ -1961,13 +2007,15 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
 		tblStuff.def.lcaColNames = []string{"id", "name", "hidden"}
 		lcaDef := newTestBranchTableDef("lca_tbl", "name")
-		lcaDef.Cols[0].Name = "id_new"
-		lcaDef.Pkey.Names = []string{"id_new"}
-		lcaDef.Pkey.PkeyColName = "id_new"
+		endpointDef := newTestBranchTableDef("lca_tbl", "name")
+		endpointDef.Cols[0].Name = "id_new"
+		endpointDef.Pkey.Names = []string{"id_new"}
+		endpointDef.Pkey.PkeyColName = "id_new"
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
-			GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+			GetTableDef(gomock.Any()).Return(endpointDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
 			GetTableID(gomock.Any()).Return(uint64(75)).AnyTimes()
+		stubLCAHistoricalLookup(t, ctrl, ses, 75, lcaDef)
 
 		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -2009,6 +2057,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		lcaDef.Pkey.PkeyColName = "select"
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(76)).AnyTimes()
+		stubLCAHistoricalLookup(t, ctrl, ses, 76, lcaDef)
 
 		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -2054,6 +2103,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		lcaDef.Cols[0].Typ = plan.Type{Id: int32(types.T_float64)}
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(76)).AnyTimes()
+		stubLCAHistoricalLookup(t, ctrl, ses, 76, lcaDef)
 
 		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -2159,6 +2209,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 				GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 			tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
 				GetTableID(gomock.Any()).Return(uint64(82)).AnyTimes()
+			stubLCAHistoricalLookup(t, ctrl, ses, 82, lcaDef)
 
 			wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
 			bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -2243,6 +2294,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 			GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
 			GetTableID(gomock.Any()).Return(uint64(76)).AnyTimes()
+		stubLCAHistoricalLookup(t, ctrl, ses, 76, lcaDef)
 
 		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -2313,6 +2365,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		}
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(76)).AnyTimes()
+		stubLCAHistoricalLookup(t, ctrl, ses, 76, lcaDef)
 
 		mrs := &MysqlResultSet{}
 		for _, col := range []struct {
@@ -2367,6 +2420,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		lcaDef := newTestBranchTableDef("lca_tbl", "b")
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
+		stubLCAHistoricalLookup(t, ctrl, ses, 77, lcaDef)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
@@ -2411,6 +2465,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		lcaDef := newTestBranchTableDef("lca_tbl", "name")
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(78)).AnyTimes()
+		stubLCAHistoricalLookup(t, ctrl, ses, 78, lcaDef)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(moerr.NewBadDBNoCtx("snapshot_gc")).Times(1)
@@ -2514,6 +2569,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		tblStuff.baseRel = baseRel
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(79)).AnyTimes()
+		stubLCAHistoricalLookup(t, ctrl, ses, 79, lcaDef)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		wantErr := moerr.NewInternalErrorNoCtx("sql failed")
@@ -2572,6 +2628,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		}
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(81)).AnyTimes()
+		stubLCAHistoricalLookup(t, ctrl, ses, 81, lcaDef)
 
 		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -2621,6 +2678,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		tblStuff.def.pkColIdxes = []int{0, 1}
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(80)).AnyTimes()
+		stubLCAHistoricalLookup(t, ctrl, ses, 80, lcaDef)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		wantErr := moerr.NewInternalErrorNoCtx("sql failed")
@@ -2805,6 +2863,7 @@ func TestHashDiffConflictReportsExpandedUpdatesWithoutValueClaim(t *testing.T) {
 	lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("lca_tbl", "name")).AnyTimes()
 	lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
 	tblStuff.lcaRel = lcaRel
+	stubLCAHistoricalLookup(t, ctrl, ses, 77, tblStuff.lcaRel.GetTableDef(context.Background()))
 
 	lcaResult := []interface{}{buildLCAProbeResultSetWithRows([]interface{}{int64(0), int64(7), "ancestor", "h0"})}
 	bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -2920,6 +2979,7 @@ func TestHashDiff_HasLCANoopUpdateFiltering(t *testing.T) {
 			lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 			lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
 			tblStuff.lcaRel = lcaRel
+			stubLCAHistoricalLookup(t, ctrl, ses, 77, tblStuff.lcaRel.GetTableDef(context.Background()))
 
 			bh := mock_frontend.NewMockBackgroundExec(ctrl)
 			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -3040,6 +3100,7 @@ func TestHashDiff_HasLCAUpdateIgnoresTargetOnlyColumns(t *testing.T) {
 	lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 	lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
 	tblStuff.lcaRel = lcaRel
+	stubLCAHistoricalLookup(t, ctrl, ses, 77, tblStuff.lcaRel.GetTableDef(context.Background()))
 
 	bh := mock_frontend.NewMockBackgroundExec(ctrl)
 	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
@@ -3131,6 +3192,7 @@ func TestHashDiff_HasLCAFakePKUpdateIsNotNoop(t *testing.T) {
 	lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 	lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
 	tblStuff.lcaRel = lcaRel
+	stubLCAHistoricalLookup(t, ctrl, ses, 77, tblStuff.lcaRel.GetTableDef(context.Background()))
 
 	bh := mock_frontend.NewMockBackgroundExec(ctrl)
 	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
@@ -3297,6 +3359,7 @@ func TestHashDiff_HasLCADecimal256PKUpdateIsNotMisclassified(t *testing.T) {
 	}
 
 	tblStuff := newTestBranchTableStuffDecimal256PK(ctrl, pkType)
+	stubLCAHistoricalLookup(t, ctrl, ses, 77, tblStuff.lcaRel.GetTableDef(context.Background()))
 	defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 	worker, err := ants.NewPool(1)
 	require.NoError(t, err)
@@ -3420,6 +3483,7 @@ func TestHashDiff_HasLCADecimal256PKDeleteIsReported(t *testing.T) {
 	}
 
 	tblStuff := newTestBranchTableStuffDecimal256PK(ctrl, pkType)
+	stubLCAHistoricalLookup(t, ctrl, ses, 77, tblStuff.lcaRel.GetTableDef(context.Background()))
 	defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 	worker, err := ants.NewPool(1)
 	require.NoError(t, err)
@@ -4228,7 +4292,7 @@ func TestDataBranchSourceColToTargetIdxPreservesRebuiltCompositePrimaryKey(t *te
 	)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1, 3}, mapping)
-	layout, err := lcaProbeColumnLayout(
+	layout, err := buildLCAProbeColumnLayout(
 		sourceDef, targetDef,
 		[]string{"select", "line item", "payload", catalog.CPrimaryKeyColName},
 		[]types.Type{
@@ -4237,6 +4301,7 @@ func TestDataBranchSourceColToTargetIdxPreservesRebuiltCompositePrimaryKey(t *te
 		},
 		[]int{2},
 		nil,
+		false,
 	)
 	require.NoError(t, err)
 	require.Equal(t, []string{"select", "line item", catalog.CPrimaryKeyColName}, layout.attrs)
@@ -4586,6 +4651,7 @@ func TestHashDiffOnlineApplyOrdersLCAChunks(t *testing.T) {
 			lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("lca_tbl", "name")).AnyTimes()
 			lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
 			tblStuff.lcaRel = lcaRel
+			stubLCAHistoricalLookup(t, ctrl, ses, 77, tblStuff.lcaRel.GetTableDef(context.Background()))
 			var active atomic.Bool
 			var key atomic.Int64
 			var probes atomic.Int32

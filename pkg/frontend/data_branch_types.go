@@ -297,7 +297,7 @@ type tableStuff struct {
 }
 
 func (t tableStuff) lcaFallbackRangeRel(snapshotTS types.TS) engine.Relation {
-	if t.lcaRelSnapshot.IsEmpty() || t.lcaRelSnapshot.EQ(&snapshotTS) {
+	if !t.lcaRelSnapshot.IsEmpty() && t.lcaRelSnapshot.EQ(&snapshotTS) {
 		return t.lcaRel
 	}
 	return nil

@@ -75,6 +75,17 @@ data branch diff r1 against r0;
 data branch diff r2 against r0{snapshot='diff_older_ancestor_sp'};
 data branch diff r0{snapshot='diff_older_ancestor_sp'} against r2;
 
+-- The ancestor's current name belonged to another table at the fork.
+create table original_name(id int primary key, v int);
+create table reused_name(id int primary key, v int);
+insert into original_name values (1,10);
+insert into reused_name values (1,99);
+data branch create table renamed_child from original_name;
+rename table reused_name to decoy_name;
+rename table original_name to reused_name;
+delete from renamed_child where id = 1;
+data branch diff renamed_child against reused_name;
+
 -- Same-table DIFF reads the deleted value under its name at the earlier snapshot.
 create table s0(id int primary key, v int);
 insert into s0 values (1,10);

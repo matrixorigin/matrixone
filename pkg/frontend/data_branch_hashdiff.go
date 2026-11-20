@@ -127,21 +127,10 @@ func lcaProbeResultTargetIndexes(
 	return append([]int(nil), layout.targetIdxes...), nil
 }
 
-// lcaProbeColumnLayout selects compatible common columns from the LCA and
+// buildLCAProbeColumnLayout selects compatible common columns from the LCA and
 // target layouts. The caller reconstructs target-only columns as NULL because
 // they are excluded from endpoint comparison and MERGE apply even when an
 // ancestor generation still contains an older representation of the column.
-func lcaProbeColumnLayout(
-	lcaDef *plan2.TableDef,
-	targetDef *plan2.TableDef,
-	targetColNames []string,
-	targetColTypes []types.Type,
-	targetOnlyIdxes []int,
-	lcaColNames []string,
-) (lcaProbeLayout, error) {
-	return buildLCAProbeColumnLayout(lcaDef, targetDef, targetColNames, targetColTypes, targetOnlyIdxes, lcaColNames, false)
-}
-
 func buildLCAProbeColumnLayout(
 	lcaDef, targetDef *plan2.TableDef,
 	targetColNames []string,
@@ -244,8 +233,7 @@ func buildLCAProbeColumnLayout(
 
 func lcaProbeTableDefAtSnapshot(
 	ctx context.Context, ses *Session, tblStuff tableStuff, snapshotTS types.TS,
-	allowMismatchedEndpointFallback bool,
-) (rel engine.Relation, def *plan2.TableDef, resolvedSnapshot bool, err error) {
+) (rel engine.Relation, def *plan2.TableDef, sqlReady bool, err error) {
 	scanCtx := identityCtx(ctx, tblStuff.resolvedLCAIdentity(ctx, ses))
 	var lookupErr error
 	if handler := ses.GetTxnHandler(); handler != nil {
@@ -263,18 +251,19 @@ func lcaProbeTableDefAtSnapshot(
 			}
 		}
 	}
-	fallbackRel := tblStuff.lcaFallbackRangeRel(snapshotTS)
-	if !allowMismatchedEndpointFallback && fallbackRel == nil {
-		if lookupErr != nil {
-			return nil, nil, false, lookupErr
+	// A relation already opened at this exact snapshot can feed the reader.
+	// Only a successful historical lookup enables the SQL path.
+	if fallbackRel := tblStuff.lcaFallbackRangeRel(snapshotTS); fallbackRel != nil {
+		if def := fallbackRel.GetTableDef(scanCtx); def != nil {
+			return fallbackRel, def, false, nil
 		}
-		return nil, nil, false, moerr.NewInternalErrorNoCtxf(
-			"DATA BRANCH LCA table definition is unavailable at snapshot %s", snapshotTS.ToString(),
-		)
 	}
-	// Time-travel SQL can use compatible type metadata from an endpoint
-	// while keeping the column names resolved from the historical lineage.
-	return nil, tblStuff.lcaRel.GetTableDef(scanCtx), fallbackRel != nil && !tblStuff.lcaRelSnapshot.IsEmpty(), nil
+	if lookupErr != nil {
+		return nil, nil, false, lookupErr
+	}
+	return nil, nil, false, moerr.NewInternalErrorNoCtxf(
+		"DATA BRANCH LCA table definition is unavailable at snapshot %s", snapshotTS.ToString(),
+	)
 }
 
 // should read the LCA table to get all column values.
@@ -316,20 +305,27 @@ func handleDelsOnLCA(
 	lcaOwnerMismatch := tblStuff.resolvedLCAIdentity(ctx, ses).account != ses.GetAccountId()
 	forceReaderProbe := lcaOwnerMismatch ||
 		(tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load())
-	if forceReaderProbe {
-		sqlRet, err = runLCAProbeWithReaderFallback(ctx, ses, tBat, tblStuff, snapshotTS)
+	var lcaSnapshotRel engine.Relation
+	var lcaTblDef *plan2.TableDef
+	var sqlReady bool
+	if !forceReaderProbe {
+		lcaSnapshotRel, lcaTblDef, sqlReady, err = lcaProbeTableDefAtSnapshot(ctx, ses, tblStuff, snapshotTS)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !sqlReady {
+		sqlRet, err = runLCAProbeWithReaderFallbackWithPreopened(
+			ctx, ses, tBat, tblStuff, snapshotTS, lcaSnapshotRel, lcaTblDef,
+		)
 		if err != nil {
 			return nil, err
 		}
 		fullTargetLayout = true
 	} else {
-		lcaSnapshotRel, lcaTblDef, resolvedSnapshot, lookupErr := lcaProbeTableDefAtSnapshot(ctx, ses, tblStuff, snapshotTS, true)
-		if lookupErr != nil {
-			return nil, lookupErr
-		}
 		lcaLayout, err = buildLCAProbeColumnLayout(
 			lcaTblDef, tblStuff.tarRel.GetTableDef(ctx), tblStuff.def.colNames, tblStuff.def.colTypes,
-			tblStuff.def.tarOnlyIdxes, tblStuff.def.lcaColNames, resolvedSnapshot,
+			tblStuff.def.tarOnlyIdxes, tblStuff.def.lcaColNames, true,
 		)
 		if err != nil {
 			return nil, err
@@ -499,7 +495,7 @@ func handleDelsOnLCA(
 					zap.Error(err),
 				)
 				sqlRet, err = runLCAProbeWithReaderFallbackWithPreopened(
-					ctx, ses, tBat, tblStuff, snapshotTS, lcaSnapshotRel, lcaTblDef, resolvedSnapshot,
+					ctx, ses, tBat, tblStuff, snapshotTS, lcaSnapshotRel, lcaTblDef,
 				)
 				if err != nil {
 					logutil.Error(
@@ -740,7 +736,7 @@ func runLCAProbeWithReaderFallback(
 	tblStuff tableStuff,
 	snapshotTS types.TS,
 ) (executor.Result, error) {
-	return runLCAProbeWithReaderFallbackWithPreopened(ctx, ses, tBat, tblStuff, snapshotTS, nil, nil, false)
+	return runLCAProbeWithReaderFallbackWithPreopened(ctx, ses, tBat, tblStuff, snapshotTS, nil, nil)
 }
 
 func runLCAProbeWithReaderFallbackWithPreopened(
@@ -751,7 +747,6 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 	snapshotTS types.TS,
 	preopenedRel engine.Relation,
 	preopenedDef *plan2.TableDef,
-	preopenedResolved bool,
 ) (sqlRet executor.Result, err error) {
 	start := time.Now()
 	sqlRet.Mp = ses.proc.Mp()
@@ -770,9 +765,9 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 		return sqlRet, nil
 	}
 
-	lcaSnapshotRel, lcaTblDef, resolvedSnapshot := preopenedRel, preopenedDef, preopenedResolved
-	if lcaSnapshotRel == nil || lcaTblDef == nil {
-		lcaSnapshotRel, lcaTblDef, resolvedSnapshot, err = lcaProbeTableDefAtSnapshot(ctx, ses, tblStuff, snapshotTS, false)
+	lcaSnapshotRel, lcaTblDef := preopenedRel, preopenedDef
+	if lcaTblDef == nil {
+		lcaSnapshotRel, lcaTblDef, _, err = lcaProbeTableDefAtSnapshot(ctx, ses, tblStuff, snapshotTS)
 		if err != nil {
 			return executor.Result{}, err
 		}
@@ -793,7 +788,7 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 	}
 	lcaLayout, err := buildLCAProbeColumnLayout(
 		lcaTblDef, tblStuff.tarRel.GetTableDef(ctx), tblStuff.def.colNames, tblStuff.def.colTypes,
-		tblStuff.def.tarOnlyIdxes, tblStuff.def.lcaColNames, resolvedSnapshot,
+		tblStuff.def.tarOnlyIdxes, tblStuff.def.lcaColNames, true,
 	)
 	if err != nil {
 		return executor.Result{}, err
@@ -882,17 +877,13 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 	// every in-flight catalog and storage read here (identityCtx keeps the
 	// live context when accounts already match).
 	scanCtx := identityCtx(ctx, tblStuff.resolvedLCAIdentity(ctx, ses))
-	fallbackRangeRel := lcaSnapshotRel
-	if fallbackRangeRel == nil {
-		fallbackRangeRel = tblStuff.lcaFallbackRangeRel(snapshotTS)
-	}
 	err = scanSnapshotRelationByIDWithFallback(
 		scanCtx,
 		"lca-reader-fallback",
 		ses,
 		tblStuff.lcaRel.GetTableID(ctx),
 		snapshotTS,
-		fallbackRangeRel,
+		lcaSnapshotRel,
 		lcaLayout.attrs,
 		lcaLayout.types,
 		pkFilterExpr,

@@ -109,6 +109,17 @@ r2  ¦  DELETE  ¦  1  ¦  10
 data branch diff r0{snapshot='diff_older_ancestor_sp'} against r2;
 ➤ diff r0 against r2[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
 r2  ¦  DELETE  ¦  1  ¦  10
+create table original_name(id int primary key, v int);
+create table reused_name(id int primary key, v int);
+insert into original_name values (1,10);
+insert into reused_name values (1,99);
+data branch create table renamed_child from original_name;
+rename table reused_name to decoy_name;
+rename table original_name to reused_name;
+delete from renamed_child where id = 1;
+data branch diff renamed_child against reused_name;
+➤ diff renamed_child against reused_name[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
+renamed_child  ¦  DELETE  ¦  1  ¦  10
 create table s0(id int primary key, v int);
 insert into s0 values (1,10);
 create snapshot diff_same_table_old_sp for database test_diff_older_ancestor;

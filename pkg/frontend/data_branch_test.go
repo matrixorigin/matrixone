@@ -2660,12 +2660,12 @@ func TestDataBranchReconcileSameTableSnapshotRename(t *testing.T) {
 			wantNames := []string{"id", "v", "hidden"}
 			require.Equal(t, wantNames, tables.def.lcaColNames)
 
-			rel, lcaDef, resolved, err := lcaProbeTableDefAtSnapshot(ctx, ses, tables, types.TimestampToTS(old), false)
+			rel, lcaDef, sqlReady, err := lcaProbeTableDefAtSnapshot(ctx, ses, tables, types.TimestampToTS(old))
 			require.NoError(t, err)
 			require.Same(t, snapshotRel, rel)
-			require.True(t, resolved)
+			require.True(t, sqlReady)
 			layout, err := buildLCAProbeColumnLayout(lcaDef, tarDef, tables.def.colNames, tables.def.colTypes,
-				tables.def.tarOnlyIdxes, tables.def.lcaColNames, resolved)
+				tables.def.tarOnlyIdxes, tables.def.lcaColNames, true)
 			require.NoError(t, err)
 			require.Equal(t, wantNames, layout.attrs)
 			require.Equal(t, []int{0, 1, 2}, layout.targetIdxes)
@@ -2748,8 +2748,8 @@ func TestDataBranchReconcileEarlierLCAColumnName(t *testing.T) {
 			require.Equal(t, []string{"id", "v", "hidden"}, tables.def.lcaColNames)
 			require.Equal(t, []string{"id", tc.tarLCAName, "hidden"}, tables.def.tarLCAColNames)
 			require.Equal(t, []string{"id", tc.baseLCAName, "hidden"}, tables.def.baseLCAColNames)
-			layout, err := lcaProbeColumnLayout(vDef, tarDef, tables.def.colNames, tables.def.colTypes,
-				tables.def.tarOnlyIdxes, tables.def.lcaColNames)
+			layout, err := buildLCAProbeColumnLayout(vDef, tarDef, tables.def.colNames, tables.def.colTypes,
+				tables.def.tarOnlyIdxes, tables.def.lcaColNames, false)
 			require.NoError(t, err)
 			require.Equal(t, []string{"id", "v", "hidden"}, layout.attrs)
 
