@@ -63,7 +63,7 @@ func int8AsI32(s []int8) []int32 {
 // bounded well under 2^31, but the 16-lane total can exceed it).
 func sumI32x16(v archsimd.Int32x16) int64 {
 	var a [16]int32
-	v.Store(&a)
+	v.StoreArray(&a)
 	var s int64
 	for _, x := range a {
 		s += int64(x)
@@ -90,8 +90,8 @@ func l2sqInt8SIMD(a, b []int8) (float64, error) {
 	acc := archsimd.Int32x16{}
 	nq, j := len(ai), 0
 	for ; j <= nq-16; j += 16 {
-		a0, a1, a2, a3 := unpackI8(archsimd.LoadInt32x16Slice(ai[j : j+16]))
-		b0, b1, b2, b3 := unpackI8(archsimd.LoadInt32x16Slice(bi[j : j+16]))
+		a0, a1, a2, a3 := unpackI8(archsimd.LoadInt32x16(ai[j : j+16]))
+		b0, b1, b2, b3 := unpackI8(archsimd.LoadInt32x16(bi[j : j+16]))
 		d0, d1, d2, d3 := a0.Sub(b0), a1.Sub(b1), a2.Sub(b2), a3.Sub(b3)
 		acc = acc.Add(d0.Mul(d0).Add(d1.Mul(d1)).Add(d2.Mul(d2).Add(d3.Mul(d3))))
 	}
@@ -112,8 +112,8 @@ func innerProductInt8SIMD(a, b []int8) (float64, error) {
 	acc := archsimd.Int32x16{}
 	nq, j := len(ai), 0
 	for ; j <= nq-16; j += 16 {
-		a0, a1, a2, a3 := unpackI8(archsimd.LoadInt32x16Slice(ai[j : j+16]))
-		b0, b1, b2, b3 := unpackI8(archsimd.LoadInt32x16Slice(bi[j : j+16]))
+		a0, a1, a2, a3 := unpackI8(archsimd.LoadInt32x16(ai[j : j+16]))
+		b0, b1, b2, b3 := unpackI8(archsimd.LoadInt32x16(bi[j : j+16]))
 		acc = acc.Add(a0.Mul(b0).Add(a1.Mul(b1)).Add(a2.Mul(b2).Add(a3.Mul(b3))))
 	}
 	sum := sumI32x16(acc)
@@ -134,8 +134,8 @@ func l1DistanceInt8SIMD(a, b []int8) (float64, error) {
 	abs := func(d archsimd.Int32x16) archsimd.Int32x16 { return d.Max(zero.Sub(d)) }
 	nq, j := len(ai), 0
 	for ; j <= nq-16; j += 16 {
-		a0, a1, a2, a3 := unpackI8(archsimd.LoadInt32x16Slice(ai[j : j+16]))
-		b0, b1, b2, b3 := unpackI8(archsimd.LoadInt32x16Slice(bi[j : j+16]))
+		a0, a1, a2, a3 := unpackI8(archsimd.LoadInt32x16(ai[j : j+16]))
+		b0, b1, b2, b3 := unpackI8(archsimd.LoadInt32x16(bi[j : j+16]))
 		acc = acc.Add(abs(a0.Sub(b0)).Add(abs(a1.Sub(b1))).Add(abs(a2.Sub(b2)).Add(abs(a3.Sub(b3)))))
 	}
 	sum := sumI32x16(acc)
@@ -161,8 +161,8 @@ func cosineDistanceInt8SIMD(a, b []int8) (float64, error) {
 	dotA, naA, nbA := archsimd.Int32x16{}, archsimd.Int32x16{}, archsimd.Int32x16{}
 	nq, j := len(ai), 0
 	for ; j <= nq-16; j += 16 {
-		a0, a1, a2, a3 := unpackI8(archsimd.LoadInt32x16Slice(ai[j : j+16]))
-		b0, b1, b2, b3 := unpackI8(archsimd.LoadInt32x16Slice(bi[j : j+16]))
+		a0, a1, a2, a3 := unpackI8(archsimd.LoadInt32x16(ai[j : j+16]))
+		b0, b1, b2, b3 := unpackI8(archsimd.LoadInt32x16(bi[j : j+16]))
 		dotA = dotA.Add(a0.Mul(b0).Add(a1.Mul(b1)).Add(a2.Mul(b2).Add(a3.Mul(b3))))
 		naA = naA.Add(a0.Mul(a0).Add(a1.Mul(a1)).Add(a2.Mul(a2).Add(a3.Mul(a3))))
 		nbA = nbA.Add(b0.Mul(b0).Add(b1.Mul(b1)).Add(b2.Mul(b2).Add(b3.Mul(b3))))

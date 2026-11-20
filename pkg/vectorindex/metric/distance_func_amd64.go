@@ -37,7 +37,7 @@ var (
 // Reduction Helpers - Simple Store and Tree Sum for maximum throughput
 func sumF32x16(v archsimd.Float32x16) float32 {
 	var a [16]float32
-	v.Store(&a)
+	v.StoreArray(&a)
 	s0 := (a[0] + a[1]) + (a[2] + a[3])
 	s1 := (a[4] + a[5]) + (a[6] + a[7])
 	s2 := (a[8] + a[9]) + (a[10] + a[11])
@@ -47,7 +47,7 @@ func sumF32x16(v archsimd.Float32x16) float32 {
 
 func sumF64x8(v archsimd.Float64x8) float64 {
 	var a [8]float64
-	v.Store(&a)
+	v.StoreArray(&a)
 	return (a[0] + a[1] + a[2] + a[3]) + (a[4] + a[5] + a[6] + a[7])
 }
 

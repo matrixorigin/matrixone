@@ -91,8 +91,8 @@ func l2sqUint8SIMD(a, b []uint8) (float64, error) {
 	acc := archsimd.Int32x16{}
 	nq, j := len(au), 0
 	for ; j <= nq-16; j += 16 {
-		a0, a1, a2, a3 := unpackU8(archsimd.LoadUint32x16Slice(au[j:j+16]), mask)
-		b0, b1, b2, b3 := unpackU8(archsimd.LoadUint32x16Slice(bu[j:j+16]), mask)
+		a0, a1, a2, a3 := unpackU8(archsimd.LoadUint32x16(au[j:j+16]), mask)
+		b0, b1, b2, b3 := unpackU8(archsimd.LoadUint32x16(bu[j:j+16]), mask)
 		d0, d1, d2, d3 := a0.Sub(b0), a1.Sub(b1), a2.Sub(b2), a3.Sub(b3)
 		acc = acc.Add(d0.Mul(d0).Add(d1.Mul(d1)).Add(d2.Mul(d2).Add(d3.Mul(d3))))
 	}
@@ -114,8 +114,8 @@ func innerProductUint8SIMD(a, b []uint8) (float64, error) {
 	acc := archsimd.Int32x16{}
 	nq, j := len(au), 0
 	for ; j <= nq-16; j += 16 {
-		a0, a1, a2, a3 := unpackU8(archsimd.LoadUint32x16Slice(au[j:j+16]), mask)
-		b0, b1, b2, b3 := unpackU8(archsimd.LoadUint32x16Slice(bu[j:j+16]), mask)
+		a0, a1, a2, a3 := unpackU8(archsimd.LoadUint32x16(au[j:j+16]), mask)
+		b0, b1, b2, b3 := unpackU8(archsimd.LoadUint32x16(bu[j:j+16]), mask)
 		acc = acc.Add(a0.Mul(b0).Add(a1.Mul(b1)).Add(a2.Mul(b2).Add(a3.Mul(b3))))
 	}
 	sum := sumI32x16(acc)
@@ -137,8 +137,8 @@ func l1DistanceUint8SIMD(a, b []uint8) (float64, error) {
 	abs := func(d archsimd.Int32x16) archsimd.Int32x16 { return d.Max(zero.Sub(d)) }
 	nq, j := len(au), 0
 	for ; j <= nq-16; j += 16 {
-		a0, a1, a2, a3 := unpackU8(archsimd.LoadUint32x16Slice(au[j:j+16]), mask)
-		b0, b1, b2, b3 := unpackU8(archsimd.LoadUint32x16Slice(bu[j:j+16]), mask)
+		a0, a1, a2, a3 := unpackU8(archsimd.LoadUint32x16(au[j:j+16]), mask)
+		b0, b1, b2, b3 := unpackU8(archsimd.LoadUint32x16(bu[j:j+16]), mask)
 		acc = acc.Add(abs(a0.Sub(b0)).Add(abs(a1.Sub(b1))).Add(abs(a2.Sub(b2)).Add(abs(a3.Sub(b3)))))
 	}
 	sum := sumI32x16(acc)
@@ -165,8 +165,8 @@ func cosineDistanceUint8SIMD(a, b []uint8) (float64, error) {
 	dotA, naA, nbA := archsimd.Int32x16{}, archsimd.Int32x16{}, archsimd.Int32x16{}
 	nq, j := len(au), 0
 	for ; j <= nq-16; j += 16 {
-		a0, a1, a2, a3 := unpackU8(archsimd.LoadUint32x16Slice(au[j:j+16]), mask)
-		b0, b1, b2, b3 := unpackU8(archsimd.LoadUint32x16Slice(bu[j:j+16]), mask)
+		a0, a1, a2, a3 := unpackU8(archsimd.LoadUint32x16(au[j:j+16]), mask)
+		b0, b1, b2, b3 := unpackU8(archsimd.LoadUint32x16(bu[j:j+16]), mask)
 		dotA = dotA.Add(a0.Mul(b0).Add(a1.Mul(b1)).Add(a2.Mul(b2).Add(a3.Mul(b3))))
 		naA = naA.Add(a0.Mul(a0).Add(a1.Mul(a1)).Add(a2.Mul(a2).Add(a3.Mul(a3))))
 		nbA = nbA.Add(b0.Mul(b0).Add(b1.Mul(b1)).Add(b2.Mul(b2).Add(b3.Mul(b3))))
@@ -206,8 +206,8 @@ func l2sqUint8AVX2(a, b []uint8) (float64, error) {
 	acc := archsimd.Int32x8{}
 	nq, j := len(au), 0
 	for ; j <= nq-8; j += 8 {
-		a0, a1, a2, a3 := unpackU8x8(archsimd.LoadUint32x8Slice(au[j:j+8]), mask)
-		b0, b1, b2, b3 := unpackU8x8(archsimd.LoadUint32x8Slice(bu[j:j+8]), mask)
+		a0, a1, a2, a3 := unpackU8x8(archsimd.LoadUint32x8(au[j:j+8]), mask)
+		b0, b1, b2, b3 := unpackU8x8(archsimd.LoadUint32x8(bu[j:j+8]), mask)
 		d0, d1, d2, d3 := a0.Sub(b0), a1.Sub(b1), a2.Sub(b2), a3.Sub(b3)
 		acc = acc.Add(d0.Mul(d0).Add(d1.Mul(d1)).Add(d2.Mul(d2).Add(d3.Mul(d3))))
 	}
@@ -229,8 +229,8 @@ func innerProductUint8AVX2(a, b []uint8) (float64, error) {
 	acc := archsimd.Int32x8{}
 	nq, j := len(au), 0
 	for ; j <= nq-8; j += 8 {
-		a0, a1, a2, a3 := unpackU8x8(archsimd.LoadUint32x8Slice(au[j:j+8]), mask)
-		b0, b1, b2, b3 := unpackU8x8(archsimd.LoadUint32x8Slice(bu[j:j+8]), mask)
+		a0, a1, a2, a3 := unpackU8x8(archsimd.LoadUint32x8(au[j:j+8]), mask)
+		b0, b1, b2, b3 := unpackU8x8(archsimd.LoadUint32x8(bu[j:j+8]), mask)
 		acc = acc.Add(a0.Mul(b0).Add(a1.Mul(b1)).Add(a2.Mul(b2).Add(a3.Mul(b3))))
 	}
 	sum := sumI32x8(acc)
@@ -252,8 +252,8 @@ func l1DistanceUint8AVX2(a, b []uint8) (float64, error) {
 	abs := func(d archsimd.Int32x8) archsimd.Int32x8 { return d.Max(zero.Sub(d)) }
 	nq, j := len(au), 0
 	for ; j <= nq-8; j += 8 {
-		a0, a1, a2, a3 := unpackU8x8(archsimd.LoadUint32x8Slice(au[j:j+8]), mask)
-		b0, b1, b2, b3 := unpackU8x8(archsimd.LoadUint32x8Slice(bu[j:j+8]), mask)
+		a0, a1, a2, a3 := unpackU8x8(archsimd.LoadUint32x8(au[j:j+8]), mask)
+		b0, b1, b2, b3 := unpackU8x8(archsimd.LoadUint32x8(bu[j:j+8]), mask)
 		acc = acc.Add(abs(a0.Sub(b0)).Add(abs(a1.Sub(b1))).Add(abs(a2.Sub(b2)).Add(abs(a3.Sub(b3)))))
 	}
 	sum := sumI32x8(acc)
@@ -280,8 +280,8 @@ func cosineDistanceUint8AVX2(a, b []uint8) (float64, error) {
 	dotA, naA, nbA := archsimd.Int32x8{}, archsimd.Int32x8{}, archsimd.Int32x8{}
 	nq, j := len(au), 0
 	for ; j <= nq-8; j += 8 {
-		a0, a1, a2, a3 := unpackU8x8(archsimd.LoadUint32x8Slice(au[j:j+8]), mask)
-		b0, b1, b2, b3 := unpackU8x8(archsimd.LoadUint32x8Slice(bu[j:j+8]), mask)
+		a0, a1, a2, a3 := unpackU8x8(archsimd.LoadUint32x8(au[j:j+8]), mask)
+		b0, b1, b2, b3 := unpackU8x8(archsimd.LoadUint32x8(bu[j:j+8]), mask)
 		dotA = dotA.Add(a0.Mul(b0).Add(a1.Mul(b1)).Add(a2.Mul(b2).Add(a3.Mul(b3))))
 		naA = naA.Add(a0.Mul(a0).Add(a1.Mul(a1)).Add(a2.Mul(a2).Add(a3.Mul(a3))))
 		nbA = nbA.Add(b0.Mul(b0).Add(b1.Mul(b1)).Add(b2.Mul(b2).Add(b3.Mul(b3))))
