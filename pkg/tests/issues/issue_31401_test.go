@@ -48,6 +48,7 @@ type issue31401CopyObserver struct {
 	retired  atomic.Int32
 	replicas sync.Map
 	// Optional barriers/failure injection operate at existing nested SQL calls.
+	hooksMu          sync.RWMutex
 	afterCopy        func(context.Context, int32) error
 	beforeRetire     func() error
 	beforeRecreate   func() error
@@ -151,6 +152,7 @@ func TestIssue31401AlterCopyRebuildTransaction(t *testing.T) {
 						}
 						return true
 					})
+					observer.hooksMu.Lock()
 					observer.afterRetire = func(checkCtx context.Context) error {
 						var count int
 						err := db.QueryRowContext(checkCtx, "select count(*) from mo_catalog.mo_iscp_log where table_id=? and job_id=? and drop_at is null", sourceTableID, sourceJobID).Scan(&count)
@@ -163,7 +165,9 @@ func TestIssue31401AlterCopyRebuildTransaction(t *testing.T) {
 						taskPreserved.Store(true)
 						return nil
 					}
+					observer.hooksMu.Unlock()
 				}
+				observer.hooksMu.Lock()
 				observer.afterCopy = func(callCtx context.Context, n int32) error {
 					if n == 1 {
 						close(prepared)
@@ -193,6 +197,7 @@ func TestIssue31401AlterCopyRebuildTransaction(t *testing.T) {
 				if mode == "publish_retry" {
 					observer.beforeSourceDrop = func() error { return moerr.NewTxnNeedRetryNoCtx() }
 				}
+				observer.hooksMu.Unlock()
 				before := []string{"update " + name + ".t set v=11 where id=1", "delete from " + name + ".t where id=2", "insert into " + name + ".t(id,v) values(4,40)"}
 				alterSQL := "alter table " + name + ".t add column d int default 7"
 				if mode == "late_lineage_error" {
@@ -330,9 +335,11 @@ func TestIssue31401AlterCopyRebuildTransaction(t *testing.T) {
 				if mode == "late_lineage_error" {
 					require.Zero(t, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".guard"))
 				}
+				observer.hooksMu.Lock()
 				observer.beforeRetire = nil
 				observer.beforeRecreate = nil
 				observer.beforeSourceDrop = nil
+				observer.hooksMu.Unlock()
 				if mode == "plugin" {
 					require.True(t, taskPreserved.Load())
 					require.Equal(t, 0, queryIssue277xxInt(t, ctx, db, "select count(*) from mo_catalog.mo_iscp_log where table_id=? and job_id=? and drop_at is null", sourceTableID, sourceJobID))
@@ -348,6 +355,12 @@ func TestIssue31401AlterCopyRebuildTransaction(t *testing.T) {
 }
 
 func (o *issue31401CopyObserver) Exec(ctx context.Context, q string, opts executor.Options) (executor.Result, error) {
+	// Background SQL shares this observer with the test's hook updates. Snapshot
+	// callbacks under the lock, then release it before callbacks issue nested SQL.
+	o.hooksMu.RLock()
+	afterCopy, afterRetire := o.afterCopy, o.afterRetire
+	beforeRetire, beforeRecreate, beforeSourceDrop := o.beforeRetire, o.beforeRecreate, o.beforeSourceDrop
+	o.hooksMu.RUnlock()
 	copyOpt := opts.StatementOption().AlterCopyDedupOpt()
 	copySQL := copyOpt != nil && strings.HasPrefix(strings.ToLower(q), "insert into")
 	if copySQL {
@@ -362,40 +375,40 @@ func (o *issue31401CopyObserver) Exec(ctx context.Context, q string, opts execut
 	}
 	if retiring {
 		o.retired.Add(1)
-		if o.beforeRetire != nil {
-			if err := o.beforeRetire(); err != nil {
+		if beforeRetire != nil {
+			if err := beforeRetire(); err != nil {
 				return executor.Result{}, err
 			}
 		}
 	}
-	if o.beforeRecreate != nil && o.retired.Load() == 1 && strings.HasPrefix(strings.ToLower(q), "create table ") {
+	if beforeRecreate != nil && o.retired.Load() == 1 && strings.HasPrefix(strings.ToLower(q), "create table ") {
 		matched := false
 		o.replicas.Range(func(name, _ any) bool {
 			matched = strings.Contains(q, name.(string))
 			return !matched
 		})
 		if matched {
-			if err := o.beforeRecreate(); err != nil {
+			if err := beforeRecreate(); err != nil {
 				return executor.Result{}, err
 			}
 		}
 	}
-	if o.beforeSourceDrop != nil && !retiring && strings.HasPrefix(q, "drop table ") && strings.HasSuffix(q, ".`t`") {
-		if err := o.beforeSourceDrop(); err != nil {
+	if beforeSourceDrop != nil && !retiring && strings.HasPrefix(q, "drop table ") && strings.HasSuffix(q, ".`t`") {
+		if err := beforeSourceDrop(); err != nil {
 			return executor.Result{}, err
 		}
 	}
 	result, err := o.SQLExecutor.Exec(ctx, q, opts)
-	if err == nil && retiring && o.afterRetire != nil {
-		if err = o.afterRetire(ctx); err != nil {
+	if err == nil && retiring && afterRetire != nil {
+		if err = afterRetire(ctx); err != nil {
 			result.Close()
 			return executor.Result{}, err
 		}
 	}
 	if err == nil && copySQL {
 		n := o.copies.Add(1)
-		if o.afterCopy != nil {
-			if err = o.afterCopy(ctx, n); err != nil {
+		if afterCopy != nil {
+			if err = afterCopy(ctx, n); err != nil {
 				result.Close()
 				return executor.Result{}, err
 			}

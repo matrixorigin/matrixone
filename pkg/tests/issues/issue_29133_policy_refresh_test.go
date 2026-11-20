@@ -17,6 +17,7 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -36,7 +37,7 @@ func TestIssue29133RoleRulesTrackRemoteChanges(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 			defer cancel()
 			var tenantPools []*sql.DB
-			open := func(index int, user string) *sql.Conn {
+			open := func(index int, user string) (*sql.DB, *sql.Conn) {
 				t.Helper()
 				cn, err := c.GetCNService(index)
 				require.NoError(t, err)
@@ -48,29 +49,39 @@ func TestIssue29133RoleRulesTrackRemoteChanges(t *testing.T) {
 				}
 				conn, err := db.Conn(ctx)
 				require.NoError(t, err)
-				t.Cleanup(func() { require.NoError(t, conn.Close()) })
-				return conn
+				t.Cleanup(func() {
+					if err := conn.Close(); !errors.Is(err, sql.ErrConnDone) {
+						assert.NoError(t, err)
+					}
+				})
+				return db, conn
 			}
-			admin := open(0, "dump")
+			adminPool, admin := open(0, "dump")
 			mustExec(t, ctx, admin, "create account rule_refresh admin_name 'admin' identified by '111'")
 			// Register before tenant resources so their LIFO cleanup completes before
-			// DROP ACCOUNT kills sessions. The admin connection remains usable.
+			// DROP ACCOUNT kills sessions. Use the pool so an earlier SQL
+			// cancellation cannot leave cleanup pinned to a discarded session.
 			t.Cleanup(func() {
 				for _, db := range tenantPools {
 					assert.Zero(t, db.Stats().OpenConnections, "tenant pool still open before DROP ACCOUNT")
 				}
+				if t.Failed() {
+					// The fixture owner retires the failed cluster.
+					return
+				}
 				cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
-				_, err := admin.ExecContext(cleanup, "drop account rule_refresh")
-				stop()
-				assert.NoError(t, err)
-				cleanup, stop = context.WithTimeout(context.Background(), 30*time.Second)
 				defer stop()
+				if _, err := adminPool.ExecContext(cleanup, "drop account rule_refresh"); !assert.NoError(t, err) {
+					return
+				}
+				check, stopCheck := context.WithTimeout(context.Background(), 30*time.Second)
+				defer stopCheck()
 				var remaining int
-				err = admin.QueryRowContext(cleanup, "select count(*) from mo_catalog.mo_account where account_name='rule_refresh'").Scan(&remaining)
-				assert.NoError(t, err)
-				assert.Zero(t, remaining)
+				if assert.NoError(t, adminPool.QueryRowContext(check, "select count(*) from mo_catalog.mo_account where account_name='rule_refresh'").Scan(&remaining)) {
+					assert.Zero(t, remaining)
+				}
 			})
-			owner := open(0, "rule_refresh#admin#accountadmin")
+			_, owner := open(0, "rule_refresh#admin#accountadmin")
 			for _, statement := range []string{
 				"create database app", "create table app.t(id int primary key, tenant int)",
 				"insert into app.t values (1,1),(2,2)", "create role reader",
@@ -81,9 +92,9 @@ func TestIssue29133RoleRulesTrackRemoteChanges(t *testing.T) {
 				mustExec(t, ctx, owner, statement)
 			}
 			mustExec(t, ctx, admin, "select mo_ctl('cn','synccommit','')")
-			reader := open(1, "rule_refresh#learner#reader")
-			binaryReader := open(1, "rule_refresh#learner#reader")
-			sqlReader := open(1, "rule_refresh#learner#reader")
+			_, reader := open(1, "rule_refresh#learner#reader")
+			_, binaryReader := open(1, "rule_refresh#learner#reader")
+			_, sqlReader := open(1, "rule_refresh#learner#reader")
 			const query = "select id from app.t order by id"
 			checkRows := func(query func() (*sql.Rows, error), expected []int) {
 				t.Helper()
@@ -170,7 +181,8 @@ func TestIssue29133RoleRulesTrackRemoteChanges(t *testing.T) {
 				// relying on a preceding text command on that connection.
 				needReprepare(func() (*sql.Rows, error) { return binary.QueryContext(ctx) })
 				needReprepare(func() (*sql.Rows, error) { return sqlReader.QueryContext(ctx, "execute saved") })
-				check(open(1, "rule_refresh#learner#reader"), transition.expected)
+				_, freshReader := open(1, "rule_refresh#learner#reader")
+				check(freshReader, transition.expected)
 				check(reader, transition.expected)
 				check(reader, transition.expected)
 				require.NoError(t, binary.Close())
