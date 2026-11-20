@@ -336,13 +336,70 @@ func TestCloneDestinationDeferredOnlyForExplicitAccount(t *testing.T) {
 	require.ErrorContains(t, err, "privilege", "reserved destination names are denied before deferral")
 }
 
+func TestOrdinaryLoadSkipsIndexCatalogProbe(t *testing.T) {
+	ctx := t.Context()
+	ses := &Session{}
+	ses.SetFromRealUser(true)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "tenant", User: "loader", DefaultRole: "public"})
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+	for _, sql := range []string{
+		"load data infile 'test.csv' into table db.import_rows",
+		"load data local infile 'test.csv' into table import_rows",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(ctx, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			probes := 0
+			require.NoError(t, checkFrontendIndexTargetWithResolver(execCtx, stmt, func(explicitIndexTarget) error {
+				probes++
+				return nil
+			}))
+			require.Zero(t, probes, "planner already resolves an ordinary LOAD target")
+		})
+	}
+}
+
+func TestReusedLoadChecksIndexCatalogMetadata(t *testing.T) {
+	ctx := t.Context()
+	ses := &Session{}
+	ses.SetFromRealUser(true)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "tenant", User: "loader", DefaultRole: "public"})
+	stmt, err := mysql.ParseOne(ctx, "load data infile 'test.csv' into table db.import_rows", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	for _, tc := range []struct {
+		name string
+		exec ExecCtx
+	}{
+		{name: "SQL EXECUTE", exec: ExecCtx{stmt: &tree.Execute{}}},
+		{name: "binary EXECUTE", exec: ExecCtx{input: &UserInput{isBinaryProtExecute: true}}},
+		{name: "cached query", exec: ExecCtx{cw: &TxnComputationWrapper{plan: &plan.Plan{}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.exec.reqCtx = ctx
+			tc.exec.ses = ses
+			probes := 0
+			err := checkFrontendIndexTargetWithResolver(&tc.exec, stmt, func(target explicitIndexTarget) error {
+				probes++
+				require.Equal(t, "db", target.database)
+				require.Equal(t, "import_rows", target.table)
+				return checkResolvedIndexRelation(&tc.exec, target.table, target.table, catalog.SystemOrdinaryRel, features.IndexTable)
+			})
+			require.Equal(t, 1, probes)
+			require.ErrorContains(t, err, "privilege")
+		})
+	}
+}
+
 func TestLoadExternalTableWithIndexPrefixUsesCatalogMetadata(t *testing.T) {
 	ses := &Session{}
 	ses.SetFromRealUser(true)
 	ses.SetTenantInfo(&TenantInfo{Tenant: "tenant", User: "reader", DefaultRole: "public"})
 	execCtx := &ExecCtx{reqCtx: context.Background(), ses: ses}
 	table := tree.NewTableName(
-		tree.Identifier("__mo_index_events"),
+		tree.Identifier("__Mo_InDeX_events"),
 		tree.ObjectNamePrefix{SchemaName: "db", ExplicitSchema: true},
 		nil,
 	)

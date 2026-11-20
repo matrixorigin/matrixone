@@ -293,6 +293,15 @@ func checkCloneDestinationAtAccount(execCtx *ExecCtx, ses *Session, table *tree.
 	})
 }
 
+func loadMayReusePlan(execCtx *ExecCtx) bool {
+	if execCtx == nil {
+		return false
+	}
+	_, execute := execCtx.stmt.(*tree.Execute)
+	return execute || (execCtx.input != nil && execCtx.input.isBinaryProtExecute) ||
+		(execCtx.cw != nil && execCtx.cw.Plan() != nil)
+}
+
 func checkFrontendIndexTargetWithResolver(execCtx *ExecCtx, stmt tree.Statement, resolve explicitIndexTargetResolver) error {
 	checkTarget := func(target explicitIndexTarget) error {
 		if err := checkResolvedIndexRelation(execCtx, target.table, target.table, "", 0); err != nil {
@@ -430,14 +439,16 @@ func checkFrontendIndexTargetWithResolver(execCtx *ExecCtx, stmt tree.Statement,
 	case *tree.LoadTable:
 		return checkTableInScope(st.Table, true)
 	case *tree.Load:
-		// The reserved prefix alone cannot distinguish an external table from a
-		// physical index. Defer LOAD to catalog-aware admission and resolution.
 		if resolve == nil || st.Table == nil {
 			return nil
 		}
-		return resolve(explicitIndexTarget{
-			database: string(st.Table.SchemaName), table: string(st.Table.ObjectName),
-		})
+		name := string(st.Table.ObjectName)
+		// Fresh planning checks resolved kinds and flags. Keep preflight for
+		// reserved names and plans that may execute without binding again.
+		if !catalog.RequiresPrivilegedRelationAccess(name, "", 0) && !loadMayReusePlan(execCtx) {
+			return nil
+		}
+		return resolve(explicitIndexTarget{database: string(st.Table.SchemaName), table: name})
 	case *tree.AnalyzeStmt:
 		for _, entry := range st.Entries {
 			if entry != nil {
