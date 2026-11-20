@@ -116,8 +116,8 @@ type flightBudget struct {
 }
 
 // flightBytes returns the most bytes of prefetch range runs under way: prefetchFlightBytes
-// when set, otherwise a share of the memory available on the node, at least one
-// MemoryPrefetchObject's bytes.
+// when set, otherwise a share of the memory available on the node, at least the buffer of
+// one MemoryPrefetchObject for each object-storage connection downloads may hold.
 func (d *DiskCache) flightBytes() int64 {
 	if d.prefetchFlightBytes > 0 {
 		return d.prefetchFlightBytes
@@ -134,7 +134,7 @@ func (d *DiskCache) flightBytes() int64 {
 	if avail, ok := memoryAvailable(); ok {
 		bytes = int64(min(avail/100*flightMemoryPercent, math.MaxInt64))
 	}
-	bytes = max(bytes, d.memoryPrefetchMax)
+	bytes = max(bytes, flightBufSize(d.memoryPrefetchMax)*max(d.maxDownloadConns, 1))
 	b.bytes.Store(bytes)
 	b.at.Store(now)
 	return bytes

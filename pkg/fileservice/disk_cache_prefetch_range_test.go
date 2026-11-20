@@ -725,22 +725,26 @@ func TestPrefetchFlightBufferReusedAfterLastHolder(t *testing.T) {
 }
 
 // The bytes of the flights under way are a share of the memory available, measured at
-// most once per refresh, and at least one column prefetch's bytes.
+// most once per refresh, and at least one MemoryPrefetchObject's buffer per download
+// connection.
 func TestFlightBytesFollowAvailableMemory(t *testing.T) {
 	prev := memoryAvailable
 	t.Cleanup(func() { memoryAvailable = prev })
 	var calls int
-	avail := uint64(10 << 30)
+	avail := uint64(20 << 30)
 	memoryAvailable = func() (uint64, bool) { calls++; return avail, true }
-	d := &DiskCache{memoryPrefetchMax: 32 << 20}
+	d := &DiskCache{memoryPrefetchMax: 20 << 20, maxDownloadConns: 16}
 	share := int64(avail / 100 * flightMemoryPercent)
 	require.Equal(t, share, d.flightBytes())
 	avail = 1 << 20
 	require.Equal(t, share, d.flightBytes(), "measured once per refresh")
 	require.Equal(t, 1, calls)
 	d.flightBudget.at.Store(0)
-	require.Equal(t, int64(32<<20), d.flightBytes(), "at least one MemoryPrefetchObject")
+	require.Equal(t, int64(16*32<<20), d.flightBytes(), "a MemoryPrefetchObject's buffer per connection")
 	memoryAvailable = func() (uint64, bool) { return 0, false }
+	d.flightBudget.at.Store(0)
+	require.Equal(t, int64(16*32<<20), d.flightBytes())
+	d.maxDownloadConns = 0
 	d.flightBudget.at.Store(0)
 	require.Equal(t, int64(prefetchFlightBytesMax), d.flightBytes())
 	d.prefetchFlightBytes = 7
