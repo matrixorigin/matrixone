@@ -490,13 +490,6 @@ func (v *Vector) ensureGroupingCapacity(rows int, _ *mpool.MPool) error {
 	return nil
 }
 
-func (v *Vector) freeBitmapStorage() {
-	if v.nsp.HasBorrowedValidity() {
-		// Release the source view without materializing it.
-		v.nsp.Reset()
-	}
-}
-
 func (v *Vector) allocData(mp *mpool.MPool, size int) ([]byte, error) {
 	return v.allocOwned(mp, size, v.offHeap, true)
 }

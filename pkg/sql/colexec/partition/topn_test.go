@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -819,7 +818,7 @@ func makeAnyNullTopNBatch(t *testing.T, proc *process.Process, groups []int32, p
 	} else {
 		bat.Vecs[1] = vector.NewVec(types.T_any.ToType())
 		bat.Vecs[1].SetLength(len(groups))
-		nulls.AddRange(bat.Vecs[1].GetNulls(), 0, uint64(len(groups)))
+		bat.Vecs[1].GetNulls().AddRange(0, uint64(len(groups)))
 	}
 	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[2], payloads, nil, proc.Mp()))

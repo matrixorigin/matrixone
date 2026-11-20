@@ -176,15 +176,6 @@ type Vector struct {
 	// off-heap data and area allocations. Physical MPool metadata owns release.
 	allocationAccount *AllocationAccountSelection
 
-	// preflightAreaBytes is the exact non-inline payload admitted by
-	// PreExtendSelectedBatch for the next UnionBatchPreflighted publication.
-	// Keeping the proof with the destination removes operator-side parallel
-	// metadata and makes the preflight/publication pair self-contained.
-	preflightAreaBytes         int
-	preflightAreaReady         bool
-	preflightRowCount          int
-	preflightStringSourceReady bool
-
 	// areaDisjoint proves that every live non-inline varlena descriptor owns a
 	// distinct range in area. Spill projections use it to avoid scanning normal
 	// append-built vectors; operations that can introduce aliases clear it.
@@ -258,9 +249,6 @@ func (v *Vector) Reset(typ types.Type) {
 	v.nsp.Clear()
 	v.gsp.Clear()
 	v.sorted = false
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
 	v.isBin = false
 	v.resetBinaryString()
 	v.areaDisjoint = true
@@ -278,9 +266,6 @@ func (v *Vector) ResetWithSameType() {
 	v.nsp.Reset()
 	v.gsp.Reset()
 	v.sorted = false
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
 	v.isBin = false
 	v.resetBinaryString()
 	v.areaDisjoint = true
@@ -307,9 +292,6 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.gsp.Clear()
 	v.length = 0
 	v.sorted = false
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
 	v.isBin = false
 	v.resetBinaryString()
 	v.areaDisjoint = true
@@ -890,8 +872,11 @@ func (v *Vector) SetStringSourceAtWithMP(row int, source types.StringSource, mp 
 		v.stringSourcesMP = owner
 	}
 	v.stringSources[row] = source
-	if !v.preflightStringSourceReady {
-		v.normalizeStringSources()
+	// The vector-wide source names the common source of uniform rows. A
+	// write that makes them disagree makes it Expression; NormalizeStringSources
+	// collapses a sidecar that has become uniform again.
+	if source != v.stringSource {
+		v.stringSource = types.StringSourceExpression
 	}
 	return nil
 }
@@ -922,13 +907,7 @@ func (v *Vector) PreflightSetStringSourceAtLength(
 		return nil
 	}
 	if v.stringSources != nil {
-		if err := v.preExtendStringSources(finalLength, mp); err != nil {
-			return err
-		}
-		if finalLength > v.length {
-			v.preflightStringSourceReady = true
-		}
-		return nil
+		return v.preExtendStringSources(finalLength, mp)
 	}
 	allocated, owner, err := v.allocateStringSources(finalLength, mp)
 	if err != nil {
@@ -939,9 +918,6 @@ func (v *Vector) PreflightSetStringSourceAtLength(
 	}
 	v.stringSources = allocated[:v.length]
 	v.stringSourcesMP = owner
-	if finalLength > v.length {
-		v.preflightStringSourceReady = true
-	}
 	return nil
 }
 
@@ -1546,7 +1522,6 @@ func (v *Vector) allocatePrepareParamKinds(n int, mp *mpool.MPool) ([]PreparePar
 
 func (v *Vector) resetStringSource() {
 	v.stringSource = types.StringSourceExpression
-	v.preflightStringSourceReady = false
 	v.releaseStringSources()
 }
 
@@ -1602,6 +1577,17 @@ func (v *Vector) preExtendStringSources(n int, mp *mpool.MPool) error {
 	v.stringSources = sources[:oldLength]
 	v.stringSourcesMP = owner
 	return nil
+}
+
+// NormalizeStringSources replaces a row-source sidecar whose rows all have
+// the same source by that single source, and releases the sidecar. It cannot
+// allocate or fail. Single-row source writes and length changes do not
+// normalize, so a caller that writes row sources itself calls this when it is
+// done.
+func (v *Vector) NormalizeStringSources() {
+	if v != nil {
+		v.normalizeStringSources()
+	}
 }
 
 func (v *Vector) normalizeStringSources() {
@@ -1765,7 +1751,7 @@ func (v *Vector) prepareOrdinaryBinaryStringAppend(rows int, mp *mpool.MPool) er
 	v.binaryStringRows.InitWithSize(int64(v.length + rows))
 	v.textStringRows.InitWithSize(int64(v.length + rows))
 	v.binaryStringRows.AddRange(0, uint64(v.length))
-	if !v.nsp.EmptyByFlag() {
+	if !v.nsp.IsEmpty() {
 		iterator := v.nsp.GetBitmap().Iterator()
 		for iterator.HasNext() {
 			row := iterator.Next()
@@ -1811,12 +1797,12 @@ func (v *Vector) prepareStringSourceAppend(rows int, source types.StringSource, 
 // already reserved. It cannot allocate and initializes newly visible ordinary
 // rows with PrepareParamNone.
 func (v *Vector) setLengthAfterExtend(n int) {
-	v.setLengthAfterExtendWithSource(n, types.StringSourceExpression, true)
+	v.setLengthAfterExtendWithSource(n, types.StringSourceExpression, false)
 }
 
 // Known-source appends cannot make an already mixed vector uniform. Publish
 // their final provenance without a normalization scan or a temporary source.
-func (v *Vector) setLengthAfterExtendWithSource(n int, source types.StringSource, normalize bool) {
+func (v *Vector) setLengthAfterExtendWithSource(n int, source types.StringSource, knownSource bool) {
 	metadataLength := v.physicalMetadataRowCountForLength(n)
 	if v.prepareParamKinds != nil {
 		if metadataLength > cap(v.prepareParamKinds) {
@@ -1843,12 +1829,11 @@ func (v *Vector) setLengthAfterExtendWithSource(n int, source types.StringSource
 				}
 			}
 		}
-		if normalize && !v.preflightStringSourceReady {
-			v.normalizeStringSources()
-		} else if !normalize {
+		// New rows can only make the sidecar mixed, never uniform.
+		if knownSource || metadataLength > oldLength && v.stringSource != source {
 			v.stringSource = types.StringSourceExpression
 		}
-	} else if !normalize {
+	} else if knownSource {
 		v.stringSource = source
 	}
 	v.length = n
@@ -2099,7 +2084,7 @@ func (v *Vector) prepareParamKindAppendStart(oldLength int) {
 	if limit <= 0 {
 		return
 	}
-	if !v.nsp.EmptyByFlag() && v.nsp.Count() >= limit &&
+	if !v.nsp.IsEmpty() && v.nsp.Count() >= limit &&
 		v.nsp.GetBitmap().CountRange(0, uint64(limit)) == limit {
 		// Scalar metadata attached to an all-NULL prefix has no value owner.
 		// Drop it before the first appended value establishes the lineage. A
@@ -2411,7 +2396,7 @@ func summarizePrepareParamKindSelection[T int32 | int64](
 		return summary
 	}
 	if w.prepareParamKinds == nil {
-		if w.IsConst() || w.GetNulls().EmptyByFlag() {
+		if w.IsConst() || w.GetNulls().IsEmpty() {
 			summary.observe(w.prepareParamKind)
 			return summary
 		}
@@ -2597,13 +2582,12 @@ func (v *Vector) PreflightUnionOnePrepareParamKinds(
 		v.length+1, summarizeStringSourceOne(w, sel), mp); err != nil {
 		return err
 	}
-	v.RetainStringSourcePreflight()
 	if err := v.preflightPrepareParamKindAppend(
 		v.length+1,
 		summarizePrepareParamKindOne(w, sel),
 		mp,
 	); err != nil {
-		v.FinalizeStringSourcePreflight()
+		v.normalizeStringSources()
 		return err
 	}
 	return nil
@@ -2619,13 +2603,12 @@ func (v *Vector) PreflightUnionPrepareParamKinds(
 		v, v.length+len(sels), w, sels, mp); err != nil {
 		return err
 	}
-	v.RetainStringSourcePreflight()
 	if err := v.preflightPrepareParamKindAppend(
 		v.length+len(sels),
 		summarizePrepareParamKindSelection(w, sels),
 		mp,
 	); err != nil {
-		v.FinalizeStringSourcePreflight()
+		v.normalizeStringSources()
 		return err
 	}
 	return nil
@@ -2672,10 +2655,9 @@ func (v *Vector) preflightUnionBatchPrepareParamKinds(
 		finalLength, w, offset, cnt, flags, mp); err != nil {
 		return err
 	}
-	v.RetainStringSourcePreflight()
 	if v.prepareParamKinds != nil {
 		if err := v.preExtendPrepareParamKinds(finalLength, mp); err != nil {
-			v.FinalizeStringSourcePreflight()
+			v.normalizeStringSources()
 			return err
 		}
 		return nil
@@ -2696,7 +2678,7 @@ func (v *Vector) preflightUnionBatchPrepareParamKinds(
 		summarizePrepareParamKindBatch(w, offset, cnt, flags),
 		mp,
 	); err != nil {
-		v.FinalizeStringSourcePreflight()
+		v.normalizeStringSources()
 		return err
 	}
 	return nil
@@ -2857,7 +2839,7 @@ func propagatePrepareParamKindsSelection[T int32 | int64](
 		if w.IsConstNull() {
 			return nil
 		}
-		if w.GetNulls().EmptyByFlag() {
+		if w.GetNulls().IsEmpty() {
 			hasValue = len(sels) > 0
 		} else {
 			for _, sel := range sels {
@@ -2892,7 +2874,7 @@ func prepareParamRangeHasValue(w *Vector, offset, cnt int, flags []uint8) bool {
 	if w == nil || cnt <= 0 || w.IsConstNull() {
 		return false
 	}
-	if w.IsConst() || w.GetNulls().EmptyByFlag() {
+	if w.IsConst() || w.GetNulls().IsEmpty() {
 		if flags == nil {
 			return true
 		}
@@ -3780,8 +3762,7 @@ func (v *Vector) propagateBinaryStringBatch(w *Vector, oldLength int, offset int
 
 func (v *Vector) NeedDup() bool {
 	return v.IsDictionary() || v.AreaBackingKind() != OwnedMPoolUnique ||
-		v.DataBackingKind() != OwnedMPoolUnique ||
-		v.nsp.HasBorrowedValidity()
+		v.DataBackingKind() != OwnedMPoolUnique
 }
 
 // make sure the type check is done before calling this function
@@ -4594,7 +4575,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	} else if !v.cantFreeArea {
 		mp.Free(v.area)
 	}
-	v.freeBitmapStorage()
 	v.class = FLAT
 	v.data = nil
 	v.area = nil
@@ -4616,9 +4596,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.resetStringSource()
 	v.prepareParamKindsMP = nil
 	v.allocationAccount = nil
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
 	v.areaDisjoint = true
 
 	//reuse.Free[Vector](v, nil)
@@ -4744,27 +4721,15 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 		v.HasNull() && dataLength%types.VarlenaSize == 0 {
 		descriptors := MustFixedColNoTypeCheck[types.Varlena](v)
 		if uint64(len(descriptors))*types.VarlenaSize == dataLength {
-			if v.nsp.HasBorrowedValidity() {
-				// Keep the borrowed validity view read-only. Its legacy bitmap
-				// materialization is an admitted COW boundary, not part of this
-				// read-only marshal check.
-				for index, descriptor := range descriptors {
-					if v.IsNull(uint64(index)) && !descriptor.IsSmall() {
-						normalizeNullVarlen = true
-						break
-					}
+			iterator := v.nsp.GetBitmap().IteratorValue()
+			for iterator.HasNext() {
+				row := iterator.Next()
+				if row >= uint64(len(descriptors)) {
+					break
 				}
-			} else {
-				iterator := v.nsp.GetBitmap().IteratorValue()
-				for iterator.HasNext() {
-					row := iterator.Next()
-					if row >= uint64(len(descriptors)) {
-						break
-					}
-					if !descriptors[row].IsSmall() {
-						normalizeNullVarlen = true
-						break
-					}
+				if !descriptors[row].IsSmall() {
+					normalizeNullVarlen = true
+					break
 				}
 			}
 		}
@@ -4793,13 +4758,7 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 			(*types.Varlena)(unsafe.Pointer(&normalizedVarlenData[0])),
 			len(descriptors),
 		)
-		if v.nsp.HasBorrowedValidity() {
-			for index := range normalizedDescriptors {
-				if v.IsNull(uint64(index)) {
-					normalizedDescriptors[index] = types.Varlena{}
-				}
-			}
-		} else {
+		{
 			iterator := v.nsp.GetBitmap().IteratorValue()
 			for iterator.HasNext() {
 				row := iterator.Next()
@@ -5609,10 +5568,36 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 	return nil
 }
 
+// SelectedBatchPreflight is what PreExtendSelectedBatch admitted for one
+// destination vector: the row count after publication and the exact
+// non-inline payload bytes. The caller keeps it and hands it to the matching
+// UnionBatchPreflighted call, which consumes it. The zero value admits
+// nothing.
+type SelectedBatchPreflight struct {
+	areaBytes int
+	rowCount  int
+	ready     bool
+}
+
+// Ready reports whether p holds an unconsumed preflight.
+func (p *SelectedBatchPreflight) Ready() bool {
+	return p != nil && p.ready
+}
+
+// take consumes p.
+func (p *SelectedBatchPreflight) take() (areaBytes, rowCount int, ok bool) {
+	if !p.Ready() {
+		return 0, 0, false
+	}
+	areaBytes, rowCount = p.areaBytes, p.rowCount
+	*p = SelectedBatchPreflight{}
+	return areaBytes, rowCount, true
+}
+
 // PreExtendSelectedBatch reserves every physical allocation needed by the
 // matching UnionBatchPreflighted call. It performs the selected varlena payload
-// scan once and retains the exact proof on the destination so publication can
-// skip its otherwise duplicate pregrow scan.
+// scan once and returns its result, so publication can skip its otherwise
+// duplicate pregrow scan. On error the result is the zero value.
 func (v *Vector) PreExtendSelectedBatch(
 	w *Vector,
 	offset int,
@@ -5620,7 +5605,7 @@ func (v *Vector) PreExtendSelectedBatch(
 	flags []uint8,
 	targetRows int,
 	mp *mpool.MPool,
-) error {
+) (SelectedBatchPreflight, error) {
 	return v.preExtendSelectedBatch(
 		w, offset, cnt, flags, targetRows, false, mp,
 	)
@@ -5637,7 +5622,7 @@ func (v *Vector) PreExtendSelectedBatchValidated(
 	flags []uint8,
 	targetRows int,
 	mp *mpool.MPool,
-) error {
+) (SelectedBatchPreflight, error) {
 	return v.preExtendSelectedBatch(
 		w, offset, cnt, flags, targetRows, true, mp,
 	)
@@ -5651,25 +5636,22 @@ func (v *Vector) preExtendSelectedBatch(
 	targetRows int,
 	selectionValidated bool,
 	mp *mpool.MPool,
-) error {
+) (SelectedBatchPreflight, error) {
 	if v == nil || w == nil || offset < 0 || cnt < 0 || targetRows < 0 ||
 		len(flags) != cnt || !w.CoversLogicalRows(offset, cnt) {
-		return mpool.ErrAllocationAccountInvalid
+		return SelectedBatchPreflight{}, mpool.ErrAllocationAccountInvalid
 	}
-	v.preflightAreaReady = false
-	v.preflightAreaBytes = 0
-	v.preflightRowCount = 0
 	// The preflight proof cannot retain an aliased source for publication.
 	// Reject it here instead of letting UnionBatchPreflighted allocate a clone
 	// after the caller has committed its surrounding state transition.
 	if v == w && w.IsDictionary() || v.dataAliases(w) || v.typ.IsVarlen() && byteSlicesOverlap(v.area, w.area) {
-		return mpool.ErrAllocationAccountInvalid
+		return SelectedBatchPreflight{}, mpool.ErrAllocationAccountInvalid
 	}
 
 	selectedRows := 0
 	if selectionValidated {
 		if targetRows < v.length {
-			return mpool.ErrAllocationAccountInvalid
+			return SelectedBatchPreflight{}, mpool.ErrAllocationAccountInvalid
 		}
 		selectedRows = targetRows - v.length
 	}
@@ -5680,7 +5662,7 @@ func (v *Vector) preExtendSelectedBatch(
 		var err error
 		selectedAreaBytes, err = dictionarySelectedAreaBytes(w, offset, flags)
 		if err != nil {
-			return err
+			return SelectedBatchPreflight{}, err
 		}
 		// The generic flag proof/count remains below; payload sizing has used
 		// the immutable selected view instead of a physical descriptor slice.
@@ -5689,11 +5671,11 @@ func (v *Vector) preExtendSelectedBatch(
 	if varlen {
 		ToSliceNoTypeCheck(w, &values)
 	}
-	hasNull := varlen && !w.IsConst() && !w.GetNulls().EmptyByFlag()
+	hasNull := varlen && !w.IsConst() && !w.GetNulls().IsEmpty()
 	if !selectionValidated || varlen && !w.IsConst() {
 		for row, flag := range flags {
 			if !selectionValidated && flag > 1 {
-				return mpool.ErrAllocationAccountInvalid
+				return SelectedBatchPreflight{}, mpool.ErrAllocationAccountInvalid
 			}
 			if flag == 0 {
 				continue
@@ -5708,14 +5690,14 @@ func (v *Vector) preExtendSelectedBatch(
 			}
 			_, length := values[offset+row].OffsetLen()
 			if int(length) > math.MaxInt-selectedAreaBytes {
-				return mpool.ErrAllocationAllocatorLimit
+				return SelectedBatchPreflight{}, mpool.ErrAllocationAllocatorLimit
 			}
 			selectedAreaBytes += int(length)
 		}
 	}
 	if targetRows < v.length ||
 		!selectionValidated && selectedRows != targetRows-v.length {
-		return mpool.ErrAllocationAccountInvalid
+		return SelectedBatchPreflight{}, mpool.ErrAllocationAccountInvalid
 	}
 	if varlen && w.IsConst() && selectedRows != 0 && !values[0].IsSmall() {
 		_, length := values[0].OffsetLen()
@@ -5726,83 +5708,64 @@ func (v *Vector) preExtendSelectedBatch(
 	// publication proof is admitted; publication cannot allocate or shrink it.
 	if selectedRows > 0 {
 		if err := v.MaterializeOwned(mp); err != nil {
-			return err
+			return SelectedBatchPreflight{}, err
 		}
 	}
 	if w.HasNull() {
 		if err := v.PreExtendNulls(targetRows, mp); err != nil {
-			return err
+			return SelectedBatchPreflight{}, err
 		}
 	}
 	if w.HasGrouping() {
 		if err := v.PreExtendGrouping(targetRows, mp); err != nil {
-			return err
+			return SelectedBatchPreflight{}, err
 		}
 	}
 	// Publication extends fixed descriptors before it copies payload. Admit the
 	// descriptor backing here as part of the same physical work unit.
 	if targetRows > v.length && targetRows > v.Capacity() {
 		if err := v.PreExtend(targetRows-v.length, mp); err != nil {
-			return err
+			return SelectedBatchPreflight{}, err
 		}
 	}
 	if err := v.preflightUnionBatchPrepareParamKinds(
 		w, int64(offset), cnt, flags, selectedRows, mp,
 	); err != nil {
-		return err
+		return SelectedBatchPreflight{}, err
 	}
 	if err := v.PreflightUnionBatchBinaryString(
 		w, int64(offset), cnt, flags, mp,
 	); err != nil {
-		v.FinalizeStringSourcePreflight()
-		return err
+		v.normalizeStringSources()
+		return SelectedBatchPreflight{}, err
 	}
 	if selectedAreaBytes > cap(v.area)-len(v.area) {
 		if err := v.PreExtendWithArea(0, selectedAreaBytes, mp); err != nil {
-			v.FinalizeStringSourcePreflight()
-			return err
+			v.normalizeStringSources()
+			return SelectedBatchPreflight{}, err
 		}
 	}
-	// Keep a preflight-created mixed source sidecar alive while length and
-	// payload are published. Provenance propagation fills its future rows before
-	// UnionBatchPreflighted finalizes and normalizes it.
-	v.preflightStringSourceReady = v.stringSources != nil
-	v.preflightAreaBytes = selectedAreaBytes
-	v.preflightRowCount = targetRows
-	v.preflightAreaReady = true
-	return nil
-}
-
-// CancelSelectedBatchPreflight drops an unpublished selection proof. It never
-// releases admitted backing storage; a later work unit may reuse that capacity.
-func (v *Vector) CancelSelectedBatchPreflight() {
-	if v == nil {
-		return
-	}
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
-	v.preflightStringSourceReady = false
-	v.normalizeStringSources()
+	return SelectedBatchPreflight{
+		areaBytes: selectedAreaBytes,
+		rowCount:  targetRows,
+		ready:     true,
+	}, nil
 }
 
 // UnionBatchPreflighted publishes a selection after PreExtendSelectedBatch.
-// It consumes the destination-owned proof exactly once.
+// It consumes preflight, which must be that call's result for v.
 func (v *Vector) UnionBatchPreflighted(
 	w *Vector,
 	offset int64,
 	cnt int,
 	flags []uint8,
+	preflight *SelectedBatchPreflight,
 	mp *mpool.MPool,
 ) error {
-	if v == nil || !v.preflightAreaReady {
+	selectedAreaBytes, preflightRowCount, ok := preflight.take()
+	if v == nil || !ok {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	selectedAreaBytes := v.preflightAreaBytes
-	preflightRowCount := v.preflightRowCount
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
 	return v.unionBatchPreflightedWithStringSources(
 		w, offset, cnt, flags, nil, mp,
 		selectedAreaBytes, preflightRowCount, true)
@@ -5817,25 +5780,27 @@ func (v *Vector) UnionBatchPreflightedWithStringSources(
 	cnt int,
 	flags []uint8,
 	stringSources []types.StringSource,
+	preflight *SelectedBatchPreflight,
 	mp *mpool.MPool,
 ) error {
 	return v.unionBatchPreflightedWithStringSourcesOverride(
-		w, offset, cnt, flags, stringSources, mp, true)
+		w, offset, cnt, flags, stringSources, preflight, mp, true)
 }
 
 // UnionBatchPreflightedWithStringSourcesDeferredNormalization keeps the
 // preflighted source sidecar alive after publication. The caller must invoke
-// FinalizeStringSourcePreflight after all correlated row updates are complete.
+// NormalizeStringSources after all correlated row updates are complete.
 func (v *Vector) UnionBatchPreflightedWithStringSourcesDeferredNormalization(
 	w *Vector,
 	offset int64,
 	cnt int,
 	flags []uint8,
 	stringSources []types.StringSource,
+	preflight *SelectedBatchPreflight,
 	mp *mpool.MPool,
 ) error {
 	return v.unionBatchPreflightedWithStringSourcesOverride(
-		w, offset, cnt, flags, stringSources, mp, false)
+		w, offset, cnt, flags, stringSources, preflight, mp, false)
 }
 
 func (v *Vector) unionBatchPreflightedWithStringSourcesOverride(
@@ -5844,6 +5809,7 @@ func (v *Vector) unionBatchPreflightedWithStringSourcesOverride(
 	cnt int,
 	flags []uint8,
 	stringSources []types.StringSource,
+	preflight *SelectedBatchPreflight,
 	mp *mpool.MPool,
 	finalize bool,
 ) error {
@@ -5856,14 +5822,10 @@ func (v *Vector) unionBatchPreflightedWithStringSourcesOverride(
 				"invalid string source %d", stringSources[row])
 		}
 	}
-	if v == nil || !v.preflightAreaReady {
+	selectedAreaBytes, preflightRowCount, ok := preflight.take()
+	if v == nil || !ok {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	selectedAreaBytes := v.preflightAreaBytes
-	preflightRowCount := v.preflightRowCount
-	v.preflightAreaBytes = 0
-	v.preflightAreaReady = false
-	v.preflightRowCount = 0
 	return v.unionBatchPreflightedWithStringSources(
 		w, offset, cnt, flags, stringSources, mp,
 		selectedAreaBytes, preflightRowCount, finalize)
@@ -5887,27 +5849,9 @@ func (v *Vector) unionBatchPreflightedWithStringSources(
 		err = v.unionBatchFlat(w, offset, cnt, flags, stringSources, mp, selectedAreaBytes, preflightRowCount, true)
 	}
 	if finalize {
-		v.FinalizeStringSourcePreflight()
+		v.normalizeStringSources()
 	}
 	return err
-}
-
-// RetainStringSourcePreflight keeps reserved row metadata alive across a
-// correlated publication sequence. FinalizeStringSourcePreflight must close it.
-func (v *Vector) RetainStringSourcePreflight() {
-	if v != nil && v.stringSources != nil {
-		v.preflightStringSourceReady = true
-	}
-}
-
-// FinalizeStringSourcePreflight ends a deferred source publication. Capacity
-// normalization cannot allocate or fail.
-func (v *Vector) FinalizeStringSourcePreflight() {
-	if v == nil || !v.preflightStringSourceReady {
-		return
-	}
-	v.preflightStringSourceReady = false
-	v.normalizeStringSources()
 }
 
 // Dup use to copy an identical vector
@@ -6017,15 +5961,7 @@ func (v *Vector) dup(
 		}
 	}
 	w.length = v.length
-	if v.GetNulls().HasBorrowedValidity() {
-		w.GetNulls().GetBitmap().InitWithSize(nullLength)
-		v.GetNulls().Foreach(func(row uint64) bool {
-			w.GetNulls().GetBitmap().Add(row)
-			return true
-		})
-	} else {
-		w.GetNulls().InitWith(v.GetNulls())
-	}
+	w.GetNulls().InitWith(v.GetNulls())
 	w.GetGrouping().InitWith(v.GetGrouping())
 	if err := v.copyBinaryStringTo(w, mp); err != nil {
 		w.Free(mp)
@@ -6114,8 +6050,8 @@ func (v *Vector) cloneToFlatCompact(
 		w,
 		v.length,
 		mp,
-		!v.nsp.EmptyByFlag(),
-		!v.gsp.EmptyByFlag(),
+		!v.nsp.IsEmpty(),
+		!v.gsp.IsEmpty(),
 	); err != nil {
 		w.Free(mp)
 		return nil, err
@@ -6190,7 +6126,7 @@ func (v *Vector) cloneToFlatCompact(
 }
 
 func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
-	if src.EmptyByFlag() {
+	if src.IsEmpty() {
 		return
 	}
 	limit := uint64(length)
@@ -6198,7 +6134,7 @@ func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
 		if row >= limit {
 			return false
 		}
-		nulls.Add(dst, row)
+		dst.Add(row)
 		return true
 	})
 }
@@ -7145,8 +7081,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		); err != nil {
 			return err
 		}
-		v.RetainStringSourcePreflight()
-		defer v.FinalizeStringSourcePreflight()
+		defer v.normalizeStringSources()
 		if w.gsp.Any() {
 			if err := v.ensureGroupingCapacity(oldLength+w.length, mp); err != nil {
 				return err
@@ -7188,7 +7123,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		u64Length := uint64(moreLength)
 
 		moreNp := more.GetBitmap()
-		if moreNp == nil || moreNp.EmptyByFlag() || moreLength == 0 {
+		if moreNp == nil || moreNp.IsEmpty() || moreLength == 0 {
 			return
 		}
 
@@ -7934,11 +7869,11 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 
 			bm := w.nsp.GetBitmap()
-			if bm != nil && !bm.EmptyByFlag() {
+			if bm != nil && !bm.IsEmpty() {
 				for i := range ws {
 					if bm.Contains(uint64(i)) {
 						vs[v.length] = types.Varlena{}
-						nulls.Add(&v.nsp, uint64(v.length))
+						v.nsp.Add(uint64(v.length))
 					} else {
 						err = BuildVarlenaFromVarlena(v, &vs[v.length], &ws[i], &w.area, mp)
 						if err != nil {
@@ -8425,8 +8360,7 @@ type FixedSourceRow struct {
 func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (bool, error) {
 	inlineStrings := v.typ.Oid == types.T_char || v.typ.Oid == types.T_varchar
 	if len(rows) < 2 || mp == nil || v.class != FLAT || v.typ.IsVarlen() && !inlineStrings ||
-		v.DataBackingKind() != OwnedMPoolUnique || !v.hasPlainFixedMetadata() ||
-		v.preflightStringSourceReady {
+		v.DataBackingKind() != OwnedMPoolUnique || !v.hasPlainFixedMetadata() {
 		return false, nil
 	}
 	if inlineStrings && (types.IsUnicodeCollation(v.typ.Charset) || v.AreaBackingKind() != OwnedMPoolUnique) {
@@ -8446,10 +8380,10 @@ func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (
 		w := row.Vec
 		if w == nil || w == v || w.class != FLAT || w.typ != v.typ ||
 			w.DataBackingKind() != OwnedMPoolUnique || row.Row < 0 || row.Row >= int64(w.length) ||
-			!w.gsp.EmptyByFlag() || !w.hasPlainFixedMetadata() || w.stringSource != source {
+			!w.gsp.IsEmpty() || !w.hasPlainFixedMetadata() || w.stringSource != source {
 			return false, nil
 		}
-		isNull := !w.nsp.EmptyByFlag() && nulls.Contains(&w.nsp, uint64(row.Row))
+		isNull := !w.nsp.IsEmpty() && w.nsp.Contains(uint64(row.Row))
 		if inlineStrings && (w.AreaBackingKind() != OwnedMPoolUnique ||
 			!isNull && w.data[int(row.Row)*size] > types.VarlenaInlineSize) {
 			return false, nil
@@ -8465,8 +8399,8 @@ func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (
 	// row-by-row NULL checks nor scalar append/admission work in the gather loop.
 	if hasNulls {
 		for i, row := range rows {
-			if !row.Vec.nsp.EmptyByFlag() && nulls.Contains(&row.Vec.nsp, uint64(row.Row)) {
-				nulls.Add(&v.nsp, uint64(oldLen+i))
+			if !row.Vec.nsp.IsEmpty() && row.Vec.nsp.Contains(uint64(row.Row)) {
+				v.nsp.Add(uint64(oldLen + i))
 				if inlineStrings {
 					clear(v.data[(oldLen+i)*size : (oldLen+i+1)*size])
 				}
@@ -8497,7 +8431,7 @@ func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (
 	v.length = oldLen + len(rows)
 	v.stringSource = source
 	if hasValues {
-		if !v.nsp.EmptyByFlag() {
+		if !v.nsp.IsEmpty() {
 			v.prepareParamKindAppendStart(oldLen)
 		}
 		v.prepareParamKindSeen = true
@@ -8522,19 +8456,19 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	}
 	preserveAreaDisjoint := v.typ.IsVarlen() && !v.IsConst() && v.areaDisjoint &&
 		v.DataBackingKind() == OwnedMPoolUnique && v.AreaBackingKind() == OwnedMPoolUnique
-	// EmptyByFlag includes borrowed Arrow validity. Avoid row lookup only
-	// when the source has no NULL/grouping bits; retain the full append path.
-	sourceGrouping := !w.gsp.EmptyByFlag() && nulls.Contains(&w.gsp, uint64(sel))
+	// Avoid row lookup only when the source has no NULL/grouping bits;
+	// retain the full append path.
+	sourceGrouping := !w.gsp.IsEmpty() && w.gsp.Contains(uint64(sel))
 	// Scalar NULL inspection is only needed for constant source vectors.
 	sourceNull := (w.IsConst() && w.IsConstNull()) ||
-		(!w.IsConst() && !w.nsp.EmptyByFlag() && nulls.Contains(&w.nsp, uint64(sel)))
+		(!w.IsConst() && !w.nsp.IsEmpty() && w.nsp.Contains(uint64(sel)))
 	// Uniform ordinary metadata needs neither per-row lookup nor sidecar
 	// admission. Include both vectors: an ordinary source can still append to
 	// a mixed destination, and NULL rows retain their string-source ownership.
 	plainMetadata := v.prepareParamKinds == nil && w.prepareParamKinds == nil &&
 		v.prepareParamKind == PrepareParamNone && w.prepareParamKind == PrepareParamNone &&
 		!v.binaryStringRowsActive && !w.binaryStringRowsActive && !v.binaryString && !w.binaryString &&
-		v.stringSources == nil && w.stringSources == nil && !v.preflightStringSourceReady &&
+		v.stringSources == nil && w.stringSources == nil &&
 		(v.length == 0 || v.stringSource == w.stringSource)
 	if !plainMetadata {
 		if err := v.MaterializeOwned(mp); err != nil {
@@ -8544,10 +8478,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 			return err
 		}
 		if err := v.PreflightUnionOneBinaryString(w, sel, mp); err != nil {
-			v.FinalizeStringSourcePreflight()
+			v.normalizeStringSources()
 			return err
 		}
-		defer v.FinalizeStringSourcePreflight()
+		defer v.normalizeStringSources()
 	}
 	if err := extendWithBitmaps(
 		v,
@@ -8577,7 +8511,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		}
 	}
 	if sourceGrouping {
-		nulls.Add(&v.gsp, uint64(oldLen))
+		v.gsp.Add(uint64(oldLen))
 	}
 	if sourceNull {
 		if preserveAreaDisjoint {
@@ -8588,7 +8522,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 			values[oldLen] = types.Varlena{}
 			v.areaDisjoint = true
 		}
-		nulls.Add(&v.nsp, uint64(oldLen))
+		v.nsp.Add(uint64(oldLen))
 		return nil
 	}
 	if w.IsConst() {
@@ -8628,7 +8562,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		}
 	}
 
-	if !plainMetadata || !v.nsp.EmptyByFlag() {
+	if !plainMetadata || !v.nsp.IsEmpty() {
 		// An all-NULL prefix may still carry scalar parameter metadata that
 		// must be cleared before its first value establishes ownership.
 		v.prepareParamKindAppendStart(oldLen)
@@ -8652,12 +8586,12 @@ func appendSelectedGrouping[T int32 | int64](
 	oldLength int,
 	sels []T,
 ) {
-	if src.gsp.EmptyByFlag() {
+	if src.gsp.IsEmpty() {
 		return
 	}
 	for i, sel := range sels {
 		if src.gsp.Contains(uint64(sel)) {
-			nulls.Add(&dst.gsp, uint64(oldLength+i))
+			dst.gsp.Add(uint64(oldLength + i))
 		}
 	}
 }
@@ -8703,8 +8637,7 @@ func (v *Vector) unionMultiFlat(w *Vector, sel int64, cnt int, mp *mpool.MPool) 
 	); err != nil {
 		return err
 	}
-	v.RetainStringSourcePreflight()
-	defer v.FinalizeStringSourcePreflight()
+	defer v.normalizeStringSources()
 
 	// Keep preflight admission and validation unchanged. As in UnionOne,
 	// uniform ordinary metadata needs no per-row publication. Check both
@@ -8715,9 +8648,9 @@ func (v *Vector) unionMultiFlat(w *Vector, sel int64, cnt int, mp *mpool.MPool) 
 		v.stringSources == nil && w.stringSources == nil &&
 		(v.length == 0 || v.stringSource == w.stringSource)
 
-	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
+	sourceGrouping := w.gsp.Contains(uint64(sel))
 	sourceNull := w.IsConstNull() ||
-		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
+		(!w.IsConst() && w.nsp.Contains(uint64(sel)))
 	if err := extendWithBitmaps(
 		v,
 		cnt,
@@ -8745,16 +8678,16 @@ func (v *Vector) unionMultiFlat(w *Vector, sel int64, cnt int, mp *mpool.MPool) 
 	}
 	sourceHasValue := !sourceNull
 	if sourceGrouping {
-		nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+cnt))
+		v.gsp.AddRange(uint64(oldLen), uint64(oldLen+cnt))
 	}
 	if w.IsConst() {
 		if sourceNull {
-			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(oldLen+cnt))
+			v.nsp.AddRange(uint64(oldLen), uint64(oldLen+cnt))
 			return nil
 		}
 		sel = 0
 	} else if sourceNull {
-		nulls.AddRange(&v.nsp, uint64(oldLen), uint64(oldLen+cnt))
+		v.nsp.AddRange(uint64(oldLen), uint64(oldLen+cnt))
 		return nil
 	}
 	if v.GetType().IsVarlen() {
@@ -8804,14 +8737,14 @@ func appendBatchGrouping(
 	cnt int,
 	flags []uint8,
 ) {
-	if src.gsp.EmptyByFlag() {
+	if src.gsp.IsEmpty() {
 		return
 	}
 	output := oldLength
 	if flags == nil {
 		for i := range cnt {
 			if src.gsp.Contains(uint64(offset) + uint64(i)) {
-				nulls.Add(&dst.gsp, uint64(output+i))
+				dst.gsp.Add(uint64(output + i))
 			}
 		}
 		return
@@ -8821,7 +8754,7 @@ func appendBatchGrouping(
 			continue
 		}
 		if src.gsp.Contains(uint64(offset) + uint64(i)) {
-			nulls.Add(&dst.gsp, uint64(output))
+			dst.gsp.Add(uint64(output))
 		}
 		output++
 	}
@@ -8850,14 +8783,14 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	}
 	// Classify the source cheaply before considering a reused destination.
 	// Metadata-bearing, nullable and constant sources keep the ordinary path.
-	if cap(v.data) > 0 && w.class == FLAT && w.nsp.EmptyByFlag() &&
+	if cap(v.data) > 0 && w.class == FLAT && w.nsp.IsEmpty() &&
 		w.prepareParamKinds == nil && w.prepareParamKind == PrepareParamNone {
 		width := v.typ.TypeSize()
 		if (width == 4 || width == 8) && v.class == FLAT && v.typ == w.typ &&
-			len(sels) <= cap(v.data)/width-v.length && v.nsp.EmptyByFlag() &&
-			v.gsp.EmptyByFlag() && w.gsp.EmptyByFlag() &&
+			len(sels) <= cap(v.data)/width-v.length && v.nsp.IsEmpty() &&
+			v.gsp.IsEmpty() && w.gsp.IsEmpty() &&
 			v.DataBackingKind() == OwnedMPoolUnique && !v.HasBorrowedBacking() &&
-			!v.preflightStringSourceReady && v.hasPlainFixedMetadata() && w.hasPlainFixedMetadata() &&
+			v.hasPlainFixedMetadata() && w.hasPlainFixedMetadata() &&
 			(v.length == 0 || v.stringSource == w.stringSource) {
 			oldLen := v.length
 			v.data = v.data[:cap(v.data)]
@@ -8900,15 +8833,14 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	); err != nil {
 		return err
 	}
-	v.RetainStringSourcePreflight()
-	defer v.FinalizeStringSourcePreflight()
+	defer v.normalizeStringSources()
 
 	if err := extendWithBitmaps(
 		v,
 		len(sels),
 		mp,
-		w.IsConstNull() || !w.nsp.EmptyByFlag(),
-		w.IsGrouping() || !w.gsp.EmptyByFlag(),
+		w.IsConstNull() || !w.nsp.IsEmpty(),
+		w.IsGrouping() || !w.gsp.IsEmpty(),
 	); err != nil {
 		return err
 	}
@@ -8920,18 +8852,18 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	v.setLengthAfterExtend(v.length + len(sels))
 	if w.IsConst() {
 		if w.IsGrouping() {
-			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+len(sels)))
-		} else if !w.gsp.EmptyByFlag() {
+			v.gsp.AddRange(uint64(oldLen), uint64(oldLen+len(sels)))
+		} else if !w.gsp.IsEmpty() {
 			// Constants share one payload, but grouping belongs to logical
 			// rows and must follow the selection, including repeated rows.
 			for i, sel := range sels {
 				if w.gsp.Contains(uint64(sel)) {
-					nulls.Add(&v.gsp, uint64(oldLen+i))
+					v.gsp.Add(uint64(oldLen + i))
 				}
 			}
 		}
 		if w.IsConstNull() {
-			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(oldLen+len(sels)))
+			v.nsp.AddRange(uint64(oldLen), uint64(oldLen+len(sels)))
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
@@ -8972,7 +8904,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		// a stale non-inline header in a null slot — counting those would reserve area
 		// for dead payload (large needless mp.Grow / alloc failure), so exclude them.
 		total := 0
-		hasNull := !w.GetNulls().EmptyByFlag()
+		hasNull := !w.GetNulls().IsEmpty()
 		// With both areas empty, valid non-NULL descriptors are either inline
 		// or empty non-inline values at offset zero. Neither needs area growth
 		// or rebasing, so copy them directly without a separate sizing pass.
@@ -9004,7 +8936,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			if hasNull {
 				for i, sel := range sels {
 					if w.nsp.Contains(uint64(sel)) {
-						nulls.Add(&v.nsp, uint64(oldLen+i))
+						v.nsp.Add(uint64(oldLen + i))
 						continue
 					}
 					if wCol[sel].IsSmall() {
@@ -9025,7 +8957,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		} else if hasNull {
 			for i, sel := range sels {
 				if w.nsp.Contains(uint64(sel)) {
-					nulls.Add(&v.nsp, uint64(oldLen+i))
+					v.nsp.Add(uint64(oldLen + i))
 					continue
 				}
 				err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
@@ -9047,10 +8979,10 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		v.areaDisjoint = preserveDisjointArea
 	} else {
 		tlen := v.GetType().TypeSize()
-		if !w.nsp.EmptyByFlag() {
+		if !w.nsp.IsEmpty() {
 			for i, sel := range sels {
 				if w.nsp.Contains(uint64(sel)) {
-					nulls.Add(&v.nsp, uint64(oldLen+i))
+					v.nsp.Add(uint64(oldLen + i))
 					continue
 				}
 				dstOffset, srcOffset := (oldLen+i)*tlen, int(sel)*tlen
@@ -9198,7 +9130,7 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 		if err := v.PreflightUnionBatchPrepareParamKinds(w, offset, cnt, flags, mp); err != nil {
 			return err
 		}
-		defer v.FinalizeStringSourcePreflight()
+		defer v.normalizeStringSources()
 		if err := v.PreflightUnionBatchBinaryString(w, offset, cnt, flags, mp); err != nil {
 			return err
 		}
@@ -9215,8 +9147,8 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 			v,
 			addCnt,
 			mp,
-			w.IsConstNull() || !w.nsp.EmptyByFlag(),
-			w.IsGrouping() || !w.gsp.EmptyByFlag(),
+			w.IsConstNull() || !w.nsp.IsEmpty(),
+			w.IsGrouping() || !w.gsp.IsEmpty(),
 		); err != nil {
 			return err
 		}
@@ -9229,12 +9161,12 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 		oldLen := v.length
 		v.setLengthAfterExtend(v.length + addCnt)
 		if w.IsGrouping() {
-			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(v.length))
+			v.gsp.AddRange(uint64(oldLen), uint64(v.length))
 		} else {
 			appendBatchGrouping(v, w, oldLen, offset, cnt, flags)
 		}
 		if w.IsConstNull() {
-			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(v.length))
+			v.nsp.AddRange(uint64(oldLen), uint64(v.length))
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
@@ -9308,7 +9240,7 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 		// failure), so exclude them to match what's actually appended.
 		if !preflighted {
 			total := 0
-			hasNull := !w.nsp.EmptyByFlag()
+			hasNull := !w.nsp.IsEmpty()
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
 					if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
@@ -9342,11 +9274,11 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 			)
 		}
 
-		if !w.nsp.EmptyByFlag() {
+		if !w.nsp.IsEmpty() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(&v.nsp, uint64(v.length))
+						v.nsp.Add(uint64(v.length))
 					} else {
 						err = BuildVarlenaFromVarlena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 						if err != nil {
@@ -9361,7 +9293,7 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 						continue
 					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(&v.nsp, uint64(v.length))
+						v.nsp.Add(uint64(v.length))
 					} else {
 						err = BuildVarlenaFromVarlena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 						if err != nil {
@@ -9395,14 +9327,14 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 		}
 	} else {
 		tlen := v.GetType().TypeSize()
-		if !w.nsp.EmptyByFlag() {
+		if !w.nsp.IsEmpty() {
 			if flags == nil {
 				// Fixed-width NULL slots contain no payload references. Copy the
 				// range once; only their bitmap, not those opaque bytes, is visible.
 				copy(v.data[oldLen*tlen:(oldLen+cnt)*tlen], w.data[int(offset)*tlen:(int(offset)+cnt)*tlen])
 				for i := 0; i < cnt; i++ {
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(&v.nsp, uint64(oldLen+i))
+						v.nsp.Add(uint64(oldLen + i))
 					}
 				}
 				v.setLengthAfterExtend(oldLen + cnt)
@@ -9412,7 +9344,7 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 						continue
 					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(&v.nsp, uint64(v.length))
+						v.nsp.Add(uint64(v.length))
 					} else {
 						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
 					}
@@ -9424,7 +9356,7 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 				if w.nsp.Any() {
 					for i := 0; i < cnt; i++ {
 						if w.nsp.Contains(uint64(offset) + uint64(i)) {
-							nulls.Add(&v.nsp, uint64(v.length))
+							v.nsp.Add(uint64(v.length))
 						}
 						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
 						v.setLengthAfterExtend(v.length + 1)
@@ -9520,7 +9452,7 @@ func (v *Vector) String() string {
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col := InefficientMustStrCol(v)
 		if len(col) == 1 {
-			if nulls.Contains(&v.nsp, 0) {
+			if v.nsp.Contains(0) {
 				return "null"
 			} else {
 				return col[0]
@@ -9536,7 +9468,7 @@ func (v *Vector) String() string {
 		//NOTE: Don't merge this with T_Varchar. We need to retrieve the Array and print the values.
 		col := MustArrayCol[float32](v)
 		if len(col) == 1 {
-			if nulls.Contains(&v.nsp, 0) {
+			if v.nsp.Contains(0) {
 				return "null"
 			} else {
 				return types.ArrayToString[float32](col[0])
@@ -9552,7 +9484,7 @@ func (v *Vector) String() string {
 		//NOTE: Don't merge this with T_Varchar. We need to retrieve the Array and print the values.
 		col := MustArrayCol[float64](v)
 		if len(col) == 1 {
-			if nulls.Contains(&v.nsp, 0) {
+			if v.nsp.Contains(0) {
 				return "null"
 			} else {
 				return types.ArrayToString[float64](col[0])
@@ -9566,7 +9498,7 @@ func (v *Vector) String() string {
 	case types.T_array_bf16:
 		col := MustArrayCol[types.BF16](v)
 		if len(col) == 1 {
-			if nulls.Contains(&v.nsp, 0) {
+			if v.nsp.Contains(0) {
 				return "null"
 			}
 			return types.ArrayToString[types.BF16](col[0])
@@ -9576,7 +9508,7 @@ func (v *Vector) String() string {
 	case types.T_array_float16:
 		col := MustArrayCol[types.Float16](v)
 		if len(col) == 1 {
-			if nulls.Contains(&v.nsp, 0) {
+			if v.nsp.Contains(0) {
 				return "null"
 			}
 			return types.ArrayToString[types.Float16](col[0])
@@ -9588,7 +9520,7 @@ func (v *Vector) String() string {
 	case types.T_array_uint8:
 		col := MustArrayCol[uint8](v)
 		if len(col) == 1 {
-			if nulls.Contains(&v.nsp, 0) {
+			if v.nsp.Contains(0) {
 				return "null"
 			}
 			return types.ArrayToString[uint8](col[0])
@@ -9598,7 +9530,7 @@ func (v *Vector) String() string {
 	case types.T_array_int8:
 		col := MustArrayCol[int8](v)
 		if len(col) == 1 {
-			if nulls.Contains(&v.nsp, 0) {
+			if v.nsp.Contains(0) {
 				return "null"
 			}
 			return types.ArrayToString[int8](col[0])
@@ -9616,7 +9548,7 @@ func implFixedRowToString[T types.FixedSizeT](v *Vector, idx int) string {
 	}
 
 	if v.IsConst() {
-		if nulls.Contains(&v.nsp, 0) {
+		if v.nsp.Contains(0) {
 			return "null"
 		} else {
 			return fmt.Sprintf("%v", GetFixedAtNoTypeCheck[T](v, 0))
@@ -9649,7 +9581,7 @@ func implTimestampRowToString(v *Vector, idx int) string {
 
 	loc := time.Local
 	if v.IsConst() {
-		if nulls.Contains(&v.nsp, 0) {
+		if v.nsp.Contains(0) {
 			return "null"
 		} else {
 			return GetFixedAtNoTypeCheck[types.Timestamp](v, 0).String2(loc, v.typ.Scale)
@@ -9669,7 +9601,7 @@ func implDatetimeRowToString(v *Vector, idx int) string {
 
 	var dt types.Datetime
 	if v.IsConst() {
-		if nulls.Contains(&v.nsp, 0) {
+		if v.nsp.Contains(0) {
 			return "null"
 		} else {
 			dt = GetFixedAtNoTypeCheck[types.Datetime](v, 0)
@@ -9691,7 +9623,7 @@ func implDecimalRowToString[T types.DecimalWithFormat](v *Vector, idx int) strin
 	}
 
 	if v.IsConst() {
-		if nulls.Contains(&v.nsp, 0) {
+		if v.nsp.Contains(0) {
 			return "null"
 		} else {
 			return GetFixedAtNoTypeCheck[T](v, 0).Format(v.typ.Scale)
@@ -9750,7 +9682,7 @@ func implArrayRowToString[T types.ArrayElement](v *Vector, idx int) string {
 	}
 
 	if v.IsConst() {
-		if nulls.Contains(&v.nsp, 0) {
+		if v.nsp.Contains(0) {
 			return "null"
 		} else {
 			return types.ArrayToString(GetArrayAt[T](v, 0))
@@ -9820,7 +9752,7 @@ func (v *Vector) RowToString(idx int) string {
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col := MustFixedColNoTypeCheck[types.Varlena](v)
 		if len(col) == 1 {
-			if nulls.Contains(&v.nsp, 0) {
+			if v.nsp.Contains(0) {
 				return "null"
 			} else {
 				return col[0].UnsafeGetString(v.area)
@@ -10213,7 +10145,7 @@ func (v *Vector) unionBatchContiguousVarlenRange(
 	offset, cnt, admittedAreaBytes int,
 	mp *mpool.MPool,
 ) (bool, error) {
-	hasNull := !w.nsp.EmptyByFlag()
+	hasNull := !w.nsp.IsEmpty()
 	areaStart, areaEnd := 0, 0
 	hasArea := false
 
@@ -10289,7 +10221,7 @@ func (v *Vector) unionBatchContiguousVarlenRange(
 		sourceRow := offset + i
 		targetRow := oldLen + i
 		if hasNull && w.nsp.Contains(uint64(sourceRow)) {
-			nulls.Add(&v.nsp, uint64(targetRow))
+			v.nsp.Add(uint64(targetRow))
 			vCol[targetRow] = types.Varlena{}
 			continue
 		}
@@ -10357,7 +10289,7 @@ func (v *Vector) prepareSingleAppendMetadata(isNull bool, source *types.StringSo
 	// scalar provenance, row sidecars, and an outstanding source preflight.
 	if source == nil && v.prepareParamKind == PrepareParamNone && v.prepareParamKinds == nil &&
 		v.stringSource == types.StringSourceExpression && v.stringSources == nil &&
-		!v.binaryString && !v.binaryStringRowsActive && !v.preflightStringSourceReady {
+		!v.binaryString && !v.binaryStringRowsActive {
 		return nil
 	}
 	if source == nil {
@@ -10382,7 +10314,7 @@ func (v *Vector) publishSingleAppend(source *types.StringSource) {
 		}
 		v.setLengthAfterExtend(v.length + 1)
 	} else {
-		v.setLengthAfterExtendWithSource(v.length+1, *source, false)
+		v.setLengthAfterExtendWithSource(v.length+1, *source, true)
 	}
 }
 
@@ -10612,7 +10544,7 @@ func appendOneFixedWithSource[T any](vec *Vector, val T, isNull bool, source *ty
 			toSliceOfLengthNoTypeCheck[types.Varlena](vec, vec.length)[length] =
 				types.Varlena{}
 		}
-		nulls.Add(&vec.nsp, uint64(length))
+		vec.nsp.Add(uint64(length))
 	} else {
 		var col []T
 		ToSliceNoTypeCheck(vec, &col)
@@ -10772,7 +10704,7 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 		if vec.typ.IsVarlen() && cnt > 0 {
 			clear(toSliceOfLengthNoTypeCheck[types.Varlena](vec, vec.length)[length:])
 		}
-		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
+		vec.nsp.AddRange(uint64(length), uint64(length+cnt))
 	} else if cnt > 0 {
 		// XXX check cnt > 0 to avoid issue #23295
 		var col []T
@@ -10813,7 +10745,7 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + cnt)
 	if isNull {
-		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
+		vec.nsp.AddRange(uint64(length), uint64(length+cnt))
 	} else {
 		var col []types.Varlena
 		ToSliceNoTypeCheck(vec, &col)
@@ -10874,7 +10806,7 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 	}
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
-			nulls.Add(&vec.nsp, uint64(length+i))
+			vec.nsp.Add(uint64(length + i))
 		} else {
 			col[length+i] = w
 		}
@@ -10958,7 +10890,7 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
 			col[length+i] = types.Varlena{}
-			nulls.Add(&vec.nsp, uint64(length+i))
+			vec.nsp.Add(uint64(length + i))
 		} else {
 			err = BuildVarlenaFromByteSlice(vec, &col[length+i], &w, mp)
 			if err != nil {
@@ -11049,7 +10981,7 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
 			col[length+i] = types.Varlena{}
-			nulls.Add(&vec.nsp, uint64(length+i))
+			vec.nsp.Add(uint64(length + i))
 		} else {
 			bs := []byte(w)
 			err = BuildVarlenaFromByteSlice(vec, &col[length+i], &bs, mp)
@@ -11144,7 +11076,7 @@ func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bo
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
 			col[length+i] = types.Varlena{}
-			nulls.Add(&vec.nsp, uint64(length+i))
+			vec.nsp.Add(uint64(length + i))
 		} else {
 			bs := w
 			err = BuildVarlenaFromArray[T](vec, &col[length+i], &bs, mp)
@@ -11329,7 +11261,7 @@ func shuffleFixedNoTypeCheckWithBuf[T types.FixedSizeT](v *Vector, sels []int64,
 func vecToString[T types.FixedSizeT](v *Vector) string {
 	col := MustFixedColWithTypeCheck[T](v)
 	if len(col) == 1 {
-		if nulls.Contains(&v.nsp, 0) {
+		if v.nsp.Contains(0) {
 			return "null"
 		} else {
 			return fmt.Sprintf("%v", col[0])
@@ -11535,27 +11467,11 @@ func (v *Vector) CoversLogicalRows(start, rows int) bool {
 
 func (v *Vector) copyWindowBitmaps(w *Vector, start, end int, mp *mpool.MPool) error {
 	length := end - start
-	if v.nsp.HasBorrowedValidity() {
-		if v.nsp.CountRange(uint64(start), uint64(end)) > 0 {
-			// Retained/asynchronous windows provide an MPool and must reserve
-			// their independent COW destination before sharing the source view.
-			if mp != nil {
-				if err := w.PrepareBorrowedValidity(length, mp); err != nil {
-					return err
-				}
-			}
-			if _, err := v.nsp.InitBorrowedWindow(&w.nsp, start, end); err != nil {
-				return err
-			}
+	if v.nsp.CountRange(uint64(start), uint64(end)) > 0 {
+		if err := w.PreExtendNulls(length, mp); err != nil {
+			return err
 		}
-	} else {
-		hasNull := v.nsp.GetBitmap().CountRange(uint64(start), uint64(end)) > 0
-		if hasNull {
-			if err := w.PreExtendNulls(length, mp); err != nil {
-				return err
-			}
-			nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
-		}
+		nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	}
 	hasGrouping := v.gsp.GetBitmap().CountRange(uint64(start), uint64(end)) > 0
 	if hasGrouping {
@@ -11732,7 +11648,7 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 			ToSliceNoTypeCheck(v, &vCol)
 			ToSliceNoTypeCheck(w, &wCol)
 			for i := start; i < end; i++ {
-				if nulls.Contains(&v.nsp, uint64(i)) {
+				if v.nsp.Contains(uint64(i)) {
 					wCol[i-start] = types.Varlena{}
 					continue
 				}
@@ -13715,7 +13631,13 @@ func Union2VectorValen(
 }
 
 func (v *Vector) FillRawPtrLen(dest []uintptr) {
-	dest[0], dest[1] = v.nsp.RawPtrLen()
+	// The null map's first word and its length in bits; (0, 0) when it has
+	// no storage.
+	dest[0], dest[1] = 0, 0
+	if ptr := nulls.Ptr(&v.nsp); ptr != nil {
+		dest[0] = uintptr(unsafe.Pointer(ptr))
+		dest[1] = uintptr(v.nsp.GetBitmap().Len())
+	}
 	ds := v.UnsafeGetRawData()
 	dest[2] = uintptr(unsafe.Pointer(&ds[0]))
 	dest[3] = uintptr(len(ds))

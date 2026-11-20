@@ -670,7 +670,7 @@ func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Null
 	}
 	vec.SetLength(nele)
 	if nsp != nil {
-		nulls.Set(vec.GetNulls(), nsp)
+		vec.GetNulls().Or(nsp)
 	}
 	return vec, nil
 }
