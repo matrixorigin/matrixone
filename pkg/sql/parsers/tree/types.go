@@ -15,10 +15,8 @@
 package tree
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 )
@@ -192,18 +190,9 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 		if len(node.EnumValues) > 0 {
 			ctx.WriteByte('(')
 			for i, enum := range node.EnumValues {
-				if (ctx.viewDefinition || ctx.preserveTextLiteralWidth && utf8.ValidString(enum)) && enumLabelNeedsHex(enum) {
-					// The MySQL scanner decodes this spelling to a STRING token,
-					// regardless of NO_BACKSLASH_ESCAPES.
-					fmt.Fprintf(ctx, "_utf8mb4 X'%x'", enum)
-				} else if ctx.preserveTextLiteralWidth {
-					// Leave invalid UTF-8 visible to the rewrite serializer's check.
-					ctx.WriteValue(P_char, enum)
-				} else {
-					ctx.WriteByte('"')
-					ctx.WriteString(enum)
-					ctx.WriteByte('"')
-				}
+				ctx.WriteByte('"')
+				ctx.WriteString(enum)
+				ctx.WriteByte('"')
 				if i < len(node.EnumValues)-1 {
 					ctx.WriteByte(',')
 				}
@@ -289,14 +278,6 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 		ctx.WriteString(" srid ")
 		ctx.WriteString(strconv.FormatUint(uint64(node.GeoMetadata.SRID), 10))
 	}
-}
-
-// Keep view metadata free of mode-dependent escapes and raw control bytes.
-// A single quote is safe without hex: WriteValue doubles it in both modes.
-func enumLabelNeedsHex(label string) bool {
-	return !utf8.ValidString(label) || strings.IndexFunc(label, func(r rune) bool {
-		return r == '\\' || r < ' ' || r == 0x7f
-	}) >= 0
 }
 
 // sql type

@@ -39,7 +39,6 @@ type FmtCtx struct {
 	// as hex-to-varchar casts so the SQL reparses identically with or without
 	// NO_BACKSLASH_ESCAPES.
 	modeIndependentStringLiterals bool
-	preserveTextLiteralWidth      bool
 	viewDefinition                bool
 	paramExprOffset               bool
 	detectDateTimeFormat          bool
@@ -154,16 +153,6 @@ func (ctx *FmtCtx) ModeIndependentStringLiterals() bool {
 	return ctx.modeIndependentStringLiterals
 }
 
-// WithExecutableStringLiterals quotes text and uses width-preserving hex literals
-// for backslashes, so another session can reparse the same literal bytes.
-func WithExecutableStringLiterals() FmtCtxOption {
-	return func(ctx *FmtCtx) {
-		ctx.singleQuoteString = true
-		ctx.modeIndependentStringLiterals = true
-		ctx.preserveTextLiteralWidth = true
-	}
-}
-
 // WithViewDefinition exports executable SELECT metadata. NAME_CONST values that
 // require mode-independent string spelling are emitted as literals with their
 // named output preserved, including inside derived tables. Text literals retain
@@ -171,8 +160,9 @@ func WithExecutableStringLiterals() FmtCtxOption {
 // remains strict.
 func WithViewDefinition() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
-		WithExecutableStringLiterals().Apply(ctx)
 		ctx.viewDefinition = true
+		ctx.modeIndependentStringLiterals = true
+		ctx.singleQuoteString = true
 		ctx.quoteIdentifier = true
 	})
 }

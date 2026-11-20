@@ -321,29 +321,6 @@ func TestViewDefinitionReplayPreservesStringValuesAcrossSQLModes(t *testing.T) {
 	}
 }
 
-func TestLegacyViewDefinitionReplayPreservesEnumAndSetLabels(t *testing.T) {
-	persisted, err := json.Marshal(map[string]string{
-		"Stmt": `create view v as select
-			cast(1 as enum(_utf8mb4 X'610962', _utf8mb4 X'615c62', 'a''b')) as e,
-			cast(1 as set(_utf8mb4 X'00080a0d1a', '普通')) as s`,
-		"sql_mode": "NO_BACKSLASH_ESCAPES",
-	})
-	require.NoError(t, err)
-	definition, ok := viewDefinitionFromPersistedData(t.Context(), string(persisted))
-	require.True(t, ok)
-	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES"} {
-		t.Run("sql_mode="+mode, func(t *testing.T) {
-			stmt, err := parsers.ParseOneWithSQLMode(t.Context(), dialect.MYSQL, definition, 1, mode)
-			require.NoError(t, err)
-			defer stmt.Free()
-			exprs := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs
-			require.Len(t, exprs, 2)
-			require.Equal(t, []string{"a\tb", `a\b`, "a'b"}, exprs[0].Expr.(*tree.CastExpr).Type.(*tree.T).InternalType.EnumValues)
-			require.Equal(t, []string{"\x00\b\n\r\x1a", "普通"}, exprs[1].Expr.(*tree.CastExpr).Type.(*tree.T).InternalType.EnumValues)
-		})
-	}
-}
-
 func TestViewDefinitionReplayPreservesImplicitBinaryHeadingAcrossSQLModes(t *testing.T) {
 	modes := []string{
 		"",

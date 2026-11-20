@@ -683,7 +683,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	rules, err := loadRuleCache(context.Background(), ses, sessionSQLModeForParser(ses))
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"db1.t1": "select `a`, `age` from `db1`.`t1` where (`age` < 3) or (`age` > 28)",
+		"db1.t1": "select a, age from db1.t1 where (age < 3) or (age > 28)",
 		"db2.t2": "select a from db2.t2 where a = 20",
 		"db3.t3": "select * from db3.t3 /* persisted */ where id = 1",
 	}, rules)
@@ -2101,7 +2101,7 @@ func TestMergeRewriteRules(t *testing.T) {
 	right := "select a from db1.t1 where a = 2"
 	merged, err := mergeRewriteRules(ctx, left, right)
 	require.NoError(t, err)
-	require.Equal(t, "select `a` from `db1`.`t1` where (`a` = 1) or (`a` = 2)", merged)
+	require.Equal(t, "select a from db1.t1 where (a = 1) or (a = 2)", merged)
 
 	// Role rule merging is a base-row visibility union, not UNION DISTINCT over
 	// projected values. Partial projections are intentionally OR-merged so two
@@ -2112,11 +2112,11 @@ func TestMergeRewriteRules(t *testing.T) {
 		"select a from db1.t1 where role_marker = 2",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "select `a` from `db1`.`t1` where (`role_marker` = 1) or (`role_marker` = 2)", rowUnionMerged)
+	require.Equal(t, "select a from db1.t1 where (role_marker = 1) or (role_marker = 2)", rowUnionMerged)
 
 	merged, err = mergeRewriteRules(ctx, merged, "select a from db1.t1 where a = 3")
 	require.NoError(t, err)
-	require.Equal(t, "select `a` from `db1`.`t1` where ((`a` = 1) or (`a` = 2)) or (`a` = 3)", merged)
+	require.Equal(t, "select a from db1.t1 where ((a = 1) or (a = 2)) or (a = 3)", merged)
 
 	merged, err = mergeRewriteRules(ctx, "select a, age from db1.t1 where age > 28", "select a from db1.t1 where a = 2")
 	require.NoError(t, err)
@@ -2128,14 +2128,14 @@ func TestMergeRewriteRules(t *testing.T) {
 	merged, err = mergeRewriteRules(ctx, "select * from db1.t1 where age > 28", "select * from db1.t1 where age < 3")
 	require.NoError(t, err)
 	require.Equal(t,
-		"select * from `db1`.`t1` where (`age` > 28) or (`age` < 3)",
+		"select * from db1.t1 where (age > 28) or (age < 3)",
 		merged,
 	)
 
 	merged, err = mergeRewriteRules(ctx, "select t.* from db1.t1 as t where age > 28", "select t.* from db1.t1 as t where age < 3")
 	require.NoError(t, err)
 	require.Equal(t,
-		"select `t`.* from `db1`.`t1` as `t` where (`age` > 28) or (`age` < 3)",
+		"select t.* from db1.t1 as t where (age > 28) or (age < 3)",
 		merged,
 	)
 
@@ -2200,11 +2200,11 @@ func TestMergeRewriteRules(t *testing.T) {
 
 	merged, err = mergeRewriteRules(ctx, "select a as x from db1.t1 where age > 28", "select a as x from db1.t1 where age < 3")
 	require.NoError(t, err)
-	require.Equal(t, "select `a` as `x` from `db1`.`t1` where (`age` > 28) or (`age` < 3)", merged)
+	require.Equal(t, "select a as x from db1.t1 where (age > 28) or (age < 3)", merged)
 
 	merged, err = mergeRewriteRules(ctx, "select a + 1 as b from db1.t1 where age > 28", "select a + 1 as b from db1.t1 where age < 3")
 	require.NoError(t, err)
-	require.Equal(t, "select `a` + 1 as `b` from `db1`.`t1` where (`age` > 28) or (`age` < 3)", merged)
+	require.Equal(t, "select a + 1 as b from db1.t1 where (age > 28) or (age < 3)", merged)
 
 	_, err = mergeRewriteRules(ctx, "select a from", "select a from db1.t1")
 	require.Error(t, err)
@@ -2288,6 +2288,23 @@ func TestMergeRewriteRulesRejectsInvalidUTF8InStringTokens(t *testing.T) {
 	}
 }
 
+func TestMergeRewriteRulesPredicateSource(t *testing.T) {
+	const prefix = "select a from db1.t where "
+	for _, predicate := range []string{"a in (select a from db1.t2 where b=2)", "a=2 /* suffix */", "a=2 -- tail", "code='/*!'", "a=/*!50000 2 */"} {
+		t.Run(predicate, func(t *testing.T) {
+			actual, err := mergeRewriteRules(t.Context(), prefix+"a=1", prefix+predicate)
+			require.NoError(t, err)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, actual, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			want, err := parsers.ParseOne(t.Context(), dialect.MYSQL, prefix+"(a=1) or ("+predicate+"\n)", 1)
+			require.NoError(t, err)
+			defer want.Free()
+			require.Equal(t, want, stmt)
+		})
+	}
+}
+
 func TestMergeRewriteRulesGetFormat(t *testing.T) {
 	const base = "select a from db1.t1 where "
 	const filter = "get_format(DATE, locale_col) = 'x'"
@@ -2296,7 +2313,7 @@ func TestMergeRewriteRulesGetFormat(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, merged, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	require.Contains(t, merged, "where (get_format(DATE, `locale_col`) = 'x') or (`a` = 1)")
+	require.Contains(t, merged, "where (get_format(DATE, locale_col) = 'x') or (a = 1)")
 }
 
 func TestMergeRewriteRulesProjectionIdentity(t *testing.T) {
@@ -2316,7 +2333,7 @@ func TestMergeRewriteRulesProjectionIdentity(t *testing.T) {
 			merged, err := mergeRewriteRules(t.Context(), left, right)
 			require.NoError(t, err)
 			if tc.compatible {
-				require.Contains(t, merged, "where (`n` = 1) or (`n` = 2)")
+				require.Contains(t, merged, "where (n = 1) or (n = 2)")
 			} else {
 				require.Equal(t, right, merged)
 			}
@@ -2348,7 +2365,7 @@ func TestMergeRewriteRulesCollatedProjection(t *testing.T) {
 				require.Equal(t, right, merged)
 				return
 			}
-			require.Contains(t, merged, "where (`a` = 1) or (`a` = 2)")
+			require.Contains(t, merged, "where (a = 1) or (a = 2)")
 			original, err := parsers.ParseOne(t.Context(), dialect.MYSQL, left, 1)
 			require.NoError(t, err)
 			defer original.Free()
@@ -2532,7 +2549,7 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 				return
 			}
 			require.NotNil(t, shape)
-			require.Equal(t, tc.selectList, shape.selectList)
+			require.Equal(t, tc.selectList, strings.ToLower(tree.StringWithOpts(&shape.clause.Exprs, dialect.MYSQL, tree.WithQuoteIdentifier())))
 			require.Equal(t, tc.table, shape.table)
 		})
 	}

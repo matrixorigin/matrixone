@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -192,8 +191,8 @@ func (node *NumVal) Format(ctx *FmtCtx) {
 	if ctx.ModeIndependentStringLiterals() {
 		switch node.ValType {
 		case P_char:
-			if strings.Contains(node.origString, "\\") || (ctx.preserveTextLiteralWidth && !utf8.ValidString(node.origString)) {
-				if ctx.preserveTextLiteralWidth {
+			if strings.Contains(node.origString, "\\") {
+				if ctx.viewDefinition {
 					// Keep the text literal's value and inferred character width
 					// without a CAST's default width or declared-size limit.
 					fmt.Fprintf(ctx, "_utf8mb4 X'%x'", []byte(node.origString))
@@ -203,12 +202,6 @@ func (node *NumVal) Format(ctx *FmtCtx) {
 				return
 			}
 		case P_ScoreBinary:
-			if ctx.preserveTextLiteralWidth && !ctx.viewDefinition && node.origString != "" {
-				// The inner introducer yields a STRING token, so _binary
-				// keeps both the binary value and its implicit SQL heading.
-				fmt.Fprintf(ctx, "_binary _utf8mb4 X'%x'", node.origString)
-				return
-			}
 			if node.origString == "" {
 				// A bare 0x is tokenized as an identifier. Keep the empty
 				// binary literal executable when mode-independent formatting is
@@ -275,10 +268,7 @@ func (s *StrVal) String() string {
 
 func FormatString(str string) string {
 	var buffer strings.Builder
-	// SQL escapes address ASCII bytes. Iterating over runes here would
-	// silently replace invalid UTF-8 before a serializer can reject it.
-	for i := range len(str) {
-		ch := str[i]
+	for i, ch := range str {
 		if ch == '\n' {
 			buffer.WriteString("\\n")
 		} else if ch == '\x00' {
@@ -300,7 +290,8 @@ func FormatString(str string) string {
 		} else if ch == '\t' {
 			buffer.WriteString("\\t")
 		} else {
-			buffer.WriteByte(ch)
+			// buffer.WriteByte(byte(ch))
+			buffer.WriteRune(ch)
 		}
 	}
 	res := buffer.String()

@@ -1004,14 +1004,16 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.sawDateTimeFormat = true
 	}
 
-	if strings.EqualFold(funcName, "interval") && len(node.Exprs) == 2 {
-		if unit, ok := node.Exprs[1].(*TimeUnitExpr); ok {
-			ctx.WriteString("INTERVAL ")
-			node.Exprs[0].Format(ctx)
-			ctx.WriteByte(' ')
-			unit.Format(ctx)
-			return
+	if strings.ToLower(funcName) == "interval" && len(node.Exprs) == 2 {
+		ctx.WriteString("INTERVAL ")
+		node.Exprs[0].Format(ctx)
+		ctx.WriteByte(' ')
+		if nv, ok := node.Exprs[1].(*NumVal); ok {
+			ctx.WriteString(nv.String())
+		} else {
+			node.Exprs[1].Format(ctx)
 		}
+		return
 	}
 
 	if funcName != "" {
@@ -1097,18 +1099,7 @@ func isDateTimeFormatFunction(name string) bool {
 }
 
 func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
-	// GET_FORMAT's first argument is a grammar keyword stored as a string for binding.
-	if !node.IsGeneric && node.FuncName != nil && strings.EqualFold(node.FuncName.Origin(), "get_format") && len(node.Exprs) == 2 {
-		if kind, ok := node.Exprs[0].(*NumVal); ok {
-			ctx.WriteString(kind.String())
-			ctx.WriteString(", ")
-			node.Exprs[1].Format(ctx)
-			return
-		}
-	}
-	// Width-preserving SQL already emits a text hex literal for this argument.
-	// A bare hex number would change the implicit NAME_CONST column name.
-	if ctx.ModeIndependentStringLiterals() && !ctx.preserveTextLiteralWidth &&
+	if ctx.ModeIndependentStringLiterals() &&
 		node.FuncName != nil &&
 		strings.EqualFold(node.FuncName.Origin(), "name_const") &&
 		len(node.Exprs) == 2 &&
@@ -1128,6 +1119,16 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 		if len(node.Exprs) > 1 {
 			ctx.WriteString(", ")
 			node.Exprs[1:].Format(ctx)
+		}
+	case "interval":
+		node.Exprs[0].Format(ctx)
+		if len(node.Exprs) > 1 {
+			ctx.WriteString(", ")
+			formatExprWithSingleQuoteDisabled(ctx, node.Exprs[1])
+			if len(node.Exprs) > 2 {
+				ctx.WriteString(", ")
+				node.Exprs[2:].Format(ctx)
+			}
 		}
 	default:
 		node.Exprs.Format(ctx)

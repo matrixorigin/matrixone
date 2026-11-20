@@ -491,6 +491,30 @@ deallocate prepare keep_handle;
 select hex(cast(label as char)), count(*) from db1.t_dup group by label;
 -- @session
 
+-- Merge the outer predicates without changing a nested WHERE or trailing comment.
+alter role test_rule_role_dup_projection_a add rule 'select a from db1.t_dup where marker = 1' on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule 'select a from db1.t_dup where marker in (select 3 where 1=1) /* end */' on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
+-- Catalog-only syntax is irrelevant when an unmergeable earlier rule is discarded.
+alter role test_rule_role_dup_projection_a add rule "select 'docs\\'notes' as n from db1.t_dup order by a" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
+-- A handle must not retain the wider interpretation of the same rule source.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where 'x\\ty' = _utf8mb4 X'780979'" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = '';
+prepare protected_handle from 'select a from db1.t_dup order by a';
+execute protected_handle;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute protected_handle;
+select a from db1.t_dup order by a;
+-- @session
+
 -- 19. Row-wise expression projections also merge without dropping role visibility
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;

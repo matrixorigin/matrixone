@@ -261,6 +261,61 @@ func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, err
 func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (tree.Statement, error) {
 	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
+	return parseOne(ctx, lexer)
+}
+
+// WhereSource bounds the expression in the original input, from immediately
+// after WHERE through the last token shifted for its expression. Source offsets
+// belong to this parse, not the AST (which may be compared or transplanted).
+type WhereSource struct {
+	Start, End                   int
+	startInComment, endInComment bool
+}
+
+// Split balances active executable comments at each cut so the three fragments
+// can be composed in ordinary SQL context. A quoted '/*!' is not a comment.
+func (w WhereSource) Split(sql string, keepWhere bool) (string, string, string, bool) {
+	if w.Start < len("where") || w.End <= w.Start || w.End > len(sql) || !strings.EqualFold(sql[w.Start-len("where"):w.Start], "where") {
+		return "", "", "", false
+	}
+	end := w.Start
+	if !keepWhere {
+		end -= len("where")
+	}
+	return balanceExecutableComment(sql[:end], false, w.startInComment), balanceExecutableComment(sql[w.Start:w.End], w.startInComment, w.endInComment), balanceExecutableComment(sql[w.End:], w.endInComment, false), true
+}
+
+func ParseOneWithWhereSources(ctx context.Context, sql string, lower int64, sqlMode string) (tree.Statement, map[*tree.Where]WhereSource, error) {
+	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
+	defer PutScanner(lexer.scanner)
+	lexer.whereSources = make(map[*tree.Where]WhereSource)
+	stmt, err := parseOne(ctx, lexer)
+	return stmt, lexer.whereSources, err
+}
+
+// ParseOneForIdentifierComparison is only for comparing projections, never for
+// execution. Quoted identifiers and unquoted names compare case-insensitively;
+// literal tokens retain both their type and their decoded bytes.
+func ParseOneForIdentifierComparison(ctx context.Context, sql string, lower int64, mode string) (tree.Statement, error) {
+	l := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(mode))
+	defer PutScanner(l.scanner)
+	l.foldNames = true
+	return parseOne(ctx, l)
+}
+
+func (l *Lexer) newWhere(expr tree.Expr, start int, lookahead bool) *tree.Where {
+	w := &tree.Where{Type: tree.AstWhere, Expr: expr}
+	if l.whereSources != nil {
+		end, inside := l.scanner.Pos, l.scanner.CommentFlag
+		if lookahead {
+			end, inside = l.beforeLookahead, l.beforeInComment
+		}
+		l.whereSources[w] = WhereSource{start, end, l.whereInComment[start], inside}
+	}
+	return w
+}
+
+func parseOne(ctx context.Context, lexer *Lexer) (tree.Statement, error) {
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
 			s.Free()
@@ -299,6 +354,11 @@ type Lexer struct {
 	parseFirst            bool
 	stopLexing            bool
 	statementEnd          int
+	whereSources          map[*tree.Where]WhereSource
+	beforeLookahead       int
+	beforeInComment       bool
+	whereInComment        map[int]bool
+	foldNames             bool
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -403,6 +463,9 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if l.stopLexing {
 		return 0
 	}
+	if l.whereSources != nil {
+		l.beforeLookahead, l.beforeInComment = l.scanner.Pos, l.scanner.CommentFlag
+	}
 	var typ int
 	var str string
 	if l.lastToken == int('.') {
@@ -411,6 +474,12 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		typ, str = l.scanner.Scan()
 	}
 	lval.pos = l.scanner.Pos
+	if l.whereSources != nil && typ == WHERE && l.scanner.CommentFlag {
+		if l.whereInComment == nil {
+			l.whereInComment = make(map[int]bool)
+		}
+		l.whereInComment[lval.pos] = true
+	}
 	l.scanner.LastToken = str
 	// yacc precedence is static, so HIGH_NOT_PRECEDENCE uses a distinct token
 	// that the grammar places at the unary-operator precedence.
@@ -488,6 +557,9 @@ func (l *Lexer) Lex(lval *yySymType) int {
 
 	l.previousToken = l.lastToken
 	l.lastToken = typ
+	if l.foldNames && (typ == ID || typ != 0 && keywords[strings.ToLower(str)] == typ) {
+		str = strings.ToLower(str)
+	}
 	lval.str = str
 	l.recordSyntaxToken(typ)
 	return typ

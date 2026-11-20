@@ -25806,7 +25806,7 @@ yydefault:
 		var yyLOCAL *tree.Where
 //line mysql_sql.y:8194
 		{
-			yyLOCAL = &tree.Where{Type: tree.AstWhere, Expr: yyDollar[2].exprUnion()}
+			yyLOCAL = yylex.(*Lexer).newWhere(yyDollar[2].exprUnion(), yyDollar[1].pos, yyrcvr.Lookahead() >= 0)
 		}
 		yyVAL.union = yyLOCAL
 	case 1155:

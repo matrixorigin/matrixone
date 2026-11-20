@@ -493,6 +493,33 @@ deallocate prepare keep_handle;
 select hex(cast(label as char)), count(*) from db1.t_dup group by label;
 ➤ hex(cast(label as varchar))[-1,16383,0]  ¦  count(*)[-5,64,0]  𝄀
 610962  ¦  2
+alter role test_rule_role_dup_projection_a add rule 'select a from db1.t_dup where marker = 1' on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule 'select a from db1.t_dup where marker in (select 3 where 1=1) /* end */' on table db1.t_dup;
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2
+alter role test_rule_role_dup_projection_a add rule "select 'docs\\'notes' as n from db1.t_dup order by a" on table db1.t_dup;
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+2
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where 'x\\ty' = _utf8mb4 X'780979'" on table db1.t_dup;
+set sql_mode = '';
+prepare protected_handle from 'select a from db1.t_dup order by a';
+execute protected_handle;
+➤ a[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute protected_handle;
+Prepared statement needs to be re-prepared
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+2
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
 alter role test_rule_role_expr_projection_a add rule "select a + 1 as b from db1.t_dup where marker = 1" on table db1.t_dup;
