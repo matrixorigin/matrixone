@@ -37,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -869,6 +871,63 @@ func Test_makeMysqlConfig(t *testing.T) {
 	assert.Equal(t, 10*time.Minute, cfg.WriteTimeout)
 	assert.True(t, cfg.MultiStatements)
 	assert.True(t, cfg.AllowNativePasswords)
+	// Every physical sink session must establish the literal dialect assumed
+	// by convertColIntoSql.
+	assert.Equal(t, map[string]string{"sql_mode": sinkSessionSQLModeExpr}, cfg.Params)
+}
+
+// convertColIntoSql emits backslash-escaped text literals. They round-trip
+// only in the session dialect makeMysqlConfig establishes; under
+// NO_BACKSLASH_ESCAPES the same SQL is rejected or decodes to other bytes.
+func TestConvertColIntoSqlLiteralRequiresBackslashEscapes(t *testing.T) {
+	ctx := context.Background()
+	text := types.T_varchar.ToType()
+	jsonType := types.T_json.ToType()
+
+	parseLiteral := func(sqlMode, sql string) (string, error) {
+		stmt, err := mysqlparser.ParseOneWithSQLMode(ctx, sql, 1, sqlMode)
+		if err != nil {
+			return "", err
+		}
+		sel, ok := stmt.(*tree.Select)
+		require.True(t, ok)
+		clause, ok := sel.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, clause.Exprs, 1)
+		val, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+		require.True(t, ok)
+		return val.String(), nil
+	}
+
+	type literalCase struct {
+		name  string
+		data  any
+		typ   *types.Type
+		value string
+	}
+	texts := []string{`back\slash`, `a'b`, `path\to\dir 'q' 中文`, `\'`, `trailing\`}
+	cases := make([]literalCase, 0, len(texts)+1)
+	for _, v := range texts {
+		cases = append(cases, literalCase{name: "text " + v, data: []byte(v), typ: &text, value: v})
+	}
+	bj, err := types.ParseStringToByteJson(`{"k": "x\"y\\z'w"}`)
+	require.NoError(t, err)
+	cases = append(cases, literalCase{name: "json", data: bj, typ: &jsonType, value: bj.String()})
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf, err := convertColIntoSql(ctx, tc.data, tc.typ, []byte("SELECT "))
+			require.NoError(t, err)
+
+			got, err := parseLiteral("", string(buf))
+			require.NoError(t, err)
+			require.Equal(t, tc.value, got)
+
+			got, err = parseLiteral("NO_BACKSLASH_ESCAPES", string(buf))
+			require.True(t, err != nil || got != tc.value,
+				"literal unexpectedly round-trips under NO_BACKSLASH_ESCAPES: %s", buf)
+		})
+	}
 }
 
 func Test_tryConn(t *testing.T) {
