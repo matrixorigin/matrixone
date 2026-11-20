@@ -305,10 +305,14 @@ func TestReconcileInterruptedExportAfterPartialRemovalAndRestart(t *testing.T) {
 type selectiveRenameErrorFS struct {
 	vfs.FS
 	blockedPath string
+	blockedErr  error
 }
 
 func (fs *selectiveRenameErrorFS) Rename(oldname, newname string) error {
 	if oldname == fs.blockedPath {
+		if fs.blockedErr != nil {
+			return fs.blockedErr
+		}
 		return os.ErrPermission
 	}
 	return fs.FS.Rename(oldname, newname)
@@ -326,6 +330,13 @@ func TestDropInvalidRetainsCandidateUntilRemovalSucceeds(t *testing.T) {
 	removed, err := mgr.DropInvalid(nid.shardID, nid.replicaID, 200)
 	require.False(t, removed)
 	require.ErrorIs(t, err, os.ErrPermission)
+	require.Equal(t, 3, mgr.Count(nid.shardID, nid.replicaID))
+	_, err = fs.Stat(fs.blockedPath)
+	require.NoError(t, err)
+	fs.blockedErr = os.ErrNotExist
+	removed, err = mgr.DropInvalid(nid.shardID, nid.replicaID, 200)
+	require.False(t, removed)
+	require.ErrorIs(t, err, os.ErrNotExist)
 	require.Equal(t, 3, mgr.Count(nid.shardID, nid.replicaID))
 	_, err = fs.Stat(fs.blockedPath)
 	require.NoError(t, err)

@@ -186,13 +186,26 @@ func (ss *snapshotRecord) removeAt(i int) error {
 	parent := filepath.Dir(item.dir)
 	removing := ss.fs.PathJoin(parent,
 		fmt.Sprintf(snapshotPathPattern+"-%d.removing", item.index, ss.nodeID.replicaID))
+	renamed := true
 	if err := ss.fs.Rename(item.dir, removing); err != nil {
-		return err
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		// A missing export cannot be renamed. Confirm the canonical path is
+		// gone before releasing its inventory slot; an ENOENT from Rename
+		// while the source still exists or a transient Stat error must retry.
+		if _, statErr := ss.fs.Stat(item.dir); !errors.Is(statErr, os.ErrNotExist) {
+			return errors.Join(err, statErr)
+		}
+		renamed = false
 	}
 	copy(ss.items[i:], ss.items[i+1:])
 	ss.items[len(ss.items)-1] = nil
 	ss.items = ss.items[:len(ss.items)-1]
 	putSnapshotItem(item)
+	if !renamed {
+		return nil
+	}
 	if err := syncExportDir(ss.fs, parent); err != nil {
 		ss.failedExportCleanup = true
 		return err

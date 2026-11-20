@@ -1283,13 +1283,20 @@ func TestTruncationFallsBackFromCorruptExport(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			testTruncationFallsBackFromCorruptExport(t, tc.corrupt)
+			testTruncationFallsBackFromCorruptExport(t, tc.corrupt, false)
 		})
 	}
 }
 
+func TestTruncationFallsBackWhenWholeExportIsMissing(t *testing.T) {
+	testTruncationFallsBackFromCorruptExport(t,
+		func(t *testing.T, fs vfs.FS, dir string, _ uint64) {
+			require.NoError(t, fs.RemoveAll(dir))
+		}, true)
+}
+
 func testTruncationFallsBackFromCorruptExport(
-	t *testing.T, corrupt func(*testing.T, vfs.FS, string, uint64),
+	t *testing.T, corrupt func(*testing.T, vfs.FS, string, uint64), repeatTicks bool,
 ) {
 	runServiceTest(t, false, true, func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -1346,6 +1353,12 @@ func testTruncationFallsBackFromCorruptExport(
 		require.Equal(t, 0, s.store.snapshotMgr.Count(shardID, replicaID))
 		_, err = s.store.cfg.FS.Stat(newerDir)
 		require.ErrorIs(t, err, os.ErrNotExist)
+		if repeatTicks {
+			for range 2 {
+				require.NoError(t, s.store.processShardTruncateLog(ctx, shardID))
+				require.Equal(t, older, s.store.shardSnapshotInfo.getTruncatedLsn(shardID))
+			}
+		}
 	})
 }
 
