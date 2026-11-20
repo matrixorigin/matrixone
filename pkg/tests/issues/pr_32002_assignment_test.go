@@ -148,6 +148,28 @@ func TestPR32002ReviewBoundaries(t *testing.T) {
 		require.NoError(t, rows.Err())
 		require.Equal(t, []string{"12.3", "12.3", "123.5"}, values)
 
+		exec("set session sql_mode='STRICT_TRANS_TABLES'")
+		exec("create table decimal_source (d decimal(12,2))")
+		exec("create table decimal_wider (d decimal(14,2))")
+		exec("insert into decimal_source values (-9999999999.99), (0.01), (null)")
+		exec("insert into decimal_wider select d from decimal_source")
+		require.Empty(t, warningCodes())
+		var negative, positive, missing int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(case when d = -9999999999.99 then 1 end), count(case when d = 0.01 then 1 end), count(case when d is null then 1 end) from decimal_wider").
+			Scan(&negative, &positive, &missing))
+		require.Equal(t, [3]int{1, 1, 1}, [3]int{negative, positive, missing})
+
+		exec("create table decimal_less_integer_room (d decimal(14,6))")
+		_, err = conn.ExecContext(ctx, "insert into decimal_less_integer_room select d from decimal_source")
+		require.Error(t, err)
+		exec("insert ignore into decimal_less_integer_room select d from decimal_source")
+		require.Equal(t, []int{int(moerr.ER_WARN_DATA_OUT_OF_RANGE)}, warningCodes())
+		var clamped int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from decimal_less_integer_room where d = -99999999.999999").Scan(&clamped))
+		require.Equal(t, 1, clamped)
+
 		exec("create table median_input (g int, v decimal(38,0))")
 		exec("insert into median_input values (1,1),(1,2),(2,3),(2,4)")
 		exec("create table median_output (v decimal(40,2))")
