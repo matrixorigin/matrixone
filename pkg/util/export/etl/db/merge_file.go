@@ -18,7 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -65,7 +64,7 @@ func WriteMergeFile(ctx context.Context, tbl *table.Table, first []string, next 
 	}
 	// Distinguish this operation's deadline from a caller that uses the same
 	// underlying cause for its own cancellation.
-	timeoutCause := fmt.Errorf("%w", moerr.CauseWriteRowRecords)
+	timeoutCause := errors.Join(moerr.CauseWriteRowRecords)
 	queryCtx, cancel := context.WithTimeoutCause(ctx, timeout, timeoutCause)
 	defer cancel()
 	countPreflightError := func(err error) {
