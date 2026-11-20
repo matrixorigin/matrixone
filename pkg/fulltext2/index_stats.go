@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -188,22 +187,17 @@ func ReadStats(ctx context.Context, sqlproc *sqlexec.SqlProcess, cfg TableConfig
 	if err != nil || matched {
 		return result, err
 	}
-	var snapshot timestamp.Timestamp
-	if historical := sqlproc.EffectiveSnapshotTS(); historical != nil {
-		snapshot = *historical
-	} else if sqlproc.Proc != nil && sqlproc.Proc.GetTxnOperator() != nil {
-		snapshot = sqlproc.Proc.GetTxnOperator().Txn().SnapshotTS
-	} else if sqlproc.SqlCtx != nil && sqlproc.SqlCtx.TxnOperator != nil {
-		snapshot = sqlproc.SqlCtx.TxnOperator.Txn().SnapshotTS
-	}
-	if snapshot.IsEmpty() {
+	if sqlproc.BuildSnapshotTS() == 0 {
 		return result, moerr.NewInternalError(ctx, "fulltext stats: read snapshot is unavailable")
 	}
-	key := veccache.SnapshotKey(cfg.IndexTable, snapshot)
+	key := veccache.GenerationKey(cfg.IndexTable, ts, tail)
 	err = veccache.Cache.Read(sqlproc, key, NewFulltext2Search(cfg), func(algo veccache.VectorIndexSearchIf) error {
 		reader, ok := algo.(*Fulltext2Search)
 		if !ok {
 			return moerr.NewInternalError(ctx, "fulltext stats: unexpected cached index type")
+		}
+		if !reader.genValid || reader.loadedTs != ts || reader.loadedTail != tail {
+			return moerr.NewInternalError(ctx, "fulltext stats: loaded generation does not match the read snapshot")
 		}
 		result, err = reader.Stats(ctx)
 		return err

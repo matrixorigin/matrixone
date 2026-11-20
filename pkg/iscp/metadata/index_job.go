@@ -33,6 +33,11 @@ const (
 	StateCanceled
 )
 
+const (
+	StageInit int8 = iota
+	StageRunning
+)
+
 func IndexJobName(index string) string { return "index_" + index }
 
 func StateName(state int8, errorCode int64) string {

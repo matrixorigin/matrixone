@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package table_function
+package sqlreader
 
 import (
 	"fmt"
@@ -25,13 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (s *indexStatsState) startKeyIndex(proc *process.Process, sqlproc *sqlexec.SqlProcess) error {
+func ReadKey(sqlproc *sqlexec.SqlProcess, cfg indexstats.Config) (indexstats.Rows, error) {
+	s := &metadataState{config: cfg}
+	proc := sqlproc.Proc
 	res, err := indexStatsRunSQL(sqlproc, "SELECT COUNT(*) FROM "+sqlquote.QualifiedIdent(s.config.Database, s.config.Entries))
 	if err != nil {
-		return err
+		return indexstats.Rows{}, err
 	}
 	summary := &indexstats.KeySummary{}
 	for _, bat := range res.Batches {
@@ -46,7 +47,7 @@ func (s *indexStatsState) startKeyIndex(proc *process.Process, sqlproc *sqlexec.
 	} else {
 		res, err = indexStatsRunSQL(sqlproc, buildKeyIndexCardinalitySQL(s.config))
 		if err != nil {
-			return err
+			return indexstats.Rows{}, err
 		}
 		var joined int64
 		for _, bat := range res.Batches {
@@ -57,11 +58,13 @@ func (s *indexStatsState) startKeyIndex(proc *process.Process, sqlproc *sqlexec.
 		}
 		res.Close()
 		if joined != summary.Entries {
-			return moerr.NewInvalidInput(proc.Ctx, "mo_index_stats: key index entries do not match visible source rows")
+			return indexstats.Rows{}, moerr.NewInvalidInput(proc.Ctx, "mo_index_stats: key index entries do not match visible source rows")
 		}
 	}
-	s.keySummary = summary
-	return s.readMetadata(proc, sqlproc)
+	if err := s.readMetadata(proc, sqlproc); err != nil {
+		return indexstats.Rows{}, err
+	}
+	return indexstats.SummaryRow(cfg.KeyKind, s.keyIndexMetrics(summary)), nil
 }
 
 // Count logical keys among actual index entries. The join preserves the index's
@@ -83,10 +86,10 @@ func buildKeyIndexCardinalitySQL(cfg indexstats.Config) string {
 		strings.Join(parts, ", "))
 }
 
-func (s *indexStatsState) keyIndexMetrics() map[string]any {
+func (s *metadataState) keyIndexMetrics(summary *indexstats.KeySummary) map[string]any {
 	metrics := map[string]any{
 		"columns": s.config.Columns, "method": s.config.Method,
-		"entry_count": s.keySummary.Entries, "cardinality": s.keySummary.Cardinality, "storage": s.storage,
+		"entry_count": summary.Entries, "cardinality": summary.Cardinality, "storage": s.storage,
 	}
 	if len(s.config.PrefixLengths) > 0 {
 		metrics["prefix_lengths"] = s.config.PrefixLengths

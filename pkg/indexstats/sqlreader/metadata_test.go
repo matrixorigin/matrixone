@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package table_function
+package sqlreader
 
 import (
 	"context"
@@ -147,16 +147,16 @@ func TestMoIndexStatsMissingAsyncJobAndUninitializedIndex(t *testing.T) {
 	indexStatsReadStorage = func(_ *process.Process, _ *sqlexec.SqlProcess, _ indexstats.Config) (map[string]any, error) {
 		return map[string]any{"size_bytes": uint64(0)}, nil
 	}
-	tf := &TableFunction{}
-	state := &indexStatsState{config: indexstats.Config{Async: true}}
-	require.NoError(t, state.start(tf, proc, 0, nil))
+
+	state := &ivfStats{metadataState: metadataState{config: indexstats.Config{Async: true}}}
+	require.NoError(t, state.startIVF(proc, sqlexec.NewSqlProcess(proc)))
 	metrics := state.rowMetrics(nil)
 	require.Nil(t, metrics["index_version"])
 	require.Equal(t, "index_not_initialized", metrics["status"])
 	require.Equal(t, "task_missing", state.maintenance["status"])
 	require.Nil(t, state.maintenance["caught_up"])
 	require.NotContains(t, metrics, "diagnosis")
-	state.free(tf, proc, false, nil)
+
 	require.Zero(t, proc.Mp().CurrNB())
 }
 

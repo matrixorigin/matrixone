@@ -30,6 +30,7 @@ import (
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,6 +46,10 @@ func (p indexStatsTestPlugin) Plan() planplugin.Hooks { return p.hooks }
 type indexStatsTestHooks struct {
 	planplugin.Hooks
 	configure func(context.Context, *pbplan.TableDef, []*pbplan.IndexDef, *indexstats.Config) error
+}
+
+func (h *indexStatsTestHooks) ReadIndexStats(*sqlexec.SqlProcess, indexstats.Config) (indexstats.Rows, error) {
+	return indexstats.SummaryRow("custom", map[string]any{"plugin": true}), nil
 }
 
 func (h *indexStatsTestHooks) ConfigureIndexStats(ctx context.Context, source *pbplan.TableDef, defs []*pbplan.IndexDef, cfg *indexstats.Config) error {
@@ -87,6 +92,14 @@ func TestMoIndexStatsPlannerUsesRegisteredCapability(t *testing.T) {
 	var cfg indexstats.Config
 	require.NoError(t, json.Unmarshal(builder.qry.Nodes[node].TableDef.TblFunc.Param, &cfg))
 	require.Equal(t, name, cfg.Algorithm)
+	execOwner, err := indexplugin.IndexStats(builder.GetContext(), cfg.Algorithm)
+	require.NoError(t, err)
+	rows, err := execOwner.ReadIndexStats(sqlexec.NewSqlProcess(mock.GetProcess()), cfg)
+	require.NoError(t, err)
+	require.Equal(t, "custom", rows.IndexType)
+	require.True(t, rows.At(0).Metrics["plugin"].(bool))
+	_, err = indexplugin.IndexStats(builder.GetContext(), "unsupported_diagnostic")
+	require.ErrorContains(t, err, "not supported")
 	require.Equal(t, "hidden_entries", cfg.Entries)
 	require.Equal(t, "id", cfg.PrimaryKey)
 

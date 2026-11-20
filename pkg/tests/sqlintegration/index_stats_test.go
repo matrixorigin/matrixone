@@ -50,6 +50,26 @@ func TestMoIndexStatsSQL(t *testing.T) {
 		}
 		exec("create database index_stats_test")
 		exec("use index_stats_test")
+		for _, tc := range []struct{ name, columns, pk, rows, newRow string }{
+			{"enum_keys", "s enum('red','blue','green','black')", "s", "('red','[1]'),('blue','[2]'),('green','[3]')", "('black','[4]')"},
+			{"string_keys", "s varchar(20) collate utf8mb4_bin", "s", "('A','[1]'),('a','[2]'),('é','[3]')", "('e','[4]')"},
+			{"tuple_keys", "s varchar(20) collate utf8mb4_bin,n bigint", "s,n", "('A',1,'[1]'),('A',2,'[2]'),('a',1,'[3]')", "('a',2,'[4]')"},
+		} {
+			exec("create table " + tc.name + "(" + tc.columns + ",v vecf32(1),primary key(" + tc.pk + "))")
+			exec("insert into " + tc.name + " values " + tc.rows)
+			exec("create index ivf using ivfflat on " + tc.name + "(v) lists=1")
+			exec("insert into " + tc.name + " values " + tc.newRow)
+			var oldRows, newRows, recall int64
+			query := "select cast(json_extract(metrics,'$.drift.old_sample_count') as bigint)," +
+				"cast(json_extract(metrics,'$.drift.new_sample_count') as bigint)," +
+				"cast(json_extract(metrics,'$.analysis.recall.sample_count') as bigint) " +
+				"from mo_index_stats('index_stats_test','" + tc.name + "','ivf','{\"sample_count\":4}') s where row_type='index'"
+			require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&oldRows, &newRows, &recall), tc.name)
+			require.Equal(t, int64(3), oldRows)
+			require.Equal(t, int64(1), newRows)
+			require.Equal(t, int64(4), recall)
+		}
+
 		for _, name := range []string{"plain_vectors", "quantized_vectors"} {
 			exec("create table " + name + "(id bigint primary key, label int, embedding vecf64(1))")
 			exec("insert into " + name + " values(1,1,'[-10]'),(2,2,'[10]')")

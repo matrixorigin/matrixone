@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
+	"github.com/matrixorigin/matrixone/pkg/indexstats/sqlreader"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/diagnostic"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -38,7 +39,7 @@ func writeIVFBuildInfo(proc *process.Process, sqlproc *sqlexec.SqlProcess, cfg v
 	}
 	ts := txn.Txn().SnapshotTS
 	info := diagnostic.BuildInfo{Format: 1, IndexVersion: version, BuildTS: fmt.Sprintf("%d-%d", ts.PhysicalTime, ts.LogicalTime), Rows: cfg.DataSize, TrainingSamples: int64(samples), SourceTableID: cfg.SourceTableID}
-	ctx, db, err := indexStatsDatabase(proc, sqlproc, indexstats.Config{Database: cfg.DbName, Table: cfg.SrcTable})
+	ctx, db, err := sqlreader.Database(proc, sqlproc, indexstats.Config{Database: cfg.DbName, Table: cfg.SrcTable})
 	if err == nil {
 		if rel, err := db.Relation(ctx, cfg.SrcTable, nil); err == nil {
 			info.SourceTableID = rel.GetTableID(ctx)

@@ -13,8 +13,8 @@ permission on the source table.
 
 The planner resolves the named index through `indexplugin.Get` and its optional
 `Plan()` diagnostic capability. The IVF and fulltext owners validate their private
-table roles and saved options and supply defaults; the SQL layer handles source
-resolution, access checks and the common output schema. Plugins without this
+table roles and saved options, supply defaults and produce diagnostic rows at execution.
+The SQL layer handles source resolution, access checks and the common output schema. Plugins without this
 capability return a not-supported error.
 
 ```sql
@@ -162,7 +162,9 @@ fixed-scale rounding of an integer AVG followed by a cast.
 
 Fulltext2 uses the existing index cache and byte governor. A warm current generation
 is reused only when its generation fingerprint matches the statement's snapshot;
-otherwise the exact snapshot is loaded under its own cache key. A shared read lock
+otherwise a diagnostic load is keyed by the hidden table and the base/tail generation
+visible in the read snapshot. Concurrent reads of the same generation share admission
+and loading. A shared read lock
 protects the generation during statistics, with the same admission and eviction
 lifetime as search. Fully live segments read only the DF header.
 The engine's

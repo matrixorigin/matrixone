@@ -30,6 +30,7 @@ type Config struct {
 	Database, Table, Index, Column, PrimaryKey string
 	Metadata, Centroids, Entries               string
 	OpType, Quantization                       string
+	SerializedKeyType                          string
 	Async                                      bool
 	TableID                                    uint64
 	Lists                                      int64
@@ -53,4 +54,22 @@ type FullTextSummary struct {
 
 type KeySummary struct {
 	Entries, Cardinality int64
+}
+
+type Row struct {
+	Kind, ObjectID string
+	Metrics        map[string]any
+}
+
+// Rows describes an immutable diagnostic result. At builds one row on demand.
+type Rows struct {
+	IndexType string
+	Count     int
+	At        func(int) Row
+}
+
+func SummaryRow(indexType string, metrics map[string]any) Rows {
+	return Rows{IndexType: indexType, Count: 1, At: func(int) Row {
+		return Row{Kind: "index", Metrics: metrics}
+	}}
 }

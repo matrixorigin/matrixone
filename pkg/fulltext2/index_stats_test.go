@@ -17,13 +17,18 @@ package fulltext2
 import (
 	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -111,10 +116,10 @@ func TestMoIndexStatsFulltext2ReusesMatchingWarmGeneration(t *testing.T) {
 	veccache.Cache.IndexMap.Store("stats_warm", entry)
 	n := 0
 	mp := mpool.MustNewZero()
-	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+	runSql = func(_ *sqlexec.SqlProcess, query string) (executor.Result, error) {
 		n++
 		v := int64(11)
-		if n%2 == 0 {
+		if strings.Contains(query, "chunk_id") {
 			v = 22
 		}
 		bat := batch.NewWithSize(1)
@@ -133,4 +138,21 @@ func TestMoIndexStatsFulltext2ReusesMatchingWarmGeneration(t *testing.T) {
 	reader.loadedTail = 99
 	_, err = ReadStats(t.Context(), sqlproc, TableConfig{IndexTable: "stats_warm"})
 	require.ErrorContains(t, err, "read snapshot is unavailable", "a different generation must never serve the statement")
+	// The cache contains only the generation loaded by a previous diagnostic.
+	veccache.Cache.IndexMap.Delete("stats_warm")
+	reader.loadedTail = 22
+	key := veccache.GenerationKey("stats_warm", 11, 22)
+	veccache.Cache.IndexMap.Store(key, entry)
+	for _, physical := range []int64{100, 200} {
+		op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+		op.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: physical}}).AnyTimes()
+		sqlproc.SqlCtx.TxnOperator = op
+		before := n
+		got, err = ReadStats(t.Context(), sqlproc, TableConfig{IndexTable: "stats_warm"})
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+		require.Equal(t, before+2, n, "a matching immutable generation only needs the two fingerprint reads")
+		require.Equal(t, []string{key}, veccache.Cache.Keys())
+	}
+
 }

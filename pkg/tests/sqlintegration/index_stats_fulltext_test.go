@@ -19,12 +19,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestMoIndexStatsFulltextSQL(t *testing.T) {
@@ -119,6 +122,7 @@ func TestMoIndexStatsFulltextSQL(t *testing.T) {
 				metrics := wait(3, 3, 5.0/3)
 				require.Equal(t, float64(tc.version), metrics["version"])
 				if tc.version == 2 {
+					checkConcurrentStatsGeneration(t, ctx, db, conn)
 					require.NotContains(t, metrics, "health_status")
 					for _, key := range []string{"tail_chunk_count", "tail_frame_count", "tail_size_bytes"} {
 						require.Contains(t, metrics, key)
@@ -193,4 +197,34 @@ func TestMoIndexStatsFulltextSQL(t *testing.T) {
 			}
 		}
 	})
+}
+
+func checkConcurrentStatsGeneration(t *testing.T, ctx context.Context, db *sql.DB, conn *sql.Conn) {
+	t.Helper()
+	var storage string
+	err := conn.QueryRowContext(ctx, `SELECT i.index_table_name FROM mo_catalog.mo_indexes i
+ JOIN mo_catalog.mo_tables t ON t.rel_id=i.table_id
+ WHERE t.reldatabase='index_stats_fulltext' AND t.relname='v2' AND i.name='ft' AND i.algo_table_type='ftv2_index'`).Scan(&storage)
+	require.NoError(t, err)
+	veccache.Cache.RemoveAllGenerations(storage, "test")
+	var calls errgroup.Group
+	for range 4 {
+		calls.Go(func() error {
+			var docs int
+			err := db.QueryRowContext(ctx, `SELECT CAST(json_extract(metrics,'$.document_count') AS SIGNED)
+    FROM mo_index_stats('index_stats_fulltext','v2','ft') s`).Scan(&docs)
+			if err == nil && docs != 3 {
+				return fmt.Errorf("document count after concurrent load: got %d, want 3", docs)
+			}
+			return err
+		})
+	}
+	require.NoError(t, calls.Wait())
+	entries := 0
+	for _, k := range veccache.Cache.Keys() {
+		if strings.HasPrefix(k, storage+"@") {
+			entries++
+		}
+	}
+	require.Equal(t, 1, entries, "different autocommit snapshots must reuse the same diagnostic load")
 }

@@ -42,7 +42,7 @@ Summary fields added by this extension:
 | `drift.new_old_residual_ratio` | Sampled new-cohort MSE / old-cohort MSE. |
 | `drift.new_rows_in_largest_5pct_buckets_ratio` | Fraction of sampled new keys in the largest ceil(5% × K) buckets. |
 | `drift.approximate` | Present for reconstructed quantized entry vectors. |
-| `analysis.recall` | `kind:centroid_coverage`, actual query count, k=10, target, `(nprobe,recall)` curve, optional new/old curves and smallest evaluated `recommended_probe_limit` meeting target. |
+| `analysis.recall` | `kind:centroid_coverage`, actual query count, k=10, target, `(nprobe,recall)` curve, optional new/old curves and smallest evaluated `recommended_probe_limit` meeting target. The curve tests the supported upper bound (80000 or the number of centroids, whichever is smaller). An unattainable target reports `target_unreachable_within_probe_limit` and omits the setting recommendation. |
 | `analysis.retrain` | Sample count, iteration limit, `approximate:true` and current/retrained `sse_ratio`; present only on request. |
 | `tail_chunk_count`, `tail_frame_count`, `tail_size_bytes` | Fulltext2 CDC-tail stored rows, distinct frame IDs and serialized payload bytes. |
 | `base_dead_ratio` | Fulltext2 max(0, 1 − source rows/base documents); absent without a base. |
@@ -84,8 +84,10 @@ count makes it unknown. Training coverage is `train_nsample/(30*lists)`.
 
 The existing IVF scan maintains a bounded deterministic reservoir of 100 entry
 keys, centroid IDs and decoded vectors, in addition to its exact counts and
-geometry. A single historical PK-only lookup classifies these keys by existence
-at `build_ts`; no historical vector join or unbounded key set is retained.
+geometry. A historical primary-key lookup classifies sampled keys by existence
+at `build_ts`. Both drift and neighbor lookups decode the sampled constants to
+their SQL type for the source primary-key filter. Keys share a statement up to
+the 256 KiB literal budget. The join uses the original key type and collation.
 "New" means a currently indexed key absent at the build snapshot; updates of an
 existing key belong to the old cohort. Reused keys have the same identity rule.
 
