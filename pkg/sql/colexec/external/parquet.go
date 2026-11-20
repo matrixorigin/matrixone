@@ -1965,9 +1965,13 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			)
 		}
 	case types.T_enum:
+		members, err := types.DecodeEnumMembers(dt.Enumvalues, dt.EnumEncoding)
+		if err != nil {
+			mp.mapper = func(_ *columnMapper, _ parquet.Page, _ *process.Process, _ *vector.Vector) error { return err }
+			break
+		}
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			if isParquetIntegerSource(st, false) {
-				enumValues := dt.Enumvalues
 				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 					return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Enum(0), func(v parquet.Value) (types.Enum, error) {
 						val, err := parquetValueToUint64(proc.Ctx, st, v)
@@ -1977,17 +1981,16 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						if val > math.MaxUint16 {
 							return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows enum index", val)
 						}
-						return types.ParseEnumValue(enumValues, uint16(val))
+						return members.ParseValue(uint16(val))
 					})
 				}
 			}
 			break
 		}
-		enumValues := dt.Enumvalues
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 				func(data []byte) (types.Enum, error) {
-					return types.ParseEnum(enumValues, util.UnsafeBytesToString(data))
+					return members.Parse(util.UnsafeBytesToString(data))
 				},
 				types.Enum(0),
 			)
@@ -3246,11 +3249,22 @@ func parquetValueToFloat32(ctx context.Context, st parquet.Type, v parquet.Value
 	return parquetFloat64ToFloat32(ctx, val)
 }
 
-func parquetFloat64ToFloat32(ctx context.Context, val float64) (float32, error) {
+func parquetFloat64ToFloat32(ctx context.Context, val float64) (result float32, err error) {
 	if val > math.MaxFloat32 || val < -math.MaxFloat32 {
-		return 0, moerr.NewInvalidInputf(ctx, "parquet value %v overflows FLOAT", val)
+		result, err = parquetFloat64ToFloat32OutOfRange(ctx, val)
+	} else {
+		result = float32(val)
 	}
-	return float32(val), nil
+	return
+}
+
+// parquetFloat64ToFloat32OutOfRange accepts infinities and rejects finite overflow.
+// The caller must first check that val is outside the finite FLOAT range.
+func parquetFloat64ToFloat32OutOfRange(ctx context.Context, val float64) (float32, error) {
+	if math.IsInf(val, 0) {
+		return float32(val), nil
+	}
+	return 0, moerr.NewInvalidInputf(ctx, "parquet value %v overflows FLOAT", val)
 }
 
 func parquetValueToString(ctx context.Context, st parquet.Type, v parquet.Value) (string, error) {

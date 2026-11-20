@@ -86,6 +86,14 @@ func TestPrimaryKeyPrefixSecondaryPointAccess(t *testing.T) {
 	}
 }
 
+func makeInt32PrimaryPrefixFilter(tag, col int32, op string, value int32, typ pb.Type) *pb.Expr {
+	expr := makeRangeFilterExpr(tag, col, op, int64(value))
+	expr.GetF().Args[0].Typ = typ
+	expr.GetF().Args[1].Typ = typ
+	expr.GetF().Args[1].GetLit().Value = &pb.Literal_I32Val{I32Val: value}
+	return expr
+}
+
 func TestSortedPrimaryPrefixPointPreference(t *testing.T) {
 	for _, tc := range []struct {
 		name                                         string
@@ -110,13 +118,13 @@ func TestSortedPrimaryPrefixPointPreference(t *testing.T) {
 			tag := builder.genNewBindTag()
 			table := mock.ctxt.tables["index_hint_t"]
 			table.Indexes = []*pb.IndexDef{table.Indexes[2]}
-			a := makeRangeFilterExpr(tag, 1, "=", 1)
+			a := makeInt32PrimaryPrefixFilter(tag, 1, "=", 1, table.Cols[1].Typ)
 			a.Selectivity = tc.sortedSel
 			op := "="
 			if tc.rangeFilter {
 				op = ">"
 			}
-			b := makeRangeFilterExpr(tag, 2, op, 2)
+			b := makeInt32PrimaryPrefixFilter(tag, 2, op, 2, table.Cols[2].Typ)
 			b.Selectivity = tc.secondarySel
 			node := &pb.Node{NodeType: pb.Node_TABLE_SCAN, ObjRef: mock.ctxt.objects[table.Name], TableDef: table, BindingTags: []int32{tag}, FilterList: []*pb.Expr{a, b}}
 			scan := builder.appendNode(node, NewBindContext(builder, nil))
@@ -262,8 +270,8 @@ func TestUniquePointCardinalityAdmission(t *testing.T) {
 					table.Indexes[0], table.Indexes[1] = table.Indexes[1], table.Indexes[0]
 				}
 			}
-			a := makeRangeFilterExpr(tag, 1, "=", 1)
-			b := makeRangeFilterExpr(tag, 2, "=", 2)
+			a := makeInt32PrimaryPrefixFilter(tag, 1, "=", 1, table.Cols[1].Typ)
+			b := makeInt32PrimaryPrefixFilter(tag, 2, "=", 2, table.Cols[2].Typ)
 			a.Selectivity = 1
 			b.Selectivity = 1
 			if tc.zeroEstimate {
@@ -274,7 +282,7 @@ func TestUniquePointCardinalityAdmission(t *testing.T) {
 				a.Selectivity = 0.001
 			}
 			if tc.parameter {
-				b.GetF().Args[1] = &pb.Expr{Typ: pb.Type{Id: int32(types.T_int64)}, Expr: &pb.Expr_P{P: &pb.ParamRef{Pos: 0}}}
+				b.GetF().Args[1] = &pb.Expr{Typ: table.Cols[2].Typ, Expr: &pb.Expr_P{P: &pb.ParamRef{Pos: 0}}}
 			}
 			filters := []*pb.Expr{a, b}
 			if tc.partial {

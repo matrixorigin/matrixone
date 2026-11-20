@@ -17,10 +17,12 @@ package logutil
 import (
 	"context"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
 
@@ -36,6 +38,142 @@ func SetupMOLogger(conf *LogConfig) {
 	}
 	replaceGlobalLogger(logger)
 	Infof("MO logger init, level=%s, log file=%s, stackLevel=%s", conf.Level, conf.Filename, conf.StacktraceLevel)
+}
+
+// quietTestDebugEncoder preserves encoding and trace reporting while omitting
+// DEBUG entries from the console sink of selected test scopes.
+type quietTestDebugEncoder struct{ zapcore.Encoder }
+
+func (e quietTestDebugEncoder) Clone() zapcore.Encoder {
+	return quietTestDebugEncoder{Encoder: e.Encoder.Clone()}
+}
+
+func (e quietTestDebugEncoder) EncodeEntry(entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
+	encoded, err := e.Encoder.EncodeEntry(entry, fields)
+	if err == nil && entry.Level == zapcore.DebugLevel {
+		encoded.Reset()
+	}
+	return encoded, err
+}
+
+var loggerTestScopeMu sync.Mutex
+
+type loggerTestState struct {
+	config            *LogConfig
+	logger, skip, err *zap.Logger
+}
+
+func loadLoggerTestState() loggerTestState {
+	return loggerTestState{
+		config: getGlobalLogConfig(), logger: GetGlobalLogger(),
+		skip: GetSkip1Logger(), err: GetErrorLogger(),
+	}
+}
+
+func storeLoggerTestState(state loggerTestState) {
+	gLogConfigs.Store(state.config)
+	_globalLogger.Store(state.logger)
+	_skip1Logger.Store(state.skip)
+	_errorLogger.Store(state.err)
+}
+
+// SetupMOLoggerForTest temporarily configures the process-global logger.
+// The temporary logger must use the console; this scope does not own file sinks.
+// The caller must restore it on every exit path and have exclusive ownership
+// of logger configuration: neither this scope nor other work may concurrently
+// call SetupMOLogger, mutate a LogConfig in place, or start another test scope.
+// Concurrent readers can see the temporary logger. The idempotent restore
+// reports false if it observes different config/logger identities; it does not
+// promise to detect misuse racing with the restore itself.
+func SetupMOLoggerForTest(conf *LogConfig) (restore func() bool) {
+	return setupMOLoggerForTest(conf, false)
+}
+
+// SetupMOLoggerForTestWithoutDebugConsole omits DEBUG console output when the
+// temporary configuration enables DEBUG, while keeping guards and trace
+// reporting enabled. If the caller's logger was already DEBUG-enabled, console
+// output remains unchanged. The SetupMOLoggerForTest ownership contract applies.
+func SetupMOLoggerForTestWithoutDebugConsole(conf *LogConfig) (restore func() bool) {
+	return setupMOLoggerForTest(conf, true)
+}
+
+func setupMOLoggerForTest(conf *LogConfig, quietDebug bool) (restore func() bool) {
+	if conf == nil || (conf.Filename != "" && conf.Filename != "console") {
+		panic("logutil: test logger scope requires console output")
+	}
+	if !loggerTestScopeMu.TryLock() {
+		panic("logutil: overlapping test logger scopes")
+	}
+	previous := loadLoggerTestState()
+	returned, published := false, false
+	defer func() {
+		if !returned {
+			if restore != nil {
+				restore()
+			} else {
+				if published {
+					storeLoggerTestState(previous)
+				}
+				loggerTestScopeMu.Unlock()
+			}
+		}
+	}()
+
+	// A custom core can reconfigure the global logger, panic, or call Goexit
+	// from Enabled. Query before publishing our config and never overwrite a
+	// newer owner if that callback changes the logger state.
+	quietConsole := quietDebug
+	if quietDebug {
+		for _, old := range []*zap.Logger{previous.logger, previous.skip, previous.err} {
+			enabled := old.Core().Enabled(zapcore.DebugLevel)
+			if loadLoggerTestState() != previous {
+				panic("logutil: logger reconfigured during test scope setup")
+			}
+			if enabled {
+				quietConsole = false
+				break
+			}
+		}
+	}
+
+	// Keep SetupMOLogger's installation sequence, but record ownership before
+	// logging: a reporter callback can itself reconfigure the global logger.
+	published = true
+	setGlobalLogConfig(conf)
+	var logger *zap.Logger
+	if quietConsole {
+		encoder := quietTestDebugEncoder{Encoder: conf.getEncoder()}
+		logger = GetLoggerWithOptions(conf.GetLevel(), encoder, conf.getSyncer(), conf.getOptions()...)
+	} else {
+		var err error
+		logger, err = initMOLogger(conf)
+		if err != nil {
+			panic(err)
+		}
+	}
+	replaceGlobalLogger(logger)
+	installed := loadLoggerTestState()
+	var once sync.Once
+	var unchanged bool
+	restore = func() bool {
+		once.Do(func() {
+			defer loggerTestScopeMu.Unlock()
+			current := loadLoggerTestState()
+			unchanged = current == installed
+			// A failed SetupMOLogger can replace only the config before it
+			// panics. Restore if all logger objects still belong to this scope.
+			if current.logger == installed.logger && current.skip == installed.skip && current.err == installed.err {
+				storeLoggerTestState(previous)
+			}
+		})
+		return unchanged
+	}
+	Infof("MO logger init, level=%s, log file=%s, stackLevel=%s", conf.Level, conf.Filename, conf.StacktraceLevel)
+	if loadLoggerTestState() != installed {
+		panic("logutil: logger reconfigured during test scope setup")
+	}
+	returned = true
+	return restore
 }
 
 // NewMOLogger new a mo zap logger

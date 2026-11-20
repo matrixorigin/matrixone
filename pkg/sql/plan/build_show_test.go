@@ -17,8 +17,12 @@ package plan
 import (
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -312,4 +316,117 @@ func TestCoverage_buildShowColumnNumber(t *testing.T) {
 		"show column_number from nation",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestShowTablesVisibilityProtocol(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	rt := moruntime.ServiceRuntime(mock.ctxt.GetProcess().GetService())
+	previous, existed := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if existed {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+		}
+	})
+	for _, version := range []int64{defines.MORPCVersion11, defines.MORPCVersion12} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		for _, sql := range []string{"show tables from tpch", "show full tables from tpch where Table_type = 'VIEW'", "show tables from tpch like 'n%'"} {
+			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), sql, 1)
+			require.NoError(t, err)
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			stmt.Free()
+			require.NoError(t, err, "version %d: %s", version, sql)
+			filtered := false
+			for _, node := range built.GetQuery().GetNodes() {
+				if node.GetNodeType() == plan.Node_TABLE_SCAN && node.GetTableDef().GetName() == "mo_role_privs" {
+					filtered = true
+				}
+			}
+			require.Equal(t, version == defines.MORPCVersion12, filtered, "version %d: %s", version, sql)
+		}
+	}
+}
+
+// subscriptionShowContext exercises both SHOW CREATE entry points through a
+// subscriber database, including the view rewrite from SHOW CREATE TABLE.
+type subscriptionShowContext struct{ *MockCompilerContext }
+
+func (c *subscriptionShowContext) GetSubscriptionMeta(string, *Snapshot) (*SubscriptionMeta, error) {
+	return &SubscriptionMeta{Name: "pub", Tables: "*"}, nil
+}
+
+func TestShowCreateSubscriptionViewDenied(t *testing.T) {
+	ctx := &subscriptionShowContext{NewMockCompilerContext(true)}
+	name := tree.NewUnresolvedObjectName("tpch", "v1")
+	_, err := buildShowCreateView(tree.NewShowCreateView(name), ctx)
+	require.ErrorContains(t, err, "cannot show view definition from subscription")
+	_, err = buildShowCreateTable(&tree.ShowCreateTable{Name: name}, ctx)
+	require.ErrorContains(t, err, "cannot show view definition from subscription")
+}
+
+func TestShowTablesAdmissionPlanning(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	rt := moruntime.ServiceRuntime(mock.ctxt.GetProcess().GetService())
+	previous, existed := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if existed {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+		}
+	})
+	for _, admission := range []tree.ShowTablesAdmission{tree.ShowTablesDatabaseAdmitted, tree.ShowTablesObjectAdmitted} {
+		for _, version := range []int64{defines.MORPCVersion12, defines.MORPCVersion11, defines.MORPCVersion12} {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "show tables from tpch", 1)
+			require.NoError(t, err)
+			show := stmt.(*tree.ShowTables)
+			show.Admission = admission
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			stmt.Free()
+			if admission == tree.ShowTablesObjectAdmitted && version == defines.MORPCVersion11 {
+				require.Error(t, err)
+				continue
+			}
+			require.NoError(t, err)
+			filtered := false
+			for _, node := range built.GetQuery().GetNodes() {
+				if node.GetNodeType() == plan.Node_TABLE_SCAN && node.GetTableDef().GetName() == "mo_role_privs" {
+					filtered = true
+				}
+			}
+			require.Equal(t, admission == tree.ShowTablesObjectAdmitted, filtered)
+		}
+	}
+}
+
+type showDowngradeCompilerContext struct {
+	CompilerContext
+	downgrade func()
+}
+
+func (c *showDowngradeCompilerContext) GetSubscriptionMeta(string, *Snapshot) (*SubscriptionMeta, error) {
+	c.downgrade()
+	return nil, nil
+}
+func TestShowTablesAdmissionDowngradeDuringPlanning(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	rt := moruntime.ServiceRuntime(mock.ctxt.GetProcess().GetService())
+	previous, existed := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if existed {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+	stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "show tables from tpch", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	stmt.(*tree.ShowTables).Admission = tree.ShowTablesObjectAdmitted
+	ctx := &showDowngradeCompilerContext{CompilerContext: mock.CurrentContext(), downgrade: func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11) }}
+	_, err = BuildPlan(ctx, stmt, false)
+	require.ErrorContains(t, err, "protocol version 12")
 }

@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
@@ -100,9 +101,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 
 	// check if the database is a subscription
+	isSubscription := false
 	if sub, err := ctx.GetSubscriptionMeta(dbName, snapshot); err != nil {
 		return nil, err
 	} else if sub != nil {
+		isSubscription = true
 		if !pubsub.InSubMetaTables(sub, tblName) {
 			return nil, moerr.NewInternalErrorNoCtxf("table %s not found in publication %s", tblName, sub.Name)
 		}
@@ -121,6 +124,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
+		if isSubscription {
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "cannot show view definition from subscription database %s", dbName)
+		}
 		var newStmt *tree.ShowCreateView
 		if stmt.Name.NumParts == 1 {
 			newStmt = tree.NewShowCreateView(tree.NewUnresolvedObjectName(tblName))
@@ -147,18 +153,10 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 
-	var buf bytes.Buffer
-	for i, ch := range ddlStr {
-		// escape double quote, for the sql pattern below
-		if ch == '"' {
-			if i == 0 || ddlStr[i-1] != '\\' {
-				buf.WriteRune('"')
-			}
-		}
-		buf.WriteRune(ch)
-	}
-	sql := "SELECT \"%s\" AS `Table`, \"%s\" AS `Create Table`"
-	sql = fmt.Sprintf(sql, tblName, buf.String())
+	// The rewrite SELECT is always parsed in ordinary mode. Quote the
+	// rendered DDL as data so this parse cannot consume its SQL escapes.
+	sql := fmt.Sprintf("SELECT %s AS `Table`, %s AS `Create Table`",
+		formatStrLit(tblName), formatStrLit(ddlStr))
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }
@@ -179,6 +177,13 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, snapshot)
 	if err != nil {
 		return nil, err
+	}
+
+	// Subscriber privileges do not authorize disclosure of publisher view SQL.
+	if sub, err := ctx.GetSubscriptionMeta(dbName, snapshot); err != nil {
+		return nil, err
+	} else if sub != nil {
+		return nil, moerr.NewInvalidInputf(ctx.GetContext(), "cannot show view definition from subscription database %s", dbName)
 	}
 
 	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
@@ -276,6 +281,13 @@ func buildShowSequences(stmt *tree.ShowSequences, ctx CompilerContext) (*Plan, e
 }
 
 func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) {
+	// Object-only admission must never fall back to an unfiltered legacy plan.
+	if stmt.Admission == tree.ShowTablesObjectAdmitted {
+		if err := requireCurrentRolesProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
+			return nil, err
+		}
+	}
+
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
@@ -312,7 +324,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 
 	var tableType string
 	if stmt.Full {
-		tableType = fmt.Sprintf(", case relkind when 'v' then 'VIEW' when '%s' then 'CLUSTER TABLE' else 'BASE TABLE' end as Table_type", catalog.SystemClusterRel)
+		tableType = fmt.Sprintf(", case tbl.relkind when 'v' then 'VIEW' when '%s' then 'CLUSTER TABLE' else 'BASE TABLE' end as Table_type", catalog.SystemClusterRel)
 	}
 
 	subName := dbName
@@ -324,31 +336,36 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		accountId = uint32(sub.AccountId)
 		dbName = sub.DbName
 		ctx.SetQueryingSubscription(sub)
-		defer func() {
-			ctx.SetQueryingSubscription(nil)
-		}()
+		defer func() { ctx.SetQueryingSubscription(nil) }()
 	}
 
-	var sql string
-	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
-	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
-	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and %s and relname != '%s' and relkind != '%s' and (%s)",
-		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
+	mustShowTable := "tbl.relname = 'mo_database' or tbl.relname = 'mo_tables' or tbl.relname = 'mo_columns'"
+	clusterTable := fmt.Sprintf(" or tbl.relkind = '%s'", catalog.SystemClusterRel)
+	accountClause := fmt.Sprintf("tbl.account_id = %v or (tbl.account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
+	from := fmt.Sprintf("%s.mo_tables %s tbl", MO_CATALOG_DB_NAME, snapshotSpec)
+	visibility := ""
+	if stmt.Admission != tree.ShowTablesDatabaseAdmitted && stmt.AtTsExpr == nil && sub == nil && !defines.IsInternalExecutor(ctx.GetContext()) &&
+		(stmt.Admission == tree.ShowTablesObjectAdmitted || requireCurrentRolesProtocol(ctx.GetContext(), ctx.GetProcess()) == nil) {
+		visibility = sysview.MetadataVisibilityCTE(defines.MORPCVersion12, dbName)
+		from += " LEFT JOIN (SELECT account_id, rel_id FROM __mo_visible_tables) visible ON visible.account_id = tbl.account_id AND visible.rel_id = tbl.rel_id"
+		accountClause = "(" + accountClause + ") AND (visible.rel_id IS NOT NULL OR (tbl.account_id = 0 AND (" + mustShowTable + clusterTable + ")))"
+	}
+	sql := visibility + fmt.Sprintf("SELECT tbl.relname as %s %s FROM %s WHERE tbl.reldatabase = %s and tbl.relname != '%s' and tbl.relname not like '%s' and %s and tbl.relname != '%s' and tbl.relkind != '%s' and (%s)",
+		sqlquote.Ident("Tables_in_"+subName), tableType, from, sqlquote.String(dbName), catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
 
 	// Do not show views in sub-db
 	if sub != nil {
-		sql += fmt.Sprintf(" and relkind != '%s'", catalog.SystemViewRel)
+		sql += fmt.Sprintf(" and tbl.relkind != '%s'", catalog.SystemViewRel)
 		if sub.Tables != pubsub.TableAll {
-			sql += fmt.Sprintf(" and relname in (%s)", pubsub.AddSingleQuotesJoin(strings.Split(sub.Tables, pubsub.Sep)))
+			sql += fmt.Sprintf(" and tbl.relname in (%s)", pubsub.AddSingleQuotesJoin(strings.Split(sub.Tables, pubsub.Sep)))
 		}
 	}
 
 	// Do not show sequences.
-	sql += fmt.Sprintf(" and relkind != '%s'", catalog.SystemSequenceRel)
+	sql += fmt.Sprintf(" and tbl.relkind != '%s'", catalog.SystemSequenceRel)
 
 	// Order by relname
-	sql += fmt.Sprintf(" ORDER BY %s", catalog.SystemRelAttr_Name)
+	sql += fmt.Sprintf(" ORDER BY tbl.%s", catalog.SystemRelAttr_Name)
 
 	ddlType := plan.DataDefinition_SHOW_TABLES
 
@@ -528,7 +545,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		return nil, err
 	}
 
-	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DBName), ctx, nil)
+	dbName, err := databaseIsValid(stmt.TargetDatabase(), ctx, nil)
 	if err != nil {
 		return nil, err
 	}

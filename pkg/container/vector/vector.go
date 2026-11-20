@@ -2088,7 +2088,8 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	}
 }
 
-// Shuffle use to shrink vectors, sels can be disordered
+// Shuffle selects rows in sels order. It preserves ascending metadata only for
+// nondecreasing selections; arbitrary permutations cannot certify value order.
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
@@ -2097,6 +2098,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		return nil
 	}
 
+	// sels can share the input data, so check before replacing it.
+	clearSorted := v.sorted && !slices.IsSorted(sels)
 	switch v.typ.Oid {
 	case types.T_bool:
 		err = shuffleFixedNoTypeCheck[bool](v, sels, mp)
@@ -2155,6 +2158,10 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.typ))
 	}
 
+	if err == nil && clearSorted {
+		v.sorted = false
+	}
+
 	return err
 }
 
@@ -2180,6 +2187,7 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 		return v.Shuffle(sels, mp)
 	}
 
+	clearSorted := v.sorted && !slices.IsSorted(sels)
 	switch v.typ.Oid {
 	case types.T_bool:
 		err = shuffleFixedNoTypeCheckWithBuf[bool](v, sels, buf)
@@ -2236,6 +2244,10 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 		err = shuffleFixedNoTypeCheckWithBuf[types.Blockid](v, sels, buf)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.ShuffleWithBuf", v.typ))
+	}
+
+	if err == nil && clearSorted {
+		v.sorted = false
 	}
 
 	return err
@@ -5266,9 +5278,10 @@ func shuffleFixedNoTypeCheckWithBuf[T types.FixedSizeT](v *Vector, sels []int64,
 	ws := util.UnsafeSliceCastToLength[T](*buf, ns)
 
 	shuffle.FixedLengthShuffle(vs, ws, sels)
-	copy(v.data[:needed], *buf)
+	// Consume selectors before copying over data they may reference.
 	nulls.Filter(&v.gsp, sels, false)
 	nulls.Filter(&v.nsp, sels, false)
+	copy(v.data[:needed], *buf)
 	v.length = ns
 	return nil
 }
@@ -5594,14 +5607,14 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 					first = false
 				} else {
 					minVal = minVal && col[i]
-					maxVal = maxVal && col[i]
+					maxVal = maxVal || col[i]
 				}
 			}
 		} else {
 			minVal, maxVal = col[0], col[0]
 			for i, j := 1, len(col); i < j; i++ {
 				minVal = minVal && col[i]
-				maxVal = maxVal && col[i]
+				maxVal = maxVal || col[i]
 			}
 		}
 		minv = types.EncodeBool(&minVal)
@@ -5959,6 +5972,27 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 }
 
 // InplaceSortAndCompact @todo optimization in the future
+// varlenaSorter compares descriptors in place so each comparison does not
+// copy two 24-byte descriptors. The area remains owned by the vector.
+type varlenaSorter struct {
+	col  []types.Varlena
+	area []byte
+}
+
+func (s varlenaSorter) Len() int { return len(s.col) }
+
+func (s varlenaSorter) Less(i, j int) bool {
+	return bytes.Compare(s.col[i].GetByteSlice(s.area), s.col[j].GetByteSlice(s.area)) < 0
+}
+
+func (s varlenaSorter) Swap(i, j int) { s.col[i], s.col[j] = s.col[j], s.col[i] }
+
+func sortVarlena(col []types.Varlena, area []byte) {
+	if len(col) > 1 {
+		sort.Sort(varlenaSorter{col: col, area: area})
+	}
+}
+
 func (v *Vector) InplaceSortAndCompact() {
 	cleanDataNotResetArea := func() {
 		if v.data != nil {
@@ -6272,9 +6306,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
-		slices.SortFunc(col, func(a, b types.Varlena) int {
-			return bytes.Compare(a.GetByteSlice(area), b.GetByteSlice(area))
-		})
+		sortVarlena(col, area)
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
 			return bytes.Equal(a.GetByteSlice(area), b.GetByteSlice(area))
 		})
@@ -6509,9 +6541,7 @@ func (v *Vector) InplaceSort() {
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
-		slices.SortFunc(col, func(a, b types.Varlena) int {
-			return bytes.Compare(a.GetByteSlice(area), b.GetByteSlice(area))
-		})
+		sortVarlena(col, area)
 
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)

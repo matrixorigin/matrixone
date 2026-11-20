@@ -18,14 +18,18 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -347,6 +351,46 @@ func TestTopSpill(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestTopSpillUsesLocalFileService(t *testing.T) {
+	tc := newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()},
+		int64(topSpillThreshold+1), []*plan.OrderBySpec{{Expr: newExpression(0)}})
+	tc.arg.ctr.n = 1
+	src := newBatch(tc.types, tc.proc, 32)
+	t.Cleanup(func() {
+		tc.arg.Free(tc.proc, false, nil)
+		src.Clean(tc.proc.Mp())
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+
+	analyzer := process.NewAnalyzer(0, false, false, "top-local-spill")
+	require.NoError(t, tc.arg.ctr.spillBatch(src, tc.proc, analyzer))
+	spillFile := tc.arg.ctr.spillFile
+	require.NotNil(t, spillFile)
+	require.Equal(t, defines.SpillFileServiceName, filepath.Base(filepath.Dir(spillFile.Name())))
+	require.NoFileExists(t, spillFile.Name(), "spill file should be unlinked while open")
+	info, err := spillFile.Stat()
+	require.NoError(t, err)
+	require.Positive(t, info.Size())
+}
+
+func TestTopSpillWithoutLocalFileService(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalFS(ctx, "other", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+
+	proc := &process.Process{
+		Base: &process.BaseProcess{FileService: fs},
+		Ctx:  ctx,
+	}
+	ctr := new(container)
+	err = ctr.spillBatch(nil, proc, process.NewAnalyzer(0, false, false, "top-missing-local-spill"))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoService), "unexpected error: %v", err)
+	require.Nil(t, ctr.spillFile)
+	require.Empty(t, ctr.spillIndex)
 }
 
 func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {
@@ -698,4 +742,81 @@ func resetChildren(arg *Top, bats []*batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs(bats)
 	arg.Children = nil
 	arg.AppendChild(op)
+}
+
+// A NULL heap root is not a numeric TopValue bound, including in spill mode.
+func TestTopValueSkipsNullHeapRoot(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		limit      int64
+		flag       plan.OrderBySpec_OrderByFlag
+		bound      int64
+		firstValue int64
+	}{
+		{name: "desc_resident", limit: 2, flag: plan.OrderBySpec_DESC, bound: -10, firstValue: 100},
+		{name: "desc_spill", limit: int64(topSpillThreshold + 1), flag: plan.OrderBySpec_DESC, bound: -10, firstValue: 100},
+		{name: "asc_nulls_last_resident", limit: 2, flag: plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_LAST, bound: 100, firstValue: -10},
+		{name: "asc_nulls_last_spill", limit: int64(topSpillThreshold + 1), flag: plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_LAST, bound: 100, firstValue: -10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture, child := newTopLayoutFixture(t, types.T_int64.ToType(), tc.limit)
+			fixture.arg.Fs[0].Flag = tc.flag
+			fixture.arg.TopValueTag = 42
+			fixture.proc.SetMessageBoard(message.NewMessageBoard())
+			receiver := message.NewMessageReceiver([]int32{42}, message.AddrBroadCastOnCurrentCN(), fixture.proc.GetMessageBoard())
+
+			first := batch.NewWithSize(1)
+			first.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			child.WithBatchs([]*batch.Batch{first})
+			for i := int64(1); i < tc.limit; i++ {
+				require.NoError(t, vector.AppendFixed(first.Vecs[0], int64(-10), false, fixture.proc.Mp()))
+			}
+			require.NoError(t, vector.AppendFixed(first.Vecs[0], int64(0), true, fixture.proc.Mp()))
+			first.SetRowCount(int(tc.limit))
+			appendTopLayoutBatch(t, fixture, child, int64(100))
+			child.WithBatchs([]*batch.Batch{batch.EmptyBatch})
+			child.WithBatchCallback(func(i int) {
+				msgs, _, err := receiver.ReceiveMessage(false, fixture.proc.Ctx)
+				require.NoError(t, err)
+				switch i {
+				case 1:
+					require.Empty(t, msgs, "NULL heap root must not publish a numeric bound")
+				case 2:
+					require.Len(t, msgs, 1)
+					zm := msgs[0].(message.TopValueMessage).TopValueZM
+					require.Equal(t, tc.bound, types.DecodeInt64(zm.GetMaxBuf()))
+				}
+			})
+			require.NoError(t, fixture.arg.Prepare(fixture.proc))
+			result, err := vm.Exec(fixture.arg, fixture.proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			require.Equal(t, tc.firstValue, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0])[0])
+		})
+	}
+}
+
+func TestTopValueSkipsNullVarlenaHeapRoot(t *testing.T) {
+	fixture, child := newTopLayoutFixture(t, types.T_varchar.ToType(), 1)
+	fixture.arg.TopValueTag = 42
+	fixture.proc.SetMessageBoard(message.NewMessageBoard())
+	receiver := message.NewMessageReceiver([]int32{42}, message.AddrBroadCastOnCurrentCN(), fixture.proc.GetMessageBoard())
+	appendTopLayoutBatch(t, fixture, child, nil)
+	appendTopLayoutBatch(t, fixture, child, "z")
+	child.WithBatchs([]*batch.Batch{batch.EmptyBatch})
+	child.WithBatchCallback(func(i int) {
+		msgs, _, err := receiver.ReceiveMessage(false, fixture.proc.Ctx)
+		require.NoError(t, err)
+		switch i {
+		case 1:
+			require.Empty(t, msgs)
+		case 2:
+			require.Len(t, msgs, 1)
+			require.True(t, msgs[0].(message.TopValueMessage).TopValueZM.IsInited())
+		}
+	})
+	require.NoError(t, fixture.arg.Prepare(fixture.proc))
+	result, err := vm.Exec(fixture.arg, fixture.proc)
+	require.NoError(t, err)
+	require.Equal(t, "z", string(result.Batch.Vecs[0].GetBytesAt(0)))
 }

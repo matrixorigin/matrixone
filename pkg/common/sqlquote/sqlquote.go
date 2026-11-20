@@ -73,3 +73,12 @@ func EscapeString(s string) string {
 func String(s string) string {
 	return "'" + EscapeString(s) + "'"
 }
+
+// StringWithMode quotes a literal for the SQL mode of its replaying session.
+// NO_BACKSLASH_ESCAPES keeps backslashes literal; single quotes still double.
+func StringWithMode(s string, noBackslashEscapes bool) string {
+	if noBackslashEscapes {
+		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	}
+	return String(s)
+}

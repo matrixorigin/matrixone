@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -806,38 +807,38 @@ func TestShowCreateS3HiveExternalTableUsesS3Options(t *testing.T) {
 
 func TestFormatColTypeGeometrySubtype(t *testing.T) {
 	// Subtype lives in Scale, SRID in Width (srid+1 when defined).
-	require.Equal(t, "POINT", FormatColType(plan.Type{
+	require.Equal(t, "POINT", mustFormatColType(t, plan.Type{
 		Id:    int32(types.T_geometry),
 		Scale: int32(geometrySubtypeEnum("POINT")),
 	}))
 
-	require.Equal(t, "GEOMETRY", FormatColType(plan.Type{
+	require.Equal(t, "GEOMETRY", mustFormatColType(t, plan.Type{
 		Id: int32(types.T_geometry),
 	}))
 
-	require.Equal(t, "POINT SRID 4326", FormatColType(plan.Type{
+	require.Equal(t, "POINT SRID 4326", mustFormatColType(t, plan.Type{
 		Id:    int32(types.T_geometry),
 		Scale: int32(geometrySubtypeEnum("POINT")),
 		Width: encodeGeometrySRIDWidth(4326, true),
 	}))
 
-	require.Equal(t, "GEOMETRY SRID 0", FormatColType(plan.Type{
+	require.Equal(t, "GEOMETRY SRID 0", mustFormatColType(t, plan.Type{
 		Id:    int32(types.T_geometry),
 		Width: encodeGeometrySRIDWidth(0, true),
 	}))
 
 	// GEOMETRY32 family renders with the "32" suffix.
-	require.Equal(t, "GEOMETRY32", FormatColType(plan.Type{
+	require.Equal(t, "GEOMETRY32", mustFormatColType(t, plan.Type{
 		Id: int32(types.T_geometry32),
 	}))
-	require.Equal(t, "POINT32", FormatColType(plan.Type{
+	require.Equal(t, "POINT32", mustFormatColType(t, plan.Type{
 		Id:    int32(types.T_geometry32),
 		Scale: int32(geometrySubtypeEnum("POINT")),
 	}))
 }
 
 func TestFormatColTypeArrayMetadata(t *testing.T) {
-	require.Equal(t, "ARRAY(varchar(20))", FormatColType(plan.Type{
+	require.Equal(t, "ARRAY(varchar(20))", mustFormatColType(t, plan.Type{
 		Id:         int32(types.T_json),
 		Enumvalues: "array(varchar(20))",
 	}))
@@ -846,12 +847,12 @@ func TestFormatColTypeArrayMetadata(t *testing.T) {
 func TestFormatColTypeVector(t *testing.T) {
 	// Every vector type must round-trip its dimension in SHOW CREATE, not just
 	// f32/f64 (the narrow types were previously missing the (N) suffix).
-	require.Equal(t, "VECF32(3)", FormatColType(plan.Type{Id: int32(types.T_array_float32), Width: 3}))
-	require.Equal(t, "VECF64(3)", FormatColType(plan.Type{Id: int32(types.T_array_float64), Width: 3}))
-	require.Equal(t, "VECBF16(3)", FormatColType(plan.Type{Id: int32(types.T_array_bf16), Width: 3}))
-	require.Equal(t, "VECF16(3)", FormatColType(plan.Type{Id: int32(types.T_array_float16), Width: 3}))
-	require.Equal(t, "VECINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_int8), Width: 3}))
-	require.Equal(t, "VECUINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_uint8), Width: 3}))
+	require.Equal(t, "VECF32(3)", mustFormatColType(t, plan.Type{Id: int32(types.T_array_float32), Width: 3}))
+	require.Equal(t, "VECF64(3)", mustFormatColType(t, plan.Type{Id: int32(types.T_array_float64), Width: 3}))
+	require.Equal(t, "VECBF16(3)", mustFormatColType(t, plan.Type{Id: int32(types.T_array_bf16), Width: 3}))
+	require.Equal(t, "VECF16(3)", mustFormatColType(t, plan.Type{Id: int32(types.T_array_float16), Width: 3}))
+	require.Equal(t, "VECINT8(3)", mustFormatColType(t, plan.Type{Id: int32(types.T_array_int8), Width: 3}))
+	require.Equal(t, "VECUINT8(3)", mustFormatColType(t, plan.Type{Id: int32(types.T_array_uint8), Width: 3}))
 }
 
 // TestShowCreateExternalWriteFilePattern ensures SHOW CREATE TABLE formatting
@@ -870,7 +871,7 @@ func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 		Filepath: "stage://s/part-*.csv",
 		Option:   []string{"format", "csv", "write_file_pattern", pattern},
 	}}
-	out := formatInfileExternalOptionsForShowCreate(p)
+	out := formatInfileExternalOptionsForShowCreate(p, false)
 	require.Contains(t, out, "'WRITE_FILE_PATTERN'='"+pattern+"'")
 	require.Contains(t, out, "'FILEPATH'='stage://s/part-*.csv'")
 	require.NotContains(t, out, "JSONDATA")
@@ -883,7 +884,7 @@ func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 		Filepath: "/local/path.csv",
 		Option:   []string{"format", "csv"},
 	}}
-	roOut := formatInfileExternalOptionsForShowCreate(ro)
+	roOut := formatInfileExternalOptionsForShowCreate(ro, false)
 	require.NotContains(t, roOut, "WRITE_FILE_PATTERN")
 	require.Contains(t, roOut, "'FILEPATH'=''")
 	require.NotContains(t, roOut, "/local/path.csv")
@@ -898,7 +899,7 @@ func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 		},
 		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
 	}
-	out = formatS3ExternalOptionsForShowCreate(s3)
+	out = formatS3ExternalOptionsForShowCreate(s3, false)
 	require.Contains(t, out, "'write_file_pattern'='"+pattern+"'")
 }
 
@@ -913,7 +914,7 @@ func TestShowCreateExternalCommentRoundTrip(t *testing.T) {
 		Filepath: "/local/path.csv",
 		Option:   []string{"format", "csv", "comment", "#"},
 	}}
-	out := formatInfileExternalOptionsForShowCreate(ro)
+	out := formatInfileExternalOptionsForShowCreate(ro, false)
 	require.Contains(t, out, "'COMMENT'='#'")
 
 	// no comment option => no COMMENT key
@@ -922,7 +923,7 @@ func TestShowCreateExternalCommentRoundTrip(t *testing.T) {
 		Filepath: "/local/path.csv",
 		Option:   []string{"format", "csv"},
 	}}
-	require.NotContains(t, formatInfileExternalOptionsForShowCreate(noComment), "COMMENT")
+	require.NotContains(t, formatInfileExternalOptionsForShowCreate(noComment, false), "COMMENT")
 
 	// S3 read-only table with a comment marker
 	s3 := &tree.ExternParam{
@@ -933,7 +934,27 @@ func TestShowCreateExternalCommentRoundTrip(t *testing.T) {
 		},
 		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
 	}
-	require.Contains(t, formatS3ExternalOptionsForShowCreate(s3), "'comment'='REM'")
+	require.Contains(t, formatS3ExternalOptionsForShowCreate(s3, false), "'comment'='REM'")
+
+	// URL s3option values use the same replay mode as INFILE values.
+	s3.Option[3] = `#\t`
+	for _, mode := range []struct {
+		name, sqlMode      string
+		noBackslashEscapes bool
+	}{
+		{name: "ordinary"},
+		{name: "NO_BACKSLASH_ESCAPES", sqlMode: "NO_BACKSLASH_ESCAPES", noBackslashEscapes: true},
+	} {
+		t.Run("s3/"+mode.name, func(t *testing.T) {
+			ddl := "CREATE EXTERNAL TABLE comment_s3 (`id` int)" + formatS3ExternalOptionsForShowCreate(s3, mode.noBackslashEscapes)
+			stmt, err := mysql.ParseOneWithSQLMode(t.Context(), ddl, 1, mode.sqlMode)
+			require.NoError(t, err, ddl)
+			defer stmt.Free()
+			create, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			require.Equal(t, `#\t`, GetCSVComment(create.Param), ddl)
+		})
+	}
 }
 
 // TestFormatStrInSingleQuotes: FIELDS/LINES values emitted by SHOW CREATE must
@@ -947,13 +968,88 @@ func TestFormatStrInSingleQuotes(t *testing.T) {
 	require.Equal(t, `\\''`, formatStrInSingleQuotes(`\'`))
 }
 
-// TestFormatLinesTerminatedBy: SHOW CREATE must keep \n and \r\n distinct so a
-// CRLF writable external table recreates as CRLF (not silently downgraded to
-// LF). Both render as doubled-backslash escape sequences; other values flow
-// through formatStrInSingleQuotes.
+// SHOW CREATE must keep LF and CRLF distinct. Render for one DDL parse;
+// the rewrite SELECT separately transports the entire DDL unchanged.
 func TestFormatLinesTerminatedBy(t *testing.T) {
-	require.Equal(t, `\\n`, formatLinesTerminatedBy("\n"))
-	require.Equal(t, `\\r\\n`, formatLinesTerminatedBy("\r\n"))
-	require.NotEqual(t, formatLinesTerminatedBy("\n"), formatLinesTerminatedBy("\r\n"))
-	require.Equal(t, "#EOL#", formatLinesTerminatedBy("#EOL#"))
+	require.Equal(t, `'\n'`, formatDDLString("\n", false))
+	require.Equal(t, `'\r\n'`, formatDDLString("\r\n", false))
+	require.Equal(t, "'\n'", formatDDLString("\n", true))
+	require.Equal(t, "'\r\n'", formatDDLString("\r\n", true))
+	require.Equal(t, "'#EOL#'", formatDDLString("#EOL#", false))
+}
+
+func TestFormatColTypeKeeps42Boolean(t *testing.T) {
+	require.Equal(t, "BOOL", types.T_bool.String())
+	for _, width := range []int32{0, 1, 64, -1} {
+		require.Equal(t, "BOOL", mustFormatColType(t, plan.Type{Id: int32(types.T_bool), Width: width, Scale: 3}))
+	}
+}
+
+func TestConstructCreateTableSQLScalarRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, members string
+	}{
+		{"default", "", `'UP','Down','O''Brien','Back\\slash','Back\\''quote'`},
+		{"no_backslash_escapes", "NO_BACKSLASH_ESCAPES", `'UP','Down','O''Brien','Back\slash','Back\''quote'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			ctx := &mock.ctxt
+			ctx.SetSqlModeOverride(tc.mode)
+			stmt, err := mysql.ParseOneWithSQLMode(t.Context(), fmt.Sprintf(`create table scalar_roundtrip (
+				id int primary key, flag bool default null,
+				enabled boolean not null default true, disabled bool default false,
+				n int unsigned, amount decimal(10,2), integer_flag tinyint(1),
+				empty_enum enum(''), enum_flag enum(%s), set_flag set(%s))`, tc.members, tc.members), 1, tc.mode)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			original := p.GetDdl().GetCreateTable().GetTableDef()
+			for _, name := range []string{"enum_flag", "set_flag"} {
+				require.Equal(t, `UP,Down,O'Brien,Back\slash,Back\'quote`, FindColumn(original.Cols, name).Typ.Enumvalues)
+			}
+			for _, compilerCtx := range []CompilerContext{ctx, nil} {
+				replayMode := tc.mode
+				if compilerCtx == nil {
+					// Background consumers deliberately emit default-mode SQL.
+					replayMode = ""
+				}
+				sql, rewritten, err := ConstructCreateTableSQL(compilerCtx, original, nil, false, nil)
+				require.NoError(t, err)
+				if rewritten != nil {
+					t.Cleanup(rewritten.Free)
+				}
+				require.Contains(t, sql, "`flag` bool DEFAULT NULL")
+				require.Contains(t, sql, "`empty_enum` enum('')")
+				parsed, err := mysql.ParseOneWithSQLMode(t.Context(), sql, 1, replayMode)
+				require.NoError(t, err)
+				func() {
+					defer parsed.Free()
+					replayed, err := BuildPlan(ctx, parsed, false)
+					require.NoError(t, err)
+					cols := replayed.GetDdl().GetCreateTable().GetTableDef().Cols
+					for _, name := range []string{"flag", "enabled", "disabled", "n", "amount", "integer_flag", "empty_enum", "enum_flag", "set_flag"} {
+						before, after := FindColumn(original.Cols, name), FindColumn(cols, name)
+						require.NotNil(t, after, name)
+						require.Equal(t, before.Typ, after.Typ, name)
+						require.Equal(t, before.Default.NullAbility, after.Default.NullAbility, name)
+						if types.T(before.Typ.Id) == types.T_bool {
+							require.Equal(t, before.Default.Expr, after.Default.Expr, name)
+						}
+					}
+					for _, name := range []string{"flag", "enabled", "disabled"} {
+						require.Equal(t, int32(types.T_bool), FindColumn(cols, name).Typ.Id)
+					}
+				}()
+			}
+		})
+	}
+}
+
+func mustFormatColType(t *testing.T, typ plan.Type) string {
+	t.Helper()
+	formatted, err := FormatColType(typ)
+	require.NoError(t, err)
+	return formatted
 }

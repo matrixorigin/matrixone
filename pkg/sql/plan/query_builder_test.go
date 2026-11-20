@@ -353,6 +353,40 @@ func TestRemoveSimpleProjectionsVolatileRefCount(t *testing.T) {
 	}
 }
 
+func TestRemoveSimpleProjectionsPreservesNullExtendedLiterals(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		join                plan.Node_JoinType
+		rightSingle         bool
+		keepLeft, keepRight bool
+	}{
+		{name: "inner", join: plan.Node_INNER},
+		{name: "left", join: plan.Node_LEFT, keepRight: true},
+		{name: "right", join: plan.Node_RIGHT, keepLeft: true},
+		{name: "outer", join: plan.Node_OUTER, keepLeft: true, keepRight: true},
+		{name: "single", join: plan.Node_SINGLE, keepRight: true},
+		{name: "right single", join: plan.Node_SINGLE, rightSingle: true, keepLeft: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, _ := genBuilderAndCtx()
+			const left, right, join, leftTag, rightTag int32 = 2, 5, 6, 10, 20
+			builder.qry.Nodes = []*plan.Node{
+				{NodeType: plan.Node_TABLE_SCAN},
+				{NodeType: plan.Node_FILTER, Children: []int32{0}},
+				{NodeType: plan.Node_PROJECT, Children: []int32{1}, BindingTags: []int32{leftTag}, ProjectList: []*plan.Expr{DeepCopyExpr(constTrue)}},
+				{NodeType: plan.Node_TABLE_SCAN},
+				{NodeType: plan.Node_FILTER, Children: []int32{3}},
+				{NodeType: plan.Node_PROJECT, Children: []int32{4}, BindingTags: []int32{rightTag}, ProjectList: []*plan.Expr{DeepCopyExpr(constTrue)}},
+				{NodeType: plan.Node_JOIN, JoinType: tc.join, IsRightJoin: tc.rightSingle, Children: []int32{left, right}},
+			}
+			builder.removeSimpleProjections(join, plan.Node_PROJECT, false,
+				map[[2]int32]int{{leftTag, 0}: 1, {rightTag, 0}: 1})
+			require.Equal(t, tc.keepLeft, builder.qry.Nodes[join].Children[0] == left)
+			require.Equal(t, tc.keepRight, builder.qry.Nodes[join].Children[1] == right)
+		})
+	}
+}
+
 func TestBuildTable_AlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

@@ -701,7 +701,7 @@ func TestPKFiltersUseSameFailOpenValidation(t *testing.T) {
 				Oid:   test.oid,
 				LB:    test.inf,
 			}
-			sorted, unsorted, err := buildBlockPKSearchFuncs(infinity)
+			sorted, unsorted, err := buildBlockPKSearchFuncs(infinity, false)
 			require.NoError(t, err)
 			require.NotNil(t, sorted)
 			require.NotNil(t, unsorted)

@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/maphash"
 	"io"
@@ -476,28 +477,36 @@ func (d *DiskCache) Update(
 	return nil
 }
 
+var (
+	diskCacheWriteCancellation = logutil.Event{
+		Name:    "storage.disk_cache.write_canceled",
+		Message: "disk cache write canceled",
+	}
+	diskCacheWriteFailure = logutil.Event{
+		Name:    "storage.disk_cache.write_failure",
+		Message: "write disk cache error",
+	}
+)
+
 func (d *DiskCache) writeFile(
 	ctx context.Context,
 	diskPath string,
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
 
-	var numError int64
-	defer func() {
-		if numError > 0 {
-			metric.FSDiskCacheErrorCounter.Add(float64(numError))
-		}
-	}()
-
+	var cleanupErr error
 	defer func() {
 		if err != nil {
-			// ignore errors
-			numError++
-			logutil.Warn(
-				"write disk cache error",
-				zap.Any("error", err),
-				zap.Any("path", diskPath),
-			)
+			// Cache population is optional. Count actionable failures only.
+			fields := func() []zap.Field {
+				return []zap.Field{zap.Error(err), zap.NamedError("cleanup_error", cleanupErr), zap.String("path", diskPath)}
+			}
+			if cleanupErr == nil && (err == context.Canceled || err == context.DeadlineExceeded) && ctx.Err() == err {
+				diskCacheWriteCancellation.DebugLazy(fields)
+			} else {
+				metric.FSDiskCacheErrorCounter.Inc()
+				diskCacheWriteFailure.WarnLazy(fields)
+			}
 			err = nil
 		}
 	}()
@@ -513,8 +522,12 @@ func (d *DiskCache) writeFile(
 		return d.removeUnindexedFile(diskPath)
 	})
 	defer func() {
-		if cleanupErr := doneUpdate(); cleanupErr != nil && err == nil {
-			err = cleanupErr
+		if updateErr := doneUpdate(); updateErr != nil {
+			if err == nil {
+				err = updateErr
+			} else {
+				cleanupErr = errors.Join(cleanupErr, updateErr)
+			}
 		}
 	}()
 
@@ -548,8 +561,12 @@ func (d *DiskCache) writeFile(
 	}
 	defer func() {
 		if err != nil {
-			_ = f.Close()
-			_ = os.Remove(f.Name())
+			if closeErr := f.Close(); closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
+				cleanupErr = closeErr
+			}
+			if removeErr := os.Remove(f.Name()); removeErr != nil && !os.IsNotExist(removeErr) {
+				cleanupErr = errors.Join(cleanupErr, removeErr)
+			}
 		}
 	}()
 
@@ -570,10 +587,15 @@ func (d *DiskCache) writeFile(
 	}
 	d.cache.Evict(ctx, nil, forceEvict)
 
-	var buf []byte
-	put := ioBufferPool.Get(&buf)
-	defer put.Put()
-	_, err = io.CopyBuffer(f, from, buf)
+	if _, ok := from.(io.WriterTo); ok {
+		// io.CopyBuffer would ignore its buffer for a WriterTo source.
+		_, err = io.Copy(f, from)
+	} else {
+		var buf []byte
+		put := ioBufferPool.Get(&buf)
+		defer put.Put()
+		_, err = io.CopyBuffer(f, from, buf)
+	}
 	if err != nil {
 		return false, err
 	}

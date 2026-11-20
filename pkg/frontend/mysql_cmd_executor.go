@@ -2013,7 +2013,7 @@ func createPrepareStmtInSession(
 	prepareControl := preparePlan.GetDcl().GetPrepare()
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	if !executionSes.IsBackgroundSession() &&
-		isQueryPlan &&
+		isQueryPlan && canCachePreparedMetadataCompile(saveStmt) &&
 		shouldCachePrepareCompile(prepareControl.Plan) &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
@@ -2276,7 +2276,7 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 		return b.err
 	}
 
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	bh := ses.GetBackgroundExec(execCtx.reqCtx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	err = bh.Exec(execCtx.reqCtx, "begin;")
@@ -2986,6 +2986,45 @@ func buildPlanWithPrepareMode(
 	stmt tree.Statement,
 	forcePrepare bool,
 ) (*plan2.Plan, error) {
+	// Prepared SHOW rebuilding refreshes admission. Admit that exact statement
+	// before planning, so neither a stale decision nor a legacy plan is reused.
+	target := authorizationStatement(stmt)
+	prepared, isPrepare := target.(*tree.PrepareStmt)
+	if isPrepare {
+		target = authorizationStatement(prepared.Stmt)
+	}
+	bindShowMetadataDatabase(target, ctx.DefaultDatabase)
+	show, showTables := target.(*tree.ShowTables)
+	objectAdmission := showMetadataObjectAdmission(target)
+	needsAdmission := showTables && show.Admission == tree.ShowTablesUnadmitted
+	if isPrepare && objectAdmission != nil {
+		// Rebuild may borrow the stored AST. Discard the preceding admission
+		// even when the new privilege check takes a trusted-session bypass.
+		*objectAdmission = false
+		_, _, _, needsAdmission = showMetadataTarget(target)
+	}
+	if needsAdmission && ses != nil && !ses.IsBackgroundSession() {
+		owner, err := preparedStatementOwner(reqCtx, ses)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := authenticateUserCanExecuteStatement(reqCtx, owner, target); err != nil {
+			return nil, err
+		}
+		// Trusted/bypass sessions return before ordinary privilege evaluation.
+		if showTables && show.Admission == tree.ShowTablesUnadmitted {
+			show.Admission = tree.ShowTablesDatabaseAdmitted
+		}
+	}
+	namedObject := objectAdmission != nil && *objectAdmission
+	if namedObject || showTables && show.Admission == tree.ShowTablesObjectAdmitted {
+		if owner, ok := ses.(*Session); ok {
+			compiler := owner.GetTxnCompileCtx()
+			if err := compiler.execCtx.useShowMetadataAuthorizationView(reqCtx, owner, namedObject); err != nil {
+				return nil, err
+			}
+		}
+	}
 	var ret *plan2.Plan
 	var err error
 
@@ -3411,6 +3450,7 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 	if proc == nil || proc.Base == nil {
 		return
 	}
+	proc.Base.SessionInfo.CurrentRoleContext = process.CurrentRoleContext{}
 	// SessionInfo is reused across statements.  Role changes update the
 	// session's TenantInfo, so refresh the trusted names at the same boundary
 	// as the other statement-scoped fields before planning or execution.
@@ -3421,6 +3461,11 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 			// from being sampled across a concurrent role transition.
 			tenant.mu.Lock()
 			account, role := tenant.getTenantUnsafe(), tenant.getDefaultRoleUnsafe()
+			mode := uint32(1)
+			if tenant.useAllSecondaryRole {
+				mode = 2
+			}
+			proc.Base.SessionInfo.CurrentRoleContext = process.CurrentRoleContext{Mode: mode, AccountID: tenant.TenantID, UserID: tenant.UserID, PrimaryRoleID: tenant.DefaultRoleID, AccountName: tenant.Tenant, UserName: tenant.User}
 			tenant.mu.Unlock()
 			proc.Base.SessionInfo.Account = account
 			proc.Base.SessionInfo.Role = role
@@ -3622,7 +3667,11 @@ func incStatementErrorsCounter(tenant string, tenantId uint32, stmt tree.Stateme
 
 // authenticateUserCanExecuteStatement checks the user can execute the statement
 func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, stmt tree.Statement) (statistic.StatsArray, error) {
-	return authenticateStatementRequirement(reqCtx, ses, authorizationStatement(stmt), nil)
+	stmt = authorizationStatement(stmt)
+	if ctx := ses.GetTxnCompileCtx(); ctx != nil {
+		bindShowMetadataDatabase(stmt, ctx.DefaultDatabase)
+	}
+	return authenticateStatementRequirement(reqCtx, ses, stmt, nil)
 }
 
 func authenticateStatementRequirement(reqCtx context.Context, ses *Session, stmt tree.Statement, priv *privilege) (statistic.StatsArray, error) {
@@ -3762,6 +3811,9 @@ func authenticatePreparedStatement(reqCtx context.Context, ses *Session, stmt tr
 	}
 	saved := prepared.authorizationRequirements(ses, stmt, p)
 	stmt = authorizationStatement(stmt)
+	if prepared != nil {
+		bindShowMetadataDatabase(stmt, func() string { return prepared.defaultDatabase })
+	}
 	var admission *privilege
 	if saved != nil {
 		admission = saved.admission
@@ -4406,6 +4458,7 @@ func executeStmt(ses *Session,
 ) (err error) {
 	ses.EnterFPrint(FPExecStmt)
 	defer ses.ExitFPrint(FPExecStmt)
+	defer execCtx.closeShowMetadataAuthorizationView(ses)
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
 
 	var cmpBegin time.Time
@@ -4886,6 +4939,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		statsInfo.ParseStage.ParseStartTime = beginInstant
 		statsInfo.ParseStage.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
 
+		// Authorization can run background SQL before executeStmtWithResponse.
+		// Refresh here for every statement, including multi-statement requests.
+		refreshStatementScopedSessionInfo(ses, proc)
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
@@ -4952,6 +5008,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		proc.Base.SessionInfo.CNLabels = maps.Clone(ses.getCNLabels())
 		proc.Base.SessionInfo.QuerySchedulingIntent = querySchedulingIntentForStatement(ses, schedulingSQL)
 
+		refreshStatementScopedSessionInfo(ses, proc)
 		err = executeStmtWithResponse(ses, execCtx)
 		ses.ClearDDLOwnerRoleID()
 		if err != nil {

@@ -31,6 +31,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -326,11 +327,9 @@ func decodeInt(code byte, b []byte) (interface{}, int) {
 		neg = true
 	}
 
-	bp := make([]byte, 8)
+	var bp [8]byte
 	copy(bp[8-n:], b[1:n+1])
-
-	var ret int64
-	binary.Read(bytes.NewBuffer(bp), binary.BigEndian, &ret)
+	ret := int64(binary.BigEndian.Uint64(bp[:]))
 
 	if neg {
 		switch code {
@@ -392,11 +391,9 @@ func decodeUint(code byte, b []byte) (interface{}, int) {
 	}
 	n := int(b[0]) - intZeroCode
 
-	bp := make([]byte, 8)
+	var bp [8]byte
 	copy(bp[8-n:], b[1:n+1])
-
-	var ret uint64
-	binary.Read(bytes.NewBuffer(bp), binary.BigEndian, &ret)
+	ret := binary.BigEndian.Uint64(bp[:])
 
 	switch code {
 	case uint8Code:
@@ -411,21 +408,17 @@ func decodeUint(code byte, b []byte) (interface{}, int) {
 }
 
 func decodeFloat32(b []byte) (float32, int) {
-	bp := make([]byte, 4)
-	copy(bp, b[1:])
-	adjustFloatBytes(bp, false)
-	var ret float32
-	binary.Read(bytes.NewBuffer(bp), binary.BigEndian, &ret)
-	return ret, 5
+	var bp [4]byte
+	copy(bp[:], b[1:])
+	adjustFloatBytes(bp[:], false)
+	return math.Float32frombits(binary.BigEndian.Uint32(bp[:])), 5
 }
 
 func decodeFloat64(b []byte) (float64, int) {
-	bp := make([]byte, 8)
-	copy(bp, b[1:])
-	adjustFloatBytes(bp, false)
-	var ret float64
-	binary.Read(bytes.NewBuffer(bp), binary.BigEndian, &ret)
-	return ret, 9
+	var bp [8]byte
+	copy(bp[:], b[1:])
+	adjustFloatBytes(bp[:], false)
+	return math.Float64frombits(binary.BigEndian.Uint64(bp[:])), 9
 }
 
 func decodeDecimal64(b []byte) (Decimal64, int) {

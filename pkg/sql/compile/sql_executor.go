@@ -370,6 +370,22 @@ func (exec *txnExecutor) Exec(
 		return executor.Result{}, err
 	}
 
+	if domains := statementOption.InheritedEnums(); len(domains) > 0 {
+		if len(stmts) != 1 {
+			return executor.Result{}, moerr.NewInternalError(exec.ctx, "inherited ENUM definitions require one CREATE TABLE")
+		}
+		create, ok := stmts[0].(*tree.CreateTable)
+		if !ok {
+			return executor.Result{}, moerr.NewInternalError(exec.ctx, "inherited ENUM definitions require CREATE TABLE")
+		}
+		create.InheritedEnums = domains
+	}
+
+	if rewriteOption := getInternalExecutorRewriteOption(exec.ctx); rewriteOption != nil {
+		// 内部 INSERT 规划前恢复外层 CTAS 已解析的有效规则。
+		attachRewriteOptionToStatement(stmts[0], rewriteOption)
+	}
+
 	// TODO(volgariver6): we got a duplicate code logic in `func (cwft *TxnComputationWrapper) Compile`,
 	// maybe we should fix it.
 	txnOp := exec.opts.Txn()

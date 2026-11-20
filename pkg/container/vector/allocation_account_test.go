@@ -470,7 +470,12 @@ func TestVectorAllocationAccountBitmapShuffleAccountsScratch(t *testing.T) {
 func TestVectorAllocationAccountBitmapShuffleFailurePreservesVector(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 8<<20, 4)
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	defer func() {
+		vec.Free(mp)
+		finalizeTestVectorAllocationAccount(t, state)
+	}()
 	require.NoError(t, vec.PreExtend(130, mp))
 	require.NoError(t, vec.PreExtendBitmap(130, mp))
 	for i := range 130 {
@@ -478,10 +483,12 @@ func TestVectorAllocationAccountBitmapShuffleFailurePreservesVector(t *testing.T
 	}
 	vec.SetNull(1)
 	vec.GetGrouping().Add(2)
+	vec.SetSorted(true)
 	before := state.account.Snapshot()
 
 	err := vec.Shuffle([]int64{2, 1, 0}, mp)
 	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+	require.True(t, vec.GetSorted())
 	require.Equal(t, before.Used, state.account.Snapshot().Used)
 	require.Equal(t, uint64(3), state.registry.LiveAllocationMetadata())
 	require.Equal(t, 130, vec.Length())
@@ -490,8 +497,12 @@ func TestVectorAllocationAccountBitmapShuffleFailurePreservesVector(t *testing.T
 	require.Equal(t, int64(0), MustFixedColWithTypeCheck[int64](vec)[0])
 	require.Equal(t, int64(129), MustFixedColWithTypeCheck[int64](vec)[129])
 
-	vec.Free(mp)
-	finalizeTestVectorAllocationAccount(t, state)
+	var scratch []byte
+	err = vec.ShuffleWithBuf([]int64{2, 1, 0}, mp, &scratch)
+	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+	require.True(t, vec.GetSorted())
+	require.Nil(t, scratch)
+
 }
 
 func TestVectorAllocationAccountBitmapGrowthFailurePreservesOwner(t *testing.T) {

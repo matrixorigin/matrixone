@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -533,255 +534,259 @@ type valueDecimalCompareType interface {
 	types.Decimal64 | types.Decimal128 | types.Decimal256
 }
 
+// valueDecimalCompare compares in the operands' scale without assuming that
+// multiplying a coefficient by a power of ten still fits its physical type.
 func valueDecimalCompare[T valueDecimalCompareType](
 	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
-	cmpFn func(a, b T) bool, scaleValue func(v T, delta int32) (T, error), selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
+	cmpFn func(a, b T) bool, scaleValue func(v T) (T, bool),
+	negative func(T) bool, zero, one T, delta int32, selectList *FunctionSelectList,
+) error {
+	if delta == 0 {
+		return opBinaryFixedFixedToFixed[T, T, bool](parameters, result, nil, int(length), cmpFn, selectList)
+	}
 
-	m := p2.GetType().Scale - p1.GetType().Scale
-
-	rsVec := result.GetResultVector()
-	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
-
-	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+	// On overflow the scaled value has greater magnitude than every value of
+	// the same physical type. Preserve that ordering using its original sign.
+	less, greater := cmpFn(zero, one), cmpFn(one, zero)
+	constantSide := -1
+	if delta > 0 && parameters[0].IsConst() {
+		constantSide = 0
+	} else if delta < 0 && parameters[1].IsConst() {
+		constantSide = 1
+	}
+	if constantSide >= 0 && (selectList == nil || !selectList.IgnoreAllRow() && selectList.ShouldEvalAllRow()) {
+		result.UseOptFunctionParamFrame(2)
+		constantParam := vector.OptGetParamFromWrapper[T](result, constantSide, parameters[constantSide])
+		variableSide := 1 - constantSide
+		variableParam := vector.OptGetParamFromWrapper[T](result, variableSide, parameters[variableSide])
+		constant, isNull := constantParam.GetValue(0)
+		variableMayNull := variableParam.WithAnyNullValue()
+		if !isNull && (!variableMayNull || !parameters[variableSide].IsConst()) {
+			scaled, ok := scaleValue(constant)
+			resultVector := result.GetResultVector()
+			values := vector.MustFixedColNoTypeCheck[bool](resultVector)
+			if variableMayNull {
+				nulls.Or(resultVector.GetNulls(), parameters[variableSide].GetNulls(), resultVector.GetNulls())
+			}
+			if !ok {
+				answer := greater
+				if constantSide == 0 && negative(constant) || constantSide == 1 && !negative(constant) {
+					answer = less
+				}
+				for i := uint64(0); i < length; i++ {
+					values[i] = answer
+				}
+			} else if parameters[variableSide].IsConst() {
+				value, _ := variableParam.GetValue(0)
+				answer := cmpFn(value, scaled)
+				if constantSide == 0 {
+					answer = cmpFn(scaled, value)
+				}
+				for i := uint64(0); i < length; i++ {
+					values[i] = answer
+				}
+			} else {
+				input := variableParam.UnSafeGetAllValue()
+				if variableMayNull {
+					for i := uint64(0); i < length; i++ {
+						if resultVector.GetNulls().Contains(i) {
+							continue
+						}
+						if constantSide == 0 {
+							values[i] = cmpFn(scaled, input[i])
+						} else {
+							values[i] = cmpFn(input[i], scaled)
+						}
+					}
+				} else if constantSide == 0 {
+					for i := uint64(0); i < length; i++ {
+						values[i] = cmpFn(scaled, input[i])
+					}
+				} else {
+					for i := uint64(0); i < length; i++ {
+						values[i] = cmpFn(input[i], scaled)
+					}
+				}
+			}
 			return nil
 		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
 	}
-	if c1 && c2 {
-		v1, null1 := p1.GetValue(0)
-		v2, null2 := p2.GetValue(0)
-		if null1 || null2 {
-			nulls.AddRange(rsNull, 0, length)
-		} else {
-			if m >= 0 {
-				x, err := scaleValue(v1, m)
-				if err != nil {
-					return err
-				}
+	// When only the unscaled operand is constant, walk the non-null vector
+	// directly and keep its per-value overflow checks.
+	unscaledConstant := -1
+	if delta > 0 && parameters[1].IsConst() && !parameters[0].IsConst() {
+		unscaledConstant = 1
+	} else if delta < 0 && parameters[0].IsConst() && !parameters[1].IsConst() {
+		unscaledConstant = 0
+	}
+	if unscaledConstant >= 0 && (selectList == nil || !selectList.IgnoreAllRow() && selectList.ShouldEvalAllRow()) {
+		result.UseOptFunctionParamFrame(2)
+		constantParam := vector.OptGetParamFromWrapper[T](result, unscaledConstant, parameters[unscaledConstant])
+		variableSide := 1 - unscaledConstant
+		variableParam := vector.OptGetParamFromWrapper[T](result, variableSide, parameters[variableSide])
+		constant, isNull := constantParam.GetValue(0)
+		if !isNull && !variableParam.WithAnyNullValue() {
+			input := variableParam.UnSafeGetAllValue()
+			values := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
+			if variableSide == 0 {
 				for i := uint64(0); i < length; i++ {
-					rss[i] = cmpFn(x, v2)
+					scaled, ok := scaleValue(input[i])
+					if ok {
+						values[i] = cmpFn(scaled, constant)
+					} else if negative(input[i]) {
+						values[i] = less
+					} else {
+						values[i] = greater
+					}
 				}
 			} else {
-				y, err := scaleValue(v2, -m)
-				if err != nil {
-					return err
-				}
 				for i := uint64(0); i < length; i++ {
-					rss[i] = cmpFn(v1, y)
+					scaled, ok := scaleValue(input[i])
+					if ok {
+						values[i] = cmpFn(constant, scaled)
+					} else if negative(input[i]) {
+						values[i] = greater
+					} else {
+						values[i] = less
+					}
 				}
 			}
+			return nil
 		}
-		return nil
 	}
-
-	if c1 {
-		v1, null1 := p1.GetValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, length)
-		} else {
-			if m >= 0 {
-				x, err := scaleValue(v1, m)
-				if err != nil {
-					return err
+	compare := func(a, b T) bool {
+		if delta > 0 {
+			scaled, ok := scaleValue(a)
+			if !ok {
+				if negative(a) {
+					return less
 				}
-				if p2.WithAnyNullValue() || rsAnyNull {
-					nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-					for i := uint64(0); i < length; i++ {
-						if rsNull.Contains(i) {
-							continue
-						}
-						v2, _ := p2.GetValue(i)
-						rss[i] = cmpFn(x, v2)
-					}
-				} else {
-					for i := uint64(0); i < length; i++ {
-						v2, _ := p2.GetValue(i)
-						rss[i] = cmpFn(x, v2)
-					}
+				return greater
+			}
+			return cmpFn(scaled, b)
+		}
+		scaled, ok := scaleValue(b)
+		if !ok {
+			if negative(b) {
+				return greater
+			}
+			return less
+		}
+		return cmpFn(a, scaled)
+	}
+	// Preserve the existing one-time scaling fast path when the operand that
+	// needs rescaling is constant.
+	if delta > 0 && parameters[0].IsConst() {
+		value, isNull := vector.GenerateFunctionFixedTypeParameter[T](parameters[0]).GetValue(0)
+		if !isNull {
+			scaled, ok := scaleValue(value)
+			if !ok {
+				answer := greater
+				if negative(value) {
+					answer = less
 				}
+				compare = func(_, _ T) bool { return answer }
 			} else {
-				if p2.WithAnyNullValue() || rsAnyNull {
-					nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-					for i := uint64(0); i < length; i++ {
-						if rsNull.Contains(i) {
-							continue
-						}
-						v2, _ := p2.GetValue(i)
-						y, err := scaleValue(v2, -m)
-						if err != nil {
-							return err
-						}
-						rss[i] = cmpFn(v1, y)
-					}
-				} else {
-					scaleMy := -m
-					for i := uint64(0); i < length; i++ {
-						v2, _ := p2.GetValue(i)
-						y, err := scaleValue(v2, scaleMy)
-						if err != nil {
-							return err
-						}
-						rss[i] = cmpFn(v1, y)
-					}
-				}
+				compare = func(_ T, b T) bool { return cmpFn(scaled, b) }
 			}
 		}
-
-		return nil
-	}
-
-	if c2 {
-		v2, null2 := p2.GetValue(0)
-		if null2 {
-			nulls.AddRange(rsNull, 0, length)
-		} else {
-			if m >= 0 {
-				if p1.WithAnyNullValue() || rsAnyNull {
-					nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-					for i := uint64(0); i < length; i++ {
-						if rsNull.Contains(i) {
-							continue
-						}
-						v1, _ := p1.GetValue(i)
-						x, err := scaleValue(v1, m)
-						if err != nil {
-							return err
-						}
-						rss[i] = cmpFn(x, v2)
-					}
-				} else {
-					for i := uint64(0); i < length; i++ {
-						v1, _ := p1.GetValue(i)
-						x, err := scaleValue(v1, m)
-						if err != nil {
-							return err
-						}
-						rss[i] = cmpFn(x, v2)
-					}
+	} else if delta < 0 && parameters[1].IsConst() {
+		value, isNull := vector.GenerateFunctionFixedTypeParameter[T](parameters[1]).GetValue(0)
+		if !isNull {
+			scaled, ok := scaleValue(value)
+			if !ok {
+				answer := less
+				if negative(value) {
+					answer = greater
 				}
+				compare = func(_, _ T) bool { return answer }
 			} else {
-				y, err := scaleValue(v2, -m)
-				if err != nil {
-					return err
-				}
-				if p1.WithAnyNullValue() || rsAnyNull {
-					nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-					for i := uint64(0); i < length; i++ {
-						if rsNull.Contains(i) {
-							continue
-						}
-						v1, _ := p1.GetValue(i)
-						rss[i] = cmpFn(v1, y)
-					}
-				} else {
-					for i := uint64(0); i < length; i++ {
-						v1, _ := p1.GetValue(i)
-						rss[i] = cmpFn(v1, y)
-					}
-				}
+				compare = func(a T, _ T) bool { return cmpFn(a, scaled) }
 			}
 		}
-		return nil
 	}
+	return opBinaryFixedFixedToFixed[T, T, bool](parameters, result, nil, int(length), compare, selectList)
+}
 
-	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-		if m >= 0 {
-			for i := uint64(0); i < length; i++ {
-				if rsNull.Contains(i) {
-					continue
-				}
-				v1, _ := p1.GetValue(i)
-				v2, _ := p2.GetValue(i)
-				x, err := scaleValue(v1, m)
-				if err != nil {
-					return err
-				}
-				rss[i] = cmpFn(x, v2)
-			}
-		} else {
-			scaleMy := -m
-			for i := uint64(0); i < length; i++ {
-				if rsNull.Contains(i) {
-					continue
-				}
-				v1, _ := p1.GetValue(i)
-				v2, _ := p2.GetValue(i)
-				y, err := scaleValue(v2, scaleMy)
-				if err != nil {
-					return err
-				}
-				rss[i] = cmpFn(v1, y)
-			}
-		}
-		return nil
+// decimal64ScaleUp proves signed multiplication is representable before
+// multiplying. Avoid formatting an error for each out-of-range vector element.
+func decimal64ScaleUp(delta int32) func(types.Decimal64) (types.Decimal64, bool) {
+	if delta > 18 {
+		return func(v types.Decimal64) (types.Decimal64, bool) { return v, v == 0 }
 	}
+	factor := int64(types.Pow10[delta])
+	upper, lower := int64(math.MaxInt64)/factor, int64(math.MinInt64)/factor
+	return func(v types.Decimal64) (types.Decimal64, bool) {
+		n := int64(v)
+		if n > upper || n < lower {
+			return v, false
+		}
+		return types.Decimal64(uint64(n * factor)), true
+	}
+}
 
-	if m >= 0 {
-		for i := uint64(0); i < length; i++ {
-			v1, _ := p1.GetValue(i)
-			v2, _ := p2.GetValue(i)
-			x, err := scaleValue(v1, m)
-			if err != nil {
-				return err
-			}
-			rss[i] = cmpFn(x, v2)
-		}
-	} else {
-		scaleMy := -m
-		for i := uint64(0); i < length; i++ {
-			v1, _ := p1.GetValue(i)
-			v2, _ := p2.GetValue(i)
-			y, err := scaleValue(v2, scaleMy)
-			if err != nil {
-				return err
-			}
-			rss[i] = cmpFn(v1, y)
-		}
+func decimalComparisonScaleDelta(parameters []*vector.Vector) int32 {
+	return parameters[1].GetType().Scale - parameters[0].GetType().Scale
+}
+
+func decimalScaleMagnitude(delta int32) int32 {
+	if delta < 0 {
+		return -delta
 	}
-	return nil
+	return delta
 }
 
 func valueDec64Compare(
 	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
-	cmpFn func(a, b types.Decimal64) bool, selectList *FunctionSelectList) error {
-	return valueDecimalCompare[types.Decimal64](parameters, result, length, cmpFn, func(v types.Decimal64, delta int32) (types.Decimal64, error) {
-		scaled, _ := v.Scale(delta)
-		return scaled, nil
-	}, selectList)
+	cmpFn func(a, b types.Decimal64) bool, selectList *FunctionSelectList,
+) error {
+	delta := decimalComparisonScaleDelta(parameters)
+	if delta == 0 {
+		return opBinaryFixedFixedToFixed[types.Decimal64, types.Decimal64, bool](parameters, result, nil, int(length), cmpFn, selectList)
+	}
+	return valueDecimalCompare(parameters, result, length, cmpFn, decimal64ScaleUp(decimalScaleMagnitude(delta)),
+		types.Decimal64.Sign, types.Decimal64(0), types.Decimal64(1), delta, selectList)
 }
 
 func valueDec128Compare(
 	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
-	cmpFn func(a, b types.Decimal128) bool, selectList *FunctionSelectList) error {
-	return valueDecimalCompare[types.Decimal128](parameters, result, length, cmpFn, func(v types.Decimal128, delta int32) (types.Decimal128, error) {
-		scaled, _ := v.Scale(delta)
-		return scaled, nil
-	}, selectList)
+	cmpFn func(a, b types.Decimal128) bool, selectList *FunctionSelectList,
+) error {
+	delta := decimalComparisonScaleDelta(parameters)
+	if parameters[0].GetType().Oid != types.T_decimal128 || parameters[1].GetType().Oid != types.T_decimal128 {
+		// The vector wrapper also converts float and DECIMAL64 inputs; use its
+		// resulting scale rather than the source vector's metadata.
+		left := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[0])
+		right := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[1])
+		delta = right.GetType().Scale - left.GetType().Scale
+	}
+	if delta == 0 {
+		return opBinaryFixedFixedToFixed[types.Decimal128, types.Decimal128, bool](parameters, result, nil, int(length), cmpFn, selectList)
+	}
+	magnitude := decimalScaleMagnitude(delta)
+	scale := func(value types.Decimal128) (types.Decimal128, bool) {
+		scaled, err := value.Scale(magnitude)
+		return scaled, err == nil && scaled.Sign() == value.Sign()
+	}
+	return valueDecimalCompare(parameters, result, length, cmpFn, scale,
+		types.Decimal128.Sign, types.Decimal128{}, types.Decimal128{B0_63: 1}, delta, selectList)
 }
 
 func valueDec256Compare(
 	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
-	cmpFn func(a, b types.Decimal256) bool, selectList *FunctionSelectList) error {
-	return valueDecimalCompare[types.Decimal256](parameters, result, length, cmpFn, func(v types.Decimal256, delta int32) (types.Decimal256, error) {
-		return v.Scale(delta)
-	}, selectList)
+	cmpFn func(a, b types.Decimal256) bool, selectList *FunctionSelectList,
+) error {
+	delta := decimalComparisonScaleDelta(parameters)
+	if delta == 0 {
+		return opBinaryFixedFixedToFixed[types.Decimal256, types.Decimal256, bool](parameters, result, nil, int(length), cmpFn, selectList)
+	}
+	magnitude := decimalScaleMagnitude(delta)
+	scale := func(value types.Decimal256) (types.Decimal256, bool) {
+		scaled, err := value.Scale(magnitude)
+		return scaled, err == nil && scaled.Sign() == value.Sign()
+	}
+	return valueDecimalCompare(parameters, result, length, cmpFn, scale,
+		types.Decimal256.Sign, types.Decimal256{}, types.Decimal256{B0_63: 1}, delta, selectList)
 }
 
 func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

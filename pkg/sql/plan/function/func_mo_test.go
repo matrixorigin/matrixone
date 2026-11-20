@@ -147,7 +147,7 @@ func TestEnumValueIndexPreservesParseEnumSemantics(t *testing.T) {
 		"low,LOW,2,high,high",
 		"K,K,Σ,ς,σ",
 	} {
-		index := buildEnumValueIndex(definition)
+		index := buildEnumMemberIndex(strings.Split(definition, ","))
 		require.NotNil(t, index)
 		for _, input := range []string{
 			"low", "LOW", "LoW", "2", "0x2", "K", "k", "Σ", "ς", "σ",
@@ -164,12 +164,12 @@ func TestEnumValueIndexPreservesParseEnumSemantics(t *testing.T) {
 		}
 	}
 
-	require.Nil(t, buildEnumValueIndex(""))
+	require.Nil(t, buildEnumValueIndexForBatch(nil, 1024))
 	largeDefinition := strings.Repeat("a,", 1023) + "a"
-	require.Nil(t, buildEnumValueIndexForBatch(largeDefinition, 8))
-	require.Nil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g", 1024))
-	require.Nil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g,h", enumValueIndexMinRows-1))
-	require.NotNil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g,h", enumValueIndexMinRows))
+	require.Nil(t, buildEnumValueIndexForBatch(strings.Split(largeDefinition, ","), 8))
+	require.Nil(t, buildEnumValueIndexForBatch(strings.Split("a,b,c,d,e,f,g", ","), 1024))
+	require.Nil(t, buildEnumValueIndexForBatch(strings.Split("a,b,c,d,e,f,g,h", ","), enumValueIndexMinRows-1))
+	require.NotNil(t, buildEnumValueIndexForBatch(strings.Split("a,b,c,d,e,f,g,h", ","), enumValueIndexMinRows))
 }
 
 func BenchmarkEnumValueIndex(b *testing.B) {
@@ -203,7 +203,7 @@ func BenchmarkEnumValueIndex(b *testing.B) {
 			b.Run(prefix+"/indexed", func(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
-					index := buildEnumValueIndexForBatch(definition, batchSize)
+					index := buildEnumValueIndexForBatch(strings.Split(definition, ","), batchSize)
 					if index == nil {
 						b.Fatal("batch should use the enum value index")
 					}
@@ -380,4 +380,237 @@ func TestTypedArrayBinaryCompatibilityUsesRawPayloadLength(t *testing.T) {
 		spec, newTypedByteJson(bytejson.TpCodeBit, string([]byte{0x01}))))
 	require.True(t, typedArrayElementCompatible(
 		spec, newTypedByteJson(bytejson.TpCodeBlob, "AA==")))
+}
+
+func TestEnumEncodedConversion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, constant := range []bool{false, true} {
+		domain := NewFunctionTestInput(types.T_varchar.ToType(), []string{"3#3:a,b0:1:c", "3#3:a,b0:1:c", "3#3:a,b0:1:c"}, nil)
+		tag := NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil)
+		if constant {
+			domain = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"3#3:a,b0:1:c", "3#3:a,b0:1:c", "3#3:a,b0:1:c"}, nil)
+			tag = NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil)
+		}
+		for _, tc := range []struct {
+			value FunctionTestInput
+			want  FunctionTestResult
+			fn    fEvalFn
+		}{
+			{NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b", "", "C"}, nil), NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{1, 2, 3}, nil), CastValueToIndex},
+			{NewFunctionTestInput(types.T_uint16.ToType(), []uint16{1, 2, 3}, nil), NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{1, 2, 3}, nil), CastIndexValueToIndex},
+			{NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{0, 1, 2}, nil), NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "a,b", ""}, nil), CastIndexToValue},
+		} {
+			tc := NewFunctionTestCase(proc, []FunctionTestInput{domain, tc.value, tag}, tc.want, tc.fn)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		}
+	}
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"2#3:a,b1:c"}, nil),
+		NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{1}, nil),
+	}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"2#3:a"}, nil), CastIndexToValue)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestEnumDisplayToIndex(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+	typ := types.T_enum.ToType()
+	for _, tc := range []struct {
+		name    string
+		domains []string
+		tags    []int64
+		values  []string
+		nulls   []bool
+		want    []types.Enum
+	}{
+		{
+			name:    "exact bytes and null",
+			domains: []string{"4#1:a1:A0:3:a,b", "4#1:a1:A0:3:a,b", "4#1:a1:A0:3:a,b", "4#1:a1:A0:3:a,b", "4#1:a1:A0:3:a,b"},
+			tags:    []int64{1, 1, 1, 1, 1},
+			values:  []string{"a", "A", "", "a,b", ""},
+			nulls:   []bool{false, false, false, false, true},
+			want:    []types.Enum{1, 2, 3, 4, 0},
+		},
+		{
+			name:    "changing and legacy domains",
+			domains: []string{"a,b", "a,b", "", "1#0:"},
+			tags:    []int64{0, 0, 0, 1},
+			values:  []string{"", "b", "", ""},
+			want:    []types.Enum{0, 2, 0, 1},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), tc.domains, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), tc.values, tc.nulls),
+				NewFunctionTestInput(types.T_int64.ToType(), tc.tags, nil),
+			}, NewFunctionTestResult(typ, false, tc.want, tc.nulls), EnumDisplayToIndex)
+			ok, info := check.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+
+	// Exercise the indexed batch path and retain the first ordinal for exact
+	// duplicates without conflating distinct spellings that fold identically.
+	const count = 64
+	domains, tags := make([]string, count), make([]int64, count)
+	values, want := make([]string, count), make([]types.Enum, count)
+	for i := range count {
+		domains[i] = "a,A,,b,c,d,a,f"
+		values[i] = []string{"a", "A", ""}[i%3]
+		want[i] = []types.Enum{1, 2, 3}[i%3]
+	}
+	check := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_varchar.ToType(), domains, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), values, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), tags, nil),
+	}, NewFunctionTestResult(typ, false, want, nil), EnumDisplayToIndex)
+	ok, info := check.RunAndFree()
+	require.True(t, ok, info)
+
+	for _, tc := range []struct {
+		domain string
+		tag    int64
+		value  string
+	}{
+		{"a,b", 0, "missing"},
+		{"1#9:x", 1, ""},
+	} {
+		check := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.domain}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.value}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.tag}, nil),
+		}, NewFunctionTestResult(typ, true, nil, nil), EnumDisplayToIndex)
+		ok, info := check.RunAndFree()
+		require.True(t, ok, info)
+	}
+}
+
+func TestEnumChangingDomains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// The same payload has different members under the two encoding tags.
+	domains := []string{"b,a", "a,b,c", ",x,", "2#3:a,b1:c", "2#3:a,b1:c", "1#0:", "a,b", "1#9:broken"}
+	tags := []int64{0, 0, 0, 0, 1, 1, 0, 1}
+	domainNulls := []bool{false, false, false, false, false, false, true, false}
+	tagNulls := []bool{false, false, false, false, false, false, false, true}
+	resultNulls := []bool{false, false, false, false, false, false, true, true}
+	for _, encoded := range []bool{false, true} {
+		rows := 4
+		if encoded {
+			rows = len(domains)
+		}
+		for _, tc := range []struct {
+			value FunctionTestInput
+			want  FunctionTestResult
+			fn    fEvalFn
+		}{
+			{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "a", "", "b1:c", "a,b", "", "x", "x"}[:rows], nil),
+				NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{2, 1, 1, 2, 1, 1, 0, 0}[:rows], resultNulls[:rows]),
+				CastValueToIndex,
+			},
+			{
+				NewFunctionTestInput(types.T_uint16.ToType(), []uint16{2, 3, 3, 2, 1, 1, 1, 1}[:rows], nil),
+				NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{2, 3, 3, 2, 1, 1, 0, 0}[:rows], resultNulls[:rows]),
+				CastIndexValueToIndex,
+			},
+			{
+				NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{2, 3, 3, 2, 1, 0, 1, 1}[:rows], nil),
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "c", "", "b1:c", "a,b", "", "", ""}[:rows], resultNulls[:rows]),
+				CastIndexToValue,
+			},
+		} {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), domains[:rows], domainNulls[:rows]), tc.value,
+			}
+			if encoded {
+				inputs = append(inputs, NewFunctionTestInput(types.T_int64.ToType(), tags[:rows], tagNulls[:rows]))
+			}
+			check := NewFunctionTestCase(proc, inputs, tc.want, tc.fn)
+			ok, info := check.Run()
+			require.True(t, ok, info)
+		}
+	}
+}
+
+func TestEnumEncodingIgnoreAndNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+	for _, tc := range []struct {
+		domain string
+		tag    int64
+	}{
+		{"2#1:a", 1}, {"a,b", 257}, {"1#0:", -1},
+		{strings.Repeat(",", types.MaxEnumLen), 0},
+	} {
+		for _, op := range []struct {
+			fn     fEvalFn
+			input  FunctionTestInput
+			output types.Type
+		}{
+			{CastValueToIndex, NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad"}, nil), types.T_enum.ToType()},
+			{CastIndexValueToIndex, NewFunctionTestInput(types.T_uint16.ToType(), []uint16{0}, nil), types.T_enum.ToType()},
+			{CastIndexToValue, NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{0}, nil), types.T_varchar.ToType()},
+		} {
+			check := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.domain}, nil), op.input,
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.tag}, nil),
+			}, NewFunctionTestResult(op.output, true, nil, nil), op.fn)
+			ok, info := check.Run()
+			require.True(t, ok, info)
+		}
+	}
+	check := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"1#0:", "1#0:", "1#0:"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "bad", ""}, []bool{false, false, true}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
+	}, NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{1, 0, 0}, []bool{false, false, true}), CastValueToIndex)
+	ok, info := check.Run()
+	require.True(t, ok, info)
+}
+
+func TestCasePreservesEnumStorage(t *testing.T) {
+	typ := types.T_enum.ToType()
+	typ.SetEnumEncoding(1)
+	matched, err := GetFunctionByName(t.Context(), "case", []types.Type{types.T_bool.ToType(), typ, typ})
+	require.NoError(t, err)
+	require.Equal(t, types.T_enum, matched.GetReturnType().Oid)
+	proc := testutil.NewProcess(t)
+	check := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+		NewFunctionTestInput(typ, []types.Enum{0, 0}, nil),
+		NewFunctionTestInput(typ, []types.Enum{2, 2}, nil),
+	}, NewFunctionTestResult(typ, false, []types.Enum{0, 2}, nil), caseFn)
+	ok, info := check.Run()
+	require.True(t, ok, info)
+}
+
+func TestFramedEnumIndexedBatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	payload := "8#3:a,b1:c0:1:e1:f1:g1:h1:i"
+	values := []string{"i", "A,B", "", "2", "0x8", "c", "e", "h"}
+	ordinals := []types.Enum{8, 1, 3, 2, 8, 2, 4, 7}
+	var domains, inputs []string
+	var tags []int64
+	var expected []types.Enum
+	for range 8 {
+		for _, value := range values {
+			domains = append(domains, payload)
+			inputs = append(inputs, value)
+			tags = append(tags, 1)
+		}
+		expected = append(expected, ordinals...)
+	}
+	check := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_varchar.ToType(), domains, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), inputs, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), tags, nil),
+	}, NewFunctionTestResult(types.T_enum.ToType(), false, expected, nil), CastValueToIndex)
+	ok, info := check.Run()
+	require.True(t, ok, info)
+	require.Nil(t, buildEnumValueIndexForBatch(types.EnumMembers{"a,b,c,d,e", "f,g,h,i"}, 64))
 }

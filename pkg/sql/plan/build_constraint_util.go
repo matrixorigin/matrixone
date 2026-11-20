@@ -1353,8 +1353,53 @@ func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, s
 		return expr, false, nil
 	}
 	if types.T(targetType.Id).IsInteger() && !isSetPlanType(&targetType) &&
-		builder.isProjectedDisplayValueExpr(expr, isSetDisplayValueExpr, true, nil) {
-		bitmap, ok := builder.materializeProjectedSetBitmap(expr, nil)
+		builder.isProjectedDisplayValueExpr(expr, isSetDisplayValueExpr, true, nil, nil) {
+		var boundary *distinctSpecialStorage
+		if col := expr.GetCol(); col != nil {
+			if rootID, ok := builder.tag2NodeID[col.RelPos]; ok {
+				inputs := builder.distinctInputNodes(rootID)
+				if len(inputs) > 0 {
+					crossesDistinct, ambiguous, compatible := false, false, true
+					setTypes := make(map[[2]int32]*plan.Type)
+					var sourceType *plan.Type
+					isSetSource := func(display *Expr) bool {
+						if !isSetDisplayValueExpr(display) {
+							return false
+						}
+						typ := &display.GetF().Args[1].Typ
+						if sourceType == nil {
+							sourceType = typ
+						} else if !sameTypeMemberDomain(sourceType, typ) {
+							ambiguous = true
+						}
+						ambiguous = ambiguous || !mysqlSpecialOrderTypeReversible(typ)
+						return true
+					}
+					acceptNode := func(node *plan.Node, colPos int32) bool {
+						if _, ok := inputs[node.NodeId]; ok {
+							crossesDistinct = true
+							typ, ok := builder.projectedSetTypeAtNode(node.NodeId, colPos)
+							if !ok {
+								compatible = false
+							} else {
+								setTypes[[2]int32{node.NodeId, colPos}] = typ
+							}
+						}
+						return true
+					}
+					if builder.isProjectedDisplayValueExpr(expr, isSetSource, true, acceptNode, nil) && crossesDistinct && ambiguous {
+						if !compatible {
+							return expr, false, nil
+						}
+						boundary = &distinctSpecialStorage{inputs: inputs, setTypes: setTypes}
+					}
+				}
+			}
+		}
+		bitmap, ok, err := builder.materializeProjectedMySQLSpecialStorage(expr, nil, boundary)
+		if err != nil {
+			return nil, false, err
+		}
 		if !ok {
 			return nil, false, moerr.NewInternalError(builder.GetContext(), "failed to materialize proven SET bitmap projection")
 		}
@@ -1371,13 +1416,14 @@ func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, s
 }
 
 func (builder *QueryBuilder) isProjectedEnumOrSetDisplayValueExpr(expr *Expr, visited map[[2]int32]struct{}) bool {
-	return builder.isProjectedDisplayValueExpr(expr, isEnumOrSetDisplayValueExpr, false, visited)
+	return builder.isProjectedDisplayValueExpr(expr, isEnumOrSetDisplayValueExpr, false, nil, visited)
 }
 
 func (builder *QueryBuilder) isProjectedDisplayValueExpr(
 	expr *Expr,
 	isDisplayValue func(*Expr) bool,
 	requireAllSetInputs bool,
+	acceptNode func(*plan.Node, int32) bool,
 	visited map[[2]int32]struct{},
 ) bool {
 	if isDisplayValue(expr) {
@@ -1391,13 +1437,14 @@ func (builder *QueryBuilder) isProjectedDisplayValueExpr(
 	if !ok {
 		return false
 	}
-	return builder.isProjectedDisplayValueAtNode(nodeID, col.ColPos, isDisplayValue, requireAllSetInputs, visited)
+	return builder.isProjectedDisplayValueAtNode(nodeID, col.ColPos, isDisplayValue, requireAllSetInputs, acceptNode, visited)
 }
 
 func (builder *QueryBuilder) isProjectedDisplayValueAtNode(
 	nodeID, colPos int32,
 	isDisplayValue func(*Expr) bool,
 	requireAllSetInputs bool,
+	acceptNode func(*plan.Node, int32) bool,
 	visited map[[2]int32]struct{},
 ) bool {
 	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
@@ -1417,6 +1464,9 @@ func (builder *QueryBuilder) isProjectedDisplayValueAtNode(
 	if colPos < 0 || int(colPos) >= len(node.ProjectList) {
 		return false
 	}
+	if acceptNode != nil && !acceptNode(node, colPos) {
+		return false
+	}
 	switch node.NodeType {
 	case plan.Node_UNION, plan.Node_UNION_ALL,
 		plan.Node_MINUS, plan.Node_MINUS_ALL,
@@ -1425,65 +1475,161 @@ func (builder *QueryBuilder) isProjectedDisplayValueAtNode(
 			if len(node.Children) == 0 || node.Children[0] < 0 || int(node.Children[0]) >= len(builder.qry.Nodes) {
 				return false
 			}
-			return builder.isProjectedDisplayValueAtNode(node.Children[0], colPos, isDisplayValue, requireAllSetInputs, visited)
+			return builder.isProjectedDisplayValueAtNode(node.Children[0], colPos, isDisplayValue, requireAllSetInputs, acceptNode, visited)
 		}
 		if len(node.Children) == 0 {
 			return false
 		}
 		for _, childID := range node.Children {
-			if !builder.isProjectedDisplayValueAtNode(childID, colPos, isDisplayValue, requireAllSetInputs, visited) {
+			if !builder.isProjectedDisplayValueAtNode(childID, colPos, isDisplayValue, requireAllSetInputs, acceptNode, visited) {
 				return false
 			}
 		}
 		return true
 	}
 
-	return builder.isProjectedDisplayValueExpr(node.ProjectList[colPos], isDisplayValue, requireAllSetInputs, visited)
+	return builder.isProjectedDisplayValueExpr(node.ProjectList[colPos], isDisplayValue, requireAllSetInputs, acceptNode, visited)
 }
 
-// materializeProjectedSetBitmap carries a proven SET bitmap through projection
-// boundaries. Set-operation inputs are materialized at the same hidden position
-// so the node can expose one physical uint64 output. The proof phase above runs
-// first, therefore mixed SET/VARCHAR operations are never mutated here.
-func (builder *QueryBuilder) materializeProjectedSetBitmap(
+// distinctInputNodes identifies projections whose complete output becomes a
+// DISTINCT key. Adding a hidden storage column there changes the query's rows.
+// DISTINCT has no binding tag, so following column references alone skips it.
+func (builder *QueryBuilder) distinctInputNodes(rootID int32) map[int32]struct{} {
+	inputs := make(map[int32]struct{})
+	seen := make(map[int32]struct{})
+	pending := []int32{rootID}
+	for len(pending) > 0 {
+		last := len(pending) - 1
+		nodeID := pending[last]
+		pending = pending[:last]
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			continue
+		}
+		if _, ok := seen[nodeID]; ok {
+			continue
+		}
+		seen[nodeID] = struct{}{}
+		node := builder.qry.Nodes[nodeID]
+		if node.NodeType == plan.Node_DISTINCT && len(node.Children) == 1 {
+			inputs[node.Children[0]] = struct{}{}
+		}
+		pending = append(pending, node.Children...)
+		for _, step := range node.SourceStep {
+			if step >= 0 && int(step) < len(builder.qry.Steps) {
+				pending = append(pending, builder.qry.Steps[step])
+			}
+		}
+	}
+	return inputs
+}
+
+type distinctSpecialStorage struct {
+	inputs   map[int32]struct{}
+	enumType *plan.Type
+	setTypes map[[2]int32]*plan.Type
+}
+
+func (builder *QueryBuilder) projectedSetTypeAtNode(nodeID, colPos int32) (*plan.Type, bool) {
+	var setType *plan.Type
+	isCompatibleSet := func(display *Expr) bool {
+		if !isSetDisplayValueExpr(display) {
+			return false
+		}
+		typ := &display.GetF().Args[1].Typ
+		if setType == nil {
+			setType = typ
+			return true
+		}
+		return sameTypeMemberDomain(setType, typ)
+	}
+	ok := builder.isProjectedDisplayValueAtNode(nodeID, colPos, isCompatibleSet, true, nil, nil)
+	return setType, ok && setType != nil
+}
+
+// canonicalValue recovers storage from a visible DISTINCT output without
+// introducing that storage as an extra grouping key.
+func (boundary *distinctSpecialStorage) canonicalValue(builder *QueryBuilder, expr *Expr, nodeID, colPos int32) (*Expr, error) {
+	if boundary.enumType == nil {
+		setType := boundary.setTypes[[2]int32{nodeID, colPos}]
+		if setType == nil {
+			return nil, moerr.NewInternalError(builder.GetContext(), "missing SET domain for DISTINCT output")
+		}
+		value, err := funcCastForSetType(builder.GetContext(), DeepCopyExpr(expr), *setType)
+		if err != nil {
+			return nil, err
+		}
+		value.Typ.Enumvalues = ""
+		value.Typ.EnumEncoding = 0
+		return value, nil
+	}
+	value, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "_enum_display_to_index", []*Expr{
+		makePlan2StringConstExprWithType(boundary.enumType.Enumvalues),
+		DeepCopyExpr(expr),
+		makePlan2Int64ConstExprWithType(int64(boundary.enumType.EnumEncoding)),
+	})
+	if err != nil {
+		return nil, err
+	}
+	value.Typ = *boundary.enumType
+	return value, nil
+}
+
+// materializeProjectedMySQLSpecialStorage carries proven storage values through
+// existing hidden projection slots. Callers first prove every set-operation input;
+// enum assignments additionally require one logical source domain across inputs.
+func (builder *QueryBuilder) materializeProjectedMySQLSpecialStorage(
 	expr *Expr,
 	visited map[[2]int32]struct{},
-) (*Expr, bool) {
-	if bitmap, ok := storedSetBitmapExpr(expr); ok {
-		return bitmap, true
+	boundary *distinctSpecialStorage,
+) (*Expr, bool, error) {
+	if storage, ok := storedMySQLSpecialTypeExpr(expr); ok {
+		return storage, true, nil
 	}
 	col := expr.GetCol()
 	if col == nil {
-		return expr, false
+		return expr, false, nil
 	}
 	nodeID, ok := builder.tag2NodeID[col.RelPos]
 	if !ok {
-		return expr, false
+		return expr, false, nil
 	}
-	return builder.materializeProjectedSetBitmapAtNode(nodeID, col.ColPos, col.RelPos, visited)
+	if boundary != nil {
+		if _, isDistinctInput := boundary.inputs[nodeID]; isDistinctInput {
+			value, err := boundary.canonicalValue(builder, expr, nodeID, col.ColPos)
+			return value, err == nil, err
+		}
+	}
+	return builder.materializeProjectedMySQLSpecialStorageAtNode(nodeID, col.ColPos, col.RelPos, visited, boundary)
 }
 
-func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
+func (builder *QueryBuilder) materializeProjectedMySQLSpecialStorageAtNode(
 	nodeID, colPos, outputTag int32,
 	visited map[[2]int32]struct{},
-) (*Expr, bool) {
+	boundary *distinctSpecialStorage,
+) (*Expr, bool, error) {
 	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
-		return nil, false
+		return nil, false, nil
 	}
 	key := [2]int32{nodeID, colPos}
 	node := builder.qry.Nodes[nodeID]
 	if colPos < 0 || int(colPos) >= len(node.ProjectList) {
-		return nil, false
+		return nil, false, nil
 	}
-	bitmapType := plan.Type{Id: int32(types.T_uint64), NotNullable: node.ProjectList[colPos].Typ.NotNullable}
-	if pos, ok := builder.setBitmapByDisplayNode[key]; ok {
-		return GetColExpr(bitmapType, outputTag, pos), true
+	if boundary != nil {
+		if _, isDistinctInput := boundary.inputs[nodeID]; isDistinctInput {
+			// A caller needs a projection above DISTINCT to hold the converted
+			// value; never add a hidden column to the DISTINCT input itself.
+			return nil, false, nil
+		}
+	}
+	if pos, ok := builder.mysqlSpecialStorageByDisplayNode[key]; ok {
+		return GetColExpr(node.ProjectList[pos].Typ, outputTag, pos), true, nil
 	}
 	if visited == nil {
 		visited = make(map[[2]int32]struct{})
 	}
 	if _, ok := visited[key]; ok {
-		return nil, false
+		return nil, false, nil
 	}
 	visited[key] = struct{}{}
 	defer delete(visited, key)
@@ -1492,38 +1638,48 @@ func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
 		node.NodeType == plan.Node_MINUS || node.NodeType == plan.Node_MINUS_ALL ||
 		node.NodeType == plan.Node_INTERSECT || node.NodeType == plan.Node_INTERSECT_ALL {
 		if len(node.Children) == 0 {
-			return nil, false
+			return nil, false, nil
 		}
 		pos := int32(len(node.ProjectList))
-		for _, childID := range node.Children {
+		var storageType plan.Type
+		for i, childID := range node.Children {
 			if childID < 0 || int(childID) >= len(builder.qry.Nodes) {
-				return nil, false
+				return nil, false, nil
 			}
 			child := builder.qry.Nodes[childID]
 			if len(child.BindingTags) == 0 {
-				return nil, false
+				return nil, false, nil
 			}
-			bitmap, found := builder.materializeProjectedSetBitmapAtNode(childID, colPos, child.BindingTags[0], visited)
-			if !found || bitmap.GetCol() == nil || bitmap.GetCol().ColPos != pos {
-				return nil, false
+			storage, found, err := builder.materializeProjectedMySQLSpecialStorageAtNode(childID, colPos, child.BindingTags[0], visited, boundary)
+			if err != nil {
+				return nil, false, err
+			}
+			if !found || storage.GetCol() == nil || storage.GetCol().ColPos != pos {
+				return nil, false, nil
+			}
+			if i == 0 {
+				storageType = storage.Typ
 			}
 		}
 		leftTag := builder.qry.Nodes[node.Children[0]].BindingTags[0]
-		node.ProjectList = append(node.ProjectList, GetColExpr(bitmapType, leftTag, pos))
-		builder.setBitmapByDisplayNode[key] = pos
-		return GetColExpr(bitmapType, outputTag, pos), true
+		storageType.NotNullable = node.ProjectList[colPos].Typ.NotNullable
+		node.ProjectList = append(node.ProjectList, GetColExpr(storageType, leftTag, pos))
+		builder.mysqlSpecialStorageByDisplayNode[key] = pos
+		return GetColExpr(node.ProjectList[pos].Typ, outputTag, pos), true, nil
 	}
 
-	bitmap, found := builder.materializeProjectedSetBitmap(node.ProjectList[colPos], visited)
+	storage, found, err := builder.materializeProjectedMySQLSpecialStorage(node.ProjectList[colPos], visited, boundary)
+	if err != nil {
+		return nil, false, err
+	}
 	if !found {
-		return nil, false
+		return nil, false, nil
 	}
 	pos := int32(len(node.ProjectList))
-	node.ProjectList = append(node.ProjectList, bitmap)
-	bitmapType = bitmap.Typ
-	bitmapType.Enumvalues = ""
-	builder.setBitmapByDisplayNode[key] = pos
-	return GetColExpr(bitmapType, outputTag, pos), true
+	storage.Typ.NotNullable = node.ProjectList[colPos].Typ.NotNullable
+	node.ProjectList = append(node.ProjectList, storage)
+	builder.mysqlSpecialStorageByDisplayNode[key] = pos
+	return GetColExpr(node.ProjectList[pos].Typ, outputTag, pos), true, nil
 }
 
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {

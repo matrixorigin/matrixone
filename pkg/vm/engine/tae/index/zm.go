@@ -785,7 +785,20 @@ func (zm ZM) InRange(lb, ub []byte, hint uint8) bool {
 	}
 }
 
+// PrefixIn accepts the sorted, prefix-free, non-null byte candidates prepared
+// by vector.UnmarshalPrefixInVector. Overlapping prefixes make the binary-search
+// predicate nonmonotonic; canonicality is established once, not per zone.
 func (zm ZM) PrefixIn(vec *vector.Vector) bool {
+	if vec == nil || !vec.GetType().Oid.IsMySQLString() || vec.Length() < 0 {
+		return true
+	}
+	if vec.Length() == 0 {
+		return false
+	}
+	if vec.IsConstNull() || vec.GetNulls().Any() ||
+		!zm.Valid() || !zm.GetType().IsMySQLString() || zm.MaxTruncated() {
+		return true
+	}
 	col, area := vector.MustVarlenaRawData(vec)
 	minVal, maxVal := zm.GetMinBuf(), zm.GetMaxBuf()
 	lowerBound := sort.Search(len(col), func(i int) bool {
@@ -1070,6 +1083,10 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		lowerBound := sort.Search(len(col), func(i int) bool {
 			return types.PrefixCompare(minVal, col[i].GetByteSlice(area)) <= 0
 		})
+		// 无法递增的截断前缀不是完整上界，不能缩短 BloomFilter 候选窗口。
+		if zm.MaxTruncated() {
+			return lowerBound, len(col)
+		}
 		upperBound := sort.Search(len(col), func(i int) bool {
 			return types.PrefixCompare(maxVal, col[i].GetByteSlice(area)) < 0
 		})
@@ -1332,7 +1349,8 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 			return types.PrefixCompare(minVal, col[i].GetByteSlice(area)) <= 0
 		})
 
-		return lowerBound < len(col) && types.PrefixCompare(maxVal, col[lowerBound].GetByteSlice(area)) >= 0
+		// MaxTruncated 表示未知的完整上界；仍可用已知下界排除候选。
+		return lowerBound < len(col) && (zm.MaxTruncated() || types.PrefixCompare(maxVal, col[lowerBound].GetByteSlice(area)) >= 0)
 
 	case types.T_array_float32:
 		col := vector.MustArrayCol[float32](vec)

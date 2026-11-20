@@ -695,6 +695,11 @@ func makePlan2CastExprWithName(ctx context.Context, expr *Expr, targetType Type,
 		return expr, nil
 	}
 	if isSameColumnType(expr.Typ, targetType) {
+		if isEnumPlanType(&expr.Typ) && expr.Typ.EnumEncoding != targetType.EnumEncoding {
+			result := *expr
+			result.Typ.Enumvalues, result.Typ.EnumEncoding = targetType.Enumvalues, targetType.EnumEncoding
+			return &result, nil
+		}
 		return expr, nil
 	}
 	targetType.NotNullable = expr.Typ.NotNullable
@@ -763,47 +768,56 @@ func makePlan2CastExprWithName(ctx context.Context, expr *Expr, targetType Type,
 }
 
 func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
-	var err error
 	if targetType.Id != int32(types.T_enum) {
 		return expr, nil
 	}
-	if isEnumPlanType(&expr.Typ) && expr.Typ.Enumvalues == targetType.Enumvalues {
-		expr.Typ = targetType
-		return expr, nil
+	if _, err := types.DecodeEnumMembers(targetType.Enumvalues, targetType.EnumEncoding); err != nil {
+		return nil, err
 	}
-	sourceExpr := expr
-
-	astArgs := []tree.Expr{
-		tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char),
+	if raw, ok := storedMySQLSpecialTypeExpr(expr); ok && isEnumPlanType(&raw.Typ) {
+		expr = raw
 	}
-
-	// bind ast function's args
-	args := make([]*Expr, len(astArgs)+1)
-	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
-	for idx, arg := range astArgs {
-		if idx == len(args)-1 {
-			continue
+	var sourceEnum *Expr
+	if isEnumPlanType(&expr.Typ) {
+		if sameTypeMemberDomain(&expr.Typ, &targetType) {
+			expr.Typ = targetType
+			return expr, nil
 		}
-		argExpr, err := binder.BindExpr(arg, 0, false)
-		if err != nil {
-			return nil, err
-		}
-		args[idx] = argExpr
-	}
-	args[len(args)-1] = sourceExpr
-	if 20 <= sourceExpr.Typ.Id && sourceExpr.Typ.Id <= 29 {
-		expr, err = BindFuncExprImplByPlanExpr(ctx, moEnumCastIndexValueToIndexFun, args)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		expr, err = BindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, args)
+		sourceEnum = DeepCopyExpr(expr)
+		var err error
+		expr, err = makeEnumOrSetDisplayValue(ctx, expr)
 		if err != nil {
 			return nil, err
 		}
 	}
-	expr.Typ = targetType
-	return expr, nil
+	funcName := moEnumCastValueToIndexFun
+	if types.T(expr.Typ.Id).IsInteger() {
+		funcName = moEnumCastIndexValueToIndexFun
+	}
+	converted, err := BindFuncExprImplByPlanExpr(ctx, funcName, mysqlSpecialTypeArgs(&targetType, expr))
+	if err != nil {
+		return nil, err
+	}
+	converted.Typ = targetType
+	if sourceEnum != nil {
+		// A display string cannot distinguish the error member from a declared
+		// empty label. Preserve ordinal zero before remapping valid labels.
+		zero := &plan.Expr{Typ: sourceEnum.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_EnumVal{EnumVal: 0},
+		}}}
+		isErrorMember, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{sourceEnum, zero})
+		if err != nil {
+			return nil, err
+		}
+		targetZero := *zero
+		targetZero.Typ = targetType
+		converted, err = BindFuncExprImplByPlanExpr(ctx, "case", []*Expr{isErrorMember, &targetZero, converted})
+		if err != nil {
+			return nil, err
+		}
+		converted.Typ = targetType
+	}
+	return converted, nil
 }
 
 func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
@@ -878,33 +892,24 @@ func makeSimplePlan2Type(typT types.T) plan.Type {
 }
 
 func makePlan2Type(typ *types.Type) plan.Type {
-	return plan.Type{
-		Id:    int32(typ.Oid),
-		Width: typ.Width,
-		Scale: typ.Scale,
-	}
+	return vector.TypeToProtoType(*typ)
 }
+
 func makePlan2TypeValue(typ *types.Type) plan.Type {
-	return plan.Type{
-		Id:    int32(typ.Oid),
-		Width: typ.Width,
-		Scale: typ.Scale,
-	}
+	return vector.TypeToProtoType(*typ)
 }
 
 var MakeTypeByPlan2Type = makeTypeByPlan2Type
 var MakePlan2TypeValue = makePlan2TypeValue
 
 func makeTypeByPlan2Type(typ plan.Type) types.Type {
-	oid := types.T(typ.Id)
-	return types.New(oid, typ.Width, typ.Scale)
+	return vector.ProtoTypeToType(typ)
 }
 
 var MakeTypeByPlan2Expr = makeTypeByPlan2Expr
 
 func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
-	oid := types.T(expr.Typ.Id)
-	return types.New(oid, expr.Typ.Width, expr.Typ.Scale)
+	return makeTypeByPlan2Type(expr.Typ)
 }
 
 func makeHiddenColTyp() Type {
@@ -947,7 +952,7 @@ func isSameColumnType(t1 Type, t2 Type) bool {
 	if t1.Id != t2.Id {
 		return false
 	}
-	if t1.Enumvalues != t2.Enumvalues {
+	if !sameTypeMemberDomain(&t1, &t2) {
 		return false
 	}
 	if t1.Width == t2.Width && t1.Scale == t2.Scale {

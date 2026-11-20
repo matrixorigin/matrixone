@@ -178,6 +178,14 @@ type IDGenerator interface {
 
 type EngineOptions func(*Engine)
 
+// WithWorkspaceAccountingChecksForTest enables workspace invariant checks
+// independently of the process logger. It is intended for test engines only.
+func WithWorkspaceAccountingChecksForTest() EngineOptions {
+	return func(e *Engine) {
+		e.config.checkWorkspaceAccounting = true
+	}
+}
+
 func WithCommitWorkspaceThreshold(th uint64) EngineOptions {
 	return func(e *Engine) {
 		e.config.commitWorkspaceThreshold = th
@@ -275,6 +283,7 @@ type Engine struct {
 	tnID     string
 
 	config struct {
+		checkWorkspaceAccounting bool
 		insertEntryMaxCount      int
 		commitWorkspaceThreshold uint64
 		writeWorkspaceThreshold  uint64

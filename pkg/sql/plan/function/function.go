@@ -143,7 +143,8 @@ func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, er
 
 func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId ||
+		oIndex < 0 || int(oIndex) >= len(allSupportedFunctions[fid].Overloads) {
 		return overload{}, false
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], true

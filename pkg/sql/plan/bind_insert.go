@@ -3227,6 +3227,7 @@ func (builder *QueryBuilder) initInsertReplaceStmtWithCTEReuse(bindCtx *BindCont
 	selectTag := lastNode.BindingTags[0]
 
 	insertColToExpr := make(map[string]*plan.Expr)
+	var distinctInputs map[int32]struct{}
 	for i, column := range insertColumns {
 		colIdx := tableDef.Name2ColIndex[column]
 		projExpr := &plan.Expr{
@@ -3239,6 +3240,51 @@ func (builder *QueryBuilder) initInsertReplaceStmtWithCTEReuse(bindCtx *BindCont
 			},
 		}
 		if isEnumPlanType(&tableDef.Cols[colIdx].Typ) {
+			if distinctInputs == nil {
+				distinctInputs = builder.distinctInputNodes(lastNodeID)
+			}
+			var sourceDomain *plan.Type
+			compatibleSource := func(display *Expr) bool {
+				if !isEnumDisplayValueExpr(display) {
+					return false
+				}
+				typ := &display.GetF().Args[1].Typ
+				if sourceDomain == nil {
+					sourceDomain = typ
+					return true
+				}
+				return sameTypeMemberDomain(sourceDomain, typ)
+			}
+			// DISTINCT groups the whole input projection. A hidden ordinal can
+			// cross it only when the source display uniquely determines storage.
+			// Set operations other than UNION ALL keep their existing barrier.
+			crossesDistinct := false
+			acceptNode := func(node *plan.Node, _ int32) bool {
+				if _, isDistinctInput := distinctInputs[node.NodeId]; isDistinctInput {
+					crossesDistinct = true
+				}
+				switch node.NodeType {
+				case plan.Node_UNION, plan.Node_MINUS, plan.Node_MINUS_ALL,
+					plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+					return false
+				default:
+					return true
+				}
+			}
+			if builder.isProjectedDisplayValueExpr(projExpr, compatibleSource, true, acceptNode, nil) {
+				var boundary *distinctSpecialStorage
+				if crossesDistinct && !mysqlSpecialOrderTypeReversible(sourceDomain) {
+					boundary = &distinctSpecialStorage{inputs: distinctInputs, enumType: sourceDomain}
+				}
+				raw, ok, materializeErr := builder.materializeProjectedMySQLSpecialStorage(projExpr, nil, boundary)
+				if materializeErr != nil {
+					return 0, nil, nil, materializeErr
+				}
+				if !ok {
+					return 0, nil, nil, moerr.NewInternalError(builder.GetContext(), "failed to materialize proven ENUM storage projection")
+				}
+				projExpr = raw
+			}
 			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return 0, nil, nil, err

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -258,18 +259,25 @@ func rowsToFill(limit uint64, currentRows int, batchRows int) int {
 }
 
 func (ctr *container) eval(limit uint64, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
-	if uint64(len(ctr.sels)) < limit {
-		ctr.sort()
-	}
+	// Selection is complete. Sort the row offsets directly instead of
+	// rebuilding/draining a heap and boxing every result through interface{}.
 	for i, cmp := range ctr.cmps {
+		if uint64(len(ctr.sels)) < limit {
+			cmp.Set(0, ctr.bat.Vecs[i])
+		}
 		ctr.bat.Vecs[i] = cmp.Vector()
 	}
-	sels := make([]int64, len(ctr.sels))
-	for i, j := 0, len(ctr.sels); i < j; i++ {
-		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
-	}
-	if err := ctr.bat.Shuffle(sels, proc.Mp()); err != nil {
-		return err
+	slices.SortFunc(ctr.sels, func(a, b int64) int {
+		return ctr.compare(0, 0, a, b)
+	})
+	sels := ctr.sels
+	ctr.sels = ctr.sels[:0]
+	// Retained slots are a permutation of [0,n). If already ordered,
+	// the owning batch needs no data copy.
+	if !slices.IsSorted(sels) {
+		if err := ctr.bat.Shuffle(sels, proc.Mp()); err != nil {
+			return err
+		}
 	}
 	for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
 		ctr.bat.Vecs[i].Free(proc.Mp())

@@ -30,8 +30,14 @@ insert into src values
   (20,'[500,500,500]'),(21,'[501,501,501]');
 create index idx using ivfflat on src(b) lists=3 op_type 'vector_l2_ops' ASYNC;
 
--- let the async build finish, then confirm the source index answers search
-select sleep(30);
+-- Wait until all six source vectors belong to the active model, then check search.
+set @ivf_restore_src_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'idx' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src') limit 1);
+set @ivf_restore_src_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'idx' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src') limit 1);
+set @ivf_restore_wait_sql = concat('select count(*) as active_entries from `', database(), '`.`', @ivf_restore_src_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @ivf_restore_src_metadata, '` where `__mo_index_key` = ''version'')');
+prepare ivf_restore_wait from @ivf_restore_wait_sql;
+-- @wait_expect(2, 30)
+execute ivf_restore_wait;
+deallocate prepare ivf_restore_wait;
 select a from src order by l2_distance(b,'[1,1,1]') limit 1;
 
 -- (a) clone succeeds and copies the rows + index definition
@@ -39,8 +45,16 @@ create table dst clone src;
 select count(*) from dst;
 show create table dst;
 
--- let RestoreTable's re-registered CDC run its FORCE_SYNC reindex on the clone
-select sleep(30);
+-- Require a model version newer than the source and all six clone entries.
+-- This waits for RestoreTable's FORCE_SYNC reindex rather than merely observing
+-- the index snapshot copied from the source.
+set @ivf_restore_dst_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'idx' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dst') limit 1);
+set @ivf_restore_dst_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'idx' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dst') limit 1);
+set @ivf_restore_wait_sql = concat('select count(*) as active_entries from `', database(), '`.`', @ivf_restore_dst_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @ivf_restore_dst_metadata, '` where `__mo_index_key` = ''version'' and cast(`__mo_index_val` as bigint) > (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @ivf_restore_src_metadata, '` where `__mo_index_key` = ''version''))');
+prepare ivf_restore_wait from @ivf_restore_wait_sql;
+-- @wait_expect(2, 30)
+execute ivf_restore_wait;
+deallocate prepare ivf_restore_wait;
 
 -- (b) the cloned index answers search (no "version not found")
 select a from dst order by l2_distance(b,'[1,1,1]') limit 1;
@@ -48,7 +62,12 @@ select a from dst order by l2_distance(b,'[500,500,500]') limit 1;
 
 -- (c) maintenance re-armed: rows inserted AFTER the clone get indexed
 insert into dst values (30,'[1000,1000,1000]'),(31,'[1001,1001,1001]');
-select sleep(45);
+-- Wait for both new vectors to reach the active clone model.
+set @ivf_restore_wait_sql = concat('select count(*) as active_entries from `', database(), '`.`', @ivf_restore_dst_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @ivf_restore_dst_metadata, '` where `__mo_index_key` = ''version'' and cast(`__mo_index_val` as bigint) > (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @ivf_restore_src_metadata, '` where `__mo_index_key` = ''version''))');
+prepare ivf_restore_wait from @ivf_restore_wait_sql;
+-- @wait_expect(2, 45)
+execute ivf_restore_wait;
+deallocate prepare ivf_restore_wait;
 -- the post-clone row is the nearest neighbor for its own vector, served by the
 -- cloned index -> the CDC maintenance path on the clone is live
 select a from dst order by l2_distance(b,'[1000,1000,1000]') limit 1;

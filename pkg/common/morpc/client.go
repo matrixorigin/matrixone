@@ -531,6 +531,18 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 	if ctx == nil {
 		panic("client Send nil context")
 	}
+	// Only backend selection and its retry/backoff use this optional budget.
+	// The original context remains attached to a request sent to a healthy
+	// backend, so ordinary remote lock waits retain their own deadline.
+	waitCtx, cancelWait, hasWaitBudget := backendWaitContext(ctx)
+	defer cancelWait()
+	waitError := func(err error) error {
+		if hasWaitBudget && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) &&
+			errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+			return moerr.NewBackendCannotConnectNoCtx("backend availability retry budget exhausted")
+		}
+		return err
+	}
 
 	// Pin the breaker incarnation for this request. A targeted backend reset
 	// detaches it, so a late result cannot affect the replacement generation.
@@ -546,6 +558,9 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 	var creationStart time.Time
 
 	for {
+		if hasWaitBudget && waitCtx.Err() != nil {
+			return nil, waitError(waitCtx.Err())
+		}
 		var admitErr error
 		permit, admitErr = breaker.Admit()
 		if admitErr != nil {
@@ -570,7 +585,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			// Handle backend creation-in-progress with bounded wait
 			if waitingForCreate {
 				shouldContinue, waitErr := c.handleAutoCreateWait(
-					ctx,
+					waitCtx,
 					backend,
 					&creationStart,
 					backendCreate,
@@ -582,7 +597,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 						!errors.Is(waitErr, context.DeadlineExceeded) {
 						permit.RecordFailure()
 					}
-					return nil, waitErr
+					return nil, waitError(waitErr)
 				}
 
 				retryCount++
@@ -600,7 +615,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 				// Calculate next backoff with jitter
 				backoff = policy.nextBackoff(backoff)
 				if waitErr := c.waitBackendChange(
-					ctx,
+					waitCtx,
 					backend,
 					&creationStart,
 					backendCreate,
@@ -611,7 +626,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 						!isBackendCreateQueueCongestion(waitErr) {
 						permit.RecordFailure()
 					}
-					return nil, waitErr
+					return nil, waitError(waitErr)
 				}
 				permit.Release()
 				continue
@@ -625,6 +640,12 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			return nil, err
 		}
 
+		// Do not dispatch a new request if the availability budget expired
+		// while selecting a backend. Once sent, the original request context
+		// governs normal remote work and lock waits.
+		if hasWaitBudget && waitCtx.Err() != nil {
+			return nil, waitError(waitCtx.Err())
+		}
 		f, err := b.Send(ctx, request)
 		if errors.Is(err, backendDraining) {
 			// Drain is a healthy generation handoff, not a peer failure. Retry
@@ -650,8 +671,8 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			backoff = policy.nextBackoff(backoff)
 			if backoff > 0 {
 				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
+				case <-waitCtx.Done():
+					return nil, waitError(waitCtx.Err())
 				case <-time.After(backoff):
 				}
 			}

@@ -178,6 +178,9 @@ func (tcc *TxnCompilerContext) GetSession() FeSession {
 func (tcc *TxnCompilerContext) GetTxnHandler() *TxnHandler {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
+	if reader := tcc.execCtx.showMetadataRead; reader != nil {
+		return reader.backSes.GetTxnHandler()
+	}
 	return tcc.execCtx.ses.GetTxnHandler()
 }
 
@@ -1145,6 +1148,9 @@ func (tcc *TxnCompilerContext) getOrCreateBackExec(ctx context.Context) Backgrou
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 
+	if reader := tcc.execCtx.showMetadataRead; reader != nil {
+		return reader
+	}
 	currentTxn := tcc.execCtx.ses.GetTxnHandler().GetTxn()
 
 	if tcc.cachedBackExec != nil {

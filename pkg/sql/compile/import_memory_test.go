@@ -23,10 +23,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -134,6 +136,7 @@ type compilerMemoryAdmission struct {
 	failure                    error
 	lastUnit                   int64
 	triedUnits                 []int64
+	onTry                      func()
 }
 
 func (m *compilerMemoryAdmission) Refresh()                    {}
@@ -151,6 +154,9 @@ func (m *compilerMemoryAdmission) WorkingSetHeadroom() rscthrottler.WorkingSetHe
 }
 func (m *compilerMemoryAdmission) TryReserveWorkingSet(ctx context.Context, spec rscthrottler.WorkingSetSpec) (*rscthrottler.WorkingSet, bool, error) {
 	m.tries++
+	if m.onTry != nil {
+		m.onTry()
+	}
 	m.lastUnit = spec.UnitBytes
 	m.triedUnits = append(m.triedUnits, spec.UnitBytes)
 	if m.failure != nil {
@@ -425,4 +431,76 @@ func TestCompileOwnsRoutingLabelsAcrossReleaseAndReuse(t *testing.T) {
 	withoutLabels := NewCompile("", "", "", "", "", nil, fixture.proc, nil, false, nil, time.Now())
 	require.Empty(t, withoutLabels.cnLabel)
 	withoutLabels.Release()
+}
+
+// A real compilation error after a successful DOP retry returns nil; releasing
+// that nil result must be safe and must not retire the original execution.
+func TestImportMemoryRecompileFailureAfterRetry(t *testing.T) {
+	original := memoryRecompileFixture(t, 4, nil)
+	original.scopes = append(original.scopes, &Scope{RootOp: &table_function.TableFunction{FuncName: "mo_current_roles"}})
+	original.installCurrentRolesExecutionCache(original.proc.Ctx)
+	old := original.currentRolesCache
+	defer original.closeCurrentRolesExecutionCache()
+	retry, err := original.recompileImportMemory(original.proc.Ctx, 2)
+	require.NoError(t, err)
+	retry.Release()
+	saved := original.pn
+	original.pn = &plan.Plan{}
+	failed, err := original.recompileImportMemory(original.proc.Ctx, 1)
+	original.pn = saved
+	require.Error(t, err)
+	require.Nil(t, failed)
+	failed.Release()
+	require.Same(t, old, original.currentRolesCache)
+}
+
+// Run must return safely when admission requests a DOP rebuild and the
+// compilation of that next generation fails.
+func TestRunDOPRecompileFailure(t *testing.T) {
+	c := memoryRecompileFixture(t, 4, nil)
+	oldScopes, oldPlan := c.scopes, c.pn
+	defer func() { c.scopes, c.pn = oldScopes, oldPlan }()
+	source := memorySourceScope(c.addr, 4, 1)
+	c.scopes = []*Scope{source}
+	c.pn = &plan.Plan{}
+	c.proc.ReplaceTopCtx(context.Background())
+	admission := &compilerMemoryAdmission{available: 0}
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	prior, _ := rt.GetGlobalVariables(moruntime.CNMemoryThrottler)
+	rt.SetGlobalVariables(moruntime.CNMemoryThrottler, admission)
+	defer rt.SetGlobalVariables(moruntime.CNMemoryThrottler, prior)
+	_, err := c.Run(0)
+	require.ErrorContains(t, err, "query '' is not yet implemented")
+	require.Greater(t, admission.tries, 0, "admission must request the DOP transition")
+}
+
+// singleCompilePool makes reuse deterministic while exercising the same
+// allocation and release functions as the shared pool.
+type singleCompilePool struct{ entry *Compile }
+
+func (p *singleCompilePool) Alloc() *Compile {
+	c := p.entry
+	p.entry = nil
+	return c
+}
+func (p *singleCompilePool) Free(c *Compile) {
+	c.clear()
+	p.entry = c
+}
+
+func TestCompileCacheGenerationAcrossDeterministicPoolReuse(t *testing.T) {
+	firstProc := newIssue27261Process(t)
+	c := allocateNewCompile(firstProc)
+	c.currentRolesCache = table_function.NewCurrentRolesExecutionCache(context.Background())
+	old := c.currentRolesCache
+	pool := &singleCompilePool{}
+	c.releaseToPool(pool)
+	require.Nil(t, c.currentRolesCache)
+	secondProc := newIssue27261Process(t)
+	next := allocateNewCompileFromPool(secondProc, pool)
+	defer next.Release()
+	require.Same(t, c, next)
+	require.Nil(t, next.currentRolesCache)
+	next.currentRolesCache = table_function.NewCurrentRolesExecutionCache(context.Background())
+	require.NotSame(t, old, next.currentRolesCache)
 }

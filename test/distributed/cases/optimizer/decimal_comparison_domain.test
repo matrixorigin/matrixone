@@ -1,0 +1,68 @@
+-- Regression: SQL decimal comparison domains must agree with stored and serialized keys.
+create table decimal_domain_scan(id int primary key, k int, x decimal(10,2));
+create index idx_domain_x on decimal_domain_scan(x);
+create index idx_domain_kx on decimal_domain_scan(k,x);
+insert into decimal_domain_scan values
+    (1,1,99.99),(2,1,199.99),(3,1,299.99),(4,1,null),
+    (5,2,199.99),(6,1,-1.25),(7,1,1.25),(8,1,2.00);
+
+-- @regex("Index Table Scan.*idx_domain_x",true)
+explain select count(*) from decimal_domain_scan where x between 99.990000 and 299.990000;
+select count(*) from decimal_domain_scan where x between 99.990000 and 299.990000;
+select id from decimal_domain_scan ignore index(idx_domain_x,idx_domain_kx)
+    where x between 99.990000 and 299.990000 order by id;
+select id from decimal_domain_scan where k=1 and x>=1.251 and x<2.001 order by id;
+select id, x<>99.991 from decimal_domain_scan where id in (1,4) order by id;
+select count(*) from decimal_domain_scan where x in (1.250000,2.000000,null);
+select id from decimal_domain_scan where x=99.990000000000000000000 order by id;
+
+select mo_ctl('dn','flush','decimal_comparison_domain.decimal_domain_scan');
+select id from decimal_domain_scan ignore index(idx_domain_x,idx_domain_kx)
+    where x between 99.990000 and 299.990000 order by id;
+select count(*) from decimal_domain_scan where x between 99.990000 and 299.990000;
+select id from decimal_domain_scan where k=1 and x>=1.251 and x<2.001 order by id;
+drop table decimal_domain_scan;
+
+-- A NOT NULL base column is nullable after an outer join.
+create table decimal_outer_l(id int primary key);
+create table decimal_outer_r(id int primary key, x decimal(10,2) not null);
+insert into decimal_outer_l values (1),(2);
+insert into decimal_outer_r values (1,99.99);
+select l.id,r.x<>99.991 from decimal_outer_l l left join decimal_outer_r r on l.id=r.id order by l.id;
+select l.id from decimal_outer_l l left join decimal_outer_r r on l.id=r.id where r.x<>99.991 order by l.id;
+select x<>cast('99. 991' as decimal(5,3)) from decimal_outer_r;
+drop table decimal_outer_l;
+drop table decimal_outer_r;
+
+-- Large decimal coefficients must be widened before comparing high-scale values.
+create table decimal_wide(id int primary key, x decimal(16,2));
+insert into decimal_wide values (1,99999999999999.99),(2,-99999999999999.99),(3,null);
+select id,x=99.991234567,x<>99.991234567 from decimal_wide order by id;
+select id from decimal_wide where x>9999999999.999999 order by id;
+select id from decimal_wide where x<=9999999999.999999 order by id;
+select id from decimal_wide where x<=>null order by id;
+select id from decimal_wide where x between 9999999999.999999 and 99999999999999.990000 order by id;
+select id from decimal_wide where x in (99999999999999.990000,99.991234567,null) order by id;
+drop table decimal_wide;
+
+-- Join keys of different scales share a lossless comparison domain.
+create table decimal_join_a(id int primary key,x decimal(16,2));
+create table decimal_join_b(id int primary key,x decimal(16,6));
+insert into decimal_join_a values (1,99999999999999.99),(2,1.23),(3,-1.25),(4,null);
+insert into decimal_join_b values (10,1.230000),(11,-1.250000),(12,9999999999.999999),(13,null);
+select a.id from decimal_join_a a join decimal_join_b b on a.x=b.x order by a.id;
+drop table decimal_join_a;
+drop table decimal_join_b;
+
+-- Decimal comparison type checking must not change temporal NULL-safe equality.
+set @saved_time_zone=@@time_zone;
+set time_zone='+08:00';
+create table temporal_domain(id int primary key,d datetime(6),ts timestamp(6));
+insert into temporal_domain values
+    (1,'2024-01-02 00:00:00','2024-01-02 00:00:00'),
+    (2,'2024-01-02 00:00:00','2024-01-01 16:00:00'),
+    (3,null,null),(4,null,'2024-01-02 00:00:00'),
+    (5,'2024-01-02 00:00:00',null);
+select id,d<=>ts,ts<=>d,d=ts,ts=d from temporal_domain order by id;
+drop table temporal_domain;
+set time_zone=@saved_time_zone;

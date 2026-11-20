@@ -34,109 +34,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestHasTrailingZeros(t *testing.T) {
-	tests := []struct {
-		name         string
-		value        string
-		constScale   int32
-		columnScale  int32
-		expectResult bool
-	}{
-		{
-			name:         "99.990000000 scale=9 to scale=2 - has trailing zeros",
-			value:        "99.990000000",
-			constScale:   9,
-			columnScale:  2,
-			expectResult: true,
-		},
-		{
-			name:         "99.991234567 scale=9 to scale=2 - no trailing zeros",
-			value:        "99.991234567",
-			constScale:   9,
-			columnScale:  2,
-			expectResult: false,
-		},
-		{
-			name:         "100.000000000 scale=9 to scale=0 - has trailing zeros",
-			value:        "100.000000000",
-			constScale:   9,
-			columnScale:  0,
-			expectResult: true,
-		},
-		{
-			name:         "12.340000000 scale=9 to scale=5 - has trailing zeros",
-			value:        "12.340000000",
-			constScale:   9,
-			columnScale:  5,
-			expectResult: true,
-		},
-		{
-			name:         "12.340000001 scale=9 to scale=5 - no trailing zeros",
-			value:        "12.340000001",
-			constScale:   9,
-			columnScale:  5,
-			expectResult: false,
-		},
-		{
-			name:         "12.34567 scale=5 to scale=5 - exact match",
-			value:        "12.34567",
-			constScale:   5,
-			columnScale:  5,
-			expectResult: false, // constScale <= columnScale, returns false
-		},
-		{
-			name:         "12.34567 scale=5 to scale=10 - column has higher scale",
-			value:        "12.34567",
-			constScale:   5,
-			columnScale:  10,
-			expectResult: false, // constScale <= columnScale, returns false
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Parse the decimal value
-			dec, _, err := types.Parse128(tt.value)
-			require.NoError(t, err)
-
-			// Create constant expression
-			constExpr := &plan.Expr{
-				Typ: plan.Type{
-					Id:    int32(types.T_decimal128),
-					Width: 38,
-					Scale: tt.constScale,
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Isnull: false,
-						Value: &plan.Literal_Decimal128Val{
-							Decimal128Val: &plan.Decimal128{
-								A: int64(dec.B0_63),
-								B: int64(dec.B64_127),
-							},
-						},
-					},
-				},
-			}
-
-			constType := types.Type{
-				Oid:   types.T_decimal128,
-				Width: 38,
-				Scale: tt.constScale,
-			}
-
-			// Test hasTrailingZeros
-			result := hasTrailingZeros(constExpr, constType, tt.columnScale)
-
-			t.Logf("Value: %s, ConstScale: %d, ColumnScale: %d", tt.value, tt.constScale, tt.columnScale)
-			t.Logf("Decimal128: A=%d, B=%d", dec.B0_63, dec.B64_127)
-			t.Logf("Expected: %v, Got: %v", tt.expectResult, result)
-
-			require.Equal(t, tt.expectResult, result, "hasTrailingZeros result mismatch")
-		})
-	}
-}
-
 func TestNormalizePrepareParamRefsIsIdempotentAcrossVisitedAliases(t *testing.T) {
 	newParam := func(pos int32) *plan.Expr {
 		return &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}}}
@@ -532,41 +429,13 @@ func TestDecimal128HasTrailingZeros(t *testing.T) {
 			t.Logf("Decimal128: low=%d, high=%d", dec.B0_63, dec.B64_127)
 			t.Logf("ConstScale: %d, ColumnScale: %d", tt.constScale, tt.columnScale)
 
-			// Test decimal128HasTrailingZeros directly
+			// Exercise the shared fixed-width proof used by index and binder.
 			trailingDigits := tt.constScale - tt.columnScale
-			result := decimal128HasTrailingZeros(int64(dec.B0_63), int64(dec.B64_127), trailingDigits)
-
+			result, proven := decimal256TrailingZerosStatus(types.Decimal256FromDecimal128(dec), trailingDigits)
+			require.True(t, proven)
 			t.Logf("TrailingDigits: %d, Expected: %v, Got: %v", trailingDigits, tt.expectTrailing, result)
 			require.Equal(t, tt.expectTrailing, result, tt.description)
 
-			// Also test through hasTrailingZeros wrapper
-			constExpr := &plan.Expr{
-				Typ: plan.Type{
-					Id:    int32(types.T_decimal128),
-					Width: 38,
-					Scale: tt.constScale,
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Isnull: false,
-						Value: &plan.Literal_Decimal128Val{
-							Decimal128Val: &plan.Decimal128{
-								A: int64(dec.B0_63),
-								B: int64(dec.B64_127),
-							},
-						},
-					},
-				},
-			}
-
-			constType := types.Type{
-				Oid:   types.T_decimal128,
-				Width: 38,
-				Scale: tt.constScale,
-			}
-
-			wrapperResult := hasTrailingZeros(constExpr, constType, tt.columnScale)
-			require.Equal(t, tt.expectTrailing, wrapperResult, "hasTrailingZeros wrapper result mismatch")
 		})
 	}
 }

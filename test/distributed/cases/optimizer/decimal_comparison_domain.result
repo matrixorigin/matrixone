@@ -1,0 +1,128 @@
+create table decimal_domain_scan(id int primary key, k int, x decimal(10,2));
+create index idx_domain_x on decimal_domain_scan(x);
+create index idx_domain_kx on decimal_domain_scan(k,x);
+insert into decimal_domain_scan values
+(1,1,99.99),(2,1,199.99),(3,1,299.99),(4,1,null),
+(5,2,199.99),(6,1,-1.25),(7,1,1.25),(8,1,2.00);
+explain select count(*) from decimal_domain_scan where x between 99.990000 and 299.990000;
+-- @regex("Index Table Scan.*idx_domain_x", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Index Table Scan on decimal_domain_scan.idx_domain_x  𝄀
+              Filter Cond: (__mo_index_idx_col >= 'D\x80\x00\x00\x00\x00\x00'\x0f'), (serial_extract(__mo_index_idx_col, 0, DECIMAL64(10, 2))) <= 299.990000)  𝄀
+              Block Filter Cond: (__mo_index_idx_col >= 'D\x80\x00\x00\x00\x00\x00'\x0f')
+select count(*) from decimal_domain_scan where x between 99.990000 and 299.990000;
+➤ count(*)[-5,64,0]  𝄀
+4
+select id from decimal_domain_scan ignore index(idx_domain_x,idx_domain_kx)
+where x between 99.990000 and 299.990000 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+5
+select id from decimal_domain_scan where k=1 and x>=1.251 and x<2.001 order by id;
+➤ id[4,32,0]  𝄀
+8
+select id, x<>99.991 from decimal_domain_scan where id in (1,4) order by id;
+➤ id[4,32,0]  ¦  x != 99.991[-7,1,0]  𝄀
+1  ¦  1  𝄀
+4  ¦  null
+select count(*) from decimal_domain_scan where x in (1.250000,2.000000,null);
+➤ count(*)[-5,64,0]  𝄀
+2
+select id from decimal_domain_scan where x=99.990000000000000000000 order by id;
+➤ id[4,32,0]  𝄀
+1
+select mo_ctl('dn','flush','decimal_comparison_domain.decimal_domain_scan');
+➤ mo_ctl(dn, flush, decimal_comparison_domain.decimal_domain_scan)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id from decimal_domain_scan ignore index(idx_domain_x,idx_domain_kx)
+where x between 99.990000 and 299.990000 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+5
+select count(*) from decimal_domain_scan where x between 99.990000 and 299.990000;
+➤ count(*)[-5,64,0]  𝄀
+4
+select id from decimal_domain_scan where k=1 and x>=1.251 and x<2.001 order by id;
+➤ id[4,32,0]  𝄀
+8
+drop table decimal_domain_scan;
+create table decimal_outer_l(id int primary key);
+create table decimal_outer_r(id int primary key, x decimal(10,2) not null);
+insert into decimal_outer_l values (1),(2);
+insert into decimal_outer_r values (1,99.99);
+select l.id,r.x<>99.991 from decimal_outer_l l left join decimal_outer_r r on l.id=r.id order by l.id;
+➤ id[4,32,0]  ¦  r.x != 99.991[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null
+select l.id from decimal_outer_l l left join decimal_outer_r r on l.id=r.id where r.x<>99.991 order by l.id;
+➤ id[4,32,0]  𝄀
+1
+select x<>cast('99. 991' as decimal(5,3)) from decimal_outer_r;
+invalid input: "99. 991" is invalid numeric string
+drop table decimal_outer_l;
+drop table decimal_outer_r;
+create table decimal_wide(id int primary key, x decimal(16,2));
+insert into decimal_wide values (1,99999999999999.99),(2,-99999999999999.99),(3,null);
+select id,x=99.991234567,x<>99.991234567 from decimal_wide order by id;
+➤ id[4,32,0]  ¦  x = 99.991234567[-7,1,0]  ¦  x != 99.991234567[-7,1,0]  𝄀
+1  ¦  0  ¦  1  𝄀
+2  ¦  0  ¦  1  𝄀
+3  ¦  null  ¦  null
+select id from decimal_wide where x>9999999999.999999 order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from decimal_wide where x<=9999999999.999999 order by id;
+➤ id[4,32,0]  𝄀
+2
+select id from decimal_wide where x<=>null order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from decimal_wide where x between 9999999999.999999 and 99999999999999.990000 order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from decimal_wide where x in (99999999999999.990000,99.991234567,null) order by id;
+➤ id[4,32,0]  𝄀
+1
+drop table decimal_wide;
+create table decimal_join_a(id int primary key,x decimal(16,2));
+create table decimal_join_b(id int primary key,x decimal(16,6));
+insert into decimal_join_a values (1,99999999999999.99),(2,1.23),(3,-1.25),(4,null);
+insert into decimal_join_b values (10,1.230000),(11,-1.250000),(12,9999999999.999999),(13,null);
+select a.id from decimal_join_a a join decimal_join_b b on a.x=b.x order by a.id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+drop table decimal_join_a;
+drop table decimal_join_b;
+set @saved_time_zone=@@time_zone;
+set time_zone='+08:00';
+create table temporal_domain(id int primary key,d datetime(6),ts timestamp(6));
+insert into temporal_domain values
+(1,'2024-01-02 00:00:00','2024-01-02 00:00:00'),
+(2,'2024-01-02 00:00:00','2024-01-01 16:00:00'),
+(3,null,null),(4,null,'2024-01-02 00:00:00'),
+(5,'2024-01-02 00:00:00',null);
+select id,d<=>ts,ts<=>d,d=ts,ts=d from temporal_domain order by id;
+➤ id[4,32,0]  ¦  d <=> ts[-7,1,0]  ¦  ts <=> d[-7,1,0]  ¦  d = ts[-7,1,0]  ¦  ts = d[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  0  ¦  0  ¦  0  ¦  0  𝄀
+3  ¦  1  ¦  1  ¦  null  ¦  null  𝄀
+4  ¦  0  ¦  0  ¦  null  ¦  null  𝄀
+5  ¦  0  ¦  0  ¦  null  ¦  null
+drop table temporal_domain;
+set time_zone=@saved_time_zone;

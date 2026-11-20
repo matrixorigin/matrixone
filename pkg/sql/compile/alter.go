@@ -793,7 +793,7 @@ func alterCopyPkColumnValueUnchanged(oldCol, newCol *plan.ColDef) bool {
 		oldTyp.GetWidth() == newTyp.GetWidth() &&
 		oldTyp.GetScale() == newTyp.GetScale() &&
 		oldTyp.GetTable() == newTyp.GetTable() &&
-		oldTyp.GetEnumvalues() == newTyp.GetEnumvalues()
+		types.EnumMembersEqual(oldTyp.GetEnumvalues(), oldTyp.GetEnumEncoding(), newTyp.GetEnumvalues(), newTyp.GetEnumEncoding())
 }
 
 // Only precheck source rows when the copied PK columns keep value-preserving
@@ -1196,7 +1196,7 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 	// 3. create temporary replica table which doesn't have foreign key constraints
 	// Get logicalId from tableDef and pass it when creating the temporary table
 	oldLogicalId := qry.GetTableDef().GetLogicalId()
-	createTmpOpts := executor.StatementOption{}
+	createTmpOpts := executor.StatementOption{}.WithInheritedEnums(tree.InheritedEnumTypes(qry.GetCopyTableDef()))
 
 	if oldLogicalId != 0 {
 		createTmpOpts = createTmpOpts.WithKeepLogicalId(oldLogicalId)

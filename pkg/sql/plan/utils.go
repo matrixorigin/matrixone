@@ -784,18 +784,13 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 			return nil
 		}
 
-		// Verify all remaining arguments either:
-		// 1. Don't contain any column references (literals/constants), OR
-		// 2. Contain the same column reference as the first argument
-		for i := 1; i < len(args); i++ {
-			otherCol := extractColRefInFilter(args[i])
-			if otherCol != nil {
-				// If this argument has a column reference, it must match the first argument's column
-				if col.RelPos != otherCol.RelPos || col.ColPos != otherCol.ColPos {
-					return nil
-				}
+		// A nil extraction can also mean multiple columns or an unsupported
+		// expression, not just a constant. Check the entire remaining subtree.
+		allowed := map[[2]int32]bool{{col.RelPos, col.ColPos}: true}
+		for _, arg := range args[1:] {
+			if !exprColRefsSubsetOf(arg, allowed) {
+				return nil
 			}
-			// If otherCol is nil, the argument is a literal/constant (no column reference), which is acceptable
 		}
 
 		return col
@@ -1608,158 +1603,195 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 	return BindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{expr, tailExpr})
 }
 
-// checkNoNeedCast
-// if constant's type higher than column's type
-// and constant's value in range of column's type, then no cast was needed
-// hasTrailingZeros checks if a decimal constant has trailing zeros that can be safely truncated
-// to match the column's scale, allowing index usage
-func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32) bool {
-	if constT.Scale <= columnScale {
-		return false
+// decimalLiteralCoefficient returns the exact integer coefficient. A cast
+// whose source and target scales differ is not a literal value proof.
+func decimalLiteralCoefficient(expr *plan.Expr) (types.Decimal256, bool) {
+	if expr == nil || !types.T(expr.Typ.Id).IsDecimal() {
+		return types.Decimal256{}, false
 	}
-
-	// Try to get the literal value
-	// If constExpr is a Cast function, try to extract the inner literal
-	var lit *plan.Literal
-	if constExpr.GetLit() != nil {
-		lit = constExpr.GetLit()
-	} else if funcExpr := constExpr.GetF(); funcExpr != nil {
-		// Check if it's a cast function with a literal argument
-		if len(funcExpr.Args) > 0 {
-			if innerLit := funcExpr.Args[0].GetLit(); innerLit != nil {
-				lit = innerLit
+	source := expr
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 || fn.Args[0] == nil {
+			return types.Decimal256{}, false
+		}
+		source = fn.Args[0]
+		if types.T(source.Typ.Id).IsDecimal() && source.Typ.Scale != expr.Typ.Scale {
+			return types.Decimal256{}, false
+		}
+	}
+	lit := source.GetLit()
+	if lit == nil || lit.Isnull || lit.IsBin {
+		return types.Decimal256{}, false
+	}
+	var coefficient types.Decimal256
+	switch value := lit.Value.(type) {
+	case *plan.Literal_Decimal64Val:
+		if value.Decimal64Val == nil || types.T(source.Typ.Id) != types.T_decimal64 {
+			return types.Decimal256{}, false
+		}
+		coefficient = types.Decimal256FromInt64(value.Decimal64Val.A)
+	case *plan.Literal_Decimal128Val:
+		if value.Decimal128Val == nil || types.T(source.Typ.Id) != types.T_decimal128 {
+			return types.Decimal256{}, false
+		}
+		coefficient = types.Decimal256FromDecimal128(types.Decimal128{
+			B0_63: uint64(value.Decimal128Val.A), B64_127: uint64(value.Decimal128Val.B),
+		})
+	case *plan.Literal_Sval:
+		if source == expr && types.T(expr.Typ.Id) != types.T_decimal256 {
+			return types.Decimal256{}, false
+		}
+		if !isPlainDecimalLiteral(value.Sval) {
+			return types.Decimal256{}, false
+		}
+		var scale int32
+		var err error
+		coefficient, scale, err = types.Parse256(value.Sval)
+		if err != nil || scale != expr.Typ.Scale {
+			return types.Decimal256{}, false
+		}
+		if source != expr {
+			switch types.T(expr.Typ.Id) {
+			case types.T_decimal64:
+				parsed, parseErr := types.ParseDecimal64(value.Sval, expr.Typ.Width, expr.Typ.Scale)
+				if parseErr != nil || types.Decimal256FromInt64(int64(parsed)) != coefficient {
+					return types.Decimal256{}, false
+				}
+			case types.T_decimal128:
+				parsed, parseErr := types.ParseDecimal128(value.Sval, expr.Typ.Width, expr.Typ.Scale)
+				if parseErr != nil || types.Decimal256FromDecimal128(parsed) != coefficient {
+					return types.Decimal256{}, false
+				}
+			case types.T_decimal256:
+				parsed, parseErr := types.ParseDecimal256(value.Sval, expr.Typ.Width, expr.Typ.Scale)
+				if parseErr != nil || parsed != coefficient {
+					return types.Decimal256{}, false
+				}
+			default:
+				return types.Decimal256{}, false
 			}
 		}
+	default:
+		return types.Decimal256{}, false
 	}
+	// A failed cast is observable even when no stored column value can equal
+	// its mathematical value. Prove the cast itself cannot overflow before
+	// replacing a comparison by a constant.
+	if source != expr && (expr.Typ.Scale < 0 || expr.Typ.Scale > expr.Typ.Width ||
+		!decimal256FitsPrecision(coefficient, expr.Typ.Width)) {
+		return types.Decimal256{}, false
+	}
+	return coefficient, true
+}
 
-	if lit == nil || lit.Isnull {
+// The execution cast parser has broader and different syntax from Parse256.
+// Accept only the common, unambiguous decimal-literal grammar for proofs.
+func isPlainDecimalLiteral(s string) bool {
+	if len(s) == 0 {
 		return false
 	}
-
-	// Calculate how many trailing digits we need to check
-	trailingDigits := constT.Scale - columnScale
-	if trailingDigits <= 0 || trailingDigits > 18 {
+	start := 0
+	if s[0] == '-' {
+		start++
+	}
+	if start == len(s) {
 		return false
 	}
-
-	// Get the decimal value and check trailing zeros
-	// Try DECIMAL64, DECIMAL128, and string literals
-	divisor := int64(types.Pow10[trailingDigits])
-
-	if val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
-		return val.Decimal64Val.A%divisor == 0
-	} else if val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
-		// For Decimal128, we need to check if the trailing digits are all zeros
-		// using 128-bit arithmetic
-		return decimal128HasTrailingZeros(val.Decimal128Val.A, val.Decimal128Val.B, trailingDigits)
-	} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
-		// The literal is a string, parse it as decimal
-		dec, _, err := types.Parse128(sval.Sval)
-		if err != nil {
+	dot := false
+	digits := 0
+	for i := start; i < len(s); i++ {
+		switch {
+		case s[i] >= '0' && s[i] <= '9':
+			digits++
+		case s[i] == '.' && !dot && digits > 0 && i+1 < len(s):
+			dot = true
+		default:
 			return false
 		}
-		return decimal128HasTrailingZeros(int64(dec.B0_63), int64(dec.B64_127), trailingDigits)
 	}
-
-	return false
+	return digits > 0
 }
 
-// decimal128HasTrailingZeros checks if a 128-bit decimal value has trailing zeros
-// that can be safely truncated. The value is represented as two int64 parts:
-// low (bits 0-63) and high (bits 64-127).
-func decimal128HasTrailingZeros(low, high int64, trailingDigits int32) bool {
-	if trailingDigits <= 0 || trailingDigits > 18 {
-		return false
+func decimal256TrailingZerosStatus(value types.Decimal256, digits int32) (bool, bool) {
+	if digits <= 0 {
+		return false, true
 	}
-
-	divisor := int64(types.Pow10[trailingDigits])
-
-	// If high part is zero, we can just check the low part
-	if high == 0 {
-		return low%divisor == 0
+	if digits > 76 {
+		return decimal256IsZero(value), true
 	}
-
-	// For values with non-zero high part, we need 128-bit modulo
-	// Use types.Decimal128 for proper 128-bit arithmetic
-	d128 := types.Decimal128{B0_63: uint64(low), B64_127: uint64(high)}
-	divisorDec := types.Decimal128{B0_63: uint64(divisor), B64_127: 0}
-
-	// Compute d128 % divisorDec
-	remainder, err := d128.Mod128(divisorDec)
-	if err != nil {
-		return false
+	divisor, ok := decimal256PowerOfTen(digits)
+	if !ok {
+		return false, false
 	}
-
-	return remainder.B0_63 == 0 && remainder.B64_127 == 0
-}
-
-// isDecimalComparisonAlwaysFalseCore checks if a decimal comparison is always false
-// This happens when the constant has non-zero digits beyond the column's scale
-func isDecimalComparisonAlwaysFalseCore(constExpr *plan.Expr, constT types.Type, columnScale int32) bool {
-	if constT.Scale <= columnScale {
-		return false
-	}
-
-	// If it has trailing zeros, it's not always false (can be optimized instead)
-	if hasTrailingZeros(constExpr, constT, columnScale) {
-		return false
-	}
-
-	// Has non-zero trailing digits, comparison is always false
-	return true
-}
-
-// isDecimalComparisonAlwaysFalse checks if a decimal equality comparison between two expressions is always false
-// Wrapper function that identifies column and constant, then calls the core logic
-func isDecimalComparisonAlwaysFalse(ctx context.Context, expr1, expr2 *plan.Expr) bool {
-	// Unwrap Cast expressions to get the underlying column/literal
-	unwrap1 := unwrapCast(expr1)
-	unwrap2 := unwrapCast(expr2)
-
-	// Identify which is column and which is constant
-	var colExpr, constExpr *plan.Expr
-	var origConstExpr *plan.Expr
-
-	if unwrap1.GetCol() != nil && unwrap2.GetLit() != nil {
-		colExpr, constExpr = unwrap1, unwrap2
-		origConstExpr = expr2
-	} else if unwrap2.GetCol() != nil && unwrap1.GetLit() != nil {
-		colExpr, constExpr = unwrap2, unwrap1
-		origConstExpr = expr1
-	} else {
-		return false // Not a column-constant comparison
-	}
-
-	// Use unwrapped column for its original type, and original constant for its type
-	colType := makeTypeByPlan2Expr(colExpr)
-	constType := makeTypeByPlan2Expr(origConstExpr)
-
-	if !colType.Oid.IsDecimal() || !constType.Oid.IsDecimal() {
-		return false
-	}
-
-	// Call the core logic
-	return isDecimalComparisonAlwaysFalseCore(constExpr, constType, colType.Scale)
-}
-
-// unwrapCast extracts the underlying expression from a Cast function
-// Returns the original expression if it's not a Cast
-func unwrapCast(expr *plan.Expr) *plan.Expr {
-	if expr == nil {
-		return nil
-	}
-
-	if funcExpr := expr.GetF(); funcExpr != nil {
-		if funcExpr.Func.ObjName == "cast" && len(funcExpr.Args) > 0 {
-			return funcExpr.Args[0]
+	if value.Sign() {
+		value = value.Minus()
+		if value.Sign() {
+			return false, false
 		}
 	}
+	remainder, err := value.Mod256(divisor)
+	return err == nil && decimal256IsZero(remainder), err == nil
+}
 
-	return expr
+func decimal256PowerOfTen(power int32) (types.Decimal256, bool) {
+	if power < 0 || power > 76 {
+		return types.Decimal256{}, false
+	}
+	result := types.Decimal256{B0_63: 1}
+	for power >= 19 {
+		next, err := result.Mul256(types.Decimal256{B0_63: types.Pow10[19]})
+		if err != nil {
+			return types.Decimal256{}, false
+		}
+		result = next
+		power -= 19
+	}
+	if power > 0 {
+		next, err := result.Mul256(types.Decimal256{B0_63: types.Pow10[power]})
+		if err != nil {
+			return types.Decimal256{}, false
+		}
+		result = next
+	}
+	return result, true
+}
+
+func decimal256FitsPrecision(value types.Decimal256, width int32) bool {
+	if width <= 0 || width > 76 {
+		return false
+	}
+	if value.Sign() {
+		value = value.Minus()
+		if value.Sign() {
+			return false
+		}
+	}
+	limit, ok := decimal256PowerOfTen(width)
+	return ok && value.Less(limit)
+}
+
+func decimal256IsZero(value types.Decimal256) bool {
+	return value.B0_63 == 0 && value.B64_127 == 0 &&
+		value.B128_191 == 0 && value.B192_255 == 0
+}
+
+// decimalDomainContains proves that every source value can be represented
+// exactly by the target, including both fractional and integer digits.
+func decimalDomainContains(target, source types.Type) bool {
+	if !target.Oid.IsDecimal() || !source.Oid.IsDecimal() ||
+		target.Width <= 0 || source.Width <= 0 || target.Scale < 0 || source.Scale < 0 ||
+		target.Scale > target.Width || source.Scale > source.Width {
+		return false
+	}
+	return target.Scale >= source.Scale &&
+		target.Width-target.Scale >= source.Width-source.Scale
 }
 
 func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 	if constExpr.GetP() != nil && columnT.IsNumeric() {
+		if columnT.Oid.IsDecimal() {
+			return decimalDomainContains(columnT, constT)
+		}
 		return true
 	}
 
@@ -1876,20 +1908,9 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 			return false
 		}
 
-	case types.T_decimal64, types.T_decimal128:
-		// Allow casting decimal constants to decimal columns only if no precision loss
-		if columnT.Oid == types.T_decimal64 || columnT.Oid == types.T_decimal128 {
-			// Optimization 1: Check if column scale >= constant scale (already handled)
-			if columnT.Scale >= constT.Scale {
-				return true
-			}
-
-			// Optimization 2: Check if constant has trailing zeros that can be truncated
-			if hasTrailingZeros(constExpr, constT, columnT.Scale) {
-				return true
-			}
-
-			return false
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		if columnT.Oid.IsDecimal() {
+			return losslessIndexDecimalBound(constExpr, columnT)
 		}
 		// Allow casting decimal constants to float columns only if precision is acceptable
 		// For FLOAT32: only allow if value has <= 7 significant digits

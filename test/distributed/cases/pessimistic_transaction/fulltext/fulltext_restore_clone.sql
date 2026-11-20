@@ -25,8 +25,9 @@ insert into src values
   (1,'alpha keyword'),(2,'beta keyword'),
   (3,'gamma topic'),(4,'delta topic');
 
--- let the async build finish, then confirm the source index answers MATCH
-select sleep(30);
+-- Wait until all source tokens are indexed before the clone captures them.
+-- @wait_expect(2, 30)
+select id from src where match(body) against('keyword topic' in boolean mode) order by id;
 select id from src where match(body) against('alpha' in boolean mode) order by id;
 
 -- (a) clone succeeds and copies the rows + fulltext index definition
@@ -34,19 +35,19 @@ create table dst clone src;
 select count(*) from dst;
 show create table dst;
 
--- let RestoreTable's re-registered CDC settle on the clone
-select sleep(30);
-
--- (b) the cloned inverted index answers MATCH (no full-scan fallback exists)
+-- (b) wait until the cloned inverted index answers MATCH (no full-scan fallback exists)
+-- @wait_expect(2, 30)
 select id from dst where match(body) against('beta' in boolean mode) order by id;
+-- @wait_expect(2, 30)
 select id from dst where match(body) against('topic' in boolean mode) order by id;
 
 -- (c) maintenance re-armed: a row inserted AFTER the clone becomes matchable
 insert into dst values (5,'epsilon fresh');
-select sleep(45);
 -- the post-clone token is matched via the cloned index -> CDC path is live
+-- @wait_expect(2, 45)
 select id from dst where match(body) against('epsilon' in boolean mode) order by id;
 -- pre-existing cloned rows remain matchable too
+-- @wait_expect(2, 30)
 select id from dst where match(body) against('alpha' in boolean mode) order by id;
 
 drop database ft_restore;

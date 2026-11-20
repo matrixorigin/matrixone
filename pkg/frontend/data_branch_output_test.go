@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/url"
@@ -43,7 +44,9 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbtimestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -398,8 +401,13 @@ func TestDataBranchDiffCanExecuteInUncommittedTransaction(t *testing.T) {
 }
 
 func TestMaterializeDiffOutputAsTable_InsertFailureDropsDestination(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	ses := newValidateSession(t)
+	ses.sesSysVars = &SystemVariables{mp: map[string]interface{}{"lower_case_table_names": int64(0)}}
+	payload, encoding, err := types.EncodeEnumMembers([]string{"a", "b"})
+	require.NoError(t, err)
+	domain := plan.Type{Id: int32(types.T_enum), Enumvalues: payload, EnumEncoding: encoding, NotNullable: true}
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
@@ -412,27 +420,27 @@ func TestMaterializeDiffOutputAsTable_InsertFailureDropsDestination(t *testing.T
 		DbName: "base_db",
 		Name:   "base_t",
 		Cols: []*plan.ColDef{
-			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: domain},
 		},
 	}).AnyTimes()
 	tarRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
 		DbName: "target_db",
 		Name:   "target_t",
 		Cols: []*plan.ColDef{
-			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: domain},
 		},
 	}).AnyTimes()
 
 	tblStuff := tableStuff{baseRel: baseRel, tarRel: tarRel}
 	tblStuff.def.colNames = []string{"id"}
-	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType()}
+	tblStuff.def.colTypes = []types.Type{types.T_enum.ToType()}
 	tblStuff.def.visibleIdxes = []int{0}
 	tblStuff.def.pkColIdx = 0
 	tblStuff.retPool = &retBatchList{}
 	tblStuff.bufPool = &sync.Pool{New: func() any { return &bytes.Buffer{} }}
 
 	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
-	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Enum(1), false, mp))
 	bat.SetRowCount(1)
 	defer tblStuff.retPool.freeAllRetBatches(mp)
 
@@ -445,34 +453,49 @@ func TestMaterializeDiffOutputAsTable_InsertFailureDropsDestination(t *testing.T
 	phase.markProducerDone()
 
 	bh := mock_frontend.NewMockBackgroundExec(ctrl)
-	var sqls []string
-	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-		sqls = append(sqls, sql)
-		if strings.HasPrefix(sql, "insert into") {
-			return moerr.NewInternalErrorNoCtx("injected insert failure")
-		}
-		return nil
-	}).Times(3)
-	bh.EXPECT().ClearExecResultSet().Times(2)
+	insertErr := moerr.NewInternalErrorNoCtx("injected insert failure")
+	cleanupErr := moerr.NewInternalErrorNoCtx("injected cleanup failure")
+	gomock.InOrder(
+		bh.EXPECT().ExecStmt(ctx, gomock.Any()).DoAndReturn(func(_ context.Context, stmt tree.Statement) error {
+			require.Equal(t, "DiffOut", stmt.(*tree.CreateTable).Table.ObjectName.String())
+			return nil
+		}),
+		bh.EXPECT().ClearExecResultSet(),
+		bh.EXPECT().ExecStmt(ctx, gomock.Any()).DoAndReturn(func(_ context.Context, stmt tree.Statement) error {
+			insert := stmt.(*tree.Insert)
+			require.Contains(t, tree.String(insert.Table, dialect.MYSQL), "DiffOut")
+			cancel()
+			return insertErr
+		}),
+		bh.EXPECT().ExecStmt(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, stmt tree.Statement) error {
+			require.NoError(t, ctx.Err())
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			require.LessOrEqual(t, time.Until(deadline), diffOutputCleanupTimeout)
+			drop := stmt.(*tree.DropTable)
+			require.True(t, drop.IfExists)
+			require.Len(t, drop.Names, 1)
+			require.Equal(t, "out_db", drop.Names[0].SchemaName.String())
+			require.Equal(t, "DiffOut", drop.Names[0].ObjectName.String())
+			return cleanupErr
+		}),
+	)
 
 	dst := tree.NewTableName(
-		tree.Identifier("diff_out"),
+		tree.Identifier("DiffOut"),
 		tree.ObjectNamePrefix{SchemaName: tree.Identifier("out_db"), ExplicitSchema: true},
 		nil,
 	)
 	err = phase.materialize(
 		ctx,
-		func() {},
+		cancel,
 		ses,
 		bh,
 		&tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{As: *dst}},
 		tblStuff,
 	)
-	require.ErrorContains(t, err, "injected insert failure")
-	require.Len(t, sqls, 3)
-	require.True(t, strings.HasPrefix(sqls[0], "create table `out_db`.`diff_out`"))
-	require.True(t, strings.HasPrefix(sqls[1], "insert into `out_db`.`diff_out`"))
-	require.Equal(t, "drop table if exists `out_db`.`diff_out`", sqls[2])
+	require.ErrorIs(t, err, insertErr)
+	require.ErrorIs(t, err, cleanupErr)
 }
 
 func TestDataBranchOutputAsTablePhase_BlocksOutputSQLUntilProducerCompletes(t *testing.T) {
@@ -2715,4 +2738,109 @@ func buildFakePKInsertBatchWithoutFakePKValue(t *testing.T, mp *mpool.MPool, row
 	}
 	bat.SetRowCount(len(rows))
 	return bat
+}
+
+func TestDataBranchOutputStoredEnumInsert(t *testing.T) {
+	ses := &Session{}
+	for _, wantErr := range []bool{false, true} {
+		t.Run(fmt.Sprintf("execution-error-%t", wantErr), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			output := &diffOutputTable{
+				databaseName: "d", tableName: "diff",
+				columnNames: []string{"source", "flag", "e", "n"},
+				enumDomains: map[int]plan2.Type{2: {
+					Id: int32(types.T_enum), Enumvalues: "3#3:a,b1:c0:", EnumEncoding: 1,
+				}},
+			}
+			bh.EXPECT().ExecStmt(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, statement tree.Statement) error {
+					rows := statement.(*tree.Insert).Rows.Select.(*tree.ValuesClause).Rows
+					for i, ordinal := range []uint16{0, 3} {
+						value := rows[i][2].(*tree.StoredEnumValue)
+						require.Equal(t, ordinal, value.Ordinal)
+						require.Equal(t, "3#3:a,b1:c0:", value.EnumValues)
+						require.Equal(t, uint32(1), value.EnumEncoding)
+					}
+					require.Equal(t, tree.P_null, rows[2][2].(*tree.NumVal).ValType)
+					// Other column literals keep their original assignment semantics.
+					require.Equal(t, "7", rows[0][3].(*tree.NumVal).String())
+					if wantErr {
+						return errors.New("insert failed")
+					}
+					return nil
+				})
+			if !wantErr {
+				bh.EXPECT().ClearExecResultSet()
+			}
+			err := output.insert(t.Context(), ses, bh, bytes.NewBufferString(
+				"('t','INSERT',0,7),('t','INSERT',3,8),('t','INSERT',NULL,9)"))
+			if wantErr {
+				require.ErrorContains(t, err, "insert failed")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestDataBranchOutputEnumCreateIdentifierCase(t *testing.T) {
+	domain := plan2.Type{Id: int32(types.T_enum), Enumvalues: "2#1:a1:b", EnumEncoding: 1}
+	output := &diffOutputTable{
+		databaseName: "CaseDb",
+		tableName:    "DiffOut",
+		columnNames:  []string{"E"},
+		enumDomains:  map[int]plan2.Type{0: domain},
+	}
+
+	for _, tc := range []struct {
+		name string
+		mode int64
+		db   string
+		tbl  string
+	}{
+		{"preserve", 0, "CaseDb", "DiffOut"},
+		{"fold", 1, "casedb", "diffout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := &Session{feSessionImpl: feSessionImpl{
+				sesSysVars: &SystemVariables{mp: map[string]interface{}{"lower_case_table_names": tc.mode}},
+			}}
+			bh := mock_frontend.NewMockBackgroundExec(gomock.NewController(t))
+			bh.EXPECT().ExecStmt(t.Context(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, stmt tree.Statement) error {
+					ddl := stmt.(*tree.CreateTable)
+					require.Equal(t, tc.db, ddl.Table.SchemaName.String())
+					require.Equal(t, tc.tbl, ddl.Table.ObjectName.String())
+					require.Equal(t, map[string]plan2.Type{"e": domain}, ddl.InheritedEnums)
+					return nil
+				})
+			bh.EXPECT().ClearExecResultSet()
+			sql := "create table " + output.qualifiedName() + " (`E` enum('a','b'))"
+			require.NoError(t, output.create(t.Context(), ses, bh, sql))
+		})
+	}
+}
+
+func TestDataBranchOutputEnumRejectsTemporaryDestination(t *testing.T) {
+	domain := plan2.Type{Id: int32(types.T_enum), Enumvalues: "2#1:a1:b", EnumEncoding: 1}
+	output := &diffOutputTable{
+		databaseName: "CaseDb",
+		tableName:    "DiffOut",
+		columnNames:  []string{"e"},
+		enumDomains:  map[int]plan2.Type{0: domain},
+	}
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			sesSysVars: &SystemVariables{mp: map[string]interface{}{"lower_case_table_names": int64(0)}},
+		},
+		tempTables: map[string]string{"CaseDb.DiffOut": "temporary_diff"},
+	}
+	bh := mock_frontend.NewMockBackgroundExec(gomock.NewController(t))
+	sql := "create table " + output.qualifiedName() + " (e enum('a','b'))"
+	err := output.create(t.Context(), ses, bh, sql)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTableAlreadyExists), "%v", err)
+	name, ok := ses.GetTempTable("CaseDb", "DiffOut")
+	require.True(t, ok)
+	require.Equal(t, "temporary_diff", name)
 }

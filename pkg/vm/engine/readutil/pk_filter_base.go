@@ -405,7 +405,7 @@ func constructBasePKFilter(
 			filter.Valid = true
 			filter.Op = function.PREFIX_IN
 			{
-				vec, unmarshalErr := unmarshalPKInVector(vals[0])
+				vec, unmarshalErr := vector.UnmarshalPrefixInVector(vals[0])
 				if unmarshalErr != nil {
 					return BasePKFilter{}, nil
 				}

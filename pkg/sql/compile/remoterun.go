@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1478,11 +1479,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 func convertToPlanTypes(ts []types.Type) []plan.Type {
 	result := make([]plan.Type, len(ts))
 	for i, t := range ts {
-		result[i] = plan.Type{
-			Id:    int32(t.Oid),
-			Width: t.Width,
-			Scale: t.Scale,
-		}
+		result[i] = vector.TypeToProtoType(t)
 	}
 	return result
 }
@@ -1491,7 +1488,7 @@ func convertToPlanTypes(ts []types.Type) []plan.Type {
 func convertToTypes(ts []plan.Type) []types.Type {
 	result := make([]types.Type, len(ts))
 	for i, t := range ts {
-		result[i] = types.New(types.T(t.Id), t.Width, t.Scale)
+		result[i] = vector.ProtoTypeToType(t)
 	}
 	return result
 }

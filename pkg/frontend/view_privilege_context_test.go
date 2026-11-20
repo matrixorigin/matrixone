@@ -168,7 +168,7 @@ func TestViewOnlyRequirementWithoutChainFailsClosed(t *testing.T) {
 	roles.Insert(5)
 	bh := &backgroundExecTest{}
 	bh.init()
-	ok, _, err = determineRoleSetHasPrivilegeSet(t.Context(), bh, ses, roles, priv, false)
+	ok, _, err = determineRoleSetHasPrivilegeSet(t.Context(), bh, ses, roles, priv, false, newCompoundPrivilegeChecks(priv))
 	require.Error(t, err)
 	require.False(t, ok)
 }

@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"math"
 	gotrace "runtime/trace"
 	"strings"
@@ -194,6 +196,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	// init context for pipeline.
 	c.proc.ResetQueryContext()
 	c.InitPipelineContextToExecuteQuery()
+	var runC = c
+	// Retry compiles own their caches and retire them in Release, before they
+	// return to the pool. Only the original compile remains owned by Run.
+	defer c.closeCurrentRolesExecutionCache()
 
 	// record this query to compile service.
 	if err = TryMarkQueryRunning(c, txnOperator); err != nil {
@@ -204,7 +210,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}()
 
 	// the runC is the final object for executing the query, it's not always the same as c because of retry.
-	var runC = c
 
 	var executeSQL = c.originSQL
 	if len(executeSQL) == 0 {
@@ -971,6 +976,7 @@ func (c *Compile) InitPipelineContextToExecuteQuery() {
 	contextBase.BuildQueryCtx(c.proc.GetTopContext())
 	contextBase.SaveToQueryContext(defines.EngineKey{}, c.e)
 	queryContext := contextBase.WithCounterSetToQueryContext(c.counterSet)
+	queryContext = c.installCurrentRolesExecutionCache(queryContext)
 
 	// build pipeline context.
 	currentContext := c.proc.BuildPipelineContext(queryContext)
@@ -990,6 +996,7 @@ func (c *Compile) InitPipelineContextToRetryQuery() {
 	contextBase.BuildQueryCtx(lastQueryCtx)
 	contextBase.SaveToQueryContext(defines.EngineKey{}, c.e)
 	queryContext := contextBase.WithCounterSetToQueryContext(c.counterSet)
+	queryContext = c.installCurrentRolesExecutionCache(queryContext)
 
 	// build pipeline context.
 	currentContext := c.proc.BuildPipelineContext(queryContext)
@@ -1081,5 +1088,39 @@ func resetStatsInfoPreRun(stats *statistic.StatsInfo, isInExecutor bool) {
 		stats.ResetCompilePreRunOnceDuration()
 		stats.ResetCompilePreRunOnceWaitLock()
 		stats.ResetScopePrepareDuration()
+	}
+}
+
+// installCurrentRolesExecutionCache gives each physical execution its own entry.
+func (c *Compile) installCurrentRolesExecutionCache(ctx context.Context) context.Context {
+	c.closeCurrentRolesExecutionCache()
+	found := false
+	for _, root := range c.scopes {
+		if walkScopeTree(root, func(s *Scope) bool {
+			_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+				if tf, ok := op.(*table_function.TableFunction); ok && tf.FuncName == "mo_current_roles" {
+					found = true
+				}
+				return nil
+			})
+			return found
+		}) {
+			break
+		}
+	}
+	if found {
+		c.currentRolesCache = table_function.NewCurrentRolesExecutionCache(ctx)
+	}
+	// Mask an inherited cache even if this execution has no role function.
+	if found || table_function.HasCurrentRolesExecutionCache(ctx) {
+		return table_function.WithCurrentRolesExecutionCache(ctx, c.currentRolesCache)
+	}
+	return ctx
+}
+
+func (c *Compile) closeCurrentRolesExecutionCache() {
+	if c.currentRolesCache != nil {
+		c.currentRolesCache.Close()
+		c.currentRolesCache = nil
 	}
 }

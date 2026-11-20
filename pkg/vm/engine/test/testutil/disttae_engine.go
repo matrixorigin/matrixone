@@ -131,7 +131,8 @@ func NewTestDisttaeEngine(
 	hakeeper := newTestHAKeeperClient()
 	colexec.NewServer("")
 
-	var engineOpts []disttae.EngineOptions
+	// Keep workspace invariant checks independent of test order and log level.
+	engineOpts := []disttae.EngineOptions{disttae.WithWorkspaceAccountingChecksForTest()}
 	if de.insertEntryMaxCount != 0 {
 		engineOpts = append(engineOpts, disttae.WithInsertEntryMaxCount(de.insertEntryMaxCount))
 	}

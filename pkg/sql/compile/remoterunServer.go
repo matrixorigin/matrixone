@@ -563,6 +563,17 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			return runErr
 		}
 		runCompile.InitPipelineContextToExecuteQuery()
+		// The connection may close while a shared role loader is inside catalog
+		// I/O. Pipeline cancellation alone does not cancel its query context.
+		if cache := runCompile.currentRolesCache; cache != nil {
+			stop := context.AfterFunc(receiver.connectionCtx, cache.Close)
+			defer stop()
+			// StopSending cancels the root pipeline, not the query context used
+			// by the shared loader. Capture this generation, never the pooled
+			// Compile, and leave individual child cancellation independent.
+			stopRoot := context.AfterFunc(runCompile.proc.Ctx, cache.Close)
+			defer stopRoot()
+		}
 		normalizeRemoteDispatchReceiverAddresses(s, runCompile.addr)
 
 		registrations, runErr := registerRemoteDispatchReceivers(s)

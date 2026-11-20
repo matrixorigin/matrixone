@@ -101,6 +101,18 @@ func TestRemoteDataSourceOrderedBlocks(t *testing.T) {
 		require.Nil(t, ds.orderedBlocks)
 	})
 
+	t.Run("reject_incompatible_threshold", func(t *testing.T) {
+		ds := NewRemoteDataSource(ctx, fs, timestamp.Timestamp{}, data)
+		defer ds.Close()
+		ds.SetOrderBy(order(plan.OrderBySpec_DESC, true))
+		wrong := objectio.NewZM(types.T_varchar, 0)
+		index.UpdateZM(wrong, []byte("x"))
+		ds.SetFilterZM(wrong)
+		require.False(t, ds.filterZM.IsInited())
+		ds.SetFilterZM(threshold(9))
+		require.True(t, ds.filterZM.IsInited())
+	})
+
 	t.Run("zonemaps_detached_from_metadata", func(t *testing.T) {
 		blk := data.GetBlockInfo(0)
 		location := blk.MetaLocation()
@@ -137,7 +149,8 @@ func TestRemoteDataSourceOrderedBlocks(t *testing.T) {
 	}{
 		{name: "descending_tie", flag: plan.OrderBySpec_DESC, value: 9, want: []uint16{3, 1, 2}},
 		{name: "ascending_tie", value: 8, want: []uint16{3, 0, 2}},
-		{name: "nullable_fallback", value: -1, nullable: true, want: []uint16{0, 1, 2, 3}},
+		{name: "nullable_nulls_first", value: 8, nullable: true, want: []uint16{3, 0, 2}},
+		{name: "nullable_nulls_last", flag: plan.OrderBySpec_DESC, value: 9, nullable: true, want: []uint16{3, 1, 2}},
 		{name: "unmapped_fallback", value: -1, unmapped: true, want: []uint16{0, 1, 2, 3}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -156,7 +169,7 @@ func TestRemoteDataSourceOrderedBlocks(t *testing.T) {
 				weaker = tc.value - 1
 			}
 			ds.SetFilterZM(threshold(weaker))
-			if !tc.nullable && !tc.unmapped {
+			if !tc.unmapped {
 				require.Equal(t, zm, ds.filterZM)
 			}
 			var got []uint16
@@ -268,4 +281,148 @@ func TestRemoteDataSourceOrderedBlocks(t *testing.T) {
 		require.Equal(t, engine.Persisted, state)
 		require.Equal(t, uint16(3), blk.MetaLocation().ID())
 	})
+}
+
+func TestOrderByBlockZoneMapNullsAndMetadata(t *testing.T) {
+	ctx := t.Context()
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
+	fs := testutil.NewSharedFS()
+	t.Cleanup(func() { fs.Close(ctx) })
+	writer := ioutil.ConstructWriter(0, []uint16{0}, -1, false, false, fs)
+	for _, tc := range []struct {
+		values  []int64
+		nulls   []bool
+		allNull bool
+	}{
+		{values: []int64{1, 2}},
+		{values: []int64{100, 0}, nulls: []bool{false, true}},
+		{allNull: true},
+	} {
+		bat := batch.NewWithSize(1)
+		t.Cleanup(func() { bat.Clean(mp) })
+		if tc.allNull {
+			bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 2, mp)
+			bat.SetRowCount(2)
+		} else {
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			for i, value := range tc.values {
+				isNull := len(tc.nulls) > 0 && tc.nulls[i]
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, isNull, mp))
+			}
+			bat.SetRowCount(len(tc.values))
+		}
+		_, err := writer.WriteBatch(bat)
+		require.NoError(t, err)
+	}
+	_, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	location := stats.ObjectLocation()
+	meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+	require.NoError(t, err)
+	require.Equal(t, uint16(objectio.IOET_ObjectMeta_V3), objectio.DecodeIOEntryHeader(meta).Version)
+	order := &plan.OrderBySpec{Expr: &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "k"}},
+	}}
+	require.True(t, OrderByBlockZoneMap(meta, 0, 0, order).IsInited())
+	require.False(t, OrderByBlockZoneMap(meta, 1, 0, order).IsInited(), "NULLS FIRST must retain a mixed-NULL block")
+	require.False(t, OrderByBlockZoneMap(meta, 2, 0, order).IsInited(), "const NULL must remain unknown")
+	order.Flag = plan.OrderBySpec_DESC
+	require.True(t, OrderByBlockZoneMap(meta, 1, 0, order).IsInited(), "NULLS LAST can use the non-NULL bound")
+	order.Flag = plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_FIRST
+	require.False(t, OrderByBlockZoneMap(meta, 1, 0, order).IsInited())
+	order.Flag = plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_LAST
+	require.True(t, OrderByBlockZoneMap(meta, 1, 0, order).IsInited())
+	order.Flag = plan.OrderBySpec_ASC
+	for _, version := range []uint16{objectio.IOET_ObjectMeta_V1, objectio.IOET_ObjectMeta_V2, 99} {
+		legacy := append(objectio.ObjectMeta(nil), meta...)
+		objectio.DecodeIOEntryHeader(legacy).Version = version
+		require.False(t, OrderByBlockZoneMap(legacy, 0, 0, order).IsInited(), "unknown formats must be retained")
+		headerOnly := make(objectio.ObjectMeta, objectio.IOEntryHeaderSize)
+		*objectio.DecodeIOEntryHeader(headerOnly) = objectio.IOEntryHeader{Type: objectio.IOET_ObjMeta, Version: version}
+		require.NotPanics(t, func() {
+			require.False(t, OrderByBlockZoneMap(headerOnly, 0, 0, order).IsInited())
+		}, "unknown formats must not be decoded as V3")
+	}
+	require.False(t, OrderByBlockZoneMap(meta, 0, 1, order).IsInited(), "missing column")
+	require.False(t, OrderByBlockZoneMap(meta, 99, 0, order).IsInited(), "missing block")
+	order.Expr.Typ.Id = int32(types.T_varchar)
+	require.False(t, OrderByBlockZoneMap(meta, 0, 0, order).IsInited(), "incompatible physical type")
+	zm := objectio.NewZM(types.T_int64, 0)
+	value := int64(1)
+	index.UpdateZM(zm, types.EncodeInt64(&value))
+	require.False(t, OrderByZoneMapMatches(zm, order), "incompatible threshold type")
+	decimalZM := objectio.NewZM(types.T_decimal64, 2)
+	index.UpdateZM(decimalZM, types.EncodeInt64(&value))
+	order.Expr.Typ = plan.Type{Id: int32(types.T_decimal64), Scale: 2}
+	require.True(t, OrderByZoneMapMatches(decimalZM, order))
+	order.Expr.Typ.Scale = 3
+	require.False(t, OrderByZoneMapMatches(decimalZM, order), "incompatible decimal scale")
+}
+
+func TestRemoteDataSourceTopValueRetainsMixedNullBlock(t *testing.T) {
+	ctx := t.Context()
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
+	fs := testutil.NewSharedFS()
+	t.Cleanup(func() { fs.Close(ctx) })
+	writer := ioutil.ConstructWriter(0, []uint16{0}, -1, false, false, fs)
+	for block, values := range [][]int64{{1, 2}, {100, 0}, {-10, -9}} {
+		bat := batch.NewWithSize(1)
+		t.Cleanup(func() { bat.Clean(mp) })
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		for i, value := range values {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, block == 1 && i == 1, mp))
+		}
+		bat.SetRowCount(len(values))
+		_, err := writer.WriteBatch(bat)
+		require.NoError(t, err)
+	}
+	_, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	data := NewBlockListRelationData(0)
+	for i := uint16(0); i < 3; i++ {
+		block := stats.ConstructBlockInfo(i)
+		data.AppendBlockInfo(&block)
+	}
+	for _, tc := range []struct {
+		name  string
+		flag  plan.OrderBySpec_OrderByFlag
+		bound int64
+		want  []uint16
+	}{
+		{name: "nulls_first", flag: plan.OrderBySpec_ASC, bound: 0, want: []uint16{1, 2}},
+		{name: "nulls_last", flag: plan.OrderBySpec_DESC, bound: 50, want: []uint16{1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := NewRemoteDataSource(ctx, fs, timestamp.Timestamp{}, data)
+			defer ds.Close()
+			ds.SetOrderBy([]*plan.OrderBySpec{{Expr: &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "k"}},
+			}, Flag: tc.flag}})
+			threshold := objectio.NewZM(types.T_int64, 0)
+			index.UpdateZM(threshold, types.EncodeInt64(&tc.bound))
+			ds.SetFilterZM(threshold)
+			var got []uint16
+			for {
+				blk, state, err := ds.Next(ctx, []string{"k"}, []types.Type{types.T_int64.ToType()}, []uint16{0}, -1, nil, nil, nil)
+				require.NoError(t, err)
+				if state == engine.End {
+					break
+				}
+				got = append(got, blk.MetaLocation().ID())
+			}
+			require.Equal(t, tc.want, got)
+		})
+	}
 }

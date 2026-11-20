@@ -35,6 +35,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -124,6 +125,7 @@ type TableColumn struct {
 	AutoIncrement    bool
 	ClusterBy        bool
 	EnumValues       string
+	EnumEncoding     uint32
 }
 
 type TableUniqueKey struct {
@@ -494,7 +496,11 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 	for i, col := range cols {
 		sb.WriteString("  ")
 		sb.WriteString(quoteDDLIdent(col.Name))
-		if sqlType := renderColumnSQLType(col); sqlType != "" {
+		sqlType := renderColumnSQLType(col)
+		if col.EnumEncoding != 0 && sqlType == "" {
+			return ""
+		}
+		if sqlType != "" {
 			sb.WriteString(" ")
 			sb.WriteString(sqlType)
 			if col.Unsigned && !strings.Contains(strings.ToUpper(sqlType), "UNSIGNED") {
@@ -602,6 +608,20 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 func renderColumnSQLType(col TableColumn) string {
 	sqlType := strings.TrimSpace(col.SQLType)
 	upperType := strings.ToUpper(sqlType)
+	if col.EnumEncoding != 0 {
+		if upperType != "ENUM" {
+			return ""
+		}
+		members, err := types.DecodeEnumMembers(col.EnumValues, col.EnumEncoding)
+		if err != nil {
+			return ""
+		}
+		quoted := make([]string, len(members))
+		for i, member := range members {
+			quoted[i] = sqlquote.String(member)
+		}
+		return "ENUM(" + strings.Join(quoted, ",") + ")"
+	}
 	enumValues := strings.TrimSpace(col.EnumValues)
 	if enumValues == "" {
 		return sqlType
@@ -1618,6 +1638,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 				AutoIncrement:    col.AutoIncrement,
 				ClusterBy:        col.ClusterBy,
 				EnumValues:       strings.Clone(col.EnumValues),
+				EnumEncoding:     col.EnumEncoding,
 			}
 		}
 	}
@@ -3911,6 +3932,10 @@ func buildColumnsFromMoColumnsRowsAt(
 		if typCol >= 0 && typCol < len(row) {
 			if sqlType, ok := decodeMoColumnSQLType(row[typCol]); ok {
 				col.SQLType = sqlType
+				var nativeType types.Type
+				if err := types.Decode([]byte(row[typCol]), &nativeType); err == nil && nativeType.Oid == types.T_enum {
+					col.EnumEncoding = nativeType.GetEnumEncoding()
+				}
 			} else {
 				typeDecodeFailures++
 				ckpDebugSchemaf(

@@ -17,6 +17,10 @@ package compile
 import (
 	"context"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/require"
 )
 
 type testInternalExecutorSession struct{}
@@ -52,6 +56,40 @@ func TestAttachInternalExecutorSessionWithNil(t *testing.T) {
 	if got := getInternalExecutorSession(attached); got != nil {
 		t.Fatalf("expected nil session, got %v", got)
 	}
+}
+
+func TestAttachInternalExecutorRewriteOption(t *testing.T) {
+	ctx := context.Background()
+	option := &tree.RewriteOption{}
+	attached := attachInternalExecutorRewriteOption(ctx, option)
+	require.Same(t, option, getInternalExecutorRewriteOption(attached))
+	require.Nil(t, getInternalExecutorRewriteOption(nil))
+	require.Nil(t, getInternalExecutorRewriteOption(ctx))
+	require.Nil(t, getInternalExecutorRewriteOption(attachInternalExecutorRewriteOption(ctx, nil)))
+
+	inner := &tree.Select{}
+	middle := &tree.Select{Select: &tree.ParenSelect{Select: inner}}
+	insert := &tree.Insert{Rows: &tree.Select{Select: &tree.ParenSelect{Select: middle}}}
+	attachRewriteOptionToStatement(insert, option)
+	require.Same(t, option, insert.Rows.RewriteOption)
+	require.Same(t, option, inner.RewriteOption)
+	require.Same(t, option, middle.RewriteOption)
+	attachRewriteOptionToStatement(insert, nil)
+	require.Same(t, option, insert.Rows.RewriteOption)
+	for _, stmt := range []tree.Statement{nil, (*tree.Insert)(nil), &tree.Insert{}, &tree.Select{}} {
+		attachRewriteOptionToStatement(stmt, option)
+	}
+}
+
+func TestInternalExecutorDefaultDatabase(t *testing.T) {
+	for _, database := range []string{"mapped_db", "", "mo_catalog"} {
+		exec := &txnExecutor{ctx: context.Background(), opts: executor.Options{}.WithDatabase(database)}
+		require.Equal(t, database, exec.getDatabase())
+	}
+	exec := &txnExecutor{database: "original_db", opts: executor.Options{}.WithDatabase("fallback_db")}
+	require.Equal(t, "original_db", exec.getDatabase())
+	exec.database = ""
+	require.Equal(t, "fallback_db", exec.getDatabase())
 }
 
 func TestAttachInternalExecutorPrivilegeCheck(t *testing.T) {

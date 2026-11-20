@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1128,7 +1129,7 @@ var (
 		stage_credentials,
 		stage_status,
 		created_time,
-		comment) values ('%s','%s', '%s', '%s','%s', '%s');`
+		comment) values (%s,%s, %s, %s,%s, %s);`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -1609,23 +1610,23 @@ const (
 
 	updateConfigurationByAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and variable_name = '%s';`
 
-	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = "%s" order by stage_id;`
+	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = %s order by stage_id;`
 
-	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s' order by stage_id;`
+	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = %s order by stage_id;`
 
-	updateStageUrlFormat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageUrlFormat = `update mo_catalog.mo_stages set url = %s  where stage_name = %s order by stage_id;`
 
-	updateStageCredentialsFormat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageCredentialsFormat = `update mo_catalog.mo_stages set stage_credentials = %s  where stage_name = %s order by stage_id;`
 
-	updateStageStatusFormat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageStatusFormat = `update mo_catalog.mo_stages set stage_status = %s  where stage_name = %s order by stage_id;`
 
-	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = %s  where stage_name = %s order by stage_id;`
 
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 
 	fetchSqlOfSpFormat = `select lang, body, args, sql_mode from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
 
-	getTableColumnDefFormat = `select attname, atttyp, attnum, attnotnull, att_default, att_is_auto_increment, att_is_hidden from mo_catalog.mo_columns where account_id = %d and att_database = '%s' and att_relname = '%s' order by attnum;`
+	getTableColumnDefFormat = `select attname, atttyp, attnum, attnotnull, att_default, att_is_auto_increment, att_is_hidden, attr_enum from mo_catalog.mo_columns where account_id = %d and att_database = '%s' and att_relname = '%s' order by attnum;`
 )
 
 var (
@@ -1687,12 +1688,12 @@ func getSqlForCheckTenant(ctx context.Context, tenant string) (string, error) {
 	return fmt.Sprintf(checkTenantFormat, tenant), nil
 }
 
-func getSqlForCheckStage(ctx context.Context, stage string) (string, error) {
-	err := inputNameIsInvalid(ctx, stage)
+func getSqlForCheckStage(ctx context.Context, stageName string) (string, error) {
+	err := stage.ValidateName(ctx, stageName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkStageFormat, stage), nil
+	return fmt.Sprintf(checkStageFormat, sqlquote.String(stageName)), nil
 }
 
 func getSqlForCheckUdfWithDb(dbName string) string {
@@ -1700,31 +1701,31 @@ func getSqlForCheckUdfWithDb(dbName string) string {
 }
 
 func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credentials, status, createdTime, comment string) (string, error) {
-	err := inputNameIsInvalid(ctx, stageName)
+	err := stage.ValidateName(ctx, stageName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(insertIntoMoStages, stageName, url, credentials, status, createdTime, comment), nil
+	return fmt.Sprintf(insertIntoMoStages, sqlquote.String(stageName), sqlquote.String(url), sqlquote.String(credentials), sqlquote.String(status), sqlquote.String(createdTime), sqlquote.String(comment)), nil
 }
 
 func getSqlForDropStage(stageName string) string {
-	return fmt.Sprintf(dropStageFormat, stageName)
+	return fmt.Sprintf(dropStageFormat, sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageUrl(stageName, url string) string {
-	return fmt.Sprintf(updateStageUrlFormat, url, stageName)
+	return fmt.Sprintf(updateStageUrlFormat, sqlquote.String(url), sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageCredentials(stageName, credentials string) string {
-	return fmt.Sprintf(updateStageCredentialsFormat, credentials, stageName)
+	return fmt.Sprintf(updateStageCredentialsFormat, sqlquote.String(credentials), sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageStatus(stageName, status string) string {
-	return fmt.Sprintf(updateStageStatusFormat, status, stageName)
+	return fmt.Sprintf(updateStageStatusFormat, sqlquote.String(status), sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageComment(stageName, comment string) string {
-	return fmt.Sprintf(updateStageCommentFormat, comment, stageName)
+	return fmt.Sprintf(updateStageCommentFormat, sqlquote.String(comment), sqlquote.String(stageName))
 }
 
 func getSqlForUpdateCommentsOfAccount(ctx context.Context, comment, account string) (string, error) {
@@ -3726,6 +3727,29 @@ func checkStageExistOrNot(ctx context.Context, bh BackgroundExec, stageName stri
 	return false, nil
 }
 
+// validateStageCredentials preserves the existing comma-separated catalog format.
+// Delimiters cannot be represented in keys/values; reject before any mutation.
+func validateStageCredentials(ctx context.Context, credentials tree.StageCredentials) error {
+	if !credentials.Exist {
+		return nil
+	}
+	if len(credentials.Credentials)%2 != 0 {
+		return moerr.NewInvalidInput(ctx, "stage credentials require key/value pairs")
+	}
+	seen := make(map[string]struct{}, len(credentials.Credentials)/2)
+	for i := 0; i < len(credentials.Credentials); i += 2 {
+		if strings.ContainsAny(credentials.Credentials[i], ",=") || strings.Contains(credentials.Credentials[i+1], ",") {
+			return moerr.NewInvalidInput(ctx, "stage credential delimiters are not representable")
+		}
+		key := strings.ToLower(credentials.Credentials[i])
+		if _, ok := seen[key]; ok {
+			return moerr.NewInvalidInput(ctx, "duplicate stage credential key")
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
 func formatCredentials(credentials tree.StageCredentials) string {
 	var rstr string
 	if credentials.Exist {
@@ -3746,6 +3770,9 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 	var credentials string
 	var StageStatus string
 	var comment string
+	if err = validateStageCredentials(ctx, cs.Credentials); err != nil {
+		return err
+	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3781,6 +3808,9 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 		credentials = formatCredentials(cs.Credentials)
 
 		StageStatus = "in_use"
+		if cs.Status.Exist {
+			StageStatus = cs.Status.Option.String()
+		}
 
 		if cs.Comment.Exist {
 			comment = cs.Comment.Comment
@@ -3894,6 +3924,9 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 	// var err error
 	var stageExist bool
 	var credentials string
+	if err = validateStageCredentials(ctx, as.CredentialsOption); err != nil {
+		return err
+	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3903,25 +3936,8 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 		return err
 	}
 
-	optionBits := uint8(0)
-	if as.UrlOption.Exist {
-		optionBits |= 1
-	}
-	if as.CredentialsOption.Exist {
-		optionBits |= 1 << 1
-	}
-	if as.StatusOption.Exist {
-		optionBits |= 1 << 2
-	}
-	if as.Comment.Exist {
-		optionBits |= 1 << 3
-	}
-	optionCount := bits.OnesCount8(optionBits)
-	if optionCount == 0 {
+	if !as.UrlOption.Exist && !as.CredentialsOption.Exist && !as.StatusOption.Exist && !as.Comment.Exist {
 		return moerr.NewInternalError(ctx, "at least one option at a time")
-	}
-	if optionCount > 1 {
-		return moerr.NewInternalError(ctx, "at most one option at a time")
 	}
 
 	err = bh.Exec(ctx, "begin;")
@@ -4145,6 +4161,13 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 				rtnErr = moerr.NewInternalErrorf(ctx, "there is no account %s", da.Name)
 			}
 			return
+		}
+
+		// Publication fanout holds shared locks on these same immutable IDs.
+		// Exclude new grants before inspecting or deleting any subscriptions.
+		bh.ClearExecResultSet()
+		if rtnErr = bh.Exec(ctx, fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update", accountId)); rtnErr != nil {
+			return rtnErr
 		}
 
 		// drop tables of the tenant
@@ -6497,7 +6520,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		canExecInRestricted = true
-	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase,
+	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		dbName, _, _, _ = showMetadataTarget(stmt)
+		canExecInRestricted = true
+	case *tree.ShowCreateView, *tree.ShowCreateDatabase,
 		*tree.ShowCreatePublications:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -7841,9 +7869,39 @@ func verifyViewPrivilegeForRole(
 	return false, nil
 }
 
+// newCompoundPrivilegeChecks tracks complete item checks within one authorization
+// snapshot. It neither changes the role-bound session cache nor mutates requirements
+// retained by prepared statements.
+func newCompoundPrivilegeChecks(priv *privilege) map[*compoundEntry][]bool {
+	if priv.needMatchedRole {
+		return nil
+	}
+	var checks map[*compoundEntry][]bool
+	for _, entry := range priv.entries {
+		if entry.privilegeEntryTyp != privilegeEntryTypeCompound || entry.compound == nil || len(entry.compound.items) < 2 {
+			continue
+		}
+		canCombine := true
+		for _, item := range entry.compound.items {
+			if item.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser ||
+				(item.objType != objectTypeTable && item.objType != objectTypeView) {
+				canCombine = false
+				break
+			}
+		}
+		if canCombine {
+			if checks == nil {
+				checks = make(map[*compoundEntry][]bool)
+			}
+			checks[entry.compound] = make([]bool, len(entry.compound.items))
+		}
+	}
+	return checks
+}
+
 // determineRoleSetHasPrivilegeSet decides the role set has at least one privilege of the privilege set.
 // The algorithm 2.
-func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege, enableCache bool) (bool, int64, error) {
+func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege, enableCache bool, compoundChecks map[*compoundEntry][]bool) (bool, int64, error) {
 	var err error
 	var pls []privilegeLevelType
 	var yes bool
@@ -7896,8 +7954,13 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 
 				allTrue := true
 				matchedRoleID := int64(0)
-				// multi privileges take effect together
-				for _, mi := range entry.compound.items {
+				checked := compoundChecks[entry.compound]
+				// Every item is required, but different effective roles may supply
+				// them. A view chain and its base check remain one indivisible item.
+				for itemIndex, mi := range entry.compound.items {
+					if checked != nil && checked[itemIndex] {
+						continue
+					}
 					if mi.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser {
 						yes, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, []*tree.Role{mi.role})
 						if err != nil {
@@ -8024,7 +8087,11 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					}
 					if !yes {
 						allTrue = false
-						break
+						if checked == nil {
+							break
+						}
+					} else if checked != nil {
+						checked[itemIndex] = true
 					}
 				}
 
@@ -8192,7 +8259,9 @@ func determineUserHasPrivilegeSetAtSnapshot(ctx context.Context, ses *Session, p
 
 	// Call the algorithm 2.
 	// If the result of the algorithm 2 is true, Then return true;
-	yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKthIteration, priv, enableCache)
+	// Keep partial grants across inherited-role levels, never across statements.
+	compoundChecks := newCompoundPrivilegeChecks(priv)
+	yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKthIteration, priv, enableCache, compoundChecks)
 	if err != nil {
 		return false, stats, roleID, err
 	}
@@ -8287,7 +8356,7 @@ func determineUserHasPrivilegeSetAtSnapshot(ctx context.Context, ses *Session, p
 
 		// Call the algorithm 2.
 		// If the result of the algorithm 2 is true, Then return true;
-		yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKPlusOneThIteration, priv, enableCache)
+		yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKPlusOneThIteration, priv, enableCache, compoundChecks)
 		if err != nil {
 			return false, stats, roleID, err
 		}
@@ -8611,6 +8680,16 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 		return false, stats, err
 	}
 	stats.Add(&delta)
+	objectAdmission := showMetadataObjectAdmission(stmt)
+	if objectAdmission != nil {
+		*objectAdmission = false
+	}
+	if st, yes := stmt.(*tree.ShowTables); yes {
+		st.Admission = tree.ShowTablesUnadmitted
+		if ok {
+			st.Admission = tree.ShowTablesDatabaseAdmitted
+		}
+	}
 	if ok {
 		setDDLOwnerRole(ses, stmt, roleID)
 	}
@@ -8619,6 +8698,22 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 		ok, delta, err = authenticateMultiDropTableTargets(ctx, ses, st)
 		stats.Add(&delta)
 		return ok, stats, err
+	}
+
+	// Object visibility is a fallback only after a successful database privilege check.
+	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil {
+		if _, _, _, supported := showMetadataTarget(stmt); supported {
+			allowed, delta, err := authenticateShowMetadata(ctx, ses, stmt)
+			if allowed && err == nil {
+				if st, yes := stmt.(*tree.ShowTables); yes {
+					st.Admission = tree.ShowTablesObjectAdmitted
+				} else if objectAdmission != nil {
+					*objectAdmission = true
+				}
+			}
+			stats.Add(&delta)
+			return allowed, stats, err
+		}
 	}
 
 	// double check privilege of drop table

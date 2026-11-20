@@ -137,7 +137,8 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
-	validate := func(query *Query) error {
+	var domainTypes map[int]*plan.Type
+	validate := func(query *Query, bindCtx *BindContext) error {
 		for _, node := range query.Nodes {
 			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
 				continue
@@ -151,6 +152,15 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 				tableName = node.TableDef.Name
 			}
 			return moerr.NewViewSelectTmpTable(ctx.GetContext(), tableName)
+		}
+		// ENUM/SET are projected as display strings. Preserve their exact
+		// logical provenance before optimization remaps those projections;
+		// explicit casts and other string expressions have no such provenance.
+		domainTypes = make(map[int]*plan.Type)
+		for i := range bindCtx.headings {
+			if typ := bindCtx.mysqlSpecialOrderTypeForProject(int32(i)); typ != nil {
+				domainTypes[i] = typ
+			}
 		}
 		return nil
 	}
@@ -194,6 +204,10 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 				Expr:         nil,
 				OriginString: "",
 			},
+		}
+		if typ := domainTypes[idx]; typ != nil {
+			cols[idx].Typ = *typ
+			cols[idx].Typ.NotNullable = expr.Typ.NotNullable
 		}
 	}
 	tableDef.Cols = cols
@@ -282,9 +296,9 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			}
 		case *plan.Expr_F:
 			// enum
-			if e.F.Func.ObjName == moEnumCastIndexToValueFun || e.F.Func.ObjName == moSetCastIndexToValueFun {
+			if validMySQLSpecialDisplayCall(e.F) && e.F.Args[1].GetCol() != nil {
 				// cast_index_to_value('apple,banana,orange', cast(col_name as T_uint16))
-				colRef := e.F.Args[1].Expr.(*plan.Expr_Col).Col
+				colRef := e.F.Args[1].GetCol()
 				tblName, colName := getTblAndColName(colRef.RelPos, colRef.ColPos)
 				if binding, ok := bindCtx.bindingByTable[tblName]; ok {
 					typ = binding.types[binding.colIdByName[colName]]
@@ -982,7 +996,7 @@ func buildCreateTable(
 
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
-		// current/default SQL mode, then restore the structured metadata below.
+		// ordinary SQL mode, then restore the structured metadata below.
 		_, newStmt, err := constructCreateTableSQL(
 			ctx,
 			tableDef,
@@ -1000,6 +1014,7 @@ func buildCreateTable(
 			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already
 			// exists" when T exists instead of being a no-op (issue #25119).
 			stmtLike.IfNotExists = stmt.IfNotExists
+			stmtLike.InheritedEnums = tree.InheritedEnumTypes(tableDef)
 			p, err := buildCreateTable(ctx, stmtLike, nil, isPrepareStmt)
 			if err != nil {
 				return nil, err
@@ -1374,6 +1389,25 @@ func buildCreateTable(
 	}, nil
 }
 
+func getCreateColumnType(ctx context.Context, stmt *tree.CreateTable, col *tree.ColumnTableDef) (Type, error) {
+	source, ok := stmt.InheritedEnums[strings.ToLower(col.Name.ColName())]
+	if !ok {
+		return getTypeFromAst(ctx, col.Type)
+	}
+	decl, ok := col.Type.(*tree.T)
+	if !ok || decl.InternalType.Oid != uint32(defines.MYSQL_TYPE_ENUM) {
+		return Type{}, moerr.NewInternalErrorf(ctx, "unexpected type for inherited ENUM column %q", col.Name.ColName())
+	}
+	members, err := types.DecodeEnumMembers(source.Enumvalues, source.EnumEncoding)
+	if err != nil {
+		return Type{}, err
+	}
+	if !slices.Equal(members, decl.InternalType.EnumValues) {
+		return Type{}, moerr.NewInternalErrorf(ctx, "member mismatch for inherited ENUM column %q", col.Name.ColName())
+	}
+	return Type{Id: source.Id, Enumvalues: source.Enumvalues, EnumEncoding: source.EnumEncoding}, nil
+}
+
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	// all below fields' key is lower case
 	var primaryKeys []string
@@ -1404,7 +1438,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	var isGeneratedCol []bool
 	for _, item := range stmt.Defs {
 		if def, ok := item.(*tree.ColumnTableDef); ok {
-			cType, err := getTypeFromAst(ctx.GetContext(), def.Type)
+			cType, err := getCreateColumnType(ctx.GetContext(), stmt, def)
 			if err != nil {
 				return err
 			}
@@ -1426,11 +1460,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
-			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
-			if err != nil {
-				return err
-			}
-			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
+			colType := allColDefs[genColIdx].Typ
+			var err error
+			if err := applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
 				return err
 			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
@@ -5771,11 +5803,12 @@ func validateAndSetHivePartitionOptions(ctx context.Context, proc *process.Proce
 			nullable = col.Default.NullAbility
 		}
 		colTypes = append(colTypes, tree.HivePartColType{
-			Id:          col.Typ.Id,
-			Width:       col.Typ.Width,
-			Scale:       col.Typ.Scale,
-			Enumvalues:  col.Typ.Enumvalues,
-			NullAbility: nullable,
+			Id:           col.Typ.Id,
+			Width:        col.Typ.Width,
+			Scale:        col.Typ.Scale,
+			Enumvalues:   col.Typ.Enumvalues,
+			EnumEncoding: col.Typ.EnumEncoding,
+			NullAbility:  nullable,
 		})
 	}
 

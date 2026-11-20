@@ -496,13 +496,7 @@ func NewReader(
 		return nil, err
 	}
 
-	memFilter, err := NewMemPKFilter(
-		tableDef,
-		ts,
-		packerPool,
-		baseFilter,
-		filterHint,
-	)
+	memFilter, err := newMemPKFilter(tableDef, ts, packerPool, baseFilter, filterHint, true)
 	if err != nil {
 		baseFilter.Cleanup()
 		return nil, err
@@ -699,6 +693,17 @@ func (r *reader) ReadWithFilter(
 	return isEnd, err
 }
 
+var (
+	readerFailure = logutil.Event{
+		Name:    "storage.reader.failure",
+		Message: "LOGREADER-ERROR",
+	}
+	readerCancellation = logutil.Event{
+		Name:    "storage.reader.cancellation",
+		Message: "LOGREADER-CANCELED",
+	}
+)
+
 func (r *reader) read(
 	ctx context.Context,
 	cols []string,
@@ -716,16 +721,29 @@ func (r *reader) read(
 	start := time.Now()
 	defer func() {
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
+		var readerContextErr error
+		if err != nil {
+			readerContextErr = ctx.Err()
+		}
 		if err != nil || dataState == engine.End {
 			r.Close()
 		}
 		if injected, logLevel := objectio.LogReaderInjected("", r.name); injected || err != nil {
 			if err != nil {
-				logutil.Error(
-					"LOGREADER-ERROR",
-					zap.String("name", r.name),
-					zap.Error(err),
-				)
+				fields := func() []zap.Field {
+					return []zap.Field{
+						zap.String("name", r.name),
+						zap.Error(err),
+						zap.String("error_type", fmt.Sprintf("%T", err)),
+						zap.NamedError("reader_context_error", readerContextErr),
+					}
+				}
+				if (err == context.Canceled || err == context.DeadlineExceeded) && err == readerContextErr {
+					// The scope decides whether a stopped reader failed the query.
+					readerCancellation.DebugLazy(fields)
+				} else {
+					readerFailure.ErrorLazy(fields)
+				}
 				return
 			}
 			if isEnd {

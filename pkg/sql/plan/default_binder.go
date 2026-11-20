@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -33,7 +34,49 @@ func NewDefaultBinder(sysCtx context.Context, builder *QueryBuilder, ctx *BindCo
 }
 
 func (b *DefaultBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if value, ok := astExpr.(*tree.StoredEnumValue); ok {
+		return b.bindStoredEnumValue(value)
+	}
 	return b.baseBindExpr(astExpr, depth, isRoot)
+}
+
+// A VALUES column reuses one DefaultBinder. Validate a source domain once,
+// without retaining row values or introducing a cache outside this binder.
+type storedEnumDomain struct {
+	values   string
+	encoding uint32
+	count    int
+}
+
+func (b *DefaultBinder) bindStoredEnumValue(value *tree.StoredEnumValue) (*plan.Expr, error) {
+	if b.typ.Id != int32(types.T_enum) {
+		return nil, moerr.NewInvalidInput(b.GetContext(), "stored ENUM value requires an ENUM destination")
+	}
+	domain := b.storedEnumDomain
+	if domain == nil || domain.values != value.EnumValues || domain.encoding != value.EnumEncoding {
+		members, err := types.DecodeEnumMembers(value.EnumValues, value.EnumEncoding)
+		if err != nil {
+			return nil, err
+		}
+		equal, err := types.EqualEnumMembers(value.EnumValues, value.EnumEncoding, b.typ.Enumvalues, b.typ.EnumEncoding)
+		if err != nil {
+			return nil, err
+		}
+		if !equal {
+			return nil, moerr.NewInvalidInput(b.GetContext(), "stored ENUM source and destination domains differ")
+		}
+		domain = &storedEnumDomain{values: value.EnumValues, encoding: value.EnumEncoding, count: len(members)}
+		b.storedEnumDomain = domain
+	}
+	if int(value.Ordinal) > domain.count {
+		return nil, moerr.NewInvalidInputf(b.GetContext(), "stored ENUM ordinal %d exceeds member count %d", value.Ordinal, domain.count)
+	}
+	return &plan.Expr{
+		Typ: b.typ,
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_EnumVal{EnumVal: uint32(value.Ordinal)},
+		}},
+	}, nil
 }
 
 func (b *DefaultBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {

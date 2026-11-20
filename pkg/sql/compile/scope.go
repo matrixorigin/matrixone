@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"net"
 	"slices"
@@ -33,6 +34,7 @@ import (
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -45,11 +47,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -323,6 +327,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	var p *pipeline.Pipeline
+	phase := "run_pipeline"
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
@@ -331,6 +336,10 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("error", err.Error()))
 		}
 		if p != nil {
+			// Cleanup cancels the pipeline even when the failure came from a
+			// dependency. Classify the result while its context still reflects
+			// what happened during execution.
+			err = s.finishRunError(phase, err)
 			err = cleanupScopePipeline(p, s.Proc, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
 			// scope is retained for reuse, so do not keep its closed reader
@@ -369,6 +378,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				readers, err := s.buildReaders(c)
 				stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 				if err != nil {
+					phase = "build_serial_reader"
 					return err
 				}
 
@@ -385,7 +395,83 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
-	err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+	return err
+}
+
+var scopeCancellationFailure = logutil.Event{
+	Name:    "pipeline.scope.cancellation_failure",
+	Message: "scope returned a cancellation-related error",
+}
+
+func (s *Scope) finishRunError(phase string, rawErr error) error {
+	if rawErr == nil {
+		return nil
+	}
+	proc := s.Proc
+	queryCtx := scopeRunQueryContext(proc)
+	err, normalized := normalizeScopeRunError(rawErr, proc.Ctx, queryCtx)
+	if err != nil && isScopeCancellationError(rawErr) {
+		// Observe the contexts before Cleanup cancels the pipeline. Context
+		// state at this boundary does not identify the first cancellation.
+		scopeCancellationFailure.WarnLazy(func() []zap.Field {
+			pipelineErr, pipelineCause := scopeCancellationContextState(proc.Ctx)
+			var activeQueryCtx context.Context
+			if proc.Base != nil {
+				activeQueryCtx, _ = process.GetQueryCtxFromProc(proc)
+			}
+			queryErr, queryCause := scopeCancellationContextState(activeQueryCtx)
+			fields := []zap.Field{
+				zap.String("phase", phase),
+				zap.Bool("normalized", normalized),
+				zap.NamedError("raw_error", rawErr),
+				zap.Error(err),
+				zap.NamedError("pipeline_error", pipelineErr),
+				zap.NamedError("pipeline_cause", pipelineCause),
+				zap.Bool("query_context_available", activeQueryCtx != nil),
+				zap.NamedError("query_error", queryErr),
+				zap.NamedError("query_cause", queryCause),
+			}
+			if s.NodeInfo.Addr != "" {
+				fields = append(fields, zap.String("node_addr", s.NodeInfo.Addr))
+			}
+			span := trace.SpanFromContext(proc.Ctx).SpanContext()
+			if proc.Base != nil {
+				topCtx := proc.GetTopContext()
+				topErr, topCause := scopeCancellationContextState(topCtx)
+				fields = append(fields, zap.NamedError("top_error", topErr), zap.NamedError("top_cause", topCause))
+				if span.IsEmpty() {
+					span = trace.SpanFromContext(topCtx).SpanContext()
+				}
+				if service := proc.GetService(); service != "" {
+					fields = append(fields, zap.String("service", service))
+				}
+				if queryID := proc.QueryId(); queryID != "" {
+					fields = append(fields, zap.String("query_id", queryID))
+				}
+				profile := proc.GetStmtProfile()
+				if id := profile.GetStmtId(); id != uuid.Nil {
+					fields = append(fields, logutil.StatementIdField(id.String()))
+				}
+				if id := profile.GetTxnId(); id != uuid.Nil {
+					fields = append(fields, logutil.TxnIdField(hex.EncodeToString(id[:])))
+				} else if txn := proc.GetTxnOperator(); txn != nil {
+					if id := txn.Txn().ID; len(id) != 0 {
+						fields = append(fields, logutil.TxnIdField(hex.EncodeToString(id)))
+					}
+				}
+			}
+			if !span.IsEmpty() {
+				fields = append(fields, trace.SpanField(span))
+			}
+			op := s.RootOp.GetOperatorBase()
+			fields = append(fields,
+				zap.Stringer("root_operator", s.RootOp.OpType()),
+				zap.Int32("operator_id", op.GetOperatorID()),
+				zap.Int32("parallel_id", op.GetParalleID()),
+			)
+			return fields
+		})
+	}
 	return err
 }
 
@@ -518,7 +604,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		wg.Wait()
 		err = collectMergeRunResults(
 			s.Proc,
-			newScopeRunResultForProcess(err, s.Proc),
+			scopeRunResult{err: err, classified: true},
 			preScopeResultReceiveChan,
 			notifyMessageResultReceiveChan)
 	}()
@@ -583,7 +669,7 @@ func collectMergeRunResults(
 	}
 	for len(notifyResults) > 0 {
 		result := <-notifyResults
-		current = preferPrimaryScopeResult(current, newScopeRunResultForProcess(result.err, proc))
+		current = preferPrimaryScopeResult(current, scopeRunResult{err: result.err, classified: true})
 		result.clean(proc)
 	}
 	current, _ = current.resolveCancelCause()
@@ -592,10 +678,14 @@ func collectMergeRunResults(
 
 // cancelMergeSiblingsOnError breaks the wait-for cycle between a failed
 // pipeline, its sibling goroutines, and remote receiver registration. It must
-// run before MergeRun waits for those siblings to exit.
+// run before MergeRun waits for those siblings to exit. The execution owner
+// classifies the error before cleanup, so a benign local stop arrives as nil.
 func (s *Scope) cancelMergeSiblingsOnError(err error) error {
-	if err != nil && s != nil && s.Proc != nil && s.Proc.Cancel != nil {
-		s.Proc.Cancel(err)
+	if err != nil && s != nil && s.Proc != nil {
+		table_function.CloseCurrentRolesExecutionCache(s.Proc.Ctx, err)
+		if s.Proc.Cancel != nil {
+			s.Proc.Cancel(err)
+		}
 	}
 	return err
 }
@@ -733,7 +823,11 @@ func reportParallelScopeBuildCancellation(
 	if s.RootOp != nil {
 		rootOp = s.RootOp.OpType().String()
 	}
-	process.WarnPipelineCleanupf(
+	logCleanup := process.WarnPipelineCleanupf
+	if normalized && normalizedErr == nil {
+		logCleanup = process.DebugPipelineCleanupf
+	}
+	logCleanup(
 		s.Proc,
 		key,
 		"parallel scope build cleanup classified cancellation: classification=%s phase=build_parallel_scope query_id=%s node_id=%s node_addr=%s mcpu=%d root_op=%s normalized=%t terminal=%s raw_err=%v normalized_err=%v pipeline_err=%v pipeline_cause=%v query_err=%v query_cause=%v",
@@ -1354,13 +1448,7 @@ func sendRemoteNotifyCleanupTerminal(proc *process.Process, reg *process.WaitReg
 	if process.SendPipelineSignalWithContext(signalCtx, reg, terminalSignal) {
 		return true
 	}
-	logRemoteNotifyCleanupSendFailure(
-		proc,
-		reg,
-		terminalSignal,
-		"remote_notify_cleanup_send_terminal_signal",
-		"remote notify cleanup timed out sending terminal %s signal: timeout=%s channel_len=%d channel_cap=%d err=%v",
-		err)
+	process.LogPipelineTerminalNotEnqueued(proc, "remote_notify_cleanup_send_terminal_signal", reg, terminalSignal)
 
 	if terminalSignal.EventType != process.EventEnd {
 		return false
@@ -1371,34 +1459,8 @@ func sendRemoteNotifyCleanupTerminal(proc *process.Process, reg *process.WaitReg
 	if process.SendPipelineSignalWithContext(signalCtx, reg, fallbackSignal) {
 		return false
 	}
-	logRemoteNotifyCleanupSendFailure(
-		proc,
-		reg,
-		fallbackSignal,
-		"remote_notify_cleanup_send_fallback_abort_signal",
-		"remote notify cleanup timed out sending fallback %s signal after end delivery failure: timeout=%s channel_len=%d channel_cap=%d err=%v",
-		fallbackErr)
+	process.LogPipelineTerminalNotEnqueued(proc, "remote_notify_cleanup_send_fallback_abort_signal", reg, fallbackSignal)
 	return false
-}
-
-func logRemoteNotifyCleanupSendFailure(
-	proc *process.Process,
-	reg *process.WaitRegister,
-	signal process.PipelineSignal,
-	key string,
-	format string,
-	err error,
-) {
-	chLen, chCap := process.WaitRegisterChannelState(reg)
-	process.WarnPipelineCleanupf(
-		proc,
-		key,
-		format,
-		signal.EventType.String(),
-		process.PipelineSignalSendTimeout,
-		chLen,
-		chCap,
-		err)
 }
 
 func scopeRunQueryContext(proc *process.Process) context.Context {
@@ -1716,6 +1778,14 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	if err != nil {
 		return
 	}
+	if emptyScan {
+		s.NodeInfo.Data = nil
+		readers = make([]engine.Reader, s.NodeInfo.Mcpu)
+		for i := range readers {
+			readers[i] = new(readutil.EmptyReader)
+		}
+		return
+	}
 	for i := range s.DataSource.FilterList {
 		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
 			emptyScan = true
@@ -1731,6 +1801,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if err != nil {
 			return
 		}
+	}
+
+	readerCount := s.NodeInfo.Mcpu
+	if !emptyScan {
+		readerCount = s.scanReaderCount(c)
 	}
 
 	switch {
@@ -1769,7 +1844,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.DataSource.FilterExpr,
 			s.DataSource.TableDef,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu,
+			readerCount,
 			hint)
 		if err != nil {
 			return
@@ -1808,7 +1883,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			c.proc,
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu,
+			readerCount,
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
@@ -1892,7 +1967,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			c.proc,
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu,
+			readerCount,
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
@@ -1916,15 +1991,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// just for quick GC.
 	s.NodeInfo.Data = nil
 
-	//for partition table.
-	if len(readers) != s.NodeInfo.Mcpu {
-		newReaders := make([]engine.Reader, 0, s.NodeInfo.Mcpu)
-		step := len(readers) / s.NodeInfo.Mcpu
-		for i := 0; i < len(readers); i += step {
-			newReaders = append(newReaders, readutil.NewMergeReader(readers[i:i+step]))
-		}
-		readers = newReaders
+	readers = groupScanReaders(readers, readerCount)
+	for len(readers) < s.NodeInfo.Mcpu {
+		readers = append(readers, new(readutil.EmptyReader))
 	}
+
 	if !emptyScan && s.DataSource.markGuard != nil {
 		s.applyMarkScanGuard(c)
 	}
@@ -1943,4 +2014,54 @@ func cleanupScopePipeline(p *pipeline.Pipeline, proc *process.Process, isPrepare
 		proc.Error(proc.Ctx, "panic during pipeline cleanup", zap.Error(cleanupErr))
 	}
 	return err
+}
+
+// scanReaderCount applies the existing scheduling grain after static and runtime
+// filters have selected the actual blocks. Worker topology and EOF counts stay
+// fixed; unused workers receive EmptyReaders. Shuffle operators retain the
+// original bucket owners independently of which reader produces their input.
+func (s *Scope) scanReaderCount(c *Compile) int {
+	n := s.NodeInfo.Mcpu
+	if n <= 1 || uint64(n) > uint64(^uint32(0)>>1) || c == nil || c.pn == nil ||
+		s.DataSource == nil || s.DataSource.node == nil || s.DataSource.node.Stats == nil ||
+		s.DataSource.IndexReaderParam != nil {
+		return n
+	}
+	// Other relation data can encode shuffle buckets rather than plain blocks.
+	data, ok := s.NodeInfo.Data.(*readutil.BlockListRelData)
+	if !ok || data.DataCnt() <= 0 || uint64(data.DataCnt()) > uint64(^uint32(0)>>1) {
+		return n
+	}
+	stats := *s.DataSource.node.Stats
+	stats.BlockNum = int32(data.DataCnt())
+	return int(plan2.CalcScanDOP(int32(n), &stats, c.pn.IsPrepare))
+}
+
+// groupScanReaders transfers every backend reader to exactly one worker. Some
+// backends return one reader for an empty scan; partitions can return multiples
+// of the requested count. Balanced contiguous groups handle both forms without
+// dropping readers or changing the order of a partition's existing groups.
+func groupScanReaders(readers []engine.Reader, n int) []engine.Reader {
+	if len(readers) <= n {
+		for len(readers) < n {
+			readers = append(readers, new(readutil.EmptyReader))
+		}
+		return readers
+	}
+	groups := make([]engine.Reader, 0, n)
+	size, extra := len(readers)/n, len(readers)%n
+	start := 0
+	for i := 0; i < n; i++ {
+		end := start + size
+		if i < extra {
+			end++
+		}
+		if end-start == 1 {
+			groups = append(groups, readers[start])
+		} else {
+			groups = append(groups, readutil.NewMergeReader(readers[start:end]))
+		}
+		start = end
+	}
+	return groups
 }

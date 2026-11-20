@@ -1,0 +1,130 @@
+drop database if exists issue_32460;
+create database issue_32460;
+use issue_32460;
+create table event_index_repro (
+id bigint primary key,
+user_id varchar(128) not null,
+run_id varchar(128) not null,
+event_type varchar(32) not null,
+event_idx bigint not null,
+index idx_control (user_id, run_id, event_type, event_idx)
+);
+explain
+select r.ordinal, max(e.event_idx)
+from (values row(0, 'owner_a', 'run_a', 1, 10),
+row(1, 'owner_b', 'run_b', 2, 10)) r(ordinal, uid, rid, lo, hi)
+join event_index_repro e force index (idx_control)
+on e.user_id = r.uid and e.run_id = r.rid
+and e.event_type = 'user_intent'
+and e.event_idx > r.lo and e.event_idx <= r.hi
+where e.run_id in ('run_a', 'run_b')
+group by r.ordinal;
+-- @regex("Index Table Scan.*idx_control", true)
+-- @regex("Runtime Filter Probe: __mo_index_idx_col Match Prefix", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Group Key: _valuescan.column_0  𝄀
+        Aggregate Functions: max(e.event_idx)  𝄀
+        ->  Filter  𝄀
+              Filter Cond: (e.event_idx > _valuescan.column_3), (e.event_idx <= _valuescan.column_4)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (e.user_id = _valuescan.column_1), (e.run_id = _valuescan.column_2)  𝄀
+                    Runtime Filter Build: serial_full(#[-1,0], #[-1,1])  𝄀
+                    ->  Join  𝄀
+                          Join Type: INDEX  𝄀
+                          Join Cond: (e.id = __mo_index_pri_col)  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on issue_32460.event_index_repro [ForceOneCN]  𝄀
+                                Filter Cond: e.run_id in ([run_a run_b]), (e.event_type = 'user_intent')  𝄀
+                                Block Filter Cond: (e.event_type = 'user_intent')  𝄀
+                                Runtime Filter Probe: e.id  𝄀
+                          ->  Index Table Scan on event_index_repro.idx_control [ForceOneCN]  𝄀
+                                Runtime Filter Probe: __mo_index_idx_col Match Prefix  𝄀
+                    ->  Filter  𝄀
+                          Filter Cond: _valuescan.column_2 in ([run_a run_b])  𝄀
+                          ->  Values Scan "*VALUES*" 
+explain
+select max(event_idx) from event_index_repro force index (idx_control)
+where user_id = 'owner_a' and run_id = 'run_a'
+and event_type = 'user_intent' and event_idx > 1 and event_idx <= 10;
+-- @regex("Index Table Scan.*idx_control", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: max(serial_extract(__mo_index_idx_col, 3, BIGINT)))  𝄀
+        ->  Index Table Scan on event_index_repro.idx_control  𝄀
+              Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = 'owner_a'), (serial_extract(__mo_index_idx_col, 1, VARCHAR)) = 'run_a'), (serial_extract(__mo_index_idx_col, 2, VARCHAR)) = 'user_intent'), (serial_extract(__mo_index_idx_col, 3, BIGINT)) > 1), (serial_extract(__mo_index_idx_col, 3, BIGINT)) <= 10)  𝄀
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
+insert into event_index_repro values
+(1, 'owner_a', 'run_a', 'user_intent', 1),
+(2, 'owner_a', 'run_a', 'user_intent', 2),
+(3, 'owner_a', 'run_a', 'user_intent', 10),
+(4, 'owner_a', 'run_a', 'user_intent', 11),
+(5, 'owner_a', 'run_a', 'other', 99),
+(6, 'owner_b', 'run_b', 'user_intent', 2),
+(7, 'owner_b', 'run_b', 'user_intent', 3),
+(8, 'owner_b', 'run_b', 'user_intent', 10),
+(9, 'owner_b', 'run_b', 'user_intent', 11),
+(10, 'owner_b', 'run_b', 'other', 99),
+(11, 'owner_c', 'run_c', 'user_intent', 7),
+(12, 'owner_a', 'run_b', 'user_intent', 99);
+select r.ordinal, max(e.event_idx) as max_event_idx
+from (values row(0, 'owner_a', 'run_a', 1, 10),
+row(1, 'owner_b', 'run_b', 2, 10),
+row(2, 'owner_a', 'run_a', 0, 2),
+row(3, 'owner_z', 'run_a', 0, 10),
+row(4, cast(null as varchar(128)), 'run_a', 0, 10)) r(ordinal, uid, rid, lo, hi)
+join event_index_repro e force index (idx_control)
+on e.user_id = r.uid and e.run_id = r.rid
+and e.event_type = 'user_intent'
+and e.event_idx > r.lo and e.event_idx <= r.hi
+where e.run_id in ('run_a', 'run_b')
+group by r.ordinal
+order by r.ordinal;
+➤ ordinal[-5,64,0]  ¦  max_event_idx[-5,64,0]  𝄀
+0  ¦  10  𝄀
+1  ¦  10  𝄀
+2  ¦  2
+select 0 as ordinal, max(e.event_idx) as max_event_idx
+from event_index_repro e force index (idx_control)
+where e.user_id = 'owner_a' and e.run_id = 'run_a'
+and e.event_type = 'user_intent' and e.event_idx > 1 and e.event_idx <= 10
+union all
+select 1, max(e.event_idx)
+from event_index_repro e force index (idx_control)
+where e.user_id = 'owner_b' and e.run_id = 'run_b'
+and e.event_type = 'user_intent' and e.event_idx > 2 and e.event_idx <= 10
+order by ordinal;
+➤ ordinal[-5,64,0]  ¦  max_event_idx[-5,64,0]  𝄀
+0  ¦  10  𝄀
+1  ¦  10
+explain
+select r.ordinal, max(e.event_idx)
+from (values row(0, 'owner_a', 'run_a', 1, 10),
+row(1, 'owner_b', 'run_b', 2, 10)) r(ordinal, uid, rid, lo, hi)
+join event_index_repro e ignore index (idx_control)
+on e.user_id = r.uid and e.run_id = r.rid
+and e.event_type = 'user_intent'
+and e.event_idx > r.lo and e.event_idx <= r.hi
+where e.run_id in ('run_a', 'run_b')
+group by r.ordinal;
+-- @regex("Index Table Scan.*idx_control", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Group Key: _valuescan.column_0  𝄀
+        Aggregate Functions: max(e.event_idx)  𝄀
+        ->  Filter  𝄀
+              Filter Cond: (e.event_idx > _valuescan.column_3), (e.event_idx <= _valuescan.column_4)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (e.user_id = _valuescan.column_1), (e.run_id = _valuescan.column_2)  𝄀
+                    ->  Table Scan on issue_32460.event_index_repro  𝄀
+                          Filter Cond: e.run_id in ([run_a run_b]), (e.event_type = 'user_intent')  𝄀
+                          Block Filter Cond: (e.event_type = 'user_intent')  𝄀
+                    ->  Filter  𝄀
+                          Filter Cond: _valuescan.column_2 in ([run_a run_b])  𝄀
+                          ->  Values Scan "*VALUES*" 
+drop database issue_32460;

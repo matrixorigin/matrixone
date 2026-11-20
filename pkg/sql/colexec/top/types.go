@@ -191,9 +191,7 @@ func (ctr *container) free(proc *process.Process) {
 
 func (ctr *container) cleanupSpill() {
 	if ctr.spillFile != nil {
-		name := ctr.spillFile.Name()
 		ctr.spillFile.Close()
-		os.Remove(name)
 		ctr.spillFile = nil
 	}
 	ctr.spillIndex = nil

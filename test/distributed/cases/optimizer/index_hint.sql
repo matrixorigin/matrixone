@@ -318,4 +318,83 @@ insert into logical_cluster values(1,1,100),(1,2,200),(2,1,300);
 select payload from logical_cluster where a=1 and b=2;
 select x.payload from logical_cluster x join primary_access y on x.a=y.a and x.b=y.b where y.a=1 order by x.payload;
 
+-- Composite unique-index lookup with a bounded trailing key set. The
+-- session_id and payload predicates must remain as base-table filters.
+create table keyset_access (
+  id int primary key,
+  user_id varchar(16) not null,
+  run_id varchar(16) not null,
+  idempotency_key varchar(64),
+  session_id int not null,
+  payload int,
+  unique key uq_user_run_key(user_id,run_id,idempotency_key)
+);
+insert into keyset_access values
+(1,'u1','r1','first',1,10),
+(2,'u1','r1','second',1,20),
+(3,'u1','r1','other',1,5),
+(4,'u1','r1','third',2,15),
+(5,'u1','r2','first',1,50),
+(6,'u2','r1','first',1,60);
+-- @separator:table
+-- @regex("Index Table Scan.*uq_user_run_key",true)
+-- @regex("__mo_index_idx_col in",true)
+explain select id,payload from keyset_access
+where user_id='u1' and run_id='r1'
+  and idempotency_key in ('first','second','third')
+  and session_id=1 and payload<30;
+select id,payload from keyset_access ignore index(uq_user_run_key)
+where user_id='u1' and run_id='r1'
+  and idempotency_key in ('first','second','third')
+  and session_id=1 and payload<30 order by id;
+select id,payload from keyset_access
+where user_id='u1' and run_id='r1'
+  and idempotency_key in ('first','second','third')
+  and session_id=1 and payload<30 order by id;
+
+-- A three-column index also supports IN in the middle key position.
+select id,payload from keyset_access ignore index(uq_user_run_key)
+where user_id='u1' and run_id in ('r1','r2') and idempotency_key='first' order by id;
+select id,payload from keyset_access force index(uq_user_run_key)
+where user_id='u1' and run_id in ('r1','r2') and idempotency_key='first' order by id;
+
+-- Dynamic equality must fall back safely when tuples cannot be folded at plan time.
+prepare keyset_param from 'select id,payload from keyset_access force index(uq_user_run_key) where user_id=cast(? as varchar(16)) and run_id=''r1'' and idempotency_key in (''first'',''second'') order by id';
+set @keyset_user='u1';
+execute keyset_param using @keyset_user;
+set @keyset_user='u2';
+execute keyset_param using @keyset_user;
+set @keyset_user=null;
+execute keyset_param using @keyset_user;
+deallocate prepare keyset_param;
+
+-- Full equality values must not be probed against truncated index components.
+create table keyset_prefix (
+  id int primary key, a int, b varchar(20), payload int,
+  key ix_tail(a,b(4)), key ix_head(b(4),a)
+);
+insert into keyset_prefix values
+  (1,1,'abcdef',10),(2,1,'abcdxy',20),(3,1,'wxyz12',30),(4,2,'abcdef',40);
+select id,payload from keyset_prefix ignore index(ix_tail,ix_head)
+where a=1 and b in ('abcdef','wxyz12') order by id;
+select id,payload from keyset_prefix force index(ix_tail)
+where a=1 and b in ('abcdef','wxyz12') order by id;
+select id,payload from keyset_prefix ignore index(ix_tail,ix_head)
+where b='abcdef' and a in (1,2) order by id;
+select id,payload from keyset_prefix force index(ix_head)
+where b='abcdef' and a in (1,2) order by id;
+select id,payload from keyset_prefix force index(ix_head)
+where b in ('abcdef','wxyz12') and a=1 order by id;
+
+-- A nonunique key set must retain every row for a duplicated key.
+create table keyset_duplicates (
+  id int primary key, a int, b varchar(20), payload int, key ix_ab(a,b)
+);
+insert into keyset_duplicates values
+  (1,1,'alpha',10),(2,1,'alpha',20),(3,1,'beta',30),(4,2,'alpha',40);
+select id,payload from keyset_duplicates ignore index(ix_ab)
+where a=1 and b in ('alpha','beta') order by id;
+select id,payload from keyset_duplicates force index(ix_ab)
+where a=1 and b in ('alpha','beta') order by id;
+
 drop database mysql_compat_index_hint;

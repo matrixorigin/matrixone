@@ -242,7 +242,7 @@ func (des *ObjectStats) BlkCnt() uint32 {
 }
 
 func (des *ObjectStats) SortKeyZoneMap() ZoneMap {
-	return ZoneMap(des[zoneMapOffset : zoneMapOffset+zoneMapLen])
+	return persistedZoneMapView(ZoneMap(des[zoneMapOffset : zoneMapOffset+zoneMapLen]))
 }
 
 func (des *ObjectStats) Extent() Extent {

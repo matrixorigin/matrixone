@@ -1123,6 +1123,49 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 	)
 }
 
+func TestRemoteBindRefreshHonorsBackendRetryBudget(t *testing.T) {
+	client := &blockingBindRefreshClient{bindRefreshStarted: make(chan struct{}, 1)}
+	remote := newRemoteLockTable("s1", time.Second,
+		pb.LockTable{ServiceID: "s2", Table: 1, OriginTable: 1, Valid: true},
+		client, func(pb.LockTable) {}, getLogger(""))
+	parent, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ctx := morpc.WithBackendWaitDeadline(parent, time.Now().Add(50*time.Millisecond))
+	backendErr := moerr.NewBackendCannotConnectNoCtx("retryable")
+	start := time.Now()
+	err := remote.handleErrorWithContext(ctx, backendErr, true)
+	require.ErrorIs(t, err, backendErr)
+	require.Less(t, time.Since(start), 500*time.Millisecond)
+	require.NoError(t, parent.Err())
+}
+
+func TestRemoteBindRefreshDoesNotStartAfterBackendBudgetExpires(t *testing.T) {
+	client := &blockingBindRefreshClient{bindRefreshStarted: make(chan struct{}, 1)}
+	remote := newRemoteLockTable("s1", time.Second,
+		pb.LockTable{ServiceID: "s2", Table: 1, OriginTable: 1, Valid: true},
+		client, func(pb.LockTable) {}, getLogger(""))
+	ctx := morpc.WithBackendWaitDeadline(context.Background(), time.Now().Add(-time.Second))
+	backendErr := moerr.NewBackendCannotConnectNoCtx("retryable")
+	require.ErrorIs(t, remote.handleErrorWithContext(ctx, backendErr, true), backendErr)
+	select {
+	case <-client.bindRefreshStarted:
+		t.Fatal("started allocator lookup after the retry budget expired")
+	default:
+	}
+}
+
+func TestRemoteBindRefreshPreservesEarlierCallerDeadline(t *testing.T) {
+	client := &blockingBindRefreshClient{bindRefreshStarted: make(chan struct{}, 1)}
+	remote := newRemoteLockTable("s1", time.Second,
+		pb.LockTable{ServiceID: "s2", Table: 1, OriginTable: 1, Valid: true},
+		client, func(pb.LockTable) {}, getLogger(""))
+	parent, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	ctx := morpc.WithBackendWaitDeadline(parent, time.Now().Add(time.Second))
+	err := remote.handleErrorWithContext(ctx, moerr.NewBackendCannotConnectNoCtx("retryable"), true)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
 func TestRemoteBindRefreshRejectsSupersededAllocatorBind(t *testing.T) {
 	runRPCTests(
 		t,

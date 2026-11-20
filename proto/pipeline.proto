@@ -685,6 +685,15 @@ message QuerySchedulingIntent {
   string algorithm_version = 9;
 }
 
+message CurrentRoleContext {
+  uint32 mode = 1;
+  uint32 account_id = 2;
+  uint32 user_id = 3;
+  uint32 primary_role_id = 4;
+  string account_name = 5;
+  string user_name = 6;
+}
+
 message SessionInfo {
   string user = 1;
   string host = 2;
@@ -704,6 +713,7 @@ message SessionInfo {
   // processes must retain it so child queries cannot escape the parent pool.
   map<string, string> cn_labels = 15;
   QuerySchedulingIntent query_scheduling_intent = 16;
+  CurrentRoleContext current_role_context = 17;
 }
 
 message SessionLoggerInfo {

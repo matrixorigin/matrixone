@@ -19,7 +19,9 @@ import (
 	"container/heap"
 	"fmt"
 	"io"
-	"os"
+	"slices"
+
+	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compare"
@@ -330,7 +332,11 @@ func (ctr *container) spillBatch(bat *batch.Batch, proc *process.Process, analyz
 	}
 
 	if ctr.spillFile == nil {
-		f, err := os.CreateTemp("", "mo-top-spill-*")
+		spillFS, err := proc.GetSpillFileService()
+		if err != nil {
+			return err
+		}
+		f, err := spillFS.CreateAndRemoveFile(proc.Ctx, fmt.Sprintf("top_%s", uuid.NewString()))
 		if err != nil {
 			return err
 		}
@@ -456,18 +462,25 @@ func (ctr *container) eval(limit uint64, n int, proc *process.Process, result *v
 }
 
 func (ctr *container) evalInMemory(limit uint64, n int, proc *process.Process, result *vm.CallResult) error {
-	if uint64(len(ctr.sels)) < limit {
-		ctr.sort()
-	}
+	// Selection is complete. Sort the row offsets directly instead of
+	// rebuilding/draining a heap and boxing every result through interface{}.
 	for i, cmp := range ctr.cmps {
+		if uint64(len(ctr.sels)) < limit {
+			cmp.Set(0, ctr.bat.Vecs[i])
+		}
 		ctr.bat.Vecs[i] = cmp.Vector()
 	}
-	sels := make([]int64, len(ctr.sels))
-	for i, j := 0, len(ctr.sels); i < j; i++ {
-		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
-	}
-	if err := ctr.bat.Shuffle(sels, proc.Mp()); err != nil {
-		return err
+	slices.SortFunc(ctr.sels, func(a, b int64) int {
+		return ctr.compare(0, 0, a, b)
+	})
+	sels := ctr.sels
+	ctr.sels = ctr.sels[:0]
+	// Retained slots are a permutation of [0,n). If already ordered,
+	// the owning batch needs no data copy.
+	if !slices.IsSorted(sels) {
+		if err := ctr.bat.Shuffle(sels, proc.Mp()); err != nil {
+			return err
+		}
 	}
 	for i := n; i < len(ctr.bat.Vecs); i++ {
 		ctr.bat.Vecs[i].Free(proc.Mp())
@@ -643,6 +656,10 @@ func (top *Top) getTopValue() ([]byte, bool) {
 		vec = ctr.cmps[0].Vector()
 	} else {
 		vec = ctr.cmps[ctr.poses[0]].Vector()
+	}
+	// NULL cannot be encoded as a zonemap threshold.
+	if vec.IsNull(uint64(x)) {
+		return nil, false
 	}
 	if vec.GetType().IsVarlen() {
 		return vec.GetBytesAt(x), true
