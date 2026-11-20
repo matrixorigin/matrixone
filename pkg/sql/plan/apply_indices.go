@@ -1640,7 +1640,7 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 	}
 	builder.addNameByColRef(idxTag, idxTableDef)
 
-	idxNodeID := builder.appendNode(&plan.Node{
+	idxNode := &plan.Node{
 		NodeType:     plan.Node_TABLE_SCAN,
 		TableDef:     idxTableDef,
 		ObjRef:       idxObjRef,
@@ -1654,7 +1654,9 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 		ScanSnapshot: node.ScanSnapshot,
 		OriginViews:  append([]string(nil), node.OriginViews...),
 		DirectView:   node.DirectView,
-	}, builder.ctxByNode[node.NodeId])
+	}
+	builder.tightenHintedCoveringRange(idxDef, node, idxNode, colMap)
+	idxNodeID := builder.appendNode(idxNode, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxNodeID, node.NodeId)
 	return idxNodeID, nil
 }
@@ -2605,21 +2607,33 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 		}
 		idxTableNode.FilterList = append(idxTableNode.FilterList, replaceColumnsForExpr(DeepCopyExpr(filter), colMap))
 	}
+	builder.installSecondaryIndexPrefixRanges(idxDef, node, idxTableNode, filterIdx, colMap)
+}
+
+func (builder *QueryBuilder) installSecondaryIndexPrefixRanges(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32, colMap map[[2]int32]*plan.Expr) bool {
 	if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
-		return
+		return false
 	}
 	bounds := builder.secondaryIndexPrefixRanges(idxDef, node, idxTableNode, filterIdx, colMap)
 	if len(bounds) == 0 || !ExprIsZonemappable(builder.GetContext(), bounds[0]) {
-		return
+		return false
 	}
-	// Every bound includes the original equality prefix. Use the first
-	// one as the lookup, while retaining SQL residuals on both scans.
-	idxTableNode.FilterList[0] = bounds[0]
+	lookup := bounds[0]
+	if indexRangeFiltersAreTotal(node) {
+		if combined := builder.combineIndexPrefixBounds(idxTableNode.FilterList[0], bounds); combined != nil && ExprIsZonemappable(builder.GetContext(), combined) {
+			lookup = combined
+		}
+	}
+	// Every bound includes the original equality prefix. Retain SQL residuals
+	// on both scans while using the combined lookup when available.
+	idxTableNode.FilterList[0] = lookup
+	appendUniqueBlockFilter(idxTableNode, lookup, true)
 	for _, bound := range bounds {
 		if ExprIsZonemappable(builder.GetContext(), bound) {
 			appendUniqueBlockFilter(idxTableNode, bound, true)
 		}
 	}
+	return true
 }
 
 func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []int32 {
@@ -3109,7 +3123,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		}
 	}
 	for _, idx := range missFilterIdx {
-		newFilterList = append(newFilterList, replaceColumnsForExpr(node.FilterList[idx], idxColMap))
+		newFilterList = append(newFilterList, replaceColumnsForExpr(DeepCopyExpr(node.FilterList[idx]), idxColMap))
 	}
 
 	// recod index table scan info
@@ -3122,7 +3136,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		IndexTableName: idxDef.IndexTableName,
 	}
 
-	idxTableNodeID := builder.appendNode(&plan.Node{
+	idxTableNode := &plan.Node{
 		NodeType:      plan.Node_TABLE_SCAN,
 		TableDef:      idxTableDef,
 		IndexScanInfo: idxScanInfo,
@@ -3133,7 +3147,11 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		Offset:        node.Offset,
 		BindingTags:   []int32{idxTag},
 		ScanSnapshot:  node.ScanSnapshot,
-	}, builder.ctxByNode[node.NodeId])
+	}
+	if leadingEqualCond && indexRangeFiltersAreTotal(node) {
+		builder.installSecondaryIndexPrefixRanges(idxDef, node, idxTableNode, leadingPos, colMap)
+	}
+	idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxTableNodeID, node.NodeId)
 
 	return idxTableNodeID
