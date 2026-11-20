@@ -1369,7 +1369,7 @@ func rewriteRuleShapeForPrecedence(ctx context.Context, rule, sqlMode string, al
 	defer stmt.Free()
 	switch stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
-		shape, _ := rewriteRuleMergeShapeForStatement(stmt, sqlMode)
+		shape, _ := rewriteRuleMergeShapeForStatement(stmt)
 		if shape == nil {
 			return nil, true
 		}
@@ -1393,25 +1393,25 @@ func rewriteRuleMergeShapeForRule(ctx context.Context, rule, sqlMode string) (*r
 	if err != nil {
 		return nil, false, moerr.NewInternalErrorf(ctx, "failed to parse rewrite rule %q while merging rewrite rules: %v", rule, err)
 	}
-	shape, ok := rewriteRuleMergeShapeForStatement(stmt, sqlMode)
+	shape, ok := rewriteRuleMergeShapeForStatement(stmt)
 	return shape, ok, nil
 }
 
-func rewriteRuleMergeShapeForStatement(stmt tree.Statement, sqlMode string) (*rewriteRuleMergeShape, bool) {
+func rewriteRuleMergeShapeForStatement(stmt tree.Statement) (*rewriteRuleMergeShape, bool) {
 	switch s := stmt.(type) {
 	case *tree.Select:
-		return rewriteRuleMergeShapeForSelect(s, sqlMode)
+		return rewriteRuleMergeShapeForSelect(s)
 	case *tree.ParenSelect:
 		if s.Select == nil {
 			return nil, false
 		}
-		return rewriteRuleMergeShapeForStatement(s.Select, sqlMode)
+		return rewriteRuleMergeShapeForStatement(s.Select)
 	default:
 		return nil, false
 	}
 }
 
-func rewriteRuleMergeShapeForSelect(stmt *tree.Select, sqlMode string) (*rewriteRuleMergeShape, bool) {
+func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, bool) {
 	if stmt == nil || len(stmt.OrderBy) > 0 || stmt.Limit != nil || stmt.With != nil ||
 		stmt.TimeWindow != nil || stmt.RankOption != nil || stmt.Ep != nil || stmt.SelectLockInfo != nil {
 		return nil, false
@@ -1430,7 +1430,7 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select, sqlMode string) (*rewrite
 	return &rewriteRuleMergeShape{
 		stmt:       stmt,
 		clause:     clause,
-		selectList: rewriteProjectionKey(clause.Exprs, sqlMode),
+		selectList: rewriteProjectionKey(clause.Exprs),
 		table:      table,
 		unfiltered: clause.Where == nil || clause.Where.Expr == nil,
 	}, true
@@ -1438,9 +1438,11 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select, sqlMode string) (*rewrite
 
 // Fold SQL and identifier case, but never the contents of a string literal.
 // Quote identifiers as well: the column `1` and the integer 1 are distinct.
-func rewriteProjectionKey(exprs tree.SelectExprs, sqlMode string) string {
+func rewriteProjectionKey(exprs tree.SelectExprs) string {
 	var literals []tree.StringLiteralPosition
-	opts := append(rewriteRuleFormatOptions(sqlMode), tree.WithStringLiteralPositions(&literals))
+	// Use one escape convention for decoded AST values, regardless of the
+	// mode in which each rule was parsed. This key is never executed as SQL.
+	opts := append(rewriteRuleFormatOptions(""), tree.WithStringLiteralPositions(&literals))
 	sql := tree.StringWithOpts(&exprs, dialect.MYSQL, opts...)
 	if len(literals) == 0 {
 		return strings.ToLower(sql)

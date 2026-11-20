@@ -752,6 +752,9 @@ func TestMergeRewriteRulesUnfilteredEarlierRule(t *testing.T) {
 		wantErr           bool
 	}{
 		{"compatible", unfiltered, unfiltered + predicate, false},
+		{"enum backslash", "select cast(1 as enum(_utf8mb4 X'615c62','z')) as label from db1.t1", "select cast(1 as enum(_utf8mb4 X'615c62','z')) as label from db1.t1" + predicate, false},
+		{"enum tab", "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t1", "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t1" + predicate, false},
+		{"different enum bytes", "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t1", "select cast(1 as enum(_utf8mb4 X'615c7462','z')) as label from db1.t1" + predicate, true},
 		{"different projection", unfiltered, "select a as n from db1.t1" + predicate, true},
 		{"different source", unfiltered, "select a from db1.t2" + predicate, true},
 		{"ineligible later rule", unfiltered, unfiltered + predicate + " order by a", true},
@@ -765,7 +768,7 @@ func TestMergeRewriteRulesUnfilteredEarlierRule(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, unfiltered, got)
+			require.Equal(t, tc.left, got)
 		})
 	}
 }
