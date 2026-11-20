@@ -176,6 +176,7 @@ type expressionExecutorBuildContext struct {
 	memos          map[int32]*memoExpressionState
 	states         []*memoExpressionState
 	joinActivation *[]ExpressionExecutor
+	jsonBindings   map[*plan.Function]*jsonProjectionBinding
 }
 
 type temporalDiagnosticMode uint8
@@ -285,13 +286,23 @@ func newExpressionExecutorsWithScope(
 	planExprs []*plan.Expr,
 	selection *vector.AllocationAccountSelection,
 	scope expressionDiagnosticScope,
+) ([]ExpressionExecutor, error) {
+	return newExpressionExecutorsWithBindings(proc, planExprs, selection, scope, nil)
+}
+
+func newExpressionExecutorsWithBindings(
+	proc *process.Process,
+	planExprs []*plan.Expr,
+	selection *vector.AllocationAccountSelection,
+	scope expressionDiagnosticScope,
+	bindings map[*plan.Function]*jsonProjectionBinding,
 ) (executors []ExpressionExecutor, err error) {
 	if err := plan.RequireLegacyCollations(planExprs); err != nil {
 		return nil, err
 	}
 	executors = make([]ExpressionExecutor, len(planExprs))
 	for i := range executors {
-		buildCtx := &expressionExecutorBuildContext{}
+		buildCtx := &expressionExecutorBuildContext{jsonBindings: bindings}
 		executors[i], err = newExpressionExecutorWithAllocation(proc, planExprs[i], selection, buildCtx, scope)
 		if err != nil {
 			for j := 0; j < i; j++ {
@@ -509,6 +520,7 @@ func newExpressionExecutorWithAllocation(
 		{
 			// init function information for evaluation.
 			executor.overloadID = overloadID
+			executor.jsonProjection = buildCtx.jsonBindings[t.F]
 			executor.dictionaryInput = overload.DictionaryInputCapability()
 			// Dynamic casts retain row-level diagnostics. Only the designated
 			// coordinator filter may fold a literal cast once per execution.
@@ -704,6 +716,7 @@ type FunctionExpressionExecutor struct {
 	parameterResults         []*vector.Vector
 	parameterExecutor        []ExpressionExecutor
 	dictionaryState          *functionDictionaryState
+	jsonProjection           *jsonProjectionBinding
 	flowControlKinds         []vector.PrepareParamKind
 	flowControlStringDomains []types.RuntimeStringDomain
 	flowControlStringSources []types.StringSource
@@ -1776,6 +1789,11 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 ) (*vector.Vector, error) {
 	expr.selectedRows = expr.selectedRows[:0]
 	for row := 0; row < rowCount; row++ {
+		if expr.fid == function.JSON_EXTRACT {
+			if err := function.CheckJSONExtractRow(proc.Ctx, row); err != nil {
+				return nil, err
+			}
+		}
 		if selectList[row] {
 			expr.selectedRows = append(expr.selectedRows, int64(row))
 		}
@@ -1951,7 +1969,21 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		batches = []*batch.Batch{batch.EmptyForConstFoldBatch}
 	}
 	rowCount := expressionRowCount(batches)
-	if !expr.folded.canFold && noRowsSelected(selectList, rowCount) {
+	selectedCount := -1
+	if expr.fid == function.JSON_EXTRACT && selectList != nil && !expr.folded.canFold {
+		selectedCount = 0
+		for row := 0; row < rowCount; row++ {
+			if err := function.CheckJSONExtractRow(proc.Ctx, row); err != nil {
+				return nil, err
+			}
+			if selectList[row] {
+				selectedCount++
+			}
+		}
+		if selectedCount == 0 {
+			return expr.makeNullResult(rowCount)
+		}
+	} else if !expr.folded.canFold && noRowsSelected(selectList, rowCount) {
 		return expr.makeNullResult(rowCount)
 	}
 	if expr.folded.needFoldingCheck {
@@ -1996,11 +2028,26 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
+	// Share extraction only for unmasked consumers of this batch.
+	if bound := expr.jsonProjection; bound != nil && selectList == nil && bound.group.frame.input == batches[0] &&
+		expr.parameterResults[0].GetType().Oid != types.T_json {
+		expr.resetResultType(expr.resultVector)
+		if err := expr.resultVector.PreExtendAndReset(rowCount); err != nil {
+			return nil, err
+		}
+		if err := bound.eval(proc, expr.parameterResults, expr.resultVector, rowCount); err != nil {
+			return nil, err
+		}
+		return expr.resultVector.GetResultVector(), nil
+	}
+
 	if selectList != nil {
-		selectedCount := 0
-		for row := 0; row < rowCount; row++ {
-			if selectList[row] {
-				selectedCount++
+		if selectedCount < 0 {
+			selectedCount = 0
+			for row := 0; row < rowCount; row++ {
+				if selectList[row] {
+					selectedCount++
+				}
 			}
 		}
 		if selectedCount < rowCount {

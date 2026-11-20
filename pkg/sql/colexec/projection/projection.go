@@ -53,7 +53,7 @@ func (projection *Projection) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(projection.ctr.projExecutors) == 0 {
-		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, projection.ProjectList, projection.ctr.outputAllocation)
+		projection.ctr.projExecutors, projection.ctr.jsonFrame, err = colexec.NewProjectionExecutors(proc, projection.ProjectList, projection.ctr.outputAllocation)
 
 		projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 		if projection.GroupingSetCount > 0 {
@@ -105,6 +105,10 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	batches := []*batch.Batch{bat}
+	if projection.ctr.jsonFrame != nil {
+		projection.ctr.jsonFrame.Begin(bat)
+		defer projection.ctr.jsonFrame.End()
+	}
 	if bat.HasDictionary() {
 		if projection.ctr.dictionaryInputs == nil {
 			projection.ctr.dictionaryInputs = &colexec.DictionaryInputFrame{}

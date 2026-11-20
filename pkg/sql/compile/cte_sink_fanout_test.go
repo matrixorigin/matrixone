@@ -150,7 +150,8 @@ func TestPipelineAttemptAlwaysClosesMaterializedSources(t *testing.T) {
 				// lazy UNION ALL before its later reader branch was submitted.
 				source.Finish(nil)
 				source.ReleaseReader(0)
-				return c.runOnce()
+				_, err := c.runOnce()
+				return err
 			},
 		},
 		{

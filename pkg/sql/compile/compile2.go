@@ -599,6 +599,13 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	var coordinatorPhaseStart time.Time
 	var coordinatorPhaseBase time.Duration
 	var allocationAttempt *statementAllocationAttempt
+	localJoined, analyzed := false, false
+	defer func() {
+		if err != nil && localJoined && !analyzed {
+			resourceRecorder.publish()
+			c.capturePartialExecution(runC, uint64(retryTimes))
+		}
+	}()
 	finishAllocationAttempt := func() error {
 		if allocationAttempt == nil {
 			return nil
@@ -644,6 +651,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			localJoined = false
 			var panicErr error = moerr.NewInternalError(execTopContext, "panic while executing DML RETURNING")
 			if c.resultSink != nil {
 				panicErr = errors.Join(panicErr, c.cancelAndWaitRunningSQL(&attemptRemoteWait))
@@ -699,7 +707,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				coordinatorPhaseStart = time.Time{}
 				coordinatorPhaseBase = 0
 
-				if runErr := runC.runOnce(); runErr != nil {
+				joined, runErr := runC.runOnce()
+				localJoined = joined
+				if runErr != nil {
 					return runErr
 				}
 				return runC.proc.GetQueryContextError()
@@ -831,6 +841,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		)
 		attemptOpen = false
 		warnings.finish(false, nil)
+		localJoined = false
 		if runC != c {
 			releaseRetryCompile(runC)
 		}
@@ -918,6 +929,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	// outcome. The panic defer above remains the single terminal owner until
 	// this call returns.
 	c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
+	analyzed = true
 	if terminalErr := finishAllocationAttempt(); terminalErr != nil {
 		err = joinAllocationLifecycleErrors(err, terminalErr)
 		err = abortSinkAttempt(err)

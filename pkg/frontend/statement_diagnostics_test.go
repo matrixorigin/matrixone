@@ -85,6 +85,38 @@ func TestCompactDiagnosticSnapshotAndTerminalRefresh(t *testing.T) {
 	require.Nil(t, h.Marshal(context.Background()))
 }
 
+func TestCompactPartialDiagnosticRetainsScanAndMissingRemote(t *testing.T) {
+	defer gostub.Stub(&motrace.UseCompactStatementDiagnostics, func() bool { return true }).Reset()
+	q, phy := compactDiagnosticFixture()
+	phy.Partial = models.PartialExecutionCapture{Interrupted: true, Attempt: 1, RemoteExpected: 2, RemoteObserved: 1, RemoteMissing: true}
+	q.GetQuery().Nodes[1].AnalyzeInfo.InputSize = 42
+	stmt := &motrace.StatementInfo{ResponseAt: time.Now(), Duration: time.Millisecond}
+	h := newJsonPlanHandler(context.Background(), stmt, nil, q, phy, context.Canceled)
+	defer h.Free()
+	d := decodeCompactDiagnostic(t, h)
+	require.Equal(t, "partial_execution", d.Detail.Capture)
+	require.Equal(t, phy.Partial, d.Detail.Partial)
+	require.Equal(t, "cancelled", d.Outcome)
+	require.NotEmpty(t, d.Physical)
+	_, stats := h.Stats(context.Background())
+	require.EqualValues(t, 10, stats.RowsRead)
+	require.EqualValues(t, 42, stats.BytesScan)
+
+	q.GetQuery().Nodes[1].AnalyzeInfo.Reset()
+	phy.Partial = models.PartialExecutionCapture{}
+	phy.LocalScope[0].RootOperator.Children[1].OpStats.Reset()
+	summary := resource.StatementResourceSummary{Memory: resource.MemoryTotals{MaxDomainPeakLiveBytes: 1 << 30}}
+	require.True(t, h.SetStatementDiagnostics(context.Background(), summary, context.Canceled))
+	final := decodeCompactDiagnostic(t, h)
+	require.Equal(t, 3, final.Level)
+	require.Equal(t, d.Detail, final.Detail)
+	require.Equal(t, d.Logical, final.Logical)
+	require.Equal(t, d.Physical, final.Physical)
+	_, stats = h.Stats(context.Background())
+	require.EqualValues(t, 10, stats.RowsRead)
+	require.EqualValues(t, 42, stats.BytesScan)
+}
+
 func TestCompactDiagnosticLateTriggerAndNormalControl(t *testing.T) {
 	defer gostub.Stub(&motrace.UseCompactStatementDiagnostics, func() bool { return true }).Reset()
 	q, phy := compactDiagnosticFixture()

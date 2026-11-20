@@ -21,6 +21,7 @@ import (
 	"math"
 	goruntime "runtime"
 	godebug "runtime/debug"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -421,6 +422,147 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			c.Release()
 			proc.Free()
 
+		})
+	}
+}
+
+func TestCompileRunPartialAnalysisPreparedReuse(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc := testutil.NewProcess(t)
+	ctrl := gomock.NewController(t)
+	proc.Base.TxnClient, proc.Base.TxnOperator = newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
+	compilerCtx.SetContext(ctx)
+
+	const sql = "select 1"
+	stmts, err := mysql.Parse(ctx, sql, 1)
+	require.NoError(t, err)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
+	require.NoError(t, err)
+	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+	c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+	defer func() {
+		c.FreeOperator()
+		c.SetIsPrepare(false)
+		c.Release()
+	}()
+	c.SetIsPrepare(true)
+
+	var outputErr error
+	fill := func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+		if bat != nil {
+			return outputErr
+		}
+		return nil
+	}
+	require.NoError(t, c.Compile(ctx, pn, fill))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.NotNil(t, c.anal.GetPhyPlan())
+	require.False(t, c.anal.GetPhyPlan().Partial.Interrupted)
+
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	aborted, cancel := context.WithCancel(ctx)
+	cancel()
+	proc.ReplaceTopCtx(aborted)
+	_, err = c.Run(0)
+	require.Error(t, err)
+	require.Nil(t, c.anal.GetPartialExecutionQuery())
+	require.False(t, c.anal.GetPhyPlan().Partial.Interrupted)
+	require.Nil(t, c.anal.GetPhyPlan().Resource)
+
+	proc.ReplaceTopCtx(ctx)
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	outputErr = moerr.NewInvalidInputNoCtx("test output failure")
+	_, err = c.Run(0)
+	require.ErrorIs(t, err, outputErr)
+	partial, observed := c.anal.GetPhyPlan(), c.anal.GetPartialExecutionQuery()
+	require.NotNil(t, observed)
+	require.True(t, partial.Partial.Interrupted)
+	require.Zero(t, partial.Partial.Attempt)
+	require.NotEmpty(t, partial.LocalScope)
+	require.True(t, slices.ContainsFunc(observed.Nodes, func(n *plan.Node) bool {
+		return n.AnalyzeInfo != nil && n.AnalyzeInfo.OutputRows > 0
+	}))
+
+	outputErr = nil
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Nil(t, c.anal.GetPartialExecutionQuery())
+	require.False(t, c.anal.GetPhyPlan().Partial.Interrupted)
+	require.True(t, partial.Partial.Interrupted)
+	require.True(t, slices.ContainsFunc(observed.Nodes, func(n *plan.Node) bool {
+		return n.AnalyzeInfo != nil && n.AnalyzeInfo.OutputRows > 0
+	}))
+}
+
+func TestCompileRunPartialAnalysisRetryGeneration(t *testing.T) {
+	for _, rebuildFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rebuild fails=%t", rebuildFails), func(t *testing.T) {
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.Base.TxnClient, proc.Base.TxnOperator = newTier2AutocommitRCTxn(t)
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
+			compilerCtx.SetContext(ctx)
+			const sql = "select 1"
+			stmts, err := mysql.Parse(ctx, sql, 1)
+			require.NoError(t, err)
+			defer stmts[0].Free()
+			optimizer := plan2.NewPrepareOptimizer(compilerCtx)
+			initial, err := optimizer.Optimize(stmts[0], false, nil)
+			require.NoError(t, err)
+
+			c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+			defer c.Release()
+			terminalErr := moerr.NewInvalidInputNoCtx("terminal retry error")
+			var values []int64
+			require.NoError(t, c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: initial}}, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+				if bat == nil {
+					return nil
+				}
+				value := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])[0]
+				values = append(values, value)
+				if value == 1 {
+					return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+				}
+				return terminalErr
+			}))
+			var rebuilt *plan.Query
+			c.SetBuildPlanFunc(func(context.Context) (*plan.Plan, error) {
+				if rebuildFails {
+					return nil, terminalErr
+				}
+				fresh, err := mysql.Parse(ctx, "select 2", 1)
+				if err != nil {
+					return nil, err
+				}
+				defer fresh[0].Free()
+				rebuilt, err = plan2.NewPrepareOptimizer(compilerCtx).Optimize(fresh[0], false, nil)
+				return &plan.Plan{Plan: &plan.Plan_Query{Query: rebuilt}}, err
+			})
+
+			_, err = c.Run(0)
+			require.ErrorIs(t, err, terminalErr)
+			observed := c.anal.GetPartialExecutionQuery()
+			if rebuildFails {
+				require.Equal(t, []int64{1}, values)
+				require.Nil(t, observed, "retry build failure has no current-generation operators")
+				return
+			}
+			require.Equal(t, []int64{1, 2}, values)
+			require.NotNil(t, observed)
+			require.True(t, c.anal.GetPhyPlan().Partial.Interrupted)
+			require.EqualValues(t, 1, c.anal.GetPhyPlan().Partial.Attempt)
+			root := observed.Steps[0]
+			require.Equal(t, rebuilt.Nodes[root].ProjectList, observed.Nodes[root].ProjectList)
+			require.NotEqual(t, initial.Nodes[initial.Steps[0]].ProjectList, observed.Nodes[root].ProjectList)
+			require.EqualValues(t, 1, observed.Nodes[root].GetAnalyzeInfo().GetOutputRows())
 		})
 	}
 }

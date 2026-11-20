@@ -1826,7 +1826,10 @@ func TestCompileExternScanParquetLoadDefaultFanoutContextCancellationTerminatesA
 	testCompile.affectRows = &atomic.Uint64{}
 
 	runDone := make(chan error, 1)
-	go func() { runDone <- testCompile.runOnce() }()
+	go func() {
+		_, err := testCompile.runOnce()
+		runDone <- err
+	}()
 	for range scopes {
 		select {
 		case <-started:
