@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,10 +47,15 @@ func TestCDCSinkSessionStripsNBEAndPreservesTextJSONBit(t *testing.T) {
 		admin, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
 		defer admin.Close()
+
+		var origGlobalMode string
+		require.NoError(t, admin.QueryRowContext(ctx, "SELECT @@GLOBAL.sql_mode").Scan(&origGlobalMode))
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cleanupCancel()
-			_, _ = admin.ExecContext(cleanupCtx, "SET GLOBAL sql_mode = DEFAULT")
+			escaped := strings.ReplaceAll(origGlobalMode, "'", "''")
+			_, restoreErr := admin.ExecContext(cleanupCtx, fmt.Sprintf("SET GLOBAL sql_mode = '%s'", escaped))
+			require.NoError(t, restoreErr)
 		}()
 
 		modeCases := []struct {
@@ -114,6 +120,12 @@ func TestCDCSinkSessionStripsNBEAndPreservesTextJSONBit(t *testing.T) {
 
 		_, err = admin.ExecContext(ctx, "CREATE DATABASE cdc_nbe_e2e")
 		require.NoError(t, err)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			_, dropErr := admin.ExecContext(cleanupCtx, "DROP DATABASE IF EXISTS cdc_nbe_e2e")
+			require.NoError(t, dropErr)
+		}()
 		_, err = admin.ExecContext(ctx, `
 			CREATE TABLE cdc_nbe_e2e.t_single (
 				id BIT(16) PRIMARY KEY,
