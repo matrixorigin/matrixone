@@ -182,6 +182,7 @@ func TestHistoricalChangesSubmitFinishedObjectBeforePlanningNext(t *testing.T) {
 
 type replayReadFailureFS struct {
 	fileservice.FileService
+	metadata      bool
 	slowObject    string
 	missingObject string
 	missingErr    error
@@ -190,7 +191,7 @@ type replayReadFailureFS struct {
 }
 
 func (fs *replayReadFailureFS) Read(ctx context.Context, v *fileservice.IOVector) error {
-	if len(v.Entries) > 1 {
+	if (fs.metadata && len(v.Entries) == 1) || (!fs.metadata && len(v.Entries) > 1) {
 		switch v.FilePath {
 		case fs.slowObject:
 			close(fs.started)
@@ -213,9 +214,12 @@ func TestHistoricalChangesCancelPendingReadsOnMissingFile(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		missingFirst bool
+		metadata     bool
 	}{
 		{name: "missing block first", missingFirst: true},
 		{name: "missing block second"},
+		{name: "missing first object's metadata", metadata: true, missingFirst: true},
+		{name: "missing second object's metadata", metadata: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
@@ -230,11 +234,20 @@ func TestHistoricalChangesCancelPendingReadsOnMissingFile(t *testing.T) {
 			slow := writeReplayTestObject(t, ctx, mp, mem, ts, 11)
 			missing := writeReplayTestObject(t, ctx, mp, mem, ts, 11)
 			objects := []*objectio.ObjectEntry{slow, missing}
-			if tc.missingFirst {
+			if tc.metadata {
+				// The blocked read is speculative, later than the missing
+				// object. A preceding valid plan must keep its replay order.
+				objects = []*objectio.ObjectEntry{missing, slow}
+				if !tc.missingFirst {
+					first := writeReplayTestObject(t, ctx, mp, mem, ts, 11)
+					objects = append([]*objectio.ObjectEntry{first}, objects...)
+				}
+			} else if tc.missingFirst {
 				objects[0], objects[1] = objects[1], objects[0]
 			}
 			fs := &replayReadFailureFS{
 				FileService:   mem,
+				metadata:      tc.metadata,
 				slowObject:    slow.ObjectName().String(),
 				missingObject: missing.ObjectName().String(),
 				missingErr:    moerr.NewFileNotFoundNoCtx(missing.ObjectName().String()),
@@ -244,9 +257,13 @@ func TestHistoricalChangesCancelPendingReadsOnMissingFile(t *testing.T) {
 			zm := index.NewZM(types.T_int32, 0)
 			pk := int32(11)
 			index.UpdateZM(zm, types.EncodeInt32(&pk))
-			filter := &engine.PKFilter{Segments: [][]byte{zm}}
+			filter := &engine.PKFilter{Segments: [][]byte{zm}, PrefetchObjectMeta: tc.metadata}
 			ctx = engine.WithPKFilter(ctx, filter)
-			changes := &ChangeHandler{pkFilter: filter, scheduler: tasks.NewParallelJobScheduler(LoadParallism)}
+			changes := &ChangeHandler{
+				pkFilter:                 filter,
+				enableCommitTSBlockPrune: tc.metadata,
+				scheduler:                tasks.NewParallelJobScheduler(LoadParallism),
+			}
 			defer changes.scheduler.Stop()
 			handle := NewAObjectHandle(ctx, &baseHandle{changesHandle: changes}, false, ts, ts, objects, fs, mp)
 			err = handle.init(ctx, true)
