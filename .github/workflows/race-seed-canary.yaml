@@ -7,7 +7,7 @@ on:
       coverage_comparison:
         description: Same-source Coverage comparison; no real COS or OSS
         type: choice
-        options: ['off', 'idc-isolation-probe', 'idc-direct-branch', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly', 'gomod-cold', 'gomod-warm', 'compile-cache-probe', 'buildcache-full-pair', 'buildcache-uncached-baseline', 'reviewed-cache-reuse', 'pvc-cache-reuse', 'mty-pvc-baseline', 'mty-pvc-seed', 'jed-pvc-baseline', 'jed-pvc-seed', 'ruh-pvc-baseline', 'ruh-pvc-seed', 'mty-pvc-reuse', 'jed-pvc-reuse', 'ruh-pvc-reuse', 'mty-two-group-prepare', 'node-cache-contract', 'mty-two-group-reuse', 'mty-node-cache-migrate', 'jed-node-cache-migrate', 'ruh-node-cache-migrate', 'mnl2-node-cache-migrate', 'mty-node-cache-2', 'mty-node-cache-3', 'jed-node-cache-2', 'jed-node-cache-3', 'ruh-node-cache-2', 'ruh-node-cache-3', 'mnl2-node-cache-2', 'mnl2-node-cache-3', 'mty-node-cache-diagnose', 'mnl2-node-cache-diagnose', 'mty-node-consumer-2', 'mnl2-node-consumer-2', 'jed-node-consumer-2', 'ruh-node-consumer-2', 'mty-node-consumer-3', 'mnl2-node-consumer-3', 'jed-node-consumer-3', 'ruh-node-consumer-3', 'mty-node-tools-probe', 'mnl2-node-tools-probe', 'jed-node-tools-probe', 'ruh-node-tools-probe', 'mty-cpu-profile-n1', 'mty-cpu-profile-n2', 'mty-real-pr-2', 'mty-native-refresh', 'all-env-real-pr-2', 'persistent-env-real-pr-2', 'persistent-authority-preflight', 'uniform-native-jed', 'uniform-native-mnl2', 'uniform-native-ruh', 'mty-n0-manual-f2d6e75']
+        options: ['off', 'idc-isolation-probe', 'idc-direct-branch', 'jed', 'tke', 'mty', 'mnl2', 'ruh', 'mnl2-cache', 'mnl2-cache-probe', 'mnl2-timing', 'mnl2-parallel16', 'two-group', 'three-group', 'three-group-shared', 'ruh-readonly', 'jed-shared-probe', 'go-mod-cache-readonly', 'gomod-cold', 'gomod-warm', 'compile-cache-probe', 'buildcache-full-pair', 'buildcache-uncached-baseline', 'reviewed-cache-reuse', 'pvc-cache-reuse', 'mty-pvc-baseline', 'mty-pvc-seed', 'jed-pvc-baseline', 'jed-pvc-seed', 'ruh-pvc-baseline', 'ruh-pvc-seed', 'mty-pvc-reuse', 'jed-pvc-reuse', 'ruh-pvc-reuse', 'mty-two-group-prepare', 'node-cache-contract', 'mty-two-group-reuse', 'mty-node-cache-migrate', 'jed-node-cache-migrate', 'ruh-node-cache-migrate', 'mnl2-node-cache-migrate', 'mty-node-cache-2', 'mty-node-cache-3', 'jed-node-cache-2', 'jed-node-cache-3', 'ruh-node-cache-2', 'ruh-node-cache-3', 'mnl2-node-cache-2', 'mnl2-node-cache-3', 'mty-node-cache-diagnose', 'mnl2-node-cache-diagnose', 'mty-node-consumer-2', 'mnl2-node-consumer-2', 'jed-node-consumer-2', 'ruh-node-consumer-2', 'mty-node-consumer-3', 'mnl2-node-consumer-3', 'jed-node-consumer-3', 'ruh-node-consumer-3', 'mty-node-tools-probe', 'mnl2-node-tools-probe', 'jed-node-tools-probe', 'ruh-node-tools-probe', 'mty-cpu-profile-n1', 'mty-cpu-profile-n2', 'mty-real-pr-2', 'mty-native-refresh', 'all-env-real-pr-2', 'persistent-env-real-pr-2', 'persistent-authority-preflight', 'uniform-native-jed', 'uniform-native-mnl2', 'uniform-native-ruh', 'mty-n0-manual-f2d6e75', 'mty-n0-union-f2d6e75']
         default: 'off'
       cs_s3_smoke:
         description: Verify each dedicated CS CI bucket from its matching runner
@@ -54,7 +54,7 @@ permissions:
 
 jobs:
   mty-node0-manual-private-candidate:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.ref == 'refs/heads/weilu-runner-test' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.coverage_comparison == 'mty-n0-manual-f2d6e75' && inputs.matrixone_sha == 'c33ce3ff8e7555c8053c85693e55e93e73d898b7' && !inputs.cs_s3_smoke && !inputs.cs_s3_adaptation_smoke && !inputs.cs_s3_probe && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.ref == 'refs/heads/weilu-runner-test' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && (inputs.coverage_comparison == 'mty-n0-manual-f2d6e75' || inputs.coverage_comparison == 'mty-n0-union-f2d6e75') && inputs.matrixone_sha == 'c33ce3ff8e7555c8053c85693e55e93e73d898b7' && !inputs.cs_s3_smoke && !inputs.cs_s3_adaptation_smoke && !inputs.cs_s3_probe && !inputs.object_storage_smoke && !inputs.coverage_contract_smoke && !inputs.local_minio_coverage
     permissions: {contents: read, actions: read}
     concurrency: {group: mty-node0-manual-f2d6e75, cancel-in-progress: false}
     runs-on: cs-mty-nc-n0-pr-v1
@@ -137,11 +137,43 @@ jobs:
         echo "CGO_CFLAGS=-I$GITHUB_WORKSPACE/cgo -I$GITHUB_WORKSPACE/thirdparties/install/include -DMO_NATIVE_CACHE_${native}=1" >> "$GITHUB_ENV"
         echo "CGO_LDFLAGS=-L$GITHUB_WORKSPACE/cgo -lmo -Wl,-rpath,$GITHUB_WORKSPACE/cgo -L$GITHUB_WORKSPACE/thirdparties/install/lib -lusearch_c -Wl,-rpath,$GITHUB_WORKSPACE/thirdparties/install/lib -lm" >> "$GITHUB_ENV"
     - name: Build private group-1 candidate; no tests or shared writes
+      if: inputs.coverage_comparison == 'mty-n0-manual-f2d6e75'
       run: python3 .ci-workflow/scripts/mty_n0_prepare_group1.py
+    - name: Compile both partitions on the trusted upstream source (private output only)
+      if: inputs.coverage_comparison == 'mty-n0-union-f2d6e75'
+      env:
+        PYTHONPATH: .ci-workflow/scripts
+      run: |
+        python3 - <<'PY'
+        import os
+        from pathlib import Path
+        import incremental_cache as c
+        import mty_n0_refresh_preflight as probe
+        import node_cache_candidate as candidate
+        tmp = Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
+        state = tmp/'cs-node-cache/state.json'
+        observed = probe.inspect()
+        c.require(observed['runtime_sha256']=='20cad9f172f9e3987b3d80c043929ea962a7f7ee8a6ebee566ad745a4b6e29bb'
+                  and observed['native_key']=='5c290d1c55518696dff2055c69ef627b7df9b07556a06c90307a9334013d1d29'
+                  and observed['shared_writes']==0, 'not the target runtime/native inputs')
+        c.require(Path(c.read_json(state)['config']['local']).resolve()==tmp/'cs-node-cache/objects-private',
+                  'private compiler store required')
+        full = tmp/'coverage-full-scope.txt'
+        contract = candidate.scope(full,full,tmp/'coverage-instrumented-scope.txt')
+        groups = c.read_json(tmp/'coverage-group-plan.json')['groups']
+        c.require(len(groups)==2 and set(groups[0]).isdisjoint(groups[1])
+                  and set(groups[0]+groups[1])==set(contract['packages'])
+                  and len(contract['coverpkg'])==476, 'incomplete two-group coverage scope')
+        bundle = candidate.freeze(state,contract,tmp/'unpublished-mty-n0-candidate')
+        c.require(bundle['source']==probe.SOURCE and bundle['compile_only'] is True and
+                  set(bundle['native_manifests'])=={observed['native_key']}, 'wrong candidate')
+        print('Private candidate only; shared writes=0; packages=%d; index=%s' %
+              (len(contract['packages']),bundle['index_sha256']))
+        PY
     - name: Preserve unpublished candidate; not a cache grant
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
-        name: mty-node0-manual-32922-group1-candidate
+        name: ${{ inputs.coverage_comparison == 'mty-n0-union-f2d6e75' && 'mty-node0-32922-both-groups-candidate' || 'mty-node0-manual-32922-group1-candidate' }}
         compression-level: 0
         retention-days: 3
         if-no-files-found: error
