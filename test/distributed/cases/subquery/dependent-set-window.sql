@@ -45,4 +45,18 @@ select a.id, (select (select a.id)) as captured from outer_keys a
     where a.id in (select b.id from join_keys b) order by a.id;
 select a.id, (select (select a.id)) as captured from outer_keys a
     where a.id not in (select b.id from join_keys b where b.id is not null) order by a.id;
+-- Keep direct outer references at the join and set-branch evaluation sites.
+select o.id from outer_keys o where exists (
+    select 1 from outer_keys a join join_keys b on b.id = o.id
+) order by o.id;
+select o.id from outer_keys o where o.id in (
+    select a.id from outer_keys a join join_keys b on b.id = o.id
+) order by o.id;
+select o.id, (select count(*) - count(b.id) from outer_keys a left join join_keys b
+    on b.id = a.id and b.id = o.id) as unmatched
+from outer_keys o order by o.id;
+select o.id from outer_keys o where 2 in (
+    select a.id from outer_keys a where a.id = 1
+    union select 2 from outer_keys b where b.id = 2 and b.id = o.id
+) order by o.id;
 drop database dependent_set_window;
