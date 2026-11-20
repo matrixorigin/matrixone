@@ -105,7 +105,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 			shardIDs = append(shardIDs, shard.ShardID)
 		}
 		slices.Sort(shardIDs)
-		var existing []*operator.Operator
+		existing := make([]*operator.Operator, 0, len(shardIDs))
 		for _, shardID := range slices.Compact(shardIDs) {
 			existing = append(existing, c.OperatorController.GetOperators(shardID)...)
 		}
