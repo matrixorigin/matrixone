@@ -324,6 +324,15 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 				ctr.leftBat = bat
 				ctr.lastIdx = 0
+				if !ctr.skipProbe {
+					hashJoin.prepareBuildOutputAreaCheck()
+				}
+				// A unique build key selects the probe row at most once.
+				// Without a residual, fan-out uses UnionMulti to copy a flat
+				// probe payload once per group in each result batch.
+				probePayloadCopiedOnce := ctr.probeHashOnPK || hashJoin.NonEqCond == nil
+				ctr.checkProbeArea = !hashJoin.IsShuffle && ctr.mp != nil && !ctr.skipProbe &&
+					!ctr.checkBuildArea && needsOutputAreaCheck(hashJoin.ResultCols, bat, 0, probePayloadCopiedOnce)
 			}
 
 			if err = hashJoin.resetResultBat(); err != nil {
@@ -400,6 +409,9 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.rightMatchedIter == nil {
 				ctr.state = End
 			} else {
+				if ctr.rightMatchedIter.HasNext() {
+					hashJoin.prepareBuildOutputAreaCheck()
+				}
 				ctr.state = Finalize
 			}
 
@@ -597,6 +609,8 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 		return
 	}
 	ctr.rightBats = ctr.mp.GetBatches()
+	ctr.buildAreaChecked = false
+	ctr.checkBuildArea = false
 	ctr.rightRowCnt = ctr.mp.GetRowCount()
 	ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 
@@ -617,6 +631,24 @@ func (hashJoin *HashJoin) getInputBatch(proc *process.Process, analyzer process.
 		return vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
 	}
 	return hashJoin.getSpilledInputBatch(proc, analyzer)
+}
+
+func (ctr *container) locateBuildRow(ordinal int64) (int64, int64) {
+	if !ctr.mp.HasBatchRowEnds() {
+		return locateStandardBuildRow(ordinal)
+	}
+	return ctr.mp.LocateBatchRow(ordinal)
+}
+
+func locateStandardBuildRow(ordinal int64) (int64, int64) {
+	return ordinal / colexec.DefaultBatchSize, ordinal % colexec.DefaultBatchSize
+}
+
+func (ctr *container) buildBatchRows(batchIndex int64) uint64 {
+	if !ctr.mp.HasBatchRowEnds() {
+		return colexec.DefaultBatchSize
+	}
+	return uint64(ctr.rightBats[batchIndex].RowCount())
 }
 
 func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
@@ -698,6 +730,19 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 	}
 }
 
+func (hashJoin *HashJoin) usesMembershipProjection() bool {
+	ctr := &hashJoin.ctr
+	if (!ctr.probeLeftSemi && !ctr.probeLeftAnti) || ctr.probeTrackBuildMatches || hashJoin.NonEqCond != nil {
+		return false
+	}
+	for _, column := range hashJoin.ResultCols {
+		if column.Rel != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
 	err := ctr.evalJoinCondition(ctr.leftBat, proc)
 	if err != nil {
@@ -718,18 +763,31 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 	}
 	leftRowCnt := ctr.leftBat.RowCount()
 	resRowCnt := 0
-	batchUnique := ctr.probeHashOnPK && hashJoin.NonEqCond == nil &&
-		((hashJoin.IsInner() && !ctr.probeTrackBuildMatches) || hashJoin.JoinType == plan.Node_RIGHT)
-	batchMembership := (ctr.probeLeftSemi || ctr.probeLeftAnti) &&
-		!ctr.probeTrackBuildMatches && hashJoin.NonEqCond == nil
-	if batchMembership {
-		for _, column := range hashJoin.ResultCols {
-			if column.Rel != 0 {
-				batchMembership = false
-				break
-			}
+	outputLimit := ctr.maxOutputRows()
+	var localAreas [8]outputArea
+	areas := ctr.outputAreas(localAreas[:0], ctr.checkBuildArea || ctr.checkProbeArea)
+	full := false
+	emit := func(row outputRow) error {
+		if len(areas) > 0 && !areas.reserve(hashJoin.ResultCols, row, outputRow{}, resRowCnt > 0) {
+			// The match is already decided. Keep just this row's references so
+			// the next Call can emit it without re-running its predicate.
+			ctr.pendingOutput = row
+			full = true
+			return nil
+		}
+		resRowCnt++
+		return ctr.appendOutputRow(hashJoin, proc, row)
+	}
+	if ctr.pendingOutput.left != nil {
+		row := ctr.pendingOutput
+		ctr.pendingOutput = outputRow{}
+		if err := emit(row); err != nil {
+			return err
 		}
 	}
+	batchUnique := ctr.probeHashOnPK && hashJoin.NonEqCond == nil &&
+		((hashJoin.IsInner() && !ctr.probeTrackBuildMatches) || hashJoin.JoinType == plan.Node_RIGHT)
+	batchMembership := hashJoin.usesMembershipProjection()
 	var probeCopy vector.UnionMultiFunc = (*vector.Vector).UnionMulti
 	if hashJoin.NonEqCond == nil && !ctr.probeHashOnPK && !batchMembership && ctr.probeRightSemiAnti {
 		// This invocation retains one probe input through every continuation.
@@ -737,7 +795,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 		probeCopy = vector.GetUnionMultiFunction(ctr.leftBat.Vecs)
 	}
 
-	for {
+	for !full && resRowCnt < outputLimit {
 		switch ctr.probeState {
 		case psNextBatch:
 			if ctr.lastIdx < leftRowCnt {
@@ -764,7 +822,13 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 		case psBatchRow:
 			if batchUnique || batchMembership {
-				count := min(len(ctr.vs)-ctr.vsIdx, colexec.DefaultBatchSize-resRowCnt)
+				count := min(len(ctr.vs)-ctr.vsIdx, outputLimit-resRowCnt)
+				if len(areas) > 0 {
+					count, full = ctr.fitFindOutput(hashJoin, areas, count, resRowCnt, batchMembership)
+				}
+				if count == 0 {
+					break
+				}
 				var matched int
 				var err error
 				if batchMembership {
@@ -781,30 +845,22 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				if ctr.vsIdx == len(ctr.vs) {
 					ctr.probeState = psNextBatch
 				}
-				if resRowCnt == colexec.DefaultBatchSize {
-					ctr.resBat.AddRowCount(resRowCnt)
-					result.Batch = ctr.resBat
-					return nil
-				}
 				continue
 			}
 
 			z, v := ctr.zvs[ctr.vsIdx], ctr.vs[ctr.vsIdx]
-			row := int64(ctr.lastIdx)
+			row := outputRow{left: ctr.leftBat, leftRow: int64(ctr.lastIdx)}
 			idx := int64(v) - 1
-			idx1 := idx / colexec.DefaultBatchSize
-			idx2 := idx % colexec.DefaultBatchSize
 
 			ctr.lastIdx++
 			ctr.vsIdx++
 
 			if ctr.probeMark {
-				markValue := z != 0 && v != 0
-				markNull := !hashJoin.ExistenceOnly && !markValue && (z == 0 || ctr.buildHasNullKey)
-				if err = ctr.appendOneMark(hashJoin, proc, row, markValue, markNull); err != nil {
+				row.markValue = z != 0 && v != 0
+				row.markNull = !hashJoin.ExistenceOnly && !row.markValue && (z == 0 || ctr.buildHasNullKey)
+				if err = emit(row); err != nil {
 					return err
 				}
-				resRowCnt++
 
 				if ctr.vsIdx < len(ctr.vs) {
 					ctr.probeState = psBatchRow
@@ -812,32 +868,19 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					ctr.probeState = psNextBatch
 				}
 
-				if resRowCnt >= colexec.DefaultBatchSize {
-					ctr.resBat.AddRowCount(resRowCnt)
-					result.Batch = ctr.resBat
-					return nil
-				}
 				continue
 			}
 
 			if z == 0 || v == 0 {
 				if ctr.probeEmitUnmatched {
-					if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+					if err = emit(row); err != nil {
 						return err
 					}
-					resRowCnt++
 				}
 
 				if ctr.vsIdx >= len(ctr.vs) {
 					ctr.probeState = psNextBatch
 				}
-
-				if resRowCnt >= colexec.DefaultBatchSize {
-					ctr.resBat.AddRowCount(resRowCnt)
-					result.Batch = ctr.resBat
-					return nil
-				}
-
 				continue
 			}
 
@@ -846,47 +889,39 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				if !ctr.probeHashOnPK {
 					candidates = ctr.mp.GetSels(uint64(idx))
 				}
-				best, found, findErr := ctr.findAsofPredecessor(hashJoin, proc, row, uint64(idx), candidates)
+				best, found, findErr := ctr.findAsofPredecessor(hashJoin, proc, row.leftRow, uint64(idx), candidates)
 				if findErr != nil {
 					return findErr
 				}
 				if found {
-					bestBatch := int64(best / colexec.DefaultBatchSize)
-					bestRow := int64(best % colexec.DefaultBatchSize)
+					bestBatch, bestRow := ctr.locateBuildRow(int64(best))
 					// Predecessor selection is complete before output. Append exactly
 					// one final row; intermediate candidates never reach the result.
-					if err = ctr.appendOneMatch(hashJoin, proc, row, bestBatch, bestRow); err != nil {
+					row.right, row.rightRow = ctr.retainedOutputBatch(bestBatch), bestRow
+					if err = emit(row); err != nil {
 						return err
 					}
-					resRowCnt++
 				} else if ctr.probeEmitUnmatched {
-					if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+					if err = emit(row); err != nil {
 						return err
 					}
-					resRowCnt++
 				}
 				if ctr.vsIdx < len(ctr.vs) {
 					ctr.probeState = psBatchRow
 				} else {
 					ctr.probeState = psNextBatch
 				}
-				if resRowCnt >= colexec.DefaultBatchSize {
-					ctr.resBat.AddRowCount(resRowCnt)
-					result.Batch = ctr.resBat
-					return nil
-				}
 				continue
 			}
 
 			if ctr.probeHashOnPK {
+				idx1, idx2 := ctr.locateBuildRow(idx)
 				if hashJoin.NonEqCond == nil {
 					if ctr.probeRightSemiAnti {
-						err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2)
-						if err != nil {
+						row.right, row.rightRow = ctr.retainedOutputBatch(idx1), idx2
+						if err = emit(row); err != nil {
 							return err
 						}
-
-						resRowCnt++
 					}
 
 					if ctr.probeTrackBuildMatches {
@@ -897,19 +932,17 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 						ctr.rightRowsMatched.Add(uint64(idx))
 					}
 				} else {
-					ok, err := ctr.evalNonEqCondition(ctr.leftBat, row, proc, idx1, idx2)
+					ok, err := ctr.evalNonEqCondition(ctr.leftBat, row.leftRow, proc, idx1, idx2)
 					if err != nil {
 						return err
 					}
 
 					if ok {
 						if ctr.probeRightSemiAnti {
-							err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2)
-							if err != nil {
+							row.right, row.rightRow = ctr.retainedOutputBatch(idx1), idx2
+							if err = emit(row); err != nil {
 								return err
 							}
-
-							resRowCnt++
 						}
 
 						if ctr.probeTrackBuildMatches {
@@ -920,11 +953,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							ctr.rightRowsMatched.Add(uint64(idx))
 						}
 					} else if ctr.probeEmitUnmatched {
-						err = ctr.appendOneNotMatch(hashJoin, proc, row)
-						if err != nil {
+						if err = emit(row); err != nil {
 							return err
 						}
-						resRowCnt++
 					}
 				}
 			} else {
@@ -937,10 +968,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 					} else if ctr.probeLeftSemi {
-						if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+						if err = emit(row); err != nil {
 							return err
 						}
-						resRowCnt++
 						ctr.sels = nil
 					} else if ctr.probeLeftAnti {
 						ctr.sels = nil
@@ -964,20 +994,18 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			} else {
 				ctr.probeState = psNextBatch
 			}
-
-			if resRowCnt >= colexec.DefaultBatchSize {
-				ctr.resBat.AddRowCount(resRowCnt)
-				result.Batch = ctr.resBat
-				return nil
-			}
-
 		case psSelsForOneRow:
 			row := int64(ctr.lastIdx - 1)
-			processCount := min(len(ctr.sels), colexec.DefaultBatchSize-resRowCnt)
-			sels := ctr.sels[:processCount]
-			// remove processed sels
-			ctr.sels = ctr.sels[processCount:]
+			processCount := min(len(ctr.sels), outputLimit-resRowCnt)
 			if hashJoin.NonEqCond == nil {
+				if len(areas) > 0 && ctr.probeRightSemiAnti {
+					processCount, full = ctr.fitGroupOutput(hashJoin, areas, row, processCount, resRowCnt)
+				}
+				if processCount == 0 {
+					break
+				}
+				sels := ctr.sels[:processCount]
+				ctr.sels = ctr.sels[processCount:]
 				if ctr.probeTrackBuildMatches {
 					for _, sel := range sels {
 						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
@@ -1006,9 +1034,8 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 								continue
 							}
 							for _, sel := range sels {
-								idx1 := sel / colexec.DefaultBatchSize
-								idx2 := sel % colexec.DefaultBatchSize
-								err = ctr.resBat.Vecs[j].UnionOne(ctr.rightBats[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp())
+								idx1, idx2 := ctr.locateBuildRow(int64(sel))
+								err = ctr.resBat.Vecs[j].UnionOne(ctr.rightBats[idx1].Vecs[rp.Pos], idx2, proc.Mp())
 								if err != nil {
 									return err
 								}
@@ -1019,10 +1046,10 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 				resRowCnt += processCount
 			} else {
-				for _, sel := range sels {
-					idx1 := int64(sel / colexec.DefaultBatchSize)
-					idx2 := int64(sel % colexec.DefaultBatchSize)
-					ok, err := ctr.evalNonEqCondition(ctr.leftBat, int64(row), proc, idx1, idx2)
+				for _, sel := range ctr.sels[:processCount] {
+					ctr.sels = ctr.sels[1:]
+					idx1, idx2 := ctr.locateBuildRow(int64(sel))
+					ok, err := ctr.evalNonEqCondition(ctr.leftBat, row, proc, idx1, idx2)
 					if err != nil {
 						return err
 					}
@@ -1043,14 +1070,17 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 						ctr.leftRowMatched = true
 
 						if ctr.probeRightSemiAnti {
-							if err = ctr.appendOneMatch(hashJoin, proc, int64(row), idx1, idx2); err != nil {
+							selected := outputRow{left: ctr.leftBat, leftRow: row, right: ctr.retainedOutputBatch(idx1), rightRow: idx2}
+							if err = emit(selected); err != nil {
 								return err
 							}
-							resRowCnt++
 						}
 
 						if ctr.probeLeftSemi {
 							ctr.sels = nil
+							break
+						}
+						if full {
 							break
 						}
 					}
@@ -1058,10 +1088,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 				if len(ctr.sels) == 0 &&
 					!ctr.leftRowMatched && ctr.probeEmitUnmatched {
-					if err = ctr.appendOneNotMatch(hashJoin, proc, int64(row)); err != nil {
+					if err = emit(outputRow{left: ctr.leftBat, leftRow: row}); err != nil {
 						return err
 					}
-					resRowCnt++
 				}
 			}
 
@@ -1072,14 +1101,11 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			} else {
 				ctr.probeState = psNextBatch
 			}
-
-			if resRowCnt >= colexec.DefaultBatchSize {
-				ctr.resBat.AddRowCount(resRowCnt)
-				result.Batch = ctr.resBat
-				return nil
-			}
 		}
 	}
+	ctr.resBat.AddRowCount(resRowCnt)
+	result.Batch = ctr.resBat
+	return nil
 }
 
 func (ctr *container) findAsofPredecessor(
@@ -1112,8 +1138,7 @@ func (ctr *container) findAsofPredecessor(
 		if best < 0 {
 			return -1, false, nil
 		}
-		batchIdx := int64(best / colexec.DefaultBatchSize)
-		rowIdx := int64(best % colexec.DefaultBatchSize)
+		batchIdx, rowIdx := ctr.locateBuildRow(int64(best))
 		qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
 		return best, qualified, evalErr
 	}
@@ -1154,8 +1179,7 @@ func (ctr *container) findAsofPredecessor(
 	if best < 0 {
 		return -1, false, nil
 	}
-	batchIdx := int64(best / colexec.DefaultBatchSize)
-	rowIdx := int64(best % colexec.DefaultBatchSize)
+	batchIdx, rowIdx := ctr.locateBuildRow(int64(best))
 	qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
 	if evalErr != nil {
 		return -1, false, evalErr
@@ -1182,8 +1206,8 @@ func (ctr *container) scanAsofEligible(
 		if !valid || !asofPredecessorEligible(value, leftValue, ctr.asofStrict) {
 			continue
 		}
-		qualified, err := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc,
-			int64(candidate/colexec.DefaultBatchSize), int64(candidate%colexec.DefaultBatchSize))
+		batchIdx, rowIdx := ctr.locateBuildRow(int64(candidate))
+		qualified, err := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
 		if err != nil {
 			return -1, false, err
 		}
@@ -1217,9 +1241,11 @@ func asofTemporalValue(vec *vector.Vector, row int64) (int64, bool) {
 }
 
 func (ctr *container) asofRightTemporalValue(hashJoin *HashJoin, candidate int32) (int64, bool) {
-	batchIdx := int(candidate / colexec.DefaultBatchSize)
-	rowIdx := int64(candidate % colexec.DefaultBatchSize)
-	if batchIdx < 0 || batchIdx >= len(ctr.rightBats) || hashJoin.AsofRightCol < 0 ||
+	if candidate < 0 {
+		return 0, false
+	}
+	batchIdx, rowIdx := ctr.locateBuildRow(int64(candidate))
+	if batchIdx >= int64(len(ctr.rightBats)) || hashJoin.AsofRightCol < 0 ||
 		int(hashJoin.AsofRightCol) >= len(ctr.rightBats[batchIdx].Vecs) {
 		return 0, false
 	}
@@ -1677,10 +1703,8 @@ func (ctr *container) appendFixedBuildColumn(dst *vector.Vector, column int32, s
 	for len(sels) > 0 {
 		n := min(len(sels), len(sources))
 		for i, sel := range sels[:n] {
-			sources[i] = vector.FixedSourceRow{
-				Vec: ctr.rightBats[sel/colexec.DefaultBatchSize].Vecs[column],
-				Row: int64(sel % colexec.DefaultBatchSize),
-			}
+			batchIdx, row := ctr.locateBuildRow(int64(sel))
+			sources[i] = vector.FixedSourceRow{Vec: ctr.rightBats[batchIdx].Vecs[column], Row: row}
 		}
 		used, err := dst.TryUnionFlatFixedRows(sources[:n], proc.Mp())
 		if err != nil {
@@ -1753,18 +1777,39 @@ func (ctr *container) finalize(hashJoin *HashJoin, proc *process.Process, result
 	rowCnt := 0
 
 	rows := &hashJoin.uniqueRightRows
-	for rowCnt < colexec.DefaultBatchSize && ctr.rightMatchedIter.HasNext() {
-		row := ctr.rightMatchedIter.Next()
-		batchIdx := row / colexec.DefaultBatchSize
-		rows[0] = int64(row % colexec.DefaultBatchSize)
+	outputLimit := ctr.maxOutputRows()
+	var localAreas [8]outputArea
+	areas := ctr.outputAreas(localAreas[:0], ctr.checkBuildArea)
+	full := false
+	for !full && rowCnt < outputLimit && ctr.rightMatchedIter.HasNext() {
+		ordinal := int64(ctr.rightMatchedIter.PeekNext())
+		batchIdx, row := ctr.locateBuildRow(ordinal)
+		batchStart := ordinal - row
+		batchRows := ctr.buildBatchRows(batchIdx)
+		selected := outputRow{right: ctr.retainedOutputBatch(batchIdx), rightRow: row}
+		if len(areas) > 0 && !areas.reserve(hashJoin.ResultCols, selected, outputRow{}, rowCnt > 0) {
+			break
+		}
+		ctr.rightMatchedIter.Next()
+		rows[0] = row
 		count := 1
-		limit := min(len(rows), colexec.DefaultBatchSize-rowCnt)
+		limit := min(len(rows), outputLimit-rowCnt)
 		// Finalize follows probe, so its bounded selection can reuse the
 		// operator's Find scratch. Only adjacent rows from the same source
 		// batch share a gather; the iterator and output order are unchanged.
-		for count < limit && ctr.rightMatchedIter.HasNext() &&
-			ctr.rightMatchedIter.PeekNext()/colexec.DefaultBatchSize == batchIdx {
-			rows[count] = int64(ctr.rightMatchedIter.Next() % colexec.DefaultBatchSize)
+		for count < limit && ctr.rightMatchedIter.HasNext() {
+			nextRow := int64(ctr.rightMatchedIter.PeekNext()) - batchStart
+			if uint64(nextRow) >= batchRows {
+				break
+			}
+			previous := selected
+			selected.rightRow = nextRow
+			if len(areas) > 0 && !areas.reserve(hashJoin.ResultCols, selected, previous, true) {
+				full = true
+				break
+			}
+			ctr.rightMatchedIter.Next()
+			rows[count] = nextRow
 			count++
 		}
 
@@ -1804,23 +1849,6 @@ func (ctr *container) finalize(hashJoin *HashJoin, proc *process.Process, result
 	ctr.resBat.AddRowCount(rowCnt)
 	result.Batch = ctr.resBat
 
-	return nil
-}
-
-func (ctr *container) appendOneNotMatch(hashJoin *HashJoin, proc *process.Process, row int64) error {
-	for j, rp := range hashJoin.ResultCols {
-		if rp.Rel == 0 {
-			err := ctr.resBat.Vecs[j].UnionOne(ctr.leftBat.Vecs[rp.Pos], row, proc.Mp())
-			if err != nil {
-				return err
-			}
-		} else {
-			err := ctr.resBat.Vecs[j].UnionNull(proc.Mp())
-			if err != nil {
-				return err
-			}
-		}
-	}
 	return nil
 }
 
@@ -1894,21 +1922,29 @@ func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Proc
 	// A bounded gather amortizes per-row projection across physical batches.
 	// Decide per column: one out-of-line string must not disable fixed-width
 	// or inline-string copies for the rest of the build tuple.
-	if matched >= 8 && rightRows[0]/colexec.DefaultBatchSize != rightRows[matched-1]/colexec.DefaultBatchSize {
+	firstBatch, _ := ctr.locateBuildRow(rightRows[0])
+	lastBatch, _ := ctr.locateBuildRow(rightRows[matched-1])
+	if matched >= 8 && firstBatch != lastBatch {
 		var sources [hashmap.UnitLimit]vector.FixedSourceRow
 		// Probe outputs are already copied; reuse their selection scratch for
 		// build-local ordinals instead of allocating another per-chunk array.
 		selections := leftRows[:matched]
-		for i, row := range rightRows[:matched] {
-			selections[i] = row % colexec.DefaultBatchSize
+		if ctr.mp.HasBatchRowEnds() {
+			for i, row := range rightRows[:matched] {
+				rightRows[i], selections[i] = ctr.mp.LocateBatchRow(row)
+			}
+		} else {
+			for i, row := range rightRows[:matched] {
+				rightRows[i], selections[i] = locateStandardBuildRow(row)
+			}
 		}
 		for j, rp := range hashJoin.ResultCols {
 			if rp.Rel == 0 {
 				continue
 			}
-			for i, row := range rightRows[:matched] {
+			for i := range matched {
 				sources[i] = vector.FixedSourceRow{
-					Vec: ctr.rightBats[row/colexec.DefaultBatchSize].Vecs[rp.Pos],
+					Vec: ctr.rightBats[rightRows[i]].Vecs[rp.Pos],
 					Row: selections[i],
 				}
 			}
@@ -1940,10 +1976,17 @@ func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Proc
 	// Only consecutive rows from the same build batch can share a Union call:
 	// grouping all matches by batch would reorder the result stream.
 	for start := 0; start < matched; {
-		batchIdx := rightRows[start] / colexec.DefaultBatchSize
-		end := start
-		for end < matched && rightRows[end]/colexec.DefaultBatchSize == batchIdx {
-			rightRows[end] %= colexec.DefaultBatchSize
+		batchIdx, row := ctr.locateBuildRow(rightRows[start])
+		batchStart := rightRows[start] - row
+		batchRows := ctr.buildBatchRows(batchIdx)
+		rightRows[start] = row
+		end := start + 1
+		for end < matched {
+			nextRow := rightRows[end] - batchStart
+			if uint64(nextRow) >= batchRows {
+				break
+			}
+			rightRows[end] = nextRow
 			end++
 		}
 		for j, rp := range hashJoin.ResultCols {
@@ -1963,47 +2006,6 @@ func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Proc
 		start = end
 	}
 	return matched, nil
-}
-
-func (ctr *container) appendOneMatch(hashJoin *HashJoin, proc *process.Process, leftRow, rIdx1, rIdx2 int64) error {
-	for j, rp := range hashJoin.ResultCols {
-		if rp.Rel == 0 {
-			err := ctr.resBat.Vecs[j].UnionOne(ctr.leftBat.Vecs[rp.Pos], leftRow, proc.Mp())
-			if err != nil {
-				return err
-			}
-		} else {
-			err := ctr.resBat.Vecs[j].UnionOne(ctr.rightBats[rIdx1].Vecs[rp.Pos], rIdx2, proc.Mp())
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (ctr *container) appendOneMark(
-	hashJoin *HashJoin,
-	proc *process.Process,
-	leftRow int64,
-	value bool,
-	isNull bool,
-) error {
-	for i, rp := range hashJoin.ResultCols {
-		switch rp.Rel {
-		case 0:
-			if err := ctr.resBat.Vecs[i].UnionOne(ctr.leftBat.Vecs[rp.Pos], leftRow, proc.Mp()); err != nil {
-				return err
-			}
-		case -1:
-			if err := vector.AppendFixed(ctr.resBat.Vecs[i], value, isNull, proc.Mp()); err != nil {
-				return err
-			}
-		default:
-			return moerr.NewInternalErrorNoCtxf("hash mark join has unexpected result relation %d", rp.Rel)
-		}
-	}
-	return nil
 }
 
 func (ctr *container) evalNonEqCondition(bat *batch.Batch, row int64, proc *process.Process, idx1, idx2 int64) (bool, error) {
@@ -2049,6 +2051,7 @@ func (hashJoin *HashJoin) resetResultBat() error {
 		}
 	} else {
 		ctr.resBat = batch.NewOffHeapWithSize(len(hashJoin.ResultCols))
+		ctr.outputRowLimit = colexec.DefaultBatchSize
 
 		for i, rp := range hashJoin.ResultCols {
 			switch rp.Rel {
@@ -2058,6 +2061,11 @@ func (hashJoin *HashJoin) resetResultBat() error {
 				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(hashJoin.RightTypes[rp.Pos])
 			case -1:
 				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
+			}
+			if !hashJoin.IsShuffle {
+				if width := ctr.resBat.Vecs[i].GetType().TypeSize(); width > 0 {
+					ctr.outputRowLimit = max(1, min(ctr.outputRowLimit, int(mpool.MaxAllocationSize()/int64(width))))
+				}
 			}
 		}
 		if err := ctr.resBat.SetAllocationAccount(hashJoin.resultAllocation); err != nil {
