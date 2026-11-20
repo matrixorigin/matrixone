@@ -174,28 +174,6 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 				"comsume",
 			}),
 		c.withMultiGraph(
-			"MoLogger Consume - Check Cost (avg)",
-			3,
-			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_sum", `type="consume_delay"`) + `[$interval:1m]))` +
-					`/` +
-					`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_status_total", "") + `[$interval:1m]))`,
-			},
-			[]string{
-				"{{ type }}",
-			},
-			axis.Unit("s"),
-		),
-		c.withMultiGraph(
-			"MoLogger Consume - Check result",
-			3,
-			[]string{
-				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_status_total", "") + `[$interval:1m])) by(type)`,
-			},
-			[]string{
-				"{{ type }}",
-			}),
-		c.withMultiGraph(
 			"MOLogger error count",
 			3,
 			[]string{

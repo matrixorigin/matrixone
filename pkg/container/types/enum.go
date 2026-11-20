@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 func ParseIntToEnum(input int64) (Enum, error) {
@@ -151,20 +152,48 @@ func parseEnumNameWithContext(ctx context.Context, elems []string, name string) 
 	if err := validateEnumMemberCountWithContext(ctx, len(elems)); err != nil {
 		return 0, err
 	}
-	// Preserve raw padded labels in existing MO definitions before trying the
-	// MySQL trailing-space spelling. Do not normalize stored domain metadata.
-	for {
+	// Raw labels keep precedence so a released definition that stores padded
+	// labels such as ENUM(' ','red','') still resolves '' to its own member.
+	// Trailing spaces are then insignificant: first on the value, matching the
+	// released fallback, and finally on both sides for padded stored labels.
+	for i, n := range elems {
+		if strings.EqualFold(n, name) {
+			return Enum(i + 1), nil
+		}
+	}
+	trimmed := strings.TrimRight(name, " ")
+	if trimmed != name {
 		for i, n := range elems {
-			if strings.EqualFold(n, name) {
+			if strings.EqualFold(n, trimmed) {
 				return Enum(i + 1), nil
 			}
 		}
-		trimmed := strings.TrimRight(name, " ")
-		if trimmed == name {
-			return 0, nil
-		}
-		name = trimmed
 	}
+	for i, n := range elems {
+		if strings.EqualFold(strings.TrimRight(n, " "), trimmed) {
+			return Enum(i + 1), nil
+		}
+	}
+	return 0, nil
+}
+
+// NormalizeEnumValues applies MySQL's CREATE-time ENUM member rules: trailing
+// spaces are removed, and members that are then equal under the same
+// case-insensitive equivalence used for assignment (strings.EqualFold) are
+// rejected as duplicates.
+func NormalizeEnumValues(ctx context.Context, values []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimRight(value, " ")
+		key := util.EqualFoldKey(trimmed)
+		if _, ok := seen[key]; ok {
+			return nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "duplicate enum member %q", value)
+		}
+		seen[key] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result, nil
 }
 
 // ParseEnumValue return item index with special number.

@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	util "github.com/matrixorigin/matrixone/pkg/util/logservice"
 )
 
 // logserviceReplicasCols defines the columns of result of statement
@@ -468,7 +467,7 @@ func setNonVotingReplicaNum(ctx context.Context, client logservice.CNHAKeeperCli
 
 func setNonVotingLocality(ctx context.Context, client logservice.CNHAKeeperClient, localityStr string) error {
 	if err := client.UpdateNonVotingLocality(ctx, pb.Locality{
-		Value: util.GetLocalityFromStr(localityStr),
+		Value: pb.ParseLocality(localityStr),
 	}); err != nil {
 		return err
 	}
