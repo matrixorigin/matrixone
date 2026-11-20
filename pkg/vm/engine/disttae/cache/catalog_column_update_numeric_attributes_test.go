@@ -76,7 +76,7 @@ func TestColumnOnlyUpdateNeverDropsNumericAttributes(t *testing.T) {
 	t.Run("identical masks replay instead of merging", func(t *testing.T) {
 		misses := captureColumnMisses(t)
 		cc, item, cols := decimalColumnUpdateFixture(t)
-		before := proto.Clone(item.BuildPlanTableDef())
+		before := proto.Clone(item.ReadPlanTableDef())
 		// The unsigned (mask 1) and zerofill (mask 3) columns alone form a
 		// column-only update: the rule must refuse them rather than accept a
 		// projection that could drop the mask. Mask 1 fails the integer-only
@@ -87,32 +87,32 @@ func TestColumnOnlyUpdateNeverDropsNumericAttributes(t *testing.T) {
 		}
 		require.Equal(t, int64(3), misses.Load(),
 			"every attributed-decimal column-only update must fall back to raw catalog replay")
-		require.True(t, proto.Equal(before, item.BuildPlanTableDef()))
+		require.True(t, proto.Equal(before, item.ReadPlanTableDef()))
 		require.Equal(t, int64(100), item.Ts.PhysicalTime)
 	})
 
 	t.Run("mask drift replays instead of accepting", func(t *testing.T) {
 		misses := captureColumnMisses(t)
 		cc, item, cols := decimalColumnUpdateFixture(t)
-		before := proto.Clone(item.BuildPlanTableDef())
+		before := proto.Clone(item.ReadPlanTableDef())
 		updated := append(Columns(nil), cols[2:3]...)
 		updated[0].IsUnsigned = 0 // published mask 1, incoming mask 0
 		cc.InsertColumns(columnUpdateBatch(t, updated, 200))
 		require.Equal(t, int64(1), misses.Load(),
 			"a mask change must go through the raw replay, never a silent projection merge")
-		require.True(t, proto.Equal(before, item.BuildPlanTableDef()))
+		require.True(t, proto.Equal(before, item.ReadPlanTableDef()))
 	})
 
 	t.Run("plain decimal acceptance preserves the zero mask", func(t *testing.T) {
 		misses := captureColumnMisses(t)
 		cc, item, cols := decimalColumnUpdateFixture(t)
-		before := proto.Clone(item.BuildPlanTableDef())
+		before := proto.Clone(item.ReadPlanTableDef())
 		updated := append(Columns(nil), cols[1:2]...)
 		cc.InsertColumns(columnUpdateBatch(t, updated, 200))
 		require.Zero(t, misses.Load())
-		require.True(t, proto.Equal(before, item.BuildPlanTableDef()))
+		require.True(t, proto.Equal(before, item.ReadPlanTableDef()))
 		// The accepted projection keeps the plain column's zero mask.
-		require.Zero(t, item.BuildPlanTableDef().Cols[1].Typ.NumericAttributes)
+		require.Zero(t, item.ReadPlanTableDef().Cols[1].Typ.NumericAttributes)
 	})
 
 	t.Run("accepted mapping is deterministic from the column row", func(t *testing.T) {

@@ -170,8 +170,8 @@ func TestCandidateConcurrentEncodingAndPrivateWrite(t *testing.T) {
 	go func() {
 		<-start
 		for i := 0; i < 100; i++ {
-			private := s.projection()
-			private.Cols[0].Default.NullAbility = false
+			private := s.attributes(false)
+			private[0].Attr.Default.NullAbility = false
 		}
 		done <- nil
 	}()
@@ -183,7 +183,7 @@ func TestCandidateConcurrentEncodingAndPrivateWrite(t *testing.T) {
 }
 
 // A real catalog source remains usable by an old reader after a new version
-// is published, including when the reader asks for fresh private projections.
+// is published, including when the reader asks for private engine definitions.
 func TestPublishedSchemaSourceMVCCReader(t *testing.T) {
 	cc := NewCatalog()
 	typ := types.T_int64.ToType()
@@ -205,15 +205,13 @@ func TestPublishedSchemaSourceMVCCReader(t *testing.T) {
 	old := lookup(15)
 	reader := old.SchemaSource()
 	require.True(t, reader.Valid())
-	before := reader.PlanTableDef()
+	before := old.ReadPlanTableDef()
 	publish(2, 20, "new")
 	current := lookup(25)
-	require.Equal(t, "new", current.SchemaSource().PlanTableDef().Cols[0].Name)
-	require.Equal(t, "old", reader.PlanTableDef().Cols[0].Name)
-	require.Equal(t, "old", lookup(15).SchemaSource().PlanTableDef().Cols[0].Name)
-	private := reader.PlanTableDef()
-	private.Cols[0].Name = "changed"
-	require.Equal(t, before, reader.PlanTableDef())
+	require.Equal(t, "new", current.ReadPlanTableDef().Cols[0].Name)
+	require.Equal(t, "old", old.ReadPlanTableDef().Cols[0].Name)
+	require.Equal(t, "old", lookup(15).ReadPlanTableDef().Cols[0].Name)
+	require.Same(t, before, old.ReadPlanTableDef())
 	defs, err := reader.EngineDefs(old)
 	require.NoError(t, err)
 	var names []string

@@ -15,15 +15,9 @@
 package cache
 
 import (
-	"bytes"
-
-	"github.com/gogo/protobuf/proto"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -159,66 +153,4 @@ func (s *candidateSchema) engineDefs(item *TableItem) ([]engine.TableDef, error)
 		defs = append(defs, &attrs[i])
 	}
 	return defs, nil
-}
-
-func (s *candidateSchema) projection() *plan.TableDef {
-	template := *s.planner
-	template.Cols = nil
-	compositePrimary := template.Pkey != nil && template.Pkey.PkeyColName == catalog.CPrimaryKeyColName
-	if compositePrimary {
-		key := *template.Pkey
-		key.CompPkeyCol = nil
-		template.Pkey = &key
-	}
-	compositeCluster := template.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(template.ClusterBy.Name)
-	if compositeCluster {
-		key := *template.ClusterBy
-		key.CompCbkeyCol = nil
-		template.ClusterBy = &key
-	}
-
-	out := plan.CopyCatalogTableTemplate(&template)
-	if s.planner.Cols != nil {
-		values := make([]plan.ColDef, len(s.planner.Cols))
-		out.Cols = make([]*plan.ColDef, len(values))
-		count := 0
-		for _, col := range s.planner.Cols {
-			if col != nil && col.Default != nil {
-				count++
-			}
-		}
-		defaults := make([]plan.Default, count)
-		nextDefault := 0
-		for i, col := range s.planner.Cols {
-			if col == nil {
-				continue
-			}
-			dst := &values[i]
-			*dst = *col
-			dst.XXX_sizecache = 0
-			dst.XXX_unrecognized = bytes.Clone(col.XXX_unrecognized)
-			dst.Typ = plan.CopyCatalogType(col.Typ)
-			if col.Default != nil {
-				dst.Default = plan.CopyDefaultInto(&defaults[nextDefault], col.Default)
-				nextDefault++
-			}
-			dst.OnUpdate = cloneOnUpdate(col.OnUpdate)
-			dst.GeneratedCol = cloneGeneratedCol(col.GeneratedCol)
-			if col.IntegerResultPresentation != nil {
-				dst.IntegerResultPresentation = proto.Clone(col.IntegerResultPresentation).(*plan.IntegerResultPresentation)
-			}
-			if col.EnumSetResultType != nil {
-				typ := plan.CopyCatalogType(*col.EnumSetResultType)
-				dst.EnumSetResultType = &typ
-			}
-			out.Cols[i] = dst
-		}
-	}
-	if compositePrimary {
-		out.Pkey.CompPkeyCol = plan2.GetColDefFromTable(out.Cols, out.Pkey.PkeyColName)
-	}
-	if compositeCluster {
-		out.ClusterBy.CompCbkeyCol = plan2.GetColDefFromTable(out.Cols, out.ClusterBy.Name)
-	}
-	return out
 }

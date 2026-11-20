@@ -98,7 +98,7 @@ func TestGetTableDefCatalogPropertiesRoundTrip(t *testing.T) {
 				require.True(t, found)
 			}
 			var projectedProperties []*plan.Property
-			for _, def := range schema.projection().Defs {
+			for _, def := range schema.planner.Defs {
 				projectedProperties = append(projectedProperties, def.GetProperties().GetProperties()...)
 			}
 			require.Equal(t, want, projectedProperties)

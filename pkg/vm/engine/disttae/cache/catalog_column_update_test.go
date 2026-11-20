@@ -111,7 +111,7 @@ func captureColumnMisses(t *testing.T) *atomic.Int64 {
 func TestColumnOnlyUpdatePreservesPublishedSchema(t *testing.T) {
 	misses := captureColumnMisses(t)
 	cc, item, cols := columnUpdateFixture(t, 3)
-	before := proto.Clone(item.BuildPlanTableDef())
+	before := proto.Clone(item.ReadPlanTableDef())
 	for _, subset := range []Columns{cols[:1], cols[:3]} {
 		updated := append(Columns(nil), subset...)
 		for i := range updated {
@@ -121,20 +121,20 @@ func TestColumnOnlyUpdatePreservesPublishedSchema(t *testing.T) {
 	}
 	require.Zero(t, misses.Load())
 	require.Equal(t, 1, cc.tables.data.Len())
-	require.True(t, proto.Equal(before, item.BuildPlanTableDef()))
+	require.True(t, proto.Equal(before, item.ReadPlanTableDef()))
 	require.Equal(t, int64(100), item.Ts.PhysicalTime)
 	require.Equal(t, 0, item.PrimaryIdx)
 	require.Equal(t, 1, item.ClusterByIdx)
 	lookup := &TableItem{AccountId: 7, DatabaseId: 8, Name: "t", Ts: timestamp.Timestamp{PhysicalTime: 300}}
 	require.True(t, cc.GetTable(lookup))
-	require.True(t, proto.Equal(item.BuildPlanTableDef(), lookup.BuildPlanTableDef()))
+	require.True(t, proto.Equal(item.ReadPlanTableDef(), lookup.ReadPlanTableDef()))
 	// A real DDL still initializes the new table version, rather than taking the no-op path.
 	next := &TableItem{AccountId: 7, DatabaseId: 8, Id: 9, Name: "t", Ts: timestamp.Timestamp{PhysicalTime: 300}, PrimaryIdx: -1, PrimarySeqnum: -1, ClusterByIdx: -1}
 	cc.setTableItem(next, true)
 	cols[0].Comment = "DDL change"
 	cc.InsertColumns(columnUpdateBatch(t, cols, 300))
-	require.Equal(t, "DDL change", next.BuildPlanTableDef().Cols[0].Comment)
-	require.True(t, proto.Equal(before, item.BuildPlanTableDef()))
+	require.Equal(t, "DDL change", next.ReadPlanTableDef().Cols[0].Comment)
+	require.True(t, proto.Equal(before, item.ReadPlanTableDef()))
 	require.Zero(t, misses.Load())
 }
 
@@ -185,14 +185,14 @@ func TestColumnOnlyUpdateRejectsUnprovenProjection(t *testing.T) {
 			}
 			mutate(item, &cols)
 			var before proto.Message
-			if item.BuildPlanTableDef() != nil {
-				before = proto.Clone(item.BuildPlanTableDef())
+			if item.ReadPlanTableDef() != nil {
+				before = proto.Clone(item.ReadPlanTableDef())
 			}
 			require.NotPanics(t, func() { cc.InsertColumns(columnUpdateBatch(t, cols, 200)) })
 			require.Equal(t, int64(1), misses.Load())
 			require.Equal(t, 1, cc.tables.data.Len())
 			if before != nil {
-				require.True(t, proto.Equal(before, item.BuildPlanTableDef()))
+				require.True(t, proto.Equal(before, item.ReadPlanTableDef()))
 			}
 		})
 	}
@@ -203,7 +203,7 @@ func TestColumnOnlyUpdateRespectsTableIncarnation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			misses := captureColumnMisses(t)
 			cc, item, cols := columnUpdateFixture(t, 3)
-			before := proto.Clone(item.BuildPlanTableDef())
+			before := proto.Clone(item.ReadPlanTableDef())
 			at := int64(200)
 			switch name {
 			case "missing":
@@ -231,7 +231,7 @@ func TestColumnOnlyUpdateRespectsTableIncarnation(t *testing.T) {
 			cc.InsertColumns(columnUpdateBatch(t, cols[:1], at))
 			require.Equal(t, int64(1), misses.Load())
 			require.Equal(t, n, cc.tables.data.Len())
-			require.True(t, proto.Equal(before, item.BuildPlanTableDef()))
+			require.True(t, proto.Equal(before, item.ReadPlanTableDef()))
 		})
 	}
 }
@@ -243,7 +243,7 @@ func TestColumnOnlyUpdateWithGCAndReaders(t *testing.T) {
 	older.Ts.PhysicalTime = 50
 	cc.setTableItem(&older, true)
 	bat := columnUpdateBatch(t, cols[:1], 200)
-	before := proto.Clone(item.BuildPlanTableDef())
+	before := proto.Clone(item.ReadPlanTableDef())
 	start := make(chan struct{})
 	var found bool
 	var observed *plan.TableDef
@@ -254,7 +254,7 @@ func TestColumnOnlyUpdateWithGCAndReaders(t *testing.T) {
 		func() {
 			q := &TableItem{AccountId: 7, DatabaseId: 8, Name: "t", Ts: timestamp.Timestamp{PhysicalTime: 200}}
 			found = cc.GetTable(q)
-			observed = q.BuildPlanTableDef()
+			observed = q.ReadPlanTableDef()
 		},
 	} {
 		wg.Add(1)
@@ -263,9 +263,9 @@ func TestColumnOnlyUpdateWithGCAndReaders(t *testing.T) {
 	close(start)
 	wg.Wait()
 	require.True(t, found)
-	require.True(t, proto.Equal(item.BuildPlanTableDef(), observed))
+	require.True(t, proto.Equal(item.ReadPlanTableDef(), observed))
 	require.Equal(t, 1, cc.tables.data.Len())
-	require.True(t, proto.Equal(before, item.BuildPlanTableDef()))
+	require.True(t, proto.Equal(before, item.ReadPlanTableDef()))
 	require.Zero(t, misses.Load())
 }
 
@@ -298,7 +298,7 @@ func TestColumnOnlyUpdateComparesStringCollation(t *testing.T) {
 	cols[2].Typ, _ = typ.Marshal()
 	cc.InsertColumns(columnUpdateBatch(t, cols[2:3], 300))
 	require.Equal(t, int64(1), misses.Load())
-	require.Equal(t, uint32(0), item.BuildPlanTableDef().Cols[2].Typ.Charset)
+	require.Equal(t, uint32(0), item.ReadPlanTableDef().Cols[2].Typ.Charset)
 }
 
 func BenchmarkColumnAttributeDecode(b *testing.B) {

@@ -34,15 +34,14 @@ func TestCanonicalSchemaAttributeIsolation(t *testing.T) {
 	s := newCandidateSchema(item)
 	require.NotNil(t, s)
 	require.NotNil(t, s.planner.Cols)
-	require.True(t, proto.Equal(expected, s.projection()))
+	require.True(t, proto.Equal(expected, s.planner))
 	source := SchemaSource{schema: s}
 	a, b := source.Columns(false), source.Columns(false)
 	require.Equal(t, original, *a[0])
 	a[0].Default.OriginString = "changed"
 	a[0].OnUpdate.OriginString = "changed"
 	a[0].GeneratedCol.OriginString = "changed"
-	p := s.projection()
-	p.Cols[0].Default.OriginString = "changed"
+	require.Equal(t, "default", s.planner.Cols[0].Default.OriginString)
 	require.Equal(t, original, *b[0])
 	require.Equal(t, original, *source.Columns(false)[0])
 	require.Equal(t, "default", item.Defs[0].(*engine.AttributeDef).Attr.Default.OriginString)
@@ -56,36 +55,17 @@ func TestCanonicalSchemaAttributeIsolation(t *testing.T) {
 	require.Equal(t, "default", again[len(again)-1].(*engine.AttributeDef).Attr.Default.OriginString)
 }
 
-func TestPublishedSchemaCopyAndIsolation(t *testing.T) {
+func TestPublishedSchemaCopySharesPlanner(t *testing.T) {
 	_, item, _ := columnUpdateFixture(t, 3)
 	require.Nil(t, item.Defs)
 	require.NotNil(t, item.schema)
 	var copied TableItem
 	copyTableItem(&copied, item)
 	require.Same(t, item.schema, copied.schema)
-	first, second := item.BuildPlanTableDef(), copied.BuildPlanTableDef()
-	first.Cols[0].Default.OriginString = "changed"
-	require.Equal(t, "7", second.Cols[0].Default.OriginString)
+	require.Same(t, item.ReadPlanTableDef(), copied.ReadPlanTableDef())
 	defs, err := copied.BuildEngineDefs()
 	require.NoError(t, err)
 	require.NotEmpty(t, defs)
-}
-
-func TestProjectionDefaultsAreIndependent(t *testing.T) {
-	s := &candidateSchema{planner: &plan.TableDef{Cols: []*plan.ColDef{
-		{Default: &plan.Default{OriginString: "first", NullAbility: true}},
-		{},
-		{Default: &plan.Default{OriginString: "last"}},
-	}}}
-	first, second := s.projection(), s.projection()
-	require.Nil(t, first.Cols[1].Default)
-	require.Equal(t, "first", first.Cols[0].Default.OriginString)
-	require.True(t, first.Cols[0].Default.NullAbility)
-	require.Equal(t, "last", first.Cols[2].Default.OriginString)
-	first.Cols[0].Default.OriginString = "changed"
-	require.Equal(t, "last", first.Cols[2].Default.OriginString)
-	require.Equal(t, "first", second.Cols[0].Default.OriginString)
-	require.Equal(t, "first", s.planner.Cols[0].Default.OriginString)
 }
 
 func TestSchemaSourceColumnsIsolation(t *testing.T) {
@@ -119,8 +99,4 @@ func TestSchemaSourceReconstructsPrivateViews(t *testing.T) {
 	actual, err := source.EngineDefs(item)
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
-	require.True(t, proto.Equal(item.BuildPlanTableDef(), source.PlanTableDef()))
-	first := source.PlanTableDef()
-	first.Cols[0].Default.OriginString = "changed"
-	require.Equal(t, "7", source.PlanTableDef().Cols[0].Default.OriginString)
 }

@@ -57,7 +57,7 @@ func TestInvalidConstraintPreventsSchemaPublication(t *testing.T) {
 	item := &TableItem{Name: "bad_constraint", Constraint: wire}
 	InitTableItemWithColumns(item, nil)
 	require.False(t, item.SchemaSource().Valid())
-	require.Nil(t, item.BuildPlanTableDef())
+	require.Nil(t, item.ReadPlanTableDef())
 
 	_, err := newSchemaConstraint(wire).decode()
 	require.Error(t, err)

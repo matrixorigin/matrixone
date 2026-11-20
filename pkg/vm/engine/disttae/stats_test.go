@@ -383,7 +383,7 @@ func TestUpdateStats(t *testing.T) {
 			require.Equal(t, 3.0, borrowed.NdvMap["event_id"])
 
 			owned := plan2.NewStatsInfo()
-			req := newUpdateStatsRequest(item.BuildPlanTableDef(), ps, fs, ts, 1, owned)
+			req := newUpdateStatsRequest(item.ReadPlanTableDef(), ps, fs, ts, 1, owned)
 			_, err = CollectAndCalculateStats(ctx, req, e.globalStats.concurrentExecutor)
 			require.NoError(t, err)
 			require.Equal(t, owned, borrowed)

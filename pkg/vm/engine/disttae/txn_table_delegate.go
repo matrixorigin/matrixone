@@ -67,10 +67,6 @@ func newTxnTableWithItem(
 		}
 		wire = item.ConstraintBytes()
 	}
-	planner := source.BorrowPlanTableDef()
-	if planner == nil {
-		planner = item.BuildPlanTableDef()
-	}
 	tbl := &txnTable{
 		db:            db,
 		accountId:     item.AccountId,
@@ -79,7 +75,7 @@ func newTxnTableWithItem(
 		tableName:     item.Name,
 		source:        source,
 		defs:          defs,
-		tableDef:      planner,
+		tableDef:      item.ReadPlanTableDef(),
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
 		relKind:       item.Kind,
@@ -909,6 +905,13 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeUpserted(
 	return modify, nil
 }
 
+func (tbl *txnTableDelegate) ValidatedCatalogKind() (string, bool) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.primary.ValidatedCatalogKind()
+	}
+	return tbl.origin.ValidatedCatalogKind()
+}
+
 func (tbl *txnTableDelegate) TableDefs(
 	ctx context.Context,
 ) ([]engine.TableDef, error) {
@@ -1058,6 +1061,10 @@ func (tbl *txnTableDelegate) TableColumns(
 		return tbl.combined.tbl.TableColumns(ctx)
 	}
 	return tbl.origin.TableColumns(ctx)
+}
+
+func (tbl *txnTableDelegate) MaxAndMinValuesUsePlannerColumns() bool {
+	return !tbl.combined.is && tbl.origin.MaxAndMinValuesUsePlannerColumns()
 }
 
 func (tbl *txnTableDelegate) MaxAndMinValues(

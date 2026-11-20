@@ -15,7 +15,6 @@
 package cache
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -83,16 +82,4 @@ func (s SchemaSource) ConstraintBytes() []byte {
 		return nil
 	}
 	return append([]byte(nil), s.schema.constraint.raw...)
-}
-
-// PlanTableDef returns a private planner projection.
-func (s SchemaSource) PlanTableDef() *plan.TableDef { return s.schema.projection() }
-
-// BorrowPlanTableDef returns the published planner for read-only use by catalog consumers.
-// Callers must copy before modifying any part of the returned graph.
-func (s SchemaSource) BorrowPlanTableDef() *plan.TableDef {
-	if s.schema == nil {
-		return nil
-	}
-	return s.schema.planner
 }

@@ -56,18 +56,18 @@ func TestCompositePrimaryKeyDoesNotReferenceProjectedColumn(t *testing.T) {
 	t.Fatal("missing engine constraint")
 }
 
-func TestBuildPlanTableDefOwnsProjection(t *testing.T) {
+func TestReadPlanTableDefOwnsProjection(t *testing.T) {
 	item := &TableItem{Name: "t", Defs: []engine.TableDef{&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Default: &plan.Default{OriginString: "original"}}}}}
-	first, second := item.BuildPlanTableDef(), item.BuildPlanTableDef()
+	first, second := item.ReadPlanTableDef(), item.ReadPlanTableDef()
 	require.NotNil(t, first)
 	require.NotNil(t, second)
 	first.Cols[0].Default.OriginString = "changed"
 	require.Equal(t, "original", second.Cols[0].Default.OriginString)
 	require.Equal(t, "original", item.Defs[0].(*engine.AttributeDef).Attr.Default.OriginString)
-	require.Nil(t, (&TableItem{}).BuildPlanTableDef())
+	require.Nil(t, (&TableItem{}).ReadPlanTableDef())
 }
 
-func TestBuildPlanTableDefComplexConstraintIsolation(t *testing.T) {
+func TestReadPlanTableDefComplexConstraintIsolation(t *testing.T) {
 	idx := &plan.IndexDef{IndexName: "idx", Parts: []string{"a", "b"}, Unique: true}
 	fk := &plan.ForeignKeyDef{Name: "fk", Cols: []uint64{1}, ForeignTbl: 42, ForeignCols: []uint64{2}}
 	pk := &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"a", "b"}}
@@ -81,7 +81,7 @@ func TestBuildPlanTableDefComplexConstraintIsolation(t *testing.T) {
 			&engine.ConstraintDef{Cts: []engine.Constraint{&engine.PrimaryKeyDef{Pkey: pk}, &engine.IndexDef{Indexes: []*plan.IndexDef{idx}}, &engine.ForeignKeyDef{Fkeys: []*plan.ForeignKeyDef{fk}}}},
 		},
 	}
-	first, second := item.BuildPlanTableDef(), item.BuildPlanTableDef()
+	first, second := item.ReadPlanTableDef(), item.ReadPlanTableDef()
 	require.Equal(t, uint32(7), first.Version)
 	require.Equal(t, uint64(11), first.TblId)
 	require.Equal(t, uint64(12), first.DbId)
@@ -956,7 +956,7 @@ func TestReplayDescriptorMatchesProjection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			item := &TableItem{Id: 12, Version: 3, Defs: tc.defs}
 			got := deriveReplayClusterKey(item)
-			expected, ok := readutil.DeclaredClusterKey(item.BuildPlanTableDef())
+			expected, ok := readutil.DeclaredClusterKey(item.ReadPlanTableDef())
 			require.Equal(t, tc.want, ok)
 			if ok {
 				require.Equal(t, expected, *got)
@@ -1029,7 +1029,7 @@ func TestProjectionStreamAndRefChildIsolation(t *testing.T) {
 	stream := &plan.Property{Key: "topic", Value: "original"}
 	children := &engine.RefChildTableDef{Tables: []uint64{42}}
 	item := &TableItem{Name: "t", Defs: []engine.TableDef{&engine.ConstraintDef{Cts: []engine.Constraint{children, &engine.StreamConfigsDef{Configs: []*plan.Property{stream}}}}}}
-	first, second := item.BuildPlanTableDef(), item.BuildPlanTableDef()
+	first, second := item.ReadPlanTableDef(), item.ReadPlanTableDef()
 	require.Equal(t, []uint64{42}, first.RefChildTbls)
 	first.RefChildTbls[0] = 99
 	var property *plan.Property

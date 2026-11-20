@@ -448,11 +448,7 @@ func (cc *CatalogCache) GetTableById(aid uint32, databaseId, tblId uint64) *Tabl
 func (cc *CatalogCache) ReadPlanTableDefByID(accountID uint32, databaseID, tableID uint64) *plan.TableDef {
 	cc.tableChange.RLock()
 	defer cc.tableChange.RUnlock()
-	item := cc.GetTableById(accountID, databaseID, tableID)
-	if def := item.SchemaSource().BorrowPlanTableDef(); def != nil {
-		return def
-	}
-	return item.BuildPlanTableDef()
+	return cc.GetTableById(accountID, databaseID, tableID).ReadPlanTableDef()
 }
 
 // WithTableVersion runs fn only when the current table identity still has the
@@ -1263,22 +1259,20 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	}, coldefs
 }
 
-// BuildPlanTableDef constructs a consumer-owned projection of this schema.
-func (item *TableItem) BuildPlanTableDef() *plan.TableDef {
+// ReadPlanTableDef returns a read-only planner definition. Published items
+// share their immutable graph; legacy items reconstruct it from their definitions.
+func (item *TableItem) ReadPlanTableDef() *plan.TableDef {
 	if item == nil || item.deleted {
 		return nil
 	}
 	if item.schema != nil {
-		return item.SchemaSource().PlanTableDef()
+		return item.schema.planner
 	}
 	if item.Defs == nil {
 		return nil
 	}
-	projection, _ := getTableDef(item, item.Defs)
-	if projection == nil {
-		return nil
-	}
-	return projection
+	def, _ := getTableDef(item, item.Defs)
+	return def
 }
 
 // ReplayClusterKey copies one schema under the same publication guard as column

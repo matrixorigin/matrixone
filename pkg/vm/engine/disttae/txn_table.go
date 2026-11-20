@@ -669,6 +669,12 @@ func (tbl *txnTable) ApproxObjectsNum(ctx context.Context) int {
 	return part.ApproxDataObjectsNum()
 }
 
+// MaxAndMinValuesUsePlannerColumns reports whether the published planner is
+// also the source of TableColumns, in the order used by MaxAndMinValues.
+func (tbl *txnTable) MaxAndMinValuesUsePlannerColumns() bool {
+	return tbl.source.Valid()
+}
+
 func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
 	var (
 		err  error
@@ -1675,6 +1681,12 @@ func (tbl *txnTable) internalDefs() ([]engine.TableDef, error) {
 	}
 	item := &cache.TableItem{Comment: tbl.comment, ViewDef: tbl.viewdef, Partitioned: tbl.partitioned, Partition: tbl.partition, Kind: tbl.relKind, CreateSql: tbl.createSql, ExtraInfo: tbl.extraInfo}
 	return tbl.source.EngineDefs(item)
+}
+
+// ValidatedCatalogKind returns the kind used by TableDefs when the published
+// schema has already validated the constraint stream.
+func (tbl *txnTable) ValidatedCatalogKind() (string, bool) {
+	return tbl.relKind, tbl.source.Valid()
 }
 
 func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {

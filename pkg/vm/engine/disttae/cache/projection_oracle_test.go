@@ -90,11 +90,8 @@ func TestPublishedProjectionIndependentOracle(t *testing.T) {
 		Checks: []*plan.CheckDef{{Name: "check", OriginSql: "a > 0"}}, FeatureFlag: 1, AutoIncrOffset: 2, AutoIncrEpoch: 3, AutoIdCache: 4, DefaultCharset: 5, CollationVersion: 6, KeyFormat: 7,
 		Defs: []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{{Key: catalog.SystemRelAttr_Comment, Value: "table comment"}, {Key: "topic", Value: "events"}, {Key: catalog.SystemRelAttr_Kind, Value: "r"}, {Key: catalog.SystemRelAttr_CreateSQL, Value: "create table T"}}}}}},
 	}
-	first, second := source.PlanTableDef(), item.BuildPlanTableDef()
-	require.Equal(t, want, first)
-	require.Equal(t, want, second)
-	require.NotSame(t, first.Cols[1], first.Pkey.CompPkeyCol)
-	require.NotSame(t, first.Cols[2], first.ClusterBy.CompCbkeyCol)
+	got := item.ReadPlanTableDef()
+	require.Equal(t, want, got)
 	defs, err := source.EngineDefs(item)
 	require.NoError(t, err)
 	wantDefs := []engine.TableDef{
@@ -109,26 +106,10 @@ func TestPublishedProjectionIndependentOracle(t *testing.T) {
 	}
 	require.Equal(t, wantDefs, defs)
 	defs[5].(*engine.AttributeDef).Attr.Default.OriginString = "private"
-	require.Equal(t, "42", source.BorrowPlanTableDef().Cols[0].Default.OriginString)
-	wire, err := first.Cols[0].Default.Marshal()
+	require.Equal(t, want, got)
+	wire, err := got.Cols[0].Default.Marshal()
 	require.NoError(t, err)
 	require.True(t, bytes.Contains(wire, []byte{0xa0, 0x06, 0x07}))
-	first.Cols[0].Default.XXX_DiscardUnknown()
-	first.Cols[0].Default.OriginString = "changed"
-	first.Cols[0].OnUpdate.OriginString = "changed"
-	first.Cols[0].GeneratedCol.OriginString = "changed"
-	first.Pkey.CompPkeyCol.Name = "changed"
-	first.ClusterBy.CompCbkeyCol.Name = "changed"
-	first.Indexes[0].Parts[0] = "changed"
-	first.Fkeys[0].ForeignCols[0] = 0
-	first.RefChildTbls[0] = 0
-	first.Checks[0].Name = "changed"
-	first.Partition.PartitionDefs[0].Def.Typ.Id = 0
-	first.Defs[0].GetProperties().Properties[0].Value = "changed"
-	first.Name2ColIndex["a"] = 99
-	require.Equal(t, want, second)
-	require.Equal(t, want, source.PlanTableDef())
-	require.Equal(t, want, source.BorrowPlanTableDef())
 	require.Equal(t, "42", inputDefault.OriginString)
 }
 
@@ -140,5 +121,5 @@ func TestPublishedProjectionEmptyOracle(t *testing.T) {
 	require.NotNil(t, item.schema)
 	item.Defs = nil
 	want := &plan.TableDef{Name: "empty", Cols: []*plan.ColDef{}, Name2ColIndex: map[string]int32{}, Checks: []*plan.CheckDef{}, Defs: []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{{Key: catalog.SystemRelAttr_Kind}}}}}}}
-	require.Equal(t, want, item.SchemaSource().PlanTableDef())
+	require.Equal(t, want, item.ReadPlanTableDef())
 }
