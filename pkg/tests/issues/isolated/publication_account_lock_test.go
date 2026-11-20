@@ -26,12 +26,13 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
 
-func TestAlterPublicationExplicitTargetLockScope(t *testing.T) {
-	const budget = 16
-	cluster, err := embed.StartTestCluster(embed.WithCNCount(2), embed.WithPreStart(func(s embed.ServiceOperator) {
+func startAccountLockCluster(t *testing.T, cnCount int, budget toml.ByteSize) embed.Cluster {
+	t.Helper()
+	cluster, err := embed.StartTestCluster(embed.WithCNCount(cnCount), embed.WithPreStart(func(s embed.ServiceOperator) {
 		if s.ServiceType() == metadata.ServiceType_CN {
 			s.Adjust(func(cfg *embed.ServiceConfig) {
 				cfg.CN.LockService.MaxLockRowCount = budget
@@ -44,17 +45,56 @@ func TestAlterPublicationExplicitTargetLockScope(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
 	}
 	require.NoError(t, err)
-	open := func(index int) (*sql.DB, string) {
+	return cluster
+}
+
+func openAccountLockSQL(t *testing.T, cluster embed.Cluster, index int) (*sql.DB, string) {
+	t.Helper()
+	cn, err := cluster.GetCNService(index)
+	require.NoError(t, err)
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	return db, cn.ServiceID()
+}
+
+func TestDropAccountWithMinimumRowLockCount(t *testing.T) {
+	cluster := startAccountLockCluster(t, 1, 1)
+	db, _ := openAccountLockSQL(t, cluster, 0)
+	ctx := t.Context()
+	exec := func(stmt string) {
 		t.Helper()
-		cn, err := cluster.GetCNService(index)
-		require.NoError(t, err)
-		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, db.Close()) })
-		return db, cn.ServiceID()
+		_, err := db.ExecContext(ctx, stmt)
+		require.NoError(t, err, stmt)
 	}
-	left, leftID := open(0)
-	right, rightID := open(1)
+	count := func(query string) int {
+		t.Helper()
+		var n int
+		require.NoError(t, db.QueryRowContext(ctx, query).Scan(&n))
+		return n
+	}
+
+	exec("create account direct_drop admin_name 'admin' identified by '111'")
+	exec("drop account direct_drop")
+	require.Zero(t, count("select count(*) from mo_catalog.mo_account where account_name='direct_drop'"))
+
+	// Cluster restore drops accounts created after the snapshot inside its own transaction.
+	exec("create database restore_scope")
+	exec("create table restore_scope.t (id int primary key)")
+	exec("insert into restore_scope.t values (1)")
+	exec("create snapshot before_account for cluster")
+	exec("create account restore_drop admin_name 'admin' identified by '111'")
+	exec("update restore_scope.t set id=2 where id=1")
+	exec("restore cluster {snapshot='before_account'}")
+	require.Zero(t, count("select count(*) from mo_catalog.mo_account where account_name='restore_drop'"))
+	require.Equal(t, 1, count("select id from restore_scope.t"))
+}
+
+func TestAlterPublicationExplicitTargetLockScope(t *testing.T) {
+	const budget = 16
+	cluster := startAccountLockCluster(t, 2, budget)
+	left, leftID := openAccountLockSQL(t, cluster, 0)
+	right, rightID := openAccountLockSQL(t, cluster, 1)
 	ctx := t.Context()
 	exec := func(t *testing.T, stmt string) {
 		t.Helper()

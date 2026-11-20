@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -136,7 +137,7 @@ func (l *LockMeta) buildLockVectors(proc *process.Process, accountId uint32) err
 		}
 	}
 
-	lockDbs := make(map[string]struct{})
+	var lockDbs []string
 	for _, table := range tables {
 		names := strings.SplitN(table, " ", 2)
 		if err := vector.AppendFixed(l.lockMetaVecs[0], accountId, false, proc.GetMPool()); err != nil {
@@ -148,7 +149,9 @@ func (l *LockMeta) buildLockVectors(proc *process.Process, accountId uint32) err
 		if err := vector.AppendBytes(l.lockMetaVecs[2], []byte(names[1]), false, proc.GetMPool()); err != nil {
 			return err
 		}
-		lockDbs[names[0]] = struct{}{}
+		if len(lockDbs) == 0 || lockDbs[len(lockDbs)-1] != names[0] {
+			lockDbs = append(lockDbs, names[0])
+		}
 	}
 	bat := &batch.Batch{Vecs: l.lockMetaVecs}
 	bat.SetRowCount(l.lockMetaVecs[0].Length())
@@ -161,7 +164,7 @@ func (l *LockMeta) buildLockVectors(proc *process.Process, accountId uint32) err
 	l.lockMetaVecs[1].CleanOnlyData()
 	// Preserve the existing single-database admission policy.
 	if len(lockDbs) > 1 {
-		for dbName := range lockDbs {
+		for _, dbName := range lockDbs {
 			if err = vector.AppendFixed(l.lockMetaVecs[0], accountId, false, proc.GetMPool()); err != nil {
 				return err
 			}
@@ -183,14 +186,40 @@ func (l *LockMeta) buildLockVectors(proc *process.Process, accountId uint32) err
 }
 
 func (l *LockMeta) lockMetaRows(e engine.Engine, proc *process.Process, rel engine.Relation, b *batch.Batch, accountId uint32, tableId uint64) error {
-	lockVec := b.GetVector(0)
-	if err := lockop.LockRows(e, proc, rel, tableId, b, 0, *lockVec.GetType(), lock.LockMode_Shared, lock.Sharding_None, accountId); err != nil {
-		// A conflicting catalog definition requires rebuilding the statement.
-		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+	keys := b.GetVector(0)
+	lockKeys := func(vec *vector.Vector) error {
+		b.SetVector(0, vec)
+		err := lockop.LockRows(e, proc, rel, tableId, b, 0, *vec.GetType(), lock.LockMode_Shared, lock.Sharding_None, accountId)
+		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) || moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 		}
 		return err
+	}
+	service := proc.GetLockService()
+	if keys.Length() < 2 || service == nil {
+		return lockKeys(keys)
+	}
+	limit := max(1, int(service.GetConfig().MaxLockRowCount))
+	if keys.Length() <= limit || !proc.GetTxnOperator().Txn().IsPessimistic() {
+		return lockKeys(keys)
+	}
+	defer b.SetVector(0, keys)
+	return lockMetaKeyBatches(keys, limit, proc.Mp(), lockKeys)
+}
+
+// A transaction retains shared metadata keys across statements. Covering ranges
+// from successive catalog operations cannot always be merged.
+func lockMetaKeyBatches(keys *vector.Vector, limit int, mp *mpool.MPool, lockKeys func(*vector.Vector) error) error {
+	for start := 0; start < keys.Length(); start += limit {
+		window, err := keys.Window(start, min(start+limit, keys.Length()))
+		if err != nil {
+			return err
+		}
+		err = lockKeys(window)
+		window.Free(mp)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

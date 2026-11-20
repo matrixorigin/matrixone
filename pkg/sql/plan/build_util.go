@@ -43,11 +43,16 @@ import (
 // 	return nodeID
 // }
 
-// Both lock planning passes use the same admission rule. An exact internal
-// catalog mutation must preserve its key set during final plan rewrites too.
+// Only the account table itself needs point locks. A DELETE also locks its
+// unique index and the compiler acquires separate catalog metadata locks.
+func (builder *QueryBuilder) requiresExactAccountRows(database, table string) bool {
+	return database == catalog.MO_CATALOG && table == catalog.MOAccountTable &&
+		defines.ExactCatalogRows(builder.compCtx.GetProcess().Ctx)
+}
+
 func estimatedLockRowLimit(builder *QueryBuilder) (float64, bool) {
 	proc := builder.compCtx.GetProcess()
-	if proc.Base.LockService == nil || defines.ExactCatalogRows(proc.Ctx) {
+	if proc.Base.LockService == nil {
 		return 0, false
 	}
 	return float64(proc.Base.LockService.GetConfig().MaxLockRowCount), true
@@ -65,16 +70,24 @@ func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
 		if n.NodeType != plan.Node_LOCK_OP {
 			continue
 		}
-		if !n.LockTargets[0].LockTable {
-			reCheckIfNeed := n.Stats.Outcnt > maxRows
-			if reCheckIfNeed {
-				logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
-				logutil.Infof("the outcnt stats is %f", n.Stats.Outcnt)
-				for _, target := range n.LockTargets {
-					target.LockTable = reCheckIfNeed
-				}
-			}
+		builder.upgradeEstimatedRowLocks(n, maxRows)
+	}
+}
+
+func (builder *QueryBuilder) upgradeEstimatedRowLocks(node *plan.Node, maxRows float64) {
+	if node.LockTargets[0].LockTable || !(node.Stats.Outcnt > maxRows) {
+		return
+	}
+	upgraded := false
+	for _, target := range node.LockTargets {
+		if !target.LockTable && !target.RequireExactRows {
+			target.LockTable = true
+			upgraded = true
 		}
+	}
+	if upgraded {
+		logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
+		logutil.Infof("the outcnt stats is %f", node.Stats.Outcnt)
 	}
 }
 
