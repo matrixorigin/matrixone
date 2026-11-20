@@ -38,10 +38,10 @@ func (cc *CatalogCache) columnUpdateLeavesProjectionUnchanged(key *TableItem, co
 		}
 		return false // A tombstone or different incarnation must not expose older rows.
 	})
-	if previous == nil || (previous.Defs == nil && previous.prototype == nil) || len(columns) == 0 {
+	if previous == nil || (previous.Defs == nil && previous.schema == nil) || len(columns) == 0 {
 		return false
 	}
-	attributes, _, valid := validatedColumnAttributes(previous)
+	attributes, valid := validatedColumnAttributes(previous)
 	if !valid {
 		return false
 	}
@@ -65,7 +65,7 @@ func (cc *CatalogCache) columnUpdateLeavesProjectionUnchanged(key *TableItem, co
 		}
 		incoming, err := decodeColumnAttribute(column)
 		if err != nil || (column.IsUnsigned == 1 && !incoming.Attr.Type.IsUInt()) ||
-			!equalColumnAttributes(attributes[column.Num-1].Attr, incoming.Attr) {
+			!equalColumnAttributes(attributes[column.Num-1], incoming.Attr) {
 			return false
 		}
 	}
@@ -74,49 +74,54 @@ func (cc *CatalogCache) columnUpdateLeavesProjectionUnchanged(key *TableItem, co
 
 // validatedColumnAttributes validates the canonical schema before comparing updates.
 // A contiguous schema ending in the hidden row ID establishes completeness.
-func validatedColumnAttributes(previous *TableItem) ([]*engine.AttributeDef, []engine.TableDef, bool) {
-	source := previous.Defs
-	if previous.prototype != nil {
-		values := previous.prototype.attributes()
-		source = make([]engine.TableDef, len(values))
-		for i := range values {
-			source[i] = &engine.AttributeDef{Attr: values[i]}
+func validatedColumnAttributes(previous *TableItem) ([]engine.Attribute, bool) {
+	var attributes []engine.Attribute
+	if previous.schema != nil {
+		schema := previous.schema
+		attributes = make([]engine.Attribute, len(schema.planner.Cols))
+		remaining := schema.residual
+		for i := range attributes {
+			attributes[i] = schema.attribute(i, &remaining)
+		}
+	} else {
+		attributes = make([]engine.Attribute, 0, len(previous.Defs))
+		for _, def := range previous.Defs {
+			if attribute, ok := def.(*engine.AttributeDef); ok {
+				if attribute == nil {
+					return nil, false
+				}
+				attributes = append(attributes, attribute.Attr)
+			}
 		}
 	}
-	attributes := make([]*engine.AttributeDef, 0, len(source))
-	defs := make([]engine.TableDef, 0, len(source))
 	primary, primarySeqnum, cluster := -1, -1, -1
-	names := make(map[string]struct{}, len(source))
-	for _, def := range source {
-		if attribute, ok := def.(*engine.AttributeDef); ok {
-			if attribute == nil || attribute.Attr.ID != uint64(len(attributes)+1) {
-				return nil, nil, false
-			}
-			index := len(attributes)
-			name := strings.ToLower(attribute.Attr.Name)
-			if _, exists := names[name]; exists {
-				return nil, nil, false
-			}
-			names[name] = struct{}{}
-			if attribute.Attr.Primary {
-				primary, primarySeqnum = index, int(attribute.Attr.Seqnum)
-			}
-			if attribute.Attr.ClusterBy {
-				cluster = index
-			}
-			attributes = append(attributes, attribute)
-			defs = append(defs, attribute)
+	names := make(map[string]struct{}, len(attributes))
+	for i := range attributes {
+		attr := &attributes[i]
+		if attr.ID != uint64(i+1) {
+			return nil, false
+		}
+		name := strings.ToLower(attr.Name)
+		if _, exists := names[name]; exists {
+			return nil, false
+		}
+		names[name] = struct{}{}
+		if attr.Primary {
+			primary, primarySeqnum = i, int(attr.Seqnum)
+		}
+		if attr.ClusterBy {
+			cluster = i
 		}
 	}
 	if len(attributes) == 0 ||
 		previous.PrimaryIdx != primary || previous.PrimarySeqnum != primarySeqnum || previous.ClusterByIdx != cluster {
-		return nil, nil, false
+		return nil, false
 	}
-	last := attributes[len(attributes)-1].Attr
+	last := &attributes[len(attributes)-1]
 	if last.Name != catalog.Row_ID || !last.IsHidden || last.Type.Oid != types.T_Rowid {
-		return nil, nil, false
+		return nil, false
 	}
-	return attributes, defs, true
+	return attributes, true
 }
 
 func equalColumnAttributes(a, b engine.Attribute) bool {

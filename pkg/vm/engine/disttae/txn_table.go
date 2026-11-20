@@ -1758,11 +1758,7 @@ func cloneTableAttribute(attr engine.Attribute) engine.Attribute {
 	return attr
 }
 
-func (tbl *txnTable) RefeshTableDef(ctx context.Context) {
-	if tbl.source.Valid() {
-		tbl.tableDef = tbl.source.PlanTableDef()
-		return
-	}
+func (tbl *txnTable) refreshTableDef(ctx context.Context) {
 	tbl.tableDef = nil
 	tbl.GetTableDef(ctx)
 }
@@ -2230,13 +2226,13 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 1. delete old table metadata
-	if _, err := tbl.db.deleteTable(ctx, oldTableName, true, !createdInTxn); err != nil {
+	if err := tbl.db.deleteTable(ctx, oldTableName, true, !createdInTxn); err != nil {
 		return err
 	}
 
 	// update table defs after deleting old table metadata
 	tbl.defs = append(baseDefs, appendDef...)
-	tbl.RefeshTableDef(ctx)
+	tbl.refreshTableDef(ctx)
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata

@@ -164,15 +164,15 @@ func TestColumnOnlyUpdateRejectsUnprovenProjection(t *testing.T) {
 		"seqnum":              func(_ *TableItem, c *Columns) { (*c)[0].Seqnum = 10 },
 		"enum":                func(_ *TableItem, c *Columns) { (*c)[0].EnumValues = "a,b" },
 		"invalid flag":        func(_ *TableItem, c *Columns) { (*c)[0].IsUnsigned = 2 },
-		"no table definition": func(i *TableItem, _ *Columns) { i.prototype = nil },
+		"no table definition": func(i *TableItem, _ *Columns) { i.schema = nil },
 		"partial schema": func(i *TableItem, _ *Columns) {
-			i.prototype.candidate.planner.Cols = i.prototype.candidate.planner.Cols[:len(i.prototype.candidate.planner.Cols)-1]
+			i.schema.planner.Cols = i.schema.planner.Cols[:len(i.schema.planner.Cols)-1]
 		},
 		"key index":     func(i *TableItem, _ *Columns) { i.PrimaryIdx = -1 },
 		"key seqnum":    func(i *TableItem, _ *Columns) { i.PrimarySeqnum = -1 },
 		"cluster index": func(i *TableItem, _ *Columns) { i.ClusterByIdx = -1 },
 		"duplicate cached name": func(i *TableItem, _ *Columns) {
-			i.prototype.candidate.planner.Cols[1].OriginName = "C0"
+			i.schema.planner.Cols[1].OriginName = "C0"
 		},
 	}
 	for name, mutate := range mutations {
@@ -220,7 +220,7 @@ func TestColumnOnlyUpdateRespectsTableIncarnation(t *testing.T) {
 					newer.Id = 10
 				case "uninitialized":
 					newer.Defs = nil
-					newer.prototype = nil
+					newer.schema = nil
 				case "same timestamp wrong id":
 					newer.Id = 10
 					newer.Ts.PhysicalTime = 200
@@ -353,7 +353,7 @@ func TestInsertColumnsReplayDescriptorOldReader(t *testing.T) {
 
 func TestColumnOnlyUpdatePrototypeWithoutEngineDefs(t *testing.T) {
 	cc, item, cols := columnUpdateFixture(t, 3)
-	require.NotNil(t, item.prototype)
+	require.NotNil(t, item.schema)
 	item.Defs = nil
 	key := &TableItem{AccountId: item.AccountId, DatabaseId: item.DatabaseId, Id: item.Id, Name: item.Name, Ts: timestamp.Timestamp{PhysicalTime: 200}}
 	require.True(t, cc.columnUpdateLeavesProjectionUnchanged(key, cols))

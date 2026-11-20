@@ -1263,10 +1263,10 @@ func TestRefreshTableDefExpressionIsolation(t *testing.T) {
 	defs := []engine.TableDef{attr}
 	first := &txnTable{db: &txnDatabase{}, defs: defs}
 	second := &txnTable{db: &txnDatabase{}, defs: defs}
-	first.RefeshTableDef(ctx)
+	first.refreshTableDef(ctx)
 	old := first.GetTableDef(ctx).Cols[0]
 	other := second.GetTableDef(ctx).Cols[0]
-	first.RefeshTableDef(ctx)
+	first.refreshTableDef(ctx)
 	current := first.GetTableDef(ctx).Cols[0]
 	old.Default.Expr.Typ.Width = 1
 	old.OnUpdate.Expr.Typ.Width = 2

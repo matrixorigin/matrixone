@@ -73,7 +73,7 @@ func TestPublishedProjectionIndependentOracle(t *testing.T) {
 		{Num: 23, Name: cb, Typ: zeroTypeWire, IsHidden: 1, IsClusterBy: 1},
 	})
 	require.Nil(t, item.Defs)
-	require.NotNil(t, item.prototype)
+	require.NotNil(t, item.schema)
 	source := item.SchemaSource()
 	require.True(t, source.Valid())
 	pkCol := &plan.ColDef{ColId: 22, Name: catalog.CPrimaryKeyColName, OriginName: catalog.CPrimaryKeyColName, Hidden: true, Typ: plan.Type{Table: "T", NotNullable: true}, Default: &plan.Default{}}
@@ -93,17 +93,9 @@ func TestPublishedProjectionIndependentOracle(t *testing.T) {
 	first, second := source.PlanTableDef(), item.BuildPlanTableDef()
 	require.Equal(t, want, first)
 	require.Equal(t, want, second)
-	// Exercise the diagnostic candidate against the same independently specified
-	// complex schema, including unknown wire fields and composite-key aliases.
-	defs, err := item.BuildEngineDefs()
-	require.NoError(t, err)
-	candidateItem := *item
-	candidateItem.Defs = defs
-	candidateItem.Constraint = item.ConstraintBytes()
-	candidate := newCandidateSchema(&candidateItem)
-	require.NotNil(t, candidate)
-	require.Equal(t, want, candidate.planner)
-	candidateDefs, err := candidate.engineDefs(item)
+	require.NotSame(t, first.Cols[1], first.Pkey.CompPkeyCol)
+	require.NotSame(t, first.Cols[2], first.ClusterBy.CompCbkeyCol)
+	defs, err := source.EngineDefs(item)
 	require.NoError(t, err)
 	wantDefs := []engine.TableDef{
 		&engine.CommentDef{Comment: "table comment"},
@@ -115,9 +107,9 @@ func TestPublishedProjectionIndependentOracle(t *testing.T) {
 		&engine.AttributeDef{Attr: engine.Attribute{ID: 22, Name: catalog.CPrimaryKeyColName, Alg: compress.Lz4, IsHidden: true, Default: &plan.Default{}}},
 		&engine.AttributeDef{Attr: engine.Attribute{ID: 23, Name: cb, Alg: compress.Lz4, IsHidden: true, ClusterBy: true, Default: &plan.Default{}}},
 	}
-	require.Equal(t, wantDefs, candidateDefs)
-	candidateDefs[5].(*engine.AttributeDef).Attr.Default.OriginString = "private"
-	require.Equal(t, "42", candidate.planner.Cols[0].Default.OriginString)
+	require.Equal(t, wantDefs, defs)
+	defs[5].(*engine.AttributeDef).Attr.Default.OriginString = "private"
+	require.Equal(t, "42", source.BorrowPlanTableDef().Cols[0].Default.OriginString)
 	wire, err := first.Cols[0].Default.Marshal()
 	require.NoError(t, err)
 	require.True(t, bytes.Contains(wire, []byte{0xa0, 0x06, 0x07}))
@@ -136,7 +128,7 @@ func TestPublishedProjectionIndependentOracle(t *testing.T) {
 	first.Name2ColIndex["a"] = 99
 	require.Equal(t, want, second)
 	require.Equal(t, want, source.PlanTableDef())
-	require.Equal(t, want, candidate.planner)
+	require.Equal(t, want, source.BorrowPlanTableDef())
 	require.Equal(t, "42", inputDefault.OriginString)
 }
 
@@ -144,8 +136,8 @@ func TestPublishedProjectionIndependentOracle(t *testing.T) {
 // while absent optional messages and slices stay nil.
 func TestPublishedProjectionEmptyOracle(t *testing.T) {
 	item := &TableItem{Name: "empty", Defs: []engine.TableDef{}}
-	item.prototype = newPrototypeSchema(item)
-	require.NotNil(t, item.prototype)
+	item.schema = newCandidateSchema(item)
+	require.NotNil(t, item.schema)
 	item.Defs = nil
 	want := &plan.TableDef{Name: "empty", Cols: []*plan.ColDef{}, Name2ColIndex: map[string]int32{}, Checks: []*plan.CheckDef{}, Defs: []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{{Key: catalog.SystemRelAttr_Kind}}}}}}}
 	require.Equal(t, want, item.SchemaSource().PlanTableDef())

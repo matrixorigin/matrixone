@@ -77,13 +77,13 @@ func TestGetTableDefCatalogPropertiesRoundTrip(t *testing.T) {
 				want = append(want, &plan.Property{Key: catalog.SystemRelAttr_CreateSQL, Value: tc.createSQL})
 			}
 
-			// The prototype must preserve the original stream, including historical
+			// The schema must preserve the original stream, including historical
 			// duplicate groups, rather than reconstruct it from planner properties.
 			item.Defs = buildCanonicalDefs(item, nil)
-			prototype := newPrototypeSchema(item)
-			require.NotNil(t, prototype)
+			schema := newCandidateSchema(item)
+			require.NotNil(t, schema)
 			for projection := 0; projection < 2; projection++ {
-				defs, err := prototype.engineDefs(item)
+				defs, err := schema.engineDefs(item)
 				require.NoError(t, err)
 				var found bool
 				for _, def := range defs {
@@ -98,7 +98,7 @@ func TestGetTableDefCatalogPropertiesRoundTrip(t *testing.T) {
 				require.True(t, found)
 			}
 			var projectedProperties []*plan.Property
-			for _, def := range prototype.projection().Defs {
+			for _, def := range schema.projection().Defs {
 				projectedProperties = append(projectedProperties, def.GetProperties().GetProperties()...)
 			}
 			require.Equal(t, want, projectedProperties)

@@ -823,7 +823,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 }
 
 func InitTableItemWithColumns(item *TableItem, cols Columns) {
-	if item.prototype != nil && item.Constraint == nil {
+	if item.schema != nil && item.Constraint == nil {
 		item.Constraint = item.ConstraintBytes()
 	}
 	slices.SortFunc(cols, func(a, b catalog.Column) int { return cmp.Compare(a.Num, b.Num) })
@@ -840,8 +840,8 @@ func InitTableItemWithColumns(item *TableItem, cols Columns) {
 	}
 	item.Defs = buildCanonicalDefs(item, coldefs)
 	item.replayClusterKey = deriveReplayClusterKey(item)
-	item.prototype = newPrototypeSchema(item)
-	if item.prototype != nil {
+	item.schema = newCandidateSchema(item)
+	if item.schema != nil {
 		item.Defs = nil
 		item.Constraint = nil
 	}
@@ -1075,20 +1075,13 @@ func cloneGeneratedCol(v *plan.GeneratedCol) *plan.GeneratedCol {
 // buildCanonicalDefs validates persisted metadata before publishing an engine schema.
 // It does not construct planner columns or retain planner-owned objects.
 func buildCanonicalDefs(item *TableItem, columns []engine.TableDef) []engine.TableDef {
-	defs := make([]engine.TableDef, 0, len(columns)+4)
-	if item.Comment != "" {
-		defs = append(defs, &engine.CommentDef{Comment: item.Comment})
-	}
-	if item.ViewDef != "" {
-		defs = append(defs, &engine.ViewDef{View: item.ViewDef})
-	}
+	var constraint *engine.ConstraintDef
 	if len(item.Constraint) > 0 {
-		c := &engine.ConstraintDef{}
-		if err := c.UnmarshalBinary(item.Constraint); err != nil {
+		constraint = &engine.ConstraintDef{}
+		if err := constraint.UnmarshalBinary(item.Constraint); err != nil {
 			logutil.Errorf("catalog-cache error: unmarshal table constraint information: %v-%v-%v, err: %v", item.AccountId, item.Id, item.Name, err)
 			return nil
 		}
-		defs = append(defs, c)
 	}
 	if item.Partitioned > 0 {
 		partition := &plan.Partition{}
@@ -1096,6 +1089,22 @@ func buildCanonicalDefs(item *TableItem, columns []engine.TableDef) []engine.Tab
 			logutil.Errorf("catalog-cache error: unmarshal table partition information: %v-%v-%v, err: %v", item.AccountId, item.Id, item.Name, err)
 			return nil
 		}
+	}
+	return append(engineDefsHeader(item, constraint, len(columns)), columns...)
+}
+
+func engineDefsHeader(item *TableItem, constraint *engine.ConstraintDef, columnCount int) []engine.TableDef {
+	defs := make([]engine.TableDef, 0, columnCount+5)
+	if item.Comment != "" {
+		defs = append(defs, &engine.CommentDef{Comment: item.Comment})
+	}
+	if item.ViewDef != "" {
+		defs = append(defs, &engine.ViewDef{View: item.ViewDef})
+	}
+	if constraint != nil {
+		defs = append(defs, constraint)
+	}
+	if item.Partitioned > 0 {
 		defs = append(defs, &engine.PartitionDef{Partitioned: item.Partitioned, Partition: item.Partition})
 	}
 	props := &engine.PropertiesDef{Properties: []engine.Property{
@@ -1105,8 +1114,7 @@ func buildCanonicalDefs(item *TableItem, columns []engine.TableDef) []engine.Tab
 	if item.CreateSql != "" {
 		props.Properties = append(props.Properties, engine.Property{Key: catalog.SystemRelAttr_CreateSQL, Value: item.CreateSql})
 	}
-	defs = append(defs, props)
-	return append(defs, columns...)
+	return append(defs, props)
 }
 
 func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef, []engine.TableDef) {
@@ -1260,8 +1268,8 @@ func (item *TableItem) BuildPlanTableDef() *plan.TableDef {
 	if item == nil || item.deleted {
 		return nil
 	}
-	if item.prototype != nil {
-		return item.prototype.projection()
+	if item.schema != nil {
+		return item.SchemaSource().PlanTableDef()
 	}
 	if item.Defs == nil {
 		return nil

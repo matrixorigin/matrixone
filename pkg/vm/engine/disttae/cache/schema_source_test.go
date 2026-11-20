@@ -23,7 +23,7 @@ import (
 	"testing"
 )
 
-func TestPrototypeSchemaAttributeIsolation(t *testing.T) {
+func TestCanonicalSchemaAttributeIsolation(t *testing.T) {
 	typ := types.T_decimal64.ToType()
 	typ.Width = 15
 	typ.Scale = 3
@@ -31,19 +31,20 @@ func TestPrototypeSchemaAttributeIsolation(t *testing.T) {
 	original := engine.Attribute{ID: 42, Name: "Mixed", Type: typ, IsRowId: true, IsHidden: true, Primary: true, ClusterBy: true, AutoIncrement: true, Seqnum: 9, EnumVlaues: "x,y", NumericAttributes: 3, Comment: "comment", Default: &plan.Default{OriginString: "default"}, OnUpdate: &plan.OnUpdate{OriginString: "update"}, GeneratedCol: &plan.GeneratedCol{OriginString: "generated"}}
 	item := &TableItem{Name: "t", Defs: []engine.TableDef{&engine.AttributeDef{Attr: original}}}
 	expected, _ := getTableDef(item, item.Defs)
-	s := newPrototypeSchema(item)
+	s := newCandidateSchema(item)
 	require.NotNil(t, s)
-	require.NotNil(t, s.candidate.planner.Cols)
+	require.NotNil(t, s.planner.Cols)
 	require.True(t, proto.Equal(expected, s.projection()))
-	a, b := s.attributes(), s.attributes()
-	require.Equal(t, original, a[0])
+	source := SchemaSource{schema: s}
+	a, b := source.Columns(false), source.Columns(false)
+	require.Equal(t, original, *a[0])
 	a[0].Default.OriginString = "changed"
 	a[0].OnUpdate.OriginString = "changed"
 	a[0].GeneratedCol.OriginString = "changed"
 	p := s.projection()
 	p.Cols[0].Default.OriginString = "changed"
-	require.Equal(t, original, b[0])
-	require.Equal(t, original, s.attributes()[0])
+	require.Equal(t, original, *b[0])
+	require.Equal(t, original, *source.Columns(false)[0])
 	require.Equal(t, "default", item.Defs[0].(*engine.AttributeDef).Attr.Default.OriginString)
 
 	defs, err := s.engineDefs(item)
@@ -58,10 +59,10 @@ func TestPrototypeSchemaAttributeIsolation(t *testing.T) {
 func TestPublishedSchemaCopyAndIsolation(t *testing.T) {
 	_, item, _ := columnUpdateFixture(t, 3)
 	require.Nil(t, item.Defs)
-	require.NotNil(t, item.prototype)
+	require.NotNil(t, item.schema)
 	var copied TableItem
 	copyTableItem(&copied, item)
-	require.Same(t, item.prototype, copied.prototype)
+	require.Same(t, item.schema, copied.schema)
 	first, second := item.BuildPlanTableDef(), copied.BuildPlanTableDef()
 	first.Cols[0].Default.OriginString = "changed"
 	require.Equal(t, "7", second.Cols[0].Default.OriginString)
@@ -71,11 +72,11 @@ func TestPublishedSchemaCopyAndIsolation(t *testing.T) {
 }
 
 func TestProjectionDefaultsAreIndependent(t *testing.T) {
-	s := &prototypeSchema{planner: &plan.TableDef{}, columns: []catalogColumn{
-		{defaultValue: &plan.Default{OriginString: "first", NullAbility: true}},
+	s := &candidateSchema{planner: &plan.TableDef{Cols: []*plan.ColDef{
+		{Default: &plan.Default{OriginString: "first", NullAbility: true}},
 		{},
-		{defaultValue: &plan.Default{OriginString: "last"}},
-	}}
+		{Default: &plan.Default{OriginString: "last"}},
+	}}}
 	first, second := s.projection(), s.projection()
 	require.Nil(t, first.Cols[1].Default)
 	require.Equal(t, "first", first.Cols[0].Default.OriginString)
@@ -84,15 +85,15 @@ func TestProjectionDefaultsAreIndependent(t *testing.T) {
 	first.Cols[0].Default.OriginString = "changed"
 	require.Equal(t, "last", first.Cols[2].Default.OriginString)
 	require.Equal(t, "first", second.Cols[0].Default.OriginString)
-	require.Equal(t, "first", s.columns[0].defaultValue.OriginString)
+	require.Equal(t, "first", s.planner.Cols[0].Default.OriginString)
 }
 
 func TestSchemaSourceColumnsIsolation(t *testing.T) {
-	item := &TableItem{prototype: &prototypeSchema{columns: []catalogColumn{
-		{originName: "a", primary: true, defaultValue: &plan.Default{OriginString: "one"}},
-		{originName: "rowid", rowID: true},
-		{originName: "b", primary: true, onUpdate: &plan.OnUpdate{OriginString: "update"}},
-	}}}
+	item := &TableItem{schema: newCandidateSchema(&TableItem{Defs: []engine.TableDef{
+		&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Primary: true, Default: &plan.Default{OriginString: "one"}}},
+		&engine.AttributeDef{Attr: engine.Attribute{Name: "rowid", IsRowId: true}},
+		&engine.AttributeDef{Attr: engine.Attribute{Name: "b", Primary: true, OnUpdate: &plan.OnUpdate{OriginString: "update"}}},
+	}})}
 	source := item.SchemaSource()
 	require.True(t, source.Valid())
 	all := source.Columns(false)

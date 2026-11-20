@@ -28,12 +28,11 @@ func newSchemaConstraint(raw []byte) schemaConstraint {
 	return schemaConstraint{raw: bytes.Clone(raw)}
 }
 
-// decode gives the decoder private input because decoded protobuf fields may
-// retain references into that input. Neither callers nor decoded values can
-// mutate the canonical stream.
+// The constraint decoder constructs private values and copies protobuf byte
+// fields, leaving the published wire bytes untouched.
 func (c schemaConstraint) decode() (*engine.ConstraintDef, error) {
 	d := &engine.ConstraintDef{}
-	if err := d.UnmarshalBinary(bytes.Clone(c.raw)); err != nil {
+	if err := d.UnmarshalBinary(c.raw); err != nil {
 		return nil, err
 	}
 	return d, nil

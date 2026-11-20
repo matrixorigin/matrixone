@@ -15,10 +15,14 @@
 package cache
 
 import (
+	"bytes"
+
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -90,80 +94,131 @@ func newCandidateSchema(item *TableItem) *candidateSchema {
 	return s
 }
 
-func (s *candidateSchema) engineParts() ([]types.Type, []compress.T, []bool) {
-	ts := make([]types.Type, len(s.planner.Cols))
-	algs := make([]compress.T, len(ts))
-	rows := make([]bool, len(ts))
-	for i, c := range s.planner.Cols {
-		ts[i], _ = candidateType(c.Typ)
-		algs[i] = compress.Lz4
+// attribute borrows expression metadata for read-only comparison. The ordered
+// residual cursor permits one pass for either all columns or a subset.
+func (s *candidateSchema) attribute(index int, remaining *[]candidateResidual) engine.Attribute {
+	col := s.planner.Cols[index]
+	attr := engine.Attribute{
+		ID: col.ColId, Name: col.OriginName, Comment: col.Comment,
+		Seqnum: uint16(col.Seqnum), IsHidden: col.Hidden, Primary: col.Primary,
+		ClusterBy: col.ClusterBy, AutoIncrement: col.Typ.AutoIncr, EnumVlaues: col.Typ.Enumvalues,
+		NumericAttributes: uint8(col.Typ.NumericAttributes),
+		Default:           col.Default, OnUpdate: col.OnUpdate, GeneratedCol: col.GeneratedCol,
+		Alg: compress.Lz4,
 	}
-	for _, r := range s.residual {
-		ts[r.index], algs[r.index], rows[r.index] = r.typ, r.alg, r.rowID
+	for len(*remaining) > 0 && (*remaining)[0].index < index {
+		*remaining = (*remaining)[1:]
 	}
-	return ts, algs, rows
+	if len(*remaining) > 0 && (*remaining)[0].index == index {
+		r := (*remaining)[0]
+		attr.Type, attr.Alg, attr.IsRowId = r.typ, r.alg, r.rowID
+		*remaining = (*remaining)[1:]
+	} else {
+		attr.Type, _ = candidateType(col.Typ)
+	}
+	return attr
 }
 
-// expanded reconstructs a temporary view from the candidate's planner and
-// sparse engine-only fields.
-func (s *candidateSchema) expanded() *prototypeSchema {
-	ts, algs, rows := s.engineParts()
-	template := *s.planner
-	template.Cols = nil
-	if template.Pkey != nil && template.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		copyKey := *template.Pkey
-		copyKey.CompPkeyCol = nil
-		template.Pkey = &copyKey
-	}
-	if template.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(template.ClusterBy.Name) {
-		copyKey := *template.ClusterBy
-		copyKey.CompCbkeyCol = nil
-		template.ClusterBy = &copyKey
-	}
-	p := &prototypeSchema{planner: &template, constraint: s.constraint, columns: make([]catalogColumn, len(s.planner.Cols))}
-	for i, c := range s.planner.Cols {
-		p.columns[i] = candidateColumn(c, ts[i], algs[i], rows[i])
-	}
-	return p
-}
-
-func candidateColumn(c *plan.ColDef, typ types.Type, alg compress.T, rowID bool) catalogColumn {
-	return catalogColumn{typ: typ, plannerType: c.Typ, name: c.Name, originName: c.OriginName, comment: c.Comment, colID: c.ColId, seqnum: c.Seqnum, alg: alg, defaultValue: c.Default, onUpdate: c.OnUpdate, generated: c.GeneratedCol, rowID: rowID, hidden: c.Hidden, primary: c.Primary, clusterBy: c.ClusterBy}
-}
-
-func (s *candidateSchema) primaryColumns() []*engine.Attribute {
-	n := 0
-	for _, c := range s.planner.Cols {
-		if c.Primary {
-			n++
+func (s *candidateSchema) attributes(primaryOnly bool) []engine.AttributeDef {
+	count := len(s.planner.Cols)
+	if primaryOnly {
+		count = 0
+		for _, col := range s.planner.Cols {
+			if col.Primary {
+				count++
+			}
 		}
 	}
-	values := make([]engine.Attribute, n)
-	keys := make([]*engine.Attribute, n)
-	residuals := s.residual
-	k := 0
-	for i, c := range s.planner.Cols {
-		if !c.Primary {
+	defs := make([]engine.AttributeDef, 0, count)
+	remaining := s.residual
+	for i, col := range s.planner.Cols {
+		if primaryOnly && !col.Primary {
 			continue
 		}
-		for len(residuals) > 0 && residuals[0].index < i {
-			residuals = residuals[1:]
-		}
-		var typ types.Type
-		alg, rowID := compress.T(compress.Lz4), false
-		if len(residuals) > 0 && residuals[0].index == i {
-			r := residuals[0]
-			typ, alg, rowID = r.typ, r.alg, r.rowID
-		} else {
-			typ, _ = candidateType(c.Typ)
-		}
-		values[k] = candidateColumn(c, typ, alg, rowID).attribute()
-		keys[k] = &values[k]
-		k++
+		attr := s.attribute(i, &remaining)
+		attr.Default = plan.CopyDefaultInto(new(plan.Default), attr.Default)
+		attr.OnUpdate = cloneOnUpdate(attr.OnUpdate)
+		attr.GeneratedCol = cloneGeneratedCol(attr.GeneratedCol)
+		defs = append(defs, engine.AttributeDef{Attr: attr})
 	}
-	return keys
+	return defs
 }
 
 func (s *candidateSchema) engineDefs(item *TableItem) ([]engine.TableDef, error) {
-	return s.expanded().engineDefs(item)
+	var constraint *engine.ConstraintDef
+	if len(s.constraint.raw) != 0 {
+		var err error
+		constraint, err = s.constraint.decode()
+		if err != nil {
+			return nil, err
+		}
+	}
+	defs := engineDefsHeader(item, constraint, len(s.planner.Cols))
+	attrs := s.attributes(false)
+	for i := range attrs {
+		defs = append(defs, &attrs[i])
+	}
+	return defs, nil
+}
+
+func (s *candidateSchema) projection() *plan.TableDef {
+	template := *s.planner
+	template.Cols = nil
+	compositePrimary := template.Pkey != nil && template.Pkey.PkeyColName == catalog.CPrimaryKeyColName
+	if compositePrimary {
+		key := *template.Pkey
+		key.CompPkeyCol = nil
+		template.Pkey = &key
+	}
+	compositeCluster := template.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(template.ClusterBy.Name)
+	if compositeCluster {
+		key := *template.ClusterBy
+		key.CompCbkeyCol = nil
+		template.ClusterBy = &key
+	}
+
+	out := plan.CopyCatalogTableTemplate(&template)
+	if s.planner.Cols != nil {
+		values := make([]plan.ColDef, len(s.planner.Cols))
+		out.Cols = make([]*plan.ColDef, len(values))
+		count := 0
+		for _, col := range s.planner.Cols {
+			if col != nil && col.Default != nil {
+				count++
+			}
+		}
+		defaults := make([]plan.Default, count)
+		nextDefault := 0
+		for i, col := range s.planner.Cols {
+			if col == nil {
+				continue
+			}
+			dst := &values[i]
+			*dst = *col
+			dst.XXX_sizecache = 0
+			dst.XXX_unrecognized = bytes.Clone(col.XXX_unrecognized)
+			dst.Typ = plan.CopyCatalogType(col.Typ)
+			if col.Default != nil {
+				dst.Default = plan.CopyDefaultInto(&defaults[nextDefault], col.Default)
+				nextDefault++
+			}
+			dst.OnUpdate = cloneOnUpdate(col.OnUpdate)
+			dst.GeneratedCol = cloneGeneratedCol(col.GeneratedCol)
+			if col.IntegerResultPresentation != nil {
+				dst.IntegerResultPresentation = proto.Clone(col.IntegerResultPresentation).(*plan.IntegerResultPresentation)
+			}
+			if col.EnumSetResultType != nil {
+				typ := plan.CopyCatalogType(*col.EnumSetResultType)
+				dst.EnumSetResultType = &typ
+			}
+			out.Cols[i] = dst
+		}
+	}
+	if compositePrimary {
+		out.Pkey.CompPkeyCol = plan2.GetColDefFromTable(out.Cols, out.Pkey.PkeyColName)
+	}
+	if compositeCluster {
+		out.ClusterBy.CompCbkeyCol = plan2.GetColDefFromTable(out.Cols, out.ClusterBy.Name)
+	}
+	return out
 }

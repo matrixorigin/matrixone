@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -24,7 +25,7 @@ import (
 
 func TestSchemaConstraintPrivateHistoricalStream(t *testing.T) {
 	original := &engine.ConstraintDef{Cts: []engine.Constraint{
-		&engine.StreamConfigsDef{Configs: []*plan.Property{{Key: "relkind", Value: "old"}, {Key: "topic", Value: "first"}}},
+		&engine.StreamConfigsDef{Configs: []*plan.Property{{Key: "relkind", Value: "old", XXX_unrecognized: []byte{0xa0, 0x06, 0x07}}, {Key: "topic", Value: "first"}}},
 		&engine.StreamConfigsDef{Configs: []*plan.Property{{Key: "topic", Value: "second"}}},
 	}}
 	wire, err := original.MarshalBinary()
@@ -35,7 +36,9 @@ func TestSchemaConstraintPrivateHistoricalStream(t *testing.T) {
 	require.NoError(t, err)
 	second, err := canonical.decode()
 	require.NoError(t, err)
-	first.Cts[0].(*engine.StreamConfigsDef).Configs[0].Value = "changed"
+	prop := first.Cts[0].(*engine.StreamConfigsDef).Configs[0]
+	prop.Value = "changed"
+	prop.XXX_unrecognized[2] = 0x08
 	got, err := second.MarshalBinary()
 	require.NoError(t, err)
 	want, err := original.MarshalBinary()
@@ -46,4 +49,16 @@ func TestSchemaConstraintPrivateHistoricalStream(t *testing.T) {
 	got, err = third.MarshalBinary()
 	require.NoError(t, err)
 	require.Equal(t, want, got)
+}
+
+func TestInvalidConstraintPreventsSchemaPublication(t *testing.T) {
+	wire := binary.BigEndian.AppendUint64([]byte{byte(engine.PrimaryKey)}, 1)
+	wire = append(wire, 0xff) // Complete framing, invalid protobuf.
+	item := &TableItem{Name: "bad_constraint", Constraint: wire}
+	InitTableItemWithColumns(item, nil)
+	require.False(t, item.SchemaSource().Valid())
+	require.Nil(t, item.BuildPlanTableDef())
+
+	_, err := newSchemaConstraint(wire).decode()
+	require.Error(t, err)
 }

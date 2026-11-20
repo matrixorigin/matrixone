@@ -138,7 +138,7 @@ type TableItem struct {
 	// table value
 	Id               uint64
 	Defs             []engine.TableDef
-	prototype        *prototypeSchema
+	schema           *candidateSchema
 	replayClusterKey *readutil.ClusterKeyDescriptor
 	Version          uint32
 	DatabaseName     string
@@ -170,11 +170,11 @@ func (item *TableItem) IsDeleted() bool {
 }
 
 func (item *TableItem) IsPartitionTable() bool {
-	return (item.Defs != nil || item.prototype != nil) && features.IsPartitioned(item.ExtraInfo.GetFeatureFlag())
+	return (item.Defs != nil || item.schema != nil) && features.IsPartitioned(item.ExtraInfo.GetFeatureFlag())
 }
 
 func (item *TableItem) IsIndexTable() bool {
-	return (item.Defs != nil || item.prototype != nil) && features.IsIndexTable(item.ExtraInfo.GetFeatureFlag())
+	return (item.Defs != nil || item.schema != nil) && features.IsIndexTable(item.ExtraInfo.GetFeatureFlag())
 }
 
 func (item *TableItem) String() string {
@@ -329,7 +329,7 @@ func copyTableItem(dst, src *TableItem) {
 	dst.DatabaseName = src.DatabaseName
 	dst.CatalogVersion = src.CatalogVersion
 	dst.Defs = src.Defs
-	dst.prototype = src.prototype
+	dst.schema = src.schema
 	dst.replayClusterKey = src.replayClusterKey
 	dst.Kind = src.Kind
 	dst.Comment = src.Comment

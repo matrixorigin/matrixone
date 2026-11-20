@@ -17,7 +17,6 @@ package cache
 import (
 	"fmt"
 
-	"github.com/gogo/protobuf/proto"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -59,11 +58,11 @@ func TestCandidateSchemaDefaultsAndResidual(t *testing.T) {
 	require.Equal(t, []byte{0xa0, 0x06, 0x01}, s.planner.Cols[7].Default.XXX_unrecognized)
 	s.planner.Cols[7].Default.XXX_unrecognized[2] = 2
 	require.Equal(t, byte(1), attrs[7].Default.XXX_unrecognized[2])
-	ts, algs, rows := s.engineParts()
+	reconstructed := (SchemaSource{schema: s}).Columns(false)
 	for i, a := range attrs {
-		require.Equal(t, a.Type, ts[i])
-		require.Equal(t, a.Alg, algs[i])
-		require.Equal(t, a.IsRowId, rows[i])
+		require.Equal(t, a.Type, reconstructed[i].Type)
+		require.Equal(t, a.Alg, reconstructed[i].Alg)
+		require.Equal(t, a.IsRowId, reconstructed[i].IsRowId)
 	}
 }
 
@@ -80,16 +79,16 @@ func TestCandidateUnsupportedTypeIsResidual(t *testing.T) {
 		planner:  &plan.TableDef{Cols: []*plan.ColDef{{Typ: unknown}}},
 		residual: []candidateResidual{{index: 0, typ: original, alg: compress.None, rowID: true}},
 	}
-	ts, algs, rows := s.engineParts()
-	require.Equal(t, original, ts[0])
-	require.Equal(t, compress.T(compress.None), algs[0])
-	require.True(t, rows[0])
+	attr := (SchemaSource{schema: s}).Columns(false)[0]
+	require.Equal(t, original, attr.Type)
+	require.Equal(t, compress.T(compress.None), attr.Alg)
+	require.True(t, attr.IsRowId)
 }
 
 func TestCandidatePrimaryColumnsPreserveSelectedMetadata(t *testing.T) {
 	typ := types.T_int64.ToType()
 	original := types.Type{Oid: types.T(255), Size: 17}
-	s := SchemaSource{schema: &prototypeSchema{candidate: &candidateSchema{
+	s := SchemaSource{schema: &candidateSchema{
 		planner: &plan.TableDef{Cols: []*plan.ColDef{
 			{OriginName: "payload", Typ: plan.Type{Id: int32(typ.Oid)}},
 			{OriginName: "first", Typ: plan.Type{Id: int32(typ.Oid)}, Primary: true, Default: &plan.Default{OriginString: "7"}},
@@ -100,7 +99,7 @@ func TestCandidatePrimaryColumnsPreserveSelectedMetadata(t *testing.T) {
 			{index: 0, typ: typ, alg: compress.None},
 			{index: 2, typ: original, alg: compress.None, rowID: true},
 		},
-	}}}
+	}}
 	keys := s.Columns(true)
 	require.Len(t, keys, 2)
 	require.Equal(t, "first", keys[0].Name)
@@ -135,11 +134,8 @@ func TestCandidateAllTypeIDsAndWireOwnership(t *testing.T) {
 	}
 	s := newCandidateSchema(item)
 	require.NotNil(t, s)
-	ts, algs, rows := s.engineParts()
-	for i, a := range expected {
-		require.Equal(t, a.Type, ts[i], "oid %d", i)
-		require.Equal(t, a.Alg, algs[i], "oid %d", i)
-		require.Equal(t, a.IsRowId, rows[i], "oid %d", i)
+	for i, attr := range (SchemaSource{schema: s}).Columns(false) {
+		require.Equal(t, expected[i], *attr, "oid %d", i)
 	}
 	require.Equal(t, raw, s.constraint.raw)
 	item.Constraint[0] = 0
@@ -174,7 +170,7 @@ func TestCandidateConcurrentEncodingAndPrivateWrite(t *testing.T) {
 	go func() {
 		<-start
 		for i := 0; i < 100; i++ {
-			private := proto.Clone(s.planner).(*plan.TableDef)
+			private := s.projection()
 			private.Cols[0].Default.NullAbility = false
 		}
 		done <- nil
@@ -184,38 +180,6 @@ func TestCandidateConcurrentEncodingAndPrivateWrite(t *testing.T) {
 	require.NoError(t, <-done)
 	require.True(t, s.planner.Cols[0].Default.NullAbility)
 	require.True(t, s.planner.Cols[1].Default.NullAbility)
-}
-
-// A reader holding an old projection stays valid after the cache publishes a
-// newer schema. Candidates are constructed from each real cache lookup.
-func TestCandidateCacheVersionIsolation(t *testing.T) {
-	cc := NewCatalog()
-	typ := types.T_int64.ToType()
-	wire, err := typ.Marshal()
-	require.NoError(t, err)
-	publish := func(version uint32, ts int64, name string) {
-		item := &TableItem{AccountId: 1, DatabaseId: 2, Name: "t", Id: 12, Version: version, Ts: timestamp.Timestamp{PhysicalTime: ts}}
-		InitTableItemWithColumns(item, Columns{{Name: name, Num: 1, Typ: wire}})
-		cc.tableChange.Lock()
-		cc.tables.data.Set(item)
-		cc.tableChange.Unlock()
-	}
-	lookup := func(ts int64) *candidateSchema {
-		item := &TableItem{AccountId: 1, DatabaseId: 2, Name: "t", Ts: timestamp.Timestamp{PhysicalTime: ts}}
-		require.True(t, cc.GetTable(item))
-		defs, e := item.BuildEngineDefs()
-		require.NoError(t, e)
-		item.Defs = defs
-		return newCandidateSchema(item)
-	}
-	publish(1, 10, "old")
-	old := lookup(15)
-	require.Equal(t, "old", old.planner.Cols[0].Name)
-	publish(2, 20, "new")
-	newer := lookup(25)
-	require.Equal(t, "new", newer.planner.Cols[0].Name)
-	require.Equal(t, "old", old.planner.Cols[0].Name)
-	require.Equal(t, "old", lookup(15).planner.Cols[0].Name)
 }
 
 // A real catalog source remains usable by an old reader after a new version
