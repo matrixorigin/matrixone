@@ -650,3 +650,52 @@ func TestChangeHandlerCoalesceBatchPreservesAllVersions(t *testing.T) {
 	require.Equal(t, 2, data.RowCount())
 	require.Equal(t, 1, tombstone.RowCount())
 }
+
+func TestFilterBatchPreservesReplacementAtSameCommit(t *testing.T) {
+	for _, skipDeletes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("skipDeletes=%t", skipDeletes), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			data := batch.NewWithSize(3)
+			deletes := batch.NewWithSize(3)
+			defer data.Clean(mp)
+			defer deletes.Clean(mp)
+
+			oldRow := types.Rowid{1}
+			newRow := types.Rowid{2}
+			otherRow := types.Rowid{3}
+			ts := types.BuildTS(100, 0)
+			key := []byte("customer-long-primary-key")
+			otherKey := []byte("another-long-primary-key")
+			for _, b := range []*batch.Batch{data, deletes} {
+				b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+				b.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+				b.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+			}
+			for _, row := range []struct {
+				id  types.Rowid
+				key []byte
+			}{{newRow, key}, {otherRow, otherKey}} {
+				require.NoError(t, vector.AppendFixed(data.Vecs[0], row.id, false, mp))
+				require.NoError(t, vector.AppendBytes(data.Vecs[1], row.key, false, mp))
+				require.NoError(t, vector.AppendFixed(data.Vecs[2], ts, false, mp))
+			}
+			data.SetRowCount(2)
+			require.NoError(t, vector.AppendFixed(deletes.Vecs[0], oldRow, false, mp))
+			require.NoError(t, vector.AppendBytes(deletes.Vecs[1], key, false, mp))
+			require.NoError(t, vector.AppendFixed(deletes.Vecs[2], ts, false, mp))
+			deletes.SetRowCount(1)
+
+			require.NoError(t, filterBatch(data, deletes, 0, skipDeletes, false, mp))
+			require.Equal(t, []types.Rowid{newRow, otherRow}, vector.MustFixedColWithTypeCheck[types.Rowid](data.Vecs[0]))
+			require.Equal(t, key, data.Vecs[1].GetBytesAt(0))
+			if skipDeletes {
+				require.Empty(t, vector.MustFixedColWithTypeCheck[types.Rowid](deletes.Vecs[0]))
+			} else {
+				require.Equal(t, []types.Rowid{oldRow}, vector.MustFixedColWithTypeCheck[types.Rowid](deletes.Vecs[0]))
+				require.Equal(t, key, deletes.Vecs[1].GetBytesAt(0))
+				require.Equal(t, ts, vector.GetFixedAtNoTypeCheck[types.TS](deletes.Vecs[2], 0))
+			}
+		})
+	}
+}
