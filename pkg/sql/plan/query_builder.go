@@ -15563,9 +15563,7 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 		return
 	}
 
-	binder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
-	binder.builder = builder
-	defExpr, err := binder.BindExpr(conds[0], 0, false)
+	defExpr, err := builder.bindTimestampHintExpr(conds[0])
 	if err != nil {
 		return
 	}
@@ -15664,6 +15662,18 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 	}
 
 	return
+}
+
+func (builder *QueryBuilder) bindTimestampHintExpr(expr tree.Expr) (*plan.Expr, error) {
+	// Frontend snapshot resolution can bind a hint before physical compilation
+	// resets the reused process. Constant folding must observe this request.
+	if proc := builder.compCtx.GetProcess(); proc != nil {
+		previous := proc.Ctx
+		proc.Ctx = builder.compCtx.GetContext()
+		defer func() { proc.Ctx = previous }()
+	}
+	binder := NewDefaultBinder(builder.GetContext(), builder, nil, plan.Type{}, nil)
+	return binder.BindExpr(expr, 0, false)
 }
 
 // validateTimestampHint rejects timestamps that cannot identify historical state.
