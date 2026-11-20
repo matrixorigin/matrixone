@@ -42,8 +42,8 @@ const (
 const (
 	fuzzyFilterAllocationSiteRuntimeFilterData mpool.AllocationSite = iota + 1
 	fuzzyFilterAllocationSiteRuntimeFilterArea
-	fuzzyFilterAllocationSiteRuntimeFilterNulls
-	fuzzyFilterAllocationSiteRuntimeFilterGrouping
+	_ // reserved: was fuzzyFilterAllocationSiteRuntimeFilterNulls
+	_ // reserved: was fuzzyFilterAllocationSiteRuntimeFilterGrouping
 	fuzzyFilterAllocationSiteRuntimeFilterPayload
 )
 
@@ -101,8 +101,6 @@ func (fuzzyFilter *FuzzyFilter) SetAllocationAccount(
 		mpool.AllocationOwnerFuzzyFilter,
 		fuzzyFilterAllocationSiteRuntimeFilterData,
 		fuzzyFilterAllocationSiteRuntimeFilterArea,
-		fuzzyFilterAllocationSiteRuntimeFilterNulls,
-		fuzzyFilterAllocationSiteRuntimeFilterGrouping,
 	)
 	if err != nil {
 		return err

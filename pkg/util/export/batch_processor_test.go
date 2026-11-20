@@ -227,7 +227,7 @@ func TestNewMOCollector_Stop(t *testing.T) {
 	for i := 0; i < N; i++ {
 		collector.Collect(ctx, newDummy(int64(i)))
 	}
-	length := collector.awakeQueue.Len()
+	length := len(collector.awakeQueue)
 	dropCnt := collector.stopDrop.Load()
 	t.Logf("channal len: %d, dropCnt: %d, totalElem: %d", length, dropCnt, N)
 	require.Equal(t, N, int(dropCnt)+int(length))
@@ -387,15 +387,15 @@ func TestMOCollector_DiscardableCollect(t *testing.T) {
 	cfg := getDummyOBCollectorConfig()
 	collector := NewMOCollector(context.TODO(), "", WithOBCollectorConfig(cfg))
 	elem := newDummy(1)
-	for i := 0; i < defaultRingBufferSize; i++ {
+	for i := 0; i < defaultCollectQueueSize; i++ {
 		collector.Collect(ctx, elem)
 	}
-	require.Equal(t, defaultRingBufferSize, int(collector.awakeQueue.Len()))
+	require.Equal(t, defaultCollectQueueSize, len(collector.awakeQueue))
 
 	// check DisableStore will discard
 	now := time.Now()
 	collector.DiscardableCollect(ctx, elem)
-	require.Equal(t, defaultRingBufferSize, int(collector.awakeQueue.Len()))
+	require.Equal(t, defaultCollectQueueSize, len(collector.awakeQueue))
 	require.True(t, time.Since(now) > discardCollectTimeout)
 	t.Logf("DiscardableCollect accept")
 }

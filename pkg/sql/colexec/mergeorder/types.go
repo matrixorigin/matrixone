@@ -289,8 +289,6 @@ func (ctr *container) setAllocationAccount(
 		mpool.AllocationOwnerOrder,
 		ordersites.MergeOrderRetainedData,
 		ordersites.MergeOrderRetainedArea,
-		ordersites.MergeOrderRetainedNulls,
-		ordersites.MergeOrderRetainedGrouping,
 	)
 	if err != nil {
 		return err
@@ -300,8 +298,6 @@ func (ctr *container) setAllocationAccount(
 		mpool.AllocationOwnerOrder,
 		ordersites.MergeOrderExpressionData,
 		ordersites.MergeOrderExpressionArea,
-		ordersites.MergeOrderExpressionNulls,
-		ordersites.MergeOrderExpressionGrouping,
 	)
 	if err != nil {
 		return err
@@ -311,8 +307,6 @@ func (ctr *container) setAllocationAccount(
 		mpool.AllocationOwnerOrder,
 		ordersites.MergeOrderOutputData,
 		ordersites.MergeOrderOutputArea,
-		ordersites.MergeOrderOutputNulls,
-		ordersites.MergeOrderOutputGrouping,
 	)
 	if err != nil {
 		return err

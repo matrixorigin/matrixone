@@ -46,12 +46,12 @@ package arenaskl
 
 import (
 	"math"
+	"math/rand/v2"
 	"runtime"
 	"sync/atomic"
 	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/fastrand"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -457,7 +457,7 @@ func (s *Skiplist) newNodeAtHeight(
 }
 
 func (s *Skiplist) randomHeight() uint32 {
-	rnd := fastrand.Uint32()
+	rnd := rand.Uint32()
 
 	h := uint32(1)
 	for h < maxHeight && rnd <= probabilities[h] {

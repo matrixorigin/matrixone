@@ -208,8 +208,6 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		mpool.AllocationOwnerOrder,
 		ordersites.OrderRetainedData,
 		ordersites.OrderRetainedArea,
-		ordersites.OrderRetainedNulls,
-		ordersites.OrderRetainedGrouping,
 	)
 	if err != nil {
 		return err
@@ -219,8 +217,6 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		mpool.AllocationOwnerOrder,
 		ordersites.OrderExpressionData,
 		ordersites.OrderExpressionArea,
-		ordersites.OrderExpressionNulls,
-		ordersites.OrderExpressionGrouping,
 	)
 	if err != nil {
 		return err
@@ -239,8 +235,6 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		mpool.AllocationOwnerOrder,
 		ordersites.OrderRetainedData,
 		ordersites.OrderRetainedArea,
-		ordersites.OrderRetainedNulls,
-		ordersites.OrderRetainedGrouping,
 		recoveryClass,
 	)
 	if err != nil {

@@ -1201,7 +1201,7 @@ func TestShrinkWithSelsFailureFreedByOperator(t *testing.T) {
 			}
 		}
 	}()
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	data := types.EncodeSlice([]int64{1, 2, 3})
 	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)

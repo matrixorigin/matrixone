@@ -129,9 +129,14 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		if tableScan.ctr.domainEmpty {
 			return vm.CancelResult, nil
 		}
+		if !tableScan.ctr.membershipPrepared {
+			tableScan.prepareReaderMembership(proc)
+			tableScan.ctr.membershipPrepared = true
+		}
 	}
 
 	for {
+		tableScan.ctr.membershipApplied = false
 		// receive topvalue message
 		if tableScan.ctr.msgReceiver != nil {
 			msgs, _, _ := tableScan.ctr.msgReceiver.ReceiveMessage(false, proc.Ctx)
@@ -178,6 +183,12 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			return vm.CancelResult, err
 		}
 		colexec.CollectReaderExplainDiagnostics(tableScan.Reader, analyzer)
+		// Account this read's late columns before retirement restores the
+		// ordinary schedule, then retire before any empty-batch shortcut.
+		if !isEnd && tableScan.ctr.filterReadMetrics && tableScan.ctr.filterLateMaterialized && !tableScan.ctr.buf.IsEmpty() {
+			tableScan.recordLateInput(tableScan.ctr.buf)
+		}
+		tableScan.retireReaderMembership(proc)
 
 		// Record ReadSize metrics when scan completes all blocks (isEnd == true)
 		// This matches explain analyze output which shows total read size for the entire scan
@@ -197,9 +208,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		if tableScan.ctr.filterReadMetrics {
-			if tableScan.ctr.filterLateMaterialized && !tableScan.ctr.buf.IsEmpty() {
-				tableScan.recordLateInput(tableScan.ctr.buf)
-			}
 			if tableScan.ctr.buf.IsEmpty() {
 				continue
 			}
