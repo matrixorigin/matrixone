@@ -471,6 +471,14 @@ alter role test_rule_role_dup_projection_b add rule "select cast(1 as enum(_utf8
 select hex(cast(label as char)), count(*) from db1.t_dup group by label;
 -- @session
 
+-- Predicate recovery must keep ANSI_QUOTES when resolving the projection.
+alter role test_rule_role_dup_projection_a add rule 'select "a" as n from db1.t_dup' on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule 'select "a" as n from db1.t_dup where code = ''docs\\''notes''' on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = 'ANSI_QUOTES,NO_BACKSLASH_ESCAPES';
+select n from db1.t_dup order by n;
+-- @session
+
 -- 19. Row-wise expression projections also merge without dropping role visibility
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;

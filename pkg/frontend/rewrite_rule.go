@@ -1313,7 +1313,7 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 		// The left rule already grants all rows. Use the catalog parser mode
 		// only to prove compatibility, never to execute the right predicate.
 		if leftShape.unfiltered && mysql.ParseSQLModeFlags(sqlMode) != 0 {
-			r, parsed := rewriteRuleShapeForPrecedence(ctx, rightRule, "", false)
+			r, parsed := rewriteRuleShapeForPrecedence(ctx, rightRule, sqlMode, true)
 			if parsed && r != nil && leftShape.selectList == r.selectList && leftShape.table == r.table {
 				return leftRule, true, nil
 			}
@@ -1358,15 +1358,19 @@ func laterRewriteRuleDeterminesResult(ctx context.Context, left, right, sqlMode 
 	return leftOK && (l == nil || l.selectList != r.selectList || l.table != r.table || r.unfiltered)
 }
 
-func rewriteRuleShapeForPrecedence(ctx context.Context, rule, sqlMode string, allowDefault bool) (*rewriteRuleMergeShape, bool) {
+func rewriteRuleShapeForPrecedence(ctx context.Context, rule, sqlMode string, allowPredicateFallback bool) (*rewriteRuleMergeShape, bool) {
 	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, 1, sqlMode)
-	if err != nil && allowDefault && mysql.ParseSQLModeFlags(sqlMode) != 0 {
-		stmt, err = parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
-	}
 	if err != nil {
+		if allowPredicateFallback {
+			return rewriteRuleShapeWithEscapedPredicate(ctx, rule, sqlMode)
+		}
 		return nil, false
 	}
 	defer stmt.Free()
+	return rewriteRulePrecedenceShape(stmt)
+}
+
+func rewriteRulePrecedenceShape(stmt tree.Statement) (*rewriteRuleMergeShape, bool) {
 	switch stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
 		shape, _ := rewriteRuleMergeShapeForStatement(stmt)
@@ -1377,6 +1381,78 @@ func rewriteRuleShapeForPrecedence(ctx context.Context, rule, sqlMode string, al
 		return &rewriteRuleMergeShape{selectList: shape.selectList, table: shape.table, unfiltered: shape.unfiltered}, true
 	default:
 		return nil, false
+	}
+}
+
+func rewriteRuleShapeWithEscapedPredicate(ctx context.Context, rule, sqlMode string) (*rewriteRuleMergeShape, bool) {
+	const noBackslashEscapes = "NO_BACKSLASH_ESCAPES"
+	flags := mysql.ParseSQLModeFlags(sqlMode)
+	if !flags.Has(mysql.SQLModeNoBackslashEscapes) || strings.Contains(rule, "/*!") {
+		return nil, false
+	}
+	modes := strings.Split(sqlMode, ",")
+	modes = slices.DeleteFunc(modes, func(mode string) bool {
+		return strings.EqualFold(strings.TrimSpace(mode), noBackslashEscapes)
+	})
+	alternateMode := strings.Join(modes, ",")
+	where := rewriteRuleWhereOffset(rule, flags)
+	if where < 0 || where != rewriteRuleWhereOffset(rule, mysql.ParseSQLModeFlags(alternateMode)) {
+		return nil, false
+	}
+
+	// The alternate parse establishes the full rule's eligibility, including
+	// clauses after WHERE. Its projection and source are not used as keys.
+	full, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, 1, alternateMode)
+	if err != nil {
+		return nil, false
+	}
+	defer full.Free()
+	shape, valid := rewriteRulePrecedenceShape(full)
+	if !valid || shape == nil || shape.unfiltered {
+		return nil, valid && shape == nil
+	}
+	prefix, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule[:where], 1, sqlMode)
+	if err != nil {
+		return nil, false
+	}
+	defer prefix.Free()
+	shape, valid = rewriteRulePrecedenceShape(prefix)
+	if !valid || shape == nil || !shape.unfiltered {
+		return nil, false
+	}
+	shape.unfiltered = false
+	return shape, true
+}
+
+func rewriteRuleWhereOffset(sql string, flags mysql.SQLModeFlags) int {
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, flags)
+	defer mysql.PutScanner(scanner)
+	depth := 0
+	afterDot := false
+	for {
+		var token int
+		var value string
+		if afterDot {
+			token, value = scanner.ScanAfterDot()
+		} else {
+			token, value = scanner.Scan()
+		}
+		afterDot = token == '.'
+		switch token {
+		case 0, mysql.LEX_ERROR, ';':
+			return -1
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return -1
+			}
+		case mysql.WHERE:
+			if depth == 0 && strings.EqualFold(value, "where") {
+				return scanner.Pos - len(value)
+			}
+		}
 	}
 }
 

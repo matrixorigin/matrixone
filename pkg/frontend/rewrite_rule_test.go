@@ -773,6 +773,32 @@ func TestMergeRewriteRulesUnfilteredEarlierRule(t *testing.T) {
 	}
 }
 
+func TestMergeRewriteRulesFallbackPreservesSessionProjection(t *testing.T) {
+	const mode = "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"
+	const unfiltered = `select "a" as n from db1.t1`
+	const predicate = ` where code = 'docs\'notes'`
+	for _, tc := range []struct {
+		name, left, right string
+		wantErr           bool
+	}{
+		{"quoted column", unfiltered, unfiltered + predicate, false},
+		{"quoted column and source", `select "a" as n from "db1"."t1"`, unfiltered + predicate, false},
+		{"literal is not a column", unfiltered, `select 'a' as n from db1.t1` + predicate, true},
+		{"projection keeps literal backslash", `select 'x\ty' as n from db1.t1`, `select 'x\ty' as n from db1.t1` + predicate, false},
+		{"backslash is not a tab", `select _utf8mb4 X'780979' as n from db1.t1`, `select 'x\ty' as n from db1.t1` + predicate, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := mergeRewriteRulesWithSQLMode(t.Context(), tc.left, tc.right, mode)
+			if tc.wantErr {
+				require.ErrorContains(t, err, "failed to parse rewrite rule")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.left, got)
+		})
+	}
+}
+
 func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
