@@ -1570,8 +1570,12 @@ func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, star
 // commit-ts zonemap at block granularity before loading block data.
 func (h *AObjectHandle) nextPrefetchTarget(
 	ctx context.Context,
+	metadata *aobjPlanPrefetch,
 ) (obj *objectio.ObjectEntry, blk uint16, ok bool, err error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, false, err
+		}
 		if h.objectOffsetCursor >= len(h.objects) {
 			return nil, 0, false, nil
 		}
@@ -1583,9 +1587,11 @@ func (h *AObjectHandle) nextPrefetchTarget(
 		}
 		blk = uint16(h.blkOffsetCursor)
 		changes := h.p.changesHandle
-		if blk == 0 && changes.enableCommitTSBlockPrune &&
+		if metadata != nil && blk == 0 && changes.enableCommitTSBlockPrune &&
 			changes.pkFilter != nil && changes.pkFilter.PrefetchObjectMeta && h.needsBlockPlan(obj) {
-			h.prefetchBlockPlans(ctx)
+			if err := h.awaitBlockPlan(ctx, metadata, obj); err != nil {
+				return nil, 0, false, err
+			}
 		}
 		h.blkOffsetCursor++
 		if h.blkOffsetCursor >= int(obj.BlkCnt()) {
@@ -1602,49 +1608,78 @@ func (h *AObjectHandle) nextPrefetchTarget(
 	}
 }
 
-// Build plans ahead of the cursor so cold metadata reads overlap. Use each
-// plan (and return its error) in the normal replay order.
-func (h *AObjectHandle) prefetchBlockPlans(ctx context.Context) {
-	first := h.objectOffsetCursor
-	if _, ok := h.blockPlans[h.objects[first].ObjectShortName().ShortString()]; ok {
+type aobjPlanRead struct {
+	plan *aobjBlockPlan
+	done chan struct{}
+}
+
+// aobjPlanPrefetch belongs to one payload prefetch call. Its workers only
+// write their own plans. The replay cursor publishes completed plans.
+type aobjPlanPrefetch struct {
+	cancel  context.CancelFunc
+	pending map[string]aobjPlanRead
+}
+
+func (h *AObjectHandle) awaitBlockPlan(ctx context.Context, prefetch *aobjPlanPrefetch, obj *objectio.ObjectEntry) error {
+	key := obj.ObjectShortName().ShortString()
+	if _, ok := h.blockPlans[key]; ok {
+		return nil
+	}
+	read, pending := prefetch.pending[key]
+	if !pending {
+		h.finishBlockPlanPrefetch(prefetch)
+		readCtx, cancel := context.WithCancel(ctx)
+		prefetch.cancel = cancel
+		first := h.objectOffsetCursor
+		last := min(first+LoadParallism, len(h.objects))
+		prefetch.pending = make(map[string]aobjPlanRead, last-first)
+		for _, candidate := range h.objects[first:last] {
+			if candidate == nil || candidate.BlkCnt() == 0 || !h.needsBlockPlan(candidate) {
+				continue
+			}
+			candidateKey := candidate.ObjectShortName().ShortString()
+			if _, ok := h.blockPlans[candidateKey]; ok {
+				continue
+			}
+			if _, ok := prefetch.pending[candidateKey]; ok {
+				continue
+			}
+			entry := aobjPlanRead{plan: &aobjBlockPlan{}, done: make(chan struct{})}
+			prefetch.pending[candidateKey] = entry
+			go func() {
+				entry.plan.err = h.buildBlockPlan(readCtx, candidate, entry.plan)
+				close(entry.done)
+			}()
+		}
+		read = prefetch.pending[key]
+	}
+
+	// A later speculative plan may still be loading. Only the current
+	// plan is required to choose and dispatch the next payload.
+	select {
+	case <-read.done:
+		h.blockPlans[key] = read.plan
+		delete(prefetch.pending, key)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (h *AObjectHandle) finishBlockPlanPrefetch(prefetch *aobjPlanPrefetch) {
+	if prefetch.cancel == nil {
 		return
 	}
-	readCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	var pending [LoadParallism]struct {
-		read sync.WaitGroup
-		obj  *objectio.ObjectEntry
-		plan *aobjBlockPlan
-	}
-	count := 0
-	last := min(first+LoadParallism, len(h.objects))
-	for _, obj := range h.objects[first:last] {
-		if obj == nil || obj.BlkCnt() == 0 {
-			continue
-		}
-		key := obj.ObjectShortName().ShortString()
-		if _, ok := h.blockPlans[key]; ok || !h.needsBlockPlan(obj) {
-			continue
-		}
-		plan := &aobjBlockPlan{}
-		h.blockPlans[key] = plan
-		entry := &pending[count]
-		entry.obj, entry.plan = obj, plan
-		count++
-		entry.read.Go(func() {
-			plan.err = h.buildBlockPlan(readCtx, obj, plan)
-		})
-	}
-	// Only a failure in replay order can stop later speculative reads.
-	// Join them all before letting the caller inspect the cached plans.
-	for i := range count {
-		entry := &pending[i]
-		entry.read.Wait()
-		if entry.plan.err != nil || h.requiresCommitTSFallback(entry.obj, entry.plan) {
-			cancel()
+	prefetch.cancel()
+	for key, read := range prefetch.pending {
+		<-read.done
+		// Keep useful read-ahead across payload windows. A speculative
+		// failure may be the cancellation above, so retry it when needed.
+		if read.plan.err == nil {
+			h.blockPlans[key] = read.plan
 		}
 	}
+	*prefetch = aobjPlanPrefetch{}
 }
 
 // shouldReadBlock decides whether one block may contain rows in [start, end].
@@ -1680,7 +1715,7 @@ func (h *AObjectHandle) shouldReadBlock(
 		return false, plan.err
 	}
 	if !plan.evaluable {
-		if h.requiresCommitTSFallback(obj, plan) {
+		if h.pruneByCommitTS(obj) && h.p.changesHandle.strictCommitTSBlockPrune {
 			logutil.Warn(
 				"ChangesHandle-CommitTSBlockPlan strict fallback",
 				zap.String("object", obj.ObjectShortName().ShortString()),
@@ -1713,10 +1748,6 @@ func (h *AObjectHandle) pruneByCommitTS(obj *objectio.ObjectEntry) bool {
 func (h *AObjectHandle) needsBlockPlan(obj *objectio.ObjectEntry) bool {
 	filter := h.p.changesHandle.pkFilter
 	return h.pruneByCommitTS(obj) || (filter != nil && len(filter.Segments) > 0)
-}
-
-func (h *AObjectHandle) requiresCommitTSFallback(obj *objectio.ObjectEntry, plan *aobjBlockPlan) bool {
-	return !plan.evaluable && h.p.changesHandle.strictCommitTSBlockPrune && h.pruneByCommitTS(obj)
 }
 
 func (h *AObjectHandle) buildBlockPlan(
@@ -1959,6 +1990,8 @@ func (h *AObjectHandle) prefetch(ctx context.Context) error {
 
 	readCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	var metadata aobjPlanPrefetch
+	defer h.finishBlockPlanPrefetch(&metadata)
 
 	var blockIDs [LoadParallism]uint16
 	var groups [LoadParallism]aObjectReadGroup
@@ -2005,7 +2038,7 @@ func (h *AObjectHandle) prefetch(ctx context.Context) error {
 		if readCtx.Err() != nil {
 			break
 		}
-		obj, blk, ok, targetErr := h.nextPrefetchTarget(readCtx)
+		obj, blk, ok, targetErr := h.nextPrefetchTarget(readCtx, &metadata)
 		if targetErr != nil {
 			cancel(targetErr)
 			break
@@ -2102,7 +2135,8 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 		} else {
 			var ok bool
 			var targetErr error
-			obj, blk, ok, targetErr = h.nextPrefetchTarget(ctx)
+			// Bounded reads plan only the current block.
+			obj, blk, ok, targetErr = h.nextPrefetchTarget(ctx, nil)
 			if targetErr != nil {
 				err = targetErr
 				h.p.changesHandle.readDuration += time.Since(t0)
