@@ -88,6 +88,12 @@ func ExecuteIterationWithRuntime(
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Hour, moerr.CauseISCPIterationTimeout)
 	defer cancel()
 
+	// The worker may run on a CN where the source tenant has never logged in.
+	if activator, ok := cnEngine.(engine.TenantCatalogActivator); ok && iterCtx.accountID != catalog.System_Account {
+		if err := activator.ActivateTenantCatalog(ctx, iterCtx.accountID); err != nil {
+			return err
+		}
+	}
 	nowTs := cnEngine.LatestLogtailAppliedTime()
 	createByOpt := client.WithTxnCreateBy(
 		0,
