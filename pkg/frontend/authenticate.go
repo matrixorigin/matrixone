@@ -4942,7 +4942,7 @@ func doAlterRole(ctx context.Context, ses *Session, ar *tree.AlterRole) (err err
 	defer bh.Close()
 
 	// put it into the single transaction
-	err = bh.Exec(ctx, "begin;")
+	err = beginPrincipalNamespaceTxn(ctx, ses, bh)
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
@@ -11999,7 +11999,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, cancelTxnCreateWithRequest: true, internalExecution: true})
 	defer bh.Close()
 
-	err = bh.Exec(ctx, "begin;")
+	err = beginPrincipalNamespaceTxn(ctx, ses, bh)
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
@@ -12235,7 +12235,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, cancelTxnCreateWithRequest: true, internalExecution: true})
 	defer bh.Close()
 
-	err = bh.Exec(ctx, "begin;")
+	err = beginPrincipalNamespaceTxn(ctx, ses, bh)
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()

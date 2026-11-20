@@ -157,14 +157,16 @@ length limits must be preserved, not silently truncate canonical names.
 
 1. Parse owned old/new pairs and normalize/quote through existing helpers. Begin
    one request-cancellable pessimistic-RC background transaction, tenant-scoped.
-2. Identify existing users among all old/new names, plus current principal, then
-   lock their existing rows in stable ID order and revalidate name/ID bindings.
+2. Lock the tenant's row in the system `mo_catalog.mo_account` table. Identify
+   existing users among all old/new names, plus the current principal, then lock
+   their existing rows in stable ID order and revalidate name/ID bindings.
    Resolve chained names against the transaction's own writes, not just the
    initial source set. Newly appearing bindings or changed IDs cause a conflict
    failure, never substitution of a new principal. Acquire required administrator
    role/membership exclusion consistently with adjacent account-management paths.
 3. Validate each ordered pair's source, host, reserved/admin status, target
-   absence, and routine-reference guard. Update only user_name by stable ID.
+   absence in both the user and role catalogs, and routine-reference guard.
+   Update only user_name by stable ID.
    Execute every pair's update, including intermediate names, inside this single
    transaction so database uniqueness handles canonical equality and conflicts.
 4. Commit once. All validation, SQL, cancellation and detected uniqueness/deadlock
@@ -175,11 +177,12 @@ length limits must be preserved, not silently truncate canonical names.
    without exposing other tenants' data. A lost commit acknowledgement has unknown
    client outcome: inspect catalog before retry; do not automatically reverse.
 
-Absent destination names are NOT assumed gap-locked. Concurrent CREATE/RENAME
-can win the unique username insert/update; the loser must roll back all pairs.
-Existing-user DROP/restore writers must share user-row conflicts. The source
-user lock is the proposed exclusion for routine creation; it is not sufficient
-proof of the admin-membership phantom or mixed-writer cases listed below.
+Absent destination names are protected by the shared account-row lock among
+participating name writers. A waiting writer checks both catalogs after it
+acquires the lock in pessimistic RC, so it sees the committed winner. The
+unique indexes also enforce uniqueness within each catalog. Existing-user
+writers still use user-row conflicts to protect identity and membership, as
+described below. Catalog restore follows the maintenance admission rule.
 
 No new service, worker, wire field, cache or catalog migration. Pair storage is
 O(pair count), but DEFINER scans may be O(routine count): current definer columns
@@ -188,13 +191,17 @@ No per-query session-wide refresh is proposed.
 
 ## Bounded writer / shared-lock contract (v0.4)
 
-Here "shared" means the SAME exclusion row, not SQL shared-lock mode. Use
-exclusive `FOR UPDATE` on the stable user-ID row in pessimistic RC. This is a
-small coordinated writer change, not a new lock service or distributed protocol.
+Name writers use exclusive `FOR UPDATE` on the same account row in pessimistic
+RC. The lock serializes name claims across both principal catalogs within one
+tenant and can also delay account-level SQL-task operations. Writers that
+modify existing identities or membership use exclusive stable user-ID row
+locks as described below.
 
 | Writer / actual evidence | Required participation and order | Failure / acceptance evidence |
 |---|---|---|
-| RENAME handler (new) | Resolve then lock affected existing user IDs in ascending ID order; revalidate bindings; check admin membership and DEFINER references after acquisition. Update ordered names while retaining locks through commit. | Missing-row destination races rely on existing unique-key transaction enforcement. Deterministic CREATE-vs-RENAME and two-RENAME tests must show one winner and whole-statement loser rollback. No gap-lock claim. |
+| RENAME USER | Account row first, then affected existing user IDs in ascending order. Revalidate bindings, check admin membership and DEFINER references, and check both user and role names before each ordered update. Hold locks until commit or rollback. | A competing name claim sees the winner's committed name after acquiring the account row. Any collision aborts the whole statement, including earlier pairs. |
+| CREATE USER, CREATE ROLE, ALTER ROLE | Begin with the configured transaction-creation timeout and request cancellation. Lock the same account row before looking up or mutating principals. Check the destination in both catalogs and retain the lock through commit or rollback. | A writer blocked by RENAME USER observes the committed name before claiming it. Acquiring the account-row lock follows the statement context and normal lock-wait policy. |
+| SQL-task insertion, force-run recovery, and DROP ACCOUNT task cleanup | SQL-task insertion locks account rows by ascending account ID before inserting task metadata. Force-run recovery and DROP ACCOUNT cleanup acquire the affected account row before locking or mutating task metadata. The account lock is released at commit or rollback. | These operations can wait behind a principal-name writer for the same account, and vice versa. Task locks follow the account lock on these paths. |
 | User-target GRANT ROLE, `authenticate.go:6245,6295,6415+` | Current default executor and unlocked target lookup do not exclude rename. Switch this user-target path to pessimistic RC; resolve user IDs, lock/revalidate them before membership checks/inserts, retain to commit. Role-to-role behavior is not redesigned. | This closes the concrete administrator-membership phantom: grant-first makes rename reject; rename-first makes grant validate the current binding or fail, never another identity. |
 | User-target REVOKE ROLE, `authenticate.go:6069-6128+` | Already pessimistic RC, but username lookup is not an exclusion lock. Take the same stable-ID target user lock before membership mutation; revalidate target. | Revocation and rename serialize; rollback/cancellation releases every acquired lock. |
 | Routine create/replace, `authenticate.go:11860+,12091+,12211+,12237+` | Existing UDF database lock precedes creator-user lock; procedure switches to pessimistic RC, with persistence preparation inside transaction and creator lock before writing. Read canonical name by ID only after lock. Rename never takes a database lock, avoiding a new reverse database edge. | Both creator-first and rename-first barrier schedules; replacement included. No stale session/task text may become a definer. |

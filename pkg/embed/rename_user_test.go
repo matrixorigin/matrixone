@@ -117,14 +117,15 @@ func TestRenameUserSerializesRoleNameClaim(t *testing.T) {
 			var tableID uint64
 			require.NoError(t, db.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where account_id=0 and reldatabase='mo_catalog' and relname=?", tableName).Scan(&tableID))
 			packer := types.NewPacker()
-			defer packer.Close()
 			packer.EncodeInt32(rowID)
+			rowKey := bytes.Clone(packer.Bytes())
+			packer.Close()
 			require.Eventually(t, func() bool {
 				found := false
 				lockService.IterLocks(func(table uint64, keys [][]byte, held lockservice.Lock) bool {
 					if table == tableID {
 						for _, key := range keys {
-							if bytes.Equal(key, packer.Bytes()) {
+							if bytes.Equal(key, rowKey) {
 								held.IterWaiters(func(lock.WaitTxn) bool { found = true; return false })
 								break
 							}

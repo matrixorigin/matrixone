@@ -866,7 +866,8 @@ func Test_initRole(t *testing.T) {
 				{UserName: "r2"},
 			},
 		}
-		ses := &Session{}
+		ses := newSes(nil, ctrl)
+		defer ses.Close()
 
 		err := InitRole(ctx, ses, tenant, cr)
 		convey.So(err, convey.ShouldBeNil)

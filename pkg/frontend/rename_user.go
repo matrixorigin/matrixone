@@ -143,6 +143,16 @@ func validateRenameUserDestination(ctx context.Context, name string) error {
 	return nil
 }
 
+// beginPrincipalNamespaceTxn caps BEGIN for existing user/role DDL while
+// preserving request cancellation. Callers continue with the original request
+// context for the account-row lock and the rest of the transaction.
+func beginPrincipalNamespaceTxn(ctx context.Context, ses *Session, bh BackgroundExec) error {
+	beginCtx, cancel := context.WithTimeoutCause(ctx,
+		getPu(ses.GetService()).SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
+	defer cancel()
+	return bh.Exec(beginCtx, "begin;")
+}
+
 // lockAccountPrincipalNamespace serializes user and role name claims on the
 // account row, even when the destination is absent from both catalog tables.
 // Callers acquire it before principal rows and hold it through finishTxn.
