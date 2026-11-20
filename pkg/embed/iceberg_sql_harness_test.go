@@ -815,6 +815,9 @@ func openIcebergTenantTestSQL(t *testing.T, c Cluster, rootDB *sql.DB) *embedded
 		fmt.Sprintf("select account_id from mo_catalog.mo_account where account_name = '%s'", accountName),
 	).Scan(&accountID))
 	require.NotZero(t, accountID)
+	// The embedded session bypasses login on this CN.
+	_, err := rootDB.ExecContext(ctx, fmt.Sprintf("select mo_ctl('cn', 'ActivateTenantCatalog', '%d')", accountID))
+	require.NoError(t, err)
 	session := newEmbeddedSQLSession(t, c, accountName, accountID, 2, 2)
 	require.Equal(t, int64(accountID), queryInt64(t, session, "select current_account_id()"))
 	require.Equal(t, int64(2), queryInt64(t, session, "select current_user_id()"))

@@ -1238,6 +1238,13 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		exec.runningReaders = &sync.Map{}
 	}
 
+	// A worker can claim the task on a CN where the source tenant has never logged in.
+	if activator, ok := exec.cnEngine.(engine.TenantCatalogActivator); ok && accountId != catalog.System_Account {
+		if err = activator.ActivateTenantCatalog(ctx, accountId); err != nil {
+			return err
+		}
+	}
+
 	// register to table scanner
 	callbackGeneration := restartGeneration
 	if !detector.RegisterIfAbsent(taskId, accountId, dbs, tables, func(tbls map[uint32]cdc.TblMap) error {

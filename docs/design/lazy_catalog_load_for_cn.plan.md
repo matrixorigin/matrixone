@@ -165,6 +165,7 @@ SELECT relname FROM mo_catalog.mo_tables WHERE account_id = @id;
 | `handleCloneTable` / `handleCloneDatabaseWithSource` | CLONE 的目标账户 |
 | `GetSubscriptionMeta` / `ResolveSnapshotWithSnapshotName` | 订阅的发布账户、命名快照的所属账户 |
 | `featureLimitCheckerForAccount` | 需要检查配额的账户 |
+| `CDCTaskExecutor.Start` | CDC worker 启动或接管任务时，在本 CN 注册表扫描前激活源账户 |
 | `activateRemoteTenantCatalog` | 远端 CN 执行 pipeline 时的账户 |
 
 `SHOW ACCOUNTS` 从 sys catalog 枚举账号，不改变当前 CN 的订阅。lazy CN 仍会列出冷租户，
