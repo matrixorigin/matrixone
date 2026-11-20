@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -62,22 +63,32 @@ func WriteMergeFile(ctx context.Context, tbl *table.Table, first []string, next 
 		_ = DBConnErrCount.Count()
 		return err
 	}
-	queryCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseWriteRowRecords)
+	// Distinguish this operation's deadline from a caller that uses the same
+	// underlying cause for its own cancellation.
+	timeoutCause := fmt.Errorf("%w", moerr.CauseWriteRowRecords)
+	queryCtx, cancel := context.WithTimeoutCause(ctx, timeout, timeoutCause)
 	defer cancel()
+	countPreflightError := func(err error) {
+		callerErr := ctx.Err()
+		if callerErr == nil || !errors.Is(err, callerErr) ||
+			context.Cause(queryCtx) == timeoutCause {
+			_ = DBConnErrCount.Count()
+		}
+	}
 	conn, err := dbConn.Conn(queryCtx)
 	if err != nil {
-		_ = DBConnErrCount.Count()
+		countPreflightError(err)
 		return err
 	}
 	defer conn.Close()
 
 	var packetLimit int
 	err = conn.QueryRowContext(queryCtx, "SELECT @@session.max_allowed_packet").Scan(&packetLimit)
-	cancel()
 	if err != nil {
-		_ = DBConnErrCount.Count()
+		countPreflightError(err)
 		return err
 	}
+	cancel()
 	// The driver reserves one byte from the negotiated limit and counts the
 	// COM_QUERY command byte against the remaining budget.
 	err = writeMergeFile(ctx, conn, tbl, first, next, min(mergeSQLLimit, packetLimit-2), mergeSQLTarget, timeout)
