@@ -563,6 +563,7 @@ func TestCollectStats(t *testing.T) {
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
 						Replicas: []pb.LogReplicaInfo{{
+							ReplicaID: 1,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -571,6 +572,7 @@ func TestCollectStats(t *testing.T) {
 								Term:     0}}}},
 					"b": {Tick: 999999999, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
 						Replicas: []pb.LogReplicaInfo{{
+							ReplicaID: 2,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -579,6 +581,7 @@ func TestCollectStats(t *testing.T) {
 								Term:     0}}}},
 					"c": {Tick: 999999999, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
 						Replicas: []pb.LogReplicaInfo{{
+							ReplicaID: 3,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},

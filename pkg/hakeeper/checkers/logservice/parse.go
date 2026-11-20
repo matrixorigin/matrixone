@@ -216,6 +216,34 @@ func removeReplicasOnChangedStoreIncarnation(
 	}
 }
 
+// canRepairVotingMembership limits scheduling for shards with expired voters
+// to cases where a majority of the current voters still report.
+func canRepairVotingMembership(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo, expired []string) bool {
+	hasExpiredVoter := false
+	for _, uuid := range shard.Replicas {
+		if contains(expired, uuid) {
+			hasExpiredVoter = true
+			break
+		}
+	}
+	if !hasExpiredVoter {
+		return true
+	}
+	reporting := 0
+	for replicaID, uuid := range shard.Replicas {
+		if contains(expired, uuid) || replicaStoreIncarnationChanged(replicaID, uuid, shard.ReplicaStoreIncarnations, stores) {
+			continue
+		}
+		for _, report := range stores[uuid].Replicas {
+			if report.ShardID == shard.ShardID && report.ReplicaID == replicaID && !report.IsNonVoting {
+				reporting++
+				break
+			}
+		}
+	}
+	return reporting > len(shard.Replicas)/2
+}
+
 // parseLogShards collects stats for further use.
 // It returns two stats, the first is the stats for normal replicas
 // and the second one is for the non-voting replicas.
@@ -231,7 +259,6 @@ func parseLogShards(
 		removeReplicasOnChangedStoreIncarnation(fixingNonVoting, shardInfo, infos.Stores)
 
 		// cal the toRemove field.
-		toRemoveNormal := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.replicas)
 		toRemoveNonVoting := getReplicasToRemove(shardID, shardInfo.NonVotingReplicas, fixingNonVoting.replicas)
 
 		// cal the toStart field.
@@ -248,14 +275,16 @@ func parseLogShards(
 			infos.Stores,
 		)
 
-		if fixingNormal.toAdd > 0 {
-			normalStats.toAdd[shardID] = fixingNormal.toAdd
+		if canRepairVotingMembership(shardInfo, infos.Stores, expired) {
+			if fixingNormal.toAdd > 0 {
+				normalStats.toAdd[shardID] = fixingNormal.toAdd
+			}
+			if removals := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.replicas); len(removals) > 0 {
+				normalStats.toRemove[shardID] = removals
+			}
 		}
 		if fixingNonVoting.toAdd > 0 {
 			nonVotingStats.toAdd[shardID] = fixingNonVoting.toAdd
-		}
-		if len(toRemoveNormal) > 0 {
-			normalStats.toRemove[shardID] = toRemoveNormal
 		}
 		if len(toRemoveNonVoting) > 0 {
 			nonVotingStats.toRemove[shardID] = toRemoveNonVoting

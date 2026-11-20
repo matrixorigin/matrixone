@@ -1768,11 +1768,9 @@ func TestPreparingCommandDeliveryIsNonDestructiveForSupportedService(t *testing.
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.CommandDeliveryPreparing = true
 	command := pb.ScheduleCommand{
-		UUID:        "tn-1",
-		ServiceType: pb.TNService,
-		ShutdownStore: &pb.ShutdownStore{
-			StoreID: "tn-1",
-		},
+		UUID:              "tn-1",
+		ServiceType:       pb.TNService,
+		CreateTaskService: &pb.CreateTaskService{},
 	}
 	_, err := rsm.Update(sm.Entry{
 		Index: 10,
@@ -2852,6 +2850,96 @@ func TestAllocateIDReservationBoundary(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, uint64(math.MaxUint64-1), r.Value)
 			}
+		})
+	}
+}
+
+func TestRestoredLegacyStoreShutdownIsNotDelivered(t *testing.T) {
+	old := NewStateMachine(0, 1)
+	start := pb.ScheduleCommand{UUID: "log", ServiceType: pb.LogService, ConfigChange: &pb.ConfigChange{
+		ChangeType: pb.StartReplica, Replica: pb.Replica{UUID: "log", ShardID: 1, ReplicaID: 3},
+	}}
+	logShutdown := pb.ScheduleCommand{UUID: "log", ServiceType: pb.LogService, ShutdownStore: &pb.ShutdownStore{StoreID: "log"}}
+	tnShutdown := pb.ScheduleCommand{UUID: "tn", ServiceType: pb.TNService, ShutdownStore: &pb.ShutdownStore{StoreID: "tn"}}
+	_, err := old.Update(sm.Entry{Index: 1, Cmd: GetUpdateCommandsCmd(1, []pb.ScheduleCommand{logShutdown, start, tnShutdown})})
+	require.NoError(t, err)
+	var snapshot bytes.Buffer
+	require.NoError(t, old.SaveSnapshot(&snapshot, nil, nil))
+	rsm := NewStateMachine(0, 1)
+	require.NoError(t, rsm.RecoverFromSnapshot(&snapshot, nil, nil))
+
+	heartbeat, err := (&pb.LogStoreHeartbeat{UUID: "log"}).Marshal()
+	require.NoError(t, err)
+	result, err := rsm.Update(sm.Entry{Index: 2, Cmd: GetLogStoreHeartbeatCmd(heartbeat)})
+	require.NoError(t, err)
+	var delivered pb.CommandBatch
+	require.NoError(t, delivered.Unmarshal(result.Data))
+	require.Equal(t, []pb.ScheduleCommand{start}, delivered.Commands)
+
+	heartbeat, err = (&pb.TNStoreHeartbeat{UUID: "tn"}).Marshal()
+	require.NoError(t, err)
+	result, err = rsm.Update(sm.Entry{Index: 3, Cmd: GetTNStoreHeartbeatCmd(heartbeat)})
+	require.NoError(t, err)
+	var tnBatch pb.CommandBatch
+	require.NoError(t, tnBatch.Unmarshal(result.Data))
+	require.Empty(t, tnBatch.Commands)
+	require.NotContains(t, rsm.(*stateMachine).state.ScheduleCommands, "tn")
+}
+
+func TestRestoredLegacyStoreShutdownWithAcknowledgedDelivery(t *testing.T) {
+	for _, preparing := range []bool{true, false} {
+		name := "enabled"
+		if preparing {
+			name = "preparing"
+		}
+		t.Run(name, func(t *testing.T) {
+			old := NewStateMachine(0, 1).(*stateMachine)
+			old.state.CommandDeliveryPreparing = preparing
+			old.state.CommandDeliveryEnabled = !preparing
+			shutdown := func(uuid string) pb.ScheduleCommand {
+				return pb.ScheduleCommand{UUID: uuid, ServiceType: pb.TNService, ShutdownStore: &pb.ShutdownStore{StoreID: uuid}}
+			}
+			task := pb.ScheduleCommand{UUID: "tn", ServiceType: pb.TNService, CreateTaskService: &pb.CreateTaskService{}}
+			_, err := old.Update(sm.Entry{Index: 10, Cmd: GetUpdateCommandsCmd(1, []pb.ScheduleCommand{
+				shutdown("tn"), task, shutdown("tn-shutdown-only"),
+			})})
+			require.NoError(t, err)
+			var snapshot bytes.Buffer
+			require.NoError(t, old.SaveSnapshot(&snapshot, nil, nil))
+			restored := NewStateMachine(0, 1).(*stateMachine)
+			require.NoError(t, restored.RecoverFromSnapshot(&snapshot, nil, nil))
+
+			poll := func(uuid string) pb.CommandBatch {
+				t.Helper()
+				result, err := restored.Lookup(&ScheduleCommandQuery{UUID: uuid})
+				require.NoError(t, err)
+				return *result.(*pb.CommandBatch)
+			}
+			sendHeartbeat := func(uuid string, ack uint64) pb.CommandBatch {
+				t.Helper()
+				heartbeat, err := (&pb.TNStoreHeartbeat{
+					UUID: uuid, AckedCommandBatchID: ack, CommandDeliveryAckSupported: true,
+				}).Marshal()
+				require.NoError(t, err)
+				result, err := restored.Update(sm.Entry{Index: restored.state.Index + 1, Cmd: GetTNStoreHeartbeatCmd(heartbeat)})
+				require.NoError(t, err)
+				var batch pb.CommandBatch
+				require.NoError(t, batch.Unmarshal(result.Data))
+				return batch
+			}
+			stored := restored.state.ScheduleCommands["tn"]
+			require.Len(t, stored.CommandIDs, 2)
+			batch := poll("tn")
+			require.Equal(t, stored.BatchID, batch.BatchID)
+			require.Equal(t, []pb.ScheduleCommand{task}, batch.Commands)
+			require.Equal(t, stored.CommandIDs[1:], batch.CommandIDs)
+			require.Equal(t, stored, restored.state.ScheduleCommands["tn"])
+			require.Equal(t, batch, sendHeartbeat("tn", 0))
+			require.Empty(t, sendHeartbeat("tn", batch.BatchID).Commands)
+			require.NotContains(t, restored.state.ScheduleCommands, "tn")
+
+			require.Empty(t, poll("tn-shutdown-only"))
+			require.Empty(t, sendHeartbeat("tn-shutdown-only", 0))
 		})
 	}
 }
