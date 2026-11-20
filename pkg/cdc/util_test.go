@@ -434,8 +434,9 @@ func Test_convertColIntoSql(t *testing.T) {
 			wantErr: assert.NoError,
 		},
 		{
+			name:    "enum ordinal is not quoted",
 			args:    args{ctx: context.Background(), data: types.Enum(1), typ: &types.Type{Oid: types.T_enum}, sqlBuff: []byte{}},
-			want:    []byte("'1'"),
+			want:    []byte("1"),
 			wantErr: assert.NoError,
 		},
 	}
