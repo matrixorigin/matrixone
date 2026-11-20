@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1719,7 +1720,7 @@ func diffOnBase(
 	}
 
 	if tarHandle, baseHandle, err = constructChangeHandle(
-		ctx, ses, bh, tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo,
+		ctx, ses, bh, &tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo,
 	); err != nil {
 		return
 	}
@@ -2252,7 +2253,7 @@ func constructChangeHandle(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
-	tables tableStuff,
+	tables *tableStuff,
 	branchInfo *branchMetaInfo,
 	pkFilter *engine.PKFilter,
 	betweenFrom, betweenTo *types.TS,
@@ -2283,7 +2284,7 @@ func constructChangeHandle(
 	}()
 
 	if tarRange, baseRange, err = decideCollectRange(
-		ctx, ses, bh, tables, branchInfo,
+		ctx, ses, bh, *tables, branchInfo,
 	); err != nil {
 		return
 	}
@@ -2297,9 +2298,30 @@ func constructChangeHandle(
 	if betweenFrom != nil && betweenTo != nil {
 		bFrom := betweenFrom.Next()
 		bTo := *betweenTo
+		// The lower bound can trim a parent range before the source fork.
+		// Only a lower bound after the fork can supply a source before image.
+		tarForkTS, _ := branchInfo.lcaProbeSnapshots(tarSnapshot, baseSnapshot, true)
+		useWindowStart := branchInfo.hasLCA() && betweenFrom.GT(&tarForkTS)
+		sourceGenerations := branchInfo.pathFromLCAToTar
+		if useWindowStart {
+			// The last real fork starts the source branch. All following
+			// COPY ALTER generations still belong to that branch.
+			lineageOnly := branchInfo.pathFromLCAToTarLineageOnly
+			for i := len(sourceGenerations) - 1; i > 0; i-- {
+				if i >= len(lineageOnly) || !lineageOnly[i] {
+					sourceGenerations = sourceGenerations[i:]
+					break
+				}
+			}
+		}
 		j := 0
+		lastDropped := -1
 		boundaries := make([]engine.Relation, 0, len(tarRange.rel))
 		for i := range tarRange.rel {
+			if tarRange.end[i].LT(&bFrom) {
+				lastDropped = i
+				continue
+			}
 			startBoundary := tarRange.startBoundary(i)
 			// Intersect: from = max(original, bFrom), end = min(original, bTo)
 			f := tarRange.from[i]
@@ -2314,6 +2336,28 @@ func constructChangeHandle(
 				e = bTo
 			}
 			if f.LE(&e) {
+				if j == 0 && useWindowStart {
+					seg, snapshot := i, *betweenFrom
+					if bFrom.LT(&tarRange.from[i]) {
+						// The next generation is not visible yet. A predecessor
+						// after the fork supplies the image in the COPY gap.
+						seg = lastDropped
+						if seg >= 0 {
+							snapshot = tarRange.end[seg]
+						}
+					}
+					if seg >= 0 && snapshot.GT(&tarForkTS) {
+						ident := tarRange.segmentIdentity(seg, tarIdent)
+						id := tarRange.rel[seg].GetTableID(identityCtx(ctx, ident))
+						if slices.Contains(sourceGenerations, id) {
+							tables.pickWindowStart = &dataBranchPickWindowStart{
+								tableID:  id,
+								snapshot: snapshot,
+								identity: ident,
+							}
+						}
+					}
+				}
 				tarRange.from[j] = f
 				tarRange.end[j] = e
 				tarRange.rel[j] = tarRange.rel[i]
@@ -2421,7 +2465,7 @@ func constructChangeHandle(
 				handle = &historicalDataBranchChangesHandle{
 					inner:               handle,
 					sourceMapping:       sourceMapping,
-					tblStuff:            tables,
+					tblStuff:            *tables,
 					ses:                 ses,
 					endpointRel:         tarHydrationRel,
 					endpointSnapshot:    tarHydrationSnapshot,
@@ -2483,7 +2527,7 @@ func constructChangeHandle(
 				handle = &historicalDataBranchChangesHandle{
 					inner:               handle,
 					sourceMapping:       sourceMapping,
-					tblStuff:            tables,
+					tblStuff:            *tables,
 					ses:                 ses,
 					endpointRel:         tables.baseRel,
 					endpointSnapshot:    baseSnapshot,

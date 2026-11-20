@@ -288,11 +288,17 @@ func appendPickedBatchRows(
 
 		// Handle conflict semantics for picked keys.
 		if wrapped.side == diffSideBase && wrapped.kind == diffDelete {
-			// A base DELETE for a picked key means the key exists in both
-			// source and destination with different values (a conflict).
+			// A base DELETE marks a destination row affected by a conflict
+			// on this picked key.
 			if userConflictOpt != nil {
 				switch userConflictOpt.Opt {
 				case tree.CONFLICT_FAIL:
+					if wrapped.pickDeleteInsertConflict {
+						return moerr.NewDataBranchConflictNoCtxf(
+							"%s DELETE and %s INSERT on pk(%v)",
+							tblStuff.tarRel.GetTableName(), wrapped.name, pkKey,
+						)
+					}
 					return moerr.NewDataBranchConflictNoCtxf(
 						"%s %s and %s %s on pk(%v) with different values",
 						tblStuff.tarRel.GetTableName(), diffInsert,

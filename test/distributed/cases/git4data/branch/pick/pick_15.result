@@ -1,0 +1,226 @@
+drop snapshot if exists pick_window_lo;
+drop snapshot if exists pick_window_hi;
+drop database if exists pick_window;
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10),(2,10);
+data branch create table src from root;
+update src set v=20;
+create snapshot pick_window_lo for table pick_window src;
+update src set v=10 where k=1;
+update src set v=25 where k=2;
+update src set v=20 where k=2;
+create snapshot pick_window_hi for table pick_window src;
+update root set v=30;
+data branch create table dst from root;
+select k,v from src {snapshot = pick_window_lo} order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  20
+select k,v from src {snapshot = pick_window_hi} order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  30
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10),(2,10),(3,10);
+data branch create table src from root;
+update src set v=20;
+create snapshot pick_window_lo for table pick_window src;
+alter table src algorithm=inplace, rename column v to v2;
+update src set v2=10 where k in (1,3);
+update src set v2=25 where k=2;
+update src set v2=20 where k=2;
+create snapshot pick_window_hi for table pick_window src;
+update root set v=30;
+data branch create table dst from root;
+update dst set v=20 where k=3;
+select k,v from src {snapshot = pick_window_lo} order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  20  𝄀
+3  ¦  20
+select k,v2 from src {snapshot = pick_window_hi} order by k;
+➤ k[4,32,0]  ¦  v2[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  10
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  30  𝄀
+3  ¦  20
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  30  𝄀
+3  ¦  10
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10),(2,10),(3,10);
+data branch create table src from root;
+update src set v=20;
+create snapshot pick_window_lo for table pick_window src;
+update src set v=10 where k in (1,3);
+update src set v=25 where k=2;
+update src set v=20 where k=2;
+create snapshot pick_window_hi for table pick_window src;
+alter table src algorithm=copy, rename column v to v2;
+update root set v=30;
+data branch create table dst from root;
+update dst set v=20 where k=3;
+select k,v from src {snapshot = pick_window_lo} order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  20  𝄀
+3  ¦  20
+select k,v from src {snapshot = pick_window_hi} order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  10
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  30  𝄀
+3  ¦  20
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  30  𝄀
+3  ¦  10
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (2,10),(4,40);
+data branch create table src from root;
+insert into src values (1,20);
+create snapshot pick_window_lo for table pick_window src;
+delete from src where k in (1,2);
+create snapshot pick_window_hi for table pick_window src;
+data branch create table dst from root;
+insert into dst values (1,99);
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+conflict: src DELETE and dst INSERT on pk(1)
+select k,v from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  99  𝄀
+2  ¦  10  𝄀
+4  ¦  40
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  99  𝄀
+4  ¦  40
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+4  ¦  40
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int, w int);
+insert into root values (1,30,10);
+data branch create table src from root;
+data branch create table dst from root;
+update src set v=20 where k=1;
+alter table src algorithm=inplace, rename column w to v2;
+create snapshot pick_window_lo for table pick_window src;
+alter table src algorithm=inplace, rename column v2 to w;
+alter table src algorithm=inplace, rename column v to v2;
+update src set v2=10 where k=1;
+create snapshot pick_window_hi for table pick_window src;
+select k,v,v2 from src {snapshot = pick_window_lo} order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  ¦  v2[4,32,0]  𝄀
+1  ¦  20  ¦  10
+select k,v2,w from src {snapshot = pick_window_hi} order by k;
+➤ k[4,32,0]  ¦  v2[4,32,0]  ¦  w[4,32,0]  𝄀
+1  ¦  10  ¦  10
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v,w from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  ¦  w[4,32,0]  𝄀
+1  ¦  10  ¦  10
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+data branch create table src from root;
+insert into src values (1,20);
+insert into root values (1,99),(2,40);
+data branch create table dst_fail from root;
+data branch create table dst_skip from root;
+data branch create table dst_accept from root;
+create snapshot pick_window_lo for table pick_window src;
+delete from src where k=1;
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst_fail between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,v from dst_fail order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  40
+data branch pick src into dst_skip between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst_skip order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  40
+data branch pick src into dst_accept between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst_accept order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  40
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+data branch create table src from root;
+insert into src values (1,20);
+create snapshot pick_window_lo for table pick_window src;
+update src set v=30 where k=1;
+create snapshot pick_window_hi for table pick_window src;
+data branch create table dst_absent from root;
+data branch create table dst from root;
+insert into dst values (1,99);
+data branch pick src into dst_absent between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,v from dst_absent order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  30
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+conflict: src INSERT and dst INSERT on pk(1) with different values
+select k,v from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  99
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  99
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  30
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;

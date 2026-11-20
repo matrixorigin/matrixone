@@ -279,6 +279,10 @@ type tableStuff struct {
 	// local-local diff; identity accessors fall back to the session.
 	lcaIdent *branchIdentity
 
+	// PICK may cut into an existing source generation after its lineage
+	// boundary. Resolve source updates against that window's before image.
+	pickWindowStart *dataBranchPickWindowStart
+
 	def struct {
 		colNames      []string     // all columns
 		colTypes      []types.Type // all columns
@@ -341,6 +345,12 @@ func (t tableStuff) lcaFallbackRangeRel(snapshotTS types.TS) engine.Relation {
 		return t.lcaRel
 	}
 	return nil
+}
+
+type dataBranchPickWindowStart struct {
+	tableID  uint64
+	snapshot types.TS
+	identity branchIdentity
 }
 
 // resolvedSnapshots returns the effective per-side snapshot timestamps:
@@ -425,7 +435,10 @@ type batchWithKind struct {
 	// hasReplacement marks a preserved PICK conflict whose source side emitted
 	// a row to replace the destination conflict victim.
 	hasReplacement bool
-	batch          *batch.Batch
+	// A destination INSERT hit by a source window DELETE. The batch carries
+	// the destination row and has no source replacement.
+	pickDeleteInsertConflict bool
+	batch                    *batch.Batch
 }
 
 // logicalOperation returns the SQL-level operation represented by this diff

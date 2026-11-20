@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/panjf2000/ants/v2"
 	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1845,7 +1846,7 @@ func TestConstructChangeHandleBetweenCompactsHydrationSnapshot(t *testing.T) {
 				pathFromLCAToBase:   []uint64{baseID},
 				pathFromLCAToBaseTS: []types.TS{{}},
 			}
-			targetHandles, baseHandles, err := constructChangeHandle(ctx, ses, bh, tables, info, nil, &betweenFrom, &tc.betweenTo)
+			targetHandles, baseHandles, err := constructChangeHandle(ctx, ses, bh, &tables, info, nil, &betweenFrom, &tc.betweenTo)
 			for _, h := range append(targetHandles, baseHandles...) {
 				t.Cleanup(func() { require.NoError(t, h.Close()) })
 			}
@@ -3189,6 +3190,256 @@ func TestHashDiff_HasLCANoopUpdateFiltering(t *testing.T) {
 			require.Equal(t, tt.wantRows, got[0].rows)
 		})
 	}
+}
+
+func TestDataBranchPickWindowHashDiff(t *testing.T) {
+	t.Run("baseline", func(t *testing.T) { testDataBranchPickWindowHashDiff(t, false, false) })
+	t.Run("reused_column_name", func(t *testing.T) { testDataBranchPickWindowHashDiff(t, true, false) })
+	t.Run("copy_alter_gap", func(t *testing.T) { testDataBranchPickWindowHashDiff(t, false, true) })
+}
+
+func expectPickWindowSnapshotLookup(ctrl *gomock.Controller, ses *Session, txn *mock_frontend.MockTxnOperator, at types.TS, id uint64, rel engine.Relation) {
+	storage, ok := ses.txnHandler.storage.(*mock_frontend.MockEngine)
+	if !ok {
+		storage = mock_frontend.NewMockEngine(ctrl)
+		ses.txnHandler.storage = storage
+	}
+	snapshotTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	txn.EXPECT().CloneSnapshotOp(at.ToTimestamp()).Return(snapshotTxn).AnyTimes()
+	storage.EXPECT().GetRelationById(gomock.Any(), snapshotTxn, id).Return("db1", "", rel, nil).AnyTimes()
+}
+
+func testDataBranchPickWindowHashDiff(t *testing.T, reusedName, copyGap bool) {
+	for _, tc := range []struct {
+		name   string
+		online bool
+		reader bool
+	}{
+		{name: "online_sql", online: true},
+		{name: "async_sql"},
+		{name: "online_reader", online: true, reader: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newValidateSession(t)
+			ctrl := gomock.NewController(t)
+			lo := types.BuildTS(11, 0)
+			probeID := uint64(88)
+			fork := types.BuildTS(10, 0)
+			dagInfo := branchMetaInfo{
+				lcaTableId:       77,
+				pathFromLCAToTar: []uint64{77, 88}, pathFromLCAToTarTS: []types.TS{{}, fork},
+				pathFromLCAToTarLineageOnly: []bool{false, false},
+				pathFromLCAToBase:           []uint64{77}, pathFromLCAToBaseTS: []types.TS{{}},
+				pathFromLCAToBaseLineageOnly: []bool{false},
+			}
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp()).AnyTimes()
+			ses.txnHandler = &TxnHandler{txnOp: txnOp}
+
+			tblStuff := newTestBranchTableStuff(ctrl)
+			if !copyGap {
+				tblStuff.tarRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(probeID).AnyTimes()
+				tblStuff.pickWindowStart = &dataBranchPickWindowStart{tableID: probeID, snapshot: lo}
+			} else {
+				lo = types.BuildTS(12, 0) // Protected CloneTS used to read the before image.
+			}
+			forkNames := []string{"id", "fork_name", "hidden"}
+			if copyGap {
+				forkNames[1] = "name"
+			} else {
+				forkRel := mock_frontend.NewMockRelation(ctrl)
+				forkRel.EXPECT().GetTableID(gomock.Any()).Return(dagInfo.lcaTableId).AnyTimes()
+				forkRel.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("root", forkNames[1])).AnyTimes()
+				tblStuff.lcaRel = forkRel
+			}
+			tblStuff.def.lcaColNames = forkNames
+			defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+			worker, err := ants.NewPool(1)
+			require.NoError(t, err)
+			defer worker.Release()
+			tblStuff.worker = worker
+			tblStuff.maxTombstoneBatchCnt = 1
+			tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+
+			loRel := mock_frontend.NewMockRelation(ctrl)
+			loDef := newTestBranchTableDef("target", "lo_name")
+			loOther := "h"
+			if reusedName {
+				// The third column has the name reused by ColId=2 at the endpoint.
+				// ColId=2 was called lo_name at lo.
+				loDef.Cols[2].Name = "name"
+				loOther = "at_fork"
+			}
+			loRel.EXPECT().GetTableDef(gomock.Any()).Return(loDef).AnyTimes()
+			loRel.EXPECT().GetTableID(gomock.Any()).Return(probeID).AnyTimes()
+			reopen := gostub.Stub(&reopenDataBranchRelationByID,
+				func(_ context.Context, _ *Session, _ BackgroundExec, id uint64, snap *plan.Snapshot) (engine.Relation, error) {
+					if copyGap && id == dagInfo.lcaTableId {
+						assert.Equal(t, fork.ToTimestamp(), *snap.TS)
+						return tblStuff.baseRel, nil
+					}
+					assert.Equal(t, probeID, id)
+					assert.Equal(t, lo.ToTimestamp(), *snap.TS)
+					return loRel, nil
+				},
+			)
+			defer reopen.Reset()
+
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			if tc.reader {
+				tblStuff.lcaReaderProbeMode = &atomic.Bool{}
+				tblStuff.lcaReaderProbeMode.Store(true)
+				before := batch.NewWithSize(3)
+				mp := ses.proc.Mp()
+				defer before.Clean(mp)
+				for i, typ := range tblStuff.def.colTypes {
+					before.Vecs[i] = vector.NewVec(typ, mp)
+				}
+				for _, key := range []int64{1, 2} {
+					require.NoError(t, vector.AppendFixed(before.Vecs[0], key, false, mp))
+					require.NoError(t, vector.AppendBytes(before.Vecs[1], []byte("at_lo"), false, mp))
+					require.NoError(t, vector.AppendBytes(before.Vecs[2], []byte(loOther), false, mp))
+				}
+				before.SetRowCount(2)
+				scan := gostub.Stub(&scanSnapshotRelationWithPreopened,
+					func(_ context.Context, _ string, _ *Session, id uint64, snapshot types.TS,
+						relation engine.Relation, attrs []string, _ []types.Type, _ *plan.Expr, _ int,
+						onBatch func(*batch.Batch) error,
+					) error {
+						if snapshot == fork {
+							assert.Equal(t, dagInfo.lcaTableId, id)
+							assert.Same(t, tblStuff.lcaRel, relation)
+							assert.Equal(t, forkNames, attrs)
+							payload, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("at_fork"), 2, mp)
+							if err != nil {
+								return err
+							}
+							defer payload.Free(mp)
+							atFork := *before
+							atFork.Vecs = []*vector.Vector{before.Vecs[0], payload, before.Vecs[2]}
+							return onBatch(&atFork)
+						}
+						assert.Equal(t, probeID, id)
+						assert.Equal(t, lo, snapshot)
+						assert.Same(t, loRel, relation)
+						assert.Equal(t, []string{"id", "lo_name", loDef.Cols[2].Name}, attrs)
+						if reusedName && attrs[1] == "name" {
+							// Return the historical column the probe actually requested.
+							wrong := *before
+							wrong.Vecs = []*vector.Vector{before.Vecs[0], before.Vecs[2], before.Vecs[2]}
+							return onBatch(&wrong)
+						}
+						return onBatch(before)
+					},
+				)
+				defer scan.Reset()
+			} else {
+				var sqlMu sync.Mutex
+				var key int64
+				var beforeValue string
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+					atFork := strings.Contains(sql, "{MO_TS='10-0'}")
+					if atFork {
+						assert.Contains(t, sql, "lca.`"+forkNames[1]+"`")
+					} else {
+						assert.Contains(t, sql, "lca.`lo_name`")
+						assert.Contains(t, sql, fmt.Sprintf("{MO_TS='%s'}", lo.ToString()))
+					}
+					i := strings.Index(sql, "values row(0,")
+					if i < 0 {
+						return moerr.NewInternalErrorNoCtx("PICK test probe did not contain one key")
+					}
+					var currentKey int64
+					if _, err := fmt.Sscanf(sql[i:], "values row(0,%d", &currentKey); err != nil {
+						return err
+					}
+					sqlMu.Lock()
+					key = currentKey
+					beforeValue = "at_lo"
+					if atFork {
+						assert.Equal(t, int64(1), currentKey, "net no-op does not reach the fork probe")
+						beforeValue = "at_fork"
+					}
+					return nil
+				}).Times(3)
+				bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+					defer sqlMu.Unlock()
+					return []interface{}{buildLCAProbeResultSetWithRows([]interface{}{int64(0), key, beforeValue, loOther})}
+				}).Times(3)
+				bh.EXPECT().ClearExecResultSet().Times(3)
+			}
+
+			commit := commitTSBytes(types.BuildTS(15, 0))
+			data := buildHashDiffDataBatchWithRowIDs(t, ses.proc.Mp(),
+				[]types.Rowid{buildHashDiffRowID(t, 3), buildHashDiffRowID(t, 4)},
+				[][]any{{int64(1), "at_fork", loOther, commit}, {int64(2), "at_lo", loOther, commit}},
+			)
+			tombstones := buildHashDiffTombstoneBatchWithRowIDs(t, ses.proc.Mp(),
+				[]types.Rowid{buildHashDiffRowID(t, 1), buildHashDiffRowID(t, 2)},
+				[][]any{{int64(1), commit}, {int64(2), commit}},
+			)
+			ctx := t.Context()
+			tarHandles := []engine.ChangesHandle{&stubEngineChangesHandle{
+				responses: []stubEngineChangesHandleResponse{{data: data, tombstone: tombstones}},
+			}}
+			if copyGap {
+				ctx, tarHandles = collectPickCopyAlterGap(t, ses, bh, &tblStuff, &dagInfo, loRel, lo, types.BuildTS(13, 0), tarHandles[0])
+				assert.NotNil(t, tblStuff.pickWindowStart)
+				if start := tblStuff.pickWindowStart; start != nil {
+					assert.Equal(t, probeID, start.tableID)
+					assert.Equal(t, lo, start.snapshot)
+				}
+			}
+			tblStuff.lcaRelSnapshot = fork
+			if !tc.reader {
+				expectPickWindowSnapshotLookup(ctrl, ses, txnOp, lo, probeID, loRel)
+				expectPickWindowSnapshotLookup(ctrl, ses, txnOp, fork, dagInfo.lcaTableId, tblStuff.lcaRel)
+			}
+			for _, handle := range tarHandles {
+				defer handle.Close()
+			}
+			var got [][]any
+			err = hashDiff(ctx, ses, bh, tblStuff, dagInfo, compositeOption{onlineApply: tc.online, preservePickConflicts: true},
+				func(w batchWithKind) (bool, error) {
+					if w.batch.RowCount() > 0 {
+						assert.Equal(t, diffUpdate, w.kind)
+						assert.Equal(t, diffSideTarget, w.side)
+						got = append(got, decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)...)
+					}
+					tblStuff.retPool.releaseRetBatch(w.batch, false)
+					return false, nil
+				},
+				tarHandles, nil, nil,
+			)
+			require.NoError(t, err)
+			// k=1 returns to the fork and is emitted. k=2 returns to lo
+			// and produces no operation in either execution path.
+			require.Equal(t, [][]any{{int64(1), "at_fork", loOther}}, got)
+			require.Equal(t, forkNames, tblStuff.def.lcaColNames)
+		})
+	}
+}
+
+func TestDataBranchPickWindowRejectsReplacedColumn(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	tables := newTestBranchTableStuff(ctrl)
+	tables.tarRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(88))
+	lo := types.BuildTS(11, 0)
+	tables.pickWindowStart = &dataBranchPickWindowStart{tableID: 88, snapshot: lo}
+	loDef := newTestBranchTableDef("target", "name")
+	loDef.Cols[1].ColId, loDef.Cols[1].Seqnum = 17, 16
+	loRel := mock_frontend.NewMockRelation(ctrl)
+	loRel.EXPECT().GetTableDef(gomock.Any()).Return(loDef)
+	reopen := gostub.Stub(&reopenDataBranchRelationByID,
+		func(_ context.Context, _ *Session, _ BackgroundExec, _ uint64, _ *plan.Snapshot) (engine.Relation, error) {
+			return loRel, nil
+		},
+	)
+	defer reopen.Reset()
+
+	_, err := dataBranchPickWindowProbe(t.Context(), ses, nil, tables, branchMetaInfo{}, types.BuildTS(20, 0))
+	require.ErrorContains(t, err, `cannot resolve column "name" at the window start`)
 }
 
 func TestHashDiff_HasLCAUpdateIgnoresTargetOnlyColumns(t *testing.T) {
@@ -4899,6 +5150,269 @@ func TestHashDiffOnlineApplyOrdersLCAChunks(t *testing.T) {
 				require.True(t, earlyApply, "multiple chunks interleave ordered probe/apply instead of retaining all results")
 			}
 			require.Equal(t, int32(wantProbes), probes.Load())
+		})
+	}
+}
+
+func TestDataBranchPickWindowDeleteInsertConflict(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		opt      int
+		online   bool
+		preserve bool
+	}{
+		{name: "fail", opt: tree.CONFLICT_FAIL, online: true},
+		{name: "skip", opt: tree.CONFLICT_SKIP, online: true},
+		{name: "accept", opt: tree.CONFLICT_ACCEPT, online: true},
+		{name: "pick_online", opt: tree.CONFLICT_ACCEPT, online: true, preserve: true},
+		{name: "pick_async", opt: tree.CONFLICT_ACCEPT, preserve: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newValidateSession(t)
+			ctrl := gomock.NewController(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp()).AnyTimes()
+			ses.txnHandler = &TxnHandler{txnOp: txnOp}
+			tables := newTestBranchTableStuff(ctrl)
+			tables.tarRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(88)).AnyTimes()
+			lo := types.BuildTS(11, 0)
+			tables.pickWindowStart = &dataBranchPickWindowStart{tableID: 88, snapshot: lo}
+			defer tables.retPool.freeAllRetBatches(ses.proc.Mp())
+			worker, err := ants.NewPool(1)
+			require.NoError(t, err)
+			defer worker.Release()
+			tables.worker = worker
+			tables.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+
+			reopen := gostub.Stub(&reopenDataBranchRelationByID,
+				func(_ context.Context, _ *Session, _ BackgroundExec, id uint64, snap *plan.Snapshot) (engine.Relation, error) {
+					assert.Equal(t, uint64(88), id)
+					assert.Equal(t, lo.ToTimestamp(), *snap.TS)
+					return tables.tarRel, nil
+				},
+			)
+			defer reopen.Reset()
+			expectPickWindowSnapshotLookup(ctrl, ses, txnOp, lo, 88, tables.tarRel)
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil)
+			bh.EXPECT().GetExecResultSet().Return([]interface{}{
+				buildLCAProbeResultSetWithRows([]interface{}{int64(0), int64(1), "source_before", "h"}),
+			})
+			bh.EXPECT().ClearExecResultSet()
+
+			mp := ses.proc.Mp()
+			sourceDelete := buildHashDiffTombstoneBatchWithRowIDs(t, mp,
+				[]types.Rowid{buildHashDiffRowID(t, 1)}, [][]any{{int64(1), commitTSBytes(types.BuildTS(15, 0))}},
+			)
+			destinationInsert := buildHashDiffDataBatchWithRowIDs(t, mp,
+				[]types.Rowid{buildHashDiffRowID(t, 2)}, [][]any{{int64(1), "destination", "h", commitTSBytes(types.BuildTS(16, 0))}},
+			)
+			var got []capturedBatch
+			err = hashDiff(t.Context(), ses, bh, tables, branchMetaInfo{
+				lcaTableId:       77,
+				pathFromLCAToTar: []uint64{77, 88}, pathFromLCAToTarTS: []types.TS{{}, types.BuildTS(10, 0)},
+				pathFromLCAToBase: []uint64{77, 89}, pathFromLCAToBaseTS: []types.TS{{}, types.BuildTS(10, 0)},
+			}, compositeOption{
+				onlineApply: tc.online, expandUpdate: true,
+				conflictOpt: &tree.ConflictOpt{Opt: tc.opt}, preservePickConflicts: tc.preserve,
+			}, func(w batchWithKind) (bool, error) {
+				if w.batch.RowCount() != 0 {
+					got = append(got, capturedBatch{
+						kind: w.kind, side: w.side, rows: decodeCapturedRows(t, w.batch, tables.def.colTypes),
+					})
+				}
+				tables.retPool.releaseRetBatch(w.batch, false)
+				return false, nil
+			}, []engine.ChangesHandle{&stubEngineChangesHandle{
+				responses: []stubEngineChangesHandleResponse{{tombstone: sourceDelete}},
+			}}, []engine.ChangesHandle{&stubEngineChangesHandle{
+				responses: []stubEngineChangesHandleResponse{{data: destinationInsert}},
+			}}, nil)
+			if tc.opt == tree.CONFLICT_FAIL {
+				require.ErrorContains(t, err, "target DELETE and base INSERT on pk(1)")
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrDataBranchConflict), err)
+				require.Empty(t, got)
+				return
+			}
+			require.NoError(t, err)
+			if tc.opt == tree.CONFLICT_SKIP {
+				require.Empty(t, got)
+				return
+			}
+			if tc.preserve {
+				require.Equal(t, []capturedBatch{{
+					kind: diffDelete, side: diffSideBase, rows: [][]any{{int64(1), "destination", "h"}},
+				}}, got)
+			} else {
+				require.Equal(t, []capturedBatch{{
+					kind: diffDelete, side: diffSideTarget, rows: [][]any{{int64(1), "source_before", "h"}},
+				}}, got)
+			}
+		})
+	}
+}
+
+func TestDataBranchPickWindowForkClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		update    bool
+		dstValue  string
+		inherited bool
+		policy    int
+		want      []capturedBatch
+	}{
+		{name: "inherited_delete_fail", dstValue: "destination", inherited: true, policy: tree.CONFLICT_FAIL,
+			want: []capturedBatch{{kind: diffDelete, side: diffSideTarget, rows: [][]any{{int64(1), "before", "h"}}}}},
+		{name: "inherited_delete_skip", dstValue: "destination", inherited: true, policy: tree.CONFLICT_SKIP,
+			want: []capturedBatch{{kind: diffDelete, side: diffSideTarget, rows: [][]any{{int64(1), "before", "h"}}}}},
+		{name: "update_becomes_insert", update: true, policy: tree.CONFLICT_FAIL,
+			want: []capturedBatch{{kind: diffInsert, side: diffSideTarget, rows: [][]any{{int64(1), "after", "h"}}}}},
+		{name: "independent_insert_fail", update: true, dstValue: "destination", policy: tree.CONFLICT_FAIL},
+		{name: "independent_insert_skip", update: true, dstValue: "destination", policy: tree.CONFLICT_SKIP},
+		{name: "inherited_insert_fail", update: true, dstValue: "destination", inherited: true, policy: tree.CONFLICT_FAIL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newValidateSession(t)
+			ctrl := gomock.NewController(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp()).AnyTimes()
+			ses.txnHandler = &TxnHandler{txnOp: txnOp}
+			tables := newTestBranchTableStuff(ctrl)
+			tables.tarRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(88)).AnyTimes()
+			tables.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(89)).AnyTimes()
+			lo, srcFork, dstFork := types.BuildTS(11, 0), types.BuildTS(10, 0), types.BuildTS(12, 0)
+			tables.pickWindowStart = &dataBranchPickWindowStart{tableID: 88, snapshot: lo}
+			forkRel := mock_frontend.NewMockRelation(ctrl)
+			forkRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
+			forkRel.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("root", "name")).AnyTimes()
+			tables.lcaRel = forkRel
+			expectPickWindowSnapshotLookup(ctrl, ses, txnOp, lo, 88, tables.tarRel)
+			expectPickWindowSnapshotLookup(ctrl, ses, txnOp, srcFork, 77, forkRel)
+			expectPickWindowSnapshotLookup(ctrl, ses, txnOp, dstFork, 77, forkRel)
+			defer tables.retPool.freeAllRetBatches(ses.proc.Mp())
+			worker, err := ants.NewPool(1)
+			require.NoError(t, err)
+			defer worker.Release()
+			tables.worker = worker
+			tables.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+			reopen := gostub.Stub(&reopenDataBranchRelationByID,
+				func(_ context.Context, _ *Session, _ BackgroundExec, id uint64, snap *plan.Snapshot) (engine.Relation, error) {
+					assert.EqualValues(t, 88, id)
+					assert.Equal(t, lo.ToTimestamp(), *snap.TS)
+					return tables.tarRel, nil
+				},
+			)
+			defer reopen.Reset()
+
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			var before []interface{}
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+				before = []interface{}{int64(0), nil, nil, nil}
+				switch {
+				case strings.Contains(sql, "MO_TS='11-0'"):
+					before = []interface{}{int64(0), int64(1), "before", "h"}
+				case strings.Contains(sql, "MO_TS='12-0'"):
+					if tc.inherited {
+						before = []interface{}{int64(0), int64(1), tc.dstValue, "h"}
+					}
+				default:
+					assert.Contains(t, sql, "MO_TS='10-0'")
+				}
+				return nil
+			}).AnyTimes()
+			bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+				return []interface{}{buildLCAProbeResultSetWithRows(before)}
+			}).AnyTimes()
+			bh.EXPECT().ClearExecResultSet().AnyTimes()
+
+			mp := ses.proc.Mp()
+			change := stubEngineChangesHandleResponse{
+				tombstone: buildHashDiffTombstoneBatchWithRowIDs(t, mp,
+					[]types.Rowid{buildHashDiffRowID(t, 1)}, [][]any{{int64(1), commitTSBytes(types.BuildTS(15, 0))}}),
+			}
+			if tc.update {
+				change.data = buildHashDiffDataBatchWithRowIDs(t, mp,
+					[]types.Rowid{buildHashDiffRowID(t, 2)}, [][]any{{int64(1), "after", "h", commitTSBytes(types.BuildTS(15, 0))}})
+			}
+			var dst []engine.ChangesHandle
+			if tc.dstValue != "" {
+				ts := types.BuildTS(16, 0)
+				if tc.inherited {
+					ts = lo
+				}
+				data := buildHashDiffDataBatchWithRowIDs(t, mp,
+					[]types.Rowid{buildHashDiffRowID(t, 3)}, [][]any{{int64(1), tc.dstValue, "h", commitTSBytes(ts)}})
+				dst = []engine.ChangesHandle{&stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{{data: data}}}}
+			}
+			var got []capturedBatch
+			err = hashDiff(t.Context(), ses, bh, tables, branchMetaInfo{
+				lcaTableId:       77,
+				pathFromLCAToTar: []uint64{77, 88}, pathFromLCAToTarTS: []types.TS{{}, srcFork},
+				pathFromLCAToBase: []uint64{77, 89}, pathFromLCAToBaseTS: []types.TS{{}, dstFork},
+			}, compositeOption{
+				onlineApply: true, expandUpdate: true, preservePickConflicts: true,
+				conflictOpt: &tree.ConflictOpt{Opt: tc.policy},
+			}, func(w batchWithKind) (bool, error) {
+				if w.batch.RowCount() != 0 && !(w.kind == diffInsert && w.side == diffSideBase) {
+					got = append(got, capturedBatch{kind: w.kind, side: w.side, fromUpdate: w.fromUpdate,
+						rows: decodeCapturedRows(t, w.batch, tables.def.colTypes)})
+				}
+				tables.retPool.releaseRetBatch(w.batch, false)
+				return false, nil
+			}, []engine.ChangesHandle{&stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{change}}}, dst, nil)
+			if tc.update && tc.dstValue != "" && tc.policy == tree.CONFLICT_FAIL {
+				require.ErrorContains(t, err, "target INSERT and base INSERT on pk(1) with different values")
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestDataBranchPickWindowRejectsAmbiguousCopyLineage(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*plan.TableDef)
+	}{
+		{name: "swapped_names", change: func(def *plan.TableDef) {
+			def.Cols[1].Name, def.Cols[2].Name = def.Cols[2].Name, def.Cols[1].Name
+		}},
+		{name: "missing_coordinates", change: func(def *plan.TableDef) {
+			def.Cols[1].ColId, def.Cols[1].Seqnum = 4, 3
+		}},
+		{name: "incompatible_type", change: func(def *plan.TableDef) {
+			def.Cols[1].Typ.Id = int32(types.T_int64)
+		}},
+		{name: "multiple_renames", change: func(def *plan.TableDef) {
+			def.Cols[1].Name, def.Cols[2].Name = "old_name", "old_hidden"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newValidateSession(t)
+			ctrl := gomock.NewController(t)
+			tables := newTestBranchTableStuff(ctrl)
+			tables.tarRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(89)).AnyTimes()
+			fork, lo, copyTS := types.BuildTS(10, 0), types.BuildTS(12, 0), types.BuildTS(14, 0)
+			tables.pickWindowStart = &dataBranchPickWindowStart{tableID: 88, snapshot: lo}
+			p1Def := newTestBranchTableDef("old", "name")
+			tc.change(p1Def)
+			p1 := mock_frontend.NewMockRelation(ctrl)
+			p1.EXPECT().GetTableDef(gomock.Any()).Return(p1Def).AnyTimes()
+			reopen := gostub.Stub(&reopenDataBranchRelationByID,
+				func(_ context.Context, _ *Session, _ BackgroundExec, id uint64, snap *plan.Snapshot) (engine.Relation, error) {
+					assert.EqualValues(t, 88, id)
+					assert.Contains(t, []timestamp.Timestamp{lo.ToTimestamp(), copyTS.ToTimestamp()}, *snap.TS)
+					return p1, nil
+				},
+			)
+			defer reopen.Reset()
+			_, err := dataBranchPickWindowProbe(t.Context(), ses, nil, tables, branchMetaInfo{
+				pathFromLCAToTar: []uint64{77, 78, 88, 89}, pathFromLCAToTarTS: []types.TS{{}, fork, types.BuildTS(11, 0), copyTS},
+				pathFromLCAToTarLineageOnly: []bool{false, false, true, true},
+			}, types.BuildTS(20, 0))
+			require.ErrorContains(t, err, "DATA BRANCH PICK has ambiguous COPY ALTER column lineage for \"name\" at the window start")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
 		})
 	}
 }
