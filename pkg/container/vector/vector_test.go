@@ -6217,88 +6217,90 @@ func TestSelectedBatchPreflightProtocol(t *testing.T) {
 		require.NoError(t, AppendBytes(source, []byte(value), false, mp))
 	}
 	flags := []uint8{1, 0, 1}
+	var preflight SelectedBatchPreflight
 	require.ErrorIs(t,
-		destination.UnionBatchPreflighted(source, 0, len(flags), flags, mp),
+		destination.UnionBatchPreflighted(source, 0, len(flags), flags, &preflight, mp),
+		mpool.ErrAllocationAccountInvariant)
+	require.ErrorIs(t,
+		destination.UnionBatchPreflighted(source, 0, len(flags), flags, nil, mp),
 		mpool.ErrAllocationAccountInvariant)
 
-	require.NoError(t, destination.PreExtendSelectedBatch(
-		source, 0, len(flags), flags, 2, mp))
+	preflight, err := destination.PreExtendSelectedBatch(
+		source, 0, len(flags), flags, 2, mp)
+	require.NoError(t, err)
+	require.True(t, preflight.Ready())
 	admitted := mp.CurrNB()
 	require.NoError(t,
-		destination.UnionBatchPreflighted(source, 0, len(flags), flags, mp))
+		destination.UnionBatchPreflighted(source, 0, len(flags), flags, &preflight, mp))
 	require.Equal(t, admitted, mp.CurrNB(),
 		"publication must use only capacity admitted by preflight")
 	require.Equal(t, 2, destination.Length())
 	require.Equal(t, source.GetBytesAt(0), destination.GetBytesAt(0))
 	require.Equal(t, source.GetBytesAt(2), destination.GetBytesAt(1))
+	require.False(t, preflight.Ready())
 	require.ErrorIs(t,
-		destination.UnionBatchPreflighted(source, 0, len(flags), flags, mp),
+		destination.UnionBatchPreflighted(source, 0, len(flags), flags, &preflight, mp),
 		mpool.ErrAllocationAccountInvariant,
-		"the proof is consumed exactly once")
+		"the preflight is consumed exactly once")
+
+	preflight, err = destination.PreExtendSelectedBatch(
+		source, 0, len(flags), []uint8{1, 2, 0}, 2, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	require.False(t, preflight.Ready(),
+		"a failed preflight must not return a publishable result")
 
 	destination.ResetWithSameType()
-	require.NoError(t, destination.PreExtendSelectedBatch(
-		source, 0, len(flags), flags, 2, mp))
-	destination.CancelSelectedBatchPreflight()
-	require.ErrorIs(t,
-		destination.UnionBatchPreflighted(source, 0, len(flags), flags, mp),
-		mpool.ErrAllocationAccountInvariant)
-
-	require.ErrorIs(t, destination.PreExtendSelectedBatch(
-		source, 0, len(flags), []uint8{1, 2, 0}, 2, mp),
-		mpool.ErrAllocationAccountInvalid)
-	require.ErrorIs(t,
-		destination.UnionBatchPreflighted(source, 0, len(flags), flags, mp),
-		mpool.ErrAllocationAccountInvariant,
-		"a failed preflight must not leave a publishable proof")
-
-	destination.ResetWithSameType()
-	require.NoError(t, destination.PreExtendSelectedBatchValidated(
-		source, 0, len(flags), flags, 2, mp))
+	preflight, err = destination.PreExtendSelectedBatchValidated(
+		source, 0, len(flags), flags, 2, mp)
+	require.NoError(t, err)
 	require.NoError(t,
-		destination.UnionBatchPreflighted(source, 0, len(flags), flags, mp))
+		destination.UnionBatchPreflighted(source, 0, len(flags), flags, &preflight, mp))
 	require.Equal(t, 2, destination.Length())
 
 	destination.ResetWithSameType()
-	require.NoError(t, destination.PreExtendSelectedBatchValidated(
-		source, 0, len(flags), flags, 2, mp))
+	preflight, err = destination.PreExtendSelectedBatchValidated(
+		source, 0, len(flags), flags, 2, mp)
+	require.NoError(t, err)
 	require.NoError(t, destination.PreflightSetStringSourceAtLength(
 		0, 2, types.StringSourceCOMStmt, mp))
 	require.ErrorIs(t, destination.UnionBatchPreflightedWithStringSources(
-		source, 0, len(flags), flags, []types.StringSource{types.StringSourceCOMStmt}, mp),
+		source, 0, len(flags), flags, []types.StringSource{types.StringSourceCOMStmt}, &preflight, mp),
 		mpool.ErrAllocationAccountInvalid)
 	require.ErrorIs(t, destination.UnionBatchPreflightedWithStringSources(
 		source, 0, len(flags), flags[:2], []types.StringSource{
 			types.StringSourceCOMStmt, types.StringSourceExpression,
-		}, mp), mpool.ErrAllocationAccountInvalid)
+		}, &preflight, mp), mpool.ErrAllocationAccountInvalid)
 	require.Error(t, destination.UnionBatchPreflightedWithStringSources(
 		source, 0, len(flags), flags, []types.StringSource{
 			types.StringSourceCOMStmt, types.StringSourceExpression, 255,
-		}, mp))
+		}, &preflight, mp))
+	require.True(t, preflight.Ready(), "rejected arguments do not consume the preflight")
 	require.NoError(t, destination.UnionBatchPreflightedWithStringSources(
 		source, 0, len(flags), flags, []types.StringSource{
 			types.StringSourceCOMStmt,
 			types.StringSourceExpression,
 			types.StringSourceUserVariable,
-		}, mp))
+		}, &preflight, mp))
 	require.Equal(t, []types.StringSource{
 		types.StringSourceCOMStmt,
 		types.StringSourceUserVariable,
 	}, destination.GetStringSources())
 	require.False(t, source.HasStringSourceMetadata())
 
-	// Keep a temporarily uniform sidecar until a correlated existing-row update
-	// completes, then normalize only the final mixed state.
+	// Row source writes do not normalize: a temporarily uniform sidecar stays
+	// until the correlated existing-row update completes, and NormalizeStringSources
+	// then sees only the final mixed state.
 	destination.ResetWithSameType()
 	require.NoError(t, AppendBytes(destination, []byte("old"), false, mp))
 	require.NoError(t, destination.SetStringSource(types.StringSourceLiteral))
 	oneFlag := []uint8{1}
-	require.NoError(t, destination.PreExtendSelectedBatchValidated(
-		source, 0, 1, oneFlag, 2, mp))
+	preflight, err = destination.PreExtendSelectedBatchValidated(
+		source, 0, 1, oneFlag, 2, mp)
+	require.NoError(t, err)
 	require.NoError(t, destination.PreflightSetStringSourceAtLength(
 		0, 2, types.StringSourceExpression, mp))
 	require.NoError(t, destination.UnionBatchPreflightedWithStringSourcesDeferredNormalization(
-		source, 0, 1, oneFlag, []types.StringSource{types.StringSourceLiteral}, mp))
+		source, 0, 1, oneFlag, []types.StringSource{types.StringSourceLiteral}, &preflight, mp))
 	require.Equal(t, []types.StringSource{
 		types.StringSourceLiteral, types.StringSourceLiteral,
 	}, destination.GetStringSources())
@@ -6306,7 +6308,7 @@ func TestSelectedBatchPreflightProtocol(t *testing.T) {
 	require.NoError(t, destination.SetStringSourceAtWithMP(
 		0, types.StringSourceExpression, mp))
 	require.Equal(t, admitted, mp.CurrNB())
-	destination.FinalizeStringSourcePreflight()
+	destination.NormalizeStringSources()
 	require.Equal(t, []types.StringSource{
 		types.StringSourceExpression, types.StringSourceLiteral,
 	}, destination.GetStringSources())
@@ -6317,22 +6319,21 @@ func TestSelectedBatchPreflightProtocol(t *testing.T) {
 	require.NoError(t, err)
 	defer constant.Free(mp)
 	destination.ResetWithSameType()
-	require.NoError(t, destination.PreExtendSelectedBatchValidated(
-		constant, 2, len(flags), flags, 2, mp))
+	preflight, err = destination.PreExtendSelectedBatchValidated(
+		constant, 2, len(flags), flags, 2, mp)
+	require.NoError(t, err)
 	require.NoError(t,
-		destination.UnionBatchPreflighted(constant, 2, len(flags), flags, mp))
+		destination.UnionBatchPreflighted(constant, 2, len(flags), flags, &preflight, mp))
 	require.Equal(t, 2, destination.Length())
 	require.Equal(t, constant.GetBytesAt(0), destination.GetBytesAt(0))
 	require.Equal(t, constant.GetBytesAt(0), destination.GetBytesAt(1))
 
-	require.ErrorIs(t, destination.PreExtendSelectedBatch(
-		destination, 0, 2, []uint8{1, 0}, 3, mp),
-		mpool.ErrAllocationAccountInvalid,
-		"a preflight proof cannot retain an aliased source for publication")
-	require.ErrorIs(t, destination.UnionBatchPreflighted(
-		destination, 0, 2, []uint8{1, 0}, mp),
-		mpool.ErrAllocationAccountInvariant,
-		"a rejected aliased preflight must not leave a publishable proof")
+	preflight, err = destination.PreExtendSelectedBatch(
+		destination, 0, 2, []uint8{1, 0}, 3, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid,
+		"a preflight cannot retain an aliased source for publication")
+	require.False(t, preflight.Ready(),
+		"a rejected aliased preflight must not return a publishable result")
 }
 
 func TestUnionAppendMetadataTransitions(t *testing.T) {
@@ -6633,11 +6634,10 @@ func TestUnionOneFinalizesCollapsedStringSourcePreflight(t *testing.T) {
 	require.NoError(t, AppendBytes(source, []byte("value"), false, mp))
 	require.NoError(t, AppendBytes(destination, []byte("prefix"), false, mp))
 	require.NoError(t, destination.PreflightSetStringSourceAtLength(1, 2, types.StringSourceLiteral, mp))
-	require.True(t, destination.preflightStringSourceReady)
 	require.NoError(t, destination.SetStringSource(types.StringSourceExpression))
 	require.Nil(t, destination.stringSources)
 	require.NoError(t, destination.UnionOne(source, 0, mp))
-	require.False(t, destination.preflightStringSourceReady)
+	require.Nil(t, destination.stringSources)
 	require.Equal(t, []string{"prefix", "value"}, []string{destination.GetStringAt(0), destination.GetStringAt(1)})
 }
 

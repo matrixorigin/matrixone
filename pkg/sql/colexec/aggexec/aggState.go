@@ -20,6 +20,7 @@ import (
 	"fmt"
 	io "io"
 	"math"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -2676,19 +2677,22 @@ func (ae *aggExec) finalizeStringSourcePreflights(groups []uint64) {
 	if ae == nil {
 		return
 	}
-	// Only vectors touched by this work unit can carry a retained preflight.
-	// Finalize is idempotent after the first group in a chunk, so duplicate
-	// groups remain O(1) without scanning all historical aggregate state.
+	// Only vectors touched by this work unit can hold row sources written
+	// during it. Normalize each touched state chunk once: normalization scans
+	// the sidecar, so repeating it per group would be quadratic.
+	var seenBuf [8]int
+	seen := seenBuf[:0]
 	for _, group := range groups {
 		if group == GroupNotMatched {
 			continue
 		}
 		x, _ := ae.getXY(group - 1)
-		if x < 0 || x >= len(ae.state) {
+		if x < 0 || x >= len(ae.state) || slices.Contains(seen, x) {
 			continue
 		}
+		seen = append(seen, x)
 		for _, vec := range ae.state[x].vecs {
-			vec.FinalizeStringSourcePreflight()
+			vec.NormalizeStringSources()
 		}
 	}
 }
@@ -3395,6 +3399,7 @@ func (ae *aggExec) readBinaryStringTrailerAndMagic(reader io.Reader, mp *mpool.M
 					return err
 				}
 			}
+			vec.NormalizeStringSources()
 		}
 		marker, err = types.ReadUint64(reader)
 		if err != nil {
