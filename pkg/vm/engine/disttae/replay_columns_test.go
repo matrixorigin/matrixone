@@ -85,6 +85,7 @@ func replayTestBatch(t *testing.T, mp *mpool.MPool, ids ...uint64) *batch.Batch 
 func TestConsumeReplayColumns(t *testing.T) {
 	t.Run("split and empty", func(t *testing.T) {
 		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
 		bs := []*batch.Batch{replayTestBatch(t, mp, 1, 2), replayTestBatch(t, mp), replayTestBatch(t, mp, 2), replayTestBatch(t, mp, 2, 3, 4)}
 		var groups [][]uint64
 		err := consumeReplayColumns(context.Background(), bs, mp, types.TS{}, func(b *batch.Batch) {
@@ -105,6 +106,7 @@ func TestConsumeReplayColumns(t *testing.T) {
 	for _, position := range []int{0, 1, 2} {
 		t.Run(string(rune('0'+position)), func(t *testing.T) {
 			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
 			bs := make([]*batch.Batch, 2, 3)
 			bs[0], bs[1] = replayTestBatch(t, mp, 1), replayTestBatch(t, mp, 2)
 			bs = append(bs, nil)
@@ -118,6 +120,7 @@ func TestConsumeReplayColumns(t *testing.T) {
 	}
 	t.Run("order", func(t *testing.T) {
 		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
 		err := consumeReplayColumns(context.Background(), []*batch.Batch{replayTestBatch(t, mp, 2, 1)}, mp, types.TS{}, func(*batch.Batch) { t.Fatal("unexpected insert") })
 		require.Error(t, err)
 		require.Zero(t, mp.CurrNB())
@@ -125,6 +128,7 @@ func TestConsumeReplayColumns(t *testing.T) {
 	})
 	t.Run("cancel", func(t *testing.T) {
 		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		err := consumeReplayColumns(ctx, []*batch.Batch{replayTestBatch(t, mp, 1)}, mp, types.TS{}, func(*batch.Batch) { t.Fatal("unexpected insert") })
@@ -138,6 +142,7 @@ func TestConsumeReplayColumns(t *testing.T) {
 // the consumer has released both borrowed windows and copied carry batches.
 func TestReplayColumnsParserOwnership(t *testing.T) {
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	packer := types.NewPacker()
 	defer packer.Close()
 	typ := types.T_uint64.ToType()
@@ -211,6 +216,7 @@ func TestReplayColumnsParserOwnership(t *testing.T) {
 
 func TestReplayColumnsCancelAndRetry(t *testing.T) {
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var first []uint64
@@ -236,6 +242,7 @@ func TestReplayColumnsCancelAndRetry(t *testing.T) {
 
 func TestReplayColumnsRejectsConflictingNames(t *testing.T) {
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	first, second := replayTestBatch(t, mp, 1), replayTestBatch(t, mp, 1)
 	second.Vecs[6].Free(mp)
 	second.Vecs[6] = vector.NewVec(types.T_varchar.ToType())
@@ -249,6 +256,7 @@ func TestReplayColumnsRejectsConflictingNames(t *testing.T) {
 // Cancellation after a window is inserted still leaves a split table in carry.
 func TestReplayColumnsCancelWithCarryAndDeadline(t *testing.T) {
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var inserted []uint64
@@ -288,6 +296,7 @@ func TestReplayPartialCopyFailure(t *testing.T) {
 	injected := errors.New("injected allocation failure")
 	t.Run("timestamp", func(t *testing.T) {
 		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
 		bs := []*batch.Batch{replayTestBatch(t, mp, 1, 1), replayTestBatch(t, mp, 2)}
 		beforeHeap := mp.OnHeapCurrNB()
 		calls := 0
@@ -308,6 +317,7 @@ func TestReplayPartialCopyFailure(t *testing.T) {
 	})
 	t.Run("carry", func(t *testing.T) {
 		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
 		bs := []*batch.Batch{replayTestBatch(t, mp, 1), replayTestBatch(t, mp, 1)}
 		called := false
 		err := consumeReplayColumnsWithFaults(context.Background(), bs, mp, types.TS{}, func(*batch.Batch) {
