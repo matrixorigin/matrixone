@@ -96,12 +96,13 @@ type DiagnosticScheduling struct {
 }
 
 type DiagnosticDetail struct {
-	Capture                   string `json:"capture"`
-	LogicalTotal              int    `json:"logical_total,omitempty"`
-	LogicalOmitted            int    `json:"logical_omitted,omitempty"`
-	PhysicalVisited           int    `json:"physical_visited,omitempty"`
-	PhysicalCandidatesOmitted int    `json:"physical_candidates_omitted,omitempty"`
-	PhysicalTruncated         bool   `json:"physical_truncated,omitempty"`
+	Capture                   string                  `json:"capture"`
+	Partial                   PartialExecutionCapture `json:"partial_execution,omitzero"`
+	LogicalTotal              int                     `json:"logical_total,omitempty"`
+	LogicalOmitted            int                     `json:"logical_omitted,omitempty"`
+	PhysicalVisited           int                     `json:"physical_visited,omitempty"`
+	PhysicalCandidatesOmitted int                     `json:"physical_candidates_omitted,omitempty"`
+	PhysicalTruncated         bool                    `json:"physical_truncated,omitempty"`
 }
 
 // DiagnosticNode fields have explicit units. Physical rows link to logical

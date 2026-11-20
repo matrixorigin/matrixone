@@ -21,6 +21,7 @@ import (
 	"math"
 	goruntime "runtime"
 	godebug "runtime/debug"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -423,6 +424,79 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 
 		})
 	}
+}
+
+func TestCompileRunPartialAnalysisPreparedReuse(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc := testutil.NewProcess(t)
+	ctrl := gomock.NewController(t)
+	proc.Base.TxnClient, proc.Base.TxnOperator = newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
+	compilerCtx.SetContext(ctx)
+
+	const sql = "select 1"
+	stmts, err := mysql.Parse(ctx, sql, 1)
+	require.NoError(t, err)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
+	require.NoError(t, err)
+	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+	c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+	defer func() {
+		c.FreeOperator()
+		c.SetIsPrepare(false)
+		c.Release()
+	}()
+	c.SetIsPrepare(true)
+
+	var outputErr error
+	fill := func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+		if bat != nil {
+			return outputErr
+		}
+		return nil
+	}
+	require.NoError(t, c.Compile(ctx, pn, fill))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.NotNil(t, c.anal.GetPhyPlan())
+	require.False(t, c.anal.GetPhyPlan().Partial.Interrupted)
+
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	aborted, cancel := context.WithCancel(ctx)
+	cancel()
+	proc.ReplaceTopCtx(aborted)
+	_, err = c.Run(0)
+	require.Error(t, err)
+	require.Nil(t, c.anal.GetPartialExecutionQuery())
+	require.False(t, c.anal.GetPhyPlan().Partial.Interrupted)
+	require.Nil(t, c.anal.GetPhyPlan().Resource)
+
+	proc.ReplaceTopCtx(ctx)
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	outputErr = moerr.NewInvalidInputNoCtx("test output failure")
+	_, err = c.Run(0)
+	require.ErrorIs(t, err, outputErr)
+	partial, observed := c.anal.GetPhyPlan(), c.anal.GetPartialExecutionQuery()
+	require.NotNil(t, observed)
+	require.True(t, partial.Partial.Interrupted)
+	require.Zero(t, partial.Partial.Attempt)
+	require.NotEmpty(t, partial.LocalScope)
+	require.True(t, slices.ContainsFunc(observed.Nodes, func(n *plan.Node) bool {
+		return n.AnalyzeInfo != nil && n.AnalyzeInfo.OutputRows > 0
+	}))
+
+	outputErr = nil
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Nil(t, c.anal.GetPartialExecutionQuery())
+	require.False(t, c.anal.GetPhyPlan().Partial.Interrupted)
+	require.True(t, partial.Partial.Interrupted)
+	require.True(t, slices.ContainsFunc(observed.Nodes, func(n *plan.Node) bool {
+		return n.AnalyzeInfo != nil && n.AnalyzeInfo.OutputRows > 0
+	}))
 }
 
 func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
