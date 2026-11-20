@@ -54,6 +54,7 @@ type StatementDiagnostics struct {
 }
 
 type DiagnosticSummary struct {
+	LockRead                *resource.LockReadDiagnostic   `json:"lock_read,omitempty"`
 	WallNS                  uint64                         `json:"wall_ns"`
 	ElapsedNS               uint64                         `json:"elapsed_ns"`
 	WaitActiveKnown         bool                           `json:"wait_active_known"`
@@ -176,6 +177,10 @@ func SelectStatementDiagnosticLevel(elapsed, threshold time.Duration, summary *r
 		reasons |= 1
 	}
 	if summary != nil {
+		if summary.LockRead != nil {
+			reasons |= 1 << 10
+			level = max(level, 1)
+		}
 		u := summary.Usage
 		admit(1, u.ExclusiveActiveNS, uint64(time.Second), uint64(4*time.Second), uint64(16*time.Second))
 		var waits uint64
@@ -258,7 +263,7 @@ func (d *StatementDiagnostics) SetSummary(s resource.StatementResourceSummary, w
 	if elapsed < 0 {
 		elapsed = 0
 	}
-	d.Summary = &DiagnosticSummary{WallNS: diagnosticDuration(wall), ElapsedNS: diagnosticDuration(elapsed), WaitActiveKnown: waitKnown, WaitActiveNS: diagnosticDuration(wait), ActiveNS: s.Usage.ExclusiveActiveNS, WaitNS: s.Usage.WaitNS, MaxDomainPeakBytes: s.Memory.MaxDomainPeakLiveBytes, SumDomainPeakBoundBytes: s.Memory.SumDomainPeakLiveBytesBound, S3ReadBytes: s.Usage.S3ReadBytes, S3WriteBytes: s.Usage.S3WriteBytes, S3Requests: s.Usage.S3Requests, EgressBytes: s.Usage.ClientEgressBytes, SpillBytes: s.Usage.SpillBytes, Attempts: s.AttemptCount, RetryWallNS: s.RetryWallNS, Quality: s.Quality, MissingFragments: s.MissingFragmentCount, MissingMemoryDomains: s.MissingMemoryDomainCount}
+	d.Summary = &DiagnosticSummary{LockRead: s.LockRead, WallNS: diagnosticDuration(wall), ElapsedNS: diagnosticDuration(elapsed), WaitActiveKnown: waitKnown, WaitActiveNS: diagnosticDuration(wait), ActiveNS: s.Usage.ExclusiveActiveNS, WaitNS: s.Usage.WaitNS, MaxDomainPeakBytes: s.Memory.MaxDomainPeakLiveBytes, SumDomainPeakBoundBytes: s.Memory.SumDomainPeakLiveBytesBound, S3ReadBytes: s.Usage.S3ReadBytes, S3WriteBytes: s.Usage.S3WriteBytes, S3Requests: s.Usage.S3Requests, EgressBytes: s.Usage.ClientEgressBytes, SpillBytes: s.Usage.SpillBytes, Attempts: s.AttemptCount, RetryWallNS: s.RetryWallNS, Quality: s.Quality, MissingFragments: s.MissingFragmentCount, MissingMemoryDomains: s.MissingMemoryDomainCount}
 }
 
 func (d *StatementDiagnostics) SetPhases(s *statistic.StatsInfo) {
@@ -492,7 +497,7 @@ func diagnosticTime(ns uint64) string {
 }
 func diagnosticReasonNames(reasons uint64) string {
 	var names []string
-	for bit, name := range [...]string{"elapsed", "active", "wait", "memory", "S3-bytes", "spill", "failure", "retry", "quality", "scheduling"} {
+	for bit, name := range [...]string{"elapsed", "active", "wait", "memory", "S3-bytes", "spill", "failure", "retry", "quality", "scheduling", "lock-read"} {
 		mask := uint64(1) << bit
 		if reasons&mask != 0 {
 			names = append(names, name)
