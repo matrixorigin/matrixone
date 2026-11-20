@@ -123,7 +123,7 @@ func TestRemapMaskOrderedMatchesReference(t *testing.T) {
 	r := rand.New(rand.NewSource(20261120))
 	for iter := 0; iter < 5000; iter++ {
 		c := randomRemapCase(r)
-		var selected []uint64
+		selected := make([]uint64, 0, len(c.sels))
 		for _, s := range c.sels {
 			selected = append(selected, uint64(s)+c.offset)
 		}
