@@ -113,6 +113,9 @@ func (p *filePrefetchObject) run() {
 	_, _ = d.downloadFile(p.ctx, p.filePath, p.start, p.end, p.open, d.endFilePrefetch(p.diskPath, p))
 }
 
+// abandon ends p, never registered.
+func (p *filePrefetchObject) abandon() { p.cancelRead() }
+
 // releaseConn frees the connection p holds, once.
 func (p *filePrefetchObject) releaseConn() {
 	p.connOnce.Do(func() { p.d.releaseDownloadConns(1) })
