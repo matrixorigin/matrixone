@@ -1269,6 +1269,41 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		require.Equal(t, "payload-4", output.Vecs[1].GetStringAt(0))
 	})
 
+	// The read maps residual survivors back to block offsets. That list must be
+	// built in its own slice: the storage row list belongs to the caller.
+	t.Run("storage selections are not modified", func(t *testing.T) {
+		output.CleanOnlyData()
+		storageRows := []int64{1, 4, 7}
+		require.NoError(t, blockDataReadWithFilter(
+			ctx,
+			&info,
+			nil,
+			[]uint16{0, 1},
+			colTypes,
+			-1,
+			types.TS{},
+			storageRows,
+			fileservice.Policy(0),
+			output,
+			cacheVectors,
+			queryMP,
+			fs,
+			[]int{0},
+			&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+				sels := []int64{1, 2}
+				require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
+				bat.SetRowCount(len(sels))
+				return engine.ReaderFilterResult{Sels: sels}, nil
+			}},
+			nil,
+			nil,
+		))
+		require.Equal(t, []int64{1, 4, 7}, storageRows)
+		require.Equal(t, []int32{4, 7}, vector.MustFixedColWithTypeCheck[int32](output.Vecs[0]))
+		require.Equal(t, "payload-4", output.Vecs[1].GetStringAt(0))
+		require.Equal(t, "payload-7", output.Vecs[1].GetStringAt(1))
+	})
+
 	output.Clean(queryMP)
 	require.Zero(t, queryMP.CurrNB())
 }
