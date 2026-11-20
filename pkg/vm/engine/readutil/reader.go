@@ -734,6 +734,7 @@ func (r *reader) read(
 					return []zap.Field{
 						zap.String("name", r.name),
 						zap.Error(err),
+						zap.String("error_type", fmt.Sprintf("%T", err)),
 						zap.NamedError("reader_context_error", readerContextErr),
 					}
 				}

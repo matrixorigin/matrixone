@@ -4163,6 +4163,13 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			return
 		}
 
+		// Publication fanout holds shared locks on these same immutable IDs.
+		// Exclude new grants before inspecting or deleting any subscriptions.
+		bh.ClearExecResultSet()
+		if rtnErr = bh.Exec(ctx, fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update", accountId)); rtnErr != nil {
+			return rtnErr
+		}
+
 		// drop tables of the tenant
 		// NOTE!!!: single DDL drop statement per single transaction
 		// SWITCH TO THE CONTEXT of the deleted context
