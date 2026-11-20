@@ -82,6 +82,17 @@ Prefer the repository wrapper for arbitrary packages and test flags:
 .agents/skills/mo-dev/scripts/mo-cgo-test -race -count=1 -timeout=240s ./pkg/target/...
 ```
 
+Embedded-cluster runs (`embed.RunBaseClusterTests` and the authenticated
+suites in `pkg/tests`) create the cluster workdir with
+`os.MkdirTemp(os.TempDir(), "mo-cluster-test-")` (`pkg/embed/cluster.go`) and
+each CN frontend listens on `<cluster-dir>/mysql<N>.sock`. `sun_path` caps the
+socket path at 108 bytes, so keep `TMPDIR` short — the default `/tmp` is fine.
+Exporting a deep directory as `TMPDIR` (for evidence containment) made the
+socket path 110 bytes and the run panicked at cluster startup with
+`listen unix .../mysql1.sock: bind: invalid argument` before any test logic
+executed. Treat that panic as an environment signature, not a candidate
+failure.
+
 Linked worktrees do not contain ignored build artifacts. When the current
 worktree lacks `cgo/libmo.dylib` on macOS or `cgo/libmo.so` on Linux (or lacks
 `thirdparties/install`), the wrapper automatically considers the primary
