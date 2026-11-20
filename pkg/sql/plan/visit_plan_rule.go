@@ -4034,6 +4034,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			runtimeType := preparedNumericComparisonTextType()
 			return makePlan2CastExpr(rule.ctx, param, makePlan2Type(&runtimeType))
 		}
+		// A marker bound to a non-string source type receives the TEXT
+		// transport literal. Cast it to that type instead of relabeling the
+		// string literal, so folding and EXPLAIN see a value of the bound type.
+		if param.Typ.Id == int32(types.T_text) && param.GetLit() != nil &&
+			e.Typ.Id != int32(types.T_any) && !types.T(e.Typ.Id).IsMySQLString() {
+			return makePlan2CastExpr(rule.ctx, param, e.Typ)
+		}
 		typ := e.Typ
 		// Most prepared parameters are intentionally replaced as TEXT to retain
 		// the historical SQL-EXECUTE behavior.  Binary protocol executions can

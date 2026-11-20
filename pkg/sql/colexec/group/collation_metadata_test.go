@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,7 +62,20 @@ func TestMergeGroupExtraBufCollationAdmission(t *testing.T) {
 			// the incoming revision onto MAX's serialized state type.
 			typeOffset := bytes.Index(payloads[1], types.EncodeType(&typ))
 			require.GreaterOrEqual(t, typeOffset, 0)
-			collationOffset := typeOffset + int(unsafe.Offsetof(typ.CollationVersion))
+			// Locate CollationVersion inside the encoded type as the only byte
+			// that changes when that field alone changes.
+			probe := typ
+			probe.CollationVersion ^= 0xff
+			encoded, probeEncoded := types.EncodeType(&typ), types.EncodeType(&probe)
+			fieldOffset := -1
+			for i := range encoded {
+				if encoded[i] != probeEncoded[i] {
+					require.Equal(t, -1, fieldOffset)
+					fieldOffset = i
+				}
+			}
+			require.GreaterOrEqual(t, fieldOffset, 0)
+			collationOffset := typeOffset + fieldOffset
 			merge := newMergeGroupOp(expressions)
 			defer merge.Free(proc, false, nil)
 			require.NoError(t, merge.Prepare(proc))
