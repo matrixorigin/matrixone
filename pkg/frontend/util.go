@@ -690,6 +690,9 @@ func bindSetVariableResultExpr(
 	compilerContext plan2.CompilerContext,
 	preparedExpression bool,
 ) (*plan.Expr, error) {
+	if proc := compilerContext.GetProcess(); proc != nil {
+		defer bindFrontendExpressionContext(proc, compilerContext.GetContext())()
+	}
 	builder := plan2.NewQueryBuilder(
 		plan.Query_SELECT, compilerContext, preparedExpression, false)
 	bindContext := plan2.NewBindContext(builder, nil)
@@ -697,9 +700,9 @@ func bindSetVariableResultExpr(
 	return binder.BindExpr(e, 0, false)
 }
 
-// bindFrontendExpressionContext borrows only the pipeline context field for
-// synchronous frontend evaluation. The caller must restore it after consuming
-// and freeing the result; query cancellation and compiler state stay untouched.
+// bindFrontendExpressionContext borrows the pipeline context field for
+// synchronous frontend binding and evaluation. The caller restores it after
+// the work completes and frees any result while the context is still bound.
 func bindFrontendExpressionContext(proc *process.Process, ctx context.Context) func() {
 	previous := proc.Ctx
 	proc.Ctx = ctx
@@ -719,16 +722,23 @@ func GetSimpleExprValueWithType(ctx context.Context, e tree.Expr, feSes FeSessio
 }
 
 func getSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession, targetType *plan.Type) (interface{}, error) {
+	name, isName := e.(*tree.UnresolvedName)
+	// A bare name such as ON is a string in SET unless it names a procedure variable.
+	isBareName := isName && !storedProcedureVariableExists(ctx, name.ColName())
+	if isBareName && targetType == nil {
+		return name.ColName(), nil
+	}
+
+	compiler := feSes.GetTxnCompileCtx()
+	proc := compiler.GetProcess()
+	evalCtx := attachValue(ctx, defines.EngineKey{}, feSes.GetTxnHandler().GetStorage())
+	defer bindFrontendExpressionContext(proc, evalCtx)()
+
 	var planExpr *plan.Expr
-	if v, ok := e.(*tree.UnresolvedName); ok && !storedProcedureVariableExists(ctx, v.ColName()) {
-		// Preserve SET @a = on behavior. A stored-procedure variable with the
-		// same syntax is instead bound through its declared type below.
-		if targetType == nil {
-			return v.ColName(), nil
-		}
-		planExpr = plan2.MakePlan2StringConstExprWithType(v.ColName())
+	if isBareName {
+		planExpr = plan2.MakePlan2StringConstExprWithType(name.ColName())
 	} else {
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, feSes.GetTxnCompileCtx(), false, false)
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, compiler, false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
 		var err error
@@ -746,12 +756,6 @@ func getSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession, targe
 		}
 	}
 
-	proc := feSes.GetTxnCompileCtx().GetProcess()
-	// Runtime expressions need the current request, including its values and
-	// cancellation, without resetting compiler-owned query state.
-	evalCtx := attachValue(ctx, defines.EngineKey{}, feSes.GetTxnHandler().GetStorage())
-	restore := bindFrontendExpressionContext(proc, evalCtx)
-	defer restore()
 	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, planExpr)
 	if err != nil {
 		return nil, err

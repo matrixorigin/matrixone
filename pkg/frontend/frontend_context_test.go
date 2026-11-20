@@ -137,3 +137,71 @@ func TestFrontendExpressionContextScope(t *testing.T) {
 		require.Same(t, prior, ses.proc.Ctx)
 	})
 }
+
+func TestFrontendPlanningUsesCurrentRequestContext(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	proc := ses.proc
+	previous, cancelPrevious := context.WithCancel(t.Context())
+	defer cancelPrevious()
+	proc.ReplaceTopCtx(previous)
+	queryCtx := proc.Base.GetContextBase().BuildQueryCtx(previous)
+	_, queryCancel := process.GetQueryCtxFromProc(proc)
+	defer queryCancel()
+	prior := proc.BuildPipelineContext(queryCtx)
+	defer proc.Cancel(nil)
+	cancelPrevious()
+	proc.NextGroupConcatInputRowBase(73, 7)
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		`select json_extract('{"age":35}', '$.age') between 30 and 39`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	expr := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+	compiler := ses.GetTxnCompileCtx()
+	for _, test := range []struct {
+		name     string
+		canceled bool
+	}{
+		{name: "live request"},
+		{name: "canceled request", canceled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current, cancel := context.WithCancel(defines.AttachAccountId(t.Context(), 0))
+			defer cancel()
+			if test.canceled {
+				cancel()
+			}
+			proc.ReplaceTopCtx(current)
+			compiler.SetExecCtx(&ExecCtx{reqCtx: current, ses: ses, proc: proc})
+			var bound *plan.Expr
+			_, err := buildPlanWithStats(current, nil, compiler, func() (*plan.Plan, error) {
+				builder := plan2.NewQueryBuilder(plan.Query_SELECT, compiler, false, false)
+				bindCtx := plan2.NewBindContext(builder, nil)
+				binder := plan2.NewProjectionBinder(builder, bindCtx, plan2.NewHavingBinder(builder, bindCtx))
+				var bindErr error
+				bound, bindErr = binder.BindExpr(expr, 0, false)
+				return nil, bindErr
+			})
+			_, rebindErr := bindSetVariableResultExpr(expr, compiler, false)
+			value, simpleErr := GetSimpleExprValue(current, expr, ses)
+			if test.canceled {
+				require.ErrorIs(t, err, context.Canceled)
+				require.ErrorIs(t, rebindErr, context.Canceled)
+				require.ErrorIs(t, simpleErr, context.Canceled)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, bound.GetLit())
+				require.True(t, bound.GetLit().GetBval())
+				require.NoError(t, rebindErr)
+				require.NoError(t, simpleErr)
+				require.Equal(t, true, value)
+			}
+			require.Same(t, prior, proc.Ctx)
+			require.Same(t, current, proc.GetTopContext())
+			after, _ := process.GetQueryCtxFromProc(proc)
+			require.Same(t, queryCtx, after)
+			require.Equal(t, uint64(7), proc.NextGroupConcatInputRowBase(73, 0))
+		})
+	}
+}
