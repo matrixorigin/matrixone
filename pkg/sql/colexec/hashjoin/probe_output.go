@@ -17,7 +17,6 @@ package hashjoin
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -37,7 +36,7 @@ func (hashJoin *HashJoin) canForwardProbe() bool {
 	if !ctr.dictionaryBoundary.AllowsDictionaryOutput() ||
 		!hashJoin.dictionaryInputSupported() || ctr.spillEngine != nil || ctr.mp == nil ||
 		len(ctr.leftBat.ExtraBuf) != 0 || len(hashJoin.ResultCols) == 0 || ctr.probeTrackBuildMatches ||
-		ctr.lastIdx != 0 || ctr.leftBat.RowCount() > colexec.DefaultBatchSize {
+		ctr.lastIdx != 0 || ctr.leftBat.RowCount() > ctr.maxOutputRows() || ctr.checkBuildArea || ctr.checkProbeArea {
 		return false
 	}
 	probeOutput := false

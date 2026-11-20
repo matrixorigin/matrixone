@@ -24,7 +24,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -550,6 +557,144 @@ func TestShuffleDictionaryConcurrentRelease(t *testing.T) {
 	for _, mixed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "full partitions", true: "full and short partitions"}[mixed], func(t *testing.T) {
 			testShuffleDictionaryConcurrentRelease(t, mixed)
+		})
+	}
+}
+
+// A real Filter forwards the all-match batch with its input policy, then
+// publishes a distinct-row selection with its own policy in the same account.
+func filteredShuffleInput(t testing.TB) (*process.Process, *ShufflePool, *batch.Batch, [][]int32) {
+	t.Helper()
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+	require.NoError(t, err)
+	account, err := registry.Open(4 << 20)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, account.Snapshot().Used)
+		_, _, err := registry.CompleteTerminal(account)
+		require.NoError(t, err)
+	})
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 21, 22)
+	require.NoError(t, err)
+	typ := types.T_int64.ToType()
+	sp := NewShufflePool(3, 16, true)
+	t.Cleanup(func() { sp.abort(mp) })
+	batches := make([]*batch.Batch, 2)
+	partitionRows := sp.producerBatchMaxRows
+	require.Equal(t, 2048, partitionRows)
+	for i := range batches {
+		input := batch.NewWithSchema(true, nil, []types.Type{typ})
+		t.Cleanup(func() { input.Clean(mp) })
+		require.NoError(t, input.SetAllocationAccount(allocation))
+		values := make([]int64, objectio.BlockMaxRows)
+		for row := range values {
+			values[row] = int64(row - i*partitionRows)
+		}
+		require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, mp))
+		input.SetRowCount(len(values))
+		batches[i] = input
+	}
+	arg := filter.NewArgument()
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs(batches))
+	t.Cleanup(func() {
+		vm.Free(arg, proc, false, nil)
+		arg.Release()
+	})
+	op, err := function.GetFunctionByName(proc.Ctx, ">=", []types.Type{typ, typ})
+	require.NoError(t, err)
+	returnType := op.GetReturnType()
+	arg.FilterExprs = []*plan.Expr{{
+		Typ: returnType.PlanType(),
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: op.GetEncodedOverloadID(), ObjName: ">="},
+			Args: []*plan.Expr{
+				{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+				{Typ: typ.PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}}},
+			},
+		}},
+	}}
+	require.NoError(t, arg.SetAllocationAccount(account))
+	require.NoError(t, vm.Prepare(arg, proc))
+	sink := &dictionaryRoutingSink{colexec.NewMockOperator()}
+	sink.AppendChild(arg)
+	vm.ConfigureDictionaryBoundaries(sink)
+	first, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Same(t, batches[0], first.Batch)
+	require.True(t, sp.matchesSharedLane(first.Batch))
+	selected, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.True(t, selected.Batch.HasDictionary())
+	require.False(t, sp.matchesSharedLane(selected.Batch))
+	require.Equal(t, 3*partitionRows, selected.Batch.RowCount())
+	bounds := []int64{int64(partitionRows - 1), int64(2*partitionRows - 1)}
+	sels := make([][]int32, sp.bucketNum)
+	for row := range selected.Batch.RowCount() {
+		value := vector.GetFixedAtNoTypeCheck[int64](selected.Batch.Vecs[0], row)
+		require.Equal(t, int64(row), value)
+		bucket := plan2.GetRangeShuffleIndexSignedSlice(bounds, value)
+		sels[bucket] = append(sels[bucket], int32(row))
+	}
+	for _, rows := range sels {
+		require.Len(t, rows, partitionRows)
+	}
+	return proc, sp, selected.Batch, sels
+}
+
+func TestShuffleDeclinesDenseFilteredDictionaryBeforeAllocation(t *testing.T) {
+	proc, sp, input, sels := filteredShuffleInput(t)
+	var views *shufflePartitionViews
+	t.Cleanup(func() {
+		if views != nil {
+			views.free(proc.Mp())
+		}
+	})
+	_, _, _, done, err := sp.tryWriteModeWithViews(input, sels, 0, 0, 0, false, &views, proc)
+	require.NoError(t, err)
+	require.True(t, done)
+	require.Nil(t, views, "the backing and selector exceed the copy cost before construction")
+	for bucket := range sels {
+		output := sp.getAnyFullBatch()
+		require.NotNil(t, output, "producer-local lane must publish one full partition")
+		t.Cleanup(func() { sp.discardBatch(output, proc.Mp()) })
+		require.EqualValues(t, bucket, output.ShuffleIDX)
+		require.False(t, output.HasDictionary())
+		require.Len(t, sels[bucket], output.RowCount())
+		for row, selected := range sels[bucket] {
+			require.Equal(t, int64(selected), vector.GetFixedAtNoTypeCheck[int64](output.Vecs[0], row))
+		}
+	}
+	require.Zero(t, sp.readyCount)
+}
+
+func BenchmarkShuffleDenseFilteredDictionaryRefusal(b *testing.B) {
+	for _, mode := range []string{"copy", "views"} {
+		b.Run(mode, func(b *testing.B) {
+			proc, sp, input, sels := filteredShuffleInput(b)
+			b.ReportAllocs()
+			for b.Loop() {
+				var views *shufflePartitionViews
+				var workspace **shufflePartitionViews
+				if mode == "views" {
+					workspace = &views
+				}
+				_, _, _, done, err := sp.tryWriteModeWithViews(input, sels, 0, 0, 0, false, workspace, proc)
+				if views != nil {
+					views.free(proc.Mp())
+				}
+				if err != nil || !done {
+					b.Fatalf("partition write: done=%t, err=%v", done, err)
+				}
+				for bucket := range sels {
+					output := sp.getAnyFullBatch()
+					if output == nil {
+						b.Fatalf("bucket %d did not publish", bucket)
+					}
+					sp.discardBatch(output, proc.Mp())
+				}
+			}
 		})
 	}
 }

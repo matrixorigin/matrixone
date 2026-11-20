@@ -149,8 +149,10 @@ later partitions. The consumer can release its selection and return capacity
 while the producer is blocked on another bucket.
 
 Retained publication must not increase the destination charge over the owned
-copy alternative. Reject narrow selectors before allocating metadata; include
-composed maps, private metadata and new backing/pin bounds before publication.
+copy alternative. Reject partitions before allocating when the new selectors
+and backing already exceed the copy bound. For a dictionary input, use the
+existing base's retained bytes and the replacement selector size. The final
+check includes actual map capacity and private metadata.
 Use one proven charge policy for the comparison, and prefer an available owned
 recycle buffer. The copy estimate ignores constant and out-of-line bytes, so
 admission is conservative. Unpublished refusal releases its selection and

@@ -17,7 +17,6 @@ package hashjoin
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -27,6 +26,7 @@ import (
 // group/row separately. No lookup result or selection escapes its JoinMap.
 func (ctr *container) probeInnerPayload(join *HashJoin, proc *process.Process, result *vm.CallResult) error {
 	rows := ctr.leftBat.RowCount()
+	outputLimit := ctr.maxOutputRows()
 	outputRows := 0
 	repeatedProbeRows := 0
 	repeatPayload := false
@@ -36,15 +36,15 @@ func (ctr *container) probeInnerPayload(join *HashJoin, proc *process.Process, r
 			break
 		}
 	}
-	for outputRows < colexec.DefaultBatchSize {
+	for outputRows < outputLimit {
 		count := 0
-		limit := min(hashmap.UnitLimit, colexec.DefaultBatchSize-outputRows)
+		limit := min(hashmap.UnitLimit, outputLimit-outputRows)
 		for count < limit {
 			if len(ctr.sels) > 0 {
 				if repeatPayload && repeatedProbeRows == outputRows+count {
 					// Copy each long probe value once for its complete duplicate
 					// group in this output, even when build gathering spans chunks.
-					repeats := min(len(ctr.sels), colexec.DefaultBatchSize-outputRows-count)
+					repeats := min(len(ctr.sels), outputLimit-outputRows-count)
 					for column, position := range join.ResultCols {
 						if position.Rel == 0 && repeatProbeArea(ctr.leftBat.Vecs[position.Pos]) {
 							if err := ctr.resBat.Vecs[column].UnionMulti(ctr.leftBat.Vecs[position.Pos], int64(ctr.lastIdx-1), repeats, proc.Mp()); err != nil {
@@ -95,7 +95,9 @@ func (ctr *container) probeInnerPayload(join *HashJoin, proc *process.Process, r
 		if count > 0 {
 			left, right := join.uniqueLeftRows[:count], join.uniqueRightRows[:count]
 			if count == 1 && !repeatPayload {
-				if err := ctr.appendOneMatch(join, proc, left[0], right[0]/colexec.DefaultBatchSize, right[0]%colexec.DefaultBatchSize); err != nil {
+				batchIndex, row := ctr.locateBuildRow(right[0])
+				match := outputRow{left: ctr.leftBat, leftRow: left[0], right: ctr.retainedOutputBatch(batchIndex), rightRow: row}
+				if err := ctr.appendOutputRow(join, proc, match); err != nil {
 					return err
 				}
 			} else {

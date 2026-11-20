@@ -78,7 +78,11 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 		if !source.IsConst() {
 			copyBytes += int64(len(rows)) * int64(source.GetType().TypeSize())
 		}
-		if !source.IsDictionary() {
+		if source.IsDictionary() {
+			// Composition replaces the selector but retains the whole base.
+			pinnedBytes += source.DictionaryBaseRetainedBytes()
+			selectors++
+		} else {
 			// Queued views can outlive producer reuse. Owned backing then
 			// remains charged while the producer allocates its replacement.
 			if source.DataBackingKind() == vector.OwnedMPoolUnique {
@@ -87,10 +91,6 @@ func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspa
 			if source.AreaBackingKind() == vector.OwnedMPoolUnique {
 				pinnedBytes += int64(cap(source.GetArea()))
 			}
-		}
-		if source.IsDictionary() {
-			selectors++
-		} else {
 			sharedSelection = true
 		}
 	}

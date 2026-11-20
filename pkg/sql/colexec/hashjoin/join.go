@@ -781,7 +781,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 		ctr.itr = ctr.mp.NewIterator()
 	}
 	if hashJoin.IsInner() && hashJoin.NonEqCond == nil && !ctr.probeHashOnPK &&
-		!ctr.probeTrackBuildMatches && ctr.spillEngine == nil {
+		!ctr.probeTrackBuildMatches && ctr.spillEngine == nil && !ctr.checkBuildArea && !ctr.checkProbeArea {
 		return ctr.probeInnerPayload(hashJoin, proc, result)
 	}
 	leftRowCnt := ctr.leftBat.RowCount()
