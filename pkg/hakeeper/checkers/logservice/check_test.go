@@ -1394,3 +1394,30 @@ func TestCheck(t *testing.T) {
 		}
 	}
 }
+
+func TestRepairChoosesDistinctStoresForMissingVoters(t *testing.T) {
+	shard := pb.LogShardInfo{ShardID: 1, Epoch: 1, LeaderID: 1, Term: 1, Replicas: map[uint64]string{1: "a"}}
+	state := pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: shard},
+		Stores: map[string]pb.LogStoreInfo{
+			"a": {Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 1}}},
+			"b": {}, "c": {},
+		},
+	}
+	cfg := hakeeper.Config{}
+	cfg.Fill()
+	cluster := pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}}}
+	checker := NewLogServiceChecker(
+		hakeeper.NewCheckerCommonFields("", cfg, util.NewTestIDAllocator(10), cluster, pb.TaskTableUser{}, 0),
+		state, pb.TNState{}, operator.ExecutingReplicas{}, operator.ExecutingReplicas{}, 0, pb.Locality{}, false,
+	)
+	var destinations []string
+	for _, op := range checker.Check() {
+		for _, step := range op.OpSteps() {
+			if add, ok := step.(operator.AddLogService); ok {
+				destinations = append(destinations, add.Replica.UUID)
+			}
+		}
+	}
+	assert.ElementsMatch(t, []string{"b", "c"}, destinations)
+}
