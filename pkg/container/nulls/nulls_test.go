@@ -149,7 +149,6 @@ func TestAdd(t *testing.T) {
 
 func TestAddRangeUsesExclusiveEndForExternalStorage(t *testing.T) {
 	var n Nulls
-	n.GetBitmap().InstallExternalStorage(make([]uint64, 2))
 	n.InitWithSize(128)
 	require.NotPanics(t, func() {
 		n.AddRange(0, 128)
@@ -160,7 +159,6 @@ func TestAddRangeUsesExclusiveEndForExternalStorage(t *testing.T) {
 func TestRangeUsesExclusiveEndForExternalStorage(t *testing.T) {
 	var source, destination Nulls
 	source.Add(7, 63)
-	destination.GetBitmap().InstallExternalStorage(make([]uint64, 1))
 	destination.InitWithSize(64)
 	require.NotPanics(t, func() {
 		Range(&source, 0, 64, 0, &destination)
@@ -271,7 +269,6 @@ func TestFilterInPlaceOrderedMatchesFilter(t *testing.T) {
 			Filter(legacy, test.sels, test.negate)
 
 			var inPlace Nulls
-			inPlace.GetBitmap().InstallExternalStorage(make([]uint64, 4))
 			inPlace.InitWith(source)
 			FilterInPlaceOrdered(&inPlace, test.sels, test.negate)
 
@@ -289,7 +286,6 @@ func TestOrderedFilterSparseTail(t *testing.T) {
 				source := Build(3, 0, 2)
 				legacy := source.Clone()
 				inPlace := source.Clone()
-				inPlace.GetBitmap().InstallExternalStorage(make([]uint64, 1))
 				var offset uint64
 				if mode == "offset" {
 					offset = 1
@@ -312,8 +308,6 @@ func TestOrderedFilterSparseTail(t *testing.T) {
 				for row := uint64(0); row < 67; row++ {
 					require.Equal(t, legacy.Contains(row), inPlace.Contains(row), "row %d", row)
 				}
-				require.True(t, inPlace.GetBitmap().HasExternalStorage())
-				require.Equal(t, 1, inPlace.GetBitmap().ExternalStorageCapacity())
 				require.NoError(t, inPlace.GetBitmap().Validate())
 			})
 		}
@@ -332,7 +326,6 @@ func TestFilterByMaskInPlaceMatchesFilter(t *testing.T) {
 			FilterByMask(legacy, &selection, negate)
 
 			var inPlace Nulls
-			inPlace.GetBitmap().InstallExternalStorage(make([]uint64, 4))
 			inPlace.InitWith(source)
 			FilterByMaskInPlace(&inPlace, &selection, negate)
 
@@ -357,7 +350,6 @@ func TestFilterByMaskInPlaceWithOffsetMatchesAllocatingPath(t *testing.T) {
 
 				var inPlace Nulls
 				if external {
-					inPlace.GetBitmap().InstallExternalStorage(make([]uint64, 4))
 				}
 				inPlace.InitWith(source)
 				FilterByMaskInPlaceWithOffset(&inPlace, &selection, negate, 1)

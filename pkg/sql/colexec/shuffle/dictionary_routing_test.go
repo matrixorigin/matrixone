@@ -69,7 +69,7 @@ func TestDictionaryOrdinaryShufflePartitionsAndAccounting(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			})
-			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 			require.NoError(t, err)
 			source, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), selection)
 			require.NoError(t, err)

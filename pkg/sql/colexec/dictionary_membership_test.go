@@ -42,7 +42,7 @@ func TestFixedMembershipScopedProbeLifecycle(t *testing.T) {
 						_, _, err := registry.CompleteTerminal(account)
 						require.NoError(t, err)
 					})
-					allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+					allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 					require.NoError(t, err)
 					typ := types.T_int64.ToType()
 					if kind == "string" {
@@ -130,7 +130,7 @@ func TestFixedMembershipScopedProbeLifecycle(t *testing.T) {
 						}
 					}
 					if !listNull {
-						require.Zero(t, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+						require.Zero(t, result.GetNulls().GetBitmap().CapWords())
 					}
 					frame.End()
 					require.Nil(t, root.parameterResults[0])

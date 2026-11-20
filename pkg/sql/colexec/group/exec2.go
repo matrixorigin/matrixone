@@ -1343,7 +1343,7 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 		// Generic reload can drain more exact keys, so finish its queue before
 		// consuming exact-key leaves. Those leaves remain deferred until EOF.
 		if group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) {
-			if group.ctr.spillBkts != nil && group.ctr.spillBkts.Len() != 0 {
+			if len(group.ctr.spillBkts) != 0 {
 				if _, err := group.ctr.loadSpilledData(proc, group.OpAnalyzer, group.Aggs); err != nil {
 					return vm.CancelResult, err
 				}
@@ -1364,7 +1364,7 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 			return vm.CancelResult, err
 		}
 		if !hasMore {
-			if group.ctr.spillBkts != nil && group.ctr.spillBkts.Len() != 0 {
+			if len(group.ctr.spillBkts) != 0 {
 				// Keep Eval until all generic spill buckets have been returned.
 				// Resetting or ending here would discard every remaining bucket.
 				group.ctr.state = vm.Eval

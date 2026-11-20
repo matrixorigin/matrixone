@@ -212,7 +212,7 @@ func TestPredicateScratchCapacityFallsBackAfterReleasingBanks(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 	require.NoError(t, err)
 	input := batch.NewWithSize(2)
 	t.Cleanup(func() { input.Clean(mp) })
