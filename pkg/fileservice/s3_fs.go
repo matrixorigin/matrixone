@@ -1713,6 +1713,10 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	if deadline, ok := ctx.Deadline(); ok {
 		fillCtx, cancelFill = context.WithDeadline(fillCtx, deadline)
 	}
+	// The download is not registered after a delete of the object since the read began.
+	if len(vector.Entries) > 0 && vector.Entries[0].readDeletes > 0 {
+		fillCtx = withDeletesMark(fillCtx, vector.Entries[0].readDeletes-1)
+	}
 	stopCancelFill := context.AfterFunc(ctx, cancelFill)
 	defer stopCancelFill()
 	stopOnClose := func() bool { return false }

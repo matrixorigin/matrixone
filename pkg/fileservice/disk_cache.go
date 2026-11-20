@@ -1041,7 +1041,7 @@ func (d *DiskCache) writeFileTo(
 		d.evictForDiskFull(callerCtx, err)
 	}()
 	// A whole-object download is a FilePrefetchObject, not registered after a delete of
-	// the object from here on.
+	// the object since the mark of ctx.
 	var whole *filePrefetchObject
 	if fill == storageFill {
 		whole = d.newWholeObject(ctx, diskPath)
@@ -1069,16 +1069,16 @@ func (d *DiskCache) writeFileTo(
 	var bounds []int64
 	releaseConns := func() {}
 	if fill == storageFill {
+		var ok bool
+		if ok, err = whole.admitWhole(); !ok {
+			return false, err
+		}
+		ctx, releaseConns = whole.ctx, whole.releaseConn
 		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads) {
 			if size, splitAt, err := objectSize(ctx); err == nil {
 				bounds = d.objectSplit.bounds(size, splitAt)
 			}
 		}
-		var ok bool
-		if ok, err = whole.admitWhole(whole.ctx); !ok {
-			return false, err
-		}
-		ctx, releaseConns = whole.ctx, whole.releaseConn
 	}
 	defer releaseConns()
 

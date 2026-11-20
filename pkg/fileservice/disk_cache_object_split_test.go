@@ -267,6 +267,68 @@ func TestS3FSDownloadWaitsForConn(t *testing.T) {
 	require.Zero(t, d.downloadConns.Load())
 }
 
+// waitingForConn reports whether a whole-object download of the object at diskPath waits
+// for a connection.
+func waitingForConn(d *DiskCache, diskPath string) bool {
+	f := &d.prefetchObjects
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for o := range f.waiting {
+		if p, ok := o.(*filePrefetchObject); ok && p.whole && p.diskPath == diskPath && p.state == objectWaitingConn {
+			return true
+		}
+	}
+	return false
+}
+
+// A read whose whole-object download waits for a connection when its object is deleted,
+// or the cache closes, reads its range and caches nothing.
+func TestS3FSReadWaitingForConnectionEndsOnDeleteOrClose(t *testing.T) {
+	for _, end := range []string{"delete", "close"} {
+		t.Run(end, func(t *testing.T) {
+			fs, _, data := newObjectSplitFS(t, objectSplitConfig{}, 300<<10)
+			fs.storage = keepOnDeleteStorage{fs.storage}
+			d := fs.diskCache
+			d.maxDownloadConns = 1
+			d.downloadConns.Store(1)
+			diskPath := d.pathForFile("object")
+			done := make(chan []byte, 1)
+			go func() {
+				got, err := readFullObjectOf(fs, 100, 10)
+				require.NoError(t, err)
+				done <- got
+			}()
+			require.Eventually(t, func() bool { return waitingForConn(d, diskPath) }, 10*time.Second, time.Millisecond)
+			if end == "delete" {
+				require.NoError(t, fs.Delete(context.Background(), "object"))
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				d.closePrefetches(ctx)
+				require.NoError(t, ctx.Err(), "the close waits for no download")
+			}
+			require.Equal(t, data[100:110], <-done)
+			require.False(t, waitingForConn(d, diskPath))
+			require.False(t, d.cache.Contains(diskPath))
+			require.Equal(t, int64(1), d.downloadConns.Load(), "it took no connection")
+		})
+	}
+}
+
+// A whole-object download of an object deleted since the mark of its context, before it
+// began, downloads nothing.
+func TestWholeObjectDownloadDeletedBeforeItBegins(t *testing.T) {
+	fs, storage, _ := newObjectSplitFS(t, objectSplitConfig{}, 300<<10)
+	d := fs.diskCache
+	diskPath := d.pathForFile("object")
+	mark := d.deletes.now()
+	d.deletes.deleted(diskPath)
+	err := fs.PrefetchFile(withDeletesMark(context.Background(), mark), "object")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, storage.reads.Load())
+	require.False(t, d.cache.Contains(diskPath))
+}
+
 // Deleting an object forgets the size a prefetch told of: after the path is written again
 // at another length, a read to the end of it reads the new object whole.
 func TestDeleteForgetsPrefetchedSize(t *testing.T) {
