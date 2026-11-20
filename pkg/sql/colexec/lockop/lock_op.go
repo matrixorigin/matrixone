@@ -680,6 +680,12 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
+	// An internal catalog statement with a bounded key set must never acquire
+	// a covering range, even if an unexpected plan asks for a table lock.
+	if g != lock.Granularity_Row && defines.ExactCatalogRows(ctx) {
+		return false, false, timestamp.Timestamp{}, moerr.NewLockNeedUpgradeNoCtx()
+	}
+
 	if g == lock.Granularity_Row && len(rows) > 1 {
 		rows = dedupLockRows(rows)
 	}
@@ -1072,7 +1078,7 @@ func LockWithMayUpgrade(
 		return lock.Result{}, err
 	}
 	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
-	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) || defines.ExactCatalogRows(ctx) {
 		return result, err
 	}
 

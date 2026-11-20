@@ -467,19 +467,17 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 }
 
 func (builder *QueryBuilder) updateLocksOnDemand(nodeID int32) {
-	lockService := builder.compCtx.GetProcess().Base.LockService
-	if lockService == nil {
-		// MockCompilerContext
+	maxRows, ok := estimatedLockRowLimit(builder)
+	if !ok {
 		return
 	}
-	lockconfig := lockService.GetConfig()
 
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType != plan.Node_LOCK_OP {
 		for _, childID := range node.Children {
 			builder.updateLocksOnDemand(childID)
 		}
-	} else if !node.LockTargets[0].LockTable && node.Stats.Outcnt > float64(lockconfig.MaxLockRowCount) {
+	} else if !node.LockTargets[0].LockTable && node.Stats.Outcnt > maxRows {
 		logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
 		logutil.Infof("the outcnt stats is %f", node.Stats.Outcnt)
 		for _, target := range node.LockTargets {

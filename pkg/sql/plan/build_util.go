@@ -43,22 +43,30 @@ import (
 // 	return nodeID
 // }
 
+// Both lock planning passes use the same admission rule. An exact internal
+// catalog mutation must preserve its key set during final plan rewrites too.
+func estimatedLockRowLimit(builder *QueryBuilder) (float64, bool) {
+	proc := builder.compCtx.GetProcess()
+	if proc.Base.LockService == nil || defines.ExactCatalogRows(proc.Ctx) {
+		return 0, false
+	}
+	return float64(proc.Base.LockService.GetConfig().MaxLockRowCount), true
+}
+
 // reCheckifNeedLockWholeTable checks if the whole table needs to be locked based on the last node's statistics.
 // It returns true if the out count of the last node is greater than the maximum lock count, otherwise it returns false.
 func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
-	lockService := builder.compCtx.GetProcess().Base.LockService
-	if lockService == nil {
-		// MockCompilerContext
+	maxRows, ok := estimatedLockRowLimit(builder)
+	if !ok {
 		return
 	}
-	lockconfig := lockService.GetConfig()
 
 	for _, n := range builder.qry.Nodes {
 		if n.NodeType != plan.Node_LOCK_OP {
 			continue
 		}
 		if !n.LockTargets[0].LockTable {
-			reCheckIfNeed := n.Stats.Outcnt > float64(lockconfig.MaxLockRowCount)
+			reCheckIfNeed := n.Stats.Outcnt > maxRows
 			if reCheckIfNeed {
 				logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
 				logutil.Infof("the outcnt stats is %f", n.Stats.Outcnt)

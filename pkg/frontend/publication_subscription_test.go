@@ -53,16 +53,16 @@ func TestLockPublicationTargetAccounts(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), 7)
 	bh := &backgroundExecTest{}
 	bh.init()
-	require.NoError(t, lockPublicationTargetAccounts(ctx, bh, nil))
+	require.NoError(t, lockPublicationTargetAccounts(ctx, bh, nil, false))
 	const query = "select account_id from mo_catalog.mo_account where account_id in (3,8) for share"
 	targets := map[int32]*pubsub.AccountInfo{8: {Id: 8}, 3: {Id: 3}}
 	mockPublicationTargetRows(bh, 3, 8)
-	require.NoError(t, lockPublicationTargetAccounts(ctx, bh, targets))
+	require.NoError(t, lockPublicationTargetAccounts(ctx, bh, targets, false))
 	bh.sql2result[query] = newMrsForRestoreStringRows([]string{"account_id"}, [][]interface{}{{int64(3)}})
-	require.True(t, moerr.IsMoErrCode(lockPublicationTargetAccounts(ctx, bh, targets), moerr.ErrTxnNeedRetry))
+	require.True(t, moerr.IsMoErrCode(lockPublicationTargetAccounts(ctx, bh, targets, false), moerr.ErrTxnNeedRetry))
 	fail := errors.New("locking read failed")
 	bh.sql2err[query] = fail
-	require.ErrorIs(t, lockPublicationTargetAccounts(ctx, bh, targets), fail)
+	require.ErrorIs(t, lockPublicationTargetAccounts(ctx, bh, targets, false), fail)
 }
 
 func TestIsUserDatabaseType(t *testing.T) {
@@ -401,6 +401,7 @@ func Test_doAlterPublication2(t *testing.T) {
 		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Service().Return("").AnyTimes()
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 

@@ -307,6 +307,19 @@ func TestHasNewVersionInRange(t *testing.T) {
 	require.True(t, changed)
 }
 
+// Budget exhaustion on an exact catalog mutation must reach the caller
+// without a second request for a covering range.
+func TestExactCatalogRowsRejectLockUpgrade(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	service := mock_lock.NewMockLockService(ctrl)
+	ctx := defines.WithExactCatalogRows(t.Context())
+	rows, txnID := [][]byte{{1}, {3}}, []byte("txn")
+	opts := lock.LockOptions{Granularity: lock.Granularity_Row, Mode: lock.LockMode_Shared}
+	service.EXPECT().Lock(ctx, uint64(1), rows, txnID, opts).Return(lock.Result{}, moerr.NewLockNeedUpgradeNoCtx())
+	_, err := LockWithMayUpgrade(ctx, service, 1, rows, txnID, opts, nil, nil, LockOptions{}, types.T_int32.ToType())
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
+}
+
 func TestLockWithRetryReturnsBackendErrorWhenDeadlineExceededStopsBoundedRetry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
