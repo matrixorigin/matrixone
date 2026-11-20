@@ -43,8 +43,7 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 				})
 				allocation, err := NewAllocationAccount(
 					account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-						VectorData: 1, VectorArea: 2, VectorNulls: 3,
-						VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+						VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 					})
 				require.NoError(t, err)
 				makeExec := func(id int64, params ...types.Type) GroupAggFuncExec {

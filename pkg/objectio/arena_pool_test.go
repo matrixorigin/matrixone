@@ -117,8 +117,7 @@ func TestArenaBurstReleasedWhileStillActive(t *testing.T) {
 	// subtest owns its own bubble below.
 	for _, schedule := range []string{"normal first fire", "delayed first fire"} {
 		t.Run(schedule, func(t *testing.T) {
-			const ttl = 150 * time.Millisecond
-			withArenaIdleTTL(t, ttl)
+			emptyArenaPool(ArenaLarge)
 			synctest.Test(t, func(t *testing.T) {
 				// Drain the reaper on every exit path, including failed
 				// assertions: this defer runs during Goexit while still
@@ -126,17 +125,20 @@ func TestArenaBurstReleasedWhileStillActive(t *testing.T) {
 				// always stopped in-bubble and the outer cleanup, which
 				// runs outside the bubble, only ever sees reaper == nil.
 				defer drainArenaReaper(ArenaLarge)
-				base := arenaMPool.CurrNB()
+				const ttl = 150 * time.Millisecond
+				withArenaIdleTTL(t, ttl)
+				base := arenaMPool.OnHeapCurrNB()
 
-				// Exercise the large tier with small off-heap buffers so
-				// the bubble cannot arm the process-wide mmap cache timer.
-				count := min(8, arenaPools[ArenaLarge].maxCount)
-				for range count {
-					a := NewArena(4 << 10)
-					a.sizeLimit = arenaMaxSize
-					PutArena(a)
+				// Track arena ownership through the same MPool without invoking
+				// the shared C allocator's timers under the virtual clock.
+				const seedSize = 1024
+				burst := min(8, arenaPools[ArenaLarge].maxCount)
+				for range burst {
+					data, err := arenaMPool.Alloc(seedSize, false)
+					require.NoError(t, err)
+					PutArena(&WriteArena{data: data, sizeLimit: arenaMaxSize})
 				}
-				perArena := (arenaMPool.CurrNB() - base) / int64(count)
+				require.Equal(t, base+int64(burst*seedSize), arenaMPool.OnHeapCurrNB())
 
 				pool := &arenaPools[ArenaLarge]
 				holdFirstReaper := schedule != "normal first fire"
@@ -154,7 +156,7 @@ func TestArenaBurstReleasedWhileStillActive(t *testing.T) {
 				// pool. Pool-owned arenas are released by withArenaIdleTTL's
 				// cleanup; releasing the borrowed one here covers a failed
 				// assertion mid-borrow without leaking or double-freeing
-				// off-heap buffers.
+				// buffers.
 				var borrowed *WriteArena
 				t.Cleanup(func() {
 					if borrowed != nil {
@@ -170,7 +172,7 @@ func TestArenaBurstReleasedWhileStillActive(t *testing.T) {
 					if n == 1 {
 						break
 					}
-					require.NotZero(t, n, "a busy arena remains available for reuse")
+					require.Positive(t, n, "the seeded pool must retain the working arena")
 					if holdFirstReaper && time.Since(start) >= 6*ttl {
 						// Re-arm the held reaper after the old fixed warmup
 						// (4*ttl) plus the TTL has elapsed in bubble time,
@@ -202,7 +204,7 @@ func TestArenaBurstReleasedWhileStillActive(t *testing.T) {
 				n, survivor := parkedLargeSnapshot()
 				require.Equal(t, 1, n, "the cold burst arenas age out while the pool stays busy")
 				require.Same(t, steady, survivor, "the surviving parked arena is the one the workload kept reusing")
-				require.Equal(t, base+perArena, arenaMPool.CurrNB(), "only the working arena's memory is kept")
+				require.Equal(t, base+seedSize, arenaMPool.OnHeapCurrNB(), "only the working arena's memory is kept")
 			})
 		})
 	}

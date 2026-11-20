@@ -165,8 +165,6 @@ func TestFillSpillLinearMarkerFailurePreservesSource(t *testing.T) {
 		mpool.AllocationOwnerFill,
 		fillAllocationSiteRetainedData,
 		fillAllocationSiteRetainedArea,
-		fillAllocationSiteRetainedNulls,
-		fillAllocationSiteRetainedGrouping,
 	)
 	require.NoError(t, err)
 	borrowed, err := makeBorrowedSpillBatch(source, 1, markerMP, selection)
