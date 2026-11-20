@@ -51,12 +51,12 @@ type CacheConfig struct {
 	// storage requests and slower reads; 0 makes the fastest reads. Default
 	// DefaultDiskDownloadMaxExtraWait.
 	DiskDownloadMaxExtraWait *toml.Duration `toml:"disk-download-max-extra-wait"`
-	// DiskPrefetchObjectSplit is how many ranges, from 1 to 4, the download of a whole
-	// object of at least DiskPrefetchObjectSplitMin bytes reads at once; 1 reads it as
-	// one range. Default DefaultDiskPrefetchObjectSplit.
+	// DiskPrefetchObjectSplit is how many parts, from 1 to 4, the download of a whole
+	// object, or a prefetch run, of at least DiskPrefetchObjectSplitMin bytes reads at
+	// once; 1 reads it as one part. Default DefaultDiskPrefetchObjectSplit.
 	DiskPrefetchObjectSplit *int `toml:"disk-prefetch-object-split"`
-	// DiskPrefetchObjectSplitMin is the size of the smallest object whose download is
-	// split. Default DefaultDiskPrefetchObjectSplitMin.
+	// DiskPrefetchObjectSplitMin is the size of the smallest object download or prefetch
+	// run that is split. Default DefaultDiskPrefetchObjectSplitMin.
 	DiskPrefetchObjectSplitMin *toml.ByteSize `toml:"disk-prefetch-object-split-min"`
 	// DiskPrefetchObjectSplitDownloads is the most downloads in flight with which another
 	// download is split. Default DefaultDiskPrefetchObjectSplitDownloads.

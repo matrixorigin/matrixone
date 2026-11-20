@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -349,8 +350,10 @@ func (d *DiskCache) prefetchRead(
 		held = append(held, fl)
 		runs = append(runs, run{first: p[0], last: p[1], flight: fl})
 	}
-	// A run past the bytes of a MemoryPrefetchObject joins the FilePrefetchObject holding
-	// it, or registers one, so concurrent reads download it once.
+	// A run past the bytes of a MemoryPrefetchObject joins the prefetch object holding it,
+	// or is read as parts, each a FilePrefetchObject the reads of its bytes share; one that
+	// finds another holding its bytes once it holds a connection joins it, so concurrent
+	// reads download a part once.
 	var started []*filePrefetchObject
 	for _, p := range files {
 		start, end := windowStart+int64(p[0])*block, windowStart+int64(p[1]+1)*block
@@ -358,16 +361,26 @@ func (d *DiskCache) prefetchRead(
 			// A run downloads to the object's end, not past it.
 			end = size
 		}
-		o, created := f.fileObjectLocked(context.WithoutCancel(ctx), diskPath, start, end, now, d.downloadMaxExtraWait)
-		o.hold()
-		held = append(held, o)
-		if created {
-			f.reads.Add(1)
-			started = append(started, o)
+		if o := f.holdingLocked(diskPath, start, end, now, d.downloadMaxExtraWait); o != nil {
+			o.hold()
+			held = append(held, o)
+			for j := p[0]; j <= p[1]; j++ {
+				if blocks[j].needed {
+					blocks[j].state, blocks[j].object = blockInFlight, o
+				}
+			}
+			continue
 		}
-		for j := p[0]; j <= p[1]; j++ {
-			if blocks[j].needed {
-				blocks[j].state, blocks[j].object = blockInFlight, o
+		for _, part := range d.rangeParts(start, end, block) {
+			o := d.newFileObject(context.WithoutCancel(ctx), filePath, part[0], part[1], open, flightNeeds{})
+			o.readStarted = true
+			o.hold()
+			held = append(held, o)
+			started = append(started, o)
+			for j := p[0]; j <= p[1]; j++ {
+				if b := &blocks[j]; b.needed && part[0] <= b.start && b.start < part[1] {
+					b.state, b.object = blockInFlight, o
+				}
 			}
 		}
 	}
@@ -385,7 +398,7 @@ func (d *DiskCache) prefetchRead(
 		}
 	}
 	for _, o := range started {
-		d.startFileRun(closing, filePath, diskPath, o, open)
+		go func() { _, _ = o.prefetch() }()
 	}
 
 	// Assemble the bytes. A prefetch object is held until the last needed block it holds
@@ -456,15 +469,27 @@ func (d *DiskCache) prefetchRead(
 	return out, len(runs), true, nil
 }
 
-// startFileRun downloads the registered FilePrefetchObject o of the object at filePath,
-// which outlives the read and ends when the cache closes. The caller counted it in reads.
-func (d *DiskCache) startFileRun(closing context.Context, filePath, diskPath string, o *filePrefetchObject, open rangeOpener) {
-	stop := context.AfterFunc(closing, o.cancelRead)
-	go func() {
-		defer d.prefetchObjects.reads.Done()
-		defer stop()
-		_, _ = d.downloadFile(o.ctx, filePath, o.start, o.end, open, d.endFilePrefetch(diskPath, o))
-	}()
+// rangeParts returns the parts [start, end) of an object is read as, each by its own
+// prefetch object: disk-prefetch-object-split parts at boundaries that are multiples of
+// align from start, when it is large enough and few downloads are under way, otherwise
+// one.
+func (d *DiskCache) rangeParts(start, end, align int64) [][2]int64 {
+	whole := [][2]int64{{start, end}}
+	if d.objectSplit.parts <= 1 || d.downloading() >= cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads) {
+		return whole
+	}
+	bounds := d.objectSplit.bounds(end-start, 0)
+	if len(bounds) < 3 {
+		return whole
+	}
+	parts := make([][2]int64, 0, len(bounds)-1)
+	for i := 1; i < len(bounds); i++ {
+		if bounds[i-1]%align != 0 {
+			return whole
+		}
+		parts = append(parts, [2]int64{start + bounds[i-1], start + bounds[i]})
+	}
+	return parts
 }
 
 // readDownload reads the bytes of download o from off into dst, once they are written.
@@ -560,22 +585,31 @@ func (fl *memoryPrefetchObject) readHeld() error {
 	return fl.read(fl.ctx, fl.open)
 }
 
+// errPrefetchDeleted is the error of a prefetch of an object deleted before it read all its
+// ranges.
+var errPrefetchDeleted = moerr.NewInternalErrorNoCtx("fileservice: object deleted during a prefetch")
+
 // errPrefetchClosed is the error of a prefetch the disk cache closed on before it read all
 // its ranges.
 var errPrefetchClosed = moerr.NewInternalErrorNoCtx("fileservice: disk cache closed during a prefetch")
 
-// readRanges reads the ranges of the object at filePath through open, each as a
-// MemoryPrefetchObject run by its own goroutine, caches each, and returns once they end
-// or ctx is done, with the error of one that did not cache its range. The ranges are
-// admitted in order, each once the one before it is: a range a prefetch object already
-// reads is waited for, not read again; a range that would pass the bytes of the flights
-// under way waits until it fits, or no flight is under way; a range cached meanwhile is
-// not read. Each flight holds one of the connections downloads may hold while it reads; a
-// range waits for one before reads can join it. The download counts as started once
-// every range is under way or one waits for its resources: a read of a range not under
-// way reads its own bytes. No range starts after a delete of the object counted since
-// deletes. It reports false, reading nothing, when the cache is closed before a range is
-// under way, and errPrefetchClosed when it closes after.
+// prefetchFilesAtOnce is the most FilePrefetchObjects of one prefetch that download at
+// once.
+const prefetchFilesAtOnce = 4
+
+// readRanges reads the ranges of the object at filePath through open into the disk cache
+// and returns once they end or ctx is done, with the error of one that did not cache its
+// range. A range is read as parts, each by its own prefetch object, run by its own
+// goroutine: a MemoryPrefetchObject for a part of at most disk-prefetch-memory-max bytes,
+// otherwise a FilePrefetchObject, at most prefetchFilesAtOnce of them at once. The parts
+// are admitted in order, each once the one before it is: a part a prefetch object
+// already reads is waited for, not read again; a part cached meanwhile is not read; a
+// part waits, holding nothing, for its buffer, within the bytes of the flights under way
+// or with none under way, and for one of the connections downloads may hold, before
+// reads can join it. The download counts as started once every part is under way or one
+// waits: a read of a part not under way reads its own bytes. No part starts after a
+// delete of the object counted since deletes. It reports false, reading nothing, when the
+// cache is closed before a part is under way, and errPrefetchClosed when it closes after.
 func (d *DiskCache) readRanges(
 	ctx context.Context,
 	filePath string,
@@ -585,17 +619,27 @@ func (d *DiskCache) readRanges(
 	open rangeOpener,
 ) (bool, error) {
 	started := sync.OnceFunc(func() { downloadStarted(ctx) })
-	results := make([]rangeResult, len(ranges))
+	var parts [][2]int64
+	for _, r := range ranges {
+		parts = append(parts, d.rangeParts(r.Offset, r.Offset+r.Size, prefetchBlockMax)...)
+	}
+	files := make(chan struct{}, prefetchFilesAtOnce)
+	results := make([]rangeResult, len(parts))
 	var wg sync.WaitGroup
 	prev := make(chan struct{})
 	close(prev)
-	for i, r := range ranges {
+	for i, part := range parts {
 		admitted := make(chan struct{})
 		wg.Add(1)
 		go func(prev <-chan struct{}) {
 			defer wg.Done()
 			<-prev
-			results[i] = d.readRange(ctx, filePath, deletes, policy, r, open, started, sync.OnceFunc(func() { close(admitted) }))
+			admit := sync.OnceFunc(func() { close(admitted) })
+			if part[1]-part[0] > d.memoryPrefetchMax {
+				results[i] = d.readFileRange(ctx, filePath, deletes, part, open, files, started, admit)
+			} else {
+				results[i] = d.readRange(ctx, filePath, deletes, policy, part, open, started, admit)
+			}
 		}(prev)
 		prev = admitted
 	}
@@ -633,28 +677,29 @@ func (d *DiskCache) readRanges(
 	return true, err
 }
 
-// rangeResult is how readRange ended: whether its range was under way, in a prefetch
+// rangeResult is how a part of readRanges ended: whether it was under way, in a prefetch
 // object it read or joined, and the error of that object or of its wait.
 type rangeResult struct {
 	underWay bool
 	err      error
 }
 
-// readRange reads r of the object at filePath as a MemoryPrefetchObject that caches it,
-// or waits for the prefetch object already reading it. It calls waiting each time r waits
-// for its resources, and admitted once r is under way or will not be read.
+// readRange reads the part [start, end) of the object at filePath as a
+// MemoryPrefetchObject that caches it, or waits for the prefetch object already reading
+// it. It calls waiting each time the part waits for its resources, and admitted once it
+// is under way or will not be read.
 func (d *DiskCache) readRange(
 	ctx context.Context,
 	filePath string,
 	deletes uint64,
 	policy Policy,
-	r PrefetchRange,
+	part [2]int64,
 	open rangeOpener,
 	waiting, admitted func(),
 ) rangeResult {
 	defer admitted()
 	needs := flightNeeds{conn: d.maxDownloadConns > 0, caching: true, deletes: &deletes, waiting: waiting}
-	fl := d.newFlight(filePath, r.Offset, r.Offset+r.Size, policy, open, needs)
+	fl := d.newFlight(filePath, part[0], part[1], policy, open, needs)
 	o, err := fl.admit(ctx)
 	admitted()
 	if o == nil {
@@ -665,6 +710,51 @@ func (d *DiskCache) readRange(
 		fl.run()
 		return rangeResult{underWay: true, err: fl.err()}
 	}
+	return waitJoined(ctx, o)
+}
+
+// readFileRange reads the part [start, end) of the object at filePath as a
+// FilePrefetchObject, once it holds one of files, or waits for the prefetch object
+// already reading it. It calls waiting each time the part waits for files or a
+// connection, and admitted once it is under way or will not be read.
+func (d *DiskCache) readFileRange(
+	ctx context.Context,
+	filePath string,
+	deletes uint64,
+	part [2]int64,
+	open rangeOpener,
+	files chan struct{},
+	waiting, admitted func(),
+) rangeResult {
+	defer admitted()
+	select {
+	case files <- struct{}{}:
+	default:
+		waiting()
+		select {
+		case files <- struct{}{}:
+		case <-ctx.Done():
+			return rangeResult{err: ctx.Err()}
+		}
+	}
+	defer func() { <-files }()
+	p := d.newFileObject(ctx, filePath, part[0], part[1], open, flightNeeds{deletes: &deletes, waiting: waiting})
+	o, err := p.admit()
+	admitted()
+	if o == prefetchObject(p) {
+		_, err := p.run()
+		return rangeResult{underWay: true, err: err}
+	}
+	p.endJoined(nil, err)
+	if o == nil {
+		return rangeResult{err: err}
+	}
+	defer o.release()
+	return waitJoined(ctx, o)
+}
+
+// waitJoined waits for the prefetch object o a part joined to end, or ctx.
+func waitJoined(ctx context.Context, o prefetchObject) rangeResult {
 	if err := waitFlights(ctx, []prefetchObject{o}); err != nil {
 		return rangeResult{underWay: true, err: err}
 	}
@@ -1155,6 +1245,11 @@ func (d *DiskCache) closePrefetches(ctx context.Context) {
 	f.mu.Lock()
 	f.closed = true
 	cancelReads := f.cancelReads
+	// The prefetch objects waiting for room see the cache closed.
+	if f.freed != nil {
+		close(f.freed)
+		f.freed = nil
+	}
 	f.mu.Unlock()
 	if cancelReads != nil {
 		cancelReads()

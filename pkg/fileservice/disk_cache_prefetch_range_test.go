@@ -21,7 +21,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -837,10 +836,11 @@ func TestPrefetchFlightFailsWhenOpenStalls(t *testing.T) {
 	}
 }
 
-// A prefetch of ranges past the in-memory bound downloads at most prefetchFilesAtOnce of
-// them at once, with no goroutine for each range waiting, and downloads them all.
+// A prefetch of ranges past the bytes of a MemoryPrefetchObject downloads at most
+// prefetchFilesAtOnce of them at once, and downloads them all.
 func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
+	fs.diskCache.memoryPrefetchMax = 512
 	var mu sync.Mutex
 	var cur, most int
 	gate := make(chan struct{})
@@ -863,10 +863,10 @@ func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 	for i := range 14 {
 		ranges = append(ranges, PrefetchRange{Offset: int64(i) * (20 << 10), Size: 1 << 10})
 	}
-	goroutines := runtime.NumGoroutine()
 	done := make(chan error, 1)
 	go func() {
-		done <- fs.prefetchFiles(context.Background(), "object", fs.diskCache.deletes.now(), ranges, open)
+		_, err := fs.diskCache.readRanges(context.Background(), "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, open)
+		done <- err
 	}()
 	release := sync.OnceFunc(func() { close(gate) })
 	defer release()
@@ -877,7 +877,6 @@ func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 	}
 	require.Eventually(t, func() bool { return inFlight() == prefetchFilesAtOnce }, 5*time.Second, time.Millisecond)
 	require.Never(t, func() bool { return inFlight() > prefetchFilesAtOnce }, 100*time.Millisecond, time.Millisecond)
-	require.Less(t, runtime.NumGoroutine()-goroutines, len(ranges), "no goroutine waits for each range")
 	release()
 	require.NoError(t, <-done)
 	mu.Lock()
@@ -980,6 +979,7 @@ func TestReadRangesHoldDownloadConnections(t *testing.T) {
 // A prefetch of ranges to files starts no range once its object was deleted.
 func TestPrefetchFilesStopAfterDelete(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
+	fs.diskCache.memoryPrefetchMax = 512
 	g := &gatedOpener{data: data, gate: make(chan struct{})}
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
@@ -989,7 +989,10 @@ func TestPrefetchFilesStopAfterDelete(t *testing.T) {
 	}
 	deletes := fs.diskCache.deletes.now()
 	done := make(chan error, 1)
-	go func() { done <- fs.prefetchFiles(context.Background(), "object", deletes, ranges, g.open) }()
+	go func() {
+		_, err := fs.diskCache.readRanges(context.Background(), "object", deletes, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, g.open)
+		done <- err
+	}()
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(); return cur == prefetchFilesAtOnce }, 5*time.Second, time.Millisecond)
 	fs.diskCache.deletes.deleted(fs.diskCache.pathForFile("object"))
 	release()

@@ -115,14 +115,21 @@ func (p *filePrefetchObject) hold() {
 }
 
 // release stops one a read started when no read uses it and its download is not
-// registered yet.
+// registered yet, and releases the prefetch object it joined once no read uses it.
 func (p *filePrefetchObject) release() {
 	p.mu.Lock()
 	p.holds--
 	stop := p.readStarted && p.holds == 0 && p.download == nil
+	var joined prefetchObject
+	if p.holds == 0 {
+		joined, p.joined = p.joined, nil
+	}
 	p.mu.Unlock()
 	if stop {
 		p.cancelRead()
+	}
+	if joined != nil {
+		joined.release()
 	}
 }
 
@@ -141,6 +148,12 @@ func (p *filePrefetchObject) readAt(ctx context.Context, off int64, dst []byte) 
 	case <-p.ready:
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+	p.mu.Lock()
+	joined := p.joined
+	p.mu.Unlock()
+	if joined != nil {
+		return joined.readAt(ctx, off, dst)
 	}
 	o := p.joinableDownload()
 	if o == nil {

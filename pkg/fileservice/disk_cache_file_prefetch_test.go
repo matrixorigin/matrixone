@@ -44,7 +44,11 @@ func TestFilePrefetchServesReadsWhileItDownloads(t *testing.T) {
 	}()
 	<-storage.stalled
 
-	require.Equal(t, data[1100:1200], readRangeOf(t, fs, ColumnPrefetch, 1100, 100))
+	vec := &IOVector{FilePath: "object", Policy: ColumnPrefetch | SkipFullFilePreloads | SkipMemoryCache,
+		Entries: []IOEntry{{Offset: 1100, Size: 100}}}
+	require.NoError(t, fs.Read(ctx, vec))
+	require.Equal(t, data[1100:1200], vec.Entries[0].Data)
+	vec.Release()
 	require.Equal(t, int64(1), storage.reads.Load(), "the read is served from the download")
 	close(storage.release)
 	require.NoError(t, <-done)

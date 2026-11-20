@@ -1059,7 +1059,8 @@ func (d *DiskCache) writeFileTo(
 	// holds nothing else.
 	var bounds []int64
 	var conns int64
-	if fill == storageFill || fill == rangeFill {
+	// A range download holds the connection its FilePrefetchObject took.
+	if fill == storageFill {
 		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads) {
 			if size, splitAt, err := objectSize(ctx); err == nil {
 				bounds = d.objectSplit.bounds(size, splitAt)
@@ -1075,7 +1076,6 @@ func (d *DiskCache) writeFileTo(
 				metric.FSDiskCacheDownloadSkippedCounter.Inc()
 				return false, nil
 			}
-			downloadWaiting(ctx)
 			if err := d.waitDownloadConns(ctx, 1); err != nil {
 				return false, err
 			}
