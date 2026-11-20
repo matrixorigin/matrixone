@@ -115,6 +115,8 @@ func TestProjectionJSONSharesSevenConsumers(t *testing.T) {
 
 func TestProjectionJSONSparseMasksUseOriginalRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	baseline := proc.Mp().CurrNB()
+	t.Cleanup(func() { require.Equal(t, baseline, proc.Mp().CurrNB()) })
 	input := batch.NewWithSize(4)
 	defer input.Clean(proc.Mp())
 	input.SetRowCount(5)
@@ -174,4 +176,13 @@ func TestProjectionJSONSparseMasksUseOriginalRows(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	require.Nil(t, p.jsonFrame.input)
 	require.Empty(t, p.jsonFrame.pages)
+
+	p.ResetProjection(proc)
+	vector.MustFixedColNoTypeCheck[bool](input.Vecs[1])[1] = false
+	*count = 0
+	result, err = p.EvalProjection(input, proc)
+	require.NoError(t, err)
+	require.Equal(t, 8, *count, "the failed invocation's partially populated cache must be discarded")
+	require.True(t, result.Vecs[0].IsNull(1))
+	require.Equal(t, "40", types.DecodeJson(result.Vecs[0].GetBytesAt(0)).String())
 }
