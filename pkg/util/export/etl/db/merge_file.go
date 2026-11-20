@@ -92,11 +92,17 @@ func writeMergeFile(ctx context.Context, conn *sql.Conn, tbl *table.Table, row [
 	overhead := len(mergeLoadPrefix) + len(suffix)
 	target = min(limit, target)
 	var tx *sql.Tx
+	var sqlFailed bool
 	defer func() {
 		if tx != nil {
 			if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
 				result = errors.Join(result, err)
+				sqlFailed = true
 			}
+		}
+		// A failed LOAD and its failed rollback are one failed file import.
+		if sqlFailed && ctx.Err() == nil {
+			_ = DBConnErrCount.Count()
 		}
 	}()
 	buf := append([]byte(nil), mergeLoadPrefix...)
@@ -117,7 +123,7 @@ func writeMergeFile(ctx context.Context, conn *sql.Conn, tbl *table.Table, row [
 			_, err = conn.ExecContext(queryCtx, query)
 		}
 		if err != nil {
-			_ = DBConnErrCount.Count()
+			sqlFailed = true
 			return moerr.AttachCause(queryCtx, err)
 		}
 		if cap(buf) > target {
@@ -145,6 +151,7 @@ func writeMergeFile(ctx context.Context, conn *sql.Conn, tbl *table.Table, row [
 				var err error
 				tx, err = conn.BeginTx(ctx, nil)
 				if err != nil {
+					sqlFailed = true
 					return err
 				}
 			}
@@ -175,7 +182,10 @@ func writeMergeFile(ctx context.Context, conn *sql.Conn, tbl *table.Table, row [
 	if tx != nil {
 		// Any commit error retains the source. In particular, a lost reply
 		// does not establish whether the server committed the file.
-		return tx.Commit()
+		// The writer pool's MySQL read/write timeouts bound transaction I/O.
+		result = tx.Commit()
+		sqlFailed = result != nil
+		return result
 	}
 	return nil
 }

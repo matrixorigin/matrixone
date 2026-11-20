@@ -16,6 +16,7 @@ package db_holder
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"errors"
 	"strings"
@@ -53,9 +54,27 @@ func TestMergeRowEncoding(t *testing.T) {
 }
 
 func TestMergeFileTransaction(t *testing.T) {
-	for _, mode := range []string{"single", "commit", "exec failure", "source failure", "commit reply lost", "oversized"} {
+	for _, mode := range []string{
+		"single", "canceled exec", "commit", "begin failure", "exec failure", "exec and rollback failure",
+		"source failure", "source and rollback failure", "commit reply lost", "oversized",
+	} {
 		t.Run(mode, func(t *testing.T) {
-			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			oldBackOff := DBConnErrCount
+			DBConnErrCount = NewReConnectionBackOff(time.Hour, 1)
+			t.Cleanup(func() { DBConnErrCount = oldBackOff })
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			matcher := sqlmock.QueryMatcherEqual
+			if mode == "canceled exec" {
+				matcher = sqlmock.QueryMatcherFunc(func(want, got string) error {
+					if err := sqlmock.QueryMatcherEqual.Match(want, got); err != nil {
+						return err
+					}
+					cancel()
+					return nil
+				})
+			}
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
 			require.NoError(t, err)
 			defer db.Close()
 			conn, err := db.Conn(t.Context())
@@ -69,21 +88,33 @@ func TestMergeFileTransaction(t *testing.T) {
 			first := []string{"small"}
 			rows := [][]string{{"a'中"}, {"third"}}
 			failure := errors.New("injected failure")
+			rollbackFailure := errors.New("injected rollback failure")
+			sourceFailed := mode == "source failure" || mode == "source and rollback failure"
+			rollbackFailed := mode == "source and rollback failure" || mode == "exec and rollback failure"
+			execFailed := mode == "exec failure" || mode == "exec and rollback failure"
 			limit, target := suffixSize+20, suffixSize+10
 			switch mode {
 			case "single":
 				rows = rows[:0]
 				mock.ExpectExec(sqlText("small\n")).WillReturnResult(sqlmock.NewResult(0, 1))
+			case "canceled exec":
+				rows = rows[:0]
+				mock.ExpectExec(sqlText("small\n")).WillDelayFor(time.Hour).WillReturnResult(sqlmock.NewResult(0, 1))
 			case "oversized":
 				first[0] = strings.Repeat("'", 11)
+			case "begin failure":
+				mock.ExpectBegin().WillReturnError(failure)
 			default:
 				mock.ExpectBegin()
 				mock.ExpectExec(sqlText("small\n")).WillReturnResult(sqlmock.NewResult(0, 1))
-				if mode == "source failure" {
-					mock.ExpectRollback()
-				} else if mode == "exec failure" {
-					mock.ExpectExec(sqlText("a''中\n")).WillReturnError(failure)
-					mock.ExpectRollback()
+				if sourceFailed || execFailed {
+					if execFailed {
+						mock.ExpectExec(sqlText("a''中\n")).WillReturnError(failure)
+					}
+					rollback := mock.ExpectRollback()
+					if rollbackFailed {
+						rollback.WillReturnError(rollbackFailure)
+					}
 				} else {
 					mock.ExpectExec(sqlText("a''中\n")).WillReturnResult(sqlmock.NewResult(0, 1))
 					mock.ExpectExec(sqlText("third\n")).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -95,7 +126,7 @@ func TestMergeFileTransaction(t *testing.T) {
 			}
 			cursor := 0
 			read := func() ([]string, error) {
-				if cursor == 1 && mode == "source failure" {
+				if cursor == 1 && sourceFailed {
 					return nil, failure
 				}
 				if cursor == len(rows) {
@@ -105,16 +136,25 @@ func TestMergeFileTransaction(t *testing.T) {
 				cursor++
 				return row, nil
 			}
-			err = writeMergeFile(t.Context(), conn, tbl, first, read, limit, target, time.Second)
+			err = writeMergeFile(ctx, conn, tbl, first, read, limit, target, time.Second)
 			switch mode {
 			case "single", "commit":
 				require.NoError(t, err)
+			case "canceled exec":
+				require.ErrorIs(t, err, sqlmock.ErrCancelled)
 			case "oversized":
 				require.ErrorContains(t, err, "exceeding")
 				require.Zero(t, cursor)
 			default:
 				require.ErrorIs(t, err, failure)
 			}
+			if rollbackFailed {
+				require.ErrorIs(t, err, rollbackFailure)
+			}
+			wantFailed := mode == "begin failure" || mode == "commit reply lost" || execFailed || rollbackFailed
+			require.True(t, DBConnErrCount.Check(), "one failed file must not exceed the threshold")
+			DBConnErrCount.Count()
+			require.Equal(t, !wantFailed, DBConnErrCount.Check())
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
