@@ -6817,6 +6817,22 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	if resultLen, notCacheable, err = builder.bindProjection(ctx, projectionBinder, selectList, notCacheable); err != nil {
 		return
 	}
+	groupByCanReduce := expandedSelectClause != nil && (expandedSelectClause.GroupBy == nil ||
+		(!expandedSelectClause.GroupBy.Apart && !expandedSelectClause.GroupBy.GroupingSets &&
+			!expandedSelectClause.GroupBy.Rollup && !expandedSelectClause.GroupBy.Cube))
+	singleValueSelectShape := expandedSelectClause != nil && resultLen == 1 && len(ctx.bindings) == 0 &&
+		bitCountWhereIsEffectivelyTrue(builder, ctx) && groupByCanReduce && !ctx.hasHaving &&
+		len(ctx.aggregates) == 0 && len(ctx.windows) == 0 && len(ctx.times) == 0 &&
+		!ctx.sampleFunc.hasSampleFunc
+	ctx.reducibleTablelessScalar = singleValueSelectShape
+	if expandedSelectClause != nil {
+		ctx.canReduceInToSubqueryFreeComparison = singleValueSelectShape &&
+			astLimit == nil && astRankOption == nil && len(expandedSelectClause.Windows) == 0 &&
+			!ctx.singleProjectionRetainsSubquery
+	}
+	if astLimit != nil || astRankOption != nil {
+		ctx.canReduceInToSubqueryFreeComparison = false
+	}
 	var viewRawProjects []*plan.Expr
 	if ctx.restoreViewMySQLSpecialTypes && astOrderBy != nil && !ctx.isDistinct &&
 		len(ctx.groups) == 0 && len(ctx.aggregates) == 0 {
@@ -10219,8 +10235,14 @@ func (builder *QueryBuilder) bindProjection(
 	}
 
 	resultLen = len(ctx.projects)
+	ctx.hasDependentProjectionSubquery = false
+	ctx.singleProjectionRetainsSubquery = resultLen == 1 &&
+		bitCountProjectionRetainsSubqueryAfterReduction(builder, bitCountProjectionSource(ctx, ctx.projects[0]), true)
 	ctx.projectSemanticKeys = ctx.projectSemanticKeys[:0]
 	for i, proj := range ctx.projects {
+		if !ctx.hasDependentProjectionSubquery && bitCountProjectionHasDependentSubquery(builder, proj) {
+			ctx.hasDependentProjectionSubquery = true
+		}
 		if err = rejectStandaloneIntervalExpr(builder.GetContext(), proj, "SELECT list"); err != nil {
 			return
 		}
@@ -11680,6 +11702,11 @@ func (builder *QueryBuilder) bindValues(
 				Expr: planExpr,
 			})
 		}
+	}
+	if rowCount == 1 && colCnt == 1 {
+		ctx.singleProjectionRetainsSubquery = bitCountProjectionRetainsSubqueryAfterReduction(
+			builder, rowSetData.Cols[0].Data[0].Expr, true)
+		ctx.canReduceInToSubqueryFreeComparison = !ctx.singleProjectionRetainsSubquery
 	}
 	nodeUUID, _ := uuid.NewV7()
 	nodeID = builder.appendNode(&plan.Node{

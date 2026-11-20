@@ -312,6 +312,90 @@ SELECT x, BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_co
 # Merged projection forwards the CAST; LIMIT makes the projected value a field.
 SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1) s;
 SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1 LIMIT 1) s;
+# A row-dependent SELECT-list subquery materializes the derived table, so the
+# outer BIT_COUNT consumes a floating field. Uncorrelated subqueries and WHERE
+# subqueries do not make this projection boundary materialized.
+SELECT 'correlated projection', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x,
+           (SELECT MAX(i.d) FROM t_bit_count_float i WHERE i.id = o.id) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+SELECT 'row-dependent projection', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x,
+           o.d + (SELECT MAX(i.d) FROM t_bit_count_float i) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+SELECT 'volatile projection', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x,
+           RAND() + (SELECT MAX(i.d) FROM t_bit_count_float i) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+SELECT 'uncorrelated projection', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x,
+           (SELECT MAX(i.d) FROM t_bit_count_float i) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+SELECT 'tableless scalar projection', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x, (SELECT RAND()) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+SELECT 'WHERE-only subquery', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x
+    FROM t_bit_count_float o
+    WHERE o.id = 1 AND EXISTS (SELECT 1 FROM t_bit_count_float i WHERE i.id = o.id)
+) s;
+# A reducible scalar field can round at its own use without forcing its
+# sibling CAST projection across a materialization boundary.
+SELECT 'direct scalar field', BIT_COUNT((SELECT o.d)) AS bits
+FROM t_bit_count_float o WHERE o.id = 1;
+SELECT 'direct scalar CAST', BIT_COUNT((SELECT CAST(o.d AS DOUBLE))) AS bits
+FROM t_bit_count_float o WHERE o.id = 1;
+SELECT 'scalar and sibling', BIT_COUNT(x) AS sibling_bits, BIT_COUNT(z) AS scalar_bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x, (SELECT o.d) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+SELECT 'IN left operand', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x,
+           o.d IN (SELECT i.d FROM t_bit_count_float i) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+# MySQL reduces a direct scalar IN to a comparison when the RHS is a single
+# source row with no effective filter. Physical or multirow RHS queries keep
+# their subquery boundary and therefore materialize the derived projection.
+SELECT 'tableless IN', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+SELECT 'IN true filter', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE 1 = 1) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+SELECT 'IN constant-true filter', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE 2 > 1) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+SELECT 'IN empty filter', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE FALSE) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+SELECT 'IN one-row VALUES', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (VALUES ROW(1)) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+SELECT 'IN multirow VALUES', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (VALUES ROW(1), ROW(2)) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+SELECT 'IN nested physical scalar', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x,
+           o.id IN (SELECT (SELECT (SELECT MAX(i.id) FROM t_bit_count_float i))) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
+SELECT 'IN grouped wrapped scalar', BIT_COUNT(x) AS bits FROM (
+    SELECT CAST(o.d AS DOUBLE) AS x,
+           o.id IN (SELECT ABS((SELECT 1)) GROUP BY 1) AS z
+    FROM t_bit_count_float o WHERE o.id = 1
+) s;
 SELECT BIT_COUNT((SELECT CAST(3.9 AS DOUBLE))) AS scalar_cast_bits;
 SELECT (SELECT BIT_COUNT(s.x)) AS correlated_cast_bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1) s;
 DROP TABLE IF EXISTS t_bit_count_float_saved;
