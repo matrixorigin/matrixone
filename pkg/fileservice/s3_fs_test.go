@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1945,6 +1946,119 @@ func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotOpenReaderWhenCacheExists(
 	assert.Nil(t, err)
 	assert.False(t, done)
 	assert.Zero(t, getReaderCalls)
+}
+
+// Count bytes consumed, not just the ranges passed to ObjectStorage.Read.
+// The fixture drives prefetch and foreground reads serially.
+type cacheFillReadMeter struct {
+	ObjectStorage
+	bytes         atomic.Int64
+	opens, closes int
+	beforeOpen    func() error
+}
+
+func (m *cacheFillReadMeter) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
+	if m.beforeOpen != nil {
+		if err := m.beforeOpen(); err != nil {
+			return nil, err
+		}
+	}
+	r, err := m.ObjectStorage.Read(ctx, key, min, max)
+	if err != nil {
+		return nil, err
+	}
+	m.opens++
+	return &readCloser{r: &countingReader{R: r, C: &m.bytes}, closeFunc: func() error {
+		m.closes++
+		return r.Close()
+	}}, nil
+}
+
+func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
+	const far = 9 << 20
+	data := make([]byte, far+4096)
+	for i := range data {
+		data[i] = byte(i*31 + i/251)
+	}
+	injected := errors.New("second range read failed")
+	for _, tc := range []struct {
+		name                    string
+		second, size, wantBytes int64
+		wantOpens               int
+		wantErr                 error
+	}{
+		{"sparse", far, 17, 30, 2, nil},
+		{"dense", 4112, 17, 33, 1, nil},
+		{"to-end", far, -1, 4096, 1, nil},
+		{"second-range-error", far, 17, 13, 1, injected},
+		{"cancel-between-ranges", far, 17, 13, 1, context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{
+				DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](32 << 20), MemoryCapacity: ptrTo[toml.ByteSize](0),
+			}, nil, false, true)
+			require.NoError(t, err)
+			defer fs.Close(t.Context())
+			const path = "object"
+			require.NoError(t, fs.Write(ctx, IOVector{FilePath: path, Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipDiskCache | SkipMemoryCache}))
+			m := &cacheFillReadMeter{ObjectStorage: fs.storage}
+			fs.storage = m
+			v := &IOVector{FilePath: path, Entries: []IOEntry{{Offset: 4096, Size: 13}, {Offset: tc.second, Size: tc.size}}}
+			defer v.Release()
+			if tc.size < 0 {
+				v.Entries = v.Entries[1:]
+			}
+			// Preserve a real partial cache hit in the sparse fallback.
+			if tc.name == "sparse" {
+				hit := IOEntry{Offset: 100, Size: 3, Data: data[100:103]}
+				require.NoError(t, fs.diskCache.Update(ctx, &IOVector{FilePath: path, Entries: []IOEntry{hit}}, false))
+				v.Entries = append([]IOEntry{{Offset: hit.Offset, Size: hit.Size}}, v.Entries...)
+			}
+			// Disk lookup precedes remote lookup. Publish synchronously at this
+			// boundary: the foreground request missed the file but its SetFile
+			// will find it. No sleeps or production scheduling hooks are needed.
+			fs.remoteCache = NewRemoteCache(nil, func() client.KeyRouter[fscache.CacheKey] {
+				require.NoError(t, fs.PrefetchFile(ctx, path))
+				require.Equal(t, int64(len(data)), m.bytes.Load())
+				require.Equal(t, 1, m.opens)
+				require.Equal(t, 1, m.closes)
+				if tc.wantErr != nil {
+					m.beforeOpen = func() error {
+						if m.opens == 2 {
+							if tc.wantErr == context.Canceled {
+								cancel()
+								return ctx.Err()
+							}
+							return injected
+						}
+						return nil
+					}
+				}
+				return nil
+			})
+			err = fs.Read(ctx, v)
+			if tc.wantErr == nil {
+				require.NoError(t, err)
+				for _, e := range v.Entries {
+					require.Equal(t, data[e.Offset:e.Offset+e.Size], e.Data)
+				}
+			} else {
+				require.ErrorIs(t, err, tc.wantErr)
+				require.Equal(t, data[4096:4109], v.Entries[0].Data)
+				require.Empty(t, v.Entries[1].Data)
+			}
+			require.Equal(t, tc.wantBytes, m.bytes.Load()-int64(len(data)), "foreground bytes consumed")
+			require.Equal(t, tc.wantOpens, m.opens-1)
+			require.Equal(t, m.opens, m.closes)
+			warm := &IOVector{FilePath: path, Entries: []IOEntry{{Offset: far, Size: 17}}}
+			defer warm.Release()
+			require.NoError(t, fs.Read(t.Context(), warm))
+			require.Equal(t, data[far:far+17], warm.Entries[0].Data)
+			require.Equal(t, tc.wantOpens, m.opens-1, "a new read should hit the published file")
+		})
+	}
 }
 
 func TestS3FSReadFullObjectToDiskCacheStreamingReturnsReaderError(t *testing.T) {
