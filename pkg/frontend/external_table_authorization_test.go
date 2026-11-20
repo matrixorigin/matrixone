@@ -62,6 +62,7 @@ func TestExtractPrivilegeTipsFromPlanCSVExternalTable(t *testing.T) {
 
 func TestExtractPrivilegeTipsFromPlanAdditionalExternalTableSelects(t *testing.T) {
 	for _, externType := range []plan.ExternType{
+		plan.ExternType_ICEBERG_TB,
 		plan.ExternType_DATASTREAM_TB,
 		plan.ExternType_FOREIGN_TB,
 		plan.ExternType_KAFKA_TB,
@@ -107,7 +108,7 @@ func TestAuthenticateAdditionalExternalTableSelectPrivilege(t *testing.T) {
 	}
 }
 
-func TestExtractPrivilegeTipsFromPlanSkipsNonCSVExternalScans(t *testing.T) {
+func TestExtractPrivilegeTipsFromPlanSkipsNonSelectExternalScans(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		stmtType   plan.Query_StatementType
@@ -116,7 +117,6 @@ func TestExtractPrivilegeTipsFromPlanSkipsNonCSVExternalScans(t *testing.T) {
 	}{
 		{name: "load", stmtType: plan.Query_INSERT, externType: plan.ExternType_LOAD, tableType: catalog.SystemExternalRel},
 		{name: "result scan", stmtType: plan.Query_SELECT, externType: plan.ExternType_RESULT_SCAN, tableType: "query_result"},
-		{name: "iceberg write scan", stmtType: plan.Query_MERGE, externType: plan.ExternType_ICEBERG_TB, tableType: catalog.SystemExternalRel},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
@@ -479,6 +479,117 @@ func TestExtractPrivilegeTipsFromPlanExternalInsertTarget(t *testing.T) {
 			require.Len(t, arr, 1)
 			assert.Equal(t, tc.priv, arr[0].typ)
 			assert.Equal(t, "__mo_index_target", arr[0].tableName)
+		})
+	}
+}
+
+func TestExtractPrivilegeTipsFromPlanIcebergDMLTargetScan(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		stmtType        plan.Query_StatementType
+		sinkOption      string
+		privilege       PrivilegeType
+		wantNoPrivilege bool
+	}{
+		{name: "update", stmtType: plan.Query_UPDATE, sinkOption: icebergapi.DMLUpdatePlanExtraOptions, privilege: PrivilegeTypeUpdate},
+		{name: "delete", stmtType: plan.Query_DELETE, sinkOption: icebergapi.DMLDeletePlanExtraOptions, privilege: PrivilegeTypeDelete},
+		{name: "merge", stmtType: plan.Query_MERGE, sinkOption: icebergapi.DMLMergePlanExtraOptions, wantNoPrivilege: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := makeExternalDMLTargetPrivilegePlan(tc.stmtType, "orders", catalog.SystemExternalRel, tc.sinkOption)
+			q := p.GetQuery()
+			q.Nodes = append([]*plan.Node{{
+				NodeType:     plan.Node_EXTERNAL_SCAN,
+				ObjRef:       &plan.ObjectRef{SchemaName: "external_db", ObjName: "orders"},
+				TableDef:     &plan.TableDef{DbName: "external_db", Name: "orders", TableType: catalog.SystemExternalRel},
+				ExternScan:   &plan.ExternScan{Type: int32(plan.ExternType_ICEBERG_TB)},
+				ExtraOptions: icebergapi.DMLTargetScanPlanExtraOptions,
+			}}, q.Nodes...)
+
+			arr, err := extractPrivilegeTipsFromPlan(p)
+			require.NoError(t, err)
+			if tc.wantNoPrivilege {
+				require.Empty(t, arr)
+				return
+			}
+			require.Len(t, arr, 1)
+			assert.Equal(t, tc.privilege, arr[0].typ)
+			assert.Equal(t, "orders", arr[0].tableName)
+		})
+	}
+}
+
+func TestExtractPrivilegeTipsFromPlanIcebergDMLSourceAndTarget(t *testing.T) {
+	p := makeExternalDMLTargetPrivilegePlan(plan.Query_UPDATE, "orders", catalog.SystemExternalRel, icebergapi.DMLUpdatePlanExtraOptions)
+	q := p.GetQuery()
+	q.Nodes = append([]*plan.Node{{
+		NodeType:     plan.Node_EXTERNAL_SCAN,
+		ObjRef:       &plan.ObjectRef{SchemaName: "external_db", ObjName: "orders"},
+		TableDef:     &plan.TableDef{DbName: "external_db", Name: "orders", TableType: catalog.SystemExternalRel},
+		ExternScan:   &plan.ExternScan{Type: int32(plan.ExternType_ICEBERG_TB)},
+		ExtraOptions: icebergapi.DMLTargetScanPlanExtraOptions,
+	}, {
+		NodeType:   plan.Node_EXTERNAL_SCAN,
+		ObjRef:     &plan.ObjectRef{SchemaName: "external_db", ObjName: "source_orders"},
+		TableDef:   &plan.TableDef{DbName: "external_db", Name: "source_orders", TableType: catalog.SystemExternalRel},
+		ExternScan: &plan.ExternScan{Type: int32(plan.ExternType_ICEBERG_TB)},
+	}}, q.Nodes...)
+
+	arr, err := extractPrivilegeTipsFromPlan(p)
+	require.NoError(t, err)
+	require.Len(t, arr, 2)
+	privileges := make(map[string]PrivilegeType, len(arr))
+	for _, tip := range arr {
+		privileges[tip.tableName] = tip.typ
+	}
+	assert.Equal(t, PrivilegeTypeUpdate, privileges["orders"])
+	assert.Equal(t, PrivilegeTypeSelect, privileges["source_orders"])
+}
+
+func TestExtractPrivilegeTipsFromPlanIcebergDMLTargetMarkerMustMatchSink(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		stmtType   plan.Query_StatementType
+		withSink   bool
+		sinkTarget string
+	}{
+		{name: "read statement", stmtType: plan.Query_SELECT},
+		{name: "missing sink", stmtType: plan.Query_UPDATE},
+		{name: "different sink target", stmtType: plan.Query_UPDATE, withSink: true, sinkTarget: "other_orders"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query := &plan2.Query{
+				StmtType: tc.stmtType,
+				Nodes: []*plan.Node{{
+					NodeType:     plan.Node_EXTERNAL_SCAN,
+					ObjRef:       &plan.ObjectRef{SchemaName: "external_db", ObjName: "orders"},
+					TableDef:     &plan.TableDef{DbName: "external_db", Name: "orders", TableType: catalog.SystemExternalRel},
+					ExternScan:   &plan.ExternScan{Type: int32(plan.ExternType_ICEBERG_TB)},
+					ExtraOptions: icebergapi.DMLTargetScanPlanExtraOptions,
+				}},
+			}
+			if tc.withSink {
+				query.Nodes = append(query.Nodes, &plan.Node{
+					NodeType:     plan.Node_INSERT,
+					ObjRef:       &plan.ObjectRef{SchemaName: "external_db", ObjName: tc.sinkTarget},
+					TableDef:     &plan.TableDef{DbName: "external_db", Name: tc.sinkTarget, TableType: catalog.SystemExternalRel},
+					ExtraOptions: icebergapi.DMLUpdatePlanExtraOptions,
+					InsertCtx: &plan.InsertCtx{
+						Ref: &plan.ObjectRef{SchemaName: "external_db", ObjName: tc.sinkTarget},
+					},
+				})
+			}
+			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: query}}
+
+			tips, err := extractPrivilegeTipsFromPlan(p)
+			require.NoError(t, err)
+			foundSelect := false
+			for _, tip := range tips {
+				if tip.tableName == "orders" && tip.typ == PrivilegeTypeSelect {
+					foundSelect = true
+				}
+			}
+			assert.True(t, foundSelect, "unmatched scan marker must retain source SELECT")
 		})
 	}
 }

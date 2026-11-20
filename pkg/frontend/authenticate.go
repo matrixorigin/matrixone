@@ -7313,39 +7313,6 @@ func getDbNameForPrivilege(objRef *plan2.ObjectRef) string {
 	return objRef.GetSchemaName()
 }
 
-func isMongoDBExternalTableScan(node *plan.Node) bool {
-	return node != nil &&
-		node.GetNodeType() == plan.Node_EXTERNAL_SCAN &&
-		node.GetExternScan() != nil &&
-		node.GetExternScan().GetType() == int32(plan.ExternType_MONGODB_TB)
-}
-
-func isCSVExternalTableScan(node *plan.Node) bool {
-	return node != nil &&
-		node.GetNodeType() == plan.Node_EXTERNAL_SCAN &&
-		node.GetTableDef().GetTableType() == catalog.SystemExternalRel &&
-		node.GetExternScan().GetType() == int32(plan.ExternType_EXTERNAL_TB)
-}
-
-// isSelectRequiredExternalTableScan covers every readable external relation
-// admitted by catalog.RequiresPrivilegedRelationAccess. Keep the planner's
-// validation-only permission carriers in sync with this list.
-func isSelectRequiredExternalTableScan(node *plan.Node) bool {
-	if isCSVExternalTableScan(node) || isMongoDBExternalTableScan(node) {
-		return true
-	}
-	if node == nil || node.GetNodeType() != plan.Node_EXTERNAL_SCAN ||
-		node.GetTableDef().GetTableType() != catalog.SystemExternalRel {
-		return false
-	}
-	switch plan.ExternType(node.GetExternScan().GetType()) {
-	case plan.ExternType_DATASTREAM_TB, plan.ExternType_FOREIGN_TB, plan.ExternType_KAFKA_TB:
-		return true
-	default:
-		return false
-	}
-}
-
 func (pot privilegeTips) String() string {
 	return fmt.Sprintf("%s %s %s", pot.typ, pot.databaseName, pot.tableName)
 }
@@ -7433,6 +7400,64 @@ func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
 	return scans
 }
 
+func icebergDMLTargetScans(q *plan.Query) map[int32]struct{} {
+	if q == nil {
+		return nil
+	}
+	var sinkOption string
+	switch q.StmtType {
+	case plan.Query_UPDATE:
+		sinkOption = icebergapi.DMLUpdatePlanExtraOptions
+	case plan.Query_DELETE:
+		sinkOption = icebergapi.DMLDeletePlanExtraOptions
+	case plan.Query_MERGE:
+		sinkOption = icebergapi.DMLMergePlanExtraOptions
+	default:
+		return nil
+	}
+
+	var targetRef *plan.ObjectRef
+	for _, node := range q.Nodes {
+		if node == nil || node.NodeType != plan.Node_INSERT || node.GetExtraOptions() != sinkOption {
+			continue
+		}
+		if node.GetInsertCtx() != nil && node.GetInsertCtx().GetRef() != nil {
+			targetRef = node.GetInsertCtx().GetRef()
+		} else {
+			targetRef = node.GetObjRef()
+		}
+		if targetRef != nil {
+			break
+		}
+	}
+	if targetRef == nil {
+		return nil
+	}
+
+	scans := make(map[int32]struct{}, 1)
+	for nodeID, node := range q.Nodes {
+		if node == nil || node.GetNodeType() != plan.Node_EXTERNAL_SCAN ||
+			node.GetExternScan().GetType() != int32(plan.ExternType_ICEBERG_TB) ||
+			node.GetExtraOptions() != icebergapi.DMLTargetScanPlanExtraOptions {
+			continue
+		}
+		ref := node.GetObjRef()
+		if ref == nil {
+			continue
+		}
+		if targetRef.GetObj() != 0 && ref.GetObj() != 0 {
+			if targetRef.GetObj() != ref.GetObj() {
+				continue
+			}
+		} else if !strings.EqualFold(targetRef.GetSchemaName(), ref.GetSchemaName()) ||
+			!strings.EqualFold(targetRef.GetObjName(), ref.GetObjName()) {
+			continue
+		}
+		scans[int32(nodeID)] = struct{}{}
+	}
+	return scans
+}
+
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
 func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 	tips, _, err := extractPrivilegeTipsAndInsertTarget(p)
@@ -7450,6 +7475,7 @@ func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *pl
 	if p.GetQuery() != nil { // select,insert select, update, delete
 		q := p.GetQuery()
 		insertDedupScans := insertDedupTargetScans(q)
+		icebergDMLScans := icebergDMLTargetScans(q)
 
 		// lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
@@ -7486,7 +7512,10 @@ func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *pl
 		}
 
 		for nodeID, node := range q.Nodes {
-			externalSelectScan := isSelectRequiredExternalTableScan(node)
+			if _, ok := icebergDMLScans[int32(nodeID)]; ok {
+				continue
+			}
+			externalSelectScan := plan2.IsExternalScanRequiringSelectPrivilege(node)
 			if isPrivilegeBearingTableScan(node) || externalSelectScan {
 				if _, ok := insertDedupScans[int32(nodeID)]; ok {
 					continue

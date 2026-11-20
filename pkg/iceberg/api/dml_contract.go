@@ -31,6 +31,10 @@ const (
 	DMLUpdatePlanExtraOptions    = "iceberg_dml_update"
 	DMLMergePlanExtraOptions     = "iceberg_dml_merge"
 	DMLOverwritePlanExtraOptions = "iceberg_dml_overwrite"
+	// DMLTargetScanPlanExtraOptions marks the Iceberg scan that supplies rows
+	// to a row-level DML sink. It is plan authorization metadata, not an
+	// execution mode.
+	DMLTargetScanPlanExtraOptions = "iceberg_dml_target_scan"
 
 	DMLPlanExtraOptionsEnvelopePrefix = "MO_ICEBERG_DML:"
 

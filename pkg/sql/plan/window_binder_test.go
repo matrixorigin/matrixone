@@ -1080,6 +1080,7 @@ func TestWindowValidationPrivilegeCarrierExternalSelectScans(t *testing.T) {
 		planpb.ExternType_MONGODB_TB,
 		planpb.ExternType_DATASTREAM_TB,
 		planpb.ExternType_FOREIGN_TB,
+		planpb.ExternType_ICEBERG_TB,
 		planpb.ExternType_KAFKA_TB,
 	} {
 		t.Run(externType.String(), func(t *testing.T) {
@@ -1102,7 +1103,6 @@ func TestWindowValidationPrivilegeCarrierExternalSelectScans(t *testing.T) {
 	for _, externType := range []planpb.ExternType{
 		planpb.ExternType_LOAD,
 		planpb.ExternType_RESULT_SCAN,
-		planpb.ExternType_ICEBERG_TB,
 	} {
 		t.Run("exclude "+externType.String(), func(t *testing.T) {
 			carrier := windowValidationPrivilegeCarrier(&planpb.Node{

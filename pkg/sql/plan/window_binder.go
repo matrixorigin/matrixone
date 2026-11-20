@@ -20,7 +20,6 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -794,22 +793,10 @@ func windowValidationPrivilegeCarrier(node *plan.Node) *plan.Node {
 	case plan.Node_TABLE_SCAN:
 		return carrier
 	case plan.Node_EXTERNAL_SCAN:
-		if node.ExternScan == nil {
+		if !IsExternalScanRequiringSelectPrivilege(node) {
 			return nil
 		}
-		// Keep this list in sync with isSelectRequiredExternalTableScan.
-		switch plan.ExternType(node.ExternScan.Type) {
-		case plan.ExternType_MONGODB_TB:
-			// The frontend recognizes MongoDB scans from this discriminator alone.
-		case plan.ExternType_EXTERNAL_TB, plan.ExternType_DATASTREAM_TB,
-			plan.ExternType_FOREIGN_TB, plan.ExternType_KAFKA_TB:
-			if node.GetTableDef().GetTableType() != catalog.SystemExternalRel {
-				return nil
-			}
-		default:
-			return nil
-		}
-		carrier.ExternScan = &plan.ExternScan{Type: node.ExternScan.Type}
+		carrier.ExternScan = &plan.ExternScan{Type: node.GetExternScan().GetType()}
 		return carrier
 	case plan.Node_FUNCTION_SCAN:
 		if node.TableDef == nil || node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name != "table_changes" {

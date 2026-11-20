@@ -6379,24 +6379,6 @@ func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
 	}
 }
 
-func TestMongoDBExternalTableScanDetectionExcludesOtherExternalScans(t *testing.T) {
-	for _, externType := range []plan.ExternType{
-		plan.ExternType_LOAD,
-		plan.ExternType_EXTERNAL_TB,
-		plan.ExternType_ICEBERG_TB,
-		plan.ExternType_RESULT_SCAN,
-	} {
-		node := &plan.Node{
-			NodeType:   plan.Node_EXTERNAL_SCAN,
-			ExternScan: &plan.ExternScan{Type: int32(externType)},
-		}
-		require.False(t, isMongoDBExternalTableScan(node), externType.String())
-	}
-	require.False(t, isMongoDBExternalTableScan(nil))
-	require.False(t, isMongoDBExternalTableScan(&plan.Node{NodeType: plan.Node_EXTERNAL_SCAN}))
-	require.False(t, isMongoDBExternalTableScan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}))
-}
-
 func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 	const (
 		dbName    = "mongodb_permission"
