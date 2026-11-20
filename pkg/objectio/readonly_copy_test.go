@@ -217,7 +217,7 @@ func TestRetainedCachedVectorPinRefusal(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 	require.NoError(t, err)
 	for _, transient := range []bool{false, true} {
 		func() {
@@ -291,4 +291,44 @@ func TestCachedColumnScopePinsOnlyForCallback(t *testing.T) {
 	require.Equal(t, int32(1), probe.released.Load())
 	require.Equal(t, payload, output.GetBytesAt(0), "owned output survives the end of its cache pin")
 	require.False(t, output.HasBorrowedBacking())
+}
+
+func TestCachedColumnScopeFixedValidationAndLifetime(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := vector.NewVec(types.T_int64.ToType())
+	output := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	t.Cleanup(func() { source.Free(mp); output.Free(mp); require.Zero(t, mp.CurrNB()) })
+	require.NoError(t, vector.AppendFixedList(source, []int64{7, 8, 9}, []bool{false, true, false}, mp))
+	encoded := marshalLegacyTestColumn(t, source)
+	original := bytes.Clone(encoded)
+	data := fileservice.NewBytes(encoded)
+	t.Cleanup(data.Release)
+	entries := []fileservice.IOEntry{{CachedData: data}}
+	scope := &CachedColumnScope{}
+	require.NoError(t, scope.With(entries, []*vector.Vector{output}, func(inputs []*vector.Vector, marked []bool) error {
+		require.False(t, marked[0], "ordinary reader policy is unchanged")
+		require.Same(t, output, inputs[0])
+		return nil
+	}))
+	failure := moerr.NewInvalidInputNoCtx("fixed scoped consumer failure")
+	err := scope.WithFixed(entries, []*vector.Vector{output}, func(inputs []*vector.Vector, marked []bool) error {
+		require.True(t, marked[0])
+		require.Equal(t, vector.LegacyAlias, inputs[0].DataBackingKind())
+		require.True(t, inputs[0].IsNull(1))
+		require.NoError(t, output.Union(inputs[0], []int64{0, 2}, mp))
+		return failure
+	})
+	require.ErrorIs(t, err, failure)
+	require.Nil(t, scope.inputs[0])
+	require.Zero(t, scope.views[0].Length())
+	require.False(t, scope.marked[0])
+	require.Equal(t, []int64{7, 9}, vector.MustFixedColNoTypeCheck[int64](output))
+	require.False(t, output.HasBorrowedBacking())
+	require.Equal(t, original, encoded)
+	invalid := fileservice.NewBytes(encoded[:IOEntryHeaderSize+1])
+	t.Cleanup(invalid.Release)
+	require.Error(t, scope.WithFixed([]fileservice.IOEntry{{CachedData: invalid}}, []*vector.Vector{output}, func([]*vector.Vector, []bool) error {
+		t.Fatal("untrusted fixed data must be fully validated before callback")
+		return nil
+	}))
 }

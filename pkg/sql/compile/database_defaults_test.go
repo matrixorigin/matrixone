@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"math"
 	"strings"
@@ -243,8 +242,6 @@ func TestDatabaseDefaultsCreateRebuildsAfterConcurrentAlter(t *testing.T) {
 	ctx := defines.AttachAccountId(t.Context(), 0)
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
-	proc.GetSessionInfo().Buf = buffer.New()
-	defer proc.GetSessionInfo().Buf.Free()
 	txnClient, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
 	proc.Base.TxnClient, proc.Base.TxnOperator = txnClient, txnOp
 	// The plan is bound before ALTER commits. The first shared-lock acquisition

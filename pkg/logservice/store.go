@@ -2071,7 +2071,13 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 		SkipLogInfo: true,
 	}
 	nhi := l.nh.GetNodeHostInfo(opts)
-	for _, ci := range nhi.ShardInfoList {
+	m.Replicas = l.appendHeartbeatReplicas(m.Replicas, nhi.ShardInfoList)
+	return m
+}
+
+// appendHeartbeatReplicas builds the replica list from one NodeHost snapshot.
+func (l *store) appendHeartbeatReplicas(replicas []pb.LogReplicaInfo, shards []dragonboat.ShardInfo) []pb.LogReplicaInfo {
+	for i, ci := range shards {
 		if ci.Pending {
 			l.runtime.Logger().Info(fmt.Sprintf("shard %d is pending, not included into the heartbeat",
 				ci.ShardID))
@@ -2079,6 +2085,16 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 		}
 		if ci.ConfigChangeIndex == 0 {
 			panic("ci.ConfigChangeIndex is 0")
+		}
+		if len(replicas) == 0 {
+			// Earlier shards were pending; reserve only the ready replicas.
+			ready := 1
+			for _, shard := range shards[i+1:] {
+				if !shard.Pending {
+					ready++
+				}
+			}
+			replicas = make([]pb.LogReplicaInfo, 0, ready)
 		}
 		replicaInfo := pb.LogReplicaInfo{
 			LogShardInfo: pb.LogShardInfo{
@@ -2098,9 +2114,9 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 		if replicaInfo.Replicas == nil {
 			replicaInfo.Replicas = make(map[uint64]dragonboat.Target)
 		}
-		m.Replicas = append(m.Replicas, replicaInfo)
+		replicas = append(replicas, replicaInfo)
 	}
-	return m
+	return replicas
 }
 
 // leaderID returns the leader ID of the specified shard.

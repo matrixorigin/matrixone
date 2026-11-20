@@ -45,8 +45,6 @@ type AllocationAccountSelection struct {
 	owner         mpool.AllocationOwner
 	dataSite      mpool.AllocationSite
 	areaSite      mpool.AllocationSite
-	nullsSite     mpool.AllocationSite
-	groupingSite  mpool.AllocationSite
 	capacityClass mpool.AllocationCapacityClass
 }
 
@@ -74,8 +72,6 @@ func AllocationAccountSelectionsEqual(
 		left.owner == right.owner &&
 		left.dataSite == right.dataSite &&
 		left.areaSite == right.areaSite &&
-		left.nullsSite == right.nullsSite &&
-		left.groupingSite == right.groupingSite &&
 		left.capacityClass == right.capacityClass
 }
 
@@ -92,9 +88,7 @@ func allocationAccountSelectionsShareProvenance(
 		left.account == right.account &&
 		left.owner == right.owner &&
 		left.dataSite == right.dataSite &&
-		left.areaSite == right.areaSite &&
-		left.nullsSite == right.nullsSite &&
-		left.groupingSite == right.groupingSite
+		left.areaSite == right.areaSite
 }
 
 // ShuffleWithAllocationAccount is Shuffle with a capacity class selected for
@@ -167,16 +161,12 @@ func NewAllocationAccountSelection(
 	owner mpool.AllocationOwner,
 	dataSite mpool.AllocationSite,
 	areaSite mpool.AllocationSite,
-	nullsSite mpool.AllocationSite,
-	groupingSite mpool.AllocationSite,
 ) (*AllocationAccountSelection, error) {
 	return NewAllocationAccountSelectionWithCapacityClass(
 		account,
 		owner,
 		dataSite,
 		areaSite,
-		nullsSite,
-		groupingSite,
 		mpool.AllocationCapacityClassDefault,
 	)
 }
@@ -188,8 +178,6 @@ func NewAllocationAccountSelectionWithCapacityClass(
 	owner mpool.AllocationOwner,
 	dataSite mpool.AllocationSite,
 	areaSite mpool.AllocationSite,
-	nullsSite mpool.AllocationSite,
-	groupingSite mpool.AllocationSite,
 	capacityClass mpool.AllocationCapacityClass,
 ) (*AllocationAccountSelection, error) {
 	selection := &AllocationAccountSelection{
@@ -197,8 +185,6 @@ func NewAllocationAccountSelectionWithCapacityClass(
 		owner:         owner,
 		dataSite:      dataSite,
 		areaSite:      areaSite,
-		nullsSite:     nullsSite,
-		groupingSite:  groupingSite,
 		capacityClass: capacityClass,
 	}
 	if err := selection.validate(); err != nil {
@@ -342,9 +328,7 @@ func (s *AllocationAccountSelection) validate() error {
 		s.owner < mpool.AllocationOwnerMin ||
 		s.owner > mpool.AllocationOwnerCatalogMax ||
 		s.dataSite < mpool.AllocationSiteMin ||
-		s.areaSite < mpool.AllocationSiteMin ||
-		s.nullsSite < mpool.AllocationSiteMin ||
-		s.groupingSite < mpool.AllocationSiteMin {
+		s.areaSite < mpool.AllocationSiteMin {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	return nil
@@ -414,32 +398,22 @@ func (v *Vector) hasBackingStorage() bool {
 		cap(v.area) != 0 ||
 		cap(v.prepareParamKinds) != 0 ||
 		cap(v.stringSources) != 0 ||
-		(v.binaryStringRows != nil &&
-			(v.binaryStringRows.Size() != 0 ||
-				v.binaryStringRows.ExternalStorageCapacity() != 0)) ||
-		(v.textStringRows != nil &&
-			(v.textStringRows.Size() != 0 ||
-				v.textStringRows.ExternalStorageCapacity() != 0)) ||
+		(v.binaryStringRows != nil && v.binaryStringRows.Size() != 0) ||
+		(v.textStringRows != nil && v.textStringRows.Size() != 0) ||
 		v.nsp.GetBitmap().Size() != 0 ||
-		v.gsp.GetBitmap().Size() != 0 ||
-		v.nsp.GetBitmap().ExternalStorageCapacity() != 0 ||
-		v.gsp.GetBitmap().ExternalStorageCapacity() != 0
+		v.gsp.GetBitmap().Size() != 0
 }
 
 // hasOwnedBackingStorage reports storage that UnmarshalBinary cannot replace
 // without losing an MPool-owned allocation. Data and area marked cantFree are
-// borrowed aliases; ordinary bitmap backing is Go-owned and remains GC-visible
-// after replacement. Accounted bitmap storage is explicit external storage.
+// borrowed aliases; bitmap backing is always Go-owned and remains GC-visible
+// after replacement.
 func (v *Vector) hasOwnedBackingStorage() bool {
 	return v.IsDictionary() || v.dataLease != nil || v.areaLease != nil ||
 		cap(v.data) != 0 && !v.cantFreeData ||
 		cap(v.area) != 0 && !v.cantFreeArea ||
 		cap(v.prepareParamKinds) != 0 ||
-		cap(v.stringSources) != 0 ||
-		(v.binaryStringRows != nil && v.binaryStringRows.ExternalStorageCapacity() != 0) ||
-		(v.textStringRows != nil && v.textStringRows.ExternalStorageCapacity() != 0) ||
-		v.nsp.GetBitmap().ExternalStorageCapacity() != 0 ||
-		v.gsp.GetBitmap().ExternalStorageCapacity() != 0
+		cap(v.stringSources) != 0
 }
 
 // SetAllocationAccount selects the account used by future owned allocations.
@@ -454,77 +428,29 @@ func (v *Vector) SetAllocationAccount(
 	if AllocationAccountSelectionsEqual(v.allocationAccount, selection) {
 		return nil
 	}
-	if v.allocationAccount != nil && selection == nil {
-		v.nsp.GetBitmap().ReleaseExternalStorage()
-		v.gsp.GetBitmap().ReleaseExternalStorage()
-		if v.binaryStringRows != nil {
-			v.binaryStringRows.ReleaseExternalStorage()
-		}
-		if v.textStringRows != nil {
-			v.textStringRows.ReleaseExternalStorage()
-		}
-	}
 	v.allocationAccount = selection
-	if selection != nil {
-		v.nsp.GetBitmap().InstallExternalStorage(nil)
-		v.gsp.GetBitmap().InstallExternalStorage(nil)
-		if v.binaryStringRows != nil {
-			v.binaryStringRows.InstallExternalStorage(nil)
-		}
-		if v.textStringRows != nil {
-			v.textStringRows.InstallExternalStorage(nil)
-		}
+	return nil
+}
+
+// Bitmaps always use Go-owned memory. When a vector grows, it reserves room in
+// the bitmaps it uses for all of its rows; a bitmap also grows itself on write.
+
+func validBitmapRows(rows int) error {
+	if rows < 0 || rows > math.MaxInt-63 {
+		return moerr.NewInvalidInputNoCtxf("invalid bitmap row count %d", rows)
 	}
 	return nil
 }
 
 func (v *Vector) ensureBitmapCapacity(rows int, mp *mpool.MPool) error {
-	if v.allocationAccount == nil {
-		return nil
-	}
-	if rows < 0 || rows > math.MaxInt-63 || mp == nil {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	requiredWords := (rows + 63) / 64
-	if requiredWords <= v.nsp.GetBitmap().ExternalStorageCapacity() &&
-		requiredWords <= v.gsp.GetBitmap().ExternalStorageCapacity() &&
-		(v.binaryStringRows == nil || requiredWords <= v.binaryStringRows.ExternalStorageCapacity()) {
-		// textStringRows is allocated together with binaryStringRows.
-		if v.textStringRows == nil || requiredWords <= v.textStringRows.ExternalStorageCapacity() {
-			return nil
-		}
-	}
-	nulls, err := v.allocateBitmapGrowth(
-		v.nsp.GetBitmap(),
-		rows,
-		mp,
-		v.allocationAccount.nullsSite,
-	)
-	if err != nil {
+	if err := v.ensureNullCapacity(rows, mp); err != nil {
 		return err
 	}
-	grouping, err := v.allocateBitmapGrowth(
-		v.gsp.GetBitmap(),
-		rows,
-		mp,
-		v.allocationAccount.groupingSite,
-	)
-	if err != nil {
-		mpool.FreeSlice(mp, nulls)
+	if err := v.ensureGroupingCapacity(rows, mp); err != nil {
 		return err
-	}
-	if cap(nulls) > 0 {
-		previous := v.nsp.GetBitmap().InstallExternalStorage(nulls)
-		mpool.FreeSlice(mp, previous)
-	}
-	if cap(grouping) > 0 {
-		previous := v.gsp.GetBitmap().InstallExternalStorage(grouping)
-		mpool.FreeSlice(mp, previous)
 	}
 	if v.binaryStringRows != nil {
-		if err := v.ensureBinaryStringCapacity(rows, mp); err != nil {
-			return err
-		}
+		return v.ensureBinaryStringCapacity(rows, mp)
 	}
 	return nil
 }
@@ -535,142 +461,39 @@ func (v *Vector) ensureBinaryStringCapacity(rows int, mp *mpool.MPool) error {
 	if !v.IsConst() && rows < v.Capacity() {
 		rows = v.Capacity()
 	}
-	if v.allocationAccount != nil {
-		// Reserve the NULL and grouping sidecars alongside binary row
-		// metadata so later row reordering can move all bitmaps together.
-		if err := v.ensureNullCapacity(rows, mp); err != nil {
-			return err
-		}
-		if err := v.ensureGroupingCapacity(rows, mp); err != nil {
-			return err
-		}
+	if err := validBitmapRows(rows); err != nil {
+		return err
 	}
 	if v.binaryStringRows == nil {
 		v.binaryStringRows = &bitmap.Bitmap{}
-		if v.allocationAccount != nil {
-			v.binaryStringRows.InstallExternalStorage(nil)
-		}
 	}
 	if v.textStringRows == nil {
 		v.textStringRows = &bitmap.Bitmap{}
-		if v.allocationAccount != nil {
-			v.textStringRows.InstallExternalStorage(nil)
-		}
 	}
-	if v.allocationAccount == nil {
-		return nil
-	}
-	binaryStorage, err := v.allocateBitmapGrowth(
-		v.binaryStringRows, rows, mp, v.allocationAccount.nullsSite,
-	)
-	if err != nil {
-		return err
-	}
-	textStorage, err := v.allocateBitmapGrowth(
-		v.textStringRows, rows, mp, v.allocationAccount.nullsSite,
-	)
-	if err != nil {
-		mpool.FreeSlice(mp, binaryStorage)
-		return err
-	}
-	if cap(binaryStorage) > 0 {
-		previous := v.binaryStringRows.InstallExternalStorage(binaryStorage)
-		mpool.FreeSlice(mp, previous)
-	}
-	if cap(textStorage) > 0 {
-		previous := v.textStringRows.InstallExternalStorage(textStorage)
-		mpool.FreeSlice(mp, previous)
-	}
+	// Callers size these with InitWithSize or TryExpandWithSize before writing.
 	return nil
 }
 
-func (v *Vector) ensureNullCapacity(rows int, mp *mpool.MPool) error {
-	if v.allocationAccount == nil {
-		return nil
-	}
-	return v.ensureSingleBitmapCapacity(
-		v.nsp.GetBitmap(),
-		rows,
-		mp,
-		v.allocationAccount.nullsSite,
-	)
-}
-
-func (v *Vector) ensureGroupingCapacity(rows int, mp *mpool.MPool) error {
-	if v.allocationAccount == nil {
-		return nil
-	}
-	return v.ensureSingleBitmapCapacity(
-		v.gsp.GetBitmap(),
-		rows,
-		mp,
-		v.allocationAccount.groupingSite,
-	)
-}
-
-func (v *Vector) ensureSingleBitmapCapacity(
-	value *bitmap.Bitmap,
-	rows int,
-	mp *mpool.MPool,
-	site mpool.AllocationSite,
-) error {
-	if rows < 0 || rows > math.MaxInt-63 || mp == nil {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	storage, err := v.allocateBitmapGrowth(value, rows, mp, site)
-	if err != nil {
+func (v *Vector) ensureNullCapacity(rows int, _ *mpool.MPool) error {
+	if err := validBitmapRows(rows); err != nil {
 		return err
 	}
-	if cap(storage) > 0 {
-		previous := value.InstallExternalStorage(storage)
-		mpool.FreeSlice(mp, previous)
-	}
+	v.nsp.GetBitmap().Reserve(rows)
 	return nil
 }
 
-func (v *Vector) allocateBitmapGrowth(
-	value *bitmap.Bitmap,
-	rows int,
-	mp *mpool.MPool,
-	site mpool.AllocationSite,
-) ([]uint64, error) {
-	requiredWords := (rows + 63) / 64
-	if requiredWords <= value.ExternalStorageCapacity() {
-		return nil, nil
+func (v *Vector) ensureGroupingCapacity(rows int, _ *mpool.MPool) error {
+	if err := validBitmapRows(rows); err != nil {
+		return err
 	}
-	requiredBytes := int64(requiredWords) * 8
-	oldBytes := int64(value.ExternalStorageCapacity()) * 8
-	newBytes, ok := mpool.GrowCapacity(oldBytes, requiredBytes)
-	if !ok || newBytes > int64(math.MaxInt) || newBytes%8 != 0 {
-		return nil, mpool.ErrAllocationAccountInvalid
-	}
-	next, err := makeSelectedSlice[uint64](v.allocationAccount, int(newBytes/8), mp, site)
-	if err != nil {
-		return nil, err
-	}
-	clear(next)
-	return next, nil
+	v.gsp.GetBitmap().Reserve(rows)
+	return nil
 }
 
-func (v *Vector) freeBitmapStorage(mp *mpool.MPool) {
+func (v *Vector) freeBitmapStorage() {
 	if v.nsp.HasBorrowedValidity() {
-		// Release the source view without materializing it. The bitmap may still
-		// carry the admitted MPool COW destination reserved before publication.
+		// Release the source view without materializing it.
 		v.nsp.Reset()
-	}
-	for _, value := range []*bitmap.Bitmap{
-		v.nsp.GetBitmap(),
-		v.gsp.GetBitmap(),
-		v.binaryStringRows,
-		v.textStringRows,
-	} {
-		if value == nil {
-			continue
-		}
-		storage := value.ReleaseExternalStorage()
-		if cap(storage) > 0 {
-			mpool.FreeSlice(mp, storage)
-		}
 	}
 }
 

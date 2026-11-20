@@ -20,6 +20,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -77,9 +78,24 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 				defer cancel()
 				cleanupSQL := func(exec func(context.Context, string, ...any) (sql.Result, error), timeout time.Duration, statement string) error {
 					t.Helper()
+					started := time.Now()
 					cleanup, stop := context.WithTimeout(context.Background(), timeout)
 					defer stop()
 					_, err := exec(cleanup, statement)
+					if err != nil {
+						// Test-only error-boundary diagnostic: retain this cleanup
+						// phase's SQL start/end/cause and a bounded snapshot of
+						// goroutine state before the assert, without touching the
+						// budget, the result, the original error or the fixture.
+						ended := time.Now()
+						var waiters [16384]byte
+						n := runtime.Stack(waiters[:], true)
+						t.Logf("issue31401 cleanupSQL error boundary: statement=%q budget=%s start=%s end=%s elapsed=%s err=%v cleanupCtxErr=%v; goroutine snapshot (bounded %d bytes):\n%s",
+							statement, timeout,
+							started.UTC().Format(time.RFC3339Nano),
+							ended.UTC().Format(time.RFC3339Nano),
+							ended.Sub(started), err, cleanup.Err(), n, waiters[:n])
+					}
 					assert.NoErrorf(t, err, "cleanup SQL: %s", statement)
 					return err
 				}
@@ -91,26 +107,21 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 						// A failed child operation may still have an unknown result.
 						// The failed fixture owns shutdown instead of another parent DDL.
 						if !t.Failed() {
-							_ = cleanupSQL(sys.ExecContext, 20*time.Second, "drop account if exists issue31401_scalar")
+							// DROP ACCOUNT drops every tenant system table and
+							// database serially; under CI contention single
+							// steps take seconds, so 20s was not enough.
+							_ = cleanupSQL(sys.ExecContext, 2*time.Minute, "drop account if exists issue31401_scalar")
 						}
 					}()
 					db, err = sql.Open("mysql", fmt.Sprintf("issue31401_scalar#admin#accountadmin:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 					require.NoError(t, err)
 					defer db.Close()
 				}
-				var tenantSourceOwned bool
-				defer func() {
-					if tenantSourceOwned {
-						_ = cleanupSQL(db.ExecContext, 10*time.Second, "drop database if exists "+source)
-					}
-				}()
-				// The next selected child already resets both databases. Keep
-				// system resources until that reset, then clean the final pair once.
-				// Tenant source cleanup still precedes its dependent DROP ACCOUNT.
+				// Each case resets both databases. Keep system resources until
+				// the next reset, then clean the final pair once. DROP ACCOUNT
+				// owns removal of the tenant's source database.
 				resetIssue277xxDatabase(t, ctx, db, source)
-				if tenant {
-					tenantSourceOwned = true
-				} else {
+				if !tenant {
 					systemSourceOwned = true
 				}
 				resetIssue277xxDatabase(t, ctx, sys, peer)

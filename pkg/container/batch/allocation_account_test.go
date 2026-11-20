@@ -64,7 +64,7 @@ func newTestBatchAllocationAccount(
 	require.NoError(t, err)
 	account, err := registry.Open(16 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	return testBatchAllocationAccount{
 		registry:  registry,
@@ -650,8 +650,6 @@ func TestBatchSetFillsTailAcrossEquivalentAllocationSelections(t *testing.T) {
 		1,
 		1,
 		2,
-		3,
-		4,
 	)
 	require.NoError(t, err)
 	require.NotSame(t, state.selection, equivalent)
@@ -692,8 +690,6 @@ func TestBatchSetCoalescesEquivalentParallelProducerChunks(t *testing.T) {
 			1,
 			1,
 			2,
-			3,
-			4,
 		)
 		require.NoError(t, err)
 		source := newMixedBatchAllocationSource(
@@ -891,7 +887,7 @@ func TestBatchUnionOneRetainsAllStringSourcePreflightsUntilPublication(t *testin
 	controller := &rejectNextBatchAllocation{}
 	account, err := registry.OpenWithController(1<<20, controller)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	destination := NewWithSize(2)
 	source := NewWithSize(2)
@@ -1035,87 +1031,6 @@ func TestBatchUnionPrepareParamKindAllocationFailureDoesNotPublishRows(t *testin
 				require.Equal(t, []byte("6"), vec.GetBytesAt(0))
 				require.Nil(t, vec.GetPrepareParamKinds())
 				require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKindAt(0))
-			}
-			require.Equal(t, before, state.account.Snapshot().Used)
-
-			source.Clean(mp)
-			destination.Clean(mp)
-			finalizeTestBatchAllocationAccount(t, state)
-			require.Zero(t, mp.CurrNB())
-		})
-	}
-}
-
-func TestBatchUnionStringDomainAllocationFailureDoesNotPublishRows(t *testing.T) {
-	tests := []struct {
-		name string
-		run  func(destination, source *Batch, mp *mpool.MPool) error
-	}{
-		{
-			name: "union-one",
-			run: func(destination, source *Batch, mp *mpool.MPool) error {
-				return destination.UnionOne(source, 0, mp)
-			},
-		},
-		{
-			name: "union",
-			run: func(destination, source *Batch, mp *mpool.MPool) error {
-				return destination.Union(source, []int64{0}, mp)
-			},
-		},
-		{
-			name: "union-window",
-			run: func(destination, source *Batch, mp *mpool.MPool) error {
-				return destination.UnionWindow(source, 0, 1, mp)
-			},
-		},
-		{
-			name: "append",
-			run: func(destination, source *Batch, mp *mpool.MPool) error {
-				_, err := destination.Append(context.Background(), mp, source)
-				return err
-			},
-		},
-		{
-			name: "append-with-copy",
-			run: func(destination, source *Batch, mp *mpool.MPool) error {
-				_, err := destination.AppendWithCopy(context.Background(), mp, source)
-				return err
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			state := newTestBatchAllocationAccount(t, 2)
-			mp := mpool.MustNewZero()
-			typ := types.T_varbinary.ToType()
-			destination := NewWithSchema(
-				true, []string{"plain", "tagged"}, []types.Type{typ, typ})
-			require.NoError(t, destination.SetAllocationAccount(state.selection))
-			for _, vec := range destination.Vecs {
-				require.NoError(t, vec.PreExtend(2, mp))
-				require.NoError(t, vector.AppendBytes(vec, []byte("old"), false, mp))
-			}
-			destination.SetRowCount(1)
-
-			source := NewWithSchema(
-				true, []string{"plain", "tagged"}, []types.Type{typ, typ})
-			for _, vec := range source.Vecs {
-				require.NoError(t, vector.AppendBytes(vec, []byte("new"), false, mp))
-			}
-			require.NoError(t, source.Vecs[1].SetRuntimeStringDomainWithMP(
-				types.RuntimeStringText, mp))
-			source.SetRowCount(1)
-
-			before := state.account.Snapshot().Used
-			err := test.run(destination, source, mp)
-			require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
-			require.Equal(t, 1, destination.RowCount())
-			for _, vec := range destination.Vecs {
-				require.Equal(t, 1, vec.Length())
-				require.Equal(t, []byte("old"), vec.GetBytesAt(0))
-				require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
 			}
 			require.Equal(t, before, state.account.Snapshot().Used)
 

@@ -6624,7 +6624,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		LastInsertIDSet:        true,
 		SqlHelper:              ses.GetSqlHelper(),
 		CompilerContext:        ses.txnCompileCtx,
-		Buf:                    ses.GetBuffer(),
 		LogLevel:               zapcore.InfoLevel, //TODO: need set by session level config
 		SessionId:              ses.GetSessId(),
 		ApplySQLSelectLimit:    !ses.GetIsInternal() && !ses.IsBackgroundSession() && !ses.IsDerivedStmt(),

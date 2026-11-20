@@ -90,7 +90,7 @@ func readonlyWriteAccount(t *testing.T, controller *readonlyWriteController) tes
 	require.NoError(t, err)
 	state.selection, err = NewAllocationAccountSelectionWithCapacityClass(
 		state.account, testVectorAllocationOwner, testVectorDataAllocationSite,
-		testVectorAreaAllocationSite, testVectorNullAllocationSite, testVectorGroupAllocationSite, class,
+		testVectorAreaAllocationSite, class,
 	)
 	require.NoError(t, err)
 	return state

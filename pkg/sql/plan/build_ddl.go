@@ -7263,7 +7263,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		// drops through ALTER so the rebind SQL travels in the same DDL
 		// transaction, exactly as functional-index drops do below.
 		survivingDef := DeepCopyTableDef(tableDef, true)
-		survivingDef.Indexes = RemoveIf(survivingDef.Indexes, func(indexDef *plan.IndexDef) bool {
+		survivingDef.Indexes = slices.DeleteFunc(survivingDef.Indexes, func(indexDef *plan.IndexDef) bool {
 			return indexDef.IndexName == resolvedIndexName
 		})
 		var droppedColumns []string
@@ -7670,7 +7670,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if !name_not_found {
 					delete(currentIndexNames, indexNameKey(constraintName))
 					droppedIndexNames[indexNameKey(constraintName)] = true
-					currentTableDef.Indexes = RemoveIf(currentTableDef.Indexes, func(indexDef *plan.IndexDef) bool {
+					currentTableDef.Indexes = slices.DeleteFunc(currentTableDef.Indexes, func(indexDef *plan.IndexDef) bool {
 						return indexDef.IndexName == constraintName
 					})
 				} else {
@@ -7695,7 +7695,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if !name_not_found {
 					delete(currentForeignKeyNames, constraintName)
 					droppedForeignKeyNames[constraintName] = true
-					currentTableDef.Fkeys = RemoveIf(currentTableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
+					currentTableDef.Fkeys = slices.DeleteFunc(currentTableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
 						return fk.Name == constraintName
 					})
 				} else {

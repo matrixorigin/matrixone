@@ -5567,7 +5567,12 @@ func TestPower(t *testing.T) {
 	}
 }
 
-func TestPowerInvalidResultReturnsNull(t *testing.T) {
+// TestPowerNonDomainFailuresReturnNull pins the #28375 row-local NULL
+// contract for everything outside the negative-fractional POW domain:
+// overflow and NaN/Inf input results stay NULL, finite underflow stays a
+// value-0 and input NULLs propagate. The finite negative base / finite
+// non-integer exponent domain is covered separately below.
+func TestPowerNonDomainFailuresReturnNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	testCases := []struct {
 		name      string
@@ -5577,18 +5582,11 @@ func TestPowerInvalidResultReturnsNull(t *testing.T) {
 		nulls     []bool
 	}{
 		{
-			name:      "vector continues after invalid row",
-			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{2, -2, 4}, nil),
-			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{3, 0.5, 0.5}, nil),
-			values:    []float64{8, 0, 2},
+			name:      "vector continues after overflow row",
+			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{2, 0, 2}, nil),
+			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{3, -1, 0.5}, nil),
+			values:    []float64{8, 0, math.Sqrt2},
 			nulls:     []bool{false, true, false},
-		},
-		{
-			name:      "constant base with vector exponent",
-			bases:     NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
-			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{2, 0.5}, nil),
-			values:    []float64{4, 0},
-			nulls:     []bool{false, true},
 		},
 		{
 			name:      "vector base with constant exponent",
@@ -5598,18 +5596,18 @@ func TestPowerInvalidResultReturnsNull(t *testing.T) {
 			nulls:     []bool{false, true},
 		},
 		{
-			name:      "constant invalid result",
-			bases:     NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
-			exponents: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
-			values:    []float64{0, 0},
-			nulls:     []bool{true, true},
-		},
-		{
 			name:      "overflow underflow and input null",
 			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{2, 2, 2, 0, 0}, []bool{false, false, false, true, false}),
 			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{1023, 1024, -1075, -1, 0}, nil),
 			values:    []float64{math.Ldexp(1, 1023), 0, 0, 0, 1},
 			nulls:     []bool{false, true, false, true, false},
+		},
+		{
+			name:      "nan and inf inputs stay row-local null",
+			bases:     NewFunctionTestInput(types.T_float64.ToType(), []float64{math.NaN(), -2, math.Inf(1), 0.5}, nil),
+			exponents: NewFunctionTestInput(types.T_float64.ToType(), []float64{2, math.NaN(), 0.5, math.Inf(-1)}, nil),
+			values:    []float64{0, 0, 0, 0},
+			nulls:     []bool{true, true, true, true},
 		},
 	}
 
@@ -5628,37 +5626,144 @@ func TestPowerInvalidResultReturnsNull(t *testing.T) {
 	}
 }
 
-func TestPowerRespectsSelectList(t *testing.T) {
+// TestPowerNegativeFractionalExponentReturnsOutOfRange pins the #31155
+// Expected: a finite negative base with a finite non-integer exponent
+// rejects the statement with moerr.ErrOutOfRange (MySQL 1690, SQLSTATE
+// 22003) across every input shape of the fixed/fixed binary template.
+// This is a proposed compatibility change over merged #28375's row-local
+// NULL decision, not yet an accepted product decision.
+func TestPowerNegativeFractionalExponentReturnsOutOfRange(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_float64.ToType(), []float64{-2, 2}, nil),
-		NewFunctionTestInput(types.T_float64.ToType(), []float64{0.5, 3}, nil),
+
+	expectOutOfRange := func(t *testing.T, bases, exponents FunctionTestInput) {
+		t.Helper()
+		tcc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{bases, exponents},
+			NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil),
+			Power,
+		)
+		defer tcc.Free()
+		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+		err := Power(tcc.parameters, tcc.result, proc, tcc.fnLength, nil)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange),
+			"expected ErrOutOfRange, got %v", err)
 	}
+
+	t.Run("constant base with constant exponent", func(t *testing.T) {
+		expectOutOfRange(t,
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
+		)
+	})
+
+	t.Run("historical pow witness pow(-8, 1/3)", func(t *testing.T) {
+		expectOutOfRange(t,
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-8, -8}, nil),
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{1.0 / 3.0, 1.0 / 3.0}, nil),
+		)
+	})
+
+	t.Run("constant base with vector exponent", func(t *testing.T) {
+		expectOutOfRange(t,
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{2, 0.5}, nil),
+		)
+	})
+
+	t.Run("vector base with constant exponent", func(t *testing.T) {
+		expectOutOfRange(t,
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{1, -2}, nil),
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
+		)
+	})
+
+	t.Run("vector base with vector exponent", func(t *testing.T) {
+		expectOutOfRange(t,
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{2, -2, 4}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{3, 0.5, 0.5}, nil),
+		)
+	})
+}
+
+// TestPowerEmptyBatchEvaluatesNoRows pins the zero-row contract of the
+// domain rejection: colexec passes the batch's row count to scalar
+// functions, and a constant/constant helper evaluates its callback even
+// when the batch is empty, so a domain-shaped constant input must not
+// reject a zero-length statement evaluation.
+func TestPowerEmptyBatchEvaluatesNoRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	tcc := NewFunctionTestCase(
 		proc,
-		inputs,
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 8}, []bool{true, false}),
+		[]FunctionTestInput{
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil),
 		Power,
 	)
 	defer tcc.Free()
-	require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+	require.NoError(t, tcc.result.PreExtendAndReset(0))
+	require.Equal(t, 0, tcc.result.GetResultVector().Length())
+	err := Power(tcc.parameters, tcc.result, proc, 0, nil)
+	require.NoError(t, err)
+	require.Equal(t, 0, tcc.result.GetResultVector().Length())
+}
 
-	selectList := &FunctionSelectList{
+// TestPowerRespectsSelectList pins the selectList boundary of the domain
+// rejection: rows masked off by the select list are never evaluated, so a
+// masked domain row stays NULL without raising an error, a selected domain
+// row surfaces the typed out-of-range error, and an all-masked constant
+// batch short-circuits to NULL. Every case binds its own cleanup at
+// creation, so assertion failures and completion both release the
+// case-owned vectors (no cross-case pointer rebinding).
+func TestPowerRespectsSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	masked := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{-2, 2}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0.5, 3}, nil),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 8}, []bool{true, false}),
+		Power,
+	)
+	defer masked.Free()
+	require.NoError(t, masked.result.PreExtendAndReset(masked.fnLength))
+	err := Power(masked.parameters, masked.result, proc, masked.fnLength, &FunctionSelectList{
 		AnyNull:    true,
 		SelectList: []bool{false, true},
-	}
-	err := Power(tcc.parameters, tcc.result, proc, tcc.fnLength, selectList)
+	})
 	require.NoError(t, err)
-
-	resultVec := tcc.result.GetResultVector()
+	resultVec := masked.result.GetResultVector()
 	require.True(t, resultVec.GetNulls().Contains(0))
 	resultParam := vector.GenerateFunctionFixedTypeParameter[float64](resultVec)
 	value, isNull := resultParam.GetValue(1)
 	require.False(t, isNull)
 	require.Equal(t, float64(8), value)
 
-	tcc.Free()
-	tcc = NewFunctionTestCase(
+	selected := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{-2, 2}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0.5, 3}, nil),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil),
+		Power,
+	)
+	defer selected.Free()
+	require.NoError(t, selected.result.PreExtendAndReset(selected.fnLength))
+	err = Power(selected.parameters, selected.result, proc, selected.fnLength, &FunctionSelectList{
+		AnyNull:    true,
+		SelectList: []bool{true, false},
+	})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange),
+		"expected ErrOutOfRange, got %v", err)
+
+	allMasked := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
 			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
@@ -5667,8 +5772,9 @@ func TestPowerRespectsSelectList(t *testing.T) {
 		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0}, []bool{true, true}),
 		Power,
 	)
-	tcc = tcc.WithSelectList(&FunctionSelectList{AllNull: true})
-	succeed, info := tcc.Run()
+	defer allMasked.Free()
+	allMasked = allMasked.WithSelectList(&FunctionSelectList{AllNull: true})
+	succeed, info := allMasked.Run()
 	require.True(t, succeed, info)
 }
 
@@ -15473,7 +15579,7 @@ func TestTimestampAddDateDeniedTypeGrowth(t *testing.T) {
 					t.Errorf("finalize account: %v", err)
 				}
 			})
-			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 			require.NoError(t, err)
 			result, err := vector.NewFunctionResultWrapperWithAllocation(types.T_date.ToType(), proc.Mp(), selection)
 			require.NoError(t, err)
@@ -15504,7 +15610,8 @@ func TestTimestampAddDateDeniedTypeGrowth(t *testing.T) {
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.Equal(t, types.T_date, result.GetResultVector().GetType().Oid)
 			require.Equal(t, 128, result.GetResultVector().Length())
-			require.Equal(t, uint64(528), account.Snapshot().Used)
+			// Payload only: the NULL bitmap is Go-owned and not charged.
+			require.Equal(t, uint64(512), account.Snapshot().Used)
 			require.Equal(t, make([]types.Date, 128), vector.MustFixedColNoTypeCheck[types.Date](result.GetResultVector()))
 		})
 	}
