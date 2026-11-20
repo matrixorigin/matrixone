@@ -205,3 +205,34 @@ func TestFrontendPlanningUsesCurrentRequestContext(t *testing.T) {
 		})
 	}
 }
+
+func TestCloneSnapshotBindingUsesCurrentRequestContext(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	proc := ses.proc
+	previous, cancelPrevious := context.WithCancel(t.Context())
+	defer cancelPrevious()
+	proc.Ctx = previous
+	cancelPrevious()
+	current, cancelCurrent := context.WithCancel(defines.AttachAccountId(t.Context(), 0))
+	defer cancelCurrent()
+	proc.ReplaceTopCtx(current)
+	ses.GetTxnCompileCtx().SetExecCtx(&ExecCtx{reqCtx: current, ses: ses, proc: proc})
+
+	stmt, err := parsers.ParseOne(current, dialect.MYSQL, `create table dst clone src {mo_ts =
+		9223372036854775806 + cast((json_extract('{"age":35}', '$.age') between 30 and 39) as signed)}`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	snapshot, err := resolveSnapshot(ses, stmt.(*tree.CloneTable).SrcTable.AtTsExpr)
+	require.Same(t, previous, proc.Ctx)
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+	require.Equal(t, int64(9223372036854775807), snapshot.TS.GetPhysicalTime())
+
+	cancelCurrent()
+	snapshot, err = resolveSnapshot(ses, stmt.(*tree.CloneTable).SrcTable.AtTsExpr)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, snapshot)
+	require.Same(t, previous, proc.Ctx)
+	require.Same(t, current, proc.GetTopContext())
+}
