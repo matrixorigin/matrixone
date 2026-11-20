@@ -322,7 +322,7 @@ func TestCTASAllAdmittedOptionsCombinedRoundtrip(t *testing.T) {
 	for _, must := range []string{
 		"compression = 'zlib'", "encryption = 'Y'", "delay_key_write = 1",
 		"STORAGE DISK", "connection = 'c one'", "data directory = '/data/x'",
-		"index directory = '/idx/x'", "password = 'se''cret'", "tablespace = ts1",
+		"index directory = '/idx/x'", "password = 'se''cret'", "tablespace = `ts1`",
 	} {
 		require.Contains(t, createSQL, must, createSQL)
 	}
