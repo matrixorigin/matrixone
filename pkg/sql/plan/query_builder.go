@@ -6240,7 +6240,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	// the composed pagination seeds, matching the enclosing-stage
 	// normalization below. NULL COUNT still yields no rows, and an absent
 	// COUNT stays unbounded.
-	if offsetExpr != nil {
+	if offsetExpr != nil && (offsetExpr.GetLit() == nil || offsetExpr.GetLit().Isnull) {
 		zero := MakePlan2Uint64ConstExprWithType(0)
 		if offsetExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce",
 			[]*Expr{DeepCopyExpr(offsetExpr), zero}); err != nil {
@@ -6324,7 +6324,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		// through the composed sums and shrink the result to zero rows. A
 		// prepared NULL COUNT keeps yielding no rows, and an absent COUNT
 		// stays unbounded - only the offset is coalesced to zero here.
-		if stageOffset != nil {
+		if stageOffset != nil && (stageOffset.GetLit() == nil || stageOffset.GetLit().Isnull) {
 			zero := MakePlan2Uint64ConstExprWithType(0)
 			if stageOffset, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce",
 				[]*Expr{DeepCopyExpr(stageOffset), zero}); err != nil {
