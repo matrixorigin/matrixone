@@ -381,8 +381,8 @@ func TestCreatePublicationIfNotExistsSkipsExistingPublication(t *testing.T) {
 	bh, ctx, stmt := newCreatePublicationIfNotExistsTest(t, true, true)
 
 	require.NoError(t, createPublication(ctx, bh, stmt, int64(1)))
-	require.Len(t, bh.executedSQLs, 8) // includes the subscriber ID locking read
 	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, sql, "select account_id from mo_catalog.mo_account where account_id in")
 		require.NotContains(t, sql, "insert into mo_catalog.mo_pubs")
 		require.NotContains(t, sql, "mo_catalog.mo_subs")
 	}
@@ -463,6 +463,7 @@ func TestCreatePublicationIfNotExistsTxnOutcome(t *testing.T) {
 		tolerated                              bool
 	}{
 		{name: "existing no-op", existing: true, commits: 1},
+		{name: "existing publication still validates source", existing: true, phase: "source", opErr: operationErr, rollbacks: 1},
 		{name: "create", commits: 1, inserts: 1, subWrites: 1},
 		{name: "ordinary duplicate", ordinary: true, phase: "insert", opErr: duplicateErr, rollbacks: 1, inserts: 1},
 		{name: "schema lookup failure", phase: "schema", opErr: operationErr, rollbacks: 1},
@@ -483,6 +484,10 @@ func TestCreatePublicationIfNotExistsTxnOutcome(t *testing.T) {
 			subSQL := getSubsSql + " and pub_account_name = 'sys' and pub_name = 'pub1'"
 			bh.sql2result[subSQL] = newMrsForRestoreStringRows(nil, nil)
 			switch tc.phase {
+			case "source":
+				lockPublicationDatabase = func(context.Context, BackgroundExec, string, uint64) (string, error) {
+					return "", tc.opErr
+				}
 			case "schema":
 				bh.sql2err["select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'"] = tc.opErr
 			case "lookup":

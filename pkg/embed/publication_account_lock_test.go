@@ -68,13 +68,41 @@ func TestCreatePublicationExplicitTargetLockScope(t *testing.T) {
 	require.Less(t, accountID(targets[0]), unrelatedID)
 	require.Less(t, unrelatedID, accountID(targets[len(targets)-1]))
 
+	t.Run("existing publication during recipient drop", func(t *testing.T) {
+		f := newPublicationAccountSQL(t, c)
+		defer f.stopStatements()
+		f.exec(f.left, "create publication pub_lock_existing database pub_lock_src account pub_lock_first")
+		f.createAccount("pub_lock_unused")
+		id := f.number(f.left, "select account_id from mo_catalog.mo_account where account_name='pub_lock_unused'")
+		gate, err := f.left.BeginTx(f.ctx, nil)
+		require.NoError(t, err)
+		defer gate.Rollback()
+		var locked int
+		require.NoError(t, gate.QueryRowContext(f.ctx, "select account_id from mo_catalog.mo_account where account_id=? for update", id).Scan(&locked))
+		require.Equal(t, id, locked)
+		drop := f.start(f.left, "drop account pub_lock_unused")
+		waited, err := f.waitForLockOrResult(drop, 0, "mo_account")
+		require.NoError(t, err)
+		require.True(t, waited)
+
+		noop := f.start(f.right, "create publication if not exists pub_lock_existing database pub_lock_src account pub_lock_unused")
+		waited, err = f.waitForLockOrResult(noop, 1, "mo_account")
+		require.NoError(t, err)
+		require.False(t, waited, "an existing publication must return before the recipient DROP is unblocked")
+		require.NoError(t, gate.Rollback())
+		require.NoError(t, <-drop)
+		require.Equal(t, 1, f.number(f.left, "select count(*) from mo_catalog.mo_subs where pub_name='pub_lock_existing' and sub_account_name='pub_lock_first' and status=0"))
+		require.Zero(t, f.number(f.left, "select count(*) from mo_catalog.mo_subs where pub_name='pub_lock_existing' and sub_account_id=?", id))
+	})
+
 	for _, tc := range []struct {
 		name      string
+		create    string
 		targets   []string
 		unrelated string
 	}{
-		{name: "wide", targets: targets, unrelated: "pub_lock_unrelated_wide"},
-		{name: "singleton", targets: targets[:1], unrelated: "pub_lock_unrelated_single"},
+		{name: "wide", create: "create publication", targets: targets, unrelated: "pub_lock_unrelated_wide"},
+		{name: "singleton", create: "create publication if not exists", targets: targets[:1], unrelated: "pub_lock_unrelated_single"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newPublicationAccountSQL(t, c)
@@ -87,7 +115,7 @@ func TestCreatePublicationExplicitTargetLockScope(t *testing.T) {
 			gate := f.holdSourceDatabase("pub_lock_src")
 			defer gate.Rollback()
 			pub := "pub_lock_" + tc.name
-			publishing := f.start(f.right, "create publication "+pub+" database pub_lock_src account "+strings.Join(tc.targets, ","))
+			publishing := f.start(f.right, tc.create+" "+pub+" database pub_lock_src account "+strings.Join(tc.targets, ","))
 			waited, err := f.waitForLockOrResult(publishing, 1, "mo_database")
 			require.NoError(t, err)
 			require.True(t, waited, "publication must retain its target locks while waiting on the source database")

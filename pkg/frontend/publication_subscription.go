@@ -310,8 +310,20 @@ func createPublicationWithTableSelection(ctx context.Context, bh BackgroundExec,
 	}
 
 	pubName := string(cp.Name)
-	if err = lockPublicationTargetAccounts(ctx, bh, subAccounts, cp.AccountsSet.All); err != nil {
-		return err
+	var publicationExists bool
+	if cp.IfNotExists {
+		// Look up the publisher's name before source database resolution can
+		// switch accounts. An existing publication won't write any grants.
+		pub, err := getPubInfo(ctx, bh, pubName)
+		if err != nil {
+			return err
+		}
+		publicationExists = pub != nil
+	}
+	if !publicationExists {
+		if err = lockPublicationTargetAccounts(ctx, bh, subAccounts, cp.AccountsSet.All); err != nil {
+			return err
+		}
 	}
 	dbName := string(cp.Database)
 	comment := cp.Comment
@@ -382,16 +394,9 @@ func createPublicationWithTableSelection(ctx context.Context, bh BackgroundExec,
 		return
 	}
 
-	if cp.IfNotExists {
-		// Database resolution may switch ctx to the source account; the publication
-		// still belongs to the account that issued CREATE.
-		pubInfo, lookupErr := getPubInfo(defines.AttachAccountId(ctx, accountId), bh, pubName)
-		if lookupErr != nil {
-			return lookupErr
-		}
-		if pubInfo != nil {
-			return nil
-		}
+	// IF NOT EXISTS does not bypass database, table scope or name validation.
+	if publicationExists {
+		return nil
 	}
 
 	if err = bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql); err != nil {
