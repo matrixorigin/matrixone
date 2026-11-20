@@ -160,6 +160,7 @@ func openKernel(proc *process.Process, factory KernelFactory, children int, acco
 			return k, err
 		}
 	}
+	vm.ConfigureSelectionEdges(k.root)
 	return k, nil
 }
 func (k *nativeKernel) read() (*batch.Batch, int, vm.Continuation, error) {

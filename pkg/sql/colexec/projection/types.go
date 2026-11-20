@@ -81,6 +81,7 @@ type container struct {
 	hasInput      bool
 	inputSeen     bool
 	childDone     bool
+	selection     selectionState
 }
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -109,6 +110,7 @@ func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, e
 		}
 	}
 	projection.ctr.projExecutors = nil
+	projection.ctr.selection.free(proc.Mp())
 	projection.ctr.buf = nil
 	projection.ctr.expandBuf = nil
 }

@@ -77,6 +77,7 @@ type container struct {
 	runtimeExecutors          []colexec.ExpressionExecutor
 	allExecutors              []colexec.ExpressionExecutor // = executors + runtimeExecutor, do not free this executors
 	subjectReuseAdmissionDone bool
+	selection                 selectionState
 }
 
 func (filter *Filter) SetRuntimeFilterExprs(proc *process.Process, exes []*plan.Expr) (err error) {

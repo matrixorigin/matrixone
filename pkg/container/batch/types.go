@@ -54,9 +54,15 @@ type Batch struct {
 
 	ExtraBuf []byte
 
-	// row count of batch, to instead of old len(Zs).
+	// row count of batch, to instead of old len(Zs). For a selected batch it
+	// is the logical (selected) row count.
 	rowCount int
 	offHeap  bool
+
+	// selection, when non-nil, lists the physical row of each logical row
+	// (see selection.go); physicalRows is then the vectors' row count.
+	selection    []int32
+	physicalRows int
 
 	// allocationAccount is the destination selection for owned off-heap
 	// vectors created or reused by this batch. Alias vectors do not copy it.

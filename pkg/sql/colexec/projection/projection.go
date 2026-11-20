@@ -104,9 +104,16 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	batches := []*batch.Batch{bat}
+	var mask []bool
+	if bat.HasSelection() {
+		bat.PhysicalView(&projection.ctr.selection.physical)
+		batches[0] = &projection.ctr.selection.physical
+		projection.ctr.selection.mask = bat.SelectionMask(projection.ctr.selection.mask)
+		mask = projection.ctr.selection.mask
+	}
 
 	for i := range projection.ctr.projExecutors {
-		vec, err := projection.ctr.projExecutors[i].Eval(proc, batches, nil)
+		vec, err := projection.ctr.projExecutors[i].Eval(proc, batches, mask)
 		if err != nil {
 			return vm.CancelResult, err
 		}
@@ -118,6 +125,14 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		projection.ctr.buf.Vecs[i] = vec
 	}
 	projection.maxAllocSize = max(projection.maxAllocSize, projection.ctr.buf.Size())
+	if bat.HasSelection() {
+		output, err := projection.finishSelected(bat, proc.Mp())
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		result.Batch = output
+		return result, nil
+	}
 	projection.ctr.buf.SetRowCount(bat.RowCount())
 	if projection.GroupingSetCount > 0 {
 		projection.ctr.hasInput = true

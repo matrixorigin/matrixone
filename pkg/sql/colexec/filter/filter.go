@@ -87,6 +87,18 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return inputResult, nil
 	}
 
+	if filter.ctr.selection.output || inputResult.Batch.HasSelection() {
+		output, err := filter.selectionCall(proc, inputResult.Batch)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		result := vm.NewCallResult()
+		if !filter.IsEnd {
+			result.Batch = output
+		}
+		return result, nil
+	}
+
 	filterBat := inputResult.Batch
 	var sels []int64
 	defer func() {

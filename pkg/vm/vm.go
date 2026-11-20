@@ -56,6 +56,7 @@ func Prepare(op Operator, proc *process.Process) error {
 	if err := op.Prepare(proc); err != nil {
 		return err
 	}
+	configureSelectionChildren(op)
 	return nil
 }
 
