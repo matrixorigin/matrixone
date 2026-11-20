@@ -65,33 +65,35 @@ func needsOutputAreaCheck(columns []colexec.ResultPos, source *batch.Batch, rela
 			continue
 		}
 		vec := source.Vecs[column.Pos]
-		if vec == nil || !vec.GetType().IsVarlen() || vec.Length() == 0 || vec.IsConstNull() {
+		// One copy per disjoint input payload fits in the source area.
+		if copyFlatPayloadOnce && vec.VarlenaAreaIsDisjoint() && !vec.IsDictionary() && int64(len(vec.GetArea())) <= limit {
 			continue
 		}
-		var areaBytes int
-		if vec.IsDictionary() {
-			areaBytes = len(vector.ResolveVarlenaReadView(vec).Area)
-		} else {
-			areaBytes = len(vec.GetArea())
-			// One copy per disjoint input payload fits in the source area.
-			if copyFlatPayloadOnce && int64(areaBytes) <= limit && vec.VarlenaAreaIsDisjoint() {
-				continue
-			}
-		}
-		if int64(areaBytes) <= threshold {
-			continue
-		}
-		rows := vec.Length()
-		if vec.IsConst() {
-			rows = 1
-		}
-		for row := range rows {
-			if vector.VarlenaPayloadSize(vec, row) > threshold {
-				return true
-			}
+		if vector.VarlenaPayloadExceeds(vec, threshold) {
+			return true
 		}
 	}
 	return false
+}
+
+func (hashJoin *HashJoin) prepareBuildOutputAreaCheck() {
+	ctr := &hashJoin.ctr
+	if ctr.buildAreaChecked || hashJoin.IsShuffle || ctr.mp == nil || ctr.spillEngine != nil {
+		return
+	}
+	ctr.buildAreaChecked = true
+	relation, buildTypes := int32(1), hashJoin.RightTypes
+	if hashJoin.AsofBuildLeft {
+		relation, buildTypes = 0, hashJoin.LeftTypes
+	}
+	threshold := mpool.MaxAllocationSize() / colexec.DefaultBatchSize
+	for _, column := range hashJoin.ResultCols {
+		if column.Rel == relation && column.Pos >= 0 && int(column.Pos) < len(buildTypes) &&
+			buildTypes[column.Pos].IsVarlen() && ctr.mp.BuildPayloadExceeds(int(column.Pos), threshold) {
+			ctr.checkBuildArea = true
+			return
+		}
+	}
 }
 
 type outputArea struct {

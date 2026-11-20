@@ -80,6 +80,7 @@ func (hashJoin *HashJoin) callAsofBuildLeft(proc *process.Process) (vm.CallResul
 						return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 					}
 				}
+				hashJoin.prepareBuildOutputAreaCheck()
 				if !hashJoin.IsShuffle && !ctr.checkBuildArea && ctr.asofBuildLeftBestRight != nil {
 					ctr.checkBuildArea = needsOutputAreaCheck(hashJoin.ResultCols, ctr.asofBuildLeftBestRight, 1, false)
 				}

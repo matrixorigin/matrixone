@@ -324,6 +324,9 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 				ctr.leftBat = bat
 				ctr.lastIdx = 0
+				if !ctr.skipProbe {
+					hashJoin.prepareBuildOutputAreaCheck()
+				}
 				// A unique build key selects the probe row at most once.
 				// Without a residual, fan-out uses UnionMulti to copy a flat
 				// probe payload once per group in each result batch.
@@ -406,6 +409,9 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.rightMatchedIter == nil {
 				ctr.state = End
 			} else {
+				if ctr.rightMatchedIter.HasNext() {
+					hashJoin.prepareBuildOutputAreaCheck()
+				}
 				ctr.state = Finalize
 			}
 
@@ -603,19 +609,8 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 		return
 	}
 	ctr.rightBats = ctr.mp.GetBatches()
+	ctr.buildAreaChecked = false
 	ctr.checkBuildArea = false
-	if !hashJoin.IsShuffle {
-		buildRel := int32(1)
-		if hashJoin.AsofBuildLeft {
-			buildRel = 0
-		}
-		for _, bat := range ctr.rightBats {
-			if needsOutputAreaCheck(hashJoin.ResultCols, bat, buildRel, false) {
-				ctr.checkBuildArea = true
-				break
-			}
-		}
-	}
 	ctr.rightRowCnt = ctr.mp.GetRowCount()
 	ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 

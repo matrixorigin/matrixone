@@ -4568,6 +4568,31 @@ func VarlenaPayloadSize(v *Vector, row int) int64 {
 	return int64(size)
 }
 
+// VarlenaPayloadExceeds reports whether any non-NULL value contributes more
+// external bytes than limit when copied to a flat vector.
+func VarlenaPayloadExceeds(v *Vector, limit int64) bool {
+	if v == nil || !v.typ.IsVarlen() || v.Length() == 0 || v.IsConstNull() {
+		return false
+	}
+	areaBytes := len(v.area)
+	if v.IsDictionary() {
+		areaBytes = len(ResolveVarlenaReadView(v).Area)
+	}
+	if int64(areaBytes) <= limit {
+		return false
+	}
+	rows := v.Length()
+	if v.IsConst() {
+		rows = 1
+	}
+	for row := range rows {
+		if VarlenaPayloadSize(v, row) > limit {
+			return true
+		}
+	}
+	return false
+}
+
 func (v *Vector) GetData() []byte {
 	v.requirePhysical()
 	return v.data

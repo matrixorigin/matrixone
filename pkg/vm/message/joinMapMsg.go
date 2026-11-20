@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 var _ Message = new(JoinMapMsg)
@@ -219,6 +220,11 @@ type JoinMap struct {
 	batchRowEnds      []int64
 	memoryRelease     func()
 	memoryReleaseOnce sync.Once
+
+	// Size checks are shared by consumers of these immutable retained batches.
+	payloadCheckMu      sync.Mutex
+	payloadCheckLimit   int64
+	payloadColumnChecks []uint8
 
 	// A resident JoinMap may be broadcast to multiple consumers, but a spill
 	// payload is move-only. Keep the complete payload behind one lock so files
@@ -454,6 +460,45 @@ func (jm *JoinMap) GetBatches() []*batch.Batch {
 	return jm.batches
 }
 
+// BuildPayloadExceeds checks one retained column and shares the result with
+// other consumers. A caller must hold its JoinMap reference throughout.
+func (jm *JoinMap) BuildPayloadExceeds(column int, limit int64) bool {
+	if column < 0 || len(jm.batches) == 0 {
+		return false
+	}
+	scan := func() bool {
+		for _, bat := range jm.batches {
+			if column < len(bat.Vecs) && vector.VarlenaPayloadExceeds(bat.Vecs[column], limit) {
+				return true
+			}
+		}
+		return false
+	}
+
+	jm.payloadCheckMu.Lock()
+	defer jm.payloadCheckMu.Unlock()
+	columns := len(jm.batches[0].Vecs)
+	if column >= columns || (jm.payloadColumnChecks != nil && jm.payloadCheckLimit != limit) {
+		return scan()
+	}
+	if jm.payloadColumnChecks == nil {
+		jm.payloadColumnChecks = make([]uint8, columns)
+		jm.payloadCheckLimit = limit
+	}
+	const (
+		fits    = 1
+		exceeds = 2
+	)
+	if jm.payloadColumnChecks[column] == 0 {
+		result := uint8(fits)
+		if scan() {
+			result = exceeds
+		}
+		jm.payloadColumnChecks[column] = result
+	}
+	return jm.payloadColumnChecks[column] == exceeds
+}
+
 // SetBatchRowEnds transfers the allocation-accounted directory to the map
 // before broadcast. It is immutable after publication.
 func (jm *JoinMap) SetBatchRowEnds(ends []int64) {
@@ -644,6 +689,7 @@ func (jm *JoinMap) FreeMemory() {
 		jm.batches[i].Clean(jm.mpool)
 	}
 	jm.batches = nil
+	jm.payloadColumnChecks = nil
 	mpool.FreeSlice(jm.mpool, jm.batchRowEnds)
 	jm.batchRowEnds = nil
 	jm.valid = false

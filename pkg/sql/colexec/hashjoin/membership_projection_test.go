@@ -206,12 +206,22 @@ func TestHashJoinProbeOutputArea(t *testing.T) {
 			uniqueBuild: true, buildPayload: true, probeKeys: []int32{1, 1}, buildKeys: []int32{1},
 			batchRows: []int{1, 1},
 		},
+		{
+			name: "inner-empty-probe", joinType: plan.Node_INNER, valueBytes: 600 << 10,
+			uniqueBuild: true, buildPayload: true, probeKeys: []int32{}, buildKeys: []int32{1},
+		},
+		{
+			name: "right-empty-probe-finalizes-build", joinType: plan.Node_RIGHT, valueBytes: 256 << 10,
+			uniqueBuild: true, buildPayload: true, probeKeys: []int32{},
+			wantKeys: []int32{1, 2}, batchRows: []int{2},
+		},
 	} {
 		t.Run(shape.name, func(t *testing.T) {
 			keyType, textType := types.T_int32.ToType(), types.T_text.ToType()
 			key := newExpr(0, keyType)
 			tc := newTestCase(t, []types.Type{keyType}, nil, [][]*plan.Expr{{key}, {key}})
 			tc.arg.JoinType = shape.joinType
+			tc.arg.IsRightJoin = shape.joinType == plan.Node_RIGHT
 			if !shape.residual {
 				tc.arg.NonEqCond = nil
 			}
@@ -247,6 +257,9 @@ func TestHashJoinProbeOutputArea(t *testing.T) {
 				tc.arg.LeftTypes = append(tc.arg.LeftTypes, textType)
 			}
 			tc.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: relation, Pos: 1}}
+			if tc.arg.IsRightJoin {
+				tc.arg.ResultCols[0].Rel = 1
+			}
 			payload := vector.NewOffHeapVecWithType(textType)
 			value := bytes.Repeat([]byte{'x'}, shape.valueBytes)
 			if shape.dictionary {
@@ -297,6 +310,9 @@ func TestHashJoinProbeOutputArea(t *testing.T) {
 			require.Equal(t, vm.ExecStop, res.Status)
 			require.Nil(t, res.Batch)
 			require.Equal(t, len(wantKeys), next)
+			if len(wantKeys) == 0 {
+				require.False(t, tc.arg.ctr.checkBuildArea, "empty probe must not inspect build payload")
+			}
 		})
 	}
 }
