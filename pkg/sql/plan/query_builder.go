@@ -4857,6 +4857,14 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		if err == nil {
 			// Identical UNION branches can collapse to one DISTINCT SELECT,
 			// but its SQL result still crosses a set-operation boundary.
+			// Keep outer references bound per invocation even though admission
+			// can no longer see a set node above the correlated branch.
+			if ctx.isCorrelated {
+				if builder.dependentRelations == nil {
+					builder.dependentRelations = make(map[int32]bool)
+				}
+				builder.dependentRelations[nodeID] = true
+			}
 			var integerIDs []uint32
 			if builder.integerPrecision != nil {
 				integerIDs = make([]uint32, len(ctx.headings))

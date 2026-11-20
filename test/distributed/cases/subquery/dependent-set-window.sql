@@ -59,6 +59,16 @@ select o.id from outer_keys o where 2 in (
     select a.id from outer_keys a where a.id = 1
     union select 2 from outer_keys b where b.id = 2 and b.id = o.id
 ) order by o.id;
+-- Folding identical branches to DISTINCT must preserve outer captures.
+select o.id, 1 in (
+    select o.id from outer_keys a where a.id = o.id
+    union select o.id from outer_keys a where a.id = o.id
+) as v from outer_keys o order by o.id;
+-- Changing only the alias avoids the fold but must not change the result.
+select o.id, 1 in (
+    select o.id from outer_keys a where a.id = o.id
+    union select o.id from outer_keys b where b.id = o.id
+) as v from outer_keys o order by o.id;
 -- A capture keeps its declared type even when the set output widens it.
 create table medium_keys (k mediumint, i int);
 insert into medium_keys values (1, 2), (3, 4);

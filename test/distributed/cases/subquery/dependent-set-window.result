@@ -90,6 +90,20 @@ union select 2 from outer_keys b where b.id = 2 and b.id = o.id
 ) order by o.id;
 ➤ id[4,32,0]  𝄀
 2
+select o.id, 1 in (
+select o.id from outer_keys a where a.id = o.id
+union select o.id from outer_keys a where a.id = o.id
+) as v from outer_keys o order by o.id;
+➤ id[4,32,0]  ¦  v[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+select o.id, 1 in (
+select o.id from outer_keys a where a.id = o.id
+union select o.id from outer_keys b where b.id = o.id
+) as v from outer_keys o order by o.id;
+➤ id[4,32,0]  ¦  v[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
 create table medium_keys (k mediumint, i int);
 insert into medium_keys values (1, 2), (3, 4);
 select o.k, 1 in (
