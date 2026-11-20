@@ -59,27 +59,6 @@ func TestCapacityPreflightMetadataHelperBoundaries(t *testing.T) {
 	_, err = winnerForGroup(&winners, &winnerCount, 9)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 
-	var sourceEvents [hashmap.UnitLimit]stringSourceEvent
-	sourceEventCount := 0
-	require.ErrorIs(t, addStringSourceEvent(
-		&sourceEvents, &sourceEventCount, -1, 0, 0, types.StringSourceLiteral),
-		mpool.ErrAllocationAccountInvalid)
-	require.ErrorIs(t, addStringSourceEvent(
-		&sourceEvents, &sourceEventCount, 0, -1, 0, types.StringSourceLiteral),
-		mpool.ErrAllocationAccountInvalid)
-	require.ErrorIs(t, addStringSourceEvent(
-		&sourceEvents, &sourceEventCount, 0, 0, -1, types.StringSourceLiteral),
-		mpool.ErrAllocationAccountInvalid)
-	require.ErrorIs(t, addStringSourceEvent(
-		&sourceEvents, &sourceEventCount, 0, 0, 0, types.StringSource(255)),
-		mpool.ErrAllocationAccountInvalid)
-	require.NoError(t, addStringSourceEvent(
-		&sourceEvents, &sourceEventCount, 0, 0, 0, types.StringSourceLiteral))
-	sourceEventCount = len(sourceEvents)
-	require.ErrorIs(t, addStringSourceEvent(
-		&sourceEvents, &sourceEventCount, 0, 0, 0, types.StringSourceLiteral),
-		mpool.ErrAllocationAccountInvalid)
-
 	require.True(t, typesEqual(nil, nil))
 	require.False(t, typesEqual([]types.Type{types.T_int64.ToType()}, nil))
 	require.False(t, typesEqual(
@@ -116,20 +95,6 @@ func TestCapacityPreflightHelperApplicationAndJSONPaths(t *testing.T) {
 	anyAggregate := makeExec(AggIdOfAny, types.T_varchar.ToType())
 	require.NoError(t, anyAggregate.GroupGrow(1))
 	base := anyAggregate.(aggregateBaseCarrier).aggregateBase()
-	var sourceEvents [hashmap.UnitLimit]stringSourceEvent
-	sourceEvents[0] = stringSourceEvent{
-		chunk: 0, column: 0, row: 0, source: types.StringSourceLiteral,
-	}
-	require.NoError(t, base.applyStringSourceEvents(&sourceEvents, 1))
-	sourceEvents[0].chunk = 9
-	require.ErrorIs(t, base.applyStringSourceEvents(&sourceEvents, 1),
-		mpool.ErrAllocationAccountInvariant)
-	sourceEvents[0] = stringSourceEvent{
-		chunk: 0, column: 9, row: 0, source: types.StringSourceLiteral,
-	}
-	require.ErrorIs(t, base.applyStringSourceEvents(&sourceEvents, 1),
-		mpool.ErrAllocationAccountInvariant)
-
 	var areaNeeds [hashmap.UnitLimit]vectorAreaChunkCapacity
 	areaNeeds[0] = vectorAreaChunkCapacity{chunk: 0}
 	areaNeeds[0].bytes[0] = types.VarlenaInlineSize + 1

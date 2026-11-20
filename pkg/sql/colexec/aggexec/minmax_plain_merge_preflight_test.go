@@ -41,7 +41,7 @@ func (f *fixedMetadataPreflightFixture) mergeSource(t testing.TB, values []int64
 
 func TestFixedMinMaxPlainMergeMetadataPreflight(t *testing.T) {
 	for _, id := range []int64{AggIdOfMin, AggIdOfMax} {
-		for _, mode := range []string{"active", "standby", "spill-source", "unrelated-source-metadata", "unrelated-target-metadata"} {
+		for _, mode := range []string{"active", "standby", "spill-source"} {
 			t.Run(fmt.Sprint(id)+"/"+mode, func(t *testing.T) {
 				f := newFixedMetadataPreflightFixture(t, id, types.T_int64.ToType())
 				if mode == "standby" {
@@ -65,14 +65,6 @@ func TestFixedMinMaxPlainMergeMetadataPreflight(t *testing.T) {
 					// Accounted allocation may round physical capacity; the source stays compact.
 					require.GreaterOrEqual(t, source.base.state[0].vecs[0].Capacity(), 7)
 					require.Less(t, source.base.state[0].vecs[0].Capacity(), AggBatchSize)
-				}
-				if mode == "unrelated-source-metadata" {
-					require.NoError(t, source.exec.GroupGrow(AggBatchSize+1-source.exec.GetNumGroups()))
-					require.NoError(t, source.base.state[1].vecs[0].SetStringSource(types.StringSourceLiteral))
-				}
-				if mode == "unrelated-target-metadata" {
-					require.NoError(t, f.exec.GroupGrow(AggBatchSize+1-f.exec.GetNumGroups()))
-					require.NoError(t, f.base.state[1].vecs[0].SetStringSource(types.StringSourceLiteral))
 				}
 				groups := []uint64{1, 1, 2, 2, 3, GroupNotMatched}
 				before, sourceBefore := snapshotFixedMetadataPreflight(f), snapshotFixedMetadataPreflight(source)
@@ -100,11 +92,7 @@ func TestFixedMinMaxPlainMergeMetadataPreflight(t *testing.T) {
 				for _, v := range result {
 					t.Cleanup(func() { v.Free(f.mp) })
 				}
-				wantChunks := 1
-				if mode == "unrelated-target-metadata" {
-					wantChunks = 2
-				}
-				require.Len(t, result, wantChunks)
+				require.Len(t, result, 1)
 				want := []int64{-5, -2}
 				if mode == "standby" {
 					want = []int64{-5, 7}
@@ -114,7 +102,6 @@ func TestFixedMinMaxPlainMergeMetadataPreflight(t *testing.T) {
 				require.Equal(t, want, vector.MustFixedColNoTypeCheck[int64](result[0])[:2])
 				for row := range 3 {
 					require.Equal(t, row == 2, result[0].IsNull(uint64(row)))
-					require.Equal(t, types.StringSourceExpression, result[0].GetStringSourceAt(row))
 				}
 			})
 		}
@@ -204,95 +191,6 @@ func TestFixedMinMaxMergePreflightTargetShape(t *testing.T) {
 	}
 }
 
-func TestFixedMinMaxMergeMetadataFallbackOrder(t *testing.T) {
-	for _, invalid := range []string{"later target", "later source", "NULL source metadata"} {
-		t.Run(invalid, func(t *testing.T) {
-			f := newFixedMetadataPreflightFixture(t, AggIdOfMin, types.T_int64.ToType())
-			require.NoError(t, f.exec.GroupGrow(1))
-			source := f.mergeSource(t, []int64{3, 4}, nil)
-			before, sourceBefore := snapshotFixedMetadataPreflight(f), snapshotFixedMetadataPreflight(source)
-			account, calls := f.account.Snapshot(), f.controller.calls
-			var got error
-			want := mpool.ErrAllocationAccountInvalid
-			func() {
-				v := source.base.state[0].vecs[0]
-				require.NoError(t, v.SetStringSourcesWithMP([]types.StringSource{
-					types.StringSourceLiteral, types.StringSourceCOMStmt}, source.mp))
-				defer func() { require.NoError(t, v.SetStringSource(types.StringSourceExpression)) }()
-				// Deliberately corrupt owned metadata: this internal error-order
-				// control is not a claim about valid SQL input. The original event
-				// stage rejects row 0 before any later source/target invariant.
-				v.GetStringSources()[0] = types.StringSource(255)
-				groups := []uint64{1, AggBatchSize + 1}
-				if invalid == "NULL source metadata" {
-					v.SetNull(0)
-					defer v.UnsetNull(0)
-					v.GetStringSources()[1] = types.StringSourceExpression
-					groups = []uint64{AggBatchSize + 1, 1}
-					want = nil // the old candidate stage skips NULL ownership
-				}
-				if invalid == "later source" {
-					original := source.base.state
-					defer func() { source.base.state = original }()
-					source.base.state = []aggState{original[0], {length: 1}}
-					source.base.state[0].length = 1
-					groups[1] = 1
-				}
-				got = f.exec.PreflightBatchMerge(source.exec, 0, groups)
-			}()
-			if want == nil {
-				require.NoError(t, got)
-			} else {
-				require.ErrorIs(t, got, want)
-			}
-			require.Equal(t, before, snapshotFixedMetadataPreflight(f))
-			require.Equal(t, sourceBefore, snapshotFixedMetadataPreflight(source))
-			require.Equal(t, account, f.account.Snapshot())
-			require.Equal(t, calls, f.controller.calls)
-		})
-	}
-}
-
-func TestFixedMinMaxMergeEmptyMetadataSidecar(t *testing.T) {
-	for _, kind := range []string{"source"} {
-		t.Run(kind, func(t *testing.T) {
-			f := newFixedMetadataPreflightFixture(t, AggIdOfMin, types.T_int64.ToType())
-			require.NoError(t, f.exec.PreAllocateGroups(128))
-			v := f.base.standby[0].vecs[0]
-			require.NoError(t, v.PreflightSetStringSourceAtLength(0, 2, types.StringSourceLiteral, f.mp))
-			require.NotNil(t, v.GetStringSources())
-			require.Empty(t, v.GetStringSources())
-			source := f.mergeSource(t, []int64{4, 4}, nil)
-			groups := []uint64{1, 128}
-			before := snapshotFixedMetadataPreflight(f)
-			used := f.account.Snapshot().Used
-			f.controller.failAt = f.controller.calls + 1
-			require.ErrorIs(t, f.exec.PreflightBatchMerge(source.exec, 0, groups), mpool.ErrAllocationAccountCapacity)
-			require.True(t, f.controller.rejected)
-			require.Equal(t, before, snapshotFixedMetadataPreflight(f), "rejected admission cannot publish rows or sidecars")
-			require.Equal(t, used, f.account.Snapshot().Used)
-			f.controller.failAt, f.controller.rejected = 0, false
-			require.NoError(t, f.exec.PreflightBatchMerge(source.exec, 0, groups))
-			requireFixedPreflightRowsUnchanged(t, before, snapshotFixedMetadataPreflight(f))
-			require.NoError(t, f.exec.GroupGrow(128))
-			admitted, calls := f.account.Snapshot().Used, f.controller.calls
-			f.controller.failAt = calls + 1
-			require.NoError(t, f.exec.BatchMerge(source.exec, 0, groups))
-			require.False(t, f.controller.rejected)
-			require.Equal(t, calls, f.controller.calls)
-			require.LessOrEqual(t, f.account.Snapshot().Used, admitted)
-			for row := range 128 {
-				present := row == 0 || row == 127
-				require.Equal(t, !present, v.IsNull(uint64(row)))
-				if present {
-					require.Equal(t, int64(4), vector.GetFixedAtNoTypeCheck[int64](v, row))
-				}
-				require.Equal(t, types.StringSourceExpression, v.GetStringSourceAt(row))
-			}
-		})
-	}
-}
-
 func BenchmarkFixedMinMaxPlainMergeMetadataPreflight(b *testing.B) {
 	for _, tc := range []struct {
 		name    string
@@ -341,7 +239,6 @@ func BenchmarkFixedMinMaxPlainMergeMetadataPreflight(b *testing.B) {
 				want := int64(row + (hashmap.UnitLimit-1-row)/tc.groups*tc.groups)
 				require.False(b, v.IsNull(uint64(row)))
 				require.Equal(b, want, vector.GetFixedAtNoTypeCheck[int64](v, row))
-				require.Equal(b, types.StringSourceExpression, v.GetStringSourceAt(row))
 			}
 		})
 	}

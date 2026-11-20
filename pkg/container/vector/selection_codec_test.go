@@ -67,7 +67,6 @@ func TestSelectedRowsVarlenaWriterMatchesReference(t *testing.T) {
 		fast   bool
 	}{
 		{name: "plain", fast: true},
-		{name: "uniform provenance", fast: true, modify: func() { require.NoError(t, source.SetStringSource(types.StringSourceLiteral)) }},
 		{name: "null fallback", modify: func() { source.SetNull(1) }},
 		{name: "grouping fallback", modify: func() { source.GetNulls().Del(1); source.GetGrouping().Add(1) }},
 	} {
@@ -75,7 +74,6 @@ func TestSelectedRowsVarlenaWriterMatchesReference(t *testing.T) {
 			t.Cleanup(func() {
 				source.GetNulls().Clear()
 				source.GetGrouping().Clear()
-				require.NoError(t, source.SetStringSource(types.StringSourceExpression))
 			})
 			if tc.modify != nil {
 				tc.modify()
@@ -349,22 +347,82 @@ func TestSelectedRowsCodecMatchesFlagSelectionWire(t *testing.T) {
 	require.Equal(t, fromFlags.Bytes(), fromRows.Bytes())
 }
 
-func TestSelectedRowsCodecPreservesStringSource(t *testing.T) {
+func TestSelectedRowsCodecDropsLegacyStringSource(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_varchar.ToType())
-	require.NoError(t, AppendBytesList(source, [][]byte{[]byte("a"), []byte("b"), []byte("c")}, nil, mp))
-	require.NoError(t, source.SetStringSourcesWithMP([]types.StringSource{
-		types.StringSourceLiteral, types.StringSourceSQLPrepare, types.StringSourceCOMStmt,
-	}, mp))
+	t.Cleanup(func() {
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, AppendBytesList(source,
+		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")}, nil, mp))
+	source.SetNull(1)
+	source.GetGrouping().Add(2)
+	require.NoError(t, source.SetBinaryStringRowsWithMP([]bool{false, false, true, true}, mp))
+	rows := []int32{0, 1, 2, 3}
+
 	var encoded bytes.Buffer
-	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0, 2}))
-	destination := NewVec(types.T_varchar.ToType())
-	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 2, mp))
-	require.Equal(t, [][]byte{[]byte("a"), []byte("c")}, InefficientMustBytesCol(destination))
-	require.Equal(t, []types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt}, destination.GetStringSources())
-	destination.Free(mp)
-	source.Free(mp)
-	require.Zero(t, mp.CurrNB())
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, rows))
+	wire := encoded.Bytes()
+	require.Zero(t, wire[4]&selectedRowsSourceMask,
+		"current writers never emit the string-source field")
+
+	checkDecoded := func(t *testing.T, legacy []byte) {
+		destination := NewOffHeapVecWithType(types.T_varchar.ToType())
+		defer destination.Free(mp)
+		reader := bytes.NewReader(legacy)
+		require.NoError(t, destination.UnmarshalSelectedRowsFrom(reader, len(rows), mp))
+		require.Zero(t, reader.Len())
+		require.Equal(t, "a", string(destination.GetBytesAt(0)))
+		require.True(t, destination.IsNull(1))
+		require.Equal(t, "c", string(destination.GetBytesAt(2)))
+		require.Equal(t, "d", string(destination.GetBytesAt(3)))
+		require.True(t, destination.GetGrouping().Contains(2))
+		require.False(t, destination.GetGrouping().Contains(0))
+		require.True(t, destination.HasBinaryStringRows())
+		require.False(t, destination.GetBinaryStringMetadataAt(0))
+		require.True(t, destination.GetBinaryStringMetadataAt(2))
+		require.True(t, destination.GetBinaryStringMetadataAt(3))
+	}
+
+	// An older writer emitted a uniform non-expression source as one byte
+	// right after the metadata byte.
+	t.Run("uniform", func(t *testing.T) {
+		legacy := append(append(append([]byte(nil), wire[:5]...),
+			byte(types.StringSourceLiteral)), wire[5:]...)
+		legacy[4] |= selectedRowsSourceUniform << selectedRowsSourceShift
+		checkDecoded(t, legacy)
+
+		invalid := append([]byte(nil), legacy...)
+		invalid[5] = byte(types.StringSourceExpression)
+		destination := NewOffHeapVecWithType(types.T_varchar.ToType())
+		defer destination.Free(mp)
+		require.ErrorContains(t, destination.UnmarshalSelectedRowsFrom(
+			bytes.NewReader(invalid), len(rows), mp), "string source")
+		require.Zero(t, destination.Length())
+	})
+
+	// An older writer emitted mixed sources as a per-row trailer.
+	t.Run("rows", func(t *testing.T) {
+		legacy := append(append([]byte(nil), wire...),
+			byte(types.StringSourceLiteral), byte(types.StringSourceExpression),
+			byte(types.StringSourceSQLPrepare), byte(types.StringSourceCOMStmt))
+		legacy[4] |= selectedRowsSourceRows << selectedRowsSourceShift
+		checkDecoded(t, legacy)
+
+		invalid := append([]byte(nil), legacy...)
+		invalid[len(invalid)-1] = 0xff
+		destination := NewOffHeapVecWithType(types.T_varchar.ToType())
+		defer destination.Free(mp)
+		require.ErrorContains(t, destination.UnmarshalSelectedRowsFrom(
+			bytes.NewReader(invalid), len(rows), mp), "string source")
+		require.Zero(t, destination.Length())
+
+		truncated := legacy[:len(legacy)-1]
+		require.Error(t, destination.UnmarshalSelectedRowsFrom(
+			bytes.NewReader(truncated), len(rows), mp))
+		require.Zero(t, destination.Length())
+	})
 }
 
 func BenchmarkSelectedRowsCodecAvoidsSparseFlagScans(b *testing.B) {

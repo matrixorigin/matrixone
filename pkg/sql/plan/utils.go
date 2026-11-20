@@ -1974,14 +1974,17 @@ func constantFoldWithPreparedExactSource(
 		}
 		isSerialized := rule.ContainsSerializedLiteral(exprList)
 
+		// LiteralVec has only a uniform source field. Keep mixed-owner lists
+		// structured so each scalar literal retains its identity.
+		listSource, uniform := rule.ListStringSource(exprList, proc)
+		if !uniform {
+			return expr, nil
+		}
 		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
 		if err != nil {
 			return nil, err
 		}
 		defer vec.Free(proc.Mp())
-		if vec.GetStringSources() != nil {
-			return expr, nil
-		}
 
 		// Nullable IN-lists must keep their null bitmap aligned with values.
 		if !vec.IsConstNull() && !vec.GetNulls().Any() {
@@ -2001,7 +2004,7 @@ func constantFoldWithPreparedExactSource(
 					Len:                       int32(vec.Length()),
 					Data:                      data,
 					IsSerialized:              isSerialized,
-					StringSource:              uint32(vec.GetStringSource()),
+					StringSource:              uint32(listSource),
 					DecimalLiteralRequiresV82: requiresDecimalProvenance,
 				},
 			},
@@ -2112,9 +2115,6 @@ func constantFoldWithPreparedExactSource(
 		if err != nil {
 			return nil, err
 		}
-		if vec.GetStringSources() != nil {
-			return expr, nil
-		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr, nil
@@ -2132,13 +2132,13 @@ func constantFoldWithPreparedExactSource(
 				Vec: &plan.LiteralVec{
 					Len:                       int32(vec.Length()),
 					Data:                      data,
-					StringSource:              uint32(vec.GetStringSource()),
+					StringSource:              uint32(rule.ExprStringSource(expr, proc)),
 					DecimalLiteralRequiresV82: requiresDecimalProvenance,
 				},
 			},
 		}, nil
 	}
-	c := rule.GetConstantValue(vec, false, 0)
+	c := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(expr, proc))
 	if c == nil {
 		constant, err := rule.MaterializeDecimal256Constant(proc, expr, vec)
 		if err != nil {
@@ -2151,9 +2151,6 @@ func constantFoldWithPreparedExactSource(
 	}
 	rule.PreserveFoldedLiteralStringDomain(expr, c)
 	rule.PreserveFoldedDecimalLiteralSemantics(expr, c)
-	if source := vec.GetStringSource(); source != types.StringSourceLiteral {
-		c.StringSource = uint32(source) + 1
-	}
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	// This annotation is itself PREPARE provenance. An enclosing expression
 	// can contain only ColRefs after relational binding, so a marker scan alone

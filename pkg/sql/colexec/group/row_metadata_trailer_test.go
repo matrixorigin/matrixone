@@ -43,41 +43,6 @@ func (s *unknownGroupServiceLockService) GetConfig() lockservice.Config {
 	return s.cfg
 }
 
-func TestSaveAggregateChunkForProtocolStringSourceGate(t *testing.T) {
-	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(input, []byte("value"), false, mp))
-	require.NoError(t, input.SetStringSource(types.StringSourceCOMStmt))
-	source, err := aggexec.MakeGroupAgg(
-		mp, aggexec.AggIdOfAny, false, nil, nil, types.T_text.ToType())
-	require.NoError(t, err)
-	require.NoError(t, source.GroupGrow(1))
-	require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
-
-	for _, includeStringSource := range []bool{false, true} {
-		var wire bytes.Buffer
-		require.NoError(t, saveAggregateChunkForProtocol(
-			source, 0, &wire, includeStringSource))
-		restored, err := aggexec.MakeGroupAgg(
-			mp, aggexec.AggIdOfAny, false, nil, nil, types.T_text.ToType())
-		require.NoError(t, err)
-		require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
-		results, err := restored.Flush()
-		require.NoError(t, err)
-		if includeStringSource {
-			require.Equal(t, types.StringSourceCOMStmt, results[0].GetStringSourceAt(0))
-		} else {
-			require.False(t, results[0].HasStringSourceMetadata())
-		}
-		results[0].Free(mp)
-		restored.Free()
-	}
-
-	source.Free()
-	input.Free(mp)
-	require.Zero(t, mp.CurrNB())
-}
-
 func TestRowMetadataTrailerWireUnknownServiceFailsClosed(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -264,7 +229,7 @@ func TestRowMetadataTrailerDomainRequiresCapabilities(t *testing.T) {
 // An older writer appended the row-metadata trailer, including retired
 // per-aggregate (uniform) or per-row category data, after the aggregate state.
 // Current readers must accept and discard it while the aggregate state's own
-// string-domain and string-source metadata are still restored.
+// string-domain metadata is still restored.
 func TestOldRowMetadataTrailerWithRetiredKindsDecodes(t *testing.T) {
 	mp := mpool.MustNewZero()
 	input := vector.NewVec(types.T_varchar.ToType())
@@ -272,7 +237,6 @@ func TestOldRowMetadataTrailerWithRetiredKindsDecodes(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(input, []byte("b"), false, mp))
 	require.NoError(t, input.SetRuntimeStringDomainsWithMP(
 		[]types.RuntimeStringDomain{types.RuntimeStringBinary, types.RuntimeStringText}, mp))
-	require.NoError(t, input.SetStringSource(types.StringSourceCOMStmt))
 	source, err := aggexec.MakeGroupAgg(
 		mp, aggexec.AggIdOfAny, false, nil, nil, types.T_varchar.ToType())
 	require.NoError(t, err)
@@ -316,8 +280,6 @@ func TestOldRowMetadataTrailerWithRetiredKindsDecodes(t *testing.T) {
 			require.Len(t, results, 1)
 			require.Equal(t, types.RuntimeStringBinary, results[0].GetRuntimeStringDomainAt(0))
 			require.Equal(t, types.RuntimeStringText, results[0].GetRuntimeStringDomainAt(1))
-			require.Equal(t, types.StringSourceCOMStmt, results[0].GetStringSourceAt(0))
-			require.Equal(t, types.StringSourceCOMStmt, results[0].GetStringSourceAt(1))
 			results[0].Free(mp)
 		})
 	}

@@ -1435,13 +1435,8 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return moerr.NewInvalidStateNoCtx(
 			"explicit-text provenance requires MORPCVersion23 for remote results")
 	}
-	if b.HasTransportMetadataWithoutStringSources() && version < defines.MORPCVersion12 {
-		return moerr.NewInvalidStateNoCtx(
-			"prepared parameter provenance requires MORPCVersion12 for remote results")
-	}
 	var transport bytes.Buffer
-	data, err := b.MarshalBinaryForPipeline(
-		&transport, false, version >= defines.MORPCVersion37)
+	data, err := b.MarshalBinaryForPipeline(&transport, false)
 	if err != nil {
 		return err
 	}

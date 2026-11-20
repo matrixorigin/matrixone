@@ -347,9 +347,21 @@ func (proc *Process) setPrepareParams(
 	proc.Base.prepareParamsIsBin = isBin
 	proc.Base.prepareParamsBinaryString = binaryString
 	proc.Base.prepareParamsOwned = owned && prepareParams != nil
-	// Typed values describe one execution's parameters; a caller with typed
-	// values installs them after the TEXT transport.
+	// Typed values and the source describe one execution's parameters; a
+	// caller installs them after the TEXT transport.
 	proc.setTypedPrepareParams(nil, false)
+	proc.Base.prepareParamsStringSource = types.StringSourceExpression
+}
+
+// SetPrepareParamsStringSource records where the current parameters came
+// from. Set it after the TEXT transport, which resets it.
+func (proc *Process) SetPrepareParamsStringSource(source types.StringSource) {
+	proc.Base.prepareParamsStringSource = source
+}
+
+// GetPrepareParamsStringSource returns where the current parameters came from.
+func (proc *Process) GetPrepareParamsStringSource() types.StringSource {
+	return proc.Base.prepareParamsStringSource
 }
 
 // SetTypedPrepareParams installs the typed parameter values: a one-row batch
@@ -393,6 +405,7 @@ type PrepareParamsState struct {
 	owned         bool
 	typed         *batch.Batch
 	typedOwned    bool
+	source        types.StringSource
 }
 
 // DetachPrepareParams removes the prepare-parameter state without releasing
@@ -406,6 +419,7 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 		owned:         proc.Base.prepareParamsOwned,
 		typed:         proc.Base.typedPrepareParams,
 		typedOwned:    proc.Base.typedPrepareParamsOwned,
+		source:        proc.Base.prepareParamsStringSource,
 	}
 	proc.Base.prepareParams = nil
 	proc.Base.prepareParamsIsBin = nil
@@ -422,6 +436,7 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 func (proc *Process) BorrowPrepareParams(state PrepareParamsState) {
 	proc.setPrepareParams(state.prepareParams, state.isBin, state.binaryString, false)
 	proc.setTypedPrepareParams(state.typed, false)
+	proc.Base.prepareParamsStringSource = state.source
 }
 
 // RestorePrepareParams restores state previously returned by
@@ -429,6 +444,7 @@ func (proc *Process) BorrowPrepareParams(state PrepareParamsState) {
 func (proc *Process) RestorePrepareParams(state PrepareParamsState) {
 	proc.setPrepareParams(state.prepareParams, state.isBin, state.binaryString, state.owned)
 	proc.setTypedPrepareParams(state.typed, state.typedOwned)
+	proc.Base.prepareParamsStringSource = state.source
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {

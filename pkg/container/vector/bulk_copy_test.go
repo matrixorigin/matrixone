@@ -43,7 +43,6 @@ func TestBatchCopySelection(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { constant.Free(mp) })
 	constant.SetIsBinaryString(true)
-	require.NoError(t, constant.SetStringSource(types.StringSourceLiteral))
 	constant.GetGrouping().Add(2)
 
 	// Reuse the batch's vector slots across representation generations. Each
@@ -73,7 +72,6 @@ func TestBatchCopySelection(t *testing.T) {
 				require.Equal(t, b, a)
 				for row := range got.Length() {
 					require.Equal(t, want.GetIsBinaryStringAt(row), got.GetIsBinaryStringAt(row))
-					require.Equal(t, want.GetStringSourceAt(row), got.GetStringSourceAt(row))
 				}
 			}()
 		}

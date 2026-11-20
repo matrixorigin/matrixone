@@ -27,7 +27,7 @@ import (
 // It gathers directly from the immutable backing into the existing destination;
 // source metadata remains indexed by logical row, including repeated values.
 func (v *Vector) unionDictionaryBatch(w *Vector, offset int64, count int, flags []uint8,
-	overrides []types.StringSource, added int, areaWasDisjoint bool, mp *mpool.MPool) error {
+	added int, areaWasDisjoint bool, mp *mpool.MPool) error {
 	backing := w.dictionaryState()
 	base, rows := backing.base.vec, backing.rows.storageFixed()
 	oldLength := v.length
@@ -78,9 +78,6 @@ func (v *Vector) unionDictionaryBatch(w *Vector, offset int64, count int, flags 
 			}
 			next++
 		}
-	}
-	if err := v.propagateStringSourcesBatch(w, oldLength, offset, count, flags, overrides, mp); err != nil {
-		return err
 	}
 	if err := v.propagateBinaryStringBatch(w, oldLength, offset, count, flags, mp); err != nil {
 		return err
@@ -418,9 +415,6 @@ func unionDictionaryRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPoo
 	if err := v.MaterializeOwned(mp); err != nil {
 		return err
 	}
-	if err := v.preExtendStringSourcesForAppend(v.length+len(sels), mp); err != nil {
-		return err
-	}
 	if err := v.preflightBinaryStringAppend(
 		v.length+len(sels),
 		summarizeBinaryStringSelection(w, sels),
@@ -428,12 +422,6 @@ func unionDictionaryRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPoo
 	); err != nil {
 		return err
 	}
-	if err := preflightStringSourceSelectionAppend(
-		v, v.length+len(sels), w, sels, mp,
-	); err != nil {
-		return err
-	}
-	defer v.normalizeStringSources()
 
 	if err := extendWithBitmaps(
 		v,
@@ -454,9 +442,6 @@ func unionDictionaryRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPoo
 	if err := gatherDictionarySelection(v, w, sels, oldLen, preserveDisjointArea, mp); err != nil {
 		return err
 	}
-	if err := propagateStringSourcesSelection(v, w, oldLen, sels, mp); err != nil {
-		return err
-	}
 	return propagateBinaryStringSelection(v, w, oldLen, sels, mp)
 }
 
@@ -467,7 +452,6 @@ func (v *Vector) admitDictionaryBatch(
 	offset int64,
 	cnt int,
 	flags []uint8,
-	stringSourceOverrides []types.StringSource,
 	mp *mpool.MPool,
 	selectedAreaBytes int,
 	preflightRowCount int,
@@ -519,10 +503,6 @@ func (v *Vector) admitDictionaryBatch(
 		return err
 	}
 	if !preflighted {
-		if err := v.PreflightUnionBatchStringSources(w, offset, cnt, flags, mp); err != nil {
-			return err
-		}
-		defer v.normalizeStringSources()
 		if err := v.PreflightUnionBatchBinaryString(w, offset, cnt, flags, mp); err != nil {
 			return err
 		}
@@ -568,5 +548,5 @@ func (v *Vector) admitDictionaryBatch(
 		}
 	}
 
-	return v.unionDictionaryBatch(w, offset, cnt, flags, stringSourceOverrides, addCnt, areaWasDisjoint, mp)
+	return v.unionDictionaryBatch(w, offset, cnt, flags, addCnt, areaWasDisjoint, mp)
 }

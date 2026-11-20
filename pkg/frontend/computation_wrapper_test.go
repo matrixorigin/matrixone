@@ -430,8 +430,7 @@ func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {
 	params := cw.proc.GetPrepareParams()
 	require.Equal(t, types.RuntimeStringBinary, params.GetRuntimeStringDomainAt(0))
 	require.Equal(t, types.RuntimeStringInherit, params.GetRuntimeStringDomainAt(1))
-	require.Equal(t, types.StringSourceSQLPrepare, params.GetStringSourceAt(0))
-	require.Equal(t, types.StringSourceSQLPrepare, params.GetStringSourceAt(1))
+	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParamsStringSource())
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
@@ -440,7 +439,7 @@ func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {
 	require.False(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0))
 	require.Equal(t, "now-text", cw.proc.GetPrepareParams().GetStringAt(0))
-	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParams().GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParamsStringSource())
 
 	current := cw.proc.GetPrepareParams()
 	cw.proc.SetPrepareParams(vector.NewVec(types.T_text.ToType()))
@@ -1025,9 +1024,8 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 			for parameter, mysqlType := range tc.mysqlTypes {
 				require.Equal(t, mysqlType == defines.MYSQL_TYPE_LONG_BLOB,
 					cw.proc.GetPrepareParamIsBinaryString(parameter))
-				require.Equal(t, types.StringSourceCOMStmt,
-					cw.proc.GetPrepareParams().GetStringSourceAt(parameter))
 			}
+			require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParamsStringSource())
 
 			queryPlan := runtimePlan.GetQuery()
 			projects := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList
@@ -1585,7 +1583,7 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 	install("-42", defines.MYSQL_TYPE_LONGLONG, false)
 	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.Equal(t, types.StringSourceCOMStmt, prepareStmt.params.GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParamsStringSource())
 	require.Nil(t, retComp)
 	require.NotSame(t, ordinaryPlan, runtimePlan)
 	require.Equal(t, int32(types.T_int64), resultExpr(runtimePlan).Typ.Id)
@@ -6743,8 +6741,7 @@ func TestInitExecuteStmtParamSetsCOMStmtBinaryStringMetadata(t *testing.T) {
 	}
 	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
 	require.False(t, cw.proc.GetPrepareParamIsBinaryString(1))
-	require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParams().GetStringSourceAt(0))
-	require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParams().GetStringSourceAt(1))
+	require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParamsStringSource())
 }
 
 func TestInitExecuteStmtParamSpecializesCOMStmtBinaryFunction(t *testing.T) {

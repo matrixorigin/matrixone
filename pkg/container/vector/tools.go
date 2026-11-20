@@ -255,11 +255,6 @@ func extendWithBitmaps(
 		}
 		v.data = ndata
 	}
-	if v.stringSources != nil {
-		if err := v.preExtendStringSources(tgtLen, m); err != nil {
-			return err
-		}
-	}
 	if v.binaryStringRowsActive {
 		if err := v.ensureBinaryStringCapacity(tgtLen, m); err != nil {
 			return err

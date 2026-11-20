@@ -58,6 +58,83 @@ var (
 	tcs []batchTestCase
 )
 
+// legacyNoStringSource, legacyUniformStringSource and legacyRowsStringSource
+// encode one vector's string-source section as written by the retired
+// version-2 transport writer.
+func legacyNoStringSource() []byte { return []byte{batchMetadataModeNone} }
+
+func legacyUniformStringSource(source types.StringSource) []byte {
+	return []byte{batchMetadataModeUniform, byte(source)}
+}
+
+func legacyRowsStringSource(sources ...types.StringSource) []byte {
+	count := int32(len(sources))
+	out := append([]byte{batchMetadataModeRows}, types.EncodeInt32(&count)...)
+	for _, source := range sources {
+		out = append(out, byte(source))
+	}
+	return out
+}
+
+// legacyV2TransportWire rewrites the version-1 transport trailer of encoded
+// as an older (version-2) writer emitted it: sections[i] follows vector i's
+// string-domain record. Without a trailer, one is synthesized with empty
+// string-domain records, as older writers did for source-only batches. Bytes
+// after the trailer (a pipeline grouping section) are preserved.
+func legacyV2TransportWire(t *testing.T, encoded []byte, sections ...[]byte) []byte {
+	t.Helper()
+	prefix, err := stableBatchPayloadLength(encoded)
+	require.NoError(t, err)
+	stable := NewWithSize(0)
+	require.NoError(t, stable.UnmarshalBinary(encoded[:prefix]))
+	require.Len(t, sections, len(stable.Vecs))
+	records := make([][]byte, len(stable.Vecs))
+	suffix := encoded[prefix:]
+	if len(suffix) >= 4 && suffix[0] == batchMetadataMagic0 &&
+		suffix[1] == batchMetadataMagic1 && suffix[2] == batchMetadataMagic2 {
+		require.Equal(t, batchMetadataVersionV1, suffix[3])
+		require.Equal(t, int32(len(stable.Vecs)), types.DecodeInt32(suffix[4:8]))
+		require.Equal(t, int64(stable.RowCount()), types.DecodeInt64(suffix[8:16]))
+		pos := 16
+		for i := range records {
+			start := pos
+			mode := suffix[pos] &^ (batchMetadataBinaryFlag | batchMetadataTextFlag)
+			pos++
+			switch mode {
+			case batchMetadataModeNone:
+			case batchMetadataModeUniform:
+				pos++
+			case batchMetadataModeRows:
+				pos += 4 + int(types.DecodeInt32(suffix[pos:pos+4]))
+			default:
+				t.Fatalf("unexpected metadata mode %d", mode)
+			}
+			records[i] = suffix[start:pos]
+		}
+		require.Equal(t, uint32(pos+4), types.DecodeUint32(suffix[pos:pos+4]))
+		suffix = suffix[pos+4:]
+	} else {
+		for i := range records {
+			records[i] = []byte{batchMetadataModeNone}
+		}
+	}
+	var trailer bytes.Buffer
+	trailer.Write([]byte{batchMetadataMagic0, batchMetadataMagic1, batchMetadataMagic2, batchMetadataVersion})
+	nVecs := int32(len(records))
+	trailer.Write(types.EncodeInt32(&nVecs))
+	rowCount := int64(stable.RowCount())
+	trailer.Write(types.EncodeInt64(&rowCount))
+	for i := range records {
+		trailer.Write(records[i])
+		trailer.Write(sections[i])
+	}
+	size := uint32(trailer.Len() + 4)
+	trailer.Write(types.EncodeUint32(&size))
+	out := append([]byte(nil), encoded[:prefix]...)
+	out = append(out, trailer.Bytes()...)
+	return append(out, suffix...)
+}
+
 func init() {
 	tcs = []batchTestCase{
 		newTestCase([]types.Type{types.T_int8.ToType()}),
@@ -119,68 +196,6 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
 		}
 	}
-}
-
-func TestBatchWindowCleansStringSourceMetadataAfterPartialFailure(t *testing.T) {
-	const (
-		rows    = 128
-		poolCap = int64(1 << 20)
-	)
-	dataMP := mpool.MustNew(t.Name() + "-data")
-	firstOwner, err := mpool.NewMPool(t.Name()+"-first", 0, mpool.NoLock)
-	require.NoError(t, err)
-	secondOwner, err := mpool.NewMPool(t.Name()+"-second", poolCap, mpool.NoLock)
-	require.NoError(t, err)
-	defer mpool.DeleteMPool(dataMP)
-	defer mpool.DeleteMPool(firstOwner)
-	defer mpool.DeleteMPool(secondOwner)
-
-	source := NewWithSize(2)
-	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	sources := make([]types.StringSource, rows)
-	for row := range sources {
-		if row%2 == 0 {
-			sources[row] = types.StringSourceLiteral
-		} else {
-			sources[row] = types.StringSourceCOMStmt
-		}
-	}
-	for _, vec := range source.Vecs {
-		require.NoError(t, vector.AppendFixedList(vec, make([]int64, rows), nil, dataMP))
-	}
-	require.NoError(t, source.Vecs[0].SetStringSourcesWithMP(sources, firstOwner))
-	require.NoError(t, source.Vecs[1].SetStringSourcesWithMP(sources, secondOwner))
-	source.SetRowCount(rows)
-	firstBaseline := firstOwner.CurrNB()
-	secondBaseline := secondOwner.CurrNB()
-	fill, err := secondOwner.Alloc(int(poolCap-secondOwner.CurrNB()), true)
-	require.NoError(t, err)
-	defer func() {
-		secondOwner.Free(fill)
-		source.Clean(dataMP)
-		require.Zero(t, dataMP.CurrNB())
-		require.Zero(t, firstOwner.CurrNB())
-		require.Zero(t, secondOwner.CurrNB())
-	}()
-
-	var window *Batch
-	require.NotPanics(t, func() {
-		window, err = source.Window(0, rows)
-	})
-	require.Nil(t, window)
-	require.Error(t, err)
-	require.Equal(t, firstBaseline, firstOwner.CurrNB(),
-		"the successfully-created prefix window must release its sidecar")
-
-	secondOwner.Free(fill)
-	fill = nil
-	window, err = source.Window(0, rows)
-	require.NoError(t, err)
-	require.NotNil(t, window)
-	window.Clean(nil)
-	require.Equal(t, firstBaseline, firstOwner.CurrNB())
-	require.Equal(t, secondBaseline, secondOwner.CurrNB())
 }
 
 func TestBatchWindowBroadcastsScalarConstants(t *testing.T) {
@@ -777,10 +792,6 @@ func TestTransportMetadataRoundTripAndReuse(t *testing.T) {
 	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
 	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
-	require.NoError(t, source.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
-		types.StringSourceCOMStmt,
-		types.StringSourceSQLPrepare,
-	}, mp))
 	require.NoError(t, source.Vecs[0].SetBinaryStringRows([]bool{true, false}))
 	source.SetRowCount(2)
 	defer source.Clean(mp)
@@ -808,29 +819,40 @@ func TestTransportMetadataRoundTripAndReuse(t *testing.T) {
 	require.NoError(t, decoded.UnmarshalBinaryWithMetadata(encoded, mp))
 	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
 	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
-	require.Equal(t, types.StringSourceCOMStmt, decoded.Vecs[0].GetStringSourceAt(0))
-	require.Equal(t, types.StringSourceSQLPrepare, decoded.Vecs[0].GetStringSourceAt(1))
+	require.Equal(t, batchMetadataVersionV1, encoded[len(legacy)+3],
+		"writers no longer emit the string-source section")
 
-	var oldPeerWire bytes.Buffer
-	oldPeerEncoded, err := source.MarshalBinaryWithMetadataForProtocol(&oldPeerWire, true, false)
-	require.NoError(t, err)
-	oldPeerDecoded := NewOffHeapEmpty()
-	require.NoError(t, oldPeerDecoded.UnmarshalBinaryWithMetadata(oldPeerEncoded, mp))
-	require.False(t, oldPeerDecoded.Vecs[0].HasStringSourceMetadata())
-	oldPeerDecoded.Clean(mp)
+	// An older writer's version-2 trailer carries per-row string sources. Both
+	// decoders validate and drop them while restoring the binary-string rows.
+	olderWriter := legacyV2TransportWire(t, encoded,
+		legacyRowsStringSource(types.StringSourceCOMStmt, types.StringSourceSQLPrepare))
+	require.Equal(t, batchMetadataVersion, olderWriter[len(legacy)+3])
+	olderDecoded := NewOffHeapEmpty()
+	require.NoError(t, olderDecoded.UnmarshalBinaryWithMetadata(olderWriter, mp))
+	require.True(t, olderDecoded.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, olderDecoded.Vecs[0].GetIsBinaryStringAt(1))
+	require.NoError(t, olderDecoded.UnmarshalFromReaderWithMetadata(
+		bytes.NewReader(olderWriter), int64(len(olderWriter)), mp))
+	require.True(t, olderDecoded.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, olderDecoded.Vecs[0].GetIsBinaryStringAt(1))
+	olderDecoded.Clean(mp)
 
-	corrupt := append([]byte(nil), encoded...)
+	corrupt := append([]byte(nil), olderWriter...)
 	const sourceRowsOffset = 4 + 4 + 8 + 1 + 4 + 2 + 1 + 4
 	corrupt[len(legacy)+sourceRowsOffset] = 255
 	corruptDecoded := NewOffHeapEmpty()
 	require.ErrorContains(t,
 		corruptDecoded.UnmarshalBinaryWithMetadata(corrupt, mp),
 		"invalid string source metadata")
+	corruptDecoded = NewOffHeapEmpty()
+	require.ErrorContains(t,
+		corruptDecoded.UnmarshalFromReaderWithMetadata(bytes.NewReader(corrupt), int64(len(corrupt)), mp),
+		"invalid string source metadata")
 	corruptDecoded.Clean(mp)
 
 	// Older writers stored a retired per-row kind (0..4) in the low bits of
 	// each binary-string row byte. The reader validates and ignores it while
-	// restoring the binary-string rows and string sources.
+	// restoring the binary-string rows.
 	const binaryRowsOffset = 4 + 4 + 8 + 1 + 4
 	withKinds := append([]byte(nil), encoded...)
 	withKinds[len(legacy)+binaryRowsOffset] |= 2
@@ -839,8 +861,6 @@ func TestTransportMetadataRoundTripAndReuse(t *testing.T) {
 	require.NoError(t, kindsDecoded.UnmarshalBinaryWithMetadata(withKinds, mp))
 	require.True(t, kindsDecoded.Vecs[0].GetIsBinaryStringAt(0))
 	require.False(t, kindsDecoded.Vecs[0].GetIsBinaryStringAt(1))
-	require.Equal(t, types.StringSourceCOMStmt, kindsDecoded.Vecs[0].GetStringSourceAt(0))
-	require.Equal(t, types.StringSourceSQLPrepare, kindsDecoded.Vecs[0].GetStringSourceAt(1))
 	kindsDecoded.Clean(mp)
 	withKinds[len(legacy)+binaryRowsOffset+1] |= 5
 	kindsDecoded = NewOffHeapEmpty()
@@ -851,41 +871,47 @@ func TestTransportMetadataRoundTripAndReuse(t *testing.T) {
 	// sidecar rather than leaking the first generation's provenance.
 	require.NoError(t, decoded.UnmarshalBinaryWithMetadata(legacy, mp))
 	require.False(t, decoded.Vecs[0].GetIsBinaryString())
-	require.False(t, decoded.Vecs[0].HasStringSourceMetadata())
 	decoded.Clean(mp)
 }
 
-func TestTransportDecoderRejectsMixedConstStringSources(t *testing.T) {
+func TestTransportDecoderDropsLegacyStringSourcesOnConstant(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewWithSize(1)
-	source.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	require.NoError(t, vector.AppendBytesList(
-		source.Vecs[0], [][]byte{[]byte("value"), []byte("value")}, nil, mp))
-	require.NoError(t, source.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
-		types.StringSourceLiteral, types.StringSourceSQLPrepare,
-	}, mp))
-	// Construct a malformed wire witness that cannot be produced through the
-	// validated const-vector setter.
-	source.Vecs[0].SetClass(vector.CONSTANT)
+	var err error
+	source.Vecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte("value"), 2, mp)
+	require.NoError(t, err)
 	source.SetRowCount(2)
 	defer source.Clean(mp)
 
 	var wire bytes.Buffer
 	encoded, err := source.MarshalBinaryWithMetadata(&wire, true)
 	require.NoError(t, err)
+	stable, err := source.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, stable, encoded, "a batch without string domains carries no trailer")
+	// An older writer could emit a per-row section (even a mixed one) for a
+	// constant vector. It is validated and dropped; the constant survives.
+	encoded = legacyV2TransportWire(t, encoded,
+		legacyRowsStringSource(types.StringSourceLiteral, types.StringSourceSQLPrepare))
 
+	check := func(decoded *Batch) {
+		require.Equal(t, 2, decoded.RowCount())
+		require.True(t, decoded.Vecs[0].IsConst())
+		require.Equal(t, "value", decoded.Vecs[0].GetStringAt(1))
+		require.False(t, decoded.Vecs[0].HasBinaryStringMetadata())
+	}
 	buffered := NewOffHeapEmpty()
-	err = buffered.UnmarshalBinaryWithMetadata(encoded, mp)
-	require.ErrorContains(t, err, "constant vector cannot have mixed string sources")
+	require.NoError(t, buffered.UnmarshalBinaryWithMetadata(encoded, mp))
+	check(buffered)
 	buffered.Clean(mp)
 
 	streaming := NewOffHeapEmpty()
-	err = streaming.UnmarshalFromReaderWithMetadata(bytes.NewReader(encoded), int64(len(encoded)), mp)
-	require.ErrorContains(t, err, "constant vector cannot have mixed string sources")
+	require.NoError(t, streaming.UnmarshalFromReaderWithMetadata(bytes.NewReader(encoded), int64(len(encoded)), mp))
+	check(streaming)
 	streaming.Clean(mp)
 }
 
-func TestAllStringSourcesRoundTripBatchAndGroupingCodecs(t *testing.T) {
+func TestLegacyStringSourcesDroppedByBatchAndGroupingCodecs(t *testing.T) {
 	mp := mpool.MustNewZero()
 	sources := []types.StringSource{
 		types.StringSourceExpression,
@@ -899,28 +925,49 @@ func TestAllStringSourcesRoundTripBatchAndGroupingCodecs(t *testing.T) {
 	for range sources {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("value"), false, mp))
 	}
-	require.NoError(t, bat.Vecs[0].SetStringSourcesWithMP(sources, mp))
+	binaryRows := []bool{true, false, true, false, false}
+	require.NoError(t, bat.Vecs[0].SetBinaryStringRowsWithMP(binaryRows, mp))
 	bat.Vecs[0].GetGrouping().Add(1, 3)
 	bat.SetRowCount(len(sources))
 	defer bat.Clean(mp)
 
+	requireBinaryRows := func(decoded *Batch) {
+		for row, binary := range binaryRows {
+			require.Equal(t, binary, decoded.Vecs[0].GetIsBinaryStringAt(row), "row %d", row)
+		}
+	}
+
+	// Every valid source value an older writer could emit is accepted and
+	// dropped by the buffered and streaming decoders.
 	var wire bytes.Buffer
 	encoded, err := bat.MarshalBinaryWithMetadata(&wire, true)
 	require.NoError(t, err)
+	encoded = legacyV2TransportWire(t, encoded, legacyRowsStringSource(sources...))
 	decoded := NewOffHeapEmpty()
 	require.NoError(t, decoded.UnmarshalBinaryWithMetadata(encoded, mp))
-	for row, source := range sources {
-		require.Equal(t, source, decoded.Vecs[0].GetStringSourceAt(row))
-	}
+	requireBinaryRows(decoded)
+	require.NoError(t, decoded.UnmarshalFromReaderWithMetadata(bytes.NewReader(encoded), int64(len(encoded)), mp))
+	requireBinaryRows(decoded)
 	decoded.Clean(mp)
 
 	wire.Reset()
 	require.NoError(t, bat.MarshalBinaryWithGroupingTo(&wire))
 	grouped := NewOffHeapEmpty()
-	require.NoError(t, grouped.UnmarshalFromReaderWithGrouping(&wire, mp))
-	for row, source := range sources {
-		require.Equal(t, source, grouped.Vecs[0].GetStringSourceAt(row))
-	}
+	require.NoError(t, grouped.UnmarshalFromReaderWithGrouping(bytes.NewReader(wire.Bytes()), mp))
+	requireBinaryRows(grouped)
+	require.True(t, grouped.Vecs[0].GetGrouping().IsSame(bat.Vecs[0].GetGrouping()))
+
+	// The grouping codec frames the same transport payload; an older
+	// writer's version-2 trailer inside it is dropped as well.
+	payloadSize := types.DecodeInt64(wire.Bytes()[:8])
+	payload := wire.Bytes()[8 : 8+payloadSize]
+	groupingTail := wire.Bytes()[8+payloadSize:]
+	olderPayload := legacyV2TransportWire(t, payload, legacyRowsStringSource(sources...))
+	olderSize := int64(len(olderPayload))
+	olderWire := append(types.EncodeInt64(&olderSize), olderPayload...)
+	olderWire = append(olderWire, groupingTail...)
+	require.NoError(t, grouped.UnmarshalFromReaderWithGrouping(bytes.NewReader(olderWire), mp))
+	requireBinaryRows(grouped)
 	require.True(t, grouped.Vecs[0].GetGrouping().IsSame(bat.Vecs[0].GetGrouping()))
 	grouped.Clean(mp)
 }
@@ -987,10 +1034,7 @@ func TestTransportMetadataSizeMatchesTrailer(t *testing.T) {
 		}
 	}
 	require.NoError(t, bat.Vecs[0].SetIsBinaryStringAt(0, true))
-	require.NoError(t, bat.Vecs[1].SetStringSource(types.StringSourceSQLPrepare))
 	bat.Vecs[2].SetIsBinaryString(true)
-	require.NoError(t, bat.Vecs[3].SetStringSourcesWithMP(
-		[]types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt}, mp))
 	bat.SetRowCount(2)
 
 	require.True(t, bat.HasBinaryStringMetadata())
@@ -1017,9 +1061,7 @@ func TestTransportMetadataSizeMatchesTrailer(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(plainStatic.Vecs[0], []byte("v"), false, mp))
 	plainStatic.SetRowCount(1)
 	require.False(t, plainStatic.HasBinaryStringMetadata())
-	require.NoError(t, plainStatic.Vecs[0].SetStringSource(types.StringSourceLiteral))
-	require.True(t, plainStatic.HasTransportMetadata())
-	require.False(t, plainStatic.HasTransportMetadataWithoutStringSources())
+	require.False(t, plainStatic.HasTransportMetadata())
 	require.False(t, plainStatic.HasBinaryStringMetadata(),
 		"static binary semantics are already carried by the vector type")
 	plainStatic.Clean(mp)
@@ -1056,15 +1098,14 @@ func TestTransportMetadataPropagatesEveryWriterFailure(t *testing.T) {
 				bat.Vecs[column], []byte("value"), false, mp))
 		}
 	}
-	require.NoError(t, bat.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
-		types.StringSourceLiteral, types.StringSourceCOMStmt,
-	}, mp))
-	require.NoError(t, bat.Vecs[1].SetStringSource(types.StringSourceSQLPrepare))
+	require.NoError(t, bat.Vecs[0].SetBinaryStringRowsWithMP([]bool{true, false}, mp))
+	bat.Vecs[1].SetIsBinaryString(true)
 	bat.SetRowCount(2)
 	defer bat.Clean(mp)
 
 	var encoded bytes.Buffer
 	require.NoError(t, bat.AppendTransportMetadataTo(&encoded))
+	require.NotZero(t, encoded.Len())
 	for failAfter := 0; failAfter < encoded.Len(); failAfter++ {
 		err := bat.AppendTransportMetadataTo(&failAfterBatchWriter{
 			remaining: failAfter,
@@ -1253,6 +1294,36 @@ func TestTransportStreamingRoundTrip(t *testing.T) {
 		bytes.NewReader(withKinds), int64(len(withKinds)), mp))
 	requireStreamingBinaryRows(t, kindsSpill)
 	kindsSpill.Clean(mp)
+
+	// An older writer's version-2 trailer adds a string-source section per
+	// vector; streaming and spill decoders validate and drop it.
+	olderWriter := legacyV2TransportWire(t, encoded,
+		legacyRowsStringSource(types.StringSourceLiteral, types.StringSourceExpression, types.StringSourceCOMStmt),
+		legacyUniformStringSource(types.StringSourceSQLPrepare))
+	olderTarget := NewOffHeapEmpty()
+	require.NoError(t, olderTarget.UnmarshalFromReaderWithMetadata(
+		bytes.NewReader(olderWriter), int64(len(olderWriter)), mp))
+	requireStreamingBinaryRows(t, olderTarget)
+	require.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](olderTarget.Vecs[1], 2))
+	require.False(t, olderTarget.Vecs[1].HasBinaryStringMetadata())
+	olderTarget.Clean(mp)
+	olderSpill := NewOffHeapEmpty()
+	require.NoError(t, olderSpill.UnmarshalFromReaderWithMetadataForSpill(
+		bytes.NewReader(olderWriter), int64(len(olderWriter)), mp))
+	requireStreamingBinaryRows(t, olderSpill)
+	olderSpill.Clean(mp)
+	for _, section := range [][]byte{
+		{batchMetadataModeUniform, byte(types.StringSourceExpression)},
+		{batchMetadataModeUniform, 0xff},
+		{0x7f},
+	} {
+		malformed := legacyV2TransportWire(t, encoded, legacyNoStringSource(), section)
+		target := NewOffHeapEmpty()
+		require.Error(t, target.UnmarshalFromReaderWithMetadata(
+			bytes.NewReader(malformed), int64(len(malformed)), mp))
+		require.False(t, target.Vecs[0].HasBinaryStringMetadata())
+		target.Clean(mp)
+	}
 	require.Zero(t, mp.CurrNB())
 }
 

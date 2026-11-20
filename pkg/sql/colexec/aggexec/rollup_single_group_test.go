@@ -423,32 +423,6 @@ func TestSingleGroupMinMaxFloatSpecialValuesMatchBulkFill(t *testing.T) {
 	}
 }
 
-func TestSingleGroupMinRejectsRichMetadata(t *testing.T) {
-	for _, source := range []bool{true} {
-		t.Run(fmt.Sprintf("source=%t", source), func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			defer mpool.DeleteMPool(mp)
-			defer func() { require.Zero(t, mp.CurrNB()) }()
-			a, err := MakeSingleGroupAgg(mp, AggIdOfMin, false, nil, nil, types.T_int32.ToType())
-			require.NoError(t, err)
-			defer a.Free()
-			SyncAggregatorsToChunkSize([]GroupAggFuncExec{a}, 1)
-			require.NoError(t, a.GroupGrow(1))
-			v := buildAvgFixedVector(t, mp, types.T_int32.ToType(), []int32{7})
-			defer v.Free(mp)
-			require.NoError(t, v.SetStringSource(types.StringSourceSQLPrepare))
-			require.False(t, SupportsSingleGroupReuseInput(a, []*vector.Vector{v}))
-			require.Error(t, BulkFillSingleGroupRange(a, 0, 1, []*vector.Vector{v}))
-			require.NoError(t, a.BulkFill(0, []*vector.Vector{v}))
-			out, err := a.Flush()
-			require.NoError(t, err)
-			defer out[0].Free(mp)
-			require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](out[0], 0))
-			require.Equal(t, types.StringSourceSQLPrepare, out[0].GetStringSourceAt(0))
-		})
-	}
-}
-
 func TestSingleGroupDecimalAvgRoundingAndRetry(t *testing.T) {
 	for _, typ := range []types.Type{types.T_int64.ToType(), types.New(types.T_int64, 35, 0)} {
 		for _, sign := range []int64{1, -1} {

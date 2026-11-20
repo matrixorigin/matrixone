@@ -61,7 +61,8 @@ const (
 	selectedRowsBinaryRows    = byte(2)
 	selectedRowsBinaryText    = byte(3)
 
-	selectedRowsSourceNone    = byte(0)
+	// The string-source field (bits 6-7) is retired; readers skip what an
+	// older writer put there.
 	selectedRowsSourceUniform = byte(1)
 	selectedRowsSourceRows    = byte(2)
 )
@@ -202,37 +203,8 @@ func (v *Vector) marshalSelectedRowsTo(
 		binaryMode = selectedRowsBinaryRows
 	}
 	metadata |= binaryMode << selectedRowsBinaryShift
-	var firstSource types.StringSource
-	sourceSeen := false
-	sourceMixed := false
-	if v.HasStringSourceMetadata() {
-		for i := 0; i < count; i++ {
-			source := v.GetStringSourceAt(rowAt(i))
-			if !source.Valid() {
-				return moerr.NewInvalidInputNoCtx("invalid selected vector string source")
-			}
-			if !sourceSeen {
-				firstSource, sourceSeen = source, true
-			} else if source != firstSource {
-				sourceMixed = true
-			}
-		}
-	}
-	sourceMode := selectedRowsSourceNone
-	if sourceSeen && firstSource != types.StringSourceExpression {
-		sourceMode = selectedRowsSourceUniform
-	}
-	if sourceMixed {
-		sourceMode = selectedRowsSourceRows
-	}
-	metadata |= sourceMode << selectedRowsSourceShift
 	if err := writeSelectedRowsByte(w, metadata, &encoded); err != nil {
 		return err
-	}
-	if sourceMode == selectedRowsSourceUniform {
-		if err := writeSelectedRowsByte(w, byte(firstSource), &encoded); err != nil {
-			return err
-		}
 	}
 	if !isVarlen {
 		fixedWidth := v.typ.TypeSize()
@@ -330,13 +302,6 @@ func (v *Vector) marshalSelectedRowsTo(
 	}
 
 metadataTrailers:
-	if sourceMode == selectedRowsSourceRows {
-		for i := 0; i < count; i++ {
-			if err := writeSelectedRowsByte(w, byte(v.GetStringSourceAt(rowAt(i))), &encoded); err != nil {
-				return err
-			}
-		}
-	}
 	return nil
 }
 
@@ -386,14 +351,14 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 			return moerr.NewInvalidInputNoCtx("invalid selected vector parameter kind")
 		}
 	}
-	var uniformSource types.StringSource
+	// The string-source field is retired: writers no longer set it, and a
+	// value from an older writer is validated and dropped.
 	if sourceMode == selectedRowsSourceUniform {
 		encoded, err := types.ReadByte(r)
 		if err != nil {
 			return err
 		}
-		uniformSource = types.StringSource(encoded)
-		if !uniformSource.Valid() || uniformSource == types.StringSourceExpression {
+		if source := types.StringSource(encoded); !source.Valid() || source == types.StringSourceExpression {
 			return moerr.NewInvalidInputNoCtx("invalid selected vector string source")
 		}
 	}
@@ -511,14 +476,15 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 			}
 		}
 	}
-	switch sourceMode {
-	case selectedRowsSourceUniform:
-		if err := v.SetStringSource(uniformSource); err != nil {
-			return err
-		}
-	case selectedRowsSourceRows:
-		if err := v.SetStringSourcesFromReader(r, count, mp); err != nil {
-			return err
+	if sourceMode == selectedRowsSourceRows {
+		for i := 0; i < count; i++ {
+			encoded, err := types.ReadByte(r)
+			if err != nil {
+				return err
+			}
+			if !types.StringSource(encoded).Valid() {
+				return moerr.NewInvalidInputNoCtx("invalid selected vector string source")
+			}
 		}
 	}
 	switch binaryMode {

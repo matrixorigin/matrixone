@@ -292,7 +292,7 @@ func TestPartitionTopOneRunsTwoStageOracle(t *testing.T) {
 
 func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 	// Row zero exercises all-literal ORDER BY (no runtime comparator). Other
-	// rows cover initial retention and replacement for all three metadata kinds.
+	// rows cover initial retention and replacement for the payload text and its runtime string domain.
 	for _, winner := range []int{0, 100, 333, 334, 335} {
 		t.Run(fmt.Sprintf("winner%d", winner), func(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
@@ -309,7 +309,6 @@ func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 			arg.AppendChild(child)
 			var wantText string
 			var wantDomain types.RuntimeStringDomain
-			var wantSource types.StringSource
 			for start := 0; start < 515; start += 257 {
 				end := min(start+257, 515)
 				rows := make([]topOneRunRow, end-start)
@@ -325,19 +324,16 @@ func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 				payload := vector.NewVec(types.T_varchar.ToType())
 				bat.Vecs = append(bat.Vecs, payload)
 				domains := make([]types.RuntimeStringDomain, len(rows))
-				sources := make([]types.StringSource, len(rows))
 				for i := range rows {
 					id := start + i
 					text := fmt.Sprintf("%d:%s", id, strings.Repeat("payload", 12))
 					require.NoError(t, vector.AppendBytes(payload, []byte(text), false, proc.Mp()))
 					domains[i] = []types.RuntimeStringDomain{types.RuntimeStringInherit, types.RuntimeStringText, types.RuntimeStringBinary}[id%3]
-					sources[i] = []types.StringSource{types.StringSourceExpression, types.StringSourceCOMStmt, types.StringSourceUserVariable}[id%3]
 					if id == winner {
-						wantText, wantDomain, wantSource = text, domains[i], sources[i]
+						wantText, wantDomain = text, domains[i]
 					}
 				}
 				require.NoError(t, payload.SetRuntimeStringDomainsWithMP(domains, proc.Mp()))
-				require.NoError(t, payload.SetStringSourcesWithMP(sources, proc.Mp()))
 			}
 			require.NoError(t, arg.Prepare(proc))
 			result, err := arg.Call(proc)
@@ -348,7 +344,6 @@ func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 			payload := result.Batch.Vecs[4]
 			require.Equal(t, wantText, string(payload.GetBytesAt(0)))
 			require.Equal(t, wantDomain, payload.GetRuntimeStringDomainAt(0))
-			require.Equal(t, wantSource, payload.GetStringSourceAt(0))
 			result, err = arg.Call(proc)
 			require.NoError(t, err)
 			require.True(t, result.Batch == nil || result.Status == vm.ExecStop)

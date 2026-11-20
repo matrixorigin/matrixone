@@ -372,9 +372,10 @@ func getExprValueWithPrepareMeta(
 		return nil, plan.Type{}, err
 	}
 	if materializedResult != nil {
-		literal := planrule.GetConstantValue(resultVec, false, 0)
+		source := setExprStringSource(e, ses)
+		literal := planrule.GetConstantValue(resultVec, false, 0, source)
 		if literal == nil && resultVec.GetType().Oid == types.T_enum {
-			literal = planrule.GetConstantValue(resultVec, true, 0)
+			literal = planrule.GetConstantValue(resultVec, true, 0, source)
 		}
 		if literal != nil {
 			*materializedResult = &plan.Expr{Typ: resultType, Expr: &plan.Expr_Lit{Lit: literal}}
@@ -650,6 +651,47 @@ func getPreparedPlanExprValueWithMeta(
 	}
 	value, err := getValueFromVector(execCtx.reqCtx, result, ses, expr)
 	return value, plan2.MakePlan2Type(result.GetType()), err
+}
+
+// setExprStringSource is where the value of a SET expression comes from, by
+// the rules constant folding applies to plan expressions: a literal is a
+// literal, a variable a user variable, a parameter has its execution's source,
+// COALESCE takes its first arm that is not a NULL literal, and anything else
+// computes a new value.
+func setExprStringSource(e tree.Expr, ses *Session) types.StringSource {
+	for {
+		switch expr := e.(type) {
+		case *tree.ParenExpr:
+			e = expr.Expr
+		case *tree.NumVal, *tree.StrVal:
+			return types.StringSourceLiteral
+		case *tree.VarExpr:
+			return types.StringSourceUserVariable
+		case *tree.ParamExpr:
+			if proc := ses.GetProc(); proc != nil {
+				return proc.GetPrepareParamsStringSource()
+			}
+			return types.StringSourceExpression
+		case *tree.FuncExpr:
+			if expr.FuncName == nil || !strings.EqualFold(expr.FuncName.Origin(), "coalesce") {
+				return types.StringSourceExpression
+			}
+			next := tree.Expr(nil)
+			for _, arg := range expr.Exprs {
+				if num, isNum := arg.(*tree.NumVal); isNum && num.ValType == tree.P_null {
+					continue
+				}
+				next = arg
+				break
+			}
+			if next == nil {
+				return types.StringSourceExpression
+			}
+			e = next
+		default:
+			return types.StringSourceExpression
+		}
+	}
 }
 
 // transparentPrepareParamKind closes the metadata boundary introduced by SET's

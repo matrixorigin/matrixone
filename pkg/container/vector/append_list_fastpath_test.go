@@ -41,7 +41,6 @@ func TestAppendFixedListFastPath(t *testing.T) {
 		require.Equal(t, values, MustFixedColWithTypeCheck[int64](vec))
 		for i := range values {
 			require.False(t, vec.IsNull(uint64(i)))
-			require.Equal(t, types.StringSourceExpression, vec.GetStringSourceAt(i))
 		}
 	}
 }
@@ -81,7 +80,6 @@ func TestAppendFixedListFastPathAfterNullablePrefix(t *testing.T) {
 	for i, value := range values {
 		require.False(t, vec.IsNull(uint64(i+2)))
 		require.Equal(t, value, GetFixedAtNoTypeCheck[int64](vec, i+2))
-		require.Equal(t, types.StringSourceExpression, vec.GetStringSourceAt(i+2))
 	}
 }
 

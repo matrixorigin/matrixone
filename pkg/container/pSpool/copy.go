@@ -198,13 +198,8 @@ copyVectors:
 		}
 		destination.SetIsBin(vec.GetIsBin())
 		if vec.IsConst() {
-			// GetUnionAllFunction already propagates row provenance for the
-			// non-constant path. Constants still need their scalar metadata
-			// copied after the const setter has materialized the value.
-			if err = vec.CopyStringSourceToWithMP(destination, cb.mp); err != nil {
-				cb.CacheBatch(true, cacheID, dst)
-				return nil, false, 0, err
-			}
+			// Constants need their scalar metadata copied after the const
+			// setter has materialized the value.
 			if err = destination.SetRuntimeStringDomainWithMP(vec.GetRuntimeStringDomainAt(0), cb.mp); err != nil {
 				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err

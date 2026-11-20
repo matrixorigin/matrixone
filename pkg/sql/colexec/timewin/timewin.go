@@ -251,11 +251,7 @@ func getPartitionSetFunction(
 		if !w.IsConstNull() && !w.IsNull(uint64(sel)) {
 			return moerr.NewInternalErrorNoCtx("time window received a non-NULL T_any partition key")
 		}
-		if err := vector.SetConstNull(v, length, mp); err != nil {
-			return err
-		}
-		// NULL retains the independently selected value owner.
-		return v.SetStringSource(w.GetStringSourceAt(int(sel)))
+		return vector.SetConstNull(v, length, mp)
 	}
 }
 

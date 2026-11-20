@@ -1730,115 +1730,6 @@ func TestAccountedBinaryStringInplaceSortHasPreflightedBitmaps(t *testing.T) {
 	}
 }
 
-func TestSelectedBatchStringSourcePreflightSurvivesLengthPublication(t *testing.T) {
-	mp := mpool.MustNewZero()
-	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
-	require.NoError(t, err)
-	controller := &rejectNextVectorAllocation{}
-	account, err := registry.OpenWithController(1<<20, controller)
-	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(
-		account,
-		testVectorAllocationOwner,
-		testVectorDataAllocationSite,
-		testVectorAreaAllocationSite,
-	)
-	require.NoError(t, err)
-
-	destination := newAccountedTestVector(t, types.T_int64.ToType(), selection)
-	require.NoError(t, AppendFixed(destination, int64(1), false, mp))
-	source := NewVec(types.T_int64.ToType())
-	require.NoError(t, AppendFixed(source, int64(2), false, mp))
-	require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
-
-	preflight, err := destination.PreExtendSelectedBatch(
-		source, 0, 1, []uint8{1}, 2, mp)
-	require.NoError(t, err)
-	require.Equal(t, 2, cap(destination.GetStringSources()))
-	controller.failAt = controller.calls + 1
-	admitted := account.Snapshot().Used
-	require.NoError(t, destination.UnionBatchPreflighted(
-		source, 0, 1, []uint8{1}, &preflight, mp))
-	require.False(t, controller.rejected, "publication must not allocate after preflight")
-	require.Equal(t, admitted, account.Snapshot().Used)
-	require.Equal(t, types.StringSourceExpression, destination.GetStringSourceAt(0))
-	require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(1))
-
-	destination.Free(mp)
-	source.Free(mp)
-	snapshot := account.Seal()
-	require.Zero(t, snapshot.Used)
-	require.Zero(t, registry.LiveAllocationMetadata())
-	_, err = registry.Finalize(account)
-	require.NoError(t, err)
-	require.Zero(t, mp.CurrNB())
-}
-
-func TestDirectUnionStringSourcePreflightSurvivesLengthPublication(t *testing.T) {
-	tests := []struct {
-		name string
-		run  func(destination, source *Vector, mp *mpool.MPool) error
-	}{
-		{name: "union-one", run: func(destination, source *Vector, mp *mpool.MPool) error {
-			return destination.UnionOne(source, 0, mp)
-		}},
-		{name: "union-multi", run: func(destination, source *Vector, mp *mpool.MPool) error {
-			return destination.UnionMulti(source, 0, 1, mp)
-		}},
-		{name: "union-int64", run: func(destination, source *Vector, mp *mpool.MPool) error {
-			return destination.Union(source, []int64{0}, mp)
-		}},
-		{name: "union-int32", run: func(destination, source *Vector, mp *mpool.MPool) error {
-			return destination.UnionInt32(source, []int32{0}, mp)
-		}},
-		{name: "union-batch", run: func(destination, source *Vector, mp *mpool.MPool) error {
-			return destination.UnionBatch(source, 0, 1, nil, mp)
-		}},
-		{name: "union-all", run: func(destination, source *Vector, mp *mpool.MPool) error {
-			return GetUnionAllFunction(types.T_int64.ToType(), mp)(destination, source)
-		}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			registry, err := mpool.NewAllocationAccountRegistry(1, 16)
-			require.NoError(t, err)
-			controller := &rejectNextVectorAllocation{}
-			account, err := registry.OpenWithController(1<<20, controller)
-			require.NoError(t, err)
-			selection, err := NewAllocationAccountSelection(
-				account, testVectorAllocationOwner, testVectorDataAllocationSite,
-				testVectorAreaAllocationSite)
-			require.NoError(t, err)
-			destination := newAccountedTestVector(t, types.T_int64.ToType(), selection)
-			require.NoError(t, destination.PreExtend(2, mp))
-			require.NoError(t, AppendFixed(destination, int64(1), false, mp))
-			source := NewVec(types.T_int64.ToType())
-			require.NoError(t, AppendFixed(source, int64(2), false, mp))
-			require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
-
-			// The mixed-source sidecar is the next admitted allocation. Rejecting
-			// the allocation after it proves publication consumes only reservation.
-			controller.failAt = controller.calls + 2
-			require.NoError(t, test.run(destination, source, mp))
-			require.False(t, controller.rejected,
-				"publication must not allocate after source preflight")
-			require.Equal(t, 2, destination.Length())
-			require.Equal(t, types.StringSourceExpression, destination.GetStringSourceAt(0))
-			require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(1))
-
-			destination.Free(mp)
-			source.Free(mp)
-			snapshot := account.Seal()
-			require.Zero(t, snapshot.Used)
-			require.Zero(t, registry.LiveAllocationMetadata())
-			_, err = registry.Finalize(account)
-			require.NoError(t, err)
-			require.Zero(t, mp.CurrNB())
-		})
-	}
-}
-
 func TestSelectedBatchBinaryStringPreflightClosesExactCapacity(t *testing.T) {
 	run := func(limit uint64) (uint64, bool, error) {
 		state := newTestVectorAllocationAccount(t, limit, 16)
@@ -2181,53 +2072,6 @@ func TestUnmarshalBinaryReplacesBorrowedAliases(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestStringSourceUnionAllocationFailureDoesNotPublishRows(t *testing.T) {
-	tests := []struct {
-		name string
-		run  func(destination, source *Vector, mp *mpool.MPool) error
-	}{
-		{
-			name: "union-multi",
-			run: func(destination, source *Vector, mp *mpool.MPool) error {
-				return destination.UnionMulti(source, 0, 1, mp)
-			},
-		},
-		{
-			name: "union-all",
-			run: func(destination, source *Vector, mp *mpool.MPool) error {
-				return GetUnionAllFunction(types.T_int64.ToType(), mp)(destination, source)
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			state := newTestVectorAllocationAccount(t, 2*uint64(types.T_int64.ToType().TypeSize()), 16)
-			mp := mpool.MustNewZero()
-			destination := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
-			require.NoError(t, destination.PreExtend(2, mp))
-			require.NoError(t, AppendFixed(destination, int64(6), false, mp))
-
-			source := NewOffHeapVecWithType(types.T_int64.ToType())
-			require.NoError(t, AppendFixed(source, int64(5), false, mp))
-			require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
-
-			before := state.account.Snapshot().Used
-			err := test.run(destination, source, mp)
-			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-			require.Equal(t, 1, destination.Length())
-			require.Equal(t, []int64{6}, MustFixedColWithTypeCheck[int64](destination))
-			require.False(t, destination.HasStringSourceMetadata())
-			require.Equal(t, before, state.account.Snapshot().Used)
-
-			source.Free(mp)
-			destination.Free(mp)
-			finalizeTestVectorAllocationAccount(t, state)
-			require.Zero(t, mp.CurrNB())
-		})
-	}
-}
-
 func TestVectorAllocationAccountConstNullCloneReuse(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 8)
 	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
@@ -2284,9 +2128,10 @@ func TestAccountedMixedStringShuffleThenSort(t *testing.T) {
 }
 
 func TestAccountedShuffleStringSidecarAdmissionRollback(t *testing.T) {
-	// Data and string-source sidecar scratch are admitted (the values are
-	// inline, so no area is needed); bitmaps are Go-owned.
-	for fail := 1; fail <= 3; fail++ {
+	// Only data scratch is admitted (the values are inline, so no area is
+	// needed); null, grouping and runtime-domain bitmaps are Go-owned.
+	const reachable = 1
+	for fail := 1; fail <= reachable+1; fail++ {
 		t.Run(fmt.Sprintf("admission=%d", fail), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
@@ -2307,7 +2152,6 @@ func TestAccountedShuffleStringSidecarAdmissionRollback(t *testing.T) {
 			require.NoError(t, AppendBytesList(v, [][]byte{[]byte("a"), []byte("b"), []byte("c")}, nil, mp))
 			require.NoError(t, v.SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, mp))
 			require.NoError(t, v.SetRuntimeStringDomainAtWithMP(1, types.RuntimeStringText, mp))
-			require.NoError(t, v.SetStringSourcesWithMP([]types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt, types.StringSourceExpression}, mp))
 			v.SetNull(2)
 			v.GetGrouping().Add(1)
 			v.SetSorted(true)
@@ -2318,7 +2162,7 @@ func TestAccountedShuffleStringSidecarAdmissionRollback(t *testing.T) {
 				sels[i] = int64(i % 3)
 			}
 			err = v.Shuffle(sels, mp)
-			require.Equal(t, fail <= 2, controller.rejected, "each reachable admission must be exercised")
+			require.Equal(t, fail <= reachable, controller.rejected, "each reachable admission must be exercised")
 			if controller.rejected {
 				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 				require.Equal(t, before, account.Snapshot().Used)
@@ -2332,8 +2176,6 @@ func TestAccountedShuffleStringSidecarAdmissionRollback(t *testing.T) {
 				require.True(t, v.GetGrouping().Contains(1))
 				require.Equal(t, types.RuntimeStringBinary, v.GetRuntimeStringDomainAt(0))
 				require.Equal(t, types.RuntimeStringText, v.GetRuntimeStringDomainAt(1))
-				require.Equal(t, types.StringSourceLiteral, v.GetStringSourceAt(0))
-				require.Equal(t, types.StringSourceCOMStmt, v.GetStringSourceAt(1))
 			} else {
 				require.NoError(t, err)
 				for i := range sels {
@@ -2343,7 +2185,6 @@ func TestAccountedShuffleStringSidecarAdmissionRollback(t *testing.T) {
 					require.Equal(t, src == 1, v.GetGrouping().Contains(uint64(i)))
 					if src < 2 {
 						require.Equal(t, []types.RuntimeStringDomain{types.RuntimeStringBinary, types.RuntimeStringText}[src], v.GetRuntimeStringDomainAt(i))
-						require.Equal(t, []types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt}[src], v.GetStringSourceAt(i))
 					}
 				}
 			}
