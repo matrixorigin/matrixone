@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1961,6 +1962,7 @@ func (p *parser) appendToLastGroup(n Node) {
 	}
 	old := g.Values[dupIdx]
 	old.Free()
+	g.Keys[last] = ""
 	g.Keys = g.Keys[:last]
 	g.Values[dupIdx] = n
 }
@@ -1993,6 +1995,7 @@ func (g *Group) reset() {
 
 func (g *Group) free() {
 	g.Obj = false
+	clear(g.Keys)
 	g.Keys = g.Keys[:0]
 	for _, sub := range g.Values {
 		sg, ok := sub.V.(*Group)
@@ -2001,6 +2004,7 @@ func (g *Group) free() {
 		}
 		sg.free()
 	}
+	clear(g.Values)
 	g.Values = g.Values[:0]
 	reuse.Free(g, nil)
 }
@@ -2021,7 +2025,66 @@ func (g *groupSortKeys) Swap(i, j int) {
 }
 
 type byteJsonWriter struct {
-	buf []byte
+	buf    []byte
+	cancel *jsonWriteBudget
+}
+
+func (w *byteJsonWriter) reserve(ctx context.Context, size int) error {
+	if w.cancel == nil || cap(w.buf)-len(w.buf) >= size {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	buf := make([]byte, len(w.buf), max(len(w.buf)+size, cap(w.buf)+cap(w.buf)/2))
+	for start := 0; start < len(buf); start += jsonParseChunk {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end := min(len(buf), start+jsonParseChunk)
+		copy(buf[start:end], w.buf[start:end])
+	}
+	w.buf = buf
+	return nil
+}
+
+func (w *byteJsonWriter) extend(ctx context.Context, size int) error {
+	if w.cancel == nil {
+		w.buf = extendByte(w.buf, size)
+		return nil
+	}
+	if err := w.reserve(ctx, size); err != nil {
+		return err
+	}
+	// The cancellable writer only appends and its spare capacity is zeroed.
+	for size > 0 {
+		chunk := min(size, jsonParseChunk)
+		if err := w.cancel.check(ctx, chunk); err != nil {
+			return err
+		}
+		w.buf = w.buf[:len(w.buf)+chunk]
+		size -= chunk
+	}
+	return nil
+}
+
+func (w *byteJsonWriter) appendText(ctx context.Context, text string) error {
+	if w.cancel == nil {
+		w.buf = append(w.buf, text...)
+		return nil
+	}
+	if err := w.reserve(ctx, len(text)); err != nil {
+		return err
+	}
+	for len(text) > 0 {
+		chunk := min(len(text), jsonParseChunk)
+		if err := w.cancel.check(ctx, chunk); err != nil {
+			return err
+		}
+		w.buf = append(w.buf, text[:chunk]...)
+		text = text[chunk:]
+	}
+	return nil
 }
 
 func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error) {
@@ -2029,6 +2092,14 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 }
 
 func (w *byteJsonWriter) writeNodeWithContext(ctx context.Context, root bool, node Node) (TpCode, uint32, error) {
+	if w.cancel != nil {
+		if err := w.cancel.check(ctx, 16); err != nil {
+			return 0, 0, err
+		}
+		if err := w.reserve(ctx, 16); err != nil {
+			return 0, 0, err
+		}
+	}
 	start := len(w.buf)
 	switch val := node.V.(type) {
 	case *Group:
@@ -2044,19 +2115,31 @@ func (w *byteJsonWriter) writeNodeWithContext(ctx context.Context, root bool, no
 			w.buf = endian.AppendUint32(w.buf, uint32(n))
 			w.buf = endian.AppendUint32(w.buf, 0) // object buf length
 
-			w.buf = extendByte(w.buf, n*(keyEntrySize+valEntrySize))
+			if w.cancel != nil && n > 1 {
+				if err := sortJSONKeysCancellable(ctx, w.cancel, obj); err != nil {
+					return 0, 0, err
+				}
+			}
+			if err := w.extend(ctx, n*(keyEntrySize+valEntrySize)); err != nil {
+				return 0, 0, err
+			}
 
 			loc := uint32(headerSize + n*(keyEntrySize+valEntrySize))
 			for i, k := range keys {
 				o := baseOffset + headerSize + i*keyEntrySize
 				length := uint32(len(k))
 				if length > math.MaxUint16 {
+					if w.cancel != nil {
+						return 0, 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "json key exceeds %d bytes", math.MaxUint16)
+					}
 					return 0, 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "json key %s", k)
 				}
 				endian.PutUint32(w.buf[o:], loc)
 				endian.PutUint16(w.buf[o+keyOriginOff:], uint16(length))
 				loc += length
-				w.buf = append(w.buf, k...)
+				if err := w.appendText(ctx, k); err != nil {
+					return 0, 0, err
+				}
 			}
 
 			for i := range keys {
@@ -2087,7 +2170,9 @@ func (w *byteJsonWriter) writeNodeWithContext(ctx context.Context, root bool, no
 		}
 		w.buf = endian.AppendUint32(w.buf, uint32(n))
 		w.buf = endian.AppendUint32(w.buf, 0) // array buf length
-		w.buf = extendByte(w.buf, n*5)
+		if err := w.extend(ctx, n*valEntrySize); err != nil {
+			return 0, 0, err
+		}
 
 		loc := uint32(headerSize + n*valEntrySize)
 		for i := range arr.Values {
@@ -2122,6 +2207,13 @@ func (w *byteJsonWriter) writeNodeWithContext(ctx context.Context, root bool, no
 		}
 		return TpCodeLiteral, uint32(LiteralNull), nil
 	case json.Number:
+		if w.cancel != nil && len(val) > jsonParseChunk {
+			short, err := shortJSONFloat(ctx, string(val))
+			if err != nil {
+				return 0, 0, err
+			}
+			val = json.Number(short)
+		}
 		tp, data, err := w.parseNumberWithContext(ctx, val)
 		if err != nil {
 			return 0, 0, err
@@ -2135,7 +2227,14 @@ func (w *byteJsonWriter) writeNodeWithContext(ctx context.Context, root bool, no
 		if root {
 			w.buf = append(w.buf, byte(TpCodeString))
 		}
-		w.buf = addString(w.buf, val)
+		if w.cancel == nil {
+			w.buf = addString(w.buf, val)
+		} else {
+			w.buf = binary.AppendUvarint(w.buf, uint64(len(val)))
+			if err := w.appendText(ctx, val); err != nil {
+				return 0, 0, err
+			}
+		}
 		return TpCodeString, uint32(len(w.buf) - start), nil
 	default:
 		return 0, 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "unknown type %T", node)
