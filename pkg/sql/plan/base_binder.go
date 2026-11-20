@@ -8146,7 +8146,7 @@ func bindFuncExprImplByPlanExpr(
 		if err := convertValueIntoBool(name, args, false); err != nil {
 			return nil, err
 		}
-		if err := quoteJSONComparisonStringParam(ctx, args); err != nil {
+		if err := quoteJSONComparisonStringParam(ctx, name, args); err != nil {
 			return nil, err
 		}
 
@@ -12188,10 +12188,12 @@ func isCharacterStringType(typeID int32) bool {
 }
 
 // quoteJSONComparisonStringParam binds a string (or not yet typed) parameter
-// compared with a JSON value as a JSON string, the MySQL rule for comparing
-// JSON with a character string. Typed numeric and Boolean parameters need no
-// rewrite: they bind like literals of their type.
-func quoteJSONComparisonStringParam(ctx context.Context, args []*Expr) error {
+// compared with a JSON value. Equality binds like the equivalent character
+// string literal, which compares the JSON operand as VARCHAR, in either
+// operand order. Other parameters and orderings bind as a JSON string.
+// Typed numeric and Boolean parameters need no rewrite: they bind like
+// literals of their type.
+func quoteJSONComparisonStringParam(ctx context.Context, name string, args []*Expr) error {
 	if len(args) != 2 {
 		return nil
 	}
@@ -12203,6 +12205,16 @@ func quoteJSONComparisonStringParam(ctx context.Context, args []*Expr) error {
 		oid := types.T(param.Typ.Id)
 		if oid != types.T_any && !oid.IsMySQLString() {
 			continue
+		}
+		switch name {
+		case "=", "<=>", "<>", "!=":
+			switch oid {
+			case types.T_any, types.T_char, types.T_varchar, types.T_text, types.T_blob:
+				varcharType := types.T_varchar.ToType()
+				var err error
+				args[1-i], err = appendCastBeforeExpr(ctx, other, makePlan2Type(&varcharType))
+				return err
+			}
 		}
 		quoted, err := BindFuncExprImplByPlanExpr(ctx, "json_quote", []*Expr{param})
 		if err != nil {
