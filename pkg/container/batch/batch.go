@@ -688,6 +688,12 @@ func (bat *Batch) UnmarshalBinaryWithPrepareParamKinds(data []byte, mp *mpool.MP
 	if err != nil {
 		return err
 	}
+	return bat.unmarshalBinaryWithPrepareParamKindsAtPrefix(data, prefixLen, mp)
+}
+
+// unmarshalBinaryWithPrepareParamKindsAtPrefix uses a previously validated
+// stable boundary; callers must ensure it lies within data.
+func (bat *Batch) unmarshalBinaryWithPrepareParamKindsAtPrefix(data []byte, prefixLen int, mp *mpool.MPool) error {
 	if err := bat.UnmarshalBinaryWithAnyMp(data[:prefixLen], mp); err != nil {
 		return err
 	}

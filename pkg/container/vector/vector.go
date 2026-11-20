@@ -349,24 +349,15 @@ func (v *Vector) Allocated() int {
 	binaryStringBytes := 0
 	if v.binaryStringRows != nil {
 		binaryStringBytes = v.binaryStringRows.Size()
-		if capacity := v.binaryStringRows.ExternalStorageCapacity(); capacity > 0 {
-			binaryStringBytes = 8 * capacity
-		}
 	}
 	if v.textStringRows != nil {
-		textStringBytes := v.textStringRows.Size()
-		if capacity := v.textStringRows.ExternalStorageCapacity(); capacity > 0 {
-			textStringBytes = 8 * capacity
-		}
-		binaryStringBytes += textStringBytes
+		binaryStringBytes += v.textStringRows.Size()
 	}
 	return retained + cap(v.data) +
 		cap(v.area) +
 		cap(v.prepareParamKinds)*int(unsafe.Sizeof(PrepareParamKind(0))) +
 		cap(v.stringSources)*int(unsafe.Sizeof(types.StringSource(0))) +
-		binaryStringBytes +
-		8*v.nsp.GetBitmap().ExternalStorageCapacity() +
-		8*v.gsp.GetBitmap().ExternalStorageCapacity()
+		binaryStringBytes
 }
 
 func (v *Vector) SetLength(n int) {
@@ -3616,25 +3607,11 @@ func (v *Vector) PreflightUnionBatchBinaryString(
 	)
 }
 
-func (v *Vector) prepareRemappedStringRows(rowsBitmap *bitmap.Bitmap, sels []int64, mp *mpool.MPool) (
-	bitmap.Bitmap, []uint64, error,
-) {
+func (v *Vector) prepareRemappedStringRows(rowsBitmap *bitmap.Bitmap, sels []int64) bitmap.Bitmap {
 	var remapped bitmap.Bitmap
 	if !v.binaryStringRowsActive {
-		return remapped, nil, nil
+		return remapped
 	}
-	words := (len(sels) + 63) / 64
-	var storage []uint64
-	var err error
-	if v.allocationAccount == nil {
-		storage, err = mpool.MakeSlice[uint64](words, mp, v.offHeap)
-	} else {
-		storage, err = makeSelectedSlice[uint64](v.allocationAccount, words, mp, v.allocationAccount.nullsSite)
-	}
-	if err != nil {
-		return remapped, nil, err
-	}
-	remapped.InstallExternalStorage(storage)
 	remapped.InitWithSize(int64(len(sels)))
 	for destination, source := range sels {
 		if source >= 0 && source < rowsBitmap.Len() &&
@@ -3642,14 +3619,7 @@ func (v *Vector) prepareRemappedStringRows(rowsBitmap *bitmap.Bitmap, sels []int
 			remapped.Add(uint64(destination))
 		}
 	}
-	return remapped, storage, nil
-}
-
-func (v *Vector) releaseRemappedBinaryStringRows(remapped *bitmap.Bitmap, storage []uint64, mp *mpool.MPool) {
-	if storage != nil {
-		remapped.ReleaseExternalStorage()
-		mpool.FreeSlice(mp, storage)
-	}
+	return remapped
 }
 
 func (v *Vector) publishRemappedBinaryStringRows(binaryRows, textRows *bitmap.Bitmap) {
@@ -4624,7 +4594,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	} else if !v.cantFreeArea {
 		mp.Free(v.area)
 	}
-	v.freeBitmapStorage(mp)
+	v.freeBitmapStorage()
 	v.class = FLAT
 	v.data = nil
 	v.area = nil
@@ -5362,15 +5332,6 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 		copy(decoded.area, layout.area)
 	}
 	if len(layout.nulls) > 0 {
-		if decoded.allocationAccount != nil {
-			_, bitLength, _, decodeErr := bitmap.DecodeMarshalHeader(layout.nulls)
-			if decodeErr != nil || bitLength > int64(math.MaxInt) {
-				return moerr.NewInvalidInputNoCtx("invalid vector null bitmap")
-			}
-			if err = decoded.ensureNullCapacity(int(bitLength), mp); err != nil {
-				return err
-			}
-		}
 		if err = decoded.nsp.Read(layout.nulls); err != nil {
 			return err
 		}
@@ -5499,10 +5460,7 @@ func (v *Vector) readNullsWithReader(r io.Reader, mp *mpool.MPool) error {
 	if bitLength > int64(math.MaxInt) {
 		return moerr.NewInvalidInputNoCtx("vector null bitmap exceeds platform limit")
 	}
-	if err = v.ensureNullCapacity(int(bitLength), mp); err != nil {
-		return err
-	}
-	payload, err := v.nsp.GetBitmap().PrepareExternalUnmarshal(
+	payload, err := v.nsp.GetBitmap().PrepareUnmarshal(
 		header[:],
 		int(size),
 	)
@@ -5558,30 +5516,16 @@ func (v *Vector) UnmarshalGroupingFromReader(
 	if err != nil || bitLength > int64(math.MaxInt) {
 		return moerr.NewInvalidInputNoCtx("invalid vector grouping bitmap")
 	}
-	if v.allocationAccount == nil {
-		data := make([]byte, size)
-		copy(data, header[:])
-		if _, err = io.ReadFull(r, data[len(header):]); err != nil {
-			return err
-		}
-		if err = validateVectorNullBitmap(data, true); err != nil {
-			return err
-		}
-		v.gsp.Reset()
-		return v.gsp.Read(data)
-	}
-	if err = v.ensureGroupingCapacity(int(bitLength), mp); err != nil {
+	data := make([]byte, size)
+	copy(data, header[:])
+	if _, err = io.ReadFull(r, data[len(header):]); err != nil {
 		return err
 	}
-	payload, err := v.gsp.GetBitmap().PrepareExternalUnmarshal(header[:], size)
-	if err != nil {
+	if err = validateVectorNullBitmap(data, true); err != nil {
 		return err
 	}
-	if _, err = io.ReadFull(r, payload); err != nil {
-		v.gsp.Reset()
-		return err
-	}
-	return v.gsp.GetBitmap().Validate()
+	v.gsp.Reset()
+	return v.gsp.Read(data)
 }
 
 func (v *Vector) ToConst() {
@@ -6797,16 +6741,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 			mpool.FreeSlice(remappedSourcesOwner, remappedSources)
 		}
 	}()
-	remappedBinary, remappedStorage, err := v.prepareRemappedStringRows(v.binaryStringRows, sels, mp)
-	if err != nil {
-		return err
-	}
-	defer func() { v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp) }()
-	remappedText, remappedTextStorage, err := v.prepareRemappedStringRows(v.textStringRows, sels, mp)
-	if err != nil {
-		return err
-	}
-	defer func() { v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp) }()
+	remappedBinary := v.prepareRemappedStringRows(v.binaryStringRows, sels)
+	remappedText := v.prepareRemappedStringRows(v.textStringRows, sels)
 	oldKinds := v.prepareParamKinds
 	var preparedKinds []PrepareParamKind
 	var preparedOwner *mpool.MPool
@@ -6892,15 +6828,7 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, preparedKinds, preparedOwner)
 	v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
 	releaseRemappedSources = false
-	if v.allocationAccount != nil && v.binaryStringRowsActive {
-		mpool.FreeSlice(mp, v.binaryStringRows.ReleaseExternalStorage())
-		mpool.FreeSlice(mp, v.textStringRows.ReleaseExternalStorage())
-		*v.binaryStringRows, *v.textStringRows = remappedBinary, remappedText
-		remappedStorage, remappedTextStorage = nil, nil
-		v.normalizeBinaryStringRows()
-	} else {
-		v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
-	}
+	v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
 	}
@@ -6946,16 +6874,8 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 			mpool.FreeSlice(remappedSourcesOwner, remappedSources)
 		}
 	}()
-	remappedBinary, remappedStorage, err := v.prepareRemappedStringRows(v.binaryStringRows, sels, mp)
-	if err != nil {
-		return err
-	}
-	defer func() { v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp) }()
-	remappedText, remappedTextStorage, err := v.prepareRemappedStringRows(v.textStringRows, sels, mp)
-	if err != nil {
-		return err
-	}
-	defer func() { v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp) }()
+	remappedBinary := v.prepareRemappedStringRows(v.binaryStringRows, sels)
+	remappedText := v.prepareRemappedStringRows(v.textStringRows, sels)
 
 	err = v.shuffleWithBufData(sels, buf)
 	if err == nil {
@@ -11370,72 +11290,10 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	return nil
 }
 
-type bitmapRemapScratch struct {
-	value   bitmap.Bitmap
-	storage []uint64
-}
-
-func (s *bitmapRemapScratch) release(mp *mpool.MPool) {
-	if s == nil || cap(s.storage) == 0 {
-		return
-	}
-	s.value.ReleaseExternalStorage()
-	mpool.FreeSlice(mp, s.storage)
-	s.storage = nil
-}
-
-// remapShuffleBitmaps preserves Shuffle's arbitrary-selection semantics. An
-// allocation-accounted vector builds both results in admitted temporary
-// storage before publishing either, so rejection cannot leave null and
-// grouping ownership half-mutated.
-func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
-	if v.allocationAccount == nil {
-		nulls.Filter(&v.gsp, sels, false)
-		nulls.Filter(&v.nsp, sels, false)
-		return nil
-	}
-
-	targets := [...]struct {
-		destination *nulls.Nulls
-		site        mpool.AllocationSite
-	}{
-		{&v.gsp, v.allocationAccount.groupingSite},
-		{&v.nsp, v.allocationAccount.nullsSite},
-	}
-	var scratch [2]bitmapRemapScratch
-	for i, target := range targets {
-		// Mixed string metadata is sorted without an allocator later, so both
-		// row bitmaps need capacity even when currently empty.
-		if target.destination.EmptyByFlag() && !v.binaryStringRowsActive {
-			continue
-		}
-		words := (len(sels) + 63) / 64
-		storage, err := makeSelectedSlice[uint64](v.allocationAccount, words, mp, target.site)
-		if err != nil {
-			for j := range i {
-				scratch[j].release(mp)
-			}
-			return err
-		}
-		scratch[i].storage = storage
-		scratch[i].value.InstallExternalStorage(storage)
-		scratch[i].value.InitWithSize(int64(len(sels)))
-		for output, source := range sels {
-			if target.destination.Contains(uint64(source)) {
-				scratch[i].value.Add(uint64(output))
-			}
-		}
-	}
-	for i, target := range targets {
-		if scratch[i].value.HasExternalStorage() {
-			target.destination.Reset()
-			dst := target.destination.GetBitmap()
-			mpool.FreeSlice(mp, dst.ReleaseExternalStorage())
-			*dst = scratch[i].value
-			scratch[i].storage = nil
-		}
-	}
-
+// remapShuffleBitmaps preserves Shuffle's arbitrary-selection semantics.
+func (v *Vector) remapShuffleBitmaps(sels []int64, _ *mpool.MPool) error {
+	nulls.Filter(&v.gsp, sels, false)
+	nulls.Filter(&v.nsp, sels, false)
 	return nil
 }
 

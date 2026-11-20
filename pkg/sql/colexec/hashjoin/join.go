@@ -616,13 +616,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 
 	if hashJoin.EmitUnmatchedBuild() {
 		if ctr.rightRowCnt > 0 {
-			ctr.rightRowsMatched, err = colexec.NewAccountedBitmap(
-				ctr.rightRowCnt,
-				proc.Mp(),
-				hashJoin.allocationAccount,
-				mpool.AllocationOwnerHashBuild,
-				hashJoinAllocationSiteMatchedRows,
-			)
+			ctr.rightRowsMatched, err = colexec.NewRowBitmap(ctr.rightRowCnt)
 			if err != nil {
 				return err
 			}
@@ -704,13 +698,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 						ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 						if hashJoin.EmitUnmatchedBuild() && ctr.rightRowCnt > 0 {
 							ctr.rightRowsMatched, allocationErr =
-								colexec.NewAccountedBitmap(
-									ctr.rightRowCnt,
-									proc.Mp(),
-									hashJoin.allocationAccount,
-									mpool.AllocationOwnerHashBuild,
-									hashJoinAllocationSiteMatchedRows,
-								)
+								colexec.NewRowBitmap(ctr.rightRowCnt)
 							ctr.rightMatchedIter = nil
 						}
 					}
@@ -1763,7 +1751,6 @@ func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) erro
 				}
 				matchedCnt += v.Count()
 				ctr.rightRowsMatched.Or(v)
-				colexec.FreeAccountedBitmap(v, proc.Mp())
 			}
 
 			if ctr.probeSingle && matchedCnt > ctr.rightRowsMatched.Count() {

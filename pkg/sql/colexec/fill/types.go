@@ -38,16 +38,16 @@ const (
 	// a disjoint range under the Fill owner.
 	fillAllocationSiteRetainedData mpool.AllocationSite = iota + 64
 	fillAllocationSiteRetainedArea
-	fillAllocationSiteRetainedNulls
-	fillAllocationSiteRetainedGrouping
+	_ // reserved: was fillAllocationSiteRetainedNulls
+	_ // reserved: was fillAllocationSiteRetainedGrouping
 	fillAllocationSiteExpressionData
 	fillAllocationSiteExpressionArea
-	fillAllocationSiteExpressionNulls
-	fillAllocationSiteExpressionGrouping
+	_ // reserved: was fillAllocationSiteExpressionNulls
+	_ // reserved: was fillAllocationSiteExpressionGrouping
 	fillAllocationSiteOutputData
 	fillAllocationSiteOutputArea
-	fillAllocationSiteOutputNulls
-	fillAllocationSiteOutputGrouping
+	_ // reserved: was fillAllocationSiteOutputNulls
+	_ // reserved: was fillAllocationSiteOutputGrouping
 	fillAllocationSiteCoordinates
 	fillAllocationSitePartitionSnapshot
 	fillAllocationSiteSpillWriteBuffer
@@ -238,8 +238,6 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		mpool.AllocationOwnerFill,
 		fillAllocationSiteRetainedData,
 		fillAllocationSiteRetainedArea,
-		fillAllocationSiteRetainedNulls,
-		fillAllocationSiteRetainedGrouping,
 	)
 	if err != nil {
 		return err
@@ -249,8 +247,6 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		mpool.AllocationOwnerFill,
 		fillAllocationSiteExpressionData,
 		fillAllocationSiteExpressionArea,
-		fillAllocationSiteExpressionNulls,
-		fillAllocationSiteExpressionGrouping,
 	)
 	if err != nil {
 		return err
@@ -260,8 +256,6 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		mpool.AllocationOwnerFill,
 		fillAllocationSiteOutputData,
 		fillAllocationSiteOutputArea,
-		fillAllocationSiteOutputNulls,
-		fillAllocationSiteOutputGrouping,
 	)
 	if err != nil {
 		return err

@@ -151,9 +151,6 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	hb.freeIgnoreRows(mp)
 	hb.uniqueSels = nil
 	hb.curVecs = nil
-	jm.SetMemoryRelease(func() {
-		releaseDedupBitmap(jmDelRows, mp)
-	})
 	return jm
 }
 
@@ -1347,8 +1344,6 @@ func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Proces
 		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteDedupDeleteOnlyData,
 		HashBuildAllocationSiteDedupDeleteOnlyArea,
-		HashBuildAllocationSiteDedupDeleteOnlyNulls,
-		HashBuildAllocationSiteDedupDeleteOnlyGrouping,
 	)
 	if err != nil {
 		bat.Clean(proc.Mp())
