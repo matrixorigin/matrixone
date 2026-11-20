@@ -57,53 +57,87 @@ func TestChangedTableTNRoute(t *testing.T) {
 	noAddress.ServiceAddress = ""
 	noReplica := current
 	noReplica.Shards = []logpb.TNShardInfo{{ShardID: 1}}
-	want := metadata.TNShard{TNShardRecord: configured, ReplicaID: 101, Address: current.ServiceAddress}
+	currentRoute := metadata.TNShard{TNShardRecord: configured, ReplicaID: 101, Address: current.ServiceAddress}
+	olderRoute := metadata.TNShard{TNShardRecord: configured, ReplicaID: 100, Address: older.ServiceAddress}
+	singleShard := []metadata.TNShardRecord{configured}
 
 	for _, tc := range []struct {
-		name       string
-		configured []metadata.TNShardRecord
-		stores     map[string]logpb.TNStoreInfo
-		want       metadata.TNShard
+		name        string
+		configured  []metadata.TNShardRecord
+		stores      map[string]logpb.TNStoreInfo
+		want        metadata.TNShard
+		recheckCode uint16
 	}{
-		{name: "unconfigured", stores: map[string]logpb.TNStoreInfo{"current": current}},
-		{name: "no routes", configured: []metadata.TNShardRecord{configured}},
-		{name: "single route", configured: []metadata.TNShardRecord{configured}, stores: map[string]logpb.TNStoreInfo{"current": current}, want: want},
-		{name: "configured multiple shards with only one advertisement", configured: []metadata.TNShardRecord{configured, secondShard}, stores: map[string]logpb.TNStoreInfo{"current": current}},
-		{name: "multiple shards on one TN", configured: []metadata.TNShardRecord{configured}, stores: map[string]logpb.TNStoreInfo{"current": sameStore}},
-		{name: "mismatched shard on another TN", configured: []metadata.TNShardRecord{configured}, stores: map[string]logpb.TNStoreInfo{"current": current, "wrong": wrongShard}},
-		{name: "replica replaced on same logical shard", configured: []metadata.TNShardRecord{configured}, stores: map[string]logpb.TNStoreInfo{"current": current, "older": older}, want: want},
-		{name: "ambiguous latest tick", configured: []metadata.TNShardRecord{configured}, stores: map[string]logpb.TNStoreInfo{"current": current, "tied": tied}},
-		{name: "latest advertisement has no address", configured: []metadata.TNShardRecord{configured}, stores: map[string]logpb.TNStoreInfo{"current": noAddress, "older": older}},
-		{name: "latest advertisement has no replica", configured: []metadata.TNShardRecord{configured}, stores: map[string]logpb.TNStoreInfo{"current": noReplica, "older": older}},
+		{name: "unconfigured", stores: map[string]logpb.TNStoreInfo{"current": current}, recheckCode: moerr.ErrNotSupported},
+		{name: "no routes", configured: singleShard, recheckCode: moerr.ErrChangeWatchRetry},
+		{name: "single route", configured: singleShard, stores: map[string]logpb.TNStoreInfo{"current": current}, want: currentRoute},
+		{name: "configured multiple shards with only one advertisement", configured: []metadata.TNShardRecord{configured, secondShard}, stores: map[string]logpb.TNStoreInfo{"current": current},
+			recheckCode: moerr.ErrNotSupported},
+		{name: "multiple shards on one TN", configured: singleShard, stores: map[string]logpb.TNStoreInfo{"current": sameStore}, recheckCode: moerr.ErrNotSupported},
+		{name: "mismatched shard on another TN", configured: singleShard, stores: map[string]logpb.TNStoreInfo{"current": current, "wrong": wrongShard},
+			recheckCode: moerr.ErrNotSupported},
+		{name: "replica replaced on same logical shard", configured: singleShard, stores: map[string]logpb.TNStoreInfo{"current": current, "older": older}, want: currentRoute},
+		{name: "another replica becomes the sole route", configured: singleShard, stores: map[string]logpb.TNStoreInfo{"older": older},
+			want: olderRoute, recheckCode: moerr.ErrChangeWatchRetry},
+		{name: "ambiguous latest tick", configured: singleShard, stores: map[string]logpb.TNStoreInfo{"current": current, "tied": tied},
+			recheckCode: moerr.ErrChangeWatchRetry},
+		{name: "latest advertisement has no address", configured: singleShard, stores: map[string]logpb.TNStoreInfo{"current": noAddress, "older": older},
+			recheckCode: moerr.ErrChangeWatchRetry},
+		{name: "latest advertisement has no replica", configured: singleShard, stores: map[string]logpb.TNStoreInfo{"current": noReplica, "older": older},
+			recheckCode: moerr.ErrChangeWatchRetry},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			keeper := watchTopologySnapshot{state: logpb.CheckerState{
 				ClusterInfo: logpb.ClusterInfo{TNShards: tc.configured},
 				TNState:     logpb.TNState{Stores: tc.stores},
 			}}
-			target, err := changedTableTN(t.Context(), keeper)
+			target, err := changedTableTN(t.Context(), keeper, nil)
 			if tc.want.ShardID != 0 {
 				require.NoError(t, err)
 			} else {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 			}
 			require.Equal(t, tc.want, target)
+
+			rechecked, err := changedTableTN(t.Context(), keeper, &currentRoute)
+			if tc.recheckCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, tc.recheckCode), "expected %d, got %v", tc.recheckCode, err)
+				require.Zero(t, rechecked)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.want, rechecked)
+			}
 		})
 	}
 }
 
 func TestChangedTableTNTopologyUnavailable(t *testing.T) {
-	_, err := changedTableTN(t.Context(), nil)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+	prior := metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{ShardID: 1, LogShardID: 11},
+		ReplicaID:     101,
+		Address:       "current:1000",
+	}
+	for _, tc := range []struct {
+		name     string
+		previous *metadata.TNShard
+	}{
+		{name: "initial"},
+		{name: "recheck", previous: &prior},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := changedTableTN(t.Context(), nil, tc.previous)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 
-	unavailable := errors.New("HAKeeper read failed")
-	target, err := changedTableTN(t.Context(), watchTopologySnapshot{err: unavailable})
-	require.ErrorIs(t, err, unavailable)
-	require.Zero(t, target)
+			unavailable := errors.New("HAKeeper read failed")
+			target, err := changedTableTN(t.Context(), watchTopologySnapshot{err: unavailable}, tc.previous)
+			require.ErrorIs(t, err, unavailable)
+			require.Zero(t, target)
 
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	target, err = changedTableTN(ctx, watchTopologySnapshot{})
-	require.ErrorIs(t, err, context.Canceled)
-	require.Zero(t, target)
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			target, err = changedTableTN(ctx, watchTopologySnapshot{}, tc.previous)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Zero(t, target)
+		})
+	}
 }

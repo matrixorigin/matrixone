@@ -103,7 +103,7 @@ func Read(proc *process.Process, marker, observerName *string) (_ Result, err er
 		return Result{}, moerr.NewNotSupported(ctx, "changed-table logtail read barrier is unavailable")
 	}
 	keeper := proc.GetHaKeeper()
-	target, err := changedTableTN(ctx, keeper)
+	target, err := changedTableTN(ctx, keeper, nil)
 	if err != nil {
 		return Result{}, err
 	}
@@ -213,13 +213,8 @@ func Read(proc *process.Process, marker, observerName *string) (_ Result, err er
 		}
 		return Result{}, moerr.NewChangeWatchRetry(ctx, "changed-table authorization or catalog scope changed during query")
 	}
-	recheckTN, err := changedTableTN(ctx, keeper)
-	if err != nil {
+	if _, err := changedTableTN(ctx, keeper, &target); err != nil {
 		return Result{}, err
-	}
-	if recheckTN.ShardID != target.ShardID || recheckTN.LogShardID != target.LogShardID ||
-		recheckTN.ReplicaID != target.ReplicaID || recheckTN.Address != target.Address {
-		return Result{}, moerr.NewChangeWatchRetry(ctx, "changed-table TN routing changed during query")
 	}
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
@@ -244,7 +239,7 @@ type changeWatchTopologyReader interface {
 	GetClusterState(context.Context) (logpb.CheckerState, error)
 }
 
-func changedTableTN(ctx context.Context, keeper changeWatchTopologyReader) (metadata.TNShard, error) {
+func changedTableTN(ctx context.Context, keeper changeWatchTopologyReader, previous *metadata.TNShard) (metadata.TNShard, error) {
 	if keeper == nil {
 		return metadata.TNShard{}, moerr.NewNotSupported(ctx, "changed-table HAKeeper client is unavailable")
 	}
@@ -287,7 +282,12 @@ func changedTableTN(ctx context.Context, keeper changeWatchTopologyReader) (meta
 			contenders++
 		}
 	}
-	if contenders != 1 || target.ReplicaID == 0 || target.Address == "" {
+	usable := contenders == 1 && target.ReplicaID != 0 && target.Address != ""
+	if previous != nil && (!usable || target.ShardID != previous.ShardID || target.LogShardID != previous.LogShardID ||
+		target.ReplicaID != previous.ReplicaID || target.Address != previous.Address) {
+		return metadata.TNShard{}, moerr.NewChangeWatchRetry(ctx, "changed-table TN routing changed during query")
+	}
+	if !usable {
 		return metadata.TNShard{}, moerr.NewNotSupported(ctx, "changed-table query requires one unambiguous TN route")
 	}
 	return target, nil
