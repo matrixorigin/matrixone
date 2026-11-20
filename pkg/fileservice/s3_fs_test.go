@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3722,4 +3723,290 @@ func TestS3FSFailedCacheReadDoesNotUpdateEarlierCache(t *testing.T) {
 	vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{first, &sparseFailingReadCache{}}, Entries: []IOEntry{{Offset: 0, Size: 4096}}}
 	require.ErrorContains(t, fs.Read(ctx, vector), "cache read failed")
 	require.Zero(t, first.updates.Load())
+}
+
+type sparseFailingUpdateCache struct{ publicationVectorCache }
+
+func (c *sparseFailingUpdateCache) Update(ctx context.Context, vector *IOVector, async bool) error {
+	_ = c.publicationVectorCache.Update(ctx, vector, async)
+	return errors.New("cache update failed")
+}
+
+func TestS3FSCacheUpdateErrorDoesNotAffectReadOrOtherUpdates(t *testing.T) {
+	ctx := t.Context()
+	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()},
+		CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](1 << 20)}, nil, false, false)
+	require.NoError(t, err)
+	fs.SetAsyncUpdate(false)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	fs.storage = &generatedRangeObjectStorage{}
+	first := &publicationVectorCache{}
+	failing := &sparseFailingUpdateCache{}
+	vector := &IOVector{FilePath: "foo", Policy: SkipFullFilePreloads, Caches: []IOVectorCache{first, failing}, Entries: []IOEntry{
+		{Offset: 0, Size: 4096, ToCacheData: CacheOriginalData},
+	}}
+	t.Cleanup(vector.Release)
+	require.NoError(t, fs.Read(ctx, vector))
+	require.Equal(t, make([]byte, 4096), vector.Entries[0].Data)
+	require.Equal(t, int64(1), failing.updates.Load())
+	require.Equal(t, int64(1), first.updates.Load())
+
+	cached := &IOVector{FilePath: "foo", Entries: []IOEntry{{Offset: 0, Size: 4096, ToCacheData: CacheOriginalData}}}
+	t.Cleanup(cached.Release)
+	require.NoError(t, fs.ReadCache(ctx, cached))
+	require.True(t, cached.allDone())
+}
+
+func TestS3FSFullCacheHitUpdatesOnlyEarlierMisses(t *testing.T) {
+	ctx := t.Context()
+	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	first := &publicationVectorCache{}
+	hit := &sparseFirstEntryCache{}
+	last := &publicationVectorCache{}
+	vector := &IOVector{FilePath: "foo", Caches: []IOVectorCache{first, hit, last}, Entries: []IOEntry{{Offset: 0, Size: 6}}}
+	t.Cleanup(vector.Release)
+	require.NoError(t, fs.Read(ctx, vector))
+	require.Equal(t, []byte("cached"), vector.Entries[0].Data)
+	require.Equal(t, int64(1), first.updates.Load())
+	require.Zero(t, hit.updates.Load())
+	require.Zero(t, last.reads.Load())
+	require.Zero(t, last.updates.Load())
+}
+
+// callbackVectorCache exposes cache read and update boundaries to lifecycle tests.
+type callbackVectorCache struct {
+	publicationVectorCache
+	onRead   func(*IOVector)
+	onUpdate func()
+}
+
+func (c *callbackVectorCache) Read(_ context.Context, v *IOVector) error {
+	if c.onRead != nil {
+		c.onRead(v)
+	}
+	return nil
+}
+
+func (c *callbackVectorCache) Update(_ context.Context, _ *IOVector, _ bool) error {
+	if c.onUpdate != nil {
+		c.onUpdate()
+	}
+	return nil
+}
+
+func TestS3FSCacheReadUnwindDoesNotPublish(t *testing.T) {
+	for _, cause := range []string{"panic", "goexit"} {
+		t.Run(cause, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "unwind", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			first := &publicationVectorCache{}
+			entered := make(chan struct{})
+			second := &callbackVectorCache{onRead: func(v *IOVector) {
+				close(entered)
+				v.Entries[0].Data = []byte("partial")
+				v.Entries[0].done = true
+				if cause == "panic" {
+					panic("cache read panic")
+				}
+				runtime.Goexit()
+			}}
+			vector := &IOVector{FilePath: "foo", Caches: []IOVectorCache{first, second}, Entries: []IOEntry{{Size: 7}, {Offset: 7, Size: 1}}}
+			result := make(chan any, 1)
+			finished := make(chan struct{})
+			returned := make(chan error, 1)
+			go func() {
+				defer close(finished)
+				defer func() { result <- recover() }()
+				returned <- fs.Read(ctx, vector)
+			}()
+			t.Cleanup(func() { cancel(); <-finished; vector.Release() })
+			select {
+			case got := <-result:
+				if cause == "panic" {
+					require.Equal(t, "cache read panic", got)
+				} else {
+					require.Nil(t, got)
+				}
+			case <-ctx.Done():
+				t.Fatal("read did not unwind")
+			}
+			<-finished
+			select {
+			case <-entered:
+			default:
+				t.Fatal("target cache callback was not reached")
+			}
+			select {
+			case err := <-returned:
+				t.Fatalf("Read returned normally: %v", err)
+			default:
+			}
+			require.Zero(t, first.updates.Load())
+		})
+	}
+}
+
+func TestS3FSCacheUpdateUnwindRunsRemainingUpdates(t *testing.T) {
+	for _, cause := range []string{"panic", "goexit"} {
+		t.Run(cause, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "unwind", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, false, false)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			fs.storage = &generatedRangeObjectStorage{}
+			calls := make(chan string, 6)
+			entered := make(chan struct{})
+			var key IOMergeKey
+			mk := func(name string) *callbackVectorCache {
+				return &callbackVectorCache{onUpdate: func() {
+					if !fs.ioMerger.IsMerging(key) {
+						calls <- "merge-already-released"
+					}
+					calls <- name
+					if name == "C" {
+						close(entered)
+						if cause == "panic" {
+							panic("cache update panic")
+						}
+						runtime.Goexit()
+					}
+				}}
+			}
+			vector := &IOVector{FilePath: "foo", Policy: SkipFullFilePreloads, Caches: []IOVectorCache{mk("A"), mk("B"), mk("C")}, Entries: []IOEntry{{Size: 4096}}}
+			key = fs.readMergeKey(vector)
+			result := make(chan any, 1)
+			finished := make(chan struct{})
+			returned := make(chan error, 1)
+			go func() {
+				defer close(finished)
+				defer func() { result <- recover() }()
+				returned <- fs.Read(ctx, vector)
+			}()
+			t.Cleanup(func() { cancel(); <-finished; vector.Release() })
+			select {
+			case got := <-result:
+				if cause == "panic" {
+					require.Equal(t, "cache update panic", got)
+				} else {
+					require.Nil(t, got)
+				}
+			case <-ctx.Done():
+				t.Fatal("read did not unwind")
+			}
+			<-finished
+			select {
+			case <-entered:
+			default:
+				t.Fatal("target cache callback was not reached")
+			}
+			select {
+			case err := <-returned:
+				t.Fatalf("Read returned normally: %v", err)
+			default:
+			}
+			close(calls)
+			var got []string
+			for call := range calls {
+				got = append(got, call)
+			}
+			require.Equal(t, []string{"C", "B", "A"}, got)
+			require.False(t, fs.ioMerger.IsMerging(key))
+		})
+	}
+}
+
+func TestS3FSCacheUpdatesPreserveRetryOrder(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var eventsMu sync.Mutex
+	var events []string
+	record := func(event string) { eventsMu.Lock(); defer eventsMu.Unlock(); events = append(events, event) }
+	ctx = OnDiskCacheWritten(ctx, func(string, IOEntry) { record("disk") })
+	ctx = WithEventLogger(ctx)
+	logger := ctx.Value(EventLoggerKey).(*eventLogger)
+	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "retry", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](1 << 20), DiskCapacity: ptrTo[toml.ByteSize](1 << 20), DiskPath: ptrTo(t.TempDir()), CacheCallbacks: CacheCallbacks{PostSet: []CacheCallbackFunc{func(fscache.CacheKey, fscache.Data) { record("memory") }}}}, nil, false, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	fs.SetAsyncUpdate(false)
+	fs.storage = &generatedRangeObjectStorage{}
+	order := make(chan []string, 1)
+	first := &callbackVectorCache{onUpdate: func() {
+		record("vector1")
+		logger.mu.Lock()
+		defer logger.mu.Unlock()
+		var got []string
+		for _, ev := range *logger.events {
+			switch ev.ev {
+			case str_update_disk_cache_Caches_begin:
+				got = append(got, "disk")
+			case str_update_memory_cache_begin:
+				got = append(got, "memory")
+			case str_update_vector_Caches_begin:
+				got = append(got, "vector")
+			}
+		}
+		order <- got
+	}}
+	vector := &IOVector{FilePath: "foo", Policy: SkipFullFilePreloads, Caches: []IOVectorCache{first, &callbackVectorCache{onUpdate: func() { record("vector2") }}}, Entries: []IOEntry{{Size: 4096, ToCacheData: CacheOriginalData}}}
+	t.Cleanup(vector.Release)
+	done, _ := fs.ioMerger.merge(fs.readMergeKey(vector))
+	require.NotNil(t, done)
+	release := sync.OnceFunc(done)
+	result := make(chan error, 1)
+	finished := make(chan struct{})
+	go func() { defer close(finished); result <- fs.Read(ctx, vector) }()
+	t.Cleanup(func() { release(); cancel(); <-finished })
+	for {
+		logger.mu.Lock()
+		found := false
+		if logger.events != nil {
+			for _, ev := range *logger.events {
+				if ev.ev == str_ioMerger_Merge_wait {
+					found = true
+					break
+				}
+			}
+		}
+		logger.mu.Unlock()
+		if found {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("read did not join seeded generation")
+		default:
+			runtime.Gosched()
+		}
+	}
+	release()
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("read did not finish")
+	}
+	<-finished
+	eventsMu.Lock()
+	gotEvents := append([]string(nil), events...)
+	eventsMu.Unlock()
+	require.Equal(t, []string{"disk", "memory", "vector2", "vector1"}, gotEvents)
+	for _, cache := range []IOVectorCache{fs.memCache, fs.diskCache} {
+		cached := &IOVector{FilePath: "foo", Entries: []IOEntry{{Size: 4096, ToCacheData: CacheOriginalData}}}
+		t.Cleanup(cached.Release)
+		require.NoError(t, cache.Read(ctx, cached))
+		require.True(t, cached.allDone())
+		require.Equal(t, make([]byte, 4096), cached.Entries[0].CachedData.Bytes())
+	}
+	select {
+	case got := <-order:
+		require.Equal(t, []string{"disk", "memory", "disk", "memory", "vector", "vector"}, got)
+	case <-ctx.Done():
+		t.Fatal("missing cache update")
+	}
 }
