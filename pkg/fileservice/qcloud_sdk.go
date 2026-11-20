@@ -919,7 +919,7 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 					}, a.perfCounterSets...)
 					resp, err := a.client.Object.Get(ctx, key, opts)
 					if err != nil {
-						return nil, err
+						return nil, normalizeCOSGetCancellation(ctx, err)
 					}
 					return &readCloser{
 						r: resp.Body,
@@ -938,6 +938,18 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 		*min,
 		IsRetryableError,
 	)
+}
+
+// With SDK retries disabled, COS still wraps a failed GET's single error in
+// RetryError, which has no Unwrap method. Restore the request's cancellation
+// only when it is the sole error returned by the SDK.
+func normalizeCOSGetCancellation(ctx context.Context, err error) error {
+	if retryErr, ok := err.(*cos.RetryError); ok && len(retryErr.Errs) == 1 {
+		if ctxErr := ctx.Err(); ctxErr != nil && retryErr.Errs[0] == ctxErr {
+			return ctxErr
+		}
+	}
+	return err
 }
 
 func (a *QCloudSDK) deleteObject(ctx context.Context, key string) (bool, error) {

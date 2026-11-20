@@ -145,10 +145,12 @@ required generated/delivery artifact is not silently excluded by ignore rules.
 
 ---
 
-## 1. Multi-angle (多角度) — run each lens as a separate pass
+## 1. Multi-angle (多角度) — review from one change map
 
-Do not spot-check. Sweep the whole diff once per lens; a defect invisible to one
-lens is obvious to another.
+Read every changed hunk once to build the
+[shared change map](../../../.agents/skills/mo-dev/references/validation-evidence.md#1-build-one-change-map).
+For each changed responsibility, apply the relevant lenses below and revisit
+only the code and callers needed to verify the affected contracts.
 
 | Lens | Ask |
 |------|-----|
@@ -230,7 +232,7 @@ G3 bound/release, G4 line-reread, G5 calibrate-last) before keeping any finding.
    (§2) that passed the 5 gates (§4).
 4. **One thorough pass beats many incremental.** The whole point: exhaust §1–§4
    now so the next reviewer finds nothing. If you're tempted to "just fix this
-   one and re-run," you're back in the loop — finish the sweep first.
+   one and re-run," finish reviewing the affected paths first.
 
 ---
 
@@ -239,8 +241,8 @@ G3 bound/release, G4 line-reread, G5 calibrate-last) before keeping any finding.
 **On your own working diff (the default — this is a *self* gate):**
 - If a callable review workflow exists, use it for parallel discovery and then
   apply §3 closure + §5 discipline yourself.
-- Otherwise walk §1 lens-by-lens → §3 closure → §4 Q1–Q3 → §5 directly. This is
-  the complete supported fallback, not a degraded or blocked review.
+- Use the §1 change map to trace §3 closure, apply §4 Q1–Q3 where relevant, and
+  reach a verdict using §5.
 
 For concurrency/lifecycle changes, build the invariant, transition table,
 ownership graph, wait-for graph, and generation boundary from
@@ -271,7 +273,7 @@ skill; for CGo build/test env and MO operator/format specifics, see **mo-dev**.
 ## 7. Exit gate — the diff is self-review-clean when ALL hold
 
 ```
-□ every §1 lens swept over the whole diff
+□ the change map covers the full diff and each affected contract's applicable §1 lenses
 □ every changed arc's functional closure (§3) traced to its terminal node
 □ Q1–Q3 unhappy paths (§4) checked on touched resources/waits/growth
 □ state ownership, wait-for dependencies, and generation transitions modeled where applicable
@@ -281,7 +283,7 @@ skill; for CGo build/test env and MO operator/format specifics, see **mo-dev**.
 □ when G-RACE-STRESS applies, the required scope and adaptive budget follow the shared race protocol
 □ every !race measurement-only test retains a race-tested functional counterpart when race validation applies
 □ evidence covers the changed behavior and satisfies the shared validity rules
-□ applicable domain guards passed (index-plugin → §8) — additive to the §1–§4 sweep above, never a substitute for it
+□ applicable domain guards passed (index-plugin → §8) alongside the §1–§4 checks
 ```
 
 Only then push / open the PR. If a subsequent PR review still finds a real
@@ -292,10 +294,8 @@ the gate catches it next time (the gate improves; the loop still ends).
 
 ## 8. Domain guard — index-plugin changes
 
-> **A domain guard is a supplement to §1–§5, never a replacement.** Always run the
-> full multi-angle sweep over the ENTIRE diff (§1–§4) regardless of whether this
-> guard applies; §8 only *adds* algo-specific checks when index-plugin files are
-> touched. Passing §8 alone is not a review.
+> Apply §1–§5 to every review. When index-plugin files are touched, add the
+> algorithm-specific checks below to the affected contracts in the change map.
 
 Apply when the diff touches index-algorithm dispatch, any
 `pkg/vectorindex/<algo>/plugin/`, `pkg/fulltext/plugin`, or `pkg/indexplugin`.

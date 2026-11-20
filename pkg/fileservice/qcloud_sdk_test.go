@@ -400,6 +400,85 @@ func TestQCloudSDKBasicObjectOperations(t *testing.T) {
 	}
 }
 
+func TestQCloudSDKReadCanceledBeforeResponseHeaders(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) {
+		close(started)
+		select {
+		case <-req.Context().Done():
+		case <-release:
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+
+	sdk := newTestCOSClient(t, server)
+	parent, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stop()
+	ctx, cancel := context.WithCancelCause(parent)
+	defer cancel(nil)
+
+	result := make(chan error, 1)
+	go func() {
+		reader, err := sdk.Read(ctx, "object", nil, nil)
+		if reader != nil {
+			reader.Close()
+		}
+		result <- err
+	}()
+
+	select {
+	case <-started:
+		cancel(errors.New("scan completed"))
+	case err := <-result:
+		t.Fatalf("GET finished before cancellation: %v", err)
+	case <-parent.Done():
+		t.Fatal("GET did not reach server")
+	}
+
+	select {
+	case err := <-result:
+		require.True(t, err == context.Canceled, "expected context.Canceled, got %T: %v", err, err)
+		require.NoError(t, parent.Err())
+	case <-parent.Done():
+		t.Fatal("GET did not return after cancellation")
+	}
+}
+
+func TestNormalizeCOSGetCancellation(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, stop := context.WithDeadline(context.Background(), time.Time{})
+	defer stop()
+	realErr := errors.New("object read failed")
+
+	for _, tc := range []struct {
+		name       string
+		ctx        context.Context
+		children   []error
+		normalized bool
+	}{
+		{"deadline", expired, []error{context.DeadlineExceeded}, true},
+		{"active request", context.Background(), []error{context.Canceled}, false},
+		{"different context error", canceled, []error{context.DeadlineExceeded}, false},
+		{"same text", canceled, []error{errors.New("context canceled")}, false},
+		{"real failure", canceled, []error{realErr}, false},
+		{"mixed attempts", canceled, []error{realErr, context.Canceled}, false},
+		{"joined failure", canceled, []error{errors.Join(realErr, context.Canceled)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := &cos.RetryError{Errs: tc.children}
+			var expected error = err
+			if tc.normalized {
+				expected = tc.ctx.Err()
+			}
+			got := normalizeCOSGetCancellation(tc.ctx, err)
+			require.True(t, got == expected, "expected %T: %v, got %T: %v", expected, expected, got, got)
+		})
+	}
+}
+
 func TestQCloudSDKListStopsRetryingAtContextDeadline(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
