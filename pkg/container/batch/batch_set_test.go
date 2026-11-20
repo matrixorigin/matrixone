@@ -232,7 +232,7 @@ func batchSetCopyInput(t testing.TB, rows int, mixed bool) (*mpool.MPool, *Batch
 		account, err := registry.Open(1 << 20)
 		require.NoError(t, err)
 		accounts = append(accounts, account)
-		selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSet, 9, 10, 11, 12)
+		selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSet, 9, 10)
 		require.NoError(t, err)
 		selections = append(selections, selection)
 	}

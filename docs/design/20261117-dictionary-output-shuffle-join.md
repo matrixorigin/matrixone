@@ -142,10 +142,11 @@ build-gather chunks; fill its repeated descriptors once and keep the build
 projection batched. Dictionary inputs retain their existing selected bulk
 copy route. No copy kernel, SQL metadata or output continuation contract changes.
 
-A retained shuffle partition owns an independent RowSelection. Before an owned
-short-partition copy, release the producer's temporary conversion map while
-retaining the immutable source snapshots required by later partitions. Ordinary
-copy capacity must not depend on flushing the pending input first.
+A retained shuffle partition owns an independent RowSelection. Release the
+producer's temporary conversion map before an owned short-partition copy or
+before returning a queue credit waiter. Immutable snapshots stay available for
+later partitions. The consumer can release its selection and return capacity
+while the producer is blocked on another bucket.
 
 Retained publication must not increase the destination charge over the owned
 copy alternative. Reject narrow selectors before allocating metadata; include

@@ -33,6 +33,13 @@ type shufflePartitionViews struct {
 	disabled bool
 }
 
+func (s *shufflePartitionViews) freeRows(mp *mpool.MPool) {
+	if s != nil && s.rows != nil {
+		s.rows.Free(mp)
+		s.rows = nil
+	}
+}
+
 func (s *shufflePartitionViews) free(mp *mpool.MPool) {
 	for i, base := range s.bases {
 		if base != nil {
@@ -40,10 +47,7 @@ func (s *shufflePartitionViews) free(mp *mpool.MPool) {
 			s.bases[i] = nil
 		}
 	}
-	if s.rows != nil {
-		s.rows.Free(mp)
-		s.rows = nil
-	}
+	s.freeRows(mp)
 }
 
 func (sp *ShufflePool) selectPartition(input *batch.Batch, rows []int32, workspace **shufflePartitionViews, proc *process.Process) (_ *batch.Batch, retErr error) {

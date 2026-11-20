@@ -967,6 +967,11 @@ func (sp *ShufflePool) tryWriteModeWithViews(
 				wait, ok := sp.reserveReady(int32(bucket), readyDelta)
 				if !ok {
 					sp.batchLocks[bucket].Unlock()
+					// Published selections own their indices. Return conversion
+					// scratch before yielding so consumers can reclaim capacity.
+					if views != nil {
+						(*views).freeRows(proc.Mp())
+					}
 					return bucket + visitBase, offset, wait, false, nil
 				}
 
@@ -987,9 +992,8 @@ func (sp *ShufflePool) tryWriteModeWithViews(
 				} else if writeErr == nil {
 					// Retained selections own their indices. Release only the
 					// producer's temporary map before allocating an owned tail.
-					if views != nil && *views != nil && (*views).rows != nil {
-						(*views).rows.Free(proc.Mp())
-						(*views).rows = nil
+					if views != nil {
+						(*views).freeRows(proc.Mp())
 					}
 					if wholeBucket {
 						consumed, writeErr = batchSet.UnionRange(proc.Mp(), srcBatch, offset, end-offset, buf)

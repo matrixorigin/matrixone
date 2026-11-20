@@ -53,7 +53,7 @@ func testShuffleDictionaryPartitions(t *testing.T, capacity uint64, expectViews 
 			_, _, err := registry.CompleteTerminal(account)
 			require.NoError(t, err)
 		})
-		allocation, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+		allocation, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 		require.NoError(t, err)
 	}
 	var input *batch.Batch
@@ -169,6 +169,95 @@ func TestShuffleDictionaryPreservesShortCoalescing(t *testing.T) {
 	require.Nil(t, sp.getAnyStoppedBatch())
 }
 
+func TestShuffleDictionaryReleasesRowsBeforeCreditWait(t *testing.T) {
+	for _, useViews := range []bool{false, true} {
+		t.Run(map[bool]string{false: "owned", true: "retained"}[useViews], func(t *testing.T) {
+			pool, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
+			require.NoError(t, err)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", pool)
+			t.Cleanup(func() { require.Zero(t, pool.CurrNB()) })
+			sp := NewShufflePool(2, 2, false)
+			t.Cleanup(func() { sp.abort(pool) })
+			input := newShuffleDictionaryInput(t, pool, 0)
+			var views *shufflePartitionViews
+			t.Cleanup(func() {
+				if views != nil {
+					views.free(pool)
+				}
+			})
+			var workspace **shufflePartitionViews
+			if useViews {
+				workspace = &views
+			}
+			sels := make([][]int32, 2)
+			for row := range input.RowCount() {
+				sels[row%2] = append(sels[row%2], int32(row))
+			}
+			for range shuffleFixedBucketReadyLimit {
+				_, _, _, done, err := sp.tryWrite(input, [][]int32{nil, sels[1]}, 0, 0, 0, proc)
+				require.NoError(t, err)
+				require.True(t, done)
+			}
+			const pressureBytes = 256 << 10
+			filler, err := pool.Alloc(int(pool.Cap()-pool.CurrNB())-pressureBytes, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { pool.Free(filler) })
+
+			bucket, offset, waiter, done, err := sp.tryWriteModeWithViews(input, sels, 0, 0, 0, false, workspace, proc)
+			require.NoError(t, err)
+			require.False(t, done)
+			require.Equal(t, 1, bucket)
+			require.Zero(t, offset)
+			require.NotNil(t, waiter)
+
+			recycle := func(bucket int32, retained bool) *batch.Batch {
+				output := sp.getFullBatch(bucket)
+				require.NotNil(t, output)
+				consumer := Shuffle{ctr: container{shufflePool: sp, buf: output, bufFromPool: true}}
+				defer consumer.releasePreviousLocalBatch(proc)
+				require.Equal(t, retained, output.HasDictionary())
+				require.Equal(t, objectio.BlockMaxRows, output.RowCount())
+				for row := range output.RowCount() {
+					want := types.Decimal128{B0_63: uint64(1 + 2*(row%2))}
+					if got := vector.GetFixedAtNoTypeCheck[types.Decimal128](output.Vecs[0], row); got != want {
+						t.Fatalf("bucket %d row %d: got %v, want %v", bucket, row, got, want)
+					}
+				}
+				return output
+			}
+			first := recycle(0, useViews)
+			// Return the recycled header's payload capacity to the pool.
+			recycled := sp.getBatchFromPool(0)
+			if recycled != nil {
+				sp.discardBatch(recycled, pool)
+			}
+			require.Same(t, first, recycled)
+			select {
+			case <-waiter:
+				t.Fatal("recycling bucket 0 woke the writer waiting on bucket 1")
+			default:
+			}
+			buffer, err := pool.Alloc(pressureBytes, true)
+			require.NoError(t, err, "the blocked producer's temporary map must not consume this capacity")
+			pool.Free(buffer)
+			require.Equal(t, pool.Cap()-pressureBytes, pool.CurrNB())
+
+			reuse := recycle(1, false)
+			select {
+			case <-waiter:
+			default:
+				t.Fatal("releasing bucket 1 credit did not wake its writer")
+			}
+			_, _, _, done, err = sp.tryWriteModeWithViews(input, sels, 0, bucket, offset, false, workspace, proc)
+			require.NoError(t, err)
+			require.True(t, done)
+			recycle(1, false)
+			require.Same(t, reuse, recycle(1, false))
+			require.Zero(t, sp.readyCount)
+		})
+	}
+}
+
 func TestShuffleDictionaryMixedPartitionsDoNotRetainCopyScratch(t *testing.T) {
 	for _, shape := range []struct {
 		name        string
@@ -204,7 +293,7 @@ func TestShuffleDictionaryMixedPartitionsDoNotRetainCopyScratch(t *testing.T) {
 					_, _, err := registry.CompleteTerminal(account)
 					require.NoError(t, err)
 				})
-				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 				require.NoError(t, err)
 				input := batch.NewWithSchema(true, nil, []types.Type{shape.typ})
 				t.Cleanup(func() { input.Clean(proc.Mp()) })
@@ -362,7 +451,7 @@ func TestShuffleDictionaryRetentionCostMetadataAndComposition(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			})
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 			require.NoError(t, err)
 			if tc.dense {
 				allocation = nil
