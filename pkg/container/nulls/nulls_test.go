@@ -17,6 +17,7 @@ package nulls
 import (
 	"bytes"
 	"fmt"
+	"math/rand"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -414,4 +415,141 @@ func TestIsSame(t *testing.T) {
 		}
 		assert.Equal(t, true, n.IsSame(&m))
 	})
+}
+
+// TestAddUnsortedRows: Add used to grow the bitmap only to cover the last
+// row, so a larger earlier row landed beyond the logical length.
+func TestAddUnsortedRows(t *testing.T) {
+	var n Nulls
+	n.InitWithSize(0)
+	n.Add(5, 2)
+	require.True(t, n.Contains(5))
+	require.True(t, n.Contains(2))
+	require.Equal(t, 2, n.Count())
+	require.GreaterOrEqual(t, n.Len(), int64(6))
+	require.NoError(t, n.GetBitmap().Validate())
+
+	m := Build(0, 200, 3, 70)
+	require.Equal(t, []uint64{3, 70, 200}, m.ToArray())
+	require.NoError(t, m.GetBitmap().Validate())
+}
+
+// TestFilterNegateEmptySels: removing no rows used to index sels[0].
+func TestFilterNegateEmptySels(t *testing.T) {
+	n := Build(10, 1, 9)
+	Filter(n, nil, true)
+	require.Equal(t, []uint64{1, 9}, n.ToArray())
+	require.Equal(t, int64(10), n.Len())
+}
+
+// refFilter is the original row-by-row Filter, kept as a reference model.
+func refFilter(nsp *Nulls, sels []int64, negate bool) *Nulls {
+	if nsp.IsEmpty() {
+		return nsp.Clone()
+	}
+	var out Nulls
+	if negate {
+		oldLen := nsp.Len()
+		out.InitWithSize(int(oldLen))
+		removed := make(map[int64]bool, len(sels))
+		for _, s := range sels {
+			removed[s] = true
+		}
+		newIdx := uint64(0)
+		for old := int64(0); old < oldLen; old++ {
+			if removed[old] {
+				continue
+			}
+			if nsp.Contains(uint64(old)) {
+				out.GetBitmap().Add(newIdx)
+			}
+			newIdx++
+		}
+		return &out
+	}
+	out.InitWithSize(len(sels))
+	for i, s := range sels {
+		if s >= 0 && nsp.Contains(uint64(s)) {
+			out.GetBitmap().Add(uint64(i))
+		}
+	}
+	return &out
+}
+
+func randomNulls(r *rand.Rand, size int) *Nulls {
+	n := NewWithSize(size)
+	for i := 0; i < size; i++ {
+		if r.Intn(3) == 0 {
+			n.Set(uint64(i))
+		}
+	}
+	return n
+}
+
+func randomSortedSels(r *rand.Rand, limit int) []int64 {
+	var sels []int64
+	for i := 0; i < limit; i++ {
+		if r.Intn(2) == 0 {
+			sels = append(sels, int64(i))
+		}
+	}
+	return sels
+}
+
+func requireSameNulls(t *testing.T, want, got *Nulls, msg string) {
+	t.Helper()
+	require.Equal(t, want.Len(), got.Len(), msg)
+	require.Equal(t, want.ToArray(), got.ToArray(), msg)
+	require.Equal(t, want.Count(), got.Count(), msg)
+	require.NoError(t, got.GetBitmap().Validate(), msg)
+}
+
+// TestFilterVariantsMatchReference checks Filter, FilterInPlaceOrdered and
+// FilterByMaskWithOffset, which now delegate to the bitmap's in-place remaps,
+// against the row-by-row reference.
+func TestFilterVariantsMatchReference(t *testing.T) {
+	r := rand.New(rand.NewSource(42))
+	for iter := 0; iter < 2000; iter++ {
+		size := r.Intn(200)
+		src := randomNulls(r, size)
+		// Selections may reach past the bitmap, as with a short null map.
+		sels := randomSortedSels(r, size+r.Intn(70))
+		offset := uint64(r.Intn(3))
+		for _, negate := range []bool{false, true} {
+			msg := fmt.Sprintf("iter=%d size=%d negate=%t offset=%d", iter, size, negate, offset)
+			want := refFilter(src, sels, negate)
+
+			got := src.Clone()
+			Filter(got, sels, negate)
+			requireSameNulls(t, want, got, "Filter "+msg)
+
+			got = src.Clone()
+			FilterInPlaceOrdered(got, sels, negate)
+			requireSameNulls(t, want, got, "FilterInPlaceOrdered "+msg)
+
+			var mask bitmap.Bitmap
+			mask.InitWithSize(int64(size + 70))
+			var shifted []int64
+			for _, s := range sels {
+				if uint64(s) >= offset {
+					mask.Add(uint64(s) - offset)
+					shifted = append(shifted, s)
+				}
+			}
+			want = refFilter(src, shifted, negate)
+			got = src.Clone()
+			FilterByMaskWithOffset(got, &mask, negate, offset)
+			requireSameNulls(t, want, got, "FilterByMaskWithOffset "+msg)
+		}
+
+		// Unordered, duplicated and negative selections for Filter.
+		perm := make([]int64, r.Intn(size+5))
+		for i := range perm {
+			perm[i] = int64(r.Intn(size+10)) - 2
+		}
+		want := refFilter(src, perm, false)
+		got := src.Clone()
+		Filter(got, perm, false)
+		requireSameNulls(t, want, got, fmt.Sprintf("Filter unordered iter=%d", iter))
+	}
 }

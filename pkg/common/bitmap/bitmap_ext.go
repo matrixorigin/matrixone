@@ -34,15 +34,6 @@ import (
 
 const MarshalHeaderSize = 24
 
-func (n *Bitmap) InitWith(m *Bitmap) {
-	if n == m {
-		return
-	}
-	n.numBits = m.numBits
-	n.popCount = m.popCount
-	n.data = append([]uint64(nil), m.data...)
-}
-
 // InitWithInvertedBits sets n to length bits read LSB-first from src
 // starting at bit offset, each bit inverted. It turns an Arrow validity
 // bitmap (1 = valid) into a null bitmap (1 = null). src must hold at least
