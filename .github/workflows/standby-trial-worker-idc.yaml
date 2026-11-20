@@ -44,6 +44,11 @@ jobs:
         GROUP: ${{ inputs.group }}
         POOL: idc
       run: python3 -I .standby/.github/standby-trial/coverage_standby.py admit
+    - name: Drill only - fail group 1 after admission on parent attempt 1
+      if: inputs.group == 1 && fromJSON(inputs.ticket).attempt == 1
+      run: |
+        echo "::error::Intentional first-attempt reservation failure; no UT result produced"
+        exit 1
     - name: Check direct worker before loading PR source
       env:
         ASSIGNED: ${{ runner.name }}

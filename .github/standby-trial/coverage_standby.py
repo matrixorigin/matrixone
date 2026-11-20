@@ -20,7 +20,9 @@ WORKER = "coverage-standby-worker.yaml"
 WORKER_REF = "weilu-runner-test"
 ENTRY = ".github/workflows/coverage-standby-pr32922.yaml"
 POOLS = {"cs": "cs-node-cache-7c14g", "idc": "amd64-mo-shanghai-ut-safe"}
-WAIT = 600
+WAIT = 3600
+HANDOFF_POLLS = 60
+HANDOFF_POLL_SECONDS = 5
 
 
 def check(ok, msg):
@@ -72,7 +74,7 @@ def parent_identity(t, p):
         "head_branch": WORKER_REF, "actor.login": "Ariznawlll",
     }
     for field, value in {"pr": 32922, "source": "Ariznawlll/matrixone",
-                         "head": "3b95c0878f88b3da58bf3e65c369b7ef4d13104e"}.items():
+                         "head": "f2d6e753ddc739e63f3cc3f9d13eda06bcd605b4"}.items():
         check(t.get(field) == value, f"trial PR identity mismatch: {field}")
     for field, value in expected.items():
         actual = p
@@ -143,11 +145,13 @@ def decide(job, now, since):
         return "cs", since  # assignment wins, even at the exact deadline
     if job["status"] == "queued":
         if job.get("runner_id") or job.get("runner_name"):
-            return None, None
+            # GitHub can expose runner assignment before changing the status.
+            # Preserve the observed queue start while this transition settles.
+            return None, since
         since = now if since is None else since
         return ("idc" if now - since >= WAIT else None), since
     check(job["status"] in ("requested", "waiting", "pending"), "not a queue timeout")
-    return None, None
+    return None, since
 
 
 def dispatch(t, pool, revision):
@@ -179,11 +183,17 @@ def output(**fields):
 
 
 def choose():
-    check(os.environ["GITHUB_RUN_ATTEMPT"] == "1", "do not redispatch a previous generation")
-    t = dict(parent=int(os.environ["GITHUB_RUN_ID"]), attempt=1, group=int(os.environ["GROUP"]),
+    attempt = int(os.environ["GITHUB_RUN_ATTEMPT"])
+    check(0 < attempt < 1_000_000, "invalid parent attempt")
+    t = dict(parent=int(os.environ["GITHUB_RUN_ID"]), attempt=attempt, group=int(os.environ["GROUP"]),
              head=os.environ["HEAD"], source=os.environ["SOURCE"], pr=int(os.environ["PR"]))
     check(t["group"] in (0, 1) and re.fullmatch("[a-f0-9]{40}", t["head"]), "invalid input")
     parent_meta(t)
+    if attempt > 1:
+        # A previous selector may have lost its connection after publishing a
+        # grant. An old *ungranted* reservation cannot pass parent_meta; an
+        # already admitted worker must have stopped before issuing a new grant.
+        require_previous_grants_terminal(t)
     # A pull_request_target run reports the PR head; a workflow_dispatch run
     # reports the workflow branch head. These are not the same commit.
     rev = t["revision"] = one("/git/ref/heads/" + WORKER_REF)["object"]["sha"]
@@ -198,15 +208,23 @@ def choose():
         if route:
             print(f"group={t['group']} CS_job={j['id']} first_queued_utc={since} decision_utc={now} route={route}", flush=True)
             break
-        time.sleep(10)
+        time.sleep(30)
     if route == "idc":
         # A concurrently assigned CS worker is still blocked at admit: its nonce
         # was never published. Confirm identity again and cancel ONLY its own run.
         parent_meta(t)
         child_meta(r, t, "cs", rev)
-        j, now = observe(r, t, "cs")
-        route, _ = decide(j, now, since)
-        check(route is not None, "ambiguous assignment at handoff")
+        for poll in range(HANDOFF_POLLS):
+            j, now = observe(r, t, "cs")
+            route, since = decide(j, now, since)
+            if route is not None:
+                break
+            if poll + 1 < HANDOFF_POLLS:
+                time.sleep(HANDOFF_POLL_SECONDS)
+                parent_meta(t)
+                child_meta(r, t, "cs", rev)
+        else:
+            raise ValueError("CS assignment did not settle at handoff; no worker granted")
         if route == "idc":
             api(f"/actions/runs/{r}/cancel", {})
             for _ in range(60):
@@ -219,6 +237,9 @@ def choose():
                 raise ValueError("CS cancellation not confirmed; IDC not dispatched")
             nonce = secrets.token_hex(32)
             t["key"], pool = digest(nonce), "idc"
+            # The workflow_dispatch ref is moving. Bind each child to the
+            # revision observed immediately before that child's dispatch.
+            rev = t["revision"] = one("/git/ref/heads/" + WORKER_REF)["object"]["sha"]
             r = dispatch(t, pool, rev)
     # Grant is immutable and costs no extra control token on the worker. Until
     # this point neither pool has been authorized to check out or run PR code.
@@ -254,12 +275,41 @@ def artifact(parent, name, filename):
         return json.loads(z.read(filename))
 
 
+def require_previous_grants_terminal(t):
+    page = 1
+    while True:
+        batch = one(f"/actions/runs/{t['parent']}/artifacts?per_page=100&page={page}")["artifacts"]
+        for item in batch:
+            found = re.fullmatch(r"coverage-admit-([1-9][0-9]*)", item["name"])
+            if not found:
+                continue
+            m = run(int(found[1]))
+            fields = re.fullmatch(r"Coverage standby / ([1-9][0-9]*)/([1-9][0-9]*)/([01])/"
+                                  r"([0-9a-f]{40})/(cs|idc)/[0-9a-f]{64}", m["display_title"])
+            check(fields and fields[1] == str(t["parent"]) and fields[4] == t["head"]
+                  and m["path"] == ".github/workflows/" + WORKER and m["event"] == "workflow_dispatch"
+                  and m["repository"]["full_name"] == REPO and m["head_branch"] == WORKER_REF,
+                  "unrecognized previous grant; no redispatch")
+            if fields[3] == str(t["group"]):
+                check(m["status"] == "completed", "previously granted group still active; no redispatch")
+        if len(batch) < 100:
+            return
+        page += 1
+
+
+def proof_name(t):
+    if t["attempt"] == 1:
+        return f"real-pr-snapshot-{t['parent']}-attempt-1"
+    return f"real-pr-retry-{t['parent']}-attempt-{t['attempt']}-group-{t['group']}"
+
+
 def admit():
     t = json.loads(os.environ["TICKET"])
     group, source, head, pool = int(os.environ["GROUP"]), os.environ["SOURCE"], os.environ["HEAD"], os.environ["POOL"]
     r = int(os.environ["GITHUB_RUN_ID"])
     check(os.environ["GITHUB_RUN_ATTEMPT"] == "1" and group == t["group"] and group in (0, 1)
-          and head == t["head"] and source == t["source"] and pool in POOLS and t["attempt"] == 1
+          and head == t["head"] and source == t["source"] and pool in POOLS
+          and type(t["attempt"]) is int and 0 < t["attempt"] < 1_000_000
           and type(t["parent"]) is int and type(t["pr"]) is int and re.fullmatch("[a-f0-9]{64}", t["key"]),
           "invalid worker ticket")
     parent_meta(t)
@@ -275,7 +325,7 @@ def admit():
         time.sleep(10)
     else:
         raise ValueError("no grant; no PR code executed")
-    proof = artifact(t["parent"], f"real-pr-snapshot-{t['parent']}-attempt-{t['attempt']}",
+    proof = artifact(t["parent"], proof_name(t),
                      "real-pr-authorization.json")
     pr = one(f"/pulls/{int(t['pr'])}")
     check(proof and proof["allowed"] == "true" and proof["verified_membership_http_status"] == 204

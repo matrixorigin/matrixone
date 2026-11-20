@@ -5,16 +5,21 @@ on:
       group: {type: number, required: true}
       head: {type: string, required: true}
       source: {type: string, required: true}
+    secrets:
+      TOKEN_ACTION: {required: false}
+      CS_COVERAGE_CACHE_READ_TOKEN: {required: false}
 permissions:
   contents: read
 jobs:
   select:
     if: github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-pr32922.yaml@refs/heads/weilu-runner-test' && github.event_name == 'push' && github.actor == 'Ariznawlll'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 360
+    environment: ci
     permissions:
       contents: read
       actions: write
+      pull-requests: read
     outputs:
       child: ${{ steps.select.outputs.child }}
     steps:
@@ -22,10 +27,33 @@ jobs:
       with:
         repository: matrixorigin/matrixone
         ref: ${{ github.sha }}
-        sparse-checkout: .github/standby-trial/coverage_standby.py
-        sparse-checkout-cone-mode: false
+        sparse-checkout: .github/standby-trial
+        sparse-checkout-cone-mode: true
         persist-credentials: false
+    - id: retry_auth
+      if: github.run_attempt > 1
+      name: Reauthorize the exact live PR before dispatching a retry
+      env:
+        ORG_MEMBERSHIP_TOKEN: ${{ secrets.TOKEN_ACTION }}
+        API_TOKEN: ${{ github.token }}
+      run: python3 -I .github/standby-trial/retry_authorize.py
+    - if: github.run_attempt > 1
+      name: Verify retry eligibility and pinned source
+      env:
+        ALLOWED: ${{ steps.retry_auth.outputs.allowed }}
+        LIVE_HEAD: ${{ steps.retry_auth.outputs.head_sha }}
+        LIVE_SOURCE: ${{ steps.retry_auth.outputs.head_repository }}
+        HEAD: ${{ inputs.head }}
+        SOURCE: ${{ inputs.source }}
+      run: test "$ALLOWED" = true && test "$LIVE_HEAD" = "$HEAD" && test "$LIVE_SOURCE" = "$SOURCE"
+    - if: github.run_attempt > 1
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: real-pr-retry-${{ github.run_id }}-attempt-${{ github.run_attempt }}-group-${{ inputs.group }}
+        path: ${{ runner.temp }}/real-pr-authorization.json
+        if-no-files-found: error
     - id: select
+      timeout-minutes: 85
       env:
         PR: "32922"
         GROUP: ${{ inputs.group }}
@@ -40,6 +68,13 @@ jobs:
         path: ${{ runner.temp }}/grant.json
         if-no-files-found: error
         retention-days: 1
+    # A failed child must fail the job that dispatched it. Failed-only reruns
+    # now create a new child for this group, not a new poll of the dead child.
+    - name: Wait for selected group, including its UT result
+      env:
+        CHILD: ${{ steps.select.outputs.child }}
+        ACTIONS_TOKEN: ${{ github.token }}
+      run: python3 -I .github/standby-trial/coverage_standby.py wait
   collect:
     needs: select
     runs-on: ubuntu-latest
@@ -48,18 +83,6 @@ jobs:
       contents: read
       actions: read
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      with:
-        repository: matrixorigin/matrixone
-        ref: ${{ github.sha }}
-        sparse-checkout: .github/standby-trial/coverage_standby.py
-        sparse-checkout-cone-mode: false
-        persist-credentials: false
-    - name: Wait for selected group, including its UT result
-      env:
-        CHILD: ${{ needs.select.outputs.child }}
-        ACTIONS_TOKEN: ${{ github.token }}
-      run: python3 -I .github/standby-trial/coverage_standby.py wait
     - name: Collect selected child's skips
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
       with:
