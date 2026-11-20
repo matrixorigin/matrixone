@@ -1,0 +1,69 @@
+name: JED read-only native cache key comparison
+on:
+  push:
+    branches: [weilu-runner-test]
+    paths: [.github/workflows/jed-native-key-probe.yaml]
+permissions:
+  contents: read
+jobs:
+  fingerprint:
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.event.before == '03ebf6bd3850c50ff4acbe593ab19ac6de202111' && github.run_attempt == 1
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [0, 1]
+    name: JED node ${{ matrix.node }} fingerprint only
+    runs-on: ${{ format('cs-jed-nc-n{0}-pr-v1', matrix.node) }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: c33ce3ff8e7555c8053c85693e55e93e73d898b7
+          persist-credentials: false
+          sparse-checkout: |
+            cgo
+            thirdparties
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: matrixorigin/CI
+          ref: 48edf24e44a888c1c4d57318c4eca7cbb310c6e7
+          path: .ci-toolchain
+          sparse-checkout: |
+            scripts
+            config
+          persist-credentials: false
+      - name: Verify node identity and restore exact read-only PVC tools into job-local storage
+        env:
+          EXPECTED_NODE: ${{ format('mo-standard-{0}', matrix.node) }}
+        run: |
+          set -euo pipefail
+          test "$CS_CACHE_ENV" = jed && test "$CS_CACHE_NODE" = "$EXPECTED_NODE"
+          test "$(git rev-parse HEAD)" = c33ce3ff8e7555c8053c85693e55e93e73d898b7
+          test "$(git -C .ci-toolchain rev-parse HEAD)" = 48edf24e44a888c1c4d57318c4eca7cbb310c6e7
+          python3 .ci-toolchain/scripts/node_cache_toolchain_store.py --catalog .ci-toolchain/config/node-compile-cache-catalog.json --lock .ci-toolchain/config/node-toolchain-lock.json --destination "$RUNNER_TEMP/node-toolchain-install" --report "$RUNNER_TEMP/persistent-toolchain.json"
+      - name: Compute production key without building or publishing
+        env:
+          COVERAGE_GROUP: ${{ matrix.node }}
+          GOWORK: "off"
+          GOFLAGS: ""
+          GOTOOLCHAIN: local
+          CGO_ENABLED: "1"
+          GOMAXPROCS: "7"
+        run: |
+          set -euo pipefail
+          export GOMODCACHE="$RUNNER_TEMP/cs-buildcache-gomod" GOCACHE="$RUNNER_TEMP/cs-buildcache-go"
+          python3 -I - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          sys.path.insert(0, str(root / ".ci-toolchain/scripts"))
+          import node_compile_cache as n
+          runtime = n.runtime(root, "jed", "matrixorigin/matrixone")
+          key, inputs = n.native_key(root, runtime)
+          report = dict(node=os.environ["CS_CACHE_NODE"], runtime=n.hash_value(runtime),
+                        native_key=key, inputs=n.hash_value(inputs), count=len(inputs),
+                        build_env=n.hash_value({k:os.environ.get(k,"") for k in n.NATIVE_ENV}),
+                        runtime_fields={k:n.hash_value(v) for k,v in runtime.items()},
+                        packages=runtime["system_packages_sha256"], cpu=runtime["cpu"]["model name"])
+          print("JED_NATIVE_RECEIPT=" + json.dumps(report,sort_keys=True))
+          PY
