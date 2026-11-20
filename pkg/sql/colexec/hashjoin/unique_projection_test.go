@@ -517,7 +517,11 @@ func benchmarkHashJoinUniqueProjection(b *testing.B, typ types.Type, nullable bo
 									continue
 								}
 								idx := int64(match - 1)
-								if err := ctr.appendOneMatch(arg, proc, int64(ctr.lastIdx+row), idx/colexec.DefaultBatchSize, idx%colexec.DefaultBatchSize); err != nil {
+								selected := outputRow{
+									left: ctr.leftBat, leftRow: int64(ctr.lastIdx + row),
+									right: ctr.rightBats[idx/colexec.DefaultBatchSize], rightRow: idx % colexec.DefaultBatchSize,
+								}
+								if err := ctr.appendOutputRow(arg, proc, selected); err != nil {
 									b.Fatal(err)
 								}
 							}
