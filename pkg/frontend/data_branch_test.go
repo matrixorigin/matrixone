@@ -250,9 +250,9 @@ func TestInstallDataBranchCloneContextRestoresRequestContext(t *testing.T) {
 	require.Nil(t, execCtx.reqCtx.Value(defines.DatTypKey{}))
 }
 
-func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootAlterLineage(t *testing.T) {
+func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootRebuilds(t *testing.T) {
 	require.Equal(t,
-		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level != 'alter'",
+		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level not in ('alter', 'truncate')",
 		branchQuotaUsageSQL(7),
 	)
 }

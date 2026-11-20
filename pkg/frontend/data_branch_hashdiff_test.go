@@ -106,7 +106,7 @@ func TestCompareTupleWithBatchRow(t *testing.T) {
 		types.Tuple{int64(2), []byte("alice"), []byte("h1")},
 		bat,
 		0,
-		true,
+		true, nil,
 	)
 	require.NoError(t, err)
 	require.Zero(t, cmp)
@@ -116,7 +116,7 @@ func TestCompareTupleWithBatchRow(t *testing.T) {
 		types.Tuple{int64(2), []byte("alice"), []byte("h1")},
 		bat,
 		0,
-		false,
+		false, nil,
 	)
 	require.NoError(t, err)
 	require.NotZero(t, cmp)
@@ -126,7 +126,7 @@ func TestCompareTupleWithBatchRow(t *testing.T) {
 		types.Tuple{int64(1), []byte("bob"), []byte("h1")},
 		bat,
 		0,
-		true,
+		true, nil,
 	)
 	require.NoError(t, err)
 	require.NotZero(t, cmp)
@@ -137,7 +137,7 @@ func TestCompareTupleWithBatchRow(t *testing.T) {
 		types.Tuple{int64(1), []byte("alice"), []byte("h1")},
 		bat,
 		0,
-		false,
+		false, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "out of range")
@@ -341,7 +341,7 @@ func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 		bat.Vecs[1] = buildFixedVector(t, mp, decimalTyp, amount)
 		bat.SetRowCount(1)
 
-		cmp, err := compareTupleWithBatchRow(tblStuff, tuple, bat, 0, false)
+		cmp, err := compareTupleWithBatchRow(tblStuff, tuple, bat, 0, false, nil)
 		require.NoError(t, err)
 		require.Zero(t, cmp)
 	})
@@ -1845,7 +1845,7 @@ func TestConstructChangeHandleBetweenCompactsHydrationSnapshot(t *testing.T) {
 				pathFromLCAToBase:   []uint64{baseID},
 				pathFromLCAToBaseTS: []types.TS{{}},
 			}
-			targetHandles, baseHandles, err := constructChangeHandle(ctx, ses, bh, tables, info, nil, &betweenFrom, &tc.betweenTo)
+			targetHandles, baseHandles, err := constructChangeHandle(ctx, ses, bh, &tables, info, nil, &betweenFrom, &tc.betweenTo)
 			for _, h := range append(targetHandles, baseHandles...) {
 				t.Cleanup(func() { require.NoError(t, h.Close()) })
 			}
