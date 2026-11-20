@@ -19,7 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -143,7 +145,12 @@ func TestObjectDownloadWaitsForItsPart(t *testing.T) {
 	ctx := context.Background()
 	o := newObjectDownload("", false, []int64{0, 4, 8})
 	_, wait := o.estimate(0, 1)
-	require.GreaterOrEqual(t, wait, rangeReadCosts.firstByte(), "a part not yet read is a latency away")
+	require.Equal(t, time.Duration(math.MaxInt64), wait, "a part that has not begun is out of reach")
+	o.begin(0)
+	o.begin(1)
+	_, wait = o.estimate(0, 1)
+	require.Positive(t, wait, "a part begun but not yet read is up to a latency away")
+	require.LessOrEqual(t, wait, rangeReadCosts.firstByte()+time.Duration(float64(time.Second)/downloadRates.rate()))
 	o.advance(1, 4)
 	written, ok := o.waitFor(ctx, 4, 8, time.Millisecond)
 	require.True(t, ok)
@@ -368,4 +375,32 @@ func TestS3FSObjectSplitDownloadsShareFewConnections(t *testing.T) {
 		}
 	}
 	require.Eventually(t, func() bool { return fs.diskCache.downloadConns.Load() == 0 }, 5*time.Second, time.Millisecond)
+}
+
+// A read of bytes in a part of a split download that waits for a connection reads its own
+// range: no read waits for a part holding no connection.
+func TestS3FSReadOfPartWaitingForConnectionReadsItsRange(t *testing.T) {
+	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
+	d := fs.diskCache
+	d.maxDownloadConns = 1
+	key := fs.pathToKey("object")
+	g := newBlackBoxStorage(fs.storage, func(k string, off int64) bool { return k == key && off == 0 })
+	fs.storage = g
+	release := sync.OnceFunc(func() { close(g.gate) })
+	defer release()
+	whole := make(chan error, 1)
+	go func() {
+		_, err := readFullObjectOf(fs, 100, 10)
+		whole <- err
+	}()
+	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 1 }, 5*time.Second, time.Millisecond,
+		"the first part holds the only connection")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{{Offset: 250 << 10, Size: 10}}}
+	require.NoError(t, fs.Read(ctx, vec))
+	require.Equal(t, data[250<<10:250<<10+10], vec.Entries[0].Data)
+	vec.Release()
+	release()
+	require.NoError(t, <-whole)
 }

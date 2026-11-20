@@ -454,3 +454,69 @@ func TestPrefetchReadHoldsNoUnneededRun(t *testing.T) {
 	defer f.mu.Unlock()
 	require.Zero(t, f.bytes)
 }
+
+// keepOnDeleteStorage serves an object after it is deleted, as object storage may for a
+// while.
+type keepOnDeleteStorage struct{ ObjectStorage }
+
+func (keepOnDeleteStorage) Delete(context.Context, ...string) error { return nil }
+
+// A read whose run waits for buffers while its object is deleted starts no run after the
+// delete, so no range of the deleted object is cached, even while storage still serves it.
+func TestPrefetchReadRunWaitingAcrossDeleteCachesNothing(t *testing.T) {
+	const unit = 64 << 10
+	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
+	ctx := context.Background()
+	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
+		Policy: SkipDiskCache | SkipMemoryCache}))
+	fs.diskCache.prefetchFlightBytes = flightBufSize(unit)
+	otherKey := fs.pathToKey("other")
+	g := newBlackBoxStorage(keepOnDeleteStorage{fs.storage}, func(key string, _ int64) bool { return key == otherKey })
+	fs.storage = g
+	release := sync.OnceFunc(func() { close(g.gate) })
+	defer release()
+	read := func(name string, done chan<- error) {
+		vec := &IOVector{FilePath: name, Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{{Offset: 100, Size: 10}}}
+		done <- fs.Read(ctx, vec)
+		vec.Release()
+	}
+	other := make(chan error, 1)
+	go read("other", other)
+	require.Eventually(t, func() bool { cur, _, _ := g.counts(otherKey); return cur == 1 }, 5*time.Second, time.Millisecond,
+		"the read of other holds the buffers")
+	object := make(chan error, 1)
+	go read("object", object)
+	f := &fs.diskCache.prefetchObjects
+	require.Eventually(t, func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.freed != nil
+	}, 5*time.Second, time.Millisecond, "the read of object waits for buffers")
+	require.NoError(t, fs.Delete(ctx, "object"))
+	release()
+	require.NoError(t, <-other)
+	<-object
+	f.reads.Wait()
+	_, cached := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 0, unit)
+	require.False(t, cached, "no range of the deleted object is cached")
+}
+
+// A read of a run past the bytes of a MemoryPrefetchObject whose part, cut at a stale
+// object size, holds none of its blocks returns.
+func TestPrefetchReadOfRunCutAtStaleSizeReturns(t *testing.T) {
+	const unit = 64 << 10
+	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
+	fs.diskCache.memoryPrefetchMax = unit
+	fs.diskCache.prefetched.store(fs.diskCache.pathForFile("object"), 30<<10)
+	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{{Offset: 60 << 10, Size: 10 << 10}}}
+	done := make(chan error, 1)
+	go func() { done <- fs.Read(context.Background(), vec) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+		require.Equal(t, data[60<<10:70<<10], vec.Entries[0].Data)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the read did not return")
+	}
+	vec.Release()
+}

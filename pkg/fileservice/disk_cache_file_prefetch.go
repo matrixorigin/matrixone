@@ -41,6 +41,8 @@ type filePrefetchObject struct {
 	// before its download is registered.
 	holds       int
 	readStarted bool
+	// connOnce frees the connection it holds once registered.
+	connOnce sync.Once
 
 	prefetchTarget
 }
@@ -101,13 +103,19 @@ func (p *filePrefetchObject) registerLocked(_, closing context.Context, _ time.T
 }
 
 // run downloads the bytes of p, registered, to their cache file, frees the connection p
-// holds, and ends p. The closing of the cache or a delete of the object cancels it.
+// holds once its bytes are read, and ends p. The closing of the cache or a delete of the
+// object cancels it.
 func (p *filePrefetchObject) run() {
 	d := p.d
 	defer d.prefetchObjects.reads.Done()
 	defer context.AfterFunc(p.closing, p.cancelRead)()
-	defer d.releaseDownloadConns(1)
+	defer p.releaseConn()
 	_, _ = d.downloadFile(p.ctx, p.filePath, p.start, p.end, p.open, d.endFilePrefetch(p.diskPath, p))
+}
+
+// releaseConn frees the connection p holds, once.
+func (p *filePrefetchObject) releaseConn() {
+	p.connOnce.Do(func() { p.d.releaseDownloadConns(1) })
 }
 
 // startFilePrefetch registers a FilePrefetchObject of the bytes [start, end) of the
@@ -148,28 +156,11 @@ func (f *prefetchObjects) holdingLocked(objectPath string, start, end int64, now
 		return o
 	}
 	for _, o := range f.m[objectPath] {
-		if p, ok := o.(*filePrefetchObject); ok && p.readStarted && p.start <= start && end <= p.end {
+		if p, ok := o.(*filePrefetchObject); ok && p.readStarted && p.ctx.Err() == nil && p.start <= start && end <= p.end {
 			return p
 		}
 	}
 	return nil
-}
-
-// prefetchFile downloads, as a FilePrefetchObject, the bytes [start, end) of the object
-// at filePath through open to their cache file, once it holds a connection downloads may
-// hold, and returns why it cached nothing. A delete of the object cancels it, and it is
-// not cached after a delete counted since it began.
-func (d *DiskCache) prefetchFile(ctx context.Context, filePath string, start, end int64, open rangeOpener) error {
-	r := newReadRun(d.newFileObject(ctx, filePath, start, end, open, flightNeeds{}), nil)
-	defer r.done()
-	r.admit(ctx, closedChan)
-	if r.got == nil {
-		return r.err
-	}
-	if err := waitFlights(ctx, []prefetchObject{r.got}); err != nil {
-		return err
-	}
-	return r.got.err()
 }
 
 // downloadFile downloads under ctx, the context of a FilePrefetchObject, its bytes [start,

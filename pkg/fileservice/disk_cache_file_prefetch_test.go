@@ -30,6 +30,15 @@ func filePrefetchOpener(fs *S3FS, file string) rangeOpener {
 	}
 }
 
+// prefetchFileRange prefetches the bytes [start, end) of the object as a
+// FilePrefetchObject.
+func prefetchFileRange(ctx context.Context, fs *S3FS, start, end int64) error {
+	fs.diskCache.memoryPrefetchMax = 64 << 10
+	_, err := fs.diskCache.readRanges(ctx, "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch,
+		[]PrefetchRange{{Offset: start, Size: end - start}}, filePrefetchOpener(fs, "object"))
+	return err
+}
+
 // A read of bytes a FilePrefetchObject has written is served from its download, while
 // the download still runs.
 func TestFilePrefetchServesReadsWhileItDownloads(t *testing.T) {
@@ -39,7 +48,7 @@ func TestFilePrefetchServesReadsWhileItDownloads(t *testing.T) {
 	ctx := context.Background()
 	done := make(chan error, 1)
 	go func() {
-		err := fs.diskCache.prefetchFile(ctx, "object", 1000, 200<<10, filePrefetchOpener(fs, "object"))
+		err := prefetchFileRange(ctx, fs, 1000, 200<<10)
 		done <- err
 	}()
 	<-storage.stalled
@@ -65,7 +74,7 @@ func TestDeleteCancelsFilePrefetch(t *testing.T) {
 	ctx := context.Background()
 	done := make(chan error, 1)
 	go func() {
-		err := fs.diskCache.prefetchFile(ctx, "object", 0, 200<<10, filePrefetchOpener(fs, "object"))
+		err := prefetchFileRange(ctx, fs, 0, 200<<10)
 		done <- err
 	}()
 	<-storage.stalled

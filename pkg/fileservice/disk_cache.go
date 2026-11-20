@@ -1130,6 +1130,8 @@ func (d *DiskCache) writeFileTo(
 	var dst io.Writer = f
 	if fill != notWholeFill {
 		download = d.startDownload(diskPath, f.Name(), fill != contentFill, bounds)
+		// Its first part holds the connection the download took.
+		download.begin(0)
 		fileDownloadStarted(ctx, download)
 		downloadStarted(ctx)
 		dst = downloadProgressWriter{w: f, download: download}
@@ -1179,6 +1181,11 @@ func (d *DiskCache) writeFileTo(
 		}
 	}
 	releaseConns()
+	// A range download frees the connection its FilePrefetchObject took once its bytes
+	// are read.
+	if p, ok := ctx.Value(fileDownloadKey{}).(*filePrefetchObject); ok && fill == rangeFill {
+		p.releaseConn()
+	}
 	if download != nil {
 		download.end(err == nil)
 	}

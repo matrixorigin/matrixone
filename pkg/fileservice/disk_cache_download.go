@@ -284,7 +284,8 @@ func (o *objectDownload) end(complete bool) {
 // estimate returns the bytes a part of the download still writes before the bytes in
 // [off, end) are written, the most of the parts holding them, and the time until they
 // are: the time to the first byte of a part not yet writing, plus its bytes left at its
-// rate so far, or at the recent downloads' rate before it wrote enough to measure its own.
+// rate so far, or at the recent downloads' rate before it wrote enough to measure its own;
+// out of reach while a part holding them has not begun.
 func (o *objectDownload) estimate(off, end int64) (int64, time.Duration) {
 	now := time.Now()
 	latency := rangeReadCosts.firstByte()
@@ -305,13 +306,14 @@ func (o *objectDownload) estimate(off, end int64) (int64, time.Duration) {
 		if left <= 0 {
 			continue
 		}
+		// A part that has not begun holds no connection yet: no read waits for it.
+		if p.began.IsZero() {
+			return math.MaxInt64, time.Duration(math.MaxInt64)
+		}
 		behind = max(behind, left)
 		var ttfb time.Duration
 		if p.first.IsZero() {
-			ttfb = latency
-			if !p.began.IsZero() {
-				ttfb = max(latency-now.Sub(p.began), 0)
-			}
+			ttfb = max(latency-now.Sub(p.began), 0)
 		}
 		rate := recent
 		if elapsed := now.Sub(p.first); !p.first.IsZero() && p.written >= downloadRateMinBytes && elapsed > 0 {
@@ -755,8 +757,6 @@ func (d *DiskCache) downloadConnsFreed() chan struct{} {
 	return d.connsFreed
 }
 
-// reserveDownloadConns reserves n of the connections downloads may hold, half the
-// connections to the object storage host, or reports that they are taken.
 // partConn takes one of the connections downloads may hold for a part of a download,
 // waiting for it, and returns the function freeing it.
 func (d *DiskCache) partConn(ctx context.Context) (func(), error) {
@@ -766,6 +766,8 @@ func (d *DiskCache) partConn(ctx context.Context) (func(), error) {
 	return func() { d.releaseDownloadConns(1) }, nil
 }
 
+// reserveDownloadConns reserves n of the connections downloads may hold, half the
+// connections to the object storage host, or reports that they are taken.
 func (d *DiskCache) reserveDownloadConns(n int64) bool {
 	limit := d.maxDownloadConns
 	for {

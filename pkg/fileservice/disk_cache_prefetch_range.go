@@ -231,6 +231,8 @@ func (d *DiskCache) prefetchRead(
 	// bytes, otherwise the parts of the run, each a FilePrefetchObject the reads of its
 	// bytes share. The read holds no prefetch object while it waits for one of its own to
 	// be admitted: it holds the one reading a block it joined only to copy the block.
+	// No run of the read starts after a delete of the object counted since it began.
+	deletes := d.deletes.now()
 	f := &d.prefetchObjects
 	f.mu.Lock()
 	if _, ok := f.openLocked(); !ok {
@@ -274,7 +276,7 @@ func (d *DiskCache) prefetchRead(
 	for _, p := range pending {
 		start, end := windowStart+int64(p[0])*block, windowStart+int64(p[1]+1)*block
 		if end-start <= d.memoryPrefetchMax {
-			r := newReadRun(d.newFlight(filePath, start, end, policy, open, flightNeeds{caching: true}), nil)
+			r := newReadRun(d.newFlight(filePath, start, end, policy, open, flightNeeds{caching: true, deletes: &deletes}), nil)
 			r.first, r.last = p[0], p[1]
 			runs = append(runs, r)
 			memoryRuns++
@@ -285,7 +287,7 @@ func (d *DiskCache) prefetchRead(
 			end = size
 		}
 		for _, part := range d.rangeParts(start, end, block) {
-			o := d.newFileObject(context.WithoutCancel(ctx), filePath, part[0], part[1], open, flightNeeds{})
+			o := d.newFileObject(context.WithoutCancel(ctx), filePath, part[0], part[1], open, flightNeeds{deletes: &deletes})
 			o.readStarted = true
 			r := newReadRun(o, nil)
 			r.first = -1
@@ -298,7 +300,7 @@ func (d *DiskCache) prefetchRead(
 				}
 			}
 			if r.first < 0 {
-				r.done()
+				o.release()
 				continue
 			}
 			runs = append(runs, r)
@@ -360,8 +362,9 @@ func (d *DiskCache) prefetchRead(
 				}
 				o = r.got
 			} else {
+				// The read chose to join it: it is joined however long its bytes take.
 				f.mu.Lock()
-				if o = f.fastestLocked(diskPath, b.start, b.end, time.Now(), d.downloadMaxExtraWait, true); o != nil {
+				if o = f.coveringLocked(diskPath, b.start, b.end); o != nil {
 					o.hold()
 				}
 				f.mu.Unlock()
@@ -716,13 +719,15 @@ func (d *DiskCache) readRanges(
 		}
 	}
 	started()
-	if closed {
-		if !underWay {
-			return false, nil
-		}
+	switch {
+	case err != nil:
+		return true, err
+	case closed && !underWay:
+		return false, nil
+	case closed:
 		return true, errPrefetchClosed
 	}
-	return true, err
+	return true, nil
 }
 
 // flightNeeds is what a prefetch object needs before it registers, besides what its kind
@@ -1283,6 +1288,17 @@ func (f *prefetchObjects) fastestLocked(diskPath string, lo, hi int64, now time.
 		}
 	}
 	return best
+}
+
+// coveringLocked returns a prefetch object of diskPath reads can join that caches the
+// bytes [lo, hi).
+func (f *prefetchObjects) coveringLocked(diskPath string, lo, hi int64) prefetchObject {
+	for _, o := range f.m[diskPath] {
+		if start, end := o.span(); start <= lo && hi <= end && o.joinable() && o.caches() {
+			return o
+		}
+	}
+	return nil
 }
 
 // fastestPrefetch returns the time until the bytes [lo, hi) of diskPath arrive from the
