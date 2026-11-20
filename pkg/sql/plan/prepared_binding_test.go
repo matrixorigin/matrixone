@@ -1072,12 +1072,15 @@ func TestPreparedSourceTransportDiagnosticOwnership(t *testing.T) {
 func TestPreparedSourceBindingPreservesComparisonContracts(t *testing.T) {
 	for _, tc := range []struct {
 		column, source types.T
-		comparisonType types.T
-		adapter        string
+		// argTypes are the comparison's argument types (column first).
+		argTypes []types.T
+		adapter  string
 	}{
-		{types.T_time, types.T_varchar, types.T_time, "cast"},
-		{types.T_json, types.T_int64, types.T_json, function.JsonComparisonParamFunctionName},
-		{types.T_decimal64, types.T_float64, types.T_float64, ""},
+		{types.T_time, types.T_varchar, []types.T{types.T_time, types.T_time}, "cast"},
+		// A typed parameter binds like a literal of its type: JSON = BIGINT
+		// is a direct JSON numeric comparison, with no hidden adapter.
+		{types.T_json, types.T_int64, []types.T{types.T_json, types.T_int64}, ""},
+		{types.T_decimal64, types.T_float64, []types.T{types.T_float64, types.T_float64}, ""},
 	} {
 		t.Run(tc.column.String(), func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -1093,8 +1096,10 @@ func TestPreparedSourceBindingPreservesComparisonContracts(t *testing.T) {
 			require.NoError(t, err)
 			comparison := findPlanFunctionExpr(p, "=")
 			require.NotNil(t, comparison)
-			for _, arg := range comparison.GetF().Args {
-				require.Equal(t, int32(tc.comparisonType), arg.Typ.Id)
+			args := comparison.GetF().Args
+			require.Len(t, args, len(tc.argTypes))
+			for i, arg := range args {
+				require.Equal(t, int32(tc.argTypes[i]), arg.Typ.Id)
 			}
 			if tc.adapter != "" {
 				require.NotNil(t, findPlanFunctionExpr(p, tc.adapter))
@@ -1225,7 +1230,7 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 		for _, dependent := range []bool{false, true} {
 			ctx := withPreparedSourceBindings(context.Background(),
 				[]PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}},
-				[]any{ParamValue{Value: "7", IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}})
+				[]any{ParamValue{Value: "7", IsBinaryProtocol: true, PrepareParamKind: types.StringConversionInteger}})
 			state := preparedBindingState(ctx)
 			state.valueDependent = dependent
 			state.selectStatement = selectStatement
@@ -1287,10 +1292,10 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 
 func TestPreparedIntegerConsumerLoweringProvenance(t *testing.T) {
 	for _, value := range []ParamValue{
-		{Value: "7", PrepareParamKind: vector.PrepareParamInteger},
+		{Value: "7", PrepareParamKind: types.StringConversionInteger},
 		{Value: "7", IsBinaryProtocol: true},
-		{Value: "7", IsBinaryProtocol: true, IsBin: true, PrepareParamKind: vector.PrepareParamInteger},
-		{Value: "7", IsBinaryProtocol: true, IsBinaryString: true, PrepareParamKind: vector.PrepareParamInteger},
+		{Value: "7", IsBinaryProtocol: true, IsBin: true, PrepareParamKind: types.StringConversionInteger},
+		{Value: "7", IsBinaryProtocol: true, IsBinaryString: true, PrepareParamKind: types.StringConversionInteger},
 	} {
 		ctx := withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}}, []any{value})
 		param := &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
@@ -1522,7 +1527,7 @@ func TestPreparedSourceBindingStringConsumers(t *testing.T) {
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
 			proc.SetPrepareParams(params)
 			if tc.typ == types.T_varbinary {
-				proc.SetPrepareParamsWithMeta(params, nil, nil, []bool{true})
+				proc.SetPrepareParamsWithMetadata(params, nil, []bool{true})
 			}
 			q := p.GetQuery()
 			result, free, err := colexec.GetReadonlyResultFromExpression(proc, q.Nodes[q.Steps[0]].ProjectList[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
@@ -1546,12 +1551,11 @@ func TestPreparedSourceBindingJSONComparisonExecution(t *testing.T) {
 	for _, tc := range []struct {
 		name, json, value string
 		typ               types.Type
-		kind              vector.PrepareParamKind
 	}{
-		{"integer", "7", "7", types.T_int64.ToType(), vector.PrepareParamInteger},
-		{"float", "1.25", "1.25", types.T_float64.ToType(), vector.PrepareParamFloat},
-		{"boolean", "true", "true", types.T_bool.ToType(), vector.PrepareParamBoolean},
-		{"decimal", "1.25", "1.25", types.New(types.T_decimal64, 3, 2), vector.PrepareParamDecimal},
+		{"integer", "7", "7", types.T_int64.ToType()},
+		{"float", "1.25", "1.25", types.T_float64.ToType()},
+		{"boolean", "true", "true", types.T_bool.ToType()},
+		{"decimal", "1.25", "1.25", types.New(types.T_decimal64, 3, 2)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -1562,20 +1566,16 @@ func TestPreparedSourceBindingJSONComparisonExecution(t *testing.T) {
 			params := vector.NewVec(types.T_text.ToType())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, proc.Mp()))
-			proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{tc.kind})
-			for _, typed := range []bool{false, true} {
-				if typed {
-					installTestTypedParams(t, proc, []types.Type{tc.typ}, []string{tc.value})
-				}
-				q := p.GetQuery()
-				result, free, err := colexec.GetReadonlyResultFromExpression(proc, q.Nodes[q.Steps[0]].ProjectList[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
-				if free != nil {
-					defer free()
-				}
-				require.NoError(t, err)
-				require.False(t, result.IsNull(0))
-				require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
+			proc.SetPrepareParams(params)
+			installTestTypedParams(t, proc, []types.Type{tc.typ}, []string{tc.value})
+			q := p.GetQuery()
+			result, free, err := colexec.GetReadonlyResultFromExpression(proc, q.Nodes[q.Steps[0]].ProjectList[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
+			if free != nil {
+				defer free()
 			}
+			require.NoError(t, err)
+			require.False(t, result.IsNull(0))
+			require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
 		})
 	}
 }
@@ -1853,7 +1853,7 @@ func TestPreparedExplicitIntegerCastFilters(t *testing.T) {
 						}
 						require.NoError(t, vector.AppendBytes(params, []byte(value), tc.null, proc.Mp()))
 						if !tc.null {
-							values[i] = ParamValue{Value: value, IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}
+							values[i] = ParamValue{Value: value, IsBinaryProtocol: true, PrepareParamKind: types.StringConversionInteger}
 						}
 					}
 					proc.SetPrepareParams(params)

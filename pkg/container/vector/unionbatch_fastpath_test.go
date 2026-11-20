@@ -48,7 +48,6 @@ func TestUnionInlineSelection(t *testing.T) {
 					require.Empty(t, src.area)
 				}
 				src.GetGrouping().Add(2)
-				src.SetPrepareParamKind(PrepareParamInteger)
 				src.SetIsBinaryString(true)
 				require.NoError(t, src.SetStringSource(types.StringSourceLiteral))
 				// Consecutive runs, gaps, repetition and reversal share one
@@ -81,7 +80,6 @@ func TestUnionInlineSelection(t *testing.T) {
 						require.Equal(t, types.StringSourceLiteral, dst.GetStringSourceAt(i+1))
 						if !isNull {
 							require.Equal(t, values[row], dst.GetStringAt(i+1))
-							require.Equal(t, PrepareParamInteger, dst.GetPrepareParamKindAt(i+1))
 							require.True(t, dst.GetIsBinaryStringAt(i+1))
 							if emptyNonInline && row == 1 {
 								// The ordinary copy rebases even an empty non-inline
@@ -587,7 +585,6 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 				source.GetNulls().Add(test.nulls...)
 				source.GetGrouping().Add(1, 3, 6)
 				source.SetLength(5) // Retain stale bits outside the logical range.
-				source.SetPrepareParamKind(PrepareParamInteger)
 				require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
 				destination := NewVec(types.T_int64.ToType())
 				defer destination.Free(mp)
@@ -605,7 +602,6 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 				require.Equal(t, int64(99), GetFixedAtNoTypeCheck[int64](destination, 0))
 				require.False(t, destination.IsNull(0))
 				require.Equal(t, types.StringSourceExpression, destination.GetStringSourceAt(0))
-				require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(0))
 				require.False(t, destination.GetIsBinaryStringAt(0))
 				for row := 1; row < 4; row++ {
 					isNull := test.name == "all" || test.name == "sparse" && row == 1
@@ -615,9 +611,7 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 					require.False(t, destination.GetIsBinaryStringAt(row))
 					if !isNull {
 						require.Equal(t, int64(11+row), GetFixedAtNoTypeCheck[int64](destination, row))
-						require.Equal(t, PrepareParamInteger, destination.GetPrepareParamKindAt(row))
 					} else {
-						require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(row))
 					}
 				}
 				require.False(t, destination.GetNulls().Contains(5))

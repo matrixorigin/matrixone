@@ -522,18 +522,17 @@ type BaseProcess struct {
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
 	// 0 after DDL, and the affected row count after DML.
-	AffectedRows                        *int64
-	LoadLocalReader                     *io.PipeReader
-	Aicm                                *defines.AutoIncrCacheManager
-	resolveVariableFunc                 func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	resolveVariableTypeFunc             func(varName string, isSystemVar, isGlobalVar bool) (plan.Type, error)
-	resolveVariableIsBinFunc            func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
-	resolveVariableStringDomainFunc     func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
-	resolveVariablePrepareParamKindFunc func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error)
-	prepareParams                       *vector.Vector
-	prepareParamsIsBin                  []bool
-	prepareParamsBinaryString           []bool
-	prepareParamsOwned                  bool
+	AffectedRows                    *int64
+	LoadLocalReader                 *io.PipeReader
+	Aicm                            *defines.AutoIncrCacheManager
+	resolveVariableFunc             func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableTypeFunc         func(varName string, isSystemVar, isGlobalVar bool) (plan.Type, error)
+	resolveVariableIsBinFunc        func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	resolveVariableStringDomainFunc func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
+	prepareParams                   *vector.Vector
+	prepareParamsIsBin              []bool
+	prepareParamsBinaryString       []bool
+	prepareParamsOwned              bool
 	// typedPrepareParams carries each prepared parameter as one row of its
 	// source SQL type (column i is parameter i). It is nil when the caller
 	// only supplied the legacy text transport.
@@ -868,33 +867,6 @@ func (proc *Process) GetPrepareParamIsBin(i int) bool {
 	return proc.getPrepareParamMeta(i, 0)
 }
 
-func (proc *Process) GetPrepareParamKind(i int) vector.PrepareParamKind {
-	var kind vector.PrepareParamKind
-	if proc.getPrepareParamMeta(i, 1) {
-		kind |= 1
-	}
-	if proc.getPrepareParamMeta(i, 2) {
-		kind |= 2
-	}
-	if proc.getPrepareParamMeta(i, 3) {
-		kind |= 4
-	}
-	return kind
-}
-
-// GetPrepareParamType returns the concrete SQL type retained for a direct
-// prepared parameter. T_any means that the sender did not provide exact type
-// metadata, as is expected for legacy peers and parameters that do not need it.
-func (proc *Process) GetPrepareParamType(i int) types.T {
-	var typ types.T
-	for bit := 0; bit < 8; bit++ {
-		if proc.getPrepareParamMeta(i, 4+bit) {
-			typ |= types.T(1 << bit)
-		}
-	}
-	return typ
-}
-
 func (proc *Process) getPrepareParamMeta(i, section int) bool {
 	paramCount := 0
 	if proc.Base.prepareParams != nil {
@@ -983,19 +955,6 @@ func (proc *Process) GetResolveVariableBinaryStringFunc() func(string, bool, boo
 		domain, err := f(name, system, global)
 		return domain == types.RuntimeStringBinary, err
 	}
-}
-
-func (proc *Process) SetResolveVariablePrepareParamKindFunc(
-	f func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error),
-) {
-	proc.Base.resolveVariablePrepareParamKindFunc = f
-}
-
-func (proc *Process) GetResolveVariablePrepareParamKindFunc() func(
-	varName string,
-	isSystemVar, isGlobalVar bool,
-) (vector.PrepareParamKind, error) {
-	return proc.Base.resolveVariablePrepareParamKindFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

@@ -42,7 +42,6 @@ func TestBatchCopySelection(t *testing.T) {
 	constant, err := NewConstBytes(types.T_varchar.ToType(), []byte("a non-inline constant payload"), 3, mp)
 	require.NoError(t, err)
 	t.Cleanup(func() { constant.Free(mp) })
-	constant.SetPrepareParamKind(PrepareParamInteger)
 	constant.SetIsBinaryString(true)
 	require.NoError(t, constant.SetStringSource(types.StringSourceLiteral))
 	constant.GetGrouping().Add(2)
@@ -73,7 +72,6 @@ func TestBatchCopySelection(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, b, a)
 				for row := range got.Length() {
-					require.Equal(t, want.GetPrepareParamKindAt(row), got.GetPrepareParamKindAt(row))
 					require.Equal(t, want.GetIsBinaryStringAt(row), got.GetIsBinaryStringAt(row))
 					require.Equal(t, want.GetStringSourceAt(row), got.GetStringSourceAt(row))
 				}

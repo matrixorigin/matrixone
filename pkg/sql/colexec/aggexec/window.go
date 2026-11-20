@@ -880,7 +880,6 @@ type valueEntry struct {
 	stringDomain types.RuntimeStringDomain
 	stringSource types.StringSource
 	data         []byte
-	kind         vector.PrepareParamKind
 }
 
 func (exec *valueWindowExec) GroupGrow(more int) error {
@@ -915,7 +914,6 @@ func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 	}
 
 	if !entry.isNull {
-		entry.kind = vec.GetPrepareParamKindAt(row)
 		entry.stringDomain = vec.GetRuntimeStringDomainAt(row)
 		// Copy the value data
 		if vec.GetType().IsVarlen() {
@@ -1204,9 +1202,6 @@ func (exec *valueWindowExec) flushNthValue() ([]*vector.Vector, error) {
 func (exec *valueWindowExec) appendValueEntry(result *vector.Vector, entry *valueEntry) error {
 	row := result.Length()
 	if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
-		return err
-	}
-	if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
 		return err
 	}
 	if err := result.SetRuntimeStringDomainAtWithMP(row, entry.stringDomain, exec.mp); err != nil {

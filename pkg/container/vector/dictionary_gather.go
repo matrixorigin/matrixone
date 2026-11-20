@@ -79,7 +79,7 @@ func (v *Vector) unionDictionaryBatch(w *Vector, offset int64, count int, flags 
 			next++
 		}
 	}
-	if err := v.propagatePrepareParamKindsBatch(w, oldLength, offset, count, flags, overrides, mp); err != nil {
+	if err := v.propagateStringSourcesBatch(w, oldLength, offset, count, flags, overrides, mp); err != nil {
 		return err
 	}
 	if err := v.propagateBinaryStringBatch(w, oldLength, offset, count, flags, mp); err != nil {
@@ -418,11 +418,7 @@ func unionDictionaryRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPoo
 	if err := v.MaterializeOwned(mp); err != nil {
 		return err
 	}
-	if err := v.preflightPrepareParamKindAppend(
-		v.length+len(sels),
-		summarizePrepareParamKindSelection(w, sels),
-		mp,
-	); err != nil {
+	if err := v.preExtendStringSourcesForAppend(v.length+len(sels), mp); err != nil {
 		return err
 	}
 	if err := v.preflightBinaryStringAppend(
@@ -459,7 +455,7 @@ func unionDictionaryRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPoo
 	if err := gatherDictionarySelection(v, w, sels, oldLen, preserveDisjointArea, mp); err != nil {
 		return err
 	}
-	if err := propagatePrepareParamKindsSelection(v, w, oldLen, sels, mp); err != nil {
+	if err := propagateStringSourcesSelection(v, w, oldLen, sels, mp); err != nil {
 		return err
 	}
 	return propagateBinaryStringSelection(v, w, oldLen, sels, mp)
@@ -524,7 +520,7 @@ func (v *Vector) admitDictionaryBatch(
 		return err
 	}
 	if !preflighted {
-		if err := v.PreflightUnionBatchPrepareParamKinds(w, offset, cnt, flags, mp); err != nil {
+		if err := v.PreflightUnionBatchStringSources(w, offset, cnt, flags, mp); err != nil {
 			return err
 		}
 		defer v.FinalizeStringSourcePreflight()

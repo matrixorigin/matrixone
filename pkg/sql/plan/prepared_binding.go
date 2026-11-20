@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -400,7 +399,7 @@ func bindPreparedIntegerValue(ctx context.Context, column, source *Expr) (*Expr,
 	if binding.Type.Oid == types.T(source.Typ.Id) {
 		if value, ok := state.values[source.GetP().Pos].(ParamValue); ok &&
 			value.IsBinaryProtocol && !value.IsBin && !value.IsBinaryString &&
-			value.PrepareParamKind == vector.PrepareParamInteger {
+			value.PrepareParamKind == types.StringConversionInteger {
 			narrowed := DeepCopyExpr(source)
 			narrowed.Typ = converted.Typ
 			return narrowed, true, nil
@@ -719,13 +718,11 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		if !ok {
 			continue
 		}
-		if name == "member of" && i == 0 && binding.Type.Oid.IsArrayRelate() {
-			// MEMBER OF rejects SQL arrays with an argument-specific runtime
-			// error. Keep a direct prepared array in its TEXT transport form so
-			// the existing checker can report that error using source metadata.
-			args[i] = &Expr{Typ: makeSimplePlan2Type(types.T_text),
-				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: source.GetP().Pos}}}
-			continue
+		if name == "member of" && i == 0 &&
+			(binding.Type.Oid.IsArrayRelate() || binding.Type.Oid == types.T_bit) {
+			// MEMBER OF rejects SQL arrays. A protocol BIT parameter carries no
+			// width, so its JSON value would be ambiguous: reject it too.
+			return nil, moerr.NewInvalidTypeForJSON(ctx, 1, "member of")
 		}
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
 			args[1-i] != nil && args[1-i].Typ.Id == int32(types.T_float32) &&

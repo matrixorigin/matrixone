@@ -94,11 +94,48 @@ func TestTypedPrepareParamParsing(t *testing.T) {
 
 	t.Run("strings and unsupported types stay on TEXT", func(t *testing.T) {
 		for _, typ := range []types.Type{
-			types.T_varchar.ToType(), types.T_text.ToType(), types.T_datetime.ToType(), types.T_json.ToType(),
+			types.T_varchar.ToType(), types.T_text.ToType(), types.T_year.ToType(), types.T_uuid.ToType(),
 		} {
-			_, ok := parse(typ, "2026-01-01")
+			_, ok := parse(typ, "2026")
 			require.False(t, ok, typ.String())
 		}
+	})
+
+	t.Run("bit", func(t *testing.T) {
+		vec, ok := parse(types.T_bit.ToType(), "15")
+		require.True(t, ok)
+		require.Equal(t, uint64(15), vector.GetFixedAtNoTypeCheck[uint64](vec, 0))
+		_, ok = parse(types.T_bit.ToType(), "-1")
+		require.False(t, ok)
+	})
+
+	t.Run("temporal and json", func(t *testing.T) {
+		vec, ok := parse(types.T_date.ToType(), "2026-01-02")
+		require.True(t, ok)
+		want, err := types.ParseDateCast("2026-01-02")
+		require.NoError(t, err)
+		require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Date](vec, 0))
+
+		dt := types.New(types.T_datetime, 0, 3)
+		vec, ok = parse(dt, "2026-01-02 03:04:05.678")
+		require.True(t, ok)
+		wantDT, err := types.ParseDatetime("2026-01-02 03:04:05.678", 3)
+		require.NoError(t, err)
+		require.Equal(t, wantDT, vector.GetFixedAtNoTypeCheck[types.Datetime](vec, 0))
+
+		_, ok = parse(types.New(types.T_time, 0, 0), "12:34:56")
+		require.True(t, ok)
+		_, ok = parse(types.New(types.T_timestamp, 0, 0), "2026-01-02 03:04:05")
+		require.True(t, ok)
+
+		vec, ok = parse(types.T_json.ToType(), `{"a":[1,true]}`)
+		require.True(t, ok)
+		require.Equal(t, `{"a": [1, true]}`, types.DecodeJson(vec.GetBytesAt(0)).String())
+
+		_, ok = parse(types.T_date.ToType(), "not a date")
+		require.False(t, ok)
+		_, ok = parse(types.T_json.ToType(), "{")
+		require.False(t, ok)
 	})
 }
 

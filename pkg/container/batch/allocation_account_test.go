@@ -241,7 +241,7 @@ func TestBatchAccountedWindowBroadcastsScalarConstant(t *testing.T) {
 		types.T_varchar.ToType(), []byte("prepared"), 1, mp,
 	)
 	require.NoError(t, err)
-	source.Vecs[1].SetPrepareParamKind(vector.PrepareParamInteger)
+	require.NoError(t, source.Vecs[1].SetStringSource(types.StringSourceSQLPrepare))
 	source.SetRowCount(4)
 
 	window, err := source.WindowWithAllocation(2, 4, mp, state.selection)
@@ -250,7 +250,7 @@ func TestBatchAccountedWindowBroadcastsScalarConstant(t *testing.T) {
 	require.Same(t, state.selection, window.AllocationAccountSelection())
 	require.Equal(t, 2, window.Vecs[1].Length())
 	require.Equal(t, []byte("prepared"), window.Vecs[1].GetBytesAt(1))
-	require.Equal(t, vector.PrepareParamInteger, window.Vecs[1].GetPrepareParamKindAt(1))
+	require.Equal(t, types.StringSourceSQLPrepare, window.Vecs[1].GetStringSourceAt(1))
 	window.Clean(mp)
 	require.Zero(t, state.account.Snapshot().Used)
 
@@ -357,9 +357,6 @@ func TestBatchGroupingCodecRoundTrip(t *testing.T) {
 	source.Vecs[0].GetGrouping().Add(1, 7, 31)
 	source.Vecs[1].GetGrouping().Add(2, 9)
 	require.NoError(t, source.Vecs[1].SetIsBinaryStringAt(0, true))
-	kinds := make([]vector.PrepareParamKind, source.RowCount())
-	kinds[0] = vector.PrepareParamInteger
-	require.NoError(t, source.Vecs[1].SetPrepareParamKindsWithMP(kinds, mp))
 	source.ExtraBuf = bytes.Repeat([]byte("x"), 1<<20)
 
 	var encoded bytes.Buffer
@@ -379,7 +376,6 @@ func TestBatchGroupingCodecRoundTrip(t *testing.T) {
 	}
 	require.True(t, decoded.Vecs[1].GetIsBinaryStringAt(0))
 	require.False(t, decoded.Vecs[1].GetIsBinaryStringAt(1))
-	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[1].GetPrepareParamKindAt(0))
 	withoutGrouping := newBatchAllocationTestSource(t, mp, nil)
 	encoded.Reset()
 	require.NoError(t, withoutGrouping.MarshalBinaryWithGroupingTo(&encoded))
@@ -810,13 +806,13 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 64)
 	mp := mpool.MustNewZero()
 	source := newBatchAllocationTestSource(t, mp, nil)
-	kinds := make([]vector.PrepareParamKind, source.RowCount())
-	for i := range kinds {
+	sources := make([]types.StringSource, source.RowCount())
+	for i := range sources {
 		if i%2 == 0 {
-			kinds[i] = vector.PrepareParamFloat
+			sources[i] = types.StringSourceLiteral
 		}
 	}
-	source.Vecs[1].SetPrepareParamKinds(kinds)
+	require.NoError(t, source.Vecs[1].SetStringSourcesWithMP(sources, mp))
 
 	destination := NewWithSchema(
 		true,
@@ -827,8 +823,8 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 	require.NoError(t, source.CloneTo(destination, mp))
 	require.NotZero(t, state.account.Snapshot().Used)
 	require.Equal(t, source.RowCount(), destination.RowCount())
-	for i, kind := range kinds {
-		require.Equal(t, kind, destination.Vecs[1].GetPrepareParamKindAt(i))
+	for i, stringSource := range sources {
+		require.Equal(t, stringSource, destination.Vecs[1].GetStringSourceAt(i))
 	}
 	// UnionBatch owns the one destination sidecar. A second metadata copy
 	// would temporarily raise the account high-water mark above its final
@@ -932,28 +928,29 @@ func TestBufferedMetadataDecodeFailureClearsEarlierStringSources(t *testing.T) {
 	}
 	require.NoError(t, source.Vecs[0].SetStringSource(types.StringSourceLiteral))
 	require.NoError(t, source.Vecs[1].SetBinaryStringRowsWithMP([]bool{true, false}, sourceMP))
+	require.NoError(t, source.Vecs[1].SetStringSourcesWithMP(
+		[]types.StringSource{types.StringSourceCOMStmt, types.StringSourceSQLPrepare}, sourceMP))
 	source.SetRowCount(2)
 	var wire bytes.Buffer
-	encoded, err := source.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	encoded, err := source.MarshalBinaryWithMetadata(&wire, true)
 	require.NoError(t, err)
 	source.Clean(sourceMP)
 	require.Zero(t, sourceMP.CurrNB())
 
 	// Stable vector payloads alias encoded bytes and consume no MPool capacity.
-	// Leaving one byte free rejects column 2's mixed runtime-domain bitmap after
-	// column 1's uniform Literal source has already been applied.
+	// Leaving one byte free rejects column 2's mixed string-source sidecar
+	// after column 1's uniform Literal source has already been applied.
 	const decodeCap = 1 << 20
 	decodeMP, err := mpool.NewMPool("batch-metadata-cleanup", decodeCap, mpool.NoFixed)
 	require.NoError(t, err)
 	held, err := decodeMP.Alloc(decodeCap-1, true)
 	require.NoError(t, err)
 	decoded := NewOffHeapEmpty()
-	err = decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, decodeMP)
+	err = decoded.UnmarshalBinaryWithMetadata(encoded, decodeMP)
 	require.Error(t, err)
 	require.Len(t, decoded.Vecs, 2)
 	for _, vec := range decoded.Vecs {
 		require.Equal(t, types.StringSourceExpression, vec.GetStringSourceAt(0))
-		require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKindAt(0))
 		require.False(t, vec.HasBinaryStringMetadata())
 	}
 	decoded.Clean(decodeMP)
@@ -961,7 +958,7 @@ func TestBufferedMetadataDecodeFailureClearsEarlierStringSources(t *testing.T) {
 	require.Zero(t, decodeMP.CurrNB())
 }
 
-func TestBatchUnionPrepareParamKindAllocationFailureDoesNotPublishRows(t *testing.T) {
+func TestBatchUnionStringSourceAllocationFailureDoesNotPublishRows(t *testing.T) {
 	tests := []struct {
 		name string
 		run  func(destination, source *Batch, mp *mpool.MPool) error
@@ -1019,7 +1016,7 @@ func TestBatchUnionPrepareParamKindAllocationFailureDoesNotPublishRows(t *testin
 			for _, vec := range source.Vecs {
 				require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, mp))
 			}
-			source.Vecs[1].SetPrepareParamKind(vector.PrepareParamFloat)
+			require.NoError(t, source.Vecs[1].SetStringSource(types.StringSourceLiteral))
 			source.SetRowCount(1)
 
 			before := state.account.Snapshot().Used
@@ -1029,8 +1026,8 @@ func TestBatchUnionPrepareParamKindAllocationFailureDoesNotPublishRows(t *testin
 			for _, vec := range destination.Vecs {
 				require.Equal(t, 1, vec.Length())
 				require.Equal(t, []byte("6"), vec.GetBytesAt(0))
-				require.Nil(t, vec.GetPrepareParamKinds())
-				require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKindAt(0))
+				require.Nil(t, vec.GetStringSources())
+				require.Equal(t, types.StringSourceExpression, vec.GetStringSourceAt(0))
 			}
 			require.Equal(t, before, state.account.Snapshot().Used)
 

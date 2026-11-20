@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"strconv"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -106,6 +107,14 @@ func typedPrepareParam(proc *process.Process, typ types.Type, text string) (*vec
 			vec, err = vector.NewConstFixed(typ, x, 1, mp)
 		case types.Decimal256:
 			vec, err = vector.NewConstFixed(typ, x, 1, mp)
+		case types.Date:
+			vec, err = vector.NewConstFixed(typ, x, 1, mp)
+		case types.Datetime:
+			vec, err = vector.NewConstFixed(typ, x, 1, mp)
+		case types.Timestamp:
+			vec, err = vector.NewConstFixed(typ, x, 1, mp)
+		case types.Time:
+			vec, err = vector.NewConstFixed(typ, x, 1, mp)
 		}
 		if err != nil {
 			return nil, false, err
@@ -179,6 +188,45 @@ func typedPrepareParam(proc *process.Process, typ types.Type, text string) (*vec
 		if v, err := types.ParseDecimal256(text, typ.Width, typ.Scale); err == nil {
 			return constFixed(v)
 		}
+	case types.T_bit:
+		// The protocol renders BIT as its unsigned value.
+		if v, ok := unsigned(64); ok {
+			return constFixed(v)
+		}
+	case types.T_date:
+		if v, err := types.ParseDateCast(text); err == nil {
+			return constFixed(v)
+		}
+	case types.T_datetime:
+		if v, err := types.ParseDatetime(text, typ.Scale); err == nil {
+			return constFixed(v)
+		}
+	case types.T_timestamp:
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		if v, err := types.ParseTimestamp(loc, text, typ.Scale); err == nil {
+			return constFixed(v)
+		}
+	case types.T_time:
+		if v, err := types.ParseTime(text, typ.Scale); err == nil {
+			return constFixed(v)
+		}
+	case types.T_json:
+		bj, err := types.ParseStringToByteJson(text)
+		if err != nil {
+			return nil, false, nil
+		}
+		encoded, err := types.EncodeJson(bj)
+		if err != nil {
+			return nil, false, nil
+		}
+		vec, err := vector.NewConstBytes(typ, encoded, 1, mp)
+		if err != nil {
+			return nil, false, err
+		}
+		return vec, true, nil
 	}
 	return nil, false, nil
 }

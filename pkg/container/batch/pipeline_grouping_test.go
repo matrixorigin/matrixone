@@ -36,7 +36,6 @@ func TestPipelineGroupingRoundTrip(t *testing.T) {
 	input.Attrs = []string{"key"}
 	input.ExtraBuf = []byte{2, 0, 3, 1}
 	input.SetRowCount(3)
-	input.Vecs[0].SetPrepareParamKind(vector.PrepareParamInteger)
 	data, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
 	require.NoError(t, err)
 	output := NewOffHeapEmpty()
@@ -49,12 +48,11 @@ func TestPipelineGroupingRoundTrip(t *testing.T) {
 	require.False(t, output.Vecs[0].GetGrouping().Contains(1))
 	require.True(t, output.Vecs[0].IsNull(2))
 	require.True(t, output.Vecs[0].GetGrouping().Contains(2), "remote transport must distinguish ROLLUP NULL from SQL NULL")
-	require.Equal(t, vector.PrepareParamInteger, output.Vecs[0].GetPrepareParamKindAt(0))
 
 	input.Vecs[0].GetGrouping().Reset()
 	plain, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
 	require.NoError(t, err)
-	legacy, err := input.MarshalBinaryWithPrepareParamKinds(&bytes.Buffer{}, true)
+	legacy, err := input.MarshalBinaryWithMetadata(&bytes.Buffer{}, true)
 	require.NoError(t, err)
 	require.Equal(t, legacy, plain, "ordinary batches must retain their legacy wire bytes")
 	require.NoError(t, output.UnmarshalBinaryForPipeline(plain, mp))
@@ -139,15 +137,15 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 	require.NoError(t, output.UnmarshalBinaryForPipeline(groupOnly, mp))
 	require.True(t, output.Vecs[0].GetGrouping().Contains(2))
 
-	input.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	input.Vecs[0].SetIsBinaryString(true)
 	require.NoError(t, input.Vecs[0].SetStringSource(types.StringSourceSQLPrepare))
 	for _, tc := range []struct {
 		name          string
 		includeSource bool
 		version       byte
 	}{
-		{"v1", false, prepareParamKindBatchVersionV1},
-		{"v2", true, prepareParamKindBatchVersion},
+		{"v1", false, batchMetadataVersionV1},
+		{"v2", true, batchMetadataVersion},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			encoded, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true, tc.includeSource)
@@ -157,7 +155,7 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 			require.Equal(t, tc.version, encoded[prefix+3])
 			require.NoError(t, output.UnmarshalBinaryForPipeline(encoded, mp))
 			require.True(t, output.Vecs[0].GetGrouping().Contains(2))
-			require.Equal(t, vector.PrepareParamFloat, output.Vecs[0].GetPrepareParamKindAt(0))
+			require.True(t, output.Vecs[0].GetIsBinaryString())
 			if tc.includeSource {
 				require.Equal(t, types.StringSourceSQLPrepare, output.Vecs[0].GetStringSourceAt(0))
 			}
@@ -182,5 +180,6 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 	require.Error(t, output.UnmarshalBinaryForPipeline(plain[:len(plain)-1], mp))
 	require.NoError(t, output.UnmarshalBinaryForPipeline(plain, mp))
 	require.False(t, output.HasGrouping())
-	require.Equal(t, vector.PrepareParamNone, output.Vecs[0].GetPrepareParamKindAt(0))
+	require.False(t, output.Vecs[0].GetIsBinaryString())
+	require.False(t, output.Vecs[0].HasStringSourceMetadata())
 }

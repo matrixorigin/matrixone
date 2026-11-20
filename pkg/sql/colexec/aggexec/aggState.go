@@ -2728,30 +2728,7 @@ func (ae *aggExec) ClearAllocationAccount(allocation *AllocationAccount) error {
 	return nil
 }
 
-// SetPrepareParamKind restores the scalar compatibility summary on a
-// deserialized preserving aggregate state. Row-exact metadata, when present,
-// is installed by the aggregate implementation and remains authoritative;
-// this method is only the v1 partial-state fallback.
-func (ae *aggExec) SetPrepareParamKind(kind vector.PrepareParamKind) {
-	for i := range ae.state {
-		if len(ae.state[i].vecs) > 0 && ae.state[i].vecs[0] != nil {
-			// An exact winner sidecar is authoritative. A scalar trailer can
-			// restore only legacy states that did not carry row provenance.
-			if len(ae.state[i].vecs[0].GetPrepareParamKinds()) == 0 {
-				ae.state[i].vecs[0].SetPrepareParamKind(kind)
-			}
-		}
-	}
-}
-
-func (ae *aggExec) PrepareParamKindChunkCount() int {
-	if ae == nil {
-		return 0
-	}
-	return len(ae.state)
-}
-
-func (ae *aggExec) PrepareParamKindVectorForChunk(chunk int) *vector.Vector {
+func (ae *aggExec) ResultVectorForChunk(chunk int) *vector.Vector {
 	if ae == nil || chunk < 0 || chunk >= len(ae.state) ||
 		len(ae.state[chunk].vecs) == 0 {
 		return nil

@@ -67,9 +67,9 @@ func TestValidVectorsAcceptsBroadcastConstants(t *testing.T) {
 	provenanceConstant, err := vector.NewConstFixed(types.T_int32.ToType(), int32(7), 2, mp)
 	require.NoError(t, err)
 	require.NoError(t, provenanceConstant.SetPrepareParamKindsWithMP(
-		[]vector.PrepareParamKind{
-			vector.PrepareParamInteger,
-			vector.PrepareParamFloat,
+		[]types.StringConversionKind{
+			types.StringConversionInteger,
+			types.StringConversionFloat,
 		},
 		mp,
 	))

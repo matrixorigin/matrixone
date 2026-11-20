@@ -579,8 +579,8 @@ func TestBoundedRunsPreserveTransientMetadataAtSink(t *testing.T) {
 			}
 			input.SetRowCount(4)
 			input.Vecs[1].GetGrouping().Add(1, 3)
-			require.NoError(t, input.Vecs[1].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
-				vector.PrepareParamFloat, vector.PrepareParamNone, vector.PrepareParamInteger, vector.PrepareParamFloat,
+			require.NoError(t, input.Vecs[1].SetPrepareParamKindsWithMP([]types.StringConversionKind{
+				types.StringConversionFloat, types.StringConversionString, types.StringConversionInteger, types.StringConversionFloat,
 			}, mp))
 			require.NoError(t, input.Vecs[1].SetStringSourcesWithMP([]types.StringSource{
 				types.StringSourceCOMStmt, types.StringSourceSQLPrepare, types.StringSourceExpression, types.StringSourceCOMStmt,

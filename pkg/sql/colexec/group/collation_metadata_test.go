@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"testing"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -52,6 +53,17 @@ func TestMergeGroupExtraBufCollationAdmission(t *testing.T) {
 				expr.Typ = typ.PlanType()
 				expressions = append(expressions, aggexec.MakeAggFunctionExpression(id, false, []*plan.Expr{expr}, nil))
 			}
+			payloads := make([][]byte, len(sources))
+			for i, source := range sources {
+				var payload bytes.Buffer
+				require.NoError(t, source.SaveIntermediateResultOfChunk(0, &payload))
+				payloads[i] = payload.Bytes()
+			}
+			// Versioned collations cannot be constructed directly, so stamp
+			// the incoming revision onto MAX's serialized state type.
+			typeOffset := bytes.Index(payloads[1], types.EncodeType(&typ))
+			require.GreaterOrEqual(t, typeOffset, 0)
+			collationOffset := typeOffset + int(unsafe.Offsetof(typ.CollationVersion))
 			merge := newMergeGroupOp(expressions)
 			defer merge.Free(proc, false, nil)
 			require.NoError(t, merge.Prepare(proc))
@@ -59,15 +71,14 @@ func TestMergeGroupExtraBufCollationAdmission(t *testing.T) {
 			partial.SetRowCount(1)
 			defer partial.Clean(proc.Mp())
 			for _, incomingRevision := range []uint8{revision, 0} {
-				sources[1].(aggexec.PrepareParamKindStateAccessor).PrepareParamKindVectorForChunk(0).
-					GetType().CollationVersion = incomingRevision
+				payloads[1][collationOffset] = incomingRevision
 				var extra bytes.Buffer
 				require.NoError(t, types.WriteInt32(&extra, H0))
 				nullable := false
 				extra.Write(types.EncodeBool(&nullable))
 				require.NoError(t, types.WriteInt32(&extra, int32(len(sources))))
-				for _, source := range sources {
-					require.NoError(t, source.SaveIntermediateResultOfChunk(0, &extra))
+				for _, payload := range payloads {
+					extra.Write(payload)
 				}
 				partial.ExtraBuf = extra.Bytes()
 				wire, err := partial.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
@@ -83,8 +94,10 @@ func TestMergeGroupExtraBufCollationAdmission(t *testing.T) {
 				} else {
 					require.NoError(t, err, "a rejected partial must not poison a legacy retry")
 					for _, ag := range merge.ctr.aggList {
-						result := ag.PrepareParamKindVectorForChunk(0)
-						require.Equal(t, "A", result.GetStringAt(0))
+						results, err := ag.Flush()
+						require.NoError(t, err)
+						require.Len(t, results, 1)
+						require.Equal(t, "A", results[0].GetStringAt(0))
 					}
 				}
 			}

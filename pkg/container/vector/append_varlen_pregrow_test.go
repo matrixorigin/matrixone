@@ -81,7 +81,6 @@ func TestAppendVarlenListPregrow(t *testing.T) {
 				require.NoError(t, AppendBytes(reference, value, false, mp))
 				require.Equal(t, value, vec.GetBytesAt(i))
 				require.False(t, vec.IsNull(uint64(i)))
-				require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(i))
 				require.Equal(t, types.StringSourceExpression, vec.GetStringSourceAt(i))
 			}
 			wire, err := vec.MarshalBinary()

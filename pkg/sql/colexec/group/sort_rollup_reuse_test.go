@@ -125,12 +125,6 @@ func TestSortRollupSingleGroupReuseAndMixedFallback(t *testing.T) {
 					avg := vector.GetFixedAtNoTypeCheck[types.Decimal128](out.Vecs[3], row)
 					require.Equal(t, []string{"3.0000", "", "2.0000", "2.6667"}[row], avg.Format(out.Vecs[3].GetType().Scale))
 				}
-				for _, vec := range out.Vecs[1:4] {
-					if !vec.IsNull(uint64(row)) {
-						require.True(t, vec.HasPrepareParamKind())
-						require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKindAt(row))
-					}
-				}
 				switch name {
 				case "mixed-distinct":
 					require.Equal(t, []int64{2, 0, 1, 2}[row], vector.GetFixedAtNoTypeCheck[int64](out.Vecs[4], row))
@@ -385,7 +379,7 @@ func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T)
 				second := batch.NewWithSize(3)
 				second.Vecs[0] = testutil.MakeInt32Vector([]int32{key}, nil, proc.Mp())
 				second.Vecs[1] = testutil.MakeInt32Vector([]int32{3}, nil, proc.Mp())
-				second.Vecs[1].SetPrepareParamKind(vector.PrepareParamFloat)
+				require.NoError(t, second.Vecs[1].SetStringSource(types.StringSourceCOMStmt))
 				second.Vecs[2] = testutil.MakeInt64Vector([]int64{3}, nil, proc.Mp())
 				second.SetRowCount(1)
 				child.WithBatchs([]*batch.Batch{first, second})
@@ -405,8 +399,6 @@ func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T)
 					for row := 0; row < out.RowCount(); row++ {
 						require.Equal(t, "5.0000", vector.GetFixedAtNoTypeCheck[types.Decimal128](out.Vecs[3], row).Format(out.Vecs[3].GetType().Scale))
 					}
-					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(0))
-					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(1))
 				} else {
 					require.Equal(t, 3, out.RowCount())
 					require.Equal(t, []int32{7, 3, 3}, vector.MustFixedColNoTypeCheck[int32](out.Vecs[1]))
@@ -414,9 +406,6 @@ func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T)
 					for row, want := range []string{"7.0000", "3.0000", "5.0000"} {
 						require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal128](out.Vecs[3], row).Format(out.Vecs[3].GetType().Scale))
 					}
-					require.Equal(t, vector.PrepareParamNone, out.Vecs[1].GetPrepareParamKindAt(0))
-					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(1))
-					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(2))
 				}
 			})
 		}
@@ -452,7 +441,7 @@ func TestSortRollupMinDowngradeAtFullOutputBoundary(t *testing.T) {
 	second := batch.NewWithSize(3)
 	second.Vecs[0] = testutil.MakeInt32Vector([]int32{int32(aggBatchSize)}, nil, proc.Mp())
 	second.Vecs[1] = testutil.MakeInt32Vector([]int32{-1}, nil, proc.Mp())
-	second.Vecs[1].SetPrepareParamKind(vector.PrepareParamFloat)
+	require.NoError(t, second.Vecs[1].SetStringSource(types.StringSourceCOMStmt))
 	second.Vecs[2] = testutil.MakeInt64Vector([]int64{-1}, nil, proc.Mp())
 	second.SetRowCount(1)
 	child.WithBatchs([]*batch.Batch{first, second})
@@ -463,7 +452,6 @@ func TestSortRollupMinDowngradeAtFullOutputBoundary(t *testing.T) {
 	for i := range keys {
 		require.Equal(t, int32(i), vector.GetFixedAtNoTypeCheck[int32](res.Batch.Vecs[1], i))
 		require.Equal(t, types.Decimal128FromInt64(int64(i)), vector.GetFixedAtNoTypeCheck[types.Decimal128](res.Batch.Vecs[2], i))
-		require.Equal(t, vector.PrepareParamNone, res.Batch.Vecs[1].GetPrepareParamKindAt(i))
 	}
 	require.False(t, g.ctr.sortRollup.reuseSingleGroup)
 	res, err = vm.Exec(g, proc)
@@ -472,7 +460,6 @@ func TestSortRollupMinDowngradeAtFullOutputBoundary(t *testing.T) {
 	require.Equal(t, []int32{-1, -1}, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[1]))
 	require.Equal(t, types.Decimal128FromInt64(-1), vector.GetFixedAtNoTypeCheck[types.Decimal128](res.Batch.Vecs[2], 0))
 	require.Equal(t, types.Decimal128FromInt64(int64(aggBatchSize*(aggBatchSize-1)/2-1)), vector.GetFixedAtNoTypeCheck[types.Decimal128](res.Batch.Vecs[2], 1))
-	require.Equal(t, vector.PrepareParamFloat, res.Batch.Vecs[1].GetPrepareParamKindAt(0))
 	res, err = vm.Exec(g, proc)
 	require.NoError(t, err)
 	require.Nil(t, res.Batch)

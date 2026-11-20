@@ -749,8 +749,8 @@ func TestSpillBatchSizeMatchesEncoding(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("materialized"), false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("spill"), false, mp))
 	require.NoError(t, bat.Vecs[1].SetIsBinaryStringAt(0, true))
-	require.NoError(t, bat.Vecs[1].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
-		vector.PrepareParamInteger, vector.PrepareParamNone,
+	require.NoError(t, bat.Vecs[1].SetPrepareParamKindsWithMP([]types.StringConversionKind{
+		types.StringConversionInteger, types.StringConversionString,
 	}, mp))
 	bat.Vecs[0].GetGrouping().Add(1)
 	bat.SetRowCount(2)

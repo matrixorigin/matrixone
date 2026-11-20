@@ -84,14 +84,6 @@ func TestUnionPlainFixedSelectionReuse(t *testing.T) {
 							require.Equal(t, types.StringSourceLiteral, dst.GetStringSourceAt(row))
 						}
 					}
-					// A later prepared value must not relabel the preceding ordinary rows.
-					parameter := NewVec(oid.ToType())
-					t.Cleanup(func() { parameter.Free(mp) })
-					require.NoError(t, parameter.UnionOne(src, 0, mp))
-					require.NoError(t, parameter.SetPrepareParamKindsWithMP([]PrepareParamKind{PrepareParamInteger}, mp))
-					require.NoError(t, dst.UnionOne(parameter, 0, mp))
-					require.Equal(t, PrepareParamNone, dst.GetPrepareParamKindAt(0))
-					require.Equal(t, PrepareParamInteger, dst.GetPrepareParamKindAt(5))
 				})
 			}
 		}

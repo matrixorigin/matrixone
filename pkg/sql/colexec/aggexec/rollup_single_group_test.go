@@ -424,7 +424,7 @@ func TestSingleGroupMinMaxFloatSpecialValuesMatchBulkFill(t *testing.T) {
 }
 
 func TestSingleGroupMinRejectsRichMetadata(t *testing.T) {
-	for _, source := range []bool{false, true} {
+	for _, source := range []bool{true} {
 		t.Run(fmt.Sprintf("source=%t", source), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			defer mpool.DeleteMPool(mp)
@@ -436,11 +436,7 @@ func TestSingleGroupMinRejectsRichMetadata(t *testing.T) {
 			require.NoError(t, a.GroupGrow(1))
 			v := buildAvgFixedVector(t, mp, types.T_int32.ToType(), []int32{7})
 			defer v.Free(mp)
-			if source {
-				require.NoError(t, v.SetStringSource(types.StringSourceSQLPrepare))
-			} else {
-				v.SetPrepareParamKind(vector.PrepareParamFloat)
-			}
+			require.NoError(t, v.SetStringSource(types.StringSourceSQLPrepare))
 			require.False(t, SupportsSingleGroupReuseInput(a, []*vector.Vector{v}))
 			require.Error(t, BulkFillSingleGroupRange(a, 0, 1, []*vector.Vector{v}))
 			require.NoError(t, a.BulkFill(0, []*vector.Vector{v}))
@@ -448,11 +444,7 @@ func TestSingleGroupMinRejectsRichMetadata(t *testing.T) {
 			require.NoError(t, err)
 			defer out[0].Free(mp)
 			require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](out[0], 0))
-			if source {
-				require.Equal(t, types.StringSourceSQLPrepare, out[0].GetStringSourceAt(0))
-			} else {
-				require.Equal(t, vector.PrepareParamFloat, out[0].GetPrepareParamKindAt(0))
-			}
+			require.Equal(t, types.StringSourceSQLPrepare, out[0].GetStringSourceAt(0))
 		})
 	}
 }

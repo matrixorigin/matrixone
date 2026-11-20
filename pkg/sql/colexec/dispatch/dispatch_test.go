@@ -237,49 +237,6 @@ func (s *unknownServiceLockService) GetConfig() lockservice.Config {
 	return s.cfg
 }
 
-func TestMarshalRemoteBatchPrepareParamProtocolGate(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-
-	vec := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, proc.Mp()))
-	vec.SetPrepareParamKinds([]vector.PrepareParamKind{
-		vector.PrepareParamInteger, vector.PrepareParamNone,
-	})
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vec
-	bat.SetRowCount(2)
-	defer bat.Clean(proc.Mp())
-
-	runtime := moruntime.ServiceRuntime(proc.GetService())
-	original, hadOriginal := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if hadOriginal {
-			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-		} else {
-			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	})
-
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
-	buf := bytes.NewBufferString("sentinel")
-	_, err := marshalRemoteBatch(proc, bat, buf)
-	require.Error(t, err)
-	require.Equal(t, "sentinel", buf.String(), "protocol rejection must happen before writing")
-
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
-	buf.Reset()
-	encoded, err := marshalRemoteBatch(proc, bat, buf)
-	require.NoError(t, err)
-	require.NotEmpty(t, encoded)
-	decoded := batch.NewOffHeapEmpty()
-	defer decoded.Clean(proc.Mp())
-	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
-	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
-}
-
 func TestMarshalRemoteBatchOldProtocolDropsStringSourceOnly(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -359,8 +316,6 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 		staticSource.Vecs[0], 0, staticSource.RowCount(), nil, proc.Mp()))
 	staticRows.SetRowCount(staticSource.RowCount())
 	require.False(t, staticRows.HasBinaryStringMetadata())
-	require.NoError(t, staticRows.Vecs[0].SetPrepareParamKindsWithMP(
-		[]vector.PrepareParamKind{vector.PrepareParamInteger, vector.PrepareParamNone}, proc.Mp()))
 	defer staticRows.Clean(proc.Mp())
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
 	buf := bytes.NewBufferString("sentinel")
@@ -368,9 +323,8 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 	require.NoError(t, err)
 	staticDecoded := batch.NewOffHeapEmpty()
 	defer staticDecoded.Clean(proc.Mp())
-	require.NoError(t, staticDecoded.UnmarshalBinaryWithPrepareParamKinds(staticEncoded, proc.Mp()))
-	require.Equal(t, vector.PrepareParamInteger, staticDecoded.Vecs[0].GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamNone, staticDecoded.Vecs[0].GetPrepareParamKindAt(1))
+	require.NoError(t, staticDecoded.UnmarshalBinaryWithMetadata(staticEncoded, proc.Mp()))
+	require.Equal(t, staticRows.RowCount(), staticDecoded.RowCount())
 
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion18)
 	buf.Reset()
@@ -378,7 +332,7 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 	require.NoError(t, err)
 	decoded := batch.NewOffHeapEmpty()
 	defer decoded.Clean(proc.Mp())
-	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
+	require.NoError(t, decoded.UnmarshalBinaryWithMetadata(encoded, proc.Mp()))
 	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
 	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
 
@@ -391,7 +345,7 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 	require.NoError(t, err)
 	decodedWithoutSources := batch.NewOffHeapEmpty()
 	defer decodedWithoutSources.Clean(proc.Mp())
-	require.NoError(t, decodedWithoutSources.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
+	require.NoError(t, decodedWithoutSources.UnmarshalBinaryWithMetadata(encoded, proc.Mp()))
 	require.False(t, decodedWithoutSources.Vecs[0].HasStringSourceMetadata())
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion37)
 	buf.Reset()
@@ -399,7 +353,7 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 	require.NoError(t, err)
 	decodedWithSources := batch.NewOffHeapEmpty()
 	defer decodedWithSources.Clean(proc.Mp())
-	require.NoError(t, decodedWithSources.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
+	require.NoError(t, decodedWithSources.UnmarshalBinaryWithMetadata(encoded, proc.Mp()))
 	require.Equal(t, types.StringSourceCOMStmt, decodedWithSources.Vecs[0].GetStringSourceAt(0))
 	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
 }
@@ -414,19 +368,19 @@ func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {
 	prepared := batch.NewWithSize(1)
 	prepared.Vecs[0] = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(prepared.Vecs[0], []byte("5"), false, proc.Mp()))
-	prepared.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	require.NoError(t, prepared.Vecs[0].SetIsBinaryStringAt(0, true))
 	prepared.SetRowCount(1)
 	defer prepared.Clean(proc.Mp())
 
 	require.NotPanics(t, func() {
-		require.False(t, prepareParamKindRemoteWireEnabled(proc))
+		require.False(t, binaryStringRemoteWireEnabled(proc))
 	})
 	buf := bytes.NewBufferString("sentinel")
 	var err error
 	require.NotPanics(t, func() {
 		_, err = marshalRemoteBatch(proc, prepared, buf)
 	})
-	require.ErrorContains(t, err, "prepared parameter provenance requires MORPCVersion12")
+	require.ErrorContains(t, err, "binary-string provenance requires MORPCVersion18")
 	require.Equal(t, "sentinel", buf.String(),
 		"unknown service must reject metadata before writing the stable batch")
 

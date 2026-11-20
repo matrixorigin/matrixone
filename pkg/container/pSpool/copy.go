@@ -201,7 +201,7 @@ copyVectors:
 			// GetUnionAllFunction already propagates row provenance for the
 			// non-constant path. Constants still need their scalar metadata
 			// copied after the const setter has materialized the value.
-			if err = vec.CopyPrepareParamMetadataToWithMP(destination, cb.mp); err != nil {
+			if err = vec.CopyStringSourceToWithMP(destination, cb.mp); err != nil {
 				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}

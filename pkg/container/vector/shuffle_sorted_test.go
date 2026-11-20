@@ -226,7 +226,7 @@ func TestByteSlicesOverlapBoundaries(t *testing.T) {
 }
 
 func TestShuffleWithBufStringMetadata(t *testing.T) {
-	for _, metadata := range []string{"uniform", "source", "kind", "domain"} {
+	for _, metadata := range []string{"uniform", "source", "domain"} {
 		for _, identity := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/identity=%v", metadata, identity), func(t *testing.T) {
 				mp := mpool.MustNewZero()
@@ -242,22 +242,17 @@ func TestShuffleWithBufStringMetadata(t *testing.T) {
 				v.GetGrouping().Add(2)
 				v.areaDisjoint = true
 				require.NoError(t, v.SetStringSource(types.StringSourceLiteral))
-				v.SetPrepareParamKind(PrepareParamInteger)
 				require.NoError(t, v.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
 				switch metadata {
 				case "source":
 					require.NoError(t, v.SetStringSourceAtWithMP(0, types.StringSourceCOMStmt, mp))
-				case "kind":
-					require.NoError(t, v.SetPrepareParamKindAtWithMP(0, PrepareParamFloat, mp))
 				case "domain":
 					require.NoError(t, v.SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, mp))
 				}
 				var sources [3]types.StringSource
-				var kinds [3]PrepareParamKind
 				var domains [3]types.RuntimeStringDomain
 				for row := range values {
 					sources[row] = v.GetStringSourceAt(row)
-					kinds[row] = v.GetPrepareParamKindAt(row)
 					domains[row] = v.GetRuntimeStringDomainAt(row)
 				}
 				sels := []int64{2, 0, 1}
@@ -272,7 +267,6 @@ func TestShuffleWithBufStringMetadata(t *testing.T) {
 					require.Equal(t, source == 1, v.IsNull(uint64(row)))
 					require.Equal(t, source == 2, v.GetGrouping().Contains(uint64(row)))
 					require.Equal(t, sources[source], v.GetStringSourceAt(row))
-					require.Equal(t, kinds[source], v.GetPrepareParamKindAt(row))
 					require.Equal(t, domains[source], v.GetRuntimeStringDomainAt(row))
 				}
 				require.False(t, v.areaDisjoint)
