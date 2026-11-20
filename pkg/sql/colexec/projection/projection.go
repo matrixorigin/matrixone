@@ -53,7 +53,7 @@ func (projection *Projection) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(projection.ctr.projExecutors) == 0 {
-		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
+		projection.ctr.projExecutors, projection.ctr.jsonFrame, err = colexec.NewProjectionExecutors(proc, projection.ProjectList, nil)
 
 		projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 		if projection.GroupingSetCount > 0 {
@@ -116,6 +116,11 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		previous := proc.WarningRowOffset
 		proc.WarningRowOffset = projection.ValuesWarningRow - 1
 		defer func() { proc.WarningRowOffset = previous }()
+	}
+
+	if projection.ctr.jsonFrame != nil {
+		projection.ctr.jsonFrame.Begin(batches[0])
+		defer projection.ctr.jsonFrame.End()
 	}
 
 	for i := range projection.ctr.projExecutors {
