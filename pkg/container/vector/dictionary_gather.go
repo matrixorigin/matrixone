@@ -437,8 +437,7 @@ func unionDictionaryRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPoo
 	); err != nil {
 		return err
 	}
-	v.RetainStringSourcePreflight()
-	defer v.FinalizeStringSourcePreflight()
+	defer v.normalizeStringSources()
 
 	if err := extendWithBitmaps(
 		v,
@@ -527,7 +526,7 @@ func (v *Vector) admitDictionaryBatch(
 		if err := v.PreflightUnionBatchPrepareParamKinds(w, offset, cnt, flags, mp); err != nil {
 			return err
 		}
-		defer v.FinalizeStringSourcePreflight()
+		defer v.normalizeStringSources()
 		if err := v.PreflightUnionBatchBinaryString(w, offset, cnt, flags, mp); err != nil {
 			return err
 		}

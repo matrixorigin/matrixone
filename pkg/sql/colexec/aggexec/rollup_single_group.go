@@ -335,7 +335,7 @@ func (exec *minMaxExecFixed[T]) appendSingleGroupResult(dst *vector.Vector) erro
 func (exec *minMaxExecFixed[T]) bulkFillSingleGroupRange(offset, rows int, vectors []*vector.Vector) error {
 	input := vectors[0]
 	state := exec.state[0].vecs[0]
-	defer state.FinalizeStringSourcePreflight()
+	defer state.NormalizeStringSources()
 	values := vector.MustFixedColNoTypeCheck[T](input)
 	var winner T
 	found := false
