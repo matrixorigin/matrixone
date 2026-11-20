@@ -534,21 +534,26 @@ type BaseProcess struct {
 	prepareParamsIsBin                  []bool
 	prepareParamsBinaryString           []bool
 	prepareParamsOwned                  bool
-	QueryClient                         qclient.QueryClient
-	Hakeeper                            logservice.CNHAKeeperClient
-	UdfService                          udf.Service
-	WaitPolicy                          lock.WaitPolicy
-	messageBoard                        *message.MessageBoard
-	executionResourceBudgetBorrowed     bool
-	executionResourceBudgetMu           sync.Mutex
-	executionResourceBudget             *ExecutionResourceGeneration
-	warningDiagnosticBudgetMu           sync.Mutex
-	warningDiagnosticBudget             *WarningDiagnosticBudget
-	cteMemoryBudgetMu                   sync.Mutex
-	cteMemoryBudget                     *CTEMemoryBudget
-	logger                              *log.MOLogger
-	TxnOperator                         client.TxnOperator
-	CloneTxnOperator                    client.TxnOperator
+	// typedPrepareParams carries each prepared parameter as one row of its
+	// source SQL type (column i is parameter i). It is nil when the caller
+	// only supplied the legacy text transport.
+	typedPrepareParams              *batch.Batch
+	typedPrepareParamsOwned         bool
+	QueryClient                     qclient.QueryClient
+	Hakeeper                        logservice.CNHAKeeperClient
+	UdfService                      udf.Service
+	WaitPolicy                      lock.WaitPolicy
+	messageBoard                    *message.MessageBoard
+	executionResourceBudgetBorrowed bool
+	executionResourceBudgetMu       sync.Mutex
+	executionResourceBudget         *ExecutionResourceGeneration
+	warningDiagnosticBudgetMu       sync.Mutex
+	warningDiagnosticBudget         *WarningDiagnosticBudget
+	cteMemoryBudgetMu               sync.Mutex
+	cteMemoryBudget                 *CTEMemoryBudget
+	logger                          *log.MOLogger
+	TxnOperator                     client.TxnOperator
+	CloneTxnOperator                client.TxnOperator
 	// userLevelLockIdentity is session-scoped rather than statement-scoped.
 	// SessionInfo is rebuilt before every statement, so keeping this identity
 	// there would lose the synthetic transaction owner while locks are held.

@@ -592,29 +592,6 @@ func (builder *QueryBuilder) isReusablePlan() bool {
 	return builder.isPrepareStatement || preparedBindingState(builder.GetContext()) != nil
 }
 
-// lowerPreparedSourceTransports runs after SQL binding and optimization. Keep
-// the physical representation compatible with existing readers and remote CNs
-// without letting transport casts participate in semantic type selection.
-func lowerPreparedSourceTransports(ctx context.Context, p *Plan) error {
-	return plan.VisitExpressionsInOwner(p, func(root *Expr) error {
-		return plan.VisitExprTree(root, func(expr *Expr) error {
-			if expr.GetP() == nil || types.T(expr.Typ.Id).IsMySQLString() || expr.Typ.Id == int32(types.T_any) {
-				return nil
-			}
-			source := &Expr{
-				Typ:  plan.Type{Id: int32(types.T_text)},
-				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: expr.GetP().Pos}},
-			}
-			physical, err := makePlan2CastExpr(ctx, source, expr.Typ)
-			if err != nil {
-				return err
-			}
-			*expr = *physical
-			return nil
-		})
-	})
-}
-
 // SQL EXECUTE exposes a bare marker as TEXT, even when its source domain is
 // numeric or BOOL for expressions that consume it. Apply that presentation
 // only at the final result edge, including transparent derived projections;
@@ -1286,9 +1263,6 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	}
 	p := &Plan{Plan: &plan.Plan_Query{Query: query}, IsPrepare: true}
 	presentPreparedSQLResults(planning, query)
-	if err = lowerPreparedSourceTransports(planning, p); err != nil {
-		return nil, err
-	}
 	state := preparedBindingState(planning)
 	return &PreparedExecutionPlan{TemporalTypes: state.temporalTypes, Plan: p, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
 		DiagnosticFree: state.diagnosticFree, ValueDependent: state.valueDependent}, nil

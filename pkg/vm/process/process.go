@@ -617,6 +617,41 @@ func (proc *Process) setPrepareParams(
 	proc.Base.prepareParamsIsBin = isBin
 	proc.Base.prepareParamsBinaryString = binaryString
 	proc.Base.prepareParamsOwned = owned && prepareParams != nil
+	// Typed values describe one execution's parameters; a caller with typed
+	// values installs them after the TEXT transport.
+	proc.setTypedPrepareParams(nil, false)
+}
+
+// SetTypedPrepareParams installs the typed parameter values: a one-row batch
+// whose column i holds parameter i in its source SQL type. Ownership of params
+// moves to proc; replacing or clearing the prepare parameters releases it.
+// Set it after the legacy text parameters, which clear it when set to nil.
+func (proc *Process) SetTypedPrepareParams(params *batch.Batch) {
+	proc.setTypedPrepareParams(params, true)
+}
+
+func (proc *Process) setTypedPrepareParams(params *batch.Batch, owned bool) {
+	old := proc.Base.typedPrepareParams
+	if old != nil && old != params && proc.Base.typedPrepareParamsOwned {
+		old.Clean(proc.Mp())
+	}
+	proc.Base.typedPrepareParams = params
+	proc.Base.typedPrepareParamsOwned = owned && params != nil
+}
+
+// GetTypedPrepareParam returns parameter i as a one-row vector of its source
+// SQL type, or nil when no typed value was supplied for it.
+func (proc *Process) GetTypedPrepareParam(i int) *vector.Vector {
+	params := proc.Base.typedPrepareParams
+	if params == nil || i < 0 || i >= len(params.Vecs) {
+		return nil
+	}
+	return params.Vecs[i]
+}
+
+// GetTypedPrepareParams returns the typed parameter batch, or nil.
+func (proc *Process) GetTypedPrepareParams() *batch.Batch {
+	return proc.Base.typedPrepareParams
 }
 
 // PrepareParamsState keeps the complete prepare-parameter state while a
@@ -626,6 +661,8 @@ type PrepareParamsState struct {
 	isBin         []bool
 	binaryString  []bool
 	owned         bool
+	typed         *batch.Batch
+	typedOwned    bool
 }
 
 // DetachPrepareParams removes the prepare-parameter state without releasing
@@ -637,11 +674,15 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 		isBin:         proc.Base.prepareParamsIsBin,
 		binaryString:  proc.Base.prepareParamsBinaryString,
 		owned:         proc.Base.prepareParamsOwned,
+		typed:         proc.Base.typedPrepareParams,
+		typedOwned:    proc.Base.typedPrepareParamsOwned,
 	}
 	proc.Base.prepareParams = nil
 	proc.Base.prepareParamsIsBin = nil
 	proc.Base.prepareParamsBinaryString = nil
 	proc.Base.prepareParamsOwned = false
+	proc.Base.typedPrepareParams = nil
+	proc.Base.typedPrepareParamsOwned = false
 	return state
 }
 
@@ -650,12 +691,14 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 // Process.Free releases only resources owned by that nested work.
 func (proc *Process) BorrowPrepareParams(state PrepareParamsState) {
 	proc.setPrepareParams(state.prepareParams, state.isBin, state.binaryString, false)
+	proc.setTypedPrepareParams(state.typed, false)
 }
 
 // RestorePrepareParams restores state previously returned by
 // DetachPrepareParams.
 func (proc *Process) RestorePrepareParams(state PrepareParamsState) {
 	proc.setPrepareParams(state.prepareParams, state.isBin, state.binaryString, state.owned)
+	proc.setTypedPrepareParams(state.typed, state.typedOwned)
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {

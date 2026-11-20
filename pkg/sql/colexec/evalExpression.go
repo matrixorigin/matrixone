@@ -390,12 +390,16 @@ func newExpressionExecutorWithAllocation(
 		return ce, nil
 
 	case *plan.Expr_P:
+		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
+		executor.allocation = selection
 		if typ.Oid != types.T_any && !typ.Oid.IsMySQLString() {
-			// ParamRef describes the SQL source domain. The process transports
-			// values as TEXT; adapt that representation inside the executor so
-			// transport casts cannot influence SQL overload or key selection.
+			// ParamRef describes the SQL source domain. When the process has no
+			// typed value for it (for example a remote peer that only received
+			// the TEXT transport), read the TEXT value through a cast built in
+			// this expression's own context.
 			cast, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{types.T_text.ToType(), typ})
 			if err != nil {
+				executor.Free()
 				return nil, err
 			}
 			physical := &plan.Expr{Typ: planExpr.Typ, Expr: &plan.Expr_F{F: &plan.Function{
@@ -405,10 +409,12 @@ func newExpressionExecutorWithAllocation(
 					{Typ: planExpr.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
 				},
 			}}}
-			return newExpressionExecutorWithAllocation(proc, physical, selection, buildCtx, scope)
+			executor.textFallback, err = newExpressionExecutorWithAllocation(proc, physical, selection, buildCtx, scope)
+			if err != nil {
+				executor.Free()
+				return nil, err
+			}
 		}
-		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
-		executor.allocation = selection
 		return executor, nil
 
 	case *plan.Expr_V:
@@ -745,15 +751,98 @@ type ParamExpressionExecutor struct {
 
 	folded     bool
 	foldedNull bool
+
+	// typedVec holds this execution's copy of a typed parameter whose source
+	// type equals typ.
+	typedVec    *vector.Vector
+	typedFolded bool
+	// textFallback reads a non-string parameter from the TEXT transport when
+	// the process holds no typed value for it.
+	textFallback ExpressionExecutor
+	// adapter casts a typed value whose source type (adapterSource) differs
+	// from typ.
+	adapter       ExpressionExecutor
+	adapterSource types.Type
+}
+
+func sameParamType(a, b types.Type) bool {
+	return a.Oid == b.Oid && a.Width == b.Width && a.Scale == b.Scale
+}
+
+// route picks the source of a non-string parameter for this execution: the
+// typed value itself (typed), or a cast adapter. Both nil means the TEXT
+// transport is read directly.
+func (expr *ParamExpressionExecutor) route(proc *process.Process) (typed *vector.Vector, adapter ExpressionExecutor, err error) {
+	if expr.typ.Oid == types.T_any || expr.typ.Oid.IsMySQLString() {
+		return nil, nil, nil
+	}
+	src := proc.GetTypedPrepareParam(expr.pos)
+	if src == nil || src.IsConstNull() || src.GetType().Oid.IsMySQLString() {
+		return nil, expr.textFallback, nil
+	}
+	if sameParamType(*src.GetType(), expr.typ) {
+		return src, nil, nil
+	}
+	source := *src.GetType()
+	if expr.adapter != nil {
+		if sameParamType(expr.adapterSource, source) {
+			return nil, expr.adapter, nil
+		}
+		expr.adapter.Free()
+		expr.adapter = nil
+	}
+	cast, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{source, expr.typ})
+	if err != nil {
+		return nil, nil, err
+	}
+	targetType := expr.typ.PlanType()
+	physical := &plan.Expr{Typ: targetType, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "cast", Obj: cast.GetEncodedOverloadID()},
+		Args: []*plan.Expr{
+			{Typ: source.PlanType(), Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(expr.pos)}}},
+			{Typ: targetType, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+		},
+	}}}
+	expr.adapter, err = NewExpressionExecutorWithAllocation(proc, physical, expr.allocation)
+	if err != nil {
+		return nil, nil, err
+	}
+	expr.adapterSource = source
+	return nil, expr.adapter, nil
+}
+
+// evalTyped returns this execution's copy of a typed parameter.
+func (expr *ParamExpressionExecutor) evalTyped(src *vector.Vector, rowCount int) (*vector.Vector, error) {
+	if !expr.typedFolded {
+		if expr.typedVec != nil {
+			expr.typedVec.Free(expr.mp)
+			expr.typedVec = nil
+		}
+		vec, err := src.DupOffHeapWithAllocation(expr.mp, expr.allocation)
+		if err != nil {
+			return nil, err
+		}
+		expr.typedVec = vec
+		expr.typedFolded = true
+	}
+	expr.typedVec.SetLength(rowCount)
+	return expr.typedVec, nil
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	// A conversion owns the selection handling of its whole subtree.
+	typed, adapter, err := expr.route(proc)
+	if err != nil {
+		return nil, err
+	}
+	if adapter != nil {
+		return adapter.Eval(proc, batches, selectList)
+	}
 	// Scalar values stay physically constant, but their logical cardinality
 	// must follow the input batch for downstream materialization and shuffle.
 	rowCount := expressionRowCount(batches)
 	if noRowsSelected(selectList, rowCount) {
 		if expr.maskedNull == nil {
-			var err error
 			expr.maskedNull, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
 			if err != nil {
 				return nil, err
@@ -761,6 +850,9 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		}
 		expr.maskedNull.SetLength(rowCount)
 		return expr.maskedNull, nil
+	}
+	if typed != nil {
+		return expr.evalTyped(typed, rowCount)
 	}
 	if expr.folded {
 		if expr.foldedNull {
@@ -834,13 +926,24 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 }
 
 func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	_, adapter, err := expr.route(proc)
+	if err != nil {
+		return nil, err
+	}
+	if adapter != nil {
+		return adapter.EvalWithoutResultReusing(proc, batches, nil)
+	}
 	vec, err := expr.Eval(proc, batches, nil)
 	if err != nil {
 		return nil, err
 	}
-	if vec == expr.null {
+	switch vec {
+	case expr.null:
 		expr.null = nil
-	} else {
+	case expr.typedVec:
+		expr.typedVec = nil
+		expr.typedFolded = false
+	default:
 		expr.vec = nil
 	}
 	expr.folded = false
@@ -864,6 +967,18 @@ func (expr *ParamExpressionExecutor) Free() {
 	if expr.maskedNull != nil {
 		expr.maskedNull.Free(expr.mp)
 		expr.maskedNull = nil
+	}
+	if expr.typedVec != nil {
+		expr.typedVec.Free(expr.mp)
+		expr.typedVec = nil
+	}
+	if expr.adapter != nil {
+		expr.adapter.Free()
+		expr.adapter = nil
+	}
+	if expr.textFallback != nil {
+		expr.textFallback.Free()
+		expr.textFallback = nil
 	}
 	reuse.Free[ParamExpressionExecutor](expr, nil)
 }
@@ -1533,7 +1648,14 @@ func scalarExpressionValue(executor ExpressionExecutor) (scalar, diagnostic bool
 		return scalarExpressionValue(source.executor)
 	case *FixedVectorExpressionExecutor:
 		return source.resultVector.IsConst(), false
-	case *ParamExpressionExecutor, *VarExpressionExecutor:
+	case *ParamExpressionExecutor:
+		// The TEXT fallback carries the conversion's diagnostics; a typed value
+		// has none, so its analysis is the conservative one.
+		if source.textFallback != nil {
+			return scalarExpressionValue(source.textFallback)
+		}
+		return true, false
+	case *VarExpressionExecutor:
 		return true, false
 	case *FunctionExpressionExecutor:
 		// CAST's row-evaluation flags protect diagnostics, rather than
@@ -1763,6 +1885,13 @@ func isRowAlignedExpressionExecutor(executor ExpressionExecutor) bool {
 			return true
 		case *FunctionExpressionExecutor:
 			return !source.folded.canFold
+		case *ParamExpressionExecutor:
+			// A TEXT-transported parameter is evaluated by its conversion; a typed
+			// value is a constant, which the caller passes through unchanged.
+			if source.textFallback == nil {
+				return false
+			}
+			executor = source.textFallback
 		default:
 			return false
 		}

@@ -136,6 +136,21 @@ func (expr *FunctionExpressionExecutor) tryFoldParameter(
 		}
 		return true, nil
 	}
+	if param, ok := parameter.(*ParamExpressionExecutor); ok && param.textFallback != nil {
+		// Without a typed value the parameter is its TEXT conversion, which
+		// folds (or refuses to) like any other function parameter.
+		useFallback := !atRuntime
+		if atRuntime {
+			_, via, err := param.route(proc)
+			if err != nil {
+				return false, err
+			}
+			useFallback = via == param.textFallback
+		}
+		if useFallback {
+			parameter = param.textFallback
+		}
+	}
 	if functionParameter, ok := parameter.(*FunctionExpressionExecutor); ok {
 		if err := functionParameter.doFold(proc, atRuntime); err != nil {
 			return false, err
@@ -426,6 +441,17 @@ func (expr *ParamExpressionExecutor) ResetForNextQuery() {
 	}
 	expr.folded = false
 	expr.foldedNull = false
+	if expr.typedVec != nil {
+		expr.typedVec.Free(expr.mp)
+		expr.typedVec = nil
+	}
+	expr.typedFolded = false
+	if expr.adapter != nil {
+		expr.adapter.ResetForNextQuery()
+	}
+	if expr.textFallback != nil {
+		expr.textFallback.ResetForNextQuery()
+	}
 }
 
 func (expr *VarExpressionExecutor) ResetForNextQuery() {

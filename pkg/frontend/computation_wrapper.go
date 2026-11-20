@@ -1947,6 +1947,9 @@ func initExecuteStmtParamWithResolverInSession(
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
+		if err = installTypedPrepareParams(cwft.proc, cwft.paramBindings); err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
 		// Update only after the full protocol payload and typed bindings are
 		// admitted. The effective domain also owns the specialization/packet key.
 		prepareStmt.rememberIntegerArithmeticBindings(preparePlan.Plan, cwft.paramBindings, cwft.paramVals)
