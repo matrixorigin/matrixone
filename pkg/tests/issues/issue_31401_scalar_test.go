@@ -117,19 +117,11 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 					require.NoError(t, err)
 					defer db.Close()
 				}
-				var tenantSourceOwned bool
-				defer func() {
-					if tenantSourceOwned {
-						_ = cleanupSQL(db.ExecContext, 10*time.Second, "drop database if exists "+source)
-					}
-				}()
-				// The next selected child already resets both databases. Keep
-				// system resources until that reset, then clean the final pair once.
-				// Tenant source cleanup still precedes its dependent DROP ACCOUNT.
+				// Each case resets both databases. Keep system resources until
+				// the next reset, then clean the final pair once. DROP ACCOUNT
+				// owns removal of the tenant's source database.
 				resetIssue277xxDatabase(t, ctx, db, source)
-				if tenant {
-					tenantSourceOwned = true
-				} else {
+				if !tenant {
 					systemSourceOwned = true
 				}
 				resetIssue277xxDatabase(t, ctx, sys, peer)
