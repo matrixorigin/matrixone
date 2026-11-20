@@ -1157,6 +1157,11 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 
 		reader, err := getReader(ctx, min, max)
 		if err != nil {
+			// A valid range starting at or beyond EOF can return HTTP 416
+			// instead of an empty body. Use the same per-entry EOF checks below.
+			if !readFullObject && *min >= 0 && (max == nil || *min < *max) && isHTTPRangeNotSatisfiable(err) {
+				return nil, nil
+			}
 			return nil, err
 		}
 		defer reader.Close()

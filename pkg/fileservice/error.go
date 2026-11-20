@@ -23,8 +23,20 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/minio/minio-go/v7"
 	"github.com/tencentyun/cos-go-sdk-v5"
 )
+
+// An unsatisfiable GET has no bytes in the requested range. The buffered
+// reader decides whether that means an empty tail or a short fixed entry.
+func isHTTPRangeNotSatisfiable(err error) bool {
+	var status interface{ HTTPStatusCode() int }
+	if errors.As(err, &status) {
+		return status.HTTPStatusCode() == http.StatusRequestedRangeNotSatisfiable
+	}
+	var resp minio.ErrorResponse
+	return errors.As(err, &resp) && resp.StatusCode == http.StatusRequestedRangeNotSatisfiable
+}
 
 func IsRetryableError(err error) bool {
 	if err == nil {

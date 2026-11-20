@@ -21,6 +21,8 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -1955,6 +1957,7 @@ type cacheFillReadMeter struct {
 	bytes         atomic.Int64
 	opens, closes int
 	beforeOpen    func() error
+	afterClose    func()
 }
 
 func (m *cacheFillReadMeter) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
@@ -1970,7 +1973,11 @@ func (m *cacheFillReadMeter) Read(ctx context.Context, key string, min, max *int
 	m.opens++
 	return &readCloser{r: &countingReader{R: r, C: &m.bytes}, closeFunc: func() error {
 		m.closes++
-		return r.Close()
+		err := r.Close()
+		if m.afterClose != nil {
+			m.afterClose()
+		}
+		return err
 	}}, nil
 }
 
@@ -2024,13 +2031,15 @@ func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
 				require.Equal(t, int64(len(data)), m.bytes.Load())
 				require.Equal(t, 1, m.opens)
 				require.Equal(t, 1, m.closes)
-				if tc.wantErr != nil {
+				if tc.wantErr == context.Canceled {
+					m.afterClose = cancel
+					m.beforeOpen = func() error {
+						require.NoError(t, ctx.Err(), "must not attempt another read after cancellation")
+						return nil
+					}
+				} else if tc.wantErr != nil {
 					m.beforeOpen = func() error {
 						if m.opens == 2 {
-							if tc.wantErr == context.Canceled {
-								cancel()
-								return ctx.Err()
-							}
 							return injected
 						}
 						return nil
@@ -2058,6 +2067,98 @@ func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
 			require.Equal(t, data[far:far+17], warm.Entries[0].Data)
 			require.Equal(t, tc.wantOpens, m.opens-1, "a new read should hit the published file")
 		})
+	}
+}
+
+// Count the HTTP body written by the endpoint, including bytes the SDK drains
+// on Close, rather than bytes returned by ObjectStorage.Read to S3FS.
+type rangeResponseWriter struct {
+	http.ResponseWriter
+	n      int64
+	status int
+}
+
+func (w *rangeResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *rangeResponseWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	w.n += int64(n)
+	return n, err
+}
+
+func TestS3FSSkippedFillHTTPRanges(t *testing.T) {
+	const far = 9 << 20
+	data := make([]byte, 16<<20)
+	data[0], data[far] = 'a', 'b'
+	for _, backend := range []string{"minio", "aws"} {
+		for _, mode := range []string{"sparse", "at-eof", "past-eof-fixed", "not-found"} {
+			t.Run(backend+"/"+mode, func(t *testing.T) {
+				var mu sync.Mutex
+				var ranges []string
+				var statuses []int
+				var bodyBytes int64
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("ETag", `"test"`)
+					out := &rangeResponseWriter{ResponseWriter: w}
+					defer func() {
+						if r.Method == http.MethodGet {
+							mu.Lock()
+							defer mu.Unlock()
+							ranges = append(ranges, r.Header.Get("Range"))
+							statuses = append(statuses, out.status)
+							bodyBytes += out.n
+						}
+					}()
+					if mode == "not-found" {
+						http.Error(out, `<Error><Code>NoSuchKey</Code></Error>`, http.StatusNotFound)
+						return
+					}
+					http.ServeContent(out, r, "object", time.Unix(1, 0), bytes.NewReader(data))
+				}))
+				defer srv.Close()
+				ctx := t.Context()
+				fs, err := NewS3FS(ctx, ObjectStorageArguments{
+					Name: "s3", Endpoint: srv.URL, Bucket: "bucket", Region: "us-east-1", IsMinio: backend == "minio",
+					NoBucketValidation: true, KeyID: "id", KeySecret: "secret",
+				}, CacheConfig{
+					DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](32 << 20), MemoryCapacity: ptrTo[toml.ByteSize](0),
+				}, nil, false, true)
+				require.NoError(t, err)
+				defer fs.Close(ctx)
+				fs.remoteCache = NewRemoteCache(nil, func() client.KeyRouter[fscache.CacheKey] {
+					require.NoError(t, fs.diskCache.SetFile(ctx, "object", func(context.Context) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }))
+					return nil
+				})
+				v := IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 0, Size: 1}, {Offset: far, Size: 1}}}
+				defer v.Release()
+				if mode == "at-eof" || mode == "not-found" {
+					v.Entries = []IOEntry{{Offset: int64(len(data)), Size: -1}}
+				} else if mode == "past-eof-fixed" {
+					v.Entries = []IOEntry{{Offset: int64(len(data)) + 1, Size: 1}}
+				}
+				err = fs.Read(ctx, &v)
+				srv.Close() // join handlers before inspecting byte counts
+				switch mode {
+				case "sparse":
+					require.NoError(t, err)
+					require.Equal(t, []byte{'a'}, v.Entries[0].Data)
+					require.Equal(t, []byte{'b'}, v.Entries[1].Data)
+					require.Equal(t, int64(2), bodyBytes, "HTTP response body bytes")
+					require.Equal(t, []string{"bytes=0-0", "bytes=9437184-9437184"}, ranges)
+				case "at-eof":
+					require.Equal(t, []int{http.StatusRequestedRangeNotSatisfiable}, statuses)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrEmptyRange), "%v", err)
+				case "past-eof-fixed":
+					require.Equal(t, []int{http.StatusRequestedRangeNotSatisfiable}, statuses)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF), "%v", err)
+				case "not-found":
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
+				}
+			})
+		}
 	}
 }
 
