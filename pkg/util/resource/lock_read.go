@@ -52,18 +52,20 @@ func (s LockReadStage) String() string {
 
 // LockReadDiagnostic is the admitted, immutable terminal projection. Seen is
 // a bit mask in stage order. PKCheckNS includes PKReadinessNS.
+// ObservedConflictTxnID is a historical witness from a local queue admission.
+// It may come from an earlier physical lock call or statement attempt.
 type LockReadDiagnostic struct {
-	StatementID    uuid.UUID `json:"statement_id"`
-	AttemptCount   uint64    `json:"attempt_count"`
-	AcquisitionNS  uint64    `json:"acquisition_ns"`
-	LogtailNS      uint64    `json:"logtail_ns"`
-	PKCheckNS      uint64    `json:"pk_check_ns"`
-	PKReadinessNS  uint64    `json:"pk_readiness_ns"`
-	Seen           uint8     `json:"seen"`
-	Conflict       bool      `json:"conflict"`
-	ConflictTxnID  string    `json:"conflict_txn_id,omitempty"`
-	LastIncomplete string    `json:"last_incomplete,omitempty"`
-	Outcome        string    `json:"outcome"`
+	StatementID           uuid.UUID `json:"statement_id"`
+	AttemptCount          uint64    `json:"attempt_count"`
+	AcquisitionNS         uint64    `json:"acquisition_ns"`
+	LogtailNS             uint64    `json:"logtail_ns"`
+	PKCheckNS             uint64    `json:"pk_check_ns"`
+	PKReadinessNS         uint64    `json:"pk_readiness_ns"`
+	Seen                  uint8     `json:"seen"`
+	Conflict              bool      `json:"conflict"`
+	ObservedConflictTxnID string    `json:"observed_conflict_txn_id,omitempty"`
+	LastIncomplete        string    `json:"last_incomplete,omitempty"`
+	Outcome               string    `json:"outcome"`
 }
 
 type lockReadTotals struct {
@@ -194,8 +196,8 @@ func ContextWithLockReadAcquisition(ctx context.Context, o *LockReadObservation)
 	return context.WithValue(ctx, lockReadAcquisitionKey{}, o)
 }
 
-// ObserveLocalLockConflict copies one real holder while the local waiter
-// owns its admission snapshot. The lock table never takes the resource lock.
+// ObserveLocalLockConflict copies one observed holder at queue admission.
+// The lock table never takes the resource lock.
 func ObserveLocalLockConflict(ctx context.Context, holders [][]byte) {
 	o, _ := ctx.Value(lockReadAcquisitionKey{}).(*LockReadObservation)
 	if o == nil {
@@ -259,7 +261,7 @@ func (s LockReadSnapshot) Diagnostic(id uuid.UUID, attempts uint64, failed bool)
 		d.Outcome = "failed"
 	}
 	if t.hasHolder {
-		d.ConflictTxnID = hex.EncodeToString(t.holder[:])
+		d.ObservedConflictTxnID = hex.EncodeToString(t.holder[:])
 	}
 	return d
 }
