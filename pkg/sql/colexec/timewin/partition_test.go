@@ -17,6 +17,7 @@ package timewin
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -237,7 +238,129 @@ func newBoundedPartArg(
 	return arg
 }
 
-// runPartArg drives the operator to exhaustion and returns (wstart, max, part)
+func newPreparedTextPartArg(t *testing.T, sliding types.Datetime) *TimeWin {
+	t.Helper()
+	partExpr := newExpression(2)
+	partExpr.Typ = plan.Type{Id: int32(types.T_text)}
+	return &TimeWin{
+		WStart: true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(
+				function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:      plan.Type{Id: int32(types.T_datetime)},
+		Ts:          newExpression(0),
+		Interval:    makeInterval(),
+		Sliding:     sliding,
+		PartitionBy: []*plan.Expr{partExpr},
+	}
+}
+
+func makePreparedTextPartInput(
+	t *testing.T,
+	mp *mpool.MPool,
+	key string,
+	kinds []vector.PrepareParamKind,
+) *batch.Batch {
+	t.Helper()
+	rows := len(kinds)
+	timestamps := make([]string, rows)
+	values := make([]int32, rows)
+	keys := make([][]byte, rows)
+	for row := range kinds {
+		timestamps[row] = "2023-08-01 00:00:00"
+		if row > 0 {
+			timestamps[row] = "2023-08-01 00:00:12"
+		}
+		values[row] = int32(row + 1)
+		keys[row] = []byte(key)
+	}
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.NewVector(rows, types.T_datetime.ToType(), mp, false, timestamps)
+	bat.Vecs[1] = testutil.NewVector(rows, types.T_int32.ToType(), mp, false, values)
+	bat.Vecs[2] = vector.NewVec(types.T_text.ToType())
+	for _, value := range keys {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[2], value, false, mp))
+	}
+	require.NoError(t, bat.Vecs[2].SetPrepareParamKindsWithMP(kinds, mp))
+	bat.SetRowCount(rows)
+	return bat
+}
+
+func TestTimeWinBroadcastsPreparedPartitionKind(t *testing.T) {
+	sliding, err := calcDatetime(5, 2)
+	require.NoError(t, err)
+	for _, gapFill := range []bool{false, true} {
+		t.Run(map[bool]string{false: "sliding", true: "gapfill"}[gapFill], func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			var first, second *batch.Batch
+			var arg *TimeWin
+			t.Cleanup(func() {
+				if arg != nil {
+					arg.Free(proc, false, nil)
+				}
+				if first != nil {
+					first.Clean(proc.Mp())
+				}
+				if second != nil {
+					second.Clean(proc.Mp())
+				}
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			first = makePreparedTextPartInput(t, proc.Mp(), "5", []vector.PrepareParamKind{
+				vector.PrepareParamFloat,
+				vector.PrepareParamInteger,
+			})
+			second = makePreparedTextPartInput(t, proc.Mp(), "6", []vector.PrepareParamKind{
+				vector.PrepareParamDecimal,
+				vector.PrepareParamBoolean,
+			})
+			arg = newPreparedTextPartArg(t, sliding)
+			arg.GapFill = gapFill
+			arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
+			require.NoError(t, arg.Prepare(proc))
+			want := map[string]vector.PrepareParamKind{
+				"5": vector.PrepareParamFloat,
+				"6": vector.PrepareParamDecimal,
+			}
+			seen := make(map[string]vector.PrepareParamKind)
+			rows := 0
+			for {
+				result, callErr := vm.Exec(arg, proc)
+				require.NoError(t, callErr)
+				if result.Batch == nil || result.Status == vm.ExecStop {
+					break
+				}
+				part := result.Batch.Vecs[2]
+				for row := 0; row < part.Length(); row++ {
+					key := string(part.GetBytesAt(row))
+					require.Contains(t, want, key)
+					seen[key] = part.GetPrepareParamKindAt(row)
+				}
+				rows += part.Length()
+			}
+			require.Positive(t, rows)
+			require.Equal(t, want, seen)
+		})
+	}
+}
+
+func decimalSumValues(t testing.TB, vec *vector.Vector) []int64 {
+	t.Helper()
+	require.Equal(t, types.T_decimal128, vec.GetType().Oid)
+	values := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
+	result := make([]int64, len(values))
+	for i, value := range values {
+		var err error
+		result[i], err = strconv.ParseInt(value.Format(0), 10, 64)
+		require.NoError(t, err)
+	}
+	return result
+}
+
+// runPartArg drives the operator to exhaustion and returns (wstart, sum, part)
 // per output row.
 func runPartArg(t testing.TB, arg *TimeWin, proc *process.Process, in *batch.Batch) (starts []types.Datetime, sums []int64, parts []int64) {
 	t.Helper()
@@ -257,7 +380,7 @@ func runPartArg(t testing.TB, arg *TimeWin, proc *process.Process, in *batch.Bat
 		bat := res.Batch
 		n := bat.Vecs[0].Length()
 		// Layout: [max, _wstart, part...]
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, bat.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Datetime](bat.Vecs[1])[:n]...)
 		if len(arg.PartitionBy) > 0 {
 			pv := bat.Vecs[2]
@@ -294,7 +417,7 @@ func runTemporalBoundArg(t testing.TB, arg *TimeWin, proc *process.Process, inpu
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		startVec := res.Batch.Vecs[1]
 		switch startVec.GetType().Oid {
 		case types.T_date:
@@ -1739,7 +1862,7 @@ func runPartArgBats(t testing.TB, arg *TimeWin, proc *process.Process, bats []*b
 		}
 		bat := res.Batch
 		n := bat.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, bat.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Datetime](bat.Vecs[1])[:n]...)
 		if len(arg.PartitionBy) > 0 {
 			pv := bat.Vecs[2]

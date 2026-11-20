@@ -55,6 +55,8 @@ func TestApproxPercentileCheckFn(t *testing.T) {
 	// unsupported type in arg0
 	result = check(nil, []types.Type{types.T_varchar.ToType(), types.T_float64.ToType()})
 	require.Equal(t, failedAggParametersWrong, result.status)
+	result = check(nil, []types.Type{types.New(types.T_decimal256, 39, 1), types.T_float64.ToType()})
+	require.Equal(t, failedAggParametersWrong, result.status)
 
 	// T_any in arg1 should request cast
 	result = check(nil, []types.Type{types.T_int64.ToType(), types.T_any.ToType()})
@@ -85,6 +87,18 @@ func TestApproxPercentileCheckFn(t *testing.T) {
 		result = check(nil, []types.Type{types.T_int64.ToType(), arg1Oid.ToType()})
 		require.Equal(t, succeedMatched, result.status, "arg1 oid %d should succeed", arg1Oid)
 	}
+}
+
+func TestMedianAcceptsWidenedDecimalResult(t *testing.T) {
+	inner := aggexec.MedianReturnType([]types.Type{types.New(types.T_decimal128, 38, 0)})
+	require.Equal(t, types.New(types.T_decimal256, 39, 1), inner)
+	result := allSupportedFunctions[MEDIAN].checkFn(nil, []types.Type{inner})
+	require.Equal(t, succeedMatched, result.status)
+	require.Equal(t, types.New(types.T_decimal256, 40, 2),
+		aggexec.MedianReturnType([]types.Type{inner}))
+	result = allSupportedFunctions[MEDIAN].checkFn(nil,
+		[]types.Type{types.New(types.T_decimal256, 76, 0)})
+	require.Equal(t, failedAggParametersWrong, result.status)
 }
 
 func TestApproxPercentileCatalogEntry(t *testing.T) {

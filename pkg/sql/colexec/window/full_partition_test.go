@@ -55,23 +55,23 @@ func TestFullPartitionSumAcrossChunksAndNullPartitions(t *testing.T) {
 	require.NoError(t, err)
 	defer first.Free(proc.Mp())
 	require.NotNil(t, ctr.fullPartitionResults)
-	for i, value := range vector.MustFixedColWithTypeCheck[int64](first) {
-		require.Equal(t, int64(firstRows), value, "row %d", i)
+	for i, value := range vector.MustFixedColWithTypeCheck[types.Decimal128](first) {
+		require.Equal(t, types.Decimal128FromInt64(firstRows), value, "row %d", i)
 	}
 
 	second, err := ctr.processAggregateFuncRange(0, arg, proc, colexec.DefaultBatchSize, len(values))
 	require.NoError(t, err)
 	defer second.Free(proc.Mp())
-	got := vector.MustFixedColWithTypeCheck[int64](second)
+	got := vector.MustFixedColWithTypeCheck[types.Decimal128](second)
 	for i := 0; i < 8; i++ {
-		require.Equal(t, int64(firstRows), got[i])
+		require.Equal(t, types.Decimal128FromInt64(firstRows), got[i])
 		require.False(t, second.IsNull(uint64(i)))
 	}
 	for i := 8; i < 11; i++ {
 		require.True(t, second.IsNull(uint64(i)))
 	}
 	for i := 11; i < 13; i++ {
-		require.Equal(t, int64(2), got[i])
+		require.Equal(t, types.Decimal128FromInt64(2), got[i])
 		require.False(t, second.IsNull(uint64(i)))
 	}
 	require.Nil(t, ctr.fullPartitionResults)
@@ -99,7 +99,10 @@ func TestFullPartitionResultsAdvanceAcrossOutputChunks(t *testing.T) {
 			result, err := ctr.processAggregateFuncRange(0, arg, proc, start, end)
 			require.NoError(t, err)
 			defer result.Free(proc.Mp())
-			require.Equal(t, want[start:end], vector.MustFixedColWithTypeCheck[int64](result))
+			values := vector.MustFixedColWithTypeCheck[types.Decimal128](result)
+			for i, value := range values {
+				require.Equal(t, types.Decimal128FromInt64(want[start+i]), value)
+			}
 		}()
 		start = end
 	}
@@ -149,6 +152,8 @@ func TestFullPartitionCommonAggregates(t *testing.T) {
 					require.Equal(t, types.Decimal128FromInt64(16667), vector.GetFixedAtNoTypeCheck[types.Decimal128](result, i))
 				case tc.name == "min" || tc.name == "max":
 					require.Equal(t, int32(tc.wantInt), vector.GetFixedAtNoTypeCheck[int32](result, i))
+				case tc.name == "sum":
+					require.Equal(t, types.Decimal128FromInt64(tc.wantInt), vector.GetFixedAtNoTypeCheck[types.Decimal128](result, i))
 				default:
 					require.Equal(t, tc.wantInt, vector.GetFixedAtNoTypeCheck[int64](result, i))
 				}
@@ -222,11 +227,11 @@ func TestUnorderedRangeFullPartitionAcrossMultiplePartitions(t *testing.T) {
 	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 3)
 	require.NoError(t, err)
 	defer first.Free(proc.Mp())
-	require.Equal(t, []int64{3, 3, 28}, vector.MustFixedColWithTypeCheck[int64](first))
+	require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(3), types.Decimal128FromInt64(3), types.Decimal128FromInt64(28)}, vector.MustFixedColWithTypeCheck[types.Decimal128](first))
 	require.NotNil(t, ctr.fullPartitionResults)
 	second, err := ctr.processAggregateFuncRange(0, arg, proc, 3, 5)
 	require.NoError(t, err)
 	defer second.Free(proc.Mp())
-	require.Equal(t, []int64{28, 28}, vector.MustFixedColWithTypeCheck[int64](second))
+	require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(28), types.Decimal128FromInt64(28)}, vector.MustFixedColWithTypeCheck[types.Decimal128](second))
 	require.Nil(t, ctr.fullPartitionResults)
 }

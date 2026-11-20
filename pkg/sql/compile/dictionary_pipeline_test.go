@@ -133,7 +133,7 @@ func TestDictionaryPipelineAccountLifetime(t *testing.T) {
 		require.False(t, result.Batch.HasDictionary())
 		for row := 0; row < result.Batch.RowCount(); row++ {
 			require.Equal(t, "B", string(result.Batch.Vecs[0].GetBytesAt(row)))
-			require.Equal(t, int64(5), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[1], row))
+			require.Equal(t, types.Decimal128FromInt64(5), vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[1])[row])
 			rows++
 		}
 	}
