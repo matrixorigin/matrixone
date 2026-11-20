@@ -4,6 +4,7 @@ create account acc2 ADMIN_NAME 'admin' IDENTIFIED BY '111';
 create account acc3 ADMIN_NAME 'admin' IDENTIFIED BY '111';
 # sys init with on
 set global enable_privilege_cache = on;
+set session enable_privilege_cache = on;
 
 -- acc1 set global variables,sys,acc2,acc3 confirm env isolation
 -- @session:id=1&user=acc1:admin&password=111
