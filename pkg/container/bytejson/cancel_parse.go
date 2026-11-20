@@ -486,6 +486,14 @@ func (g cancellableJSONKeySort) Less(i, j int) bool {
 	return len(a) < len(b)
 }
 
+func (g cancellableJSONKeySort) Swap(i, j int) {
+	// sort.Sort can reverse an ordered run without comparing keys.
+	if err := g.budget.check(g.ctx, 0); err != nil {
+		panic(jsonKeySortInterrupted{err})
+	}
+	g.groupSortKeys.Swap(i, j)
+}
+
 func sortJSONKeysCancellable(ctx context.Context, budget *jsonWriteBudget, g *Group) (err error) {
 	defer func() {
 		if caught := recover(); caught != nil {
