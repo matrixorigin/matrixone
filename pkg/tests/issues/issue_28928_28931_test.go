@@ -312,6 +312,10 @@ func TestIssue28931StaleUpdatePlanCannotBypassNewIndex(t *testing.T) {
 			waitForPlan()
 			execSQLRequire(t, ctx, writerDB, "update "+table+" set payload = 'changed' where id = 1")
 			require.NoError(t, finishDDL())
+			// finishDDL only proves CREATE INDEX committed on the ddl CN. The
+			// writer CN must apply that commit before any index-dependent query,
+			// so IGNORE/FORCE INDEX cannot fail with error 1176.
+			syncAuthenticatedClusterCommit(t, ctx, cluster)
 
 			var scannedCount, scannedSum, indexedCount, indexedSum int
 			require.NoError(t, writerDB.QueryRowContext(ctx,
@@ -324,7 +328,6 @@ func TestIssue28931StaleUpdatePlanCannotBypassNewIndex(t *testing.T) {
 			require.Equal(t, 1, scannedSum)
 			require.Equal(t, scannedCount, indexedCount)
 			require.Equal(t, scannedSum, indexedSum)
-			syncAuthenticatedClusterCommit(t, ctx, cluster)
 			issue289AssertPhysicalIndex(t, ctx, writerDB, database, "regular_update", "ix_payload", "payload", false,
 				[]issue289IndexRow{{1, "changed"}, {2, "control"}})
 		})
