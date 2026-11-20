@@ -1625,6 +1625,15 @@ static-check-selected:
 	$(STATIC_CHECK_MOLINT)
 	$(STATIC_CHECK_GOLANGCI)
 
+# Local fast path: analyze the packages affected by changes (committed, staged,
+# unstaged and untracked) since the merge base with STATIC_CHECK_BASE, using the
+# same selection as PR CI. Not a merge gate; run static-check for that.
+STATIC_CHECK_BASE ?= $(shell git rev-parse --verify -q upstream/main >/dev/null && echo upstream/main || echo origin/main)
+.PHONY: static-check-changed
+static-check-changed: err-check
+	@set -e; packages=$$(SCA_LOCAL_BASE='$(STATIC_CHECK_BASE)' $(CGO_OPTS) node .github/ci/static-analysis.cjs); \
+	$(MAKE) --no-print-directory static-check-selected STATIC_CHECK_PACKAGES="$$packages"
+
 # Trusted cache producers only need to populate golangci-lint's analysis
 # cache. This is not a reduced validation gate; PR and local SCA continue to
 # use static-check-analysis or static-check above.
