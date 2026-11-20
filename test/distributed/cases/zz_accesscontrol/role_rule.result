@@ -533,22 +533,22 @@ alter role test_rule_role_dup_projection_b add rule "select X'414A' as 'n' from 
 select hex(n) as label_bytes, count(*) as visible_rows from db1.t_dup group by n;
 ➤ label_bytes[12,16,0]  ¦  visible_rows[-5,64,0]  𝄀
 414A  ¦  2
-alter role test_rule_role_dup_projection_a add rule "select a as n, X'414a' as label from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
-alter role test_rule_role_dup_projection_b add rule "SELECT A as n, X'414A' as label FROM db1.t_dup" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select a as n, X'414a' as label, name_const('c', X'414a') from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "SELECT A as n, X'414A' as label, name_const('c', X'414A') FROM db1.t_dup" on table db1.t_dup;
 set sql_mode = '';
 prepare spelling_handle from 'select 1';
 set sql_mode = 'NO_BACKSLASH_ESCAPES';
 execute spelling_handle;
 ➤ 1[-5,64,0]  𝄀
 1
-select n, hex(label) as label_bytes from db1.t_dup order by n;
-➤ n[4,32,0]  ¦  label_bytes[12,16,0]  𝄀
-1  ¦  414A  𝄀
-1  ¦  414A  𝄀
-2  ¦  414A  𝄀
-3  ¦  414A  𝄀
-4  ¦  414A  𝄀
-5  ¦  414A
+select n, hex(label) as label_bytes, c from db1.t_dup order by n;
+➤ n[4,32,0]  ¦  label_bytes[12,16,0]  ¦  c[12,2,0]  𝄀
+1  ¦  414A  ¦  AJ  𝄀
+1  ¦  414A  ¦  AJ  𝄀
+2  ¦  414A  ¦  AJ  𝄀
+3  ¦  414A  ¦  AJ  𝄀
+4  ¦  414A  ¦  AJ  𝄀
+5  ¦  414A  ¦  AJ
 deallocate prepare spelling_handle;
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;

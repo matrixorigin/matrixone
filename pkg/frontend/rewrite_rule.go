@@ -1454,18 +1454,28 @@ func sameDecodedRewriteRule(ctx context.Context, oldSQL, newSQL, oldMode, newMod
 	if !okA || !okB || !reflect.DeepEqual(a.withoutProjection(), b.withoutProjection()) {
 		return false
 	}
-	// Equal merge projections need not expose identical result metadata. An
-	// explicit alias supplies the heading; otherwise retain the original AST.
-	if !slices.EqualFunc(a.clause.Exprs, b.clause.Exprs, func(x, y tree.SelectExpr) bool {
-		if x.As != nil && !x.As.Empty() && y.As != nil && !y.As.Empty() {
-			return x.As.Origin() == y.As.Origin()
-		}
-		return reflect.DeepEqual(x, y)
-	}) {
+	// Value equivalence alone does not guarantee identical result headings.
+	if !slices.EqualFunc(a.clause.Exprs, b.clause.Exprs, sameRewriteResultHeading) {
 		return false
 	}
 	same, err := sameRewriteProjection(ctx, oldSQL, newSQL, oldMode, newMode, lower)
 	return err == nil && same
+}
+
+func sameRewriteResultHeading(x, y tree.SelectExpr) bool {
+	heading := func(e tree.SelectExpr) (string, bool) {
+		if e.As != nil && !e.As.Empty() {
+			return e.As.Origin(), true
+		}
+		return tree.NameConstHeading(e.Expr)
+	}
+	a, aKnown := heading(x)
+	b, bKnown := heading(y)
+	if aKnown || bKnown {
+		return aKnown && bKnown && a == b
+	}
+	// Other implicit headings may depend on binding or expression spelling.
+	return reflect.DeepEqual(x, y)
 }
 
 // Leave the original statement untouched: FROM, WHERE and all other clauses

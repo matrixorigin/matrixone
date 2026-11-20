@@ -535,14 +535,14 @@ select hex(n) as label_bytes, count(*) as visible_rows from db1.t_dup group by n
 -- @session
 
 -- A later unfiltered rule exposes the same named projections across a mode reload.
-alter role test_rule_role_dup_projection_a add rule "select a as n, X'414a' as label from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
-alter role test_rule_role_dup_projection_b add rule "SELECT A as n, X'414A' as label FROM db1.t_dup" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select a as n, X'414a' as label, name_const('c', X'414a') from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "SELECT A as n, X'414A' as label, name_const('c', X'414A') FROM db1.t_dup" on table db1.t_dup;
 -- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
 set sql_mode = '';
 prepare spelling_handle from 'select 1';
 set sql_mode = 'NO_BACKSLASH_ESCAPES';
 execute spelling_handle;
-select n, hex(label) as label_bytes from db1.t_dup order by n;
+select n, hex(label) as label_bytes, c from db1.t_dup order by n;
 deallocate prepare spelling_handle;
 -- @session
 
