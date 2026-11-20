@@ -114,6 +114,27 @@ update sb1 set v = 30 where id = 1;
 data branch pick sb2 into sb1 keys(1) when conflict accept;
 select * from sb1 order by id;
 
+-- Sibling PICK uses the parent generation visible at each fork across COPY ALTER.
+create table cp0(id int primary key, v int);
+insert into cp0 values (1,10);
+data branch create table cp_early from cp0;
+alter table cp0 algorithm=copy, add column extra int default 0;
+data branch create table cp_late from cp0;
+update cp_late set v = 20 where id = 1;
+data branch pick cp_late into cp_early keys(1) when conflict accept;
+select * from cp_early order by id;
+
+-- In the reverse direction, read the late fork's renamed column.
+create table rp0(id int primary key, v int);
+insert into rp0 values (1,10);
+data branch create table rp_early from rp0;
+alter table rp0 algorithm=copy, rename column v to w;
+data branch create table rp_late from rp0;
+update rp_early set v = 30 where id = 1;
+update rp_late set w = 40 where id = 1;
+data branch pick rp_early into rp_late keys(1) when conflict accept;
+select * from rp_late order by id;
+
 -- A source DELETE must not overwrite a post-fork replacement in the destination.
 data branch create table m1 from m0;
 delete from m1 where id = 1;

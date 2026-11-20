@@ -1480,7 +1480,7 @@ func reconcileDataBranchEndpointSchema(
 			if tarCol.Name == catalog.Row_ID {
 				continue
 			}
-			reaches, tarLCACol, redefined := dataBranchColumnReachesLCA(
+			reaches, tarLCACol, tarForkCol, redefined := dataBranchColumnAtFork(
 				tarDefs, dagInfo.pathFromLCAToTarLineageOnly, tarCol,
 			)
 			if !reaches || redefined || tarLCACol == nil {
@@ -1491,15 +1491,20 @@ func reconcileDataBranchEndpointSchema(
 				continue
 			}
 			tables.def.tarLCAColNames[idx] = tarLCACol.Name
+			if tarForkCol != nil {
+				tables.def.tarLCAColNames[idx] = tarForkCol.Name
+			}
 			// Keep the target's lineage name as a default when the base has no
 			// lineage match, as in the shared probe layout.
-			tables.def.baseLCAColNames[idx] = tarLCACol.Name
-			if reaches, baseLCACol, redefined := dataBranchColumnReachesLCA(
+			tables.def.baseLCAColNames[idx] = tables.def.tarLCAColNames[idx]
+			if reaches, _, baseForkCol, redefined := dataBranchColumnAtFork(
 				baseDefs, dagInfo.pathFromLCAToBaseLineageOnly, resolveBaseColumn(tarCol),
-			); reaches && !redefined && baseLCACol != nil {
-				tables.def.baseLCAColNames[idx] = baseLCACol.Name
+			); reaches && !redefined && baseForkCol != nil {
+				tables.def.baseLCAColNames[idx] = baseForkCol.Name
 			}
 		}
+		// The earlier anchor observes the shared LCA generation. Sibling PICK
+		// selects each side's fork names separately.
 		tarAnchor, baseAnchor, _ := dagInfo.lcaProbeAnchors(tarSP, baseSP)
 		tables.def.lcaColNames = tables.def.tarLCAColNames
 		if baseAnchor.LT(&tarAnchor) {
@@ -2569,8 +2574,24 @@ func dataBranchColumnReachesLCA(
 	lineageOnly []bool,
 	endpointCol *plan.ColDef,
 ) (reachesLCA bool, lcaCol *plan.ColDef, redefined bool) {
+	reachesLCA, lcaCol, _, redefined = dataBranchColumnAtFork(pathDefs, lineageOnly, endpointCol)
+	return
+}
+
+func dataBranchColumnAtFork(
+	pathDefs []*plan.TableDef,
+	lineageOnly []bool,
+	endpointCol *plan.ColDef,
+) (reachesLCA bool, lcaCol, forkCol *plan.ColDef, redefined bool) {
 	if len(pathDefs) == 0 || len(pathDefs) != len(lineageOnly) || endpointCol == nil {
-		return false, nil, false
+		return false, nil, nil, false
+	}
+	forkParentIdx := 0
+	if forkIdx, ok := firstDataBranchForkIndex(lineageOnly, len(pathDefs)); ok {
+		forkParentIdx = forkIdx - 1
+	}
+	if forkParentIdx == len(pathDefs)-1 {
+		forkCol = endpointCol
 	}
 	current := endpointCol
 	for i := len(pathDefs) - 2; i >= 0; i-- {
@@ -2592,14 +2613,17 @@ func dataBranchColumnReachesLCA(
 		if previous == nil {
 			for j := i - 1; j >= 0; j-- {
 				if dataBranchColumnDefByLogicalName(pathDefs[j], endpointCol) != nil {
-					return false, nil, true
+					return false, nil, forkCol, true
 				}
 			}
-			return false, nil, false
+			return false, nil, forkCol, false
 		}
 		current = previous
+		if i == forkParentIdx {
+			forkCol = current
+		}
 	}
-	return true, current, false
+	return true, current, forkCol, false
 }
 
 func dataBranchColumnDefByRenameIdentity(

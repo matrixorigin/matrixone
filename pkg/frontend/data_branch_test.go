@@ -2771,6 +2771,97 @@ func TestDataBranchReconcileEarlierLCAColumnName(t *testing.T) {
 	}
 }
 
+func TestDataBranchSiblingPickProbeGeneration(t *testing.T) {
+	const oldID, newID, earlyID, lateID = uint64(1), uint64(2), uint64(3), uint64(4)
+	earlyFork, copyAlter, lateFork := types.BuildTS(100, 0), types.BuildTS(200, 0), types.BuildTS(300, 0)
+	for _, tc := range []struct {
+		name, newColumn string
+	}{
+		{name: "same column name", newColumn: "v"},
+		{name: "renamed column", newColumn: "w"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			ses := newValidateSession(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(400, 0).ToTimestamp())
+			ses.txnHandler = &TxnHandler{txnOp: txnOp}
+
+			newRelation := func(id uint64, name, colName string) *mock_frontend.MockRelation {
+				rel := mock_frontend.NewMockRelation(ctrl)
+				rel.EXPECT().GetTableID(gomock.Any()).Return(id).AnyTimes()
+				rel.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef(name, colName)).AnyTimes()
+				return rel
+			}
+			oldParent := newRelation(oldID, "parent", "v")
+			newParent := newRelation(newID, "parent", tc.newColumn)
+			original := reopenDataBranchRelationByID
+			t.Cleanup(func() { reopenDataBranchRelationByID = original })
+			reopenDataBranchRelationByID = func(_ context.Context, _ *Session, _ BackgroundExec, id uint64, snapshot *plan.Snapshot) (engine.Relation, error) {
+				ts := types.TimestampToTS(*snapshot.TS)
+				if ts == lateFork {
+					require.Equal(t, newID, id)
+					return newParent, nil
+				}
+				require.Contains(t, []types.TS{earlyFork, copyAlter}, ts)
+				require.Equal(t, oldID, id)
+				return oldParent, nil
+			}
+
+			info := branchMetaInfo{
+				lcaTableId:                   oldID,
+				pathFromLCAToTar:             []uint64{oldID, newID, lateID},
+				pathFromLCAToTarTS:           []types.TS{{}, copyAlter, lateFork},
+				pathFromLCAToTarLineageOnly:  []bool{false, true, false},
+				pathFromLCAToBase:            []uint64{oldID, earlyID},
+				pathFromLCAToBaseTS:          []types.TS{{}, earlyFork},
+				pathFromLCAToBaseLineageOnly: []bool{false, false},
+			}
+			tables := newTestBranchTableStuff(ctrl)
+			tables.tarRel = newRelation(lateID, "late", tc.newColumn)
+			tables.baseRel = newRelation(earlyID, "early", "v")
+			tables.lcaRel, tables.lcaRelSnapshot = oldParent, earlyFork
+			tables.def.colNames[1] = tc.newColumn
+			require.NoError(t, reconcileDataBranchEndpointSchema(ctx, ses, nil, &tables, &info))
+
+			tarID, baseID := info.lcaProbeTableIDs(true)
+			require.Equal(t, newID, tarID)
+			require.Equal(t, oldID, baseID)
+			tarID, baseID = info.lcaProbeTableIDs(false)
+			require.Equal(t, oldID, tarID)
+			require.Equal(t, oldID, baseID)
+
+			now := types.BuildTS(400, 0)
+			tarProbe, baseProbe := info.lcaProbeSnapshots(now, now, true)
+			require.Equal(t, lateFork, tarProbe)
+			require.Equal(t, earlyFork, baseProbe)
+			pick := compositeOption{preservePickConflicts: true}
+			late := sideTableStuffForLCAProbe(tables, pick, info, now, now, false)
+			require.Equal(t, newID, late.lcaProbeTableID(ctx))
+			require.True(t, late.lcaRelSnapshot.IsEmpty())
+			require.Nil(t, late.lcaFallbackRangeRel(lateFork))
+			require.Equal(t, []string{"id", tc.newColumn, "hidden"}, late.def.lcaColNames)
+
+			wantEarlyNames := []string{"id", "v", "hidden"}
+			early := sideTableStuffForLCAProbe(tables, pick, info, now, now, true)
+			require.Equal(t, oldID, early.lcaProbeTableID(ctx))
+			require.Same(t, oldParent, early.lcaFallbackRangeRel(earlyFork))
+			require.Equal(t, wantEarlyNames, early.def.lcaColNames)
+
+			tarProbe, baseProbe = info.lcaProbeSnapshots(now, now, false)
+			require.Equal(t, earlyFork, tarProbe)
+			require.Equal(t, earlyFork, baseProbe)
+			for _, forBase := range []bool{false, true} {
+				diff := sideTableStuffForLCAProbe(tables, compositeOption{}, info, now, now, forBase)
+				require.Equal(t, oldID, diff.lcaProbeTableID(ctx))
+				require.Same(t, oldParent, diff.lcaFallbackRangeRel(earlyFork))
+				require.Equal(t, wantEarlyNames, diff.def.lcaColNames)
+			}
+		})
+	}
+}
+
 func TestDataBranchDiffRejectsSnapshotBeforeLCACreation(t *testing.T) {
 	ctx := context.Background()
 	ses := newValidateSession(t)

@@ -242,7 +242,7 @@ func lcaProbeTableDefAtSnapshot(
 			if !snapshotTS.IsEmpty() {
 				txnOp = txnOp.CloneSnapshotOp(snapshotTS.ToTimestamp())
 			}
-			_, _, snapshotRel, lookupErrAtSnapshot := storage.GetRelationById(scanCtx, txnOp, tblStuff.lcaRel.GetTableID(scanCtx))
+			_, _, snapshotRel, lookupErrAtSnapshot := storage.GetRelationById(scanCtx, txnOp, tblStuff.lcaProbeTableID(scanCtx))
 			lookupErr = lookupErrAtSnapshot
 			if lookupErr == nil && snapshotRel != nil {
 				if snapshotDef := snapshotRel.GetTableDef(scanCtx); snapshotDef != nil {
@@ -463,7 +463,7 @@ func handleDelsOnLCA(
 		}
 		logutil.Debug(
 			"DataBranch-LCA-SQL-Start",
-			zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+			zap.Uint64("table-id", tblStuff.lcaProbeTableID(ctx)),
 			zap.String("db-name", lcaTblDef.DbName),
 			zap.String("table-name", lcaTblDef.Name),
 			zap.Int("input-pk-rows", tBat.RowCount()),
@@ -475,7 +475,7 @@ func handleDelsOnLCA(
 		if sqlRet, err = runSql(ctx, ses, bh, sqlBuf.String(), nil, nil); err != nil {
 			logutil.Error(
 				"DataBranch-LCA-SQL-Error",
-				zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+				zap.Uint64("table-id", tblStuff.lcaProbeTableID(ctx)),
 				zap.String("db-name", lcaTblDef.DbName),
 				zap.String("table-name", lcaTblDef.Name),
 				zap.Int("input-pk-rows", tBat.RowCount()),
@@ -488,7 +488,7 @@ func handleDelsOnLCA(
 				}
 				logutil.Info(
 					"DataBranch-LCA-SQL-Fallback-Start",
-					zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+					zap.Uint64("table-id", tblStuff.lcaProbeTableID(ctx)),
 					zap.String("table-name", lcaTblDef.Name),
 					zap.Int("input-pk-rows", tBat.RowCount()),
 					zap.String("snapshot-ts", snapshotTS.ToString()),
@@ -500,7 +500,7 @@ func handleDelsOnLCA(
 				if err != nil {
 					logutil.Error(
 						"DataBranch-LCA-SQL-Fallback-Error",
-						zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+						zap.Uint64("table-id", tblStuff.lcaProbeTableID(ctx)),
 						zap.String("table-name", lcaTblDef.Name),
 						zap.Int("input-pk-rows", tBat.RowCount()),
 						zap.String("snapshot-ts", snapshotTS.ToString()),
@@ -511,7 +511,7 @@ func handleDelsOnLCA(
 				fullTargetLayout = true
 				logutil.Info(
 					"DataBranch-LCA-SQL-Fallback-Done",
-					zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+					zap.Uint64("table-id", tblStuff.lcaProbeTableID(ctx)),
 					zap.String("table-name", lcaTblDef.Name),
 					zap.Int("input-pk-rows", tBat.RowCount()),
 					zap.Int("fallback-batches", len(sqlRet.Batches)),
@@ -526,7 +526,7 @@ func handleDelsOnLCA(
 	if forceReaderProbe {
 		logutil.Debug(
 			"DataBranch-LCA-ReaderProbe-Direct",
-			zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+			zap.Uint64("table-id", tblStuff.lcaProbeTableID(ctx)),
 			zap.String("table-name", lcaTableName),
 			zap.Int("input-pk-rows", tBat.RowCount()),
 			zap.String("snapshot-ts", snapshotTS.ToString()),
@@ -622,7 +622,7 @@ func handleDelsOnLCA(
 	dBat.SetRowCount(lcaHitRows)
 	logutil.Debug(
 		"DataBranch-LCA-Join-Result",
-		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+		zap.Uint64("table-id", tblStuff.lcaProbeTableID(ctx)),
 		zap.String("table-name", lcaTableName),
 		zap.Int("joined-rows", joinedRows),
 		zap.Int("lca-hit-rows", lcaHitRows),
@@ -646,7 +646,7 @@ func handleDelsOnLCA(
 	}
 	logutil.Debug(
 		"DataBranch-LCA-PostProcess-Done",
-		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+		zap.Uint64("table-id", tblStuff.lcaProbeTableID(ctx)),
 		zap.String("table-name", lcaTableName),
 		zap.Int("remaining-tbat-rows", tBat.RowCount()),
 		zap.Int("remaining-dbat-rows", dBat.RowCount()),
@@ -833,7 +833,7 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 	)
 	logutil.Info(
 		"DataBranch-LCA-ReaderFallback-ScanStart",
-		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+		zap.Uint64("table-id", tblStuff.lcaProbeTableID(ctx)),
 		zap.String("table-name", lcaTblDef.Name),
 		zap.Int("input-pk-rows", rowCount),
 		zap.Int("input-unique-keys", len(inputKeys)),
@@ -842,7 +842,7 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 
 	defer func() {
 		fields := []zap.Field{
-			zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+			zap.Uint64("table-id", tblStuff.lcaProbeTableID(ctx)),
 			zap.String("table-name", lcaTblDef.Name),
 			zap.Int("input-pk-rows", rowCount),
 			zap.Int("input-unique-keys", len(inputKeys)),
@@ -881,7 +881,7 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 		scanCtx,
 		"lca-reader-fallback",
 		ses,
-		tblStuff.lcaRel.GetTableID(ctx),
+		tblStuff.lcaProbeTableID(ctx),
 		snapshotTS,
 		lcaSnapshotRel,
 		lcaLayout.attrs,
@@ -938,7 +938,7 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 	}
 	logutil.Info(
 		"DataBranch-LCA-ReaderFallback-ScanDone",
-		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+		zap.Uint64("table-id", tblStuff.lcaProbeTableID(ctx)),
 		zap.String("table-name", lcaTblDef.Name),
 		zap.Int("scan-batch-cnt", scannedBatchCnt),
 		zap.Int("scan-row-cnt", scannedRowCnt),
@@ -1032,7 +1032,7 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 	outputCost = time.Since(outputStart)
 	logutil.Info(
 		"DataBranch-LCA-ReaderFallback-Output",
-		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+		zap.Uint64("table-id", tblStuff.lcaProbeTableID(ctx)),
 		zap.String("table-name", lcaTblDef.Name),
 		zap.Int("output-rows", rowCount),
 		zap.Bool("has-any-hit", hasAnyHit),
@@ -1147,9 +1147,16 @@ func sideTableStuffForLCAProbe(
 	if copt.preservePickConflicts {
 		_, _, bothForked := dagInfo.lcaProbeAnchors(tarSP, baseSP)
 		if bothForked {
+			tarTableID, baseTableID := dagInfo.lcaProbeTableIDs(true)
+			probeTableID := tarTableID
 			names := tblStuff.def.tarLCAColNames
 			if forBase {
+				probeTableID = baseTableID
 				names = tblStuff.def.baseLCAColNames
+			}
+			if probeTableID != 0 && probeTableID != dagInfo.lcaTableId {
+				tblStuff.lcaProbeTableId = probeTableID
+				tblStuff.lcaRelSnapshot = types.TS{}
 			}
 			if len(names) > 0 {
 				tblStuff.def.lcaColNames = names
@@ -3470,6 +3477,7 @@ func dataBranchHistoricalProbeStuff(
 ) tableStuff {
 	probeStuff := tblStuff
 	probeStuff.lcaRel = endpointRel
+	probeStuff.lcaProbeTableId = 0
 	endpointTableID := endpointRel.GetTableID(ctx)
 	if endpointTableID == tblStuff.tarRel.GetTableID(ctx) {
 		// Target-side hydration restores the current values of columns that

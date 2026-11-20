@@ -178,11 +178,18 @@ func (m *branchMetaInfo) hasLCA() bool {
 	return m.lcaTableId != 0
 }
 
-func firstDataBranchForkTS(pathTS []types.TS, lineageOnly []bool) (types.TS, bool) {
-	for i := 1; i < len(pathTS); i++ {
+func firstDataBranchForkIndex(lineageOnly []bool, pathLen int) (int, bool) {
+	for i := 1; i < pathLen; i++ {
 		if i < len(lineageOnly) && lineageOnly[i] {
 			continue
 		}
+		return i, true
+	}
+	return 0, false
+}
+
+func firstDataBranchForkTS(pathTS []types.TS, lineageOnly []bool) (types.TS, bool) {
+	if i, ok := firstDataBranchForkIndex(lineageOnly, len(pathTS)); ok {
 		return pathTS[i], true
 	}
 	return types.TS{}, false
@@ -226,6 +233,24 @@ func (m *branchMetaInfo) lcaProbeSnapshots(
 	return baseAnchor, baseAnchor
 }
 
+// lcaProbeTableIDs pairs the sibling PICK snapshots with their fork parents.
+func (m *branchMetaInfo) lcaProbeTableIDs(preservePickConflicts bool) (tarTableID, baseTableID uint64) {
+	tarTableID, baseTableID = m.lcaTableId, m.lcaTableId
+	if preservePickConflicts {
+		tarIdx, tarForked := firstDataBranchForkIndex(m.pathFromLCAToTarLineageOnly, len(m.pathFromLCAToTarTS))
+		baseIdx, baseForked := firstDataBranchForkIndex(m.pathFromLCAToBaseLineageOnly, len(m.pathFromLCAToBaseTS))
+		if tarForked && baseForked {
+			if tarIdx > 0 && tarIdx-1 < len(m.pathFromLCAToTar) {
+				tarTableID = m.pathFromLCAToTar[tarIdx-1]
+			}
+			if baseIdx > 0 && baseIdx-1 < len(m.pathFromLCAToBase) {
+				baseTableID = m.pathFromLCAToBase[baseIdx-1]
+			}
+		}
+	}
+	return tarTableID, baseTableID
+}
+
 type tableStuff struct {
 	tarRel   engine.Relation
 	baseRel  engine.Relation
@@ -246,6 +271,7 @@ type tableStuff struct {
 
 	lcaRel            engine.Relation
 	lcaRelSnapshot    types.TS // snapshot at which lcaRel was opened
+	lcaProbeTableId   uint64   // nonzero when the probe uses a different generation from lcaRel
 	lcaCTS            types.TS
 	lcaHasZeroHistory bool
 	// lcaIdent is the winning owner identity lcaRel was reopened under
@@ -296,7 +322,20 @@ type tableStuff struct {
 	seqWatermarks *sequenceWatermarkTracker
 }
 
+func (t tableStuff) lcaProbeTableID(ctx context.Context) uint64 {
+	if t.lcaProbeTableId != 0 {
+		return t.lcaProbeTableId
+	}
+	if t.lcaRel != nil {
+		return t.lcaRel.GetTableID(ctx)
+	}
+	return 0
+}
+
 func (t tableStuff) lcaFallbackRangeRel(snapshotTS types.TS) engine.Relation {
+	if t.lcaProbeTableId != 0 {
+		return nil
+	}
 	if !t.lcaRelSnapshot.IsEmpty() && t.lcaRelSnapshot.EQ(&snapshotTS) {
 		return t.lcaRel
 	}

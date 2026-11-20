@@ -1195,8 +1195,16 @@ func TestHandleDelsOnLCA_EarlyPaths(t *testing.T) {
 }
 
 func TestHandleDelsOnLCA_SQLFallbackKeepsSnapshotRelation(t *testing.T) {
-	for _, definitionLookupHits := range []bool{true, false} {
-		t.Run(fmt.Sprintf("definition lookup succeeds=%t", definitionLookupHits), func(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		openedAt       types.TS
+		lookupSucceeds bool
+	}{
+		{name: "historical lookup succeeds", openedAt: types.BuildTS(20, 0), lookupSucceeds: true},
+		{name: "lookup fails with mismatched relation snapshot", openedAt: types.BuildTS(20, 0)},
+		{name: "lookup fails with empty relation snapshot", openedAt: types.TS{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			ctrl := gomock.NewController(t)
 			ses := newValidateSession(t)
@@ -1207,55 +1215,45 @@ func TestHandleDelsOnLCA_SQLFallbackKeepsSnapshotRelation(t *testing.T) {
 			defer tables.retPool.freeAllRetBatches(mp)
 			live := mock_frontend.NewMockRelation(ctrl)
 			live.EXPECT().GetTableID(gomock.Any()).Return(tableID).AnyTimes()
+			// At the fork, the endpoint's current name belongs to a different table.
+			live.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("reused_name", "name")).AnyTimes()
 			tables.lcaRel = live
-			tables.lcaRelSnapshot = types.BuildTS(20, 0)
-			historical := mock_frontend.NewMockRelation(ctrl)
-			def := newTestBranchTableDef("lca_tbl", "name")
+			tables.lcaRelSnapshot = tc.openedAt
 
 			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 			probeTxn := mock_frontend.NewMockTxnOperator(ctrl)
 			txnOp.EXPECT().CloneSnapshotOp(snapshot.ToTimestamp()).Return(probeTxn)
-			if definitionLookupHits {
-				txnOp.EXPECT().CloneSnapshotOp(snapshot.ToTimestamp()).Return(probeTxn)
-			}
 			storage := mock_frontend.NewMockEngine(ctrl)
 			ses.txnHandler = &TxnHandler{storage: storage, txnOp: txnOp}
 			bh := mock_frontend.NewMockBackgroundExec(ctrl)
 			lookupErr := moerr.NewInternalErrorNoCtx("cannot reopen historical relation")
 			firstLookup := storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, tableID)
-			if definitionLookupHits {
-				firstLookup.Return("db1", def.Name, historical, nil)
+			if tc.lookupSucceeds {
+				historical := mock_frontend.NewMockRelation(ctrl)
+				def := newTestBranchTableDef("original_name", "name")
+				txnOp.EXPECT().CloneSnapshotOp(snapshot.ToTimestamp()).Return(probeTxn)
 				historical.EXPECT().GetTableDef(gomock.Any()).Return(def).Times(2)
 				probeTxn.EXPECT().SnapshotTS().Return(snapshot.ToTimestamp())
 				stubDataBranchSnapshotRowsAfterRanges(t, historical, []string{"id", "name", "hidden"},
 					[]any{int64(1), "historical", "h1"})
-			} else {
-				firstLookup.Return("", "", nil, lookupErr)
-				live.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("reused_name", "name")).AnyTimes()
-			}
-			if definitionLookupHits {
 				gomock.InOrder(
-					firstLookup,
-					bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(moerr.NewBadDBNoCtx("db1")),
+					firstLookup.Return("db1", def.Name, historical, nil),
+					bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+						require.Contains(t, sql, "`db1`.`original_name`{MO_TS='10-2'}")
+						require.NotContains(t, sql, "`reused_name`")
+						return moerr.NewBadDBNoCtx("db1")
+					}),
 					storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, tableID).Return("", "", nil, lookupErr),
 				)
 			} else {
-				// At the fork, the endpoint's current name belongs to a different table.
-				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).
-					DoAndReturn(func(_ context.Context, sql string) error {
-						t.Errorf("unverified table name reached historical SQL: %s", sql)
-						return nil
-					}).AnyTimes()
-				bh.EXPECT().GetExecResultSet().Return([]interface{}{buildLCAProbeResultSetWithRows(
-					[]interface{}{int64(0), int64(1), "decoy", "h1"},
-				)}).AnyTimes()
-				bh.EXPECT().ClearExecResultSet().AnyTimes()
+				// The background executor has no SQL expectations on this path.
+				firstLookup.Return("", "", nil, lookupErr)
 			}
 
 			tombstones := buildIntDataBatch(t, mp, []string{"id"}, tables.def.colTypes[:1], [][]any{{int64(1)}})
 			defer tombstones.Clean(mp)
 			deleted, err := handleDelsOnLCA(ctx, ses, bh, tombstones, tables, snapshot.ToTimestamp())
-			if !definitionLookupHits {
+			if !tc.lookupSucceeds {
 				require.ErrorIs(t, err, lookupErr)
 				require.Nil(t, deleted)
 				require.Equal(t, 1, tombstones.RowCount())
@@ -1264,6 +1262,90 @@ func TestHandleDelsOnLCA_SQLFallbackKeepsSnapshotRelation(t *testing.T) {
 			require.NoError(t, err)
 			defer tables.retPool.releaseRetBatch(deleted, false)
 			require.Equal(t, [][]any{{int64(1), "historical", "h1"}}, decodeCapturedRows(t, deleted, tables.def.colTypes))
+			require.Zero(t, tombstones.RowCount())
+		})
+	}
+}
+
+func TestHandleDelsOnLCA_ProbeGenerationTableID(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		lookupFails bool
+		sqlFallback bool
+	}{
+		{name: "SQL reads the newer generation"},
+		{name: "SQL fallback scans the newer generation", sqlFallback: true},
+		{name: "failed lookup never touches the older generation", lookupFails: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			ses := newValidateSession(t)
+			mp := ses.proc.Mp()
+			snapshot := types.BuildTS(10, 2)
+			const newID = uint64(78)
+			tables := newTestBranchTableStuff(ctrl)
+			defer tables.retPool.freeAllRetBatches(mp)
+			// The old generation must remain untouched, even if its recorded
+			// snapshot happens to match.
+			tables.lcaRel = mock_frontend.NewMockRelation(ctrl)
+			tables.lcaRelSnapshot = snapshot
+			tables.lcaProbeTableId = newID
+			probeCols := []string{"id", "renamed", "hidden"}
+			tables.def.lcaColNames = probeCols
+
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			probeTxn := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().CloneSnapshotOp(snapshot.ToTimestamp()).Return(probeTxn)
+			storage := mock_frontend.NewMockEngine(ctrl)
+			ses.txnHandler = &TxnHandler{storage: storage, txnOp: txnOp}
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			lookupErr := moerr.NewInternalErrorNoCtx("cannot reopen the fork parent")
+			lookup := storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, newID)
+			wantRow := []any{int64(1), "at fork", "h1"}
+			if tc.lookupFails {
+				lookup.Return("", "", nil, lookupErr)
+			} else {
+				newParent := mock_frontend.NewMockRelation(ctrl)
+				def := newTestBranchTableDef("new_parent", "renamed")
+				newParent.EXPECT().GetTableDef(gomock.Any()).Return(def)
+				lookup.Return(def.DbName, def.Name, newParent, nil)
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+					require.Contains(t, sql, "`db1`.`new_parent`{MO_TS='10-2'}")
+					require.Contains(t, sql, "lca.`renamed`")
+					require.NotContains(t, sql, "lca.`name`")
+					if tc.sqlFallback {
+						return moerr.NewBadDBNoCtx("db1")
+					}
+					return nil
+				})
+				if tc.sqlFallback {
+					txnOp.EXPECT().CloneSnapshotOp(snapshot.ToTimestamp()).Return(probeTxn)
+					storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, newID).
+						Return(def.DbName, def.Name, newParent, nil).After(lookup)
+					newParent.EXPECT().GetTableDef(gomock.Any()).Return(def)
+					probeTxn.EXPECT().SnapshotTS().Return(snapshot.ToTimestamp())
+					stubDataBranchSnapshotRowsAfterRanges(t, newParent, probeCols, wantRow)
+				} else {
+					bh.EXPECT().GetExecResultSet().Return([]interface{}{buildLCAProbeResultSetWithRows(
+						append([]any{int64(0)}, wantRow...),
+					)})
+					bh.EXPECT().ClearExecResultSet()
+				}
+			}
+
+			tombstones := buildIntDataBatch(t, mp, []string{"id"}, tables.def.colTypes[:1], [][]any{{int64(1)}})
+			defer tombstones.Clean(mp)
+			deleted, err := handleDelsOnLCA(ctx, ses, bh, tombstones, tables, snapshot.ToTimestamp())
+			if tc.lookupFails {
+				require.ErrorIs(t, err, lookupErr)
+				require.Nil(t, deleted)
+				require.Equal(t, 1, tombstones.RowCount())
+				return
+			}
+			require.NoError(t, err)
+			defer tables.retPool.releaseRetBatch(deleted, false)
+			require.Equal(t, [][]any{wantRow}, decodeCapturedRows(t, deleted, tables.def.colTypes))
 			require.Zero(t, tombstones.RowCount())
 		})
 	}
@@ -1574,6 +1656,7 @@ func TestDataBranchHistoricalHydrationRejectsMismatchedRelationSnapshot(t *testi
 	ses := newValidateSession(t)
 	mp := ses.proc.Mp()
 	tables := newTestBranchTableStuff(ctrl)
+	tables.lcaProbeTableId = 99
 	tables.tarRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(ctx).Return(uint64(2))
 	tables.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(ctx).Return(uint64(3))
 	const segmentID = uint64(4)
@@ -2334,6 +2417,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		defer ctrl.Finish()
 
 		tblStuff := newTestBranchTableStuff(ctrl)
+		defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
 		tblStuff.def.colNames = []string{"added", "id", "name"}
 		tblStuff.def.colTypes = []types.Type{
@@ -2344,7 +2428,6 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		tblStuff.def.visibleIdxes = []int{0, 1, 2}
 		tblStuff.def.pkColIdx = 1
 		tblStuff.def.pkColIdxes = []int{1}
-		tblStuff.retPool = &retBatchList{}
 		targetDef := tblStuff.tarRel.GetTableDef(context.Background())
 		targetDef.Cols = []*plan.ColDef{
 			{Name: "added", ColId: 4, Seqnum: 3, Typ: plan.Type{Id: int32(types.T_int64)}},
@@ -2412,6 +2495,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		defer ctrl.Finish()
 
 		tblStuff := newTestBranchTableStuff(ctrl)
+		defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 		targetTblDef := tblStuff.tarRel.GetTableDef(context.Background())
 		targetTblDef.Cols[1].OriginName = "b"
 		targetTblDef.Cols[1].Name = "bb"
@@ -2460,6 +2544,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		defer ctrl.Finish()
 
 		tblStuff := newTestBranchTableStuff(ctrl)
+		defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
 		tblStuff.lcaReaderProbeMode = &atomic.Bool{}
 		lcaDef := newTestBranchTableDef("lca_tbl", "name")
@@ -2852,6 +2937,7 @@ func TestHashDiffConflictReportsExpandedUpdatesWithoutValueClaim(t *testing.T) {
 	ses.txnHandler = &TxnHandler{txnOp: txnOp}
 
 	tblStuff := newTestBranchTableStuff(ctrl)
+	defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 	worker, err := ants.NewPool(1)
 	require.NoError(t, err)
 	defer worker.Release()
@@ -2967,6 +3053,7 @@ func TestHashDiff_HasLCANoopUpdateFiltering(t *testing.T) {
 			}
 
 			tblStuff := newTestBranchTableStuff(ctrl)
+			defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 			worker, err := ants.NewPool(1)
 			require.NoError(t, err)
 			defer worker.Release()
@@ -3077,6 +3164,7 @@ func TestHashDiff_HasLCAUpdateIgnoresTargetOnlyColumns(t *testing.T) {
 	}
 
 	tblStuff := newTestBranchTableStuff(ctrl)
+	defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 	tblStuff.def.commonIdxes = []int{0, 1}
 	tblStuff.def.commonVisibleIdxes = []int{0, 1}
 	tblStuff.def.tarOnlyIdxes = []int{2}
@@ -3179,6 +3267,7 @@ func TestHashDiff_HasLCAFakePKUpdateIsNotNoop(t *testing.T) {
 	}
 
 	tblStuff := newTestBranchTableStuff(ctrl)
+	defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 	makeTestBranchTableStuffFakePK(&tblStuff)
 	worker, err := ants.NewPool(1)
 	require.NoError(t, err)
