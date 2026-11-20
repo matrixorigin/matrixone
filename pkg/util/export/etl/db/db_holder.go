@@ -177,7 +177,9 @@ func buildDBConn(randomCN bool) (*sql.DB, error) {
 
 	//45s suggest by xzxiong
 	newDBConn.SetConnMaxLifetime(45 * time.Second)
-	newDBConn.SetMaxOpenConns(MaxConnectionNumber)
+	// A merge can hold one connection across source reads and SQL chunks.
+	// Keep another slot available for the live report writer.
+	newDBConn.SetMaxOpenConns(MaxConnectionNumber + 1)
 	newDBConn.SetMaxIdleConns(MaxConnectionNumber)
 	if err = newDBConn.Ping(); err != nil {
 		closeDBConn(newDBConn)
@@ -403,28 +405,27 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 type DBConnProvider func(forceNewConn bool, randomCN bool) (*sql.DB, error)
 
 func IsRecordExisted(ctx context.Context, record []string, tbl *table.Table, getDBConn DBConnProvider) (bool, error) {
+	if tbl.Table != "statement_info" {
+		return false, nil
+	}
 	dbConn, err := getDBConn(false, false)
 	if err != nil {
 		return false, err
 	}
 
-	if tbl.Table == "statement_info" {
-		const stmtIDIndex = 0           // Replace with actual index for statement ID if different
-		const accountIdIndex = 4        // Replace with actual index for account_id (after account at index 3)
-		const statusIndex = 16          // Replace with actual index for status (shifted by 1 due to account_id)
-		const requestAtIndex = 13       // Replace with actual index for request_at (shifted by 1 due to account_id)
-		if len(record) <= statusIndex { // Use the largest index you will access
-			return false, nil
-		}
-		accountIdStr := record[accountIdIndex]
-		accountId, err := strconv.ParseUint(accountIdStr, 10, 32)
-		if err != nil {
-			return false, err
-		}
-		return isStatementExisted(ctx, dbConn, record[stmtIDIndex], record[statusIndex], record[requestAtIndex], uint32(accountId))
+	const stmtIDIndex = 0           // Replace with actual index for statement ID if different
+	const accountIdIndex = 4        // Replace with actual index for account_id (after account at index 3)
+	const statusIndex = 16          // Replace with actual index for status (shifted by 1 due to account_id)
+	const requestAtIndex = 13       // Replace with actual index for request_at (shifted by 1 due to account_id)
+	if len(record) <= statusIndex { // Use the largest index you will access
+		return false, nil
 	}
-
-	return false, nil
+	accountIdStr := record[accountIdIndex]
+	accountId, err := strconv.ParseUint(accountIdStr, 10, 32)
+	if err != nil {
+		return false, err
+	}
+	return isStatementExisted(ctx, dbConn, record[stmtIDIndex], record[statusIndex], record[requestAtIndex], uint32(accountId))
 }
 
 func isStatementExisted(ctx context.Context, db *sql.DB, stmtId string, status string, request_at string, accountId uint32) (bool, error) {

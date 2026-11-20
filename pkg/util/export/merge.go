@@ -15,8 +15,11 @@
 package export
 
 import (
+	"bufio"
 	"container/list"
 	"context"
+	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -26,7 +29,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/simdcsv"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -335,127 +337,74 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 	defer span.End()
 
 	// Control task concurrency
-	m.runningJobs <- struct{}{}
+	select {
+	case m.runningJobs <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	defer func() {
 		<-m.runningJobs
 	}()
 
 	// Step 3. do simple merge
 	var uploadFile = func(ctx context.Context, fp *FileMeta) error {
-		row := m.table.GetRow(ctx)
-		defer row.Free()
-		// open reader
 		reader, err := newETLReader(ctx, m.service, m.table, m.fs, fp.FilePath, fp.FileSize, m.mp)
 		if err != nil {
 			v2.TraceETLMergeOpenFailedCounter.Inc()
-			m.logger.Error(fmt.Sprintf("merge file meet read failed: %v", err))
 			return err
 		}
 		defer reader.Close()
-
-		cacheFileData := &SliceCache{}
-		defer cacheFileData.Reset()
-
-		// Read the first line to check if the record already exists
-		var existed bool
-		firstLine, err := reader.ReadLine()
-		if err != nil {
-			v2.TraceETLMergeReadFailedCounter.Inc()
-			m.logger.Error("failed to read the first line of the file",
-				logutil.PathField(fp.FilePath), zap.Error(err))
-			return err
-		}
-
-		if firstLine != nil {
-			if err = row.ParseRow(firstLine); err != nil {
-				v2.TraceETLMergeParseFailedCounter.Inc()
-				m.logger.Error("parse first ETL row failed",
-					logutil.TableField(m.table.GetIdentify()),
-					logutil.PathField(fp.FilePath),
-					logutil.VarsField(SubStringPrefixLimit(fmt.Sprintf("%v", firstLine), 102400)),
-				)
-				return err
+		read := func() ([]string, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
 			}
-
-			// Check if the first record already exists in the database
-			existed, err = db_holder.IsRecordExisted(ctx, firstLine, m.table, db_holder.GetOrInitDBConn)
-			if err != nil {
-				v2.TraceETLMergeExistFailedCounter.Inc()
-				m.logger.Error("error checking if the first record exists",
-					logutil.TableField(m.table.GetIdentify()),
-					logutil.PathField(fp.FilePath),
-					logutil.StatementField(firstLine[0]),
-					logutil.ErrorField(err),
-				)
-				return err
-			}
-
-			// Process the first line since it doesn't exist in the database
-			if !existed {
-				cacheFileData.Put(row)
-			} else {
-				v2.TraceETLMergeExistCounter.Inc()
-			}
-		}
-
-		// read all content if not existed
-		if !existed {
-			var line []string
-			line, err = reader.ReadLine()
-			for ; line != nil && err == nil; line, err = reader.ReadLine() {
-				if err = row.ParseRow(line); err != nil {
-					v2.TraceETLMergeParseFailedCounter.Inc()
-					m.logger.Error("parse ETL rows failed",
-						logutil.TableField(m.table.GetIdentify()),
-						logutil.PathField(fp.FilePath),
-						logutil.VarsField(SubStringPrefixLimit(fmt.Sprintf("%v", line), 102400)),
-					)
-					return err
-				}
-
-				cacheFileData.Put(row)
-			}
+			row, err := reader.ReadLine()
 			if err != nil {
 				v2.TraceETLMergeReadFailedCounter.Inc()
-				m.logger.Warn("failed to read file",
-					logutil.PathField(fp.FilePath), zap.Error(err))
+			}
+			return row, err
+		}
+		first, err := read()
+		if err != nil {
+			return err
+		}
+		if first != nil {
+			done, err := db_holder.IsRecordExisted(ctx, first, m.table, db_holder.GetOrInitDBConn)
+			if err != nil {
+				v2.TraceETLMergeExistFailedCounter.Inc()
 				return err
 			}
-		}
-
-		// sql insert
-		if cacheFileData.Size() > 0 {
-			if err = cacheFileData.Flush(m.table); err != nil {
+			if done {
+				v2.TraceETLMergeExistCounter.Inc()
+			} else if err := db_holder.WriteMergeFile(ctx, m.table, first, read, MAX_MERGE_INSERT_TIME); err != nil {
 				v2.TraceETLMergeWriteFailedCounter.Inc()
-				m.logger.Warn("failed do write",
-					logutil.PathField(fp.FilePath), zap.Error(err))
 				return err
 			}
-			cacheFileData.Reset()
 		}
-		// delete empty file or file already uploaded
-		// 2 situation: 1) record exist; 2) reset after Flush.
-		if cacheFileData.Size() == 0 {
-			if err = m.fs.Delete(ctx, fp.FilePath); err != nil {
-				v2.TraceETLMergeDeleteFailedCounter.Inc()
-				m.logger.Warn("failed to delete file",
-					logutil.PathField(fp.FilePath), zap.Error(err))
-				return err
-			} else {
-				m.logger.Warn("delete file", logutil.PathField(fp.FilePath))
-			}
+		if err := m.fs.Delete(ctx, fp.FilePath); err != nil {
+			v2.TraceETLMergeDeleteFailedCounter.Inc()
+			return err
 		}
 		v2.TraceETLMergeSuccessCounter.Inc()
 		return nil
 	}
-	var err error
-
+	var firstErr error
 	successCnt := 0
 	for _, fp := range files {
-		if err = uploadFile(ctx, fp); err != nil {
-			// todo: adjust the sleep settings
-			// Sleep 10 seconds to wait for the database to recover
-			time.Sleep(10 * time.Second)
+		if err := ctx.Err(); err != nil {
+			return errors.Join(firstErr, err)
+		}
+		if err := uploadFile(ctx, fp); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			timer := time.NewTimer(10 * time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return errors.Join(firstErr, ctx.Err())
+			case <-timer.C:
+			}
 			m.logger.Error("failed to upload file to MO",
 				logutil.TableField(m.table.GetIdentify()),
 				logutil.PathField(fp.FilePath),
@@ -471,7 +420,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 		zap.Int("success", successCnt),
 	)
 
-	return err
+	return firstErr
 }
 
 func SubStringPrefixLimit(str string, length int) string {
@@ -486,83 +435,111 @@ func SubStringPrefixLimit(str string, length int) string {
 	}
 }
 
+// ContentReader borrows a single CSV record until the next ReadLine.
 type ContentReader struct {
-	ctx     context.Context
-	path    string
-	idx     int
-	length  int
-	content [][]string
-
-	logger *log.MOLogger
-	reader *simdcsv.Reader
-	raw    io.ReadCloser
+	ctx         context.Context
+	raw         io.ReadCloser
+	input       *recordInput
+	buffer      *bufio.Reader
+	reader      *csv.Reader
+	recordLimit int64
 }
 
-// BatchReadRows ~= 20MB rawlog file has about 3700+ rows
-const BatchReadRows = 4000
+type recordInput struct {
+	ctx       context.Context
+	raw       io.Reader
+	offset    int64
+	remaining int64 // negative allows incremental reads while skipping comments
+}
 
-func NewContentReader(
-	ctx context.Context,
-	service string,
-	path string,
-	reader *simdcsv.Reader,
-	raw io.ReadCloser,
-) *ContentReader {
-	logger := runtime.ServiceRuntime(service).Logger().WithContext(ctx).Named(LoggerNameContentReader)
-	return &ContentReader{
-		ctx:     ctx,
-		path:    path,
-		length:  0,
-		content: make([][]string, BatchReadRows),
-		logger:  logger,
-		reader:  reader,
-		raw:     raw,
+func (r *recordInput) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
 	}
+	if r.remaining == 0 {
+		return 0, moerr.NewInvalidInput(r.ctx, "ETL CSV record exceeds the input byte limit")
+	}
+	if r.remaining > 0 && int64(len(p)) > r.remaining {
+		p = p[:r.remaining]
+	}
+	n, err := r.raw.Read(p)
+	r.offset += int64(n)
+	if r.remaining > 0 {
+		r.remaining -= int64(n)
+	}
+	return n, err
+}
+
+func newContentReader(ctx context.Context, raw io.ReadCloser) *ContentReader {
+	input := &recordInput{ctx: ctx, raw: raw, remaining: -1}
+	buffer := bufio.NewReader(input)
+	reader := csv.NewReader(buffer)
+	reader.Comma = table.CommonCsvOptions.FieldTerminator
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+	reader.ReuseRecord = true
+	return &ContentReader{ctx: ctx, raw: raw, input: input, buffer: buffer, reader: reader, recordLimit: int64(config.LargestEntryLimit)}
 }
 
 func (s *ContentReader) ReadLine() ([]string, error) {
-	if s.idx == s.length && s.reader != nil {
-		var cnt int
-		var err error
-		s.content, cnt, err = s.reader.Read(BatchReadRows, s.ctx, s.content)
+	if err := s.ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Skip physical comments and blank lines only between logical records.
+	// This keeps long comments out of the CSV parser's record scratch space.
+	for {
+		prefix, err := s.buffer.Peek(1)
+		if err == io.EOF {
+			return nil, nil
+		}
 		if err != nil {
 			return nil, err
-		} else if s.content == nil {
-			s.logger.Error("ContentReader.ReadLine.nil", logutil.PathField(s.path),
-				zap.Bool("nil", s.content == nil),
-				zap.Error(s.ctx.Err()),
-				zap.Bool("SupportedCPU", simdcsv.SupportedCPU()),
-			)
-			return nil, moerr.NewInternalError(s.ctx, "read files meet context Done")
 		}
-		if cnt < BatchReadRows {
-			//s.reader.Close() // DO NOT call, because it is a forever loop with empty op.
-			s.reader = nil
-			s.raw.Close()
-			s.raw = nil
-			s.logger.Debug("ContentReader.ReadLine.EOF", logutil.PathField(s.path), zap.Int("rows", cnt))
+		switch prefix[0] {
+		case '#':
+			for {
+				_, err := s.buffer.ReadSlice('\n')
+				if errors.Is(err, bufio.ErrBufferFull) {
+					continue
+				}
+				if err == io.EOF {
+					return nil, nil
+				}
+				if err != nil {
+					return nil, err
+				}
+				break
+			}
+			continue
+		case '\n':
+			_, _ = s.buffer.Discard(1)
+			continue
+		case '\r':
+			pair, err := s.buffer.Peek(2)
+			if err != nil && err != io.EOF {
+				return nil, err
+			}
+			if len(pair) == 2 && pair[1] == '\n' {
+				_, _ = s.buffer.Discard(2)
+				continue
+			}
 		}
-		s.idx = 0
-		s.length = cnt
-		s.logger.Debug("ContentReader.ReadLine", logutil.PathField(s.path), zap.Int("rows", cnt),
-			zap.Bool("SupportedCPU", simdcsv.SupportedCPU()),
-		)
+		break
 	}
-	if s.idx < s.length {
-		idx := s.idx
-		s.idx++
-		if len(s.content) == 0 {
-			s.logger.Error("ContentReader.ReadLine.nil",
-				logutil.PathField(s.path),
-				zap.Bool("nil", s.content == nil),
-				zap.Int("cached", len(s.content)),
-				zap.Int("idx", idx),
-				zap.Bool("SupportedCPU", simdcsv.SupportedCPU()),
-			)
-		}
-		return s.content[idx], nil
+
+	start := s.input.offset - int64(s.buffer.Buffered())
+	// Allow one byte of lookahead for exact-limit records ending at EOF.
+	s.input.remaining = max(0, s.recordLimit+1-int64(s.buffer.Buffered()))
+	row, err := s.reader.Read()
+	s.input.remaining = -1
+	if err != nil && err != io.EOF {
+		return nil, err
 	}
-	return nil, nil
+	if s.input.offset-int64(s.buffer.Buffered())-start > s.recordLimit {
+		return nil, moerr.NewInvalidInput(s.ctx, "ETL CSV record exceeds the input byte limit")
+	}
+	return row, nil
 }
 
 func (s *ContentReader) ReadRow(row *table.Row) error {
@@ -570,15 +547,7 @@ func (s *ContentReader) ReadRow(row *table.Row) error {
 }
 
 func (s *ContentReader) Close() {
-	capLen := cap(s.content)
-	s.content = s.content[:capLen]
-	for idx := range s.content {
-		s.content[idx] = nil
-	}
-	if s.raw != nil {
-		_ = s.raw.Close()
-		s.raw = nil
-	}
+	_ = s.raw.Close()
 }
 
 func newETLReader(
@@ -596,7 +565,6 @@ func newETLReader(
 	case table.TaeExtension:
 		r, err := etl.NewTaeReader(ctx, tbl, filePath, size, fs, mp)
 		if err != nil {
-			r.Close()
 			return nil, err
 		}
 		_, err = r.ReadAll(ctx)
@@ -620,7 +588,7 @@ func isETLFile(filePath string) bool {
 // failed case return: nil_reader, error
 func NewCSVReader(
 	ctx context.Context,
-	service string,
+	_ string,
 	fs fileservice.FileService,
 	path string,
 ) (ETLReader, error) {
@@ -641,54 +609,8 @@ func NewCSVReader(
 		return nil, err
 	}
 
-	// parse csv content
-	simdCsvReader := simdcsv.NewReaderWithOptions(reader,
-		table.CommonCsvOptions.FieldTerminator,
-		'#',
-		true,
-		true)
-
-	// return content Reader
-	return NewContentReader(ctx, service, path, simdCsvReader, reader), nil
+	return newContentReader(ctx, reader), nil
 }
-
-type Cache interface {
-	Put(*table.Row)
-	Size() int64
-	Flush(*table.Table) error
-	Reset()
-	IsEmpty() bool
-}
-
-type SliceCache struct {
-	m    [][]string
-	size int64
-}
-
-func (c *SliceCache) Flush(tbl *table.Table) error {
-	_, err := db_holder.WriteRowRecords(c.m, tbl, MAX_MERGE_INSERT_TIME)
-	c.Reset()
-	return err
-}
-
-func (c *SliceCache) Reset() {
-	for idx := range c.m {
-		c.m[idx] = nil
-	}
-	c.m = c.m[:0]
-	c.size = 0
-}
-
-func (c *SliceCache) IsEmpty() bool {
-	return len(c.m) == 0
-}
-
-func (c *SliceCache) Put(r *table.Row) {
-	c.m = append(c.m, r.GetCsvStrings())
-	c.size += r.Size()
-}
-
-func (c *SliceCache) Size() int64 { return c.size }
 
 func LongRunETLMerge(
 	ctx context.Context,
