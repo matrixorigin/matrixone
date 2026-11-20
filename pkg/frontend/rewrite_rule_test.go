@@ -715,6 +715,9 @@ func TestLoadRuleCacheUsesValidatedLaterRuleForIneligibleEarlierRule(t *testing.
 		wantErr                   bool
 	}{
 		{"ineligible earlier rule", left + " order by a", "", right, false},
+		{"distinct earlier rule", strings.Replace(left, "select a", "select distinct a", 1), "", right, false},
+		{"grouped earlier rule", left + " group by a", "", right, false},
+		{"aggregate earlier rule", strings.Replace(left, "select a", "select count(*) as a", 1), "", right, false},
 		{"ineligible later rule", left, "", right + " order by a", false},
 		{"different projection names", left, "", "select a as n from db1.t1 where a = 2", false},
 		{"unfiltered later rule absorbs invalid predicate", left, "", "select a from db1.t1", false},
@@ -2316,6 +2319,47 @@ func TestMergeRewriteRulesGetFormat(t *testing.T) {
 	require.Contains(t, merged, "where (get_format(DATE, locale_col) = 'x') or (a = 1)")
 }
 
+func TestSameEffectiveRewriteRulesAcrossModes(t *testing.T) {
+	const mode = "NO_BACKSLASH_ESCAPES"
+	const a = "select a from db1.t1"
+	for _, tc := range []struct {
+		name, oldKey, newKey, oldSQL, newSQL string
+		equal                                bool
+	}{
+		{"different spelling", "db1.t1", "db1.t1", a, "SELECT a FROM db1.t1", true},
+		{"same spelling different bytes", "db1.t1", "db1.t1", a + ` where code='a\tb'`, a + ` where code='a\tb'`, false},
+		{"changed predicate", "db1.t1", "db1.t1", a, a + " where a=2", false},
+		{"different table key", "db1.t1", "db1.t2", a, a, false},
+		{"unparseable winner", "db1.t1", "db1.t1", a, a + " where (", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.equal, sameEffectiveRewriteRules(t.Context(), map[string]string{tc.oldKey: tc.oldSQL}, map[string]string{tc.newKey: tc.newSQL}, "", mode, 1))
+		})
+	}
+}
+
+func TestMergeRewriteRulesProjectionAliases(t *testing.T) {
+	for _, tc := range []struct {
+		left, right string
+		compatible  bool
+	}{
+		{"a as 'N'", "a as 'n'", true}, {"a as 'N'", "a as n", true}, {"a as 'N'", "a as 'm'", false},
+		{"*, a as 'N'", "*, a as 'n'", true},
+	} {
+		t.Run(tc.left+" vs "+tc.right, func(t *testing.T) {
+			left := "select " + tc.left + " from db1.t1 where a=1"
+			right := "select " + tc.right + " from db1.t1 where a=2"
+			got, err := mergeRewriteRules(t.Context(), left, right)
+			require.NoError(t, err)
+			if tc.compatible {
+				require.Equal(t, "select "+tc.left+" from db1.t1 where (a=1) or (a=2)", got)
+			} else {
+				require.Equal(t, right, got)
+			}
+		})
+	}
+}
+
 func TestMergeRewriteRulesProjectionIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		left, right string
@@ -2326,6 +2370,11 @@ func TestMergeRewriteRulesProjectionIdentity(t *testing.T) {
 		{"`1`", "1", false},
 		{"CAST(1 AS ENUM('A','B'))", "CAST(1 AS ENUM('a','b'))", false},
 		{"concat(Code, 'A')", "concat(code, 'A')", true},
+		{"X'414a'", "X'414A'", true},
+		{"concat(X'414a','A')", "concat(X'414A','A')", true},
+		{"X'414a'", "X'414B'", false},
+		{"X'414a'", "X'00414a'", false},
+		{"X'414a'", "'AJ'", false},
 	} {
 		t.Run(tc.left+" vs "+tc.right, func(t *testing.T) {
 			left := "select " + tc.left + " as a from db1.t1 where n = 1"

@@ -520,6 +520,20 @@ Prepared statement needs to be re-prepared
 select a from db1.t_dup order by a;
 ➤ a[4,32,0]  𝄀
 2
+alter role test_rule_role_dup_projection_a add rule "select X'414a' as 'N' from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select X'414A' as 'n' from db1.t_dup where marker = 2" on table db1.t_dup;
+select hex(n) as label_bytes, count(*) as visible_rows from db1.t_dup group by n;
+➤ label_bytes[12,16,0]  ¦  visible_rows[-5,64,0]  𝄀
+414A  ¦  2
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule 'SELECT a FROM db1.t_dup' on table db1.t_dup;
+set sql_mode = '';
+prepare spelling_handle from 'select 1';
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute spelling_handle;
+➤ 1[-5,64,0]  𝄀
+1
+deallocate prepare spelling_handle;
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
 alter role test_rule_role_expr_projection_a add rule "select a + 1 as b from db1.t_dup where marker = 1" on table db1.t_dup;

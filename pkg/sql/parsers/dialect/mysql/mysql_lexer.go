@@ -557,7 +557,9 @@ func (l *Lexer) Lex(lval *yySymType) int {
 
 	l.previousToken = l.lastToken
 	l.lastToken = typ
-	if l.foldNames && (typ == ID || typ != 0 && keywords[strings.ToLower(str)] == typ) {
+	// HEXNUM retains its digits for binding. Fold only their case for the
+	// comparison parse; token type, width and leading zero bytes still matter.
+	if l.foldNames && (typ == ID || typ == HEXNUM || typ != 0 && keywords[strings.ToLower(str)] == typ) {
 		str = strings.ToLower(str)
 	}
 	lval.str = str

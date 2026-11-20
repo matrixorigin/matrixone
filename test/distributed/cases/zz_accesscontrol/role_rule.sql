@@ -515,6 +515,24 @@ execute protected_handle;
 select a from db1.t_dup order by a;
 -- @session
 
+-- Equivalent quoted aliases and hex digits still union base rows.
+alter role test_rule_role_dup_projection_a add rule "select X'414a' as 'N' from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select X'414A' as 'n' from db1.t_dup where marker = 2" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select hex(n) as label_bytes, count(*) as visible_rows from db1.t_dup group by n;
+-- @session
+
+-- A later unfiltered rule can keep its original spelling across a mode reload.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule 'SELECT a FROM db1.t_dup' on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = '';
+prepare spelling_handle from 'select 1';
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute spelling_handle;
+deallocate prepare spelling_handle;
+-- @session
+
 -- 19. Row-wise expression projections also merge without dropping role visibility
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;

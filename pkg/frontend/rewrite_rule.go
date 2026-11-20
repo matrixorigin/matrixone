@@ -366,17 +366,9 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 		if key != rewriteRuleKeyForTenant(ses, ses.GetTenantInfo()) {
 			continue
 		}
-		same := !loaded || maps.Equal(previous, rules)
-		if same && loaded && cachedKey.sqlMode != key.sqlMode {
-			// Identical source can decode to different predicates after SET sql_mode.
-			// Compare outside both locks; revision below guards publication.
-			for _, rule := range rules {
-				if !sameDecodedRewriteRule(ctx, rule, cachedKey.sqlMode, key.sqlMode, parserLowerCaseTableNames(ses)) {
-					same = false
-					break
-				}
-			}
-		}
+		// Compare outside both locks; revision below guards publication. On a
+		// mode change neither identical nor different SQL spelling is decisive.
+		same := !loaded || sameEffectiveRewriteRules(ctx, previous, rules, cachedKey.sqlMode, key.sqlMode, parserLowerCaseTableNames(ses))
 		ses.mu.Lock()
 		ses.ruleCacheMu.Lock()
 		if generation != ses.rewritePolicyGeneration || ses.ruleCacheRevision != revision {
@@ -1434,13 +1426,22 @@ func rewriteRulePrecedenceShape(stmt tree.Statement, source string) (*rewriteRul
 	}
 }
 
-func sameDecodedRewriteRule(ctx context.Context, rule, oldMode, newMode string, lower int64) bool {
-	old, err := mysql.ParseOneWithSQLMode(ctx, rule, lower, oldMode)
+func sameEffectiveRewriteRules(ctx context.Context, oldRules, newRules map[string]string, oldMode, newMode string, lower int64) bool {
+	if oldMode == newMode {
+		return maps.Equal(oldRules, newRules)
+	}
+	return maps.EqualFunc(oldRules, newRules, func(oldSQL, newSQL string) bool {
+		return sameDecodedRewriteRule(ctx, oldSQL, newSQL, oldMode, newMode, lower)
+	})
+}
+
+func sameDecodedRewriteRule(ctx context.Context, oldSQL, newSQL, oldMode, newMode string, lower int64) bool {
+	old, err := mysql.ParseOneWithSQLMode(ctx, oldSQL, lower, oldMode)
 	if err != nil {
 		return false
 	}
 	defer old.Free()
-	next, err := mysql.ParseOneWithSQLMode(ctx, rule, lower, newMode)
+	next, err := mysql.ParseOneWithSQLMode(ctx, newSQL, lower, newMode)
 	if err != nil {
 		return false
 	}
@@ -1454,14 +1455,18 @@ func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string) (*rewrit
 		return nil, false
 	}
 	defer full.Free()
-	shape, ok := rewriteRuleMergeShapeForStatement(full)
-	if !ok {
-		// Only a structural disqualifier is conclusive without resolving the
-		// projection in the session mode. Otherwise retain the parse error.
-		ordered, yes := full.(*tree.Select)
-		return nil, yes && (len(ordered.OrderBy) > 0 || ordered.Limit != nil || ordered.With != nil)
+	s := rewriteRuleSelect(full)
+	if s == nil {
+		return nil, false
 	}
-	span := sources[shape.clause.Where]
+	if !rewriteRuleSelectModifiersAllowMerge(s) {
+		return nil, true
+	}
+	clause, ok := s.Select.(*tree.SelectClause)
+	if !ok {
+		return nil, false
+	}
+	span := sources[clause.Where]
 	prefix, _, suffix, available := span.Split(rule, true)
 	if !available {
 		return nil, false
@@ -1474,11 +1479,17 @@ func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string) (*rewrit
 		return nil, false
 	}
 	defer st.Free()
-	shape, ok = rewriteRuleMergeShapeForStatement(st)
-	if !ok || newSources[shape.clause.Where].Start != span.Start || newSources[shape.clause.Where].End != len(prefix)+len(" true") {
+	s = rewriteRuleSelect(st)
+	if s == nil {
 		return nil, false
 	}
-	return &rewriteRuleMergeShape{source: neutral, table: shape.table}, true
+	clause, ok = s.Select.(*tree.SelectClause)
+	if !ok || newSources[clause.Where].Start != span.Start || newSources[clause.Where].End != len(prefix)+len(" true") {
+		return nil, false
+	}
+	// Reuse the ordinary eligibility test, including grouping, DISTINCT and
+	// aggregate projections. The neutral statement is proof, never executable.
+	return rewriteRulePrecedenceShape(st, neutral)
 }
 
 func sameRewriteShape(ctx context.Context, l, r *rewriteRuleMergeShape, mode string) (bool, error) {
@@ -1505,7 +1516,13 @@ func sameRewriteShape(ctx context.Context, l, r *rewriteRuleMergeShape, mode str
 	if !okA || !okB {
 		return false, moerr.NewInvalidInput(ctx, "cannot compare rewrite projections")
 	}
-	return reflect.DeepEqual(a.clause.Exprs, b.clause.Exprs), nil
+	return slices.EqualFunc(a.clause.Exprs, b.clause.Exprs, func(x, y tree.SelectExpr) bool {
+		// A STRING token used as an alias is an identifier, not a literal.
+		if x.As == nil || y.As == nil {
+			return x.As == y.As && reflect.DeepEqual(x.Expr, y.Expr)
+		}
+		return x.As.Compare() == y.As.Compare() && reflect.DeepEqual(x.Expr, y.Expr)
+	}), nil
 }
 
 func rewriteRuleMergeShapeForRule(ctx context.Context, rule, sqlMode string) (*rewriteRuleMergeShape, bool, error) {
@@ -1522,22 +1539,26 @@ func rewriteRuleMergeShapeForRule(ctx context.Context, rule, sqlMode string) (*r
 }
 
 func rewriteRuleMergeShapeForStatement(stmt tree.Statement) (*rewriteRuleMergeShape, bool) {
+	return rewriteRuleMergeShapeForSelect(rewriteRuleSelect(stmt))
+}
+
+func rewriteRuleSelect(stmt tree.Statement) *tree.Select {
 	switch s := stmt.(type) {
 	case *tree.Select:
-		return rewriteRuleMergeShapeForSelect(s)
+		return s
 	case *tree.ParenSelect:
-		if s.Select == nil {
-			return nil, false
-		}
-		return rewriteRuleMergeShapeForStatement(s.Select)
+		return s.Select
 	default:
-		return nil, false
+		return nil
 	}
 }
 
+func rewriteRuleSelectModifiersAllowMerge(stmt *tree.Select) bool {
+	return len(stmt.OrderBy) == 0 && stmt.Limit == nil && stmt.With == nil && stmt.TimeWindow == nil && stmt.RankOption == nil && stmt.Ep == nil && stmt.SelectLockInfo == nil
+}
+
 func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, bool) {
-	if stmt == nil || len(stmt.OrderBy) > 0 || stmt.Limit != nil || stmt.With != nil ||
-		stmt.TimeWindow != nil || stmt.RankOption != nil || stmt.Ep != nil || stmt.SelectLockInfo != nil {
+	if stmt == nil || !rewriteRuleSelectModifiersAllowMerge(stmt) {
 		return nil, false
 	}
 
