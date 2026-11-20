@@ -646,6 +646,21 @@ func downloadStarted(ctx context.Context) {
 	}
 }
 
+type downloadWaitingKey struct{}
+
+// withDownloadWaiting returns ctx, through which a download calls waiting when it waits
+// for a connection, holding nothing.
+func withDownloadWaiting(ctx context.Context, waiting func()) context.Context {
+	return context.WithValue(ctx, downloadWaitingKey{}, waiting)
+}
+
+// downloadWaiting tells the download ctx is for that it waits for a connection.
+func downloadWaiting(ctx context.Context) {
+	if waiting, ok := ctx.Value(downloadWaitingKey{}).(func()); ok {
+		waiting()
+	}
+}
+
 func (s *S3FS) PrefetchObject(ctx context.Context, req ObjectPrefetch) error {
 	// An object the index-file cache holds is not downloaded into the disk cache.
 	if GetFileServicePolicy(ctx).Any(IndexFileObject) && s.cachesIndexObjects() {
@@ -797,8 +812,9 @@ const prefetchFilesAtOnce = 4
 var errPrefetchDeleted = moerr.NewInternalErrorNoCtx("fileservice: object deleted during a prefetch")
 
 // prefetchFiles downloads each of ranges of the object at filePath as a FilePrefetchObject,
-// prefetchFilesAtOnce at a time. The prefetch counts as started once the first ranges are
-// under way; a read of a range not yet under way reads its own bytes. No range starts once
+// prefetchFilesAtOnce at a time. The prefetch counts as started once the first range of
+// each worker is under way or waits for a connection; a read of a range not under way
+// reads its own bytes. No range starts once
 // the object was deleted after the disk cache counted deletes deleted ones.
 func (s *S3FS) prefetchFiles(ctx context.Context, filePath string, deletes uint64, ranges []PrefetchRange, open rangeOpener) error {
 	objectPath := s.diskCache.pathForFile(filePath)
@@ -828,7 +844,7 @@ func (s *S3FS) prefetchFiles(ctx context.Context, filePath string, deletes uint6
 					continue
 				}
 				r := ranges[i]
-				_, errs[i] = s.diskCache.prefetchFile(withDownloadStarted(ctx, underWay), filePath, r.Offset, r.Offset+r.Size, open)
+				_, errs[i] = s.diskCache.prefetchFile(withDownloadWaiting(withDownloadStarted(ctx, underWay), mark), filePath, r.Offset, r.Offset+r.Size, open)
 			}
 		}()
 	}

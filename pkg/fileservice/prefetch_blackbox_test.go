@@ -281,6 +281,70 @@ func TestBlackBoxForegroundReadNotHeldByBufferOfWaitingRange(t *testing.T) {
 	require.Equal(t, 1, total, "only the read reads the object")
 }
 
+// A column read of a range of a running prefetch whose range waits for a connection, held
+// by another object's download, reads its own bytes; once the connection is free, the
+// prefetch caches the range.
+func TestBlackBoxColumnReadNotHeldByPrefetchWaitingForConnection(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
+	ctx := context.Background()
+	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
+		Policy: SkipDiskCache | SkipMemoryCache}))
+	ranges := columnRanges(2, 40<<10, 1<<10)
+	fs.diskCache.maxDownloadConns = 1
+	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
+	g := newBlackBoxStorage(fs.storage, func(key string, _ int64) bool { return key == otherKey })
+	fs.storage = g
+	release := sync.OnceFunc(func() { close(g.gate) })
+	defer release()
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "other", Size: int64(len(data)), Scan: &PrefetchScan{}}))
+	require.Eventually(t, func() bool { cur, _, _ := g.counts(otherKey); return cur == 1 }, 5*time.Second, time.Millisecond,
+		"the whole download of other holds the connection")
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 2 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
+	require.Eventually(t, func() bool { return fs.prefetcher.isRunning("object") }, 5*time.Second, time.Millisecond)
+	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	got, err := readColumnRange(readCtx, fs, ranges[0])
+	require.NoError(t, err)
+	require.Equal(t, data[ranges[0].Offset:ranges[0].Offset+ranges[0].Size], got)
+	require.True(t, fs.prefetcher.isRunning("object"), "the prefetch still waits")
+	release()
+	require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("object") }, 5*time.Second, time.Millisecond)
+	key := fs.diskCache.rangeObjectKey("object")
+	for _, r := range ranges {
+		_, cached := fs.diskCache.ranges.covering(key, r.Offset, r.Size)
+		require.True(t, cached)
+	}
+	_, _, total := g.counts(objectKey)
+	require.Equal(t, 2, total, "the prefetch reads only the range the read did not")
+}
+
+// A column read of a range of a running prefetch of ranges downloading to files, whose
+// range waits for a connection held by another object's download, reads its own bytes.
+func TestBlackBoxColumnReadNotHeldByFilePrefetchWaitingForConnection(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
+	ctx := context.Background()
+	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
+		Policy: SkipDiskCache | SkipMemoryCache}))
+	ranges := columnRanges(2, 40<<10, 16<<10)
+	fs.diskCache.maxDownloadConns = 1
+	fs.diskCache.memoryPrefetchMax = 16 << 10
+	otherKey := fs.pathToKey("other")
+	g := newBlackBoxStorage(fs.storage, func(key string, _ int64) bool { return key == otherKey })
+	fs.storage = g
+	release := sync.OnceFunc(func() { close(g.gate) })
+	defer release()
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "other", Size: int64(len(data)), Scan: &PrefetchScan{}}))
+	require.Eventually(t, func() bool { cur, _, _ := g.counts(otherKey); return cur == 1 }, 5*time.Second, time.Millisecond,
+		"the whole download of other holds the connection")
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 32 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
+	require.Eventually(t, func() bool { return fs.prefetcher.isRunning("object") }, 5*time.Second, time.Millisecond)
+	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	got, err := readColumnRange(readCtx, fs, ranges[0])
+	require.NoError(t, err)
+	require.Equal(t, data[ranges[0].Offset:ranges[0].Offset+ranges[0].Size], got)
+}
+
 // A memory-backed column prefetch whose ranges wait for a connection ends once its object
 // is deleted, while the download holding the connection still runs.
 func TestBlackBoxMemoryColumnPrefetchWaitingForConnectionEndsOnDelete(t *testing.T) {

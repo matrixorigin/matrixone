@@ -1075,6 +1075,7 @@ func (d *DiskCache) writeFileTo(
 				metric.FSDiskCacheDownloadSkippedCounter.Inc()
 				return false, nil
 			}
+			downloadWaiting(ctx)
 			if err := d.waitDownloadConns(ctx, 1); err != nil {
 				return false, err
 			}
