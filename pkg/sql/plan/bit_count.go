@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,7 +26,7 @@ import (
 // Only table dump origin validation uses the released expression binding.
 type releasedBitCountDumpBindingKey struct{}
 
-func bitCountFloatFieldOverload(oid types.T) int32 {
+func releasedBitCountFloatOverload(oid types.T) int32 {
 	switch oid { // typeswitch:partial only native MySQL FLOAT and DOUBLE fields select the rounding overload.
 	case types.T_float32:
 		return function.BitCountRoundedFloat32Overload
@@ -38,9 +37,9 @@ func bitCountFloatFieldOverload(oid types.T) int32 {
 	}
 }
 
-func bindBitCountFloatField(ctx context.Context, args []*Expr) (*Expr, error) {
+func bindBitCountFloatOverload(ctx context.Context, args []*Expr, overload int32) (*Expr, error) {
 	t := makeTypeByPlan2Expr(args[0])
-	f, err := function.GetFunctionByNameWithOverload(ctx, "bit_count", []types.Type{t}, bitCountFloatFieldOverload(t.Oid))
+	f, err := function.GetFunctionByNameWithOverload(ctx, "bit_count", []types.Type{t}, overload)
 	if err != nil {
 		return nil, err
 	}
@@ -123,42 +122,63 @@ func bitCountInSubqueryCanReduce(scope *BindContext, sub *plan.SubqueryRef) bool
 	return sub.Typ == plan.SubqueryRef_IN || sub.Typ == plan.SubqueryRef_ANY && sub.Op == "="
 }
 
+// Only evaluate bounded trees of SQL predicates on constants. General
+// constant folding also admits functions that can have external effects.
+func bitCountConstantPredicate(expr *Expr, budget *int) bool {
+	if expr == nil || *budget == 0 {
+		return false
+	}
+	*budget -= 1
+	if expr.GetLit() != nil || expr.GetT() != nil {
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	switch id {
+	case function.CAST:
+		typ := types.Type{Oid: types.T(expr.Typ.Id)}
+		if typ.Oid != types.T_bool && !typ.IsNumeric() {
+			return false
+		}
+	case function.EQUAL, function.NOT_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL,
+		function.LESS_THAN, function.LESS_EQUAL, function.NULL_SAFE_EQUAL,
+		function.AND, function.OR, function.XOR, function.NOT,
+		function.IS, function.ISNOT, function.ISNULL, function.ISNOTNULL,
+		function.ISTRUE, function.ISNOTTRUE, function.ISFALSE, function.ISNOTFALSE,
+		function.PLUS, function.MINUS, function.MULTI, function.DIV, function.MOD,
+		function.UNARY_PLUS, function.UNARY_MINUS:
+	default:
+		return false
+	}
+	for _, arg := range fn.Args {
+		if !bitCountConstantPredicate(arg, budget) {
+			return false
+		}
+	}
+	return true
+}
+
 func bitCountWhereIsEffectivelyTrue(builder *QueryBuilder, ctx *BindContext) bool {
 	if ctx == nil {
 		return false
 	}
 	for _, filter := range ctx.whereFilters {
-		lit := filter.GetLit()
-		if filter.Typ.Id == int32(types.T_bool) && lit != nil && !lit.Isnull && lit.GetBval() {
-			continue
-		}
-		fn := filter.GetF()
-		if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil {
-			return false
-		}
-		switch fn.Func.GetObjName() {
-		case "=", "<>", "!=", "<", "<=", ">", ">=":
-		default:
-			return false
-		}
-		if fn.Args[0].GetLit() == nil || fn.Args[1].GetLit() == nil {
-			return false
-		}
-		if fn.Func.GetObjName() == "=" && reflect.DeepEqual(fn.Args[0].Typ, fn.Args[1].Typ) {
-			left, right := fn.Args[0].GetLit(), fn.Args[1].GetLit()
-			if left != nil && right != nil && !left.Isnull && !right.Isnull && reflect.DeepEqual(left, right) {
-				continue
+		folded := filter
+		if filter.GetLit() == nil {
+			budget := 32
+			if builder == nil || builder.compCtx == nil || !bitCountConstantPredicate(filter, &budget) {
+				return false
+			}
+			var err error
+			folded, err = ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(filter), builder.compCtx.GetProcess(), false, false)
+			if err != nil || folded == nil {
+				return false
 			}
 		}
-		// The SELECT/IN transform may remove literal comparisons before reducing
-		// the RHS. Fold only two already-bound literals under a comparison
-		// operator; general constant folding can call external functions.
-		if builder == nil || builder.compCtx == nil {
-			return false
-		}
-		folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(filter), builder.compCtx.GetProcess(), false, true)
-		if err != nil || folded == nil || folded.GetLit() == nil || folded.GetLit().Isnull ||
-			folded.Typ.Id != int32(types.T_bool) || !folded.GetLit().GetBval() {
+		if lit := folded.GetLit(); folded.Typ.Id != int32(types.T_bool) || lit == nil || lit.Isnull || !lit.GetBval() {
 			return false
 		}
 	}
@@ -219,24 +239,49 @@ func bitCountProjectionDependsOnRows(builder *QueryBuilder, expr *Expr, direct b
 
 // A mergeable projection forwards its operand's conversion. A materialized
 // query block exposes a field even when the original expression was a CAST.
-func (b *baseBinder) bitCountReadsFloatField(expr *Expr) bool {
+func (b *baseBinder) bitCountFloatOverload(expr *Expr) int32 {
+	field, expression := function.BitCountFloat64FieldOverload, function.BitCountFloat64ExpressionOverload
+	if expr.Typ.Id == int32(types.T_float32) {
+		field, expression = function.BitCountFloat32FieldOverload, function.BitCountFloat32ExpressionOverload
+	}
 	// A same-block group slot represents the original GROUP BY expression.
 	// Inspect its conversion without replacing the slot used for evaluation.
 	if col := expr.GetCol(); col != nil && b.ctx != nil && b.ctx.groupTag > 0 &&
 		col.RelPos == b.ctx.groupTag && col.ColPos >= 0 && int(col.ColPos) < len(b.ctx.groups) {
 		expr = b.ctx.groups[col.ColPos]
 	}
-	if b.builder == nil || b.builder.qry == nil {
-		return expr.GetCol() != nil || expr.GetCorr() != nil
-	}
 	// Projections are bound before consumers. The decreasing node ID keeps
 	// recursive or self-referencing projections from reopening the lookup.
-	nodes := b.builder.qry.Nodes
+	var nodes []*plan.Node
+	if b.builder != nil && b.builder.qry != nil {
+		nodes = b.builder.qry.Nodes
+	}
 	limit := len(nodes)
 	for {
-		if fn := expr.GetF(); fn != nil && fn.Func != nil &&
-			fn.Func.GetObjName() == "cast" && fn.GetSyntaxExplicitCast() {
-			return false
+		if fn := expr.GetF(); fn != nil && fn.Func != nil {
+			id, _ := function.DecodeOverloadID(fn.Func.GetObj())
+			switch id {
+			case function.CASE:
+				// IFNULL converts its common result, even after lowering to CASE.
+				if expr.GetPreparedNumeric().GetIfnullCommonValue() {
+					return int32(expression)
+				}
+				return -1
+			case function.CAST, function.IFF:
+				// Conditionals can select operands with different conversion rules.
+				return -1
+			case function.UNARY_PLUS:
+				expr = fn.Args[0]
+				continue
+			default:
+				return int32(expression)
+			}
+		}
+		if nodes == nil {
+			if expr.GetCol() != nil || expr.GetCorr() != nil {
+				return int32(field)
+			}
+			return -1
 		}
 		if sub := expr.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
 			var scope *BindContext
@@ -245,7 +290,7 @@ func (b *baseBinder) bitCountReadsFloatField(expr *Expr) bool {
 			}
 			if scope == nil || !scope.reducibleTablelessScalar || sub.Child != nil || sub.RowSize != 1 ||
 				len(scope.projects) != 1 || scope.hasDependentProjectionSubquery {
-				return true
+				return int32(field)
 			}
 			expr = scope.projects[0]
 			continue
@@ -256,27 +301,27 @@ func (b *baseBinder) bitCountReadsFloatField(expr *Expr) bool {
 		} else if col := expr.GetCorr(); col != nil {
 			tag, pos = col.RelPos, col.ColPos
 		} else {
-			return false
+			return -1
 		}
 		id, ok := b.builder.tag2NodeID[tag]
 		if !ok || id < 0 || int(id) >= limit {
 			// Aggregate and window outputs can be bound before their node.
-			return true
+			return int32(field)
 		}
 		limit = int(id)
 		node := nodes[id]
 		if node.NodeType != plan.Node_PROJECT || pos < 0 || int(pos) >= len(node.ProjectList) {
-			return true
+			return int32(field)
 		}
 		scope := b.builder.ctxByNode[id]
 		if scope != nil && (scope.isDistinct || scope.hasHaving || len(scope.aggregates) != 0 ||
 			len(scope.groups) != 0 || len(scope.windows) != 0 || scope.hasDependentProjectionSubquery) {
-			return true
+			return int32(field)
 		}
 		for current := node; ; {
 			if current.Limit != nil || current.Offset != nil || current.NodeType == plan.Node_VALUE_SCAN ||
 				current.NodeType == plan.Node_MATERIAL || isPreparedSetOperationNode(current.NodeType) {
-				return true
+				return int32(field)
 			}
 			if len(current.Children) != 1 || b.builder.ctxByNode[current.Children[0]] != scope {
 				break

@@ -8920,6 +8920,34 @@ var supportedMathBuiltIns = []FuncNew{
 				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
 				newOp:      func() executeLogicOfOverload { return bitCountTruncatedFloat[float64] },
 			},
+			{
+				// Match the reference x86 FLOAT field conversion on signed overflow.
+				overloadId: BitCountFloat32FieldOverload,
+				args:       []types.T{types.T_float32},
+				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return bitCountFloatField[float32](0x1p63, math.MinInt64) },
+			},
+			{
+				// DOUBLE fields saturate inclusively at the largest double below 2^63.
+				overloadId: BitCountFloat64FieldOverload,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return bitCountFloatField[float64](0x1.fffffffffffffp62, math.MaxInt64) },
+			},
+			{
+				overloadId:           BitCountFloat32ExpressionOverload,
+				args:                 []types.T{types.T_float32},
+				rowScopedDiagnostics: true,
+				retType:              func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:                func() executeLogicOfOverload { return bitCountFloatExpression[float32] },
+			},
+			{
+				overloadId:           BitCountFloat64ExpressionOverload,
+				args:                 []types.T{types.T_float64},
+				rowScopedDiagnostics: true,
+				retType:              func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:                func() executeLogicOfOverload { return bitCountFloatExpression[float64] },
+			},
 		},
 	},
 

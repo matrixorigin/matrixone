@@ -1006,9 +1006,37 @@ const (
 	BitCountRoundedFloat32Overload = 8
 	BitCountRoundedFloat64Overload = 9
 
-	bitCountTruncatedFloat32Overload = 15
-	bitCountTruncatedFloat64Overload = 16
+	bitCountTruncatedFloat32Overload  = 15
+	bitCountTruncatedFloat64Overload  = 16
+	BitCountFloat32FieldOverload      = 17
+	BitCountFloat64FieldOverload      = 18
+	BitCountFloat32ExpressionOverload = 19
+	BitCountFloat64ExpressionOverload = 20
 )
+
+func IsBitCountFloatOverload(overload int32) bool {
+	return overload == BitCountRoundedFloat32Overload || overload == BitCountRoundedFloat64Overload ||
+		overload >= bitCountTruncatedFloat32Overload && overload <= BitCountFloat64ExpressionOverload
+}
+
+func bitCountFloatField[T constraints.Float](upperBound float64, saturated int64) executeLogicOfOverload {
+	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		return opUnaryFixedToFixedWithErrorCheck[T, uint64](ivecs, result, proc, length, func(v T) (uint64, error) {
+			rounded := math.RoundToEven(float64(v))
+			if rounded >= upperBound {
+				return bitCountFromSignedInt64Pattern(saturated), nil
+			}
+			return bitCountFromFloat(rounded, proc)
+		}, selectList)
+	}
+}
+
+func bitCountFloatExpression[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithErrorCheck[T, uint64](ivecs, result, proc, length, func(v T) (uint64, error) {
+		value, err := explicitFloatToInt64(float64(v))
+		return bitCountFromSignedInt64Pattern(value), err
+	}, selectList)
+}
 
 func bitCountRoundedFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixedWithErrorCheck[T, uint64](ivecs, result, proc, length, func(v T) (uint64, error) {
