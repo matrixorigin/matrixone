@@ -28,6 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
 
@@ -451,4 +454,41 @@ func TestJoinMapRefCount(t *testing.T) {
 	jm.Free()
 	require.False(t, jm.IsValid())
 	require.Nil(t, jm.shm)
+}
+
+func TestJoinMapBuildPayloadChecks(t *testing.T) {
+	mp := mpool.MustNewZero()
+	build := batch.NewWithSize(3)
+	jm := NewJoinMap(GroupSels{}, nil, nil, nil, []*batch.Batch{build}, mp)
+	jm.IncRef(1)
+	t.Cleanup(func() {
+		jm.Free()
+		require.Nil(t, jm.payloadColumnChecks)
+		require.Zero(t, mp.CurrNB())
+	})
+	for i, width := range []int{32, 128, 512} {
+		build.Vecs[i] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(build.Vecs[i], make([]byte, width), false, mp))
+	}
+	build.SetRowCount(1)
+
+	type checks struct{ fits, exceeds bool }
+	const consumers = 8
+	results := make(chan checks, consumers)
+	jm.IncRef(consumers)
+	for range consumers {
+		go func() {
+			result := checks{!jm.BuildPayloadExceeds(0, 64), jm.BuildPayloadExceeds(1, 64)}
+			jm.Free()
+			results <- result
+		}()
+	}
+	for range consumers {
+		require.Equal(t, checks{true, true}, <-results)
+	}
+	require.NotZero(t, jm.payloadColumnChecks[0])
+	require.NotZero(t, jm.payloadColumnChecks[1])
+	require.Zero(t, jm.payloadColumnChecks[2], "unprojected column")
+	require.False(t, jm.BuildPayloadExceeds(1, 128), "use the caller's byte limit")
+	require.True(t, jm.BuildPayloadExceeds(1, 64))
 }
