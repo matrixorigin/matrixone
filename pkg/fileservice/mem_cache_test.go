@@ -1335,6 +1335,11 @@ func TestMemoryCacheEvictToCapacityPercent(t *testing.T) {
 	}
 	assert.Equal(t, int64(10), cache.cache.Used())
 
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	assert.NotContains(t, EvictMemoryCachesToCapacityPercent(cancelled, 50), "test-target-evict")
+	assert.Equal(t, int64(10), cache.cache.Used())
+
 	ret := EvictMemoryCachesToCapacityPercent(ctx, 50)
 	assert.Equal(t, int64(5), ret["test-target-evict"])
 	assert.LessOrEqual(t, cache.cache.Used(), int64(5))
