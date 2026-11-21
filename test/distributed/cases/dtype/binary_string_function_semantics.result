@@ -79,16 +79,16 @@ select id, hex(coalesce(txt, bin)), char_length(coalesce(txt, bin)),
 charset(coalesce(txt, bin)), collation(coalesce(txt, bin))
 from domains order by id;
 ➤ id[4,32,0]  ¦  hex(coalesce(txt, bin))[-1,16383,0]  ¦  char_length(coalesce(txt, bin))[-5,64,0]  ¦  charset(coalesce(txt, bin))[12,65535,0]  ¦  collation(coalesce(txt, bin))[12,65535,0]  𝄀
-1  ¦  E4BDA061  ¦  2  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
-2  ¦  E4BDA061  ¦  4  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
-3  ¦  E4BDA061  ¦  2  ¦  utf8mb4  ¦  utf8mb4_general_ci
+1  ¦  E4BDA061  ¦  2  ¦  binary  ¦  binary  𝄀
+2  ¦  E4BDA061  ¦  4  ¦  binary  ¦  binary  𝄀
+3  ¦  E4BDA061  ¦  2  ¦  binary  ¦  binary
 select id, hex(left(coalesce(txt, bin), 1)), hex(reverse(coalesce(txt, bin))),
 char_length(concat(coalesce(txt, bin), 'x'))
 from domains order by id;
 ➤ id[4,32,0]  ¦  hex(left(coalesce(txt, bin), 1))[-1,16383,0]  ¦  hex(reverse(coalesce(txt, bin)))[-1,16383,0]  ¦  char_length(concat(coalesce(txt, bin), x))[-5,64,0]  𝄀
-1  ¦  E4BDA0  ¦  61E4BDA0  ¦  3  𝄀
+1  ¦  E4BDA0  ¦  61E4BDA0  ¦  5  𝄀
 2  ¦  E4  ¦  61A0BDE4  ¦  5  𝄀
-3  ¦  E4BDA0  ¦  61E4BDA0  ¦  3
+3  ¦  E4BDA0  ¦  61E4BDA0  ¦  5
 select id, field(left(coalesce(txt, bin), 1), '你', X'e4'),
 hex(left(coalesce(txt, bin), 1)) from domains order by id;
 ➤ id[4,32,0]  ¦  field(left(coalesce(txt, bin), 1), 你, 0xe4)[-5,64,0]  ¦  hex(left(coalesce(txt, bin), 1))[-1,16383,0]  𝄀
@@ -466,7 +466,7 @@ char_length(concat_ws(sep, first_value, second_value)),
 charset(concat_ws(sep, first_value, second_value))
 from concat_ws_domains order by id;
 ➤ id[4,32,0]  ¦  hex(concat_ws(sep, first_value, second_value))[12,258,0]  ¦  char_length(concat_ws(sep, first_value, second_value))[-5,64,0]  ¦  charset(concat_ws(sep, first_value, second_value))[12,65535,0]  𝄀
-1  ¦  E4BDA0  ¦  1  ¦  binary  𝄀
+1  ¦  E4BDA0  ¦  3  ¦  binary  𝄀
 2  ¦  E4BDA02D61  ¦  5  ¦  binary
 create table collation_domains (
 ci varchar(16) collate utf8mb4_general_ci,
@@ -510,12 +510,12 @@ set @selected_text = if(false, X'ff', '你a');
 select charset(@selected_text), collation(@selected_text),
 char_length(@selected_text), hex(left(@selected_text, 1));
 ➤ charset(@selected_text)[12,65535,0]  ¦  collation(@selected_text)[12,65535,0]  ¦  char_length(@selected_text)[-5,64,0]  ¦  hex(left(@selected_text, 1))[-1,16383,0]  𝄀
-binary  ¦  binary  ¦  2  ¦  E4BDA0
+binary  ¦  binary  ¦  4  ¦  E4
 select if(false, X'ff', '你a') into @selected_text_into;
 select charset(@selected_text_into), collation(@selected_text_into),
 char_length(@selected_text_into), hex(left(@selected_text_into, 1));
 ➤ charset(@selected_text_into)[12,65535,0]  ¦  collation(@selected_text_into)[12,65535,0]  ¦  char_length(@selected_text_into)[-5,64,0]  ¦  hex(left(@selected_text_into, 1))[-1,16383,0]  𝄀
-binary  ¦  binary  ¦  2  ¦  E4BDA0
+binary  ¦  binary  ¦  4  ¦  E4
 set @choose_binary = false;
 prepare prepared_set_domain from
 'set @prepared_selected_text = if(?, X''ff'', ''你a'')';
@@ -523,7 +523,7 @@ execute prepared_set_domain using @choose_binary;
 select charset(@prepared_selected_text), collation(@prepared_selected_text),
 char_length(@prepared_selected_text), hex(left(@prepared_selected_text, 1));
 ➤ charset(@prepared_selected_text)[12,65535,0]  ¦  collation(@prepared_selected_text)[12,65535,0]  ¦  char_length(@prepared_selected_text)[-5,64,0]  ¦  hex(left(@prepared_selected_text, 1))[12,16,0]  𝄀
-binary  ¦  binary  ¦  2  ¦  E4BDA0
+binary  ¦  binary  ¦  4  ¦  E4
 deallocate prepare prepared_set_domain;
 set @typed_binary_null = cast(null as binary(8));
 prepare typed_binary_null_stmt from
@@ -547,7 +547,7 @@ from remote_prepare_source;
 ➤ AP QUERY PLAN ON MULTICN(10 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
-        Aggregate Functions: sum(char_length(@binary_value)), sum(cast((@binary_value like '____') AS TINYINT))  𝄀
+        Aggregate Functions: sum(char_length(@binary_value)), sum(cast((cast(@binary_value AS VARCHAR) like '____') AS TINYINT))  𝄀
         ->  Table Scan on binary_string_function_semantics.remote_prepare_source
 prepare remote_domain_stmt from
 'select sum(char_length(?)), sum(? like ''____'') from remote_prepare_source';
@@ -556,18 +556,18 @@ execute remote_domain_stmt using @binary_value, @binary_value;
 320000  ¦  80000
 execute remote_domain_stmt using @selected_text, @selected_text;
 ➤ sum(char_length(?))[3,38,0]  ¦  sum(? like ____)[-5,64,0]  𝄀
-160000  ¦  0
+320000  ¦  80000
 deallocate prepare remote_domain_stmt;
 prepare remote_bound_stmt from
 'select min(charset(@selected_text)), sum(char_length(@selected_text)),
 min(hex(left(@selected_text, 1))) from remote_prepare_source';
 execute remote_bound_stmt;
 ➤ min(charset(@selected_text))[12,65535,0]  ¦  sum(char_length(@selected_text))[3,38,0]  ¦  min(hex(left(@selected_text, 1)))[-1,16383,0]  𝄀
-binary  ¦  160000  ¦  E4BDA0
+binary  ¦  320000  ¦  E4
 set @selected_text = X'e4bda061';
 execute remote_bound_stmt;
 ➤ min(charset(@selected_text))[12,65535,0]  ¦  sum(char_length(@selected_text))[3,38,0]  ¦  min(hex(left(@selected_text, 1)))[-1,16383,0]  𝄀
-binary  ¦  160000  ¦  E4BDA0
+binary  ¦  320000  ¦  E4
 select charset(@selected_text), char_length(@selected_text), hex(left(@selected_text, 1));
 ➤ charset(@selected_text)[12,65535,0]  ¦  char_length(@selected_text)[-5,64,0]  ¦  hex(left(@selected_text, 1))[-1,16383,0]  𝄀
 binary  ¦  4  ¦  E4
