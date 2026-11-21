@@ -67,10 +67,6 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 
 	c.OperatorController.RemoveFinishedOperator(logState, tnState, cnState, proxyState)
 
-	executing := c.OperatorController.GetExecutingReplicas()
-	executingNonVoting := c.OperatorController.GetNonVotingExecutingReplicas()
-
-	operators := make([]*operator.Operator, 0)
 	commonFields := hakeeper.NewCheckerCommonFields(
 		c.service,
 		c.cfg,
@@ -79,6 +75,17 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 		user,
 		currentTick,
 	)
+	expiredStores := make([]string, 0)
+	for uuid, store := range logState.Stores {
+		if commonFields.Cfg.LogStoreExpired(store.Tick, currentTick) {
+			expiredStores = append(expiredStores, uuid)
+		}
+	}
+	c.removeStaleLogMembershipOperators(state, expiredStores)
+	executing := c.OperatorController.GetExecutingReplicas()
+	executingNonVoting := c.OperatorController.GetNonVotingExecutingReplicas()
+
+	operators := make([]*operator.Operator, 0)
 	checkers := []hakeeper.ModuleChecker{
 		logservice.NewLogServiceChecker(
 			commonFields,
@@ -113,4 +120,45 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 		operators = append(pending, operators...)
 	}
 	return c.OperatorController.Dispatch(operators, logState, tnState, cnState, proxyState)
+}
+
+func (c *Coordinator) removeStaleLogMembershipOperators(state pb.CheckerState, expired []string) {
+	var stale []*operator.Operator
+	for shardID := range state.LogState.Shards {
+		shard := state.LogState.Shards[shardID]
+		for _, op := range c.OperatorController.GetOperators(shardID) {
+			step := op.Check(state.LogState, state.TNState, state.CNState, state.ProxyState)
+			if step == nil || op.IsEnd() {
+				continue
+			}
+			replica, target, isAdd, ok := logMembershipStep(step)
+			if !ok {
+				continue
+			}
+			_, destinationExists := state.LogState.Stores[replica.UUID]
+			if replica.Epoch != shard.Epoch ||
+				!logservice.IsReportingVotingExecutor(shard, state.LogState.Stores, expired, target) ||
+				(isAdd && (!destinationExists || slices.Contains(expired, replica.UUID))) {
+				stale = append(stale, op)
+			}
+		}
+	}
+	for _, op := range stale {
+		c.OperatorController.RemoveOperator(op)
+	}
+}
+
+func logMembershipStep(step operator.OpStep) (operator.Replica, string, bool, bool) {
+	switch step := step.(type) {
+	case operator.AddLogService:
+		return step.Replica, step.Target, true, true
+	case operator.AddNonVotingLogService:
+		return step.Replica, step.Target, true, true
+	case operator.RemoveLogService:
+		return step.Replica, step.Target, false, true
+	case operator.RemoveNonVotingLogService:
+		return step.Replica, step.Target, false, true
+	default:
+		return operator.Replica{}, "", false, false
+	}
 }
