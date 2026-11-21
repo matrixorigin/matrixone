@@ -215,7 +215,7 @@ func foldConstantStringLengths(expr *plan.Expr, ctx context.Context) {
 		function.GetFunctionIsProvenPureFoldableById(fn.Func.Obj) {
 		arg := fn.Args[0]
 		characters := id == function.LENGTH_UTF8 &&
-			types.StaticStringDomain(makeTypeByPlan2Expr(arg)) == types.StringDomainText
+			!stringExprUsesBytes(arg)
 		measure, ok := measureConstantString(ctx, arg, characters)
 		if ok {
 			length := measure.bytes
@@ -252,7 +252,7 @@ func measureConstantString(ctx context.Context, expr *plan.Expr, characters bool
 		}
 		result := constantStringMeasure{bytes: int64(len(value.Sval))}
 		if characters {
-			if !utf8.ValidString(value.Sval) {
+			if lit.IsBin || !utf8.ValidString(value.Sval) {
 				return constantStringMeasure{}, false
 			}
 			result.characters = int64(utf8.RuneCountInString(value.Sval))
@@ -290,6 +290,20 @@ func measureConstantString(ctx context.Context, expr *plan.Expr, characters bool
 		}
 		if n <= limit/source.bytes {
 			return constantStringMeasure{bytes: source.bytes * n, characters: source.characters * n}, true
+		}
+	case function.REVERSE:
+		if len(fn.Args) != 1 {
+			break
+		}
+		if stringExprUsesBytes(fn.Args[0]) {
+			// Byte reversal can break UTF-8, but it preserves byte length.
+			if !characters {
+				return measureConstantString(ctx, fn.Args[0], false)
+			}
+		} else {
+			// Text reversal re-encodes runes. Even a byte-length observer
+			// needs valid UTF-8 before assuming that the byte length is stable.
+			return measureConstantString(ctx, fn.Args[0], true)
 		}
 	case function.CONCAT:
 		if len(fn.Args) == 0 {

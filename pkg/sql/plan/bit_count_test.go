@@ -379,6 +379,83 @@ func TestBitCountStringMeasureBypassesAllocationBudget(t *testing.T) {
 	require.NotNil(t, length.GetF(), "cancelled proof must not rewrite")
 }
 
+func TestBitCountReverseProofPreservesStringDomains(t *testing.T) {
+	builder := &QueryBuilder{compCtx: NewEmptyCompilerContext(newPlanTestProcess(t))}
+	ctx := builder.GetContext()
+	bind := func(name string, args ...*pb.Expr) *pb.Expr {
+		t.Helper()
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	text := makePlan2StringConstExprWithType
+	integer := makePlan2Int64ConstExprWithType
+	const n = maxSpeculativeFoldValueBytes + 1
+	large := bind("repeat", text("é"), integer(n))
+	for _, tc := range []struct {
+		metric string
+		want   int64
+	}{
+		{"length", n * 2},
+		{"character_length", n},
+		{"bit_length", n * 16},
+	} {
+		t.Run(tc.metric, func(t *testing.T) {
+			metric := bind(tc.metric, bind("reverse", DeepCopyExpr(large)))
+			proof := &BindContext{}
+			proof.setWhereFilters([]*pb.Expr{bind("=", metric, integer(tc.want))})
+			require.True(t, bitCountWhereIsEffectivelyTrue(builder, proof))
+			require.NotNil(t, metric.GetF(), "keep the execution predicate intact")
+		})
+	}
+
+	// Text reversal can expand invalid bytes when it re-encodes runes.
+	invalid := text(string([]byte{0xff}))
+	metric := bind("length", bind("reverse", DeepCopyExpr(invalid)))
+	foldConstantStringLengths(metric, ctx)
+	require.NotNil(t, metric.GetF())
+
+	legacyBinary := DeepCopyExpr(invalid)
+	legacyBinary.GetLit().IsBin = true
+	metric = bind("length", bind("reverse", legacyBinary))
+	foldConstantStringLengths(metric, ctx)
+	require.NotNil(t, metric.GetLit())
+	require.Equal(t, int64(1), metric.GetLit().GetI64Val())
+
+	staticBinary := text("é")
+	staticBinary.Typ = makePlan2Type(&types.Type{Oid: types.T_blob, Charset: types.CharsetBinary})
+	metric = bind("character_length", bind("reverse", staticBinary))
+	foldConstantStringLengths(metric, ctx)
+	require.NotNil(t, metric.GetLit())
+	require.Equal(t, int64(2), metric.GetLit().GetI64Val())
+
+	right := bind("right", DeepCopyExpr(invalid), integer(2))
+	bound, safe := speculativeConstantFoldSafety(right, &speculativeConstantFoldBudget{ctx: ctx})
+	require.True(t, safe)
+	require.False(t, bound.validUTF8, "RIGHT can return the original invalid bytes")
+
+	// The allocation check must apply the same text expansion bound for
+	// operators that re-encode a selected rune range.
+	const repeat = maxSpeculativeFoldValueBytes / 2
+	for name, args := range map[string][]*pb.Expr{
+		"reverse": nil, "substring": {integer(1)}, "left": {integer(repeat)}, "right": {integer(repeat)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range []struct {
+				value *pb.Expr
+				safe  bool
+			}{
+				{invalid, false},
+				{text("a"), true},
+			} {
+				source := bind("repeat", DeepCopyExpr(tc.value), integer(repeat))
+				expr := bind(name, append([]*pb.Expr{source}, args...)...)
+				require.Equal(t, tc.safe, isSpeculativeConstantFoldSafe(expr, &speculativeConstantFoldBudget{ctx: ctx}))
+			}
+		})
+	}
+}
+
 func TestBitCountConditionalBinding(t *testing.T) {
 	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	queryPlan, err := runOneStmt(optimizer, t, `select
