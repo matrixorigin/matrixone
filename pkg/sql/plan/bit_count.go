@@ -128,11 +128,11 @@ func bitCountCanReduceScalar(builder *QueryBuilder, scope *BindContext) bool {
 	return scope.reducibleTablelessScalar && bitCountWhereIsEffectivelyTrue(builder, scope)
 }
 
-func (ctx *BindContext) setWhereFilters(filters []*plan.Expr) {
-	ctx.whereFilters = filters
-	ctx.bitCountWhereProofKnown = false
-	ctx.bitCountWhereProofValue = false
-	ctx.bitCountWhereProofNeedsContext = false
+func (bc *BindContext) setWhereFilters(filters []*plan.Expr) {
+	bc.whereFilters = filters
+	bc.bitCountWhereProofKnown = false
+	bc.bitCountWhereProofValue = false
+	bc.bitCountWhereProofNeedsContext = false
 }
 
 func bitCountWhereIsEffectivelyTrue(builder *QueryBuilder, ctx *BindContext) bool {

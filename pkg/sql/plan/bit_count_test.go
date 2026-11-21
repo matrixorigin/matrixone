@@ -487,20 +487,90 @@ func TestBitCountMeasuresConstantStringSlices(t *testing.T) {
 		{name: "reversed uniform runes", metric: "bit_length", value: bind("substring", bind("reverse", uniform), integer(2), integer(3)), want: 48},
 		{name: "whole mixed-width value", metric: "length", value: bind("substring", DeepCopyExpr(mixed), integer(1)), want: 6 * (n / 2)},
 		{name: "mixed-width characters", metric: "character_length", value: bind("substring", DeepCopyExpr(mixed), integer(-5), integer(4)), want: 4},
-		{name: "partial mixed-width bytes unknown", metric: "length", value: bind("substring", mixed, integer(2), integer(3)), refused: true},
+		{name: "partial mixed-width bytes", metric: "length", value: bind("substring", mixed, integer(2), integer(3)), want: 10},
 		{name: "binary bytes", metric: "character_length", value: bind("right", binary, integer(2)), want: 2},
+		{name: "text re-encoding with invalid UTF-8", metric: "length", value: bind("left", text(string([]byte{0xff})), integer(1)), refused: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expr := bind(tc.metric, tc.value)
 			foldConstantStringLengths(expr, ctx)
 			if tc.refused {
-				require.NotNil(t, expr.GetF(), "an upper bound must not become a byte count")
+				require.NotNil(t, expr.GetF(), "unknown text bytes must retain runtime evaluation")
 			} else {
 				require.NotNil(t, expr.GetLit())
 				require.Equal(t, tc.want, expr.GetLit().GetI64Val())
 			}
 		})
 	}
+}
+
+func TestBitCountExactMixedWidthProjection(t *testing.T) {
+	// The repeat produces 1.2 MB, beyond the raw speculative fold budget.
+	const source = "REPEAT('é😀',200000)"
+	for _, tc := range []struct {
+		name, predicate, limit string
+		want                   int32
+	}{
+		{"byte length", "LENGTH(SUBSTRING(" + source + ",1,2))=6", "", 16},
+		{"character length", "CHAR_LENGTH(SUBSTRING(" + source + ",1,2))=2", "", 16},
+		{"composition", "LENGTH(LEFT(RIGHT(SUBSTRING(CONCAT('z',REVERSE(REPEAT('é😀x',200000)),'〇'),2,4),3),2))=6", "", 16},
+		{"false byte length", "LENGTH(SUBSTRING(" + source + ",1,2))=7", "", function.BitCountFloat64FieldOverload},
+		{"explicit materialization", "LENGTH(SUBSTRING(" + source + ",1,2))=6", " LIMIT 1", function.BitCountFloat64FieldOverload},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			inner := "SELECT CAST(e.sal AS DOUBLE) x,e.empno IN (SELECT 1 WHERE " +
+				tc.predicate + ") z FROM constraint_test.emp e" + tc.limit
+			for _, selectList := range []string{"BIT_COUNT(x)", "BIT_COUNT(x),z"} {
+				query, err := runOneStmt(optimizer, t, "SELECT "+selectList+" FROM ("+inner+") s")
+				require.NoError(t, err)
+				expr := findPlanFunctionExpr(query, "bit_count")
+				require.NotNil(t, expr)
+				_, overload := function.DecodeOverloadID(expr.GetF().Func.Obj)
+				require.Equal(t, tc.want, overload, selectList)
+			}
+		})
+	}
+
+	builder := &QueryBuilder{compCtx: NewEmptyCompilerContext(newPlanTestProcess(t))}
+	ctx := builder.GetContext()
+	bind := func(name string, args ...*pb.Expr) *pb.Expr {
+		t.Helper()
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	integer := makePlan2Int64ConstExprWithType
+	literal := makePlan2StringConstExprWithType("é😀")
+	large := bind("repeat", literal, integer(8<<20))
+	last := bind("length", bind("right", large, integer(3)))
+	copy := DeepCopyExpr(last)
+	foldConstantStringLengths(copy, ctx)
+	require.NotNil(t, copy.GetLit())
+	require.Equal(t, int64(10), copy.GetLit().GetI64Val())
+	require.NotNil(t, last.GetF())
+
+	count := integer(3)
+	for range maxStringLengthProofDepth + 1 {
+		count = &pb.Expr{Typ: count.Typ, Expr: &pb.Expr_F{F: &pb.Function{
+			Func: &pb.ObjectRef{ObjName: "cast"},
+			Args: []*pb.Expr{count, {Typ: count.Typ}},
+		}}}
+	}
+	copy = DeepCopyExpr(last)
+	copy.GetF().Args[0].GetF().Args[1] = count
+	foldConstantStringLengths(copy, ctx)
+	require.NotNil(t, copy.GetF(), "fixed arguments must obey the proof depth limit")
+
+	proof := stringLengthProof{ctx: ctx, workLeft: 2}
+	copy = DeepCopyExpr(last)
+	proof.fold(copy, maxStringLengthProofDepth)
+	require.NotNil(t, copy.GetF(), "exhausting proof work must leave the operation intact")
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	foldConstantStringLengths(last, cancelled)
+	require.NotNil(t, last.GetF(), "a cancelled request cannot publish a length proof")
 }
 
 func TestBitCountConditionalBinding(t *testing.T) {

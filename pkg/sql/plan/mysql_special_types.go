@@ -371,7 +371,11 @@ func speculativeStringOutputBound(f *plan.Function, args []speculativeFoldString
 }
 
 func speculativeConstantInt64(expr *plan.Expr) (int64, bool) {
-	if expr == nil {
+	return speculativeConstantInt64Within(expr, maxStringLengthProofDepth, nil)
+}
+
+func speculativeConstantInt64Within(expr *plan.Expr, depth int, spend func(int) bool) (int64, bool) {
+	if expr == nil || depth == 0 || spend != nil && !spend(1) {
 		return 0, false
 	}
 	if lit := expr.GetLit(); lit != nil {
@@ -392,16 +396,16 @@ func speculativeConstantInt64(expr *plan.Expr) (int64, bool) {
 		if len(f.Args) < 2 {
 			return 0, false
 		}
-		value, ok := speculativeConstantInt64(f.Args[0])
+		value, ok := speculativeConstantInt64Within(f.Args[0], depth-1, spend)
 		if !ok || !isSpeculativeIntegerType(types.T(f.Args[0].Typ.Id)) ||
 			!speculativeIntegerCastPreservesValue(types.T(expr.Typ.Id), value) {
 			return 0, false
 		}
 		return value, true
 	case "unary_plus":
-		return speculativeConstantInt64(f.Args[0])
+		return speculativeConstantInt64Within(f.Args[0], depth-1, spend)
 	case "unary_minus":
-		value, ok := speculativeConstantInt64(f.Args[0])
+		value, ok := speculativeConstantInt64Within(f.Args[0], depth-1, spend)
 		if !ok || value == -1<<63 {
 			return 0, false
 		}
