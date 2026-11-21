@@ -300,7 +300,8 @@ func TestFlightTransitionPrefetchReadJoinedFailedFlightFails(t *testing.T) {
 // the connections never pass the bound.
 func TestFlightTransitionColumnPrefetchReturnsBudgetAndConns(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
-	fs.diskCache.conns.max = 2
+	fs.diskCache.conns.max = 16
+	holdConns(t, fs.diskCache, 14)
 	ranges := columnRanges(8, 20<<10, 1<<10)
 	fs.diskCache.prefetchFlightBytes = 3 * flightBufSize(ranges[0].Size)
 	g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return true })
@@ -308,12 +309,12 @@ func TestFlightTransitionColumnPrefetchReturnsBudgetAndConns(t *testing.T) {
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: 8 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
 	key := fs.pathToKey("object")
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 2 }, 5*time.Second, time.Millisecond)
-	require.LessOrEqual(t, fs.diskCache.conns.held.Load(), int64(2))
+	require.LessOrEqual(t, fs.diskCache.conns.held.Load(), int64(16))
 	close(g.gate)
 	require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("object") }, 5*time.Second, time.Millisecond)
 	fs.diskCache.prefetchObjects.reads.Wait()
 	require.Zero(t, prefetchBytes(fs))
-	require.Zero(t, fs.diskCache.conns.held.Load())
+	require.Equal(t, int64(14), fs.diskCache.conns.held.Load())
 	_, most, total := g.counts(key)
 	require.Equal(t, len(ranges), total)
 	require.LessOrEqual(t, most, 2)

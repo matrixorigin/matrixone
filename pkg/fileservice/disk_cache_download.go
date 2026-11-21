@@ -717,6 +717,20 @@ func (d *DiskCache) prefetchWorkers() int {
 	return int(max(limit/4, min(limit, 4), 1))
 }
 
+// prefetchShare is the most prefetch objects of one prefetch that wait for their resources
+// or read at once: the connections downloads may hold over the prefetch workers, so the
+// prefetches of all workers can read at once; at least 1, and prefetchShareUnbounded when
+// downloads hold no connection.
+func (d *DiskCache) prefetchShare() int {
+	if d.conns.max < 1 {
+		return prefetchShareUnbounded
+	}
+	return max(int(d.conns.max)/d.prefetchWorkers(), 1)
+}
+
+// prefetchShareUnbounded is prefetchShare when downloads hold no connection.
+const prefetchShareUnbounded = 4
+
 // connPool counts the object-storage connections downloads hold, at most max, half the
 // connections to the object storage host.
 type connPool struct {

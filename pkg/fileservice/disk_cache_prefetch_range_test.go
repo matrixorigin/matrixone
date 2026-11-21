@@ -843,7 +843,7 @@ func TestPrefetchFlightFailsWhenOpenStalls(t *testing.T) {
 }
 
 // A prefetch of ranges past the bytes of a MemoryPrefetchObject downloads at most
-// prefetchFilesAtOnce of them at once, and downloads them all.
+// prefetchShare of them at once, and downloads them all.
 func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	fs.diskCache.memoryPrefetchMax = 512
@@ -881,12 +881,12 @@ func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 		defer mu.Unlock()
 		return cur
 	}
-	require.Eventually(t, func() bool { return inFlight() == prefetchFilesAtOnce }, 5*time.Second, time.Millisecond)
-	require.Never(t, func() bool { return inFlight() > prefetchFilesAtOnce }, 100*time.Millisecond, time.Millisecond)
+	require.Eventually(t, func() bool { return inFlight() == fs.diskCache.prefetchShare() }, 5*time.Second, time.Millisecond)
+	require.Never(t, func() bool { return inFlight() > fs.diskCache.prefetchShare() }, 100*time.Millisecond, time.Millisecond)
 	release()
 	require.NoError(t, <-done)
 	mu.Lock()
-	require.Equal(t, prefetchFilesAtOnce, most)
+	require.Equal(t, fs.diskCache.prefetchShare(), most)
 	mu.Unlock()
 	key := fs.diskCache.rangeObjectKey("object")
 	for _, r := range ranges {
@@ -954,11 +954,23 @@ func TestReadRangesJoinableBeforeEveryRangeStarts(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
+// holdConns holds n of the connections downloads may hold, as other downloads do, until
+// the test ends.
+func holdConns(t *testing.T, d *DiskCache, n int64) {
+	d.conns.held.Add(n)
+	t.Cleanup(func() {
+		for range n {
+			d.conns.release()
+		}
+	})
+}
+
 // The flights of a background prefetch of ranges hold at most the connections downloads
 // may hold.
 func TestReadRangesHoldDownloadConnections(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
-	fs.diskCache.conns.max = 2
+	fs.diskCache.conns.max = 16
+	holdConns(t, fs.diskCache, 14)
 	g := &gatedOpener{data: data, gate: make(chan struct{})}
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
@@ -979,7 +991,7 @@ func TestReadRangesHoldDownloadConnections(t *testing.T) {
 	_, most, total := g.counts()
 	require.Equal(t, 2, most)
 	require.Equal(t, 8, total)
-	require.Zero(t, fs.diskCache.conns.held.Load())
+	require.Equal(t, int64(14), fs.diskCache.conns.held.Load())
 }
 
 // A prefetch of ranges to files starts no range once its object was deleted.
@@ -999,10 +1011,10 @@ func TestPrefetchFilesStopAfterDelete(t *testing.T) {
 		_, err := fs.diskCache.readRanges(context.Background(), "object", deletes, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, g.open)
 		done <- err
 	}()
-	require.Eventually(t, func() bool { cur, _, _ := g.counts(); return cur == prefetchFilesAtOnce }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { cur, _, _ := g.counts(); return cur == fs.diskCache.prefetchShare() }, 5*time.Second, time.Millisecond)
 	fs.diskCache.deletes.deleted(fs.diskCache.pathForFile("object"))
 	release()
 	require.ErrorIs(t, <-done, errPrefetchDeleted)
 	_, _, total := g.counts()
-	require.Equal(t, prefetchFilesAtOnce, total, "no range starts after the delete")
+	require.Equal(t, fs.diskCache.prefetchShare(), total, "no range starts after the delete")
 }

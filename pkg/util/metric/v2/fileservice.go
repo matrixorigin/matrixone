@@ -438,7 +438,7 @@ var (
 	FSPrefetchDroppedCounter    = FSPrefetchObjectCounter.WithLabelValues("dropped")
 
 	// FSPrefetchObjectWaitingGauge is the prefetch objects of runs waiting for their
-	// resources, by what they wait for: a file slot, a buffer or a connection.
+	// resources, by what they wait for: a slot of their prefetch, a buffer or a connection.
 	FSPrefetchObjectWaitingGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
@@ -446,7 +446,7 @@ var (
 			Name:      "prefetch_object_waiting",
 			Help:      "Prefetch objects of runs waiting for their resources, by what they wait for",
 		}, []string{"for"})
-	FSPrefetchObjectWaitingFileSlot   = FSPrefetchObjectWaitingGauge.WithLabelValues("file_slot")
+	FSPrefetchObjectWaitingSlot       = FSPrefetchObjectWaitingGauge.WithLabelValues("slot")
 	FSPrefetchObjectWaitingBuffer     = FSPrefetchObjectWaitingGauge.WithLabelValues("buffer")
 	FSPrefetchObjectWaitingConnection = FSPrefetchObjectWaitingGauge.WithLabelValues("connection")
 

@@ -430,8 +430,8 @@ func (d *DiskCache) prefetchRead(
 type readRun struct {
 	first, last int // block indexes, for a read
 	object      waitingObject
-	// files, when set, is held by the object while it waits for a connection and reads.
-	files chan struct{}
+	// slots, when set, is held by the object while it waits for its resources and reads.
+	slots chan struct{}
 	// admitted is closed once object is registered, joined the prefetch object got holding
 	// its bytes, or will not be read, with err; got is held until done.
 	admitted chan struct{}
@@ -446,8 +446,8 @@ type readRun struct {
 	prefetch bool
 }
 
-func newReadRun(o waitingObject, files chan struct{}) *readRun {
-	return &readRun{object: o, files: files, admitted: make(chan struct{})}
+func newReadRun(o waitingObject, slots chan struct{}) *readRun {
+	return &readRun{object: o, slots: slots, admitted: make(chan struct{})}
 }
 
 // startRuns admits the objects of runs in order, by one goroutine, and runs each by its
@@ -484,8 +484,8 @@ var closedChan = func() <-chan struct{} {
 // registered. It returns the error ending the runs after r: ctx's, or the delete or close
 // that ended r.
 func (r *readRun) admit(ctx context.Context) error {
-	if r.files != nil {
-		if err := r.takeFileSlot(ctx); err != nil {
+	if r.slots != nil {
+		if err := r.takeSlot(ctx); err != nil {
 			r.fail(err)
 			return err
 		}
@@ -519,10 +519,10 @@ func (r *readRun) fail(err error) {
 	r.object.abandon()
 }
 
-// end frees the file slot r took, and the object it got when it takes no bytes of it.
+// end frees the slot r took, and the object it got when it takes no bytes of it.
 func (r *readRun) end() {
-	if r.files != nil {
-		<-r.files
+	if r.slots != nil {
+		<-r.slots
 	}
 	if r.unneeded || r.prefetch && !r.joinedFile() {
 		r.done()
@@ -535,20 +535,20 @@ func (r *readRun) joinedFile() bool {
 	return ok && r.got != prefetchObject(r.object)
 }
 
-// takeFileSlot takes one of files for the object of r, waiting for it holding nothing.
-func (r *readRun) takeFileSlot(ctx context.Context) error {
+// takeSlot takes one of slots for the object of r, waiting for it holding nothing.
+func (r *readRun) takeSlot(ctx context.Context) error {
 	select {
-	case r.files <- struct{}{}:
+	case r.slots <- struct{}{}:
 		return nil
 	default:
 	}
-	setState(r.object, objectWaitingFileSlot)
+	setState(r.object, objectWaitingSlot)
 	defer setState(r.object, objectCreated)
 	if waiting := r.object.target().needs.waiting; waiting != nil {
 		waiting()
 	}
 	select {
-	case r.files <- struct{}{}:
+	case r.slots <- struct{}{}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -700,15 +700,12 @@ var errPrefetchDeleted = moerr.NewInternalErrorNoCtx("fileservice: object delete
 // its ranges.
 var errPrefetchClosed = moerr.NewInternalErrorNoCtx("fileservice: disk cache closed during a prefetch")
 
-// prefetchFilesAtOnce is the most FilePrefetchObjects of one prefetch that download at
-// once.
-const prefetchFilesAtOnce = 4
-
 // readRanges reads the ranges of the object at filePath through open into the disk cache
 // and returns once they end or ctx is done, with the error of one that did not cache its
 // range. A range is read as parts, each by its own prefetch object: a MemoryPrefetchObject
-// for a part of at most disk-prefetch-memory-max bytes, otherwise a FilePrefetchObject, at
-// most prefetchFilesAtOnce of them at once. The parts are admitted in order, each once the
+// for a part of at most disk-prefetch-memory-max bytes, otherwise a FilePrefetchObject; at
+// most prefetchShare of them wait for resources or read at once. The parts are admitted in
+// order, each once the
 // one before it is, and each waits, holding nothing, for its resources before reads can
 // join it. The download counts as started once every part is under way or one waits: a
 // read of a part not under way reads its own bytes. No part starts after a delete of the
@@ -723,17 +720,17 @@ func (d *DiskCache) readRanges(
 	open rangeOpener,
 ) (bool, error) {
 	started := sync.OnceFunc(func() { downloadStarted(ctx) })
-	files := make(chan struct{}, prefetchFilesAtOnce)
+	slots := make(chan struct{}, d.prefetchShare())
 	var runs []*readRun
 	for _, r := range ranges {
 		for _, part := range d.rangeParts(r.Offset, r.Offset+r.Size, prefetchBlockMax) {
 			needs := flightNeeds{caching: true, deletes: &deletes, waiting: started}
 			if part[1]-part[0] > d.memoryPrefetchMax {
-				runs = append(runs, newReadRun(d.newFileObject(ctx, filePath, part[0], part[1], open, needs), files))
+				runs = append(runs, newReadRun(d.newFileObject(ctx, filePath, part[0], part[1], open, needs), slots))
 				continue
 			}
 			needs.conn = d.conns.max > 0
-			runs = append(runs, newReadRun(d.newFlight(filePath, part[0], part[1], policy, open, needs), nil))
+			runs = append(runs, newReadRun(d.newFlight(filePath, part[0], part[1], policy, open, needs), slots))
 		}
 	}
 	for _, r := range runs {
@@ -833,21 +830,21 @@ type objectState int
 
 const (
 	objectCreated objectState = iota
-	objectWaitingFileSlot
+	objectWaitingSlot
 	objectWaitingBuffer
 	objectWaitingConn
 	objectRegistered
 )
 
 func (s objectState) String() string {
-	return [...]string{"created", "waiting for a file slot", "waiting for a buffer", "waiting for a connection", "registered"}[s]
+	return [...]string{"created", "waiting for a slot", "waiting for a buffer", "waiting for a connection", "registered"}[s]
 }
 
 // waitingGauge returns the gauge of the objects in state s, nil when s is not a wait.
 func (s objectState) waitingGauge() prometheus.Gauge {
 	switch s {
-	case objectWaitingFileSlot:
-		return metric.FSPrefetchObjectWaitingFileSlot
+	case objectWaitingSlot:
+		return metric.FSPrefetchObjectWaitingSlot
 	case objectWaitingBuffer:
 		return metric.FSPrefetchObjectWaitingBuffer
 	case objectWaitingConn:
