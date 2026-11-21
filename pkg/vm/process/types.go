@@ -543,7 +543,7 @@ type BaseProcess struct {
 	prepareParamsStringSource       types.StringSource
 	QueryClient                     qclient.QueryClient
 	Hakeeper                        logservice.CNHAKeeperClient
-	UdfService                      udf.Service
+	UdfService                      udf.Runtime
 	WaitPolicy                      lock.WaitPolicy
 	messageBoard                    *message.MessageBoard
 	executionResourceBudgetBorrowed bool

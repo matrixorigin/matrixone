@@ -21,7 +21,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -970,31 +972,26 @@ func TestPublicationViewBindingMarkerPreservesConstantExpressionSRIDs(t *testing
 				"the guarded probe executed nothing of the arithmetically nested builtin")
 		})
 
-		// The python UDF machinery is the sharp edge of the internal-class
-		// veto: a stored definition can name python_user_defined_function
-		// itself, so the binder resolves the call through the builtin
-		// registry and never reaches the catalog-UDF veto above, and the
-		// overloads carry no volatile flag - only the class bit keeps the
-		// guarded probe away from UdfService.Run. The counting fake proves
-		// the boundary at the service itself: the ordinary bind executes the
-		// machinery through its own fold (and still rejects the service-less
-		// definition with the constant-integer verdict), while the marked
-		// probe must neither call the service nor admit the definition.
+		// A stored definition can name the legacy Python builtin directly,
+		// bypassing catalog-UDF resolution. Python is volatile and must not
+		// execute during either ordinary or guarded constant folding. Both
+		// bindings reject the nonconstant SRID without calling the service;
+		// valid Python execution uses the typed external-routine path.
 		pyUdfJSON := `{"udf":{"body":"{\\\"import\\\":false,\\\"handler\\\":\\\"h\\\",\\\"body\\\":\\\"pass\\\"}","language":"python","rettype":"int","db":"d","modified_time":""}}`
 		pyUdfWitnessSQL := "select st_geomfromtext('POINT(1 2)', 1 + python_user_defined_function('" +
 			pyUdfJSON + "', 0)) as g limit 0"
 
-		t.Run("the ordinary bind executes the python UDF machinery through its own fold", func(t *testing.T) {
+		t.Run("the ordinary bind neither calls the Python UDF service nor folds the SRID", func(t *testing.T) {
 			udfService := &countingUdfService{}
 			proc.Base.UdfService = udfService
 			defer func() { proc.Base.UdfService = nil }()
 
 			_, err := buildSRIDProjection(t, context.Background(), pyUdfWitnessSQL)
-			require.Error(t, err, "the service-less definition cannot produce a constant integer")
+			require.Error(t, err, "the Python call cannot produce a planning-time constant integer")
 			require.ErrorContains(t, err,
 				"the SRID argument of a geometry constructor must be a constant integer")
-			require.Positive(t, udfService.runs,
-				"the ordinary fold executes the wrapped python UDF machinery, exactly its own admission contract")
+			require.Zero(t, udfService.runs,
+				"ordinary constant folding must not execute Python user code")
 		})
 
 		t.Run("the marked probe neither calls the UDF service nor admits the definition", func(t *testing.T) {
@@ -1036,20 +1033,19 @@ func TestPublicationViewBindingMarkerPreservesConstantExpressionSRIDs(t *testing
 	})
 }
 
-// countingUdfService records every UdfService.Run call the fold machinery
-// performs during a bind, so a test can prove an internal-class builtin never
-// reaches the UDF service during a publication binding probe.
+// countingUdfService records execution attempts during binding, so tests can
+// prove ordinary and metadata-only folds never reach the Python UDF service.
 type countingUdfService struct {
 	runs int
 }
 
 func (s *countingUdfService) Language() string { return "python" }
 
-func (s *countingUdfService) Run(
-	_ context.Context, _ *udf.Request, _ udf.PkgReader,
-) (*udf.Response, error) {
+func (s *countingUdfService) Execute(
+	_ context.Context, _ *udf.Invocation, _ vector.FunctionResultWrapper, _ *mpool.MPool,
+) error {
 	s.runs++
-	return nil, moerr.NewInternalErrorNoCtx("udf service unavailable in binding tests")
+	return moerr.NewInternalErrorNoCtx("udf service unavailable in binding tests")
 }
 
 // TestPublicationViewBindingMarkerKeepsProbeLiteralStatements binds the

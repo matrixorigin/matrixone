@@ -53,7 +53,7 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
-	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
+	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -316,7 +316,7 @@ func startService(
 	case metadata.ServiceType_LOG:
 		return startLogService(cfg, stopper, fs, shutdownC)
 	case metadata.ServiceType_PYTHON_UDF:
-		return startPythonUdfService(cfg, stopper)
+		return startPythonUdfWorker(cfg, stopper)
 	default:
 		panic("unknown service type")
 	}
@@ -775,12 +775,16 @@ func waitProxyFileServiceRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-// startPythonUdfService starts the python udf service.
-func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
+// startPythonUdfWorker starts the Python UDF worker.
+func startPythonUdfWorker(cfg *Config, stopper *stopper.Stopper) error {
 	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
-	finish := serviceLifecycle.registerTask(serviceRolePython)
+	return startManagedPythonWorker(cfg.PythonUdfWorkerConfig, stopper, serviceLifecycle)
+}
+
+func startManagedPythonWorker(cfg python.Config, stopper *stopper.Stopper, lifecycle *serviceSupervisor) error {
+	finish := lifecycle.registerTask(serviceRolePython)
 	serviceWG.Add(1)
 	var taskDone sync.Once
 	finishTask := func(err error) {
@@ -789,22 +793,36 @@ func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
 			finish(err)
 		})
 	}
-	err := stopper.RunNamedTask("python-udf-service", func(ctx context.Context) {
+	err := stopper.RunNamedTask("python-udf-worker", func(ctx context.Context) {
 		var closeErr error
 		defer func() { finishTask(closeErr) }()
-		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRolePython)
+		roleCtx, cancelRole := lifecycle.roleContext(ctx, serviceRolePython)
 		defer cancelRole()
-		s, err := pythonservice.NewService(cfg.PythonUdfServerConfig)
+		s, err := python.NewSupervisor(cfg)
 		if err != nil {
 			panic(err)
 		}
 		if err := s.Start(); err != nil {
 			panic(err)
 		}
-		<-roleCtx.Done()
-		if err := s.Close(); err != nil {
-			closeErr = err
-			logutil.GetGlobalLogger().Error("failed to close python udf service", zap.Error(err))
+		workerDone := s.Done()
+		select {
+		case <-roleCtx.Done():
+			if err := s.Close(); err != nil {
+				closeErr = err
+				logutil.GetGlobalLogger().Error("failed to close Python UDF worker", zap.Error(err))
+			}
+		case <-workerDone:
+			// The supervisor has reaped the worker. Its exit only makes the
+			// configured Python endpoint unavailable. CN and ordinary SQL
+			// continue to run, and the Gateway reports Python transport errors.
+			if roleCtx.Err() == nil {
+				workerErr := s.Err()
+				if workerErr == nil {
+					workerErr = errors.New("process exited without an error")
+				}
+				logutil.GetGlobalLogger().Error("Python UDF worker exited unexpectedly", zap.Error(workerErr))
+			}
 		}
 	})
 	if err != nil {

@@ -49,6 +49,28 @@ func publicationVector(path, data string) IOVector {
 	return IOVector{FilePath: path, Entries: []IOEntry{{Data: []byte(data), Size: int64(len(data))}}}
 }
 
+func TestWriteExclusiveMemoryPublishers(t *testing.T) {
+	fs, err := NewMemoryFS("shared", DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(t.Context()) })
+	start := make(chan struct{})
+	done := make(chan error, 2)
+	for _, data := range []string{"A", "B"} {
+		go func(data string) {
+			<-start
+			done <- WriteExclusive(t.Context(), fs, publicationVector("slot", data))
+		}(data)
+	}
+	close(start)
+	first, second := <-done, <-done
+	if first == nil {
+		require.True(t, moerr.IsMoErrCode(second, moerr.ErrFileAlreadyExists))
+	} else {
+		require.True(t, moerr.IsMoErrCode(first, moerr.ErrFileAlreadyExists))
+		require.NoError(t, second)
+	}
+}
+
 // One-byte manifests and channel barriers force the old publisher to resume
 // after the winner has published. No scheduler timing determines the oracle.
 func TestWriteExclusiveDelayedPublisher(t *testing.T) {

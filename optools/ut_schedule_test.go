@@ -127,6 +127,27 @@ func scheduleHarnessWithMockTimeout(t *testing.T, timeout time.Duration, script,
 	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(mock), 0755); err != nil {
 		t.Fatal(err)
 	}
+	// The scheduler fixture has no repository package tree, so it cannot run
+	// the real dependency bootstrap. Simulate only the already-prepared
+	// pyarrow probe and pass every other Python invocation to the host
+	// interpreter so the existing report/heartbeat helpers keep their coverage.
+	python3, err := exec.LookPath("python3")
+	if err != nil {
+		python3 = ""
+	}
+	pythonStub := `#!/bin/bash
+if [[ "$#" == 2 && "$1" == -c && "$2" == "import pyarrow" ]]; then
+  exit 0
+fi
+if [[ -n "${MATRIXONE_TEST_REAL_PYTHON3:-}" ]]; then
+  exec "${MATRIXONE_TEST_REAL_PYTHON3}" "$@"
+fi
+echo "python3 is unavailable in the scheduler harness" >&2
+exit 127
+`
+	if err := os.WriteFile(filepath.Join(dir, "python3"), []byte(pythonStub), 0755); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bash, "-c", script)
@@ -144,6 +165,9 @@ func scheduleHarnessWithMockTimeout(t *testing.T, timeout time.Duration, script,
 		cmd.Env = append(cmd.Env, value)
 	}
 	cmd.Env = append(cmd.Env, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0", "GOFLAGS=")
+	if python3 != "" {
+		cmd.Env = append(cmd.Env, "MATRIXONE_TEST_REAL_PYTHON3="+python3)
+	}
 	cmd.Env = append(cmd.Env, variables...)
 	out, err, diagnostic := runScheduleHarnessCommand(ctx, cmd, root)
 	if diagnostic != "" {
@@ -153,6 +177,38 @@ func scheduleHarnessWithMockTimeout(t *testing.T, timeout time.Duration, script,
 		t.Fatalf("runner harness timed out: %v\n%s\n%s", err, out, diagnostic)
 	}
 	return out, err
+}
+
+func TestRunUTPreparesPythonDependenciesForWorkerShards(t *testing.T) {
+	for _, tc := range []struct {
+		shard string
+		want  string
+	}{
+		{"all", "1"}, {"light", "1"}, {"embedded", "1"}, {"issues", "0"}, {"heavy-plan", "0"},
+	} {
+		t.Run(tc.shard, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+UT_SHARD="$SHARD"
+prepared=0
+function logger() { :; }
+function prepare_python_udf_dependencies() { (( prepared += 1 )); return 0; }
+function go() {
+ if [[ "$*" == "clean -testcache" ]]; then
+  [[ "$prepared" == "$WANT_PREPARE" ]] || exit 90
+  printf 'python preparation checked\n'
+  exit 0
+ fi
+ exit 91
+}
+run_tests
+exit 92`
+			out, err := scheduleHarnessWithMock(t, script, "#!/bin/bash\nexit 93\n",
+				"SHARD="+tc.shard, "WANT_PREPARE="+tc.want)
+			if err != nil || !strings.Contains(string(out), "python preparation checked") {
+				t.Fatalf("shard %s did not reach the cache boundary with expected Python setup: %v\n%s", tc.shard, err, out)
+			}
+		})
+	}
 }
 
 func TestMakeUTProcessPoolConfiguration(t *testing.T) {
