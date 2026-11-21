@@ -164,7 +164,7 @@ func TestTopBatchPruningJSONNumericFallback(t *testing.T) {
 }
 
 func TestTopOrderedBatchMixedKeysAndPayload(t *testing.T) {
-	// Each batch is reverse-ordered for (a ASC NULLS FIRST, b DESC).
+	// Each batch is reverse-ordered for (a ASC NULLS FIRST, b DESC, a DESC NULLS LAST).
 	batches := [][]orderedTestRow{
 		{{3, false, 1, 31}, {3, false, 2, 32}, {2, false, 1, 21}, {2, false, 2, 22}, {1, false, 1, 11}, {1, false, 2, 12}},
 		{{4, false, 1, 41}, {4, false, 2, 42}, {3, false, 3, 33}, {1, false, 3, 13}, {0, true, 1, 101}, {0, true, 2, 102}},
@@ -179,7 +179,11 @@ func TestTopOrderedBatchMixedKeysAndPayload(t *testing.T) {
 				payloadType = types.T_varchar.ToType()
 			}
 			tc := newTestCase(t, mp, []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), payloadType}, 3,
-				[]*plan.OrderBySpec{{Expr: newTypedInt64Expression(0), Flag: plan.OrderBySpec_NULLS_FIRST}, {Expr: newTypedInt64Expression(1), Flag: plan.OrderBySpec_DESC}})
+				[]*plan.OrderBySpec{
+					{Expr: newTypedInt64Expression(0), Flag: plan.OrderBySpec_NULLS_FIRST},
+					{Expr: newTypedInt64Expression(1), Flag: plan.OrderBySpec_DESC},
+					{Expr: newTypedInt64Expression(0), Flag: plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_LAST},
+				})
 			defer tc.proc.Free()
 			defer tc.arg.Free(tc.proc, false, nil)
 			// Rebuild inputs and reset the same operator to cover the next generation.
