@@ -46,6 +46,70 @@ Non-goals:
 - Changing what a query returns. Prefetch changes only what is cached and fetched.
 - Prefetching metadata or tombstones. They keep their current path.
 
+## Architecture
+
+```mermaid
+flowchart TB
+  reads["Query reads<br/>an IOVector and its Policy"]
+  scans["Scan prefetch requests<br/>a whole object, or column ranges"]
+
+  subgraph s3fs["S3FS"]
+    direction LR
+    mem["Memory cache"] --> files["Cached files<br/>entries, range files,<br/>downloads under way"]
+    files --> join["Join prefetch objects<br/>under way"]
+    join --> block["Block read<br/>runs of missing ranges"]
+    block --> direct["Direct read"]
+  end
+
+  subgraph prefetcher["Prefetcher: one entry per object"]
+    direction LR
+    pq["Prefetch queue<br/>share read first,<br/>then soonest due"] <-->|"a read reaches it /<br/>its last read leaves"| lq["Live queue<br/>a read waits for it;<br/>starts first"]
+  end
+
+  subgraph objects["Prefetch objects: wait holding nothing, register, run, end"]
+    runs["Runs of a read or prefetch<br/>admitted in order by one admitter;<br/>each frees its hold when it ends"]
+    admit["Admission<br/>join a registered object,<br/>or register once resources fit"]
+    memobj["MemoryPrefetchObject<br/>buffer + 1 connection"]
+    fileobj["FilePrefetchObject<br/>range or whole-object file<br/>+ 1 connection"]
+    registry["Registry<br/>registered and waiting objects,<br/>bytes in flight"]
+    runs --> admit
+    admit --> memobj
+    admit --> fileobj
+    admit --> registry
+  end
+
+  subgraph res["Resources, taken before registering"]
+    budget["Flight budget<br/>min(5% of available memory,<br/>memory-max × connections);<br/>one buffer when none in flight"]
+    conns["Download connections<br/>half the host's connections"]
+    slots["File slots<br/>4 per read"]
+  end
+
+  subgraph storage["Disk cache storage"]
+    entries["Entry index"]
+    ranges["Range files"]
+    owners["Path owners<br/>one owner per path;<br/>reads of one generation;<br/>open files"]
+    whole["Whole-object downloads"]
+    async["Async writes"]
+    deletes["Delete marks"]
+  end
+
+  remote[("Object storage<br/>one range GET per connection")]
+
+  reads --> mem
+  scans --> pq
+  scans --> lq
+  join -.-> registry
+  block --> runs
+  pq --> runs
+  lq --> runs
+  admit --- res
+  memobj -->|"cached as a range file"| ranges
+  fileobj --> ranges
+  fileobj --> whole
+  storage --> remote
+  direct --> remote
+```
+
 ## Contracts
 
 ### The prefetcher is independent of the scans (decision)
