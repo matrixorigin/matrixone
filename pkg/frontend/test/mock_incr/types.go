@@ -540,17 +540,18 @@ func (mr *MockIncrValueStoreMockRecorder) Create(ctx, tableID, cols, txnOp inter
 }
 
 // Delete mocks base method.
-func (m *MockIncrValueStore) Delete(ctx context.Context, tableID uint64) error {
+func (m *MockIncrValueStore) Delete(ctx context.Context, tableID uint64, commitTS timestamp.Timestamp) (timestamp.Timestamp, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Delete", ctx, tableID)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret := m.ctrl.Call(m, "Delete", ctx, tableID, commitTS)
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Delete indicates an expected call of Delete.
-func (mr *MockIncrValueStoreMockRecorder) Delete(ctx, tableID interface{}) *gomock.Call {
+func (mr *MockIncrValueStoreMockRecorder) Delete(ctx, tableID, commitTS interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockIncrValueStore)(nil).Delete), ctx, tableID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockIncrValueStore)(nil).Delete), ctx, tableID, commitTS)
 }
 
 // ForceSetOffset mocks base method.

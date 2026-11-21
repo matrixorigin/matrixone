@@ -50,17 +50,20 @@ func (c AutoColumn) getInsertSQL() string {
 }
 
 type sqlStore struct {
-	ls   lockservice.LockService
-	exec executor.SQLExecutor
+	ls          lockservice.LockService
+	exec        executor.SQLExecutor
+	waitLogtail func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
 }
 
 func NewSQLStore(
 	exec executor.SQLExecutor,
 	ls lockservice.LockService,
+	waitLogtail func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error),
 ) (IncrValueStore, error) {
 	return &sqlStore{
-		exec: exec,
-		ls:   ls,
+		exec:        exec,
+		ls:          ls,
+		waitLogtail: waitLogtail,
 	}, nil
 }
 
@@ -378,46 +381,66 @@ func (s *sqlStore) ForceSetOffset(
 	return nil
 }
 
-func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
+func (s *sqlStore) Delete(ctx context.Context, tableID uint64, commitTS timestamp.Timestamp) (timestamp.Timestamp, error) {
+	if err := ctx.Err(); err != nil {
+		return commitTS, err
+	}
+	if commitTS.IsEmpty() {
+		var err error
+		commitTS, err = s.deleteRows(ctx, tableID)
+		if err != nil || commitTS.IsEmpty() {
+			return commitTS, err
+		}
+	}
+	// The caller keeps the dropped table's cache guard until local visibility.
+	// A failed wait must retain this commit timestamp so retries only wait.
+	_, err := s.waitLogtail(ctx, commitTS)
+	return commitTS, err
+}
+
+func (s *sqlStore) deleteRows(ctx context.Context, tableID uint64) (timestamp.Timestamp, error) {
+	var empty timestamp.Timestamp
+	tenantID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return empty, err
+	}
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithEnableTrace().
-		WithDisableWaitPaused().
-		WithWaitCommittedLogApplied().
-		WithStatementOption(executor.StatementOption{}.WithDisableLog())
-
-	return s.exec.ExecTxn(ctx,
-		func(txn executor.TxnExecutor) error {
-			var tenantId uint32
-			tenantId, err := defines.GetAccountId(ctx)
-			if err != nil {
-				return err
-			}
-
-			sql := fmt.Sprintf("select account_name from mo_catalog.mo_account where account_id = %d", tenantId)
-			newCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-			res, err := s.exec.Exec(newCtx, sql, opts)
-			if err != nil {
-				return err
-			}
-			var rowCount int
-			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-				rowCount += rows
-				return true
-			})
-			if rowCount == 0 {
-				res.Close()
-				return nil
-			}
-			res, err = s.exec.Exec(
-				ctx,
-				fmt.Sprintf("delete from %s where table_id = %d",
-					incrTableName, tableID),
-				opts.WithStatementOption(executor.StatementOption{}))
-			res.Close()
-			return err
-		},
-		opts)
+		WithDisableWaitPaused()
+	sql := fmt.Sprintf("select account_name from mo_catalog.mo_account where account_id = %d", tenantID)
+	res, err := s.exec.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql,
+		opts.WithStatementOption(executor.StatementOption{}.WithDisableLog()))
+	if err != nil {
+		return empty, err
+	}
+	var exists bool
+	res.ReadRows(func(rows int, _ []*vector.Vector) bool {
+		exists = rows > 0
+		return !exists
+	})
+	res.Close()
+	if !exists {
+		return empty, nil
+	}
+	deleteSQL := fmt.Sprintf("delete from %s where table_id = %d", incrTableName, tableID)
+	var op client.TxnOperator
+	var affected uint64
+	err = s.exec.ExecTxn(ctx, func(te executor.TxnExecutor) error {
+		op = te.Txn()
+		res, err := te.Exec(deleteSQL, executor.StatementOption{})
+		affected = res.AffectedRows
+		res.Close()
+		return err
+	}, opts.WithSQL(deleteSQL))
+	if err != nil {
+		return empty, err
+	}
+	commitTS := op.GetOverview().Meta.CommitTS
+	if affected != 0 && commitTS.IsEmpty() {
+		return empty, moerr.NewInvalidState(ctx, "auto-increment metadata delete committed without a timestamp")
+	}
+	return commitTS, nil
 }
 
 // autoColumnPolicyTableKey redirects only the table-metadata half of a reset
