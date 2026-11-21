@@ -6821,7 +6821,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		(!expandedSelectClause.GroupBy.Apart && !expandedSelectClause.GroupBy.GroupingSets &&
 			!expandedSelectClause.GroupBy.Rollup && !expandedSelectClause.GroupBy.Cube))
 	singleValueSelectShape := expandedSelectClause != nil && resultLen == 1 && len(ctx.bindings) == 0 &&
-		bitCountWhereIsEffectivelyTrue(builder, ctx) && groupByCanReduce && !ctx.hasHaving &&
+		groupByCanReduce && !ctx.hasHaving &&
 		len(ctx.aggregates) == 0 && len(ctx.windows) == 0 && len(ctx.times) == 0 &&
 		!ctx.sampleFunc.hasSampleFunc
 	ctx.reducibleTablelessScalar = singleValueSelectShape
