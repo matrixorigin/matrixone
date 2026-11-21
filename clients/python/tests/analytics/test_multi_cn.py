@@ -47,14 +47,22 @@ def test_cross_cn_arrow_visibility(trial, cn2):
     assert trial.query('SELECT count(*) n,sum(id) s FROM ' + table).to_pylist() == [{'n': 2000, 's': Decimal(1999000)}]
 
 
-def test_cross_cn_pk_conflict_is_atomic(trial, cn2):
+@pytest.mark.parametrize('source', ['arrow', 'file'])
+def test_cross_cn_pk_conflict_is_atomic(trial, cn2, source):
     table = trial.table()
     trial.client.execute('CREATE TABLE ' + table + '(id BIGINT PRIMARY KEY)')
 
     def write(i):
         c = cn2 if i % 2 else trial.client
         try:
-            c.analytics.upload_arrow(table, pa.table({'id': [0, i + 1]}), trial.directory, create=False)
+            data = pa.table({'id': [0, i + 1]})
+            if source == 'arrow':
+                c.analytics.upload_arrow(table, data, trial.directory, create=False)
+            else:
+                path = trial.directory / ('conflict_' + str(i) + '.parquet')
+                pq.write_table(data, path)
+                with c.analytics.read_parquet(path) as relation:
+                    assert relation.import_into(table) == 2
             return i + 1
         except Exception:
             return None
@@ -76,11 +84,22 @@ def test_cross_cn_external_and_import(trial, cn2):
     assert trial.query('SELECT count(*) n,sum(id) s FROM ' + table).to_pylist() == [{'n': 800, 's': Decimal(319600)}]
 
 
-def test_cross_cn_read_after_failed_append(trial, cn2):
+@pytest.mark.parametrize('source', ['arrow', 'file'])
+def test_cross_cn_read_after_failed_append(trial, cn2, source):
     table = trial.table()
     trial.client.execute('CREATE TABLE ' + table + '(id BIGINT PRIMARY KEY)')
-    trial.analytics.upload_arrow(table, pa.table({'id': [1]}), trial.directory, create=False)
+
+    def write(client, values, filename):
+        data = pa.table({'id': values})
+        if source == 'arrow':
+            return client.analytics.upload_arrow(table, data, trial.directory, create=False, batch_size=1)
+        path = trial.directory / filename
+        pq.write_table(data, path)
+        with client.analytics.read_parquet(path) as relation:
+            return relation.import_into(table)
+
+    assert write(trial.client, [1], 'initial.parquet') == 1
     with pytest.raises(Exception):
-        cn2.analytics.upload_arrow(table, pa.table({'id': [2, 1, 3]}), trial.directory, create=False, batch_size=1)
+        write(cn2, [2, 1, 3], 'duplicate.parquet')
     assert trial.rows(table)['id'].to_pylist() == [1]
     assert rows(cn2, 'SELECT * FROM ' + table) == [{'id': 1}]

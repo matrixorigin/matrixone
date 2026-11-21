@@ -48,19 +48,21 @@ class TestNewConnectionHooksOnline:
             on_connect=count_hook_calls,
         )
 
-        # The hook should be called once for the initial connection
-        assert hook_call_count >= 1
-
-        # Force a new connection by executing a query
-        # This should trigger the hook again
-        result = client.execute("SELECT 1")
-        assert len(result.rows) == 1
-
-        # The hook should be called again for the new connection
-        assert hook_call_count >= 2
-
-        # Clean up
-        client.disconnect()
+        try:
+            assert hook_call_count == 1
+            first = client.execute("SELECT CONNECTION_ID()").scalar()
+            assert client.execute("SELECT CONNECTION_ID()").scalar() == first
+            assert hook_call_count == 1
+            # Hold the first lease so the next query needs a second physical connection.
+            with client.get_sqlalchemy_engine().connect() as held:
+                assert held.exec_driver_sql("SELECT CONNECTION_ID()").scalar() == first
+                assert client.execute("SELECT CONNECTION_ID()").scalar() != first
+                assert hook_call_count == 2
+            assert client.execute("SELECT 1").rows == [(1,)]
+            assert hook_call_count == 2
+            assert client.get_sqlalchemy_engine().pool.checkedout() == 0
+        finally:
+            client.disconnect()
 
     def test_sync_client_with_predefined_actions(self, test_client):
         """Test sync client with predefined actions"""
@@ -126,19 +128,20 @@ class TestNewConnectionHooksOnline:
             on_connect=count_hook_calls,
         )
 
-        # The hook should be called once for the initial connection
-        assert hook_call_count >= 1
-
-        # Force a new connection by executing a query
-        # This should trigger the hook again
-        result = await client.execute("SELECT 1")
-        assert len(result.rows) == 1
-
-        # The hook should be called again for the new connection
-        assert hook_call_count >= 2
-
-        # Clean up
-        await client.disconnect()
+        try:
+            assert hook_call_count == 1
+            first = (await client.execute("SELECT CONNECTION_ID()")).scalar()
+            assert (await client.execute("SELECT CONNECTION_ID()")).scalar() == first
+            assert hook_call_count == 1
+            async with client.get_sqlalchemy_engine().connect() as held:
+                assert (await held.exec_driver_sql("SELECT CONNECTION_ID()")).scalar() == first
+                assert (await client.execute("SELECT CONNECTION_ID()")).scalar() != first
+                assert hook_call_count == 2
+            assert (await client.execute("SELECT 1")).rows == [(1,)]
+            assert hook_call_count == 2
+            assert client.get_sqlalchemy_engine().sync_engine.pool.checkedout() == 0
+        finally:
+            await client.disconnect()
 
     @pytest.mark.asyncio
     async def test_async_client_with_predefined_actions(self, test_async_client):

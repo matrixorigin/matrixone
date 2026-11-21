@@ -154,6 +154,47 @@ def test_arrow_unsupported_requires_exact_server_evidence(message, state):
     assert 'token' not in value.reason
 
 
+@pytest.mark.parametrize('asynchronous', [False, True])
+@pytest.mark.parametrize(
+    'code,message,invalidated,expected',
+    [
+        (20300, "format 'arrow' is not supported", False, 'parquet'),
+        (20300, "format 'csv' is not supported", False, 'arrow'),
+        (20300, 'permission denied', False, 'arrow'),
+        (1064, 'syntax error', False, 'arrow'),
+        (20300, "format 'arrow' is not supported", True, 'error'),
+        (2013, 'lost connection', True, 'error'),
+    ],
+)
+def test_upload_format_fallback_requires_live_exact_rejection(asynchronous, code, message, invalidated, expected):
+    from matrixone.capabilities import check_arrow_load, check_arrow_load_async
+
+    error = OperationalError('probe', {}, Exception(code, message), connection_invalidated=invalidated)
+    calls = []
+
+    def execute(sql):
+        calls.append(sql)
+        raise error
+
+    async def execute_async(sql):
+        return execute(sql)
+
+    connection = SimpleNamespace(exec_driver_sql=execute_async if asynchronous else execute)
+
+    def run():
+        if asynchronous:
+            return asyncio.run(check_arrow_load_async(connection, allow_parquet=True))
+        return check_arrow_load(connection, allow_parquet=True)
+
+    if expected == 'error':
+        with pytest.raises(OperationalError) as caught:
+            run()
+        assert caught.value is error
+    else:
+        assert run() == expected
+    assert len(calls) == 1 and calls[0].startswith('EXPLAIN LOAD DATA')
+
+
 def test_setting_policy_change_invalidates_cached_observations():
     client = Client()
     engine = client._engine = ProbeEngine()

@@ -19,7 +19,7 @@ This module provides a centralized SQL building system that eliminates
 code duplication across different interfaces (ORM, Vector Search, Pinecone, etc.).
 """
 
-from ._query_compilation import conjoin_conditions
+from ._query_compilation import conjoin_conditions, render_limit_clause
 from ._sql_literals import sql_string_token, sql_identifier, substitute_parameters
 
 from collections.abc import Mapping, Set
@@ -495,8 +495,9 @@ class MatrixOneSQLBuilder:
             sql_parts.append(order_clause)
 
         # Build LIMIT clause
-        if self._limit_count is not None:
-            sql_parts.append(f"LIMIT {self._limit_count}")
+        limit_clause = render_limit_clause(self._limit_count, self._offset_count)
+        if limit_clause:
+            sql_parts.append(limit_clause)
 
         # Build OFFSET clause
         if self._offset_count is not None:

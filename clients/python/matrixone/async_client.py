@@ -407,7 +407,7 @@ class AsyncClient(BaseMatrixOneClient):
         role: Optional[str] = None,
         charset: str = "utf8mb4",
         connection_timeout: Optional[int] = None,
-        auto_commit: bool = True,
+        auto_commit: Optional[bool] = None,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
         capability_overrides: Optional[dict] = None,
         local_infile: Optional[bool] = None,
@@ -460,17 +460,19 @@ class AsyncClient(BaseMatrixOneClient):
         from .capabilities import validate_overrides
 
         overrides = validate_overrides(capability_overrides)
-        from ._connection_options import positive_timeout
+        from ._connection_options import positive_timeout, resolve_auto_commit
 
         positive_timeout(self.query_timeout, 'query_timeout')
         timeout = self.connection_timeout if connection_timeout is None else connection_timeout
         positive_timeout(timeout, 'connection_timeout')
+        auto_commit = resolve_auto_commit(auto_commit, self.auto_commit)
         if self._engine is not None:
             await self.disconnect()
         if self._analytics is not None:
             self._analytics.reconnect()
         self._reset_compatibility(overrides)
         self.connection_timeout = timeout
+        self.auto_commit = auto_commit
         try:
             # Build final login info based on user parameter and optional account/role
             final_user, parsed_info = self._build_login_info(user, account, role)
@@ -701,6 +703,7 @@ class AsyncClient(BaseMatrixOneClient):
             query={"charset": self._connection_params["charset"]},
         )
 
+        from ._connection_options import preserve_transactions_with_autocommit
         from ._local_infile import connection_options, configure_engine
 
         # Create async engine with connection pooling
@@ -713,6 +716,7 @@ class AsyncClient(BaseMatrixOneClient):
             pool_pre_ping=True,  # Verify connections before use
             pool_reset_on_return="rollback",  # Never commit an abandoned borrower
             connect_args={
+                'autocommit': self._connection_params.get('autocommit', self.auto_commit),
                 'connect_timeout': self._connection_params['connect_timeout'],
                 **connection_options(self._connection_params.get('local_infile')),
             },
@@ -724,6 +728,8 @@ class AsyncClient(BaseMatrixOneClient):
         from .sqlalchemy_ext.dialect import adapt_engine_dialect
 
         adapt_engine_dialect(engine.sync_engine)
+        if self._connection_params.get('autocommit', self.auto_commit):
+            preserve_transactions_with_autocommit(engine.sync_engine)
 
         return engine
 
@@ -1231,7 +1237,11 @@ class AsyncClient(BaseMatrixOneClient):
                 # SQLAlchemy statement - delegate to session for consistent behavior
                 async with self.session() as session:
                     # Suppress session-level logging; AsyncClient logs below
-                    result = await session.execute(sql_or_stmt, params, log_mode='off')
+                    from ._session_execution import deferred_literal_options
+
+                    result = await session.execute(
+                        sql_or_stmt, params, log_mode='off', **deferred_literal_options(sql_or_stmt)
+                    )
 
                     # Convert SQLAlchemy result to AsyncResultSet
                     if result_returns_rows(result):
@@ -1302,8 +1312,15 @@ class AsyncClient(BaseMatrixOneClient):
                         # Escape % to %% for pymysql's format string handling
                         escaped_sql = final_sql if _driver_bound else final_sql.replace('%', '%%')
                         if _driver_bound:
+                            from ._driver_execution import driver_parameters
+
                             result = await conn.exec_driver_sql(
-                                escaped_sql, params, execution_options={'no_parameters': params is None}
+                                escaped_sql,
+                                driver_parameters(params),
+                                execution_options={
+                                    'no_parameters': params is None,
+                                    '_matrixone_preserve_driver_sql': True,
+                                },
                             )
                         else:
                             result = await conn.exec_driver_sql(escaped_sql)

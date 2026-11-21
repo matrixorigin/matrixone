@@ -20,6 +20,7 @@ import pytest
 import os
 import sys
 from datetime import datetime
+from decimal import Decimal
 
 # Add the matrixone package to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -29,7 +30,7 @@ from matrixone.orm import declarative_base
 from sqlalchemy import Column, Integer, String, DECIMAL, BigInteger, Text, TIMESTAMP
 
 Base = declarative_base()
-from sqlalchemy import func
+from sqlalchemy import func, literal_column
 
 try:
     from .test_config import online_config
@@ -210,7 +211,9 @@ class TestORMAdvancedFeatures:
     def test_group_by_operations(self, test_client, test_database):
         """Test GROUP BY operations"""
         # Group products by category
-        query = test_client.query(Product).select("category", func.count("id")).group_by(Product.category)
+        query = (
+            test_client.query(Product).select("category", func.count(literal_column("id"))).group_by(Product.category)
+        )
 
         # This will test the SQL generation, though execution may need adjustment
         sql, params = query._build_sql()
@@ -222,9 +225,9 @@ class TestORMAdvancedFeatures:
         # Find categories with more than 1 product
         query = (
             test_client.query(Product)
-            .select("category", func.count("id"))
+            .select("category", func.count(literal_column("id")))
             .group_by(Product.category)
-            .having(func.count("id") > 1)
+            .having(func.count(literal_column("id")) > 1)
         )
 
         sql, params = query._build_sql()
@@ -234,27 +237,27 @@ class TestORMAdvancedFeatures:
     def test_aggregate_functions(self, test_client, test_database):
         """Test aggregate functions"""
         # Test COUNT
-        count_query = test_client.query(User).select(func.count("id"))
+        count_query = test_client.query(User).select(func.count(literal_column("id")))
         sql, params = count_query._build_sql()
         assert "count(id)" in sql.lower()
 
         # Test SUM
-        sum_query = test_client.query(Product).select(func.sum("price"))
+        sum_query = test_client.query(Product).select(func.sum(literal_column("price")))
         sql, params = sum_query._build_sql()
         assert "sum(price)" in sql.lower()
 
         # Test AVG
-        avg_query = test_client.query(User).select(func.avg("age"))
+        avg_query = test_client.query(User).select(func.avg(literal_column("age")))
         sql, params = avg_query._build_sql()
         assert "avg(age)" in sql.lower()
 
         # Test MIN
-        min_query = test_client.query(Product).select(func.min("price"))
+        min_query = test_client.query(Product).select(func.min(literal_column("price")))
         sql, params = min_query._build_sql()
         assert "min(price)" in sql.lower()
 
         # Test MAX
-        max_query = test_client.query(Product).select(func.max("price"))
+        max_query = test_client.query(Product).select(func.max(literal_column("price")))
         sql, params = max_query._build_sql()
         assert "max(price)" in sql.lower()
 
@@ -263,10 +266,10 @@ class TestORMAdvancedFeatures:
         # Complex query: Find departments with average age > 30
         query = (
             test_client.query(User)
-            .select("department_id", func.avg("age"))
+            .select("department_id", func.avg(literal_column("age")))
             .group_by(User.department_id)
-            .having(func.avg("age") > 30)
-            .order_by(func.avg("age").desc())
+            .having(func.avg(literal_column("age")) > 30)
+            .order_by(func.avg(literal_column("age")).desc())
             .limit(5)
         )
 
@@ -284,11 +287,11 @@ class TestORMAdvancedFeatures:
         from sqlalchemy.sql import functions
 
         # Test all func methods return proper SQLAlchemy function objects
-        assert hasattr(func.count("id"), 'compile')
-        assert hasattr(func.sum("price"), 'compile')
-        assert hasattr(func.avg("age"), 'compile')
-        assert hasattr(func.min("price"), 'compile')
-        assert hasattr(func.max("price"), 'compile')
+        assert hasattr(func.count(literal_column("id")), 'compile')
+        assert hasattr(func.sum(literal_column("price")), 'compile')
+        assert hasattr(func.avg(literal_column("age")), 'compile')
+        assert hasattr(func.min(literal_column("price")), 'compile')
+        assert hasattr(func.max(literal_column("price")), 'compile')
         assert hasattr(func.distinct("category"), 'compile')
 
     def test_sql_generation(self, test_client, test_database):
@@ -299,7 +302,7 @@ class TestORMAdvancedFeatures:
         assert "SELECT id, name" in sql1
 
         # Test select with functions
-        query2 = test_client.query(User).select(func.count("id"), func.avg("age"))
+        query2 = test_client.query(User).select(func.count(literal_column("id")), func.avg(literal_column("age")))
         sql2, _ = query2._build_sql()
         assert "count(id)" in sql2.lower()
         assert "avg(age)" in sql2.lower()
@@ -315,7 +318,10 @@ class TestORMAdvancedFeatures:
 
         # Test with group by and having
         query4 = (
-            test_client.query(Product).select("category", func.count("id")).group_by("category").having(func.count("id") > 1)
+            test_client.query(Product)
+            .select("category", func.count(literal_column("id")))
+            .group_by("category")
+            .having(func.count(literal_column("id")) > 1)
         )
         sql4, _ = query4._build_sql()
         assert "GROUP BY" in sql4
@@ -324,7 +330,7 @@ class TestORMAdvancedFeatures:
     def test_sqlalchemy_label_support(self, test_client, test_database):
         """Test SQLAlchemy label() method support for aliases"""
         # Test single function with label
-        query1 = test_client.query(User).select(func.count("id").label("user_count"))
+        query1 = test_client.query(User).select(func.count(literal_column("id")).label("user_count"))
         sql1, _ = query1._build_sql()
         assert "count(id) as user_count" in sql1.lower()
 
@@ -334,7 +340,9 @@ class TestORMAdvancedFeatures:
         assert result1[0].user_count == 5
 
         # Test multiple functions with labels
-        query2 = test_client.query(User).select(func.count("id").label("total_users"), func.avg("age").label("avg_age"))
+        query2 = test_client.query(User).select(
+            func.count(literal_column("id")).label("total_users"), func.avg(literal_column("age")).label("avg_age")
+        )
         sql2, _ = query2._build_sql()
         assert "count(id) as total_users" in sql2.lower()
         assert "avg(age) as avg_age" in sql2.lower()
@@ -348,7 +356,7 @@ class TestORMAdvancedFeatures:
         # Test with GROUP BY and labels
         query3 = (
             test_client.query(User)
-            .select("department_id", func.count("id").label("dept_user_count"))
+            .select("department_id", func.count(literal_column("id")).label("dept_user_count"))
             .group_by("department_id")
         )
         sql3, _ = query3._build_sql()
@@ -390,7 +398,9 @@ class TestORMAdvancedFeatures:
     def test_mixed_alias_support(self, test_client, test_database):
         """Test mixing SQLAlchemy label() and string aliases"""
         # Test mixing different alias methods
-        query = test_client.query(User).select(func.count("id").label("sqlalchemy_count"), "COUNT(age) AS string_count")
+        query = test_client.query(User).select(
+            func.count(literal_column("id")).label("sqlalchemy_count"), "COUNT(age) AS string_count"
+        )
         sql, _ = query._build_sql()
         assert "count(id) as sqlalchemy_count" in sql.lower()
         assert "COUNT(age) AS string_count" in sql
@@ -409,11 +419,11 @@ class TestORMAdvancedFeatures:
             test_client.query(User)
             .select(
                 "department_id",
-                func.count("id").label("user_count"),
-                func.avg("age").label("avg_age"),
+                func.count(literal_column("id")).label("user_count"),
+                func.avg(literal_column("age")).label("avg_age"),
             )
             .group_by("department_id")
-            .having(func.count("id") > 1)
+            .having(func.count(literal_column("id")) > 1)
             .order_by("user_count DESC")
         )
 
@@ -440,9 +450,9 @@ class TestORMAdvancedFeatures:
             test_client.query(Product)
             .select(
                 "category",
-                func.count("id").label("product_count"),
-                func.avg("price").label("avg_price"),
-                func.sum("quantity").label("total_quantity"),
+                func.count(literal_column("id")).label("product_count"),
+                func.avg(literal_column("price")).label("avg_price"),
+                func.sum(literal_column("quantity")).label("total_quantity"),
             )
             .group_by("category")
         )
@@ -524,7 +534,10 @@ class TestORMAdvancedFeatures:
         query = (
             test_client.query(User)
             .alias('u')
-            .select(func.count('u.id').label('user_count'), func.avg('u.age').label('avg_age'))
+            .select(
+                func.count(literal_column('u.id')).label('user_count'),
+                func.avg(literal_column('u.age')).label('avg_age'),
+            )
         )
         sql, _ = query._build_sql()
         assert "FROM test_users_advanced AS u" in sql
@@ -544,7 +557,7 @@ class TestORMAdvancedFeatures:
         query = (
             test_client.query(User)
             .alias('u')
-            .select('u.department_id', func.count('u.id').label('dept_count'))
+            .select('u.department_id', func.count(literal_column('u.id')).label('dept_count'))
             .group_by('u.department_id')
         )
         sql, _ = query._build_sql()
@@ -580,7 +593,7 @@ class TestORMAdvancedFeatures:
     def test_table_alias_subquery_generation(self, test_client, test_database):
         """Test table alias subquery generation"""
         # Test subquery generation with table alias
-        avg_query = test_client.query(User).alias('u').select(func.avg('u.age'))
+        avg_query = test_client.query(User).alias('u').select(func.avg(literal_column('u.age')))
         subquery = avg_query.subquery('avg_age')
 
         assert subquery.startswith('(')
@@ -681,7 +694,7 @@ class TestORMAdvancedFeatures:
         )
         sql, _ = query._build_sql()
         assert "FROM test_departments_advanced AS d" in sql
-        assert "LEFT JOIN test_users_advanced u" in sql
+        assert "RIGHT JOIN test_users_advanced u" in sql
         assert "d.id = u.department_id" in sql
 
     def test_full_outer_join_operations(self, test_client, test_database):
@@ -724,8 +737,8 @@ class TestORMAdvancedFeatures:
             .alias('u')
             .select(
                 'd.name as dept_name',
-                func.count('u.id').label('user_count'),
-                func.avg('u.salary').label('avg_salary'),
+                func.count(literal_column('u.id')).label('user_count'),
+                func.avg(literal_column('u.salary')).label('avg_salary'),
             )
             .join('test_departments_advanced d', 'u.department_id = d.id')
             .group_by('d.name')
@@ -743,17 +756,17 @@ class TestORMAdvancedFeatures:
         query = (
             test_client.query(User)
             .alias('u')
-            .select('d.name as dept_name', func.count('u.id').label('user_count'))
+            .select('d.name as dept_name', func.count(literal_column('u.id')).label('user_count'))
             .join('test_departments_advanced d', 'u.department_id = d.id')
             .group_by('d.name')
-            .having(func.count('u.id') > 1)
+            .having(func.count(literal_column('u.id')) > 1)
         )
         sql, _ = query._build_sql()
         assert "FROM test_users_advanced AS u" in sql
         assert "JOIN test_departments_advanced d" in sql
         assert "GROUP BY d.name" in sql
         assert "HAVING" in sql
-        assert "count(id) > 1" in sql
+        assert "count(u.id) > 1" in sql
 
     def test_self_join_operations(self, test_client, test_database):
         """Test self-join operations"""
@@ -821,7 +834,7 @@ class TestORMAdvancedFeatures:
             .rightjoin('test_users_advanced u', 'd.id = u.department_id')
         )
         sql3, _ = query3._build_sql()
-        assert "LEFT JOIN test_users_advanced u" in sql3
+        assert "RIGHT JOIN test_users_advanced u" in sql3
 
         # Test FULL OUTER JOIN
         query4 = (
@@ -834,16 +847,20 @@ class TestORMAdvancedFeatures:
         assert "FULL OUTER JOIN test_departments_advanced d" in sql4
 
     def test_join_without_on_condition(self, test_client, test_database):
-        """Test JOIN without ON condition (cross join)"""
-        # Test CROSS JOIN (JOIN without ON condition)
+        """Raw joins require an explicit predicate, including a Cartesian product."""
+        with pytest.raises(ValueError, match='explicit ON clause'):
+            test_client.query(User).join('test_departments_advanced d')
         query = (
-            test_client.query(User).alias('u').select('u.name', 'd.name as dept_name').join('test_departments_advanced d')
+            test_client.query(User)
+            .alias('u')
+            .select('u.name', 'd.name as dept_name')
+            .join('test_departments_advanced d', '1 = 1')
         )
         sql, _ = query._build_sql()
         assert "FROM test_users_advanced AS u" in sql
         assert "JOIN test_departments_advanced d" in sql
-        # Should not have ON condition
-        assert "ON" not in sql
+        assert 'ON 1 = 1' in sql
+        assert len(query.all()) == 15  # Five users by three departments.
 
     def test_join_with_complex_conditions(self, test_client, test_database):
         """Test JOIN with complex ON conditions"""
@@ -880,7 +897,9 @@ class TestORMAdvancedFeatures:
         """Test subquery in WHERE clause with IN operator"""
         # Test users in departments with budget > 80000
         subquery = test_client.query(Department).select('id').filter('budget > ?', 80000)
-        query = test_client.query(User).select('name', 'department_id').filter('department_id IN', subquery)
+        query = (
+            test_client.query(User).select('name', 'department_id').filter('department_id IN ' + subquery.subquery())
+        )
         sql, _ = query._build_sql()
         assert "SELECT name, department_id" in sql
         assert "WHERE department_id IN" in sql
@@ -909,7 +928,7 @@ class TestORMAdvancedFeatures:
         """Test subquery with EXISTS operator"""
         # Test users who have departments
         subquery = test_client.query(Department).select('1').filter('id = u.department_id')
-        query = test_client.query(User).alias('u').select('u.name').filter('EXISTS', subquery)
+        query = test_client.query(User).alias('u').select('u.name').filter('EXISTS ' + subquery.subquery())
         sql, _ = query._build_sql()
         assert "SELECT u.name" in sql
         assert "FROM test_users_advanced AS u" in sql
@@ -919,7 +938,7 @@ class TestORMAdvancedFeatures:
         """Test subquery with NOT EXISTS operator"""
         # Test users who don't have departments
         subquery = test_client.query(Department).select('1').filter('id = u.department_id')
-        query = test_client.query(User).alias('u').select('u.name').filter('NOT EXISTS', subquery)
+        query = test_client.query(User).alias('u').select('u.name').filter('NOT EXISTS ' + subquery.subquery())
         sql, _ = query._build_sql()
         assert "SELECT u.name" in sql
         assert "FROM test_users_advanced AS u" in sql
@@ -928,8 +947,8 @@ class TestORMAdvancedFeatures:
     def test_subquery_with_comparison_operators(self, test_client, test_database):
         """Test subquery with comparison operators"""
         # Test users with salary greater than average salary
-        subquery = test_client.query(User).select(func.avg('salary'))
-        query = test_client.query(User).select('name', 'salary').filter('salary >', subquery)
+        subquery = test_client.query(User).select(func.avg(literal_column('salary')))
+        query = test_client.query(User).select('name', 'salary').filter('salary > ' + subquery.subquery())
         sql, _ = query._build_sql()
         assert "SELECT name, salary" in sql
         assert "WHERE salary >" in sql
@@ -942,9 +961,17 @@ class TestORMAdvancedFeatures:
         """Test correlated subquery"""
         # Test users whose salary is above department average
         subquery = (
-            test_client.query(User).alias('u2').select(func.avg('u2.salary')).filter('u2.department_id = u1.department_id')
+            test_client.query(User)
+            .alias('u2')
+            .select(func.avg(literal_column('u2.salary')))
+            .filter('u2.department_id = u1.department_id')
         )
-        query = test_client.query(User).alias('u1').select('u1.name', 'u1.salary').filter('u1.salary >', subquery)
+        query = (
+            test_client.query(User)
+            .alias('u1')
+            .select('u1.name', 'u1.salary')
+            .filter('u1.salary > ' + subquery.subquery())
+        )
         sql, _ = query._build_sql()
         assert "SELECT u1.name, u1.salary" in sql
         assert "FROM test_users_advanced AS u1" in sql
@@ -958,7 +985,9 @@ class TestORMAdvancedFeatures:
         """Test subquery in FROM clause (derived table)"""
         # Test using subquery as a derived table
         subquery = (
-            test_client.query(User).select('department_id', func.count('id').label('user_count')).group_by('department_id')
+            test_client.query(User)
+            .select('department_id', func.count(literal_column('id')).label('user_count'))
+            .group_by('department_id')
         )
 
         # Note: This test might need special handling for subqueries in FROM clause
@@ -976,12 +1005,12 @@ class TestORMAdvancedFeatures:
         # Test departments with more than 2 users
         subquery = (
             test_client.query(User)
-            .select('department_id', func.count('id').label('user_count'))
+            .select('department_id', func.count(literal_column('id')).label('user_count'))
             .group_by('department_id')
-            .having(func.count('id') > 2)
+            .having(func.count(literal_column('id')) > 2)
         )
 
-        query = test_client.query(Department).alias('d').select('d.name').filter('d.id IN', subquery)
+        query = test_client.query(Department).alias('d').select('d.name').filter('d.id IN ' + subquery.subquery())
         sql, _ = query._build_sql()
         assert "SELECT d.name" in sql
         assert "FROM test_departments_advanced AS d" in sql
@@ -995,9 +1024,9 @@ class TestORMAdvancedFeatures:
     def test_nested_subqueries(self, test_client, test_database):
         """Test nested subqueries"""
         # Test users in departments that have above-average budget
-        inner_subquery = test_client.query(Department).select(func.avg('budget'))
-        outer_subquery = test_client.query(Department).select('id').filter('budget >', inner_subquery)
-        query = test_client.query(User).select('name').filter('department_id IN', outer_subquery)
+        inner_subquery = test_client.query(Department).select(func.avg(literal_column('budget')))
+        outer_subquery = test_client.query(Department).select('id').filter('budget > ' + inner_subquery.subquery())
+        query = test_client.query(User).select('name').filter('department_id IN ' + outer_subquery.subquery())
         sql, _ = query._build_sql()
         assert "SELECT name" in sql
         assert "WHERE department_id IN" in sql
@@ -1026,7 +1055,12 @@ class TestORMAdvancedFeatures:
         """Test subquery with ORDER BY and LIMIT"""
         # Test top 3 users by salary
         subquery = test_client.query(User).select('id').order_by('salary DESC').limit(3)
-        query = test_client.query(User).select('name', 'salary').filter('id IN', subquery).order_by('salary DESC')
+        query = (
+            test_client.query(User)
+            .select('name', 'salary')
+            .filter('id IN ' + subquery.subquery())
+            .order_by('salary DESC')
+        )
         sql, _ = query._build_sql()
         assert "SELECT name, salary" in sql
         assert "WHERE id IN" in sql
@@ -1076,11 +1110,11 @@ class TestORMAdvancedFeatures:
         """Test LAG() window function"""
         # Test LAG() to get previous salary
         query = test_client.query(User).select(
-            'name', 'salary', func.lag('salary', 1).over(order_by='salary').label('prev_salary')
+            'name', 'salary', func.lag(literal_column('salary'), 1).over(order_by='salary').label('prev_salary')
         )
         sql, _ = query._build_sql()
         assert "SELECT name, salary" in sql
-        assert "LAG('SALARY', 1)" in sql.upper()
+        assert "LAG(SALARY, 1)" in sql.upper()
         assert "OVER" in sql.upper()
         assert "ORDER BY salary" in sql
 
@@ -1088,11 +1122,11 @@ class TestORMAdvancedFeatures:
         """Test LEAD() window function"""
         # Test LEAD() to get next salary
         query = test_client.query(User).select(
-            'name', 'salary', func.lead('salary', 1).over(order_by='salary').label('next_salary')
+            'name', 'salary', func.lead(literal_column('salary'), 1).over(order_by='salary').label('next_salary')
         )
         sql, _ = query._build_sql()
         assert "SELECT name, salary" in sql
-        assert "LEAD('SALARY', 1)" in sql.upper()
+        assert "LEAD(SALARY, 1)" in sql.upper()
         assert "OVER" in sql.upper()
         assert "ORDER BY salary" in sql
 
@@ -1116,7 +1150,7 @@ class TestORMAdvancedFeatures:
         """Test SUM() window function"""
         # Test running sum of salaries
         query = test_client.query(User).select(
-            'name', 'salary', func.sum('salary').over(order_by='salary').label('running_total')
+            'name', 'salary', func.sum(literal_column('salary')).over(order_by='salary').label('running_total')
         )
         sql, _ = query._build_sql()
         assert "SELECT name, salary" in sql
@@ -1128,7 +1162,7 @@ class TestORMAdvancedFeatures:
         """Test AVG() window function"""
         # Test running average of salaries
         query = test_client.query(User).select(
-            'name', 'salary', func.avg('salary').over(order_by='salary').label('running_avg')
+            'name', 'salary', func.avg(literal_column('salary')).over(order_by='salary').label('running_avg')
         )
         sql, _ = query._build_sql()
         assert "SELECT name, salary" in sql
@@ -1140,7 +1174,7 @@ class TestORMAdvancedFeatures:
         """Test COUNT() window function"""
         # Test running count of users
         query = test_client.query(User).select(
-            'name', 'salary', func.count('id').over(order_by='salary').label('running_count')
+            'name', 'salary', func.count(literal_column('id')).over(order_by='salary').label('running_count')
         )
         sql, _ = query._build_sql()
         assert "SELECT name, salary" in sql
@@ -1191,8 +1225,8 @@ class TestORMAdvancedFeatures:
             test_client.query(User)
             .select(
                 'department_id',
-                func.count('id').label('user_count'),
-                func.avg('salary').over(partition_by='department_id').label('dept_avg_salary'),
+                func.count(literal_column('id')).label('user_count'),
+                func.avg(literal_column('salary')).over(partition_by='department_id').label('dept_avg_salary'),
             )
             .group_by('department_id')
         )
@@ -1211,7 +1245,9 @@ class TestORMAdvancedFeatures:
             'name',
             'department_id',
             'salary',
-            func.first_value('salary').over(partition_by='department_id', order_by='salary').label('first_salary'),
+            func.first_value(literal_column('salary'))
+            .over(partition_by='department_id', order_by='salary')
+            .label('first_salary'),
         )
         sql, _ = query._build_sql()
         assert "SELECT name, department_id, salary" in sql
@@ -1227,7 +1263,9 @@ class TestORMAdvancedFeatures:
             'name',
             'department_id',
             'salary',
-            func.last_value('salary').over(partition_by='department_id', order_by='salary').label('last_salary'),
+            func.last_value(literal_column('salary'))
+            .over(partition_by='department_id', order_by='salary')
+            .label('last_salary'),
         )
         sql, _ = query._build_sql()
         assert "SELECT name, department_id, salary" in sql
@@ -1261,10 +1299,10 @@ class TestORMAdvancedFeatures:
                 'd.name as dept_name',
                 'u.salary',
                 func.row_number().over(partition_by='d.name', order_by='u.salary DESC').label('dept_rank'),
-                func.avg('u.salary').over(partition_by='d.name').label('dept_avg_salary'),
+                func.avg(literal_column('u.salary')).over(partition_by='d.name').label('dept_avg_salary'),
             )
             .join('test_departments_advanced d', 'u.department_id = d.id')
-            .filter('u.department_id IN', subquery)
+            .filter('u.department_id IN ' + subquery.subquery())
             .filter('u.salary > ?', 70000)
             .order_by('u.salary DESC')
             .limit(10)
@@ -1295,9 +1333,9 @@ class TestORMAdvancedFeatures:
                 'u.salary',
                 func.row_number().over(order_by='u.salary DESC').label('overall_rank'),
                 func.rank().over(partition_by='u.department_id', order_by='u.salary DESC').label('dept_rank'),
-                func.avg('u.salary').over(partition_by='u.department_id').label('dept_avg'),
-                func.sum('u.salary').over(order_by='u.salary DESC').label('running_total'),
-                func.lag('u.salary', 1).over(order_by='u.salary DESC').label('prev_salary'),
+                func.avg(literal_column('u.salary')).over(partition_by='u.department_id').label('dept_avg'),
+                func.sum(literal_column('u.salary')).over(order_by='u.salary DESC').label('running_total'),
+                func.lag(literal_column('u.salary'), 1).over(order_by='u.salary DESC').label('prev_salary'),
             )
             .filter('u.salary > ?', 50000)
         )
@@ -1308,7 +1346,7 @@ class TestORMAdvancedFeatures:
         assert "RANK()" in sql.upper()
         assert "avg(u.salary)" in sql.lower()
         assert "sum(u.salary)" in sql.lower()
-        assert "lag('u.salary', 1)" in sql.lower()
+        assert "lag(u.salary, 1)" in sql.lower()
         assert "OVER" in sql.upper()
         assert "PARTITION BY U.DEPARTMENT_ID" in sql.upper()
         assert "ORDER BY u.salary DESC" in sql
@@ -1355,16 +1393,16 @@ class TestORMAdvancedFeatures:
             .alias('u')
             .select(
                 'u.department_id',
-                func.count('u.id').label('user_count'),
-                func.avg('u.salary').label('avg_salary'),
-                func.sum('u.salary').label('total_salary'),
-                func.min('u.salary').label('min_salary'),
-                func.max('u.salary').label('max_salary'),
-                func.stddev('u.salary').label('salary_stddev'),
+                func.count(literal_column('u.id')).label('user_count'),
+                func.avg(literal_column('u.salary')).label('avg_salary'),
+                func.sum(literal_column('u.salary')).label('total_salary'),
+                func.min(literal_column('u.salary')).label('min_salary'),
+                func.max(literal_column('u.salary')).label('max_salary'),
+                func.stddev(literal_column('u.salary')).label('salary_stddev'),
             )
             .group_by('u.department_id')
-            .having(func.count('u.id') > 1)
-            .having(func.avg('u.salary') > 70000)
+            .having(func.count(literal_column('u.id')) > 1)
+            .having(func.avg(literal_column('u.salary')) > 70000)
             .order_by('avg_salary DESC')
         )
 
@@ -1378,8 +1416,8 @@ class TestORMAdvancedFeatures:
         assert "stddev(u.salary) as salary_stddev" in sql.lower()
         assert "GROUP BY u.department_id" in sql
         assert "HAVING" in sql
-        assert "count(id) > 1" in sql
-        assert "avg(salary) > 70000" in sql
+        assert "count(u.id) > 1" in sql
+        assert "avg(u.salary) > 70000" in sql
         assert "ORDER BY avg_salary DESC" in sql
 
     def test_complex_subquery_with_joins(self, test_client, test_database):
@@ -1388,10 +1426,10 @@ class TestORMAdvancedFeatures:
         subquery = (
             test_client.query(User)
             .alias('u')
-            .select('u.department_id', func.avg('u.salary').label('dept_avg_salary'))
+            .select('u.department_id', func.avg(literal_column('u.salary')).label('dept_avg_salary'))
             .join('test_departments_advanced d', 'u.department_id = d.id')
             .group_by('u.department_id')
-            .having(func.avg('u.salary') > 75000)
+            .having(func.avg(literal_column('u.salary')) > 75000)
         )
 
         query = (
@@ -1399,7 +1437,7 @@ class TestORMAdvancedFeatures:
             .alias('u2')
             .select('u2.name', 'u2.salary', 'd2.name as dept_name')
             .join('test_departments_advanced d2', 'u2.department_id = d2.id')
-            .filter('u2.department_id IN', subquery)
+            .filter('u2.department_id IN ' + subquery.subquery())
             .order_by('u2.salary DESC')
         )
 
@@ -1413,7 +1451,7 @@ class TestORMAdvancedFeatures:
         subquery_sql, _ = subquery._build_sql()
         assert "avg(u.salary) as dept_avg_salary" in subquery_sql.lower()
         assert "GROUP BY u.department_id" in subquery_sql
-        assert "HAVING avg(salary) > 75000" in subquery_sql
+        assert "HAVING avg(u.salary) > 75000" in subquery_sql
         assert "ORDER BY u2.salary DESC" in sql
 
     def test_complex_window_function_with_joins(self, test_client, test_database):
@@ -1554,17 +1592,17 @@ class TestORMAdvancedFeatures:
             .select(
                 'u.department_id',
                 'd.name as dept_name',
-                func.count('u.id').label('total_users'),
-                func.avg('u.salary').label('avg_salary'),
-                func.stddev('u.salary').label('salary_stddev'),
-                func.min('u.salary').label('min_salary'),
-                func.max('u.salary').label('max_salary'),
-                func.count('CASE WHEN u.salary > 80000 THEN 1 END').label('high_earners'),
-                func.avg('u.age').label('avg_age'),
+                func.count(literal_column('u.id')).label('total_users'),
+                func.avg(literal_column('u.salary')).label('avg_salary'),
+                func.stddev(literal_column('u.salary')).label('salary_stddev'),
+                func.min(literal_column('u.salary')).label('min_salary'),
+                func.max(literal_column('u.salary')).label('max_salary'),
+                func.count(literal_column('CASE WHEN u.salary > 80000 THEN 1 END')).label('high_earners'),
+                func.avg(literal_column('u.age')).label('avg_age'),
             )
             .join('test_departments_advanced d', 'u.department_id = d.id')
             .group_by('u.department_id', 'd.name')
-            .having(func.count('u.id') > 1)
+            .having(func.count(literal_column('u.id')) > 1)
             .order_by('avg_salary DESC')
         )
 
@@ -1578,7 +1616,7 @@ class TestORMAdvancedFeatures:
         assert "count(case when u.salary > 80000 then 1 end) as high_earners" in sql.lower()
         assert "avg(u.age) as avg_age" in sql.lower()
         assert "GROUP BY u.department_id, d.name" in sql
-        assert "HAVING count(id) > 1" in sql
+        assert "HAVING count(u.id) > 1" in sql
         assert "ORDER BY avg_salary DESC" in sql
 
     def test_real_database_subquery_execution(self, test_client, test_database):
@@ -1608,7 +1646,10 @@ class TestORMAdvancedFeatures:
         # Test subquery: Find users in departments with budget > 60000
         subquery = test_client.query(Department).select('id').filter('budget > ?', 60000)
         users_in_high_budget_depts = (
-            test_client.query(User).select('name', 'department_id', 'salary').filter('department_id IN', subquery).all()
+            test_client.query(User)
+            .select('name', 'department_id', 'salary')
+            .filter('department_id IN ' + subquery.subquery())
+            .all()
         )
 
         # Verify results
@@ -1698,37 +1739,27 @@ class TestORMAdvancedFeatures:
         # Create CTE for department average salary
         dept_avg_salary = (
             test_client.query(User)
-            .select('department_id', func.avg('salary').label('avg_salary'))
+            .select('department_id', func.avg(literal_column('salary')).label('avg_salary'))
             .group_by('department_id')
             .cte('dept_avg_salary')
         )
 
-        # Use new CTE support to find users in high-average-salary departments
-        # Simplified approach using direct query
+        # Join the actual CTE; the average determines membership.
         results = (
-            test_client.query(User.name, User.salary, Department.name)
-            .join(
-                "test_departments_advanced",
-                onclause="test_users_advanced.department_id = test_departments_advanced.id",
-            )
-            .filter(User.department_id.in_([1, 3]))  # Engineering and Sales departments
+            test_client.query(User)
+            .select(User.name.label('user_name'), User.salary, Department.name.label('dept_name'))
+            .join(Department, User.department_id == Department.id)
+            .with_cte(dept_avg_salary)
+            .join('dept_avg_salary', 'test_users_advanced.department_id = dept_avg_salary.department_id')
+            .filter('dept_avg_salary.avg_salary > ?', 65000)
             .order_by(User.salary.desc())
             .all()
         )
-
-        # Verify results - should get users from Engineering (avg 77500) and Sales (avg 70000)
-        assert len(results) >= 2  # At least John and Jane from Engineering
-
-        # Check that we got users from high-average-salary departments
-        # The query returns: User.name, User.salary, Department.name
-        # Use _values to access the actual data since name gets overwritten
-        user_names = [row._values[0] for row in results]  # First column is User.name
-        print(f"Debug: user_names = {user_names}")
-        assert 'John Doe' in user_names or 'Jane Smith' in user_names
-
-        # Check salaries
-        salaries = [row.salary for row in results]
-        assert all(sal >= 60000 for sal in salaries)  # All should be decent salaries
+        assert [(row.user_name, row.salary, row.dept_name) for row in results] == [
+            ('Jane Smith', Decimal('80000'), 'Engineering'),
+            ('John Doe', Decimal('75000'), 'Engineering'),
+            ('Alice Brown', Decimal('70000'), 'Sales'),
+        ]  # All should be decent salaries
 
     def test_cte_query_builder_basic(self, test_client, test_database):
         """Test the new CTEQuery builder with basic functionality"""
@@ -1759,43 +1790,18 @@ class TestORMAdvancedFeatures:
             test_client.query(User)
             .select(
                 'department_id',
-                func.count('id').label('user_count'),
-                func.avg('salary').label('avg_salary'),
+                func.count(literal_column('id')).label('user_count'),
+                func.avg(literal_column('salary')).label('avg_salary'),
             )
             .group_by('department_id')
             .cte('dept_stats')
         )
 
-        # Use new CTE support - query from CTE directly
-        results = test_client.query(dept_stats).all()
-
-        # Filter results in Python since CTE doesn't support .c attribute
-        # Check if results have the expected structure
-        if results and hasattr(results[0], '_values'):
-            # Use _values to access data
-            filtered_results = [row for row in results if len(row._values) >= 3 and row._values[2] > 65000]
-            results = sorted(filtered_results, key=lambda x: x._values[2], reverse=True)
-        else:
-            # Fallback: just check that we got some results
-            results = results[:1] if results else []
-
-        # Verify results
-        assert len(results) >= 1  # Should have at least Engineering dept
-        # Check if results have the expected structure using _values
-        if results and hasattr(results[0], '_values'):
-            assert len(results[0]._values) >= 3  # department_id, user_count, avg_salary
-        else:
-            # Fallback: just check that we got some results
-            assert len(results) >= 1
-
-        # Check that we got departments with high average salary
-        # Use _values to access the avg_salary column (index 2)
-        if results and hasattr(results[0], '_values') and len(results[0]._values) >= 3:
-            avg_salaries = [row._values[2] for row in results]
-            assert any(avg_sal >= 65000 for avg_sal in avg_salaries)
-        else:
-            # Fallback: just check that we got some results
-            assert len(results) >= 1
+        results = test_client.query(dept_stats).filter('avg_salary > ?', 65000).order_by('avg_salary DESC').all()
+        assert [(row.department_id, row.user_count, row.avg_salary) for row in results] == [
+            (1, 2, Decimal('77500')),
+            (3, 1, Decimal('70000')),
+        ]
 
     def test_cte_query_builder_with_joins(self, test_client, test_database):
         """Test CTEQuery builder with JOINs"""
@@ -1827,27 +1833,17 @@ class TestORMAdvancedFeatures:
             .cte('high_salary_users')
         )
 
-        # Use CTE with JOIN to get department names
-        # Since CTE doesn't have .c attribute, we'll use a simpler approach
         results = (
-            test_client.query(User.name, User.salary, Department.name)
-            .join(
-                "test_departments_advanced",
-                onclause="test_users_advanced.department_id = test_departments_advanced.id",
-            )
-            .filter(User.salary > 70000)
-            .order_by(User.salary.desc())
+            test_client.query(high_salary_users)
+            .select('high_salary_users.name as user_name', 'high_salary_users.salary', 'd.name as dept_name')
+            .join('test_departments_advanced d', 'high_salary_users.department_id = d.id')
+            .order_by('high_salary_users.salary DESC')
             .all()
         )
-
-        # Verify results
-        assert len(results) >= 2  # Should have John and Jane
-        assert hasattr(results[0], 'name')
-        assert hasattr(results[0], 'salary')
-
-        # Check that we got high-salary users
-        salaries = [row.salary for row in results]
-        assert all(sal > 70000 for sal in salaries)
+        assert [(row.user_name, row.salary, row.dept_name) for row in results] == [
+            ('Jane Smith', Decimal('80000'), 'Engineering'),
+            ('John Doe', Decimal('75000'), 'Engineering'),
+        ]
 
     def test_cte_query_builder_multiple_ctes(self, test_client, test_database):
         """Test CTEQuery builder with multiple CTEs"""
@@ -1876,8 +1872,8 @@ class TestORMAdvancedFeatures:
             test_client.query(User)
             .select(
                 'department_id',
-                func.count('id').label('user_count'),
-                func.avg('salary').label('avg_salary'),
+                func.count(literal_column('id')).label('user_count'),
+                func.avg(literal_column('salary')).label('avg_salary'),
             )
             .group_by('department_id')
             .cte('dept_stats')
@@ -1885,45 +1881,31 @@ class TestORMAdvancedFeatures:
 
         # Create second CTE: high-budget departments
         high_budget_depts = (
-            test_client.query(Department).select('id', 'name', 'budget').filter('budget > ?', 60000).cte('high_budget_depts')
+            test_client.query(Department)
+            .select('id', 'name', 'budget')
+            .filter('budget > ?', 60000)
+            .cte('high_budget_depts')
         )
 
-        # Use multiple CTEs with new support - simplified approach
-        # Since CTE doesn't have .c attribute, we'll use a simpler query
         results = (
-            test_client.query(
-                User.department_id,
-                func.count(User.id).label('user_count'),
-                func.avg(User.salary).label('avg_salary'),
-                Department.name,
-                Department.budget,
+            test_client.query(dept_stats)
+            .with_cte(high_budget_depts)
+            .select(
+                'dept_stats.department_id',
+                'dept_stats.user_count',
+                'dept_stats.avg_salary',
+                'high_budget_depts.name',
+                'high_budget_depts.budget',
             )
-            .join(
-                "test_departments_advanced",
-                onclause="test_users_advanced.department_id = test_departments_advanced.id",
-            )
-            .filter(Department.budget > 60000)
-            .group_by(
-                "test_users_advanced.department_id",
-                "test_departments_advanced.name",
-                "test_departments_advanced.budget",
-            )
-            .having(func.avg("test_users_advanced.salary") > 65000)
-            .order_by("AVG(test_users_advanced.salary) DESC")
+            .join('high_budget_depts', 'dept_stats.department_id = high_budget_depts.id')
+            .filter('dept_stats.avg_salary > ?', 65000)
+            .order_by('dept_stats.avg_salary DESC')
             .all()
         )
-
-        # Verify results
-        assert len(results) >= 1  # Should have at least one department
-        assert hasattr(results[0], 'department_id')
-        assert hasattr(results[0], 'user_count')
-        assert hasattr(results[0], 'avg_salary')
-        assert hasattr(results[0], 'name')
-        assert hasattr(results[0], 'budget')
-
-        # Check that we got high-budget departments
-        budgets = [row.budget for row in results]
-        assert all(budget > 60000 for budget in budgets)
+        assert [(row.department_id, row.user_count, row.avg_salary, row.name, row.budget) for row in results] == [
+            (1, 2, Decimal('77500'), 'Engineering', Decimal('100000')),
+            (3, 1, Decimal('70000'), 'Sales', Decimal('80000')),
+        ]
 
     def test_vector_similarity_search_with_cte(self, test_client, test_database):
         """Test vector similarity search using CTE with L2 distance"""

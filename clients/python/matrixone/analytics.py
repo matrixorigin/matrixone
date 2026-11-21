@@ -976,8 +976,10 @@ def _validate_upload(batch_size, max_staging_bytes):
         raise ValueError("max_staging_bytes must be a positive integer")
 
 
-def _stage_arrow(data, staging_dir, schema, batch_size, max_staging_bytes, on_path, cancelled=None):
-    """Produce one IPC file. The caller owns unlink after this function exits.
+def _stage_arrow(
+    data, staging_dir, schema, batch_size, max_staging_bytes, on_path, cancelled=None, file_format='arrow'
+):
+    """Produce one checked IPC/Parquet file; the caller owns unlink on exit.
 
     on_path registers the exact reserved identity before any IPC write. No DB
     connection is involved. A supplied reader remains owned by its caller.
@@ -986,6 +988,8 @@ def _stage_arrow(data, staging_dir, schema, batch_size, max_staging_bytes, on_pa
     import pyarrow.ipc as ipc
 
     _validate_upload(batch_size, max_staging_bytes)
+    if file_format not in ('arrow', 'parquet'):
+        raise ValueError('Unsupported Arrow upload staging format')
     _check_cancelled(cancelled)
     owned_reader = not isinstance(data, pa.RecordBatchReader)
     reader = _as_reader(data, schema)
@@ -995,14 +999,21 @@ def _stage_arrow(data, staging_dir, schema, batch_size, max_staging_bytes, on_pa
         wire = _wire_schema(reader.schema)
         directory = Path(staging_dir).resolve(strict=True)
         _check_cancelled(cancelled)
-        fd, path = tempfile.mkstemp(prefix="mo_py_arrow_", suffix=".arrow", dir=str(directory))
+        fd, path = tempfile.mkstemp(prefix="mo_py_arrow_", suffix="." + file_format, dir=str(directory))
         try:
             on_path(path)
             sink = _StagingSink(fd, max_staging_bytes)
         except BaseException:
             os.close(fd)
             raise
-        writer = ipc.new_file(sink, wire)
+        if file_format == 'parquet':
+            import pyarrow.parquet as parquet
+
+            writer = parquet.ParquetWriter(
+                sink, wire, version='2.6', compression=None, use_dictionary=False, write_statistics=False
+            )
+        else:
+            writer = ipc.new_file(sink, wire)
         rows = 0
         for batch in reader:
             _check_cancelled(cancelled)
@@ -1035,6 +1046,11 @@ def _stage_arrow(data, staging_dir, schema, batch_size, max_staging_bytes, on_pa
                 error = cleanup_errors[0]
                 error.arrow_cleanup_errors = tuple(cleanup_errors[1:])
                 raise error
+
+
+def _check_upload_client(client, engine, generation):
+    if client._engine is not engine or getattr(client, '_compatibility_generation', None) != generation:
+        raise RuntimeError('Client connection changed during Arrow upload preparation')
 
 
 class AnalyticsManager:
@@ -1161,36 +1177,57 @@ class AnalyticsManager:
         batch_size=65536,
         max_staging_bytes=1024 * 1024 * 1024,
     ):
-        """Create/append via one atomic native Arrow LOAD from shared staging.
+        """Create/append Arrow input atomically through shared staging.
 
         staging_dir must already exist and be visible to the server, optionally
         under server_staging_dir. No LOCAL/Flight transport is implied. Nested
         types and sub-microsecond timestamps fail rather than silently truncate.
         With create=True the target must not exist; existing tables are untouched.
+        A server that definitively rejects native Arrow LOAD uses checked Parquet
+        staging. Unknown probe failures do not authorize a format change.
         """
         target = _table_name(table).replace("%", "%%")
         _validate_upload(batch_size, max_staging_bytes)
         self._require_arrow_load()
+        _arrow()
+        Path(staging_dir).resolve(strict=True)
+        engine = self.engine
+        generation = getattr(self.client, '_compatibility_generation', None)
         paths = []
         rows = None
         committed = False
-        operation_phase = 'staging'
+        operation_phase = 'capability'
         try:
-            staged = _stage_arrow(data, staging_dir, schema, batch_size, max_staging_bytes, paths.append)
+            from .capabilities import check_arrow_load
+
+            pool_wait()
+            with engine.connect() as probe:
+                file_format = check_arrow_load(probe, allow_parquet=True)
+            _check_upload_client(self.client, engine, generation)
+            operation_phase = 'staging'
+            staged = _stage_arrow(
+                data, staging_dir, schema, batch_size, max_staging_bytes, paths.append, file_format=file_format
+            )
             rows = staged.rows
             wire = staged.schema
             server_path = _server_staging_path(server_staging_dir or Path(staged.path).parent, Path(staged.path).name)
             try:
-                with _write_transaction(self.engine, rows=rows) as conn:
-                    from .capabilities import check_arrow_load
+                _check_upload_client(self.client, engine, generation)
+                with _write_transaction(engine, rows=rows) as conn:
+                    _check_upload_client(self.client, engine, generation)
+                    selected_format = check_arrow_load(conn, allow_parquet=True)
+                    if file_format == 'arrow' and selected_format != 'arrow':
+                        from .exceptions import QueryError
 
-                    check_arrow_load(conn)
+                        raise QueryError(
+                            'Selected checkout rejects the staged Arrow format', phase='capability', committed=False
+                        )
                     operation_phase = 'ddl_table'
                     if create:
                         conn.exec_driver_sql("CREATE TABLE %s (%s)" % (target, _ddl_columns(wire)))
                     operation_phase = 'load'
                     conn.exec_driver_sql(
-                        "LOAD DATA INFILE {'filepath'=%s, 'format'='arrow'} INTO TABLE " + target,
+                        "LOAD DATA INFILE {'filepath'=%s, 'format'='" + file_format + "'} INTO TABLE " + target,
                         (server_path,),
                     )
                 committed = True

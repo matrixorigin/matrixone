@@ -19,6 +19,22 @@ Stages enable:
 * ✅ **Transaction support** - atomic stage operations with ``session()``
 * ✅ **Security** - store credentials separately from queries
 
+Released-server compatibility
+-----------------------------
+
+On official MatrixOne 4.2.8, the SDK reports an actionable ``QueryError`` before
+Stage creation when names/catalog values contain apostrophes, or when
+``enable=False`` is requested. The server cannot safely persist those quoted
+values and ignores the disabled-create option. Values and options are never
+removed silently.
+
+Ordinary Stage names and values remain supported. If an initially enabled Stage
+is acceptable, explicitly create it with ``enable=True`` and then call
+``client.stage.alter(name, enable=False)``. This is a two-step choice, not atomic
+disabled creation. Percent-encode URI path characters where appropriate;
+quoted credentials/comments and atomic disabled creation require a fixed
+server release. See the `compatibility map <design/release-quality.md>`_.
+
 Creating Stages with Simple Interfaces (Recommended)
 -----------------------------------------------------
 

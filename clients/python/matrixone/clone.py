@@ -235,6 +235,12 @@ class CloneManager(BaseCloneManager):
         try:
             if if_not_exists and self._has_rows(executor.execute(self._existence_sql(object_type, target))):
                 return
+            # Some releases acknowledge a missing source database by creating
+            # an empty target. Check the live source before issuing that write.
+            # Snapshot clones must not require the source to still exist today.
+            if object_type == 'DATABASE' and snapshot is None:
+                if not self._has_rows(executor.execute(self._verification_sql(object_type, source))):
+                    raise CloneError('Source database does not exist')
             executor.execute(sql)
         except Exception as error:
             raise CloneError('Failed to clone ' + object_type.lower() + ': ' + str(error)) from error
@@ -433,6 +439,9 @@ class AsyncCloneManager(BaseCloneManager):
             try:
                 if if_not_exists and self._has_rows(await executor.execute(self._existence_sql(object_type, target))):
                     return
+                if object_type == 'DATABASE' and snapshot is None:
+                    if not self._has_rows(await executor.execute(self._verification_sql(object_type, source))):
+                        raise CloneError('Source database does not exist')
                 await executor.execute(sql)
             except Exception as error:
                 raise CloneError('Failed to clone ' + object_type.lower() + ': ' + str(error)) from error

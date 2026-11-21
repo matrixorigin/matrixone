@@ -63,6 +63,8 @@ class TestMatrixOneVersionParsing(unittest.TestCase):
             ("10.5.2-MatrixOne-v2.1.5", "2.1.5"),
             ("1.0.0-MatrixOne-v1.0.0", "1.0.0"),
             ("15.20.30-MatrixOne-v4.5.6", "4.5.6"),
+            ("8.0.30-MatrixOne-v4.2.8-hotfix", "4.2.8"),
+            ("8.0.30-MatrixOne-v4.2.8-hotfix-20261114", "4.2.8"),
         ]
 
         for version_string, expected in test_cases:
@@ -96,6 +98,10 @@ class TestMatrixOneVersionParsing(unittest.TestCase):
             "invalid",  # Completely invalid
             "8.0.30-MatrixOne",  # Missing version part
             "8.0.30-MatrixOne-v-",  # Invalid format
+            "8.0.30-MatrixOne-v4.2.8-hotfix-",
+            "8.0.30-MatrixOne-v4.2.8-hotfix-202611140",
+            "8.0.30-MatrixOne-v4.2.8-hotfix-20261114-custom",
+            "8.0.30-MatrixOne-v4.2.8-custom",
         ]
 
         for invalid_version in invalid_versions:

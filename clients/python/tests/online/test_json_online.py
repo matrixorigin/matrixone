@@ -11,6 +11,7 @@ Uses a single test table to reduce overhead.
 """
 
 import json
+from decimal import Decimal
 import pytest
 from sqlalchemy import Column, Integer, String, update, Numeric, literal, select
 from matrixone import Client
@@ -380,16 +381,16 @@ class TestStandardSyntax:
         assert results.rows[1][1] == 'Logitech'
 
     def test_cast_to_numeric(self, client, test_table):
-        """Test .cast(Numeric) for numeric conversion."""
+        """Test .cast(Numeric(18, 2)) for numeric conversion."""
         results = (
-            client.query(Product.product_name, Product.specifications['price'].cast(Numeric).label('price'))
+            client.query(Product.product_name, Product.specifications['price'].cast(Numeric(18, 2)).label('price'))
             .order_by(Product.product_id)
             .execute()
         )
 
         # Returns numeric values
-        assert results.rows[0][1] == 1299.99
-        assert results.rows[1][1] == 99.99
+        assert results.rows[0][1] == Decimal('1299.99')
+        assert results.rows[1][1] == Decimal('99.99')
 
     def test_filter_with_dict_syntax(self, client, test_table):
         """Test WHERE with column['key']."""
@@ -411,8 +412,8 @@ class TestStandardSyntax:
         """Test numeric filtering with .cast()."""
         # Use a fresh query to avoid data modification from previous tests
         results = (
-            client.query(Product.product_name, Product.specifications['price'].cast(Numeric).label('price'))
-            .filter(Product.specifications['price'].cast(Numeric) > 100)
+            client.query(Product.product_name, Product.specifications['price'].cast(Numeric(18, 2)).label('price'))
+            .filter(Product.specifications['price'].cast(Numeric(18, 2)) > 100)
             .execute()
         )
 
@@ -446,6 +447,7 @@ class TestBooleanHandling:
 
     def test_string_boolean_comparison(self, client):
         """Python string 'true' matches JSON STRING values, not JSON booleans."""
+
         # Dedicated mixed fixture: the shared Product table stores verified as
         # booleans, which the STRING guard must not select for == 'true'.
         class MixedVerified(Base):
@@ -518,11 +520,11 @@ class TestComplexScenarios:
             client.query(
                 Product.product_name,
                 Product.specifications['brand'].astext.label('brand'),
-                Product.specifications['price'].cast(Numeric).label('price'),
+                Product.specifications['price'].cast(Numeric(18, 2)).label('price'),
             )
             .filter(Product.specifications['active'] == True)
-            .filter(Product.specifications['price'].cast(Numeric) > 100)
-            .order_by(Product.specifications['price'].cast(Numeric).desc())
+            .filter(Product.specifications['price'].cast(Numeric(18, 2)) > 100)
+            .order_by(Product.specifications['price'].cast(Numeric(18, 2)).desc())
             .execute()
         )
 
@@ -531,7 +533,7 @@ class TestComplexScenarios:
         assert len(rows) == 1
         assert rows[0][0] == 'Laptop'
         assert rows[0][1] == 'Dell'
-        assert rows[0][2] == 1299.99
+        assert rows[0][2] == Decimal('1299.99')
 
     def test_multiple_json_extracts(self, client, test_table):
         """Test multiple JSON field extractions."""
@@ -540,7 +542,7 @@ class TestComplexScenarios:
                 Product.product_name,
                 Product.specifications['brand'].astext.label('brand'),
                 Product.specifications['category'].astext.label('category'),
-                Product.specifications['price'].cast(Numeric).label('price'),
+                Product.specifications['price'].cast(Numeric(18, 2)).label('price'),
                 Product.specifications['active'].label('active'),
             )
             .filter(Product.product_id == 1)
@@ -551,7 +553,7 @@ class TestComplexScenarios:
         assert row[0] == 'Laptop'
         assert row[1] == 'Dell'
         assert row[2] == 'Electronics'
-        assert row[3] == 1299.99
+        assert row[3] == Decimal('1299.99')
         assert 'true' in str(row[4])
 
 

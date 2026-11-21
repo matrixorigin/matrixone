@@ -13,6 +13,7 @@ import pytest
 
 from matrixone import Client
 from matrixone.async_client import AsyncClient
+from matrixone.exceptions import QueryError
 
 pytestmark = pytest.mark.skipif(os.environ.get('MO_SDK_ONLINE') != '1', reason='isolated server required')
 
@@ -201,7 +202,11 @@ def test_native_snapshot_mode_is_owned_by_connection(client):
     with client._engine.begin() as connection:
         connection.exec_driver_sql("SET sql_mode='NO_BACKSLASH_ESCAPES'")
     try:
-        assert SnapshotClient(client, 'unused_without_from').execute("SELECT '\\', ?", (7,)).rows == [('\\', 7)]
+        # Snapshot rewriting deliberately rejects mode-dependent raw literals
+        # before dispatch. Ordinary execution still resolves the checkout's mode.
+        with pytest.raises(ValueError, match='mode-ambiguous'):
+            SnapshotClient(client, 'unused_without_from').execute("SELECT '\\', ?", (7,))
+        assert client.execute("SELECT '\\', ?", (7,)).rows == [('\\', 7)]
     finally:
         with client._engine.begin() as connection:
             connection.exec_driver_sql("SET sql_mode=''")
@@ -257,20 +262,22 @@ _NATIVE_TOKEN_CASES = [
 
 @pytest.mark.parametrize('sql,params,expected', _NATIVE_TOKEN_CASES)
 @pytest.mark.parametrize('surface', ['client', 'embedded_session', 'exported_session'])
-def test_native_public_token_boundaries(client, surface, sql, params, expected):
+def test_native_public_token_boundaries(client, surface, sql, params, expected, record_property):
     from matrixone.client import Session as ClientSession
     from matrixone.session import Session as ExportedSession
 
-    if surface == 'client':
-        assert client.execute(sql, params).rows == [expected]
-    else:
+    def execute():
+        if surface == 'client':
+            return client.execute(sql, params).rows[0]
         cls = ClientSession if surface == 'embedded_session' else ExportedSession
         with cls(bind=client._engine, client=client) as session:
-            assert tuple(session.execute(sql, params).one()) == expected
+            return tuple(session.execute(sql, params).one())
+
+    assert execute() == expected
 
 
 @pytest.mark.asyncio
-async def test_async_native_public_token_boundaries(client):
+async def test_async_native_public_token_boundaries(client, record_property):
     c = AsyncClient(logger=Mock())
     await c.connect(
         host=os.environ.get('MO_HOST', '127.0.0.1'),
