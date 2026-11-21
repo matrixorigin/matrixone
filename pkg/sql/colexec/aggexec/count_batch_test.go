@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -61,7 +60,7 @@ func TestCountBatchDenseState(t *testing.T) {
 			if mode != "null" {
 				require.NoError(t, vector.AppendFixedList(vec, make([]int64, rows), nil, mp))
 				if mode == "nullable" {
-					nulls.Add(vec.GetNulls(), 3, uint64(rows-2))
+					vec.GetNulls().Add(3, uint64(rows-2))
 				}
 				if mode == "constant" {
 					vec.ToConst()

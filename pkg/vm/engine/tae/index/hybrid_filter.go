@@ -189,7 +189,7 @@ func (bf *hybridFilter) MayContainsKey(key []byte) (bool, error) {
 
 func (bf *hybridFilter) MayContainsAnyKeys(
 	keys containers.Vector,
-) (bool, *nulls.Bitmap, error) {
+) (bool, *nulls.Nulls, error) {
 	return bf.bloomFilter.MayContainsAnyKeys(keys)
 }
 

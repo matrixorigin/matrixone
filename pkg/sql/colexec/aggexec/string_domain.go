@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// mergeEqualRuntimeStringDomain makes provenance merging for equal aggregate
+// mergeEqualRuntimeStringDomain makes runtime-domain merging for equal aggregate
 // candidates commutative and associative. The contributing-values policy is
 // defined over effective domains, not runtime enum ordinals: an inherited
 // statically-binary value therefore dominates an explicit Text override.
@@ -33,17 +33,11 @@ func mergeEqualRuntimeStringDomain(
 ) error {
 	destinationType := *destination.GetType()
 	sourceType := *source.GetType()
-	mergedSource, err := types.MergeStringSources(
-		destination.GetStringSourceAt(destinationRow), source.GetStringSourceAt(sourceRow))
-	if err != nil {
-		return err
-	}
-	if err := destination.PreflightSetStringSourceAt(destinationRow, mergedSource, mp); err != nil {
-		return err
-	}
 	if types.StaticStringDomain(destinationType) == types.StringDomainNone {
-		return destination.SetStringSourceAtWithMP(destinationRow, mergedSource, mp)
+		return nil
 	}
+	// The semantic-state API still takes a string source; aggregate state
+	// carries no source provenance, so both sides use the default.
 	destinationState, err := types.NewStringSemanticState(
 		destinationType,
 		destination.GetRuntimeStringDomainAt(destinationRow),
@@ -75,8 +69,5 @@ func mergeEqualRuntimeStringDomain(
 	if err != nil {
 		return err
 	}
-	if err := destination.SetRuntimeStringDomainAtWithMP(destinationRow, merged.RuntimeDomain(), mp); err != nil {
-		return err
-	}
-	return destination.SetStringSourceAtWithMP(destinationRow, mergedSource, mp)
+	return destination.SetRuntimeStringDomainAtWithMP(destinationRow, merged.RuntimeDomain(), mp)
 }

@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -70,15 +69,10 @@ func TrySelectBetweenRows(parameters []*vector.Vector, proc *process.Process, le
 
 func plainBetweenSelectionDate(value *vector.Vector, literal bool) bool {
 	if value == nil || value.GetType().Oid != types.T_date || value.IsDictionary() ||
-		value.HasNull() || value.HasGrouping() || value.HasBinaryStringMetadata() ||
-		value.GetPrepareParamKind() != vector.PrepareParamNone || len(value.GetPrepareParamKinds()) != 0 ||
-		value.GetPrepareParamType() != types.T_any || value.IsPreparedJSONComparisonParam() {
+		value.HasNull() || value.HasGrouping() || value.HasBinaryStringMetadata() {
 		return false
 	}
-	// DATE literals carry scalar literal provenance. It has no effect on DATE
-	// comparison; dynamic/row string provenance still uses the ordinary kernel.
-	return !value.HasStringSourceMetadata() || literal &&
-		value.GetStringSource() == types.StringSourceLiteral && len(value.GetStringSources()) == 0
+	return true
 }
 
 func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -307,7 +301,7 @@ func opBetweenBool(
 		})
 	}
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
-		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		return nil
 	}
 	ivec := parameters[0]
@@ -320,7 +314,7 @@ func opBetweenBool(
 	alwaysFalse := lval && !rval
 
 	if ivec.IsConstNull() {
-		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 	} else if ivec.IsConst() {
 		if alwaysFalse {
 			for i := range length {
@@ -400,7 +394,7 @@ func opBetweenFixed[T constraints.Integer | constraints.Float](
 		})
 	}
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
-		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		return nil
 	}
 	ivec := parameters[0]
@@ -427,7 +421,7 @@ func opBetweenFixed[T constraints.Integer | constraints.Float](
 
 	if ivec.IsConst() {
 		if ivec.IsConstNull() {
-			nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+			result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		} else {
 			val := icol[0]
 			r := val >= lval && val <= rval
@@ -487,7 +481,7 @@ func opBetweenFixedWithFn[T types.FixedSizeTExceptStrType](
 		return opBetweenFixedRows(parameters, result, length, compareFunc)
 	}
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
-		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		return nil
 	}
 	ivec := parameters[0]
@@ -514,7 +508,7 @@ func opBetweenFixedWithFn[T types.FixedSizeTExceptStrType](
 
 	if ivec.IsConst() {
 		if ivec.IsConstNull() {
-			nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+			result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		} else {
 			val := icol[0]
 			r := compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
@@ -575,7 +569,7 @@ func opBetweenBytesWithFunc(
 		return opBetweenBytesRows(parameters, result, length, compareFunc)
 	}
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
-		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		return nil
 	}
 	ivec := parameters[0]
@@ -598,7 +592,7 @@ func opBetweenBytesWithFunc(
 
 	if ivec.IsConst() {
 		if ivec.IsConstNull() {
-			nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+			result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		} else {
 			val := icol[0].GetByteSlice(iarea)
 			r := compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
@@ -810,7 +804,7 @@ func inRangeBool(
 	length int,
 ) error {
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
-		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		return nil
 	}
 	ivec := parameters[0]
@@ -848,7 +842,7 @@ func inRangeBool(
 	}
 
 	if ivec.IsConstNull() {
-		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 	} else if ivec.IsConst() {
 		r := check(icol[0])
 		for i := range length {
@@ -881,7 +875,7 @@ func inRangeFixed[T constraints.Integer | constraints.Float](
 	length int,
 ) error {
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
-		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		return nil
 	}
 	ivec := parameters[0]
@@ -892,7 +886,7 @@ func inRangeFixed[T constraints.Integer | constraints.Float](
 	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
 	if ivec.IsConstNull() {
-		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 	} else if ivec.IsConst() {
 		val := icol[0]
 		var r bool
@@ -1001,7 +995,7 @@ func inRangeFixedWithFunc[T types.FixedSizeTExceptStrType](
 	compareFunc func(v1, v2 T) int,
 ) error {
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
-		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		return nil
 	}
 	ivec := parameters[0]
@@ -1012,7 +1006,7 @@ func inRangeFixedWithFunc[T types.FixedSizeTExceptStrType](
 	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
 	if ivec.IsConstNull() {
-		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 	} else if ivec.IsConst() {
 		val := icol[0]
 		var r bool
@@ -1122,7 +1116,7 @@ func inRangeBytesWithFunc(
 	compareFunc func(v1, v2 []byte) int,
 ) error {
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
-		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		return nil
 	}
 	ivec := parameters[0]
@@ -1134,7 +1128,7 @@ func inRangeBytesWithFunc(
 
 	if ivec.IsConst() {
 		if ivec.IsConstNull() {
-			nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+			result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		} else {
 			val := icol[0].GetByteSlice(iarea)
 			var r bool

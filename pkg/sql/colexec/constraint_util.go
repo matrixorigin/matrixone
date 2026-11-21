@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -67,7 +66,7 @@ func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan
 			continue
 		}
 		nsp := vecs[j].GetNulls()
-		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility && nulls.Any(nsp) {
+		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility && nsp.Any() {
 			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", attrs[j]))
 		}
 	}
@@ -152,7 +151,7 @@ func BatchDataNotNullFillForIgnore(
 				return nil, moerr.NewConstraintViolation(proc.Ctx,
 					fmt.Sprintf("Column '%s' cannot be null", attr))
 			}
-			nulls.Del(vec.GetNulls(), uint64(slot))
+			vec.GetNulls().Del(uint64(slot))
 			adjusted = true
 			warnings.Add(moerr.ER_BAD_NULL_ERROR,
 				fmt.Sprintf("Column '%s' cannot be null", attr))
@@ -182,7 +181,7 @@ func constImplicitNotNullDefaultVec(vec *vector.Vector, rows int, mp *mpool.MPoo
 		dst.Free(mp)
 		return nil, ok, err
 	}
-	nulls.Del(dst.GetNulls(), 0)
+	dst.GetNulls().Del(0)
 	dst.ToConst()
 	dst.SetLength(rows)
 	return dst, true, nil

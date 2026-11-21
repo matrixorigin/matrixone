@@ -69,6 +69,9 @@ func TestIcebergDeleteBuildsDMLWriteIntent(t *testing.T) {
 	if scan == nil {
 		t.Fatalf("expected Iceberg external scan")
 	}
+	if scan.GetExtraOptions() != icebergapi.DMLTargetScanPlanExtraOptions {
+		t.Fatalf("Iceberg DELETE target scan marker = %q", scan.GetExtraOptions())
+	}
 	if !tableDefHasCol(scan.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
 		!tableDefHasCol(scan.GetTableDef(), icebergapi.DMLRowOrdinalColumnName) {
 		t.Fatalf("scan table def is missing DML metadata columns: %+v", scan.GetTableDef())
@@ -178,6 +181,9 @@ func TestIcebergUpdateBuildsDMLWriteIntent(t *testing.T) {
 	}
 	if scan == nil {
 		t.Fatalf("expected Iceberg external scan")
+	}
+	if scan.GetExtraOptions() != icebergapi.DMLTargetScanPlanExtraOptions {
+		t.Fatalf("Iceberg UPDATE target scan marker = %q", scan.GetExtraOptions())
 	}
 	if !tableDefHasCol(scan.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
 		!tableDefHasCol(scan.GetTableDef(), icebergapi.DMLRowOrdinalColumnName) {
@@ -351,6 +357,9 @@ func TestIcebergMergeMatchedUpdateBuildsDMLWriteIntent(t *testing.T) {
 	}
 	if scan == nil {
 		t.Fatalf("expected Iceberg external scan")
+	}
+	if scan.GetExtraOptions() != icebergapi.DMLTargetScanPlanExtraOptions {
+		t.Fatalf("Iceberg MERGE target scan marker = %q", scan.GetExtraOptions())
 	}
 	if !tableDefHasCol(scan.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
 		!tableDefHasCol(scan.GetTableDef(), icebergapi.DMLRowOrdinalColumnName) {

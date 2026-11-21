@@ -39,25 +39,12 @@ func TestBetweenRowSelectionLiteralDateBounds(t *testing.T) {
 	t.Cleanup(func() { upper.Free(proc.Mp()) })
 	parameters := []*vector.Vector{source, lower, upper}
 	scratch := make([]int64, 0, 4)
-	for _, literal := range []bool{false, true} {
-		if literal {
-			require.NoError(t, lower.SetStringSource(types.StringSourceLiteral))
-			require.NoError(t, upper.SetStringSource(types.StringSourceLiteral))
-		}
-		rows, admitted, err := TrySelectBetweenRows(parameters, proc, 4, scratch)
-		require.NoError(t, err)
-		require.True(t, admitted)
-		require.Equal(t, []int64{1, 2}, rows)
-	}
-	// Literal provenance on scalar bounds is safe; the source's unproved
-	// provenance and a wrong logical domain still take ordinary evaluation.
-	require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
-	scratch = append(scratch[:0], 99)
 	rows, admitted, err := TrySelectBetweenRows(parameters, proc, 4, scratch)
 	require.NoError(t, err)
-	require.False(t, admitted)
-	require.Equal(t, []int64{99}, rows)
-	require.NoError(t, source.SetStringSource(types.StringSourceExpression))
+	require.True(t, admitted)
+	require.Equal(t, []int64{1, 2}, rows)
+	// A wrong logical domain still takes ordinary evaluation.
+	scratch = append(scratch[:0], 99)
 	rows, admitted, err = TrySelectBetweenRows(parameters, proc, 5, scratch)
 	require.NoError(t, err)
 	require.False(t, admitted)

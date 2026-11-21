@@ -337,34 +337,34 @@ func TestValueWindowExec_ResultOwnership(t *testing.T) {
 	}
 }
 
-func TestValueWindowExecPreservesRowStringSources(t *testing.T) {
+func TestValueWindowExecPreservesRowStringDomains(t *testing.T) {
 	for _, window := range []struct {
 		name   string
 		id     int64
-		want   []types.StringSource
+		want   []types.RuntimeStringDomain
 		values []string
 		nulls  []bool
 	}{
 		{
 			name: "lag",
 			id:   WinIdOfLag, values: []string{"", "a", "b", "c", "d"}, nulls: []bool{true, false, false, false, false},
-			want: []types.StringSource{
-				types.StringSourceExpression,
-				types.StringSourceExpression,
-				types.StringSourceLiteral,
-				types.StringSourceUserVariable,
-				types.StringSourceSQLPrepare,
+			want: []types.RuntimeStringDomain{
+				types.RuntimeStringInherit,
+				types.RuntimeStringInherit,
+				types.RuntimeStringBinary,
+				types.RuntimeStringText,
+				types.RuntimeStringInherit,
 			},
 		},
 		{
 			name: "lead",
 			id:   WinIdOfLead, values: []string{"b", "c", "d", "e", ""}, nulls: []bool{false, false, false, false, true},
-			want: []types.StringSource{
-				types.StringSourceLiteral,
-				types.StringSourceUserVariable,
-				types.StringSourceSQLPrepare,
-				types.StringSourceCOMStmt,
-				types.StringSourceExpression,
+			want: []types.RuntimeStringDomain{
+				types.RuntimeStringBinary,
+				types.RuntimeStringText,
+				types.RuntimeStringInherit,
+				types.RuntimeStringBinary,
+				types.RuntimeStringInherit,
 			},
 		},
 	} {
@@ -372,23 +372,23 @@ func TestValueWindowExecPreservesRowStringSources(t *testing.T) {
 			mp := newAggExecTestPool(t)
 			input := vector.NewVec(types.T_text.ToType())
 			t.Cleanup(func() { input.Free(mp) })
-			sources := []types.StringSource{
-				types.StringSourceExpression,
-				types.StringSourceLiteral,
-				types.StringSourceUserVariable,
-				types.StringSourceSQLPrepare,
-				types.StringSourceCOMStmt,
+			domains := []types.RuntimeStringDomain{
+				types.RuntimeStringInherit,
+				types.RuntimeStringBinary,
+				types.RuntimeStringText,
+				types.RuntimeStringInherit,
+				types.RuntimeStringBinary,
 			}
-			for i := range sources {
+			for i, domain := range domains {
 				require.NoError(t, vector.AppendBytes(input, []byte{byte('a' + i)}, false, mp))
+				require.NoError(t, input.SetRuntimeStringDomainAtWithMP(i, domain, mp))
 			}
-			require.NoError(t, input.SetStringSourcesWithMP(sources, mp))
 			exec, err := makeValueWindowExec(mp, window.id, false, []types.Type{types.T_text.ToType()})
 			require.NoError(t, err)
 			t.Cleanup(exec.Free)
-			require.NoError(t, exec.GroupGrow(len(sources)))
-			for group := range sources {
-				for row := range sources {
+			require.NoError(t, exec.GroupGrow(len(domains)))
+			for group := range domains {
+				for row := range domains {
 					require.NoError(t, exec.Fill(group, row, []*vector.Vector{input}))
 				}
 			}
@@ -400,8 +400,8 @@ func TestValueWindowExecPreservesRowStringSources(t *testing.T) {
 				}
 			}
 
-			for row, source := range window.want {
-				require.Equal(t, source, result.GetStringSourceAt(row))
+			for row, domain := range window.want {
+				require.Equal(t, domain, result.GetRuntimeStringDomainAt(row), "row %d", row)
 			}
 		})
 	}

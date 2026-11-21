@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -102,11 +103,12 @@ func (proc *Process) BuildProcessInfo(
 			if err != nil {
 				return procInfo, err
 			}
+			// The wire keeps one source per parameter; they share one value.
 			var stringSources []uint32
-			if vec.HasStringSourceMetadata() {
+			if source := proc.Base.prepareParamsStringSource; source != types.StringSourceExpression {
 				stringSources = make([]uint32, vec.Length())
 				for i := range stringSources {
-					stringSources[i] = uint32(vec.GetStringSourceAt(i))
+					stringSources[i] = uint32(source)
 				}
 			}
 			stringSources, err = StringSourcePrepareParamMetadataForRemote(
@@ -142,6 +144,10 @@ func (proc *Process) BuildProcessInfo(
 			}
 			procInfo.PrepareParams.StringSources = stringSources
 			procInfo.PrepareParams.RuntimeStringDomains = runtimeStringDomains
+			if procInfo.PrepareParams.TypedParams, err = encodeTypedPrepareParams(
+				proc.Base.typedPrepareParams, vec.Length()); err != nil {
+				return procInfo, err
+			}
 		}
 	}
 	{ // session info
@@ -406,22 +412,23 @@ func (c *codecService) Decode(
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		if len(stringSources) > 0 {
-			sources := make([]types.StringSource, len(stringSources))
-			for i, source := range stringSources {
-				sources[i] = types.StringSource(source)
-			}
-			if err = prepareParams.SetStringSourcesWithMP(sources, proc.Mp()); err != nil {
-				prepareParams.Free(proc.Mp())
-				proc.Free()
-				return nil, err
-			}
-		}
 		proc.SetOwnedPrepareParamsWithMetadata(
 			prepareParams,
 			prepareParamMetadata,
 			binaryStringMetadata,
 		)
+		// Older peers could send a different source per parameter; all
+		// parameters of one execution share one origin, so merge them.
+		if len(stringSources) > 0 {
+			merged := types.StringSource(stringSources[0])
+			for _, source := range stringSources[1:] {
+				if merged, err = types.MergeStringSources(merged, types.StringSource(source)); err != nil {
+					proc.Free()
+					return nil, err
+				}
+			}
+			proc.SetPrepareParamsStringSource(merged)
+		}
 		if len(runtimeStringDomains) > 0 {
 			domains := make([]types.RuntimeStringDomain, len(runtimeStringDomains))
 			for i, domain := range runtimeStringDomains {
@@ -433,8 +440,71 @@ func (c *codecService) Decode(
 				return nil, err
 			}
 		}
+		typed, err := decodeTypedPrepareParams(
+			value.PrepareParams.TypedParams, prepareParams.Length(), proc.Mp())
+		if err != nil {
+			proc.Free()
+			return nil, err
+		}
+		if typed != nil {
+			proc.SetTypedPrepareParams(typed)
+		}
 	}
 	return proc, nil
+}
+
+// encodeTypedPrepareParams encodes one entry per parameter position; an empty
+// entry means the position has only the TEXT transport.
+func encodeTypedPrepareParams(typed *batch.Batch, paramCount int) ([][]byte, error) {
+	if typed == nil {
+		return nil, nil
+	}
+	if len(typed.Vecs) != paramCount {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"typed prepare parameters: %d columns for %d parameters", len(typed.Vecs), paramCount)
+	}
+	encoded := make([][]byte, paramCount)
+	for i, vec := range typed.Vecs {
+		if vec == nil {
+			continue
+		}
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		encoded[i] = data
+	}
+	return encoded, nil
+}
+
+func decodeTypedPrepareParams(encoded [][]byte, paramCount int, mp *mpool.MPool) (*batch.Batch, error) {
+	if len(encoded) == 0 {
+		return nil, nil
+	}
+	if len(encoded) != paramCount {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"typed prepare parameters: %d entries for %d parameters", len(encoded), paramCount)
+	}
+	typed := batch.NewWithSize(paramCount)
+	for i, data := range encoded {
+		if len(data) == 0 {
+			continue
+		}
+		vec := new(vector.Vector)
+		if err := vec.UnmarshalBinaryWithCopy(data, mp); err != nil {
+			typed.Clean(mp)
+			return nil, err
+		}
+		if vec.Length() != 1 {
+			vec.Free(mp)
+			typed.Clean(mp)
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"typed prepare parameter %d has %d rows", i, vec.Length())
+		}
+		typed.Vecs[i] = vec
+	}
+	typed.SetRowCount(1)
+	return typed, nil
 }
 
 // convert process.Limitation to pipeline.ProcessLimitation

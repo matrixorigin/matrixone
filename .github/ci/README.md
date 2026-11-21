@@ -46,6 +46,11 @@ analyzer versions or rules require reviewing this package-local contract.
 - Selection and conservative fallback reasons are printed on stderr; stdout
   from the selector contains only package arguments.
 - `SCA_FULL=1 make static-check-analysis` forces complete PR analysis.
+- `make static-check-changed` is a local fast path, not a gate. It applies the
+  same selection to the working tree (committed, staged, unstaged and untracked
+  changes) against its merge base with `STATIC_CHECK_BASE` (default
+  `upstream/main` if present, else `origin/main`). Ignored Go inputs, a missing
+  base, or broad changes fall back to the full graph.
 - `make static-check-golangci` still populates the complete trusted analysis cache.
 - License exemptions require the frozen checkout and PR head/base to match
   before and after file pagination, plus the validated configuration/tool recipe.
