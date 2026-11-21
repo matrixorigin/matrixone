@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -60,7 +62,7 @@ func TestDependentValueSourceAllocation(t *testing.T) {
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	}()
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2)
 	require.NoError(t, err)
 	typ := types.T_int32.ToType().PlanType()
 	n := &plan.Node{NodeType: plan.Node_VALUE_SCAN,
@@ -308,7 +310,7 @@ func TestDependentNativeStages(t *testing.T) {
 				_, err := registry.Finalize(account)
 				require.NoError(t, err)
 			}()
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65, 66, 67)
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65)
 			require.NoError(t, err)
 			compiled, opened, closed := 0, 0, 0
 			sourceCompiler := func(node *plan.Node) (dependent.SourceFactory, error) {
@@ -484,7 +486,7 @@ func TestDependentExternalSourceReuse(t *testing.T) {
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	}()
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65, 66, 67)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65)
 	require.NoError(t, err)
 	for range 2 {
 		func() {
@@ -592,7 +594,7 @@ func TestDependentFuzzyFilterDemand(t *testing.T) {
 					_, err := registry.Finalize(account)
 					require.NoError(t, err)
 				}()
-				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65, 66, 67)
+				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65)
 				require.NoError(t, err)
 				for range 2 {
 					func() {
@@ -620,6 +622,32 @@ func TestDependentFuzzyFilterDemand(t *testing.T) {
 }
 
 func TestDependentSourceAdmissionBeforeOpen(t *testing.T) {
+	t.Run("table-scan-private-frame", func(t *testing.T) {
+		p := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+		t.Cleanup(p.Free)
+		// This admits the operator and source wrapper alone, but cannot hold
+		// the private frame coallocated by TableScan.NewArgument. Rejection
+		// must precede the database open (there is deliberately no engine).
+		limit := uint64(reflect.TypeFor[table_scan.TableScan]().Size() + reflect.TypeFor[dependentNativeSource]().Size())
+		budget := process.MustNewExecutionResourceBudget(limit, limit)
+		t.Cleanup(budget.Close)
+		generation, err := budget.OpenGeneration(1)
+		require.NoError(t, err)
+		t.Cleanup(generation.Close)
+		require.NoError(t, p.SetExecutionResourceBudgetForTesting(generation))
+		c := &Compile{proc: p}
+		factory, err := c.compileDependentSource(&plan.Node{
+			NodeType: plan.Node_TABLE_SCAN,
+			ObjRef:   &plan.ObjectRef{SchemaName: "frame_admission", ObjName: "t"},
+			TableDef: &plan.TableDef{},
+		})
+		require.NoError(t, err)
+		source, err := factory(p, nil, nil)
+		require.Error(t, err)
+		require.Nil(t, source)
+		require.Zero(t, generation.Used())
+	})
+
 	p := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer p.Free()
 	budget := process.MustNewExecutionResourceBudget(64, 64)

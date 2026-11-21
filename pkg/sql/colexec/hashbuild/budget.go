@@ -182,6 +182,9 @@ func (hb *HashmapBuilder) copyBuildBatch(
 	if hb.batchAllocation == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
+	if hb.boundBatchAllocations {
+		return hb.Batches.CopyIntoBoundedBatches(src, proc, hb.batchAllocation)
+	}
 	return hb.Batches.CopyIntoBatchesWithAllocation(
 		src,
 		proc,

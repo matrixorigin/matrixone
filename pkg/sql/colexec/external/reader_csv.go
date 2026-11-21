@@ -387,7 +387,15 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 		if err != nil {
 			return nil, err
 		}
-		res[attr.ColFieldIndex] = csvparser.Field{Val: val}
+		res[attr.ColFieldIndex] = csvparser.Field{
+			Val: val,
+			// A BIT column's JSON NUMBER token carries the exported uint64
+			// value, so flag the token provenance for getColData's value
+			// conversion instead of letting both byte-semantic consumers read
+			// the token text as raw bytes. Kafka JSON keeps its existing byte
+			// conversion (#30653 is the file JSONLINE export contract).
+			IsJSONNumber: !kafkaJSON && tp == int32(types.T_bit) && scalarIsJSONNumber(valN),
+		}
 	}
 	return res, nil
 }
@@ -397,6 +405,10 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 		err error
 		res = make([]csvparser.Field, 0, len(attrs))
 	)
+	// Kafka consumes the same array records, but #30653's export contract
+	// covers file JSONLINE sources only; Kafka BIT columns keep the byte
+	// conversion.
+	kafkaJSON := r.param != nil && r.param.KafkaScan != nil
 	jsonNode, err := bytejson.ParseNodeString(str)
 	if err != nil {
 		if jsonLineTruncated(err, str, '[') {
@@ -448,7 +460,13 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 		if err != nil {
 			return nil, err
 		}
-		res = append(res, csvparser.Field{Val: val})
+		res = append(res, csvparser.Field{
+			Val: val,
+			// Same scalar provenance as the object shape: a BIT column's
+			// JSON NUMBER token is the exported uint64 value, not a raw-byte
+			// payload. Kafka JSON keeps its existing byte conversion.
+			IsJSONNumber: !kafkaJSON && tp == int32(types.T_bit) && scalarIsJSONNumber(valN),
+		})
 	}
 	return res, nil
 }
@@ -510,6 +528,14 @@ func writeJSONLexemes(text *strings.Builder, node bytejson.Node) error {
 
 func (r *CsvReader) legacyJSONBinary() bool {
 	return r.param != nil && r.param.Extern != nil && r.param.Extern.JsonBinary == plan.JSONBinaryLegacyBase64
+}
+
+// scalarIsJSONNumber reports whether the node holds an unquoted JSON NUMBER
+// scalar token, as opposed to a string, group (object/array) or boolean
+// token. Quoted JSON digits stay string scalars and keep byte semantics.
+func scalarIsJSONNumber(node bytejson.Node) bool {
+	_, ok := node.V.(json.Number)
+	return ok
 }
 
 // jsonLineScalarText preserves numeric array boundaries for vector columns.

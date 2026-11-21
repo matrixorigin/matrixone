@@ -6511,16 +6511,21 @@ func TestCharsetIntroducerLiteralValue(t *testing.T) {
 
 func TestCharsetIntroducerHexLiteralValue(t *testing.T) {
 	for _, mode := range []string{"", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
-		stmt, err := ParseOneWithSQLMode(context.Background(), "SELECT _utf8mb4 X'c3a95ce7958c'", 1, mode)
-		require.NoError(t, err)
-		func() {
-			defer stmt.Free()
-			literal := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.NumVal)
-			require.Equal(t, tree.P_char, literal.ValType)
-			require.Equal(t, `é\界`, literal.String())
-		}()
+		for _, sql := range []string{
+			"SELECT _utf8mb4 X'c3a95ce7958c'",
+			"SELECT _utf8mb4 0xc3a95ce7958c",
+			"SELECT _UTF8MB4 0XC3A95CE7958C",
+		} {
+			stmt, err := ParseOneWithSQLMode(context.Background(), sql, 1, mode)
+			require.NoError(t, err, sql)
+			func() {
+				defer stmt.Free()
+				literal := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.NumVal)
+				require.Equal(t, tree.P_char, literal.ValType, sql)
+				require.Equal(t, `é\界`, literal.String(), sql)
+			}()
+		}
 	}
-
 }
 
 func TestUnquotedSupplementaryIdentifiersRejected(t *testing.T) {

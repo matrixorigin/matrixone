@@ -857,7 +857,7 @@ func (ctr *container) spillBatch(
 	origBat.Recursive = bat.Recursive
 	origBat.ShuffleIDX = bat.ShuffleIDX
 	origBat.SetRowCount(bat.RowCount())
-	payloadSize, err := origBat.MarshalBinaryWithPrepareParamKindsSize()
+	payloadSize, err := origBat.MarshalBinaryWithMetadataSize()
 	if err != nil {
 		return spillRecordRef{}, err
 	}
@@ -872,7 +872,7 @@ func (ctr *container) spillBatch(
 		return spillRecordRef{}, err
 	}
 	offset := ctr.spillOffset
-	if err = origBat.MarshalBinaryWithPrepareParamKindsTo(ctr.spillWriter); err != nil {
+	if err = origBat.MarshalBinaryWithMetadataTo(ctr.spillWriter); err != nil {
 		return spillRecordRef{}, err
 	}
 	ctr.spillOffset += int64(payloadSize)
@@ -1192,7 +1192,7 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 		}
 		reuseBat.CleanOnlyData()
 		reader := io.NewSectionReader(ctr.spillFile, record.offset, record.size)
-		if err := reuseBat.UnmarshalFromReaderWithPrepareParamKindsForSpill(
+		if err := reuseBat.UnmarshalFromReaderWithMetadataForSpill(
 			reader,
 			record.size,
 			proc.Mp(),
@@ -1319,6 +1319,12 @@ func (top *Top) getTopValue() ([]byte, bool) {
 		vec = ctr.cmps[0].Vector()
 	} else {
 		vec = ctr.cmps[ctr.poses[0]].Vector()
+	}
+	if vec.IsNull(uint64(x)) {
+		// A NULL heap root has no comparable key, and its raw slot bytes
+		// are not a pruning bound. Publish nothing and let every reader
+		// fail open to the unpruned exact scan.
+		return nil, false
 	}
 	if vec.GetType().IsVarlen() {
 		return vec.GetBytesAt(x), true

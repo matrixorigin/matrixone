@@ -177,27 +177,21 @@ func TestBorrowedVectorMaterializeOwnedCopiesValidityIntoAccount(t *testing.T) {
 	data := types.EncodeSlice([]int64{11, 22, 33})
 	dataLease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
 	require.NoError(t, err)
-	validity := []byte{0b00000101} // row one is NULL
-	validityLease, err := NewRefCountedBufferLease(validity, int64(cap(validity)), nil)
-	require.NoError(t, err)
 
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
 	selection, err := NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 1, 2, 3, 4,
+		account, mpool.AllocationOwnerExternal, 1, 2,
 	)
 	require.NoError(t, err)
 	vec, err := NewBorrowedFixedVectorWithAllocation(
 		types.T_int64.ToType(), 3, data, dataLease, selection,
 	)
 	require.NoError(t, err)
-	require.NoError(t, vec.GetNulls().InstallBorrowedValidity(
-		validity, 0, 3, 1, validityLease,
-	))
+	vec.GetNulls().Add(1)
 	dataLease.Release()
-	validityLease.Release()
 
 	mp := mpool.MustNewZero()
 	clone, err := vec.CloneWindow(0, vec.Length(), mp)
@@ -219,48 +213,6 @@ func TestBorrowedVectorMaterializeOwnedCopiesValidityIntoAccount(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestBorrowedValidityLegacyMaterializationUsesReservedMPoolStorage(t *testing.T) {
-	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
-	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 1, 2, 3, 4,
-	)
-	require.NoError(t, err)
-	mp := mpool.MustNewZero()
-	vec, err := NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), selection)
-	require.NoError(t, err)
-	require.NoError(t, vec.PrepareBorrowedValidity(3, mp))
-	admittedBytes := mp.CurrNB()
-	require.Positive(t, admittedBytes)
-	require.Positive(t, account.Snapshot().Used)
-
-	validity := []byte{0b00000101} // row one is NULL
-	var releases atomic.Int32
-	lease, err := NewRefCountedBufferLease(validity, int64(cap(validity)), func() {
-		releases.Add(1)
-	})
-	require.NoError(t, err)
-	require.NoError(t, vec.GetNulls().InstallBorrowedValidity(validity, 0, 3, 1, lease))
-	lease.Release()
-	require.True(t, vec.GetNulls().HasBorrowedValidity())
-
-	bitmap := vec.GetNulls().GetBitmap()
-	require.False(t, vec.GetNulls().HasBorrowedValidity())
-	require.Equal(t, int32(1), releases.Load())
-	require.True(t, bitmap.HasExternalStorage())
-	require.Equal(t, []uint64{1}, vec.GetNulls().ToArray())
-	require.Equal(t, admittedBytes, mp.CurrNB(), "legacy materialization must not allocate outside admission")
-
-	vec.Free(mp)
-	require.Zero(t, account.Snapshot().Used)
-	require.Zero(t, mp.CurrNB())
-	account.Seal()
-	_, err = registry.Finalize(account)
-	require.NoError(t, err)
-}
-
 func TestUnionOneBorrowedFixedValidity(t *testing.T) {
 	for _, withNull := range []bool{false, true} {
 		t.Run(fmt.Sprintf("null=%t", withNull), func(t *testing.T) {
@@ -268,11 +220,7 @@ func TestUnionOneBorrowedFixedValidity(t *testing.T) {
 			releases := 0
 			t.Cleanup(func() {
 				require.Zero(t, mp.CurrNB())
-				expected := 1
-				if withNull {
-					expected = 2
-				}
-				require.Equal(t, expected, releases, "each borrowed owner releases exactly once")
+				require.Equal(t, 1, releases, "the borrowed owner releases exactly once")
 			})
 			data := types.EncodeSlice([]int64{11, 22, 33})
 			dataLease, err := NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
@@ -282,11 +230,7 @@ func TestUnionOneBorrowedFixedValidity(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { source.Free(nil) })
 			if withNull {
-				validity := []byte{0b00000101}
-				validityLease, err := NewRefCountedBufferLease(validity, int64(cap(validity)), func() { releases++ })
-				require.NoError(t, err)
-				t.Cleanup(validityLease.Release)
-				require.NoError(t, source.GetNulls().InstallBorrowedValidity(validity, 0, 3, 1, validityLease))
+				source.GetNulls().Add(1)
 			}
 			destination := NewVec(types.T_int64.ToType())
 			t.Cleanup(func() { destination.Free(mp) })
@@ -298,7 +242,6 @@ func TestUnionOneBorrowedFixedValidity(t *testing.T) {
 					require.Equal(t, []int64{11, 22, 33}[sel], GetFixedAtWithTypeCheck[int64](destination, row))
 				}
 			}
-			require.Equal(t, withNull, source.GetNulls().HasBorrowedValidity(), "copy does not materialize source validity")
 			require.Equal(t, []int64{11, 22, 33}, types.DecodeSlice[int64](data))
 		})
 	}

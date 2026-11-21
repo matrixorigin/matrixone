@@ -27,7 +27,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -302,6 +301,9 @@ type PrepareStmt struct {
 	proc                      *process.Process
 	remapDb                   map[string]string
 	defaultDatabase           string
+	// A direct tenant-admin read of a physical index was admitted while this
+	// plan was bound. A caller-owned procedure must rebind before using it.
+	directIndexReadAdmitted bool
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -373,23 +375,20 @@ type PrepareStmt struct {
 	fixedIntegerParamPositions []int32
 	hasPaginationParams        bool
 	hasLagLeadParams           bool
-	paramKinds                 []vector.PrepareParamKind
+	paramKinds                 []types.StringConversionKind
 	paramBinaryStrings         []bool
-	paramMetadata              []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
-	// generation. Only these parameters need an exact SQL type in Process
-	// metadata; paramConcreteTypes is a reusable execution buffer.
+	// generation; the protocol type decides those parameters' binding kind.
 	jsonComparisonParamPositions []int32
 	jsonMemberOfParamPositions   []int32
-	paramConcreteTypes           []types.T
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose
 	// runtime integer/decimal domain may require overload rebinding without
 	// rescanning the full plan for every EXECUTE.
 	numericOverloadParamPositions []int32
-	// temporalRuntimeParamPositions combines numeric-function and prepared
-	// GENERATE_SERIES endpoint positions. Only these markers retain a temporal
-	// COM_STMT_EXECUTE packet domain instead of generic text transport.
+	// temporalRuntimeParamPositions combines numeric-function, BIT_COUNT, and
+	// prepared GENERATE_SERIES endpoint positions. Only these markers retain a
+	// temporal COM_STMT_EXECUTE packet domain instead of generic text transport.
 	temporalRuntimeParamPositions []int32
 	// bitCountOverloadParamPositions owns BIT_COUNT's asymmetric prepared
 	// contract. Each marker starts with the binary-string default; after an
@@ -1110,7 +1109,6 @@ type FeSession interface {
 	GetProc() *process.Process
 	GetLastInsertID() uint64
 	GetSqlHelper() *SqlHelper
-	GetBuffer() *buffer.Buffer
 	GetStmtProfile() *process.StmtProfile
 	CopySeqToProc(proc *process.Process)
 	getQueryId(internal bool) []string
@@ -1191,6 +1189,9 @@ type ExecCtx struct {
 	// transaction-boundary policy and later execution use the same prepared AST.
 	// The statement is borrowed from the computation wrapper or prepare cache.
 	effectiveTxnStatement tree.Statement
+	// Set only when binding uses the direct-user physical-index read exception.
+	// PREPARE captures this in its handle, while EXECUTE refreshes it on rebind.
+	directIndexReadAdmitted bool
 	// deferReadOnlyOwnership marks that the pre-Create READ ONLY admission
 	// deferred an unqualified multi-source UPDATE verdict because no catalog
 	// transaction existed yet for owner resolution. executeStmtWithWorkspace
@@ -1359,7 +1360,6 @@ type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch, *perfcounter.Cou
 
 type feSessionImpl struct {
 	pool          *mpool.MPool
-	buf           *buffer.Buffer
 	stmtProfile   process.StmtProfile
 	tenant        *TenantInfo
 	txnHandler    *TxnHandler
@@ -1524,10 +1524,6 @@ func (ses *feSessionImpl) Reset() {
 	for _, bat := range ses.resultBatches {
 		bat.Clean(ses.pool)
 	}
-	if ses.buf != nil {
-		ses.buf.Free()
-		ses.buf = nil
-	}
 	ses.upstream = nil
 	ses.fromRealUser = false
 }
@@ -1560,10 +1556,6 @@ func (ses *feSessionImpl) SetMemPool(mp *mpool.MPool) {
 
 func (ses *feSessionImpl) GetMemPool() *mpool.MPool {
 	return ses.pool
-}
-
-func (ses *feSessionImpl) GetBuffer() *buffer.Buffer {
-	return ses.buf
 }
 
 func (ses *feSessionImpl) GetStmtProfile() *process.StmtProfile {
@@ -1828,6 +1820,13 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 
 	if name == "wait_timeout" || name == "interactive_timeout" {
 		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
+			return err
+		}
+	}
+	if name == "time_zone" {
+		// An unknown zone stored globally would fail every new session's
+		// initialization, so reject it here like SET SESSION does.
+		if _, _, err = resolveTimeZone(ctx, val); err != nil {
 			return err
 		}
 	}

@@ -42,7 +42,7 @@ func dependentTestAllocation(t *testing.T) (*process.Process, *vector.Allocation
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2)
 	require.NoError(t, err)
 	return proc, selection, account
 }
@@ -192,7 +192,7 @@ func TestDependentExistsAndBudgetFailure(t *testing.T) {
 		_, err := registry.Finalize(limited)
 		require.NoError(t, err)
 	}()
-	selection, err := vector.NewAllocationAccountSelection(limited, mpool.AllocationOwnerDependent, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(limited, mpool.AllocationOwnerDependent, 1, 2)
 	require.NoError(t, err)
 	r, err := NewDependentReducer(proc, &plan.DependentExpr{Reducer: plan.SubqueryRef_SCALAR}, []plan.Type{{Id: int32(types.T_int64)}}, nil, selection)
 	require.NoError(t, err)

@@ -1084,6 +1084,137 @@ func BitCountBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWr
 	return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
 }
 
+// PreparedBitCountCastOverload is a binder-only conversion for a string
+// execution after BIT_COUNT has latched to a numeric parameter domain.
+const PreparedBitCountCastOverload int32 = 10
+
+func appendPreparedBitCountConversionWarning(proc *process.Process, value, typeName string) {
+	if proc == nil {
+		return
+	}
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	appender.AppendWarningDiagnostic(
+		moerr.ER_TRUNCATED_WRONG_VALUE,
+		fmt.Sprintf("Truncated incorrect %s value: '%-.128s'", typeName, trimASCIISpace(value)),
+	)
+}
+
+func preparedBitCountIntegerPrefix(prefix string) (int64, bool, error) {
+	rounded, err := parseMySQLDecimal256Prefix(prefix, 65, 0)
+	if err != nil {
+		return 0, false, err
+	}
+	integer, ok := new(big.Int).SetString(rounded.Format(0), 10)
+	if !ok {
+		return 0, false, strconv.ErrSyntax
+	}
+	if integer.IsInt64() {
+		return integer.Int64(), false, nil
+	}
+	if integer.Sign() < 0 {
+		return math.MinInt64, true, nil
+	}
+	return math.MaxInt64, true, nil
+}
+
+func preparedBitCountTextRows[T types.FixedSizeTExceptStrType](
+	source *vector.Vector, result *vector.FunctionResult[T], proc *process.Process, length int,
+	selectList *FunctionSelectList, convert func(string) (T, string, error),
+) error {
+	input := vector.GenerateFunctionStrParameter(source)
+	var zero T
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := result.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := input.GetStrValue(row)
+		if null {
+			if err := result.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		text := convertByteSliceToString(value)
+		trimmed := trimASCIISpace(text)
+		prefix, _, hasPrefix := scanDecimalFloatPrefix(trimmed)
+		if !hasPrefix {
+			appendPreparedBitCountConversionWarning(proc, text, "INTEGER")
+			if err := result.Append(zero, false); err != nil {
+				return err
+			}
+			continue
+		}
+		converted, warningType, err := convert(prefix)
+		if err != nil {
+			return err
+		}
+		if warningType == "" && prefix != trimmed {
+			warningType = "INTEGER"
+		}
+		if warningType != "" {
+			appendPreparedBitCountConversionWarning(proc, text, warningType)
+		}
+		if err = result.Append(converted, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// NewPreparedBitCountCast keeps prepared string reuse out of the generic
+// strict CAST contract. Integer latches round the exact decimal prefix and
+// saturate at signed BIGINT boundaries; DOUBLE and DECIMAL retain their own
+// later BIT_COUNT conversion rules.
+func NewPreparedBitCountCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(parameters) != 2 || !parameters[0].GetType().Oid.IsMySQLString() {
+		return moerr.NewInvalidInput(proc.Ctx, "prepared bit count cast requires a string value and numeric target")
+	}
+	source := parameters[0]
+	// typeswitch:partial Prepared BIT_COUNT numeric latches use canonical target types;
+	// other float-family members cannot reach this binder-only conversion.
+	switch target := result.GetResultVector().GetType(); target.Oid {
+	case types.T_int64:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[int64](result), proc, length, selectList, func(prefix string) (int64, string, error) {
+			value, outOfRange, err := preparedBitCountIntegerPrefix(prefix)
+			if outOfRange {
+				return value, "DECIMAL", err
+			}
+			return value, "", err
+		})
+	case types.T_uint64:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[uint64](result), proc, length, selectList, func(prefix string) (uint64, string, error) {
+			value, outOfRange, err := preparedBitCountIntegerPrefix(prefix)
+			if outOfRange {
+				return uint64(value), "DECIMAL", err
+			}
+			return uint64(value), "", err
+		})
+	case types.T_float64:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[float64](result), proc, length, selectList, func(prefix string) (float64, string, error) {
+			value, err := strconv.ParseFloat(prefix, 64)
+			if errors.Is(err, strconv.ErrRange) && math.IsInf(value, 0) {
+				// Retain the infinity for BIT_COUNT's existing floating conversion;
+				// the string conversion owns warning 1292.
+				return value, "INTEGER", nil
+			}
+			return value, "", err
+		})
+	case types.T_decimal256:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[types.Decimal256](result), proc, length, selectList, func(prefix string) (types.Decimal256, string, error) {
+			value, err := parseMySQLDecimal256Prefix(prefix, target.Width, target.Scale)
+			return value, "", err
+		})
+	default:
+		return moerr.NewInvalidInput(proc.Ctx, "prepared bit count cast requires an int64, uint64, float64, or decimal256 target")
+	}
+}
+
 func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
 		return int64(len(v) * 8)
@@ -8884,7 +9015,7 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -8900,13 +9031,13 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
 			resultVal, ok := inetAtonValue(ipStr)
 			if !ok {
 				// Invalid IP: return NULL for all rows
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 			} else {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
@@ -9059,38 +9190,6 @@ func InetNtoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		}, selectList)
 	default:
 		return moerr.NewInvalidInputNoCtxf("INET_NTOA does not support input type %s", argType.Oid.String())
-	}
-}
-
-func inetNtoaPreparedText(value []byte, kind vector.PrepareParamKind) (string, error) {
-	switch kind {
-	case vector.PrepareParamFloat:
-		floating, err := strconv.ParseFloat(string(value), 64)
-		if err != nil {
-			return "", err
-		}
-		return inetNtoaReal(floating)
-	case vector.PrepareParamDecimal:
-		integer, err := roundPreparedDecimalIntegerString(string(value))
-		if err != nil {
-			return "", err
-		}
-		number, err := strconv.ParseInt(integer, 10, 64)
-		if err != nil {
-			return "", err
-		}
-		return inetNtoaSigned(number)
-	case vector.PrepareParamBoolean:
-		switch strings.ToLower(string(value)) {
-		case "true", "1":
-			return inetNtoaUnsigned(1)
-		case "false", "0":
-			return inetNtoaUnsigned(0)
-		default:
-			return inetNtoaUnsigned(0)
-		}
-	default:
-		return inetNtoaSigned(parseMySQLIntegerPrefix(value))
 	}
 }
 
@@ -9259,10 +9358,6 @@ func InetNtoaDynamic(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			if null {
 				return "", true, nil
 			}
-			if kind := param.GetPrepareParamKindAt(int(i)); kind != vector.PrepareParamNone {
-				text, err := inetNtoaPreparedText(value, kind)
-				return text, err != nil, err
-			}
 			return appendSigned(parseMySQLIntegerPrefix(value), false)
 		}
 	case types.T_year:
@@ -9322,7 +9417,7 @@ func executeIPPredicate[T ipPredicateResult](
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -9338,7 +9433,7 @@ func executeIPPredicate[T ipPredicateResult](
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			var resultVal T
 			if predicate(v1) {
@@ -10158,7 +10253,7 @@ func OctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	err := opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, func(v []byte, row int) (string, error) {
 		if len(v) == 0 {
 			if ivecs[0].IsConst() {
-				nulls.AddRange(resultNulls, 0, uint64(length))
+				resultNulls.AddRange(0, uint64(length))
 			} else {
 				resultNulls.Add(uint64(row))
 			}
@@ -10603,41 +10698,10 @@ func randomBytesTextLength(
 	row uint64,
 	proc *process.Process,
 ) (int64, error) {
-	kind := param.GetPrepareParamKindAt(int(row))
-	switch kind {
-	case vector.PrepareParamFloat, vector.PrepareParamDecimal:
-		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
-		// SQL PREPARE stores the value in a text transport vector. The source
-		// kind is the distinction between a string literal (integer prefix) and
-		// a numeric value (round-to-even for FLOAT, exact half-up for DECIMAL).
-		if kind == vector.PrepareParamDecimal {
-			integer, err := roundPreparedDecimalIntegerString(text)
-			if err != nil {
-				return 0, randomBytesRangeError(proc)
-			}
-			return randomBytesRoundedDecimalIntegerString(integer, proc)
-		}
-		floating, err := strconv.ParseFloat(text, 64)
-		if err != nil {
-			return 0, randomBytesRangeError(proc)
-		}
-		return randomBytesRoundedFloat(floating, proc)
-	case vector.PrepareParamBoolean:
-		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
-		boolean, err := strconv.ParseBool(text)
-		if err != nil {
-			return 0, randomBytesRangeError(proc)
-		}
-		if boolean {
-			return 1, nil
-		}
-		return 0, nil
-	default:
-		// Keep ordinary character values byte-oriented. In particular, MySQL
-		// only ignores ASCII whitespace before the numeric prefix; using
-		// strings.TrimSpace here would incorrectly accept Unicode whitespace.
-		return parseMySQLIntegerPrefix(value), nil
-	}
+	// Keep ordinary character values byte-oriented. In particular, MySQL
+	// only ignores ASCII whitespace before the numeric prefix; using
+	// strings.TrimSpace here would incorrectly accept Unicode whitespace.
+	return parseMySQLIntegerPrefix(value), nil
 }
 
 func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (randomBytesLengthGetter, error) {

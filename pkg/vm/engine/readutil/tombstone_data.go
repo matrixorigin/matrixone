@@ -397,7 +397,7 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 	}
 
 	if len(rowsOffset) != 0 {
-		left = RemoveIf(rowsOffset, func(t int64) bool {
+		left = slices.DeleteFunc(rowsOffset, func(t int64) bool {
 			return deletedMask.Contains(uint64(t))
 		})
 	}

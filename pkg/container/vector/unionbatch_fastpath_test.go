@@ -16,13 +16,85 @@ package vector
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUnionInlineSelection(t *testing.T) {
+	for _, shape := range []string{"inline", "zero-area-noninline", "zero-area-noninline-empty-dest", "nullable", "mixed"} {
+		for _, index32 := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/int32=%t", shape, index32), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+				src, dst := NewVec(types.T_varchar.ToType()), NewVec(types.T_varchar.ToType())
+				t.Cleanup(func() { src.Free(mp); dst.Free(mp) })
+				values := []string{"a", "b", strings.Repeat("c", types.VarlenaInlineSize), "d", "e", "f", "g", "h"}
+				emptyNonInline := strings.HasPrefix(shape, "zero-area-noninline")
+				if emptyNonInline {
+					values[1] = ""
+				} else if shape == "mixed" {
+					values[1] = strings.Repeat("b", types.VarlenaInlineSize+1)
+				}
+				for row, value := range values {
+					require.NoError(t, AppendBytes(src, []byte(value), shape == "nullable" && row == 4, mp))
+				}
+				if emptyNonInline {
+					// Zero area bytes alone do not prove inline descriptors.
+					MustFixedColNoTypeCheck[types.Varlena](src)[1].SetOffsetLen(0, 0)
+					require.Empty(t, src.area)
+				}
+				src.GetGrouping().Add(2)
+				src.SetIsBinaryString(true)
+				// Consecutive runs, gaps, repetition and reversal share one
+				// append. The expected rows do not depend on the copy helper.
+				rows := []int64{1, 2, 3, 6, 6, 4, 0, 1, 2}
+				prefix := "prefix"
+				if shape == "zero-area-noninline" {
+					prefix = strings.Repeat("p", 64)
+				}
+				for range 2 {
+					dst.CleanOnlyData()
+					require.NoError(t, AppendBytes(dst, []byte(prefix), false, mp))
+					if index32 {
+						sels := make([]int32, len(rows))
+						for i, row := range rows {
+							sels[i] = int32(row)
+						}
+						require.NoError(t, dst.UnionInt32(src, sels, mp))
+					} else {
+						require.NoError(t, dst.Union(src, rows, mp))
+					}
+					require.Equal(t, prefix, dst.GetStringAt(0))
+					require.Equal(t, len(rows)+1, dst.Length())
+					for i, row := range rows {
+						isNull := shape == "nullable" && row == 4
+						require.Equal(t, isNull, dst.IsNull(uint64(i+1)))
+						require.Equal(t, row == 2, dst.GetGrouping().Contains(uint64(i+1)))
+						if !isNull {
+							require.Equal(t, values[row], dst.GetStringAt(i+1))
+							require.True(t, dst.GetIsBinaryStringAt(i+1))
+							if emptyNonInline && row == 1 {
+								// The ordinary copy rebases even an empty non-inline
+								// payload after the destination's existing area.
+								offset, length := MustFixedColNoTypeCheck[types.Varlena](dst)[i+1].OffsetLen()
+								expectedOffset := uint32(0)
+								if shape == "zero-area-noninline" {
+									expectedOffset = uint32(len(prefix))
+								}
+								require.Equal(t, expectedOffset, offset)
+								require.Zero(t, length)
+							}
+						}
+					}
+				}
+			})
+		}
+	}
+}
 
 // TestUnionBatchVarlenFastPath exercises the full-append fast path: mixed inline
 // (short) + non-inline (long) values, unioned into a non-empty target so the
@@ -107,7 +179,7 @@ func TestUnionBatchVarlenContiguousRangeFastPath(t *testing.T) {
 		}
 		require.NoError(t, AppendArray(src, value, isNull, mp))
 	}
-	nulls.Add(&src.gsp, uint64(start+3), uint64(start+count-1))
+	src.gsp.Add(uint64(start+3), uint64(start+count-1))
 
 	dst := NewVec(types.T_array_float32.ToType())
 	require.NoError(t, AppendArray(dst, []float32{1, 2, 3}, false, mp))
@@ -283,7 +355,7 @@ func newForcedGrowthAliasVector(
 		selectedRows := len(values) - 1
 		if len(vec.area)+payloadBytes > cap(vec.area) &&
 			len(vec.data)+selectedRows*vec.typ.TypeSize() > cap(vec.data) {
-			nulls.Add(&vec.gsp, 2)
+			vec.gsp.Add(2)
 			return vec, values, isNull
 		}
 	}
@@ -509,8 +581,6 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 				source.GetNulls().Add(test.nulls...)
 				source.GetGrouping().Add(1, 3, 6)
 				source.SetLength(5) // Retain stale bits outside the logical range.
-				source.SetPrepareParamKind(PrepareParamInteger)
-				require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
 				destination := NewVec(types.T_int64.ToType())
 				defer destination.Free(mp)
 				require.NoError(t, AppendFixed(destination, int64(99), false, mp))
@@ -518,28 +588,24 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 					// The preflight API requires explicit flags, so this also
 					// checks the unchanged flagged-copy control.
 					flags := []uint8{1, 1, 1}
-					require.NoError(t, destination.PreExtendSelectedBatch(source, 2, 3, flags, 4, mp))
-					require.NoError(t, destination.UnionBatchPreflighted(source, 2, 3, flags, mp))
+					preflight, err := destination.PreExtendSelectedBatch(source, 2, 3, flags, 4, mp)
+					require.NoError(t, err)
+					require.NoError(t, destination.UnionBatchPreflighted(source, 2, 3, flags, &preflight, mp))
 				} else {
 					require.NoError(t, destination.UnionBatch(source, 2, 3, nil, mp))
 				}
 				require.Equal(t, 4, destination.Length())
 				require.Equal(t, int64(99), GetFixedAtNoTypeCheck[int64](destination, 0))
 				require.False(t, destination.IsNull(0))
-				require.Equal(t, types.StringSourceExpression, destination.GetStringSourceAt(0))
-				require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(0))
 				require.False(t, destination.GetIsBinaryStringAt(0))
 				for row := 1; row < 4; row++ {
 					isNull := test.name == "all" || test.name == "sparse" && row == 1
 					require.Equal(t, isNull, destination.IsNull(uint64(row)))
 					require.Equal(t, row == 2, destination.GetGrouping().Contains(uint64(row)))
-					require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(row))
 					require.False(t, destination.GetIsBinaryStringAt(row))
 					if !isNull {
 						require.Equal(t, int64(11+row), GetFixedAtNoTypeCheck[int64](destination, row))
-						require.Equal(t, PrepareParamInteger, destination.GetPrepareParamKindAt(row))
 					} else {
-						require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(row))
 					}
 				}
 				require.False(t, destination.GetNulls().Contains(5))
@@ -574,7 +640,7 @@ func TestUnionBatchNullFastPath(t *testing.T) {
 			require.NoError(t, AppendBytes(w, b, null, mp))
 		}
 		// set a few grouping bits (independent of nulls)
-		nulls.Add(&w.gsp, 3, 7, 100, 299)
+		w.gsp.Add(3, 7, 100, 299)
 		return w
 	}
 	w := build()
@@ -639,8 +705,8 @@ func TestUnionBatchFastPathStaleBitmapBits(t *testing.T) {
 		}
 		// in-range bits (must propagate) plus stale bits >= the shrunk length
 		// (must be ignored, exactly as the per-row path ignores them).
-		nulls.Add(&w.nsp, 3, 15, 18)
-		nulls.Add(&w.gsp, 5, 12, 17)
+		w.nsp.Add(3, 15, 18)
+		w.gsp.Add(5, 12, 17)
 		w.SetLength(10) // length 10; bits 12,15,17,18 are now stale (>= length)
 		return w
 	}
@@ -703,7 +769,7 @@ func TestUnionPregrowSkipsNullRows(t *testing.T) {
 	const staleLen = 1 << 20 // 1 MiB of dead payload per null row
 	for i := 1; i < n; i += 2 {
 		wCol[i].SetOffsetLen(0, staleLen)
-		nulls.Add(&w.nsp, uint64(i))
+		w.nsp.Add(uint64(i))
 	}
 
 	// Union all rows (sels-gather -> the pre-grow path). Pre-fix this reserves
@@ -760,14 +826,13 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 				require.NoError(t, AppendBytes(src, value, i == 6, mp))
 			}
 			if kind == "null-dead-payload" {
-				nulls.Add(&src.nsp, 0)
+				src.nsp.Add(0)
 			}
 			if kind == "reordered" {
 				col := MustFixedColNoTypeCheck[types.Varlena](src)
 				col[2], col[4] = col[4], col[2]
 			}
-			nulls.Add(&src.gsp, 3)
-			require.NoError(t, src.SetStringSource(types.StringSourceLiteral))
+			src.gsp.Add(3)
 			input := src
 			offset, count := 0, 8
 			if kind == "offset" || kind == "reordered" {
@@ -795,7 +860,6 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 			dst := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
 			t.Cleanup(func() { dst.Free(mp) })
 			require.NoError(t, AppendBytes(dst, []byte("prefix"), false, mp))
-			require.NoError(t, dst.SetStringSource(types.StringSourceExpression))
 			selected := 0
 			liveBytes := 0
 			for i, f := range flags {
@@ -807,9 +871,10 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 					liveBytes += len(input.GetBytesAt(offset + i))
 				}
 			}
-			require.NoError(t, dst.PreExtendSelectedBatch(input, offset, count, flags, 1+selected, mp))
+			preflight, err := dst.PreExtendSelectedBatch(input, offset, count, flags, 1+selected, mp)
+			require.NoError(t, err)
 			admitted := state.account.Snapshot().Used
-			require.NoError(t, dst.UnionBatchPreflighted(input, int64(offset), count, flags, mp))
+			require.NoError(t, dst.UnionBatchPreflighted(input, int64(offset), count, flags, &preflight, mp))
 			require.Equal(t, admitted, state.account.Snapshot().Used, "publication cannot allocate")
 			require.Len(t, dst.GetArea(), liveBytes, "only admitted live bytes may be copied")
 			next := 1
@@ -823,10 +888,8 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 				if !input.IsNull(uint64(row)) {
 					require.Equal(t, input.GetBytesAt(row), dst.GetBytesAt(next))
 				}
-				require.Equal(t, types.StringSourceLiteral, dst.GetStringSourceAt(next))
 				next++
 			}
-			require.Equal(t, types.StringSourceExpression, dst.GetStringSourceAt(0))
 		})
 	}
 }
@@ -850,10 +913,11 @@ func BenchmarkPreflightedVarlenSelection(b *testing.B) {
 			b.SetBytes(int64(selected * 128))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := dst.PreExtendSelectedBatch(src, 0, rows, flags, selected, mp); err != nil {
+				preflight, err := dst.PreExtendSelectedBatch(src, 0, rows, flags, selected, mp)
+				if err != nil {
 					b.Fatal(err)
 				}
-				if err := dst.UnionBatchPreflighted(src, 0, rows, flags, mp); err != nil {
+				if err := dst.UnionBatchPreflighted(src, 0, rows, flags, &preflight, mp); err != nil {
 					b.Fatal(err)
 				}
 				dst.CleanOnlyData()

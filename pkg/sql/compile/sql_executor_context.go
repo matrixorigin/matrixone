@@ -726,6 +726,13 @@ func (c *compilerContext) resolve(dbName string, tableName string, snapshot *pla
 	// snapshot, tenant, and physical-account mapping cannot diverge between
 	// GetSubscriptionMeta and the actual catalog lookup.
 	if delegate := c.resolveDelegate(); delegate != nil {
+		if defines.IsPersistentViewBinding(c.GetContext()) && !defines.IsPersistentViewBinding(delegate.GetContext()) {
+			// The delegate owns the catalog domain, but this binder owns whether
+			// a name occurs inside persisted SQL. Do not use its DDL-only lookup.
+			previous := delegate.GetContext()
+			delegate.SetContext(defines.WithPersistentViewBinding(previous))
+			defer delegate.SetContext(previous)
+		}
 		if !resolveTemporaryAlias {
 			return delegate.ResolveWithoutTemporaryAlias(dbName, tableName, snapshot, nil)
 		}
@@ -748,7 +755,7 @@ func (c *compilerContext) resolve(dbName string, tableName string, snapshot *pla
 	// Resolve temporary table alias in current session for internal SQL execution.
 	// This keeps CTAS follow-up INSERT in the same transaction workable for temp tables.
 	isTmpTable := false
-	if ses := c.proc.GetSession(); ses != nil && resolveTemporaryAlias {
+	if ses := c.proc.GetSession(); ses != nil && resolveTemporaryAlias && !defines.IsPersistentViewBinding(c.GetContext()) {
 		if realName, ok := ses.GetTempTable(dbName, tableName); ok {
 			tableName = realName
 			isTmpTable = true

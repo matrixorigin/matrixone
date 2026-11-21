@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	commonUtil "github.com/matrixorigin/matrixone/pkg/common/util"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -2659,7 +2659,7 @@ func extractPStateFromRelData(
 		logutil.Warn("RELDATA-WITH-EMPTY-PSTATE",
 			zap.String("db", tbl.db.databaseName),
 			zap.String("table", tbl.tableName),
-			zap.String("sql", commonUtil.Abbreviate(sql, 500)),
+			zap.String("sql", commonutil.Abbreviate(sql, 500)),
 			zap.String("relDataType", fmt.Sprintf("%T", relData)),
 			zap.Int("relDataLen", relData.DataCnt()),
 			zap.String("txn", tbl.db.op.Txn().DebugString()),

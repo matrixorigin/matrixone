@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -1098,7 +1099,12 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 		"",
 		"replayCatalogCache",
 		0)
-	op, err = e.cli.New(ctx, timestamp.Timestamp{}, client.WithSkipPushClientReady(), client.WithSnapshotTS(ts), createByOpt)
+	// These three catalog SELECTs share a fixed snapshot and acquire no locks.
+	// A pessimistic terminal operation could wait for CN readiness while failed
+	// construction is joining this replay, before readiness can be published.
+	op, err = e.cli.New(ctx, timestamp.Timestamp{},
+		client.WithSkipPushClientReady(), client.WithSnapshotTS(ts),
+		client.WithTxnMode(txn.TxnMode_Optimistic), createByOpt)
 	if err != nil {
 		return err
 	}

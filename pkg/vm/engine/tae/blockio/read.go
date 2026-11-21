@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -106,7 +105,7 @@ func ReadDataByFilter(
 		}
 		sels = searchFunc(cacheVectors)
 		if !deleteMask.IsEmpty() {
-			sels = util.RemoveIf(sels, func(i int64) bool {
+			sels = slices.DeleteFunc(sels, func(i int64) bool {
 				return deleteMask.Contains(uint64(i))
 			})
 		}
@@ -194,12 +193,13 @@ func BlockDataReadWithFilter(
 	if applyFilter == nil || applyFilter.Apply == nil {
 		return 0, moerr.NewInvalidInputNoCtx("nil residual block filter")
 	}
-	if applyFilter.Exact != nil && len(columns) > 0 && len(earlyColumns) == len(columns) {
-		// Exact filtering consumes the full requested schema. The legacy
-		// late-materialization contract still requires a proper subset.
+	if (applyFilter.Exact != nil || applyFilter.Select != nil) && len(columns) > 0 && len(earlyColumns) == len(columns) {
+		// Exact and selection-only filtering may consume the full requested
+		// schema without changing its eager scheduling. Legacy Apply-only
+		// late materialization still requires a proper subset.
 		for i, pos := range earlyColumns {
 			if pos != i {
-				return 0, moerr.NewInvalidInputNoCtx("invalid complete exact-filter column positions")
+				return 0, moerr.NewInvalidInputNoCtx("invalid complete filter column positions")
 			}
 		}
 	} else if err := validateEarlyColumns(earlyColumns, len(columns)); err != nil {
@@ -336,6 +336,7 @@ func blockDataRead(
 	if applyFilter != nil && applyFilter.Exact != nil &&
 		orderByLimit == nil && !info.IsAppendable() && phyAddrColumnPos < 0 {
 		cacheVectors.Free(mp)
+		applyFilter.FreeMembership(mp)
 		return blockDataReadExactFilter(ctx, info, ds, columns, colTypes, sels, policy, bat, mp, fs, applyFilter, preFilterRows)
 	}
 
@@ -1024,6 +1025,11 @@ func blockDataReadWithFilter(
 		return err
 	}
 	cacheVectors.Free(mp)
+	stageMembership := phyAddrColumnPos < 0 && orderByLimit == nil && ds != nil && len(outputBat.ExtraBuf) == 0 &&
+		canReadMembership(ctx, info, columns, colTypes, storageSelectRows, earlyColumns, applyFilter)
+	if !stageMembership {
+		applyFilter.FreeMembership(mp)
+	}
 	if len(storageSelectRows) > 0 &&
 		!info.IsAppendable() && orderByLimit != nil && !orderByLimit.OrderedLimit {
 		topColPos := int(orderByLimit.ColPos)
@@ -1084,24 +1090,54 @@ func blockDataReadWithFilter(
 			tombstones.Release()
 			return tombstoneErr
 		}
+		if stageMembership {
+			if tombstones.IsEmpty() {
+				handled, memberErr := blockDataReadMembership(ctx, info, columns, colTypes, earlyColumns,
+					policy, outputBat, mp, fs, applyFilter, preFilterRows)
+				if handled || memberErr != nil {
+					tombstones.Release()
+					return memberErr
+				}
+			} else {
+				applyFilter.FreeMembership(mp)
+			}
+		}
+
+		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) && !objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(colTypes) {
+			defer tombstones.Release()
+			return blockDataReadScopedOwned(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter, preFilterRows)
+		}
 		var visibilityTS *types.TS
 		if info.IsAppendable() {
 			visibilityTS = &ts
 		}
-		if deleteMask, err = materializeBlockColumnsAtPositions(
-			ctx,
-			info,
-			columns,
-			colTypes,
-			phyAddrColumnPos,
-			earlyColumns,
-			nil,
-			visibilityTS,
-			policy,
-			outputBat,
-			mp,
-			fs,
-		); err != nil {
+		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil {
+			idxes := make([]uint16, len(earlyColumns))
+			typs := make([]types.Type, len(earlyColumns))
+			dest := make([]*vector.Vector, len(earlyColumns))
+			for i, pos := range earlyColumns {
+				idxes[i] = columns[pos]
+				typs[i] = colTypes[pos]
+				dest[i] = outputBat.Vecs[pos]
+			}
+			_, err = ioutil.LoadColumnsDataIntoBorrowed(ctx, idxes, typs, fs, info.MetaLocation(), dest, mp, policy, applyFilter.BorrowColumns(earlyColumns, len(outputBat.Vecs)))
+		} else {
+			deleteMask, err = materializeBlockColumnsAtPositions(
+				ctx,
+				info,
+				columns,
+				colTypes,
+				phyAddrColumnPos,
+				earlyColumns,
+				nil,
+				visibilityTS,
+				policy,
+				outputBat,
+				mp,
+				fs,
+			)
+		}
+		if err != nil {
 			tombstones.Release()
 			return err
 		}
@@ -1148,12 +1184,34 @@ func blockDataReadWithFilter(
 		return nil
 	}
 
-	filterResult, err := applyFilter.Apply(outputBat, earlyColumns)
-	if err != nil {
-		return err
-	}
-	if err = validateReaderFilterResult(filterResult, liveRows, outputBat.RowCount()); err != nil {
-		return err
+	var filterResult engine.ReaderFilterResult
+	selectedOutput := applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() &&
+		orderByLimit == nil && phyAddrColumnPos < 0 && len(outputBat.ExtraBuf) == 0
+	if selectedOutput {
+		filterResult, err = applyFilter.Select(outputBat, earlyColumns)
+		if err != nil {
+			return err
+		}
+		selectedRows := liveRows
+		if !filterResult.All {
+			selectedRows = len(filterResult.Sels)
+		}
+		if err = validateReaderFilterResult(filterResult, liveRows, selectedRows); err != nil {
+			return err
+		}
+		if !filterResult.All {
+			if err = publishReaderSelection(outputBat, earlyColumns, filterResult.Sels, applyFilter, mp); err != nil {
+				return err
+			}
+		}
+	} else {
+		filterResult, err = applyFilter.Apply(outputBat, earlyColumns)
+		if err != nil {
+			return err
+		}
+		if err = validateReaderFilterResult(filterResult, liveRows, outputBat.RowCount()); err != nil {
+			return err
+		}
 	}
 	if !filterResult.All {
 		if err := objectio.JSONReadSetFromContext(ctx).SelectRows(filterResult.Sels, mp); err != nil {
@@ -1161,6 +1219,9 @@ func blockDataReadWithFilter(
 		}
 	}
 	for _, pos := range earlyColumns {
+		if selectedOutput && applyFilter.ColumnUse(pos, len(outputBat.Vecs)) == engine.ReaderColumnUnused && outputBat.Vecs[pos].Length() == 0 {
+			continue
+		}
 		if outputBat.Vecs[pos].Length() != outputBat.RowCount() {
 			return moerr.NewInvalidInputNoCtxf(
 				"residual filter left early column %d with %d rows for batch row count %d",

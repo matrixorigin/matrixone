@@ -155,17 +155,22 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
-	if whichToSend.Recursive == 1 {
-		if !dispatch.ctr.hasData {
+	switch whichToSend.Recursive {
+	case 1:
+		if dispatch.RecSink && !dispatch.ctr.hasData {
 			result.Status = vm.ExecStop
 			whichToSend.SetEnd()
-		} else {
-			dispatch.ctr.hasData = false
 		}
-	} else if whichToSend.IsEmpty() {
-		return result, nil
-	} else {
-		dispatch.ctr.hasData = true
+		dispatch.ctr.hasData = false
+	case 2:
+		// End is a recursive control marker, not data for the next round.
+	default:
+		if whichToSend.IsEmpty() {
+			return result, nil
+		}
+		if dispatch.RecSink {
+			dispatch.ctr.hasData = true
+		}
 	}
 
 	if dispatch.MaterializedSource != nil {

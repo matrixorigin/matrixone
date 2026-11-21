@@ -396,8 +396,6 @@ func TestAppendResultBatchEndsStatementAllocationOwnership(t *testing.T) {
 		1,
 		1,
 		2,
-		3,
-		4,
 	)
 	require.NoError(t, err)
 

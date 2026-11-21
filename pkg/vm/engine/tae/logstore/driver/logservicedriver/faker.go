@@ -48,10 +48,10 @@ func GetTruncatedPSNFromMockTruncateRecord(r logservice.LogRecord) uint64 {
 	return types.DecodeUint64(r.Data)
 }
 
-func makeMockLogRecord(pos int) logservice.LogRecord {
+func makeMockLogRecord(psn uint64) logservice.LogRecord {
 	return logservice.LogRecord{
 		Type: pb.UserRecord,
-		Lsn:  uint64(pos),
+		Lsn:  psn,
 	}
 }
 
@@ -62,7 +62,12 @@ func noopAppendSkipCmd(_ context.Context, skipMap map[uint64]uint64) error {
 func mockUnmarshalLogRecordFactor(d *mockDriver) func(r logservice.LogRecord) LogEntry {
 	return func(r logservice.LogRecord) (ret LogEntry) {
 		var err error
-		pos := int(r.Lsn)
+		pos := sort.Search(len(d.recordSpecs), func(i int) bool {
+			return d.recordSpecs[i][1] >= r.Lsn
+		})
+		if pos == len(d.recordSpecs) || d.recordSpecs[pos][1] != r.Lsn {
+			panic("mock record PSN is missing from record specs")
+		}
 		// [CmdType,PSN,DSN-S,DSN-E,SAFE]
 		spec := d.recordSpecs[pos]
 		switch CmdType(spec[0]) {
@@ -148,9 +153,9 @@ func (d *mockDriver) getWALTruncateFromBackend(ctx context.Context) (uint64, uin
 func (d *mockDriver) readFromBackend(
 	ctx context.Context, firstPSN uint64, maxSize int,
 ) (nextPSN uint64, records []logservice.LogRecord, err error) {
-	for i, spec := range d.recordSpecs {
+	for _, spec := range d.recordSpecs {
 		if spec[1] >= firstPSN {
-			records = append(records, makeMockLogRecord(i))
+			records = append(records, makeMockLogRecord(spec[1]))
 		}
 		if len(records) >= maxSize {
 			return spec[1] + 1, records, nil

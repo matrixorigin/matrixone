@@ -246,6 +246,44 @@ func TestShufflePoolBoundsReadyBatchesAndResumes(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestShufflePoolWholeBucketResumesWithoutSelection(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(1, 1, true)
+	require.True(t, sp.hold())
+	input := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, false, objectio.BlockMaxRows*4, proc.Mp())
+	defer input.Clean(proc.Mp())
+	bucket, offset, waiter, done, err := sp.tryWriteMode(input, nil, 0, 0, 0, true, proc)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, objectio.BlockMaxRows*2, offset)
+	rows := 0
+	for !done {
+		ready := sp.getAnyFullBatch()
+		require.NotNil(t, ready)
+		rows += ready.RowCount()
+		sp.discardBatch(ready, proc.Mp())
+		select {
+		case <-waiter:
+		default:
+			t.Fatal("freeing a ready batch did not wake the range writer")
+		}
+		bucket, offset, waiter, done, err = sp.tryWriteMode(input, nil, 0, bucket, offset, true, proc)
+		require.NoError(t, err)
+	}
+	for ready := sp.getAnyFullBatch(); ready != nil; ready = sp.getAnyFullBatch() {
+		rows += ready.RowCount()
+		sp.discardBatch(ready, proc.Mp())
+	}
+	if last := sp.getAnyLastBatch(); last != nil {
+		rows += last.RowCount()
+		sp.discardBatch(last, proc.Mp())
+	}
+	require.Equal(t, input.RowCount(), rows)
+	_, ownsStats := sp.release(proc.Mp(), false)
+	require.True(t, ownsStats)
+}
+
 func TestShufflePoolReservesReadyCreditForProvenanceChange(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
@@ -254,7 +292,7 @@ func TestShufflePoolReservesReadyCreditForProvenanceChange(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 
 	sp := NewShufflePool(1, 1, true)
@@ -311,7 +349,7 @@ func TestShufflePoolKeepsIndependentProducerTails(t *testing.T) {
 		accounts[producer], err = registry.Open(1 << 20)
 		require.NoError(t, err)
 		selections[producer], err = vector.NewAllocationAccountSelection(
-			accounts[producer], 1, 1, 2, 3, 4,
+			accounts[producer], 1, 1, 2,
 		)
 		require.NoError(t, err)
 		inputs[producer] = batch.NewWithSchema(
@@ -433,7 +471,7 @@ func TestShufflePoolMatchingProducersCoalesce(t *testing.T) {
 				require.NoError(t, err)
 				account, err = registry.Open(1 << 20)
 				require.NoError(t, err)
-				selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+				selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 				require.NoError(t, err)
 				if tc.vectorOnly {
 					require.NoError(t, input.Vecs[0].SetAllocationAccount(selection))
@@ -524,13 +562,13 @@ func TestShufflePoolSplitsInputsAtProducerLaneCapacity(t *testing.T) {
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	}()
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	// Reserve the shared lane for a different provenance, then verify that
 	// accounted input still obeys the bounded producer-local fallback.
 	seed := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
 	defer seed.Clean(proc.Mp())
-	seedSelection, err := vector.NewAllocationAccountSelection(account, 1, 5, 6, 7, 8)
+	seedSelection, err := vector.NewAllocationAccountSelection(account, 1, 5, 6)
 	require.NoError(t, err)
 	require.NoError(t, seed.Vecs[0].SetAllocationAccount(seedSelection))
 	require.NoError(t, vector.AppendFixed(seed.Vecs[0], int64(0), false, proc.Mp()))
@@ -976,7 +1014,7 @@ func BenchmarkShufflePoolProducerTails(b *testing.B) {
 					account = accounts[0]
 				}
 				selection, selectionErr := vector.NewAllocationAccountSelection(
-					account, 1, 1, 2, 3, 4,
+					account, 1, 1, 2,
 				)
 				if selectionErr != nil {
 					b.Fatal(selectionErr)

@@ -2098,6 +2098,46 @@ func parseCSVUint(field csvparser.Field, bits int, round bool) (uint64, error) {
 	return strconv.ParseUint(integer, 10, bits)
 }
 
+// jsonNumberBitLexeme converts the canonical decimal lexeme of a nonnegative
+// integer JSON NUMBER token into that BIT value's canonical big-endian byte
+// encoding (single 0x00 for zero, no leading zero bytes, at most 8 bytes).
+// It returns false for everything else -- digits with leading zeros, signs,
+// fractions, exponents, values above uint64, or values above the BIT width
+// -- and the caller keeps the token text, preserving today's byte conversion
+// values and errors bit-for-bit.
+func jsonNumberBitLexeme(lexeme string, width int32) (string, bool) {
+	if len(lexeme) == 0 || len(lexeme) > 20 {
+		return "", false
+	}
+	for i := 0; i < len(lexeme); i++ {
+		if lexeme[i] < '0' || lexeme[i] > '9' {
+			return "", false
+		}
+	}
+	if len(lexeme) > 1 && lexeme[0] == '0' {
+		return "", false
+	}
+	value, err := strconv.ParseUint(lexeme, 10, 64)
+	if err != nil {
+		return "", false
+	}
+	// A BIT(64) target accepts the whole uint64 domain; narrower widths are
+	// clamped so out-of-width tokens keep the pre-existing conversion path.
+	if width > 0 && width < 64 && value > 1<<uint(width)-1 {
+		return "", false
+	}
+	var buf [8]byte
+	for i := 7; i >= 0; i-- {
+		buf[i] = byte(value)
+		value >>= 8
+	}
+	n := 8
+	for n > 1 && buf[8-n] == 0 {
+		n--
+	}
+	return string(buf[8-n:]), true
+}
+
 func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, attr plan.ExternAttr, proc *process.Process) error {
 	colIdx := attr.ColIndex
 	colName := attr.ColName
@@ -2150,6 +2190,20 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	}
 	if isNullOrEmpty {
 		return vector.AppendBytes(vec, nil, true, mp)
+	}
+
+	// A JSON NUMBER field for a BIT column is the exact uint64 the JSONLINE
+	// writer emitted, not a raw-byte CSV payload. Convert it after the raw
+	// NULLIF decision above and before both consumers: the staged varchar
+	// handoff below and the direct type construction below read the field as
+	// big-endian bytes, so canonical value bytes reach either consumer as the
+	// exact BIT value. Tokens that are not canonical nonnegative uint64
+	// integers, or that exceed the BIT width, keep the original text and with
+	// it today's conversion values and errors.
+	if id == types.T_bit && field.IsJSONNumber {
+		if encoded, ok := jsonNumberBitLexeme(field.Val, col.Typ.Width); ok {
+			field.Val = encoded
+		}
 	}
 
 	var temporalValue loadDataTemporalValue

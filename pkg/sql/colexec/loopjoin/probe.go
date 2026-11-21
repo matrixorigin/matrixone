@@ -97,15 +97,19 @@ func (ctr *container) appendJoinedRange(
 	start int,
 	count int,
 ) error {
+	if ctr.buildCopyBatch != buildBat || ctr.buildCopy == nil {
+		ctr.buildCopy = vector.GetUnionBatchFunction(buildBat.Vecs)
+		ctr.buildCopyBatch = buildBat
+	}
 	for k, rp := range ap.ResultCols {
 		switch rp.Rel {
 		case 0:
-			if err := ctr.resBat.Vecs[k].UnionMulti(
+			if err := ctr.probeCopy(ctr.resBat.Vecs[k],
 				inBat.Vecs[rp.Pos], int64(probeRow), count, proc.Mp()); err != nil {
 				return err
 			}
 		case 1:
-			if err := ctr.resBat.Vecs[k].UnionBatch(
+			if err := ctr.buildCopy(ctr.resBat.Vecs[k],
 				buildBat.Vecs[rp.Pos], int64(start), count, nil, proc.Mp()); err != nil {
 				return err
 			}
@@ -364,6 +368,74 @@ func (ctr *container) yieldProbe(
 	result.Batch = ctr.resBat
 }
 
+// scalarBuildBatch admits only an unconditional join that repeats one build
+// row. Empty build batches do not contribute to that cardinality.
+func (ctr *container) scalarBuildBatch(ap *LoopJoin, batches []*batch.Batch) *batch.Batch {
+	if ctr.expr != nil || ap.PairCondition != nil ||
+		(ap.JoinType != plan.Node_INNER && ap.JoinType != plan.Node_LEFT) {
+		return nil
+	}
+	var scalar *batch.Batch
+	for _, bat := range batches {
+		if bat.RowCount() == 0 {
+			continue
+		}
+		if bat.RowCount() != 1 || scalar != nil {
+			return nil
+		}
+		scalar = bat
+	}
+	return scalar
+}
+
+func (ctr *container) probeScalarBuild(
+	ap *LoopJoin,
+	proc *process.Process,
+	build *batch.Batch,
+	result *vm.CallResult,
+) error {
+	inbat := ctr.inBat
+	start := ctr.probeIdx
+	end := min(start+colexec.DefaultBatchSize, inbat.RowCount())
+	used, count := ctr.resBat.Size(), 0
+	for row := start; row < end; row++ {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return err
+		}
+		rowBytes := ctr.joinedRowBytes(ap, inbat, row, build, 0)
+		if !ctr.canAppendRow(count, used, rowBytes) {
+			break
+		}
+		used += rowBytes
+		count++
+	}
+	probeCopy := vector.GetUnionBatchFunction(inbat.Vecs)
+	buildCopy := vector.GetUnionMultiFunction(build.Vecs)
+	for k, rp := range ap.ResultCols {
+		if rp.Rel == 0 {
+			if err := probeCopy(ctr.resBat.Vecs[k],
+				inbat.Vecs[rp.Pos], int64(start), count, nil, proc.Mp()); err != nil {
+				return err
+			}
+		} else if rp.Rel == 1 {
+			if err := buildCopy(ctr.resBat.Vecs[k],
+				build.Vecs[rp.Pos], 0, count, proc.Mp()); err != nil {
+				return err
+			}
+		}
+	}
+	// A failed column copy must not advance the input or publish partial rows.
+	ctr.probeIdx = start + count
+	if ctr.probeIdx == inbat.RowCount() {
+		ctr.inBat = nil
+		ctr.clearBulkCopy()
+		ctr.probeIdx = 0
+	}
+	ctr.resBat.SetRowCount(count)
+	result.Batch = ctr.resBat
+	return nil
+}
+
 func (ctr *container) probe(
 	ap *LoopJoin,
 	proc *process.Process,
@@ -372,11 +444,15 @@ func (ctr *container) probe(
 	defer func() {
 		if err != nil {
 			ctr.clearProbeResume()
+			ctr.clearBulkCopy()
 		}
 	}()
 
 	inbat := ctr.inBat
 	mpbat := ctr.mp.GetBatches()
+	if scalar := ctr.scalarBuildBatch(ap, mpbat); scalar != nil {
+		return ctr.probeScalarBuild(ap, proc, scalar, result)
+	}
 	if ctr.joinBat == nil {
 		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(inbat, proc.Mp())
 	}
@@ -594,6 +670,7 @@ func (ctr *container) probe(
 	}
 
 	ctr.inBat = nil
+	ctr.clearBulkCopy()
 	ctr.probeIdx = 0
 	ctr.resBat.SetRowCount(rowCountIncrease)
 	result.Batch = ctr.resBat

@@ -3777,10 +3777,13 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		}
 
 		// step3 : switch the default role and role id;
-		wasIndexAdmin := verifyAccountCanExecMoCtrl(account)
+		previousRoleID := account.GetDefaultRoleID()
 		account.SetDefaultRoleID(uint32(roleId))
 		account.SetDefaultRole(sr.Role.UserName)
-		if wasIndexAdmin != verifyAccountCanExecMoCtrl(account) {
+		// A prepared plan was bound under the previous active role. Rebuild it
+		// before reuse even when neither role has rewrite rules: object-level
+		// admission (including physical-index reads) depends on this role.
+		if previousRoleID != account.GetDefaultRoleID() {
 			ses.invalidateCachedPlans(true)
 		}
 		// then, reset secondary role to none
@@ -5856,14 +5859,6 @@ func SetGrantPrivilegeObjectLockedHookForTest(hook func()) func() {
 
 func checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(ctx context.Context, ses FeSession, bh BackgroundExec,
 	ot tree.ObjectType, pl tree.PrivilegeLevel) (privilegeLevelType, int64, error) {
-	if ot == tree.OBJECT_TYPE_TABLE &&
-		(pl.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE || pl.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE) &&
-		isIndexTable(pl.TabName) {
-		// Hidden index relations are implementation details whose lifecycle is
-		// owned by their base table/index definition. They cannot be independent
-		// authorization objects.
-		return 0, 0, moerr.NewInvalidInputf(ctx, "cannot grant privileges on internal relation %s", pl.TabName)
-	}
 	privLevel, objID, err := checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(ctx, ses, bh, ot, pl, true)
 	if err == nil && ot == tree.OBJECT_TYPE_TABLE &&
 		(pl.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE || pl.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE) {
@@ -7318,13 +7313,6 @@ func getDbNameForPrivilege(objRef *plan2.ObjectRef) string {
 	return objRef.GetSchemaName()
 }
 
-func isMongoDBExternalTableScan(node *plan.Node) bool {
-	return node != nil &&
-		node.GetNodeType() == plan.Node_EXTERNAL_SCAN &&
-		node.GetExternScan() != nil &&
-		node.GetExternScan().GetType() == int32(plan.ExternType_MONGODB_TB)
-}
-
 func (pot privilegeTips) String() string {
 	return fmt.Sprintf("%s %s %s", pot.typ, pot.databaseName, pot.tableName)
 }
@@ -7412,10 +7400,74 @@ func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
 	return scans
 }
 
+func icebergDMLTargetScans(q *plan.Query) map[int32]struct{} {
+	if q == nil {
+		return nil
+	}
+	var sinkOption string
+	switch q.StmtType {
+	case plan.Query_UPDATE:
+		sinkOption = icebergapi.DMLUpdatePlanExtraOptions
+	case plan.Query_DELETE:
+		sinkOption = icebergapi.DMLDeletePlanExtraOptions
+	case plan.Query_MERGE:
+		sinkOption = icebergapi.DMLMergePlanExtraOptions
+	default:
+		return nil
+	}
+
+	var targetRef *plan.ObjectRef
+	for _, node := range q.Nodes {
+		if node == nil || node.NodeType != plan.Node_INSERT || node.GetExtraOptions() != sinkOption {
+			continue
+		}
+		if node.GetInsertCtx() != nil && node.GetInsertCtx().GetRef() != nil {
+			targetRef = node.GetInsertCtx().GetRef()
+		} else {
+			targetRef = node.GetObjRef()
+		}
+		if targetRef != nil {
+			break
+		}
+	}
+	if targetRef == nil {
+		return nil
+	}
+
+	scans := make(map[int32]struct{}, 1)
+	for nodeID, node := range q.Nodes {
+		if node == nil || node.GetNodeType() != plan.Node_EXTERNAL_SCAN ||
+			node.GetExternScan().GetType() != int32(plan.ExternType_ICEBERG_TB) ||
+			node.GetExtraOptions() != icebergapi.DMLTargetScanPlanExtraOptions {
+			continue
+		}
+		ref := node.GetObjRef()
+		if ref == nil {
+			continue
+		}
+		if targetRef.GetObj() != 0 && ref.GetObj() != 0 {
+			if targetRef.GetObj() != ref.GetObj() {
+				continue
+			}
+		} else if !strings.EqualFold(targetRef.GetSchemaName(), ref.GetSchemaName()) ||
+			!strings.EqualFold(targetRef.GetObjName(), ref.GetObjName()) {
+			continue
+		}
+		scans[int32(nodeID)] = struct{}{}
+	}
+	return scans
+}
+
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
 func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
+	tips, _, err := extractPrivilegeTipsAndInsertTarget(p)
+	return tips, err
+}
+
+func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *plan.ObjectRef, error) {
 	// NOTE: the pts may be nil when the plan does operate any table.
 	var pts privilegeTipsArray
+	var insertTarget *plan.ObjectRef
 	appendPt := func(pt privilegeTips) {
 		pts = append(pts, pt)
 	}
@@ -7423,6 +7475,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 	if p.GetQuery() != nil { // select,insert select, update, delete
 		q := p.GetQuery()
 		insertDedupScans := insertDedupTargetScans(q)
+		icebergDMLScans := icebergDMLTargetScans(q)
 
 		// lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
@@ -7459,7 +7512,11 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 		}
 
 		for nodeID, node := range q.Nodes {
-			if isPrivilegeBearingTableScan(node) || isMongoDBExternalTableScan(node) {
+			if _, ok := icebergDMLScans[int32(nodeID)]; ok {
+				continue
+			}
+			externalSelectScan := plan2.IsExternalScanRequiringSelectPrivilege(node)
+			if isPrivilegeBearingTableScan(node) || externalSelectScan {
 				if _, ok := insertDedupScans[int32(nodeID)]; ok {
 					continue
 				}
@@ -7491,10 +7548,18 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 						scanTyp = PrivilegeTypeSelect
 						scanOperation = clusterTableSelect
 					}
+					if externalSelectScan {
+						// An external scan is always a read, even when its relation name
+						// matches a DML target. Subscription aliases make name-based
+						// target matching especially unsafe.
+						scanTyp = PrivilegeTypeSelect
+						scanOperation = clusterTableSelect
+					}
 
-					// do not check the privilege of the index table
+					// External tables are independent catalog objects even when their
+					// names use the internal index prefix.
 					viewPath := node.GetViewPath()
-					if !isIndexTable(node.ObjRef.GetObjName()) {
+					if externalSelectScan || !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
 							typ:                   scanTyp,
 							objType:               objectTypeTable,
@@ -7534,6 +7599,10 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 				}
 				if objRef == nil && node.ObjRef != nil {
 					objRef = node.ObjRef
+				}
+				if insertTarget == nil && q.StmtType == plan.Query_INSERT &&
+					objRef.GetSchemaName() != "" && objRef.GetObjName() != "" {
+					insertTarget = objRef
 				}
 				if objRef != nil {
 					dbName := objRef.GetSchemaName()
@@ -7583,15 +7652,19 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 					}
 				}
 			} else if node.NodeType == plan.Node_INSERT {
-				if q.StmtType == plan.Query_MERGE &&
-					node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
-					continue
-				}
 				var objRef *plan.ObjectRef
 				if node.InsertCtx != nil && node.InsertCtx.Ref != nil {
 					objRef = node.InsertCtx.Ref
 				} else if node.ObjRef != nil {
 					objRef = node.ObjRef
+				}
+				if insertTarget == nil && node.GetInsertCtx().GetAddAffectedRows() &&
+					objRef.GetSchemaName() != "" && objRef.GetObjName() != "" {
+					insertTarget = objRef
+				}
+				if q.StmtType == plan.Query_MERGE &&
+					node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+					continue
 				}
 				if objRef != nil {
 					dbName := objRef.GetSchemaName()
@@ -7602,12 +7675,21 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 					if tableName == "" && node.TableDef != nil && node.TableDef.Name != "" {
 						tableName = node.TableDef.Name
 					}
-					// do not check the privilege of the index table
+					// External DML targets are catalog objects, not hidden index tables.
+					// Iceberg expresses UPDATE/DELETE with Node_INSERT. Execution
+					// markers must never decide whether authorization is required:
+					// missing or mismatched markers still fail closed on the statement privilege.
+					externalTarget := node.GetTableDef().GetTableType() == catalog.SystemExternalRel
+					targetPrivilege := PrivilegeTypeInsert
+					if externalTarget && (q.StmtType == plan.Query_INSERT ||
+						q.StmtType == plan.Query_UPDATE || q.StmtType == plan.Query_DELETE) {
+						targetPrivilege = t
+					}
 					viewPath := node.GetViewPath()
-					if !isIndexTable(tableName) {
+					if externalTarget || !isIndexTable(tableName) {
 						insertClusterTable := isClusterTable(dbName, tableName)
 						appendPt(privilegeTips{
-							typ:                   PrivilegeTypeInsert,
+							typ:                   targetPrivilege,
 							objType:               objectTypeTable,
 							databaseName:          dbName,
 							tableName:             tableName,
@@ -7635,6 +7717,12 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 					}
 				}
 			} else if node.NodeType == plan.Node_MULTI_UPDATE {
+				if insertTarget == nil && q.StmtType == plan.Query_INSERT && len(node.UpdateCtxList) > 0 {
+					objRef := node.UpdateCtxList[0].GetObjRef()
+					if objRef.GetSchemaName() != "" && objRef.GetObjName() != "" {
+						insertTarget = objRef
+					}
+				}
 				for _, updateCtx := range node.UpdateCtxList {
 					if updateCtx == nil || updateCtx.ObjRef == nil || updateCtx.TableDef == nil {
 						continue
@@ -7715,10 +7803,11 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 	}
 	lockTips, err := selectLockPrivilegeTips(p.GetQuery())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pts = append(pts, lockTips...)
-	return appendLogicalViewPrivilegeTips(pts, p.GetQuery())
+	tips, err := appendLogicalViewPrivilegeTips(pts, p.GetQuery())
+	return tips, insertTarget, err
 }
 
 // A path key identifies each catalog definition, not an authorization result.
@@ -9870,7 +9959,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		if isTargetSysWhiteList(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
 			return true, stats, nil
 		}
-		arr, err := extractPrivilegeTipsFromPlan(p)
+		arr, insertTarget, err := extractPrivilegeTipsAndInsertTarget(p)
 		if err != nil {
 			return false, stats, err
 		}
@@ -9880,24 +9969,46 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		if mergeStmt, ok := stmt.(*tree.Merge); ok {
 			arr = appendMergeActionPrivilegeTips(ses, mergeStmt, p, arr)
 		}
-		if len(arr) == 0 {
+		if ins, ok := stmt.(*tree.Insert); ok {
 			var dbName, tableName string
-			var ok bool
-			switch st := stmt.(type) {
-			case *tree.Insert:
-				dbName, tableName, ok = getInsertTargetTableName(st, ses)
-			case *tree.Load:
-				dbName, tableName, ok = getLoadTargetTableName(st, ses)
+			hasTarget := insertTarget != nil
+			if hasTarget {
+				dbName, tableName = insertTarget.GetSchemaName(), insertTarget.GetObjName()
+			} else {
+				dbName, tableName, hasTarget = getInsertTargetTableName(ins, ses)
 			}
-			if ok {
-				arr = append(arr, privilegeTips{
-					typ:                   PrivilegeTypeInsert,
-					objType:               objectTypeTable,
-					databaseName:          dbName,
-					tableName:             tableName,
-					isClusterTable:        isClusterTable(dbName, tableName),
-					clusterTableOperation: clusterTableModify,
-				})
+			if hasTarget {
+				hasTargetInsert := false
+				for _, tip := range arr {
+					if tip.typ == PrivilegeTypeInsert && tip.objType == objectTypeTable &&
+						tip.databaseName == dbName && tip.tableName == tableName {
+						hasTargetInsert = true
+						break
+					}
+				}
+				if !hasTargetInsert {
+					arr = append(arr, privilegeTips{
+						typ:                   PrivilegeTypeInsert,
+						objType:               objectTypeTable,
+						databaseName:          dbName,
+						tableName:             tableName,
+						isClusterTable:        isClusterTable(dbName, tableName),
+						clusterTableOperation: clusterTableModify,
+					})
+				}
+			}
+		} else if len(arr) == 0 {
+			if loadStmt, ok := stmt.(*tree.Load); ok {
+				if dbName, tableName, hasTarget := getLoadTargetTableName(loadStmt, ses); hasTarget {
+					arr = append(arr, privilegeTips{
+						typ:                   PrivilegeTypeInsert,
+						objType:               objectTypeTable,
+						databaseName:          dbName,
+						tableName:             tableName,
+						isClusterTable:        isClusterTable(dbName, tableName),
+						clusterTableOperation: clusterTableModify,
+					})
+				}
 			}
 		}
 		// SHOW INDEX IGNORED and STATUS need SELECT on the named table, which their plans may not

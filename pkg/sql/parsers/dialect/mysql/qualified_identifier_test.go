@@ -120,7 +120,7 @@ func TestQualifiedIdentifierBoundariesAndReuse(t *testing.T) {
 	for _, sql := range []string{
 		"select rank from src", "create table select(id int)",
 		"select t.'rank' from src t", "select t.\"rank\" from src t",
-		"select t._utf8mb4'rank' from src t", "select t.x'AB' from src t",
+		"select t.x'AB' from src t",
 		"select t.b'01' from src t", "select t.? from src t",
 		"select t.1 from src t", "select t.", "select t.`rank",
 		"select t./* unterminated", "select t.😀 from src t",
@@ -140,6 +140,20 @@ func TestQualifiedIdentifierBoundariesAndReuse(t *testing.T) {
 			defer stmt.Free()
 		})
 	}
+	// With the introducer guard, after `t.` the token `_utf8mb4` returns to
+	// being a plain qualified-name component, so a following string literal
+	// binds as its alias again -- the pre-introducer token stream is restored
+	// (issue #22157): `t._utf8mb4` stays a column, `'rank'` its implicit alias.
+	t.Run("select t._utf8mb4'rank' from src t", func(t *testing.T) {
+		stmt, err := ParseOne(context.Background(), "select t._utf8mb4'rank' from src t", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		clause := stmt.(*tree.Select).Select.(*tree.SelectClause)
+		require.Len(t, clause.Exprs, 1)
+		requireQualifiedName(t, clause.Exprs[0].Expr, "t", "_utf8mb4")
+		require.False(t, clause.Exprs[0].As.Empty())
+		require.Equal(t, "rank", clause.Exprs[0].As.Origin())
+	})
 	t.Run("parser reuse after success and failure", func(t *testing.T) {
 		var parser MySQLParser
 		for _, sql := range []string{"select t.rank from src t", "select t."} {
@@ -195,4 +209,21 @@ func TestQualifiedIdentifierBoundariesAndReuse(t *testing.T) {
 		token, _ = scanner.ScanWithComments()
 		require.Equal(t, RANK, token)
 	})
+}
+
+// After `t.`, `_utf8mb4` is a plain qualified-name component: the charset
+// introducer must not consume it even when an introducer-shaped literal
+// follows, keeping the historically valid `SELECT t._utf8mb4 0xzz FROM src t`
+// parseable (issue #22157).
+func TestQualifiedIdentifierKeepsIntroducerColumn(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "SELECT t._utf8mb4 0xzz FROM src t", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	clause := stmt.(*tree.Select).Select.(*tree.SelectClause)
+	require.Len(t, clause.Exprs, 1)
+	requireQualifiedName(t, clause.Exprs[0].Expr, "t", "_utf8mb4")
+	// 0xzz scans as a plain identifier and binds as the implicit alias,
+	// matching the qualified-name token stream from before the introducer.
+	require.False(t, clause.Exprs[0].As.Empty())
+	require.Equal(t, "0xzz", clause.Exprs[0].As.Origin())
 }

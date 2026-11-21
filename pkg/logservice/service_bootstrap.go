@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	util "github.com/matrixorigin/matrixone/pkg/util/logservice"
 	"go.uber.org/zap"
 )
 
@@ -93,7 +92,7 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	numOfLogShards := cfg.BootstrapConfig.NumOfLogShards
 	numOfTNShards := cfg.BootstrapConfig.NumOfTNShards
 	numOfLogReplicas := cfg.BootstrapConfig.NumOfLogShardReplicas
-	nonVotingLocality := util.GetLocalityFromStr(cfg.BootstrapConfig.NonVotingLocality)
+	nonVotingLocality := pb.ParseLocality(cfg.BootstrapConfig.NonVotingLocality)
 
 	// If the standby mode is enabled, the number of log shard should be 2.
 	if cfg.BootstrapConfig.StandbyEnabled {

@@ -23,7 +23,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 
 FIELD_RE = re.compile(r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>[^\s]+)")
@@ -67,7 +67,9 @@ def format_duration(seconds: float) -> str:
 
 
 def setup_records(
-    report_path: Path, parse_errors: Optional[List[int]] = None
+    report_path: Path,
+    parse_errors: Optional[List[int]] = None,
+    on_event: Optional[Callable[[dict, int], None]] = None,
 ) -> Iterable[Tuple[Dict[str, str], float]]:
     """Yield valid setup records from a possibly truncated Go test report.
 
@@ -85,6 +87,8 @@ def setup_records(
                 continue
             if not isinstance(event, dict):
                 continue
+            if on_event is not None:
+                on_event(event, len(line))
             output = event.get("Output")
             if not isinstance(output, str):
                 continue
@@ -135,107 +139,139 @@ def summarize(report_path: Path) -> Dict[Tuple[str, str], List[float]]:
     return summarize_records(setup_records(report_path))
 
 
-def admission_holders(report_path: Path) -> List[str]:
-    """Explain holder time separately from overlapping admission waits.
+class AdmissionHolders:
+    """Track admission leases without retaining the report's test output."""
 
-    Package termination bounds an OS-owned lease but does not prove service
-    cleanup. Concurrent invocations of the same package cannot be associated
-    with terminal events without a PID, so leave those generations unresolved.
-    Keep only lifecycle metadata, not the potentially large test output.
-    """
-    leases = []
-    active = {}
-    invocations = defaultdict(int)
-    current_invocations = {}
-    live = defaultdict(int)
-    ambiguous = set()
-    terminals = {}
-    invocation_pids = defaultdict(set)
+    def __init__(self) -> None:
+        self.leases = []
+        self.active = {}
+        self.invocations = defaultdict(int)
+        self.current_invocations = {}
+        self.live = defaultdict(int)
+        self.ambiguous = set()
+        self.terminals = {}
+        self.invocation_pids = defaultdict(set)
+        self.error: Optional[Exception] = None
+
+    def observe(self, event: dict) -> None:
+        # Previously this pass ran after setup aggregation and only when there
+        # were totals to print. Defer an unexpected holder error until then.
+        if self.error is not None:
+            return
+        try:
+            self._observe(event)
+        except Exception as error:
+            self.error = error
+
+    def _observe(self, event: dict) -> None:
+        action = event.get("Action")
+        output = event.get("Output", "")
+        if action not in ("start", "pass", "fail", "skip") and (
+            not isinstance(output, str) or "MO_UT_SETUP " not in output
+        ):
+            return
+        try:
+            package = event.get("Package")
+            if not isinstance(package, str) or not package:
+                return
+            stamp = datetime.fromisoformat(event["Time"].replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                return
+            timestamp = stamp.timestamp()
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return
+        if action == "start":
+            if self.live[package]:
+                self.ambiguous.add(package)
+            self.invocations[package] += 1
+            self.live[package] += 1
+            self.current_invocations[package] = self.invocations[package]
+        invocation = (package, self.current_invocations.get(package, 0))
+        if action in ("pass", "fail", "skip") and not event.get("Test"):
+            self.terminals[invocation] = timestamp
+            self.live[package] = max(0, self.live[package] - 1)
+            # A later startless capture must not inherit this process's
+            # start event or overwrite its terminal bound.
+            self.current_invocations.pop(package, None)
+        if not isinstance(output, str):
+            return
+        for output_line in output.splitlines():
+            marker = output_line.find("MO_UT_SETUP ")
+            if marker < 0:
+                continue
+            fields = dict(FIELD_RE.findall(output_line[marker + 12 :]))
+            if fields.get("fixture") != "embedded-cluster":
+                continue
+            pid, cluster = fields.get("pid"), fields.get("cluster_id")
+            if not pid or not cluster:
+                continue
+            self.invocation_pids[invocation].add(pid)
+            key = (invocation, pid, cluster)
+            if fields.get("phase") == "admission-acquire" and fields.get("status") == "ready":
+                lease = {
+                    "invocation": invocation, "pid": pid, "cluster": cluster,
+                    "start": timestamp, "end": None, "evidence": "open-at-capture",
+                    "test": event.get("Test", "?"),
+                }
+                self.leases.append(lease)
+                self.active[key] = lease
+            elif fields.get("admission_released") == "true" and key in self.active:
+                lease = self.active.pop(key)
+                if timestamp >= lease["start"]:
+                    lease.update(end=timestamp, evidence="explicit")
+
+    def lines(self) -> List[str]:
+        """Explain holder time separately from overlapping admission waits.
+
+        Package termination bounds an OS-owned lease but does not prove service
+        cleanup. Concurrent invocations without a PID remain unresolved.
+        """
+        if self.error is not None:
+            raise self.error
+        for lease in self.leases:
+            invocation = lease["invocation"]
+            terminal = self.terminals.get(invocation)
+            if (lease["end"] is None and invocation[1] > 0 and invocation[0] not in self.ambiguous
+                    and len(self.invocation_pids[invocation]) == 1
+                    and terminal is not None and terminal >= lease["start"]):
+                lease.update(end=terminal, evidence="process-exit-inferred")
+        if not self.leases:
+            return []
+        counts = defaultdict(int)
+        for lease in self.leases:
+            counts[lease["evidence"]] += 1
+        lines = [
+            "[ut_setup] admission generations: "
+            f"explicit={counts['explicit']} process-exit-inferred={counts['process-exit-inferred']} "
+            f"unresolved={counts['open-at-capture']}; "
+            "process exit is an upper bound, not clean service shutdown; "
+            "wait totals overlap holder work and are not potential wall-time savings"
+        ]
+        bounded = [lease for lease in self.leases if lease["end"] is not None]
+        bounded.sort(key=lambda lease: lease["end"] - lease["start"], reverse=True)
+        for lease in bounded[:5]:
+            lines.append(
+                "[ut_setup] admission holder "
+                f"duration={format_duration(lease['end'] - lease['start'])} "
+                f"evidence={lease['evidence']} package={lease['invocation'][0]} "
+                f"acquire_test={lease['test']} pid={lease['pid']} cluster={lease['cluster']}"
+            )
+        return lines
+
+
+def admission_holders(report_path: Path) -> List[str]:
+    tracker = AdmissionHolders()
+    # Keep the standalone helper's more permissive JSON error handling. The
+    # main summary instead feeds the tracker during its setup-record scan.
     with report_path.open(encoding="utf-8") as report:
         for line in report:
             try:
                 event = json.loads(line)
-                if not isinstance(event, dict):
-                    continue
-                package = event.get("Package")
-                if not isinstance(package, str) or not package:
-                    continue
-                stamp = datetime.fromisoformat(event["Time"].replace("Z", "+00:00"))
-                if stamp.tzinfo is None:
-                    continue
-                timestamp = stamp.timestamp()
             except (ValueError, KeyError, TypeError, AttributeError):
                 continue
-            action = event.get("Action")
-            if action == "start":
-                if live[package]:
-                    ambiguous.add(package)
-                invocations[package] += 1
-                live[package] += 1
-                current_invocations[package] = invocations[package]
-            invocation = (package, current_invocations.get(package, 0))
-            if action in ("pass", "fail", "skip") and not event.get("Test"):
-                terminals[invocation] = timestamp
-                live[package] = max(0, live[package] - 1)
-                # A later startless capture must not inherit this process's
-                # start event or overwrite its terminal bound.
-                current_invocations.pop(package, None)
-            output = event.get("Output", "")
-            if not isinstance(output, str):
-                continue
-            for output_line in output.splitlines():
-                marker = output_line.find("MO_UT_SETUP ")
-                if marker < 0:
-                    continue
-                fields = dict(FIELD_RE.findall(output_line[marker + 12 :]))
-                if fields.get("fixture") != "embedded-cluster":
-                    continue
-                pid, cluster = fields.get("pid"), fields.get("cluster_id")
-                if not pid or not cluster:
-                    continue
-                invocation_pids[invocation].add(pid)
-                key = (invocation, pid, cluster)
-                if fields.get("phase") == "admission-acquire" and fields.get("status") == "ready":
-                    lease = {
-                        "invocation": invocation, "pid": pid, "cluster": cluster,
-                        "start": timestamp, "end": None, "evidence": "open-at-capture",
-                        "test": event.get("Test", "?"),
-                    }
-                    leases.append(lease)
-                    active[key] = lease
-                elif fields.get("admission_released") == "true" and key in active:
-                    lease = active.pop(key)
-                    if timestamp >= lease["start"]:
-                        lease.update(end=timestamp, evidence="explicit")
-    for lease in leases:
-        invocation = lease["invocation"]
-        terminal = terminals.get(invocation)
-        if (lease["end"] is None and invocation[1] > 0 and invocation[0] not in ambiguous
-                and len(invocation_pids[invocation]) == 1
-                and terminal is not None and terminal >= lease["start"]):
-            lease.update(end=terminal, evidence="process-exit-inferred")
-    if not leases:
-        return []
-    counts = defaultdict(int)
-    for lease in leases:
-        counts[lease["evidence"]] += 1
-    lines = [
-        "[ut_setup] admission generations: "
-        f"explicit={counts['explicit']} process-exit-inferred={counts['process-exit-inferred']} "
-        f"unresolved={counts['open-at-capture']}; "
-        "process exit is an upper bound, not clean service shutdown; "
-        "wait totals overlap holder work and are not potential wall-time savings"
-    ]
-    bounded = [lease for lease in leases if lease["end"] is not None]
-    bounded.sort(key=lambda lease: lease["end"] - lease["start"], reverse=True)
-    for lease in bounded[:5]:
-        lines.append(
-            "[ut_setup] admission holder "
-            f"duration={format_duration(lease['end'] - lease['start'])} "
-            f"evidence={lease['evidence']} package={lease['invocation'][0]} "
-            f"acquire_test={lease['test']} pid={lease['pid']} cluster={lease['cluster']}"
-        )
-    return lines
+            if isinstance(event, dict):
+                tracker._observe(event)
+    return tracker.lines()
 
 
 def summarize_embedded_diagnostics(
@@ -369,7 +405,40 @@ def main(argv: List[str]) -> int:
         return 2
 
     parse_errors = [0]
-    records = list(setup_records(report_path, parse_errors))
+    holders = AdmissionHolders()
+    records = []
+    early_events = 0
+    early_bytes = 0
+    deferred_holders = False
+
+    def observe(event: dict, line_length: int) -> None:
+        nonlocal holders, early_events, early_bytes, deferred_holders
+        if deferred_holders:
+            return
+        # Before the first valid aggregate, the old CLI retained no holder
+        # metadata at all. Bound provisional state; if a report exceeds this
+        # budget, read holders separately only when an aggregate is present.
+        if not records:
+            action = event.get("Action")
+            output = event.get("Output")
+            relevant = (
+                action == "start"
+                or (action in ("pass", "fail", "skip") and not event.get("Test"))
+                or (isinstance(output, str) and "MO_UT_SETUP " in output)
+            )
+            if relevant:
+                early_events += 1
+                # Four bytes per character bounds Python's Unicode storage;
+                # the fixed allowance covers per-event bookkeeping.
+                early_bytes += 4 * line_length + 256
+                if early_events > 4096 or early_bytes > 4 * 1024 * 1024:
+                    holders = None
+                    deferred_holders = True
+                    return
+        holders.observe(event)
+
+    for record in setup_records(report_path, parse_errors, observe):
+        records.append(record)
     if parse_errors[0]:
         print(
             f"[ut_setup] ignored malformed JSON lines={parse_errors[0]} "
@@ -396,7 +465,8 @@ def main(argv: List[str]) -> int:
     diagnosis = summarize_embedded_diagnostics(records)
     if diagnosis is not None:
         print(diagnosis)
-    for line in admission_holders(report_path):
+    holder_lines = admission_holders(report_path) if deferred_holders else holders.lines()
+    for line in holder_lines:
         print(line)
     return 0
 

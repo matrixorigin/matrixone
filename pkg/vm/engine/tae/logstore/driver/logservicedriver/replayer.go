@@ -865,7 +865,7 @@ func (r *replayer) readNextBatch(
 	)
 
 	r.stats.readDuration += time.Since(t0)
-	for i, record := range records {
+	for _, record := range records {
 		if r.onLogRecord != nil {
 			r.onLogRecord(record)
 		}
@@ -873,7 +873,9 @@ func (r *replayer) readNextBatch(
 		if record.GetType() != pb.UserRecord {
 			continue
 		}
-		psn := r.waterMarks.psnToRead + uint64(i)
+		// LogService can omit Raft commands from Read, leaving holes in the
+		// returned physical LSNs. Keep the PSN attached to the record.
+		psn := record.Lsn
 		entry := r.logRecordToLogEntry(record)
 		if updated := r.replayedState.readCache.addRecord(
 			psn, entry,

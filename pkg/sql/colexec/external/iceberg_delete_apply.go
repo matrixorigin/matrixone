@@ -29,7 +29,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -842,7 +841,7 @@ func maskIcebergHiddenReadColumns(param *ExternalParam, bat *batch.Batch) {
 		if idx < 0 || idx >= len(bat.Vecs) || bat.Vecs[idx] == nil {
 			continue
 		}
-		nulls.AddRange(bat.Vecs[idx].GetNulls(), 0, uint64(rowCount))
+		bat.Vecs[idx].GetNulls().AddRange(0, uint64(rowCount))
 	}
 }
 

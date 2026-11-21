@@ -43,15 +43,29 @@ func (filter *Filter) GetOperatorBase() *vm.OperatorBase {
 
 func init() {
 	reuse.CreatePool[Filter](
-		func() *Filter {
-			return &Filter{}
-		},
-		func(a *Filter) {
-			*a = Filter{}
-		},
+		newFilterArgument,
+		resetFilterArgument,
 		reuse.DefaultOptions[Filter]().
 			WithEnableChecker(),
 	)
+}
+
+// Keep the frame in the same allocation, outside the operator's reset range.
+type filterArgument struct {
+	operator Filter
+	frame    colexec.DictionaryInputFrame
+}
+
+func newFilterArgument() *Filter {
+	a := new(filterArgument)
+	a.operator.ctr.dictionaryInputs = &a.frame
+	return &a.operator
+}
+
+func resetFilterArgument(a *Filter) {
+	frame := a.ctr.dictionaryInputs
+	*a = Filter{}
+	a.ctr.dictionaryInputs = frame
 }
 
 func (filter Filter) TypeName() string {
@@ -70,6 +84,11 @@ func (filter *Filter) Release() {
 }
 
 type container struct {
+	dictionaryInputs          *colexec.DictionaryInputFrame
+	dictionaryBoundary        vm.DictionaryOutputState
+	viewOutput                *batch.Batch
+	selectedRows              []int64
+	outputAllocation          *vector.AllocationAccountSelection
 	buf                       *batch.Batch
 	executors                 []colexec.ExpressionExecutor
 	bs                        vector.FunctionParameterWrapper[bool]
@@ -87,14 +106,24 @@ func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err erro
 	filter.ctr.resetExecutor()
 	filter.ctr.cleanRuntimeExecutor()
 	filter.RuntimeFilterExprs = nil
+	if filter.ctr.outputAllocation != nil {
+		filter.Free(proc, pipelineFailed, err)
+	}
 }
 
 func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {
+	filter.ctr.dictionaryInputs.Free(proc.Mp())
+	if filter.ctr.viewOutput != nil {
+		filter.ctr.viewOutput.Clean(proc.Mp())
+		filter.ctr.viewOutput = nil
+	}
+	filter.ctr.selectedRows = nil
 	filter.ctr.cleanExecutor()
 	filter.ctr.cleanRuntimeExecutor()
 	filter.ctr.allExecutors = nil
 	if filter.ctr.buf != nil {
 		filter.ctr.buf.Clean(proc.Mp())
+		filter.ctr.buf = nil
 	}
 	filter.RuntimeFilterExprs = nil
 }

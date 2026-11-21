@@ -151,7 +151,7 @@ func TestExactScanAllocationFailureClearsBorrowedViews(t *testing.T) {
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	typ := types.T_int64.ToType()
 	src := vector.NewVec(typ)

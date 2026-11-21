@@ -50,16 +50,16 @@ const (
 	dedupJoinAllocationSiteCaptured
 	dedupJoinAllocationSiteCaptureData
 	dedupJoinAllocationSiteCaptureArea
-	dedupJoinAllocationSiteCaptureNulls
-	dedupJoinAllocationSiteCaptureGrouping
+	_ // reserved: was dedupJoinAllocationSiteCaptureNulls
+	_ // reserved: was dedupJoinAllocationSiteCaptureGrouping
 	dedupJoinAllocationSiteFinalizeSelections
 )
 
 const (
 	dedupJoinAllocationSiteResultData mpool.AllocationSite = iota + 110
 	dedupJoinAllocationSiteResultArea
-	dedupJoinAllocationSiteResultNulls
-	dedupJoinAllocationSiteResultGrouping
+	_ // reserved: was dedupJoinAllocationSiteResultNulls
+	_ // reserved: was dedupJoinAllocationSiteResultGrouping
 )
 
 // WorkerJoinMsg carries per-worker state from non-merger workers to the
@@ -218,8 +218,6 @@ func freeCapturedVecs(vecs []*vector.Vector, proc *process.Process) {
 
 func freeWorkerJoinMsg(msg *WorkerJoinMsg, proc *process.Process) {
 	if msg != nil {
-		colexec.FreeAccountedBitmap(msg.matched, proc.Mp())
-		colexec.FreeAccountedBitmap(msg.captured, proc.Mp())
 		freeCapturedVecs(msg.capturedVecs, proc)
 	}
 }
@@ -329,12 +327,15 @@ type DedupJoin struct {
 	NumCPU   uint64
 	IsMerger bool
 
-	OnDuplicateAction         plan.Node_OnDuplicateAction
-	DedupBuildKeepLast        bool
-	DedupColName              string
-	SpillThreshold            int64
-	DedupColTypes             []plan.Type
-	DedupKeyExprs             []*plan.Expr
+	OnDuplicateAction  plan.Node_OnDuplicateAction
+	DedupBuildKeepLast bool
+	DedupColName       string
+	SpillThreshold     int64
+	DedupColTypes      []plan.Type
+	DedupKeyExprs      []*plan.Expr
+	// AuxiliaryRowIdColIdx is a one-based build-side row-ID column. NULL marks
+	// reservation/release evidence for IGNORE; zero disables that contract.
+	AuxiliaryRowIdColIdx      int32
 	DelColIdx                 int32
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
@@ -396,8 +397,6 @@ func (dedupJoin *DedupJoin) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		dedupJoinAllocationSiteCaptureData,
 		dedupJoinAllocationSiteCaptureArea,
-		dedupJoinAllocationSiteCaptureNulls,
-		dedupJoinAllocationSiteCaptureGrouping,
 	)
 	if err != nil {
 		return err
@@ -407,8 +406,6 @@ func (dedupJoin *DedupJoin) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		dedupJoinAllocationSiteResultData,
 		dedupJoinAllocationSiteResultArea,
-		dedupJoinAllocationSiteResultNulls,
-		dedupJoinAllocationSiteResultGrouping,
 	)
 	if err != nil {
 		return err
@@ -599,7 +596,6 @@ func (ctr *container) cleanCaptured(proc *process.Process) {
 		}
 	}
 	ctr.capturedVecs = nil
-	colexec.FreeAccountedBitmap(ctr.captured, proc.Mp())
 	ctr.captured = nil
 	ctr.captureResultIdx = nil
 }
@@ -633,7 +629,6 @@ func (ctr *container) cleanBucketState(proc *process.Process) {
 	ctr.cleanHashMap()
 	ctr.batches = nil
 	ctr.batchRowCount = 0
-	colexec.FreeAccountedBitmap(ctr.matched, proc.Mp())
 	ctr.matched = nil
 	ctr.resetActionReplayCursors()
 }

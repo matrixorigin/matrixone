@@ -36,56 +36,77 @@ import (
 
 func TestOwnedCompleteKeyShuffle(t *testing.T) {
 	for _, values := range [][]int64{{7, 7, 7}, {0, 1, 2, 3, 4, 5, 6, 7}} {
-		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-		budget, err := proc.GetExecutionResourceBudget()
-		require.NoError(t, err)
-		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
-		require.NoError(t, err)
-		account, err := registry.OpenWithController(1<<20, budget)
-		require.NoError(t, err)
-		arg := NewArgument()
-		arg.BucketNum, arg.ShuffleType = 8, int32(plan.ShuffleType_Hash)
-		arg.ShuffleKeyColumns, arg.DrainAllBuckets, arg.OwnedOutput = []int32{0}, true, true
-		arg.OwnedColumnCount = 1
-		require.NoError(t, arg.SetAllocationAccount(account))
-		input := batch.NewWithSize(1)
-		input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, proc.Mp()))
-		input.SetRowCount(len(values))
-		input.ShuffleIDX = 99
-		source := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-		arg.AppendChild(source)
-		require.NoError(t, vm.Prepare(arg, proc))
-		var got []int64
-		for {
-			result, err := vm.Exec(arg, proc)
+		for _, dictionary := range []bool{false, true} {
+			expected := values
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			budget, err := proc.GetExecutionResourceBudget()
 			require.NoError(t, err)
-			if result.Batch == nil || result.Status == vm.ExecStop {
-				break
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(1<<20, budget)
+			require.NoError(t, err)
+			arg := NewArgument()
+			arg.BucketNum, arg.ShuffleType = 8, int32(plan.ShuffleType_Hash)
+			arg.ShuffleKeyColumns, arg.DrainAllBuckets, arg.OwnedOutput = []int32{0}, true, true
+			arg.OwnedColumnCount = 1
+			require.NoError(t, arg.SetAllocationAccount(account))
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, proc.Mp()))
+			input.SetRowCount(len(values))
+			if dictionary {
+				func() {
+					original := input.Vecs[0]
+					base, err := vector.FreezeVector(original, proc.Mp(), nil)
+					require.NoError(t, err)
+					defer base.Release()
+					rows, err := vector.NewRowSelection([]int64{1, 0, 1}, len(values), proc.Mp(), nil)
+					require.NoError(t, err)
+					defer rows.Release()
+					dict, err := vector.NewDictionaryVector(base, rows, proc.Mp(), nil)
+					require.NoError(t, err)
+					input.Vecs[0] = dict
+					original.Free(proc.Mp())
+					input.SetRowCount(3)
+					expected = []int64{values[1], values[0], values[1]}
+				}()
 			}
-			if result.Batch.RowCount() == 0 {
-				continue
+
+			input.ShuffleIDX = 99
+			source := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			arg.AppendChild(source)
+			require.NoError(t, vm.Prepare(arg, proc))
+			var got []int64
+			for {
+				result, err := vm.Exec(arg, proc)
+				require.NoError(t, err)
+				if result.Batch == nil || result.Status == vm.ExecStop {
+					break
+				}
+				if result.Batch.RowCount() == 0 {
+					continue
+				}
+				require.NotSame(t, input, result.Batch)
+				require.True(t, vector.AllocationAccountSelectionsEqual(arg.outputAllocation, result.Batch.AllocationAccountSelection()))
+				got = append(got, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0])...)
 			}
-			require.NotSame(t, input, result.Batch)
-			require.True(t, vector.AllocationAccountSelectionsEqual(arg.outputAllocation, result.Batch.AllocationAccountSelection()))
-			got = append(got, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0])...)
+			require.ElementsMatch(t, expected, got)
+			require.Equal(t, int32(99), input.ShuffleIDX)
+			require.Nil(t, input.AllocationAccountSelection())
+			arg.Reset(proc, false, nil)
+			arg.Free(proc, false, nil)
+			require.Zero(t, account.Snapshot().Used)
+			require.NoError(t, arg.ClearAllocationAccount(account))
+			require.Zero(t, budget.Used())
+			account.Seal()
+			_, err = registry.Finalize(account)
+			require.NoError(t, err)
+			arg.Release()
+			input.Clean(proc.Mp())
+			source.ResetBatchs()
+			require.Zero(t, proc.Mp().CurrNB())
+			proc.Free()
 		}
-		require.ElementsMatch(t, values, got)
-		require.Equal(t, int32(99), input.ShuffleIDX)
-		require.Nil(t, input.AllocationAccountSelection())
-		arg.Reset(proc, false, nil)
-		arg.Free(proc, false, nil)
-		require.Zero(t, account.Snapshot().Used)
-		require.NoError(t, arg.ClearAllocationAccount(account))
-		require.Zero(t, budget.Used())
-		account.Seal()
-		_, err = registry.Finalize(account)
-		require.NoError(t, err)
-		arg.Release()
-		input.Clean(proc.Mp())
-		source.ResetBatchs()
-		require.Zero(t, proc.Mp().CurrNB())
-		proc.Free()
 	}
 }
 

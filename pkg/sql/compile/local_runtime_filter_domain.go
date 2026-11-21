@@ -20,11 +20,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type localDomainScan struct {
@@ -44,6 +48,9 @@ func (c *Compile) bindLocalRuntimeFilterDomains(q *plan.Query, roots []*Scope) {
 	}
 	scans := make(map[int32][]localDomainScan)
 	visited := make(map[*Scope]bool)
+	// Only these independently scheduled build receivers can close a local
+	// source's bounded connector edge. Ambiguous registers remain inadmissible.
+	receivers := make(map[*process.WaitRegister]*Scope)
 	safe := true
 	var walk func(*Scope)
 	walk = func(s *Scope) {
@@ -57,6 +64,15 @@ func (c *Compile) bindLocalRuntimeFilterDomains(q *plan.Query, roots []*Scope) {
 			(s.NodeInfo.Addr != "" && s.NodeInfo.Addr != c.addr) || s.Proc == nil ||
 			s.Proc.GetMessageBoard() != c.proc.GetMessageBoard() {
 			safe = false
+		}
+		if _, ok := s.RootOp.(*hashbuild.HashBuild); ok && s.Proc != nil {
+			for _, reg := range s.Proc.Reg.MergeReceivers {
+				if prior, exists := receivers[reg]; exists && prior != s {
+					receivers[reg] = nil
+				} else if !exists {
+					receivers[reg] = s
+				}
+			}
 		}
 		_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
 			if scan, ok := op.(*table_scan.TableScan); ok {
@@ -83,7 +99,7 @@ func (c *Compile) bindLocalRuntimeFilterDomains(q *plan.Query, roots []*Scope) {
 	for _, descriptor := range domains {
 		source := scans[descriptor.SourceScanNodeId]
 		if len(source) != 1 || len(source[0].scope.PreScopes) != 0 || source[0].scope.DataSource == nil ||
-			len(source[0].scope.DataSource.RuntimeFilterSpecs) != 0 || !independentLocalDomainSource(source[0].scope) {
+			len(source[0].scope.DataSource.RuntimeFilterSpecs) != 0 || !independentLocalDomainSource(source[0].scope, receivers) {
 			continue
 		}
 		if !localDomainScanColumn(q, descriptor.SourceScanNodeId, descriptor.SourceColumnName, descriptor.KeyType) {
@@ -125,9 +141,34 @@ func (c *Compile) bindLocalRuntimeFilterDomains(q *plan.Query, roots []*Scope) {
 	}
 }
 
-func independentLocalDomainSource(s *Scope) bool {
+func independentLocalDomainSource(s *Scope, receivers map[*process.WaitRegister]*Scope) bool {
+	root := s.RootOp
+	if sender, ok := root.(*connector.Connector); ok {
+		if sender.Reg == nil || len(sender.Children) != 1 {
+			return false
+		}
+		receiver := receivers[sender.Reg]
+		if receiver == nil || receiver == s || receiver.Magic != Merge || receiver.IsRemote || receiver.LazyPreScopes ||
+			len(receiver.PreScopes) != 1 || receiver.PreScopes[0] != s || receiver.Proc == nil ||
+			len(receiver.Proc.Reg.MergeReceivers) != 1 || receiver.Proc.Reg.MergeReceivers[0] != sender.Reg {
+			return false
+		}
+		build, ok := receiver.RootOp.(*hashbuild.HashBuild)
+		if !ok || !build.NeedHashMap || len(build.Children) != 1 {
+			return false
+		}
+		input, ok := build.Children[0].(*merge.Merge)
+		if !ok || input.Partial || input.MaterializedSource != nil || len(input.Children) != 0 {
+			return false
+		}
+		// MergeRun starts this source concurrently and runs Merge -> HashBuild
+		// without probe execution. The scan publishes domain completion at EOF;
+		// bounded data/terminal capacity is drained by that independent receiver.
+		// No transport protocol or cancellation/cleanup owner is changed.
+		root = sender.Children[0]
+	}
 	safe := true
-	_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+	_ = vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
 		switch op.OpType() {
 		case vm.TableScan, vm.Projection, vm.HashBuild:
 		case vm.Shuffle:

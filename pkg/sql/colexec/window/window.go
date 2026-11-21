@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 	"unsafe"
@@ -92,7 +91,6 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 		window.Free(proc, false, nil)
 	}
 
-	window.ctr.prepareParamKind.Reset(window.Aggs)
 	if window.OpAnalyzer == nil {
 		window.OpAnalyzer = process.NewAnalyzer(window.GetIdx(), window.IsFirst, window.IsLast, "window")
 	} else {
@@ -237,7 +235,7 @@ func materializeWindowBound(
 
 	runtimeBound.Val = &plan.Expr{
 		Typ:  planned.Val.Typ,
-		Expr: &plan.Expr_Lit{Lit: rule.GetConstantValue(vec, false, 0)},
+		Expr: &plan.Expr_Lit{Lit: rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(planned.Val, proc))},
 	}
 	return runtimeBound, nil
 }
@@ -445,14 +443,6 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			if err = ctr.validateIndicatorPeriods(0, window, proc); err != nil {
 				return result, err
 			}
-			for i := range window.Aggs {
-				if i < len(ctr.aggVecs) && len(ctr.aggVecs[i].Vec) > 0 {
-					arg := ctr.aggVecs[i].Vec[0]
-					if arg.Length() > 0 && !arg.AllNull() {
-						ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
-					}
-				}
-			}
 
 			// Compatible expressions share this materialized and sorted partition.
 			// Keep the materialized and sorted logical partition, then evaluate it
@@ -615,9 +605,6 @@ func (ctr *container) processFuncRange(
 	if ctr.localRank != nil && ctr.localRank.end <= outputEnd {
 		// Completed partition state must not compete with the next input copy.
 		ctr.freeLocalRankIndex()
-	}
-	if !vec.HasPrepareParamKind() {
-		vec.SetPrepareParamKind(ctr.prepareParamKind.Get(idx))
 	}
 	analyzer.Alloc(int64(vec.Size()))
 	return vec, nil
@@ -1378,7 +1365,36 @@ func (ctr *container) processOrderFuncRange(
 ) (*vector.Vector, error) {
 	n := ctr.bat.RowCount()
 	funcName := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name
-	// Each ranking implementation builds one eight-byte value per output row
+	if funcName == "row_number" {
+		if err := checkCanceled(proc, 0); err != nil {
+			return nil, err
+		}
+		count := outputEnd - outputStart
+		vec, err := ctr.allocation.NewVector(types.T_uint64.ToType())
+		if err != nil {
+			return nil, err
+		}
+		if err = vec.PreExtend(count, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		vec.SetLength(count)
+		values := vector.MustFixedColNoTypeCheck[uint64](vec)
+		for j := outputStart; j < outputEnd; j++ {
+			if err := checkCanceled(proc, j-outputStart); err != nil {
+				vec.Free(proc.Mp())
+				return nil, err
+			}
+			partitionStart := 0
+			if ctr.ps != nil {
+				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
+			values[j-outputStart] = uint64(j - partitionStart + 1)
+		}
+		return vec, nil
+	}
+
+	// The remaining ranking implementations build one eight-byte value per output row
 	// before copying into its owned vector. Include that simultaneous scratch.
 	scratch := uint64(outputEnd-outputStart) * 8
 	if err := ctr.allocation.ReserveMetadata(proc, scratch); err != nil {
@@ -1420,27 +1436,6 @@ func (ctr *container) processOrderFuncRange(
 		return vec, nil
 	}
 	switch funcName {
-	case "row_number":
-		values := make([]uint64, outputEnd-outputStart)
-		for j := outputStart; j < outputEnd; j++ {
-			if err := checkCanceled(proc, j-outputStart); err != nil {
-				return nil, err
-			}
-			partitionStart := 0
-			if ctr.ps != nil {
-				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
-			}
-			values[j-outputStart] = uint64(j - partitionStart + 1)
-		}
-		vec, err := ctr.allocation.NewVector(types.T_uint64.ToType())
-		if err != nil {
-			return nil, err
-		}
-		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
-			vec.Free(proc.Mp())
-			return nil, err
-		}
-		return vec, nil
 	case "ntile":
 		values := make([]int64, outputEnd-outputStart)
 		bucketCount, err := ctr.ntileBucketCount(idx)
@@ -2041,23 +2036,12 @@ func (ctr *container) processValueFuncRange(
 }
 
 func getNthValueOffsetFromVec(ctx context.Context, vec *vector.Vector, row int) (int64, bool, error) {
-	if !types.T(vec.GetType().Oid).IsMySQLString() {
-		value, ok := getInt64FromVec(vec, row)
-		return value, ok, nil
-	}
-
-	if vec.IsConst() {
-		row = 0
-	}
-	if vec.Length() == 0 || vec.IsNull(uint64(row)) ||
-		!vec.HasPrepareParamKind() || vec.GetPrepareParamKindAt(row) != vector.PrepareParamInteger {
+	if types.T(vec.GetType().Oid).IsMySQLString() {
+		// A typed prepared offset arrives as an integer; a string is not one.
 		return 0, false, moerr.NewWrongArguments(ctx, "nth_value")
 	}
-	value, err := strconv.ParseUint(vec.GetStringAt(row), 10, 63)
-	if err != nil || value == 0 {
-		return 0, false, moerr.NewWrongArguments(ctx, "nth_value")
-	}
-	return int64(value), true, nil
+	value, ok := getInt64FromVec(vec, row)
+	return value, ok, nil
 }
 
 // getInt64FromVec extracts an int64 value from a vector at the given row.
@@ -2750,9 +2734,6 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) (er
 				ctr.aggVecs[i].Vec[j].CleanOnlyData()
 				if err = ctr.aggVecs[i].Vec[j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 					return err
-				}
-				if !ctr.aggVecs[i].Vec[j].HasPrepareParamKind() {
-					ctr.aggVecs[i].Vec[j].SetPrepareParamKind(vec.GetPrepareParamKind())
 				}
 			} else {
 				ctr.aggVecs[i].Vec[j], err = vec.Dup(proc.Mp())

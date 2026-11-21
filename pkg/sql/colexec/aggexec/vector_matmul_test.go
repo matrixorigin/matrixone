@@ -250,7 +250,7 @@ func TestVectorMatmulAccountedFill(t *testing.T) {
 	account, err := registry.Open(64 << 20)
 	require.NoError(t, err)
 	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 	})
 	require.NoError(t, err)
 
@@ -435,7 +435,7 @@ func vmAllocation(t *testing.T) *AllocationAccount {
 	account, err := registry.Open(64 << 20)
 	require.NoError(t, err)
 	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 	})
 	require.NoError(t, err)
 	return allocation
@@ -745,7 +745,7 @@ func vmAccountWithLimit(t *testing.T, limit uint64) *AllocationAccount {
 	account, err := registry.Open(limit)
 	require.NoError(t, err)
 	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 	})
 	require.NoError(t, err)
 	return allocation
@@ -1151,7 +1151,7 @@ func TestVectorMatmulGPUMemoryAdmission(t *testing.T) {
 		account, err := registry.Open(limit)
 		require.NoError(t, err)
 		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-			VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 		})
 		require.NoError(t, err)
 		agg, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vmVecType()})
@@ -1606,7 +1606,7 @@ func TestVectorMatmulConfigAdmission(t *testing.T) {
 		account, err := registry.Open(limit)
 		require.NoError(t, err)
 		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-			VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 		})
 		require.NoError(t, err)
 		return account, allocation
@@ -2072,7 +2072,7 @@ func TestVectorMatmulConfigAdmittedBeforeParse(t *testing.T) {
 				account, err := registry.Open(limit)
 				require.NoError(t, err)
 				allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-					VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+					VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 				})
 				require.NoError(t, err)
 				var aggErr error
@@ -2154,7 +2154,7 @@ func TestVectorMatmulLargeOptionsRefused(t *testing.T) {
 	account, err := registry.Open(64 << 10)
 	require.NoError(t, err)
 	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 	})
 	require.NoError(t, err)
 	raw := EncodeVectorMatmulConfig(1, "[[1,0,0,0]]", opts.String(), false)
@@ -2350,7 +2350,7 @@ func TestVectorMatmulVecblockJSONRejectedBeforeCollecting(t *testing.T) {
 	account, err := registry.Open(64 << 10)
 	require.NoError(t, err)
 	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 	})
 	require.NoError(t, err)
 	raw := EncodeVectorMatmulConfig(1, malformed(10000), `{"query_format":"vecblock"}`, false)

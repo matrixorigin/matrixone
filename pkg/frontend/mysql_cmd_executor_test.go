@@ -47,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -174,6 +173,23 @@ func TestDoComQueryParseErrorReplacesPreviousDiagnostics(t *testing.T) {
 	require.Equal(t, 1, info.length())
 	require.Equal(t, []uint16{1064}, info.codes)
 	require.NotContains(t, info.msgs, "stale diagnostic marker")
+	t.Run("restore outer statement after parse error", func(t *testing.T) {
+		previous := ses.GetStmtInfo()
+		t.Cleanup(func() { ses.SetTStmt(previous) })
+		outer := &motrace.StatementInfo{Statement: []byte("outer statement")}
+		ses.SetTStmt(outer)
+		ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		err := doComQuery(ses, execCtx, &UserInput{sql: "select from"})
+		require.Error(t, err)
+		require.Same(t, outer, ses.GetStmtInfo(), "a nested request must return the outer statement to its owner")
+		ses.appendErrorDiagnostic(1064, err.Error())
+		info := ses.diagnosticsSnapshot()
+		require.Equal(t, 1, info.length())
+		require.Equal(t, []uint16{1064}, info.codes)
+		require.NotContains(t, info.msgs, "stale diagnostic marker")
+	})
 }
 
 func TestDoComQueryParseErrorRedactsMongoDBSelector(t *testing.T) {
@@ -3837,7 +3853,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			bat := genBatch()
 			for i := 0; i < len(bat.Attrs); i++ {
 				for j := 0; j < bat.Vecs[0].Length(); j++ {
-					nulls.Add(bat.Vecs[i].GetNulls(), uint64(j))
+					bat.Vecs[i].GetNulls().Add(uint64(j))
 				}
 			}
 			return bat
@@ -3911,7 +3927,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 			for i := 0; i < len(bat.Attrs); i++ {
 				for j := 0; j < 1; j++ {
-					nulls.Add(bat.Vecs[i].GetNulls(), uint64(j))
+					bat.Vecs[i].GetNulls().Add(uint64(j))
 				}
 			}
 			return bat
@@ -8770,7 +8786,7 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 		plan.ParamValue{
 			Value:               "9007199254740992.0000000000",
 			IsBinaryProtocol:    true,
-			PrepareParamKind:    vector.PrepareParamDecimal,
+			PrepareParamKind:    types.StringConversionDecimal,
 			EnableNumericPrefix: true,
 		},
 	})
@@ -9167,6 +9183,9 @@ func TestJsonPlanHandlerRefreshesTerminalResourceSummary(t *testing.T) {
 	require.Nil(t, unmarshaled.buffer)
 	require.Nil(t, unmarshaled.marshalHandler)
 	require.Nil(t, unmarshaled.Marshal(context.Background()))
+	unmarshaled.SetResourceSummary(summary)
+	var absent *jsonPlanHandler
+	absent.SetResourceSummary(summary)
 }
 
 func TestSchedulingTracePlanHandlerMarshalsLazilyOnce(t *testing.T) {
@@ -10888,6 +10907,14 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 
 }
 
+func enableParseErrorTracer(t *testing.T) {
+	t.Helper()
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	t.Cleanup(func() { provider.SetEnable(wasEnabled) })
+	provider.SetEnable(true)
+}
+
 func Test_RecordParseErrorStatement(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -10916,7 +10943,7 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 		Ctx:  context.TODO(),
 	}
 
-	motrace.GetTracerProvider().SetEnable(true)
+	enableParseErrorTracer(t)
 	_, err := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, moerr.NewInternalErrorNoCtx("test"))
 	assert.Nil(t, err)
 
@@ -10934,6 +10961,24 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 	ses.finishResponseAccounting(context.TODO(), moerr.NewInternalErrorNoCtx("test"), true)
 	assert.Nil(t, ses.GetStmtInfo())
 
+}
+
+func TestRecordParseErrorStatementRestoresTracer(t *testing.T) {
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	t.Cleanup(func() { provider.SetEnable(wasEnabled) })
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("initial=%t", enabled), func(t *testing.T) {
+			provider.SetEnable(enabled)
+			require.True(t, t.Run("enable tracer", func(t *testing.T) {
+				enableParseErrorTracer(t)
+				require.Same(t, provider, motrace.GetTracerProvider())
+				require.True(t, provider.IsEnable())
+			}))
+			require.Same(t, provider, motrace.GetTracerProvider())
+			require.Equal(t, enabled, provider.IsEnable())
+		})
+	}
 }
 
 func Test_getExplainOption(t *testing.T) {

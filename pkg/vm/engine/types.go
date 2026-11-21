@@ -1288,14 +1288,208 @@ type ReaderFilter func(
 	loadedColumns []int,
 ) (ReaderFilterResult, error)
 
+// ReaderSelection returns original-row positions without changing input values,
+// vector lengths or batch row count. All means identity. The reader must consume
+// the borrowed mapping before another callback or ReadWithFilter return.
+type ReaderSelection func(*batch.Batch, []int) (ReaderFilterResult, error)
+
 // ReaderFilterRequest owns one prepared scan's two execution forms. Readers
 // invoke Apply on owned batches unless Exact completed the same predicate chain.
 // Observe consumes scalar input/work metadata only; cached vectors never escape.
 // Like ReaderFilter, requests are sequential and must not be shared concurrently.
+// ReaderColumnUse describes consumers after the residual filter. The default
+// retains the existing representation; unused columns may be cleared only when
+// the caller proves projection/domain consumers no longer read them.
+type ReaderColumnUse uint8
+
+const (
+	ReaderColumnRetain ReaderColumnUse = iota
+	ReaderColumnOwned
+	ReaderColumnUnused
+)
+
+// ReaderSelectionScratch contains non-owning call operands, never payload owners.
+// Its vectors are cleared by the reader on every terminal path.
+type ReaderSelectionScratch struct {
+	Seqnums   []uint16
+	Types     []types.Type
+	Columns   []int
+	Sources   []*vector.Vector
+	Vectors   []*vector.Vector
+	Headers   []*vector.Vector
+	Snapshots []*vector.DictionaryVectorSlot
+}
+
+func (s *ReaderSelectionScratch) Clear() {
+	clear(s.Sources)
+	clear(s.Vectors)
+	clear(s.Headers)
+	clear(s.Snapshots)
+	s.Seqnums = s.Seqnums[:0]
+	s.Types = s.Types[:0]
+	s.Columns = s.Columns[:0]
+	s.Sources = s.Sources[:0]
+	s.Vectors = s.Vectors[:0]
+	s.Headers = s.Headers[:0]
+	s.Snapshots = s.Snapshots[:0]
+}
+
 type ReaderFilterRequest struct {
-	Apply   ReaderFilter
-	Exact   *objectio.ExactScanState
-	Observe func(objectio.ExactScanStats)
+	// Membership is an optional necessary predicate over its key Columns.
+	// It is read-only and runs after storage visibility. Supporting readers
+	// may stage it before proven-total predicates on a pinned identity domain.
+	// Its sorted unique mapping is consumed before another callback. Readers
+	// without staged support ignore it and preserve the ordinary Apply path.
+	Membership *ReaderMembershipFilter
+	// ColumnUses is opt-in, proven by a caller with distinct read headers.
+	// Missing/unknown policies retain all columns. It never changes filter inputs.
+	ColumnUses       []ReaderColumnUse
+	selectionScratch *ReaderSelectionScratch
+	borrowColumns    []bool
+	scopedColumns    *objectio.CachedColumnScope
+	// Select evaluates the same ordered predicate chain without shrinking its
+	// input. Sels uses the original live-row domain and is borrowed until the
+	// next callback. A supporting reader retains views or gathers that mapping
+	// once; unsupported readers continue calling Apply.
+	// Workspace contains caller-owned original read vectors displaced by selected
+	// publication. The caller retires published views, restores these slots, then
+	// reclaims unique backing before its next read; terminal cleanup frees both.
+	Workspace []*vector.Vector
+	// ReusableHeaders are cleared publication headers owned by the same caller.
+	SnapshotSlots    []*vector.DictionaryVectorSlot
+	SelectionSlot    *vector.DictionaryVectorSlot
+	ReusableHeaders  []*vector.Vector
+	Select           ReaderSelection
+	OutputAllocation *vector.AllocationAccountSelection
+	ObserveSelection func(rows, columns int, logicalBytes int64)
+	Apply            ReaderFilter
+	Exact            *objectio.ExactScanState
+	Observe          func(objectio.ExactScanStats)
+}
+
+// ReaderMembershipFilter is allocated only by a scan with an admitted ready
+// domain. Ordinary reader requests carry only a nil optional pointer.
+type ReaderMembershipFilter struct {
+	Columns []int
+	// ColumnUses is the original projection policy, used only once a reader
+	// admits the membership path. The outer request keeps aligned fallback data.
+	ColumnUses []ReaderColumnUse
+	// Bypass retires the optional stage after a resource refusal. The current
+	// read completes through the ordinary borrowed-predicate route instead.
+	Bypass bool
+	// PredicateColumns is the original ordered chain's required input set.
+	// Nil retains early-column behavior for callers without staged metadata.
+	PredicateColumns []int
+	// PredicatesTotal permits early rejection only for a proven total chain.
+	// Custom callbacks and unknown/fallible predicates preserve their order.
+	PredicatesTotal       bool
+	Select                ReaderSelection
+	InputRows, OutputRows int64
+	scratch               *ReaderMembershipScratch
+}
+
+// ReaderMembershipScratch belongs to the sequential prepared scan, never to a
+// cached block. The row map is accounted; Sources/Views are non-owning operands
+// cleared before every read returns. Scope cannot escape the synchronous read.
+type ReaderMembershipScratch struct {
+	Physical       *vector.Vector
+	Scope          vector.DictionarySelectionScope
+	Sources, Views []*vector.Vector
+	// Separate non-owning operands stay stable while nested key/publication
+	// reads reuse the ordinary request scratch inside the predicate I/O scope.
+	PredicateRead ReaderSelectionScratch
+}
+
+func (r *ReaderFilterRequest) MembershipScratch(width int) (*ReaderMembershipScratch, error) {
+	if r.Membership.scratch == nil {
+		r.Membership.scratch = &ReaderMembershipScratch{
+			Sources: make([]*vector.Vector, width), Views: make([]*vector.Vector, width),
+		}
+	}
+	s := r.Membership.scratch
+	if s.Physical == nil {
+		var err error
+		s.Physical, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), r.OutputAllocation)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
+// FreeMembership is terminal for this prepared request; the owner calls it on
+// Reset/Free and before replacing a request during preparation.
+func (r *ReaderFilterRequest) FreeMembership(mp *mpool.MPool) {
+	if r == nil || r.Membership == nil || r.Membership.scratch == nil {
+		return
+	}
+	s := r.Membership.scratch
+	s.Scope.Free(mp)
+	if s.Physical != nil {
+		s.Physical.Free(mp)
+	}
+	r.Membership.scratch = nil
+}
+
+// ColumnUse preserves the original behavior for absent or incompatible policy.
+func (r *ReaderFilterRequest) ColumnUse(column, width int) ReaderColumnUse {
+	if r == nil || len(r.ColumnUses) != width || column < 0 || column >= width {
+		return ReaderColumnRetain
+	}
+	use := r.ColumnUses[column]
+	if use != ReaderColumnOwned && use != ReaderColumnUnused {
+		return ReaderColumnRetain
+	}
+	return use
+}
+
+// ColumnScope is metadata-only and execution-lane local. It has no live cache
+// references outside the synchronous callback, including after failed reads.
+func (r *ReaderFilterRequest) ColumnScope() *objectio.CachedColumnScope {
+	if r.scopedColumns == nil {
+		r.scopedColumns = &objectio.CachedColumnScope{}
+	}
+	return r.scopedColumns
+}
+
+// BorrowColumns lets the single pinned read honor the eventual representation.
+// Owned/unused columns use the original owned decoder path without transient
+// cache leases. The mask is request-local and consumed before publication.
+func (r *ReaderFilterRequest) BorrowColumns(positions []int, width int) []bool {
+	if cap(r.borrowColumns) < len(positions) {
+		r.borrowColumns = make([]bool, len(positions))
+	} else {
+		r.borrowColumns = r.borrowColumns[:len(positions)]
+	}
+	for i, pos := range positions {
+		r.borrowColumns[i] = r.ColumnUse(pos, width) == ReaderColumnRetain
+	}
+	return r.borrowColumns
+}
+
+// SelectionScratch is execution-lane local and bounded by the scan schema.
+func (r *ReaderFilterRequest) SelectionScratch(width int) *ReaderSelectionScratch {
+	if r.selectionScratch == nil {
+		r.selectionScratch = &ReaderSelectionScratch{}
+	}
+	s := r.selectionScratch
+	s.Clear()
+	if cap(s.Columns) < width {
+		s.Columns = make([]int, 0, width)
+	}
+	if cap(s.Sources) < width {
+		s.Sources = make([]*vector.Vector, 0, width)
+	}
+	if cap(s.Vectors) < width {
+		s.Vectors = make([]*vector.Vector, 0, width)
+	}
+	if cap(s.Headers) < width {
+		s.Headers = make([]*vector.Vector, 0, width)
+	}
+	if cap(s.Snapshots) < width {
+		s.Snapshots = make([]*vector.DictionaryVectorSlot, 0, width)
+	}
+	return s
 }
 
 // LateMaterializationReader is an optional Reader capability. It reads the

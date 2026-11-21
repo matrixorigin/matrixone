@@ -110,12 +110,19 @@ func TestSimpleCAllocatorAllocateAndDeallocate(t *testing.T) {
 		simpleCAllocatorMmapThreshold - 1,
 		simpleCAllocatorMmapThreshold,
 		simpleCAllocatorMmapThreshold + 1,
+		(2 << 20) - 1,
+		2 << 20,
+		(2 << 20) + 1,
 	} {
 		t.Run(testNameForSize(size), func(t *testing.T) {
 			allocator := newTestSimpleCAllocator()
 
 			slice, err := allocator.Allocate(size)
 			require.NoError(t, err)
+			defer func() {
+				allocator.Deallocate(slice, size)
+				require.Zero(t, allocator.currentInuse.Load())
+			}()
 			require.Len(t, slice, int(size))
 			require.Equal(t, int(size), cap(slice))
 			require.Equal(t, make([]byte, size), slice)
@@ -123,8 +130,6 @@ func TestSimpleCAllocatorAllocateAndDeallocate(t *testing.T) {
 
 			slice[0] = 1
 			slice[len(slice)-1] = 2
-			allocator.Deallocate(slice, size)
-			require.Zero(t, allocator.currentInuse.Load())
 		})
 	}
 }

@@ -646,6 +646,88 @@ func TestDetermineShuffleForJoinNDVGuard(t *testing.T) {
 	require.False(t, lowNDVJoin.Stats.HashmapStats.Shuffle)
 }
 
+func TestDetermineShuffleForJoinSkipsRecursiveSubtrees(t *testing.T) {
+	for _, afterRemap := range []bool{false, true} {
+		for _, recursiveSide := range []string{"left", "right"} {
+			t.Run(fmt.Sprintf("after_remap_%t/%s", afterRemap, recursiveSide), func(t *testing.T) {
+				leftTag, rightTag := int32(1), int32(2)
+				leftRel, rightRel := leftTag, rightTag
+				if afterRemap {
+					leftRel, rightRel = 0, 1
+				}
+
+				leftSource := makeShuffleJoinTestChild(leftTag, 1_000)
+				leftSource.NodeType = plan.Node_RECURSIVE_SCAN
+				rightSource := makeShuffleJoinTestChild(rightTag, 10_000_000)
+				if recursiveSide == "right" {
+					leftSource.NodeType = plan.Node_TABLE_SCAN
+					rightSource.NodeType = plan.Node_RECURSIVE_SCAN
+				}
+				left := &plan.Node{
+					NodeType:    plan.Node_PROJECT,
+					Children:    []int32{0},
+					BindingTags: []int32{leftTag},
+					ProjectList: []*plan.Expr{
+						makeMarkShuffleColumn(true, leftTag, 0),
+						makeMarkShuffleColumn(true, leftTag, 1),
+					},
+					Stats: &plan.Stats{Outcnt: 1_000, HashmapStats: &plan.HashMapStats{}},
+				}
+				right := &plan.Node{
+					NodeType:    plan.Node_PROJECT,
+					Children:    []int32{2},
+					BindingTags: []int32{rightTag},
+					ProjectList: []*plan.Expr{
+						makeMarkShuffleColumn(true, rightTag, 0),
+						makeMarkShuffleColumn(true, rightTag, 1),
+					},
+					Stats: &plan.Stats{Outcnt: 10_000_000, HashmapStats: &plan.HashMapStats{}},
+				}
+				join := &plan.Node{
+					NodeType: plan.Node_JOIN,
+					JoinType: plan.Node_INNER,
+					Children: []int32{1, 3},
+					OnList: []*plan.Expr{
+						makeShuffleJoinEquality(t, types.T_int64, -1, leftRel, rightRel, 0),
+					},
+					Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+						Shuffle:               true,
+						ShuffleColIdx:         7,
+						ShuffleType:           plan.ShuffleType_Range,
+						ShuffleTypeForMultiCN: plan.ShuffleTypeForMultiCN_Hybrid,
+						ShuffleMethod:         plan.ShuffleMethod_Reuse,
+						HashmapSize:           10_000_000,
+						ShuffleColMin:         10,
+						ShuffleColMax:         1_000_000,
+						Ranges:                []float64{100, 1_000},
+						Nullcnt:               7,
+					}},
+				}
+				builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{
+					leftSource, left, rightSource, right, join,
+				}}}
+
+				determineShuffleForJoinWithColRefMode(join, builder, afterRemap)
+
+				hashmapStats := join.Stats.HashmapStats
+				require.False(t, hashmapStats.Shuffle)
+				require.Equal(t, int32(-1), hashmapStats.ShuffleColIdx)
+				require.Equal(t, plan.ShuffleMethod_Normal, hashmapStats.ShuffleMethod)
+				require.Equal(t, plan.ShuffleType_Hash, hashmapStats.ShuffleType)
+				require.Equal(t, plan.ShuffleTypeForMultiCN_Simple, hashmapStats.ShuffleTypeForMultiCN)
+				require.Empty(t, hashmapStats.Ranges)
+
+				leftSource.NodeType = plan.Node_TABLE_SCAN
+				rightSource.NodeType = plan.Node_TABLE_SCAN
+				join.Stats.HashmapStats = &plan.HashMapStats{HashmapSize: 10_000_000}
+				determineShuffleForJoinWithColRefMode(join, builder, afterRemap)
+				require.True(t, join.Stats.HashmapStats.Shuffle,
+					"the same eligible join remains shuffleable without a recursive subtree")
+			})
+		}
+	}
+}
+
 func TestDetermineShuffleForJoinUsesResidualInequalityCapacityBound(t *testing.T) {
 	for _, test := range []struct {
 		name        string

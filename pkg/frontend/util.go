@@ -217,7 +217,7 @@ func getExprValueWithPrepareMeta(
 	execCtx *ExecCtx,
 	preparedExpression bool,
 	materializedResult **plan.Expr,
-	prepareParamKind *vector.PrepareParamKind,
+	prepareParamKind *types.StringConversionKind,
 	runtimeDomain *types.RuntimeStringDomain,
 	isBin ...*bool,
 ) (interface{}, plan.Type, error) {
@@ -234,7 +234,7 @@ func getExprValueWithPrepareMeta(
 			*isBin[0] = false
 		}
 		if prepareParamKind != nil {
-			*prepareParamKind = vector.PrepareParamNone
+			*prepareParamKind = types.StringConversionString
 		}
 		return v.ColName(), plan.Type{Id: int32(types.T_text)}, nil
 	}
@@ -346,14 +346,11 @@ func getExprValueWithPrepareMeta(
 		*runtimeDomain = resultVec.GetRuntimeStringDomainAt(0)
 	}
 	if prepareParamKind != nil {
-		*prepareParamKind = resultVec.GetPrepareParamKind()
-		if *prepareParamKind == vector.PrepareParamNone {
-			*prepareParamKind, err = transparentPrepareParamKind(e, ses)
-			if err != nil {
-				return nil, plan.Type{}, err
-			}
+		*prepareParamKind, err = transparentPrepareParamKind(e, ses)
+		if err != nil {
+			return nil, plan.Type{}, err
 		}
-		if *prepareParamKind == vector.PrepareParamNone {
+		if *prepareParamKind == types.StringConversionString {
 			*prepareParamKind = prepareParamKindFromType(resultVec.GetType().Oid)
 		}
 	}
@@ -375,9 +372,10 @@ func getExprValueWithPrepareMeta(
 		return nil, plan.Type{}, err
 	}
 	if materializedResult != nil {
-		literal := planrule.GetConstantValue(resultVec, false, 0)
+		source := setExprStringSource(e, ses)
+		literal := planrule.GetConstantValue(resultVec, false, 0, source)
 		if literal == nil && resultVec.GetType().Oid == types.T_enum {
-			literal = planrule.GetConstantValue(resultVec, true, 0)
+			literal = planrule.GetConstantValue(resultVec, true, 0, source)
 		}
 		if literal != nil {
 			*materializedResult = &plan.Expr{Typ: resultType, Expr: &plan.Expr_Lit{Lit: literal}}
@@ -581,7 +579,7 @@ func getPreparedPlanExprValueWithSubqueries(
 	specializedExpr *plan.Expr,
 	ses *Session,
 	execCtx *ExecCtx,
-	prepareParamKind *vector.PrepareParamKind,
+	prepareParamKind *types.StringConversionKind,
 	runtimeDomain *types.RuntimeStringDomain,
 	isBin *bool,
 ) (interface{}, plan.Type, error) {
@@ -589,7 +587,7 @@ func getPreparedPlanExprValueWithSubqueries(
 	collectScalarSubqueries(astExpr, &subqueries)
 	replacements := make([]*plan.Expr, len(subqueries))
 	for i, subquery := range subqueries {
-		var subqueryKind vector.PrepareParamKind
+		var subqueryKind types.StringConversionKind
 		var subqueryIsBin bool
 		_, _, err := getExprValueWithPrepareMeta(
 			subquery, ses, execCtx, true, &replacements[i], &subqueryKind, nil, &subqueryIsBin)
@@ -624,7 +622,7 @@ func getPreparedPlanExprValueWithMeta(
 	expr *plan.Expr,
 	ses *Session,
 	execCtx *ExecCtx,
-	prepareParamKind *vector.PrepareParamKind,
+	prepareParamKind *types.StringConversionKind,
 	runtimeDomain *types.RuntimeStringDomain,
 	isBin *bool,
 ) (interface{}, plan.Type, error) {
@@ -649,13 +647,51 @@ func getPreparedPlanExprValueWithMeta(
 		*runtimeDomain = result.GetRuntimeStringDomainAt(0)
 	}
 	if prepareParamKind != nil {
-		*prepareParamKind = result.GetPrepareParamKind()
-		if *prepareParamKind == vector.PrepareParamNone {
-			*prepareParamKind = prepareParamKindFromType(result.GetType().Oid)
-		}
+		*prepareParamKind = prepareParamKindFromType(result.GetType().Oid)
 	}
 	value, err := getValueFromVector(execCtx.reqCtx, result, ses, expr)
 	return value, plan2.MakePlan2Type(result.GetType()), err
+}
+
+// setExprStringSource is where the value of a SET expression comes from, by
+// the rules constant folding applies to plan expressions: a literal is a
+// literal, a variable a user variable, a parameter has its execution's source,
+// COALESCE takes its first arm that is not a NULL literal, and anything else
+// computes a new value.
+func setExprStringSource(e tree.Expr, ses *Session) types.StringSource {
+	for {
+		switch expr := e.(type) {
+		case *tree.ParenExpr:
+			e = expr.Expr
+		case *tree.NumVal, *tree.StrVal:
+			return types.StringSourceLiteral
+		case *tree.VarExpr:
+			return types.StringSourceUserVariable
+		case *tree.ParamExpr:
+			if proc := ses.GetProc(); proc != nil {
+				return proc.GetPrepareParamsStringSource()
+			}
+			return types.StringSourceExpression
+		case *tree.FuncExpr:
+			if expr.FuncName == nil || !strings.EqualFold(expr.FuncName.Origin(), "coalesce") {
+				return types.StringSourceExpression
+			}
+			next := tree.Expr(nil)
+			for _, arg := range expr.Exprs {
+				if num, isNum := arg.(*tree.NumVal); isNum && num.ValType == tree.P_null {
+					continue
+				}
+				next = arg
+				break
+			}
+			if next == nil {
+				return types.StringSourceExpression
+			}
+			e = next
+		default:
+			return types.StringSourceExpression
+		}
+	}
 }
 
 // transparentPrepareParamKind closes the metadata boundary introduced by SET's
@@ -663,7 +699,7 @@ func getPreparedPlanExprValueWithMeta(
 // source conversion category even if projection materialization drops vector-
 // local metadata. Parentheses are transparent; casts and other expressions are
 // intentionally not, because their result type defines the conversion category.
-func transparentPrepareParamKind(e tree.Expr, ses *Session) (vector.PrepareParamKind, error) {
+func transparentPrepareParamKind(e tree.Expr, ses *Session) (types.StringConversionKind, error) {
 	for {
 		switch expr := e.(type) {
 		case *tree.ParenExpr:
@@ -673,14 +709,19 @@ func transparentPrepareParamKind(e tree.Expr, ses *Session) (vector.PrepareParam
 			// Parser ordinals are one-based; the normalized plan/process positions
 			// are zero-based (see decrementParamOrdinalRule).
 			if proc == nil || expr.Offset <= 0 {
-				return vector.PrepareParamNone, nil
+				return types.StringConversionString, nil
 			}
-			return proc.GetPrepareParamKind(expr.Offset - 1), nil
+			typed := proc.GetTypedPrepareParam(expr.Offset - 1)
+			if typed == nil {
+				return types.StringConversionString, nil
+			}
+			kind, _ := types.StringConversionKindForType(typed.GetType().Oid)
+			return kind, nil
 		case *tree.VarExpr:
 			return ses.GetTxnCompileCtx().ResolveVariablePrepareParamKind(
 				expr.Name, expr.System, expr.Global)
 		default:
-			return vector.PrepareParamNone, nil
+			return types.StringConversionString, nil
 		}
 	}
 }
@@ -1592,6 +1633,16 @@ func isTextExecuteParam(value string) bool {
 }
 
 func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batch.Batch, *plan.ResultColDef, error) {
+	return convertRowsIntoBatchInLocation(pool, cols, rows, time.Local)
+}
+
+// convertRowsIntoBatchInLocation converts frontend result rows into a batch.
+// Some producers, such as DATA BRANCH DIFF, render temporal values as text in
+// the session time zone; loc is the zone used to read TIMESTAMP text back.
+func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]any, loc *time.Location) (*batch.Batch, *plan.ResultColDef, error) {
+	if loc == nil {
+		loc = time.Local
+	}
 	planColDefs, colTyps, colNames, err := mysqlColDef2PlanResultColDef(cols)
 	if err != nil {
 		return nil, nil, err
@@ -1605,6 +1656,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		bat.Vecs[colIndex] = vector.NewVec(typ)
 		nsp := nulls.NewWithSize(cnt)
 
+		// typeswitch:partial colTyps come from mysqlColDef2PlanResultColDef, which maps MySQL FLOAT/DOUBLE only to T_float32/T_float64
 		switch typ.Oid {
 		case types.T_varchar, types.T_text, types.T_varbinary:
 			// Byte-valued and vector-valued cells must save the exact bytes
@@ -1802,8 +1854,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				var val types.Date
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(types.Date)
+				} else if val, err = getDateFromRowValue(row[colIndex]); err != nil {
+					return nil, nil, err
 				}
 
 				err := vector.AppendFixed[types.Date](bat.Vecs[colIndex], val, false, pool)
@@ -1816,8 +1868,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				var val types.Time
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(types.Time)
+				} else if val, err = getTimeFromRowValue(row[colIndex], typ.Scale); err != nil {
+					return nil, nil, err
 				}
 
 				err := vector.AppendFixed[types.Time](bat.Vecs[colIndex], val, false, pool)
@@ -1830,8 +1882,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				var val types.Datetime
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(types.Datetime)
+				} else if val, err = getDatetimeFromRowValue(row[colIndex], typ.Scale); err != nil {
+					return nil, nil, err
 				}
 
 				err := vector.AppendFixed[types.Datetime](bat.Vecs[colIndex], val, false, pool)
@@ -1850,7 +1902,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					case types.Timestamp:
 						val = v
 					case string:
-						val, err = types.ParseTimestamp(time.Local, v, typ.Scale)
+						val, err = types.ParseTimestamp(loc, v, typ.Scale)
 						if err != nil {
 							return nil, nil, err
 						}
@@ -2147,20 +2199,26 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 			}
 			tType = types.New(types.T_date, 0, 0)
 		case defines.MYSQL_TYPE_TIME:
+			scale := mysqlTemporalColScale(col)
 			pType = plan.Type{
-				Id: int32(types.T_time),
+				Id:    int32(types.T_time),
+				Scale: scale,
 			}
-			tType = types.New(types.T_time, 0, 0)
+			tType = types.New(types.T_time, 0, scale)
 		case defines.MYSQL_TYPE_DATETIME:
+			scale := mysqlTemporalColScale(col)
 			pType = plan.Type{
-				Id: int32(types.T_datetime),
+				Id:    int32(types.T_datetime),
+				Scale: scale,
 			}
-			tType = types.New(types.T_datetime, 0, 0)
+			tType = types.New(types.T_datetime, 0, scale)
 		case defines.MYSQL_TYPE_TIMESTAMP:
+			scale := mysqlTemporalColScale(col)
 			pType = plan.Type{
-				Id: int32(types.T_timestamp),
+				Id:    int32(types.T_timestamp),
+				Scale: scale,
 			}
-			tType = types.New(types.T_timestamp, 0, 0)
+			tType = types.New(types.T_timestamp, 0, scale)
 		case defines.MYSQL_TYPE_ENUM:
 			pType = plan.Type{
 				Id: int32(types.T_enum),
@@ -2189,6 +2247,55 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 }
 
 const mysqlDecimalExtraLength uint32 = 1
+
+// mysqlTemporalColScale returns the fractional-second precision a
+// TIME/DATETIME/TIMESTAMP result column declares, so saved results keep it.
+func mysqlTemporalColScale(col Column) int32 {
+	decimalCol, ok := col.(mysqlDecimalColumn)
+	if !ok {
+		return 0
+	}
+	scale := int32(decimalCol.Decimal())
+	if scale < 0 || scale > 6 {
+		return 0
+	}
+	return scale
+}
+
+// Saved result rows carry temporal values either as MatrixOne values or, for
+// producers that render rows as text (DATA BRANCH DIFF), as strings.
+func getDateFromRowValue(value any) (types.Date, error) {
+	switch v := value.(type) {
+	case types.Date:
+		return v, nil
+	case string:
+		return types.ParseDateCast(v)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to date type", v)
+	}
+}
+
+func getTimeFromRowValue(value any, scale int32) (types.Time, error) {
+	switch v := value.(type) {
+	case types.Time:
+		return v, nil
+	case string:
+		return types.ParseTime(v, scale)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to time type", v)
+	}
+}
+
+func getDatetimeFromRowValue(value any, scale int32) (types.Datetime, error) {
+	switch v := value.(type) {
+	case types.Datetime:
+		return v, nil
+	case string:
+		return types.ParseDatetime(v, scale)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to datetime type", v)
+	}
+}
 
 type mysqlDecimalColumn interface {
 	Column

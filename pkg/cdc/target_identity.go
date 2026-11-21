@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/cdc/retry"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -31,6 +32,60 @@ var mysqlInnoDBIdentityName = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 func classifyCDCTargetSQLError(err error) error {
 	if retryable, _ := ClassifyRetryableError(err); retryable && !IsRetryableConnectionError(err) {
 		return newRetryableConnectionError(err)
+	}
+	return err
+}
+
+// ResolveTargetSinkType selects MatrixOne's guarded identity protocol for a
+// mysql URI only after the target proves that it supports the protocol.
+func ResolveTargetSinkType(ctx context.Context, uri UriInfo, timeout string) (sinkType string, err error) {
+	defer func() { err = classifyCDCTargetSQLError(err) }()
+	if uri.SinkTyp != CDCSinkType_MySQL {
+		return uri.SinkTyp, nil
+	}
+	connPool, err := OpenDbConn(ctx, uri.User, uri.Password, uri.Ip, uri.Port, timeout)
+	if err != nil {
+		return "", err
+	}
+	defer connPool.Close()
+	conn, err := connPool.Conn(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	return resolveTargetSinkType(ctx, conn, uri.SinkTyp)
+}
+
+func resolveTargetSinkType(ctx context.Context, conn *sql.Conn, sinkType string) (resolved string, err error) {
+	defer func() { err = classifyCDCTargetSQLError(err) }()
+	if sinkType != CDCSinkType_MySQL {
+		return sinkType, nil
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	_, probeErr := tx.ExecContext(ctx, "CALL mo_cdc_target_guard_capability()")
+	rollbackErr := tx.Rollback()
+	if rollbackErr != nil {
+		return "", rollbackErr
+	}
+	if probeErr != nil {
+		// MySQL resolves an unqualified CALL against the current database
+		// before procedure lookup, so a connection without one returns 1046.
+		if code, ok := retry.MySQLErrorCode(probeErr); ok &&
+			(code == moerr.ER_SP_DOES_NOT_EXIST || code == moerr.ER_NO_DB_ERROR) {
+			return CDCSinkType_MySQL, nil
+		}
+		return "", probeErr
+	}
+	return CDCSinkType_MO, nil
+}
+
+func mysqlTargetIdentityMetadataError(ctx context.Context, err error) error {
+	if code, ok := retry.MySQLErrorCode(err); ok && code == moerr.ER_NO_SUCH_TABLE {
+		return moerr.NewNotSupportedf(ctx,
+			"CDC target identity requires information_schema.INNODB_TABLES: %v", err)
 	}
 	return err
 }
@@ -52,7 +107,7 @@ func checkMySQLTargetIdentityCapability(ctx context.Context, conn *sql.Conn, db,
 	rows, err := conn.QueryContext(ctx,
 		"SELECT TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?", "__mo_cdc_capability_probe__/__absent__")
 	if err != nil {
-		return err
+		return mysqlTargetIdentityMetadataError(ctx, err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); err == nil {
@@ -136,7 +191,7 @@ func guardedCDCTargetIdentity(ctx context.Context, tx *sql.Tx, sinkType, db, tab
 			"SELECT @@server_uuid, TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?",
 			db+"/"+table)
 		if err != nil {
-			return "", err
+			return "", mysqlTargetIdentityMetadataError(ctx, err)
 		}
 		defer rows.Close()
 		var uuid string

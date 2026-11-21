@@ -1570,7 +1570,7 @@ install-static-check-tools:
 	  echo 'Prebuilt golangci-lint unavailable; installing the pinned version from source' >&2; \
 	fi; \
 	GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
-	@GOBIN="$(GOPATH)/bin" go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20261028130237-35bd4d9a4055
+	@GOBIN="$(GOPATH)/bin" go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20261115233300-147a3f213653
 	@GOBIN="$(GOPATH)/bin" go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 FRONTEND_MOCKGEN = $(CGO_OPTS) CGO_LDFLAGS="-L$(THIRDPARTIES_INSTALL_DIR)/lib -L$(CGO_DIR) -Wl,-rpath,$(CGO_DIR) -Wl,-rpath,$(THIRDPARTIES_INSTALL_DIR)/lib" GOWORK=off $(GOPATH)/bin/mockgen -build_flags="$(GO_MODULE_MODE)"
@@ -1624,6 +1624,15 @@ static-check-analysis: err-check
 static-check-selected:
 	$(STATIC_CHECK_MOLINT)
 	$(STATIC_CHECK_GOLANGCI)
+
+# Local fast path: analyze the packages affected by changes (committed, staged,
+# unstaged and untracked) since the merge base with STATIC_CHECK_BASE, using the
+# same selection as PR CI. Not a merge gate; run static-check for that.
+STATIC_CHECK_BASE ?= $(shell git rev-parse --verify -q upstream/main >/dev/null && echo upstream/main || echo origin/main)
+.PHONY: static-check-changed
+static-check-changed: err-check
+	@set -e; packages=$$(SCA_LOCAL_BASE='$(STATIC_CHECK_BASE)' $(CGO_OPTS) node .github/ci/static-analysis.cjs); \
+	$(MAKE) --no-print-directory static-check-selected STATIC_CHECK_PACKAGES="$$packages"
 
 # Trusted cache producers only need to populate golangci-lint's analysis
 # cache. This is not a reduced validation gate; PR and local SCA continue to

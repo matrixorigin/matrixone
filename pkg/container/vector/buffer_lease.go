@@ -15,7 +15,6 @@
 package vector
 
 import (
-	"math"
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -90,7 +89,7 @@ func (v *Vector) AreaBackingKind() BackingKind {
 }
 
 func (v *Vector) HasBorrowedBacking() bool {
-	return v != nil && (v.dataLease != nil || v.areaLease != nil || v.nsp.HasBorrowedValidity())
+	return v != nil && (v.dataLease != nil || v.areaLease != nil)
 }
 
 func (v *Vector) BorrowedAccountedBytes() int64 {
@@ -104,7 +103,6 @@ func (v *Vector) BorrowedAccountedBytes() int64 {
 	if v.areaLease != nil && !sameBufferLease(v.areaLease, v.dataLease) {
 		bytes += v.areaLease.AccountedBytes()
 	}
-	bytes += v.nsp.BorrowedAccountedBytes()
 	return bytes
 }
 
@@ -165,42 +163,6 @@ func (v *Vector) InstallBorrowedArea(area []byte, lease BufferLease) error {
 	v.area = area
 	v.areaLease = lease
 	v.cantFreeArea = true
-	return nil
-}
-
-// PrepareBorrowedValidity reserves the owned COW destination before a
-// borrowed Arrow validity view is published. Nulls' legacy mutation APIs
-// cannot return allocation errors, so admission must happen here while the
-// bridge can still fail transactionally. The bitmap remains logically empty
-// until the validity view is materialized.
-func (v *Vector) PrepareBorrowedValidity(rows int, mp *mpool.MPool) error {
-	if v == nil || mp == nil || rows < 0 || rows > math.MaxInt-63 ||
-		v.nsp.HasBorrowedValidity() || v.nsp.Len() != 0 {
-		return moerr.NewInvalidInputNoCtx("invalid borrowed validity reservation")
-	}
-	requiredWords := (rows + 63) / 64
-	bitmap := v.nsp.GetBitmap()
-	if requiredWords > bitmap.ExternalStorageCapacity() {
-		var (
-			storage []uint64
-			err     error
-		)
-		if v.allocationAccount == nil {
-			storage, err = mpool.MakeSlice[uint64](requiredWords, mp, v.offHeap)
-		} else {
-			storage, err = v.allocateBitmapGrowth(
-				bitmap, rows, mp, v.allocationAccount.nullsSite,
-			)
-		}
-		if err != nil {
-			return err
-		}
-		if cap(storage) > 0 {
-			previous := bitmap.InstallExternalStorage(storage)
-			mpool.FreeSlice(mp, previous)
-		}
-	}
-	bitmap.Reset()
 	return nil
 }
 
@@ -268,6 +230,9 @@ func (v *Vector) releaseBorrowedData() {
 		return
 	}
 	lease := v.dataLease
+	if owned, ok := lease.(*dictionaryPayloadLease); ok {
+		owned.origin.CompareAndSwap(v, nil)
+	}
 	v.dataLease = nil
 	v.data = nil
 	v.cantFreeData = false
@@ -279,6 +244,9 @@ func (v *Vector) releaseBorrowedArea() {
 		return
 	}
 	lease := v.areaLease
+	if owned, ok := lease.(*dictionaryPayloadLease); ok {
+		owned.origin.CompareAndSwap(v, nil)
+	}
 	v.areaLease = nil
 	v.area = nil
 	v.cantFreeArea = false
@@ -308,7 +276,7 @@ func (v *Vector) CopyWithReadonlyArea(source *Vector, mp *mpool.MPool) error {
 	private.offHeap = v.offHeap
 	private.sorted = v.sorted
 	private.isBin = v.isBin
-	private.prepareParamType = v.prepareParamType
+
 	if err := private.SetAllocationAccount(v.allocationAccount); err != nil {
 		private.Free(mp)
 		return err
@@ -343,6 +311,10 @@ func (v *Vector) CopyWithReadonlyArea(source *Vector, mp *mpool.MPool) error {
 // MaterializeOwned performs copy-on-write transactionally. Allocation failure
 // leaves the borrowed Vector unchanged and readable.
 func (v *Vector) MaterializeOwned(mp *mpool.MPool) error {
+	// Ordinary scalar destinations have no workspace lease to reclaim.
+	if v != nil && (v.dataLease != nil || v.areaLease != nil) {
+		v.ReclaimDictionaryWorkspace()
+	}
 	if v.IsDictionary() {
 		return v.EnsureFlat(mp)
 	}
@@ -357,6 +329,7 @@ func (v *Vector) MaterializeOwned(mp *mpool.MPool) error {
 		return err
 	}
 	v.CopyExpressionMetadataTo(owned)
+	v.retireDictionaryWorkspaceOrigin()
 	old := *v
 	*v = *owned
 	old.Free(mp)

@@ -54,7 +54,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -66,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	orderop "github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	partitionop "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
@@ -354,7 +354,6 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 			proc := testutil.NewProcess(t)
 			proc.Base.SessionInfo.ApplySQLSelectLimit = true
-			proc.GetSessionInfo().Buf = buffer.New()
 			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 				if name == plan2.SQLSelectLimitVariable {
 					return ^uint64(0), nil
@@ -421,7 +420,6 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			}
 			c.Release()
 			proc.Free()
-			proc.GetSessionInfo().Buf.Free()
 
 		})
 	}
@@ -431,10 +429,8 @@ func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
 	proc.Base.SessionInfo.ApplySQLSelectLimit = true
-	proc.GetSessionInfo().Buf = buffer.New()
 	t.Cleanup(func() {
 		proc.Free()
-		proc.GetSessionInfo().Buf.Free()
 	})
 	limitValue := uint64(1)
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
@@ -542,10 +538,8 @@ func TestSQLSelectLimitOperatorSelection(t *testing.T) {
 			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 			proc := testutil.NewProcess(t)
 			proc.Base.SessionInfo.ApplySQLSelectLimit = true
-			proc.GetSessionInfo().Buf = buffer.New()
 			t.Cleanup(func() {
 				proc.Free()
-				proc.GetSessionInfo().Buf.Free()
 			})
 			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 				if name == plan2.SQLSelectLimitVariable {
@@ -1001,7 +995,6 @@ func TestResultWriterCapturesExecutionGeneration(t *testing.T) {
 func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().Buf = buffer.New()
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		if name == plan2.SQLSelectLimitVariable {
 			return ^uint64(0), nil
@@ -1057,7 +1050,6 @@ func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 
 	c.Release()
 	proc.Free()
-	proc.GetSessionInfo().Buf.Free()
 }
 
 func TestApplyExecutorLockWaitTimeout(t *testing.T) {
@@ -2628,7 +2620,6 @@ func TestLockMeta_doLock(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = context.Background()
 	eng := mock_frontend.NewMockEngine(ctrl)
 
@@ -3550,6 +3541,33 @@ func TestCompileShuffleJoinKeepsReusableLocalShuffle(t *testing.T) {
 
 	require.Len(t, result, 1,
 		"reusing an existing probe partition must keep the single local fast path")
+}
+
+func TestCompileRecursiveProbeJoinUsesUnshuffledBroadcast(t *testing.T) {
+	nodes := engine.Nodes{
+		{Addr: "cn1:6001", Mcpu: 1},
+		{Addr: "cn2:6001", Mcpu: 1},
+	}
+	c := newCompileForShuffleJoinTest(t, nodes)
+	c.execType = plan2.ExecTypeAP_MULTICN
+
+	node := newShuffleJoinTestNode(1)
+	node.Stats.HashmapStats.Shuffle = false
+	node.Stats.HashmapStats.ShuffleColIdx = -1
+	left := &plan.Node{Stats: &plan.Stats{Outcnt: 10}}
+	right := &plan.Node{Stats: &plan.Stats{Outcnt: 20}}
+
+	probe := newShuffleJoinTestScope(t, nodes[0], 1)
+	probe.setRootOperator(mergerecursive.NewArgument())
+	build := newShuffleJoinTestScope(t, nodes[1], 1)
+
+	result := c.compileJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+	t.Cleanup(func() { ReleaseScopes(result) })
+
+	require.Len(t, result, 1)
+	require.Same(t, probe, result[0], "broadcast join keeps the recursive probe scope")
+	require.True(t, scopesContainOperator(result, vm.MergeRecursive))
+	require.False(t, scopesContainOperator(result, vm.Shuffle))
 }
 
 func TestCompileLocalShuffleJoinOnlySkipsProvenProbeShuffle(t *testing.T) {

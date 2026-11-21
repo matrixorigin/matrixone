@@ -54,8 +54,8 @@ const (
 const (
 	HashBuildSpillAllocationSiteSelectedData mpool.AllocationSite = iota + 64
 	HashBuildSpillAllocationSiteSelectedArea
-	HashBuildSpillAllocationSiteSelectedNulls
-	HashBuildSpillAllocationSiteSelectedGrouping
+	_ // reserved: was HashBuildSpillAllocationSiteSelectedNulls
+	_ // reserved: was HashBuildSpillAllocationSiteSelectedGrouping
 	HashBuildSpillAllocationSiteHashValues
 	HashBuildSpillAllocationSiteRowIDs
 	HashBuildSpillAllocationSiteMarshalBuffer
@@ -67,8 +67,8 @@ const (
 	HashBuildAllocationSiteHashDescriptor
 	HashBuildAllocationSiteBatchData
 	HashBuildAllocationSiteBatchArea
-	HashBuildAllocationSiteBatchNulls
-	HashBuildAllocationSiteBatchGrouping
+	_ // reserved: was HashBuildAllocationSiteBatchNulls
+	_ // reserved: was HashBuildAllocationSiteBatchGrouping
 	HashBuildAllocationSiteGroupSels
 	HashBuildAllocationSiteHashIterator
 )
@@ -80,21 +80,23 @@ const (
 const (
 	HashBuildAllocationSiteUniqueKeyData mpool.AllocationSite = iota + 44
 	HashBuildAllocationSiteUniqueKeyArea
-	HashBuildAllocationSiteUniqueKeyNulls
-	HashBuildAllocationSiteUniqueKeyGrouping
+	_ // reserved: was HashBuildAllocationSiteUniqueKeyNulls
+	_ // reserved: was HashBuildAllocationSiteUniqueKeyGrouping
 	HashBuildAllocationSiteRuntimeFilterPayload
 	HashBuildAllocationSiteRuntimeFilterScratch
 	HashBuildAllocationSiteDedupIgnoreBitmap
 	HashBuildAllocationSiteDedupDeleteBitmap
 	HashBuildAllocationSiteDedupLastRows
 	HashBuildAllocationSiteDedupSurvivorRows
-	HashBuildAllocationSiteDedupSurvivorOwnsKey
+	HashBuildAllocationSiteDedupSurvivorPriority
 	HashBuildAllocationSiteDedupDiscardedRows
 	HashBuildAllocationSiteDedupDeleteOnlyData
 	HashBuildAllocationSiteDedupDeleteOnlyArea
-	HashBuildAllocationSiteDedupDeleteOnlyNulls
-	HashBuildAllocationSiteDedupDeleteOnlyGrouping
+	_ // reserved: was HashBuildAllocationSiteDedupDeleteOnlyNulls
+	_ // reserved: was HashBuildAllocationSiteDedupDeleteOnlyGrouping
 )
+
+const HashBuildAllocationSiteBatchRowEnds mpool.AllocationSite = 61
 
 type container struct {
 	state           int
@@ -508,10 +510,27 @@ type HashBuild struct {
 	DedupColName              string
 	DedupColTypes             []plan.Type
 	DedupKeyExprs             []*plan.Expr
+	AuxiliaryRowIdColIdx      int32
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
 
 	vm.OperatorBase
+}
+
+// AcceptsDictionary admits direct-column builds whose ingress is copied into
+// existing owned retained storage or gathered into flat spill partitions.
+// Computed-key and dedup modes retain the compatibility boundary until their
+// specialized expression and destructive-update paths are converted.
+func (hashBuild *HashBuild) AcceptsDictionary(child int) bool {
+	if child != 0 || hashBuild.IsDedup {
+		return false
+	}
+	for _, condition := range hashBuild.Conditions {
+		if condition == nil || condition.GetCol() == nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (hashBuild *HashBuild) GetOperatorBase() *vm.OperatorBase {
@@ -529,8 +548,6 @@ func (hashBuild *HashBuild) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
 		HashBuildSpillAllocationSiteSelectedArea,
-		HashBuildSpillAllocationSiteSelectedNulls,
-		HashBuildSpillAllocationSiteSelectedGrouping,
 	)
 	if err != nil {
 		return err
@@ -574,8 +591,6 @@ func (hashBuild *HashBuild) installRecoveryCapacity(
 		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
 		HashBuildSpillAllocationSiteSelectedArea,
-		HashBuildSpillAllocationSiteSelectedNulls,
-		HashBuildSpillAllocationSiteSelectedGrouping,
 		class,
 	)
 	if err != nil {
@@ -630,8 +645,6 @@ func (hashBuild *HashBuild) releaseRecoveryCapacity(
 		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
 		HashBuildSpillAllocationSiteSelectedArea,
-		HashBuildSpillAllocationSiteSelectedNulls,
-		HashBuildSpillAllocationSiteSelectedGrouping,
 	)
 	if err != nil {
 		ctr.spillBatchAllocation = nil
@@ -677,8 +690,6 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteBatchData,
 		HashBuildAllocationSiteBatchArea,
-		HashBuildAllocationSiteBatchNulls,
-		HashBuildAllocationSiteBatchGrouping,
 	)
 	if err != nil {
 		return err
@@ -688,8 +699,6 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteUniqueKeyData,
 		HashBuildAllocationSiteUniqueKeyArea,
-		HashBuildAllocationSiteUniqueKeyNulls,
-		HashBuildAllocationSiteUniqueKeyGrouping,
 	)
 	if err != nil {
 		return err
@@ -744,6 +753,7 @@ func (hb *HashmapBuilder) ClearAllocationAccount(
 	}
 	if builder.IntHashMap != nil || builder.StrHashMap != nil ||
 		len(builder.Batches.Buf) != 0 || builder.Sels.Size() != 0 ||
+		builder.batchRowEnds != nil ||
 		len(builder.executors) != 0 || len(builder.curVecs) != 0 ||
 		len(builder.uniqueKeys.first.vecs) != 0 ||
 		len(builder.uniqueKeys.rest) != 0 || builder.uniqueKeys.directory != nil ||
@@ -1005,4 +1015,10 @@ func (ctr *container) releaseMemoryGrowthParticipant() {
 	}
 	ctr.memoryGrowthParticipant.Release()
 	ctr.memoryGrowthParticipant = nil
+}
+
+// Admitted build ingress is copied into owned retained batches or flat spill
+// partitions. Prefer owned scan columns without disabling selected filtering.
+func (hashBuild *HashBuild) PrefersOwnedDictionaryInput(child int) bool {
+	return hashBuild.AcceptsDictionary(child)
 }

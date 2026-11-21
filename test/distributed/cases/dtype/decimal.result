@@ -1569,6 +1569,7 @@ Project  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on decimal.decimal_opt_test [ForceOneCN]  𝄀
               Filter Cond: decimal_opt_test.price in ([9999 19999 29999])  𝄀
+              Block Filter Cond: decimal_opt_test.price in ([9999 19999 29999])  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
               Filter Cond: prefix_in(__mo_index_idx_col)  𝄀

@@ -157,7 +157,7 @@ func LoadColumnsDataInto(
 	policy fileservice.Policy,
 ) (deleteMask objectio.Bitmap, fromCache bool, err error) {
 	return loadColumnsDataInto(ctx, columns, typs, fs, location, destinations,
-		sels, visibilityTS, m, policy, false)
+		sels, visibilityTS, m, policy, false, false, nil)
 }
 
 // LoadColumnsDataIntoReadonly materializes complete, non-appendable columns
@@ -175,8 +175,16 @@ func LoadColumnsDataIntoReadonly(
 	policy fileservice.Policy,
 ) (fromCache bool, err error) {
 	_, fromCache, err = loadColumnsDataInto(ctx, columns, typs, fs, location,
-		destinations, nil, nil, m, policy, true)
+		destinations, nil, nil, m, policy, true, false, nil)
 	return
+}
+
+// LoadColumnsDataIntoBorrowed borrows only entries with ObjectIO's immutable
+// validation capability and an admitted per-column borrow policy. A nil policy
+// preserves full borrowing; an incompatible policy conservatively copies owned.
+func LoadColumnsDataIntoBorrowed(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, m *mpool.MPool, policy fileservice.Policy, allowBorrow []bool) (bool, error) {
+	_, hit, err := loadColumnsDataInto(ctx, columns, typs, fs, location, destinations, nil, nil, m, policy, false, true, allowBorrow)
+	return hit, err
 }
 
 func loadColumnsDataInto(
@@ -191,6 +199,8 @@ func loadColumnsDataInto(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 	readonlyArea bool,
+	borrowedColumns bool,
+	allowBorrow []bool,
 ) (deleteMask objectio.Bitmap, fromCache bool, err error) {
 	if len(columns) != len(destinations) {
 		err = moerr.NewInvalidInputNoCtxf(
@@ -319,7 +329,18 @@ func loadColumnsDataInto(
 			}
 			publication.Publish(columns[i], reader)
 		}
-		if readonlyArea {
+		if borrowedColumns && (allowBorrow == nil || len(allowBorrow) == len(columns) && allowBorrow[i]) {
+			var borrowed bool
+			borrowed, err = objectio.TryBorrowCachedVector(destinations[i], ioVectors.Entries[i].CachedData, m)
+			if err != nil {
+				publication.Disable()
+				return
+			}
+			if borrowed {
+				continue
+			}
+			err = objectio.CopyCachedVectorAll(destinations[i], ioVectors.Entries[i].CachedData, m)
+		} else if readonlyArea {
 			err = objectio.CopyCachedVectorAllReadonly(
 				destinations[i],
 				ioVectors.Entries[i].CachedData,
@@ -800,4 +821,76 @@ func LoadOneBlockWithIndex(
 	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
 		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
 	return bat, sortKey, err
+}
+
+// WithColumnsDataInto keeps one IOVector pinned through consume. Privately
+// validated columns use scoped readonly headers; other formats materialize into
+// the original owned destinations. The callback must publish only owned data
+// and consume any cache aliases before returning, including on error.
+func WithColumnsDataInto(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, scope *objectio.CachedColumnScope, m *mpool.MPool, policy fileservice.Policy, consume func([]*vector.Vector, []bool) error) (bool, error) {
+	return withColumnsDataInto(ctx, columns, typs, fs, location, destinations, scope, m, policy, false, consume)
+}
+
+// WithColumnsDataIntoBorrowedFixed lends fully validated fixed-width and private
+// variable-width inputs. Unmarked columns remain unloaded so a caller can
+// decline before copying unsupported formats. Every alias is synchronous;
+// ordinary WithColumnsDataInto callers keep their existing policy.
+func WithColumnsDataIntoBorrowedFixed(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, scope *objectio.CachedColumnScope, m *mpool.MPool, policy fileservice.Policy, consume func([]*vector.Vector, []bool) error) (bool, error) {
+	return withColumnsDataInto(ctx, columns, typs, fs, location, destinations, scope, m, policy, true, consume)
+}
+
+func withColumnsDataInto(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, scope *objectio.CachedColumnScope, m *mpool.MPool, policy fileservice.Policy, fixed bool, consume func([]*vector.Vector, []bool) error) (bool, error) {
+	if scope == nil || consume == nil || len(columns) != len(typs) || len(columns) != len(destinations) || m == nil {
+		return false, moerr.NewInvalidInputNoCtx("invalid scoped column read")
+	}
+	ioVector, hit, err := readColumnsData(ctx, columns, typs, fs, location, nil, m, policy)
+	if err != nil {
+		return false, err
+	}
+	defer objectio.ReleaseIOVector(&ioVector)
+	consumeInputs := func(inputs []*vector.Vector, marked []bool) error {
+		for i := range columns {
+			if !marked[i] && !fixed {
+				if err := objectio.CopyCachedVectorAll(destinations[i], ioVector.Entries[i].CachedData, m); err != nil {
+					return err
+				}
+			}
+		}
+		return consume(inputs, marked)
+	}
+	if fixed {
+		err = scope.WithFixed(ioVector.Entries, destinations, consumeInputs)
+	} else {
+		err = scope.With(ioVector.Entries, destinations, consumeInputs)
+	}
+	return hit, err
+}
+
+// LoadBlocksWithSpecialLayouts loads the given blocks from one object with a single FileService
+// read. Block IDs must have been grouped using their physical column ranges.
+func LoadBlocksWithSpecialLayouts(
+	ctx context.Context,
+	fs fileservice.FileService,
+	key objectio.Location,
+	blockIDs []uint16,
+	mp *mpool.MPool,
+) ([]*batch.Batch, []objectio.SpecialColumnLayout, error) {
+	meta, err := objectio.FastLoadObjectMeta(ctx, &key, false, fs)
+	if err != nil {
+		return nil, nil, err
+	}
+	data := meta.MustGetMeta(objectio.SchemaData)
+	cols := make([]uint16, data.BlockHeader().ColumnCount())
+	for i := range cols {
+		cols[i] = uint16(i)
+	}
+	batches, err := objectio.ReadBlocksAllColumns(ctx, &data, key.Name().String(), blockIDs, cols, fileservice.SkipAllCache, fs, mp)
+	if err != nil {
+		return nil, nil, err
+	}
+	layouts := make([]objectio.SpecialColumnLayout, len(blockIDs))
+	for i, id := range blockIDs {
+		layouts[i] = objectio.ResolveSpecialColumnLayout(data.GetBlockMeta(uint32(id)))
+	}
+	return batches, layouts, nil
 }

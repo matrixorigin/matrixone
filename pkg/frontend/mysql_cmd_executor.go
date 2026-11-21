@@ -1461,7 +1461,7 @@ func doSetVar(
 	var userVarIsBin bool
 	var userVarRuntimeDomain types.RuntimeStringDomain
 	var userVarType plan.Type
-	var userVarPrepareParamKind vector.PrepareParamKind
+	var userVarPrepareParamKind types.StringConversionKind
 	type evaluatedAssignment struct {
 		assign                  *tree.VarAssignmentExpr
 		value                   interface{}
@@ -1469,7 +1469,7 @@ func doSetVar(
 		userVarIsBin            bool
 		userVarRuntimeDomain    types.RuntimeStringDomain
 		valueType               plan.Type
-		userVarPrepareParamKind vector.PrepareParamKind
+		userVarPrepareParamKind types.StringConversionKind
 	}
 	type systemVarReplayabilitySnapshot struct {
 		replayable bool
@@ -1511,7 +1511,7 @@ func doSetVar(
 	}
 	evaluateAssignment := func(index int, assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
-		prepareParamKind := vector.PrepareParamNone
+		prepareParamKind := types.StringConversionString
 		var value interface{}
 		var valueType plan.Type
 		var runtimeDomain types.RuntimeStringDomain
@@ -3174,7 +3174,13 @@ func createPrepareStmtInSession(
 	}
 	var preparePlan *plan.Plan
 	protocolVersion := currentProtocolVersion(executionProc)
+	execCtx.directIndexReadAdmitted = false
 	err := execCtx.withRootSQL(originSQL, func() (err error) {
+		// Quoted SQL PREPARE starts with PrepareString in the outer request,
+		// while authorization must inspect the parsed PrepareStmt being bound.
+		previousStmt := execCtx.stmt
+		execCtx.stmt = stmt
+		defer func() { execCtx.stmt = previousStmt }()
 		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), stmt, nil)
 		return err
 	})
@@ -3255,6 +3261,7 @@ func createPrepareStmtInSession(
 		divPrecisionIncrementSet: true,
 		remapDb:                  maps.Clone(execCtx.remapDb),
 		defaultDatabase:          executionSes.GetTxnCompileCtx().GetDatabase(),
+		directIndexReadAdmitted:  execCtx.directIndexReadAdmitted,
 		tempTableVersion:         owner.GetTempTableVersion(),
 		ddlVersion:               owner.getDDLVersion(),
 		cloneSQL:                 cloneSQL,
@@ -6617,7 +6624,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		LastInsertIDSet:        true,
 		SqlHelper:              ses.GetSqlHelper(),
 		CompilerContext:        ses.txnCompileCtx,
-		Buf:                    ses.GetBuffer(),
 		LogLevel:               zapcore.InfoLevel, //TODO: need set by session level config
 		SessionId:              ses.GetSessId(),
 		ApplySQLSelectLimit:    !ses.GetIsInternal() && !ses.IsBackgroundSession() && !ses.IsDerivedStmt(),
@@ -6632,7 +6638,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetResolveVariableTypeFunc(ses.txnCompileCtx.ResolveVariableType)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
 	proc.SetResolveVariableStringDomainFunc(ses.txnCompileCtx.ResolveVariableStringDomain)
-	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
@@ -6948,6 +6953,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if resolveErr == nil {
 			admissionCtx := *execCtx
 			admissionCtx.input = currentInput
+			admissionCtx.cw = cw
 			if handler := ses.GetTxnHandler(); handler != nil && handler.GetTxn() != nil {
 				proc.Base.TxnOperator = handler.GetTxn()
 			}

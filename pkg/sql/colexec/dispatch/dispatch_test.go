@@ -106,6 +106,125 @@ func (child *emptyDispatchChild) Call(*process.Process) (vm.CallResult, error) {
 	return vm.NewCallResult(), nil
 }
 
+func TestDispatchRecursiveCTEMemberForwardsEmptyRoundMarker(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	marker := func() *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 1, proc.Mp())
+		bat.SetRowCount(1)
+		bat.SetLast()
+		return bat
+	}
+	emptyRound := marker()
+	productiveRound := marker()
+	data := batch.NewWithSize(1)
+	data.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 1, proc.Mp())
+	data.SetRowCount(1)
+	t.Cleanup(func() {
+		emptyRound.Clean(proc.Mp())
+		productiveRound.Clean(proc.Mp())
+		data.Clean(proc.Mp())
+	})
+
+	var sent []*batch.Batch
+	d := NewArgument()
+	d.OpAnalyzer = process.NewAnalyzer(d.GetIdx(), d.IsFirst, d.IsLast, "dispatch")
+	defer d.Release()
+	d.RecCTE = true
+	d.ctr = &container{sendFunc: func(bat *batch.Batch, _ *Dispatch, _ *process.Process) (bool, error) {
+		sent = append(sent, bat)
+		return false, nil
+	}}
+	d.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{emptyRound, data, productiveRound}))
+
+	for _, want := range []*batch.Batch{emptyRound, data, productiveRound} {
+		result, err := d.Call(proc)
+		require.NoError(t, err)
+		require.Same(t, want, result.Batch)
+		require.Equal(t, vm.ExecNext, result.Status)
+	}
+	require.Equal(t, []*batch.Batch{emptyRound, data, productiveRound}, sent)
+	require.Equal(t, int32(1), emptyRound.Recursive,
+		"a member with no rows in this round must stay live for later frontiers")
+	require.Equal(t, int32(1), productiveRound.Recursive)
+}
+
+func TestDispatchIntermediateForwardsRecursiveRoundMarker(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	marker := batch.NewWithSize(1)
+	marker.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 1, proc.Mp())
+	marker.SetRowCount(1)
+	marker.SetLast()
+	t.Cleanup(func() { marker.Clean(proc.Mp()) })
+
+	var sent []*batch.Batch
+	d := NewArgument()
+	defer d.Release()
+	d.OpAnalyzer = process.NewAnalyzer(d.GetIdx(), d.IsFirst, d.IsLast, "dispatch")
+	d.ctr = &container{sendFunc: func(bat *batch.Batch, _ *Dispatch, _ *process.Process) (bool, error) {
+		sent = append(sent, bat)
+		return false, nil
+	}}
+	d.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{marker}))
+
+	result, err := d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Same(t, marker, result.Batch)
+	require.Equal(t, int32(1), marker.Recursive)
+	require.Equal(t, []*batch.Batch{marker}, sent)
+}
+
+func TestDispatchRecursiveSinkStopsOnlyAfterEmptyGlobalFrontier(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	data := batch.NewWithSize(1)
+	data.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 1, proc.Mp())
+	data.SetRowCount(1)
+	productiveMarker := batch.NewWithSize(1)
+	productiveMarker.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 1, proc.Mp())
+	productiveMarker.SetRowCount(1)
+	productiveMarker.SetLast()
+	emptyMarker := batch.NewWithSize(1)
+	emptyMarker.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 1, proc.Mp())
+	emptyMarker.SetRowCount(1)
+	emptyMarker.SetLast()
+	t.Cleanup(func() {
+		data.Clean(proc.Mp())
+		productiveMarker.Clean(proc.Mp())
+		emptyMarker.Clean(proc.Mp())
+	})
+
+	var sent []*batch.Batch
+	d := NewArgument()
+	d.OpAnalyzer = process.NewAnalyzer(d.GetIdx(), d.IsFirst, d.IsLast, "dispatch")
+	defer d.Release()
+	d.RecSink = true
+	d.ctr = &container{sendFunc: func(bat *batch.Batch, _ *Dispatch, _ *process.Process) (bool, error) {
+		sent = append(sent, bat)
+		return false, nil
+	}}
+	d.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{data, productiveMarker, emptyMarker}))
+
+	result, err := d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.True(t, d.ctr.hasData)
+
+	result, err = d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Equal(t, int32(1), productiveMarker.Recursive)
+	require.False(t, d.ctr.hasData)
+
+	result, err = d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.Equal(t, int32(2), emptyMarker.Recursive)
+	require.Equal(t, []*batch.Batch{data, productiveMarker, emptyMarker}, sent)
+}
+
 // unknownServiceLockService supplies only the service identity needed by
 // Process.GetService. The embedded interface keeps this test independent of
 // lock-service behavior that is unrelated to protocol capability lookup.
@@ -116,80 +235,6 @@ type unknownServiceLockService struct {
 
 func (s *unknownServiceLockService) GetConfig() lockservice.Config {
 	return s.cfg
-}
-
-func TestMarshalRemoteBatchPrepareParamProtocolGate(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-
-	vec := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, proc.Mp()))
-	vec.SetPrepareParamKinds([]vector.PrepareParamKind{
-		vector.PrepareParamInteger, vector.PrepareParamNone,
-	})
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vec
-	bat.SetRowCount(2)
-	defer bat.Clean(proc.Mp())
-
-	runtime := moruntime.ServiceRuntime(proc.GetService())
-	original, hadOriginal := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if hadOriginal {
-			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-		} else {
-			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	})
-
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
-	buf := bytes.NewBufferString("sentinel")
-	_, err := marshalRemoteBatch(proc, bat, buf)
-	require.Error(t, err)
-	require.Equal(t, "sentinel", buf.String(), "protocol rejection must happen before writing")
-
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
-	buf.Reset()
-	encoded, err := marshalRemoteBatch(proc, bat, buf)
-	require.NoError(t, err)
-	require.NotEmpty(t, encoded)
-	decoded := batch.NewOffHeapEmpty()
-	defer decoded.Clean(proc.Mp())
-	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
-	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
-}
-
-func TestMarshalRemoteBatchOldProtocolDropsStringSourceOnly(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("literal"), false, proc.Mp()))
-	require.NoError(t, bat.Vecs[0].SetStringSource(types.StringSourceLiteral))
-	bat.SetRowCount(1)
-	defer bat.Clean(proc.Mp())
-
-	runtime := moruntime.ServiceRuntime(proc.GetService())
-	original, hadOriginal := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if hadOriginal {
-			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-		} else {
-			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	})
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
-
-	var buf bytes.Buffer
-	encoded, err := marshalRemoteBatch(proc, bat, &buf)
-	require.NoError(t, err)
-	decoded := batch.NewOffHeapEmpty()
-	defer decoded.Clean(proc.Mp())
-	require.NoError(t, decoded.UnmarshalBinary(encoded))
-	require.False(t, decoded.Vecs[0].HasStringSourceMetadata())
 }
 
 func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
@@ -240,8 +285,6 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 		staticSource.Vecs[0], 0, staticSource.RowCount(), nil, proc.Mp()))
 	staticRows.SetRowCount(staticSource.RowCount())
 	require.False(t, staticRows.HasBinaryStringMetadata())
-	require.NoError(t, staticRows.Vecs[0].SetPrepareParamKindsWithMP(
-		[]vector.PrepareParamKind{vector.PrepareParamInteger, vector.PrepareParamNone}, proc.Mp()))
 	defer staticRows.Clean(proc.Mp())
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
 	buf := bytes.NewBufferString("sentinel")
@@ -249,9 +292,8 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 	require.NoError(t, err)
 	staticDecoded := batch.NewOffHeapEmpty()
 	defer staticDecoded.Clean(proc.Mp())
-	require.NoError(t, staticDecoded.UnmarshalBinaryWithPrepareParamKinds(staticEncoded, proc.Mp()))
-	require.Equal(t, vector.PrepareParamInteger, staticDecoded.Vecs[0].GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamNone, staticDecoded.Vecs[0].GetPrepareParamKindAt(1))
+	require.NoError(t, staticDecoded.UnmarshalBinaryWithMetadata(staticEncoded, proc.Mp()))
+	require.Equal(t, staticRows.RowCount(), staticDecoded.RowCount())
 
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion18)
 	buf.Reset()
@@ -259,30 +301,10 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 	require.NoError(t, err)
 	decoded := batch.NewOffHeapEmpty()
 	defer decoded.Clean(proc.Mp())
-	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
+	require.NoError(t, decoded.UnmarshalBinaryWithMetadata(encoded, proc.Mp()))
 	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
 	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
 
-	require.NoError(t, dynamic.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
-		types.StringSourceCOMStmt, types.StringSourceSQLPrepare,
-	}, proc.Mp()))
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
-	buf.Reset()
-	encoded, err = marshalRemoteBatch(proc, dynamic, buf)
-	require.NoError(t, err)
-	decodedWithoutSources := batch.NewOffHeapEmpty()
-	defer decodedWithoutSources.Clean(proc.Mp())
-	require.NoError(t, decodedWithoutSources.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
-	require.False(t, decodedWithoutSources.Vecs[0].HasStringSourceMetadata())
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion37)
-	buf.Reset()
-	encoded, err = marshalRemoteBatch(proc, dynamic, buf)
-	require.NoError(t, err)
-	decodedWithSources := batch.NewOffHeapEmpty()
-	defer decodedWithSources.Clean(proc.Mp())
-	require.NoError(t, decodedWithSources.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
-	require.Equal(t, types.StringSourceCOMStmt, decodedWithSources.Vecs[0].GetStringSourceAt(0))
-	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
 }
 
 func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {
@@ -295,19 +317,19 @@ func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {
 	prepared := batch.NewWithSize(1)
 	prepared.Vecs[0] = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(prepared.Vecs[0], []byte("5"), false, proc.Mp()))
-	prepared.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	require.NoError(t, prepared.Vecs[0].SetIsBinaryStringAt(0, true))
 	prepared.SetRowCount(1)
 	defer prepared.Clean(proc.Mp())
 
 	require.NotPanics(t, func() {
-		require.False(t, prepareParamKindRemoteWireEnabled(proc))
+		require.False(t, binaryStringRemoteWireEnabled(proc))
 	})
 	buf := bytes.NewBufferString("sentinel")
 	var err error
 	require.NotPanics(t, func() {
 		_, err = marshalRemoteBatch(proc, prepared, buf)
 	})
-	require.ErrorContains(t, err, "prepared parameter provenance requires MORPCVersion12")
+	require.ErrorContains(t, err, "binary-string provenance requires MORPCVersion18")
 	require.Equal(t, "sentinel", buf.String(),
 		"unknown service must reject metadata before writing the stable batch")
 
@@ -1201,8 +1223,6 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 		1,
 		102,
 		103,
-		104,
-		105,
 	)
 	require.NoError(t, err)
 	src := batch.NewOffHeapWithSize(1)

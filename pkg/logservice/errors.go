@@ -88,10 +88,15 @@ func toError(ctx context.Context, resp pb.Response) error {
 	if resp.ErrorCode == uint32(moerr.ErrNoHAKeeper) {
 		return moerr.NewNoHAKeeper(ctx)
 	} else if resp.ErrorCode == uint32(moerr.ErrInvalidTruncateLsn) {
-		return moerr.NewInvalidTruncateLsn(ctx, 0, 0)
+		if resp.ErrorMessage != "" {
+			return moerr.NewInvalidTruncateLsnWithMessage(ctx, resp.ErrorMessage)
+		}
+		return moerr.NewInvalidTruncateLsnWithMessage(ctx, "invalid truncate lsn")
 	} else if resp.ErrorCode == uint32(moerr.ErrNotLeaseHolder) {
-		// holder id get lost?
-		return moerr.NewNotLeaseHolder(ctx, 0xDEADBEEF)
+		if resp.ErrorMessage != "" {
+			return moerr.NewNotLeaseHolderWithMessage(ctx, resp.ErrorMessage)
+		}
+		return moerr.NewNotLeaseHolderWithMessage(ctx, "not lease holder")
 	} else if resp.ErrorCode == uint32(moerr.ErrInternal) {
 		// internal error
 		return moerr.NewInternalError(ctx, resp.ErrorMessage)

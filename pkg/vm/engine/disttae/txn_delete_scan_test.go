@@ -398,7 +398,7 @@ func TestBorrowedWorkspacePreparationFailurePreservesState(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	var rows [2]types.Rowid
 	rows[0].SetRowOffset(0)

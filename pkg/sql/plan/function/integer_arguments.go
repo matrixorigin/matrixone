@@ -27,6 +27,9 @@ const (
 	integerBitPatternParameter
 	// HEX has distinct string/array behavior; only numeric sources are integers.
 	numericOnlyIntegerParameter
+	// Bitwise consumers coerce only native temporal sources here; every other
+	// source keeps its existing signed, unsigned, string, or binary overload.
+	temporalOnlyIntegerParameter
 )
 
 type integerParameter struct {
@@ -40,6 +43,11 @@ type integerParameter struct {
 	// Only roles whose original signatures accepted temporal values opt in.
 	temporal bool
 	uuid     bool
+	// keepsOperandBinding binds the AST operand in its ordinary context (for
+	// example the DEFAULT column type) and converts it only after binding
+	// proves a native temporal source. Persisted non-temporal expressions keep
+	// their original bound form.
+	keepsOperandBinding bool
 }
 
 func integerParameterForPosition(name string, position int) (integerParameter, bool) {
@@ -56,6 +64,12 @@ func integerParameterForPosition(name string, position int) (integerParameter, b
 }
 
 func (p integerParameter) sourceTarget(source types.T, binaryLiteral bool) (types.T, bool) {
+	if p.mode == temporalOnlyIntegerParameter {
+		if integerArgumentTemporalSource(source) {
+			return types.T_int64, true
+		}
+		return 0, false
+	}
 	if p.mode == integerBitPatternParameter {
 		return IntegerBitSourceTarget(source, binaryLiteral), true
 	}
@@ -83,6 +97,18 @@ func IntegerBitSourceTarget(source types.T, binaryLiteral bool) types.T {
 func IntegerArgumentUsesBitSources(name string, position int) bool {
 	parameter, ok := integerParameterForPosition(name, position)
 	return ok && parameter.mode == integerBitPatternParameter
+}
+
+func IntegerArgumentUsesTemporalIntegerCast(name string, position int, source types.T) bool {
+	parameter, ok := integerParameterForPosition(name, position)
+	return ok && parameter.mode == temporalOnlyIntegerParameter && integerArgumentTemporalSource(source)
+}
+
+// IntegerArgumentKeepsOperandBinding reports whether AST binding must leave the
+// operand's ordinary binding context in place.
+func IntegerArgumentKeepsOperandBinding(name string, position int) bool {
+	parameter, ok := integerParameterForPosition(name, position)
+	return ok && parameter.keepsOperandBinding
 }
 
 func IntegerArgumentSourceDependent(name string, position int) bool {

@@ -46,16 +46,22 @@ func NewBatchSetWithAllocation(batchMaxRow int, selection *vector.AllocationAcco
 }
 
 func (bs *BatchSet) matchesDestination(destination, source *Batch) bool {
-	if bs.outputAllocation == nil {
+	allocation := bs.outputAllocation
+	if allocation == nil && source != nil {
+		// getOrCreateBatch uses the batch account for every copied column.
+		// Borrowed input columns may have different physical owners.
+		allocation = source.allocationAccount
+	}
+	if allocation == nil {
 		return vectorAllocationSelectionsMatch(destination, source)
 	}
 	if destination == nil || source == nil || len(destination.Vecs) != len(source.Vecs) ||
-		!vector.AllocationAccountSelectionsEqual(destination.allocationAccount, bs.outputAllocation) {
+		!vector.AllocationAccountSelectionsEqual(destination.allocationAccount, allocation) {
 		return false
 	}
 	for i, v := range destination.Vecs {
 		if v == nil || source.Vecs[i] == nil || !v.GetType().Eq(*source.Vecs[i].GetType()) ||
-			!vector.AllocationAccountSelectionsEqual(v.AllocationAccountSelection(), bs.outputAllocation) {
+			!vector.AllocationAccountSelectionsEqual(v.AllocationAccountSelection(), allocation) {
 			return false
 		}
 	}
@@ -202,11 +208,11 @@ func (bs *BatchSet) Extend(mpool *mpool.MPool, inBatch *Batch, reuseBuf *Batch) 
 	// empty bats or last batch is full - can directly use fast path
 	lastIdx := batLen - 1
 	if batLen > 0 && bs.batches[lastIdx].rowCount < bs.batchMaxRow &&
-		!vectorAllocationSelectionsMatch(bs.batches[lastIdx], inBatch) {
+		!bs.matchesDestination(bs.batches[lastIdx], inBatch) {
 		return bs.extendWithNewProvenance(mpool, inBatch, reuseBuf)
 	}
 	if batLen == 0 || bs.batches[lastIdx].rowCount == bs.batchMaxRow {
-		if vectorAllocationSelectionsMatch(reuseBuf, inBatch) {
+		if bs.matchesDestination(reuseBuf, inBatch) {
 			reuseBuf.CleanOnlyData()
 			reuseBuf, err = reuseBuf.AppendWithCopy(context.TODO(), mpool, inBatch)
 			if err != nil {
@@ -223,9 +229,10 @@ func (bs *BatchSet) Extend(mpool *mpool.MPool, inBatch *Batch, reuseBuf *Batch) 
 		return false, nil
 	}
 
-	// fast path 2: inBatch is full
-	if inBatch.rowCount == bs.batchMaxRow {
-		if vectorAllocationSelectionsMatch(reuseBuf, inBatch) {
+	// Keep the full-input shortcut within its original provenance domain.
+	// Mixed-source copies must fill the earlier destination tail in order.
+	if inBatch.rowCount == bs.batchMaxRow && vectorAllocationSelectionsMatch(bs.batches[lastIdx], inBatch) {
+		if bs.matchesDestination(reuseBuf, inBatch) {
 			reuseBuf.CleanOnlyData()
 			reuseBuf, err = reuseBuf.AppendWithCopy(context.TODO(), mpool, inBatch)
 			if err != nil {
@@ -350,6 +357,53 @@ func (bs *BatchSet) Union(mpool *mpool.MPool, inBatch *Batch, sels []int32, reus
 	return consumed, nil
 }
 
+// UnionRange appends consecutive logical rows without constructing selection indices.
+// The BatchSet owns each destination before writing, including on an error.
+func (bs *BatchSet) UnionRange(mp *mpool.MPool, input *Batch, offset, count int, reuse *Batch) (bool, error) {
+	if count == 0 {
+		return false, nil
+	}
+	if offset == 0 && count == input.RowCount() && count <= bs.batchMaxRow {
+		return bs.Extend(mp, input, reuse)
+	}
+	return bs.appendRange(mp, input, offset, count, reuse)
+}
+
+func (bs *BatchSet) appendRange(mp *mpool.MPool, input *Batch, offset, count int, reuse *Batch) (bool, error) {
+	consumed := false
+	end := offset + count
+	for offset < end {
+		var dst *Batch
+		if len(bs.batches) != 0 {
+			last := bs.batches[len(bs.batches)-1]
+			if last.RowCount() < bs.batchMaxRow && bs.matchesDestination(last, input) {
+				dst = last
+			}
+		}
+		if dst == nil {
+			var err error
+			dst, err = bs.getOrCreateBatch(input, reuse, mp)
+			if err != nil {
+				return consumed, err
+			}
+			if dst == reuse {
+				consumed, reuse = true, nil
+			}
+			bs.batches = append(bs.batches, dst)
+		} else if dst.RowCount() > 0 {
+			for _, vec := range dst.Vecs {
+				vec.SetSorted(false)
+			}
+		}
+		n := min(end-offset, bs.batchMaxRow-dst.RowCount())
+		if err := dst.UnionWindow(input, offset, n, mp); err != nil {
+			return consumed, err
+		}
+		offset += n
+	}
+	return consumed, nil
+}
+
 func (bs *BatchSet) getOrCreateBatch(inBatch *Batch, reuseBuf *Batch, mpool *mpool.MPool) (*Batch, error) {
 	if bs.matchesDestination(reuseBuf, inBatch) {
 		reuseBuf.CleanOnlyData()
@@ -387,37 +441,7 @@ func (bs *BatchSet) getOrCreateBatch(inBatch *Batch, reuseBuf *Batch, mpool *mpo
 // extendWithDestination copies the full input without inheriting its
 // allocation provenance. The BatchSet owns every destination before writing.
 func (bs *BatchSet) extendWithDestination(mp *mpool.MPool, input, reuse *Batch) (bool, error) {
-	consumed := false
-	for start := 0; start < input.RowCount(); {
-		var dst *Batch
-		if len(bs.batches) != 0 {
-			last := bs.batches[len(bs.batches)-1]
-			if last.RowCount() < bs.batchMaxRow && bs.matchesDestination(last, input) {
-				dst = last
-			}
-		}
-		if dst == nil {
-			var err error
-			dst, err = bs.getOrCreateBatch(input, reuse, mp)
-			if err != nil {
-				return consumed, err
-			}
-			if dst == reuse {
-				consumed, reuse = true, nil
-			}
-			bs.batches = append(bs.batches, dst)
-		} else if dst.RowCount() > 0 {
-			for _, vec := range dst.Vecs {
-				vec.SetSorted(false)
-			}
-		}
-		n := min(input.RowCount()-start, bs.batchMaxRow-dst.RowCount())
-		if err := dst.UnionWindow(input, start, n, mp); err != nil {
-			return consumed, err
-		}
-		start += n
-	}
-	return consumed, nil
+	return bs.appendRange(mp, input, 0, input.RowCount(), reuse)
 }
 
 func (bs *BatchSet) extendWithNewProvenance(

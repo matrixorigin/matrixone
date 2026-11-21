@@ -265,10 +265,8 @@ func TestSingleGroupReuseAllocationFailure(t *testing.T) {
 		failOffset int
 	}{
 		{"new-data", AggIdOfCountColumn, false, 1},
-		{"new-nulls", AggIdOfSum, true, 2},
 		{"existing-growth", AggIdOfAvg, false, 1},
 		{"min-new-data", AggIdOfMin, false, 1},
-		{"min-new-nulls", AggIdOfMin, true, 2},
 		{"min-existing-growth", AggIdOfMin, false, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -284,7 +282,7 @@ func TestSingleGroupReuseAllocationFailure(t *testing.T) {
 				require.Zero(t, controller.used)
 				require.Zero(t, mp.CurrNB())
 			}()
-			allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6})
+			allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6})
 			require.NoError(t, err)
 			exec, err := MakeSingleGroupAgg(mp, tc.id, false, allocation, nil, types.T_int32.ToType())
 			require.NoError(t, err)
@@ -425,40 +423,6 @@ func TestSingleGroupMinMaxFloatSpecialValuesMatchBulkFill(t *testing.T) {
 	}
 }
 
-func TestSingleGroupMinRejectsRichMetadata(t *testing.T) {
-	for _, source := range []bool{false, true} {
-		t.Run(fmt.Sprintf("source=%t", source), func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			defer mpool.DeleteMPool(mp)
-			defer func() { require.Zero(t, mp.CurrNB()) }()
-			a, err := MakeSingleGroupAgg(mp, AggIdOfMin, false, nil, nil, types.T_int32.ToType())
-			require.NoError(t, err)
-			defer a.Free()
-			SyncAggregatorsToChunkSize([]GroupAggFuncExec{a}, 1)
-			require.NoError(t, a.GroupGrow(1))
-			v := buildAvgFixedVector(t, mp, types.T_int32.ToType(), []int32{7})
-			defer v.Free(mp)
-			if source {
-				require.NoError(t, v.SetStringSource(types.StringSourceSQLPrepare))
-			} else {
-				v.SetPrepareParamKind(vector.PrepareParamFloat)
-			}
-			require.False(t, SupportsSingleGroupReuseInput(a, []*vector.Vector{v}))
-			require.Error(t, BulkFillSingleGroupRange(a, 0, 1, []*vector.Vector{v}))
-			require.NoError(t, a.BulkFill(0, []*vector.Vector{v}))
-			out, err := a.Flush()
-			require.NoError(t, err)
-			defer out[0].Free(mp)
-			require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](out[0], 0))
-			if source {
-				require.Equal(t, types.StringSourceSQLPrepare, out[0].GetStringSourceAt(0))
-			} else {
-				require.Equal(t, vector.PrepareParamFloat, out[0].GetPrepareParamKindAt(0))
-			}
-		})
-	}
-}
-
 func TestSingleGroupDecimalAvgRoundingAndRetry(t *testing.T) {
 	for _, typ := range []types.Type{types.T_int64.ToType(), types.New(types.T_int64, 35, 0)} {
 		for _, sign := range []int64{1, -1} {
@@ -471,7 +435,7 @@ func TestSingleGroupDecimalAvgRoundingAndRetry(t *testing.T) {
 				account, err := registry.OpenWithController(128<<20, controller)
 				require.NoError(t, err)
 				defer func() { finishTestAggregateAllocation(t, registry, account); require.Zero(t, mp.CurrNB()) }()
-				allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6})
+				allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6})
 				require.NoError(t, err)
 				exec, err := MakeSingleGroupAgg(mp, AggIdOfAvg, false, allocation, nil, typ)
 				require.NoError(t, err)
@@ -581,7 +545,7 @@ func TestSingleGroupDecimalOutputAllocationFailure(t *testing.T) {
 				require.Zero(t, controller.used)
 				require.Zero(t, mp.CurrNB())
 			}()
-			allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6})
+			allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6})
 			require.NoError(t, err)
 			exec, err := MakeSingleGroupAgg(mp, AggIdOfSum, false, allocation, nil, types.T_int64.ToType())
 			require.NoError(t, err)
@@ -611,9 +575,6 @@ func TestSingleGroupDecimalOutputAllocationFailure(t *testing.T) {
 			}
 			before := account.Snapshot().Used
 			controller.failAt = controller.calls + 1
-			if !growth {
-				controller.failAt++
-			}
 			result, err := AppendSingleGroupResultAndReset(exec, dst)
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.True(t, controller.rejected)

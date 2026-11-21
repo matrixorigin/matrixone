@@ -61,7 +61,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(tableScan.ctr.filterExecutors) == 0 && len(tableScan.FilterExprs) > 0 {
-		tableScan.ctr.filterExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableScan.FilterExprs)
+		tableScan.ctr.filterExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, tableScan.FilterExprs, tableScan.OutputAllocation)
 		if err != nil {
 			return
 		}
@@ -70,7 +70,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 
 	// runtime filters are set fresh by handleRuntimeFilters before each Prepare call
 	if len(tableScan.RuntimeFilterExprs) > 0 {
-		tableScan.ctr.runtimeFilterExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableScan.RuntimeFilterExprs)
+		tableScan.ctr.runtimeFilterExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, tableScan.RuntimeFilterExprs, tableScan.OutputAllocation)
 		if err != nil {
 			return
 		}
@@ -88,7 +88,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	tableScan.configureLateMaterialization()
 	tableScan.prepareReaderFilter(proc)
 
-	err = tableScan.PrepareProjection(proc)
+	err = tableScan.PrepareProjectionWithAllocation(proc, tableScan.OutputAllocation)
 	if err != nil {
 		return err
 	}
@@ -109,6 +109,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 }
 
 func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
+	tableScan.ctr.dictionaryBoundary.BeginCall()
 	start := time.Now()
 
 	analyzer := tableScan.OpAnalyzer
@@ -128,9 +129,14 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		if tableScan.ctr.domainEmpty {
 			return vm.CancelResult, nil
 		}
+		if !tableScan.ctr.membershipPrepared {
+			tableScan.prepareReaderMembership(proc)
+			tableScan.ctr.membershipPrepared = true
+		}
 	}
 
 	for {
+		tableScan.ctr.membershipApplied = false
 		// receive topvalue message
 		if tableScan.ctr.msgReceiver != nil {
 			msgs, _, _ := tableScan.ctr.msgReceiver.ReceiveMessage(false, proc.Ctx)
@@ -144,6 +150,23 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		// read data from storage engine
+		for col, workspace := range tableScan.ctr.readerWorkspace {
+			if workspace != nil {
+				header := tableScan.ctr.buf.Vecs[col]
+				reusable := header.IsDictionary()
+				header.CleanOnlyData()
+				if reusable && len(tableScan.ctr.readerHeaders) == len(tableScan.ctr.buf.Vecs) {
+					if old := tableScan.ctr.readerHeaders[col]; old != nil {
+						old.Free(proc.Mp())
+					}
+					tableScan.ctr.readerHeaders[col] = header
+				} else {
+					header.Free(proc.Mp())
+				}
+				tableScan.ctr.buf.Vecs[col] = workspace
+				tableScan.ctr.readerWorkspace[col] = nil
+			}
+		}
 		tableScan.ctr.buf.CleanOnlyData()
 		tableScan.ctr.filterReadMetrics = false
 		tableScan.ctr.filterLateMaterialized = false
@@ -160,6 +183,12 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			return vm.CancelResult, err
 		}
 		colexec.CollectReaderExplainDiagnostics(tableScan.Reader, analyzer)
+		// Account this read's late columns before retirement restores the
+		// ordinary schedule, then retire before any empty-batch shortcut.
+		if !isEnd && tableScan.ctr.filterReadMetrics && tableScan.ctr.filterLateMaterialized && !tableScan.ctr.buf.IsEmpty() {
+			tableScan.recordLateInput(tableScan.ctr.buf)
+		}
+		tableScan.retireReaderMembership(proc)
 
 		// Record ReadSize metrics when scan completes all blocks (isEnd == true)
 		// This matches explain analyze output which shows total read size for the entire scan
@@ -179,9 +208,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		if tableScan.ctr.filterReadMetrics {
-			if tableScan.ctr.filterLateMaterialized && !tableScan.ctr.buf.IsEmpty() {
-				tableScan.recordLateInput(tableScan.ctr.buf)
-			}
 			if tableScan.ctr.buf.IsEmpty() {
 				continue
 			}
@@ -190,22 +216,48 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			// record storage I/O metrics before filtering
-			analyzer.InputBlock()
-			analyzer.ScanBytes(tableScan.ctr.buf)
-			analyzer.Input(tableScan.ctr.buf) // record pre-filter rows for EXPLAIN ANALYZE inputRows
-			batSize := tableScan.ctr.buf.Size()
-			tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, batSize)
-
-			// inline filter evaluation: filter rows before returning to caller
-			if len(tableScan.ctr.allFilterExecutors) > 0 {
-				if _, err = tableScan.evalFilter(proc, tableScan.ctr.buf, nil); err != nil {
-					return vm.CancelResult, err
+			if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() && !tableScan.ctr.padCharToFullLength && len(tableScan.ctr.allFilterExecutors) > 0 && len(tableScan.ctr.buf.ExtraBuf) == 0 {
+				selection, selectErr := tableScan.selectReaderFilter(proc, tableScan.ctr.buf, nil)
+				if selectErr != nil {
+					return vm.CancelResult, selectErr
+				}
+				if !selection.All {
+					next, retained, selectErr := colexec.SelectBatchColumns(tableScan.ctr.buf, nil, selection.Sels, proc.Mp(), tableScan.OutputAllocation, true)
+					if selectErr != nil {
+						return vm.CancelResult, selectErr
+					}
+					if retained {
+						tableScan.OpAnalyzer.GetOpStats().AddExtraStat("DictionaryScanSelectedRows", int64(next.RowCount()))
+					}
+					for col, source := range tableScan.ctr.buf.Vecs {
+						tableScan.ctr.readerWorkspace[col] = source
+						tableScan.ctr.buf.Vecs[col] = nil
+					}
+					tableScan.ctr.buf.Clean(proc.Mp())
+					tableScan.ctr.buf = next
 				}
 				if tableScan.ctr.buf.IsEmpty() {
-					continue // all rows filtered out, read next block
+					continue
+				}
+			} else {
+				// record storage I/O metrics before filtering
+				analyzer.InputBlock()
+				analyzer.ScanBytes(tableScan.ctr.buf)
+				analyzer.Input(tableScan.ctr.buf) // record pre-filter rows for EXPLAIN ANALYZE inputRows
+				batSize := tableScan.ctr.buf.Size()
+				tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, batSize)
+
+				// inline filter evaluation: filter rows before returning to caller
+				if len(tableScan.ctr.allFilterExecutors) > 0 {
+					if _, err = tableScan.evalFilter(proc, tableScan.ctr.buf, nil); err != nil {
+						return vm.CancelResult, err
+					}
+					if tableScan.ctr.buf.IsEmpty() {
+						continue // all rows filtered out, read next block
+					}
 				}
 			}
+
 		}
 
 		if tableScan.ctr.padCharToFullLength {
@@ -385,7 +437,7 @@ func (tableScan *TableScan) evalFilter(
 
 			values := vector.MustFixedColNoTypeCheck[bool](vec)
 			nulls := vec.GetNulls()
-			if !nulls.EmptyByFlag() {
+			if !nulls.IsEmpty() {
 				for j, v := range values {
 					if v && !nulls.Contains(uint64(j)) {
 						sels = append(sels, int64(j))

@@ -62,6 +62,36 @@ func TestDictionaryReadComposeAndFlatten(t *testing.T) {
 	require.True(t, dict.IsNull(3))
 	require.True(t, dict.gsp.Contains(0))
 	require.True(t, dict.gsp.Contains(2))
+	self, err := NewDictionaryVector(base, rows, mp, state.selection)
+	require.NoError(t, err)
+	t.Cleanup(func() { self.Free(mp) })
+	require.NoError(t, self.UnionOne(self, 1, mp))
+	require.Equal(t, 5, self.Length())
+	require.Equal(t, int64(10), GetFixedAtNoTypeCheck[int64](self, 4))
+	require.True(t, self.IsNull(3))
+	require.True(t, self.GetGrouping().Contains(0))
+	for _, operation := range []string{"selection", "batch"} {
+		func() {
+			target, err := NewDictionaryVector(base, rows, mp, state.selection)
+			require.NoError(t, err)
+			defer target.Free(mp)
+			if operation == "selection" {
+				require.NoError(t, target.Union(target, []int64{3, 0}, mp))
+			} else {
+				require.NoError(t, target.UnionBatch(target, 2, 2, nil, mp))
+			}
+			require.Equal(t, 6, target.Length())
+			if operation == "selection" {
+				require.True(t, target.IsNull(4))
+				require.Equal(t, int64(40), GetFixedAtNoTypeCheck[int64](target, 5))
+				require.True(t, target.GetGrouping().Contains(5))
+			} else {
+				require.Equal(t, int64(40), GetFixedAtNoTypeCheck[int64](target, 4))
+				require.True(t, target.GetGrouping().Contains(4))
+				require.True(t, target.IsNull(5))
+			}
+		}()
+	}
 	require.Panics(t, func() { _ = MustFixedColNoTypeCheck[int64](dict) })
 	require.Panics(t, func() { _ = dict.GetData() })
 	require.Panics(t, func() { dict.SetNulls(nil) }, "clearing validity requires writable payload")
@@ -237,11 +267,7 @@ func TestDictionaryStringsAndProvenance(t *testing.T) {
 	for row, value := range values {
 		require.NoError(t, AppendBytes(source, []byte(value), row == 2, mp))
 	}
-	require.NoError(t, source.SetPrepareParamKindsWithMP([]PrepareParamKind{PrepareParamInteger, PrepareParamDecimal, PrepareParamNone}, mp))
-	require.NoError(t, source.SetStringSourcesWithMP([]types.StringSource{types.StringSourceCOMStmt, types.StringSourceSQLPrepare, types.StringSourceLiteral}, mp))
 	require.NoError(t, source.SetIsBinaryStringAt(1, true, mp))
-	source.SetPrepareParamType(types.T_decimal128)
-	source.SetPreparedJSONComparisonParam()
 	base, err := FreezeVector(source, mp, nil)
 	require.NoError(t, err)
 	t.Cleanup(base.Release)
@@ -251,29 +277,53 @@ func TestDictionaryStringsAndProvenance(t *testing.T) {
 	dict, err := NewDictionaryVector(base, rows, mp, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { dict.Free(mp) })
-	require.Equal(t, []PrepareParamKind{PrepareParamDecimal, PrepareParamInteger, PrepareParamDecimal, PrepareParamNone}, dict.GetPrepareParamKinds())
-	require.Equal(t, types.StringSourceLiteral, dict.GetStringSourceAt(3), "NULL retains its source owner")
 	require.True(t, dict.GetIsBinaryStringAt(0))
 	require.False(t, dict.GetIsBinaryStringAt(1))
-	require.Equal(t, types.T_decimal128, dict.GetPrepareParamType())
-	require.True(t, dict.IsPreparedJSONComparisonParam())
 	view := ResolveVarlenaReadView(dict)
 	require.Equal(t, values[1], string(view.Values[view.Selection[0]].GetByteSlice(view.Area)))
 	require.NoError(t, source.EnsureWritable(mp))
-	require.Equal(t, types.T_decimal128, source.GetPrepareParamType())
-	require.True(t, source.IsPreparedJSONComparisonParam())
 	source.Free(mp)
 	require.Equal(t, values[1], dict.GetStringAt(2))
+	for _, operation := range []string{"one", "multi", "copy"} {
+		func() {
+			target := NewVec(types.T_varchar.ToType())
+			defer target.Free(mp)
+			if operation == "copy" {
+				for range 4 {
+					require.NoError(t, AppendBytes(target, nil, true, mp))
+				}
+			}
+			repeat := 1
+			if operation == "multi" {
+				repeat = 2
+			}
+			expected := []string{values[1], values[0], values[1], ""}
+			for logical, value := range expected {
+				switch operation {
+				case "one":
+					require.NoError(t, target.UnionOne(dict, int64(logical), mp))
+				case "multi":
+					require.NoError(t, target.UnionMulti(dict, int64(logical), repeat, mp))
+				case "copy":
+					require.NoError(t, target.Copy(dict, int64(logical), int64(logical), mp))
+				}
+				for duplicate := 0; duplicate < repeat; duplicate++ {
+					row := logical*repeat + duplicate
+					require.Equal(t, logical == 3, target.IsNull(uint64(row)))
+					if logical != 3 {
+						require.Equal(t, value, target.GetStringAt(row))
+					}
+					require.Equal(t, logical == 0 || logical == 2, target.GetIsBinaryStringAt(row))
+				}
+			}
+		}()
+	}
 	require.NoError(t, dict.EnsureWritable(mp))
 	require.Equal(t, values[1], dict.GetStringAt(0))
 	require.Equal(t, values[0], dict.GetStringAt(1))
 	require.Equal(t, values[1], dict.GetStringAt(2))
 	require.True(t, dict.IsNull(3))
 	require.True(t, dict.GetIsBinaryStringAt(2))
-	require.Equal(t, types.StringSourceCOMStmt, dict.GetStringSourceAt(1))
-	require.Equal(t, PrepareParamDecimal, dict.GetPrepareParamKindAt(0))
-	require.Equal(t, types.T_decimal128, dict.GetPrepareParamType())
-	require.True(t, dict.IsPreparedJSONComparisonParam())
 	require.Equal(t, len(values[1])*2, len(dict.GetArea()), "only selected non-inline payload is copied")
 }
 
@@ -459,7 +509,7 @@ func TestDictionaryEnsureFlatFailureIsTransactional(t *testing.T) {
 	account, err := registry.OpenWithController(1<<20, controller)
 	require.NoError(t, err)
 	selection, err := NewAllocationAccountSelection(account, testVectorAllocationOwner,
-		testVectorDataAllocationSite, testVectorAreaAllocationSite, testVectorNullAllocationSite, testVectorGroupAllocationSite)
+		testVectorDataAllocationSite, testVectorAreaAllocationSite)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		finalizeTestVectorAllocationAccount(t, testVectorAllocationAccount{registry: registry, account: account, selection: selection})

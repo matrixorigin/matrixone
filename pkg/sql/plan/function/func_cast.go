@@ -34,6 +34,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -445,42 +446,6 @@ func explicitFloatToInt64(value float64) (int64, error) {
 		return 0, moerr.NewOutOfRangeNoCtxf("int64", "value '%s'", strconv.FormatFloat(value, 'g', -1, 64))
 	}
 	return int64(rounded), nil
-}
-
-func preparedFloatToUint64(input string) (uint64, error) {
-	value, err := strconv.ParseFloat(input, 64)
-	if err != nil {
-		return 0, err
-	}
-	return explicitFloatToUint64(value)
-}
-
-func preparedFloatToInt64(input string) (int64, error) {
-	value, err := strconv.ParseFloat(input, 64)
-	if err != nil {
-		return 0, err
-	}
-	return explicitFloatToInt64(value)
-}
-
-func isPreparedNumericCastOutOfRange(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrOutOfRange) || errors.Is(err, strconv.ErrRange)
-}
-
-func preparedDecimalToUint64(input string) (uint64, error) {
-	rounded, err := roundPreparedDecimalIntegerString(input)
-	if err != nil {
-		return 0, err
-	}
-	return explicitUint64FromIntegerString(rounded)
-}
-
-func preparedDecimalToInt64(input string) (int64, error) {
-	rounded, err := roundPreparedDecimalIntegerString(input)
-	if err != nil {
-		return 0, err
-	}
-	return decimalInt64Explicit(rounded)
 }
 
 func decimalToUint64Explicit[T types.FixedSizeTExceptStrType](
@@ -1499,7 +1464,7 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 // precision needs no per-row validation. Other shapes use the checked path.
 func widenDecimal256Batch(from *vector.Vector, to *vector.FunctionResult[types.Decimal256], target types.Type, length int) bool {
 	source := from.GetType()
-	if length == 0 || source.Scale != target.Scale || source.Width > target.Width || from.IsConst() || !from.GetNulls().EmptyByFlag() {
+	if length == 0 || source.Scale != target.Scale || source.Width > target.Width || from.IsConst() || !from.GetNulls().IsEmpty() {
 		return false
 	}
 	dst := vector.MustFixedColNoTypeCheck[types.Decimal256](to.GetResultVector())
@@ -4019,7 +3984,7 @@ func floatNumToFixFloat[T1 constraints.Float](
 func widenIntegerBatch[T1, T2 constraints.Integer | constraints.Float](
 	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int, selectList *FunctionSelectList) bool {
 	source := from.GetSourceVector()
-	if length <= 0 || source.IsConst() || !source.GetNulls().EmptyByFlag() ||
+	if length <= 0 || source.IsConst() || !source.GetNulls().IsEmpty() ||
 		selectList.IgnoreAllRow() || !selectList.ShouldEvalAllRow() {
 		return false
 	}
@@ -6667,7 +6632,7 @@ func decimalCastAllNull(source *vector.Vector, length uint64) bool {
 		return true
 	}
 	ns := source.GetNulls()
-	return !ns.EmptyByFlag() && ns.Contains(0) &&
+	return !ns.IsEmpty() && ns.Contains(0) &&
 		(length == 1 || (ns.Contains(length-1) && ns.CountRange(0, length) == int(length)))
 }
 
@@ -6697,7 +6662,7 @@ func decimal64ToDecimal64(
 	values := vector.MustFixedColNoTypeCheck[types.Decimal64](source)
 	constant := source.IsConst()
 	var sourceNulls *bitmap.Bitmap
-	if !constant && !source.GetNulls().EmptyByFlag() {
+	if !constant && !source.GetNulls().IsEmpty() {
 		sourceNulls = source.GetNulls().GetBitmap()
 	}
 	for i = 0; i < l; i++ {
@@ -6917,7 +6882,7 @@ func decimal64ToDecimal256Array(
 	values := vector.MustFixedColNoTypeCheck[types.Decimal64](source)
 	constant := source.IsConst()
 	var sourceNulls *bitmap.Bitmap
-	if !constant && !source.GetNulls().EmptyByFlag() {
+	if !constant && !source.GetNulls().IsEmpty() {
 		sourceNulls = source.GetNulls().GetBitmap()
 	}
 	for i = 0; i < l; i++ {
@@ -7103,7 +7068,7 @@ func decimal128ToDecimal128(
 	values := vector.MustFixedColNoTypeCheck[types.Decimal128](source)
 	constant := source.IsConst()
 	var sourceNulls *bitmap.Bitmap
-	if !constant && !source.GetNulls().EmptyByFlag() {
+	if !constant && !source.GetNulls().IsEmpty() {
 		sourceNulls = source.GetNulls().GetBitmap()
 	}
 	for i = 0; i < l; i++ {
@@ -7171,7 +7136,7 @@ func decimal128ToDecimal256(
 	values := vector.MustFixedColNoTypeCheck[types.Decimal128](source)
 	constant := source.IsConst()
 	var sourceNulls *bitmap.Bitmap
-	if !constant && !source.GetNulls().EmptyByFlag() {
+	if !constant && !source.GetNulls().IsEmpty() {
 		sourceNulls = source.GetNulls().GetBitmap()
 	}
 	for i = 0; i < l; i++ {
@@ -7333,7 +7298,7 @@ func decimal256ToDecimal256(
 	values := vector.MustFixedColNoTypeCheck[types.Decimal256](source)
 	constant := source.IsConst()
 	var sourceNulls *bitmap.Bitmap
-	if !constant && !source.GetNulls().EmptyByFlag() {
+	if !constant && !source.GetNulls().IsEmpty() {
 		sourceNulls = source.GetNulls().GetBitmap()
 	}
 	for i = 0; i < l; i++ {
@@ -7653,27 +7618,6 @@ func strToSignedWithProc[T constraints.Signed](
 				result = T(r)
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
-				kind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
-				if len(explicit) > 0 && explicit[0] && bitSize == 64 &&
-					(kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal) {
-					var r int64
-					var err error
-					if kind == vector.PrepareParamFloat {
-						r, err = preparedFloatToInt64(s)
-					} else {
-						r, err = preparedDecimalToInt64(s)
-					}
-					if err != nil {
-						if isPreparedNumericCastOutOfRange(err) {
-							return moerr.NewOutOfRangef(ctx, "int64", "value '%s'", s)
-						}
-						return moerr.NewInvalidArg(ctx, "cast to int", s)
-					}
-					if err = to.Append(T(r), false); err != nil {
-						return err
-					}
-					continue
-				}
 				var r int64
 				var err error
 				var rangeWarning explicitIntegerCastWarning
@@ -8796,26 +8740,6 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 				}
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
-				kind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
-				if len(explicit) > 0 && explicit[0] && bitSize == 64 &&
-					(kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal) {
-					var value uint64
-					if kind == vector.PrepareParamFloat {
-						value, tErr = preparedFloatToUint64(s)
-					} else {
-						value, tErr = preparedDecimalToUint64(s)
-					}
-					if tErr != nil {
-						if isPreparedNumericCastOutOfRange(tErr) {
-							return moerr.NewOutOfRangef(ctx, "uint64", "value '%s'", s)
-						}
-						return moerr.NewInvalidArg(ctx, "cast to uint64", s)
-					}
-					if tErr = to.Append(T(value), false); tErr != nil {
-						return tErr
-					}
-					continue
-				}
 				res = &s
 				if len(explicit) > 1 && explicit[1] {
 					val, integerPrefix, integerHasPrefix, integerOutOfRange, tErr =
@@ -8882,24 +8806,6 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 	return nil
 }
 
-// preparedNonFiniteFloat restores a non-finite FLOAT/DOUBLE prepared
-// parameter from its canonical transport text. Ordinary SQL strings, and
-// parameters of any other kind, keep the MySQL string conversion.
-func preparedNonFiniteFloat(kind vector.PrepareParamKind, v []byte) (float64, bool) {
-	if kind != vector.PrepareParamFloat {
-		return 0, false
-	}
-	switch convertByteSliceToString(v) {
-	case "NaN":
-		return math.NaN(), true
-	case "+Inf":
-		return math.Inf(1), true
-	case "-Inf":
-		return math.Inf(-1), true
-	}
-	return 0, false
-}
-
 func strToFloatWithProc[T constraints.Float](
 	ctx context.Context,
 	proc *process.Process,
@@ -8940,33 +8846,13 @@ func strToFloatWithProc[T constraints.Float](
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
 			}
-			paramKind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
-			if nonFinite, ok := preparedNonFiniteFloat(paramKind, v); ok {
-				// A FLOAT/DOUBLE parameter travels as Go's canonical text, so
-				// NaN and infinities arrive as "NaN", "+Inf" and "-Inf". The
-				// SQL string parser reads those as 0; restore the source value
-				// so consumers can see and reject it like the direct double.
-				r2 = nonFinite
-			} else if paramKind == vector.PrepareParamBoolean {
-				// Prepared Boolean values travel as canonical text. Restore their
-				// numeric category without changing ordinary SQL string coercion.
-				b, err := strconv.ParseBool(convertByteSliceToString(v))
-				if err != nil {
-					return moerr.NewInvalidArg(ctx, "prepared Boolean", convertByteSliceToString(v))
-				}
-				r2 = 0
-				if b {
-					r2 = 1
-				}
-			} else {
-				r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
-				if tErr != nil {
-					return tErr
-				}
-				if !isBinary && mode == SQLCompatibilityMySQL {
-					if err := diagnoseFloatText(proc, ctx, cast, convertByteSliceToString(v)); err != nil {
-						return err
-					}
+			r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
+			if tErr != nil {
+				return tErr
+			}
+			if !isBinary && mode == SQLCompatibilityMySQL {
+				if err := diagnoseFloatText(proc, ctx, cast, convertByteSliceToString(v)); err != nil {
+					return err
 				}
 			}
 			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
@@ -10316,6 +10202,100 @@ func appendBinaryToTextUtf8Warning(proc *process.Process, v []byte) {
 	}
 }
 
+// castBackingOverlaps reports overlap including spare capacity. Pre-growing a
+// result must not release storage still read through a source window.
+func castBackingOverlaps(left, right []byte) bool {
+	if cap(left) == 0 || cap(right) == 0 {
+		return false
+	}
+	l := uintptr(unsafe.Pointer(unsafe.SliceData(left[:cap(left)])))
+	r := uintptr(unsafe.Pointer(unsafe.SliceData(right[:cap(right)])))
+	if l <= r {
+		return r-l < uintptr(cap(left))
+	}
+	return l-r < uintptr(cap(right))
+}
+
+func castVectorsOverlap(source, result *vector.Vector) bool {
+	sourceData, sourceArea := source.GetData(), source.GetArea()
+	resultData, resultArea := result.GetData(), result.GetArea()
+	return castBackingOverlaps(sourceData, resultData) ||
+		castBackingOverlaps(sourceData, resultArea) ||
+		castBackingOverlaps(sourceArea, resultData) ||
+		castBackingOverlaps(sourceArea, resultArea)
+}
+
+// tryReserveAssignedText avoids repeated area growth for a new TEXT/BLOB
+// assignment result. Values requiring diagnostics or conversion fall back to
+// the ordinary row path. The result remains independently owned.
+func tryReserveAssignedText(
+	proc *process.Process,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Varlena],
+	length int,
+	toType types.Type,
+	selectList *FunctionSelectList,
+) (bool, error) {
+	source, result := from.GetSourceVector(), to.GetResultVector()
+	if proc == nil || source == nil || result == nil || length < 2 ||
+		(toType.Oid != types.T_text && toType.Oid != types.T_blob) ||
+		*result.GetType() != toType || source.GetType().Oid != toType.Oid ||
+		source == result || source.IsConst() || source.IsDictionary() ||
+		source.Length() != length || result.IsConst() || result.IsDictionary() ||
+		result.Length() != 0 || result.HasBorrowedBacking() ||
+		result.DataBackingKind() != vector.OwnedMPoolUnique ||
+		result.AreaBackingKind() != vector.OwnedMPoolUnique ||
+		cap(result.GetArea()) != 0 || len(source.GetArea()) == 0 ||
+		(selectList != nil && (selectList.IgnoreAllRow() || !selectList.ShouldEvalAllRow())) {
+		return false, nil
+	}
+	if castVectorsOverlap(source, result) {
+		return false, nil
+	}
+	total, externalValues := 0, 0
+	for row := 0; row < length; row++ {
+		value, null := from.GetStrValue(uint64(row))
+		if null || len(value) <= types.VarlenaInlineSize {
+			continue
+		}
+		if len(value) > math.MaxInt-total {
+			return false, nil
+		}
+		total += len(value)
+		externalValues++
+	}
+	// One external value already needs only one area allocation. Avoid an
+	// extra validation pass and preserve the existing single-value path.
+	if externalValues < 2 || uint64(total) > math.MaxUint32 ||
+		int64(total) > mpool.MaxAllocationSize() {
+		return false, nil
+	}
+	byteWidth, hasByteWidth := stringFamilyByteWidth(toType)
+	for row := 0; row < length; row++ {
+		value, null := from.GetStrValue(uint64(row))
+		if null {
+			continue
+		}
+		// Leave diagnostics and their row order to the ordinary path.
+		if hasByteWidth && len(value) > byteWidth {
+			return false, nil
+		}
+		if err := types.ValidateCollationValue(toType, value); err != nil {
+			return false, nil
+		}
+	}
+	if err := result.PreExtendWithArea(0, total, proc.Mp()); err != nil {
+		return true, err
+	}
+	for row := 0; row < length; row++ {
+		value, null := from.GetStrValue(uint64(row))
+		if err := to.AppendBytes(value, null); err != nil {
+			return true, err
+		}
+	}
+	return true, nil
+}
+
 func strToStr(
 	ctx context.Context,
 	proc *process.Process,
@@ -10323,6 +10303,11 @@ func strToStr(
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type,
 	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool,
 	mode castMode, selectList *FunctionSelectList) error {
+	if mode.isAssignment() {
+		if done, err := tryReserveAssignedText(proc, from, to, length, toType, selectList); done {
+			return err
+		}
+	}
 	totype := to.GetType()
 	destLen := int(totype.Width)
 	trimComparisonKey := mode == castModeComparison &&
@@ -10566,35 +10551,6 @@ func strToBit(
 				return err
 			}
 		} else {
-			// Prepared parameters are transported internally in canonical text.
-			// Provenance restores their source conversion category;
-			// SQL strings containing the same characters retain byte-string semantics.
-			kind := from.GetSourceVector().GetPrepareParamKindAt(i)
-			if kind != vector.PrepareParamNone {
-				input := string(v)
-				var value uint64
-				var inRange bool
-				var err error
-				switch kind {
-				case vector.PrepareParamInteger:
-					value, inRange, err = preparedIntegerToBit(input, bitSize)
-				case vector.PrepareParamFloat:
-					value, inRange, err = preparedFloatToBit(input, bitSize)
-				case vector.PrepareParamDecimal:
-					value, inRange, err = preparedDecimalToBit(input, bitSize)
-				case vector.PrepareParamBoolean:
-					value, inRange, err = preparedBooleanToBit(input)
-				default:
-					return moerr.NewInternalErrorf(ctx, "unsupported prepared parameter kind %d", kind)
-				}
-				if err != nil || (!inRange && !statementIgnore(proc)) {
-					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", input)
-				}
-				if err = to.Append(value, false); err != nil {
-					return err
-				}
-				continue
-			}
 			if len(v) > 8 {
 				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
 			}
@@ -10613,100 +10569,6 @@ func strToBit(
 		}
 	}
 	return nil
-}
-
-// preparedIntegerToBit converts the canonical decimal representation emitted
-// by COM_STMT_EXECUTE. Negative values can only originate from signed protocol
-// integers; non-negative signed and unsigned values share the same BIT range.
-func preparedIntegerToBit(input string, bitSize int) (value uint64, inRange bool, err error) {
-	if strings.HasPrefix(input, "-") {
-		signed, parseErr := strconv.ParseInt(input, 10, 64)
-		if parseErr != nil {
-			return 0, false, parseErr
-		}
-		if signed < 0 && bitSize != 64 {
-			return 0, false, nil
-		}
-		return uint64(signed), true, nil
-	}
-
-	unsigned, parseErr := strconv.ParseUint(input, 10, 64)
-	if parseErr != nil {
-		return 0, false, parseErr
-	}
-	maxValue := maxBitValue(bitSize)
-	if unsigned > maxValue {
-		return maxValue, false, nil
-	}
-	return unsigned, true, nil
-}
-
-func preparedFloatToBit(input string, bitSize int) (value uint64, inRange bool, err error) {
-	floating, parseErr := strconv.ParseFloat(input, 64)
-	if parseErr != nil {
-		return 0, false, parseErr
-	}
-	if floating < 0 {
-		return 0, false, nil
-	}
-	rounded := math.Round(floating)
-	if math.IsNaN(rounded) || floatExceedsBitRange(rounded, bitSize) {
-		return maxBitValue(bitSize), false, nil
-	}
-	return uint64(rounded), true, nil
-}
-
-func preparedDecimalToBit(input string, bitSize int) (value uint64, inRange bool, err error) {
-	if input == "" {
-		return 0, false, &strconv.NumError{Func: "preparedDecimalToBit", Num: input, Err: strconv.ErrSyntax}
-	}
-	negative := input[0] == '-'
-	digits := input
-	if input[0] == '-' || input[0] == '+' {
-		digits = input[1:]
-	}
-	integerPart, fractionPart, foundDot := strings.Cut(digits, ".")
-	if integerPart == "" || (foundDot && fractionPart == "") || strings.Contains(fractionPart, ".") {
-		return 0, false, &strconv.NumError{Func: "preparedDecimalToBit", Num: input, Err: strconv.ErrSyntax}
-	}
-	nonZero := false
-	for _, part := range []string{integerPart, fractionPart} {
-		for i := 0; i < len(part); i++ {
-			if part[i] < '0' || part[i] > '9' {
-				return 0, false, &strconv.NumError{Func: "preparedDecimalToBit", Num: input, Err: strconv.ErrSyntax}
-			}
-			nonZero = nonZero || part[i] != '0'
-		}
-	}
-	// Decimal values are normalized before the direct typed cast, so a signed
-	// zero is zero while every other negative decimal remains out of range.
-	if negative && nonZero {
-		return 0, false, nil
-	}
-
-	unsigned, parseErr := strconv.ParseUint(integerPart, 10, 64)
-	if parseErr != nil {
-		if numErr, ok := parseErr.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
-			return maxBitValue(bitSize), false, nil
-		}
-		return 0, false, parseErr
-	}
-	maxValue := maxBitValue(bitSize)
-	if unsigned > maxValue {
-		return maxValue, false, nil
-	}
-	return unsigned, true, nil
-}
-
-func preparedBooleanToBit(input string) (value uint64, inRange bool, err error) {
-	boolean, parseErr := strconv.ParseBool(input)
-	if parseErr != nil {
-		return 0, false, parseErr
-	}
-	if boolean {
-		return 1, true, nil
-	}
-	return 0, true, nil
 }
 
 func strToArray[T types.ArrayElement](

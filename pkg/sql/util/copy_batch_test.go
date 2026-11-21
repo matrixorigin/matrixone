@@ -103,8 +103,6 @@ func TestCopyBatchCrossesAllocationOwnershipBoundary(t *testing.T) {
 		1,
 		1,
 		2,
-		3,
-		4,
 	)
 	require.NoError(t, err)
 
@@ -254,7 +252,7 @@ func TestCopyBatchDestinationAdmission(t *testing.T) {
 			require.NoError(t, err)
 			account, err := registry.Open(limit)
 			require.NoError(t, err)
-			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerTxnWorkspace, 1, 2, 3, 4)
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerTxnWorkspace, 1, 2)
 			require.NoError(t, err)
 			dst, err := CopyBatchWithAllocation(src, proc, selection)
 			if limit == 1<<20 {
@@ -290,7 +288,7 @@ func BenchmarkCopyBatchDestinationAdmission(b *testing.B) {
 	require.NoError(b, err)
 	account, err := registry.Open(64 << 20)
 	require.NoError(b, err)
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerTxnWorkspace, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerTxnWorkspace, 1, 2)
 	require.NoError(b, err)
 	generation, err := proc.GetExecutionResourceBudget()
 	require.NoError(b, err)
@@ -304,7 +302,7 @@ func BenchmarkCopyBatchDestinationAdmission(b *testing.B) {
 		require.NoError(b, err)
 		generation.Close()
 	})
-	cnSelection, err := vector.NewAllocationAccountSelection(cnAccount, mpool.AllocationOwnerTxnWorkspace, 1, 2, 3, 4)
+	cnSelection, err := vector.NewAllocationAccountSelection(cnAccount, mpool.AllocationOwnerTxnWorkspace, 1, 2)
 	require.NoError(b, err)
 	for _, tc := range []struct {
 		name      string
@@ -334,9 +332,9 @@ func TestCopyBatchKeepsSourceAndDestinationChargesIndependent(t *testing.T) {
 	require.NoError(t, err)
 	target, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	srcSelection, err := vector.NewAllocationAccountSelection(source, mpool.AllocationOwnerDML, 1, 2, 3, 4)
+	srcSelection, err := vector.NewAllocationAccountSelection(source, mpool.AllocationOwnerDML, 1, 2)
 	require.NoError(t, err)
-	dstSelection, err := vector.NewAllocationAccountSelection(target, mpool.AllocationOwnerTxnWorkspace, 1, 2, 3, 4)
+	dstSelection, err := vector.NewAllocationAccountSelection(target, mpool.AllocationOwnerTxnWorkspace, 1, 2)
 	require.NoError(t, err)
 	src := batch.NewOffHeapWithSize(1)
 	require.NoError(t, src.SetAllocationAccount(srcSelection))

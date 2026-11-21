@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -400,7 +399,7 @@ func bindPreparedIntegerValue(ctx context.Context, column, source *Expr) (*Expr,
 	if binding.Type.Oid == types.T(source.Typ.Id) {
 		if value, ok := state.values[source.GetP().Pos].(ParamValue); ok &&
 			value.IsBinaryProtocol && !value.IsBin && !value.IsBinaryString &&
-			value.PrepareParamKind == vector.PrepareParamInteger {
+			value.PrepareParamKind == types.StringConversionInteger {
 			narrowed := DeepCopyExpr(source)
 			narrowed.Typ = converted.Typ
 			return narrowed, true, nil
@@ -562,7 +561,7 @@ func specializePreparedTemporalDecimalCasts(proc *process.Process, state *prepar
 		if warned || vec == nil || vec.Length() == 0 {
 			return nil
 		}
-		literal := rule.GetConstantValue(vec, false, 0)
+		literal := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(child, proc))
 		if literal != nil {
 			rule.PreserveFoldedDecimalLiteralSemantics(child, literal)
 			child.Expr = &plan.Expr_Lit{Lit: literal}
@@ -590,29 +589,6 @@ func (builder *QueryBuilder) preparedParameterDiagnosticsFree() bool {
 // reused. Keep that lifetime separate from PREPARE's unresolved-type mode.
 func (builder *QueryBuilder) isReusablePlan() bool {
 	return builder.isPrepareStatement || preparedBindingState(builder.GetContext()) != nil
-}
-
-// lowerPreparedSourceTransports runs after SQL binding and optimization. Keep
-// the physical representation compatible with existing readers and remote CNs
-// without letting transport casts participate in semantic type selection.
-func lowerPreparedSourceTransports(ctx context.Context, p *Plan) error {
-	return plan.VisitExpressionsInOwner(p, func(root *Expr) error {
-		return plan.VisitExprTree(root, func(expr *Expr) error {
-			if expr.GetP() == nil || types.T(expr.Typ.Id).IsMySQLString() || expr.Typ.Id == int32(types.T_any) {
-				return nil
-			}
-			source := &Expr{
-				Typ:  plan.Type{Id: int32(types.T_text)},
-				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: expr.GetP().Pos}},
-			}
-			physical, err := makePlan2CastExpr(ctx, source, expr.Typ)
-			if err != nil {
-				return err
-			}
-			*expr = *physical
-			return nil
-		})
-	})
 }
 
 // SQL EXECUTE exposes a bare marker as TEXT, even when its source domain is
@@ -742,13 +718,11 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		if !ok {
 			continue
 		}
-		if name == "member of" && i == 0 && binding.Type.Oid.IsArrayRelate() {
-			// MEMBER OF rejects SQL arrays with an argument-specific runtime
-			// error. Keep a direct prepared array in its TEXT transport form so
-			// the existing checker can report that error using source metadata.
-			args[i] = &Expr{Typ: makeSimplePlan2Type(types.T_text),
-				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: source.GetP().Pos}}}
-			continue
+		if name == "member of" && i == 0 &&
+			(binding.Type.Oid.IsArrayRelate() || binding.Type.Oid == types.T_bit) {
+			// MEMBER OF rejects SQL arrays. A protocol BIT parameter carries no
+			// width, so its JSON value would be ambiguous: reject it too.
+			return nil, moerr.NewInvalidTypeForJSON(ctx, 1, "member of")
 		}
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
 			args[1-i] != nil && args[1-i].Typ.Id == int32(types.T_float32) &&
@@ -925,6 +899,31 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			(isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
 				preparedSQLExecuteNumericResultConsumer(name) || isPreparedNumericComparisonContext(name)):
 			target = binding.NumericType
+		}
+		if name == "bit_count" && len(args) == 1 &&
+			(binding.Type.Oid == types.T_date || binding.Type.Oid == types.T_datetime ||
+				binding.Type.Oid == types.T_time || binding.Type.Oid == types.T_timestamp) {
+			// A remembered numeric target applies to later string executions.
+			// Native temporal values must reach bindIntegerFunctionArguments
+			// unchanged so their own rounding and calendar conversion win.
+			continue
+		}
+		if name == "bit_count" && len(args) == 1 && binding.Type.Oid.IsMySQLString() {
+			// typeswitch:partial Prepared BIT_COUNT numeric latches use canonical target types;
+			// other float-family members cannot be remembered numeric targets.
+			switch target.Oid {
+			case types.T_int64, types.T_uint64, types.T_float64, types.T_decimal256:
+				// A numeric latch changes later string executions to MySQL's
+				// numeric-prefix conversion. Generic CAST is strict and cannot
+				// represent that consumer-specific contract or its diagnostics.
+				converted, err := appendCastBeforeExprWithOverload(
+					ctx, source, makePlan2Type(&target), planfunction.PreparedBitCountCastOverload)
+				if err != nil {
+					return nil, err
+				}
+				args[i] = converted
+				continue
+			}
 		}
 		if target.Oid != types.T_any {
 			var err error
@@ -1261,9 +1260,6 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	}
 	p := &Plan{Plan: &plan.Plan_Query{Query: query}, IsPrepare: true}
 	presentPreparedSQLResults(planning, query)
-	if err = lowerPreparedSourceTransports(planning, p); err != nil {
-		return nil, err
-	}
 	state := preparedBindingState(planning)
 	return &PreparedExecutionPlan{TemporalTypes: state.temporalTypes, Plan: p, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
 		DiagnosticFree: state.diagnosticFree, ValueDependent: state.valueDependent}, nil

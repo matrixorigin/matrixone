@@ -44,8 +44,8 @@ const rightDedupJoinAllocationSiteMatched mpool.AllocationSite = 90
 const (
 	rightDedupJoinAllocationSiteResultData mpool.AllocationSite = iota + 114
 	rightDedupJoinAllocationSiteResultArea
-	rightDedupJoinAllocationSiteResultNulls
-	rightDedupJoinAllocationSiteResultGrouping
+	_ // reserved: was rightDedupJoinAllocationSiteResultNulls
+	_ // reserved: was rightDedupJoinAllocationSiteResultGrouping
 )
 
 type container struct {
@@ -120,8 +120,6 @@ func (rightDedupJoin *RightDedupJoin) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		rightDedupJoinAllocationSiteResultData,
 		rightDedupJoinAllocationSiteResultArea,
-		rightDedupJoinAllocationSiteResultNulls,
-		rightDedupJoinAllocationSiteResultGrouping,
 	)
 	if err != nil {
 		return err
@@ -239,7 +237,6 @@ func (ctr *container) cleanHashMap() {
 }
 
 func (ctr *container) cleanBitmap(proc *process.Process) {
-	colexec.FreeAccountedBitmap(ctr.matched, proc.Mp())
 	ctr.matched = nil
 }
 

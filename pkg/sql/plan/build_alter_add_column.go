@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -487,7 +488,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 				functionalOwners[part] = col
 			}
 		}
-		indexInfo.Parts = RemoveIf[string](indexInfo.Parts, func(t string) bool {
+		indexInfo.Parts = slices.DeleteFunc(indexInfo.Parts, func(t string) bool {
 			return catalog.ResolveAlias(t) == colName
 		})
 		for ordinal, part := range indexInfo.Parts {
@@ -552,7 +553,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 					if !dropIndex {
 						continue
 					}
-					tbInfo.Indexes = RemoveIf[*IndexDef](tbInfo.Indexes, func(def *IndexDef) bool {
+					tbInfo.Indexes = slices.DeleteFunc(tbInfo.Indexes, func(def *IndexDef) bool {
 						return def.IndexName == indexInfo.IndexName
 					})
 					i--
@@ -569,7 +570,7 @@ func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo 
 	if tbInfo.Pkey == nil || tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return nil
 	} else {
-		tbInfo.Pkey.Names = RemoveIf[string](tbInfo.Pkey.Names, func(t string) bool {
+		tbInfo.Pkey.Names = slices.DeleteFunc(tbInfo.Pkey.Names, func(t string) bool {
 			return t == colName
 		})
 
@@ -648,7 +649,7 @@ func handleDropColumnPosition(ctx context.Context, tableDef *TableDef, col *ColD
 			break
 		}
 	}
-	tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(t *ColDef) bool {
+	tableDef.Cols = slices.DeleteFunc(tableDef.Cols, func(t *ColDef) bool {
 		return t.Name == col.Name
 	})
 	if dropPos >= 0 {
@@ -667,7 +668,7 @@ func handleDropColumnWithClusterBy(ctx context.Context, copyTableDef *TableDef, 
 		} else {
 			clNames = []string{clusterBy.Name}
 		}
-		clNames = RemoveIf[string](clNames, func(t string) bool {
+		clNames = slices.DeleteFunc(clNames, func(t string) bool {
 			return t == originCol.Name
 		})
 

@@ -34,8 +34,10 @@ type persistedDDLReplayKey struct{}
 // re-authoring unaffected computation using the current session.
 type persistedDDLReplay struct {
 	tableName string
-	columns   map[string]*replayedColumnExpressions
-	checks    map[string]*planpb.CheckDef
+	// target is borrowed and remains immutable while this replay is active.
+	target  *planpb.TableDef
+	columns map[string]*replayedColumnExpressions
+	checks  map[string]*planpb.CheckDef
 	// Inverse of the visible CREATE coordinates, used by in-place MODIFY.
 	rawPositions map[int32]int32
 	err          error
@@ -106,6 +108,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 	}
 	replay := &persistedDDLReplay{
 		tableName:    strings.ToLower(target.Name),
+		target:       target,
 		columns:      make(map[string]*replayedColumnExpressions),
 		checks:       make(map[string]*planpb.CheckDef),
 		rawPositions: make(map[int32]int32),

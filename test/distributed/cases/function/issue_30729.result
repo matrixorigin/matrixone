@@ -1,0 +1,139 @@
+drop table if exists src;
+drop table if exists out_if;
+create table src(id int primary key, v varchar(20));
+insert into src values (1, 'hello-long'), (0, 'zero-row'), (2, ''), (3, '你好'), (4, unhex('410042'));
+select length(if(id=0, null, cast(v as binary))) as len_then_null from src order by id;
+➤ len_then_null[-5,64,0]  𝄀
+null  𝄀
+10  𝄀
+0  𝄀
+6  𝄀
+3
+select hex(if(id=0, null, cast(v as binary))) as hex_then_null from src order by id;
+➤ hex_then_null[-1,16383,0]  𝄀
+null  𝄀
+68656C6C6F2D6C6F6E67  𝄀
+  𝄀
+E4BDA0E5A5BD  𝄀
+410042
+select length(if(id=0, cast(v as binary), null)) as len_else_null from src order by id;
+➤ len_else_null[-5,64,0]  𝄀
+8  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
+select hex(if(id=0, cast(v as binary), null)) as hex_else_null from src where id=0;
+➤ hex_else_null[-1,16383,0]  𝄀
+7A65726F2D726F77
+select length(cast(v as binary)) as len_direct, hex(cast(v as binary)) as hex_direct from src order by id;
+➤ len_direct[-5,64,0]  ¦  hex_direct[-1,16383,0]  𝄀
+8  ¦  7A65726F2D726F77  𝄀
+10  ¦  68656C6C6F2D6C6F6E67  𝄀
+0  ¦    𝄀
+6  ¦  E4BDA0E5A5BD  𝄀
+3  ¦  410042
+select length(ifnull(cast(v as binary), null)) as len_ifnull from src order by id;
+➤ len_ifnull[-5,64,0]  𝄀
+8  𝄀
+10  𝄀
+0  𝄀
+6  𝄀
+3
+select length(case when id=0 then null else cast(v as binary) end) as len_case from src order by id;
+➤ len_case[-5,64,0]  𝄀
+null  𝄀
+10  𝄀
+0  𝄀
+6  𝄀
+3
+select length(coalesce(cast(v as binary), null)) as len_coalesce from src order by id;
+➤ len_coalesce[-5,64,0]  𝄀
+8  𝄀
+10  𝄀
+0  𝄀
+6  𝄀
+3
+select length(if(id=0, cast(v as binary), cast(v as binary))) as len_two from src order by id;
+➤ len_two[-5,64,0]  𝄀
+8  𝄀
+10  𝄀
+0  𝄀
+6  𝄀
+3
+select length(if(id=0, null, cast(v as binary(3)))) as len_b3 from src order by id;
+➤ len_b3[-5,64,0]  𝄀
+null  𝄀
+3  𝄀
+3  𝄀
+3  𝄀
+3
+select hex(if(id=0, null, cast(v as binary(3)))) as hex_b3 from src order by id;
+➤ hex_b3[12,6,0]  𝄀
+null  𝄀
+68656C  𝄀
+000000  𝄀
+E4BDA0  𝄀
+410042
+select length(if(id=0, null, cast(v as binary(7)))) as len_b7 from src order by id;
+➤ len_b7[-5,64,0]  𝄀
+null  𝄀
+7  𝄀
+7  𝄀
+7  𝄀
+7
+select hex(if(id=0, null, cast(v as binary(7)))) as hex_b7 from src order by id;
+➤ hex_b7[12,14,0]  𝄀
+null  𝄀
+68656C6C6F2D6C  𝄀
+00000000000000  𝄀
+E4BDA0E5A5BD00  𝄀
+41004200000000
+select length(if(id=0, null, cast(v as binary(20)))) as len_b20 from src order by id;
+➤ len_b20[-5,64,0]  𝄀
+null  𝄀
+20  𝄀
+20  𝄀
+20  𝄀
+20
+select hex(if(id=0, null, cast(v as binary(20)))) as hex_b20 from src order by id;
+➤ hex_b20[12,40,0]  𝄀
+null  𝄀
+68656C6C6F2D6C6F6E6700000000000000000000  𝄀
+0000000000000000000000000000000000000000  𝄀
+E4BDA0E5A5BD0000000000000000000000000000  𝄀
+4100420000000000000000000000000000000000
+select length(if(id=0, cast(v as binary(3)), cast(v as binary))) as len_mixed from src order by id;
+➤ len_mixed[-5,64,0]  𝄀
+3  𝄀
+10  𝄀
+0  𝄀
+6  𝄀
+3
+create table out_if as select if(id=0, null, cast(v as binary)) as b from src;
+select length(b) as ctas_len, hex(b) as ctas_hex from out_if order by length(b), hex(b);
+➤ ctas_len[-5,64,0]  ¦  ctas_hex[-1,16383,0]  𝄀
+null  ¦  null  𝄀
+0  ¦    𝄀
+3  ¦  410042  𝄀
+6  ¦  E4BDA0E5A5BD  𝄀
+10  ¦  68656C6C6F2D6C6F6E67
+select count(*) as ctas_null_count from out_if where b is null;
+➤ ctas_null_count[-5,64,0]  𝄀
+1
+prepare s from 'select length(if(id=0, null, cast(v as binary))) from src where id = ?';
+set @a = 1;
+execute s using @a;
+➤ length(if(src.id = 0, null, cast(src.v as binary)))[-5,64,0]  𝄀
+10
+set @a = 0;
+execute s using @a;
+➤ length(if(src.id = 0, null, cast(src.v as binary)))[-5,64,0]  𝄀
+null
+set @a = 2;
+execute s using @a;
+➤ length(if(src.id = 0, null, cast(src.v as binary)))[-5,64,0]  𝄀
+0
+deallocate prepare s;
+drop table if exists out_if;
+drop table if exists src;

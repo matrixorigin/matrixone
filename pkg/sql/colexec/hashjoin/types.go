@@ -54,23 +54,25 @@ const hashJoinAllocationSiteAsofIndex mpool.AllocationSite = 106
 const (
 	hashJoinAllocationSiteResultData mpool.AllocationSite = iota + 102
 	hashJoinAllocationSiteResultArea
-	hashJoinAllocationSiteResultNulls
-	hashJoinAllocationSiteResultGrouping
+	_ // reserved: was hashJoinAllocationSiteResultNulls
+	_ // reserved: was hashJoinAllocationSiteResultGrouping
 )
 
 const (
 	hashJoinAllocationSiteAsofCandidateData mpool.AllocationSite = iota + 107
 	hashJoinAllocationSiteAsofCandidateArea
-	hashJoinAllocationSiteAsofCandidateNulls
-	hashJoinAllocationSiteAsofCandidateGrouping
+	_ // reserved: was hashJoinAllocationSiteAsofCandidateNulls
+	_ // reserved: was hashJoinAllocationSiteAsofCandidateGrouping
 	hashJoinAllocationSiteAsofCandidateState
 )
 
 type container struct {
-	state       int
-	itr         hashmap.Iterator
-	rightBats   []*batch.Batch
-	rightRowCnt int64
+	dictionaryBoundary vm.DictionaryOutputState
+	probeOutput        *identityProbeOutput
+	state              int
+	itr                hashmap.Iterator
+	rightBats          []*batch.Batch
+	rightRowCnt        int64
 	// globalBuildRowCnt is independent of the currently loaded spill bucket.
 	// MARK join needs the global empty-build fact for SQL three-valued logic.
 	globalBuildRowCnt int64
@@ -78,8 +80,13 @@ type container struct {
 	joinDiagnosticActivation []colexec.ExpressionExecutor
 	joinDiagnosticActivated  bool
 
-	leftBat *batch.Batch
-	resBat  *batch.Batch
+	leftBat          *batch.Batch
+	resBat           *batch.Batch
+	outputRowLimit   int
+	buildAreaChecked bool
+	checkBuildArea   bool
+	checkProbeArea   bool
+	pendingOutput    outputRow
 
 	lastIdx int
 	// process idx for zvs and vs, which returned by hashmap.Iterator.Find()
@@ -290,8 +297,6 @@ func (hashJoin *HashJoin) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		hashJoinAllocationSiteResultData,
 		hashJoinAllocationSiteResultArea,
-		hashJoinAllocationSiteResultNulls,
-		hashJoinAllocationSiteResultGrouping,
 	)
 	if err != nil {
 		return err
@@ -301,8 +306,6 @@ func (hashJoin *HashJoin) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		hashJoinAllocationSiteAsofCandidateData,
 		hashJoinAllocationSiteAsofCandidateArea,
-		hashJoinAllocationSiteAsofCandidateNulls,
-		hashJoinAllocationSiteAsofCandidateGrouping,
 	)
 	if err != nil {
 		return err
@@ -400,6 +403,7 @@ func (hashJoin *HashJoin) Release() {
 }
 
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	hashJoin.observeProbeOutput()
 	if hashJoin.JoinDiagnostic != nil {
 		hashJoin.JoinDiagnostic.Reset()
 	}
@@ -441,6 +445,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	hashJoin.observeProbeOutput()
 	if hashJoin.JoinDiagnostic != nil {
 		hashJoin.JoinDiagnostic.Reset()
 	}
@@ -517,6 +522,10 @@ func (ctr *container) cleanNonEqCondExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
+	if ctr.probeOutput != nil {
+		ctr.probeOutput.free(proc)
+		ctr.probeOutput = nil
+	}
 	ctr.rightBats = nil
 	if ctr.resBat != nil {
 		ctr.resBat.Clean(proc.GetMPool())
@@ -534,7 +543,6 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 }
 
 func (ctr *container) freeRightRowsMatched(proc *process.Process) {
-	colexec.FreeAccountedBitmap(ctr.rightRowsMatched, proc.Mp())
 	ctr.rightRowsMatched = nil
 }
 
@@ -547,6 +555,10 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 }
 
 func (ctr *container) cleanHashMap() {
+	ctr.buildAreaChecked = false
+	ctr.checkBuildArea = false
+	ctr.checkProbeArea = false
+	ctr.pendingOutput = outputRow{}
 	hashmap.IteratorClearOwner(ctr.itr)
 	ctr.itr = nil
 	if ctr.mp != nil {

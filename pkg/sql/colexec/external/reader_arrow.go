@@ -45,8 +45,6 @@ const (
 	arrowRangeAllocationSite mpool.AllocationSite = 1
 	arrowVectorDataSite      mpool.AllocationSite = 3
 	arrowVectorAreaSite      mpool.AllocationSite = 4
-	arrowVectorNullsSite     mpool.AllocationSite = 5
-	arrowVectorGroupingSite  mpool.AllocationSite = 6
 	arrowMaxOutputRows                            = 100_000
 )
 
@@ -228,8 +226,6 @@ func NewArrowReader(
 		mpool.AllocationOwnerExternal,
 		arrowVectorDataSite,
 		arrowVectorAreaSite,
-		arrowVectorNullsSite,
-		arrowVectorGroupingSite,
 	)
 	if err != nil {
 		return nil, err
