@@ -32,7 +32,7 @@ func TestSubstringASCIIFastPath(t *testing.T) {
 				// Preserve the former rune-based text semantics, including
 				// replacement of invalid UTF-8, independently of the fast path.
 				runes := []rune(input)
-				left, right := substringBounds(len(runes), bounds[0], bounds[1], withLength)
+				left, right := StringSliceBounds(len(runes), bounds[0], bounds[1], withLength)
 				got := substringByDomain([]byte(input), bounds[0], bounds[1], withLength, false)
 				require.Equal(t, string(runes[left:right]), string(got))
 			}

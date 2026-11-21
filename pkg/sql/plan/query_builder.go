@@ -4475,6 +4475,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		rootID = builder.rewriteEffectlessAggToProject(rootID)
 		var points compositePointCapture
+		builder.deferredBitCountFilter = false
 		rootID, points, err = builder.optimizeFilters(rootID, &pointBudget)
 		if err != nil {
 			return nil, err
@@ -4500,6 +4501,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+		if builder.deferredBitCountFilter {
+			// A removed projection can expose a scan-local predicate. Retry
+			// before costing joins so it can reduce their input cardinality.
+			rootID, _ = builder.pushdownFilters(rootID, nil, false)
+		}
 		builder.removeUnobservedCountSorts(rootID)
 		if err = builder.distributeTextDomainInQuery(); err != nil {
 			return nil, err
@@ -6816,6 +6822,22 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	projectionBinder = NewProjectionBinder(builder, ctx, havingBinder)
 	if resultLen, notCacheable, err = builder.bindProjection(ctx, projectionBinder, selectList, notCacheable); err != nil {
 		return
+	}
+	groupByCanReduce := expandedSelectClause != nil && (expandedSelectClause.GroupBy == nil ||
+		(!expandedSelectClause.GroupBy.Apart && !expandedSelectClause.GroupBy.GroupingSets &&
+			!expandedSelectClause.GroupBy.Rollup && !expandedSelectClause.GroupBy.Cube))
+	singleValueSelectShape := expandedSelectClause != nil && resultLen == 1 && len(ctx.bindings) == 0 &&
+		groupByCanReduce && !ctx.hasHaving &&
+		len(ctx.aggregates) == 0 && len(ctx.windows) == 0 && len(ctx.times) == 0 &&
+		!ctx.sampleFunc.hasSampleFunc
+	ctx.reducibleTablelessScalar = singleValueSelectShape
+	if expandedSelectClause != nil {
+		ctx.canReduceInToSubqueryFreeComparison = singleValueSelectShape &&
+			astLimit == nil && astRankOption == nil && len(expandedSelectClause.Windows) == 0 &&
+			!ctx.singleProjectionRetainsSubquery
+	}
+	if astLimit != nil || astRankOption != nil {
+		ctx.canReduceInToSubqueryFreeComparison = false
 	}
 	var viewRawProjects []*plan.Expr
 	if ctx.restoreViewMySQLSpecialTypes && astOrderBy != nil && !ctx.isDistinct &&
@@ -9677,7 +9699,7 @@ func (builder *QueryBuilder) bindWhere(
 	// is flattening one conjunct. Publish the complete bound WHERE list before
 	// walking it so the optimization is independent of SQL predicate order.
 	// The list is replaced with the flattened predicates below.
-	ctx.whereFilters = whereList
+	ctx.setWhereFilters(whereList)
 	// Apply total, subquery-independent conjuncts before building the domain
 	// of a dependent subquery. Otherwise replay can start recursive partitions
 	// for rows that these conjuncts remove. Keep unsafe predicates in place:
@@ -9720,7 +9742,7 @@ func (builder *QueryBuilder) bindWhere(
 			return
 		}
 	}
-	ctx.whereFilters = boundFilterList
+	ctx.setWhereFilters(boundFilterList)
 
 	newNodeID = nodeID
 	return
@@ -10219,8 +10241,14 @@ func (builder *QueryBuilder) bindProjection(
 	}
 
 	resultLen = len(ctx.projects)
+	ctx.hasDependentProjectionSubquery = false
+	ctx.singleProjectionRetainsSubquery = resultLen == 1 &&
+		bitCountProjectionRetainsSubqueryAfterReduction(builder, bitCountProjectionSource(ctx, ctx.projects[0]), true)
 	ctx.projectSemanticKeys = ctx.projectSemanticKeys[:0]
 	for i, proj := range ctx.projects {
+		if !ctx.hasDependentProjectionSubquery && bitCountProjectionHasDependentSubquery(builder, proj) {
+			ctx.hasDependentProjectionSubquery = true
+		}
 		if err = rejectStandaloneIntervalExpr(builder.GetContext(), proj, "SELECT list"); err != nil {
 			return
 		}
@@ -11680,6 +11708,11 @@ func (builder *QueryBuilder) bindValues(
 				Expr: planExpr,
 			})
 		}
+	}
+	if rowCount == 1 && colCnt == 1 {
+		ctx.singleProjectionRetainsSubquery = bitCountProjectionRetainsSubqueryAfterReduction(
+			builder, rowSetData.Cols[0].Data[0].Expr, true)
+		ctx.canReduceInToSubqueryFreeComparison = !ctx.singleProjectionRetainsSubquery
 	}
 	nodeUUID, _ := uuid.NewV7()
 	nodeID = builder.appendNode(&plan.Node{

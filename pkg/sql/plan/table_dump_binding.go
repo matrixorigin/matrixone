@@ -54,6 +54,7 @@ type tableDumpExpressionVisitor struct {
 	hasDivision           bool
 	hasIntegerDivision    bool
 	hasSpecial            bool
+	hasBitCount           bool
 	hasTimestampAdd       bool
 	hasUnixTimestamp      bool
 	hasJSON               bool
@@ -72,6 +73,8 @@ func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 	}
 	if fn, ok := e.(*tree.FuncExpr); ok {
 		switch numericAstFunctionName(fn) {
+		case "bit_count":
+			v.hasBitCount = true
 		case "format", "makedate", "maketime":
 			v.hasSpecial = true
 		case "time":
@@ -253,6 +256,7 @@ const (
 	tableDumpBindingPreIntegerDecimal        tableDumpBindingMode = 1 << 15
 	tableDumpBindingPreDecimalPrecision      tableDumpBindingMode = 1 << 16
 	tableDumpBindingPreTimeNullability       tableDumpBindingMode = 1 << 17
+	tableDumpBindingReleasedBitCount         tableDumpBindingMode = 1 << 18
 )
 
 const tableDumpBindingLegacyFloat tableDumpBindingMode = 1 << 11
@@ -438,7 +442,10 @@ func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, ite
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability | tableDumpBindingReleasedBitCount)
+	if mode&tableDumpBindingReleasedBitCount != 0 {
+		bindCtx = context.WithValue(bindCtx, releasedBitCountDumpBindingKey{}, true)
+	}
 	if mode&tableDumpBindingPreDecimalPrecision != 0 {
 		bindCtx = function.WithLegacyDecimalIntermediatePrecision(bindCtx)
 	}
@@ -1088,6 +1095,14 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					for _, mode := range baseModes {
 						modes = append(modes, mode|tableDumpBindingPreIntegerDecimal)
 					}
+				}
+			}
+			if visit.hasBitCount {
+				// Keep the applicable proof modes for other calls in the same
+				// expression. The only additional BIT_COUNT binding is the
+				// one shipped by 4.2.8.
+				for _, mode := range modes {
+					modes = append(modes, mode|tableDumpBindingReleasedBitCount)
 				}
 			}
 			// All session witnesses share the ordinary cancellation and total

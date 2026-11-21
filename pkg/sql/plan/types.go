@@ -398,6 +398,8 @@ type QueryBuilder struct {
 	// mixedDomainCoalesce is set when the statement binds a binary-typed
 	// COALESCE that can return a text value; see coalesce_text_domain.go.
 	mixedDomainCoalesce bool
+	// A filter on a mixed-conversion alias must wait for projection removal.
+	deferredBitCountFilter bool
 
 	updateTargetScope *updateTargetScope
 
@@ -1090,13 +1092,19 @@ type BindContext struct {
 	// groupConcatByExpr records the physical aggregate slot for each GROUP_CONCAT
 	// AST node. HAVING is bound before SELECT, so an alias may materialize the
 	// aggregate first; the later SELECT occurrence must reuse that exact slot.
-	groupConcatByExpr      map[*tree.FuncExpr]int32
-	sampleByAst            map[string]int32
-	windowByAst            map[string]int32
-	projectByExpr          map[string]int32
-	timeByAst              map[string]int32
-	whereFilters           []*plan.Expr
-	flattenedVolatileExprs map[int32]*plan.Expr
+	groupConcatByExpr map[*tree.FuncExpr]int32
+	sampleByAst       map[string]int32
+	windowByAst       map[string]int32
+	projectByExpr     map[string]int32
+	timeByAst         map[string]int32
+	whereFilters      []*plan.Expr
+	// bitCountWhereProof caches the query-block-local constant proof used by
+	// BIT_COUNT reduction. bindWhere invalidates it whenever the filter list is
+	// replaced; it is never carried into execution or prepared-plan state.
+	bitCountWhereProofKnown        bool
+	bitCountWhereProofValue        bool
+	bitCountWhereProofNeedsContext bool
+	flattenedVolatileExprs         map[int32]*plan.Expr
 	// Pagination is bound before SELECT expressions are flattened, but its
 	// plan node is attached afterwards. Replay must not evaluate a skipped row.
 	outerPaginationPending bool
@@ -1148,6 +1156,19 @@ type BindContext struct {
 	// contexts created while binding one FROM clause inherit the owner, while a
 	// nested SELECT replaces it when bindSelect starts.
 	queryBlockOwner *BindContext
+	// reducibleTablelessScalar describes a scalar SELECT that MySQL may
+	// replace with its sole projection. hasDependentProjectionSubquery records
+	// whether a visible projection contains a row-dependent or unstable
+	// subquery, which prevents a derived SELECT from being merged.
+	// singleProjectionRetainsSubquery is captured before flattening and records
+	// whether a sole visible projection still contains a subquery after direct
+	// single-value reductions.
+	// canReduceInToSubqueryFreeComparison records whether a one-column IN RHS
+	// loses its subquery after MySQL's single-value reduction.
+	reducibleTablelessScalar            bool
+	hasDependentProjectionSubquery      bool
+	singleProjectionRetainsSubquery     bool
+	canReduceInToSubqueryFreeComparison bool
 	// aggregateInputParent is set on a subquery context when that subquery is
 	// bound as an aggregate argument of its parent query. Correlations back to
 	// this parent are per-row aggregate inputs, not bare aggregate-query output

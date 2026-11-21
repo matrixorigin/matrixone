@@ -2349,7 +2349,13 @@ func maxPadTextCharacterWidth(sourceType *types.Type) int {
 }
 
 func maxStringFunctionResultLength(result vector.FunctionResultWrapper) int64 {
-	switch result.GetResultVector().GetType().Oid {
+	return StringFunctionResultByteLimit(result.GetResultVector().GetType().Oid)
+}
+
+// StringFunctionResultByteLimit is the execution limit for expanding string
+// functions such as REPEAT. The planner shares it when proving exact sizes.
+func StringFunctionResultByteLimit(oid types.T) int64 {
+	switch oid {
 	case types.T_blob, types.T_text:
 		return int64(types.MaxBlobLen)
 	case types.T_char, types.T_varchar:

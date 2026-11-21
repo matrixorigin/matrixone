@@ -147,13 +147,13 @@ SELECT BIT_COUNT(_binary X'00'), BIT_COUNT(_binary X'01'), BIT_COUNT(_binary X'4
 ➤ BIT_COUNT(0x00)[-5,64,0]  ¦  BIT_COUNT(0x01)[-5,64,0]  ¦  BIT_COUNT(0x40)[-5,64,0]  ¦  BIT_COUNT(0xFF)[-5,64,0]  ¦  BIT_COUNT(0xFFFF)[-5,64,0]  𝄀
 0  ¦  1  ¦  1  ¦  8  ¦  16
 SELECT HEX(_binary 0x40), BIT_COUNT(_binary 0x40);
-➤ HEX(0x40)[12,65535,0]  ¦  BIT_COUNT(0x40)[-5,64,0]  𝄀
+➤ HEX(0x40)[12,2,0]  ¦  BIT_COUNT(0x40)[-5,64,0]  𝄀
 40  ¦  1
 SELECT HEX(_binary 0x00), BIT_COUNT(_binary 0x00), HEX(_binary 0x01), BIT_COUNT(_binary 0x01), HEX(_binary 0xff), BIT_COUNT(_binary 0xff), HEX(_binary 0xFFFF), BIT_COUNT(_binary 0xFFFF);
-➤ HEX(0x00)[12,65535,0]  ¦  BIT_COUNT(0x00)[-5,64,0]  ¦  HEX(0x01)[12,65535,0]  ¦  BIT_COUNT(0x01)[-5,64,0]  ¦  HEX(0xff)[12,65535,0]  ¦  BIT_COUNT(0xff)[-5,64,0]  ¦  HEX(0xffff)[12,65535,0]  ¦  BIT_COUNT(0xffff)[-5,64,0]  𝄀
+➤ HEX(0x00)[12,2,0]  ¦  BIT_COUNT(0x00)[-5,64,0]  ¦  HEX(0x01)[12,2,0]  ¦  BIT_COUNT(0x01)[-5,64,0]  ¦  HEX(0xff)[12,2,0]  ¦  BIT_COUNT(0xff)[-5,64,0]  ¦  HEX(0xffff)[12,4,0]  ¦  BIT_COUNT(0xffff)[-5,64,0]  𝄀
 00  ¦  0  ¦  01  ¦  1  ¦  FF  ¦  8  ¦  FFFF  ¦  16
 SELECT HEX(_binary 0x0102030405060708), BIT_COUNT(_binary 0x0102030405060708), HEX(_binary 0xFFFFFFFFFFFFFFFF), BIT_COUNT(_binary 0xFFFFFFFFFFFFFFFF);
-➤ HEX(0x0102030405060708)[12,65535,0]  ¦  BIT_COUNT(0x0102030405060708)[-5,64,0]  ¦  HEX(0xffffffffffffffff)[12,65535,0]  ¦  BIT_COUNT(0xffffffffffffffff)[-5,64,0]  𝄀
+➤ HEX(0x0102030405060708)[12,16,0]  ¦  BIT_COUNT(0x0102030405060708)[-5,64,0]  ¦  HEX(0xffffffffffffffff)[12,16,0]  ¦  BIT_COUNT(0xffffffffffffffff)[-5,64,0]  𝄀
 0102030405060708  ¦  13  ¦  FFFFFFFFFFFFFFFF  ¦  64
 SELECT BIT_COUNT(X'0102030405060708'), BIT_COUNT(X'FFFFFFFFFFFFFFFF'), BIT_COUNT(X'FFFFFFFFFFFFFFFFFF');
 ➤ BIT_COUNT(0x0102030405060708)[-5,64,0]  ¦  BIT_COUNT(0xFFFFFFFFFFFFFFFF)[-5,64,0]  ¦  BIT_COUNT(0xFFFFFFFFFFFFFFFFFF)[-5,64,0]  𝄀
@@ -478,22 +478,291 @@ SELECT BIT_COUNT(CAST(3.9 AS DECIMAL(10,2))) AS d_pos, BIT_COUNT(CAST(-3.9 AS DE
 d_pos    d_neg    d_subunit
 1    62    64
 DROP TABLE IF EXISTS t_bit_count_float;
-CREATE TABLE t_bit_count_float(id INT, f FLOAT, d DOUBLE);
-INSERT INTO t_bit_count_float VALUES (1, 3.9, 3.9), (2, -3.5, -3.5), (3, 0.9, 0.9), (4, -0.9, -0.9), (5, NULL, NULL);
-SELECT id, BIT_COUNT(f) AS f_bits, BIT_COUNT(d) AS d_bits FROM t_bit_count_float ORDER BY id;
-id    f_bits    d_bits
-1    2    2
-2    63    63
-3    0    0
-4    0    0
-5    null    null
-SELECT id FROM t_bit_count_float WHERE BIT_COUNT(f) = 2 AND BIT_COUNT(d) = 2 ORDER BY id;
-id
-1
-SELECT id FROM t_bit_count_float WHERE BIT_COUNT(f) = 63 AND BIT_COUNT(d) = 63 ORDER BY id;
-id
+CREATE TABLE t_bit_count_float(id INT PRIMARY KEY, f FLOAT, d DOUBLE);
+INSERT INTO t_bit_count_float VALUES (1,3.9,3.9),(2,-3.5,-3.5),(3,0.6,0.6),(4,-0.6,-0.6),(5,NULL,NULL),(6,3.5,3.5),(7,2.5,2.5),(8,-0.5,-0.5);
+SELECT id, BIT_COUNT(f) AS f_bits, BIT_COUNT(d) AS d_bits, BIT_COUNT(CAST(d AS DOUBLE)) AS cast_bits FROM t_bit_count_float ORDER BY id;
+➤ id[4,32,0]  ¦  f_bits[-5,64,0]  ¦  d_bits[-5,64,0]  ¦  cast_bits[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  2  𝄀
+2  ¦  62  ¦  62  ¦  63  𝄀
+3  ¦  1  ¦  1  ¦  0  𝄀
+4  ¦  64  ¦  64  ¦  0  𝄀
+5  ¦  null  ¦  null  ¦  null  𝄀
+6  ¦  1  ¦  1  ¦  2  𝄀
+7  ¦  1  ¦  1  ¦  1  𝄀
+8  ¦  0  ¦  0  ¦  0
+SELECT id FROM t_bit_count_float WHERE BIT_COUNT(f) = 64 AND BIT_COUNT(d) = 64 ORDER BY id;
+➤ id[4,32,0]  𝄀
+4
+SELECT id, BIT_COUNT(SUM(d) OVER(PARTITION BY id)) AS sum_bits, BIT_COUNT(AVG(d) OVER(PARTITION BY id)) AS avg_bits FROM t_bit_count_float ORDER BY id;
+➤ id[4,32,0]  ¦  sum_bits[-5,64,0]  ¦  avg_bits[-5,64,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  62  ¦  62  𝄀
+3  ¦  1  ¦  1  𝄀
+4  ¦  64  ¦  64  𝄀
+5  ¦  null  ¦  null  𝄀
+6  ¦  1  ¦  1  𝄀
+7  ¦  1  ¦  1  𝄀
+8  ¦  0  ¦  0
+SELECT d, BIT_COUNT(CAST(d AS DOUBLE)) AS bits FROM t_bit_count_float WHERE id IN (1,4,5) GROUP BY d, CAST(d AS DOUBLE) ORDER BY d;
+➤ d[8,53,31]  ¦  bits[-5,64,0]  𝄀
+null  ¦  null  𝄀
+-0.6  ¦  0  𝄀
+3.9  ¦  2
+SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float GROUP BY d, CAST(d AS DOUBLE) HAVING BIT_COUNT(CAST(d AS DOUBLE)) = 2 ORDER BY x;
+➤ x[8,53,31]  𝄀
+3.5  𝄀
+3.9
+SELECT d, BIT_COUNT(d) AS bits FROM t_bit_count_float WHERE id IN (1,4) GROUP BY d ORDER BY d;
+➤ d[8,53,31]  ¦  bits[-5,64,0]  𝄀
+-0.6  ¦  64  𝄀
+3.9  ¦  1
+SELECT x, BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1 GROUP BY CAST(d AS DOUBLE)) s;
+➤ x[8,53,31]  ¦  bits[-5,64,0]  𝄀
+3.9  ¦  1
+SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1) s;
+➤ bits[-5,64,0]  𝄀
 2
+SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1 LIMIT 1) s;
+➤ bits[-5,64,0]  𝄀
+1
+SELECT id, BIT_COUNT(x) AS bits FROM (SELECT id, IF(id = 1, d, CAST(d AS DOUBLE)) AS x FROM t_bit_count_float WHERE id IN (1,5,6)) s ORDER BY id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
+1  ¦  1  𝄀
+5  ¦  null  𝄀
+6  ¦  2
+SELECT id, BIT_COUNT(x) AS bits FROM (SELECT id, CASE WHEN id = 1 THEN d ELSE CAST(d AS DOUBLE) END AS x FROM t_bit_count_float WHERE id IN (1,5,6) LIMIT 3) s ORDER BY id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
+1  ¦  1  𝄀
+5  ¦  null  𝄀
+6  ¦  1
+SELECT id FROM (SELECT id, IF(id = 1, d, CAST(d AS DOUBLE)) AS x FROM t_bit_count_float WHERE id IN (1,5,6)) s WHERE BIT_COUNT(x) = 2 ORDER BY id;
+➤ id[4,32,0]  𝄀
+6
+SELECT id, x, BIT_COUNT(x) AS bits FROM (SELECT id, IF(id = 1, d, CAST(d AS DOUBLE)) AS x FROM t_bit_count_float WHERE id IN (1,5,6)) s WHERE BIT_COUNT(x) = 1 ORDER BY id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  bits[-5,64,0]  𝄀
+1  ¦  3.9  ¦  1  𝄀
+6  ¦  3.5  ¦  1
+SELECT id, id IN (SELECT 1 WHERE CONCAT('a','b','c','d',CAST(o.id AS CHAR)) = 'abcd1') AS matched FROM t_bit_count_float o WHERE id IN (1,6) ORDER BY id;
+➤ id[4,32,0]  ¦  matched[-6,8,0]  𝄀
+1  ¦  1  𝄀
+6  ¦  0
+SELECT 'correlated projection', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+(SELECT MAX(i.d) FROM t_bit_count_float i WHERE i.id = o.id) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ correlated projection[12,21,0]  ¦  bits[-5,64,0]  𝄀
+correlated projection  ¦  1
+SELECT 'row-dependent projection', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+o.d + (SELECT MAX(i.d) FROM t_bit_count_float i) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ row-dependent projection[12,24,0]  ¦  bits[-5,64,0]  𝄀
+row-dependent projection  ¦  1
+SELECT 'volatile projection', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+RAND() + (SELECT MAX(i.d) FROM t_bit_count_float i) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ volatile projection[12,19,0]  ¦  bits[-5,64,0]  𝄀
+volatile projection  ¦  1
+SELECT 'uncorrelated projection', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+(SELECT MAX(i.d) FROM t_bit_count_float i) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ uncorrelated projection[12,23,0]  ¦  bits[-5,64,0]  𝄀
+uncorrelated projection  ¦  2
+SELECT 'tableless scalar projection', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, (SELECT RAND()) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ tableless scalar projection[12,27,0]  ¦  bits[-5,64,0]  𝄀
+tableless scalar projection  ¦  2
+SELECT 'WHERE-only subquery', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x
+FROM t_bit_count_float o
+WHERE o.id = 1 AND EXISTS (SELECT 1 FROM t_bit_count_float i WHERE i.id = o.id)
+) s;
+➤ WHERE-only subquery[12,19,0]  ¦  bits[-5,64,0]  𝄀
+WHERE-only subquery  ¦  2
+SELECT 'direct scalar field', BIT_COUNT((SELECT o.d)) AS bits
+FROM t_bit_count_float o WHERE o.id = 1;
+➤ direct scalar field[12,19,0]  ¦  bits[-5,64,0]  𝄀
+direct scalar field  ¦  1
+SELECT 'direct scalar CAST', BIT_COUNT((SELECT CAST(o.d AS DOUBLE))) AS bits
+FROM t_bit_count_float o WHERE o.id = 1;
+➤ direct scalar CAST[12,18,0]  ¦  bits[-5,64,0]  𝄀
+direct scalar CAST  ¦  2
+SELECT 'scalar and sibling', BIT_COUNT(x) AS sibling_bits, BIT_COUNT(z) AS scalar_bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, (SELECT o.d) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ scalar and sibling[12,18,0]  ¦  sibling_bits[-5,64,0]  ¦  scalar_bits[-5,64,0]  𝄀
+scalar and sibling  ¦  2  ¦  1
+SELECT 'IN left operand', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+o.d IN (SELECT i.d FROM t_bit_count_float i) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN left operand[12,15,0]  ¦  bits[-5,64,0]  𝄀
+IN left operand  ¦  1
+SELECT 'tableless IN', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ tableless IN[12,12,0]  ¦  bits[-5,64,0]  𝄀
+tableless IN  ¦  2
+SELECT 'IN true filter', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE 1 = 1) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN true filter[12,14,0]  ¦  bits[-5,64,0]  𝄀
+IN true filter  ¦  2
+SELECT 'IN constant-true filter', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE 2 > 1) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN constant-true filter[12,23,0]  ¦  bits[-5,64,0]  𝄀
+IN constant-true filter  ¦  2
+SELECT 'IN empty filter', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE FALSE) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN empty filter[12,15,0]  ¦  bits[-5,64,0]  𝄀
+IN empty filter  ¦  1
+SELECT 'IN numeric true', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE 1) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN numeric true[12,15,0]  ¦  bits[-5,64,0]  𝄀
+IN numeric true  ¦  2
+SELECT 'IN null test true', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE 1 IS NOT NULL) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN null test true[12,17,0]  ¦  bits[-5,64,0]  𝄀
+IN null test true  ¦  2
+SELECT 'IN boolean true', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE 1=1 OR 1=2) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN boolean true[12,15,0]  ¦  bits[-5,64,0]  𝄀
+IN boolean true  ¦  2
+SELECT 'IN constant LIKE', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE 'a' LIKE 'a') AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN constant LIKE[12,16,0]  ¦  bits[-5,64,0]  𝄀
+IN constant LIKE  ¦  2
+SELECT 'IN constant ABS', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE ABS(-1)=1) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN constant ABS[12,15,0]  ¦  bits[-5,64,0]  𝄀
+IN constant ABS  ¦  2
+SELECT 'IN numeric cast true', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE CAST(1 AS SIGNED)) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN numeric cast true[12,20,0]  ¦  bits[-5,64,0]  𝄀
+IN numeric cast true  ¦  2
+SELECT 'IN null filter', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (SELECT 1 WHERE NULL) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN null filter[12,14,0]  ¦  bits[-5,64,0]  𝄀
+IN null filter  ¦  1
+SELECT 'IN one-row VALUES', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (VALUES ROW(1)) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN one-row VALUES[12,17,0]  ¦  bits[-5,64,0]  𝄀
+IN one-row VALUES  ¦  2
+SELECT 'IN multirow VALUES', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x, o.id IN (VALUES ROW(1), ROW(2)) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN multirow VALUES[12,18,0]  ¦  bits[-5,64,0]  𝄀
+IN multirow VALUES  ¦  1
+SELECT 'IN nested physical scalar', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+o.id IN (SELECT (SELECT (SELECT MAX(i.id) FROM t_bit_count_float i))) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN nested physical scalar[12,25,0]  ¦  bits[-5,64,0]  𝄀
+IN nested physical scalar  ¦  1
+SELECT 'IN grouped wrapped scalar', BIT_COUNT(x) AS bits FROM (
+SELECT CAST(o.d AS DOUBLE) AS x,
+o.id IN (SELECT ABS((SELECT 1)) GROUP BY 1) AS z
+FROM t_bit_count_float o WHERE o.id = 1
+) s;
+➤ IN grouped wrapped scalar[12,25,0]  ¦  bits[-5,64,0]  𝄀
+IN grouped wrapped scalar  ¦  1
+SELECT BIT_COUNT((SELECT CAST(3.9 AS DOUBLE))) AS scalar_cast_bits;
+➤ scalar_cast_bits[-5,64,0]  𝄀
+2
+SELECT (SELECT BIT_COUNT(s.x)) AS correlated_cast_bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1) s;
+➤ correlated_cast_bits[-5,64,0]  𝄀
+2
+DROP TABLE IF EXISTS t_bit_count_float_saved;
+CREATE TABLE t_bit_count_float_saved AS SELECT id, BIT_COUNT(d) AS bits FROM t_bit_count_float;
+SELECT id, bits FROM t_bit_count_float_saved WHERE id IN (1,4,5) ORDER BY id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
+1  ¦  1  𝄀
+4  ¦  64  𝄀
+5  ¦  null
+DROP TABLE t_bit_count_float_saved;
+SELECT id, BIT_COUNT(d+0) AS added, BIT_COUNT(ABS(d)) AS magnitude, BIT_COUNT(-d) AS negated,
+BIT_COUNT(POWER(d,1)) AS power_bits, BIT_COUNT(IFNULL(d,0)) AS ifnull_bits, BIT_COUNT(ROUND(d,1)) AS round_bits,
+BIT_COUNT(CAST(d AS DOUBLE)) AS cast_bits FROM t_bit_count_float WHERE id IN (1,4) ORDER BY id;
+➤ id[4,32,0]  ¦  added[-5,64,0]  ¦  magnitude[-5,64,0]  ¦  negated[-5,64,0]  ¦  power_bits[-5,64,0]  ¦  ifnull_bits[-5,64,0]  ¦  round_bits[-5,64,0]  ¦  cast_bits[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  62  ¦  1  ¦  1  ¦  1  ¦  2  𝄀
+4  ¦  64  ¦  1  ¦  1  ¦  64  ¦  64  ¦  64  ¦  0
+SELECT id, BIT_COUNT(IF(id=1,d,CAST(d AS DOUBLE))) AS if_bits,
+BIT_COUNT(CASE WHEN id=1 THEN d ELSE CAST(d AS DOUBLE) END) AS case_bits,
+BIT_COUNT(NULLIF(d,0)) AS nullif_bits,
+BIT_COUNT(IF(id=1,d,9007199254740993)) AS exact_bits
+FROM t_bit_count_float WHERE id IN (1,2,5) ORDER BY id;
+➤ id[4,32,0]  ¦  if_bits[-5,64,0]  ¦  case_bits[-5,64,0]  ¦  nullif_bits[-5,64,0]  ¦  exact_bits[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  63  ¦  63  ¦  62  ¦  2  𝄀
+5  ¦  null  ¦  null  ¦  null  ¦  2
+INSERT INTO t_bit_count_float VALUES (100, 1e19, 1e19), (101, 1e20, 1e20), (102, 9223372036854774784, 9223372036854774784);
+SELECT id, BIT_COUNT(f) AS float_bits, BIT_COUNT(d) AS double_bits, BIT_COUNT(+d) AS plus_bits
+FROM t_bit_count_float WHERE id >= 100 ORDER BY id;
+➤ id[4,32,0]  ¦  float_bits[-5,64,0]  ¦  double_bits[-5,64,0]  ¦  plus_bits[-5,64,0]  𝄀
+100  ¦  1  ¦  63  ¦  63  𝄀
+101  ¦  1  ¦  63  ¦  63  𝄀
+102  ¦  1  ¦  63  ¦  63
+SELECT BIT_COUNT(d+0) FROM t_bit_count_float WHERE id = 100;
+Data truncation: data out of range: data type int64, value '1e+19'
+SELECT id, IF(id < 100, BIT_COUNT(d+0), 0) AS masked_bits
+FROM t_bit_count_float WHERE id IN (1,100) ORDER BY id;
+➤ id[4,32,0]  ¦  masked_bits[3,21,0]  𝄀
+1  ¦  1  𝄀
+100  ¦  0
+SELECT id, BIT_COUNT(IF(id=100,d,d+0)) AS branch_bits
+FROM t_bit_count_float WHERE id IN (1,100) ORDER BY id;
+➤ id[4,32,0]  ¦  branch_bits[-5,64,0]  𝄀
+1  ¦  1  𝄀
+100  ¦  63
 DROP TABLE t_bit_count_float;
+PREPARE bit_count_field FROM 'SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(? AS DOUBLE) AS x) s';
+SET @bit_count_field = 3.9;
+EXECUTE bit_count_field USING @bit_count_field;
+➤ bits[-5,64,0]  𝄀
+1
+SET @bit_count_field = -0.6;
+EXECUTE bit_count_field USING @bit_count_field;
+➤ bits[-5,64,0]  𝄀
+64
+SET @bit_count_field = NULL;
+EXECUTE bit_count_field USING @bit_count_field;
+➤ bits[-5,64,0]  𝄀
+null
+DEALLOCATE PREPARE bit_count_field;
 PREPARE bit_count_float_marker FROM 'SELECT BIT_COUNT(CAST(? AS FLOAT)) AS f_bits, BIT_COUNT(CAST(? AS DOUBLE)) AS d_bits';
 SET @bit_count_f = 3.9;
 SET @bit_count_d = -3.5;
