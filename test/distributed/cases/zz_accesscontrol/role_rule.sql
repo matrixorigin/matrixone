@@ -516,6 +516,12 @@ alter role test_rule_role_dup_projection_a add rule "select count('docs\\'notes'
 select a from db1.t_dup order by a;
 -- @session
 
+-- A two-item projection cannot merge with the later rule's single item.
+alter role test_rule_role_dup_projection_a add rule "select a, length('docs\\'notes') as n from db1.t_dup" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
 -- A handle must not retain the wider interpretation of the same rule source.
 alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where 'x\\ty' = _utf8mb4 X'780979'" on table db1.t_dup;
 -- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456

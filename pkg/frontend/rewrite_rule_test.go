@@ -730,6 +730,8 @@ func TestLoadRuleCacheUsesValidatedLaterRuleForIneligibleEarlierRule(t *testing.
 		{"ineligible later rule", left, "", right + " order by a", false},
 		{"different projection names", left, "", "select a as n from db1.t1 where a = 2", false},
 		{"unfiltered later rule absorbs invalid predicate", left, "", "select a from db1.t1", false},
+		{"filtered later rule with different select-list length", `select a, length('docs\'notes') as n from db1.t1`, "", right, false},
+		{"filtered later rule with equal select-list length is not decisive", `select a, length('docs\'notes') as n from db1.t1`, "", `select a, length('plain') as n from db1.t1 where a=2`, true},
 		{"unfiltered later rule supersedes unreadable projection", `select a, length('docs\'notes') as n from db1.t1 where a=1`, "", "select a from db1.t1", false},
 		{"unfiltered last rule absorbs invalid middle predicate", "select a from db1.t1 where a = 1", left, "select a from db1.t1", false},
 		{"ineligible middle rule is superseded", "select a from db1.t1 where a = 1", left + " order by a", right + " order by a", false},
