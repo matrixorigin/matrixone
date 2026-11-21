@@ -132,6 +132,15 @@ func WithMemoryWorkspace(ticket *rscthrottler.WorkingSet) SinkerOption {
 	return func(sinker *Sinker) { sinker.workspace = ticket }
 }
 
+// WithChunkedColumnPolicy configures a live, service-specific rollout policy
+// for object writers created by this Sinker. A nil or unsupported FileSinker
+// keeps the legacy persisted-column format.
+func WithChunkedColumnPolicy(policy objectio.ChunkedColumnPolicy) SinkerOption {
+	return func(sinker *Sinker) {
+		sinker.config.chunkedColumnPolicy = policy
+	}
+}
+
 type FileSinker interface {
 	Sink(context.Context, *batch.Batch) error
 	Sync(context.Context) (*objectio.ObjectStats, error)
@@ -147,14 +156,19 @@ type FSinkerImpl struct {
 	mp     *mpool.MPool
 	fs     fileservice.FileService
 
-	sortKeyPos      int
-	isPrimaryKey    bool
-	isTombstone     bool
-	seqnums         []uint16
-	schemaVersion   uint32
-	hiddenSelection objectio.HiddenColumnSelection
-	workspaceBytes  int64
-	arenaBytes      int64
+	sortKeyPos          int
+	isPrimaryKey        bool
+	isTombstone         bool
+	seqnums             []uint16
+	schemaVersion       uint32
+	hiddenSelection     objectio.HiddenColumnSelection
+	workspaceBytes      int64
+	arenaBytes          int64
+	chunkedColumnPolicy objectio.ChunkedColumnPolicy
+}
+
+func (s *FSinkerImpl) SetChunkedColumnPolicy(policy objectio.ChunkedColumnPolicy) {
+	s.chunkedColumnPolicy = policy
 }
 
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
@@ -188,6 +202,7 @@ func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 				s.arena,
 			)
 		}
+		s.writer.SetChunkedColumnPolicy(s.chunkedColumnPolicy)
 	}
 
 	_, err := s.writer.WriteBatch(b)
@@ -356,6 +371,18 @@ func NewSinker(
 	for _, opt := range opts {
 		opt(sinker)
 	}
+	if policy := sinker.config.chunkedColumnPolicy; policy != nil {
+		factory := sinker.fSinker.factory
+		sinker.fSinker.factory = func(mp *mpool.MPool, fs fileservice.FileService) FileSinker {
+			fileSinker := factory(mp, fs)
+			if setter, ok := fileSinker.(interface {
+				SetChunkedColumnPolicy(objectio.ChunkedColumnPolicy)
+			}); ok {
+				setter.SetChunkedColumnPolicy(policy)
+			}
+			return fileSinker
+		}
+	}
 
 	sinker.fillDefaults()
 	return sinker
@@ -407,14 +434,15 @@ type Sinker struct {
 		sortKeyIdx int
 	}
 	config struct {
-		allMergeSorted   bool
-		dedupAll         bool
-		tailSizeCap      int
-		offHeap          bool
-		byteBoundedRuns  bool
-		cleanupFailedRun bool
-		bufferBytes      int64
-		preExtendBuffer  bool
+		allMergeSorted      bool
+		dedupAll            bool
+		tailSizeCap         int
+		offHeap             bool
+		byteBoundedRuns     bool
+		cleanupFailedRun    bool
+		bufferBytes         int64
+		preExtendBuffer     bool
+		chunkedColumnPolicy objectio.ChunkedColumnPolicy
 	}
 	fSinker struct {
 		executor FileSinker

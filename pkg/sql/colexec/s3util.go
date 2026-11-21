@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -84,6 +85,31 @@ func NewCNS3TombstoneWriter(
 	memoryThreshold int,
 	opts ...ioutil.SinkerOption,
 ) *CNS3Writer {
+	return newCNS3TombstoneWriter("", mp, fs, pkType, memoryThreshold, opts...)
+}
+
+// NewCNS3TombstoneWriterForService creates a CN writer whose persisted format
+// follows the live rollout protocol for exactly one service. Callers without a
+// stable service identity must use NewCNS3TombstoneWriter, which is fail-closed.
+func NewCNS3TombstoneWriterForService(
+	serviceID string,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	pkType types.Type,
+	memoryThreshold int,
+	opts ...ioutil.SinkerOption,
+) *CNS3Writer {
+	return newCNS3TombstoneWriter(serviceID, mp, fs, pkType, memoryThreshold, opts...)
+}
+
+func newCNS3TombstoneWriter(
+	serviceID string,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	pkType types.Type,
+	memoryThreshold int,
+	opts ...ioutil.SinkerOption,
+) *CNS3Writer {
 
 	writer := &CNS3Writer{
 		isTombstone: true,
@@ -96,6 +122,9 @@ func NewCNS3TombstoneWriter(
 	opts = append(opts, ioutil.WithByteBoundedRuns(), ioutil.WithUnpublishedRunCleanup())
 	opts = append(opts, ioutil.WithMemorySizeThreshold(memoryThreshold))
 	opts = append(opts, ioutil.WithTailSizeCap(0))
+	if policy := chunkedColumnPolicyForService(serviceID); policy != nil {
+		opts = append(opts, ioutil.WithChunkedColumnPolicy(policy))
+	}
 
 	writer.sinker = ioutil.NewTombstoneSinker(
 		objectio.HiddenColumnSelection_None,
@@ -175,6 +204,34 @@ func NewCNS3DataWriter(
 	flushOnSync bool,
 	sinkerOpts ...ioutil.SinkerOption,
 ) *CNS3Writer {
+	return newCNS3DataWriter("", mp, fs, tableDef, memoryThreshold, flushOnSync, sinkerOpts...)
+}
+
+// NewCNS3DataWriterForService creates a CN writer whose persisted format is
+// gated by the service's current minimum deployment protocol at write time.
+func NewCNS3DataWriterForService(
+	serviceID string,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	tableDef *plan.TableDef,
+	memoryThreshold int,
+	flushOnSync bool,
+	sinkerOpts ...ioutil.SinkerOption,
+) *CNS3Writer {
+	return newCNS3DataWriter(
+		serviceID, mp, fs, tableDef, memoryThreshold, flushOnSync, sinkerOpts...,
+	)
+}
+
+func newCNS3DataWriter(
+	serviceID string,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	tableDef *plan.TableDef,
+	memoryThreshold int,
+	flushOnSync bool,
+	sinkerOpts ...ioutil.SinkerOption,
+) *CNS3Writer {
 
 	writer := new(CNS3Writer)
 
@@ -201,6 +258,9 @@ func NewCNS3DataWriter(
 	sinkerOpts = append(sinkerOpts, ioutil.WithMemorySizeThreshold(memoryThreshold))
 	sinkerOpts = append(sinkerOpts, ioutil.WithTailSizeCap(0))
 	sinkerOpts = append(sinkerOpts, ioutil.WithOffHeap())
+	if policy := chunkedColumnPolicyForService(serviceID); policy != nil {
+		sinkerOpts = append(sinkerOpts, ioutil.WithChunkedColumnPolicy(policy))
+	}
 	writer.sinker = ioutil.NewSinker(
 		sortKeyIdx,
 		attrs,
@@ -214,6 +274,26 @@ func NewCNS3DataWriter(
 	writer.ResetBlockInfoBat()
 
 	return writer
+}
+
+// Keep the object-format rollout behind the same protocol gate as main.
+// The 4.2 line currently advertises an older protocol version, so it can
+// read chunked columns without writing them during a mixed-version upgrade.
+const chunkedColumnMinProtocolVersion int64 = 29
+
+func chunkedColumnPolicyForService(serviceID string) objectio.ChunkedColumnPolicy {
+	if serviceID == "" {
+		return nil
+	}
+	return func() bool {
+		rt := moruntime.ServiceRuntime(serviceID)
+		if rt == nil {
+			return false
+		}
+		value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		version, valid := value.(int64)
+		return ok && valid && version >= chunkedColumnMinProtocolVersion
+	}
 }
 
 func (w *CNS3Writer) Write(ctx context.Context, bat *batch.Batch) error {

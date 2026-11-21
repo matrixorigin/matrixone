@@ -50,9 +50,9 @@ type PKFilter struct {
 	// so object-level pruning must fail open in that case.
 	ObjectZMIsPK bool
 
-	// ReplaySpec carries an optional packed-PK predicate for in-memory row replay.
-	// When present, CollectChanges can use it to avoid scanning the whole
-	// partition-state row tree and instead iterate only the matching PK entries.
+	// ReplaySpec carries an optional packed-PK predicate for row replay.
+	// When present, CollectChanges can avoid scanning the whole in-memory
+	// row tree and filter persisted rows that survive coarse zonemap pruning.
 	//
 	// Unlike Segments, ReplaySpec preserves the original logical predicate
 	// (`Op` + `Keys`) rather than just a coarse ZoneMap approximation.
