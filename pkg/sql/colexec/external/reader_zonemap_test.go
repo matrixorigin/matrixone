@@ -127,7 +127,8 @@ func TestZonemapSavedResultProjection(t *testing.T) {
 		{name: "compatible varlen projection type", fields: []int32{0, 1}, fieldOneProjectionType: &charType},
 		{name: "all-missing", fields: []int32{2}},
 		{name: "no-columns"},
-		{name: "allocation-failure", fields: []int32{0, 1}, failAppend: true},
+		{name: "saved-column allocation failure", fields: []int32{0, 1}, failAppend: true},
+		{name: "missing-column allocation failure", fields: []int32{0, -1}, failAppend: true},
 		{name: "decode-failure", fields: []int32{0, 1}, corruptDecode: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -177,8 +178,10 @@ func TestZonemapSavedResultProjection(t *testing.T) {
 				}()
 				selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerExternal, 1, 2)
 				require.NoError(t, err)
-				buf.Vecs[1].Free(mp)
-				buf.Vecs[1], err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_varchar.ToType(), selection)
+				dst := buf.Vecs[1]
+				typ := *dst.GetType()
+				dst.Free(mp)
+				buf.Vecs[1], err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
 				require.NoError(t, err)
 				defer buf.Clean(mp)
 			}
@@ -201,7 +204,13 @@ func TestZonemapSavedResultProjection(t *testing.T) {
 						require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 						require.Equal(t, rows, buf.Vecs[0].Length())
 					}
-					require.Len(t, scanFS.columns, 2)
+					// Both physical columns are read in the saved-column and decode
+					// cases. The missing-column case loads only its real sibling.
+					wantReads := 2
+					if tc.fields[1] < 0 {
+						wantReads = 1
+					}
+					require.Len(t, scanFS.columns, wantReads)
 					require.Zero(t, buf.RowCount())
 					require.Zero(t, reader.zoneparam.offset)
 					break
