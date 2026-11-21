@@ -974,8 +974,10 @@ const (
 	TEMPORAL_DATETIME_BOUND  = 634
 	TEMPORAL_TIMESTAMP_BOUND = 635
 
+	JSON_SEARCH = 636
+
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 636
+	FUNCTION_END_NUMBER = 637
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1310,6 +1312,7 @@ var functionIdRegister = map[string]int32{
 	"json_agg_to_double":             JSON_AGG_TO_DOUBLE,
 	"json_storage_free":              JSON_STORAGE_FREE,
 	"json_depth":                     JSON_DEPTH,
+	"json_search":                    JSON_SEARCH,
 	"vector_matmul":                  VECTOR_MATMUL,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
