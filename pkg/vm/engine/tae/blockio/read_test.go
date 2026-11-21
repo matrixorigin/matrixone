@@ -1058,6 +1058,9 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 	})
 
 	t.Run("scoped gather failure restores owned headers", func(t *testing.T) {
+		// Output vectors are filled through the reader's pool; the caller
+		// charges them after the read. Read through the tight view itself so
+		// the gather into the output is what exceeds the account.
 		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 		require.NoError(t, err)
 		account, err := registry.Open(8)
@@ -1084,7 +1087,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
 		}}
 		scratch := request.SelectionScratch(2)
-		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "scoped-gather-failure", out, cacheVectors, queryMP, fs, []int{1}, request)
+		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "scoped-gather-failure", out, cacheVectors, allocation, fs, []int{1}, request)
 		require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 		for _, source := range scratch.Sources[:cap(scratch.Sources)] {
 			require.Nil(t, source, "failed reads release all borrowed scratch references")

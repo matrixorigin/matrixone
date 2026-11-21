@@ -35,8 +35,12 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
-	maxAllocSize              int
-	buf                       *batch.Batch
+	maxAllocSize int
+	buf          *batch.Batch
+	// outputLease charges buf's retained capacity to OutputAllocation while
+	// the emitted batch is live. buf is allocated through proc's pool, so the
+	// lease is its only charge; it is released before buf is refilled.
+	outputLease               *mpool.CapacityLease
 	msgReceiver               *message.MessageReceiver
 	filterExecutors           []colexec.ExpressionExecutor
 	runtimeFilterExecutors    []colexec.ExpressionExecutor
@@ -136,13 +140,30 @@ func (tableScan *TableScan) BoundAllocationAccount() *mpool.AllocationAccount {
 	return tableScan.allocationAccount
 }
 
-// mp returns the pool scan output allocates from: the OutputAllocation view
-// when one is bound, otherwise proc's pool.
-func (tableScan *TableScan) mp(proc *process.Process) *mpool.MPool {
-	if tableScan.OutputAllocation != nil {
-		return tableScan.OutputAllocation
+// chargeOutput charges the batch about to be emitted to OutputAllocation by
+// a capacity lease of buf's retained capacity. Everything written into buf
+// (reader fills, in-place filtering and padding) uses proc's pool, so the
+// lease is buf's only charge and nothing is counted twice.
+func (tableScan *TableScan) chargeOutput() error {
+	tableScan.releaseOutputLease()
+	if tableScan.OutputAllocation == nil || tableScan.ctr.buf == nil {
+		return nil
 	}
-	return proc.Mp()
+	size := tableScan.ctr.buf.Allocated()
+	if size <= 0 {
+		return nil
+	}
+	lease, err := tableScan.OutputAllocation.ReservePinnedCapacity(uint64(size))
+	if err != nil {
+		return err
+	}
+	tableScan.ctr.outputLease = lease
+	return nil
+}
+
+func (tableScan *TableScan) releaseOutputLease() {
+	tableScan.ctr.outputLease.Release()
+	tableScan.ctr.outputLease = nil
 }
 
 func (tableScan *TableScan) ClearAllocationAccount(account *mpool.AllocationAccount) error {
@@ -236,6 +257,7 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 		tableScan.OpAnalyzer.Alloc(allocSize)
 	}
 	tableScan.closeReader()
+	tableScan.releaseOutputLease()
 	// The output batch is the lender of the cache pins its borrowed columns
 	// alias; nothing reads it after Reset, so do not keep the pins while the
 	// operator waits to be reused.
@@ -252,6 +274,7 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	tableScan.ctr.columnUsesReady = false
 
 	tableScan.releaseLocalDomains()
+	tableScan.releaseOutputLease()
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.Clean(proc.Mp())
 		tableScan.ctr.buf = nil

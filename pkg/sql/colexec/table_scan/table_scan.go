@@ -147,6 +147,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		// read data from storage engine
+		tableScan.releaseOutputLease()
 		tableScan.ctr.buf.CleanOnlyData()
 		tableScan.ctr.filterReadMetrics = false
 		tableScan.ctr.filterLateMaterialized = false
@@ -216,7 +217,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		if tableScan.ctr.padCharToFullLength {
-			if err = padCharColumnsToFullLength(tableScan.ctr.buf, tableScan.mp(proc)); err != nil {
+			if err = padCharColumnsToFullLength(tableScan.ctr.buf, proc.Mp()); err != nil {
 				return vm.CancelResult, err
 			}
 		}
@@ -232,6 +233,9 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		break
 	}
 
+	if err := tableScan.chargeOutput(); err != nil {
+		return vm.CancelResult, err
+	}
 	retBatch := tableScan.ctr.buf
 
 	return vm.CallResult{Batch: retBatch, Status: vm.ExecNext}, nil
@@ -329,7 +333,7 @@ func (tableScan *TableScan) evalFilter(
 		tableScan.ctr.subjectReuseAdmissionDone = true
 	}
 	if tableScan.ctr.padCharToFullLength {
-		if err := padCharColumnsToFullLength(bat, tableScan.mp(proc)); err != nil {
+		if err := padCharColumnsToFullLength(bat, proc.Mp()); err != nil {
 			return engine.ReaderFilterResult{}, err
 		}
 	}
@@ -420,12 +424,12 @@ func (tableScan *TableScan) evalFilter(
 				}
 
 				if loadedColumns == nil {
-					if err := shrinkPopulatedVecs(bat, sels, tableScan.mp(proc)); err != nil {
+					if err := shrinkPopulatedVecs(bat, sels, proc.Mp()); err != nil {
 						return engine.ReaderFilterResult{}, err
 					}
 				} else {
 					for _, pos := range loadedColumns {
-						if err := bat.Vecs[pos].Shrink(sels, false, tableScan.mp(proc)); err != nil {
+						if err := bat.Vecs[pos].Shrink(sels, false, proc.Mp()); err != nil {
 							return engine.ReaderFilterResult{}, err
 						}
 					}

@@ -103,7 +103,7 @@ func TestReaderBorrowedPinsStayBoundedAcrossBlocks(t *testing.T) {
 			return engine.ReaderFilterResult{All: true}, nil
 		},
 	}
-	perBlockLeases, perBlockUsed := -1, uint64(0)
+	perBlockLeases := -1
 	const blocks = 6
 	for block := 0; block < blocks; block++ {
 		source.emitted = false
@@ -116,16 +116,17 @@ func TestReaderBorrowedPinsStayBoundedAcrossBlocks(t *testing.T) {
 			require.Equal(t, int32(row), vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], row))
 			require.Equal(t, payload, output.Vecs[1].GetBytesAt(row))
 		}
+		// The reader reads through the caller's plain pool and never charges
+		// the output's account itself; the scan charges the emitted batch
+		// (pins included) after the read.
+		require.Zero(t, account.Snapshot().Used, "block %d: the reader must not charge the output account", block)
 		if perBlockLeases < 0 {
-			perBlockLeases, perBlockUsed = output.HeldLeases(), account.Snapshot().Used
+			perBlockLeases = output.HeldLeases()
 			require.Positive(t, perBlockLeases)
-			require.Positive(t, perBlockUsed, "the pinned capacity is charged to the scan's account")
 			continue
 		}
 		require.Equal(t, perBlockLeases, output.HeldLeases(), "block %d: pins must not accumulate", block)
-		require.Equal(t, perBlockUsed, account.Snapshot().Used, "block %d: pin reservations must not accumulate", block)
 	}
 	output.CleanOnlyData()
 	require.Zero(t, output.HeldLeases())
-	require.Less(t, account.Snapshot().Used, perBlockUsed, "reuse returns the pin reservation; only owned scratch capacity stays")
 }
