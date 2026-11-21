@@ -198,45 +198,43 @@ func TestPressureCgroupV2CoveredMounts(t *testing.T) {
 		name       string
 		mountpoint string
 		parentID   int
+		fullCover  bool
 	}{
 		{name: "covered subtree", mountpoint: "wide/child", parentID: 30},
 		{name: "covered limit file", mountpoint: "wide/child/memory.max", parentID: 30},
-		{name: "stacked at mountpoint", mountpoint: "wide", parentID: 30},
-		{name: "covered ancestor", mountpoint: ".", parentID: 1},
+		{name: "stacked at mountpoint", mountpoint: "wide", parentID: 30, fullCover: true},
+		{name: "covered ancestor", mountpoint: ".", parentID: 1, fullCover: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			parent, alternate := t.TempDir(), t.TempDir()
 			wide := filepath.Join(parent, "wide")
-			for _, fixture := range []struct {
-				mount string
-				limit string
-			}{{mount: wide, limit: "max"}, {mount: alternate, limit: "500"}} {
-				leaf := filepath.Join(fixture.mount, "child")
-				require.NoError(t, os.MkdirAll(leaf, 0700))
-				for _, dir := range []string{fixture.mount, leaf} {
-					value := "1000"
-					if dir == leaf {
-						value = fixture.limit
-					}
-					require.NoError(t, os.WriteFile(filepath.Join(dir, "cgroup.controllers"), nil, 0600))
-					require.NoError(t, os.WriteFile(filepath.Join(dir, "memory.max"), []byte(value), 0600))
-				}
+			leaf := filepath.Join(wide, "child")
+			require.NoError(t, os.MkdirAll(leaf, 0700))
+			for dir, limit := range map[string]string{wide: "500", leaf: "max", alternate: "1000"} {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "cgroup.controllers"), nil, 0600))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "memory.max"), []byte(limit), 0600))
 			}
 			mountinfo := fmt.Appendf(nil,
-				"30 1 0:1 /tenant %s rw - cgroup2 cgroup rw\n31 %d 0:1 /other %s rw - cgroup2 cgroup rw\n",
+				"30 1 0:1 /tenant %s rw - cgroup2 cgroup rw\n31 %d 0:2 / %s rw - tmpfs tmpfs rw\n",
 				wide, tc.parentID, filepath.Join(parent, tc.mountpoint),
 			)
-			views, err := parsePressureCgroupViews(mountinfo, group, "cgroup2")
-			require.NoError(t, err)
-			_, err = pressureCgroupV2Hierarchy(group, views)
-			require.ErrorContains(t, err, "covered by another mount")
-
-			mountinfo = fmt.Appendf(mountinfo, "32 1 0:1 /tenant %s rw - cgroup2 cgroup rw\n", alternate)
-			views, err = parsePressureCgroupViews(mountinfo, group, "cgroup2")
+			withAlternate := fmt.Appendf(mountinfo, "32 1 0:1 %s %s rw - cgroup2 cgroup rw\n", group, alternate)
+			views, err := parsePressureCgroupViews(withAlternate, group, "cgroup2")
 			require.NoError(t, err)
 			limit, err := pressureCgroupV2Hierarchy(group, views)
 			require.NoError(t, err)
-			require.Equal(t, uint64(500), limit)
+			if tc.fullCover {
+				require.Equal(t, uint64(1000), limit, "only the narrower mount is visible")
+			} else {
+				require.Equal(t, uint64(500), limit, "the partially covered mount still exposes a stricter ancestor")
+			}
+
+			views, err = parsePressureCgroupViews(mountinfo, group, "cgroup2")
+			if !tc.fullCover {
+				require.NoError(t, err)
+				_, err = pressureCgroupV2Hierarchy(group, views)
+			}
+			require.ErrorContains(t, err, "covered by another mount")
 		})
 	}
 }

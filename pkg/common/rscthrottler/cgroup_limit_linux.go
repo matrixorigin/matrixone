@@ -238,12 +238,11 @@ type pressureMount struct {
 type pressureCgroupView struct {
 	root, mount string
 	overmounts  []pressureMount
-	hidden      bool
 }
 
 func (v pressureCgroupView) file(dir, name string) (string, error) {
 	path := filepath.Join(dir, name)
-	if v.hidden || slices.ContainsFunc(v.overmounts, func(m pressureMount) bool {
+	if slices.ContainsFunc(v.overmounts, func(m pressureMount) bool {
 		return mountContains(m.point, path)
 	}) {
 		return "", moerr.NewInternalErrorf(moerr.NoReportContext(), "cgroup path %q is covered by another mount", path)
@@ -273,7 +272,7 @@ func mountContains(root, path string) bool {
 }
 
 // A sibling mounted on an ancestor path can hide an existing attachment.
-// Stacks at the same path are parent/child and are checked at file lookup.
+// Stacks at the same path are parent/child and are checked at view selection.
 func pressureMountHidden(m pressureMount, mounts map[string]pressureMount, children map[string][]pressureMount) bool {
 	for {
 		for _, sibling := range children[m.parent] {
@@ -306,7 +305,7 @@ func pressureCgroupViews(group, fsType string) ([]pressureCgroupView, error) {
 }
 
 // A mount can expose just a subtree of the same process hierarchy. Keep all
-// matching views; start at the widest root and preserve order for equal roots.
+// reachable views; start at the widest root and preserve order for equal roots.
 func parsePressureCgroupViews(data []byte, group, fsType string) ([]pressureCgroupView, error) {
 	if !inCgroupNamespace(group) {
 		return nil, moerr.NewInternalErrorf(moerr.NoReportContext(), "cgroup membership %q is outside the visible namespace", group)
@@ -358,12 +357,22 @@ func parsePressureCgroupViews(data []byte, group, fsType string) ([]pressureCgro
 	views := make([]pressureCgroupView, 0, len(matched))
 	for _, candidate := range matched {
 		m := candidate.mount
+		overmounts := children[m.id]
+		// A mount stacked at the candidate's mountpoint hides its entire view.
+		// Mounts below it can leave ancestors visible and are checked per file.
+		if pressureMountHidden(m, mounts, children) || slices.ContainsFunc(overmounts, func(child pressureMount) bool {
+			return child.point == m.point
+		}) {
+			continue
+		}
 		views = append(views, pressureCgroupView{
 			root:       candidate.root,
 			mount:      m.point,
-			overmounts: children[m.id],
-			hidden:     pressureMountHidden(m, mounts, children),
+			overmounts: overmounts,
 		})
+	}
+	if len(views) == 0 {
+		return nil, moerr.NewInternalErrorf(moerr.NoReportContext(), "all memory cgroup mounts for %q are covered by another mount", group)
 	}
 	slices.SortStableFunc(views, func(a, b pressureCgroupView) int {
 		return cmp.Compare(len(a.root), len(b.root))
