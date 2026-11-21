@@ -172,6 +172,18 @@ select issue_32869_identity(
   (select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
    from test_issue_32869.inner_rows o limit 1)
 ) from test_issue_32869.outer_rows;
+select issue_32869_identity(cast(null as signed) +
+  (select (select i.d from test_issue_32869.secret_rows s where s.s > i.d limit 0)
+   from test_issue_32869.inner_rows i limit 1)) as folded_identity;
+select issue_32869_identity(cast(null as signed) +
+  (select (select i.d from test_issue_32869.inner_rows s where s.d > i.d limit 0)
+   from test_issue_32869.restricted_wrapper i limit 1)) as folded_identity;
+select issue_32869_keep_second(cast(null as signed) +
+  (select (select i.d from inner_rows s where s.d > i.d limit 0)
+   from restricted_wrapper i limit 1), 42) as folded_discarded_wrapper;
+select issue_32869_keep_second(cast(null as signed) +
+  (select (select i.d from test_issue_32869.secret_rows s where s.s > i.d limit 0)
+   from test_issue_32869.inner_rows i limit 1), 42) as folded_discarded_wrapper;
 select s from test_issue_32869.secret_rows;
 -- @session
 drop user issue_32869_reader;
@@ -188,7 +200,27 @@ select issue_32869_constant_expr((select o.a from inner_rows i where i.d > o.a l
        issue_32869_constant_query((select o.a from inner_rows i where i.d > o.a limit 0)) as query_value,
        issue_32869_constant_mixed((select o.a from inner_rows i where i.d > o.a limit 0), 13) as mixed_value
 from outer_rows o where o.a = 11;
-prepare issue_32869_set from 'set @before = ?, @answer = (select case when o.a = 11 then o.a else cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) end from outer_rows o where o.a = ? limit 1), @after = ?';
+prepare issue_32869_set_lazy from 'set @answer = case when exists(select 1 from outer_rows) then 7 else (select (select o.a from inner_rows i where i.d > o.a limit 0) from outer_rows o) end';
+execute issue_32869_set_lazy;
+select @answer;
+deallocate prepare issue_32869_set_lazy;
+prepare issue_32869_set_replay from 'set @answer = case when not exists(select 1 from outer_rows where a = ?) then ? + (select (select i.d from secret_rows s where s.s > i.d limit 0) from inner_rows i limit 1) else 7 end';
+set @condition = 1, @nullable = null;
+execute issue_32869_set_replay using @condition, @nullable;
+select @answer;
+set @condition = 999, @nullable = null;
+execute issue_32869_set_replay using @condition, @nullable;
+select @answer;
+deallocate prepare issue_32869_set_replay;
+prepare issue_32869_set_decimal from 'set @decimal_answer = round((select cast(1.23 as decimal(4,2))), ?)';
+set @decimal_digits = 1;
+execute issue_32869_set_decimal using @decimal_digits;
+select @decimal_answer;
+deallocate prepare issue_32869_set_decimal;
+select issue_32869_identity(cast(null as signed) +
+  (select (select i.d from inner_rows s where s.d > i.d limit 0)
+   from restricted_wrapper i limit 1)) as folded_identity;
+prepare issue_32869_set from 'set @before = ?, @answer = 1 + (select case when o.a = 11 then o.a else cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) end from outer_rows o where o.a = ? limit 1), @after = ?';
 set @v_before = 21, @v_outer = 1, @v_after = 23;
 execute issue_32869_set using @v_before, @v_outer, @v_after;
 select @before, @answer, @after;

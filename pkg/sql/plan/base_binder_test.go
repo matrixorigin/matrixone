@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -348,7 +349,7 @@ func TestBindSQLUDFUsesStoredParserMode(t *testing.T) {
 		expr, err := bindFuncExprImplUdf(&binder.baseBinder, "legacy_pipe", &function.Udf{
 			Body:     "0 || 1",
 			Language: string(tree.SQL),
-		}, nil, nil, 0, 0)
+		}, nil, nil, 0, zeroScalarArgumentScope{})
 		require.NoError(t, err)
 		require.Equal(t, "concat", expr.GetF().GetFunc().GetObjName())
 	})
@@ -359,7 +360,7 @@ func TestBindSQLUDFUsesStoredParserMode(t *testing.T) {
 			Body:     "0 || 1",
 			Language: string(tree.SQL),
 			SQLMode:  &emptyMode,
-		}, nil, nil, 0, 0)
+		}, nil, nil, 0, zeroScalarArgumentScope{})
 		require.NoError(t, err)
 		require.Equal(t, "or", expr.GetF().GetFunc().GetObjName())
 	})
@@ -536,6 +537,7 @@ func TestBuiltinFoldedZeroScalarRetainsSources(t *testing.T) {
 		{"direct", "select null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n", []string{"region"}},
 		{"nested wrapper", "select null + (select null + (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1) from nation n", []string{"region", "customer"}},
 		{"deduplicated inner source", "select null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0), null + (select null + (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1) from nation n", []string{"region", "customer"}},
+		{"folded wrapper argument to UDF", "select f_identity(null + (select (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1)) from nation n", []string{"region", "customer"}},
 		{"folded argument to UDF", "select f_identity(null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0)) from nation n", []string{"region"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -554,10 +556,32 @@ func TestBuiltinFoldedZeroScalarRetainsSources(t *testing.T) {
 			}
 			for _, source := range tc.sources {
 				require.True(t, retained[source], "folded scalar must retain %s for authorization and catalog validation", source)
-				require.False(t, queryHasReachableTable(query, source), "a folded source must not execute")
+				if tc.name != "folded wrapper argument to UDF" && source == "region" {
+					require.False(t, queryHasReachableTable(query, source), "the root LIMIT 0 source must not execute")
+				}
 			}
 		})
 	}
+}
+
+func TestSQLUDFDiscardsFoldedWrapperAndRetainsSources(t *testing.T) {
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select f_discard(null + (select null + (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+	require.NoError(t, err)
+	retained := make(map[string]bool)
+	for _, node := range query.Nodes {
+		if IsValidationPrivilegeCarrier(node) && node.ObjRef != nil {
+			retained[node.ObjRef.ObjName] = true
+		}
+	}
+	require.True(t, retained["region"])
+	require.True(t, retained["customer"])
+	require.False(t, queryHasReachableTable(query, "region"))
+	require.False(t, queryHasReachableTable(query, "customer"))
 }
 
 type zeroScalarSavedResultContext struct{ *MockCompilerContext }
@@ -751,6 +775,60 @@ func TestCollectUDFArgumentAuthorizationSourcesIncludesNonTableScans(t *testing.
 	sources, err := collectUDFArgumentAuthorizationSources(builder, args, nil)
 	require.NoError(t, err)
 	require.Equal(t, map[int32]struct{}{0: {}, 1: {}, 2: {}}, sources)
+}
+
+func TestRetainUDFArgumentExternalSourceCapturesCatalogDependency(t *testing.T) {
+	inner := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		ObjRef:   &plan.ObjectRef{SchemaName: "test", ObjName: "inner"},
+		TableDef: &plan.TableDef{
+			DbName: "test", Name: "inner", DbId: 7, TblId: 10, Version: 12,
+		},
+	}
+	external := &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		ObjRef:   &plan.ObjectRef{SchemaName: "test", ObjName: "external_rows"},
+		TableDef: &plan.TableDef{
+			DbName: "test", Name: "external_rows", DbId: 7, TblId: 11, Version: 13,
+			TableType: catalog.SystemExternalRel,
+		},
+		ExternScan: &plan.ExternScan{Type: int32(plan.ExternType_EXTERNAL_TB)},
+	}
+	rootNode := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{0, 1}}
+	builder := &QueryBuilder{
+		isPrepareStatement: true,
+		qry:                &plan.Query{Nodes: []*plan.Node{inner, external, rootNode}},
+	}
+
+	sources, err := collectUDFArgumentAuthorizationSources(
+		builder, nil, []int32{2})
+	require.NoError(t, err)
+	require.Equal(t, map[int32]struct{}{0: {}, 1: {}}, sources)
+	builder.appendValidationCarrier(validationPrivilegeCarrier(external))
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(sources))
+
+	var externalCarrier *plan.Node
+	for _, carrier := range builder.validationPrivilegeCarriers {
+		if carrier.GetNodeType() == plan.Node_EXTERNAL_SCAN {
+			externalCarrier = carrier
+			break
+		}
+	}
+	require.NotNil(t, externalCarrier)
+	require.Equal(t, int32(plan.ExternType_EXTERNAL_TB), externalCarrier.GetExternScan().GetType())
+	require.Equal(t, catalog.SystemExternalRel, externalCarrier.GetTableDef().GetTableType())
+	require.Equal(t, "external_rows", externalCarrier.GetObjRef().GetObjName())
+
+	foundDependency := false
+	for _, dependency := range builder.qry.GetCatalogDependencies() {
+		if dependency.GetObjName() == "external_rows" {
+			foundDependency = true
+			require.Equal(t, int64(13), dependency.GetServer())
+			require.Equal(t, int64(7), dependency.GetDb())
+			require.Equal(t, int64(11), dependency.GetObj())
+		}
+	}
+	require.True(t, foundDependency, "retained external scans must invalidate prepared catalog dependencies")
 }
 
 func TestValidateUDFArgumentAuthorizationSourcesSkipsRetainedPlanWalk(t *testing.T) {

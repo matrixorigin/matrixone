@@ -543,6 +543,7 @@ type QueryBuilder struct {
 	udfResolutionCount          uint64
 	udfExpansionDepth           uint32
 	zeroScalarRewriteGeneration uint64
+	zeroScalarRetainedWrappers  []int32
 	// Tracks discarded scalar sources even when their carrier was deduplicated.
 	zeroScalarRetentionGeneration uint64
 	// Tracks special checks in isolated validation builders nested in a scalar.
@@ -1356,6 +1357,7 @@ type TableBinder struct {
 
 type WhereBinder struct {
 	baseBinder
+	preparedSetSubqueries map[*tree.Subquery][]int32
 }
 
 type GroupBinder struct {

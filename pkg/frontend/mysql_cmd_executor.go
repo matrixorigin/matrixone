@@ -1517,9 +1517,14 @@ func doSetVar(
 		var runtimeDomain types.RuntimeStringDomain
 		var evalErr error
 		if index < len(preparedItems) && preparedItems[index].Value != nil {
-			if preparedPlanExprContainsSubquery(preparedItems[index].Value) {
-				value, valueType, evalErr = getPreparedPlanExprValueWithSubqueries(
-					assign.Value, preparedItems[index].Value, ses, execCtx,
+			var subqueries []*tree.Subquery
+			tree.CollectOuterSubqueries(assign.Value, &subqueries)
+			if len(subqueries) != 0 {
+				// Keep all subqueries inside the original expression. Evaluating
+				// them separately can execute dead CASE branches and loses the
+				// AST-to-plan identity after runtime parameter specialization.
+				value, valueType, evalErr = getExprValueWithPrepareMeta(
+					assign.Value, ses, execCtx, true, nil,
 					&prepareParamKind, &runtimeDomain, &isBin)
 			} else {
 				value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
