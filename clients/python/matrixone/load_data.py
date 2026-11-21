@@ -21,7 +21,7 @@ from enum import Enum
 import re
 
 from ._sql_literals import sql_identifier, sql_string_token
-from ._utils import stage_file_uri
+from ._utils import get_table_name, stage_file_uri
 
 
 class LoadDataFormat(str, Enum):
@@ -200,7 +200,12 @@ class BaseLoadDataManager:
             raise ValueError('ignore_lines must be a non-negative integer')
         if columns is not None and (not isinstance(columns, (list, tuple)) or not columns):
             raise ValueError('columns must be a nonempty list of identifiers')
-        parts = ['INTO TABLE ' + sql_identifier(table_name, qualified=True)]
+        target = (
+            sql_identifier(table_name, qualified=True)
+            if isinstance(table_name, str)
+            else get_table_name(table_name, quoted=True)
+        )
+        parts = ['INTO TABLE ' + target]
         if character_set:
             parts.append('CHARACTER SET ' + sql_identifier(character_set))
         fields = []
@@ -681,16 +686,10 @@ class LoadDataManager(BaseLoadDataManager):
             csv_data = "1,Alice\\n2,Bob\\n"
             client.load_data.read_csv_inline(csv_data, table='users')
         """
-        # Handle model class input
-        if hasattr(table, '__tablename__'):
-            table_name = table.__tablename__
-        else:
-            table_name = table
-
         # Build SQL
         sql = self._build_load_data_inline_sql(
             data=data,
-            table_name=table_name,
+            table_name=table,
             format='csv',
             delimiter=sep,
             enclosed_by=quotechar,
@@ -960,19 +959,13 @@ class LoadDataManager(BaseLoadDataManager):
             json_data = '{"id":1,"name":"Alice"}\\n'
             client.load_data.read_json_inline(json_data, table='users')
         """
-        # Handle model class input
-        if hasattr(table, '__tablename__'):
-            table_name = table.__tablename__
-        else:
-            table_name = table
-
         # Map orient to jsontype
         jsontype_str = _json_structure(orient)
 
         # Build SQL
         sql = self._build_load_data_inline_sql(
             data=data,
-            table_name=table_name,
+            table_name=table,
             format='jsonline',
             jsontype=jsontype_str,
             **self._inline_options(kwargs),
@@ -1172,20 +1165,11 @@ class LoadDataManager(BaseLoadDataManager):
             ...     }
             ... )
         """
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
         if kwargs:
             raise ValueError('Unknown LOAD options: ' + ', '.join(sorted(kwargs)))
         # Validate required parameters
         if not file_path or not isinstance(file_path, str):
             raise ValueError("file_path must be a non-empty string")
-
-        if not table_name or not isinstance(table_name, str):
-            raise ValueError("table_name must be a non-empty string")
 
         if not isinstance(ignore_lines, int) or ignore_lines < 0:
             raise ValueError("ignore_lines must be a non-negative integer")
@@ -1198,7 +1182,7 @@ class LoadDataManager(BaseLoadDataManager):
         # Build the LOAD DATA SQL statement
         sql = self._build_load_data_sql(
             file_path=file_path,
-            table_name=table_name,
+            table_name=table_name_or_model,
             fields_terminated_by=fields_terminated_by,
             fields_enclosed_by=fields_enclosed_by,
             fields_optionally_enclosed=fields_optionally_enclosed,
@@ -1242,14 +1226,8 @@ class LoadDataManager(BaseLoadDataManager):
             ...     ignore_lines=1
             ... )
         """
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
         # Build SQL with LOCAL keyword
-        sql = self._build_load_data_sql(file_path=file_path, table_name=table_name, local=True, **kwargs)
+        sql = self._build_load_data_sql(file_path=file_path, table_name=table_name_or_model, local=True, **kwargs)
 
         from ._session_execution import _LiteralSQL
 
@@ -1607,16 +1585,10 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_csv_inline (pandas-style)"""
-        # Handle model class input
-        if hasattr(table, '__tablename__'):
-            table_name = table.__tablename__
-        else:
-            table_name = table
-
         # Build SQL
         sql = self._build_load_data_inline_sql(
             data=data,
-            table_name=table_name,
+            table_name=table,
             format='csv',
             delimiter=sep,
             enclosed_by=quotechar,
@@ -1633,19 +1605,13 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_json_inline (pandas-style)"""
-        # Handle model class input
-        if hasattr(table, '__tablename__'):
-            table_name = table.__tablename__
-        else:
-            table_name = table
-
         # Map orient to jsontype
         jsontype_str = _json_structure(orient)
 
         # Build SQL
         sql = self._build_load_data_inline_sql(
             data=data,
-            table_name=table_name,
+            table_name=table,
             format='jsonline',
             jsontype=jsontype_str,
             **self._inline_options(kwargs),
@@ -1674,20 +1640,11 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of from_file - builds SQL and executes asynchronously"""
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
         if kwargs:
             raise ValueError('Unknown LOAD options: ' + ', '.join(sorted(kwargs)))
         # Validate required parameters
         if not file_path or not isinstance(file_path, str):
             raise ValueError("file_path must be a non-empty string")
-
-        if not table_name or not isinstance(table_name, str):
-            raise ValueError("table_name must be a non-empty string")
 
         if not isinstance(ignore_lines, int) or ignore_lines < 0:
             raise ValueError("ignore_lines must be a non-negative integer")
@@ -1700,7 +1657,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         # Build the LOAD DATA SQL statement using base class
         sql = self._build_load_data_sql(
             file_path=file_path,
-            table_name=table_name,
+            table_name=table_name_or_model,
             fields_terminated_by=fields_terminated_by,
             fields_enclosed_by=fields_enclosed_by,
             fields_optionally_enclosed=fields_optionally_enclosed,
@@ -1722,14 +1679,8 @@ class AsyncLoadDataManager(BaseLoadDataManager):
 
     async def from_local_file(self, file_path: str, table_name_or_model, **kwargs):
         """Async version of from_local_file"""
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
         # Build SQL with LOCAL keyword
-        sql = self._build_load_data_sql(file_path=file_path, table_name=table_name, local=True, **kwargs)
+        sql = self._build_load_data_sql(file_path=file_path, table_name=table_name_or_model, local=True, **kwargs)
 
         from ._session_execution import _LiteralSQL
 
