@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -128,19 +129,50 @@ func bitCountCanReduceScalar(builder *QueryBuilder, scope *BindContext) bool {
 	return scope.reducibleTablelessScalar && bitCountWhereIsEffectivelyTrue(builder, scope)
 }
 
+func (ctx *BindContext) setWhereFilters(filters []*plan.Expr) {
+	ctx.whereFilters = filters
+	ctx.bitCountWhereProofKnown = false
+	ctx.bitCountWhereProofValue = false
+	ctx.bitCountWhereProofNeedsContext = false
+}
+
 func bitCountWhereIsEffectivelyTrue(builder *QueryBuilder, ctx *BindContext) bool {
 	if ctx == nil {
 		return false
 	}
-	budget := 32
-	for _, filter := range ctx.whereFilters {
-		folded := filter
-		if filter.GetLit() == nil {
-			if builder == nil || builder.compCtx == nil || !isSpeculativeConstantFoldSafe(filter, &budget) {
+	if ctx.bitCountWhereProofKnown {
+		if ctx.bitCountWhereProofValue && ctx.bitCountWhereProofNeedsContext {
+			if builder == nil || builder.compCtx == nil {
 				return false
 			}
 			bindCtx := builder.GetContext()
-			if defines.IsNoEvaluationViewBinding(bindCtx) || bindCtx.Err() != nil {
+			if bindCtx == nil || defines.IsNoEvaluationViewBinding(bindCtx) || bindCtx.Err() != nil {
+				return false
+			}
+		}
+		return ctx.bitCountWhereProofValue
+	}
+	ctx.bitCountWhereProofKnown = true
+	ctx.bitCountWhereProofValue = false
+	ctx.bitCountWhereProofNeedsContext = false
+	var budget *speculativeConstantFoldBudget
+	for _, filter := range ctx.whereFilters {
+		folded := filter
+		if filter.GetLit() == nil {
+			ctx.bitCountWhereProofNeedsContext = true
+			if builder == nil || builder.compCtx == nil {
+				return false
+			}
+			bindCtx := builder.GetContext()
+			if bindCtx == nil || defines.IsNoEvaluationViewBinding(bindCtx) || bindCtx.Err() != nil {
+				return false
+			}
+			if budget == nil {
+				budget = &speculativeConstantFoldBudget{ctx: bindCtx}
+			}
+			foldExpr := DeepCopyExpr(filter)
+			foldLargeSpaceLengthExpressions(foldExpr, bindCtx)
+			if !isSpeculativeConstantFoldSafe(foldExpr, budget) {
 				return false
 			}
 			proc := builder.compCtx.GetProcess()
@@ -152,8 +184,8 @@ func bitCountWhereIsEffectivelyTrue(builder *QueryBuilder, ctx *BindContext) boo
 			eval := proc.NewNoContextChildProc(0)
 			eval.Ctx = bindCtx
 			var err error
-			folded, err = ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(filter), eval, false, false)
-			if err != nil || folded == nil {
+			folded, err = ConstantFold(batch.EmptyForConstFoldBatch, foldExpr, eval, false, false)
+			if err != nil || folded == nil || bindCtx.Err() != nil {
 				return false
 			}
 		}
@@ -161,7 +193,39 @@ func bitCountWhereIsEffectivelyTrue(builder *QueryBuilder, ctx *BindContext) boo
 			return false
 		}
 	}
+	ctx.bitCountWhereProofValue = true
 	return true
+}
+
+func foldLargeSpaceLengthExpressions(expr *plan.Expr, ctx context.Context) bool {
+	if expr == nil || ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil {
+		return false
+	}
+	name := strings.ToLower(f.Func.GetObjName())
+	if (name == "length" || name == "char_length" || name == "octet_length" || name == "bit_length") &&
+		len(f.Args) == 1 && function.GetFunctionIsProvenPureFoldableById(f.Func.GetObj()) {
+		space := f.Args[0].GetF()
+		if space != nil && space.Func != nil && strings.EqualFold(space.Func.GetObjName(), "space") &&
+			function.GetFunctionIsProvenPureFoldableById(space.Func.GetObj()) && len(space.Args) == 1 {
+			length, ok := speculativeConstantInt64(space.Args[0])
+			if ok && length >= 0 && length <= int64(types.MaxBlobLen) {
+				if name == "bit_length" {
+					length *= 8
+				}
+				expr.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: length}}}
+				return true
+			}
+		}
+	}
+	changed := false
+	for _, arg := range f.Args {
+		changed = foldLargeSpaceLengthExpressions(arg, ctx) || changed
+	}
+	return changed
 }
 
 func bitCountProjectionDependsOnRows(builder *QueryBuilder, expr *Expr, direct bool, seen map[int32]bool) bool {

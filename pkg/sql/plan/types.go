@@ -1090,13 +1090,19 @@ type BindContext struct {
 	// groupConcatByExpr records the physical aggregate slot for each GROUP_CONCAT
 	// AST node. HAVING is bound before SELECT, so an alias may materialize the
 	// aggregate first; the later SELECT occurrence must reuse that exact slot.
-	groupConcatByExpr      map[*tree.FuncExpr]int32
-	sampleByAst            map[string]int32
-	windowByAst            map[string]int32
-	projectByExpr          map[string]int32
-	timeByAst              map[string]int32
-	whereFilters           []*plan.Expr
-	flattenedVolatileExprs map[int32]*plan.Expr
+	groupConcatByExpr map[*tree.FuncExpr]int32
+	sampleByAst       map[string]int32
+	windowByAst       map[string]int32
+	projectByExpr     map[string]int32
+	timeByAst         map[string]int32
+	whereFilters      []*plan.Expr
+	// bitCountWhereProof caches the query-block-local constant proof used by
+	// BIT_COUNT reduction. bindWhere invalidates it whenever the filter list is
+	// replaced; it is never carried into execution or prepared-plan state.
+	bitCountWhereProofKnown        bool
+	bitCountWhereProofValue        bool
+	bitCountWhereProofNeedsContext bool
+	flattenedVolatileExprs         map[int32]*plan.Expr
 	// Pagination is bound before SELECT expressions are flattened, but its
 	// plan node is attached afterwards. Replay must not evaluate a skipped row.
 	outerPaginationPending bool

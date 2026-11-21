@@ -201,32 +201,66 @@ func isGeometrySRIDConstFoldSafe(expr *plan.Expr) bool {
 	return isSpeculativeConstantFoldSafe(expr, nil)
 }
 
-// isSpeculativeConstantFoldSafe admits only literal trees and executable
-// functions whose value evaluation has been audited for constant folding.
-func isSpeculativeConstantFoldSafe(expr *plan.Expr, budget *int) bool {
-	if expr == nil {
+const (
+	maxSpeculativeFoldLiteralBytes = 4096
+	maxSpeculativeFoldValueBytes   = 1 << 20
+	maxSpeculativeFoldTotalBytes   = 8 << 20
+)
+
+type speculativeConstantFoldBudget struct {
+	ctx         context.Context
+	outputBytes int64
+}
+
+func (budget *speculativeConstantFoldBudget) consume(bytes int64) bool {
+	if budget == nil {
+		return true
+	}
+	if bytes < 0 || bytes > maxSpeculativeFoldValueBytes ||
+		budget.outputBytes > maxSpeculativeFoldTotalBytes-bytes {
 		return false
 	}
-	if budget != nil {
-		if *budget <= 0 {
-			return false
-		}
-		*budget--
+	budget.outputBytes += bytes
+	return true
+}
+
+// isSpeculativeConstantFoldSafe admits literal trees and executable
+// functions whose value evaluation has been audited for constant folding.
+// Variable-width results are admitted only when a registered producer has a
+// proven byte bound within the fold budget.
+func isSpeculativeConstantFoldSafe(expr *plan.Expr, budget *speculativeConstantFoldBudget) bool {
+	_, _, safe := speculativeConstantFoldSafety(expr, budget)
+	return safe
+}
+
+type speculativeFoldStringBound struct {
+	bytes int64
+	known bool
+}
+
+func speculativeConstantFoldSafety(expr *plan.Expr, budget *speculativeConstantFoldBudget) (int64, bool, bool) {
+	if expr == nil {
+		return 0, false, false
+	}
+	if budget != nil && budget.ctx != nil && budget.ctx.Err() != nil {
+		return 0, false, false
 	}
 	switch node := expr.Expr.(type) {
 	case *plan.Expr_Lit:
-		return budget == nil || len(node.Lit.GetSval()) <= 4096
+		if budget == nil || types.T(expr.Typ.Id).FixedLength() >= 0 {
+			return 0, false, true
+		}
+		bytes := int64(len(node.Lit.GetSval()))
+		if bytes > maxSpeculativeFoldLiteralBytes || !budget.consume(bytes) {
+			return 0, false, false
+		}
+		return bytes, true, true
 	case *plan.Expr_T:
-		return true
+		return 0, false, true
 	case *plan.Expr_F:
 		f := node.F
 		if f == nil || f.Func == nil {
-			return false
-		}
-		if budget != nil && types.T(expr.Typ.Id).FixedLength() < 0 {
-			// Purity does not bound an intermediate's size. A tiny tree like
-			// LENGTH(SPACE(n)) can allocate a large string during evaluation.
-			return false
+			return 0, false, false
 		}
 		switch f.Func.GetObjName() {
 		case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus",
@@ -234,15 +268,153 @@ func isSpeculativeConstantFoldSafe(expr *plan.Expr, budget *int) bool {
 			// The binder's arithmetic, cast and tuple encoding operators.
 		default:
 			if !function.GetFunctionIsProvenPureFoldableById(f.Func.GetObj()) {
-				return false
+				return 0, false, false
 			}
 		}
-		for _, arg := range f.Args {
-			if !isSpeculativeConstantFoldSafe(arg, budget) {
-				return false
-			}
+		var stackBounds [4]speculativeFoldStringBound
+		argBounds := stackBounds[:len(f.Args)]
+		if len(f.Args) > len(stackBounds) {
+			argBounds = make([]speculativeFoldStringBound, len(f.Args))
 		}
+		for i, arg := range f.Args {
+			bytes, hasBytes, safe := speculativeConstantFoldSafety(arg, budget)
+			if !safe {
+				return 0, false, false
+			}
+			argBounds[i] = speculativeFoldStringBound{bytes: bytes, known: hasBytes}
+		}
+		if budget == nil || types.T(expr.Typ.Id).FixedLength() >= 0 {
+			return 0, false, true
+		}
+		bytes, bounded := speculativeStringOutputBound(f, argBounds)
+		if !bounded || !budget.consume(bytes) {
+			return 0, false, false
+		}
+		return bytes, true, true
+	default:
+		return 0, false, false
+	}
+}
+
+func speculativeStringOutputBound(f *plan.Function, args []speculativeFoldStringBound) (int64, bool) {
+	if f == nil || f.Func == nil {
+		return 0, false
+	}
+	name := strings.ToLower(f.Func.GetObjName())
+	switch name {
+	case "space":
+		if len(f.Args) != 1 {
+			return 0, false
+		}
+		length, ok := speculativeConstantInt64(f.Args[0])
+		return length, ok && length >= 0
+	case "repeat":
+		if len(f.Args) != 2 || !args[0].known {
+			return 0, false
+		}
+		repeats, ok := speculativeConstantInt64(f.Args[1])
+		if !ok || repeats < 0 || (repeats != 0 && args[0].bytes > maxSpeculativeFoldValueBytes/repeats) {
+			return 0, false
+		}
+		return args[0].bytes * repeats, true
+	case "concat":
+		var total int64
+		for _, arg := range args {
+			if !arg.known || total > maxSpeculativeFoldValueBytes-arg.bytes {
+				return 0, false
+			}
+			total += arg.bytes
+		}
+		return total, len(args) > 0
+	case "concat_ws":
+		if len(args) < 2 || !args[0].known {
+			return 0, false
+		}
+		var total int64
+		for _, arg := range args[1:] {
+			if !arg.known || total > maxSpeculativeFoldValueBytes-arg.bytes {
+				return 0, false
+			}
+			total += arg.bytes
+		}
+		separators := int64(max(0, len(args)-2))
+		if separators != 0 && args[0].bytes > (maxSpeculativeFoldValueBytes-total)/separators {
+			return 0, false
+		}
+		return total + separators*args[0].bytes, true
+	case "reverse", "substring", "substr", "left", "right":
+		if len(args) == 0 || !args[0].known {
+			return 0, false
+		}
+		return args[0].bytes, true
+	default:
+		return 0, false
+	}
+}
+
+func speculativeConstantInt64(expr *plan.Expr) (int64, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if value, isNull, ok := geometrySRIDLiteralValue(expr.GetLit()); ok {
+		return value, !isNull
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil || len(f.Args) == 0 {
+		return 0, false
+	}
+	switch strings.ToLower(f.Func.GetObjName()) {
+	case "cast":
+		if len(f.Args) < 2 {
+			return 0, false
+		}
+		value, ok := speculativeConstantInt64(f.Args[0])
+		if !ok || !isSpeculativeIntegerType(types.T(f.Args[0].Typ.Id)) ||
+			!speculativeIntegerCastPreservesValue(types.T(expr.Typ.Id), value) {
+			return 0, false
+		}
+		return value, true
+	case "unary_plus":
+		return speculativeConstantInt64(f.Args[0])
+	case "unary_minus":
+		value, ok := speculativeConstantInt64(f.Args[0])
+		if !ok || value == -1<<63 {
+			return 0, false
+		}
+		return -value, true
+	default:
+		return 0, false
+	}
+}
+
+func isSpeculativeIntegerType(typ types.T) bool {
+	switch typ {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		return true
+	default:
+		return false
+	}
+}
+
+func speculativeIntegerCastPreservesValue(target types.T, value int64) bool {
+	switch target {
+	case types.T_int8:
+		return value >= -(1<<7) && value <= (1<<7)-1
+	case types.T_uint8:
+		return value >= 0 && value <= (1<<8)-1
+	case types.T_int16:
+		return value >= -(1<<15) && value <= (1<<15)-1
+	case types.T_uint16:
+		return value >= 0 && value <= (1<<16)-1
+	case types.T_int32:
+		return value >= -(1<<31) && value <= (1<<31)-1
+	case types.T_uint32:
+		return value >= 0 && value <= (1<<32)-1
+	case types.T_int64:
+		return true
+	case types.T_uint64:
+		return value >= 0
 	default:
 		return false
 	}
