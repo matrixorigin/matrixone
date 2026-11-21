@@ -800,12 +800,17 @@ func (s *stateMachine) getCommandBatchFiltered(
 		deliver := make([]pb.ScheduleCommand, 0, len(batch.Commands))
 		pending := make([]pb.ScheduleCommand, 0, len(batch.Commands))
 		var deliverIDs, pendingIDs []pb.ScheduleCommandID
+		var hint uint64
 		if len(batch.CommandIDs) == len(batch.Commands) {
 			deliverIDs = make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
 			pendingIDs = make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
 		}
 		for i, cmd := range batch.Commands {
 			if cmd.ShutdownStore != nil || s.catalogScheduleObsolete(cmd) {
+				continue
+			}
+			if !s.canDeliverVotingRemoval(cmd) {
+				hint = HeartbeatCheckNeeded
 				continue
 			}
 			retryable, applied := s.bootstrapReplicaCommandStatus(cmd)
@@ -846,7 +851,7 @@ func (s *stateMachine) getCommandBatchFiltered(
 		if err != nil {
 			panic(err)
 		}
-		return sm.Result{Data: data}
+		return sm.Result{Value: hint, Data: data}
 	}
 	return sm.Result{}
 
@@ -967,7 +972,11 @@ func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result
 // WithoutLegacyStoreShutdown filters delivery from old queues without changing
 // the stored batch or the stable identities of the remaining commands.
 func WithoutLegacyStoreShutdown(batch pb.CommandBatch) pb.CommandBatch {
-	first := slices.IndexFunc(batch.Commands, func(cmd pb.ScheduleCommand) bool { return cmd.ShutdownStore != nil })
+	return withoutScheduleCommands(batch, func(cmd pb.ScheduleCommand) bool { return cmd.ShutdownStore != nil })
+}
+
+func withoutScheduleCommands(batch pb.CommandBatch, discard func(pb.ScheduleCommand) bool) pb.CommandBatch {
+	first := slices.IndexFunc(batch.Commands, discard)
 	if first < 0 {
 		return batch
 	}
@@ -980,7 +989,7 @@ func WithoutLegacyStoreShutdown(batch pb.CommandBatch) pb.CommandBatch {
 		ids = append(ids, batch.CommandIDs[:first]...)
 	}
 	for i := first + 1; i < len(batch.Commands); i++ {
-		if batch.Commands[i].ShutdownStore != nil {
+		if discard(batch.Commands[i]) {
 			continue
 		}
 		commands = append(commands, batch.Commands[i])
@@ -1841,7 +1850,9 @@ func (s *stateMachine) handleStateQuery(scheduling bool) interface{} {
 
 func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch {
 	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
-		batch = WithoutLegacyStoreShutdown(batch)
+		batch = withoutScheduleCommands(batch, func(cmd pb.ScheduleCommand) bool {
+			return cmd.ShutdownStore != nil || !s.canDeliverVotingRemoval(cmd)
+		})
 		copied := deepcopy.Copy(&batch)
 		result, ok := copied.(*pb.CommandBatch)
 		if !ok {

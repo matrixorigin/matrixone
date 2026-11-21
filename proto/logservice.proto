@@ -622,6 +622,7 @@ message ScheduleCommand {
   BootstrapShard    BootstrapShard    = 11;
   CatalogMetadataMembershipOperation CatalogMetadataMembership = 12;
   CatalogMetadataStartPermit CatalogMetadataStart = 13;
+  VotingRemovalGuard VotingRemoval = 14;
 }
 
 // ScheduleCommandQuery fetches the pending command batch for a service without
@@ -1258,4 +1259,9 @@ message CheckHealth {
 message ScheduleCommandID {
   uint64 OriginBatchID = 1;
   uint64 CommandIndex  = 2;
+}
+
+// VotingRemovalGuard carries the scheduler's expiration policy into Raft replay.
+message VotingRemovalGuard {
+  uint64 LogStoreTimeoutTicks = 1;
 }

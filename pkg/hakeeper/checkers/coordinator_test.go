@@ -167,7 +167,8 @@ func TestFixExpiredStore(t *testing.T) {
 					},
 					ChangeType: pb.RemoveReplica,
 				},
-				ServiceType: pb.LogService,
+				ServiceType:   pb.LogService,
+				VotingRemoval: &pb.VotingRemovalGuard{LogStoreTimeoutTicks: expiredTick},
 			}},
 		},
 		{

@@ -119,7 +119,16 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 		pending := logservice.PendingOperators(commonFields, logState, state.NonVotingReplicaNum, existing)
 		operators = append(pending, operators...)
 	}
-	return c.OperatorController.Dispatch(operators, logState, tnState, cnState, proxyState)
+	commands := c.OperatorController.Dispatch(operators, logState, tnState, cnState, proxyState)
+	for i := range commands {
+		cmd := &commands[i]
+		if cmd.ServiceType == pb.LogService && cmd.ConfigChange != nil && cmd.ConfigChange.ChangeType == pb.RemoveReplica {
+			cmd.VotingRemoval = &pb.VotingRemovalGuard{
+				LogStoreTimeoutTicks: c.cfg.ExpiredTick(0, c.cfg.LogStoreTimeout),
+			}
+		}
+	}
+	return commands
 }
 
 func (c *Coordinator) removeStaleLogMembershipOperators(state pb.CheckerState, expired []string) {
@@ -136,9 +145,11 @@ func (c *Coordinator) removeStaleLogMembershipOperators(state pb.CheckerState, e
 				continue
 			}
 			_, destinationExists := state.LogState.Stores[replica.UUID]
+			_, removesVoter := step.(operator.RemoveLogService)
 			if replica.Epoch != shard.Epoch ||
 				!logservice.IsReportingVotingExecutor(shard, state.LogState.Stores, expired, target) ||
-				(isAdd && (!destinationExists || slices.Contains(expired, replica.UUID))) {
+				(isAdd && (!destinationExists || slices.Contains(expired, replica.UUID))) ||
+				(removesVoter && !logservice.CanRemoveVotingReplica(shard, state.LogState.Stores, expired, replica.ReplicaID, replica.UUID)) {
 				stale = append(stale, op)
 			}
 		}

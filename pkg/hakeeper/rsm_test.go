@@ -2963,3 +2963,79 @@ func TestRestoredLegacyStoreShutdownWithAcknowledgedDelivery(t *testing.T) {
 		})
 	}
 }
+
+func TestGuardedVotingRemovalDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		ticks       uint64
+		advance     uint64
+		incarnation string
+		legacy      bool
+		staleEpoch  bool
+		wantRemoval bool
+	}{
+		{name: "custom deadline is inclusive", ticks: 2, advance: 2, wantRemoval: true},
+		{name: "one tick past deadline", ticks: 2, advance: 3},
+		{name: "zero timeout has a guard", wantRemoval: true},
+		{name: "changed storage incarnation", incarnation: "replacement"},
+		{name: "old epoch", staleEpoch: true},
+		{name: "inherited unguarded command", legacy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := NewStateMachine(0, 1).(*stateMachine)
+			old.state.CommandDeliveryEnabled = true
+			shard := pb.LogShardInfo{
+				ShardID: 1, Epoch: 7, Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d", 5: "e"},
+				ReplicaStoreIncarnations: map[uint64]string{2: "original"},
+			}
+			old.state.LogState.Shards[1] = shard
+			old.state.Tick = tc.advance
+			for _, id := range []uint64{2, 3} {
+				old.state.LogState.Stores[shard.Replicas[id]] = pb.LogStoreInfo{
+					StoreIncarnation: tc.incarnation,
+					Replicas:         []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: id}},
+				}
+			}
+			remove := pb.ScheduleCommand{UUID: "a", ServiceType: pb.LogService, ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.RemoveReplica, Replica: pb.Replica{UUID: "d", ShardID: 1, ReplicaID: 4, Epoch: shard.Epoch},
+			}}
+			if !tc.legacy {
+				remove.VotingRemoval = &pb.VotingRemovalGuard{LogStoreTimeoutTicks: tc.ticks}
+			}
+			if tc.staleEpoch {
+				remove.ConfigChange.Replica.Epoch--
+			}
+			unrelated := pb.ScheduleCommand{UUID: "a", ServiceType: pb.LogService, ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.StartReplica, Replica: pb.Replica{UUID: "a", ShardID: 2, ReplicaID: 1},
+			}}
+			_, err := old.Update(sm.Entry{Index: 1, Cmd: GetUpdateCommandsCmd(1, []pb.ScheduleCommand{remove, unrelated})})
+			require.NoError(t, err)
+			before := old.state.ScheduleCommands["a"]
+			require.Len(t, before.CommandIDs, 2)
+			var snapshot bytes.Buffer
+			require.NoError(t, old.SaveSnapshot(&snapshot, nil, nil))
+			rsm := NewStateMachine(0, 2).(*stateMachine)
+			require.NoError(t, rsm.RecoverFromSnapshot(&snapshot, nil, nil))
+			polled, err := rsm.Lookup(&ScheduleCommandQuery{UUID: "a"})
+			require.NoError(t, err)
+			require.Equal(t, []pb.ScheduleCommand{unrelated}, polled.(*pb.CommandBatch).Commands,
+				"executor has not yet reported the shard")
+			require.Equal(t, before, rsm.state.ScheduleCommands["a"])
+			hb, err := (&pb.LogStoreHeartbeat{UUID: "a", Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 1}}}).Marshal()
+			require.NoError(t, err)
+			result, err := rsm.Update(sm.Entry{Index: 2, Cmd: GetLogStoreHeartbeatCmd(hb)})
+			require.NoError(t, err)
+			var delivered pb.CommandBatch
+			require.NoError(t, delivered.Unmarshal(result.Data))
+			require.Equal(t, before.BatchID, delivered.BatchID)
+			if tc.wantRemoval {
+				require.Equal(t, before.Commands, delivered.Commands)
+				require.Equal(t, before.CommandIDs, delivered.CommandIDs)
+			} else {
+				require.Equal(t, []pb.ScheduleCommand{unrelated}, delivered.Commands)
+				require.Equal(t, before.CommandIDs[1:], delivered.CommandIDs)
+			}
+			require.NotContains(t, rsm.state.ScheduleCommands, "a")
+		})
+	}
+}

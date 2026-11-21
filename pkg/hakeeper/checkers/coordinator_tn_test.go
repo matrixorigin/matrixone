@@ -678,3 +678,86 @@ func TestCoordinatorGatesMembershipWithoutVoterMajority(t *testing.T) {
 		}
 	}
 }
+
+func TestQueuedVotingRemovalRechecksReports(t *testing.T) {
+	_, fixture, alloc := tnStartScenario(t)
+	c := NewCoordinator("", hakeeper.Config{TickPerSecond: 3, LogStoreTimeout: 2 * time.Second})
+	shard := pb.LogShardInfo{
+		ShardID: 1, Epoch: 7, LeaderID: 1,
+		Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d", 5: "e"},
+	}
+	rsm := hakeeper.NewStateMachine(0, 1)
+	var index uint64
+	apply := func(cmd []byte) sm.Result {
+		t.Helper()
+		index++
+		result, err := rsm.Update(sm.Entry{Index: index, Cmd: cmd})
+		require.NoError(t, err)
+		return result
+	}
+	heartbeat := func(id string, replica uint64) sm.Result {
+		t.Helper()
+		hb := pb.LogStoreHeartbeat{UUID: id, TaskServiceCreated: true}
+		if replica != 0 {
+			hb.Replicas = []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: replica}}
+		}
+		data, err := hb.Marshal()
+		require.NoError(t, err)
+		return apply(hakeeper.GetLogStoreHeartbeatCmd(data))
+	}
+	check := func() pb.ScheduleCommand {
+		t.Helper()
+		value, err := rsm.Lookup(&hakeeper.StateQuery{})
+		require.NoError(t, err)
+		state := value.(*pb.CheckerState)
+		state.TNState = fixture.TNState
+		state.ClusterInfo.LogShards = []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}}
+		var removals []pb.ScheduleCommand
+		for _, cmd := range c.Check(alloc, *state, false) {
+			if cmd.ServiceType == pb.LogService && cmd.ConfigChange != nil && cmd.ConfigChange.ChangeType == pb.RemoveReplica {
+				removals = append(removals, cmd)
+			}
+		}
+		require.Len(t, removals, 1)
+		return removals[0]
+	}
+
+	heartbeat("a", 1)
+	heartbeat("b", 2)
+	heartbeat("c", 3)
+	heartbeat("d", 0)
+	heartbeat("e", 0)
+	queued := check()
+	require.Equal(t, "a", queued.UUID)
+	require.Equal(t, "d", queued.ConfigChange.Replica.UUID)
+	require.Equal(t, uint64(6), queued.VotingRemoval.GetLogStoreTimeoutTicks())
+	sibling := pb.ScheduleCommand{UUID: queued.UUID, ServiceType: pb.LogService, ConfigChange: &pb.ConfigChange{
+		ChangeType: pb.StartReplica, Replica: pb.Replica{ShardID: 2, ReplicaID: 1, UUID: queued.UUID},
+	}}
+	apply(hakeeper.GetUpdateCommandsCmd(1, []pb.ScheduleCommand{queued, sibling}))
+
+	poll := func() *pb.CommandBatch {
+		t.Helper()
+		value, err := rsm.Lookup(&hakeeper.ScheduleCommandQuery{UUID: queued.UUID})
+		require.NoError(t, err)
+		return value.(*pb.CommandBatch)
+	}
+	require.Equal(t, []pb.ScheduleCommand{queued, sibling}, poll().Commands)
+	heartbeat("c", 0)
+	heartbeat("d", 4)
+	require.Equal(t, []pb.ScheduleCommand{sibling}, poll().Commands)
+	require.Equal(t, []pb.ScheduleCommand{sibling}, poll().Commands, "lookup does not consume the queue")
+	result := heartbeat("a", 1)
+	require.Equal(t, hakeeper.HeartbeatCheckNeeded, result.Value)
+	var delivered pb.CommandBatch
+	require.NoError(t, delivered.Unmarshal(result.Data))
+	require.Equal(t, []pb.ScheduleCommand{sibling}, delivered.Commands)
+	require.Empty(t, poll().Commands)
+
+	replacement := check()
+	require.Equal(t, "c", replacement.ConfigChange.Replica.UUID)
+	apply(hakeeper.GetUpdateCommandsCmd(1, []pb.ScheduleCommand{replacement}))
+	delivered = pb.CommandBatch{}
+	require.NoError(t, delivered.Unmarshal(heartbeat("a", 1).Data))
+	require.Equal(t, []pb.ScheduleCommand{replacement}, delivered.Commands)
+}

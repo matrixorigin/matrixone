@@ -243,15 +243,7 @@ func isReportingVotingExecutor(
 		if uuid != target || contains(expired, uuid) {
 			continue
 		}
-		if replicaStoreIncarnationChanged(replicaID, uuid, shard.ReplicaStoreIncarnations, stores) {
-			return false
-		}
-		for _, report := range stores[uuid].Replicas {
-			if report.ShardID == shard.ShardID && report.ReplicaID == replicaID && !report.IsNonVoting {
-				return true
-			}
-		}
-		return false
+		return hakeeper.ReportsLogVoter(shard, replicaID, stores[uuid])
 	}
 	return false
 }
@@ -279,7 +271,7 @@ func votingRemovalOrder(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo
 			return 0
 		}
 		_, reporting := slices.BinarySearch(reporters, uuid)
-		if !hasQuorumAfterVotingRemoval(voters, len(reporters), reporting) {
+		if !hakeeper.HasQuorumAfterVotingRemoval(voters, len(reporters), reporting) {
 			if id == shard.LeaderID {
 				return 5
 			}
@@ -314,17 +306,12 @@ func canRemoveVotingReplica(
 
 	reporters := reportingVotingExecutors(shard, stores, expired)
 	_, reporting := slices.BinarySearch(reporters, replicaToRemove.uuid)
-	return hasQuorumAfterVotingRemoval(voters, len(reporters), reporting)
+	return hakeeper.HasQuorumAfterVotingRemoval(voters, len(reporters), reporting)
 }
 
-func hasQuorumAfterVotingRemoval(voters, reporters int, removesReporter bool) bool {
-	if voters < 2 || reporters <= voters/2 {
-		return false
-	}
-	if removesReporter {
-		reporters--
-	}
-	return reporters > (voters-1)/2
+// CanRemoveVotingReplica checks projected quorum for a retained operator.
+func CanRemoveVotingReplica(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo, expired []string, replicaID uint64, uuid string) bool {
+	return canRemoveVotingReplica(shard, stores, expired, replica{replicaID: replicaID, uuid: uuid})
 }
 
 // reportingVotingExecutors returns configured voters that are live and have
@@ -335,8 +322,8 @@ func reportingVotingExecutors(
 	expired []string,
 ) []string {
 	executors := make([]string, 0, len(shard.Replicas))
-	for _, uuid := range shard.Replicas {
-		if isReportingVotingExecutor(shard, stores, expired, uuid) {
+	for replicaID, uuid := range shard.Replicas {
+		if !contains(expired, uuid) && hakeeper.ReportsLogVoter(shard, replicaID, stores[uuid]) {
 			executors = append(executors, uuid)
 		}
 	}
