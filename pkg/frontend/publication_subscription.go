@@ -309,17 +309,16 @@ func createPublicationWithTableSelection(ctx context.Context, bh BackgroundExec,
 	}
 
 	pubName := string(cp.Name)
-	var publicationExists bool
+	var skippedRecipientLocks bool
 	if cp.IfNotExists {
-		// Look up the publisher's name before source database resolution can
-		// switch accounts. An existing publication won't write any grants.
+		// Use the early lookup only to avoid locking recipients for a no-op.
 		pub, err := getPubInfo(ctx, bh, pubName)
 		if err != nil {
 			return err
 		}
-		publicationExists = pub != nil
+		skippedRecipientLocks = pub != nil
 	}
-	if !publicationExists {
+	if !skippedRecipientLocks {
 		if err = lockPublicationTargetAccounts(ctx, bh, subAccounts, cp.AccountsSet.All); err != nil {
 			return err
 		}
@@ -393,9 +392,21 @@ func createPublicationWithTableSelection(ctx context.Context, bh BackgroundExec,
 		return
 	}
 
-	// IF NOT EXISTS does not bypass database, table scope or name validation.
-	if publicationExists {
-		return nil
+	if cp.IfNotExists {
+		// Source validation can observe newer commits and switch to the source
+		// account. Decide the no-op now, using the publisher's namespace.
+		pub, err := getPubInfo(defines.AttachAccountId(ctx, accountId), bh, pubName)
+		if err != nil {
+			return err
+		}
+		if pub != nil {
+			return nil
+		}
+		if skippedRecipientLocks {
+			// The original publication disappeared. Restart to lock recipients
+			// before the source database, as on every grant-writing path.
+			return moerr.NewTxnNeedRetry(ctx)
+		}
 	}
 
 	if err = bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql); err != nil {

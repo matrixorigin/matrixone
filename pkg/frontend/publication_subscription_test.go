@@ -388,6 +388,33 @@ func TestCreatePublicationIfNotExistsSkipsExistingPublication(t *testing.T) {
 	}
 }
 
+func TestCreatePublicationIfNotExistsRechecksAfterSourceValidation(t *testing.T) {
+	for _, lookupErr := range []error{nil, context.Canceled} {
+		t.Run(fmt.Sprintf("lookup=%v", lookupErr), func(t *testing.T) {
+			bh, ctx, stmt := newCreatePublicationIfNotExistsTest(t, true, true)
+			pubSQL := fmt.Sprintf(getPubInfoSql, sysAccountID) + " and pub_name = 'pub1'"
+			// A concurrent DROP commits after the first lookup. The source
+			// validation phase is the boundary between the two snapshots.
+			lockPublicationDatabase = func(context.Context, BackgroundExec, string, uint64) (string, error) {
+				bh.sql2result[pubSQL] = newMrsForRestoreStringRows(nil, nil)
+				bh.sql2err[pubSQL] = lookupErr
+				return "", nil
+			}
+			err := createPublication(ctx, bh, stmt, 1)
+			if lookupErr != nil {
+				require.ErrorIs(t, err, lookupErr)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry), "got %v", err)
+			}
+			for _, sql := range bh.executedSQLs {
+				require.NotContains(t, sql, "select account_id from mo_catalog.mo_account where account_id in")
+				require.NotContains(t, sql, "insert into mo_catalog.mo_pubs")
+				require.NotContains(t, sql, "mo_catalog.mo_subs")
+			}
+		})
+	}
+}
+
 func TestCreatePublicationIfNotExistsUsesPublisherAccount(t *testing.T) {
 	for _, existing := range []bool{false, true} {
 		t.Run(fmt.Sprintf("publisher exists=%t", existing), func(t *testing.T) {

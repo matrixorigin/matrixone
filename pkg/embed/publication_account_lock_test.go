@@ -24,6 +24,10 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 )
@@ -93,6 +97,62 @@ func TestCreatePublicationExplicitTargetLockScope(t *testing.T) {
 		require.NoError(t, <-drop)
 		require.Equal(t, 1, f.number(f.left, "select count(*) from mo_catalog.mo_subs where pub_name='pub_lock_existing' and sub_account_name='pub_lock_first' and status=0"))
 		require.Zero(t, f.number(f.left, "select count(*) from mo_catalog.mo_subs where pub_name='pub_lock_existing' and sub_account_id=?", id))
+	})
+
+	t.Run("publication dropped before source table becomes valid", func(t *testing.T) {
+		f := newPublicationAccountSQL(t, c)
+		defer f.stopStatements()
+		const create = "create publication if not exists pub_recheck database pub_new_src table t account pub_lock_target_01"
+		const publications = "select count(*) from mo_catalog.mo_pubs where account_id=0 and pub_name='pub_recheck'"
+		const grants = "select count(*) from mo_catalog.mo_subs where pub_account_id=0 and pub_name='pub_recheck'"
+		f.exec(f.left, "create database pub_new_src")
+		f.exec(f.left, "create publication pub_recheck database pub_lock_src account pub_lock_first")
+
+		// Pause after the shared source lock is granted. An exclusive lock as a
+		// barrier would itself force this statement to retry before validation.
+		cn, err := c.GetCNService(1)
+		require.NoError(t, err)
+		tc := runtime.MustGetTestingContext(cn.ServiceID())
+		previous := tc.GetAdjustLockResultFunc()
+		defer tc.SetAdjustLockResultFunc(previous)
+		reached, resume := make(chan struct{}), make(chan struct{})
+		release := sync.OnceFunc(func() { close(resume) })
+		defer release()
+		pause := sync.OnceFunc(func() {
+			close(reached)
+			select {
+			case <-resume:
+			case <-f.ctx.Done():
+			}
+		})
+		tc.SetAdjustLockResultFunc(func(id []byte, tableID uint64, result *lock.Result) {
+			previous(id, tableID, result)
+			if tableID == catalog.MO_DATABASE_ID {
+				pause()
+			}
+		})
+		publishing := f.start(f.right, create)
+		select {
+		case <-reached:
+		case err := <-publishing:
+			t.Fatalf("CREATE finished before obtaining its source lock: %v", err)
+		case <-f.ctx.Done():
+			t.Fatal(f.ctx.Err())
+		}
+		f.exec(f.left, "drop publication pub_recheck")
+		f.exec(f.left, "create table pub_new_src.t (id int primary key)")
+		release()
+
+		err = <-publishing
+		require.Zero(t, f.number(f.left, publications))
+		require.Zero(t, f.number(f.left, grants))
+		var wire *mysql.MySQLError
+		require.ErrorAs(t, err, &wire, "a missing publication needs a fresh attempt with recipient locks")
+		require.EqualValues(t, moerr.ErrTxnNeedRetry, wire.Number)
+		f.exec(f.right, create)
+		require.Equal(t, 1, f.number(f.left, publications+" and database_name='pub_new_src' and table_list='t'"))
+		require.Equal(t, 1, f.number(f.left, grants))
+		require.Equal(t, 1, f.number(f.left, grants+" and sub_account_name='pub_lock_target_01' and status=0"))
 	})
 
 	for _, tc := range []struct {
