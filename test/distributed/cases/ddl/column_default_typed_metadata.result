@@ -67,7 +67,7 @@ du  ¦  decimal(10,4)  ¦  YES  ¦    ¦  1.2000  ¦    ¦    𝄀
 d40  ¦  decimal(40,4)  ¦  YES  ¦    ¦  1.2000  ¦    ¦    𝄀
 ds  ¦  decimal(10,4)  ¦  YES  ¦    ¦  1.2000  ¦    ¦    𝄀
 dp  ¦  decimal(10,4)  ¦  YES  ¦    ¦  1.2000  ¦    ¦    𝄀
-db1  ¦  decimal(10,4)  ¦  YES  ¦    ¦  0.0051  ¦    ¦  
+db1  ¦  decimal(10,4)  ¦  YES  ¦    ¦  51.0000  ¦    ¦  
 select column_name, column_default, extra from information_schema.columns
 where table_schema='column_default_typed_metadata' and table_name='t_attributed'
 order by ordinal_position;
@@ -77,11 +77,11 @@ du  ¦  1.2000  ¦    𝄀
 d40  ¦  1.2000  ¦    𝄀
 ds  ¦  1.2000  ¦    𝄀
 dp  ¦  1.2000  ¦    𝄀
-db1  ¦  0.0051  ¦  
+db1  ¦  51.0000  ¦  
 insert into t_attributed(id) values (1);
 select id, du, d40, ds, dp, db1 from t_attributed;
 ➤ id[4,32,0]  ¦  du[3,10,4]  ¦  d40[3,40,4]  ¦  ds[3,10,4]  ¦  dp[3,10,4]  ¦  db1[3,10,4]  𝄀
-1  ¦  1.2000  ¦  1.2000  ¦  1.2000  ¦  1.2000  ¦  0.0051
+1  ¦  1.2000  ¦  1.2000  ¦  1.2000  ¦  1.2000  ¦  51.0000
 create table t_u64boundary (
 id int primary key,
 u64max decimal(40,4) unsigned default 18446744073709551615,

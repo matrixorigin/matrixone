@@ -181,7 +181,8 @@ func TestIssue31161ColumnDefaultMetadata(t *testing.T) {
 		exec("insert into " + dbName + ".e(id) values (1)")
 
 		// I1: bit/hex literal defaults on DECIMAL columns render the typed
-		// value (the IsBin payload is a binary coefficient, never text).
+		// value: the IsBin payload is one unsigned integer (never text), and
+		// the declared scale is applied to it exactly once (#31816).
 		exec("create table " + dbName + ".f (" +
 			"id int primary key, " +
 			"db1 decimal(10,4) unsigned default b'00110011', " +
@@ -315,21 +316,23 @@ func TestIssue31161ColumnDefaultMetadata(t *testing.T) {
 		requireValue("select da from "+dbName+".e where id = 1", "1.2000")
 		requireValue("select dau from "+dbName+".e where id = 1", "1.2000")
 
-		// I1: the binary-coefficient decode pins 0.0051/51 next to the
-		// inserted values; a text parse would have published 3.0000.
+		// I1: the bit/hex payload decodes to one unsigned integer (51 for
+		// b'00110011'/0x33/x'33'); the declared scale applies exactly once,
+		// so the metadata surfaces and the inserted rows read 51.0000 at
+		// scale 4 and 51 at scale 0 (#31816).
 		requireMeta(dbName, "f", map[string]colMeta{
 			"id":  {defValid: false, extra: ""},
-			"db1": {def: "0.0051", defValid: true, extra: ""},
+			"db1": {def: "51.0000", defValid: true, extra: ""},
 			"db2": {def: "51", defValid: true, extra: ""},
-			"dh1": {def: "0.0051", defValid: true, extra: ""},
-			"dh2": {def: "0.0051", defValid: true, extra: ""},
-			"db3": {def: "0.0051", defValid: true, extra: ""},
+			"dh1": {def: "51.0000", defValid: true, extra: ""},
+			"dh2": {def: "51.0000", defValid: true, extra: ""},
+			"db3": {def: "51.0000", defValid: true, extra: ""},
 		})
-		requireValue("select db1 from "+dbName+".f where id = 1", "0.0051")
+		requireValue("select db1 from "+dbName+".f where id = 1", "51.0000")
 		requireValue("select db2 from "+dbName+".f where id = 1", "51")
-		requireValue("select dh1 from "+dbName+".f where id = 1", "0.0051")
-		requireValue("select dh2 from "+dbName+".f where id = 1", "0.0051")
-		requireValue("select db3 from "+dbName+".f where id = 1", "0.0051")
+		requireValue("select dh1 from "+dbName+".f where id = 1", "51.0000")
+		requireValue("select dh2 from "+dbName+".f where id = 1", "51.0000")
+		requireValue("select db3 from "+dbName+".f where id = 1", "51.0000")
 
 		// I4: reference columns keep their reference origin and mark; the
 		// referenced literal column keeps its literal metadata.

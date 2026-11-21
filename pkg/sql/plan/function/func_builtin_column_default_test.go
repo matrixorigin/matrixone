@@ -304,7 +304,7 @@ func Test_BuiltIn_MoShowVisibleBinColumnDefaultTypedAndExtra(t *testing.T) {
 		{"bit8 numeric", "51", cdLitBit(8, 51), "b'110011'", false, ""},
 		{"bit1 zero", "0b0", cdLitBit(1, 0), "b'0'", false, ""},
 		{"bit64 one", "0b1", cdLitBit(64, 1), "b'1'", false, ""},
-		{"dec64 folded bit spelling", "0b00110011", cdLitDec64(10, 4, 51), "0.0051", false, ""},
+		{"dec64 folded bit spelling", "0b00110011", cdLitDec64(10, 4, 510000), "51.0000", false, ""},
 		{"dec64 folded true", "true", cdLitDec64(10, 4, 10000), "1.0000", false, ""},
 		{"dec64 folded scientific", "1.2e0", litDec64S4, "1.2000", false, ""},
 		{"dec64 folded signed", "(+1.2)", litDec64S4, "1.2000", false, ""},
@@ -356,10 +356,13 @@ func Test_BuiltIn_MoShowVisibleBinColumnDefaultTypedAndExtra(t *testing.T) {
 			cdComposition(cdFn("unary_plus", cdType(types.T_decimal64, 2, 1), castLit12), dec64u104, "d"), "1.2000", false, ""},
 		{"attr signed float", "(+1.2e0)",
 			cdComposition(cdFn("unary_plus", cdType(types.T_float64, 0, 0), cdLitF64(1.2)), dec64u104, "d"), "1.2000", false, ""},
-		{"attr bit literal", "0b00110011", cdComposition(isBinBit, dec64u104, "d"), "0.0051", false, ""},
+		// IsBin payloads are one unsigned big-endian integer scaled once by
+		// the declared scale (#31816): b'00110011' (=0x33=51) at DECIMAL(10,4)
+		// renders 51.0000, and scale0 keeps its text identity.
+		{"attr bit literal", "0b00110011", cdComposition(isBinBit, dec64u104, "d"), "51.0000", false, ""},
 		{"attr bit literal scale0", "0b00110011", cdComposition(isBinBit, dec64u100, "d"), "51", false, ""},
-		{"attr dec256 bit literal", "0b00110011", cdComposition(isBinBit, dec256u404, "d"), "0.0051", false, ""},
-		{"attr hex literal", "0x33", cdComposition(isBinHex, dec64u104, "d"), "0.0051", false, ""},
+		{"attr dec256 bit literal", "0b00110011", cdComposition(isBinBit, dec256u404, "d"), "51.0000", false, ""},
+		{"attr hex literal", "0x33", cdComposition(isBinHex, dec64u104, "d"), "51.0000", false, ""},
 		// Decimal-carrier widening (I1): an integer literal above uint64
 		// binds as a raw decimal128 literal the attributed admission
 		// preserves; the renderer widens and rescales it like the
@@ -602,9 +605,10 @@ func TestConvertLiteralToDecimal128Branches(t *testing.T) {
 		want  string
 		ok    bool
 	}{
-		// An IsBin payload decodes as the big-endian base-256 coefficient,
-		// so b'00110011' (0x33) renders 51 at the declared scale.
-		{"bin", cdLitStrBin("\x33", plan.StringLiteralForm_STRING_LITERAL_BIT), 20, 6, "0.000051", true},
+		// An IsBin payload decodes as one unsigned big-endian integer scaled
+		// once by the declared scale (#31816): b'00110011' (0x33 = 51) at
+		// DECIMAL(20,6) renders 51.000000.
+		{"bin", cdLitStrBin("\x33", plan.StringLiteralForm_STRING_LITERAL_BIT), 20, 6, "51.000000", true},
 		{"f64", cdLitF64(1.5), 20, 6, "1.500000", true},
 		{"f32", cdLitF32(2.5), 20, 6, "2.500000", true},
 		{"bool false", cdLitBool(false), 20, 6, "0.000000", true},
