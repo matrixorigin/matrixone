@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -37,7 +38,7 @@ func isStorageIntegerOid(oid types.T) bool {
 	return false
 }
 
-// Integer assignment adjusts a typed source to the target storage boundary
+// Integer assignment adjusts a typed source to the target column boundary
 // only when SQL mode or IGNORE permits it. Use an exact integer domain so a
 // UINT64 source never passes through FLOAT64 before it is clipped.
 func clampIntegerAssignmentSource(proc *process.Process, source *vector.Vector, target types.T,
@@ -57,7 +58,7 @@ func clampIntegerAssignmentSource(proc *process.Process, source *vector.Vector, 
 		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[uint16](source), target, result, length, selection)
 	case types.T_uint32:
 		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[uint32](source), target, result, length, selection)
-	case types.T_uint64:
+	case types.T_uint64, types.T_bit:
 		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[uint64](source), target, result, length, selection)
 	}
 	return moerr.NewInternalError(proc.Ctx, "unsupported integer assignment source")
@@ -91,7 +92,7 @@ func appendClampedIntegerAssignment[S, D constraints.Integer](proc *process.Proc
 	source vector.FunctionParameterWrapper[S], result *vector.FunctionResult[D], length int,
 	selection *FunctionSelectList) error {
 	var zero D
-	bits := uint(unsafe.Sizeof(zero) * 8)
+	bits := integerAssignmentBitSize(result.GetType(), int(unsafe.Sizeof(zero)*8))
 	signed := ^zero < zero
 	maximum := uint64(math.MaxUint64)
 	minimumMagnitude := uint64(0)
@@ -126,7 +127,7 @@ func appendClampedIntegerAssignment[S, D constraints.Integer](proc *process.Proc
 			converted = D(magnitude)
 		}
 		if clipped {
-			appendIntegerAssignmentRangeWarning(proc, result.GetType().Oid, uint64(row))
+			appendIntegerAssignmentRangeWarning(proc, result.GetType(), uint64(row))
 		}
 		if err := result.Append(converted, false); err != nil {
 			return err
@@ -135,14 +136,112 @@ func appendClampedIntegerAssignment[S, D constraints.Integer](proc *process.Proc
 	return nil
 }
 
-func appendIntegerAssignmentRangeWarning(proc *process.Process, target types.T, row uint64) {
+func integerAssignmentBitSize(target types.Type, storageBits int) int {
+	if target.IsMediumInt() {
+		return int(target.Width)
+	}
+	return storageBits
+}
+
+func mediumIntAssignmentTypeName(target types.Type) string {
+	if target.Oid == types.T_uint32 {
+		return "mediumint unsigned"
+	}
+	return "mediumint"
+}
+
+func appendIntegerAssignmentRangeWarning(proc *process.Process, target types.Type, row uint64) {
 	if proc == nil {
 		return
 	}
 	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+		message := "Out of range value for %s assignment at row %d"
+		targetName := target.Oid.String()
+		if target.IsMediumInt() {
+			message = "Out of range value for column '%s' at row %d"
+			targetName = "mediumint"
+		}
 		appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
-			fmt.Sprintf("Out of range value for %s assignment at row %d", target, proc.WarningRowOffset+row+1))
+			fmt.Sprintf(message, targetName, proc.WarningRowOffset+row+1))
 	}
+}
+
+// Quoted radix text follows the legacy integer grammar. If the narrower
+// MEDIUMINT parse fails on range, only a valid physical-width parse may be
+// adjusted. Malformed text or values outside that grammar still fail.
+func retryMediumIntRadixText[I constraints.Integer](
+	ctx context.Context, proc *process.Process, target types.Type, text string, parseErr error,
+	mode castMode, row uint64, parse func(string, int) (I, error),
+) (I, bool, error) {
+	if !errors.Is(parseErr, strconv.ErrRange) || !isAssignmentSpecialNumericSyntax(text) {
+		return 0, false, parseErr
+	}
+	value, err := parse(text, 32)
+	if err != nil {
+		return value, false, err
+	}
+	if mode == castModeStrictStringWidth {
+		return value, false, moerr.NewOutOfRangef(ctx, mediumIntAssignmentTypeName(target), "value '%d'", value)
+	}
+	minimum, maximum, _ := target.MediumIntBounds()
+	appendIntegerAssignmentRangeWarning(proc, target, row)
+	return I(min(max(int64(value), minimum), maximum)), true, nil
+}
+
+// HEX and BIT literals use a character container with binary charset.
+// Opaque BINARY/VARBINARY data and prepared binary parameters keep their
+// existing conversion rules even if the vector has its binary flag set.
+func isIntegerAssignmentRadixLiteral(source *vector.Vector, isBinary bool) bool {
+	typ := source.GetType()
+	return isBinary && typ.Charset == types.CharsetBinary &&
+		(typ.Oid == types.T_varchar || typ.Oid == types.T_char)
+}
+
+// A binary literal carries a big-endian unsigned magnitude. Check the range
+// while reading the bytes so neither a uint64 nor the physical target wraps.
+func binaryToIntegerAssignment[I constraints.Integer](ctx context.Context, proc *process.Process,
+	source vector.FunctionParameterWrapper[types.Varlena], result *vector.FunctionResult[I],
+	bits, length int, selectList *FunctionSelectList, mode castMode,
+) error {
+	var zero I
+	target := result.GetType()
+	if ^zero < zero {
+		bits--
+	}
+	maximum := maxBitValue(bits)
+	for row := range length {
+		var raw []byte
+		isNull := true
+		if !functionRowSkipped(selectList, uint64(row)) {
+			raw, isNull = source.GetStrValue(uint64(row))
+		}
+		if isNull {
+			if err := result.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		var magnitude uint64
+		overflow := false
+		for _, b := range raw {
+			if magnitude > maximum>>8 {
+				overflow = true
+				break
+			}
+			magnitude = (magnitude << 8) | uint64(b)
+		}
+		if overflow || magnitude > maximum {
+			if mode == castModeStrictStringWidth {
+				return moerr.NewOutOfRangef(ctx, target.String(), "value 0x%x", raw)
+			}
+			magnitude = maximum
+			appendIntegerAssignmentRangeWarning(proc, target, uint64(row))
+		}
+		if err := result.Append(I(magnitude), false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func integerAssignmentMagnitude[S constraints.Integer](value S) (negative bool, magnitude uint64) {
@@ -175,7 +274,7 @@ func signedIntegerMagnitude(value int64) (bool, uint64) {
 }
 
 // Keep ordinary decimal casts unchanged: assignment alone adjusts the exact
-// rounded integer to the destination storage range.
+// rounded integer to the destination column range.
 func decimalToIntegerAssignment[D types.Decimal64 | types.Decimal128 | types.Decimal256](
 	proc *process.Process, source vector.FunctionParameterWrapper[D], target types.T,
 	result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
@@ -208,12 +307,13 @@ func roundDecimalAssignment[D types.Decimal64 | types.Decimal128 | types.Decimal
 	length int, selectList *FunctionSelectList, mode castMode, round func(D, int32) string,
 ) error {
 	var zero I
-	bits := int(unsafe.Sizeof(zero)) * 8
+	bits := integerAssignmentBitSize(result.GetType(), int(unsafe.Sizeof(zero)*8))
 	signed := ^zero < zero
 	rangeType, rangeValueFormat := result.GetType().String(), "value %s"
-	if signed {
-		// Keep the existing signed DECIMAL assignment diagnostics, which use
-		// the Go width name and quote the value. Unsigned targets use SQL names.
+	if result.GetType().IsMediumInt() {
+		rangeType, rangeValueFormat = mediumIntAssignmentTypeName(result.GetType()), "value '%s'"
+	} else if signed {
+		// Keep the established signed DECIMAL error text.
 		rangeType, rangeValueFormat = fmt.Sprintf("%T", zero), "value '%s'"
 	}
 	strict := mode == castModeStrictStringWidth ||
@@ -248,7 +348,7 @@ func roundDecimalAssignment[D types.Decimal64 | types.Decimal128 | types.Decimal
 			if strict {
 				return moerr.NewOutOfRangef(proc.Ctx, rangeType, rangeValueFormat, rounded)
 			}
-			appendIntegerAssignmentRangeWarning(proc, result.GetType().Oid, uint64(i))
+			appendIntegerAssignmentRangeWarning(proc, result.GetType(), uint64(i))
 		}
 		if err := result.Append(converted, false); err != nil {
 			return err
@@ -282,7 +382,7 @@ func floatToIntegerAssignment[F constraints.Float](proc *process.Process, source
 
 func roundFloatAssignment[F constraints.Float, I constraints.Integer](proc *process.Process, source vector.FunctionParameterWrapper[F], result *vector.FunctionResult[I], length int, selectList *FunctionSelectList, mode castMode) error {
 	var zero I
-	bits := int(unsafe.Sizeof(zero)) * 8
+	bits := integerAssignmentBitSize(result.GetType(), int(unsafe.Sizeof(zero)*8))
 	lower, upper := 0.0, math.Ldexp(1, bits)
 	signed := ^zero < zero
 	if signed {
@@ -305,9 +405,12 @@ func roundFloatAssignment[F constraints.Float, I constraints.Integer](proc *proc
 		}
 		if rounded < lower || rounded >= upper {
 			if mode == castModeStrictStringWidth {
+				if result.GetType().IsMediumInt() {
+					return moerr.NewOutOfRangef(proc.Ctx, mediumIntAssignmentTypeName(result.GetType()), "value '%v'", rounded)
+				}
 				return moerr.NewOutOfRangef(proc.Ctx, result.GetType().String(), "value %v", value)
 			}
-			appendIntegerAssignmentRangeWarning(proc, result.GetType().Oid, uint64(i))
+			appendIntegerAssignmentRangeWarning(proc, result.GetType(), uint64(i))
 			var clipped I
 			if rounded < lower {
 				if signed {

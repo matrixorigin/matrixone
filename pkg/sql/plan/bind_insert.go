@@ -6568,7 +6568,7 @@ func (builder *QueryBuilder) buildValueScan(
 				// materializes the target type directly and would bypass the
 				// admission composition.
 				literal := r[i]
-				if colTyp.Oid.IsDecimal() {
+				if colTyp.Oid.IsDecimal() || colTyp.Oid.IsInteger() {
 					literal = unwrapParenExpr(literal)
 				}
 				if nv, ok := literal.(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {

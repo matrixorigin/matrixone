@@ -16,7 +16,9 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -31,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/exp/constraints"
 )
 
 const (
@@ -2100,29 +2103,13 @@ func forceCastExprWithNameAndAssignment(
 
 // Keep ordinary in-range VALUES literals on their established typed-constant
 // path. Only an adjustment candidate needs its wider source at runtime.
-func insertNumericLiteralNeedsAdjustment(proc *process.Process, numVal *tree.NumVal, colType *types.Type) bool {
-	if colType.Oid.IsDecimal() && function.DecimalAssignmentLosesScale(numVal.String(), colType.Scale) {
+func insertDecimalLiteralNeedsAdjustment(proc *process.Process, numVal *tree.NumVal, colType *types.Type) bool {
+	if function.DecimalAssignmentLosesScale(numVal.String(), colType.Scale) {
 		return true
 	}
 	var canInsert bool
 	var err error
 	switch colType.Oid {
-	case types.T_int8:
-		canInsert, _, err = util.SetInsertValueNumber[int8](proc, numVal, colType)
-	case types.T_int16:
-		canInsert, _, err = util.SetInsertValueNumber[int16](proc, numVal, colType)
-	case types.T_int32:
-		canInsert, _, err = util.SetInsertValueNumber[int32](proc, numVal, colType)
-	case types.T_int64:
-		canInsert, _, err = util.SetInsertValueNumber[int64](proc, numVal, colType)
-	case types.T_uint8:
-		canInsert, _, err = util.SetInsertValueNumber[uint8](proc, numVal, colType)
-	case types.T_uint16:
-		canInsert, _, err = util.SetInsertValueNumber[uint16](proc, numVal, colType)
-	case types.T_uint32:
-		canInsert, _, err = util.SetInsertValueNumber[uint32](proc, numVal, colType)
-	case types.T_uint64:
-		canInsert, _, err = util.SetInsertValueNumber[uint64](proc, numVal, colType)
 	case types.T_decimal64:
 		canInsert, _, err = util.SetInsertValueDecimal64(proc, numVal, colType)
 	case types.T_decimal128:
@@ -2143,6 +2130,37 @@ func decimalRadixAssignmentSource(ast tree.Expr) *plan.Expr {
 	return nil
 }
 
+// Use the same checked conversion to decide whether a fast-path integer
+// constant fits. Only overflowing values in an adjusting mode need a cast.
+func makeIntegerAssignmentLiteral[T constraints.Integer](
+	proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool,
+	makeConst func(T) *plan.Expr,
+) (*plan.Expr, error) {
+	canInsert, value, err := util.SetInsertValueNumber[T](proc, numVal, colType)
+	if err == nil && canInsert {
+		return makeConst(value), nil
+	}
+	overflow := moerr.IsMoErrCode(err, moerr.ErrOutOfRange) || errors.Is(err, strconv.ErrRange)
+	if overflow && (isIgnore || !function.StrictSqlModeForAssignment(proc)) {
+		switch numVal.ValType {
+		case tree.P_int64, tree.P_uint64, tree.P_hexnum, tree.P_bit:
+			return bindIntegerAssignmentLiteral(proc, numVal, colType, isIgnore)
+		}
+	}
+	return nil, err
+}
+
+func bindIntegerAssignmentLiteral(
+	proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool,
+) (*plan.Expr, error) {
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, plan.Type{}, nil)
+	source, err := binder.BindExpr(numVal, 0, true)
+	if err != nil {
+		return nil, err
+	}
+	return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
+}
+
 func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (*plan.Expr, error) {
 	if numVal.ValType == tree.P_null || numVal.ValType == tree.P_nulltext {
 		return makePlan2NullConstExprWithType(), nil
@@ -2151,7 +2169,7 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 	lenient := decimalTarget && (isIgnore || !function.StrictSqlModeForAssignment(proc))
 	scaleLoss := decimalTarget && !lenient && function.DecimalAssignmentLosesScale(numVal.String(), colType.Scale)
 	if decimalTarget && (numVal.ValType == tree.P_hexnum || numVal.ValType == tree.P_bit) &&
-		(colType.Oid == types.T_decimal256 || lenient && insertNumericLiteralNeedsAdjustment(proc, numVal, colType)) {
+		(colType.Oid == types.T_decimal256 || lenient && insertDecimalLiteralNeedsAdjustment(proc, numVal, colType)) {
 		// The numeric cast must see the radix spelling rather than binary bytes.
 		source := decimalRadixAssignmentSource(numVal)
 		return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
@@ -2159,17 +2177,7 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 	if decimalTarget && (lenient || scaleLoss) &&
 		(numVal.ValType == tree.P_decimal || numVal.ValType == tree.P_int64 ||
 			numVal.ValType == tree.P_uint64 || numVal.ValType == tree.P_float64) &&
-		insertNumericLiteralNeedsAdjustment(proc, numVal, colType) {
-		binder := NewDefaultBinder(proc.Ctx, nil, nil, plan.Type{}, nil)
-		source, err := binder.BindExpr(numVal, 0, true)
-		if err != nil {
-			return nil, err
-		}
-		return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
-	}
-	if colType.Oid.IsInteger() && (isIgnore || !function.StrictSqlModeForAssignment(proc)) &&
-		(numVal.ValType == tree.P_int64 || numVal.ValType == tree.P_uint64) &&
-		insertNumericLiteralNeedsAdjustment(proc, numVal, colType) {
+		insertDecimalLiteralNeedsAdjustment(proc, numVal, colType) {
 		binder := NewDefaultBinder(proc.Ctx, nil, nil, plan.Type{}, nil)
 		source, err := binder.BindExpr(numVal, 0, true)
 		if err != nil {
@@ -2188,26 +2196,11 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		expr := MakePlan2StringConstExprWithType(numVal.String())
 		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
 	}
-	// MEDIUMINT's 24-bit domain is narrower than its int32/uint32 storage.
-	// Keep the literal's original source type so assignment checking cannot be
-	// bypassed by the VALUES fast path.
-	if colType.IsMediumInt() {
-		binder := NewDefaultBinder(proc.Ctx, nil, nil, plan.Type{}, nil)
-		source, err := binder.BindExpr(numVal, 0, true)
-		if err != nil {
-			return nil, err
-		}
-		return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
-	}
-	// Integer assignment must consume the literal's source type, not parse its
-	// spelling as an integer or truncate it in the VALUES fast path.
-	if colType.Oid.IsInteger() && (numVal.ValType == tree.P_decimal || numVal.ValType == tree.P_float64) {
-		binder := NewDefaultBinder(proc.Ctx, nil, nil, plan.Type{}, nil)
-		source, err := binder.BindExpr(numVal, 0, true)
-		if err != nil {
-			return nil, err
-		}
-		return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
+	// Preserve the source before conversion whenever the physical constant
+	// would lose fractional information or bypass a logical column bound.
+	if colType.Oid.IsInteger() && (colType.IsMediumInt() ||
+		numVal.ValType == tree.P_decimal || numVal.ValType == tree.P_float64) {
+		return bindIntegerAssignmentLiteral(proc, numVal, colType, isIgnore)
 	}
 	switch colType.Oid {
 	case types.T_bool:
@@ -2224,53 +2217,21 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		}
 		return MakePlan2Uint64ConstExprWithType(num), err
 	case types.T_int8:
-		canInsert, num, err := util.SetInsertValueNumber[int8](proc, numVal, colType)
-		if err != nil || !canInsert {
-			return nil, err
-		}
-		return MakePlan2Int8ConstExprWithType(num), err
+		return makeIntegerAssignmentLiteral(proc, numVal, colType, isIgnore, MakePlan2Int8ConstExprWithType)
 	case types.T_int16:
-		canInsert, num, err := util.SetInsertValueNumber[int16](proc, numVal, colType)
-		if err != nil || !canInsert {
-			return nil, err
-		}
-		return MakePlan2Int16ConstExprWithType(num), err
+		return makeIntegerAssignmentLiteral(proc, numVal, colType, isIgnore, MakePlan2Int16ConstExprWithType)
 	case types.T_int32:
-		canInsert, num, err := util.SetInsertValueNumber[int32](proc, numVal, colType)
-		if err != nil || !canInsert {
-			return nil, err
-		}
-		return MakePlan2Int32ConstExprWithType(num), err
+		return makeIntegerAssignmentLiteral(proc, numVal, colType, isIgnore, MakePlan2Int32ConstExprWithType)
 	case types.T_int64:
-		canInsert, num, err := util.SetInsertValueNumber[int64](proc, numVal, colType)
-		if err != nil || !canInsert {
-			return nil, err
-		}
-		return MakePlan2Int64ConstExprWithType(num), err
+		return makeIntegerAssignmentLiteral(proc, numVal, colType, isIgnore, MakePlan2Int64ConstExprWithType)
 	case types.T_uint8:
-		canInsert, num, err := util.SetInsertValueNumber[uint8](proc, numVal, colType)
-		if err != nil || !canInsert {
-			return nil, err
-		}
-		return MakePlan2Uint8ConstExprWithType(num), err
+		return makeIntegerAssignmentLiteral(proc, numVal, colType, isIgnore, MakePlan2Uint8ConstExprWithType)
 	case types.T_uint16:
-		canInsert, num, err := util.SetInsertValueNumber[uint16](proc, numVal, colType)
-		if err != nil || !canInsert {
-			return nil, err
-		}
-		return MakePlan2Uint16ConstExprWithType(num), err
+		return makeIntegerAssignmentLiteral(proc, numVal, colType, isIgnore, MakePlan2Uint16ConstExprWithType)
 	case types.T_uint32:
-		canInsert, num, err := util.SetInsertValueNumber[uint32](proc, numVal, colType)
-		if err != nil || !canInsert {
-			return nil, err
-		}
-		return MakePlan2Uint32ConstExprWithType(num), err
+		return makeIntegerAssignmentLiteral(proc, numVal, colType, isIgnore, MakePlan2Uint32ConstExprWithType)
 	case types.T_uint64:
-		canInsert, num, err := util.SetInsertValueNumber[uint64](proc, numVal, colType)
-		if err != nil || !canInsert {
-			return nil, err
-		}
-		return MakePlan2Uint64ConstExprWithType(num), err
+		return makeIntegerAssignmentLiteral(proc, numVal, colType, isIgnore, makePlan2Uint64ConstExprWithType)
 	case types.T_float32:
 		canInsert, num, err := util.SetInsertValueNumber[float32](proc, numVal, colType)
 		if err != nil || !canInsert {
@@ -2513,7 +2474,7 @@ func buildValueScan(
 				// path materializes the target type directly and would bypass
 				// the admission composition.
 				literal := r[i]
-				if colTyp.Oid.IsDecimal() {
+				if colTyp.Oid.IsDecimal() || colTyp.Oid.IsInteger() {
 					literal = unwrapParenExpr(literal)
 				}
 				if nv, ok := literal.(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {

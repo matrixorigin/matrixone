@@ -1113,15 +1113,6 @@ func NewExplicitCast(parameters []*vector.Vector, result vector.FunctionResultWr
 	return newCast(parameters, result, proc, length, selectList, castModeExplicit, false)
 }
 
-func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, mode castMode, allowTrailingSpaceTrim bool) error {
-	err := newCastWithoutMediumIntBounds(parameters, result, proc, length, selectList, mode, allowTrailingSpaceTrim)
-	if err != nil || !mode.isAssignment() || len(parameters) < 2 || !parameters[1].GetType().IsMediumInt() {
-		return err
-	}
-	return enforceMediumIntAssignmentBounds(
-		proc, *parameters[1].GetType(), result.GetResultVector(), length, selectList, mode)
-}
-
 func enforceMediumIntAssignmentBounds(
 	proc *process.Process,
 	targetType types.Type,
@@ -1153,14 +1144,14 @@ func enforceMediumIntAssignmentBounds(
 				continue
 			}
 			if strict {
-				return moerr.NewOutOfRangef(ctx, "mediumint", "value '%d'", value)
+				return moerr.NewOutOfRangef(ctx, mediumIntAssignmentTypeName(targetType), "value '%d'", value)
 			}
 			if value < min {
 				values[row] = int32(min)
 			} else {
 				values[row] = int32(max)
 			}
-			appendMediumIntRangeWarning(proc, row)
+			appendIntegerAssignmentRangeWarning(proc, targetType, uint64(row))
 		}
 		return nil
 	}
@@ -1176,25 +1167,15 @@ func enforceMediumIntAssignmentBounds(
 			continue
 		}
 		if strict {
-			return moerr.NewOutOfRangef(ctx, "mediumint unsigned", "value '%d'", value)
+			return moerr.NewOutOfRangef(ctx, mediumIntAssignmentTypeName(targetType), "value '%d'", value)
 		}
 		values[row] = uint32(max)
-		appendMediumIntRangeWarning(proc, row)
+		appendIntegerAssignmentRangeWarning(proc, targetType, uint64(row))
 	}
 	return nil
 }
 
-func appendMediumIntRangeWarning(proc *process.Process, row int) {
-	if proc == nil {
-		return
-	}
-	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
-		appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
-			fmt.Sprintf("Out of range value for column 'mediumint' at row %d", proc.WarningRowOffset+uint64(row)+1))
-	}
-}
-
-func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, mode castMode, allowTrailingSpaceTrim bool) error {
+func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, mode castMode, allowTrailingSpaceTrim bool) error {
 	var err error
 	execProc := proc
 	// Cast Parameter1 as Type Parameter2
@@ -1268,7 +1249,7 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 			vector.MustFunctionResult[types.Date](result), length, selectList, mode)
 	}
 	if (mode == castModeAssignment || mode == castModeAssignmentIgnore) &&
-		isStorageIntegerOid(fromType.Oid) && isStorageIntegerOid(toType.Oid) {
+		(isStorageIntegerOid(fromType.Oid) || fromType.Oid == types.T_bit) && isStorageIntegerOid(toType.Oid) {
 		return clampIntegerAssignmentSource(proc, from, toType.Oid, result, length, selectList)
 	}
 	if mode.isAssignment() && toType.Oid.IsInteger() {
@@ -1278,10 +1259,6 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 			return floatToIntegerAssignment(proc, vector.GenerateFunctionFixedTypeParameter[float32](from), toType.Oid, result, length, selectList, mode)
 		case types.T_float64:
 			return floatToIntegerAssignment(proc, vector.GenerateFunctionFixedTypeParameter[float64](from), toType.Oid, result, length, selectList, mode)
-		}
-	}
-	if mode.isAssignment() && toType.Oid.IsInteger() {
-		switch fromType.Oid {
 		case types.T_decimal64:
 			return decimalToIntegerAssignment(proc, vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from), toType.Oid, result, length, selectList, mode, decimal64RoundedIntegerString)
 		case types.T_decimal128:
@@ -1453,6 +1430,9 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(execProc, s, *toType, result, length, selectList, mode, allowTrailingSpaceTrim, reportDataTooLong)
+		if !result.ArgumentIsBin(0) || isIntegerAssignmentRadixLiteral(from, result.ArgumentIsBin(0)) {
+			return err
+		}
 	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		//NOTE: Don't mix T_array and T_varchar.
 		// T_varchar will have "[1,2,3]" string
@@ -1492,6 +1472,11 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 	default:
 		// XXX we set the function here to adapt to the BVT cases.
 		err = formatCastError(proc.Ctx, from, *toType, "")
+	}
+	// Legacy source converters may still produce a physical int32 value
+	// before checking MEDIUMINT. Sources handled above already checked it.
+	if err == nil && mode.isAssignment() && toType.IsMediumInt() {
+		return enforceMediumIntAssignmentBounds(proc, *toType, result.GetResultVector(), length, selectList, mode)
 	}
 	return err
 }
@@ -7688,6 +7673,12 @@ func strToSignedWithProc[T constraints.Signed](
 	var i uint64
 	var l = uint64(length)
 	isBinary := to.ArgumentIsBin(0)
+	if mode.isAssignment() {
+		bitSize = integerAssignmentBitSize(to.GetType(), bitSize)
+		if isIntegerAssignmentRadixLiteral(from.GetSourceVector(), isBinary) {
+			return binaryToIntegerAssignment(ctx, proc, from, to, bitSize, length, selectList, mode)
+		}
+	}
 
 	var result T
 	for i = 0; i < l; i++ {
@@ -7724,6 +7715,7 @@ func strToSignedWithProc[T constraints.Signed](
 				var r int64
 				var err error
 				var rangeWarning explicitIntegerCastWarning
+				var assignmentAdjusted bool
 				var integerPrefix string
 				var integerHasPrefix, integerOutOfRange bool
 				if len(explicit) > 1 && explicit[1] {
@@ -7733,8 +7725,14 @@ func strToSignedWithProc[T constraints.Signed](
 					r, rangeWarning, err = parseSignedExplicitCastStringWithWarning(s, bitSize)
 				} else {
 					r, err = parseSignedCastString(s, bitSize)
+					if err != nil && mode.isAssignment() && to.GetType().IsMediumInt() {
+						r, assignmentAdjusted, err = retryMediumIntRadixText(ctx, proc, to.GetType(), s, err, mode, i, parseSignedCastString)
+					}
 				}
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return err
+					}
 					if (mode == castModeAssignmentIgnore || (mode == castModeAssignment && !isStrictSqlMode(proc))) &&
 						!isBinary && !isAssignmentSpecialNumericSyntax(s) {
 						if prefix, hasPrefix, truncated, prefixErr := assignmentIntegerPrefix(s); hasPrefix {
@@ -7757,7 +7755,7 @@ func strToSignedWithProc[T constraints.Signed](
 								if strings.HasPrefix(prefix, "-") {
 									clipped = -int64(uint64(1) << (bitSize - 1))
 								}
-								appendIntegerAssignmentRangeWarning(proc, to.GetType().Oid, i)
+								appendIntegerAssignmentRangeWarning(proc, to.GetType(), i)
 								if err = to.Append(T(clipped), false); err != nil {
 									return err
 								}
@@ -7788,13 +7786,16 @@ func strToSignedWithProc[T constraints.Signed](
 					// XXX I'm not sure if we should return the int8 / int16 / int64 info. or
 					// just return the int. the old code just return the int. too much bvt result needs to update.
 					if strings.Contains(err.Error(), "value out of range") {
+						if mode.isAssignment() && to.GetType().IsMediumInt() {
+							return moerr.NewOutOfRangef(ctx, mediumIntAssignmentTypeName(to.GetType()), "value '%s'", s)
+						}
 						return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value '%s'", s)
 					}
 					return moerr.NewInvalidArg(ctx, "cast to int", s)
 				}
 				if len(explicit) > 1 && explicit[1] {
 					appendIntegerNumericCoercionWarning(proc, s, integerPrefix, integerHasPrefix, integerOutOfRange)
-				} else if rangeWarning != explicitIntegerCastTruncated {
+				} else if !assignmentAdjusted && rangeWarning != explicitIntegerCastTruncated {
 					appendNumericCoercionWarningAs(proc, s, integerCastWarningType(explicit))
 				}
 				appendExplicitIntegerCastWarning(proc, s, rangeWarning)
@@ -8865,6 +8866,12 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 	var i uint64
 	var l = uint64(length)
 	isBinary := to.ArgumentIsBin(0)
+	if mode.isAssignment() {
+		bitSize = integerAssignmentBitSize(to.GetType(), bitSize)
+		if isIntegerAssignmentRadixLiteral(from.GetSourceVector(), isBinary) {
+			return binaryToIntegerAssignment(ctx, proc, from, to, bitSize, length, selectList, mode)
+		}
+	}
 
 	var val uint64
 	var tErr error
@@ -8883,6 +8890,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 		} else {
 			var res *string
 			var rangeWarning explicitIntegerCastWarning
+			var assignmentAdjusted bool
 			var integerPrefix string
 			var integerHasPrefix, integerOutOfRange bool
 			if isBinary {
@@ -8903,9 +8911,15 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 					val, rangeWarning, tErr = parseUnsignedExplicitCastStringWithWarning(s, bitSize)
 				} else {
 					val, tErr = parseUnsignedCastString(s, bitSize)
+					if tErr != nil && mode.isAssignment() && to.GetType().IsMediumInt() {
+						val, assignmentAdjusted, tErr = retryMediumIntRadixText(ctx, proc, to.GetType(), s, tErr, mode, i, parseUnsignedCastString)
+					}
 				}
 			}
 			if tErr != nil {
+				if moerr.IsMoErrCode(tErr, moerr.ErrOutOfRange) {
+					return tErr
+				}
 				if (mode == castModeAssignmentIgnore || (mode == castModeAssignment && !isStrictSqlMode(proc))) &&
 					!isBinary && !isAssignmentSpecialNumericSyntax(*res) {
 					if prefix, hasPrefix, truncated, prefixErr := assignmentIntegerPrefix(*res); hasPrefix {
@@ -8930,7 +8944,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 							if strings.HasPrefix(prefix, "-") {
 								clipped = 0
 							}
-							appendIntegerAssignmentRangeWarning(proc, to.GetType().Oid, i)
+							appendIntegerAssignmentRangeWarning(proc, to.GetType(), i)
 							if err := to.Append(T(clipped), false); err != nil {
 								return err
 							}
@@ -8956,6 +8970,9 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 					continue
 				}
 				if strings.Contains(tErr.Error(), "value out of range") {
+					if mode.isAssignment() && to.GetType().IsMediumInt() {
+						return moerr.NewOutOfRangef(ctx, mediumIntAssignmentTypeName(to.GetType()), "value '%s'", *res)
+					}
 					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", *res)
 				}
 				return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), *res)
@@ -8963,7 +8980,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 			if !isBinary {
 				if len(explicit) > 1 && explicit[1] {
 					appendIntegerNumericCoercionWarning(proc, *res, integerPrefix, integerHasPrefix, integerOutOfRange)
-				} else if rangeWarning != explicitIntegerCastTruncated {
+				} else if !assignmentAdjusted && rangeWarning != explicitIntegerCastTruncated {
 					appendNumericCoercionWarningAs(proc, *res, integerCastWarningType(explicit))
 				}
 				appendExplicitIntegerCastWarning(proc, *res, rangeWarning)

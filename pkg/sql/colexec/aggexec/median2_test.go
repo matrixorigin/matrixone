@@ -77,10 +77,8 @@ func TestMedianDecimal38UsesWideExactResult(t *testing.T) {
 
 func TestMedianDecimal256ResultComposes(t *testing.T) {
 	mp := mpool.MustNewZero()
-	t.Cleanup(func() {
-		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
-	})
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	inputType := types.New(types.T_decimal128, 38, 0)
 	input := vector.NewVec(inputType)
 	t.Cleanup(func() { input.Free(mp) })

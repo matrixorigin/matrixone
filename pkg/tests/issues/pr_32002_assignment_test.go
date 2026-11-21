@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -86,24 +86,85 @@ func TestPR32002ReviewBoundaries(t *testing.T) {
 			require.Equal(t, "2.0", value)
 		}
 
+		checkIntegerAssignment := func(warning, expected string) {
+			t.Helper()
+			func() {
+				rows, err := conn.QueryContext(ctx, "show warnings")
+				require.NoError(t, err)
+				defer rows.Close()
+				require.True(t, rows.Next())
+				var level, message string
+				var code uint16
+				require.NoError(t, rows.Scan(&level, &code, &message))
+				require.Equal(t, "Warning", level)
+				require.Equal(t, uint16(moerr.ER_WARN_DATA_OUT_OF_RANGE), code)
+				require.Equal(t, warning, message)
+				require.False(t, rows.Next(), "one clipped value produces one warning")
+				require.NoError(t, rows.Err())
+			}()
+			var values string
+			require.NoError(t, conn.QueryRowContext(ctx, "select group_concat(v order by v) from row_warning").Scan(&values))
+			require.Equal(t, expected, values)
+		}
 		for _, tc := range []struct {
-			typ, value, warning string
-			max                 int
+			typ, warning, stored string
+			inputs               []string
 		}{
-			{"tinyint", "'300'", "Out of range value for TINYINT assignment at row 2", 127},
-			{"mediumint", "8388608", "Out of range value for column 'mediumint' at row 2", 8388607},
+			{"tinyint", "TINYINT assignment", "1,127", []string{"'300'"}},
+			{"tinyint unsigned", "TINYINT UNSIGNED assignment", "1,255",
+				[]string{"256", "0x100", "(X'0100')", "0b100000000", "b'100000000'", "0x10000000000000000"}},
+			{"mediumint", "column 'mediumint'", "1,8388607",
+				[]string{"8388608", "2147483648", "2147483648.1", "2147483648e0", "'8388608tail'", "'2147483648tail'", "'0x1000000'"}},
+			{"mediumint", "column 'mediumint'", "-8388608,1", []string{"-2147483649"}},
+			{"mediumint unsigned", "column 'mediumint'", "1,16777215", []string{"4294967296", "'0x1000000'"}},
+			{"mediumint unsigned", "column 'mediumint'", "0,1", []string{"-1"}},
 		} {
 			exec("create table row_warning (v " + tc.typ + ")")
-			exec("insert ignore into row_warning values (1),(" + tc.value + ")")
-			var level, warning string
-			var code, maximum int
-			require.NoError(t, conn.QueryRowContext(ctx, "show warnings").Scan(&level, &code, &warning))
-			require.Equal(t, int(moerr.ER_WARN_DATA_OUT_OF_RANGE), code)
-			require.Equal(t, tc.warning, warning)
-			require.NoError(t, conn.QueryRowContext(ctx, "select max(v) from row_warning").Scan(&maximum))
-			require.Equal(t, tc.max, maximum)
+			for _, mode := range []struct{ sqlMode, insert string }{
+				{"", "insert"}, {"STRICT_TRANS_TABLES", "insert ignore"},
+			} {
+				exec("set session sql_mode='" + mode.sqlMode + "'")
+				for _, value := range tc.inputs {
+					exec("delete from row_warning")
+					exec(mode.insert + " into row_warning values (1),(" + value + ")")
+					checkIntegerAssignment("Out of range value for "+tc.warning+" at row 2", tc.stored)
+				}
+			}
 			exec("drop table row_warning")
 		}
+
+		exec("create table row_warning (v tinyint unsigned)")
+		exec("insert into row_warning values (0xff),((0b10)),(NULL)")
+		require.Empty(t, warningCodes())
+		var radixValues string
+		require.NoError(t, conn.QueryRowContext(ctx, "select group_concat(v order by v) from row_warning").Scan(&radixValues))
+		require.Equal(t, "2,255", radixValues)
+		exec("delete from row_warning")
+		for _, query := range []string{
+			"insert into row_warning values (1),(0x100)",
+			"insert into row_warning select 0x100",
+		} {
+			_, err := conn.ExecContext(ctx, query)
+			var myErr *mysql.MySQLError
+			require.ErrorAs(t, err, &myErr)
+			require.Equal(t, uint16(moerr.ER_DATA_OUT_OF_RANGE), myErr.Number)
+		}
+		var rejectedRows int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from row_warning").Scan(&rejectedRows))
+		require.Zero(t, rejectedRows)
+
+		for _, query := range []string{
+			"insert ignore into row_warning select 0x100",
+			"insert ignore into row_warning select cast(256 as bit(9))",
+		} {
+			exec(query)
+			checkIntegerAssignment("Out of range value for TINYINT UNSIGNED assignment at row 1", "255")
+			exec("delete from row_warning")
+		}
+		exec("insert into row_warning values (1)")
+		exec("update ignore row_warning set v=0x100")
+		checkIntegerAssignment("Out of range value for TINYINT UNSIGNED assignment at row 1", "255")
+		exec("drop table row_warning")
 
 		exec("create table warning_source (v int)")
 		exec("insert into warning_source values (1),(300)")
