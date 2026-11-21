@@ -957,7 +957,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <funcExpr> function_call_window
 %type <expr> sample_function_expr
 
-%type <unresolvedName> column_name column_name_unresolved normal_ident
+%type <unresolvedName> column_name column_name_unresolved column_decl_name normal_ident
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam create_cdc_opt create_cdc_opts
 %type <str> charset_keyword db_name db_name_opt
 %type <str> backup_type_opt backup_timestamp_opt
@@ -965,7 +965,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <str> non_reserved_keyword
 %type <str> equal_opt column_keyword_opt
 %type <str> as_opt_id name_string
-%type <cstr> ident as_name_opt db_name_ident
+%type <cstr> ident as_name_opt db_name_ident ident_or_end
 %type <str> table_alias explain_sym prepare_sym deallocate_sym stmt_name reset_sym
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
@@ -2246,6 +2246,10 @@ normal_ident:
         dbNameCStr := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
         tblNameCStr := yylex.(*Lexer).GetDbOrTblNameCStr($3.Origin())
         $$ = tree.NewUnresolvedName(dbNameCStr, tblNameCStr, $5)
+    }
+|   END
+    {
+        $$ = tree.NewUnresolvedName(tree.NewCStr($1, 1))
     }
 
 columns_or_variable_list_opt:
@@ -3660,6 +3664,15 @@ update_value:
     {
         $$ = &tree.UpdateExpr{Names: []*tree.UnresolvedName{$1}, Expr: $3}
     }
+|   END '=' expr_or_default
+    {
+        $$ = &tree.UpdateExpr{
+            Names: []*tree.UnresolvedName{
+                tree.NewUnresolvedName(tree.NewCStr($1, 1)),
+            },
+            Expr: $3,
+        }
+    }
 
 lock_stmt:
     lock_table_stmt
@@ -4613,7 +4626,7 @@ alter_option:
         opt := tree.NewAlterTableModifyColumnClause(typ, newColumn, position)
 	    $$ = tree.AlterTableOption(opt)
     }
-|   CHANGE column_keyword_opt column_name column_def column_position
+|   CHANGE column_keyword_opt column_decl_name column_def column_position
     {
         // Type OldColumnName NewColumn Position
         var typ = tree.AlterTableChangeColumn
@@ -4623,7 +4636,7 @@ alter_option:
         opt := tree.NewAlterTableChangeColumnClause(typ, oldColumnName, newColumn, position)
     	$$ = tree.AlterTableOption(opt)
     }
-|  RENAME COLUMN column_name TO column_name
+|  RENAME COLUMN column_decl_name TO column_decl_name
     {
         var typ = tree.AlterTableRenameColumn
         var oldColumnName = $3
@@ -4631,7 +4644,7 @@ alter_option:
         opt := tree.NewAlterTableRenameColumnClause(typ, oldColumnName, newColumnName)
 	    $$ = tree.AlterTableOption(opt)
     }
-|  ALTER column_keyword_opt column_name SET DEFAULT bit_expr
+|  ALTER column_keyword_opt column_decl_name SET DEFAULT bit_expr
     {
         var typ = tree.AlterTableAlterColumn
         var columnName = $3
@@ -4641,7 +4654,7 @@ alter_option:
         opt := tree.NewAlterTableAlterColumnClause(typ, columnName, defaultExpr, visibility, optionType)
 	    $$ = tree.AlterTableOption(opt)
     }
-|  ALTER column_keyword_opt column_name SET visibility
+|  ALTER column_keyword_opt column_decl_name SET visibility
     {
         var typ = tree.AlterTableAlterColumn
         var columnName = $3
@@ -4651,7 +4664,7 @@ alter_option:
         opt := tree.NewAlterTableAlterColumnClause(typ, columnName, defaultExpr, visibility, optionType)
 	    $$ = tree.AlterTableOption(opt)
     }
-|  ALTER column_keyword_opt column_name DROP DEFAULT
+|  ALTER column_keyword_opt column_decl_name DROP DEFAULT
     {
         var typ = tree.AlterTableAlterColumn
         var columnName = $3
@@ -4795,7 +4808,7 @@ column_position:
         var relativeColumn *tree.UnresolvedName
         $$ = tree.NewColumnPosition(typ, relativeColumn);
     }
-|   AFTER column_name
+|   AFTER column_decl_name
     {
         var typ = tree.ColumnPositionAfter;
         var relativeColumn = $2
@@ -4827,6 +4840,16 @@ alter_table_rename:
         $$ = tree.NewAlterOptionTableName(name)
     }
 
+ident_or_end:
+    ident
+    {
+        $$ = $1
+    }
+|   END
+    {
+        $$ = tree.NewCStr($1, 1)
+    }
+
 alter_table_drop:
     INDEX ident
     {
@@ -4840,13 +4863,13 @@ alter_table_drop:
         var name = tree.Identifier($2.Compare());
         $$ = tree.NewAlterOptionDrop(dropType, name);
     }
-|   ident
+|   ident_or_end
     {
         var dropType = tree.AlterTableDropColumn;
         var name = tree.Identifier($1.Compare());
         $$ = tree.NewAlterOptionDrop(dropType, name);
     }
-|   COLUMN ident
+|   COLUMN ident_or_end
     {
         var dropType = tree.AlterTableDropColumn;
         var name = tree.Identifier($2.Compare());
@@ -6885,6 +6908,10 @@ insert_target_column:
     {
         $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin()))
     }
+|   END
+    {
+        $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetDbOrTblNameCStr($1))
+    }
 |   ident '.' ident
     {
         tblName := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
@@ -7418,6 +7445,19 @@ select_no_parens:
             return 1
         }
         $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($2, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause select_with_parens
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, Ep: tree.SelectIntoExportOr($2, nil), IntoVars: intoVars, DeprecatedInto: deprecatedInto, With: $1}
         if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
             yylex.Error(intoErr)
             return 1
@@ -10493,6 +10533,22 @@ index_column:
             Expr,
         )
     }
+|   END length_opt asc_desc_opt
+    {
+        // A bare END column name is already accepted at declaration sites
+        // (column_def) and by inline primary keys; extend the same name
+        // resolution to the unambiguous table-level key position. END stays a block terminator everywhere else.
+        var ColName = tree.NewUnresolvedName(tree.NewCStr($1, 1))
+        var Length = int($2)
+        var Direction = $3
+        var Expr tree.Expr
+        $$ = tree.NewKeyPart(
+            ColName,
+            Length,
+            Direction,
+            Expr,
+        )
+    }
 |   '(' expression ')' asc_desc_opt
     {
         var ColName *tree.UnresolvedName
@@ -11102,6 +11158,60 @@ create_table_stmt:
     {
         if intoErr := tree.ValidateSelectIntoNotAllowed($11); intoErr != "" { yylex.Error(intoErr); goto ret1 }
         t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.CTASConflict = $9; t.AsSource = $11; $$ = t
+    }
+// MySQL orders table options before [IGNORE|REPLACE] [AS] query_expression
+// (options after the query stay rejected). The option list is the non-empty
+// table_option_list so an empty list can never compete with '(' (#32542).
+|   CREATE temporary_opt TABLE not_exists_opt table_name table_option_list ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($7); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        t := tree.NewCreateTable()
+        t.IsAsSelect = true
+        t.Temporary = $2
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Options = $6
+        t.AsSource = $7
+        $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($10); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        t := tree.NewCreateTable()
+        t.IsAsSelect = true
+        t.Temporary = $2
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.Options = $9
+        t.AsSource = $10
+        $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name table_option_list ctas_conflict_required ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($8); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Options = $6; t.CTASConflict = $7; t.AsSource = $8; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list ctas_conflict_required ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($11); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.Options = $9; t.CTASConflict = $10; t.AsSource = $11; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name table_option_list ctas_conflict_opt AS ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($9); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Options = $6; t.CTASConflict = $7; t.AsSource = $9; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list ctas_conflict_opt AS ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($12); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.Options = $9; t.CTASConflict = $10; t.AsSource = $12; $$ = t
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name LIKE table_name
     {
@@ -12755,11 +12865,11 @@ index_name:
 	}
 
 column_def:
-    column_name column_type column_attribute_list_opt
+    column_decl_name column_type column_attribute_list_opt
     {
         $$ = tree.NewColumnTableDef($1, $2, $3)
     }
-|   column_name SERIAL column_attribute_list_opt
+|   column_decl_name SERIAL column_attribute_list_opt
     {
         // MySQL SERIAL is the alias for BIGINT UNSIGNED NOT NULL
         // AUTO_INCREMENT UNIQUE. Expanding at the column-definition owner
@@ -12783,6 +12893,19 @@ column_def:
             tree.NewAttributeUnique(),
         }
         $$ = tree.NewColumnTableDef($1, typ, append(serialAttrs, $3...))
+    }
+
+// The bare END declaration name shares one owner rule across the ordinary
+// column_type alternative and the SERIAL alias alternative, so `end SERIAL`
+// parses exactly like the quoted name and the expanded type. END outside a declaration position is untouched.
+column_decl_name:
+    column_name
+    {
+        $$ = $1
+    }
+|   END
+    {
+        $$ = tree.NewUnresolvedName(tree.NewCStr($1, 1))
     }
 
 column_name_unresolved:

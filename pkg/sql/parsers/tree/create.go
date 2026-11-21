@@ -995,7 +995,10 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		node.SubscriptionOption.Format(ctx)
 	} else {
 
-		if !node.IsAsSelect && !(node.IcebergParam != nil && len(node.Defs) == 0) {
+		// A CTAS with an explicit column list keeps the definitions through the
+		// replay; a plain CTAS still formats without the def list (#32542).
+		if (!node.IsAsSelect && !(node.IcebergParam != nil && len(node.Defs) == 0)) ||
+			(node.IsAsSelect && len(node.Defs) > 0) {
 			ctx.WriteString(" (")
 			for i, def := range node.Defs {
 				if i != 0 {
@@ -1008,6 +1011,14 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		}
 	}
 
+	if node.Options != nil {
+		prefix := " "
+		for _, t := range node.Options {
+			ctx.WriteString(prefix)
+			t.Format(ctx)
+		}
+	}
+
 	if node.IsAsSelect {
 		if node.CTASConflict != "" {
 			ctx.WriteByte(' ')
@@ -1015,14 +1026,6 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		}
 		ctx.WriteString(" as ")
 		node.AsSource.Format(ctx)
-	}
-
-	if node.Options != nil {
-		prefix := " "
-		for _, t := range node.Options {
-			ctx.WriteString(prefix)
-			t.Format(ctx)
-		}
 	}
 
 	if node.IcebergParam != nil {
@@ -2766,10 +2769,15 @@ func NewProperty(k, v string) *Property {
 	return p
 }
 
+// The PROPERTIES grammar accepts only string literals (property_elem:
+// STRING '=' STRING), so the shared option serializer must emit the key and
+// value as single-quoted SQL literals that reparse. Mirror the OP_TYPE serializer's owner semantics: escape the
+// backslash-escape mode first so the consumer's backslash-aware parse
+// restores the exact bytes, then single-quote doubling.
 func (node *Property) Format(ctx *FmtCtx) {
-	ctx.WriteString(node.Key)
+	writeDecodedSQLString(ctx, node.Key)
 	ctx.WriteString(" = ")
-	ctx.WriteString(node.Value)
+	writeDecodedSQLString(ctx, node.Value)
 }
 
 func (node Property) TypeName() string { return "tree.Property" }
@@ -2788,8 +2796,18 @@ type TableOptionEngine struct {
 }
 
 func (node *TableOptionEngine) Format(ctx *FmtCtx) {
+	if node.Engine == "" {
+		// The grammar needs a value; an empty engine only replays as a STRING
+		// literal.
+		ctx.WriteString("engine = ''")
+		return
+	}
 	ctx.WriteString("engine = ")
-	ctx.WriteString(node.Engine)
+	// Emit through the identifier writer: the canonical catalog context
+	// quotes identifiers, so reserved words and spaced names replay as quoted
+	// idents under the table_alias production while plain printouts keep the
+	// historical bare form.
+	ctx.WriteIdentifier(Identifier(node.Engine))
 }
 
 func (node TableOptionEngine) TypeName() string { return "tree.TableOptionEngine" }
@@ -2814,8 +2832,7 @@ type TableOptionEngineAttr struct {
 }
 
 func (node *TableOptionEngineAttr) Format(ctx *FmtCtx) {
-	ctx.WriteString("ENGINE_ATTRIBUTE = ")
-	ctx.WriteString(node.Engine)
+	writeDecodedStringOption(ctx, "ENGINE_ATTRIBUTE", node.Engine)
 }
 
 func (node TableOptionEngineAttr) TypeName() string { return "tree.TableOptionEngineAttr" }
@@ -3022,7 +3039,18 @@ type TableOptionComment struct {
 }
 
 func (node *TableOptionComment) Format(ctx *FmtCtx) {
-	ctx.WriteString("comment = '" + node.Comment + "'")
+	// The comment grammar stores util.DealCommentString(...), which already
+	// single-quote-doubles embedded quotes, so serialization must escape
+	// backslashes only (a decoded trailing backslash would otherwise escape
+	// the closing quote and break the catalog's rel_createsql reparse;
+	//Do not double already-doubled quotes.
+	ctx.WriteString("comment = '")
+	if !ctx.NoBackslashEscape() {
+		ctx.WriteString(FormatString(node.Comment))
+	} else {
+		ctx.WriteString(node.Comment)
+	}
+	ctx.WriteByte('\'')
 }
 
 func (node TableOptionComment) TypeName() string { return "tree.TableOptionComment" }
@@ -3098,9 +3126,31 @@ type TableOptionCompression struct {
 	Compression string
 }
 
+// writeDecodedSQLString re-emits a DECODED string value as a single-quoted
+// SQL literal: backslashes are escaped in the standard mode and embedded
+// quotes are doubled, so the canonical catalog rel_createsql reparse restores
+// the exact decoded bytes. Options whose grammar stores an ALREADY-ESCAPED
+// representation (COMMENT escapes backslashes only and keeps doubled quotes)
+// must not route through this helper.
+func writeDecodedSQLString(ctx *FmtCtx, value string) {
+	if !ctx.NoBackslashEscape() {
+		value = FormatString(value)
+	}
+	ctx.WriteByte('\'')
+	ctx.WriteString(strings.ReplaceAll(value, "'", "''"))
+	ctx.WriteByte('\'')
+}
+
+// writeDecodedStringOption serializes one table option whose grammar accepts
+// only a STRING literal and stores the decoded value.
+func writeDecodedStringOption(ctx *FmtCtx, name, value string) {
+	ctx.WriteString(name)
+	ctx.WriteString(" = ")
+	writeDecodedSQLString(ctx, value)
+}
+
 func (node *TableOptionCompression) Format(ctx *FmtCtx) {
-	ctx.WriteString("compression = ")
-	ctx.WriteString(node.Compression)
+	writeDecodedStringOption(ctx, "compression", node.Compression)
 }
 
 func (node TableOptionCompression) TypeName() string { return "tree.TableOptionCompression" }
@@ -3125,8 +3175,7 @@ type TableOptionConnection struct {
 }
 
 func (node *TableOptionConnection) Format(ctx *FmtCtx) {
-	ctx.WriteString("connection = ")
-	ctx.WriteString(node.Connection)
+	writeDecodedStringOption(ctx, "connection", node.Connection)
 }
 
 func (node TableOptionConnection) TypeName() string { return "tree.TableOptionConnection" }
@@ -3151,8 +3200,7 @@ type TableOptionPassword struct {
 }
 
 func (node *TableOptionPassword) Format(ctx *FmtCtx) {
-	ctx.WriteString("password = ")
-	ctx.WriteString(node.Password)
+	writeDecodedStringOption(ctx, "password", node.Password)
 }
 
 func (node TableOptionPassword) TypeName() string { return "tree.TableOptionPassword" }
@@ -3255,7 +3303,9 @@ type TableOptionDelayKeyWrite struct {
 }
 
 func (node *TableOptionDelayKeyWrite) Format(ctx *FmtCtx) {
-	ctx.WriteString("key_write = ")
+	// DELAY_KEY_WRITE is the grammar-visible option name and its value is an
+	// INTEGRAL, so only the misspelled option name needs correcting.
+	ctx.WriteString("delay_key_write = ")
 	ctx.WriteString(strconv.FormatUint(node.Value, 10))
 }
 
@@ -3362,8 +3412,7 @@ type TableOptionSecondaryEngineAttr struct {
 }
 
 func (node *TableOptionSecondaryEngineAttr) Format(ctx *FmtCtx) {
-	ctx.WriteString("SECONDARY_ENGINE_ATTRIBUTE = ")
-	ctx.WriteString(node.Attr)
+	writeDecodedStringOption(ctx, "SECONDARY_ENGINE_ATTRIBUTE", node.Attr)
 }
 
 func (node TableOptionSecondaryEngineAttr) TypeName() string {
@@ -3478,9 +3527,19 @@ type TableOptionTablespace struct {
 }
 
 func (node *TableOptionTablespace) Format(ctx *FmtCtx) {
-	ctx.WriteString("tablespace = ")
-	ctx.WriteString(node.Name)
-	ctx.WriteString(node.StorageOpt)
+	// TABLESPACE ident and storage_opt (STORAGE DISK/STORAGE MEMORY) are two
+	// different grammar productions:
+	// replay exactly the production that was parsed instead of concatenating
+	// both halves into an unparsable hybrid.
+	if node.Name != "" {
+		ctx.WriteString("tablespace = ")
+		// The canonical catalog context quotes identifiers, so reserved words
+		// and spaced names replay through the ident production; plain contexts
+		// keep the historical bare form.
+		ctx.WriteIdentifier(Identifier(node.Name))
+		return
+	}
+	ctx.WriteString(strings.TrimSpace(node.StorageOpt))
 }
 
 func (node TableOptionTablespace) TypeName() string { return "tree.TableOptionTablespace" }
@@ -3506,8 +3565,7 @@ type TableOptionDataDirectory struct {
 }
 
 func (node *TableOptionDataDirectory) Format(ctx *FmtCtx) {
-	ctx.WriteString("data directory = ")
-	ctx.WriteString(node.Dir)
+	writeDecodedStringOption(ctx, "data directory", node.Dir)
 }
 
 func (node TableOptionDataDirectory) TypeName() string { return "tree.TableOptionDataDirectory" }
@@ -3532,8 +3590,7 @@ type TableOptionIndexDirectory struct {
 }
 
 func (node *TableOptionIndexDirectory) Format(ctx *FmtCtx) {
-	ctx.WriteString("index directory = ")
-	ctx.WriteString(node.Dir)
+	writeDecodedStringOption(ctx, "index directory", node.Dir)
 }
 
 func (node TableOptionIndexDirectory) TypeName() string { return "tree.TableOptionIndexDirectory" }
@@ -3640,8 +3697,7 @@ type TableOptionEncryption struct {
 }
 
 func (node *TableOptionEncryption) Format(ctx *FmtCtx) {
-	ctx.WriteString("encryption = ")
-	ctx.WriteString(node.Encryption)
+	writeDecodedStringOption(ctx, "encryption", node.Encryption)
 }
 
 func (node TableOptionEncryption) TypeName() string { return "tree.TableOptionEncryption" }

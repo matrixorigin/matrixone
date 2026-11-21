@@ -119,6 +119,25 @@ func TestArenaBurstReleasedWhileStillActive(t *testing.T) {
 		t.Run(schedule, func(t *testing.T) {
 			emptyArenaPool(ArenaLarge)
 			synctest.Test(t, func(t *testing.T) {
+				// Registered FIRST so the LIFO cleanup chain runs it LAST,
+				// after every in-bubble buffer free (reaper frees, borrowed
+				// release, the TTL helper's drain sweep) has finished arming
+				// the write-arena allocator's process-global mmap-cache idle
+				// timer. Both exit paths reach it on this still-in-bubble
+				// goroutine: a normal return, and require.FailNow, whose
+				// runtime.Goexit first unwinds the defers below and then
+				// lets the test framework run these cleanups inside the
+				// bubble before synctest tears it down. Advancing bubble
+				// time past the cache idle lets the armed timer fire and
+				// retire through its own drain, so no bubble-owned timer
+				// survives for a later non-bubble test to Reset (the
+				// CountCap fatal: "reset of synctest timer from outside
+				// bubble").
+				t.Cleanup(func() {
+					synctest.Wait()
+					time.Sleep(5 * time.Second)
+					synctest.Wait()
+				})
 				// Drain the reaper on every exit path, including failed
 				// assertions: this defer runs during Goexit while still
 				// inside the bubble, so the bubble-owned reaper timer is
