@@ -1335,9 +1335,73 @@ func TestMemoryCacheEvictToCapacityPercent(t *testing.T) {
 	}
 	assert.Equal(t, int64(10), cache.cache.Used())
 
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	assert.NotContains(t, EvictMemoryCachesToCapacityPercent(cancelled, 50), "test-target-evict")
+	assert.Equal(t, int64(10), cache.cache.Used())
+
 	ret := EvictMemoryCachesToCapacityPercent(ctx, 50)
 	assert.Equal(t, int64(5), ret["test-target-evict"])
 	assert.LessOrEqual(t, cache.cache.Used(), int64(5))
+}
+
+func TestMemoryCacheCloseDuringPressureEviction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	callbackResult := make(chan string, 1)
+	unblock := sync.OnceFunc(func() { close(release) })
+	const name = "close-during-pressure-eviction"
+	cache := NewMemCache(fscache.ConstCapacity(1<<20), &CacheCallbacks{
+		PostEvict: []CacheCallbackFunc{func(_ fscache.CacheKey, data fscache.Data) {
+			close(started)
+			<-release
+			callbackResult <- string(data.Bytes())
+		}},
+	}, nil, name)
+	tracking := &reclaimTrackingAllocator{MemoryCacheAllocator: cache.arenaAllocator}
+	cache.arenaAllocator = tracking
+	defer cache.Close(ctx)
+	defer unblock()
+	func() {
+		data := cache.CopyToCacheData(ctx, []byte("retained during callback"))
+		defer data.Release()
+		requireDataCacheSet(t, cache.cache, ctx, fscache.CacheKey{Path: "one", Sz: int64(len(data.Bytes()))}, data)
+	}()
+
+	walkCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	evicted := make(chan struct{})
+	go func() {
+		EvictMemoryCachesToCapacityPercent(walkCtx, 0)
+		close(evicted)
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	stop()
+	closed := make(chan struct{})
+	go func() {
+		cache.Close(ctx)
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	require.NotContains(t, EvictMemoryCachesToCapacityPercent(ctx, 0), name)
+	unblock()
+	select {
+	case <-evicted:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	require.Equal(t, "retained during callback", <-callbackResult)
+	require.Equal(t, int64(1), tracking.reclaims.Load(), "only Close reclaims the retired arena")
 }
 
 func TestMemoryCacheExplicitEvictionReclaimsAllocator(t *testing.T) {

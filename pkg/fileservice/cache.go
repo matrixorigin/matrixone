@@ -445,8 +445,15 @@ func EvictMemoryCachesToCapacityPercent(ctx context.Context, percent int64) map[
 		percent = 100
 	}
 
+	deadline, hasDeadline := ctx.Deadline()
 	allMemoryCaches.Range(func(k, v any) bool {
+		if ctx.Err() != nil || hasDeadline && !time.Now().Before(deadline) {
+			return false
+		}
 		cache := k.(*MemCache)
+		if cache.closed.Load() {
+			return true
+		}
 		name := v.(memoryCacheRegistration).name
 		capacity := cache.cache.Capacity()
 		target := capacity * percent / 100
