@@ -16,9 +16,7 @@ package plan
 
 import (
 	"context"
-	"unicode/utf8"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -196,134 +194,6 @@ func bitCountWhereIsEffectivelyTrue(builder *QueryBuilder, ctx *BindContext) boo
 	}
 	ctx.bitCountWhereProofValue = true
 	return true
-}
-
-// foldConstantStringLengths reduces exact length expressions before the
-// speculative evaluator admits string allocations. It only changes the proof
-// copy; expressions that may warn, fail, or have unknown lengths are retained.
-func foldConstantStringLengths(expr *plan.Expr, ctx context.Context) {
-	if expr == nil || ctx.Err() != nil {
-		return
-	}
-	fn := expr.GetF()
-	if fn == nil || fn.Func == nil {
-		return
-	}
-	id, _ := function.DecodeOverloadID(fn.Func.Obj)
-	if (id == function.LENGTH || id == function.LENGTH_UTF8 || id == function.BIT_LENGTH) &&
-		len(fn.Args) == 1 && expr.Typ.Id == int32(types.T_int64) &&
-		function.GetFunctionIsProvenPureFoldableById(fn.Func.Obj) {
-		arg := fn.Args[0]
-		characters := id == function.LENGTH_UTF8 &&
-			!stringExprUsesBytes(arg)
-		measure, ok := measureConstantString(ctx, arg, characters)
-		if ok {
-			length := measure.bytes
-			switch {
-			case characters:
-				length = measure.characters
-			case id == function.BIT_LENGTH:
-				length *= 8
-			}
-			expr.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: length}}}
-			return
-		}
-	}
-	for _, arg := range fn.Args {
-		foldConstantStringLengths(arg, ctx)
-	}
-}
-
-type constantStringMeasure struct {
-	bytes, characters int64
-}
-
-// measureConstantString computes exact sizes for producers whose result never
-// needs to be built to find its length. In character mode, valid UTF-8 ensures
-// rune counts compose across string boundaries.
-func measureConstantString(ctx context.Context, expr *plan.Expr, characters bool) (constantStringMeasure, bool) {
-	if expr == nil || ctx.Err() != nil || !types.T(expr.Typ.Id).IsMySQLString() {
-		return constantStringMeasure{}, false
-	}
-	if lit := expr.GetLit(); lit != nil {
-		value, ok := lit.Value.(*plan.Literal_Sval)
-		if lit.Isnull || lit.Src != nil || !ok || len(value.Sval) > maxSpeculativeFoldLiteralBytes {
-			return constantStringMeasure{}, false
-		}
-		result := constantStringMeasure{bytes: int64(len(value.Sval))}
-		if characters {
-			if lit.IsBin || !utf8.ValidString(value.Sval) {
-				return constantStringMeasure{}, false
-			}
-			result.characters = int64(utf8.RuneCountInString(value.Sval))
-		}
-		return result, true
-	}
-	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || !function.GetFunctionIsProvenPureFoldableById(fn.Func.Obj) {
-		return constantStringMeasure{}, false
-	}
-	id, _ := function.DecodeOverloadID(fn.Func.Obj)
-	switch id {
-	case function.SPACE:
-		limit := min(int64(types.MaxBlobLen), mpool.MaxAllocationSize())
-		if len(fn.Args) == 1 {
-			if n, ok := speculativeConstantInt64(fn.Args[0]); ok && n >= 0 && n <= limit {
-				return constantStringMeasure{bytes: n, characters: n}, true
-			}
-		}
-	case function.REPEAT:
-		if len(fn.Args) != 2 {
-			break
-		}
-		source, ok := measureConstantString(ctx, fn.Args[0], characters)
-		if !ok {
-			break
-		}
-		n, ok := speculativeConstantInt64(fn.Args[1])
-		if !ok || n < 0 {
-			break
-		}
-		limit := min(function.StringFunctionResultByteLimit(types.T(expr.Typ.Id)), mpool.MaxAllocationSize())
-		if source.bytes == 0 {
-			return constantStringMeasure{}, true
-		}
-		if n <= limit/source.bytes {
-			return constantStringMeasure{bytes: source.bytes * n, characters: source.characters * n}, true
-		}
-	case function.REVERSE:
-		if len(fn.Args) != 1 {
-			break
-		}
-		if stringExprUsesBytes(fn.Args[0]) {
-			// Byte reversal can break UTF-8, but it preserves byte length.
-			if !characters {
-				return measureConstantString(ctx, fn.Args[0], false)
-			}
-		} else {
-			// Text reversal re-encodes runes. Even a byte-length observer
-			// needs valid UTF-8 before assuming that the byte length is stable.
-			return measureConstantString(ctx, fn.Args[0], true)
-		}
-	case function.CONCAT:
-		if len(fn.Args) == 0 {
-			break
-		}
-		// Use the supported large string range, even when CONCAT can
-		// admit a larger allocation in its normal execution path.
-		limit := min(int64(types.MaxBlobLen), mpool.MaxAllocationSize())
-		var result constantStringMeasure
-		for _, arg := range fn.Args {
-			item, ok := measureConstantString(ctx, arg, characters)
-			if !ok || item.bytes > limit-result.bytes {
-				return constantStringMeasure{}, false
-			}
-			result.bytes += item.bytes
-			result.characters += item.characters
-		}
-		return result, true
-	}
-	return constantStringMeasure{}, false
 }
 
 func bitCountProjectionDependsOnRows(builder *QueryBuilder, expr *Expr, direct bool, seen map[int32]bool) bool {

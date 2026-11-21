@@ -456,6 +456,53 @@ func TestBitCountReverseProofPreservesStringDomains(t *testing.T) {
 	}
 }
 
+func TestBitCountMeasuresConstantStringSlices(t *testing.T) {
+	builder := &QueryBuilder{compCtx: NewEmptyCompilerContext(newPlanTestProcess(t))}
+	ctx := builder.GetContext()
+	bind := func(name string, args ...*pb.Expr) *pb.Expr {
+		t.Helper()
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	integer := makePlan2Int64ConstExprWithType
+	text := makePlan2StringConstExprWithType
+	const n = maxSpeculativeFoldValueBytes + 1
+	space := bind("space", integer(n))
+	uniform := bind("repeat", text("éø"), integer(n/2))
+	mixed := bind("repeat", text("é😀"), integer(n/2))
+	binary := text("é😀")
+	binary.Typ = makePlan2Type(&types.Type{Oid: types.T_blob, Charset: types.CharsetBinary})
+	for _, tc := range []struct {
+		name    string
+		metric  string
+		value   *pb.Expr
+		want    int64
+		refused bool
+	}{
+		{name: "whole prefix", metric: "length", value: bind("left", DeepCopyExpr(space), integer(n)), want: n},
+		{name: "suffix", metric: "length", value: bind("right", DeepCopyExpr(space), integer(17)), want: 17},
+		{name: "negative start", metric: "octet_length", value: bind("mid", DeepCopyExpr(space), integer(-3), integer(9)), want: 3},
+		{name: "extreme start", metric: "length", value: bind("substr", DeepCopyExpr(space), integer(-1<<63)), want: 0},
+		{name: "reversed uniform runes", metric: "bit_length", value: bind("substring", bind("reverse", uniform), integer(2), integer(3)), want: 48},
+		{name: "whole mixed-width value", metric: "length", value: bind("substring", DeepCopyExpr(mixed), integer(1)), want: 6 * (n / 2)},
+		{name: "mixed-width characters", metric: "character_length", value: bind("substring", DeepCopyExpr(mixed), integer(-5), integer(4)), want: 4},
+		{name: "partial mixed-width bytes unknown", metric: "length", value: bind("substring", mixed, integer(2), integer(3)), refused: true},
+		{name: "binary bytes", metric: "character_length", value: bind("right", binary, integer(2)), want: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := bind(tc.metric, tc.value)
+			foldConstantStringLengths(expr, ctx)
+			if tc.refused {
+				require.NotNil(t, expr.GetF(), "an upper bound must not become a byte count")
+			} else {
+				require.NotNil(t, expr.GetLit())
+				require.Equal(t, tc.want, expr.GetLit().GetI64Val())
+			}
+		})
+	}
+}
+
 func TestBitCountConditionalBinding(t *testing.T) {
 	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	queryPlan, err := runOneStmt(optimizer, t, `select
