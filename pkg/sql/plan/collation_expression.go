@@ -798,7 +798,7 @@ func stringDerivationRank(expr *Expr) uint32 {
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil {
 		name := strings.ToLower(fn.Func.ObjName)
-		if name == "cast" && !fn.SyntaxExplicitCast && len(fn.Args) > 0 && fn.Args[0] != nil {
+		if isBinderConversion(expr) {
 			// A conversion inserted by the binder keeps its operand's derivation.
 			source := fn.Args[0]
 			switch {

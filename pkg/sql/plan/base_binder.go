@@ -4595,6 +4595,14 @@ func (b *baseBinder) coerceJSONNumericAggregateArg(
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	expr, err := b.bindFuncExprImplByAstExprInner(name, astArgs, depth)
+	if err == nil && name == "coalesce" && b.builder != nil && isMixedDomainCoalesce(expr) {
+		b.builder.mixedDomainCoalesce = true
+	}
+	return expr, err
+}
+
+func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
 	previousFieldContext := b.preparedFieldArgumentContext
 	b.preparedFieldArgumentContext = previousFieldContext || name == "field"
 	defer func() { b.preparedFieldArgumentContext = previousFieldContext }()

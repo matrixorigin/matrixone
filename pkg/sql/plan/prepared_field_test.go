@@ -337,6 +337,11 @@ func TestStringCommonValueDeclarationBoundary(t *testing.T) {
 			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 			coalesce := findPlanFunctionExpr(bound, "coalesce")
+			if coalesce == nil {
+				// A binary value with a text '' peer is a mixed-domain COALESCE:
+				// REVERSE is distributed over it and tests the value with IS NOT NULL.
+				coalesce = findPlanFunctionExpr(bound, "isnotnull")
+			}
 			require.NotNil(t, coalesce)
 			arg := coalesce.GetF().Args[0]
 			for source := preparedFieldPrivateCastSource(arg, 0); source != nil; source = preparedFieldPrivateCastSource(arg, 0) {
