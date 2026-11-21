@@ -173,7 +173,7 @@ func (v *Vector) unmarshalBinaryV1(data []byte) error {
 }
 
 // Validate framing before the legacy alias decoder indexes it. The V1 bitmap
-// has a 4-byte empty flag followed by an 8-byte bit length and byte length.
+// has a 4-byte reserved word followed by an 8-byte bit length and byte length.
 func validateJSONLegacyWire(data []byte) error {
 	cursor := vectorBinaryCursor{data: data}
 	if _, err := cursor.read(1 + types.TSize + 4); err != nil {

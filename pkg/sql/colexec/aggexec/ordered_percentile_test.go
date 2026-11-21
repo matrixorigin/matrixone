@@ -757,7 +757,6 @@ func TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip(t *testing.T) {
 			require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
 		}
 		require.NoError(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringBinary, mp))
-		require.NoError(t, vec.SetStringSource(types.StringSourceCOMStmt))
 		return vec
 	}
 
@@ -777,7 +776,6 @@ func TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "beta", results[0].GetStringAt(0))
 	require.Equal(t, types.RuntimeStringBinary, results[0].GetRuntimeStringDomainAt(0))
-	require.Equal(t, types.StringSourceCOMStmt, results[0].GetStringSourceAt(0))
 
 	results[0].Free(mp)
 	leftValues.Free(mp)
@@ -808,7 +806,6 @@ func TestOrderedPercentileDiscreteRawMagicPrefixRoundTrip(t *testing.T) {
 	assertResult := func(result *vector.Vector, want []byte) {
 		require.Equal(t, want, result.GetBytesAt(0))
 		require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(0))
-		require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
 	}
 
 	for _, tc := range []struct {
@@ -823,7 +820,7 @@ func TestOrderedPercentileDiscreteRawMagicPrefixRoundTrip(t *testing.T) {
 				aggStringMetadataMagic2,
 				aggStringMetadataVersion,
 				byte(types.RuntimeStringInherit),
-				byte(types.StringSourceExpression),
+				0,
 				'x',
 			},
 		},
@@ -892,8 +889,6 @@ func TestOrderedPercentileDiscreteVarcharSelectedRuntimeDomain(t *testing.T) {
 	// retained arguments to raw bytes.
 	require.NoError(t, values.SetRuntimeStringDomainAtWithMP(
 		1, types.RuntimeStringBinary, mp))
-	require.NoError(t, values.SetStringSourceAtWithMP(
-		1, types.StringSourceCOMStmt, mp))
 
 	exec, err := makeOrderedPercentileExec(
 		mp, AggIdOfPercentileDisc, false, typ, orderedPercentileDiscrete)
@@ -909,7 +904,62 @@ func TestOrderedPercentileDiscreteVarcharSelectedRuntimeDomain(t *testing.T) {
 
 	require.Equal(t, "zz", result[0].GetStringAt(0))
 	require.Equal(t, types.RuntimeStringBinary, result[0].GetRuntimeStringDomainAt(0))
-	require.Equal(t, types.StringSourceCOMStmt, result[0].GetStringSourceAt(0))
+}
+
+// TestAggStringMetadataLegacySourceByte checks that retained-argument
+// envelopes written by older peers, which stored a string source in byte 5,
+// still decode with the runtime domain intact, while writers emit 0 there.
+func TestAggStringMetadataLegacySourceByte(t *testing.T) {
+	envelope := func(domain types.RuntimeStringDomain, source byte) []byte {
+		return []byte{
+			aggStringMetadataMagic0,
+			aggStringMetadataMagic1,
+			aggStringMetadataMagic2,
+			aggStringMetadataVersion,
+			byte(domain),
+			source,
+			'v',
+		}
+	}
+	for _, domain := range []types.RuntimeStringDomain{
+		types.RuntimeStringInherit, types.RuntimeStringText, types.RuntimeStringBinary,
+	} {
+		for _, source := range []types.StringSource{
+			types.StringSourceExpression,
+			types.StringSourceLiteral,
+			types.StringSourceUserVariable,
+			types.StringSourceSQLPrepare,
+			types.StringSourceCOMStmt,
+		} {
+			raw, gotDomain, encoded, err := decodeAggStringMetadata(envelope(domain, byte(source)))
+			require.NoError(t, err)
+			require.True(t, encoded)
+			require.Equal(t, domain, gotDomain)
+			require.Equal(t, []byte("v"), raw)
+		}
+	}
+	_, _, _, err := decodeAggStringMetadata(envelope(types.RuntimeStringBinary, 0xff))
+	require.ErrorContains(t, err, "invalid aggregate string metadata")
+
+	// Writers always emit the default (zero) source byte.
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+	typ := types.New(types.T_varchar, 20, 0)
+	exec, err := makeOrderedPercentileExec(
+		mp, AggIdOfPercentileDisc, false, typ, orderedPercentileDiscrete)
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(
+		EncodeOrderedPercentileConfig([]byte("0.5"), false), 0))
+	values := vector.NewVec(typ)
+	defer values.Free(mp)
+	require.NoError(t, vector.AppendBytes(values, []byte("v"), false, mp))
+	require.NoError(t, values.SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, mp))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+	var wire bytes.Buffer
+	require.NoError(t, exec.SaveIntermediateResult(1, [][]uint8{{1}}, &wire))
+	require.True(t, bytes.Contains(wire.Bytes(), envelope(types.RuntimeStringBinary, 0)))
 }
 
 func TestMakeSpecialOrderedPercentileExec(t *testing.T) {

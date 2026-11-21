@@ -57,7 +57,7 @@ func compactGroupColumns(vecs []*vector.Vector, start, count int) bool {
 		}
 		typ := vec.GetType()
 		if typ.Oid != types.T_char || typ.Width != 1 || types.IsUnicodeCollation(typ.Charset) ||
-			vec.IsConst() || vec.HasNull() || vec.HasGrouping() || vec.HasStringSourceMetadata() ||
+			vec.IsConst() || vec.HasNull() || vec.HasGrouping() ||
 			start > vec.Length() || count > vec.Length()-start {
 			return false
 		}
@@ -70,7 +70,7 @@ func (ctr *container) previewCompactGroups(vecs []*vector.Vector, start, count i
 	if hr.compact != nil {
 		hr.compact.eligible = false
 	}
-	if hr.compactDisabled || ctr.groupKeyStringSourceMetadata || !compactGroupColumns(vecs, start, count) {
+	if hr.compactDisabled || !compactGroupColumns(vecs, start, count) {
 		return groupInsertPreview{}, false, nil
 	}
 	if hr.compact == nil {

@@ -184,22 +184,23 @@ func TestReadonlyFixedPreflightPublication(t *testing.T) {
 				}
 				t.Cleanup(func() { input.Free(mp) })
 				before := mp.CurrNB()
+				var preflight SelectedBatchPreflight
 				var err error
 				if validated {
-					err = destination.PreExtendSelectedBatchValidated(input, 0, 1, []uint8{1}, 3, mp)
+					preflight, err = destination.PreExtendSelectedBatchValidated(input, 0, 1, []uint8{1}, 3, mp)
 				} else {
-					err = destination.PreExtendSelectedBatch(input, 0, 1, []uint8{1}, 3, mp)
+					preflight, err = destination.PreExtendSelectedBatch(input, 0, 1, []uint8{1}, 3, mp)
 				}
 				if alias {
 					require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 					require.Equal(t, before, mp.CurrNB())
-					require.False(t, destination.preflightAreaReady)
+					require.False(t, preflight.Ready())
 					return
 				}
 				require.NoError(t, err)
 				calls := controller.calls
 				controller.failAt = calls + 1
-				require.NoError(t, destination.UnionBatchPreflighted(input, 0, 1, []uint8{1}, mp))
+				require.NoError(t, destination.UnionBatchPreflighted(input, 0, 1, []uint8{1}, &preflight, mp))
 				require.Equal(t, calls, controller.calls)
 				require.Equal(t, []int64{11, 22, 42}, MustFixedColNoTypeCheck[int64](destination))
 			})

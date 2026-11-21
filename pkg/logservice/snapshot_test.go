@@ -17,6 +17,7 @@ package logservice
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/lni/vfs"
@@ -197,6 +198,253 @@ type removeErrorFS struct{ vfs.FS }
 
 func (fs removeErrorFS) RemoveAll(string) error { return os.ErrPermission }
 
+type partialSnapshotRemovalFS struct {
+	vfs.FS
+	failed bool
+}
+
+type retryParentSyncFS struct {
+	vfs.FS
+	syncCalls int
+}
+
+type retryParentSyncDir struct {
+	vfs.File
+	fs *retryParentSyncFS
+}
+
+func (dir *retryParentSyncDir) Sync() error {
+	dir.fs.syncCalls++
+	if dir.fs.syncCalls == 1 {
+		return os.ErrPermission
+	}
+	return dir.File.Sync()
+}
+
+func (fs *retryParentSyncFS) OpenDir(path string) (vfs.File, error) {
+	dir, err := fs.FS.OpenDir(path)
+	if err != nil {
+		return nil, err
+	}
+	return &retryParentSyncDir{File: dir, fs: fs}, nil
+}
+
+func (fs *retryParentSyncFS) RemoveAll(path string) error {
+	if strings.HasSuffix(path, ".removing") && fs.syncCalls < 2 {
+		return os.ErrInvalid
+	}
+	return fs.FS.RemoveAll(path)
+}
+
+func TestReconcileInterruptedExportSyncsTombstoneOnRetry(t *testing.T) {
+	fs := &retryParentSyncFS{FS: vfs.NewStrictMem()}
+	mgr := newSnapshotManager(&Config{FS: fs, SnapshotExportDir: "/tmp/exported"})
+	nid := nodeID{shardID: 1, replicaID: 2}
+	testPrepareSnapshot(t, mgr, nid, 100)
+	final := mgr.snapshotPath(nid, 100)
+	flag, err := fs.Create(fs.PathJoin(final, "dragonboat.snapshot.message"))
+	require.NoError(t, err)
+	require.NoError(t, flag.Close())
+
+	require.ErrorIs(t, mgr.ReconcileInterruptedExport(nid.shardID, nid.replicaID), os.ErrPermission)
+	_, err = fs.Stat(final + "-2.removing")
+	require.NoError(t, err)
+	require.NoError(t, mgr.ReconcileInterruptedExport(nid.shardID, nid.replicaID))
+	require.Equal(t, 2, fs.syncCalls)
+	_, err = fs.Stat(final + "-2.removing")
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func (fs *partialSnapshotRemovalFS) RemoveAll(path string) error {
+	if strings.HasSuffix(path, ".removing") && !fs.failed {
+		fs.failed = true
+		if err := fs.FS.Remove(fs.FS.PathJoin(path, "dragonboat.snapshot.message")); err != nil {
+			return err
+		}
+		if err := fs.FS.Remove(fs.FS.PathJoin(path, "snapshot.metadata")); err != nil {
+			return err
+		}
+		return os.ErrPermission
+	}
+	return fs.FS.RemoveAll(path)
+}
+
+func TestReconcileInterruptedExportAfterPartialRemovalAndRestart(t *testing.T) {
+	fs := &partialSnapshotRemovalFS{FS: vfs.NewStrictMem()}
+	cfg := &Config{FS: fs, SnapshotExportDir: "/tmp/exported"}
+	mgr := newSnapshotManager(cfg)
+	nid := nodeID{shardID: 1, replicaID: 2}
+	testPrepareSnapshot(t, mgr, nid, 100)
+	testPrepareSnapshot(t, mgr, nid, 200)
+	final := mgr.snapshotPath(nid, 200)
+	flag, err := fs.Create(fs.PathJoin(final, "dragonboat.snapshot.message"))
+	require.NoError(t, err)
+	require.NoError(t, flag.Close())
+
+	require.ErrorIs(t, mgr.ReconcileInterruptedExport(nid.shardID, nid.replicaID), os.ErrPermission)
+	removing := final + "-2.removing"
+	_, err = fs.Stat(final)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = fs.Stat(removing)
+	require.NoError(t, err)
+	_, err = fs.Stat(fs.PathJoin(removing, "snapshot.metadata"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	// A new manager has no in-memory cleanup marker. The directory name alone
+	// must make the remainder discoverable after a process restart.
+	restarted := newSnapshotManager(cfg)
+	require.NoError(t, restarted.ReconcileInterruptedExport(nid.shardID, nid.replicaID))
+	require.NoError(t, restarted.Init(nid.shardID, nid.replicaID))
+	require.Equal(t, 1, restarted.Count(nid.shardID, nid.replicaID))
+	_, err = fs.Stat(removing)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = fs.Stat(mgr.snapshotPath(nid, 100))
+	require.NoError(t, err)
+}
+
+type selectiveRenameErrorFS struct {
+	vfs.FS
+	blockedPath string
+	blockedErr  error
+}
+
+func (fs *selectiveRenameErrorFS) Rename(oldname, newname string) error {
+	if oldname == fs.blockedPath {
+		if fs.blockedErr != nil {
+			return fs.blockedErr
+		}
+		return os.ErrPermission
+	}
+	return fs.FS.Rename(oldname, newname)
+}
+
+func TestDropInvalidRetainsCandidateUntilRemovalSucceeds(t *testing.T) {
+	fs := &selectiveRenameErrorFS{FS: vfs.NewStrictMem()}
+	mgr := newSnapshotManager(&Config{FS: fs, SnapshotExportDir: "/tmp/exported"})
+	nid := nodeID{shardID: 1, replicaID: 2}
+	for _, index := range []snapshotIndex{100, 200, 300} {
+		testPrepareSnapshot(t, mgr, nid, index)
+	}
+	require.NoError(t, mgr.Init(nid.shardID, nid.replicaID))
+	fs.blockedPath = mgr.snapshotPath(nid, 200)
+	removed, err := mgr.DropInvalid(nid.shardID, nid.replicaID, 200)
+	require.False(t, removed)
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.Equal(t, 3, mgr.Count(nid.shardID, nid.replicaID))
+	_, err = fs.Stat(fs.blockedPath)
+	require.NoError(t, err)
+	fs.blockedErr = os.ErrNotExist
+	removed, err = mgr.DropInvalid(nid.shardID, nid.replicaID, 200)
+	require.False(t, removed)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.Equal(t, 3, mgr.Count(nid.shardID, nid.replicaID))
+	_, err = fs.Stat(fs.blockedPath)
+	require.NoError(t, err)
+
+	fs.blockedPath = ""
+	removed, err = mgr.DropInvalid(nid.shardID, nid.replicaID, 200)
+	require.NoError(t, err)
+	require.True(t, removed)
+	require.Equal(t, 2, mgr.Count(nid.shardID, nid.replicaID))
+	_, err = fs.Stat(mgr.snapshotPath(nid, 200))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	dir, index := mgr.EvalImportSnapshot(nid.shardID, nid.replicaID, 200)
+	require.Equal(t, mgr.snapshotPath(nid, 100), dir)
+	require.Equal(t, uint64(100), index)
+	removed, err = mgr.DropInvalid(nid.shardID, nid.replicaID, 200)
+	require.NoError(t, err)
+	require.False(t, removed)
+	removed, err = mgr.DropInvalid(nid.shardID, 99, 200)
+	require.NoError(t, err)
+	require.False(t, removed)
+}
+
+type partialCompletedRemovalFS struct {
+	vfs.FS
+	failPath string
+}
+
+func (fs *partialCompletedRemovalFS) RemoveAll(path string) error {
+	if path == fs.failPath {
+		fs.failPath = ""
+		if err := fs.FS.Remove(fs.FS.PathJoin(path, "snapshot.metadata")); err != nil {
+			return err
+		}
+		return os.ErrPermission
+	}
+	return fs.FS.RemoveAll(path)
+}
+
+func TestCompletedSnapshotRemovalRecoversAfterPartialDeleteAndRestart(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		remove        func(*snapshotManager, nodeID) error
+		failIndex     snapshotIndex
+		remaining     int
+		preserveOlder bool
+	}{
+		{
+			name: "invalid candidate",
+			remove: func(mgr *snapshotManager, nid nodeID) error {
+				_, err := mgr.DropInvalid(nid.shardID, nid.replicaID, 200)
+				return err
+			},
+			failIndex:     200,
+			remaining:     1,
+			preserveOlder: true,
+		},
+		{
+			name: "post import cleanup",
+			remove: func(mgr *snapshotManager, nid nodeID) error {
+				return mgr.Remove(nid.shardID, nid.replicaID, 200)
+			},
+			failIndex: 100,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := &partialCompletedRemovalFS{FS: vfs.NewStrictMem()}
+			cfg := &Config{FS: fs, SnapshotExportDir: "/tmp/exported"}
+			mgr := newSnapshotManager(cfg)
+			nid := nodeID{shardID: 1, replicaID: 2}
+			testPrepareSnapshot(t, mgr, nid, 100)
+			testPrepareSnapshot(t, mgr, nid, 200)
+			require.NoError(t, mgr.Init(nid.shardID, nid.replicaID))
+			final := mgr.snapshotPath(nid, tc.failIndex)
+			removing := final + "-2.removing"
+			fs.failPath = removing
+
+			require.ErrorIs(t, tc.remove(mgr, nid), os.ErrPermission)
+			require.True(t, mgr.NeedsFailedExportCleanup(nid.shardID, nid.replicaID))
+			require.Equal(t, tc.remaining, mgr.Count(nid.shardID, nid.replicaID))
+			_, err := fs.Stat(final)
+			require.ErrorIs(t, err, os.ErrNotExist)
+			_, err = fs.Stat(removing)
+			require.NoError(t, err)
+			if !tc.preserveOlder {
+				_, err = fs.Stat(mgr.snapshotPath(nid, 200))
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
+			_, err = fs.Stat(fs.PathJoin(removing, "snapshot.metadata"))
+			require.ErrorIs(t, err, os.ErrNotExist)
+
+			// A new manager has no in-memory retry flag. The tombstone name
+			// alone must make the partial deletion discoverable.
+			restarted := newSnapshotManager(cfg)
+			require.NoError(t, restarted.ReconcileInterruptedExport(nid.shardID, nid.replicaID))
+			require.NoError(t, restarted.Init(nid.shardID, nid.replicaID))
+			require.Equal(t, tc.remaining, restarted.Count(nid.shardID, nid.replicaID))
+			_, err = fs.Stat(removing)
+			require.ErrorIs(t, err, os.ErrNotExist)
+			_, err = fs.Stat(mgr.snapshotPath(nid, 100))
+			if tc.preserveOlder {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
+		})
+	}
+}
+
 type listErrorFS struct {
 	vfs.FS
 	path string
@@ -207,6 +455,75 @@ func (fs listErrorFS) List(path string) ([]string, error) {
 		return nil, os.ErrPermission
 	}
 	return fs.FS.List(path)
+}
+
+type secondListErrorFS struct {
+	vfs.FS
+	path  string
+	lists int
+}
+
+func (fs *secondListErrorFS) List(path string) ([]string, error) {
+	if path == fs.path {
+		fs.lists++
+		if fs.lists == 2 {
+			return nil, os.ErrPermission
+		}
+	}
+	return fs.FS.List(path)
+}
+
+func TestStartReplicaReturnsSnapshotInventoryError(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		start func(*store, uint64, uint64) error
+	}{
+		{"voting", func(l *store, shardID, replicaID uint64) error {
+			return l.startReplica(shardID, replicaID, nil, false)
+		}},
+		{"nonvoting", func(l *store, shardID, replicaID uint64) error {
+			return l.startNonVotingReplica(shardID, replicaID, nil, false)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := &secondListErrorFS{FS: vfs.NewStrictMem()}
+			mgr := newSnapshotManager(&Config{FS: fs, SnapshotExportDir: "/tmp/exported"})
+			const shardID, replicaID = uint64(1), uint64(2)
+			fs.path = mgr.exportPath(shardID, replicaID)
+			require.NoError(t, mgr.ReconcileInterruptedExport(shardID, replicaID))
+			require.ErrorIs(t, tc.start(&store{snapshotMgr: mgr}, shardID, replicaID), os.ErrPermission)
+			require.Equal(t, 2, fs.lists)
+		})
+	}
+}
+
+func TestReconcileFailedExportRealignsSnapshotIndex(t *testing.T) {
+	const shardID, replicaID = uint64(1), uint64(2)
+	mgr := newSnapshotManager(&Config{
+		FS:                vfs.NewStrictMem(),
+		SnapshotExportDir: "/tmp/exported",
+	})
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	testPrepareSnapshot(t, mgr, nid, 100)
+	require.NoError(t, mgr.Init(shardID, replicaID))
+	l := &store{snapshotMgr: mgr, shardSnapshotInfo: newShardSnapshotInfo()}
+	l.shardSnapshotInfo.setSnapshotIndex(shardID, 200)
+
+	// A failed rename leaves only a generating directory. The local high
+	// watermark must move back so a quiescent shard can export index 200 again.
+	temporary := mgr.snapshotPath(nid, 200) + "-2.generating"
+	require.NoError(t, mgr.cfg.FS.MkdirAll(temporary, defaultExportedDirMode))
+	require.NoError(t, l.reconcileFailedExport(shardID, replicaID))
+	_, err := mgr.cfg.FS.Stat(temporary)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.Equal(t, uint64(100), l.shardSnapshotInfo.getSnapshotIndex(shardID))
+
+	// A commit can also finish the final directory before reporting an I/O
+	// error. Reload it rather than issuing a duplicate export at that index.
+	testPrepareSnapshot(t, mgr, nid, 300)
+	require.NoError(t, l.reconcileFailedExport(shardID, replicaID))
+	require.Equal(t, uint64(300), l.shardSnapshotInfo.getSnapshotIndex(shardID))
+	require.Equal(t, 2, mgr.Count(shardID, replicaID))
 }
 
 func TestReconcileInterruptedExportPreservesFailedRemoval(t *testing.T) {
@@ -232,7 +549,11 @@ func TestReconcileInterruptedExportPreservesFailedRemoval(t *testing.T) {
 
 			err = mgr.ReconcileInterruptedExport(nid.shardID, nid.replicaID)
 			require.ErrorIs(t, err, os.ErrPermission)
-			_, err = fs.Stat(dir)
+			remaining := dir
+			if tc.name == "final" {
+				remaining += "-2.removing"
+			}
+			_, err = fs.Stat(remaining)
 			require.NoError(t, err, "a failed cleanup must leave the directory visible")
 		})
 	}
@@ -253,17 +574,24 @@ func TestReconcileUncertainExportsRetriesFailedQuotaCleanup(t *testing.T) {
 	_, _, err := mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 1)
 	require.ErrorIs(t, err, os.ErrPermission)
 	require.Equal(t, 2, mgr.Count(nid.shardID, nid.replicaID))
+	require.True(t, mgr.NeedsFailedExportCleanup(nid.shardID, nid.replicaID))
 	_, err = fs.Stat(mgr.snapshotPath(nid, 200))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	removing := mgr.snapshotPath(nid, 200) + "-2.removing"
+	_, err = fs.Stat(removing)
 	require.NoError(t, err)
 
 	mgr.cfg.FS = fs
+	require.NoError(t, mgr.ReconcileInterruptedExport(nid.shardID, nid.replicaID))
+	require.NoError(t, mgr.Init(nid.shardID, nid.replicaID))
+	mgr.ClearFailedExportCleanup(nid.shardID, nid.replicaID)
 	newest, trimmed, err := mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 1)
 	require.NoError(t, err)
-	require.True(t, trimmed)
+	require.False(t, trimmed)
 	require.Equal(t, uint64(100), newest)
 	require.Equal(t, 1, mgr.Count(nid.shardID, nid.replicaID))
-	_, err = fs.Stat(mgr.snapshotPath(nid, 200))
-	require.True(t, os.IsNotExist(err))
+	_, err = fs.Stat(removing)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestReconcileUncertainExportsPreservesViewOnScanError(t *testing.T) {
