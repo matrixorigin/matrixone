@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -279,6 +280,67 @@ func TestPR32002ReviewBoundaries(t *testing.T) {
 		require.Equal(t, "2026-10-21", date)
 
 		exec("set session sql_mode=''")
+		for _, tc := range []struct {
+			declaration string
+			scale       int
+		}{
+			{"decimal(4,1)", 1},
+			{"decimal(20,17)", 17},
+			{"decimal(40,37)", 37},
+			{"decimal(4,1) unsigned", 1},
+		} {
+			exec("create table decimal_radix (v " + tc.declaration + ")")
+			assertValue := func(want string) {
+				t.Helper()
+				var value string
+				var count int
+				require.NoError(t, conn.QueryRowContext(ctx, "select max(v),count(*) from decimal_radix").Scan(&value, &count))
+				require.Equal(t, 1, count)
+				require.Equal(t, want, value, tc.declaration)
+			}
+			fitting := "100." + strings.Repeat("0", tc.scale)
+			maximum := "999." + strings.Repeat("9", tc.scale)
+			exec("set session sql_mode='STRICT_TRANS_TABLES'")
+			for _, input := range []string{"select 0x64", "select b'1100100'", "values (0x64)"} {
+				exec("insert into decimal_radix " + input)
+				require.Empty(t, warningCodes())
+				assertValue(fitting)
+				exec("delete from decimal_radix")
+			}
+
+			exec("insert into decimal_radix select 0x64")
+			_, err := conn.ExecContext(ctx, "insert into decimal_radix select 0xffff")
+			require.Error(t, err, tc.declaration)
+			assertValue(fitting)
+			exec("update ignore decimal_radix set v=0xffff")
+			require.Equal(t, []int{int(moerr.ER_WARN_DATA_OUT_OF_RANGE)}, warningCodes())
+			assertValue(maximum)
+			exec("delete from decimal_radix")
+
+			exec("insert ignore into decimal_radix select 0xffff")
+			require.Equal(t, []int{int(moerr.ER_WARN_DATA_OUT_OF_RANGE)}, warningCodes())
+			assertValue(maximum)
+			exec("delete from decimal_radix")
+			exec("set session sql_mode=''")
+			exec("insert into decimal_radix select 0xffff")
+			require.Equal(t, []int{int(moerr.ER_WARN_DATA_OUT_OF_RANGE)}, warningCodes())
+			assertValue(maximum)
+			exec("drop table decimal_radix")
+		}
+
+		exec("create table decimal_radix (v decimal(40,1))")
+		exec("insert into decimal_radix select 0x10000000000000000")
+		require.Empty(t, warningCodes())
+		var wideRadix string
+		require.NoError(t, conn.QueryRowContext(ctx, "select v from decimal_radix").Scan(&wideRadix))
+		require.Equal(t, "18446744073709551616.0", wideRadix)
+		exec("delete from decimal_radix")
+		exec("insert into decimal_radix select 0x01" + strings.Repeat("00", 32))
+		require.Equal(t, []int{int(moerr.ER_WARN_DATA_OUT_OF_RANGE)}, warningCodes())
+		require.NoError(t, conn.QueryRowContext(ctx, "select v from decimal_radix").Scan(&wideRadix))
+		require.Equal(t, strings.Repeat("9", 39)+".9", wideRadix)
+		exec("drop table decimal_radix")
+
 		exec("create table decimals (d decimal(4,1))")
 		exec("insert into decimals values (123.456)")
 		require.Equal(t, []int{int(moerr.WARN_DATA_TRUNCATED)}, warningCodes())
