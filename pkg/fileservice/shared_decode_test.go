@@ -1416,30 +1416,43 @@ func TestS3FSSharedDecodeDiskFillSkipsColdPaths(t *testing.T) {
 }
 
 func TestS3FSSharedDecodeFallbackDoesNotRejoin(t *testing.T) {
-	fs, counters := newSharedDecodeDiskFillFS(t, CacheCallbacks{}, true)
-	beforeS3 := counters.FileService.S3.Get.Load()
-	calls, generationsOnFallback := 0, -1
-	v := IOVector{FilePath: "columns", Entries: []IOEntry{{
-		Size: 3, CachedDataSize: 3, DecodeSharing: DecodeSharing{Codec: "test-retry"},
-		ToCacheData: func(ctx context.Context, _ io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
-			calls++
-			if calls == 1 {
-				return nil, errors.New("injected disk conversion failure")
+	for _, tc := range []struct {
+		name    string
+		sharing bool
+	}{
+		{name: "shared", sharing: true},
+		{name: "unshared"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs, counters := newSharedDecodeDiskFillFS(t, CacheCallbacks{}, true)
+			beforeS3 := counters.FileService.S3.Get.Load()
+			calls, generationsOnFallback := 0, -1
+			v := IOVector{FilePath: "columns", Entries: []IOEntry{{
+				Size: 3, CachedDataSize: 3,
+				ToCacheData: func(ctx context.Context, _ io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+					calls++
+					if calls == 1 {
+						return nil, errors.New("injected disk conversion failure")
+					}
+					fs.decodedReads.mu.Lock()
+					generationsOnFallback = fs.decodedReads.count
+					fs.decodedReads.mu.Unlock()
+					return allocator.CopyToCacheData(ctx, data), nil
+				},
+			}}}
+			if tc.sharing {
+				v.Entries[0].DecodeSharing = DecodeSharing{Codec: "test-retry"}
 			}
-			fs.decodedReads.mu.Lock()
-			generationsOnFallback = fs.decodedReads.count
-			fs.decodedReads.mu.Unlock()
-			return allocator.CopyToCacheData(ctx, data), nil
-		},
-	}}}
-	t.Cleanup(v.ReleaseReadResultOnError)
-	require.NoError(t, fs.Read(t.Context(), &v))
-	require.Equal(t, 2, calls)
-	require.Equal(t, 0, generationsOnFallback, "storage fallback must not join another decode generation")
-	require.Greater(t, counters.FileService.S3.Get.Load(), beforeS3)
-	require.Equal(t, []byte("abc"), v.Entries[0].CachedData.Bytes())
-	v.ReleaseReadResultOnError()
-	requireDecodeDrained(t, fs.decodedReads)
+			t.Cleanup(v.ReleaseReadResultOnError)
+			require.NoError(t, fs.Read(t.Context(), &v))
+			require.Equal(t, 2, calls)
+			require.Equal(t, 0, generationsOnFallback, "storage fallback must not join another decode generation")
+			require.Greater(t, counters.FileService.S3.Get.Load(), beforeS3)
+			require.Equal(t, []byte("abc"), v.Entries[0].CachedData.Bytes())
+			v.ReleaseReadResultOnError()
+			requireDecodeDrained(t, fs.decodedReads)
+		})
+	}
 }
 
 func selectedDecodeVector(selected int) IOVector {
