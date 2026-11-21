@@ -328,9 +328,9 @@ func (tbl *txnTable) AnalyzeTable(
 	return result, nil
 }
 
-// Fixed K=32768: each sketch owns 32-byte nodes, uint32 heap slots,
-// and two uint32 bucket heads per slot. Round up for small allocations.
-const analyzeSketchCharge = 1536 << 10
+// At K=32768 the incidence arrays use 1.375 MiB. Allow for the bounded
+// row witness set and overlapping old/new backing storage during growth.
+const analyzeSketchCharge = 4 << 20
 
 // Keep admission limited to tested fixed-width readers. In particular, do
 // not let IsDecimal expand this path to DECIMAL128/256 or affect NDV bounds.

@@ -284,6 +284,51 @@ func TestBottomKMergeCountsBlockPresenceAcrossEvictions(t *testing.T) {
 	}
 }
 
+func TestBottomKObservedUnion(t *testing.T) {
+	// Value 0 appears only in the incidence frame, value 1 in both
+	// frames and shards, and values 2 through 64 only in the row sample.
+	part := func(k int, lo, hi byte) *NDVAccumulator {
+		a := NewNDVAccumulator(SampleSketchCapacity)
+		a.sketch.k = k
+		require.NoError(t, a.BeginIncidenceBlock())
+		require.NoError(t, a.ObserveIncidenceValue(ValueHash{}))
+		require.NoError(t, a.ObserveIncidenceValue(ValueHash{1}))
+		require.NoError(t, a.EndIncidenceBlock())
+		require.NoError(t, a.ObserveSampleValue(ValueHash{1}))
+		for i := lo; i <= hi; i++ {
+			require.NoError(t, a.ObserveSampleValue(ValueHash{i}))
+		}
+		return a
+	}
+	for _, k := range []int{16, SampleSketchCapacity} {
+		a := part(k, 2, 32)
+		require.NoError(t, a.Merge(part(k, 33, 64)))
+		for _, state := range []*NDVAccumulator{a, part(k, 2, 64)} {
+			v, err := state.Estimate(1000, MustFraction(1, 2))
+			require.NoError(t, err)
+			require.Equal(t, float64(min(k, 65)), v.ObservedLower)
+			require.Equal(t, v.ObservedLower, v.Point)
+		}
+	}
+}
+
+func BenchmarkNDVSparseAuto(b *testing.B) {
+	for b.Loop() {
+		a := NewNDVAccumulator(SampleSketchCapacity)
+		_ = a.BeginIncidenceBlock()
+		for i := range 256 {
+			h := ValueHash{byte(i % 8)}
+			_ = a.ObserveIncidenceValue(h)
+			_ = a.ObserveSampleValue(h)
+		}
+		_ = a.EndIncidenceBlock()
+		v, err := a.Estimate(256, MustFraction(1, 1))
+		if err != nil || v.Point != 8 {
+			b.Fatal(v, err)
+		}
+	}
+}
+
 func TestFullScanNDVAccumulatorIsBoundedAndMergeable(t *testing.T) {
 	const distinct = 100_000
 	left := NewFullScanNDVAccumulator()

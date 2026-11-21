@@ -100,6 +100,7 @@ func (a *NDVAccumulator) ObserveSampleValue(value ValueHash) error {
 	}
 	if a.sketch != nil {
 		a.sampleRows++
+		a.sketch.observeRow(binary.LittleEndian.Uint64(value[:]))
 		return nil
 	}
 	if a.fullScan != nil {
@@ -230,6 +231,9 @@ func (a *NDVAccumulator) Merge(other *NDVAccumulator) error {
 		for _, c := range other.sketch.nodes {
 			a.sketch.add(c.hash, tag, c.n)
 		}
+		for h := range other.sketch.rowWitnesses {
+			a.sketch.observeRow(h)
+		}
 		a.sketch.truncated = a.sketch.truncated || other.sketch.truncated
 		a.incidenceBlocks += other.incidenceBlocks
 		a.sampleRows += other.sampleRows
@@ -298,10 +302,10 @@ func (a *NDVAccumulator) Estimate(
 		if !blockSample.valid() || blockSample.Numerator == 0 || populationNonNull > 0 && len(a.sketch.nodes) == 0 {
 			return NDVEstimate{}, ErrInvalidNDVInput
 		}
-		lower := float64(len(a.sketch.nodes))
+		lower := float64(a.sketch.observedLower())
 		upper := max(populationNonNull, lower, float64(a.sampleRows))
 		return NDVEstimate{
-			Algorithm: "NDV_BOTTOM_K_BLOCK_DUJ1_V1", Point: a.sketch.point(upper, blockSample.Float64()),
+			Algorithm: "NDV_BOTTOM_K_BLOCK_DUJ1_V1", Point: max(lower, a.sketch.point(upper, blockSample.Float64())),
 			ObservedLower: lower, RelationalUpper: upper,
 		}, nil
 	}
@@ -395,17 +399,56 @@ type entry struct {
 // A max-heap bounds the retained hashes; bucket chains locate duplicates
 // without allocating per value. Entry indices remain stable during eviction.
 type incidenceSketch struct {
-	k           int
-	nodes       []entry
-	heads, heap []uint32
-	truncated   bool
+	k            int
+	nodes        []entry
+	heads, heap  []uint32
+	truncated    bool
+	rowWitnesses map[uint64]struct{}
+}
+
+// Row observations contribute a lower bound, never incidence or singletons.
+// Once either frame has K witnesses its union already proves the capped bound.
+func (s *incidenceSketch) observeRow(x uint64) {
+	if len(s.nodes) == s.k || len(s.rowWitnesses) == s.k {
+		return
+	}
+	if s.rowWitnesses == nil {
+		s.rowWitnesses = make(map[uint64]struct{})
+	}
+	s.rowWitnesses[x] = struct{}{}
+}
+
+func (s *incidenceSketch) observedLower() int {
+	n := len(s.rowWitnesses)
+	if n == 0 || len(s.nodes) == s.k {
+		return len(s.nodes)
+	}
+	for _, c := range s.nodes {
+		if n == s.k {
+			break
+		}
+		if _, overlap := s.rowWitnesses[c.hash]; !overlap {
+			n++
+		}
+	}
+	return n
+}
+
+func (s *incidenceSketch) grow() {
+	size := min(s.k, max(8, 2*len(s.nodes)))
+	nodes, heap := make([]entry, len(s.nodes), size), make([]uint32, len(s.heap), size)
+	copy(nodes, s.nodes)
+	copy(heap, s.heap)
+	s.nodes, s.heap, s.heads = nodes, heap, make([]uint32, 2*size)
+	for i := range s.nodes {
+		b := s.nodes[i].hash % uint64(len(s.heads))
+		s.nodes[i].next, s.heads[b] = s.heads[b], uint32(i+1)
+	}
 }
 
 func (s *incidenceSketch) add(x uint64, block, inc int64) {
 	if s.heads == nil {
-		s.heads = make([]uint32, 2*s.k)
-		s.heap = make([]uint32, 0, s.k)
-		s.nodes = make([]entry, 0, s.k)
+		s.grow()
 	}
 	if len(s.heap) == s.k && x > s.nodes[s.heap[0]].hash {
 		s.truncated = true
@@ -424,6 +467,10 @@ func (s *incidenceSketch) add(x uint64, block, inc int64) {
 	}
 	var slot uint32
 	if len(s.nodes) < s.k {
+		if len(s.nodes) == cap(s.nodes) {
+			s.grow()
+			bucket = x % uint64(len(s.heads))
+		}
 		slot = uint32(len(s.nodes))
 		s.nodes = append(s.nodes, entry{})
 		s.heap = append(s.heap, slot)

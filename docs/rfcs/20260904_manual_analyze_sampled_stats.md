@@ -310,7 +310,11 @@ or a reader error must join workers and release reservations without publishing.
 Reducing workers must not change the sample or the sketch result; if even a
 serial reservation is rejected, return the admission error.
 
-Each active sketch needs at most 1.5 MiB of array storage. Charge worker and
+Keep up to K distinct sampled row hashes as witnesses independently of the
+block-incidence estimate. The union of both frames supplies a lower bound,
+exact up to K even when frames or workers overlap. Grow incidence arrays with
+the retained set; their final size is 1.375 MiB. Reserve 4 MiB per active
+sketch for those arrays, the row witnesses and growth. Charge worker and
 coordinator sketches on the admitted path; this is not a bound on total RSS.
 Across column passes, memoize only row-inclusion decisions, keyed by the
 persisted block identity and physical row offset, at most 8 MiB per statement.
