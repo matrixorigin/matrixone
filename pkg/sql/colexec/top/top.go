@@ -372,11 +372,6 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 				remaining -= uint64(size) + 1
 			}
 		}
-		mp := make(map[int]int)
-		for i, pos := range ctr.poses {
-			mp[int(pos)] = i
-		}
-
 		if ctr.bat == nil {
 			if ctr.spilling {
 				ctr.bat = batch.NewOffHeapWithSize(len(ctr.poses))
@@ -410,41 +405,20 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 		}
 
 		if ctr.spilling {
-			for idx := range ctr.poses {
-				var desc, nullsLast bool
-				pos := ctr.poses[idx]
-				if posIdx, ok := mp[int(pos)]; ok {
-					desc = ap.Fs[posIdx].Flag&plan.OrderBySpec_DESC != 0
-					if ap.Fs[posIdx].Flag&plan.OrderBySpec_NULLS_FIRST != 0 {
-						nullsLast = false
-					} else if ap.Fs[posIdx].Flag&plan.OrderBySpec_NULLS_LAST != 0 {
-						nullsLast = true
-					} else {
-						nullsLast = desc
-					}
-				}
-				ctr.cmps = append(
-					ctr.cmps,
-					compare.NewOrder(*bat.Vecs[pos].GetType(), desc, nullsLast),
-				)
-			}
+			ctr.cmps = newSpillComparators(ctr.bat.Vecs, ap.Fs)
 		} else {
-			for i := 0; i < len(bat.Vecs); i++ {
-				var desc, nullsLast bool
-				if pos, ok := mp[i]; ok {
-					desc = ap.Fs[pos].Flag&plan.OrderBySpec_DESC != 0
-					if ap.Fs[pos].Flag&plan.OrderBySpec_NULLS_FIRST != 0 {
-						nullsLast = false
-					} else if ap.Fs[pos].Flag&plan.OrderBySpec_NULLS_LAST != 0 {
-						nullsLast = true
-					} else {
-						nullsLast = desc
-					}
+			// Resident comparators share physical vector slots. Populate the map
+			// backwards so the first ORDER BY specification owns each slot.
+			first := make(map[int32]int, len(ctr.poses))
+			for i := len(ctr.poses) - 1; i >= 0; i-- {
+				first[ctr.poses[i]] = i
+			}
+			for i, vec := range bat.Vecs {
+				var flag plan.OrderBySpec_OrderByFlag
+				if key, ok := first[int32(i)]; ok {
+					flag = ap.Fs[key].Flag
 				}
-				ctr.cmps = append(
-					ctr.cmps,
-					compare.NewOrder(*bat.Vecs[i].GetType(), desc, nullsLast),
-				)
+				ctr.cmps = append(ctr.cmps, newOrderComparator(*vec.GetType(), flag))
 			}
 		}
 	}
@@ -457,9 +431,26 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 		return ctr.processBatchSpillFrom(ap.ctr.limit, bat, start, proc, analyzer)
 	}
 	if ctr.boundedResident {
-		return ctr.processBatchResident(bat, start, proc, analyzer)
+		return ctr.processBatchResident(bat, start, ap.Fs, proc, analyzer)
 	}
 	return ctr.processBatch(ap.ctr.limit, bat, start, proc)
+}
+
+func newOrderComparator(typ types.Type, flag plan.OrderBySpec_OrderByFlag) compare.Compare {
+	desc := flag&plan.OrderBySpec_DESC != 0
+	nullsLast := flag&plan.OrderBySpec_NULLS_FIRST == 0 &&
+		(flag&plan.OrderBySpec_NULLS_LAST != 0 || desc)
+	return compare.NewOrder(typ, desc, nullsLast)
+}
+
+// Spill owns a separate vector and mutable comparator for every logical key,
+// even when several keys refer to the same input column.
+func newSpillComparators(keys []*vector.Vector, fs []*plan.OrderBySpec) []compare.Compare {
+	cmps := make([]compare.Compare, len(keys))
+	for i, vec := range keys {
+		cmps[i] = newOrderComparator(*vec.GetType(), fs[i].Flag)
+	}
+	return cmps
 }
 
 // verifiedBatchSuffix discards a prefix only after proving the whole batch is
@@ -556,7 +547,7 @@ func (ctr *container) compactResident(proc *process.Process) error {
 // startResidentSpill transfers only surviving rows. The pending input row has
 // not been mutated or consumed, so the caller resumes it exactly once. On any
 // failure the query aborts and Reset/Free still owns all published resources.
-func (ctr *container) startResidentSpill(proc *process.Process, analyzer process.Analyzer) error {
+func (ctr *container) startResidentSpill(fs []*plan.OrderBySpec, proc *process.Process, analyzer process.Analyzer) error {
 	keys := batch.NewOffHeapWithSize(len(ctr.poses))
 	defer func() {
 		if keys != nil {
@@ -595,10 +586,9 @@ func (ctr *container) startResidentSpill(proc *process.Process, analyzer process
 		}
 	}
 	keys.SetRowCount(rows)
-	cmps := make([]compare.Compare, len(ctr.poses))
-	for i, pos := range ctr.poses {
-		cmps[i] = ctr.cmps[pos]
-		cmps[i].Set(0, keys.Vecs[i])
+	cmps := newSpillComparators(keys.Vecs, fs)
+	for i, cmp := range cmps {
+		cmp.Set(0, keys.Vecs[i])
 	}
 	ctr.bat.Clean(proc.Mp())
 	ctr.bat, keys = keys, nil
@@ -608,7 +598,7 @@ func (ctr *container) startResidentSpill(proc *process.Process, analyzer process
 	return nil
 }
 
-func (ctr *container) processBatchResident(bat *batch.Batch, start int, proc *process.Process, analyzer process.Analyzer) error {
+func (ctr *container) processBatchResident(bat *batch.Batch, start int, fs []*plan.OrderBySpec, proc *process.Process, analyzer process.Analyzer) error {
 	for i, cmp := range ctr.cmps {
 		cmp.Set(1, bat.Vecs[i])
 	}
@@ -652,7 +642,7 @@ func (ctr *container) processBatchResident(bat *batch.Batch, start int, proc *pr
 				}
 				ctr.residentBytes = live
 			} else {
-				if err := ctr.startResidentSpill(proc, analyzer); err != nil {
+				if err := ctr.startResidentSpill(fs, proc, analyzer); err != nil {
 					return err
 				}
 				return ctr.processBatchSpillFrom(ctr.limit, bat, row, proc, analyzer)
