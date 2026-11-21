@@ -747,10 +747,10 @@ func TestBindSetVariableResultExprUsesPreparedModeForDecimalParam(t *testing.T) 
 	selectStmt := stmt.(*tree.Select)
 	expr := selectStmt.Select.(*tree.SelectClause).Exprs[0].Expr
 
-	_, err = bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), false)
+	_, err = plan.BindSetVariableResultType(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), false)
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")
 
-	bound, err := bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), true)
+	bound, err := plan.BindSetVariableResultType(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), true)
 	require.NoError(t, err)
 	require.NotNil(t, bound)
 }

@@ -332,7 +332,7 @@ func getExprValueWithPrepareMeta(
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
 	if oid == types.T_decimal64 || oid == types.T_decimal128 || oid == types.T_decimal256 || resultVec.IsNull(0) {
-		planExpr, err = bindSetVariableResultExpr(
+		planExpr, err = plan2.BindSetVariableResultType(
 			e, ses.GetTxnCompileCtx(), preparedExpression)
 		if err != nil {
 			return nil, plan.Type{}, err
@@ -724,18 +724,6 @@ func transparentPrepareParamKind(e tree.Expr, ses *Session) (types.StringConvers
 			return types.StringConversionString, nil
 		}
 	}
-}
-
-func bindSetVariableResultExpr(
-	e tree.Expr,
-	compilerContext plan2.CompilerContext,
-	preparedExpression bool,
-) (*plan.Expr, error) {
-	builder := plan2.NewQueryBuilder(
-		plan.Query_SELECT, compilerContext, preparedExpression, false)
-	bindContext := plan2.NewBindContext(builder, nil)
-	binder := plan2.NewProjectionBinder(builder, bindContext, plan2.NewHavingBinder(builder, bindContext))
-	return binder.BindExpr(e, 0, false)
 }
 
 // bindFrontendExpressionContext borrows only the pipeline context field for

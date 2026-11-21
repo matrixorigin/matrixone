@@ -11133,3 +11133,18 @@ func TestCentroidxIndexParametersAreInternal(t *testing.T) {
 	_, err := runOneStmt(mock, t, "SELECT N_NAME FROM NATION CENTROIDX('vector_l2_ops', '{}', '{\"ignored\":\"t\"}') JOIN REGION ON N_REGIONKEY = R_REGIONKEY")
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 }
+
+func TestPreparedSetRetainsFoldedZeroScalarSources(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @p = ?, @answer = (select null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n limit 1)'")
+	require.NoError(t, err)
+	prepared := p.GetDcl().GetPrepare()
+	require.Len(t, prepared.ParamTypes, 1)
+	require.NotNil(t, prepared.Plan.GetDcl().GetSetVariables().Items[1].Value.GetSub())
+	names := make([]string, 0, len(prepared.Schemas))
+	for _, schema := range prepared.Schemas {
+		names = append(names, schema.ObjName)
+	}
+	require.ElementsMatch(t, []string{"nation", "region"}, names)
+}

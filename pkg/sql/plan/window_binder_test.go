@@ -1171,7 +1171,7 @@ func TestWindowValidationPrivilegeCarrierExternalSelectScans(t *testing.T) {
 		planpb.ExternType_KAFKA_TB,
 	} {
 		t.Run(externType.String(), func(t *testing.T) {
-			carrier := windowValidationPrivilegeCarrier(&planpb.Node{
+			carrier := validationPrivilegeCarrier(&planpb.Node{
 				NodeType: planpb.Node_EXTERNAL_SCAN,
 				ObjRef:   &planpb.ObjectRef{SchemaName: "external_db", ObjName: "events"},
 				TableDef: &planpb.TableDef{
@@ -1192,7 +1192,7 @@ func TestWindowValidationPrivilegeCarrierExternalSelectScans(t *testing.T) {
 		planpb.ExternType_RESULT_SCAN,
 	} {
 		t.Run("exclude "+externType.String(), func(t *testing.T) {
-			carrier := windowValidationPrivilegeCarrier(&planpb.Node{
+			carrier := validationPrivilegeCarrier(&planpb.Node{
 				NodeType:   planpb.Node_EXTERNAL_SCAN,
 				ObjRef:     &planpb.ObjectRef{SchemaName: "external_db", ObjName: "events"},
 				TableDef:   &planpb.TableDef{TableType: catalog.SystemExternalRel},

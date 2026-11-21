@@ -3889,12 +3889,7 @@ func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, d
 	if err != nil {
 		return nil, err
 	}
-	requiredRoots := zeroScalarSubqueryRoots(b.builder, args)
-	bound, err := bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarRewriteGeneration)
-	if err == nil && len(requiredRoots) > 0 && !exprRetainsZeroScalarRoots(bound, requiredRoots) {
-		return nil, moerr.NewNYI(b.GetContext(), "function with a correlated scalar LIMIT 0 argument may discard its table dependency")
-	}
-	return bound, err
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarRewriteGeneration)
 }
 
 // bindGroupingFuncExpr binds GROUPING arguments directly to their registered
@@ -5384,6 +5379,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 	if err != nil {
 		return nil, err
 	}
+	requiredZeroScalarRoots = nil // The UDF binder owns argument retention.
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarRewriteGeneration)
 }
 
@@ -6106,7 +6102,12 @@ func bindFuncExprImplUdf(
 			return nil, err
 		}
 	}
+	requiredRoots := zeroScalarSubqueryRoots(b.builder, boundArgs)
 	validateBoundResult := func(expr *plan.Expr) (*plan.Expr, error) {
+		if (b.builder == nil || b.builder.zeroScalarPolicy == zeroScalarDisabled) &&
+			!exprRetainsZeroScalarRoots(expr, requiredRoots) {
+			return nil, moerr.NewNYI(b.GetContext(), "function with a correlated scalar LIMIT 0 argument may discard its table dependency")
+		}
 		if requiresUDFSourceValidation {
 			if err := validateUDFArgumentAuthorizationSources(b.builder, requiredSources, expr); err != nil {
 				return nil, err
@@ -6136,11 +6137,42 @@ func bindFuncExprImplUdf(
 		// make it start with a 'SELECT'.
 
 		expressionBody := !strings.Contains(sql, "select")
-		if requiresUDFSourceValidation && !expressionBody {
-			// Query-body UDFs add a lexical SELECT scope around the bound
-			// argument. Until that scope has a dedicated correlation mapping,
-			// preserve the prior fail-closed behavior.
-			return nil, moerr.NewNYI(b.GetContext(), "SQL UDF query body with a correlated scalar LIMIT 0 argument")
+		if requiresUDFSourceValidation {
+			used := make(map[*plan.Expr]struct{}, len(udfArgs))
+			for _, arg := range udfArgs {
+				used[arg] = struct{}{}
+				if expressionBody {
+					continue
+				}
+				needsRemap, err := udfArgumentNeedsZeroScalarRemap(b.builder, arg)
+				if err != nil {
+					return nil, err
+				}
+				if needsRemap {
+					return nil, moerr.NewNYI(b.GetContext(), "SQL UDF query body with a correlated scalar LIMIT 0 argument")
+				}
+			}
+			var unused []*plan.Expr
+			for _, arg := range boundArgs {
+				if _, ok := used[arg]; !ok {
+					unused = append(unused, arg)
+				}
+			}
+			if len(unused) != 0 && b.builder.zeroScalarPolicy != zeroScalarDisabled {
+				sources, err := collectUDFArgumentAuthorizationSources(b.builder, unused, nil)
+				if err != nil {
+					return nil, err
+				}
+				if err := b.builder.validateZeroScalarSpecialSources(sources); err != nil {
+					return nil, err
+				}
+				if err := b.builder.retainZeroScalarAuthorizationSources(sources); err != nil {
+					return nil, err
+				}
+				if len(sources) != 0 {
+					b.builder.zeroScalarRetentionGeneration++
+				}
+			}
 		}
 		if expressionBody {
 			sql = "select " + sql
