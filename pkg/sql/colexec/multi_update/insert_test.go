@@ -17,15 +17,18 @@ package multi_update
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -334,4 +337,86 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool) []
 	}
 
 	return updateCtxs
+}
+
+func TestMainTableWriteObservationScopeAndReset(t *testing.T) {
+	require.True(t, fault.Enable())
+	t.Cleanup(func() { fault.Disable() })
+	ctx := context.Background()
+	point := "fj/sql/main_table_write/observer_db/observer_table"
+	require.NoError(t, fault.AddFaultPoint(ctx, point, ":::", "echo", 0, "", false))
+	require.NoError(t, fault.AddFaultPoint(ctx, "observer_count", ":::", "getcount", 0, point, false))
+	proc := testutil.NewProcess(t)
+	observeMainTableWrite(proc, &MultiUpdateCtx{ObjRef: &planpb.ObjectRef{SchemaName: "other_db", ObjName: "observer_table"}})
+	count, _, ok := fault.TriggerFault("observer_count")
+	require.True(t, ok)
+	require.Zero(t, count)
+	observeMainTableWrite(proc, &MultiUpdateCtx{ObjRef: &planpb.ObjectRef{SchemaName: "observer_db", ObjName: "observer_table"}})
+	count, _, _ = fault.TriggerFault("observer_count")
+	require.Equal(t, int64(1), count)
+	_, err := fault.RemoveFaultPoint(ctx, point)
+	require.NoError(t, err)
+	require.NoError(t, fault.AddFaultPoint(ctx, point, ":::", "echo", 0, "", false))
+	count, _, _ = fault.TriggerFault("observer_count")
+	require.Zero(t, count)
+	// A deliberately blocking observation must respect statement cancellation.
+	_, err = fault.RemoveFaultPoint(ctx, point)
+	require.NoError(t, err)
+	require.NoError(t, fault.AddFaultPoint(ctx, point, ":::", "wait", 0, "", false))
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	proc.Ctx = cancelled
+	observeMainTableWrite(proc, &MultiUpdateCtx{ObjRef: &planpb.ObjectRef{SchemaName: "observer_db", ObjName: "observer_table"}})
+	require.NoError(t, fault.AddFaultPoint(ctx, "observer_waiters", ":::", "getwaiters", 0, point, false))
+	waiters, _, ok := fault.TriggerFault("observer_waiters")
+	require.True(t, ok)
+	require.Zero(t, waiters, "cancelled statements must not retain an observation waiter")
+	require.True(t, fault.Disable())
+	observeMainTableWrite(proc, &MultiUpdateCtx{})
+}
+
+func TestMainTableWriteEnteredWaitCancellationAndNewGeneration(t *testing.T) {
+	require.True(t, fault.Enable())
+	t.Cleanup(func() { fault.Disable() })
+	ctx := context.Background()
+	point := "fj/sql/main_table_write/entered_wait/table"
+	require.NoError(t, fault.AddFaultPoint(ctx, point, ":::", "wait", 0, "", false))
+	require.NoError(t, fault.AddFaultPoint(ctx, "entered_wait_waiters", ":::", "getwaiters", 0, point, false))
+	require.NoError(t, fault.AddFaultPoint(ctx, "entered_wait_count", ":::", "getcount", 0, point, false))
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(ctx)
+	t.Cleanup(func() { proc.Cancel(context.Canceled) })
+	updateCtx := &MultiUpdateCtx{ObjRef: &planpb.ObjectRef{SchemaName: "entered_wait", ObjName: "table"}}
+	done := make(chan struct{})
+	go func() {
+		observeMainTableWrite(proc, updateCtx)
+		close(done)
+	}()
+	// Registration is the schedule barrier. Elapsed time alone is not proof
+	// that the observation entered WAIT.
+	require.Eventually(t, func() bool {
+		waiters, _, ok := fault.TriggerFault("entered_wait_waiters")
+		return ok && waiters == 1
+	}, 10*time.Second, time.Millisecond)
+	proc.Cancel(context.Canceled)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("entered observation did not return after pipeline cancellation")
+	}
+	waiters, _, ok := fault.TriggerFault("entered_wait_waiters")
+	require.True(t, ok)
+	require.Zero(t, waiters)
+	_, err := fault.RemoveFaultPoint(ctx, point)
+	require.NoError(t, err)
+	require.NoError(t, fault.AddFaultPoint(ctx, point, ":::", "echo", 0, "", false))
+	count, _, ok := fault.TriggerFault("entered_wait_count")
+	require.True(t, ok)
+	require.Zero(t, count)
+	proc.BuildPipelineContext(ctx)
+	observeMainTableWrite(proc, updateCtx)
+	count, _, _ = fault.TriggerFault("entered_wait_count")
+	require.Equal(t, int64(1), count)
+	waiters, _, _ = fault.TriggerFault("entered_wait_waiters")
+	require.Zero(t, waiters)
 }

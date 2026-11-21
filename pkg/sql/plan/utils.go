@@ -8485,6 +8485,13 @@ func refreshPreparedPlanProjectionTypes(
 			if err := refreshExprList(node.FilterList); err != nil {
 				return err
 			}
+			// ODKU assignments execute in the dedup join and may contain dependent
+			// programs. Refresh their captures and outputs alongside join predicates.
+			if node.DedupJoinCtx != nil {
+				if err := refreshExprList(node.DedupJoinCtx.UpdateColExprList); err != nil {
+					return err
+				}
+			}
 		}
 		if setOperationSpecialized {
 			if err := refreshPreparedSetOperationPhysicalKeys(ctx, node, childProjectLists); err != nil {
