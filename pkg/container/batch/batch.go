@@ -167,6 +167,9 @@ func (bat *Batch) prepareMarshalBinary(
 	if bat == nil {
 		return 0, moerr.NewInvalidInputNoCtx("invalid batch for marshal")
 	}
+	if bat.selection != nil {
+		return 0, errSelectedBatch()
+	}
 	const fixedSize = uint64(8 + 4 + 4 + 4 + 4 + 4)
 	total := fixedSize
 	add := func(value uint64) bool {
@@ -226,6 +229,9 @@ func (bat *Batch) prepareMarshalBinary(
 func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 	if bat == nil || w == nil {
 		return io.ErrClosedPipe
+	}
+	if bat.selection != nil {
+		return errSelectedBatch()
 	}
 	var inlinePlans [64]vector.MarshalBinaryPlan
 	var plans []vector.MarshalBinaryPlan
@@ -903,7 +909,7 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 			if bat.offHeap {
 				vecs[i] = vector.NewOffHeapVec()
 			} else {
-				vecs[i] = vector.NewVecFromReuse()
+				vecs[i] = new(vector.Vector)
 			}
 		} else if vecs[i].Allocated() > 0 || vecs[i].NeedDup() {
 			if mp == nil && !vecs[i].NeedDup() {
@@ -1229,7 +1235,7 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 			if bat.offHeap {
 				vec = vector.NewOffHeapVec()
 			} else {
-				vec = vector.NewVecFromReuse()
+				vec = new(vector.Vector)
 			}
 		} else if vec.NeedDup() {
 			vec.Free(mp)
@@ -1555,6 +1561,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	bat.Attrs = nil
 	bat.releaseExtraBuf()
 	bat.SetRowCount(0)
+	bat.selection, bat.physicalRows = nil, 0
 	bat.allocationAccount = nil
 }
 
@@ -1581,6 +1588,7 @@ func (bat *Batch) CleanOnlyData() {
 		}
 	}
 	bat.rowCount = 0
+	bat.selection, bat.physicalRows = nil, 0
 }
 
 func (bat *Batch) FreeColumns(m *mpool.MPool) {
@@ -1855,6 +1863,7 @@ func (bat *Batch) AddRowCount(rowCount int) {
 
 func (bat *Batch) SetRowCount(rowCount int) {
 	bat.rowCount = rowCount
+	bat.selection, bat.physicalRows = nil, 0
 }
 
 func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector, startIndex int) {

@@ -98,7 +98,7 @@ func TestJSONReaderTransientAdmissionCoversBacking(t *testing.T) {
 	}
 }
 
-func TestJSONReaderTransientDictionaryAndMutableLifetime(t *testing.T) {
+func TestJSONReaderTransientMutableLifetime(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
 	want := errors.New("budget exhausted")
@@ -116,20 +116,15 @@ func TestJSONReaderTransientDictionaryAndMutableLifetime(t *testing.T) {
 	large := jsonAdmissionValue(t, `{"keep":"`+strings.Repeat("x", 16<<10)+`"}`)
 	require.NoError(t, AppendBytes(source, large, false, mp))
 	require.NoError(t, AppendBytes(source, nil, true, mp))
-	rows, err := NewRowSelection([]int64{0, 1, 0}, 2, mp, nil)
-	require.NoError(t, err)
-	defer rows.Release()
-	dict, err := source.SelectDictionary(rows, mp, nil)
-	require.NoError(t, err)
-	defer dict.Free(mp)
+	require.NoError(t, AppendBytes(source, large, false, mp))
 	limit = 8192
-	reader, invalid, err := TryNewJSONReaderSnapshotForRows(dict, 3, mp, nil, admission)
+	reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 3, mp, nil, admission)
 	require.ErrorIs(t, err, want)
 	require.False(t, invalid)
 	require.Nil(t, reader)
 	require.Zero(t, live)
 	limit = 1 << 30
-	reader, invalid, err = TryNewJSONReaderSnapshotForRows(dict, 3, mp, nil, admission)
+	reader, invalid, err = TryNewJSONReaderSnapshotForRows(source, 3, mp, nil, admission)
 	require.NoError(t, err)
 	require.False(t, invalid)
 	defer reader.Close()

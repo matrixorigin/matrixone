@@ -34,9 +34,9 @@ import (
 	"testing"
 )
 
-type dictionaryPipelineReader struct{ done, closed bool }
+type pipelineAccountReader struct{ done, closed bool }
 
-func (r *dictionaryPipelineReader) Read(_ context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, out *batch.Batch) (bool, error) {
+func (r *pipelineAccountReader) Read(_ context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, out *batch.Batch) (bool, error) {
 	if r.done {
 		return true, nil
 	}
@@ -55,13 +55,13 @@ func (r *dictionaryPipelineReader) Read(_ context.Context, _ []string, _ *plan.E
 	out.SetRowCount(4)
 	return false, nil
 }
-func (r *dictionaryPipelineReader) Close() error                       { r.closed = true; return nil }
-func (*dictionaryPipelineReader) SetFilterZM(objectio.ZoneMap)         {}
-func (*dictionaryPipelineReader) SetOrderBy([]*plan.OrderBySpec)       {}
-func (*dictionaryPipelineReader) GetOrderBy() []*plan.OrderBySpec      { return nil }
-func (*dictionaryPipelineReader) SetIndexParam(*plan.IndexReaderParam) {}
+func (r *pipelineAccountReader) Close() error                       { r.closed = true; return nil }
+func (*pipelineAccountReader) SetFilterZM(objectio.ZoneMap)         {}
+func (*pipelineAccountReader) SetOrderBy([]*plan.OrderBySpec)       {}
+func (*pipelineAccountReader) GetOrderBy() []*plan.OrderBySpec      { return nil }
+func (*pipelineAccountReader) SetIndexParam(*plan.IndexReaderParam) {}
 
-func TestDictionaryPipelineAccountLifetime(t *testing.T) {
+func TestPipelineAccountLifetime(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	t.Cleanup(proc.Free)
 	budget, err := proc.GetExecutionResourceBudget()
@@ -87,7 +87,7 @@ func TestDictionaryPipelineAccountLifetime(t *testing.T) {
 		require.NoError(t, err)
 		return expression
 	}
-	reader := &dictionaryPipelineReader{}
+	reader := &pipelineAccountReader{}
 	scan := table_scan.NewArgument().WithTypes([]plan.Type{keyType.PlanType(), valueType.PlanType(), payloadType.PlanType()})
 	scan.Reader, scan.Attrs, scan.FilterExprs = reader, []string{"k", "v", "payload"}, []*plan.Expr{predicate(0)}
 	restrict := filter.NewArgument()
@@ -120,9 +120,6 @@ func TestDictionaryPipelineAccountLifetime(t *testing.T) {
 	configured, err = configureAllocationAccountOwners(owners, account)
 	require.NoError(t, err)
 	require.NoError(t, vm.Prepare(aggregate, proc))
-	require.True(t, scan.DictionaryOutputState().AllowsDictionaryOutput())
-	require.True(t, restrict.DictionaryOutputState().AllowsDictionaryOutput())
-	require.True(t, project.DictionaryOutputState().AllowsDictionaryOutput())
 	rows := 0
 	for {
 		result, err := vm.Exec(aggregate, proc)
@@ -130,7 +127,6 @@ func TestDictionaryPipelineAccountLifetime(t *testing.T) {
 		if result.Batch == nil {
 			break
 		}
-		require.False(t, result.Batch.HasDictionary())
 		for row := 0; row < result.Batch.RowCount(); row++ {
 			require.Equal(t, "B", string(result.Batch.Vecs[0].GetBytesAt(row)))
 			require.Equal(t, int64(5), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[1], row))
@@ -138,6 +134,4 @@ func TestDictionaryPipelineAccountLifetime(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, rows)
-	require.Positive(t, scan.OpAnalyzer.GetOpStats().ExtraStats["DictionaryScanSelectedRows"])
-	require.Positive(t, restrict.OpAnalyzer.GetOpStats().ExtraStats["DictionaryFilterSelectedRows"])
 }

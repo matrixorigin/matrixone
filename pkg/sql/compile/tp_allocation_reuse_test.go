@@ -152,7 +152,7 @@ func TestTPReusableOperatorsAllocationScope(t *testing.T) {
 }
 
 type tpReuseReader struct {
-	dictionaryPipelineReader
+	pipelineAccountReader
 	err error
 }
 
@@ -160,7 +160,7 @@ func (r *tpReuseReader) Read(ctx context.Context, attrs []string, expr *plan.Exp
 	if r.err != nil {
 		return false, r.err
 	}
-	return r.dictionaryPipelineReader.Read(ctx, attrs, expr, mp, out)
+	return r.pipelineAccountReader.Read(ctx, attrs, expr, mp, out)
 }
 
 type tpReusePipeline struct {
@@ -289,7 +289,6 @@ func TestTPReusablePipelineQueries(t *testing.T) {
 						var got []string
 						var count int64
 						err := f.execute(tc.param, tc.null, tc.err, func(b *batch.Batch) {
-							require.False(t, b.HasDictionary(), "root must publish flat results")
 							if aggregate {
 								count += vector.GetFixedAtNoTypeCheck[int64](b.Vecs[0], 0)
 								return
@@ -348,7 +347,6 @@ func TestTPReusePowerProjectionDomainErrorRecovery(t *testing.T) {
 	runSelected := func() ([]string, error) {
 		var got []string
 		err := f.execute("A", false, nil, func(b *batch.Batch) {
-			require.False(t, b.HasDictionary(), "root must publish flat results")
 			for row := range b.RowCount() {
 				got = append(got, fmt.Sprintf("%s:%v", b.Vecs[0].GetStringAt(row), vector.GetFixedAtNoTypeCheck[float64](b.Vecs[1], row)))
 			}

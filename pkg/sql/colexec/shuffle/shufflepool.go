@@ -895,18 +895,6 @@ func (sp *ShufflePool) tryWriteMode(
 	wholeBucket bool,
 	proc *process.Process,
 ) (nextPosition int, nextOffset int, wait <-chan struct{}, done bool, err error) {
-	return sp.tryWriteModeWithViews(srcBatch, sels, producer, startPosition, startOffset, wholeBucket, nil, proc)
-}
-
-func (sp *ShufflePool) tryWriteModeWithViews(
-	srcBatch *batch.Batch,
-	sels [][]int32,
-	producer int32,
-	startPosition, startOffset int,
-	wholeBucket bool,
-	views **shufflePartitionViews,
-	proc *process.Process,
-) (nextPosition int, nextOffset int, wait <-chan struct{}, done bool, err error) {
 	if producer < 0 || len(sp.batchSets) == 0 {
 		return startPosition, startOffset, nil, false, moerr.NewInternalErrorf(
 			proc.Ctx,
@@ -967,11 +955,6 @@ func (sp *ShufflePool) tryWriteModeWithViews(
 				wait, ok := sp.reserveReady(int32(bucket), readyDelta)
 				if !ok {
 					sp.batchLocks[bucket].Unlock()
-					// Published selections own their indices. Return conversion
-					// scratch before yielding so consumers can reclaim capacity.
-					if views != nil {
-						(*views).freeRows(proc.Mp())
-					}
 					return bucket + visitBase, offset, wait, false, nil
 				}
 
@@ -980,26 +963,10 @@ func (sp *ShufflePool) tryWriteModeWithViews(
 				buf := sp.getBatchFromPool(producer)
 				var consumed bool
 				var writeErr error
-				var selected *batch.Batch
-				if views != nil && buf == nil && !wholeBucket && end-offset == maxRows && oldLength == oldReady {
-					selected, writeErr = sp.selectPartition(srcBatch, current[offset:end], views, proc)
-				}
-				if selected != nil {
-					writeErr = batchSet.Push(proc.Mp(), selected)
-					if writeErr != nil {
-						selected.Clean(proc.Mp())
-					}
-				} else if writeErr == nil {
-					// Retained selections own their indices. Release only the
-					// producer's temporary map before allocating an owned tail.
-					if views != nil {
-						(*views).freeRows(proc.Mp())
-					}
-					if wholeBucket {
-						consumed, writeErr = batchSet.UnionRange(proc.Mp(), srcBatch, offset, end-offset, buf)
-					} else {
-						consumed, writeErr = batchSet.Union(proc.Mp(), srcBatch, current[offset:end], buf)
-					}
+				if wholeBucket {
+					consumed, writeErr = batchSet.UnionRange(proc.Mp(), srcBatch, offset, end-offset, buf)
+				} else {
+					consumed, writeErr = batchSet.Union(proc.Mp(), srcBatch, current[offset:end], buf)
 				}
 				if !consumed && buf != nil {
 					sp.putBatchToPool(buf, proc.Mp())

@@ -15,6 +15,7 @@
 package batch
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -54,9 +55,15 @@ type Batch struct {
 
 	ExtraBuf []byte
 
-	// row count of batch, to instead of old len(Zs).
+	// row count of batch, to instead of old len(Zs). For a selected batch it
+	// is the logical (selected) row count.
 	rowCount int
 	offHeap  bool
+
+	// selection, when non-nil, marks the physical rows that are the batch's
+	// logical rows (see selection.go); physicalRows is the vectors' row count.
+	selection    *bitmap.Bitmap
+	physicalRows int
 
 	// allocationAccount is the destination selection for owned off-heap
 	// vectors created or reused by this batch. Alias vectors do not copy it.

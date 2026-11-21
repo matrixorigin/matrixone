@@ -67,7 +67,6 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 		handled = true
 		borrowed := scopedMembershipPredicates{columns: early, destinations: read.Sources}
 		defer borrowed.restore(output)
-		defer s.Scope.End()
 		for i, column := range early {
 			if inputs[i].Length() != rows {
 				return moerr.NewInvalidInputNoCtx("scoped membership input row mismatch")
@@ -105,23 +104,33 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 			s.Physical.SetLength(count)
 			physical = vector.MustFixedColNoTypeCheck[int64](s.Physical)
 			copy(physical, member.Sels)
-			admitted, err := s.Scope.Bind(s.Sources, s.Views, predicates, physical, inputs[0].Length(), mp, request.OutputAllocation)
-			if err != nil && !mpool.IsRetryableAllocationCapacity(err) {
-				return err
-			}
-			if admitted {
-				for _, column := range predicates {
-					output.Vecs[column] = s.Views[column]
+			// Predicates read accounted flat copies of their member rows. The
+			// copies are private to this callback and released right after the
+			// predicates, before the surviving payload is gathered.
+			defer freeMembershipViews(s, predicates, mp)
+			for _, column := range predicates {
+				source := s.Sources[column]
+				view, err := vector.NewOffHeapVecWithTypeAndAllocation(*source.GetType(), request.OutputAllocation)
+				if err == nil {
+					s.Views[column] = view
+					err = view.Union(source, physical, mp)
 				}
-			} else {
-				// Optional view metadata must not force a temporary payload
-				// allocation ahead of the ordinary predicate evaluation.
-				fallback = true
-				return nil
+				if err != nil {
+					if mpool.IsRetryableAllocationCapacity(err) {
+						// Optional staging must not force a temporary payload
+						// allocation ahead of the ordinary predicate evaluation.
+						fallback = true
+						return nil
+					}
+					return err
+				}
+				source.CopyExpressionMetadataTo(view)
+				output.Vecs[column] = view
 			}
 		}
 		output.SetRowCount(count)
 		residual, err := request.Select(output, predicates)
+		freeMembershipViews(s, predicates, mp)
 		if err != nil {
 			// Only this proven-total route may retry predicates. Release its
 			// optional map/views before the ordinary evaluation; without live
@@ -139,8 +148,6 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 		if err := validateReaderFilterResult(residual, count, selected); err != nil {
 			return err
 		}
-		// Retire the views before changing the row map they borrow.
-		s.Scope.End()
 		if !residual.All {
 			if member.All {
 				// The final callback's rows already use the physical domain.
@@ -195,4 +202,13 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 		return true, blockDataReadScopedOwned(ctx, info, columns, typs, predicates, policy, output, mp, fs, request, nil)
 	}
 	return handled, err
+}
+
+func freeMembershipViews(s *engine.ReaderMembershipScratch, predicates []int, mp *mpool.MPool) {
+	for _, column := range predicates {
+		if view := s.Views[column]; view != nil {
+			view.Free(mp)
+			s.Views[column] = nil
+		}
+	}
 }

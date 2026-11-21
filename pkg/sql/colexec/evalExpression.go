@@ -508,7 +508,6 @@ func newExpressionExecutorWithAllocation(
 		{
 			// init function information for evaluation.
 			executor.overloadID = overloadID
-			executor.dictionaryInput = overload.DictionaryInputCapability()
 			// Dynamic casts retain row-level diagnostics. Only the designated
 			// coordinator filter may fold a literal cast once per execution.
 			executor.stringToNumericCast = !overload.CannotFold() &&
@@ -702,7 +701,6 @@ type FunctionExpressionExecutor struct {
 	// parameters related
 	parameterResults  []*vector.Vector
 	parameterExecutor []ExpressionExecutor
-	dictionaryState   *functionDictionaryState
 	iffNullResults    [2]*vector.Vector
 }
 
@@ -1644,10 +1642,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	if err := expr.selectedResult.PreExtendAndReset(selectedCount); err != nil {
 		return nil, err
 	}
-	parameters, normalizeErr := expr.normalizeDictionaryParameters(expr.selectedParameterResults, true)
-	if normalizeErr != nil {
-		return nil, normalizeErr
-	}
+	parameters := expr.selectedParameterResults
 	if err := expr.evalFn(
 		expr.semanticParameterVectors(parameters), expr.selectedResult, proc, selectedCount, nil); err != nil {
 		return nil, err
@@ -1678,7 +1673,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	// avoids at least three NULL-placeholder appends; keep dense masks on
 	// the existing append loop.
 	scatterFixed := selectedCount <= rowCount/4 && runtimeType.IsFixedLen() &&
-		!selectedResult.IsConst() && !selectedResult.IsDictionary() &&
+		!selectedResult.IsConst() &&
 		selectedResult.DataBackingKind() == vector.OwnedMPoolUnique &&
 		result.DataBackingKind() == vector.OwnedMPoolUnique &&
 		!selectedResult.HasBorrowedBacking() && !result.HasBorrowedBacking() &&
@@ -1828,10 +1823,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	parameters, normalizeErr := expr.normalizeDictionaryParameters(expr.parameterResults, true)
-	if normalizeErr != nil {
-		return nil, normalizeErr
-	}
+	parameters := expr.parameterResults
 	if err = expr.evalFn(
 		expr.semanticParameterVectors(parameters), expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
@@ -1913,7 +1905,6 @@ func (expr *FunctionExpressionExecutor) Free() {
 		expr.selectedNullResult.Free(expr.m)
 		expr.selectedNullResult = nil
 	}
-	expr.freeDictionaryParameters()
 	for _, parameter := range expr.selectedParameterVectors {
 		if parameter != nil {
 			parameter.Free(expr.m)

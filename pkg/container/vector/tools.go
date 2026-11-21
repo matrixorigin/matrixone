@@ -26,7 +26,6 @@ import (
 )
 
 func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
-	v.requirePhysical()
 	if v.class == CONSTANT {
 		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
@@ -35,7 +34,6 @@ func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
 }
 
 func ToFixedCol[T any](v *Vector, ret *[]T) {
-	v.requirePhysical()
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
@@ -61,7 +59,6 @@ func MustFixedColNoTypeCheck[T any](v *Vector) (ret []T) {
 // n does not exceed the allocated capacity. Used by aggregation executors for
 // bounds-check-eliminated array access via (*[N]T)(slice) conversion.
 func MustFixedColAsSlice[T any](v *Vector, n int) []T {
-	v.requirePhysical()
 	return unsafe.Slice((*T)(unsafe.Pointer(unsafe.SliceData(v.data))), n)
 }
 
@@ -80,7 +77,6 @@ func MustFixedColWithTypeCheck[T any](v *Vector) (ret []T) {
 //		vs[i].GetByteSlice(area)
 //	}
 func InefficientMustBytesCol(v *Vector) [][]byte {
-	v.requirePhysical()
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -112,7 +108,6 @@ func InefficientMustBytesCol(v *Vector) [][]byte {
 // it will cause the UnsafeGetString method to panic. This is because what is stored here is the offset of the last value.
 // and InefficientMustBytesCol has a same bug.
 func InefficientMustStrCol(v *Vector) []string {
-	v.requirePhysical()
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -130,7 +125,6 @@ func InefficientMustStrCol(v *Vector) []string {
 
 // MustArrayCol  Converts Vector<[]T> to [][]T
 func MustArrayCol[T types.ArrayElement](v *Vector) [][]T {
-	v.requirePhysical()
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -260,9 +254,6 @@ func extendWithBitmaps(
 }
 
 func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
-	if vec.IsDictionary() {
-		return ret, errDictionaryPhysicalAccess
-	}
 	nsp, err := vec.nsp.Show()
 	if err != nil {
 		return
@@ -292,7 +283,7 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 	if err != nil {
 		return nil, err
 	}
-	rvec := NewVecFromReuse()
+	rvec := new(Vector)
 	rvec.area = vec.Area
 	rvec.length = int(vec.Len)
 	rvec.typ = typ

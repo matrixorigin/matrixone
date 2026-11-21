@@ -587,8 +587,7 @@ func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Nulls) {
 	}
 	vec.tryCOW()
 
-	dels := vector.GetSels()
-	defer func() { vector.PutSels(dels) }()
+	var dels []int64
 	mask.Foreach(func(i uint64) bool {
 		dels = append(dels, int64(i))
 		return true
@@ -604,8 +603,7 @@ func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
 	}
 	vec.tryCOW()
 
-	dels := vector.GetSels()
-	defer func() { vector.PutSels(dels) }()
+	var dels []int64
 	itr := deletes.Iterator()
 	for itr.HasNext() {
 		r := itr.Next()

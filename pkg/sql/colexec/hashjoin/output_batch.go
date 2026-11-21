@@ -66,7 +66,7 @@ func needsOutputAreaCheck(columns []colexec.ResultPos, source *batch.Batch, rela
 		}
 		vec := source.Vecs[column.Pos]
 		// One copy per disjoint input payload fits in the source area.
-		if copyFlatPayloadOnce && vec.VarlenaAreaIsDisjoint() && !vec.IsDictionary() && int64(len(vec.GetArea())) <= limit {
+		if copyFlatPayloadOnce && vec.VarlenaAreaIsDisjoint() && int64(len(vec.GetArea())) <= limit {
 			continue
 		}
 		if vector.VarlenaPayloadExceeds(vec, threshold) {
@@ -129,7 +129,7 @@ func (areas outputAreas) reserve(columns []colexec.ResultPos, row, previous outp
 		}
 		vec := source.Vecs[column.Pos]
 		prevSource, prevSel := previous.source(column.Rel)
-		if prevSource == source && !vec.IsDictionary() &&
+		if prevSource == source &&
 			(vec.IsConst() || (column.Rel == 0 && sel == prevSel)) {
 			continue
 		}

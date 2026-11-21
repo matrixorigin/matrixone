@@ -561,7 +561,7 @@ func HandleShardingReadPrimaryKeysMayBeModified(
 		return nil, err
 	}
 
-	keyVector := vector.NewVecFromReuse()
+	keyVector := new(vector.Vector)
 	err = keyVector.UnmarshalBinary(param.PrimaryKeysMayBeModifiedParam.KeyVector)
 	if err != nil {
 		return nil, err
@@ -616,7 +616,7 @@ func HandleShardingReadPrimaryKeysMayBeUpserted(
 		return nil, err
 	}
 
-	keyVector := vector.NewVecFromReuse()
+	keyVector := new(vector.Vector)
 	err = keyVector.UnmarshalBinary(param.PrimaryKeysMayBeModifiedParam.KeyVector)
 	if err != nil {
 		return nil, err

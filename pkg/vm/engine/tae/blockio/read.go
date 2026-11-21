@@ -1151,8 +1151,7 @@ func blockDataReadWithFilter(
 
 		physicalRowCount = outputBat.Vecs[earlyColumns[0]].Length()
 		if !deleteMask.IsEmpty() {
-			deleted := vector.GetSels()
-			defer func() { vector.PutSels(deleted) }()
+			var deleted []int64
 			deleted = deleteMask.ToI64Array(&deleted)
 			for _, pos := range earlyColumns {
 				if err := outputBat.Vecs[pos].Shrink(deleted, true, mp); err != nil {
@@ -1240,8 +1239,11 @@ func blockDataReadWithFilter(
 		// Map only the surviving logical rows back to block offsets. In
 		// particular, a zero-result filter returns above without building an
 		// O(block rows) live-row slice.
-		selectedPhysicalRows = vector.GetSels()
-		defer func() { vector.PutSels(selectedPhysicalRows) }()
+		capacity := len(filterResult.Sels)
+		if filterResult.All {
+			capacity = physicalRowCount
+		}
+		selectedPhysicalRows = make([]int64, 0, capacity)
 		nextSelected := 0
 		liveRow := int64(0)
 		for physicalRow := 0; physicalRow < physicalRowCount; physicalRow++ {
@@ -1261,8 +1263,8 @@ func blockDataReadWithFilter(
 		if physicalRows == nil {
 			selectedPhysicalRows = filterResult.Sels
 		} else {
-			selectedPhysicalRows = vector.GetSels()
-			defer func() { vector.PutSels(selectedPhysicalRows) }()
+			// A new slice: physicalRows belongs to the caller.
+			selectedPhysicalRows = make([]int64, 0, len(filterResult.Sels))
 			for _, row := range filterResult.Sels {
 				selectedPhysicalRows = append(selectedPhysicalRows, physicalRows[row])
 			}
@@ -1457,7 +1459,7 @@ func blockDataReadWithSelectedFilterTopK(
 				return selectedPhysicalRows, nil
 			}
 
-			pooledPhysicalRows = vector.GetSels()
+			pooledPhysicalRows = pooledPhysicalRows[:0]
 			for _, row := range filterResult.Sels {
 				pooledPhysicalRows = append(pooledPhysicalRows, storageSelectRows[row])
 			}
@@ -1468,9 +1470,6 @@ func blockDataReadWithSelectedFilterTopK(
 		mp,
 		policy,
 	)
-	if pooledPhysicalRows != nil {
-		defer vector.PutSels(pooledPhysicalRows)
-	}
 	if err != nil {
 		return err
 	}
@@ -1656,8 +1655,7 @@ func BlockDataReadInner(
 		defer deleteMask.Release()
 
 		if !deleteMask.IsEmpty() {
-			arr := vector.GetSels()
-			defer vector.PutSels(arr)
+			var arr []int64
 			deletedRows = deleteMask.ToI64Array(&arr)
 			for i := range columns {
 				if err := outputBat.Vecs[i].Shrink(deletedRows, true, mp); err != nil {
@@ -1790,10 +1788,7 @@ func BlockDataReadInner(
 	// transform delete mask to deleted rows
 	// TODO: avoid this transformation
 	if !deleteMask.IsEmpty() {
-		arr := vector.GetSels()
-		defer func() {
-			vector.PutSels(arr)
-		}()
+		var arr []int64
 
 		deletedRows = deleteMask.ToI64Array(&arr)
 	}

@@ -43,29 +43,15 @@ func (filter *Filter) GetOperatorBase() *vm.OperatorBase {
 
 func init() {
 	reuse.CreatePool[Filter](
-		newFilterArgument,
-		resetFilterArgument,
+		func() *Filter {
+			return &Filter{}
+		},
+		func(a *Filter) {
+			*a = Filter{}
+		},
 		reuse.DefaultOptions[Filter]().
 			WithEnableChecker(),
 	)
-}
-
-// Keep the frame in the same allocation, outside the operator's reset range.
-type filterArgument struct {
-	operator Filter
-	frame    colexec.DictionaryInputFrame
-}
-
-func newFilterArgument() *Filter {
-	a := new(filterArgument)
-	a.operator.ctr.dictionaryInputs = &a.frame
-	return &a.operator
-}
-
-func resetFilterArgument(a *Filter) {
-	frame := a.ctr.dictionaryInputs
-	*a = Filter{}
-	a.ctr.dictionaryInputs = frame
 }
 
 func (filter Filter) TypeName() string {
@@ -84,10 +70,6 @@ func (filter *Filter) Release() {
 }
 
 type container struct {
-	dictionaryInputs          *colexec.DictionaryInputFrame
-	dictionaryBoundary        vm.DictionaryOutputState
-	viewOutput                *batch.Batch
-	selectedRows              []int64
 	outputAllocation          *vector.AllocationAccountSelection
 	buf                       *batch.Batch
 	executors                 []colexec.ExpressionExecutor
@@ -95,6 +77,9 @@ type container struct {
 	runtimeExecutors          []colexec.ExpressionExecutor
 	allExecutors              []colexec.ExpressionExecutor // = executors + runtimeExecutor, do not free this executors
 	subjectReuseAdmissionDone bool
+	selection                 selectionState
+	// flatSels is the compacting path's row-number scratch.
+	flatSels []int64
 }
 
 func (filter *Filter) SetRuntimeFilterExprs(proc *process.Process, exes []*plan.Expr) (err error) {
@@ -112,12 +97,6 @@ func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err erro
 }
 
 func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {
-	filter.ctr.dictionaryInputs.Free(proc.Mp())
-	if filter.ctr.viewOutput != nil {
-		filter.ctr.viewOutput.Clean(proc.Mp())
-		filter.ctr.viewOutput = nil
-	}
-	filter.ctr.selectedRows = nil
 	filter.ctr.cleanExecutor()
 	filter.ctr.cleanRuntimeExecutor()
 	filter.ctr.allExecutors = nil

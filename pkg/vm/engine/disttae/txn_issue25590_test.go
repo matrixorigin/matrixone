@@ -167,10 +167,9 @@ func runIssue25590Statements(
 			prevRowid := prevRowids[0]
 			deleteBlkId := map[types.Blockid]bool{prevRowid.CloneBlockID(): true}
 			rows := map[types.Rowid]uint8{prevRowid: 0}
-			sels := vector.GetSels()
+			var sels []int64
 			txn.deleteTableWrites(issue25590DBID, issue25590TableID, sels, deleteBlkId,
 				prevRowid.GetRowOffset(), prevRowid.GetRowOffset(), rows)
-			vector.PutSels(sels)
 		}
 
 		insert := issue25590InsertBatch(t, txn, newV)
@@ -379,10 +378,9 @@ func TestIssue25590RollbackAfterRetiredHistory(t *testing.T) {
 	liveRowid := vector.MustFixedColWithTypeCheck[types.Rowid](liveBat.GetVector(0))[0]
 	deleteBlkId := map[types.Blockid]bool{liveRowid.CloneBlockID(): true}
 	rows := map[types.Rowid]uint8{liveRowid: 0}
-	sels := vector.GetSels()
+	var sels []int64
 	txn.deleteTableWrites(issue25590DBID, issue25590TableID, sels, deleteBlkId,
 		liveRowid.GetRowOffset(), liveRowid.GetRowOffset(), rows)
-	vector.PutSels(sels)
 	bat := issue25590InsertBatch(t, txn, prelude+1)
 	txn.appendWorkspaceEntryLocked(Entry{
 		typ:          INSERT,
@@ -550,9 +548,8 @@ func issue25590MarkRows(t *testing.T, txn *Transaction, bat *batch.Batch, idxs .
 			max = all[i].GetRowOffset()
 		}
 	}
-	sels := vector.GetSels()
+	var sels []int64
 	txn.deleteTableWrites(issue25590DBID, issue25590TableID, sels, deleteBlkId, min, max, rows)
-	vector.PutSels(sels)
 }
 
 //   - a batch shrunk only PARTIALLY must never be retired (the value the

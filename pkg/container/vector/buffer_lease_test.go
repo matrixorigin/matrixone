@@ -345,7 +345,7 @@ func TestBorrowedVarlenMarshalUsesCanonicalCompactedArea(t *testing.T) {
 	require.NoError(t, plan.MarshalTo(&streamed))
 	require.Equal(t, encoded, streamed.Bytes())
 
-	decoded := NewVecFromReuse()
+	decoded := new(Vector)
 	require.NoError(t, decoded.UnmarshalBinary(encoded))
 	require.Equal(t, string(first), decoded.GetStringAt(0))
 	require.Equal(t, "short", decoded.GetStringAt(1))

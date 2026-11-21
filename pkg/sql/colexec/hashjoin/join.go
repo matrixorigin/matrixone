@@ -250,10 +250,6 @@ func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
 }
 
 func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
-	hashJoin.ctr.dictionaryBoundary.BeginCall()
-	if output := hashJoin.ctr.probeOutput; output != nil {
-		output.retire()
-	}
 	if hashJoin.AsofBuildLeft {
 		return hashJoin.callAsofBuildLeft(proc)
 	}
@@ -355,20 +351,8 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 
-			if hashJoin.canForwardProbe() {
-				if err := hashJoin.beginProbeOutput(); err != nil {
-					return result, err
-				}
-			}
-
 			if ctr.skipProbe {
 				rowCount := ctr.leftBat.RowCount()
-				if output := ctr.probeOutput; output != nil && output.optimistic {
-					ctr.resBat.SetRowCount(rowCount)
-					result.Batch = output.publish(hashJoin)
-					ctr.leftBat = nil
-					return result, nil
-				}
 				var srcVec *vector.Vector
 				var targetVec *vector.Vector
 
@@ -397,10 +381,6 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if err != nil {
 				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
-			}
-
-			if output := ctr.probeOutput; output != nil && output.optimistic {
-				result.Batch = output.publish(hashJoin)
 			}
 
 			if hashJoin.IsRightSemi() || hashJoin.IsRightAnti() {
@@ -1889,14 +1869,6 @@ func (ctr *container) appendMembershipMatches(hashJoin *HashJoin, proc *process.
 			selected++
 		}
 	}
-	if output := ctr.probeOutput; output != nil && output.optimistic {
-		if selected == count {
-			return selected, nil
-		}
-		if err := output.materializePrefix(hashJoin, proc); err != nil {
-			return 0, err
-		}
-	}
 	if selected == 0 {
 		return 0, nil
 	}
@@ -1922,14 +1894,6 @@ func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Proc
 			matched++
 		}
 	}
-	forwardProbe := false
-	if output := ctr.probeOutput; output != nil && output.optimistic {
-		if matched == count {
-			forwardProbe = true
-		} else if err := output.materializePrefix(hashJoin, proc); err != nil {
-			return 0, err
-		}
-	}
 	if matched == 0 {
 		return 0, nil
 	}
@@ -1939,7 +1903,7 @@ func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Proc
 		}
 	}
 	for j, rp := range hashJoin.ResultCols {
-		if rp.Rel == 0 && !forwardProbe {
+		if rp.Rel == 0 {
 			src := ctr.leftBat.Vecs[rp.Pos]
 			// Whole flat varlena copies may retain unreferenced area bytes.
 			// Keep the exact selected-payload allocation behavior in that case.

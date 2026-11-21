@@ -59,7 +59,7 @@ func TestUnionSelectionPreservesOwnedDisjointVarlenaLayout(t *testing.T) {
 
 	wire, err := selected.MarshalBinary()
 	require.NoError(t, err)
-	decoded := NewVecFromReuse()
+	decoded := new(Vector)
 	defer decoded.Free(nil)
 	require.NoError(t, decoded.UnmarshalBinary(wire))
 	require.Equal(t, values[3], decoded.GetBytesAt(0))
@@ -120,7 +120,7 @@ func TestUnionOnePreservesOwnedDisjointVarlenaLayout(t *testing.T) {
 		require.NotEqual(t, firstOffset, repeatedOffset)
 		wire, err := selected.MarshalBinary()
 		require.NoError(t, err)
-		decoded := NewVecFromReuse()
+		decoded := new(Vector)
 		t.Cleanup(func() { decoded.Free(nil) })
 		require.NoError(t, decoded.UnmarshalBinary(wire))
 		for row, sel := range sels {
@@ -221,7 +221,7 @@ func TestUnionOneNullClearsReusedVarlenaDescriptor(t *testing.T) {
 			destination.GetNulls().Del(0)
 			wire, err := destination.MarshalBinary()
 			require.NoError(t, err)
-			decoded := NewVecFromReuse()
+			decoded := new(Vector)
 			t.Cleanup(func() { decoded.Free(nil) })
 			require.NoError(t, decoded.UnmarshalBinary(wire))
 			require.False(t, decoded.IsNull(0))
