@@ -162,6 +162,11 @@ func TestType_Eq(t *testing.T) {
 }
 
 func TestT_ToType(t *testing.T) {
+	unknown := T(255)
+	_, ok := unknown.TryToType()
+	require.False(t, ok)
+	require.PanicsWithValue(t, "Unknown type", func() { unknown.ToType() })
+
 	require.Equal(t, int32(1), T_int8.ToType().Size)
 	require.Equal(t, int32(2), T_int16.ToType().Size)
 	require.Equal(t, int32(4), T_int32.ToType().Size)

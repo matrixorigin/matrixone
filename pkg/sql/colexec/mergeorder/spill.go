@@ -168,14 +168,14 @@ func writeSpillUint64(writer io.Writer, value uint64) error {
 }
 
 func appendSpillPayload(writer io.Writer, bat *batch.Batch) (int64, error) {
-	size, err := bat.MarshalBinaryWithPrepareParamKindsSize()
+	size, err := bat.MarshalBinarySize()
 	if err != nil {
 		return 0, err
 	}
 	if err = writeSpillInt64(writer, int64(size)); err != nil {
 		return 0, err
 	}
-	if err = bat.MarshalBinaryWithPrepareParamKindsTo(writer); err != nil {
+	if err = bat.MarshalBinaryTo(writer); err != nil {
 		return 0, err
 	}
 	return int64(size) + 8, nil
@@ -240,7 +240,7 @@ func readSpillPayload(proc *process.Process, reader io.Reader, reuseBat *batch.B
 		return nil, moerr.NewInternalError(proc.Ctx, "negative merge-order spill payload size")
 	}
 	reuseBat.CleanOnlyData()
-	if err := reuseBat.UnmarshalFromReaderWithPrepareParamKinds(reader, batchSize, proc.Mp()); err != nil {
+	if err := reuseBat.UnmarshalFromReaderWithMetadata(reader, batchSize, proc.Mp()); err != nil {
 		return nil, err
 	}
 	return reuseBat, nil

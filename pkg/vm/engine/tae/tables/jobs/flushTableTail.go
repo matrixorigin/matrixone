@@ -522,9 +522,9 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	}
 	totalRowCnt := bat.Length()
 	if isTombstone {
-		task.aTombstoneDeletesCnt += bat.Deletes.GetCardinality()
+		task.aTombstoneDeletesCnt += bat.Deletes.Count()
 	} else {
-		task.aObjDeletesCnt += bat.Deletes.GetCardinality()
+		task.aObjDeletesCnt += bat.Deletes.Count()
 	}
 
 	var sortMapping []int64

@@ -98,28 +98,31 @@ func TestRandomBytesCoercesBoolTextFloatAndDecimalLengths(t *testing.T) {
 	}
 }
 
-func TestRandomBytesUsesPreparedSourceKindForTextTransport(t *testing.T) {
+func TestRandomBytesUsesPreparedSourceType(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	decimal := func(v string, scale int32) FunctionTestInput {
+		typ := types.New(types.T_decimal128, 38, scale)
+		d, err := types.ParseDecimal128(v, typ.Width, typ.Scale)
+		require.NoError(t, err)
+		return NewFunctionTestInput(typ, []types.Decimal128{d}, nil)
+	}
+	// Prepared parameters reach execution as typed values.
 	for _, tc := range []struct {
 		name  string
-		kind  vector.PrepareParamKind
-		value string
+		input FunctionTestInput
 		want  int
 	}{
-		{name: "float", kind: vector.PrepareParamFloat, value: "1.5", want: 2},
-		{name: "decimal", kind: vector.PrepareParamDecimal, value: "2.5", want: 3},
-		{name: "decimal_exact_precision", kind: vector.PrepareParamDecimal, value: "2.5000000000000001", want: 3},
-		{name: "boolean", kind: vector.PrepareParamBoolean, value: "true", want: 1},
-		{name: "long_integer_prefix", kind: vector.PrepareParamNone, value: "0000000000000000000000000000001024tail", want: 1024},
+		{name: "float", input: NewFunctionTestInput(types.T_float64.ToType(), []float64{1.5}, nil), want: 2},
+		{name: "decimal", input: decimal("2.5", 1), want: 3},
+		{name: "decimal_exact_precision", input: decimal("2.5000000000000001", 16), want: 3},
+		{name: "boolean", input: NewFunctionTestInput(types.T_bool.ToType(), []bool{true}, nil), want: 1},
+		{name: "long_integer_prefix", input: NewFunctionTestInput(types.T_text.ToType(), []string{"0000000000000000000000000000001024tail"}, nil), want: 1024},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			caseTest := NewFunctionTestCase(proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(types.T_text.ToType(), []string{tc.value}, nil),
-				},
+				[]FunctionTestInput{tc.input},
 				NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), RandomBytes)
 			defer caseTest.Free()
-			caseTest.parameters[0].SetPrepareParamKind(tc.kind)
 
 			require.NoError(t, caseTest.result.PreExtendAndReset(1))
 			require.NoError(t, RandomBytes(caseTest.parameters, caseTest.result, proc, 1, nil))
@@ -291,52 +294,6 @@ func TestRandomBytesDecimalHighScalePathsAgree(t *testing.T) {
 
 	require.Equal(t, 2, run(t, NewFunctionTestInput(typ, []types.Decimal128{value}, nil)))
 	require.Equal(t, 2, run(t, NewFunctionTestConstInput(typ, []types.Decimal128{value}, nil)))
-
-	prepared := NewFunctionTestCase(proc,
-		[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), []string{"2.49"}, nil)},
-		NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), RandomBytes)
-	defer prepared.Free()
-	prepared.parameters[0].SetPrepareParamKind(vector.PrepareParamDecimal)
-	require.NoError(t, prepared.result.PreExtendAndReset(1))
-	require.NoError(t, RandomBytes(prepared.parameters, prepared.result, proc, 1, nil))
-	require.Len(t, prepared.GetResultVectorDirectly().GetBytesAt(0), 2)
-}
-
-func TestRandomBytesHonorsRuntimeTextOverrideForBinaryCommonType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	t.Run("constant text override", func(t *testing.T) {
-		input, err := vector.NewConstBytes(types.T_varbinary.ToType(), []byte("2"), 1, proc.Mp())
-		require.NoError(t, err)
-		defer input.Free(proc.Mp())
-		require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, proc.Mp()))
-
-		result := vector.NewFunctionResultWrapper(types.T_blob.ToType(), proc.Mp())
-		defer result.Free()
-		require.NoError(t, result.PreExtendAndReset(1))
-		require.NoError(t, RandomBytes([]*vector.Vector{input}, result, proc, 1, nil))
-		require.Len(t, result.GetResultVector().GetBytesAt(0), 2)
-	})
-
-	t.Run("mixed prepared text and masked binary", func(t *testing.T) {
-		input := vector.NewVec(types.T_varbinary.ToType())
-		defer input.Free(proc.Mp())
-		require.NoError(t, vector.AppendBytes(input, []byte("2.5"), false, proc.Mp()))
-		require.NoError(t, vector.AppendBytes(input, []byte{0}, false, proc.Mp()))
-		require.NoError(t, input.SetSelectedValueBinaryStringRowsWithMP([]bool{false, true}, proc.Mp()))
-		input.SetPrepareParamKinds([]vector.PrepareParamKind{
-			vector.PrepareParamDecimal,
-			vector.PrepareParamNone,
-		})
-
-		result := vector.NewFunctionResultWrapper(types.T_blob.ToType(), proc.Mp())
-		defer result.Free()
-		require.NoError(t, result.PreExtendAndReset(2))
-		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
-		require.NoError(t, RandomBytes([]*vector.Vector{input}, result, proc, 2, selectList))
-		require.Len(t, result.GetResultVector().GetBytesAt(0), 3)
-		require.True(t, result.GetResultVector().IsNull(1))
-	})
 }
 
 func TestRandomBytesCoversAllAcceptedScalarGetterTypes(t *testing.T) {
@@ -438,26 +395,6 @@ func TestRandomBytesTreatsInvalidNumericTextAsRangeError(t *testing.T) {
 				},
 				NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), RandomBytes)
 			defer caseTest.Free()
-
-			require.NoError(t, caseTest.result.PreExtendAndReset(1))
-			err := RandomBytes(caseTest.parameters, caseTest.result, proc, 1, nil)
-			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrPreparedParamOutOfRange), err)
-		})
-	}
-}
-
-func TestRandomBytesTreatsInvalidPreparedDecimalAsRangeError(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	for _, value := range []string{"1/2", "1e999", "1.2.3"} {
-		t.Run(value, func(t *testing.T) {
-			caseTest := NewFunctionTestCase(proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(types.T_text.ToType(), []string{value}, nil),
-				},
-				NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), RandomBytes)
-			defer caseTest.Free()
-			caseTest.parameters[0].SetPrepareParamKind(vector.PrepareParamDecimal)
 
 			require.NoError(t, caseTest.result.PreExtendAndReset(1))
 			err := RandomBytes(caseTest.parameters, caseTest.result, proc, 1, nil)

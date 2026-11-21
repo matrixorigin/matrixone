@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -393,7 +394,7 @@ func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
 	binaryFilled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
 		ParamValue{
 			Value:            "2",
-			PrepareParamKind: vector.PrepareParamInteger,
+			PrepareParamKind: types.StringConversionInteger,
 		},
 	})
 	require.NoError(t, err)
@@ -1071,6 +1072,48 @@ func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T
 	validation.qry.Nodes[0].ViewPath[0].Snapshot.TS.LogicalTime = 8
 	require.Equal(t, uint32(7), owner.windowValidationScans[4].ViewPath[0].Snapshot.TS.LogicalTime)
 
+}
+
+func TestWindowValidationPrivilegeCarrierExternalSelectScans(t *testing.T) {
+	for _, externType := range []planpb.ExternType{
+		planpb.ExternType_EXTERNAL_TB,
+		planpb.ExternType_MONGODB_TB,
+		planpb.ExternType_DATASTREAM_TB,
+		planpb.ExternType_FOREIGN_TB,
+		planpb.ExternType_ICEBERG_TB,
+		planpb.ExternType_KAFKA_TB,
+	} {
+		t.Run(externType.String(), func(t *testing.T) {
+			carrier := windowValidationPrivilegeCarrier(&planpb.Node{
+				NodeType: planpb.Node_EXTERNAL_SCAN,
+				ObjRef:   &planpb.ObjectRef{SchemaName: "external_db", ObjName: "events"},
+				TableDef: &planpb.TableDef{
+					TableType: catalog.SystemExternalRel,
+					Cols:      make([]*planpb.ColDef, 4),
+				},
+				ExternScan: &planpb.ExternScan{Type: int32(externType)},
+			})
+			require.NotNil(t, carrier)
+			require.Equal(t, int32(externType), carrier.GetExternScan().GetType())
+			require.Equal(t, catalog.SystemExternalRel, carrier.GetTableDef().GetTableType())
+			require.Empty(t, carrier.GetTableDef().GetCols())
+		})
+	}
+
+	for _, externType := range []planpb.ExternType{
+		planpb.ExternType_LOAD,
+		planpb.ExternType_RESULT_SCAN,
+	} {
+		t.Run("exclude "+externType.String(), func(t *testing.T) {
+			carrier := windowValidationPrivilegeCarrier(&planpb.Node{
+				NodeType:   planpb.Node_EXTERNAL_SCAN,
+				ObjRef:     &planpb.ObjectRef{SchemaName: "external_db", ObjName: "events"},
+				TableDef:   &planpb.TableDef{TableType: catalog.SystemExternalRel},
+				ExternScan: &planpb.ExternScan{Type: int32(externType)},
+			})
+			require.Nil(t, carrier)
+		})
+	}
 }
 
 func namedWindowsSQL(prefix string, count int) string {

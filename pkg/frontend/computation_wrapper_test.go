@@ -370,7 +370,6 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	proc.SetResolveVariableTypeFunc(ses.txnCompileCtx.ResolveVariableType)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
 	proc.SetResolveVariableStringDomainFunc(ses.txnCompileCtx.ResolveVariableStringDomain)
-	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	return ses, prepareStmt, cw, execCtx
 }
 
@@ -416,9 +415,6 @@ func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
-	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0),
-		"static binary type must not be flattened into a runtime override")
-	require.False(t, cw.proc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, plan2.ParamValue{
 		Value: "AB\x00\x00", IsBin: false, EnableNumericPrefix: true,
 		SourceType: types.NewWithCharset(types.T_varbinary, 0, 0, types.CharsetBinary), HasSourceType: true,
@@ -429,19 +425,15 @@ func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {
 	}, cw.paramVals[1])
 
 	params := cw.proc.GetPrepareParams()
-	require.Equal(t, types.RuntimeStringBinary, params.GetRuntimeStringDomainAt(0))
-	require.Equal(t, types.RuntimeStringInherit, params.GetRuntimeStringDomainAt(1))
-	require.Equal(t, types.StringSourceSQLPrepare, params.GetStringSourceAt(0))
-	require.Equal(t, types.StringSourceSQLPrepare, params.GetStringSourceAt(1))
+	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParamsStringSource())
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
 	require.Zero(t, params.Length(), "the previous owned params must be released on successful replacement")
 	require.Nil(t, params.GetData())
 	require.False(t, cw.proc.GetPrepareParamIsBin(0))
-	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0))
 	require.Equal(t, "now-text", cw.proc.GetPrepareParams().GetStringAt(0))
-	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParams().GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParamsStringSource())
 
 	current := cw.proc.GetPrepareParams()
 	cw.proc.SetPrepareParams(vector.NewVec(types.T_text.ToType()))
@@ -470,14 +462,14 @@ func TestBinaryProtocolPreparedParamRebindsStringDomain(t *testing.T) {
 	previous := install(defines.MYSQL_TYPE_BLOB)
 	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+	require.True(t, preparedParamValueIsBinaryString(cw, 0))
 
 	cw.proc.SetPrepareParams(nil)
 	current := install(defines.MYSQL_TYPE_VAR_STRING)
 	previous.Free(cw.proc.Mp())
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0),
+	require.False(t, preparedParamValueIsBinaryString(cw, 0),
 		"a text rebind must clear the previous binary domain")
 
 	cw.proc.SetPrepareParams(nil)
@@ -485,7 +477,7 @@ func TestBinaryProtocolPreparedParamRebindsStringDomain(t *testing.T) {
 	current.Free(cw.proc.Mp())
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0),
+	require.True(t, preparedParamValueIsBinaryString(cw, 0),
 		"a later binary rebind must not reuse the text domain")
 	cw.proc.SetPrepareParams(nil)
 	next.Free(cw.proc.Mp())
@@ -525,7 +517,7 @@ func TestCOMStmtJsonUnquoteRebindExecutesWithWireStringDomain(t *testing.T) {
 			if owned && executionStmt != nil {
 				defer executionStmt.Free()
 			}
-			require.Equal(t, tc.wantBinary, cw.proc.GetPrepareParamIsBinaryString(0))
+			require.Equal(t, tc.wantBinary, preparedParamValueIsBinaryString(cw, 0))
 
 			queryPlan := runtimePlan.GetQuery()
 			projects := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList
@@ -542,7 +534,7 @@ func TestCOMStmtJsonUnquoteRebindExecutesWithWireStringDomain(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, result.Length())
 			require.Equal(t, "plain", result.GetStringAt(0))
-			require.False(t, result.GetIsBinaryStringAt(0))
+			require.Equal(t, types.StringDomainText, types.StaticStringDomain(*result.GetType()))
 
 			after, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
 			require.NoError(t, err)
@@ -584,7 +576,7 @@ func TestCOMStmtJsonQuoteRebindExecutesWithWireStringDomain(t *testing.T) {
 			if owned && executionStmt != nil {
 				defer executionStmt.Free()
 			}
-			require.Equal(t, tc.wantBinary, cw.proc.GetPrepareParamIsBinaryString(0))
+			require.Equal(t, tc.wantBinary, preparedParamValueIsBinaryString(cw, 0))
 
 			queryPlan := runtimePlan.GetQuery()
 			projects := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList
@@ -601,7 +593,7 @@ func TestCOMStmtJsonQuoteRebindExecutesWithWireStringDomain(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, result.Length())
 			require.Equal(t, `"plain"`, result.GetStringAt(0))
-			require.False(t, result.GetIsBinaryStringAt(0))
+			require.Equal(t, types.StringDomainText, types.StaticStringDomain(*result.GetType()))
 
 			after, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
 			require.NoError(t, err)
@@ -1025,10 +1017,9 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 			}
 			for parameter, mysqlType := range tc.mysqlTypes {
 				require.Equal(t, mysqlType == defines.MYSQL_TYPE_LONG_BLOB,
-					cw.proc.GetPrepareParamIsBinaryString(parameter))
-				require.Equal(t, types.StringSourceCOMStmt,
-					cw.proc.GetPrepareParams().GetStringSourceAt(parameter))
+					preparedParamValueIsBinaryString(cw, parameter))
 			}
+			require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParamsStringSource())
 
 			queryPlan := runtimePlan.GetQuery()
 			projects := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList
@@ -1048,7 +1039,8 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 			replaceResult, err := replaceExecutor.Eval(cw.proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.wantReplace, replaceResult.GetStringAt(0))
-			require.Equal(t, tc.wantReplaceBinary, replaceResult.GetIsBinaryStringAt(0))
+			require.Equal(t, tc.wantReplaceBinary,
+				types.StaticStringDomain(*replaceResult.GetType()) == types.StringDomainBinary)
 
 			nestedExecutor, err := colexec.NewExpressionExecutor(cw.proc, projects[2])
 			require.NoError(t, err)
@@ -1242,14 +1234,14 @@ func TestUserVariableNullTypeDoesNotLeakHistoryToExecuteParams(t *testing.T) {
 		}
 		require.NoError(t, ses.SetUserDefinedVar("parameter", nil, ""))
 		func() {
-			params, values, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc,
+			params, values, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc, ses.txnCompileCtx.ResolveVariablePrepareParamKind,
 				[]*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "parameter"}}}}, nil, nil)
 			require.NoError(t, err)
 			defer params.Free(cw.proc.Mp())
 			value := values[0].(plan2.ParamValue)
 			require.Nil(t, value.Value)
 			require.False(t, value.HasSourceType, "literal NULL has no current conversion type, regardless of history")
-			require.Equal(t, vector.PrepareParamNone, value.PrepareParamKind)
+			require.Equal(t, types.StringConversionString, value.PrepareParamKind)
 		}()
 	}
 }
@@ -1442,21 +1434,17 @@ func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
 
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, nil, true, cw.proc.Mp()))
-	cw.proc.SetPrepareParamsWithMeta(
-		params,
-		[]bool{false},
-		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
-	)
+	cw.proc.SetPrepareParamsWithIsBin(params, []bool{false})
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
 		params.Free(cw.proc.Mp())
 	}()
 
-	values, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0})
+	values, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}, []types.StringConversionKind{types.StringConversionDecimal})
 	require.NoError(t, err)
 	require.Equal(t, []any{plan2.ParamValue{
 		IsBinaryProtocol:    true,
-		PrepareParamKind:    vector.PrepareParamDecimal,
+		PrepareParamKind:    types.StringConversionDecimal,
 		EnableNumericPrefix: true,
 	}}, values)
 }
@@ -1590,7 +1578,7 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 	install("-42", defines.MYSQL_TYPE_LONGLONG, false)
 	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.Equal(t, types.StringSourceCOMStmt, prepareStmt.params.GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParamsStringSource())
 	require.Nil(t, retComp)
 	require.NotSame(t, ordinaryPlan, runtimePlan)
 	require.Equal(t, int32(types.T_int64), resultExpr(runtimePlan).Typ.Id)
@@ -1968,7 +1956,7 @@ func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
 	require.Len(t, cw.paramVals, 1)
 	param, ok := cw.paramVals[0].(plan2.ParamValue)
 	require.True(t, ok)
-	require.Equal(t, vector.PrepareParamBoolean, param.PrepareParamKind)
+	require.Equal(t, types.StringConversionBoolean, param.PrepareParamKind)
 	require.True(t, param.HasRuntimeType)
 	require.Equal(t, types.T_bool.ToType(), param.RuntimeType)
 }
@@ -2057,24 +2045,24 @@ func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 		mysqlType  defines.MysqlType
 		isUnsigned bool
 		value      string
-		want       vector.PrepareParamKind
+		want       types.StringConversionKind
 	}{
-		{defines.MYSQL_TYPE_TINY, false, "0", vector.PrepareParamBoolean},
-		{defines.MYSQL_TYPE_TINY, false, "1", vector.PrepareParamBoolean},
-		{defines.MYSQL_TYPE_TINY, true, "1", vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_TINY, false, "2", vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_TINY, false, "-1", vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_SHORT, false, "1", vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_INT24, false, "1", vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_LONG, false, "1", vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_LONGLONG, false, "1", vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_YEAR, false, "2024", vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_FLOAT, false, "1.5", vector.PrepareParamFloat},
-		{defines.MYSQL_TYPE_DOUBLE, false, "1.5", vector.PrepareParamFloat},
-		{defines.MYSQL_TYPE_DECIMAL, false, "1.5", vector.PrepareParamDecimal},
-		{defines.MYSQL_TYPE_NEWDECIMAL, false, "1.5", vector.PrepareParamDecimal},
-		{defines.MYSQL_TYPE_BIT, false, "1", vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_VAR_STRING, false, "1", vector.PrepareParamNone},
+		{defines.MYSQL_TYPE_TINY, false, "0", types.StringConversionBoolean},
+		{defines.MYSQL_TYPE_TINY, false, "1", types.StringConversionBoolean},
+		{defines.MYSQL_TYPE_TINY, true, "1", types.StringConversionInteger},
+		{defines.MYSQL_TYPE_TINY, false, "2", types.StringConversionInteger},
+		{defines.MYSQL_TYPE_TINY, false, "-1", types.StringConversionInteger},
+		{defines.MYSQL_TYPE_SHORT, false, "1", types.StringConversionInteger},
+		{defines.MYSQL_TYPE_INT24, false, "1", types.StringConversionInteger},
+		{defines.MYSQL_TYPE_LONG, false, "1", types.StringConversionInteger},
+		{defines.MYSQL_TYPE_LONGLONG, false, "1", types.StringConversionInteger},
+		{defines.MYSQL_TYPE_YEAR, false, "2024", types.StringConversionInteger},
+		{defines.MYSQL_TYPE_FLOAT, false, "1.5", types.StringConversionFloat},
+		{defines.MYSQL_TYPE_DOUBLE, false, "1.5", types.StringConversionFloat},
+		{defines.MYSQL_TYPE_DECIMAL, false, "1.5", types.StringConversionDecimal},
+		{defines.MYSQL_TYPE_NEWDECIMAL, false, "1.5", types.StringConversionDecimal},
+		{defines.MYSQL_TYPE_BIT, false, "1", types.StringConversionInteger},
+		{defines.MYSQL_TYPE_VAR_STRING, false, "1", types.StringConversionString},
 	} {
 		require.Equal(t, test.want,
 			binaryProtocolPrepareParamKind(test.mysqlType, test.isUnsigned, []byte(test.value)),
@@ -2205,13 +2193,12 @@ func TestPreparedParamValuesCarriesBothDecimalDomains(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			params := vector.NewVec(types.T_text.ToType())
 			require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, cw.proc.Mp()))
-			cw.proc.SetPrepareParamsWithMeta(
-				params, []bool{false}, []vector.PrepareParamKind{vector.PrepareParamDecimal})
+			cw.proc.SetPrepareParamsWithIsBin(params, []bool{false})
 			t.Cleanup(func() {
 				cw.proc.SetPrepareParams(nil)
 				params.Free(cw.proc.Mp())
 			})
-			values, err := preparedParamValues(cw.proc, []byte{byte(test.mysqlType), 0})
+			values, err := preparedParamValues(cw.proc, []byte{byte(test.mysqlType), 0}, []types.StringConversionKind{types.StringConversionDecimal})
 			require.NoError(t, err)
 			require.Len(t, values, 1)
 			value := values[0].(plan2.ParamValue)
@@ -2259,14 +2246,13 @@ func TestPreparedParamValuesPreservesTemporalScale(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			params := vector.NewVec(types.T_text.ToType())
 			require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, cw.proc.Mp()))
-			cw.proc.SetPrepareParamsWithMeta(
-				params, []bool{false}, []vector.PrepareParamKind{vector.PrepareParamNone})
+			cw.proc.SetPrepareParamsWithIsBin(params, []bool{false})
 			t.Cleanup(func() {
 				cw.proc.SetPrepareParams(nil)
 				params.Free(cw.proc.Mp())
 			})
 
-			values, err := preparedParamValues(cw.proc, []byte{byte(test.mysqlType), 0}, []int32{0})
+			values, err := preparedParamValues(cw.proc, []byte{byte(test.mysqlType), 0}, []types.StringConversionKind{types.StringConversionString}, []int32{0})
 			require.NoError(t, err)
 			require.Len(t, values, 1)
 			param := values[0].(plan2.ParamValue)
@@ -2285,9 +2271,7 @@ func TestPreparedParamValuesScopesTemporalRuntimeToConsumer(t *testing.T) {
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("2024-01-02"), false, cw.proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("2024-01-03"), false, cw.proc.Mp()))
-	cw.proc.SetPrepareParamsWithMeta(
-		params, []bool{false, false},
-		[]vector.PrepareParamKind{vector.PrepareParamNone, vector.PrepareParamNone})
+	cw.proc.SetPrepareParamsWithIsBin(params, []bool{false, false})
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
 		params.Free(cw.proc.Mp())
@@ -2299,6 +2283,7 @@ func TestPreparedParamValuesScopesTemporalRuntimeToConsumer(t *testing.T) {
 			byte(defines.MYSQL_TYPE_DATE), 0,
 			byte(defines.MYSQL_TYPE_DATE), 0,
 		},
+		[]types.StringConversionKind{types.StringConversionString, types.StringConversionString},
 		[]int32{0}, // only parameter 0 is consumed by INET_NTOA
 		[]int32{1}, // only parameter 1 needs the temporal numeric domain
 	)
@@ -2675,14 +2660,13 @@ func TestPreparedParamValuesBoundsInvalidDecimalError(t *testing.T) {
 	payload := strings.Repeat("x", 1<<20)
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte(payload), false, cw.proc.Mp()))
-	cw.proc.SetPrepareParamsWithMeta(
-		params, []bool{false}, []vector.PrepareParamKind{vector.PrepareParamDecimal})
+	cw.proc.SetPrepareParamsWithIsBin(params, []bool{false})
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
 		params.Free(cw.proc.Mp())
 	}()
 
-	_, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0})
+	_, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}, []types.StringConversionKind{types.StringConversionDecimal})
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), payload[:128])
 	require.Contains(t, err.Error(), "1048576 bytes")
@@ -2700,19 +2684,15 @@ func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
 		cw.proc.SetPrepareParams(nil)
 		params.Free(cw.proc.Mp())
 	}()
-	cw.proc.SetPrepareParamsWithMeta(
-		params,
-		[]bool{false},
-		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
-	)
+	cw.proc.SetPrepareParamsWithIsBin(params, []bool{false})
 	paramTypes := []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
-	values, err := preparedParamValues(cw.proc, paramTypes)
+	values, err := preparedParamValues(cw.proc, paramTypes, []types.StringConversionKind{types.StringConversionDecimal})
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 	param, ok := values[0].(plan2.ParamValue)
 	require.True(t, ok)
 	require.Equal(t, value, param.Value)
-	require.Equal(t, vector.PrepareParamDecimal, param.PrepareParamKind)
+	require.Equal(t, types.StringConversionDecimal, param.PrepareParamKind)
 	require.True(t, param.HasRuntimeType)
 	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
 	require.Equal(t, int32(39), param.RuntimeType.Width)
@@ -3197,16 +3177,15 @@ func TestPreparedBitCountPreservesRepreparedNumericProtocolType(t *testing.T) {
 		return vector.GetFixedAtNoTypeCheck[uint64](result, 0)
 	}
 
-	install := func(value string, mysqlType defines.MysqlType, kind vector.PrepareParamKind) *vector.Vector {
+	install := func(value string, mysqlType defines.MysqlType, kind types.StringConversionKind) *vector.Vector {
 		params := vector.NewVec(types.T_text.ToType())
 		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
-		params.SetPrepareParamKinds([]vector.PrepareParamKind{kind})
 		prepareStmt.params = params
 		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
 		return params
 	}
 
-	stringParams := install("64", defines.MYSQL_TYPE_VAR_STRING, vector.PrepareParamNone)
+	stringParams := install("64", defines.MYSQL_TYPE_VAR_STRING, types.StringConversionString)
 	_, stringPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.NotSame(t, preparePlan, stringPlan)
@@ -3216,7 +3195,7 @@ func TestPreparedBitCountPreservesRepreparedNumericProtocolType(t *testing.T) {
 	require.Equal(t, int32(types.T_varbinary), fn.GetF().Args[0].Typ.Id)
 
 	cw.proc.SetPrepareParams(nil)
-	integerParams := install("127", defines.MYSQL_TYPE_TINY, vector.PrepareParamInteger)
+	integerParams := install("127", defines.MYSQL_TYPE_TINY, types.StringConversionInteger)
 	stringParams.Free(cw.proc.Mp())
 	_, integerPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
@@ -3226,7 +3205,7 @@ func TestPreparedBitCountPreservesRepreparedNumericProtocolType(t *testing.T) {
 	require.Equal(t, int32(types.T_int64), fn.GetF().Args[0].Typ.Id)
 
 	cw.proc.SetPrepareParams(nil)
-	blobParams := install("128", defines.MYSQL_TYPE_BLOB, vector.PrepareParamNone)
+	blobParams := install("128", defines.MYSQL_TYPE_BLOB, types.StringConversionString)
 	integerParams.Free(cw.proc.Mp())
 	_, blobPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
@@ -3239,7 +3218,7 @@ func TestPreparedBitCountPreservesRepreparedNumericProtocolType(t *testing.T) {
 		"the later value must not overflow the source TINYINT width")
 
 	cw.proc.SetPrepareParams(nil)
-	decimalParams := install("64.5", defines.MYSQL_TYPE_NEWDECIMAL, vector.PrepareParamDecimal)
+	decimalParams := install("64.5", defines.MYSQL_TYPE_NEWDECIMAL, types.StringConversionDecimal)
 	blobParams.Free(cw.proc.Mp())
 	_, decimalPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
@@ -3250,7 +3229,7 @@ func TestPreparedBitCountPreservesRepreparedNumericProtocolType(t *testing.T) {
 	require.Equal(t, int32(30), fn.GetF().Args[0].Typ.Scale)
 
 	cw.proc.SetPrepareParams(nil)
-	expandedDecimalParams := install("1000", defines.MYSQL_TYPE_BLOB, vector.PrepareParamNone)
+	expandedDecimalParams := install("1000", defines.MYSQL_TYPE_BLOB, types.StringConversionString)
 	decimalParams.Free(cw.proc.Mp())
 	_, expandedDecimalPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
@@ -3453,9 +3432,6 @@ func TestPreparedBitCountStateAdvancesAlongsideOtherNumericOverloads(t *testing.
 		params := vector.NewVec(types.T_text.ToType())
 		require.NoError(t, vector.AppendBytes(params, []byte(absValue), false, cw.proc.Mp()))
 		require.NoError(t, vector.AppendBytes(params, []byte(bitCountValue), false, cw.proc.Mp()))
-		params.SetPrepareParamKinds([]vector.PrepareParamKind{
-			vector.PrepareParamInteger, vector.PrepareParamInteger,
-		})
 		prepareStmt.params = params
 		prepareStmt.ParamTypes = []byte{
 			byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(bitCountType), 0,
@@ -4432,7 +4408,7 @@ func TestPreparedExecutionBindingKeyPreservesIdentity(t *testing.T) {
 	bindings[1].Type.Charset = 255
 	for flags := range 32 {
 		param := plan2.ParamValue{
-			Value: "17", PrepareParamKind: vector.PrepareParamInteger,
+			Value: "17", PrepareParamKind: types.StringConversionInteger,
 			IsBinaryProtocol: flags&1 != 0, IsBin: flags&2 != 0,
 			IsBinaryString: flags&4 != 0, EnableNumericPrefix: flags&8 != 0,
 			RuntimeStringDomain: types.RuntimeStringDomain(flags % 3),
@@ -4580,23 +4556,23 @@ func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategoryNoPagination(b 
 func TestSQLVariablePrepareParamKind(t *testing.T) {
 	for _, test := range []struct {
 		oid  types.T
-		want vector.PrepareParamKind
+		want types.StringConversionKind
 	}{
-		{types.T_bool, vector.PrepareParamBoolean},
-		{types.T_bit, vector.PrepareParamInteger},
-		{types.T_int64, vector.PrepareParamInteger},
-		{types.T_uint64, vector.PrepareParamInteger},
-		{types.T_year, vector.PrepareParamInteger},
-		{types.T_float64, vector.PrepareParamFloat},
-		{types.T_decimal128, vector.PrepareParamDecimal},
-		{types.T_varchar, vector.PrepareParamNone},
+		{types.T_bool, types.StringConversionBoolean},
+		{types.T_bit, types.StringConversionInteger},
+		{types.T_int64, types.StringConversionInteger},
+		{types.T_uint64, types.StringConversionInteger},
+		{types.T_year, types.StringConversionInteger},
+		{types.T_float64, types.StringConversionFloat},
+		{types.T_decimal128, types.StringConversionDecimal},
+		{types.T_varchar, types.StringConversionString},
 	} {
 		require.Equal(t, test.want, prepareParamKindFromType(test.oid), "type %v", test.oid)
 	}
-	require.Equal(t, vector.PrepareParamBoolean, prepareParamKindFromValue(true))
-	require.Equal(t, vector.PrepareParamInteger, prepareParamKindFromValue(uint64(5)))
-	require.Equal(t, vector.PrepareParamFloat, prepareParamKindFromValue(float64(5)))
-	require.Equal(t, vector.PrepareParamNone, prepareParamKindFromValue("5"))
+	require.Equal(t, types.StringConversionBoolean, prepareParamKindFromValue(true))
+	require.Equal(t, types.StringConversionInteger, prepareParamKindFromValue(uint64(5)))
+	require.Equal(t, types.StringConversionFloat, prepareParamKindFromValue(float64(5)))
+	require.Equal(t, types.StringConversionString, prepareParamKindFromValue("5"))
 }
 
 func TestTransparentPrepareParamKind(t *testing.T) {
@@ -4606,25 +4582,25 @@ func TestTransparentPrepareParamKind(t *testing.T) {
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("5"), false, cw.proc.Mp()))
 	defer params.Free(cw.proc.Mp())
-	cw.proc.SetPrepareParamsWithMeta(
-		params, nil, []vector.PrepareParamKind{vector.PrepareParamFloat})
+	cw.proc.SetPrepareParams(params)
+	installTestTypedPrepareParams(t, cw.proc, types.T_float64.ToType())
 	defer cw.proc.SetPrepareParams(nil)
 
 	kind, err := transparentPrepareParamKind(
 		&tree.ParenExpr{Expr: tree.NewParamExpr(1)}, ses)
 	require.NoError(t, err)
-	require.Equal(t, vector.PrepareParamFloat, kind)
+	require.Equal(t, types.StringConversionFloat, kind)
 
 	require.NoError(t, ses.setUserDefinedVarWithKind(
-		"decimal_value", "5.9", "", false, vector.PrepareParamDecimal))
+		"decimal_value", "5.9", "", false, types.StringConversionDecimal))
 	kind, err = transparentPrepareParamKind(
 		tree.NewVarExpr("decimal_value", false, false, nil), ses)
 	require.NoError(t, err)
-	require.Equal(t, vector.PrepareParamDecimal, kind)
+	require.Equal(t, types.StringConversionDecimal, kind)
 
 	kind, err = transparentPrepareParamKind(tree.NewParamExpr(2), ses)
 	require.NoError(t, err)
-	require.Equal(t, vector.PrepareParamNone, kind)
+	require.Equal(t, types.StringConversionString, kind)
 }
 
 func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
@@ -4706,7 +4682,7 @@ func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "second"}}},
 		},
 	}
-	params, _, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc, execPlan.Args, nil, nil)
+	params, _, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc, ses.txnCompileCtx.ResolveVariablePrepareParamKind, execPlan.Args, nil, nil)
 	require.ErrorIs(t, err, assert.AnError)
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
@@ -4718,9 +4694,6 @@ func TestInitExecuteStmtParamKeepsConcreteTypeOnlyForJSONComparison(t *testing.T
 		t, 117, "select json_extract('18446744073709551615', '$') = ?")
 	defer prepareStmt.Close()
 
-	prepareStmt.jsonComparisonParamPositions = plan2.PreparedJSONComparisonParamPositions(
-		prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
-	require.Equal(t, []int32{0}, prepareStmt.jsonComparisonParamPositions)
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(
 		prepareStmt.params, []byte("9223372036854775807"), false, cw.proc.Mp()))
@@ -4728,16 +4701,14 @@ func TestInitExecuteStmtParamKeepsConcreteTypeOnlyForJSONComparison(t *testing.T
 
 	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.Equal(t, types.T_int64, cw.proc.GetPrepareParamType(0))
-	require.Equal(t, vector.PrepareParamInteger, cw.proc.GetPrepareParamKind(0))
+	requireTypedParamOid(t, cw.proc, 0, types.T_int64)
 
 	require.NoError(t, vector.SetStringAt(
 		prepareStmt.params, 0, "16777216", cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_FLOAT), 0}
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.Equal(t, types.T_float32, cw.proc.GetPrepareParamType(0))
-	require.Equal(t, vector.PrepareParamFloat, cw.proc.GetPrepareParamKind(0))
+	requireTypedParamOid(t, cw.proc, 0, types.T_float32)
 }
 
 func TestExecuteUserParamConcreteTypePreservesMemberOfDomains(t *testing.T) {
@@ -4747,22 +4718,22 @@ func TestExecuteUserParamConcreteTypePreservesMemberOfDomains(t *testing.T) {
 	}
 
 	got, err := executeUserParamConcreteType(
-		proc, memberOfArg(types.T_array_float32), []float32{1, 2}, vector.PrepareParamNone, 0, true)
+		proc, memberOfArg(types.T_array_float32), []float32{1, 2}, types.StringConversionString, 0, true)
 	require.NoError(t, err)
 	require.Equal(t, types.T_array_float32, got)
 
 	got, err = executeUserParamConcreteType(
-		proc, memberOfArg(types.T_geometry32), "POINT(1 2)", vector.PrepareParamNone, 0, true)
+		proc, memberOfArg(types.T_geometry32), "POINT(1 2)", types.StringConversionString, 0, true)
 	require.NoError(t, err)
 	require.Equal(t, types.T_geometry32, got)
 
 	got, err = executeUserParamConcreteType(
-		proc, memberOfArg(types.T_bit), uint64(1), vector.PrepareParamInteger, 0, true)
+		proc, memberOfArg(types.T_bit), uint64(1), types.StringConversionInteger, 0, true)
 	require.NoError(t, err)
 	require.Equal(t, types.T_bit, got)
 
 	got, err = executeUserParamConcreteType(
-		proc, memberOfArg(types.T_array_float32), []float32{1, 2}, vector.PrepareParamNone, 0, false)
+		proc, memberOfArg(types.T_array_float32), []float32{1, 2}, types.StringConversionString, 0, false)
 	require.NoError(t, err)
 	require.Equal(t, types.T_any, got)
 }
@@ -4784,11 +4755,11 @@ func TestInitExecuteStmtParamPreservesPreparedBitMemberOf(t *testing.T) {
 		prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_BIT), 0}
 
+	// A protocol BIT has no width, so MEMBER OF rejects it when the statement
+	// is bound to the parameter's source type. (A NULL parameter has no
+	// source type and is not rejected.)
 	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
-	require.NoError(t, err)
-	// Reject the unsupported width-less domain in the executor, not here:
-	// SQL NULL or a masked-off row must still short-circuit its evaluation.
-	require.Equal(t, types.T_bit, cw.proc.GetPrepareParamType(0))
+	require.ErrorContains(t, err, "argument 1")
 }
 
 func TestPreparedMemberOfBitFailureThenRebind(t *testing.T) {
@@ -4809,13 +4780,12 @@ func TestPreparedMemberOfBitFailureThenRebind(t *testing.T) {
 		}
 		_, err := runPreparedMemberOfPacket(t, ses, prepared, cw, execCtx, proto, packet)
 		require.ErrorContains(t, err, "argument 1")
-		require.Equal(t, types.T_bit, cw.proc.GetPrepareParamType(0))
 		packet[7] = byte(defines.MYSQL_TYPE_LONGLONG)
 		packet[8] = 0
 		got, err := runPreparedMemberOfPacket(t, ses, prepared, cw, execCtx, proto, packet)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), got)
-		require.Equal(t, types.T_int64, cw.proc.GetPrepareParamType(0))
+		requireTypedParamOid(t, cw.proc, 0, types.T_int64)
 	}
 }
 
@@ -4854,14 +4824,14 @@ func TestBuildExecuteUserParamsPreservesBoundConcreteTypes(t *testing.T) {
 	}
 
 	params, _, _, _, paramKinds, paramTypes, err := buildExecuteUserParamsWithMemberOfPositions(
-		cw.proc, args, typedPositions, nil)
+		cw.proc, ses.txnCompileCtx.ResolveVariablePrepareParamKind, args, typedPositions, nil)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 	require.Equal(t, wantTypes, paramTypes)
 	for i, test := range tests {
-		wantKind := vector.PrepareParamInteger
+		wantKind := types.StringConversionInteger
 		if test.typ == types.T_float32 {
-			wantKind = vector.PrepareParamFloat
+			wantKind = types.StringConversionFloat
 		}
 		require.Equal(t, wantKind, paramKinds[i], test.name)
 	}
@@ -4872,9 +4842,9 @@ func TestBuildExecuteUserParamsRejectsBoundTypeKindMismatch(t *testing.T) {
 	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 119)
 	defer prepareStmt.Close()
 	require.NoError(t, ses.setUserDefinedVarWithKind(
-		"mismatched", int8(1), "", false, vector.PrepareParamFloat))
+		"mismatched", int8(1), "", false, types.StringConversionFloat))
 
-	params, _, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc, []*plan.Expr{{
+	params, _, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc, ses.txnCompileCtx.ResolveVariablePrepareParamKind, []*plan.Expr{{
 		Typ:  plan.Type{Id: int32(types.T_int8)},
 		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "mismatched"}},
 	}}, []int32{0}, nil)
@@ -4921,16 +4891,16 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	require.False(t, isBin)
 	kind, err := ses.txnCompileCtx.ResolveVariablePrepareParamKind("V1", false, false)
 	require.NoError(t, err)
-	require.Equal(t, vector.PrepareParamInteger, kind)
+	require.Equal(t, types.StringConversionInteger, kind)
 
 	for _, test := range []struct {
 		name     string
-		expected vector.PrepareParamKind
+		expected types.StringConversionKind
 	}{
-		{name: "decimal_value", expected: vector.PrepareParamDecimal},
-		{name: "year_value", expected: vector.PrepareParamInteger},
-		{name: "string_value", expected: vector.PrepareParamNone},
-		{name: "declared_only_outer", expected: vector.PrepareParamNone},
+		{name: "decimal_value", expected: types.StringConversionDecimal},
+		{name: "year_value", expected: types.StringConversionInteger},
+		{name: "string_value", expected: types.StringConversionString},
+		{name: "declared_only_outer", expected: types.StringConversionString},
 	} {
 		kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind(test.name, false, false)
 		require.NoError(t, err)
@@ -4945,7 +4915,7 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	require.True(t, isBin)
 	kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind("session_only", false, false)
 	require.NoError(t, err)
-	require.Equal(t, vector.PrepareParamNone, kind)
+	require.Equal(t, types.StringConversionString, kind)
 
 	value, err = ses.txnCompileCtx.ResolveVariable("missing_user_var", false, false)
 	require.NoError(t, err)
@@ -4955,7 +4925,7 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	require.False(t, isBin)
 	kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind("missing_user_var", false, false)
 	require.NoError(t, err)
-	require.Equal(t, vector.PrepareParamNone, kind)
+	require.Equal(t, types.StringConversionString, kind)
 
 	t.Run("system variables keep their namespace", func(t *testing.T) {
 		for _, local := range []interface{}{nil, int64(0), int64(1)} {
@@ -4996,24 +4966,24 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "session_only"}}},
 	}
 	params, paramVals, paramIsBin, _, paramKinds, paramTypes, err := buildExecuteUserParamsWithMemberOfPositions(
-		cw.proc, args, []int32{0, 1, 2}, nil)
+		cw.proc, ses.txnCompileCtx.ResolveVariablePrepareParamKind, args, []int32{0, 1, 2}, nil)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 
 	require.Equal(t, []bool{false, false, true}, paramIsBin)
-	require.Equal(t, []vector.PrepareParamKind{
-		vector.PrepareParamInteger,
-		vector.PrepareParamInteger,
-		vector.PrepareParamNone,
+	require.Equal(t, []types.StringConversionKind{
+		types.StringConversionInteger,
+		types.StringConversionInteger,
+		types.StringConversionString,
 	}, paramKinds)
 	require.Equal(t, []types.T{types.T_int64, types.T_int64, types.T_any}, paramTypes)
 	require.Equal(t, []any{
 		plan2.ParamValue{
-			Value: int64(10), IsBin: false, PrepareParamKind: vector.PrepareParamInteger, EnableNumericPrefix: true,
+			Value: int64(10), IsBin: false, PrepareParamKind: types.StringConversionInteger, EnableNumericPrefix: true,
 			SourceType: types.T_int64.ToType(), HasSourceType: true,
 		},
 		plan2.ParamValue{
-			Value: int64(20), IsBin: false, PrepareParamKind: vector.PrepareParamInteger, EnableNumericPrefix: true,
+			Value: int64(20), IsBin: false, PrepareParamKind: types.StringConversionInteger, EnableNumericPrefix: true,
 			SourceType: types.T_int64.ToType(), HasSourceType: true,
 		},
 		plan2.ParamValue{
@@ -5032,7 +5002,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 
 	decimalType := plan.Type{Id: int32(types.T_decimal128), Width: 12, Scale: 3}
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
-		"runtime_decimal", "2.500", "", false, decimalType, vector.PrepareParamDecimal))
+		"runtime_decimal", "2.500", "", false, decimalType, types.StringConversionDecimal))
 	require.NoError(t, ses.SetUserDefinedVar("runtime_text", "2.500", ""))
 	require.NoError(t, ses.SetUserDefinedVar("runtime_bool", true, ""))
 	binaryTextType := plan.Type{
@@ -5044,11 +5014,11 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	timeType := plan.Type{Id: int32(types.T_time), Scale: 6}
 	jsonType := plan.Type{Id: int32(types.T_json)}
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
-		"runtime_date", "2024-01-02", "", false, dateType, vector.PrepareParamNone))
+		"runtime_date", "2024-01-02", "", false, dateType, types.StringConversionString))
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
-		"runtime_time", "00:00:02.654321", "", false, timeType, vector.PrepareParamNone))
+		"runtime_time", "00:00:02.654321", "", false, timeType, types.StringConversionString))
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
-		"runtime_json", "1.6", "", false, jsonType, vector.PrepareParamNone))
+		"runtime_json", "1.6", "", false, jsonType, types.StringConversionString))
 
 	args := []*plan.Expr{
 		{
@@ -5080,7 +5050,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 		},
 	}
 	params, paramVals, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(
-		cw.proc, args, nil, nil, []int32{4, 5, 6})
+		cw.proc, ses.txnCompileCtx.ResolveVariablePrepareParamKind, args, nil, nil, []int32{4, 5, 6})
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 
@@ -5089,7 +5059,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, decimalParam.HasSourceType)
 	require.Equal(t, types.New(types.T_decimal128, 12, 3), decimalParam.SourceType)
-	require.Equal(t, vector.PrepareParamDecimal, decimalParam.PrepareParamKind)
+	require.Equal(t, types.StringConversionDecimal, decimalParam.PrepareParamKind)
 
 	textParam, ok := paramVals[1].(plan2.ParamValue)
 	require.True(t, ok)
@@ -5102,7 +5072,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	require.Equal(t, types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), binaryParam.SourceType)
 	boolParam := paramVals[3].(plan2.ParamValue)
 	require.Equal(t, "true", params.GetStringAt(3), "do not rewrite the transport value")
-	require.Equal(t, vector.PrepareParamBoolean, boolParam.PrepareParamKind)
+	require.Equal(t, types.StringConversionBoolean, boolParam.PrepareParamKind)
 	require.True(t, boolParam.HasSourceType)
 	require.Equal(t, types.T_bool.ToType(), boolParam.SourceType)
 	require.False(t, boolParam.HasRuntimeType,
@@ -6189,8 +6159,7 @@ func TestInitExecuteStmtParamUsesBinaryMemberOfTypeAndFilter(t *testing.T) {
 	}
 	require.NoError(t, err)
 	require.Nil(t, retComp)
-	require.Equal(t, types.T_float32, cw.proc.GetPrepareParamType(0))
-	require.Equal(t, vector.PrepareParamFloat, cw.proc.GetPrepareParamKind(0))
+	requireTypedParamOid(t, cw.proc, 0, types.T_float32)
 	require.Equal(t, []int32{0}, prepareStmt.jsonComparisonParamPositions)
 
 	var predicate *plan.Expr
@@ -6460,22 +6429,7 @@ func TestBinaryProtocolPrepareParamTemporalDomains(t *testing.T) {
 	}
 }
 
-func TestBinaryProtocolPrepareParamBinaryStringMetadataNoBlobDoesNotAllocate(t *testing.T) {
-	const paramCount = 64
-	paramTypes := make([]byte, paramCount*2)
-	for i := 0; i < paramCount; i++ {
-		paramTypes[i*2] = byte(defines.MYSQL_TYPE_LONG)
-	}
-
-	allocs := testing.AllocsPerRun(100, func() {
-		if metadata := binaryProtocolPrepareParamBinaryStringMetadata(paramTypes, paramCount, nil); metadata != nil {
-			t.Fatal("non-BLOB binary parameters must not produce binary-string metadata")
-		}
-	})
-	require.Zero(t, allocs)
-}
-
-func TestInitExecuteStmtParamReusesBinaryStringMetadata(t *testing.T) {
+func TestInitExecuteStmtParamRebindsBinaryStringPerExecution(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 126, "select ?")
 	defer prepareStmt.Close()
 
@@ -6498,18 +6452,25 @@ func TestInitExecuteStmtParamReusesBinaryStringMetadata(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// The binary-string bit is derived from each execution's wire type.
 	run(defines.MYSQL_TYPE_BLOB, "blob-one")
-	require.Len(t, prepareStmt.paramBinaryStrings, 1)
-	first := &prepareStmt.paramBinaryStrings[0]
-	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+	require.True(t, preparedParamValueIsBinaryString(cw, 0))
 
 	run(defines.MYSQL_TYPE_VAR_STRING, "text")
-	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0))
-	require.Same(t, first, &prepareStmt.paramBinaryStrings[0])
+	require.False(t, preparedParamValueIsBinaryString(cw, 0))
 
 	run(defines.MYSQL_TYPE_BLOB, "blob-two")
-	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
-	require.Same(t, first, &prepareStmt.paramBinaryStrings[0])
+	require.True(t, preparedParamValueIsBinaryString(cw, 0))
+}
+
+// preparedParamValueIsBinaryString reports whether the current execution's
+// parameter i was bound as a binary string (derived from its COM_STMT wire type).
+func preparedParamValueIsBinaryString(cw *TxnComputationWrapper, i int) bool {
+	if i >= len(cw.paramVals) {
+		return false
+	}
+	value, ok := cw.paramVals[i].(plan2.ParamValue)
+	return ok && value.IsBinaryString
 }
 
 func TestInitExecuteStmtParamBinaryConstructorMemberOf(t *testing.T) {
@@ -6638,16 +6599,14 @@ func TestInitExecuteStmtParamKeepsConcreteTypeForMemberOf(t *testing.T) {
 
 	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.Equal(t, types.T_int64, cw.proc.GetPrepareParamType(0))
-	require.Equal(t, vector.PrepareParamInteger, cw.proc.GetPrepareParamKind(0))
+	requireTypedParamOid(t, cw.proc, 0, types.T_int64)
 
 	require.NoError(t, vector.SetStringAt(
 		prepareStmt.params, 0, "16777216", cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_FLOAT), 0}
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.Equal(t, types.T_float32, cw.proc.GetPrepareParamType(0))
-	require.Equal(t, vector.PrepareParamFloat, cw.proc.GetPrepareParamKind(0))
+	requireTypedParamOid(t, cw.proc, 0, types.T_float32)
 }
 
 func TestPreparedViewMetadataUdfRebuildsEveryExecute(t *testing.T) {
@@ -6676,16 +6635,17 @@ func TestPreparedNullBlobRetainsBinaryProtocolType(t *testing.T) {
 
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, nil, true, cw.proc.Mp()))
-	cw.proc.SetPrepareParamsWithMeta(params, []bool{false}, []vector.PrepareParamKind{vector.PrepareParamNone})
+	cw.proc.SetPrepareParamsWithIsBin(params, []bool{false})
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
 		params.Free(cw.proc.Mp())
 	}()
 	paramTypes := []byte{byte(defines.MYSQL_TYPE_BLOB), 0}
 
-	values, err := preparedParamValues(cw.proc, paramTypes)
+	values, err := preparedParamValues(cw.proc, paramTypes, []types.StringConversionKind{types.StringConversionString})
 	require.NoError(t, err)
 	require.Equal(t, []any{plan2.ParamValue{
+		IsBinaryString:      true, // derived from the BLOB wire type
 		IsBinaryProtocol:    true,
 		RuntimeType:         types.T_blob.ToType(),
 		HasRuntimeType:      true,
@@ -6767,10 +6727,9 @@ func TestInitExecuteStmtParamSetsCOMStmtBinaryStringMetadata(t *testing.T) {
 	if owned {
 		executionStmt.Free()
 	}
-	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
-	require.False(t, cw.proc.GetPrepareParamIsBinaryString(1))
-	require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParams().GetStringSourceAt(0))
-	require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParams().GetStringSourceAt(1))
+	require.True(t, preparedParamValueIsBinaryString(cw, 0))
+	require.False(t, preparedParamValueIsBinaryString(cw, 1))
+	require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParamsStringSource())
 }
 
 func TestInitExecuteStmtParamSpecializesCOMStmtBinaryFunction(t *testing.T) {
@@ -6806,7 +6765,7 @@ func TestInitExecuteStmtParamSpecializesCOMStmtBinaryFunction(t *testing.T) {
 	value, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
 	require.Equal(t, []byte{0xe4}, value.GetBytesAt(0))
-	require.True(t, value.GetIsBinaryStringAt(0))
+	require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(*value.GetType()))
 }
 
 func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
@@ -6818,10 +6777,8 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 	}{
 		{"text", types.T_text.ToType(), types.RuntimeStringInherit, false},
 		{"binary", types.T_blob.ToType(), types.RuntimeStringInherit, true},
-		{"selected binary", types.T_text.ToType(), types.RuntimeStringBinary, true},
-		{"selected text", types.T_blob.ToType(), types.RuntimeStringText, false},
-		{"selected text on binary varchar", types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetBinary), types.RuntimeStringText, false},
-		{"selected binary retains text collation", types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetUTF8MB4Bin), types.RuntimeStringBinary, true},
+		{"binary varchar", types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetBinary), types.RuntimeStringInherit, true},
+		{"text collation varchar", types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetUTF8MB4Bin), types.RuntimeStringInherit, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses, scratch, cw, execCtx := newPreparedExecuteEnv(t, 124)
@@ -6835,7 +6792,7 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 				require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
 					"bound_s", value, "", false,
 					plan.Type{Id: int32(typ.Oid), Charset: uint32(typ.Charset)},
-					vector.PrepareParamNone, false, domain))
+					types.StringConversionString, false, domain))
 			}
 			bind := func() *plan.Plan {
 				t.Helper()
@@ -6934,31 +6891,6 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 			check(second, opposite, !tc.binary, false)
 		})
 	}
-}
-
-func TestBuildExecuteUserParamsPreservesExplicitTextOverride(t *testing.T) {
-	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 123)
-	defer prepareStmt.Close()
-	binaryType := plan.Type{
-		Id: int32(types.T_varbinary), Width: 16, Charset: uint32(types.CharsetBinary),
-	}
-	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-		"text_override", "你", "", false, binaryType, vector.PrepareParamNone,
-		false, types.RuntimeStringText))
-
-	domain, err := ses.txnCompileCtx.ResolveVariableStringDomain("text_override", false, false)
-	require.NoError(t, err)
-	require.Equal(t, types.RuntimeStringText, domain)
-	params, values, _, binary, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc, []*plan.Expr{{
-		Typ: binaryType, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "text_override"}},
-	}}, nil, nil)
-	require.NoError(t, err)
-	defer params.Free(cw.proc.Mp())
-	require.Equal(t, types.RuntimeStringText, params.GetRuntimeStringDomainAt(0))
-	require.Equal(t, []bool{false}, binary)
-	param := values[0].(plan2.ParamValue)
-	require.Equal(t, types.RuntimeStringText, param.RuntimeStringDomain)
-	require.Equal(t, types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary), param.SourceType)
 }
 
 func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
@@ -7459,4 +7391,17 @@ func BenchmarkPreparedStatsDrift(b *testing.B) {
 			}
 		})
 	}
+}
+
+// requireTypedParamOid checks the typed value installed for parameter
+// i; T_any means the position keeps only the TEXT transport.
+func requireTypedParamOid(t *testing.T, proc *process.Process, i int, want types.T) {
+	t.Helper()
+	typed := proc.GetTypedPrepareParam(i)
+	if want == types.T_any {
+		require.Nil(t, typed, "parameter %d must not carry a typed value", i)
+		return
+	}
+	require.NotNil(t, typed, "parameter %d must carry a typed value", i)
+	require.Equal(t, want, typed.GetType().Oid)
 }
