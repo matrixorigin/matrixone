@@ -10,4 +10,4 @@ permissions:
 jobs:
   cache:
     if: github.repository == 'matrixorigin/matrixone' && github.event.workflow_run.conclusion == 'success'
-    uses: matrixorigin/CI/.github/workflows/coverage-cache-refresh.yaml@0695d1c5bdde0512b05926899268c4030c1ec87f
+    uses: matrixorigin/CI/.github/workflows/coverage-cache-refresh.yaml@5c809462fdf7369b42c00de262380ba766b5ea4d
