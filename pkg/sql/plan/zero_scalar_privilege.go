@@ -122,3 +122,50 @@ func zeroScalarSourceCoversCarrier(source, carrier *plan.Node) bool {
 	return a.TableType == b.TableType && a.Name == b.Name && a.TblId == b.TblId &&
 		a.Version == b.Version && a.DbName == b.DbName && a.DbId == b.DbId
 }
+
+// finalizeZeroScalarAuthorizationSources verifies that execution keeps the
+// required live sources and publishes metadata for sources pruned from the plan.
+func (builder *QueryBuilder) finalizeZeroScalarAuthorizationSources() error {
+	var seen map[int32]struct{}
+	if len(builder.zeroScalarScanIDs) != 0 || len(builder.zeroScalarRequiredLiveSources) != 0 || len(builder.zeroScalarPrivilegeScans) != 0 {
+		seen = make(map[int32]struct{})
+		pending := append([]int32(nil), builder.qry.Steps...)
+		for len(pending) > 0 {
+			id := pending[len(pending)-1]
+			pending = pending[:len(pending)-1]
+			if id < 0 || int(id) >= len(builder.qry.Nodes) || builder.qry.Nodes[id] == nil {
+				return moerr.NewInternalError(builder.GetContext(), "invalid query node while preserving correlated scalar source")
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			pending = append(pending, builder.qry.Nodes[id].Children...)
+		}
+		for _, id := range builder.zeroScalarScanIDs {
+			if _, ok := seen[id]; !ok {
+				if _, retainedForAuthorization := builder.zeroScalarPrivilegeSources[id]; !retainedForAuthorization {
+					return moerr.NewNYI(builder.GetContext(), "correlated scalar LIMIT 0 source discarded during planning")
+				}
+			}
+			node := builder.qry.Nodes[id]
+			if node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil || node.ObjRef == nil {
+				return moerr.NewInternalError(builder.GetContext(), "correlated scalar LIMIT 0 source is not a table scan")
+			}
+		}
+		for id := range builder.zeroScalarRequiredLiveSources {
+			if _, ok := seen[id]; !ok {
+				return moerr.NewNYI(builder.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
+			}
+		}
+	}
+	for _, node := range builder.zeroScalarPrivilegeScans {
+		if _, ok := seen[node.NodeId]; ok && zeroScalarSourceCoversCarrier(builder.qry.Nodes[node.NodeId], node) {
+			continue
+		}
+		node.NodeId = int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, node)
+		builder.ctxByNode = append(builder.ctxByNode, nil)
+	}
+	return nil
+}
