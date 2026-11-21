@@ -485,3 +485,96 @@ func TestCDCStatementBuilder_EmptyInputs(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, sqls)
 }
+
+func TestCDCStatementBuilder_BitInsertAndDelete(t *testing.T) {
+	mp := newBuilderTestMPool(t)
+
+	// Single BIT(16) primary key with values containing 0x5C ('\'), 0x5C6E ("\n"), 0x27 ('\''), 0x0000.
+	singleDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_bit), Width: 16}},
+			{Name: "b8", Typ: plan.Type{Id: int32(types.T_bit), Width: 8}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+		Name2ColIndex: map[string]int32{"id": 0, "b8": 1},
+	}
+	singleBuilder, err := NewCDCStatementBuilder("db", "bit_t", singleDef, 4096, false)
+	require.NoError(t, err)
+
+	insertBat := batch.NewWithSize(2)
+	insertBat.Vecs[0] = vector.NewVec(types.New(types.T_bit, 16, 0))
+	insertBat.Vecs[1] = vector.NewVec(types.New(types.T_bit, 8, 0))
+	t.Cleanup(func() { insertBat.Clean(mp) })
+	require.NoError(t, vector.AppendFixed(insertBat.Vecs[0], uint64(0x5c6e), false, mp))
+	require.NoError(t, vector.AppendFixed(insertBat.Vecs[1], uint64(0x5c), false, mp))
+	require.NoError(t, vector.AppendFixed(insertBat.Vecs[0], uint64(0x0027), false, mp))
+	require.NoError(t, vector.AppendFixed(insertBat.Vecs[1], uint64(0x27), false, mp))
+	insertBat.SetRowCount(2)
+
+	insertSQLs, err := singleBuilder.BuildInsertSQL(context.Background(), insertBat, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	require.Len(t, insertSQLs, 1)
+	require.Equal(t,
+		"/* [100-0, 200-0) */ INSERT INTO `db`.`bit_t` (`id`,`b8`) VALUES (x'5c6e',x'5c'),(x'0027',x'27') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`b8`=VALUES(`b8`);",
+		unpaddedSQL(insertSQLs[0]),
+	)
+
+	delBat := batch.NewWithSize(2)
+	delBat.Vecs[0] = vector.NewVec(types.New(types.T_bit, 16, 0))
+	delBat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	ownedSingle := true
+	t.Cleanup(func() {
+		if ownedSingle {
+			delBat.Clean(mp)
+		}
+	})
+	for _, id := range []uint64{0x5c6e, 0x005c} {
+		require.NoError(t, vector.AppendFixed(delBat.Vecs[0], id, false, mp))
+		require.NoError(t, vector.AppendFixed(delBat.Vecs[1], builderFromTS, false, mp))
+	}
+	delBat.SetRowCount(2)
+	singleAtomic := NewAtomicBatch(mp)
+	packer := types.NewPacker()
+	defer packer.Close()
+	singleAtomic.Append(packer, delBat, 1, 0)
+	ownedSingle = false
+	t.Cleanup(singleAtomic.Close)
+
+	delSQLs, err := singleBuilder.BuildDeleteSQL(context.Background(), singleAtomic, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	require.Len(t, delSQLs, 1)
+	require.Equal(t,
+		"/* [100-0, 200-0) */ DELETE FROM `db`.`bit_t` WHERE `id` IN ((x'005c'),(x'5c6e'));",
+		unpaddedSQL(delSQLs[0]),
+	)
+
+	// Composite (BIT(16), VARCHAR) primary key DELETE.
+	compDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "bpk", Typ: plan.Type{Id: int32(types.T_bit), Width: 16}},
+			{Name: "spk", Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"bpk", "spk"}},
+		Name2ColIndex: map[string]int32{"bpk": 0, "spk": 1},
+	}
+	compBuilder, err := NewCDCStatementBuilder("db", "comp_t", compDef, 4096, false)
+	require.NoError(t, err)
+
+	packer.Reset()
+	packer.EncodeBit(0x5c6e)
+	packer.EncodeStringType([]byte(`a'b`))
+	k1 := string(packer.GetBuf())
+	packer.Reset()
+	packer.EncodeBit(0x005c)
+	packer.EncodeStringType([]byte(`back\slash`))
+	k2 := string(packer.GetBuf())
+	compAtomic := atomicStringBatch(t, mp, []string{k1, k2})
+
+	compDelSQLs, err := compBuilder.BuildDeleteSQL(context.Background(), compAtomic, builderFromTS, builderToTS)
+	require.NoError(t, err)
+	require.Len(t, compDelSQLs, 1)
+	require.Equal(t,
+		`/* [100-0, 200-0) */ DELETE FROM `+"`db`.`comp_t`"+` WHERE (`+"`bpk`,`spk`"+`) IN ((x'005c','back\\slash'),(x'5c6e','a\'b'));`,
+		unpaddedSQL(compDelSQLs[0]),
+	)
+}
