@@ -4807,72 +4807,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	var selectStmts []tree.Statement
 	var unionTypes []plan.Node_NodeType
 
-	// get Union selectStmts
 	err := getUnionSelects(builder.GetContext(), stmt, &selectStmts, &unionTypes)
 	if err != nil {
 		return 0, err
-	}
-
-	if len(selectStmts) == 1 {
-		var nodeID int32
-		switch sltStmt := selectStmts[0].(type) {
-		case *tree.Select:
-			if sltClause, ok := sltStmt.Select.(*tree.SelectClause); ok {
-				sltClause.Distinct = true
-				nodeID, err = builder.bindSelect(sltStmt, ctx, isRoot)
-			} else {
-				// rewrite sltStmt to select distinct * from (sltStmt) a
-				tmpSltStmt := &tree.Select{
-					Select: &tree.SelectClause{
-						Distinct: true,
-
-						Exprs: []tree.SelectExpr{
-							{Expr: tree.StarExpr()},
-						},
-						From: &tree.From{
-							Tables: tree.TableExprs{
-								&tree.AliasedTableExpr{
-									Expr: &tree.ParenTableExpr{
-										Expr: sltStmt,
-									},
-									As: tree.AliasClause{
-										Alias: "a",
-									},
-								},
-							},
-						},
-					},
-					Limit:   astLimit,
-					OrderBy: astOrderBy,
-				}
-				nodeID, err = builder.bindSelect(tmpSltStmt, ctx, isRoot)
-			}
-
-		case *tree.SelectClause:
-			if !sltStmt.Distinct {
-				sltStmt.Distinct = true
-			}
-			nodeID, err = builder.bindSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
-		}
-		if err == nil {
-			// Identical UNION branches can collapse to one DISTINCT SELECT,
-			// but its SQL result still crosses a set-operation boundary.
-			var integerIDs []uint32
-			if builder.integerPrecision != nil {
-				integerIDs = make([]uint32, len(ctx.headings))
-				for i := range integerIDs {
-					integerIDs[i] = ctx.outputColumnProvenanceForProject(int32(i)).IntegerPrecisionID
-				}
-			}
-			ctx.clearOutputColumnProvenance()
-			for i, id := range integerIDs {
-				if !shareGroupingInput {
-					id = builder.integerPrecision.reference(id)
-				}
-				ctx.setOutputColumnProvenance(int32(i), OutputColumnProvenance{State: ProvenanceNone, IntegerPrecisionID: id})
-			}
-		}
-		return nodeID, err
 	}
 
 	// build selects
@@ -5160,17 +5097,22 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					(argsType[idx].IsMediumInt() || targetArgType.IsMediumInt()) &&
 					argsType[idx].Scale == targetArgType.Scale &&
 					argsType[idx].Width != targetArgType.Width
+				node := builder.qry.Nodes[tmpID]
 				if !needsCast && sameMediumIntStorageWidth {
-					// MEDIUMINT and INT share the same physical int32/uint32
-					// vector. Widen the branch metadata without adding a per-row
-					// conversion or mutating an expression shared by another node.
-					projected := builder.qry.Nodes[tmpID].ProjectList[columnIdx]
-					widened := *projected
-					widened.Typ.Width = targetArgType.Width
-					builder.qry.Nodes[tmpID].ProjectList[columnIdx] = &widened
+					projected := node.ProjectList[columnIdx]
+					if projected.GetCorr() != nil {
+						// Keep the capture's declared type on the leaf. Only the
+						// branch result has the set operation's common width.
+						needsCast = true
+					} else {
+						// MEDIUMINT and INT share a physical vector type. Widen
+						// the branch metadata without a per-row conversion.
+						widened := *projected
+						widened.Typ.Width = targetArgType.Width
+						node.ProjectList[columnIdx] = &widened
+					}
 				}
 				if needsCast {
-					node := builder.qry.Nodes[tmpID]
 					source := node.ProjectList[columnIdx]
 					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
 						node.ProjectList[columnIdx].Typ = targetType
