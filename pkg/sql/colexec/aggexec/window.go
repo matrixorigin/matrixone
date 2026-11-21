@@ -878,9 +878,7 @@ type valueWindowExec struct {
 type valueEntry struct {
 	isNull       bool
 	stringDomain types.RuntimeStringDomain
-	stringSource types.StringSource
 	data         []byte
-	kind         vector.PrepareParamKind
 }
 
 func (exec *valueWindowExec) GroupGrow(more int) error {
@@ -910,12 +908,10 @@ func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 
 	vec := vectors[0]
 	entry := &valueEntry{
-		isNull:       vec.IsNull(uint64(row)),
-		stringSource: vec.GetStringSourceAt(row),
+		isNull: vec.IsNull(uint64(row)),
 	}
 
 	if !entry.isNull {
-		entry.kind = vec.GetPrepareParamKindAt(row)
 		entry.stringDomain = vec.GetRuntimeStringDomainAt(row)
 		// Copy the value data
 		if vec.GetType().IsVarlen() {
@@ -1059,7 +1055,7 @@ func (exec *valueWindowExec) flushLag() (_ []*vector.Vector, retErr error) {
 		} else {
 			entry := frame[lagPos]
 			if entry.isNull {
-				if err := exec.appendNullEntry(result, entry); err != nil {
+				if err := exec.appendNullEntry(result); err != nil {
 					return nil, err
 				}
 			} else {
@@ -1070,8 +1066,6 @@ func (exec *valueWindowExec) flushLag() (_ []*vector.Vector, retErr error) {
 		}
 	}
 
-	// Row source writes do not normalize; collapse a uniform sidecar once.
-	result.NormalizeStringSources()
 	return []*vector.Vector{result}, nil
 }
 
@@ -1114,7 +1108,7 @@ func (exec *valueWindowExec) flushLead() (_ []*vector.Vector, retErr error) {
 		} else {
 			entry := frame[leadPos]
 			if entry.isNull {
-				if err := exec.appendNullEntry(result, entry); err != nil {
+				if err := exec.appendNullEntry(result); err != nil {
 					return nil, err
 				}
 			} else {
@@ -1125,8 +1119,6 @@ func (exec *valueWindowExec) flushLead() (_ []*vector.Vector, retErr error) {
 		}
 	}
 
-	// Row source writes do not normalize; collapse a uniform sidecar once.
-	result.NormalizeStringSources()
 	return []*vector.Vector{result}, nil
 }
 
@@ -1151,7 +1143,7 @@ func (exec *valueWindowExec) flushFirstValue() (_ []*vector.Vector, retErr error
 		// Get the first value in the frame
 		entry := frame[0]
 		if entry.isNull {
-			if err := exec.appendNullEntry(result, entry); err != nil {
+			if err := exec.appendNullEntry(result); err != nil {
 				return nil, err
 			}
 		} else {
@@ -1161,8 +1153,6 @@ func (exec *valueWindowExec) flushFirstValue() (_ []*vector.Vector, retErr error
 		}
 	}
 
-	// Row source writes do not normalize; collapse a uniform sidecar once.
-	result.NormalizeStringSources()
 	return []*vector.Vector{result}, nil
 }
 
@@ -1187,7 +1177,7 @@ func (exec *valueWindowExec) flushLastValue() (_ []*vector.Vector, retErr error)
 		// Get the last value in the frame
 		entry := frame[len(frame)-1]
 		if entry.isNull {
-			if err := exec.appendNullEntry(result, entry); err != nil {
+			if err := exec.appendNullEntry(result); err != nil {
 				return nil, err
 			}
 		} else {
@@ -1197,8 +1187,6 @@ func (exec *valueWindowExec) flushLastValue() (_ []*vector.Vector, retErr error)
 		}
 	}
 
-	// Row source writes do not normalize; collapse a uniform sidecar once.
-	result.NormalizeStringSources()
 	return []*vector.Vector{result}, nil
 }
 
@@ -1214,21 +1202,11 @@ func (exec *valueWindowExec) appendValueEntry(result *vector.Vector, entry *valu
 	if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
 		return err
 	}
-	if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
-		return err
-	}
-	if err := result.SetRuntimeStringDomainAtWithMP(row, entry.stringDomain, exec.mp); err != nil {
-		return err
-	}
-	return result.SetStringSourceAtWithMP(row, entry.stringSource, exec.mp)
+	return result.SetRuntimeStringDomainAtWithMP(row, entry.stringDomain, exec.mp)
 }
 
-func (exec *valueWindowExec) appendNullEntry(result *vector.Vector, entry *valueEntry) error {
-	row := result.Length()
-	if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
-		return err
-	}
-	return result.SetStringSourceAtWithMP(row, entry.stringSource, exec.mp)
+func (exec *valueWindowExec) appendNullEntry(result *vector.Vector) error {
+	return vector.AppendAny(result, nil, true, exec.mp)
 }
 
 // appendValueToVector appends a value to the result vector based on the type

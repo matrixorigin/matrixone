@@ -52,70 +52,19 @@ type minMaxExecBytes struct {
 func (*minMaxExecFixed[T]) sourcePreservingMerge() {}
 func (*minMaxExecBytes) sourcePreservingMerge()    {}
 
-func mergeMinMaxPrepareParamKind(
-	vec *vector.Vector,
-	row int,
-	candidate vector.PrepareParamKind,
-	mp *mpool.MPool,
-) error {
-	return vec.SetPrepareParamKindAtWithMP(
-		row,
-		vector.MergePrepareParamKinds(vec.GetPrepareParamKindAt(row), candidate),
-		mp,
-	)
-}
-
-func setMinMaxFixedMetadata(
-	vec *vector.Vector,
-	row int,
-	kind vector.PrepareParamKind,
-	source types.StringSource,
-	mp *mpool.MPool,
-) error {
-	if err := vec.SetPrepareParamKindAtWithMP(row, kind, mp); err != nil {
-		return err
-	}
-	return vec.SetStringSourceAtWithMP(row, source, mp)
-}
-
-func mergeMinMaxFixedMetadata(
-	vec *vector.Vector,
-	row int,
-	kind vector.PrepareParamKind,
-	source types.StringSource,
-	mp *mpool.MPool,
-) error {
-	if err := mergeMinMaxPrepareParamKind(vec, row, kind, mp); err != nil {
-		return err
-	}
-	mergedSource, err := types.MergeStringSources(vec.GetStringSourceAt(row), source)
-	if err != nil {
-		return err
-	}
-	return vec.SetStringSourceAtWithMP(row, mergedSource, mp)
-}
-
 func (exec *minMaxExecFixed[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	if groupIndex == -1 {
 		return nil
 	}
 	vec := vectors[0]
 	if vec.IsNull(uint64(row)) {
-		// A NULL does not inspect the destination value, but still closes any
-		// source-metadata reservation made for this work unit.
-		exec.finalizeStringSourcePreflights([]uint64{uint64(groupIndex + 1)})
 		return nil
 	}
 	x, y := exec.getXY(uint64(groupIndex))
 	aggVec := exec.state[x].vecs[0]
-	if !hasDefaultFixedMinMaxMetadata(vec) || !hasDefaultFixedMinMaxMetadata(aggVec) {
-		return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
-	}
-	defer aggVec.NormalizeStringSources()
 
-	// A scalar fill needs no per-batch hash table or local winner arrays. The
-	// same guard used by preflight proves that neither input nor destination
-	// can require a metadata sidecar; rich metadata retains the batch path.
+	// A scalar fill needs no per-batch hash table or local winner arrays:
+	// fixed-width min/max carries no row metadata.
 	if vec.IsConst() {
 		row = 0
 	}
@@ -132,9 +81,7 @@ func (exec *minMaxExecFixed[T]) Fill(groupIndex int, row int, vectors []*vector.
 			return nil
 		}
 	}
-	// Even an ordinary winner or tie must mark PrepareParamNone as observed,
-	// exactly as BatchFill does. Under the guard this setter cannot allocate.
-	return aggVec.SetPrepareParamKindAtWithMP(int(y), vector.PrepareParamNone, exec.mp)
+	return nil
 }
 
 func (exec *minMaxExecFixed[T]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -142,41 +89,7 @@ func (exec *minMaxExecFixed[T]) BulkFill(groupIndex int, vectors []*vector.Vecto
 }
 
 func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	defer exec.finalizeStringSourcePreflights(groups)
 	vec := vectors[0]
-	// Reserve every potentially touched source sidecar before changing winner
-	// values. This preserves the aggregate's no-partial-publication contract on
-	// metadata allocation failure. The ordinary source-free path skips the row
-	// scan entirely.
-	hasSourceMetadata := vec.HasStringSourceMetadata()
-	if !hasSourceMetadata {
-		for chunk := range exec.state {
-			if exec.state[chunk].vecs[0].HasStringSourceMetadata() {
-				hasSourceMetadata = true
-				break
-			}
-		}
-	}
-	if hasSourceMetadata {
-		for row, group := range groups {
-			if group == GroupNotMatched {
-				continue
-			}
-			inputRow := offset + row
-			if vec.IsConst() {
-				inputRow = 0
-			}
-			if vec.IsNull(uint64(inputRow)) {
-				continue
-			}
-			x, y := exec.getXY(group - 1)
-			destination := exec.state[x].vecs[0]
-			if err := destination.PreflightSetStringSourceAt(
-				int(y), vec.GetStringSourceAt(inputRow), exec.mp); err != nil {
-				return err
-			}
-		}
-	}
 	n := len(groups)
 	if n == 0 {
 		return nil
@@ -188,8 +101,6 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 	var slotOf [256]uint8
 	var localVals [maxSlots]T
 	var localGrps [maxSlots]uint64
-	var localKinds [maxSlots]vector.PrepareParamKind
-	var localSources [maxSlots]types.StringSource
 	nSlots := 0
 
 	for i := range slotOf {
@@ -209,18 +120,12 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 		g := grp - 1
 		var value T
 		inputRow := int(uint64(i) + uint64(offset))
-		kind := vec.GetPrepareParamKindAt(inputRow)
-		source := vec.GetStringSourceAt(inputRow)
 		if isConst {
 			index := 0
 			if selection != nil {
 				index = int(selection[inputRow])
 			}
 			value = vals[index]
-			if vec.IsConst() {
-				kind = vec.GetPrepareParamKindAt(0)
-				source = vec.GetStringSourceAt(0)
-			}
 		} else {
 			value = vals[i+offset]
 		}
@@ -237,21 +142,8 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 					if aggVec.IsNull(y) {
 						aggVec.UnsetNull(y)
 						aggs[y] = value
-						if err := setMinMaxFixedMetadata(aggVec, int(y), kind, source, exec.mp); err != nil {
-							return err
-						}
-					} else {
-						switch cmp := exec.comp(value, aggs[y]); {
-						case cmp < 0:
-							aggs[y] = value
-							if err := setMinMaxFixedMetadata(aggVec, int(y), kind, source, exec.mp); err != nil {
-								return err
-							}
-						case cmp == 0:
-							if err := mergeMinMaxFixedMetadata(aggVec, int(y), kind, source, exec.mp); err != nil {
-								return err
-							}
-						}
+					} else if exec.comp(value, aggs[y]) < 0 {
+						aggs[y] = value
 					}
 					break
 				}
@@ -259,24 +151,12 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 				slotOf[h] = s
 				localGrps[nSlots] = g
 				localVals[nSlots] = value
-				localKinds[nSlots] = kind
-				localSources[nSlots] = source
 				nSlots++
 				break
 			}
 			if localGrps[s] == g {
-				switch cmp := exec.comp(value, localVals[s]); {
-				case cmp < 0:
+				if exec.comp(value, localVals[s]) < 0 {
 					localVals[s] = value
-					localKinds[s] = kind
-					localSources[s] = source
-				case cmp == 0:
-					localKinds[s] = vector.MergePrepareParamKinds(localKinds[s], kind)
-					mergedSource, err := types.MergeStringSources(localSources[s], source)
-					if err != nil {
-						return err
-					}
-					localSources[s] = mergedSource
 				}
 				break
 			}
@@ -299,21 +179,8 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 		if aggVec.IsNull(y) {
 			aggVec.UnsetNull(y)
 			aggs[y] = localVals[s]
-			if err := setMinMaxFixedMetadata(aggVec, int(y), localKinds[s], localSources[s], exec.mp); err != nil {
-				return err
-			}
-		} else {
-			switch cmp := exec.comp(localVals[s], aggs[y]); {
-			case cmp < 0:
-				aggs[y] = localVals[s]
-				if err := setMinMaxFixedMetadata(aggVec, int(y), localKinds[s], localSources[s], exec.mp); err != nil {
-					return err
-				}
-			case cmp == 0:
-				if err := mergeMinMaxFixedMetadata(aggVec, int(y), localKinds[s], localSources[s], exec.mp); err != nil {
-					return err
-				}
-			}
+		} else if exec.comp(localVals[s], aggs[y]) < 0 {
+			aggs[y] = localVals[s]
 		}
 	}
 	return nil
@@ -327,17 +194,10 @@ func (exec *minMaxExecFixed[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int
 	x1, y1 := exec.getXY(uint64(groupIdx1))
 	x2, y2 := other.getXY(uint64(groupIdx2))
 	dst, src := exec.state[x1].vecs[0], other.state[x2].vecs[0]
-	if !hasDefaultFixedMinMaxMetadata(src) || !hasDefaultFixedMinMaxMetadata(dst) {
-		return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
-	}
-	defer dst.NormalizeStringSources()
 	if src.IsNull(uint64(y2)) {
 		return nil
 	}
-	// Scalar window snapshots need only the two touched states, not a scan of
-	// every chunk or per-row metadata merging. The guard excludes metadata
-	// allocation, but a reserved sidecar may still be uniform, so it must
-	// still be normalized as in BatchMerge.
+	// Scalar window snapshots need only the two touched states.
 	// Spill-decoded sources may be compact; only the destination is chunk-sized.
 	value := chunkRows[T](src)[y2]
 	aggs := chunkArr[T](dst)
@@ -352,43 +212,11 @@ func (exec *minMaxExecFixed[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int
 			return nil
 		}
 	}
-	// A winner/tie must observe None, including an initially unobserved state.
-	return dst.SetPrepareParamKindAtWithMP(int(y1), vector.PrepareParamNone, exec.mp)
+	return nil
 }
 
 func (exec *minMaxExecFixed[T]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
-	defer exec.finalizeStringSourcePreflights(groups)
 	other := next.(*minMaxExecFixed[T])
-	hasSourceMetadata := false
-	for chunk := range exec.state {
-		if exec.state[chunk].vecs[0].HasStringSourceMetadata() {
-			hasSourceMetadata = true
-			break
-		}
-	}
-	if !hasSourceMetadata {
-		for chunk := range other.state {
-			if other.state[chunk].vecs[0].HasStringSourceMetadata() {
-				hasSourceMetadata = true
-				break
-			}
-		}
-	}
-	if hasSourceMetadata {
-		for i, group := range groups {
-			if group == GroupNotMatched {
-				continue
-			}
-			x1, y1 := exec.getXY(group - 1)
-			x2, y2 := other.getXY(uint64(offset + i))
-			destination := exec.state[x1].vecs[0]
-			source := other.state[x2].vecs[0]
-			if err := destination.PreflightSetStringSourceAt(
-				int(y1), source.GetStringSourceAt(int(y2)), exec.mp); err != nil {
-				return err
-			}
-		}
-	}
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
@@ -410,32 +238,8 @@ func (exec *minMaxExecFixed[T]) BatchMerge(next AggFuncExec, offset int, groups 
 		if exec.state[x1].vecs[0].IsNull(y1) {
 			exec.state[x1].vecs[0].UnsetNull(y1)
 			aggs1[y1] = aggs2[y2]
-			if err := setMinMaxFixedMetadata(
-				exec.state[x1].vecs[0], int(y1),
-				other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2)),
-				other.state[x2].vecs[0].GetStringSourceAt(int(y2)), exec.mp); err != nil {
-				return err
-			}
-		} else {
-			cmp := exec.comp(aggs2[y2], aggs1[y1])
-			switch {
-			case cmp < 0:
-				aggs1[y1] = aggs2[y2]
-				if err := setMinMaxFixedMetadata(
-					exec.state[x1].vecs[0], int(y1),
-					other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2)),
-					other.state[x2].vecs[0].GetStringSourceAt(int(y2)), exec.mp); err != nil {
-					return err
-				}
-			case cmp == 0:
-				if err := mergeMinMaxFixedMetadata(
-					exec.state[x1].vecs[0], int(y1),
-					other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2)),
-					other.state[x2].vecs[0].GetStringSourceAt(int(y2)), exec.mp,
-				); err != nil {
-					return err
-				}
-			}
+		} else if exec.comp(aggs2[y2], aggs1[y1]) < 0 {
+			aggs1[y1] = aggs2[y2]
 		}
 	}
 	return nil
@@ -472,47 +276,20 @@ func (exec *minMaxExecFixed[T]) Flush() ([]*vector.Vector, error) {
 	if exec.hasExtra {
 		for _, vec := range vecs {
 			for i := range vec.Length() {
-				if err := vec.PreflightSetStringSourceAt(
-					i, types.StringSourceExpression, exec.mp); err != nil {
-					return freeResultsOnError(err)
-				}
-			}
-			for i := range vec.Length() {
 				if vec.IsNull(uint64(i)) {
 					vec.UnsetNull(uint64(i))
 					if err := vector.SetFixedAtNoTypeCheck(vec, int(i), exec.extra); err != nil {
 						return freeResultsOnError(err)
 					}
-					if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
-						return freeResultsOnError(err)
-					}
-					if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
-						return freeResultsOnError(err)
-					}
 				} else {
 					oldValue := vector.GetFixedAtNoTypeCheck[T](vec, int(i))
-					switch cmp := exec.comp(exec.extra, oldValue); {
-					case cmp < 0:
+					if exec.comp(exec.extra, oldValue) < 0 {
 						if err := vector.SetFixedAtNoTypeCheck(vec, int(i), exec.extra); err != nil {
-							return freeResultsOnError(err)
-						}
-						if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
-							return freeResultsOnError(err)
-						}
-						if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
-							return freeResultsOnError(err)
-						}
-					case cmp == 0:
-						if err := mergeMinMaxPrepareParamKind(vec, i, vector.PrepareParamNone, exec.mp); err != nil {
-							return freeResultsOnError(err)
-						}
-						if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
 							return freeResultsOnError(err)
 						}
 					}
 				}
 			}
-			vec.NormalizeStringSources()
 		}
 	}
 	return vecs, nil
@@ -527,7 +304,6 @@ func (exec *minMaxExecBytes) BulkFill(groupIndex int, vectors []*vector.Vector) 
 }
 
 func (exec *minMaxExecBytes) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	defer exec.finalizeStringSourcePreflights(groups)
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
@@ -539,7 +315,6 @@ func (exec *minMaxExecBytes) BatchFill(offset int, groups []uint64, vectors []*v
 		} else {
 			x, y := exec.getXY(grp - 1)
 			value := vectors[0].GetBytesAt(int(idx))
-			kind := vectors[0].GetPrepareParamKindAt(int(idx))
 			if exec.state[x].vecs[0].IsNull(uint64(y)) {
 				if err := exec.state[x].vecs[0].SetRawBytesAtFromAndUnsetNull(
 					int(y), vectors[0], int(idx), exec.mp); err != nil {
@@ -549,22 +324,12 @@ func (exec *minMaxExecBytes) BatchFill(offset int, groups []uint64, vectors []*v
 				oldValue := exec.state[x].vecs[0].GetBytesAt(int(y))
 				switch cmp := exec.comp(value, oldValue); {
 				case cmp < 0:
-					if err := exec.state[x].vecs[0].PreflightSetPrepareParamKindAt(
-						int(y), kind, exec.mp); err != nil {
-						return err
-					}
 					if err := vector.SetBytesAtFrom(exec.state[x].vecs[0], int(y), vectors[0], int(idx), exec.mp); err != nil {
-						return err
-					}
-					if err := exec.state[x].vecs[0].SetPrepareParamKindAtWithMP(int(y), kind, exec.mp); err != nil {
 						return err
 					}
 				case cmp == 0:
 					if err := mergeEqualRuntimeStringDomain(
 						exec.state[x].vecs[0], int(y), vectors[0], int(idx), exec.mp); err != nil {
-						return err
-					}
-					if err := mergeMinMaxPrepareParamKind(exec.state[x].vecs[0], int(y), kind, exec.mp); err != nil {
 						return err
 					}
 				}
@@ -579,7 +344,6 @@ func (exec *minMaxExecBytes) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) e
 }
 
 func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
-	defer exec.finalizeStringSourcePreflights(groups)
 	other := next.(*minMaxExecBytes)
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
@@ -602,30 +366,13 @@ func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []u
 			oldValue := exec.state[x1].vecs[0].GetBytesAt(int(y1))
 			switch cmp := exec.comp(value, oldValue); {
 			case cmp < 0:
-				kind := other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2))
-				if err := exec.state[x1].vecs[0].PreflightSetPrepareParamKindAt(
-					int(y1), kind, exec.mp); err != nil {
-					return err
-				}
 				if err := vector.SetBytesAtFrom(
 					exec.state[x1].vecs[0], int(y1), other.state[x2].vecs[0], int(y2), exec.mp); err != nil {
-					return err
-				}
-				if err := exec.state[x1].vecs[0].SetPrepareParamKindAtWithMP(
-					int(y1), kind, exec.mp); err != nil {
 					return err
 				}
 			case cmp == 0:
 				if err := mergeEqualRuntimeStringDomain(
 					exec.state[x1].vecs[0], int(y1), other.state[x2].vecs[0], int(y2), exec.mp); err != nil {
-					return err
-				}
-				if err := mergeMinMaxPrepareParamKind(
-					exec.state[x1].vecs[0],
-					int(y1),
-					other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2)),
-					exec.mp,
-				); err != nil {
 					return err
 				}
 			}
@@ -751,47 +498,20 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 	if exec.hasExtra {
 		for _, vec := range vecs {
 			for i := range vec.Length() {
-				if err := vec.PreflightSetStringSourceAt(
-					i, types.StringSourceExpression, exec.mp); err != nil {
-					return freeResultsOnError(err)
-				}
-			}
-			for i := range vec.Length() {
 				if vec.IsNull(uint64(i)) {
 					vec.UnsetNull(uint64(i))
 					if err := vector.SetBytesAtWithBinaryString(vec, int(i), exec.extra, false, exec.mp); err != nil {
 						return freeResultsOnError(err)
 					}
-					if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
-						return freeResultsOnError(err)
-					}
-					if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
-						return freeResultsOnError(err)
-					}
 				} else {
 					oldValue := vec.GetBytesAt(int(i))
-					switch cmp := exec.comp(exec.extra, oldValue); {
-					case cmp < 0:
+					if exec.comp(exec.extra, oldValue) < 0 {
 						if err := vector.SetBytesAtWithBinaryString(vec, int(i), exec.extra, false, exec.mp); err != nil {
-							return freeResultsOnError(err)
-						}
-						if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
-							return freeResultsOnError(err)
-						}
-						if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
-							return freeResultsOnError(err)
-						}
-					case cmp == 0:
-						if err := mergeMinMaxPrepareParamKind(vec, i, vector.PrepareParamNone, exec.mp); err != nil {
-							return freeResultsOnError(err)
-						}
-						if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
 							return freeResultsOnError(err)
 						}
 					}
 				}
 			}
-			vec.NormalizeStringSources()
 		}
 	}
 	return vecs, nil

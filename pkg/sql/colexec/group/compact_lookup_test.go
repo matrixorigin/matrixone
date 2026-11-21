@@ -269,11 +269,6 @@ func TestCompactGroupFallbackAndGeneration(t *testing.T) {
 	require.True(t, hit)
 	require.True(t, preview.existingOnly)
 	require.Equal(t, []uint64{7}, preview.values)
-	ctr.groupKeyStringSourceMetadata = true
-	_, hit, err = ctr.previewCompactGroups([]*vector.Vector{vec}, 0, 1)
-	require.NoError(t, err)
-	require.False(t, hit, "resident source metadata keeps the generic publication path")
-	ctr.groupKeyStringSourceMetadata = false
 	vec.GetNulls().Add(0)
 	_, hit, err = ctr.previewCompactGroups([]*vector.Vector{vec}, 0, 1)
 	require.NoError(t, err)

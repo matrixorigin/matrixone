@@ -321,12 +321,6 @@ func composeDictionaryRows(source *RowSelection, logical []int64, mp *mpool.MPoo
 }
 
 func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) error {
-	if err := dst.preflightStringSourceAppend(len(rows), summarizeStringSourceSelection(source, rows), mp); err != nil {
-		return err
-	}
-	if err := dst.preflightPrepareParamKindAppend(len(rows), summarizePrepareParamKindSelection(source, rows), mp); err != nil {
-		return err
-	}
 	if err := dst.preflightBinaryStringAppend(len(rows), summarizeBinaryStringSelection(source, rows), mp); err != nil {
 		return err
 	}
@@ -340,7 +334,7 @@ func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) 
 			return err
 		}
 	}
-	dst.setLengthAfterExtendWithSource(len(rows), source.stringSource, true)
+	dst.setLengthAfterExtend(len(rows))
 	if source.IsConstNull() {
 		dst.nsp.AddRange(0, uint64(len(rows)))
 	} else if !source.IsConst() && source.HasNull() {
@@ -356,9 +350,6 @@ func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) 
 				dst.gsp.Add(uint64(i))
 			}
 		}
-	}
-	if err := propagatePrepareParamKindsSelection(dst, source, 0, rows, mp); err != nil {
-		return err
 	}
 	if err := propagateBinaryStringSelection(dst, source, 0, rows, mp); err != nil {
 		return err
@@ -523,10 +514,6 @@ func (v *Vector) materializeDictionaryWithBuilder(mp *mpool.MPool, account *Allo
 	flat.length, flat.sorted = v.length, v.sorted
 	// Row metadata is already in logical coordinates. Copy it once; payload
 	// gathering below must not invoke append helpers that rewrite provenance.
-	if err := v.CopyPrepareParamMetadataToWithMP(flat, mp); err != nil {
-		flat.Free(mp)
-		return nil, err
-	}
 	if err := v.copyBinaryStringTo(flat, mp); err != nil {
 		flat.Free(mp)
 		return nil, err

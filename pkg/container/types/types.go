@@ -909,6 +909,15 @@ func (t Type) Eq(b Type) bool {
 }
 
 func (t T) ToType() Type {
+	typ, ok := t.TryToType()
+	if !ok {
+		panic("Unknown type")
+	}
+	return typ
+}
+
+// TryToType returns the default type for a supported OID.
+func (t T) TryToType() (Type, bool) {
 	var typ Type
 
 	typ.Oid = t
@@ -986,10 +995,10 @@ func (t T) ToType() Type {
 		// XXX I don't know about this one ...
 		typ.Size = 0
 	default:
-		panic("Unknown type")
+		return Type{}, false
 	}
 	typ.Charset = CharsetType(t)
-	return typ
+	return typ, true
 }
 
 func (t T) ToTypeWithScale(scale int32) Type {

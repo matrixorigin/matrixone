@@ -131,7 +131,7 @@ func (s *returningSpool) Write(generation uint64, bat *batch.Batch, _ *perfcount
 	var size uint64
 	s.buf.Write(types.EncodeUint64(&size))
 	payloadStart := s.buf.Len()
-	if _, err = bat.MarshalBinaryWithPrepareParamKinds(&s.buf, false); err != nil {
+	if _, err = bat.MarshalBinaryWithMetadata(&s.buf, false); err != nil {
 		return err
 	}
 	payloadSize := s.buf.Len() - payloadStart
@@ -225,7 +225,7 @@ func (s *returningSpool) Replay(ctx context.Context, consume func(*batch.Batch, 
 		}
 		readBatch.CleanOnlyData()
 		limited := &io.LimitedReader{R: reader, N: int64(size)}
-		if err = readBatch.UnmarshalFromReaderWithPrepareParamKinds(limited, int64(size), s.mp); err != nil {
+		if err = readBatch.UnmarshalFromReaderWithMetadata(limited, int64(size), s.mp); err != nil {
 			return err
 		}
 		if limited.N != 0 {
@@ -289,7 +289,7 @@ func (s *returningSpool) releaseAttemptLocked() error {
 
 func estimateReturningBatchBytes(bat *batch.Batch) (uint64, error) {
 	bytes := uint64(returningSpoolBufferSize + 32 + len(bat.Vecs)*64 + len(bat.ExtraBuf))
-	metadataSize, err := bat.PrepareParamKindMetadataSize()
+	metadataSize, err := bat.TransportMetadataSize()
 	if err != nil {
 		return 0, err
 	}

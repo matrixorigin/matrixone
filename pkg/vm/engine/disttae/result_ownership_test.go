@@ -134,7 +134,7 @@ func TestCatalogReadResultsReleaseBatchOwnership(t *testing.T) {
 				}
 
 				invoke := func() error {
-					_, err := db.deleteTable(ctx, "tbl", true, false)
+					err := db.deleteTable(ctx, "tbl", true, false)
 					return err
 				}
 				if tt.wantPanic != "" {

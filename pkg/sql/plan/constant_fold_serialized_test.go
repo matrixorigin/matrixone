@@ -395,8 +395,8 @@ func TestConstantFoldPreservesSerialCastSemantics(t *testing.T) {
 	defer foldedFree()
 	require.Equal(
 		t,
-		rule.GetConstantValue(runtimeResult, false, 0),
-		rule.GetConstantValue(foldedResult, false, 0),
+		rule.GetConstantValue(runtimeResult, false, 0, types.StringSourceExpression),
+		rule.GetConstantValue(foldedResult, false, 0, types.StringSourceExpression),
 		"constant folding changed the expression value",
 	)
 }
@@ -667,12 +667,6 @@ func TestConstantListFoldPreservesPerItemStringProvenance(t *testing.T) {
 	require.NoError(t, proto.Unmarshal(payload, decodedControl))
 	require.Equal(t, foldedControl.GetVec().GetStringSource(),
 		decodedControl.GetVec().GetStringSource())
-	result, free, evalErr := colexec.GetReadonlyResultFromExpression(
-		proc, foldedControl, []*batch.Batch{batch.EmptyForConstFoldBatch},
-	)
-	require.NoError(t, evalErr)
-	defer free()
-	require.Equal(t, types.StringSourceLiteral, result.GetStringSourceAt(0))
 }
 
 func TestConstantFoldPreservesExplicitCastSource(t *testing.T) {
@@ -704,31 +698,12 @@ func TestConstantFoldPreservesExplicitCastSource(t *testing.T) {
 	require.Equal(t, folded.GetLit().GetStringSource(), decoded.GetLit().GetStringSource())
 	require.Equal(t, exprStructuralHash(folded), exprStructuralHash(decoded))
 	require.True(t, exprStructuralEqual(folded, decoded))
-
-	result, free, err := colexec.GetReadonlyResultFromExpression(
-		ctx.GetProcess(), decoded, []*batch.Batch{batch.EmptyForConstFoldBatch})
-	require.NoError(t, err)
-	defer free()
-	require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
-
-	plain := &planpb.Expr{
-		Typ: planpb.Type{Id: int32(types.T_varchar)},
-		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
-			Value: &planpb.Literal_Sval{Sval: "x"},
-		}},
-	}
-	plainResult, plainFree, err := colexec.GetReadonlyResultFromExpression(
-		ctx.GetProcess(), plain, []*batch.Batch{batch.EmptyForConstFoldBatch})
-	require.NoError(t, err)
-	defer plainFree()
-	require.Equal(t, types.StringSourceLiteral, plainResult.GetStringSourceAt(0))
 }
 
 func TestMakeInExprRuntimePayloadKeepsExpressionSource(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	scanKeys := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(scanKeys, []byte("runtime-key"), false, proc.Mp()))
-	require.Equal(t, types.StringSourceExpression, scanKeys.GetStringSourceAt(0))
 	data, err := scanKeys.MarshalBinary()
 	require.NoError(t, err)
 	scanKeys.Free(proc.Mp())
@@ -743,13 +718,6 @@ func TestMakeInExprRuntimePayloadKeepsExpressionSource(t *testing.T) {
 	}, 1, data, false)
 	runtimePayload := inExpr.GetF().Args[1]
 	require.Zero(t, runtimePayload.GetVec().GetStringSource())
-
-	result, free, evalErr := colexec.GetReadonlyResultFromExpression(
-		proc, runtimePayload, []*batch.Batch{batch.EmptyForConstFoldBatch},
-	)
-	require.NoError(t, evalErr)
-	defer free()
-	require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
 }
 
 func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {

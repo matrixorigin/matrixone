@@ -69,15 +69,10 @@ func TrySelectBetweenRows(parameters []*vector.Vector, proc *process.Process, le
 
 func plainBetweenSelectionDate(value *vector.Vector, literal bool) bool {
 	if value == nil || value.GetType().Oid != types.T_date || value.IsDictionary() ||
-		value.HasNull() || value.HasGrouping() || value.HasBinaryStringMetadata() ||
-		value.GetPrepareParamKind() != vector.PrepareParamNone || len(value.GetPrepareParamKinds()) != 0 ||
-		value.GetPrepareParamType() != types.T_any || value.IsPreparedJSONComparisonParam() {
+		value.HasNull() || value.HasGrouping() || value.HasBinaryStringMetadata() {
 		return false
 	}
-	// DATE literals carry scalar literal provenance. It has no effect on DATE
-	// comparison; dynamic/row string provenance still uses the ordinary kernel.
-	return !value.HasStringSourceMetadata() || literal &&
-		value.GetStringSource() == types.StringSourceLiteral && len(value.GetStringSources()) == 0
+	return true
 }
 
 func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

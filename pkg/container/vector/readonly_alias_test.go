@@ -118,10 +118,6 @@ func TestReadonlyWindowSelectionMetadata(t *testing.T) {
 				values := [][]byte{[]byte("aaaaaa"), bytes.Repeat([]byte{'b'}, 64), nil, []byte("d"), []byte("e"), []byte("f"), []byte("g")}
 				_, destination := readonlyAliasVectors(t, mp, values, leased, nil)
 				destination.GetGrouping().Add(1)
-				require.NoError(t, destination.SetStringSourcesWithMP([]types.StringSource{
-					types.StringSourceLiteral, types.StringSourceUserVariable, types.StringSourceSQLPrepare,
-					types.StringSourceExpression, types.StringSourceExpression, types.StringSourceExpression, types.StringSourceExpression,
-				}, mp))
 				require.NoError(t, destination.Shrink([]int64{3, 4, 5, 6}, true, mp))
 				require.GreaterOrEqual(t, cap(destination.GetData()), 7*types.VarlenaSize)
 				input, err := destination.Window(0, 3)
@@ -137,9 +133,6 @@ func TestReadonlyWindowSelectionMetadata(t *testing.T) {
 				for row, original := range []int{0, 1, 2, 1, 0, 2, 1} {
 					require.Equal(t, original == 2, destination.IsNull(uint64(row)))
 					require.Equal(t, original == 1, destination.GetGrouping().Contains(uint64(row)))
-					require.Equal(t, []types.StringSource{
-						types.StringSourceLiteral, types.StringSourceUserVariable, types.StringSourceSQLPrepare,
-					}[original], destination.GetStringSourceAt(row))
 					if original != 2 {
 						require.Equal(t, values[original], destination.GetBytesAt(row))
 					}
