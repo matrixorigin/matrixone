@@ -4166,7 +4166,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		// Publication fanout holds shared locks on these same immutable IDs.
 		// Exclude new grants before inspecting or deleting any subscriptions.
 		bh.ClearExecResultSet()
-		if rtnErr = bh.Exec(ctx, fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update", accountId)); rtnErr != nil {
+		if rtnErr = bh.Exec(defines.WithExactCatalogRows(ctx), fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update", accountId)); rtnErr != nil {
 			return rtnErr
 		}
 
@@ -4355,7 +4355,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			return rtnErr
 		}
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
-		rtnErr = bh.Exec(ctx, sql)
+		rtnErr = bh.Exec(defines.WithExactCatalogRows(ctx), sql)
 		if rtnErr != nil {
 			return rtnErr
 		}

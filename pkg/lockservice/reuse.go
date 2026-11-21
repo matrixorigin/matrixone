@@ -75,6 +75,7 @@ func init() {
 		},
 		func(cs *cowSlice) {
 			cs.v.Store(0)
+			cs.exactKeys = nil
 			cs.mustGet().unref()
 		},
 		reuse.DefaultOptions[cowSlice]().

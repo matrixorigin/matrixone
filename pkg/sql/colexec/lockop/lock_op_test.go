@@ -307,6 +307,30 @@ func TestHasNewVersionInRange(t *testing.T) {
 	require.True(t, changed)
 }
 
+func TestExactCatalogRowsRejectLockUpgrade(t *testing.T) {
+	service := mock_lock.NewMockLockService(gomock.NewController(t))
+	// Both calls belong to the same marked statement. Only the account data
+	// target inherits the exact-row requirement when the operator is built.
+	ctx := defines.WithExactCatalogRows(t.Context())
+	rows, txnID := [][]byte{{1}, {3}}, []byte("txn")
+	rowOpts := lock.LockOptions{Granularity: lock.Granularity_Row, Mode: lock.LockMode_Shared}
+	pk := types.T_int32.ToType()
+	service.EXPECT().Lock(ctx, uint64(17), rows, txnID, rowOpts).Return(lock.Result{}, moerr.NewLockNeedUpgradeNoCtx())
+	_, err := LockWithMayUpgrade(ctx, service, 17, rows, txnID, rowOpts, nil, nil, LockOptions{requireExactRows: true}, pk)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
+
+	packer := types.NewPacker()
+	defer packer.Close()
+	rangeOpts := rowOpts
+	rangeOpts.Granularity = lock.Granularity_Range
+	gomock.InOrder(
+		service.EXPECT().Lock(ctx, uint64(2), rows, txnID, rowOpts).Return(lock.Result{}, moerr.NewLockNeedUpgradeNoCtx()),
+		service.EXPECT().Lock(ctx, uint64(2), gomock.Any(), txnID, rangeOpts).Return(lock.Result{}, nil),
+	)
+	_, err = LockWithMayUpgrade(ctx, service, 2, rows, txnID, rowOpts, GetFetchRowsFunc(pk), nil, DefaultLockOptions(packer), pk)
+	require.NoError(t, err)
+}
+
 func TestLockWithRetryReturnsBackendErrorWhenDeadlineExceededStopsBoundedRetry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

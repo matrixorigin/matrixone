@@ -36,6 +36,8 @@ var (
 type tableLockHolder struct {
 	tableKeys  map[uint64]*cowSlice
 	tableBinds map[uint64]pb.LockTable
+	// A transaction must not mix proxy representatives and direct ownership for a table.
+	proxyOwnerOnly map[uint64]bool
 	// uncertainLockKeys contains rows recorded only because a remote Lock
 	// response failed. They remain in tableKeys for conservative cleanup, but
 	// do not prove that this transaction holds the row for deadlock detection.
@@ -104,7 +106,8 @@ func (txn *activeTxn) lockRemoved(
 	defer s.unref()
 	s.iter(func(v []byte) bool {
 		if _, ok := removedLocks[util.UnsafeBytesToString(v)]; !ok {
-			newV.append([][]byte{v})
+			// Removal can only shrink the original set, including segmented sets.
+			newV.appendExact([][]byte{v})
 		}
 		return true
 	})
@@ -129,7 +132,7 @@ func (txn *activeTxn) lockAdded(
 	locks [][]byte,
 	logger *log.MOLogger,
 ) error {
-	return txn.addLocks(group, bind, locks, logger, true)
+	return txn.addLocks(group, bind, locks, logger, true, false)
 }
 
 // lockAddedForCleanup records locks that a failed remote request may have
@@ -140,8 +143,9 @@ func (txn *activeTxn) lockAddedForCleanup(
 	bind pb.LockTable,
 	locks [][]byte,
 	logger *log.MOLogger,
+	exact bool,
 ) error {
-	return txn.addLocks(group, bind, locks, logger, false)
+	return txn.addLocks(group, bind, locks, logger, false, exact)
 }
 
 func (txn *activeTxn) addLocks(
@@ -149,7 +153,7 @@ func (txn *activeTxn) addLocks(
 	bind pb.LockTable,
 	locks [][]byte,
 	logger *log.MOLogger,
-	confirmed bool,
+	confirmed, exact bool,
 ) error {
 
 	if txn.beforeLockAdded != nil {
@@ -195,17 +199,27 @@ func (txn *activeTxn) addLocks(
 		s.unref()
 	}
 
-	if ok {
-		if err := v.append(locks); err != nil {
-			return err
+	pending := locks
+	if !ok {
+		first := len(locks)
+		if exact {
+			first = min(first, txn.fsp.maxSize())
 		}
-	} else {
-		cs, err := newCowSlice(txn.fsp, locks)
+		var err error
+		v, err = newCowSlice(txn.fsp, locks[:first])
 		if err != nil {
 			return err
 		}
-		h.tableKeys[bind.Table] = cs
+		h.tableKeys[bind.Table] = v
 		h.tableBinds[bind.Table] = bind
+		pending = locks[first:]
+	}
+	if len(pending) > 0 {
+		if exact {
+			v.appendExact(pending)
+		} else if err := v.append(pending); err != nil {
+			return err
+		}
 	}
 
 	if confirmed {

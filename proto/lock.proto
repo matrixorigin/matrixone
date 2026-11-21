@@ -32,6 +32,13 @@ enum Granularity {
   Range = 1;
 }
 
+// RowLockPolicy preserves the requested point-lock mode across lock-service versions.
+enum RowLockPolicy {
+  Ordinary = 0;
+  ExactShared = 1;
+  ExactExclusive = 2;
+}
+
 // LockMode lock mode
 enum LockMode {
   Exclusive = 0;
@@ -62,6 +69,8 @@ message LockOptions {
   timestamp.Timestamp SnapShotTs        = 9 [(gogoproto.nullable) = false];
   int64               LockWaitTimeout   = 10;
   int64               LockWaitDeadline  = 11;
+  // Internal catalog DDL must acquire individual rows even under contention.
+  RowLockPolicy       RowPolicy         = 12;
 }
 
 // LockTable describes which CN manages a Table's Locks.
@@ -418,7 +427,7 @@ message Result {
   uint32              Waiters         = 9;  
   // NewLockAdd if true means new lock added, false means lock is added before by current 
   // txn
-  bool                NewLockAdd      = 10;                
+  bool                NewLockAdd      = 10;
 }
 
 message ExtraMutation {

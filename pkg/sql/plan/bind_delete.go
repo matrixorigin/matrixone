@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -371,6 +370,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		for _, col := range tableDef.Cols {
 			if col.Name == tableDef.Pkey.PkeyColName {
 				lockTarget := &plan.LockTarget{
+					RequireExactRows:   builder.requiresExactAccountRows(dmlCtx.objRefs[i].GetSchemaName(), dmlCtx.objRefs[i].GetObjName()),
 					TableId:            tableDef.TblId,
 					ObjRef:             DeepCopyObjectRef(dmlCtx.objRefs[i]),
 					PrimaryColIdxInBat: pkPos,
@@ -467,24 +467,18 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 }
 
 func (builder *QueryBuilder) updateLocksOnDemand(nodeID int32) {
-	lockService := builder.compCtx.GetProcess().Base.LockService
-	if lockService == nil {
-		// MockCompilerContext
+	maxRows, ok := estimatedLockRowLimit(builder)
+	if !ok {
 		return
 	}
-	lockconfig := lockService.GetConfig()
 
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType != plan.Node_LOCK_OP {
 		for _, childID := range node.Children {
 			builder.updateLocksOnDemand(childID)
 		}
-	} else if !node.LockTargets[0].LockTable && node.Stats.Outcnt > float64(lockconfig.MaxLockRowCount) {
-		logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
-		logutil.Infof("the outcnt stats is %f", node.Stats.Outcnt)
-		for _, target := range node.LockTargets {
-			target.LockTable = true
-		}
+	} else {
+		builder.upgradeEstimatedRowLocks(node, maxRows)
 	}
 }
 

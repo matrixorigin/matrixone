@@ -37,6 +37,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestLockMetaKeyBatches(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+	keys := vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { keys.Free(mp) })
+	for _, key := range []string{"a", "b", "c", "d", "e"} {
+		require.NoError(t, vector.AppendBytes(keys, []byte(key), false, mp))
+	}
+	collect := func(stopAt string) ([]string, error) {
+		var batches []string
+		err := lockMetaKeyBatches(keys, 2, mp, func(window *vector.Vector) error {
+			var batch string
+			for i := 0; i < window.Length(); i++ {
+				batch += string(window.GetBytesAt(i))
+			}
+			batches = append(batches, batch)
+			if batch == stopAt {
+				return context.Canceled
+			}
+			return nil
+		})
+		return batches, err
+	}
+	batches, err := collect("")
+	require.NoError(t, err)
+	require.Equal(t, []string{"ab", "cd", "e"}, batches)
+	batches, err = collect("cd")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, []string{"ab", "cd"}, batches)
+}
+
 // Optimistic LockRows is inert: this fixture isolates key ownership and catalog
 // handle rebinding. Public pessimistic tests prove actual lock admission.
 func newLockMetaTestOwner(t testing.TB, account uint32) (*LockMeta, *process.Process, engine.Engine, *int, *error) {

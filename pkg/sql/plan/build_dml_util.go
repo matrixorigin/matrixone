@@ -4446,6 +4446,7 @@ func appendLockNode(
 	}
 
 	lockTarget := &plan.LockTarget{
+		RequireExactRows:   builder.requiresExactAccountRows(tableDef.DbName, tableDef.Name),
 		TableId:            tableDef.TblId,
 		PrimaryColIdxInBat: int32(pkPos),
 		PrimaryColTyp:      pkTyp,
