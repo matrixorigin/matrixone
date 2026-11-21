@@ -15,11 +15,11 @@ insert into t values
 (1, '2024-06-18', '2024-06-18 01:02:03', '2024-06-18 01:02:03.250', '2024-06-18 01:02:03', '-01:02:03', '01:02:03.50'),
 (2, null, null, null, null, null, null);
 select -cast('2024-06-18' as date), -cast('01:02:03' as time), -cast('2024-06-18 01:02:03' as datetime);
-➤ -cast(2024-06-18 as date)[-5,64,0]  ¦  -cast(01:02:03 as time)[3,18,0]  ¦  -cast(2024-06-18 01:02:03 as datetime)[3,38,0]  𝄀
+➤ -cast(2024-06-18 as date)[8,64,0]  ¦  -cast(01:02:03 as time)[8,64,0]  ¦  -cast(2024-06-18 01:02:03 as datetime)[8,64,0]  𝄀
 -20240618  ¦  -10203  ¦  -20240618010203
 select id, -d, -dt, -dt3, -ts, -tm, -tm2 from t order by id;
-➤ id[4,32,0]  ¦  -d[-5,64,0]  ¦  -dt[3,38,0]  ¦  -dt3[3,38,3]  ¦  -ts[3,38,0]  ¦  -tm[3,18,0]  ¦  -tm2[3,18,2]  𝄀
-1  ¦  -20240618  ¦  -20240618010203  ¦  -20240618010203.250  ¦  -20240618010203  ¦  10203  ¦  -10203.50  𝄀
+➤ id[4,32,0]  ¦  -d[8,64,0]  ¦  -dt[8,64,0]  ¦  -dt3[8,64,0]  ¦  -ts[8,64,0]  ¦  -tm[8,64,0]  ¦  -tm2[8,64,0]  𝄀
+1  ¦  -20240618  ¦  -20240618010203  ¦  -20240618010203.25  ¦  -20240618010203  ¦  10203  ¦  -10203.5  𝄀
 2  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
 select id, -d = 0 - d, -dt3 = 0 - dt3, -tm2 = 0 - tm2 from t order by id;
 ➤ id[4,32,0]  ¦  -d = 0 - d[-6,8,0]  ¦  -dt3 = 0 - dt3[-6,8,0]  ¦  -tm2 = 0 - tm2[-6,8,0]  𝄀
@@ -38,14 +38,14 @@ select -(-d) = d + 0 from t where id = 1;
 create table r as select -d a, -dt3 b, -tm2 c, +d e from t;
 select column_name, column_type from information_schema.columns where table_schema = 'unary_sign_temporal' and table_name = 'r' order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  𝄀
-a  ¦  bigint  𝄀
-b  ¦  decimal(38,3)  𝄀
-c  ¦  decimal(18,2)  𝄀
+a  ¦  double  𝄀
+b  ¦  double  𝄀
+c  ¦  double  𝄀
 e  ¦  date
 prepare s from 'select -?';
 set @d = cast('2024-06-18' as date);
 execute s using @d;
-➤ -?[-5,64,0]  𝄀
+➤ -?[8,64,0]  𝄀
 -20240618
 deallocate prepare s;
 drop database unary_sign_temporal;

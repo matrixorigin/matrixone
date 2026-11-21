@@ -31,24 +31,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// MySQL negates the numeric value of DATE/TIME/DATETIME/TIMESTAMP operands
-// (the same value as `0 - x`), and its parser drops unary plus entirely.
+// MySQL negates DATE/TIME/DATETIME/TIMESTAMP operands in the DOUBLE domain,
+// while its parser drops unary plus entirely.
 func TestUnarySignTemporalOperands(t *testing.T) {
 	ctx := context.Background()
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
-		name  string
-		expr  string
-		oid   types.T
-		scale int32
-		want  string
+		name   string
+		expr   string
+		oid    types.T
+		digits int
+		want   string
+		null   bool
 	}{
-		{name: "minus date", expr: "-date'2024-06-18'", oid: types.T_int64, want: "-20240618"},
-		{name: "minus time", expr: "-time'01:02:03'", oid: types.T_decimal64, want: "-10203"},
-		{name: "minus negative fractional time", expr: "-cast('-01:02:03.50' as time(2))", oid: types.T_decimal64, scale: 2, want: "10203.50"},
-		{name: "minus datetime", expr: "-cast('2024-06-18 01:02:03' as datetime)", oid: types.T_decimal128, want: "-20240618010203"},
-		{name: "minus fractional datetime", expr: "-cast('2024-06-18 01:02:03.250' as datetime(3))", oid: types.T_decimal128, scale: 3, want: "-20240618010203.250"},
-		{name: "minus timestamp", expr: "-cast('2024-06-18 01:02:03' as timestamp)", oid: types.T_decimal128, want: "-20240618010203"},
+		{name: "minus date", expr: "-date'2024-06-18'", oid: types.T_float64, digits: -1, want: "-20240618"},
+		{name: "minus time", expr: "-time'01:02:03'", oid: types.T_float64, digits: -1, want: "-10203"},
+		{name: "minus negative fractional time", expr: "-cast('-01:02:03.50' as time(2))", oid: types.T_float64, digits: 2, want: "10203.50"},
+		{name: "minus datetime", expr: "-cast('2024-06-18 01:02:03' as datetime)", oid: types.T_float64, digits: -1, want: "-20240618010203"},
+		{name: "minus fractional datetime rounds as double", expr: "-cast('2024-06-18 01:02:03.123456' as datetime(6))", oid: types.T_float64, digits: 6, want: "-20240618010203.125000"},
+		{name: "minus fractional timestamp rounds as double", expr: "-cast('2024-06-18 01:02:03.123456' as timestamp(6))", oid: types.T_float64, digits: 6, want: "-20240618010203.125000"},
+		{name: "minus null timestamp", expr: "-cast(null as timestamp)", oid: types.T_float64, null: true},
 		{name: "minus integer control", expr: "-5", oid: types.T_int64, want: "-5"},
 		{name: "plus date", expr: "+date'2024-06-18'", oid: types.T_date, want: "2024-06-18"},
 		{name: "plus time", expr: "+time'01:02:03'", oid: types.T_time, want: "01:02:03"},
@@ -66,16 +68,16 @@ func TestUnarySignTemporalOperands(t *testing.T) {
 			defer free()
 			typ := result.GetType()
 			require.Equal(t, tc.oid, typ.Oid)
+			require.Equal(t, tc.null, result.IsConstNull() || result.IsNull(0))
+			if tc.null {
+				return
+			}
 			var got string
 			switch typ.Oid {
 			case types.T_int64:
 				got = strconv.FormatInt(vector.GetFixedAtNoTypeCheck[int64](result, 0), 10)
-			case types.T_decimal64:
-				require.Equal(t, tc.scale, typ.Scale)
-				got = vector.GetFixedAtNoTypeCheck[types.Decimal64](result, 0).Format(typ.Scale)
-			case types.T_decimal128:
-				require.Equal(t, tc.scale, typ.Scale)
-				got = vector.GetFixedAtNoTypeCheck[types.Decimal128](result, 0).Format(typ.Scale)
+			case types.T_float64:
+				got = strconv.FormatFloat(vector.GetFixedAtNoTypeCheck[float64](result, 0), 'f', tc.digits, 64)
 			case types.T_date:
 				got = vector.GetFixedAtNoTypeCheck[types.Date](result, 0).String()
 			case types.T_time:
