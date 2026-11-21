@@ -15,10 +15,13 @@
 package colexec
 
 import (
+	"strconv"
+	"strings"
+	"testing"
+
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -26,9 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"strconv"
-	"strings"
-	"testing"
 )
 
 func newTestDecimalAggregateExecutor(p *process.Process, e *plan.Expr) (ExpressionExecutor, error) {
@@ -102,7 +102,7 @@ func TestDecimalMulSubExpression(t *testing.T) {
 		got, err := ex.Eval(p, []*batch.Batch{input}, nil)
 		require.NoError(t, err)
 		require.Equal(t, int32(4), got.GetType().Scale)
-		nulls.Add(input.Vecs[1].GetNulls(), 1)
+		input.Vecs[1].GetNulls().Add(1)
 		got, err = ex.Eval(p, []*batch.Batch{input}, nil)
 		require.NoError(t, err)
 		require.True(t, got.IsNull(1))
@@ -256,7 +256,7 @@ func BenchmarkDecimalMulSubExpression(b *testing.B) {
 				}
 				input.SetRowCount(n)
 				if strings.HasSuffix(mode, "_null") && n > 0 {
-					nulls.Add(input.Vecs[1].GetNulls(), 0)
+					input.Vecs[1].GetNulls().Add(0)
 				}
 				var mask []bool
 				if strings.HasSuffix(mode, "_mask") {
@@ -304,7 +304,7 @@ func TestDecimalMulSubPhysicalWidthFallback(t *testing.T) {
 }
 
 func TestDecimalMulSubRepresentations(t *testing.T) {
-	for _, shape := range []string{"x_const", "y_const", "both_const", "constant_null", "flat_null", "borrowed_null"} {
+	for _, shape := range []string{"x_const", "y_const", "both_const", "constant_null", "flat_null"} {
 		t.Run(shape, func(t *testing.T) {
 			p := testutil.NewProcess(t)
 			defer p.Free()
@@ -331,21 +331,11 @@ func TestDecimalMulSubRepresentations(t *testing.T) {
 				input.Vecs[1] = vector.NewConstNull(types.New(types.T_decimal64, 15, 2), 3, p.Mp())
 			}
 			if shape == "flat_null" {
-				nulls.Add(input.Vecs[1].GetNulls(), 1)
-			}
-			if shape == "borrowed_null" {
-				validity := []byte{0b101}
-				lease, err := vector.NewRefCountedBufferLease(validity, 1, nil)
-				require.NoError(t, err)
-				require.NoError(t, input.Vecs[1].GetNulls().InstallBorrowedValidity(validity, 0, 3, 1, lease))
-				lease.Release()
+				input.Vecs[1].GetNulls().Add(1)
 			}
 			for _, mask := range [][]bool{nil, {false, true, true}, {false, false, false}} {
 				got, err := ex.Eval(p, []*batch.Batch{input}, mask)
 				require.NoError(t, err)
-				if shape == "borrowed_null" && mask == nil {
-					require.True(t, input.Vecs[1].GetNulls().HasBorrowedValidity())
-				}
 				values := append([]types.Decimal128(nil), vector.MustFixedColNoTypeCheck[types.Decimal128](got)...)
 				isNull := make([]bool, 3)
 				for i := range isNull {

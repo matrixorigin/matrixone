@@ -46,6 +46,13 @@ func TestPhysicalIndexRelationClassification(t *testing.T) {
 			require.Equal(t, tc.want, RequiresPrivilegedRelationAccess(tc.name, tc.kind, 0))
 		})
 	}
+	t.Run("external relation with reserved name", func(t *testing.T) {
+		const name = "__mo_index_events"
+		require.False(t, RequiresPrivilegedRelationAccess(name, SystemExternalRel, 0))
+		require.True(t, RequiresPrivilegedRelationAccess(name, SystemExternalRel, features.IndexTable))
+		require.True(t, RequiresPrivilegedRelationAccess(name, SystemOrdinaryRel, 0))
+		require.True(t, RequiresPrivilegedRelationAccess(name, "unregistered_plugin_kind", 0))
+	})
 	for _, kind := range append(userVisibleRelationKinds[:], "", SystemTemporaryTable, SystemPersistRel, SystemTransientRel, "V") {
 		t.Run("core/"+kind, func(t *testing.T) {
 			require.False(t, RequiresPrivilegedRelationAccess("ordinary", kind, 0))

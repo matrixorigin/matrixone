@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -618,7 +617,7 @@ func (ses *Session) setUserDefinedVarWithKind(
 	value interface{},
 	sql string,
 	isBin bool,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 ) error {
 	return ses.setUserDefinedVarWithTypeAndKind(
 		name, value, sql, isBin, inferUserDefinedVarType(value), kind)
@@ -629,7 +628,7 @@ func (ses *Session) setUserDefinedVarWithKindAndReplayability(
 	value interface{},
 	sql string,
 	isBin bool,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 	replayable bool,
 ) error {
 	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
@@ -642,7 +641,7 @@ func (ses *Session) setUserDefinedVarWithTypeAndKind(
 	sql string,
 	isBin bool,
 	typ plan.Type,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 ) error {
 	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
 		name, value, sql, isBin, typ, kind, false)
@@ -654,7 +653,7 @@ func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
 	sql string,
 	isBin bool,
 	typ plan.Type,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 	replayable bool,
 	runtimeDomains ...types.RuntimeStringDomain,
 ) error {

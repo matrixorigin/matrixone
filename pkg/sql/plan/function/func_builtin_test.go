@@ -407,9 +407,9 @@ func TestBuiltInNameConst(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, result.PreExtendAndReset(3))
 	require.NoError(t, builtInNameConst([]*vector.Vector{nameVec, valueVec}, result, proc, 3, nil))
-	require.True(t, nulls.Contains(result.GetResultVector().GetNulls(), 0))
-	require.True(t, nulls.Contains(result.GetResultVector().GetNulls(), 1))
-	require.True(t, nulls.Contains(result.GetResultVector().GetNulls(), 2))
+	require.True(t, result.GetResultVector().GetNulls().Contains(0))
+	require.True(t, result.GetResultVector().GetNulls().Contains(1))
+	require.True(t, result.GetResultVector().GetNulls().Contains(2))
 }
 
 func Test_BuiltIn_Rpad(t *testing.T) {

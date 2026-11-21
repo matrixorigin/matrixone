@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -229,7 +228,7 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 				return err
 			}
 			for j := 0; j < rows; j++ {
-				nulls.Add(vecTmp.GetNulls(), uint64(j))
+				vecTmp.GetNulls().Add(uint64(j))
 			}
 		} else if catalog.ContainExternalHidenCol(param.Attrs[i].ColName) {
 			if rows == 0 {

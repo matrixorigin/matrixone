@@ -1461,7 +1461,7 @@ func doSetVar(
 	var userVarIsBin bool
 	var userVarRuntimeDomain types.RuntimeStringDomain
 	var userVarType plan.Type
-	var userVarPrepareParamKind vector.PrepareParamKind
+	var userVarPrepareParamKind types.StringConversionKind
 	type evaluatedAssignment struct {
 		assign                  *tree.VarAssignmentExpr
 		value                   interface{}
@@ -1469,7 +1469,7 @@ func doSetVar(
 		userVarIsBin            bool
 		userVarRuntimeDomain    types.RuntimeStringDomain
 		valueType               plan.Type
-		userVarPrepareParamKind vector.PrepareParamKind
+		userVarPrepareParamKind types.StringConversionKind
 	}
 	type systemVarReplayabilitySnapshot struct {
 		replayable bool
@@ -1512,7 +1512,7 @@ func doSetVar(
 	}
 	evaluateAssignment := func(index int, assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
-		prepareParamKind := vector.PrepareParamNone
+		prepareParamKind := types.StringConversionString
 		var value interface{}
 		var valueType plan.Type
 		var runtimeDomain types.RuntimeStringDomain
@@ -6645,7 +6645,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetResolveVariableTypeFunc(ses.txnCompileCtx.ResolveVariableType)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
 	proc.SetResolveVariableStringDomainFunc(ses.txnCompileCtx.ResolveVariableStringDomain)
-	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
@@ -6961,6 +6960,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if resolveErr == nil {
 			admissionCtx := *execCtx
 			admissionCtx.input = currentInput
+			admissionCtx.cw = cw
 			if handler := ses.GetTxnHandler(); handler != nil && handler.GetTxn() != nil {
 				proc.Base.TxnOperator = handler.GetTxn()
 			}

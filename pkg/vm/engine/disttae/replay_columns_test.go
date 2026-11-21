@@ -85,9 +85,13 @@ func replayTestBatch(t *testing.T, mp *mpool.MPool, ids ...uint64) *batch.Batch 
 func TestConsumeReplayColumns(t *testing.T) {
 	t.Run("split and empty", func(t *testing.T) {
 		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
 		bs := []*batch.Batch{replayTestBatch(t, mp, 1, 2), replayTestBatch(t, mp), replayTestBatch(t, mp, 2), replayTestBatch(t, mp, 2, 3, 4)}
 		var groups [][]uint64
 		err := consumeReplayColumns(context.Background(), bs, mp, types.TS{}, func(b *batch.Batch) {
+			if len(groups) != 0 {
+				require.Empty(t, bs[0].Vecs, "release the first source before consuming the next group")
+			}
 			var got []uint64
 			for i := 0; i < b.RowCount(); i++ {
 				got = append(got, replayKey(b, i, 2).table)
@@ -97,10 +101,12 @@ func TestConsumeReplayColumns(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, [][]uint64{{1}, {2, 2, 2}, {3, 4}}, groups)
 		require.Zero(t, mp.CurrNB())
+		require.Zero(t, mp.OnHeapCurrNB())
 	})
 	for _, position := range []int{0, 1, 2} {
 		t.Run(string(rune('0'+position)), func(t *testing.T) {
 			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
 			bs := make([]*batch.Batch, 2, 3)
 			bs[0], bs[1] = replayTestBatch(t, mp, 1), replayTestBatch(t, mp, 2)
 			bs = append(bs, nil)
@@ -109,21 +115,26 @@ func TestConsumeReplayColumns(t *testing.T) {
 			err := consumeReplayColumns(context.Background(), bs, mp, types.TS{}, func(*batch.Batch) { t.Fatal("unexpected insert") })
 			require.Error(t, err)
 			require.Zero(t, mp.CurrNB())
+			require.Zero(t, mp.OnHeapCurrNB())
 		})
 	}
 	t.Run("order", func(t *testing.T) {
 		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
 		err := consumeReplayColumns(context.Background(), []*batch.Batch{replayTestBatch(t, mp, 2, 1)}, mp, types.TS{}, func(*batch.Batch) { t.Fatal("unexpected insert") })
 		require.Error(t, err)
 		require.Zero(t, mp.CurrNB())
+		require.Zero(t, mp.OnHeapCurrNB())
 	})
 	t.Run("cancel", func(t *testing.T) {
 		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		err := consumeReplayColumns(ctx, []*batch.Batch{replayTestBatch(t, mp, 1)}, mp, types.TS{}, func(*batch.Batch) { t.Fatal("unexpected insert") })
 		require.ErrorIs(t, err, context.Canceled)
 		require.Zero(t, mp.CurrNB())
+		require.Zero(t, mp.OnHeapCurrNB())
 	})
 }
 
@@ -131,6 +142,7 @@ func TestConsumeReplayColumns(t *testing.T) {
 // the consumer has released both borrowed windows and copied carry batches.
 func TestReplayColumnsParserOwnership(t *testing.T) {
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	packer := types.NewPacker()
 	defer packer.Close()
 	typ := types.T_uint64.ToType()
@@ -175,6 +187,7 @@ func TestReplayColumnsParserOwnership(t *testing.T) {
 	err = consumeReplayColumns(context.Background(), []*batch.Batch{makeBatch(a), makeBatch(b), makeBatch(c, d), makeBatch(e)}, mp, types.BuildTS(100, 0), insert)
 	require.NoError(t, err)
 	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
 	require.Len(t, parsed, 3)
 	byKey := make(map[[2]uint64]cache.Columns)
 	for i, key := range keys {
@@ -195,14 +208,15 @@ func TestReplayColumnsParserOwnership(t *testing.T) {
 	cache.InitTableItemWithColumns(item, cols)
 	require.Equal(t, 0, item.PrimaryIdx)
 	require.Equal(t, 1, item.ClusterByIdx)
-	require.Equal(t, a.Name, item.TableDef.Cols[0].Name)
-	require.Equal(t, "12345678901234567890", item.TableDef.Cols[0].Default.OriginString)
-	require.Equal(t, "c0 + 123456789", item.TableDef.Cols[1].OnUpdate.OriginString)
-	require.Equal(t, "c0 + c1 + 123456789", item.TableDef.Cols[2].GeneratedCol.OriginString)
+	require.Equal(t, a.Name, item.ReadPlanTableDef().Cols[0].Name)
+	require.Equal(t, "12345678901234567890", item.ReadPlanTableDef().Cols[0].Default.OriginString)
+	require.Equal(t, "c0 + 123456789", item.ReadPlanTableDef().Cols[1].OnUpdate.OriginString)
+	require.Equal(t, "c0 + c1 + 123456789", item.ReadPlanTableDef().Cols[2].GeneratedCol.OriginString)
 }
 
 func TestReplayColumnsCancelAndRetry(t *testing.T) {
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var first []uint64
@@ -213,6 +227,7 @@ func TestReplayColumnsCancelAndRetry(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, []uint64{1}, first)
 	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
 	var retry []uint64
 	err = consumeReplayColumns(context.Background(), []*batch.Batch{replayTestBatch(t, mp, 1), replayTestBatch(t, mp, 2)}, mp, types.TS{}, func(b *batch.Batch) {
 		for i := 0; i < b.RowCount(); i++ {
@@ -222,10 +237,12 @@ func TestReplayColumnsCancelAndRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []uint64{1, 2}, retry)
 	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
 }
 
 func TestReplayColumnsRejectsConflictingNames(t *testing.T) {
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	first, second := replayTestBatch(t, mp, 1), replayTestBatch(t, mp, 1)
 	second.Vecs[6].Free(mp)
 	second.Vecs[6] = vector.NewVec(types.T_varchar.ToType())
@@ -233,11 +250,13 @@ func TestReplayColumnsRejectsConflictingNames(t *testing.T) {
 	err := consumeReplayColumns(context.Background(), []*batch.Batch{first, second}, mp, types.TS{}, func(*batch.Batch) { t.Fatal("invalid input was published") })
 	require.Error(t, err)
 	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
 }
 
 // Cancellation after a window is inserted still leaves a split table in carry.
 func TestReplayColumnsCancelWithCarryAndDeadline(t *testing.T) {
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var inserted []uint64
@@ -248,6 +267,7 @@ func TestReplayColumnsCancelWithCarryAndDeadline(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, []uint64{1}, inserted)
 	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
 
 	deadline, stop := context.WithDeadline(context.Background(), time.Unix(0, 0))
 	defer stop()
@@ -256,6 +276,7 @@ func TestReplayColumnsCancelWithCarryAndDeadline(t *testing.T) {
 	})
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
 
 	inserted = nil
 	err = consumeReplayColumns(context.Background(), []*batch.Batch{replayTestBatch(t, mp, 1, 2), replayTestBatch(t, mp, 2, 3)}, mp, types.TS{}, func(b *batch.Batch) {
@@ -266,6 +287,7 @@ func TestReplayColumnsCancelWithCarryAndDeadline(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []uint64{1, 2, 2, 3}, inserted)
 	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
 }
 
 // TestReplayPartialCopyFailure verifies the cleanup owners after a failure has
@@ -274,6 +296,7 @@ func TestReplayPartialCopyFailure(t *testing.T) {
 	injected := errors.New("injected allocation failure")
 	t.Run("timestamp", func(t *testing.T) {
 		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
 		bs := []*batch.Batch{replayTestBatch(t, mp, 1, 1), replayTestBatch(t, mp, 2)}
 		beforeHeap := mp.OnHeapCurrNB()
 		calls := 0
@@ -294,6 +317,7 @@ func TestReplayPartialCopyFailure(t *testing.T) {
 	})
 	t.Run("carry", func(t *testing.T) {
 		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
 		bs := []*batch.Batch{replayTestBatch(t, mp, 1), replayTestBatch(t, mp, 1)}
 		called := false
 		err := consumeReplayColumnsWithFaults(context.Background(), bs, mp, types.TS{}, func(*batch.Batch) {
@@ -374,7 +398,7 @@ func TestReplayPartialInsertRetryCache(t *testing.T) {
 		})
 	require.ErrorIs(t, err, injected)
 	require.Equal(t, 3, calls)
-	require.Equal(t, []string{"keep", "stale"}, []string{cc.GetTableByName(1, 8, "first").TableDef.Cols[0].Name, cc.GetTableByName(1, 8, "first").TableDef.Cols[1].Name})
+	require.Equal(t, []string{"keep", "stale"}, []string{cc.GetTableByName(1, 8, "first").ReadPlanTableDef().Cols[0].Name, cc.GetTableByName(1, 8, "first").ReadPlanTableDef().Cols[1].Name})
 	require.False(t, cc.CanServe(ts))
 	require.Zero(t, mp.CurrNB())
 	require.Zero(t, mp.OnHeapCurrNB())
@@ -383,10 +407,10 @@ func TestReplayPartialInsertRetryCache(t *testing.T) {
 	err = consumeReplayColumns(t.Context(), []*batch.Batch{makeBatch(first), makeBatch(second)}, mp, ts, cc.InsertColumns)
 	require.NoError(t, err)
 	got := cc.GetTableByName(1, 8, "first")
-	require.NotNil(t, got.TableDef)
-	require.Len(t, got.TableDef.Cols, 1)
-	require.Equal(t, "keep", got.TableDef.Cols[0].Name)
-	require.Equal(t, "other", cc.GetTableByName(1, 8, "second").TableDef.Cols[0].Name)
+	require.NotNil(t, got.ReadPlanTableDef())
+	require.Len(t, got.ReadPlanTableDef().Cols, 1)
+	require.Equal(t, "keep", got.ReadPlanTableDef().Cols[0].Name)
+	require.Equal(t, "other", cc.GetTableByName(1, 8, "second").ReadPlanTableDef().Cols[0].Name)
 	require.Zero(t, mp.CurrNB())
 	require.Zero(t, mp.OnHeapCurrNB())
 }

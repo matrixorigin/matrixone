@@ -9015,7 +9015,7 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -9031,13 +9031,13 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
 			resultVal, ok := inetAtonValue(ipStr)
 			if !ok {
 				// Invalid IP: return NULL for all rows
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 			} else {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
@@ -9190,38 +9190,6 @@ func InetNtoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		}, selectList)
 	default:
 		return moerr.NewInvalidInputNoCtxf("INET_NTOA does not support input type %s", argType.Oid.String())
-	}
-}
-
-func inetNtoaPreparedText(value []byte, kind vector.PrepareParamKind) (string, error) {
-	switch kind {
-	case vector.PrepareParamFloat:
-		floating, err := strconv.ParseFloat(string(value), 64)
-		if err != nil {
-			return "", err
-		}
-		return inetNtoaReal(floating)
-	case vector.PrepareParamDecimal:
-		integer, err := roundPreparedDecimalIntegerString(string(value))
-		if err != nil {
-			return "", err
-		}
-		number, err := strconv.ParseInt(integer, 10, 64)
-		if err != nil {
-			return "", err
-		}
-		return inetNtoaSigned(number)
-	case vector.PrepareParamBoolean:
-		switch strings.ToLower(string(value)) {
-		case "true", "1":
-			return inetNtoaUnsigned(1)
-		case "false", "0":
-			return inetNtoaUnsigned(0)
-		default:
-			return inetNtoaUnsigned(0)
-		}
-	default:
-		return inetNtoaSigned(parseMySQLIntegerPrefix(value))
 	}
 }
 
@@ -9390,10 +9358,6 @@ func InetNtoaDynamic(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			if null {
 				return "", true, nil
 			}
-			if kind := param.GetPrepareParamKindAt(int(i)); kind != vector.PrepareParamNone {
-				text, err := inetNtoaPreparedText(value, kind)
-				return text, err != nil, err
-			}
 			return appendSigned(parseMySQLIntegerPrefix(value), false)
 		}
 	case types.T_year:
@@ -9453,7 +9417,7 @@ func executeIPPredicate[T ipPredicateResult](
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -9469,7 +9433,7 @@ func executeIPPredicate[T ipPredicateResult](
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			var resultVal T
 			if predicate(v1) {
@@ -10289,7 +10253,7 @@ func OctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	err := opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, func(v []byte, row int) (string, error) {
 		if len(v) == 0 {
 			if ivecs[0].IsConst() {
-				nulls.AddRange(resultNulls, 0, uint64(length))
+				resultNulls.AddRange(0, uint64(length))
 			} else {
 				resultNulls.Add(uint64(row))
 			}
@@ -10734,41 +10698,10 @@ func randomBytesTextLength(
 	row uint64,
 	proc *process.Process,
 ) (int64, error) {
-	kind := param.GetPrepareParamKindAt(int(row))
-	switch kind {
-	case vector.PrepareParamFloat, vector.PrepareParamDecimal:
-		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
-		// SQL PREPARE stores the value in a text transport vector. The source
-		// kind is the distinction between a string literal (integer prefix) and
-		// a numeric value (round-to-even for FLOAT, exact half-up for DECIMAL).
-		if kind == vector.PrepareParamDecimal {
-			integer, err := roundPreparedDecimalIntegerString(text)
-			if err != nil {
-				return 0, randomBytesRangeError(proc)
-			}
-			return randomBytesRoundedDecimalIntegerString(integer, proc)
-		}
-		floating, err := strconv.ParseFloat(text, 64)
-		if err != nil {
-			return 0, randomBytesRangeError(proc)
-		}
-		return randomBytesRoundedFloat(floating, proc)
-	case vector.PrepareParamBoolean:
-		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
-		boolean, err := strconv.ParseBool(text)
-		if err != nil {
-			return 0, randomBytesRangeError(proc)
-		}
-		if boolean {
-			return 1, nil
-		}
-		return 0, nil
-	default:
-		// Keep ordinary character values byte-oriented. In particular, MySQL
-		// only ignores ASCII whitespace before the numeric prefix; using
-		// strings.TrimSpace here would incorrectly accept Unicode whitespace.
-		return parseMySQLIntegerPrefix(value), nil
-	}
+	// Keep ordinary character values byte-oriented. In particular, MySQL
+	// only ignores ASCII whitespace before the numeric prefix; using
+	// strings.TrimSpace here would incorrectly accept Unicode whitespace.
+	return parseMySQLIntegerPrefix(value), nil
 }
 
 func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (randomBytesLengthGetter, error) {
