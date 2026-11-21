@@ -53,7 +53,7 @@ func resolvePressureCgroup(limit uint64, err error) (uint64, error) {
 	if errors.Is(err, memlimit.ErrNoCgroup) {
 		var st unix.Statfs_t
 		if statErr := unix.Statfs("/sys/fs/cgroup", &st); statErr == nil {
-			return 0, moerr.NewInternalErrorNoCtx("cgroup mode unavailable despite an accessible mount")
+			return 0, moerr.NewInternalError(moerr.NoReportContext(), "cgroup mode unavailable despite an accessible mount")
 		} else if !errors.Is(statErr, unix.ENOENT) {
 			return 0, statErr
 		}
@@ -78,7 +78,7 @@ func pressureCgroupV2Directory(mount, dir string) (uint64, error) {
 	mount, dir = filepath.Clean(mount), filepath.Clean(dir)
 	rel, err := filepath.Rel(mount, dir)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return 0, moerr.NewInternalErrorNoCtx("cgroup path outside mount")
+		return 0, moerr.NewInternalError(moerr.NoReportContext(), "cgroup path outside mount")
 	}
 	var minimum uint64
 	for {
@@ -103,7 +103,7 @@ func pressureCgroupV2Directory(mount, dir string) (uint64, error) {
 		} else if value := strings.TrimSpace(string(data)); value != "max" {
 			n, parseErr := strconv.ParseUint(value, 10, 63)
 			if parseErr != nil || n == 0 {
-				return 0, moerr.NewInternalErrorNoCtxf("invalid cgroup v2 memory limit %q", value)
+				return 0, moerr.NewInternalErrorf(moerr.NoReportContext(), "invalid cgroup v2 memory limit %q", value)
 			}
 			if minimum == 0 || n < minimum {
 				minimum = n
@@ -167,7 +167,7 @@ func parsePressureCgroupMount(data []byte, group, fsType string) (string, string
 		}
 	}
 	if bestMount == "" {
-		return "", "", moerr.NewInternalErrorNoCtxf("memory cgroup mount not found for %q", group)
+		return "", "", moerr.NewInternalErrorf(moerr.NoReportContext(), "memory cgroup mount not found for %q", group)
 	}
 	return bestMount, bestDir, nil
 }
@@ -184,10 +184,10 @@ func parseCgroupV1Limit(data []byte, page uint64) (uint64, error) {
 				return 0, memlimit.ErrNoLimit
 			}
 			if value == 0 || value > uint64(^uint64(0)>>1) {
-				return 0, moerr.NewInternalErrorNoCtx("invalid cgroup v1 memory limit")
+				return 0, moerr.NewInternalError(moerr.NoReportContext(), "invalid cgroup v1 memory limit")
 			}
 			return value, nil
 		}
 	}
-	return 0, moerr.NewInternalErrorNoCtx("cgroup hierarchical memory limit missing")
+	return 0, moerr.NewInternalError(moerr.NoReportContext(), "cgroup hierarchical memory limit missing")
 }
