@@ -423,16 +423,16 @@ func TestBinaryStringAdditionalTransformsAndMask(t *testing.T) {
 }
 
 func TestBinaryStringBoundaryHelpers(t *testing.T) {
-	left, right := substringBounds(3, math.MinInt64, math.MaxInt64, true)
+	left, right := StringSliceBounds(3, math.MinInt64, math.MaxInt64, true)
 	require.Equal(t, 0, left)
 	require.Equal(t, 0, right)
-	left, right = substringBounds(3, -1, math.MaxInt64, true)
+	left, right = StringSliceBounds(3, -1, math.MaxInt64, true)
 	require.Equal(t, 2, left)
 	require.Equal(t, 3, right)
-	left, right = substringBounds(3, 1, math.MinInt64, true)
+	left, right = StringSliceBounds(3, 1, math.MinInt64, true)
 	require.Equal(t, 0, left)
 	require.Equal(t, 0, right)
-	left, right = substringBounds(3, math.MaxInt64, 1, false)
+	left, right = StringSliceBounds(3, math.MaxInt64, 1, false)
 	require.Equal(t, 0, left)
 	require.Equal(t, 0, right)
 
