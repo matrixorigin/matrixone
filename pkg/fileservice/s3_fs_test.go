@@ -3422,6 +3422,128 @@ func TestS3FSOrdinarySparseRangeRead(t *testing.T) {
 	}
 }
 
+var errTestHDFSSeek = errors.New("test HDFS seek beyond EOF")
+
+// hdfsSeekReader models the bounds check in colinmarc/hdfs FileReader.Seek.
+type hdfsSeekReader struct {
+	size, offset int64
+}
+
+func (r *hdfsSeekReader) Seek(offset int64, whence int) (int64, error) {
+	if whence != io.SeekStart || offset < 0 || offset > r.size {
+		return r.offset, errTestHDFSSeek
+	}
+	r.offset = offset
+	return offset, nil
+}
+
+func (r *hdfsSeekReader) Read(p []byte) (int, error) {
+	if r.offset == r.size {
+		return 0, io.EOF
+	}
+	n := int(min(int64(len(p)), r.size-r.offset))
+	clear(p[:n])
+	r.offset += int64(n)
+	return n, nil
+}
+
+type hdfsSeekStorage struct {
+	dummyObjectStorage
+	size   int64
+	ranges [][2]int64
+	closes int
+}
+
+func (s *hdfsSeekStorage) Read(_ context.Context, key string, min, max *int64) (io.ReadCloser, error) {
+	s.ranges = append(s.ranges, [2]int64{*min, *max})
+	reader, err := readObjectRange(&hdfsSeekReader{size: s.size}, key, min, max)
+	if err != nil {
+		s.closes++ // HDFS.Read closes its opened file on an error.
+		return nil, err
+	}
+	return &readCloser{r: reader, closeFunc: func() error { s.closes++; return nil }}, nil
+}
+
+func TestS3FSOrdinarySparseHDFSSeekBounds(t *testing.T) {
+	const far = int64(16 << 20)
+	for _, tc := range []struct {
+		name       string
+		hdfs       bool
+		size       int64
+		offsets    [2]int64
+		wantRanges [][2]int64
+		wantErr    error
+		short      bool
+	}{
+		{"later beyond EOF", true, 8192, [2]int64{0, far}, [][2]int64{{0, far + 4096}}, nil, true},
+		{"first beyond EOF", true, 8192, [2]int64{far, 2 * far}, [][2]int64{{far, 2*far + 4096}}, errTestHDFSSeek, false},
+		{"first at EOF", true, 8192, [2]int64{8192, far}, [][2]int64{{8192, far + 4096}}, nil, true},
+		{"success", true, far + 4096, [2]int64{0, far}, [][2]int64{{0, far + 4096}}, nil, false},
+		{"non-HDFS control", false, 8192, [2]int64{0, far}, [][2]int64{{0, 4096}, {far, far + 4096}}, errTestHDFSSeek, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			storage := &hdfsSeekStorage{size: tc.size}
+			fs.storage = storage
+			if tc.hdfs {
+				fs.rawStorage = &HDFS{}
+			} else {
+				fs.rawStorage = storage
+			}
+			cache := &publicationVectorCache{}
+			vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{cache}, Entries: []IOEntry{
+				{Offset: tc.offsets[0], Size: 4096}, {Offset: tc.offsets[1], Size: 4096},
+			}}
+			t.Cleanup(vector.Release)
+			err = fs.Read(ctx, vector)
+			switch {
+			case tc.short:
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF), "%v", err)
+			case tc.wantErr != nil:
+				require.ErrorIs(t, err, tc.wantErr)
+			default:
+				require.NoError(t, err)
+				for _, entry := range vector.Entries {
+					require.Equal(t, make([]byte, 4096), entry.Data)
+				}
+			}
+			require.Equal(t, tc.wantRanges, storage.ranges)
+			require.Equal(t, len(tc.wantRanges), storage.closes)
+			if err != nil {
+				require.Zero(t, cache.updates.Load())
+			} else {
+				require.EqualValues(t, 1, cache.updates.Load())
+			}
+		})
+	}
+	t.Run("partial cache with two misses", func(t *testing.T) {
+		ctx := t.Context()
+		fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
+		require.NoError(t, err)
+		t.Cleanup(func() { fs.Close(context.Background()) })
+		storage := &hdfsSeekStorage{size: 8192}
+		fs.storage, fs.rawStorage = storage, &HDFS{}
+		hit := &sparseFirstEntryCache{}
+		miss := &publicationVectorCache{}
+		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{hit, miss}, Entries: []IOEntry{
+			{Offset: 0, Size: 4096}, {Offset: 4096, Size: 4096}, {Offset: far, Size: 4096},
+		}}
+		t.Cleanup(vector.Release)
+		err = fs.Read(ctx, vector)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF), "%v", err)
+		require.Equal(t, []byte("cached"), vector.Entries[0].Data)
+		require.Equal(t, [][2]int64{{4096, far + 4096}}, storage.ranges)
+		require.Equal(t, 1, storage.closes)
+		require.EqualValues(t, 1, hit.reads.Load())
+		require.EqualValues(t, 1, miss.reads.Load())
+		require.Zero(t, hit.updates.Load())
+		require.Zero(t, miss.updates.Load())
+	})
+}
+
 type sparseFailureStorage struct {
 	dummyObjectStorage
 	calls int

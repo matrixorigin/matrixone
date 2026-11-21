@@ -1180,7 +1180,11 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 			}
 		}
 		if expensive && buffered && ordered && misses <= 4 {
-			return s.readEntriesIndividually(ctx, vector)
+			// HDFS Seek returns a non-HTTP error for offsets past EOF. Keep the
+			// envelope read so a later short range retains its existing error.
+			if _, isHDFS := s.rawStorage.(*HDFS); !isHDFS {
+				return s.readEntriesIndividually(ctx, vector)
+			}
 		}
 	}
 
