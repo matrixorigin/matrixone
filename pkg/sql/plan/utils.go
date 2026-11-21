@@ -3760,6 +3760,9 @@ func resetPreparePlan(
 				}
 			}
 		}
+		if transientQuery != nil {
+			subqueryRoots.pending = append(subqueryRoots.pending, transientQuery.Steps...)
+		}
 		visitedRoots := make(map[int32]struct{})
 		for len(subqueryRoots.pending) > 0 {
 			root := subqueryRoots.pending[0]
@@ -3808,6 +3811,7 @@ func resetPreparePlan(
 			querySchemas = appendPrepareSchemas(
 				querySchemas, transientQuery.GetCatalogDependencies()...)
 		}
+		querySchemas = appendPrepareSchemas(nil, querySchemas...)
 		return querySchemas, getParamRule.paramTypes, nil
 	}
 

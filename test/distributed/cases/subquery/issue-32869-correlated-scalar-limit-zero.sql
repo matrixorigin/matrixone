@@ -228,6 +228,14 @@ set @v_before = 31, @v_outer = 11, @v_after = 33;
 execute issue_32869_set using @v_before, @v_outer, @v_after;
 select @before, @answer, @after;
 deallocate prepare issue_32869_set;
+prepare issue_32869_set_simple_case from 'set @case_answer = case (select (select o.a from inner_rows i where i.d > o.a limit 0) from outer_rows o where o.a = 1 limit 1) when 1 then 11 when 2 then 12 else 13 end';
+execute issue_32869_set_simple_case;
+select @case_answer;
+deallocate prepare issue_32869_set_simple_case;
+prepare issue_32869_set_udf_null from 'set @udf_answer = (select issue_32869_identity(cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0)) from outer_rows o where o.a = 1 limit 1)';
+execute issue_32869_set_udf_null;
+select @udf_answer;
+deallocate prepare issue_32869_set_udf_null;
 
 -- @teardown
 drop database test_issue_32869;

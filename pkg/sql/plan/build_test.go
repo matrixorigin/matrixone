@@ -11177,3 +11177,17 @@ func TestPreparedSetRetainsFoldedZeroScalarSourcesAfterRebinding(t *testing.T) {
 	}
 	require.ElementsMatch(t, []string{"nation", "region"}, names)
 }
+
+func TestPreparedSetRetainsRepeatedCaseSubquerySources(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = case (select (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n where n.n_nationkey = ? limit 1) when 1 then 11 when 2 then 12 else 13 end'")
+	require.NoError(t, err)
+	prepared := p.GetDcl().GetPrepare()
+	require.Len(t, prepared.ParamTypes, 1)
+	names := make([]string, 0, len(prepared.Schemas))
+	for _, schema := range prepared.Schemas {
+		names = append(names, schema.ObjName)
+	}
+	require.ElementsMatch(t, []string{"nation", "region"}, names)
+}

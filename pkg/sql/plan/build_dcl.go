@@ -739,7 +739,7 @@ func buildDeallocate(stmt *tree.Deallocate, _ CompilerContext) (*Plan, error) {
 // frontend has evaluated and authorized it through a synthetic SELECT.
 func BindSetVariableResultType(expr tree.Expr, ctx CompilerContext, prepared bool) (*Expr, error) {
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, prepared, false)
-	builder.zeroScalarPolicy = zeroScalarValidateOnly
+	builder.zeroScalarPolicy = zeroScalarExecutable
 	bindCtx := NewBindContext(builder, nil)
 	binder := NewProjectionBinder(builder, bindCtx, NewHavingBinder(builder, bindCtx))
 	return binder.BindExpr(expr, 0, false)
@@ -757,6 +757,8 @@ func buildSetVariablesWithQuery(
 ) (*Plan, *Query, error) {
 	var err error
 	items := make([]*plan.SetVariablesItem, len(stmt.Assignments))
+	preparedSetRoots := make([]int32, 0)
+	seenPreparedSetRoots := make(map[int32]struct{})
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	binder := NewWhereBinder(builder, &BindContext{})
@@ -802,8 +804,21 @@ func buildSetVariablesWithQuery(
 				return nil, nil, err
 			}
 		}
+		for _, subquery := range subqueries {
+			for _, nodeID := range boundSubqueries[subquery] {
+				if _, seen := seenPreparedSetRoots[nodeID]; seen {
+					continue
+				}
+				seenPreparedSetRoots[nodeID] = struct{}{}
+				preparedSetRoots = append(preparedSetRoots, nodeID)
+			}
+		}
 		items[idx] = item
 	}
+	// Prepared SET execution replays the original expression AST. Keep every
+	// bound subquery root available for dependency and parameter discovery even
+	// when expression folding removes its reference from the prepared value.
+	builder.qry.Steps = append(builder.qry.Steps, preparedSetRoots...)
 	setVariables := &plan.SetVariables{
 		Items: items,
 	}
@@ -820,8 +835,8 @@ func buildSetVariablesWithQuery(
 	}, builder.qry, nil
 }
 
-// Prepared SET keeps the AST subqueries in bound-expression order for schema
-// capture and same-session expression replay.
+// Prepared SET replays its source expression, so dependency discovery must
+// retain bound subquery roots even when folding removes their value references.
 func validatePreparedSetScalarReplay(
 	builder *QueryBuilder,
 	value *Expr,
@@ -841,39 +856,38 @@ func validatePreparedSetScalarReplay(
 			return cannotReplay()
 		}
 	}
-	pos := 0
-	usedNodeIDs := make(map[int32]struct{}, len(subqueries))
+
+	boundSources := make(map[int32]*tree.Subquery)
+	for _, subquery := range subqueries {
+		nodeIDs := bound[subquery]
+		if len(nodeIDs) == 0 {
+			return cannotReplay()
+		}
+		for _, nodeID := range nodeIDs {
+			if existing, ok := boundSources[nodeID]; ok && existing != subquery {
+				return cannotReplay()
+			}
+			boundSources[nodeID] = subquery
+		}
+	}
+
 	var visit func(*Expr) error
 	visit = func(expr *Expr) error {
 		if expr == nil {
 			return nil
 		}
 		if ref := expr.GetSub(); ref != nil {
-			if pos == len(subqueries) || ref.Child != nil {
+			subquery, ok := boundSources[ref.NodeId]
+			if !ok || ref.Child != nil {
 				return cannotReplay()
 			}
-			if subqueries[pos].Exists {
+			if subquery.Exists {
 				if ref.Typ != plan.SubqueryRef_EXISTS && ref.Typ != plan.SubqueryRef_NOT_EXISTS {
 					return cannotReplay()
 				}
 			} else if ref.Typ != plan.SubqueryRef_SCALAR || ref.RowSize != 1 {
 				return cannotReplay()
 			}
-			nodeIDs := bound[subqueries[pos]]
-			matched := false
-			for _, nodeID := range nodeIDs {
-				if nodeID == ref.NodeId {
-					if _, alreadyUsed := usedNodeIDs[nodeID]; !alreadyUsed {
-						usedNodeIDs[nodeID] = struct{}{}
-						matched = true
-						break
-					}
-				}
-			}
-			if !matched {
-				return cannotReplay()
-			}
-			pos++
 			return nil
 		}
 		if expr.GetDependent() != nil {
@@ -915,9 +929,6 @@ func validatePreparedSetScalarReplay(
 	}
 	if err := visit(value); err != nil {
 		return err
-	}
-	if pos != len(subqueries) {
-		return cannotReplay()
 	}
 	return nil
 }
