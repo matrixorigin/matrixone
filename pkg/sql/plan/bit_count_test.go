@@ -255,6 +255,65 @@ func TestBitCountPredicateFoldUsesBindingContext(t *testing.T) {
 	require.False(t, bitCountWhereIsEffectivelyTrue(builder, ctx))
 }
 
+func TestBitCountPredicateProofHandlesLongPredicatesAndBoundedStrings(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	builder := &QueryBuilder{compCtx: NewEmptyCompilerContext(proc)}
+
+	filters := make([]*pb.Expr, 12)
+	for i := range filters {
+		text := makePlan2StringConstExprWithType(string(rune('a' + i)))
+		filter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "like", []*pb.Expr{text, DeepCopyExpr(text)})
+		require.NoError(t, err)
+		filters[i] = filter
+	}
+
+	ctx := &BindContext{}
+	ctx.setWhereFilters(filters)
+	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "distinct eligible conjuncts must not share an arbitrary node cutoff")
+	require.True(t, ctx.bitCountWhereProofKnown)
+	require.True(t, ctx.bitCountWhereProofValue)
+	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "repeat probes should use the cached scope proof")
+	proofContext := builder.GetContext()
+	cancelledContext, cancel := context.WithCancel(proofContext)
+	cancel()
+	builder.compCtx.SetContext(cancelledContext)
+	require.False(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "a cached proof must not bypass the current request cancellation")
+	builder.compCtx.SetContext(proofContext)
+	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "restoring the active request context may reuse the proof")
+
+	longDisjunction := DeepCopyExpr(filters[0])
+	for _, filter := range filters[1:] {
+		var err error
+		longDisjunction, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*pb.Expr{longDisjunction, DeepCopyExpr(filter)})
+		require.NoError(t, err)
+	}
+	ctx.setWhereFilters([]*pb.Expr{longDisjunction})
+	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "one large pure boolean tree must be admitted")
+	ctx.setWhereFilters(append(append([]*pb.Expr(nil), filters...), makePlan2BoolConstExprWithType(false)))
+	require.False(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "a false suffix must retain the materialization boundary")
+	null := &pb.Expr{Typ: pb.Type{Id: int32(types.T_bool)}, Expr: &pb.Expr_Lit{Lit: &pb.Literal{Isnull: true}}}
+	ctx.setWhereFilters(append(append([]*pb.Expr(nil), filters...), null))
+	require.False(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "a NULL suffix must retain the materialization boundary")
+
+	makeLengthPredicate := func(size int64) *pb.Expr {
+		space, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "space", []*pb.Expr{makePlan2Int64ConstExprWithType(size)})
+		require.NoError(t, err)
+		length, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "length", []*pb.Expr{space})
+		require.NoError(t, err)
+		predicate, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*pb.Expr{length, makePlan2Int64ConstExprWithType(size)})
+		require.NoError(t, err)
+		return predicate
+	}
+	ctx.setWhereFilters([]*pb.Expr{makeLengthPredicate(65536)})
+	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "bounded 64 KiB string output should fold")
+	largeSpace, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "space", []*pb.Expr{makePlan2Int64ConstExprWithType(64 << 20)})
+	require.NoError(t, err)
+	budget := &speculativeConstantFoldBudget{ctx: builder.GetContext()}
+	require.False(t, isSpeculativeConstantFoldSafe(largeSpace, budget), "the allocation guard must reject a raw 64 MiB string")
+	ctx.setWhereFilters([]*pb.Expr{makeLengthPredicate(64 << 20)})
+	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "SPACE length should fold symbolically without allocating its output")
+}
+
 func TestBitCountConditionalBinding(t *testing.T) {
 	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	queryPlan, err := runOneStmt(optimizer, t, `select

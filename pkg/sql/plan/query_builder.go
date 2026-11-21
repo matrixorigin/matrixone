@@ -9659,7 +9659,7 @@ func (builder *QueryBuilder) bindWhere(
 	// is flattening one conjunct. Publish the complete bound WHERE list before
 	// walking it so the optimization is independent of SQL predicate order.
 	// The list is replaced with the flattened predicates below.
-	ctx.whereFilters = whereList
+	ctx.setWhereFilters(whereList)
 	// Apply total, subquery-independent conjuncts before building the domain
 	// of a dependent subquery. Otherwise replay can start recursive partitions
 	// for rows that these conjuncts remove. Keep unsafe predicates in place:
@@ -9702,7 +9702,7 @@ func (builder *QueryBuilder) bindWhere(
 			return
 		}
 	}
-	ctx.whereFilters = boundFilterList
+	ctx.setWhereFilters(boundFilterList)
 
 	newNodeID = nodeID
 	return

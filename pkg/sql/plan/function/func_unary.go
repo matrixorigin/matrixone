@@ -1019,16 +1019,65 @@ func IsBitCountFloatOverload(overload int32) bool {
 		overload >= bitCountTruncatedFloat32Overload && overload <= BitCountFloat64ExpressionOverload
 }
 
-func bitCountFloatField[T constraints.Float](upperBound float64, saturated int64) executeLogicOfOverload {
+func bitCountFloatField[T constraints.Float](upperBound float64, saturated int64, rowScopedWarning bool) executeLogicOfOverload {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-		return opUnaryFixedToFixedWithErrorCheck[T, uint64](ivecs, result, proc, length, func(v T) (uint64, error) {
+		constantInput := ivecs[0].IsConst()
+		err := opUnaryFixedToFixedWithErrorCheck[T, uint64](ivecs, result, proc, length, func(v T) (uint64, error) {
 			rounded := math.RoundToEven(float64(v))
 			if rounded >= upperBound {
+				if rowScopedWarning && !constantInput {
+					appendBitCountFloatFieldWarning(proc, float64(v))
+				}
 				return bitCountFromSignedInt64Pattern(saturated), nil
+			}
+			if rowScopedWarning && rounded <= float64(math.MinInt64) && !constantInput {
+				appendBitCountFloatFieldWarning(proc, float64(v))
 			}
 			return bitCountFromFloat(rounded, proc)
 		}, selectList)
+		if err != nil || !rowScopedWarning || !constantInput {
+			return err
+		}
+		activeRows := bitCountSelectedRowCount(selectList, length)
+		if activeRows == 0 {
+			return nil
+		}
+		input := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
+		value, isNull := input.GetValue(0)
+		if isNull || !bitCountFloatFieldValueOverflows(float64(value), upperBound) {
+			return nil
+		}
+		for range activeRows {
+			appendBitCountFloatFieldWarning(proc, float64(value))
+		}
+		return nil
 	}
+}
+
+func bitCountFloatFieldValueOverflows(value, upperBound float64) bool {
+	rounded := math.RoundToEven(value)
+	return rounded >= upperBound || rounded <= float64(math.MinInt64)
+}
+
+func bitCountSelectedRowCount(selectList *FunctionSelectList, length int) int {
+	if length <= 0 || selectList != nil && selectList.IgnoreAllRow() {
+		return 0
+	}
+	if selectList == nil || selectList.ShouldEvalAllRow() {
+		return length
+	}
+	selected := 0
+	for row := uint64(0); row < uint64(length); row++ {
+		if !selectList.Contains(row) {
+			selected++
+		}
+	}
+	return selected
+}
+
+func appendBitCountFloatFieldWarning(proc *process.Process, value float64) {
+	text := string(util.AppendMySQLFloat(nil, value, 64))
+	appendIntegerNumericCoercionWarning(proc, text, "", false, true)
 }
 
 func bitCountFloatExpression[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

@@ -372,6 +372,95 @@ func TestBitCountStringWarnings(t *testing.T) {
 	}
 }
 
+func TestBitCountFloatFieldDiagnostics(t *testing.T) {
+	fieldOverload, err := GetFunctionById(context.Background(), EncodeOverloadID(BIT_COUNT, BitCountFloat64FieldOverload))
+	require.NoError(t, err)
+	require.True(t, fieldOverload.HasRowScopedDiagnostics())
+
+	for _, tc := range []struct {
+		name         string
+		values       []float64
+		nulls        []bool
+		want         []uint64
+		wantNulls    []bool
+		mask         *FunctionSelectList
+		constant     bool
+		float32Field bool
+		wantTexts    []string
+	}{
+		{
+			name:      "one warning per overflow row",
+			values:    []float64{1e19, -1e19, 2.5},
+			want:      []uint64{63, 1, 1},
+			wantNulls: []bool{false, false, false},
+			wantTexts: []string{"Truncated incorrect INTEGER value: '1e19'", "Truncated incorrect INTEGER value: '-1e19'"},
+		},
+		{
+			name:      "constant partial selection",
+			values:    []float64{1e19},
+			want:      []uint64{63, 0, 63},
+			wantNulls: []bool{false, true, false},
+			mask:      &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}},
+			constant:  true,
+			wantTexts: []string{"Truncated incorrect INTEGER value: '1e19'", "Truncated incorrect INTEGER value: '1e19'"},
+		},
+		{
+			name:      "NULL does not warn",
+			values:    []float64{1e19},
+			nulls:     []bool{true},
+			want:      []uint64{0},
+			wantNulls: []bool{true},
+		},
+		{
+			name:         "float32 field remains warning free",
+			values:       []float64{1e19, -1e19},
+			want:         []uint64{1, 1},
+			wantNulls:    []bool{false, false},
+			float32Field: true,
+		},
+		{
+			name:      "constant all rows masked",
+			values:    []float64{1e19},
+			want:      []uint64{0, 0, 0},
+			wantNulls: []bool{true, true, true},
+			mask:      &FunctionSelectList{AnyNull: true, AllNull: true},
+			constant:  true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			if tc.float32Field {
+				values := []float32{float32(tc.values[0]), float32(tc.values[1])}
+				fc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{NewFunctionTestInput(types.T_float32.ToType(), values, nil)},
+					NewFunctionTestResult(types.T_uint64.ToType(), false, tc.want, tc.wantNulls),
+					bitCountFloatField[float32](0x1p63, math.MinInt64, false))
+				ok, info := fc.RunAndFree()
+				require.True(t, ok, info)
+				require.Empty(t, warnings.warnings)
+				return
+			}
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(), tc.values, tc.nulls)},
+				NewFunctionTestResult(types.T_uint64.ToType(), false, tc.want, tc.wantNulls),
+				bitCountFloatField[float64](0x1.fffffffffffffp62, math.MaxInt64, true)).WithSelectList(tc.mask)
+			if tc.constant {
+				fc.parameters[0].SetClass(vector.CONSTANT)
+				fc.fnLength = 3
+			}
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+			require.Len(t, warnings.warnings, len(tc.wantTexts))
+			for i, want := range tc.wantTexts {
+				require.Equal(t, uint16(moerr.ER_TRUNCATED_WRONG_VALUE), warnings.warnings[i].code)
+				require.Equal(t, want, warnings.warnings[i].msg)
+			}
+		})
+	}
+}
+
 func TestBitCountDirectDiagnostics(t *testing.T) {
 	for _, tc := range []struct {
 		name, value string

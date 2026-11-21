@@ -8925,14 +8925,18 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: BitCountFloat32FieldOverload,
 				args:       []types.T{types.T_float32},
 				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
-				newOp:      func() executeLogicOfOverload { return bitCountFloatField[float32](0x1p63, math.MinInt64) },
+				newOp:      func() executeLogicOfOverload { return bitCountFloatField[float32](0x1p63, math.MinInt64, false) },
 			},
 			{
-				// DOUBLE fields saturate inclusively at the largest double below 2^63.
-				overloadId: BitCountFloat64FieldOverload,
-				args:       []types.T{types.T_float64},
-				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
-				newOp:      func() executeLogicOfOverload { return bitCountFloatField[float64](0x1.fffffffffffffp62, math.MaxInt64) },
+				// DOUBLE field conversion emits one truncation warning per selected row
+				// when MySQL's signed integer conversion clamps either boundary.
+				overloadId:           BitCountFloat64FieldOverload,
+				rowScopedDiagnostics: true,
+				args:                 []types.T{types.T_float64},
+				retType:              func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp: func() executeLogicOfOverload {
+					return bitCountFloatField[float64](0x1.fffffffffffffp62, math.MaxInt64, true)
+				},
 			},
 			{
 				overloadId:           BitCountFloat32ExpressionOverload,
