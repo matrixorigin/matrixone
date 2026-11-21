@@ -118,8 +118,7 @@ func (m *memThrottler) ForceRefresh() {
 
 func (m *memThrottler) refresh(force bool) {
 	last := m.lastRefresh.Load()
-	sampledAt := time.Now()
-	now := sampledAt.UnixNano()
+	now := time.Now().UnixNano()
 
 	if !force && time.Duration(now-last) <= refreshMaxInterval {
 		return
@@ -127,24 +126,39 @@ func (m *memThrottler) refresh(force bool) {
 
 	m.lastRefresh.Store(now)
 
-	var (
-		err            error
-		cgroup         uint64
-		info           *process.MemoryInfoStat
-		total          uint64
-		reservedBefore int64
-	)
+	if m.proc == nil {
+		m.proc, _ = process.NewProcess(int32(os.Getpid()))
+	}
+	m.refreshMemory(m.proc.MemoryInfo, memlimit.FromCgroup)
+}
 
-	defer func() {
-		logutil.Info(
-			fmt.Sprintf("%s-Refresh", MemoryThrottlerLogHeader),
-			zap.String("detail", m.String()),
-			zap.Error(err),
+func (m *memThrottler) refreshMemory(
+	readRSS func() (*process.MemoryInfoStat, error),
+	readCgroup func() (uint64, error),
+) {
+	prevRSS := m.rss.Load()
+	prevBase := m.rssReservedBase.Load()
+	prevLiveBase := m.rssMpoolLiveBase.Load()
+	sample, rssErr := m.sampleRSS(readRSS)
+	if rssErr == nil {
+		m.rss.Store(sample.rss)
+		// Sample the S3 reservation base conservatively from the same refresh
+		// window as RSS. Using the smaller of the before/after counters avoids
+		// treating a concurrent new acquire as already reflected in the RSS
+		// sample. Any stale covered portion then decays not only when RSS drops
+		// but also when off-heap live bytes rise back toward the earlier live
+		// baseline, which means the freed S3 pages are being reused by other
+		// work and can no longer be treated as reusable S3 headroom.
+		sampledReserved := min(sample.reservedBefore, sample.reservedAfter)
+		base, liveBase := nextCNFlushS3RSSState(
+			prevRSS, prevBase, prevLiveBase, sample.rss, sample.live, sampledReserved,
 		)
-	}()
+		m.rssReservedBase.Store(base)
+		m.rssMpoolLiveBase.Store(liveBase)
+	}
 
-	total = objectio.TotalMem()
-	cgroup, err = memlimit.FromCgroup()
+	total := objectio.TotalMem()
+	cgroup, err := readCgroup()
 
 	physicalLimit := total
 	if cgroup != 0 && cgroup < total {
@@ -164,47 +178,45 @@ func (m *memThrottler) refresh(force bool) {
 		m.limit.Store(int64(float64(physicalLimit) * m.limitRate))
 	}
 
-	if m.proc == nil {
-		m.proc, _ = process.NewProcess(int32(os.Getpid()))
-	}
-
-	prevRSS := m.rss.Load()
-	prevBase := m.rssReservedBase.Load()
-	prevLiveBase := m.rssMpoolLiveBase.Load()
-	reservedBefore = m.reserved.Load()
-	if reservedBefore < 0 {
-		reservedBefore = 0
-	}
-	if info, err = m.proc.MemoryInfo(); err == nil {
-		rss := int64(info.RSS)
-		m.rss.Store(rss)
-
-		reservedAfter := m.reserved.Load()
-		if reservedAfter < 0 {
-			reservedAfter = 0
-		}
-
-		currentLive := mpool.GlobalStats().NumCurrBytes.Load()
-		// Sample the S3 reservation base conservatively from the same refresh
-		// window as RSS. Using the smaller of the before/after counters avoids
-		// treating a concurrent new acquire as already reflected in the RSS
-		// sample. Any stale covered portion then decays not only when RSS drops
-		// but also when off-heap live bytes rise back toward the earlier live
-		// baseline, which means the freed S3 pages are being reused by other
-		// work and can no longer be treated as reusable S3 headroom.
-		sampledReserved := min(reservedBefore, reservedAfter)
-		base, liveBase := nextCNFlushS3RSSState(
-			prevRSS, prevBase, prevLiveBase, rss, currentLive, sampledReserved,
-		)
-		m.rssReservedBase.Store(base)
-		m.rssMpoolLiveBase.Store(liveBase)
-		if m.rssPressure != nil {
-			m.rssPressure.observe(sampledAt, rss, int64(physicalLimit), reservedAfter, currentLive)
-		}
-	}
-
 	m.cgroup.Store(cgroup)
 	m.total.Store(total)
+	if rssErr != nil {
+		err = rssErr
+	} else if m.rssPressure != nil {
+		m.rssPressure.observe(sample.at, sample.rss, int64(physicalLimit), sample.reservedAfter, sample.live)
+	}
+	logutil.Info(
+		fmt.Sprintf("%s-Refresh", MemoryThrottlerLogHeader),
+		zap.String("detail", m.String()),
+		zap.Error(err),
+	)
+}
+
+type rssSample struct {
+	at             time.Time
+	rss            int64
+	reservedBefore int64
+	reservedAfter  int64
+	live           int64
+}
+
+func (m *memThrottler) sampleRSS(readRSS func() (*process.MemoryInfoStat, error)) (rssSample, error) {
+	if source := m.rssPressure; source != nil {
+		source.controller.sampleMu.Lock()
+		defer source.controller.sampleMu.Unlock()
+	}
+	sample := rssSample{
+		at:             time.Now(),
+		reservedBefore: max(0, m.reserved.Load()),
+	}
+	info, err := readRSS()
+	if err != nil {
+		return rssSample{}, err
+	}
+	sample.rss = int64(info.RSS)
+	sample.reservedAfter = max(0, m.reserved.Load())
+	sample.live = mpool.GlobalStats().NumCurrBytes.Load()
+	return sample, nil
 }
 
 /*

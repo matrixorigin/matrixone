@@ -882,7 +882,11 @@ func (m *MemCache) EvictToCapacityPercent(ctx context.Context, percent int64) in
 	}
 	target := m.cache.Capacity() * percent / 100
 	used := m.EvictToTarget(ctx, target)
-	m.reclaimAllocator()
+	// Close flushes the cache and retires its allocator. A walk admitted
+	// before Close can still finish its removal callbacks.
+	if !m.closed.Load() {
+		m.reclaimAllocator()
+	}
 	return used
 }
 

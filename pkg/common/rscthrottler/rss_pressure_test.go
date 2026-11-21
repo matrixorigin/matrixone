@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shirou/gopsutil/v3/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -111,48 +112,192 @@ func TestRSSPressureTransitionsCancelStaleActions(t *testing.T) {
 	require.Zero(t, frees.Load(), "canceled eviction must not trigger a stale free")
 }
 
-func TestRSSPressureLastSourceCloseJoinsRecovery(t *testing.T) {
-	started := make(chan context.Context, 1)
-	cancelled := make(chan struct{})
-	signalCancelled := sync.OnceFunc(func() { close(cancelled) })
+func TestRSSPressureCloseLeavesAdmittedWalkWithWorker(t *testing.T) {
+	type walk struct {
+		ctx    context.Context
+		target int64
+	}
+	started := make(chan walk, 2)
 	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	var frees, concurrent atomic.Int32
+	var overlap atomic.Bool
+	var targets []int64
+	completed := make(chan struct{}, 2)
 	c := rssPressureController{
-		setTarget:   func(int64, time.Time) {},
+		setTarget:   func(target int64, _ time.Time) { targets = append(targets, target) },
 		clearTarget: func() {},
-		evict: func(ctx context.Context, _ int64) {
-			started <- ctx
-			<-ctx.Done()
-			signalCancelled()
-			<-release
+		evict: func(ctx context.Context, target int64) {
+			if concurrent.Add(1) > 1 {
+				overlap.Store(true)
+			}
+			defer concurrent.Add(-1)
+			started <- walk{ctx, target}
+			if target == rssCacheSoftTarget {
+				<-release // A callback already admitted may ignore cancellation.
+			}
 		},
-		free: func() {},
+		free: func() { frees.Add(1); completed <- struct{}{} },
 	}
 	cn, workspace := c.attach(), c.attach()
+	defer cn.Close()
 	defer workspace.Close()
-	unblock := sync.OnceFunc(func() { close(release) })
 	defer unblock()
-
 	cn.observe(time.Now(), 860, 1000, 800, 0)
-	ctx := receivePressureEvent(t, started)
+	first := receivePressureEvent(t, started)
 	cn.Close()
-	require.NoError(t, ctx.Err(), "another source still owns process recovery")
+	require.NoError(t, first.ctx.Err(), "the remaining reporter still owns pressure")
 
 	closed := make(chan struct{})
 	go func() {
 		workspace.Close()
 		close(closed)
 	}()
-	receivePressureEvent(t, cancelled)
-	require.Empty(t, closed)
-	unblock()
 	receivePressureEvent(t, closed)
+	require.ErrorIs(t, first.ctx.Err(), context.Canceled)
+
+	attached := make(chan *RSSPressureSource, 1)
+	go func() { attached <- c.attach() }()
+	next := receivePressureEvent(t, attached)
+	defer next.Close()
+	cn.observe(time.Now(), 870, 1000, 800, 0) // A retired source cannot schedule work.
+	require.Equal(t, []int64{rssCacheSoftTarget}, targets, "retired source cannot publish a target")
+	next.observe(time.Now(), 950, 1000, 800, 0)
+	require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget}, targets)
+	require.Empty(t, started, "the existing worker still owns the blocked callback")
+	unblock()
+	require.Equal(t, rssCacheHardTarget, receivePressureEvent(t, started).target)
+	receivePressureEvent(t, completed)
+	require.False(t, overlap.Load(), "cache walks must remain serialized across reattach")
+	require.Equal(t, int32(1), frees.Load(), "only the replacement walk may scavenge")
+}
+
+func TestRSSPressureImmediateFreeUsesOneReport(t *testing.T) {
+	var frees atomic.Int32
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	started := make(chan struct{}, 2)
+	c := rssPressureController{
+		setTarget:   func(int64, time.Time) {},
+		clearTarget: func() {},
+		evict:       func(ctx context.Context, _ int64) { <-ctx.Done() },
+		free: func() {
+			frees.Add(1)
+			started <- struct{}{}
+			<-release
+		},
+	}
+	cn, workspace := c.attach(), c.attach()
+	defer cn.Close()
+	defer workspace.Close()
+	defer unblock()
+	now := time.Now()
+	cn.observe(now, 800, 1000, 0, 0)
+	observed := make(chan struct{})
+	go func() {
+		workspace.observe(now.Add(time.Second), 900, 1000, 55, 600)
+		close(observed)
+	}()
+	receivePressureEvent(t, observed)
+	require.Zero(t, frees.Load(), "655 visible bytes in the report exceed 70% of RSS")
+
+	finished := make(chan struct{})
+	go func() {
+		workspace.observe(now.Add(2*time.Second), 900, 1000, 0, 600)
+		close(finished)
+	}()
+	receivePressureEvent(t, started)
+	cn.Close()
+	retired := make(chan struct{})
+	go func() { workspace.Close(); close(retired) }()
+	receivePressureEvent(t, retired)
 
 	next := c.attach()
 	defer next.Close()
-	cn.observe(time.Now(), 950, 1000, 800, 0)
-	require.Empty(t, started, "a retired source cannot publish into a restarted controller")
-	next.observe(time.Now(), 860, 1000, 800, 0)
-	receivePressureEvent(t, started)
+	restarted := make(chan struct{})
+	go func() {
+		next.observe(now.Add(rssScavengeInterval+3*time.Second), 900, 1000, 0, 600)
+		close(restarted)
+	}()
+	receivePressureEvent(t, restarted)
+	require.Equal(t, int32(1), frees.Load(), "an active free survives reporter detach")
+	unblock()
+	receivePressureEvent(t, finished)
+	next.observe(now.Add(rssScavengeInterval+4*time.Second), 900, 1000, 0, 600)
+	require.Equal(t, int32(2), frees.Load(), "eligibility returns after completion and cooldown")
+
+	next.Close()
+	later := c.attach()
+	defer later.Close()
+	later.observe(now.Add(rssScavengeInterval+5*time.Second), 900, 1000, 0, 600)
+	require.Equal(t, int32(2), frees.Load(), "the cooldown survives last detach")
+}
+
+func TestRSSRefreshOrdersByRSSRead(t *testing.T) {
+	var targets []int64
+	c := rssPressureController{
+		setTarget:   func(target int64, _ time.Time) { targets = append(targets, target) },
+		clearTarget: func() {},
+		evict:       func(context.Context, int64) {},
+		free:        func() {},
+	}
+	first := c.attach()
+	defer first.Close()
+	second := c.attach()
+	defer second.Close()
+	cn := &memThrottler{rssPressure: first}
+	workspace := &memThrottler{rssPressure: second}
+	cn.reserved.Store(800)
+	workspace.reserved.Store(800)
+
+	rssStarted := make(chan struct{})
+	read := make(chan struct{})
+	allowRead := sync.OnceFunc(func() { close(read) })
+	defer allowRead()
+	rssRead := make(chan struct{})
+	limitStarted := make(chan struct{})
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+	finished := make(chan struct{})
+	go func() {
+		cn.refreshMemory(func() (*process.MemoryInfoStat, error) {
+			close(rssStarted)
+			<-read
+			close(rssRead)
+			return &process.MemoryInfoStat{RSS: 950}, nil
+		}, func() (uint64, error) {
+			close(limitStarted)
+			<-release
+			return 1000, nil
+		})
+		close(finished)
+	}()
+	receivePressureEvent(t, rssStarted)
+	if c.sampleMu.TryLock() {
+		c.sampleMu.Unlock()
+		t.Fatal("another reporter could overtake the active RSS read")
+	}
+	allowRead()
+	receivePressureEvent(t, limitStarted)
+	select {
+	case <-rssRead:
+	default:
+		t.Fatal("limit lookup started before RSS was sampled")
+	}
+	readRSS := func() (*process.MemoryInfoStat, error) { return &process.MemoryInfoStat{RSS: 950}, nil }
+	healthyReported := make(chan struct{})
+	go func() {
+		workspace.refreshMemory(readRSS, func() (uint64, error) { return 2000, nil })
+		close(healthyReported)
+	}()
+	receivePressureEvent(t, healthyReported)
+	unblock()
+	receivePressureEvent(t, finished)
+	require.Empty(t, targets, "the older measurement cannot replace a newer healthy pair")
+
+	cn.refreshMemory(readRSS, func() (uint64, error) { return 1000, nil })
+	require.Equal(t, []int64{rssCacheHardTarget}, targets, "a newer measurement uses its own ceiling")
 }
 
 func receivePressureEvent[T any](t *testing.T, ch <-chan T) T {
