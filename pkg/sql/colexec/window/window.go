@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 	"unsafe"
@@ -92,7 +91,6 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 		window.Free(proc, false, nil)
 	}
 
-	window.ctr.prepareParamKind.Reset(window.Aggs)
 	if window.OpAnalyzer == nil {
 		window.OpAnalyzer = process.NewAnalyzer(window.GetIdx(), window.IsFirst, window.IsLast, "window")
 	} else {
@@ -237,7 +235,7 @@ func materializeWindowBound(
 
 	runtimeBound.Val = &plan.Expr{
 		Typ:  planned.Val.Typ,
-		Expr: &plan.Expr_Lit{Lit: rule.GetConstantValue(vec, false, 0)},
+		Expr: &plan.Expr_Lit{Lit: rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(planned.Val, proc))},
 	}
 	return runtimeBound, nil
 }
@@ -445,14 +443,6 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			if err = ctr.validateIndicatorPeriods(0, window, proc); err != nil {
 				return result, err
 			}
-			for i := range window.Aggs {
-				if i < len(ctr.aggVecs) && len(ctr.aggVecs[i].Vec) > 0 {
-					arg := ctr.aggVecs[i].Vec[0]
-					if arg.Length() > 0 && !arg.AllNull() {
-						ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
-					}
-				}
-			}
 
 			// Compatible expressions share this materialized and sorted partition.
 			// Keep the materialized and sorted logical partition, then evaluate it
@@ -615,9 +605,6 @@ func (ctr *container) processFuncRange(
 	if ctr.localRank != nil && ctr.localRank.end <= outputEnd {
 		// Completed partition state must not compete with the next input copy.
 		ctr.freeLocalRankIndex()
-	}
-	if !vec.HasPrepareParamKind() {
-		vec.SetPrepareParamKind(ctr.prepareParamKind.Get(idx))
 	}
 	analyzer.Alloc(int64(vec.Size()))
 	return vec, nil
@@ -2049,23 +2036,12 @@ func (ctr *container) processValueFuncRange(
 }
 
 func getNthValueOffsetFromVec(ctx context.Context, vec *vector.Vector, row int) (int64, bool, error) {
-	if !types.T(vec.GetType().Oid).IsMySQLString() {
-		value, ok := getInt64FromVec(vec, row)
-		return value, ok, nil
-	}
-
-	if vec.IsConst() {
-		row = 0
-	}
-	if vec.Length() == 0 || vec.IsNull(uint64(row)) ||
-		!vec.HasPrepareParamKind() || vec.GetPrepareParamKindAt(row) != vector.PrepareParamInteger {
+	if types.T(vec.GetType().Oid).IsMySQLString() {
+		// A typed prepared offset arrives as an integer; a string is not one.
 		return 0, false, moerr.NewWrongArguments(ctx, "nth_value")
 	}
-	value, err := strconv.ParseUint(vec.GetStringAt(row), 10, 63)
-	if err != nil || value == 0 {
-		return 0, false, moerr.NewWrongArguments(ctx, "nth_value")
-	}
-	return int64(value), true, nil
+	value, ok := getInt64FromVec(vec, row)
+	return value, ok, nil
 }
 
 // getInt64FromVec extracts an int64 value from a vector at the given row.
@@ -2758,9 +2734,6 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) (er
 				ctr.aggVecs[i].Vec[j].CleanOnlyData()
 				if err = ctr.aggVecs[i].Vec[j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 					return err
-				}
-				if !ctr.aggVecs[i].Vec[j].HasPrepareParamKind() {
-					ctr.aggVecs[i].Vec[j].SetPrepareParamKind(vec.GetPrepareParamKind())
 				}
 			} else {
 				ctr.aggVecs[i].Vec[j], err = vec.Dup(proc.Mp())

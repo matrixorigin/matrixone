@@ -43,6 +43,11 @@ type integerParameter struct {
 	// Only roles whose original signatures accepted temporal values opt in.
 	temporal bool
 	uuid     bool
+	// keepsOperandBinding binds the AST operand in its ordinary context (for
+	// example the DEFAULT column type) and converts it only after binding
+	// proves a native temporal source. Persisted non-temporal expressions keep
+	// their original bound form.
+	keepsOperandBinding bool
 }
 
 func integerParameterForPosition(name string, position int) (integerParameter, bool) {
@@ -97,6 +102,13 @@ func IntegerArgumentUsesBitSources(name string, position int) bool {
 func IntegerArgumentUsesTemporalIntegerCast(name string, position int, source types.T) bool {
 	parameter, ok := integerParameterForPosition(name, position)
 	return ok && parameter.mode == temporalOnlyIntegerParameter && integerArgumentTemporalSource(source)
+}
+
+// IntegerArgumentKeepsOperandBinding reports whether AST binding must leave the
+// operand's ordinary binding context in place.
+func IntegerArgumentKeepsOperandBinding(name string, position int) bool {
+	parameter, ok := integerParameterForPosition(name, position)
+	return ok && parameter.keepsOperandBinding
 }
 
 func IntegerArgumentSourceDependent(name string, position int) bool {

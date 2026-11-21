@@ -36,7 +36,7 @@ func (bat *Batch) MarshalBinaryWithGroupingSize() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	metadataSize, err := bat.PrepareParamKindMetadataSize()
+	metadataSize, err := bat.TransportMetadataSize()
 	if err != nil {
 		return 0, err
 	}
@@ -67,7 +67,7 @@ func (bat *Batch) MarshalBinaryWithGroupingTo(w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	metadataSize, err := bat.PrepareParamKindMetadataSize()
+	metadataSize, err := bat.TransportMetadataSize()
 	if err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func (bat *Batch) MarshalBinaryWithGroupingTo(w io.Writer) error {
 	if err := metadataFree.MarshalBinaryTo(w); err != nil {
 		return err
 	}
-	if err := bat.AppendPrepareParamKindMetadata(w); err != nil {
+	if err := bat.AppendTransportMetadata(w); err != nil {
 		return err
 	}
 	return bat.marshalGroupingTo(w)
@@ -119,7 +119,7 @@ func (bat *Batch) UnmarshalFromReaderWithGrouping(
 		return moerr.NewInvalidInputNoCtx("negative batch grouping payload size")
 	}
 	limited := &io.LimitedReader{R: r, N: payloadSize}
-	if err := bat.unmarshalFromReaderWithPrepareParamKinds(limited, payloadSize, mp, false); err != nil {
+	if err := bat.unmarshalFromReaderWithMetadata(limited, payloadSize, mp, false); err != nil {
 		return err
 	}
 	if limited.N != 0 {

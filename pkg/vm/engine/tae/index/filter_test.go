@@ -33,7 +33,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 	defer data.Close()
 	sf, err := NewBloomFilter(data, nil, nil, nil)
 	require.NoError(t, err)
-	var positive *nulls.Bitmap
+	var positive *nulls.Nulls
 	var res bool
 	var exist bool
 
@@ -57,14 +57,14 @@ func TestStaticFilterNumeric(t *testing.T) {
 	defer query.Close()
 	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
-	require.Equal(t, 2000, positive.GetCardinality())
+	require.Equal(t, 2000, positive.Count())
 	require.True(t, exist)
 
 	query = containers.MockVector2(typ, 20000, 40000)
 	defer query.Close()
 	_, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
-	fpRate := float32(positive.GetCardinality()) / float32(20000)
+	fpRate := float32(positive.Count()) / float32(20000)
 	require.True(t, fpRate < float32(0.01))
 
 	var buf []byte
@@ -82,7 +82,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 	defer query.Close()
 	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
-	require.Equal(t, 40000, positive.GetCardinality())
+	require.Equal(t, 40000, positive.Count())
 	require.True(t, exist)
 }
 
@@ -267,7 +267,7 @@ func TestStaticFilterString(t *testing.T) {
 	defer data.Close()
 	sf, err := NewBloomFilter(data, nil, nil, nil)
 	require.NoError(t, err)
-	var positive *nulls.Bitmap
+	var positive *nulls.Nulls
 	var res bool
 	var exist bool
 
@@ -283,14 +283,14 @@ func TestStaticFilterString(t *testing.T) {
 	defer query.Close()
 	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
-	require.Equal(t, 2000, positive.GetCardinality())
+	require.Equal(t, 2000, positive.Count())
 	require.True(t, exist)
 
 	query = containers.MockVector2(typ, 20000, 40000)
 	defer query.Close()
 	_, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
-	fpRate := float32(positive.GetCardinality()) / float32(20000)
+	fpRate := float32(positive.Count()) / float32(20000)
 	require.True(t, fpRate < float32(0.01))
 
 	var buf []byte
@@ -308,7 +308,7 @@ func TestStaticFilterString(t *testing.T) {
 	defer query.Close()
 	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
-	require.Equal(t, 40000, positive.GetCardinality())
+	require.Equal(t, 40000, positive.Count())
 	require.True(t, exist)
 }
 

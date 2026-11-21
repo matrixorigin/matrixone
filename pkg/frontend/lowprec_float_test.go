@@ -84,7 +84,7 @@ func TestLowPrecisionFloatParquetParamsAndBranchTuples(t *testing.T) {
 		v, err := vectorValueToParquet(vec, 0, nil)
 		require.NoError(t, err)
 		require.Equal(t, float32(1.5), v, oid.String())
-		require.Equal(t, vector.PrepareParamFloat, prepareParamKindFromType(oid))
+		require.Equal(t, types.StringConversionFloat, prepareParamKindFromType(oid))
 
 		raw := vec.GetRawBytesAt(1)
 		got, err := normalizeTupleColumnValue(append([]byte(nil), raw...), oid.ToType())

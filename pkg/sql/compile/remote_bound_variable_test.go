@@ -91,7 +91,6 @@ func TestRemoteBoundStringVariableFoldRoundTrip(t *testing.T) {
 					require.Equal(t, next, v.GetStringAt(0))
 					require.Equal(t, tc.binary, v.GetIsBinaryStringAt(0))
 					require.Equal(t, tc.charset, v.GetType().Charset)
-					require.Equal(t, types.StringSourceUserVariable, v.GetStringSourceAt(0))
 				}()
 				require.Zero(t, remote.Mp().CurrNB())
 				require.Equal(t, uint32(tc.domain)+1, variable.GetV().BoundStringDomain)

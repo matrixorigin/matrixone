@@ -437,7 +437,7 @@ func (tableScan *TableScan) evalFilter(
 
 			values := vector.MustFixedColNoTypeCheck[bool](vec)
 			nulls := vec.GetNulls()
-			if !nulls.EmptyByFlag() {
+			if !nulls.IsEmpty() {
 				for j, v := range values {
 					if v && !nulls.Contains(uint64(j)) {
 						sels = append(sels, int64(j))

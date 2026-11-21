@@ -433,21 +433,12 @@ func TestOwnedPrepareParamsLifecycle(t *testing.T) {
 	}
 
 	plain := newParams("plain")
-	proc.SetOwnedPrepareParamsWithMeta(
-		plain,
-		[]bool{false},
-		[]vector.PrepareParamKind{vector.PrepareParamNone},
-	)
+	proc.SetOwnedPrepareParamsWithIsBin(plain, nil)
 	require.Nil(t, proc.Base.prepareParamsIsBin, "default metadata must keep the zero-allocation path")
 
 	first := newParams("first")
-	proc.SetOwnedPrepareParamsWithMeta(
-		first,
-		[]bool{true},
-		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
-	)
+	proc.SetOwnedPrepareParamsWithIsBin(first, []bool{true})
 	require.True(t, proc.GetPrepareParamIsBin(0))
-	require.Equal(t, vector.PrepareParamDecimal, proc.GetPrepareParamKind(0))
 	require.Zero(t, plain.Length(), "replacing owned default-metadata params must release them")
 	proc.SetPrepareParamsWithIsBin(first, []bool{false})
 	require.Equal(t, 1, first.Length(), "setting the same pointer must not release it")
@@ -471,27 +462,6 @@ func TestOwnedPrepareParamsLifecycle(t *testing.T) {
 	require.False(t, proc.Base.prepareParamsOwned)
 	require.Equal(t, 1, borrowed.Length(), "Process must not release borrowed params")
 	borrowed.Free(proc.Mp())
-}
-
-func TestSetPrepareParamsWithReusableMetaReusesPackedStorage(t *testing.T) {
-	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
-	params := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(params, []byte("42"), false, proc.Mp()))
-	defer params.Free(proc.Mp())
-
-	metadata := proc.SetPrepareParamsWithReusableTypedMeta(
-		params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger},
-		[]types.T{types.T_int64}, nil, []bool{true})
-	require.Equal(t, vector.PrepareParamInteger, proc.GetPrepareParamKind(0))
-	require.Equal(t, types.T_int64, proc.GetPrepareParamType(0))
-	require.True(t, proc.GetPrepareParamIsBinaryString(0))
-	first := &metadata[0]
-	metadata = proc.SetPrepareParamsWithReusableMeta(
-		params, nil, []vector.PrepareParamKind{vector.PrepareParamDecimal}, metadata)
-	require.Same(t, first, &metadata[0])
-	require.Equal(t, vector.PrepareParamDecimal, proc.GetPrepareParamKind(0))
-	require.Equal(t, types.T_any, proc.GetPrepareParamType(0))
-	require.False(t, proc.GetPrepareParamIsBinaryString(0))
 }
 
 func TestDetachAndRestorePrepareParams(t *testing.T) {

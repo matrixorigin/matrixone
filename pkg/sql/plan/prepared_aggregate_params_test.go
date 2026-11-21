@@ -933,9 +933,9 @@ func TestPreparedLagLeadOffsetParameter(t *testing.T) {
 				int64(1),
 				false,
 				true,
-				ParamValue{Value: "0", PrepareParamKind: vector.PrepareParamBoolean},
-				ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamBoolean},
-				ParamValue{Value: "9223372036854775807", PrepareParamKind: vector.PrepareParamInteger},
+				ParamValue{Value: "0", PrepareParamKind: types.StringConversionBoolean},
+				ParamValue{Value: "1", PrepareParamKind: types.StringConversionBoolean},
+				ParamValue{Value: "9223372036854775807", PrepareParamKind: types.StringConversionInteger},
 			} {
 				filled, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{valid})
 				require.NoError(t, err)
@@ -947,10 +947,10 @@ func TestPreparedLagLeadOffsetParameter(t *testing.T) {
 				int64(-1),
 				nil,
 				float64(-1.5),
-				ParamValue{Value: "-1", PrepareParamKind: vector.PrepareParamInteger},
-				ParamValue{Value: "-1.5", PrepareParamKind: vector.PrepareParamFloat},
-				ParamValue{Value: "-1.5", PrepareParamKind: vector.PrepareParamDecimal},
-				ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamBoolean},
+				ParamValue{Value: "-1", PrepareParamKind: types.StringConversionInteger},
+				ParamValue{Value: "-1.5", PrepareParamKind: types.StringConversionFloat},
+				ParamValue{Value: "-1.5", PrepareParamKind: types.StringConversionDecimal},
+				ParamValue{Value: "2", PrepareParamKind: types.StringConversionBoolean},
 			} {
 				_, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{invalid})
 				require.Error(t, err)

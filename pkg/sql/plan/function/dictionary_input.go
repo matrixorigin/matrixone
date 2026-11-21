@@ -26,7 +26,7 @@ func dictionaryComparisonInputs(parameters []*vector.Vector) bool {
 		return false
 	}
 	for _, v := range parameters {
-		if v.IsPreparedJSONComparisonParam() || v.HasGrouping() {
+		if v.HasGrouping() {
 			return false
 		}
 	}
@@ -59,10 +59,10 @@ func dictionaryInInputs(parameters []*vector.Vector) bool {
 	}
 	oid := parameters[0].GetType().Oid
 	if (oid.IsSignedInt() || oid.IsUnsignedInt()) && oid == parameters[1].GetType().Oid {
-		return !parameters[0].HasGrouping() && !parameters[1].HasGrouping() && !parameters[0].IsPreparedJSONComparisonParam() && !parameters[1].IsPreparedJSONComparisonParam()
+		return !parameters[0].HasGrouping() && !parameters[1].HasGrouping()
 	}
 	for _, v := range parameters {
-		if !v.GetType().Oid.IsMySQLString() || v.IsPreparedJSONComparisonParam() || v.HasGrouping() {
+		if !v.GetType().Oid.IsMySQLString() || v.HasGrouping() {
 			return false
 		}
 	}
@@ -84,7 +84,7 @@ func dictionaryArithmeticInputs(parameters []*vector.Vector) bool {
 // Pure string kernels use logical wrapper reads; bit/JSON/array overloads retain
 // their existing physical normalization contract.
 func dictionaryUnaryStringInputs(parameters []*vector.Vector) bool {
-	return len(parameters) == 1 && parameters[0] != nil && parameters[0].GetType().Oid.IsMySQLString() && !parameters[0].HasGrouping() && !parameters[0].IsPreparedJSONComparisonParam()
+	return len(parameters) == 1 && parameters[0] != nil && parameters[0].GetType().Oid.IsMySQLString() && !parameters[0].HasGrouping()
 }
 
 func dictionaryBetweenInputs(parameters []*vector.Vector) bool {
@@ -102,7 +102,7 @@ func dictionaryStringArguments(parameters []*vector.Vector) bool {
 		return false
 	}
 	for _, v := range parameters {
-		if v == nil || !v.GetType().Oid.IsMySQLString() || v.HasGrouping() || v.IsPreparedJSONComparisonParam() {
+		if v == nil || !v.GetType().Oid.IsMySQLString() || v.HasGrouping() {
 			return false
 		}
 	}
@@ -114,7 +114,7 @@ func dictionarySubstringInputs(parameters []*vector.Vector) bool {
 		return false
 	}
 	for _, v := range parameters[1:] {
-		if v == nil || v.GetType().Oid != types.T_int64 || v.HasGrouping() || v.IsPreparedJSONComparisonParam() {
+		if v == nil || v.GetType().Oid != types.T_int64 || v.HasGrouping() {
 			return false
 		}
 	}

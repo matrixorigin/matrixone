@@ -66,23 +66,6 @@ func (ag *AggFuncExecExpression) GetAggID() int64 {
 	return ag.aggID
 }
 
-// PreservesFirstArgPrepareParamKind reports aggregates whose result is one of
-// the first argument's original values without a semantic type conversion.
-// Source conversion provenance may cross these materialization boundaries.
-func (ag *AggFuncExecExpression) PreservesFirstArgPrepareParamKind() bool {
-	switch ag.aggID {
-	case AggIdOfMin, AggIdOfMax, AggIdOfAny, AggIdOfMaxBy, AggIdOfMaxByNonNull,
-		WinIdOfFirstValue, WinIdOfLastValue, WinIdOfNthValue:
-		return true
-	case WinIdOfLag, WinIdOfLead:
-		// With no explicit default, LAG/LEAD return the first argument or NULL.
-		// A default expression can introduce a different source category.
-		return len(ag.argExpressions) < 3
-	default:
-		return false
-	}
-}
-
 func (ag *AggFuncExecExpression) IsDistinct() bool {
 	return ag.isDistinct
 }
@@ -258,11 +241,13 @@ type GroupAggFuncExec interface {
 	AllocationAccountOwner
 	BatchCapacityPreflight
 	SpillStateCodec
-	PrepareParamKindStateAccessor
 
 	AdditionalMemorySize() int64
 	GetNumGroups() int
-	SetPrepareParamKind(vector.PrepareParamKind)
+	// ResultVectorForChunk returns the result vector of one state chunk, or
+	// nil when the aggregate keeps no vector there. Protocol gates inspect its
+	// string metadata before a partial result is sent to an older peer.
+	ResultVectorForChunk(chunk int) *vector.Vector
 }
 
 // RequiresCanonicalDistinctKeyWire reports whether an aggregate's saved
@@ -363,15 +348,6 @@ type DistinctArgumentDrain interface {
 	RetainedBytes() uint64
 	Commit() error
 	Abort()
-}
-
-// PrepareParamKindStateAccessor exposes the result vectors whose winner
-// provenance is carried by Group's spill/partial wire extension. Group owns
-// the codec and streams directly between these vectors and the wire; the
-// aggregate does not materialize a second row-sized metadata slice.
-type PrepareParamKindStateAccessor interface {
-	PrepareParamKindChunkCount() int
-	PrepareParamKindVectorForChunk(chunk int) *vector.Vector
 }
 
 // indicate who implements the AggFuncExec interface.
