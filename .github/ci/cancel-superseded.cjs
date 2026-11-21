@@ -95,6 +95,67 @@ async function releaseClosedPullRequestRuns({ github, context, core, wait = slee
   await cancelMatchingRuns({ github, repo, core, get, candidates, matches, stillCurrent, wait });
 }
 
+// workflow_dispatch children do not inherit entrypoint's concurrency group.
+// A separate default-branch controller is needed because the parent collector
+// is itself cancelled when its parent terminates. Bind cleanup to the exact
+// completed parent attempt and the child workflow identity; never cancel by
+// PR branch name or a title substring alone.
+async function releaseCompletedCoverageWorkers({ github, context, core, wait = sleep }) {
+  const event = context.payload.workflow_run;
+  if (context.eventName !== 'workflow_run' || context.payload.action !== 'completed' ||
+      !Number.isSafeInteger(event?.id) || !Number.isSafeInteger(event?.run_attempt) ||
+      event.run_attempt < 1) throw new Error('Expected a completed workflow run attempt');
+  const repo = context.repo;
+  const entry = (await github.rest.actions.getWorkflow({ ...repo, workflow_id: 'entrypoint.yaml' })).data;
+  const parent = (await github.rest.actions.getWorkflowRunAttempt({
+    ...repo, run_id: event.id, attempt_number: event.run_attempt,
+  })).data;
+  if (parent.id !== event.id || parent.run_attempt !== event.run_attempt ||
+      parent.workflow_id !== entry.id || parent.event !== 'pull_request_target' ||
+      parent.path !== '.github/workflows/entrypoint.yaml' ||
+      parent.repository?.full_name !== 'matrixorigin/matrixone' ||
+      !/^[a-f0-9]{40}$/.test(parent.head_sha || '') ||
+      parent.status !== 'completed' || !parent.conclusion ||
+      event.head_sha !== parent.head_sha) {
+    throw new Error('Completed parent attempt identity mismatch');
+  }
+  const worker = (await github.rest.actions.getWorkflow({
+    ...repo, workflow_id: 'coverage-standby-worker.yaml',
+  })).data;
+  const title = new RegExp(`^Coverage standby / ${parent.id}/${parent.run_attempt}/[01]/` +
+    `${parent.head_sha}/(?:cs|idc)/[a-f0-9]{64}$`);
+  const matches = run => active.has(run.status) && run.event === 'workflow_dispatch' &&
+    run.workflow_id === worker.id && run.path === '.github/workflows/coverage-standby-worker.yaml' &&
+    run.repository?.full_name === 'matrixorigin/matrixone' &&
+    run.head_branch === 'main' && run.run_attempt === 1 &&
+    title.test(run.display_title || '');
+  const candidates = new Map();
+  // A 204 dispatch response can become visible shortly after the parent ends.
+  // Rescan briefly so a late-indexed, still-queued child is not left behind.
+  for (let round = 0; round < 3; round++) {
+    for (const status of active) {
+      const { data } = await github.rest.actions.listWorkflowRuns({
+        ...repo, workflow_id: worker.id, branch: 'main', event: 'workflow_dispatch',
+        status, per_page: 100,
+      });
+      if (data.total_count > 100 || data.workflow_runs.length !== data.total_count) {
+        throw new Error('Incomplete coverage worker discovery; inspect manually');
+      }
+      for (const run of data.workflow_runs) if (matches(run)) candidates.set(run.id, run);
+    }
+    if (round < 2) await wait(5_000);
+  }
+  const get = async id => (await github.rest.actions.getWorkflowRun({ ...repo, run_id: id })).data;
+  const stillCurrent = async () => {
+    const { data: current } = await github.rest.actions.getWorkflowRunAttempt({
+      ...repo, run_id: parent.id, attempt_number: parent.run_attempt,
+    });
+    return current.id === parent.id && current.run_attempt === parent.run_attempt &&
+      current.status === 'completed' && current.head_sha === parent.head_sha;
+  };
+  await cancelMatchingRuns({ github, repo, core, get, candidates, matches, stillCurrent, wait });
+}
+
 async function cancelMatchingRuns({ github, repo, core, get, candidates, matches, stillCurrent, wait }) {
   const pending = new Map();
   const requestCancel = async (run, force) => {
@@ -147,4 +208,5 @@ async function cancelMatchingRuns({ github, repo, core, get, candidates, matches
     .write();
 }
 
-module.exports = { isSuperseded, releaseSupersededRuns, releaseClosedPullRequestRuns };
+module.exports = { isSuperseded, releaseSupersededRuns, releaseClosedPullRequestRuns,
+  releaseCompletedCoverageWorkers };

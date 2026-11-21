@@ -12,7 +12,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { releaseSupersededRuns, releaseClosedPullRequestRuns, isSuperseded } = require('./cancel-superseded.cjs');
+const { releaseSupersededRuns, releaseClosedPullRequestRuns, releaseCompletedCoverageWorkers,
+  isSuperseded } = require('./cancel-superseded.cjs');
 
 const newer = () => ({ id: 200, workflow_id: 42, event: 'pull_request_target',
   head_branch: 'fix/test', head_repository: { id: 7 }, run_attempt: 1,
@@ -170,7 +171,8 @@ test('unusually large discovery fails rather than claiming all runs were inspect
 
 test('controller stays outside producer concurrency and uses only trusted code with bounded execution', () => {
   const workflow = readFileSync(join(__dirname, '../workflows/ci-cancellation.yml'), 'utf8');
-  assert.match(workflow, /workflow_run:\n    workflows: \['MatrixOne ALL CI'\]\n    types: \[requested\]/);
+  assert.match(workflow, /workflow_run:\n    workflows: \['MatrixOne ALL CI'\]\n    types: \[requested, completed\]/);
+  assert.match(workflow, /releaseCompletedCoverageWorkers/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /pull_request_target:\n    types: \[closed\]/);
   assert.match(workflow, /pull-requests: read/);
@@ -254,4 +256,89 @@ test('closed PR cancellation handles normal completion, API errors and malformed
   invalid.options.context.payload.action = 'opened';
   await assert.rejects(invalid.run(), /Expected a closed/);
   assert.deepEqual(invalid.calls, []);
+});
+
+function coverageHarness({ children, parentOverride = {}, tick } = {}) {
+  const sha = 'a'.repeat(40);
+  const parent = { id: 600, run_attempt: 2, workflow_id: 42, event: 'pull_request_target',
+    path: '.github/workflows/entrypoint.yaml', repository: { full_name: 'matrixorigin/matrixone' },
+    head_sha: sha, status: 'completed', conclusion: 'cancelled', ...parentOverride };
+  const child = (id, group, pool, overrides = {}) => ({ id, run_attempt: 1, workflow_id: 43,
+    event: 'workflow_dispatch', path: '.github/workflows/coverage-standby-worker.yaml',
+    repository: { full_name: 'matrixorigin/matrixone' }, head_branch: 'main', status: 'queued',
+    display_title: `Coverage standby / 600/2/${group}/${sha}/${pool}/${'b'.repeat(64)}`,
+    ...overrides });
+  const rows = new Map((children || [child(700, 0, 'cs'), child(701, 1, 'idc', { status: 'in_progress' })])
+    .map(run => [run.id, run]));
+  const calls = [];
+  let elapsed = 0;
+  const actions = {
+    getWorkflow: async ({ workflow_id }) => ({ data: { id: workflow_id === 'entrypoint.yaml' ? 42 : 43 } }),
+    getWorkflowRunAttempt: async () => ({ data: { ...parent } }),
+    listWorkflowRuns: async ({ workflow_id, branch, event, status }) => {
+      assert.equal(workflow_id, 43);
+      assert.equal(branch, 'main');
+      assert.equal(event, 'workflow_dispatch');
+      const found = [...rows.values()].filter(run => run.status === status);
+      return { data: { total_count: found.length, workflow_runs: found } };
+    },
+    getWorkflowRun: async ({ run_id }) => ({ data: { ...rows.get(run_id) } }),
+    cancelWorkflowRun: async ({ run_id }) => { calls.push(['cancel', run_id, elapsed]); },
+  };
+  const core = { info() {}, summary: {
+    addHeading() { return this; }, addRaw() { return this; }, async write() {},
+  } };
+  const context = { eventName: 'workflow_run', repo: { owner: 'matrixorigin', repo: 'matrixone' },
+    payload: { action: 'completed', workflow_run: { id: parent.id, run_attempt: parent.run_attempt,
+      head_sha: parent.head_sha } } };
+  const options = { github: { rest: { actions }, request: async (route, { run_id }) => {
+    assert.equal(route, 'POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel');
+    calls.push(['force', run_id, elapsed]);
+  } }, context, core, wait: async ms => { elapsed += ms; if (tick) tick(rows, parent, elapsed); } };
+  return { rows, parent, child, calls, options, run: () => releaseCompletedCoverageWorkers(options) };
+}
+
+test('completed parent attempt releases only its queued and running standby children', async () => {
+  const h = coverageHarness();
+  await h.run();
+  assert.deepEqual(h.calls, [['cancel', 700, 10000], ['cancel', 701, 10000],
+    ['force', 700, 130000], ['force', 701, 130000]]);
+});
+
+test('standby cleanup excludes other parent attempts, heads, workflows and reruns', async () => {
+  const h = coverageHarness({ children: [] });
+  const base = h.child(700, 0, 'cs');
+  const others = [
+    { display_title: base.display_title.replace('/2/0/', '/1/0/') },
+    { display_title: base.display_title.replace(' / 600/', ' / 601/') },
+    { display_title: base.display_title.replace('a'.repeat(40), 'c'.repeat(40)) },
+    { workflow_id: 99 }, { path: '.github/workflows/other.yaml' },
+    { event: 'push' }, { head_branch: 'weilu-runner-test' }, { run_attempt: 2 },
+    { status: 'completed' },
+  ];
+  others.forEach((override, index) => h.rows.set(800 + index, { ...base, id: 800 + index, ...override }));
+  await h.run();
+  assert.deepEqual(h.calls, []);
+});
+
+test('standby cleanup catches late-indexed child and avoids escalating finished child', async () => {
+  const h = coverageHarness({ children: [], tick(rows, _parent, elapsed) {
+    if (elapsed === 5000) rows.set(700, h.child(700, 0, 'cs'));
+    if (elapsed === 20000) rows.get(700).status = 'completed';
+  } });
+  await h.run();
+  assert.deepEqual(h.calls, [['cancel', 700, 10000]]);
+});
+
+test('standby cleanup fails closed for active or mismatched parent attempt', async () => {
+  for (const override of [{ status: 'in_progress', conclusion: null },
+    { event: 'push' }, { path: '.github/workflows/other.yaml' }]) {
+    const h = coverageHarness({ parentOverride: override });
+    await assert.rejects(h.run(), /identity mismatch/);
+    assert.deepEqual(h.calls, []);
+  }
+  const stale = coverageHarness();
+  stale.options.context.payload.workflow_run.run_attempt = 1;
+  await assert.rejects(stale.run(), /identity mismatch/);
+  assert.deepEqual(stale.calls, []);
 });
