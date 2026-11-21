@@ -712,3 +712,38 @@ func TestTableDumpReleasedBitCountBindings(t *testing.T) {
 	_, err = AnalyzeTableDumpBindings(compiler, current, released)
 	require.ErrorContains(t, err, "cannot verify bound generated expression", "mixed modes have no SQL binding")
 }
+
+func TestBitCountLowersReducedScalarSelector(t *testing.T) {
+	for _, tc := range []struct {
+		name, operand string
+		selector      int32
+	}{
+		{"IF", "if(e.empno=1, e.sal, cast(e.sal as double))", function.IFF},
+		{"CASE", "case when e.empno=1 then e.sal else cast(e.sal as double) end", function.CASE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
+			salPos, ok := tableColumnPosition(table, "sal")
+			require.True(t, ok)
+			table.Cols[salPos].Typ.Id = int32(types.T_float64)
+			p, err := runOneStmt(optimizer, t, "select bit_count((select "+tc.operand+")) from constraint_test.emp e")
+			require.NoError(t, err)
+			q := p.GetQuery()
+			root := q.Nodes[q.Steps[len(q.Steps)-1]]
+			require.Len(t, root.ProjectList, 1)
+			selector := root.ProjectList[0]
+			require.NotNil(t, selector.GetF())
+			id, _ := function.DecodeOverloadID(selector.GetF().GetFunc().GetObj())
+			require.Equal(t, tc.selector, id)
+			require.Equal(t, int32(types.T_uint64), selector.Typ.Id, "the selector chooses a count, rather than a floating operand")
+			for i, want := range []int32{function.BitCountFloat64FieldOverload, 16} {
+				arm := selector.GetF().GetArgs()[i+1]
+				require.NotNil(t, arm.GetF())
+				id, overload := function.DecodeOverloadID(arm.GetF().GetFunc().GetObj())
+				require.Equal(t, int32(function.BIT_COUNT), id)
+				require.Equal(t, want, overload)
+			}
+		})
+	}
+}

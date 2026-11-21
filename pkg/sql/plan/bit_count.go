@@ -294,6 +294,63 @@ func bitCountFieldOverload(expr *Expr) int32 {
 	return function.BitCountFloat64FieldOverload
 }
 
+func bitCountSelector(value *Expr) *Expr {
+	for {
+		fn := value.GetF()
+		if fn == nil || fn.Func == nil {
+			return nil
+		}
+		id, _ := function.DecodeOverloadID(fn.Func.Obj)
+		switch id {
+		case function.UNARY_PLUS:
+			value = fn.Args[0]
+		case function.CASE, function.IFF:
+			if value.GetPreparedNumeric().GetIfnullCommonValue() {
+				return nil
+			}
+			return value
+		default:
+			return nil
+		}
+	}
+}
+
+func bitCountReducibleScalarProjection(builder *QueryBuilder, sub *plan.SubqueryRef) *Expr {
+	if sub == nil || sub.Typ != plan.SubqueryRef_SCALAR || sub.Child != nil || sub.RowSize != 1 {
+		return nil
+	}
+	scope := bitCountSubqueryScope(builder, sub)
+	if scope == nil || len(scope.projects) != 1 || scope.hasDependentProjectionSubquery ||
+		!bitCountCanReduceScalar(builder, scope) {
+		return nil
+	}
+	return scope.projects[0]
+}
+
+// Lower only when scalar flattening returned the source projection directly.
+// A retained scalar still exposes a field, and an IF/CASE synthesized for
+// scalar row presence must not be mistaken for the user's selector.
+func (builder *QueryBuilder) lowerScalarBitCount(ctx *BindContext, fn *plan.Function, sub *plan.SubqueryRef) (*Expr, error) {
+	value := fn.Args[0]
+	if releasedBitCountFloatOverload(types.T(value.Typ.Id)) < 0 {
+		return nil, nil
+	}
+	_, overload := function.DecodeOverloadID(fn.Func.Obj)
+	if overload == releasedBitCountFloatOverload(types.T(value.Typ.Id)) {
+		return nil, nil
+	}
+	selector := bitCountSelector(value)
+	if selector == nil || bitCountReducibleScalarProjection(builder, sub) == nil {
+		return nil, nil
+	}
+	project := builder.qry.Nodes[sub.NodeId].ProjectList
+	if len(project) != 1 || project[0] != value {
+		return nil, nil
+	}
+	binder := baseBinder{builder: builder, ctx: ctx, sysCtx: builder.GetContext()}
+	return binder.bindBitCountOperand(selector)
+}
+
 func (builder *QueryBuilder) filterUsesProjectedBitCount(expr *Expr, projectTag int32) bool {
 	if fn := expr.GetF(); fn != nil {
 		if fn.Func.GetObjName() == "bit_count" && len(fn.Args) == 1 {
@@ -330,21 +387,9 @@ func (builder *QueryBuilder) lowerProjectedBitCount(expr, original *Expr) *Expr 
 	if overload != bitCountFieldOverload(original) {
 		return expr
 	}
-	value := fn.Args[0]
-	for {
-		f := value.GetF()
-		if f == nil || f.Func == nil {
-			return expr
-		}
-		id, _ := function.DecodeOverloadID(f.Func.Obj)
-		if id == function.UNARY_PLUS {
-			value = f.Args[0]
-			continue
-		}
-		if (id != function.CASE && id != function.IFF) || value.GetPreparedNumeric().GetIfnullCommonValue() {
-			return expr
-		}
-		break
+	value := bitCountSelector(fn.Args[0])
+	if value == nil {
+		return expr
 	}
 	ctx := builder.GetContext()
 	if ctx.Err() != nil {
@@ -414,15 +459,10 @@ func (b *baseBinder) bitCountFloatOverload(expr *Expr) int32 {
 			return -1
 		}
 		if sub := expr.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
-			var scope *BindContext
-			if sub.NodeId >= 0 && int(sub.NodeId) < len(b.builder.ctxByNode) {
-				scope = b.builder.ctxByNode[sub.NodeId]
-			}
-			if scope == nil || !bitCountCanReduceScalar(b.builder, scope) || sub.Child != nil || sub.RowSize != 1 ||
-				len(scope.projects) != 1 || scope.hasDependentProjectionSubquery {
+			expr = bitCountReducibleScalarProjection(b.builder, sub)
+			if expr == nil {
 				return int32(field)
 			}
-			expr = scope.projects[0]
 			continue
 		}
 		var tag, pos int32

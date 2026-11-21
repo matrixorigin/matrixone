@@ -349,6 +349,10 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 		// enclosing consumer bottom-up so its result nullability still matches
 		// the arguments that will reach execution.
 		preserveIfNullContract := isIfNullCase(exprImpl.F)
+		var scalarBitCountArg *plan.SubqueryRef
+		if exprImpl.F.Func.GetObjName() == "bit_count" && len(exprImpl.F.Args) == 1 {
+			scalarBitCountArg = exprImpl.F.Args[0].GetSub()
+		}
 		if consumer == existentialNegatedFilter && len(builder.pendingExistentials) != 0 {
 			// The caller admits only the direct NOT(EXISTS) WHERE conjunct.
 			sub := *exprImpl.F.Args[0].GetSub()
@@ -375,7 +379,16 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 			affected = affected || childAffected
 		}
 		if affected && exprImpl.F.Func != nil {
-			if preserveIfNullContract {
+			var lowered *Expr
+			if scalarBitCountArg != nil {
+				lowered, err = builder.lowerScalarBitCount(ctx, exprImpl.F, scalarBitCountArg)
+				if err != nil {
+					return 0, nil, false, err
+				}
+			}
+			if lowered != nil {
+				expr = lowered
+			} else if preserveIfNullContract {
 				if !isIfNullCase(exprImpl.F) {
 					return 0, nil, false, moerr.NewInternalError(builder.GetContext(),
 						"IFNULL expression changed shape while flattening subquery")
