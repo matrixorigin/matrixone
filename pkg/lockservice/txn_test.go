@@ -121,7 +121,7 @@ func TestCleanupOnlyLockStateTransitions(t *testing.T) {
 		key1 := []byte("k1")
 		key2 := []byte("k2")
 		require.NoError(t, txn.lockAddedForCleanup(
-			bind.Group, bind, [][]byte{key1}, logger))
+			bind.Group, bind, [][]byte{key1}, logger, false))
 
 		holder := txn.getHoldLocksLocked(bind.Group)
 		require.Contains(t, holder.tableKeys, bind.Table,
@@ -135,7 +135,7 @@ func TestCleanupOnlyLockStateTransitions(t *testing.T) {
 
 		// A later failed retry must not downgrade a row already confirmed held.
 		require.NoError(t, txn.lockAddedForCleanup(
-			bind.Group, bind, [][]byte{key1, key2}, logger))
+			bind.Group, bind, [][]byte{key1, key2}, logger, false))
 		require.NotContains(t, holder.uncertainLockKeys[bind.Table], string(key1))
 		require.Contains(t, holder.uncertainLockKeys[bind.Table], string(key2))
 
@@ -372,5 +372,47 @@ func TestCloseWithoutFreeWithContextReturnsCanceledLookup(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 		require.Contains(t, txn.getHoldLocksLocked(0).tableKeys, bind.Table,
 			"canceled cleanup must retain the table for a later retry")
+	})
+}
+
+func TestExactLockKeysAcrossSegments(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		fsp := newFixedSlicePool(2)
+		defer func() { require.Equal(t, fsp.acquireV.Load(), fsp.releaseV.Load()) }()
+		txn := newActiveTxn([]byte("txn"), "txn", fsp, "")
+		defer reuse.Free(txn, nil)
+		bind := pb.LockTable{Table: 1}
+		logger := getLogger("")
+		keys := [][]byte{{1}, {2}, {3}, {4}, {5}, {6}, {7}}
+		require.NoError(t, txn.addLocks(0, bind, keys[:3], logger, true, true))
+		h := txn.getHoldLocksLocked(0)
+		early := h.tableKeys[1].slice()
+		defer early.unref()
+		require.NoError(t, txn.addLocks(0, bind, keys[3:], logger, false, true))
+		require.True(t, moerr.IsMoErrCode(txn.lockAdded(0, bind, [][]byte{{8}}, logger), moerr.ErrLockNeedUpgrade))
+		full := h.tableKeys[1].slice()
+		defer full.unref()
+		require.Equal(t, keys, full.all())
+		for p := full; p != nil; p = p.prev {
+			require.LessOrEqual(t, p.cap(), 2)
+		}
+		var visited [][]byte
+		full.iter(func(key []byte) bool {
+			visited = append(visited, key)
+			return len(visited) < 3
+		})
+		require.Equal(t, keys[:3], visited)
+		require.Len(t, h.uncertainLockKeys[1], 4)
+		for range 10 {
+			require.NoError(t, txn.addLocks(0, bind, keys, logger, false, true))
+		}
+		require.Equal(t, len(keys), h.tableKeys[1].mustGet().totalLen())
+		txn.lockRemoved(0, 1, map[string]struct{}{string(keys[1]): {}, string(keys[4]): {}})
+		retained := h.tableKeys[1].slice()
+		require.Equal(t, [][]byte{{1}, {3}, {4}, {6}, {7}}, retained.all())
+		retained.unref()
+		require.Len(t, h.uncertainLockKeys[1], 3)
+		require.Equal(t, keys[:3], early.all())
+		require.Equal(t, keys, full.all())
 	})
 }

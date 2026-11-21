@@ -145,7 +145,7 @@ func TestRemoteWaitingListRequiresConfirmedHolder(t *testing.T) {
 				remoteTable.getBind().Group,
 				remoteTable.getBind(),
 				[][]byte{row},
-				source.logger,
+				source.logger, false,
 			)
 			waiterTxn.Unlock()
 			require.NoError(t, err)

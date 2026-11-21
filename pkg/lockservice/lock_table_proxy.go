@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -62,7 +63,24 @@ func (lp *localLockTableProxy) lock(
 	rows [][]byte,
 	options LockOptions,
 	cb func(pb.Result, error)) {
-	if options.Mode != pb.LockMode_Shared {
+	// Once a transaction takes exact locks, subsequent requests on this
+	// table must use the same remote owner, including ordinary shared reads.
+	// Otherwise a proxy Skip/ReplaceTo on unlock could strand a direct lock.
+	bind := lp.getBind()
+	h := txn.getHoldLocksLocked(bind.Group)
+	ownerOnly, routed := h.proxyOwnerOnly[bind.Table]
+	if options.RequiresExactRows() && routed && !ownerOnly {
+		cb(pb.Result{}, moerr.NewTxnNeedRetry(ctx))
+		return
+	}
+	if !routed && (options.RequiresExactRows() || options.Mode == pb.LockMode_Shared) {
+		if h.proxyOwnerOnly == nil {
+			h.proxyOwnerOnly = make(map[uint64]bool)
+		}
+		ownerOnly = options.RequiresExactRows()
+		h.proxyOwnerOnly[bind.Table] = ownerOnly
+	}
+	if ownerOnly || options.Mode != pb.LockMode_Shared {
 		lp.remote.lock(ctx, txn, rows, options, cb)
 		return
 	}
@@ -141,7 +159,6 @@ func (lp *localLockTableProxy) lock(
 	lp.mu.Lock()
 	r := v.result
 	lp.mu.Unlock()
-	bind := lp.getBind()
 	err := txn.lockAdded(bind.Group, bind, rows, lp.logger)
 	if err != nil {
 		lp.mu.Lock()
@@ -177,7 +194,7 @@ func (lp *localLockTableProxy) unlockWithContext(
 	}
 
 	skipped := 0
-	n := rows.len()
+	n := rows.totalLen()
 	var remoteMutations []pb.ExtraMutation
 	var updates []holderUpdate
 	lp.mu.Lock()
@@ -275,10 +292,10 @@ func (lp *localLockTableProxy) unlockWithContext(
 	// all skipped
 	var err error
 	if unlocker, ok := lp.remote.(contextUnlocker); ok {
-		if skipped != rows.len() {
+		if skipped != n {
 			err = unlocker.unlockWithContext(ctx, txn, ls, commitTS, remoteMutations...)
 		}
-	} else if skipped != rows.len() {
+	} else if skipped != n {
 		lp.remote.unlock(txn, ls, commitTS, remoteMutations...)
 	}
 	if err != nil {

@@ -702,6 +702,9 @@ func doLock(
 		Group:           opts.group,
 		SnapShotTs:      txnOp.CreateTS(),
 	}
+	if opts.requireExactRows {
+		options = options.WithExactRows()
+	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
 		if options.ForwardTo == "" {

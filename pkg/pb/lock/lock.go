@@ -134,6 +134,36 @@ func (m LockOptions) WithGranularity(granularity Granularity) LockOptions {
 	return m
 }
 
+// WithExactRows requires point locks in the current mode.
+func (m LockOptions) WithExactRows() LockOptions {
+	m.RowPolicy = RowLockPolicy_ExactExclusive
+	if m.Mode == LockMode_Shared {
+		m.RowPolicy = RowLockPolicy_ExactShared
+	}
+	return m
+}
+
+func (m LockOptions) RequiresExactRows() bool {
+	return m.RowPolicy != RowLockPolicy_Ordinary
+}
+
+// ForRemoteLock uses an exclusive point as the backwards-compatible wire
+// mode. An older owner cannot attach it to another transaction's shared
+// range. Upgraded receivers restore the requested sharing mode.
+func (m LockOptions) ForRemoteLock() LockOptions {
+	if m.RequiresExactRows() {
+		m.Mode = LockMode_Exclusive
+	}
+	return m
+}
+
+func (m LockOptions) FromRemoteLock() LockOptions {
+	if m.RowPolicy == RowLockPolicy_ExactShared {
+		m.Mode = LockMode_Shared
+	}
+	return m
+}
+
 // WithMode set lock mode, the default mode is Exclusive.
 func (m LockOptions) WithMode(mode LockMode) LockOptions {
 	m.Mode = mode

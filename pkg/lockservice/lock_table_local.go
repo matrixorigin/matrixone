@@ -378,7 +378,7 @@ func (l *localLockTable) unlock(
 
 				l.logger.Fatal("BUG: unlock a lock that is not held by the current txn",
 					zap.Bool("row", lock.isLockRow()),
-					zap.Int("keys-count", locks.len()),
+					zap.Int("keys-count", locks.totalLen()),
 					zap.String("hold-bind", b.DebugString()),
 					zap.String("bind", l.bind.DebugString()),
 					waitTxnArrayField("holders", lock.holders.getTxnSlice()),
@@ -521,6 +521,9 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 	case pb.Granularity_Row:
 		return l.acquireRowLockLocked(c)
 	case pb.Granularity_Range:
+		if c.opts.RequiresExactRows() {
+			return moerr.NewLockNeedUpgradeNoCtx()
+		}
 		if len(c.rows) == 0 ||
 			len(c.rows)%2 != 0 {
 			panic("invalid range lock")
@@ -544,11 +547,11 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 				l.logger,
 				c,
 				func() error {
-					return c.txn.lockAdded(
+					return c.txn.addLocks(
 						l.bind.Group,
 						l.bind,
 						[][]byte{key},
-						l.logger,
+						l.logger, true, c.opts.RequiresExactRows(),
 					)
 				},
 			)
@@ -649,7 +652,7 @@ func (l *localLockTable) addRowLockLocked(
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	err := c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{row}, l.logger)
+	err := c.txn.addLocks(l.bind.Group, l.bind, [][]byte{row}, l.logger, true, c.opts.RequiresExactRows())
 	if err != nil {
 		return err
 	}
@@ -1090,7 +1093,7 @@ func (l *localLockTable) addRangeLockLocked(
 				zap.Uint64("table", l.bind.OriginTable),
 				zap.String("txn", c.txn.txnKey),
 				zap.Int("merged", n),
-				zap.Int("current", v.mustGet().len()),
+				zap.Int("current", v.mustGet().totalLen()),
 			)
 		}
 	}
