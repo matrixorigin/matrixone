@@ -33,6 +33,9 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	defer ses.ExitFPrint(FPExecInFrontEnd)
 	//check transaction states
 	switch st := execCtx.stmt.(type) {
+	case *tree.FlushPrivileges:
+		// Compatibility no-op: authorization has already been checked.
+
 	case *tree.BeginTransaction:
 		ses.EnterFPrint(FPBeginTxn)
 		defer ses.ExitFPrint(FPBeginTxn)

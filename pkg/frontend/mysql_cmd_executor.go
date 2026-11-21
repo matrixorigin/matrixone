@@ -3152,6 +3152,9 @@ func createPrepareStmtInSession(
 	if err := executableExplainLocalLoadReject(execCtx.reqCtx, saveStmt); err != nil {
 		return nil, err
 	}
+	if _, ok := saveStmt.(*tree.FlushPrivileges); ok {
+		return nil, moerr.NewNotSupported(execCtx.reqCtx, "preparing FLUSH PRIVILEGES")
+	}
 	// Every executable handle must prove which policy actually participated
 	// in planning. Publication cannot repair missing provenance afterward.
 	if !preparedOwnerPolicyCaptured(execCtx) {

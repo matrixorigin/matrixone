@@ -4480,6 +4480,32 @@ func TestGetComputationWrapperUsesRequestRewriteSnapshot(t *testing.T) {
 	require.NotContains(t, selectStmt.RewriteOption.Rewrites, "src.t")
 }
 
+func TestComStmtPrepareRejectsFlushPrivileges(t *testing.T) {
+	stubEmptyRewriteRuleCache(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.txnHandler = &TxnHandler{}
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	resp, err := ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("flush privileges"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.Equal(t, int(COM_STMT_PREPARE), resp.cmd)
+	require.True(t, moerr.IsMoErrCode(resp.GetData().(error), moerr.ErrParseError),
+		"the COM_STMT_PREPARE rejection must come from the prepareable-statement parser: %v", resp.GetData())
+
+	prepared, err := ses.GetPrepareStmt(ctx, getPrepareStmtName(ses.GetLastStmtId()))
+	require.Error(t, err)
+	require.Nil(t, prepared)
+}
+
 func TestExecRequestStmtPreparePreservesMandatoryRewritePolicy(t *testing.T) {
 	const inlineSQL = `/*+ {"rewrites":{"db.t":"select * from db.t where inline_visible = 1"}} */ ` +
 		"select * from db.t"
