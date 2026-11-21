@@ -216,9 +216,9 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 		}
 		src := loaded.Vecs[fileColumn]
 		fileColumn++
-		if src.GetType().Oid != dst.GetType().Oid {
-			return moerr.NewInvalidInput(ctx, "saved result column type does not match the projection")
-		}
+		// Saved-result projection metadata and the physical vector type are not
+		// guaranteed to have identical Oids. Preserve the previous reader's
+		// compatibility instead of introducing a new strict-type requirement.
 		if src.Length() != rows {
 			return moerr.NewInvalidInput(ctx, "saved result column length does not match the block row count")
 		}

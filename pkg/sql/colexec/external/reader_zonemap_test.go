@@ -115,13 +115,16 @@ func TestZonemapSavedResultProjection(t *testing.T) {
 	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
 
+	charType := types.T_char
 	for _, tc := range []struct {
-		name          string
-		fields        []int32
-		failAppend    bool
-		corruptDecode bool
+		name                   string
+		fields                 []int32
+		fieldOneProjectionType *types.T
+		failAppend             bool
+		corruptDecode          bool
 	}{
 		{name: "mixed", fields: []int32{-1, 1, 0}},
+		{name: "compatible varlen projection type", fields: []int32{0, 1}, fieldOneProjectionType: &charType},
 		{name: "all-missing", fields: []int32{2}},
 		{name: "no-columns"},
 		{name: "allocation-failure", fields: []int32{0, 1}, failAppend: true},
@@ -147,6 +150,9 @@ func TestZonemapSavedResultProjection(t *testing.T) {
 					name = "v"
 				case 1:
 					name, typ = catalog.ExternalFilePath, types.T_varchar
+					if tc.fieldOneProjectionType != nil {
+						typ = *tc.fieldOneProjectionType
+					}
 				}
 				param.Attrs = append(param.Attrs, plan.ExternAttr{ColName: name, ColIndex: int32(col), ColFieldIndex: field})
 				param.Cols = append(param.Cols, &plan.ColDef{Name: name, Typ: plan.Type{Id: int32(typ)}})
