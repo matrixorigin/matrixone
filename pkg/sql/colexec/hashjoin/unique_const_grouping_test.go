@@ -107,9 +107,6 @@ func TestHashJoinUniqueConstantGroupingSelections(t *testing.T) {
 						v = vector.NewConstNull(typ, 5, proc.Mp())
 					}
 					v.GetGrouping().Add(uint64(groupingRow))
-					if shape != "fixed" {
-						v.SetIsBinaryString(true)
-					}
 					bat.Vecs[0] = v
 					bat.SetRowCount(5)
 					return bat
@@ -147,7 +144,6 @@ func TestHashJoinUniqueConstantGroupingSelections(t *testing.T) {
 						if shape == "fixed" {
 							require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](v, row))
 						} else {
-							require.True(t, v.GetIsBinaryStringAt(row))
 							require.Equal(t, "constant payload", v.GetStringAt(row))
 						}
 					}

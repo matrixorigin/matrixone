@@ -327,11 +327,6 @@ func (exec *minMaxExecBytes) BatchFill(offset int, groups []uint64, vectors []*v
 					if err := vector.SetBytesAtFrom(exec.state[x].vecs[0], int(y), vectors[0], int(idx), exec.mp); err != nil {
 						return err
 					}
-				case cmp == 0:
-					if err := mergeEqualRuntimeStringDomain(
-						exec.state[x].vecs[0], int(y), vectors[0], int(idx), exec.mp); err != nil {
-						return err
-					}
 				}
 			}
 		}
@@ -367,11 +362,6 @@ func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []u
 			switch cmp := exec.comp(value, oldValue); {
 			case cmp < 0:
 				if err := vector.SetBytesAtFrom(
-					exec.state[x1].vecs[0], int(y1), other.state[x2].vecs[0], int(y2), exec.mp); err != nil {
-					return err
-				}
-			case cmp == 0:
-				if err := mergeEqualRuntimeStringDomain(
 					exec.state[x1].vecs[0], int(y1), other.state[x2].vecs[0], int(y2), exec.mp); err != nil {
 					return err
 				}
@@ -500,13 +490,13 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 			for i := range vec.Length() {
 				if vec.IsNull(uint64(i)) {
 					vec.UnsetNull(uint64(i))
-					if err := vector.SetBytesAtWithBinaryString(vec, int(i), exec.extra, false, exec.mp); err != nil {
+					if err := vector.SetBytesAt(vec, int(i), exec.extra, exec.mp); err != nil {
 						return freeResultsOnError(err)
 					}
 				} else {
 					oldValue := vec.GetBytesAt(int(i))
 					if exec.comp(exec.extra, oldValue) < 0 {
-						if err := vector.SetBytesAtWithBinaryString(vec, int(i), exec.extra, false, exec.mp); err != nil {
+						if err := vector.SetBytesAt(vec, int(i), exec.extra, exec.mp); err != nil {
 							return freeResultsOnError(err)
 						}
 					}

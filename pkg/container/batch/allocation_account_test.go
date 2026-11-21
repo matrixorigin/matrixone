@@ -353,7 +353,6 @@ func TestBatchGroupingCodecRoundTrip(t *testing.T) {
 	source := newBatchAllocationTestSource(t, mp, nil)
 	source.Vecs[0].GetGrouping().Add(1, 7, 31)
 	source.Vecs[1].GetGrouping().Add(2, 9)
-	require.NoError(t, source.Vecs[1].SetIsBinaryStringAt(0, true))
 	source.ExtraBuf = bytes.Repeat([]byte("x"), 1<<20)
 
 	var encoded bytes.Buffer
@@ -371,8 +370,6 @@ func TestBatchGroupingCodecRoundTrip(t *testing.T) {
 	for i := range source.Vecs {
 		require.True(t, decoded.Vecs[i].GetGrouping().IsSame(source.Vecs[i].GetGrouping()))
 	}
-	require.True(t, decoded.Vecs[1].GetIsBinaryStringAt(0))
-	require.False(t, decoded.Vecs[1].GetIsBinaryStringAt(1))
 	withoutGrouping := newBatchAllocationTestSource(t, mp, nil)
 	encoded.Reset()
 	require.NoError(t, withoutGrouping.MarshalBinaryWithGroupingTo(&encoded))
@@ -803,11 +800,6 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 64)
 	mp := mpool.MustNewZero()
 	source := newBatchAllocationTestSource(t, mp, nil)
-	binaryRows := make([]bool, source.RowCount())
-	for i := range binaryRows {
-		binaryRows[i] = i%2 == 0
-	}
-	require.NoError(t, source.Vecs[1].SetBinaryStringRowsWithMP(binaryRows, mp))
 
 	destination := NewWithSchema(
 		true,
@@ -818,8 +810,8 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 	require.NoError(t, source.CloneTo(destination, mp))
 	require.NotZero(t, state.account.Snapshot().Used)
 	require.Equal(t, source.RowCount(), destination.RowCount())
-	for i, binary := range binaryRows {
-		require.Equal(t, binary, destination.Vecs[1].GetIsBinaryStringAt(i))
+	for i := 0; i < source.RowCount(); i++ {
+		require.Equal(t, source.Vecs[1].GetStringAt(i), destination.Vecs[1].GetStringAt(i))
 	}
 	// A clone must not stage a second copy that would temporarily raise the
 	// account high-water mark above its final live usage.
@@ -868,44 +860,6 @@ func TestBatchAllocationAccountCloneRollback(t *testing.T) {
 
 	source.Clean(mp)
 	finalizeTestBatchAllocationAccount(t, state)
-}
-
-func TestBufferedMetadataDecodeFailureClearsEarlierStringDomains(t *testing.T) {
-	sourceMP := mpool.MustNewZero()
-	source := NewWithSize(2)
-	for i := range source.Vecs {
-		source.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
-		require.NoError(t, vector.AppendBytes(source.Vecs[i], []byte("a"), false, sourceMP))
-		require.NoError(t, vector.AppendBytes(source.Vecs[i], []byte("b"), false, sourceMP))
-	}
-	source.Vecs[0].SetIsBinaryString(true)
-	require.NoError(t, source.Vecs[1].SetBinaryStringRowsWithMP([]bool{true, false}, sourceMP))
-	source.SetRowCount(2)
-	var wire bytes.Buffer
-	encoded, err := source.MarshalBinaryWithMetadata(&wire, true)
-	require.NoError(t, err)
-	source.Clean(sourceMP)
-	require.Zero(t, sourceMP.CurrNB())
-
-	// Stable vector payloads alias encoded bytes and consume no MPool capacity.
-	// Leaving one byte free rejects column 2's mixed binary-string sidecar
-	// after column 1's uniform binary flag has already been applied.
-	const decodeCap = 1 << 20
-	decodeMP, err := mpool.NewMPool("batch-metadata-cleanup", decodeCap, mpool.NoFixed)
-	require.NoError(t, err)
-	held, err := decodeMP.Alloc(decodeCap-1, true)
-	require.NoError(t, err)
-	decoded := NewOffHeapEmpty()
-	err = decoded.UnmarshalBinaryWithMetadata(encoded, decodeMP)
-	require.Error(t, err)
-	require.Len(t, decoded.Vecs, 2)
-	for _, vec := range decoded.Vecs {
-		require.False(t, vec.GetIsBinaryString())
-		require.False(t, vec.HasBinaryStringMetadata())
-	}
-	decoded.Clean(decodeMP)
-	decodeMP.Free(held)
-	require.Zero(t, decodeMP.CurrNB())
 }
 
 func TestBatchAllocationAccountConfigurationIsAtomic(t *testing.T) {

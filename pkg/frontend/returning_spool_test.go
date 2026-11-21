@@ -214,11 +214,10 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 	require.Zero(t, budget.SpillFDUsed())
 
 	final := returningTestBatch(t, ses, 7, 8, 9)
-	binaryValues := vector.NewVec(types.T_text.ToType())
+	binaryValues := vector.NewVec(types.T_varbinary.ToType())
 	for _, value := range []string{"a", "b", "c"} {
 		require.NoError(t, vector.AppendBytes(binaryValues, []byte(value), false, ses.proc.Mp()))
 	}
-	require.NoError(t, binaryValues.SetBinaryStringRowsWithMP([]bool{true, false, true}, ses.proc.Mp()))
 	final.Vecs = append(final.Vecs, binaryValues)
 	defer final.Clean(ses.proc.Mp())
 	require.NoError(t, spool.BeginAttempt(ctx, 1, ses.proc))
@@ -234,9 +233,9 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 		got = got[:0]
 		require.NoError(t, spool.Replay(ctx, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
 			got = append(got, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])...)
-			require.True(t, bat.Vecs[1].GetBinaryStringMetadataAt(0))
-			require.False(t, bat.Vecs[1].GetBinaryStringMetadataAt(1))
-			require.True(t, bat.Vecs[1].GetBinaryStringMetadataAt(2))
+			require.Equal(t, types.T_varbinary, bat.Vecs[1].GetType().Oid)
+			require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(*bat.Vecs[1].GetType()))
+			require.Equal(t, "b", bat.Vecs[1].GetStringAt(1))
 			return nil
 		}))
 		require.Equal(t, []int64{7, 8, 9}, got)

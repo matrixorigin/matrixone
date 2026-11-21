@@ -321,9 +321,6 @@ func composeDictionaryRows(source *RowSelection, logical []int64, mp *mpool.MPoo
 }
 
 func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) error {
-	if err := dst.preflightBinaryStringAppend(len(rows), summarizeBinaryStringSelection(source, rows), mp); err != nil {
-		return err
-	}
 	if source.HasNull() {
 		if err := dst.ensureNullCapacity(len(rows), mp); err != nil {
 			return err
@@ -350,9 +347,6 @@ func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) 
 				dst.gsp.Add(uint64(i))
 			}
 		}
-	}
-	if err := propagateBinaryStringSelection(dst, source, 0, rows, mp); err != nil {
-		return err
 	}
 	source.CopyExpressionMetadataTo(dst)
 	return nil
@@ -514,10 +508,6 @@ func (v *Vector) materializeDictionaryWithBuilder(mp *mpool.MPool, account *Allo
 	flat.length, flat.sorted = v.length, v.sorted
 	// Row metadata is already in logical coordinates. Copy it once; payload
 	// gathering below must not invoke append helpers that rewrite provenance.
-	if err := v.copyBinaryStringTo(flat, mp); err != nil {
-		flat.Free(mp)
-		return nil, err
-	}
 	if err := v.copyWindowBitmapsOwned(flat, 0, v.length, mp); err != nil {
 		flat.Free(mp)
 		return nil, err

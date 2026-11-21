@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -623,7 +622,6 @@ func buildPartialH0Batch(t *testing.T, proc *process.Process, values []int32) *b
 
 type preparedPartialSpec struct {
 	rows    int
-	binary  bool
 	allNull bool
 	value   string
 }
@@ -652,7 +650,7 @@ func buildPreparedPartial(
 		value = "5"
 	}
 	require.NoError(t, vector.AppendBytes(params, []byte(value), spec.allNull, proc.Mp()))
-	proc.SetPrepareParamsWithMetadata(params, nil, []bool{spec.binary})
+	proc.SetPrepareParams(params)
 	defer proc.SetPrepareParams(nil)
 
 	input := batch.NewWithSize(1)
@@ -722,125 +720,6 @@ func mergePreparedPartial(
 	return outputs[0]
 }
 
-func TestMergeGroupPreservesBinaryStringProvenance(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	t.Cleanup(func() {
-		require.Zero(t, proc.Mp().CurrNB())
-		proc.Free()
-	})
-	setGroupProtocolVersionForTest(t, proc, defines.MORPCVersion18)
-	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("binary"), false, proc.Mp()))
-	input.Vecs[0].SetIsBinaryString(true)
-	input.SetRowCount(1)
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	partialOp := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{minTextColumnAgg(0)})
-	partialOp.NeedEval = false
-	partialOp.AppendChild(child)
-	require.NoError(t, partialOp.Prepare(proc))
-	partials := collectBatches(t, partialOp, proc)
-	require.Len(t, partials, 1)
-	partial := cloneBatch(t, proc, partials[0])
-	partialOp.Free(proc, false, nil)
-	child.Free(proc, false, nil)
-	output := mergePreparedPartial(t, proc, partial,
-		[]aggexec.AggFuncExecExpression{minTextColumnAgg(0)})
-	require.True(t, output.Vecs[0].GetBinaryStringMetadataAt(0))
-}
-
-func TestGroupBinaryStringPartialRequiresMORPCVersion18(t *testing.T) {
-	tests := []struct {
-		name           string
-		version        int64
-		missingRuntime bool
-		wantErr        bool
-	}{
-		{name: "v11", version: defines.MORPCVersion11, wantErr: true},
-		{name: "v12", version: defines.MORPCVersion12, wantErr: true},
-		{name: "v16", version: defines.MORPCVersion16, wantErr: true},
-		{name: "v17", version: defines.MORPCVersion17, wantErr: true},
-		{name: "v18", version: defines.MORPCVersion18},
-		{name: "missing runtime", missingRuntime: true, wantErr: true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			if tc.missingRuntime {
-				proc.Base.LockService = &unknownGroupServiceLockService{
-					cfg: lockservice.Config{ServiceID: "group-binary-unknown-service"},
-				}
-			} else {
-				setGroupProtocolVersionForTest(t, proc, tc.version)
-			}
-			input := batch.NewWithSize(2)
-			input.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
-			input.Vecs[1] = vector.NewVec(types.T_text.ToType())
-			require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("binary"), false, proc.Mp()))
-			input.Vecs[1].SetIsBinaryString(true)
-			input.SetRowCount(1)
-			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-			partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
-				[]aggexec.AggFuncExecExpression{minTextColumnAgg(1)})
-			partial.NeedEval = false
-			partial.AppendChild(child)
-			require.NoError(t, partial.Prepare(proc))
-
-			var gotBatch *batch.Batch
-			var gotErr error
-			for range 4 {
-				result, err := vm.Exec(partial, proc)
-				if err != nil {
-					gotErr = err
-					break
-				}
-				if result.Batch != nil {
-					gotBatch = result.Batch
-					break
-				}
-			}
-			if tc.wantErr {
-				require.Nil(t, gotBatch)
-				require.ErrorContains(t, gotErr, "requires MORPCVersion18")
-			} else {
-				require.NoError(t, gotErr)
-				require.NotNil(t, gotBatch)
-			}
-			partial.Free(proc, false, nil)
-			child.Free(proc, false, nil)
-			require.Zero(t, proc.Mp().CurrNB())
-			proc.Free()
-		})
-	}
-}
-
-func TestMergeGroupBinaryStringPartialRequiresMORPCVersion18(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	t.Cleanup(func() {
-		require.Zero(t, proc.Mp().CurrNB())
-		proc.Free()
-	})
-	setGroupProtocolVersionForTest(t, proc, defines.MORPCVersion18)
-	partial := buildPreparedMinPartial(t, proc, preparedPartialSpec{
-		rows:   1,
-		binary: true,
-	})
-	// Exercise the aggregate-owned receiver gate directly. The ordinary batch
-	// metadata is intentionally absent, while the aggregate state still carries
-	// its v18-only binary-string trailer.
-	setGroupProtocolVersionForTest(t, proc, defines.MORPCVersion16)
-
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
-	t.Cleanup(func() { child.Free(proc, false, nil) })
-	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minPreparedParamAgg()})
-	merge.AppendChild(child)
-	t.Cleanup(func() { merge.Free(proc, true, nil) })
-	require.NoError(t, merge.Prepare(proc))
-	result, err := vm.Exec(merge, proc)
-	require.Nil(t, result.Batch)
-	require.ErrorContains(t, err, "requires MORPCVersion18")
-}
-
 func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -852,7 +731,6 @@ func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 	for range 2 {
 		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("5"), false, proc.Mp()))
 	}
-	input.Vecs[1].SetIsBinaryString(true)
 	input.SetRowCount(2)
 
 	partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
@@ -874,7 +752,7 @@ func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 	keys := vector.MustFixedColNoTypeCheck[int32](outputs[0].Vecs[0])
 	require.Len(t, keys, 2)
 	for row := range keys {
-		require.True(t, outputs[0].Vecs[1].GetBinaryStringMetadataAt(row))
+		require.Equal(t, "5", outputs[0].Vecs[1].GetStringAt(row))
 	}
 	merge.Free(proc, false, nil)
 	partialBatch.Clean(proc.Mp())

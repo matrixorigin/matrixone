@@ -108,7 +108,7 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 	scratch.rewritePolicyGeneration = ses.rewritePolicyGeneration
 	staticType := plan.Type{Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetBinary)}
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-		"bound_s", "你", "", false, staticType, types.StringConversionString, false, types.RuntimeStringText))
+		"bound_s", "你", "", false, staticType, types.StringConversionString, false, types.RuntimeStringInherit))
 	stmt := tree.NewPrepareString("bound_migration", "select charset(@bound_s), char_length(coalesce(@bound_s, ?))")
 	defer stmt.Free()
 	p, err := buildPlan(execCtx.reqCtx, ses, ses.txnCompileCtx, stmt)
@@ -133,7 +133,7 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 		require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
 			"bound_s", value, "", false,
 			plan.Type{Id: int32(types.T_text), Charset: uint32(types.CharsetUTF8)},
-			types.StringConversionString, false, types.RuntimeStringBinary))
+			types.StringConversionString, false, types.RuntimeStringInherit))
 		resp := &query.MigrateConnFromResponse{}
 		err := rt.migrateConnectionFrom(resp)
 		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
@@ -159,7 +159,8 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 					if i == 0 {
 						require.Equal(t, "binary", v.GetStringAt(0))
 					} else {
-						require.Equal(t, int64(len([]rune(value))), vector.GetFixedAtNoTypeCheck[int64](v, 0))
+						// The frozen binding is statically binary: byte length.
+						require.Equal(t, int64(len(value)), vector.GetFixedAtNoTypeCheck[int64](v, 0))
 					}
 				}()
 			}
@@ -176,7 +177,7 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 			defer executor.Free()
 			retryValue, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 			require.NoError(t, err)
-			require.Equal(t, int64(len([]rune(value))), vector.GetFixedAtNoTypeCheck[int64](retryValue, 0))
+			require.Equal(t, int64(len(value)), vector.GetFixedAtNoTypeCheck[int64](retryValue, 0))
 		}()
 		require.True(t, plan.HasBoundStringVariable(prepared.PreparePlan), "execution preparation and evaluation must not erase cached bindings")
 		require.Equal(t, original, p.String())

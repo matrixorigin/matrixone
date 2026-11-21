@@ -19,7 +19,6 @@ import (
 	"io"
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -396,8 +395,6 @@ func (v *Vector) CanSetAllocationAccount(
 func (v *Vector) hasBackingStorage() bool {
 	return v.IsDictionary() || cap(v.data) != 0 ||
 		cap(v.area) != 0 ||
-		(v.binaryStringRows != nil && v.binaryStringRows.Size() != 0) ||
-		(v.textStringRows != nil && v.textStringRows.Size() != 0) ||
 		v.nsp.GetBitmap().Size() != 0 ||
 		v.gsp.GetBitmap().Size() != 0
 }
@@ -442,32 +439,7 @@ func (v *Vector) ensureBitmapCapacity(rows int, mp *mpool.MPool) error {
 	if err := v.ensureNullCapacity(rows, mp); err != nil {
 		return err
 	}
-	if err := v.ensureGroupingCapacity(rows, mp); err != nil {
-		return err
-	}
-	if v.binaryStringRows != nil {
-		return v.ensureBinaryStringCapacity(rows, mp)
-	}
-	return nil
-}
-
-func (v *Vector) ensureBinaryStringCapacity(rows int, mp *mpool.MPool) error {
-	// Constant payload and provenance have one physical row even when their
-	// logical broadcast length or a reused payload buffer has larger capacity.
-	if !v.IsConst() && rows < v.Capacity() {
-		rows = v.Capacity()
-	}
-	if err := validBitmapRows(rows); err != nil {
-		return err
-	}
-	if v.binaryStringRows == nil {
-		v.binaryStringRows = &bitmap.Bitmap{}
-	}
-	if v.textStringRows == nil {
-		v.textStringRows = &bitmap.Bitmap{}
-	}
-	// Callers size these with InitWithSize or TryExpandWithSize before writing.
-	return nil
+	return v.ensureGroupingCapacity(rows, mp)
 }
 
 func (v *Vector) ensureNullCapacity(rows int, _ *mpool.MPool) error {

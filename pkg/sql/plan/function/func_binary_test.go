@@ -4994,23 +4994,6 @@ func TestFindInSetHonorsCollationCaseFolding(t *testing.T) {
 		require.True(t, succeed, info)
 	})
 
-	t.Run("per row runtime binary needle stays byte ordered", func(t *testing.T) {
-		caseData := NewFunctionTestCase(
-			proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(text, []string{"A", "B"}, nil),
-				NewFunctionTestInput(text, []string{"a,b", "a,b"}, nil),
-			},
-			NewFunctionTestResult(types.T_uint64.ToType(), false,
-				[]uint64{0, 2}, []bool{false, false}),
-			FindInSet,
-		)
-		require.NoError(t, caseData.parameters[0].SetRuntimeStringDomainAtWithMP(
-			0, types.RuntimeStringBinary, proc.Mp()))
-		succeed, info := caseData.RunAndFree()
-		require.True(t, succeed, info)
-	})
-
 	// The sigma fold orbit (U+03A3/U+03C3/U+03C2) collapses in membership,
 	// matching MySQL's shared 0x03A3 weight (issue #31175 review).
 	t.Run("sigma family folds membership", func(t *testing.T) {

@@ -76,26 +76,6 @@ func TestResultCloneBytesAccountsForSharedPayload(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, measured, uint64(nullClone.Size()))
 
-	binary := make([]bool, rows)
-	for i := 0; i < rows; i += 2 {
-		binary[i] = true
-	}
-	require.NoError(t, flat.SetBinaryStringRowsWithMP(binary, mp))
-	metadataClone, err := cloneInternalExecutorResultBatch(source, mp, false)
-	require.NoError(t, err)
-	defer metadataClone.Clean(mp)
-	measured, err = resultCloneBytes(source, 0, ^uint64(0))
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, measured, uint64(metadataClone.Size()), "mixed metadata must also fit the bound")
-
-	require.NoError(t, constant.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
-	constantMetadataClone, err := cloneInternalExecutorResultBatch(constantBatch, mp, false)
-	require.NoError(t, err)
-	defer constantMetadataClone.Clean(mp)
-	measured, err = resultCloneBytes(constantBatch, 0, limit)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, measured, uint64(constantMetadataClone.Size()), "constant metadata must fit the bound")
-
 	// Reject corrupt references before cloning can slice outside the area.
 	values, area := vector.MustVarlenaRawData(flat)
 	values[1].SetOffsetLen(uint32(len(area)), 1)

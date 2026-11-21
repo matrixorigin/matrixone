@@ -39,7 +39,6 @@ func TestCopyWithReadonlyAreaSnapshotAndReuse(t *testing.T) {
 	require.NoError(t, AppendBytes(source, []byte("inline"), false, mp))
 	require.NoError(t, AppendBytes(source, nil, true, mp))
 	source.GetGrouping().Add(1)
-	require.NoError(t, source.SetIsBinaryStringAt(0, true, mp))
 
 	require.NoError(t, destination.CopyWithReadonlyArea(source, mp))
 	require.Equal(t, types.New(types.T_varchar, 256, 0), *destination.GetType())
@@ -57,7 +56,6 @@ func TestCopyWithReadonlyAreaSnapshotAndReuse(t *testing.T) {
 	require.Less(t, mp.CurrNB()-beforeView, int64(len(value)), "a view must not allocate another payload")
 	require.True(t, readonly.GetNulls().Contains(2))
 	require.True(t, readonly.GetGrouping().Contains(1))
-	require.True(t, readonly.GetIsBinaryStringAt(0))
 	readonly.GetNulls().Del(2)
 	readonly.GetGrouping().Del(1)
 	require.True(t, destination.GetNulls().Contains(2))
