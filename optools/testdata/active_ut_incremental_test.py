@@ -151,18 +151,49 @@ class IncrementalReaderTest(unittest.TestCase):
                 self.assertIn("test=TestOne state=unknown started=unknown package_result=unknown",
                               active_out.read_text())
 
-    def test_failure_replay_admits_the_same_lifecycle_records(self):
-        oversized = self.event("fail", "").replace(
-            b'"}', b'","Padding":"' + b"x" * reader.MAX_LIFECYCLE_LINE_BYTES + b'"}'
-        )
+    def test_final_package_exit_without_newline(self):
         self.report.write_bytes(
-            self.event("start", "") + self.event("run") + oversized
-            + self.event("fail", "")[:-1]
+            self.event("start", "") + self.event("run") + self.event("fail", "")[:-1]
         )
         active_out = self.report.with_suffix(".active")
-        summarize(self.report, active_out=active_out)
+        _, packages, malformed = summarize(self.report, active_out=active_out)
+        self.assertEqual(0, malformed)
+        self.assertEqual("fail", packages[0][3])
+        self.assertIn("unfinished UT case at package exit:", active_out.read_text())
+        self.assertIn("test=TestOne", active_out.read_text())
+        self.assertIn("package_result=fail", active_out.read_text())
+
+        summarize(self.report, active_out=active_out, require_lifecycle_lf=True)
         self.assertEqual(self.read(), active_out.read_text().splitlines())
         self.assertTrue(self.read()[0].startswith("active UT case: "))
+        with self.report.open("ab") as stream:
+            stream.write(b"\n")
+        self.assertEqual(["no active or incomplete UT package/test case found"], self.read())
+
+    def test_final_lifecycle_size_matches_merged_size(self):
+        terminal = self.event("fail", "")[:-1]
+        prefix = self.event("start", "") + self.event("run")
+        active_out = self.report.with_suffix(".active")
+        for admitted in (True, False):
+            payload_size = reader.MAX_LIFECYCLE_LINE_BYTES - int(admitted)
+            event = terminal + b" " * (payload_size - len(terminal))
+            for separator in (b"", b"\n"):
+                with self.subTest(admitted=admitted, separator=separator):
+                    self.report.write_bytes(prefix + event + separator)
+                    summarize(self.report, active_out=active_out)
+                    expected = "unfinished UT case at package exit:" if admitted else "active UT case:"
+                    self.assertTrue(active_out.read_text().startswith(expected))
+
+    def test_final_replay_ignores_corrupt_tail(self):
+        prefix = self.event("start", "") + self.event("run")
+        active_out = self.report.with_suffix(".active")
+        for tail in (self.event("fail", "")[:-2], b"\xff"):
+            with self.subTest(tail=tail):
+                self.report.write_bytes(prefix + tail)
+                _, packages, malformed = summarize(self.report, active_out=active_out)
+                self.assertEqual([], packages)
+                self.assertEqual(1, malformed)
+                self.assertTrue(active_out.read_text().startswith("active UT case: "))
 
     def test_late_distinct_case_has_known_attribution(self):
         self.report.write_bytes(

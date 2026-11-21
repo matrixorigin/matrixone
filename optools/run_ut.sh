@@ -665,9 +665,13 @@ function report_slow_ut_cases(){
     local slow_report="${UT_DIAGNOSTIC_DIR}/top.txt"
     local slow_output=""
     local lifecycle_report="${UT_REPORT}.lifecycle"
+    local -a lifecycle_args=(--active-out "${lifecycle_report}")
+    if [[ -n "${CURRENT_UT_PID}" ]] || (( CURRENT_UT_DRAIN_FAILED != 0 )); then
+        lifecycle_args+=(--require-lifecycle-lf)
+    fi
     rm -f "${lifecycle_report}"
     if ! slow_output=$(python3 -B "${BUILD_WKSP}/optools/summarize_ut_slow_cases.py" \
-        "${UT_REPORT}" --active-out "${lifecycle_report}"); then
+        "${UT_REPORT}" "${lifecycle_args[@]}"); then
         logger "ERR" "failed to summarize slow UT cases from ${UT_REPORT}"
         return 0
     fi

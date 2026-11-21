@@ -68,7 +68,8 @@ def format_duration(seconds: float) -> str:
 
 
 def summarize(
-    report_path: Path, limit: int = 20, active_out: Optional[Path] = None
+    report_path: Path, limit: int = 20, active_out: Optional[Path] = None,
+    *, require_lifecycle_lf: bool = False,
 ) -> Tuple[
     List[Tuple[float, str, str, str, str]],
     List[Tuple[float, str, str, str, str]],
@@ -105,9 +106,13 @@ def summarize(
                 continue
             if action not in TEST_START_ACTIONS and action not in TERMINAL_ACTIONS and action != "start":
                 continue
-            if (lifecycle is not None and len(raw_line) <= MAX_LIFECYCLE_LINE_BYTES
-                    and raw_line.endswith(b"\n")):
-                apply_event(lifecycle, event, unfinished)
+            if lifecycle is not None:
+                has_lf = raw_line.endswith(b"\n")
+                # A stopped writer's decoded EOF record is equivalent to the
+                # merged record, including the separator in the size budget.
+                framed_size = len(raw_line) + (0 if has_lf else 1)
+                if framed_size <= MAX_LIFECYCLE_LINE_BYTES and (has_lf or not require_lifecycle_lf):
+                    apply_event(lifecycle, event, unfinished)
             timestamp = parse_time(event.get("Time"))
             test = event.get("Test")
             if isinstance(test, str) and test:
@@ -163,6 +168,7 @@ def main(argv: List[str]) -> int:
     parser.add_argument("report", type=Path)
     parser.add_argument("limit", nargs="?", type=int, default=20)
     parser.add_argument("--active-out", type=Path)
+    parser.add_argument("--require-lifecycle-lf", action="store_true")
     args = parser.parse_args(argv[1:])
     limit = args.limit
     if limit <= 0:
@@ -171,7 +177,9 @@ def main(argv: List[str]) -> int:
         print(f"slow UT case report missing: {args.report}", file=sys.stderr)
         return 1
 
-    tests, packages, malformed = summarize(args.report, limit, args.active_out)
+    tests, packages, malformed = summarize(
+        args.report, limit, args.active_out, require_lifecycle_lf=args.require_lifecycle_lf,
+    )
     print(f"[slow_ut_cases] completed test cases (top {limit}):")
     if tests:
         for elapsed, package, test, result, ended in tests:
