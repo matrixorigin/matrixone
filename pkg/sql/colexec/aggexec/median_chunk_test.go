@@ -104,7 +104,7 @@ func TestMedianFlushAcrossResultChunks(t *testing.T) {
 					result, err := exec.Flush()
 					t.Cleanup(func() {
 						for _, v := range result {
-							v.Free(mp)
+							v.Free(v.MPool())
 						}
 					})
 					require.NoError(t, err)

@@ -688,7 +688,7 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 	bat := batch.New([]string{"data", "total_size", "chunk_index", "total_chunks", "is_complete"})
 
 	// Column 0: data (BLOB)
-	bat.Vecs[0] = vector.NewVec(types.T_blob.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_blob.ToType(), mp)
 	if data != nil {
 		err = vector.AppendBytes(bat.Vecs[0], data, false, mp)
 		if err != nil {
@@ -704,7 +704,7 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 	}
 
 	// Column 1: total_size (LONGLONG)
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixed(bat.Vecs[1], fileSize, false, mp)
 	if err != nil {
 		bat.Clean(mp)
@@ -712,7 +712,7 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 	}
 
 	// Column 2: chunk_index (LONG) - use int64 to match getObjectFromUpstream expectations
-	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixed(bat.Vecs[2], chunkIndex, false, mp)
 	if err != nil {
 		bat.Clean(mp)
@@ -720,7 +720,7 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 	}
 
 	// Column 3: total_chunks (LONG) - use int64 to match getObjectFromUpstream expectations
-	bat.Vecs[3] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixed(bat.Vecs[3], totalChunks, false, mp)
 	if err != nil {
 		bat.Clean(mp)
@@ -728,7 +728,7 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 	}
 
 	// Column 4: is_complete (bool) - use bool to match getObjectFromUpstream expectations
-	bat.Vecs[4] = vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[4] = vector.NewVec(types.T_bool.ToType(), mp)
 	err = vector.AppendFixed(bat.Vecs[4], isComplete, false, mp)
 	if err != nil {
 		bat.Clean(mp)
@@ -763,7 +763,7 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedDirectly(
 		// If snapshot not found, return false
 		mp := mpool.MustNewZero()
 		bat := batch.New([]string{"result"})
-		bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_bool.ToType(), mp)
 		err = vector.AppendFixed(bat.Vecs[0], false, false, mp)
 		if err != nil {
 			bat.Clean(mp)
@@ -808,7 +808,7 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedDirectly(
 	// Create a batch with one column containing the result
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"result"})
-	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType(), mp)
 	err = vector.AppendFixed(bat.Vecs[0], result, false, mp)
 	if err != nil {
 		bat.Clean(mp)
@@ -1279,7 +1279,7 @@ func (h *UpstreamSQLHelper) handleGetObjectCmd(
 	bat := batch.New([]string{"data", "total_size", "chunk_index", "total_chunks", "is_complete"})
 
 	// Column 0: data (BLOB)
-	bat.Vecs[0] = vector.NewVec(types.T_blob.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_blob.ToType(), mp)
 	if data != nil {
 		err = vector.AppendBytes(bat.Vecs[0], data, false, mp)
 		if err != nil {
@@ -1295,7 +1295,7 @@ func (h *UpstreamSQLHelper) handleGetObjectCmd(
 	}
 
 	// Column 1: total_size (LONGLONG)
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixed(bat.Vecs[1], fileSize, false, mp)
 	if err != nil {
 		bat.Clean(mp)
@@ -1303,7 +1303,7 @@ func (h *UpstreamSQLHelper) handleGetObjectCmd(
 	}
 
 	// Column 2: chunk_index (LONG)
-	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixed(bat.Vecs[2], chunkIndex, false, mp)
 	if err != nil {
 		bat.Clean(mp)
@@ -1311,7 +1311,7 @@ func (h *UpstreamSQLHelper) handleGetObjectCmd(
 	}
 
 	// Column 3: total_chunks (LONG)
-	bat.Vecs[3] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixed(bat.Vecs[3], totalChunks, false, mp)
 	if err != nil {
 		bat.Clean(mp)
@@ -1319,7 +1319,7 @@ func (h *UpstreamSQLHelper) handleGetObjectCmd(
 	}
 
 	// Column 4: is_complete (bool)
-	bat.Vecs[4] = vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[4] = vector.NewVec(types.T_bool.ToType(), mp)
 	err = vector.AppendFixed(bat.Vecs[4], isComplete, false, mp)
 	if err != nil {
 		bat.Clean(mp)
@@ -1368,7 +1368,7 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedCmd(
 		// If snapshot not found, return false
 		mp := mpool.MustNewZero()
 		bat := batch.New([]string{"result"})
-		bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_bool.ToType(), mp)
 		err = vector.AppendFixed(bat.Vecs[0], false, false, mp)
 		if err != nil {
 			bat.Clean(mp)
@@ -1413,7 +1413,7 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedCmd(
 	// Create a batch with one column containing the result
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"result"})
-	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType(), mp)
 	err = vector.AppendFixed(bat.Vecs[0], result, false, mp)
 	if err != nil {
 		bat.Clean(mp)
@@ -1444,7 +1444,7 @@ func (h *UpstreamSQLHelper) handleGCStatusCmd(
 
 		mp := mpool.MustNewZero()
 		bat := batch.New([]string{"result"})
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 		err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
 		if err != nil {
 			bat.Clean(mp)
@@ -1465,7 +1465,7 @@ func (h *UpstreamSQLHelper) handleGCStatusCmd(
 
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"result"})
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
 	if err != nil {
 		bat.Clean(mp)
@@ -1492,7 +1492,7 @@ func (h *UpstreamSQLHelper) handleRegisterSyncProtectionCmd(
 
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"result"})
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
 	if err != nil {
 		bat.Clean(mp)
@@ -1519,7 +1519,7 @@ func (h *UpstreamSQLHelper) handleRenewSyncProtectionCmd(
 
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"result"})
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
 	if err != nil {
 		bat.Clean(mp)
@@ -1546,7 +1546,7 @@ func (h *UpstreamSQLHelper) handleUnregisterSyncProtectionCmd(
 
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"result"})
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
 	if err != nil {
 		bat.Clean(mp)

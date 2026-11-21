@@ -388,9 +388,9 @@ type indicatorEvaluator struct {
 
 // freeVectors releases every mpool-held vector of the evaluator and clears
 // the stage seed rings.
-func (ev *indicatorEvaluator) freeVectors(mp *mpool.MPool) {
+func (ev *indicatorEvaluator) freeVectors(free func(*vector.Vector)) {
 	if ev.prefix != nil {
-		ev.prefix.Free(mp)
+		free(ev.prefix)
 		ev.prefix = nil
 	}
 	for i := range ev.stageSeed {
@@ -794,7 +794,7 @@ func (ctr *container) newIndicatorEvaluator(
 		return nil, err
 	}
 	ev.mp = mp
-	prefixVec, err := ctr.allocation.NewVector(ev.retType)
+	prefixVec, err := ctr.allocation.NewVector(proc, ev.retType)
 	if err != nil {
 		return nil, err
 	}
@@ -802,14 +802,14 @@ func (ctr *container) newIndicatorEvaluator(
 	srcVec := ctr.aggVecs[idx].Vec[0]
 	srcRowFn, err := newIndicatorValueRowFn(funcName, srcVec, proc.Ctx)
 	if err != nil {
-		ev.freeVectors(proc.Mp())
+		ev.freeVectors(func(v *vector.Vector) { ctr.allocation.FreeVector(proc, v) })
 		return nil, err
 	}
 	ev.rowFn = srcRowFn
 	if kernel != kernelCumPositiveStreak {
 		nVal, ok := getInt64FromVec(ctr.aggVecs[idx].Vec[1], 0)
 		if !ok || int(nVal) < indicatorMinPeriod || int(nVal) > indicatorMaxPeriod {
-			ev.freeVectors(proc.Mp())
+			ev.freeVectors(func(v *vector.Vector) { ctr.allocation.FreeVector(proc, v) })
 			return nil, moerr.NewInvalidInputf(proc.Ctx,
 				"period argument of %s must be a constant integer in [1, 1024]", funcName)
 		}
@@ -898,13 +898,13 @@ func (ctr *container) processIndicatorFuncRange(
 	if err = ev.advanceTo(proc, outputEnd, ctr.ps, ctr.bat.RowCount()); err != nil {
 		return nil, err
 	}
-	localResult, err := ctr.allocation.NewVector(retType)
+	localResult, err := ctr.allocation.NewVector(proc, retType)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		if err != nil && localResult != nil {
-			localResult.Free(proc.Mp())
+			ctr.allocation.FreeVector(proc, localResult)
 			result = nil
 		}
 	}()
@@ -959,10 +959,10 @@ func (ctr *container) validateIndicatorPeriods(idx int, ap *Window, proc *proces
 
 // freeIndicatorState releases the indicator evaluators of every window
 // expression at the three lifecycle reset points (eval entry, Reset, Free).
-func (ctr *container) freeIndicatorState(mp *mpool.MPool) {
+func (ctr *container) freeIndicatorState(proc *process.Process) {
 	for _, ev := range ctr.indicatorEvals {
 		if ev != nil {
-			ev.freeVectors(mp)
+			ev.freeVectors(func(v *vector.Vector) { ctr.allocation.FreeVector(proc, v) })
 		}
 	}
 	ctr.indicatorEvals = nil

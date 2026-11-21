@@ -2157,9 +2157,11 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		if err != nil {
 			return err
 		}
-		if _, err = txn.WriteBatch(ALTER, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, bat, txn.tnStores[0]); err != nil {
-			bat.Clean(txn.proc.Mp())
+		// WriteBatch copies the rows into the workspace; the batch stays ours.
+		_, err = txn.WriteBatch(ALTER, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, bat, txn.tnStores[0])
+		bat.Clean(txn.proc.Mp())
+		if err != nil {
 			return err
 		}
 	}
@@ -2277,7 +2279,8 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.getTxn().tnStores[0],
 		tbl.extraInfo.AutoIncrEpoch,
 	); err != nil {
-		ibat.Clean(tbl.getTxn().proc.Mp())
+		tbl.getTxn().takeWorkspaceCopy(ibat)
+		ibat.Clean(tbl.getTxn().workspaceMP())
 		return err
 	}
 	return tbl.getTxn().dumpBatch(ctx, tbl.getTxn().GetSnapshotWriteOffset())
@@ -2408,7 +2411,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		return nil, fileName, persisted, err
 	}
 
-	if infoBat, err = s3Writer.FillBlockInfoBat(); err != nil {
+	if infoBat, err = s3Writer.FillBlockInfoBat(proc.Mp()); err != nil {
 		return nil, fileName, persisted, err
 	}
 
@@ -2429,7 +2432,8 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	}
 
 	fileName = stats[0].ObjectLocation().String()
-	bat, err = infoBat.Dup(proc.Mp())
+	// The caller releases the replacement batch with the transaction pool.
+	bat, err = infoBat.Dup(tbl.getTxn().proc.Mp())
 
 	return bat, fileName, persisted, err
 }
@@ -2453,15 +2457,20 @@ func (tbl *txnTable) Delete(
 
 	switch deletionTyp {
 	case catalog.Row_ID:
-		var err error
-		bat, err = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		// The caller's batch is in the caller's pool: filter a workspace
+		// copy, which then enters the workspace as is.
+		txn := tbl.getTxn()
+		ibat, err := txn.copyWorkspaceBatchForTable(bat, tbl.db.databaseName)
 		if err != nil {
 			return err
 		}
-		if bat.RowCount() == 0 {
-			return nil
+		ibat, err = txn.deleteBatch(ibat, tbl.db.databaseId, tbl.tableId, txn.workspaceMP())
+		if err != nil || ibat.RowCount() == 0 {
+			txn.takeWorkspaceCopy(ibat)
+			ibat.Clean(txn.workspaceMP())
+			return err
 		}
-		return tbl.writeTnPartition(ctx, bat)
+		return tbl.writeTnPartitionCopy(ctx, ibat)
 
 	case catalog.ObjectMeta_ObjectStats:
 		tbl.getTxn().hasS3Op.Store(true)
@@ -2503,9 +2512,14 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 	bat := batch.NewWithSize(1)
 	bat.SetAttributes([]string{"object_id"})
 
-	objIDVec := vector.NewVec(types.T_binary.ToType())
+	// The entry enters the workspace directly, so it is built in its pool.
+	objIDVec, wmp, err := tbl.getTxn().newWorkspaceVector(types.T_binary.ToType())
+	if err != nil {
+		return err
+	}
 	objIDBytes := objID[:]
-	if err := vector.AppendBytes(objIDVec, objIDBytes, false, tbl.getTxn().proc.Mp()); err != nil {
+	if err := vector.AppendBytes(objIDVec, objIDBytes, false, wmp); err != nil {
+		objIDVec.Free(wmp)
 		return err
 	}
 	bat.Vecs[0] = objIDVec
@@ -2538,9 +2552,16 @@ func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) err
 	if err != nil {
 		return err
 	}
-	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(ctx, DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.writeTableName(ctx), ibat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
-		ibat.Clean(tbl.getTxn().proc.Mp())
+	return tbl.writeTnPartitionCopy(ctx, ibat)
+}
+
+// writeTnPartitionCopy writes ibat, a workspace copy, as a delete entry.
+func (tbl *txnTable) writeTnPartitionCopy(ctx context.Context, ibat *batch.Batch) error {
+	txn := tbl.getTxn()
+	if _, err := txn.writeBatchWithAutoIncrEpoch(ctx, DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
+		tbl.db.databaseName, tbl.writeTableName(ctx), ibat, txn.tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
+		txn.takeWorkspaceCopy(ibat)
+		ibat.Clean(txn.workspaceMP())
 		return err
 	}
 	return nil
@@ -3834,7 +3855,7 @@ func dupVectorWithoutNulls(v *vector.Vector, mp *mpool.MPool) (*vector.Vector, e
 		// short-lived transaction-engine owner charged through mp.
 		return v.Dup(mp)
 	}
-	filtered := vector.NewVec(*v.GetType())
+	filtered := vector.NewVec(*v.GetType(), mp)
 	nsp := v.GetNulls()
 	for i := 0; i < v.Length(); i++ {
 		if !nsp.Contains(uint64(i)) {

@@ -257,7 +257,7 @@ func TestJsonStorageSizeUsesPersistedSpecialByteJson(t *testing.T) {
 	nested, err := bytejson.CreateByteJSON([]any{opaque, bit})
 	require.NoError(t, err)
 
-	input := vector.NewVec(types.T_json.ToType())
+	input := vector.NewVec(types.T_json.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	values := []bytejson.ByteJson{opaque, bit, nested}
 	want := make([]int64, len(values))
@@ -312,7 +312,7 @@ func TestJsonStorageErrorRecoveryAfterInvalidText(t *testing.T) {
 		{name: "free", fn: JsonStorageFree, want: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			input := vector.NewVec(types.T_varchar.ToType())
+			input := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			defer input.Free(proc.Mp())
 			result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 			defer result.Free()

@@ -2642,7 +2642,7 @@ func buildExecuteUserParamsWithMemberOfPositions(
 	paramTypes []types.T,
 	err error,
 ) {
-	params = vector.NewVec(types.T_text.ToType())
+	params = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer func() {
 		if err != nil {
 			params.Free(proc.Mp())

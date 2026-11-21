@@ -53,7 +53,7 @@ func TestSortRollupLaterDecimalFinalizerFailure(t *testing.T) {
 	require.NoError(t, err)
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
-	input.Vecs[1] = vector.NewVec(typ)
+	input.Vecs[1] = vector.NewVec(typ, proc.Mp())
 	require.NoError(t, vector.AppendFixed(input.Vecs[1], max, false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(input.Vecs[1], types.Decimal256FromInt64(1), false, proc.Mp()))
 	input.SetRowCount(2)

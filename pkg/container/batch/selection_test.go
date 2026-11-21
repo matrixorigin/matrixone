@@ -28,8 +28,8 @@ import (
 func TestBatchSelection(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	for i := int64(0); i < 6; i++ {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], i*10, false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte{byte('a' + i)}, i == 4, mp))
@@ -60,8 +60,8 @@ func TestBatchSelection(t *testing.T) {
 	require.Error(t, err)
 
 	compact := NewWithSize(2)
-	compact.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	compact.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	compact.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	compact.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, bat.CompactInto(compact, mp))
 	require.False(t, compact.HasSelection())
 	require.Equal(t, 3, compact.RowCount())

@@ -130,33 +130,33 @@ func TestLocalSpillDirNilRootFS(t *testing.T) {
 func TestScalarInt64ReadsBothAggregateTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	i64 := vector.NewVec(types.T_int64.ToType())
+	i64 := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(i64, int64(4096), false, mp))
 	require.Equal(t, int64(4096), scalarInt64(i64))
 
-	dec := vector.NewVec(types.T_decimal128.ToType())
+	dec := vector.NewVec(types.T_decimal128.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(dec, types.Decimal128{B0_63: 4096, B64_127: 0}, false, mp))
 	require.Equal(t, int64(4096), scalarInt64(dec))
 
 	// a value past int64 saturates rather than wrapping to a negative budget,
 	// which would silently disable the guard
-	big := vector.NewVec(types.T_decimal128.ToType())
+	big := vector.NewVec(types.T_decimal128.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(big, types.Decimal128{B0_63: 0, B64_127: 1}, false, mp))
 	require.Equal(t, int64(math.MaxInt64), scalarInt64(big))
 
-	huge := vector.NewVec(types.T_decimal128.ToType())
+	huge := vector.NewVec(types.T_decimal128.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(huge, types.Decimal128{B0_63: math.MaxUint64, B64_127: 0}, false, mp))
 	require.Equal(t, int64(math.MaxInt64), scalarInt64(huge))
 
 	// empty / null / unexpected type are all "no budget information"
 	require.Equal(t, int64(0), scalarInt64(nil))
-	require.Equal(t, int64(0), scalarInt64(vector.NewVec(types.T_int64.ToType())))
+	require.Equal(t, int64(0), scalarInt64(vector.NewVec(types.T_int64.ToType(), mp)))
 
-	null := vector.NewVec(types.T_int64.ToType())
+	null := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(null, int64(0), true, mp))
 	require.Equal(t, int64(0), scalarInt64(null))
 
-	other := vector.NewVec(types.T_varchar.ToType())
+	other := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(other, []byte("7"), false, mp))
 	require.Equal(t, int64(0), scalarInt64(other))
 }

@@ -110,10 +110,10 @@ func newInsertTableHarness(
 
 	// Pre-allocate the insertBuf only for the non-contiguous path. Contiguous
 	// path never reads it; passing it in keeps the call site's signature happy.
-	insertBuf := batch.NewOffHeapWithSize(len(insertCols))
+	insertBuf := batch.NewWithSize(len(insertCols))
 	insertBuf.SetAttributes(attrs)
 	for i := range insertCols {
-		insertBuf.Vecs[i] = vector.NewOffHeapVecWithType(colTypes[i])
+		insertBuf.Vecs[i] = vector.NewVec(colTypes[i], mp)
 	}
 	h.insertBuf = insertBuf
 	return h
@@ -299,7 +299,7 @@ func TestInsertMainTableSkipNullPkUsesActualPkColumn(t *testing.T) {
 	input := makePkSecondInputBatch(mp, []int32{0, 7}, []uint64{0}, []int64{1, 0}, []uint64{1}, []int32{10, 20}, nil)
 
 	analyzer := process.NewTempAnalyzer()
-	require.NoError(t, op.insert_main_table(proc, analyzer, 0, input))
+	require.NoError(t, mainErr(op.insert_main_table(proc, analyzer, 0, input, false)))
 	require.Len(t, *written, 1)
 
 	got := (*written)[0]
@@ -325,7 +325,7 @@ func TestInsertMainTableSkipNullPkChecksNotNullAfterFilter(t *testing.T) {
 	input := makePkSecondInputBatch(mp, []int32{5, 6}, nil, []int64{0, 2}, []uint64{0}, []int32{0, 0}, []uint64{0, 1})
 
 	analyzer := process.NewTempAnalyzer()
-	err := op.insert_main_table(proc, analyzer, 0, input)
+	_, err := op.insert_main_table(proc, analyzer, 0, input, false)
 	require.ErrorContains(t, err, "Column 'b' cannot be null")
 	require.Empty(t, *written)
 
@@ -344,7 +344,7 @@ func TestInsertMainTableSkipNullPkRejectsZeroTemporalAfterFilter(t *testing.T) {
 	op.RejectZeroTemporal = true
 	updateCtx.TableDef.Cols[0].Typ = plan.Type{Id: int32(types.T_date)}
 
-	dates := vector.NewVec(types.T_date.ToType())
+	dates := vector.NewVec(types.T_date.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(dates, types.ZeroDate, false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(dates, types.ZeroDate, false, proc.Mp()))
 	ids := testutil.MakeInt64Vector([]int64{0, 2}, []uint64{0}, proc.Mp())
@@ -356,7 +356,7 @@ func TestInsertMainTableSkipNullPkRejectsZeroTemporalAfterFilter(t *testing.T) {
 	input.SetRowCount(2)
 	defer input.Clean(proc.Mp())
 
-	err := op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input)
+	_, err := op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input, false)
 	require.Error(t, err)
 	require.Empty(t, *written)
 	op.Free(proc, true, err)

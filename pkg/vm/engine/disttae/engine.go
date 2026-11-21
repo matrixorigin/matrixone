@@ -536,11 +536,12 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	// WriteBatch copies the rows into the workspace; the batch stays ours.
+	defer bat.Clean(txn.proc.Mp())
 	// non-io operations do not need to pass context
 	note := noteForCreate(uint64(accountId), name)
 	if _, err = txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0]); err != nil {
-		bat.Clean(txn.proc.Mp())
 		return err
 	}
 
@@ -979,17 +980,17 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	// WriteBatch copies the rows into the workspace; the batch stays ours.
+	defer bat.Clean(txn.proc.Mp())
 
-	bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID)
+	bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.proc.Mp())
 	if err != nil {
-		bat.Clean(txn.proc.Mp())
 		return err
 	}
 	if bat.RowCount() > 0 {
 		note := noteForDrop(uint64(accountId), name)
 		if _, err := txn.WriteBatch(DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 			catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0]); err != nil {
-			bat.Clean(txn.proc.Mp())
 			return err
 		}
 	}

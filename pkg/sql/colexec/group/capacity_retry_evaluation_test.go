@@ -52,14 +52,14 @@ func (e *retryStringExpression) Eval(proc *process.Process, inputs []*batch.Batc
 		return result, err
 	}
 	if e.vec != nil {
-		e.vec.Free(proc.Mp())
+		e.vec.Free(e.mp)
 	}
 	e.mp = proc.Mp()
 	if e.selection != nil {
 		e.mp = e.selection
 	}
 	e.calls++
-	e.vec = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	e.vec = vector.NewVec(types.T_varchar.ToType(), e.mp)
 	for range inputs[0].RowCount() {
 		e.rows++
 		value := fmt.Sprintf("%05d-%s", e.rows, strings.Repeat("x", 96))
@@ -94,7 +94,7 @@ type retryIntExpression struct {
 
 func (e *retryIntExpression) Eval(proc *process.Process, inputs []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	if e.vec != nil {
-		e.vec.Free(proc.Mp())
+		e.vec.Free(e.mp)
 	}
 	e.mp = proc.Mp()
 	if e.selection != nil {
@@ -102,7 +102,7 @@ func (e *retryIntExpression) Eval(proc *process.Process, inputs []*batch.Batch, 
 	}
 	e.calls++
 	var err error
-	e.vec = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	e.vec = vector.NewVec(types.T_int32.ToType(), e.mp)
 	for range inputs[0].RowCount() {
 		e.rows++
 		if err = vector.AppendFixed(e.vec, int32(e.rows), false, e.mp); err != nil {

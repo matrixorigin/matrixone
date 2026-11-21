@@ -1380,14 +1380,16 @@ type ReaderMembershipFilter struct {
 // cached block. The row map is accounted; Sources/Views are non-owning operands
 // cleared before every read returns. Scope cannot escape the synchronous read.
 type ReaderMembershipScratch struct {
-	Physical       *vector.Vector
+	Physical *vector.Vector
+	// physicalMP is the pool Physical was created with.
+	physicalMP     *mpool.MPool
 	Sources, Views []*vector.Vector
 	// Separate non-owning operands stay stable while nested key/publication
 	// reads reuse the ordinary request scratch inside the predicate I/O scope.
 	PredicateRead ReaderSelectionScratch
 }
 
-func (r *ReaderFilterRequest) MembershipScratch(width int) (*ReaderMembershipScratch, error) {
+func (r *ReaderFilterRequest) MembershipScratch(width int, mp *mpool.MPool) (*ReaderMembershipScratch, error) {
 	if r.Membership.scratch == nil {
 		r.Membership.scratch = &ReaderMembershipScratch{
 			Sources: make([]*vector.Vector, width), Views: make([]*vector.Vector, width),
@@ -1395,7 +1397,13 @@ func (r *ReaderFilterRequest) MembershipScratch(width int) (*ReaderMembershipScr
 	}
 	s := r.Membership.scratch
 	if s.Physical == nil {
-		s.Physical = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		// The scratch belongs to the request: it lives in the output pool.
+		owner := mp
+		if r.OutputAllocation != nil {
+			owner = r.OutputAllocation
+		}
+		s.Physical = vector.NewVec(types.T_int64.ToType(), owner)
+		s.physicalMP = owner
 	}
 	return s, nil
 }
@@ -1408,7 +1416,8 @@ func (r *ReaderFilterRequest) FreeMembership(mp *mpool.MPool) {
 	}
 	s := r.Membership.scratch
 	if s.Physical != nil {
-		s.Physical.Free(mp)
+		// Freed with the pool MembershipScratch created it with.
+		s.Physical.Free(s.physicalMP)
 	}
 	r.Membership.scratch = nil
 }

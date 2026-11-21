@@ -35,9 +35,9 @@ func TestWriteDMLReplacementDataFilesWritesStatementScopedParquet(t *testing.T) 
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id", "created_at", "name"})
-	idVec := vector.NewVec(types.T_int32.ToType())
-	dateVec := vector.NewVec(types.T_date.ToType())
-	nameVec := vector.NewVec(types.T_varchar.ToType())
+	idVec := vector.NewVec(types.T_int32.ToType(), mp)
+	dateVec := vector.NewVec(types.T_date.ToType(), mp)
+	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for idx, row := range []struct {
 		id   int32
 		date types.Date

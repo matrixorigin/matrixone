@@ -38,15 +38,6 @@ func (v *Vector) hasBackingStorage() bool {
 		v.gsp.GetBitmap().Size() != 0
 }
 
-// hasOwnedBackingStorage reports storage that UnmarshalBinary cannot replace
-// without losing an MPool-owned allocation. Data and area marked cantFree are
-// borrowed aliases; bitmap backing is always Go-owned and remains GC-visible
-// after replacement.
-func (v *Vector) hasOwnedBackingStorage() bool {
-	return cap(v.data) != 0 && !v.cantFreeData ||
-		cap(v.area) != 0 && !v.cantFreeArea
-}
-
 // Bitmaps always use Go-owned memory. When a vector grows, it reserves room in
 // the bitmaps it uses for all of its rows; a bitmap also grows itself on write.
 
@@ -80,71 +71,72 @@ func (v *Vector) ensureGroupingCapacity(rows int, _ *mpool.MPool) error {
 	return nil
 }
 
+func errVectorReadOnly() error {
+	return moerr.NewInternalErrorNoCtx("vector is read-only: it has no mpool")
+}
+
+// checkMP verifies that mp, passed by a caller operating on v, is exactly the
+// pool v was created with; a different pool, even a view of the same pool, is
+// an error. An accounted view is therefore supplied when the vector is
+// created. A read-only vector (nil pool) accepts no allocation or mutation.
+func (v *Vector) checkMP(mp *mpool.MPool) error {
+	if v.mp == nil {
+		return errVectorReadOnly()
+	}
+	if mp != v.mp {
+		return moerr.NewInternalErrorNoCtxf(
+			"vector mpool mismatch: vector belongs to %p, call passed %p", v.mp, mp)
+	}
+	return nil
+}
+
+// mustCheckMP is checkMP for calls that cannot return an error.
+func (v *Vector) mustCheckMP(mp *mpool.MPool) {
+	if err := v.checkMP(mp); err != nil {
+		panic(err)
+	}
+}
+
 func (v *Vector) allocData(mp *mpool.MPool, size int) ([]byte, error) {
-	return v.allocOwned(mp, size, v.offHeap, true)
+	return v.allocOwned(mp, size)
 }
 
 func (v *Vector) allocArea(mp *mpool.MPool, size int) ([]byte, error) {
-	return v.allocOwned(mp, size, v.offHeap, false)
+	return v.allocOwned(mp, size)
 }
 
-func (v *Vector) allocOwned(
-	mp *mpool.MPool,
-	size int,
-	offHeap bool,
-	_ bool,
-) ([]byte, error) {
-	if mp == nil {
-		return nil, moerr.NewInternalErrorNoCtx(
-			"vector allocation does not have a mpool",
-		)
+// allocOwned allocates size bytes from v's pool. All vector memory is
+// off-heap.
+func (v *Vector) allocOwned(mp *mpool.MPool, size int) ([]byte, error) {
+	if err := v.checkMP(mp); err != nil {
+		return nil, err
 	}
-	// An accounted MPool view charges the allocation; the vector itself
-	// carries no account. A view charges only off-heap allocations, so an
-	// allocation through a view is always off-heap.
-	return mp.Alloc(size, offHeap || mp.IsView())
+	return v.mp.Alloc(size, true)
 }
 
 func (v *Vector) growData(mp *mpool.MPool, size int) ([]byte, error) {
-	return v.growOwned(mp, v.data, size, true)
+	return v.growOwned(mp, v.data, size)
 }
 
 func (v *Vector) growArea(mp *mpool.MPool, size int) ([]byte, error) {
-	return v.growOwned(mp, v.area, size, false)
+	return v.growOwned(mp, v.area, size)
 }
 
-func (v *Vector) growOwned(
-	mp *mpool.MPool,
-	old []byte,
-	size int,
-	data bool,
-) ([]byte, error) {
-	if v.HasBorrowedBacking() {
-		if err := v.MaterializeOwned(mp); err != nil {
-			return nil, err
-		}
-		if data {
-			old = v.data
-		} else {
-			old = v.area
-		}
+func (v *Vector) growOwned(mp *mpool.MPool, old []byte, size int) ([]byte, error) {
+	if err := v.checkMP(mp); err != nil {
+		return nil, err
 	}
 	if size <= cap(old) {
 		return old[:size], nil
-	}
-	if mp == nil {
-		return nil, moerr.NewInternalErrorNoCtx(
-			"vector growth does not have a mpool",
-		)
 	}
 	capacity, ok := mpool.GrowCapacity(int64(cap(old)), int64(size))
 	if !ok {
 		return nil, mpool.ErrAllocationAllocatorLimit
 	}
 	if cap(old) != 0 {
-		return mp.Grow(old, size, v.offHeap || mp.IsView())
+		return v.mp.Grow(old, size, true)
 	}
-	buf, err := v.allocOwned(mp, int(capacity), v.offHeap, data)
+	buf, err := v.mp.Alloc(int(capacity), true)
 	if err != nil {
 		return nil, err
 	}

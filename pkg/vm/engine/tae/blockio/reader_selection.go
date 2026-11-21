@@ -17,6 +17,7 @@ package blockio
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -30,7 +31,24 @@ func publishReaderSelection(output *batch.Batch, positions []int, rows []int64, 
 			vec.CleanOnlyData()
 			continue
 		}
-		if err := vec.Shrink(rows, false, mp); err != nil {
+		if vec.IsReadOnly() {
+			// A column borrowed from the cache cannot shrink in place: publish
+			// an owned copy of the selected rows instead.
+			owner := mp
+			if request != nil && request.OutputAllocation != nil {
+				owner = request.OutputAllocation
+			}
+			owned := vector.NewVec(*vec.GetType(), owner)
+			if err := owned.Union(vec, rows, owner); err != nil {
+				owned.Free(owner)
+				return err
+			}
+			owned.SetSorted(vec.GetSorted())
+			vec.Free(nil)
+			output.Vecs[pos] = owned
+			continue
+		}
+		if err := vec.Shrink(rows, false, vec.MPool()); err != nil {
 			return err
 		}
 	}

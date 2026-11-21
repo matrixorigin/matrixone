@@ -105,7 +105,7 @@ func ivfAndExpr(ctx context.Context, exprs ...*plan.Expr) (*plan.Expr, error) {
 }
 
 func ivfInInt64Expr(ctx context.Context, mp *mpool.MPool, left *plan.Expr, values []int64) (*plan.Expr, error) {
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer vec.Free(mp)
 	if err := vector.AppendFixedList(vec, values, nil, mp); err != nil {
 		return nil, err

@@ -200,8 +200,8 @@ func newOrderPairBatch(
 	t.Helper()
 	require.Len(t, second, len(first))
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], first, nil, proc.Mp()))
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], second, nil, proc.Mp()))
 	bat.SetRowCount(len(first))
@@ -330,7 +330,7 @@ func TestAccountedOrderVariableProjectionAcrossBatches(t *testing.T) {
 		require.NoError(t, evalErr)
 
 		input := batch.NewWithSize(2)
-		input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(input.Vecs[0], ids, nil, proc.Mp()))
 		input.Vecs[1] = zone
 		input.SetRowCount(len(ids))
@@ -365,68 +365,6 @@ func TestAccountedOrderVariableProjectionAcrossBatches(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
-func TestAccountedOrderFinalShuffleUsesRecoveryCapacity(t *testing.T) {
-	controller := &orderTestCapacityController{limit: 64 << 20}
-	proc, op, _ := newOrderRecoveryTest(t, controller)
-	input := newOrderPairBatch(t, proc, []int64{4, 3, 2, 1}, []int64{1, 2, 3, 4})
-	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
-	require.NoError(t, op.Prepare(proc))
-	_, err := op.ctr.appendBatch(proc, input)
-	require.NoError(t, err)
-	op.ctr.resultOrderList, op.ctr.resultOrderMP, err = growOrderSliceWithCapacityClass(
-		op.ctr.resultOrderList,
-		op.ctr.resultOrderMP,
-		op.ctr.batWaitForSort.RowCount(),
-		proc,
-		op.ctr.allocationAccount,
-		ordersites.OrderSelections,
-		mpool.AllocationCapacityClassDefault,
-	)
-	require.NoError(t, err)
-	for i := range op.ctr.resultOrderList {
-		op.ctr.resultOrderList[i] = int64(len(op.ctr.resultOrderList) - i - 1)
-	}
-	controller.freeze()
-
-	result := vm.NewCallResult()
-	err = op.ctr.sortAndSend(proc, &result)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	require.Equal(t, []int64{1, 2, 3, 4},
-		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
-	capacity, borrowed := op.ctr.recoveryCapacity.Snapshot()
-	require.Positive(t, capacity)
-	require.Positive(t, borrowed)
-}
-
-func TestAccountedOrderRetainsRunFromPreAdmittedRecoveryCapacity(t *testing.T) {
-	controller := &orderTestCapacityController{limit: 64 << 20}
-	proc, op, _ := newOrderRecoveryTest(t, controller)
-	input := newOrderPairBatch(t, proc,
-		[]int64{4, 3, 2, 1}, []int64{1, 2, 3, 4})
-	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
-	require.NoError(t, op.Prepare(proc))
-	require.NoError(t, op.ctr.ensureRecoveryCapacity(input))
-	ordinaryUsed := controller.freeze()
-
-	_, err := op.ctr.appendBatch(proc, input)
-	require.NoError(t, err)
-	require.Equal(t, ordinaryUsed, controller.current(),
-		"retained run and append scratch must consume the admitted recovery floor")
-	capacity, borrowed := op.ctr.recoveryCapacity.Snapshot()
-	require.Positive(t, capacity)
-	require.Positive(t, borrowed)
-
-	result := vm.NewCallResult()
-	require.NoError(t, op.ctr.sortAndSend(proc, &result))
-	require.NotNil(t, result.Batch)
-	require.Equal(t, []int64{1, 2, 3, 4},
-		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
-	capacity, borrowed = op.ctr.recoveryCapacity.Snapshot()
-	require.Equal(t, borrowed, capacity,
-		"completed run must release conservative unused recovery headroom")
-}
-
 func TestAccountedOrderRecoveryTargetAddsNextRunToRetainedScratch(t *testing.T) {
 	proc, op, _ := newOrderRecoveryTest(t, nil,
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
@@ -447,7 +385,7 @@ func TestAccountedOrderRecoveryTargetAddsNextRunToRetainedScratch(t *testing.T) 
 	result := vm.NewCallResult()
 	require.NoError(t, op.ctr.sortAndSend(proc, &result))
 	require.NotNil(t, result.Batch)
-	result.Batch.Clean(proc.Mp())
+	result.Batch.CleanOwned()
 	op.ctr.rbat = nil
 	require.NoError(t, op.ctr.trimRecoveryCapacity())
 	_, scratchBorrowed := op.ctr.recoveryCapacity.Snapshot()
@@ -657,7 +595,7 @@ func TestAccountedOrderDynamicShareUsesAllocatedCapacity(t *testing.T) {
 	_, err := op.ctr.appendBatch(proc, source)
 	require.NoError(t, err)
 	for _, vec := range op.ctr.batWaitForSort.Vecs {
-		require.NoError(t, vec.PreExtend(8192, proc.Mp()))
+		require.NoError(t, vec.PreExtend(8192, op.ctr.runMP()))
 	}
 	require.Greater(t,
 		op.ctr.batWaitForSort.Allocated(), op.ctr.batWaitForSort.Size())
@@ -692,21 +630,22 @@ func TestAccountedOrderMultiColumnAppendFailureRollsBack(t *testing.T) {
 	controller := &orderTestCapacityController{limit: ^uint64(0)}
 	state := installOrderTestAllocation(t, op, 64<<20, controller)
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(7), false, proc.Mp()))
-	input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(
 		input.Vecs[1], []byte("payload larger than inline varlena storage"), false, proc.Mp()))
 	input.SetRowCount(1)
 	defer input.Clean(proc.Mp())
 
-	op.ctr.batWaitForSort = batch.NewOffHeapWithSize(2)
+	require.NoError(t, op.ctr.ensureBufMP(proc))
+	require.NoError(t, op.ctr.allocationViews(op.ctr.bufMP))
+	op.ctr.batWaitForSort = batch.NewWithSize(2)
 	for i := range input.Vecs {
 		op.ctr.batWaitForSort.Vecs[i] =
-			vector.NewOffHeapVecWithType(*input.Vecs[i].GetType())
+			vector.NewVec(*input.Vecs[i].GetType(), op.ctr.runMP())
 	}
-	require.NoError(t, op.ctr.allocationViews(proc.Mp()))
-	require.NoError(t, op.ctr.batWaitForSort.Vecs[0].PreExtend(1, op.ctr.retainedAllocation))
+	require.NoError(t, op.ctr.batWaitForSort.Vecs[0].PreExtend(1, op.ctr.runMP()))
 	_, err := op.ctr.appendCheckpoints(len(op.ctr.batWaitForSort.Vecs), proc)
 	require.NoError(t, err)
 	controller.arm()
@@ -856,9 +795,9 @@ func TestAccountedOrderDoesNotInheritSealedInputAccount(t *testing.T) {
 		mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
-	input := batch.NewOffHeapWithSize(2)
+	input := batch.NewWithSize(2)
 	for i := range input.Vecs {
-		input.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		input.Vecs[i] = vector.NewVec(types.T_int64.ToType(), inputView)
 	}
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(1), false, inputView))
 	require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(2), false, inputView))

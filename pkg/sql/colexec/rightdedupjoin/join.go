@@ -394,7 +394,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 		analyzer.GetOpStats().AddExtraStat("RightDedupInputUniqueRows", int64(count))
 	}
 
-	if err := ap.resetResultBatch(); err != nil {
+	if err := ap.resetResultBatch(proc); err != nil {
 		return err
 	}
 	resMP, err := ap.resultMP(proc)

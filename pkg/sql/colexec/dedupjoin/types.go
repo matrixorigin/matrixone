@@ -297,7 +297,11 @@ type container struct {
 	// source column into capturedVecs[i] at position `sel`. In finalize() the
 	// captured values are emitted into the Result slots that point at the
 	// build-side placeholder columns.
-	capturedVecs     []*vector.Vector
+	capturedVecs []*vector.Vector
+	// resultVecMP is the pool result vectors are created with (resultMP).
+	resultVecMP *mpool.MPool
+	// capturedMP is the pool capturedVecs were created with (the state view).
+	capturedMP       *mpool.MPool
 	captured         *bitmap.Bitmap
 	captureResultIdx []int32
 
@@ -570,10 +574,22 @@ func (ctr *container) cleanStableUpdateVecs(proc *process.Process) {
 	ctr.finalizeCurrentVecs = nil
 }
 
+// cleanResultBatch frees a result batch. Every result vector is created with
+// the result pool (build columns are copied into it, never moved).
+func cleanResultBatch(bat *batch.Batch, mp *mpool.MPool) {
+	for i, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(mp)
+			bat.Vecs[i] = nil
+		}
+	}
+	bat.Clean(nil)
+}
+
 func (ctr *container) cleanBuf(proc *process.Process) {
 	for _, bat := range ctr.buf {
 		if bat != nil && bat != ctr.rbat {
-			bat.Clean(proc.GetMPool())
+			cleanResultBatch(bat, ctr.resultVecMP)
 		}
 	}
 	ctr.buf = nil
@@ -582,7 +598,7 @@ func (ctr *container) cleanBuf(proc *process.Process) {
 func (ctr *container) cleanResultBatches(proc *process.Process) {
 	ctr.cleanBuf(proc)
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.GetMPool())
+		cleanResultBatch(ctr.rbat, ctr.resultVecMP)
 		ctr.rbat = nil
 	}
 }
@@ -590,9 +606,10 @@ func (ctr *container) cleanResultBatches(proc *process.Process) {
 func (ctr *container) cleanCaptured(proc *process.Process) {
 	for _, v := range ctr.capturedVecs {
 		if v != nil {
-			v.Free(proc.GetMPool())
+			v.Free(ctr.capturedMP)
 		}
 	}
+	ctr.capturedMP = nil
 	ctr.capturedVecs = nil
 	ctr.captured = nil
 	ctr.captureResultIdx = nil
@@ -602,7 +619,7 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 	ctr.batches = nil
 
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.GetMPool())
+		cleanResultBatch(ctr.rbat, ctr.resultVecMP)
 		ctr.rbat = nil
 	}
 	if ctr.joinBat1 != nil {

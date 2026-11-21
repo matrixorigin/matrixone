@@ -1127,7 +1127,7 @@ func TestDistinctSpillDrainPublishesBeforeResidentRelease(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{0},
 		vector.MustFixedColNoTypeCheck[int64](result[0]))
-	result[0].Free(g.ctr.mp)
+	g.ctr.freeGroupVector(result[0])
 
 	g.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
@@ -1209,7 +1209,7 @@ func TestH0CountDistinctForcedCollisionUsesExternalSort(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{100},
 		vector.MustFixedColNoTypeCheck[int64](result[0]))
-	result[0].Free(g.ctr.mp)
+	g.ctr.freeGroupVector(result[0])
 
 	g.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
@@ -1252,7 +1252,7 @@ func TestH0DistinctExternalSortMergesMultipleWideKeyRuns(t *testing.T) {
 	result, err := g.ctr.aggList[0].Flush()
 	require.NoError(t, err)
 	require.Equal(t, []int64{40}, vector.MustFixedColNoTypeCheck[int64](result[0]))
-	result[0].Free(g.ctr.mp)
+	g.ctr.freeGroupVector(result[0])
 
 	g.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
@@ -1301,7 +1301,7 @@ func TestH0CountDistinctRecursivelyRepartitionsOversizedLeaf(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{100},
 		vector.MustFixedColNoTypeCheck[int64](result[0]))
-	result[0].Free(g.ctr.mp)
+	g.ctr.freeGroupVector(result[0])
 
 	g.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
@@ -1633,7 +1633,7 @@ func TestDistinctContributionPathIsPartitionedAndAppliedOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{1, 1},
 		vector.MustFixedColNoTypeCheck[int64](result[0]))
-	result[0].Free(g.ctr.mp)
+	g.ctr.freeGroupVector(result[0])
 	g.ctr.finishDistinctContributions()
 
 	g.Free(proc, false, nil)
@@ -1750,7 +1750,7 @@ func TestIntermediateDistinctSpillRepartitionsOversizedLeaf(t *testing.T) {
 		for _, count := range vector.MustFixedColNoTypeCheck[int64](result[0]) {
 			total += count
 		}
-		result[0].Free(partial.ctr.mp)
+		partial.ctr.freeGroupVector(result[0])
 		leaves++
 	}
 	require.Greater(t, leaves, 1)
@@ -1858,7 +1858,7 @@ func TestIntermediateDistinctSpillTerminalLeafContinuesWithinHardAccount(t *test
 				for _, count := range vector.MustFixedColNoTypeCheck[int64](result[0]) {
 					total += count
 				}
-				result[0].Free(partial.ctr.mp)
+				partial.ctr.freeGroupVector(result[0])
 				leaves++
 			}
 			require.Equal(t, int64(records), total)

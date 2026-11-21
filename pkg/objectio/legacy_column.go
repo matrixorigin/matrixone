@@ -329,7 +329,7 @@ func materializeLegacyColumnWindow(
 		}
 		return sourceNulls.Contains(uint64(row))
 	}
-	dst := vector.NewVec(layout.typ)
+	dst := vector.NewVec(layout.typ, mp)
 	failed := true
 	defer func() {
 		if failed {

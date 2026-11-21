@@ -44,7 +44,7 @@ func TestHashBuildPublishesCompleteChunkedMembership(t *testing.T) {
 	builder := &tc.arg.ctr.hashmapBuilder
 	func() {
 		input := batch.NewWithSize(1)
-		input.Vecs[0] = vector.NewVec(typ)
+		input.Vecs[0] = vector.NewVec(typ, tc.proc.Mp())
 		defer input.Clean(tc.proc.Mp())
 		for row := 0; row < 8193; row++ {
 			require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(row), false, tc.proc.Mp()))
@@ -125,7 +125,7 @@ func TestHashmapUniqueKeyChunking(t *testing.T) {
 					input := batch.NewWithSize(3)
 					defer input.Clean(proc.Mp())
 					for col := range input.Vecs {
-						input.Vecs[col] = vector.NewVec(typ)
+						input.Vecs[col] = vector.NewVec(typ, proc.Mp())
 					}
 					for row := 0; row < rows; row++ {
 						key := int32(row % distinct)
@@ -188,7 +188,7 @@ func TestUniqueKeyAppendRollbackAcrossChunks(t *testing.T) {
 		hb := &HashmapBuilder{}
 		require.NoError(t, hb.SetAllocationAccount(account))
 		defer func() { hb.Free(proc); require.Zero(t, account.Snapshot().Used); require.Zero(t, control.used) }()
-		left, right := vector.NewVec(types.T_int64.ToType()), vector.NewVec(types.T_varchar.ToType())
+		left, right := vector.NewVec(types.T_int64.ToType(), proc.Mp()), vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		defer left.Free(proc.Mp())
 		defer right.Free(proc.Mp())
 		for row := 0; row < 8196; row++ {
@@ -235,7 +235,7 @@ func TestUniqueKeyRollbackInvariantDiscardsCollection(t *testing.T) {
 		require.Zero(t, account.Snapshot().Used)
 		require.Zero(t, control.used)
 	})
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	t.Cleanup(func() { input.Free(proc.Mp()) })
 	require.NoError(t, vector.AppendFixedList(input, make([]int64, 8193), nil, proc.Mp()))
 	hb.curVecs = []*vector.Vector{input, input}
@@ -266,9 +266,9 @@ func TestUniqueKeyBatchesAligned(t *testing.T) {
 				defer proc.Free()
 				hb := newTestHashmapBuilder(t)
 				defer hb.Free(proc)
-				left := vector.NewVec(types.T_int64.ToType())
+				left := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 				defer left.Free(proc.Mp())
-				right := vector.NewVec(types.T_int64.ToType())
+				right := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 				defer right.Free(proc.Mp())
 				var sels []int64
 				for i := 0; i < rows; i++ {
@@ -310,9 +310,9 @@ func TestUniqueKeyBatchesAligned(t *testing.T) {
 
 func TestUniqueKeyBytePreflight(t *testing.T) {
 	mp := mpool.MustNewZero()
-	dst := vector.NewVec(types.T_varchar.ToType())
+	dst := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer dst.Free(mp)
-	src := vector.NewVec(types.T_varchar.ToType())
+	src := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer src.Free(mp)
 	require.NoError(t, vector.AppendBytesList(src, [][]byte{make([]byte, 100), make([]byte, 100)}, nil, mp))
 	n, err := keyAppendCount([]*vector.Vector{dst}, []*vector.Vector{src}, 0, 2, nil, 4096+24+100)
@@ -328,8 +328,8 @@ func TestUniqueKeyByteBoundedCollection(t *testing.T) {
 		t.Run(fmt.Sprint(selected), func(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			hb := newTestHashmapBuilder(t)
-			left := vector.NewVec(types.T_varchar.ToType())
-			right := vector.NewVec(types.T_int64.ToType())
+			left := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+			right := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			t.Cleanup(func() {
 				hb.curVecs = nil // The test, rather than an executor, owns the sources.
 				hb.Free(proc)

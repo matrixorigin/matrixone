@@ -35,7 +35,7 @@ import (
 func TestIssue25590InsertRelayObjectNames(t *testing.T) {
 	proc := testutil.NewProc(t)
 
-	bat := colexec.AllocCNS3ResultBat(false)
+	bat := colexec.AllocCNS3ResultBat(false, proc.Mp())
 	defer bat.Clean(proc.Mp())
 	want := make([]string, 0, 3)
 	for i := 0; i < 3; i++ {
@@ -59,7 +59,7 @@ func TestIssue25590InsertRelayObjectNames(t *testing.T) {
 		"adoption enumerates every persisted insert object, one name per stats row")
 
 	// An empty result batch still reports its class with no names.
-	empty := colexec.AllocCNS3ResultBat(false)
+	empty := colexec.AllocCNS3ResultBat(false, proc.Mp())
 	defer empty.Clean(proc.Mp())
 	empty.SetRowCount(0)
 	_, ok, err = TryExtractS3InsertObjectNames(empty) // zero rows: not the layout (no rows to name)
@@ -69,8 +69,8 @@ func TestIssue25590InsertRelayObjectNames(t *testing.T) {
 	// Foreign attributes are ordinary data rows, not ownership metadata.
 	foreign := batch.NewWithSize(2)
 	foreign.SetAttributes([]string{"user_col_a", "user_col_b"})
-	foreign.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	foreign.Vecs[1] = vector.NewVec(types.T_binary.ToType())
+	foreign.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
+	foreign.Vecs[1] = vector.NewVec(types.T_binary.ToType(), proc.Mp())
 	defer foreign.Clean(proc.Mp())
 	require.NoError(t, vector.AppendBytes(
 		foreign.Vecs[0], []byte("committed_object_name"), false, proc.Mp()))
@@ -83,7 +83,7 @@ func TestIssue25590InsertRelayObjectNames(t *testing.T) {
 		"attributes the producer never emits never look like ownership metadata")
 
 	// A stats value too short to carry an ObjectStats rejects the ack.
-	broken := colexec.AllocCNS3ResultBat(false)
+	broken := colexec.AllocCNS3ResultBat(false, proc.Mp())
 	defer broken.Clean(proc.Mp())
 	require.NoError(t, vector.AppendBytes(
 		broken.Vecs[0], []byte("block-info-bytes"), false, proc.Mp()))

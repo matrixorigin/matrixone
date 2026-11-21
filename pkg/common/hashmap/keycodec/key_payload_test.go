@@ -32,7 +32,7 @@ func TestKeyPayloadCompleteAndRetained(t *testing.T) {
 			var chunks [][]byte
 			for base := 0; base < rows; base += KeyChunkRows {
 				func() {
-					v := vector.NewVec(types.T_int64.ToType())
+					v := vector.NewVec(types.T_int64.ToType(), mp)
 					defer v.Free(mp)
 					for i := base; i < min(rows, base+KeyChunkRows); i++ {
 						require.NoError(t, vector.AppendFixed(v, int64(i), false, mp))
@@ -69,7 +69,7 @@ func TestKeyPayloadCompleteAndRetained(t *testing.T) {
 
 func TestKeyPayloadRejectsMalformedAndCancellation(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v := vector.NewVec(types.T_int64.ToType())
+	v := vector.NewVec(types.T_int64.ToType(), mp)
 	defer v.Free(mp)
 	require.NoError(t, vector.AppendFixedList(v, make([]int64, KeyChunkRows+1), nil, mp))
 	oversized, err := v.MarshalBinary()

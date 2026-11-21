@@ -27,7 +27,7 @@ import (
 func TestAppendBytesRejectsInvalidNativeUnicodeValue(t *testing.T) {
 	mp := mpool.MustNewZero()
 	unicode := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
-	vec := NewVec(unicode)
+	vec := NewVec(unicode, mp)
 	defer vec.Free(mp)
 
 	// This byte sequence is a valid UCA weight for U+FFFF, but is not valid
@@ -37,7 +37,7 @@ func TestAppendBytesRejectsInvalidNativeUnicodeValue(t *testing.T) {
 	require.Error(t, err)
 	require.Zero(t, vec.Length())
 
-	binaryVec := NewVec(types.T_binary.ToType())
+	binaryVec := NewVec(types.T_binary.ToType(), mp)
 	defer binaryVec.Free(mp)
 	require.NoError(t, AppendBytes(binaryVec, []byte{0xff}, false, mp))
 }
@@ -68,7 +68,7 @@ func TestBuildVarlenaFromVarlenaCollationAdmission(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-			vec := NewVec(tc.typ)
+			vec := NewVec(tc.typ, mp)
 			t.Cleanup(func() { vec.Free(mp) })
 			// Construct a structurally valid descriptor directly so invalid text
 			// reaches this admission boundary instead of failing in AppendBytes.
@@ -119,9 +119,9 @@ func BenchmarkUnionOneVarlenaCopy(b *testing.B) {
 				mp := mpool.MustNewZero()
 				b.Cleanup(func() { require.Zero(b, mp.CurrNB()) })
 				typ := types.NewWithCharset(types.T_varchar, 64, 0, charset.id)
-				source := NewVec(typ)
+				source := NewVec(typ, mp)
 				b.Cleanup(func() { source.Free(mp) })
-				destination := NewVec(typ)
+				destination := NewVec(typ, mp)
 				b.Cleanup(func() { destination.Free(mp) })
 				value := bytes.Repeat([]byte{'v'}, size.n)
 				for row := range rows {
@@ -167,7 +167,7 @@ func TestUnionInlineVarlenaAdmission(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/nullable=%t", tc.name, nullable), func(t *testing.T) {
 				mp := mpool.MustNewZero()
 				t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-				source := NewVec(types.T_varchar.ToType())
+				source := NewVec(types.T_varchar.ToType(), mp)
 				t.Cleanup(func() { source.Free(mp) })
 				rows := []int64{0}
 				valueRow := 0
@@ -184,7 +184,7 @@ func TestUnionInlineVarlenaAdmission(t *testing.T) {
 				// Inject invalid Unicode bytes at this copy boundary, bypassing
 				// AppendBytes admission. The fast path must still reject them.
 				source.typ.Charset = tc.charset
-				destination := NewVec(source.typ)
+				destination := NewVec(source.typ, mp)
 				t.Cleanup(func() { destination.Free(mp) })
 				err := destination.Union(source, rows, mp)
 				if tc.bad {

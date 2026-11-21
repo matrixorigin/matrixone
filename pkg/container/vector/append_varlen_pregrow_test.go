@@ -62,9 +62,9 @@ func TestAppendVarlenListPregrow(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			vec := NewVec(tc.oid.ToType())
-			reference := NewVec(tc.oid.ToType())
-			decoded := NewVec(tc.oid.ToType())
+			vec := NewVec(tc.oid.ToType(), mp)
+			reference := NewVec(tc.oid.ToType(), mp)
+			decoded := NewVec(tc.oid.ToType(), mp)
 			t.Cleanup(func() {
 				defer mpool.DeleteMPool(mp)
 				vec.Free(mp)
@@ -97,7 +97,7 @@ func TestAppendVarlenListPregrow(t *testing.T) {
 
 func TestAppendVarlenListPregrowGuards(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := NewVec(types.T_varbinary.ToType())
+	vec := NewVec(types.T_varbinary.ToType(), mp)
 	t.Cleanup(func() {
 		defer mpool.DeleteMPool(mp)
 		vec.Free(mp)
@@ -114,9 +114,9 @@ func TestAppendVarlenListPregrowGuards(t *testing.T) {
 
 	nullState := newTestVectorAllocationAccount(t, 2048, 8)
 	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, nullState) })
-	nullVec := newAccountedTestVector(t, types.T_varbinary.ToType())
 	nmp := nullState.view(t, mp)
-	t.Cleanup(func() { nullVec.Free(mp) })
+	nullVec := newAccountedTestVector(t, types.T_varbinary.ToType(), nmp)
+	t.Cleanup(func() { nullVec.Free(nmp) })
 	deadPayload := bytes.Repeat([]byte("x"), 256)
 	nullValues := make([][]byte, 32)
 	nullMask := make([]bool, len(nullValues))
@@ -135,9 +135,9 @@ func TestAppendVarlenListPregrowGuards(t *testing.T) {
 
 	state := newTestVectorAllocationAccount(t, 2048, 8)
 	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
-	unicode := newAccountedTestVector(t, types.NewWithCharset(types.T_varchar, 128, 0, types.CharsetUTF8MB4UnicodeCI))
 	ump := state.view(t, mp)
-	t.Cleanup(func() { unicode.Free(mp) })
+	unicode := newAccountedTestVector(t, types.NewWithCharset(types.T_varchar, 128, 0, types.CharsetUTF8MB4UnicodeCI), ump)
+	t.Cleanup(func() { unicode.Free(ump) })
 	invalid := string(append([]byte{0xff}, bytes.Repeat([]byte("x"), 127)...))
 	values := make([]string, 32)
 	for i := range values {
@@ -178,9 +178,9 @@ func TestAppendVarlenListPregrowBudgetRollback(t *testing.T) {
 				require.Zero(t, mp.CurrNB())
 				require.Zero(t, mp.OnHeapCurrNB())
 			})
-			vec := newAccountedTestVector(t, tc.oid.ToType())
 			dmp := state.view(t, mp)
-			t.Cleanup(func() { vec.Free(mp) })
+			vec := newAccountedTestVector(t, tc.oid.ToType(), dmp)
+			t.Cleanup(func() { vec.Free(dmp) })
 			require.ErrorIs(t, tc.add(vec, dmp), mpool.ErrAllocationAccountCapacity)
 			require.Zero(t, vec.Length())
 			require.Zero(t, len(vec.area))

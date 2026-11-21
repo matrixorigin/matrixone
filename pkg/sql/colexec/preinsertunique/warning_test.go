@@ -17,6 +17,8 @@ package preinsertunique
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -75,6 +77,7 @@ func TestInsertIgnoreMultiDedupReportsWarningForAcceptedSetConflict(t *testing.T
 	}}, session.warnings)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	input.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -100,6 +103,7 @@ func TestInsertIgnoreMultiDedupSkipsMetadataForNoConflict(t *testing.T) {
 	require.Empty(t, session.warnings)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	input.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())

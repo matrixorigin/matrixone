@@ -69,7 +69,7 @@ func TestVectorMatmulCPUMatchesScalarOrder(t *testing.T) {
 		}
 		typ := types.New(oid, dim, 0)
 		cast := func(t *testing.T, vs [][]float32) *vector.Vector {
-			from := vector.NewVec(types.New(types.T_array_float32, dim, 0))
+			from := vector.NewVec(types.New(types.T_array_float32, dim, 0), mp)
 			t.Cleanup(func() { from.Free(mp) })
 			for _, v := range vs {
 				require.NoError(t, vector.AppendArray(from, v, false, mp))
@@ -120,7 +120,7 @@ func TestVectorMatmulCPUMatchesScalarOrder(t *testing.T) {
 
 				// CPU vector_matmul over the same cells; the query as a float32 BLOB, exact in
 				// every plain type, or as the vecf8/vecf4 cell
-				ids := vector.NewVec(types.T_int64.ToType())
+				ids := vector.NewVec(types.T_int64.ToType(), mp)
 				t.Cleanup(func() { ids.Free(mp) })
 				groups := make([]uint64, nrows)
 				for i := range groups {

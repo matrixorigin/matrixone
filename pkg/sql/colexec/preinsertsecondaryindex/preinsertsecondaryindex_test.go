@@ -128,6 +128,7 @@ func TestPreInsertSecondaryIndex(t *testing.T) {
 		_, err = vm.Exec(tc.arg, proc)
 		require.NoError(t, err)
 		tc.arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(tc.arg)
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
 	}
 }
@@ -135,8 +136,8 @@ func TestPreInsertSecondaryIndex(t *testing.T) {
 func TestPreInsertSecondarySingleVarcharUsesSizedUkType(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("CODE001"), false, proc.Mp()))
 	bat.SetRowCount(1)
@@ -152,7 +153,7 @@ func TestPreInsertSecondarySingleVarcharUsesSizedUkType(t *testing.T) {
 			},
 		},
 	}
-	arg.initBuf(bat, arg.PreInsertCtx.Columns, int(arg.PreInsertCtx.PkColumn), false)
+	arg.initBuf(bat, arg.PreInsertCtx.Columns, int(arg.PreInsertCtx.PkColumn), false, proc.Mp())
 	defer arg.Free(proc, false, nil)
 
 	require.NotZero(t, arg.ctr.buf.Vecs[indexColPos].GetType().TypeSize())
@@ -199,16 +200,16 @@ func TestPreInsertSecondaryUpdateKeepsRowsAligned(t *testing.T) {
 				types.BuildTestRowid(1, 4),
 			}
 			input := batch.NewWithSize(len(tc.indexColumns) + 2)
-			input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(input.Vecs[0], pks, nil, proc.Mp()))
 			for colIdx, values := range tc.indexColumns {
-				input.Vecs[colIdx+1] = vector.NewVec(types.T_int64.ToType())
+				input.Vecs[colIdx+1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 				for rowIdx, value := range values {
 					require.NoError(t, vector.AppendFixed(
 						input.Vecs[colIdx+1], value, tc.nullRows[colIdx][rowIdx], proc.Mp()))
 				}
 			}
-			input.Vecs[len(input.Vecs)-1] = vector.NewVec(types.T_Rowid.ToType())
+			input.Vecs[len(input.Vecs)-1] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(input.Vecs[len(input.Vecs)-1], rowIDs, nil, proc.Mp()))
 			input.SetRowCount(len(pks))
 			defer input.Clean(proc.Mp())
@@ -250,6 +251,7 @@ func TestPreInsertSecondaryUpdateKeepsRowsAligned(t *testing.T) {
 }
 
 func resetChildren(arg *PreInsertSecIdx, m *mpool.MPool) {
+	colexec.FreeMockChildren(arg)
 	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil

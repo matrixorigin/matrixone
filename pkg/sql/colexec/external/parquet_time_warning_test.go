@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -51,7 +52,7 @@ func TestParquetTimeWarningsFollowAcceptedRows(t *testing.T) {
 				proc.WarningSink = sink
 				var got []types.Time
 				for finished := false; !finished; {
-					bat := batchBudgetVectorBatch(types.T_time)
+					bat := batchBudgetVectorBatch(types.T_time, proc.Mp())
 					func() {
 						defer bat.Clean(proc.Mp())
 						var err error
@@ -110,7 +111,7 @@ func TestParquetTimeWarningsOnPrefixRemap(t *testing.T) {
 					var got []types.Time
 					var batches []int
 					for finished := false; !finished; {
-						bat := parquetTimeWarningPairBatch(types.T_text)
+						bat := parquetTimeWarningPairBatch(types.T_text, proc.Mp())
 						func() {
 							defer bat.Clean(proc.Mp())
 							var err error
@@ -148,7 +149,7 @@ func TestParquetTimeWarningAdmissionErrors(t *testing.T) {
 			sink := &parquetTimeWarningSink{limit: 4, budget: process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)}
 			defer sink.reset()
 			proc.WarningSink = sink
-			bat := parquetTimeWarningPairBatch(types.T_int32)
+			bat := parquetTimeWarningPairBatch(types.T_int32, proc.Mp())
 			defer bat.Clean(proc.Mp())
 			sentinel := errors.New("cancel candidate after TIME conversion")
 			if failure == "strict" {
@@ -206,7 +207,7 @@ func TestParquetHybridTimeWarningsFollowAcceptedRows(t *testing.T) {
 			}
 			var got []types.Time
 			for finished := false; !finished; {
-				bat := parquetTimeWarningPairBatch(types.T_text)
+				bat := parquetTimeWarningPairBatch(types.T_text, proc.Mp())
 				func() {
 					defer bat.Clean(proc.Mp())
 					var err error
@@ -331,10 +332,10 @@ func newParquetTimeWarningPairReader(t *testing.T, data []byte, budget uint64, s
 		}, []plan.ExternAttr{{ColName: "c1", ColIndex: 0}, {ColName: "c2", ColIndex: 1}})
 }
 
-func parquetTimeWarningPairBatch(second types.T) *batch.Batch {
+func parquetTimeWarningPairBatch(second types.T, mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_time.ToType())
-	bat.Vecs[1] = vector.NewVec(second.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_time.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(second.ToType(), mp)
 	return bat
 }
 

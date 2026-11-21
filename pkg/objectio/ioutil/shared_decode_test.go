@@ -95,7 +95,7 @@ func testFusedTopNSelectedDecodeIsolation(t *testing.T, dimensions int) {
 	bat := batch.NewWithSize(3)
 	typs := []types.Type{types.T_int64.ToType(), types.T_array_float32.ToType(), types.T_array_float32.ToType()}
 	for i := range typs {
-		bat.Vecs[i] = vector.NewVec(typs[i])
+		bat.Vecs[i] = vector.NewVec(typs[i], mp)
 	}
 	t.Cleanup(func() { bat.Clean(mp) })
 	values := make([]float32, dimensions)
@@ -128,7 +128,7 @@ func testFusedTopNSelectedDecodeIsolation(t *testing.T, dimensions int) {
 	call := func(t *testing.T, query float32, bound plan.BoundType, materialize []int64, selectRows func(*vector.Vector) ([]int64, error)) ([]int64, []float64, []float32, error) {
 		pool := mpool.MustNewZero()
 		defer func() { require.Zero(t, pool.CurrNB()); mpool.DeleteMPool(pool) }()
-		missing, filter, projection := vector.NewVec(typs[0]), vector.NewVec(typs[0]), vector.NewVec(typs[2])
+		missing, filter, projection := vector.NewVec(typs[0], pool), vector.NewVec(typs[0], pool), vector.NewVec(typs[2], pool)
 		defer missing.Free(pool)
 		defer filter.Free(pool)
 		defer projection.Free(pool)

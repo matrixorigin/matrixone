@@ -3516,10 +3516,10 @@ func constructValueScan(proc *process.Process, node *plan.Node, allocations ...*
 		typ := plan2.MakeTypeByPlan2Type(node.TableDef.Cols[i].Typ)
 		// An accounted value batch folds constants into unaccounted scratch
 		// and copies them into an off-heap vector through the view.
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, proc.Mp())
 		var accounted *vector.Vector
 		if op.Allocation != nil {
-			accounted = vector.NewOffHeapVecWithType(typ)
+			accounted = vector.NewVec(typ, op.Allocation)
 			op.Batchs[0].Vecs[i] = accounted
 		} else {
 			op.Batchs[0].Vecs[i] = vec

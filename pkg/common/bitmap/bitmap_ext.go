@@ -77,6 +77,24 @@ func (n *Bitmap) Ptr() *uint64 {
 	return &n.data[0]
 }
 
+// WordsCovering returns the bitmap's words, padded with zero words when they
+// cover fewer than nbits bits. A bitmap ends at its highest set bit, so it
+// can be shorter than the vector it describes; C code that tests the bit of
+// every row must get words covering every row, or it reads past the bitmap.
+// It returns nil for a bitmap without words.
+func (n *Bitmap) WordsCovering(nbits int) []uint64 {
+	if n == nil || len(n.data) == 0 {
+		return nil
+	}
+	need := (nbits + 63) / 64
+	if len(n.data) >= need {
+		return n.data
+	}
+	words := make([]uint64, need)
+	copy(words, n.data)
+	return words
+}
+
 func (n *Bitmap) ToArray() []uint64 {
 	rows := make([]uint64, 0, n.Count())
 	ToArray(n, &rows)

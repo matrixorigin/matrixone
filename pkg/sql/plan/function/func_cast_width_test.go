@@ -131,13 +131,13 @@ func TestZeroWidthCharVarcharAssignment(t *testing.T) {
 		var src *vector.Vector
 		switch sourceType {
 		case types.T_text:
-			src = vector.NewVec(types.T_text.ToType())
+			src = vector.NewVec(types.T_text.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendBytes(src, []byte(input), false, proc.Mp()))
 		case types.T_int64:
-			src = vector.NewVec(types.T_int64.ToType())
+			src = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixed(src, int64(1), false, proc.Mp()))
 		case types.T_bool:
-			src = vector.NewVec(types.T_bool.ToType())
+			src = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixed(src, true, false, proc.Mp()))
 		default:
 			t.Fatalf("unsupported zero-width test source %s", sourceType)
@@ -145,7 +145,7 @@ func TestZeroWidthCharVarcharAssignment(t *testing.T) {
 		defer src.Free(proc.Mp())
 
 		target := types.New(targetType, 0, 0)
-		dst := vector.NewVec(target)
+		dst := vector.NewVec(target, proc.Mp())
 		defer dst.Free(proc.Mp())
 		result := vector.NewFunctionResultWrapper(target, proc.Mp())
 		defer result.Free()
@@ -276,9 +276,9 @@ func TestIsStrictSqlMode(t *testing.T) {
 func castTextToVarchar3(t *testing.T, proc *process.Process, input string) (string, error) {
 	t.Helper()
 	vc3 := types.New(types.T_varchar, 3, 0)
-	src := vector.NewVec(types.T_text.ToType())
+	src := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(src, []byte(input), false, proc.Mp()))
-	dst := vector.NewVec(vc3)
+	dst := vector.NewVec(vc3, proc.Mp())
 	rs := vector.NewFunctionResultWrapper(vc3, proc.Mp())
 	defer rs.Free()
 	require.NoError(t, rs.PreExtendAndReset(1))
@@ -328,9 +328,9 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 
 	// DDL cast (NewStrictCast) never applies the trailing-space exemption.
 	proc := testutil.NewProcess(t)
-	src := vector.NewVec(types.T_text.ToType())
+	src := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(src, []byte("abc   "), false, proc.Mp()))
-	dst := vector.NewVec(types.New(types.T_varchar, 3, 0))
+	dst := vector.NewVec(types.New(types.T_varchar, 3, 0), proc.Mp())
 	rs := vector.NewFunctionResultWrapper(types.New(types.T_varchar, 3, 0), proc.Mp())
 	defer rs.Free()
 	require.NoError(t, rs.PreExtendAndReset(1))
@@ -358,11 +358,11 @@ func TestAssignStringWidthWarningDiagnostics(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			session := &numericWarningSession{}
 			proc.Session = session
-			source := vector.NewVec(types.T_varchar.ToType())
+			source := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			defer source.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(source, []byte(tc.input), false, proc.Mp()))
 			target := types.New(tc.target, 3, 0)
-			destination := vector.NewVec(target)
+			destination := vector.NewVec(target, proc.Mp())
 			defer destination.Free(proc.Mp())
 			result := vector.NewFunctionResultWrapper(target, proc.Mp())
 			defer result.Free()
@@ -389,11 +389,11 @@ func TestAssignStringWidthWarningUsesExecutionAttemptSink(t *testing.T) {
 	sink := &numericWarningSession{}
 	proc.WarningSink = sink
 
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer source.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(source, []byte("abcd"), false, proc.Mp()))
 	target := types.New(types.T_varchar, 3, 0)
-	destination := vector.NewVec(target)
+	destination := vector.NewVec(target, proc.Mp())
 	defer destination.Free(proc.Mp())
 	result := vector.NewFunctionResultWrapper(target, proc.Mp())
 	defer result.Free()
@@ -443,12 +443,12 @@ func TestTinyTextAssignmentWidthUsesBytes(t *testing.T) {
 			return sqlMode, nil
 		})
 
-		src := vector.NewVec(types.T_text.ToType())
+		src := vector.NewVec(types.T_text.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(src, []byte(input), false, proc.Mp()))
 		defer src.Free(proc.Mp())
 
 		target := types.New(types.T_text, types.MaxTinyTextLen, 0)
-		dst := vector.NewVec(target)
+		dst := vector.NewVec(target, proc.Mp())
 		defer dst.Free(proc.Mp())
 		result := vector.NewFunctionResultWrapper(target, proc.Mp())
 		defer result.Free()
@@ -500,10 +500,10 @@ func TestTextBlobFamilyAssignmentWidthUsesBytes(t *testing.T) {
 		session := &numericWarningSession{}
 		proc.Session = session
 
-		src := vector.NewVec(sourceType)
+		src := vector.NewVec(sourceType, proc.Mp())
 		require.NoError(t, vector.AppendBytes(src, input, false, proc.Mp()))
 		defer src.Free(proc.Mp())
-		dst := vector.NewVec(targetType)
+		dst := vector.NewVec(targetType, proc.Mp())
 		defer dst.Free(proc.Mp())
 		result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
 		defer result.Free()
@@ -603,11 +603,11 @@ func TestAssignmentCastTypedSource(t *testing.T) {
 		proc *process.Process,
 		cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error,
 	) (string, error) {
-		src := vector.NewVec(types.T_int64.ToType())
+		src := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, int64(12345), false, proc.Mp()))
 		defer src.Free(proc.Mp())
 		target := types.New(types.T_varchar, 3, 0)
-		dst := vector.NewVec(target)
+		dst := vector.NewVec(target, proc.Mp())
 		defer dst.Free(proc.Mp())
 		result := vector.NewFunctionResultWrapper(target, proc.Mp())
 		defer result.Free()
@@ -684,11 +684,11 @@ func castGeometryToString(
 		src, err = vector.NewConstBytes(sourceType.ToType(), payload, 1, proc.Mp())
 		require.NoError(t, err)
 	} else {
-		src = vector.NewVec(sourceType.ToType())
+		src = vector.NewVec(sourceType.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(src, payload, false, proc.Mp()))
 	}
 	defer src.Free(proc.Mp())
-	dst := vector.NewVec(toType)
+	dst := vector.NewVec(toType, proc.Mp())
 	defer dst.Free(proc.Mp())
 	rs := vector.NewFunctionResultWrapper(toType, proc.Mp())
 	defer rs.Free()
@@ -884,11 +884,11 @@ func TestJSONBlobAssignmentWidthWarning(t *testing.T) {
 		session := &numericWarningSession{}
 		proc.Session = session
 
-		source := vector.NewVec(types.T_json.ToType())
+		source := vector.NewVec(types.T_json.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(source, []byte(encoded), false, proc.Mp()))
 		defer source.Free(proc.Mp())
 		target := types.New(types.T_blob, types.MaxStringSize, 0)
-		destination := vector.NewVec(target)
+		destination := vector.NewVec(target, proc.Mp())
 		defer destination.Free(proc.Mp())
 		result := vector.NewFunctionResultWrapper(target, proc.Mp())
 		defer result.Free()
@@ -980,7 +980,7 @@ func TestRegisteredCastOpaqueZeroWidthPreservesConsumerState(t *testing.T) {
 		for _, oid := range []types.T{types.T_blob, types.T_text, types.T_binary} {
 			t.Run(state.name+"/"+oid.String(), func(t *testing.T) {
 				proc := testutil.NewProcess(t)
-				source := vector.NewVec(oid.ToType())
+				source := vector.NewVec(oid.ToType(), proc.Mp())
 				t.Cleanup(func() { source.Free(proc.Mp()) })
 				require.NoError(t, vector.AppendBytes(source, state.data, false, proc.Mp()))
 				targetType := types.T_varbinary.ToType()
@@ -1015,7 +1015,7 @@ func TestRegisteredCastZeroWidthSQLAssignment(t *testing.T) {
 			t.Run(oid.String()+"/"+tc.name, func(t *testing.T) {
 				proc := testutil.NewProcess(t)
 				proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return tc.mode, nil })
-				source := vector.NewVec(types.T_varchar.ToType())
+				source := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				t.Cleanup(func() { source.Free(proc.Mp()) })
 				require.NoError(t, vector.AppendBytes(source, []byte("x"), false, proc.Mp()))
 				targetType := types.New(oid, 0, 0)

@@ -52,7 +52,7 @@ func TestChunkedIntegerMembership(t *testing.T) {
 			}
 			for chunk := 0; chunk < 3; chunk++ {
 				func() {
-					v := vector.NewVec(types.T_uint64.ToType())
+					v := vector.NewVec(types.T_uint64.ToType(), mp)
 					defer v.Free(mp)
 					for row := 0; row < test.rows; row++ {
 						require.NoError(t, vector.AppendFixed(v, value(chunk*test.rows+row), row == 0, mp))

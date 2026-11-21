@@ -89,8 +89,8 @@ func TestLogInputTombstoneObjectWithExistingBatches(t *testing.T) {
 
 	tombstone := newTestObjectStats(t, 1, 2, 100, 100, 0, objectio.NewSegmentid(), 0)
 	ts := types.BuildTS(10000001, 1)
-	vec := vector.NewVec(types.T_Rowid.ToType())
 	mp := mpool.MustNew("test")
+	vec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	for i := 0; i < 50; i++ {
 		blk := objectio.NewBlockid(segid, 0, 0)
 		vector.AppendFixed(vec, types.NewRowid(blk, uint32(i)), false, mp)

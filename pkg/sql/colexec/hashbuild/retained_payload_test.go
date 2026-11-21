@@ -80,7 +80,7 @@ func TestHashBuildRetainedVarlenAllocationBoundary(t *testing.T) {
 				input := batch.NewWithSize(len(columnTypes))
 				child.WithBatchs([]*batch.Batch{input})
 				for col, typ := range columnTypes {
-					input.Vecs[col] = vector.NewVec(typ)
+					input.Vecs[col] = vector.NewVec(typ, mp)
 				}
 				for row := start; row < end; row++ {
 					require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(1), false, mp))

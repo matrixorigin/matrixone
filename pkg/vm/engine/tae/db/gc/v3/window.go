@@ -499,7 +499,7 @@ func (w *GCWindow) writeMetaForRemainings(
 		}
 	}()
 	ret := batch.NewWithSchema(
-		false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
+		ObjectTableMetaAttrs, ObjectTableMetaTypes, w.mp,
 	)
 	defer ret.Clean(w.mp)
 	for _, s := range stats {
@@ -758,7 +758,7 @@ func (w *GCWindow) Compare(
 		buffer = MakeGCWindowBuffer(mpool.MB)
 		defer buffer.Close(w.mp)
 	}
-	bat := buffer.Fetch()
+	bat := buffer.Fetch(table.mp)
 	defer buffer.Putback(bat, w.mp)
 
 	objects := make(map[string]*ObjectEntry)
@@ -854,7 +854,7 @@ type TableStats struct {
 func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMeta, mp *mpool.MPool) (map[uint32]*TableStats, error) {
 	buffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer buffer.Close(mp)
-	bat := buffer.Fetch()
+	bat := buffer.Fetch(mp)
 	defer buffer.Putback(bat, mp)
 	sourcer := w.MakeFilesReader(ctx, w.fs)
 
@@ -878,7 +878,7 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 		dropTSs := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
 		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
 		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
-		nameVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+		nameVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0), mp)
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
 			stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
 			name := stats.ObjectName().String()

@@ -561,13 +561,13 @@ func (group *Group) ensureRuntimeEmptyGroupingSet() error {
 	if len(group.ctr.aggList) != len(group.Aggs) {
 		group.ctr.aggList, err = group.ctr.makeAggList(group.Aggs)
 		if err != nil {
-			output.Clean(group.ctr.mp)
+			group.ctr.cleanGroupBatch(output)
 			return err
 		}
 	}
 	for _, agg := range group.ctr.aggList {
 		if err = agg.GroupGrow(1); err != nil {
-			output.Clean(group.ctr.mp)
+			group.ctr.cleanGroupBatch(output)
 			return err
 		}
 	}
@@ -1223,12 +1223,12 @@ func (ctr *container) createNewGroupByBatchWithAllocation(
 		}
 	}
 
-	b := batch.NewOffHeapWithSize(len(ctr.groupByTypes))
+	b := batch.NewWithSize(len(ctr.groupByTypes))
 	for i, typ := range ctr.groupByTypes {
-		b.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+		b.Vecs[i] = vector.NewVec(typ, mp)
 	}
 	if err := b.PreExtend(mp, size); err != nil {
-		b.Clean(ctr.mp)
+		ctr.cleanGroupBatch(b)
 		return nil, err
 	}
 	b.SetRowCount(0)

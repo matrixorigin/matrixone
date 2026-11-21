@@ -124,7 +124,7 @@ func TestSort(t *testing.T) {
 
 func TestSortDecimal256(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.New(types.T_decimal256, 65, 2))
+	vec := vector.NewVec(types.New(types.T_decimal256, 65, 2), mp)
 	defer vec.Free(mp)
 
 	v1, err := types.ParseDecimal256("3.45", 65, 2)
@@ -148,8 +148,8 @@ func TestSortDecimal256(t *testing.T) {
 
 func TestSortByVectors(t *testing.T) {
 	mp := mpool.MustNewZero()
-	first := vector.NewVec(types.T_int64.ToType())
-	second := vector.NewVec(types.T_int64.ToType())
+	first := vector.NewVec(types.T_int64.ToType(), mp)
+	second := vector.NewVec(types.T_int64.ToType(), mp)
 	defer first.Free(mp)
 	defer second.Free(mp)
 
@@ -173,8 +173,8 @@ func TestSortByVectors(t *testing.T) {
 
 func TestSortByVectorsUnicodeCollationUsesSecondaryKey(t *testing.T) {
 	mp := mpool.MustNewZero()
-	first := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI))
-	second := vector.NewVec(types.T_int64.ToType())
+	first := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI), mp)
+	second := vector.NewVec(types.T_int64.ToType(), mp)
 	defer first.Free(mp)
 	defer second.Free(mp)
 
@@ -189,7 +189,7 @@ func TestSortByVectorsUnicodeCollationUsesSecondaryKey(t *testing.T) {
 func TestSortByVectorsGeneralCICollation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	sorted := func(values []string, desc bool) []int64 {
-		vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8))
+		vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8), mp)
 		require.NoError(t, vector.AppendStringList(vec, values, nil, mp))
 		defer vec.Free(mp)
 		selectors := make([]int64, vec.Length())
@@ -210,8 +210,8 @@ func TestSortByVectorsGeneralCICollation(t *testing.T) {
 
 func TestSortByVectorsGeneralCITieUsesSecondaryKey(t *testing.T) {
 	mp := mpool.MustNewZero()
-	first := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8))
-	second := vector.NewVec(types.T_int64.ToType())
+	first := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8), mp)
+	second := vector.NewVec(types.T_int64.ToType(), mp)
 	defer first.Free(mp)
 	defer second.Free(mp)
 
@@ -226,7 +226,7 @@ func TestSortByVectorsGeneralCITieUsesSecondaryKey(t *testing.T) {
 func TestSortByVectorsKeepsByteOrderForBinaryCollations(t *testing.T) {
 	for _, charset := range []uint8{types.CharsetUTF8MB4Bin, types.CharsetBinary, types.CharsetLegacy} {
 		mp := mpool.MustNewZero()
-		vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, charset))
+		vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, charset), mp)
 		require.NoError(t, vector.AppendStringList(vec, []string{"b", "A", "C"}, nil, mp))
 		selectors := []int64{0, 1, 2}
 		SortByVectors(selectors, []*vector.Vector{vec}, []bool{false}, []bool{false})
@@ -237,8 +237,8 @@ func TestSortByVectorsKeepsByteOrderForBinaryCollations(t *testing.T) {
 
 func TestSortByVectorsUsesSemanticUnicodeTypeWhenVectorMetadataIsPhysical(t *testing.T) {
 	mp := mpool.MustNewZero()
-	physical := vector.NewVec(types.T_varchar.ToType())
-	second := vector.NewVec(types.T_int64.ToType())
+	physical := vector.NewVec(types.T_varchar.ToType(), mp)
+	second := vector.NewVec(types.T_int64.ToType(), mp)
 	defer physical.Free(mp)
 	defer second.Free(mp)
 
@@ -260,8 +260,8 @@ func TestSortByVectorsUsesSemanticUnicodeTypeWhenVectorMetadataIsPhysical(t *tes
 
 func TestSortByVectorsSortsNonNullPartitionWhenVectorHasNullElsewhere(t *testing.T) {
 	mp := mpool.MustNewZero()
-	first := vector.NewVec(types.T_bool.ToType())
-	second := vector.NewVec(types.T_enum.ToType())
+	first := vector.NewVec(types.T_bool.ToType(), mp)
+	second := vector.NewVec(types.T_enum.ToType(), mp)
 	defer first.Free(mp)
 	defer second.Free(mp)
 
@@ -285,8 +285,8 @@ func TestSortByVectorsSortsNonNullPartitionWhenVectorHasNullElsewhere(t *testing
 
 func TestSortByVectorsFloatOrderPeersUseSecondaryKey(t *testing.T) {
 	mp := mpool.MustNewZero()
-	first := vector.NewVec(types.T_float64.ToType())
-	second := vector.NewVec(types.T_int64.ToType())
+	first := vector.NewVec(types.T_float64.ToType(), mp)
+	second := vector.NewVec(types.T_int64.ToType(), mp)
 	defer first.Free(mp)
 	defer second.Free(mp)
 
@@ -314,7 +314,7 @@ func TestSortByVectorsFloatOrderPeersUseSecondaryKey(t *testing.T) {
 
 func TestSortForSQLOrderFloat32NaNLast(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_float32.ToType())
+	vec := vector.NewVec(types.T_float32.ToType(), mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendFixedList(vec, []float32{
 		math.Float32frombits(0x7fc00002), 1, float32(math.Inf(-1)),
@@ -339,7 +339,7 @@ func TestSortForSQLOrderFloat32NaNLast(t *testing.T) {
 
 func TestSortJSONUsesSeparatePhysicalAndSQLOrder(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_json.ToType())
+	vec := vector.NewVec(types.T_json.ToType(), mp)
 	defer vec.Free(mp)
 	for _, value := range []string{"0", "1", "false", "true"} {
 		appendJSON(t, vec, mp, value)
@@ -370,8 +370,8 @@ func TestSortJSONUsesSeparatePhysicalAndSQLOrder(t *testing.T) {
 
 func TestSortByVectorsJSONNumericPeersUseSecondaryKey(t *testing.T) {
 	mp := mpool.MustNewZero()
-	first := vector.NewVec(types.T_json.ToType())
-	second := vector.NewVec(types.T_int64.ToType())
+	first := vector.NewVec(types.T_json.ToType(), mp)
+	second := vector.NewVec(types.T_int64.ToType(), mp)
 	defer first.Free(mp)
 	defer second.Free(mp)
 
@@ -388,8 +388,8 @@ func TestSortByVectorsJSONNumericPeersUseSecondaryKey(t *testing.T) {
 
 func TestSortByVectorsJSONPeerGroupsUseSecondaryJSONKey(t *testing.T) {
 	mp := mpool.MustNewZero()
-	first := vector.NewVec(types.T_int64.ToType())
-	second := vector.NewVec(types.T_json.ToType())
+	first := vector.NewVec(types.T_int64.ToType(), mp)
+	second := vector.NewVec(types.T_json.ToType(), mp)
 	defer first.Free(mp)
 	defer second.Free(mp)
 
@@ -406,8 +406,8 @@ func TestSortByVectorsJSONPeerGroupsUseSecondaryJSONKey(t *testing.T) {
 
 func TestSortByVectorsWithScratchMatchesConveniencePath(t *testing.T) {
 	mp := mpool.MustNewZero()
-	first := vector.NewVec(types.T_int64.ToType())
-	second := vector.NewVec(types.T_int64.ToType())
+	first := vector.NewVec(types.T_int64.ToType(), mp)
+	second := vector.NewVec(types.T_int64.ToType(), mp)
 	defer first.Free(mp)
 	defer second.Free(mp)
 	require.NoError(t, vector.AppendFixedList(
@@ -435,7 +435,7 @@ func TestSortByVectorsConstantNullKey(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 	constant := vector.NewConstNull(types.T_any.ToType(), 4, mp)
 	defer constant.Free(mp)
-	key := vector.NewVec(types.T_int64.ToType())
+	key := vector.NewVec(types.T_int64.ToType(), mp)
 	defer key.Free(mp)
 	require.NoError(t, vector.AppendFixedList(key, []int64{2, 1, 2, 1}, nil, mp))
 	for _, keys := range [][]*vector.Vector{{constant, key}, {key, constant}} {
@@ -474,7 +474,7 @@ func BenchmarkSortIntVector(b *testing.B) {
 
 func BenchmarkSortForSQLOrderJSONWidePayload(b *testing.B) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_json.ToType())
+	vec := vector.NewVec(types.T_json.ToType(), mp)
 	defer vec.Free(mp)
 
 	const rows = 256
@@ -498,8 +498,8 @@ func BenchmarkSortForSQLOrderJSONWidePayload(b *testing.B) {
 func BenchmarkSortByVectorsJSONManySmallPeerGroups(b *testing.B) {
 	const rows = 8192
 	mp := mpool.MustNewZero()
-	first := vector.NewVec(types.T_int64.ToType())
-	second := vector.NewVec(types.T_json.ToType())
+	first := vector.NewVec(types.T_int64.ToType(), mp)
+	second := vector.NewVec(types.T_json.ToType(), mp)
 	defer first.Free(mp)
 	defer second.Free(mp)
 
@@ -700,7 +700,7 @@ func TestSortLowPrecFloat(t *testing.T) {
 	check := func(oid types.T, appended func(*vector.Vector)) {
 		t.Run(oid.String(), func(t *testing.T) {
 			require.True(t, IsSupportedType(oid))
-			vec := vector.NewVec(oid.ToType())
+			vec := vector.NewVec(oid.ToType(), mp)
 			defer vec.Free(mp)
 			appended(vec)
 

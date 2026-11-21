@@ -136,13 +136,13 @@ func (c *dummyCatalogSource) SetMergeNotifier(catalog.MergeNotifierOnCatalog) {}
 var oneGoodOneBad = func() (*batch.Batch, func()) {
 	bat := batch.New([]string{"account_id", "tid", "version", "settings"})
 	// first row with bad settings leading to parse error
-	bat.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_uint32.ToType(), common.MergeAllocator)
 	vector.AppendFixed[uint32](bat.Vecs[0], 0, false, common.MergeAllocator)
-	bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType(), common.MergeAllocator)
 	vector.AppendFixed[uint64](bat.Vecs[1], 1000, false, common.MergeAllocator)
-	bat.Vecs[2] = vector.NewVec(types.T_uint32.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_uint32.ToType(), common.MergeAllocator)
 	vector.AppendFixed[uint32](bat.Vecs[2], 0, false, common.MergeAllocator)
-	bat.Vecs[3] = vector.NewVec(types.T_json.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_json.ToType(), common.MergeAllocator)
 	json, _ := types.ParseStringToByteJson(`{"bad_settings": 100}`)
 	vector.AppendByteJson(bat.Vecs[3], json, false, common.MergeAllocator)
 

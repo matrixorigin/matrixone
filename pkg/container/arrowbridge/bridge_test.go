@@ -92,7 +92,7 @@ func TestAppendDictionaryNullSupportsEveryTargetStorageClass(t *testing.T) {
 	} {
 		t.Run(oid.String(), func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			vec := vector.NewVec(oid.ToType())
+			vec := vector.NewVec(oid.ToType(), mp)
 			require.NoError(t, appendDictionaryNull(vec, oid.ToType(), mp))
 			require.Equal(t, 1, vec.Length())
 			require.True(t, vec.IsNull(0))
@@ -297,7 +297,7 @@ func TestAppendDictionaryValuePreservesPrimitiveArrowValues(t *testing.T) {
 			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
 			values := test.build(alloc)
 			mp := mpool.MustNewZero()
-			vec := vector.NewVec(test.target.ToType())
+			vec := vector.NewVec(test.target.ToType(), mp)
 
 			copied, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, test.target.ToType(), mp, time.UTC)
 			require.NoError(t, err)
@@ -348,7 +348,7 @@ func TestAppendDictionaryValuePreservesVariableWidthArrowValues(t *testing.T) {
 			values := test.build(alloc)
 			mp := mpool.MustNewZero()
 			target := types.New(types.T_varchar, 16, 0)
-			vec := vector.NewVec(target)
+			vec := vector.NewVec(target, mp)
 
 			_, err := appendDictionaryValue(context.Background(), vec, values, conversionBorrowVarlen, 0, 0, false, target, mp, time.UTC)
 			require.NoError(t, err)
@@ -416,7 +416,7 @@ func TestAppendDictionaryValueConvertsDateAndTimeValues(t *testing.T) {
 			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
 			values := test.build(alloc)
 			mp := mpool.MustNewZero()
-			vec := vector.NewVec(test.target.ToType())
+			vec := vector.NewVec(test.target.ToType(), mp)
 
 			copied, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, test.target.ToType(), mp, time.UTC)
 			require.NoError(t, err)
@@ -441,7 +441,7 @@ func TestAppendDictionaryValueHandlesDecimalAndRejectsInvalidTemporalValues(t *t
 		builder.Release()
 		mp := mpool.MustNewZero()
 		target := types.New(types.T_decimal128, 18, 2)
-		vec := vector.NewVec(target)
+		vec := vector.NewVec(target, mp)
 
 		copied, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, target, mp, time.UTC)
 		require.NoError(t, err)
@@ -477,7 +477,7 @@ func TestAppendDictionaryValueHandlesDecimalAndRejectsInvalidTemporalValues(t *t
 			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
 			values := test.build(alloc)
 			mp := mpool.MustNewZero()
-			vec := vector.NewVec(test.target.ToType())
+			vec := vector.NewVec(test.target.ToType(), mp)
 
 			_, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, test.target.ToType(), mp, time.UTC)
 			require.ErrorContains(t, err, test.err)
@@ -496,7 +496,7 @@ func TestAppendDictionaryValueHandlesDecimalAndRejectsInvalidTemporalValues(t *t
 		values := builder.NewArray()
 		builder.Release()
 		mp := mpool.MustNewZero()
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 
 		_, err := appendDictionaryValue(context.Background(), vec, values, conversionMaterializeBool, 0, 0, false, types.T_int64.ToType(), mp, time.UTC)
 		require.ErrorContains(t, err, "invalid Arrow dictionary values")
@@ -653,7 +653,7 @@ func TestFixedBorrowValidityLifetimeAndWindow(t *testing.T) {
 	require.Zero(t, stats.MaterializedColumns)
 	require.Zero(t, stats.PinAmplificationFallbacks)
 	require.Zero(t, stats.UnalignedFallbacks)
-	require.True(t, bat.Vecs[0].HasBorrowedBacking())
+	require.True(t, bat.Vecs[0].IsReadOnly())
 	expectedData := sliced.Data().Buffers()[1].Bytes()[sliced.Data().Offset()*8:]
 	require.Equal(t,
 		uintptr(unsafe.Pointer(unsafe.SliceData(expectedData))),
@@ -723,7 +723,7 @@ func TestExactFixedWidthTypeMatrixBorrowsPayload(t *testing.T) {
 
 			bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
 			require.NoError(t, err)
-			require.True(t, bat.Vecs[0].HasBorrowedBacking())
+			require.True(t, bat.Vecs[0].IsReadOnly())
 			require.Equal(t, int64(test.target.TypeSize()), stats.BorrowedPayloadBytes)
 			require.Equal(t, int64(test.target.TypeSize()), stats.EligiblePayloadBytes)
 			require.Equal(t, int64(1), stats.BorrowedColumns)
@@ -813,30 +813,6 @@ func TestDictionaryDecimalPrecisionOverflow(t *testing.T) {
 	alloc.AssertSize(t, 0)
 }
 
-func TestFixedExplicitCOW(t *testing.T) {
-	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
-	builder := array.NewInt32Builder(alloc)
-	builder.AppendValues([]int32{1, 2}, nil)
-	arr := builder.NewArray()
-	builder.Release()
-	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: arrow.PrimitiveTypes.Int32}}, nil)
-	record := array.NewRecordBatch(schema, []arrow.Array{arr}, 2)
-	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "v", Type: types.T_int32.ToType()}}, MatchByName)
-	require.NoError(t, err)
-	mp := mpool.MustNewZero()
-	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
-	require.NoError(t, err)
-	require.NoError(t, bat.Vecs[0].MaterializeOwned(mp))
-	require.False(t, bat.Vecs[0].HasBorrowedBacking())
-	vector.SetFixedAtWithTypeCheck(bat.Vecs[0], 0, int32(9))
-	require.Equal(t, []int32{9, 2}, vector.MustFixedColNoTypeCheck[int32](bat.Vecs[0]))
-	record.Release()
-	arr.Release()
-	bat.Clean(mp)
-	require.Equal(t, int64(0), mp.CurrNB())
-	alloc.AssertSize(t, 0)
-}
-
 func TestMaterializedConversionUsesStatementAllocationSelection(t *testing.T) {
 	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
 	require.NoError(t, err)
@@ -863,7 +839,8 @@ func TestMaterializedConversionUsesStatementAllocationSelection(t *testing.T) {
 	require.Positive(t, account.Snapshot().Used)
 	record.Release()
 	values.Release()
-	bat.Clean(mp)
+	// The materialized output vectors belong to the statement selection.
+	bat.Clean(selection)
 	require.Zero(t, account.Snapshot().Used)
 	account.Seal()
 	_, err = registry.Finalize(account)
@@ -973,7 +950,7 @@ func TestVarlenBorrowLongInlineShortAndLifetime(t *testing.T) {
 	require.Equal(t, int64(len("tiny")), stats.MaterializedPayloadBytes)
 	require.Equal(t, int64(1), stats.BorrowedColumns)
 	require.Zero(t, stats.MaterializedColumns)
-	require.True(t, bat.Vecs[0].HasBorrowedBacking())
+	require.True(t, bat.Vecs[0].IsReadOnly())
 	descriptors, area := vector.MustVarlenaRawData(bat.Vecs[0])
 	require.True(t, descriptors[0].IsSmall())
 	require.False(t, descriptors[1].IsSmall())
@@ -1006,7 +983,7 @@ func TestVarlenPinAmplificationMaterializes(t *testing.T) {
 
 	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{MaxPinAmplification: 0.0001})
 	require.NoError(t, err)
-	require.False(t, bat.Vecs[0].HasBorrowedBacking())
+	require.False(t, bat.Vecs[0].IsReadOnly())
 	require.Zero(t, stats.BorrowedPayloadBytes)
 	require.Equal(t, int64(len(long)), stats.EligiblePayloadBytes)
 	require.Equal(t, int64(len(long)), stats.MaterializedPayloadBytes)
@@ -1044,7 +1021,7 @@ func TestFixedBinaryConversionPadsToDeclaredWidth(t *testing.T) {
 			require.NoError(t, err)
 			expected := append(append([]byte(nil), value...), 0, 0, 0)
 			require.Equal(t, expected, bat.Vecs[0].GetBytesAt(0))
-			require.False(t, bat.Vecs[0].HasBorrowedBacking(),
+			require.False(t, bat.Vecs[0].IsReadOnly(),
 				"padding requires an owned MatrixOne value")
 
 			bat.Clean(mp)
@@ -1131,8 +1108,8 @@ func TestForceMaterializeBorrowEligibleColumns(t *testing.T) {
 	require.Equal(t, borrowedStats.EligiblePayloadBytes, materializedStats.EligiblePayloadBytes)
 	require.Equal(t, borrowedStats.EligiblePayloadBytes, materializedStats.MaterializedPayloadBytes)
 	require.Zero(t, materializedStats.PinAmplificationFallbacks)
-	require.False(t, materialized.Vecs[0].HasBorrowedBacking())
-	require.False(t, materialized.Vecs[1].HasBorrowedBacking())
+	require.False(t, materialized.Vecs[0].IsReadOnly())
+	require.False(t, materialized.Vecs[1].IsReadOnly())
 
 	borrowed.Clean(mp)
 	materialized.Clean(mp)
@@ -1745,7 +1722,7 @@ func TestCheckedWideningTypeMatrix(t *testing.T) {
 
 			bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
 			require.NoError(t, err)
-			require.False(t, bat.Vecs[0].HasBorrowedBacking())
+			require.False(t, bat.Vecs[0].IsReadOnly())
 			require.Equal(t, int64(test.target.TypeSize()), stats.MaterializedPayloadBytes)
 			switch test.target.Oid {
 			case types.T_int16:
@@ -1984,7 +1961,7 @@ func TestDictionaryGatherMaterializesAndPropagatesLogicalNulls(t *testing.T) {
 
 	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
 	require.NoError(t, err)
-	require.False(t, bat.Vecs[0].HasBorrowedBacking(), "dictionary indices must be gathered")
+	require.False(t, bat.Vecs[0].IsReadOnly(), "dictionary indices must be gathered")
 	require.Equal(t, int64(len(long)+len("tiny")), stats.MaterializedPayloadBytes)
 	require.Equal(t, long, string(bat.Vecs[0].GetBytesAt(0)))
 	require.True(t, bat.Vecs[0].IsNull(1), "a null dictionary value is a logical null")

@@ -752,7 +752,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      vector.NewVec(types.T_decimal256.ToType()),
+				vec:      vector.NewVec(types.T_decimal256.ToType(), mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -1101,7 +1101,7 @@ func Test_narrowVectorCdcRoundTrip(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			vec := vector.NewVec(c.typ)
+			vec := vector.NewVec(c.typ, mp)
 			require.NoError(t, vector.AppendBytes(vec, c.payload, false, mp))
 			defer vec.Free(mp)
 

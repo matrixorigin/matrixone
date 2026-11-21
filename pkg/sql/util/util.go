@@ -63,7 +63,7 @@ func CopyBatchWithAllocation(bat *batch.Batch, proc *process.Process, mp *mpool.
 	if mp == nil {
 		return CopyBatch(bat, proc)
 	}
-	dst := batch.NewOffHeapWithSize(len(bat.Vecs))
+	dst := batch.NewWithSize(len(bat.Vecs))
 	dst.Attrs = append(dst.Attrs, bat.Attrs...)
 	for i, src := range bat.Vecs {
 		v, err := src.CloneToFlatCompact(mp)

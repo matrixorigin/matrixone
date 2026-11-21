@@ -35,6 +35,12 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
+	// scanMP is the scan's own pool for its output vectors when no accounted
+	// OutputAllocation is bound. Output rows copied out of the buffer pool
+	// live in it, so no other operator (they use proc.Mp() or their own
+	// pools) can modify them: the strict mpool check rejects any other pool.
+	// It lives as long as buf.
+	scanMP                    *mpool.MPool
 	maxAllocSize              int
 	buf                       *batch.Batch
 	msgReceiver               *message.MessageReceiver
@@ -137,12 +143,30 @@ func (tableScan *TableScan) BoundAllocationAccount() *mpool.AllocationAccount {
 }
 
 // mp returns the pool scan output allocates from: the OutputAllocation view
-// when one is bound, otherwise proc's pool.
+// when one is bound, otherwise the scan's own pool (proc's pool before
+// Prepare creates it).
 func (tableScan *TableScan) mp(proc *process.Process) *mpool.MPool {
 	if tableScan.OutputAllocation != nil {
 		return tableScan.OutputAllocation
 	}
+	if tableScan.ctr.scanMP != nil {
+		return tableScan.ctr.scanMP
+	}
 	return proc.Mp()
+}
+
+// prepareScanMP creates the scan's own output pool. It is called only while
+// the output batch does not exist yet.
+func (tableScan *TableScan) prepareScanMP(proc *process.Process) error {
+	if tableScan.OutputAllocation != nil || tableScan.ctr.scanMP != nil {
+		return nil
+	}
+	mp, err := colexec.NewOperatorMPool(proc, "table_scan")
+	if err != nil {
+		return err
+	}
+	tableScan.ctr.scanMP = mp
+	return nil
 }
 
 func (tableScan *TableScan) ClearAllocationAccount(account *mpool.AllocationAccount) error {
@@ -253,8 +277,14 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 
 	tableScan.releaseLocalDomains()
 	if tableScan.ctr.buf != nil {
-		tableScan.ctr.buf.Clean(proc.Mp())
+		// The output vectors were created with the scan's output pool.
+		tableScan.ctr.buf.Clean(tableScan.mp(proc))
 		tableScan.ctr.buf = nil
+	}
+	if tableScan.ctr.scanMP != nil {
+		// The reader fills buf through scanMP; close it before the pool goes.
+		tableScan.closeReader()
+		colexec.FreeOperatorMPool(&tableScan.ctr.scanMP)
 	}
 
 	if tableScan.ProjectList != nil {

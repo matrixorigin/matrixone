@@ -47,7 +47,7 @@ func TestExtractRowFromVector(t *testing.T) {
 
 func TestConvertYearVectorToSlice(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_year.ToType())
+	vec := vector.NewVec(types.T_year.ToType(), mp)
 	for _, value := range []types.MoYear{0, 2024} {
 		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 	}
@@ -132,7 +132,7 @@ func TestExtractRowFromVectorNarrowVec(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			vec := vector.NewVec(c.oid.ToType())
+			vec := vector.NewVec(c.oid.ToType(), mp)
 			require.NoError(t, vector.AppendAny(vec, c.bytes, false, mp))
 
 			row := make([]any, 1)
@@ -180,7 +180,7 @@ func TestExtractRowFromVector2(t *testing.T) {
 	t.Run("A", func(t *testing.T) {
 		var (
 			vecf32 [][]float32
-			vec    = vector.NewVec(types.T_array_float32.ToType())
+			vec    = vector.NewVec(types.T_array_float32.ToType(), mp)
 		)
 
 		for i := 0; i < 10; i++ {
@@ -213,7 +213,7 @@ func TestExtractRowFromVector2(t *testing.T) {
 	t.Run("B", func(t *testing.T) {
 		var (
 			vecf64 [][]float64
-			vec    = vector.NewVec(types.T_array_float64.ToType())
+			vec    = vector.NewVec(types.T_array_float64.ToType(), mp)
 		)
 
 		for i := 0; i < 10; i++ {
@@ -330,7 +330,7 @@ func TestColumnSlicesGetDate(t *testing.T) {
 			name: "Normal T_date type",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_date, 0, 0))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_date, 0, 0), mp)
 				date := types.Date(types.DateFromCalendar(2024, 1, 15))
 				vector.AppendFixed(bat.Vecs[0], date, false, mp)
 				bat.SetRowCount(1)
@@ -353,7 +353,7 @@ func TestColumnSlicesGetDate(t *testing.T) {
 			name: "Normal T_datetime type",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0), mp)
 				dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 0)
 				vector.AppendFixed(bat.Vecs[0], dt, false, mp)
 				bat.SetRowCount(1)
@@ -399,7 +399,7 @@ func TestColumnSlicesGetDate(t *testing.T) {
 			name: "Invalid type (default case)",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0), mp)
 				vector.AppendFixed(bat.Vecs[0], int64(12345), false, mp)
 				bat.SetRowCount(1)
 
@@ -457,7 +457,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 			name: "Normal T_datetime type with scale 0",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0), mp)
 				dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 0)
 				vector.AppendFixed(bat.Vecs[0], dt, false, mp)
 				bat.SetRowCount(1)
@@ -479,7 +479,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 			name: "Normal T_datetime type with scale > 0 and MicroSec == 0",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6), mp)
 				dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 6)
 				vector.AppendFixed(bat.Vecs[0], dt, false, mp)
 				bat.SetRowCount(1)
@@ -501,7 +501,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 			name: "Normal T_datetime type with scale > 0 and MicroSec != 0",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6), mp)
 				dt, _ := types.ParseDatetime("2024-01-15 10:20:30.123456", 6)
 				vector.AppendFixed(bat.Vecs[0], dt, false, mp)
 				bat.SetRowCount(1)
@@ -546,7 +546,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 			name: "Invalid type (default case)",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0), mp)
 				vector.AppendFixed(bat.Vecs[0], int64(12345), false, mp)
 				bat.SetRowCount(1)
 
@@ -599,7 +599,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, tc.scale))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, tc.scale), mp)
 			t.Cleanup(func() { bat.Clean(mp) })
 			dt, err := types.ParseDatetime("2024-01-15 10:20:30", tc.scale)
 			require.NoError(t, err)
@@ -618,7 +618,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 
 	t.Run("zero datetime caps corrupt scale", func(t *testing.T) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 1000))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 1000), mp)
 		t.Cleanup(func() { bat.Clean(mp) })
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.ZeroDatetime, false, mp))
 		bat.SetRowCount(1)
@@ -656,7 +656,7 @@ func TestColumnSlicesLowPrecFloat(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(c.oid.ToType())
+			bat.Vecs[0] = vector.NewVec(c.oid.ToType(), mp)
 			// -1.5 and 2.0 are exactly representable in all four formats.
 			switch c.oid {
 			case types.T_bf16:

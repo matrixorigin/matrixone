@@ -547,7 +547,7 @@ func (r *BlockTopNRead) wholeTopN(ctx context.Context, reader *chunkTopNReader, 
 		err = reader.bindChunk(&source, entry.CachedData, meta)
 		if err == nil {
 			if whole == nil {
-				whole = vector.NewVec(*source.GetType())
+				whole = vector.NewVec(*source.GetType(), r.mp)
 			}
 			err = whole.UnionBatch(&source, 0, source.Length(), nil, r.mp)
 		}

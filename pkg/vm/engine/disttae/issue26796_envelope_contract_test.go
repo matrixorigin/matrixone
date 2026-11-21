@@ -206,7 +206,7 @@ func TestIssue26796PruningKeepsReadSemantics(t *testing.T) {
 
 	t.Run("in-filter", func(t *testing.T) {
 		mp := mpool.MustNewZeroNoFixed()
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		for _, v := range []int64{9, 33, 90} {
 			require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 		}
@@ -320,13 +320,13 @@ func TestIssue26796PruningKeepsReadSemantics(t *testing.T) {
 		issue26796InsertBatch(t, txn, 5, 1, 9)
 		other := batch.NewWithSize(2)
 		other.Attrs = []string{issue26796PKName, "value"}
-		other.SetVector(0, vector.NewVec(types.T_int64.ToType()))
-		other.SetVector(1, vector.NewVec(types.T_int64.ToType()))
+		other.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
+		other.SetVector(1, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(other.GetVector(0), int64(17), false, txn.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(other.GetVector(1), int64(17), false, txn.proc.Mp()))
 		other.SetRowCount(1)
 		txn.Lock()
-		txn.appendWorkspaceEntryLocked(Entry{
+		appendWorkspaceEntryForTest(t, txn, Entry{
 			typ:        INSERT,
 			tableId:    issue26796TblID + 1,
 			databaseId: issue26796DBID,
@@ -355,7 +355,7 @@ func issue26796MergeTwoForTest(t *testing.T, txn *Transaction, dstIdx, srcIdx in
 	dst := &txn.writes[dstIdx]
 	rowIdVector, err := txn.batchAllocNewRowIds(dst.bat.RowCount())
 	require.NoError(t, err)
-	defer rowIdVector.Free(txn.proc.Mp())
+	defer rowIdVector.Free(txn.workspaceMP())
 	rowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](rowIdVector)
 	for x := range dst.bat.RowCount() {
 		require.NoError(t, vector.SetFixedAtWithTypeCheck[objectio.Rowid](dst.bat.Vecs[0], x, rowIds[x]))
@@ -667,9 +667,9 @@ func TestIssue26796MembershipFilterGatesExactProbePath(t *testing.T) {
 		t.Helper()
 		bat := batch.NewWithSize(3)
 		bat.Attrs = []string{issue26796PKName, "value", catalog.IndexTablePrimaryColName}
-		bat.SetVector(0, vector.NewVec(types.T_int64.ToType()))
-		bat.SetVector(1, vector.NewVec(types.T_int64.ToType()))
-		bat.SetVector(2, vector.NewVec(types.T_int64.ToType()))
+		bat.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
+		bat.SetVector(1, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
+		bat.SetVector(2, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.GetVector(0), pk, false, txn.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.GetVector(1), value, false, txn.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.GetVector(2), memberCol, false, txn.proc.Mp()))

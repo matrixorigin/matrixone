@@ -33,7 +33,7 @@ func BenchmarkAppendFixedListReuse(b *testing.B) {
 			}
 			b.Run(mode+"_"+strconv.Itoa(size), func(b *testing.B) {
 				mp := mpool.MustNewZero()
-				vec := NewVec(types.T_int64.ToType())
+				vec := NewVec(types.T_int64.ToType(), mp)
 				b.Cleanup(func() {
 					defer mpool.DeleteMPool(mp)
 					vec.Free(mp)

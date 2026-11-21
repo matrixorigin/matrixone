@@ -46,7 +46,7 @@ func BenchmarkAppendValueRows(b *testing.B) {
 	} {
 		b.Run(test.name, func(b *testing.B) {
 			mp := mpool.MustNewZero()
-			vec := NewVec(test.oid.ToType())
+			vec := NewVec(test.oid.ToType(), mp)
 			b.Cleanup(func() {
 				defer mpool.DeleteMPool(mp)
 				vec.Free(mp)

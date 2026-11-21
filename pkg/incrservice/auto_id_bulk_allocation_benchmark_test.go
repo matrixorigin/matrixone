@@ -72,7 +72,7 @@ func BenchmarkAutoIDCacheBulkAllocationRequests(b *testing.B) {
 								for consumed := 0; consumed < actualRows; {
 									rows := min(batchRows, actualRows-consumed)
 									func() {
-										vec := vector.NewVec(types.T_uint64.ToType())
+										vec := vector.NewVec(types.T_uint64.ToType(), mp)
 										defer vec.Free(mp)
 										require.NoError(b, vector.AppendFixedList(vec, make([]uint64, rows), nil, mp))
 										vec.GetNulls().AddRange(0, uint64(rows))

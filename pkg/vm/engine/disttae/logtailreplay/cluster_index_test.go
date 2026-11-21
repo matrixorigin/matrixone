@@ -161,10 +161,10 @@ func applyClusterDeletes(
 	rows []clusterRow,
 ) {
 	t.Helper()
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
-	tbRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+	tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+	pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+	tbRowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
 	newClusterVecOwner(t, pool, rowIDVec, tsVec, pkVec, tbRowIDVec)
 	for _, row := range rows {
 		vector.AppendFixed(rowIDVec, row.rowID, false, pool)
@@ -850,11 +850,11 @@ func TestClusterKeyIndexIgnoresAmbiguousCompoundAttrs(t *testing.T) {
 
 	state := NewPartitionState("", false, 42, false)
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
-	clusterVec := vector.NewVec(types.T_varchar.ToType())
-	otherVec := vector.NewVec(types.T_varchar.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+	tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+	pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+	clusterVec := vector.NewVec(types.T_varchar.ToType(), pool)
+	otherVec := vector.NewVec(types.T_varchar.ToType(), pool)
 	newClusterVecOwner(t, pool, rowIDVec, tsVec, pkVec, clusterVec, otherVec)
 	rowID := types.RandomRowid()
 	vector.AppendFixed(rowIDVec, rowID, false, pool)
@@ -916,10 +916,10 @@ func TestClusterKeyIndexIgnoresAmbiguousCompoundAttrs(t *testing.T) {
 // filler vector.
 func makeClusterReplayBatch(t testing.TB, pool *mpool.MPool, rows []clusterRow, attrs []string) *api.Batch {
 	t.Helper()
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
-	clusterVec := vector.NewVec(types.T_varchar.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+	tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+	pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+	clusterVec := vector.NewVec(types.T_varchar.ToType(), pool)
 	fixtures := newClusterVecOwner(t, pool, rowIDVec, tsVec, pkVec, clusterVec)
 	for _, row := range rows {
 		vector.AppendFixed(rowIDVec, row.rowID, false, pool)
@@ -936,7 +936,7 @@ func makeClusterReplayBatch(t testing.TB, pool *mpool.MPool, rows []clusterRow, 
 		if strings.HasPrefix(attr, catalog.PrefixCBColName) {
 			vecs = append(vecs, mustVectorToProto(clusterVec))
 		} else {
-			filler := vector.NewVec(types.T_int32.ToType())
+			filler := vector.NewVec(types.T_int32.ToType(), pool)
 			for range rows {
 				vector.AppendFixed(filler, int32(1), false, pool)
 			}
@@ -1009,11 +1009,11 @@ func TestClusterKeyIterFallbackWhenIndexUnusable(t *testing.T) {
 			name: "user column shadows the compound prefix",
 			setup: func(state *PartitionState) int {
 				rows := mkRows(0, 3, 0, "k")
-				rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-				tsVec := vector.NewVec(types.T_TS.ToType())
-				pkVec := vector.NewVec(types.T_int64.ToType())
-				clusterVec := vector.NewVec(types.T_varchar.ToType())
-				otherVec := vector.NewVec(types.T_int32.ToType())
+				rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+				tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+				pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+				clusterVec := vector.NewVec(types.T_varchar.ToType(), pool)
+				otherVec := vector.NewVec(types.T_int32.ToType(), pool)
 				newClusterVecOwner(t, pool, rowIDVec, tsVec, pkVec, clusterVec, otherVec)
 				for _, row := range rows {
 					vector.AppendFixed(rowIDVec, row.rowID, false, pool)
@@ -1507,10 +1507,10 @@ func BenchmarkClusterIndexInsertMaintenance(b *testing.B) {
 				// per iteration.
 				fixtures := &clusterVecOwner{pool: pool}
 				for batch := 0; batch < 10; batch++ {
-					rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-					tsVec := vector.NewVec(types.T_TS.ToType())
-					pkVec := vector.NewVec(types.T_int64.ToType())
-					clusterVec := vector.NewVec(types.T_varchar.ToType())
+					rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+					tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+					pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+					clusterVec := vector.NewVec(types.T_varchar.ToType(), pool)
 					fixtures.track(rowIDVec, tsVec, pkVec, clusterVec)
 					for i := 0; i < batchRows; i++ {
 						vector.AppendFixed(rowIDVec, rowIDs[i], false, pool)
@@ -1554,10 +1554,10 @@ func TestClusterKeyIndexIgnoresNonVarCharPrefixedUserColumn(t *testing.T) {
 	state := NewPartitionState("", false, 42, false)
 	sid := objectio.NewSegmentid()
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
-	geomVec := vector.NewVec(types.T_geometry.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+	tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+	pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+	geomVec := vector.NewVec(types.T_geometry.ToType(), pool)
 	newClusterVecOwner(t, pool, rowIDVec, tsVec, pkVec, geomVec)
 	var rowIDs []types.Rowid
 	for i := 0; i < 4; i++ {

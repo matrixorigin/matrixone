@@ -96,8 +96,8 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			stats := objectio.NewObjectStats()
 			require.NoError(t, objectio.SetObjectStatsLocation(stats, location))
 			bat := batch.New([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
-			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
-			bat.SetVector(1, vector.NewVec(types.T_varchar.ToType()))
+			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp()))
+			bat.SetVector(1, vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], objectio.EncodeBlockInfo(&info), false, txn.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[1], stats.Marshal(), false, txn.proc.Mp()))
 			bat.SetRowCount(1)
@@ -126,7 +126,7 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 				require.Equal(t, tc.want, req.(*api.Entry).TableName)
 				require.Empty(t, remaining)
 			}
-			txn.writes[0].bat.Clean(txn.proc.Mp())
+			txn.writes[0].bat.Clean(txn.workspaceMP())
 		})
 	}
 }
@@ -148,7 +148,7 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			stats := objectio.NewObjectStats()
 			require.NoError(t, objectio.SetObjectStatsLocation(stats, objectio.NewRandomLocation(1, 1)))
 			bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
-			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], stats.Marshal(), false, txn.proc.Mp()))
 			bat.SetRowCount(1)
 			defer bat.Clean(txn.proc.Mp())
@@ -182,7 +182,7 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 				Bat:        protoBat,
 			}})
 			require.ErrorContains(t, err, "bad write format")
-			txn.writes[0].bat.Clean(txn.proc.Mp())
+			txn.writes[0].bat.Clean(txn.workspaceMP())
 		})
 	}
 }
@@ -257,7 +257,7 @@ func makeBatchForTest(
 	ints ...int64,
 ) *batch.Batch {
 	bat := batch.New([]string{"a"})
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, n := range ints {
 		vector.AppendFixed(vec, n, false, mp)
 	}
@@ -568,9 +568,9 @@ func TestPrimaryKeysMayBeModifiedWaitsForSubscriptionData(t *testing.T) {
 	bat := makeBatchForTest(mp, 7)
 	defer bat.Clean(mp)
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	pkVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer rowIDVec.Free(mp)
 	defer tsVec.Free(mp)
 	defer pkVec.Free(mp)
@@ -883,7 +883,7 @@ func TestWorkspaceInsertRowEstimate(t *testing.T) {
 	other.SetRowCount(500)
 	meta := batch.NewWithSize(1)
 	meta.Attrs = []string{catalog.ObjectMeta_ObjectStats}
-	meta.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	meta.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp())
 	t.Cleanup(func() { meta.Clean(txn.proc.Mp()) })
 	for _, rows := range []uint32{8192, 1844} {
 		stats := objectio.NewObjectStats()
@@ -1014,9 +1014,9 @@ func TestPartitionRowEstimate(t *testing.T) {
 func TestReplayRowColumnSizeIncludesPhysicalRowID(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	idVec := vector.NewVec(types.T_int64.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer rowIDVec.Free(mp)
 	defer tsVec.Free(mp)
 	defer idVec.Free(mp)

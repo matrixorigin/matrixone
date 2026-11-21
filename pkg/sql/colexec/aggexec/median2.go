@@ -121,7 +121,7 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 		exec.groups = append(exec.groups, make([]*Vectors[T], more)...)
 	}
 	for i := oldLength; i < len(exec.groups); i++ {
-		exec.groups[i] = NewVectors[T](exec.argType)
+		exec.groups[i] = NewVectors[T](exec.argType, exec.mp)
 	}
 	return exec.ret.grows(more)
 }
@@ -232,11 +232,11 @@ func (exec *medianColumnExecSelf[T, R]) saveAccountedIntermediateChunk(
 	if err := types.WriteInt64(writer, int64(cnt)); err != nil || cnt == 0 {
 		return err
 	}
-	result, err := exec.accounted.allocation.newVector(exec.retType)
+	result, err := exec.accounted.allocation.newVector(exec.retType, exec.mp)
 	if err != nil {
 		return err
 	}
-	empty, err := exec.accounted.allocation.newVector(types.T_bool.ToType())
+	empty, err := exec.accounted.allocation.newVector(types.T_bool.ToType(), exec.mp)
 	if err != nil {
 		result.Free(exec.mp)
 		return err
@@ -452,11 +452,11 @@ func (exec *medianColumnExecSelf[T, R]) accountedIntermediateResult(
 	flags [][]uint8,
 	rows int,
 ) (*vector.Vector, *vector.Vector, error) {
-	result, err := exec.accounted.allocation.newVector(exec.retType)
+	result, err := exec.accounted.allocation.newVector(exec.retType, exec.mp)
 	if err != nil {
 		return nil, nil, err
 	}
-	empty, err := exec.accounted.allocation.newVector(types.T_bool.ToType())
+	empty, err := exec.accounted.allocation.newVector(types.T_bool.ToType(), exec.mp)
 	if err != nil {
 		result.Free(exec.mp)
 		return nil, nil, err
@@ -611,7 +611,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshalAccountedIntermediate(
 		return moerr.NewInvalidInputNoCtx(
 			"single-group median has multiple result rows")
 	}
-	result, err := exec.accounted.allocation.newVector(exec.retType)
+	result, err := exec.accounted.allocation.newVector(exec.retType, exec.mp)
 	if err != nil {
 		return err
 	}
@@ -626,7 +626,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshalAccountedIntermediate(
 	if err != nil || emptyCount != 1 {
 		return moerr.NewInvalidInputNoCtx("median has invalid empty-state count")
 	}
-	empty, err := exec.accounted.allocation.newVector(types.T_bool.ToType())
+	empty, err := exec.accounted.allocation.newVector(types.T_bool.ToType(), exec.mp)
 	if err != nil {
 		return err
 	}
@@ -701,7 +701,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshalAccountedIntermediate(
 				return io.ErrUnexpectedEOF
 			}
 			wire := &io.LimitedReader{R: limited, N: int64(wireSize)}
-			source, err := exec.accounted.allocation.newVector(exec.argType)
+			source, err := exec.accounted.allocation.newVector(exec.argType, exec.mp)
 			if err != nil {
 				return err
 			}
@@ -1778,7 +1778,7 @@ func flushAccountedMedianNumeric[T numeric](
 	groupBase := 0
 	for chunk := range exec.accounted.state {
 		state := &exec.accounted.state[chunk]
-		result, err := exec.accounted.allocation.newVector(exec.retType)
+		result, err := exec.accounted.allocation.newVector(exec.retType, exec.mp)
 		if err != nil {
 			return nil, err
 		}
@@ -1848,7 +1848,7 @@ func flushAccountedMedianDecimal[T types.Decimal64 | types.Decimal128](
 	groupBase := 0
 	for chunk := range exec.accounted.state {
 		state := &exec.accounted.state[chunk]
-		result, err := exec.accounted.allocation.newVector(exec.retType)
+		result, err := exec.accounted.allocation.newVector(exec.retType, exec.mp)
 		if err != nil {
 			return nil, err
 		}

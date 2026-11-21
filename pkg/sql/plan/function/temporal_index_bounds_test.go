@@ -30,7 +30,7 @@ func TestTemporalBoundRuntimeValues(t *testing.T) {
 	proc := fixedTruncProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC
 	bound := types.Timestamp(types.DatetimeFromClock(2026, 6, 1, 12, 0, 0, 123000))
-	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(3))
+	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(3), proc.Mp())
 	t.Cleanup(func() { values.Free(proc.Mp()) })
 	require.NoError(t, vector.AppendFixedList(values, []types.Timestamp{bound, bound, bound + 1}, []bool{false, true, false}, proc.Mp()))
 	control := func(value int32) *vector.Vector {

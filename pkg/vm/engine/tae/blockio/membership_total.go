@@ -94,7 +94,7 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 		}
 		var physical []int64
 		if !member.All {
-			if err := s.Physical.PreExtend(count, request.OutputAllocation); err != nil {
+			if err := s.Physical.PreExtend(count, s.Physical.MPool()); err != nil {
 				if mpool.IsRetryableAllocationCapacity(err) {
 					fallback = true
 					return nil
@@ -110,7 +110,7 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 			defer freeMembershipViews(s, predicates, mp)
 			for _, column := range predicates {
 				source := s.Sources[column]
-				view := vector.NewOffHeapVecWithType(*source.GetType())
+				view := vector.NewVec(*source.GetType(), request.OutputAllocation)
 				s.Views[column] = view
 				err := view.Union(source, physical, request.OutputAllocation)
 				if err != nil {

@@ -109,7 +109,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	proc.SetStmtProfile(sp)
 	sp.SetStatementRuntimeProfile("Insert", "DML", true)
 
-	vec := vector.NewVec(types.T_text.ToType())
+	vec := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(vec, []byte("b"), true, proc.Mp()))
 	proc.SetPrepareParamsWithIsBin(vec, []bool{true, false})
@@ -860,7 +860,7 @@ func TestRuntimeStringDomainPrepareParamMetadataForRemoteValidation(t *testing.T
 
 func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
-	frameParams := vector.NewVec(types.T_text.ToType())
+	frameParams := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("1"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("0"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("true"), false, proc.Mp()))
@@ -1147,7 +1147,7 @@ func TestPrepareParamsStringSourceLifecycle(t *testing.T) {
 	mp := proc.Mp()
 
 	newParams := func() *vector.Vector {
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(params, []byte("x"), false, mp))
 		return params
 	}

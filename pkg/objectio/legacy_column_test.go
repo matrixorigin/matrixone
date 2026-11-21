@@ -114,7 +114,7 @@ func TestReadLegacyColumnWindowLZ4AndNone(t *testing.T) {
 		return spill, nil
 	}
 
-	stringsSource := vector.NewVec(types.T_varchar.ToType())
+	stringsSource := vector.NewVec(types.T_varchar.ToType(), mp)
 	for row := 0; row < 100; row++ {
 		value := strings.Repeat(string(rune('a'+row%20)), 1024)
 		require.NoError(t, vector.AppendBytes(stringsSource, []byte(value), row == 57, mp))
@@ -145,7 +145,7 @@ func TestReadLegacyColumnWindowLZ4AndNone(t *testing.T) {
 	bat.Clean(mp)
 	stringsSource.Free(mp)
 
-	fixedSource := vector.NewVec(types.T_int64.ToType())
+	fixedSource := vector.NewVec(types.T_int64.ToType(), mp)
 	for row := int64(0); row < 10; row++ {
 		require.NoError(t, vector.AppendFixed(fixedSource, row, row == 6, mp))
 	}
@@ -188,7 +188,7 @@ func TestReadLegacyColumnWindowDeduplicatesSharedVarlenaArea(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer constant.Free(mp)
-	shared := vector.NewVec(types.T_text.ToType())
+	shared := vector.NewVec(types.T_text.ToType(), mp)
 	require.NoError(t, shared.UnionBatch(constant, 0, rows, nil, mp))
 	defer shared.Free(mp)
 	require.False(t, shared.VarlenaAreaIsDisjoint())
@@ -281,7 +281,7 @@ func TestReadOneBlockAllColumnsWindowNormalizesLegacyClass(t *testing.T) {
 			if tc.kind == "varlen" {
 				typ = types.T_varchar.ToType()
 			}
-			source := vector.NewVec(typ)
+			source := vector.NewVec(typ, mp)
 			t.Cleanup(func() { source.Free(mp) })
 			values := []string{"first distinct value longer than the inline representation", "", "last distinct value longer than the inline representation"}
 			for row := 0; row < 3; row++ {
@@ -437,7 +437,7 @@ func TestReservedSpillWriterErrorPaths(t *testing.T) {
 func TestMaterializeLegacyColumnWindowRange(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	source := vector.NewVec(types.T_int32.ToType())
+	source := vector.NewVec(types.T_int32.ToType(), mp)
 	defer source.Free(mp)
 	for i := 0; i < 4; i++ {
 		require.NoError(t, vector.AppendFixed(source, int32(i), false, mp))

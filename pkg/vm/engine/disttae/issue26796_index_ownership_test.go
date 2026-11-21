@@ -122,8 +122,8 @@ func issue26796InsertBatchInto(
 	t.Helper()
 	bat := batch.NewWithSize(2)
 	bat.Attrs = []string{issue26796PKName, "value"}
-	bat.SetVector(0, vector.NewVec(types.T_int64.ToType()))
-	bat.SetVector(1, vector.NewVec(types.T_int64.ToType()))
+	bat.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
+	bat.SetVector(1, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 	for _, pk := range pks {
 		require.NoError(t, vector.AppendFixed(bat.GetVector(0), pk, false, txn.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.GetVector(1), pk, false, txn.proc.Mp()))

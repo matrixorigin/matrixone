@@ -68,7 +68,7 @@ func NewBitwiseAggregateCast(
 	case types.T_float32:
 		return bitwiseAggregateFloat32ToInt64(from, to, proc, length, selectList)
 	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-		tmp := vector.NewVec(types.T_float32.ToType())
+		tmp := vector.NewVec(types.T_float32.ToType(), proc.Mp())
 		defer tmp.Free(proc.Mp())
 		if err := materializeLowPrecAsFloat32(proc.Ctx, from, tmp, length, proc.Mp()); err != nil {
 			return err

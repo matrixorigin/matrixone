@@ -663,7 +663,7 @@ func TestInetNtoaDynamicRejectsNonNullAny(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	data, err := proc.Mp().Alloc(types.VarlenaSize, false)
 	require.NoError(t, err)
-	input := vector.NewVecWithData(types.T_any.ToType(), 1, data, nil)
+	input := vector.NewVecWithData(types.T_any.ToType(), 1, data, nil, proc.Mp())
 	input.SetClass(vector.CONSTANT)
 	defer input.Free(proc.Mp())
 

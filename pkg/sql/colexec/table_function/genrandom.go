@@ -175,7 +175,7 @@ func (st *genRandomState) start(tf *TableFunction, proc *process.Process, nthRow
 
 	// whew, we're done with parameters.
 	if st.batch == nil {
-		st.batch = tf.createResultBatch()
+		st.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		st.batch.CleanOnlyData()
 	}

@@ -173,7 +173,7 @@ func TestGetLiteralString_UnsupportedValueRejects(t *testing.T) {
 func TestExtractVecValues_Int8(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	v := vector.NewVec(types.T_int8.ToType())
+	v := vector.NewVec(types.T_int8.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v, int8(-7), false, mp))
 	require.NoError(t, vector.AppendFixed(v, int8(7), false, mp))
 	data, err := v.MarshalBinary()
@@ -190,7 +190,7 @@ func TestExtractVecValues_Int8(t *testing.T) {
 func TestExtractVecValues_Int16(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	v := vector.NewVec(types.T_int16.ToType())
+	v := vector.NewVec(types.T_int16.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v, int16(-123), false, mp))
 	require.NoError(t, vector.AppendFixed(v, int16(32000), false, mp))
 	data, err := v.MarshalBinary()
@@ -206,7 +206,7 @@ func TestExtractVecValues_Int16(t *testing.T) {
 func TestExtractVecValues_Int64(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	v := vector.NewVec(types.T_int64.ToType())
+	v := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v, int64(-5), false, mp))
 	require.NoError(t, vector.AppendFixed(v, int64(2450900), false, mp))
 	data, err := v.MarshalBinary()
@@ -222,7 +222,7 @@ func TestExtractVecValues_Int64(t *testing.T) {
 func TestExtractVecValues_Uint8(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	v := vector.NewVec(types.T_uint8.ToType())
+	v := vector.NewVec(types.T_uint8.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v, uint8(3), false, mp))
 	require.NoError(t, vector.AppendFixed(v, uint8(250), false, mp))
 	data, err := v.MarshalBinary()
@@ -238,7 +238,7 @@ func TestExtractVecValues_Uint8(t *testing.T) {
 func TestExtractVecValues_Uint16(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	v := vector.NewVec(types.T_uint16.ToType())
+	v := vector.NewVec(types.T_uint16.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v, uint16(3), false, mp))
 	require.NoError(t, vector.AppendFixed(v, uint16(60000), false, mp))
 	data, err := v.MarshalBinary()
@@ -254,7 +254,7 @@ func TestExtractVecValues_Uint16(t *testing.T) {
 func TestExtractVecValues_Uint32(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	v := vector.NewVec(types.T_uint32.ToType())
+	v := vector.NewVec(types.T_uint32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v, uint32(3), false, mp))
 	require.NoError(t, vector.AppendFixed(v, uint32(4_000_000_000), false, mp))
 	data, err := v.MarshalBinary()
@@ -270,7 +270,7 @@ func TestExtractVecValues_Uint32(t *testing.T) {
 func TestExtractVecValues_Uint64(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	v := vector.NewVec(types.T_uint64.ToType())
+	v := vector.NewVec(types.T_uint64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v, uint64(3), false, mp))
 	require.NoError(t, vector.AppendFixed(v, uint64(18_000_000_000), false, mp))
 	data, err := v.MarshalBinary()
@@ -289,7 +289,7 @@ func TestExtractVecValues_UnsupportedType(t *testing.T) {
 	// doesn't reject first.
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	v := vector.NewVec(types.T_decimal128.ToType())
+	v := vector.NewVec(types.T_decimal128.ToType(), mp)
 	dec := types.Decimal128{B0_63: 123, B64_127: 0}
 	require.NoError(t, vector.AppendFixed(v, dec, false, mp))
 	require.NoError(t, vector.AppendFixed(v, dec, false, mp))
@@ -328,7 +328,7 @@ func TestSafeVarlenaBytes_SmallInline(t *testing.T) {
 	// Small varlena stores bytes inline; safeVarlenaBytes returns ByteSlice().
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	v := vector.NewVec(types.T_varchar.ToType())
+	v := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(v, []byte("hi"), false, mp))
 	col := vector.MustFixedColNoTypeCheck[types.Varlena](v)
 	area := v.GetArea()
@@ -342,7 +342,7 @@ func TestSafeVarlenaBytes_LongFromArea(t *testing.T) {
 	// Long varlena reads from vec's area.
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	v := vector.NewVec(types.T_varchar.ToType())
+	v := vector.NewVec(types.T_varchar.ToType(), mp)
 	long := []byte("this-is-definitely-longer-than-varlena-inline-threshold-bytes")
 	require.NoError(t, vector.AppendBytes(v, long, false, mp))
 	col := vector.MustFixedColNoTypeCheck[types.Varlena](v)
@@ -371,7 +371,7 @@ func TestSafeVarlenaBytes_OutOfRangeRejects(t *testing.T) {
 func TestFillConstantVector_Int8(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_int8.ToType())
+	vec := vector.NewVec(types.T_int8.ToType(), mp)
 	col := &plan.ColDef{Name: "y", Typ: plan.Type{Id: int32(types.T_int8)}}
 	require.NoError(t, fillConstantVector(vec, "42", col, 3, proc, "/t"))
 	val := vector.MustFixedColNoTypeCheck[int8](vec)
@@ -382,7 +382,7 @@ func TestFillConstantVector_Int8(t *testing.T) {
 func TestFillConstantVector_Int16(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_int16.ToType())
+	vec := vector.NewVec(types.T_int16.ToType(), mp)
 	col := &plan.ColDef{Name: "y", Typ: plan.Type{Id: int32(types.T_int16)}}
 	require.NoError(t, fillConstantVector(vec, "12345", col, 2, proc, "/t"))
 	val := vector.MustFixedColNoTypeCheck[int16](vec)
@@ -394,7 +394,7 @@ func TestFillConstantVector_Int64_AndUintSignFail(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	col := &plan.ColDef{Name: "y", Typ: plan.Type{Id: int32(types.T_int64)}}
 	require.NoError(t, fillConstantVector(vec, "-99", col, 1, proc, "/t"))
 	v64 := vector.MustFixedColNoTypeCheck[int64](vec)
@@ -402,11 +402,11 @@ func TestFillConstantVector_Int64_AndUintSignFail(t *testing.T) {
 	vec.Free(mp)
 
 	// uint with a negative string → wrapped error path
-	vec = vector.NewVec(types.T_uint32.ToType())
+	vec = vector.NewVec(types.T_uint32.ToType(), mp)
 	col = &plan.ColDef{Name: "u", Typ: plan.Type{Id: int32(types.T_uint32)}}
 	err := fillConstantVector(vec, "-1", col, 1, proc, "/t")
 	require.Error(t, err)
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_Uint8_Uint16_Uint64(t *testing.T) {
@@ -423,7 +423,7 @@ func TestFillConstantVector_Uint8_Uint16_Uint64(t *testing.T) {
 		{"uint64", types.T_uint64, "4294967296"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(tc.typId.ToType())
+			vec := vector.NewVec(tc.typId.ToType(), mp)
 			col := &plan.ColDef{Name: "n", Typ: plan.Type{Id: int32(tc.typId)}}
 			require.NoError(t, fillConstantVector(vec, tc.strVal, col, 1, proc, "/t"))
 			vec.Free(mp)
@@ -434,7 +434,7 @@ func TestFillConstantVector_Uint8_Uint16_Uint64(t *testing.T) {
 func TestFillConstantVector_Bit(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_bit.ToType())
+	vec := vector.NewVec(types.T_bit.ToType(), mp)
 	col := &plan.ColDef{Name: "b", Typ: plan.Type{Id: int32(types.T_bit), Width: 8}}
 	require.NoError(t, fillConstantVector(vec, "7", col, 1, proc, "/t"))
 	val := vector.MustFixedColNoTypeCheck[uint64](vec)
@@ -442,148 +442,148 @@ func TestFillConstantVector_Bit(t *testing.T) {
 	vec.Free(mp)
 
 	// ParseUint failure wraps
-	vec = vector.NewVec(types.T_bit.ToType())
+	vec = vector.NewVec(types.T_bit.ToType(), mp)
 	require.Error(t, fillConstantVector(vec, "abc", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_Float32_Float64(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
 
-	vec := vector.NewVec(types.T_float32.ToType())
+	vec := vector.NewVec(types.T_float32.ToType(), mp)
 	col := &plan.ColDef{Name: "f32", Typ: plan.Type{Id: int32(types.T_float32)}}
 	require.NoError(t, fillConstantVector(vec, "1.5", col, 1, proc, "/t"))
 	vec.Free(mp)
 
-	vec = vector.NewVec(types.T_float64.ToType())
+	vec = vector.NewVec(types.T_float64.ToType(), mp)
 	col = &plan.ColDef{Name: "f64", Typ: plan.Type{Id: int32(types.T_float64)}}
 	require.NoError(t, fillConstantVector(vec, "2.25", col, 1, proc, "/t"))
 	vec.Free(mp)
 
 	// Parse error path
-	vec = vector.NewVec(types.T_float32.ToType())
+	vec = vector.NewVec(types.T_float32.ToType(), mp)
 	col = &plan.ColDef{Name: "f32", Typ: plan.Type{Id: int32(types.T_float32)}}
 	require.Error(t, fillConstantVector(vec, "notafloat", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 
-	vec = vector.NewVec(types.T_float64.ToType())
+	vec = vector.NewVec(types.T_float64.ToType(), mp)
 	col = &plan.ColDef{Name: "f64", Typ: plan.Type{Id: int32(types.T_float64)}}
 	require.Error(t, fillConstantVector(vec, "notafloat", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_Decimal64(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_decimal64.ToType())
+	vec := vector.NewVec(types.T_decimal64.ToType(), mp)
 	col := &plan.ColDef{Name: "d", Typ: plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}}
 	require.NoError(t, fillConstantVector(vec, "12.34", col, 1, proc, "/t"))
 	vec.Free(mp)
 
 	// Parse error
-	vec = vector.NewVec(types.T_decimal64.ToType())
+	vec = vector.NewVec(types.T_decimal64.ToType(), mp)
 	require.Error(t, fillConstantVector(vec, "notadecimal", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_Decimal128(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_decimal128.ToType())
+	vec := vector.NewVec(types.T_decimal128.ToType(), mp)
 	col := &plan.ColDef{Name: "d", Typ: plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 2}}
 	require.NoError(t, fillConstantVector(vec, "123456789.01", col, 1, proc, "/t"))
 	vec.Free(mp)
 
-	vec = vector.NewVec(types.T_decimal128.ToType())
+	vec = vector.NewVec(types.T_decimal128.ToType(), mp)
 	require.Error(t, fillConstantVector(vec, "nope", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_Date(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_date.ToType())
+	vec := vector.NewVec(types.T_date.ToType(), mp)
 	col := &plan.ColDef{Name: "d", Typ: plan.Type{Id: int32(types.T_date)}}
 	require.NoError(t, fillConstantVector(vec, "2025-06-15", col, 1, proc, "/t"))
 	vec.Free(mp)
 
-	vec = vector.NewVec(types.T_date.ToType())
+	vec = vector.NewVec(types.T_date.ToType(), mp)
 	require.Error(t, fillConstantVector(vec, "not-a-date", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_Datetime(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_datetime.ToType())
+	vec := vector.NewVec(types.T_datetime.ToType(), mp)
 	col := &plan.ColDef{Name: "dt", Typ: plan.Type{Id: int32(types.T_datetime), Scale: 0}}
 	require.NoError(t, fillConstantVector(vec, "2025-06-15 12:34:56", col, 1, proc, "/t"))
 	vec.Free(mp)
 
-	vec = vector.NewVec(types.T_datetime.ToType())
+	vec = vector.NewVec(types.T_datetime.ToType(), mp)
 	require.Error(t, fillConstantVector(vec, "not-a-datetime", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_Timestamp(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_timestamp.ToType())
+	vec := vector.NewVec(types.T_timestamp.ToType(), mp)
 	col := &plan.ColDef{Name: "ts", Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 0}}
 	require.NoError(t, fillConstantVector(vec, "2025-06-15 12:34:56", col, 1, proc, "/t"))
 	vec.Free(mp)
 
-	vec = vector.NewVec(types.T_timestamp.ToType())
+	vec = vector.NewVec(types.T_timestamp.ToType(), mp)
 	require.Error(t, fillConstantVector(vec, "not-a-ts", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_Time(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_time.ToType())
+	vec := vector.NewVec(types.T_time.ToType(), mp)
 	col := &plan.ColDef{Name: "t", Typ: plan.Type{Id: int32(types.T_time), Scale: 0}}
 	require.NoError(t, fillConstantVector(vec, "12:34:56", col, 1, proc, "/t"))
 	vec.Free(mp)
 
-	vec = vector.NewVec(types.T_time.ToType())
+	vec = vector.NewVec(types.T_time.ToType(), mp)
 	require.Error(t, fillConstantVector(vec, "not-a-time", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_BoolError(t *testing.T) {
 	proc := testutil.NewProc(t)
-	vec := vector.NewVec(types.T_bool.ToType())
+	vec := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	col := &plan.ColDef{Name: "b", Typ: plan.Type{Id: int32(types.T_bool)}}
 	require.Error(t, fillConstantVector(vec, "nope", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_Uuid(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_uuid.ToType())
+	vec := vector.NewVec(types.T_uuid.ToType(), mp)
 	col := &plan.ColDef{Name: "u", Typ: plan.Type{Id: int32(types.T_uuid)}}
 	require.NoError(t, fillConstantVector(vec, "00000000-0000-0000-0000-000000000001", col, 1, proc, "/t"))
 	vec.Free(mp)
 
-	vec = vector.NewVec(types.T_uuid.ToType())
+	vec = vector.NewVec(types.T_uuid.ToType(), mp)
 	require.Error(t, fillConstantVector(vec, "not-a-uuid", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_Json(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_json.ToType())
+	vec := vector.NewVec(types.T_json.ToType(), mp)
 	col := &plan.ColDef{Name: "j", Typ: plan.Type{Id: int32(types.T_json)}}
 	require.NoError(t, fillConstantVector(vec, `{"a":1}`, col, 1, proc, "/t"))
 	vec.Free(mp)
 
-	vec = vector.NewVec(types.T_json.ToType())
+	vec = vector.NewVec(types.T_json.ToType(), mp)
 	require.Error(t, fillConstantVector(vec, "not-json", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_ByteTypes(t *testing.T) {
@@ -594,7 +594,7 @@ func TestFillConstantVector_ByteTypes(t *testing.T) {
 		types.T_char, types.T_varchar, types.T_text,
 		types.T_blob, types.T_binary, types.T_varbinary, types.T_datalink,
 	} {
-		vec := vector.NewVec(typId.ToType())
+		vec := vector.NewVec(typId.ToType(), mp)
 		col := &plan.ColDef{Name: "b", Typ: plan.Type{Id: int32(typId)}}
 		require.NoError(t, fillConstantVector(vec, "xyz", col, 2, proc, "/t"))
 		vec.Free(mp)
@@ -604,54 +604,54 @@ func TestFillConstantVector_ByteTypes(t *testing.T) {
 func TestFillConstantVector_VectorTypesReturnNotSupported(t *testing.T) {
 	proc := testutil.NewProc(t)
 	for _, typId := range []types.T{types.T_array_float32, types.T_array_float64} {
-		vec := vector.NewVec(typId.ToType())
+		vec := vector.NewVec(typId.ToType(), proc.Mp())
 		col := &plan.ColDef{Name: "v", Typ: plan.Type{Id: int32(typId)}}
 		err := fillConstantVector(vec, "[1,2,3]", col, 1, proc, "/t")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported")
-		vec.Free(nil)
+		vec.Free(vec.MPool())
 	}
 }
 
 func TestFillConstantVector_UnsupportedTypeDefaultBranch(t *testing.T) {
 	// Use T_any which is not in the switch → hits default branch.
 	proc := testutil.NewProc(t)
-	vec := vector.NewVec(types.T_any.ToType())
+	vec := vector.NewVec(types.T_any.ToType(), proc.Mp())
 	col := &plan.ColDef{Name: "x", Typ: plan.Type{Id: int32(types.T_any)}}
 	err := fillConstantVector(vec, "whatever", col, 1, proc, "/t")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported")
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_SetStoredAsUint64(t *testing.T) {
 	// SET is encoded as T_uint64 with non-empty Enumvalues → ParseSet branch.
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_uint64.ToType())
+	vec := vector.NewVec(types.T_uint64.ToType(), mp)
 	col := &plan.ColDef{Name: "s",
 		Typ: plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b,c"}}
 	require.NoError(t, fillConstantVector(vec, "b", col, 1, proc, "/t"))
 	vec.Free(mp)
 
 	// Unknown member → parse error
-	vec = vector.NewVec(types.T_uint64.ToType())
+	vec = vector.NewVec(types.T_uint64.ToType(), mp)
 	require.Error(t, fillConstantVector(vec, "zzz", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_Enum(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_enum.ToType())
+	vec := vector.NewVec(types.T_enum.ToType(), mp)
 	col := &plan.ColDef{Name: "e",
 		Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "red,green,blue"}}
 	require.NoError(t, fillConstantVector(vec, "green", col, 1, proc, "/t"))
 	vec.Free(mp)
 
-	vec = vector.NewVec(types.T_enum.ToType())
+	vec = vector.NewVec(types.T_enum.ToType(), mp)
 	require.Error(t, fillConstantVector(vec, "purple", col, 1, proc, "/t"))
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 // ---------------------------------------------------------------------------
@@ -663,7 +663,7 @@ func TestFillVirtualColumns_FilepathOnly(t *testing.T) {
 	mp := proc.Mp()
 
 	// One filepath column in batch.
-	fpVec := vector.NewVec(types.T_varchar.ToType())
+	fpVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	bat := &batch.Batch{Vecs: []*vector.Vector{fpVec}}
 	bat.SetRowCount(5)
 
@@ -685,8 +685,8 @@ func TestFillVirtualColumns_FilepathAndPartition(t *testing.T) {
 	mp := proc.Mp()
 
 	// Batch has [filepath varchar, partition int32].
-	fpVec := vector.NewVec(types.T_varchar.ToType())
-	partVec := vector.NewVec(types.T_int32.ToType())
+	fpVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	partVec := vector.NewVec(types.T_int32.ToType(), mp)
 	bat := &batch.Batch{Vecs: []*vector.Vector{fpVec, partVec}}
 	bat.SetRowCount(3)
 

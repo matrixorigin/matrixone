@@ -271,6 +271,10 @@ func (s *Source) AppendWithStats(bat *batch.Batch) (stats AppendStats, err error
 	s.mu.Unlock()
 
 	cloned, err := cloneMaterializedBatch(bat, mp, allocation)
+	clonedMP := allocation
+	if clonedMP == nil {
+		clonedMP = mp
+	}
 	if err != nil {
 		s.mu.Lock()
 		if s.generation == generation && s.active {
@@ -299,7 +303,7 @@ func (s *Source) AppendWithStats(bat *batch.Batch) (stats AppendStats, err error
 			s.bytes -= reserved
 		}
 		stats.RetainedBytes = s.bytes
-		cloned.Clean(mp)
+		cloned.Clean(clonedMP)
 		if s.generation == generation && s.err != nil {
 			return stats, s.err
 		}
@@ -307,7 +311,7 @@ func (s *Source) AppendWithStats(bat *batch.Batch) (stats AppendStats, err error
 	}
 	if actual > reserved && (actual-reserved > s.memoryLimit || s.bytes > s.memoryLimit-(actual-reserved)) {
 		s.bytes -= reserved
-		cloned.Clean(mp)
+		cloned.Clean(clonedMP)
 		stats.SpilledBytes, err = s.appendSpilledLocked(bat)
 		if err != nil {
 			s.failLocked(err)
@@ -326,6 +330,17 @@ func (s *Source) AppendWithStats(bat *batch.Batch) (stats AppendStats, err error
 
 // Next returns a batch owned by the caller, or end=true after the producer
 // finishes. Every successful caller must clean the returned batch exactly once.
+// ReaderMP is the pool of the batches Next returns; the reader cleans them
+// with it.
+func (s *Source) ReaderMP() *mpool.MPool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.allocation != nil {
+		return s.allocation
+	}
+	return s.mp
+}
+
 func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.Batch, end bool, err error) {
 	if s == nil {
 		return nil, true, moerr.NewInternalErrorNoCtx("nil materialized sink source")
@@ -370,7 +385,7 @@ func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.B
 			}
 			if s.generation != generation || !s.active || s.readerReleased[readerID] {
 				s.mu.Unlock()
-				decoded.Clean(mp)
+				decoded.Clean(allocation)
 				return nil, true, moerr.NewInternalErrorNoCtx("materialized sink source stopped while reading spill data")
 			}
 			s.spillReadOffsets[readerID] = nextOffset
@@ -605,7 +620,7 @@ func readSpilledBatch(
 	decoded, err := unmarshalSpillBatch(data, mp, allocation)
 	if err != nil {
 		if decoded != nil {
-			decoded.Clean(mp)
+			decoded.Clean(allocation)
 		}
 		return nil, offset, err
 	}
@@ -625,7 +640,7 @@ func unmarshalSpillBatch(
 	var err error
 	switch data[0] {
 	case spillPayloadGrouping:
-		decoded = batch.NewOffHeapWithSize(0)
+		decoded = batch.NewWithSize(0)
 		err = decoded.UnmarshalFromReaderWithGrouping(r, allocation)
 	case spillPayloadSelectedRange:
 		decoded, err = unmarshalSelectedSpillBatchFrom(r, mp, allocation)
@@ -634,12 +649,12 @@ func unmarshalSpillBatch(
 	}
 	if err != nil {
 		if decoded != nil {
-			decoded.Clean(mp)
+			decoded.Clean(allocation)
 		}
 		return nil, err
 	}
 	if r.Len() != 0 {
-		decoded.Clean(mp)
+		decoded.Clean(allocation)
 		return nil, moerr.NewInvalidInputNoCtx("trailing materialized sink spill payload")
 	}
 	return decoded, nil
@@ -661,7 +676,7 @@ func cloneMaterializedBatch(
 		return source.Dup(mp)
 	}
 	attrs, attrTypes := source.GetSchema()
-	cloned := batch.NewWithSchema(true, attrs, attrTypes)
+	cloned := batch.NewWithSchema(attrs, attrTypes, allocation)
 	cloned.Recursive = source.Recursive
 	if err := source.CloneTo(cloned, allocation); err != nil {
 		return nil, err
@@ -770,16 +785,16 @@ func unmarshalSelectedSpillBatchFrom(
 		}
 		return nil, moerr.NewInvalidInputNoCtx("invalid materialized sink spill column count")
 	}
-	decoded := batch.NewOffHeapWithSize(columns)
+	decoded := batch.NewWithSize(columns)
 	for i := range columns {
 		typ, readErr := types.ReadType(r)
 		if readErr != nil {
-			decoded.Clean(mp)
+			decoded.Clean(allocation)
 			return nil, readErr
 		}
 		sorted, readErr := types.ReadByte(r)
 		if readErr != nil || sorted > 1 {
-			decoded.Clean(mp)
+			decoded.Clean(allocation)
 			if readErr != nil {
 				return nil, readErr
 			}
@@ -787,19 +802,19 @@ func unmarshalSelectedSpillBatchFrom(
 				"invalid materialized sink spill sorted flag",
 			)
 		}
-		decoded.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+		decoded.Vecs[i] = vector.NewVec(typ, allocation)
 		if err = decoded.Vecs[i].UnmarshalSelectedRowsFrom(r, int(rows64), allocation); err != nil {
-			decoded.Clean(mp)
+			decoded.Clean(allocation)
 			return nil, err
 		}
 		decoded.Vecs[i].SetSorted(sorted != 0)
 	}
 	if decoded.Recursive, err = types.ReadInt32(r); err != nil {
-		decoded.Clean(mp)
+		decoded.Clean(allocation)
 		return nil, err
 	}
 	if decoded.ShuffleIDX, err = types.ReadInt32(r); err != nil {
-		decoded.Clean(mp)
+		decoded.Clean(allocation)
 		return nil, err
 	}
 	decoded.SetRowCount(int(rows64))
@@ -913,10 +928,28 @@ func (s *Source) tryCleanLocked() {
 	}
 }
 
+// BatchMP returns the pool the batches Next returns belong to: a consumer
+// frees each returned batch with it. Capture it when the batch is returned;
+// it is valid until the consumer releases its reader.
+func (s *Source) BatchMP() *mpool.MPool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bufferMPLocked()
+}
+
+// bufferMPLocked is the one pool the retained batches belong to: the
+// accounted spill view when one is configured, otherwise the sink pool.
+func (s *Source) bufferMPLocked() *mpool.MPool {
+	if s.allocation != nil {
+		return s.allocation
+	}
+	return s.mp
+}
+
 func (s *Source) cleanLocked() {
-	if s.mp != nil {
+	if mp := s.bufferMPLocked(); mp != nil {
 		for _, bat := range s.batches {
-			bat.Clean(s.mp)
+			bat.Clean(mp)
 		}
 	}
 	if s.spillFile != nil {

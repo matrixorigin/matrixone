@@ -61,7 +61,8 @@ func TestPreparedRefreshFailureReleasesProtocolResources(t *testing.T) {
 				require.True(t, ses.tryReservePreparedCursorBytes(retained, 1024))
 				stmt.cursor = &preparedStmtCursor{owner: ses, bytes: retained, result: &MysqlResultSet{Data: [][]interface{}{{1}}}}
 				if command == COM_STMT_EXECUTE {
-					stmt.params = vector.NewVec(types.T_text.ToType())
+					stmt.params = vector.NewVec(types.T_text.ToType(), ses.GetProc().Mp())
+					stmt.paramsMP = ses.GetProc().Mp()
 					require.NoError(t, vector.AppendBytes(stmt.params, []byte("pending"), false, ses.GetProc().Mp()))
 					stmt.getFromSendLongData = map[int]struct{}{0: {}}
 				}

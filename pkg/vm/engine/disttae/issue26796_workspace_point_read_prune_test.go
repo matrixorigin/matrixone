@@ -130,8 +130,8 @@ func issue26796InsertOne(t *testing.T, txn *Transaction, pk, value int64) {
 	t.Helper()
 	bat := batch.NewWithSize(2)
 	bat.Attrs = []string{issue26796PKName, "value"}
-	bat.SetVector(0, vector.NewVec(types.T_int64.ToType()))
-	bat.SetVector(1, vector.NewVec(types.T_int64.ToType()))
+	bat.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
+	bat.SetVector(1, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.GetVector(0), pk, false, txn.proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.GetVector(1), value, false, txn.proc.Mp()))
 	bat.SetRowCount(1)
@@ -148,8 +148,8 @@ func issue26796InsertBatch(t *testing.T, txn *Transaction, pks ...int64) {
 	t.Helper()
 	bat := batch.NewWithSize(2)
 	bat.Attrs = []string{issue26796PKName, "value"}
-	bat.SetVector(0, vector.NewVec(types.T_int64.ToType()))
-	bat.SetVector(1, vector.NewVec(types.T_int64.ToType()))
+	bat.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
+	bat.SetVector(1, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 	for _, pk := range pks {
 		require.NoError(t, vector.AppendFixed(bat.GetVector(0), pk, false, txn.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.GetVector(1), pk, false, txn.proc.Mp()))
@@ -244,7 +244,7 @@ func issue26796PointReadTable(
 	}
 	outBatch := batch.NewWithSize(1)
 	outBatch.Attrs = []string{"value"}
-	outBatch.SetVector(0, vector.NewVec(types.T_int64.ToType()))
+	outBatch.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 	err := ls.filterInMemUnCommittedInserts(context.Background(), []uint16{1}, 0, txn.proc.Mp(), outBatch)
 	require.NoError(t, err)
 

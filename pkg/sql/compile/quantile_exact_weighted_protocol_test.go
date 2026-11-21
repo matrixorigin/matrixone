@@ -59,7 +59,7 @@ func TestPreflightQuantileExactWeightedConfigsReturnsPreparedValueError(t *testi
 	node := &planpb.Node{AggList: []*planpb.Expr{bound}}
 
 	check := func(param []byte, isNull bool) error {
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(params, param, isNull, proc.Mp()))
 		proc.SetPrepareParams(params)
 		baseline := proc.Mp().CurrNB()
@@ -78,7 +78,7 @@ func TestPreflightQuantileExactWeightedConfigsReturnsPreparedValueError(t *testi
 	require.ErrorContains(t, err,
 		"percentile argument of quantileexactweighted cannot be NULL")
 
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("0.25"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
 	require.NoError(t, preflightPercentileConfigs(node, proc),

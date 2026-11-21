@@ -62,7 +62,7 @@ func runLargeOffsetMemory(t testing.TB, n int) {
 	var bats []*batch.Batch
 	for start := 0; start < n; start += 8192 {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), c.proc.Mp())
 		values := make([]int64, min(8192, n-start))
 		for j := range values {
 			values[j] = int64(start + j)

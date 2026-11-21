@@ -43,8 +43,6 @@ var (
 // column names (Attrs), column data (Vecs), the number of rows (rowCount),
 // aggregation intermediate data (Aggs),
 // and some specific flags like Recursive, ShuffleIDX.
-//
-// offHeap is true means this batch was allocated outside mpool.
 type Batch struct {
 	// For recursive CTE, 1 is last batch, 2 is end of batch
 	Recursive  int32
@@ -59,7 +57,6 @@ type Batch struct {
 	// row count of batch, to instead of old len(Zs). For a selected batch it
 	// is the logical (selected) row count.
 	rowCount int
-	offHeap  bool
 
 	// selection, when non-nil, marks the physical rows that are the batch's
 	// logical rows (see selection.go); physicalRows is the vectors' row count.

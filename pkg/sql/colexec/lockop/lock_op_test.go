@@ -394,7 +394,7 @@ func TestLockRowsForSnapshotRefresh(t *testing.T) {
 				defer testingContext.SetAdjustLockResultFunc(nil)
 
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
 				bat.SetRowCount(1)
 				defer bat.Clean(proc.Mp())
@@ -1652,7 +1652,7 @@ func TestDoLockSharedOversizedBatchKeepsExactRows(t *testing.T) {
 			table:     26769,
 			typeValue: types.T_int64.ToType(),
 			makeVec: func(mp *mpool.MPool) *vector.Vector {
-				vec := vector.NewVec(types.T_int64.ToType())
+				vec := vector.NewVec(types.T_int64.ToType(), mp)
 				vector.AppendFixedList(vec, []int64{1, 2, 3, 4, 5}, nil, mp)
 				return vec
 			},
@@ -1666,7 +1666,7 @@ func TestDoLockSharedOversizedBatchKeepsExactRows(t *testing.T) {
 			table:     26770,
 			typeValue: types.T_varchar.ToType(),
 			makeVec: func(mp *mpool.MPool) *vector.Vector {
-				vec := vector.NewVec(types.T_varchar.ToType())
+				vec := vector.NewVec(types.T_varchar.ToType(), mp)
 				for _, value := range []string{"1", "2", "3", "4", "5"} {
 					require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
 				}
@@ -2466,11 +2466,11 @@ func runLockNonBlockingOpTest(
 			for idx, table := range tables {
 				arg.AddLockTarget(table, nil, offset, pkType, -1, offset+1, nil, true)
 
-				vec := vector.NewVec(pkType)
+				vec := vector.NewVec(pkType, proc.Mp())
 				vector.AppendFixedList(vec, values[idx], nil, proc.Mp())
 				bat.Vecs[offset] = vec
 
-				vec = vector.NewVec(tsType)
+				vec = vector.NewVec(tsType, proc.Mp())
 				bat.Vecs[offset+1] = vec
 				offset += 2
 			}

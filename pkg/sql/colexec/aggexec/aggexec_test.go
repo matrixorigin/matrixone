@@ -168,7 +168,7 @@ func TestVectorsUnmarshalFromReader(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, exec.GroupGrow(2))
 
-	v := vector.NewVec(param)
+	v := vector.NewVec(param, mp)
 	require.NoError(t, vector.AppendFixed(v, float64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(v, float64(3), false, mp))
 	require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v}))
@@ -236,7 +236,7 @@ func TestAggExecUnmarshalReplacesExistingState(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, results, 2)
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 	})
 }
@@ -277,13 +277,13 @@ func TestAggExecSpillDecodeUsesExactSourceCapacity(t *testing.T) {
 	results, err := destination.Flush()
 	require.NoError(t, err)
 	require.Equal(t, []int64{0, 0}, vector.MustFixedColNoTypeCheck[int64](results[0]))
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	destination.Free()
 	target.Free()
 
 	t.Run("fixed-max-plain", func(t *testing.T) {
 		f := newFixedMetadataPreflightFixture(t, AggIdOfMax, types.T_float64.ToType())
-		input := vector.NewVec(types.T_float64.ToType())
+		input := vector.NewVec(types.T_float64.ToType(), f.mp)
 		t.Cleanup(func() { input.Free(f.mp) })
 		require.NoError(t, vector.AppendFixedList(input, []float64{7, 4, 0, 9}, []bool{false, false, true, false}, f.mp))
 		require.NoError(t, f.exec.GroupGrow(3))
@@ -317,7 +317,7 @@ func TestAggExecSpillDecodeUsesExactSourceCapacity(t *testing.T) {
 		results, err := merged.Flush()
 		require.NoError(t, err)
 		require.Len(t, results, 1)
-		t.Cleanup(func() { results[0].Free(f.mp) })
+		t.Cleanup(func() { results[0].Free(results[0].MPool()) })
 		require.Equal(t, float64(7), vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
 		require.Equal(t, float64(9), vector.GetFixedAtNoTypeCheck[float64](results[0], 2))
 		for row := range 3 {
@@ -526,7 +526,7 @@ func TestAggStateReadRejectsInconsistentAndTruncatedState(t *testing.T) {
 
 	t.Run("vector row count", func(t *testing.T) {
 		info := aggInfo{stateTypes: []types.Type{types.T_int64.ToType()}}
-		source := vector.NewVec(types.T_int64.ToType())
+		source := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(source, []int64{1, 2}, nil, mp))
 		var encoded bytes.Buffer
 		require.NoError(t, types.WriteInt32(&encoded, 1))

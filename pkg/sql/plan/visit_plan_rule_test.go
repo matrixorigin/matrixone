@@ -1008,15 +1008,15 @@ func TestCollectPrepareViewSchemasKeepsLogicalSubscriptions(t *testing.T) {
 	}
 	ctx.resolve = func(databaseName, tableName string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 		return &ObjectRef{
-			SchemaName:       "publisher_db",
-			ObjName:          tableName,
-			Obj:              20,
-			SubscriptionName: databaseName,
-			PubInfo:          &planpb.PubInfo{TenantId: 11},
-		}, &TableDef{
-			DbName: "publisher_db", Name: tableName,
-			DbId: 10, TblId: 20, Version: 30,
-		}, nil
+				SchemaName:       "publisher_db",
+				ObjName:          tableName,
+				Obj:              20,
+				SubscriptionName: databaseName,
+				PubInfo:          &planpb.PubInfo{TenantId: 11},
+			}, &TableDef{
+				DbName: "publisher_db", Name: tableName,
+				DbId: 10, TblId: 20, Version: 30,
+			}, nil
 	}
 
 	schemas, err := collectPrepareViewSchemas(ctx)
@@ -3810,7 +3810,7 @@ func TestRestorePreparedExactIntegerTextExecutesNormalization(t *testing.T) {
 			} else {
 				require.NotNil(t, restored.GetF().Args[0].GetP())
 			}
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			proc.SetPrepareParams(params)
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			value := "9007199254740993"

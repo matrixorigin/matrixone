@@ -156,7 +156,7 @@ func TestUTCFunctionsRejectNonConstantFractionalSecondPrecision(t *testing.T) {
 	for _, name := range []string{"utc_time", "utc_timestamp"} {
 		for _, values := range nonConstantInputs {
 			t.Run(name, func(t *testing.T) {
-				input := vector.NewVec(types.T_int64.ToType())
+				input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 				defer input.Free(proc.Mp())
 				require.NoError(t, vector.AppendFixedList(input, values, nil, proc.Mp()))
 

@@ -26,7 +26,7 @@ import (
 
 func TestAnyValueBatchFillReturnsSetRawBytesAtError(t *testing.T) {
 	inputMp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), inputMp)
 	require.NoError(t, vector.AppendBytes(input, make([]byte, 4096), false, inputMp))
 	defer input.Free(inputMp)
 
@@ -40,7 +40,7 @@ func TestAnyValueBatchFillReturnsSetRawBytesAtError(t *testing.T) {
 
 func TestAnyValueBatchMergeReturnsSetRawBytesAtError(t *testing.T) {
 	inputMp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), inputMp)
 	require.NoError(t, vector.AppendBytes(input, make([]byte, 4096), false, inputMp))
 	defer input.Free(inputMp)
 
@@ -76,7 +76,7 @@ func TestAnyValueIntermediateDecodesLegacyStringStateTrailer(t *testing.T) {
 	}
 	for _, saveChunk := range []bool{false, true} {
 		mp := mpool.MustNewZero()
-		input := vector.NewVec(types.T_text.ToType())
+		input := vector.NewVec(types.T_text.ToType(), mp)
 		for range domains {
 			require.NoError(t, vector.AppendBytes(input, []byte("value"), false, mp))
 		}
@@ -149,7 +149,7 @@ func TestAnyValueIntermediateDecodesLegacyStringStateTrailer(t *testing.T) {
 			}
 			require.Equal(t, wire.Bytes(), reencoded.Bytes(), name)
 			reencoder.Free()
-			results[0].Free(mp)
+			results[0].Free(results[0].MPool())
 			restored.Free()
 		}
 
@@ -162,7 +162,7 @@ func TestAnyValueIntermediateDecodesLegacyStringStateTrailer(t *testing.T) {
 func TestAnyValueIntermediateRoundTripPreservesStringValue(t *testing.T) {
 	mp := mpool.MustNewZero()
 	typ := types.T_varbinary.ToType()
-	input := vector.NewVec(typ)
+	input := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendBytes(input, []byte("binary"), false, mp))
 	source := makeAnyValueExec(mp, AggIdOfAny, typ)
 	require.NoError(t, source.GroupGrow(1))
@@ -177,7 +177,7 @@ func TestAnyValueIntermediateRoundTripPreservesStringValue(t *testing.T) {
 	require.Equal(t, typ.Oid, results[0].GetType().Oid)
 	require.Equal(t, "binary", results[0].GetStringAt(0))
 
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	restored.Free()
 	source.Free()
 	input.Free(mp)

@@ -228,17 +228,16 @@ func callSkipLocked(
 			if err := proc.Ctx.Err(); err != nil {
 				return result, err
 			}
-			window, err := input.Window(rowIdx, rowIdx+1)
-			if err != nil {
-				return result, err
-			}
-			candidate, err := window.Dup(proc.Mp())
-			window.Clean(nil)
+			// The window is a read-only reference to the row; performLock only
+			// reads it.
+			candidate, err := input.Window(rowIdx, rowIdx+1)
 			if err != nil {
 				return result, err
 			}
 			err = performLock(candidate, proc, lockOp, analyzer, -1)
-			candidate.Clean(proc.Mp())
+			candidate.FreeWindow()
+			// A candidate's refreshed timestamps are not published.
+			clear(lockOp.ctr.refresh.replaced)
 			if err == lockservice.ErrLockConflict {
 				if lockOp.ctr.retryError != nil {
 					// A completed target can have advanced the snapshot or detected a
@@ -315,8 +314,11 @@ func callNonBlocking(
 		if !result.Batch.IsEmpty() {
 			lockOp.ctr.lockCount += int64(result.Batch.RowCount())
 			if err := performLock(result.Batch, proc, lockOp, analyzer, -1); err != nil {
+				clear(lockOp.ctr.refresh.replaced)
 				return result, err
 			}
+			// Publish refreshed timestamp columns through the operator's view.
+			result.Batch = lockOp.ctr.refresh.publish(result.Batch)
 		}
 
 		if lockOp.ctr.retryError == nil {
@@ -389,7 +391,7 @@ func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int) hasNewVersionI
 func getVec(proc *process.Process, vec *vector.Vector) (*vector.Vector, error) {
 	if vec.HasNull() {
 		nulls := vec.GetNulls()
-		newVec := vector.NewOffHeapVecWithType(*vec.GetType())
+		newVec := vector.NewVec(*vec.GetType(), proc.Mp())
 		for i := 0; i < vec.Length(); i++ {
 			if !nulls.Contains(uint64(i)) {
 				if err := vector.AppendBytes(newVec, nil, true, proc.Mp()); err != nil {
@@ -553,15 +555,29 @@ func performLock(
 		// refreshTS is last commit ts + 1, because we need see the committed data.
 		// A definition change must rebuild the plan instead; forwarding only the
 		// refreshed row timestamp would keep the stale physical table ID.
+		// The refreshed column is the operator's own vector: a copy of the
+		// child's column with the timestamps appended, published through
+		// lockOp.ctr.refresh in place of the child's vector, which is never
+		// modified.
 		if !defChanged && proc.Base.TxnClient.RefreshExpressionEnabled() &&
 			target.refreshTimestampIndexInBatch != -1 {
 			priVec := bat.GetVector(target.primaryColumnIndexInBatch)
-			vec := bat.GetVector(target.refreshTimestampIndexInBatch)
+			src := bat.GetVector(target.refreshTimestampIndexInBatch)
+			dst := lockOp.ctr.refresh.vector(target.refreshTimestampIndexInBatch, *src.GetType(), proc.Mp())
+			if err := dst.UnionBatch(src, 0, src.Length(), nil, proc.Mp()); err != nil {
+				return err
+			}
 			ts := types.BuildTS(refreshTS.PhysicalTime, refreshTS.LogicalTime)
 			n := priVec.Length()
 			for i := 0; i < n; i++ {
-				vector.AppendFixed(vec, ts, false, proc.Mp())
+				if err := vector.AppendFixed(dst, ts, false, proc.Mp()); err != nil {
+					return err
+				}
 			}
+			if lockOp.ctr.refresh.replaced == nil {
+				lockOp.ctr.refresh.replaced = make(map[int32]*vector.Vector)
+			}
+			lockOp.ctr.refresh.replaced[target.refreshTimestampIndexInBatch] = dst
 			continue
 		}
 
@@ -2109,6 +2125,7 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 
 func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	lockOp.cleanSkipLockedOutput(proc)
+	clear(lockOp.ctr.refresh.replaced)
 	lockOp.resetParker()
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.defChanged = false
@@ -2118,6 +2135,7 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
 	lockOp.cleanSkipLockedOutput(proc)
+	lockOp.ctr.refresh.free()
 	lockOp.cleanParker()
 	lockOp.ctr.relations = nil
 }
@@ -2258,5 +2276,8 @@ func lockTargetWithRows(
 	bat.Vecs[target.primaryColumnIndexInBatch] = vec
 	bat.SetRowCount(vec.Length())
 
-	return performLock(bat, proc, lockOp, lockOp.OpAnalyzer, idx)
+	err = performLock(bat, proc, lockOp, lockOp.OpAnalyzer, idx)
+	// lock rows are not a published batch.
+	clear(lockOp.ctr.refresh.replaced)
+	return err
 }

@@ -43,7 +43,7 @@ func TestLoopJoinScalarBuild(t *testing.T) {
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			join.ctr.setProbeBatch(input)
 			for _, start := range []int{0, colexec.DefaultBatchSize} {
-				require.NoError(t, join.resetResultBat())
+				require.NoError(t, join.resetResultBat(proc))
 				result := vm.NewCallResult()
 				require.NoError(t, join.ctr.probe(join, proc, &result))
 				count := min(colexec.DefaultBatchSize, len(values)-start)
@@ -75,7 +75,6 @@ func TestLoopJoinScalarBuildDoesNotPublishOnFailure(t *testing.T) {
 			input := makeInt32LoopJoinBatch(proc.Mp(), []int32{1, 2})
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			join.ctr.setProbeBatch(input)
-			require.NoError(t, join.resetResultBat())
 			if !cancel {
 				// Size the result account for exactly one column so the second
 				// column is refused after the first column has copied.
@@ -87,11 +86,11 @@ func TestLoopJoinScalarBuildDoesNotPublishOnFailure(t *testing.T) {
 					mpool.AllocationOwnerHashBuild, loopJoinAllocationSiteResultData,
 					mpool.AllocationCapacityClassDefault)
 				require.NoError(t, err)
-				measured := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+				measured := vector.NewVec(types.T_int32.ToType(), measureMP)
 				require.NoError(t, measured.UnionBatch(input.Vecs[0], 0, input.RowCount(), nil, measureMP))
 				oneColumn := measureAccount.Snapshot().Used
 				require.Positive(t, oneColumn)
-				measured.Free(proc.Mp())
+				measured.Free(measureMP)
 				require.Zero(t, measureAccount.Snapshot().Used)
 
 				registry, err := mpool.NewAllocationAccountRegistry(1, 16)
@@ -108,6 +107,8 @@ func TestLoopJoinScalarBuildDoesNotPublishOnFailure(t *testing.T) {
 				proc.Ctx = ctx
 				stop()
 			}
+			// The result batch is created with the result binding installed above.
+			require.NoError(t, join.resetResultBat(proc))
 			result := vm.NewCallResult()
 			err := join.ctr.probe(join, proc, &result)
 			if cancel {

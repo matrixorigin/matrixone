@@ -3565,7 +3565,7 @@ func TestBuiltInCurrentTimeNoArgDefaultsToZeroFSP(t *testing.T) {
 func TestTimestampFunctionsIgnoreNullPrecisionValue(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	arg := vector.NewVec(types.T_int64.ToType())
+	arg := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer arg.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(arg, int64(6), false, proc.Mp()))
 	arg.SetNull(0) // A reused non-constant vector can retain its previous data.

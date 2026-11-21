@@ -30,7 +30,7 @@ var lowPrecTypes = []types.T{types.T_bf16, types.T_float16, types.T_float8, type
 // lowPrecVector holds 1.5 and -0.5, exact in every low-precision type, then a NULL.
 func lowPrecVector(t *testing.T, oid types.T, mp *mpool.MPool) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(oid.ToType())
+	vec := vector.NewVec(oid.ToType(), mp)
 	for i, v := range []float32{1.5, -0.5, 0} {
 		null := i == 2
 		var err error
@@ -106,7 +106,7 @@ func TestParquetExportVecBlockExactCell(t *testing.T) {
 		require.True(t, ok)
 		cell, err := types.AppendBlockScaled(nil, f, []float32{1.2031566, -447, 0.001, 6})
 		require.NoError(t, err)
-		vec := vector.NewVec(types.New(oid, 4, 0))
+		vec := vector.NewVec(types.New(oid, 4, 0), mp)
 		require.NoError(t, vector.AppendBytes(vec, cell, false, mp))
 
 		v, err := vectorValueToParquet(vec, 0, nil)

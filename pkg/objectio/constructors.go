@@ -352,7 +352,7 @@ func decode(buf []byte, trusted bool) (any, error) {
 		return buf[IOEntryHeaderSize:], nil
 	}
 	if trusted && header.Type == IOET_ColData && header.Version == IOET_ColumnData_V2 {
-		vec := vector.NewVec(types.Type{})
+		vec := vector.NewVec(types.Type{}, nil)
 		if err := vec.UnmarshalBinaryTrusted(buf[IOEntryHeaderSize:]); err != nil {
 			return nil, err
 		}
@@ -452,9 +452,9 @@ func MaterializeCachedVectorWindow(
 			return nil, err
 		}
 		defer window.Free(nil)
-		return window.DupOffHeap(mp)
+		return window.Dup(mp)
 	}
-	dst := vector.NewVec(*source.GetType())
+	dst := vector.NewVec(*source.GetType(), mp)
 	sels := make([]int64, length)
 	for i := range sels {
 		sels[i] = int64(offset + i)
@@ -1013,6 +1013,8 @@ func bindCachedVectorForScope(toVec *vector.Vector, data fscache.Data) error {
 	if data == nil {
 		return moerr.NewInvalidInputNoCtx("nil object cache data")
 	}
+	// A zero vector has no pool: decoding makes it a read-only reference to
+	// the cache bytes.
 	var bound vector.Vector
 	var err error
 	if marked, ok := data.(validatedVectorCacheDataMarker); ok {
@@ -1051,10 +1053,10 @@ func mustVectorTo(toVec *vector.Vector, buf []byte, trusted bool) (err error) {
 }
 
 func warnVectorDestinationNotEmpty(toVec *vector.Vector, inputBytes int) {
-	if !toVec.NeedDup() && toVec.Allocated() > 0 {
+	if !toVec.IsReadOnly() && toVec.Allocated() > 0 {
 		eventVectorDestinationNotEmpty.WarnLazy(func() []zap.Field {
 			return []zap.Field{
-				zap.Bool("need-dup", toVec.NeedDup()),
+				zap.Bool("need-dup", toVec.IsReadOnly()),
 				zap.Int("allocated-bytes", toVec.Allocated()),
 				zap.Int("input-bytes", inputBytes),
 			}
@@ -1070,12 +1072,12 @@ func MustObjectMeta(buffer []byte) ObjectMeta {
 	return ObjectMeta(buffer)
 }
 
-// TryBorrowCachedVector publishes a privately validated cache column as a
-// read-only flat alias in dst. It never constructs an identity dictionary.
-// The Vector holds no lease: keeper (the lender that published dst, normally
-// the output batch) holds the cache pin and, through an accounted view mp, a
-// reservation of the full pinned capacity, until it drops or reuses its
-// columns. Mutation of dst follows vector copy-on-write.
+// TryBorrowCachedVector turns the empty dst into a read-only reference vector
+// (nil pool) over a privately validated cache column. keeper (the lender that
+// published dst, normally the output batch) holds the cache pin and, through
+// an accounted view mp, a reservation of the full pinned capacity, until it
+// drops or reuses its columns. dst must never be mutated; a consumer that
+// needs to write copies it first.
 func TryBorrowCachedVector(dst *vector.Vector, data fscache.Data, mp *mpool.MPool, keeper bufferlease.Keeper) (bool, error) {
 	marked, ok := data.(validatedVectorCacheDataMarker)
 	if !ok || keeper == nil || mp == nil || dst == nil || dst.Length() != 0 || dst.Allocated() != 0 || dst.GetType().Oid == types.T_json {
@@ -1114,7 +1116,7 @@ func TryBorrowCachedVector(dst *vector.Vector, data fscache.Data, mp *mpool.MPoo
 		}
 	}
 	data.Retain()
-	lease, err := vector.NewRefCountedBufferLease(marked.validatedVectorBackingForScope(), data.Capacity(), func() {
+	lease, err := bufferlease.NewRefCounted(marked.validatedVectorBackingForScope(), data.Capacity(), func() {
 		data.Release()
 		pin.Release()
 	})
@@ -1129,10 +1131,12 @@ func TryBorrowCachedVector(dst *vector.Vector, data fscache.Data, mp *mpool.MPoo
 	if err = keeper.HoldLease(lease); err != nil {
 		return false, err
 	}
-	if err = dst.InstallBorrowedView(&source, mp); err != nil {
+	view, err := source.Window(0, source.Length())
+	if err != nil {
 		// The keeper keeps the pin until its next release; dst holds nothing.
 		return false, err
 	}
+	*dst = *view
 	return true, nil
 }
 

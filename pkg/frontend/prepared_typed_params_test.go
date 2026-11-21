@@ -141,7 +141,7 @@ func TestTypedPrepareParamParsing(t *testing.T) {
 
 func TestInstallTypedPrepareParams(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("abc"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, nil, true, proc.Mp()))

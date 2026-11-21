@@ -106,7 +106,9 @@ func runRightDedupCase(t *testing.T, buildVals, probeVals []int32, pessimistic, 
 	}
 
 	arg.Free(proc, false, nil)
+	freeTestChildren(arg)
 	buildArg.Free(proc, false, nil)
+	freeTestChildren(buildArg)
 	proc.Free()
 }
 
@@ -187,7 +189,9 @@ func runRightDedupInputUniqueCase(t *testing.T, pessimistic, targetConflict bool
 	installTestAllocation(t, arg, buildArg)
 	defer func() {
 		arg.Free(proc, false, nil)
+		freeTestChildren(arg)
 		buildArg.Free(proc, false, nil)
+		freeTestChildren(buildArg)
 		buildBat.Clean(proc.Mp())
 		probeBat.Clean(proc.Mp())
 		proc.Free()
@@ -293,6 +297,7 @@ func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBa
 	}
 
 	arg.Free(proc, false, nil)
+	freeTestChildren(arg)
 	require.Zero(t, account.Snapshot().Used)
 	_, _, err = registry.CompleteTerminal(account)
 	require.NoError(t, err)
@@ -371,7 +376,9 @@ func runRightDedupSpilledInputKeysUniqueWithBuild(t *testing.T, pessimistic bool
 	defer func() {
 		failed := execErr != nil
 		rightDedupArg.Free(proc, failed, execErr)
+		freeTestChildren(rightDedupArg)
 		buildArg.Free(proc, failed, execErr)
+		freeTestChildren(buildArg)
 		buildBat.Clean(proc.Mp())
 		probeBat.Clean(proc.Mp())
 		budget, budgetErr := proc.GetExecutionResourceBudget()
@@ -424,6 +431,7 @@ func TestRightDedupResetAndPrepareRetry(t *testing.T) {
 	require.Zero(t, arg.ctr.groupCount)
 	require.Zero(t, arg.ctr.buildGroupCount)
 	arg.Free(proc, false, nil)
+	freeTestChildren(arg)
 	proc.Free()
 }
 
@@ -487,6 +495,7 @@ func TestRightDedupEmptyBuildProbeMapHonorsExecutionResourceBudget(t *testing.T)
 	var callErr error
 	t.Cleanup(func() {
 		arg.Free(proc, true, callErr)
+		freeTestChildren(arg)
 		require.Zero(t, budget.Used())
 		require.Zero(t, budget.SpillDiskUsed())
 		require.Zero(t, budget.SpillFDUsed())
@@ -551,14 +560,18 @@ func TestRightDedupJoin(t *testing.T) {
 	installTestAllocation(t, arg, buildArg)
 	t.Cleanup(func() {
 		arg.Free(proc, false, nil)
+		freeTestChildren(arg)
 		buildArg.Free(proc, false, nil)
+		freeTestChildren(buildArg)
 		require.Zero(t, proc.Mp().CurrNB())
 		require.Zero(t, proc.Mp().OnHeapCurrNB())
 	})
 	for generation, action := range []plan.Node_OnDuplicateAction{plan.Node_FAIL, plan.Node_FAIL, plan.Node_IGNORE} {
 		if generation == 2 {
 			arg.Free(proc, false, nil)
+			freeTestChildren(arg)
 			buildArg.Free(proc, false, nil)
+			freeTestChildren(buildArg)
 		}
 		arg.OnDuplicateAction = action
 		buildArg.OnDuplicateAction = action

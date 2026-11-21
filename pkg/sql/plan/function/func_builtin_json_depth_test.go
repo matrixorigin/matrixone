@@ -134,7 +134,7 @@ func TestJsonDepthRejectsEmptyTypedPayloadWithoutPanic(t *testing.T) {
 	// Public T_json append paths reject malformed payloads. Build the
 	// representation as text, then change only the test vector metadata so the
 	// executor's fail-closed boundary is exercised directly.
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(input, []byte{}, false, proc.Mp()))
 	input.SetType(types.T_json.ToType())
@@ -153,7 +153,7 @@ func TestJsonDepthRejectsEmptyTypedPayloadWithoutPanic(t *testing.T) {
 func TestJsonDepthPreparedProvenanceAndSelectList(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(input, []byte(`1`), false, proc.Mp()))
 	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
@@ -210,7 +210,7 @@ func TestJsonDepthLimitAndErrorRecovery(t *testing.T) {
 	succeed, info = fc.RunAndFree()
 	require.True(t, succeed, info)
 
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 	defer result.Free()

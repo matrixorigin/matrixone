@@ -68,7 +68,7 @@ func replayTestBatch(t *testing.T, mp *mpool.MPool, ids ...uint64) *batch.Batch 
 	t.Helper()
 	b := batch.NewWithSize(7)
 	for i, typ := range []types.T{types.T_uint64, types.T_uint64, types.T_uint32, types.T_uint64, types.T_varchar, types.T_uint64, types.T_varchar} {
-		b.Vecs[i] = vector.NewVec(typ.ToType())
+		b.Vecs[i] = vector.NewVec(typ.ToType(), mp)
 	}
 	for _, id := range ids {
 		require.NoError(t, vector.AppendFixed(b.Vecs[0], id, false, mp))
@@ -154,7 +154,7 @@ func TestReplayColumnsParserOwnership(t *testing.T) {
 		data, err := catalog.GenCreateColumnTuples(cols, mp, packer)
 		require.NoError(t, err)
 		out := batch.NewWithSize(len(data.Vecs) + 1)
-		out.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		out.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 		for range cols {
 			require.NoError(t, vector.AppendFixed(out.Vecs[0], types.Rowid{}, false, mp))
 		}
@@ -228,7 +228,7 @@ func TestReplayColumnsRejectsConflictingNames(t *testing.T) {
 	mp := mpool.MustNewZero()
 	first, second := replayTestBatch(t, mp, 1), replayTestBatch(t, mp, 1)
 	second.Vecs[6].Free(mp)
-	second.Vecs[6] = vector.NewVec(types.T_varchar.ToType())
+	second.Vecs[6] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(second.Vecs[6], []byte("different"), false, mp))
 	err := consumeReplayColumns(context.Background(), []*batch.Batch{first, second}, mp, types.TS{}, func(*batch.Batch) { t.Fatal("invalid input was published") })
 	require.Error(t, err)
@@ -275,14 +275,14 @@ func TestReplayPartialCopyFailure(t *testing.T) {
 	t.Run("timestamp", func(t *testing.T) {
 		mp := mpool.MustNewZero()
 		bs := []*batch.Batch{replayTestBatch(t, mp, 1, 1), replayTestBatch(t, mp, 2)}
-		beforeHeap := mp.OnHeapCurrNB()
+		beforeHeap := mp.CurrNB()
 		calls := 0
 		err := consumeReplayColumnsWithFaults(context.Background(), bs, mp, types.TS{}, func(*batch.Batch) {
 			t.Fatal("incomplete timestamp was inserted")
 		}, nil, func(v *vector.Vector, ts types.TS, mp *mpool.MPool) error {
 			calls++
 			if calls == 2 {
-				require.Greater(t, mp.OnHeapCurrNB(), beforeHeap)
+				require.Greater(t, mp.CurrNB(), beforeHeap)
 				return injected
 			}
 			return vector.AppendFixed(v, ts, false, mp)
@@ -290,7 +290,7 @@ func TestReplayPartialCopyFailure(t *testing.T) {
 		require.ErrorIs(t, err, injected)
 		require.Equal(t, 2, calls)
 		require.Zero(t, mp.CurrNB())
-		require.Zero(t, mp.OnHeapCurrNB())
+		require.Zero(t, mp.CurrNB())
 	})
 	t.Run("carry", func(t *testing.T) {
 		mp := mpool.MustNewZero()
@@ -300,15 +300,15 @@ func TestReplayPartialCopyFailure(t *testing.T) {
 			t.Fatal("partial carry was inserted")
 		}, func(dst, src *batch.Batch, offset, count int, mp *mpool.MPool) error {
 			called = true
-			before := mp.OnHeapCurrNB()
+			before := mp.CurrNB()
 			require.NoError(t, dst.Vecs[0].UnionBatch(src.Vecs[0], int64(offset), count, nil, mp))
-			require.Greater(t, mp.OnHeapCurrNB(), before)
+			require.Greater(t, mp.CurrNB(), before)
 			return injected
 		}, nil)
 		require.ErrorIs(t, err, injected)
 		require.True(t, called)
 		require.Zero(t, mp.CurrNB())
-		require.Zero(t, mp.OnHeapCurrNB())
+		require.Zero(t, mp.CurrNB())
 	})
 }
 
@@ -347,7 +347,7 @@ func TestReplayPartialInsertRetryCache(t *testing.T) {
 		data, err := catalog.GenCreateColumnTuples(cols, mp, packer)
 		require.NoError(t, err)
 		b := batch.NewWithSize(len(data.Vecs) + 1)
-		b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 		copy(b.Vecs[1:], data.Vecs)
 		for range cols {
 			if err := vector.AppendFixed(b.Vecs[0], types.Rowid{}, false, mp); err != nil {
@@ -377,7 +377,7 @@ func TestReplayPartialInsertRetryCache(t *testing.T) {
 	require.Equal(t, []string{"keep", "stale"}, []string{cc.GetTableByName(1, 8, "first").TableDef.Cols[0].Name, cc.GetTableByName(1, 8, "first").TableDef.Cols[1].Name})
 	require.False(t, cc.CanServe(ts))
 	require.Zero(t, mp.CurrNB())
-	require.Zero(t, mp.OnHeapCurrNB())
+	require.Zero(t, mp.CurrNB())
 
 	insertTables()
 	err = consumeReplayColumns(t.Context(), []*batch.Batch{makeBatch(first), makeBatch(second)}, mp, ts, cc.InsertColumns)
@@ -388,5 +388,5 @@ func TestReplayPartialInsertRetryCache(t *testing.T) {
 	require.Equal(t, "keep", got.TableDef.Cols[0].Name)
 	require.Equal(t, "other", cc.GetTableByName(1, 8, "second").TableDef.Cols[0].Name)
 	require.Zero(t, mp.CurrNB())
-	require.Zero(t, mp.OnHeapCurrNB())
+	require.Zero(t, mp.CurrNB())
 }

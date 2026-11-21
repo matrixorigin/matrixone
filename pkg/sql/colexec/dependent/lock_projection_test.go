@@ -69,12 +69,12 @@ func TestDependentImplicitLockProjection(t *testing.T) {
 			}
 			b := batch.NewWithSize(width)
 			for i := range b.Vecs {
-				b.Vecs[i], err = vector.NewOffHeapVecWithType(types.T_int32.ToType()), nil
+				b.Vecs[i], err = vector.NewVec(types.T_int32.ToType(), allocation), nil
 				require.NoError(t, err)
 				require.NoError(t, vector.AppendFixed(b.Vecs[i], int32(11), false, allocation))
 			}
 			b.SetRowCount(1)
-			return &testSource{batch: b, close: func() { closed++; b.Clean(child.Mp()) }}, nil
+			return &testSource{batch: b, close: func() { closed++; b.Clean(allocation) }}, nil
 		}, nil
 	}, func(node *plan.Node, children []*plan.Node) (dependent.KernelFactory, [][]*plan.Expr, error) {
 		require.Equal(t, plan.Node_LOCK_OP, node.NodeType)

@@ -55,7 +55,7 @@ func TestPreparedFieldResolvedStringDomain(t *testing.T) {
 			t.Run(tc.name+"/"+sourceOID.String(), func(t *testing.T) {
 				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				proc := mock.ctxt.GetProcess()
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
 				require.NoError(t, vector.AppendBytes(params, []byte("a"), false, proc.Mp()))
 				proc.SetPrepareParams(params)

@@ -117,13 +117,15 @@ type container struct {
 	producerRows    int64
 	producerSize    int64
 
-	directBatches     chan directHandoff
-	directAck         chan struct{}
-	consumerDone      chan struct{}
-	consumerOnce      sync.Once
-	bufFromPool       bool
-	keyVectors        []*vector.Vector
-	keyHashes         *vector.Vector
+	directBatches chan directHandoff
+	directAck     chan struct{}
+	consumerDone  chan struct{}
+	consumerOnce  sync.Once
+	bufFromPool   bool
+	keyVectors    []*vector.Vector
+	keyHashes     *vector.Vector
+	// keyHashesMP is the pool keyHashes was created with.
+	keyHashesMP       *mpool.MPool
 	selectionBacking  []int32
 	selectionOffsets  []int
 	selectionMetadata *process.ExecutionTransientMemoryReservation
@@ -294,8 +296,8 @@ func (shuffle *Shuffle) freeKeyScratch(proc *process.Process) {
 	clear(shuffle.ctr.keyVectors)
 	shuffle.ctr.keyVectors = nil
 	if shuffle.ctr.keyHashes != nil {
-		shuffle.ctr.keyHashes.Free(proc.Mp())
-		shuffle.ctr.keyHashes = nil
+		shuffle.ctr.keyHashes.Free(shuffle.ctr.keyHashesMP)
+		shuffle.ctr.keyHashes, shuffle.ctr.keyHashesMP = nil, nil
 	}
 	if shuffle.ctr.selectionBacking != nil {
 		mpool.FreeSlice(proc.Mp(), shuffle.ctr.selectionBacking)

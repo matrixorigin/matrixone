@@ -49,9 +49,11 @@ func TestAuxiliaryWarningGroupRows(t *testing.T) {
 			defer func() {
 				if join != nil {
 					join.Free(proc, false, nil)
+					freeTestChildren(join)
 				}
 				if build != nil {
 					build.Free(proc, false, nil)
+					freeTestChildren(build)
 				}
 				buildBat.Clean(proc.Mp())
 				probeBat.Clean(proc.Mp())
@@ -64,9 +66,9 @@ func TestAuxiliaryWarningGroupRows(t *testing.T) {
 			intType, boolType := types.T_int32.ToType(), types.T_bool.ToType()
 			rightTypes := []types.Type{intType, intType, boolType, intType}
 			for i, typ := range rightTypes {
-				buildBat.Vecs[i] = vector.NewVec(typ)
+				buildBat.Vecs[i] = vector.NewVec(typ, proc.Mp())
 			}
-			probeBat.Vecs[0] = vector.NewVec(intType)
+			probeBat.Vecs[0] = vector.NewVec(intType, proc.Mp())
 			appendRow := func(key, id int32, keyNull, auxiliary bool) {
 				require.NoError(t, vector.AppendFixed(buildBat.Vecs[0], key, keyNull, proc.Mp()))
 				require.NoError(t, vector.AppendFixed(buildBat.Vecs[1], int32(0), true, proc.Mp()))

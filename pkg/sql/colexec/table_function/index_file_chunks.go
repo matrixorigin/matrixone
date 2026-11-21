@@ -99,7 +99,7 @@ func (st *indexFileChunksState) start(tf *TableFunction, proc *process.Process, 
 	}
 
 	if st.batch == nil {
-		st.batch = tf.createResultBatch()
+		st.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		st.batch.CleanOnlyData()
 	}

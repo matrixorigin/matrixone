@@ -80,12 +80,12 @@ func TestEncodeGroupConcatPayloadAndFieldBytes(t *testing.T) {
 
 	textVec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("const"), 2, mp)
 	require.NoError(t, err)
-	intVec := vector.NewVec(types.T_int64.ToType())
+	intVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(intVec, []int64{7, 9}, nil, mp))
-	geometryVec := vector.NewVec(types.T_geometry.ToType())
+	geometryVec := vector.NewVec(types.T_geometry.ToType(), mp)
 	geometryBytes := geo.WriteWKB(geo.Point{X: 1, Y: 2})
 	require.NoError(t, vector.AppendBytes(geometryVec, geometryBytes, false, mp))
-	arrayVec := vector.NewVec(types.T_array_float32.ToType())
+	arrayVec := vector.NewVec(types.T_array_float32.ToType(), mp)
 	arrayBytes := types.ArrayToBytes([]float32{1, 2, 3})
 	require.NoError(t, vector.AppendBytes(arrayVec, arrayBytes, false, mp))
 
@@ -106,7 +106,7 @@ func TestEncodeGroupConcatPayloadAndFieldBytes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "const", got[0])
 
-	nullVec := vector.NewVec(types.T_varchar.ToType())
+	nullVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(nullVec, nil, true, mp))
 	payload, err = encodeGroupConcatPayload([]*vector.Vector{nullVec}, 0, []types.Type{types.T_varchar.ToType()})
 	require.NoError(t, err)

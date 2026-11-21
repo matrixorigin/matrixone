@@ -1216,7 +1216,7 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 	if isLowPrecFloat(fromType.Oid) {
 		// widen to float32 and cast it as a float32 value, so every float32 rule of this
 		// cast mode (explicit, assignment, decimal) applies
-		tmp := vector.NewVec(types.T_float32.ToType())
+		tmp := vector.NewVec(types.T_float32.ToType(), proc.Mp())
 		defer tmp.Free(proc.Mp())
 		if err := materializeLowPrecAsFloat32(proc.Ctx, from, tmp, length, proc.Mp()); err != nil {
 			return err
@@ -10242,9 +10242,7 @@ func tryReserveAssignedText(
 		*result.GetType() != toType || source.GetType().Oid != toType.Oid ||
 		source == result || source.IsConst() ||
 		source.Length() != length || result.IsConst() ||
-		result.Length() != 0 || result.HasBorrowedBacking() ||
-		result.DataBackingKind() != vector.OwnedMPoolUnique ||
-		result.AreaBackingKind() != vector.OwnedMPoolUnique ||
+		result.Length() != 0 || result.IsReadOnly() ||
 		cap(result.GetArea()) != 0 || len(source.GetArea()) == 0 ||
 		(selectList != nil && (selectList.IgnoreAllRow() || !selectList.ShouldEvalAllRow())) {
 		return false, nil

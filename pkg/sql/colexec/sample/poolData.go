@@ -35,7 +35,7 @@ func (pd *poolData) appendValidRow(mp *mpool.MPool, bat *batch.Batch, offset int
 	if pd.validBatch == nil {
 		pd.validBatch = batch.NewWithSize(len(bat.Vecs))
 		for i := range pd.validBatch.Vecs {
-			pd.validBatch.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
+			pd.validBatch.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType(), mp)
 		}
 	}
 
@@ -54,7 +54,7 @@ func (pd *poolData) appendInvalidRow(mp *mpool.MPool, bat *batch.Batch, row int)
 	}
 	pd.invalidBatch = batch.NewWithSize(len(bat.Vecs))
 	for i := range pd.invalidBatch.Vecs {
-		pd.invalidBatch.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
+		pd.invalidBatch.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType(), mp)
 	}
 
 	for i := range pd.invalidBatch.Vecs {

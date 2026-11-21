@@ -546,7 +546,7 @@ func TestPercentileDecimal128Vals_EdgeCases(t *testing.T) {
 
 func TestPercentileDecimal128MaxPrecisionEndpoints(t *testing.T) {
 	mp := mpool.MustNewZero()
-	values := NewVectors[types.Decimal128](types.New(types.T_decimal128, 38, 0))
+	values := NewVectors[types.Decimal128](types.New(types.T_decimal128, 38, 0), mp)
 	t.Cleanup(func() {
 		values.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -604,7 +604,7 @@ func TestPercentileDecimal128ScaleBoundaries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			values := NewVectors[types.Decimal128](tt.typ)
+			values := NewVectors[types.Decimal128](tt.typ, mp)
 			t.Cleanup(func() {
 				values.Free(mp)
 				require.Equal(t, int64(0), mp.CurrNB())
@@ -1288,7 +1288,7 @@ func TestApproxPercentileExec_MultipleGroups(t *testing.T) {
 	// Group 1: values 1,2  -> median 1.5
 	// Group 2: values 10,20 -> median 15
 	// Group 3: value 100 -> median 100
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(vec, []int64{1, 2, 10, 20, 0, 0, 100}, []bool{false, false, false, false, true, true, false}, mp))
 	defer vec.Free(mp)
 
@@ -1315,7 +1315,7 @@ func TestApproxPercentileExec_NullHandling(t *testing.T) {
 	require.NoError(t, exec.GroupGrow(1))
 	require.NoError(t, exec.SetExtraInformation([]byte("0.5"), 0))
 
-	vec := vector.NewVec(types.T_float64.ToType())
+	vec := vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(vec, []float64{0, 1, 2, 3, 4, 5}, []bool{true, false, true, false, true, false}, mp))
 	defer vec.Free(mp)
 
@@ -1800,7 +1800,7 @@ func TestApproxPercentileExec_BoundedSketchPartialMerge10K(t *testing.T) {
 				exact = append(exact, values[row])
 			}
 		}
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(vec, values, nulls, mp))
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
 		vec.Free(mp)

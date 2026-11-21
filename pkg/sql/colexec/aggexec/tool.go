@@ -25,7 +25,10 @@ import (
 )
 
 // MergeSplitResult turns the physical chunks returned by AggFuncExec.Flush
-// into one logical result vector. It consumes every input vector on all paths:
+// into one logical result vector. The chunks are the aggregate's vectors, all
+// created with the aggregate's pool; ownership passes to the caller, so the
+// merge works through that pool (the first chunk's) and the strict mpool
+// check rejects a chunk of any other pool. It consumes every input vector on all paths:
 // on success the caller owns only the returned vector, and on failure all input
 // vectors have been freed.
 //
@@ -33,7 +36,7 @@ import (
 // vector is reused and grown once before the remaining chunks are appended in
 // order. UnionBatch's full-vector path preserves nulls and copies varlen areas
 // in bulk.
-func MergeSplitResult(vecs []*vector.Vector, mp *mpool.MPool) (*vector.Vector, error) {
+func MergeSplitResult(vecs []*vector.Vector) (*vector.Vector, error) {
 	if len(vecs) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("aggregate returned no result vectors")
 	}
@@ -46,9 +49,16 @@ func MergeSplitResult(vecs []*vector.Vector, mp *mpool.MPool) (*vector.Vector, e
 		return result, nil
 	}
 	if result == nil {
-		freeAggResultVectors(vecs, mp)
+		for _, vec := range vecs {
+			if vec != nil {
+				// Ownership passed with the chunk: free it with its pool.
+				vec.Free(vec.MPool())
+			}
+		}
 		return nil, moerr.NewInternalErrorNoCtx("aggregate returned a nil result vector")
 	}
+	// The aggregate's pool, which every chunk shares.
+	mp := result.MPool()
 
 	additionalRows, additionalArea := 0, 0
 	resultType := *result.GetType()
@@ -138,8 +148,8 @@ const (
 	MaxVectorLength = 262144
 )
 
-func NewVectors[T numeric | types.Decimal64 | types.Decimal128](typ types.Type) *Vectors[T] {
-	vec := vector.NewOffHeapVecWithType(typ)
+func NewVectors[T numeric | types.Decimal64 | types.Decimal128](typ types.Type, mp *mpool.MPool) *Vectors[T] {
+	vec := vector.NewVec(typ, mp)
 	return &Vectors[T]{vecs: []*vector.Vector{vec}}
 }
 
@@ -153,7 +163,7 @@ func newAccountedVectors[T numeric | types.Decimal64 | types.Decimal128](
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
 	return &Vectors[T]{
-		vecs:       []*vector.Vector{vector.NewOffHeapVecWithType(typ)},
+		vecs:       []*vector.Vector{vector.NewVec(typ, view)},
 		allocation: view,
 	}, nil
 }
@@ -186,6 +196,7 @@ func (vs *Vectors[T]) UnmarshalFromReader(
 	typ types.Type,
 	mp *mpool.MPool,
 ) (retErr error) {
+	mp = vs.growMP(mp)
 	length := int64(0)
 	if _, err := io.ReadFull(r, types.EncodeInt64(&length)); err != nil {
 		return err
@@ -209,7 +220,7 @@ func (vs *Vectors[T]) UnmarshalFromReader(
 			return err
 		}
 		lr := &io.LimitedReader{R: r, N: int64(sz)}
-		vec := vector.NewOffHeapVecWithType(typ)
+		vec := vector.NewVec(typ, mp)
 		if err := unmarshalAggregateVector(vec, lr, mp); err != nil {
 			vec.Free(mp)
 			return err
@@ -247,7 +258,8 @@ func (vs *Vectors[T]) getAppendableVector() (*vector.Vector, error) {
 		vs.appendAt++
 	}
 	if vs.appendAt == len(vs.vecs) {
-		vs.vecs = append(vs.vecs, vector.NewOffHeapVecWithType(*vs.vecs[0].GetType()))
+		// A new chunk lives in the pool of the existing chunks.
+		vs.vecs = append(vs.vecs, vector.NewVec(*vs.vecs[0].GetType(), vs.vecs[0].MPool()))
 	}
 	return vs.vecs[vs.appendAt], nil
 }
@@ -266,7 +278,7 @@ func (vs *Vectors[T]) PreExtend(rows int, mp *mpool.MPool) error {
 	remaining := rows
 	for index := vs.appendAt; remaining > 0; index++ {
 		if index == len(vs.vecs) {
-			vs.vecs = append(vs.vecs, vector.NewOffHeapVecWithType(*vs.vecs[0].GetType()))
+			vs.vecs = append(vs.vecs, vector.NewVec(*vs.vecs[0].GetType(), vs.growMP(mp)))
 		}
 		vec := vs.vecs[index]
 		available := MaxVectorLength - vec.Length()
@@ -314,6 +326,7 @@ func (vs *Vectors[T]) Union(other *Vectors[T], mp *mpool.MPool) error {
 }
 
 func (vs *Vectors[T]) Free(mp *mpool.MPool) {
+	mp = vs.growMP(mp)
 	for _, vec := range vs.vecs {
 		vec.Free(mp)
 	}

@@ -54,7 +54,7 @@ func TestCountBatchDenseState(t *testing.T) {
 			if mode == "null" {
 				vec = vector.NewConstNull(typ, rows, mp)
 			} else {
-				vec = vector.NewVec(typ)
+				vec = vector.NewVec(typ, mp)
 			}
 			t.Cleanup(func() { vec.Free(mp) })
 			if mode != "null" {
@@ -90,7 +90,7 @@ func TestCountBatchDenseState(t *testing.T) {
 			}
 			results, err := exec.Flush()
 			for _, result := range results {
-				t.Cleanup(func() { result.Free(mp) })
+				t.Cleanup(func() { result.Free(result.MPool()) })
 			}
 			require.NoError(t, err)
 			start := 0

@@ -14,14 +14,17 @@
 
 package vector
 
-import "github.com/matrixorigin/matrixone/pkg/common/mpool"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+)
 
-// DetachedBuffer transfers one owned Vector backing allocation through the
-// pipeline spool. The allocation keeps its own charge (its MPool metadata),
-// so reattaching it never relabels memory. A non-empty value must be attached
-// or freed exactly once.
+// DetachedBuffer transfers one Vector backing allocation through the pipeline
+// spool. It remembers the pool it came from and attaches only to a vector of
+// that pool. A non-empty value must be attached or freed exactly once.
 type DetachedBuffer struct {
 	data []byte
+	mp   *mpool.MPool
 	kind DetachedBufferKind
 }
 
@@ -33,22 +36,24 @@ const (
 )
 
 func DetachVectorData(v *Vector) DetachedBuffer {
-	if v == nil || !v.CanDetach(BackingData) {
+	if v == nil {
 		return DetachedBuffer{}
 	}
 	buffer := DetachedBuffer{
 		data: v.data,
+		mp:   v.mp,
 	}
 	v.data = nil
 	return buffer
 }
 
 func DetachVectorArea(v *Vector) DetachedBuffer {
-	if v == nil || !v.CanDetach(BackingArea) {
+	if v == nil {
 		return DetachedBuffer{}
 	}
 	buffer := DetachedBuffer{
 		data: v.area,
+		mp:   v.mp,
 		kind: DetachedAreaBuffer,
 	}
 	v.area = nil
@@ -62,14 +67,14 @@ func (b *DetachedBuffer) Capacity() int {
 	return cap(b.data)
 }
 
-// CanAttachTo reports whether the buffer can serve v's data or area backing.
-// Vectors carry no allocation account and an accounted view has one site for
-// data and area, so any owned buffer can serve either backing.
+// CanAttachTo reports whether the buffer can serve v's data or area backing:
+// v must belong to the pool the buffer came from.
 func (b *DetachedBuffer) CanAttachTo(
 	v *Vector,
 	kind DetachedBufferKind,
 ) bool {
-	return b != nil && v != nil && cap(b.data) != 0 && kind <= DetachedAreaBuffer
+	return b != nil && v != nil && cap(b.data) != 0 && kind <= DetachedAreaBuffer &&
+		b.mp != nil && v.mp == b.mp
 }
 
 func (b *DetachedBuffer) AttachTo(
@@ -105,12 +110,16 @@ func (b *DetachedBuffer) Free(mp *mpool.MPool) {
 		return
 	}
 	if cap(b.data) != 0 {
-		mp.Free(b.data)
+		if mp != b.mp {
+			panic(moerr.NewInternalErrorNoCtx("detached vector buffer freed with a different mpool"))
+		}
+		b.mp.Free(b.data)
 	}
 	b.clear()
 }
 
 func (b *DetachedBuffer) clear() {
 	b.data = nil
+	b.mp = nil
 	b.kind = DetachedDataBuffer
 }

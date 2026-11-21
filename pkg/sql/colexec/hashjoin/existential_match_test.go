@@ -34,7 +34,9 @@ func TestRightExistentialDuplicateGroupAcrossBatchesAndReset(t *testing.T) {
 			tc.arg.JoinType, tc.arg.IsRightJoin, tc.arg.NonEqCond = join, true, nil
 			defer func() {
 				tc.arg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.arg)
 				tc.barg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.barg)
 				tc.proc.Free()
 				tc.cancel()
 				require.Zero(t, tc.proc.Mp().CurrNB())
@@ -115,7 +117,9 @@ func TestRightExistentialResidualMatchesDifferentRows(t *testing.T) {
 				tc.arg.Reset(tc.proc, false, nil)
 				tc.barg.Reset(tc.proc, false, nil)
 				tc.arg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.arg)
 				tc.barg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.barg)
 				tc.proc.Free()
 				tc.cancel()
 				require.Zero(t, tc.proc.Mp().CurrNB())
@@ -123,7 +127,7 @@ func TestRightExistentialResidualMatchesDifferentRows(t *testing.T) {
 			makeBatch := func(values []int32) *batch.Batch {
 				bat := batch.NewWithSize(2)
 				for i := range 2 {
-					bat.Vecs[i] = vector.NewVec(typ)
+					bat.Vecs[i] = vector.NewVec(typ, tc.proc.Mp())
 				}
 				require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, tc.proc.Mp()))
 				keys := make([]int32, len(values))
@@ -170,7 +174,9 @@ func BenchmarkRightExistentialRepeatedKeys(b *testing.B) {
 				}
 				defer func() {
 					tc.arg.Free(tc.proc, false, nil)
+					freeTestChildren(tc.arg)
 					tc.barg.Free(tc.proc, false, nil)
+					freeTestChildren(tc.barg)
 					tc.proc.Free()
 					tc.cancel()
 				}()
@@ -215,7 +221,9 @@ func TestRightExistentialGroupsAcrossSpillBuckets(t *testing.T) {
 				tc.arg.Reset(tc.proc, false, nil)
 				tc.barg.Reset(tc.proc, false, nil)
 				tc.arg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.arg)
 				tc.barg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.barg)
 				budget, err := tc.proc.GetExecutionResourceBudget()
 				require.NoError(t, err)
 				require.Zero(t, budget.Used())

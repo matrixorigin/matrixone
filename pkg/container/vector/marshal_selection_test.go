@@ -30,7 +30,7 @@ func TestUnionSelectionPreservesOwnedDisjointVarlenaLayout(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	})
 
-	source := NewVec(types.T_varchar.ToType())
+	source := NewVec(types.T_varchar.ToType(), mp)
 	defer source.Free(mp)
 	values := [][]byte{
 		bytes.Repeat([]byte{'a'}, 49),
@@ -42,7 +42,7 @@ func TestUnionSelectionPreservesOwnedDisjointVarlenaLayout(t *testing.T) {
 		require.NoError(t, AppendBytes(source, value, row == 1, mp))
 	}
 
-	selected := NewVec(types.T_varchar.ToType())
+	selected := NewVec(types.T_varchar.ToType(), mp)
 	defer selected.Free(mp)
 	sels := []int32{3, 0, 1, 3, 2}
 	require.NoError(t, selected.PreExtend(len(sels), mp))
@@ -83,7 +83,7 @@ func TestUnionSelectionKeepsConstVarlenaAliased(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer constant.Free(mp)
-	selected := NewVec(types.T_varchar.ToType())
+	selected := NewVec(types.T_varchar.ToType(), mp)
 	defer selected.Free(mp)
 	require.NoError(t, selected.PreExtend(2, mp))
 	require.NoError(t, selected.UnionInt32(constant, []int32{0, 0}, mp))
@@ -96,13 +96,13 @@ func TestUnionSelectionKeepsConstVarlenaAliased(t *testing.T) {
 func TestUnionOnePreservesOwnedDisjointVarlenaLayout(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	source := NewVec(types.T_varchar.ToType())
+	source := NewVec(types.T_varchar.ToType(), mp)
 	t.Cleanup(func() { source.Free(mp) })
 	values := [][]byte{bytes.Repeat([]byte{'a'}, 49), nil, []byte("inline"), bytes.Repeat([]byte{'b'}, 57)}
 	for row, value := range values {
 		require.NoError(t, AppendBytes(source, value, row == 1, mp))
 	}
-	selected := NewVec(types.T_varchar.ToType())
+	selected := NewVec(types.T_varchar.ToType(), mp)
 	t.Cleanup(func() { selected.Free(mp) })
 	sels := []int64{3, 0, 1, 3, 2}
 	for range 2 {
@@ -139,7 +139,7 @@ func TestUnionOneConstVarlenaCopiesIndependentPayloads(t *testing.T) {
 	source, err := NewConstBytes(types.T_varchar.ToType(), value, 3, mp)
 	require.NoError(t, err)
 	t.Cleanup(func() { source.Free(mp) })
-	destination := NewVec(types.T_varchar.ToType())
+	destination := NewVec(types.T_varchar.ToType(), mp)
 	t.Cleanup(func() { destination.Free(mp) })
 	for _, sel := range []int64{2, 0} {
 		require.NoError(t, destination.UnionOne(source, sel, mp))
@@ -164,37 +164,6 @@ func TestUnionOneConstVarlenaCopiesIndependentPayloads(t *testing.T) {
 	require.True(t, plan.canonicalVarlen)
 }
 
-func TestUnionOneBorrowedAreaMaterializesOwnedCopy(t *testing.T) {
-	mp := mpool.MustNewZero()
-	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	area := bytes.Repeat([]byte{'b'}, 49)
-	lease, err := NewRefCountedBufferLease(area, int64(cap(area)), nil)
-	require.NoError(t, err)
-	t.Cleanup(lease.Release)
-	destination := NewVec(types.T_varchar.ToType())
-	t.Cleanup(func() { destination.Free(mp) })
-	require.NoError(t, destination.PreExtend(2, mp))
-	destination.SetLength(1)
-	MustFixedColNoTypeCheck[types.Varlena](destination)[0].SetOffsetLen(0, uint32(len(area)))
-	require.NoError(t, destination.InstallBorrowedArea(area))
-	source := NewVec(types.T_varchar.ToType())
-	t.Cleanup(func() { source.Free(mp) })
-	require.NoError(t, AppendBytes(source, []byte("inline"), false, mp))
-	require.Equal(t, BorrowedAlias, destination.AreaBackingKind())
-	require.NoError(t, destination.UnionOne(source, 0, mp))
-	require.Equal(t, OwnedMPoolUnique, destination.AreaBackingKind())
-	require.NotSame(t, &area[0], &destination.GetArea()[0])
-	require.Equal(t, area, lease.Bytes())
-	// The owned copy's descriptors are computed to be disjoint.
-	require.True(t, destination.VarlenaAreaIsDisjoint())
-	plan, err := destination.PrepareMarshalBinary()
-	require.NoError(t, err)
-	// An owned, disjoint copy marshals its area in bulk.
-	require.False(t, plan.canonicalVarlen)
-	require.Equal(t, area, destination.GetBytesAt(0))
-	require.Equal(t, "inline", destination.GetStringAt(1))
-}
-
 func TestUnionOneNullClearsReusedVarlenaDescriptor(t *testing.T) {
 	for _, constant := range []bool{false, true} {
 		name := "flat"
@@ -204,7 +173,7 @@ func TestUnionOneNullClearsReusedVarlenaDescriptor(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-			source := NewVec(types.T_varchar.ToType())
+			source := NewVec(types.T_varchar.ToType(), mp)
 			t.Cleanup(func() { source.Free(mp) })
 			if constant {
 				source.Free(mp)
@@ -212,7 +181,7 @@ func TestUnionOneNullClearsReusedVarlenaDescriptor(t *testing.T) {
 			} else {
 				require.NoError(t, AppendBytes(source, nil, true, mp))
 			}
-			destination := NewVec(types.T_varchar.ToType())
+			destination := NewVec(types.T_varchar.ToType(), mp)
 			t.Cleanup(func() { destination.Free(mp) })
 			require.NoError(t, AppendBytes(destination, bytes.Repeat([]byte{'x'}, 128), false, mp))
 			destination.ResetWithSameType()
@@ -235,7 +204,7 @@ func TestUnionOneNullClearsReusedVarlenaDescriptor(t *testing.T) {
 func TestUnionOneConstDestinationDoesNotAcquireDisjointProof(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	destination := NewVec(types.T_varchar.ToType())
+	destination := NewVec(types.T_varchar.ToType(), mp)
 	destination.SetClass(CONSTANT)
 	t.Cleanup(func() { destination.Free(mp) })
 	source := NewConstNull(types.T_varchar.ToType(), 1, mp)
@@ -251,17 +220,18 @@ func TestUnionOneConstDestinationDoesNotAcquireDisjointProof(t *testing.T) {
 func TestUnionOneNullDoesNotClearWindowOwnerDescriptor(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	owner := NewVec(types.T_varchar.ToType())
+	owner := NewVec(types.T_varchar.ToType(), mp)
 	t.Cleanup(func() { owner.Free(mp) })
 	values := [][]byte{bytes.Repeat([]byte{'a'}, 49), bytes.Repeat([]byte{'b'}, 57)}
 	require.NoError(t, AppendBytesList(owner, values, nil, mp))
 	view, err := owner.Window(0, 1)
 	require.NoError(t, err)
-	t.Cleanup(func() { view.Free(mp) })
+	t.Cleanup(func() { view.Free(nil) })
 	source := NewConstNull(types.T_varchar.ToType(), 1, mp)
 	t.Cleanup(func() { source.Free(mp) })
-	require.NoError(t, view.UnionOne(source, 0, mp))
-	require.True(t, view.IsNull(1))
+	// A window is read-only: appending to it fails and leaves the owner intact.
+	require.Error(t, view.UnionOne(source, 0, mp))
+	require.Equal(t, 1, view.Length())
 	for row, value := range values {
 		require.Equal(t, value, owner.GetBytesAt(row), "NULL append must not mutate shared descriptors")
 	}
@@ -270,7 +240,7 @@ func TestUnionOneNullDoesNotClearWindowOwnerDescriptor(t *testing.T) {
 func TestUnionOneVarlenaAllocationFailureFailsClosed(t *testing.T) {
 	sourceMP := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, sourceMP.CurrNB()) })
-	source := NewVec(types.T_varchar.ToType())
+	source := NewVec(types.T_varchar.ToType(), sourceMP)
 	t.Cleanup(func() { source.Free(sourceMP) })
 	require.NoError(t, AppendBytes(source, make([]byte, 2<<20), false, sourceMP))
 	mp, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
@@ -279,7 +249,7 @@ func TestUnionOneVarlenaAllocationFailureFailsClosed(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 		mpool.DeleteMPool(mp)
 	})
-	destination := NewOffHeapVecWithType(types.T_varchar.ToType())
+	destination := NewVec(types.T_varchar.ToType(), mp)
 	t.Cleanup(func() { destination.Free(mp) })
 	require.NoError(t, AppendBytes(destination, []byte("prefix"), false, mp))
 	require.True(t, destination.VarlenaAreaIsDisjoint())

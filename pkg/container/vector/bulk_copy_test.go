@@ -25,7 +25,7 @@ import (
 func TestBatchCopySelection(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	flat := NewVec(types.T_int64.ToType())
+	flat := NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() { flat.Free(mp) })
 	require.NoError(t, AppendFixedList(flat, []int64{11, 22, 33}, nil, mp))
 	flat.SetNull(1)
@@ -44,7 +44,7 @@ func TestBatchCopySelection(t *testing.T) {
 		batch := GetUnionBatchFunction(sources)
 		for _, rangeCopy := range []bool{false, true} {
 			func() {
-				got, want := NewVec(*src.GetType()), NewVec(*src.GetType())
+				got, want := NewVec(*src.GetType(), mp), NewVec(*src.GetType(), mp)
 				defer got.Free(mp)
 				defer want.Free(mp)
 				if rangeCopy {
@@ -65,7 +65,7 @@ func TestBatchCopySelection(t *testing.T) {
 	}
 	// Unknown/mixed batches retain a callable generic fallback.
 	for _, unknown := range [][]*Vector{nil, {nil}, {flat, constant}, {{class: 255}}} {
-		out := NewVec(types.T_int64.ToType())
+		out := NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, GetUnionBatchFunction(unknown)(out, flat, 0, 3, nil, mp))
 		values := MustFixedColNoTypeCheck[int64](out)
 		require.Equal(t, int64(11), values[0])
@@ -87,7 +87,7 @@ func TestBatchCopySelectionAliasAndAdmission(t *testing.T) {
 		t.Run(map[bool]string{false: "repeat", true: "range"}[rangeCopy], func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-			source := NewVec(types.T_int64.ToType())
+			source := NewVec(types.T_int64.ToType(), mp)
 			t.Cleanup(func() { source.Free(mp) })
 			require.NoError(t, AppendFixedList(source, []int64{11, 22, 33}, nil, mp))
 			multi, batch := GetUnionMultiFunction([]*Vector{source}), GetUnionBatchFunction([]*Vector{source})
@@ -100,9 +100,9 @@ func TestBatchCopySelectionAliasAndAdmission(t *testing.T) {
 			}
 			state := newTestVectorAllocationAccount(t, 1, 128)
 			t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
-			out := newAccountedTestVector(t, types.T_int64.ToType())
 			dmp := state.view(t, mp)
-			t.Cleanup(func() { out.Free(mp) })
+			out := newAccountedTestVector(t, types.T_int64.ToType(), dmp)
+			t.Cleanup(func() { out.Free(dmp) })
 			var err error
 			if rangeCopy {
 				err = batch(out, source, 0, 3, nil, dmp)

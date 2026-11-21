@@ -84,7 +84,7 @@ func TestCapacityPreflightPrimitiveBoundaries(t *testing.T) {
 	_, err = nextArgumentOrdinal(&progress, &progressCount, 9, 9, 0)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 
-	normal := vector.NewVec(types.T_varchar.ToType())
+	normal := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(normal, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(normal, nil, true, mp))
 	require.NoError(t, vector.AppendBytes(normal, []byte("b"), false, mp))
@@ -160,10 +160,10 @@ func TestCapacityPreflightPrimitiveBoundaries(t *testing.T) {
 	// Exercise every key-copy mode used by the DISTINCT preflight path. In
 	// particular, signed zero must be canonicalized in-place in the accounted
 	// scratch key, while non-distinct and non-zero values retain their bytes.
-	floatValues := vector.NewVec(types.T_float64.ToType())
+	floatValues := vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(floatValues, math.Copysign(0, -1), false, mp))
 	require.NoError(t, vector.AppendFixed(floatValues, float64(3), false, mp))
-	intValues := vector.NewVec(types.T_int64.ToType())
+	intValues := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(intValues, int64(7), false, mp))
 	key, err = exec.state[0].preparePreflightArgumentKey(
 		mp, 0, []*vector.Vector{floatValues}, 0,
@@ -202,7 +202,7 @@ func TestCapacityPreflightPrimitiveBoundaries(t *testing.T) {
 func TestDistinctArgumentBatchDeduplicatesFullWorkUnit(t *testing.T) {
 	const offset = 17
 	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	for i := 0; i < offset; i++ {
 		require.NoError(t, vector.AppendFixed(input, int64(-1), false, mp))
 	}
@@ -237,7 +237,7 @@ func TestDistinctArgumentBatchDeduplicatesFullWorkUnit(t *testing.T) {
 func TestDistinctArgumentLinearBatchTransitionsOnlyAfterUniqueLimit(t *testing.T) {
 	const offset = 3
 	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	for range offset {
 		require.NoError(t, vector.AppendFixed(input, int64(-1), false, mp))
 	}
@@ -286,8 +286,8 @@ func TestDistinctArgumentAdaptivePreflightPreservesMultiColumnSemantics(t *testi
 	require.NoError(t, owner.SetAllocationAccount(allocation))
 	require.NoError(t, exec.GroupGrow(2))
 
-	stringsInput := vector.NewVec(types.T_varchar.ToType())
-	intsInput := vector.NewVec(types.T_int64.ToType())
+	stringsInput := vector.NewVec(types.T_varchar.ToType(), mp)
+	intsInput := vector.NewVec(types.T_int64.ToType(), mp)
 	for range offset {
 		require.NoError(t, vector.AppendBytes(stringsInput, []byte("ignored"), false, mp))
 		require.NoError(t, vector.AppendFixed(intsInput, int64(-1), false, mp))
@@ -327,7 +327,7 @@ func TestDistinctArgumentAdaptivePreflightPreservesMultiColumnSemantics(t *testi
 		require.Equal(t, int64(len(want[group])),
 			vector.GetFixedAtNoTypeCheck[int64](results[0], group))
 	}
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	stringsInput.Free(mp)
 	intsInput.Free(mp)
 	exec.Free()
@@ -598,7 +598,7 @@ func TestConcreteAggregatePreflightsRejectOversizedWorkUnits(t *testing.T) {
 		t.Helper()
 		vectors := make([]*vector.Vector, len(params))
 		for i, param := range params {
-			vec := vector.NewVec(param)
+			vec := vector.NewVec(param, mp)
 			switch param.Oid {
 			case types.T_int64:
 				require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
@@ -812,7 +812,7 @@ func TestConcreteAggregatePreflightWinnerAndMergePaths(t *testing.T) {
 			name: "bit-bytes", id: AggIdOfBitOr,
 			params: []types.Type{bitBytesType},
 			build: func(t *testing.T, mp *mpool.MPool) []*vector.Vector {
-				vec := vector.NewVec(bitBytesType)
+				vec := vector.NewVec(bitBytesType, mp)
 				for _, value := range [][]byte{{0}, {1, 2}, {2, 1}, {3, 3}} {
 					require.NoError(t, vector.AppendBytes(vec, value, false, mp))
 				}
@@ -869,7 +869,7 @@ func TestConcreteAggregatePreflightWinnerAndMergePaths(t *testing.T) {
 			name: "json-array", id: AggIdOfJsonArrayAgg,
 			params: []types.Type{types.T_json.ToType()},
 			build: func(t *testing.T, mp *mpool.MPool) []*vector.Vector {
-				vec := vector.NewVec(types.T_json.ToType())
+				vec := vector.NewVec(types.T_json.ToType(), mp)
 				for _, value := range []any{int64(0), long + "-a", long + "-b", nil} {
 					require.NoError(t, vector.AppendBytes(vec, jsonValue(t, value), false, mp))
 				}
@@ -882,7 +882,7 @@ func TestConcreteAggregatePreflightWinnerAndMergePaths(t *testing.T) {
 			build: func(t *testing.T, mp *mpool.MPool) []*vector.Vector {
 				keys := buildVarlenVec(t, mp, types.T_varchar.ToType(),
 					[]string{"ignored", "a", "b", "c"})
-				values := vector.NewVec(types.T_json.ToType())
+				values := vector.NewVec(types.T_json.ToType(), mp)
 				for _, value := range []any{int64(0), long + "-a", long + "-b", nil} {
 					require.NoError(t, vector.AppendBytes(values, jsonValue(t, value), false, mp))
 				}
@@ -951,7 +951,7 @@ func TestArgumentArenaPreflightMigratesRetainedRows(t *testing.T) {
 	SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
 	require.NoError(t, exec.GroupGrow(1))
 
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), mp)
 	// GroupGrow reserves the regular 512 KiB argument arena. Cross that
 	// boundary so the test proves migration preserves already-published rows,
 	// rather than only exercising the in-place admission path.
@@ -1003,7 +1003,7 @@ func TestAccountedOrderedGroupConcatPreflightAndResult(t *testing.T) {
 			values := buildVarlenVec(t, mp, types.T_varchar.ToType(),
 				[]string{"b", "a", "a", "c", "ignored"})
 			values.SetNull(4)
-			orderKeys := vector.NewVec(types.T_int64.ToType())
+			orderKeys := vector.NewVec(types.T_int64.ToType(), mp)
 			require.NoError(t, vector.AppendFixedList(orderKeys,
 				[]int64{2, 1, 3, 0, 4},
 				[]bool{false, false, false, true, false}, mp))
@@ -1025,7 +1025,7 @@ func TestAccountedOrderedGroupConcatPreflightAndResult(t *testing.T) {
 			}
 			require.Equal(t, want, string(result[0].GetBytesAt(0)))
 			require.Equal(t, "c", string(result[0].GetBytesAt(1)))
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			values.Free(mp)
 			orderKeys.Free(mp)
 			exec.Free()

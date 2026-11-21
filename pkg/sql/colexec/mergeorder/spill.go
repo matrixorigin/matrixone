@@ -345,14 +345,17 @@ func (ctr *container) ensureSpillTailColumns() {
 	ctr.spillTailCols = ctr.spillTailCols[:len(ctr.executors)]
 }
 
-func (ctr *container) clearSpillTailColumns(mp *mpool.MPool) {
+// clearSpillTailColumns frees the tail key columns, created with
+// spillTailMP (the output pool) in updateActiveRunTail.
+func (ctr *container) clearSpillTailColumns(_ *mpool.MPool) {
 	for i := range ctr.spillTailCols {
 		if ctr.spillTailCols[i] != nil {
-			ctr.spillTailCols[i].Free(mp)
+			ctr.spillTailCols[i].Free(ctr.spillTailMP)
 			ctr.spillTailCols[i] = nil
 		}
 	}
 	ctr.spillTailCols = nil
+	ctr.spillTailMP = nil
 	ctr.spillTailReady = false
 }
 
@@ -378,7 +381,8 @@ func (ctr *container) updateActiveRunTail(proc *process.Process, incomingOrderCo
 	}
 	for i := range incomingOrderCols {
 		if ctr.spillTailCols[i] == nil {
-			ctr.spillTailCols[i] = vector.NewOffHeapVecWithType(*incomingOrderCols[i].GetType())
+			ctr.spillTailCols[i] = vector.NewVec(*incomingOrderCols[i].GetType(), tailMP)
+			ctr.spillTailMP = tailMP
 		} else {
 			ctr.spillTailCols[i].CleanOnlyData()
 		}
@@ -667,7 +671,7 @@ func (ctr *container) spillCachedRuns(proc *process.Process, analyzer process.An
 			}
 			ctr.spillRuns = append(ctr.spillRuns, run)
 			freeOrderColumns(proc.Mp(), bat, orderCols)
-			ctr.batchList[i].Clean(proc.Mp())
+			ctr.batchList[i].Clean(ctr.residentMP(proc))
 			ctr.batchList[i] = nil
 			ctr.orderCols[i] = nil
 			continue
@@ -676,7 +680,7 @@ func (ctr *container) spillCachedRuns(proc *process.Process, analyzer process.An
 			return err
 		}
 		freeOrderColumns(proc.Mp(), bat, orderCols)
-		ctr.batchList[i].Clean(proc.Mp())
+		ctr.batchList[i].Clean(ctr.residentMP(proc))
 		ctr.batchList[i] = nil
 		ctr.orderCols[i] = nil
 	}
@@ -949,10 +953,10 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 	var outOrder *batch.Batch
 	defer func() {
 		if out != nil {
-			out.Clean(proc.Mp())
+			out.Clean(outMP)
 		}
 		if outOrder != nil {
-			outOrder.Clean(proc.Mp())
+			outOrder.Clean(outMP)
 		}
 	}()
 	keyCount := len(ctr.spillKeyIndexes)
@@ -971,9 +975,9 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 				return nil, err
 			}
 			if keyCount > 0 {
-				outOrder = batch.NewOffHeapWithSize(keyCount)
+				outOrder = batch.NewWithSize(keyCount)
 				for i, keyIdx := range ctr.spillKeyIndexes {
-					outOrder.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.spillReaders[0].orderCols[keyIdx].GetType())
+					outOrder.Vecs[i] = vector.NewVec(*ctr.spillReaders[0].orderCols[keyIdx].GetType(), outMP)
 				}
 			}
 		} else {
@@ -1188,6 +1192,9 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 	if err != nil {
 		return false, err
 	}
+	if ctr.buf != nil && ctr.bufMP != bufMP {
+		ctr.cleanBuf()
+	}
 	if ctr.buf == nil {
 		if len(ctr.spillReaders) == 0 {
 			return true, nil
@@ -1201,6 +1208,7 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 		if err != nil {
 			return false, err
 		}
+		ctr.bufMP = bufMP
 	} else {
 		ctr.buf.CleanOnlyData()
 	}

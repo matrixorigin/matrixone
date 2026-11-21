@@ -115,7 +115,7 @@ func BenchmarkNullableStrHashEncodeFlatFixed(b *testing.B) {
 
 			vecs := make([]*vector.Vector, 7)
 			for column := range vecs {
-				vecs[column] = vector.NewVec(types.T_int32.ToType())
+				vecs[column] = vector.NewVec(types.T_int32.ToType(), mp)
 				values := make([]int32, UnitLimit+1)
 				for row := range values {
 					values[row] = int32(column*(UnitLimit+1) + row)

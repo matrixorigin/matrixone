@@ -50,8 +50,8 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 	r.uses = append([]engine.ReaderColumnUse(nil), filter.ColumnUses...)
 	source := batch.NewWithSize(2)
 	defer source.Clean(mp)
-	source.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 15, 2))
-	source.Vecs[1] = vector.NewVec(types.New(types.T_char, 15, 0))
+	source.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 15, 2), mp)
+	source.Vecs[1] = vector.NewVec(types.New(types.T_char, 15, 0), mp)
 	require.NoError(r.t, vector.AppendFixedList(source.Vecs[0], []types.Decimal64{100, 0, 200, 300}, nil, mp))
 	for _, phone := range []string{"13-567-890-1234", "13-567-890-1234", "31-567-890-1234"} {
 		require.NoError(r.t, vector.AppendBytes(source.Vecs[1], []byte(phone), false, mp))
@@ -142,7 +142,7 @@ func TestOwnedOutputReaderSelectionEntry(t *testing.T) {
 			zero := &pb.Expr{Typ: balance.PlanType(), Expr: &pb.Expr_Lit{Lit: &pb.Literal{Value: &pb.Literal_Decimal64Val{Decimal64Val: &pb.Decimal64{}}}}}
 			substring := bind("substring", lateTestCol(1, phone), integer(1), integer(2))
 			listType := types.MustTypeFromPlan(substring.Typ)
-			payload := vector.NewVec(listType)
+			payload := vector.NewVec(listType, proc.Mp())
 			require.NoError(t, vector.AppendBytes(payload, []byte("13"), false, proc.Mp()))
 			require.NoError(t, vector.AppendBytes(payload, []byte("31"), false, proc.Mp()))
 			data, err := payload.MarshalBinary()

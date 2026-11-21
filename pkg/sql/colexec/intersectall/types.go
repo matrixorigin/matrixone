@@ -112,7 +112,7 @@ func (intersectAll *IntersectAll) Free(proc *process.Process, pipelineFailed boo
 	ctr.cleanHashMap()
 	ctr.keyEvaluator.Free()
 	if ctr.buf != nil {
-		ctr.buf.Clean(proc.Mp())
+		intersectAll.CleanBatch(proc, ctr.buf)
 		ctr.buf = nil
 	}
 	intersectAll.FreeMetadata()

@@ -29,7 +29,7 @@ func TestAppendFixedListFastPath(t *testing.T) {
 	}
 	for _, mask := range [][]bool{nil, make([]bool, len(values))} {
 		mp := mpool.MustNewZero()
-		vec := NewVec(types.T_int64.ToType())
+		vec := NewVec(types.T_int64.ToType(), mp)
 		t.Cleanup(func() {
 			defer mpool.DeleteMPool(mp)
 			vec.Free(mp)
@@ -61,7 +61,7 @@ func TestAppendFixedListFastPathWidths(t *testing.T) {
 
 func TestAppendFixedListFastPathAfterNullablePrefix(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := NewVec(types.T_int64.ToType())
+	vec := NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() {
 		defer mpool.DeleteMPool(mp)
 		vec.Free(mp)
@@ -85,7 +85,7 @@ func TestAppendFixedListFastPathAfterNullablePrefix(t *testing.T) {
 
 func TestAppendFixedListShortMaskKeepsPartialPanic(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := NewVec(types.T_int64.ToType())
+	vec := NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() {
 		defer mpool.DeleteMPool(mp)
 		vec.Free(mp)
@@ -109,7 +109,7 @@ func TestAppendFixedListShortMaskKeepsPartialPanic(t *testing.T) {
 func checkAppendFixedListWidth[T any](t *testing.T, typ types.Type, values []T) {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	vec := NewVec(typ)
+	vec := NewVec(typ, mp)
 	t.Cleanup(func() {
 		defer mpool.DeleteMPool(mp)
 		vec.Free(mp)
@@ -122,7 +122,7 @@ func checkAppendFixedListWidth[T any](t *testing.T, typ types.Type, values []T) 
 
 func TestAppendFixedListAliasedInput(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := NewVec(types.T_int64.ToType())
+	vec := NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() {
 		defer mpool.DeleteMPool(mp)
 		vec.Free(mp)
@@ -146,7 +146,7 @@ func TestAppendFixedListAliasedInput(t *testing.T) {
 
 func TestAppendFixedListAliasedInputAfterGrowth(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := NewVec(types.T_int64.ToType())
+	vec := NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() {
 		defer mpool.DeleteMPool(mp)
 		vec.Free(mp)

@@ -291,8 +291,8 @@ func TestLimitCopyDoesNotRetainUpstreamAccount(t *testing.T) {
 	view, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
-	input := batch.NewOffHeapWithSize(1)
-	input.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
+	input := batch.NewWithSize(1)
+	input.SetVector(0, vector.NewVec(types.T_int64.ToType(), view))
 	for i := range 32 {
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i), false, view))
 	}
@@ -310,7 +310,7 @@ func TestLimitCopyDoesNotRetainUpstreamAccount(t *testing.T) {
 	// The copy is charged to the operator's own pool: once the producer
 	// releases its accounted batch, nothing remains charged to its account
 	// even though the operator still holds the copy.
-	input.Clean(proc.Mp())
+	input.Clean(view)
 	require.Zero(t, account.Snapshot().Used)
 	require.NotNil(t, arg.ctr.buf)
 	arg.Reset(proc, false, nil)

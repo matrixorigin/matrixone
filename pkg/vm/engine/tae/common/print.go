@@ -340,7 +340,7 @@ func ApiBatchToString(apiBat *api.Batch, printN int) string {
 	if apiBat == nil {
 		return ""
 	}
-	bat, _ := batch.ProtoBatchToBatch(apiBat)
+	bat, _ := batch.ProtoBatchToBatch(apiBat, nil)
 	return MoBatchToString(bat, printN)
 }
 

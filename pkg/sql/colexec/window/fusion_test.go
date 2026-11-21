@@ -50,6 +50,7 @@ func TestFusedWindowIndependentStateAndReset(t *testing.T) {
 			arg.AppendChild(child)
 			t.Cleanup(func() {
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				child.Free(proc, false, nil)
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())

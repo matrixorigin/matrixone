@@ -84,7 +84,7 @@ func TestArrayCompareNarrow(t *testing.T) {
 }
 
 func newArrayVec[T types.ArrayElement](t *testing.T, mp *mpool.MPool, oid types.T, rows [][]T) *vector.Vector {
-	v := vector.NewVec(types.New(oid, types.MaxArrayDimension, 0))
+	v := vector.NewVec(types.New(oid, types.MaxArrayDimension, 0), mp)
 	for _, r := range rows {
 		require.NoError(t, vector.AppendBytes(v, types.ArrayToBytes(r), false, mp))
 	}

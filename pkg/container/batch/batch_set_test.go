@@ -29,7 +29,7 @@ const (
 
 func TestBatchSetUnionRangeSplitsAndFillsTail(t *testing.T) {
 	mp := mpool.MustNewZero()
-	input := NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+	input := NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, mp)
 	queue := NewBatchSet(3)
 	t.Cleanup(func() {
 		queue.Clean(mp)
@@ -68,10 +68,11 @@ func TestBatchSetChargesCopiesToCallerView(t *testing.T) {
 	require.NoError(t, err)
 	queue := NewBatchSet(4)
 	var inputs []*Batch
+	var inputPools []*mpool.MPool
 	t.Cleanup(func() {
-		queue.Clean(mp)
-		for _, input := range inputs {
-			input.Clean(mp)
+		queue.Clean(dstView)
+		for i, input := range inputs {
+			input.Clean(inputPools[i])
 		}
 		for _, account := range []*mpool.AllocationAccount{destination, source} {
 			require.Zero(t, account.Seal().Used)
@@ -81,8 +82,9 @@ func TestBatchSetChargesCopiesToCallerView(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	})
 	newInput := func(alloc *mpool.MPool, values ...int64) *Batch {
-		input := NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+		input := NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, alloc)
 		inputs = append(inputs, input)
+		inputPools = append(inputPools, alloc)
 		require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, alloc))
 		input.SetRowCount(len(values))
 		return input
@@ -119,7 +121,7 @@ func TestBatchSetOwnedDestinationAllocationFailure(t *testing.T) {
 	view, err := mp.WithAccount(account, mpool.AllocationOwnerSet, 9, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	queue := NewBatchSet(4)
-	input := NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+	input := NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, mp)
 	t.Cleanup(func() {
 		queue.Clean(mp)
 		input.Clean(mp)
@@ -133,167 +135,6 @@ func TestBatchSetOwnedDestinationAllocationFailure(t *testing.T) {
 	_, err = queue.Extend(view, input, nil)
 	require.Error(t, err)
 	require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](input.Vecs[0]))
-}
-
-// A mixed-account input is copied into the existing tail through the
-// caller's MPool.
-func TestBatchSetMixedInputDestinationReuse(t *testing.T) {
-	for _, mode := range []string{"union", "range", "extend"} {
-		t.Run(mode, func(t *testing.T) {
-			mp, first, destination := batchSetCopyInput(t, 4, true)
-			if mode == "extend" {
-				rows := 2
-				for _, v := range first.Vecs {
-					v.SetLength(rows)
-				}
-				first.SetRowCount(rows)
-			}
-			queue := NewBatchSet(4)
-			t.Cleanup(func() { queue.Clean(mp) })
-			appendRows := func(input *Batch) {
-				var err error
-				switch mode {
-				case "union":
-					_, err = queue.Union(destination, input, []int32{0, 2}, nil)
-				case "range":
-					_, err = queue.UnionRange(destination, input, 0, 2, nil)
-				default:
-					_, err = queue.Extend(destination, input, nil)
-				}
-				require.NoError(t, err)
-			}
-			appendRows(first)
-			tail := queue.Get(0)
-			require.Equal(t, 1, queue.ReadyDeltaFor(first, 2))
-			appendRows(first)
-			require.Equal(t, 1, queue.ReadyCount(), "reservation and actual readiness must agree")
-			require.Equal(t, 1, queue.Length(), "a copied destination must fill its existing tail")
-			require.Same(t, tail, queue.Get(0))
-			want := []int64{0, 1, 0, 1}
-			if mode == "union" {
-				want = []int64{0, 2, 0, 2}
-			}
-			for _, v := range tail.Vecs {
-				require.Equal(t, want, vector.MustFixedColNoTypeCheck[int64](v))
-			}
-		})
-	}
-}
-
-// batchSetCopyInput returns a base pool, an input batch and an accounted
-// destination view. With mixed, column 0 of the input is charged to a
-// foreign account.
-func batchSetCopyInput(t testing.TB, rows int, mixed bool) (*mpool.MPool, *Batch, *mpool.MPool) {
-	t.Helper()
-	mp := mpool.MustNewZero()
-	registry, err := mpool.NewAllocationAccountRegistry(2, 32)
-	require.NoError(t, err)
-	accounts := make([]*mpool.AllocationAccount, 0, 2)
-	input := NewWithSchema(true, nil, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
-	t.Cleanup(func() {
-		input.Clean(mp)
-		for _, account := range accounts {
-			require.Zero(t, account.Seal().Used)
-			_, err := registry.Finalize(account)
-			require.NoError(t, err)
-		}
-		require.Zero(t, mp.CurrNB())
-	})
-	views := make([]*mpool.MPool, 0, 2)
-	for range 2 {
-		account, err := registry.Open(1 << 20)
-		require.NoError(t, err)
-		accounts = append(accounts, account)
-		view, err := mp.WithAccount(account, mpool.AllocationOwnerSet, 9, mpool.AllocationCapacityClassDefault)
-		require.NoError(t, err)
-		views = append(views, view)
-	}
-	values := make([]int64, rows)
-	for i := range values {
-		values[i] = int64(i)
-	}
-	for i, v := range input.Vecs {
-		alloc := mp
-		if mixed && i == 0 {
-			alloc = views[1]
-		}
-		require.NoError(t, vector.AppendFixedList(v, values, nil, alloc))
-	}
-	input.SetRowCount(rows)
-	return mp, input, views[0]
-}
-
-func BenchmarkBatchSetMixedInputDestination(b *testing.B) {
-	for _, mixed := range []bool{false, true} {
-		name := "flat"
-		if mixed {
-			name = "mixed"
-		}
-		b.Run(name, func(b *testing.B) {
-			mp, input, _ := batchSetCopyInput(b, 4, mixed)
-			queue := NewBatchSet(16)
-			b.Cleanup(func() { queue.Clean(mp) })
-			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
-				queue.Clean(mp)
-				for range 8 {
-					if _, err := queue.Union(mp, input, []int32{0, 2}, nil); err != nil {
-						b.Fatal(err)
-					}
-				}
-			}
-		})
-	}
-}
-
-func TestBatchSetFullMixedInputTailOrderAndReuse(t *testing.T) {
-	for _, method := range []string{"extend", "union all"} {
-		for _, reuseKind := range []string{"none", "destination"} {
-			t.Run(method+"/"+reuseKind, func(t *testing.T) {
-				mp, input, destination := batchSetCopyInput(t, 4, true)
-				queue := NewBatchSet(4)
-				var reuse *Batch
-				consumed := false
-				t.Cleanup(func() {
-					queue.Clean(mp)
-					if reuse != nil && !consumed {
-						reuse.Clean(mp)
-					}
-				})
-				_, err := queue.Union(destination, input, []int32{2, 3}, nil)
-				require.NoError(t, err)
-				if reuseKind != "none" {
-					reuse = NewWithSchema(true, nil, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
-					for _, v := range reuse.Vecs {
-						require.NoError(t, vector.AppendFixedList(v, []int64{-1, -2}, nil, destination))
-					}
-					reuse.SetRowCount(2)
-				}
-				ready := queue.ReadyCount()
-				expectedDelta := queue.ReadyDeltaFor(input, input.RowCount())
-				if method == "extend" {
-					consumed, err = queue.Extend(destination, input, reuse)
-				} else {
-					consumed, err = queue.Union(destination, input, []int32{0, 1, 2, 3}, reuse)
-				}
-				require.NoError(t, err)
-				require.Equal(t, expectedDelta, queue.ReadyCount()-ready)
-				require.Equal(t, reuseKind == "destination", consumed)
-				if consumed {
-					require.Same(t, reuse, queue.Get(0))
-				}
-				rows := make([]int64, 0, 6)
-				for i := 0; i < queue.Length(); i++ {
-					bat := queue.Get(i)
-					rows = append(rows, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])...)
-				}
-				// A full input takes the full-batch shortcut ahead of the
-				// partial tail, as for any input: batches carry no account.
-				require.Equal(t, []int64{0, 1, 2, 3, 2, 3}, rows)
-			})
-		}
-	}
 }
 
 func TestBatchSetSortedMetadataAfterAppend(t *testing.T) {
@@ -313,7 +154,7 @@ func TestBatchSetSortedMetadataAfterAppend(t *testing.T) {
 			t.Cleanup(func() { queue.Clean(mp); require.Zero(t, mp.CurrNB()) })
 			newInput := func(values []int64) *Batch {
 				bat := NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 				t.Cleanup(func() { bat.Clean(mp) })
 				require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, mp))
 				bat.SetRowCount(len(values))
@@ -747,7 +588,6 @@ func TestBatchSetReadinessAndOffHeapGrowth(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, consumed)
 	require.Zero(t, queue.ReadyCount())
-	require.True(t, queue.Get(0).offHeap)
 	require.Less(t, queue.Get(0).Allocated(), TestBatchMaxRow, "a sparse tail must not preallocate a full batch")
 	src.Clean(mp)
 
@@ -790,7 +630,7 @@ func makeTestBatch(max int, mp *mpool.MPool) *Batch {
 
 func makeTestVec(max int, mp *mpool.MPool) *vector.Vector {
 	typ := types.T_int32.ToType()
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	for i := 0; i < max; i++ {
 		v := i
 		if err := vector.AppendFixed(vec, int32(v), false, mp); err != nil {

@@ -27,7 +27,7 @@ import (
 func vecBlockOrderVector(t *testing.T, oid types.T, mp *mpool.MPool, rows [][]float32) *vector.Vector {
 	t.Helper()
 	f, _ := oid.BlockScaledFormat()
-	vec := vector.NewVec(types.New(oid, 3, 0))
+	vec := vector.NewVec(types.New(oid, 3, 0), mp)
 	for _, r := range rows {
 		if r == nil {
 			require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
@@ -63,8 +63,8 @@ func TestSortVecBlockManyPeerGroups(t *testing.T) {
 	mp := mpool.MustNewZero()
 	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
 		f, _ := oid.BlockScaledFormat()
-		keys := vector.NewVec(types.T_int64.ToType())
-		vecs := vector.NewVec(types.New(oid, dim, 0))
+		keys := vector.NewVec(types.T_int64.ToType(), mp)
+		vecs := vector.NewVec(types.New(oid, dim, 0), mp)
 		values := make([][]float32, rows)
 		for i := 0; i < rows; i++ {
 			require.NoError(t, vector.AppendFixed(keys, int64(i%groups), false, mp))

@@ -249,6 +249,7 @@ func TestWin(t *testing.T) {
 		_, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false, nil)
+		colexec.FreeMockChildren(tc.arg)
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -292,6 +293,7 @@ func TestWindowFrameEvaluationHonorsCancellation(t *testing.T) {
 			require.ErrorIs(t, err, context.Canceled)
 
 			arg.Free(proc, true, err)
+			colexec.FreeMockChildren(arg)
 			proc.Free()
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
 		})
@@ -322,6 +324,7 @@ func TestCumulativeWindowCancellationReleasesState(t *testing.T) {
 	require.Nil(t, arg.ctr.runningAgg)
 
 	arg.Free(proc, true, err)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -353,6 +356,7 @@ func TestBoundedSlidingWindowCancellationReleasesState(t *testing.T) {
 	require.Nil(t, arg.ctr.runningAgg)
 
 	arg.Free(proc, true, err)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -383,7 +387,7 @@ func TestBoundedSlidingRangeWindowCancellationReleasesState(t *testing.T) {
 	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
 	result, err := arg.ctr.processAggregateFuncRange(0, arg, proc, 0, rows)
 	if result != nil {
-		result.Free(proc.Mp())
+		result.Free(result.MPool())
 	}
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, arg.ctr.batAggs)
@@ -410,6 +414,7 @@ func TestWindowCallHonorsPreCancellation(t *testing.T) {
 }
 
 func resetChildren(arg *Window, m *mpool.MPool) {
+	colexec.FreeMockChildren(arg)
 	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
@@ -540,7 +545,7 @@ func makeWindowWithFrame(frame *plan.FrameClause) *Window {
 
 func setWindowPrepareParams(t *testing.T, proc *process.Process, values ...*string) *vector.Vector {
 	t.Helper()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	for _, value := range values {
 		var raw []byte
 		isNull := value == nil
@@ -592,6 +597,7 @@ func TestWindowPrepareMaterializesRowsFrameBounds(t *testing.T) {
 	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	require.Nil(t, arg.ctr.runtimeFrames)
 	proc.SetPrepareParams(nil)
 	secondParams.Free(proc.Mp())
@@ -626,6 +632,7 @@ func TestWindowPrepareMaterializesRangeFrameBounds(t *testing.T) {
 	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	require.Nil(t, arg.ctr.runtimeFrames)
 	proc.SetPrepareParams(nil)
 	secondParams.Free(proc.Mp())
@@ -681,6 +688,7 @@ func TestWindowPrepareValidatesRowsFrameBounds(t *testing.T) {
 			requirePreparedRowsBoundUnchanged(t, planned.End.Val, 0)
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			proc.SetPrepareParams(nil)
 			if params != nil {
 				params.Free(proc.Mp())
@@ -739,6 +747,7 @@ func TestWindowPrepareValidatesRangeFrameBounds(t *testing.T) {
 			requirePreparedRowsBoundUnchanged(t, planned.End.Val, 0)
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			proc.SetPrepareParams(nil)
 			if params != nil {
 				params.Free(proc.Mp())
@@ -838,6 +847,7 @@ func TestWindowPrepareClearsPartialRowsFrameBoundsOnError(t *testing.T) {
 	requirePreparedRowsBoundUnchanged(t, invalid.Start.Val, 1)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.SetPrepareParams(nil)
 	params.Free(proc.Mp())
 	proc.Free()
@@ -873,6 +883,7 @@ func TestWindowPrepareHandlesNilAndLiteralFrameBounds(t *testing.T) {
 	require.Same(t, literal.End.Val, arg.ctr.runtimeFrames[1].End.Val)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	require.Nil(t, arg.ctr.runtimeFrames)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -903,6 +914,7 @@ func TestWindowPreparePreservesRangeIntervalBounds(t *testing.T) {
 	require.Same(t, interval, arg.ctr.runtimeFrames[0].Start.Val)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -921,6 +933,7 @@ func TestWindowPrepareFrameBoundsStayUnpublishedAfterLaterError(t *testing.T) {
 	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 0)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.SetPrepareParams(nil)
 	params.Free(proc.Mp())
 	proc.Free()
@@ -945,6 +958,7 @@ func TestWindowPrepareFrameBoundsFeedAggregateConsumer(t *testing.T) {
 	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.SetPrepareParams(nil)
 	params.Free(proc.Mp())
@@ -987,6 +1001,7 @@ func TestWindowPrepareRangeFrameBoundsFeedAggregateConsumer(t *testing.T) {
 	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.SetPrepareParams(nil)
 	params.Free(proc.Mp())
@@ -1019,6 +1034,7 @@ func TestWindowPreparedCumulativeBoundUsesRuntimeValue(t *testing.T) {
 	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.SetPrepareParams(nil)
 	params.Free(proc.Mp())
@@ -1051,6 +1067,7 @@ func TestWindowPreparedBoundedSlidingSumUsesRuntimeValue(t *testing.T) {
 	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.SetPrepareParams(nil)
 	params.Free(proc.Mp())
@@ -1092,6 +1109,7 @@ func TestWindowPrepareFrameBoundsFeedValueConsumers(t *testing.T) {
 			requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			op.Free(proc, false, nil)
 			proc.SetPrepareParams(nil)
 			params.Free(proc.Mp())
@@ -1217,9 +1235,9 @@ func TestBoundedSlidingRowsFrameEligibility(t *testing.T) {
 }
 
 func TestBoundedSlidingRangeFrameEligibility(t *testing.T) {
-	intOrder := vector.NewVec(types.T_int32.ToType())
-	floatOrder := vector.NewVec(types.T_float64.ToType())
-	timestampOrder := vector.NewVec(types.T_timestamp.ToType())
+	intOrder := vector.NewVec(types.T_int32.ToType(), mpool.MustNewZero())
+	floatOrder := vector.NewVec(types.T_float64.ToType(), mpool.MustNewZero())
+	timestampOrder := vector.NewVec(types.T_timestamp.ToType(), mpool.MustNewZero())
 	validFrame := makeBoundedRangeFrame(2, 2)
 
 	tests := []struct {
@@ -1425,6 +1443,7 @@ func TestWindowJsonObjectAggOutput(t *testing.T) {
 	require.Nil(t, arg.ctr.runningAgg)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 }
@@ -1479,6 +1498,7 @@ func TestWindowOrderedPercentileOutput(t *testing.T) {
 			}
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			op.Free(proc, false, nil)
 			proc.Free()
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1529,6 +1549,7 @@ func TestWindowOrderedPercentileFullPartitionBroadcasts(t *testing.T) {
 	require.Equal(t, []float64{2, 2, 15, 15}, got)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1588,6 +1609,7 @@ func TestWindowOrderedPercentileSpills(t *testing.T) {
 	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillSize)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1614,6 +1636,7 @@ func TestWindowOrderedPercentileFinalizationHonorsCancellation(t *testing.T) {
 	require.Nil(t, arg.ctr.batAggs)
 
 	arg.Free(proc, true, err)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, true, err)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -1662,6 +1685,7 @@ func TestWindowOrderedPercentileSpilledMergeCancellationClosesAndReuses(t *testi
 	proc.Ctx = originalCtx
 	arg.Reset(proc, true, err)
 	child.Free(proc, true, err)
+	colexec.FreeMockChildren(child)
 	secondBatch := makeInt32Batch(proc.Mp(), []int32{10, 20, 30})
 	secondChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{secondBatch})
 	arg.Children = nil
@@ -1675,6 +1699,7 @@ func TestWindowOrderedPercentileSpilledMergeCancellationClosesAndReuses(t *testi
 	require.Nil(t, arg.ctr.fullPartitionResults)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	secondChild.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -1718,7 +1743,7 @@ func TestWindowOrderedPercentilePartitionCrossesOutputChunk(t *testing.T) {
 	require.Equal(t, wantFirst,
 		vector.MustFixedColWithTypeCheck[int32](first))
 	require.NotNil(t, ctr.fullPartitionResults)
-	first.Free(proc.Mp())
+	first.Free(first.MPool())
 
 	second, err := ctr.processAggregateFuncRange(
 		0, arg, proc, colexec.DefaultBatchSize, rows)
@@ -1733,7 +1758,7 @@ func TestWindowOrderedPercentilePartitionCrossesOutputChunk(t *testing.T) {
 	}
 	require.Equal(t, want, vector.MustFixedColWithTypeCheck[int32](second))
 	require.Nil(t, ctr.fullPartitionResults)
-	second.Free(proc.Mp())
+	second.Free(second.MPool())
 
 	bat.Clean(proc.Mp())
 	proc.Free()
@@ -1769,6 +1794,7 @@ func TestWindowOrderedPercentileCacheReleasesOnReset(t *testing.T) {
 	require.Zero(t, arg.ctr.fullPartitionNextRow)
 	require.Zero(t, arg.ctr.fullPartition)
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 
 	secondBatch := makeInt32Batch(proc.Mp(), []int32{10, 20, 30})
 	secondChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{secondBatch})
@@ -1783,6 +1809,7 @@ func TestWindowOrderedPercentileCacheReleasesOnReset(t *testing.T) {
 	require.Nil(t, arg.ctr.fullPartitionResults)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	secondChild.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -1808,6 +1835,7 @@ func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 
 	t.Cleanup(func() {
 		arg.Free(proc, true, nil)
+		colexec.FreeMockChildren(arg)
 		op.Free(proc, true, nil)
 		mp := proc.Mp()
 		proc.Free()
@@ -1828,6 +1856,7 @@ func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	require.Nil(t, arg.ctr.batAggs)
 
 	op.Free(proc, true, err)
+	colexec.FreeMockChildren(op)
 	require.Positive(t, account.Snapshot().Used)
 	arg.Reset(proc, true, err)
 	require.Nil(t, arg.ctr.batAggs, "Reset must release window aggregators after an error")
@@ -1901,6 +1930,7 @@ func TestWindowAggResultAcrossChunks(t *testing.T) {
 	require.Nil(t, arg.ctr.runningAgg)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1946,6 +1976,7 @@ func TestWindowAggregateResultDropsTailNulls(t *testing.T) {
 	require.False(t, resultVec.HasNull(), "tail capacity must not make a non-null window result nullable")
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1980,6 +2011,7 @@ func TestWindowAggregateResultKeepsLogicalNulls(t *testing.T) {
 	require.False(t, resultVec.IsNull(2))
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1988,7 +2020,7 @@ func TestWindowAggregateResultKeepsLogicalNulls(t *testing.T) {
 func TestWindowSkipsEmptyInputBatch(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	empty := batch.NewWithSize(1)
-	empty.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	empty.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	nonEmpty := makeInt32Batch(proc.Mp(), []int32{7})
 
 	spec := makeWindowSpec()
@@ -2007,6 +2039,7 @@ func TestWindowSkipsEmptyInputBatch(t *testing.T) {
 	require.Equal(t, []int64{7}, collectFixedWindowColumn[int64](t, arg, proc, 1))
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2049,6 +2082,7 @@ func TestWindowPartitionedAggResultAcrossChunks(t *testing.T) {
 	}
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2088,6 +2122,7 @@ func TestWindowDecimalAggResultAcrossChunks(t *testing.T) {
 	}
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2125,6 +2160,7 @@ func TestWindowOrderResultAcrossChunks(t *testing.T) {
 	}
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2165,6 +2201,7 @@ func TestWindowRankPeerAcrossChunks(t *testing.T) {
 	}
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2173,7 +2210,7 @@ func TestWindowRankPeerAcrossChunks(t *testing.T) {
 func TestWindowRankTreatsFloatNaNsAsLastPeerGroup(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []float64{
 		math.Float64frombits(0x7ff8000000000002), 1,
 		math.Float64frombits(0x7ff8000000000001), -1,
@@ -2201,6 +2238,7 @@ func TestWindowRankTreatsFloatNaNsAsLastPeerGroup(t *testing.T) {
 	require.Equal(t, []uint64{1, 2, 3, 3}, collectFixedWindowColumn[uint64](t, arg, proc, 1))
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2210,7 +2248,7 @@ func TestWindowPartitionedRankTreatsFloatNaNsAsPeers(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1}, nil, proc.Mp())
-	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
 		math.Float64frombits(0x7ff8000000000002), 1,
 		math.Float64frombits(0x7ff8000000000001), -1,
@@ -2240,6 +2278,7 @@ func TestWindowPartitionedRankTreatsFloatNaNsAsPeers(t *testing.T) {
 	require.Equal(t, []uint64{1, 2, 3, 3}, collectFixedWindowColumn[uint64](t, arg, proc, 2))
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2249,7 +2288,7 @@ func TestWindowPartitionedFloatNaNPeersUseLaterOrderKey(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
-	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
 		math.Float64frombits(0x7ff8000000000001),
 		math.Float64frombits(0x7ff8000000000002),
@@ -2288,6 +2327,7 @@ func TestWindowPartitionedFloatNaNPeersUseLaterOrderKey(t *testing.T) {
 		vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[3]))
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2338,6 +2378,7 @@ func TestWindowValueResultAcrossChunks(t *testing.T) {
 	}
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2385,7 +2426,7 @@ func TestWindowOrderFunctionsUsePeerBoundaries(t *testing.T) {
 			// not reset rank state.
 			result, err := ctr.processOrderFuncRange(0, arg, proc, 1, 4)
 			require.NoError(t, err)
-			defer result.Free(proc.Mp())
+			defer result.Free(result.MPool())
 			if test.wantFloat != nil {
 				require.Equal(t, types.T_float64, result.GetType().Oid)
 				require.Equal(t, test.wantFloat, vector.MustFixedColWithTypeCheck[float64](result))
@@ -2454,6 +2495,7 @@ func TestWindowReuseWithEmptyInput(t *testing.T) {
 	arg.AppendChild(child)
 	t.Cleanup(func() {
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 		child.Free(proc, false, nil)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -2461,6 +2503,7 @@ func TestWindowReuseWithEmptyInput(t *testing.T) {
 	for _, values := range [][]int32{nil, {1, 2, 3}, nil, {4, 5}} {
 		arg.Reset(proc, false, nil)
 		child.Free(proc, false, nil)
+		colexec.FreeMockChildren(child)
 		if len(values) != 0 {
 			child.WithBatchs([]*batch.Batch{makeInt32Batch(proc.Mp(), values)})
 		} else {
@@ -2521,6 +2564,7 @@ func TestWindowResetBeforeAllChunksReleasesState(t *testing.T) {
 	arg.Reset(proc, false, nil)
 	require.Nil(t, arg.ctr.runningAgg)
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2547,7 +2591,7 @@ func TestCumulativeAggregateResetsAtPartitionBoundary(t *testing.T) {
 		vector.MustFixedColWithTypeCheck[int64](result))
 	require.Nil(t, ctr.runningAgg)
 
-	result.Free(proc.Mp())
+	result.Free(result.MPool())
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -2578,19 +2622,19 @@ func TestCumulativeMaxUsesRunningAggregateAcrossChunks(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want[:200], vector.MustFixedColWithTypeCheck[int32](first))
 	require.NotNil(t, ctr.runningAgg, "cumulative MIN/MAX must retain one running state")
-	first.Free(proc.Mp())
+	first.Free(first.MPool())
 
 	second, err := ctr.processAggregateFuncRange(0, arg, proc, 200, 300)
 	require.NoError(t, err)
 	require.Equal(t, want[200:300], vector.MustFixedColWithTypeCheck[int32](second))
 	require.NotNil(t, ctr.runningAgg)
-	second.Free(proc.Mp())
+	second.Free(second.MPool())
 
 	third, err := ctr.processAggregateFuncRange(0, arg, proc, 300, len(values))
 	require.NoError(t, err)
 	require.Equal(t, want[300:], vector.MustFixedColWithTypeCheck[int32](third))
 	require.Nil(t, ctr.runningAgg)
-	third.Free(proc.Mp())
+	third.Free(third.MPool())
 
 	// Reuse after completion, now with both whole partitions in one output
 	// chunk. Neither partition needs a state surviving beyond this call.
@@ -2598,7 +2642,7 @@ func TestCumulativeMaxUsesRunningAggregateAcrossChunks(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, vector.MustFixedColWithTypeCheck[int32](whole))
 	require.Nil(t, ctr.runningAgg)
-	whole.Free(proc.Mp())
+	whole.Free(whole.MPool())
 
 	bat.Clean(proc.Mp())
 	proc.Free()
@@ -2643,7 +2687,7 @@ func TestCumulativePrefixWithinOutputChunk(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(tc.typ)
+			bat.Vecs[0] = vector.NewVec(tc.typ, proc.Mp())
 			input := bat.Vecs[0]
 			t.Cleanup(func() {
 				bat.Clean(proc.Mp())
@@ -2689,7 +2733,7 @@ func TestCumulativePrefixWithinOutputChunk(t *testing.T) {
 			for _, end := range []int{2, 5, 8} {
 				got, err := ctr.processAggregateFuncRange(0, arg, proc, start, end)
 				require.NoError(t, err)
-				t.Cleanup(func() { got.Free(proc.Mp()) })
+				t.Cleanup(func() { got.Free(got.MPool()) })
 				require.Equal(t, end-start, got.Length())
 				for row := 0; row < got.Length(); row++ {
 					expected := start + row
@@ -2729,7 +2773,7 @@ func BenchmarkCumulativeSmallPartitions(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				got.Free(proc.Mp())
+				got.Free(got.MPool())
 				ctr.freeRunningAgg()
 			}
 		})
@@ -2765,6 +2809,7 @@ func TestBoundedSlidingSumAcrossOutputChunks(t *testing.T) {
 	require.Nil(t, arg.ctr.runningAgg)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -2786,7 +2831,7 @@ func TestBoundedSlidingSumRejectsNonSequentialOutput(t *testing.T) {
 
 	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 1)
 	require.NoError(t, err)
-	first.Free(proc.Mp())
+	first.Free(first.MPool())
 	require.NotNil(t, ctr.runningAgg)
 
 	// A retained sliding state is valid only for the immediately following
@@ -2821,7 +2866,7 @@ func TestBoundedSlidingSumResetsAtPartitionBoundary(t *testing.T) {
 		vector.MustFixedColWithTypeCheck[int64](result))
 	require.Nil(t, ctr.runningAgg)
 
-	result.Free(proc.Mp())
+	result.Free(result.MPool())
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -2852,7 +2897,7 @@ func TestBoundedSlidingSumPreservesNullSemantics(t *testing.T) {
 	require.True(t, result.IsNull(2))
 	require.False(t, result.IsNull(3))
 
-	result.Free(proc.Mp())
+	result.Free(result.MPool())
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -2884,7 +2929,7 @@ func TestBoundedSlidingSumSupportsInt64Arguments(t *testing.T) {
 		types.Decimal128FromInt64(7),
 	}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
 
-	result.Free(proc.Mp())
+	result.Free(result.MPool())
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -2925,7 +2970,7 @@ func TestBoundedSlidingSumSupportsDecimal64Arguments(t *testing.T) {
 	require.False(t, result.IsNull(3))
 	require.False(t, result.IsNull(4))
 
-	result.Free(proc.Mp())
+	result.Free(result.MPool())
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -2958,7 +3003,7 @@ func TestBoundedSlidingRangeAvgAcrossPeersAndOutputChunks(t *testing.T) {
 		for _, value := range vector.MustFixedColWithTypeCheck[types.Decimal128](result) {
 			got = append(got, types.Decimal128ToFloat64(value, result.GetType().Scale))
 		}
-		result.Free(proc.Mp())
+		result.Free(result.MPool())
 		if output[1] < len(values) {
 			require.NotNil(t, ctr.runningAgg)
 		}
@@ -3044,7 +3089,7 @@ func TestBoundedSlidingRangeAvgOrderShapes(t *testing.T) {
 			require.InDeltaSlice(t, test.want, got, 1e-4)
 			require.Nil(t, ctr.runningAgg)
 
-			result.Free(proc.Mp())
+			result.Free(result.MPool())
 			bat.Clean(proc.Mp())
 			proc.Free()
 			require.Zero(t, proc.Mp().CurrNB())
@@ -3095,7 +3140,7 @@ func TestBoundedSlidingRangeSumUint8MaximumBoundary(t *testing.T) {
 			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[uint64](result))
 			require.Nil(t, ctr.runningAgg)
 
-			result.Free(proc.Mp())
+			result.Free(result.MPool())
 			bat.Clean(proc.Mp())
 			proc.Free()
 			require.Zero(t, proc.Mp().CurrNB())
@@ -3125,7 +3170,7 @@ func TestCumulativeAggregatePreservesNullSemantics(t *testing.T) {
 		vector.MustFixedColWithTypeCheck[int64](result))
 	require.False(t, result.HasNull())
 
-	result.Free(proc.Mp())
+	result.Free(result.MPool())
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -3174,6 +3219,7 @@ func TestWindowOrdersPartitionedInput(t *testing.T) {
 	require.Len(t, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[2]), 4)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -3350,7 +3396,7 @@ func TestWindowOrderVectorRepresentationChanges(t *testing.T) {
 	require.NoError(t, err)
 	ctr := &container{orderVecs: []colexec.ExprEvalVector{order}}
 	t.Cleanup(ctr.freeExes)
-	t.Cleanup(func() { ctr.freeVector(proc.Mp()) })
+	t.Cleanup(func() { ctr.freeVector(proc) })
 	var previous *vector.Vector
 	for i, bat := range batches {
 		source := bat.Vecs[0]
@@ -3413,6 +3459,7 @@ func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
 	require.Equal(t, []uint64{1, 2, 1, 2}, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[2]))
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -3421,7 +3468,7 @@ func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
 func TestWindowPartitionTopNSeparatesGroupingNullFromEmptyString(t *testing.T) {
 	proc := newWindowSpillProcess(t)
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"", "", ""}, nil, proc.Mp()))
 	input.Vecs[0].GetGrouping().Add(0)
 	input.Vecs[1] = testutil.MakeInt32Vector([]int32{100, 30, 20}, nil, proc.Mp())
@@ -3453,6 +3500,7 @@ func TestWindowPartitionTopNSeparatesGroupingNullFromEmptyString(t *testing.T) {
 	require.Equal(t, []uint64{1, 1, 2}, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[2]))
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -3464,7 +3512,7 @@ func TestWindowPartitionTopNUsesSQLOrderForFloatNaNPeers(t *testing.T) {
 		bat := batch.NewWithSize(3)
 		bat.Vecs[0] = testutil.MakeInt32Vector(
 			[]int32{partitionValue, partitionValue, partitionValue}, nil, proc.Mp())
-		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
 			math.Float64frombits(0x7ff8000000000002),
 			math.Float64frombits(0x7ff8000000000001),
@@ -3504,6 +3552,7 @@ func TestWindowPartitionTopNUsesSQLOrderForFloatNaNPeers(t *testing.T) {
 		vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[3]))
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -3522,7 +3571,7 @@ func TestWindowPartitionTopNReducerUsesSQLOrderForFloatNaNs(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			input := batch.NewWithSize(3)
 			input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1, 1, 1, 1}, nil, proc.Mp())
-			input.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+			input.Vecs[1] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(input.Vecs[1], []float64{
 				math.Float64frombits(0x7ff8000000000002), math.Inf(1), 1, 0, -1,
 				math.Inf(-1), math.Float64frombits(0x7ff8000000000001),
@@ -3577,8 +3626,10 @@ func TestWindowPartitionTopNReducerUsesSQLOrderForFloatNaNs(t *testing.T) {
 			require.Equal(t, []uint64{1, 2}, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[3]))
 
 			windowArg.Free(proc, false, nil)
+			colexec.FreeMockChildren(windowArg)
 			partitionArg.Free(proc, false, nil)
 			partitionChild.Free(proc, false, nil)
+			colexec.FreeMockChildren(partitionChild)
 			proc.Free()
 			require.Zero(t, proc.Mp().CurrNB())
 		})
@@ -3637,6 +3688,7 @@ func TestWindowOrderHonorsCancellation(t *testing.T) {
 			require.ErrorIs(t, err, context.Canceled)
 
 			arg.Free(proc, true, err)
+			colexec.FreeMockChildren(arg)
 			bat.Clean(proc.Mp())
 			proc.Free()
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -3658,7 +3710,7 @@ func newFunExpr(name string) *plan.Expr {
 
 func TestSearchLeftUnsupportedType(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	err := vector.AppendBytes(vec, []byte("abc"), false, mp)
 	require.NoError(t, err)
 	defer vec.Free(mp)
@@ -3671,7 +3723,7 @@ func TestSearchLeftUnsupportedType(t *testing.T) {
 func TestSearchLeftWithNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
 	// Simulate sorted order with ASC NULLS FIRST: [NULL, NULL, 1, 2, 2, 4]
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	values := []int64{0, 0, 1, 2, 2, 4}
 	nullRows := []bool{true, true, false, false, false, false}
 
@@ -3707,7 +3759,7 @@ func TestSearchLeftWithNulls(t *testing.T) {
 func TestSearchRightWithNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
 	// Simulate sorted order with ASC NULLS FIRST: [NULL, NULL, 1, 2, 2, 4]
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	values := []int64{0, 0, 1, 2, 2, 4}
 	nullRows := []bool{true, true, false, false, false, false}
 
@@ -3734,7 +3786,7 @@ func TestSearchRightWithNulls(t *testing.T) {
 func TestSearchLeftWithNullsDesc(t *testing.T) {
 	mp := mpool.MustNewZero()
 	// DESC NULLS LAST: raw values = [4, 2, 1, 0, 0], nulls at positions 3, 4
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	values := []int64{4, 2, 1, 0, 0}
 	nullRows := []bool{false, false, false, true, true}
 
@@ -3765,7 +3817,7 @@ func TestSearchLeftWithNullsDesc(t *testing.T) {
 func TestSearchRightWithNullsDesc(t *testing.T) {
 	mp := mpool.MustNewZero()
 	// DESC NULLS LAST: raw values = [4, 2, 1, 0, 0], nulls at positions 3, 4
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	values := []int64{4, 2, 1, 0, 0}
 	nullRows := []bool{false, false, false, true, true}
 
@@ -3792,7 +3844,7 @@ func TestSearchRightWithNullsDesc(t *testing.T) {
 // TestSearchLeftAllNulls verifies NULL peer grouping when all values are NULL.
 func TestSearchLeftAllNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	for i := 0; i < 5; i++ {
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))
 	}
@@ -3810,7 +3862,7 @@ func TestSearchLeftAllNulls(t *testing.T) {
 
 func TestSearchRightUnsupportedType(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	err := vector.AppendBytes(vec, []byte("abc"), false, mp)
 	require.NoError(t, err)
 	defer vec.Free(mp)
@@ -3824,7 +3876,7 @@ func TestSearchRightUnsupportedType(t *testing.T) {
 // DESC NULLS LAST ordering: raw values [4, 2, 2, 1, NULL, NULL].
 func TestSearchLeftDescRange(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	values := []int64{4, 2, 2, 1, 0, 0}
 	nullRows := []bool{false, false, false, false, true, true}
 	for i, v := range values {
@@ -3862,7 +3914,7 @@ func TestSearchLeftDescRange(t *testing.T) {
 // TestSearchRightDescRange verifies searchRight with desc=true.
 func TestSearchRightDescRange(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	values := []int64{4, 2, 2, 1, 0, 0}
 	nullRows := []bool{false, false, false, false, true, true}
 	for i, v := range values {
@@ -3894,7 +3946,7 @@ func TestSearchRightDescRange(t *testing.T) {
 // when ctr.desc is empty (RANGE frame without an ORDER BY spec).
 func TestBuildRangeIntervalEmptyDesc(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	values := []int64{1, 2, 2, 4}
 	for _, v := range values {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
@@ -3931,7 +3983,7 @@ func TestBuildRangeIntervalEmptyDesc(t *testing.T) {
 // also tolerate an empty ctr.desc.
 func TestBuildRangeIntervalEmptyDescUnbounded(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	values := []int64{1, 2, 2, 4}
 	for _, v := range values {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
@@ -3957,7 +4009,7 @@ func TestBuildRangeIntervalEmptyDescUnbounded(t *testing.T) {
 
 func TestBuildRangeIntervalVarcharPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, value := range []string{"2026-01", "2026-02", "2026-02", "2026-03"} {
 		require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
 	}
@@ -4026,6 +4078,7 @@ func TestWindowRangeVarcharOrderBy(t *testing.T) {
 	require.Equal(t, []int64{100, 350, 350}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -4043,7 +4096,7 @@ func TestWindowRangeVarcharOrderBy(t *testing.T) {
 
 // helper to build a simple fixed-type vector without nulls.
 func makeFixedVec[T types.OrderedT](t *testing.T, mp *mpool.MPool, oid types.T, values []T) *vector.Vector {
-	vec := vector.NewVec(oid.ToType())
+	vec := vector.NewVec(oid.ToType(), mp)
 	for _, v := range values {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
@@ -4290,7 +4343,7 @@ func TestBuildRangeIntervalUint64Boundaries(t *testing.T) {
 	}
 
 	t.Run("null peers", func(t *testing.T) {
-		vec := vector.NewVec(types.T_uint64.ToType())
+		vec := vector.NewVec(types.T_uint64.ToType(), mp)
 		for i, value := range []uint64{0, 0, 0, 1} {
 			require.NoError(t, vector.AppendFixed(vec, value, i < 2, mp))
 		}
@@ -4634,7 +4687,7 @@ func TestBuildRangeIntervalFloatNaNsUseSQLOrder(t *testing.T) {
 				{name: "desc", values: tc.descValues, desc: true},
 			} {
 				t.Run(direction.name, func(t *testing.T) {
-					vec := vector.NewVec(tc.oid.ToType())
+					vec := vector.NewVec(tc.oid.ToType(), mp)
 					switch tc.oid {
 					case types.T_float32:
 						values := make([]float32, len(direction.values))
@@ -5014,7 +5067,7 @@ func TestWindowTimestampRangeUsesSessionTimeZone(t *testing.T) {
 				values[i], err = types.ParseTimestamp(time.UTC, value, 6)
 				require.NoError(t, err)
 			}
-			vec := vector.NewVec(types.T_timestamp.ToType())
+			vec := vector.NewVec(types.T_timestamp.ToType(), mp)
 			require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
 			defer vec.Free(mp)
 
@@ -5066,7 +5119,7 @@ func TestWindowAccountedScratchRetirement(t *testing.T) {
 	defer ctr.clearCivilOrder()
 	loc, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
-	vec := vector.NewVec(types.T_timestamp.ToType())
+	vec := vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
 	defer vec.Free(proc.Mp())
 	for _, instant := range []string{"2024-11-03 05:30:00", "2024-11-03 06:30:00"} {
 		value, err := types.ParseTimestamp(time.UTC, instant, 6)
@@ -5244,7 +5297,7 @@ func TestWindowTimestampRangeFoldMembership(t *testing.T) {
 					orderedValues[i], orderedValues[j] = orderedValues[j], orderedValues[i]
 				}
 			}
-			vec := vector.NewVec(types.T_timestamp.ToType())
+			vec := vector.NewVec(types.T_timestamp.ToType(), mp)
 			require.NoError(t, vector.AppendFixedList(vec, orderedValues, nil, mp))
 			defer vec.Free(mp)
 
@@ -5327,7 +5380,7 @@ func TestWindowTimestampRangeFoldMembershipDetectsSparseTransitions(t *testing.T
 				values[i], err = types.ParseTimestamp(time.UTC, value, 6)
 				require.NoError(t, err)
 			}
-			vec := vector.NewVec(types.T_timestamp.ToType())
+			vec := vector.NewVec(types.T_timestamp.ToType(), mp)
 			require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
 			defer vec.Free(mp)
 
@@ -5360,7 +5413,7 @@ func TestWindowTimestampRangeFoldMembershipRefreshesMaterializedOrderVector(t *t
 	require.NoError(t, err)
 	proc.GetSessionInfo().TimeZone = newYork
 
-	source := vector.NewVec(types.T_timestamp.ToType())
+	source := vector.NewVec(types.T_timestamp.ToType(), mp)
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = source
 	defer input.Clean(mp)
@@ -5369,7 +5422,7 @@ func TestWindowTimestampRangeFoldMembershipRefreshesMaterializedOrderVector(t *t
 	require.NoError(t, err)
 	ctr := &container{orderVecs: []colexec.ExprEvalVector{order}}
 	defer ctr.freeExes()
-	defer ctr.freeVector(mp)
+	defer ctr.freeVector(proc)
 
 	frame := &plan.FrameClause{
 		Type: plan.FrameClause_RANGE,
@@ -5443,7 +5496,7 @@ func TestWindowTimestampRangeFoldIndexHonorsCancellation(t *testing.T) {
 	for i := range values {
 		values[i] = start + types.Timestamp(int64(i)*60*types.MicroSecsPerSec)
 	}
-	vec := vector.NewVec(types.T_timestamp.ToType())
+	vec := vector.NewVec(types.T_timestamp.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
 	defer vec.Free(mp)
 
@@ -5487,7 +5540,7 @@ func TestWindowTimestampRangeFoldAggregateMembership(t *testing.T) {
 		timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
 		require.NoError(t, err)
 	}
-	orderVec := vector.NewVec(types.T_timestamp.ToType())
+	orderVec := vector.NewVec(types.T_timestamp.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(orderVec, timestamps, nil, mp))
 	defer orderVec.Free(mp)
 
@@ -5520,7 +5573,7 @@ func TestWindowTimestampRangeFoldAggregateMembership(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{12, 23, 16, 12, 23, 16, 15, 8},
 		vector.MustFixedColWithTypeCheck[int64](result))
-	result.Free(mp)
+	result.Free(result.MPool())
 }
 
 func TestWindowTimestampRangeFoldAggregateMembershipHandlesConstOrderVector(t *testing.T) {
@@ -5561,7 +5614,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipHandlesConstOrderVector(t *t
 	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
 	require.Equal(t, []int64{15, 15, 15, 15}, vector.MustFixedColWithTypeCheck[int64](result))
-	result.Free(mp)
+	result.Free(result.MPool())
 
 	// Const storage must still obey finite RANGE bounds instead of treating
 	// every frame as its peer group.
@@ -5667,7 +5720,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipPreservesUnboundedNullPeers(
 				timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
 				require.NoError(t, err)
 			}
-			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			orderVec := vector.NewVec(types.T_timestamp.ToType(), mp)
 			require.NoError(t, vector.AppendFixedList(orderVec, timestamps, test.nulls, mp))
 			defer orderVec.Free(mp)
 
@@ -5693,7 +5746,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipPreservesUnboundedNullPeers(
 			result, runErr := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 			require.NoError(t, runErr)
 			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int64](result))
-			result.Free(mp)
+			result.Free(result.MPool())
 		})
 	}
 }
@@ -5767,7 +5820,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipSmallPartitions(t *testing.T
 				timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
 				require.NoError(t, err)
 			}
-			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			orderVec := vector.NewVec(types.T_timestamp.ToType(), mp)
 			require.NoError(t, vector.AppendFixedList(orderVec, timestamps, nil, mp))
 			defer orderVec.Free(mp)
 
@@ -5791,7 +5844,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipSmallPartitions(t *testing.T
 			result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 			require.NoError(t, err)
 			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int64](result))
-			result.Free(mp)
+			result.Free(result.MPool())
 		})
 	}
 }
@@ -5826,7 +5879,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipAfterOrderMaterialization(t 
 		require.NoError(t, err)
 	}
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], timestamps, nil, mp))
 	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 10}, nil, mp)
 	bat.SetRowCount(2)
@@ -5843,7 +5896,9 @@ func TestWindowTimestampRangeFoldAggregateMembershipAfterOrderMaterialization(t 
 	require.NoError(t, arg.Prepare(proc))
 	defer arg.Free(proc, false, nil)
 
-	arg.ctr.bat = bat
+	// The retained input lives in the operator's pool, as appendInput builds it.
+	require.NoError(t, arg.ctr.appendInput(proc, bat))
+	bat = arg.ctr.bat
 	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
 	arg.Fs = makeOrderBy(spec)
 	arg.ctr.orderVecs = make([]colexec.ExprEvalVector, len(arg.Fs))
@@ -5857,7 +5912,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipAfterOrderMaterialization(t 
 	result, err := arg.ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
 	require.Equal(t, []int64{11, 10}, vector.MustFixedColWithTypeCheck[int64](result))
-	result.Free(mp)
+	result.Free(result.MPool())
 }
 
 func TestWindowTimestampRangeFoldAggregateMembershipPreservesMultiKeyOrder(t *testing.T) {
@@ -5878,7 +5933,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipPreservesMultiKeyOrder(t *te
 	require.NoError(t, err)
 	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 2, 2}, nil, mp)
-	bat.Vecs[1] = vector.NewVec(types.T_timestamp.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_timestamp.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []types.Timestamp{
 		timestampA, timestampB, timestampA, timestampB,
 	}, nil, mp))
@@ -5903,7 +5958,9 @@ func TestWindowTimestampRangeFoldAggregateMembershipPreservesMultiKeyOrder(t *te
 	require.NoError(t, arg.Prepare(proc))
 	defer arg.Free(proc, false, nil)
 
-	arg.ctr.bat = bat
+	// The retained input lives in the operator's pool, as appendInput builds it.
+	require.NoError(t, arg.ctr.appendInput(proc, bat))
+	bat = arg.ctr.bat
 	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
 	arg.Fs = makeOrderBy(spec)
 	arg.ctr.orderVecs = make([]colexec.ExprEvalVector, len(arg.Fs))
@@ -5917,7 +5974,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipPreservesMultiKeyOrder(t *te
 	result, err := arg.ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
 	require.Equal(t, []int64{1, 3, 7, 15}, vector.MustFixedColWithTypeCheck[int64](result))
-	result.Free(mp)
+	result.Free(result.MPool())
 }
 
 func TestWindowTimestampRangeFoldValueMembership(t *testing.T) {
@@ -5967,7 +6024,7 @@ func TestWindowTimestampRangeFoldValueMembership(t *testing.T) {
 				timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
 				require.NoError(t, err)
 			}
-			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			orderVec := vector.NewVec(types.T_timestamp.ToType(), mp)
 			require.NoError(t, vector.AppendFixedList(orderVec, timestamps, nil, mp))
 			defer orderVec.Free(mp)
 
@@ -5999,7 +6056,7 @@ func TestWindowTimestampRangeFoldValueMembership(t *testing.T) {
 			if test.lastIsNil {
 				require.True(t, result.IsNull(uint64(result.Length()-1)))
 			}
-			result.Free(mp)
+			result.Free(result.MPool())
 		})
 	}
 }
@@ -6033,7 +6090,7 @@ func BenchmarkWindowTimestampRangeFoldUnboundedValue(b *testing.B) {
 			for i := range timestamps {
 				timestamps[i] = start + types.Timestamp(int64(i)*60*types.MicroSecsPerSec)
 			}
-			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			orderVec := vector.NewVec(types.T_timestamp.ToType(), mp)
 			require.NoError(b, vector.AppendFixedList(orderVec, timestamps, nil, mp))
 			defer orderVec.Free(mp)
 
@@ -6060,7 +6117,7 @@ func BenchmarkWindowTimestampRangeFoldUnboundedValue(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				result, runErr := ctr.processValueFuncRange(0, arg, proc, 0, size)
 				require.NoError(b, runErr)
-				result.Free(mp)
+				result.Free(result.MPool())
 			}
 		})
 	}
@@ -6344,7 +6401,7 @@ func TestTimestampRangeMicrosecondDSTGapBoundary(t *testing.T) {
 		{"desc", []types.Timestamp{gapEnd, beforeGap}, 1, 0, true, 0, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(types.T_timestamp.ToType())
+			vec := vector.NewVec(types.T_timestamp.ToType(), mp)
 			require.NoError(t, vector.AppendFixedList(vec, tc.values, nil, mp))
 			defer vec.Free(mp)
 
@@ -6521,7 +6578,7 @@ func TestTemporalRangeCalendarIntervalOverflow(t *testing.T) {
 func TestSearchRightNarrowedNullSuffix(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer vec.Free(mp)
 	for i, value := range []int64{1, 0, 0, 0} {
 		require.NoError(t, vector.AppendFixed(vec, value, i >= 2, mp))

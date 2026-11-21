@@ -2966,7 +2966,8 @@ func FuzzParseExecuteData(f *testing.F) {
 		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 		PreparePlan: preparePlan,
 		PrepareStmt: stmts[0],
-		params:      vector.NewVec(types.T_varchar.ToType()),
+		params:      vector.NewVec(types.T_varchar.ToType(), proc.Mp()),
+		paramsMP:    proc.Mp(),
 	}
 
 	var testData []byte
@@ -3823,7 +3824,7 @@ func TestMysqlProtocolWriteUsesLogicalBatchRowCount(t *testing.T) {
 				types.T_int64.ToType(), int64(7), 1, mp,
 			)
 			require.NoError(t, err)
-			totals := vector.NewVec(types.T_int64.ToType())
+			totals := vector.NewVec(types.T_int64.ToType(), mp)
 			for _, value := range []int64{10, 20, 30} {
 				require.NoError(t, vector.AppendFixed(totals, value, false, mp))
 			}
@@ -3894,7 +3895,7 @@ func TestDatetimeExactSecondWireRowsKeepDeclaredScale(t *testing.T) {
 
 			mp := mpool.MustNewZero()
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6), mp)
 			t.Cleanup(func() { bat.Clean(mp) })
 			dt, err := types.ParseDatetime("2024-01-15 10:20:30", 6)
 			require.NoError(t, err)
@@ -5230,7 +5231,7 @@ func makeKases(t *testing.T) []kase {
 				}
 				bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_char.ToType(), mp, false, nil, vecData)
 			case defines.MYSQL_TYPE_GEOMETRY:
-				vec := vector.NewVec(types.T_geometry.ToType())
+				vec := vector.NewVec(types.T_geometry.ToType(), mp)
 				vecData := make([][]byte, 0, len(mrs.Data))
 				for i := 0; i < len(mrs.Data); i++ {
 					vecData = append(vecData, mrs.Data[i][colIdx].([]byte))
@@ -6475,7 +6476,7 @@ func Test_appendResultSetBinaryRow2_DateTimeHandling(t *testing.T) {
 
 			// Create a batch with DATE type vector
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_date, 0, 0))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_date, 0, 0), proc.Mp())
 			date := types.Date(types.DateFromCalendar(2024, 1, 15))
 			vector.AppendFixed(bat.Vecs[0], date, false, proc.Mp())
 			bat.SetRowCount(1)
@@ -6504,7 +6505,7 @@ func Test_appendResultSetBinaryRow2_DateTimeHandling(t *testing.T) {
 
 			// Create a batch with DATETIME type vector
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0), proc.Mp())
 			dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 0)
 			vector.AppendFixed(bat.Vecs[0], dt, false, proc.Mp())
 			bat.SetRowCount(1)
@@ -6533,7 +6534,7 @@ func Test_appendResultSetBinaryRow2_DateTimeHandling(t *testing.T) {
 
 			// Create a batch with DATE type vector
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_date, 0, 0))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_date, 0, 0), proc.Mp())
 			date := types.Date(types.DateFromCalendar(2024, 1, 15))
 			vector.AppendFixed(bat.Vecs[0], date, false, proc.Mp())
 			bat.SetRowCount(1)
@@ -6562,7 +6563,7 @@ func Test_appendResultSetBinaryRow2_DateTimeHandling(t *testing.T) {
 
 			// Create a batch with TIMESTAMP type vector
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_timestamp, 0, 0))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_timestamp, 0, 0), proc.Mp())
 			ts, _ := types.ParseTimestamp(time.UTC, "2024-01-15 10:20:30", 0)
 			vector.AppendFixed(bat.Vecs[0], ts, false, proc.Mp())
 			bat.SetRowCount(1)
@@ -6591,7 +6592,7 @@ func Test_appendResultSetBinaryRow2_DateTimeHandling(t *testing.T) {
 
 			// Create a batch with DATETIME type vector (with microseconds)
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6), proc.Mp())
 			dt, _ := types.ParseDatetime("2024-01-15 10:20:30.123456", 6)
 			vector.AppendFixed(bat.Vecs[0], dt, false, proc.Mp())
 			bat.SetRowCount(1)
@@ -6707,11 +6708,11 @@ func Test_appendResultSetBinaryRow2_TimeMicroseconds(t *testing.T) {
 			rs.AddColumn(uCol)
 
 			bat := batch.NewWithSize(2)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_time, 0, 6))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_time, 0, 6), proc.Mp())
 			tm, err := types.ParseTime(timeStr, 6)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(vector.AppendFixed(bat.Vecs[0], tm, false, proc.Mp()), convey.ShouldBeNil)
-			bat.Vecs[1] = vector.NewVec(types.New(types.T_uint64, 0, 0))
+			bat.Vecs[1] = vector.NewVec(types.New(types.T_uint64, 0, 0), proc.Mp())
 			convey.So(vector.AppendFixed(bat.Vecs[1], maxUint64, false, proc.Mp()), convey.ShouldBeNil)
 			bat.SetRowCount(1)
 

@@ -83,9 +83,9 @@ func TestPublicDependentStreamingExecution(t *testing.T) {
 				keys = []int32{1, 2, 2, 4}
 			}
 			for i, col := range node.TableDef.Cols {
-				b.Vecs[i], err = vector.NewOffHeapVecWithType(types.T_int32.ToType()), nil
+				b.Vecs[i], err = vector.NewVec(types.T_int32.ToType(), sourceAllocation), nil
 				if err != nil {
-					b.Clean(child.Mp())
+					b.Clean(sourceAllocation)
 					return nil, err
 				}
 				for _, key := range keys {
@@ -94,13 +94,13 @@ func TestPublicDependentStreamingExecution(t *testing.T) {
 						v = key * 10
 					}
 					if err = vector.AppendFixed(b.Vecs[i], v, false, sourceAllocation); err != nil {
-						b.Clean(child.Mp())
+						b.Clean(sourceAllocation)
 						return nil, err
 					}
 				}
 			}
 			b.SetRowCount(len(keys))
-			return &testSource{batch: b, close: func() { closed[node.NodeId]++; b.Clean(child.Mp()) }}, nil
+			return &testSource{batch: b, close: func() { closed[node.NodeId]++; b.Clean(sourceAllocation) }}, nil
 		}, nil
 	})
 	require.NoError(t, err)

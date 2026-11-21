@@ -97,7 +97,7 @@ func TestExpressionDefaultNullIfStringSource(t *testing.T) {
 
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(makeTypeByPlan2Expr(&Expr{Typ: cols[0].Typ}))
+			input.Vecs[0] = vector.NewVec(makeTypeByPlan2Expr(&Expr{Typ: cols[0].Typ}), proc.Mp())
 			require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(tc.input), tc.nullInput, proc.Mp()))
 			input.SetRowCount(1)
 			executor, err := colexec.NewExpressionExecutor(proc, expr)

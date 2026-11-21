@@ -61,8 +61,8 @@ func directInsertBatch(t *testing.T, mp *mpool.MPool, ids []int32, names []strin
 	t.Helper()
 	require.Len(t, names, len(ids))
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	t.Cleanup(func() { bat.Clean(mp) })
 	for i, id := range ids {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], id, false, mp))
@@ -75,8 +75,8 @@ func directInsertBatch(t *testing.T, mp *mpool.MPool, ids []int32, names []strin
 func atomicStringBatch(t *testing.T, mp *mpool.MPool, values []string) *AtomicBatch {
 	t.Helper()
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	owned := true
 	t.Cleanup(func() {
 		if owned {
@@ -227,8 +227,8 @@ func TestCDCStatementBuilder_InsertNullTypesAndEscaping(t *testing.T) {
 	builder, err := NewCDCStatementBuilder("db", "t", def, 4096, false)
 	require.NoError(t, err)
 	bat := batch.NewWithSize(4)
-	bat.Vecs[0], bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType()), vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[2], bat.Vecs[3] = vector.NewVec(types.T_bool.ToType()), vector.NewVec(types.T_float64.ToType())
+	bat.Vecs[0], bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType(), mp), vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[2], bat.Vecs[3] = vector.NewVec(types.T_bool.ToType(), mp), vector.NewVec(types.T_float64.ToType(), mp)
 	t.Cleanup(func() { bat.Clean(mp) })
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], ^uint64(0), false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("path\\'测试"), false, mp))

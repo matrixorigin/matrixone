@@ -533,7 +533,7 @@ func (builder *QueryBuilder) fastExactKeySet(
 	if _, ok := addKeySetBytes(0, len(firstData)); !ok {
 		return nil, true
 	}
-	firstVec := vector.NewVec(types.T_any.ToType())
+	firstVec := vector.NewVec(types.T_any.ToType(), mp)
 	if err := firstVec.UnmarshalBinary(firstData); err != nil ||
 		firstVec.GetType().Oid != types.T_varchar || firstVec.Length() != 1 || firstVec.IsNull(0) {
 		return nil, false
@@ -574,14 +574,14 @@ func (builder *QueryBuilder) fastExactKeySet(
 		}
 	}
 
-	keys := vector.NewVec(leadingType)
+	keys := vector.NewVec(leadingType, mp)
 	transfer := false
 	defer func() {
 		if !transfer {
 			keys.Free(mp)
 		}
 	}()
-	wire := vector.NewVec(*firstVec.GetType())
+	wire := vector.NewVec(*firstVec.GetType(), mp)
 	defer wire.Free(mp)
 	packer := types.NewPacker()
 	defer packer.Close()
@@ -713,7 +713,7 @@ func (builder *QueryBuilder) replaceKeySetCondition(
 	}
 
 	mp := builder.compCtx.GetProcess().Mp()
-	rowVec := vector.NewVec(*inVec.GetType())
+	rowVec := vector.NewVec(*inVec.GetType(), mp)
 	defer rowVec.Free(mp)
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 	leadingColExpr.GetCol().Name = idxTableDef.Cols[0].Name
@@ -740,7 +740,7 @@ func (builder *QueryBuilder) replaceKeySetCondition(
 			}
 		}
 		if exactKeys == nil {
-			exactKeys = vector.NewVec(keyType)
+			exactKeys = vector.NewVec(keyType, mp)
 		}
 		defer exactKeys.Free(mp)
 	} else {
@@ -761,7 +761,7 @@ func (builder *QueryBuilder) replaceKeySetCondition(
 		if exact {
 			// UnmarshalBinary borrows the expression's bytes. AppendBytes copies
 			// the one value into our owned vector before either can be released.
-			key := vector.NewVec(types.T_any.ToType())
+			key := vector.NewVec(types.T_any.ToType(), mp)
 			if err := key.UnmarshalBinary(tupleVec.GetData()); err != nil ||
 				key.GetType().Oid != types.T_varchar || key.Length() != 1 || key.IsNull(0) {
 				return nil

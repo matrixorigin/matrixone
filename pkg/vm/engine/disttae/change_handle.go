@@ -794,7 +794,7 @@ func (h *CheckpointChangesHandle) Next(
 		for i, col := range tblDef.Cols {
 			bat.Attrs = append(bat.Attrs, col.Name)
 			typ := plan2.ExprType2Type(&col.Typ)
-			bat.Vecs[i] = vector.NewVec(typ)
+			bat.Vecs[i] = vector.NewVec(typ, mp)
 		}
 		return bat
 	}

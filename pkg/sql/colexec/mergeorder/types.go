@@ -122,6 +122,8 @@ type container struct {
 	compares  []compare.Compare
 
 	buf *batch.Batch
+	// bufMP is the pool buf was created with.
+	bufMP *mpool.MPool
 	// sortMP is the pool a standalone SortBatch charges its resident sorted
 	// copies and result to; nil means proc's pool.
 	sortMP *mpool.MPool
@@ -156,7 +158,9 @@ type container struct {
 	spillAppendEnabled bool
 	spillAppendTarget  int64
 	spillTailCols      []*vector.Vector
-	spillTailReady     bool
+	// spillTailMP is the pool spillTailCols were created with.
+	spillTailMP    *mpool.MPool
+	spillTailReady bool
 }
 
 type spillRun struct {
@@ -221,8 +225,7 @@ func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, 
 	if ctr.buf != nil {
 		if ctr.allocationAccount != nil {
 			// Accounted output cannot survive its statement-attempt boundary.
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
+			ctr.cleanBuf()
 		} else {
 			ctr.buf.CleanOnlyData()
 		}
@@ -247,10 +250,7 @@ func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, e
 	}
 	ctr.executors = nil
 
-	if ctr.buf != nil {
-		ctr.buf.Clean(proc.Mp())
-		ctr.buf = nil
-	}
+	ctr.cleanBuf()
 	ctr.releaseGrowthParticipant()
 	ctr.budget = nil
 }
@@ -509,7 +509,9 @@ func (ctr *container) setSpillAppendPolicy() {
 	ctr.spillAppendTarget = target
 }
 
-func freeOrderColumns(mp *mpool.MPool, bat *batch.Batch, cols []*vector.Vector) {
+// freeOrderColumns frees the evaluated order columns not shared with bat.
+// They are expression results, owned by their executors' pools.
+func freeOrderColumns(_ *mpool.MPool, bat *batch.Batch, cols []*vector.Vector) {
 	if len(cols) == 0 {
 		return
 	}
@@ -520,8 +522,45 @@ func freeOrderColumns(mp *mpool.MPool, bat *batch.Batch, cols []*vector.Vector) 
 		if batchContainsVector(bat, vec) {
 			continue
 		}
-		vec.Free(mp)
+		vec.Free(vec.MPool())
 	}
+}
+
+// residentMP is the pool resident (batchList) batches are created with: the
+// standalone SortBatch caller's pool, the retained view when an account is
+// bound, otherwise proc's pool.
+func (ctr *container) residentMP(proc *process.Process) *mpool.MPool {
+	if ctr.sortMP != nil {
+		return ctr.sortMP
+	}
+	if ctr.retainedAllocation != nil {
+		return ctr.retainedAllocation
+	}
+	return proc.Mp()
+}
+
+// cleanBuf frees the output buffer with the pool it was created with.
+func (ctr *container) cleanBuf() {
+	if ctr.buf != nil {
+		ctr.buf.Clean(ctr.bufMP)
+		ctr.buf = nil
+		ctr.bufMP = nil
+	}
+}
+
+// cleanOwned frees a batch whose vectors may come from different pools (a
+// received input or a decoded spill batch) with each vector's own pool.
+func cleanOwned(bat *batch.Batch) {
+	if bat == nil {
+		return
+	}
+	for i, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(vec.MPool())
+			bat.Vecs[i] = nil
+		}
+	}
+	bat.Clean(nil)
 }
 
 func batchContainsVector(bat *batch.Batch, vec *vector.Vector) bool {
@@ -538,11 +577,11 @@ func (r *spillRunReader) close(proc *process.Process) {
 		return
 	}
 	if r.batch != nil {
-		r.batch.Clean(proc.Mp())
+		cleanOwned(r.batch)
 		r.batch = nil
 	}
 	if r.keyBatch != nil {
-		r.keyBatch.Clean(proc.Mp())
+		cleanOwned(r.keyBatch)
 		r.keyBatch = nil
 	}
 	r.orderCols = nil
@@ -632,10 +671,10 @@ func (r *spillRunReader) readNextBatch(proc *process.Process, ctr *container) (b
 		r.keyBatch.CleanOnlyData()
 	}
 	if r.batch == nil {
-		r.batch = batch.NewOffHeapWithSize(0)
+		r.batch = batch.NewWithSize(0)
 	}
 	if r.keyBatch == nil {
-		r.keyBatch = batch.NewOffHeapWithSize(0)
+		r.keyBatch = batch.NewWithSize(0)
 	}
 
 	decodedMP, err := ctr.decodedMP(proc)
