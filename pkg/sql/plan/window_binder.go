@@ -793,11 +793,10 @@ func windowValidationPrivilegeCarrier(node *plan.Node) *plan.Node {
 	case plan.Node_TABLE_SCAN:
 		return carrier
 	case plan.Node_EXTERNAL_SCAN:
-		if node.ExternScan == nil || node.ExternScan.Type != int32(plan.ExternType_MONGODB_TB) {
+		if !IsExternalScanRequiringSelectPrivilege(node) {
 			return nil
 		}
-		// The frontend recognizes MongoDB scans from this discriminator alone.
-		carrier.ExternScan = &plan.ExternScan{Type: node.ExternScan.Type}
+		carrier.ExternScan = &plan.ExternScan{Type: node.GetExternScan().GetType()}
 		return carrier
 	case plan.Node_FUNCTION_SCAN:
 		if node.TableDef == nil || node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name != "table_changes" {
