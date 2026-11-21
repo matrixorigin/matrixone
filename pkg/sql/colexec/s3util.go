@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -662,7 +661,7 @@ func SortByKey(
 
 	hasNull := false
 	// Not-Null Check, notice that cluster by support null value
-	if nulls.Any(bat.Vecs[sortIndex].GetNulls()) {
+	if bat.Vecs[sortIndex].GetNulls().Any() {
 		hasNull = true
 		if !allow_null {
 			return moerr.NewConstraintViolationf(proc.Ctx,

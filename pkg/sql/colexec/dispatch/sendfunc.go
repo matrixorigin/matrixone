@@ -62,7 +62,9 @@ var (
 	sendToAnyRemote = sendToAnyRemoteFunc
 )
 
-func prepareParamKindRemoteWireEnabled(proc *process.Process) bool {
+// transportMetadataRemoteWireEnabled reports whether the peer reads the batch
+// metadata trailer (MORPC v12 and later).
+func transportMetadataRemoteWireEnabled(proc *process.Process) bool {
 	return remoteBatchWireVersion(proc) >= defines.MORPCVersion12
 }
 
@@ -72,10 +74,6 @@ func binaryStringRemoteWireEnabled(proc *process.Process) bool {
 
 func explicitTextRemoteWireEnabled(proc *process.Process) bool {
 	return remoteBatchWireVersion(proc) >= defines.MORPCVersion23
-}
-
-func stringSourceRemoteWireEnabled(proc *process.Process) bool {
-	return remoteBatchWireVersion(proc) >= defines.MORPCVersion37
 }
 
 func remoteBatchWireVersion(proc *process.Process) int64 {
@@ -106,7 +104,7 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 		return nil, moerr.NewInvalidStateNoCtx(
 			"grouping provenance requires MORPCVersion87 for remote dispatch")
 	}
-	wireEnabled := prepareParamKindRemoteWireEnabled(proc)
+	wireEnabled := transportMetadataRemoteWireEnabled(proc)
 	if bat.HasBinaryStringMetadata() && !binaryStringRemoteWireEnabled(proc) {
 		return nil, moerr.NewInvalidStateNoCtx(
 			"binary-string provenance requires MORPCVersion18 for remote dispatch")
@@ -115,13 +113,8 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 		return nil, moerr.NewInvalidStateNoCtx(
 			"explicit-text provenance requires MORPCVersion23 for remote dispatch")
 	}
-	if bat.HasPrepareParamKindMetadataWithoutStringSources() && !wireEnabled {
-		return nil, moerr.NewInvalidStateNoCtx(
-			"prepared parameter provenance requires MORPCVersion12 for remote dispatch")
-	}
 	if wireEnabled {
-		return bat.MarshalBinaryForPipeline(
-			buf, true, stringSourceRemoteWireEnabled(proc))
+		return bat.MarshalBinaryForPipeline(buf, true)
 	}
 	return bat.MarshalBinaryWithBuffer(buf, true)
 }

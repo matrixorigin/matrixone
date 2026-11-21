@@ -146,7 +146,6 @@ func (proc *Process) NewViewBindingProcess(ctx context.Context) *Process {
 	child.Base.resolveVariableTypeFunc = proc.Base.resolveVariableTypeFunc
 	child.Base.resolveVariableIsBinFunc = proc.Base.resolveVariableIsBinFunc
 	child.Base.resolveVariableStringDomainFunc = proc.Base.resolveVariableStringDomainFunc
-	child.Base.resolveVariablePrepareParamKindFunc = proc.Base.resolveVariablePrepareParamKindFunc
 	child.Session = proc.Session
 	child.WarningSink = proc.WarningSink
 	child.CopyPlanSnapshotFrom(proc)

@@ -241,6 +241,23 @@ func Test_appendUint64(t *testing.T) {
 	}
 }
 
+func TestCDCBitLiteralPreservesBytes(t *testing.T) {
+	for _, tc := range []struct {
+		width int32
+		value uint64
+		want  string
+	}{
+		{8, 39, "x'27'"},
+		{8, 92, "x'5c'"},
+		{16, 39, "x'0027'"},
+		{64, 0xff005c27000000ff, "x'ff005c27000000ff'"},
+	} {
+		got, err := convertColIntoSql(context.Background(), tc.value, &types.Type{Oid: types.T_bit, Width: tc.width}, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, tc.want, string(got))
+	}
+}
+
 func Test_convertColIntoSql(t *testing.T) {
 	bj, err := bytejson.ParseFromString("{\"a\": 1}")
 	require.Nil(t, err)

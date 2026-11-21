@@ -55,8 +55,6 @@ func MayDiagnoseStatementConstant(expr *plan.Expr) bool {
 			types.T(fn.Args[0].Typ.Id).IsMySQLString() &&
 			(target.ToType().IsNumeric() ||
 				(fn.Args[0].GetP() != nil && target != types.T_any && !target.IsMySQLString()))
-	case INTERNAL_JSON_COMPARISON_PARAM, INTERNAL_JSON_ORDERING_PARAM:
-		return true
 	default:
 		return false
 	}
