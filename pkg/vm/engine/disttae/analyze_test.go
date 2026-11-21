@@ -17,6 +17,8 @@ package disttae
 import (
 	"context"
 	"crypto/sha256"
+	"math"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,6 +31,154 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAnalyzeRowDecisionsMatchVisibleIdentity(t *testing.T) {
+	seed := sha256.Sum256([]byte("sample across column passes"))
+	r := analyzeSelectedRange{rowThreshold: [16]byte{128}}
+	cache := new(analyzeRowDecisions)
+	r.block.BlockID[0] = 1
+	foreign := r.block.BlockID
+	foreign[0]++
+	require.Equal(t, analyzestats.RetainRow(seed, nil, r.rowThreshold, false), r.retainRow(&seed, nil, cache))
+	// Gaps and different order model readers after visibility filtering. IDs
+	// that cannot be represented by this block's bitmap must never alias it.
+	for pass := range 2 {
+		for i := range 201 {
+			offset := uint32(2 * i)
+			if pass == 1 {
+				offset = 400 - offset
+			}
+			for _, id := range []types.Rowid{
+				types.NewRowid(&r.block.BlockID, offset),
+				types.NewRowid(&foreign, offset),
+				types.NewRowid(&r.block.BlockID, objectio.BlockMaxRows+offset),
+			} {
+				want := analyzestats.RetainRow(seed, id[:], r.rowThreshold, false)
+				require.Equal(t, want, r.retainRow(&seed, id[:], cache))
+			}
+		}
+	}
+}
+
+func BenchmarkAnalyzeRowDecisions(b *testing.B) {
+	seed := sha256.Sum256([]byte("column passes"))
+	r := analyzeSelectedRange{rowThreshold: [16]byte{17}}
+	ids := make([]types.Rowid, objectio.BlockMaxRows)
+	for i := range ids {
+		ids[i] = types.NewRowid(&r.block.BlockID, uint32(i))
+	}
+	for _, mode := range []string{"uncached", "cached"} {
+		b.Run(mode, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				var cache *analyzeRowDecisions
+				if mode == "cached" {
+					cache = new(analyzeRowDecisions)
+				}
+				for range 23 {
+					for i := range ids {
+						r.retainRow(&seed, ids[i][:], cache)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestAnalyzeIntegerDomainRequiresCompleteCoverage(t *testing.T) {
+	zm := index.NewZM(types.T_int64, 0)
+	newValue := func(v int64) { index.UpdateZM(zm, types.EncodeInt64(&v)) }
+	require.True(t, math.IsInf(integerDomainWidth(zm), 1))
+	newValue(-2)
+	newValue(3)
+	ndvs := map[string]float64{"k": 20}
+	domains := []analyzeIntegerDomain{{name: "k", zm: zm}}
+	id := objectio.NewObjectid()
+	obj := objectio.NewObjectStatsWithObjectID(&id, false, true, false)
+	objectio.SetObjectStatsExtent(obj, objectio.NewExtent(1, 2, 3, 4))
+	objectio.SetObjectStatsBlkCnt(obj, 1)
+	objectio.SetObjectStatsRowCnt(obj, 2)
+	blocks := objectio.ObjectStatsToBlockInfoSlice(obj, true)
+	// Logical cost is per distinct persisted object, not per block or column.
+	id2 := objectio.NewObjectid()
+	obj2 := objectio.NewObjectStatsWithObjectID(&id2, false, true, false)
+	objectio.SetObjectStatsExtent(obj2, objectio.NewExtent(1, 5, 7, 9))
+	objectio.SetObjectStatsBlkCnt(obj2, 1)
+	objectio.SetObjectStatsRowCnt(obj2, 2)
+	blocks.AppendBlockInfo(blocks.Get(1))
+	second := objectio.ObjectStatsToBlockInfoSlice(obj2, false)
+	blocks.AppendBlockInfo(second.Get(0))
+	locs, ok := analyzeDomainLocations(t.Context(), blocks, 10, 2)
+	require.True(t, ok)
+	require.Len(t, locs, 2)
+	for _, b := range []struct {
+		bytes   uint64
+		objects int
+	}{{9, 2}, {10, 1}} {
+		locs, ok = analyzeDomainLocations(t.Context(), blocks, b.bytes, b.objects)
+		require.False(t, ok)
+		require.Empty(t, locs)
+	}
+	// Uninspected persisted rows could contain new values.
+	boundAnalyzeDomains(t.Context(), blocks, nil, 0, domains, ndvs)
+	require.Equal(t, 20., ndvs["k"])
+	// With only the fully traversed memory range, the inclusive width is safe.
+	require.True(t, blocks.Get(0).IsMemBlk())
+	boundAnalyzeDomains(t.Context(), blocks[:objectio.BlockInfoSize], nil, 0, domains, ndvs)
+	require.Equal(t, 6., ndvs["k"])
+	newValue(math.MaxInt64)
+	require.True(t, math.IsInf(integerDomainWidth(zm), 1))
+}
+
+func TestAnalyzeDecisionShardAcrossPasses(t *testing.T) {
+	// Slot zero represents the mem range, which stays uncached. Vary the
+	// partition between passes, and end the budget inside a worker's slice.
+	seed := sha256.Sum256([]byte("same snapshot"))
+	for _, limit := range []int{0, 4, 8} {
+		cache := make([]analyzeRowDecisions, limit)
+		for pass, spans := range [][][2]int{{{1, 3}, {3, 6}, {6, 8}}, {{1, 5}, {5, 8}}} {
+			var group sync.WaitGroup
+			for _, span := range spans {
+				group.Go(func() {
+					shard := analyzeDecisionShard(cache, span[0], span[1])
+					if len(shard) != cap(shard) {
+						t.Error("shard includes capacity owned by another worker")
+					}
+					for j := span[0]; j < span[1]; j++ {
+						r := analyzeSelectedRange{rowThreshold: [16]byte{117}}
+						r.block.BlockID = types.BuildTestBlockid(int64(j), 0)
+						var memo *analyzeRowDecisions
+						if j-span[0] < len(shard) {
+							memo = &shard[j-span[0]]
+						}
+						for i := range 64 {
+							offset := uint32(i)
+							if pass != 0 {
+								offset = 63 - offset
+							}
+							id := types.NewRowid(&r.block.BlockID, offset)
+							want := analyzestats.RetainRow(seed, id[:], r.rowThreshold, false)
+							if got := r.retainRow(&seed, id[:], memo); got != want {
+								t.Errorf("block=%d row=%d want=%t got=%t", j, offset, want, got)
+								return
+							}
+						}
+					}
+				})
+			}
+			group.Wait()
+			for i := range cache {
+				want := ^uint64(0)
+				if i == 0 {
+					want = 0
+				}
+				if cache[i].known[0] != want {
+					t.Fatalf("limit=%d block=%d known=%x", limit, i, cache[i].known[0])
+				}
+			}
+		}
+	}
+}
 
 func TestSelectAnalyzeRangesIsBoundedAndDeterministic(t *testing.T) {
 	objectID := objectio.NewObjectid()

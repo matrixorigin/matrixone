@@ -30,6 +30,10 @@ var (
 
 type ValueHash [16]byte
 
+// SampleSketchCapacity is the maximum number of distinct hashes tracked per
+// default AUTO column. Smaller explicit budgets retain their exact-map policy.
+const SampleSketchCapacity = 1 << 15
+
 func HashValue(canonicalValue []byte) ValueHash {
 	sum := sha256.Sum256(canonicalValue)
 	var result ValueHash
@@ -57,6 +61,7 @@ func HashTypedValue(typeID uint32, width, scale int32, canonicalValue []byte) Va
 // maxValues is a hard per-frame bound; a frame that crosses it is disabled
 // rather than partially published.
 type NDVAccumulator struct {
+	sketch    *incidenceSketch
 	maxValues uint64
 	fullScan  *hll.Sketch
 
@@ -72,6 +77,9 @@ type NDVAccumulator struct {
 }
 
 func NewNDVAccumulator(maxValues uint64) *NDVAccumulator {
+	if maxValues >= SampleSketchCapacity {
+		return &NDVAccumulator{sketch: &incidenceSketch{k: SampleSketchCapacity}}
+	}
 	return &NDVAccumulator{
 		maxValues:       maxValues,
 		rowCounts:       make(map[ValueHash]uint64),
@@ -89,6 +97,10 @@ func NewFullScanNDVAccumulator() *NDVAccumulator {
 func (a *NDVAccumulator) ObserveSampleValue(value ValueHash) error {
 	if a == nil {
 		return ErrAccumulatorLimit
+	}
+	if a.sketch != nil {
+		a.sampleRows++
+		return nil
 	}
 	if a.fullScan != nil {
 		a.sampleRows++
@@ -128,6 +140,9 @@ func (a *NDVAccumulator) BeginIncidenceBlock() error {
 		return ErrAccumulatorState
 	}
 	a.blockOpen = true
+	if a.sketch != nil {
+		return nil
+	}
 	if a.fullScan != nil {
 		return nil
 	}
@@ -144,6 +159,10 @@ func (a *NDVAccumulator) BeginIncidenceBlock() error {
 func (a *NDVAccumulator) ObserveIncidenceValue(value ValueHash) error {
 	if a == nil || !a.blockOpen {
 		return ErrAccumulatorState
+	}
+	if a.sketch != nil {
+		a.sketch.add(binary.LittleEndian.Uint64(value[:]), int64(a.incidenceBlocks), 1)
+		return nil
 	}
 	if a.incidenceErr != nil {
 		return a.incidenceErr
@@ -170,6 +189,9 @@ func (a *NDVAccumulator) EndIncidenceBlock() error {
 	}
 	a.blockOpen = false
 	a.incidenceBlocks++
+	if a.sketch != nil {
+		return nil
+	}
 	if a.fullScan != nil {
 		return nil
 	}
@@ -194,13 +216,24 @@ func (a *NDVAccumulator) EndIncidenceBlock() error {
 }
 
 func (a *NDVAccumulator) Merge(other *NDVAccumulator) error {
-	if a == nil || other == nil || a.blockOpen || other.blockOpen ||
-		(a.fullScan == nil) != (other.fullScan == nil) ||
-		(a.fullScan == nil && a.maxValues != other.maxValues) {
+	if a == nil || other == nil || a == other || a.blockOpen || other.blockOpen ||
+		(a.sketch == nil) != (other.sketch == nil) || (a.fullScan == nil) != (other.fullScan == nil) ||
+		a.maxValues != other.maxValues || math.MaxUint64-a.sampleRows < other.sampleRows ||
+		math.MaxUint64-a.incidenceBlocks < other.incidenceBlocks {
 		return ErrAccumulatorState
 	}
-	if math.MaxUint64-a.sampleRows < other.sampleRows || math.MaxUint64-a.incidenceBlocks < other.incidenceBlocks {
-		return ErrAccumulatorState
+	if a.sketch != nil {
+		if a.sketch.k != other.sketch.k {
+			return ErrAccumulatorState
+		}
+		tag := -1 - int64(a.incidenceBlocks)
+		for _, c := range other.sketch.nodes {
+			a.sketch.add(c.hash, tag, c.n)
+		}
+		a.sketch.truncated = a.sketch.truncated || other.sketch.truncated
+		a.incidenceBlocks += other.incidenceBlocks
+		a.sampleRows += other.sampleRows
+		return nil
 	}
 	a.sampleRows += other.sampleRows
 	a.incidenceBlocks += other.incidenceBlocks
@@ -260,6 +293,17 @@ func (a *NDVAccumulator) Estimate(
 	}
 	if !finiteNonNegative(populationNonNull) {
 		return NDVEstimate{}, ErrInvalidNDVInput
+	}
+	if a.sketch != nil {
+		if !blockSample.valid() || blockSample.Numerator == 0 || populationNonNull > 0 && len(a.sketch.nodes) == 0 {
+			return NDVEstimate{}, ErrInvalidNDVInput
+		}
+		lower := float64(len(a.sketch.nodes))
+		upper := max(populationNonNull, lower, float64(a.sampleRows))
+		return NDVEstimate{
+			Algorithm: "NDV_BOTTOM_K_BLOCK_DUJ1_V1", Point: a.sketch.point(upper, blockSample.Float64()),
+			ObservedLower: lower, RelationalUpper: upper,
+		}, nil
 	}
 	if a.fullScan != nil {
 		population := math.Max(populationNonNull, 0)
@@ -340,4 +384,98 @@ func (a *NDVAccumulator) IncidenceStateError() error {
 		return ErrAccumulatorState
 	}
 	return a.incidenceErr
+}
+
+type entry struct {
+	hash    uint64
+	last, n int64
+	next    uint32
+}
+
+// A max-heap bounds the retained hashes; bucket chains locate duplicates
+// without allocating per value. Entry indices remain stable during eviction.
+type incidenceSketch struct {
+	k           int
+	nodes       []entry
+	heads, heap []uint32
+	truncated   bool
+}
+
+func (s *incidenceSketch) add(x uint64, block, inc int64) {
+	if s.heads == nil {
+		s.heads = make([]uint32, 2*s.k)
+		s.heap = make([]uint32, 0, s.k)
+		s.nodes = make([]entry, 0, s.k)
+	}
+	if len(s.heap) == s.k && x > s.nodes[s.heap[0]].hash {
+		s.truncated = true
+		return
+	}
+	bucket := x % uint64(len(s.heads))
+	for link := s.heads[bucket]; link != 0; link = s.nodes[link-1].next {
+		c := &s.nodes[link-1]
+		if c.hash == x {
+			if c.last != block {
+				c.n += inc
+				c.last = block
+			}
+			return
+		}
+	}
+	var slot uint32
+	if len(s.nodes) < s.k {
+		slot = uint32(len(s.nodes))
+		s.nodes = append(s.nodes, entry{})
+		s.heap = append(s.heap, slot)
+		i := len(s.heap) - 1
+		for i > 0 {
+			p := (i - 1) / 2
+			if s.nodes[s.heap[p]].hash >= x {
+				break
+			}
+			s.heap[i] = s.heap[p]
+			i = p
+		}
+		s.heap[i] = slot
+	} else {
+		s.truncated = true
+		slot = s.heap[0]
+		ptr := &s.heads[s.nodes[slot].hash%uint64(len(s.heads))]
+		for *ptr != slot+1 {
+			ptr = &s.nodes[*ptr-1].next
+		}
+		*ptr = s.nodes[slot].next
+		i := 0
+		for i*2+1 < len(s.heap) {
+			j := i*2 + 1
+			if j+1 < len(s.heap) && s.nodes[s.heap[j+1]].hash > s.nodes[s.heap[j]].hash {
+				j++
+			}
+			if x >= s.nodes[s.heap[j]].hash {
+				break
+			}
+			s.heap[i] = s.heap[j]
+			i = j
+		}
+		s.heap[i] = slot
+	}
+	s.nodes[slot] = entry{hash: x, last: block, n: inc, next: s.heads[bucket]}
+	s.heads[bucket] = slot + 1
+}
+func (s *incidenceSketch) point(pop float64, q float64) float64 {
+	var n, f1 float64
+	for _, c := range s.nodes {
+		n += float64(c.n)
+		if c.n == 1 {
+			f1++
+		}
+	}
+	if n == 0 {
+		return 0
+	}
+	d := float64(len(s.nodes))
+	if s.truncated {
+		d = float64(s.k-1) * math.Exp2(64) / float64(s.nodes[s.heap[0]].hash)
+	}
+	return min(float64(pop), max(d, d*n/(n-f1+q*f1)))
 }

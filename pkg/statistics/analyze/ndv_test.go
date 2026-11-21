@@ -244,6 +244,37 @@ func TestNDVAccumulatorSeparatesRowsAndBlockPresence(t *testing.T) {
 	require.Equal(t, float64(4), estimate.Point)
 }
 
+func TestBottomKMergeCountsBlockPresenceAcrossEvictions(t *testing.T) {
+	// The global bottom three ranks are 1, 2, 3. Their block counts are
+	// respectively 2, 2, 1, irrespective of duplicate rows and local evictions.
+	makePart := func(blocks ...[]uint64) *NDVAccumulator {
+		a := &NDVAccumulator{sketch: &incidenceSketch{k: 3}}
+		for _, block := range blocks {
+			require.NoError(t, a.BeginIncidenceBlock())
+			for _, rank := range block {
+				var h ValueHash
+				binary.LittleEndian.PutUint64(h[:], rank<<60)
+				require.NoError(t, a.ObserveIncidenceValue(h))
+			}
+			require.NoError(t, a.EndIncidenceBlock())
+		}
+		return a
+	}
+	l, r := []uint64{7, 4, 3, 2, 1, 1}, []uint64{8, 6, 1, 2, 2}
+	for _, blocks := range [][2][]uint64{{l, r}, {r, l}} {
+		merged := makePart(blocks[0])
+		require.NoError(t, merged.Merge(makePart(blocks[1])))
+		for _, a := range []*NDVAccumulator{merged, makePart(blocks[0], blocks[1])} {
+			v, err := a.Estimate(100, MustFraction(1, 2))
+			require.NoError(t, err)
+			require.Equal(t, 3., v.ObservedLower)
+			require.InDelta(t, (2.*16/3)*5/4.5, v.Point, 1e-12)
+			_, err = a.Estimate(100, MustFraction(0, 1))
+			require.ErrorIs(t, err, ErrInvalidNDVInput)
+		}
+	}
+}
+
 func TestFullScanNDVAccumulatorIsBoundedAndMergeable(t *testing.T) {
 	const distinct = 100_000
 	left := NewFullScanNDVAccumulator()
