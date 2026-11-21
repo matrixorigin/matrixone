@@ -156,7 +156,7 @@ func TestPR32002ReviewBoundaries(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, "select d from decimals").Scan(&assigned))
 		require.Equal(t, "12.3", assigned)
 
-		for _, source := range []string{"0xfff", "X'0FFF'", "0b111111111111", "b'111111111111'", "'9999tail'"} {
+		for _, source := range []string{"0xfff", "(0xfff)", "X'0FFF'", "0b111111111111", "b'111111111111'", "'9999tail'"} {
 			_, err := conn.ExecContext(ctx, "insert into decimals values ("+source+")")
 			require.Error(t, err, source)
 			exec("delete from decimals")
@@ -165,6 +165,26 @@ func TestPR32002ReviewBoundaries(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "select d from decimals").Scan(&assigned))
 			require.Equal(t, "999.9", assigned, source)
 		}
+		exec("delete from decimals")
+		exec("insert ignore into decimals values (1),((0xfff))")
+		func() {
+			warnings, err := conn.QueryContext(ctx, "show warnings")
+			require.NoError(t, err)
+			defer warnings.Close()
+			require.True(t, warnings.Next())
+			var level, message string
+			var code uint16
+			require.NoError(t, warnings.Scan(&level, &code, &message))
+			require.Equal(t, "Warning", level)
+			require.Equal(t, uint16(moerr.ER_WARN_DATA_OUT_OF_RANGE), code)
+			require.Equal(t, "Out of range value for column 'decimal' at row 2", message)
+			require.False(t, warnings.Next())
+			require.NoError(t, warnings.Err())
+		}()
+		var minimum, maximum string
+		require.NoError(t, conn.QueryRowContext(ctx, "select min(d),max(d) from decimals").Scan(&minimum, &maximum))
+		require.Equal(t, "1.0", minimum)
+		require.Equal(t, "999.9", maximum)
 		exec("set session sql_mode=''")
 		exec("create table unsigned_decimal (d numeric(4,1) unsigned)")
 		exec("insert into unsigned_decimal values ('-9999tail')")

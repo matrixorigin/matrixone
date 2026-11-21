@@ -2512,7 +2512,11 @@ func buildValueScan(
 				// and pass through unsigned-domain admission; the const fast
 				// path materializes the target type directly and would bypass
 				// the admission composition.
-				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {
+				literal := r[i]
+				if colTyp.Oid.IsDecimal() {
+					literal = unwrapParenExpr(literal)
+				}
+				if nv, ok := literal.(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
 						return nil, err

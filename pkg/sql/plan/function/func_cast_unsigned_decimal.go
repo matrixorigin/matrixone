@@ -301,7 +301,7 @@ func appendUnsignedDecimalOutOfRangeWarning(proc *process.Process, column string
 	}
 	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 		appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
-			fmt.Sprintf("Out of range value for column '%s' at row %d", column, row+1))
+			fmt.Sprintf("Out of range value for column '%s' at row %d", column, proc.WarningRowOffset+row+1))
 	}
 }
 

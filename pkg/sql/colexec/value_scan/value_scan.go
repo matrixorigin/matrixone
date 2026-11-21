@@ -43,7 +43,9 @@ func evalRowsetData(proc *process.Process, rowsetExpr []*plan.RowsetExpr, vec *v
 	}
 	var inputWindow *batch.Batch
 	var inputWindowRow int32 = -1
+	previousWarningRowOffset := proc.WarningRowOffset
 	defer func() {
+		proc.WarningRowOffset = previousWarningRowOffset
 		if inputWindow != nil {
 			inputWindow.Clean(nil)
 		}
@@ -85,6 +87,7 @@ func evalRowsetData(proc *process.Process, rowsetExpr []*plan.RowsetExpr, vec *v
 			}
 			bats = []*batch.Batch{inputWindow}
 		}
+		proc.WarningRowOffset = uint64(rowPos)
 		val, err := expr.Eval(proc, bats, nil)
 		if err != nil {
 			return err
