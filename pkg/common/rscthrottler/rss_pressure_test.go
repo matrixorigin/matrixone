@@ -16,11 +16,15 @@ package rscthrottler
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/KimMachineGun/automemlimit/memlimit"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/shirou/gopsutil/v3/process"
 	"github.com/stretchr/testify/require"
 )
@@ -298,6 +302,92 @@ func TestRSSRefreshOrdersByRSSRead(t *testing.T) {
 
 	cn.refreshMemory(readRSS, func() (uint64, error) { return 1000, nil })
 	require.Equal(t, []int64{rssCacheHardTarget}, targets, "a newer measurement uses its own ceiling")
+}
+
+func TestRSSRefreshRejectsIncompleteCeiling(t *testing.T) {
+	walk := make(chan context.Context, 1)
+	c := rssPressureController{
+		setTarget:   func(int64, time.Time) {},
+		clearTarget: func() {},
+		evict:       func(ctx context.Context, _ int64) { walk <- ctx; <-ctx.Done() },
+		free:        func() {},
+	}
+	cn, workspace := c.attach(), c.attach()
+	defer cn.Close()
+	defer workspace.Close()
+	readRSS := func() (*process.MemoryInfoStat, error) { return &process.MemoryInfoStat{RSS: 950}, nil }
+	m1, m2 := &memThrottler{rssPressure: cn}, &memThrottler{rssPressure: workspace}
+	m1.reserved.Store(1000)
+	m2.reserved.Store(1000)
+	m1.refreshMemory(readRSS, func() (uint64, error) { return 1000, nil })
+	ctx := receivePressureEvent(t, walk)
+	c.mu.Lock()
+	last, expires := c.lastSample, c.expires
+	c.mu.Unlock()
+	m2.refreshMemory(readRSS, func() (uint64, error) { return 0, errors.New("cgroup read failed") })
+	m2.refreshMemory(readRSS, func() (uint64, error) { return 0, nil })
+	c.mu.Lock()
+	state, afterLast, afterExpires := c.state, c.lastSample, c.expires
+	c.mu.Unlock()
+	require.Equal(t, rssPressureHard, state)
+	require.Equal(t, last, afterLast)
+	require.Equal(t, expires, afterExpires)
+	require.NoError(t, ctx.Err())
+	require.Equal(t, objectio.TotalMem(), m2.actualTotalMemory.Load())
+	m2.refreshMemory(func() (*process.MemoryInfoStat, error) { return &process.MemoryInfoStat{RSS: 700}, nil }, func() (uint64, error) { return 1000, nil })
+	receivePressureEvent(t, ctx.Done())
+	c.mu.Lock()
+	state = c.state
+	c.mu.Unlock()
+	require.Equal(t, rssPressureNone, state)
+}
+
+func TestRSSRefreshAcceptsNoCgroupLimit(t *testing.T) {
+	total := objectio.TotalMem()
+	require.Greater(t, total, uint64(100))
+	for _, noLimit := range []error{memlimit.ErrNoLimit, memlimit.ErrNoCgroup, memlimit.ErrCgroupsNotSupported} {
+		t.Run(noLimit.Error(), func(t *testing.T) {
+			targets := make(chan int64, 1)
+			c := rssPressureController{
+				setTarget:   func(target int64, _ time.Time) { targets <- target },
+				clearTarget: func() {},
+				evict:       func(context.Context, int64) {},
+				free:        func() {},
+			}
+			source := c.attach()
+			defer source.Close()
+			m := &memThrottler{rssPressure: source}
+			m.reserved.Store(int64(total))
+			m.refreshMemory(func() (*process.MemoryInfoStat, error) {
+				return &process.MemoryInfoStat{RSS: total - total/20}, nil
+			}, func() (uint64, error) { return 0, fmt.Errorf("wrapped: %w", noLimit) })
+			require.Equal(t, rssCacheHardTarget, receivePressureEvent(t, targets))
+		})
+	}
+}
+
+func TestRSSRefreshUsesResolvedUnlimitedHostCeiling(t *testing.T) {
+	total := objectio.TotalMem()
+	require.Greater(t, total, uint64(2000))
+	c := rssPressureController{
+		setTarget:   func(int64, time.Time) { t.Error("stale local limit triggered pressure") },
+		clearTarget: func() {},
+		evict:       func(context.Context, int64) {},
+		free:        func() {},
+	}
+	source := c.attach()
+	defer source.Close()
+	m := &memThrottler{rssPressure: source}
+	m.refreshMemoryWithPressure(
+		func() (*process.MemoryInfoStat, error) { return &process.MemoryInfoStat{RSS: 950}, nil },
+		func() (uint64, error) { return 1000, nil },
+		func(uint64, error) (uint64, error) { return 0, memlimit.ErrNoLimit },
+	)
+	require.Equal(t, uint64(1000), m.actualTotalMemory.Load())
+	c.mu.Lock()
+	state := c.state
+	c.mu.Unlock()
+	require.Equal(t, rssPressureNone, state)
 }
 
 func receivePressureEvent[T any](t *testing.T, ch <-chan T) T {

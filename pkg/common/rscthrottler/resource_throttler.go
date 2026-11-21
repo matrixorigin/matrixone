@@ -15,6 +15,7 @@
 package rscthrottler
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -129,12 +130,20 @@ func (m *memThrottler) refresh(force bool) {
 	if m.proc == nil {
 		m.proc, _ = process.NewProcess(int32(os.Getpid()))
 	}
-	m.refreshMemory(m.proc.MemoryInfo, memlimit.FromCgroup)
+	m.refreshMemoryWithPressure(m.proc.MemoryInfo, memlimit.FromCgroup, resolvePressureCgroup)
 }
 
 func (m *memThrottler) refreshMemory(
 	readRSS func() (*process.MemoryInfoStat, error),
 	readCgroup func() (uint64, error),
+) {
+	m.refreshMemoryWithPressure(readRSS, readCgroup, nil)
+}
+
+func (m *memThrottler) refreshMemoryWithPressure(
+	readRSS func() (*process.MemoryInfoStat, error),
+	readCgroup func() (uint64, error),
+	resolvePressure func(uint64, error) (uint64, error),
 ) {
 	prevRSS := m.rss.Load()
 	prevBase := m.rssReservedBase.Load()
@@ -180,15 +189,32 @@ func (m *memThrottler) refreshMemory(
 
 	m.cgroup.Store(cgroup)
 	m.total.Store(total)
+	var pressureResolutionErr error
 	if rssErr != nil {
 		err = rssErr
 	} else if m.rssPressure != nil {
-		m.rssPressure.observe(sample.at, sample.rss, int64(physicalLimit), sample.reservedAfter, sample.live)
+		pressureLimit, pressureErr := cgroup, err
+		if resolvePressure != nil {
+			pressureLimit, pressureErr = resolvePressure(cgroup, err)
+		}
+		if pressureErr == nil && pressureLimit != 0 {
+			if total != 0 {
+				pressureLimit = min(pressureLimit, total)
+			}
+			m.rssPressure.observe(sample.at, sample.rss, int64(pressureLimit), sample.reservedAfter, sample.live)
+		} else if errors.Is(pressureErr, memlimit.ErrNoLimit) ||
+			errors.Is(pressureErr, memlimit.ErrNoCgroup) ||
+			errors.Is(pressureErr, memlimit.ErrCgroupsNotSupported) {
+			m.rssPressure.observe(sample.at, sample.rss, int64(total), sample.reservedAfter, sample.live)
+		} else if pressureErr != nil && resolvePressure != nil {
+			pressureResolutionErr = pressureErr
+		}
 	}
 	logutil.Info(
 		fmt.Sprintf("%s-Refresh", MemoryThrottlerLogHeader),
 		zap.String("detail", m.String()),
 		zap.Error(err),
+		zap.NamedError("pressure-ceiling", pressureResolutionErr),
 	)
 }
 
