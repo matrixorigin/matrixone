@@ -859,6 +859,16 @@ func TestProxyExactRowsUseOwnerThroughUnlock(t *testing.T) {
 		require.NoError(t, err)
 		_, err = client.Lock(ctx, table, rows[:1], proxyTxn, shared.WithExactRows())
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
+		// Restore replays both grants in one transaction. Pin the route on
+		// the ordinary request while a different transaction uses the proxy.
+		restoreTxn := newTestTxnID(4)
+		restoreShared := shared
+		restoreShared.BypassLocalProxy = true
+		_, err = client.Lock(ctx, table, rows[:1], restoreTxn, restoreShared)
+		require.NoError(t, err)
+		_, err = client.Lock(ctx, table, rows, restoreTxn, restoreShared.WithExactRows())
+		require.NoError(t, err)
+		require.NoError(t, client.Unlock(ctx, restoreTxn, timestamp.Timestamp{}))
 		require.NoError(t, client.Unlock(ctx, proxyTxn, timestamp.Timestamp{}))
 		exclusive := newTestRowExclusiveOptions()
 		exclusive.Policy = pb.WaitPolicy_FastFail

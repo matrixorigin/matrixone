@@ -2751,17 +2751,16 @@ func TestExactRowDoesNotJoinSharedRange(t *testing.T) {
 
 func TestExactRowWireMode(t *testing.T) {
 	for _, mode := range []pb.LockMode{pb.LockMode_Shared, pb.LockMode_Exclusive} {
-		ordinary := pb.LockOptions{Granularity: pb.Granularity_Row, Mode: mode}
-		require.Equal(t, ordinary, ordinary.ForRemoteLock().FromRemoteLock())
-		exact := ordinary.WithExactRows()
-		wire := exact.ForRemoteLock()
-		payload, err := wire.Marshal()
-		require.NoError(t, err)
-		var received pb.LockOptions
-		require.NoError(t, received.Unmarshal(payload))
-		// A receiver that only understands the original Mode field waits for a
-		// covering shared range. A current receiver restores shared point locks.
-		require.Equal(t, pb.LockMode_Exclusive, received.Mode)
-		require.Equal(t, exact, received.FromRemoteLock())
+		for _, exact := range []bool{false, true} {
+			sent := pb.LockOptions{Mode: mode, ExactRows: exact, BypassLocalProxy: true}
+			for _, method := range []pb.Method{pb.Method_Lock, pb.Method_ForwardLock} {
+				req := pb.Request{Method: method, Lock: pb.LockRequest{Options: sent}}
+				payload, err := req.Marshal()
+				require.NoError(t, err)
+				var received pb.Request
+				require.NoError(t, received.Unmarshal(payload))
+				require.Equal(t, sent, received.Lock.Options)
+			}
+		}
 	}
 }

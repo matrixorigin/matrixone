@@ -25,18 +25,22 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
 
-func startAccountLockCluster(t *testing.T, cnCount int, budget, maxSlice toml.ByteSize) embed.Cluster {
+func startAccountLockCluster(t *testing.T, cnCount int, configs ...lockservice.Config) embed.Cluster {
 	t.Helper()
+	nextCN := 0
 	cluster, err := embed.StartTestCluster(embed.WithCNCount(cnCount), embed.WithPreStart(func(s embed.ServiceOperator) {
 		if s.ServiceType() == metadata.ServiceType_CN {
+			locks := configs[nextCN]
+			nextCN++
 			s.Adjust(func(cfg *embed.ServiceConfig) {
-				cfg.CN.LockService.MaxLockRowCount = budget
-				cfg.CN.LockService.MaxFixedSliceSize = maxSlice
+				cfg.CN.LockService.MaxLockRowCount = locks.MaxLockRowCount
+				cfg.CN.LockService.MaxFixedSliceSize = locks.MaxFixedSliceSize
+				cfg.CN.LockService.EnableRemoteLocalProxy = locks.EnableRemoteLocalProxy
 				cfg.CN.SQLAddress = fmt.Sprintf("127.0.0.1:%d", cfg.CN.Frontend.Port)
 				cfg.CN.Frontend.SkipCheckUser = false
 			})
@@ -60,7 +64,7 @@ func openAccountLockSQL(t *testing.T, cluster embed.Cluster, index int) (*sql.DB
 }
 
 func TestDropAccountWithMinimumRowLockCount(t *testing.T) {
-	cluster := startAccountLockCluster(t, 1, 1, 0)
+	cluster := startAccountLockCluster(t, 1, lockservice.Config{MaxLockRowCount: 1})
 	db, _ := openAccountLockSQL(t, cluster, 0)
 	ctx := t.Context()
 	exec := func(stmt string) {
@@ -93,7 +97,8 @@ func TestDropAccountWithMinimumRowLockCount(t *testing.T) {
 
 func TestAlterPublicationExplicitTargetLockScope(t *testing.T) {
 	const budget = 16
-	cluster := startAccountLockCluster(t, 2, budget, 0)
+	locks := lockservice.Config{MaxLockRowCount: budget}
+	cluster := startAccountLockCluster(t, 2, locks, locks)
 	left, leftID := openAccountLockSQL(t, cluster, 0)
 	right, rightID := openAccountLockSQL(t, cluster, 1)
 	ctx := t.Context()
@@ -226,7 +231,8 @@ func TestAlterPublicationExplicitTargetLockScope(t *testing.T) {
 
 func TestCreatePublicationBeyondLockSliceCapacity(t *testing.T) {
 	const maxSlice = 128
-	cluster := startAccountLockCluster(t, 2, 16, maxSlice)
+	locks := lockservice.Config{MaxLockRowCount: 16, MaxFixedSliceSize: maxSlice}
+	cluster := startAccountLockCluster(t, 2, locks, locks)
 	owner, _ := openAccountLockSQL(t, cluster, 0)
 	publisher, _ := openAccountLockSQL(t, cluster, 1)
 	ctx := t.Context()
@@ -261,4 +267,86 @@ func TestCreatePublicationBeyondLockSliceCapacity(t *testing.T) {
 	var remaining int
 	require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_subs where pub_account_id=0 and pub_name='wide_pub' and status=0").Scan(&remaining))
 	require.Equal(t, len(names)-2, remaining)
+}
+
+func TestOrdinaryUpdateSharedMetadataRange(t *testing.T) {
+	cluster := startAccountLockCluster(t, 1, lockservice.Config{MaxLockRowCount: 4, MaxFixedSliceSize: 16})
+	db, _ := openAccountLockSQL(t, cluster, 0)
+	ctx := t.Context()
+	_, err := db.ExecContext(ctx, "create database meta_range")
+	require.NoError(t, err)
+	tables := make([]string, 17)
+	for i := range tables {
+		name := fmt.Sprintf("meta_range.t%02d", i)
+		tables[i] = name
+		_, err = db.ExecContext(ctx, "create table "+name+" (id int primary key, v int)")
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "insert into "+name+" values (1,1), (2,1)")
+		require.NoError(t, err)
+	}
+	update := func(target string, sources []string, id int) string {
+		parts := make([]string, len(sources))
+		for i, source := range sources {
+			parts[i] = "select v from " + source
+		}
+		return fmt.Sprintf("update %s set v=v+1 where id=%d and (select sum(v) from (%s) s)>0",
+			target, id, strings.Join(parts, " union all "))
+	}
+	first, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer first.Rollback()
+	// Both requests have the same metadata endpoints. Their writes target
+	// different tables so only shared metadata admission is under test.
+	_, err = first.ExecContext(ctx, update(tables[0], []string{tables[1], tables[2], tables[3], tables[16]}, 1))
+	require.NoError(t, err)
+	second, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer second.Rollback()
+	updateCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	_, err = second.ExecContext(updateCtx, update(tables[16], tables[:16], 2))
+	require.NoError(t, err)
+	require.NoError(t, second.Commit())
+	require.NoError(t, first.Commit())
+	var a, b int
+	require.NoError(t, db.QueryRowContext(ctx, "select a.v,b.v from meta_range.t00 a,meta_range.t16 b where a.id=1 and b.id=2").Scan(&a, &b))
+	require.Equal(t, 2, a)
+	require.Equal(t, 2, b)
+}
+
+func TestRestoreClusterRemotePublicationLocks(t *testing.T) {
+	cluster := startAccountLockCluster(t, 1, lockservice.Config{}, lockservice.Config{EnableRemoteLocalProxy: true})
+	owner, ownerCN := openAccountLockSQL(t, cluster, 0)
+	ctx := t.Context()
+	exec := func(db *sql.DB, statement string) {
+		t.Helper()
+		_, err := db.ExecContext(ctx, statement)
+		require.NoError(t, err, statement)
+	}
+	exec(owner, "create account restore_sub admin_name 'admin' identified by '111'")
+	exec(owner, "create database restore_pub_db")
+	exec(owner, "create table restore_pub_db.t (id int primary key)")
+	exec(owner, "create publication a_all database restore_pub_db account all")
+	exec(owner, "create publication b_named database restore_pub_db account restore_sub")
+	exec(owner, "create snapshot pub_lock_snapshot for cluster")
+	exec(owner, "drop publication a_all")
+	exec(owner, "drop publication b_named")
+
+	var tableID uint64
+	require.NoError(t, owner.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where account_id=0 and reldatabase='mo_catalog' and relname='mo_account'").Scan(&tableID))
+	ls := lockservice.GetLockServiceByServiceID(ownerCN)
+	bind, err := ls.GetLockTableBind(0, tableID)
+	require.NoError(t, err)
+	require.Equal(t, ls.GetServiceID(), bind.ServiceID)
+	// Start the proxy CN after the first CN owns mo_account. Starting them
+	// together lets either CN win the catalog binding during bootstrap.
+	require.NoError(t, cluster.StartNewCNService(1))
+	restore, restoreCN := openAccountLockSQL(t, cluster, 1)
+	require.True(t, lockservice.GetLockServiceByServiceID(restoreCN).GetConfig().EnableRemoteLocalProxy)
+	exec(restore, "restore cluster {snapshot='pub_lock_snapshot'}")
+	var pubs, grants int
+	require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_pubs where account_id=0 and database_name='restore_pub_db' and pub_name in ('a_all','b_named')").Scan(&pubs))
+	require.NoError(t, owner.QueryRowContext(ctx, "select count(distinct pub_name) from mo_catalog.mo_subs where pub_account_id=0 and pub_name in ('a_all','b_named') and sub_account_name='restore_sub' and status=0").Scan(&grants))
+	require.Equal(t, 2, pubs)
+	require.Equal(t, 2, grants)
 }

@@ -145,7 +145,7 @@ func (l Lock) tryHold(
 	// A point requester must not inherit another transaction's covering range.
 	// The final range holder wakes all waiters and removes both endpoints, so
 	// retrying the seek after notification can acquire the actual point.
-	if c.opts.RequiresExactRows() && !l.isLockRow() {
+	if c.opts.ExactRows && !l.isLockRow() {
 		return false, false, nil
 	}
 	if l.canHold(c) {

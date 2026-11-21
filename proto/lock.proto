@@ -32,13 +32,6 @@ enum Granularity {
   Range = 1;
 }
 
-// RowLockPolicy preserves the requested point-lock mode across lock-service versions.
-enum RowLockPolicy {
-  Ordinary = 0;
-  ExactShared = 1;
-  ExactExclusive = 2;
-}
-
 // LockMode lock mode
 enum LockMode {
   Exclusive = 0;
@@ -70,7 +63,9 @@ message LockOptions {
   int64               LockWaitTimeout   = 10;
   int64               LockWaitDeadline  = 11;
   // Internal catalog DDL must acquire individual rows even under contention.
-  RowLockPolicy       RowPolicy         = 12;
+  bool                ExactRows         = 12;
+  // This transaction uses the remote lock owner throughout catalog maintenance.
+  bool                BypassLocalProxy  = 13;
 }
 
 // LockTable describes which CN manages a Table's Locks.

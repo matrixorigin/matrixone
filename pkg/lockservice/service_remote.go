@@ -434,7 +434,7 @@ func (s *service) handleRemoteLock(
 		txn,
 		req.Lock.Rows,
 		LockOptions{
-			LockOptions:                req.Lock.Options.FromRemoteLock(),
+			LockOptions:                req.Lock.Options,
 			async:                      true,
 			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
 		},
@@ -557,7 +557,7 @@ func (s *service) handleForwardLock(
 		txn,
 		req.Lock.Rows,
 		LockOptions{
-			LockOptions:                req.Lock.Options.FromRemoteLock(),
+			LockOptions:                req.Lock.Options,
 			async:                      true,
 			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
 		},

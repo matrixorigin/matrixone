@@ -63,21 +63,22 @@ func (lp *localLockTableProxy) lock(
 	rows [][]byte,
 	options LockOptions,
 	cb func(pb.Result, error)) {
-	// Once a transaction takes exact locks, subsequent requests on this
-	// table must use the same remote owner, including ordinary shared reads.
+	// Restore goes directly to the owner from its first request, even when
+	// an ordinary shared request precedes an exact point in the same transaction.
 	// Otherwise a proxy Skip/ReplaceTo on unlock could strand a direct lock.
 	bind := lp.getBind()
 	h := txn.getHoldLocksLocked(bind.Group)
 	ownerOnly, routed := h.proxyOwnerOnly[bind.Table]
-	if options.RequiresExactRows() && routed && !ownerOnly {
+	requiresOwner := options.ExactRows || options.BypassLocalProxy
+	if requiresOwner && routed && !ownerOnly {
 		cb(pb.Result{}, moerr.NewTxnNeedRetry(ctx))
 		return
 	}
-	if !routed && (options.RequiresExactRows() || options.Mode == pb.LockMode_Shared) {
+	if !routed && (requiresOwner || options.Mode == pb.LockMode_Shared) {
 		if h.proxyOwnerOnly == nil {
 			h.proxyOwnerOnly = make(map[uint64]bool)
 		}
-		ownerOnly = options.RequiresExactRows()
+		ownerOnly = requiresOwner
 		h.proxyOwnerOnly[bind.Table] = ownerOnly
 	}
 	if ownerOnly || options.Mode != pb.LockMode_Shared {

@@ -521,7 +521,7 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 	case pb.Granularity_Row:
 		return l.acquireRowLockLocked(c)
 	case pb.Granularity_Range:
-		if c.opts.RequiresExactRows() {
+		if c.opts.ExactRows {
 			return moerr.NewLockNeedUpgradeNoCtx()
 		}
 		if len(c.rows) == 0 ||
@@ -551,7 +551,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 						l.bind.Group,
 						l.bind,
 						[][]byte{key},
-						l.logger, true, c.opts.RequiresExactRows(),
+						l.logger, true, c.opts.ExactRows,
 					)
 				},
 			)
@@ -652,7 +652,7 @@ func (l *localLockTable) addRowLockLocked(
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	err := c.txn.addLocks(l.bind.Group, l.bind, [][]byte{row}, l.logger, true, c.opts.RequiresExactRows())
+	err := c.txn.addLocks(l.bind.Group, l.bind, [][]byte{row}, l.logger, true, c.opts.ExactRows)
 	if err != nil {
 		return err
 	}

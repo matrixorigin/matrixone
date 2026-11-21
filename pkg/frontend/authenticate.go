@@ -75,10 +75,11 @@ import (
 )
 
 type TenantInfo struct {
-	mu          sync.Mutex
-	Tenant      string
-	User        string
-	DefaultRole string
+	taskServiceUser bool // internal task-storage connection, assigned at registration
+	mu              sync.Mutex
+	Tenant          string
+	User            string
+	DefaultRole     string
 
 	TenantID      uint32
 	UserID        uint32
@@ -109,6 +110,7 @@ func (ti *TenantInfo) Copy() *TenantInfo {
 	ti.mu.Lock()
 	defer ti.mu.Unlock()
 	return &TenantInfo{
+		taskServiceUser:     ti.taskServiceUser,
 		Tenant:              ti.Tenant,
 		User:                ti.User,
 		DefaultRole:         ti.DefaultRole,
@@ -485,13 +487,24 @@ func setSpecialUser(userName string, user *initUser) {
 // SetSpecialUser saves the user for initialization
 // !!!NOTE: userName must not contain Colon ':'
 func SetSpecialUser(username string, password []byte) {
+	registerSpecialUser(username, password, false)
+}
+
+// SetTaskServiceUser identifies the SQL connection that maintains task catalogs,
+// including CDC cleanup performed in a separate transaction during account removal.
+func SetTaskServiceUser(username string, password []byte) {
+	registerSpecialUser(username, password, true)
+}
+
+func registerSpecialUser(username string, password []byte, taskService bool) {
 	acc := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          username,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        math.MaxUint32,
-		DefaultRoleID: moAdminRoleID,
+		taskServiceUser: taskService,
+		Tenant:          sysAccountName,
+		User:            username,
+		DefaultRole:     moAdminRoleName,
+		TenantID:        sysAccountID,
+		UserID:          math.MaxUint32,
+		DefaultRoleID:   moAdminRoleID,
 	}
 
 	user := &initUser{

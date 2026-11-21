@@ -694,13 +694,14 @@ func doLock(
 
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
-		Granularity:     g,
-		Policy:          proc.GetWaitPolicy(),
-		Mode:            opts.mode,
-		TableDefChanged: opts.changeDef,
-		Sharding:        opts.sharding,
-		Group:           opts.group,
-		SnapShotTs:      txnOp.CreateTS(),
+		Granularity:      g,
+		Policy:           proc.GetWaitPolicy(),
+		Mode:             opts.mode,
+		TableDefChanged:  opts.changeDef,
+		Sharding:         opts.sharding,
+		Group:            opts.group,
+		SnapShotTs:       txnOp.CreateTS(),
+		BypassLocalProxy: txnOp.TxnOptions().CatalogMaintenance(),
 	}
 	if opts.requireExactRows {
 		options = options.WithExactRows()

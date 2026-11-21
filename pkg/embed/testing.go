@@ -178,7 +178,7 @@ func prepareBasicCluster(c Cluster) {
 	// register special user for task framework
 	username := "task_user"
 	password := "task_pass"
-	frontend.SetSpecialUser(username, []byte(password))
+	frontend.SetTaskServiceUser(username, []byte(password))
 	_ = holder.Create(logservicepb.CreateTaskService{
 		User: logservicepb.TaskTableUser{
 			Username: username,

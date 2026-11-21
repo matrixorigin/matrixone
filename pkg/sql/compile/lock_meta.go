@@ -200,7 +200,10 @@ func (l *LockMeta) lockMetaRows(e engine.Engine, proc *process.Process, rel engi
 		return lockKeys(keys)
 	}
 	limit := max(1, int(service.GetConfig().MaxLockRowCount))
-	if keys.Length() <= limit || !proc.GetTxnOperator().Txn().IsPessimistic() {
+	// Restore and the task service can revisit shared catalog metadata.
+	// Ordinary DML submits all keys so LockRows can choose the range up front.
+	txnOp := proc.GetTxnOperator()
+	if keys.Length() <= limit || !txnOp.Txn().IsPessimistic() || !txnOp.TxnOptions().CatalogMaintenance() {
 		return lockKeys(keys)
 	}
 	defer b.SetVector(0, keys)
