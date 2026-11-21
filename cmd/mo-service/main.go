@@ -266,7 +266,11 @@ func startService(
 		return err
 	}
 	if st == metadata.ServiceType_PYTHON_UDF && cfg.legacyPythonUdfServer {
-		logutil.GetGlobalLogger().Warn("skipping retired [python-udf-server] role; use [python-udf-worker] and explicitly enable the CN Python UDF client to use Arrow Flight")
+		const migration = "retired [python-udf-server] role; use [python-udf-worker] and explicitly enable the CN Python UDF client to use Arrow Flight"
+		if serviceLifecycle != nil && serviceLifecycle.pythonWorkerRequired {
+			return errors.New(migration)
+		}
+		logutil.GetGlobalLogger().Warn("skipping " + migration)
 		return nil
 	}
 

@@ -58,8 +58,11 @@ K bounds active Gateway invocations, H bounds handler execution slots, and W=1
 bounds stream batch progress. Admission, group/member state, terminal records and
 per-account/per-owner quotas have independent owners and budgets. Protocol steps
 include EndInput, InputConsumed, result ACK and Finish/FinishAck. Started work is
-never transparently replayed. Cancellation and capability refresh waiters progress
-independently; generation fences reject stale completions.
+never transparently replayed. After an execution attempt that can call Python,
+the SQL coordinator returns a transaction conflict to the client instead of
+restarting the statement. Database rollback cannot undo handler side effects.
+Cancellation and capability refresh waiters progress independently; generation
+fences reject stale completions.
 
 Process cleanup must cover both termination and reaping. Handler sessions own
 pipes, child/watchdog processes and H/quota until cleanup succeeds; partial
@@ -78,12 +81,13 @@ Compose configures a separate worker endpoint for each CN. The `PYTHON_UDF`
 mo-service role wraps a Go Supervisor; the standalone worker image runs Python
 under init. These are different launch forms for the same Flight service.
 
-During a shutdown upgrade, a retained v4.2.6 `[python-udf-server]` configuration
-logs a migration diagnostic and skips the retired role. To use the development
-adapter, configure `[python-udf-worker]` and explicitly enable the CN Python
-client. In a shared launch, worker startup failures and unexpected exits
-leave ordinary SQL available. A dedicated `mo-service -cfg` Python worker
-exits with an error in those cases so its supervisor can restart the service.
+During a shutdown upgrade, a shared launch logs a migration diagnostic and
+skips a retained `[python-udf-server]` role. A dedicated `mo-service -cfg`
+worker exits with the migration error for that configuration. To use the
+development adapter, configure `[python-udf-worker]` and explicitly enable the
+CN Python client. Worker startup failures and unexpected exits leave ordinary
+SQL available in a shared launch and cause a dedicated worker to exit with an
+error so its supervisor can restart it.
 
 Gateway and worker must match the current capability contract, including tzdata.
 The worker image replaces its entire zoneinfo tree from the MO runtime base;

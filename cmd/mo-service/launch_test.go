@@ -714,6 +714,7 @@ func TestServiceClusterValidationAndErrors(t *testing.T) {
 }
 
 func TestLaunchSkipsReleasedPythonServerRole(t *testing.T) {
+	setLaunchTestHooks(t)
 	// v4.2.6, etc/launch-with-python-udf-server/python-udf-server.toml.
 	const legacy = `service-type = "PYTHON_UDF"
 
@@ -723,7 +724,13 @@ address = "127.0.0.1:50051"
 path = "pkg/udf/pythonservice/pyserver"
 `
 	file := writeLaunchTestFile(t, "python-udf-server.toml", legacy)
+	serviceLifecycle = newServiceSupervisor()
+	launchStartService = startService
 	require.NoError(t, startPythonUdfServiceCluster(t.Context(), []string{file}, nil, nil))
+	serviceLifecycle.pythonWorkerRequired = true
+	dedicated := NewConfig()
+	require.NoError(t, parseConfigFromFile(file, dedicated))
+	require.ErrorContains(t, startService(t.Context(), dedicated, nil, nil), "use [python-udf-worker]")
 
 	// An explicit replacement block takes precedence in a migrated file.
 	cfg := NewConfig()

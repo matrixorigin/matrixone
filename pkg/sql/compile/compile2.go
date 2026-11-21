@@ -54,6 +54,26 @@ type runSQLCoordinatorWithSQL interface {
 	CancelAndWaitRunningSQLWithSQL(ctx context.Context, keepToken uint64, currentSQL string) error
 }
 
+var errPythonRoutineInRetryPlan = errors.New("retry plan contains a Python routine")
+
+// A worker can have run on another CN even when this coordinator only saw a
+// transaction conflict. Inspect the failed attempt's bound expressions,
+// including a DDL's source query, before allowing a new execution generation.
+func planMayReplayPython(p *plan.Plan) bool {
+	query := p.GetQuery()
+	if query == nil {
+		query = p.GetDdl().GetQuery()
+	}
+	return plan.VisitExpressionsInOwner(query, func(root *plan.Expr) error {
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			if expr.GetF().GetRoutineCall().GetPython() != nil {
+				return errPythonRoutineInRetryPlan
+			}
+			return nil
+		})
+	}) != nil
+}
+
 func statementHasSQLCalcFoundRows(stmt tree.Statement) bool {
 	selectStmt, ok := stmt.(*tree.Select)
 	if !ok || selectStmt == nil {
@@ -671,7 +691,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if err == nil {
 			allocationAttempt, err = runC.beginAllocationAccountAttempt()
 		}
-		if err == nil {
+		executionMayHaveStarted := err == nil
+		if executionMayHaveStarted {
 			err = runC.runPipelineAttempt(func() error {
 				preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
 				attemptPreRunWall = preRunWall
@@ -717,7 +738,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// Seal before cancellation: a late terminal RPC must not leak diagnostics.
 		warnings.discard()
 		c.fatalLog(retryTimes, err)
-		if !c.canRetry(err) {
+		if !c.canRetry(err) || (executionMayHaveStarted && planMayReplayPython(runC.pn)) {
 			// runOnce may return after a local or coordinator branch fails while a
 			// remote branch is still unwinding. Quiesce every producer before the
 			// attempt-owned sink releases its file and reservations; a generation

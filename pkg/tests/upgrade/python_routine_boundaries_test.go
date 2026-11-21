@@ -139,6 +139,61 @@ func TestPythonRoutineSQLBoundaries(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, "select octet_length(valid_blob())").Scan(&n))
 		require.Equal(t, 1, n)
 	})
+	t.Run("read_committed_conflict_does_not_replay_handler", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		_, err := conn.ExecContext(ctx, "create table retry_probe (id int primary key, value int)")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "insert into retry_probe values (1, 1)")
+		require.NoError(t, err)
+
+		calls := filepath.Join(directory, "retry-calls")
+		release := filepath.Join(directory, "retry-release")
+		source := fmt.Sprintf(`def f(ctx, value):
+    from pathlib import Path
+    from time import monotonic, sleep
+    with Path(%q).open("a") as calls:
+        calls.write(str(value) + chr(10))
+    if value == 1:
+        end = monotonic() + 15
+        while not Path(%q).exists():
+            if monotonic() >= end:
+                raise RuntimeError("update did not commit")
+            sleep(0.01)
+    return True
+`, calls, release)
+		_, err = conn.ExecContext(ctx,
+			"create function retry_predicate(value int) returns bool language python as '"+
+				strings.ReplaceAll(source, "'", "''")+"' handler 'f' mode scalar")
+		require.NoError(t, err)
+
+		done := make(chan struct{})
+		var deleteErr error
+		go func() {
+			defer close(done)
+			_, deleteErr = conn.ExecContext(ctx, "delete from retry_probe where retry_predicate(value)")
+		}()
+		defer func() {
+			cancel()
+			<-done
+		}()
+		require.Eventually(t, func() bool {
+			got, err := os.ReadFile(calls)
+			return err == nil && string(got) == "1\n"
+		}, 10*time.Second, 10*time.Millisecond, "DELETE never entered its first predicate invocation")
+		_, err = db.ExecContext(ctx, "update python_boundary.retry_probe set value = 2 where id = 1")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(release, nil, 0600))
+		<-done
+
+		got, err := os.ReadFile(calls)
+		require.NoError(t, err)
+		require.Equal(t, "1\n", string(got), "one DELETE must not replay the Python handler")
+		require.ErrorContains(t, deleteErr, "txn need retry in rc mode")
+		var value int
+		require.NoError(t, conn.QueryRowContext(ctx, "select value from retry_probe where id = 1").Scan(&value))
+		require.Equal(t, 2, value)
+	})
 	t.Run("bounded_scalar_and_vector", func(t *testing.T) {
 		for _, mode := range []string{"scalar", "vector"} {
 			for _, family := range []string{"tinytext", "tinyblob"} {
