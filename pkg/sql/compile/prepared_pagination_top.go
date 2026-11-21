@@ -18,7 +18,6 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -55,13 +54,19 @@ func preparedPaginationBound(proc *process.Process, expr *plan.Expr, maxValue ui
 				return 0, false, false
 			}
 			pos := int(param.Pos)
-			kind := proc.GetPrepareParamKind(pos)
-			if (kind != vector.PrepareParamNone && kind != vector.PrepareParamInteger && kind != vector.PrepareParamBoolean) ||
-				proc.GetPrepareParamIsBin(pos) || proc.GetPrepareParamIsBinaryString(pos) ||
-				!preparedPaginationSourceDomain(proc.GetPrepareParamType(pos), &maxValue, true) {
+			sourceType := types.T_any
+			binarySource := false
+			if typed := proc.GetTypedPrepareParam(pos); typed != nil {
+				sourceType = typed.GetType().Oid
+				binarySource = types.StaticStringDomain(*typed.GetType()) == types.StringDomainBinary
+			}
+			kind, _ := types.StringConversionKindForType(sourceType)
+			if (kind != types.StringConversionString && kind != types.StringConversionInteger && kind != types.StringConversionBoolean) ||
+				proc.GetPrepareParamIsBin(pos) || binarySource ||
+				!preparedPaginationSourceDomain(sourceType, &maxValue, true) {
 				return 0, false, false
 			}
-			if kind == vector.PrepareParamBoolean {
+			if kind == types.StringConversionBoolean {
 				maxValue = min(maxValue, 1)
 			}
 			value, err := proc.GetPrepareParamsAt(pos)

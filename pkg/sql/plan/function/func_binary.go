@@ -1650,7 +1650,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			return err
 		}
 	}
-	return setConcatWsStringResultDomain(ivecs, result, proc)
+	return nil
 }
 
 func TSToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2597,7 +2597,7 @@ func dateInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	rss := vector.MustFixedColNoTypeCheck[types.Date](rsVec)
 	rsNull := rsVec.GetNulls()
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 
@@ -2768,7 +2768,7 @@ func timestampInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		loc = time.Local
 	}
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 	for i := uint64(0); i < uint64(length); i++ {
@@ -2884,7 +2884,7 @@ func timeInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	values := vector.MustFixedColNoTypeCheck[types.Time](rsv)
 	nullsVec := rsv.GetNulls()
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(nullsVec, 0, uint64(length))
+		nullsVec.AddRange(0, uint64(length))
 		return nil
 	}
 	for i := uint64(0); i < uint64(length); i++ {
@@ -2941,7 +2941,7 @@ func timeIntervalRaw(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	values := vector.MustFixedColNoTypeCheck[types.Time](rs.GetResultVector())
 	nullsVec := rs.GetResultVector().GetNulls()
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(nullsVec, 0, uint64(length))
+		nullsVec.AddRange(0, uint64(length))
 		return nil
 	}
 	for i := uint64(0); i < uint64(length); i++ {
@@ -7576,7 +7576,7 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
@@ -7593,12 +7593,12 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			}
 			continue
 		}
-		binary := binaryStringAt(ivecs[0], int(i), uniformBinary, perRow)
+		binary := uniformBinary
 		if err = rs.AppendBytes(substringByDomain(v, s, 0, false, binary), false); err != nil {
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 // Binary SUBSTRING uses byte offsets. Routing binary values through the text
@@ -7697,7 +7697,7 @@ func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
@@ -7715,12 +7715,12 @@ func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			}
 			continue
 		}
-		binary := binaryStringAt(ivecs[0], int(i), uniformBinary, perRow)
+		binary := uniformBinary
 		if err = rs.AppendBytes(substringByDomain(v, s, l, true, binary), false); err != nil {
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func substringByDomain(value []byte, start, length int64, withLength, binary bool) []byte {
@@ -7858,7 +7858,7 @@ func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -8714,8 +8714,8 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 	// INSTR's domain routing and MySQL's both-argument comparison resolution.
 	fold := likeFoldModeFor(ivecs[1].GetType().Charset)
 	listType := *ivecs[1].GetType()
-	needleBinary, needlePerRow := stringDomainMode(ivecs[0])
-	listBinary, listPerRow := stringDomainMode(ivecs[1])
+	needleBinary := isBinaryStringVector(ivecs[0])
+	listBinary := isBinaryStringVector(ivecs[1])
 	needles := vector.GenerateFunctionStrParameter(ivecs[0])
 	lists := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[Tr](result)
@@ -8735,8 +8735,8 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 			continue
 		}
 		rowFold := fold != likeFoldNone &&
-			!binaryStringAt(ivecs[0], int(row), needleBinary, needlePerRow) &&
-			!binaryStringAt(ivecs[1], int(row), listBinary, listPerRow)
+			!needleBinary &&
+			!listBinary
 		// The needle's comparison representation is row-invariant: prepare
 		// it once and reuse it across every list member instead of folding
 		// or keying the needle again per member (issue #31175 review).
@@ -8825,7 +8825,7 @@ func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 	haystacks := vector.GenerateFunctionStrParameter(ivecs[0])
 	needles := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[int64](result)
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0])
 	caseInsensitive := types.IsCaseInsensitiveCollation(ivecs[0].GetType().Charset)
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
@@ -8842,7 +8842,7 @@ func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 			}
 			continue
 		}
-		binary := binaryStringAt(ivecs[0], int(row), uniformBinary, perRow)
+		binary := uniformBinary
 		rs.AppendMustValue(locateString(needle, haystack, 1, binary, caseInsensitive))
 	}
 	return nil
@@ -8852,7 +8852,7 @@ func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
@@ -8870,7 +8870,7 @@ func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			continue
 		}
 		var value []byte
-		if binaryStringAt(ivecs[0], int(i), uniformBinary, perRow) {
+		if uniformBinary {
 			value = v1[:prefixLength(len(v1), v2)]
 		} else {
 			value = functionUtil.QuickStrToBytes(evalLeft(functionUtil.QuickBytesToStr(v1), v2))
@@ -8879,7 +8879,7 @@ func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func prefixLength(total int, requested int64) int {
@@ -8907,7 +8907,7 @@ func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
@@ -8925,7 +8925,7 @@ func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			continue
 		}
 		var value []byte
-		if binaryStringAt(ivecs[0], int(i), uniformBinary, perRow) {
+		if uniformBinary {
 			count := prefixLength(len(v1), v2)
 			value = v1[len(v1)-count:]
 		} else {
@@ -8935,7 +8935,7 @@ func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func evalRight(str string, length int64) string {
@@ -10558,7 +10558,7 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 func writeReplaceBytes(dst, src, needle, replacement []byte) {
 	if len(needle) == 0 {
@@ -10632,7 +10632,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
 	p4 := vector.GenerateFunctionStrParameter(ivecs[3])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err = rs.AppendBytes(nil, true); err != nil {
@@ -10650,7 +10650,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			}
 			continue
 		}
-		binary := binaryStringAt(ivecs[0], int(i), uniformBinary, perRow)
+		binary := uniformBinary
 		size, start, end, raw := insertResultLayout(v1, pos, remove, v4)
 		if binary {
 			size, start, end, raw = insertBinaryResultLayout(v1, pos, remove, v4)
@@ -10680,7 +10680,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func insertBinaryResultLayout(source []byte, pos, remove int64, replacement []byte) (size, start, end int, raw bool) {
@@ -10739,7 +10739,7 @@ func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[2], result, proc)
+	return nil
 }
 
 func trimBoth(src, cuts string) string {
@@ -10801,7 +10801,7 @@ func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func SplitSingle(str, sep string, cnt uint32) (string, bool) {

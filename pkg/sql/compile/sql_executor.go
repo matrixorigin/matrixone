@@ -890,25 +890,6 @@ func resultCloneBytes(bat *batch.Batch, used, limit uint64) (uint64, error) {
 		if !charge(uint64(rows) * uint64(width)) {
 			return exceeded()
 		}
-		// Sidecars for flat vectors can expand to one entry per output row.
-		// Constants retain the exact source sidecars after broadcasting.
-		for _, n := range []int{len(vec.GetPrepareParamKinds()), len(vec.GetStringSources())} {
-			if n != 0 && !vec.IsConst() {
-				n = max(n, rows)
-			}
-			if !charge(uint64(n)) {
-				return exceeded()
-			}
-		}
-		if vec.HasBinaryStringMetadata() {
-			words := uint64(rows) / 64
-			if rows%64 != 0 {
-				words++
-			}
-			if words > ^uint64(0)/16 || !charge(words*16) {
-				return exceeded()
-			}
-		}
 		if !vec.GetType().IsVarlen() || rows == 0 || vec.IsConstNull() {
 			continue
 		}

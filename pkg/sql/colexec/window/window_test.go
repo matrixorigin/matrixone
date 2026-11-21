@@ -2669,14 +2669,6 @@ func TestCumulativePrefixWithinOutputChunk(t *testing.T) {
 				}
 			}
 			bat.SetRowCount(8)
-			if tc.function == "max" {
-				require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
-				require.NoError(t, input.SetStringSourceAtWithMP(6, types.StringSourceUserVariable, proc.Mp()))
-				require.NoError(t, input.SetPrepareParamKindAtWithMP(5, vector.PrepareParamInteger, proc.Mp()))
-				if tc.typ.IsVarlen() {
-					require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, proc.Mp()))
-				}
-			}
 			overload, err := function.GetFunctionByName(proc.Ctx, tc.function, []types.Type{tc.typ})
 			require.NoError(t, err)
 			expression := aggexec.MakeAggFunctionExpression(overload.GetEncodedOverloadID(), tc.distinct, []*plan.Expr{newColExprWithType(0, tc.typ)}, nil)
@@ -2708,9 +2700,6 @@ func TestCumulativePrefixWithinOutputChunk(t *testing.T) {
 					require.Equal(t, want[0].IsNull(uint64(expected)), got.IsNull(uint64(row)))
 					if !got.IsNull(uint64(row)) {
 						require.Equal(t, want[0].GetRawBytesAt(expected), got.GetRawBytesAt(row))
-						require.Equal(t, want[0].GetPrepareParamKindAt(expected), got.GetPrepareParamKindAt(row))
-						require.Equal(t, want[0].GetStringSourceAt(expected), got.GetStringSourceAt(row))
-						require.Equal(t, want[0].GetRuntimeStringDomainAt(expected), got.GetRuntimeStringDomainAt(row))
 					}
 				}
 				start = end

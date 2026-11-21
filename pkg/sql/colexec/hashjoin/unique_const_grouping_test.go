@@ -107,11 +107,6 @@ func TestHashJoinUniqueConstantGroupingSelections(t *testing.T) {
 						v = vector.NewConstNull(typ, 5, proc.Mp())
 					}
 					v.GetGrouping().Add(uint64(groupingRow))
-					if shape != "fixed" {
-						v.SetPrepareParamKind(vector.PrepareParamInteger)
-						v.SetIsBinaryString(true)
-						require.NoError(t, v.SetStringSource(types.StringSourceLiteral))
-					}
 					bat.Vecs[0] = v
 					bat.SetRowCount(5)
 					return bat
@@ -143,17 +138,12 @@ func TestHashJoinUniqueConstantGroupingSelections(t *testing.T) {
 						}
 						require.Equal(t, sourceRow == groupingRow, v.GetGrouping().Contains(uint64(row)), "side %d row %d", side, row)
 						require.Equal(t, shape == "null", v.IsNull(uint64(row)))
-						if shape != "fixed" {
-							require.Equal(t, types.StringSourceLiteral, v.GetStringSourceAt(row))
-						}
 						if shape == "null" {
 							continue
 						}
 						if shape == "fixed" {
 							require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](v, row))
 						} else {
-							require.Equal(t, vector.PrepareParamInteger, v.GetPrepareParamKindAt(row))
-							require.True(t, v.GetIsBinaryStringAt(row))
 							require.Equal(t, "constant payload", v.GetStringAt(row))
 						}
 					}

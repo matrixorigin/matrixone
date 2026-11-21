@@ -74,7 +74,7 @@ func TestConstantFoldRuleRetainsStandaloneInterval(t *testing.T) {
 	require.Same(t, expr, NewConstantFold(false).constantFold(expr, testutil.NewProcess(t)))
 }
 
-func TestGetConstantValue2PreservesAndValidatesLiteralStringSource(t *testing.T) {
+func TestGetConstantValue2AcceptsAndValidatesLiteralStringSource(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	vec := vector.NewVec(types.T_varchar.ToType())
 	defer vec.Free(proc.Mp())
@@ -104,7 +104,6 @@ func TestGetConstantValue2PreservesAndValidatesLiteralStringSource(t *testing.T)
 		require.NoError(t, err)
 		require.True(t, constant)
 		row := vec.Length() - 1
-		require.Equal(t, test.source, vec.GetStringSourceAt(row))
 		require.Equal(t, test.null, vec.IsNull(uint64(row)))
 	}
 
@@ -157,7 +156,6 @@ func TestGetConstantValue2PhysicalFamilySource(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, ok)
 				require.False(t, vec.IsNull(uint64(i)))
-				require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(i))
 			}
 			test.literal.Isnull = true
 			ok, err := GetConstantValue2(proc, expr, vec)
@@ -165,8 +163,6 @@ func TestGetConstantValue2PhysicalFamilySource(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, 3, vec.Length())
 			require.True(t, vec.IsNull(2))
-			require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(2))
-			require.Nil(t, vec.GetStringSources())
 
 			// A missing payload keeps the established fallback placeholder
 			// behavior; the DATETIME branch historically reports a constant NULL.
@@ -175,12 +171,6 @@ func TestGetConstantValue2PhysicalFamilySource(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, test.oid == types.T_datetime, ok)
 			require.Equal(t, 4, vec.Length())
-			wantSource := types.StringSourceExpression
-			if ok {
-				wantSource = types.StringSourceLiteral
-			}
-			require.Equal(t, wantSource, vec.GetStringSourceAt(3))
-			require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(2))
 			require.Equal(t, !vec.GetType().IsVarlen(), vec.IsNull(3))
 		})
 	}
@@ -206,7 +196,6 @@ func TestGetConstantValue2TemporalFallback(t *testing.T) {
 			require.False(t, ok)
 			require.Equal(t, 1, vec.Length())
 			require.True(t, vec.IsNull(0))
-			require.Equal(t, types.StringSourceExpression, vec.GetStringSourceAt(0))
 		})
 	}
 }
@@ -239,10 +228,8 @@ func TestGetConstantValue2UniformSourceAllocation(t *testing.T) {
 				t.Logf("rows=%d allocations=%d bytes=%d", n, stats.NumAlloc.Load()-allocs, stats.NumAllocBytes.Load()-bytes)
 				require.Equal(t, allocs, stats.NumAlloc.Load())
 				require.Equal(t, bytes, stats.NumAllocBytes.Load())
-				require.Nil(t, vec.GetStringSources())
 				require.Equal(t, n, vec.Length())
 				for i := 0; i < n; i++ {
-					require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(i))
 					if oid == types.T_varchar {
 						require.Equal(t, "inline", vec.GetStringAt(i))
 					} else {

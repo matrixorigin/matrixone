@@ -83,13 +83,17 @@ func TestConstGroupingSelectionCopies(t *testing.T) {
 					case "batch-preflighted":
 						rows = []int64{1, 2, 3, 4}
 						flags := []uint8{1, 1, 1, 1}
-						require.NoError(t, dst.PreExtendSelectedBatch(source, 1, 4, flags, dst.Length()+4, mp))
-						err = dst.UnionBatchPreflighted(source, 1, 4, flags, mp)
+						var preflight SelectedBatchPreflight
+						preflight, err = dst.PreExtendSelectedBatch(source, 1, 4, flags, dst.Length()+4, mp)
+						require.NoError(t, err)
+						err = dst.UnionBatchPreflighted(source, 1, 4, flags, &preflight, mp)
 					case "batch-preflighted-flags":
 						rows = []int64{1, 2, 4}
 						flags := []uint8{1, 1, 0, 1}
-						require.NoError(t, dst.PreExtendSelectedBatch(source, 1, 4, flags, dst.Length()+3, mp))
-						err = dst.UnionBatchPreflighted(source, 1, 4, flags, mp)
+						var preflight SelectedBatchPreflight
+						preflight, err = dst.PreExtendSelectedBatch(source, 1, 4, flags, dst.Length()+3, mp)
+						require.NoError(t, err)
+						err = dst.UnionBatchPreflighted(source, 1, 4, flags, &preflight, mp)
 					case "empty-flags":
 						err = dst.UnionBatch(source, 1, 4, []uint8{0, 0, 0, 0}, mp)
 					case "multi-control":

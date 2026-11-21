@@ -1,3 +1,5 @@
+// +gobra
+
 // Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +50,15 @@ ghost type BitModel domain {
 	}
 	axiom { // all ones shifted left
 		forall s uint64, k int :: {Bit(^uint64(0) << s, k)} 0 <= s && s < 64 && 0 <= k && k < 64 ==> Bit(^uint64(0) << s, k) == (k >= int(s))
+	}
+	axiom { // any word shifted left; Go shifts of 64 or more give zero
+		forall x, s uint64, k int :: {Bit(x << s, k)} 0 <= s && 0 <= k && k < 64 ==> Bit(x << s, k) == (k >= int(s) && Bit(x, k-int(s)))
+	}
+	axiom { // any word shifted right; Go shifts of 64 or more give zero
+		forall x, s uint64, k int :: {Bit(x >> s, k)} 0 <= s && 0 <= k && k < 64 ==> Bit(x >> s, k) == (k+int(s) < 64 && Bit(x, k+int(s)))
+	}
+	axiom { // one
+		forall k int :: {Bit(1, k)} 0 <= k && k < 64 ==> Bit(1, k) == (k == 0)
 	}
 	axiom { // all ones shifted right
 		forall s uint64, k int :: {Bit(^uint64(0) >> s, k)} 0 <= s && s < 64 && 0 <= k && k < 64 ==> Bit(^uint64(0) >> s, k) == (k < 64-int(s))

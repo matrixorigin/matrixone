@@ -20,7 +20,6 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -222,7 +221,7 @@ func TestTemporalFoldRefreshesPreparedTimestampScale(t *testing.T) {
 			require.Equal(t, rowResult.GetType().Scale, filter.GetF().Args[1].Typ.Scale)
 			require.Equal(t, rowData, filter.GetF().Args[1].GetFold().Data)
 			free()
-			nulls.Del(params.GetNulls(), 0)
+			params.GetNulls().Del(0)
 			require.NoError(t, vector.SetBytesAt(params, 0, []byte("3"), proc.Mp()))
 			for _, executor := range executors {
 				executor.ResetForNextQuery()

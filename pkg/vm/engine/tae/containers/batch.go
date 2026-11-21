@@ -129,7 +129,7 @@ func (bat *Batch) DeleteCnt() int {
 	if !bat.HasDelete() {
 		return 0
 	}
-	return int(bat.Deletes.GetCardinality())
+	return int(bat.Deletes.Count())
 }
 
 func (bat *Batch) Compact() {
@@ -162,7 +162,7 @@ func (bat *Batch) Allocated() int {
 	return allocated
 }
 
-func (bat *Batch) WindowDeletes(offset, length int, deep bool) *nulls.Bitmap {
+func (bat *Batch) WindowDeletes(offset, length int, deep bool) *nulls.Nulls {
 	if bat.Deletes.IsEmpty() || length <= 0 {
 		return nil
 	}
@@ -472,7 +472,7 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	if size == 0 {
 		return
 	}
-	bat.Deletes = &nulls.Bitmap{}
+	bat.Deletes = &nulls.Nulls{}
 	buf = make([]byte, size)
 	if _, err = io.ReadFull(r, buf); err != nil {
 		return
@@ -618,7 +618,7 @@ func (bat *Batch) ReadFromV2(r io.Reader) (n int64, err error) {
 	if size == 0 {
 		return
 	}
-	bat.Deletes = &nulls.Bitmap{}
+	bat.Deletes = &nulls.Nulls{}
 	buf = make([]byte, size)
 	if _, err = r.Read(buf); err != nil {
 		return

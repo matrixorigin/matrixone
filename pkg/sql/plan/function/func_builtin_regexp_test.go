@@ -799,72 +799,64 @@ func Test_BuiltIn_RegexpPositionAnchorPolicies(t *testing.T) {
 	}
 }
 
-func Test_BuiltIn_RegexpUsesRowStringDomainAndSurvivesRebind(t *testing.T) {
+func Test_BuiltIn_RegexpUsesStaticStringDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	op := newOpBuiltInRegexp()
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"中中", "中中"}, nil),
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"中", "中"}, nil),
-		NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
+	for _, tc := range []struct {
+		name      string
+		subject   types.Type
+		wantInstr int64
+	}{
+		{name: "binary", subject: types.T_varbinary.ToType(), wantInstr: 4},
+		{name: "text", subject: types.T_varchar.ToType(), wantInstr: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(tc.subject, []string{"中中", "中中"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"中", "中"}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
+			}
+
+			instr := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{tc.wantInstr, tc.wantInstr}, nil),
+				op.builtInRegexpInstr)
+			defer instr.Free()
+			ok, info := instr.Run()
+			require.True(t, ok, info)
+
+			substr := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中", "中"}, nil),
+				op.builtInRegexpSubstr)
+			defer substr.Free()
+			ok, info = substr.Run()
+			require.True(t, ok, info)
+
+			replace := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(tc.subject, []string{"中中", "中中"}, nil),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"中", "中"}, nil),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"X", "X"}, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1}, nil),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中X", "中X"}, nil),
+				op.builtInRegexpReplace)
+			defer replace.Free()
+			ok, info = replace.Run()
+			require.True(t, ok, info)
+		})
 	}
-
-	instr := NewFunctionTestCase(proc, inputs,
-		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{4, 2}, nil),
-		op.builtInRegexpInstr)
-	defer instr.Free()
-	require.NoError(t, instr.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
-	ok, info := instr.Run()
-	require.True(t, ok, info)
-
-	substr := NewFunctionTestCase(proc, inputs,
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中", "中"}, nil),
-		op.builtInRegexpSubstr)
-	defer substr.Free()
-	require.NoError(t, substr.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
-	ok, info = substr.Run()
-	require.True(t, ok, info)
-	require.True(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
-	require.False(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(1))
-
-	// Reuse one operator and result wrapper as prepared execution does. Resetting
-	// the parameter domain must change semantics and clear the old result domain.
-	substr.parameters[0].SetIsBinaryString(false)
-	substr.expected.wanted = []string{"中", "中"}
-	ok, info = substr.Run()
-	require.True(t, ok, info)
-	require.False(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
-	require.False(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(1))
-
-	substr.parameters[0].SetIsBinaryString(true)
-	ok, info = substr.Run()
-	require.True(t, ok, info)
-	require.True(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
-
-	replace := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"中中", "中中"}, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"中", "中"}, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"X", "X"}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1}, nil),
-		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中X", "中X"}, nil),
-		op.builtInRegexpReplace)
-	defer replace.Free()
-	require.NoError(t, replace.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
-	ok, info = replace.Run()
-	require.True(t, ok, info)
-	require.True(t, replace.GetResultVectorDirectly().GetIsBinaryStringAt(0))
-	require.False(t, replace.GetResultVectorDirectly().GetIsBinaryStringAt(1))
 }
 
 func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	varchar := types.T_varchar.ToType()
-	setFirstRowBinary := func(t *testing.T, testCase *FunctionTestCase, parameter int) {
-		t.Helper()
-		require.NoError(t, testCase.parameters[parameter].SetRuntimeStringDomainAtWithMP(
-			0, types.RuntimeStringBinary, proc.Mp()))
+	varbinary := types.T_varbinary.ToType()
+	typeFor := func(binary bool) types.Type {
+		if binary {
+			return varbinary
+		}
+		return varchar
 	}
 
 	for _, tc := range []struct {
@@ -875,77 +867,77 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 		{name: "not_regexp", fn: newOpBuiltInRegexp().builtInNotRegMatch},
 		{name: "regexp_like", fn: newOpBuiltInRegexp().builtInRegexpLike},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			want := []bool{true, false}
-			if tc.name == "not_regexp" {
-				want = []bool{false, true}
-			}
-			testCase := NewFunctionTestCase(proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(varchar, []string{"中", "中"}, nil),
-					NewFunctionTestInput(varchar, []string{"..", ".."}, nil),
-				},
-				NewFunctionTestResult(types.T_bool.ToType(), false, want, nil), tc.fn)
-			defer testCase.Free()
-			setFirstRowBinary(t, &testCase, 1)
-			ok, info := testCase.Run()
-			require.True(t, ok, info)
-		})
+		for _, binary := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/binary=%v", tc.name, binary), func(t *testing.T) {
+				want := binary
+				if tc.name == "not_regexp" {
+					want = !want
+				}
+				testCase := NewFunctionTestCase(proc,
+					[]FunctionTestInput{
+						NewFunctionTestInput(varchar, []string{"中"}, nil),
+						NewFunctionTestInput(typeFor(binary), []string{".."}, nil),
+					},
+					NewFunctionTestResult(types.T_bool.ToType(), false, []bool{want}, nil), tc.fn)
+				defer testCase.Free()
+				ok, info := testCase.Run()
+				require.True(t, ok, info)
+			})
+		}
 	}
 
-	instr := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(varchar, []string{"中中", "中中"}, nil),
-			NewFunctionTestInput(varchar, []string{"中", "中"}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
-		},
-		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{4, 2}, nil),
-		newOpBuiltInRegexp().builtInRegexpInstr)
-	defer instr.Free()
-	setFirstRowBinary(t, &instr, 1)
-	ok, info := instr.Run()
-	require.True(t, ok, info)
+	for _, binary := range []bool{true, false} {
+		wantInstr := int64(2)
+		if binary {
+			wantInstr = 4
+		}
+		instr := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(varchar, []string{"中中"}, nil),
+				NewFunctionTestInput(typeFor(binary), []string{"中"}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, nil),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{wantInstr}, nil),
+			newOpBuiltInRegexp().builtInRegexpInstr)
+		ok, info := instr.Run()
+		require.True(t, ok, info)
+		instr.Free()
 
-	substr := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(varchar, []string{"中中", "中中"}, nil),
-			NewFunctionTestInput(varchar, []string{"中", "中"}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
-		},
-		NewFunctionTestResult(varchar, false, []string{"中", "中"}, nil),
-		newOpBuiltInRegexp().builtInRegexpSubstr)
-	defer substr.Free()
-	setFirstRowBinary(t, &substr, 1)
-	ok, info = substr.Run()
-	require.True(t, ok, info)
-	require.True(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
-	require.False(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(1))
+		substr := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(varchar, []string{"中中"}, nil),
+				NewFunctionTestInput(typeFor(binary), []string{"中"}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, nil),
+			},
+			NewFunctionTestResult(varchar, false, []string{"中"}, nil),
+			newOpBuiltInRegexp().builtInRegexpSubstr)
+		ok, info = substr.Run()
+		require.True(t, ok, info)
+		substr.Free()
+	}
 
 	for _, tc := range []struct {
 		name            string
 		binaryParameter int
 		want            []string
-		wantBinary      bool
 	}{
-		{name: "subject selects binary matching", binaryParameter: 0, want: []string{"\xff\xff\xff", "X"}, wantBinary: true},
-		{name: "pattern selects binary matching", binaryParameter: 1, want: []string{"\xff\xff\xff", "X"}, wantBinary: true},
+		{name: "subject selects binary matching", binaryParameter: 0, want: []string{"\xff\xff\xff"}},
+		{name: "pattern selects binary matching", binaryParameter: 1, want: []string{"\xff\xff\xff"}},
 	} {
 		t.Run("regexp_replace_"+tc.name, func(t *testing.T) {
+			inputTypes := []types.Type{varchar, varchar, varbinary}
+			inputTypes[tc.binaryParameter] = varbinary
 			replace := NewFunctionTestCase(proc,
 				[]FunctionTestInput{
-					NewFunctionTestInput(varchar, []string{"中", "中"}, nil),
-					NewFunctionTestInput(varchar, []string{".", "."}, nil),
-					NewFunctionTestInput(varchar, []string{"\xff", "X"}, nil),
+					NewFunctionTestInput(inputTypes[0], []string{"中"}, nil),
+					NewFunctionTestInput(inputTypes[1], []string{"."}, nil),
+					NewFunctionTestInput(inputTypes[2], []string{"\xff"}, nil),
 				},
 				NewFunctionTestResult(varchar, false, tc.want, nil),
 				newOpBuiltInRegexp().builtInRegexpReplace)
 			defer replace.Free()
-			setFirstRowBinary(t, &replace, tc.binaryParameter)
-			setFirstRowBinary(t, &replace, 2)
 			ok, info := replace.Run()
 			require.True(t, ok, info)
-			require.Equal(t, tc.wantBinary, replace.GetResultVectorDirectly().GetIsBinaryStringAt(0))
-			require.False(t, replace.GetResultVectorDirectly().GetIsBinaryStringAt(1))
 		})
 	}
 
@@ -963,7 +955,7 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 			},
 		},
 		{
-			name: "five arguments", replacement: "中", want: "ä¸\u00ad",
+			name: "five arguments", replacement: "中", want: "ä¸­",
 			controlInputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
@@ -974,17 +966,15 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 			inputs := []FunctionTestInput{
 				NewFunctionTestInput(varchar, []string{"中"}, nil),
 				NewFunctionTestInput(varchar, []string{"."}, nil),
-				NewFunctionTestInput(varchar, []string{tc.replacement}, nil),
+				NewFunctionTestInput(varbinary, []string{tc.replacement}, nil),
 			}
 			inputs = append(inputs, tc.controlInputs...)
 			replace := NewFunctionTestCase(proc, inputs,
 				NewFunctionTestResult(varchar, false, []string{tc.want}, nil),
 				newOpBuiltInRegexp().builtInRegexpReplace)
 			defer replace.Free()
-			setFirstRowBinary(t, &replace, 2)
 			ok, info := replace.Run()
 			require.True(t, ok, info)
-			require.False(t, replace.GetResultVectorDirectly().GetIsBinaryStringAt(0))
 		})
 	}
 
@@ -995,15 +985,13 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 		[]FunctionTestInput{
 			NewFunctionTestInput(varchar, []string{"Ā"}, nil),
 			NewFunctionTestInput(varchar, []string{`\x{100}`}, nil),
-			NewFunctionTestInput(varchar, []string{"X"}, nil),
+			NewFunctionTestInput(varbinary, []string{"X"}, nil),
 		},
 		NewFunctionTestResult(varchar, false, []string{"X"}, nil),
 		newOpBuiltInRegexp().builtInRegexpReplace)
 	defer replaceWithUnicodePattern.Free()
-	setFirstRowBinary(t, &replaceWithUnicodePattern, 2)
-	ok, info = replaceWithUnicodePattern.Run()
+	ok, info := replaceWithUnicodePattern.Run()
 	require.True(t, ok, info)
-	require.False(t, replaceWithUnicodePattern.GetResultVectorDirectly().GetIsBinaryStringAt(0))
 }
 
 func TestRegexpBinaryBytesToText(t *testing.T) {
@@ -1753,35 +1741,26 @@ func Test_BuiltIn_RegularLike(t *testing.T) {
 
 }
 
-func Test_BuiltIn_RegexpLikeRebindsBinaryCaseSensitivity(t *testing.T) {
+func Test_BuiltIn_RegexpLikeBinaryCaseSensitivity(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	varchar := types.T_varchar.ToType()
-	testCase := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(varchar, []string{"É"}, nil),
-			NewFunctionTestInput(varchar, []string{"é"}, nil),
-			NewFunctionTestInput(varchar, []string{"i"}, nil),
-		},
-		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, nil),
-		newOpBuiltInRegexp().builtInRegexpLike)
-	defer testCase.Free()
-
-	testCase.parameters[0].SetIsBinaryString(true)
-	testCase.parameters[1].SetIsBinaryString(true)
-	ok, info := testCase.Run()
-	require.True(t, ok, info)
-
-	testCase.parameters[0].SetIsBinaryString(false)
-	testCase.parameters[1].SetIsBinaryString(false)
-	testCase.expected.wanted = []bool{true}
-	ok, info = testCase.Run()
-	require.True(t, ok, info)
-
-	testCase.parameters[0].SetIsBinaryString(true)
-	testCase.parameters[1].SetIsBinaryString(true)
-	testCase.expected.wanted = []bool{false}
-	ok, info = testCase.Run()
-	require.True(t, ok, info)
+	for _, tc := range []struct {
+		typ  types.Type
+		want bool
+	}{
+		{types.T_varbinary.ToType(), false},
+		{types.T_varchar.ToType(), true},
+	} {
+		testCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(tc.typ, []string{"É"}, nil),
+				NewFunctionTestInput(tc.typ, []string{"é"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"i"}, nil),
+			},
+			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{tc.want}, nil),
+			newOpBuiltInRegexp().builtInRegexpLike)
+		ok, info := testCase.RunAndFree()
+		require.True(t, ok, info, tc.typ.String())
+	}
 }
 
 func Test_BuiltIn_RegexpValueFunctionsRejectEmptyPattern(t *testing.T) {
@@ -1887,11 +1866,10 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 		t.Run("binary_pattern_null_subject/"+matchType, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, []FunctionTestInput{
 				nullText,
-				NewFunctionTestInput(text, []string{`^\x{100}`}, nil),
+				NewFunctionTestInput(types.T_varbinary.ToType(), []string{`^\x{100}`}, nil),
 				NewFunctionTestInput(text, []string{matchType}, nil),
 			}, NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil), newOpBuiltInRegexp().builtInRegexpLike)
 			defer tcc.Free()
-			require.NoError(t, tcc.parameters[1].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
 			_, err := tcc.DebugRun()
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "binary")
@@ -1899,10 +1877,9 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 	}
 	t.Run("valid_binary_pattern_null_subject", func(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, []FunctionTestInput{
-			nullText, NewFunctionTestInput(text, []string{`^a`}, nil),
+			nullText, NewFunctionTestInput(types.T_varbinary.ToType(), []string{`^a`}, nil),
 			NewFunctionTestInput(text, []string{"m"}, nil),
 		}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true}), newOpBuiltInRegexp().builtInRegexpLike)
-		require.NoError(t, tcc.parameters[1].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
 		ok, info := tcc.RunAndFree()
 		require.True(t, ok, info)
 	})
@@ -2941,20 +2918,6 @@ func Test_BuiltIn_LikeHonorsCollationCaseFolding(t *testing.T) {
 				NewFunctionTestInput(binary, []string{"A", "abc"}, nil),
 			},
 			[]bool{false, false}, nil)
-	})
-
-	t.Run("per row binary domain stays byte ordered", func(t *testing.T) {
-		tcc := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(text, []string{"a", "a"}, nil),
-				NewFunctionTestConstInput(text, []string{"A", "A"}, nil),
-			},
-			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, true}, nil),
-			newOpBuiltInRegexp().likeFn)
-		require.NoError(t, tcc.parameters[0].SetRuntimeStringDomainAtWithMP(
-			0, types.RuntimeStringBinary, proc.Mp()))
-		succeed, errInfo := tcc.RunAndFree()
-		require.True(t, succeed, errInfo)
 	})
 
 	t.Run("constant multi percent pattern folds subject", func(t *testing.T) {

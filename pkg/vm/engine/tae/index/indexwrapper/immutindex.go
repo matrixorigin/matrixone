@@ -51,7 +51,7 @@ func (idx ImmutIndex) BatchDedup(
 	rt *dbutils.Runtime,
 	isTombstone bool,
 	blkID uint32,
-) (sels *nulls.Bitmap, err error) {
+) (sels *nulls.Nulls, err error) {
 	var exist bool
 	if keysZM.Valid() {
 		if exist = idx.zm.FastIntersect(keysZM); !exist {

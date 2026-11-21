@@ -992,7 +992,7 @@ func spillBatchSizeWithLimit(
 			return 0, 0, moerr.NewInternalErrorNoCtx("invalid materialized sink spill vector data")
 		}
 		nullBytes := uint64(0)
-		if !vec.GetNulls().EmptyByFlag() {
+		if !vec.GetNulls().IsEmpty() {
 			nullBytes = uint64(nulls.Size(vec.GetNulls())) + 24
 		}
 		if nullBytes > math.MaxUint32 {
@@ -1028,15 +1028,7 @@ func spillBatchSizeWithLimit(
 			return 0, 0, err
 		}
 	}
-	metadataBytes, metadataErr := bat.PrepareParamKindMetadataSize()
-	if metadataErr != nil {
-		return 0, 0, metadataErr
-	}
-	serialized, err = addSpillBatchTail(
-		serialized,
-		uint64(len(bat.ExtraBuf)),
-		uint64(metadataBytes),
-	)
+	serialized, err = checkedAdd(serialized, uint64(len(bat.ExtraBuf)))
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1065,14 +1057,6 @@ func spillBatchSizeWithLimit(
 	}
 	scratch, err = checkedAdd(scratch, serialized)
 	return serialized, scratch, err
-}
-
-func addSpillBatchTail(serialized, extraBytes, metadataBytes uint64) (uint64, error) {
-	withExtra, err := checkedAdd(serialized, extraBytes)
-	if err != nil {
-		return 0, err
-	}
-	return checkedAdd(withExtra, metadataBytes)
 }
 
 func checkedAdd(values ...uint64) (uint64, error) {

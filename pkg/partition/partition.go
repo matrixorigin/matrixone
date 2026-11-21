@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -45,7 +44,7 @@ func genericPartition[T types.FixedSizeT](sels []int64, diffs []bool, partitions
 		if nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(nsp, uint64(sel))
+				isNull := nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else if !isNull {
@@ -112,7 +111,7 @@ func floatOrderPartition[T types.FixedSizeT](
 		if nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(nsp, uint64(sel))
+				isNull := nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else if !isNull {
@@ -177,7 +176,7 @@ func bytesPartitionBy(sels []int64, diffs []bool, partitions []int64, vec *vecto
 		if nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel].GetByteSlice(area)
-				isNull := nulls.Contains(nsp, uint64(sel))
+				isNull := nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else if !isNull && i > 0 {
@@ -231,7 +230,7 @@ func bytesOrderPartition(sels []int64, diffs []bool, partitions []int64, vec *ve
 		if nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel].GetByteSlice(area)
-				isNull := nulls.Contains(nsp, uint64(sel))
+				isNull := nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else if !isNull {
@@ -419,7 +418,7 @@ func jsonOrderPartition(
 		var previousNull bool
 		var havePrevious bool
 		for i, sel := range sels {
-			isNull := nulls.Contains(nsp, uint64(sel))
+			isNull := nsp.Contains(uint64(sel))
 			var current bytejson.ByteJson
 			var currentValid bool
 			if !isNull {

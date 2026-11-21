@@ -1145,13 +1145,20 @@ func TestExecutor_ExecSQLAfterTryConnUsesReuseQueryBuf(t *testing.T) {
 	err = executor.ExecSQL(context.Background(), nil, sqlBuf, false)
 	require.NoError(t, err)
 
-	select {
-	case query := <-server.queries:
-		require.Equal(t, "CREATE DATABASE cdc_regression", query)
-	case err := <-server.errs:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for COM_QUERY")
+	// The physical session first establishes the literal dialect assumed by
+	// convertColIntoSql, before any CDC statement is sent on it.
+	for _, want := range []string{
+		"SET sql_mode = " + sinkSessionSQLModeExpr,
+		"CREATE DATABASE cdc_regression",
+	} {
+		select {
+		case query := <-server.queries:
+			require.Equal(t, want, query)
+		case err := <-server.errs:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for COM_QUERY")
+		}
 	}
 }
 

@@ -81,6 +81,21 @@ func TestGobraBitModel(t *testing.T) {
 			}
 		}
 	}
+	for k := 0; k < 64; k++ {
+		if bit(1, k) != (k == 0) {
+			t.Fatalf("one: bit %d", k)
+		}
+	}
+	for _, a := range words {
+		for s := uint64(0); s < 70; s++ {
+			for k := 0; k < 64; k++ {
+				if bit(a<<s, k) != (k >= int(s) && bit(a, k-int(s))) ||
+					bit(a>>s, k) != (k+int(s) < 64 && bit(a, k+int(s))) {
+					t.Fatalf("general shift axiom fails for %#x shift %d at bit %d", a, s, k)
+				}
+			}
+		}
+	}
 	for s := uint64(0); s < 64; s++ {
 		for k := 0; k < 64; k++ {
 			if bit(uint64(1)<<s, k) != (k == int(s)) ||

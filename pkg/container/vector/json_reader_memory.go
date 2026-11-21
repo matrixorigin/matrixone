@@ -18,7 +18,6 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 // JSONReaderMemoryAdmission charges reader memory to a statement budget,
@@ -44,13 +43,6 @@ func (s *AllocationAccountSelection) admitPhysical(size uint64) (func(), error) 
 		return nil, moerr.NewInvalidInputNoCtx("JSON reader allocation size overflow")
 	}
 	return ReserveJSONReaderMetadata(nil, s.transient, size+256)
-}
-
-func makeSelectedSlice[T any](s *AllocationAccountSelection, n int, mp *mpool.MPool, site mpool.AllocationSite) ([]T, error) {
-	if s.transient != nil {
-		return mpool.MakeSliceAdmitted[T](n, mp, s.admitPhysical)
-	}
-	return mpool.MakeSliceAccountedWithCapacityClass[T](n, mp, s.account, s.owner, site, s.capacityClass)
 }
 
 // JSONReaderMetadataCapacity conservatively covers Go size-class rounding,

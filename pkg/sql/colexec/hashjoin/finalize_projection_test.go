@@ -51,7 +51,7 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 				require.Zero(t, proc.Mp().CurrNB())
 			})
 			account := installTestAllocation(t, arg)
-			for source := range 2 {
+			for range 2 {
 				bat := batch.NewWithSize(1)
 				v := vector.NewVec(typ)
 				bat.Vecs[0] = v
@@ -70,13 +70,6 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 					values[2].SetOffsetLen(1<<30, 65536) // Never read NULL payload.
 				}
 				v.GetGrouping().Add(2)
-				origin := types.StringSourceLiteral
-				if source == 1 {
-					origin = types.StringSourceExpression
-					v.SetPrepareParamKind(vector.PrepareParamInteger)
-					v.SetIsBinaryString(true)
-				}
-				require.NoError(t, v.SetStringSource(origin))
 				bat.SetRowCount(4)
 			}
 			// Resolved build ordinals use DefaultBatchSize stride; only the
@@ -107,9 +100,6 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 						require.True(t, result.Batch.Vecs[0].IsNull(uint64(row)))
 						require.Equal(t, want.IsNull(uint64(row)), got.IsNull(uint64(row)))
 						require.Equal(t, want.GetGrouping().Contains(uint64(row)), got.GetGrouping().Contains(uint64(row)))
-						require.Equal(t, want.GetPrepareParamKindAt(row), got.GetPrepareParamKindAt(row))
-						require.Equal(t, want.GetStringSourceAt(row), got.GetStringSourceAt(row))
-						require.Equal(t, want.GetRuntimeStringDomainAt(row), got.GetRuntimeStringDomainAt(row))
 						if !want.IsNull(uint64(row)) {
 							require.Equal(t, want.GetBytesAt(row), got.GetBytesAt(row))
 						}
