@@ -74,7 +74,7 @@ func (oomExactAllocator) BackingSize(size uint64) (uint64, error) {
 // It observes the real Set-return boundary without blocking the reservation
 // commit callback inside the accounting guard.
 type memCacheSetReturnGate struct {
-	fscache.DataCache
+	memoryCacheBacking
 	key       fscache.CacheKey
 	entered   chan struct{}
 	release   chan struct{}
@@ -83,7 +83,7 @@ type memCacheSetReturnGate struct {
 }
 
 func (g *memCacheSetReturnGate) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) (bool, error) {
-	inserted, err := g.DataCache.Set(ctx, key, data)
+	inserted, err := g.memoryCacheBacking.Set(ctx, key, data)
 	if key == g.key {
 		g.enterOnce.Do(func() { close(g.entered) })
 		<-g.release
@@ -488,10 +488,10 @@ func TestMemCacheReservationHandoffFitsAtSetReturn(t *testing.T) {
 	defer cVector.Release()
 
 	gate := &memCacheSetReturnGate{
-		DataCache: cache.cache,
-		key:       key(2),
-		entered:   make(chan struct{}),
-		release:   make(chan struct{}),
+		memoryCacheBacking: cache.cache,
+		key:                key(2),
+		entered:            make(chan struct{}),
+		release:            make(chan struct{}),
 	}
 	cache.cache = gate
 	updateDone := make(chan error, 1)
@@ -1343,6 +1343,57 @@ func TestMemoryCacheEvictToCapacityPercent(t *testing.T) {
 	ret := EvictMemoryCachesToCapacityPercent(ctx, 50)
 	assert.Equal(t, int64(5), ret["test-target-evict"])
 	assert.LessOrEqual(t, cache.cache.Used(), int64(5))
+}
+
+func TestMemoryCachePressureStopsBeforeBatch(t *testing.T) {
+	for _, cancelAt := range []struct {
+		name string
+		read int
+	}{
+		{name: "target snapshot", read: 1},
+		{name: "under evictor lock", read: 2},
+	} {
+		t.Run(cancelAt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			reads := 0
+			armed := false
+			evictions := 0
+			cache := NewMemCache(func() int64 {
+				if !armed {
+					return 1 << 20
+				}
+				reads++
+				if reads == cancelAt.read {
+					cancel()
+				}
+				return 80
+			}, &CacheCallbacks{
+				PostEvict: []CacheCallbackFunc{func(fscache.CacheKey, fscache.Data) { evictions++ }},
+			}, nil, "cancel-during-capacity-read")
+			defer cache.Close(t.Context())
+			tracking := &reclaimTrackingAllocator{MemoryCacheAllocator: cache.arenaAllocator}
+			cache.arenaAllocator = tracking
+			for i := range 8 {
+				key := fscache.CacheKey{Path: fmt.Sprint(i), Sz: 10}
+				requireDataCacheSet(t, cache.cache, ctx, key, staticTestData(make([]byte, 10)))
+			}
+			cache.AllocateCacheData(ctx, 4096).Release()
+			idleBytes := cache.reservedBytes.Load()
+			require.Positive(t, idleBytes)
+			armed = true
+			EvictMemoryCachesToCapacityPercent(ctx, 50)
+			require.ErrorIs(t, ctx.Err(), context.Canceled)
+			require.Equal(t, int64(80), cache.cache.Used())
+			require.Zero(t, evictions)
+			require.Zero(t, tracking.reclaims.Load())
+			if cancelAt.read == 1 {
+				require.Equal(t, idleBytes, cache.reservedBytes.Load())
+			} else {
+				require.Zero(t, cache.reservedBytes.Load(), "already admitted idle cleanup commits")
+			}
+		})
+	}
 }
 
 func TestMemoryCacheCloseDuringPressureEviction(t *testing.T) {

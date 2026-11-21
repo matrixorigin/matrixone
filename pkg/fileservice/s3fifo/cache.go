@@ -357,7 +357,7 @@ func (c *Cache[K, V]) evictAndPublish(ps *policyShard[K, V], ix *indexShard[K, V
 		seq, result := c.publish(ix, e, limit)
 		removed, done := buf[:0], false
 		if result == insertRejected {
-			removed, _, done = c.evictBatch(limit-e.size, removed)
+			removed, _, done = c.evictBatch(c.capacity(), limit-e.size, removed)
 			seq, result = c.publish(ix, e, limit)
 		}
 		c.evictor.Unlock()
@@ -531,18 +531,30 @@ func (c *Cache[K, V]) DeleteGroup(group string) {
 // Used can be over target or the capacity when it returns. Values whose insertion is still
 // being notified are counted in Used but not yet evictable.
 func (c *Cache[K, V]) EvictTo(ctx context.Context, target int64) int64 {
-	var buf [evictBatch]removal[K, V]
-	return c.evictTo(ctx, target, buf[:0])
+	return c.evictTo(ctx, target, false)
 }
 
-// evictTo is EvictTo evicting in batches of the capacity of buf.
-func (c *Cache[K, V]) evictTo(ctx context.Context, target int64, buf []removal[K, V]) int64 {
+func (c *Cache[K, V]) evictTo(ctx context.Context, target int64, pressure bool) int64 {
+	var buf [evictBatch]removal[K, V]
 	target = max(target, 0)
 	for {
 		// The evicted values are released outside the evictor, so that a slow release does
 		// not hold up the other evictions.
 		c.evictor.Lock()
-		removed, used, done := c.evictBatch(target, buf)
+		if pressure && fscache.PressureEvictionCanceled(ctx) {
+			c.evictor.Unlock()
+			return c.Used()
+		}
+		capacity := c.capacity()
+		batchTarget := target
+		if pressure {
+			if fscache.PressureEvictionCanceled(ctx) {
+				c.evictor.Unlock()
+				return c.Used()
+			}
+			batchTarget = min(target, capacity)
+		}
+		removed, used, done := c.evictBatch(capacity, batchTarget, buf[:0])
 		c.evictor.Unlock()
 		c.finishAll(removed)
 		clear(removed)
@@ -571,7 +583,7 @@ func (c *Cache[K, V]) evictOver() {
 		} else if !c.evictor.TryLock() {
 			return
 		}
-		removed, used, done := c.evictBatch(capacity, buf[:0])
+		removed, used, done := c.evictBatch(c.capacity(), capacity, buf[:0])
 		c.evictor.Unlock()
 		c.finishAll(removed)
 		clear(removed)
@@ -584,8 +596,7 @@ func (c *Cache[K, V]) evictOver() {
 // evictBatch evicts values into removed, up to its capacity, while Used is over target. done
 // reports that Used is within target or that nothing is left to evict. The caller holds the
 // evictor.
-func (c *Cache[K, V]) evictBatch(target int64, removed []removal[K, V]) (_ []removal[K, V], used int64, done bool) {
-	capacity := c.capacity()
+func (c *Cache[K, V]) evictBatch(capacity, target int64, removed []removal[K, V]) (_ []removal[K, V], used int64, done bool) {
 	for len(removed) < cap(removed) {
 		if used = c.used.Load(); used <= target {
 			return removed, used, true

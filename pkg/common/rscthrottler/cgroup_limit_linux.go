@@ -17,9 +17,11 @@
 package rscthrottler
 
 import (
+	"cmp"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -29,90 +31,64 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// The legacy provider can return ErrNoLimit for an unreadable or malformed
-// limit file. Confirm its no-limit sentinel before publishing a host ceiling.
-func resolvePressureCgroup(limit uint64, err error) (uint64, error) {
-	// The legacy v2 reader returns the leaf limit only. Use the same
-	// hierarchy-aware ceiling for successful and unsuccessful reads.
-	if cgroups.Mode() == cgroups.Unified {
-		return pressureCgroupV2Limit()
+// Resolve the pressure ceiling from the process membership. A mount at the
+// conventional cgroup path need not be the view exposing that membership.
+func resolvePressureCgroup(_ uint64, legacyErr error) (uint64, error) {
+	controllers, unified, err := cgroups.ParseCgroupFileUnified("/proc/self/cgroup")
+	if err == nil {
+		if group, ok := controllers["memory"]; ok {
+			return pressureCgroupV1Limit(group)
+		}
+		if unified != "" {
+			return pressureCgroupV2Limit(unified)
+		}
+		if len(controllers) != 0 {
+			return 0, memlimit.ErrNoCgroup
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return 0, err
 	}
-	if cgroups.Mode() == cgroups.Hybrid || cgroups.Mode() == cgroups.Legacy {
-		controllers, _, parseErr := cgroups.ParseCgroupFileUnified("/proc/self/cgroup")
-		if parseErr != nil {
-			return 0, parseErr
-		}
-		if path, exists := controllers["memory"]; exists {
-			return pressureCgroupV1Limit(path)
-		}
-		if cgroups.Mode() == cgroups.Hybrid {
-			return pressureCgroupV2Limit()
-		}
-		return 0, memlimit.ErrNoCgroup
-	}
-	if errors.Is(err, memlimit.ErrNoCgroup) {
+	// A genuine lack of cgroups permits host fallback. An empty or missing
+	// membership with an accessible mount is an incomplete observation.
+	if errors.Is(legacyErr, memlimit.ErrNoCgroup) {
 		var st unix.Statfs_t
-		if statErr := unix.Statfs("/sys/fs/cgroup", &st); statErr == nil {
-			return 0, moerr.NewInternalError(moerr.NoReportContext(), "cgroup mode unavailable despite an accessible mount")
-		} else if !errors.Is(statErr, unix.ENOENT) {
+		if statErr := unix.Statfs("/sys/fs/cgroup", &st); errors.Is(statErr, unix.ENOENT) {
+			return 0, legacyErr
+		} else if statErr != nil {
 			return 0, statErr
 		}
-		return limit, err
 	}
-	return limit, err
-}
-
-func pressureCgroupV2Limit() (uint64, error) {
-	_, group, err := cgroups.ParseCgroupFileUnified("/proc/self/cgroup")
 	if err != nil {
 		return 0, err
 	}
-	mount, dir, err := pressureCgroupMount(group, "cgroup2")
+	return 0, moerr.NewInternalError(moerr.NoReportContext(), "cgroup membership unavailable")
+}
+
+func pressureCgroupV2Limit(group string) (uint64, error) {
+	views, err := pressureCgroupViews(group, "cgroup2")
 	if err != nil {
 		return 0, err
 	}
-	return pressureCgroupV2Directory(mount, dir)
+	return pressureCgroupV2Hierarchy(filepath.Clean(group), views)
 }
 
-func pressureCgroupV2Directory(mount, dir string) (uint64, error) {
-	mount, dir = filepath.Clean(mount), filepath.Clean(dir)
-	rel, err := filepath.Rel(mount, dir)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return 0, moerr.NewInternalError(moerr.NoReportContext(), "cgroup path outside mount")
-	}
+// Read each visible ancestor once successfully. Alternate mount views can
+// expose a masked descendant without hiding a stricter ancestor in the wider
+// view. An unreadable level makes the whole ceiling incomplete.
+func pressureCgroupV2Hierarchy(group string, views []pressureCgroupView) (uint64, error) {
+	root := views[0].root
 	var minimum uint64
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "cgroup.controllers")); err != nil {
+	for level := group; ; level = filepath.Dir(level) {
+		limit, err := pressureCgroupV2Level(level, root, views)
+		if err != nil {
 			return 0, err
 		}
-		data, err := os.ReadFile(filepath.Join(dir, "memory.max"))
-		if errors.Is(err, os.ErrNotExist) {
-			if dir != mount {
-				controllers, readErr := os.ReadFile(filepath.Join(filepath.Dir(dir), "cgroup.subtree_control"))
-				if readErr != nil {
-					return 0, readErr
-				}
-				for _, controller := range strings.Fields(string(controllers)) {
-					if strings.TrimPrefix(controller, "+") == "memory" {
-						return 0, err
-					}
-				}
-			}
-		} else if err != nil {
-			return 0, err
-		} else if value := strings.TrimSpace(string(data)); value != "max" {
-			n, parseErr := strconv.ParseUint(value, 10, 63)
-			if parseErr != nil || n == 0 {
-				return 0, moerr.NewInternalErrorf(moerr.NoReportContext(), "invalid cgroup v2 memory limit %q", value)
-			}
-			if minimum == 0 || n < minimum {
-				minimum = n
-			}
+		if limit != 0 && (minimum == 0 || limit < minimum) {
+			minimum = limit
 		}
-		if dir == mount {
+		if level == root {
 			break
 		}
-		dir = filepath.Dir(dir)
 	}
 	if minimum == 0 {
 		return 0, memlimit.ErrNoLimit
@@ -120,56 +96,283 @@ func pressureCgroupV2Directory(mount, dir string) (uint64, error) {
 	return minimum, nil
 }
 
-func pressureCgroupV1Limit(group string) (uint64, error) {
-	_, dir, err := pressureCgroupMount(group, "cgroup")
-	if err != nil {
-		return 0, err
+func pressureCgroupV2Level(level, root string, views []pressureCgroupView) (uint64, error) {
+	var firstErr error
+	var noLimit bool
+	for _, view := range views {
+		dir, ok := view.directory(level)
+		if !ok {
+			continue
+		}
+		limit, err := readPressureCgroupV2Level(view, dir, level, root, views)
+		if err == nil {
+			return limit, nil
+		}
+		if errors.Is(err, memlimit.ErrNoLimit) {
+			// Prefer an explicit memory.max from another view to inferred absence.
+			noLimit = true
+		} else if firstErr == nil {
+			firstErr = err
+		}
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "memory.stat"))
-	if err != nil {
-		return 0, err
+	if noLimit {
+		return 0, nil
 	}
-	return parseCgroupV1Limit(data, uint64(os.Getpagesize()))
+	return 0, firstErr
 }
 
-// pressureCgroupMount resolves a process membership relative to its actual
-// mount root, which may be a container's bind-mounted subtree.
-func pressureCgroupMount(group, fsType string) (string, string, error) {
+func readPressureCgroupV2Level(view pressureCgroupView, dir, level, root string, views []pressureCgroupView) (uint64, error) {
+	if err := view.stat(dir, "cgroup.controllers"); err != nil {
+		return 0, err
+	}
+	data, err := view.read(dir, "memory.max")
+	if errors.Is(err, os.ErrNotExist) {
+		var enabled bool
+		var readErr error
+		if level == root {
+			enabled, readErr = pressureRootMemoryEnabled(view, dir, level)
+		} else {
+			enabled, readErr = pressureParentMemoryEnabled(filepath.Dir(level), views)
+		}
+		if readErr != nil {
+			return 0, readErr
+		}
+		if !enabled {
+			return 0, memlimit.ErrNoLimit
+		}
+	}
+	if err != nil {
+		return 0, err
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "max" {
+		return 0, nil
+	}
+	limit, err := strconv.ParseUint(value, 10, 63)
+	if err != nil || limit == 0 {
+		return 0, moerr.NewInternalErrorf(moerr.NoReportContext(), "invalid cgroup v2 memory limit %q", value)
+	}
+	return limit, nil
+}
+
+// At a bind or namespace root, memory.max still exists if memory is
+// enabled. Only the global root lacks both memory.max and cgroup.type.
+func pressureRootMemoryEnabled(view pressureCgroupView, dir, level string) (bool, error) {
+	data, err := view.read(dir, "cgroup.controllers")
+	if err != nil {
+		return false, err
+	}
+	if !hasMemoryController(data) {
+		return false, nil
+	}
+	if level == "/" {
+		err := view.stat(dir, "cgroup.type")
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func pressureParentMemoryEnabled(level string, views []pressureCgroupView) (bool, error) {
+	var firstErr error
+	for _, view := range views {
+		dir, ok := view.directory(level)
+		if !ok {
+			continue
+		}
+		data, err := view.read(dir, "cgroup.subtree_control")
+		if err == nil {
+			return hasMemoryController(data), nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return false, firstErr
+}
+
+func hasMemoryController(data []byte) bool {
+	for _, controller := range strings.Fields(string(data)) {
+		if strings.TrimPrefix(controller, "+") == "memory" {
+			return true
+		}
+	}
+	return false
+}
+
+func pressureCgroupV1Limit(group string) (uint64, error) {
+	views, err := pressureCgroupViews(group, "cgroup")
+	if err != nil {
+		return 0, err
+	}
+	return pressureCgroupV1Hierarchy(filepath.Clean(group), views)
+}
+
+func pressureCgroupV1Hierarchy(group string, views []pressureCgroupView) (uint64, error) {
+	var firstErr error
+	for _, view := range views {
+		dir, _ := view.directory(group)
+		data, err := view.read(dir, "memory.stat")
+		if err == nil {
+			var limit uint64
+			limit, err = parseCgroupV1Limit(data, uint64(os.Getpagesize()))
+			if err == nil || errors.Is(err, memlimit.ErrNoLimit) {
+				return limit, err
+			}
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return 0, firstErr
+}
+
+type pressureMount struct {
+	id, parent, point string
+}
+
+type pressureCgroupView struct {
+	root, mount string
+	overmounts  []pressureMount
+	hidden      bool
+}
+
+func (v pressureCgroupView) file(dir, name string) (string, error) {
+	path := filepath.Join(dir, name)
+	if v.hidden || slices.ContainsFunc(v.overmounts, func(m pressureMount) bool {
+		return mountContains(m.point, path)
+	}) {
+		return "", moerr.NewInternalErrorf(moerr.NoReportContext(), "cgroup path %q is covered by another mount", path)
+	}
+	return path, nil
+}
+
+func (v pressureCgroupView) read(dir, name string) ([]byte, error) {
+	path, err := v.file(dir, name)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+}
+
+func (v pressureCgroupView) stat(dir, name string) error {
+	path, err := v.file(dir, name)
+	if err != nil {
+		return err
+	}
+	_, err = os.Stat(path)
+	return err
+}
+
+func mountContains(root, path string) bool {
+	return root == "/" || path == root || strings.HasPrefix(path, root+"/")
+}
+
+// A sibling mounted on an ancestor path can hide an existing attachment.
+// Stacks at the same path are parent/child and are checked at file lookup.
+func pressureMountHidden(m pressureMount, mounts map[string]pressureMount, children map[string][]pressureMount) bool {
+	for {
+		for _, sibling := range children[m.parent] {
+			if sibling.point != m.point && mountContains(sibling.point, m.point) {
+				return true
+			}
+		}
+		parent, ok := mounts[m.parent]
+		if !ok || parent.id == m.id {
+			return false
+		}
+		m = parent
+	}
+}
+
+func (v pressureCgroupView) directory(group string) (string, bool) {
+	rel, err := filepath.Rel(v.root, group)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return filepath.Join(v.mount, rel), true
+}
+
+func pressureCgroupViews(group, fsType string) ([]pressureCgroupView, error) {
 	data, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
-	return parsePressureCgroupMount(data, group, fsType)
+	return parsePressureCgroupViews(data, group, fsType)
 }
 
-func parsePressureCgroupMount(data []byte, group, fsType string) (string, string, error) {
-	var bestRoot, bestMount, bestDir string
+// A mount can expose just a subtree of the same process hierarchy. Keep all
+// matching views; start at the widest root and preserve order for equal roots.
+func parsePressureCgroupViews(data []byte, group, fsType string) ([]pressureCgroupView, error) {
+	if !inCgroupNamespace(group) {
+		return nil, moerr.NewInternalErrorf(moerr.NoReportContext(), "cgroup membership %q is outside the visible namespace", group)
+	}
+	group = filepath.Clean(group)
+	mounts := make(map[string]pressureMount)
+	children := make(map[string][]pressureMount)
+	type candidate struct {
+		mount pressureMount
+		root  string
+	}
+	var matched []candidate
 	unescape := strings.NewReplacer("\\040", " ", "\\011", "\t", "\\012", "\n", "\\134", "\\")
 	for _, line := range strings.Split(string(data), "\n") {
-		parts := strings.SplitN(line, " - ", 2)
-		if len(parts) != 2 {
+		left, right, ok := strings.Cut(line, " - ")
+		if !ok {
 			continue
 		}
-		before, after := strings.Fields(parts[0]), strings.Fields(parts[1])
-		if len(before) < 5 || len(after) < 3 || after[0] != fsType {
+		before, after := strings.Fields(left), strings.Fields(right)
+		if len(before) < 5 || len(after) < 3 {
 			continue
 		}
-		if fsType == "cgroup" && !strings.Contains(","+after[2]+",", ",memory,") {
+		mount := pressureMount{
+			id:     before[0],
+			parent: before[1],
+			point:  filepath.Clean(unescape.Replace(before[4])),
+		}
+		mounts[mount.id] = mount
+		if mount.id != mount.parent {
+			children[mount.parent] = append(children[mount.parent], mount)
+		}
+		if after[0] != fsType || fsType == "cgroup" && !slices.Contains(strings.Split(after[2], ","), "memory") {
 			continue
 		}
-		root, mount := filepath.Clean(unescape.Replace(before[3])), filepath.Clean(unescape.Replace(before[4]))
-		rel, err := filepath.Rel(root, filepath.Clean(group))
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		root := unescape.Replace(before[3])
+		// An inherited mount may be rooted at /.. in this cgroup namespace.
+		// Cleaning it would alias a different group to the namespace root.
+		if !inCgroupNamespace(root) {
 			continue
 		}
-		if bestMount == "" || len(root) < len(bestRoot) {
-			bestRoot, bestMount, bestDir = root, mount, filepath.Join(mount, rel)
+		root = filepath.Clean(root)
+		if mountContains(root, group) {
+			matched = append(matched, candidate{mount: mount, root: root})
 		}
 	}
-	if bestMount == "" {
-		return "", "", moerr.NewInternalErrorf(moerr.NoReportContext(), "memory cgroup mount not found for %q", group)
+	if len(matched) == 0 {
+		return nil, moerr.NewInternalErrorf(moerr.NoReportContext(), "memory cgroup mount not found for %q", group)
 	}
-	return bestMount, bestDir, nil
+	views := make([]pressureCgroupView, 0, len(matched))
+	for _, candidate := range matched {
+		m := candidate.mount
+		views = append(views, pressureCgroupView{
+			root:       candidate.root,
+			mount:      m.point,
+			overmounts: children[m.id],
+			hidden:     pressureMountHidden(m, mounts, children),
+		})
+	}
+	slices.SortStableFunc(views, func(a, b pressureCgroupView) int {
+		return cmp.Compare(len(a.root), len(b.root))
+	})
+	return views, nil
+}
+
+func inCgroupNamespace(path string) bool {
+	return filepath.IsAbs(path) && !slices.Contains(strings.Split(path, "/"), "..")
 }
 
 func parseCgroupV1Limit(data []byte, page uint64) (uint64, error) {

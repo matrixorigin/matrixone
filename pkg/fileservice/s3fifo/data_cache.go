@@ -146,3 +146,9 @@ func (d *DataCache) Evict(ctx context.Context, done chan int64) {
 func (d *DataCache) EvictToTargetWithWait(ctx context.Context, target int64) int64 {
 	return d.c.EvictTo(ctx, min(target, d.c.Capacity()))
 }
+
+// EvictForPressure admits new batches only while the pressure walk is live.
+// Once admitted, a batch owns its removal callbacks through completion.
+func (d *DataCache) EvictForPressure(ctx context.Context, target int64) int64 {
+	return d.c.evictTo(ctx, target, true)
+}

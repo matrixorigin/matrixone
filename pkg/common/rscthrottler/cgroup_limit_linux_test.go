@@ -17,6 +17,7 @@
 package rscthrottler
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,9 +26,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPressureCgroupV2Directory(t *testing.T) {
+func TestPressureCgroupV2Level(t *testing.T) {
 	mount := t.TempDir()
-	dir := filepath.Join(mount, "parent", "child")
+	group := "/parent/child"
+	views := []pressureCgroupView{{root: "/", mount: mount}}
+	dir := filepath.Join(mount, group)
 	require.NoError(t, os.MkdirAll(dir, 0700))
 	for _, path := range []string{mount, filepath.Dir(dir), dir} {
 		require.NoError(t, os.WriteFile(filepath.Join(path, "cgroup.controllers"), nil, 0600))
@@ -35,29 +38,29 @@ func TestPressureCgroupV2Directory(t *testing.T) {
 	parent := filepath.Dir(dir)
 	require.NoError(t, os.WriteFile(filepath.Join(mount, "cgroup.subtree_control"), []byte("cpu\n"), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(parent, "cgroup.subtree_control"), []byte("memory\n"), 0600))
-	_, err := pressureCgroupV2Directory(mount, dir)
+	_, err := pressureCgroupV2Hierarchy(group, views)
 	require.Error(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(parent, "cgroup.subtree_control"), []byte("cpu\n"), 0600))
-	_, err = pressureCgroupV2Directory(mount, dir)
+	_, err = pressureCgroupV2Hierarchy(group, views)
 	require.ErrorIs(t, err, memlimit.ErrNoLimit)
 	require.NoError(t, os.WriteFile(filepath.Join(parent, "memory.max"), []byte("1000\n"), 0600))
-	limit, err := pressureCgroupV2Directory(mount, dir)
+	limit, err := pressureCgroupV2Hierarchy(group, views)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1000), limit)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "memory.max"), []byte("max\n"), 0600))
-	limit, err = pressureCgroupV2Directory(mount, dir)
+	limit, err = pressureCgroupV2Hierarchy(group, views)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1000), limit)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "memory.max"), []byte("invalid\n"), 0600))
-	_, err = pressureCgroupV2Directory(mount, dir)
+	_, err = pressureCgroupV2Hierarchy(group, views)
 	require.Error(t, err)
 	require.NoError(t, os.Remove(filepath.Join(dir, "memory.max")))
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "memory.max"), 0700))
-	_, err = pressureCgroupV2Directory(mount, dir)
+	_, err = pressureCgroupV2Hierarchy(group, views)
 	require.Error(t, err)
-	_, err = pressureCgroupV2Directory(mount, mount)
+	_, err = pressureCgroupV2Hierarchy("/", views)
 	require.ErrorIs(t, err, memlimit.ErrNoLimit)
-	_, err = pressureCgroupV2Directory(mount, filepath.Join(mount, "missing"))
+	_, err = pressureCgroupV2Hierarchy("/missing", views)
 	require.Error(t, err)
 }
 
@@ -73,18 +76,193 @@ func TestParseCgroupV1Limit(t *testing.T) {
 	}
 }
 
-func TestParsePressureCgroupMount(t *testing.T) {
+func TestParsePressureCgroupViews(t *testing.T) {
 	data := []byte("30 1 0:1 /docker/abc /sys/fs/cgroup/memory rw - cgroup cgroup rw,memory\n" +
-		"31 1 0:2 /tenant /sys/fs/cgroup/unified rw - cgroup2 cgroup rw\n" +
-		"32 1 0:2 /tenant/nested /mnt/bind rw - cgroup2 cgroup rw\n")
-	mount, dir, err := parsePressureCgroupMount(data, "/docker/abc", "cgroup")
+		"32 1 0:2 /tenant/nested /mnt/bind rw - cgroup2 cgroup rw\n" +
+		"31 1 0:2 /tenant /sys/fs/cgroup/unified rw - cgroup2 cgroup rw\n")
+	v1, err := parsePressureCgroupViews(data, "/docker/abc", "cgroup")
 	require.NoError(t, err)
-	require.Equal(t, "/sys/fs/cgroup/memory", mount)
-	require.Equal(t, "/sys/fs/cgroup/memory", dir)
-	mount, dir, err = parsePressureCgroupMount(data, "/tenant/nested", "cgroup2")
+	require.Equal(t, []pressureCgroupView{{root: "/docker/abc", mount: "/sys/fs/cgroup/memory"}}, v1)
+	v2, err := parsePressureCgroupViews(data, "/tenant/nested", "cgroup2")
 	require.NoError(t, err)
-	require.Equal(t, "/sys/fs/cgroup/unified", mount)
-	require.Equal(t, "/sys/fs/cgroup/unified/nested", dir)
-	_, _, err = parsePressureCgroupMount(data, "/docker/other", "cgroup")
+	require.Equal(t, []pressureCgroupView{
+		{root: "/tenant", mount: "/sys/fs/cgroup/unified"},
+		{root: "/tenant/nested", mount: "/mnt/bind"},
+	}, v2)
+	_, err = parsePressureCgroupViews(data, "/docker/abcd", "cgroup")
 	require.Error(t, err)
+}
+
+func TestPressureCgroupV2AlternateViews(t *testing.T) {
+	const group = "/tenant/child"
+	for _, narrow := range []bool{false, true} {
+		name := "same root"
+		if narrow {
+			name = "complementary ancestor and leaf"
+		}
+		t.Run(name, func(t *testing.T) {
+			broad, alternate := t.TempDir(), t.TempDir()
+			root := "/tenant"
+			if narrow {
+				root = group
+			}
+			data := []byte(fmt.Sprintf(
+				"30 1 0:1 /tenant %s rw - cgroup2 cgroup rw\n31 1 0:1 %s %s rw - cgroup2 cgroup rw\n",
+				broad, root, alternate,
+			))
+			views, err := parsePressureCgroupViews(data, group, "cgroup2")
+			require.NoError(t, err)
+			leaf, ok := views[1].directory(group)
+			require.True(t, ok)
+			require.NoError(t, os.MkdirAll(leaf, 0700))
+			writeLevel := func(dir, limit string) {
+				t.Helper()
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "cgroup.controllers"), nil, 0600))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "memory.max"), []byte(limit), 0600))
+			}
+			writeLevel(leaf, "1000")
+			if narrow {
+				_, err = pressureCgroupV2Hierarchy(group, views)
+				require.ErrorIs(t, err, os.ErrNotExist, "a finite leaf cannot prove an unreadable ancestor")
+				writeLevel(leaf, "max")
+				_, err = pressureCgroupV2Hierarchy(group, views)
+				require.ErrorIs(t, err, os.ErrNotExist, "an unlimited leaf cannot prove an unreadable ancestor")
+				writeLevel(broad, "500")
+				limit, err := pressureCgroupV2Hierarchy(group, views)
+				require.NoError(t, err)
+				require.Equal(t, uint64(500), limit)
+				return
+			}
+			writeLevel(alternate, "max")
+			limit, err := pressureCgroupV2Hierarchy(group, views)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1000), limit)
+		})
+	}
+}
+
+func TestPressureCgroupV2VisibleRoot(t *testing.T) {
+	for _, root := range []string{"/tenant", "/"} {
+		t.Run(root, func(t *testing.T) {
+			views := []pressureCgroupView{
+				{root: root, mount: t.TempDir()},
+				{root: root, mount: t.TempDir()},
+			}
+			for _, view := range views {
+				for file, contents := range map[string]string{"cgroup.controllers": "cpu memory", "cgroup.type": "domain"} {
+					require.NoError(t, os.WriteFile(filepath.Join(view.mount, file), []byte(contents), 0600))
+				}
+			}
+			memoryMax := filepath.Join(views[1].mount, "memory.max")
+			_, err := pressureCgroupV2Hierarchy(root, views)
+			require.ErrorIs(t, err, os.ErrNotExist, "an enabled non-global root must expose memory.max")
+			require.NoError(t, os.WriteFile(memoryMax, []byte("500"), 0600))
+			limit, err := pressureCgroupV2Hierarchy(root, views)
+			require.NoError(t, err)
+			require.Equal(t, uint64(500), limit)
+			if root == "/" {
+				require.NoError(t, os.Remove(filepath.Join(views[0].mount, "cgroup.type")))
+				limit, err = pressureCgroupV2Hierarchy(root, views)
+				require.NoError(t, err)
+				require.Equal(t, uint64(500), limit, "an explicit limit wins over inferred absence")
+				_, err = pressureCgroupV2Hierarchy(root, views[:1])
+				require.ErrorIs(t, err, memlimit.ErrNoLimit)
+			}
+		})
+	}
+}
+
+func TestPressureCgroupV1AlternateViews(t *testing.T) {
+	views := []pressureCgroupView{
+		{root: "/tenant", mount: t.TempDir()},
+		{root: "/tenant", mount: t.TempDir()},
+	}
+	path := filepath.Join(views[1].mount, "memory.stat")
+	_, err := pressureCgroupV1Hierarchy("/tenant", views)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NoError(t, os.WriteFile(path, []byte("hierarchical_memory_limit 1000\n"), 0600))
+	limit, err := pressureCgroupV1Hierarchy("/tenant", views)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1000), limit)
+
+	page := uint64(os.Getpagesize())
+	unlimited := uint64(^uint64(0)>>1) / page * page
+	require.NoError(t, os.WriteFile(path, fmt.Appendf(nil, "hierarchical_memory_limit %d\n", unlimited), 0600))
+	_, err = pressureCgroupV1Hierarchy("/tenant", views)
+	require.ErrorIs(t, err, memlimit.ErrNoLimit)
+}
+
+func TestPressureCgroupV2CoveredMounts(t *testing.T) {
+	const group = "/tenant/child"
+	for _, tc := range []struct {
+		name       string
+		mountpoint string
+		parentID   int
+	}{
+		{name: "covered subtree", mountpoint: "wide/child", parentID: 30},
+		{name: "covered limit file", mountpoint: "wide/child/memory.max", parentID: 30},
+		{name: "stacked at mountpoint", mountpoint: "wide", parentID: 30},
+		{name: "covered ancestor", mountpoint: ".", parentID: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent, alternate := t.TempDir(), t.TempDir()
+			wide := filepath.Join(parent, "wide")
+			for _, fixture := range []struct {
+				mount string
+				limit string
+			}{{mount: wide, limit: "max"}, {mount: alternate, limit: "500"}} {
+				leaf := filepath.Join(fixture.mount, "child")
+				require.NoError(t, os.MkdirAll(leaf, 0700))
+				for _, dir := range []string{fixture.mount, leaf} {
+					value := "1000"
+					if dir == leaf {
+						value = fixture.limit
+					}
+					require.NoError(t, os.WriteFile(filepath.Join(dir, "cgroup.controllers"), nil, 0600))
+					require.NoError(t, os.WriteFile(filepath.Join(dir, "memory.max"), []byte(value), 0600))
+				}
+			}
+			mountinfo := fmt.Appendf(nil,
+				"30 1 0:1 /tenant %s rw - cgroup2 cgroup rw\n31 %d 0:1 /other %s rw - cgroup2 cgroup rw\n",
+				wide, tc.parentID, filepath.Join(parent, tc.mountpoint),
+			)
+			views, err := parsePressureCgroupViews(mountinfo, group, "cgroup2")
+			require.NoError(t, err)
+			_, err = pressureCgroupV2Hierarchy(group, views)
+			require.ErrorContains(t, err, "covered by another mount")
+
+			mountinfo = fmt.Appendf(mountinfo, "32 1 0:1 /tenant %s rw - cgroup2 cgroup rw\n", alternate)
+			views, err = parsePressureCgroupViews(mountinfo, group, "cgroup2")
+			require.NoError(t, err)
+			limit, err := pressureCgroupV2Hierarchy(group, views)
+			require.NoError(t, err)
+			require.Equal(t, uint64(500), limit)
+		})
+	}
+}
+
+func TestPressureCgroupV1CoveredStat(t *testing.T) {
+	wide, alternate := t.TempDir(), t.TempDir()
+	path := filepath.Join(wide, "memory.stat")
+	require.NoError(t, os.WriteFile(path, []byte("hierarchical_memory_limit 1000\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(alternate, "memory.stat"), []byte("hierarchical_memory_limit 500\n"), 0600))
+	mountinfo := fmt.Appendf(nil,
+		"30 1 0:1 /tenant %s rw - cgroup cgroup rw,memory\n31 30 0:3 / %s rw - tmpfs tmpfs rw\n32 1 0:1 /tenant %s rw - cgroup cgroup rw,memory\n",
+		wide, path, alternate,
+	)
+	views, err := parsePressureCgroupViews(mountinfo, "/tenant", "cgroup")
+	require.NoError(t, err)
+	limit, err := pressureCgroupV1Hierarchy("/tenant", views)
+	require.NoError(t, err)
+	require.Equal(t, uint64(500), limit)
+}
+
+func TestParsePressureCgroupNamespaceRoot(t *testing.T) {
+	mountinfo := []byte("30 1 0:1 /.. /inherit rw - cgroup2 cgroup rw\n" +
+		"31 1 0:1 / /namespace rw - cgroup2 cgroup rw\n")
+	views, err := parsePressureCgroupViews(mountinfo, "/", "cgroup2")
+	require.NoError(t, err)
+	require.Equal(t, []pressureCgroupView{{root: "/", mount: "/namespace"}}, views)
+	_, err = parsePressureCgroupViews(mountinfo, "/../other", "cgroup2")
+	require.ErrorContains(t, err, "outside the visible namespace")
 }

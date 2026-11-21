@@ -31,8 +31,13 @@ import (
 	"go.uber.org/zap"
 )
 
+type memoryCacheBacking interface {
+	fscache.DataCache
+	EvictForPressure(context.Context, int64) int64
+}
+
 type MemCache struct {
-	cache       fscache.DataCache
+	cache       memoryCacheBacking
 	counterSets []*perfcounter.CounterSet
 	callbacksMu [256]sync.Mutex
 	postGet     []CacheCallbackFunc
@@ -517,10 +522,18 @@ func (m *MemCache) recycleReservedCacheData(data *Bytes, backingSize int) bool {
 // They already count against reservedBytes, so this must run before FIFO
 // eviction under allocation pressure and at explicit reclamation boundaries.
 func (m *MemCache) releaseIdleCacheData() int {
+	return m.releaseIdleCacheDataBeforeCancel(context.Background())
+}
+
+func (m *MemCache) releaseIdleCacheDataBeforeCancel(ctx context.Context) int {
 	released := 0
 	m.idleCacheData.Range(func(_, value any) bool {
 		pool := value.(*memoryCacheIdlePool)
 		pool.mu.Lock()
+		if fscache.PressureEvictionCanceled(ctx) {
+			pool.mu.Unlock()
+			return false
+		}
 		for {
 			select {
 			case data := <-pool.data:
@@ -871,20 +884,29 @@ func (m *MemCache) EvictToTarget(ctx context.Context, target int64) int64 {
 }
 
 func (m *MemCache) EvictToCapacityPercent(ctx context.Context, percent int64) int64 {
-	if percent < 0 {
-		percent = 0
+	if m.closed.Load() || fscache.PressureEvictionCanceled(ctx) {
+		return m.cache.Used()
 	}
-	if percent > 100 {
-		percent = 100
+	percent = min(max(percent, 0), 100)
+	target := memoryCachePercentTarget(m.cache.Capacity(), percent)
+	return m.evictForPressure(ctx, target, percent < 100)
+}
+
+func memoryCachePercentTarget(capacity, percent int64) int64 {
+	return capacity/100*percent + capacity%100*percent/100
+}
+
+func (m *MemCache) evictForPressure(ctx context.Context, target int64, drainIdle bool) int64 {
+	if m.closed.Load() || fscache.PressureEvictionCanceled(ctx) {
+		return m.cache.Used()
 	}
-	if percent < 100 {
-		m.releaseIdleCacheData()
+	if drainIdle {
+		m.releaseIdleCacheDataBeforeCancel(ctx)
 	}
-	target := m.cache.Capacity() * percent / 100
-	used := m.EvictToTarget(ctx, target)
-	// Close flushes the cache and retires its allocator. A walk admitted
-	// before Close can still finish its removal callbacks.
-	if !m.closed.Load() {
+	used := m.cache.EvictForPressure(ctx, target)
+	// An admitted walk can finish releasing removed buffers across Close.
+	// The retiring cache or the next live walk owns any remaining purge.
+	if !m.closed.Load() && !fscache.PressureEvictionCanceled(ctx) {
 		m.reclaimAllocator()
 	}
 	return used
