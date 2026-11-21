@@ -2129,6 +2129,7 @@ type txnTable struct {
 	tableName string
 	db        *txnDatabase
 	//	insertExpr *plan.Expr
+	source        cache.SchemaSource
 	defs          []engine.TableDef
 	tableDef      *plan.TableDef
 	seqnums       []uint16
