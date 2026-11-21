@@ -16,10 +16,355 @@ package plan
 
 import (
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"strings"
 )
+
+// Policies separate query execution from owners that only validate a bound
+// expression or retain its authorization dependencies.
+type zeroScalarPolicy uint8
+
+const (
+	zeroScalarDisabled zeroScalarPolicy = iota
+	zeroScalarValidateOnly
+	zeroScalarRetainOnly
+	zeroScalarExecutable
+)
+
+func zeroLimitScalarHasControlFunction(statement tree.SelectStatement) bool {
+	var selectNode *tree.Select
+	switch stmt := statement.(type) {
+	case *tree.ParenSelect:
+		if stmt != nil {
+			selectNode = stmt.Select
+		}
+	case *tree.Select:
+		selectNode = stmt
+	}
+	if selectNode == nil || selectNode.Limit == nil || !zeroLimitLiteral(selectNode.Limit.Count) {
+		return false
+	}
+
+	found := false
+	walkGroupingSetOrderByExpr(&tree.Subquery{Select: statement}, func(expr tree.Expr) bool {
+		if found {
+			return false
+		}
+		fn, ok := expr.(*tree.FuncExpr)
+		if ok && fn.FuncName != nil {
+			name := strings.ToLower(fn.FuncName.Origin())
+			found = name == "mo_ctl" || name == "fault_inject"
+		}
+		return !found
+	})
+	return found
+}
+
+type zeroScalarLiveRequirement uint8
+
+const (
+	zeroScalarLiveSavedResult zeroScalarLiveRequirement = 1 << iota
+	zeroScalarLiveControl
+)
+
+// zeroLimitScalarSourceSafe checks the original SQL tree before binding can
+// inline SQL UDFs or fold away their unused arguments. The planner rewrite is
+// limited to a one-column SELECT over one direct ordinary-table reference.
+func zeroLimitScalarSourceSafe(statement tree.SelectStatement, ctx *BindContext) bool {
+	if ctx == nil || ctx.remapOption != nil || ctx.snapshot != nil {
+		return false
+	}
+
+	var selectNode *tree.Select
+	switch stmt := statement.(type) {
+	case *tree.ParenSelect:
+		if stmt == nil {
+			return false
+		}
+		selectNode = stmt.Select
+	case *tree.Select:
+		selectNode = stmt
+	default:
+		return false
+	}
+	if selectNode == nil || selectNode.IsPerform || selectNode.RewriteOption != nil ||
+		selectNode.TimeWindow != nil || selectNode.RankOption != nil ||
+		selectNode.With != nil || selectNode.Ep != nil || selectNode.SelectLockInfo != nil ||
+		selectNode.Limit == nil || !zeroLimitLiteral(selectNode.Limit.Count) ||
+		!nonNegativeIntegerLiteralOrNil(selectNode.Limit.Offset) {
+		return false
+	}
+	clause, ok := selectNode.Select.(*tree.SelectClause)
+	if !ok || clause == nil || clause.Distinct || clause.GroupBy != nil ||
+		clause.Having != nil || clause.Option != 0 || clause.From == nil ||
+		len(clause.From.Tables) != 1 || len(clause.Exprs) != 1 ||
+		clause.Exprs[0].Expr == nil {
+		return false
+	}
+	if !zeroLimitSourceExprSafe(clause.Exprs[0].Expr, true, 0) {
+		return false
+	}
+	if clause.Where != nil && !zeroLimitSourceExprSafe(clause.Where.Expr, true, 0) {
+		return false
+	}
+	// Bound-expression validation below still rejects unsafe sort keys.
+	for _, order := range selectNode.OrderBy {
+		if order == nil || !zeroLimitSourceExprSafe(order.Expr, false, 0) {
+			return false
+		}
+	}
+
+	var tableExpr tree.TableExpr = clause.From.Tables[0]
+	if join, ok := tableExpr.(*tree.JoinTableExpr); ok {
+		if join == nil || join.Right != nil || join.Cond != nil || join.Option != "" ||
+			(join.JoinType != "" && join.JoinType != tree.JOIN_TYPE_CROSS) {
+			return false
+		}
+		tableExpr = join.Left
+	}
+	aliased, ok := tableExpr.(*tree.AliasedTableExpr)
+	if !ok || aliased == nil || len(aliased.IndexHints) != 0 || len(aliased.As.Cols) != 0 {
+		return false
+	}
+	table, ok := aliased.Expr.(*tree.TableName)
+	if !ok || table == nil || table.AtTsExpr != nil || table.IcebergRef != nil || table.ExplicitCatalog {
+		return false
+	}
+	if table.Schema() == "" && ctx.findCTE(string(table.ObjectName)) != nil {
+		return false
+	}
+	return true
+}
+
+func zeroLimitLiteral(expr tree.Expr) bool {
+	value, ok := expr.(*tree.NumVal)
+	if !ok || value == nil || value.Negative() ||
+		(value.ValType != tree.P_int64 && value.ValType != tree.P_uint64) {
+		return false
+	}
+	limit, ok := value.Uint64()
+	return ok && limit == 0
+}
+
+func nonNegativeIntegerLiteralOrNil(expr tree.Expr) bool {
+	if expr == nil {
+		return true
+	}
+	value, ok := expr.(*tree.NumVal)
+	if !ok || value == nil || value.Negative() ||
+		(value.ValType != tree.P_int64 && value.ValType != tree.P_uint64) {
+		return false
+	}
+	_, ok = value.Uint64()
+	return ok
+}
+
+// This explicit, bounded AST walker is intentionally smaller than the SQL
+// expression grammar. Unknown expression kinds fail closed; tree.Expr.Accept
+// is not safe here because several parser nodes leave it unimplemented.
+func zeroLimitSourceExprSafe(expr tree.Expr, allowValueOps bool, depth int) bool {
+	if expr == nil || depth > 128 {
+		return false
+	}
+	next := depth + 1
+	switch node := expr.(type) {
+	case *tree.NumVal:
+		return node != nil && node.ValType != tree.P_any && node.ValType != tree.P_star
+	case *tree.ParamExpr:
+		return node != nil
+	case *tree.StrVal:
+		return node != nil
+	case *tree.UnresolvedName:
+		return node != nil && !node.Star && node.NumParts > 0 &&
+			node.NumParts <= len(node.CStrParts) && node.ColName() != ""
+	case *tree.ParenExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.AndExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Left, allowValueOps, next) &&
+			zeroLimitSourceExprSafe(node.Right, allowValueOps, next)
+	case *tree.OrExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Left, allowValueOps, next) &&
+			zeroLimitSourceExprSafe(node.Right, allowValueOps, next)
+	case *tree.NotExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNullExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotNullExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.ComparisonExpr:
+		return node != nil && node.SubOp == 0 && node.Escape == nil &&
+			zeroLimitSourceExprSafe(node.Left, allowValueOps, next) &&
+			zeroLimitSourceExprSafe(node.Right, allowValueOps, next)
+	case *tree.IsTrueExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsFalseExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotTrueExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotFalseExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsUnknownExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotUnknownExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.BinaryExpr:
+		return allowValueOps && node != nil &&
+			(node.Op == tree.PLUS || node.Op == tree.MINUS || node.Op == tree.MULTI ||
+				node.Op == tree.DIV || node.Op == tree.INTEGER_DIV || node.Op == tree.MOD) &&
+			zeroLimitSourceExprSafe(node.Left, true, next) &&
+			zeroLimitSourceExprSafe(node.Right, true, next)
+	case *tree.UnaryExpr:
+		return allowValueOps && node != nil &&
+			(node.Op == tree.UNARY_PLUS || node.Op == tree.UNARY_MINUS) &&
+			zeroLimitSourceExprSafe(node.Expr, true, next)
+	case *tree.CastExpr:
+		if !allowValueOps || node == nil {
+			return false
+		}
+		typ, typeOK := node.Type.(*tree.T)
+		return typeOK && typ != nil &&
+			zeroLimitSourceExprSafe(node.Expr, true, next)
+	case *tree.FuncExpr:
+		if !allowValueOps || node == nil || node.FuncName == nil ||
+			node.Type != tree.FUNC_TYPE_DEFAULT || node.AggType != 0 ||
+			node.WindowSpec != nil || len(node.OrderBy) != 0 {
+			return false
+		}
+		name := strings.ToLower(node.FuncName.Origin())
+		switch name {
+		case "concat", "char", "coalesce", "ifnull":
+		default:
+			return false
+		}
+		if ref, ok := node.Func.FunctionReference.(*tree.UnresolvedName); !ok ||
+			ref == nil || ref.NumParts != 1 || ref.Star ||
+			!strings.EqualFold(ref.ColName(), name) {
+			return false
+		}
+		for _, arg := range node.Exprs {
+			if !zeroLimitSourceExprSafe(arg, true, next) {
+				return false
+			}
+		}
+		return len(node.Exprs) > 0
+	default:
+		return false
+	}
+}
+
+// scalarRootZeroNeedsDependent selects the existing invocation-local owner
+// before scalar projection normalization can reject or move an outer value.
+// A nested zero is not enough: an aggregate or set operation above it may
+// still produce rows.
+func (builder *QueryBuilder) zeroScalarDirectTablePlan(root int32, ctx *BindContext) bool {
+	if builder.qry == nil || ctx == nil {
+		return false
+	}
+	seen := make(map[int32]struct{})
+	foundZero := false
+	for steps := 0; steps < len(builder.qry.Nodes); steps++ {
+		if root < 0 || int(root) >= len(builder.qry.Nodes) ||
+			int(root) >= len(builder.ctxByNode) || builder.ctxByNode[root] != ctx {
+			return false
+		}
+		if _, ok := seen[root]; ok {
+			return false
+		}
+		seen[root] = struct{}{}
+		node := builder.qry.Nodes[root]
+		if node == nil || node.RankOption != nil {
+			return false
+		}
+		if node.Limit != nil {
+			limit, literal := getLiteralUint64(node.Limit)
+			if foundZero || !literal || limit != 0 {
+				return false
+			}
+			foundZero = true
+		}
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			return foundZero && len(node.Children) == 0 && len(node.BindingTags) == 1 &&
+				node.TableDef != nil && node.TableDef.TableType == catalog.SystemOrdinaryRel &&
+				node.TableDef.Partition == nil && node.TableDef.ViewSql == nil &&
+				node.TableDef.TblFunc == nil && node.ObjRef != nil &&
+				node.ObjRef.Server == 0 && node.ObjRef.ServerName == "" &&
+				node.ObjRef.SubscriptionName == "" && node.ObjRef.PubInfo == nil &&
+				node.ObjRef.Snapshot == nil && !node.ObjRef.NotLockMeta
+		}
+		if node.NodeType != plan.Node_PROJECT && node.NodeType != plan.Node_FILTER &&
+			node.NodeType != plan.Node_SORT || len(node.Children) != 1 {
+			return false
+		}
+		if node.Offset != nil {
+			if node.Limit == nil {
+				return false
+			}
+			if _, literal := getLiteralUint64(node.Offset); !literal {
+				return false
+			}
+		}
+		root = node.Children[0]
+	}
+	return false
+}
+
+func (builder *QueryBuilder) scalarRootZeroNeedsDependent(sub *plan.SubqueryRef) bool {
+	if builder == nil || builder.qry == nil || sub == nil || sub.Typ != plan.SubqueryRef_SCALAR || sub.Child != nil ||
+		sub.NodeId < 0 || int(sub.NodeId) >= len(builder.qry.Nodes) ||
+		int(sub.NodeId) >= len(builder.ctxByNode) {
+		return false
+	}
+	subCtx := builder.ctxByNode[sub.NodeId]
+	if subCtx == nil || !subCtx.zeroScalarRootSourceSafe ||
+		len(subCtx.results) != 1 || len(subCtx.projects) == 0 || subCtx.projects[0] == nil ||
+		!builder.zeroScalarDirectTablePlan(sub.NodeId, subCtx) {
+		return false
+	}
+	hasOuter, invalidDepth := false, false
+	if err := plan.VisitExprTree(subCtx.projects[0], func(expr *plan.Expr) error {
+		if corr := expr.GetCorr(); corr != nil {
+			hasOuter = true
+			invalidDepth = invalidDepth || corr.Depth != 1
+		}
+		return nil
+	}); err != nil || !hasOuter || invalidDepth {
+		return false
+	}
+
+	id := sub.NodeId
+	// Bound traversal even for a malformed cyclic plan.
+	for range len(builder.qry.Nodes) {
+		if id < 0 || int(id) >= len(builder.qry.Nodes) {
+			return false
+		}
+		node := builder.qry.Nodes[id]
+		if node == nil || node.RankOption != nil {
+			return false
+		}
+		if node.Limit != nil {
+			limit, literal := getLiteralUint64(node.Limit)
+			if !literal || limit != 0 {
+				return false
+			}
+			if node.Offset != nil {
+				if _, literal = getLiteralUint64(node.Offset); !literal {
+					return false
+				}
+			}
+			return true
+		}
+		if node.Offset != nil || len(node.Children) != 1 ||
+			(node.NodeType != plan.Node_PROJECT && node.NodeType != plan.Node_SORT) {
+			return false
+		}
+		id = node.Children[0]
+	}
+	return false
+}
 
 // Select the general path before any destructive pull-up. A previously bound
 // dependent child makes its enclosing relation dependent even when all of its
@@ -151,6 +496,7 @@ func (builder *QueryBuilder) createDependentQuery() (*Query, error) {
 // Program roots and stage owners are node references, just like Children and
 // Steps. Compact all of them under one map, preserving shared node identity.
 func compactCorrelationPlan(q *plan.Query) error {
+	oldNodes := q.Nodes
 	ids := make(map[int32]int32)
 	var nodes []*plan.Node
 	if err := plan.WalkQueryNodes(q, func(id int32, n *plan.Node) error {
@@ -175,6 +521,7 @@ func compactCorrelationPlan(q *plan.Query) error {
 	for _, s := range q.Correlation.Stages {
 		s.OwnerNode = ids[s.OwnerNode]
 	}
+	appendWindowValidationPrivilegeCarriers(oldNodes, &nodes)
 	q.Nodes = nodes
 	return q.ValidateCorrelation()
 }

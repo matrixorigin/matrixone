@@ -735,6 +735,16 @@ func buildDeallocate(stmt *tree.Deallocate, _ CompilerContext) (*Plan, error) {
 	}, nil
 }
 
+// BindSetVariableResultType binds the expression for type recovery after the
+// frontend has evaluated and authorized it through a synthetic SELECT.
+func BindSetVariableResultType(expr tree.Expr, ctx CompilerContext, prepared bool) (*Expr, error) {
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, prepared, false)
+	builder.zeroScalarPolicy = zeroScalarValidateOnly
+	bindCtx := NewBindContext(builder, nil)
+	binder := NewProjectionBinder(builder, bindCtx, NewHavingBinder(builder, bindCtx))
+	return binder.BindExpr(expr, 0, false)
+}
+
 func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	p, _, err := buildSetVariablesWithQuery(stmt, ctx, isPrepareStmt)
 	return p, err
@@ -760,9 +770,31 @@ func buildSetVariablesWithQuery(
 		if assignment.Value == nil {
 			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "Set statement has no value")
 		}
+		var subqueries []*tree.Subquery
+		if isPrepareStmt {
+			tree.CollectOuterSubqueries(assignment.Value, &subqueries)
+		}
+		if len(subqueries) != 0 {
+			builder.zeroScalarPolicy = zeroScalarExecutable
+			binder.preparedSetSubqueries = make(map[*tree.Subquery][]int32, len(subqueries))
+		}
+		retained := builder.zeroScalarRetentionGeneration
+		rewritten := builder.zeroScalarRewriteGeneration
+		liveRequirements := make(map[int32]zeroScalarLiveRequirement, len(builder.zeroScalarRequiredLiveNodes))
+		for id, requirement := range builder.zeroScalarRequiredLiveNodes {
+			liveRequirements[id] = requirement
+		}
 		item.Value, err = binder.baseBindExpr(assignment.Value, 0, true)
+		builder.zeroScalarPolicy = zeroScalarDisabled
+		boundSubqueries := binder.preparedSetSubqueries
+		binder.preparedSetSubqueries = nil
 		if err != nil {
 			return nil, nil, err
+		}
+		if builder.zeroScalarRetentionGeneration != retained || builder.zeroScalarRewriteGeneration != rewritten {
+			if err := validatePreparedSetScalarReplay(builder, item.Value, subqueries, boundSubqueries, liveRequirements); err != nil {
+				return nil, nil, err
+			}
 		}
 		if assignment.Reserved != nil {
 			item.Reserved, err = binder.baseBindExpr(assignment.Reserved, 0, true)
@@ -772,7 +804,6 @@ func buildSetVariablesWithQuery(
 		}
 		items[idx] = item
 	}
-
 	setVariables := &plan.SetVariables{
 		Items: items,
 	}
@@ -787,6 +818,108 @@ func buildSetVariablesWithQuery(
 			},
 		},
 	}, builder.qry, nil
+}
+
+// Prepared SET keeps the AST subqueries in bound-expression order for schema
+// capture and same-session expression replay.
+func validatePreparedSetScalarReplay(
+	builder *QueryBuilder,
+	value *Expr,
+	subqueries []*tree.Subquery,
+	bound map[*tree.Subquery][]int32,
+	previousLiveRequirements map[int32]zeroScalarLiveRequirement,
+) error {
+	cannotReplay := func() error {
+		return moerr.NewNYI(builder.GetContext(),
+			"prepared SET cannot retain correlated scalar LIMIT 0 source validation")
+	}
+	if len(subqueries) == 0 {
+		return cannotReplay()
+	}
+	for id, requirement := range builder.zeroScalarRequiredLiveNodes {
+		if requirement&^previousLiveRequirements[id] != 0 {
+			return cannotReplay()
+		}
+	}
+	pos := 0
+	usedNodeIDs := make(map[int32]struct{}, len(subqueries))
+	var visit func(*Expr) error
+	visit = func(expr *Expr) error {
+		if expr == nil {
+			return nil
+		}
+		if ref := expr.GetSub(); ref != nil {
+			if pos == len(subqueries) || ref.Child != nil {
+				return cannotReplay()
+			}
+			if subqueries[pos].Exists {
+				if ref.Typ != plan.SubqueryRef_EXISTS && ref.Typ != plan.SubqueryRef_NOT_EXISTS {
+					return cannotReplay()
+				}
+			} else if ref.Typ != plan.SubqueryRef_SCALAR || ref.RowSize != 1 {
+				return cannotReplay()
+			}
+			nodeIDs := bound[subqueries[pos]]
+			matched := false
+			for _, nodeID := range nodeIDs {
+				if nodeID == ref.NodeId {
+					if _, alreadyUsed := usedNodeIDs[nodeID]; !alreadyUsed {
+						usedNodeIDs[nodeID] = struct{}{}
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				return cannotReplay()
+			}
+			pos++
+			return nil
+		}
+		if expr.GetDependent() != nil {
+			return cannotReplay()
+		}
+		var children []*Expr
+		if fn := expr.GetF(); fn != nil {
+			children = append(children, fn.Args...)
+		}
+		if list := expr.GetList(); list != nil {
+			children = append(children, list.List...)
+		}
+		if literal := expr.GetLit(); literal != nil && literal.Src != nil {
+			children = append(children, literal.Src)
+		}
+		if window := expr.GetW(); window != nil {
+			children = append(children, window.WindowFunc)
+			children = append(children, window.PartitionBy...)
+			for _, order := range window.OrderBy {
+				if order != nil {
+					children = append(children, order.Expr)
+				}
+			}
+			if frame := window.Frame; frame != nil {
+				if frame.Start != nil {
+					children = append(children, frame.Start.Val)
+				}
+				if frame.End != nil {
+					children = append(children, frame.End.Val)
+				}
+			}
+		}
+		for _, child := range children {
+			if err := visit(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := visit(value); err != nil {
+		return err
+	}
+	if pos != len(subqueries) {
+		return cannotReplay()
+	}
+	return nil
 }
 
 func buildCreateAccount(stmt *tree.CreateAccount, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {

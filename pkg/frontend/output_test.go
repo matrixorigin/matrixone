@@ -705,3 +705,23 @@ func TestColumnSlicesLowPrecFloat(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertFlatUntypedNullVectorToSlice(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := vector.NewConstNull(types.T_any.ToType(), 2, mp)
+	vec := vector.NewVec(types.T_any.ToType())
+	require.NoError(t, vec.UnionOne(source, 0, mp))
+	require.NoError(t, vec.UnionOne(source, 1, mp))
+	require.False(t, vec.IsConstNull())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	slices := &ColumnSlices{ctx: t.Context(), dataSet: bat, colIdx2SliceIdx: make([]int, 1)}
+	t.Cleanup(func() { source.Free(mp); bat.Clean(mp) })
+	t.Cleanup(slices.Close)
+	require.NoError(t, convertBatchToSlices(t.Context(), nil, bat, slices))
+	for i := range 2 {
+		row := make([]any, 1)
+		require.NoError(t, extractRowFromVector2(t.Context(), nil, vec, 0, row, i, false, slices))
+		require.Nil(t, row[0])
+	}
+}

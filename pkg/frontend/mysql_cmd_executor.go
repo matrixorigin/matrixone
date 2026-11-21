@@ -1517,9 +1517,14 @@ func doSetVar(
 		var runtimeDomain types.RuntimeStringDomain
 		var evalErr error
 		if index < len(preparedItems) && preparedItems[index].Value != nil {
-			if preparedPlanExprContainsSubquery(preparedItems[index].Value) {
-				value, valueType, evalErr = getPreparedPlanExprValueWithSubqueries(
-					assign.Value, preparedItems[index].Value, ses, execCtx,
+			var subqueries []*tree.Subquery
+			tree.CollectOuterSubqueries(assign.Value, &subqueries)
+			if len(subqueries) != 0 {
+				// Keep all subqueries inside the original expression. Evaluating
+				// them separately can execute dead CASE branches and loses the
+				// AST-to-plan identity after runtime parameter specialization.
+				value, valueType, evalErr = getExprValueWithPrepareMeta(
+					assign.Value, ses, execCtx, true, nil,
 					&prepareParamKind, &runtimeDomain, &isBin)
 			} else {
 				value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
@@ -4533,8 +4538,11 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 			return true, nil
 		}
 		for i := range p.Query.Nodes {
-			if def := p.Query.Nodes[i].TableDef; def != nil {
-				flag, err := checkFn(p.Query.Nodes[i].ObjRef, def, p.Query.Nodes[i].ScanSnapshot)
+			node := p.Query.Nodes[i]
+			// table_changes has a synthetic output schema. Its source is
+			// validated through CatalogDependencies below.
+			if def := node.TableDef; def != nil && !isTableChangesScan(node) {
+				flag, err := checkFn(node.ObjRef, def, node.ScanSnapshot)
 				if err != nil || flag {
 					return true, err
 				}
@@ -8427,6 +8435,9 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, _ FeSession) (statsByte 
 	if h.query != nil {
 		options := &explain.MarshalPlanOptions
 		for _, node := range h.query.Nodes {
+			if plan2.IsValidationPrivilegeCarrier(node) {
+				continue
+			}
 			if h.isInternalSubStmt {
 				s := explain.GetStatistic4Trace(ctx, node, options)
 				statsByte.Add(&s)
