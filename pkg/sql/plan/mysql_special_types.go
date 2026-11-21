@@ -198,60 +198,51 @@ func isGeometrySRIDConstFunction(name string) bool {
 // decode reports its own constant-integer error, exactly like an ordinary
 // build of a non-constant definition.
 func isGeometrySRIDConstFoldSafe(expr *plan.Expr) bool {
+	return isSpeculativeConstantFoldSafe(expr, nil)
+}
+
+// isSpeculativeConstantFoldSafe admits only literal trees and executable
+// functions whose value evaluation has been audited for constant folding.
+func isSpeculativeConstantFoldSafe(expr *plan.Expr, budget *int) bool {
 	if expr == nil {
 		return false
 	}
+	if budget != nil {
+		if *budget <= 0 {
+			return false
+		}
+		*budget--
+	}
 	switch node := expr.Expr.(type) {
 	case *plan.Expr_Lit:
-		// Any literal atom is admissible: the fold result still has to
-		// decode as a constant integer, so a folded fraction or string meets
-		// the decode's own rejection, the same verdict ordinary binding
-		// gives it.
-		return true
+		return budget == nil || len(node.Lit.GetSval()) <= 4096
 	case *plan.Expr_T:
-		// Expr_T is the conversion operators' target-type metadata: the
-		// resolver appends it as the trailing argument of every cast node it
-		// builds (appendCastBeforeExprWithOverload in base_binder.go), it
-		// cannot be written from SQL, and nothing executes it - the fold
-		// executor consumes it as a type descriptor. Accepting exactly this
-		// structural leaf lets the implicit casts of otherwise safe
-		// arithmetic ('4325' + 1) pass the walk, while every executable node
-		// keeps requiring the operator whitelist above.
 		return true
 	case *plan.Expr_F:
-		switch node.F.GetFunc().GetObjName() {
+		f := node.F
+		if f == nil || f.Func == nil {
+			return false
+		}
+		if budget != nil && types.T(expr.Typ.Id).FixedLength() < 0 {
+			// Purity does not bound an intermediate's size. A tiny tree like
+			// LENGTH(SPACE(n)) can allocate a large string during evaluation.
+			return false
+		}
+		switch f.Func.GetObjName() {
 		case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus",
 			"unary_tilde", "cast", "serial", "serial_full":
-			for _, arg := range node.F.GetArgs() {
-				if !isGeometrySRIDConstFoldSafe(arg) {
-					return false
-				}
-			}
-			return true
+			// The binder's arithmetic, cast and tuple encoding operators.
 		default:
-			// A nested function is admissible only through the function
-			// registry's positively proven pure set - never through the
-			// absence of a flag: llm_chat is registered STRICT without the
-			// internal bit and without a volatile or real-time-related
-			// overload, so a negative-only test admits it and the guarded
-			// fold executes its HTTP request. The curated set keeps a pure
-			// deterministic builtin inside the arithmetic (ABS of a
-			// literal) folding exactly as ordinary binding folds it, while
-			// rand and sleep stay out through the volatile and real-time
-			// flags, the relation resolvers, the fault-injection machinery
-			// and the LLM, starlark and UDF executors stay out through the
-			// internal bit or pure-set membership, and nothing of any of
-			// them executes here.
-			if !function.GetFunctionIsProvenPureFoldableById(node.F.GetFunc().GetObj()) {
+			if !function.GetFunctionIsProvenPureFoldableById(f.Func.GetObj()) {
 				return false
 			}
-			for _, arg := range node.F.GetArgs() {
-				if !isGeometrySRIDConstFoldSafe(arg) {
-					return false
-				}
-			}
-			return true
 		}
+		for _, arg := range f.Args {
+			if !isSpeculativeConstantFoldSafe(arg, budget) {
+				return false
+			}
+		}
+		return true
 	default:
 		return false
 	}

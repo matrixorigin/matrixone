@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -72,10 +73,10 @@ func bitCountProjectionRetainsSubqueryAfterReduction(builder *QueryBuilder, expr
 	if sub := expr.GetSub(); sub != nil {
 		scope := bitCountSubqueryScope(builder, sub)
 		if direct && sub.Typ == plan.SubqueryRef_SCALAR && sub.Child == nil && sub.RowSize == 1 &&
-			scope != nil && scope.reducibleTablelessScalar {
+			scope != nil && bitCountCanReduceScalar(builder, scope) {
 			return scope.singleProjectionRetainsSubquery
 		}
-		if direct && bitCountInSubqueryCanReduce(scope, sub) {
+		if direct && bitCountInSubqueryCanReduce(builder, scope, sub) {
 			return bitCountProjectionRetainsSubqueryAfterReduction(builder, sub.Child, true)
 		}
 		return true
@@ -115,65 +116,43 @@ func bitCountSubqueryScope(builder *QueryBuilder, sub *plan.SubqueryRef) *BindCo
 	return builder.ctxByNode[sub.NodeId]
 }
 
-func bitCountInSubqueryCanReduce(scope *BindContext, sub *plan.SubqueryRef) bool {
+func bitCountInSubqueryCanReduce(builder *QueryBuilder, scope *BindContext, sub *plan.SubqueryRef) bool {
 	if scope == nil || !scope.canReduceInToSubqueryFreeComparison || sub == nil || sub.RowSize != 1 || sub.Child == nil {
 		return false
 	}
-	return sub.Typ == plan.SubqueryRef_IN || sub.Typ == plan.SubqueryRef_ANY && sub.Op == "="
+	return (sub.Typ == plan.SubqueryRef_IN || sub.Typ == plan.SubqueryRef_ANY && sub.Op == "=") &&
+		bitCountWhereIsEffectivelyTrue(builder, scope)
 }
 
-// Only evaluate bounded trees of SQL predicates on constants. General
-// constant folding also admits functions that can have external effects.
-func bitCountConstantPredicate(expr *Expr, budget *int) bool {
-	if expr == nil || *budget == 0 {
-		return false
-	}
-	*budget -= 1
-	if expr.GetLit() != nil || expr.GetT() != nil {
-		return true
-	}
-	fn := expr.GetF()
-	if fn == nil || fn.Func == nil {
-		return false
-	}
-	id, _ := function.DecodeOverloadID(fn.Func.GetObj())
-	switch id {
-	case function.CAST:
-		typ := types.Type{Oid: types.T(expr.Typ.Id)}
-		if typ.Oid != types.T_bool && !typ.IsNumeric() {
-			return false
-		}
-	case function.EQUAL, function.NOT_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL,
-		function.LESS_THAN, function.LESS_EQUAL, function.NULL_SAFE_EQUAL,
-		function.AND, function.OR, function.XOR, function.NOT,
-		function.IS, function.ISNOT, function.ISNULL, function.ISNOTNULL,
-		function.ISTRUE, function.ISNOTTRUE, function.ISFALSE, function.ISNOTFALSE,
-		function.PLUS, function.MINUS, function.MULTI, function.DIV, function.MOD,
-		function.UNARY_PLUS, function.UNARY_MINUS:
-	default:
-		return false
-	}
-	for _, arg := range fn.Args {
-		if !bitCountConstantPredicate(arg, budget) {
-			return false
-		}
-	}
-	return true
+func bitCountCanReduceScalar(builder *QueryBuilder, scope *BindContext) bool {
+	return scope.reducibleTablelessScalar && bitCountWhereIsEffectivelyTrue(builder, scope)
 }
 
 func bitCountWhereIsEffectivelyTrue(builder *QueryBuilder, ctx *BindContext) bool {
 	if ctx == nil {
 		return false
 	}
+	budget := 32
 	for _, filter := range ctx.whereFilters {
 		folded := filter
 		if filter.GetLit() == nil {
-			budget := 32
-			if builder == nil || builder.compCtx == nil || !bitCountConstantPredicate(filter, &budget) {
+			if builder == nil || builder.compCtx == nil || !isSpeculativeConstantFoldSafe(filter, &budget) {
 				return false
 			}
+			bindCtx := builder.GetContext()
+			if defines.IsNoEvaluationViewBinding(bindCtx) || bindCtx.Err() != nil {
+				return false
+			}
+			proc := builder.compCtx.GetProcess()
+			if proc == nil {
+				return false
+			}
+			// The compiler may lend a process from an earlier statement.
+			// Borrow its resources, using the current bind request's deadline.
+			eval := proc.NewNoContextChildProc(0)
+			eval.Ctx = bindCtx
 			var err error
-			folded, err = ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(filter), builder.compCtx.GetProcess(), false, false)
+			folded, err = ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(filter), eval, false, false)
 			if err != nil || folded == nil {
 				return false
 			}
@@ -191,12 +170,12 @@ func bitCountProjectionDependsOnRows(builder *QueryBuilder, expr *Expr, direct b
 	}
 	if sub := expr.GetSub(); sub != nil {
 		scope := bitCountSubqueryScope(builder, sub)
-		if direct && bitCountInSubqueryCanReduce(scope, sub) &&
+		if direct && bitCountInSubqueryCanReduce(builder, scope, sub) &&
 			!bitCountProjectionRetainsSubqueryAfterReduction(builder, sub.Child, true) {
 			return false
 		}
 		if direct && sub.Typ == plan.SubqueryRef_SCALAR && sub.Child == nil && sub.RowSize == 1 &&
-			scope != nil && scope.reducibleTablelessScalar {
+			scope != nil && bitCountCanReduceScalar(builder, scope) {
 			return scope.hasDependentProjectionSubquery
 		}
 		if sub.Child != nil && bitCountProjectionDependsOnRows(builder, sub.Child, false, seen) {
@@ -235,6 +214,37 @@ func bitCountProjectionDependsOnRows(builder *QueryBuilder, expr *Expr, direct b
 		}
 	}
 	return false
+}
+
+// Bind the count inside each selected arm so the control-flow executor keeps
+// its row masks and the operand reaches BIT_COUNT with its own conversion.
+func (b *baseBinder) bindBitCountOperand(expr *Expr) (*Expr, error) {
+	ctx := b.GetContext()
+	if releasedBitCountFloatOverload(types.T(expr.Typ.Id)) >= 0 {
+		if fn := expr.GetF(); fn != nil && fn.Func != nil {
+			id, _ := function.DecodeOverloadID(fn.Func.GetObj())
+			switch id {
+			case function.UNARY_PLUS:
+				return b.bindBitCountOperand(fn.Args[0])
+			case function.CASE, function.IFF:
+				if !expr.GetPreparedNumeric().GetIfnullCommonValue() {
+					args := append([]*Expr(nil), fn.Args...)
+					for _, i := range controlFlowValueIndexes(fn.Func.GetObjName(), len(args)) {
+						count, err := b.bindBitCountOperand(stripIntegerSelectionReconciliation(args[i]))
+						if err != nil {
+							return nil, err
+						}
+						args[i] = count
+					}
+					return BindFuncExprImplByPlanExpr(ctx, fn.Func.GetObjName(), args)
+				}
+			}
+		}
+		if overload := b.bitCountFloatOverload(expr); overload >= 0 {
+			return bindBitCountFloatOverload(ctx, []*Expr{expr}, overload)
+		}
+	}
+	return BindFuncExprImplByPlanExpr(ctx, "bit_count", []*Expr{expr})
 }
 
 // A mergeable projection forwards its operand's conversion. A materialized
@@ -288,7 +298,7 @@ func (b *baseBinder) bitCountFloatOverload(expr *Expr) int32 {
 			if sub.NodeId >= 0 && int(sub.NodeId) < len(b.builder.ctxByNode) {
 				scope = b.builder.ctxByNode[sub.NodeId]
 			}
-			if scope == nil || !scope.reducibleTablelessScalar || sub.Child != nil || sub.RowSize != 1 ||
+			if scope == nil || !bitCountCanReduceScalar(b.builder, scope) || sub.Child != nil || sub.RowSize != 1 ||
 				len(scope.projects) != 1 || scope.hasDependentProjectionSubquery {
 				return int32(field)
 			}

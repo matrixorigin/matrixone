@@ -5265,9 +5265,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 	}
 	if name == "bit_count" && len(args) == 1 && releasedBitCountFloatOverload(types.T(args[0].Typ.Id)) >= 0 &&
 		b.GetContext().Value(releasedBitCountDumpBindingKey{}) == nil {
-		if overload := b.bitCountFloatOverload(args[0]); overload >= 0 {
-			return bindBitCountFloatOverload(b.GetContext(), args, overload)
-		}
+		return b.bindBitCountOperand(args[0])
 	}
 	var integerInputs []uint32
 	if b.builder != nil && b.builder.integerPrecision != nil {

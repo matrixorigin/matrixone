@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -132,6 +133,24 @@ func TestBitCountDerivedSubqueryProjectionBinding(t *testing.T) {
 			want: 16,
 		},
 		{
+			name: "direct IN with pure string predicate",
+			selects: `select cast(e.sal as double) x, e.empno in (select 1 where 'a' like 'a') z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "direct IN with pure numeric function",
+			selects: `select cast(e.sal as double) x, e.empno in (select 1 where abs(-1) = 1) z
+				from constraint_test.emp e`,
+			want: 16,
+		},
+		{
+			name: "direct IN with volatile filter retains subquery",
+			selects: `select cast(e.sal as double) x, e.empno in (select 1 where rand() < 0.5) z
+				from constraint_test.emp e`,
+			want: function.BitCountFloat64FieldOverload,
+		},
+		{
 			name: "direct IN with numeric true filter",
 			selects: `select cast(e.sal as double) x, e.empno in (select 1 where 1) z
 				from constraint_test.emp e`,
@@ -213,6 +232,44 @@ func TestBitCountDerivedSubqueryProjectionBinding(t *testing.T) {
 			_, overload := function.DecodeOverloadID(fn.GetF().GetFunc().GetObj())
 			require.Equal(t, tc.want, overload)
 		})
+	}
+}
+
+func TestBitCountPredicateFoldUsesBindingContext(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	compCtx := NewEmptyCompilerContext(proc)
+	builder := &QueryBuilder{compCtx: compCtx}
+	oldStatement, cancel := context.WithCancel(proc.Ctx)
+	cancel()
+	proc.Ctx = oldStatement
+
+	text := makePlan2StringConstExprWithType("a")
+	text.Typ.Charset = uint32(types.CharsetUTF8)
+	like, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "like", []*Expr{text, DeepCopyExpr(text)})
+	require.NoError(t, err)
+	ctx := &BindContext{whereFilters: []*Expr{like}}
+	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx))
+	require.NotNil(t, like.GetF(), "speculative folding must leave the bound predicate intact")
+
+	compCtx.SetContext(oldStatement)
+	require.False(t, bitCountWhereIsEffectivelyTrue(builder, ctx))
+}
+
+func TestBitCountConditionalBinding(t *testing.T) {
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+	queryPlan, err := runOneStmt(optimizer, t, `select
+		bit_count(case when e.empno=1 then cast(e.sal as double)+0 else cast(e.sal as double) end)
+		from constraint_test.emp e`)
+	require.NoError(t, err)
+	selector := findPlanFunctionExpr(queryPlan, "case")
+	require.NotNil(t, selector)
+	require.Equal(t, int32(types.T_uint64), selector.Typ.Id)
+	for i, want := range []int32{function.BitCountFloat64ExpressionOverload, 16} {
+		arg := selector.GetF().GetArgs()[i+1]
+		require.NotNil(t, arg.GetF())
+		fid, overload := function.DecodeOverloadID(arg.GetF().GetFunc().GetObj())
+		require.Equal(t, int32(function.BIT_COUNT), fid)
+		require.Equal(t, want, overload)
 	}
 }
 
