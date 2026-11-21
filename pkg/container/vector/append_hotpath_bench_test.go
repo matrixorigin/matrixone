@@ -31,19 +31,18 @@ import (
 func BenchmarkAppendValueRows(b *testing.B) {
 	const rows = 8192
 	for _, test := range []struct {
-		name       string
-		oid        types.T
-		value      []byte
-		isNull     bool
-		seed       bool
-		binaryText bool
+		name   string
+		oid    types.T
+		value  []byte
+		isNull bool
+		seed   bool
 	}{
 		{name: "ordinary_int64", oid: types.T_int64},
 		{name: "null_int64", oid: types.T_int64, isNull: true},
 		{name: "ordinary_inline_varchar", oid: types.T_varchar, value: []byte("ordinary column")},
 		{name: "ordinary_area_varchar", oid: types.T_varchar, value: bytes.Repeat([]byte{'x'}, types.VarlenaInlineSize+1)},
 		{name: "null_varchar", oid: types.T_varchar, isNull: true},
-		{name: "binary_prefix_varchar", oid: types.T_varchar, value: []byte("ordinary column"), seed: true, binaryText: true},
+		{name: "seeded_varchar", oid: types.T_varchar, value: []byte("ordinary column"), seed: true},
 	} {
 		b.Run(test.name, func(b *testing.B) {
 			mp := mpool.MustNewZero()
@@ -68,9 +67,6 @@ func BenchmarkAppendValueRows(b *testing.B) {
 						b.Fatal(err)
 					}
 					start = 1
-					if test.binaryText {
-						vec.SetIsBinaryString(true)
-					}
 				}
 				if test.oid == types.T_int64 {
 					for row := start; row < rows; row++ {
@@ -95,10 +91,6 @@ func BenchmarkAppendValueRows(b *testing.B) {
 				} else {
 					require.Equal(b, test.value, vec.GetBytesAt(rows-1))
 				}
-			}
-			if test.binaryText {
-				require.True(b, vec.GetIsBinaryStringAt(0))
-				require.False(b, vec.GetIsBinaryStringAt(rows-1))
 			}
 		})
 	}

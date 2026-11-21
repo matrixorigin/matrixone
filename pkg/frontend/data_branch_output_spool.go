@@ -90,7 +90,7 @@ func (spool *dataBranchOutputSpool) append(wrapped batchWithKind) error {
 	var batchSize uint64
 	spool.buf.Write(types.EncodeUint64(&batchSize))
 	batchStart := spool.buf.Len()
-	if _, err := wrapped.batch.MarshalBinaryWithMetadata(&spool.buf, false); err != nil {
+	if _, err := wrapped.batch.MarshalBinaryWithBuffer(&spool.buf, false); err != nil {
 		return err
 	}
 	batchSize = uint64(spool.buf.Len() - batchStart)

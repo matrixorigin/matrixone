@@ -1243,22 +1243,22 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		mpool.DeleteMPool(mp)
 		return nil, err
 	}
-	binaryStringMetadata, err := process.BinaryStringPrepareParamMetadataForRemote(
+	// Binary-string flags and runtime string domains are retired: an older
+	// peer's values are validated and dropped. Plan types carry the domain.
+	if _, err = process.BinaryStringPrepareParamMetadataForRemote(
 		proc.GetService(),
 		int(pHelper.prepareParams.Length),
 		pHelper.prepareParams.IsBinaryString,
-	)
-	if err != nil {
+	); err != nil {
 		proc.Free()
 		mpool.DeleteMPool(mp)
 		return nil, err
 	}
-	runtimeStringDomains, err := process.RuntimeStringDomainPrepareParamMetadataForRemote(
+	if _, err = process.RuntimeStringDomainPrepareParamMetadataForRemote(
 		proc.GetService(),
 		int(pHelper.prepareParams.Length),
 		pHelper.prepareParams.RuntimeStringDomains,
-	)
-	if err != nil {
+	); err != nil {
 		proc.Free()
 		mpool.DeleteMPool(mp)
 		return nil, err
@@ -1281,23 +1281,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithMetadata(
-			prepareParams,
-			prepareParamMetadata,
-			binaryStringMetadata,
-		)
-		if len(runtimeStringDomains) > 0 {
-			domains := make([]types.RuntimeStringDomain, len(runtimeStringDomains))
-			for i, domain := range runtimeStringDomains {
-				domains[i] = types.RuntimeStringDomain(domain)
-			}
-			if err = prepareParams.SetRuntimeStringDomainsWithMP(domains, proc.Mp()); err != nil {
-				prepareParams.Free(proc.Mp())
-				proc.Free()
-				mpool.DeleteMPool(mp)
-				return nil, err
-			}
-		}
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
 	}
 	// Carry ROW_COUNT() state so row_count() pushed down to this remote CN reads
 	// the previous statement's affected rows instead of the default 0.
@@ -1426,14 +1410,6 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	if b.HasGrouping() && version < defines.MORPCVersion87 {
 		return moerr.NewInvalidStateNoCtx(
 			"grouping provenance requires MORPCVersion87 for remote results")
-	}
-	if b.HasBinaryStringMetadata() && version < defines.MORPCVersion18 {
-		return moerr.NewInvalidStateNoCtx(
-			"binary-string provenance requires MORPCVersion18 for remote results")
-	}
-	if b.HasExplicitTextStringMetadata() && version < defines.MORPCVersion23 {
-		return moerr.NewInvalidStateNoCtx(
-			"explicit-text provenance requires MORPCVersion23 for remote results")
 	}
 	var transport bytes.Buffer
 	data, err := b.MarshalBinaryForPipeline(&transport, false)

@@ -415,9 +415,6 @@ func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
-	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0),
-		"static binary type must not be flattened into a runtime override")
-	require.False(t, cw.proc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, plan2.ParamValue{
 		Value: "AB\x00\x00", IsBin: false, EnableNumericPrefix: true,
 		SourceType: types.NewWithCharset(types.T_varbinary, 0, 0, types.CharsetBinary), HasSourceType: true,
@@ -428,8 +425,6 @@ func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {
 	}, cw.paramVals[1])
 
 	params := cw.proc.GetPrepareParams()
-	require.Equal(t, types.RuntimeStringBinary, params.GetRuntimeStringDomainAt(0))
-	require.Equal(t, types.RuntimeStringInherit, params.GetRuntimeStringDomainAt(1))
 	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParamsStringSource())
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
@@ -437,7 +432,6 @@ func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {
 	require.Zero(t, params.Length(), "the previous owned params must be released on successful replacement")
 	require.Nil(t, params.GetData())
 	require.False(t, cw.proc.GetPrepareParamIsBin(0))
-	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0))
 	require.Equal(t, "now-text", cw.proc.GetPrepareParams().GetStringAt(0))
 	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParamsStringSource())
 
@@ -468,14 +462,14 @@ func TestBinaryProtocolPreparedParamRebindsStringDomain(t *testing.T) {
 	previous := install(defines.MYSQL_TYPE_BLOB)
 	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+	require.True(t, preparedParamValueIsBinaryString(cw, 0))
 
 	cw.proc.SetPrepareParams(nil)
 	current := install(defines.MYSQL_TYPE_VAR_STRING)
 	previous.Free(cw.proc.Mp())
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0),
+	require.False(t, preparedParamValueIsBinaryString(cw, 0),
 		"a text rebind must clear the previous binary domain")
 
 	cw.proc.SetPrepareParams(nil)
@@ -483,7 +477,7 @@ func TestBinaryProtocolPreparedParamRebindsStringDomain(t *testing.T) {
 	current.Free(cw.proc.Mp())
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0),
+	require.True(t, preparedParamValueIsBinaryString(cw, 0),
 		"a later binary rebind must not reuse the text domain")
 	cw.proc.SetPrepareParams(nil)
 	next.Free(cw.proc.Mp())
@@ -523,7 +517,7 @@ func TestCOMStmtJsonUnquoteRebindExecutesWithWireStringDomain(t *testing.T) {
 			if owned && executionStmt != nil {
 				defer executionStmt.Free()
 			}
-			require.Equal(t, tc.wantBinary, cw.proc.GetPrepareParamIsBinaryString(0))
+			require.Equal(t, tc.wantBinary, preparedParamValueIsBinaryString(cw, 0))
 
 			queryPlan := runtimePlan.GetQuery()
 			projects := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList
@@ -540,7 +534,7 @@ func TestCOMStmtJsonUnquoteRebindExecutesWithWireStringDomain(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, result.Length())
 			require.Equal(t, "plain", result.GetStringAt(0))
-			require.False(t, result.GetIsBinaryStringAt(0))
+			require.Equal(t, types.StringDomainText, types.StaticStringDomain(*result.GetType()))
 
 			after, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
 			require.NoError(t, err)
@@ -582,7 +576,7 @@ func TestCOMStmtJsonQuoteRebindExecutesWithWireStringDomain(t *testing.T) {
 			if owned && executionStmt != nil {
 				defer executionStmt.Free()
 			}
-			require.Equal(t, tc.wantBinary, cw.proc.GetPrepareParamIsBinaryString(0))
+			require.Equal(t, tc.wantBinary, preparedParamValueIsBinaryString(cw, 0))
 
 			queryPlan := runtimePlan.GetQuery()
 			projects := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList
@@ -599,7 +593,7 @@ func TestCOMStmtJsonQuoteRebindExecutesWithWireStringDomain(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, result.Length())
 			require.Equal(t, `"plain"`, result.GetStringAt(0))
-			require.False(t, result.GetIsBinaryStringAt(0))
+			require.Equal(t, types.StringDomainText, types.StaticStringDomain(*result.GetType()))
 
 			after, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
 			require.NoError(t, err)
@@ -1023,7 +1017,7 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 			}
 			for parameter, mysqlType := range tc.mysqlTypes {
 				require.Equal(t, mysqlType == defines.MYSQL_TYPE_LONG_BLOB,
-					cw.proc.GetPrepareParamIsBinaryString(parameter))
+					preparedParamValueIsBinaryString(cw, parameter))
 			}
 			require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParamsStringSource())
 
@@ -1045,7 +1039,8 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 			replaceResult, err := replaceExecutor.Eval(cw.proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.wantReplace, replaceResult.GetStringAt(0))
-			require.Equal(t, tc.wantReplaceBinary, replaceResult.GetIsBinaryStringAt(0))
+			require.Equal(t, tc.wantReplaceBinary,
+				types.StaticStringDomain(*replaceResult.GetType()) == types.StringDomainBinary)
 
 			nestedExecutor, err := colexec.NewExpressionExecutor(cw.proc, projects[2])
 			require.NoError(t, err)
@@ -6434,22 +6429,7 @@ func TestBinaryProtocolPrepareParamTemporalDomains(t *testing.T) {
 	}
 }
 
-func TestBinaryProtocolPrepareParamBinaryStringMetadataNoBlobDoesNotAllocate(t *testing.T) {
-	const paramCount = 64
-	paramTypes := make([]byte, paramCount*2)
-	for i := 0; i < paramCount; i++ {
-		paramTypes[i*2] = byte(defines.MYSQL_TYPE_LONG)
-	}
-
-	allocs := testing.AllocsPerRun(100, func() {
-		if metadata := binaryProtocolPrepareParamBinaryStringMetadata(paramTypes, paramCount, nil); metadata != nil {
-			t.Fatal("non-BLOB binary parameters must not produce binary-string metadata")
-		}
-	})
-	require.Zero(t, allocs)
-}
-
-func TestInitExecuteStmtParamReusesBinaryStringMetadata(t *testing.T) {
+func TestInitExecuteStmtParamRebindsBinaryStringPerExecution(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 126, "select ?")
 	defer prepareStmt.Close()
 
@@ -6472,18 +6452,25 @@ func TestInitExecuteStmtParamReusesBinaryStringMetadata(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// The binary-string bit is derived from each execution's wire type.
 	run(defines.MYSQL_TYPE_BLOB, "blob-one")
-	require.Len(t, prepareStmt.paramBinaryStrings, 1)
-	first := &prepareStmt.paramBinaryStrings[0]
-	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+	require.True(t, preparedParamValueIsBinaryString(cw, 0))
 
 	run(defines.MYSQL_TYPE_VAR_STRING, "text")
-	require.False(t, cw.proc.GetPrepareParamIsBinaryString(0))
-	require.Same(t, first, &prepareStmt.paramBinaryStrings[0])
+	require.False(t, preparedParamValueIsBinaryString(cw, 0))
 
 	run(defines.MYSQL_TYPE_BLOB, "blob-two")
-	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
-	require.Same(t, first, &prepareStmt.paramBinaryStrings[0])
+	require.True(t, preparedParamValueIsBinaryString(cw, 0))
+}
+
+// preparedParamValueIsBinaryString reports whether the current execution's
+// parameter i was bound as a binary string (derived from its COM_STMT wire type).
+func preparedParamValueIsBinaryString(cw *TxnComputationWrapper, i int) bool {
+	if i >= len(cw.paramVals) {
+		return false
+	}
+	value, ok := cw.paramVals[i].(plan2.ParamValue)
+	return ok && value.IsBinaryString
 }
 
 func TestInitExecuteStmtParamBinaryConstructorMemberOf(t *testing.T) {
@@ -6658,6 +6645,7 @@ func TestPreparedNullBlobRetainsBinaryProtocolType(t *testing.T) {
 	values, err := preparedParamValues(cw.proc, paramTypes, []types.StringConversionKind{types.StringConversionString})
 	require.NoError(t, err)
 	require.Equal(t, []any{plan2.ParamValue{
+		IsBinaryString:      true, // derived from the BLOB wire type
 		IsBinaryProtocol:    true,
 		RuntimeType:         types.T_blob.ToType(),
 		HasRuntimeType:      true,
@@ -6739,8 +6727,8 @@ func TestInitExecuteStmtParamSetsCOMStmtBinaryStringMetadata(t *testing.T) {
 	if owned {
 		executionStmt.Free()
 	}
-	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
-	require.False(t, cw.proc.GetPrepareParamIsBinaryString(1))
+	require.True(t, preparedParamValueIsBinaryString(cw, 0))
+	require.False(t, preparedParamValueIsBinaryString(cw, 1))
 	require.Equal(t, types.StringSourceCOMStmt, cw.proc.GetPrepareParamsStringSource())
 }
 
@@ -6777,7 +6765,7 @@ func TestInitExecuteStmtParamSpecializesCOMStmtBinaryFunction(t *testing.T) {
 	value, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
 	require.Equal(t, []byte{0xe4}, value.GetBytesAt(0))
-	require.True(t, value.GetIsBinaryStringAt(0))
+	require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(*value.GetType()))
 }
 
 func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
@@ -6789,10 +6777,8 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 	}{
 		{"text", types.T_text.ToType(), types.RuntimeStringInherit, false},
 		{"binary", types.T_blob.ToType(), types.RuntimeStringInherit, true},
-		{"selected binary", types.T_text.ToType(), types.RuntimeStringBinary, true},
-		{"selected text", types.T_blob.ToType(), types.RuntimeStringText, false},
-		{"selected text on binary varchar", types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetBinary), types.RuntimeStringText, false},
-		{"selected binary retains text collation", types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetUTF8MB4Bin), types.RuntimeStringBinary, true},
+		{"binary varchar", types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetBinary), types.RuntimeStringInherit, true},
+		{"text collation varchar", types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetUTF8MB4Bin), types.RuntimeStringInherit, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses, scratch, cw, execCtx := newPreparedExecuteEnv(t, 124)
@@ -6905,31 +6891,6 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 			check(second, opposite, !tc.binary, false)
 		})
 	}
-}
-
-func TestBuildExecuteUserParamsPreservesExplicitTextOverride(t *testing.T) {
-	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 123)
-	defer prepareStmt.Close()
-	binaryType := plan.Type{
-		Id: int32(types.T_varbinary), Width: 16, Charset: uint32(types.CharsetBinary),
-	}
-	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-		"text_override", "你", "", false, binaryType, types.StringConversionString,
-		false, types.RuntimeStringText))
-
-	domain, err := ses.txnCompileCtx.ResolveVariableStringDomain("text_override", false, false)
-	require.NoError(t, err)
-	require.Equal(t, types.RuntimeStringText, domain)
-	params, values, _, binary, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc, ses.txnCompileCtx.ResolveVariablePrepareParamKind, []*plan.Expr{{
-		Typ: binaryType, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "text_override"}},
-	}}, nil, nil)
-	require.NoError(t, err)
-	defer params.Free(cw.proc.Mp())
-	require.Equal(t, types.RuntimeStringText, params.GetRuntimeStringDomainAt(0))
-	require.Equal(t, []bool{false}, binary)
-	param := values[0].(plan2.ParamValue)
-	require.Equal(t, types.RuntimeStringText, param.RuntimeStringDomain)
-	require.Equal(t, types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary), param.SourceType)
 }
 
 func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {

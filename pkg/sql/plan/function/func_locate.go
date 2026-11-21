@@ -29,7 +29,7 @@ func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResul
 	rs := vector.MustFunctionResult[int64](result)
 	substrVs := vector.GenerateFunctionStrParameter(parameters[0])
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
-	uniformBinary, perRow := stringDomainMode(parameters[1])
+	uniformBinary := isBinaryStringVector(parameters[1])
 	caseInsensitive := types.IsCaseInsensitiveCollation(parameters[1].GetType().Charset)
 
 	for row := uint64(0); row < uint64(length); row++ {
@@ -47,7 +47,7 @@ func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResul
 			}
 			continue
 		}
-		binary := binaryStringAt(parameters[1], int(row), uniformBinary, perRow)
+		binary := uniformBinary
 		rs.AppendMustValue(locateString(substr, str, 1, binary, caseInsensitive))
 	}
 	return nil
@@ -59,7 +59,7 @@ func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResul
 	substrVs := vector.GenerateFunctionStrParameter(parameters[0])
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
 	posVs := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
-	uniformBinary, perRow := stringDomainMode(parameters[1])
+	uniformBinary := isBinaryStringVector(parameters[1])
 	caseInsensitive := types.IsCaseInsensitiveCollation(parameters[1].GetType().Charset)
 
 	for row := uint64(0); row < uint64(length); row++ {
@@ -78,7 +78,7 @@ func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResul
 			}
 			continue
 		}
-		binary := binaryStringAt(parameters[1], int(row), uniformBinary, perRow)
+		binary := uniformBinary
 		rs.AppendMustValue(locateString(substr, str, position, binary, caseInsensitive))
 	}
 	return nil

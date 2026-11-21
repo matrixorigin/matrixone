@@ -857,7 +857,7 @@ func (ctr *container) spillBatch(
 	origBat.Recursive = bat.Recursive
 	origBat.ShuffleIDX = bat.ShuffleIDX
 	origBat.SetRowCount(bat.RowCount())
-	payloadSize, err := origBat.MarshalBinaryWithMetadataSize()
+	payloadSize, err := origBat.MarshalBinarySize()
 	if err != nil {
 		return spillRecordRef{}, err
 	}
@@ -872,7 +872,7 @@ func (ctr *container) spillBatch(
 		return spillRecordRef{}, err
 	}
 	offset := ctr.spillOffset
-	if err = origBat.MarshalBinaryWithMetadataTo(ctr.spillWriter); err != nil {
+	if err = origBat.MarshalBinaryTo(ctr.spillWriter); err != nil {
 		return spillRecordRef{}, err
 	}
 	ctr.spillOffset += int64(payloadSize)

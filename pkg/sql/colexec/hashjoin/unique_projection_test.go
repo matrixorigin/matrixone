@@ -56,9 +56,7 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 		for row, value := range values {
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), source == 0 && row == 1, proc.Mp()))
 		}
-		if source == 1 {
-			bat.Vecs[0].SetIsBinaryString(true)
-		} else {
+		if source == 0 {
 			bat.Vecs[0].GetGrouping().Add(1)
 		}
 		bat.SetRowCount(2)
@@ -83,10 +81,8 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 	for row, value := range []string{"a", "", "c", "d", "a"} {
 		require.Equal(t, row == 1, payload.IsNull(uint64(row)))
 		require.Equal(t, row == 1, payload.GetGrouping().Contains(uint64(row)))
-		binary := row == 2 || row == 3
 		if row != 1 {
 			require.Equal(t, value, string(payload.GetBytesAt(row)))
-			require.Equal(t, binary, payload.GetIsBinaryStringAt(row))
 		}
 	}
 }
@@ -199,12 +195,10 @@ func TestHashJoinUniqueProjectionProbeRange(t *testing.T) {
 			if shape == "constant" {
 				source.ToConst()
 				source.SetLength(6)
-				source.SetIsBinaryString(true)
 			} else {
 				source.SetNull(2)
 				physical, _ := vector.MustVarlenaRawData(source)
 				physical[2].SetOffsetLen(1<<30, 65536) // NULL payload must not be read.
-				require.NoError(t, source.SetRuntimeStringDomainAtWithMP(4, types.RuntimeStringBinary, proc.Mp()))
 			}
 			source.GetGrouping().Add(3)
 			ctr.leftBat.SetRowCount(6)
@@ -227,7 +221,6 @@ func TestHashJoinUniqueProjectionProbeRange(t *testing.T) {
 			for row := range want.Length() {
 				require.Equal(t, want.IsNull(uint64(row)), got.IsNull(uint64(row)))
 				require.Equal(t, want.GetGrouping().Contains(uint64(row)), got.GetGrouping().Contains(uint64(row)))
-				require.Equal(t, want.GetRuntimeStringDomainAt(row), got.GetRuntimeStringDomainAt(row))
 				if !want.IsNull(uint64(row)) {
 					require.Equal(t, want.GetBytesAt(row), got.GetBytesAt(row))
 				}

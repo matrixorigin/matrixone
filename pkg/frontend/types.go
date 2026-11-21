@@ -376,7 +376,6 @@ type PrepareStmt struct {
 	hasPaginationParams        bool
 	hasLagLeadParams           bool
 	paramKinds                 []types.StringConversionKind
-	paramBinaryStrings         []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
 	// generation; the protocol type decides those parameters' binding kind.
 	jsonComparisonParamPositions []int32

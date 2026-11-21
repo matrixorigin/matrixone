@@ -50,11 +50,7 @@ func jsonUnquoteBeforeBorrowedString(ivecs []*vector.Vector, result vector.Funct
 	}
 
 	single := func(v []byte, row int) (string, error) {
-		// Evaluate the selected row's domain after the template has filtered
-		// NULL and masked rows.  Runtime binary provenance can vary within a
-		// VARCHAR vector, and a selected text row can override a static binary
-		// result type.
-		if ivecs[0].GetIsBinaryStringAt(row) {
+		if isBinaryStringVector(ivecs[0]) {
 			return "", moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_unquote")
 		}
 		if ivecs[0].GetType().Oid.IsMySQLString() {
