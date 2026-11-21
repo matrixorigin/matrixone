@@ -16,6 +16,7 @@ package changedtables
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -94,6 +95,13 @@ func readCatalog(
 		return err
 	}, opts)
 	if err != nil {
+		// ExecTxn can wrap the statement failure when it rolls back. Return
+		// the watch error directly so the SQL frontend can send its code.
+		var limitErr *executor.ResultLimitError
+		if errors.As(err, &limitErr) {
+			return watchCatalog{}, moerr.NewChangeWatchCapacity(ctx, fmt.Sprintf(
+				"catalog result exceeds its %d-byte budget. Reduce the observer registration scope", limitErr.Limit))
+		}
 		return watchCatalog{}, err
 	}
 	return result, nil

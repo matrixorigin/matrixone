@@ -16,6 +16,8 @@ package changedtables
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -117,6 +119,36 @@ func TestReadWatchCatalogAtExactCut(t *testing.T) {
 	require.Equal(t, Binding{Epoch: [16]byte{1}, Observer: Observer{AccountID: 17, Incarnation: 12}}, catalogResult.binding)
 	require.Equal(t, map[uint32]string{3: "source"}, catalogResult.sourceNames)
 	require.Equal(t, []Grant{{AccountID: 3, DatabaseName: "db", TableName: "t", GrantID: [16]byte{2}, DatabaseID: 88}}, catalogResult.grants)
+}
+
+func TestReadWatchCatalogResultBudget(t *testing.T) {
+	cut := timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 17}
+	name := "observer"
+	for _, tc := range []struct {
+		name  string
+		limit uint64
+	}{
+		{name: "grants", limit: watchCatalogMaxResultBytes},
+		{name: "legacy partition lookup", limit: watchPartitionLookupResultSize},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cause := &executor.ResultLimitError{Limit: tc.limit}
+			// The real executor joins a statement error with rollback's result.
+			txnErr := errors.Join(fmt.Errorf("query failed: %w", cause), nil)
+			e := watchCatalogTestExecutor{execTxn: func(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
+				return txnErr
+			}}
+			result, err := readCatalog(t.Context(), e, callerIdentity{}, &name, cut)
+			require.Equal(t, watchCatalog{}, result)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrChangeWatchCapacity), "%v", err)
+			require.ErrorContains(t, err, fmt.Sprintf("catalog result exceeds its %d-byte budget", tc.limit))
+
+			txnErr = errors.Join(errors.New(cause.Error()), nil)
+			result, err = readCatalog(t.Context(), e, callerIdentity{}, &name, cut)
+			require.Equal(t, watchCatalog{}, result)
+			require.Same(t, txnErr, err)
+		})
+	}
 }
 
 func TestWatchCatalogRejectsInvalidRead(t *testing.T) {

@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -40,6 +42,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/require"
 )
+
+type scopedHistoryCountingFS struct {
+	fileservice.FileService
+	path          string
+	blockByOffset map[int64]int
+	blocksPerRead []int
+	entriesRead   int
+	failOnSecond  error
+}
+
+func (fs *scopedHistoryCountingFS) Read(ctx context.Context, request *fileservice.IOVector) error {
+	if request.FilePath == fs.path {
+		dataBlocks := make(map[int]struct{})
+		columns := 0
+		for _, entry := range request.Entries {
+			if block, ok := fs.blockByOffset[entry.Offset]; ok {
+				dataBlocks[block] = struct{}{}
+				columns++
+			}
+		}
+		if len(dataBlocks) != 0 {
+			if fs.failOnSecond != nil && len(fs.blocksPerRead) == 1 {
+				return fs.failOnSecond
+			}
+			fs.blocksPerRead = append(fs.blocksPerRead, len(dataBlocks))
+			fs.entriesRead += columns
+		}
+	}
+	return fs.FileService.Read(ctx, request)
+}
 
 func newScopedCheckpointTestHandle(t *testing.T, opts *options.Options) *mockHandle {
 	t.Helper()
@@ -109,6 +141,78 @@ func persistScopedHistoryIndex(
 	}
 	require.NotEmpty(t, locs)
 	return locs
+}
+
+func TestScopedChangedTablesBatchesCheckpointReads(t *testing.T) {
+	ctx := t.Context()
+	fs := objectio.TmpNewSharedFileservice(ctx, t.TempDir())
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	mp := mpool.MustNewZero()
+	start := types.BuildTS(100, 0)
+	end := types.BuildTS(101, 0)
+	target := cmd_util.ScopedChangedTable{AccountID: 3, DatabaseID: 4000, TableID: 9000}
+
+	const objectBlocks = scopedChangedTablesIndexGroupBlocks + 1
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := ioutil.NewBlockWriterNew(fs, name, 0, taelogtail.TableIDSeqnums, false)
+	require.NoError(t, err)
+	bat := batch.NewWithSchema(false, taelogtail.TableIDAttrs, taelogtail.TableIDTypes)
+	defer bat.Clean(mp)
+	for i := range objectBlocks {
+		identity := cmd_util.ScopedChangedTable{AccountID: 3, DatabaseID: 4000, TableID: uint64(1000 + i)}
+		first, last := start, start
+		switch i {
+		case 0:
+			identity, last = cmd_util.ScopedChangedTable{}, end
+		case objectBlocks - 1:
+			identity, first, last = target, end, end
+		}
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], identity.AccountID, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], identity.DatabaseID, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], identity.TableID, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[3], first, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[4], last, false, mp))
+		bat.SetRowCount(1)
+		_, err := writer.WriteBatch(bat)
+		require.NoError(t, err)
+		bat.CleanOnlyData()
+	}
+	blocks, meta, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, objectBlocks)
+	var locations objectio.LocationSlice
+	locations.Append(objectio.BuildLocation(name, meta, objectBlocks, objectBlocks))
+	reads := &scopedHistoryCountingFS{
+		FileService:   fs,
+		path:          name.String(),
+		blockByOffset: make(map[int64]int),
+		failOnSecond:  errors.New("checkpoint index payload read failed"),
+	}
+	for i, block := range blocks {
+		for _, col := range taelogtail.TableIDSeqnums {
+			reads.blockByOffset[int64(block.ColumnMeta(col).Location().Offset())] = i
+		}
+	}
+	require.Len(t, reads.blockByOffset, objectBlocks*len(taelogtail.TableIDSeqnums))
+	var candidates []cmd_util.ScopedChangedTable
+	add := func(candidate cmd_util.ScopedChangedTable) {
+		candidates = append(candidates, candidate)
+	}
+	err = scanScopedChangedTableIndexLocations(ctx, locations, reads, end, end, add)
+	require.ErrorIs(t, err, reads.failOnSecond)
+	require.Len(t, reads.blocksPerRead, 1)
+	require.Empty(t, candidates)
+
+	reads.failOnSecond = nil
+	reads.blocksPerRead = nil
+	reads.entriesRead = 0
+	require.NoError(t, scanScopedChangedTableIndexLocations(ctx, locations, reads, end, end, add))
+	require.Equal(t, []cmd_util.ScopedChangedTable{target}, candidates)
+	for _, count := range reads.blocksPerRead {
+		require.LessOrEqual(t, count, scopedChangedTablesIndexGroupBlocks)
+	}
+	require.Equal(t, len(reads.blockByOffset), reads.entriesRead)
+	require.Less(t, len(reads.blocksPerRead), objectBlocks)
 }
 
 func TestScopedChangedTablesLongCheckpointHistory(t *testing.T) {

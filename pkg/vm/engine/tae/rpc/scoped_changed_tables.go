@@ -16,26 +16,32 @@ package rpc
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 const (
-	scopedChangedTablesTimeout        = 15 * time.Second
-	scopedChangedTablesMaxWork        = 1_000_000
-	scopedChangedTablesMaxIndexBlocks = 1_024
+	scopedChangedTablesTimeout          = 15 * time.Second
+	scopedChangedTablesMaxWork          = 1_000_000
+	scopedChangedTablesMaxIndexBlocks   = 1_024
+	scopedChangedTablesIndexGroupBlocks = 16
+	// Sixteen full blocks of the five fixed-width columns are under 6 MiB
+	// before vector framing and compression overhead.
+	scopedChangedTablesIndexGroupBytes = 8 << 20
 )
 
 var errScopedChangedTablesDeadline = moerr.NewInternalErrorNoCtx("scoped changed-table request deadline")
@@ -239,7 +245,16 @@ func (h *Handle) scanScopedChangedTableIndex(
 	if checkpoint == nil {
 		return moerr.NewChangeWatchHistoryUnavailable(ctx, "scoped changed-table history has no covering checkpoint")
 	}
-	locations := checkpoint.GetTableIDLocation()
+	return scanScopedChangedTableIndexLocations(ctx, checkpoint.GetTableIDLocation(), h.db.Runtime.Fs, from, to, add)
+}
+
+func scanScopedChangedTableIndexLocations(
+	ctx context.Context,
+	locations objectio.LocationSlice,
+	fs fileservice.FileService,
+	from, to types.TS,
+	add func(cmd_util.ScopedChangedTable),
+) error {
 	if len(locations)%objectio.LocationLen != 0 {
 		return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint index locations")
 	}
@@ -263,71 +278,76 @@ func (h *Handle) scanScopedChangedTableIndex(
 			return moerr.NewChangeWatchCapacity(ctx, "scoped changed-table checkpoint block budget exceeded")
 		}
 	}
-	reader, err := logtail.NewSyncTableIDReader(locations, common.CheckpointAllocator, h.db.Runtime.Fs)
-	if err != nil {
-		return err
-	}
-	// Each read consumes one declared block, with at most BlockMaxRows fixed-
-	// width index rows. Every block must contribute to validation: coverage rows
-	// can occur anywhere and multiple rows can narrow the proven interval.
+	// Coverage rows can occur anywhere and multiple rows can narrow the
+	// proven interval. Scan every block even after all allowed tables match.
 	var start, end types.TS
 	var known bool
-	for {
+	visit := func(vecs []vector.Vector) error {
+		accounts := vector.MustFixedColNoTypeCheck[uint32](&vecs[0])
+		databases := vector.MustFixedColNoTypeCheck[uint64](&vecs[1])
+		tables := vector.MustFixedColNoTypeCheck[uint64](&vecs[2])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](&vecs[3])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](&vecs[4])
+		for i, table := range tables {
+			if i%256 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			if ends[i].LT(&starts[i]) || starts[i].Physical() < 0 {
+				return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint interval")
+			}
+			if table == logtail.CKPTableIDBatch_SpecialTableID {
+				if accounts[i] != 0 || databases[i] != 0 {
+					return moerr.NewInternalError(ctx, "invalid scoped changed-table history range identity")
+				}
+				// Unexpected multiple markers can prove only their intersection.
+				if !known || start.LT(&starts[i]) {
+					start = starts[i]
+				}
+				if !known || end.GT(&ends[i]) {
+					end = ends[i]
+				}
+				known = true
+				continue
+			}
+			if databases[i] == 0 {
+				return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint identity")
+			}
+			if !starts[i].GT(&to) && !ends[i].LT(&from) {
+				add(cmd_util.ScopedChangedTable{AccountID: accounts[i], DatabaseID: databases[i], TableID: table})
+			}
+		}
+		return nil
+	}
+	for i := 0; i < locations.Len(); i++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		release, bat, done, err := reader.Read(ctx)
+		location := locations.Get(i)
+		extent := location.Extent()
+		if !validScopedChangedTableExtent(extent, math.MaxUint32) ||
+			extent.Length() > scopedChangedTablesIndexGroupBytes || extent.OriginSize() > scopedChangedTablesIndexGroupBytes {
+			return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint metadata extent")
+		}
+		meta, err := objectio.FastLoadObjectMeta(ctx, location, false, fs)
 		if err != nil {
 			return err
 		}
-		if done {
-			break
+		blockMetas, ok := meta.CheckedDataBlocks(location.ID())
+		if !ok {
+			return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint block metadata")
 		}
-		err = func() error {
-			defer release()
-			if !validScopedChangedTableIndex(bat) {
-				return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint index columns")
+		name := location.Name().String()
+		for first := 0; first < len(blockMetas); first += scopedChangedTablesIndexGroupBlocks {
+			last := min(first+scopedChangedTablesIndexGroupBlocks, len(blockMetas))
+			if err := readScopedChangedTableIndexGroup(ctx, fs, name, blockMetas[first:last], extent.Offset(), visit); err != nil {
+				return err
 			}
-			accounts := vector.MustFixedColNoTypeCheck[uint32](bat.Vecs[0])
-			databases := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[1])
-			tables := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
-			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
-			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
-			for i, table := range tables {
-				if i%256 == 0 {
-					if err := ctx.Err(); err != nil {
-						return err
-					}
-				}
-				if ends[i].LT(&starts[i]) || starts[i].Physical() < 0 {
-					return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint interval")
-				}
-				if table == logtail.CKPTableIDBatch_SpecialTableID {
-					if accounts[i] != 0 || databases[i] != 0 {
-						return moerr.NewInternalError(ctx, "invalid scoped changed-table history range identity")
-					}
-					// Unexpected multiple markers can prove only their intersection.
-					if !known || start.LT(&starts[i]) {
-						start = starts[i]
-					}
-					if !known || end.GT(&ends[i]) {
-						end = ends[i]
-					}
-					known = true
-					continue
-				}
-				if databases[i] == 0 {
-					return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint identity")
-				}
-				if !starts[i].GT(&to) && !ends[i].LT(&from) {
-					add(cmd_util.ScopedChangedTable{AccountID: accounts[i], DatabaseID: databases[i], TableID: table})
-				}
-			}
-			return nil
-		}()
-		if err != nil {
-			return err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if !known || start.GT(&from) || end.LT(&to) {
 		return moerr.NewChangeWatchHistoryUnavailable(ctx, "scoped changed-table checkpoint history is incomplete")
@@ -340,15 +360,109 @@ func nextChangeTimestamp(ts types.TS) types.TS {
 	return types.TimestampToTS(ts.ToTimestamp().Next())
 }
 
-func validScopedChangedTableIndex(bat *batch.Batch) bool {
-	if bat == nil || bat.RowCount() > objectio.BlockMaxRows || len(bat.Vecs) != len(logtail.TableIDTypes) {
-		return false
+func readScopedChangedTableIndexGroup(
+	ctx context.Context,
+	fs fileservice.FileService,
+	name string,
+	blocks []objectio.BlockObject,
+	metaOffset uint32,
+	visit func([]vector.Vector) error,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	for i, v := range bat.Vecs {
-		if v == nil || v.GetType().Oid != logtail.TableIDTypes[i].Oid ||
-			v.Length() != bat.RowCount() || v.IsConst() || v.GetNulls().Any() {
-			return false
+	for _, block := range blocks {
+		if block.GetRows() > objectio.BlockMaxRows || int(block.GetColumnCount()) < len(logtail.TableIDSeqnums) {
+			return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint block dimensions")
 		}
 	}
-	return true
+	// ObjectWriter stores each column across successive blocks before placing
+	// the next column. Keep that order so a complete small object needs one read.
+	entries := make([]fileservice.IOEntry, 0, len(logtail.TableIDSeqnums)*len(blocks))
+	var readBytes, decodedBytes int64
+	var previousEnd int64
+	for i, seqnum := range logtail.TableIDSeqnums {
+		for _, block := range blocks {
+			if seqnum > block.GetMaxSeqnum() || seqnum >= block.GetMetaColumnCount() {
+				return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint index column metadata")
+			}
+			column := block.ColumnMeta(seqnum)
+			extent := column.Location()
+			if column.DataType() != uint8(logtail.TableIDTypes[i].Oid) ||
+				!validScopedChangedTableExtent(extent, metaOffset) || int64(extent.Offset()) < previousEnd {
+				return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint index column metadata")
+			}
+			entry := objectio.NewColumnReadEntry(extent)
+			readBytes += entry.Size
+			decodedBytes += entry.CachedDataSize
+			previousEnd = entry.Offset + entry.Size
+			entries = append(entries, entry)
+		}
+	}
+	if readBytes > scopedChangedTablesIndexGroupBytes || decodedBytes > scopedChangedTablesIndexGroupBytes {
+		return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint index group size")
+	}
+
+	// Split at physical gaps, so FileService cannot turn a sparse group into
+	// a single large range. Keep decoded buffers alive through each block visit.
+	var read int
+	defer func() {
+		(&fileservice.IOVector{Entries: entries[:read]}).Release()
+	}()
+	for read < len(entries) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end := read + 1
+		for end < len(entries) && entries[end-1].Offset+entries[end-1].Size == entries[end].Offset {
+			end++
+		}
+		ioVec := fileservice.IOVector{
+			FilePath: name,
+			Policy:   fileservice.SkipFullFilePreloads,
+			Entries:  entries[read:end:end],
+		}
+		if err := fs.Read(ctx, &ioVec); err != nil {
+			ioVec.ReleaseReadResultOnError()
+			return err
+		}
+		size := entries[end-1].Offset + entries[end-1].Size - entries[read].Offset
+		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+			counter.FileService.ReadSize.Add(size)
+		})
+		read = end
+	}
+
+	vecs := make([]vector.Vector, len(logtail.TableIDTypes))
+	for b, block := range blocks {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		for i, typ := range logtail.TableIDTypes {
+			v := &vecs[i]
+			*v = vector.Vector{}
+			entry := &entries[i*len(blocks)+b]
+			if entry.CachedData == nil || entry.CachedData.Size() != entry.CachedDataSize {
+				return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint index column size")
+			}
+			if err := objectio.MustVectorToCached(v, entry.CachedData); err != nil {
+				return err
+			}
+			if v.GetType().Oid != typ.Oid || v.Length() != int(block.GetRows()) ||
+				v.IsConst() || v.GetNulls().Any() || len(v.GetData()) != v.Length()*typ.TypeSize() {
+				return moerr.NewInternalError(ctx, "invalid scoped changed-table checkpoint index columns")
+			}
+		}
+		if err := visit(vecs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validScopedChangedTableExtent(extent objectio.Extent, end uint32) bool {
+	// Fixed-width checkpoint columns and their metadata use unchunked extents.
+	return extent.Offset() >= objectio.HeaderSize && extent.Length() > 0 && extent.OriginSize() > 0 &&
+		uint64(extent.Offset())+uint64(extent.Length()) <= uint64(end) &&
+		(extent.Alg() == compress.None || extent.Alg() == compress.Lz4)
 }
