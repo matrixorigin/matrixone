@@ -1,7 +1,7 @@
 # MatrixOne 双机主备部署（DRBD + Pacemaker/STONITH）
 
 两台机器，用 DRBD 块级复制整个数据目录，Pacemaker 保证严格单活。
-MatrixOne 以 all-in-one 容器运行，由 Pacemaker 的 `docker-compose` 资源代理启停
+MatrixOne 以 all-in-one 容器运行，由 Pacemaker 的 `ocf:matrixone:docker-compose` 资源代理启停
 （**不进 systemd**）。同步复制的 RPO=0 以 DRBD 正常连接、双端同步及隔离机制通过验收为前提；切换时间受故障检测、隔离和 MO 恢复耗时影响。
 
 支持 RHEL / CentOS / Rocky / AlmaLinux 与 Debian / Ubuntu。
@@ -45,6 +45,14 @@ sudo ./mo-ha-deploy.sh --config node1.env --bootstrap --format-drbd --yes
 ```bash
 sudo ./mo-ha-deploy.sh --config node1.env --stages check --yes
 ```
+
+`pkg` 阶段在两台节点安装随包提供的 MatrixOne 资源代理。已有集群可以在两台节点的部署目录单独安装代理，省去重跑整个 `pkg` 阶段。
+
+```bash
+sudo install -D -m 0755 agents/heartbeat/docker-compose /usr/lib/ocf/resource.d/matrixone/docker-compose
+```
+
+如果 `p_mo` 仍使用 `ocf:heartbeat:docker-compose`，在维护窗口停用该资源并确认容器已停止。通过离线 CIB 将 `p_mo` 的 provider 改为 `matrixone`，保留现有资源参数和约束，校验后发布并重新启用 `p_mo`。
 
 ## 三、验证
 
@@ -112,7 +120,7 @@ fencing 不能省，也不能用假实现。上线前务必对非活动节点实
 | `mo-ha-deploy.sh` | 一键部署脚本，RPM / DEB 通用 |
 | `deploy.env.example` | 参数模板，复制后修改 |
 | `mo-config/` | MatrixOne all-in-one compose 与 launch/log/tn/cn 配置模板 |
-| `agents/heartbeat/docker-compose` | OCF 资源代理（EL9 的 resource-agents 不含，随包下发） |
+| `agents/heartbeat/docker-compose` | 随包提供的 OCF 代理源码，安装为 `ocf:matrixone:docker-compose` |
 | `backups/20261105-before-fixes/` | 本次修改前的原脚本、env 模板及 SHA-256 校验值 |
 | `backups/20261105-before-proxmox-fix/` | 集成 Proxmox 自动发现修复前的脚本 |
 
