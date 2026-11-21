@@ -1265,9 +1265,11 @@ func (a *MergeScheduler) doSched(
 	afterGather := a.clock.Now()
 	// Schedule tasks
 	for _, task := range tasks {
+		if _, granted := rc.Acquire(int64(task.eSize)); !granted {
+			continue
+		}
 		task.doneCB = a.taskObserverFactory(supp, task.eSize, rc)
 		if a.executor.ExecuteFor(todo.table, task) {
-			rc.Acquire(int64(task.eSize))
 			supp.AddTask()
 			task.doneCB.Admit()
 			if task.isTombstone {
@@ -1279,6 +1281,8 @@ func (a *MergeScheduler) doSched(
 				supp.vaccumTrigCount++
 			}
 			supp.lastMergeTime = afterGather
+		} else {
+			rc.Release(int64(task.eSize))
 		}
 	}
 
