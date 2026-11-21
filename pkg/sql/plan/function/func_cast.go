@@ -8253,7 +8253,7 @@ func appendDecimalCastRangeWarning(proc *process.Process, row uint64) {
 	}
 	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 		appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
-			fmt.Sprintf("Out of range value for column 'decimal' at row %d", row+1))
+			fmt.Sprintf("Out of range value for column 'decimal' at row %d", proc.WarningRowOffset+row+1))
 	}
 }
 
@@ -8263,7 +8263,7 @@ func appendDecimalAssignmentScaleWarning(proc *process.Process, row uint64) {
 	}
 	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 		appender.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED,
-			fmt.Sprintf("Data truncated for DECIMAL value at row %d", row+1))
+			fmt.Sprintf("Data truncated for DECIMAL value at row %d", proc.WarningRowOffset+row+1))
 	}
 }
 
