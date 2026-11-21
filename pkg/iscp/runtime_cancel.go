@@ -412,6 +412,7 @@ func (exec *ISCPTaskExecutor) filterFencedIteration(iter *IterationContext) *Ite
 	return &IterationContext{
 		accountID: iter.accountID,
 		tableID:   iter.tableID,
+		indexJob:  iter.indexJob,
 		jobNames:  keepJobNames,
 		jobIDs:    keepJobIDs,
 		lsn:       keepLSN,
