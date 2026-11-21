@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -205,15 +204,15 @@ func foldLargeSpaceLengthExpressions(expr *plan.Expr, ctx context.Context) bool 
 	if f == nil || f.Func == nil {
 		return false
 	}
-	name := strings.ToLower(f.Func.GetObjName())
-	if (name == "length" || name == "char_length" || name == "octet_length" || name == "bit_length") &&
-		len(f.Args) == 1 && function.GetFunctionIsProvenPureFoldableById(f.Func.GetObj()) {
-		space := f.Args[0].GetF()
-		if space != nil && space.Func != nil && strings.EqualFold(space.Func.GetObjName(), "space") &&
-			function.GetFunctionIsProvenPureFoldableById(space.Func.GetObj()) && len(space.Args) == 1 {
+	id, _ := function.DecodeOverloadID(f.Func.Obj)
+	if (id == function.LENGTH || id == function.LENGTH_UTF8 || id == function.BIT_LENGTH) &&
+		len(f.Args) == 1 && function.GetFunctionIsProvenPureFoldableById(f.Func.Obj) {
+		if space := f.Args[0].GetF(); space != nil && space.Func != nil && len(space.Args) == 1 {
+			spaceID, _ := function.DecodeOverloadID(space.Func.Obj)
 			length, ok := speculativeConstantInt64(space.Args[0])
-			if ok && length >= 0 && length <= int64(types.MaxBlobLen) {
-				if name == "bit_length" {
+			if spaceID == function.SPACE && function.GetFunctionIsProvenPureFoldableById(space.Func.Obj) &&
+				ok && length >= 0 && length <= int64(types.MaxBlobLen) {
+				if id == function.BIT_LENGTH {
 					length *= 8
 				}
 				expr.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: length}}}
@@ -304,20 +303,104 @@ func (b *baseBinder) bindBitCountOperand(expr *Expr) (*Expr, error) {
 				}
 			}
 		}
-		if overload := b.bitCountFloatOverload(expr); overload >= 0 {
+		overload := b.bitCountFloatOverload(expr)
+		if overload == bitCountSelectedArm {
+			// A retained projection is read as a field. An optimizer
+			// substitution can still expose the selector to this consumer.
+			overload = bitCountFieldOverload(expr)
+		}
+		if overload >= 0 {
 			return bindBitCountFloatOverload(ctx, []*Expr{expr}, overload)
 		}
 	}
 	return BindFuncExprImplByPlanExpr(ctx, "bit_count", []*Expr{expr})
 }
 
+const bitCountSelectedArm int32 = -2
+
+func bitCountFieldOverload(expr *Expr) int32 {
+	if expr.Typ.Id == int32(types.T_float32) {
+		return function.BitCountFloat32FieldOverload
+	}
+	return function.BitCountFloat64FieldOverload
+}
+
+func (builder *QueryBuilder) filterUsesProjectedBitCount(expr *Expr, projectTag int32) bool {
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func.GetObjName() == "bit_count" && len(fn.Args) == 1 {
+			arg := fn.Args[0]
+			if col := arg.GetCol(); col != nil && col.RelPos == projectTag &&
+				releasedBitCountFloatOverload(types.T(arg.Typ.Id)) >= 0 {
+				binder := baseBinder{builder: builder}
+				return binder.bitCountFloatOverload(arg) == bitCountSelectedArm
+			}
+		}
+		for _, arg := range fn.Args {
+			if builder.filterUsesProjectedBitCount(arg, projectTag) {
+				return true
+			}
+		}
+	}
+	for _, item := range expr.GetList().GetList() {
+		if builder.filterUsesProjectedBitCount(item, projectTag) {
+			return true
+		}
+	}
+	return false
+}
+
+// lowerProjectedBitCount runs when the optimizer substitutes a projected
+// operand. Use the original slot to respect query-block boundaries, and only
+// lower a selector actually exposed by that substitution.
+func (builder *QueryBuilder) lowerProjectedBitCount(expr, original *Expr) *Expr {
+	if original.GetCol() == nil {
+		return expr
+	}
+	fn := expr.GetF()
+	_, overload := function.DecodeOverloadID(fn.Func.Obj)
+	if overload != bitCountFieldOverload(original) {
+		return expr
+	}
+	value := fn.Args[0]
+	for {
+		f := value.GetF()
+		if f == nil || f.Func == nil {
+			return expr
+		}
+		id, _ := function.DecodeOverloadID(f.Func.Obj)
+		if id == function.UNARY_PLUS {
+			value = f.Args[0]
+			continue
+		}
+		if (id != function.CASE && id != function.IFF) || value.GetPreparedNumeric().GetIfnullCommonValue() {
+			return expr
+		}
+		break
+	}
+	ctx := builder.GetContext()
+	if ctx.Err() != nil {
+		return expr
+	}
+	binder := baseBinder{builder: builder, sysCtx: ctx}
+	if binder.bitCountFloatOverload(original) != bitCountSelectedArm {
+		return expr
+	}
+	// The already-bound selector has compatible BIT_COUNT result types in
+	// each arm. Retain the valid original binding if it cannot be rebound.
+	if lowered, err := binder.bindBitCountOperand(value); err == nil {
+		return lowered
+	}
+	return expr
+}
+
 // A mergeable projection forwards its operand's conversion. A materialized
 // query block exposes a field even when the original expression was a CAST.
 func (b *baseBinder) bitCountFloatOverload(expr *Expr) int32 {
-	field, expression := function.BitCountFloat64FieldOverload, function.BitCountFloat64ExpressionOverload
+	field, expression := bitCountFieldOverload(expr), int32(function.BitCountFloat64ExpressionOverload)
 	if expr.Typ.Id == int32(types.T_float32) {
-		field, expression = function.BitCountFloat32FieldOverload, function.BitCountFloat32ExpressionOverload
+		expression = function.BitCountFloat32ExpressionOverload
 	}
+	fromProjection := false
 	// A same-block group slot represents the original GROUP BY expression.
 	// Inspect its conversion without replacing the slot used for evaluation.
 	if col := expr.GetCol(); col != nil && b.ctx != nil && b.ctx.groupTag > 0 &&
@@ -340,9 +423,13 @@ func (b *baseBinder) bitCountFloatOverload(expr *Expr) int32 {
 				if expr.GetPreparedNumeric().GetIfnullCommonValue() {
 					return int32(expression)
 				}
+				fallthrough
+			case function.IFF:
+				if fromProjection {
+					return bitCountSelectedArm
+				}
 				return -1
-			case function.CAST, function.IFF:
-				// Conditionals can select operands with different conversion rules.
+			case function.CAST:
 				return -1
 			case function.UNARY_PLUS:
 				expr = fn.Args[0]
@@ -403,5 +490,6 @@ func (b *baseBinder) bitCountFloatOverload(expr *Expr) int32 {
 			current = nodes[current.Children[0]]
 		}
 		expr = node.ProjectList[pos]
+		fromProjection = true
 	}
 }

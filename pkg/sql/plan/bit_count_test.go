@@ -295,23 +295,34 @@ func TestBitCountPredicateProofHandlesLongPredicatesAndBoundedStrings(t *testing
 	ctx.setWhereFilters(append(append([]*pb.Expr(nil), filters...), null))
 	require.False(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "a NULL suffix must retain the materialization boundary")
 
-	makeLengthPredicate := func(size int64) *pb.Expr {
+	makeLengthPredicate := func(name string, size, want int64) *pb.Expr {
 		space, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "space", []*pb.Expr{makePlan2Int64ConstExprWithType(size)})
 		require.NoError(t, err)
-		length, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "length", []*pb.Expr{space})
+		length, err := BindFuncExprImplByPlanExpr(builder.GetContext(), name, []*pb.Expr{space})
 		require.NoError(t, err)
-		predicate, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*pb.Expr{length, makePlan2Int64ConstExprWithType(size)})
+		predicate, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*pb.Expr{length, makePlan2Int64ConstExprWithType(want)})
 		require.NoError(t, err)
 		return predicate
 	}
-	ctx.setWhereFilters([]*pb.Expr{makeLengthPredicate(65536)})
+	ctx.setWhereFilters([]*pb.Expr{makeLengthPredicate("length", 65536, 65536)})
 	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "bounded 64 KiB string output should fold")
 	largeSpace, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "space", []*pb.Expr{makePlan2Int64ConstExprWithType(64 << 20)})
 	require.NoError(t, err)
 	budget := &speculativeConstantFoldBudget{ctx: builder.GetContext()}
 	require.False(t, isSpeculativeConstantFoldSafe(largeSpace, budget), "the allocation guard must reject a raw 64 MiB string")
-	ctx.setWhereFilters([]*pb.Expr{makeLengthPredicate(64 << 20)})
-	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "SPACE length should fold symbolically without allocating its output")
+	for _, name := range []string{"length", "char_length", "character_length", "octet_length", "bit_length"} {
+		t.Run(name, func(t *testing.T) {
+			const size = 64 << 20
+			want := int64(size)
+			if name == "bit_length" {
+				want *= 8
+			}
+			predicate := makeLengthPredicate(name, size, want)
+			ctx.setWhereFilters([]*pb.Expr{predicate})
+			require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "SPACE length should fold symbolically")
+			require.NotNil(t, predicate.GetF().Args[0].GetF().Args[0].GetF(), "the proof must leave the runtime predicate intact")
+		})
+	}
 }
 
 func TestBitCountConditionalBinding(t *testing.T) {
@@ -330,6 +341,39 @@ func TestBitCountConditionalBinding(t *testing.T) {
 		require.Equal(t, int32(function.BIT_COUNT), fid)
 		require.Equal(t, want, overload)
 	}
+}
+
+func TestBitCountMergedSelectorFilterReachesJoinInput(t *testing.T) {
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+	ctx := optimizer.CurrentContext().(*MockCompilerContext)
+	table := ctx.tables["emp"]
+	for _, col := range table.Cols {
+		if col.Name == "sal" {
+			// FLOAT field conversion has no row diagnostic and can be pushed
+			// below the join. DOUBLE retains the normal diagnostic barrier.
+			col.Typ = pb.Type{Id: int32(types.T_float32)}
+		}
+	}
+	ctx.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")] = table
+	p, err := runOneStmt(optimizer, t, `select s.empno
+		from (select e.empno, if(e.empno=1, e.sal, cast(e.sal as float)) as x
+		      from constraint_test.emp e cross join constraint_test.emp d) s
+		where bit_count(s.x)=2`)
+	require.NoError(t, err)
+	query := p.GetQuery()
+	join := findNodeUnder(query, query.Steps[len(query.Steps)-1], pb.Node_JOIN)
+	require.NotNil(t, join)
+	filtered := 0
+	for _, child := range join.Children {
+		scan := findNodeUnder(query, child, pb.Node_TABLE_SCAN)
+		require.NotNil(t, scan)
+		for _, filter := range scan.FilterList {
+			if exprCallsFunc(filter, "bit_count") {
+				filtered++
+			}
+		}
+	}
+	require.Equal(t, 1, filtered, "the merged selector predicate should filter one scan before the cross join")
 }
 
 func TestBitCountCorrelatedScalarProjectionBinding(t *testing.T) {

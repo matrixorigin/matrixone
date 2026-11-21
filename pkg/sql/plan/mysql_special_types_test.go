@@ -1014,3 +1014,20 @@ func TestGeometrySRIDNullShortCircuit(t *testing.T) {
 		})
 	}
 }
+
+func TestSpeculativeConstantFoldVariadicArgumentBounds(t *testing.T) {
+	ctx := context.Background()
+	args := make([]*Expr, 5)
+	for i := range args {
+		args[i] = makePlan2StringConstExprWithType("a")
+	}
+	for arity := 4; arity <= len(args); arity++ {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "concat", args[:arity])
+		require.NoError(t, err)
+		require.True(t, isSpeculativeConstantFoldSafe(expr, nil))
+		bytes, known, safe := speculativeConstantFoldSafety(expr, &speculativeConstantFoldBudget{ctx: ctx})
+		require.True(t, known)
+		require.True(t, safe)
+		require.Equal(t, int64(arity), bytes)
+	}
+}

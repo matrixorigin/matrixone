@@ -398,6 +398,8 @@ type QueryBuilder struct {
 	// mixedDomainCoalesce is set when the statement binds a binary-typed
 	// COALESCE that can return a text value; see coalesce_text_domain.go.
 	mixedDomainCoalesce bool
+	// A filter on a mixed-conversion alias must wait for projection removal.
+	deferredBitCountFilter bool
 
 	updateTargetScope *updateTargetScope
 

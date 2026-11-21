@@ -525,6 +525,27 @@ SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count
 SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1 LIMIT 1) s;
 ➤ bits[-5,64,0]  𝄀
 1
+SELECT id, BIT_COUNT(x) AS bits FROM (SELECT id, IF(id = 1, d, CAST(d AS DOUBLE)) AS x FROM t_bit_count_float WHERE id IN (1,5,6)) s ORDER BY id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
+1  ¦  1  𝄀
+5  ¦  null  𝄀
+6  ¦  2
+SELECT id, BIT_COUNT(x) AS bits FROM (SELECT id, CASE WHEN id = 1 THEN d ELSE CAST(d AS DOUBLE) END AS x FROM t_bit_count_float WHERE id IN (1,5,6) LIMIT 3) s ORDER BY id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
+1  ¦  1  𝄀
+5  ¦  null  𝄀
+6  ¦  1
+SELECT id FROM (SELECT id, IF(id = 1, d, CAST(d AS DOUBLE)) AS x FROM t_bit_count_float WHERE id IN (1,5,6)) s WHERE BIT_COUNT(x) = 2 ORDER BY id;
+➤ id[4,32,0]  𝄀
+6
+SELECT id, x, BIT_COUNT(x) AS bits FROM (SELECT id, IF(id = 1, d, CAST(d AS DOUBLE)) AS x FROM t_bit_count_float WHERE id IN (1,5,6)) s WHERE BIT_COUNT(x) = 1 ORDER BY id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  bits[-5,64,0]  𝄀
+1  ¦  3.9  ¦  1  𝄀
+6  ¦  3.5  ¦  1
+SELECT id, id IN (SELECT 1 WHERE CONCAT('a','b','c','d',CAST(o.id AS CHAR)) = 'abcd1') AS matched FROM t_bit_count_float o WHERE id IN (1,6) ORDER BY id;
+➤ id[4,32,0]  ¦  matched[-6,8,0]  𝄀
+1  ¦  1  𝄀
+6  ¦  0
 SELECT 'correlated projection', BIT_COUNT(x) AS bits FROM (
 SELECT CAST(o.d AS DOUBLE) AS x,
 (SELECT MAX(i.d) FROM t_bit_count_float i WHERE i.id = o.id) AS z
