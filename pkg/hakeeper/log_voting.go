@@ -57,17 +57,35 @@ func (s *stateMachine) canDeliverVotingRemoval(cmd pb.ScheduleCommand) bool {
 		return false
 	}
 
+	quorum, executorReports := s.votingRemovalQuorum(shard, target.ReplicaID, cmd.UUID, cmd.VotingRemoval, nil)
+	return quorum && executorReports
+}
+
+func (s *stateMachine) votingRemovalQuorum(
+	shard pb.LogShardInfo,
+	targetID uint64,
+	executor string,
+	guard *pb.VotingRemovalGuard,
+	admitted map[uint64]pb.CatalogMetadataReplicaIdentity,
+) (quorum, executorReports bool) {
 	reporters := 0
-	executorReports, targetReports := false, false
+	targetReports := false
 	for replicaID, uuid := range shard.Replicas {
 		store, ok := s.state.LogState.Stores[uuid]
-		if !ok || (s.state.Tick > store.Tick && s.state.Tick-store.Tick > cmd.VotingRemoval.LogStoreTimeoutTicks) ||
+		if !ok || (s.state.Tick > store.Tick && s.state.Tick-store.Tick > guard.LogStoreTimeoutTicks) ||
 			!ReportsLogVoter(shard, replicaID, store) {
 			continue
 		}
+		if admitted != nil {
+			member, ok := admitted[replicaID]
+			if !ok || member.Revoked || member.NonVoting || member.UUID != uuid ||
+				member.StoreIncarnation != store.StoreIncarnation {
+				continue
+			}
+		}
 		reporters++
-		executorReports = executorReports || uuid == cmd.UUID
-		targetReports = targetReports || replicaID == target.ReplicaID
+		executorReports = executorReports || uuid == executor
+		targetReports = targetReports || replicaID == targetID
 	}
-	return executorReports && HasQuorumAfterVotingRemoval(len(shard.Replicas), reporters, targetReports)
+	return HasQuorumAfterVotingRemoval(len(shard.Replicas), reporters, targetReports), executorReports
 }

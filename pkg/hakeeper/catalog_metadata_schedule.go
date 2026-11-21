@@ -221,7 +221,10 @@ func (s *stateMachine) prepareCatalogSchedule(cmd *pb.ScheduleCommand) bool {
 			return true
 		}
 		r.Action = pb.CATALOG_ACTION_RESERVE_MEMBERSHIP
-		r.Membership = &pb.CatalogMetadataMembershipOperation{ConfigChangeIndex: replica.Epoch, ReplicaID: replica.ReplicaID, UUID: replica.UUID, StoreIncarnation: incarnation, ChangeType: cfg.ChangeType}
+		r.Membership = &pb.CatalogMetadataMembershipOperation{
+			ConfigChangeIndex: replica.Epoch, ReplicaID: replica.ReplicaID, UUID: replica.UUID,
+			StoreIncarnation: incarnation, ChangeType: cfg.ChangeType, VotingRemoval: cmd.VotingRemoval,
+		}
 	case pb.StopReplica, pb.StopNonVotingReplica, pb.KillZombie:
 		return s.prepareCatalogStop(cmd, incarnation)
 	case pb.StartReplica, pb.StartNonVotingReplica:

@@ -1090,6 +1090,7 @@ enum CatalogMetadataAction {
   CATALOG_ACTION_SUPERSEDE = 16;
   CATALOG_ACTION_REVOKE_START = 17;
   CATALOG_ACTION_RETIRE_TARGET = 18;
+  CATALOG_ACTION_AUTHORIZE_VOTING_REMOVAL = 19;
 }
 
 message CatalogMetadataFence {
@@ -1109,6 +1110,9 @@ message CatalogMetadataMembershipOperation {
   ConfigChangeType ChangeType = 6;
   map<uint64, string> ExpectedVoting = 7;
   map<uint64, string> ExpectedNonVoting = 8;
+  VotingRemovalGuard VotingRemoval = 9;
+  // Only a new guarded reservation can prove that no submission was authorized.
+  bool VotingRemovalUnattempted = 10;
 }
 
 message CatalogMetadataStartPermit {
@@ -1176,6 +1180,9 @@ message CatalogMetadataRequest {
   uint64 ObservedConfigChangeIndex = 15;
   map<uint64, string> ObservedVoting = 16;
   map<uint64, string> ObservedNonVoting = 17;
+  string ExecutorStoreIncarnation = 18;
+  // Explicit timeout policy for an inherited reservation without a guard.
+  VotingRemovalGuard LegacyVotingRemoval = 19;
 }
 
 // Targets are scoped to the enclosing barrier's epoch and generation and

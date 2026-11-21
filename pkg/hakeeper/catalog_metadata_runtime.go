@@ -101,7 +101,7 @@ func (s *stateMachine) handleCatalogMetadataRequest(cmd []byte) sm.Result {
 	s.state.CatalogMetadataBarrier = &next
 	if cutover {
 		s.discardLegacyCatalogSchedule()
-	} else {
+	} else if req.Action != pb.CATALOG_ACTION_AUTHORIZE_VOTING_REMOVAL || token == 0 {
 		// A completed membership proof can make previously queued, tokenless
 		// commands permanently stale. Reclaim them at the replicated owner so
 		// stores that no longer poll cannot retain or block on them forever.
@@ -230,6 +230,8 @@ func (s *stateMachine) applyCatalogMetadataRequest(b *pb.CatalogMetadataBarrierS
 		return s.reserveCatalogMembership(a, r)
 	case pb.CATALOG_ACTION_COMPLETE_MEMBERSHIP:
 		return completeCatalogMembership(a, r)
+	case pb.CATALOG_ACTION_AUTHORIZE_VOTING_REMOVAL:
+		return s.authorizeCatalogVotingRemoval(a, r)
 	case pb.CATALOG_ACTION_GRANT_START, pb.CATALOG_ACTION_COMPLETE_START, pb.CATALOG_ACTION_REVOKE_START:
 		return s.applyCatalogStart(a, r)
 	case pb.CATALOG_ACTION_BEGIN, pb.CATALOG_ACTION_SUPERSEDE:
@@ -383,6 +385,7 @@ func (s *stateMachine) reserveCatalogMembership(a *pb.CatalogMetadataArbitration
 	}
 	copy := *m
 	copy.Token = token
+	copy.VotingRemovalUnattempted = m.ChangeType == pb.RemoveReplica && m.VotingRemoval != nil
 	copy.ExpectedVoting = maps.Clone(shard.Replicas)
 	copy.ExpectedNonVoting = maps.Clone(shard.NonVotingReplicas)
 	if copy.ExpectedNonVoting == nil {
@@ -400,6 +403,45 @@ func (s *stateMachine) reserveCatalogMembership(a *pb.CatalogMetadataArbitration
 	}
 	a.Reservation = &copy
 	return CatalogMetadataApplied, token
+}
+
+func (s *stateMachine) authorizeCatalogVotingRemoval(a *pb.CatalogMetadataArbitration, r *pb.CatalogMetadataRequest) (uint64, uint64) {
+	m := a.Reservation
+	if m == nil || m.Token != r.Token || m.ChangeType != pb.RemoveReplica {
+		return CatalogMetadataStale, 0
+	}
+	shard, ok := s.state.LogState.Shards[DefaultHAKeeperShardID]
+	if !ok || shard.Epoch != m.ConfigChangeIndex || shard.Replicas[m.ReplicaID] != m.UUID ||
+		r.Owner == "" || r.ExecutorStoreIncarnation == "" ||
+		s.state.LogState.Stores[r.Owner].StoreIncarnation != r.ExecutorStoreIncarnation {
+		return CatalogMetadataRejected, 0
+	}
+	guard := m.VotingRemoval
+	if guard == nil {
+		guard = r.LegacyVotingRemoval
+		if guard == nil {
+			return CatalogMetadataRejected, 0
+		}
+	}
+	quorum, executorReports := s.votingRemovalQuorum(shard, m.ReplicaID, r.Owner, guard, a.Members)
+	if !executorReports {
+		return CatalogMetadataRejected, 0
+	}
+	// The periodic reconciler may be the voter being removed after a leader
+	// change. In that case quorum already excludes its vote, and a surviving
+	// leader can complete the token from Raft readback.
+	if !quorum {
+		if !m.VotingRemovalUnattempted {
+			return CatalogMetadataRejected, 0
+		}
+		// No attempt could have reached Raft. Release only this reservation.
+		a.Reservation = nil
+		return CatalogMetadataApplied, 0
+	}
+	// The submitter may lose this response or the Raft result. Once authorized,
+	// only a matching membership readback can finish this operation.
+	m.VotingRemovalUnattempted = false
+	return CatalogMetadataApplied, m.Token
 }
 
 func completeCatalogMembership(a *pb.CatalogMetadataArbitration, r *pb.CatalogMetadataRequest) (uint64, uint64) {

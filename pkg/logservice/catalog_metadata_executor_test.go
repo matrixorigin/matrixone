@@ -463,6 +463,9 @@ type catalogTestMembership struct {
 	state                           pb.CatalogMetadataBarrierState
 	membership                      dragonboat.Membership
 	readErr, mutateErr, completeErr error
+	authorizeErr                    error
+	authorized                      bool
+	authorizeCount                  int
 	completeCount                   int
 	attempts                        []pb.CatalogMetadataMembershipOperation
 	advance                         bool
@@ -474,6 +477,10 @@ func (c *catalogTestMembership) catalogBarrierState(context.Context) (*pb.Catalo
 func (c *catalogTestMembership) catalogMembership(context.Context) (*dragonboat.Membership, error) {
 	copy := c.membership
 	return &copy, c.readErr
+}
+func (c *catalogTestMembership) catalogAuthorizeVotingRemoval(context.Context, *pb.CatalogMetadataMembershipOperation) (bool, error) {
+	c.authorizeCount++
+	return c.authorized, c.authorizeErr
 }
 func (c *catalogTestMembership) catalogMutateMembership(_ context.Context, p *pb.CatalogMetadataMembershipOperation) error {
 	c.attempts = append(c.attempts, *p)
@@ -569,6 +576,40 @@ func TestCatalogMembershipReconciliation(t *testing.T) {
 		require.Zero(t, c.completeCount)
 		require.Equal(t, &p, c.state.Arbitration.Reservation)
 	})
+}
+
+func TestCatalogVotingRemovalReconciliation(t *testing.T) {
+	p := &pb.CatalogMetadataMembershipOperation{Token: 4, ConfigChangeIndex: 7, ReplicaID: 4,
+		UUID: "d", StoreIncarnation: "inc", ChangeType: pb.RemoveReplica,
+		ExpectedVoting: map[uint64]string{1: "a", 2: "b", 3: "c", 5: "e"}}
+	c := &catalogTestMembership{
+		state: pb.CatalogMetadataBarrierState{Arbitration: &pb.CatalogMetadataArbitration{MaintenanceEnabled: true, Reservation: p}},
+		membership: dragonboat.Membership{ConfigChangeID: 7,
+			Nodes: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d", 5: "e"}},
+	}
+	ctx := context.Background()
+	// Both a heartbeat command and periodic retry use the same submission gate.
+	require.NoError(t, reconcileCatalogMembership(ctx, p, c))
+	c.authorizeErr = context.DeadlineExceeded
+	require.ErrorIs(t, reconcileCatalogMembership(ctx, nil, c), context.DeadlineExceeded)
+	require.Equal(t, 2, c.authorizeCount)
+	require.Empty(t, c.attempts)
+	c.authorizeErr, c.authorized = nil, true
+	c.mutateErr = context.DeadlineExceeded
+	require.ErrorIs(t, reconcileCatalogMembership(ctx, nil, c), context.DeadlineExceeded)
+	require.Len(t, c.attempts, 1)
+
+	c.authorized = false
+	require.NoError(t, reconcileCatalogMembership(ctx, nil, c))
+	require.Len(t, c.attempts, 1)
+	require.Equal(t, 4, c.authorizeCount)
+	c.membership.ConfigChangeID++
+	c.membership.Nodes = p.ExpectedVoting
+	require.NoError(t, reconcileCatalogMembership(ctx, nil, c))
+	require.Len(t, c.attempts, 1)
+	require.Equal(t, 4, c.authorizeCount)
+	require.Equal(t, 1, c.completeCount)
+	require.Nil(t, c.state.Arbitration.Reservation)
 }
 
 func TestCatalogExecutorPermitReplacement(t *testing.T) {
