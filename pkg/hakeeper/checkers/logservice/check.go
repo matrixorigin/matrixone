@@ -325,10 +325,11 @@ func (cr *checkToRemove) check() []*operator.Operator {
 					}
 				}
 				replicasToRemove = eligible
+			} else {
+				slices.SortFunc(replicasToRemove, func(a, b replica) int {
+					return cmp.Compare(a.replicaID, b.replicaID)
+				})
 			}
-			slices.SortFunc(replicasToRemove, func(a, b replica) int {
-				return cmp.Compare(a.replicaID, b.replicaID)
-			})
 			executorCandidates := reportingVotingExecutors(shardInfo, cr.lc.logState.Stores, cr.lc.expiredStores)
 			if len(executorCandidates) == 0 {
 				continue

@@ -15,6 +15,8 @@
 package logservice
 
 import (
+	"cmp"
+	"maps"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -61,6 +63,7 @@ func fixedLogShardInfoNormal(
 	record metadata.LogShardRecord,
 	info pb.LogShardInfo,
 	expiredStores []string,
+	stores map[string]pb.LogStoreInfo,
 ) *fixingShard {
 	// info.Replicas only contains the normal replicas.
 	// info.NonVotingReplicas only contains the non-voting replicas.
@@ -85,7 +88,7 @@ func fixedLogShardInfoNormal(
 
 	// The number of replicas is more than expected. Remove some of them.
 	if diff > 0 {
-		idSlice := sortedReplicaID(fixing.replicas, info.LeaderID)
+		idSlice := slices.SortedFunc(maps.Keys(fixing.replicas), votingRemovalOrder(info, stores, expiredStores))
 		for i := 0; i < diff; i++ {
 			delete(fixing.replicas, idSlice[i])
 		}
@@ -138,8 +141,9 @@ func fixedLogShardInfo(
 	nonVotingReplicaNum uint64,
 	info pb.LogShardInfo,
 	expiredStores []string,
+	stores map[string]pb.LogStoreInfo,
 ) (*fixingShard, *fixingShard) {
-	return fixedLogShardInfoNormal(record, info, expiredStores),
+	return fixedLogShardInfoNormal(record, info, expiredStores, stores),
 		fixedLogShardInfoNonVoting(nonVotingReplicaNum, info, expiredStores)
 }
 
@@ -210,6 +214,40 @@ func IsReportingVotingExecutor(
 	return isReportingVotingExecutor(shard, stores, expired, target)
 }
 
+// votingRemovalOrder ranks the full surplus set before taking the requested
+// number of removals. At minimum quorum an unreported voter can be removed,
+// whereas removing a reporting voter can leave the new configuration short.
+func votingRemovalOrder(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo, expired []string) func(uint64, uint64) int {
+	reporters := reportingVotingExecutors(shard, stores, expired)
+	voters := len(shard.Replicas)
+	rank := func(id uint64) int {
+		uuid := shard.Replicas[id]
+		if contains(expired, uuid) {
+			return 0
+		}
+		_, reporting := slices.BinarySearch(reporters, uuid)
+		if !hasQuorumAfterVotingRemoval(voters, len(reporters), reporting) {
+			if id == shard.LeaderID {
+				return 5
+			}
+			return 4
+		}
+		if id == shard.LeaderID {
+			return 3
+		}
+		if reporting {
+			return 2
+		}
+		return 1
+	}
+	return func(a, b uint64) int {
+		if order := cmp.Compare(rank(a), rank(b)); order != 0 {
+			return order
+		}
+		return cmp.Compare(a, b)
+	}
+}
+
 func canRemoveVotingReplica(
 	shard pb.LogShardInfo,
 	stores map[string]pb.LogStoreInfo,
@@ -221,14 +259,19 @@ func canRemoveVotingReplica(
 		return false
 	}
 
-	reporting := reportingVotingExecutors(shard, stores, expired)
-	if len(reporting) <= voters/2 {
+	reporters := reportingVotingExecutors(shard, stores, expired)
+	_, reporting := slices.BinarySearch(reporters, replicaToRemove.uuid)
+	return hasQuorumAfterVotingRemoval(voters, len(reporters), reporting)
+}
+
+func hasQuorumAfterVotingRemoval(voters, reporters int, removesReporter bool) bool {
+	if voters < 2 || reporters <= voters/2 {
 		return false
 	}
-	if isReportingVotingExecutor(shard, stores, expired, replicaToRemove.uuid) {
-		reporting = reporting[:len(reporting)-1]
+	if removesReporter {
+		reporters--
 	}
-	return len(reporting) > (voters-1)/2
+	return reporters > (voters-1)/2
 }
 
 // reportingVotingExecutors returns configured voters that are live and have
@@ -284,7 +327,7 @@ func parseLogShards(
 	for _, shardInfo := range infos.Shards {
 		shardID := shardInfo.ShardID
 		record := getRecord(shardID, cluster.LogShards)
-		fixingNormal, fixingNonVoting := fixedLogShardInfo(record, nonVotingReplicaNum, shardInfo, expired)
+		fixingNormal, fixingNonVoting := fixedLogShardInfo(record, nonVotingReplicaNum, shardInfo, expired, infos.Stores)
 
 		// cal the toRemove field.
 		toRemoveNonVoting := getReplicasToRemove(shardID, shardInfo.NonVotingReplicas, fixingNonVoting.replicas)
@@ -298,6 +341,10 @@ func parseLogShards(
 				normalStats.toAdd[shardID] = fixingNormal.toAdd
 			}
 			if removals := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.replicas); len(removals) > 0 {
+				if len(removals) > 1 {
+					order := votingRemovalOrder(shardInfo, infos.Stores, expired)
+					slices.SortFunc(removals, func(a, b replica) int { return order(a.replicaID, b.replicaID) })
+				}
 				normalStats.toRemove[shardID] = removals
 			}
 		}

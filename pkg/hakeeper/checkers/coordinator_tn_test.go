@@ -512,10 +512,12 @@ func TestCoordinatorPreservesVotingQuorumAfterRemoval(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		failedID   uint64
+		reporters  uint64
 		wantRemove string
 	}{
-		{name: "remove unavailable voter before losing quorum", failedID: 5, wantRemove: "log-e"},
-		{name: "do not remove a reporting voter when projection loses quorum", failedID: 0},
+		{name: "remove unavailable voter before losing quorum", failedID: 5, reporters: 3, wantRemove: "log-e"},
+		{name: "remove a live surplus voter without a replica report", reporters: 3, wantRemove: "log-d"},
+		{name: "wait without a reporting majority", reporters: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			currentTick := uint64(1)
@@ -542,7 +544,7 @@ func TestCoordinatorPreservesVotingQuorumAfterRemoval(t *testing.T) {
 					tick = 0
 				}
 				store := pb.LogStoreInfo{Tick: tick}
-				if id <= 3 {
+				if id <= tc.reporters {
 					store.Replicas = []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: id}}
 				}
 				state.LogState.Stores[uuid] = store
