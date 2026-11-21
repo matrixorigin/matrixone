@@ -11137,7 +11137,7 @@ func TestCentroidxIndexParametersAreInternal(t *testing.T) {
 func TestPreparedSetRetainsFoldedZeroScalarSources(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	p, err := runOneStmt(mock, t,
-		"prepare stmt1 from 'set @p = ?, @answer = (select null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n limit 1)'")
+		"prepare stmt1 from 'set @p = ?, @answer = (select cast(null as signed) + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n limit 1)'")
 	require.NoError(t, err)
 	prepared := p.GetDcl().GetPrepare()
 	require.Len(t, prepared.ParamTypes, 1)

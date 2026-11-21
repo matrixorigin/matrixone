@@ -774,12 +774,14 @@ func buildSetVariablesWithQuery(
 		// session. Preserve catalog dependencies for PREPARE even if an
 		// expression inside that subquery folds away.
 		if sub, ok := unwrapParenExpr(assignment.Value).(*tree.Subquery); isPrepareStmt && ok && !sub.Exists {
-			builder.zeroScalarPolicy = zeroScalarRetainOnly
+			builder.zeroScalarPolicy = zeroScalarExecutable
 		}
 		retained := builder.zeroScalarRetentionGeneration
+		rewritten := builder.zeroScalarRewriteGeneration
 		item.Value, err = binder.baseBindExpr(assignment.Value, 0, true)
 		builder.zeroScalarPolicy = zeroScalarDisabled
-		if err == nil && builder.zeroScalarRetentionGeneration != retained &&
+		if err == nil && (builder.zeroScalarRetentionGeneration != retained ||
+			builder.zeroScalarRewriteGeneration != rewritten) &&
 			(item.Value.GetSub() == nil || len(builder.zeroScalarRequiredLiveNodes) != 0) {
 			return nil, nil, moerr.NewNYI(ctx.GetContext(),
 				"prepared SET cannot retain correlated scalar LIMIT 0 source validation")
