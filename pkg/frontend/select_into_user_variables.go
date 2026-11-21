@@ -124,7 +124,7 @@ func (collector *selectIntoUserVariables) capture(ctx context.Context, ses FeSes
 		}
 		for i, vec := range bat.Vecs {
 			collector.rowIsBin[i] = vec.GetIsBin()
-			collector.rowDomain[i] = vec.GetRuntimeStringDomainAt(0)
+			collector.rowDomain[i] = types.RuntimeStringInherit
 			collector.row[i], collector.rowType[i] = selectIntoUserVariableValueAndType(collector.row[i], *vec.GetType())
 		}
 	}

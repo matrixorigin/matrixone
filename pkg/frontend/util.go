@@ -343,7 +343,7 @@ func getExprValueWithPrepareMeta(
 		*isBin[0] = resultVec.GetIsBin()
 	}
 	if runtimeDomain != nil {
-		*runtimeDomain = resultVec.GetRuntimeStringDomainAt(0)
+		*runtimeDomain = types.RuntimeStringInherit
 	}
 	if prepareParamKind != nil {
 		*prepareParamKind, err = transparentPrepareParamKind(e, ses)
@@ -644,7 +644,7 @@ func getPreparedPlanExprValueWithMeta(
 		*isBin = result.GetIsBin()
 	}
 	if runtimeDomain != nil {
-		*runtimeDomain = result.GetRuntimeStringDomainAt(0)
+		*runtimeDomain = types.RuntimeStringInherit
 	}
 	if prepareParamKind != nil {
 		*prepareParamKind = prepareParamKindFromType(result.GetType().Oid)

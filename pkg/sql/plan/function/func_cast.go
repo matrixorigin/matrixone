@@ -10394,8 +10394,8 @@ func strToStr(
 	// marker, legacy IsBin literal flag, or a per-row sidecar. Function results
 	// such as UNHEX carry a static binary-domain varbinary type that the legacy
 	// literal flag alone misses.
-	srcUniformBinary, srcPerRowBinary := stringDomainMode(from.GetSourceVector())
-	binarySourceToText := mode == castModeExplicit && (srcUniformBinary || srcPerRowBinary) &&
+	srcUniformBinary := isBinaryStringVector(from.GetSourceVector())
+	binarySourceToText := mode == castModeExplicit && srcUniformBinary &&
 		toType.Charset != types.CharsetBinary &&
 		(toType.Oid == types.T_char || toType.Oid == types.T_varchar || toType.Oid == types.T_text)
 	if (totype.Oid != types.T_text || isTinyTextType(totype) || enforceByteWidth) &&
@@ -10408,7 +10408,7 @@ func strToStr(
 				}
 				continue
 			}
-			if binarySourceToText && binaryStringAt(from.GetSourceVector(), int(i), srcUniformBinary, srcPerRowBinary) && !utf8.Valid(v) {
+			if binarySourceToText && srcUniformBinary && !utf8.Valid(v) {
 				appendBinaryToTextUtf8Warning(proc, v)
 				if err := to.AppendBytes(nil, true); err != nil {
 					return err
@@ -10507,7 +10507,7 @@ func strToStr(
 			if trimComparisonKey || trimSetOperationKey {
 				v = bytes.TrimRight(v, " ")
 			}
-			if binarySourceToText && binaryStringAt(from.GetSourceVector(), int(i), srcUniformBinary, srcPerRowBinary) && !utf8.Valid(v) {
+			if binarySourceToText && srcUniformBinary && !utf8.Valid(v) {
 				appendBinaryToTextUtf8Warning(proc, v)
 				if err := to.AppendBytes(nil, true); err != nil {
 					return err

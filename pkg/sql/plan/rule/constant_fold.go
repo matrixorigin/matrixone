@@ -827,14 +827,6 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64, source type
 				Sval: vec.GetStringAt(int(row)),
 			},
 		}
-		if vec.GetType().Oid.IsMySQLString() {
-			switch vec.GetRuntimeStringDomainAt(int(row)) {
-			case types.RuntimeStringText:
-				literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
-			case types.RuntimeStringBinary:
-				literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
-			}
-		}
 		return literal
 	case types.T_json:
 		if !transAll {

@@ -112,7 +112,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	vec := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(vec, []byte("b"), true, proc.Mp()))
-	proc.SetPrepareParamsWithMetadata(vec, []bool{true, false}, []bool{false, true})
+	proc.SetPrepareParamsWithIsBin(vec, []bool{true, false})
 	proc.SetAffectedRows(42)
 	proc.SetPlanSnapshotTS(timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4})
 	proc.SetPlanGenerationReused(true)
@@ -575,11 +575,12 @@ func TestCodecServiceRejectsBinaryStringMetadataForOldProtocol(t *testing.T) {
 
 	proc, _ := newCodecTestProcess(t)
 	defer proc.Free()
-	params := proc.GetPrepareParams()
-	proc.SetPrepareParamsWithMetadata(params, []bool{false, false}, []bool{true, false})
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion18)
 	info, err := proc.BuildProcessInfo("select ?")
 	require.NoError(t, err)
+	require.Empty(t, info.PrepareParams.IsBinaryString, "the writer no longer emits binary-string flags")
+	// An older writer's binary-string flags are still validated on decode.
+	info.PrepareParams.IsBinaryString = []bool{true, false}
 
 	svc := NewCodecService(
 		fakeCodecTxnClient{op: fakeCodecTxnOperator{}},
@@ -593,7 +594,7 @@ func TestCodecServiceRejectsBinaryStringMetadataForOldProtocol(t *testing.T) {
 	decoded, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	defer decoded.Free()
-	require.True(t, decoded.GetPrepareParamIsBinaryString(0))
+	require.Equal(t, 2, decoded.GetPrepareParams().Length())
 }
 
 func TestCodecServiceRejectsMalformedStringSourceMetadata(t *testing.T) {
@@ -652,7 +653,8 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, int64(2), info.PrepareParams.Length)
 	require.Equal(t, []bool{false, true}, info.PrepareParams.Nulls)
 	require.Equal(t, []bool{true, false}, info.PrepareParams.IsBin)
-	require.Equal(t, []bool{false, true}, info.PrepareParams.IsBinaryString)
+	require.Empty(t, info.PrepareParams.IsBinaryString)
+	require.Empty(t, info.PrepareParams.RuntimeStringDomains)
 	require.Equal(t, int64(42), info.AffectedRows)
 	require.True(t, info.StatementRuntimeIgnore)
 	require.Equal(t, &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, info.PlanSnapshotTs)
@@ -692,104 +694,6 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "select 2", mockInfo.Sql)
 	require.Equal(t, "UTC", proc.Base.SessionInfo.TimeZone.String())
-}
-
-func TestBuildProcessInfoGatesBinaryStringMetadataByProtocolVersion(t *testing.T) {
-	proc, _ := newCodecTestProcess(t)
-	serviceRuntime := rt.ServiceRuntime(proc.GetService())
-	original, hadOriginal := serviceRuntime.GetGlobalVariables(rt.MOProtocolVersion)
-	defer func() {
-		if hadOriginal {
-			serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, original)
-		} else {
-			serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-		proc.Free()
-	}()
-
-	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion10)
-	_, err := proc.BuildProcessInfo("select ?")
-	require.Error(t, err)
-
-	proc.SetPrepareParamsWithMetadata(proc.GetPrepareParams(), []bool{false, false}, []bool{false, false})
-	info, err := proc.BuildProcessInfo("select ?")
-	require.NoError(t, err)
-	require.Empty(t, info.PrepareParams.IsBinaryString)
-
-	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
-	proc.SetPrepareParamsWithMetadata(proc.GetPrepareParams(), []bool{false, false}, []bool{false, true})
-	_, err = proc.BuildProcessInfo("select ?")
-	require.Error(t, err)
-
-	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion12)
-	_, err = proc.BuildProcessInfo("select ?")
-	require.Error(t, err)
-
-	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion13)
-	_, err = proc.BuildProcessInfo("select ?")
-	require.Error(t, err)
-
-	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion14)
-	_, err = proc.BuildProcessInfo("select ?")
-	require.Error(t, err)
-
-	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion15)
-	_, err = proc.BuildProcessInfo("select ?")
-	require.Error(t, err)
-
-	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion16)
-	_, err = proc.BuildProcessInfo("select ?")
-	require.Error(t, err)
-
-	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
-	_, err = proc.BuildProcessInfo("select ?")
-	require.Error(t, err)
-
-	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion18)
-	proc.SetPrepareParamsWithMetadata(proc.GetPrepareParams(), []bool{false, false}, []bool{false, true})
-	info, err = proc.BuildProcessInfo("select ?")
-	require.NoError(t, err)
-	require.Equal(t, []bool{false, true}, info.PrepareParams.IsBinaryString)
-}
-
-func TestBuildProcessInfoRejectsInvalidBinaryStringMetadataLength(t *testing.T) {
-	proc, _ := newCodecTestProcess(t)
-	defer proc.Free()
-	serviceRuntime := rt.ServiceRuntime(proc.GetService())
-	original, hadOriginal := serviceRuntime.GetGlobalVariables(rt.MOProtocolVersion)
-	defer func() {
-		if hadOriginal {
-			serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, original)
-		} else {
-			serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	}()
-	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion18)
-
-	params := proc.GetPrepareParams()
-	for _, tc := range []struct {
-		name     string
-		params   *vector.Vector
-		metadata []bool
-	}{
-		{name: "too-short", params: params, metadata: []bool{true}},
-		{name: "too-long", params: params, metadata: []bool{true, false, false}},
-		{name: "zero-params-with-metadata", params: vector.NewVec(types.T_varchar.ToType()), metadata: []bool{true}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.params != params {
-				defer tc.params.Free(proc.Mp())
-			}
-			proc.SetPrepareParamsWithMetadata(tc.params, nil, tc.metadata)
-			_, err := proc.BuildProcessInfo("select ?")
-			require.ErrorContains(t, err, "invalid binary-string prepare parameter metadata length")
-		})
-	}
-
-	proc.SetPrepareParamsWithMetadata(params, nil, []bool{false, false})
-	info, err := proc.BuildProcessInfo("select ?")
-	require.NoError(t, err)
-	require.Empty(t, info.PrepareParams.IsBinaryString)
 }
 
 func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
@@ -954,20 +858,6 @@ func TestRuntimeStringDomainPrepareParamMetadataForRemoteValidation(t *testing.T
 	require.ErrorContains(t, err, "metadata length")
 }
 
-func TestBuildProcessInfoSerializesUniformRuntimeBinaryDomain(t *testing.T) {
-	proc, _ := newCodecTestProcess(t)
-	params := vector.NewVec(types.T_text.ToType())
-	defer params.Free(proc.Mp())
-	require.NoError(t, vector.AppendBytes(params, []byte("a"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(params, []byte("b"), false, proc.Mp()))
-	require.NoError(t, params.SetRuntimeStringDomainWithMP(types.RuntimeStringBinary, proc.Mp()))
-	proc.SetPrepareParams(params)
-
-	info, err := proc.BuildProcessInfo("select ?")
-	require.NoError(t, err)
-	require.Equal(t, []uint32{2, 2}, info.PrepareParams.RuntimeStringDomains)
-}
-
 func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	frameParams := vector.NewVec(types.T_text.ToType())
@@ -976,9 +866,6 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("true"), false, proc.Mp()))
 	proc.SetPrepareParamsWithIsBin(frameParams, []bool{true, false, false})
 	proc.SetPrepareParamsStringSource(types.StringSourceCOMStmt)
-	require.NoError(t, frameParams.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
-		types.RuntimeStringInherit, types.RuntimeStringText, types.RuntimeStringBinary,
-	}, proc.Mp()))
 
 	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
 	payload, err := svc.Encode(proc, "select sum(n) over (order by id rows between ? preceding and ? following)")
@@ -988,7 +875,10 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	require.NoError(t, info.Unmarshal(payload))
 	require.Equal(t, []bool{true, false, false}, info.PrepareParams.IsBin)
 	require.Equal(t, []uint32{4, 4, 4}, info.PrepareParams.StringSources)
-	require.Equal(t, []uint32{0, 1, 2}, info.PrepareParams.RuntimeStringDomains)
+	require.Empty(t, info.PrepareParams.RuntimeStringDomains)
+	// An older writer's per-parameter runtime string domains are validated
+	// and dropped by the decoder.
+	info.PrepareParams.RuntimeStringDomains = []uint32{0, 1, 2}
 	decodedProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	defer decodedProc.Free()
@@ -1006,9 +896,6 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	require.Equal(t, "0", decodedParams.GetStringAt(1))
 	require.Equal(t, "true", decodedParams.GetStringAt(2))
 	require.Equal(t, types.StringSourceCOMStmt, decodedProc.GetPrepareParamsStringSource())
-	require.Equal(t, types.RuntimeStringInherit, decodedParams.GetRuntimeStringDomainAt(0))
-	require.Equal(t, types.RuntimeStringText, decodedParams.GetRuntimeStringDomainAt(1))
-	require.Equal(t, types.RuntimeStringBinary, decodedParams.GetRuntimeStringDomainAt(2))
 }
 
 func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) {
@@ -1250,7 +1137,6 @@ func TestCodecServiceMergesPerParamStringSourcesFromOldPeer(t *testing.T) {
 			require.Equal(t, 2, params.Length())
 			require.Equal(t, proc.GetPrepareParams().GetNulls().Contains(1), params.GetNulls().Contains(1))
 			require.Equal(t, proc.GetPrepareParamIsBin(0), decoded.GetPrepareParamIsBin(0))
-			require.Equal(t, proc.GetPrepareParamIsBinaryString(1), decoded.GetPrepareParamIsBinaryString(1))
 		})
 	}
 }
@@ -1273,14 +1159,8 @@ func TestPrepareParamsStringSourceLifecycle(t *testing.T) {
 	}{
 		{"SetPrepareParams", func(v *vector.Vector) { proc.SetPrepareParams(v) }},
 		{"SetPrepareParamsWithIsBin", func(v *vector.Vector) { proc.SetPrepareParamsWithIsBin(v, []bool{false}) }},
-		{"SetPrepareParamsWithMetadata", func(v *vector.Vector) {
-			proc.SetPrepareParamsWithMetadata(v, []bool{false}, []bool{false})
-		}},
 		{"SetOwnedPrepareParamsWithIsBin", func(v *vector.Vector) {
 			proc.SetOwnedPrepareParamsWithIsBin(v, []bool{false})
-		}},
-		{"SetOwnedPrepareParamsWithMetadata", func(v *vector.Vector) {
-			proc.SetOwnedPrepareParamsWithMetadata(v, []bool{false}, []bool{false})
 		}},
 	}
 	var borrowed []*vector.Vector

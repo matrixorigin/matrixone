@@ -36,14 +36,10 @@ func (bat *Batch) MarshalBinaryWithGroupingSize() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	metadataSize, err := bat.TransportMetadataSize()
-	if err != nil {
-		return 0, err
-	}
-	if len(bat.Vecs) > math.MaxInt32 || size > math.MaxInt-8-metadataSize {
+	if len(bat.Vecs) > math.MaxInt32 || size > math.MaxInt-8 {
 		return 0, moerr.NewInvalidInputNoCtx("batch grouping payload exceeds marshal format")
 	}
-	size += 8 + metadataSize + 4
+	size += 8 + 4
 	for _, vec := range bat.Vecs {
 		groupingSize := vec.GroupingMarshalBinarySize()
 		if groupingSize < 0 || groupingSize > math.MaxInt32 ||
@@ -67,20 +63,10 @@ func (bat *Batch) MarshalBinaryWithGroupingTo(w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	metadataSize, err := bat.TransportMetadataSize()
-	if err != nil {
-		return err
-	}
-	if payloadSize > math.MaxInt-metadataSize {
-		return moerr.NewInvalidInputNoCtx("batch grouping payload exceeds marshal format")
-	}
-	if err := writeBatchMarshalInt64(w, int64(payloadSize+metadataSize)); err != nil {
+	if err := writeBatchMarshalInt64(w, int64(payloadSize)); err != nil {
 		return err
 	}
 	if err := metadataFree.MarshalBinaryTo(w); err != nil {
-		return err
-	}
-	if err := bat.AppendTransportMetadata(w); err != nil {
 		return err
 	}
 	return bat.marshalGroupingTo(w)

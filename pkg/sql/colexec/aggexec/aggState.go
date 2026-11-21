@@ -2920,9 +2920,6 @@ func (ae *aggExec) saveIntermediateResult(
 			return err
 		}
 	}
-	if err := ae.writeBinaryStringTrailerForSelection(flags, writer); err != nil {
-		return err
-	}
 	if err := ae.writeGroupConcatSourceRowTrailer(writer); err != nil {
 		return err
 	}
@@ -3016,9 +3013,6 @@ func (ae *aggExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) er
 		ae.mp, writer, &ae.aggInfo); err != nil {
 		return err
 	}
-	if err := ae.writeBinaryStringTrailerForChunk(chunk, writer); err != nil {
-		return err
-	}
 	if err := ae.writeGroupConcatSourceRowTrailer(writer); err != nil {
 		return err
 	}
@@ -3039,101 +3033,6 @@ func writeAggBinaryStringByte(writer io.Writer, value byte) error {
 	}
 	if written != len(encoded) {
 		return io.ErrShortWrite
-	}
-	return nil
-}
-
-func (ae *aggExec) writeBinaryStringTrailerForSelection(
-	flags [][]uint8,
-	writer io.Writer,
-) error {
-	hasBinaryString := false
-	hasTextString := false
-	var rowCount int32
-	for chunk, chunkFlags := range flags {
-		if chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
-			continue
-		}
-		vec := ae.state[chunk].vecs[0]
-		for row, flag := range chunkFlags {
-			if flag == 0 {
-				continue
-			}
-			rowCount++
-			if vec != nil && vec.GetRuntimeStringDomainAt(row) != types.RuntimeStringInherit {
-				hasBinaryString = true
-				hasTextString = hasTextString || vec.GetRuntimeStringDomainAt(row) == types.RuntimeStringText
-			}
-		}
-	}
-	if !hasBinaryString {
-		return nil
-	}
-	marker := aggBinaryStringTrailerMagic
-	if hasTextString {
-		marker = aggStringDomainTrailerMagic
-	}
-	if err := types.WriteUint64(writer, marker); err != nil {
-		return err
-	}
-	if err := types.WriteInt32(writer, rowCount); err != nil {
-		return err
-	}
-	for chunk, chunkFlags := range flags {
-		if chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
-			continue
-		}
-		vec := ae.state[chunk].vecs[0]
-		for row, flag := range chunkFlags {
-			if flag == 0 {
-				continue
-			}
-			value := byte(0)
-			if vec != nil {
-				if hasTextString {
-					value = byte(vec.GetRuntimeStringDomainAt(row))
-				} else if vec.GetRuntimeStringDomainAt(row) == types.RuntimeStringBinary {
-					value = 1
-				}
-			}
-			if err := writeAggBinaryStringByte(writer, value); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (ae *aggExec) writeBinaryStringTrailerForChunk(
-	chunk int,
-	writer io.Writer,
-) error {
-	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 ||
-		ae.state[chunk].vecs[0] == nil ||
-		!ae.state[chunk].vecs[0].HasBinaryStringMetadata() {
-		return nil
-	}
-	vec := ae.state[chunk].vecs[0]
-	marker := aggBinaryStringTrailerMagic
-	if vec.HasExplicitTextStringMetadata() {
-		marker = aggStringDomainTrailerMagic
-	}
-	if err := types.WriteUint64(writer, marker); err != nil {
-		return err
-	}
-	if err := types.WriteInt32(writer, int32(vec.Length())); err != nil {
-		return err
-	}
-	for row := 0; row < vec.Length(); row++ {
-		value := byte(0)
-		if marker == aggStringDomainTrailerMagic {
-			value = byte(vec.GetRuntimeStringDomainAt(row))
-		} else if vec.GetRuntimeStringDomainAt(row) == types.RuntimeStringBinary {
-			value = 1
-		}
-		if err := writeAggBinaryStringByte(writer, value); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -3319,13 +3218,6 @@ func (ae *aggExec) readBinaryStringTrailerAndMagic(reader io.Reader, mp *mpool.M
 					(marker == aggStringDomainTrailerMagic || marker == aggStringStateTrailerMagic) &&
 						types.RuntimeStringDomain(domain) > types.RuntimeStringBinary || !sourceValid {
 					return moerr.NewInvalidInputNoCtx("invalid aggregate binary provenance row")
-				}
-				runtimeDomain := types.RuntimeStringDomain(domain)
-				if marker == aggBinaryStringTrailerMagic && domain == 1 {
-					runtimeDomain = types.RuntimeStringBinary
-				}
-				if err := vec.SetRuntimeStringDomainAtWithMP(row, runtimeDomain, mp); err != nil {
-					return err
 				}
 			}
 		}
@@ -3751,12 +3643,12 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 			bs := vectors[0].GetRawBytesAt(row)
 			var fillErr error
 			if ae.preserveStringMetadata && vectors[0].GetType().Oid.IsMySQLString() {
-				domain := vectors[0].GetRuntimeStringDomainAt(row)
 				// Every retained string carries the envelope, including rows with
 				// default metadata. Otherwise raw user bytes beginning with the
 				// metadata magic are indistinguishable from an encoded payload.
+				// The domain byte is retired: it is always INHERIT.
 				fillErr = ae.state[x].fillArgWithStringMetadata(
-					ae.mp, y, bs, domain, distinct)
+					ae.mp, y, bs, types.RuntimeStringInherit, distinct)
 			} else {
 				fillErr = ae.state[x].fillArg(ae.mp, y, bs, distinct)
 			}

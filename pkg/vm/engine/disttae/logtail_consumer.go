@@ -198,7 +198,7 @@ func (c *PushClient) dcaReset() {
 	c.dca.Lock()
 	defer c.dca.Unlock()
 	c.dca.replayed = false
-	c.dca.flist = c.dca.flist[:0]
+	c.dca.flist = nil
 }
 
 func (c *PushClient) dcaTryDelay(isSub bool, f func()) (delayed bool) {
@@ -222,7 +222,7 @@ func (c *PushClient) dcaConfirmAndApply() {
 	for _, f := range c.dca.flist {
 		f()
 	}
-	c.dca.flist = c.dca.flist[:0]
+	c.dca.flist = nil
 }
 
 type State struct {

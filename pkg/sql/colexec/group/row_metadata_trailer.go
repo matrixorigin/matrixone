@@ -21,9 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -123,20 +121,6 @@ func groupConcatSourceRowProvenanceWireEnabled(proc *process.Process) bool {
 	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, ok := value.(int64)
 	return ok && version >= defines.MORPCVersion66
-}
-
-// aggResultVectorAccessor is an optional aggregate capability exposing the
-// state vector of one chunk, used to enforce the protocol gates of the string
-// metadata it carries before that state crosses a peer boundary.
-type aggResultVectorAccessor interface {
-	ResultVectorForChunk(chunk int) *vector.Vector
-}
-
-func aggResultVectorForChunk(agg aggexec.AggFuncExec, chunk int) *vector.Vector {
-	if accessor, ok := agg.(aggResultVectorAccessor); ok {
-		return accessor.ResultVectorForChunk(chunk)
-	}
-	return nil
 }
 
 // readRowMetadataTrailer consumes one retired row-metadata trailer written by

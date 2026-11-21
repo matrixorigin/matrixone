@@ -55,12 +55,14 @@ func preparedPaginationBound(proc *process.Process, expr *plan.Expr, maxValue ui
 			}
 			pos := int(param.Pos)
 			sourceType := types.T_any
+			binarySource := false
 			if typed := proc.GetTypedPrepareParam(pos); typed != nil {
 				sourceType = typed.GetType().Oid
+				binarySource = types.StaticStringDomain(*typed.GetType()) == types.StringDomainBinary
 			}
 			kind, _ := types.StringConversionKindForType(sourceType)
 			if (kind != types.StringConversionString && kind != types.StringConversionInteger && kind != types.StringConversionBoolean) ||
-				proc.GetPrepareParamIsBin(pos) || proc.GetPrepareParamIsBinaryString(pos) ||
+				proc.GetPrepareParamIsBin(pos) || binarySource ||
 				!preparedPaginationSourceDomain(sourceType, &maxValue, true) {
 				return 0, false, false
 			}
