@@ -42,7 +42,7 @@ type planAuthorization struct {
 
 func derivePlanAuthorization(ses FeSession, stmt tree.Statement, p *plan.Plan, admission *privilege) planAuthorization {
 	result := planAuthorization{privilege: *admission, moCtrl: hasMoCtrl(p), sysWhitelist: isTargetSysWhiteList(p)}
-	arr := extractPrivilegeTipsFromPlan(p)
+	arr, insertTarget := extractPrivilegeTipsAndInsertTarget(p)
 	if _, ok := stmt.(*tree.Replace); ok {
 		arr = addReplaceDeletePrivilegeTips(arr, p)
 	}
@@ -51,18 +51,25 @@ func derivePlanAuthorization(ses FeSession, stmt tree.Statement, p *plan.Plan, a
 		result.dynamic = true
 	}
 	if ins, ok := stmt.(*tree.Insert); ok {
-		// Preserve the existing fallback when the plan has no concrete
-		// object requirements; view-only requirements are not targets.
-		hasConcreteRequirement := false
+		var db, table string
+		hasTarget := insertTarget != nil
+		if hasTarget {
+			db, table = insertTarget.GetSchemaName(), insertTarget.GetObjName()
+		} else {
+			db, table, hasTarget = getInsertTargetTableName(ins, ses)
+		}
+		// Source requirements cannot stand in for the statement target.
+		needsFallback := true
 		for _, tip := range arr {
-			if !tip.viewOnly {
-				hasConcreteRequirement = true
+			if !tip.viewOnly && (!hasTarget ||
+				(tip.typ == PrivilegeTypeInsert && tip.databaseName == db && tip.tableName == table)) {
+				needsFallback = false
 				break
 			}
 		}
-		if !hasConcreteRequirement {
+		if needsFallback {
 			result.dynamic = true
-			if db, table, ok := getInsertTargetTableName(ins, ses); ok {
+			if hasTarget {
 				arr = append(arr, privilegeTips{typ: PrivilegeTypeInsert, objType: objectTypeTable, databaseName: db, tableName: table, isClusterTable: isClusterTable(db, table), clusterTableOperation: clusterTableModify})
 			}
 		}
