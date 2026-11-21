@@ -309,6 +309,21 @@ func createPublicationWithTableSelection(ctx context.Context, bh BackgroundExec,
 	}
 
 	pubName := string(cp.Name)
+	var publicationExists bool
+	if cp.IfNotExists {
+		// Look up the publisher's name before source database resolution can
+		// switch accounts. An existing publication won't write any grants.
+		pub, err := getPubInfo(ctx, bh, pubName)
+		if err != nil {
+			return err
+		}
+		publicationExists = pub != nil
+	}
+	if !publicationExists {
+		if err = lockPublicationTargetAccounts(ctx, bh, subAccounts, cp.AccountsSet.All); err != nil {
+			return err
+		}
+	}
 	dbName := string(cp.Database)
 	comment := cp.Comment
 
@@ -378,16 +393,9 @@ func createPublicationWithTableSelection(ctx context.Context, bh BackgroundExec,
 		return
 	}
 
-	if cp.IfNotExists {
-		// Database resolution may switch ctx to the source account; the publication
-		// still belongs to the account that issued CREATE.
-		pubInfo, lookupErr := getPubInfo(defines.AttachAccountId(ctx, accountId), bh, pubName)
-		if lookupErr != nil {
-			return lookupErr
-		}
-		if pubInfo != nil {
-			return nil
-		}
+	// IF NOT EXISTS does not bypass database, table scope or name validation.
+	if publicationExists {
+		return nil
 	}
 
 	if err = bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql); err != nil {
@@ -566,6 +574,13 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		}
 	}
 
+	all := pub.SubAccountsStr == pubsub.AccountAll
+	if ap.AccountsSet != nil {
+		all = ap.AccountsSet.All
+	}
+	if err = lockPublicationTargetAccounts(ctx, bh, newSubAccounts, all); err != nil {
+		return err
+	}
 	// alter comment
 	comment := pub.Comment
 	if ap.Comment != "" {
@@ -2923,6 +2938,43 @@ func insertMoSubs(ctx context.Context, bh BackgroundExec, subInfo *pubsub.SubInf
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	sql := fmt.Sprintf(insertIntoMoSubsFormat, subInfo.SubAccountId, sanitizeSQLInput(subInfo.SubAccountName), subInfo.PubAccountId, sanitizeSQLInput(subInfo.PubAccountName), sanitizeSQLInput(subInfo.PubName), sanitizeSQLInput(subInfo.PubDbName), sanitizeSQLInput(subInfo.PubTables), sanitizeSQLInput(subInfo.PubComment), subInfo.Status)
 	return bh.Exec(ctx, sql)
+}
+
+// Keep the resolved subscriber IDs alive through catalog fanout. A name can be
+// dropped and recreated between target selection and the mo_subs insert.
+func lockPublicationTargetAccounts(ctx context.Context, bh BackgroundExec, targets map[int32]*pubsub.AccountInfo, all bool) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	ids := make([]int32, 0, len(targets))
+	for id := range targets {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	sql := "select account_id from mo_catalog.mo_account where account_id in (" + pubsub.JoinAccountIds(ids) + ")"
+	var err error
+	if all {
+		err = bh.Exec(sysCtx, sql+" for share")
+	} else {
+		err = execWithExplicitPublicationAccountLocks(sysCtx, bh, sql, ids)
+	}
+	if err != nil {
+		return err
+	}
+	rs, err := getResultSet(sysCtx, bh)
+	if err != nil {
+		return err
+	}
+	var n uint64
+	for _, r := range rs {
+		n += r.GetRowCount()
+	}
+	if n != uint64(len(ids)) {
+		return moerr.NewTxnNeedRetry(ctx)
+	}
+	return nil
 }
 
 func batchInsertMoSubs(
