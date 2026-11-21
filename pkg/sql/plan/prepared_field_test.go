@@ -281,27 +281,28 @@ func TestStringDeclarationBoundaries(t *testing.T) {
 		name, sql string
 		binary    bool
 	}{
-		// COALESCE over a binary arm is statically typed binary at every
-		// declaration boundary; no boundary may relabel it as text.
-		{"mergeable projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation) d", true},
-		{"filtered projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation where n_nationkey=1) d", true},
-		{"having projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation having x is not null) d", true},
-		{"constant having projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation having true) d", true},
-		{"limited projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation limit 1) d", true},
-		{"sorted limited projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation order by n_name limit 1) d", true},
-		{"distinct projection", "select reverse(x) from (select distinct coalesce(n_name,_binary '') x from nation) d", true},
-		{"window projection", "select reverse(x) from (select coalesce(n_name,_binary '') x,row_number() over () rn from nation) d", true},
-		{"scalar projection", "select reverse((select coalesce(n_name,_binary '') from nation limit 1))", true},
-		{"scalar grouped", "select reverse((select coalesce(n_name,_binary '') from nation group by coalesce(n_name,_binary '')))", true},
-		{"scalar singleton group", "select reverse((select coalesce(n_name,_binary '') from nation where n_nationkey=1 group by coalesce(n_name,_binary '')))", true},
-		{"scalar having", "select reverse((select coalesce(n_name,_binary '') x from nation where n_nationkey=1 having x is not null))", true},
-		{"scalar distinct", "select reverse((select distinct coalesce(n_name,_binary '') from nation limit 1))", true},
-		{"scalar window", "select reverse((select first_value(coalesce(n_name,_binary '')) over () from nation limit 1))", true},
+		// COALESCE(text column, binary literal) is text (MySQL collation
+		// aggregation), and stays text at every declaration boundary.
+		{"mergeable projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation) d", false},
+		{"filtered projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation where n_nationkey=1) d", false},
+		{"having projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation having x is not null) d", false},
+		{"constant having projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation having true) d", false},
+		{"limited projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation limit 1) d", false},
+		{"sorted limited projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation order by n_name limit 1) d", false},
+		{"distinct projection", "select reverse(x) from (select distinct coalesce(n_name,_binary '') x from nation) d", false},
+		{"window projection", "select reverse(x) from (select coalesce(n_name,_binary '') x,row_number() over () rn from nation) d", false},
+		{"scalar projection", "select reverse((select coalesce(n_name,_binary '') from nation limit 1))", false},
+		{"scalar grouped", "select reverse((select coalesce(n_name,_binary '') from nation group by coalesce(n_name,_binary '')))", false},
+		{"scalar singleton group", "select reverse((select coalesce(n_name,_binary '') from nation where n_nationkey=1 group by coalesce(n_name,_binary '')))", false},
+		{"scalar having", "select reverse((select coalesce(n_name,_binary '') x from nation where n_nationkey=1 having x is not null))", false},
+		{"scalar distinct", "select reverse((select distinct coalesce(n_name,_binary '') from nation limit 1))", false},
+		{"scalar window", "select reverse((select first_value(coalesce(n_name,_binary '')) over () from nation limit 1))", false},
+		// UNION type merging does not apply coercibility yet; MySQL is text here.
 		{"scalar set", "select reverse((select coalesce(n_name,_binary '') x from nation union all select _binary '' order by x desc limit 1))", true},
-		{"scalar materialized source", "select reverse((select x from (select coalesce(n_name,_binary '') x from nation limit 1) d))", true},
+		{"scalar materialized source", "select reverse((select x from (select coalesce(n_name,_binary '') x from nation limit 1) d))", false},
 
-		{"direct COALESCE", "select reverse(coalesce(n_name,_binary '')) from nation", true},
-		{"nested COALESCE", "select reverse(coalesce(coalesce(n_name,_binary ''),'')) from nation", true},
+		{"direct COALESCE", "select reverse(coalesce(n_name,_binary '')) from nation", false},
+		{"nested COALESCE", "select reverse(coalesce(coalesce(n_name,_binary ''),'')) from nation", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
@@ -336,6 +337,11 @@ func TestStringCommonValueDeclarationBoundary(t *testing.T) {
 			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 			coalesce := findPlanFunctionExpr(bound, "coalesce")
+			if coalesce == nil {
+				// A binary value with a text '' peer is a mixed-domain COALESCE:
+				// REVERSE is distributed over it and tests the value with IS NOT NULL.
+				coalesce = findPlanFunctionExpr(bound, "isnotnull")
+			}
 			require.NotNil(t, coalesce)
 			arg := coalesce.GetF().Args[0]
 			for source := preparedFieldPrivateCastSource(arg, 0); source != nil; source = preparedFieldPrivateCastSource(arg, 0) {
@@ -363,27 +369,27 @@ func TestStringDeclarationConsumers(t *testing.T) {
 		{"NULLIF merged source", "select reverse(x) from (select nullif(coalesce(n_name,_binary ''),'') x from nation) d", "reverse", 0, false},
 		{"CASE retains stronger text source", "select reverse(case when coalesce(n_name,_binary '')='' then null else coalesce(n_name,_binary '') end) from nation", "reverse", 0, false},
 		{"NULLIF forwards conditional text", "select reverse(nullif(if(n_nationkey=1,_binary '',coalesce(n_name,_binary '')),'')) from nation", "reverse", 0, false},
-		{"NULLIF retains allocated owner", "select reverse(nullif(lpad(coalesce(n_name,_binary ''),3,'z'),'')) from nation", "reverse", 0, true},
+		{"NULLIF retains allocated owner", "select reverse(nullif(lpad(coalesce(n_name,_binary ''),3,'z'),'')) from nation", "reverse", 0, false},
 		{"CASE retains pure text LPAD", "select reverse(case when n_nationkey=0 then lpad(n_name,3,'z') else _binary '' end) from nation", "reverse", 0, false},
 		{"limited CASE retains text declaration", "select reverse(x) from (select case when n_nationkey=0 then n_name else _binary '' end x from nation limit 1) d", "reverse", 0, false},
 		{"HAVING CASE retains text declaration", "select reverse(x) from (select case when n_nationkey=0 then n_name else _binary '' end x from nation having x is not null) d", "reverse", 0, false},
 		{"limited LPAD CASE retains text declaration", "select reverse(x) from (select case when n_nationkey=0 then lpad(n_name,3,'z') else _binary '' end x from nation limit 1) d", "reverse", 0, false},
 		{"CASE retains allocated binary owner", "select reverse(case when n_nationkey=0 then lpad(coalesce(n_name,cast('' as binary(4))),3,'z') else _binary '' end) from nation", "reverse", 0, true},
-		{"BIT_COUNT direct source", "select bit_count(coalesce(n_name,_binary '')) from nation", "bit_count", 0, true},
-		{"BIT_COUNT merged source", "select bit_count(x) from (select coalesce(n_name,_binary '') x from nation) d", "bit_count", 0, true},
+		{"BIT_COUNT direct source", "select bit_count(coalesce(n_name,_binary '')) from nation", "bit_count", 0, false},
+		{"BIT_COUNT merged source", "select bit_count(x) from (select coalesce(n_name,_binary '') x from nation) d", "bit_count", 0, false},
 		{"COALESCE over REVERSE", "select coalesce(reverse(coalesce(n_name,_binary '')),'') from nation", "coalesce", 0, false},
 		{"COALESCE over LEFT", "select coalesce(left(coalesce(n_name,_binary ''),1),'') from nation", "coalesce", 0, false},
 		{"COALESCE over TRIM", "select coalesce(trim(coalesce(n_name,_binary '')),'') from nation", "coalesce", 0, false},
 		{"COALESCE over REPEAT", "select coalesce(repeat(coalesce(n_name,_binary ''),2),'') from nation", "coalesce", 0, false},
 		{"COALESCE over RPAD", "select coalesce(rpad(coalesce(n_name,_binary ''),3,'z'),'') from nation", "coalesce", 0, false},
-		{"COALESCE over LPAD", "select coalesce(lpad(coalesce(n_name,_binary ''),3,'z'),'') from nation", "coalesce", 0, true},
+		{"COALESCE over LPAD", "select coalesce(lpad(coalesce(n_name,_binary ''),3,'z'),'') from nation", "coalesce", 0, false},
 		{"IF over COALESCE", "select char_length(if(n_nationkey=1,_binary '',coalesce(n_name,_binary ''))) from nation", "char_length", 0, false},
 		{"CASE over COALESCE", "select char_length(case when n_nationkey=1 then _binary '' else coalesce(n_name,_binary '') end) from nation", "char_length", 0, false},
 		{"CASE over column", "select char_length(case when n_nationkey=1 then _binary '' else n_name end) from nation", "char_length", 0, false},
 		{"merged conditional", "select char_length(x) from (select if(n_nationkey=1,_binary '',coalesce(n_name,_binary '')) x from nation) d", "char_length", 0, false},
-		{"LOCATE merged source", "select locate('a',x) from (select coalesce(n_name,_binary '') x from nation) d", "locate", 1, true},
-		{"INSTR merged source", "select instr(x,'a') from (select coalesce(n_name,_binary '') x from nation) d", "instr", 0, true},
-		{"LIKE merged source", "select x like '__' from (select coalesce(n_name,_binary '') x from nation) d", "like", 0, true},
+		{"LOCATE merged source", "select locate('a',x) from (select coalesce(n_name,_binary '') x from nation) d", "locate", 1, false},
+		{"INSTR merged source", "select instr(x,'a') from (select coalesce(n_name,_binary '') x from nation) d", "instr", 0, false},
+		{"LIKE merged source", "select x like '__' from (select coalesce(n_name,_binary '') x from nation) d", "like", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)

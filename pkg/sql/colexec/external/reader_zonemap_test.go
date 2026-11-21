@@ -148,7 +148,9 @@ func TestZonemapSavedResultProjection(t *testing.T) {
 			if tc.failAppend {
 				registry, err := mpool.NewAllocationAccountRegistry(1, 8)
 				require.NoError(t, err)
-				account, err := registry.Open(1)
+				// The account fits the first column's rows but not the second
+				// column, so the read fails after one column was copied.
+				account, err := registry.Open(32)
 				require.NoError(t, err)
 				defer func() {
 					require.Zero(t, account.Seal().Used)
@@ -240,7 +242,7 @@ func TestZonemapSavedResultProjection(t *testing.T) {
 			for _, column := range scanFS.columns {
 				require.Equal(t, 1, column.releases)
 			}
-			buf.Clean(mp)
+			buf.Clean(outPool)
 			gotBytes, gotObjects := mp.OnHeapOutstanding()
 			require.Equal(t, bytes, gotBytes)
 			require.Equal(t, objects, gotObjects)

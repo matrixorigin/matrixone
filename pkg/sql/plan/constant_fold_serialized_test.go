@@ -728,7 +728,8 @@ func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {
 	}{
 		{name: "if text to binary", sql: "select if(true, 'selected', cast('fallback' as varbinary))", wantDomain: types.StringDomainBinary, wantFold: true},
 		{name: "case runtime control", sql: "select case when true then 'selected' else cast('fallback' as varbinary) end", wantDomain: types.StringDomainBinary},
-		{name: "coalesce binary to text", sql: "select coalesce(_binary'selected', cast('fallback' as char))", wantDomain: types.StringDomainBinary, wantFold: true},
+		// A CAST is IMPLICIT and outranks the COERCIBLE binary literal (MySQL).
+		{name: "coalesce binary to text", sql: "select coalesce(_binary'selected', cast('fallback' as char))", wantDomain: types.StringDomainText, wantFold: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
