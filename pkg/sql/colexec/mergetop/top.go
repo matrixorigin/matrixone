@@ -219,9 +219,11 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 		}
 
 		if len(ctr.cmps) == 0 {
-			mp := make(map[int]int, len(ctr.poses))
-			for i, pos := range ctr.poses {
-				mp[int(pos)] = i
+			// Comparators share physical slots. The first logical key owns
+			// each slot because a repeated value cannot break its own ties.
+			first := make(map[int32]int, len(ctr.poses))
+			for i := len(ctr.poses) - 1; i >= 0; i-- {
+				first[ctr.poses[i]] = i
 			}
 
 			if ctr.bat == nil {
@@ -238,7 +240,7 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 
 			for i := 0; i < len(bat.Vecs); i++ {
 				var desc, nullsLast bool
-				if pos, ok := mp[i]; ok {
+				if pos, ok := first[int32(i)]; ok {
 					desc = ap.Fs[pos].Flag&plan.OrderBySpec_DESC != 0
 					if ap.Fs[pos].Flag&plan.OrderBySpec_NULLS_FIRST != 0 {
 						nullsLast = false

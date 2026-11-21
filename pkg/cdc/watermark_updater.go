@@ -2224,18 +2224,19 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 	tableLabel := key.String()
 	v2.CdcWatermarkUpdateCounter.WithLabelValues(tableLabel, "commit").Inc()
 
-	// Log watermark updates for better observability
-	logutil.Debug(
-		"cdc.watermark.buffer_update",
-		zap.String("task-id", key.TaskId),
-		zap.String("key", key.String()),
-		zap.String("old-watermark", oldWatermark.ToString()),
-		zap.String("new-watermark", watermark.ToString()),
-		zap.Bool("has-old", hasOld),
-		zap.Int("uncommitted-count", len(u.cacheUncommitted)),
-		zap.Int("committing-count", len(u.cacheCommitting)),
-		zap.Int("committed-count", len(u.cacheCommitted)),
-	)
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		logutil.Debug(
+			"cdc.watermark.buffer_update",
+			zap.String("task-id", key.TaskId),
+			zap.String("key", tableLabel),
+			zap.String("old-watermark", oldWatermark.ToString()),
+			zap.String("new-watermark", watermark.ToString()),
+			zap.Bool("has-old", hasOld),
+			zap.Int("uncommitted-count", len(u.cacheUncommitted)),
+			zap.Int("committing-count", len(u.cacheCommitting)),
+			zap.Int("committed-count", len(u.cacheCommitted)),
+		)
+	}
 
 	return nil
 }

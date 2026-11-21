@@ -270,14 +270,19 @@ func TestBlockInfoSlice(t *testing.T) {
 
 func TestDca(t *testing.T) {
 	pClient := &PushClient{}
+	var applied []int
 
-	signalCnt := 0
-	assert.True(t, pClient.dcaTryDelay(true, func() { signalCnt++ }))  // skip for sub response
-	assert.True(t, pClient.dcaTryDelay(false, func() { signalCnt++ })) // delay
+	assert.True(t, pClient.dcaTryDelay(false, func() { applied = append(applied, -1) }))
+	pClient.dcaReset()
+	assert.Nil(t, pClient.dca.flist, "reset must release queued closures")
+	assert.True(t, pClient.dcaTryDelay(true, func() { applied = append(applied, -2) }))
+	assert.True(t, pClient.dcaTryDelay(false, func() { applied = append(applied, 1) }))
+	assert.True(t, pClient.dcaTryDelay(false, func() { applied = append(applied, 2) }))
 	pClient.dcaConfirmAndApply()
-	assert.Equal(t, 1, signalCnt)
-	assert.False(t, pClient.dcaTryDelay(false, func() {})) // skip for finished replay
-
+	assert.Nil(t, pClient.dca.flist, "confirmation must release applied closures")
+	pClient.dcaConfirmAndApply()
+	assert.Equal(t, []int{1, 2}, applied)
+	assert.False(t, pClient.dcaTryDelay(false, func() {}))
 }
 
 type testHAKeeperClient struct {
@@ -3920,13 +3925,13 @@ func TestDispatchCatalogUpdateOrdersTablesBeforeColumns(t *testing.T) {
 				e.pClient.dcaConfirmAndApply()
 			}
 			require.True(t, e.GetLatestCatalogCache().GetTable(q))
-			require.NotNil(t, q.TableDef)
-			require.Equal(t, "200", q.TableDef.Cols[0].Comment)
+			require.NotNil(t, q.ReadPlanTableDef())
+			require.Equal(t, "200", q.ReadPlanTableDef().Cols[0].Comment)
 			// Both versions must have been initialized, not only the last buffered one.
 			q.Ts.PhysicalTime = 100
 			require.True(t, e.GetLatestCatalogCache().GetTable(q))
-			require.NotNil(t, q.TableDef)
-			require.Equal(t, "100", q.TableDef.Cols[0].Comment)
+			require.NotNil(t, q.ReadPlanTableDef())
+			require.Equal(t, "100", q.ReadPlanTableDef().Cols[0].Comment)
 			cols[0].IsUnsigned = 1
 			cb, err := catalog.GenCreateColumnTuples(cols[:1], mp, packer)
 			require.NoError(t, err)
@@ -3936,7 +3941,7 @@ func TestDispatchCatalogUpdateOrdersTablesBeforeColumns(t *testing.T) {
 			q.Ts = to
 			require.True(t, e.GetLatestCatalogCache().GetTable(q))
 			require.Equal(t, uint32(200), q.Version)
-			require.Equal(t, "200", q.TableDef.Cols[0].Comment)
+			require.Equal(t, "200", q.ReadPlanTableDef().Cols[0].Comment)
 		})
 	}
 }

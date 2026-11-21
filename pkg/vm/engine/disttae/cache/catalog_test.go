@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 
@@ -29,7 +30,109 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
+
+func TestCompositePrimaryKeyDoesNotReferenceProjectedColumn(t *testing.T) {
+	constraint := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.PrimaryKeyDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName}},
+	}}
+	wire, err := constraint.MarshalBinary()
+	require.NoError(t, err)
+	projection, defs := getTableDef(&TableItem{Constraint: wire}, buildCanonicalDefs(&TableItem{Constraint: wire}, []engine.TableDef{
+		&engine.AttributeDef{Attr: engine.Attribute{Name: catalog.CPrimaryKeyColName}},
+	}))
+	require.NotNil(t, projection.Pkey.CompPkeyCol)
+	for _, def := range defs {
+		if c, ok := def.(*engine.ConstraintDef); ok {
+			pk := c.Cts[0].(*engine.PrimaryKeyDef).Pkey
+			require.Nil(t, pk.CompPkeyCol)
+			projection.Pkey.PkeyColName = "changed"
+			require.Equal(t, catalog.CPrimaryKeyColName, pk.PkeyColName)
+			return
+		}
+	}
+	t.Fatal("missing engine constraint")
+}
+
+func TestReadPlanTableDefOwnsProjection(t *testing.T) {
+	item := &TableItem{Name: "t", Defs: []engine.TableDef{&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Default: &plan.Default{OriginString: "original"}}}}}
+	first, second := item.ReadPlanTableDef(), item.ReadPlanTableDef()
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+	first.Cols[0].Default.OriginString = "changed"
+	require.Equal(t, "original", second.Cols[0].Default.OriginString)
+	require.Equal(t, "original", item.Defs[0].(*engine.AttributeDef).Attr.Default.OriginString)
+	require.Nil(t, (&TableItem{}).ReadPlanTableDef())
+}
+
+func TestReadPlanTableDefComplexConstraintIsolation(t *testing.T) {
+	idx := &plan.IndexDef{IndexName: "idx", Parts: []string{"a", "b"}, Unique: true}
+	fk := &plan.ForeignKeyDef{Name: "fk", Cols: []uint64{1}, ForeignTbl: 42, ForeignCols: []uint64{2}}
+	pk := &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"a", "b"}}
+	check := &plan.CheckDef{Name: "positive", OriginSql: "a > 0"}
+	item := &TableItem{Id: 11, DatabaseId: 12, Name: "t", DatabaseName: "db", Version: 7,
+		ExtraInfo: &api.SchemaExtra{Checks: []*plan.CheckDef{check}, DefaultCharset: 2},
+		Defs: []engine.TableDef{
+			&engine.AttributeDef{Attr: engine.Attribute{Name: "a"}},
+			&engine.AttributeDef{Attr: engine.Attribute{Name: "b"}},
+			&engine.AttributeDef{Attr: engine.Attribute{Name: catalog.CPrimaryKeyColName}},
+			&engine.ConstraintDef{Cts: []engine.Constraint{&engine.PrimaryKeyDef{Pkey: pk}, &engine.IndexDef{Indexes: []*plan.IndexDef{idx}}, &engine.ForeignKeyDef{Fkeys: []*plan.ForeignKeyDef{fk}}}},
+		},
+	}
+	first, second := item.ReadPlanTableDef(), item.ReadPlanTableDef()
+	require.Equal(t, uint32(7), first.Version)
+	require.Equal(t, uint64(11), first.TblId)
+	require.Equal(t, uint64(12), first.DbId)
+	require.Equal(t, []string{"a", "b"}, first.Pkey.Names)
+	require.NotNil(t, first.Pkey.CompPkeyCol)
+	require.Equal(t, []string{"a", "b"}, first.Indexes[0].Parts)
+	require.Equal(t, uint64(42), first.Fkeys[0].ForeignTbl)
+	require.Equal(t, "a > 0", first.Checks[0].OriginSql)
+	first.Pkey.Names[0] = "changed"
+	first.Pkey.CompPkeyCol.Name = "changed"
+	first.Indexes[0].Parts[0] = "changed"
+	first.Fkeys[0].ForeignCols[0] = 99
+	first.Checks[0].OriginSql = "changed"
+	require.Equal(t, "a", second.Pkey.Names[0])
+	require.Equal(t, catalog.CPrimaryKeyColName, second.Pkey.CompPkeyCol.Name)
+	require.Equal(t, "a", second.Indexes[0].Parts[0])
+	require.Equal(t, uint64(2), second.Fkeys[0].ForeignCols[0])
+	require.Equal(t, "a > 0", second.Checks[0].OriginSql)
+	require.Equal(t, "a", pk.Names[0])
+	require.Nil(t, pk.CompPkeyCol)
+	require.Equal(t, "a", idx.Parts[0])
+	require.Equal(t, uint64(2), fk.ForeignCols[0])
+	require.Equal(t, "a > 0", check.OriginSql)
+}
+
+func TestProjectColumnsOwnsExpressions(t *testing.T) {
+	attr := &engine.AttributeDef{Attr: engine.Attribute{Name: "A", Default: &plan.Default{OriginString: "default"}, OnUpdate: &plan.OnUpdate{OriginString: "update"}, GeneratedCol: &plan.GeneratedCol{OriginString: "generated"}}}
+	defs := []engine.TableDef{attr}
+	first, names, _ := projectColumns("t", defs)
+	second, _, _ := projectColumns("t", defs)
+	require.Equal(t, int32(0), names["a"])
+	first[0].Default.OriginString = "changed"
+	first[0].OnUpdate.OriginString = "changed"
+	first[0].GeneratedCol.OriginString = "changed"
+	require.Equal(t, "default", attr.Attr.Default.OriginString)
+	require.Equal(t, "update", attr.Attr.OnUpdate.OriginString)
+	require.Equal(t, "generated", attr.Attr.GeneratedCol.OriginString)
+	require.Equal(t, "default", second[0].Default.OriginString)
+	require.Equal(t, "update", second[0].OnUpdate.OriginString)
+	require.Equal(t, "generated", second[0].GeneratedCol.OriginString)
+}
+
+func TestCopyTableItemPreservesProjectionMetadata(t *testing.T) {
+	src := &TableItem{Id: 3, DatabaseName: "db", CatalogVersion: 7, LogicalId: 9}
+	dst := &TableItem{}
+	copyTableItem(dst, src)
+	require.Equal(t, src.Id, dst.Id)
+	require.Equal(t, src.DatabaseName, dst.DatabaseName)
+	require.Equal(t, src.CatalogVersion, dst.CatalogVersion)
+	require.Equal(t, src.LogicalId, dst.LogicalId)
+}
 
 const (
 	Rows = 10
@@ -641,7 +744,9 @@ func TestTableInsert(t *testing.T) {
 		key.Ts = timestamps[i].ToTimestamp()
 		ok := cc.GetTable(key)
 		require.Equal(t, true, ok)
-		require.Equal(t, 13, len(key.Defs), i)
+		defs, err := key.BuildEngineDefs()
+		require.NoError(t, err)
+		require.Equal(t, 13, len(defs), i)
 	}
 	{ // set the deletion time
 		for i := range timestamps {
@@ -830,4 +935,145 @@ func newTestDatabaseBatch(mp *mpool.MPool) *batch.Batch {
 	typs = append(typs, types.New(types.T_TS, 0, 0))
 	typs = append(typs, catalog.MoDatabaseTypes...)
 	return testutil.NewBatch(typs, false, Rows, mp)
+}
+
+func TestReplayDescriptorMatchesProjection(t *testing.T) {
+	name := "__mo_cbkey_001a001b"
+	attr := func(hidden, clustered bool, typ types.T) *engine.AttributeDef {
+		return &engine.AttributeDef{Attr: engine.Attribute{Name: name, IsHidden: hidden, ClusterBy: clustered, Type: typ.ToType(), Seqnum: 9}}
+	}
+	for _, tc := range []struct {
+		name string
+		defs []engine.TableDef
+		want bool
+	}{
+		{"valid", []engine.TableDef{attr(true, true, types.T_varchar)}, true},
+		{"visible", []engine.TableDef{attr(false, true, types.T_varchar)}, false},
+		{"wrong type", []engine.TableDef{attr(true, true, types.T_int32)}, false},
+		{"duplicate", []engine.TableDef{attr(true, true, types.T_varchar), attr(true, true, types.T_varchar)}, false},
+		{"real primary key", []engine.TableDef{attr(true, true, types.T_varchar), &engine.ConstraintDef{Cts: []engine.Constraint{&engine.PrimaryKeyDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}}}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := &TableItem{Id: 12, Version: 3, Defs: tc.defs}
+			got := deriveReplayClusterKey(item)
+			expected, ok := readutil.DeclaredClusterKey(item.ReadPlanTableDef())
+			require.Equal(t, tc.want, ok)
+			if ok {
+				require.Equal(t, expected, *got)
+			} else {
+				require.Nil(t, got)
+			}
+		})
+	}
+}
+
+func TestReplayDescriptorReinitializedWithSchema(t *testing.T) {
+	columnType := types.T_varchar.ToType()
+	typ, err := columnType.Marshal()
+	require.NoError(t, err)
+	col := catalog.Column{Name: "__mo_cbkey_001a001b", Num: 1, Seqnum: 9, Typ: typ, IsHidden: 1, IsClusterBy: 1}
+	item := &TableItem{Id: 12, Version: 3}
+	InitTableItemWithColumns(item, Columns{col})
+	require.NotNil(t, item.replayClusterKey)
+	old := *item.replayClusterKey
+	require.Equal(t, uint32(3), old.Version)
+
+	item.Version = 4
+	col.IsClusterBy = 0
+	InitTableItemWithColumns(item, Columns{col})
+	require.Nil(t, item.replayClusterKey)
+	require.Equal(t, uint32(3), old.Version)
+
+	col.IsClusterBy = 1
+	InitTableItemWithColumns(item, Columns{col})
+	require.NotNil(t, item.replayClusterKey)
+	require.Equal(t, uint32(4), item.replayClusterKey.Version)
+}
+
+func TestReplayDescriptorHistoricalPublication(t *testing.T) {
+	cc := NewCatalog()
+	mk := func(id uint64, version uint32, ts int64, seq uint16) *TableItem {
+		typ := types.T_varchar.ToType()
+		wire, err := typ.Marshal()
+		require.NoError(t, err)
+		item := &TableItem{AccountId: 1, DatabaseId: 2, Name: "t", Id: id, Version: version, Ts: timestamp.Timestamp{PhysicalTime: ts}}
+		InitTableItemWithColumns(item, Columns{{Name: "__mo_cbkey_001a001b", Num: 1, Seqnum: seq, Typ: wire, IsHidden: 1, IsClusterBy: 1}})
+		return item
+	}
+	publish := func(item *TableItem) { cc.tableChange.Lock(); defer cc.tableChange.Unlock(); cc.tables.data.Set(item) }
+	at := func(ts int64, id uint64) *readutil.ClusterKeyDescriptor {
+		return cc.ReplayClusterKey(1, 2, id, "t", timestamp.Timestamp{PhysicalTime: ts})
+	}
+	publish(mk(12, 1, 10, 1))
+	old := at(15, 12)
+	require.NotNil(t, old)
+	require.Equal(t, uint32(1), old.Version)
+	done := make(chan struct{})
+	go func() { publish(mk(12, 2, 20, 2)); close(done) }()
+	<-done
+	newer := at(25, 12)
+	require.NotNil(t, newer)
+	require.Equal(t, uint32(2), newer.Version)
+	old.Version = 99
+	require.Equal(t, uint32(1), at(15, 12).Version)
+	require.Equal(t, uint32(2), at(25, 12).Version)
+	publish(&TableItem{AccountId: 1, DatabaseId: 2, Name: "t", Id: 12, deleted: true, Ts: timestamp.Timestamp{PhysicalTime: 30}})
+	require.Nil(t, at(35, 12))
+	publish(mk(13, 3, 40, 3))
+	require.Nil(t, at(45, 12))
+	require.Equal(t, uint32(3), at(45, 13).Version)
+	require.Equal(t, uint32(1), at(15, 12).Version)
+}
+
+func TestProjectionStreamAndRefChildIsolation(t *testing.T) {
+	stream := &plan.Property{Key: "topic", Value: "original"}
+	children := &engine.RefChildTableDef{Tables: []uint64{42}}
+	item := &TableItem{Name: "t", Defs: []engine.TableDef{&engine.ConstraintDef{Cts: []engine.Constraint{children, &engine.StreamConfigsDef{Configs: []*plan.Property{stream}}}}}}
+	first, second := item.ReadPlanTableDef(), item.ReadPlanTableDef()
+	require.Equal(t, []uint64{42}, first.RefChildTbls)
+	first.RefChildTbls[0] = 99
+	var property *plan.Property
+	for _, def := range first.Defs {
+		for _, p := range def.GetProperties().GetProperties() {
+			if p.Key == "topic" {
+				property = p
+			}
+		}
+	}
+	require.NotNil(t, property)
+	property.Value = "changed"
+	require.Equal(t, []uint64{42}, second.RefChildTbls)
+	require.Equal(t, []uint64{42}, children.Tables)
+	require.Equal(t, "original", stream.Value)
+	var value string
+	for _, def := range second.Defs {
+		for _, p := range def.GetProperties().GetProperties() {
+			if p.Key == "topic" {
+				value = p.Value
+			}
+		}
+	}
+	require.Equal(t, "original", value)
+}
+
+func TestProjectColumnsCompactBoundaries(t *testing.T) {
+	for _, n := range []int{0, 1, 2} {
+		defs := []engine.TableDef{&engine.CommentDef{Comment: "ignored"}}
+		for i := 0; i < n; i++ {
+			defs = append(defs, &engine.AttributeDef{Attr: engine.Attribute{Name: fmt.Sprintf("c%d", i), Default: &plan.Default{OriginString: "original"}}})
+		}
+		first, names, _ := projectColumns("t", defs)
+		second, _, _ := projectColumns("t", defs)
+		require.Len(t, first, n)
+		require.Len(t, names, n)
+		for i := range first {
+			require.Equal(t, int32(i), names[first[i].Name])
+			first[i].Default.OriginString = "changed"
+			require.Equal(t, "original", second[i].Default.OriginString)
+		}
+		third, _, _ := projectColumns("t", defs)
+		for _, col := range third {
+			require.Equal(t, "original", col.Default.OriginString)
+		}
+	}
 }

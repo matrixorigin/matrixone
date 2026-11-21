@@ -408,10 +408,10 @@ func TestCTASRepeatedDerivedStringDomainConsumesDeclaration(t *testing.T) {
 		}
 	}
 	require.Len(t, visible, 1)
-	require.Equal(t, int32(types.T_varbinary), visible[0].Typ.Id)
-	// IF consumes the derived conditional declaration before LEFT. Its output
-	// is one byte even for a selected multibyte text value, as in MySQL CTAS.
-	// Preserve VARBINARY rather than upgrading this bounded result to BLOB.
+	// MySQL collation aggregation: X'ff' (COERCIBLE) loses to n_name
+	// (IMPLICIT), so the derived value and LEFT(...) are text, as in MySQL
+	// CTAS (varchar(1)).
+	require.Equal(t, int32(types.T_varchar), visible[0].Typ.Id)
 	require.Equal(t, int32(1), visible[0].Typ.Width)
 }
 

@@ -6951,6 +6951,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if resolveErr == nil {
 			admissionCtx := *execCtx
 			admissionCtx.input = currentInput
+			admissionCtx.cw = cw
 			if handler := ses.GetTxnHandler(); handler != nil && handler.GetTxn() != nil {
 				proc.Base.TxnOperator = handler.GetTxn()
 			}

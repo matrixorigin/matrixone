@@ -28,7 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/stretchr/testify/require"
 )
@@ -180,4 +182,127 @@ func TestTemporalCanonicalRelationKeepsSISchemaAcrossReplay(t *testing.T) {
 		require.Equal(t, uint32(1), canonical.origin.version)
 		require.Equal(t, timestamp.Timestamp{PhysicalTime: 150}, op.SnapshotTS())
 	})
+}
+
+func TestTxnTableOwnsReconstructedDefinitions(t *testing.T) {
+	base := newTxnTableForTest()
+	eng := base.eng.(*Engine)
+	op, txn := newResetTxnForTest(t, eng)
+	item := cache.TableItem{Name: "t", Defs: []engine.TableDef{&engine.AttributeDef{Attr: engine.Attribute{Name: "id", Type: types.T_int64.ToType(), Primary: true, Default: &plan.Default{OriginString: "original"}}}}}
+	db := &txnDatabase{op: op}
+	first := newTxnTableWithItem(db, item, txn.proc, eng)
+	second := newTxnTableWithItem(db, item, txn.proc, eng)
+	ctx := context.Background()
+	cols, err := first.TableColumns(ctx)
+	require.NoError(t, err)
+	require.Len(t, cols, 1)
+	keys, err := first.GetPrimaryKeys(ctx)
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	defs, err := first.TableDefs(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, defs)
+	cols[0].Default.OriginString = "changed"
+	other, err := second.TableColumns(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "original", other[0].Default.OriginString)
+	require.Equal(t, "original", item.Defs[0].(*engine.AttributeDef).Attr.Default.OriginString)
+}
+
+func TestPublishedPlannerBorrowKeepsVersionsAndCopiesIsolated(t *testing.T) {
+	base := newTxnTableForTest()
+	eng := base.eng.(*Engine)
+	op, txn := newResetTxnForTest(t, eng)
+	db := &txnDatabase{op: op}
+	columnType := types.T_int64.ToType()
+	typ, err := columnType.Marshal()
+	require.NoError(t, err)
+	makeItem := func(name string) cache.TableItem {
+		item := cache.TableItem{Name: "t"}
+		cache.InitTableItemWithColumns(&item, cache.Columns{{Name: name, Num: 1, Typ: typ}})
+		return item
+	}
+	oldItem := makeItem("old")
+	old := newTxnTableWithItem(db, oldItem, txn.proc, eng)
+	peer := newTxnTableWithItem(db, oldItem, txn.proc, eng)
+	newItem := makeItem("new")
+	newer := newTxnTableWithItem(db, newItem, txn.proc, eng)
+	ctx := context.Background()
+	require.Same(t, old.GetTableDef(ctx), peer.GetTableDef(ctx))
+	require.NotSame(t, old.GetTableDef(ctx), newer.GetTableDef(ctx))
+	require.Equal(t, "old", old.GetTableDef(ctx).Cols[0].Name)
+	require.Equal(t, "new", newer.GetTableDef(ctx).Cols[0].Name)
+	copyDef := old.CopyTableDef(ctx)
+	copyDef.Cols[0].Name = "changed"
+	require.Equal(t, "old", peer.GetTableDef(ctx).Cols[0].Name)
+}
+
+func TestPublishedRelationPrimaryKeys(t *testing.T) {
+	base := newTxnTableForTest()
+	eng := base.eng.(*Engine)
+	op, txn := newResetTxnForTest(t, eng)
+	db := &txnDatabase{op: op}
+	ctx := context.Background()
+
+	ordinaryType := types.T_int64.ToType()
+	ordinary, err := ordinaryType.Marshal()
+	require.NoError(t, err)
+	keyType := types.T_varchar.ToType()
+	keyType.Size++ // Preserve the catalog type when the planner cannot round-trip it.
+	key, err := keyType.Marshal()
+	require.NoError(t, err)
+	defaultExpr, err := (&plan.Default{OriginString: "'original'"}).Marshal()
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		key  string
+	}{
+		{name: "none"},
+		{name: "single", key: "a"},
+		{name: "hidden composite", key: catalog.CPrimaryKeyColName},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := cache.TableItem{Name: "t"}
+			cols := cache.Columns{
+				{Name: "a", Num: 1, Typ: ordinary},
+				{Name: "b", Num: 2, Seqnum: 1, Typ: ordinary},
+			}
+			switch tc.key {
+			case "a":
+				cols[0].ConstraintType = catalog.SystemColPKConstraint
+				cols[0].HasDef = 1
+				cols[0].DefaultExpr = defaultExpr
+			case catalog.CPrimaryKeyColName:
+				cols = append(cols, catalog.Column{
+					Name: tc.key, Num: 3, Seqnum: 2, Typ: key,
+					IsHidden: 1, ConstraintType: catalog.SystemColPKConstraint,
+				})
+			}
+			cache.InitTableItemWithColumns(&item, cols)
+			require.True(t, item.SchemaSource().Valid())
+			rel := newTxnTableWithItem(db, item, txn.proc, eng)
+
+			keys, err := rel.GetPrimaryKeys(ctx)
+			require.NoError(t, err)
+			if tc.key == "" {
+				require.Empty(t, keys)
+				return
+			}
+			require.Len(t, keys, 1)
+			require.Equal(t, tc.key, keys[0].Name)
+			require.True(t, keys[0].Primary)
+			if tc.key == catalog.CPrimaryKeyColName {
+				require.True(t, keys[0].IsHidden)
+				require.Equal(t, keyType, keys[0].Type)
+				require.EqualValues(t, 2, keys[0].Seqnum)
+				return
+			}
+			require.Equal(t, "'original'", keys[0].Default.OriginString)
+			keys[0].Default.OriginString = "changed"
+			keys, err = rel.GetPrimaryKeys(ctx)
+			require.NoError(t, err)
+			require.Equal(t, "'original'", keys[0].Default.OriginString)
+		})
+	}
 }

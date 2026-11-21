@@ -1570,7 +1570,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 
 					case types.T_int8:
 						if needVec(op) {
-							//vec = vector.NewVec(ty.ToType())
+							//vec = vector.NewVec(ty.ToType(), mp)
 							for x := lb; x <= ub; x++ {
 								xx := int8(x)
 								if opOnBinary(op) {
@@ -1584,7 +1584,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 						uub = types.EncodeValue(int8(ub), ty)
 					case types.T_int16:
 						if needVec(op) {
-							//vec = vector.NewVec(ty.ToType())
+							//vec = vector.NewVec(ty.ToType(), mp)
 							for x := lb; x <= ub; x++ {
 								xx := int16(x)
 								if opOnBinary(op) {
@@ -1598,7 +1598,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 						uub = types.EncodeValue(int16(ub), ty)
 					case types.T_int32:
 						if needVec(op) {
-							//vec = vector.NewVec(ty.ToType())
+							//vec = vector.NewVec(ty.ToType(), mp)
 							for x := lb; x <= ub; x++ {
 								xx := int32(x)
 								if opOnBinary(op) {
@@ -1612,7 +1612,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 						uub = types.EncodeValue(int32(ub), ty)
 					case types.T_int64:
 						if needVec(op) {
-							//vec = vector.NewVec(ty.ToType())
+							//vec = vector.NewVec(ty.ToType(), mp)
 							for x := lb; x <= ub; x++ {
 								xx := int64(x)
 								if opOnBinary(op) {
@@ -1626,7 +1626,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 						uub = types.EncodeValue(int64(ub), ty)
 					case types.T_uint8:
 						if needVec(op) {
-							//vec = vector.NewVec(ty.ToType())
+							//vec = vector.NewVec(ty.ToType(), mp)
 							for x := lb; x <= ub; x++ {
 								xx := uint8(x)
 								if opOnBinary(op) {
@@ -1640,7 +1640,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 						uub = types.EncodeValue(uint8(ub), ty)
 					case types.T_uint16:
 						if needVec(op) {
-							//vec = vector.NewVec(ty.ToType())
+							//vec = vector.NewVec(ty.ToType(), mp)
 							for x := lb; x <= ub; x++ {
 								xx := uint16(x)
 								if opOnBinary(op) {
@@ -1654,7 +1654,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 						uub = types.EncodeValue(uint16(ub), ty)
 					case types.T_uint32:
 						if needVec(op) {
-							//vec = vector.NewVec(ty.ToType())
+							//vec = vector.NewVec(ty.ToType(), mp)
 							for x := lb; x <= ub; x++ {
 								xx := uint32(x)
 								if opOnBinary(op) {
@@ -1668,7 +1668,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 						uub = types.EncodeValue(uint32(ub), ty)
 					case types.T_uint64:
 						if needVec(op) {
-							//vec = vector.NewVec(ty.ToType())
+							//vec = vector.NewVec(ty.ToType(), mp)
 							for x := lb; x <= ub; x++ {
 								xx := int64(x)
 								if opOnBinary(op) {
@@ -1682,7 +1682,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 						uub = types.EncodeValue(uint64(ub), ty)
 					case types.T_float32:
 						if needVec(op) {
-							//vec = vector.NewVec(ty.ToType())
+							//vec = vector.NewVec(ty.ToType(), mp)
 							for x := lb; x <= ub; x++ {
 								xx := float32(x)
 								if opOnBinary(op) {
@@ -1696,7 +1696,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 						uub = types.EncodeValue(float32(ub), ty)
 					case types.T_float64:
 						if needVec(op) {
-							//vec = vector.NewVec(ty.ToType())
+							//vec = vector.NewVec(ty.ToType(), mp)
 							for x := lb; x <= ub; x++ {
 								xx := x
 								if opOnBinary(op) {
@@ -1727,7 +1727,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 
 					case types.T_date:
 						if needVec(op) {
-							//vec = vector.NewVec(ty.ToType())
+							//vec = vector.NewVec(ty.ToType(), mp)
 							for x := lb; x <= ub; x++ {
 								xx := types.Date(x)
 								if opOnBinary(op) {
@@ -1742,7 +1742,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 
 					case types.T_timestamp:
 						if needVec(op) {
-							//vec = vector.NewVec(ty.ToType())
+							//vec = vector.NewVec(ty.ToType(), mp)
 							for x := lb; x <= ub; x++ {
 								xx := types.Timestamp(x)
 								if opOnBinary(op) {

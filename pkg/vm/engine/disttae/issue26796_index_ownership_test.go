@@ -38,7 +38,6 @@ package disttae
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	commonruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -83,7 +82,6 @@ func newIssue26796TxnWithTables(t testing.TB, specs ...issue26796TableSpec) (*Tr
 		databaseOps:     newDbOps(),
 		deletedBlocks:   &deletedBlocks{},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 	}
 	op := newTxnOperatorForTestWithWorkspace(t, txn)
 	txn.op = op

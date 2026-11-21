@@ -136,6 +136,35 @@ function selectPackages(files, records, root, report = () => {}) {
     full(`affected closure reaches full-scan threshold (${selected.size}/${owners.size} packages)`);
 }
 
+// Local developer mode: compare the working tree, including staged, unstaged
+// and untracked inputs, with its merge base against a named ref. Unlike the PR
+// event comparison this is deliberately mutable; it never gates CI.
+function localChanges({ cwd = process.cwd(), base, git, report = () => {} } = {}) {
+  const full = reason => { report(reason); return null; };
+  git ||= args => execFileSync('git', args, {
+    cwd, encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  try {
+    const mergeBase = git(['merge-base', base, 'HEAD']).trim();
+    const raw = git(['diff', '--no-ext-diff', '--no-renames', '--ignore-submodules=none',
+      '--name-status', '-z', mergeBase]);
+    const fields = raw.split('\0');
+    if (fields.pop() !== '' || fields.length % 2) return full('malformed local diff');
+    const files = [];
+    for (let i = 0; i < fields.length; i += 2) {
+      if (!['A', 'M', 'D', 'T'].includes(fields[i])) return full('unsupported local diff entry');
+      files.push({ status: fields[i], filename: fields[i + 1] });
+    }
+    for (const filename of git(['ls-files', '--others', '--exclude-standard', '-z']).split('\0')) {
+      if (filename) files.push({ status: 'A', filename });
+    }
+    return files;
+  } catch {
+    return full(`local merge base with ${JSON.stringify(base)} or diff unavailable`);
+  }
+}
+
 function plan({ cwd = process.cwd(), env = process.env, run = execFileSync } = {}) {
   // Always verify the whole production/test graph once, including on fallback.
   // Discovery failure is a real SCA failure, not a successful empty selection.
@@ -145,8 +174,11 @@ function plan({ cwd = process.cwd(), env = process.env, run = execFileSync } = {
   });
   const records = inventory(text);
   const report = reason => console.error(`SCA full-scan reason: ${reason}`);
-  let files = env.SCA_FULL === '1' ? null : immutableChanges({ cwd, env, report });
+  const local = env.SCA_LOCAL_BASE;
+  let files = null;
   if (env.SCA_FULL === '1') report('SCA_FULL=1');
+  else if (local) files = localChanges({ cwd, base: local, report });
+  else files = immutableChanges({ cwd, env, report });
   if (files) {
     // Git status omits ignored files, but Go still compiles an ignored .go
     // file inside a package. Require every real source input to be committed
@@ -160,6 +192,8 @@ function plan({ cwd = process.cwd(), env = process.env, run = execFileSync } = {
         const match = /^100(?:644|755) [0-9a-f]+ 0\t([\s\S]+)$/.exec(entry);
         return match ? [match[1]] : [];
       }));
+      // Local mode already reports untracked, non-ignored inputs as changes.
+      if (local) for (const f of files) if (f.status === 'A') tracked.add(f.filename);
       if (records.some(p => p.sources.some(source =>
         !tracked.has(path.relative(cwd, path.resolve(p.dir, source)).split(path.sep).join('/'))))) {
         report('Go graph contains untracked, generated or nonregular source inputs');
@@ -184,4 +218,4 @@ if (require.main === module) {
     process.exitCode = 1;
   }
 }
-module.exports = { goChanges, inventoryFields, inventory, selectPackages, plan };
+module.exports = { goChanges, inventoryFields, inventory, localChanges, selectPackages, plan };

@@ -4595,6 +4595,14 @@ func (b *baseBinder) coerceJSONNumericAggregateArg(
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	expr, err := b.bindFuncExprImplByAstExprInner(name, astArgs, depth)
+	if err == nil && name == "coalesce" && b.builder != nil && isMixedDomainCoalesce(expr) {
+		b.builder.mixedDomainCoalesce = true
+	}
+	return expr, err
+}
+
+func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
 	previousFieldContext := b.preparedFieldArgumentContext
 	b.preparedFieldArgumentContext = previousFieldContext || name == "field"
 	defer func() { b.preparedFieldArgumentContext = previousFieldContext }()
@@ -4777,6 +4785,12 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				// from v72 to v86.
 				b.suppressDefaultValueBindType = true
 				b.inetNtoaNumericLiteralContext = true
+			}
+			if conditionalValueIndexes(name, len(astArgs)) != nil && isBinaryLiteralAst(arg) {
+				// A binary literal branch keeps its own COERCIBLE identity, so
+				// collation aggregation decides the conditional's string domain
+				// instead of the destination column type of a DEFAULT.
+				b.suppressDefaultValueBindType = true
 			}
 			if name == "timestampadd" && idx == 1 && timestampAddSecondUnit(args[:idx]) && !function.LegacyTimestampAddSecond(b.GetContext()) {
 				// SECOND consumes the source decimal value before integer coercion.
@@ -7949,6 +7963,7 @@ func bindFuncExprImplByPlanExpr(
 	if err != nil {
 		return nil, err
 	}
+	args = relabelCoercibleBinaryBranches(name, args)
 	// HEX/BIT literals have a VARCHAR-shaped type but an exact unsigned numeric
 	// domain. Preserve their provenance before either prepared consumers or the
 	// type-only SUM/AVG fallback converts strings to DOUBLE. Ordinary binary
@@ -8146,7 +8161,7 @@ func bindFuncExprImplByPlanExpr(
 		if err := convertValueIntoBool(name, args, false); err != nil {
 			return nil, err
 		}
-		if err := quoteJSONComparisonStringParam(ctx, args); err != nil {
+		if err := quoteJSONComparisonStringParam(ctx, name, args); err != nil {
 			return nil, err
 		}
 
@@ -8432,6 +8447,12 @@ func bindFuncExprImplByPlanExpr(
 		}
 		if isNullExpr(args[1]) {
 			return args[1], nil
+		}
+	case "unary_plus":
+		// MySQL's parser drops unary plus, so +<temporal> keeps the operand's
+		// native value and type instead of looking for a numeric overload.
+		if len(args) == 1 && isUnaryPlusTemporalOperand(args[0]) {
+			return args[0], nil
 		}
 	case "unary_minus":
 		if len(args) == 0 {
@@ -12188,10 +12209,12 @@ func isCharacterStringType(typeID int32) bool {
 }
 
 // quoteJSONComparisonStringParam binds a string (or not yet typed) parameter
-// compared with a JSON value as a JSON string, the MySQL rule for comparing
-// JSON with a character string. Typed numeric and Boolean parameters need no
-// rewrite: they bind like literals of their type.
-func quoteJSONComparisonStringParam(ctx context.Context, args []*Expr) error {
+// compared with a JSON value. Equality binds like the equivalent character
+// string literal, which compares the JSON operand as VARCHAR, in either
+// operand order. Other parameters and orderings bind as a JSON string.
+// Typed numeric and Boolean parameters need no rewrite: they bind like
+// literals of their type.
+func quoteJSONComparisonStringParam(ctx context.Context, name string, args []*Expr) error {
 	if len(args) != 2 {
 		return nil
 	}
@@ -12203,6 +12226,16 @@ func quoteJSONComparisonStringParam(ctx context.Context, args []*Expr) error {
 		oid := types.T(param.Typ.Id)
 		if oid != types.T_any && !oid.IsMySQLString() {
 			continue
+		}
+		switch name {
+		case "=", "<=>", "<>", "!=":
+			switch oid {
+			case types.T_any, types.T_char, types.T_varchar, types.T_text, types.T_blob:
+				varcharType := types.T_varchar.ToType()
+				var err error
+				args[1-i], err = appendCastBeforeExpr(ctx, other, makePlan2Type(&varcharType))
+				return err
+			}
 		}
 		quoted, err := BindFuncExprImplByPlanExpr(ctx, "json_quote", []*Expr{param})
 		if err != nil {
@@ -14071,4 +14104,12 @@ func (b *baseBinder) defaultNumericOuterType() *plan.Type {
 		return &typ
 	}
 	return nil
+}
+
+func isUnaryPlusTemporalOperand(expr *Expr) bool {
+	switch types.T(expr.Typ.Id) {
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+		return true
+	}
+	return false
 }
