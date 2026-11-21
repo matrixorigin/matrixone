@@ -4778,6 +4778,12 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.suppressDefaultValueBindType = true
 				b.inetNtoaNumericLiteralContext = true
 			}
+			if conditionalValueIndexes(name, len(astArgs)) != nil && isBinaryLiteralAst(arg) {
+				// A binary literal branch keeps its own COERCIBLE identity, so
+				// collation aggregation decides the conditional's string domain
+				// instead of the destination column type of a DEFAULT.
+				b.suppressDefaultValueBindType = true
+			}
 			if name == "timestampadd" && idx == 1 && timestampAddSecondUnit(args[:idx]) && !function.LegacyTimestampAddSecond(b.GetContext()) {
 				// SECOND consumes the source decimal value before integer coercion.
 				b.suppressDefaultValueBindType = true
@@ -7949,6 +7955,7 @@ func bindFuncExprImplByPlanExpr(
 	if err != nil {
 		return nil, err
 	}
+	args = relabelCoercibleBinaryBranches(name, args)
 	// HEX/BIT literals have a VARCHAR-shaped type but an exact unsigned numeric
 	// domain. Preserve their provenance before either prepared consumers or the
 	// type-only SUM/AVG fallback converts strings to DOUBLE. Ordinary binary

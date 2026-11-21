@@ -678,3 +678,160 @@ func setExpressionCollation(ctx context.Context, name string, args []*Expr, typ 
 	}
 	return nil
 }
+
+// conditionalValueIndexes returns the value arguments of CASE, IF and
+// COALESCE. IFNULL and NULLIF are bound as CASE.
+func conditionalValueIndexes(name string, arity int) []int {
+	var indexes []int
+	switch name {
+	case "case":
+		for i := 1; i < arity; i += 2 {
+			indexes = append(indexes, i)
+		}
+		if arity%2 == 1 {
+			indexes = append(indexes, arity-1)
+		}
+	case "if", "iff":
+		if arity == 3 {
+			indexes = []int{1, 2}
+		}
+	case "coalesce":
+		for i := 0; i < arity; i++ {
+			indexes = append(indexes, i)
+		}
+	}
+	return indexes
+}
+
+// isBinaryStringLiteral reports a SQL binary string literal: _binary '...',
+// X'...' or b'...'. Constants built by the planner are not SQL literals.
+func isBinaryStringLiteral(expr *Expr) bool {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return false
+	}
+	switch literal.LiteralForm {
+	case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+		plan.StringLiteralForm_STRING_LITERAL_HEX,
+		plan.StringLiteralForm_STRING_LITERAL_BIT:
+	default:
+		return false
+	}
+	return types.StaticStringDomain(makeTypeByPlan2Expr(expr)) == types.StringDomainBinary
+}
+
+// relabelCoercibleBinaryBranches applies MySQL collation aggregation to the
+// value branches of a conditional: the lowest coercibility wins and binary
+// wins a tie. When a text branch wins outright, a binary literal branch
+// (COERCIBLE) takes the winning text type, so if(c, txt, _binary ”) is text.
+// The literal's bytes are kept as they are; MySQL does not validate them.
+func relabelCoercibleBinaryBranches(name string, args []*Expr) []*Expr {
+	indexes := conditionalValueIndexes(name, len(args))
+	if len(indexes) < 2 {
+		return args
+	}
+	var winner *Expr
+	winnerRank := uint32(6)
+	binaryRank := uint32(6)
+	hasBinaryLiteral := false
+	for _, index := range indexes {
+		arg := args[index]
+		if arg == nil || !types.T(arg.Typ.Id).IsMySQLString() || isNullLiteralExpr(arg) {
+			continue
+		}
+		rank := stringDerivationRank(arg)
+		if types.StaticStringDomain(makeTypeByPlan2Expr(arg)) == types.StringDomainBinary {
+			binaryRank = min(binaryRank, rank)
+			hasBinaryLiteral = hasBinaryLiteral || isBinaryStringLiteral(arg)
+			continue
+		}
+		if winner == nil || rank < winnerRank {
+			winner, winnerRank = arg, rank
+		}
+	}
+	if winner == nil || !hasBinaryLiteral || winnerRank >= binaryRank {
+		return args
+	}
+	result := append([]*Expr(nil), args...)
+	for _, index := range indexes {
+		arg := args[index]
+		if arg == nil || !isBinaryStringLiteral(arg) {
+			continue
+		}
+		relabeled := DeepCopyExpr(arg)
+		typ := &relabeled.Typ
+		switch types.T(typ.Id) {
+		case types.T_blob:
+			typ.Id = int32(types.T_text)
+		case types.T_binary, types.T_varbinary:
+			typ.Id = int32(types.T_varchar)
+		}
+		typ.Charset, typ.CollationVersion = winner.Typ.Charset, winner.Typ.CollationVersion
+		typ.PadSpace = winner.Typ.PadSpace
+		literal := relabeled.GetLit()
+		literal.IsBin = false
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+		result[index] = relabeled
+	}
+	return result
+}
+
+func isBinaryLiteralAst(expr tree.Expr) bool {
+	numVal, ok := unwrapParenExpr(expr).(*tree.NumVal)
+	if !ok {
+		return false
+	}
+	switch numVal.ValType {
+	case tree.P_hexnum, tree.P_bit, tree.P_ScoreBinary, tree.P_ScoreBinaryHexnum:
+		return true
+	}
+	return false
+}
+
+// stringDerivationRank is MySQL's collation derivation of a string
+// expression: EXPLICIT 0, IMPLICIT 2 (columns, casts, variables), COERCIBLE 4
+// (literals, parameters), IGNORABLE 6 (NULL). An ordinary function takes the
+// strongest derivation among its string arguments.
+func stringDerivationRank(expr *Expr) uint32 {
+	if expr.Typ.CollationCoercibilitySet && expr.Typ.CollationCoercibility == 0 {
+		return 0
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		name := strings.ToLower(fn.Func.ObjName)
+		if name == "cast" && !fn.SyntaxExplicitCast && len(fn.Args) > 0 && fn.Args[0] != nil {
+			// A conversion inserted by the binder keeps its operand's derivation.
+			source := fn.Args[0]
+			switch {
+			case isNullLiteralExpr(source):
+				return 6
+			case source.GetP() != nil:
+				return 4
+			case source.GetV() != nil:
+				return 2
+			case types.T(source.Typ.Id).IsMySQLString():
+				return stringDerivationRank(source)
+			case source.GetLit() != nil:
+				return 5
+			}
+		}
+		switch name {
+		case "cast", "convert", "binary", "user", "current_user", "version", "database", "schema":
+		default:
+			rank, seen := uint32(6), false
+			for _, arg := range fn.Args {
+				if arg != nil && types.T(arg.Typ.Id).IsMySQLString() {
+					rank, seen = min(rank, stringDerivationRank(arg)), true
+				}
+			}
+			if seen {
+				return rank
+			}
+			return 4
+		}
+	}
+	c, ok := collationForExpression(expr)
+	if !ok {
+		return 4
+	}
+	return c.rank
+}
