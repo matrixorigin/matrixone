@@ -6619,9 +6619,6 @@ func bindMixedInListComparison(
 		left, right = operands[0], operands[1]
 	}
 	operands = []*Expr{left, right}
-	if err := adjustJsonDynamicParamType(ctx, operator, operands); err != nil {
-		return nil, err
-	}
 	return BindFuncExprImplByPlanExpr(ctx, operator, operands)
 }
 
@@ -8149,7 +8146,7 @@ func bindFuncExprImplByPlanExpr(
 		if err := convertValueIntoBool(name, args, false); err != nil {
 			return nil, err
 		}
-		if err := adjustJsonDynamicParamType(ctx, name, args); err != nil {
+		if err := quoteJSONComparisonStringParam(ctx, name, args); err != nil {
 			return nil, err
 		}
 
@@ -12190,36 +12187,41 @@ func isCharacterStringType(typeID int32) bool {
 	}
 }
 
-func adjustJsonDynamicParamType(ctx context.Context, name string, args []*Expr) error {
-	paramFunction := ""
-	switch name {
-	case "<", "<=", ">", ">=":
-		paramFunction = function.JsonOrderingParamFunctionName
-	case "=", "<=>", "<>", "!=":
-		paramFunction = function.JsonComparisonParamFunctionName
-	default:
-		return nil
-	}
+// quoteJSONComparisonStringParam binds a string (or not yet typed) parameter
+// compared with a JSON value. Equality binds like the equivalent character
+// string literal, which compares the JSON operand as VARCHAR, in either
+// operand order. Other parameters and orderings bind as a JSON string.
+// Typed numeric and Boolean parameters need no rewrite: they bind like
+// literals of their type.
+func quoteJSONComparisonStringParam(ctx context.Context, name string, args []*Expr) error {
 	if len(args) != 2 {
 		return nil
 	}
-
-	// The private JSON adapter consumes the transport bytes and their Process
-	// type/kind metadata. A SQL cast back to TEXT would change direct Boolean
-	// parameters into numeric strings before the adapter can preserve them.
-	transport := func(expr *Expr) *Expr {
-		return &Expr{Typ: makeSimplePlan2Type(types.T_text), Expr: &plan.Expr_P{
-			P: &plan.ParamRef{Pos: expr.GetP().Pos},
-		}}
-	}
-	if args[0].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[1]) {
-		var err error
-		args[1], err = BindFuncExprImplByPlanExpr(ctx, paramFunction, []*Expr{transport(args[1])})
-		return err
-	}
-	if args[1].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[0]) {
-		var err error
-		args[0], err = BindFuncExprImplByPlanExpr(ctx, paramFunction, []*Expr{transport(args[0])})
+	for i := range args {
+		param, other := args[i], args[1-i]
+		if other.Typ.Id != int32(types.T_json) || !isDirectDynamicParam(param) {
+			continue
+		}
+		oid := types.T(param.Typ.Id)
+		if oid != types.T_any && !oid.IsMySQLString() {
+			continue
+		}
+		switch name {
+		case "=", "<=>", "<>", "!=":
+			switch oid {
+			case types.T_any, types.T_char, types.T_varchar, types.T_text, types.T_blob:
+				varcharType := types.T_varchar.ToType()
+				var err error
+				args[1-i], err = appendCastBeforeExpr(ctx, other, makePlan2Type(&varcharType))
+				return err
+			}
+		}
+		quoted, err := BindFuncExprImplByPlanExpr(ctx, "json_quote", []*Expr{param})
+		if err != nil {
+			return err
+		}
+		jsonType := types.T_json.ToType()
+		args[i], err = appendCastBeforeExpr(ctx, quoted, makePlan2Type(&jsonType))
 		return err
 	}
 	return nil

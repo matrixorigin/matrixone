@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -46,10 +45,9 @@ func TestFlatCopyPreservesLogicalBatchAndCodecBoundaries(t *testing.T) {
 	ints := vector.NewVec(types.T_int64.ToType())
 	t.Cleanup(func() { ints.Free(mp) })
 	require.NoError(t, vector.AppendFixedList(ints, []int64{10, 20, 30}, nil, mp))
-	nulls.Add(ints.GetNulls(), 1)
-	nulls.Add(ints.GetGrouping(), 2)
+	ints.GetNulls().Add(1)
+	ints.GetGrouping().Add(2)
 	ints.SetIsBin(true)
-	ints.SetPrepareParamType(types.T_int64)
 	text := vector.NewVec(types.T_varchar.ToType())
 	t.Cleanup(func() { text.Free(mp) })
 	long := strings.Repeat("selected", 8)
@@ -87,7 +85,6 @@ func TestFlatCopyPreservesLogicalBatchAndCodecBoundaries(t *testing.T) {
 	require.True(t, output.Vecs[0].GetGrouping().Contains(0))
 	require.True(t, output.Vecs[0].GetGrouping().Contains(2))
 	require.True(t, output.Vecs[0].GetIsBin())
-	require.Equal(t, types.T_int64, output.Vecs[0].GetPrepareParamType())
 	require.True(t, output.Vecs[2].IsConst())
 	for row, want := range []string{long, "short", long, "null"} {
 		require.Equal(t, want, string(output.Vecs[1].GetBytesAt(row)))

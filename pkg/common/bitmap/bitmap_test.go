@@ -450,3 +450,31 @@ func TestBitmapIteratorBounds(t *testing.T) {
 	require.Equal(t, uint64(0), itr.PeekNext())
 	require.Equal(t, []uint64{0, 63, 64, 127, 128, 129}, collect(full))
 }
+
+func TestInitWithInvertedBits(t *testing.T) {
+	src := make([]byte, 40)
+	for i := range src {
+		src[i] = byte(i*37 + 11)
+	}
+	for _, offset := range []int{0, 1, 3, 7, 8, 9, 63, 64, 65} {
+		for _, length := range []int{0, 1, 7, 63, 64, 65, 128, 200, 300 - offset} {
+			if offset+length > len(src)*8 {
+				continue
+			}
+			var n Bitmap
+			n.InitWithInvertedBits(src, offset, length)
+			require.Equal(t, int64(length), n.Len())
+			want := 0
+			for row := 0; row < length; row++ {
+				bit := offset + row
+				null := src[bit>>3]&(1<<(bit&7)) == 0
+				require.Equal(t, null, n.Contains(uint64(row)), "offset=%d length=%d row=%d", offset, length, row)
+				if null {
+					want++
+				}
+			}
+			require.Equal(t, want, n.Count())
+			require.NoError(t, n.Validate())
+		}
+	}
+}

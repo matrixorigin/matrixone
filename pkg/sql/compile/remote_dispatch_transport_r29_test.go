@@ -695,7 +695,7 @@ func r29StubSender(
 func r29WireBatch(t *testing.T, bat *batch.Batch) *pipeline.Message {
 	t.Helper()
 	var buf bytes.Buffer
-	data, err := bat.MarshalBinaryForPipeline(&buf, true, true)
+	data, err := bat.MarshalBinaryForPipeline(&buf, true)
 	require.NoError(t, err)
 	return &pipeline.Message{Data: data, BatchSequence: 1}
 }

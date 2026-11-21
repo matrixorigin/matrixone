@@ -39,9 +39,6 @@ func TestCopyWithReadonlyAreaSnapshotAndReuse(t *testing.T) {
 	require.NoError(t, AppendBytes(source, []byte("inline"), false, mp))
 	require.NoError(t, AppendBytes(source, nil, true, mp))
 	source.GetGrouping().Add(1)
-	require.NoError(t, source.SetPrepareParamKindsWithMP(
-		[]PrepareParamKind{PrepareParamFloat, PrepareParamNone, PrepareParamNone}, mp,
-	))
 	require.NoError(t, source.SetIsBinaryStringAt(0, true, mp))
 
 	require.NoError(t, destination.CopyWithReadonlyArea(source, mp))
@@ -60,7 +57,6 @@ func TestCopyWithReadonlyAreaSnapshotAndReuse(t *testing.T) {
 	require.Less(t, mp.CurrNB()-beforeView, int64(len(value)), "a view must not allocate another payload")
 	require.True(t, readonly.GetNulls().Contains(2))
 	require.True(t, readonly.GetGrouping().Contains(1))
-	require.Equal(t, PrepareParamFloat, readonly.GetPrepareParamKindAt(0))
 	require.True(t, readonly.GetIsBinaryStringAt(0))
 	readonly.GetNulls().Del(2)
 	readonly.GetGrouping().Del(1)
@@ -200,10 +196,11 @@ func readonlyAreaMutations() []readonlyAreaMutation {
 		}},
 		{"preflighted", false, func(dst, src *Vector, mp *mpool.MPool) error {
 			flags := []uint8{1}
-			if err := dst.PreExtendSelectedBatch(src, 0, 1, flags, dst.Length()+1, mp); err != nil {
+			preflight, err := dst.PreExtendSelectedBatch(src, 0, 1, flags, dst.Length()+1, mp)
+			if err != nil {
 				return err
 			}
-			return dst.UnionBatchPreflighted(src, 0, 1, flags, mp)
+			return dst.UnionBatchPreflighted(src, 0, 1, flags, &preflight, mp)
 		}},
 	}
 }
@@ -253,18 +250,15 @@ func TestCopyWithReadonlyAreaMutations(t *testing.T) {
 					extra.CleanOnlyData()
 					replacement := bytes.Repeat([]byte{'x'}, size)
 					require.NoError(t, AppendBytes(extra, replacement, false, mp))
-					require.NoError(t, extra.SetStringSource(types.StringSourceLiteral))
 					require.NoError(t, mutation.run(destination, extra, mp))
 					require.GreaterOrEqual(t, len(destination.GetData()), destination.Length()*types.VarlenaSize)
 					if mutation.copy {
 						require.Equal(t, 3, destination.Length())
 						require.Equal(t, replacement, destination.GetBytesAt(0))
-						require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(0))
 						require.Equal(t, values[1], destination.GetBytesAt(1))
 						require.Equal(t, values[2], destination.GetBytesAt(2))
 					} else {
 						require.Equal(t, replacement, destination.GetBytesAt(destination.Length()-1))
-						require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(destination.Length()-1))
 						require.Equal(t, values[0], destination.GetBytesAt(0))
 						require.Equal(t, values[1], destination.GetBytesAt(1))
 					}
@@ -296,22 +290,22 @@ func TestCopyWithReadonlyAreaPreflightWithinCapacity(t *testing.T) {
 	require.NoError(t, destination.CopyWithReadonlyArea(source, mp))
 	require.NoError(t, destination.Shrink([]int64{2}, true, mp))
 	require.NoError(t, AppendBytes(extra, []byte("inline"), false, mp))
-	require.NoError(t, extra.SetStringSource(types.StringSourceLiteral))
 	before := mp.CurrNB()
 	flags := []uint8{0}
-	require.NoError(t, destination.PreExtendSelectedBatch(extra, 0, 1, flags, 2, mp))
-	require.NoError(t, destination.UnionBatchPreflighted(extra, 0, 1, flags, mp))
+	preflight, err := destination.PreExtendSelectedBatch(extra, 0, 1, flags, 2, mp)
+	require.NoError(t, err)
+	require.NoError(t, destination.UnionBatchPreflighted(extra, 0, 1, flags, &preflight, mp))
 	require.Equal(t, before, mp.CurrNB())
 	require.True(t, destination.HasBorrowedBacking(), "an empty selection must not materialize")
 	flags[0] = 1
-	require.NoError(t, destination.PreExtendSelectedBatch(extra, 0, 1, flags, 3, mp))
+	preflight, err = destination.PreExtendSelectedBatch(extra, 0, 1, flags, 3, mp)
+	require.NoError(t, err)
 	require.False(t, destination.HasBorrowedBacking(), "preflight must finish COW even without area growth")
 	before = mp.CurrNB()
-	require.NoError(t, destination.UnionBatchPreflighted(extra, 0, 1, flags, mp))
+	require.NoError(t, destination.UnionBatchPreflighted(extra, 0, 1, flags, &preflight, mp))
 	require.Equal(t, before, mp.CurrNB(), "publication must not repeat admission")
 	require.Equal(t, 3, destination.Length())
 	require.Equal(t, "inline", destination.GetStringAt(2))
-	require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(2))
 }
 
 func TestCopyWithReadonlyAreaCopyAliasedSource(t *testing.T) {

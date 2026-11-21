@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -266,14 +265,14 @@ func TestBackupTombstoneValidationRejectsMalformedColumns(t *testing.T) {
 			name:   "null commit timestamp",
 			layout: backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, 3),
 			mutate: func(bat *batch.Batch) {
-				nulls.Add(bat.Vecs[2].GetNulls(), 1)
+				bat.Vecs[2].GetNulls().Add(1)
 			},
 		},
 		{
 			name:   "null abort flag",
 			layout: backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, 3),
 			mutate: func(bat *batch.Batch) {
-				nulls.Add(bat.Vecs[3].GetNulls(), 1)
+				bat.Vecs[3].GetNulls().Add(1)
 			},
 		},
 	}

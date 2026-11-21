@@ -24,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
-
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
 
 func TestPartition(t *testing.T) {
@@ -35,7 +33,7 @@ func TestPartition(t *testing.T) {
 	partitions := make([]int64, 2)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v0)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v0.GetNulls(), 1)
+	v0.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v0)
 	require.Equal(t, []int64{0, 1}, partitions)
 
@@ -43,7 +41,7 @@ func TestPartition(t *testing.T) {
 	vector.AppendFixedList(v1, []int16{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v1)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v0.GetNulls(), 1)
+	v0.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v1)
 	require.Equal(t, []int64{0, 1}, partitions)
 
@@ -51,7 +49,7 @@ func TestPartition(t *testing.T) {
 	vector.AppendFixedList(v2, []int32{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v2)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v2.GetNulls(), 1)
+	v2.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v2)
 	require.Equal(t, []int64{0, 1}, partitions)
 
@@ -59,7 +57,7 @@ func TestPartition(t *testing.T) {
 	vector.AppendFixedList(v3, []int64{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v3)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v3.GetNulls(), 1)
+	v3.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v3)
 	require.Equal(t, []int64{0, 1}, partitions)
 
@@ -67,7 +65,7 @@ func TestPartition(t *testing.T) {
 	vector.AppendFixedList(v4, []uint8{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v4)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v4.GetNulls(), 1)
+	v4.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v4)
 	require.Equal(t, []int64{0, 1}, partitions)
 
@@ -75,7 +73,7 @@ func TestPartition(t *testing.T) {
 	vector.AppendFixedList(v5, []uint16{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v5)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v5.GetNulls(), 1)
+	v5.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v5)
 	require.Equal(t, []int64{0, 1}, partitions)
 
@@ -83,7 +81,7 @@ func TestPartition(t *testing.T) {
 	vector.AppendFixedList(v6, []uint32{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v6)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v6.GetNulls(), 1)
+	v6.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v6)
 	require.Equal(t, []int64{0, 1}, partitions)
 
@@ -91,7 +89,7 @@ func TestPartition(t *testing.T) {
 	vector.AppendFixedList(v7, []uint64{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v7)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v7.GetNulls(), 1)
+	v7.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v7)
 	require.Equal(t, []int64{0, 1}, partitions)
 
@@ -99,7 +97,7 @@ func TestPartition(t *testing.T) {
 	vector.AppendFixedList(v8, []types.Date{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v8)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v8.GetNulls(), 1)
+	v8.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v8)
 	require.Equal(t, []int64{0, 1}, partitions)
 
@@ -107,7 +105,7 @@ func TestPartition(t *testing.T) {
 	vector.AppendFixedList(v9, []float32{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v9)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v9.GetNulls(), 1)
+	v9.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v9)
 	require.Equal(t, []int64{0, 1}, partitions)
 
@@ -115,7 +113,7 @@ func TestPartition(t *testing.T) {
 	vector.AppendFixedList(v10, []float64{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v10)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v10.GetNulls(), 1)
+	v10.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v10)
 	require.Equal(t, []int64{0, 1}, partitions)
 
@@ -123,7 +121,7 @@ func TestPartition(t *testing.T) {
 	vector.AppendStringList(v11, []string{"hello", "Gut", "konichiwa", "nihao", "nihao", "nihao", "nihao"}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v10)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v11.GetNulls(), 1)
+	v11.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v11)
 	require.Equal(t, []int64{0, 1}, partitions)
 
@@ -133,7 +131,7 @@ func TestPartition(t *testing.T) {
 	require.NoError(t, vector.AppendFixedList(v12, []uint64{3, 4, 5, 6, 7, 8}, nil, mp))
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v12)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v12.GetNulls(), 1)
+	v12.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v12)
 	require.Equal(t, []int64{0, 1}, partitions)
 
@@ -141,7 +139,7 @@ func TestPartition(t *testing.T) {
 	_ = vector.AppendStringList(v13, []string{"abc", "def", "xyz", "abc", "def", "xyz"}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v13)
 	require.Equal(t, []int64{0, 1}, partitions)
-	nulls.Add(v13.GetNulls(), 1)
+	v13.GetNulls().Add(1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v13)
 	require.Equal(t, []int64{0, 1}, partitions)
 
