@@ -358,8 +358,14 @@ func speculativeConstantInt64(expr *plan.Expr) (int64, bool) {
 	if expr == nil {
 		return 0, false
 	}
-	if value, isNull, ok := geometrySRIDLiteralValue(expr.GetLit()); ok {
-		return value, !isNull
+	if lit := expr.GetLit(); lit != nil {
+		// This proof can only follow value-preserving integer conversions.
+		// An oversized unsigned literal must not wrap before we inspect its cast.
+		if lit.Src != nil || lit.GetU64Val() > uint64(1<<63-1) {
+			return 0, false
+		}
+		value, isNull, ok := geometrySRIDLiteralValue(lit)
+		return value, ok && !isNull
 	}
 	f := expr.GetF()
 	if f == nil || f.Func == nil || len(f.Args) == 0 {
