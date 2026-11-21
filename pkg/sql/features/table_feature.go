@@ -22,6 +22,7 @@ const (
 	DataStreamExternal = 1 << iota
 	ForeignExternal    = 1 << iota
 	KafkaExternal      = 1 << iota
+	SchemaEvolved      = 1 << iota
 )
 
 func IsPartitioned(f uint64) bool {
@@ -50,4 +51,8 @@ func IsForeignExternal(f uint64) bool {
 
 func IsKafkaExternal(f uint64) bool {
 	return f&KafkaExternal != 0
+}
+
+func IsSchemaEvolved(f uint64) bool {
+	return f&SchemaEvolved != 0
 }

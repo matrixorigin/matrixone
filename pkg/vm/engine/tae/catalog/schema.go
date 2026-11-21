@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/tidwall/pretty"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -185,6 +186,29 @@ func (s *Schema) Clone() *Schema {
 		panic(err)
 	}
 	return ns
+}
+
+func (s *Schema) ColumnReadSpec() (*objectio.ColumnReadSpec, error) {
+	if s == nil || s.Extra == nil || !features.IsSchemaEvolved(s.Extra.FeatureFlag) {
+		return nil, nil
+	}
+	cols := make([]objectio.RawColumnSpecInput, 0, len(s.ColDefs))
+	for _, col := range s.ColDefs {
+		if !col.PhyAddr {
+			cols = append(cols, objectio.RawColumnSpecInput{SeqNum: col.SeqNum, Type: col.Type, Default: col.Default})
+		}
+	}
+	return objectio.NewColumnReadSpecFromEncoded(true, cols)
+}
+
+func (s *Schema) MaxSeqnum() uint16 {
+	var maxSeqnum uint16
+	for _, col := range s.ColDefs {
+		if !col.PhyAddr {
+			maxSeqnum = max(maxSeqnum, col.SeqNum)
+		}
+	}
+	return maxSeqnum
 }
 
 func (s *Schema) IsSecondaryIndexTable() bool {

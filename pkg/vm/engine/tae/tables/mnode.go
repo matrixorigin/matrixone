@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -263,48 +264,61 @@ func (node *memoryNode) getDataWindowLocked(
 		panic("not expect")
 		// bat.Deletes = bat.WindowDeletes(int(from), int(to-from), false)
 	}
-	if *bat == nil {
+	spec, err := readSchema.ColumnReadSpec()
+	if err != nil {
+		return err
+	}
+	var maxSeqnum uint16
+	if spec != nil {
+		maxSeqnum = node.writeSchema.MaxSeqnum()
+	}
+	fresh := *bat == nil
+	if fresh {
 		*bat = containers.NewBatchWithCapacity(len(colIdxes))
-		for _, colIdx := range colIdxes {
-			if colIdx == objectio.SEQNUM_COMMITTS {
+		defer func() {
+			if err != nil {
+				(*bat).Close()
+				*bat = nil
+			}
+		}()
+	}
+	pool := node.object.rt.VectorPool.Transient
+	rows := int(to - from)
+	for _, colIdx := range colIdxes {
+		switch colIdx {
+		case objectio.SEQNUM_COMMITTS:
+			if fresh {
 				typ := types.T_TS.ToType()
-				vec := node.object.rt.VectorPool.Transient.GetVector(&typ)
-				(*bat).AddVector(objectio.TombstoneAttr_CommitTs_Attr, vec)
-				continue
+				(*bat).AddVector(objectio.TombstoneAttr_CommitTs_Attr, pool.GetVector(&typ))
 			}
-			if colIdx == objectio.SEQNUM_ABORT {
+			continue
+		case objectio.SEQNUM_ABORT:
+			if fresh {
 				typ := types.T_bool.ToType()
-				vec := node.object.rt.VectorPool.Transient.GetVector(&typ)
-				(*bat).AddVector(objectio.TombstoneAttr_Abort_Attr, vec)
-				continue
+				(*bat).AddVector(objectio.TombstoneAttr_Abort_Attr, pool.GetVector(&typ))
 			}
-			colDef := readSchema.ColDefs[colIdx]
-			idx, ok := node.writeSchema.SeqnumMap[colDef.SeqNum]
-			var vec containers.Vector
-			if !ok {
-				vec = node.object.rt.VectorPool.Transient.GetVector(&colDef.Type) // TODO
-				for i := from; i < to; i++ {
-					vec.Append(nil, true)
-				}
-			} else {
-				vec = node.data.Vecs[idx].CloneWindowWithPool(int(from), int(to-from), node.object.rt.VectorPool.Transient)
-			}
-			(*bat).AddVector(colDef.Name, vec)
+			continue
 		}
-	} else {
-		for _, colIdx := range colIdxes {
-			if colIdx == objectio.SEQNUM_COMMITTS || colIdx == objectio.SEQNUM_ABORT {
-				continue
-			}
-			colDef := readSchema.ColDefs[colIdx]
-			idx, ok := node.writeSchema.SeqnumMap[colDef.SeqNum]
-			var vec containers.Vector
-			if !ok {
-				vec = containers.NewConstNullVector(colDef.Type, int(to-from), mp)
-				(*bat).GetVectorByName(colDef.Name).Extend(vec) // TODO
+		col := readSchema.ColDefs[colIdx]
+		idx, present := node.writeSchema.SeqnumMap[col.SeqNum]
+		switch spec.Classify(col.SeqNum, maxSeqnum, present) {
+		case objectio.ColPhysical:
+			src := node.data.Vecs[idx]
+			if fresh {
+				(*bat).AddVector(col.Name, src.CloneWindowWithPool(int(from), rows, pool))
 			} else {
-				(*bat).GetVectorByName(colDef.Name).Extend(node.data.Vecs[idx])
+				(*bat).GetVectorByName(col.Name).ExtendWithOffset(src, int(from), rows)
 			}
+		case objectio.ColVirtualDefault:
+			if fresh {
+				(*bat).AddVector(col.Name, pool.GetVector(&col.Type))
+			}
+			dst := (*bat).GetVectorByName(col.Name)
+			if err = spec.AppendMissingRows(col.SeqNum, dst.GetDownstreamVector(), rows, dst.GetAllocator()); err != nil {
+				return err
+			}
+		case objectio.ColCorruptedMissing:
+			return moerr.NewInternalErrorNoCtxf("column sequence %d is missing within memory node layout ending at %d", col.SeqNum, maxSeqnum)
 		}
 	}
 	return
@@ -316,37 +330,151 @@ func (node *memoryNode) ApplyAppendLocked(
 	schema := node.writeSchema
 	from = int(node.mustData().Length())
 	rows := bat.Length()
+	if err = node.appendMissingWALColumns(bat, rows); err != nil {
+		return
+	}
 	for srcPos, attr := range bat.Attrs {
-		def := schema.ColDefs[schema.GetColIdx(attr)]
-		destVec := node.data.Vecs[def.Idx]
+		idx := schema.GetColIdx(attr)
+		if idx < 0 {
+			continue
+		}
+		destVec := node.data.Vecs[idx]
 		destVec.Extend(bat.Vecs[srcPos])
 	}
 	if logicalID := node.legacyLogicalID(bat); logicalID != nil {
 		node.data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID).Extend(logicalID)
 	}
-	// Upgrade compat: replayed WAL batches may be encoded with an older schema
-	// and omit columns introduced later. Pad those missing columns with NULLs
-	// for the appended rows so every in-memory vector stays aligned.
+	// Align remaining legacy columns that have no evolution metadata.
 	node.ReserveRowsLocked(uint32(from + rows))
 	return
+}
+
+func (node *memoryNode) missingWALColumns(bat *containers.Batch) (*objectio.ColumnReadSpec, []*catalog.ColDef, error) {
+	schema := node.writeSchema
+	if !features.IsSchemaEvolved(schema.Extra.FeatureFlag) {
+		return nil, nil, nil
+	}
+	var missing []*catalog.ColDef
+	var maxSeqnum uint16
+	for _, col := range schema.ColDefs {
+		if col.PhyAddr {
+			continue
+		}
+		if _, present := bat.Nameidx[col.Name]; present {
+			maxSeqnum = max(maxSeqnum, col.SeqNum)
+		} else {
+			missing = append(missing, col)
+		}
+	}
+	if len(missing) == 0 {
+		return nil, nil, nil
+	}
+	spec, err := schema.ColumnReadSpec()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, col := range missing {
+		if spec.Classify(col.SeqNum, maxSeqnum, false) == objectio.ColCorruptedMissing {
+			return nil, nil, moerr.NewInternalErrorNoCtxf("column sequence %d is missing within append layout ending at %d", col.SeqNum, maxSeqnum)
+		}
+	}
+	return spec, missing, nil
+}
+
+// appendMissingWALColumns fills absent columns before mutating supplied
+// values. Roll back the fills if an allocation fails.
+func (node *memoryNode) appendMissingWALColumns(bat *containers.Batch, rows int) error {
+	spec, missing, err := node.missingWALColumns(bat)
+	if err != nil || len(missing) == 0 {
+		return err
+	}
+	checkpoints := make([]vector.AppendCheckpoint, len(missing))
+	for i, col := range missing {
+		vec := node.data.Vecs[col.Idx]
+		dst := vec.GetDownstreamVector()
+		checkpoints[i] = dst.MakeAppendCheckpoint()
+		if err = spec.AppendMissingRows(col.SeqNum, dst, rows, vec.GetAllocator()); err != nil {
+			for j, filled := range missing[:i+1] {
+				err = vector.JoinAppendRollbackError(err, node.data.Vecs[filled.Idx].GetDownstreamVector().RollbackAppend(checkpoints[j], rows))
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 func (node *memoryNode) ApplyAppendAtLocked(bat *containers.Batch, offset uint32) (err error) {
 	schema := node.writeSchema
 	data := node.mustData()
-	node.ReserveRowsLocked(offset + uint32(bat.Length()))
+	rows := bat.Length()
+	spec, missing, err := node.missingWALColumns(bat)
+	if err != nil {
+		return err
+	}
+	if len(missing) != 0 {
+		if err = fillMissingWALColumnsAt(data, spec, missing, int(offset), rows); err != nil {
+			return err
+		}
+	}
+	node.ReserveRowsLocked(offset + uint32(rows))
 	for srcPos, attr := range bat.Attrs {
-		def := schema.ColDefs[schema.GetColIdx(attr)]
-		destVec := data.Vecs[def.Idx]
-		for row := 0; row < bat.Length(); row++ {
+		idx := schema.GetColIdx(attr)
+		if idx < 0 {
+			continue
+		}
+		destVec := data.Vecs[idx]
+		for row := range rows {
 			destVec.CopyFrom(bat.Vecs[srcPos], int(offset)+row, row)
 		}
 	}
 	if logicalID := node.legacyLogicalID(bat); logicalID != nil {
 		destVec := data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID)
-		for row := range bat.Length() {
+		for row := range rows {
 			destVec.CopyFrom(logicalID, int(offset)+row, row)
 		}
+	}
+	return nil
+}
+
+// Prepare positional fills separately because replay can overwrite existing rows.
+// Publish only after every missing column has been filled successfully.
+func fillMissingWALColumnsAt(data *containers.Batch, spec *objectio.ColumnReadSpec, missing []*catalog.ColDef, offset, rows int) error {
+	staged := make([]containers.Vector, 0, len(missing))
+	defer func() {
+		for _, vec := range staged {
+			vec.Close()
+		}
+	}()
+	for _, col := range missing {
+		current := data.Vecs[col.Idx]
+		mp := current.GetAllocator()
+		next, err := containers.CloneVector(current.GetDownstreamVector(), mp, nil)
+		if err != nil {
+			return err
+		}
+		staged = append(staged, next)
+		dst := next.GetDownstreamVector()
+		if grow := offset + rows - dst.Length(); grow > 0 {
+			if err := vector.AppendMultiFixed(dst, byte(0), true, grow, mp); err != nil {
+				return err
+			}
+		}
+		src, err := spec.MaterializeMissingVector(col.SeqNum, col.Type, 1, mp)
+		if err != nil {
+			return err
+		}
+		for row := range rows {
+			if err = dst.Copy(src, int64(offset+row), 0, mp); err != nil {
+				break
+			}
+		}
+		src.Free(mp)
+		if err != nil {
+			return err
+		}
+	}
+	for i, col := range missing {
+		data.Vecs[col.Idx], staged[i] = staged[i], data.Vecs[col.Idx]
 	}
 	return nil
 }
@@ -461,14 +589,9 @@ func (node *memoryNode) Scan(
 	if *bat != nil {
 		rowOffset = (*bat).Length()
 	}
-	err = node.getDataWindowLocked(
-		bat,
-		readSchema,
-		colIdxes,
-		0,
-		selection.MaxRow,
-		mp,
-	)
+	if err = node.getDataWindowLocked(bat, readSchema, colIdxes, 0, selection.MaxRow, mp); err != nil {
+		return err
+	}
 	for _, idx := range colIdxes {
 		if idx == objectio.SEQNUM_COMMITTS {
 			node.object.appendMVCC.FillInCommitTSVecLocked(

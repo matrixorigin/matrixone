@@ -195,7 +195,9 @@ func FilterObjects(
 
 		var pos int
 		if seekOp != nil {
-			pos = seekOp(dataMeta)
+			if pos, err = seekOp(dataMeta); err != nil {
+				return
+			}
 		}
 
 		if objStats.Rows() == 0 {

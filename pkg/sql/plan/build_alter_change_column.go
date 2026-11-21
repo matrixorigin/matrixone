@@ -342,6 +342,7 @@ func buildColumnAndConstraint(
 			return nil, moerr.NewInvalidInputf(ctx.GetContext(),
 				"default expression for column '%s' cannot refer to itself", newColNameOrigin)
 		}
+		preserveOriginDefault(newCol.Default, oldCol.Default)
 	}
 
 	if err = checkIndexedColumnTypeChange(ctx.GetContext(), targetTableDef, oldCol, newCol); err != nil {

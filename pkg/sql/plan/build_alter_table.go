@@ -33,6 +33,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -1433,6 +1434,13 @@ func droppedFkNames(specs []tree.AlterTableOption) map[string]bool {
 
 func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, error) {
 	replicaTableDef := DeepCopyTableDef(tableDef, true)
+	replicaTableDef.FeatureFlag &^= features.SchemaEvolved
+	for _, col := range replicaTableDef.Cols {
+		if col.Default != nil {
+			col.Default.HasOriginDefault = false
+			col.Default.OriginDefault = nil
+		}
+	}
 
 	id, err := uuid.NewV7()
 	if err != nil {

@@ -657,7 +657,11 @@ func LoadColumnsData2(
 	}
 	name := location.Name()
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
-	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.UnsafeString(), location.ID(), cols, typs, nil, fs, policy); err != nil {
+	var mp *mpool.MPool
+	if vPool != nil {
+		mp = vPool.GetMPool()
+	}
+	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.UnsafeString(), location.ID(), cols, typs, mp, fs, policy); err != nil {
 		return
 	}
 	vectors = make([]containers.Vector, len(cols))

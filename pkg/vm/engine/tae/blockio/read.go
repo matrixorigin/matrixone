@@ -113,7 +113,7 @@ func ReadDataByFilter(
 	if len(sels) == 0 {
 		return
 	}
-	sels, err = ds.ApplyTombstones(ctx, &info.BlockID, sels, engine.Policy_CheckAll)
+	sels, err = ds.ApplyTombstones(objectio.WithoutColumnReadSpec(ctx), &info.BlockID, sels, engine.Policy_CheckAll)
 	if err == nil && stats != nil {
 		stats.StorageFilterOutputRows += uint64(len(sels))
 	}
@@ -469,7 +469,7 @@ func blockDataReadWithExactMembershipTopK(
 			}
 			return []int64{}, nil
 		}
-		selected, err := ds.ApplyTombstones(ctx, &info.BlockID, selected, engine.Policy_CheckAll)
+		selected, err := ds.ApplyTombstones(objectio.WithoutColumnReadSpec(ctx), &info.BlockID, selected, engine.Policy_CheckAll)
 		if err != nil {
 			return nil, err
 		}
@@ -635,7 +635,7 @@ func BlockDataReadBackup(
 			}
 		}
 	}()
-	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
+	tombstones, err := ds.GetTombstones(objectio.WithoutColumnReadSpec(ctx), &info.BlockID)
 	if err != nil {
 		return
 	}
@@ -1085,7 +1085,7 @@ func blockDataReadWithFilter(
 		if ds == nil {
 			return moerr.NewInvalidInputNoCtx("nil data source for late block read")
 		}
-		tombstones, tombstoneErr := ds.GetTombstones(ctx, &info.BlockID)
+		tombstones, tombstoneErr := ds.GetTombstones(objectio.WithoutColumnReadSpec(ctx), &info.BlockID)
 		if tombstoneErr != nil {
 			tombstones.Release()
 			return tombstoneErr
@@ -1622,7 +1622,7 @@ func BlockDataReadInner(
 		if ds == nil {
 			return moerr.NewInvalidInputNoCtx("nil data source for full block read")
 		}
-		tombstones, tombstoneErr := ds.GetTombstones(ctx, &info.BlockID)
+		tombstones, tombstoneErr := ds.GetTombstones(objectio.WithoutColumnReadSpec(ctx), &info.BlockID)
 		if tombstoneErr != nil {
 			tombstones.Release()
 			return tombstoneErr
@@ -1691,7 +1691,7 @@ func BlockDataReadInner(
 
 		inputRows := selectRows
 		if inputRows == nil {
-			tombstones, tombstoneErr := ds.GetTombstones(ctx, &info.BlockID)
+			tombstones, tombstoneErr := ds.GetTombstones(objectio.WithoutColumnReadSpec(ctx), &info.BlockID)
 			if tombstoneErr != nil {
 				return tombstoneErr
 			}
@@ -1772,7 +1772,7 @@ func BlockDataReadInner(
 		)
 	}
 
-	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
+	tombstones, err := ds.GetTombstones(objectio.WithoutColumnReadSpec(ctx), &info.BlockID)
 	if err != nil {
 		return
 	}

@@ -489,6 +489,10 @@ message Default {
 
   // XXX: Deprecated and to be removed soon.
   bool null_ability = 3;
+
+  // The default frozen when the column was introduced, for reading older rows.
+  bool has_origin_default = 4;
+  Literal origin_default = 5;
 }
 
 message OnUpdate {

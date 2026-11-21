@@ -11236,7 +11236,7 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 	return partialResults, partialResultTypes, columnMap
 }
 
-func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, partialResults []any, partialResultTypes []types.T, columnMap map[int]int) error {
+func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, partialResults []any, partialResultTypes []types.T, columnMap map[int]int, readSpec *objectio.ColumnReadSpec) error {
 	if len(node.AggList) == 1 && node.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName == "starcount" {
 		partialResults[0] = partialResults[0].(int64) + int64(blk.MetaLocation().Rows())
 		return nil
@@ -11254,17 +11254,32 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 	for i := range node.AggList {
 		agg := node.AggList[i].Expr.(*plan.Expr_F)
 		name := agg.F.Func.ObjName
+		var colMeta objectio.ColumnMeta
+		var zm objectio.ZoneMap
+		if name != "starcount" {
+			col := agg.F.Args[0].Expr.(*plan.Expr_Col)
+			colMeta, err = objectio.ResolveColumnMeta(readSpec, blkMeta, uint16(columnMap[int(col.Col.ColPos)]))
+			if err != nil {
+				return err
+			}
+			if name != "count" {
+				zm = colMeta.ZoneMap()
+				if !zm.IsInited() && colMeta.NullCnt() == blkMeta.GetRows() {
+					continue
+				}
+				if !zm.IsInited() || name == "max" && !colMeta.HasExactZoneMapMax() {
+					return moerr.NewInternalErrorNoCtx("aggregate requires exact zone map bounds")
+				}
+			}
+		}
 		switch name {
 		case "starcount":
 			partialResults[i] = partialResults[i].(int64) + int64(blkMeta.GetRows())
 		case "count":
 			partialResults[i] = partialResults[i].(int64) + int64(blkMeta.GetRows())
-			col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-			nullCnt := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).NullCnt()
+			nullCnt := colMeta.NullCnt()
 			partialResults[i] = partialResults[i].(int64) - int64(nullCnt)
 		case "min":
-			col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-			zm := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).ZoneMap()
 			if zm.GetType().FixedLength() < 0 {
 				return &moerr.Error{}
 			} else {
@@ -11392,8 +11407,6 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 				}
 			}
 		case "max":
-			col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-			zm := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).ZoneMap()
 			if zm.GetType().FixedLength() < 0 {
 				return &moerr.Error{}
 			} else {

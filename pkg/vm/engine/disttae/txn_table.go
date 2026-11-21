@@ -676,55 +676,48 @@ func (tbl *txnTable) MaxAndMinValuesUsePlannerColumns() bool {
 }
 
 func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
-	var (
-		err  error
-		part *logtailreplay.PartitionState
-	)
-	if part, err = tbl.getPartitionState(ctx); err != nil {
+	part, err := tbl.getPartitionState(ctx)
+	if err != nil {
 		return nil, nil, err
 	}
 
 	var inited bool
-	cols := tbl.GetTableDef(ctx).GetCols()
+	tableDef := tbl.GetTableDef(ctx)
+	readSpec := objectio.NewColumnReadSpecFromTableDef(tableDef)
+	cols := tableDef.GetCols()
 	dataLength := len(cols) - 1
 
 	tableVal := make([][2]any, dataLength)
 	tableTypes := make([]uint8, dataLength)
 	zms := make([]objectio.ZoneMap, dataLength)
 
-	var meta objectio.ObjectDataMeta
-	var objMeta objectio.ObjectMeta
 	fs, err := fileservice.Get[fileservice.FileService](
 		tbl.getTxn().proc.Base.FileService,
 		defines.SharedFileServiceName)
 	if err != nil {
 		return nil, nil, err
 	}
-	var updateMu sync.Mutex
 	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
-		var err error
 		location := obj.Location()
-		if objMeta, err = objectio.FastLoadObjectMeta(objCtx, &location, false, fs); err != nil {
+		objMeta, err := objectio.FastLoadObjectMeta(objCtx, &location, false, fs)
+		if err != nil {
 			return err
 		}
-		updateMu.Lock()
-		defer updateMu.Unlock()
-		meta = objMeta.MustDataMeta()
-		if inited {
-			for idx := range zms {
-				zm := meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
-				if !zm.IsInited() {
-					continue
-				}
+		meta := objMeta.MustDataMeta()
+		for idx := range zms {
+			col, err := objectio.ResolveColumnMeta(readSpec, meta, uint16(cols[idx].Seqnum))
+			if err != nil {
+				return err
+			}
+			zm := col.ZoneMap()
+			if !inited || (zm.IsInited() && !zms[idx].IsInited()) {
+				zms[idx] = zm.Clone()
+				tableTypes[idx] = uint8(cols[idx].Typ.Id)
+			} else {
 				index.MergeZM(zms[idx], zm)
 			}
-		} else {
-			for idx := range zms {
-				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap().Clone()
-				tableTypes[idx] = uint8(cols[idx].Typ.Id)
-			}
-			inited = true
 		}
+		inited = true
 
 		return nil
 	}
@@ -757,7 +750,12 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		return nil, err
 	}
 
-	cols := tbl.GetTableDef(ctx).GetCols()
+	tableDef := tbl.GetTableDef(ctx)
+	cols := tableDef.GetCols()
+	var readSpec *objectio.ColumnReadSpec
+	if !visitTombstone {
+		readSpec = objectio.NewColumnReadSpecFromTableDef(tableDef)
+	}
 	found := false
 	n := 0
 	for _, c := range cols {
@@ -786,7 +784,6 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		return nil, err
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxDataObjectsNum())
-	var updateMu sync.Mutex
 	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
@@ -799,7 +796,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 
 		location := obj.Location()
 		objName := location.Name().String()
-		if name == AllColumns && obj.StatsValid() {
+		if name == AllColumns && readSpec == nil && obj.StatsValid() {
 			// no need to load object meta
 			for _, col := range needCols {
 				infoList = append(infoList, &plan.MetadataScanInfo{
@@ -823,13 +820,14 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		if err != nil {
 			return err
 		}
-		updateMu.Lock()
-		defer updateMu.Unlock()
 		meta := objMeta.MustDataMeta()
 		rowCnt := int64(meta.BlockHeader().Rows())
 
 		for _, col := range needCols {
-			colMeta := meta.MustGetColumn(uint16(col.Seqnum))
+			colMeta, err := objectio.ResolveColumnMeta(readSpec, meta, uint16(col.Seqnum))
+			if err != nil {
+				return err
+			}
 			infoList = append(infoList, &plan.MetadataScanInfo{
 				ColName:      col.Name,
 				IsHidden:     col.Hidden,
@@ -857,14 +855,6 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		visitTombstone,
 	); err != nil {
 		return nil, err
-	}
-
-	var logStr string
-	for i, col := range needCols {
-		if i > 0 {
-			logStr += ", "
-		}
-		logStr += col.GetName()
 	}
 
 	return infoList, nil
@@ -1454,7 +1444,7 @@ func (tbl *txnTable) rangesOnePart(
 	if done, err = readutil.TryFastFilterBlocksWithZone(
 		ctx,
 		tbl.db.op.SnapshotTS(),
-		tbl.tableDef,
+		tableDef,
 		rangesParam,
 		state,
 		nil,
@@ -1528,6 +1518,25 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
+	readSpec := objectio.NewColumnReadSpecFromTableDef(tableDef)
+	matches := func(meta objectio.BlockHeaderMeta) (bool, error) {
+		var source objectio.ColumnMetaFetcher = meta
+		var fetcher *objectio.EvolvedColumnMetaFetcher
+		if readSpec != nil {
+			fetcher = readSpec.WrapColumnMetaFetcher(meta)
+			source = fetcher
+		}
+		for _, expr := range rangesParam.BlockFilters {
+			ok := colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, source, columnMap, zms, vecs)
+			if fetcher != nil && fetcher.Err() != nil {
+				return false, fetcher.Err()
+			}
+			if !ok {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
 
 	if err = ForeachSnapshotObjects(
 		tbl.db.op.SnapshotTS(),
@@ -1553,14 +1562,9 @@ func (tbl *txnTable) rangesOnePart(
 
 				// here we only eval expr on the object meta if it has more than one blocks
 				if meta.BlockCount() > 2 {
-					for _, expr := range rangesParam.BlockFilters {
-						if !colexec.EvaluateFilterByZoneMap(
-							errCtx, proc, expr, meta, columnMap, zms, vecs,
-						) {
-							skipObj = true
-							break
-						}
-					}
+					var ok bool
+					ok, err2 = matches(meta)
+					skipObj = !ok
 				}
 			}
 			if skipObj {
@@ -1582,13 +1586,11 @@ func (tbl *txnTable) rangesOnePart(
 				skipBlk := false
 
 				if auxIdCnt > 0 {
-					// eval filter expr on the block
-					for _, expr := range rangesParam.BlockFilters {
-						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
-							skipBlk = true
-							break
-						}
+					var ok bool
+					if ok, err2 = matches(blkMeta); err2 != nil {
+						return false
 					}
+					skipBlk = !ok
 
 					// if the block is not needed, skip it
 					if skipBlk {
@@ -2428,6 +2430,8 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	var stats []objectio.ObjectStats
 	var infoBat *batch.Batch
 	var rowsBat *batch.Batch
+	readSpec := objectio.NewColumnReadSpecFromTableDef(tbl.GetTableDef(ctx))
+	readCtx := objectio.WithColumnReadSpec(tbl.getTxn().proc.Ctx, readSpec)
 
 	defer func() {
 		// The rows batch is the rewrite's scratch — its surviving rows
@@ -2455,7 +2459,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 			rowsBat.CleanOnlyData()
 
 			if err = blockio.CopyBlockData(
-				tbl.getTxn().proc.Ctx,
+				readCtx,
 				blk.MetaLoc[:],
 				deletes,
 				tbl.seqnums,

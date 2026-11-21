@@ -56,7 +56,7 @@ func readColumnTopNWithMeta(
 ) ([]int64, []float64, bool, error) {
 	blk := meta.GetBlockMeta(uint32(block))
 	var ext Extent
-	if column < SEQNUM_UPPER && column <= blk.GetMaxSeqnum() && blk.ColumnMeta(column).DataType() != 0 {
+	if column < SEQNUM_UPPER && column <= blk.GetMaxSeqnum() && column < blk.GetMetaColumnCount() && blk.ColumnMeta(column).DataType() != 0 {
 		ext = blk.ColumnMeta(column).Location()
 	}
 	if ext == nil || ext.Alg() != compress.Lz4Chunked || !typ.Oid.IsArrayRelate() ||

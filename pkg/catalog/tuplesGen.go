@@ -89,11 +89,27 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 	// Validate before mutating attributes or narrowing column ordinals. Hidden
 	// backing columns consume ordinary sequence numbers; physical rowid does not.
 	ordinaryColumns := 0
+	hasAssignedSeqnums := false
 	for _, def := range defs {
 		if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.Name != Row_ID {
 			ordinaryColumns++
+			hasAssignedSeqnums = hasAssignedSeqnums || attr.Attr.Seqnum != 0
 			if ordinaryColumns > objectio.SEQNUM_UPPER {
 				return nil, moerr.NewErrTooManyFields(context.Background())
+			}
+		}
+	}
+	if hasAssignedSeqnums {
+		// Catalog rebuilds carry the complete layout, including a possible
+		// column with sequence number zero. New definitions are all zero.
+		seen := make(map[uint16]struct{}, ordinaryColumns)
+		for _, def := range defs {
+			if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.Name != Row_ID {
+				seq := attr.Attr.Seqnum
+				if _, exists := seen[seq]; exists || seq >= objectio.SEQNUM_UPPER {
+					return nil, moerr.NewInternalErrorNoCtxf("invalid column sequence number %d", seq)
+				}
+				seen[seq] = struct{}{}
 			}
 		}
 	}
@@ -138,6 +154,10 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 		if err != nil {
 			return nil, err
 		}
+		seqnum := attrDef.Attr.Seqnum
+		if !hasAssignedSeqnums {
+			seqnum = uint16(num - 1)
+		}
 		col := Column{
 			Typ:          typ,
 			TypLen:       int32(len(typ)),
@@ -149,7 +169,7 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 			DatabaseName: databaseName,
 			Num:          num,
 			Comment:      attrDef.Attr.Comment,
-			Seqnum:       uint16(num - 1),
+			Seqnum:       seqnum,
 			EnumValues:   attrDef.Attr.EnumVlaues,
 		}
 		if attrDef.Attr.Type.IsUInt() {
@@ -161,7 +181,7 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 			col.IsUnsigned = int8(uint32(attrDef.Attr.NumericAttributes) & types.NumericAttributeMask)
 		}
 		attrDef.Attr.ID = uint64(num)
-		attrDef.Attr.Seqnum = uint16(num - 1)
+		attrDef.Attr.Seqnum = seqnum
 		if attrDef.Attr.Default != nil {
 			if !attrDef.Attr.Default.NullAbility {
 				col.NotNull = 1
@@ -217,6 +237,10 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 	// add rowid column
 	rowidTyp := types.T_Rowid.ToType()
 	typ, _ := types.Encode(&rowidTyp)
+	rowidSeqnum := uint16(len(cols))
+	if hasAssignedSeqnums {
+		rowidSeqnum = objectio.SEQNUM_ROWID
+	}
 	cols = append(cols, Column{
 		Typ:          typ,
 		TypLen:       int32(len(typ)),
@@ -227,7 +251,7 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 		TableName:    tableName,
 		DatabaseName: databaseName,
 		Num:          int32(len(cols) + 1),
-		Seqnum:       uint16(len(cols)),
+		Seqnum:       rowidSeqnum,
 		IsHidden:     1,
 		NotNull:      1,
 	})
