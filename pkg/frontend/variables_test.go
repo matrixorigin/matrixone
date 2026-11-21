@@ -28,6 +28,33 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 )
 
+type publicationContext struct {
+	context.Context
+	onErr func()
+}
+
+func (ctx publicationContext) Err() error {
+	ctx.onErr()
+	return ctx.Context.Err()
+}
+
+func TestSystemVariablesRejectCancellationAtPublication(t *testing.T) {
+	vars := &SystemVariables{mp: map[string]interface{}{"sql_mode": "NO_BACKSLASH_ESCAPES"}}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctxAtPublication := publicationContext{Context: ctx, onErr: func() {
+		if vars.mu.TryLock() {
+			vars.mu.Unlock()
+			t.Fatal("cancellation must be checked while holding the variables lock")
+		}
+		cancel()
+	}}
+
+	assert.ErrorIs(t, vars.setIfActive(ctxAtPublication, "sql_mode", ""), context.Canceled)
+	assert.Equal(t, "NO_BACKSLASH_ESCAPES", vars.Get("sql_mode"))
+	assert.Zero(t, vars.getMutationGeneration())
+}
+
 func TestRollupAlgorithmVariable(t *testing.T) {
 	sv, ok := gSysVarsDefs["rollup_algorithm"]
 	assert.True(t, ok)

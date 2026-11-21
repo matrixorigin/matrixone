@@ -680,7 +680,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 		{10, "db3.t3", "select * from db3.t3 /* persisted */ where id = 1"},
 	})
 
-	rules, err := loadRuleCache(context.Background(), ses)
+	rules, err := loadRuleCache(context.Background(), ses, sessionSQLModeForParser(ses))
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
 		"db1.t1": "select a, age from db1.t1 where (age < 3) or (age > 28)",
@@ -694,6 +694,136 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	require.NoError(t, err)
 	defer freeStatements(stmts)
 	require.NoError(t, parsers.AddRewriteHints(context.Background(), stmts, sql))
+}
+
+func TestLoadRuleCacheUsesValidatedLaterRuleForIneligibleEarlierRule(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	bh := &backgroundExecTest{}
+	bh.init()
+	t.Cleanup(gostub.StubFunc(&NewBackgroundExec, bh).Reset)
+	ses := newSes(&privilege{}, ctrl)
+	t.Cleanup(ses.Close)
+	ses.SetTenantInfo(&TenantInfo{DefaultRoleID: 10})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{{11, false}})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(11)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{{12, false}})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(12)] = newMrsForInheritedRoleIdOfRoleId(nil)
+	const mode = "NO_BACKSLASH_ESCAPES"
+	const left = `select a from db1.t1 where code = 'docs\'notes'`
+	const right = "select a from db1.t1 where a = 2"
+	for _, tc := range []struct {
+		name, left, middle, right string
+		wantErr                   bool
+	}{
+		{"ineligible earlier rule", left + " order by a", "", right, false},
+		{"distinct earlier rule", strings.Replace(left, "select a", "select distinct a", 1), "", right, false},
+		{"grouped earlier rule", left + " group by a", "", right, false},
+		{"aggregate earlier rule", strings.Replace(left, "select a", "select count(*) as a", 1), "", right, false},
+		{"aggregate on invalid literal without where", `select count('docs\'notes') as n from db1.t1`, "", right, false},
+		{"nested aggregate on invalid literal without where", `select coalesce(max('docs\'notes'), '') as n from db1.t1`, "", right, false},
+		{"join with invalid on and no where", `select x.a from db1.t1 x join db1.t1 y on x.code=y.code and y.code='docs\'notes'`, "", right, false},
+		{"derived table with invalid inner where", `select s.a from (select a from db1.t1 where code='docs\'notes') s`, "", right, false},
+		{"scalar on invalid literal without where", `select length('docs\'notes') as n from db1.t1`, "", right, true},
+		{"distinct with invalid projection and no where", `select distinct 'docs\'notes' as n from db1.t1`, "", right, false},
+		{"set operation with no outer where", left + " union all " + right, "", right, false},
+		{"invalid having and no where", `select a from db1.t1 group by a having code='docs\'notes'`, "", right, false},
+		{"invalid projection alone is not structural proof", `select 'docs\'notes' as n from db1.t1`, "", right, true},
+		{"ineligible later rule", left, "", right + " order by a", false},
+		{"different projection names", left, "", "select a as n from db1.t1 where a = 2", false},
+		{"unfiltered later rule absorbs invalid predicate", left, "", "select a from db1.t1", false},
+		{"filtered later rule with different select-list length", `select a, length('docs\'notes') as n from db1.t1`, "", right, false},
+		{"filtered later rule with equal select-list length is not decisive", `select a, length('docs\'notes') as n from db1.t1`, "", `select a, length('plain') as n from db1.t1 where a=2`, true},
+		{"unfiltered later rule supersedes unreadable projection", `select a, length('docs\'notes') as n from db1.t1 where a=1`, "", "select a from db1.t1", false},
+		{"unfiltered last rule absorbs invalid middle predicate", "select a from db1.t1 where a = 1", left, "select a from db1.t1", false},
+		{"ineligible middle rule is superseded", "select a from db1.t1 where a = 1", left + " order by a", right + " order by a", false},
+		{"compatible last rule cannot mask earlier failure", "select a from db1.t1 where a = 1", left, right, true},
+		{"invalid winner", left + " order by a", "", "select a from", true},
+		{"potentially mergeable earlier rule", left, "", right, true},
+		{"corrupt earlier rule", "select a from", "", right, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := [][]interface{}{{10, "db1.t1", tc.left}, {12, "db1.t1", tc.right}}
+			if tc.middle != "" {
+				rows = append(rows, []interface{}{11, "db1.t1", tc.middle})
+			}
+			bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10, 11, 12})] = newMrsForRewriteRules(rows)
+			rules, err := loadRuleCache(t.Context(), ses, mode)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Nil(t, rules)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, map[string]string{"db1.t1": tc.right}, rules)
+		})
+	}
+}
+
+func TestMergeRewriteRulesUnfilteredEarlierRule(t *testing.T) {
+	const mode = "NO_BACKSLASH_ESCAPES"
+	const unfiltered = "select a from db1.t1"
+	const predicate = ` where code = 'docs\'notes'`
+	for _, tc := range []struct {
+		name, left, right string
+		wantErr           bool
+	}{
+		{"compatible", unfiltered, unfiltered + predicate, false},
+		{"enum backslash", "select cast(1 as enum(_utf8mb4 X'615c62','z')) as label from db1.t1", "select cast(1 as enum(_utf8mb4 X'615c62','z')) as label from db1.t1" + predicate, false},
+		{"enum tab", "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t1", "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t1" + predicate, false},
+		{"different enum bytes", "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t1", "select cast(1 as enum(_utf8mb4 X'615c7462','z')) as label from db1.t1" + predicate, true},
+		{"different projection", unfiltered, "select a as n from db1.t1" + predicate, true},
+		{"different source", unfiltered, "select a from db1.t2" + predicate, true},
+		{"ineligible later rule", unfiltered, unfiltered + predicate + " order by a", true},
+		{"filtered earlier rule", unfiltered + " where a = 1", unfiltered + predicate, true},
+		{"malformed in both modes", unfiltered, unfiltered + " where (", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := mergeRewriteRulesWithSQLMode(t.Context(), tc.left, tc.right, mode)
+			if tc.wantErr {
+				require.ErrorContains(t, err, "failed to parse rewrite rule")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.left, got)
+		})
+	}
+}
+
+func TestMergedEnumRuleStableAcrossEscapeModes(t *testing.T) {
+	const prefix = "select cast(1 as enum(_utf8mb4 X'610962', _utf8mb4 X'615c62', 'z')) as label from db1.t1 where a = "
+	ctx := t.Context()
+	original, err := mergeRewriteRulesWithSQLMode(ctx, prefix+"1", prefix+"2", "")
+	require.NoError(t, err)
+	reloaded, err := mergeRewriteRulesWithSQLMode(ctx, prefix+"1", prefix+"2", "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+	require.Equal(t, original, reloaded)
+	require.Contains(t, reloaded, "_utf8mb4 X'610962'")
+	require.Contains(t, reloaded, "_utf8mb4 X'615c62'")
+}
+
+func TestMergeRewriteRulesFallbackPreservesSessionProjection(t *testing.T) {
+	const mode = "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"
+	const unfiltered = `select "a" as n from db1.t1`
+	const predicate = ` where code = 'docs\'notes'`
+	for _, tc := range []struct {
+		name, left, right string
+		wantErr           bool
+	}{
+		{"quoted column", unfiltered, unfiltered + predicate, false},
+		{"quoted column and source", `select "a" as n from "db1"."t1"`, unfiltered + predicate, false},
+		{"literal is not a column", unfiltered, `select 'a' as n from db1.t1` + predicate, true},
+		{"projection keeps literal backslash", `select 'x\ty' as n from db1.t1`, `select 'x\ty' as n from db1.t1` + predicate, false},
+		{"backslash is not a tab", `select _utf8mb4 X'780979' as n from db1.t1`, `select 'x\ty' as n from db1.t1` + predicate, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := mergeRewriteRulesWithSQLMode(t.Context(), tc.left, tc.right, mode)
+			if tc.wantErr {
+				require.ErrorContains(t, err, "failed to parse rewrite rule")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.left, got)
+		})
+	}
 }
 
 func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
@@ -723,7 +853,7 @@ func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 		{10, "db1.t1", "select a from"},
 	})
 
-	_, err := loadRuleCache(context.Background(), ses)
+	_, err := loadRuleCache(context.Background(), ses, sessionSQLModeForParser(ses))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to parse rewrite rule")
 }
@@ -1975,6 +2105,10 @@ func TestHandleAlterRoleAddRuleRejectsNonSelectRuleSQLBeforeWriting(t *testing.T
 	}
 }
 
+func mergeRewriteRules(ctx context.Context, left, right string) (string, error) {
+	return mergeRewriteRulesWithSQLMode(ctx, left, right, "")
+}
+
 func TestMergeRewriteRules(t *testing.T) {
 	ctx := context.Background()
 
@@ -2091,6 +2225,197 @@ func TestMergeRewriteRules(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestMergeRewriteRulesPreservesStringLiterals(t *testing.T) {
+	ctx := context.Background()
+	const base = "select a from db1.t1 where "
+	const left = `kind = '单据' and code in (select code from db1.codes where region in ('0001', '0010'))`
+	const right = `label = 'O''Brien' and path = _utf8mb4 X'615c62'`
+
+	merged, err := mergeRewriteRules(ctx, base+left, base+right)
+	require.NoError(t, err)
+	// Compare reparsed trees so the type and decoded value of each literal matter,
+	// without requiring a particular SQL spelling.
+	want, err := parsers.ParseOne(ctx, dialect.MYSQL, base+"("+left+") or ("+right+")", 1)
+	require.NoError(t, err)
+	defer want.Free()
+	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES"} {
+		t.Run("sql_mode="+mode, func(t *testing.T) {
+			got, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, merged, 1, mode)
+			require.NoError(t, err)
+			defer got.Free()
+			require.Equal(t, want, got)
+		})
+	}
+}
+
+func TestMergeRewriteRulesSequentialIdentifier(t *testing.T) {
+	const base = "select `2024` as a from db1.t1 where "
+	merged, err := mergeRewriteRules(t.Context(), base+"n = 1", base+"n = 2")
+	require.NoError(t, err)
+	merged, err = mergeRewriteRules(t.Context(), merged, base+"n = 3")
+	require.NoError(t, err)
+	want, err := parsers.ParseOne(t.Context(), dialect.MYSQL, base+"((n = 1) or (n = 2)) or (n = 3)", 1)
+	require.NoError(t, err)
+	defer want.Free()
+	got, err := parsers.ParseOne(t.Context(), dialect.MYSQL, merged, 1)
+	require.NoError(t, err)
+	defer got.Free()
+	require.Equal(t, want, got)
+}
+
+func TestMergeRewriteRulesSessionModeAndHint(t *testing.T) {
+	const base = "select a from db1.t1 where "
+	const left = `path = 'docs\notes' and match(body) against ('a\b' in boolean mode)`
+	const right = `tag = _utf8mb4 X'ff'`
+	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES"} {
+		t.Run("sql_mode="+mode, func(t *testing.T) {
+			ctx := t.Context()
+			merged, err := mergeRewriteRulesWithSQLMode(ctx, base+left, base+right, mode)
+			require.NoError(t, err)
+			hint, err := formatRewriteHint(ctx, map[string]string{"db1.t1": merged})
+			require.NoError(t, err)
+			rules, err := parseRewriteHint(ctx, hint)
+			require.NoError(t, err)
+			want, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, base+"("+left+") or ("+right+")", 1, mode)
+			require.NoError(t, err)
+			defer want.Free()
+			got, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rules["db1.t1"], 1, mode)
+			require.NoError(t, err)
+			defer got.Free()
+			require.Equal(t, want, got)
+		})
+	}
+}
+
+func TestMergeRewriteRulesRejectsInvalidUTF8InStringTokens(t *testing.T) {
+	for _, tc := range []struct{ name, rule string }{
+		{"match", "select a from db1.t1 where match(body) against ('\xff' in boolean mode)"},
+		{"enum", "select a from db1.t1 where cast(1 as enum('\xff','b')) is not null"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			original, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.rule, 1)
+			require.NoError(t, err)
+			defer original.Free()
+			_, err = mergeRewriteRules(ctx, tc.rule, "select a from db1.t1 where a = 1")
+			require.ErrorContains(t, err, "cannot be represented as UTF-8")
+		})
+	}
+}
+
+func TestMergeRewriteRulesPredicateSource(t *testing.T) {
+	const prefix = "select a from db1.t where "
+	for _, predicate := range []string{"a in (select a from db1.t2 where b=2)", "a=2 /* suffix */", "a=2 -- tail", "code='/*!'", "a=/*!50000 2 */"} {
+		t.Run(predicate, func(t *testing.T) {
+			actual, err := mergeRewriteRules(t.Context(), prefix+"a=1", prefix+predicate)
+			require.NoError(t, err)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, actual, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			want, err := parsers.ParseOne(t.Context(), dialect.MYSQL, prefix+"(a=1) or ("+predicate+"\n)", 1)
+			require.NoError(t, err)
+			defer want.Free()
+			require.Equal(t, want, stmt)
+		})
+	}
+}
+
+func TestMergeRewriteRulesGetFormat(t *testing.T) {
+	const base = "select a from db1.t1 where "
+	const filter = "get_format(DATE, locale_col) = 'x'"
+	merged, err := mergeRewriteRules(t.Context(), base+filter, base+"a = 1")
+	require.NoError(t, err)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, merged, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.Contains(t, merged, "where (get_format(DATE, locale_col) = 'x') or (a = 1)")
+}
+
+func TestSameEffectiveRewriteRulesAcrossModes(t *testing.T) {
+	const mode = "NO_BACKSLASH_ESCAPES"
+	const a = "select a from db1.t1"
+	for _, tc := range []struct {
+		name, oldKey, newKey, oldSQL, newSQL string
+		equal                                bool
+	}{
+		{"different spelling", "db1.t1", "db1.t1", a, "SELECT a FROM db1.t1", true},
+		{"same spelling different bytes", "db1.t1", "db1.t1", a + ` where code='a\tb'`, a + ` where code='a\tb'`, false},
+		{"changed predicate", "db1.t1", "db1.t1", a, a + " where a=2", false},
+		{"aliased column spelling", "t", "t", "select a as n from t", "select A as n from t", true},
+		{"aliased literal spelling", "t", "t", "select X'414a' as n from t", "select X'414A' as n from t", true},
+		{"name_const heading and value unchanged", "t", "t", "select name_const('n',X'414a') from t", "select name_const('n',X'414A') from t", true},
+		{"name_const heading changed", "t", "t", "select name_const('n',X'414a') from t", "select name_const('N',X'414A') from t", false},
+		{"name_const value changed", "t", "t", "select name_const('n',X'414a') from t", "select name_const('n',X'00414A') from t", false},
+		{"explicit alias overrides name_const heading", "t", "t", "select name_const('n',X'414a') as c from t", "select name_const('n',X'414A') as C from t", false},
+		{"different literal bytes", "t", "t", "select X'414a' as n from t", "select X'00414A' as n from t", false},
+		{"different literal type", "t", "t", "select X'414a' as n from t", "select 'AJ' as n from t", false},
+		{"different explicit heading", "t", "t", "select a as n from t", "select A as N from t", false},
+		{"qualifier spelling is not the column heading", "t", "t", "select t.a from t", "select T.a from t", true},
+		{"qualifier spelling in expression heading", "t", "t", "select abs(t.a) from t", "select abs(T.a) from t", false},
+		{"different implicit heading", "t", "t", "select a from t", "select A from t", false},
+		{"different source", "t", "t", "select a as n from t", "select A as n from s", false},
+		{"equivalent projection but different predicate bytes", "t", "t", `select a as n from t where code='a\tb'`, `select A as n from t where code='a\tb'`, false},
+		{"different table key", "db1.t1", "db1.t2", a, a, false},
+		{"unparseable winner", "db1.t1", "db1.t1", a, a + " where (", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.equal, sameEffectiveRewriteRules(t.Context(), map[string]string{tc.oldKey: tc.oldSQL}, map[string]string{tc.newKey: tc.newSQL}, "", mode, 1))
+		})
+	}
+}
+
+func TestMergeRewriteRulesProjectionAliases(t *testing.T) {
+	for _, tc := range []struct {
+		left, right string
+		compatible  bool
+	}{
+		{"a as 'N'", "a as 'n'", true}, {"a as 'N'", "a as n", true}, {"a as 'N'", "a as 'm'", false},
+		{"*, a as 'N'", "*, a as 'n'", true},
+	} {
+		t.Run(tc.left+" vs "+tc.right, func(t *testing.T) {
+			left := "select " + tc.left + " from db1.t1 where a=1"
+			right := "select " + tc.right + " from db1.t1 where a=2"
+			got, err := mergeRewriteRules(t.Context(), left, right)
+			require.NoError(t, err)
+			if tc.compatible {
+				require.Equal(t, "select "+tc.left+" from db1.t1 where (a=1) or (a=2)", got)
+			} else {
+				require.Equal(t, right, got)
+			}
+		})
+	}
+}
+
+func TestMergeRewriteRulesProjectionIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		left, right string
+		compatible  bool
+	}{
+		{"'1'", "1", false},
+		{"'a'", "'A'", false},
+		{"`1`", "1", false},
+		{"CAST(1 AS ENUM('A','B'))", "CAST(1 AS ENUM('a','b'))", false},
+		{"concat(Code, 'A')", "concat(code, 'A')", true},
+		{"X'414a'", "X'414A'", true},
+		{"concat(X'414a','A')", "concat(X'414A','A')", true},
+		{"X'414a'", "X'414B'", false},
+		{"X'414a'", "X'00414a'", false},
+		{"X'414a'", "'AJ'", false},
+	} {
+		t.Run(tc.left+" vs "+tc.right, func(t *testing.T) {
+			left := "select " + tc.left + " as a from db1.t1 where n = 1"
+			right := "select " + tc.right + " as a from db1.t1 where n = 2"
+			merged, err := mergeRewriteRules(t.Context(), left, right)
+			require.NoError(t, err)
+			if tc.compatible {
+				require.Contains(t, merged, "where (n = 1) or (n = 2)")
+			} else {
+				require.Equal(t, right, merged)
+			}
+		})
+	}
+}
+
 func TestMergeRewriteRulesCollatedProjection(t *testing.T) {
 	for _, tc := range []struct {
 		projection string
@@ -2196,7 +2521,7 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 			name:       "simple select",
 			rule:       "select A, Age from db1.t1 where age > 28",
 			ok:         true,
-			selectList: "a, age",
+			selectList: "`a`, `age`",
 			table:      "db1.t1",
 		},
 		{
@@ -2210,35 +2535,35 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 			name:       "qualified star with alias",
 			rule:       "select t.* from db1.t1 as t where age > 28",
 			ok:         true,
-			selectList: "t.*",
+			selectList: "`t`.*",
 			table:      "db1.t1 as t",
 		},
 		{
 			name:       "aliased column",
 			rule:       "select a as x from db1.t1 where age > 28",
 			ok:         true,
-			selectList: "a as x",
+			selectList: "`a` as `x`",
 			table:      "db1.t1",
 		},
 		{
 			name:       "where subquery with order by and limit",
 			rule:       "select a from db1.t1 where a in (select a from db1.t2 order by a limit 1)",
 			ok:         true,
-			selectList: "a",
+			selectList: "`a`",
 			table:      "db1.t1",
 		},
 		{
 			name:       "parenthesized single table",
 			rule:       "select a from (db1.t1) where age > 28",
 			ok:         true,
-			selectList: "a",
+			selectList: "`a`",
 			table:      "db1.t1",
 		},
 		{
 			name:       "scalar expression",
 			rule:       "select a + 1 from db1.t1 where age > 28",
 			ok:         true,
-			selectList: "a + 1",
+			selectList: "`a` + 1",
 			table:      "db1.t1",
 		},
 		{
@@ -2291,7 +2616,7 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			shape, ok, err := rewriteRuleMergeShapeForRule(ctx, tc.rule)
+			shape, ok, err := rewriteRuleMergeShapeForRule(ctx, tc.rule, "")
 			require.NoError(t, err)
 			require.Equal(t, tc.ok, ok)
 			if !tc.ok {
@@ -2299,7 +2624,7 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 				return
 			}
 			require.NotNil(t, shape)
-			require.Equal(t, tc.selectList, shape.selectList)
+			require.Equal(t, tc.selectList, strings.ToLower(tree.StringWithOpts(&shape.clause.Exprs, dialect.MYSQL, tree.WithQuoteIdentifier())))
 			require.Equal(t, tc.table, shape.table)
 		})
 	}

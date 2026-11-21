@@ -38,8 +38,8 @@ drop database if exists db2;
 create database db1;
 create table db1.t1(a int, age int);
 insert into db1.t1 values (1,1),(2,2),(100,30);
-create table db1.t_dup(a int, marker int);
-insert into db1.t_dup values (1,1),(1,2),(2,3);
+create table db1.t_dup(a int, marker int, code varchar(16));
+insert into db1.t_dup values (1,1,'0001'),(1,2,'O''Brien'),(2,3,'1');
 create table db1.t_rename_no_rule(a int);
 alter table db1.t_rename_no_rule rename to db1.t_rename_no_rule_after;
 rename table db1.t_rename_no_rule_after to db1.t_rename_no_rule;
@@ -349,8 +349,8 @@ select * from db1.t1 order by a;
 100  ¦  30
 create role test_rule_role_dup_projection_a;
 create role test_rule_role_dup_projection_b;
-alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where marker = 1" on table db1.t_dup;
-alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where marker = 2" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O''Brien'" on table db1.t_dup;
 create user test_rule_user_dup_projection identified by '123456' default role test_rule_role_dup_projection_a;
 grant connect on account * to test_rule_role_dup_projection_a;
 grant select on table db1.t_dup to test_rule_role_dup_projection_a;
@@ -367,6 +367,193 @@ select a, count(*) from db1.t_dup group by a order by a;
 select count(*) from db1.t_dup;
 ➤ count(*)[-5,64,0]  𝄀
 1
+grant test_rule_role_dup_projection_b to test_rule_role_dup_projection_a;
+select a, count(*) from db1.t_dup group by a order by a;
+➤ a[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  2
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+select a, count(*) from db1.t_dup group by a order by a;
+➤ a[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  2
+insert into db1.t_dup values (3,4,_utf8mb4 X'646f63730a6f746573'),(4,5,_utf8mb4 X'646f63735c6e6f746573');
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where get_format(DATE, code) is not null" on table db1.t_dup;
+set sql_mode = '';
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+3
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+4
+set sql_mode = '';
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+3
+set sql_mode = 'NO_BACKSLASH_ESCAPES', sql_mode = 'ANSI_QUOTES';
+select @@sql_mode = 'ANSI_QUOTES' as final_mode;
+➤ final_mode[-6,8,0]  𝄀
+1
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+3
+insert into db1.t_dup values (5,6,'docs''notes');
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+set sql_mode = '';
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+internal error: failed to parse rewrite rule "select a from db1.t_dup where code = 'docs\\'notes'" while merging rewrite rules: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 49 near "notes'";
+select @@sql_mode = '' as retained_mode;
+➤ retained_mode[-6,8,0]  𝄀
+1
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+5
+set sql_mode = '';
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+5
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where marker = 1 and interval(marker, ascii('a'), 200) = 0" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where marker = 3" on table db1.t_dup;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes' order by a" on table db1.t_dup;
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+2
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where marker = 3 order by a" on table db1.t_dup;
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+2
+alter role test_rule_role_dup_projection_a add rule "select name_const(_utf8mb4 X'615c62', 7) from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select name_const(_utf8mb4 X'615c62', 7) from db1.t_dup where marker = 2" on table db1.t_dup;
+select `a\b` from db1.t_dup;
+➤ a\b[-5,64,0]  𝄀
+7  𝄀
+7
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a as n from db1.t_dup where marker = 3" on table db1.t_dup;
+select n from db1.t_dup;
+➤ n[4,32,0]  𝄀
+2
+alter role test_rule_role_dup_projection_a add rule "select _binary 'ab', concat(_binary 'ab', 'X') from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select _binary 'ab', concat(_binary 'ab', 'X') from db1.t_dup where marker = 2" on table db1.t_dup;
+select hex(ab), hex(`concat(ab, X)`) from db1.t_dup;
+➤ hex(ab)[12,4,0]  ¦  hex(concat(ab, X))[12,12,0]  𝄀
+6162  ¦  616258  𝄀
+6162  ¦  616258
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup" on table db1.t_dup;
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5
+alter role test_rule_role_dup_projection_a add rule "select cast(1 as enum(_utf8mb4 X'615c62','z')) as label from db1.t_dup" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select cast(1 as enum(_utf8mb4 X'615c62','z')) as label from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+select hex(cast(label as char)), count(*) from db1.t_dup group by label;
+➤ hex(cast(label as varchar))[-1,16383,0]  ¦  count(*)[-5,64,0]  𝄀
+615C62  ¦  6
+alter role test_rule_role_dup_projection_a add rule 'select "a" as n from db1.t_dup' on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule 'select "a" as n from db1.t_dup where code = ''docs\\''notes''' on table db1.t_dup;
+set sql_mode = 'ANSI_QUOTES,NO_BACKSLASH_ESCAPES';
+select n from db1.t_dup order by n;
+➤ n[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5
+alter role test_rule_role_dup_projection_a add rule "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t_dup where marker = 2" on table db1.t_dup;
+set sql_mode = '';
+prepare keep_handle from 'select 1';
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute keep_handle;
+➤ 1[-5,64,0]  𝄀
+1
+deallocate prepare keep_handle;
+select hex(cast(label as char)), count(*) from db1.t_dup group by label;
+➤ hex(cast(label as varchar))[-1,16383,0]  ¦  count(*)[-5,64,0]  𝄀
+610962  ¦  2
+alter role test_rule_role_dup_projection_a add rule 'select a from db1.t_dup where marker = 1' on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule 'select a from db1.t_dup where marker in (select 3 where 1=1) /* end */' on table db1.t_dup;
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2
+alter role test_rule_role_dup_projection_a add rule "select 'docs\\'notes' as n from db1.t_dup order by a" on table db1.t_dup;
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+2
+alter role test_rule_role_dup_projection_a add rule "select distinct 'docs\\'notes' as n from db1.t_dup" on table db1.t_dup;
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+2
+alter role test_rule_role_dup_projection_a add rule "select count('docs\\'notes') as n from db1.t_dup" on table db1.t_dup;
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+2
+alter role test_rule_role_dup_projection_a add rule "select a, length('docs\\'notes') as n from db1.t_dup" on table db1.t_dup;
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+2
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where 'x\\ty' = _utf8mb4 X'780979'" on table db1.t_dup;
+set sql_mode = '';
+prepare protected_handle from 'select a from db1.t_dup order by a';
+execute protected_handle;
+➤ a[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute protected_handle;
+Prepared statement needs to be re-prepared
+select a from db1.t_dup order by a;
+➤ a[4,32,0]  𝄀
+2
+alter role test_rule_role_dup_projection_a add rule "select X'414a' as 'N' from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select X'414A' as 'n' from db1.t_dup where marker = 2" on table db1.t_dup;
+select hex(n) as label_bytes, count(*) as visible_rows from db1.t_dup group by n;
+➤ label_bytes[12,16,0]  ¦  visible_rows[-5,64,0]  𝄀
+414A  ¦  2
+alter role test_rule_role_dup_projection_a add rule "select a as n, X'414a' as label, name_const('c', X'414a') from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "SELECT A as n, X'414A' as label, name_const('c', X'414A') FROM db1.t_dup" on table db1.t_dup;
+set sql_mode = '';
+prepare spelling_handle from 'select 1';
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute spelling_handle;
+➤ 1[-5,64,0]  𝄀
+1
+select n, hex(label) as label_bytes, c from db1.t_dup order by n;
+➤ n[4,32,0]  ¦  label_bytes[12,16,0]  ¦  c[12,2,0]  𝄀
+1  ¦  414A  ¦  AJ  𝄀
+1  ¦  414A  ¦  AJ  𝄀
+2  ¦  414A  ¦  AJ  𝄀
+3  ¦  414A  ¦  AJ  𝄀
+4  ¦  414A  ¦  AJ  𝄀
+5  ¦  414A  ¦  AJ
+deallocate prepare spelling_handle;
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
 alter role test_rule_role_expr_projection_a add rule "select a + 1 as b from db1.t_dup where marker = 1" on table db1.t_dup;

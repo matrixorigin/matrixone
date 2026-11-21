@@ -39,8 +39,8 @@ drop database if exists db2;
 create database db1;
 create table db1.t1(a int, age int);
 insert into db1.t1 values (1,1),(2,2),(100,30);
-create table db1.t_dup(a int, marker int);
-insert into db1.t_dup values (1,1),(1,2),(2,3);
+create table db1.t_dup(a int, marker int, code varchar(16));
+insert into db1.t_dup values (1,1,'0001'),(1,2,'O''Brien'),(2,3,'1');
 
 -- 0. Rename admission keeps tables without role rules working and closes the
 -- shared cluster-table path conservatively.
@@ -347,8 +347,8 @@ select * from db1.t1 order by a;
 -- 18. Partial projections keep duplicate projected values from distinct visible rows
 create role test_rule_role_dup_projection_a;
 create role test_rule_role_dup_projection_b;
-alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where marker = 1" on table db1.t_dup;
-alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where marker = 2" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O''Brien'" on table db1.t_dup;
 create user test_rule_user_dup_projection identified by '123456' default role test_rule_role_dup_projection_a;
 grant connect on account * to test_rule_role_dup_projection_a;
 grant select on table db1.t_dup to test_rule_role_dup_projection_a;
@@ -360,6 +360,196 @@ select count(*) from db1.t_dup;
 set secondary role all;
 select a, count(*) from db1.t_dup group by a order by a;
 select count(*) from db1.t_dup;
+-- @session
+
+-- Both rules are active through role inheritance. The two matching rows project
+-- to the same value; the row with code '1' must not match '0001'.
+grant test_rule_role_dup_projection_b to test_rule_role_dup_projection_a;
+-- @session:id=17&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a, count(*) from db1.t_dup group by a order by a;
+-- @session
+
+-- Re-saving a rule and rebuilding the merged rule in a new session keeps the same visible rows.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+-- @session:id=18&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a, count(*) from db1.t_dup group by a order by a;
+-- @session
+
+-- Changing the session mode must rebuild the role-rule cache. In the stored
+-- rule, \n is a newline only in the default mode. The other role uses GET_FORMAT.
+insert into db1.t_dup values (3,4,_utf8mb4 X'646f63730a6f746573'),(4,5,_utf8mb4 X'646f63735c6e6f746573');
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where get_format(DATE, code) is not null" on table db1.t_dup;
+-- @session:id=19&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = '';
+select a from db1.t_dup order by a;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select a from db1.t_dup order by a;
+set sql_mode = '';
+select a from db1.t_dup order by a;
+-- @session
+
+-- Multiple valid changes in one SET keep the same authorization principal.
+-- @session:id=29&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = 'NO_BACKSLASH_ESCAPES', sql_mode = 'ANSI_QUOTES';
+select @@sql_mode = 'ANSI_QUOTES' as final_mode;
+select a from db1.t_dup order by a;
+-- @session
+
+-- A mode that cannot parse an active rule is rejected before the session changes.
+insert into db1.t_dup values (5,6,'docs''notes');
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+-- @session:id=28&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = '';
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select @@sql_mode = '' as retained_mode;
+select a from db1.t_dup order by a;
+set sql_mode = '';
+select a from db1.t_dup order by a;
+-- @session
+
+-- Both rules contribute rows when the earlier rule uses scalar INTERVAL.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where marker = 1 and interval(marker, ascii('a'), 200) = 0" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where marker = 3" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select a from db1.t_dup order by a;
+-- @session
+
+-- An ineligible earlier rule does not replace or invalidate the later rule.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes' order by a" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
+-- The later ordered rule alone determines precedence.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where marker = 3 order by a" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
+-- A merged NAME_CONST projection must still be addressable by its original name.
+alter role test_rule_role_dup_projection_a add rule "select name_const(_utf8mb4 X'615c62', 7) from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select name_const(_utf8mb4 X'615c62', 7) from db1.t_dup where marker = 2" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select `a\b` from db1.t_dup;
+-- @session
+
+-- Incompatible projection names select the later rule without the earlier filter.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a as n from db1.t_dup where marker = 3" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select n from db1.t_dup;
+-- @session
+
+-- The literal's token type also determines the implicit projection name.
+alter role test_rule_role_dup_projection_a add rule "select _binary 'ab', concat(_binary 'ab', 'X') from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select _binary 'ab', concat(_binary 'ab', 'X') from db1.t_dup where marker = 2" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select hex(ab), hex(`concat(ab, X)`) from db1.t_dup;
+-- @session
+
+-- An unfiltered later rule makes the earlier predicate irrelevant to visibility.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
+-- The same visibility union applies when the unfiltered rule is earlier.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
+-- Projection compatibility depends on the decoded ENUM label, not its escape spelling.
+alter role test_rule_role_dup_projection_a add rule "select cast(1 as enum(_utf8mb4 X'615c62','z')) as label from db1.t_dup" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select cast(1 as enum(_utf8mb4 X'615c62','z')) as label from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select hex(cast(label as char)), count(*) from db1.t_dup group by label;
+-- @session
+
+-- Predicate recovery must keep ANSI_QUOTES when resolving the projection.
+alter role test_rule_role_dup_projection_a add rule 'select "a" as n from db1.t_dup' on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule 'select "a" as n from db1.t_dup where code = ''docs\\''notes''' on table db1.t_dup;
+-- @session:id=30&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = 'ANSI_QUOTES,NO_BACKSLASH_ESCAPES';
+select n from db1.t_dup order by n;
+-- @session
+
+-- Reloading equivalent ENUM rules must not invalidate a prepared handle.
+alter role test_rule_role_dup_projection_a add rule "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select cast(1 as enum(_utf8mb4 X'610962','z')) as label from db1.t_dup where marker = 2" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = '';
+prepare keep_handle from 'select 1';
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute keep_handle;
+deallocate prepare keep_handle;
+select hex(cast(label as char)), count(*) from db1.t_dup group by label;
+-- @session
+
+-- Merge the outer predicates without changing a nested WHERE or trailing comment.
+alter role test_rule_role_dup_projection_a add rule 'select a from db1.t_dup where marker = 1' on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule 'select a from db1.t_dup where marker in (select 3 where 1=1) /* end */' on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
+-- Catalog-only syntax is irrelevant when an unmergeable earlier rule is discarded.
+alter role test_rule_role_dup_projection_a add rule "select 'docs\\'notes' as n from db1.t_dup order by a" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
+-- A structural disqualifier is enough even with no outer WHERE to replace.
+alter role test_rule_role_dup_projection_a add rule "select distinct 'docs\\'notes' as n from db1.t_dup" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
+-- An aggregate cannot merge either, even if its argument only parses in catalog mode.
+alter role test_rule_role_dup_projection_a add rule "select count('docs\\'notes') as n from db1.t_dup" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
+-- A two-item projection cannot merge with the later rule's single item.
+alter role test_rule_role_dup_projection_a add rule "select a, length('docs\\'notes') as n from db1.t_dup" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
+-- A handle must not retain the wider interpretation of the same rule source.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where 'x\\ty' = _utf8mb4 X'780979'" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = '';
+prepare protected_handle from 'select a from db1.t_dup order by a';
+execute protected_handle;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute protected_handle;
+select a from db1.t_dup order by a;
+-- @session
+
+-- Equivalent quoted aliases and hex digits still union base rows.
+alter role test_rule_role_dup_projection_a add rule "select X'414a' as 'N' from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select X'414A' as 'n' from db1.t_dup where marker = 2" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select hex(n) as label_bytes, count(*) as visible_rows from db1.t_dup group by n;
+-- @session
+
+-- A later unfiltered rule exposes the same named projections across a mode reload.
+alter role test_rule_role_dup_projection_a add rule "select a as n, X'414a' as label, name_const('c', X'414a') from db1.t_dup where code = 'docs\\'notes'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "SELECT A as n, X'414A' as label, name_const('c', X'414A') FROM db1.t_dup" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = '';
+prepare spelling_handle from 'select 1';
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute spelling_handle;
+select n, hex(label) as label_bytes, c from db1.t_dup order by n;
+deallocate prepare spelling_handle;
 -- @session
 
 -- 19. Row-wise expression projections also merge without dropping role visibility

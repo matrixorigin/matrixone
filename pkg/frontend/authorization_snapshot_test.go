@@ -69,6 +69,19 @@ func TestAuthorizationEpochOwnershipAndEnd(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestAuthorizationPrincipalIndependentOfParserMode(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	t.Cleanup(ses.Close)
+	tenant := &TenantInfo{TenantID: 5, UserID: 7, DefaultRoleID: 9}
+	ses.SetTenantInfo(tenant)
+	ctx, epoch := beginAuthorizationEpoch(t.Context(), ses, &ExecCtx{})
+	defer epoch.end()
+	initialKey := rewriteRuleKeyForTenant(ses, tenant)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "NO_BACKSLASH_ESCAPES"))
+	require.Equal(t, epoch.identity, rewriteRuleSessionIdentity(ses))
+	require.NotEqual(t, initialKey, rewriteRuleKeyForTenant(ses, tenant))
+}
+
 func TestAuthorizationEpochEndCompletesOnce(t *testing.T) {
 	ses := newTestSession(t, gomock.NewController(t))
 	t.Cleanup(ses.Close)

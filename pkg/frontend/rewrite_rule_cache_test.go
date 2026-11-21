@@ -136,7 +136,7 @@ func TestPreparedFreshnessAdmissionRequestScope(t *testing.T) {
 				// An identity change invalidates the marker even when another
 				// owner has already installed an equal cache for that identity.
 				ses.tenant.UserID++
-				ses.ruleCacheIdentity = rewriteRuleSessionIdentity(ses)
+				ses.ruleCacheKey = rewriteRuleKeyForTenant(ses, ses.GetTenantInfo())
 			case "generation":
 				ses.bumpRewritePolicyGeneration()
 			case "revision":
@@ -224,7 +224,7 @@ func TestPreparedFreshnessRequestEndsDuringRefresh(t *testing.T) {
 // and the authenticated public regression uses the real engine proof.
 func seedRewriteRuleCacheProofForTest(ses *Session) {
 	ses.ruleCacheVersion = 1
-	ses.ruleCacheIdentity = rewriteRuleSessionIdentity(ses)
+	ses.ruleCacheKey = rewriteRuleKeyForTenant(ses, ses.GetTenantInfo())
 	ses.ruleCacheVersionProvider = func(context.Context, *Session) (any, error) { return 1, nil }
 }
 
@@ -390,7 +390,7 @@ func TestLoadRuleCacheTransactionFailures(t *testing.T) {
 			bh.sql2err[failing] = failure
 			stub := gostub.StubFunc(&NewBackgroundExec, bh)
 			defer stub.Reset()
-			_, err := loadRuleCache(context.Background(), ses)
+			_, err := loadRuleCache(context.Background(), ses, sessionSQLModeForParser(ses))
 			require.ErrorIs(t, err, failure)
 			require.Equal(t, "begin;", bh.executedSQLs[0])
 			if failing != "begin;" {
