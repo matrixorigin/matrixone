@@ -177,5 +177,25 @@ select s from test_issue_32869.secret_rows;
 drop user issue_32869_reader;
 drop role issue_32869_role;
 
+-- @case
+-- @desc:discarded UDF arguments and prepared SET keep folded scalar sources
+-- @label:bvt
+use test_issue_32869;
+create function issue_32869_constant_expr(x int) returns int language sql as '11';
+create function issue_32869_constant_query(x int) returns int language sql as 'select 12';
+create function issue_32869_constant_mixed(x int, y int) returns int language sql as 'select $2';
+select issue_32869_constant_expr((select o.a from inner_rows i where i.d > o.a limit 0)) as expr_value,
+       issue_32869_constant_query((select o.a from inner_rows i where i.d > o.a limit 0)) as query_value,
+       issue_32869_constant_mixed((select o.a from inner_rows i where i.d > o.a limit 0), 13) as mixed_value
+from outer_rows o where o.a = 11;
+prepare issue_32869_set from 'set @before = ?, @answer = (select case when o.a = 11 then o.a else cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) end from outer_rows o where o.a = ? limit 1), @after = ?';
+set @v_before = 21, @v_outer = 1, @v_after = 23;
+execute issue_32869_set using @v_before, @v_outer, @v_after;
+select @before, @answer, @after;
+set @v_before = 31, @v_outer = 11, @v_after = 33;
+execute issue_32869_set using @v_before, @v_outer, @v_after;
+select @before, @answer, @after;
+deallocate prepare issue_32869_set;
+
 -- @teardown
 drop database test_issue_32869;
