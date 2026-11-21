@@ -37,6 +37,8 @@ type PrefetchParams struct {
 	fs  fileservice.FileService
 	key objectio.Location
 	typ PrefetchType
+	// policy is the file-service policy the prefetch of the object runs under.
+	policy fileservice.Policy
 }
 
 func BuildPrefetchParams(service fileservice.FileService, key objectio.Location) (PrefetchParams, error) {
@@ -71,7 +73,9 @@ func buildPrefetchParams(service fileservice.FileService, key objectio.Location)
 func mergePrefetch(processes []PrefetchParams) map[string]PrefetchParams {
 	pc := make(map[string]PrefetchParams)
 	for _, p := range processes {
-		pc[p.key.Name().String()] = p
+		name := p.key.Name().String()
+		p.policy |= pc[name].policy
+		pc[name] = p
 	}
 	return pc
 }
@@ -81,18 +85,30 @@ func Prefetch(
 	service fileservice.FileService,
 	key objectio.Location,
 ) error {
+	return PrefetchWithPolicy(sid, service, key, 0)
+}
+
+// PrefetchWithPolicy prefetches the object at key, its download running under the
+// file-service policy bits policy.
+func PrefetchWithPolicy(
+	sid string,
+	service fileservice.FileService,
+	key objectio.Location,
+	policy fileservice.Policy,
+) error {
 	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
 	params.typ = PrefetchFileType
+	params.policy = policy
 	return MustGetPipeline(sid).Prefetch(params)
 }
 
 // PrefetchSkipped reports whether the whole-object preload of blk's object is
 // skipped for a read under policy.
 func PrefetchSkipped(ctx context.Context, service fileservice.FileService, policy fileservice.Policy, blk *objectio.BlockInfo) bool {
-	if !policy.Any(fileservice.SkipFullFilePreloads, fileservice.NarrowRead) {
+	if !policy.Any(fileservice.SkipFullFilePreloads, fileservice.NarrowRead, fileservice.IndexFileObject) {
 		return false
 	}
 	return fileservice.FullFilePreloadSkipped(ctx, service, policy, blk.MetaLocation().Name().String())

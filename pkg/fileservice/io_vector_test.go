@@ -212,3 +212,16 @@ func TestIOVectorExpensiveMinimalRangeRead(t *testing.T) {
 		})
 	}
 }
+
+func TestIOVectorSparse(t *testing.T) {
+	vec := func(entries ...IOEntry) *IOVector { return &IOVector{Entries: entries} }
+	require.False(t, vec().sparse())
+	require.False(t, vec(IOEntry{Offset: 5, Size: 5}).sparse())
+	require.False(t, vec(IOEntry{Offset: 10, Size: 5}, IOEntry{Offset: 0, Size: 10}).sparse(), "touching, out of order")
+	require.False(t, vec(IOEntry{Offset: 0, Size: 20}, IOEntry{Offset: 5, Size: 5}, IOEntry{Offset: 18, Size: 4}).sparse(), "contained and overlapping")
+	require.True(t, vec(IOEntry{Offset: 0, Size: 10}, IOEntry{Offset: 11, Size: 1}).sparse())
+	require.True(t, vec(IOEntry{Offset: 0, Size: 20}, IOEntry{Offset: 5, Size: 5}, IOEntry{Offset: 21, Size: 1}).sparse())
+	done := vec(IOEntry{Offset: 0, Size: 1}, IOEntry{Offset: 100, Size: 1})
+	done.Entries[1].done = true
+	require.False(t, done.sparse(), "entries done do not count")
+}

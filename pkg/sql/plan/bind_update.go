@@ -1630,6 +1630,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 					dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[part]].Typ
 				}
 
+				builder.markDedupTargetScan(scanNodeID)
 				dedupJoinNode := &plan.Node{
 					NodeType:          plan.Node_JOIN,
 					Children:          []int32{scanNodeID, lastNodeID},
@@ -1887,6 +1888,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 					dedupColName = idxDef.IndexName
 				}
 
+				builder.markDedupTargetScan(idxTableNodeID)
 				dedupJoinNode := &plan.Node{
 					NodeType:          plan.Node_JOIN,
 					Children:          []int32{idxTableNodeID, lastNodeID},
@@ -4387,6 +4389,7 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		if len(diagnosticExprs) > 0 {
 			dedupName = idxDef.IndexName
 		}
+		builder.markDedupTargetScan(idxScanID)
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:          plan.Node_JOIN,
 			Children:          []int32{idxScanID, lastNodeID},

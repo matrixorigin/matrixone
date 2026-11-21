@@ -302,7 +302,7 @@ by time since its last use, not by which index generation or snapshot names it.
 - A file's last use is when it was published or when its last hold was released, as for
   eviction.
 - A file with no holds whose last use is older than the idle TTL is deleted by a periodic
-  collection in each CN. The TTL is configurable, 1 hour by default; 0 turns idle collection
+  collection in each CN. The TTL is configurable, 0 by default; 0 turns idle collection
   off, leaving eviction and the free-space collection below. A hold taken while a file is being collected either keeps
   it or finds it missing and rebuilds it from the rows; a collection never removes a file
   that is held.

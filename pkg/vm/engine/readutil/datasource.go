@@ -19,6 +19,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -51,6 +52,10 @@ type RemoteDataSource struct {
 	batchPrefetchCursor int
 	cursor              int
 	data                engine.RelData
+
+	// columnPrefetchCursor is the block the column prefetches reach.
+	columnPrefetchCursor int
+	prefetch             ScanPrefetch
 
 	orderBy []*plan.OrderBySpec
 	// The permutation belongs to this reader; never reorder shared RelData.
@@ -133,6 +138,11 @@ func (rs *RemoteDataSource) Next(
 	}
 	rs.batchPrefetch(ctx, seqNums)
 	cur := rs.blockAt(rs.cursor)
+	// An ordered scan reads blocks of objects in zone-map order and may read one block of
+	// an object; it asks for no object's columns, ahead of it or when it enters the object.
+	if rs.orderedBlocks == nil && fileservice.GetFileServicePolicy(ctx).Any(fileservice.ColumnPrefetch) {
+		rs.prefetch.Reach(ctx, rs.fs, &cur, seqNums)
+	}
 	rs.cursor++
 	return &cur, engine.Persisted, nil
 }
@@ -145,6 +155,10 @@ func (rs *RemoteDataSource) blockAt(i int) objectio.BlockInfo {
 }
 
 func (rs *RemoteDataSource) batchPrefetch(ctx context.Context, seqNums []uint16) {
+	policy := fileservice.GetFileServicePolicy(ctx)
+	if policy.Any(fileservice.ColumnPrefetch) && rs.orderedBlocks == nil {
+		rs.prefetchColumns(ctx, seqNums)
+	}
 	// TODO: remove proc and don't GetService
 	if rs.proc == nil {
 		return
@@ -167,9 +181,9 @@ func (rs *RemoteDataSource) batchPrefetch(ctx context.Context, seqNums []uint16)
 		bids[idx-begin] = blk.BlockID
 	}
 
-	if !ioutil.PrefetchSkipped(ctx, rs.fs, fileservice.GetFileServicePolicy(ctx), blks[0]) {
-		err := ioutil.Prefetch(
-			rs.proc.GetService(), rs.fs, blks[0].MetaLocation())
+	if !ioutil.PrefetchSkipped(ctx, rs.fs, policy, blks[0]) {
+		err := ioutil.PrefetchWithPolicy(
+			rs.proc.GetService(), rs.fs, blks[0].MetaLocation(), policy&fileservice.IndexFileObject)
 		if err != nil {
 			logutil.Errorf("pefetch block data: %s", err.Error())
 		}
@@ -183,7 +197,40 @@ func (rs *RemoteDataSource) batchPrefetch(ctx context.Context, seqNums []uint16)
 	rs.batchPrefetchCursor = end
 }
 
+// prefetchColumns prefetches the ranges of the columns seqNums of the objects of the
+// blocks the scan reads next, staying at least half a window ahead of it.
+func (rs *RemoteDataSource) prefetchColumns(ctx context.Context, seqNums []uint16) {
+	n := rs.data.DataCnt()
+	if rs.columnPrefetchCursor >= n || rs.columnPrefetchCursor-rs.cursor >= BatchPrefetchSize/2 {
+		return
+	}
+	begin := max(rs.columnPrefetchCursor, rs.cursor)
+	end := min(rs.cursor+BatchPrefetchSize, n)
+	now := time.Now()
+	pace := rs.prefetch.Pace(now, rs.cursor)
+	for idx := begin; idx < end; {
+		due := now.Add(time.Duration(float64(idx-rs.cursor) / pace * float64(time.Second))).UnixNano()
+		blk := rs.blockAt(idx)
+		obj := *blk.BlockID.Object()
+		// The object's blocks past the window are its too: the next window does not
+		// prefetch it again.
+		idx++
+		for idx < n {
+			next := rs.blockAt(idx)
+			if !next.BlockID.Object().EQ(&obj) {
+				break
+			}
+			idx++
+		}
+		end = max(end, idx)
+		rs.prefetch.PrefetchColumns(ctx, rs.fs, &blk, seqNums, due)
+	}
+	rs.columnPrefetchCursor = max(end, begin)
+}
+
 func (rs *RemoteDataSource) Close() {
+	rs.prefetch.End()
+	rs.columnPrefetchCursor = 0
 	rs.cursor = 0
 	rs.batchPrefetchCursor = 0
 	rs.orderedBlocks = nil

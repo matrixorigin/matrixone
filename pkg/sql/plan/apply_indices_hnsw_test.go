@@ -538,6 +538,7 @@ func TestApplyIndicesForSortUsingHnswKeepsFiltersOnScan(t *testing.T) {
 	require.Equal(t, int64(4), opts.ThreadsSearch)
 	require.Zero(t, opts.PrefilterExactThreshold, "a post-filtered search has no membership to scan")
 	require.Len(t, scanNode.FilterList, 2)
+	require.True(t, readsColumnRanges(scanNode), "the base table is read back only for the candidates")
 }
 
 // applyHnswAndGetSearchNode runs the hnsw rewrite for a filtered top-k with the

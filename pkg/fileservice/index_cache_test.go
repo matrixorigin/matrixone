@@ -197,11 +197,11 @@ func TestIndexFileCacheCanceledPutLeavesNothing(t *testing.T) {
 	dir := t.TempDir()
 	c := newTestIndexFileCache(t, dir, 1<<30)
 	ctx, cancel := context.WithCancel(context.Background())
-	c.disk.beforeFilePublication = cancel
+	c.disk.hooks.beforeFilePublication = cancel
 	written, err := c.Put(ctx, "e", indexCacheEntry([]byte("x")))
 	require.ErrorIs(t, err, context.Canceled)
 	require.False(t, written)
-	c.disk.beforeFilePublication = nil
+	c.disk.hooks.beforeFilePublication = nil
 	requireIndexCacheMiss(t, c, "e")
 	entries, temps, _ := listCacheDirs(t, dir)
 	require.Empty(t, entries)
@@ -214,7 +214,7 @@ func TestIndexFileCacheEntryInvisibleBeforePublication(t *testing.T) {
 	diskPath, err := c.disk.pathForDir("e")
 	require.NoError(t, err)
 	var sawMiss bool
-	c.disk.beforeFilePublication = func() {
+	c.disk.hooks.beforeFilePublication = func() {
 		_, statErr := os.Stat(diskPath)
 		sawMiss = os.IsNotExist(statErr)
 	}
@@ -487,7 +487,7 @@ func TestIndexFileCacheReleaseSuperseded(t *testing.T) {
 		requireEntryDir(t, c, "b", superseded)
 	}
 
-	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Hour)
+	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Hour, 0)
 	require.NoError(t, err)
 	<-c.disk.load.done
 	t.Cleanup(func() { c.Close(context.Background()) })
@@ -570,12 +570,12 @@ func TestIndexFileCacheLoadRanksBehindUse(t *testing.T) {
 	}
 	gonePath, err := c.disk.pathForDir("gone")
 	require.NoError(t, err)
-	c.disk.beforeIndexLoadedDirs = func() {
+	c.disk.hooks.beforeIndexLoadedDirs = func() {
 		put(c, "fresh")
 		require.NoError(t, os.RemoveAll(gonePath))
 	}
 	c.disk.loadCache(ctx)
-	c.disk.beforeIndexLoadedDirs = nil
+	c.disk.hooks.beforeIndexLoadedDirs = nil
 	require.False(t, c.disk.cache.Contains(gonePath), "an entry removed while the cache loads is not counted")
 	require.Equal(t, 3*size, c.disk.cache.Used())
 
@@ -619,7 +619,7 @@ func ageEntry(t *testing.T, c *IndexFileCache, name string, age time.Duration) {
 // used first, until enough is freed to reach the target, whatever the idle TTL.
 func TestIndexFileCacheRelievesDiskPressure(t *testing.T) {
 	ctx := context.Background()
-	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, 0)
+	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, 0, 0)
 	require.NoError(t, err)
 	<-c.disk.load.done
 	t.Cleanup(func() { c.Close(context.Background()) })
@@ -686,7 +686,7 @@ func TestIndexFileCacheRelievesDiskPressure(t *testing.T) {
 func TestIndexFileCacheCollectsIdleEntries(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	c, err := newIndexFileCache(ctx, dir, fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Hour)
+	c, err := newIndexFileCache(ctx, dir, fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Hour, 0)
 	require.NoError(t, err)
 	<-c.disk.load.done
 	t.Cleanup(func() { c.Close(context.Background()) })
@@ -734,7 +734,7 @@ func TestIndexFileCacheCollectsIdleEntries(t *testing.T) {
 // watches free space.
 func TestIndexFileCacheGCLoop(t *testing.T) {
 	ctx := context.Background()
-	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Second)
+	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Second, 0)
 	require.NoError(t, err)
 	<-c.disk.load.done
 	_, err = c.Put(ctx, "e", indexCacheEntry([]byte("e")))
@@ -972,7 +972,7 @@ func TestIndexFileCacheOpenReturnsOneGeneration(t *testing.T) {
 	require.NoError(t, err)
 
 	replaced := false
-	c.disk.beforeCacheDirFileOpen = func() {
+	c.disk.hooks.beforeCacheDirFileOpen = func() {
 		if replaced {
 			return
 		}
@@ -1269,4 +1269,25 @@ func TestIndexFileCacheRemovalLeavesNoDirectories(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("z"), readAllFile(t, files[0]))
 	closeFiles(files)
+}
+
+func TestIndexFileCacheOpenDirSharesCallerDeadline(t *testing.T) {
+	originalShortWait := shortIOWaitDuration
+	shortIOWaitDuration = 10 * time.Second
+	t.Cleanup(func() { shortIOWaitDuration = originalShortWait })
+	ctx := context.Background()
+	c := newTestIndexFileCache(t, t.TempDir(), 1<<20)
+	name := "1/abcd/0/sum"
+	_, err := c.Put(ctx, name, indexCacheEntry([]byte("x")))
+	require.NoError(t, err)
+	diskPath, err := c.disk.pathForDir(name)
+	require.NoError(t, err)
+	release := c.disk.startUpdate(diskPath)
+	defer release()
+	// The caller's wait spent its deadline: the open of the entry does not wait again.
+	deadline := time.Now().Add(-time.Millisecond)
+	started := time.Now()
+	_, err = c.disk.openDir(ctx, name, diskPath, []string{"data"}, &deadline)
+	require.Error(t, err)
+	require.Less(t, time.Since(started), time.Second)
 }

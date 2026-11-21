@@ -284,7 +284,7 @@ func (obj *baseObject) loadPersistedMVCC(
 		[]types.Type{types.T_TS.ToType(), types.T_bool.ToType()},
 		obj.rt.Fs,
 		location,
-		fileservice.Policy(0),
+		fileservice.ExactColumnsRead,
 		true,
 		obj.rt.VectorPool.Transient,
 	)
@@ -351,6 +351,8 @@ func (obj *baseObject) ResolvePersistedColumnData(
 	col int,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, err error) {
+	// A dedup probe reads one column of the object, never the whole object.
+	ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|fileservice.ExactColumnsRead)
 	err = obj.Scan(
 		ctx, &bat, txn, readSchema, blkOffset, []int{col}, mp)
 	return

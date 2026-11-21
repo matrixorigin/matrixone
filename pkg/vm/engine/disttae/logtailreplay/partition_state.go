@@ -343,7 +343,7 @@ func forEachVisibleCommitTS(
 	objectio.ForeachBlkInObjStatsList(true, nil,
 		func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 			_, release, _, err := ioutil.LoadColumnsData(
-				ctx, cols, typs, fs, blk.MetaLocation(), cacheVectors, mp, fileservice.Policy(0))
+				ctx, cols, typs, fs, blk.MetaLocation(), cacheVectors, mp, fileservice.ExactColumnsRead)
 			if err != nil {
 				loadErr = err
 				return false

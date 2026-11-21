@@ -205,20 +205,13 @@ func TestFuzzingDiskS3(t *testing.T) {
 				operationSeed = uint64(1)
 			)
 
-			// A full async queue must not turn a successful storage write into
-			// a failed read. Skip the seed's disk fill, then read it cold before
-			// concurrent operations: ToCacheData permits the raw Data to be nil.
-			func() {
-				for i := 0; i < cap(diskCache.async.slots); i++ {
-					diskCache.async.slots <- struct{}{}
-				}
-				defer func() {
-					for i := 0; i < cap(diskCache.async.slots); i++ {
-						<-diskCache.async.slots
-					}
-				}()
-				op(t, 0)
-			}()
+			// A seed whose disk-cache file is gone is read cold: ToCacheData permits
+			// the raw Data to be nil.
+			op(t, 0)
+			diskCache.Flush(context.Background())
+			if err := diskCache.DeletePaths(context.Background(), []string{"0"}); err != nil {
+				t.Fatal(err)
+			}
 			op(t, 1)
 
 			start := make(chan struct{})

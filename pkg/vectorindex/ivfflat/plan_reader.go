@@ -780,6 +780,9 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		return res, moerr.NewInvalidStateNoCtxf("ivfflat hidden relation %s.%s has no table definition", req.Schema, req.Table)
 	}
 	ctx = fileservice.WithPreloadGroup(ctx, tableDef.TblId)
+	if tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+		ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|fileservice.IndexFileObject)
+	}
 	var statsStart time.Time
 	if s.executionStats != nil {
 		statsStart = time.Now()
@@ -818,6 +821,9 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	selectedBlocks := 0
 	if relData != nil {
 		selectedBlocks = relData.DataCnt()
+	}
+	if tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries && relData != nil {
+		defer releaseIndexObjects(holdIndexObjects(s.proc.GetFileService(), indexObjectNames(relData)))
 	}
 	readers, err := rel.BuildReaders(
 		ctx,
@@ -1304,4 +1310,44 @@ func makeRelationScanBatch(tableDef *plan.TableDef, columns []string) (*batch.Ba
 		bat.Vecs[i] = vector.NewVec(types.New(types.T(colType.Id), colType.Width, colType.Scale))
 	}
 	return bat, nil
+}
+
+// indexObjectNames returns the objects of the persisted blocks of relData, each once.
+func indexObjectNames(relData engine.RelData) []string {
+	var objects []string
+	seen := make(map[string]struct{})
+	for i := 0; i < relData.DataCnt(); i++ {
+		blk := relData.GetBlockInfo(i)
+		if blk.IsMemBlk() {
+			continue
+		}
+		name := blk.MetaLocation().Name().String()
+		if _, ok := seen[name]; !ok {
+			seen[name] = struct{}{}
+			objects = append(objects, name)
+		}
+	}
+	return objects
+}
+
+// holdIndexObjects holds the objects the index-file cache of fs holds, so the scan reads
+// them from there. A read of another downloads it whole into the cache.
+func holdIndexObjects(fs fileservice.FileService, objects []string) []*fileservice.IndexFileHold {
+	cache, _ := fileservice.IndexObjectCache(fs)
+	if cache == nil || len(objects) == 0 {
+		return nil
+	}
+	holds := make([]*fileservice.IndexFileHold, 0, len(objects))
+	for _, object := range objects {
+		if hold := cache.HoldCached(fileservice.IndexObjectEntry(object)); hold != nil {
+			holds = append(holds, hold)
+		}
+	}
+	return holds
+}
+
+func releaseIndexObjects(holds []*fileservice.IndexFileHold) {
+	for _, hold := range holds {
+		hold.Release()
+	}
 }

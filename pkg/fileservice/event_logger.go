@@ -104,6 +104,11 @@ func LogSlowEvent(ctx context.Context, threshold time.Duration) {
 	logger := v.(*eventLogger)
 
 	logger.mu.Lock()
+	if logger.closed {
+		// Another read shares the logger and already logged it.
+		logger.mu.Unlock()
+		return
+	}
 	defer func() {
 		events := *logger.events
 		for i := range events {

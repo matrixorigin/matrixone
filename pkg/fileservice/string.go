@@ -68,8 +68,6 @@ var (
 	str_close_disk_files_end                  = internString("close disk files end")
 	str_disk_cache_fill_entry_begin           = internString("disk cache fill entry begin")
 	str_disk_cache_fill_entry_end             = internString("disk cache fill entry end")
-	str_disk_cache_file_seek_begin            = internString("disk cache file seek begin")
-	str_disk_cache_file_seek_end              = internString("disk cache file seek end")
 	str_disk_cache_wait_update_complete_begin = internString("disk cache wait update complete begin")
 	str_disk_cache_wait_update_complete_end   = internString("disk cache wait update complete end")
 	str_disk_cache_file_open_begin            = internString("disk cache file open begin")

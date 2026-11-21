@@ -55,8 +55,8 @@ const (
 	DefaultIndexFileDiskCapacity = 8 << 30
 
 	// DefaultIndexFileIdleTTL is how long an index-file cache entry with no holds stays
-	// after its last use.
-	DefaultIndexFileIdleTTL = time.Hour
+	// after its last use; 0 turns idle collection off.
+	DefaultIndexFileIdleTTL time.Duration = 0
 
 	maxIndexFileGCInterval = 10 * time.Minute
 
@@ -124,7 +124,7 @@ func NewIndexFileCache(
 	name string,
 	rebuildPolicy Policy,
 ) (*IndexFileCache, error) {
-	return newIndexFileCache(ctx, path, capacity, name, "", rebuildPolicy, 0)
+	return newIndexFileCache(ctx, path, capacity, name, "", rebuildPolicy, 0, 0)
 }
 
 func newIndexFileCache(
@@ -135,9 +135,10 @@ func newIndexFileCache(
 	metricScope string,
 	rebuildPolicy Policy,
 	idleTTL time.Duration,
+	openFilesMax int,
 ) (*IndexFileCache, error) {
 	disk, err := newDiskCache(ctx, path, capacity, nil, true, nil, name, metricScope,
-		diskCacheOptions{dirEntries: true})
+		diskCacheOptions{dirEntries: true, openFilesMax: openFilesMax})
 	if err != nil {
 		return nil, err
 	}
@@ -158,6 +159,7 @@ type indexFileCacheSettings struct {
 	rebuildPolicy  Policy
 	idleTTL        time.Duration
 	checkOnStartup bool
+	openFilesMax   int
 }
 
 type sharedIndexFileCache struct {
@@ -207,7 +209,7 @@ func acquireIndexFileCache(
 		return e.cache, nil
 	}
 	c, err := newIndexFileCache(ctx, settings.path, fscache.ConstCapacity(settings.capacity),
-		name, metricScope, settings.rebuildPolicy, settings.idleTTL)
+		name, metricScope, settings.rebuildPolicy, settings.idleTTL, settings.openFilesMax)
 	if err != nil {
 		return nil, err
 	}
@@ -468,12 +470,35 @@ func (c *IndexFileCache) CreateTempFile() (f *os.File, remove func(), err error)
 // Put publishes entry name with files. It returns false, with no error, when the entry
 // already exists or the cache could not be written; a source error is returned.
 func (c *IndexFileCache) Put(ctx context.Context, name string, files []IndexCacheFile) (bool, error) {
+	return c.put(ctx, name, 0, files)
+}
+
+// DeleteMark returns the mark of content read now, for PutUnlessDeleted.
+func (c *IndexFileCache) DeleteMark() uint64 {
+	return c.disk.readDeletes()
+}
+
+// PutUnlessDeleted is Put, except that it publishes nothing, and returns false, when entry
+// name was deleted after mark was taken.
+func (c *IndexFileCache) PutUnlessDeleted(ctx context.Context, name string, mark uint64, files []IndexCacheFile) (bool, error) {
+	return c.put(ctx, name, mark, files)
+}
+
+func (c *IndexFileCache) put(ctx context.Context, name string, mark uint64, files []IndexCacheFile) (bool, error) {
 	diskPath, err := c.disk.pathForDir(name)
 	if err != nil {
 		return false, err
 	}
 	if err := checkCacheDirFiles(files); err != nil {
 		return false, err
+	}
+	if mark > 0 {
+		stripe := c.disk.deletes.stripe(diskPath)
+		stripe.RLock()
+		defer stripe.RUnlock()
+		if c.disk.deletes.since(diskPath, mark-1) {
+			return false, nil
+		}
 	}
 	written, err := c.disk.putDir(ctx, diskPath, files)
 	if err != nil {
@@ -498,7 +523,45 @@ func (c *IndexFileCache) Open(ctx context.Context, name string, files ...string)
 			return nil, err
 		}
 	}
-	return c.disk.openDir(ctx, name, diskPath, files)
+	var deadline time.Time
+	return c.disk.openDir(ctx, name, diskPath, files, &deadline)
+}
+
+// openEntryFile opens file of entry name for a read, through the file kept open for the
+// entry if any, and keeps a file it opens for later reads; done ends the read's use of it.
+// The file is kept by entry, so reads of an entry through it read the same file of it.
+func (c *IndexFileCache) openEntryFile(ctx context.Context, name string, file string) (f *os.File, done func(), err error) {
+	diskPath, err := c.disk.pathForDir(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := checkCacheDirFileName(file); err != nil {
+		return nil, nil, err
+	}
+	d := c.disk
+	var deadline time.Time
+	generation, ok := d.paths.startRead(ctx, diskPath, &deadline)
+	if !ok {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		return nil, nil, moerr.NewFileNotFoundNoCtx(name)
+	}
+	kept := d.paths.takeKept(diskPath)
+	opened := openedDiskCacheFile{generation: generation, kept: kept}
+	if kept != nil {
+		d.cache.Get(ctx, diskPath)
+		opened.file = kept.file
+	} else {
+		files, err := d.openDir(ctx, name, diskPath, []string{file}, &deadline)
+		if err != nil {
+			d.paths.endRead(diskPath, generation)
+			return nil, nil, err
+		}
+		opened.file = files[0]
+		opened.kept = d.paths.keep(diskPath, generation, files[0])
+	}
+	return opened.file, func() { d.paths.close(diskPath, opened) }, nil
 }
 
 // IndexFileHold keeps a cache entry on disk until it is released. Only the first release
@@ -541,17 +604,48 @@ func (c *IndexFileCache) Hold(name string) (*IndexFileHold, error) {
 	return &IndexFileHold{release: func(used bool) { c.disk.releaseDir(diskPath, used) }}, nil
 }
 
-// Delete removes entry name at once, held or not; files already open stay readable.
+// HoldCached holds entry name, as Hold does, when the cache holds the entry, and returns
+// nil when it does not.
+func (c *IndexFileCache) HoldCached(name string) *IndexFileHold {
+	hold, err := c.Hold(name)
+	if err != nil {
+		return nil
+	}
+	if diskPath, err := c.disk.pathForDir(name); err != nil || !c.disk.dirCached(diskPath) {
+		hold.ReleaseSuperseded()
+		return nil
+	}
+	return hold
+}
+
+// dirCached reports whether the entry directory at diskPath is cached: indexed, or on
+// disk while the index is loading.
+func (d *DiskCache) dirCached(diskPath string) bool {
+	if d.cache.Contains(diskPath) {
+		return true
+	}
+	select {
+	case <-d.load.done:
+		return false
+	default:
+	}
+	_, err := os.Stat(diskPath)
+	return err == nil
+}
+
+// Delete removes entry name at once, held or not; files already open stay readable. A
+// PutUnlessDeleted of content read before the delete publishes nothing.
 func (c *IndexFileCache) Delete(ctx context.Context, name string) error {
 	diskPath, err := c.disk.pathForDir(name)
 	if err != nil {
 		return err
 	}
-	done, err := c.disk.startUpdateContext(ctx, diskPath)
+	c.disk.deletes.deleted(diskPath)
+	owner, err := c.disk.paths.acquire(ctx, diskPath, nil)
 	if err != nil {
 		return err
 	}
-	defer done()
+	defer owner.release()
 	if err := removeCacheDir(diskPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -577,15 +671,13 @@ type loadedDir struct {
 func (d *DiskCache) indexLoadedDirs(ctx context.Context, dirs []loadedDir) {
 	lru := d.cache
 	slices.SortFunc(dirs, func(a, b loadedDir) int { return b.lastUse.Compare(a.lastUse) })
-	if d.beforeIndexLoadedDirs != nil {
-		d.beforeIndexLoadedDirs()
-	}
+	runHook(d.hooks.beforeIndexLoadedDirs)
 	for _, e := range dirs {
-		done := d.startUpdate(e.path)
+		owner, _ := d.paths.acquire(context.Background(), e.path, nil)
 		if _, err := os.Stat(e.path); err == nil {
 			lru.SetOldest(ctx, e.path, struct{}{}, e.size)
 		}
-		done()
+		_ = owner.release()
 	}
 }
 
@@ -660,11 +752,11 @@ func (d *DiskCache) removeIdleDir(ctx context.Context, path string, before time.
 	if !idle {
 		return false, err
 	}
-	done, err := d.startUpdateContext(ctx, path)
+	owner, err := d.paths.acquire(ctx, path, nil)
 	if err != nil {
 		return false, err
 	}
-	defer done()
+	defer owner.release()
 	d.held.mu.Lock()
 	if idle, err = d.idleDirLocked(path, before); !idle {
 		d.held.mu.Unlock()
@@ -763,14 +855,14 @@ func (d *DiskCache) putDir(ctx context.Context, diskPath string, files []IndexCa
 	defer func() {
 		d.evictForDiskFull(ctx, err)
 	}()
-	doneUpdate, err := d.startUpdateWithCleanupContext(ctx, diskPath, func() error {
+	owner, err := d.paths.acquire(ctx, diskPath, func() error {
 		return d.removeUnindexedFile(diskPath)
 	})
 	if err != nil {
 		return false, err
 	}
 	defer func() {
-		d.mergeWriteCleanupError(diskPath, &err, doneUpdate())
+		d.mergeWriteCleanupError(diskPath, &err, owner.release())
 	}()
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -817,9 +909,7 @@ func (d *DiskCache) putDir(ctx context.Context, diskPath string, files []IndexCa
 	}
 	d.cache.Evict(ctx, nil, size)
 
-	if d.beforeFilePublication != nil {
-		d.beforeFilePublication()
-	}
+	runHook(d.hooks.beforeFilePublication)
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -857,9 +947,7 @@ func (d *DiskCache) createCacheTempDir(dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}
-	if d.beforeCacheTempFileCreate != nil {
-		d.beforeCacheTempFileCreate()
-	}
+	runHook(d.hooks.beforeCacheTempFileCreate)
 	return os.MkdirTemp(dir, "*"+cacheDirTempSuffix)
 }
 
@@ -935,16 +1023,17 @@ func (d *DiskCache) moveCacheDirFile(ctx context.Context, from, to string) (int6
 	return fileSize(stat), nil
 }
 
-func (d *DiskCache) openDir(ctx context.Context, name string, diskPath string, files []string) ([]*os.File, error) {
-	var deadline time.Time
-	generation, ok := d.startPathReadWithin(ctx, diskPath, &deadline, shortIOWaitDuration)
+// openDir opens files of the entry directory diskPath; its wait for the path shares
+// deadline with the caller's.
+func (d *DiskCache) openDir(ctx context.Context, name string, diskPath string, files []string, deadline *time.Time) ([]*os.File, error) {
+	generation, ok := d.paths.startRead(ctx, diskPath, deadline)
 	if !ok {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		return nil, moerr.NewFileNotFoundNoCtx(name)
 	}
-	defer d.finishPathRead(diskPath, generation)
+	defer d.paths.endRead(diskPath, generation)
 
 	// Files are opened relative to one directory handle, so all of them come from the
 	// same entry even if it is evicted and published again meanwhile.
@@ -963,8 +1052,8 @@ func (d *DiskCache) openDir(ctx context.Context, name string, diskPath string, f
 		}
 	}
 	for i, file := range files {
-		if i > 0 && d.beforeCacheDirFileOpen != nil {
-			d.beforeCacheDirFileOpen()
+		if i > 0 {
+			runHook(d.hooks.beforeCacheDirFileOpen)
 		}
 		f, err := root.Open(file)
 		if err != nil {
@@ -986,10 +1075,10 @@ func (d *DiskCache) openDir(ctx context.Context, name string, diskPath string, f
 			}
 			return nil, err
 		}
-		if doneReindex, ok := d.tryStartReadReindex(diskPath, generation); ok {
+		if owner, ok := d.paths.reindex(diskPath, generation); ok {
 			var reindexErr error
 			func() {
-				defer func() { reindexErr = doneReindex() }()
+				defer func() { reindexErr = owner.release() }()
 				d.cache.Set(ctx, diskPath, struct{}{}, size)
 			}()
 			if reindexErr != nil {

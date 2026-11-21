@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -117,6 +118,7 @@ type LocalDisttaeDataSource struct {
 	rc struct {
 		prefetchDisabled    bool
 		batchPrefetchCursor int
+		prefetch            readutil.ScanPrefetch
 		WorkspaceLocked     bool
 		//SkipPStateDeletes   bool
 	}
@@ -451,6 +453,7 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 }
 
 func (ls *LocalDisttaeDataSource) Close() {
+	ls.rc.prefetch.End()
 	if ls.pStateRows.insIter != nil {
 		ls.pStateRows.insIter.Close()
 		ls.pStateRows.insIter = nil
@@ -571,6 +574,9 @@ func (ls *LocalDisttaeDataSource) Next(
 			}
 
 			info = ls.rangeSlice.Get(ls.rangesCursor)
+			if !ls.rc.prefetchDisabled && fileservice.GetFileServicePolicy(ctx).Any(fileservice.ColumnPrefetch) {
+				ls.rc.prefetch.Reach(ctx, ls.fs, info, seqNums)
+			}
 			ls.rangesCursor++
 			state = engine.Persisted
 			return
@@ -1763,32 +1769,56 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 	if ls.rc.prefetchDisabled {
 		return
 	}
-	if ls.rc.batchPrefetchCursor >= ls.rangeSlice.Len() ||
-		ls.rangesCursor < ls.rc.batchPrefetchCursor {
+	n := ls.rangeSlice.Len()
+	// The prefetches stay at least half a window ahead of the scan.
+	if ls.rc.batchPrefetchCursor >= n ||
+		ls.rc.batchPrefetchCursor-ls.rangesCursor >= readutil.BatchPrefetchSize/2 {
 		return
 	}
 
-	batchSize := min(readutil.BatchPrefetchSize, ls.rangeSlice.Len()-ls.rangesCursor)
-
-	begin := ls.rangesCursor
-	end := ls.rangesCursor + batchSize
+	begin := max(ls.rc.batchPrefetchCursor, ls.rangesCursor)
+	end := min(ls.rangesCursor+readutil.BatchPrefetchSize, n)
+	now := time.Now()
+	pace := ls.rc.prefetch.Pace(now, ls.rangesCursor)
 
 	policy := fileservice.GetFileServicePolicy(ctx)
-	var preObj types.Objectid
-	for idx := begin; idx < end; idx++ {
+	for idx := begin; idx < end; {
+		due := now.Add(time.Duration(float64(idx-ls.rangesCursor) / pace * float64(time.Second))).UnixNano()
 		blk := ls.rangeSlice.Get(idx)
-		if blk.BlockID.Object().EQ(&preObj) {
-			continue
+		obj := *blk.BlockID.Object()
+		first := idx
+		// The object's blocks past the window are its too: the next window does not
+		// prefetch it again.
+		idx++
+		for idx < n && ls.rangeSlice.Get(idx).BlockID.Object().EQ(&obj) {
+			idx++
 		}
-
-		preObj = *blk.BlockID.Object()
-		if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
+		end = max(end, idx)
+		var size int64
+		var blocks int
+		if ls.pState != nil {
+			if entry, ok := ls.pState.GetObject(*blk.MetaLocation().Name().Short()); ok {
+				size, blocks = int64(entry.ObjectStats.Size()), int(entry.ObjectStats.BlkCnt())
+			}
+		}
+		prefetcher, isPrefetcher := ls.fs.(fileservice.ObjectPrefetcher)
+		if policy.Any(fileservice.ColumnPrefetch) {
+			ls.rc.prefetch.PrefetchColumns(ctx, ls.fs, blk, seqNums, due)
+			continue
+		} else if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
 			continue
 		}
 
 		// prefetch blk data
-		err := ioutil.Prefetch(
-			ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
+		var err error
+		if isPrefetcher && size > 0 {
+			err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
+				FilePath: blk.MetaLocation().Name().String(),
+				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Scan: ls.rc.prefetch.Scan(),
+			})
+		} else {
+			err = ioutil.PrefetchWithPolicy(ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation(), policy&fileservice.IndexFileObject)
+		}
 		if err != nil {
 			logutil.Errorf("pefetch block data: %s, blk:%s",
 				err.Error(),
@@ -1796,7 +1826,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 		}
 	}
 
-	ls.rc.batchPrefetchCursor = end
+	ls.rc.batchPrefetchCursor = max(end, begin)
 }
 
 func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(

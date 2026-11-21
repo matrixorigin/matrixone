@@ -117,6 +117,22 @@ func TestRemoteDataSourceOrderedBlocks(t *testing.T) {
 		require.Nil(t, ds.orderedBlocks)
 	})
 
+	t.Run("ordered_scan_asks_for_no_object_columns", func(t *testing.T) {
+		rec := &objectPrefetchRecordingFS{FileService: fs}
+		colCtx := fileservice.WithFileServicePolicy(ctx, fileservice.SkipFullFilePreloads|fileservice.ColumnPrefetch)
+		ds := NewRemoteDataSource(colCtx, rec, timestamp.Timestamp{}, data)
+		defer ds.Close()
+		ds.SetOrderBy(order(plan.OrderBySpec_DESC, false))
+		for {
+			_, state, err := next(ds, colCtx)
+			require.NoError(t, err)
+			if state == engine.End {
+				break
+			}
+		}
+		require.Empty(t, rec.reqs, "an ordered scan asks for no object's columns")
+	})
+
 	t.Run("appendable_blocks_are_not_pruned", func(t *testing.T) {
 		appendableData := NewBlockListRelationData(0)
 		for i := uint16(0); i < 4; i++ {

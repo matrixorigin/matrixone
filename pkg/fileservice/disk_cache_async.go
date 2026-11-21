@@ -33,7 +33,11 @@ import (
 )
 
 const (
-	diskCacheAsyncQueueSize       = 64
+	// diskCacheAsyncQueueSize is the most asynchronous updates pending at once, each
+	// holding an open file.
+	diskCacheAsyncQueueSize = 512
+	// diskCacheAsyncWorkers is the number of asynchronous updates published at once.
+	diskCacheAsyncWorkers         = 4
 	diskCacheAsyncMaxPendingBytes = int64(64 << 20)
 	diskCacheWriteErrorLogKey     = "disk-cache-write-error"
 	diskCacheWriteRecoveryLogKey  = "disk-cache-write-recovery"
@@ -46,20 +50,31 @@ var eventDiskCacheAsyncCallbackPanic = logutil.Event{
 }
 
 type diskCacheAsyncUpdate struct {
-	filePath     string
-	diskPath     string
-	entry        IOEntry
-	callbacks    []OnDiskCacheWrittenFunc
+	filePath  string
+	diskPath  string
+	entry     IOEntry
+	callbacks []OnDiskCacheWrittenFunc
+	// callbackTurn is the update's place in the submission order of callbacks.
+	callbackTurn *asyncCallbackTurn
 	finalize     *diskCacheAsyncFileFinalize
 	releaseOnce  sync.Once
 	resourceOnce sync.Once
 }
 
+// asyncCallbackTurn is an update with callbacks, linked in submission order. An update
+// that ends without running its callbacks is unlinked; the head runs once ready.
+type asyncCallbackTurn struct {
+	prev, next *asyncCallbackTurn
+	job        *diskCacheAsyncUpdate
+	ready      bool
+}
+
 type diskCacheAsyncFileFinalize struct {
-	file       *os.File
-	doneUpdate func() error
-	attempted  bool
-	err        error
+	file      *os.File
+	target    fillTarget
+	owner     *pathOwner
+	attempted bool
+	err       error
 }
 
 type diskCacheAsyncState struct {
@@ -69,11 +84,13 @@ type diskCacheAsyncState struct {
 	slots  chan struct{}
 	done   chan struct{}
 
-	startOnce    sync.Once
-	closeOnce    sync.Once
-	submitters   sync.WaitGroup
-	callbackMu   sync.Mutex
-	callbackTail chan struct{}
+	startOnce       sync.Once
+	closeOnce       sync.Once
+	submitters      sync.WaitGroup
+	callbackMu      sync.Mutex
+	callbackHead    *asyncCallbackTurn
+	callbackTail    *asyncCallbackTurn
+	callbackRunning bool
 
 	mu struct {
 		sync.Mutex
@@ -83,6 +100,8 @@ type diskCacheAsyncState struct {
 		maxPendingBytes int64
 		dropped         int64
 		idle            chan struct{}
+		// freed, when set, is closed once a slot or pending bytes are released.
+		freed freedSignal
 	}
 }
 
@@ -121,8 +140,6 @@ func (d *DiskCache) initAsyncUpdates() {
 	d.async.mu.maxPendingBytes = diskCacheAsyncMaxPendingBytes
 	d.async.mu.idle = make(chan struct{})
 	close(d.async.mu.idle)
-	d.async.callbackTail = make(chan struct{})
-	close(d.async.callbackTail)
 }
 
 func (d *DiskCache) initWriteFailureState() {
@@ -212,7 +229,11 @@ func cleanupDiskCacheTempFile(file *os.File) error {
 	return errors.Join(closeErr, removeErr)
 }
 
+// scheduleAsyncUpdate queues the write of entry, waiting for a slot and for room in the
+// pending bytes. It drops the write when the cache closes, when ctx ends first, or when
+// the entry is larger than all the pending bytes allowed.
 func (d *DiskCache) scheduleAsyncUpdate(
+	ctx context.Context,
 	filePath string,
 	diskPath string,
 	entry IOEntry,
@@ -221,29 +242,35 @@ func (d *DiskCache) scheduleAsyncUpdate(
 	dataBytes := int64(len(entry.Data))
 	a := &d.async
 	a.mu.Lock()
-	if a.mu.closed {
-		a.dropAsyncUpdateLocked()
+	for {
+		if a.mu.closed || dataBytes > a.mu.maxPendingBytes {
+			a.dropAsyncUpdateLocked()
+			a.mu.Unlock()
+			return
+		}
+		if _, ok := a.mu.pending[diskPath]; ok {
+			// FileService objects are immutable. One pending write for the same
+			// canonical range is sufficient and avoids copying duplicate data.
+			a.mu.Unlock()
+			return
+		}
+		if len(a.slots) < cap(a.slots) && dataBytes <= a.mu.maxPendingBytes-a.mu.pendingBytes {
+			a.slots <- struct{}{}
+			break
+		}
+		freed := a.mu.freed.waitLocked()
 		a.mu.Unlock()
-		return
-	}
-	if _, ok := a.mu.pending[diskPath]; ok {
-		// FileService objects are immutable. One pending write for the same
-		// canonical range is sufficient and avoids copying duplicate data.
-		a.mu.Unlock()
-		return
-	}
-	select {
-	case a.slots <- struct{}{}:
-	default:
-		a.dropAsyncUpdateLocked()
-		a.mu.Unlock()
-		return
-	}
-	if dataBytes > a.mu.maxPendingBytes-a.mu.pendingBytes {
-		<-a.slots
-		a.dropAsyncUpdateLocked()
-		a.mu.Unlock()
-		return
+		select {
+		case <-freed:
+		case <-ctx.Done():
+		case <-a.ctx.Done():
+		}
+		a.mu.Lock()
+		if ctx.Err() != nil {
+			a.dropAsyncUpdateLocked()
+			a.mu.Unlock()
+			return
+		}
 	}
 	if len(a.mu.pending) == 0 {
 		a.mu.idle = make(chan struct{})
@@ -254,18 +281,31 @@ func (d *DiskCache) scheduleAsyncUpdate(
 	a.mu.Unlock()
 
 	a.startOnce.Do(func() {
-		go d.runAsyncUpdates()
+		d.startAsyncWorkers()
 	})
 
 	job := &diskCacheAsyncUpdate{
 		filePath: filePath,
 		diskPath: diskPath,
 		entry: IOEntry{
-			Offset: entry.Offset,
-			Size:   entry.Size,
-			Data:   bytes.Clone(entry.Data),
+			Offset:      entry.Offset,
+			Size:        entry.Size,
+			Data:        bytes.Clone(entry.Data),
+			readDeletes: entry.readDeletes,
 		},
 		callbacks: append([]OnDiskCacheWrittenFunc(nil), callbacks...),
+	}
+	if len(callbacks) > 0 {
+		turn := &asyncCallbackTurn{job: job}
+		job.callbackTurn = turn
+		a.callbackMu.Lock()
+		if turn.prev = a.callbackTail; turn.prev != nil {
+			turn.prev.next = turn
+		} else {
+			a.callbackHead = turn
+		}
+		a.callbackTail = turn
+		a.callbackMu.Unlock()
 	}
 	select {
 	case a.jobs <- job:
@@ -275,22 +315,37 @@ func (d *DiskCache) scheduleAsyncUpdate(
 	a.submitters.Done()
 }
 
-func (d *DiskCache) tryReserveAsyncFileFinalize(diskPath string) bool {
+// reserveAsyncFileFinalize reserves a slot for the async publication of the file at
+// diskPath, waiting for one to be free. It reports false when the cache is closed, when the
+// file's publication is already pending, or when ctx ends first.
+func (d *DiskCache) reserveAsyncFileFinalize(ctx context.Context, diskPath string) bool {
 	a := &d.async
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.mu.closed {
-		a.dropAsyncUpdateLocked()
-		return false
-	}
-	if _, ok := a.mu.pending[diskPath]; ok {
-		return false
-	}
-	select {
-	case a.slots <- struct{}{}:
-	default:
-		a.dropAsyncUpdateLocked()
-		return false
+	for {
+		if a.mu.closed {
+			a.dropAsyncUpdateLocked()
+			return false
+		}
+		if _, ok := a.mu.pending[diskPath]; ok {
+			return false
+		}
+		if len(a.slots) < cap(a.slots) {
+			a.slots <- struct{}{}
+			break
+		}
+		freed := a.mu.freed.waitLocked()
+		a.mu.Unlock()
+		select {
+		case <-freed:
+		case <-ctx.Done():
+		case <-a.ctx.Done():
+		}
+		a.mu.Lock()
+		if ctx.Err() != nil {
+			a.dropAsyncUpdateLocked()
+			return false
+		}
 	}
 	if len(a.mu.pending) == 0 {
 		a.mu.idle = make(chan struct{})
@@ -308,6 +363,7 @@ func (d *DiskCache) releaseAsyncFileFinalizeReservation(diskPath string) {
 	a.mu.Lock()
 	delete(a.mu.pending, diskPath)
 	<-a.slots
+	a.wakeFreedLocked()
 	if len(a.mu.pending) == 0 {
 		close(a.mu.idle)
 	}
@@ -318,18 +374,20 @@ func (d *DiskCache) releaseAsyncFileFinalizeReservation(diskPath string) {
 func (d *DiskCache) scheduleReservedAsyncFileFinalize(
 	diskPath string,
 	file *os.File,
-	doneUpdate func() error,
+	owner *pathOwner,
+	target fillTarget,
 ) {
 	a := &d.async
 	a.startOnce.Do(func() {
-		go d.runAsyncUpdates()
+		d.startAsyncWorkers()
 	})
 
 	job := &diskCacheAsyncUpdate{
 		diskPath: diskPath,
 		finalize: &diskCacheAsyncFileFinalize{
-			file:       file,
-			doneUpdate: doneUpdate,
+			file:   file,
+			target: target,
+			owner:  owner,
 		},
 	}
 	select {
@@ -354,13 +412,53 @@ func (d *DiskCache) claimAsyncPublication() bool {
 	return !a.mu.closed
 }
 
+// finalizeQueuedFile publishes a file the async workers finalize. The file of an entry is
+// not published when the entry's object was deleted after the entry was read.
+func (d *DiskCache) finalizeQueuedFile(diskPath string, f *os.File, target fillTarget) error {
+	t, ok := target.(entryFillTarget)
+	if !ok {
+		return d.finalizeFileTo(d.async.ctx, diskPath, f, d.claimAsyncPublication, target)
+	}
+	var err error
+	published, _ := d.publishUnlessDeleted(t.filePath, IOEntry{readDeletes: t.readDeletes}, d.claimAsyncPublication, func(claim func() bool) (bool, error) {
+		err = d.finalizeFileTo(d.async.ctx, diskPath, f, claim, target)
+		return err == nil, err
+	})
+	if !published && errors.Is(err, context.Canceled) && d.async.ctx.Err() == nil {
+		// The entry's object was deleted after the entry was read.
+		return nil
+	}
+	return err
+}
+
+// wakeFreedLocked wakes the updates waiting for a slot or pending bytes.
+func (a *diskCacheAsyncState) wakeFreedLocked() {
+	a.mu.freed.notifyLocked()
+}
+
 func (a *diskCacheAsyncState) dropAsyncUpdateLocked() {
 	a.mu.dropped++
 	metric.FSDiskCacheAsyncUpdateDroppedCounter.Inc()
 }
 
+// startAsyncWorkers starts the workers that write asynchronous updates; done is closed
+// once all of them exit.
+func (d *DiskCache) startAsyncWorkers() {
+	var workers sync.WaitGroup
+	for range diskCacheAsyncWorkers {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			d.runAsyncUpdates()
+		}()
+	}
+	go func() {
+		workers.Wait()
+		close(d.async.done)
+	}()
+}
+
 func (d *DiskCache) runAsyncUpdates() {
-	defer close(d.async.done)
 	for {
 		select {
 		case <-d.async.ctx.Done():
@@ -370,29 +468,18 @@ func (d *DiskCache) runAsyncUpdates() {
 			if d.async.ctx.Err() == nil {
 				if job.finalize != nil {
 					job.finalize.attempted = true
-					job.finalize.err = d.finalizeFile(
-						d.async.ctx,
-						job.diskPath,
-						job.finalize.file,
-						d.claimAsyncPublication,
-					)
+					job.finalize.err = d.finalizeQueuedFile(job.diskPath, job.finalize.file, job.finalize.target)
 					d.evictForDiskFull(d.async.ctx, job.finalize.err)
 				} else {
-					written, _ := d.writeEntry(
-						d.async.ctx,
-						job.diskPath,
-						job.entry,
-						d.claimAsyncPublication,
-					)
+					written, _ := d.publishUnlessDeleted(job.filePath, job.entry, d.claimAsyncPublication, func(claim func() bool) (bool, error) {
+						return d.writeEntry(d.async.ctx, job.diskPath, job.entry, claim)
+					})
 					retainForCallbacks = written && len(job.callbacks) > 0
 				}
 			}
 			d.completeAsyncUpdate(job, retainForCallbacks)
 			if retainForCallbacks {
-				// The original admission slot and byte budget stay owned by this
-				// callback goroutine. Callbacks are therefore independent of the
-				// cache worker/Flush/Close wait graph, while blocked callbacks remain
-				// bounded by the same admission limits as cache updates.
+				// The update keeps its admission slot and bytes until its callbacks ran.
 				d.scheduleAsyncUpdateCallbacks(job)
 			}
 		}
@@ -411,7 +498,7 @@ func (d *DiskCache) completeAsyncUpdate(
 		if job.finalize != nil {
 			cleanupErr := errors.Join(
 				cleanupDiskCacheTempFile(job.finalize.file),
-				job.finalize.doneUpdate(),
+				job.finalize.owner.release(),
 			)
 			if job.finalize.attempted {
 				resultErr := job.finalize.err
@@ -426,6 +513,9 @@ func (d *DiskCache) completeAsyncUpdate(
 				_ = d.observeWriteResult(job.diskPath, cleanupErr)
 			}
 		}
+		if !retainForCallbacks && job.callbackTurn != nil {
+			d.endCallbackTurn(job.callbackTurn)
+		}
 		a := &d.async
 		a.mu.Lock()
 		delete(a.mu.pending, job.diskPath)
@@ -439,22 +529,71 @@ func (d *DiskCache) completeAsyncUpdate(
 	})
 }
 
+// scheduleAsyncUpdateCallbacks runs the callbacks of job once those of the updates
+// submitted before it ran.
 func (d *DiskCache) scheduleAsyncUpdateCallbacks(job *diskCacheAsyncUpdate) {
 	a := &d.async
 	a.callbackMu.Lock()
-	previous := a.callbackTail
-	done := make(chan struct{})
-	a.callbackTail = done
-	a.callbackMu.Unlock()
+	defer a.callbackMu.Unlock()
+	job.callbackTurn.ready = true
+	d.startCallbacksLocked()
+}
 
-	go func() {
-		defer close(done)
-		defer d.releaseAsyncUpdateResources(job)
-		<-previous
+// endCallbackTurn unlinks the turn of an update that ends without running its callbacks.
+func (d *DiskCache) endCallbackTurn(turn *asyncCallbackTurn) {
+	a := &d.async
+	a.callbackMu.Lock()
+	defer a.callbackMu.Unlock()
+	d.unlinkCallbackTurnLocked(turn)
+	d.startCallbacksLocked()
+}
+
+func (d *DiskCache) unlinkCallbackTurnLocked(turn *asyncCallbackTurn) {
+	a := &d.async
+	if turn.prev != nil {
+		turn.prev.next = turn.next
+	} else {
+		a.callbackHead = turn.next
+	}
+	if turn.next != nil {
+		turn.next.prev = turn.prev
+	} else {
+		a.callbackTail = turn.prev
+	}
+	turn.prev, turn.next = nil, nil
+}
+
+// startCallbacksLocked starts the runner of callbacks when none runs and the head is ready.
+func (d *DiskCache) startCallbacksLocked() {
+	a := &d.async
+	if a.callbackRunning || a.callbackHead == nil || !a.callbackHead.ready {
+		return
+	}
+	a.callbackRunning = true
+	go d.runAsyncCallbacks()
+}
+
+// runAsyncCallbacks runs the callbacks of the ready head turns, in submission order.
+func (d *DiskCache) runAsyncCallbacks() {
+	a := &d.async
+	for {
+		a.callbackMu.Lock()
+		turn := a.callbackHead
+		if turn == nil || !turn.ready {
+			a.callbackRunning = false
+			a.callbackMu.Unlock()
+			return
+		}
+		a.callbackMu.Unlock()
+		job := turn.job
 		for i, fn := range job.callbacks {
 			d.runAsyncUpdateCallback(job, i, fn)
 		}
-	}()
+		d.releaseAsyncUpdateResources(job)
+		a.callbackMu.Lock()
+		d.unlinkCallbackTurnLocked(turn)
+		a.callbackMu.Unlock()
+	}
 }
 
 // runAsyncUpdateCallback is the panic boundary for callbacks moved from the
@@ -499,6 +638,7 @@ func (d *DiskCache) releaseAsyncUpdateResourcesLocked(job *diskCacheAsyncUpdate)
 	job.resourceOnce.Do(func() {
 		d.async.mu.pendingBytes -= int64(len(job.entry.Data))
 		<-d.async.slots
+		d.async.wakeFreedLocked()
 		job.entry.Data = nil
 		job.callbacks = nil
 	})
