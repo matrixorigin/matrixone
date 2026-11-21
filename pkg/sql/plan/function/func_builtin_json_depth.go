@@ -85,7 +85,7 @@ func jsonDepthCheckPreparedInput(
 			continue
 		}
 
-		if input.GetIsBinaryStringAt(physicalRow) {
+		if isBinaryStringVector(input) {
 			return jsonDepthInvalidBinary(proc)
 		}
 		if !jsonDepthTypeSupported(*input.GetType()) {

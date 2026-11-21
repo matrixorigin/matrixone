@@ -15,8 +15,10 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,6 +37,7 @@ type gatedStorage struct {
 	release chan struct{}
 	opens   atomic.Int64
 	ranges  atomic.Int64
+	readers sync.WaitGroup
 }
 
 func (s *gatedStorage) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
@@ -99,24 +102,47 @@ func newDownloadContractFS(t *testing.T, maxExtraWait time.Duration) (*S3FS, *ga
 		default:
 			close(storage.release)
 		}
+		storage.readers.Wait()
 		fs.Close(ctx)
 	})
 	return fs, storage, data
 }
 
-func readAsync(fs *S3FS, offset, size int64) (*IOVector, chan error) {
-	vec := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: offset, Size: size}}}
-	done := make(chan error, 1)
-	go func() { done <- fs.Read(context.Background(), vec) }()
-	return vec, done
+type downloadContractRead struct {
+	data []byte
+	err  error
 }
 
-func requireReturns(t *testing.T, done chan error) {
+func (s *gatedStorage) readAsync(fs *S3FS, offset, size int64) <-chan downloadContractRead {
+	done := make(chan downloadContractRead, 1)
+	s.readers.Add(1)
+	go func() {
+		defer s.readers.Done()
+		vec := IOVector{FilePath: "object", Entries: []IOEntry{{Offset: offset, Size: size}}}
+		err := fs.Read(context.Background(), &vec)
+		result := downloadContractRead{err: err}
+		if err == nil {
+			// Give the test a copy and release the read buffer even if the
+			// test has already timed out and will never receive the result.
+			result.data = bytes.Clone(vec.Entries[0].Data)
+			vec.Release()
+		} else {
+			vec.ReleaseReadResultOnError()
+		}
+		done <- result
+	}()
+	return done
+}
+
+func requireReturns(t *testing.T, done <-chan downloadContractRead) []byte {
+	t.Helper()
 	select {
-	case err := <-done:
-		require.NoError(t, err)
+	case result := <-done:
+		require.NoError(t, result.err)
+		return result.data
 	case <-time.After(diskCacheLifecycleTestTimeout):
 		t.Fatal("read did not return")
+		return nil
 	}
 }
 
@@ -126,25 +152,23 @@ func requireReturns(t *testing.T, done chan error) {
 func TestDesignDownloadFetchedOnce(t *testing.T) {
 	fs, storage, data := newDownloadContractFS(t, time.Hour)
 
-	leader, done := readAsync(fs, 1024, 4)
-	requireReturns(t, done)
-	require.Equal(t, data[1024:1028], leader.Entries[0].Data, "the first reader returned before the download finished")
+	leader := requireReturns(t, storage.readAsync(fs, 1024, 4))
+	require.Equal(t, data[1024:1028], leader, "the first reader returned before the download finished")
 	diskPath := fs.diskCache.pathForFile("object")
 	require.NotNil(t, fs.diskCache.download(diskPath), "the download continues in the background")
 
-	written, done := readAsync(fs, 4096, 13)
-	requireReturns(t, done)
-	require.Equal(t, data[4096:4109], written.Entries[0].Data)
+	written := requireReturns(t, storage.readAsync(fs, 4096, 13))
+	require.Equal(t, data[4096:4109], written)
 
-	pending, done := readAsync(fs, 6<<20, 17)
+	done := storage.readAsync(fs, 6<<20, 17)
 	select {
-	case err := <-done:
-		t.Fatalf("a read of bytes not yet written returned before they were: %v", err)
+	case result := <-done:
+		t.Fatalf("a read of bytes not yet written returned before they were: %v", result.err)
 	case <-time.After(50 * time.Millisecond):
 	}
 	close(storage.release)
-	requireReturns(t, done)
-	require.Equal(t, data[6<<20:6<<20+17], pending.Entries[0].Data)
+	pending := requireReturns(t, done)
+	require.Equal(t, data[6<<20:6<<20+17], pending)
 
 	fs.FlushCache(context.Background())
 	require.Equal(t, int64(1), storage.opens.Load(), "the object was fetched from storage once")
@@ -161,13 +185,11 @@ func TestDesignDownloadFarBehindReadsRange(t *testing.T) {
 	downloadsRate(t, 1<<20)
 	rangeCosts(t, 0.001, 1<<30)
 
-	_, done := readAsync(fs, 1024, 4)
-	requireReturns(t, done)
+	requireReturns(t, storage.readAsync(fs, 1024, 4))
 	ranges := storage.ranges.Load()
 
-	far, done := readAsync(fs, 6<<20, 17)
-	requireReturns(t, done)
-	require.Equal(t, data[6<<20:6<<20+17], far.Entries[0].Data)
+	far := requireReturns(t, storage.readAsync(fs, 6<<20, 17))
+	require.Equal(t, data[6<<20:6<<20+17], far)
 	require.Greater(t, storage.ranges.Load(), ranges, "the read fetched its range")
 	require.NotNil(t, fs.diskCache.download(fs.diskCache.pathForFile("object")), "without waiting for the stalled download")
 }

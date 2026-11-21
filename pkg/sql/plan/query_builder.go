@@ -4504,6 +4504,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 		builder.removeUnobservedCountSorts(rootID)
+		if err = builder.distributeTextDomainInQuery(); err != nil {
+			return nil, err
+		}
 		// Safe derived aliases now expose the existing singleton proof shape.
 		if err = builder.rewriteNumericDomainFilters(rootID, plan.Node_JOIN); err != nil {
 			return nil, err

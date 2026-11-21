@@ -59,21 +59,26 @@ func TestAnyValueBatchMergeReturnsSetRawBytesAtError(t *testing.T) {
 }
 
 // TestAnyValueIntermediateDecodesLegacyStringStateTrailer checks wire
-// compatibility with older writers that emitted the string-state trailer,
-// which packs a string source above the runtime domain in each row byte. The
-// source bits must be validated and dropped; the domains must be restored.
+// compatibility with older writers that emitted a per-row string trailer
+// (the domain-only trailer, or the retired string-state trailer that packs a
+// string source above the domain in each row byte) before the closing magic.
+// Current writers emit no trailer; readers must validate and drop it.
 func TestAnyValueIntermediateDecodesLegacyStringStateTrailer(t *testing.T) {
 	domains := []types.RuntimeStringDomain{
 		types.RuntimeStringBinary,
 		types.RuntimeStringText,
 		types.RuntimeStringInherit,
 	}
+	legacySources := []types.StringSource{
+		types.StringSourceCOMStmt,
+		types.StringSourceLiteral,
+		types.StringSourceSQLPrepare,
+	}
 	for _, saveChunk := range []bool{false, true} {
 		mp := mpool.MustNewZero()
 		input := vector.NewVec(types.T_text.ToType())
-		for row, domain := range domains {
+		for range domains {
 			require.NoError(t, vector.AppendBytes(input, []byte("value"), false, mp))
-			require.NoError(t, input.SetRuntimeStringDomainAtWithMP(row, domain, mp))
 		}
 		source := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
 		require.NoError(t, source.GroupGrow(len(domains)))
@@ -85,102 +90,96 @@ func TestAnyValueIntermediateDecodesLegacyStringStateTrailer(t *testing.T) {
 			require.NoError(t, source.SaveIntermediateResult(3, [][]uint8{{1, 1, 1}}, &wire))
 		}
 
-		// Current writers emit the domain-only trailer.
-		var marker bytes.Buffer
+		var marker, stateMarker, magic bytes.Buffer
 		require.NoError(t, types.WriteUint64(&marker, aggStringDomainTrailerMagic))
-		at := bytes.LastIndex(wire.Bytes(), marker.Bytes())
-		require.GreaterOrEqual(t, at, 0)
-		var stateMarker bytes.Buffer
 		require.NoError(t, types.WriteUint64(&stateMarker, aggStringStateTrailerMagic))
+		require.NoError(t, types.WriteUint64(&magic, magicNumber))
+		require.Equal(t, -1, bytes.Index(wire.Bytes(), marker.Bytes()),
+			"writers must not emit the string-domain trailer")
 		require.Equal(t, -1, bytes.Index(wire.Bytes(), stateMarker.Bytes()),
 			"writers must not emit the retired string-state trailer")
+		require.True(t, bytes.HasSuffix(wire.Bytes(), magic.Bytes()))
+		body := wire.Bytes()[:wire.Len()-magic.Len()]
 
-		// Rewrite it into the legacy string-state form carrying sources.
-		legacy := append([]byte(nil), wire.Bytes()...)
-		copy(legacy[at:], stateMarker.Bytes())
-		rows := at + len(marker.Bytes()) + 4
-		legacySources := []types.StringSource{
-			types.StringSourceCOMStmt,
-			types.StringSourceLiteral,
-			types.StringSourceSQLPrepare,
+		legacyWith := func(trailerMagic []byte, rowBytes []byte) []byte {
+			var out bytes.Buffer
+			out.Write(body)
+			out.Write(trailerMagic)
+			require.NoError(t, types.WriteInt32(&out, int32(len(rowBytes))))
+			out.Write(rowBytes)
+			out.Write(magic.Bytes())
+			return out.Bytes()
 		}
-		for row := range domains {
-			require.Equal(t, byte(domains[row]), legacy[rows+row])
-			legacy[rows+row] |= byte(legacySources[row]) << 2
+		domainRows := make([]byte, len(domains))
+		stateRows := make([]byte, len(domains))
+		for row, domain := range domains {
+			domainRows[row] = byte(domain)
+			stateRows[row] = byte(domain) | byte(legacySources[row])<<2
 		}
-		invalid := append([]byte(nil), legacy...)
-		invalid[rows] = byte(domains[0]) | 0xfc // source=63
+		invalidRows := append([]byte(nil), stateRows...)
+		invalidRows[0] = byte(domains[0]) | 0xfc // source=63
 
 		restored := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
 		require.ErrorContains(t,
-			restored.UnmarshalFromReader(bytes.NewReader(invalid), mp),
+			restored.UnmarshalFromReader(bytes.NewReader(legacyWith(stateMarker.Bytes(), invalidRows)), mp),
 			"invalid aggregate binary provenance")
-		require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(legacy), mp))
-		results, err := restored.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-		for row, domain := range domains {
-			require.Equal(t, []byte("value"), results[0].GetBytesAt(row))
-			require.Equal(t, domain, results[0].GetRuntimeStringDomainAt(row), "row %d", row)
-		}
-
-		// Re-encoding the decoded state yields the source-free current form.
-		reencoder := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
-		require.NoError(t, reencoder.UnmarshalFromReader(bytes.NewReader(legacy), mp))
-		var reencoded bytes.Buffer
-		if saveChunk {
-			require.NoError(t, reencoder.SaveIntermediateResultOfChunk(0, &reencoded))
-		} else {
-			require.NoError(t, reencoder.SaveIntermediateResult(3, [][]uint8{{1, 1, 1}}, &reencoded))
-		}
-		require.Equal(t, wire.Bytes(), reencoded.Bytes())
-
-		reencoder.Free()
-		results[0].Free(mp)
 		restored.Free()
+
+		for name, legacy := range map[string][]byte{
+			"domain": legacyWith(marker.Bytes(), domainRows),
+			"state":  legacyWith(stateMarker.Bytes(), stateRows),
+		} {
+			restored := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+			require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(legacy), mp), name)
+			results, err := restored.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			for row := range domains {
+				require.Equal(t, []byte("value"), results[0].GetBytesAt(row), "%s row %d", name, row)
+			}
+
+			// Re-encoding the decoded state yields the trailer-free current form.
+			reencoder := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+			require.NoError(t, reencoder.UnmarshalFromReader(bytes.NewReader(legacy), mp))
+			var reencoded bytes.Buffer
+			if saveChunk {
+				require.NoError(t, reencoder.SaveIntermediateResultOfChunk(0, &reencoded))
+			} else {
+				require.NoError(t, reencoder.SaveIntermediateResult(3, [][]uint8{{1, 1, 1}}, &reencoded))
+			}
+			require.Equal(t, wire.Bytes(), reencoded.Bytes(), name)
+			reencoder.Free()
+			results[0].Free(mp)
+			restored.Free()
+		}
+
 		source.Free()
 		input.Free(mp)
 		require.Zero(t, mp.CurrNB(), "saveChunk=%v", saveChunk)
 	}
 }
 
-func TestAnyValueIntermediateRoundTripPreservesStringSemantics(t *testing.T) {
+func TestAnyValueIntermediateRoundTripPreservesStringValue(t *testing.T) {
 	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_text.ToType())
+	typ := types.T_varbinary.ToType()
+	input := vector.NewVec(typ)
 	require.NoError(t, vector.AppendBytes(input, []byte("binary"), false, mp))
-	input.SetIsBinaryString(true)
-	source := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+	source := makeAnyValueExec(mp, AggIdOfAny, typ)
 	require.NoError(t, source.GroupGrow(1))
 	require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
 	var wire bytes.Buffer
 	require.NoError(t, source.SaveIntermediateResultOfChunk(0, &wire))
 
-	restored := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+	restored := makeAnyValueExec(mp, AggIdOfAny, typ)
 	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
 	results, err := restored.Flush()
 	require.NoError(t, err)
-	require.True(t, results[0].GetBinaryStringMetadataAt(0))
+	require.Equal(t, typ.Oid, results[0].GetType().Oid)
+	require.Equal(t, "binary", results[0].GetStringAt(0))
 
 	results[0].Free(mp)
 	restored.Free()
 	source.Free()
-	input.Free(mp)
-	require.Zero(t, mp.CurrNB())
-}
-
-func TestAnyValuePreservesExplicitTextFromNullSlot(t *testing.T) {
-	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_varbinary.ToType())
-	require.NoError(t, vector.AppendBytes(input, []byte("text"), false, mp))
-	require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
-	exec := makeAnyValueExec(mp, AggIdOfAny, types.T_varbinary.ToType())
-	require.NoError(t, exec.GroupGrow(1))
-	require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
-	results, err := exec.Flush()
-	require.NoError(t, err)
-	require.Equal(t, types.RuntimeStringText, results[0].GetRuntimeStringDomainAt(0))
-	results[0].Free(mp)
-	exec.Free()
 	input.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }

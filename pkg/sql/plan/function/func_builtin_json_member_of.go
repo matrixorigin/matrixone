@@ -58,7 +58,7 @@ func jsonMemberOfRightIsBinary(parameter *vector.Vector, row int) bool {
 	if jsonMemberOfRightHasBinaryDomain(typ) {
 		return true
 	}
-	return parameter.GetIsBinaryStringAt(row)
+	return isBinaryStringVector(parameter)
 }
 
 // jsonMemberOfRightHasInvalidRuntimeType preserves the SQL domain of a direct
@@ -169,7 +169,7 @@ func (operand *jsonMemberOfValueOperand) documentAt(row uint64, proc *process.Pr
 			ctx,
 			operand.parameter.GetBytesAt(int(row)),
 			operand.parameter.GetType().Oid,
-			operand.parameter.GetIsBinaryStringAt(int(row)),
+			isBinaryStringVector(operand.parameter),
 			jsonSessionProtocolVersion(proc),
 		)
 	} else if operand.parameter.GetType().Oid == types.T_year {

@@ -1261,37 +1261,6 @@ func binaryProtocolPrepareParamIsBinaryString(mysqlType defines.MysqlType) bool 
 	}
 }
 
-func binaryProtocolPrepareParamBinaryStringMetadata(
-	paramTypes []byte,
-	paramCount int,
-	reusable []bool,
-) []bool {
-	if paramCount <= 0 {
-		return nil
-	}
-	hasBinaryString := false
-	for i := 0; i < paramCount && i*2 < len(paramTypes); i++ {
-		if binaryProtocolPrepareParamIsBinaryString(defines.MysqlType(paramTypes[i*2])) {
-			hasBinaryString = true
-			break
-		}
-	}
-	if !hasBinaryString {
-		return nil
-	}
-	if cap(reusable) < paramCount {
-		reusable = make([]bool, paramCount)
-	} else {
-		reusable = reusable[:paramCount]
-		clear(reusable)
-	}
-	for i := 0; i < paramCount && i*2 < len(paramTypes); i++ {
-		reusable[i] = binaryProtocolPrepareParamIsBinaryString(
-			defines.MysqlType(paramTypes[i*2]))
-	}
-	return reusable
-}
-
 // preparedFixedIntegerParamPositions returns static execute-time metadata for
 // one prepared-plan generation. LIMIT/OFFSET and LAG/LEAD offsets have the
 // same fixed unsigned-integer contract, so retain one sorted position list for
@@ -1838,16 +1807,7 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 			prepareStmt.paramKinds[i] = kind
 		}
-		binaryStringMetadata := binaryProtocolPrepareParamBinaryStringMetadata(
-			prepareStmt.ParamTypes, paramCount, prepareStmt.paramBinaryStrings)
-		if binaryStringMetadata != nil {
-			prepareStmt.paramBinaryStrings = binaryStringMetadata
-		}
-		if binaryStringMetadata != nil {
-			cwft.proc.SetPrepareParamsWithMetadata(prepareStmt.params, nil, binaryStringMetadata)
-		} else {
-			cwft.proc.SetPrepareParams(prepareStmt.params)
-		}
+		cwft.proc.SetPrepareParams(prepareStmt.params)
 		cwft.proc.SetPrepareParamsStringSource(types.StringSourceCOMStmt)
 		cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes, prepareStmt.paramKinds,
 			prepareStmt.inetNtoaParamPositions, prepareStmt.temporalRuntimeParamPositions)
@@ -1867,13 +1827,13 @@ func initExecuteStmtParamWithResolverInSession(
 				showPublicationPatternPositions = []int32{0}
 			}
 		}
-		params, paramVals, paramIsBin, paramBinaryString, _, _, err := buildExecuteUserParamsWithMemberOfPositions(
+		params, paramVals, paramIsBin, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(
 			cwft.proc, executionSes.GetTxnCompileCtx().ResolveVariablePrepareParamKind, execPlan.Args, prepareStmt.jsonComparisonParamPositions,
 			prepareStmt.jsonMemberOfParamPositions, prepareStmt.inetNtoaParamPositions, showPublicationPatternPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		cwft.proc.SetOwnedPrepareParamsWithMetadata(params, paramIsBin, paramBinaryString)
+		cwft.proc.SetOwnedPrepareParamsWithIsBin(params, paramIsBin)
 		cwft.proc.SetPrepareParamsStringSource(types.StringSourceSQLPrepare)
 		cwft.paramVals = paramVals
 		if !sourceBindingQuery {
@@ -2358,8 +2318,9 @@ func preparedParamValues(proc *process.Process, paramTypes []byte, kinds []types
 	values := make([]any, params.Length())
 	for i := range values {
 		paramValue := plan2.ParamValue{
-			IsBin:               proc.GetPrepareParamIsBin(i),
-			IsBinaryString:      proc.GetPrepareParamIsBinaryString(i),
+			IsBin: proc.GetPrepareParamIsBin(i),
+			IsBinaryString: i*2 < len(paramTypes) &&
+				binaryProtocolPrepareParamIsBinaryString(defines.MysqlType(paramTypes[i*2])),
 			IsBinaryProtocol:    true,
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
@@ -2691,7 +2652,6 @@ func buildExecuteUserParamsWithMemberOfPositions(
 	paramIsBin = make([]bool, len(args))
 	paramBinaryString = make([]bool, len(args))
 	paramDomains := make([]types.RuntimeStringDomain, len(args))
-	effectiveParamDomains := make([]types.RuntimeStringDomain, len(args))
 	paramKinds = make([]types.StringConversionKind, len(args))
 	var inetNtoaPositions, showPublicationPatternPositions []int32
 	if len(inetNtoaPositionsArg) > 0 {
@@ -2736,14 +2696,6 @@ func buildExecuteUserParamsWithMemberOfPositions(
 				return
 			}
 			paramBinaryString[i] = paramDomains[i] == types.RuntimeStringBinary
-		}
-		effectiveParamDomains[i] = paramDomains[i]
-		if effectiveParamDomains[i] == types.RuntimeStringInherit &&
-			types.StaticStringDomain(executeArgumentSourceType(sourceType)) == types.StringDomainBinary {
-			// SQL EXECUTE transports all values through a text-shaped vector. Carry
-			// the assignment-time binary domain on that vector so a remote CN or a
-			// scalar-subquery lineage source does not reinterpret the bytes as text.
-			effectiveParamDomains[i] = types.RuntimeStringBinary
 		}
 		if resolveKind != nil {
 			paramKinds[i], err = resolveKind(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
@@ -2829,9 +2781,6 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			paramValue.HasSourceType = true
 		}
 		paramVals[i] = paramValue
-	}
-	if err = params.SetRuntimeStringDomainsWithMP(effectiveParamDomains, proc.Mp()); err != nil {
-		return
 	}
 	return
 }

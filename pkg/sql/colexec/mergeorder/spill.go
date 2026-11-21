@@ -168,14 +168,14 @@ func writeSpillUint64(writer io.Writer, value uint64) error {
 }
 
 func appendSpillPayload(writer io.Writer, bat *batch.Batch) (int64, error) {
-	size, err := bat.MarshalBinaryWithMetadataSize()
+	size, err := bat.MarshalBinarySize()
 	if err != nil {
 		return 0, err
 	}
 	if err = writeSpillInt64(writer, int64(size)); err != nil {
 		return 0, err
 	}
-	if err = bat.MarshalBinaryWithMetadataTo(writer); err != nil {
+	if err = bat.MarshalBinaryTo(writer); err != nil {
 		return 0, err
 	}
 	return int64(size) + 8, nil

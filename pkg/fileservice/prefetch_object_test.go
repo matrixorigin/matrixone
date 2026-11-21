@@ -149,11 +149,10 @@ func TestPrefetchRangeDoesNotJoinUncachedObject(t *testing.T) {
 // reads its range and returns its bytes.
 func TestDeleteDuringWholeObjectReadReadsRange(t *testing.T) {
 	fs, storage, data := newDownloadContractFS(t, time.Hour)
-	vec, done := readAsync(fs, 6<<20, 17)
+	done := storage.readAsync(fs, 6<<20, 17)
 	require.Eventually(t, func() bool { return fs.diskCache.download(fs.diskCache.pathForFile("object")) != nil },
 		10*time.Second, time.Millisecond)
 	require.NoError(t, fs.diskCache.DeletePaths(context.Background(), []string{"object"}))
-	requireReturns(t, done)
-	require.Equal(t, data[6<<20:6<<20+17], vec.Entries[0].Data)
+	require.Equal(t, data[6<<20:6<<20+17], requireReturns(t, done))
 	require.Positive(t, storage.ranges.Load(), "the read fetched its range")
 }

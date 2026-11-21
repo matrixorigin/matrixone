@@ -48,7 +48,6 @@ func TestUnionInlineSelection(t *testing.T) {
 					require.Empty(t, src.area)
 				}
 				src.GetGrouping().Add(2)
-				src.SetIsBinaryString(true)
 				// Consecutive runs, gaps, repetition and reversal share one
 				// append. The expected rows do not depend on the copy helper.
 				rows := []int64{1, 2, 3, 6, 6, 4, 0, 1, 2}
@@ -76,7 +75,6 @@ func TestUnionInlineSelection(t *testing.T) {
 						require.Equal(t, row == 2, dst.GetGrouping().Contains(uint64(i+1)))
 						if !isNull {
 							require.Equal(t, values[row], dst.GetStringAt(i+1))
-							require.True(t, dst.GetIsBinaryStringAt(i+1))
 							if emptyNonInline && row == 1 {
 								// The ordinary copy rebases even an empty non-inline
 								// payload after the destination's existing area.
@@ -306,25 +304,6 @@ func TestUnionBatchVarlenWindowAliasForcedGrowth(t *testing.T) {
 	assertUnionBatchAliasResult(t, vec, values, isNull, oldLength, offset, cnt)
 
 	window.Free(mp)
-	vec.Free(mp)
-	require.Zero(t, mp.CurrNB())
-}
-
-func TestUnionBatchVarlenSelfAliasSparseFlagsPreservesMetadata(t *testing.T) {
-	mp := mpool.MustNewZero()
-	vec, values, isNull := newForcedGrowthAliasVector(t, mp)
-	selected := vec.Length() - 1
-	require.False(t, isNull[selected])
-	require.NoError(t, vec.SetIsBinaryStringAt(selected, true, mp))
-	flags := make([]uint8, vec.Length())
-	flags[selected] = 1
-	oldLength := vec.Length()
-
-	require.NoError(t, vec.UnionBatch(vec, 0, 1, flags, mp))
-	require.Equal(t, oldLength+1, vec.Length())
-	require.Equal(t, values[selected], string(vec.GetBytesAt(oldLength)))
-	require.True(t, vec.GetBinaryStringMetadataAt(oldLength))
-
 	vec.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
@@ -597,12 +576,10 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 				require.Equal(t, 4, destination.Length())
 				require.Equal(t, int64(99), GetFixedAtNoTypeCheck[int64](destination, 0))
 				require.False(t, destination.IsNull(0))
-				require.False(t, destination.GetIsBinaryStringAt(0))
 				for row := 1; row < 4; row++ {
 					isNull := test.name == "all" || test.name == "sparse" && row == 1
 					require.Equal(t, isNull, destination.IsNull(uint64(row)))
 					require.Equal(t, row == 2, destination.GetGrouping().Contains(uint64(row)))
-					require.False(t, destination.GetIsBinaryStringAt(row))
 					if !isNull {
 						require.Equal(t, int64(11+row), GetFixedAtNoTypeCheck[int64](destination, row))
 					} else {

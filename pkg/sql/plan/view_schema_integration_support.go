@@ -18,8 +18,6 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -38,11 +36,11 @@ func (r *ViewSchemaRequest) BuildPreparedForIntegrationTest(stmt tree.Statement,
 		params := parent.GetPrepareParams()
 		if params != nil {
 			n := params.Length()
-			isBin, binary := make([]bool, n), make([]bool, n)
+			isBin := make([]bool, n)
 			for i := range n {
-				isBin[i], binary[i] = parent.GetPrepareParamIsBin(i), parent.GetPrepareParamIsBinaryString(i)
+				isBin[i] = parent.GetPrepareParamIsBin(i)
 			}
-			proc.SetPrepareParamsWithMetadata(params, isBin, binary)
+			proc.SetPrepareParamsWithIsBin(params, isBin)
 			defer proc.SetPrepareParams(nil)
 		}
 		var buildErr error

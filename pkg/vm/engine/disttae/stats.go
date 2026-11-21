@@ -1655,8 +1655,8 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	}
 
 	// Get table definition
-	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
-	if table == nil || table.TableDef == nil {
+	tableDef := gs.engine.GetLatestCatalogCache().ReadPlanTableDefByID(key.AccId, key.DatabaseID, key.TableID)
+	if tableDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("table not found")
 	}
 
@@ -1682,7 +1682,7 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := &updateStatsRequest{
 		statsInfo:       stats,
-		tableDef:        table.TableDef,
+		tableDef:        tableDef,
 		partitionState:  ps,
 		fs:              gs.engine.fs,
 		ts:              types.TimestampToTS(now),
@@ -1707,7 +1707,7 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	// Validate the observation against the schema snapshot that owned the
 	// collection. Publication below validates that same version again while
 	// holding the catalog change lock through the cache swap.
-	if err := applyStatsRefreshOptions(stats, table.TableDef, options); err != nil {
+	if err := applyStatsRefreshOptions(stats, tableDef, options); err != nil {
 		return nil, err
 	}
 
@@ -1781,9 +1781,8 @@ func (gs *GlobalStats) publishAnalyzedStats(
 			"manual statistics publication crossed subscription boundary for table %d", key.TableID)
 	}
 
-	table := gs.engine.GetLatestCatalogCache().GetTableById(
-		key.AccId, key.DatabaseID, key.TableID)
-	if table == nil || table.TableDef == nil {
+	tableDef := gs.engine.GetLatestCatalogCache().ReadPlanTableDefByID(key.AccId, key.DatabaseID, key.TableID)
+	if tableDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("table not found")
 	}
 	metadata := plan2.NewStatsInfo()
@@ -1794,7 +1793,7 @@ func (gs *GlobalStats) publishAnalyzedStats(
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := &updateStatsRequest{
 		statsInfo:       metadata,
-		tableDef:        table.TableDef,
+		tableDef:        tableDef,
 		partitionState:  ps,
 		fs:              gs.engine.fs,
 		ts:              types.TimestampToTS(now),
@@ -2121,9 +2120,8 @@ func (gs *GlobalStats) publishStatsForGenerationAtTableVersion(
 }
 
 func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay.PartitionState, key pb.StatsInfoKey, stats *pb.StatsInfo) (bool, float64) {
-	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
-	// table or its definition is nil, means that the table is created but not committed yet.
-	if table == nil || table.TableDef == nil {
+	tableDef := gs.engine.GetLatestCatalogCache().ReadPlanTableDefByID(key.AccId, key.DatabaseID, key.TableID)
+	if tableDef == nil {
 		logutil.Errorf("cannot get table by ID %v", key)
 		return false, 0
 	}
@@ -2143,7 +2141,7 @@ func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay
 	// the time used to init stats info is not need to be too precise.
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := newUpdateStatsRequest(
-		table.TableDef,
+		tableDef,
 		ps,
 		gs.engine.fs,
 		types.TimestampToTS(now),
@@ -2539,11 +2537,11 @@ func CollectAndCalculateStats(ctx context.Context, req *updateStatsRequest, exec
 			}
 		}
 	}
-	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
-	info := plan2.NewTableStatsInfo(lenCols)
 	if req.approxObjectNum == 0 {
 		return 1.0, nil
 	}
+	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
+	info := plan2.NewTableStatsInfo(lenCols)
 	info.ApproxObjectNumber = req.approxObjectNum
 	baseTableDef := req.tableDef
 

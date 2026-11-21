@@ -57,7 +57,7 @@ func evalIssue28912PreparedProject(
 	observed := issue28912ObservedResult{
 		isNull: result.GetNulls().Contains(0),
 		typ:    *result.GetType(),
-		binary: result.GetIsBinaryStringAt(0),
+		binary: types.StaticStringDomain(*result.GetType()) == types.StringDomainBinary,
 	}
 	if !observed.isNull {
 		observed.value = result.GetStringAt(0)

@@ -127,7 +127,9 @@ func TestHexSliceOfConditionalBlobMetadata(t *testing.T) {
 		t.Run(selector, func(t *testing.T) {
 			selected, err := BindFuncExprImplByPlanExpr(ctx, selector, []*planpb.Expr{condition, binary, coalesced})
 			require.NoError(t, err)
-			require.Equal(t, int32(types.T_blob), selected.Typ.Id)
+			require.Equal(t, int32(types.T_varbinary), selected.Typ.Id)
+			// COALESCE over a binary arm is statically VARBINARY; the possible-domain
+			// analysis still conservatively reports its text arm.
 			require.Equal(t, possibleStringDomainText|possibleStringDomainBinary, possibleStringDomainsForExpr(selected))
 			for _, name := range []string{"left", "right", "substring"} {
 				args := []*planpb.Expr{selected, makePlan2Int64ConstExprWithType(1)}
@@ -136,13 +138,14 @@ func TestHexSliceOfConditionalBlobMetadata(t *testing.T) {
 				}
 				slice, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 				require.NoError(t, err)
-				require.Equal(t, int32(types.T_blob), slice.Typ.Id)
+				require.Equal(t, int32(types.T_varbinary), slice.Typ.Id)
 				result, err := BindFuncExprImplByPlanExpr(ctx, "hex", []*planpb.Expr{slice})
 				require.NoError(t, err)
-				// The low-level binder has not consumed a SQL declaration boundary:
-				// the selected value can still be a multibyte text row.
-				require.Equal(t, int32(types.T_text), result.Typ.Id)
-				require.Equal(t, int32(0), result.Typ.Width)
+				// The slice is statically VARBINARY(16), so its hex result is
+				// bounded; the conservative text|binary domain analysis sizes it
+				// for 16 four-byte characters.
+				require.Equal(t, int32(types.T_varchar), result.Typ.Id)
+				require.Equal(t, int32(128), result.Typ.Width)
 			}
 
 			// SQL binding can consume a binary declaration with an explicit
@@ -157,7 +160,7 @@ func TestHexSliceOfConditionalBlobMetadata(t *testing.T) {
 				}
 				slice, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 				require.NoError(t, err)
-				require.Equal(t, int32(types.T_blob), slice.Typ.Id)
+				require.Equal(t, int32(types.T_varbinary), slice.Typ.Id)
 				result, err := BindFuncExprImplByPlanExpr(ctx, "hex", []*planpb.Expr{slice})
 				require.NoError(t, err)
 				require.Equal(t, int32(types.T_varchar), result.Typ.Id)

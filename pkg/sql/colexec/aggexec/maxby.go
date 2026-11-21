@@ -122,9 +122,6 @@ func (exec *maxByExec) fillRow(
 		candidateWins(vectors, rows, state.vecs, int(y), exec.argTypes) {
 		return exec.copyWinner(x, state.vecs, int(y), vectors, rows)
 	}
-	if candidateEquals(vectors, rows, state.vecs, int(y), exec.argTypes) {
-		return mergeEqualRuntimeStringDomain(state.vecs[0], int(y), vectors[0], rows[0], exec.mp)
-	}
 	return nil
 }
 
@@ -156,10 +153,6 @@ func (exec *maxByExec) BatchMerge(next AggFuncExec, offset int, groups []uint64)
 			if err := exec.copyWinner(x1, current, int(y1), candidate, rows); err != nil {
 				return err
 			}
-		} else if candidateEquals(candidate, rows, current, int(y1), exec.argTypes) {
-			if err := mergeEqualRuntimeStringDomain(current[0], int(y1), candidate[0], rows[0], exec.mp); err != nil {
-				return err
-			}
 		}
 	}
 	exec.compactBatchGroups(groups)
@@ -177,12 +170,6 @@ func candidateWins(candidate []*vector.Vector, candidateRows [3]int, current []*
 	// final deterministic fallback so partial aggregation merge order cannot
 	// change the result when it is not.
 	return compareNullableRaw(candidate[0], candidateRows[0], current[0], currentRow) > 0
-}
-
-func candidateEquals(candidate []*vector.Vector, candidateRows [3]int, current []*vector.Vector, currentRow int, typs []types.Type) bool {
-	return compareVectorValue(candidate[1], candidateRows[1], current[1], currentRow, typs[1]) == 0 &&
-		compareNullableVectorValue(candidate[2], candidateRows[2], current[2], currentRow, typs[2]) == 0 &&
-		compareNullableRaw(candidate[0], candidateRows[0], current[0], currentRow) == 0
 }
 
 func compareNullableVectorValue(a *vector.Vector, ai int, b *vector.Vector, bi int, typ types.Type) int {

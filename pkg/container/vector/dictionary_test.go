@@ -258,7 +258,7 @@ func TestLegacyClassDecodeNormalization(t *testing.T) {
 	}
 }
 
-func TestDictionaryStringsAndProvenance(t *testing.T) {
+func TestDictionaryStrings(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	source := NewVec(types.T_varchar.ToType())
@@ -267,7 +267,6 @@ func TestDictionaryStringsAndProvenance(t *testing.T) {
 	for row, value := range values {
 		require.NoError(t, AppendBytes(source, []byte(value), row == 2, mp))
 	}
-	require.NoError(t, source.SetIsBinaryStringAt(1, true, mp))
 	base, err := FreezeVector(source, mp, nil)
 	require.NoError(t, err)
 	t.Cleanup(base.Release)
@@ -277,8 +276,6 @@ func TestDictionaryStringsAndProvenance(t *testing.T) {
 	dict, err := NewDictionaryVector(base, rows, mp, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { dict.Free(mp) })
-	require.True(t, dict.GetIsBinaryStringAt(0))
-	require.False(t, dict.GetIsBinaryStringAt(1))
 	view := ResolveVarlenaReadView(dict)
 	require.Equal(t, values[1], string(view.Values[view.Selection[0]].GetByteSlice(view.Area)))
 	require.NoError(t, source.EnsureWritable(mp))
@@ -313,7 +310,6 @@ func TestDictionaryStringsAndProvenance(t *testing.T) {
 					if logical != 3 {
 						require.Equal(t, value, target.GetStringAt(row))
 					}
-					require.Equal(t, logical == 0 || logical == 2, target.GetIsBinaryStringAt(row))
 				}
 			}
 		}()
@@ -323,7 +319,6 @@ func TestDictionaryStringsAndProvenance(t *testing.T) {
 	require.Equal(t, values[0], dict.GetStringAt(1))
 	require.Equal(t, values[1], dict.GetStringAt(2))
 	require.True(t, dict.IsNull(3))
-	require.True(t, dict.GetIsBinaryStringAt(2))
 	require.Equal(t, len(values[1])*2, len(dict.GetArea()), "only selected non-inline payload is copied")
 }
 
