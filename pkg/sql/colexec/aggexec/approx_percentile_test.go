@@ -1925,3 +1925,52 @@ func TestQuantileSketchMergeEmptyParityLevelIntoEmptyDestination(t *testing.T) {
 	require.Equal(t, src.count, dst.count)
 	require.True(t, dst.hasValue)
 }
+
+func TestApproxPercentileExec_Decimal256MergeRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	typ := types.New(types.T_decimal256, 48, 1)
+	makeExec := func() AggFuncExec {
+		t.Helper()
+		exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, typ)
+		require.NoError(t, err)
+		t.Cleanup(exec.Free)
+		return exec
+	}
+	fill := func(exec AggFuncExec, values ...string) {
+		t.Helper()
+		require.NoError(t, exec.GroupGrow(3))
+		require.NoError(t, exec.SetExtraInformation([]byte("0.5"), 0))
+		vec := vector.NewVec(typ)
+		defer vec.Free(mp)
+		for _, value := range values {
+			decimal, err := types.ParseDecimal256(value, typ.Width, typ.Scale)
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendFixed(vec, decimal, false, mp))
+		}
+		require.NoError(t, vector.AppendFixed(vec, types.Decimal256{}, true, mp))
+		require.NoError(t, exec.BatchFill(0, []uint64{1, 2, 3}, []*vector.Vector{vec}))
+	}
+
+	left, right := makeExec(), makeExec()
+	fill(left, "1234567890123456789012345678901234567890.1", "-1234567890123456789012345678901234567890.1")
+	fill(right, "1234567890123456789012345678901234567890.2", "-1234567890123456789012345678901234567890.2")
+	var buf bytes.Buffer
+	require.NoError(t, right.SaveIntermediateResult(3, [][]uint8{{1, 1, 1}}, &buf))
+	restored := makeExec()
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
+	require.NoError(t, restored.SetExtraInformation([]byte("0.5"), 0))
+	require.NoError(t, left.BatchMerge(restored, 0, []uint64{1, 2, 3}))
+
+	result, err := left.Flush()
+	require.NoError(t, err)
+	for _, vec := range result {
+		t.Cleanup(func() { vec.Free(mp) })
+	}
+	require.Len(t, result, 1)
+	require.Equal(t, typ, *result[0].GetType())
+	values := vector.MustFixedColNoTypeCheck[types.Decimal256](result[0])
+	require.Equal(t, "1234567890123456789012345678901234567890.2", values[0].Format(typ.Scale))
+	require.Equal(t, "-1234567890123456789012345678901234567890.2", values[1].Format(typ.Scale))
+	require.True(t, result[0].IsNull(uint64(2)))
+}

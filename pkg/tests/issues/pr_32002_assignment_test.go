@@ -73,6 +73,38 @@ func TestPR32002ReviewBoundaries(t *testing.T) {
 			return codes
 		}
 
+		exec("create table percentile_inputs (g int, v decimal(38,0))")
+		exec("insert into percentile_inputs values (1,1),(1,2),(2,2),(2,3),(3,NULL)")
+		const grouped = "select g,median(v) m from percentile_inputs group by g"
+		exec("create view percentile_medians as " + grouped)
+		for _, query := range []string{
+			"select approx_percentile(m, 0.5) from (" + grouped + ") t",
+			"select approx_percentile(m, 0.5) from percentile_medians",
+		} {
+			var value string
+			require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&value), query)
+			require.Equal(t, "2.0", value)
+		}
+
+		for _, tc := range []struct {
+			typ, value, warning string
+			max                 int
+		}{
+			{"tinyint", "'300'", "Out of range value for TINYINT assignment at row 2", 127},
+			{"mediumint", "8388608", "Out of range value for column 'mediumint' at row 2", 8388607},
+		} {
+			exec("create table row_warning (v " + tc.typ + ")")
+			exec("insert ignore into row_warning values (1),(" + tc.value + ")")
+			var level, warning string
+			var code, maximum int
+			require.NoError(t, conn.QueryRowContext(ctx, "show warnings").Scan(&level, &code, &warning))
+			require.Equal(t, int(moerr.ER_WARN_DATA_OUT_OF_RANGE), code)
+			require.Equal(t, tc.warning, warning)
+			require.NoError(t, conn.QueryRowContext(ctx, "select max(v) from row_warning").Scan(&maximum))
+			require.Equal(t, tc.max, maximum)
+			exec("drop table row_warning")
+		}
+
 		exec("set session sql_mode=''")
 		exec("create table ints (s tinyint, u tinyint unsigned)")
 		exec("insert into ints values ('-18446744073709551616','-18446744073709551616')")

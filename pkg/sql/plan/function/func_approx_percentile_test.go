@@ -55,8 +55,6 @@ func TestApproxPercentileCheckFn(t *testing.T) {
 	// unsupported type in arg0
 	result = check(nil, []types.Type{types.T_varchar.ToType(), types.T_float64.ToType()})
 	require.Equal(t, failedAggParametersWrong, result.status)
-	result = check(nil, []types.Type{types.New(types.T_decimal256, 39, 1), types.T_float64.ToType()})
-	require.Equal(t, failedAggParametersWrong, result.status)
 
 	// T_any in arg1 should request cast
 	result = check(nil, []types.Type{types.T_int64.ToType(), types.T_any.ToType()})
@@ -73,7 +71,7 @@ func TestApproxPercentileCheckFn(t *testing.T) {
 		types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 	} {
 		result = check(nil, []types.Type{oid.ToType(), types.T_float64.ToType()})
 		require.Equal(t, succeedMatched, result.status, "oid %d should succeed", oid)

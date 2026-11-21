@@ -15,6 +15,8 @@
 package function
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -532,24 +534,13 @@ var supportedAggInNewFramework = []FuncNew{
 				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
 
-			// APPROX_PERCENTILE has its own executor domain; MEDIAN also
-			// accepts DECIMAL256 results from a preceding MEDIAN.
 			finalTypes := append([]types.Type(nil), inputs...)
 			needCast := false
 			if finalTypes[0].Oid == types.T_any {
 				finalTypes[0] = aggexec.MedianSupportedType[0].ToType()
 				needCast = true
-			} else {
-				supported := false
-				for _, st := range aggexec.MedianSupportedType {
-					if st != types.T_decimal256 && finalTypes[0].Oid == st {
-						supported = true
-						break
-					}
-				}
-				if !supported {
-					return newCheckResultWithFailure(failedAggParametersWrong)
-				}
+			} else if !slices.Contains(aggexec.MedianSupportedType, finalTypes[0].Oid) {
+				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
 
 			// check Arg[1]: must be a supported integer, float, or decimal type

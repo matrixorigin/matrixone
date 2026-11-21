@@ -141,7 +141,7 @@ func appendIntegerAssignmentRangeWarning(proc *process.Process, target types.T, 
 	}
 	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 		appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
-			fmt.Sprintf("Out of range value for %s assignment at row %d", target, row+1))
+			fmt.Sprintf("Out of range value for %s assignment at row %d", target, proc.WarningRowOffset+row+1))
 	}
 }
 

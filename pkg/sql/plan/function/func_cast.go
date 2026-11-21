@@ -1190,7 +1190,7 @@ func appendMediumIntRangeWarning(proc *process.Process, row int) {
 	}
 	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 		appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
-			fmt.Sprintf("Out of range value for column 'mediumint' at row %d", row+1))
+			fmt.Sprintf("Out of range value for column 'mediumint' at row %d", proc.WarningRowOffset+uint64(row)+1))
 	}
 }
 
