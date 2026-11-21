@@ -288,7 +288,13 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 				if result.Status == vm.ExecStop || result.Batch == nil {
 					break
 				}
-				sums := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[len(groupExprs)])
+				var sums []types.Decimal128
+				var counts []int64
+				if tc.distinct {
+					counts = vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[len(groupExprs)])
+				} else {
+					sums = vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[len(groupExprs)])
+				}
 				for row := range result.Batch.RowCount() {
 					raw := string(result.Batch.Vecs[0].GetBytesAt(row))
 					require.GreaterOrEqual(t, len(raw), 5)
@@ -298,7 +304,12 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 						require.True(t, result.Batch.Vecs[1].GetGrouping().Contains(uint64(row)))
 					}
 					require.NotContains(t, got, n, "group was published twice")
-					got[n] = sums[row]
+					if tc.distinct {
+						got[n] = counts[row]
+					} else {
+						got[n], err = strconv.ParseInt(sums[row].Format(0), 10, 64)
+						require.NoError(t, err)
+					}
 				}
 			}
 			_, rejected := controller.snapshot()
@@ -337,7 +348,7 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 				require.NotNil(t, result.Batch)
 				require.Equal(t, 1, result.Batch.RowCount())
 				require.Empty(t, result.Batch.Vecs[0].GetBytesAt(0))
-				require.Equal(t, int64(0), vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[2])[0])
+				require.Equal(t, types.Decimal128FromInt64(0), vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[2])[0])
 				result, err = vm.Exec(g, proc)
 				require.NoError(t, err)
 				require.True(t, result.Status == vm.ExecStop || result.Batch == nil)

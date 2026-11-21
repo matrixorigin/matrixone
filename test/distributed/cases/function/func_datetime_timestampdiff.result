@@ -160,6 +160,8 @@ timestampdiff(time_stamp_unit(year), 2021-11-01 12:15:12, 2018-01-01 12:15:12)
 SELECT TIMESTAMPDIFF( YEAR, '2022-01-01 12:15:12', '2018-01-01 12:15:12');
 timestampdiff(time_stamp_unit(year), 2022-01-01 12:15:12, 2018-01-01 12:15:12)
 -4
+set @date_insert_sql_mode = @@sql_mode;
+set sql_mode = '';
 drop table if exists t1;
 create table t1(a date,  b date);
 insert into t1 values('2019-11-01 12:15:12', '2018-01-01 12:15:12');
@@ -410,3 +412,4 @@ a    b    timestampdiff(time_stamp_unit(year), a, b)
 2018-01-01    2018-01-01    0
 2018-01-01    2018-01-01    0
 drop table t1;
+set sql_mode = @date_insert_sql_mode;

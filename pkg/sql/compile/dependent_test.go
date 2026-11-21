@@ -299,6 +299,9 @@ func TestDependentNativeStages(t *testing.T) {
 			query, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false, nil)
 			require.NoError(t, err)
 			require.NotNil(t, query.Correlation)
+			// Wider aggregate state can trigger spilling; this fixture exercises
+			// dependent execution rather than spill disk admission limits.
+			proc.Base.Lim.SpillSize = 64 << 20
 			budget, err := proc.GetExecutionResourceBudget()
 			require.NoError(t, err)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 8192)

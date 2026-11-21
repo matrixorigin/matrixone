@@ -121,7 +121,7 @@ func TestSortRollupSingleGroupReuseAndMixedFallback(t *testing.T) {
 				require.Equal(t, row == 1, out.Vecs[2].IsNull(uint64(row)))
 				require.Equal(t, row == 1, out.Vecs[3].IsNull(uint64(row)))
 				if row != 1 {
-					require.Equal(t, sum, vector.GetFixedAtNoTypeCheck[int64](out.Vecs[2], row))
+					require.Equal(t, types.Decimal128FromInt64(sum), vector.GetFixedAtNoTypeCheck[types.Decimal128](out.Vecs[2], row))
 					avg := vector.GetFixedAtNoTypeCheck[types.Decimal128](out.Vecs[3], row)
 					require.Equal(t, []string{"3.0000", "", "2.0000", "2.6667"}[row], avg.Format(out.Vecs[3].GetType().Scale))
 				}

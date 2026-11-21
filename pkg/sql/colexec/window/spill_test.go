@@ -228,7 +228,7 @@ func TestWindowOrderSpillPreservesAggregateArguments(t *testing.T) {
 	require.NotNil(t, result.Batch)
 	require.Equal(t, []int32{20, 30, 10}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
 	require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1]))
-	require.Equal(t, []int64{20, 50, 60}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
+	require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(20), types.Decimal128FromInt64(50), types.Decimal128FromInt64(60)}, vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[2]))
 	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillRows)
 	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillSize)
 

@@ -4056,7 +4056,36 @@ func requireModernClusterInsertPlan(
 
 	if wantAccountID != nil {
 		accountExpr := writeExpr("account_id")
-		require.True(t, exprContainsIntegerLiteral(accountExpr, *wantAccountID),
+		var containsAccountLiteral func(*plan.Expr, *plan.Node, int) bool
+		containsAccountLiteral = func(expr *plan.Expr, owner *plan.Node, depth int) bool {
+			if expr == nil || depth > len(query.Nodes) || exprContainsIntegerLiteral(expr, *wantAccountID) {
+				return expr != nil && exprContainsIntegerLiteral(expr, *wantAccountID)
+			}
+			if fn := expr.GetF(); fn != nil {
+				for _, arg := range fn.Args {
+					if containsAccountLiteral(arg, owner, depth+1) {
+						return true
+					}
+				}
+			}
+			if col := expr.GetCol(); col != nil {
+				if col.RelPos == 0 && len(owner.Children) == 1 {
+					child := query.Nodes[owner.Children[0]]
+					if col.ColPos >= 0 && int(col.ColPos) < len(child.ProjectList) {
+						return containsAccountLiteral(child.ProjectList[col.ColPos], child, depth+1)
+					}
+				}
+				for _, node := range query.Nodes {
+					for _, tag := range node.BindingTags {
+						if tag == col.RelPos && col.ColPos >= 0 && int(col.ColPos) < len(node.ProjectList) {
+							return containsAccountLiteral(node.ProjectList[col.ColPos], node, depth+1)
+						}
+					}
+				}
+			}
+			return false
+		}
+		require.True(t, containsAccountLiteral(accountExpr, rowImage, 0),
 			"account_id must remain in its target column position: %s", accountExpr.String())
 	}
 
@@ -6125,11 +6154,16 @@ func TestReplaceRewritesLegacyGeneratedColumnCast(t *testing.T) {
 	require.True(t, foundGeneratedAssignment)
 }
 
-func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
+func TestAssignmentCastPlanProtocolSelection(t *testing.T) {
 	proc := newPlanTestProcess(t)
-
-	build := func(version int64) string {
-		setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, version)
+	for _, tc := range []struct {
+		version    int64
+		stringCast string
+	}{
+		{defines.MORPCVersion4, "cast_strict"},
+		{defines.MORPCVersion5, "cast_assign"},
+	} {
+		setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, tc.version)
 		mock := NewMockOptimizer(true, proc)
 		stmt, err := mysql.ParseOne(
 			t.Context(),
@@ -6140,18 +6174,26 @@ func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
 		defer stmt.Free()
 		built, err := mock.Optimize(stmt)
 		require.NoError(t, err)
-		data, err := json.Marshal(built)
-		require.NoError(t, err)
-		return string(data)
+		var integerCasts, stringCasts []string
+		for _, node := range built.Nodes {
+			for _, project := range node.ProjectList {
+				walkPlanExpr(project, func(expr *plan.Expr) {
+					name := expr.GetF().GetFunc().GetObjName()
+					if !IsAssignmentCastFamilyName(name) {
+						return
+					}
+					switch types.T(expr.Typ.Id) {
+					case types.T_uint32:
+						integerCasts = append(integerCasts, name)
+					case types.T_varchar:
+						stringCasts = append(stringCasts, name)
+					}
+				})
+			}
+		}
+		require.Equal(t, []string{"cast_assign"}, integerCasts, "protocol %d", tc.version)
+		require.Equal(t, []string{tc.stringCast, tc.stringCast}, stringCasts, "protocol %d", tc.version)
 	}
-
-	mixedVersionPlan := build(defines.MORPCVersion4)
-	require.Contains(t, mixedVersionPlan, `"obj_name":"cast_strict"`)
-	require.NotContains(t, mixedVersionPlan, `"obj_name":"cast_assign"`)
-	require.NotContains(t, mixedVersionPlan, `"obj_name":"cast_ignore"`)
-
-	upgradedPlan := build(defines.MORPCVersion5)
-	require.Contains(t, upgradedPlan, `"obj_name":"cast_assign"`)
 }
 
 func addPositiveCheck(t *testing.T, mock *MockOptimizer, tableName, columnName string) {
