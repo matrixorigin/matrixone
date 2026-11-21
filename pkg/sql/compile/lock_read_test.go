@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/hex"
 	"testing"
 	"time"
 
@@ -132,6 +133,105 @@ func TestLockReadRecordsWaitAfterRecompile(t *testing.T) {
 			d := snapshot.Diagnostic([16]byte{}, 2, true)
 			require.Positive(t, d.AcquisitionNS)
 			require.Equal(t, "acquisition", d.LastIncomplete)
+		})
+	}
+}
+
+func TestLockReadPrePipelineTableTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		eligible bool
+	}{
+		{name: "eligible locking read", eligible: true},
+		{name: "non-owner locking read"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cc := plan2.NewMockCompilerContext(true)
+			proc := cc.GetProcess()
+			t.Cleanup(proc.Free)
+			root := resource.NewRoot(resource.ConnExternal)
+			root.EnableLockRead()
+			ctx := resource.ContextWithRoot(defines.AttachAccountId(cc.GetContext(), 7), root)
+			const sql = "select n_nationkey from nation for update"
+			stmt, err := mysql.ParseOne(ctx, sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+
+			ctrl := gomock.NewController(t)
+			txnID := []byte{1}
+			// Keep the catalog fixture separate from the planner's generated table IDs.
+			const catalogTableID uint64 = 1 << 32
+			catalogBinding := lock.LockTable{Table: catalogTableID}
+			op := mockfrontend.NewMockTxnOperator(ctrl)
+			op.EXPECT().Txn().Return(txn.TxnMeta{
+				ID: txnID, Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC,
+				SnapshotTS: timestamp.Timestamp{PhysicalTime: 1},
+			}).AnyTimes()
+			op.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+			op.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+			op.EXPECT().NextSequence().Return(uint64(1)).AnyTimes()
+			op.EXPECT().CreateTS().Return(timestamp.Timestamp{}).AnyTimes()
+			op.EXPECT().AddLockTable(catalogBinding).Return(nil)
+			proc.Base.TxnOperator = op
+
+			service := mocklock.NewMockLockService(ctrl)
+			service.EXPECT().GetConfig().Return(lockservice.Config{MaxLockRowCount: 1}).AnyTimes()
+			service.EXPECT().GetServiceID().Return("").Times(2)
+			proc.Base.LockService = service
+
+			eng := newStubEngineForGenerateNodes("tpch", "nation")
+			eng.dbs[catalog.MO_CATALOG].rels[catalog.MO_TABLES].tableID = catalogTableID
+			pn, err := plan2.BuildPlan(cc, stmt, false)
+			require.NoError(t, err)
+			c := NewCompile("127.0.0.1:1", "tpch", sql, "", "", eng, proc, stmt, false, nil, time.Now())
+			t.Cleanup(c.Release)
+			if tc.eligible {
+				c.SetResourceAttemptOwnerEligible()
+			}
+			require.NoError(t, c.Compile(ctx, pn, nil))
+			require.Len(t, c.lockTables, 1, "the planner must promote the read to a pre-pipeline table lock")
+			var dataTableID uint64
+			for tableID := range c.lockTables {
+				dataTableID = tableID
+			}
+			require.NotEqual(t, catalogTableID, dataTableID)
+			op.EXPECT().AddWaitLock(catalogTableID, gomock.Any(), gomock.Any()).Return(uint64(1))
+			op.EXPECT().RemoveWaitLock(uint64(1))
+			op.EXPECT().AddWaitLock(dataTableID, gomock.Any(), gomock.Any()).Return(uint64(2))
+			op.EXPECT().RemoveWaitLock(uint64(2))
+			holder := []byte("table-lock-owner")
+			gomock.InOrder(
+				service.EXPECT().Lock(gomock.Any(), catalogTableID, gomock.Any(), txnID, gomock.Any()).
+					DoAndReturn(func(_ context.Context, _ uint64, _ [][]byte, _ []byte, opts lock.LockOptions) (lock.Result, error) {
+						require.Equal(t, lock.LockMode_Shared, opts.Mode)
+						require.Equal(t, lock.Granularity_Row, opts.Granularity)
+						return lock.Result{LockedOn: catalogBinding, NewLockAdd: true}, nil
+					}),
+				service.EXPECT().Lock(gomock.Any(), dataTableID, gomock.Any(), txnID, gomock.Any()).
+					DoAndReturn(func(ctx context.Context, _ uint64, _ [][]byte, _ []byte, opts lock.LockOptions) (lock.Result, error) {
+						require.Equal(t, lock.LockMode_Exclusive, opts.Mode)
+						require.Equal(t, lock.Granularity_Range, opts.Granularity)
+						resource.ObserveLocalLockConflict(ctx, [][]byte{holder})
+						return lock.Result{}, lockservice.ErrLockTimeout
+					}),
+			)
+			c.InitPipelineContextToExecuteQuery()
+			require.ErrorIs(t, c.prePipelineInitializer(), lockservice.ErrLockTimeout)
+
+			const elapsed = 100 * time.Millisecond
+			_, snapshot := root.SealWithLockRead(uint64(elapsed))
+			require.Equal(t, tc.eligible, snapshot.Qualifies(elapsed, time.Second))
+			d := snapshot.Diagnostic([16]byte{}, 1, true)
+			if tc.eligible {
+				require.Positive(t, d.AcquisitionNS)
+				require.Equal(t, "acquisition", d.LastIncomplete)
+				require.True(t, d.Conflict)
+				require.Equal(t, hex.EncodeToString(holder), d.ObservedConflictTxnID)
+				require.Zero(t, d.LogtailNS)
+				require.Zero(t, d.PKCheckNS)
+			} else {
+				require.Zero(t, d.Seen)
+			}
 		})
 	}
 }

@@ -476,6 +476,7 @@ func lockTableWithModeAndContext(
 	}()
 
 	opts := DefaultLockOptions(parker).
+		withLockRead(resource.LockReadRootFromContext(ctx), nil).
 		WithLockMode(mode).
 		WithLockTable(true, changeDef).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
