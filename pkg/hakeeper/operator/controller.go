@@ -215,10 +215,6 @@ func generateScheduleCommand(step OpStep) pb.ScheduleCommand {
 		return addTnReplica(st)
 	case RemoveTnReplica:
 		return removeTnReplica(st)
-	case StopTnStore:
-		return stopTnStore(st)
-	case StopLogStore:
-		return stopLogStore(st)
 	case CreateTaskService:
 		return createTaskService(st)
 	case DeleteCNStore:
@@ -400,26 +396,6 @@ func removeTnReplica(st RemoveTnReplica) pb.ScheduleCommand {
 			ChangeType: pb.StopReplica,
 		},
 		ServiceType: pb.TNService,
-	}
-}
-
-func stopTnStore(st StopTnStore) pb.ScheduleCommand {
-	return pb.ScheduleCommand{
-		UUID: st.StoreID,
-		ShutdownStore: &pb.ShutdownStore{
-			StoreID: st.StoreID,
-		},
-		ServiceType: pb.TNService,
-	}
-}
-
-func stopLogStore(st StopLogStore) pb.ScheduleCommand {
-	return pb.ScheduleCommand{
-		UUID: st.StoreID,
-		ShutdownStore: &pb.ShutdownStore{
-			StoreID: st.StoreID,
-		},
-		ServiceType: pb.LogService,
 	}
 }
 

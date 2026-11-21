@@ -837,6 +837,17 @@ func TestCNCommandGenerationRolloverDoesNotReplayInheritedCommands(t *testing.T)
 		"the same command may be intentional work after the prior batch is acknowledged")
 }
 
+func TestCNHeartbeatAcknowledgesRetiredCommandBatch(t *testing.T) {
+	service := &service{cfg: &Config{UUID: "cn-1"}, config: &util.ConfigData{}}
+	service.handleHeartbeatResponse(0, pb.CommandBatch{})
+	require.Zero(t, service.newCNStoreHeartbeat().AckedCommandBatchID)
+
+	service.handleHeartbeatResponse(0, pb.CommandBatch{BatchID: 10})
+	require.Equal(t, uint64(10), service.newCNStoreHeartbeat().AckedCommandBatchID)
+	service.handleHeartbeatResponse(0, pb.CommandBatch{BatchID: 9})
+	require.Equal(t, uint64(10), service.newCNStoreHeartbeat().AckedCommandBatchID)
+}
+
 func TestCNIdenticalCommandAfterAckIsNotHiddenByDelayedResponse(t *testing.T) {
 	conf := &Config{UUID: "cn-1"}
 	holder := &observingTaskHolder{

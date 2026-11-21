@@ -81,6 +81,9 @@ func validateCatalogMetadataArbitration(b *pb.CatalogMetadataBarrierState) error
 		if m.Token == 0 || m.Token > a.LastOperationID || m.ConfigChangeIndex == 0 || m.ReplicaID == 0 || m.UUID == "" || m.StoreIncarnation == "" || catalogMetadataPendingStart(a) {
 			return invalid()
 		}
+		if m.VotingRemovalUnattempted && (m.ChangeType != pb.RemoveReplica || m.VotingRemoval == nil) {
+			return invalid()
+		}
 		switch m.ChangeType {
 		case pb.AddReplica, pb.AddNonVotingReplica, pb.RemoveReplica, pb.RemoveNonVotingReplica:
 		default:

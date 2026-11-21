@@ -15,6 +15,8 @@
 package logservice
 
 import (
+	"cmp"
+	"maps"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -61,6 +63,7 @@ func fixedLogShardInfoNormal(
 	record metadata.LogShardRecord,
 	info pb.LogShardInfo,
 	expiredStores []string,
+	stores map[string]pb.LogStoreInfo,
 ) *fixingShard {
 	// info.Replicas only contains the normal replicas.
 	// info.NonVotingReplicas only contains the non-voting replicas.
@@ -72,9 +75,9 @@ func fixedLogShardInfoNormal(
 		fixing.toAdd = uint32(-diff)
 	}
 
-	// remove the expired replicas.
+	// Unavailable voters already count toward any surplus.
 	for replicaID, uuid := range info.Replicas {
-		if contains(expiredStores, uuid) {
+		if isUnavailableVoter(info, stores, expiredStores, replicaID, uuid) {
 			delete(fixing.replicas, replicaID)
 			// do not remove replicas more than expected.
 			if diff > 0 {
@@ -85,7 +88,7 @@ func fixedLogShardInfoNormal(
 
 	// The number of replicas is more than expected. Remove some of them.
 	if diff > 0 {
-		idSlice := sortedReplicaID(fixing.replicas, info.LeaderID)
+		idSlice := slices.SortedFunc(maps.Keys(fixing.replicas), votingRemovalOrder(info, stores, expiredStores))
 		for i := 0; i < diff; i++ {
 			delete(fixing.replicas, idSlice[i])
 		}
@@ -138,8 +141,9 @@ func fixedLogShardInfo(
 	nonVotingReplicaNum uint64,
 	info pb.LogShardInfo,
 	expiredStores []string,
+	stores map[string]pb.LogStoreInfo,
 ) (*fixingShard, *fixingShard) {
-	return fixedLogShardInfoNormal(record, info, expiredStores),
+	return fixedLogShardInfoNormal(record, info, expiredStores, stores),
 		fixedLogShardInfoNonVoting(nonVotingReplicaNum, info, expiredStores)
 }
 
@@ -199,6 +203,17 @@ func replicaStoreIncarnationChanged(
 		replicaIncarnation != storeIncarnation
 }
 
+func isUnavailableVoter(
+	shard pb.LogShardInfo,
+	stores map[string]pb.LogStoreInfo,
+	expired []string,
+	replicaID uint64,
+	uuid string,
+) bool {
+	return contains(expired, uuid) ||
+		replicaStoreIncarnationChanged(replicaID, uuid, shard.ReplicaStoreIncarnations, stores)
+}
+
 func removeReplicasOnChangedStoreIncarnation(
 	fixed *fixingShard,
 	shardInfo pb.LogShardInfo,
@@ -216,6 +231,132 @@ func removeReplicasOnChangedStoreIncarnation(
 	}
 }
 
+// isReportingVotingExecutor verifies that target still represents its configured
+// voting replica and reported that exact identity in the current heartbeat.
+func isReportingVotingExecutor(
+	shard pb.LogShardInfo,
+	stores map[string]pb.LogStoreInfo,
+	expired []string,
+	target string,
+) bool {
+	for replicaID, uuid := range shard.Replicas {
+		if uuid != target || contains(expired, uuid) {
+			continue
+		}
+		return hakeeper.ReportsLogVoter(shard, replicaID, stores[uuid])
+	}
+	return false
+}
+
+// IsReportingVotingExecutor reports whether target is a live, current voter for
+// this shard. It is shared with coordinator cleanup of stale membership work.
+func IsReportingVotingExecutor(
+	shard pb.LogShardInfo,
+	stores map[string]pb.LogStoreInfo,
+	expired []string,
+	target string,
+) bool {
+	return isReportingVotingExecutor(shard, stores, expired, target)
+}
+
+// votingRemovalOrder ranks the full surplus set before taking the requested
+// number of removals. At minimum quorum an unreported voter can be removed,
+// whereas removing a reporting voter can leave the new configuration short.
+func votingRemovalOrder(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo, expired []string) func(uint64, uint64) int {
+	reporters := reportingVotingExecutors(shard, stores, expired)
+	voters := len(shard.Replicas)
+	rank := func(id uint64) int {
+		uuid := shard.Replicas[id]
+		if isUnavailableVoter(shard, stores, expired, id, uuid) {
+			return 0
+		}
+		_, reporting := slices.BinarySearch(reporters, uuid)
+		if !hakeeper.HasQuorumAfterVotingRemoval(voters, len(reporters), reporting) {
+			if id == shard.LeaderID {
+				return 5
+			}
+			return 4
+		}
+		if id == shard.LeaderID {
+			return 3
+		}
+		if reporting {
+			return 2
+		}
+		return 1
+	}
+	return func(a, b uint64) int {
+		if order := cmp.Compare(rank(a), rank(b)); order != 0 {
+			return order
+		}
+		return cmp.Compare(a, b)
+	}
+}
+
+func canRemoveVotingReplica(
+	shard pb.LogShardInfo,
+	stores map[string]pb.LogStoreInfo,
+	expired []string,
+	replicaToRemove replica,
+) bool {
+	voters := len(shard.Replicas)
+	if voters < 2 || shard.Replicas[replicaToRemove.replicaID] != replicaToRemove.uuid {
+		return false
+	}
+
+	reporters := reportingVotingExecutors(shard, stores, expired)
+	_, reporting := slices.BinarySearch(reporters, replicaToRemove.uuid)
+	return hakeeper.HasQuorumAfterVotingRemoval(voters, len(reporters), reporting)
+}
+
+// CanRemoveVotingReplica checks projected quorum for a retained operator.
+func CanRemoveVotingReplica(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo, expired []string, replicaID uint64, uuid string) bool {
+	return canRemoveVotingReplica(shard, stores, expired, replica{replicaID: replicaID, uuid: uuid})
+}
+
+// reportingVotingExecutors returns configured voters that are live and have
+// reported the same voter identity for this shard in the current heartbeat.
+func reportingVotingExecutors(
+	shard pb.LogShardInfo,
+	stores map[string]pb.LogStoreInfo,
+	expired []string,
+) []string {
+	executors := make([]string, 0, len(shard.Replicas))
+	for replicaID, uuid := range shard.Replicas {
+		if !contains(expired, uuid) && hakeeper.ReportsLogVoter(shard, replicaID, stores[uuid]) {
+			executors = append(executors, uuid)
+		}
+	}
+	slices.Sort(executors)
+	return executors
+}
+
+// hasVotingMajority reports whether current voting membership has a strict
+// majority of live stores reporting their configured voter identities.
+func hasVotingMajority(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo, expired []string) bool {
+	return len(shard.Replicas) > 0 &&
+		len(reportingVotingExecutors(shard, stores, expired)) > len(shard.Replicas)/2
+}
+
+// canRepairVotingMembership limits configuration changes to reporting voters.
+// If any configured voter is unavailable, a strict majority must remain.
+func canRepairVotingMembership(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo, expired []string) bool {
+	// Empty voter sets are the initial bootstrap case, which has no existing
+	// configuration to change and is handled by checkToBootstrap.
+	if len(shard.Replicas) == 0 {
+		return true
+	}
+	// Preserve the existing no-failure policy. When a voter is expired (or its
+	// storage incarnation changed on main), require a reporting majority before
+	// scheduling any membership change.
+	for replicaID, uuid := range shard.Replicas {
+		if isUnavailableVoter(shard, stores, expired, replicaID, uuid) {
+			return len(reportingVotingExecutors(shard, stores, expired)) > len(shard.Replicas)/2
+		}
+	}
+	return true
+}
+
 // parseLogShards collects stats for further use.
 // It returns two stats, the first is the stats for normal replicas
 // and the second one is for the non-voting replicas.
@@ -226,12 +367,10 @@ func parseLogShards(
 	for _, shardInfo := range infos.Shards {
 		shardID := shardInfo.ShardID
 		record := getRecord(shardID, cluster.LogShards)
-		fixingNormal, fixingNonVoting := fixedLogShardInfo(record, nonVotingReplicaNum, shardInfo, expired)
-		removeReplicasOnChangedStoreIncarnation(fixingNormal, shardInfo, infos.Stores)
+		fixingNormal, fixingNonVoting := fixedLogShardInfo(record, nonVotingReplicaNum, shardInfo, expired, infos.Stores)
 		removeReplicasOnChangedStoreIncarnation(fixingNonVoting, shardInfo, infos.Stores)
 
 		// cal the toRemove field.
-		toRemoveNormal := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.replicas)
 		toRemoveNonVoting := getReplicasToRemove(shardID, shardInfo.NonVotingReplicas, fixingNonVoting.replicas)
 
 		// cal the toStart field.
@@ -248,17 +387,23 @@ func parseLogShards(
 			infos.Stores,
 		)
 
-		if fixingNormal.toAdd > 0 {
-			normalStats.toAdd[shardID] = fixingNormal.toAdd
-		}
-		if fixingNonVoting.toAdd > 0 {
-			nonVotingStats.toAdd[shardID] = fixingNonVoting.toAdd
-		}
-		if len(toRemoveNormal) > 0 {
-			normalStats.toRemove[shardID] = toRemoveNormal
-		}
-		if len(toRemoveNonVoting) > 0 {
-			nonVotingStats.toRemove[shardID] = toRemoveNonVoting
+		if canRepairVotingMembership(shardInfo, infos.Stores, expired) {
+			if fixingNormal.toAdd > 0 {
+				normalStats.toAdd[shardID] = fixingNormal.toAdd
+			}
+			if removals := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.replicas); len(removals) > 0 {
+				if len(removals) > 1 {
+					order := votingRemovalOrder(shardInfo, infos.Stores, expired)
+					slices.SortFunc(removals, func(a, b replica) int { return order(a.replicaID, b.replicaID) })
+				}
+				normalStats.toRemove[shardID] = removals
+			}
+			if fixingNonVoting.toAdd > 0 {
+				nonVotingStats.toAdd[shardID] = fixingNonVoting.toAdd
+			}
+			if len(toRemoveNonVoting) > 0 {
+				nonVotingStats.toRemove[shardID] = toRemoveNonVoting
+			}
 		}
 		normalStats.toStart = append(normalStats.toStart, toStartNormal...)
 		nonVotingStats.toStart = append(nonVotingStats.toStart, toStartNonVoting...)

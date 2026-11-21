@@ -387,6 +387,7 @@ func catalogMembershipCanApply(p *pb.CatalogMetadataMembershipOperation, m *drag
 type catalogMembershipController interface {
 	catalogBarrierState(context.Context) (*pb.CatalogMetadataBarrierState, error)
 	catalogMembership(context.Context) (*dragonboat.Membership, error)
+	catalogAuthorizeVotingRemoval(context.Context, *pb.CatalogMetadataMembershipOperation) (bool, error)
 	catalogMutateMembership(context.Context, *pb.CatalogMetadataMembershipOperation) error
 	catalogCompleteMembership(context.Context, *pb.CatalogMetadataMembershipOperation, *dragonboat.Membership) error
 }
@@ -405,6 +406,30 @@ func (l *store) catalogBarrierState(ctx context.Context) (*pb.CatalogMetadataBar
 func (l *store) catalogMembership(ctx context.Context) (*dragonboat.Membership, error) {
 	return l.nh.SyncGetShardMembership(ctx, hakeeper.DefaultHAKeeperShardID)
 }
+
+func (l *store) catalogAuthorizeVotingRemoval(ctx context.Context, p *pb.CatalogMetadataMembershipOperation) (bool, error) {
+	req := pb.CatalogMetadataRequest{
+		Version: 1, Action: pb.CATALOG_ACTION_AUTHORIZE_VOTING_REMOVAL, Token: p.Token,
+		Owner: l.id(), ExecutorStoreIncarnation: l.getStoreIncarnation(),
+	}
+	if p.VotingRemoval == nil {
+		cfg := l.cfg.GetHAKeeperConfig()
+		req.LegacyVotingRemoval = &pb.VotingRemovalGuard{LogStoreTimeoutTicks: cfg.ExpiredTick(0, cfg.LogStoreTimeout)}
+	}
+	cmd, err := hakeeper.GetCatalogMetadataRequestCmd(req)
+	if err != nil {
+		return false, err
+	}
+	result, err := l.propose(ctx, l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID), cmd)
+	if err != nil {
+		return false, err
+	}
+	if result.Value != hakeeper.CatalogMetadataApplied || len(result.Data) != 8 {
+		return false, catalogExecutionError()
+	}
+	return binaryEnc.Uint64(result.Data) == p.Token, nil
+}
+
 func (l *store) catalogMutateMembership(ctx context.Context, p *pb.CatalogMetadataMembershipOperation) error {
 	switch p.ChangeType {
 	case pb.AddReplica:
@@ -473,6 +498,15 @@ func reconcileCatalogMembership(ctx context.Context, expected *pb.CatalogMetadat
 	if m.ConfigChangeID == p.ConfigChangeIndex {
 		if !catalogMembershipCanApply(p, m) {
 			return catalogExecutionError()
+		}
+		if p.ChangeType == pb.RemoveReplica {
+			admitted, err := owner.catalogAuthorizeVotingRemoval(ctx, p)
+			if err != nil || !admitted {
+				return err
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if err := owner.catalogMutateMembership(ctx, p); err != nil {
 			return err

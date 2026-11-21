@@ -22,7 +22,6 @@ package operator
 
 import (
 	"fmt"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -53,6 +52,9 @@ type Builder struct {
 	targetNonVotingPeers peersMap
 
 	err error
+
+	// Only these live, reporting voters may execute membership changes.
+	executorCandidates map[string]struct{}
 
 	// intermediate states
 	toAdd, toRemove peersMap // pending tasks.
@@ -226,18 +228,35 @@ func (b *Builder) prepareBuild() string {
 	return b.brief()
 }
 
+func (b *Builder) withExecutorCandidates(candidates []string) *Builder {
+	b.executorCandidates = make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		b.executorCandidates[candidate] = struct{}{}
+	}
+	return b
+}
+
 func (b *Builder) selectRetainedVotingTarget() (string, error) {
-	var targets []string
+	var selected string
+	found := false
 	for target, replicaID := range b.targetPeers {
-		if originReplicaID, ok := b.originPeers[target]; ok && originReplicaID == replicaID {
-			targets = append(targets, target)
+		originReplicaID, retained := b.originPeers[target]
+		if !retained || originReplicaID != replicaID {
+			continue
+		}
+		if b.executorCandidates != nil {
+			if _, eligible := b.executorCandidates[target]; !eligible {
+				continue
+			}
+		}
+		if !found || target < selected {
+			selected, found = target, true
 		}
 	}
-	if len(targets) == 0 {
-		return "", moerr.NewInternalErrorNoCtx("cannot build operator step without a retained voting peer")
+	if !found {
+		return "", moerr.NewInternalErrorNoCtx("cannot build operator step without a retained voting peer that is live and reporting")
 	}
-	slices.Sort(targets)
-	return targets[0], nil
+	return selected, nil
 }
 
 func (b *Builder) buildToRemoveSteps() error {

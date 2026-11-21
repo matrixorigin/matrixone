@@ -1768,11 +1768,9 @@ func TestPreparingCommandDeliveryIsNonDestructiveForSupportedService(t *testing.
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.CommandDeliveryPreparing = true
 	command := pb.ScheduleCommand{
-		UUID:        "tn-1",
-		ServiceType: pb.TNService,
-		ShutdownStore: &pb.ShutdownStore{
-			StoreID: "tn-1",
-		},
+		UUID:              "tn-1",
+		ServiceType:       pb.TNService,
+		CreateTaskService: &pb.CreateTaskService{},
 	}
 	_, err := rsm.Update(sm.Entry{
 		Index: 10,
@@ -2852,6 +2850,192 @@ func TestAllocateIDReservationBoundary(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, uint64(math.MaxUint64-1), r.Value)
 			}
+		})
+	}
+}
+
+func TestRestoredLegacyStoreShutdownIsNotDelivered(t *testing.T) {
+	old := NewStateMachine(0, 1)
+	start := pb.ScheduleCommand{UUID: "log", ServiceType: pb.LogService, ConfigChange: &pb.ConfigChange{
+		ChangeType: pb.StartReplica, Replica: pb.Replica{UUID: "log", ShardID: 1, ReplicaID: 3},
+	}}
+	logShutdown := pb.ScheduleCommand{UUID: "log", ServiceType: pb.LogService, ShutdownStore: &pb.ShutdownStore{StoreID: "log"}}
+	tnShutdown := pb.ScheduleCommand{UUID: "tn", ServiceType: pb.TNService, ShutdownStore: &pb.ShutdownStore{StoreID: "tn"}}
+	_, err := old.Update(sm.Entry{Index: 1, Cmd: GetUpdateCommandsCmd(1, []pb.ScheduleCommand{logShutdown, start, tnShutdown})})
+	require.NoError(t, err)
+	var snapshot bytes.Buffer
+	require.NoError(t, old.SaveSnapshot(&snapshot, nil, nil))
+	rsm := NewStateMachine(0, 1)
+	require.NoError(t, rsm.RecoverFromSnapshot(&snapshot, nil, nil))
+
+	heartbeat, err := (&pb.LogStoreHeartbeat{UUID: "log"}).Marshal()
+	require.NoError(t, err)
+	result, err := rsm.Update(sm.Entry{Index: 2, Cmd: GetLogStoreHeartbeatCmd(heartbeat)})
+	require.NoError(t, err)
+	var delivered pb.CommandBatch
+	require.NoError(t, delivered.Unmarshal(result.Data))
+	require.Equal(t, []pb.ScheduleCommand{start}, delivered.Commands)
+
+	heartbeat, err = (&pb.TNStoreHeartbeat{UUID: "tn"}).Marshal()
+	require.NoError(t, err)
+	result, err = rsm.Update(sm.Entry{Index: 3, Cmd: GetTNStoreHeartbeatCmd(heartbeat)})
+	require.NoError(t, err)
+	var tnBatch pb.CommandBatch
+	require.NoError(t, tnBatch.Unmarshal(result.Data))
+	require.Empty(t, tnBatch.Commands)
+	require.NotContains(t, rsm.(*stateMachine).state.ScheduleCommands, "tn")
+}
+
+func TestRestoredLegacyStoreShutdownWithAcknowledgedDelivery(t *testing.T) {
+	for _, preparing := range []bool{true, false} {
+		name := "enabled"
+		if preparing {
+			name = "preparing"
+		}
+		t.Run(name, func(t *testing.T) {
+			old := NewStateMachine(0, 1).(*stateMachine)
+			old.state.CommandDeliveryPreparing = preparing
+			old.state.CommandDeliveryEnabled = !preparing
+			shutdown := func(uuid string) pb.ScheduleCommand {
+				return pb.ScheduleCommand{UUID: uuid, ServiceType: pb.TNService, ShutdownStore: &pb.ShutdownStore{StoreID: uuid}}
+			}
+			task := pb.ScheduleCommand{UUID: "tn", ServiceType: pb.TNService, CreateTaskService: &pb.CreateTaskService{}}
+			_, err := old.Update(sm.Entry{Index: 10, Cmd: GetUpdateCommandsCmd(1, []pb.ScheduleCommand{
+				shutdown("tn"), task, shutdown("tn-shutdown-only"), shutdown("tn-rollover"),
+			})})
+			require.NoError(t, err)
+			var snapshot bytes.Buffer
+			require.NoError(t, old.SaveSnapshot(&snapshot, nil, nil))
+			restored := NewStateMachine(0, 1).(*stateMachine)
+			require.NoError(t, restored.RecoverFromSnapshot(&snapshot, nil, nil))
+
+			poll := func(uuid string) pb.CommandBatch {
+				t.Helper()
+				result, err := restored.Lookup(&ScheduleCommandQuery{UUID: uuid})
+				require.NoError(t, err)
+				return *result.(*pb.CommandBatch)
+			}
+			sendHeartbeat := func(uuid string, ack uint64) pb.CommandBatch {
+				t.Helper()
+				heartbeat, err := (&pb.TNStoreHeartbeat{
+					UUID: uuid, AckedCommandBatchID: ack, CommandDeliveryAckSupported: true,
+				}).Marshal()
+				require.NoError(t, err)
+				result, err := restored.Update(sm.Entry{Index: restored.state.Index + 1, Cmd: GetTNStoreHeartbeatCmd(heartbeat)})
+				require.NoError(t, err)
+				var batch pb.CommandBatch
+				require.NoError(t, batch.Unmarshal(result.Data))
+				return batch
+			}
+			stored := restored.state.ScheduleCommands["tn"]
+			require.Len(t, stored.CommandIDs, 2)
+			batch := poll("tn")
+			require.Equal(t, stored.BatchID, batch.BatchID)
+			require.Equal(t, []pb.ScheduleCommand{task}, batch.Commands)
+			require.Equal(t, stored.CommandIDs[1:], batch.CommandIDs)
+			require.Equal(t, stored, restored.state.ScheduleCommands["tn"])
+			require.Equal(t, batch, sendHeartbeat("tn", 0))
+			require.Empty(t, sendHeartbeat("tn", batch.BatchID).Commands)
+			require.NotContains(t, restored.state.ScheduleCommands, "tn")
+
+			require.Empty(t, poll("tn-shutdown-only"))
+			stored = restored.state.ScheduleCommands["tn-shutdown-only"]
+			marker := pb.CommandBatch{BatchID: stored.BatchID}
+			require.NotZero(t, marker.BatchID)
+			require.Equal(t, marker, sendHeartbeat("tn-shutdown-only", 0))
+			require.Equal(t, stored, restored.state.ScheduleCommands["tn-shutdown-only"])
+			require.Equal(t, marker, sendHeartbeat("tn-shutdown-only", 0))
+			require.Empty(t, sendHeartbeat("tn-shutdown-only", marker.BatchID))
+			require.NotContains(t, restored.state.ScheduleCommands, "tn-shutdown-only")
+
+			marker = sendHeartbeat("tn-rollover", 0)
+			require.NotZero(t, marker.BatchID)
+			require.Empty(t, marker.Commands)
+			task.UUID = "tn-rollover"
+			_, err = restored.Update(sm.Entry{Index: restored.state.Index + 1, Cmd: GetUpdateCommandsCmd(1, []pb.ScheduleCommand{task})})
+			require.NoError(t, err)
+			latest := sendHeartbeat("tn-rollover", marker.BatchID)
+			require.Greater(t, latest.BatchID, marker.BatchID)
+			require.Equal(t, []pb.ScheduleCommand{task}, latest.Commands)
+			require.Equal(t, latest, poll("tn-rollover"))
+			require.Empty(t, sendHeartbeat("tn-rollover", latest.BatchID))
+			require.NotContains(t, restored.state.ScheduleCommands, "tn-rollover")
+		})
+	}
+}
+
+func TestGuardedVotingRemovalDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		ticks       uint64
+		advance     uint64
+		incarnation string
+		legacy      bool
+		staleEpoch  bool
+		wantRemoval bool
+	}{
+		{name: "custom deadline is inclusive", ticks: 2, advance: 2, wantRemoval: true},
+		{name: "one tick past deadline", ticks: 2, advance: 3},
+		{name: "zero timeout has a guard", wantRemoval: true},
+		{name: "changed storage incarnation", incarnation: "replacement"},
+		{name: "old epoch", staleEpoch: true},
+		{name: "inherited unguarded command", legacy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := NewStateMachine(0, 1).(*stateMachine)
+			old.state.CommandDeliveryEnabled = true
+			shard := pb.LogShardInfo{
+				ShardID: 1, Epoch: 7, Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d", 5: "e"},
+				ReplicaStoreIncarnations: map[uint64]string{2: "original"},
+			}
+			old.state.LogState.Shards[1] = shard
+			old.state.Tick = tc.advance
+			for _, id := range []uint64{2, 3} {
+				old.state.LogState.Stores[shard.Replicas[id]] = pb.LogStoreInfo{
+					StoreIncarnation: tc.incarnation,
+					Replicas:         []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: id}},
+				}
+			}
+			remove := pb.ScheduleCommand{UUID: "a", ServiceType: pb.LogService, ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.RemoveReplica, Replica: pb.Replica{UUID: "d", ShardID: 1, ReplicaID: 4, Epoch: shard.Epoch},
+			}}
+			if !tc.legacy {
+				remove.VotingRemoval = &pb.VotingRemovalGuard{LogStoreTimeoutTicks: tc.ticks}
+			}
+			if tc.staleEpoch {
+				remove.ConfigChange.Replica.Epoch--
+			}
+			unrelated := pb.ScheduleCommand{UUID: "a", ServiceType: pb.LogService, ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.StartReplica, Replica: pb.Replica{UUID: "a", ShardID: 2, ReplicaID: 1},
+			}}
+			_, err := old.Update(sm.Entry{Index: 1, Cmd: GetUpdateCommandsCmd(1, []pb.ScheduleCommand{remove, unrelated})})
+			require.NoError(t, err)
+			before := old.state.ScheduleCommands["a"]
+			require.Len(t, before.CommandIDs, 2)
+			var snapshot bytes.Buffer
+			require.NoError(t, old.SaveSnapshot(&snapshot, nil, nil))
+			rsm := NewStateMachine(0, 2).(*stateMachine)
+			require.NoError(t, rsm.RecoverFromSnapshot(&snapshot, nil, nil))
+			polled, err := rsm.Lookup(&ScheduleCommandQuery{UUID: "a"})
+			require.NoError(t, err)
+			require.Equal(t, []pb.ScheduleCommand{unrelated}, polled.(*pb.CommandBatch).Commands,
+				"executor has not yet reported the shard")
+			require.Equal(t, before, rsm.state.ScheduleCommands["a"])
+			hb, err := (&pb.LogStoreHeartbeat{UUID: "a", Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 1}}}).Marshal()
+			require.NoError(t, err)
+			result, err := rsm.Update(sm.Entry{Index: 2, Cmd: GetLogStoreHeartbeatCmd(hb)})
+			require.NoError(t, err)
+			var delivered pb.CommandBatch
+			require.NoError(t, delivered.Unmarshal(result.Data))
+			require.Equal(t, before.BatchID, delivered.BatchID)
+			if tc.wantRemoval {
+				require.Equal(t, before.Commands, delivered.Commands)
+				require.Equal(t, before.CommandIDs, delivered.CommandIDs)
+			} else {
+				require.Equal(t, []pb.ScheduleCommand{unrelated}, delivered.Commands)
+				require.Equal(t, before.CommandIDs[1:], delivered.CommandIDs)
+			}
+			require.NotContains(t, rsm.state.ScheduleCommands, "a")
 		})
 	}
 }

@@ -32,6 +32,10 @@ import (
 
 func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 	for _, cmd := range cmds {
+		// An older HAKeeper leader may still send the retired command.
+		if cmd.GetShutdownStore() != nil {
+			continue
+		}
 		s.runtime.Logger().Info(fmt.Sprintf("%s applying cmd: %s", s.ID(), cmd.LogString()))
 		if cmd.GetConfigChange() != nil {
 			if cmd.ConfigChange.Replica.ShardID == hakeeper.DefaultHAKeeperShardID && s.store.catalogExecutor.enabled {
@@ -63,8 +67,6 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 			default:
 				panic(fmt.Sprintf("unknown config change cmd type %d", cmd.ConfigChange.ChangeType))
 			}
-		} else if cmd.GetShutdownStore() != nil {
-			s.handleShutdownStore(cmd)
 		} else if cmd.GetCreateTaskService() != nil {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
@@ -177,14 +179,6 @@ func (s *Service) handleKillZombie(cmd pb.ScheduleCommand) {
 		return
 	}
 	s.store.removeMetadata(shardID, replicaID)
-}
-
-func (s *Service) handleShutdownStore(_ pb.ScheduleCommand) {
-	// notify main routine that have received shutdown cmd
-	select {
-	case s.shutdownC <- struct{}{}:
-	default:
-	}
 }
 
 func (s *Service) heartbeatWorker(ctx context.Context) {

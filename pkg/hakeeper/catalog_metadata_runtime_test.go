@@ -89,6 +89,96 @@ func TestCatalogRuntimeRejectedEntryRetainsFloor(t *testing.T) {
 	}
 }
 
+func TestCatalogVotingRemovalAdmission(t *testing.T) {
+	s := NewStateMachine(0, 1).(*stateMachine)
+	shard := pb.LogShardInfo{ShardID: DefaultHAKeeperShardID, Epoch: 7,
+		Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d", 5: "e"}}
+	heartbeat := func(s *stateMachine, id uint64, reports bool) pb.CommandBatch {
+		t.Helper()
+		hb := pb.LogStoreHeartbeat{UUID: shard.Replicas[id], StoreIncarnation: "inc",
+			CatalogMetadataCapabilities: &pb.CatalogMetadataCapabilities{HAKeeperBarrierProtocol: 1}}
+		if reports {
+			hb.Replicas = []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: id}}
+		}
+		return unhappyHeartbeat(t, s, hb)
+	}
+	enableMaintenance := func(s *stateMachine) {
+		t.Helper()
+		for id := uint64(1); id <= 5; id++ {
+			heartbeat(s, id, true)
+		}
+		runtimeApply(t, s, runtimeRequest(s, pb.CATALOG_ACTION_ENABLE_MAINTENANCE), CatalogMetadataApplied)
+		heartbeat(s, 4, false)
+		heartbeat(s, 5, false)
+	}
+	enableMaintenance(s)
+	queue := func(s *stateMachine, target uint64) pb.CommandBatch {
+		t.Helper()
+		cmd := pb.ScheduleCommand{UUID: "a", ServiceType: pb.LogService, VotingRemoval: &pb.VotingRemovalGuard{},
+			ConfigChange: &pb.ConfigChange{ChangeType: pb.RemoveReplica,
+				Replica: pb.Replica{ShardID: DefaultHAKeeperShardID, ReplicaID: target, UUID: shard.Replicas[target], Epoch: shard.Epoch}}}
+		unhappyQueue(t, s, cmd)
+		return heartbeat(s, 1, true)
+	}
+	batch := queue(s, 4)
+	require.Len(t, batch.Commands, 1)
+	first := batch.Commands[0].CatalogMetadataMembership
+	require.NotNil(t, first)
+	require.NotNil(t, first.VotingRemoval)
+	require.True(t, first.VotingRemovalUnattempted)
+	require.NotContains(t, s.state.ScheduleCommands, "a")
+	s = runtimeRestore(t, s)
+	heartbeat(s, 3, false)
+	heartbeat(s, 4, true)
+
+	admit := runtimeRequest(s, pb.CATALOG_ACTION_AUTHORIZE_VOTING_REMOVAL)
+	admit.Token, admit.Owner, admit.ExecutorStoreIncarnation = first.Token, "a", "old-inc"
+	runtimeApply(t, s, admit, CatalogMetadataRejected)
+	admit.Owner, admit.ExecutorStoreIncarnation = "e", "inc"
+	runtimeApply(t, s, admit, CatalogMetadataRejected)
+	require.Equal(t, first, s.state.CatalogMetadataBarrier.Arbitration.Reservation)
+	// The retry can be owned by the returning voter if it became leader.
+	admit.Owner = "d"
+	require.Zero(t, runtimeApply(t, s, admit, CatalogMetadataApplied))
+	require.Nil(t, s.state.CatalogMetadataBarrier.Arbitration.Reservation)
+	require.Equal(t, first.Token, s.state.CatalogMetadataBarrier.Arbitration.LastOperationID)
+
+	batch = queue(s, 3)
+	require.Len(t, batch.Commands, 1)
+	second := batch.Commands[0].CatalogMetadataMembership
+	require.Greater(t, second.Token, first.Token)
+	runtimeApply(t, s, admit, CatalogMetadataStale)
+	admit.Token, admit.Owner = second.Token, "a"
+	require.Equal(t, second.Token, runtimeApply(t, s, admit, CatalogMetadataApplied))
+	s = runtimeRestore(t, s)
+	require.False(t, s.state.CatalogMetadataBarrier.Arbitration.Reservation.VotingRemovalUnattempted)
+	heartbeat(s, 4, false)
+	heartbeat(s, 3, true)
+	runtimeApply(t, s, admit, CatalogMetadataRejected)
+	require.Equal(t, second.Token, s.state.CatalogMetadataBarrier.Arbitration.Reservation.Token)
+
+	complete := runtimeRequest(s, pb.CATALOG_ACTION_COMPLETE_MEMBERSHIP)
+	complete.Token, complete.ObservedConfigChangeIndex = second.Token, shard.Epoch+1
+	complete.ObservedVoting, complete.ObservedNonVoting = second.ExpectedVoting, second.ExpectedNonVoting
+	runtimeApply(t, s, complete, CatalogMetadataApplied)
+	require.Nil(t, s.state.CatalogMetadataBarrier.Arbitration.Reservation)
+	require.Equal(t, shard.Epoch+1, s.state.CatalogMetadataBarrier.Arbitration.ConfirmedConfigChangeIndex)
+
+	// An old data image has no admission fields. Leave its possible Raft
+	// submission owned by the token, and require explicit ticks to retry.
+	legacy := NewStateMachine(0, 1).(*stateMachine)
+	enableMaintenance(legacy)
+	reserve := runtimeRequest(legacy, pb.CATALOG_ACTION_RESERVE_MEMBERSHIP)
+	reserve.Membership = &pb.CatalogMetadataMembershipOperation{ConfigChangeIndex: shard.Epoch,
+		ReplicaID: 4, UUID: "d", StoreIncarnation: "inc", ChangeType: pb.RemoveReplica}
+	admit.Token = runtimeApply(t, legacy, reserve, CatalogMetadataApplied)
+	legacy = runtimeRestore(t, legacy)
+	require.False(t, legacy.state.CatalogMetadataBarrier.Arbitration.Reservation.VotingRemovalUnattempted)
+	runtimeApply(t, legacy, admit, CatalogMetadataRejected)
+	admit.LegacyVotingRemoval = &pb.VotingRemovalGuard{}
+	require.Equal(t, admit.Token, runtimeApply(t, legacy, admit, CatalogMetadataApplied))
+}
+
 func TestCatalogRuntimeFenceRecoveryAndDelayedOwner(t *testing.T) {
 	s := catalogRuntimeFixture(t)
 	r := runtimeRequest(s, pb.CATALOG_ACTION_ACQUIRE_FENCE)

@@ -24,20 +24,44 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
+func newReplicaBuilder(shardInfo pb.LogShardInfo, candidates []string) *Builder {
+	builder := NewBuilder("", shardInfo)
+	if candidates != nil {
+		builder.withExecutorCandidates(candidates)
+	}
+	return builder
+}
+
 func CreateAddReplica(uuid string, shardInfo pb.LogShardInfo, replicaID uint64) (*Operator, error) {
-	return NewBuilder("", shardInfo).AddPeer(uuid, replicaID).Build()
+	return CreateAddReplicaWithCandidates(uuid, shardInfo, replicaID, nil)
+}
+
+func CreateAddReplicaWithCandidates(uuid string, shardInfo pb.LogShardInfo, replicaID uint64, candidates []string) (*Operator, error) {
+	return newReplicaBuilder(shardInfo, candidates).AddPeer(uuid, replicaID).Build()
 }
 
 func CreateAddNonVotingReplica(uuid string, shardInfo pb.LogShardInfo, replicaID uint64) (*Operator, error) {
-	return NewBuilder("", shardInfo).AddNonVotingPeer(uuid, replicaID).Build()
+	return CreateAddNonVotingReplicaWithCandidates(uuid, shardInfo, replicaID, nil)
+}
+
+func CreateAddNonVotingReplicaWithCandidates(uuid string, shardInfo pb.LogShardInfo, replicaID uint64, candidates []string) (*Operator, error) {
+	return newReplicaBuilder(shardInfo, candidates).AddNonVotingPeer(uuid, replicaID).Build()
 }
 
 func CreateRemoveReplica(uuid string, shardInfo pb.LogShardInfo) (*Operator, error) {
-	return NewBuilder("", shardInfo).RemovePeer(uuid).Build()
+	return CreateRemoveReplicaWithCandidates(uuid, shardInfo, nil)
+}
+
+func CreateRemoveReplicaWithCandidates(uuid string, shardInfo pb.LogShardInfo, candidates []string) (*Operator, error) {
+	return newReplicaBuilder(shardInfo, candidates).RemovePeer(uuid).Build()
 }
 
 func CreateRemoveNonVotingReplica(uuid string, shardInfo pb.LogShardInfo) (*Operator, error) {
-	return NewBuilder("", shardInfo).RemoveNonVotingPeer(uuid).Build()
+	return CreateRemoveNonVotingReplicaWithCandidates(uuid, shardInfo, nil)
+}
+
+func CreateRemoveNonVotingReplicaWithCandidates(uuid string, shardInfo pb.LogShardInfo, candidates []string) (*Operator, error) {
+	return newReplicaBuilder(shardInfo, candidates).RemoveNonVotingPeer(uuid).Build()
 }
 
 func CreateStopReplica(brief string, uuid string, shardID uint64, epoch uint64) *Operator {
