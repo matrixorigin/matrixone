@@ -28,21 +28,35 @@ func (builder *QueryBuilder) subqueryNeedsDependent(root int32) bool {
 	q := &plan.Query{Nodes: builder.qry.Nodes, Steps: builder.qry.Steps}
 	// WalkQueryNodes walks the global directory; this selection is restricted
 	// to the candidate relation and its source dependencies.
-	pending := []int32{root}
-	seen := make(map[int32]bool)
+	type candidate struct {
+		id       int32
+		setInput bool
+	}
+	pending := []candidate{{id: root}}
+	seen := make(map[candidate]bool)
 	for len(pending) > 0 {
-		id := pending[len(pending)-1]
+		current := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
+		id := current.id
 		if id < 0 || int(id) >= len(q.Nodes) || q.Nodes[id] == nil {
 			return true // The binding validator will report the malformed input.
 		}
-		if seen[id] {
+		if seen[current] {
 			continue
 		}
-		seen[id] = true
+		seen[current] = true
 		n := q.Nodes[id]
 		if builder.dependentRelations[id] {
 			return true
+		}
+		// Legacy pull-up only extracts filter predicates. Moving an ON predicate
+		// above its join would also lose null-extended rows for an outer join.
+		if n.NodeType == plan.Node_JOIN {
+			for _, cond := range n.OnList {
+				if hasCorrCol(cond) {
+					return true
+				}
+			}
 		}
 		needed := false
 		// An outer grouping key is constant only within its invocation. It
@@ -52,19 +66,25 @@ func (builder *QueryBuilder) subqueryNeedsDependent(root int32) bool {
 		}
 		_ = plan.VisitExpressionsInOwner(n, func(e *plan.Expr) error {
 			return plan.VisitExprTree(e, func(e *plan.Expr) error {
-				needed = needed || e.GetDependent() != nil || e.GetCorr() != nil && e.GetCorr().Depth > 1
+				// Pulling a correlation out of a set input changes that branch's
+				// rows (and can widen its schema) before set equality is applied.
+				corr := e.GetCorr()
+				needed = needed || e.GetDependent() != nil || corr != nil && (current.setInput || corr.Depth > 1)
 				return nil
 			})
 		})
 		if needed {
 			return true
 		}
-		pending = append(pending, n.Children...)
+		setInput := current.setInput || isSetOperation(n.NodeType)
+		for _, child := range n.Children {
+			pending = append(pending, candidate{id: child, setInput: setInput})
+		}
 		for _, step := range n.SourceStep {
 			if step < 0 || int(step) >= len(q.Steps) {
 				return true
 			}
-			pending = append(pending, q.Steps[step])
+			pending = append(pending, candidate{id: q.Steps[step], setInput: setInput})
 		}
 	}
 	return false
