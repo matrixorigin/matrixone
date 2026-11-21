@@ -517,7 +517,8 @@ func LockTableForSnapshotRefreshWithContext(
 	return lockTableWithModeAndContext(ctx, eng, proc, tableID, pkType, mode, changeDef, false)
 }
 
-// LockRow lock rows in table, rows will be locked, and wait current txn closed.
+// LockRows locks rows for the lifetime of the current transaction. When the
+// query context opts in, pre-pipeline acquisitions contribute to its diagnostic.
 func LockRows(
 	eng engine.Engine,
 	proc *process.Process,
@@ -560,6 +561,7 @@ func LockRows(
 	}()
 
 	opts := DefaultLockOptions(parker).
+		withLockRead(resource.LockReadRootFromContext(proc.Ctx), nil).
 		WithLockTable(false, false).
 		WithLockSharding(sharding).
 		WithLockMode(lockMode).
@@ -607,9 +609,6 @@ func doLock(
 	partitionIdx int32,
 	opts LockOptions,
 ) (bool, bool, timestamp.Timestamp, error) {
-	if opts.lockRead != nil {
-		defer opts.lockReadRoot.MergeLockRead(opts.lockRead)
-	}
 	txnOp := proc.GetTxnOperator()
 	txnClient := proc.Base.TxnClient
 	lockService := proc.GetLockService()
@@ -722,6 +721,12 @@ func doLock(
 		table = lockservice.ShardingByRow(rows[0])
 	}
 
+	if opts.lockReadRoot != nil {
+		if opts.lockRead == nil {
+			opts.lockRead = &resource.LockReadObservation{}
+		}
+		defer opts.lockReadRoot.MergeLockRead(opts.lockRead)
+	}
 	lockCtx := resource.ContextWithLockReadAcquisition(ctx, opts.lockRead)
 	acquisitionStart := opts.lockRead.Start()
 	result, err := lockWithRetry(
