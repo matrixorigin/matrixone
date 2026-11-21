@@ -111,7 +111,10 @@ func newPhyPlanExportCloneFixture() (*PhyPlan, *process.OperatorStats) {
 	return &PhyPlan{
 		Version:   "1.0",
 		RetryTime: 3,
-		Resource:  &resource.StatementResourceSummary{StatementWallNS: 17},
+		Resource: &resource.StatementResourceSummary{
+			StatementWallNS: 17,
+			LockRead:        &resource.LockReadDiagnostic{AcquisitionNS: 8, LastIncomplete: "acquisition"},
+		},
 		LocalScope: []PhyScope{{
 			Magic:      "Normal",
 			Receiver:   []PhyReceiver{{Idx: 2, RemoteUuid: "local"}},
@@ -169,6 +172,11 @@ func TestPhyPlanCloneForExportReferenceSchemaIsExplicit(t *testing.T) {
 		{
 			name:                  "StatementResourceSummary",
 			value:                 source.Resource,
+			referenceBearingField: []string{"LockRead"},
+		},
+		{
+			name:                  "LockReadDiagnostic",
+			value:                 source.Resource.LockRead,
 			referenceBearingField: nil,
 		},
 	}
@@ -200,6 +208,7 @@ func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
 	require.Same(t, got.LocalScope[0].RootOperator.Children[0], got.RemoteScope[0].RootOperator)
 
 	source.Resource.StatementWallNS = 19
+	source.Resource.LockRead.AcquisitionNS = 18
 	source.LocalScope[0].Receiver[0].Idx = 20
 	source.LocalScope[0].DataSource.Attributes[0] = "mutated"
 	source.LocalScope[0].RootOperator.DestReceiver[0].Idx = 21
@@ -209,6 +218,7 @@ func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
 	stats.Reset()
 
 	require.Equal(t, uint64(17), got.Resource.StatementWallNS)
+	require.Equal(t, uint64(8), got.Resource.LockRead.AcquisitionNS)
 	require.Equal(t, 2, got.LocalScope[0].Receiver[0].Idx)
 	require.Equal(t, "a", got.LocalScope[0].DataSource.Attributes[0])
 	require.Equal(t, 1, got.LocalScope[0].RootOperator.DestReceiver[0].Idx)
@@ -411,6 +421,11 @@ func TestPhyPlanCloneForExportPreservesNilAndEmptyReferences(t *testing.T) {
 	require.Nil(t, got.LocalScope[0].RootOperator.Children)
 	require.NotNil(t, got.RemoteScope)
 	require.Empty(t, got.RemoteScope)
+
+	source.Resource = &resource.StatementResourceSummary{}
+	got = source.CloneForExport()
+	require.NotNil(t, got.Resource)
+	require.Nil(t, got.Resource.LockRead)
 }
 
 func TestPhyPlanJSON(t *testing.T) {

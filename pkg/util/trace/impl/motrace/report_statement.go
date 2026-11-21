@@ -242,6 +242,7 @@ type StatementInfo struct {
 	stated     bool
 	cuStated   bool
 
+	lockReadLimiter  *LockReadLimiter
 	resourceRoot     *resource.Root
 	resourceSummary  resource.StatementResourceSummary
 	resourceStated   bool
@@ -413,6 +414,7 @@ func (s *StatementInfo) free() {
 	s.statsArray.Reset()
 	s.stated = false
 	s.disableAgg = false
+	s.lockReadLimiter = nil
 	// clean skipTxn ctrl
 	s.skipTxnOnce = false
 	s.skipTxnID = nil
@@ -815,9 +817,14 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 			s.resourceMPeak = nil
 			s.resourceMPeakSet = false
 		}
-		s.SetResourceSummary(s.resourceRoot.Seal(uint64(s.Duration)))
+		summary, observed := s.resourceRoot.SealWithLockRead(uint64(s.Duration))
+		s.finishLockRead(&summary, observed, err != nil)
+		s.SetResourceSummary(summary)
 		if setter, ok := s.ExecPlan.(ResourceSummarySetter); ok {
 			setter.SetResourceSummary(s.resourceSummary)
+			if summary.LockRead != nil {
+				s.jsonByte = nil
+			}
 		}
 		s.ExecPlan2Stats(ctx)
 		if s.statsArray.GetCU() < 0 {
