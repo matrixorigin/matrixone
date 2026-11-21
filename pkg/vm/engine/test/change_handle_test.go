@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -186,25 +187,78 @@ func TestFlushErrorMsg(t *testing.T) {
 	status := iscp.JobStatus{}
 	statusStr, err := iscp.MarshalJobStatus(&status)
 	require.NoError(t, err)
-	sql := cdc.CDCSQLBuilder.ISCPLogInsertSQL(uint32(accountId), 1, "test", 1, specStr, 2, types.TS{}, statusStr)
-	err = exec_sql(disttaeEngine, ctxWithTimeout, sql)
-	require.NoError(t, err)
+	committed := types.BuildTS(19, math.MaxUint32)
+	otherCommitted := types.BuildTS(18, 0)
+	retiredCommitted := types.BuildTS(17, 0)
+	for i, watermark := range []types.TS{committed, otherCommitted, retiredCommitted} {
+		name := []string{"test", "other", "retired"}[i]
+		sql := cdc.CDCSQLBuilder.ISCPLogInsertSQL(accountId, 1, name, uint64(i+1), specStr,
+			iscp.ISCPJobState_Completed, watermark, statusStr)
+		require.NoError(t, exec_sql(disttaeEngine, ctxWithTimeout, sql))
+	}
+	readWatermarks := func() map[string]types.TS {
+		t.Helper()
+		result, err := execSql(disttaeEngine, ctxWithTimeout,
+			"SELECT job_name, watermark FROM mo_catalog.mo_iscp_log WHERE table_id = 1")
+		require.NoError(t, err)
+		defer result.Close()
+		got := make(map[string]types.TS)
+		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				got[cols[0].GetStringAt(i)] = types.StringToTS(cols[1].GetStringAt(i))
+			}
+			return true
+		})
+		return got
+	}
+
+	next := committed.Next()
+	statuses := []*iscp.JobStatus{{From: next, To: next}, {From: next, To: next}, {From: next, To: next}}
+	require.NoError(t, iscp.FlushJobStatusOnIterationState(
+		ctxWithTimeout, "", disttaeEngine.Engine, disttaeEngine.GetTxnClient(), accountId, 1,
+		[]string{"test", "other", "retired"}, []uint64{1, 2, 3}, []uint64{1, 1, 1}, statuses,
+		nil, iscp.ISCPJobState_Running, []uint64{0, 0, 0},
+	))
+	require.Equal(t, map[string]types.TS{"test": committed, "other": otherCommitted, "retired": retiredCommitted}, readWatermarks())
+
+	require.NoError(t, exec_sql(disttaeEngine, ctxWithTimeout,
+		"UPDATE mo_catalog.mo_iscp_log SET drop_at = NOW() WHERE job_name = 'retired'"))
 	err = iscp.FlushPermanentErrorMessage(
-		ctx,
+		ctxWithTimeout,
 		"",
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		uint32(accountId),
 		1,
-		[]string{"test"},
-		[]uint64{1},
-		[]uint64{1},
-		[]*iscp.JobStatus{{}},
-		types.MaxTs(),
+		[]string{"retired", "test"},
+		[]uint64{3, 1},
+		[]uint64{1, 1},
+		[]*iscp.JobStatus{statuses[2], statuses[0]},
 		"test",
-		[]uint64{0},
+		[]uint64{1, 1},
 	)
 	require.NoError(t, err)
+	require.Equal(t, map[string]types.TS{"test": committed, "other": otherCommitted, "retired": retiredCommitted}, readWatermarks())
+
+	require.NoError(t, iscp.FlushJobStatusOnIterationState(
+		ctxWithTimeout, "", disttaeEngine.Engine, disttaeEngine.GetTxnClient(), accountId, 1,
+		[]string{"other"}, []uint64{2}, []uint64{1}, []*iscp.JobStatus{statuses[1]},
+		&next, iscp.ISCPJobState_Completed, []uint64{1},
+	))
+	require.Equal(t, map[string]types.TS{"test": committed, "other": next, "retired": retiredCommitted}, readWatermarks())
+
+	terminalRows, err := execSql(disttaeEngine, ctxWithTimeout,
+		"SELECT job_name FROM mo_catalog.mo_iscp_log WHERE job_state = 4")
+	require.NoError(t, err)
+	defer terminalRows.Close()
+	var terminalNames []string
+	terminalRows.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			terminalNames = append(terminalNames, cols[0].GetStringAt(i))
+		}
+		return true
+	})
+	require.Equal(t, []string{"test"}, terminalNames, "a retired CAS miss cannot block an active member's terminal update")
 }
 
 func TestChangesHandle1(t *testing.T) {
@@ -4647,7 +4701,7 @@ func TestCancelIteration2(t *testing.T) {
 			[]uint64,
 			[]uint64,
 			[]*iscp.JobStatus,
-			types.TS,
+			*types.TS,
 			int8,
 			[]uint64,
 		) error {

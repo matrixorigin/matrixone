@@ -155,7 +155,6 @@ func ExecuteIterationWithRuntime(
 					iterCtx.jobIDs,
 					iterCtx.lsn,
 					statuses,
-					types.MaxTs(),
 					errMsg,
 					preLSN,
 				)
@@ -190,7 +189,7 @@ func ExecuteIterationWithRuntime(
 							iterCtx.jobNames[0],
 							iterCtx.jobIDs[0],
 							&completedStatus,
-							iterCtx.fromTS,
+							nil,
 							ISCPJobState_Completed,
 							preLSN[0],
 						)
@@ -215,7 +214,6 @@ func ExecuteIterationWithRuntime(
 					iterCtx.jobIDs,
 					iterCtx.lsn,
 					statuses,
-					types.MaxTs(),
 					err.Error(),
 					preLSN,
 				)
@@ -251,7 +249,7 @@ func ExecuteIterationWithRuntime(
 	collectCtx := collectChangesCtxForJobs(ctxWithoutTimeout, jobSpecs, prevStatus, committedWatermark)
 	if !iterCtx.fromTS.IsEmpty() {
 		var targetRows int
-		targetRows, err = rowBudgetForJobs(jobSpecs)
+		targetRows, err = iterCtx.rowBudget(jobSpecs)
 		if err != nil {
 			return
 		}
@@ -354,7 +352,7 @@ func ExecuteIterationWithRuntime(
 		iterCtx.jobIDs,
 		iterCtx.lsn,
 		statuses,
-		iterCtx.fromTS,
+		nil,
 		ISCPJobState_Running,
 		preLSN,
 	)
@@ -379,17 +377,16 @@ func ExecuteIterationWithRuntime(
 	)
 	var finalErr error
 	for i, status := range statuses {
-		if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])) {
-			continue
-		}
+		// Consumer handles have drained. The terminal CAS can wait for
+		// the retiring DDL: rollback allows settlement, commit rejects it.
 		if status.ErrorCode != 0 || typ == ISCPDataType_Snapshot {
 			state := ISCPJobState_Completed
 			if status.PermanentlyFailed() {
 				state = ISCPJobState_Error
 			}
-			watermark := status.From
+			var watermark *types.TS
 			if status.ErrorCode == 0 {
-				watermark = status.To
+				watermark = &status.To
 			}
 			err = flushFinalJobStatusOnIterationState(
 				ctx,
@@ -694,7 +691,9 @@ func runISCPTaskIterationConsumers(
 					dataRetrievers[i].Cancel,
 				)
 				if !ok {
-					dataRetrievers[i].Cancel(moerr.NewInternalErrorNoCtx("iscp job consumer canceled"))
+					err := moerr.NewInternalErrorNoCtx("iscp job consumer canceled")
+					statuses[i].SetError(err)
+					dataRetrievers[i].Cancel(err)
 					return
 				}
 				if objectio.WaitInjected(objectio.FJ_ISCPCancelAfterRegisterConsumer) {
@@ -707,6 +706,8 @@ func runISCPTaskIterationConsumers(
 			}
 			err := consumerEntry.Consume(consumerCtx, dataRetrievers[i])
 			if err != nil {
+				statuses[i].SetError(err)
+				dataRetrievers[i].SetError(err)
 				if runtime != nil && runtime.IsJobFenced(key) {
 					return
 				}
@@ -719,8 +720,6 @@ func runISCPTaskIterationConsumers(
 					zap.String("from", iterCtx.fromTS.ToString()),
 					zap.String("to", iterCtx.toTS.ToString()),
 				)
-				dataRetrievers[i].SetError(err)
-				statuses[i].SetError(err)
 			}
 		}(i)
 	}
@@ -740,7 +739,7 @@ func flushFinalJobStatusOnIterationState(
 	iterCtx *IterationContext,
 	jobIdx int,
 	status *JobStatus,
-	watermark types.TS,
+	watermark *types.TS,
 	state int8,
 ) error {
 	return retry(
@@ -779,7 +778,7 @@ var FlushJobStatusOnIterationState = func(
 	jobIDs []uint64,
 	lsns []uint64,
 	jobStatuses []*JobStatus,
-	watermark types.TS,
+	watermark *types.TS,
 	state int8,
 	prevLSN []uint64,
 ) (err error) {
@@ -819,6 +818,13 @@ var FlushJobStatusOnIterationState = func(
 			prevLSN[i],
 		)
 		if err != nil {
+			// Running still needs an all-or-nothing claim. A terminal
+			// status-only update can settle its live members even if
+			// another member was retired or advanced by another owner.
+			if len(jobNames) > 1 && watermark == nil && state != ISCPJobState_Running && isSupersededIteration(err) {
+				err = nil
+				continue
+			}
 			return
 		}
 	}
@@ -834,7 +840,7 @@ func FlushStatus(
 	jobName string,
 	jobID uint64,
 	jobStatus *JobStatus,
-	watermark types.TS,
+	watermark *types.TS,
 	state int8,
 	prevLSN uint64,
 ) (err error) {
@@ -842,17 +848,11 @@ func FlushStatus(
 	if err != nil {
 		return
 	}
-	sql := cdc.CDCSQLBuilder.ISCPLogUpdateResultSQL(
-		tenantId,
-		tableID,
-		jobName,
-		jobID,
-		watermark,
-		statusJson,
-		jobStatus.Stage,
-		jobStatus.LifecycleVersion,
-		state,
-		prevLSN,
+	// Running is an atomic group claim with its original CAS contract.
+	// A terminal result needs the same generation to remain active.
+	sql := cdc.CDCSQLBuilder.ISCPLogUpdateIterationSQL(
+		tenantId, tableID, jobName, jobID, watermark, statusJson, jobStatus.Stage,
+		jobStatus.LifecycleVersion, state, prevLSN, state != ISCPJobState_Running,
 	)
 	result, err := ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {
@@ -967,7 +967,6 @@ var GetJobSpecs = func(
 			jobIDs,
 			lsns,
 			jobStatuses,
-			types.MaxTs(),
 			permanentErrMsg,
 			prevLSNs,
 		)
@@ -1043,7 +1042,6 @@ func FlushPermanentErrorMessage(
 	jobIDs []uint64,
 	lsns []uint64,
 	jobStatuses []*JobStatus,
-	watermark types.TS,
 	errMsg string,
 	prevLSN []uint64,
 ) (err error) {
@@ -1073,7 +1071,7 @@ func FlushPermanentErrorMessage(
 		jobIDs,
 		lsns,
 		jobStatuses,
-		watermark,
+		nil,
 		ISCPJobState_Error,
 		prevLSN,
 	)

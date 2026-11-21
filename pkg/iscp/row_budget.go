@@ -25,11 +25,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func indexTargetRows(spec *TriggerSpec) int {
-	if spec == nil {
-		return 0
+// A scheduled iteration keeps its own trigger policy across catalog updates.
+type iterationRowBudget struct {
+	target   int
+	jobType  uint16
+	captured bool
+}
+
+func (iter *IterationContext) rowBudget(specs []*JobSpec) (int, error) {
+	if !iter.budget.captured {
+		return rowBudgetForJobs(specs)
 	}
-	return spec.TargetRows
+	return iter.budget.target, validateRowBudget(iter.budget.target, iter.budget.jobType, iter.indexJob)
+}
+
+func validateRowBudget(target int, jobType uint16, indexJob bool) error {
+	if target < 0 {
+		return moerr.NewInvalidInputNoCtx("negative ISCP target rows")
+	}
+	if target > 0 && !indexJob && jobType != TriggerType_AlwaysUpdate {
+		return moerr.NewInvalidInputNoCtx("ISCP target rows requires an independent AlwaysUpdate job")
+	}
+	return nil
 }
 
 func rowBudgetForJobs(specs []*JobSpec) (int, error) {
@@ -39,15 +56,9 @@ func rowBudgetForJobs(specs []*JobSpec) (int, error) {
 		if spec == nil {
 			return 0, moerr.NewInternalErrorNoCtx("nil ISCP job spec")
 		}
-		if spec.TargetRows < 0 {
-			return 0, moerr.NewInvalidInputNoCtx("negative ISCP target rows")
-		}
 		current := spec.TargetRows
-		if spec.ConsumerInfo.ConsumerType == int8(ConsumerType_IndexSync) {
-			current = indexTargetRows(&spec.TriggerSpec)
-		}
-		if current > 0 && spec.ConsumerInfo.ConsumerType != int8(ConsumerType_IndexSync) && spec.JobType != TriggerType_AlwaysUpdate {
-			return 0, moerr.NewInvalidInputNoCtx("ISCP target rows requires an independent AlwaysUpdate job")
+		if err := validateRowBudget(current, spec.JobType, spec.ConsumerInfo.ConsumerType == int8(ConsumerType_IndexSync)); err != nil {
+			return 0, err
 		}
 		if targetSet && target != current {
 			return 0, moerr.NewInternalErrorNoCtx("mixed ISCP row budgets in one iteration")

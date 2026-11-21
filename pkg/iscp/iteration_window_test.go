@@ -134,3 +134,86 @@ func TestLimitIterationTimeSpan(t *testing.T) {
 	limitIterationTimeSpan(ordinary)
 	require.Equal(t, want, ordinary.toTS)
 }
+
+func TestAdmittedIterationKeepsItsRowBudget(t *testing.T) {
+	for _, tc := range []struct {
+		consumer ConsumerType
+		target   int
+	}{
+		{ConsumerType_IndexSync, 0},
+		{ConsumerType_IndexSync, 100},
+		{ConsumerType_CNConsumer, 0},
+	} {
+		target := tc.target
+		ctx := context.Background()
+		table := NewTableEntry(newRuntimeTestExecutor(), 1, 2, 3, "db", "table")
+		watermark := types.BuildTS(10, 0)
+		spec := JobSpec{ConsumerInfo: ConsumerInfo{ConsumerType: int8(tc.consumer)},
+			TriggerSpec: TriggerSpec{JobType: TriggerType_Default, TargetRows: target}}
+		names := []string{"first", "second"}
+		for i, name := range names {
+			_, err := table.AddOrUpdateSinker(ctx, name, &spec, &JobStatus{Stage: JobStage_Running},
+				uint64(i+1), watermark, ISCPJobState_Completed, 0)
+			require.NoError(t, err)
+		}
+		iters, _ := table.getCandidate()
+		require.Len(t, iters, 1)
+		admitted := iters[0]
+		require.Len(t, admitted.jobIDs, 2)
+		require.NoError(t, table.markIterationPending(admitted))
+
+		changed := spec
+		changed.TargetRows = target + 1
+		changed.JobType = TriggerType_AlwaysUpdate
+		_, err := table.AddOrUpdateSinker(ctx, "second", &changed, &JobStatus{Stage: JobStage_Running},
+			2, watermark, ISCPJobState_Completed, 0)
+		require.NoError(t, err)
+		targetInUse, err := admitted.rowBudget([]*JobSpec{&spec, &changed})
+		require.NoError(t, err)
+		require.Equal(t, target, targetInUse)
+
+		applied := types.BuildTS(11, 0)
+		for i, nextSpec := range []*JobSpec{&spec, &changed} {
+			_, err := table.AddOrUpdateSinker(ctx, names[i], nextSpec, &JobStatus{LSN: 1, Stage: JobStage_Running},
+				uint64(i+1), applied, ISCPJobState_Completed, 0)
+			require.NoError(t, err)
+		}
+		iters, _ = table.getCandidate()
+		require.Len(t, iters, 2)
+		got := make(map[string]int, len(iters))
+		for _, iter := range iters {
+			require.Len(t, iter.jobNames, 1)
+			require.Equal(t, applied.Next(), iter.fromTS)
+			got[iter.jobNames[0]] = iter.budget.target
+		}
+		require.Equal(t, map[string]int{"first": target, "second": target + 1}, got)
+	}
+}
+
+func TestIterationStatusReplayKeepsCleanTableProgress(t *testing.T) {
+	ctx := context.Background()
+	table := NewTableEntry(newRuntimeTestExecutor(), 1, 2, 3, "db", "table")
+	spec := &JobSpec{TriggerSpec: TriggerSpec{JobType: TriggerType_Default}}
+	persisted := types.BuildTS(10, 0)
+	cleanThrough := types.BuildTS(15, 0)
+	_, err := table.AddOrUpdateSinker(ctx, "job", spec, &JobStatus{Stage: JobStage_Running}, 1,
+		persisted, ISCPJobState_Completed, 0)
+	require.NoError(t, err)
+	job := table.jobs[JobKey{JobName: "job", JobID: 1}]
+	require.NoError(t, job.UpdateWatermark(persisted.Next(), cleanThrough, 0))
+	iters, _ := table.getCandidate()
+	require.Len(t, iters, 1)
+	require.NoError(t, table.markIterationPending(iters[0]))
+
+	for _, state := range []int8{ISCPJobState_Running, ISCPJobState_Completed} {
+		_, err = table.AddOrUpdateSinker(ctx, "job", spec,
+			&JobStatus{LSN: 1, Stage: JobStage_Running}, 1, persisted, state, 0)
+		require.NoError(t, err)
+		require.Equal(t, state, job.state)
+		require.Equal(t, persisted, job.persistedWatermark)
+		require.Equal(t, cleanThrough, job.watermark)
+	}
+	iters, _ = table.getCandidate()
+	require.Len(t, iters, 1)
+	require.Equal(t, cleanThrough.Next(), iters[0].fromTS, "retry starts at the first unconsumed timestamp")
+}

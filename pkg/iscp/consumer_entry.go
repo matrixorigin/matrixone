@@ -108,7 +108,7 @@ func (jobEntry *JobEntry) update(
 		needApply = true
 	}
 	if needApply {
-		if jobEntry.watermark.GT(&watermark) {
+		if jobEntry.persistedWatermark.GT(&watermark) {
 			// The durable row is already terminal, so no second conditional write is
 			// needed (and job_state != Error would reject it). Accept the terminal
 			// version without moving the last known-good watermark backwards.
@@ -121,7 +121,7 @@ func (jobEntry *JobEntry) update(
 				return nil
 			}
 			errMsg := fmt.Sprintf("watermark %v > %v, current state %d, incoming state %d, job %d-%v-%d",
-				jobEntry.watermark.ToString(), watermark.ToString(), jobEntry.state, state, jobEntry.tableInfo.tableID, jobEntry.jobName, jobEntry.jobID)
+				jobEntry.persistedWatermark.ToString(), watermark.ToString(), jobEntry.state, state, jobEntry.tableInfo.tableID, jobEntry.jobName, jobEntry.jobID)
 			err := FlushPermanentErrorMessage(
 				ctx,
 				jobEntry.tableInfo.exec.cnUUID,
@@ -133,7 +133,6 @@ func (jobEntry *JobEntry) update(
 				[]uint64{jobEntry.jobID},
 				[]uint64{jobStatus.LSN},
 				[]*JobStatus{jobStatus},
-				types.MaxTs(),
 				errMsg,
 				// The regressing row is already durable. Fence that exact version;
 				// using the older in-memory LSN can never match it.
@@ -153,7 +152,11 @@ func (jobEntry *JobEntry) update(
 		}
 		jobEntry.currentLSN = jobStatus.LSN
 		jobEntry.persistedWatermark = watermark
-		jobEntry.watermark = watermark
+		// Catalog status writes can carry an older durable boundary than
+		// this executor's clean-table proof.
+		if watermark.GT(&jobEntry.watermark) {
+			jobEntry.watermark = watermark
+		}
 		jobEntry.state = state
 	}
 	// Job metadata and Stage can change without a progress/state transition.
@@ -187,7 +190,6 @@ func (jobEntry *JobEntry) UpdateWatermark(
 			[]uint64{jobEntry.jobID},
 			[]uint64{jobEntry.currentLSN},
 			[]*JobStatus{{Stage: jobEntry.stage}},
-			types.MaxTs(),
 			fmt.Sprintf("update watermark failed, from %v, current %v", from.ToString(), expectedFrom.ToString()),
 			[]uint64{jobEntry.currentLSN},
 		)

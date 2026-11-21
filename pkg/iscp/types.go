@@ -96,6 +96,7 @@ type IterationContext struct {
 	tableID   uint64
 	// indexJob keeps index reads separate from ordinary consumer reads.
 	indexJob bool
+	budget   iterationRowBudget
 	jobNames []string
 	jobIDs   []uint64
 	lsn      []uint64

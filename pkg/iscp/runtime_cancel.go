@@ -409,15 +409,10 @@ func (exec *ISCPTaskExecutor) filterFencedIteration(iter *IterationContext) *Ite
 	if len(keepJobNames) == len(iter.jobNames) {
 		return iter
 	}
-	return &IterationContext{
-		accountID: iter.accountID,
-		tableID:   iter.tableID,
-		indexJob:  iter.indexJob,
-		jobNames:  keepJobNames,
-		jobIDs:    keepJobIDs,
-		lsn:       keepLSN,
-		stages:    keepStages,
-		fromTS:    iter.fromTS,
-		toTS:      iter.toTS,
-	}
+	filtered := *iter
+	filtered.jobNames = keepJobNames
+	filtered.jobIDs = keepJobIDs
+	filtered.lsn = keepLSN
+	filtered.stages = keepStages
+	return &filtered
 }

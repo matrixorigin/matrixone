@@ -168,11 +168,13 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 	}
 	minFromTS = types.MaxTs()
 	for _, sinker := range candidates {
+		budget := iterationRowBudget{target: sinker.jobSpec.TargetRows, jobType: sinker.jobSpec.JobType, captured: true}
 		if sinker.watermark.IsEmpty() && sinker.state == ISCPJobState_Completed {
 			iterations = append(iterations, &IterationContext{
 				tableID:   t.tableID,
 				accountID: t.accountID,
 				indexJob:  sinker.isIndexJob,
+				budget:    budget,
 				jobNames:  []string{sinker.jobName},
 				jobIDs:    []uint64{sinker.jobID},
 				lsn:       []uint64{sinker.currentLSN + 1},
@@ -212,11 +214,8 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				if iter.indexJob != sinker.isIndexJob || !iter.fromTS.EQ(&from) || !iter.toTS.EQ(&to) {
 					continue
 				}
-				if sinker.isIndexJob {
-					first := t.jobs[JobKey{JobName: iter.jobNames[0], JobID: iter.jobIDs[0]}]
-					if first == nil || indexTargetRows(first.jobSpec) != indexTargetRows(sinker.jobSpec) {
-						continue
-					}
+				if iter.budget.target != budget.target {
+					continue
 				}
 				iter.jobNames = append(iter.jobNames, sinker.jobName)
 				iter.jobIDs = append(iter.jobIDs, sinker.jobID)
@@ -231,6 +230,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				tableID:   t.tableID,
 				accountID: t.accountID,
 				indexJob:  sinker.isIndexJob,
+				budget:    budget,
 				jobNames:  []string{sinker.jobName},
 				jobIDs:    []uint64{sinker.jobID},
 				lsn:       []uint64{sinker.currentLSN + 1},

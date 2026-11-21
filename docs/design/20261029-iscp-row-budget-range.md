@@ -15,8 +15,10 @@ required; older binaries ignore the optional JSON field. MatrixOne upgrades
 by full-cluster shutdown, so no mixed-version owner protocol is needed.
 
 Index jobs with the same source table, watermark, range, and row target share
-one source probe/read and fan out to their own sinks. A lagging index reads its
-own range until it catches up. Index and non-index jobs never share a read.
+one source probe/read and fan out to their own sinks. Scheduling captures the
+group's target, including zero. A catalog change after scheduling applies to
+the next iteration, for both index and ordinary consumers. A lagging index reads its own range until it catches up.
+Index and non-index jobs never share a read.
 The existing 30-minute timestamp cap continues to apply to every catch-up
 job before dispatch or clean-table watermark advance.
 
@@ -68,9 +70,9 @@ After a successful probe, ISCP sets `iterCtx.toTS` to the selected bound before 
 consumers, or data retrievers. A failed probe leaves the scheduled range intact
 for retry. The selected bound is the value used by
 `DataRetriever.GetToTS`, the sink transaction, durable watermark update, and
-in-memory state. No partial probe result is ever persisted. After a failed
-iteration, the next attempt starts at `watermark.Next()` and may choose a
-different safe range.
+in-memory state. Running and failure writes update job status while preserving
+the committed watermark of each member. A retry resumes at `watermark.Next()`
+and can process the first timestamp of the failed range again.
 
 ## Validation
 
