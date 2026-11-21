@@ -2189,6 +2189,9 @@ func orSelectivity(s1, s2 float64) float64 {
 
 func HasShuffleInPlan(qry *plan.Query) bool {
 	for _, node := range qry.GetNodes() {
+		if IsZeroScalarPrivilegeCarrier(node) {
+			continue
+		}
 		if node.NodeType != plan.Node_TABLE_SCAN && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
 			return true
 		}
@@ -2299,6 +2302,9 @@ func CalcQueryDOP(p *plan.Plan, ncpu int32, lencn int, typ ExecType) {
 	qry := p.GetQuery()
 	if typ == ExecTypeTP || ncpu == 1 {
 		for i := range qry.Nodes {
+			if IsZeroScalarPrivilegeCarrier(qry.Nodes[i]) {
+				continue
+			}
 			qry.Nodes[i].Stats.Dop = 1
 		}
 		return
@@ -2319,7 +2325,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	hasExprBasedShuffle := false
 	hasForceOneCN := false
 	for _, node := range qry.GetNodes() {
-		if node == nil {
+		if node == nil || IsZeroScalarPrivilegeCarrier(node) {
 			continue
 		}
 		if node.GetStats().GetForceOneCN() {
@@ -2353,7 +2359,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle && !hasForceOneCN
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
-		if node == nil {
+		if node == nil || IsZeroScalarPrivilegeCarrier(node) {
 			continue
 		}
 		switch node.NodeType {
@@ -2469,6 +2475,9 @@ func PrintStats(qry *plan.Query) string {
 	buf := bytes.NewBuffer(make([]byte, 0, 1024*64))
 	buf.WriteString("Print Stats: \n")
 	for _, node := range qry.GetNodes() {
+		if IsZeroScalarPrivilegeCarrier(node) {
+			continue
+		}
 		stats := node.Stats
 		buf.WriteString(fmt.Sprintf("Node ID: %v, Node Type %v, ", node.NodeId, node.NodeType))
 		if stats == nil {

@@ -5973,6 +5973,9 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 	if h.query != nil {
 		options := &explain.MarshalPlanOptions
 		for _, node := range h.query.Nodes {
+			if plan2.IsZeroScalarPrivilegeCarrier(node) {
+				continue
+			}
 			if h.isInternalSubStmt {
 				s := explain.GetStatistic4Trace(ctx, node, options)
 				statsByte.Add(&s)
