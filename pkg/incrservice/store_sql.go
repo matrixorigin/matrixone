@@ -379,11 +379,12 @@ func (s *sqlStore) ForceSetOffset(
 }
 
 func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
+	// Lazy cleanup retires metadata for a dropped table. No subsequent
+	// read depends on the delete having reached local logtail.
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithEnableTrace().
 		WithDisableWaitPaused().
-		WithWaitCommittedLogApplied().
 		WithStatementOption(executor.StatementOption{}.WithDisableLog())
 
 	return s.exec.ExecTxn(ctx,
@@ -405,8 +406,8 @@ func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 				rowCount += rows
 				return true
 			})
+			res.Close()
 			if rowCount == 0 {
-				res.Close()
 				return nil
 			}
 			res, err = s.exec.Exec(

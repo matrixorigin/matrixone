@@ -50,12 +50,14 @@ func TestDeleteWhenAccountNotExists(t *testing.T) {
 
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
+		require.False(t, opts.WaitCommittedLogApplied())
 		return execFunc(nil)
 	}).AnyTimes()
 
 	// account not exists
 	var executedSQLs []string
 	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+		require.False(t, opts.WaitCommittedLogApplied())
 		executedSQLs = append(executedSQLs, sql)
 		res := executor.Result{}
 		return res, nil
@@ -79,10 +81,12 @@ func TestDeleteWhenAccountExists(t *testing.T) {
 
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
+		require.False(t, opts.WaitCommittedLogApplied())
 		return execFunc(nil)
 	}).AnyTimes()
 	var executedSQLs []string
 	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+		require.False(t, opts.WaitCommittedLogApplied())
 		executedSQLs = append(executedSQLs, sql)
 		bat := &batch.Batch{}
 		bat.SetRowCount(1)
