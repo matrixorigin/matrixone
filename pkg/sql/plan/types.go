@@ -395,6 +395,10 @@ type updateTargetScope struct {
 }
 
 type QueryBuilder struct {
+	// mixedDomainCoalesce is set when the statement binds a binary-typed
+	// COALESCE that can return a text value; see coalesce_text_domain.go.
+	mixedDomainCoalesce bool
+
 	updateTargetScope *updateTargetScope
 
 	// DELETE owns these generated scan identities. Optimizer consumers must

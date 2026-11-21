@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -668,6 +669,12 @@ func (tbl *txnTable) ApproxObjectsNum(ctx context.Context) int {
 	return part.ApproxDataObjectsNum()
 }
 
+// MaxAndMinValuesUsePlannerColumns reports whether the published planner is
+// also the source of TableColumns, in the order used by MaxAndMinValues.
+func (tbl *txnTable) MaxAndMinValuesUsePlannerColumns() bool {
+	return tbl.source.Valid()
+}
+
 func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
 	var (
 		err  error
@@ -941,12 +948,9 @@ func (tbl *txnTable) collectTombstones(
 		}
 
 		//collect uncommitted persisted tombstones.
-		if err := tbl.getTxn().getUncommittedS3Tombstone(
-			func(stats *objectio.ObjectStats) {
-				tombstone.AppendFiles(*stats)
-			}); err != nil {
-			return nil, err
-		}
+		tbl.getTxn().flushedTombstones.forEach(tbl.tableId, func(stats objectio.ObjectStats) {
+			tombstone.AppendFiles(stats)
+		})
 	}
 
 	//collect committed tombstones.
@@ -1667,6 +1671,21 @@ func (tbl *txnTable) collectUnCommittedTombstoneObjs(txnOffset int) ([]objectio.
 }
 
 // the return defs has no rowid column
+// internalDefs reconstructs a private internal view without changing source state.
+func (tbl *txnTable) internalDefs() ([]engine.TableDef, error) {
+	if !tbl.source.Valid() {
+		return tbl.defs, nil
+	}
+	item := &cache.TableItem{Comment: tbl.comment, ViewDef: tbl.viewdef, Partitioned: tbl.partitioned, Partition: tbl.partition, Kind: tbl.relKind, CreateSql: tbl.createSql, ExtraInfo: tbl.extraInfo}
+	return tbl.source.EngineDefs(item)
+}
+
+// ValidatedCatalogKind returns the kind used by TableDefs when the published
+// schema has already validated the constraint stream.
+func (tbl *txnTable) ValidatedCatalogKind() (string, bool) {
+	return tbl.relKind, tbl.source.Valid()
+}
+
 func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	//return tbl.defs, nil
 	// I don't understand why the logic now is not to get all the tableDef. Don't understand.
@@ -1690,18 +1709,32 @@ func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 		viewDef.View = tbl.viewdef
 		defs = append(defs, viewDef)
 	}
-	if len(tbl.constraint) > 0 {
+	wire := tbl.constraint
+	if tbl.source.Valid() {
+		wire = tbl.source.ConstraintBytes()
+	}
+	if len(wire) > 0 {
 		c := &engine.ConstraintDef{}
-		err := c.UnmarshalBinary(tbl.constraint)
+		err := c.UnmarshalBinary(wire)
 		if err != nil {
 			return nil, err
 		}
 		defs = append(defs, c)
 	}
-	for i, def := range tbl.defs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if !objectio.IsPhysicalAddr(attr.Attr.Name) {
-				defs = append(defs, tbl.defs[i])
+	if tbl.source.Valid() {
+		for _, attr := range tbl.source.Columns(false) {
+			if !objectio.IsPhysicalAddr(attr.Name) {
+				defs = append(defs, &engine.AttributeDef{Attr: *attr})
+			}
+		}
+	} else {
+		for _, def := range tbl.defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				if !objectio.IsPhysicalAddr(attr.Attr.Name) {
+					copyAttr := *attr
+					copyAttr.Attr = cloneTableAttribute(attr.Attr)
+					defs = append(defs, &copyAttr)
+				}
 			}
 		}
 	}
@@ -1720,7 +1753,21 @@ func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	return defs, nil
 }
 
-func (tbl *txnTable) RefeshTableDef(ctx context.Context) {
+// cloneTableAttribute isolates mutable expression trees from catalog definitions.
+func cloneTableAttribute(attr engine.Attribute) engine.Attribute {
+	if attr.Default != nil {
+		attr.Default = proto.Clone(attr.Default).(*plan.Default)
+	}
+	if attr.OnUpdate != nil {
+		attr.OnUpdate = proto.Clone(attr.OnUpdate).(*plan.OnUpdate)
+	}
+	if attr.GeneratedCol != nil {
+		attr.GeneratedCol = proto.Clone(attr.GeneratedCol).(*plan.GeneratedCol)
+	}
+	return attr
+}
+
+func (tbl *txnTable) refreshTableDef(ctx context.Context) {
 	tbl.tableDef = nil
 	tbl.GetTableDef(ctx)
 }
@@ -1745,6 +1792,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		name2index := make(map[string]int32)
 		for _, def := range tbl.defs {
 			if attr, ok := def.(*engine.AttributeDef); ok {
+				privateAttr := cloneTableAttribute(attr.Attr)
 				name := strings.ToLower(attr.Attr.Name)
 				name2index[name] = i
 				cols = append(cols, &plan.ColDef{
@@ -1764,10 +1812,10 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 						NumericAttributes: uint32(attr.Attr.NumericAttributes),
 					},
 					Primary:      attr.Attr.Primary,
-					Default:      attr.Attr.Default,
-					OnUpdate:     attr.Attr.OnUpdate,
+					Default:      privateAttr.Default,
+					OnUpdate:     privateAttr.OnUpdate,
 					Comment:      attr.Attr.Comment,
-					GeneratedCol: attr.Attr.GeneratedCol,
+					GeneratedCol: privateAttr.GeneratedCol,
 					ClusterBy:    attr.Attr.ClusterBy,
 					Hidden:       attr.Attr.IsHidden,
 					Seqnum:       uint32(attr.Attr.Seqnum),
@@ -1978,11 +2026,24 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if err := validateAutoIncrEpochAdvance(tbl.extraInfo.AutoIncrEpoch, autoIncrResetCount); err != nil {
 		return err
 	}
+	// Prepare the complete transaction-owned state before any DDL mutation.
+	oldSource := tbl.source
+	oldPlanner := tbl.tableDef
+	if oldSource.Valid() {
+		defs, err := tbl.internalDefs()
+		if err != nil {
+			return err
+		}
+		tbl.defs = defs
+		tbl.constraint = oldSource.ConstraintBytes()
+		tbl.source = cache.SchemaSource{}
+	}
 	var err error
 	var checkCstr []byte
 	oldTableName := tbl.tableName
 	oldCreateSQL := tbl.createSql
 	olddefs := tbl.defs
+	oldVersion := tbl.version
 	oldPart := tbl.partitioned
 	oldPartInfo := tbl.partition
 	oldComment := tbl.comment
@@ -2006,8 +2067,6 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				tbl.partition = oldPartInfo
 			case api.AlterKind_UpdateComment:
 				tbl.comment = oldComment
-			case api.AlterKind_UpdateConstraint:
-				tbl.constraint = oldConstraint
 			case api.AlterKind_RenameTable:
 				tbl.tableName = oldTableName
 				tbl.createSql = oldCreateSQL
@@ -2024,7 +2083,17 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				tbl.extraInfo.AutoIncrEpoch = oldAutoIncrEpoch
 			}
 		}
+		tbl.source = oldSource
+		if oldSource.Valid() {
+			tbl.defs = nil
+			tbl.constraint = nil
+			tbl.version = oldVersion
+			tbl.tableDef = oldPlanner
+			return
+		}
 		tbl.defs = olddefs
+		tbl.constraint = oldConstraint
+		tbl.version = oldVersion
 		tbl.tableDef = nil
 		tbl.GetTableDef(ctx)
 	}
@@ -2166,13 +2235,13 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 1. delete old table metadata
-	if _, err := tbl.db.deleteTable(ctx, oldTableName, true, !createdInTxn); err != nil {
+	if err := tbl.db.deleteTable(ctx, oldTableName, true, !createdInTxn); err != nil {
 		return err
 	}
 
 	// update table defs after deleting old table metadata
 	tbl.defs = append(baseDefs, appendDef...)
-	tbl.RefeshTableDef(ctx)
+	tbl.refreshTableDef(ctx)
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata
@@ -2215,21 +2284,29 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 }
 
 func (tbl *txnTable) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
+	if tbl.source.Valid() {
+		return tbl.source.Columns(false), nil
+	}
 	var attrs []*engine.Attribute
 	for _, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			attrs = append(attrs, &attr.Attr)
+			copyAttr := cloneTableAttribute(attr.Attr)
+			attrs = append(attrs, &copyAttr)
 		}
 	}
 	return attrs, nil
 }
 
 func (tbl *txnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
+	if tbl.source.Valid() {
+		return tbl.source.Columns(true), nil
+	}
 	attrs := make([]*engine.Attribute, 0, 1)
 	for _, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			if attr.Attr.Primary {
-				attrs = append(attrs, &attr.Attr)
+				copyAttr := cloneTableAttribute(attr.Attr)
+				attrs = append(attrs, &copyAttr)
 			}
 		}
 	}
@@ -3213,6 +3290,29 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 	}
 
+	checkTombstones := func() (bool, error) {
+		if checkTombstone {
+			pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
+			pkType := plan2.ExprType2Type(&pkDef.Typ)
+			changed, tombstoneReason, err := tombstonePKExistsInRange(
+				ctx, tbl.tableId, p, from, to, keys, pkType, fs, tbl.proc.Load().GetMPool(),
+			)
+			if changed {
+				reason = tombstoneReason
+			}
+			return changed, err
+		}
+		return false, nil
+	}
+	if len(candidateBlks) == 0 {
+		return checkTombstones()
+	}
+
+	if pkCheckBailoutOnCandidateBlocks(len(candidateBlks)) {
+		reason = "candidate_blocks_bailout"
+		return true, nil
+	}
+
 	bytes, _ := keys.MarshalBinary()
 	colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
 	inExpr := plan2.MakeInExpr(
@@ -3249,109 +3349,91 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 	}
 
-	if pkCheckBailoutOnCandidateBlocks(len(candidateBlks)) {
-		reason = "candidate_blocks_bailout"
-		return true, nil
-	}
-
 	cacheVectors := containers.NewVectors(3)
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
-	if len(candidateBlks) > 0 {
-		// Acquire semaphore to limit concurrent block I/O across all transactions.
-		// This prevents 1000 goroutines from simultaneously reading blocks and
-		// exhausting mpool capacity. Release before the tombstone phase, which
-		// acquires its own permit (never nest acquisitions).
-		if err := acquirePKCheckSemaphore(ctx); err != nil {
+	// Acquire semaphore to limit concurrent block I/O across all transactions.
+	// This prevents 1000 goroutines from simultaneously reading blocks and
+	// exhausting mpool capacity. Release before the tombstone phase, which
+	// acquires its own permit (never nest acquisitions).
+	if err := acquirePKCheckSemaphore(ctx); err != nil {
+		return false, err
+	}
+
+	v2.TxnPKChangeCheckIOCounter.Inc()
+
+	for _, blk := range candidateBlks {
+		if err := ctx.Err(); err != nil {
+			releasePKCheckSemaphore()
 			return false, err
 		}
+		searchFunc := filter.DecideSearchFunc(blk.IsSorted())
+		if searchFunc == nil {
+			searchFunc = buildUnsortedFilter()
+		}
 
-		v2.TxnPKChangeCheckIOCounter.Inc()
-
-		for _, blk := range candidateBlks {
-			if err := ctx.Err(); err != nil {
-				releasePKCheckSemaphore()
-				return false, err
-			}
-			searchFunc := filter.DecideSearchFunc(blk.IsSorted())
-			if searchFunc == nil {
-				searchFunc = buildUnsortedFilter()
-			}
-
-			var matched, usable bool
-			if filter.CachedSearch != nil {
-				matched, usable, _, err = ioutil.LoadColumnDataBySearchAndCheckTS(
-					ctx,
-					uint16(pkSeq),
-					pkType,
-					fs,
-					blk.MetaLocation(),
-					filter.CachedSearch,
-					blk.IsSorted() && !filter.HasFakePK,
-					objectio.SEQNUM_COMMITTS,
-					from,
-					to,
-					tbl.proc.Load().GetMPool(),
-					fileservice.Policy(0),
-				)
-			} else {
-				var release func()
-				release, _, err = ioutil.LoadColumns(
-					ctx,
-					[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
-					[]types.Type{pkType, objectio.TSType, types.T_bool.ToType()},
-					fs,
-					blk.MetaLocation(),
-					cacheVectors,
-					tbl.proc.Load().GetMPool(),
-					fileservice.Policy(0),
-				)
-				if err == nil {
-					sels := searchFunc(cacheVectors)
-					if len(sels) == 0 {
-						matched, usable = false, true
-					} else {
-						matched, usable = pkCommitTSMatchedInRange(&cacheVectors[1], &cacheVectors[2], sels, from, to)
-					}
-					release()
-				}
-			}
-			if err != nil {
-				releasePKCheckSemaphore()
-				reason = "data_block_read_error"
-				if !checkTombstone {
-					obj, ok := p.GetObject(*objectio.ShortName(&blk.BlockID))
-					if ok && pkCheckObsoleteObjectMissing(obj, to, err) {
-						return true, moerr.NewTxnNeedRetry(ctx)
-					}
-				}
-				return true, err
-			}
-			if !usable || matched {
-				releasePKCheckSemaphore()
-				if usable {
-					reason = "data_commit_ts_hit"
+		var matched, usable bool
+		if filter.CachedSearch != nil {
+			matched, usable, _, err = ioutil.LoadColumnDataBySearchAndCheckTS(
+				ctx,
+				uint16(pkSeq),
+				pkType,
+				fs,
+				blk.MetaLocation(),
+				filter.CachedSearch,
+				blk.IsSorted() && !filter.HasFakePK,
+				objectio.SEQNUM_COMMITTS,
+				from,
+				to,
+				tbl.proc.Load().GetMPool(),
+				fileservice.Policy(0),
+			)
+		} else {
+			var release func()
+			release, _, err = ioutil.LoadColumns(
+				ctx,
+				[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+				[]types.Type{pkType, objectio.TSType, types.T_bool.ToType()},
+				fs,
+				blk.MetaLocation(),
+				cacheVectors,
+				tbl.proc.Load().GetMPool(),
+				fileservice.Policy(0),
+			)
+			if err == nil {
+				sels := searchFunc(cacheVectors)
+				if len(sels) == 0 {
+					matched, usable = false, true
 				} else {
-					reason = "data_commit_ts_unavailable"
+					matched, usable = pkCommitTSMatchedInRange(&cacheVectors[1], &cacheVectors[2], sels, from, to)
 				}
-				return true, nil
+				release()
 			}
 		}
-		releasePKCheckSemaphore()
-	}
-	if checkTombstone {
-		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
-		pkType := plan2.ExprType2Type(&pkDef.Typ)
-		changed, tombstoneReason, err := tombstonePKExistsInRange(
-			ctx, tbl.tableId, p, from, to, keys, pkType, fs, tbl.proc.Load().GetMPool(),
-		)
-		if changed {
-			reason = tombstoneReason
+		if err != nil {
+			releasePKCheckSemaphore()
+			reason = "data_block_read_error"
+			if !checkTombstone {
+				obj, ok := p.GetObject(*objectio.ShortName(&blk.BlockID))
+				if ok && pkCheckObsoleteObjectMissing(obj, to, err) {
+					return true, moerr.NewTxnNeedRetry(ctx)
+				}
+			}
+			return true, err
 		}
-		return changed, err
+		if !usable || matched {
+			releasePKCheckSemaphore()
+			if usable {
+				reason = "data_commit_ts_hit"
+			} else {
+				reason = "data_commit_ts_unavailable"
+			}
+			return true, nil
+		}
 	}
-	return false, nil
+	releasePKCheckSemaphore()
+	return checkTombstones()
 }
 
 // tombstonePKExistsInRange checks whether any tombstone object created or deleted

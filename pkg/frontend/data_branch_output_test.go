@@ -33,6 +33,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -48,6 +49,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -278,6 +281,7 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 
 	tblStuff := tableStuff{baseRel: baseRel, tarRel: tarRel}
 	tblStuff.def.colNames = []string{"id", "name", "__mo_diff_source", "__mo_diff_flag"}
+	tblStuff.def.baseColNames = tblStuff.def.colNames
 	tblStuff.def.colTypes = []types.Type{
 		types.T_int64.ToType(),
 		types.T_varchar.ToType(),
@@ -393,6 +397,271 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 	})
 }
 
+func TestDataBranchOutputTableUsesLineageColumnMapping(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableDef(ctx).Return(&plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "id", ColId: 1, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+		{Name: "note", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20, NotNullable: true}},
+	}}).AnyTimes()
+	tarRel.EXPECT().GetTableDef(ctx).Return(&plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "id", ColId: 1, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+		{Name: "extra", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}},
+		{Name: "label", ColId: 3, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20, NotNullable: true}},
+	}}).AnyTimes()
+	tables := tableStuff{baseRel: baseRel, tarRel: tarRel}
+	tables.def.colNames = []string{"id", "extra", "label"}
+	tables.def.baseColNames = []string{"id", "", "note"}
+	tables.def.tarOnlyIdxes = []int{1}
+	output := diffOutputTable{
+		databaseName: "db",
+		tableName:    "result",
+		columnNames:  []string{"__mo_diff_source", "__mo_diff_flag"},
+	}
+
+	t.Run("renamed common column with a different physical identity", func(t *testing.T) {
+		output.projectedIdxes = []int{0, 2}
+		sql, err := output.createSQL(ctx, tables)
+		require.NoError(t, err)
+		require.Contains(t, sql, "`label` VARCHAR(20) not null")
+	})
+	t.Run("target-only column reuses a base column identity", func(t *testing.T) {
+		output.projectedIdxes = []int{0, 1}
+		sql, err := output.createSQL(ctx, tables)
+		require.NoError(t, err)
+		require.Contains(t, sql, "`extra` INT default null")
+	})
+	t.Run("missing common column mapping", func(t *testing.T) {
+		missingMapping := tables
+		missingMapping.def.baseColNames = []string{"", "", "note"}
+		projected := output
+		projected.projectedIdxes = []int{0, 2}
+
+		sql, err := projected.createSQL(ctx, missingMapping)
+		require.ErrorContains(t, err, `destination column for source column "id"`)
+		require.Empty(t, sql)
+	})
+	t.Run("missing target-only column definition", func(t *testing.T) {
+		tarRel := mock_frontend.NewMockRelation(gomock.NewController(t))
+		tarRel.EXPECT().GetTableDef(ctx).Return(&plan.TableDef{Cols: []*plan.ColDef{
+			{Name: "id", ColId: 1, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+		}})
+		missingColumn := tables
+		missingColumn.tarRel = tarRel
+		projected := output
+		projected.projectedIdxes = []int{0, 1}
+
+		sql, err := projected.createSQL(ctx, missingColumn)
+		require.ErrorContains(t, err, `source column "extra" is unavailable`)
+		require.Empty(t, sql)
+	})
+}
+
+func TestDataBranchOutputTableUnicodeFold(t *testing.T) {
+	t.Run("lineage rejects fold equivalent target columns", func(t *testing.T) {
+		baseDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "s"}}}
+		tarDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "s"}, {Name: "ſ"}}}
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			[]*plan.TableDef{baseDef, tarDef}, []bool{false, false},
+			[]*plan.TableDef{baseDef}, []bool{false},
+		)
+		require.ErrorContains(t, err, "target columns 's' and 'ſ' have equivalent names")
+		require.Nil(t, endpointColumns)
+	})
+
+	t.Run("lineage maps ordinary target columns", func(t *testing.T) {
+		baseCol := &plan.ColDef{Name: "id"}
+		baseDef := &plan.TableDef{Cols: []*plan.ColDef{baseCol}}
+		tarDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "ID"}}}
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			[]*plan.TableDef{baseDef, tarDef}, []bool{false, false},
+			[]*plan.TableDef{baseDef}, []bool{false},
+		)
+		require.NoError(t, err)
+		require.Len(t, endpointColumns, 1)
+		require.Same(t, baseCol, endpointColumns["id"])
+	})
+
+	t.Run("lineage maps fold equivalent columns by lowercase target name", func(t *testing.T) {
+		baseCol := &plan.ColDef{Name: "S"}
+		baseDef := &plan.TableDef{Cols: []*plan.ColDef{baseCol}}
+		tarDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "ſ"}}}
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			[]*plan.TableDef{baseDef, tarDef}, []bool{false, false},
+			[]*plan.TableDef{baseDef}, []bool{false},
+		)
+		require.NoError(t, err)
+		require.Len(t, endpointColumns, 1)
+		require.Same(t, baseCol, endpointColumns["ſ"])
+	})
+
+	for _, tc := range []struct {
+		name           string
+		baseCols       []string
+		targetCols     []string
+		projection     tree.IdentifierList
+		wantOutputCols []string
+		wantSQL        string
+		wantError      string
+	}{
+		{
+			name:       "two target columns match one base column",
+			baseCols:   []string{"id", "s"},
+			targetCols: []string{"id", "s", "ſ"},
+			wantError:  "base column 's' matches multiple target columns ('s' and 'ſ')",
+		},
+		{
+			name:       "fold equivalent target-only columns without LCA",
+			baseCols:   []string{"id"},
+			targetCols: []string{"id", "s", "ſ"},
+			wantError:  "target columns 's' and 'ſ' have equivalent names",
+		},
+		{
+			name:       "fold equivalent base columns remain ambiguous",
+			baseCols:   []string{"id", "s", "ſ"},
+			targetCols: []string{"id", "s"},
+			wantError:  "base columns 's' and 'ſ' have equivalent names",
+		},
+		{
+			name:           "fold equivalent common column and projection",
+			baseCols:       []string{"id", "S"},
+			targetCols:     []string{"id", "ſ"},
+			projection:     tree.IdentifierList{"s"},
+			wantOutputCols: []string{"__mo_diff_source", "__mo_diff_flag", "id", "ſ"},
+			wantSQL:        "`ſ` INT default null",
+		},
+		{
+			name:           "metadata collision with fold equivalent source column",
+			baseCols:       []string{"id", "__mo_diff_ſource"},
+			targetCols:     []string{"id", "__mo_diff_ſource"},
+			wantOutputCols: []string{"__mo_diff_source_1", "__mo_diff_flag", "id", "__mo_diff_ſource"},
+			wantSQL:        "`__mo_diff_source_1` varchar(255) default null",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			newRelation := func(id uint64, names []string) *mock_frontend.MockRelation {
+				def := &plan.TableDef{
+					Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+					Cols: []*plan.ColDef{
+						{Name: "id", Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}},
+						{Name: catalog.Row_ID, Hidden: true},
+					},
+				}
+				for _, name := range names[1:] {
+					def.Cols = append(def.Cols, &plan.ColDef{
+						Name: name,
+						Typ:  plan.Type{Id: int32(types.T_int32)},
+					})
+				}
+				rel := mock_frontend.NewMockRelation(ctrl)
+				rel.EXPECT().GetTableID(ctx).Return(id)
+				rel.EXPECT().GetTableDef(ctx).Return(def).AnyTimes()
+				return rel
+			}
+			tables := tableStuff{
+				tarRel:  newRelation(1, tc.targetCols),
+				baseRel: newRelation(2, tc.baseCols),
+			}
+			tables.def.colNames = tc.targetCols
+			tables.def.pkKind = normalKind
+			tables.def.pkColIdxes = []int{0}
+			for idx := range tc.targetCols {
+				tables.def.visibleIdxes = append(tables.def.visibleIdxes, idx)
+			}
+
+			err := reconcileDataBranchEndpointSchema(ctx, nil, nil, &tables, &branchMetaInfo{})
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.baseCols, tables.def.baseColNames)
+			require.Equal(t, []int{0, 1}, tables.def.baseColToTarIdx)
+			outName := tree.NewTableName("out",
+				tree.ObjectNamePrefix{SchemaName: "db", ExplicitSchema: true}, nil)
+			output, err := newDiffOutputTable(ctx, newValidateSession(t), &tree.DataBranchDiff{
+				OutputOpt: &tree.DiffOutputOpt{As: *outName},
+				Columns:   tc.projection,
+			}, tables)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantOutputCols, output.columnNames)
+			sql, err := output.createSQL(ctx, tables)
+			require.NoError(t, err)
+			require.Contains(t, sql, tc.wantSQL)
+		})
+	}
+
+	var tables tableStuff
+	tables.def.colNames = []string{"id", "s", "ſ"}
+	tables.def.visibleIdxes = []int{0, 1, 2}
+	t.Run("projection rejects fold equivalent visible columns", func(t *testing.T) {
+		projected, err := resolveProjectedIdxes(tree.IdentifierList{"s"}, tables)
+		require.ErrorContains(t, err, "equivalent")
+		require.Nil(t, projected)
+	})
+	t.Run("output without projection rejects fold equivalent visible columns", func(t *testing.T) {
+		output, err := newDiffOutputTable(context.Background(), newValidateSession(t), &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{As: makeBranchTableName("db", "out", nil)},
+			Columns:   nil,
+		}, tables)
+		require.ErrorContains(t, err, "equivalent")
+		require.Nil(t, output)
+	})
+}
+
+func TestDataBranchDecimalNumericAttributes(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		baseAttrs, tarAttrs uint32
+		compatible          bool
+	}{
+		{"unsigned and signed", types.NumericAttributeUnsigned, 0, false},
+		{"unsigned and zerofill", types.NumericAttributeUnsigned, types.NumericAttributeZerofillMask, false},
+		{"signed and zerofill", 0, types.NumericAttributeZerofillMask, false},
+		{"matching unsigned", types.NumericAttributeUnsigned, types.NumericAttributeUnsigned, true},
+		{"matching signed", 0, 0, true},
+		{"matching zerofill", types.NumericAttributeZerofillMask, types.NumericAttributeZerofillMask, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decimal := plan.Type{Id: int32(types.T_decimal64), Width: 9, Scale: 2}
+			baseType, tarType := decimal, decimal
+			baseType.NumericAttributes = tc.baseAttrs
+			tarType.NumericAttributes = tc.tarAttrs
+			require.Equal(t, tc.compatible, isDataBranchLogicalTypeEquivalent(baseType, tarType))
+
+			pk := &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"}
+			id := &plan.ColDef{Name: "id", ColId: 1, Primary: true, Typ: plan.Type{Id: int32(types.T_int32)}}
+			baseDef := &plan.TableDef{Pkey: pk, Cols: []*plan.ColDef{
+				id,
+				{Name: "pad", ColId: 2, Seqnum: 1, Typ: decimal},
+				{Name: "v", ColId: 3, Seqnum: 2, Typ: baseType},
+			}}
+			tarDef := &plan.TableDef{Pkey: pk, Cols: []*plan.ColDef{
+				id,
+				{Name: "v", ColId: 2, Seqnum: 1, Typ: tarType},
+				{Name: "pad", ColId: 3, Seqnum: 2, Typ: decimal},
+			}}
+			common, visible, targetOnly, err := checkSchemaCompatibilityWithResolver(
+				tarDef, baseDef, func(tarCol *plan.ColDef) *plan.ColDef {
+					return dataBranchColumnDefByLogicalName(baseDef, tarCol)
+				},
+			)
+			if !tc.compatible {
+				require.ErrorContains(t, err, "schema compatibility check: column 'v' has different type attributes")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, []int{0, 1, 2}, common)
+			require.Equal(t, []int{0, 1, 2}, visible)
+			require.Empty(t, targetOnly)
+		})
+	}
+}
+
 func TestDataBranchDiffCanExecuteInUncommittedTransaction(t *testing.T) {
 	can, err := statementCanBeExecutedInUncommittedTransaction(
 		context.Background(), newValidateSession(t), &tree.DataBranchDiff{},
@@ -429,6 +698,7 @@ func TestMaterializeDiffOutputAsTable_InsertFailureDropsDestination(t *testing.T
 
 	tblStuff := tableStuff{baseRel: baseRel, tarRel: tarRel}
 	tblStuff.def.colNames = []string{"id"}
+	tblStuff.def.baseColNames = tblStuff.def.colNames
 	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType()}
 	tblStuff.def.visibleIdxes = []int{0}
 	tblStuff.def.pkColIdx = 0
@@ -477,6 +747,158 @@ func TestMaterializeDiffOutputAsTable_InsertFailureDropsDestination(t *testing.T
 	require.True(t, strings.HasPrefix(sqls[0], "create table `out_db`.`diff_out`"))
 	require.True(t, strings.HasPrefix(sqls[1], "insert into `out_db`.`diff_out`"))
 	require.Equal(t, "drop table if exists `out_db`.`diff_out`", sqls[2])
+}
+
+func TestMaterializeDiffOutputAsTable_PreservesTimestampInstants(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	fs := getPu(ses.GetService()).FileService
+	t.Cleanup(func() { ses.Close(); fs.Close(ctx) })
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	ses.SetTimeZone(loc)
+	back := ses.InitBackExec(nil, "", fakeDataSetFetcher2).(*backExec)
+	t.Cleanup(back.Close)
+	require.Same(t, loc, back.backSes.GetTimeZone())
+
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+		{Name: "ts", Typ: plan.Type{Id: int32(types.T_timestamp), Width: 6, Scale: 6, NotNullable: true}},
+		{Name: "other_ts", Typ: plan.Type{Id: int32(types.T_timestamp), Width: 6, Scale: 6}},
+	}}).Times(2)
+	tblStuff := tableStuff{baseRel: rel, tarRel: rel}
+	tblStuff.def.colNames = []string{"id", "ts", "other_ts"}
+	tblStuff.def.baseColNames = tblStuff.def.colNames
+	tsType := types.New(types.T_timestamp, 0, 6)
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), tsType, tsType}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.bufPool = &sync.Pool{New: func() any { return &bytes.Buffer{} }}
+
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	bat := batch.NewWithSize(len(tblStuff.def.colTypes))
+	defer bat.Clean(mp)
+	for i, typ := range tblStuff.def.colTypes {
+		bat.Vecs[i] = vector.NewVec(typ)
+	}
+	parse := func(zone *time.Location, literal string) types.Timestamp {
+		t.Helper()
+		ts, parseErr := types.ParseTimestamp(zone, literal, 6)
+		require.NoError(t, parseErr)
+		return ts
+	}
+	const (
+		normal     = "2024-02-01 06:07:08.654321"
+		foldFirst  = "2024-11-03 05:30:00.123456"
+		foldSecond = "2024-11-03 06:30:00.123456"
+		lowerAt5   = "1969-12-31 19:00:01.000000"
+		lowerAt8   = "1969-12-31 16:00:01.000000"
+		upper      = "9999-12-31 23:59:59.999999"
+		zero       = "0000-00-00 00:00:00.000000"
+	)
+	ordinary := parse(time.UTC, normal)
+	first, second := parse(time.UTC, foldFirst), parse(time.UTC, foldSecond)
+	for _, ts := range []types.Timestamp{first, second} {
+		require.Equal(t, "2024-11-03 01:30:00.123456", ts.String2(loc, 6))
+	}
+	low := types.TimestampMinValue
+	highAt5 := parse(time.FixedZone("-05:00", -5*3600), upper)
+	highAt8 := parse(time.FixedZone("-08:00", -8*3600), upper)
+	require.Equal(t, "10000-01-01 04:59:59.999999", highAt5.String2(time.UTC, 6))
+	require.Equal(t, "10000-01-01 07:59:59.999999", highAt8.String2(time.UTC, 6))
+
+	const null = types.Timestamp(0) // Only used as a NULL marker in this fixture.
+	rows := [][2]types.Timestamp{
+		{first, null},
+		{second, null},
+		{low, highAt5},
+		{types.ZeroTimestamp, highAt5},
+		{first, low},
+		{low, highAt8},
+		{ordinary, types.ZeroTimestamp},
+	}
+	for i, row := range rows {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i+1), false, mp))
+		for j, ts := range row {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[j+1], ts, ts == null, mp))
+		}
+	}
+	bat.SetRowCount(len(rows))
+	dst := tree.NewTableName(
+		tree.Identifier("diff_out"),
+		tree.ObjectNamePrefix{SchemaName: tree.Identifier("out_db"), ExplicitSchema: true},
+		nil,
+	)
+	stmt := &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{As: *dst}}
+	const insert = "insert into `out_db`.`diff_out` (`__mo_diff_source`,`__mo_diff_flag`,`id`,`ts`,`other_ts`) values "
+	statements := []struct {
+		sql    string
+		hours  int
+		values []types.Timestamp
+	}{
+		{
+			insert + "('branch','INSERT',1,'" + foldFirst + "',NULL),('branch','INSERT',2,'" + foldSecond + "',NULL)",
+			0, []types.Timestamp{first, second},
+		},
+		{
+			insert + "('branch','INSERT',3,'" + lowerAt5 + "','" + upper + "')," +
+				"('branch','INSERT',4,'" + zero + "','" + upper + "')," +
+				"('branch','INSERT',5,'2024-11-03 00:30:00.123456','" + lowerAt5 + "')",
+			-5, []types.Timestamp{low, highAt5, types.ZeroTimestamp, highAt5, first, low},
+		},
+		{
+			insert + "('branch','INSERT',6,'" + lowerAt8 + "','" + upper + "')," +
+				"('branch','INSERT',7,'2024-01-31 22:07:08.654321','" + zero + "')",
+			-8, []types.Timestamp{low, highAt8, ordinary, types.ZeroTimestamp},
+		},
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	phase, err := newDataBranchOutputAsTablePhase(runCtx, proc)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, phase.close()) }()
+	require.NoError(t, phase.spool.append(batchWithKind{name: "branch", kind: diffInsert, batch: bat}))
+	phase.markProducerDone()
+
+	// Observe the SQL and timezone passed by the real background executor.
+	original := GetComputationWrapperInBack
+	defer func() { GetComputationWrapperInBack = original }()
+	var sqls []string
+	var zones []*time.Location
+	GetComputationWrapperInBack = func(_ *ExecCtx, _ string, input *UserInput, _ string, _ engine.Engine, proc *process.Process, _ FeSession) ([]ComputationWrapper, error) {
+		require.Same(t, loc, ses.GetTimeZone())
+		sqls = append(sqls, input.getSql())
+		zones = append(zones, proc.Base.SessionInfo.TimeZone)
+		return nil, nil
+	}
+	err = phase.materialize(runCtx, cancel, ses, back, stmt, tblStuff)
+	require.Same(t, loc, ses.GetTimeZone())
+	require.Same(t, loc, back.backSes.GetTimeZone())
+	require.NoError(t, err)
+	require.Len(t, sqls, 4)
+	require.Contains(t, sqls[0], "`ts` TIMESTAMP(6) not null")
+	require.Same(t, time.UTC, zones[0])
+
+	timestampLiteral := regexp.MustCompile(`'([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6})'`)
+	for i, want := range statements {
+		sql, zone := sqls[i+1], zones[i+1]
+		require.Equal(t, want.sql, sql)
+		if want.hours == 0 {
+			require.Same(t, time.UTC, zone)
+		}
+		_, offset := time.Unix(0, 0).In(zone).Zone()
+		require.Equal(t, want.hours*3600, offset)
+		literals := timestampLiteral.FindAllStringSubmatch(sql, -1)
+		require.Len(t, literals, len(want.values))
+		for j, literal := range literals {
+			if want.values[j] == types.ZeroTimestamp {
+				require.Equal(t, zero, literal[1])
+			}
+			require.Equal(t, want.values[j], parse(zone, literal[1]))
+		}
+	}
 }
 
 func TestDataBranchOutputAsTablePhase_BlocksOutputSQLUntilProducerCompletes(t *testing.T) {
