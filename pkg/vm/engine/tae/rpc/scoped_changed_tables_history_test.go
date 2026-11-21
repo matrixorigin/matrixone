@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -141,6 +142,94 @@ func persistScopedHistoryIndex(
 	}
 	require.NotEmpty(t, locs)
 	return locs
+}
+
+type scopedCheckpointRunner struct {
+	checkpoint.Runner
+	latest atomic.Pointer[checkpoint.CheckpointEntry]
+}
+
+func (r *scopedCheckpointRunner) MaxCheckpoint() *checkpoint.CheckpointEntry {
+	return r.latest.Load()
+}
+
+func TestScopedChangedTablesRetriesRetiredCheckpointIndex(t *testing.T) {
+	ctx := t.Context()
+	fs := &scopedIndexReadFS{FileService: objectio.TmpNewFileservice(ctx, t.TempDir())}
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.Fs = fs
+	h := newScopedCheckpointTestHandle(t, opts)
+
+	write := startScopedChangedTablesTxn(t, h.Handle)
+	database, err := testutil.CreateDatabase2(ctx, write, "retired_checkpoint_index")
+	require.NoError(t, err)
+	schema := catalog.MockSchema(2, 0)
+	relation, err := testutil.CreateRelation2(ctx, write, database, schema)
+	require.NoError(t, err)
+	rows := catalog.MockBatch(schema, 1)
+	defer rows.Close()
+	require.NoError(t, relation.Append(ctx, rows))
+	require.NoError(t, write.Commit(ctx))
+	commit := write.GetCommitTS()
+	table := cmd_util.ScopedChangedTable{DatabaseID: database.GetID(), TableID: relation.ID()}
+
+	require.NoError(t, h.db.ForceCheckpoint(ctx, h.db.TxnMgr.Now()))
+	runner := h.db.BGCheckpointRunner
+	predecessor := runner.MaxCheckpoint()
+	require.NotNil(t, predecessor)
+	require.True(t, predecessor.IsIncremental())
+	oldIndex := predecessor.GetTableIDLocation()
+	require.Equal(t, 1, oldIndex.Len())
+	oldPath := oldIndex.Get(0).Name().String()
+	require.NoError(t, h.db.ForceGlobalCheckpoint(ctx, predecessor.GetEnd(), time.Hour))
+	successor := runner.MaxCheckpoint()
+	require.NotNil(t, successor)
+	require.True(t, successor.IsGlobal())
+	newIndex := successor.GetTableIDLocation()
+	require.Equal(t, 1, newIndex.Len())
+	newPath := newIndex.Get(0).Name().String()
+	require.NotEqual(t, oldPath, newPath)
+
+	// Build both indexes before starting the RPC, then control when the
+	// handler sees the successor. Stop periodic jobs before replacing the runner.
+	h.db.CronJobs.Reset()
+	selection := &scopedCheckpointRunner{Runner: runner}
+	selection.latest.Store(predecessor)
+	h.db.BGCheckpointRunner = selection
+	defer func() { h.db.BGCheckpointRunner = runner }()
+	h.db.LogtailMgr.SetReplayHistoryFloor(predecessor.GetEnd())
+	req := cmd_util.GetScopedChangedTablesReq{
+		From: commit.Prev().ToTimestamp(), To: commit.ToTimestamp(),
+		Tables: []cmd_util.ScopedChangedTable{table},
+	}
+	var resp cmd_util.GetScopedChangedTablesResp
+	check := func(t *testing.T) {
+		t.Helper()
+		_, err := h.HandleGetScopedChangedTables(t.Context(), txn.TxnMeta{}, &req, &resp)
+		require.NoError(t, err)
+		require.NoError(t, cmd_util.ValidateScopedChangedTablesResponse(t.Context(), &req, &resp))
+		require.Equal(t, []cmd_util.ScopedChangedTable{table}, resp.Tables)
+	}
+	check(t)
+
+	t.Run("retired index", func(t *testing.T) {
+		failed, err := readScopedChangedTablesWithIndexPaused(t, h.Handle, fs, oldPath, &req, func(ctx context.Context) {
+			// Model GC removing the old object after the covering checkpoint is published.
+			selection.latest.Store(successor)
+			require.NoError(t, fs.Delete(ctx, oldPath))
+		})
+		require.Empty(t, failed)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrChangeWatchRetry), "%v", err)
+	})
+	check(t)
+
+	t.Run("missing current index", func(t *testing.T) {
+		require.NoError(t, fs.Delete(t.Context(), newPath))
+		_, err := h.HandleGetScopedChangedTables(t.Context(), txn.TxnMeta{}, &req, &resp)
+		require.Empty(t, resp)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
+	})
 }
 
 func TestScopedChangedTablesBatchesCheckpointReads(t *testing.T) {

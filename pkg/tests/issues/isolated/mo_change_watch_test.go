@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -57,7 +58,11 @@ func TestChangeWatchProxy(t *testing.T) {
 	require.NoError(t, err)
 	cnConfig := cn.GetServiceConfig()
 
-	socket := filepath.Join(t.TempDir(), "proxy.sock")
+	// Unix socket paths have a small OS limit, so use a short temporary root.
+	socketDir, err := os.MkdirTemp("/tmp", "mo-watch-proxy-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(socketDir)) })
+	socket := filepath.Join(socketDir, "proxy.sock")
 	proxyConfig := proxy.Config{UUID: uuid.NewString(), ListenAddress: "unix://" + socket, RebalanceDisabled: true}
 	proxyConfig.HAKeeper.ClientConfig = cnConfig.HAKeeperClient
 	rt := moruntime.NewRuntime(metadata.ServiceType_PROXY, proxyConfig.UUID, zap.NewNop())

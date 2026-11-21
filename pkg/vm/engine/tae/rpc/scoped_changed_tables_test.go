@@ -204,6 +204,48 @@ func (fs *scopedIndexReadFS) Read(ctx context.Context, request *fileservice.IOVe
 	return fs.FileService.Read(ctx, request)
 }
 
+func readScopedChangedTablesWithIndexPaused(
+	t *testing.T,
+	h *Handle,
+	fs *scopedIndexReadFS,
+	path string,
+	req *cmd_util.GetScopedChangedTablesReq,
+	change func(context.Context),
+) (cmd_util.GetScopedChangedTablesResp, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	gate := &scopedIndexReadGate{
+		path:    path,
+		entered: make(chan struct{}),
+		resume:  make(chan struct{}),
+	}
+	fs.gate.Store(gate)
+	defer fs.gate.Store(nil)
+	var resp cmd_util.GetScopedChangedTablesResp
+	var err error
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		_, err = h.HandleGetScopedChangedTables(ctx, txn.TxnMeta{}, req, &resp)
+	}()
+	defer func() {
+		cancel()
+		<-finished
+	}()
+	select {
+	case <-gate.entered:
+	case <-finished:
+		t.Fatalf("scoped scan ended before reading index %s: %v", path, err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	change(ctx)
+	close(gate.resume)
+	<-finished
+	return resp, err
+}
+
 func TestScopedChangedTablesReadIndexAndFailClosed(t *testing.T) {
 	ctx := t.Context()
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -258,47 +300,10 @@ func TestScopedChangedTablesReadIndexAndFailClosed(t *testing.T) {
 
 	holdIndexRead := func(t *testing.T, change func(context.Context), message string) {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		gate := &scopedIndexReadGate{
-			path:    locations.Get(0).Name().UnsafeString(),
-			entered: make(chan struct{}),
-			resume:  make(chan struct{}),
-		}
-		fs.gate.Store(gate)
-		defer fs.gate.Store(nil)
-		type probeResult struct {
-			resp cmd_util.GetScopedChangedTablesResp
-			err  error
-		}
-		done := make(chan probeResult, 1)
-		finished := make(chan struct{})
-		go func() {
-			defer close(finished)
-			var out probeResult
-			_, out.err = h.HandleGetScopedChangedTables(ctx, txn.TxnMeta{}, &req, &out.resp)
-			done <- out
-		}()
-		defer func() {
-			cancel()
-			<-finished
-		}()
-		select {
-		case <-gate.entered:
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
-		}
-		change(ctx)
-		close(gate.resume)
-		var outcome probeResult
-		select {
-		case outcome = <-done:
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
-		}
-		require.ErrorContains(t, outcome.err, message)
-		require.True(t, moerr.IsMoErrCode(outcome.err, moerr.ErrChangeWatchRetry), "%v", outcome.err)
-		require.Empty(t, outcome.resp)
+		resp, err := readScopedChangedTablesWithIndexPaused(t, h.Handle, fs, locations.Get(0).Name().String(), &req, change)
+		require.ErrorContains(t, err, message)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrChangeWatchRetry), "%v", err)
+		require.Empty(t, resp)
 	}
 	t.Run("write mode changes during scan", func(t *testing.T) {
 		defer h.db.TxnMode.Store(uint32(db.DBTxnMode_Write))

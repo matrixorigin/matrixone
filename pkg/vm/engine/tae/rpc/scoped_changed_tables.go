@@ -15,6 +15,7 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"math"
 	"sync"
@@ -245,7 +246,16 @@ func (h *Handle) scanScopedChangedTableIndex(
 	if checkpoint == nil {
 		return moerr.NewChangeWatchHistoryUnavailable(ctx, "scoped changed-table history has no covering checkpoint")
 	}
-	return scanScopedChangedTableIndexLocations(ctx, checkpoint.GetTableIDLocation(), h.db.Runtime.Fs, from, to, add)
+	locations := checkpoint.GetTableIDLocation()
+	err := scanScopedChangedTableIndexLocations(ctx, locations, h.db.Runtime.Fs, from, to, add)
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		// Disk GC can retire the selected index once a successor is published.
+		current := h.db.BGCheckpointRunner.MaxCheckpoint()
+		if current != nil && !bytes.Equal(current.GetTableIDLocation(), locations) {
+			return moerr.NewChangeWatchRetry(ctx, "checkpoint index was replaced during scoped changed-table scan")
+		}
+	}
+	return err
 }
 
 func scanScopedChangedTableIndexLocations(
