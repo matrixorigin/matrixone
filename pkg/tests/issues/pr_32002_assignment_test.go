@@ -105,6 +105,63 @@ func TestPR32002ReviewBoundaries(t *testing.T) {
 			exec("drop table row_warning")
 		}
 
+		exec("create table warning_source (v int)")
+		exec("insert into warning_source values (1),(300)")
+		exec("create table mixed_warnings (v tinyint)")
+		checkWarningRows := func(expected ...int) {
+			t.Helper()
+			rows, err := conn.QueryContext(ctx, "show warnings")
+			require.NoError(t, err)
+			defer rows.Close()
+			var messages []string
+			for rows.Next() {
+				var level, message string
+				var code int
+				require.NoError(t, rows.Scan(&level, &code, &message))
+				require.Equal(t, int(moerr.ER_WARN_DATA_OUT_OF_RANGE), code)
+				messages = append(messages, message)
+			}
+			require.NoError(t, rows.Err())
+			want := make([]string, len(expected))
+			for i, row := range expected {
+				want[i] = fmt.Sprintf("Out of range value for TINYINT assignment at row %d", row)
+			}
+			require.ElementsMatch(t, want, messages)
+		}
+		checkStored := func(expected string) {
+			t.Helper()
+			var values string
+			require.NoError(t, conn.QueryRowContext(ctx, "select group_concat(v order by v) from mixed_warnings").Scan(&values))
+			require.Equal(t, expected, values)
+		}
+
+		exec("insert ignore into mixed_warnings values (2),((select v from warning_source where v=300)),('301'),((select v from warning_source where v=1)),('302')")
+		checkWarningRows(2, 3, 5)
+		checkStored("1,2,127,127,127")
+		exec("truncate table mixed_warnings")
+		stmt, err := conn.PrepareContext(ctx, "insert ignore into mixed_warnings values ((select v from warning_source where v=1)),(?)")
+		require.NoError(t, err)
+		defer stmt.Close()
+		for _, value := range []string{"300", "301"} {
+			_, err := stmt.ExecContext(ctx, value)
+			require.NoError(t, err)
+			checkWarningRows(2)
+		}
+		checkStored("1,1,127,127")
+
+		// A scalar-cardinality error must still abort the entire statement.
+		_, err = conn.ExecContext(ctx, "insert ignore into mixed_warnings values ('300'), ((select v from warning_source))")
+		require.ErrorContains(t, err, "Subquery returns more than 1 row")
+		checkStored("1,1,127,127")
+
+		exec("set session sql_mode=''")
+		exec("create table replace_warnings (id int primary key, v tinyint)")
+		exec("replace into replace_warnings values (1, 1), (1,(select v from warning_source where v=300))")
+		checkWarningRows(2)
+		var replaced int
+		require.NoError(t, conn.QueryRowContext(ctx, "select v from replace_warnings where id=1").Scan(&replaced))
+		require.Equal(t, 127, replaced)
+
 		exec("set session sql_mode=''")
 		exec("create table ints (s tinyint, u tinyint unsigned)")
 		exec("insert into ints values ('-18446744073709551616','-18446744073709551616')")

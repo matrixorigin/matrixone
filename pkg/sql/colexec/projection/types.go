@@ -29,6 +29,8 @@ var _ vm.Operator = new(Projection)
 type Projection struct {
 	ctr         container
 	ProjectList []*plan.Expr
+	// ValuesWarningRow is the statement row for a singleton VALUES projection.
+	ValuesWarningRow uint64
 
 	// GroupingSetCount and GroupingFlags turn this projection into a
 	// vector-level grouping-set expander. The first len(flags)/count columns are

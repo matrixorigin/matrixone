@@ -4420,7 +4420,7 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 		node.Children[i] = builder.removeUnnecessaryProjections(childID)
 	}
 
-	if node.NodeType != plan.Node_PROJECT {
+	if node.NodeType != plan.Node_PROJECT || node.ValuesWarningRow() != 0 {
 		return nodeID
 	}
 	if _, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {

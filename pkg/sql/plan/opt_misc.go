@@ -255,7 +255,7 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 		// after arbitration rows were already filtered.
 		return false
 	}
-	if node.NodeType != plan.Node_PROJECT || node.Limit != nil || node.Offset != nil {
+	if node.NodeType != plan.Node_PROJECT || node.Limit != nil || node.Offset != nil || node.ValuesWarningRow() != 0 {
 		return false
 	}
 	if _, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {

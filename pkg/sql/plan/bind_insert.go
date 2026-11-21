@@ -6936,7 +6936,9 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 				return 0, err
 			}
 		}
+		var warningRowOption string
 		if carryOrdinal {
+			warningRowOption = plan.ValuesWarningRowOption(uint64(rowIdx) + 1)
 			projectList[ordinalPos] = MakePlan2Int64ConstExprWithType(int64(rowIdx))
 		}
 		rowCtx.headings = make([]string, projectWidth)
@@ -6946,10 +6948,11 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 			rowCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
 		}
 		if carryOrdinal {
-			rowCtx.headings[ordinalPos] = "_values_ordinal"
+			rowCtx.headings[ordinalPos] = plan.ValuesWarningOrdinalColumn
 		}
 		branches = append(branches, builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_PROJECT,
+			ExtraOptions: warningRowOption,
 			ProjectList:  projectList,
 			Children:     []int32{dummyID},
 			BindingTags:  []int32{projectTag},
@@ -6980,7 +6983,9 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 				Typ:   targetCols[colIdx].Typ,
 			}
 		}
+		var scanOption string
 		if carryOrdinal {
+			scanOption = plan.ValuesWarningOrdinalScan
 			rowsetData.Cols[ordinalPos] = &plan.ColData{}
 			for _, rowIdx := range literalRows {
 				rowsetData.Cols[ordinalPos].Data = append(rowsetData.Cols[ordinalPos].Data, &plan.RowsetExpr{
@@ -6989,17 +6994,18 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 			}
 			valueScanTableDef.Cols[ordinalPos] = &plan.ColDef{
 				ColId: 0,
-				Name:  "_values_ordinal",
+				Name:  plan.ValuesWarningOrdinalColumn,
 				Typ:   MakePlan2Int64ConstExprWithType(0).Typ,
 			}
 		}
 		nodeID, _ := uuid.NewV7()
 		scanID := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_VALUE_SCAN,
-			RowsetData:  rowsetData,
-			TableDef:    valueScanTableDef,
-			BindingTags: []int32{lastTag},
-			Uuid:        nodeID[:],
+			NodeType:     plan.Node_VALUE_SCAN,
+			ExtraOptions: scanOption,
+			RowsetData:   rowsetData,
+			TableDef:     valueScanTableDef,
+			BindingTags:  []int32{lastTag},
+			Uuid:         nodeID[:],
 		}, rowCtx)
 		projectTag := builder.genNewBindTag()
 		projectList := make([]*plan.Expr, projectWidth)
@@ -7017,7 +7023,7 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 			rowCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
 		}
 		if carryOrdinal {
-			rowCtx.headings[ordinalPos] = "_values_ordinal"
+			rowCtx.headings[ordinalPos] = plan.ValuesWarningOrdinalColumn
 		}
 		branches = append(branches, builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_PROJECT,
@@ -7064,7 +7070,7 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		if colIdx < len(colNames) {
 			unionCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
 		} else {
-			unionCtx.headings[colIdx] = "_values_ordinal"
+			unionCtx.headings[colIdx] = plan.ValuesWarningOrdinalColumn
 		}
 		unionCtx.projects[colIdx] = &plan.Expr{
 			Typ:  builder.qry.Nodes[lastNodeID].ProjectList[colIdx].Typ,

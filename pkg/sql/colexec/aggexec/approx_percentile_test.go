@@ -1928,6 +1928,7 @@ func TestQuantileSketchMergeEmptyParityLevelIntoEmptyDestination(t *testing.T) {
 
 func TestApproxPercentileExec_Decimal256MergeRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	typ := types.New(types.T_decimal256, 48, 1)
 	makeExec := func() AggFuncExec {
