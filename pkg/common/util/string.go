@@ -14,6 +14,12 @@
 
 package util
 
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+
 // Abbreviate truncates a string from the beginning to the specified length.
 // Parameters:
 //   - str: the input string
@@ -35,4 +41,26 @@ func Abbreviate(str string, length int) string {
 		return str[:l] + "..."
 	}
 	return str[:l]
+}
+
+// EqualFoldKey produces the equivalence classes used by strings.EqualFold.
+func EqualFoldKey(value string) string {
+	var folded strings.Builder
+	for _, r := range value {
+		if r < utf8.RuneSelf {
+			if r >= 'a' && r <= 'z' {
+				r -= 'a' - 'A'
+			}
+			folded.WriteByte(byte(r))
+			continue
+		}
+		min := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < min {
+				min = next
+			}
+		}
+		folded.WriteRune(min)
+	}
+	return folded.String()
 }
