@@ -1187,7 +1187,8 @@ exec 9<> "$CASE_DIR/heartbeat-ready"
 trap 'stop_ut_heartbeat; exec 9>&-' EXIT
 function logger() {
     printf "%s\n" "$2" >> "$CASE_DIR/ut.log"
-    if [[ "$2" == *active_cases=3* && "$2" == *TestPrivate* && "$2" == *TestShard* && "$2" == *TestBatched* ]]; then
+    if [[ "$2" == *active_cases=unknown* ||
+          ( "$2" == *active_cases=3* && "$2" == *TestPrivate* && "$2" == *TestShard* && "$2" == *TestBatched* ) ]]; then
         printf 'ready\n' >&9
     fi
 }
@@ -1217,19 +1218,42 @@ EOF
 cat > "$G_WKSP/${G_TS}-embedded-batched-race-report.out.0" <<'EOF'
 {"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/embedded","Test":"TestBatched"}
 EOF
+cat > "$G_WKSP/${G_TS}-engine-race-report.out.tmp.staging" <<'EOF'
+{"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/engine","Test":"TestStaged"}
+EOF
+cat > "$UT_REPORT" <<'EOF'
+{"Time":"2026-09-10T00:00:00Z","Action":"start","Package":"example/retired"}
+{"Time":"2026-09-10T00:00:01Z","Action":"run","Package":"example/retired","Test":"TestRetired"}
+{"Time":"2026-09-10T00:00:02Z","Action":"fail","Package":"example/retired"}
+EOF
 read -r -t 10 heartbeat_ready <&9 || exit 92
 stop_ut_heartbeat
-exec 9>&-
 [[ -z "$UT_HEARTBEAT_PID" ]] || exit 91
 grep -q 'event=heartbeat' "$UT_CHECKPOINT"
 grep -q 'active_cases=3' "$CASE_DIR/ut.log"
 grep -q 'TestPrivate' "$CASE_DIR/ut.log"
 grep -q 'TestShard' "$CASE_DIR/ut.log"
 grep -q 'TestBatched' "$CASE_DIR/ut.log"
+! grep -qE 'TestRetired|TestStaged' "$CASE_DIR/ut.log" || exit 94
 grep -q 'processes=9' "$CASE_DIR/ut.log"
 grep -q 'processes.top_rss=pid=9,ppid=1,rss_kib=900,comm=largest;pid=8,ppid=1,rss_kib=800,comm=eighth;' "$CASE_DIR/ut.log"
 grep -q 'pid=2,ppid=1,rss_kib=200,comm=small;' "$CASE_DIR/ut.log"
-! grep -q 'pid=1,ppid=0,rss_kib=100,comm=tiny;' "$CASE_DIR/ut.log"
+! grep -q 'pid=1,ppid=0,rss_kib=100,comm=tiny;' "$CASE_DIR/ut.log" || exit 95
+
+function python3() { return 1; }
+function awk() {
+    if [[ "$*" == *active_ut_cases.awk* ]]; then
+        touch "$CASE_DIR/rescanned"
+        return 1
+    fi
+    command awk "$@"
+}
+: > "$CASE_DIR/ut.log"
+start_ut_heartbeat
+read -r -t 10 heartbeat_ready <&9 || exit 96
+stop_ut_heartbeat
+exec 9>&-
+grep -q 'active_cases=unknown active=unclassified report' "$CASE_DIR/ut.log" && [[ ! -e "$CASE_DIR/rescanned" ]]
 `
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
@@ -1238,6 +1262,59 @@ exit 0
 	out, err := scheduleHarnessWithMock(t, script, mock)
 	if err != nil {
 		t.Fatalf("heartbeat lifecycle: %v\n%s", err, out)
+	}
+}
+
+func TestPlanRaceReportSeparatesTornShard(t *testing.T) {
+	script := `source ./run_ut.sh UT
+PLAN_RACE_SHARDS=2
+PLAN_RACE_PARALLEL=2
+PLAN_RACE_REPORT="$CASE_DIR/plan.out"
+status=0
+run_plan_race_shards example/plan || status=$?
+[[ "$status" == 1 && -f "$PLAN_RACE_REPORT.ready" ]] || exit 90
+append_ut_report "$PLAN_RACE_REPORT" "$CASE_DIR/ready.out" || exit 91
+rm "$PLAN_RACE_REPORT.ready"
+append_ut_report "$PLAN_RACE_REPORT" "$CASE_DIR/recovered.out" || exit 92
+cmp "$CASE_DIR/ready.out" "$CASE_DIR/recovered.out" || exit 93
+python3 -B ./optools/summarize_ut_slow_cases.py "$CASE_DIR/ready.out" \
+    --active-out "$CASE_DIR/lifecycle" || exit 94
+grep -q 'unresolved UT case .*test=TestOne' "$CASE_DIR/lifecycle" || exit 95
+[[ $(wc -l < "$CASE_DIR/lifecycle") == 1 ]] || exit 96
+`
+	mock := `#!/bin/bash
+case "$1" in
+ version) exit 0 ;;
+ list) printf '%s\t%s\n' "$CASE_DIR" example/plan ;;
+ test)
+  while [[ "$1" != -o ]]; do shift; done
+  cat > "$2" <<'BINARY'
+#!/bin/bash
+printf 'TestOne\nTestTwo\n'
+BINARY
+  chmod +x "$2"
+  ;;
+ tool)
+  printf '%s\n' '{"Action":"start","Package":"example/plan"}'
+  case "$*" in
+   *TestOne*)
+    printf '%s\n' '{"Action":"run","Package":"example/plan","Test":"TestOne"}'
+    printf '%s' '{"Action":"fail","Package":"example/plan"}'
+    exit 1
+    ;;
+   *TestTwo*)
+    printf '%s\n' '{"Action":"run","Package":"example/plan","Test":"TestTwo"}' \
+     '{"Action":"pass","Package":"example/plan","Test":"TestTwo"}' \
+     '{"Action":"pass","Package":"example/plan"}'
+    ;;
+   *) exit 99 ;;
+  esac
+  ;;
+ *) exit 99 ;;
+esac
+`
+	if out, err := scheduleHarnessWithMock(t, script, mock); err != nil {
+		t.Fatalf("plan report publication: %v\n%s", err, out)
 	}
 }
 

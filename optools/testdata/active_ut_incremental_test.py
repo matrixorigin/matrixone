@@ -17,6 +17,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import active_ut_incremental as reader
+from summarize_ut_slow_cases import summarize
 
 
 class IncrementalReaderTest(unittest.TestCase):
@@ -90,13 +91,109 @@ class IncrementalReaderTest(unittest.TestCase):
         self.assertEqual(1, len(self.read()[0].splitlines()))
 
     def test_multiple_reports_and_package_failure(self):
-        self.report.write_bytes(self.event("run") + self.event("fail", ""))
+        self.report.write_bytes(self.event("start", "") + self.event("run"))
+        self.assertIn("TestOne", self.read()[0])
+        with self.report.open("ab") as stream:
+            stream.write(self.event("fail", ""))
+        self.assertEqual(["no active or incomplete UT package/test case found"], self.read())
         second = self.report.with_suffix(".second")
         second.write_bytes(self.event("run"))
-        self.assertEqual(self.read(), self.read(self.report, second, second))
-        self.oracle()  # unfinished case must survive the package failure
+        self.assertEqual(self.read(second), self.read(self.report, second, second))
         second.unlink()
         self.assertEqual(self.read(), self.read(self.report, second))
+
+        with self.report.open("ab") as stream:
+            stream.write(self.event("start", "") + self.event("run"))
+        self.assertIn("TestOne", self.read()[0])
+        active_out = self.report.with_suffix(".active")
+        summarize(self.report, active_out=active_out)
+        lines = active_out.read_text().splitlines()
+        self.assertEqual(2, len(lines))
+        self.assertTrue(lines[0].startswith("active UT case: "))
+        self.assertTrue(lines[1].startswith("unfinished UT case at package exit: "))
+        self.assertTrue(lines[1].endswith("package_result=fail"))
+
+    def test_overlapping_package_invocations(self):
+        self.report.write_bytes(
+            self.event("start", "") + self.event("run", "TestA")
+            + self.event("start", "") + self.event("run", "TestB")
+            + self.event("fail", "")
+        )
+        lines = self.read()
+        self.assertEqual(2, len(lines))
+        self.assertTrue(all(line.startswith("unresolved UT case") for line in lines))
+        with self.report.open("ab") as stream:
+            stream.write(self.event("pass", "TestB") + self.event("pass", ""))
+        self.assertEqual(["no active or incomplete UT package/test case found"], self.read())
+        active_out = self.report.with_suffix(".active")
+        summarize(self.report, active_out=active_out)
+        final = active_out.read_text().splitlines()
+        self.assertEqual(1, len(final))
+        self.assertIn("test=TestA", final[0])
+        self.assertTrue(final[0].endswith("package_result=unknown"))
+
+    def test_same_name_overlap_preserves_unmatched_run(self):
+        for events in (
+            self.event("run") + self.event("fail", ""),
+            self.event("fail", "") + self.event("run"),
+        ):
+            with self.subTest(events=events):
+                self.report.write_bytes(
+                    self.event("start", "") + self.event("run") + self.event("start", "")
+                    + events + self.event("pass")
+                )
+                self.assertIn("unresolved UT case", self.read()[0])
+                with self.report.open("ab") as stream:
+                    stream.write(self.event("pass", ""))
+                active_out = self.report.with_suffix(".active")
+                summarize(self.report, active_out=active_out)
+                self.assertEqual(1, len(active_out.read_text().splitlines()))
+                self.assertIn("test=TestOne state=unknown started=unknown package_result=unknown",
+                              active_out.read_text())
+
+    def test_failure_replay_admits_the_same_lifecycle_records(self):
+        oversized = self.event("fail", "").replace(
+            b'"}', b'","Padding":"' + b"x" * reader.MAX_LIFECYCLE_LINE_BYTES + b'"}'
+        )
+        self.report.write_bytes(
+            self.event("start", "") + self.event("run") + oversized
+            + self.event("fail", "")[:-1]
+        )
+        active_out = self.report.with_suffix(".active")
+        summarize(self.report, active_out=active_out)
+        self.assertEqual(self.read(), active_out.read_text().splitlines())
+        self.assertTrue(self.read()[0].startswith("active UT case: "))
+
+    def test_late_distinct_case_has_known_attribution(self):
+        self.report.write_bytes(
+            self.event("start", "") + self.event("run", "TestOld")
+            + self.event("start", "") + self.event("fail", "")
+            + self.event("run", "TestNew")
+        )
+        live, unresolved = self.read()
+        self.assertIn("active UT case:", live)
+        self.assertIn("test=TestNew", live)
+        self.assertIn("unresolved UT case", unresolved)
+        self.assertIn("test=TestOld", unresolved)
+        with self.report.open("ab") as stream:
+            stream.write(self.event("fail", ""))
+        active_out = self.report.with_suffix(".active")
+        summarize(self.report, active_out=active_out)
+        first, second = active_out.read_text().splitlines()
+        self.assertIn("test=TestNew", first)
+        self.assertTrue(first.endswith("package_result=fail"))
+        self.assertIn("test=TestOld", second)
+        self.assertTrue(second.endswith("package_result=unknown"))
+
+    def test_slow_summary_survives_lifecycle_publication_error(self):
+        self.report.write_bytes(self.event("run") + self.event("pass"))
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        result = subprocess.run(
+            [sys.executable, "-B", str(script), str(self.report), "--active-out",
+             str(self.report / "cannot-create")], capture_output=True, text=True, check=True,
+        )
+        self.assertIn("package=example/test test=TestOne", result.stdout)
+        self.assertIn("failed to publish UT lifecycle summary", result.stderr)
 
 
 if __name__ == "__main__":

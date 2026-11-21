@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from datetime import datetime
@@ -24,8 +25,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-TERMINAL_ACTIONS = {"pass", "fail", "skip"}
-TEST_START_ACTIONS = {"run", "pause", "cont"}
+from active_ut_incremental import (
+    MAX_LIFECYCLE_LINE_BYTES, TERMINAL_ACTIONS, TEST_START_ACTIONS,
+    apply_event, atomic_write, fresh, render,
+)
 
 
 def parse_time(value: object) -> Optional[datetime]:
@@ -65,7 +68,7 @@ def format_duration(seconds: float) -> str:
 
 
 def summarize(
-    report_path: Path, limit: int = 20
+    report_path: Path, limit: int = 20, active_out: Optional[Path] = None
 ) -> Tuple[
     List[Tuple[float, str, str, str, str]],
     List[Tuple[float, str, str, str, str]],
@@ -76,6 +79,8 @@ def summarize(
     completed_tests: List[Tuple[float, str, str, str, str]] = []
     completed_packages: List[Tuple[float, str, str, str, str]] = []
     malformed = 0
+    lifecycle = fresh(None) if active_out is not None else None
+    unfinished = []
 
     with report_path.open("rb") as report:
         for raw_line in report:
@@ -98,6 +103,11 @@ def summarize(
             package = event.get("Package")
             if not isinstance(action, str) or not isinstance(package, str) or not package:
                 continue
+            if action not in TEST_START_ACTIONS and action not in TERMINAL_ACTIONS and action != "start":
+                continue
+            if (lifecycle is not None and len(raw_line) <= MAX_LIFECYCLE_LINE_BYTES
+                    and raw_line.endswith(b"\n")):
+                apply_event(lifecycle, event, unfinished)
             timestamp = parse_time(event.get("Time"))
             test = event.get("Test")
             if isinstance(test, str) and test:
@@ -137,30 +147,31 @@ def summarize(
                         )
                     )
 
+    if active_out is not None:
+        try:
+            atomic_write(active_out, "\n".join(render({"report": lifecycle}, unfinished)) + "\n",
+                         prefix=active_out.name + ".tmp.")
+        except OSError as error:
+            print(f"failed to publish UT lifecycle summary: {error}", file=sys.stderr)
     completed_tests.sort(key=lambda item: item[0], reverse=True)
     completed_packages.sort(key=lambda item: item[0], reverse=True)
     return completed_tests[:limit], completed_packages[:limit], malformed
 
 
 def main(argv: List[str]) -> int:
-    if len(argv) not in (2, 3):
-        print(f"usage: {argv[0]} GO_TEST_JSON [LIMIT]", file=sys.stderr)
-        return 2
-    try:
-        limit = int(argv[2]) if len(argv) == 3 else 20
-    except ValueError:
-        print("LIMIT must be a positive integer", file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("report", type=Path)
+    parser.add_argument("limit", nargs="?", type=int, default=20)
+    parser.add_argument("--active-out", type=Path)
+    args = parser.parse_args(argv[1:])
+    limit = args.limit
     if limit <= 0:
-        print("LIMIT must be a positive integer", file=sys.stderr)
-        return 2
-
-    report_path = Path(argv[1])
-    if not report_path.is_file():
-        print(f"slow UT case report missing: {report_path}", file=sys.stderr)
+        parser.error("LIMIT must be a positive integer")
+    if not args.report.is_file():
+        print(f"slow UT case report missing: {args.report}", file=sys.stderr)
         return 1
 
-    tests, packages, malformed = summarize(report_path, limit)
+    tests, packages, malformed = summarize(args.report, limit, args.active_out)
     print(f"[slow_ut_cases] completed test cases (top {limit}):")
     if tests:
         for elapsed, package, test, result, ended in tests:
