@@ -178,3 +178,34 @@ func TestPendingMembershipRetryRequiresReportingExecutor(t *testing.T) {
 	require.Equal(t, []*operator.Operator{otherAdd}, PendingOperators(fields, state, 0, []*operator.Operator{otherAdd}))
 	require.Equal(t, []*operator.Operator{addOnB}, PendingOperators(fields, state, 0, []*operator.Operator{addOnB, otherAdd}))
 }
+
+func TestPendingVotingRemovalSelectsSafeSurplus(t *testing.T) {
+	cfg := hakeeper.Config{}
+	cfg.Fill()
+	fields := hakeeper.NewCheckerCommonFields("", cfg, nil,
+		pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}}},
+		pb.TaskTableUser{}, 1)
+	shard := pb.LogShardInfo{ShardID: 1, Epoch: 7, LeaderID: 1,
+		Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d", 5: "e"}}
+	state := pb.LogState{Shards: map[uint64]pb.LogShardInfo{1: shard}, Stores: map[string]pb.LogStoreInfo{}}
+	for id, uuid := range shard.Replicas {
+		store := pb.LogStoreInfo{Tick: 1}
+		if id <= 3 {
+			store.Replicas = []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: id}}
+		}
+		state.Stores[uuid] = store
+	}
+	remove := func(id, epoch uint64) *operator.Operator {
+		return operator.NewOperator("", 1, epoch, operator.RemoveLogService{
+			Target: "a", Replica: operator.Replica{UUID: shard.Replicas[id], ShardID: 1, ReplicaID: id, Epoch: epoch},
+		})
+	}
+	safe := remove(4, 7)
+	require.Equal(t, []*operator.Operator{safe}, PendingOperators(fields, state, 0,
+		[]*operator.Operator{remove(2, 7), remove(5, 6), safe, remove(5, 7)}))
+
+	store := state.Stores["c"]
+	store.Replicas = nil
+	state.Stores["c"] = store
+	require.Empty(t, PendingOperators(fields, state, 0, []*operator.Operator{safe}))
+}

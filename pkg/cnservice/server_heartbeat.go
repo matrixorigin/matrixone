@@ -352,7 +352,8 @@ func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {
 }
 
 func (s *service) handleCommandBatchLocked(batch logservicepb.CommandBatch) {
-	if len(batch.Commands) == 0 {
+	// A nonzero ID with no commands is an obsolete batch to acknowledge.
+	if len(batch.Commands) == 0 && batch.BatchID == 0 {
 		return
 	}
 	if batch.BatchID == 0 {

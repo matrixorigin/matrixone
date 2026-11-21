@@ -86,6 +86,27 @@ func TestParseLogShardsFencesChangedStoreIncarnation(t *testing.T) {
 	assert.Len(t, nonVoting.toStart, 1)
 }
 
+func TestChangedVotingStoreIncarnationCountsTowardSurplus(t *testing.T) {
+	cluster := pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 4}}}
+	shard := pb.LogShardInfo{
+		ShardID:                  1,
+		Replicas:                 map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d", 5: "e"},
+		ReplicaStoreIncarnations: map[uint64]string{5: "old"},
+	}
+	state := pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: shard},
+		Stores: map[string]pb.LogStoreInfo{"d": {}, "e": {StoreIncarnation: "new"}},
+	}
+	for id := uint64(1); id <= 3; id++ {
+		state.Stores[shard.Replicas[id]] = pb.LogStoreInfo{
+			Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: id}},
+		}
+	}
+
+	normal, _ := parseLogShards(cluster, state, nil, 0)
+	assert.Equal(t, []replica{{uuid: "e", shardID: 1, replicaID: 5}}, normal.toRemove[1])
+}
+
 func TestFixedLogShardInfo(t *testing.T) {
 	cases := []struct {
 		desc string
@@ -257,7 +278,7 @@ func TestFixedLogShardInfo(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		normal, nonVoting := fixedLogShardInfo(c.record, c.nonVotingReplicaNum, c.info, c.expiredStores)
+		normal, nonVoting := fixedLogShardInfo(c.record, c.nonVotingReplicaNum, c.info, c.expiredStores, nil)
 		assert.Equal(t, c.expectedNormal, normal)
 		assert.Equal(t, c.expectedNonVoting, nonVoting)
 	}

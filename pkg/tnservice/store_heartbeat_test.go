@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -77,7 +78,7 @@ func (c *canceledTNResponseClient) SendTNHeartbeat(
 		close(c.heartbeatEntered)
 	}
 	<-ctx.Done()
-	return pb.CommandBatch{BatchID: 7, Commands: []pb.ScheduleCommand{c.command}}, nil
+	return testCommandBatch(7, c.command), nil
 }
 
 func (c *canceledTNResponseClient) GetScheduleCommands(
@@ -90,7 +91,7 @@ func (c *canceledTNResponseClient) GetScheduleCommands(
 		close(c.pollEntered)
 	}
 	<-ctx.Done()
-	return pb.CommandBatch{BatchID: 7, Commands: []pb.ScheduleCommand{c.command}}, nil
+	return testCommandBatch(7, c.command), nil
 }
 
 func (c *blockingHeartbeatCommandClient) SendTNHeartbeat(
@@ -220,6 +221,28 @@ func Test_heartbeat(t *testing.T) {
 	}
 }
 
+type observingTNTaskHolder struct {
+	taskservice.TaskServiceHolder
+	applied chan struct{}
+}
+
+func (h *observingTNTaskHolder) Create(pb.CreateTaskService) error {
+	h.applied <- struct{}{}
+	return moerr.NewInternalErrorNoCtx("observe task command without creating a service")
+}
+
+func observeTNTaskApplication(store *store) chan struct{} {
+	applied := make(chan struct{}, 10)
+	store.task.serviceHolder = &observingTNTaskHolder{applied: applied}
+	return applied
+}
+
+func tnTaskCommand() pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID: "tn-1", ServiceType: pb.TNService, CreateTaskService: &pb.CreateTaskService{},
+	}
+}
+
 func TestCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", rt)
@@ -227,13 +250,7 @@ func TestCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 		testHAClient:     &testHAClient{},
 		heartbeatEntered: make(chan struct{}),
 		pollEntered:      make(chan struct{}),
-		command: pb.ScheduleCommand{
-			UUID:        "tn-1",
-			ServiceType: pb.TNService,
-			ShutdownStore: &pb.ShutdownStore{
-				StoreID: "tn-1",
-			},
-		},
+		command:          tnTaskCommand(),
 	}
 	store := &store{
 		cfg: &Config{
@@ -243,8 +260,8 @@ func TestCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 		config:         &util.ConfigData{},
 		hakeeperClient: client,
 		rt:             rt,
-		shutdownC:      make(chan struct{}, 1),
 	}
+	applied := observeTNTaskApplication(store)
 	store.cfg.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
 	store.cfg.HAKeeper.HeatbeatTimeout.Duration = 5 * time.Second
 
@@ -261,7 +278,7 @@ func TestCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 	}
 
 	select {
-	case <-store.shutdownC:
+	case <-applied:
 	case <-time.After(2 * time.Second):
 		t.Fatal("schedule command did not progress independently of heartbeat")
 	}
@@ -281,13 +298,7 @@ func TestCommandPollProgressesAfterHeartbeatFailure(t *testing.T) {
 		testHAClient:     &testHAClient{},
 		heartbeatEntered: make(chan struct{}),
 		pollEntered:      make(chan struct{}),
-		command: pb.ScheduleCommand{
-			UUID:        "tn-1",
-			ServiceType: pb.TNService,
-			ShutdownStore: &pb.ShutdownStore{
-				StoreID: "tn-1",
-			},
-		},
+		command:          tnTaskCommand(),
 	}
 	store := &store{
 		cfg: &Config{
@@ -297,8 +308,8 @@ func TestCommandPollProgressesAfterHeartbeatFailure(t *testing.T) {
 		config:         &util.ConfigData{},
 		hakeeperClient: client,
 		rt:             rt,
-		shutdownC:      make(chan struct{}, 1),
 	}
+	applied := observeTNTaskApplication(store)
 	store.cfg.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
 	store.cfg.HAKeeper.HeatbeatTimeout.Duration = 10 * time.Millisecond
 
@@ -318,7 +329,7 @@ func TestCommandPollProgressesAfterHeartbeatFailure(t *testing.T) {
 	}()
 
 	select {
-	case <-store.shutdownC:
+	case <-applied:
 	case <-time.After(2 * time.Second):
 		t.Fatal("poll did not take over after heartbeat failure")
 	}
@@ -327,13 +338,7 @@ func TestCommandPollProgressesAfterHeartbeatFailure(t *testing.T) {
 func TestCommandPollDiscoversCommandCreatedAfterEmptyRead(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", rt)
-	command := pb.ScheduleCommand{
-		UUID:        "tn-1",
-		ServiceType: pb.TNService,
-		ShutdownStore: &pb.ShutdownStore{
-			StoreID: "tn-1",
-		},
-	}
+	command := tnTaskCommand()
 	client := &lateTNCommandClient{
 		testHAClient:     &testHAClient{},
 		heartbeatEntered: make(chan struct{}),
@@ -346,8 +351,8 @@ func TestCommandPollDiscoversCommandCreatedAfterEmptyRead(t *testing.T) {
 		config:         &util.ConfigData{},
 		hakeeperClient: client,
 		rt:             rt,
-		shutdownC:      make(chan struct{}, 1),
 	}
+	applied := observeTNTaskApplication(store)
 	store.cfg.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
 	store.cfg.HAKeeper.HeatbeatTimeout.Duration = 10 * time.Second
 
@@ -378,7 +383,7 @@ func TestCommandPollDiscoversCommandCreatedAfterEmptyRead(t *testing.T) {
 	}
 	client.commandReady.Store(true)
 	select {
-	case <-store.shutdownC:
+	case <-applied:
 	case <-time.After(2 * time.Second):
 		t.Fatal("command created after an empty read exceeded the poll progress bound")
 	}
@@ -404,13 +409,7 @@ func TestCommandTaskSkipsPollWithoutInFlightHeartbeat(t *testing.T) {
 func TestCanceledControlResponsesAreNotApplied(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", rt)
-	command := pb.ScheduleCommand{
-		UUID:        "tn-1",
-		ServiceType: pb.TNService,
-		ShutdownStore: &pb.ShutdownStore{
-			StoreID: "tn-1",
-		},
-	}
+	command := tnTaskCommand()
 	store := &store{
 		cfg: &Config{
 			UUID: "tn-1",
@@ -423,9 +422,9 @@ func TestCanceledControlResponsesAreNotApplied(t *testing.T) {
 			pollEntered:      make(chan struct{}),
 			command:          command,
 		},
-		rt:        rt,
-		shutdownC: make(chan struct{}, 1),
+		rt: rt,
 	}
+	applied := observeTNTaskApplication(store)
 	store.cfg.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
 	store.cfg.HAKeeper.HeatbeatTimeout.Duration = 5 * time.Second
 
@@ -453,7 +452,7 @@ func TestCanceledControlResponsesAreNotApplied(t *testing.T) {
 		t.Fatal("control-plane workers did not terminate after cancellation")
 	}
 	select {
-	case <-store.shutdownC:
+	case <-applied:
 		t.Fatal("response returned after cancellation was applied")
 	default:
 	}
@@ -464,13 +463,7 @@ func TestCanceledControlResponsesAreNotApplied(t *testing.T) {
 func TestHeartbeatDropsResponseAfterRequestDeadline(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", rt)
-	command := pb.ScheduleCommand{
-		UUID:        "tn-1",
-		ServiceType: pb.TNService,
-		ShutdownStore: &pb.ShutdownStore{
-			StoreID: "tn-1",
-		},
-	}
+	command := tnTaskCommand()
 	store := &store{
 		cfg: &Config{
 			UUID: "tn-1",
@@ -483,93 +476,79 @@ func TestHeartbeatDropsResponseAfterRequestDeadline(t *testing.T) {
 			pollEntered:      make(chan struct{}),
 			command:          command,
 		},
-		rt:        rt,
-		shutdownC: make(chan struct{}, 1),
+		rt: rt,
 	}
+	applied := observeTNTaskApplication(store)
 	store.cfg.HAKeeper.HeatbeatTimeout.Duration = time.Millisecond
 
 	store.heartbeat(context.Background())
 	select {
-	case <-store.shutdownC:
+	case <-applied:
 		t.Fatal("response returned after its request deadline was applied")
 	default:
 	}
 }
 
 func TestCommandBatchDeduplicatesPollHeartbeatRace(t *testing.T) {
-	rt := runtime.DefaultRuntime()
-	runtime.SetupServiceBasedRuntime("", rt)
-	command := pb.ScheduleCommand{
-		UUID:        "tn-1",
-		ServiceType: pb.TNService,
-		ShutdownStore: &pb.ShutdownStore{
-			StoreID: "tn-1",
-		},
-	}
-	store := &store{
-		rt:        rt,
-		shutdownC: make(chan struct{}, 4),
-	}
+	store := &store{rt: runtime.DefaultRuntime()}
+	applied := observeTNTaskApplication(store)
+	command := tnTaskCommand()
 
 	store.handleCommandBatch(testCommandBatch(10, command))
 	require.Equal(t, uint64(10), store.ackedCommandBatchID.Load())
-	require.Equal(t, uint64(10), store.shutdownBatchID.Load())
 	require.Len(t, store.appliedCommandIDs, 1)
 	store.handleCommandBatch(testCommandBatch(10, command))
 	store.handleCommandBatch(testCommandBatch(9, command))
-	require.Empty(t, store.shutdownC, "shutdown must wait for its durable acknowledgement")
+	require.Len(t, applied, 1, "poll and heartbeat must apply the generation once")
 	store.handleHeartbeatResponse(9, pb.CommandBatch{})
-	require.Empty(t, store.shutdownC, "a stale acknowledgement must not complete shutdown")
-	store.handleHeartbeatResponse(10, testCommandBatch(10, command))
-	require.Empty(t, store.shutdownC, "a retained shutdown command is not acknowledged")
+	require.Len(t, store.appliedCommandIDs, 1, "a stale acknowledgement must preserve current identities")
 	store.handleHeartbeatResponse(10, pb.CommandBatch{})
-	require.Equal(t, 1, len(store.shutdownC), "an exact committed acknowledgement completes shutdown")
+	require.Empty(t, store.appliedCommandIDs)
+
 	store.handleCommandBatch(pb.CommandBatch{Commands: []pb.ScheduleCommand{command}})
-	require.Equal(t, 1, len(store.shutdownC), "one legacy replay after leader downgrade must be suppressed")
+	require.Len(t, applied, 1, "one legacy replay after leader downgrade is suppressed")
 	store.handleCommandBatch(pb.CommandBatch{Commands: []pb.ScheduleCommand{command}})
-	require.Equal(t, 2, len(store.shutdownC), "a later legacy checker retry must remain applicable")
+	require.Len(t, applied, 2, "a later legacy checker retry is independently applicable")
 
 	store.handleCommandBatch(testCommandBatch(11, command))
-	require.Equal(t, 2, len(store.shutdownC), "a new acknowledged generation must wait for its own ack")
+	require.Len(t, applied, 3, "a new acknowledged generation is independently applicable")
 	require.Equal(t, uint64(11), store.ackedCommandBatchID.Load())
-	require.Len(t, store.appliedCommandIDs, 1,
-		"an inherited terminal command must retain one bounded command identity")
-	store.handleHeartbeatResponse(11, pb.CommandBatch{})
-	require.Equal(t, 3, len(store.shutdownC), "a new checker generation remains independently completable")
-	require.Empty(t, store.appliedCommandIDs)
+	require.Len(t, store.appliedCommandIDs, 1)
 }
 
-func TestShutdownWaitsForAcknowledgementTransport(t *testing.T) {
-	rt := runtime.DefaultRuntime()
-	runtime.SetupServiceBasedRuntime("", rt)
-	client := &testHAClient{}
+func TestTNHeartbeatAcknowledgesRetiredCommandBatch(t *testing.T) {
 	store := &store{
-		cfg: &Config{
-			UUID: "tn-1",
-		},
-		replicas:       &sync.Map{},
-		config:         &util.ConfigData{},
-		hakeeperClient: client,
-		rt:             rt,
-		shutdownC:      make(chan struct{}, 1),
+		cfg:      &Config{UUID: "tn-1"},
+		replicas: &sync.Map{},
+		config:   &util.ConfigData{},
+		rt:       runtime.DefaultRuntime(),
 	}
-	store.cfg.HAKeeper.HeatbeatTimeout.Duration = time.Second
-	command := pb.ScheduleCommand{
-		UUID:        "tn-1",
-		ServiceType: pb.TNService,
-		ShutdownStore: &pb.ShutdownStore{
-			StoreID: "tn-1",
-		},
+	applied := observeTNTaskApplication(store)
+	shutdown := pb.ScheduleCommand{
+		UUID: "tn-1", ServiceType: pb.TNService, ShutdownStore: &pb.ShutdownStore{StoreID: "tn-1"},
 	}
+	task := tnTaskCommand()
 
-	store.handlePolledCommandBatch(context.Background(), testCommandBatch(10, command))
-	require.Equal(t, uint64(10), client.lastHeartbeat.AckedCommandBatchID)
-	require.Equal(t, uint64(10), store.shutdownBatchID.Load())
-	require.Empty(t, store.shutdownC,
-		"a failed acknowledgement RPC must not trigger process termination")
+	// The poll may have come from an old leader. Its shutdown is retired,
+	// and the valid command and exact acknowledgement still go through.
+	store.handleCommandBatch(testCommandBatch(10, shutdown, task))
+	require.Len(t, applied, 1)
+	ack := store.getHeartbeatMessage().AckedCommandBatchID
+	require.Equal(t, uint64(10), ack)
+	store.handleHeartbeatResponse(ack, pb.CommandBatch{})
+	require.Empty(t, store.appliedCommandIDs)
 
-	store.handleHeartbeatResponse(10, pb.CommandBatch{})
-	require.Zero(t, store.shutdownBatchID.Load())
-	require.Len(t, store.shutdownC, 1,
-		"a later heartbeat can safely complete an acknowledgement whose response was lost")
+	// Obsolete-only legacy traffic must not consume dedupe for valid commands.
+	store.handleHeartbeatResponse(ack, pb.CommandBatch{Commands: []pb.ScheduleCommand{shutdown}})
+	store.handleCommandBatch(pb.CommandBatch{Commands: []pb.ScheduleCommand{task}})
+	require.Len(t, applied, 1)
+
+	store.handleCommandBatch(testCommandBatch(11, task))
+	require.Len(t, applied, 2)
+	store.handleHeartbeatResponse(11, pb.CommandBatch{BatchID: 12})
+	require.Equal(t, uint64(12), store.getHeartbeatMessage().AckedCommandBatchID)
+	store.handleHeartbeatResponse(11, pb.CommandBatch{BatchID: 9})
+	require.Equal(t, uint64(12), store.getHeartbeatMessage().AckedCommandBatchID)
+	store.handleCommandBatch(pb.CommandBatch{Commands: []pb.ScheduleCommand{task}})
+	require.Len(t, applied, 3, "a newer empty generation supersedes the previous dedupe window")
 }

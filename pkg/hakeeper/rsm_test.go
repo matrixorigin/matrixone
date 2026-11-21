@@ -2901,7 +2901,7 @@ func TestRestoredLegacyStoreShutdownWithAcknowledgedDelivery(t *testing.T) {
 			}
 			task := pb.ScheduleCommand{UUID: "tn", ServiceType: pb.TNService, CreateTaskService: &pb.CreateTaskService{}}
 			_, err := old.Update(sm.Entry{Index: 10, Cmd: GetUpdateCommandsCmd(1, []pb.ScheduleCommand{
-				shutdown("tn"), task, shutdown("tn-shutdown-only"),
+				shutdown("tn"), task, shutdown("tn-shutdown-only"), shutdown("tn-rollover"),
 			})})
 			require.NoError(t, err)
 			var snapshot bytes.Buffer
@@ -2939,7 +2939,27 @@ func TestRestoredLegacyStoreShutdownWithAcknowledgedDelivery(t *testing.T) {
 			require.NotContains(t, restored.state.ScheduleCommands, "tn")
 
 			require.Empty(t, poll("tn-shutdown-only"))
-			require.Empty(t, sendHeartbeat("tn-shutdown-only", 0))
+			stored = restored.state.ScheduleCommands["tn-shutdown-only"]
+			marker := pb.CommandBatch{BatchID: stored.BatchID}
+			require.NotZero(t, marker.BatchID)
+			require.Equal(t, marker, sendHeartbeat("tn-shutdown-only", 0))
+			require.Equal(t, stored, restored.state.ScheduleCommands["tn-shutdown-only"])
+			require.Equal(t, marker, sendHeartbeat("tn-shutdown-only", 0))
+			require.Empty(t, sendHeartbeat("tn-shutdown-only", marker.BatchID))
+			require.NotContains(t, restored.state.ScheduleCommands, "tn-shutdown-only")
+
+			marker = sendHeartbeat("tn-rollover", 0)
+			require.NotZero(t, marker.BatchID)
+			require.Empty(t, marker.Commands)
+			task.UUID = "tn-rollover"
+			_, err = restored.Update(sm.Entry{Index: restored.state.Index + 1, Cmd: GetUpdateCommandsCmd(1, []pb.ScheduleCommand{task})})
+			require.NoError(t, err)
+			latest := sendHeartbeat("tn-rollover", marker.BatchID)
+			require.Greater(t, latest.BatchID, marker.BatchID)
+			require.Equal(t, []pb.ScheduleCommand{task}, latest.Commands)
+			require.Equal(t, latest, poll("tn-rollover"))
+			require.Empty(t, sendHeartbeat("tn-rollover", latest.BatchID))
+			require.NotContains(t, restored.state.ScheduleCommands, "tn-rollover")
 		})
 	}
 }

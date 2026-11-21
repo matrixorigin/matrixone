@@ -22,7 +22,6 @@ package operator
 
 import (
 	"fmt"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -238,7 +237,8 @@ func (b *Builder) withExecutorCandidates(candidates []string) *Builder {
 }
 
 func (b *Builder) selectRetainedVotingTarget() (string, error) {
-	var targets []string
+	var selected string
+	found := false
 	for target, replicaID := range b.targetPeers {
 		originReplicaID, retained := b.originPeers[target]
 		if !retained || originReplicaID != replicaID {
@@ -249,13 +249,14 @@ func (b *Builder) selectRetainedVotingTarget() (string, error) {
 				continue
 			}
 		}
-		targets = append(targets, target)
+		if !found || target < selected {
+			selected, found = target, true
+		}
 	}
-	if len(targets) == 0 {
+	if !found {
 		return "", moerr.NewInternalErrorNoCtx("cannot build operator step without a retained voting peer that is live and reporting")
 	}
-	slices.Sort(targets)
-	return targets[0], nil
+	return selected, nil
 }
 
 func (b *Builder) buildToRemoveSteps() error {

@@ -949,20 +949,24 @@ func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result
 		batch.CommandIDs = pendingIDs
 		s.state.ScheduleCommands[uuid] = batch
 	}
-	batch = withoutLegacyStoreShutdown(batch)
 	if len(batch.Commands) == 0 {
 		return sm.Result{}
 	}
-	data, err := batch.Marshal()
+	delivery := WithoutLegacyStoreShutdown(batch)
+	// If only obsolete shutdown commands remain, the next heartbeat can
+	// acknowledge this empty generation. Every Raft peer can then retire it
+	// through the existing exact-batch acknowledgement path.
+	delivery.BatchID = batch.BatchID
+	data, err := delivery.Marshal()
 	if err != nil {
 		panic(err)
 	}
 	return sm.Result{Data: data}
 }
 
-// withoutLegacyStoreShutdown filters delivery from old queues without changing
+// WithoutLegacyStoreShutdown filters delivery from old queues without changing
 // the stored batch or the stable identities of the remaining commands.
-func withoutLegacyStoreShutdown(batch pb.CommandBatch) pb.CommandBatch {
+func WithoutLegacyStoreShutdown(batch pb.CommandBatch) pb.CommandBatch {
 	first := slices.IndexFunc(batch.Commands, func(cmd pb.ScheduleCommand) bool { return cmd.ShutdownStore != nil })
 	if first < 0 {
 		return batch
@@ -1837,7 +1841,7 @@ func (s *stateMachine) handleStateQuery(scheduling bool) interface{} {
 
 func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch {
 	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
-		batch = withoutLegacyStoreShutdown(batch)
+		batch = WithoutLegacyStoreShutdown(batch)
 		copied := deepcopy.Copy(&batch)
 		result, ok := copied.(*pb.CommandBatch)
 		if !ok {
