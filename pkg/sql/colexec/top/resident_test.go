@@ -118,7 +118,7 @@ func TestTopResidentMigrationFailureKeepsOwner(t *testing.T) {
 			} else {
 				tc.arg.ctr.spillWriter = shortTopSpillWriter{}
 			}
-			err := tc.arg.ctr.startResidentSpill(tc.proc, tc.arg.OpAnalyzer)
+			err := tc.arg.ctr.startResidentSpill(tc.arg.Fs, tc.proc, tc.arg.OpAnalyzer)
 			if failure == "cancel" {
 				require.ErrorIs(t, err, context.Canceled)
 			} else {

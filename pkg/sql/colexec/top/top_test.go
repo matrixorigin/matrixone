@@ -218,7 +218,11 @@ func TestTopMultiKeyThresholdAndReset(t *testing.T) {
 					typs = append(typs, types.T_varchar.ToType())
 				}
 				tc := newTestCase(t, mpool.MustNewZero(), typs, 2,
-					[]*plan.OrderBySpec{{Expr: first, Flag: plan.OrderBySpec_DESC}, {Expr: second, Flag: plan.OrderBySpec_DESC}})
+					[]*plan.OrderBySpec{
+						{Expr: first, Flag: plan.OrderBySpec_DESC},
+						{Expr: second, Flag: plan.OrderBySpec_DESC},
+						{Expr: first},
+					})
 				tc.arg.TopValueTag = 42
 				tc.arg.OrderedOutput = ordered
 				tc.proc.SetMessageBoard(message.NewMessageBoard())
@@ -272,6 +276,16 @@ func TestTopMultiKeyThresholdAndReset(t *testing.T) {
 							if mode == "migrate" && i == 2 {
 								require.True(t, tc.arg.ctr.boundedResident)
 								require.False(t, tc.arg.ctr.spilling)
+							}
+							if mode == "migrate" && i == 3 {
+								ctr := &tc.arg.ctr
+								require.True(t, ctr.spilling)
+								require.Positive(t, ctr.spillOffset)
+								// The secondary-key replacement happened after migration.
+								// Both copies of the repeated key must own fresh bindings.
+								for key, cmp := range ctr.cmps {
+									require.Same(t, ctr.bat.Vecs[key], cmp.Vector())
+								}
 							}
 						})
 						var keys, secondary []int64
