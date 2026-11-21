@@ -151,6 +151,33 @@ func TestReadWatchCatalogResultBudget(t *testing.T) {
 	}
 }
 
+func TestReadWatchCatalogRegistrationLimit(t *testing.T) {
+	// The count is checked before decoding any columns.
+	b := batch.NewWithSize(0)
+	b.SetRowCount(MaxTables + 1)
+	res := executor.Result{Batches: []*batch.Batch{b}}
+	defer res.Close()
+	grants, names, decodeErr := decodeWatchGrants(t.Context(), res)
+	require.Nil(t, grants)
+	require.Nil(t, names)
+	require.True(t, moerr.IsMoErrCode(decodeErr, moerr.ErrChangeWatchCapacity), "%v", decodeErr)
+
+	cut := timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 17}
+	name := "observer"
+	e := watchCatalogTestExecutor{execTxn: func(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
+		return errors.Join(decodeErr, nil)
+	}}
+	result, err := readCatalog(t.Context(), e, callerIdentity{}, &name, cut)
+	require.Equal(t, watchCatalog{}, result)
+	capacityErr, ok := err.(*moerr.Error)
+	require.True(t, ok, "expected *moerr.Error, got %T: %v", err, err)
+	require.Equal(t, moerr.ErrChangeWatchCapacity, capacityErr.ErrorCode())
+	require.Equal(t, uint16(22604), capacityErr.MySQLCode())
+	require.Equal(t, "HY000", capacityErr.SqlState())
+	require.ErrorContains(t, err, "100000 effective table registrations")
+	require.ErrorContains(t, err, "Reduce the observer registration scope")
+}
+
 func TestWatchCatalogRejectsInvalidRead(t *testing.T) {
 	ctx := t.Context()
 	cut := timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 17}

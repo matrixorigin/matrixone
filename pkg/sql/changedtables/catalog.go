@@ -102,6 +102,10 @@ func readCatalog(
 			return watchCatalog{}, moerr.NewChangeWatchCapacity(ctx, fmt.Sprintf(
 				"catalog result exceeds its %d-byte budget. Reduce the observer registration scope", limitErr.Limit))
 		}
+		var catalogErr *moerr.Error
+		if errors.As(err, &catalogErr) && catalogErr.ErrorCode() == moerr.ErrChangeWatchCapacity {
+			return watchCatalog{}, catalogErr
+		}
 		return watchCatalog{}, err
 	}
 	return result, nil
@@ -351,7 +355,8 @@ func filterWatchPartitionIDs(
 func decodeWatchGrants(ctx context.Context, res executor.Result) ([]Grant, map[uint32]string, error) {
 	numRows := watchResultRows(res)
 	if numRows > MaxTables {
-		return nil, nil, moerr.NewInvalidInput(ctx, "mo_changed_tables exceeds the registered table limit")
+		return nil, nil, moerr.NewChangeWatchCapacity(ctx, fmt.Sprintf(
+			"observer exceeds the limit of %d effective table registrations. Reduce the observer registration scope", MaxTables))
 	}
 	grants := make([]Grant, 0, numRows)
 	sources := make(map[uint32]string)
