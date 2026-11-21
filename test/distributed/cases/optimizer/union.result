@@ -16,11 +16,19 @@ Project
 explain select * from t1 union select * from t1;
 QUERY PLAN
 Project
-  ->  Table Scan on d1.t1
+  ->  Union
+        ->  Project
+              ->  Table Scan on d1.t1
+        ->  Project
+              ->  Table Scan on d1.t1
 explain select * from t2 union select * from t2;
 QUERY PLAN
 Project
-  ->  Table Scan on d1.t2
+  ->  Union
+        ->  Project
+              ->  Table Scan on d1.t2
+        ->  Project
+              ->  Table Scan on d1.t2
 explain select c1 from t1 group by c1;
 QUERY PLAN
 Project

@@ -390,6 +390,18 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		},
 		pks: []int{0},
 	}
+	// nation_char adds a fixed CHAR column to the planted catalog so planner
+	// tests can exercise the pad-space physical equality rules for set
+	// operations without any runtime database.
+	tpchSchema["nation_char"] = &Schema{
+		cols: []col{
+			{"n_nationkey", types.T_int32, false, 0, 0},
+			{"n_regionkey", types.T_int32, false, 0, 0},
+			{"n_c", types.T_char, false, 10, 0},
+			rowIDColumn,
+		},
+		pks: []int{0},
+	}
 	tpchSchema["region"] = &Schema{
 		cols: []col{
 			{"r_regionkey", types.T_int32, false, 0, 0},
