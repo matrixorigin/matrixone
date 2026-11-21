@@ -405,10 +405,9 @@ func (exec *orderedPercentileDiscreteExec) restoreDiscreteValues(
 		}
 		payload := aggPayloadFromKey(&exec.aggInfo, key)
 		domain := types.RuntimeStringInherit
-		source := types.StringSourceExpression
 		encodedMetadata := false
 		if exec.argTypes[0].Oid.IsMySQLString() {
-			payload, domain, source, encodedMetadata, err = decodeAggStringMetadata(payload)
+			payload, domain, encodedMetadata, err = decodeAggStringMetadata(payload)
 			if err != nil {
 				return err
 			}
@@ -427,9 +426,6 @@ func (exec *orderedPercentileDiscreteExec) restoreDiscreteValues(
 		}
 		if encodedMetadata {
 			if err := values.SetRuntimeStringDomainAtWithMP(index, domain, exec.mp); err != nil {
-				return err
-			}
-			if err := values.SetStringSourceAtWithMP(index, source, exec.mp); err != nil {
 				return err
 			}
 		}

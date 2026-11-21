@@ -45,7 +45,7 @@ func TestGetConstantValueNarrowVec(t *testing.T) {
 	for _, c := range cases {
 		vec := vector.NewVec(c.oid.ToType())
 		require.NoError(t, vector.AppendBytes(vec, c.data, false, mp))
-		lit := GetConstantValue(vec, true, 0)
+		lit := GetConstantValue(vec, true, 0, types.StringSourceExpression)
 		require.NotNilf(t, lit, "%s should fold", c.oid)
 		vv, ok := lit.Value.(*plan.Literal_VecVal)
 		require.Truef(t, ok, "%s -> VecVal literal", c.oid)
@@ -54,23 +54,23 @@ func TestGetConstantValueNarrowVec(t *testing.T) {
 	}
 }
 
-func TestGetConstantValuePreservesRowStringSource(t *testing.T) {
+func TestGetConstantValueEncodesExplicitStringSource(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
 	vec := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytesList(vec, [][]byte{[]byte("value"), nil}, []bool{false, true}, mp))
-	require.NoError(t, vec.SetStringSourcesWithMP([]types.StringSource{
-		types.StringSourceUserVariable,
-		types.StringSourceCOMStmt,
-	}, mp))
 	defer vec.Free(mp)
 
-	nonNull := GetConstantValue(vec, false, 0)
+	nonNull := GetConstantValue(vec, false, 0, types.StringSourceUserVariable)
 	require.Equal(t, "value", nonNull.GetSval())
 	require.Equal(t, uint32(types.StringSourceUserVariable)+1, nonNull.GetStringSource())
 
-	null := GetConstantValue(vec, false, 1)
+	null := GetConstantValue(vec, false, 1, types.StringSourceCOMStmt)
 	require.True(t, null.GetIsnull())
 	require.Equal(t, uint32(types.StringSourceCOMStmt)+1, null.GetStringSource())
+
+	literal := GetConstantValue(vec, false, 0, types.StringSourceLiteral)
+	require.Equal(t, "value", literal.GetSval())
+	require.Zero(t, literal.GetStringSource())
 }

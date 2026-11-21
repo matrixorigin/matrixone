@@ -226,9 +226,6 @@ func extendWithBitmaps(
 			return err
 		}
 	}
-	if m != nil && v.prepareParamKinds == nil {
-		v.prepareParamKindsMP = m
-	}
 	if rows <= 0 {
 		// we will at least extent by 1.
 		// This is a pure hack to
@@ -257,16 +254,6 @@ func extendWithBitmaps(
 			return err
 		}
 		v.data = ndata
-	}
-	if v.prepareParamKinds != nil {
-		if err := v.preExtendPrepareParamKinds(tgtLen, m); err != nil {
-			return err
-		}
-	}
-	if v.stringSources != nil {
-		if err := v.preExtendStringSources(tgtLen, m); err != nil {
-			return err
-		}
 	}
 	if v.binaryStringRowsActive {
 		if err := v.ensureBinaryStringCapacity(tgtLen, m); err != nil {

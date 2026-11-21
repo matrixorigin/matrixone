@@ -523,7 +523,6 @@ func TestDomainlessNullCompare(t *testing.T) {
 			flat.SetLength(3)
 			flat.GetNulls().AddRange(0, 3)
 			defer func() { constant.Free(mp); flat.Free(mp); require.Zero(t, mp.CurrNB()) }()
-			require.NoError(t, constant.SetStringSource(types.StringSourceLiteral))
 			for _, desc := range []bool{false, true} {
 				c := factory.new(types.T_any.ToType(), desc, desc)
 				require.NotNil(t, c)
@@ -534,7 +533,6 @@ func TestDomainlessNullCompare(t *testing.T) {
 				require.Zero(t, c.Compare(1, 0, 1, 2))
 				require.NoError(t, c.Copy(0, 1, 2, 1, proc))
 				require.True(t, flat.IsNull(1))
-				require.Equal(t, types.StringSourceLiteral, flat.GetStringSourceAt(1))
 				// ANY has no non-NULL value domain; don't broaden unsupported values.
 				flat.GetNulls().Del(0)
 				require.True(t, moerr.IsMoErrCode(c.Copy(1, 0, 0, 0, proc), moerr.ErrNotSupported))

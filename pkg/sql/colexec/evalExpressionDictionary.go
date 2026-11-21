@@ -162,7 +162,7 @@ func (expr *FunctionExpressionExecutor) booleanProducesNoNulls() bool {
 		return false
 	}
 	for _, argument := range expr.parameterResults {
-		if argument == nil || argument.HasNull() || argument.HasGrouping() || argument.IsPreparedJSONComparisonParam() {
+		if argument == nil || argument.HasNull() || argument.HasGrouping() {
 			return false
 		}
 		if logical && argument.GetType().Oid != types.T_bool {
@@ -242,7 +242,7 @@ func (expr *FunctionExpressionExecutor) decimal128ProducesNoNulls() bool {
 }
 
 func decimalValueIsNonNull(value *vector.Vector) bool {
-	return value != nil && !value.HasNull() && !value.HasGrouping() && !value.IsPreparedJSONComparisonParam()
+	return value != nil && !value.HasNull() && !value.HasGrouping()
 }
 
 // fixedMembershipList identifies the execution-owned literal/runtime-filter
@@ -261,7 +261,7 @@ func (expr *FunctionExpressionExecutor) fixedMembershipList() *vector.Vector {
 	value := list.resultVector
 	oid := value.GetType().Oid
 	if !(oid.IsSignedInt() || oid.IsUnsignedInt() || oid.IsMySQLString()) ||
-		value.IsDictionary() || value.HasGrouping() || value.IsPreparedJSONComparisonParam() {
+		value.IsDictionary() || value.HasGrouping() {
 		return nil
 	}
 	return value

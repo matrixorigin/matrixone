@@ -48,9 +48,7 @@ func TestUnionInlineSelection(t *testing.T) {
 					require.Empty(t, src.area)
 				}
 				src.GetGrouping().Add(2)
-				src.SetPrepareParamKind(PrepareParamInteger)
 				src.SetIsBinaryString(true)
-				require.NoError(t, src.SetStringSource(types.StringSourceLiteral))
 				// Consecutive runs, gaps, repetition and reversal share one
 				// append. The expected rows do not depend on the copy helper.
 				rows := []int64{1, 2, 3, 6, 6, 4, 0, 1, 2}
@@ -61,7 +59,6 @@ func TestUnionInlineSelection(t *testing.T) {
 				for range 2 {
 					dst.CleanOnlyData()
 					require.NoError(t, AppendBytes(dst, []byte(prefix), false, mp))
-					require.NoError(t, dst.SetStringSource(types.StringSourceExpression))
 					if index32 {
 						sels := make([]int32, len(rows))
 						for i, row := range rows {
@@ -72,16 +69,13 @@ func TestUnionInlineSelection(t *testing.T) {
 						require.NoError(t, dst.Union(src, rows, mp))
 					}
 					require.Equal(t, prefix, dst.GetStringAt(0))
-					require.Equal(t, types.StringSourceExpression, dst.GetStringSourceAt(0))
 					require.Equal(t, len(rows)+1, dst.Length())
 					for i, row := range rows {
 						isNull := shape == "nullable" && row == 4
 						require.Equal(t, isNull, dst.IsNull(uint64(i+1)))
 						require.Equal(t, row == 2, dst.GetGrouping().Contains(uint64(i+1)))
-						require.Equal(t, types.StringSourceLiteral, dst.GetStringSourceAt(i+1))
 						if !isNull {
 							require.Equal(t, values[row], dst.GetStringAt(i+1))
-							require.Equal(t, PrepareParamInteger, dst.GetPrepareParamKindAt(i+1))
 							require.True(t, dst.GetIsBinaryStringAt(i+1))
 							if emptyNonInline && row == 1 {
 								// The ordinary copy rebases even an empty non-inline
@@ -587,8 +581,6 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 				source.GetNulls().Add(test.nulls...)
 				source.GetGrouping().Add(1, 3, 6)
 				source.SetLength(5) // Retain stale bits outside the logical range.
-				source.SetPrepareParamKind(PrepareParamInteger)
-				require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
 				destination := NewVec(types.T_int64.ToType())
 				defer destination.Free(mp)
 				require.NoError(t, AppendFixed(destination, int64(99), false, mp))
@@ -596,28 +588,24 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 					// The preflight API requires explicit flags, so this also
 					// checks the unchanged flagged-copy control.
 					flags := []uint8{1, 1, 1}
-					require.NoError(t, destination.PreExtendSelectedBatch(source, 2, 3, flags, 4, mp))
-					require.NoError(t, destination.UnionBatchPreflighted(source, 2, 3, flags, mp))
+					preflight, err := destination.PreExtendSelectedBatch(source, 2, 3, flags, 4, mp)
+					require.NoError(t, err)
+					require.NoError(t, destination.UnionBatchPreflighted(source, 2, 3, flags, &preflight, mp))
 				} else {
 					require.NoError(t, destination.UnionBatch(source, 2, 3, nil, mp))
 				}
 				require.Equal(t, 4, destination.Length())
 				require.Equal(t, int64(99), GetFixedAtNoTypeCheck[int64](destination, 0))
 				require.False(t, destination.IsNull(0))
-				require.Equal(t, types.StringSourceExpression, destination.GetStringSourceAt(0))
-				require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(0))
 				require.False(t, destination.GetIsBinaryStringAt(0))
 				for row := 1; row < 4; row++ {
 					isNull := test.name == "all" || test.name == "sparse" && row == 1
 					require.Equal(t, isNull, destination.IsNull(uint64(row)))
 					require.Equal(t, row == 2, destination.GetGrouping().Contains(uint64(row)))
-					require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(row))
 					require.False(t, destination.GetIsBinaryStringAt(row))
 					if !isNull {
 						require.Equal(t, int64(11+row), GetFixedAtNoTypeCheck[int64](destination, row))
-						require.Equal(t, PrepareParamInteger, destination.GetPrepareParamKindAt(row))
 					} else {
-						require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(row))
 					}
 				}
 				require.False(t, destination.GetNulls().Contains(5))
@@ -845,7 +833,6 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 				col[2], col[4] = col[4], col[2]
 			}
 			src.gsp.Add(3)
-			require.NoError(t, src.SetStringSource(types.StringSourceLiteral))
 			input := src
 			offset, count := 0, 8
 			if kind == "offset" || kind == "reordered" {
@@ -873,7 +860,6 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 			dst := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
 			t.Cleanup(func() { dst.Free(mp) })
 			require.NoError(t, AppendBytes(dst, []byte("prefix"), false, mp))
-			require.NoError(t, dst.SetStringSource(types.StringSourceExpression))
 			selected := 0
 			liveBytes := 0
 			for i, f := range flags {
@@ -885,9 +871,10 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 					liveBytes += len(input.GetBytesAt(offset + i))
 				}
 			}
-			require.NoError(t, dst.PreExtendSelectedBatch(input, offset, count, flags, 1+selected, mp))
+			preflight, err := dst.PreExtendSelectedBatch(input, offset, count, flags, 1+selected, mp)
+			require.NoError(t, err)
 			admitted := state.account.Snapshot().Used
-			require.NoError(t, dst.UnionBatchPreflighted(input, int64(offset), count, flags, mp))
+			require.NoError(t, dst.UnionBatchPreflighted(input, int64(offset), count, flags, &preflight, mp))
 			require.Equal(t, admitted, state.account.Snapshot().Used, "publication cannot allocate")
 			require.Len(t, dst.GetArea(), liveBytes, "only admitted live bytes may be copied")
 			next := 1
@@ -901,10 +888,8 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 				if !input.IsNull(uint64(row)) {
 					require.Equal(t, input.GetBytesAt(row), dst.GetBytesAt(next))
 				}
-				require.Equal(t, types.StringSourceLiteral, dst.GetStringSourceAt(next))
 				next++
 			}
-			require.Equal(t, types.StringSourceExpression, dst.GetStringSourceAt(0))
 		})
 	}
 }
@@ -928,10 +913,11 @@ func BenchmarkPreflightedVarlenSelection(b *testing.B) {
 			b.SetBytes(int64(selected * 128))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := dst.PreExtendSelectedBatch(src, 0, rows, flags, selected, mp); err != nil {
+				preflight, err := dst.PreExtendSelectedBatch(src, 0, rows, flags, selected, mp)
+				if err != nil {
 					b.Fatal(err)
 				}
-				if err := dst.UnionBatchPreflighted(src, 0, rows, flags, mp); err != nil {
+				if err := dst.UnionBatchPreflighted(src, 0, rows, flags, &preflight, mp); err != nil {
 					b.Fatal(err)
 				}
 				dst.CleanOnlyData()

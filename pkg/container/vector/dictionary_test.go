@@ -267,11 +267,7 @@ func TestDictionaryStringsAndProvenance(t *testing.T) {
 	for row, value := range values {
 		require.NoError(t, AppendBytes(source, []byte(value), row == 2, mp))
 	}
-	require.NoError(t, source.SetPrepareParamKindsWithMP([]PrepareParamKind{PrepareParamInteger, PrepareParamDecimal, PrepareParamNone}, mp))
-	require.NoError(t, source.SetStringSourcesWithMP([]types.StringSource{types.StringSourceCOMStmt, types.StringSourceSQLPrepare, types.StringSourceLiteral}, mp))
 	require.NoError(t, source.SetIsBinaryStringAt(1, true, mp))
-	source.SetPrepareParamType(types.T_decimal128)
-	source.SetPreparedJSONComparisonParam()
 	base, err := FreezeVector(source, mp, nil)
 	require.NoError(t, err)
 	t.Cleanup(base.Release)
@@ -281,17 +277,11 @@ func TestDictionaryStringsAndProvenance(t *testing.T) {
 	dict, err := NewDictionaryVector(base, rows, mp, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { dict.Free(mp) })
-	require.Equal(t, []PrepareParamKind{PrepareParamDecimal, PrepareParamInteger, PrepareParamDecimal, PrepareParamNone}, dict.GetPrepareParamKinds())
-	require.Equal(t, types.StringSourceLiteral, dict.GetStringSourceAt(3), "NULL retains its source owner")
 	require.True(t, dict.GetIsBinaryStringAt(0))
 	require.False(t, dict.GetIsBinaryStringAt(1))
-	require.Equal(t, types.T_decimal128, dict.GetPrepareParamType())
-	require.True(t, dict.IsPreparedJSONComparisonParam())
 	view := ResolveVarlenaReadView(dict)
 	require.Equal(t, values[1], string(view.Values[view.Selection[0]].GetByteSlice(view.Area)))
 	require.NoError(t, source.EnsureWritable(mp))
-	require.Equal(t, types.T_decimal128, source.GetPrepareParamType())
-	require.True(t, source.IsPreparedJSONComparisonParam())
 	source.Free(mp)
 	require.Equal(t, values[1], dict.GetStringAt(2))
 	for _, operation := range []string{"one", "multi", "copy"} {
@@ -308,8 +298,6 @@ func TestDictionaryStringsAndProvenance(t *testing.T) {
 				repeat = 2
 			}
 			expected := []string{values[1], values[0], values[1], ""}
-			kinds := []PrepareParamKind{PrepareParamDecimal, PrepareParamInteger, PrepareParamDecimal, PrepareParamNone}
-			sources := []types.StringSource{types.StringSourceSQLPrepare, types.StringSourceCOMStmt, types.StringSourceSQLPrepare, types.StringSourceLiteral}
 			for logical, value := range expected {
 				switch operation {
 				case "one":
@@ -325,8 +313,6 @@ func TestDictionaryStringsAndProvenance(t *testing.T) {
 					if logical != 3 {
 						require.Equal(t, value, target.GetStringAt(row))
 					}
-					require.Equal(t, kinds[logical], target.GetPrepareParamKindAt(row))
-					require.Equal(t, sources[logical], target.GetStringSourceAt(row))
 					require.Equal(t, logical == 0 || logical == 2, target.GetIsBinaryStringAt(row))
 				}
 			}
@@ -338,10 +324,6 @@ func TestDictionaryStringsAndProvenance(t *testing.T) {
 	require.Equal(t, values[1], dict.GetStringAt(2))
 	require.True(t, dict.IsNull(3))
 	require.True(t, dict.GetIsBinaryStringAt(2))
-	require.Equal(t, types.StringSourceCOMStmt, dict.GetStringSourceAt(1))
-	require.Equal(t, PrepareParamDecimal, dict.GetPrepareParamKindAt(0))
-	require.Equal(t, types.T_decimal128, dict.GetPrepareParamType())
-	require.True(t, dict.IsPreparedJSONComparisonParam())
 	require.Equal(t, len(values[1])*2, len(dict.GetArea()), "only selected non-inline payload is copied")
 }
 

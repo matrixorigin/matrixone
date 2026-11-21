@@ -222,10 +222,6 @@ func normalizeQueryResultBatchForWrite(
 			return nil, nil, err
 		}
 		cloned = append(cloned, dup)
-		// Prepared-parameter provenance is execution-only and is not part of the
-		// stable vector encoding. Drop it before extending the persisted logical
-		// length so a heterogeneous sidecar cannot grow with the result batch.
-		dup.SetPrepareParamKinds(nil)
 		if vec.IsConst() {
 			dup.SetLength(rowCount)
 		} else {

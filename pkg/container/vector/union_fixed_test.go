@@ -43,7 +43,6 @@ func TestUnionPlainFixedSelectionReuse(t *testing.T) {
 							binary.LittleEndian.PutUint64(src.data[row*width:], []uint64{0x8000000000000000, 0x7ff8000000001234, 0xfff0000000000000, 0xffffffffffffffff}[row])
 						}
 					}
-					require.NoError(t, src.SetStringSource(types.StringSourceLiteral))
 					input := src
 					if backing != "owned" {
 						var err error
@@ -63,7 +62,6 @@ func TestUnionPlainFixedSelectionReuse(t *testing.T) {
 						}
 						require.NoError(t, err)
 						t.Cleanup(func() { input.Free(mp) })
-						require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
 					}
 					require.NoError(t, dst.PreExtend(8, mp))
 					for range 2 {
@@ -81,17 +79,8 @@ func TestUnionPlainFixedSelectionReuse(t *testing.T) {
 						for row, sourceRow := range []int{3, 2, 0, 1, 1} {
 							require.Equal(t, src.data[sourceRow*width:(sourceRow+1)*width], dst.data[row*width:(row+1)*width])
 							require.False(t, dst.IsNull(uint64(row)))
-							require.Equal(t, types.StringSourceLiteral, dst.GetStringSourceAt(row))
 						}
 					}
-					// A later prepared value must not relabel the preceding ordinary rows.
-					parameter := NewVec(oid.ToType())
-					t.Cleanup(func() { parameter.Free(mp) })
-					require.NoError(t, parameter.UnionOne(src, 0, mp))
-					require.NoError(t, parameter.SetPrepareParamKindsWithMP([]PrepareParamKind{PrepareParamInteger}, mp))
-					require.NoError(t, dst.UnionOne(parameter, 0, mp))
-					require.Equal(t, PrepareParamNone, dst.GetPrepareParamKindAt(0))
-					require.Equal(t, PrepareParamInteger, dst.GetPrepareParamKindAt(5))
 				})
 			}
 		}
@@ -132,7 +121,6 @@ func TestUnionFixedSelection(t *testing.T) {
 					if nullable {
 						src.GetNulls().Add(1)
 					}
-					require.NoError(t, src.SetStringSource(types.StringSourceLiteral))
 					view, err := src.Window(1, 4)
 					require.NoError(t, err)
 					t.Cleanup(func() { view.Free(mp) })
@@ -156,7 +144,6 @@ func TestUnionFixedSelection(t *testing.T) {
 							isNull := nullable && sourceRow == 1
 							require.Equal(t, isNull, dst.IsNull(uint64(row)))
 							require.Equal(t, sourceRow == 2, dst.GetGrouping().Contains(uint64(row)))
-							require.Equal(t, types.StringSourceLiteral, dst.GetStringSourceAt(row))
 							if !isNull {
 								require.Equal(t, expected[sourceRow], dst.data[row*width:(row+1)*width])
 							}

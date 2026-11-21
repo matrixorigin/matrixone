@@ -1654,7 +1654,7 @@ func makeWindowFrameConstValue(
 			Len: int32(vec.Length()), Data: data, DecimalLiteralRequiresV82: requiresDecimal,
 		}}}, nil
 	}
-	c := rule.GetConstantValue(vec, false, 0)
+	c := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(e, proc))
 	rule.PreserveFoldedDecimalLiteralSemantics(e, c)
 
 	return &plan.Expr{
@@ -1784,7 +1784,7 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 	if err != nil {
 		return nil, err
 	}
-	c := rule.GetConstantValue(vec, false, 0)
+	c := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(numberExpr, proc))
 
 	var finalValue int64
 	if c.Isnull {

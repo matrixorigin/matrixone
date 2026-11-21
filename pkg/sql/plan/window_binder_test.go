@@ -394,7 +394,7 @@ func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
 	binaryFilled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
 		ParamValue{
 			Value:            "2",
-			PrepareParamKind: vector.PrepareParamInteger,
+			PrepareParamKind: types.StringConversionInteger,
 		},
 	})
 	require.NoError(t, err)
