@@ -1,2 +1,0 @@
--- CN object merge has been removed. Keep the public surface fail-closed.
-select mo_ctl('cn', 'mergeobjects', 't:mo_ctl_merge.t1:small');

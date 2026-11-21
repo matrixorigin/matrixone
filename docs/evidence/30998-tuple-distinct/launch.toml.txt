@@ -1,3 +1,0 @@
-logservices = ["/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/log.toml"]
-tnservices = ["/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/tn.toml"]
-cnservices = ["/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/cn.toml"]

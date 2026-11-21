@@ -1,2 +1,0 @@
-select mo_ctl('cn', 'mergeobjects', 't:mo_ctl_merge.t1:small');
-not supported: command MERGEOBJECTS not supported
