@@ -119,7 +119,7 @@ type flightBudget struct {
 }
 
 // flightBytes returns the most bytes of prefetch range runs under way: prefetchFlightBytes
-// when set, otherwise a share of the memory available on the node, at least the buffer of
+// when set, otherwise a share of the memory available on the node, at most the buffer of
 // one MemoryPrefetchObject for each object-storage connection downloads may hold.
 func (d *DiskCache) flightBytes() int64 {
 	if d.prefetchFlightBytes > 0 {
@@ -130,14 +130,16 @@ func (d *DiskCache) flightBytes() int64 {
 	at := b.at.Load()
 	bytes := b.bytes.Load()
 	// One caller measures once the last measurement is stale; the others keep it meanwhile.
-	if bytes > 0 && (now-at < int64(flightBudgetRefresh) || !b.at.CompareAndSwap(at, now)) {
+	if at != 0 && (now-at < int64(flightBudgetRefresh) || !b.at.CompareAndSwap(at, now)) {
 		return bytes
 	}
 	bytes = int64(prefetchFlightBytesMax)
 	if avail, ok := memoryAvailable(); ok {
 		bytes = int64(min(avail/100*flightMemoryPercent, math.MaxInt64))
 	}
-	bytes = max(bytes, flightBufSize(d.memoryPrefetchMax)*max(d.conns.max, 1))
+	if d.conns.max > 0 {
+		bytes = min(bytes, flightBufSize(d.memoryPrefetchMax)*d.conns.max)
+	}
 	b.bytes.Store(bytes)
 	b.at.Store(now)
 	return bytes
@@ -309,8 +311,8 @@ func (d *DiskCache) prefetchRead(
 		}
 	}
 
-	// The runs are admitted in order, each by its own goroutine once the one before it is,
-	// and read once registered. A run serves its bytes to waiting reads as they arrive and
+	// The runs are admitted in order, by one goroutine, and each is read by its own once
+	// registered. A run serves its bytes to waiting reads as they arrive and
 	// stays registered until it is cached; it outlives the read, which may return before
 	// its last bytes arrive.
 	admitCtx, cancelAdmits := context.WithCancel(ctx)
@@ -438,10 +440,37 @@ type readRun struct {
 	doneOnce sync.Once
 	// unneeded is set when the read takes no bytes of the run.
 	unneeded bool
+	// prefetch is set for a run of a prefetch, which takes no bytes of it either: it holds
+	// the object it got until the run ends, but a joined FilePrefetchObject until the
+	// prefetch releases it, as one a read started stops once no one holds it.
+	prefetch bool
 }
 
 func newReadRun(o waitingObject, files chan struct{}) *readRun {
 	return &readRun{object: o, files: files, admitted: make(chan struct{})}
+}
+
+// startRuns admits the objects of runs in order, by one goroutine, and runs each by its
+// own once registered. Once ctx ends, the object is deleted or the cache closes, the runs
+// not admitted end with that error. It returns the channel closed once the last is
+// admitted.
+func startRuns(ctx context.Context, runs []*readRun) <-chan struct{} {
+	if len(runs) == 0 {
+		return closedChan
+	}
+	all := make(chan struct{})
+	go func() {
+		defer close(all)
+		for i, r := range runs {
+			if err := r.admit(ctx); err != nil {
+				for _, r := range runs[i+1:] {
+					r.fail(err)
+				}
+				return
+			}
+		}
+	}()
+	return all
 }
 
 // closedChan is a closed channel.
@@ -451,41 +480,59 @@ var closedChan = func() <-chan struct{} {
 	return c
 }()
 
-// startRuns admits the objects of runs in order, each by its own goroutine once the one
-// before it is, and runs each once registered. It returns the channel closed once the last
-// is admitted.
-func startRuns(ctx context.Context, runs []*readRun) <-chan struct{} {
-	prev := closedChan
-	for _, r := range runs {
-		go r.admit(ctx, prev)
-		prev = r.admitted
-	}
-	return prev
-}
-
-// admit admits the object of r once prev is closed, then runs it once registered.
-func (r *readRun) admit(ctx context.Context, prev <-chan struct{}) {
-	<-prev
-	// A read holds no run it takes no bytes of.
-	if r.unneeded {
-		defer r.done()
-	}
+// admit admits the object of r, waiting holding nothing, and starts its run once
+// registered. It returns the error ending the runs after r: ctx's, or the delete or close
+// that ended r.
+func (r *readRun) admit(ctx context.Context) error {
 	if r.files != nil {
 		if err := r.takeFileSlot(ctx); err != nil {
-			r.err = err
-			close(r.admitted)
-			r.object.abandon()
-			return
+			r.fail(err)
+			return err
 		}
-		defer func() { <-r.files }()
 	}
-	r.got, r.err = admit(ctx, r.object)
+	var err error
+	r.got, err = admit(ctx, r.object)
+	r.err = err
 	close(r.admitted)
-	if r.got == prefetchObject(r.object) {
-		r.object.run()
-	} else {
+	if r.got != prefetchObject(r.object) {
 		r.object.abandon()
+		r.end()
+	} else {
+		go func() {
+			r.object.run()
+			r.end()
+		}()
 	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, errPrefetchDeleted) || errors.Is(err, errPrefetchClosed) {
+		return err
+	}
+	return nil
+}
+
+// fail ends r, not admitted, with err.
+func (r *readRun) fail(err error) {
+	r.err = err
+	close(r.admitted)
+	r.object.abandon()
+}
+
+// end frees the file slot r took, and the object it got when it takes no bytes of it.
+func (r *readRun) end() {
+	if r.files != nil {
+		<-r.files
+	}
+	if r.unneeded || r.prefetch && !r.joinedFile() {
+		r.done()
+	}
+}
+
+// joinedFile reports whether r joined a FilePrefetchObject.
+func (r *readRun) joinedFile() bool {
+	_, ok := r.got.(*filePrefetchObject)
+	return ok && r.got != prefetchObject(r.object)
 }
 
 // takeFileSlot takes one of files for the object of r, waiting for it holding nothing.
@@ -688,6 +735,9 @@ func (d *DiskCache) readRanges(
 			needs.conn = d.conns.max > 0
 			runs = append(runs, newReadRun(d.newFlight(filePath, part[0], part[1], policy, open, needs), nil))
 		}
+	}
+	for _, r := range runs {
+		r.prefetch = true
 	}
 	last := startRuns(ctx, runs)
 	go func() {

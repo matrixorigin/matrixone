@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -536,4 +537,147 @@ func TestBlackBoxConcurrentReadsOfFileRunDownloadOnce(t *testing.T) {
 	}
 	_, _, total = g.counts(objectKey)
 	require.Equal(t, 1, total, "the run downloads once")
+}
+
+// A range of a prefetch that ended frees its buffer while an earlier range of the prefetch
+// still reads, so a read of another range takes the buffer and returns.
+func TestBlackBoxEndedPrefetchRangeFreesItsBuffer(t *testing.T) {
+	const unit = 64 << 10
+	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
+	ctx := context.Background()
+	d := fs.diskCache
+	d.prefetchFlightBytes = 2 * flightBufSize(unit)
+	key := fs.pathToKey("object")
+	g := newBlackBoxStorage(fs.storage, func(k string, offset int64) bool { return k == key && offset == 0 })
+	fs.storage = g
+	release := sync.OnceFunc(func() { close(g.gate) })
+	t.Cleanup(release)
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 2 * unit,
+		Ranges: []PrefetchRange{{Offset: 0, Size: unit}, {Offset: 2 * unit, Size: unit}}, Scan: &PrefetchScan{}}))
+	f := &d.prefetchObjects
+	diskPath := d.pathForFile("object")
+	require.Eventually(t, func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return len(f.m[diskPath]) == 1 && f.bytes == flightBufSize(unit)
+	}, 5*time.Second, time.Millisecond, "the second range ended and freed its buffer while the first reads")
+
+	read := make(chan []byte, 1)
+	go func() {
+		vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
+			Entries: []IOEntry{{Offset: 3*unit + 100, Size: 10}}}
+		if err := fs.Read(ctx, vec); err != nil {
+			read <- nil
+			return
+		}
+		read <- bytes.Clone(vec.Entries[0].Data)
+		vec.Release()
+	}()
+	var got []byte
+	require.Eventually(t, func() bool {
+		select {
+		case got = <-read:
+			return true
+		default:
+			return false
+		}
+	}, 5*time.Second, time.Millisecond, "a read of another range takes the freed buffer")
+	require.Equal(t, data[3*unit+100:3*unit+110], got)
+	cur, _, _ := g.counts(key)
+	require.Equal(t, 1, cur, "the first range still reads")
+	release()
+	f.reads.Wait()
+}
+
+// The ranges of a prefetch waiting for the only connection take no goroutine each, and a
+// delete of the object ends them all.
+func TestBlackBoxWideRangePrefetchWaitingTakesNoGoroutinePerRange(t *testing.T) {
+	const n = 2048
+	fs, _, _ := newPrefetchRangeFS(t, 0, n*64)
+	ctx := context.Background()
+	d := fs.diskCache
+	d.conns.max = 1
+	d.conns.held.Store(1)
+	t.Cleanup(d.conns.release)
+	f := &d.prefetchObjects
+	waiting := func() int {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return len(f.waiting)
+	}
+	before := runtime.NumGoroutine()
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: n * 16,
+		Ranges: columnRanges(n, 64, 16), Scan: &PrefetchScan{}}))
+	require.Eventually(t, func() bool { return waiting() == 1 }, 5*time.Second, time.Millisecond,
+		"the first range waits for the connection")
+	require.Less(t, runtime.NumGoroutine()-before, 32, "the ranges not admitted take no goroutine")
+
+	require.NoError(t, fs.Delete(ctx, "object"))
+	require.Eventually(t, func() bool {
+		return waiting() == 0 && !fs.prefetcher.isRunning("object") && runtime.NumGoroutine()-before < 32
+	}, 5*time.Second, time.Millisecond, "the delete ends every range")
+	f.mu.Lock()
+	require.Zero(t, f.bytes)
+	f.mu.Unlock()
+	require.Equal(t, int64(1), d.conns.held.Load(), "no range took a connection")
+}
+
+// A prefetch that joined a range download a read started keeps it downloading once the
+// read leaves, and the range is cached.
+func TestBlackBoxPrefetchKeepsJoinedReadDownload(t *testing.T) {
+	const unit = 64 << 10
+	fs, storage, data := newPrefetchRangeFS(t, unit, 4*unit)
+	d := fs.diskCache
+	d.memoryPrefetchMax = unit / 2
+	entered, gate := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	d.hooks.beforeCacheTempFileCreate = func() {
+		once.Do(func() {
+			close(entered)
+			<-gate
+		})
+	}
+	release := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(release)
+
+	readCtx, cancelRead := context.WithCancel(context.Background())
+	readDone := make(chan error, 1)
+	go func() {
+		vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
+			Entries: []IOEntry{{Offset: 100, Size: 10}}}
+		readDone <- fs.Read(readCtx, vec)
+		vec.Release()
+	}()
+	<-entered
+	f := &d.prefetchObjects
+	diskPath := d.pathForFile("object")
+	var started *filePrefetchObject
+	f.mu.Lock()
+	for _, o := range f.m[diskPath] {
+		if p, ok := o.(*filePrefetchObject); ok && p.readStarted {
+			started = p
+		}
+	}
+	f.mu.Unlock()
+	require.NotNil(t, started, "the read started a range download")
+
+	ctx := context.Background()
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: unit,
+		Ranges: []PrefetchRange{{Offset: 0, Size: unit}}, Scan: &PrefetchScan{}}))
+	holds := func() int {
+		started.mu.Lock()
+		defer started.mu.Unlock()
+		return started.holds
+	}
+	require.Eventually(t, func() bool { return holds() == 2 }, 5*time.Second, time.Millisecond, "the prefetch joined it")
+	cancelRead()
+	require.ErrorIs(t, <-readDone, context.Canceled)
+	require.NoError(t, started.ctx.Err(), "the download the prefetch holds goes on")
+
+	release()
+	require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("object") }, 5*time.Second, time.Millisecond)
+	f.reads.Wait()
+	reads := storage.reads.Load()
+	require.Equal(t, data[100:110], readRangeOf(t, fs, 0, 100, 10))
+	require.Equal(t, reads, storage.reads.Load(), "the range was cached")
 }

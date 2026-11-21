@@ -542,3 +542,63 @@ func TestPrefetchReadAcrossDeleteReturnsNoBytes(t *testing.T) {
 	require.Equal(t, int64(2), opens.Load())
 	require.False(t, ok, "no bytes read across a delete are returned")
 }
+
+// With no memory available, concurrent reads hold one buffer at a time, and all of them
+// return their bytes.
+func TestPrefetchMemoryExhaustedHoldsOneBuffer(t *testing.T) {
+	const (
+		unit  = 64 << 10
+		units = 8
+	)
+	prev := memoryAvailable
+	t.Cleanup(func() { memoryAvailable = prev })
+	memoryAvailable = func() (uint64, bool) { return 0, true }
+	fs, _, data := newPrefetchRangeFS(t, unit, units*unit)
+	fs.diskCache.prefetchFlightBytes = 0
+	fs.diskCache.flightBudget.at.Store(0)
+	storage := &gateStorage{ObjectStorage: fs.storage, release: make(chan struct{})}
+	fs.storage = storage
+	release := sync.OnceFunc(func() { close(storage.release) })
+	t.Cleanup(release)
+	f := &fs.diskCache.prefetchObjects
+
+	type result struct {
+		i    int
+		data []byte
+		err  error
+	}
+	done := make(chan result, units)
+	for i := range units {
+		go func() {
+			vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
+				Entries: []IOEntry{{Offset: int64(i)*unit + 100, Size: 10}}}
+			err := fs.Read(context.Background(), vec)
+			r := result{i: i, err: err}
+			if err == nil {
+				r.data = slices.Clone(vec.Entries[0].Data)
+			}
+			vec.Release()
+			done <- r
+		}()
+	}
+	require.Eventually(t, func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return storage.opens.Load() == 1 && len(f.waiting) == units-1
+	}, 10*time.Second, time.Millisecond, "one read holds a buffer, the others wait for it")
+	f.mu.Lock()
+	require.Equal(t, flightBufSize(unit), f.bytes)
+	f.mu.Unlock()
+
+	release()
+	for range units {
+		r := <-done
+		require.NoError(t, r.err)
+		off := r.i*unit + 100
+		require.Equal(t, data[off:off+10], r.data)
+	}
+	f.reads.Wait()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	require.Zero(t, f.bytes)
+}

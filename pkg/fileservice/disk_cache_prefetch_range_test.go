@@ -724,13 +724,13 @@ func TestPrefetchFlightBufferReusedAfterLastHolder(t *testing.T) {
 }
 
 // The bytes of the flights under way are a share of the memory available, measured at
-// most once per refresh, and at least one MemoryPrefetchObject's buffer per download
+// most once per refresh, and at most one MemoryPrefetchObject's buffer per download
 // connection.
 func TestFlightBytesFollowAvailableMemory(t *testing.T) {
 	prev := memoryAvailable
 	t.Cleanup(func() { memoryAvailable = prev })
 	var calls int
-	avail := uint64(20 << 30)
+	avail := uint64(4 << 30)
 	memoryAvailable = func() (uint64, bool) { calls++; return avail, true }
 	d := &DiskCache{memoryPrefetchMax: 20 << 20, conns: connPool{max: 16}}
 	share := int64(avail / 100 * flightMemoryPercent)
@@ -739,10 +739,16 @@ func TestFlightBytesFollowAvailableMemory(t *testing.T) {
 	require.Equal(t, share, d.flightBytes(), "measured once per refresh")
 	require.Equal(t, 1, calls)
 	d.flightBudget.at.Store(0)
-	require.Equal(t, int64(16*32<<20), d.flightBytes(), "a MemoryPrefetchObject's buffer per connection")
+	require.Equal(t, int64(avail/100*flightMemoryPercent), d.flightBytes(), "a small cgroup holds its share")
+	avail = 0
+	d.flightBudget.at.Store(0)
+	require.Zero(t, d.flightBytes(), "exhausted memory holds none")
+	avail = 1 << 40
+	d.flightBudget.at.Store(0)
+	require.Equal(t, int64(16*32<<20), d.flightBytes(), "at most a MemoryPrefetchObject's buffer per connection")
 	memoryAvailable = func() (uint64, bool) { return 0, false }
 	d.flightBudget.at.Store(0)
-	require.Equal(t, int64(16*32<<20), d.flightBytes())
+	require.Equal(t, int64(prefetchFlightBytesMax), d.flightBytes())
 	d.conns.max = 0
 	d.flightBudget.at.Store(0)
 	require.Equal(t, int64(prefetchFlightBytesMax), d.flightBytes())

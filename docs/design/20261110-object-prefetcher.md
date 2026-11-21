@@ -112,7 +112,9 @@ as the last read waiting for it leaves, by its start or by its context ending.
 
 The buffers of MemoryPrefetchObjects, each counted from the start of its prefetch object
 until the last read copying from it releases it, hold at most 5% of the memory available
-on the node, measured at most once a second, and at least `disk-prefetch-memory-max`. A
+on the node, measured at most once a second, and at most one buffer of
+`disk-prefetch-memory-max` bytes, rounded up to a power of two, for each object-storage
+connection downloads may hold. A
 prefetch object past that bound waits until it fits, or until none is under way.
 Buffers are reused by power-of-two size up to 32 MiB; a buffer is reused only once its
 prefetch object ended and no read copies from it.
@@ -338,7 +340,7 @@ idle timeout" ([#32792](https://github.com/matrixorigin/matrixone/issues/32792))
 | Running prefetch downloads | the prefetcher's workers | the worker count; cancelled at file-service or disk-cache close |
 | Scan tokens | the scan, which ends its token on close | one per scan; an entry holds tokens only of live scans |
 | Object sizes told by prefetches | the disk cache | a fixed number of entries, cleared when full; a size told before a delete of any object is not stored |
-| Buffers of MemoryPrefetchObjects under way or held by reads | the disk cache | 5% of the memory available on the node, at least one buffer of `disk-prefetch-memory-max` bytes for each object-storage connection downloads may hold; past it a prefetch object, a read's included, waits until buffers are freed; each range of a prefetch is its own prefetch object, admitted in order, that waits, holding nothing, for its buffer and one of the object-storage connections downloads may hold before reads can join it; a prefetch of ranges counts as started once every range is under way or one waits, and a read of a range not under way reads its own bytes; a prefetch starts none once its object was deleted |
+| Buffers of MemoryPrefetchObjects under way or held by reads | the disk cache | 5% of the memory available on the node, at most one buffer of `disk-prefetch-memory-max` bytes, rounded up to a power of two, for each object-storage connection downloads may hold, and one buffer when none is under way; past it a prefetch object, a read's included, waits until buffers are freed; each range of a prefetch is its own prefetch object, admitted in order, that waits, holding nothing, for its buffer and one of the object-storage connections downloads may hold before reads can join it; a prefetch of ranges counts as started once every range is under way or one waits, and a read of a range not under way reads its own bytes; a prefetch starts none once its object was deleted |
 | FilePrefetchObjects under way | the prefetcher's workers, or the reads that start them | the worker count, and one per range a live read waits for: one a read starts is shared by every read of its range and stopped when no read waits for it before its download starts; one prefetch downloads at most 4 at once; one of a run waits, holding nothing, for its connection before it registers, and one that then finds another holding its bytes joins it, so concurrent reads download a run once; a prefetch starts none once its object was deleted; the object-storage connections they hold count with whole-object downloads |
 | Deleted objects remembered for cache writes | the disk cache | a fixed number of entries; when cleared, entries read before are not cached |
 | Object-storage connections held by downloads | the disk cache | half the host's connections; past it a download waits |
