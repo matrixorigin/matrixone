@@ -7211,7 +7211,7 @@ func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
 			if expectedResultTables == "" {
 				expectedResultTables = "nation"
 			}
-			require.Equal(t, expectedResultTables, getTablesFromPlan(queryPlan), "validation-only carriers must not add empty result-table names")
+			require.Equal(t, expectedResultTables, getTablesFromPlan(queryPlan), "validation-only carriers must not add result-table names")
 
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
