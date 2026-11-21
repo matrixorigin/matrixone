@@ -22,7 +22,6 @@ package operator
 
 import (
 	"fmt"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -53,6 +52,9 @@ type Builder struct {
 	targetNonVotingPeers peersMap
 
 	err error
+
+	// Only these live, reporting voters may execute membership changes.
+	executorCandidates map[string]struct{}
 
 	// intermediate states
 	toAdd, toRemove peersMap // pending tasks.
@@ -226,53 +228,78 @@ func (b *Builder) prepareBuild() string {
 	return b.brief()
 }
 
-func (b *Builder) buildToRemoveSteps() *Builder {
-	for len(b.toRemove) > 0 {
-		var targets []string
-		for target := range b.targetPeers {
-			targets = append(targets, target)
-		}
-		slices.Sort(targets)
+func (b *Builder) withExecutorCandidates(candidates []string) *Builder {
+	b.executorCandidates = make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		b.executorCandidates[candidate] = struct{}{}
+	}
+	return b
+}
 
+func (b *Builder) selectRetainedVotingTarget() (string, error) {
+	var selected string
+	found := false
+	for target, replicaID := range b.targetPeers {
+		originReplicaID, retained := b.originPeers[target]
+		if !retained || originReplicaID != replicaID {
+			continue
+		}
+		if b.executorCandidates != nil {
+			if _, eligible := b.executorCandidates[target]; !eligible {
+				continue
+			}
+		}
+		if !found || target < selected {
+			selected, found = target, true
+		}
+	}
+	if !found {
+		return "", moerr.NewInternalErrorNoCtx("cannot build operator step without a retained voting peer that is live and reporting")
+	}
+	return selected, nil
+}
+
+func (b *Builder) buildToRemoveSteps() error {
+	for len(b.toRemove) > 0 {
+		target, err := b.selectRetainedVotingTarget()
+		if err != nil {
+			return err
+		}
 		uuid, replicaID := b.toRemove.Get()
 		b.steps = append(b.steps, RemoveLogService{
-			Target:  targets[0],
+			Target:  target,
 			Replica: Replica{uuid, b.shardID, replicaID, b.epoch},
 		})
 		delete(b.toRemove, uuid)
 	}
-	return b
+	return nil
 }
 
-func (b *Builder) buildToRemoveNonVotingSteps() *Builder {
+func (b *Builder) buildToRemoveNonVotingSteps() error {
 	for len(b.toRemoveNonVoting) > 0 {
-		var targets []string
-		for target := range b.targetPeers {
-			targets = append(targets, target)
+		target, err := b.selectRetainedVotingTarget()
+		if err != nil {
+			return err
 		}
-		slices.Sort(targets)
-
 		uuid, replicaID := b.toRemoveNonVoting.Get()
 		b.steps = append(b.steps, RemoveNonVotingLogService{
-			Target:  targets[0],
+			Target:  target,
 			Replica: Replica{uuid, b.shardID, replicaID, b.epoch},
 		})
 		delete(b.toRemoveNonVoting, uuid)
 	}
-	return b
+	return nil
 }
 
-func (b *Builder) buildToAddSteps() *Builder {
+func (b *Builder) buildToAddSteps() error {
 	for len(b.toAdd) > 0 {
-		var targets []string
-		for target := range b.originPeers {
-			targets = append(targets, target)
+		target, err := b.selectRetainedVotingTarget()
+		if err != nil {
+			return err
 		}
-		slices.Sort(targets)
-
 		uuid, replicaID := b.toAdd.Get()
 		b.steps = append(b.steps, AddLogService{
-			Target: targets[0],
+			Target: target,
 			Replica: Replica{
 				UUID:      uuid,
 				ShardID:   b.shardID,
@@ -282,20 +309,18 @@ func (b *Builder) buildToAddSteps() *Builder {
 		})
 		delete(b.toAdd, uuid)
 	}
-	return b
+	return nil
 }
 
-func (b *Builder) buildToAddNonVotingSteps() *Builder {
+func (b *Builder) buildToAddNonVotingSteps() error {
 	for len(b.toAddNonVoting) > 0 {
-		var targets []string
-		for target := range b.originPeers {
-			targets = append(targets, target)
+		target, err := b.selectRetainedVotingTarget()
+		if err != nil {
+			return err
 		}
-		slices.Sort(targets)
-
 		uuid, replicaID := b.toAddNonVoting.Get()
 		b.steps = append(b.steps, AddNonVotingLogService{
-			Target: targets[0],
+			Target: target,
 			Replica: Replica{
 				UUID:      uuid,
 				ShardID:   b.shardID,
@@ -305,14 +330,22 @@ func (b *Builder) buildToAddNonVotingSteps() *Builder {
 		})
 		delete(b.toAddNonVoting, uuid)
 	}
-	return b
+	return nil
 }
 
 func (b *Builder) buildSteps() error {
-	b.buildToRemoveSteps().
-		buildToAddSteps().
-		buildToRemoveNonVotingSteps().
-		buildToAddNonVotingSteps()
+	if err := b.buildToRemoveSteps(); err != nil {
+		return err
+	}
+	if err := b.buildToAddSteps(); err != nil {
+		return err
+	}
+	if err := b.buildToRemoveNonVotingSteps(); err != nil {
+		return err
+	}
+	if err := b.buildToAddNonVotingSteps(); err != nil {
+		return err
+	}
 	if len(b.steps) == 0 {
 		return moerr.NewInternalErrorNoCtx("no operator step is built")
 	}

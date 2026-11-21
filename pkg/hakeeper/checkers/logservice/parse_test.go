@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
@@ -197,7 +198,7 @@ func TestFixedLogShardInfo(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		normal, nonVoting := fixedLogShardInfo(c.record, c.nonVotingReplicaNum, c.info, c.expiredStores)
+		normal, nonVoting := fixedLogShardInfo(c.record, c.nonVotingReplicaNum, c.info, c.expiredStores, nil)
 		assert.Equal(t, c.expectedNormal, normal)
 		assert.Equal(t, c.expectedNonVoting, nonVoting)
 	}
@@ -513,6 +514,7 @@ func TestCollectStats(t *testing.T) {
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
 						Replicas: []pb.LogReplicaInfo{{
+							ReplicaID: 1,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -521,6 +523,7 @@ func TestCollectStats(t *testing.T) {
 								Term:     0}}}},
 					"b": {Tick: 999999999, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
 						Replicas: []pb.LogReplicaInfo{{
+							ReplicaID: 2,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -529,6 +532,7 @@ func TestCollectStats(t *testing.T) {
 								Term:     0}}}},
 					"c": {Tick: 999999999, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
 						Replicas: []pb.LogReplicaInfo{{
+							ReplicaID: 3,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -1116,4 +1120,76 @@ func TestCollectStore(t *testing.T) {
 		_, expired = parseLogStores(cfg1, c.infos, c.tick)
 		assert.Equal(t, []string{}, expired)
 	}
+}
+
+func TestMembershipChangesWaitForVotingMajority(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		nonVotingReplicas map[uint64]string
+		requiredNonVoters uint64
+	}{
+		{name: "non-voting add", nonVotingReplicas: map[uint64]string{4: "d"}, requiredNonVoters: 2},
+		{name: "non-voting remove", nonVotingReplicas: map[uint64]string{4: "d", 5: "e"}, requiredNonVoters: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shard := pb.LogShardInfo{
+				ShardID:           1,
+				Epoch:             9,
+				Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+				NonVotingReplicas: tc.nonVotingReplicas,
+			}
+			independentShard := pb.LogShardInfo{ShardID: 2, Epoch: 1, Replicas: map[uint64]string{1: "a"}}
+			state := pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: shard, 2: independentShard},
+				Stores: map[string]pb.LogStoreInfo{
+					"a": {Tick: 100, Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 1}}},
+					"b": {Tick: 100},                                                                   // alive, but it has not reported this shard
+					"c": {Tick: 0, Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 3}}}, // expired voter; its last report is not evidence
+					"d": {Tick: 100},
+					"e": {Tick: 100},
+				},
+			}
+			cluster := pb.ClusterInfo{LogShards: []metadata.LogShardRecord{
+				{ShardID: 1, NumberOfReplicas: 3}, {ShardID: 2, NumberOfReplicas: 1},
+			}}
+			normal, nonVoting := parseLogShards(cluster, state, []string{"c"}, tc.requiredNonVoters)
+
+			assert.Empty(t, normal.toAdd[1])
+			assert.Empty(t, normal.toRemove[1])
+			assert.Empty(t, nonVoting.toAdd[1])
+			assert.Empty(t, nonVoting.toRemove[1])
+			assert.True(t, hasReplica(normal.toStart, "b", 1), "a configured live voter can still start")
+			assert.True(t, hasReplica(nonVoting.toStart, "d", 1), "a configured non-voter can still start")
+			assert.True(t, hasReplica(normal.toStart, "a", 2), "an unrelated shard can start on the reporting voter")
+
+			lc := &logServiceChecker{
+				CheckerCommonFields: hakeeper.CheckerCommonFields{Cluster: cluster},
+				logState:            state,
+				workingStores:       map[string]pb.Locality{"a": {}, "b": {}, "d": {}, "e": {}},
+			}
+			common := checker{lc: lc, ss: []*stats{normal, nonVoting}, membershipScheduled: make(map[uint64]struct{})}
+			assert.Empty(t, (&checkToAdd{checker: common}).check())
+			assert.Empty(t, (&checkToRemove{checker: common}).check())
+			startOps := (&checkToStart{checker: common}).check()
+			startedIndependentShard := false
+			for _, op := range startOps {
+				for _, step := range op.OpSteps() {
+					if start, ok := step.(operator.StartLogService); ok &&
+						start.Replica.UUID == "a" && start.Replica.ShardID == 2 {
+						startedIndependentShard = true
+					}
+				}
+			}
+			assert.True(t, startedIndependentShard, "an unrelated start remains schedulable while this shard lacks quorum")
+		})
+	}
+}
+
+func hasReplica(replicas []replica, uuid string, shardID uint64) bool {
+	for _, r := range replicas {
+		if r.uuid == uuid && r.shardID == shardID {
+			return true
+		}
+	}
+	return false
 }

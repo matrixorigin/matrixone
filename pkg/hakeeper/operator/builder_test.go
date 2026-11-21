@@ -223,3 +223,51 @@ func TestRemoveNonVotingBuild(t *testing.T) {
 		},
 	}, build.steps[0])
 }
+
+func TestBuildUsesLiveExecutorCandidates(t *testing.T) {
+	shard := logservice.LogShardInfo{
+		ShardID: 1,
+		Epoch:   7,
+		Replicas: map[uint64]string{
+			1: "a", 2: "b", 3: "c", 4: "d", 5: "e",
+		},
+	}
+	candidates := []string{"c", "d", "e"}
+	op, err := NewBuilder("", shard).
+		withExecutorCandidates(candidates).
+		RemovePeer("a").RemovePeer("b").Build()
+	assert.NoError(t, err)
+	if assert.NotNil(t, op) {
+		assert.Len(t, op.steps, 2)
+		for _, step := range op.steps {
+			var target string
+			switch step := step.(type) {
+			case RemoveLogService:
+				target = step.Target
+			case RemoveNonVotingLogService:
+				target = step.Target
+			default:
+				assert.FailNow(t, "unexpected step", "%T", step)
+			}
+			assert.Contains(t, candidates, target)
+		}
+	}
+}
+
+func TestBuildWithoutRetainedExecutorFailsSafely(t *testing.T) {
+	shard := logservice.LogShardInfo{ShardID: 1, Epoch: 7, Replicas: map[uint64]string{1: "a"}}
+	op, err := NewBuilder("", shard).RemovePeer("a").Build()
+	assert.ErrorContains(t, err, "without a retained voting peer")
+	assert.Nil(t, op)
+}
+
+func TestBuildRejectsEmptyExecutorCandidates(t *testing.T) {
+	shard := logservice.LogShardInfo{
+		ShardID:  1,
+		Epoch:    7,
+		Replicas: map[uint64]string{1: "a", 2: "b"},
+	}
+	op, err := CreateRemoveReplicaWithCandidates("a", shard, []string{})
+	assert.ErrorContains(t, err, "without a retained voting peer")
+	assert.Nil(t, op)
+}

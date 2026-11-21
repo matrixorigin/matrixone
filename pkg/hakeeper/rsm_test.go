@@ -1422,3 +1422,37 @@ func TestHandleLogShardUpdate(t *testing.T) {
 	_, ok := shards[10]
 	assert.True(t, ok)
 }
+
+func TestRestoredLegacyStoreShutdownIsNotDelivered(t *testing.T) {
+	old := NewStateMachine(0, 1)
+	start := pb.ScheduleCommand{UUID: "log", ServiceType: pb.LogService, ConfigChange: &pb.ConfigChange{
+		ChangeType: pb.StartReplica, Replica: pb.Replica{UUID: "log", ShardID: 1, ReplicaID: 3},
+	}}
+	logShutdown := pb.ScheduleCommand{UUID: "log", ServiceType: pb.LogService, ShutdownStore: &pb.ShutdownStore{StoreID: "log"}}
+	tnShutdown := pb.ScheduleCommand{UUID: "tn", ServiceType: pb.TNService, ShutdownStore: &pb.ShutdownStore{StoreID: "tn"}}
+	_, err := old.Update(sm.Entry{Index: 1, Cmd: GetUpdateCommandsCmd(1, []pb.ScheduleCommand{logShutdown, start, tnShutdown})})
+	require.NoError(t, err)
+	var snapshot bytes.Buffer
+	require.NoError(t, old.SaveSnapshot(&snapshot, nil, nil))
+	rsm := NewStateMachine(0, 1)
+	require.NoError(t, rsm.RecoverFromSnapshot(&snapshot, nil, nil))
+
+	heartbeat, err := (&pb.LogStoreHeartbeat{UUID: "log"}).Marshal()
+	require.NoError(t, err)
+	result, err := rsm.Update(sm.Entry{Index: 2, Cmd: GetLogStoreHeartbeatCmd(heartbeat)})
+	require.NoError(t, err)
+	var delivered pb.CommandBatch
+	require.NoError(t, delivered.Unmarshal(result.Data))
+	require.Equal(t, []pb.ScheduleCommand{start}, delivered.Commands)
+
+	heartbeat, err = (&pb.TNStoreHeartbeat{UUID: "tn"}).Marshal()
+	require.NoError(t, err)
+	result, err = rsm.Update(sm.Entry{Index: 3, Cmd: GetTNStoreHeartbeatCmd(heartbeat)})
+	require.NoError(t, err)
+	var tnBatch pb.CommandBatch
+	require.NoError(t, tnBatch.Unmarshal(result.Data))
+	require.Empty(t, tnBatch.Commands)
+	queued, err := rsm.Lookup(&ScheduleCommandQuery{UUID: "tn"})
+	require.NoError(t, err)
+	require.Empty(t, queued.(*pb.CommandBatch).Commands)
+}
