@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -451,6 +452,315 @@ func TestTableDumpDefaultLocales(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTableDumpHistoricalJapaneseMonthAbbrev(t *testing.T) {
+	for _, tc := range []struct {
+		name, declaration, currentValue, oldValue, forgedValue, readingLocale string
+		increment, creationZoneSeconds, readingZoneSeconds                    int64
+	}{
+		{"constant", "varchar(64) default (date_format('2024-03-01','%b'))", " 3月", "3月", "4月", "ja_JP", 4, 0, 0},
+		{"division_and_zone", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b')))", "0.3333: 3月", "0.3333:3月", "0.3333:4月", "de_DE", 4, 0, 0},
+		{"cross_zone", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b')))", "0: 3月", "0:3月", "0:4月", "ja_JP", 0, 0, -8 * 3600},
+		{"non_utc_creation", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b %Y-%m-%d %H:%i:%s')))", "0: 3月 2024-03-01 09:00:00", "0:3月 2024-03-01 09:00:00", "0:4月 2024-03-01 09:00:00", "en_US", 0, 9 * 3600, 0},
+		{"non_utc_creation_precision_4", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b %Y-%m-%d %H:%i:%s')))", "0.3333: 3月 2024-03-01 09:00:00", "0.3333:3月 2024-03-01 09:00:00", "0.3333:4月 2024-03-01 09:00:00", "en_US", 4, 9 * 3600, 0},
+		{"half_hour_creation", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b %Y-%m-%d %H:%i:%s')))", "0: 3月 2024-03-01 05:30:00", "0:3月 2024-03-01 05:30:00", "0:4月 2024-03-01 05:30:00", "en_US", 0, 5*3600 + 30*60, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			proc.GetSessionInfo().TimeZone = time.UTC
+			if tc.creationZoneSeconds != 0 {
+				proc.GetSessionInfo().TimeZone = time.FixedZone("creation zone", int(tc.creationZoneSeconds))
+			}
+			proc.GetSessionInfo().LCTimeNames = "ja_JP"
+			locale := "ja_JP"
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+				if name == "lc_time_names" {
+					return locale, nil
+				}
+				return "", nil
+			})
+			compiler := NewMockCompilerContext(false, proc)
+			compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+				switch name {
+				case "lc_time_names":
+					return locale, nil
+				case "div_precision_increment":
+					return tc.increment, nil
+				case "explicit_defaults_for_timestamp":
+					return true, nil
+				}
+				return "", nil
+			}
+			stmt, err := mysql.ParseOne(t.Context(), "create table legacy_ja(a "+tc.declaration+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(compiler, stmt, false)
+			require.NoError(t, err)
+			current := built.GetDdl().GetCreateTable().GetTableDef()
+			require.Equal(t, tc.currentValue, current.Cols[0].Default.Expr.GetLit().GetSval())
+
+			// Before this locale correction, ja_JP %b emitted the same month
+			// without the leading space. Serialize the complete metadata tree.
+			legacy := proto.Clone(current).(*planpb.TableDef)
+			legacy.Cols[0].Default.Expr.GetLit().Value = &planpb.Literal_Sval{Sval: tc.oldValue}
+			encoded, err := proto.Marshal(legacy)
+			require.NoError(t, err)
+			var persisted planpb.TableDef
+			require.NoError(t, proto.Unmarshal(encoded, &persisted))
+			before := proto.Clone(&persisted)
+			locale = tc.readingLocale
+			proc.GetSessionInfo().LCTimeNames = locale
+			readingZone := time.UTC
+			if tc.readingZoneSeconds != 0 {
+				readingZone = time.FixedZone("reading zone", int(tc.readingZoneSeconds))
+			}
+			proc.GetSessionInfo().TimeZone = readingZone
+			sensitive, err := AnalyzeTableDumpBindings(compiler, &persisted, &persisted)
+			require.NoError(t, err)
+			require.True(t, sensitive)
+			// The half-hour case also proves that a legacy payload can be
+			// checked against the current catalog declaration. The other rows
+			// exercise distinct locale, precision, and timezone witnesses above.
+			if tc.name == "half_hour_creation" {
+				sensitive, err = AnalyzeTableDumpBindings(compiler, current, &persisted)
+				require.NoError(t, err)
+				require.True(t, sensitive)
+			}
+			// One current-format control is enough to detect an accidental
+			// preference for the historical Japanese month spelling.
+			if tc.name == "constant" {
+				_, err = AnalyzeTableDumpBindings(compiler, current, current)
+				require.NoError(t, err)
+			}
+			require.True(t, proto.Equal(before, &persisted))
+			require.Equal(t, locale, proc.GetSessionInfo().LCTimeNames)
+			require.Same(t, readingZone, proc.GetSessionInfo().TimeZone)
+
+			// A forged month must still be rejected after searching both the
+			// historical locale and the non-hour creation offset. Running this
+			// exhaustive negative search once avoids repeating the same oracle.
+			if tc.name == "half_hour_creation" {
+				forged := proto.Clone(&persisted).(*planpb.TableDef)
+				forged.Cols[0].Default.Expr.GetLit().Value = &planpb.Literal_Sval{Sval: tc.forgedValue}
+				_, err = AnalyzeTableDumpBindings(compiler, current, forged)
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestTableDumpCurrentMonthAbbrevNonUTCCreation(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.FixedZone("creation zone", 9*3600)
+	proc.GetSessionInfo().LCTimeNames = "en_US"
+	compiler := NewMockCompilerContext(false, proc)
+	compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+		switch name {
+		case "lc_time_names":
+			return "en_US", nil
+		case "div_precision_increment":
+			return int64(0), nil
+		case "explicit_defaults_for_timestamp":
+			return true, nil
+		}
+		return "", nil
+	}
+	stmt, err := mysql.ParseOne(t.Context(), "create table t(a varchar(200) default (concat("+
+		"cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', "+
+		"date_format(from_unixtime(1709251200),'%b %Y-%m-%d %H:%i:%s'))))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, "0:Mar 2024-03-01 09:00:00", def.Cols[0].Default.Expr.GetLit().GetSval())
+	proc.GetSessionInfo().TimeZone = time.UTC
+	for _, readingLocale := range []string{"en_US", "de_DE"} {
+		t.Run(readingLocale, func(t *testing.T) {
+			proc.GetSessionInfo().LCTimeNames = readingLocale
+			_, err = AnalyzeTableDumpBindings(compiler, def, def)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestTableDumpSharedTimezoneWitnessAcrossDefaults(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.FixedZone("creation zone", 5*3600+30*60)
+	proc.GetSessionInfo().LCTimeNames = "en_US"
+	compiler := NewMockCompilerContext(false, proc)
+	compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+		switch name {
+		case "lc_time_names":
+			return "en_US", nil
+		case "div_precision_increment":
+			return int64(0), nil
+		case "explicit_defaults_for_timestamp":
+			return true, nil
+		}
+		return "", nil
+	}
+	columns := make([]string, 8)
+	for i := range columns {
+		columns[i] = fmt.Sprintf("c%d varchar(200) default (concat("+
+			"cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', "+
+			"date_format(from_unixtime(1709251200),'%%b %%Y-%%m-%%d %%H:%%i:%%s')))", i)
+	}
+	stmt, err := mysql.ParseOne(t.Context(), "create table t("+strings.Join(columns, ",")+")", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef()
+	require.GreaterOrEqual(t, len(def.Cols), len(columns))
+	for _, col := range def.Cols[:len(columns)] {
+		require.Equal(t, "0:Mar 2024-03-01 05:30:00", col.Default.Expr.GetLit().GetSval())
+	}
+	proc.GetSessionInfo().TimeZone = time.UTC
+	_, err = AnalyzeTableDumpBindings(compiler, def, def)
+	require.NoError(t, err)
+
+	forged := proto.Clone(def).(*planpb.TableDef)
+	forged.Cols[len(columns)-1].Default.Expr.GetLit().Value = &planpb.Literal_Sval{Sval: "forged"}
+	_, err = AnalyzeTableDumpBindings(compiler, def, forged)
+	require.Error(t, err)
+}
+
+func TestTableDumpHistoricalJapaneseSharedTimezoneWitness(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.FixedZone("creation zone", 5*3600+30*60)
+	proc.GetSessionInfo().LCTimeNames = "ja_JP"
+	compiler := NewMockCompilerContext(false, proc)
+	compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+		switch name {
+		case "lc_time_names":
+			return proc.GetSessionInfo().LCTimeNames, nil
+		case "div_precision_increment":
+			return int64(0), nil
+		case "explicit_defaults_for_timestamp":
+			return true, nil
+		}
+		return "", nil
+	}
+	columns := make([]string, 8)
+	for i := range columns {
+		columns[i] = fmt.Sprintf("c%d varchar(200) default (concat("+
+			"cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', "+
+			"date_format(from_unixtime(%d),'%%b %%Y-%%m-%%d %%H:%%i:%%s')))", i, 1709251200+i*3600)
+	}
+	stmt, err := mysql.ParseOne(t.Context(), "create table t("+strings.Join(columns, ",")+")", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	current := built.GetDdl().GetCreateTable().GetTableDef()
+	legacy := proto.Clone(current).(*planpb.TableDef)
+	for i := range columns {
+		currentValue := fmt.Sprintf("0: 3月 2024-03-01 %02d:30:00", 5+i)
+		require.Equal(t, currentValue, current.Cols[i].Default.Expr.GetLit().GetSval())
+		legacy.Cols[i].Default.Expr.GetLit().Value = &planpb.Literal_Sval{
+			Sval: strings.Replace(currentValue, " 3月", "3月", 1),
+		}
+	}
+	encoded, err := proto.Marshal(legacy)
+	require.NoError(t, err)
+	var persisted planpb.TableDef
+	require.NoError(t, proto.Unmarshal(encoded, &persisted))
+	before := proto.Clone(&persisted)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.GetSessionInfo().LCTimeNames = "en_US"
+	for _, target := range []*planpb.TableDef{&persisted, current} {
+		sensitive, err := AnalyzeTableDumpBindings(compiler, target, &persisted)
+		require.NoError(t, err)
+		require.True(t, sensitive)
+	}
+	require.True(t, proto.Equal(before, &persisted))
+	require.Same(t, time.UTC, proc.GetSessionInfo().TimeZone)
+	require.Equal(t, "en_US", proc.GetSessionInfo().LCTimeNames)
+}
+
+func TestTableDumpSharedTimezoneWitnessAcrossDistinctDefaults(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.FixedZone("creation zone", 5*3600+30*60)
+	proc.GetSessionInfo().LCTimeNames = "en_US"
+	compiler := NewMockCompilerContext(false, proc)
+	compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+		switch name {
+		case "lc_time_names":
+			return "en_US", nil
+		case "div_precision_increment":
+			return int64(0), nil
+		case "explicit_defaults_for_timestamp":
+			return true, nil
+		}
+		return "", nil
+	}
+	columns := make([]string, 3)
+	for i, unixTime := range []int{1709251200, 1709254800, 1709258400} {
+		columns[i] = fmt.Sprintf("c%d varchar(200) default (concat("+
+			"cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', "+
+			"date_format(from_unixtime(%d),'%%b %%Y-%%m-%%d %%H:%%i:%%s')))", i, unixTime)
+	}
+	stmt, err := mysql.ParseOne(t.Context(), "create table t("+strings.Join(columns, ",")+")", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef()
+	for i, want := range []string{
+		"0:Mar 2024-03-01 05:30:00",
+		"0:Mar 2024-03-01 06:30:00",
+		"0:Mar 2024-03-01 07:30:00",
+	} {
+		require.Equal(t, want, def.Cols[i].Default.Expr.GetLit().GetSval())
+	}
+	before := proto.Clone(def)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	for _, supplied := range []*planpb.TableDef{nil, def} {
+		capture, err := AnalyzeTableDumpBindings(compiler, def, supplied)
+		require.NoError(t, err)
+		require.True(t, capture)
+	}
+	require.True(t, proto.Equal(before, def))
+
+	forged := proto.Clone(def).(*planpb.TableDef)
+	forged.Cols[len(columns)-1].Default.Expr.GetLit().Value = &planpb.Literal_Sval{Sval: "forged"}
+	_, err = AnalyzeTableDumpBindings(compiler, def, forged)
+	require.Error(t, err)
+}
+
+func TestTableDumpCurrentMonthAbbrevNamedZoneRules(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	creationZone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = creationZone
+	proc.GetSessionInfo().LCTimeNames = "en_US"
+	compiler := NewMockCompilerContext(false, proc)
+	compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+		switch name {
+		case "lc_time_names":
+			return "en_US", nil
+		case "div_precision_increment":
+			return int64(0), nil
+		case "explicit_defaults_for_timestamp":
+			return true, nil
+		}
+		return "", nil
+	}
+	stmt, err := mysql.ParseOne(t.Context(), "create table t(a varchar(200) default (concat("+
+		"cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', "+
+		"date_format(from_unixtime(1704067200),'%Y-%m-%d %H:%i'), '|', "+
+		"date_format(from_unixtime(1722470400),'%Y-%m-%d %H:%i %b'))))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, "0:2023-12-31 19:00|2024-07-31 20:00 Jul", def.Cols[0].Default.Expr.GetLit().GetSval())
+	proc.GetSessionInfo().TimeZone = time.UTC
+	_, err = AnalyzeTableDumpBindings(compiler, def, def)
+	require.NoError(t, err)
 }
 
 const tableDumpSessionSearchTestTimezoneBindings = 8
