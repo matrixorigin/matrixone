@@ -7,11 +7,14 @@ select sleep(1.5);
 sleep(1.5)
 0
 select sleep(null);
-invalid argument sleep, bad value input contains null
+sleep(null)
+null
 select sleep(-1);
-invalid argument sleep, bad value input contains negative
+sleep(-1)
+0
 select sleep(-1.5);
-invalid argument sleep, bad value input contains negative
+sleep(-1.5)
+0
 create table t1 (a int,b int);
 insert into t1 values (1,1),(1,null);
 select sleep(a) from t1;
@@ -19,7 +22,9 @@ sleep(a)
 0
 0
 select sleep(b) from t1;
-invalid argument sleep, bad value input contains null
+sleep(b)
+0
+null
 SELECT sleep(0);
 sleep(0)
 0
@@ -27,9 +32,11 @@ SELECT sleep(0.33);
 sleep(0.33)
 0
 SELECT sleep(-2);
-invalid argument sleep, bad value input contains negative
+sleep(-2)
+0
 SELECT sleep(-23.1);
-invalid argument sleep, bad value input contains negative
+sleep(-23.1)
+0
 DROP TABLE IF EXISTS sleep_01;
 CREATE TABLE sleep_01 (id int);
 SELECT * ,sleep(0.2) from sleep_01;

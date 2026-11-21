@@ -11758,7 +11758,7 @@ func UTCTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 
 func sleepSeconds(proc *process.Process, sec float64) (uint8, error) {
 	if sec < 0 {
-		return 0, moerr.NewInvalidArg(proc.Ctx, "sleep", "input contains negative")
+		return 0, nil
 	}
 
 	sleepNano := time.Nanosecond * time.Duration(sec*1e9)
@@ -11776,7 +11776,9 @@ func Sleep[T uint64 | float64](ivecs []*vector.Vector, result vector.FunctionRes
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := ivec.GetValue(i)
 		if null {
-			return moerr.NewInvalidArg(proc.Ctx, "sleep", "input contains null")
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
 		} else {
 			res, err := sleepSeconds(proc, float64(v))
 			if err == nil {
