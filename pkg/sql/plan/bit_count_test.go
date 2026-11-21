@@ -325,6 +325,60 @@ func TestBitCountPredicateProofHandlesLongPredicatesAndBoundedStrings(t *testing
 	}
 }
 
+func TestBitCountStringMeasureBypassesAllocationBudget(t *testing.T) {
+	builder := &QueryBuilder{compCtx: NewEmptyCompilerContext(newPlanTestProcess(t))}
+	bindCtx := builder.GetContext()
+	bind := func(name string, args ...*pb.Expr) *pb.Expr {
+		t.Helper()
+		expr, err := BindFuncExprImplByPlanExpr(bindCtx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	const count = maxSpeculativeFoldValueBytes + 1
+	intLit := makePlan2Int64ConstExprWithType
+	strLit := makePlan2StringConstExprWithType
+	producer := bind("concat", bind("repeat", strLit("é"), intLit(count)), strLit("👍"))
+	require.False(t, isSpeculativeConstantFoldSafe(producer, &speculativeConstantFoldBudget{ctx: bindCtx}))
+	for _, tc := range []struct {
+		name string
+		want int64
+	}{
+		{"length", 2*count + 4},
+		{"octet_length", 2*count + 4},
+		{"character_length", count + 1},
+		{"bit_length", (2*count + 4) * 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			length := bind(tc.name, DeepCopyExpr(producer))
+			proof := &BindContext{}
+			for _, want := range []int64{tc.want, tc.want - 1} {
+				predicate := bind("=", DeepCopyExpr(length), intLit(want))
+				proof.setWhereFilters([]*pb.Expr{predicate})
+				require.Equal(t, want == tc.want, bitCountWhereIsEffectivelyTrue(builder, proof))
+				require.NotNil(t, predicate.GetF().Args[0].GetF(), "proof must preserve the original expression")
+			}
+		})
+	}
+
+	// An out-of-range unsigned input must not wrap to a negative count
+	// during the proof and then become positive through unary minus.
+	unsigned := makePlan2Uint64ConstExprWithType(^uint64(count - 1))
+	signed, err := makePlan2CastExpr(bindCtx, unsigned, makePlan2Type(&types.Type{Oid: types.T_int64}))
+	require.NoError(t, err)
+	outOfRangeCast := bind("length", bind("repeat", strLit("a"), bind("unary_minus", signed)))
+	foldConstantStringLengths(outOfRangeCast, bindCtx)
+	require.NotNil(t, outOfRangeCast.GetF(), "proof must leave the checked cast to normal execution")
+
+	oversize := bind("length", bind("repeat", strLit("aa"), intLit(1<<62)))
+	foldConstantStringLengths(oversize, bindCtx)
+	require.NotNil(t, oversize.GetF(), "the execution limit must still apply")
+	cancelled, cancel := context.WithCancel(bindCtx)
+	cancel()
+	length := bind("length", producer)
+	foldConstantStringLengths(length, cancelled)
+	require.NotNil(t, length.GetF(), "cancelled proof must not rewrite")
+}
+
 func TestBitCountConditionalBinding(t *testing.T) {
 	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	queryPlan, err := runOneStmt(optimizer, t, `select
