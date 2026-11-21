@@ -319,6 +319,10 @@ func coalesceBinaryStringResult(overloads []overload, inputs []types.Type) (chec
 			continue
 		case types.T_binary, types.T_varbinary:
 			hasBinary = true
+		case types.T_char, types.T_varchar:
+			// MySQL gives a COALESCE over byte and character strings the
+			// binary string type, as it does IF and CASE. The type is the
+			// only carrier of that domain: vectors have no per-row domain.
 		default:
 			return checkResult{}, false
 		}

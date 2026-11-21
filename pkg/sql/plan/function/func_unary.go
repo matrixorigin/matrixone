@@ -1037,8 +1037,8 @@ func BitCountDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
-	if !perRow && uniformBinary {
+	uniformBinary := isBinaryStringVector(ivecs[0])
+	if uniformBinary {
 		return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
 	}
 	param := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -1059,7 +1059,7 @@ func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResul
 		}
 		var count uint64
 		var err error
-		binary := binaryStringAt(ivecs[0], int(row), uniformBinary, perRow)
+		binary := uniformBinary
 		if binary {
 			count = bitCountFromBinaryString(value)
 		} else {
@@ -1522,7 +1522,7 @@ func Empty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 
 func JsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	single := func(str string, row int) ([]byte, error) {
-		if ivecs[0].GetIsBinaryStringAt(row) {
+		if isBinaryStringVector(ivecs[0]) {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_quote")
 		}
 		if !utf8.ValidString(str) {
@@ -1593,7 +1593,7 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		// NULL and masked rows.  Runtime binary provenance can vary within a
 		// VARCHAR vector, and a selected text row can override a static binary
 		// result type.
-		if ivecs[0].GetIsBinaryStringAt(row) {
+		if isBinaryStringVector(ivecs[0]) {
 			return "", moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_unquote")
 		}
 		if ivecs[0].GetType().Oid.IsMySQLString() {
@@ -1638,7 +1638,7 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			continue
 		}
 		if !utf8.Valid(value) {
-			isBinary := ivecs[0].GetIsBinaryStringAt(int(row))
+			isBinary := isBinaryStringVector(ivecs[0])
 			if isBinary {
 				return moerr.NewCannotConvertString(proc.Ctx, string(value), "binary", "utf8mb4")
 			}
@@ -10162,7 +10162,7 @@ func Rtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	input := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0])
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -10177,7 +10177,7 @@ func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			}
 			continue
 		}
-		if binaryStringAt(ivecs[0], int(row), uniformBinary, perRow) {
+		if uniformBinary {
 			if err := rs.AppendBytesWithWriter(len(value), func(dst []byte) error {
 				for i := range value {
 					dst[len(value)-1-i] = value[i]
@@ -10192,7 +10192,7 @@ func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func reverse(str string) string {
@@ -10865,20 +10865,7 @@ func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (r
 			if null {
 				return 0, true, nil
 			}
-			isBinary := staticBinary
-			switch param.GetRuntimeStringDomainAt(int(i)) {
-			case types.RuntimeStringText:
-				// A selected CASE/IF/COALESCE value can explicitly restore
-				// character semantics even when the common vector type is
-				// VARBINARY/BLOB.  The row-level override must win over the
-				// static type and any conservative vector summary.
-				isBinary = false
-			case types.RuntimeStringBinary:
-				isBinary = true
-			default:
-				isBinary = isBinary || param.GetIsBinaryStringAt(int(i))
-			}
-			if isBinary {
+			if staticBinary {
 				if len(value) == 0 {
 					return 0, false, moerr.NewInvalidArg(proc.Ctx, "cast to int", value)
 				}

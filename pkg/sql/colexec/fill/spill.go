@@ -530,7 +530,7 @@ func (s *fillSpill) writeRecord(
 	wire.Recursive = bat.Recursive
 	wire.ShuffleIDX = bat.ShuffleIDX
 	wire.SetRowCount(bat.RowCount())
-	payloadSize, err := wire.MarshalBinaryWithMetadataSize()
+	payloadSize, err := wire.MarshalBinarySize()
 	if err != nil {
 		return 0, err
 	}
@@ -541,7 +541,7 @@ func (s *fillSpill) writeRecord(
 	if err = writeFillBytes(file.writer, types.EncodeInt64(&size)); err != nil {
 		return 0, err
 	}
-	if err = wire.MarshalBinaryWithMetadataTo(file.writer); err != nil {
+	if err = wire.MarshalBinaryTo(file.writer); err != nil {
 		return 0, err
 	}
 	if err = writeFillBytes(file.writer, types.EncodeInt64(&size)); err != nil {

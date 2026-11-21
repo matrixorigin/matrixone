@@ -55,11 +55,11 @@ set @bound_domain_s = if(false, X'ff', '你a');
 prepare bound_selected_text from 'select charset(@bound_domain_s), collation(@bound_domain_s), char_length(@bound_domain_s), hex(left(@bound_domain_s, 1))';
 execute bound_selected_text;
 ➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
-binary  ¦  binary  ¦  2  ¦  E4BDA0
+binary  ¦  binary  ¦  4  ¦  E4
 set @bound_domain_s = X'e4bda061';
 execute bound_selected_text;
 ➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
-binary  ¦  binary  ¦  2  ¦  E4BDA0
+binary  ¦  binary  ¦  4  ¦  E4
 select charset(@bound_domain_s), char_length(@bound_domain_s), hex(left(@bound_domain_s, 1));
 ➤ charset(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
 binary  ¦  4  ¦  E4
@@ -73,10 +73,10 @@ execute bound_selected_binary;
 binary  ¦  binary  ¦  4  ¦  E4
 execute bound_selected_text;
 ➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
-binary  ¦  binary  ¦  2  ¦  E4BDA0
+binary  ¦  binary  ¦  4  ¦  E4
 select charset(@bound_domain_s), char_length(@bound_domain_s), hex(left(@bound_domain_s, 1));
 ➤ charset(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
-binary  ¦  2  ¦  E4BDA0
+binary  ¦  4  ¦  E4
 set @bound_domain_s = NULL;
 execute bound_selected_text;
 ➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
@@ -87,7 +87,7 @@ binary  ¦  binary  ¦  null  ¦  null
 set @bound_domain_s = '你a';
 execute bound_selected_text;
 ➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
-binary  ¦  binary  ¦  2  ¦  E4BDA0
+binary  ¦  binary  ¦  4  ¦  E4
 execute bound_selected_binary;
 ➤ charset(@bound_domain_s)[12,65535,0]  ¦  collation(@bound_domain_s)[12,65535,0]  ¦  char_length(@bound_domain_s)[-5,64,0]  ¦  hex(left(@bound_domain_s, 1))[-1,16383,0]  𝄀
 binary  ¦  binary  ¦  4  ¦  E4

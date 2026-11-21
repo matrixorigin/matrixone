@@ -36,11 +36,12 @@ func TestRemoteBoundStringVariableFoldRoundTrip(t *testing.T) {
 		name    string
 		charset uint8
 		domain  types.RuntimeStringDomain
-		binary  bool
 	}{
-		{"text over binary static type", types.CharsetBinary, types.RuntimeStringText, false},
-		{"binary over text static type", types.CharsetUTF8MB4Bin, types.RuntimeStringBinary, true},
-		{"inherit binary static type", types.CharsetBinary, types.RuntimeStringInherit, true},
+		// The bound domain is planning metadata only; the folded value's
+		// semantics come from its static type (charset).
+		{"text over binary static type", types.CharsetBinary, types.RuntimeStringText},
+		{"binary over text static type", types.CharsetUTF8MB4Bin, types.RuntimeStringBinary},
+		{"inherit binary static type", types.CharsetBinary, types.RuntimeStringInherit},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
@@ -89,7 +90,6 @@ func TestRemoteBoundStringVariableFoldRoundTrip(t *testing.T) {
 					v, err := executor.Eval(remote, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 					require.NoError(t, err)
 					require.Equal(t, next, v.GetStringAt(0))
-					require.Equal(t, tc.binary, v.GetIsBinaryStringAt(0))
 					require.Equal(t, tc.charset, v.GetType().Charset)
 				}()
 				require.Zero(t, remote.Mp().CurrNB())

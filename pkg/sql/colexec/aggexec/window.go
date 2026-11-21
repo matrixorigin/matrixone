@@ -876,9 +876,8 @@ type valueWindowExec struct {
 
 // valueEntry stores a single value from the window frame
 type valueEntry struct {
-	isNull       bool
-	stringDomain types.RuntimeStringDomain
-	data         []byte
+	isNull bool
+	data   []byte
 }
 
 func (exec *valueWindowExec) GroupGrow(more int) error {
@@ -912,7 +911,6 @@ func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 	}
 
 	if !entry.isNull {
-		entry.stringDomain = vec.GetRuntimeStringDomainAt(row)
 		// Copy the value data
 		if vec.GetType().IsVarlen() {
 			bs := vec.GetBytesAt(row)
@@ -1198,11 +1196,7 @@ func (exec *valueWindowExec) flushNthValue() ([]*vector.Vector, error) {
 }
 
 func (exec *valueWindowExec) appendValueEntry(result *vector.Vector, entry *valueEntry) error {
-	row := result.Length()
-	if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
-		return err
-	}
-	return result.SetRuntimeStringDomainAtWithMP(row, entry.stringDomain, exec.mp)
+	return appendValueToVector(result, entry.data, exec.retType, exec.mp)
 }
 
 func (exec *valueWindowExec) appendNullEntry(result *vector.Vector) error {

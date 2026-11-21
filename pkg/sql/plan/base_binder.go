@@ -4595,6 +4595,14 @@ func (b *baseBinder) coerceJSONNumericAggregateArg(
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	expr, err := b.bindFuncExprImplByAstExprInner(name, astArgs, depth)
+	if err == nil && name == "coalesce" && b.builder != nil && isMixedDomainCoalesce(expr) {
+		b.builder.mixedDomainCoalesce = true
+	}
+	return expr, err
+}
+
+func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
 	previousFieldContext := b.preparedFieldArgumentContext
 	b.preparedFieldArgumentContext = previousFieldContext || name == "field"
 	defer func() { b.preparedFieldArgumentContext = previousFieldContext }()
@@ -4777,6 +4785,12 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				// from v72 to v86.
 				b.suppressDefaultValueBindType = true
 				b.inetNtoaNumericLiteralContext = true
+			}
+			if conditionalValueIndexes(name, len(astArgs)) != nil && isBinaryLiteralAst(arg) {
+				// A binary literal branch keeps its own COERCIBLE identity, so
+				// collation aggregation decides the conditional's string domain
+				// instead of the destination column type of a DEFAULT.
+				b.suppressDefaultValueBindType = true
 			}
 			if name == "timestampadd" && idx == 1 && timestampAddSecondUnit(args[:idx]) && !function.LegacyTimestampAddSecond(b.GetContext()) {
 				// SECOND consumes the source decimal value before integer coercion.
@@ -7949,6 +7963,7 @@ func bindFuncExprImplByPlanExpr(
 	if err != nil {
 		return nil, err
 	}
+	args = relabelCoercibleBinaryBranches(name, args)
 	// HEX/BIT literals have a VARCHAR-shaped type but an exact unsigned numeric
 	// domain. Preserve their provenance before either prepared consumers or the
 	// type-only SUM/AVG fallback converts strings to DOUBLE. Ordinary binary

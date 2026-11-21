@@ -2792,10 +2792,8 @@ func TestFillValuesOfParamsPreservesSQLExecuteRuntimeStringDomain(t *testing.T) 
 		wantForm   planpb.StringLiteralForm
 		wantLength int64
 	}{
-		{
-			name: "static varbinary runtime text", sourceType: types.T_varbinary.ToType(),
-			domain: types.RuntimeStringText, wantForm: planpb.StringLiteralForm_STRING_LITERAL_TEXT, wantLength: 2,
-		},
+		// A static VARBINARY source can no longer carry a TEXT row: the static
+		// type is the only source of binary-vs-text semantics.
 		{
 			name: "static varchar runtime binary", sourceType: types.T_varchar.ToType(),
 			domain: types.RuntimeStringBinary, wantForm: planpb.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,

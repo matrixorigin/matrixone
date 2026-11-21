@@ -40,7 +40,6 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 				bat.Vecs[0], err = vector.NewConstBytes(typ, []byte("constant payload"), 5, proc.Mp())
 				require.NoError(t, err)
 				bat.Vecs[0].GetGrouping().Add(0, 2)
-				bat.Vecs[0].SetIsBinaryString(true)
 				bat.SetRowCount(5)
 				return bat
 			}
@@ -86,7 +85,6 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 								require.Equal(t, sourceRow == 0 || sourceRow == 2, v.GetGrouping().Contains(uint64(row)), "side %d output row %d", side, seen)
 								require.False(t, v.IsNull(uint64(row)))
 								require.Equal(t, "constant payload", v.GetStringAt(row))
-								require.True(t, v.GetIsBinaryStringAt(row))
 							}
 							seen++
 						}
@@ -116,7 +114,6 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 					require.Equal(t, side == 0 || row == 1, v.GetGrouping().Contains(uint64(row)), "side %d row %d", side, row)
 					require.False(t, v.IsNull(uint64(row)))
 					require.Equal(t, "constant payload", v.GetStringAt(row))
-					require.True(t, v.GetIsBinaryStringAt(row))
 				}
 			}
 		})

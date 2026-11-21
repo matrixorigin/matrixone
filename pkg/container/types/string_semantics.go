@@ -248,6 +248,12 @@ func StaticStringDomain(typ Type) StringDomain {
 	if typ.Charset == CharsetBinary {
 		return StringDomainBinary
 	}
+	// Old plans can leave an intrinsically binary OID with the legacy zero
+	// charset; it is still a byte string.
+	if typ.Charset == CharsetLegacy &&
+		(typ.Oid == T_binary || typ.Oid == T_varbinary || typ.Oid == T_blob) {
+		return StringDomainBinary
+	}
 	return StringDomainText
 }
 

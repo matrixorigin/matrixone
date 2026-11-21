@@ -79,9 +79,6 @@ func (v *Vector) unionDictionaryBatch(w *Vector, offset int64, count int, flags 
 			next++
 		}
 	}
-	if err := v.propagateBinaryStringBatch(w, oldLength, offset, count, flags, mp); err != nil {
-		return err
-	}
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = areaWasDisjoint
 	}
@@ -415,13 +412,6 @@ func unionDictionaryRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPoo
 	if err := v.MaterializeOwned(mp); err != nil {
 		return err
 	}
-	if err := v.preflightBinaryStringAppend(
-		v.length+len(sels),
-		summarizeBinaryStringSelection(w, sels),
-		mp,
-	); err != nil {
-		return err
-	}
 
 	if err := extendWithBitmaps(
 		v,
@@ -439,10 +429,7 @@ func unionDictionaryRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPoo
 	oldLen := v.length
 	v.setLengthAfterExtend(v.length + len(sels))
 	appendSelectedGrouping(v, w, oldLen, sels)
-	if err := gatherDictionarySelection(v, w, sels, oldLen, preserveDisjointArea, mp); err != nil {
-		return err
-	}
-	return propagateBinaryStringSelection(v, w, oldLen, sels, mp)
+	return gatherDictionarySelection(v, w, sels, oldLen, preserveDisjointArea, mp)
 }
 
 // admitDictionaryBatch is the selected counterpart of the existing bulk
@@ -502,12 +489,6 @@ func (v *Vector) admitDictionaryBatch(
 	if err := v.MaterializeOwned(mp); err != nil {
 		return err
 	}
-	if !preflighted {
-		if err := v.PreflightUnionBatchBinaryString(w, offset, cnt, flags, mp); err != nil {
-			return err
-		}
-	}
-
 	if preflighted {
 		if preflightRowCount != v.length+addCnt ||
 			preflightRowCount*v.typ.TypeSize() > cap(v.data) {

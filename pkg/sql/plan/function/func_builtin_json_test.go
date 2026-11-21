@@ -521,11 +521,10 @@ func TestJsonConstructorPreparedMetadata(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got.String())
 			if tc.binary {
-				// A binary-string key keeps its raw bytes.
+				// A text-typed key keeps its raw bytes.
 				k := vector.NewVec(types.T_text.ToType())
 				defer k.Free(proc.Mp())
 				require.NoError(t, vector.AppendBytes(k, []byte(tc.input), false, proc.Mp()))
-				k.SetIsBinaryString(true)
 				key, err := newOpBuiltInJsonObject().convertKeyToAny(proc, newOpBuiltInJsonArray(), k, 0, defines.MORPCVersion51)
 				require.NoError(t, err)
 				require.Equal(t, tc.input, key)
