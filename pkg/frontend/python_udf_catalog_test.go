@@ -817,26 +817,23 @@ func TestPersistSQLReplacePublishesNextImmutableRevision(t *testing.T) {
 		result.AddRow([]interface{}{int64(2), int64(5)})
 		return result
 	}()
-	bh.sql2result[fmt.Sprintf(
-		"select rettype from mo_catalog.mo_user_defined_function where function_id = %d;", functionID,
-	)] = singleStringResult("rettype", "bigint")
-
 	err := persistUserDefinedFunction(context.Background(), bh, &TenantInfo{User: "owner"}, 7, userDefinedFunctionDefinition{
 		name:     "sql_revision",
 		args:     `[{"name":"value","type":"bigint"}]`,
 		argTypes: `["bigint"]`,
-		retType:  "bigint",
+		retType:  "varchar",
 		body:     "select value + 2",
 		lang:     string(tree.SQL),
 		dbName:   "db1",
 	}, &functionID)
 	require.NoError(t, err)
-	require.Len(t, bh.executedSqls, 7)
+	require.Len(t, bh.executedSqls, 6)
 	require.Equal(t, functionRevisionCatalogSchemaCheck, bh.executedSqls[0])
-	require.Contains(t, bh.executedSqls[4], "body = \"select value + 2\"")
-	require.Contains(t, bh.executedSqls[5], "function_id, revision, namespace_version")
-	require.Contains(t, bh.executedSqls[5], ", 3, 6,")
-	require.Contains(t, bh.executedSqls[6], "active_revision = 3, namespace_version = 6")
+	require.Contains(t, bh.executedSqls[3], "retType = 'varchar'")
+	require.Contains(t, bh.executedSqls[4], "function_id, revision, namespace_version")
+	require.Contains(t, bh.executedSqls[4], ", 3, 6,")
+	require.Contains(t, bh.executedSqls[4], "\"varchar\", \"select value + 2\"")
+	require.Contains(t, bh.executedSqls[5], "active_revision = 3, namespace_version = 6")
 }
 
 func TestReadSQLRevisionBindsActiveHeadAndRejectsTampering(t *testing.T) {

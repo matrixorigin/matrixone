@@ -1066,7 +1066,6 @@ func (tcc *TxnCompilerContext) ResolveViewUdf(name string, args []*plan.Expr, da
 
 func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Expr, database string) (udf *function.Udf, err error) {
 	var matchNum int
-	var argstr string
 	var argTypeStr string
 	var sql string
 	var erArray []ExecResult
@@ -1169,10 +1168,20 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 			if getErr != nil {
 				return nil, getErr
 			}
-			argstr, err = erArray[0].GetString(ctx, i, 1)
-			if err != nil {
+			catalogArgs, getErr := erArray[0].GetString(ctx, i, 1)
+			if getErr != nil {
+				return nil, getErr
+			}
+			var argList []*function.Arg
+			if err = json.Unmarshal([]byte(catalogArgs), &argList); err != nil {
 				return nil, err
 			}
+			// A legacy overload can lack a revision. Only resolve revisions for
+			// candidates whose catalog arity makes them eligible for this call.
+			if len(argList) != len(args) {
+				continue
+			}
+			argstr := catalogArgs
 			udf = &function.Udf{}
 			udf.Body, err = erArray[0].GetString(ctx, i, 2)
 			if err != nil {
@@ -1234,11 +1243,12 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 			if err = udf.LoadPythonTypeContract(); err != nil {
 				return nil, err
 			}
-			// arg type check
-			argList := make([]*function.Arg, 0)
-			err = json.Unmarshal([]byte(argstr), &argList)
-			if err != nil {
-				return nil, err
+			if argstr != catalogArgs {
+				// The active revision supplies the definition for binding.
+				argList = nil
+				if err = json.Unmarshal([]byte(argstr), &argList); err != nil {
+					return nil, err
+				}
 			}
 			if len(argList) != len(args) { // mismatch
 				continue
