@@ -55,7 +55,7 @@ func TestRSSPressureSharesRecovery(t *testing.T) {
 	var wg sync.WaitGroup
 	for _, source := range []*RSSPressureSource{cn, workspace} {
 		wg.Go(func() {
-			source.observe(now, 3600*mib, 4096*mib, 32*mib, 0, false)
+			source.observe(now, 3600*mib, 32*mib, 0, rssPressureLimit{bytes: 4096 * mib})
 		})
 	}
 	wg.Wait()
@@ -88,7 +88,7 @@ func TestRSSPressureTransitionsCancelStaleActions(t *testing.T) {
 	defer source.Close()
 	now := time.Now()
 	observe := func(seconds time.Duration, rss int64) {
-		source.observe(now.Add(seconds*time.Second), rss, 1000, 800, 0, false)
+		source.observe(now.Add(seconds*time.Second), rss, 800, 0, rssPressureLimit{bytes: 1000})
 	}
 	observe(-121, 950) // Expires before it can affect hysteresis or start recovery.
 	observe(0, 849)
@@ -124,6 +124,7 @@ func TestRSSPressurePartialLimitCanRestartAfterLeaseExpiry(t *testing.T) {
 		state:       rssPressureHard,
 		expires:     now,
 		lastSample:  now.Add(-rssPressureTTL),
+		leaseRoot:   "/tenant",
 		setTarget:   func(target int64, _ time.Time) { targets <- target },
 		clearTarget: func() {},
 		evict:       func(_ context.Context, target int64) { walks <- target },
@@ -132,9 +133,81 @@ func TestRSSPressurePartialLimitCanRestartAfterLeaseExpiry(t *testing.T) {
 	source := c.attach()
 	defer source.Close()
 
-	source.observe(now, 850, 1000, 850, 0, true)
+	source.observe(now, 850, 850, 0, rssPressureLimit{bytes: 1000, readRoot: "/tenant/leaf", knownRoot: "/tenant/leaf"})
 	require.Equal(t, rssCacheSoftTarget, receivePressureEvent(t, targets))
 	require.Equal(t, rssCacheSoftTarget, receivePressureEvent(t, walks))
+}
+
+func TestRSSPressureKeepsCoverageAcrossPositiveReports(t *testing.T) {
+	wide := rssPressureLimit{bytes: 500, readRoot: "/tenant", knownRoot: "/tenant"}
+	leaf := rssPressureLimit{bytes: 1000, readRoot: "/tenant/leaf", knownRoot: "/tenant/leaf"}
+	covered := leaf
+	covered.knownRoot = wide.knownRoot
+	disjoint := rssPressureLimit{bytes: 1000, readRoot: "/other", knownRoot: "/other"}
+	root := rssPressureLimit{bytes: 500, readRoot: "/", knownRoot: "/"}
+	host := rssPressureLimit{bytes: 1000}
+	for _, tc := range []struct {
+		name          string
+		first, strong rssPressureLimit
+		weak, healthy rssPressureLimit
+	}{
+		{"narrower view cannot replace a wide lease", wide, leaf, leaf, wide},
+		{"a covered ancestor is remembered from first admission", covered, leaf, leaf, wide},
+		{"disjoint positive views keep their common ancestry", wide, disjoint, leaf, root},
+		{"positive host sample retains v2 evidence", wide, host, leaf, host},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var targets []int64
+			cleared := 0
+			c := rssPressureController{
+				setTarget:   func(target int64, _ time.Time) { targets = append(targets, target) },
+				clearTarget: func() { cleared++ },
+				evict:       func(context.Context, int64) {},
+				free:        func() {},
+			}
+			a, b := c.attach(), c.attach()
+			defer a.Close()
+			defer b.Close()
+			now := time.Now()
+			a.observe(now, int64(tc.first.bytes)*86/100, 1000, 0, tc.first)
+			b.observe(now.Add(time.Second), int64(tc.strong.bytes)*95/100, 1000, 0, tc.strong)
+			require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget}, targets)
+			expiry := c.expires
+			b.observe(now.Add(2*time.Second), 440, 1000, 0, tc.weak)
+			require.Equal(t, expiry, c.expires)
+			require.Zero(t, cleared)
+			require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget}, targets)
+			a.observe(now.Add(3*time.Second), 350, 1000, 0, tc.healthy)
+			require.Equal(t, 1, cleared)
+			require.Empty(t, c.leaseRoot)
+		})
+	}
+}
+
+func TestRSSPressureLearnsCoverageFromStaleUnresolvedSample(t *testing.T) {
+	targets, clears := 0, 0
+	c := rssPressureController{
+		setTarget:   func(int64, time.Time) { targets++ },
+		clearTarget: func() { clears++ },
+		evict:       func(context.Context, int64) {},
+		free:        func() {},
+	}
+	source := c.attach()
+	defer source.Close()
+	now := time.Now()
+	leaf := rssPressureLimit{bytes: 1000, readRoot: "/tenant/leaf", knownRoot: "/tenant/leaf"}
+	source.observe(now.Add(2*time.Second), 860, 1000, 0, leaf)
+	expiry := c.expires
+	// This probe started before the lease existed and learned the wider
+	// topology. Its hierarchy read failed after a newer RSS was accepted.
+	source.observe(now, 770, 1000, 0, rssPressureLimit{knownRoot: "/tenant"})
+	require.Equal(t, "/tenant", c.leaseRoot)
+	source.observe(now.Add(3*time.Second), 790, 1000, 0, leaf)
+	require.Equal(t, expiry, c.expires)
+	require.Equal(t, 1, targets)
+	require.Zero(t, clears)
+	source.observe(now.Add(4*time.Second), 650, 1000, 0, rssPressureLimit{bytes: 880, readRoot: "/tenant", knownRoot: "/tenant"})
+	require.Equal(t, 1, clears)
 }
 
 func TestRSSPressureCloseLeavesAdmittedWalkWithWorker(t *testing.T) {
@@ -168,7 +241,7 @@ func TestRSSPressureCloseLeavesAdmittedWalkWithWorker(t *testing.T) {
 	defer cn.Close()
 	defer workspace.Close()
 	defer unblock()
-	cn.observe(time.Now(), 860, 1000, 800, 0, false)
+	cn.observe(time.Now(), 860, 800, 0, rssPressureLimit{bytes: 1000})
 	first := receivePressureEvent(t, started)
 	cn.Close()
 	require.NoError(t, first.ctx.Err(), "the remaining reporter still owns pressure")
@@ -185,9 +258,9 @@ func TestRSSPressureCloseLeavesAdmittedWalkWithWorker(t *testing.T) {
 	go func() { attached <- c.attach() }()
 	next := receivePressureEvent(t, attached)
 	defer next.Close()
-	cn.observe(time.Now(), 870, 1000, 800, 0, false) // A retired source cannot schedule work.
+	cn.observe(time.Now(), 870, 800, 0, rssPressureLimit{bytes: 1000}) // A retired source cannot schedule work.
 	require.Equal(t, []int64{rssCacheSoftTarget}, targets, "retired source cannot publish a target")
-	next.observe(time.Now(), 950, 1000, 800, 0, false)
+	next.observe(time.Now(), 950, 800, 0, rssPressureLimit{bytes: 1000})
 	require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget}, targets)
 	require.Empty(t, started, "the existing worker still owns the blocked callback")
 	unblock()
@@ -217,10 +290,10 @@ func TestRSSPressureImmediateFreeUsesOneReport(t *testing.T) {
 	defer workspace.Close()
 	defer unblock()
 	now := time.Now()
-	cn.observe(now, 800, 1000, 0, 0, false)
+	cn.observe(now, 800, 0, 0, rssPressureLimit{bytes: 1000})
 	observed := make(chan struct{})
 	go func() {
-		workspace.observe(now.Add(time.Second), 900, 1000, 55, 600, false)
+		workspace.observe(now.Add(time.Second), 900, 55, 600, rssPressureLimit{bytes: 1000})
 		close(observed)
 	}()
 	receivePressureEvent(t, observed)
@@ -228,7 +301,7 @@ func TestRSSPressureImmediateFreeUsesOneReport(t *testing.T) {
 
 	finished := make(chan struct{})
 	go func() {
-		workspace.observe(now.Add(2*time.Second), 900, 1000, 0, 600, false)
+		workspace.observe(now.Add(2*time.Second), 900, 0, 600, rssPressureLimit{bytes: 1000})
 		close(finished)
 	}()
 	receivePressureEvent(t, started)
@@ -241,20 +314,20 @@ func TestRSSPressureImmediateFreeUsesOneReport(t *testing.T) {
 	defer next.Close()
 	restarted := make(chan struct{})
 	go func() {
-		next.observe(now.Add(rssScavengeInterval+3*time.Second), 900, 1000, 0, 600, false)
+		next.observe(now.Add(rssScavengeInterval+3*time.Second), 900, 0, 600, rssPressureLimit{bytes: 1000})
 		close(restarted)
 	}()
 	receivePressureEvent(t, restarted)
 	require.Equal(t, int32(1), frees.Load(), "an active free survives reporter detach")
 	unblock()
 	receivePressureEvent(t, finished)
-	next.observe(now.Add(rssScavengeInterval+4*time.Second), 900, 1000, 0, 600, false)
+	next.observe(now.Add(rssScavengeInterval+4*time.Second), 900, 0, 600, rssPressureLimit{bytes: 1000})
 	require.Equal(t, int32(2), frees.Load(), "eligibility returns after completion and cooldown")
 
 	next.Close()
 	later := c.attach()
 	defer later.Close()
-	later.observe(now.Add(rssScavengeInterval+5*time.Second), 900, 1000, 0, 600, false)
+	later.observe(now.Add(rssScavengeInterval+5*time.Second), 900, 0, 600, rssPressureLimit{bytes: 1000})
 	require.Equal(t, int32(2), frees.Load(), "the cooldown survives last detach")
 }
 
@@ -436,7 +509,9 @@ func TestRSSRefreshUsesResolvedUnlimitedHostCeiling(t *testing.T) {
 	m.refreshMemoryWithPressure(
 		func() (*process.MemoryInfoStat, error) { return &process.MemoryInfoStat{RSS: 950}, nil },
 		func() (uint64, error) { return 1000, nil },
-		func(uint64, error) (rssPressureLimit, error) { return rssPressureLimit{}, memlimit.ErrNoLimit },
+		func(uint64, error, func(string)) (rssPressureLimit, error) {
+			return rssPressureLimit{}, memlimit.ErrNoLimit
+		},
 	)
 	require.Equal(t, uint64(1000), m.actualTotalMemory.Load())
 	c.mu.Lock()

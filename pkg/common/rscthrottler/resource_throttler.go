@@ -140,15 +140,10 @@ func (m *memThrottler) refreshMemory(
 	m.refreshMemoryWithPressure(readRSS, readCgroup, nil)
 }
 
-type rssPressureLimit struct {
-	bytes   uint64
-	partial bool // A finite value is an upper bound when an ancestor is hidden.
-}
-
 func (m *memThrottler) refreshMemoryWithPressure(
 	readRSS func() (*process.MemoryInfoStat, error),
 	readCgroup func() (uint64, error),
-	resolvePressure func(uint64, error) (rssPressureLimit, error),
+	resolvePressure func(uint64, error, func(string)) (rssPressureLimit, error),
 ) {
 	prevRSS := m.rss.Load()
 	prevBase := m.rssReservedBase.Load()
@@ -200,20 +195,28 @@ func (m *memThrottler) refreshMemoryWithPressure(
 	} else if m.rssPressure != nil {
 		pressureLimit, pressureErr := rssPressureLimit{bytes: cgroup}, err
 		if resolvePressure != nil {
-			pressureLimit, pressureErr = resolvePressure(cgroup, err)
+			pressureLimit, pressureErr = resolvePressure(cgroup, err, func(root string) {
+				m.rssPressure.recordCgroupCoverage(sample.at, root)
+			})
 		}
-		if pressureErr == nil && pressureLimit.bytes != 0 {
+		switch {
+		case pressureErr == nil:
 			if total != 0 {
 				pressureLimit.bytes = min(pressureLimit.bytes, total)
 			}
-			m.rssPressure.observe(sample.at, sample.rss, int64(pressureLimit.bytes), sample.reservedAfter, sample.live, pressureLimit.partial)
-		} else if !pressureLimit.partial && (errors.Is(pressureErr, memlimit.ErrNoLimit) ||
-			errors.Is(pressureErr, memlimit.ErrNoCgroup) ||
-			errors.Is(pressureErr, memlimit.ErrCgroupsNotSupported)) {
-			m.rssPressure.observe(sample.at, sample.rss, int64(total), sample.reservedAfter, sample.live, false)
-		} else if pressureErr != nil && resolvePressure != nil {
-			pressureResolutionErr = pressureErr
+		case errors.Is(pressureErr, memlimit.ErrNoLimit),
+			errors.Is(pressureErr, memlimit.ErrNoCgroup),
+			errors.Is(pressureErr, memlimit.ErrCgroupsNotSupported):
+			// Normalizing an unlimited cgroup to host memory preserves the
+			// cgroup coverage evidence attached to that limit.
+			pressureLimit.bytes = total
+		default:
+			pressureLimit.bytes = 0
+			if resolvePressure != nil {
+				pressureResolutionErr = pressureErr
+			}
 		}
+		m.rssPressure.observe(sample.at, sample.rss, sample.reservedAfter, sample.live, pressureLimit)
 	}
 	logutil.Info(
 		fmt.Sprintf("%s-Refresh", MemoryThrottlerLogHeader),

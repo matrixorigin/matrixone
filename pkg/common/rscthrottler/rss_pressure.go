@@ -17,7 +17,9 @@ package rscthrottler
 import (
 	"context"
 	"math"
+	"path"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -86,6 +88,33 @@ func NewRSSPressureSource() *RSSPressureSource {
 	return processRSSPressure.attach()
 }
 
+type rssPressureLimit struct {
+	bytes uint64
+	// Logical cgroup v2 hierarchy paths, independent of mount aliases.
+	// Other sources leave both empty.
+	readRoot  string
+	knownRoot string
+}
+
+func cgroupPathContains(root, group string) bool {
+	return root == "/" || group == root || strings.HasPrefix(group, root+"/")
+}
+
+// coveringCgroupRoot keeps one bound for the lease, even when the process
+// reports from different subtrees. It never forgets an observed ancestor.
+func coveringCgroupRoot(root, other string) string {
+	if root == "" {
+		return other
+	}
+	if other == "" {
+		return root
+	}
+	for !cgroupPathContains(root, other) {
+		root = path.Dir(root)
+	}
+	return root
+}
+
 type rssPressureController struct {
 	// Order RSS measurements without blocking reporter detach or cache work.
 	sampleMu sync.Mutex
@@ -98,6 +127,7 @@ type rssPressureController struct {
 	lastEvict      time.Time
 	lastFree       time.Time
 	expires        time.Time
+	leaseRoot      string
 	state          rssPressureState
 	pending        bool
 	running        bool
@@ -146,6 +176,7 @@ func (s *RSSPressureSource) Close() {
 	c.lastSample = time.Time{}
 	c.lastEvict = time.Time{}
 	c.expires = time.Time{}
+	c.leaseRoot = ""
 	c.sources = nil
 }
 
@@ -168,26 +199,58 @@ func (s *RSSPressureSource) recordRSSCapture(at time.Time) {
 	}
 }
 
-func (s *RSSPressureSource) observe(at time.Time, rss, limit, reserved, live int64, partial bool) {
-	if limit <= 0 || limit == math.MaxInt64 {
+// recordCgroupCoverage widens a live lease's required scope before potentially
+// blocking hierarchy reads. It does not publish a pressure measurement.
+func (s *RSSPressureSource) recordCgroupCoverage(at time.Time, root string) {
+	c := s.controller
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	if _, live := c.sources[s]; live && now.Before(c.expires) && now.Before(at.Add(rssPressureTTL)) {
+		c.setLeaseRoot(coveringCgroupRoot(c.leaseRoot, root))
+	}
+}
+
+func (c *rssPressureController) setLeaseRoot(root string) {
+	if root != c.leaseRoot {
+		// Retain only the path, not the backing mountinfo snapshot.
+		c.leaseRoot = strings.Clone(root)
+	}
+}
+
+func (s *RSSPressureSource) observe(at time.Time, rss, reserved, live int64, ceiling rssPressureLimit) {
+	validLimit := ceiling.bytes != 0 && ceiling.bytes < math.MaxInt64
+	if !validLimit && ceiling.knownRoot == "" {
 		return
 	}
 	c := s.controller
 	c.mu.Lock()
 	now := time.Now()
 	expires := at.Add(rssPressureTTL)
-	if _, ok := c.sources[s]; !ok || at.Before(c.lastSample) || !now.Before(expires) {
+	if _, ok := c.sources[s]; !ok || !now.Before(expires) {
 		c.mu.Unlock()
 		return
 	}
 	previous := c.state
-	if partial && !now.Before(c.expires) {
+	requiredRoot := ceiling.knownRoot
+	if now.Before(c.expires) {
+		requiredRoot = coveringCgroupRoot(c.leaseRoot, requiredRoot)
+		// The lease may have started while the hierarchy probe was in flight.
+		c.setLeaseRoot(requiredRoot)
+	} else {
 		previous = rssPressureNone
 	}
+	if !validLimit || at.Before(c.lastSample) {
+		c.mu.Unlock()
+		return
+	}
+	limit := int64(ceiling.bytes)
+	latestCapture := !at.Before(c.lastRSSCapture)
+	partial := ceiling.readRoot != "" && !cgroupPathContains(ceiling.readRoot, requiredRoot)
 	next := nextRSSPressureState(previous, float64(rss)/float64(limit))
 	// An upper bound can establish pressure, but cannot prove recovery.
 	if partial && next == rssPressureNone ||
-		next < previous && (partial || at.Before(c.lastRSSCapture)) {
+		next < previous && (partial || !latestCapture) {
 		c.mu.Unlock()
 		return
 	}
@@ -202,6 +265,7 @@ func (s *RSSPressureSource) observe(at time.Time, rss, limit, reserved, live int
 	}
 	if target == 0 {
 		c.expires = time.Time{}
+		c.leaseRoot = ""
 		c.mu.Unlock()
 		if previous != rssPressureNone {
 			logRSSPressure(rss, limit, max(0, reserved+live), 0, false, false, previous, rssPressureNone)
@@ -210,6 +274,7 @@ func (s *RSSPressureSource) observe(at time.Time, rss, limit, reserved, live int
 	}
 
 	c.expires = expires
+	c.setLeaseRoot(requiredRoot)
 	c.setTarget(target, c.expires)
 	evict := previous < c.state || previous == c.state && at.Sub(c.lastEvict) > rssScavengeInterval
 	if evict {

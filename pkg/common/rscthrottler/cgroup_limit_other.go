@@ -16,6 +16,6 @@
 
 package rscthrottler
 
-func resolvePressureCgroup(limit uint64, err error) (rssPressureLimit, error) {
+func resolvePressureCgroup(limit uint64, err error, _ func(string)) (rssPressureLimit, error) {
 	return rssPressureLimit{bytes: limit}, err
 }
