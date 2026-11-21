@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -229,38 +230,43 @@ func (budget *speculativeConstantFoldBudget) consume(bytes int64) bool {
 // Variable-width results are admitted only when a registered producer has a
 // proven byte bound within the fold budget.
 func isSpeculativeConstantFoldSafe(expr *plan.Expr, budget *speculativeConstantFoldBudget) bool {
-	_, _, safe := speculativeConstantFoldSafety(expr, budget)
+	_, safe := speculativeConstantFoldSafety(expr, budget)
 	return safe
 }
 
 type speculativeFoldStringBound struct {
-	bytes int64
-	known bool
+	bytes     int64
+	known     bool
+	validUTF8 bool
 }
 
-func speculativeConstantFoldSafety(expr *plan.Expr, budget *speculativeConstantFoldBudget) (int64, bool, bool) {
-	if expr == nil {
-		return 0, false, false
-	}
-	if budget != nil && budget.ctx != nil && budget.ctx.Err() != nil {
-		return 0, false, false
+func stringExprUsesBytes(expr *plan.Expr) bool {
+	return expr != nil && (expr.GetLit().GetIsBin() ||
+		types.StaticStringDomain(makeTypeByPlan2Expr(expr)) == types.StringDomainBinary)
+}
+
+func speculativeConstantFoldSafety(expr *plan.Expr, budget *speculativeConstantFoldBudget) (speculativeFoldStringBound, bool) {
+	var unknown speculativeFoldStringBound
+	if expr == nil || budget != nil && budget.ctx != nil && budget.ctx.Err() != nil {
+		return unknown, false
 	}
 	switch node := expr.Expr.(type) {
 	case *plan.Expr_Lit:
 		if budget == nil || types.T(expr.Typ.Id).FixedLength() >= 0 {
-			return 0, false, true
+			return unknown, true
 		}
-		bytes := int64(len(node.Lit.GetSval()))
+		value := node.Lit.GetSval()
+		bytes := int64(len(value))
 		if bytes > maxSpeculativeFoldLiteralBytes || !budget.consume(bytes) {
-			return 0, false, false
+			return unknown, false
 		}
-		return bytes, true, true
+		return speculativeFoldStringBound{bytes: bytes, known: true, validUTF8: utf8.ValidString(value)}, true
 	case *plan.Expr_T:
-		return 0, false, true
+		return unknown, true
 	case *plan.Expr_F:
 		f := node.F
 		if f == nil || f.Func == nil {
-			return 0, false, false
+			return unknown, false
 		}
 		switch f.Func.GetObjName() {
 		case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus",
@@ -268,7 +274,7 @@ func speculativeConstantFoldSafety(expr *plan.Expr, budget *speculativeConstantF
 			// The binder's arithmetic, cast and tuple encoding operators.
 		default:
 			if !function.GetFunctionIsProvenPureFoldableById(f.Func.GetObj()) {
-				return 0, false, false
+				return unknown, false
 			}
 		}
 		var stackBounds [4]speculativeFoldStringBound
@@ -279,79 +285,89 @@ func speculativeConstantFoldSafety(expr *plan.Expr, budget *speculativeConstantF
 			argBounds = argBounds[:len(f.Args)]
 		}
 		for i, arg := range f.Args {
-			bytes, hasBytes, safe := speculativeConstantFoldSafety(arg, budget)
+			bound, safe := speculativeConstantFoldSafety(arg, budget)
 			if !safe {
-				return 0, false, false
+				return unknown, false
 			}
-			argBounds[i] = speculativeFoldStringBound{bytes: bytes, known: hasBytes}
+			argBounds[i] = bound
 		}
 		if budget == nil || types.T(expr.Typ.Id).FixedLength() >= 0 {
-			return 0, false, true
+			return unknown, true
 		}
-		bytes, bounded := speculativeStringOutputBound(f, argBounds)
-		if !bounded || !budget.consume(bytes) {
-			return 0, false, false
-		}
-		return bytes, true, true
+		bound := speculativeStringOutputBound(f, argBounds)
+		return bound, bound.known && budget.consume(bound.bytes)
 	default:
-		return 0, false, false
+		return unknown, false
 	}
 }
 
-func speculativeStringOutputBound(f *plan.Function, args []speculativeFoldStringBound) (int64, bool) {
-	if f == nil || f.Func == nil {
-		return 0, false
-	}
+func speculativeStringOutputBound(f *plan.Function, args []speculativeFoldStringBound) speculativeFoldStringBound {
+	var unknown speculativeFoldStringBound
 	name := strings.ToLower(f.Func.GetObjName())
 	switch name {
 	case "space":
-		if len(f.Args) != 1 {
-			return 0, false
+		if len(args) == 1 {
+			length, ok := speculativeConstantInt64(f.Args[0])
+			if ok && length >= 0 {
+				return speculativeFoldStringBound{bytes: length, known: true, validUTF8: true}
+			}
 		}
-		length, ok := speculativeConstantInt64(f.Args[0])
-		return length, ok && length >= 0
 	case "repeat":
-		if len(f.Args) != 2 || !args[0].known {
-			return 0, false
+		if len(args) != 2 || !args[0].known {
+			break
 		}
 		repeats, ok := speculativeConstantInt64(f.Args[1])
-		if !ok || repeats < 0 || (repeats != 0 && args[0].bytes > maxSpeculativeFoldValueBytes/repeats) {
-			return 0, false
-		}
-		return args[0].bytes * repeats, true
-	case "concat":
-		var total int64
-		for _, arg := range args {
-			if !arg.known || total > maxSpeculativeFoldValueBytes-arg.bytes {
-				return 0, false
+		if ok && repeats >= 0 && (repeats == 0 || args[0].bytes <= maxSpeculativeFoldValueBytes/repeats) {
+			return speculativeFoldStringBound{
+				bytes: args[0].bytes * repeats, known: true, validUTF8: args[0].validUTF8,
 			}
-			total += arg.bytes
 		}
-		return total, len(args) > 0
-	case "concat_ws":
-		if len(args) < 2 || !args[0].known {
-			return 0, false
-		}
-		var total int64
-		for _, arg := range args[1:] {
-			if !arg.known || total > maxSpeculativeFoldValueBytes-arg.bytes {
-				return 0, false
+	case "concat", "concat_ws":
+		values := args
+		if name == "concat_ws" {
+			if len(args) < 2 || !args[0].known {
+				break
 			}
-			total += arg.bytes
+			values = args[1:]
 		}
-		separators := int64(max(0, len(args)-2))
-		if separators != 0 && args[0].bytes > (maxSpeculativeFoldValueBytes-total)/separators {
-			return 0, false
+		result := speculativeFoldStringBound{known: len(values) > 0, validUTF8: true}
+		for _, arg := range values {
+			if !arg.known || result.bytes > maxSpeculativeFoldValueBytes-arg.bytes {
+				return unknown
+			}
+			result.bytes += arg.bytes
+			result.validUTF8 = result.validUTF8 && arg.validUTF8
 		}
-		return total + separators*args[0].bytes, true
+		if name == "concat_ws" && len(values) > 1 {
+			separators := int64(len(values) - 1)
+			if args[0].bytes > (maxSpeculativeFoldValueBytes-result.bytes)/separators {
+				return unknown
+			}
+			result.bytes += separators * args[0].bytes
+			result.validUTF8 = result.validUTF8 && args[0].validUTF8
+		}
+		return result
 	case "reverse", "substring", "substr", "left", "right":
 		if len(args) == 0 || !args[0].known {
-			return 0, false
+			break
 		}
-		return args[0].bytes, true
-	default:
-		return 0, false
+		bound := args[0]
+		if stringExprUsesBytes(f.Args[0]) {
+			// Byte reversal or slicing need not preserve UTF-8 boundaries.
+			bound.validUTF8 = false
+		} else if !bound.validUTF8 {
+			// Re-encoding an invalid byte as U+FFFD can take three bytes.
+			const replacementBytes = int64(len(string(utf8.RuneError)))
+			if bound.bytes > maxSpeculativeFoldValueBytes/replacementBytes {
+				break
+			}
+			bound.bytes *= replacementBytes
+			// RIGHT can return its input unchanged when the whole string is selected.
+			bound.validUTF8 = name != "right"
+		}
+		return bound
 	}
+	return unknown
 }
 
 func speculativeConstantInt64(expr *plan.Expr) (int64, bool) {
