@@ -1451,6 +1451,28 @@ func TestReadPythonRevisionRequiresPersistedIdentitySignature(t *testing.T) {
 	bh.sql2result[query] = result
 	_, err = readPythonRevision(context.Background(), bh, 44, nil)
 	require.ErrorContains(t, err, "revision contract is not supported")
+
+	// An outer join lets us distinguish an unversioned legacy row from
+	// dangling or partially published revision metadata.
+	result.Data[0][2] = nil
+	bh.init()
+	bh.sql2result[query] = result
+	_, err = readPythonRevision(context.Background(), bh, 44, nil)
+	require.ErrorContains(t, err, "invalid revision head")
+
+	result.Data[0][0], result.Data[0][1] = int64(0), int64(0)
+	bh.init()
+	bh.sql2result[query] = result
+	_, err = readPythonRevision(context.Background(), bh, 44, nil)
+	require.ErrorContains(t, err, "invalid revision head")
+
+	result.Data[0][3], result.Data[0][4] = "", ""
+	result.Data[0][5], result.Data[0][6] = int64(0), ""
+	bh.init()
+	bh.sql2result[query] = result
+	revision, err = readPythonRevision(context.Background(), bh, 44, nil)
+	require.NoError(t, err)
+	require.Equal(t, pythonRevisionCatalogRow{}, revision)
 }
 
 func TestMatchUserDefinedFunctionCandidatesUsesExactPythonDescriptor(t *testing.T) {

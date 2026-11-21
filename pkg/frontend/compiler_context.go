@@ -1216,12 +1216,14 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 				if revisionErr != nil {
 					return nil, revisionErr
 				}
-				argstr = revision.Args
-				udf.Body = revision.Body
-				udf.Language = revision.Language
-				udf.RetType = revision.RetType
-				udf.Revision = revision.Revision
-				udf.NamespaceVersion = revision.NamespaceVersion
+				if revision.Revision != 0 {
+					argstr = revision.Args
+					udf.Body = revision.Body
+					udf.Language = revision.Language
+					udf.RetType = revision.RetType
+					udf.Revision = revision.Revision
+					udf.NamespaceVersion = revision.NamespaceVersion
+				}
 			} else if udf.Language == string(tree.SQL) {
 				revision, found, revisionErr := readSQLRevision(queryCtx, bh, functionID, tcc.GetSnapshot())
 				if revisionErr != nil {
@@ -1240,8 +1242,13 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 					udf.NullPolicy = revision.NullPolicy
 				}
 			}
-			if err = udf.LoadPythonTypeContract(); err != nil {
-				return nil, err
+			// Known legacy rows contribute their logical signature to overload
+			// ranking. Their body is never eligible for execution.
+			legacyPython := udf.Language == string(tree.PYTHON) && udf.Revision == 0
+			if !legacyPython {
+				if err = udf.LoadPythonTypeContract(); err != nil {
+					return nil, err
+				}
 			}
 			if argstr != catalogArgs {
 				// The active revision supplies the definition for binding.
@@ -1254,19 +1261,24 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 				continue
 			}
 			udf.Args = argList
-			if err = udf.ValidatePythonTypeContract(); err != nil {
-				return nil, err
-			}
-			if err = udf.ValidatePythonCatalogSignature(); err != nil {
-				return nil, err
+			if !legacyPython {
+				if err = udf.ValidatePythonTypeContract(); err != nil {
+					return nil, err
+				}
+				if err = udf.ValidatePythonCatalogSignature(); err != nil {
+					return nil, err
+				}
 			}
 
 			toList := make([]types.T, len(args))
-			pythonTargetTypes := make([]types.Type, 0)
-			if udf.Language == string(tree.PYTHON) {
+			var pythonTargetTypes []types.Type
+			if udf.Language == string(tree.PYTHON) && !legacyPython {
 				pythonTargetTypes = udf.GetArgsType()
 			}
 			for j := range argList {
+				if argList[j] == nil {
+					return nil, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: function %d has a missing catalog argument at position %d", functionID, j+1)
+				}
 				if len(pythonTargetTypes) != 0 {
 					toList[j] = pythonTargetTypes[j].Oid
 				} else if fromList[j].IsDecimal() && argList[j].Type == "decimal" {
@@ -1308,6 +1320,9 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 
 		if matchNum == 1 {
 			if strings.EqualFold(matchedList[0].Udf.Language, string(tree.PYTHON)) {
+				if matchedList[0].Udf.Revision == 0 {
+					return nil, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: legacy Python function %d requires DROP and CREATE", matchedList[0].Udf.FunctionID)
+				}
 				matchedList[0].Udf.ArgsType = function.PythonUdfArgTypeCast(fromList, matchedList[0].Udf.GetArgsType())
 				if len(matchedList[0].Udf.ArgsType) != len(fromList) {
 					return nil, udferr.Newf("python udf: argument descriptor count changed during resolution")
@@ -1597,6 +1612,8 @@ func readSQLRevision(
 	}, true, nil
 }
 
+// readPythonRevision returns a zero revision only for a legacy catalog row
+// with no published revision or signature metadata.
 func readPythonRevision(ctx context.Context, bh BackgroundExec, functionID int64, snapshot *plan2.Snapshot) (pythonRevisionCatalogRow, error) {
 	bh.ClearExecResultSet()
 	query := pythonRevisionCatalogSQL(snapshot, functionID)
@@ -1619,13 +1636,6 @@ func readPythonRevision(ctx context.Context, bh BackgroundExec, functionID int64
 	if err != nil {
 		return pythonRevisionCatalogRow{}, err
 	}
-	revision, err := row.GetInt64(ctx, 0, 2)
-	if err != nil {
-		return pythonRevisionCatalogRow{}, err
-	}
-	if activeRevision <= 0 || namespaceVersion <= 0 || revision != activeRevision {
-		return pythonRevisionCatalogRow{}, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python function %d has an invalid revision head", functionID)
-	}
 	getString := func(column uint64) (string, error) { return row.GetString(ctx, 0, column) }
 	canonicalInput, err := getString(3)
 	if err != nil {
@@ -1642,6 +1652,24 @@ func readPythonRevision(ctx context.Context, bh BackgroundExec, functionID int64
 	signatureFingerprint, err := getString(6)
 	if err != nil {
 		return pythonRevisionCatalogRow{}, err
+	}
+	missingRevision, err := row.ColumnIsNull(ctx, 0, 2)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	if activeRevision == 0 && namespaceVersion == 0 && missingRevision &&
+		signatureKeySchemaVersion == 0 && canonicalInput == "" && returnDescriptor == "" && signatureFingerprint == "" {
+		return pythonRevisionCatalogRow{}, nil
+	}
+	if missingRevision || activeRevision <= 0 || namespaceVersion <= 0 {
+		return pythonRevisionCatalogRow{}, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python function %d has an invalid revision head", functionID)
+	}
+	revision, err := row.GetInt64(ctx, 0, 2)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	if revision != activeRevision {
+		return pythonRevisionCatalogRow{}, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python function %d has an invalid revision head", functionID)
 	}
 	args, err := getString(7)
 	if err != nil {
@@ -1761,7 +1789,7 @@ func pythonRevisionCatalogSQL(snapshot *plan2.Snapshot, functionID int64) string
 		r.definition_fingerprint, r.artifact_digest, r.environment_digest,
 		r.security_type, f.security_type
 		from %s f
-		join %s r
+		left join %s r
 			on r.function_id = f.function_id and r.revision = f.active_revision
 			and r.namespace_version = f.namespace_version
 		where f.function_id = %d;`, userFunctionTable, revisionTable, functionID)

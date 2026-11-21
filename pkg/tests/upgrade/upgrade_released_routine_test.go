@@ -76,6 +76,7 @@ func TestReleasedCatalogLoginRepairsRoutineSchema(t *testing.T) {
 						"create database routine_repair",
 						`insert into mo_catalog.mo_user_defined_function(name,owner,args,rettype,body,language,db,definer,type,security_type) values ('legacy_plus_seven',2,'[{"name":"x","type":"bigint"}]','bigint','$1 + 7','sql','routine_repair','root','SQL','INVOKER')`,
 						`insert into mo_catalog.mo_user_defined_function(name,owner,args,rettype,body,language,db,definer,type,security_type) values ('legacy_python_sibling',2,'[{"name":"x","type":"bigint"},{"name":"y","type":"bigint"}]','bigint','def f(x, y): return x + y','python','routine_repair','root','FUNCTION','INVOKER')`,
+						`insert into mo_catalog.mo_user_defined_function(name,owner,args,rettype,body,language,db,definer,type,security_type) values ('same_arity_python_sibling',2,'[{"name":"x","type":"varchar"}]','varchar','def f(x): return x','python','routine_repair','root','FUNCTION','INVOKER')`,
 						"drop table mo_catalog.mo_function_revisions",
 					} {
 						res, err := txn.Exec(statement, versions.UpgradeStatementOption(accountID))
@@ -184,6 +185,13 @@ func TestReleasedCatalogLoginRepairsRoutineSchema(t *testing.T) {
 					require.Equal(t, int64(12), result)
 					err = conn.QueryRowContext(ctx, "select legacy_python_sibling(5, 6)").Scan(&result)
 					require.ErrorContains(t, err, "UNSUPPORTED_ROUTINE_VERSION")
+
+					_, err = conn.ExecContext(ctx, "create function same_arity_python_sibling(x bigint) returns bigint language sql as '$1 + 7'")
+					require.NoError(t, err)
+					require.NoError(t, conn.QueryRowContext(ctx, "select same_arity_python_sibling(cast(5 as bigint))").Scan(&result))
+					require.Equal(t, int64(12), result)
+					err = conn.QueryRowContext(ctx, "select same_arity_python_sibling(cast('5' as varchar(16)))").Scan(&result)
+					require.ErrorContains(t, err, "UNSUPPORTED_ROUTINE_VERSION: legacy Python function")
 				})
 				t.Run("replace_sql_return_type", func(t *testing.T) {
 					checkSQLRoutineReturnTypeReplacement(t, ctx, tenantDB)
