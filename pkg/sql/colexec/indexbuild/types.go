@@ -36,8 +36,8 @@ const (
 const (
 	indexBuildAllocationSiteRuntimeFilterData mpool.AllocationSite = iota + 1
 	indexBuildAllocationSiteRuntimeFilterArea
-	indexBuildAllocationSiteRuntimeFilterNulls
-	indexBuildAllocationSiteRuntimeFilterGrouping
+	_ // reserved: was indexBuildAllocationSiteRuntimeFilterNulls
+	_ // reserved: was indexBuildAllocationSiteRuntimeFilterGrouping
 	indexBuildAllocationSiteRuntimeFilterPayload
 )
 
@@ -73,8 +73,6 @@ func (indexBuild *IndexBuild) SetAllocationAccount(
 		mpool.AllocationOwnerIndexBuild,
 		indexBuildAllocationSiteRuntimeFilterData,
 		indexBuildAllocationSiteRuntimeFilterArea,
-		indexBuildAllocationSiteRuntimeFilterNulls,
-		indexBuildAllocationSiteRuntimeFilterGrouping,
 	)
 	if err != nil {
 		return err

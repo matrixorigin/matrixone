@@ -853,7 +853,7 @@ func TestAccountedOrderDoesNotInheritSealedInputAccount(t *testing.T) {
 	inputSelection, err := vector.NewAllocationAccountSelection(
 		inputAccount,
 		mpool.AllocationOwnerOrder,
-		1, 2, 3, 4,
+		1, 2,
 	)
 	require.NoError(t, err)
 	input := batch.NewOffHeapWithSize(2)

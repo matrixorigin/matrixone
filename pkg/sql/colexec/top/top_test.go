@@ -995,44 +995,6 @@ func testTopSpillOutputUsesRowAndByteBounds(t *testing.T, limit int, orderedOutp
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
-func TestTopSpillPrepareParamMetadata(t *testing.T) {
-	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	arg := &Top{
-		Limit: plan2.MakePlan2Uint64ConstExprWithType(topSpillThreshold + 1),
-		Fs: []*plan.OrderBySpec{{
-			Expr: newExpression(0),
-		}},
-	}
-	src := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(vec, []byte("1"), false, mp))
-	require.NoError(t, vector.AppendBytes(vec, []byte("2"), false, mp))
-	vec.SetPrepareParamKinds([]vector.PrepareParamKind{
-		vector.PrepareParamInteger, vector.PrepareParamNone,
-	})
-	require.NoError(t, vec.SetIsBinaryStringAt(0, true))
-	src.Vecs[0] = vec
-	src.SetRowCount(2)
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{src})
-	arg.AppendChild(child)
-	require.NoError(t, arg.Prepare(proc))
-	result, err := vm.Exec(arg, proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	require.Equal(t, vector.PrepareParamInteger,
-		result.Batch.Vecs[0].GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamNone,
-		result.Batch.Vecs[0].GetPrepareParamKindAt(1))
-	require.True(t, result.Batch.Vecs[0].GetIsBinaryStringAt(0))
-	require.False(t, result.Batch.Vecs[0].GetIsBinaryStringAt(1))
-
-	child.Free(proc, false, nil)
-	arg.Free(proc, false, nil)
-	proc.Free()
-	require.Zero(t, mp.CurrNB())
-}
-
 func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {
 	limit := int64(topSpillThreshold + 1)
 	tc := newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()}, limit,

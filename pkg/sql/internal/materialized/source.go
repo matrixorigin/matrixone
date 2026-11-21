@@ -131,8 +131,8 @@ type SpillConfig struct {
 const (
 	cteAllocationSiteData mpool.AllocationSite = iota + 1
 	cteAllocationSiteArea
-	cteAllocationSiteNulls
-	cteAllocationSiteGrouping
+	_ // reserved: was cteAllocationSiteNulls
+	_ // reserved: was cteAllocationSiteGrouping
 )
 
 // CTESinkOption marks a planner-approved bounded multi-consumer CTE source.
@@ -188,18 +188,18 @@ func (s *Source) Begin(mp *mpool.MPool, spillConfig ...SpillConfig) error {
 			)
 		}
 		owner := s.spillConfig.AllocationOwner
-		sites := [4]mpool.AllocationSite{cteAllocationSiteData, cteAllocationSiteArea, cteAllocationSiteNulls, cteAllocationSiteGrouping}
+		sites := [2]mpool.AllocationSite{cteAllocationSiteData, cteAllocationSiteArea}
 		switch owner {
 		case 0, mpool.AllocationOwnerCTE:
 			owner = mpool.AllocationOwnerCTE
 		case mpool.AllocationOwnerTop:
-			sites = [4]mpool.AllocationSite{topsites.AdaptiveTopRetainedData, topsites.AdaptiveTopRetainedArea, topsites.AdaptiveTopRetainedNulls, topsites.AdaptiveTopRetainedGrouping}
+			sites = [2]mpool.AllocationSite{topsites.AdaptiveTopRetainedData, topsites.AdaptiveTopRetainedArea}
 		default:
 			return mpool.ErrAllocationAccountInvalid
 		}
 		allocation, err := vector.NewAllocationAccountSelection(
 			s.spillConfig.AllocationAccount, owner,
-			sites[0], sites[1], sites[2], sites[3],
+			sites[0], sites[1],
 		)
 		if err != nil {
 			return err
@@ -992,7 +992,7 @@ func spillBatchSizeWithLimit(
 			return 0, 0, moerr.NewInternalErrorNoCtx("invalid materialized sink spill vector data")
 		}
 		nullBytes := uint64(0)
-		if !vec.GetNulls().EmptyByFlag() {
+		if !vec.GetNulls().IsEmpty() {
 			nullBytes = uint64(nulls.Size(vec.GetNulls())) + 24
 		}
 		if nullBytes > math.MaxUint32 {
@@ -1028,15 +1028,7 @@ func spillBatchSizeWithLimit(
 			return 0, 0, err
 		}
 	}
-	metadataBytes, metadataErr := bat.PrepareParamKindMetadataSize()
-	if metadataErr != nil {
-		return 0, 0, metadataErr
-	}
-	serialized, err = addSpillBatchTail(
-		serialized,
-		uint64(len(bat.ExtraBuf)),
-		uint64(metadataBytes),
-	)
+	serialized, err = checkedAdd(serialized, uint64(len(bat.ExtraBuf)))
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1065,14 +1057,6 @@ func spillBatchSizeWithLimit(
 	}
 	scratch, err = checkedAdd(scratch, serialized)
 	return serialized, scratch, err
-}
-
-func addSpillBatchTail(serialized, extraBytes, metadataBytes uint64) (uint64, error) {
-	withExtra, err := checkedAdd(serialized, extraBytes)
-	if err != nil {
-		return 0, err
-	}
-	return checkedAdd(withExtra, metadataBytes)
 }
 
 func checkedAdd(values ...uint64) (uint64, error) {

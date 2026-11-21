@@ -77,3 +77,13 @@ func TestIntegerArgumentTemporalCast(t *testing.T) {
 		require.True(t, ok, info)
 	}
 }
+
+func TestIntegerArgumentKeepsOperandBinding(t *testing.T) {
+	require.True(t, IntegerArgumentKeepsOperandBinding("unary_tilde", 0))
+	require.True(t, IntegerArgumentUsesTemporalIntegerCast("unary_tilde", 0, types.T_date))
+	require.False(t, IntegerArgumentUsesTemporalIntegerCast("unary_tilde", 0, types.T_binary))
+	require.False(t, IntegerArgumentKeepsOperandBinding("unary_tilde", 1))
+	require.False(t, IntegerArgumentKeepsOperandBinding("&", 0))
+	require.False(t, IntegerArgumentKeepsOperandBinding("bit_count", 0))
+	require.False(t, IntegerArgumentKeepsOperandBinding("no_such_function", 0))
+}

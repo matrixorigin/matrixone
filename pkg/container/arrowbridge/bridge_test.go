@@ -654,7 +654,6 @@ func TestFixedBorrowValidityLifetimeAndWindow(t *testing.T) {
 	require.Zero(t, stats.PinAmplificationFallbacks)
 	require.Zero(t, stats.UnalignedFallbacks)
 	require.True(t, bat.Vecs[0].HasBorrowedBacking())
-	require.True(t, bat.Vecs[0].GetNulls().HasBorrowedValidity())
 	expectedData := sliced.Data().Buffers()[1].Bytes()[sliced.Data().Offset()*8:]
 	require.Equal(t,
 		uintptr(unsafe.Pointer(unsafe.SliceData(expectedData))),
@@ -662,7 +661,8 @@ func TestFixedBorrowValidityLifetimeAndWindow(t *testing.T) {
 	)
 	require.Equal(t, []int64{20, 30, 40}, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]))
 	require.True(t, bat.Vecs[0].IsNull(0))
-	require.True(t, bat.Vecs[0].GetNulls().HasBorrowedValidity(), "Contains must preserve the validity view")
+	require.False(t, bat.Vecs[0].IsNull(1))
+	require.False(t, bat.Vecs[0].IsNull(2))
 
 	window, err := bat.Vecs[0].Window(1, 3)
 	require.NoError(t, err)
@@ -843,7 +843,7 @@ func TestMaterializedConversionUsesStatementAllocationSelection(t *testing.T) {
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
 	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 20, 21, 22, 23,
+		account, mpool.AllocationOwnerExternal, 20, 21,
 	)
 	require.NoError(t, err)
 	allocator := memory.NewGoAllocator()
@@ -880,7 +880,7 @@ func TestConvertReleasesUnpublishedVectorWhenPreExtendIsRejected(t *testing.T) {
 	account, err := registry.Open(1)
 	require.NoError(t, err)
 	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 20, 21, 22, 23,
+		account, mpool.AllocationOwnerExternal, 20, 21,
 	)
 	require.NoError(t, err)
 
@@ -920,7 +920,7 @@ func TestConvertReleasesBorrowedVarlenVectorWhenDescriptorAdmissionIsRejected(t 
 	account, err := registry.Open(1)
 	require.NoError(t, err)
 	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 20, 21, 22, 23,
+		account, mpool.AllocationOwnerExternal, 20, 21,
 	)
 	require.NoError(t, err)
 

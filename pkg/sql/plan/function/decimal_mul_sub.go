@@ -82,16 +82,7 @@ func TryDecimalMulSub64(x, y *vector.Vector, c types.Decimal64, out *vector.Vect
 	if !yc {
 		yn = y.GetNulls()
 	}
-	if xn.HasBorrowedValidity() || yn.HasBorrowedValidity() {
-		// GetBitmap materializes borrowed validity. Keep input leases immutable.
-		for i := 0; i < n; i++ {
-			if xn.Contains(uint64(i)) || yn.Contains(uint64(i)) {
-				out.GetNulls().Add(uint64(i))
-			}
-		}
-	} else {
-		nulls.Or(xn, yn, out.GetNulls())
-	}
+	nulls.Or(xn, yn, out.GetNulls())
 	masked := !out.GetNulls().IsEmpty()
 	bitmap := out.GetNulls().GetBitmap()
 	for i := 0; i < n; i++ {

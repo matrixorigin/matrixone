@@ -37,7 +37,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -978,11 +978,11 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_float32:
 				arrStr := types.BytesToArrayToString[float32](vec.GetBytesAt(i))
-				value := util2.UnsafeStringToBytes(arrStr)
+				value := commonutil.UnsafeStringToBytes(arrStr)
 				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_float64:
 				arrStr := types.BytesToArrayToString[float64](vec.GetBytesAt(i))
-				value := util2.UnsafeStringToBytes(arrStr)
+				value := commonutil.UnsafeStringToBytes(arrStr)
 				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_float8, types.T_array_float4:
 				// the exact text, which LOAD reads back as the same cell
@@ -991,25 +991,25 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 					sendExportBatchByte(ctx, ByteChan, &BatchByte{err: err})
 					return
 				}
-				value := util2.UnsafeStringToBytes(arrStr)
+				value := commonutil.UnsafeStringToBytes(arrStr)
 				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_bf16:
 				arrStr := types.BytesToArrayToString[types.BF16](vec.GetBytesAt(i))
-				value := util2.UnsafeStringToBytes(arrStr)
+				value := commonutil.UnsafeStringToBytes(arrStr)
 				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_float16:
 				arrStr := types.BytesToArrayToString[types.Float16](vec.GetBytesAt(i))
-				value := util2.UnsafeStringToBytes(arrStr)
+				value := commonutil.UnsafeStringToBytes(arrStr)
 				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_int8:
 				arrStr := types.BytesToArrayToString[int8](vec.GetBytesAt(i))
-				value := util2.UnsafeStringToBytes(arrStr)
+				value := commonutil.UnsafeStringToBytes(arrStr)
 				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_uint8:
 				// []uint8 aliases []byte; BytesToArrayToString[uint8] renders the values
 				// as an array string ("[1, 2, 3]"), not the raw bytes as a string.
 				arrStr := types.BytesToArrayToString[uint8](vec.GetBytesAt(i))
-				value := util2.UnsafeStringToBytes(arrStr)
+				value := commonutil.UnsafeStringToBytes(arrStr)
 				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_date:
 				val := vector.GetFixedAtNoTypeCheck[types.Date](vec, i)

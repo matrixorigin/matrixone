@@ -857,7 +857,7 @@ func (ctr *container) spillBatch(
 	origBat.Recursive = bat.Recursive
 	origBat.ShuffleIDX = bat.ShuffleIDX
 	origBat.SetRowCount(bat.RowCount())
-	payloadSize, err := origBat.MarshalBinaryWithPrepareParamKindsSize()
+	payloadSize, err := origBat.MarshalBinarySize()
 	if err != nil {
 		return spillRecordRef{}, err
 	}
@@ -872,7 +872,7 @@ func (ctr *container) spillBatch(
 		return spillRecordRef{}, err
 	}
 	offset := ctr.spillOffset
-	if err = origBat.MarshalBinaryWithPrepareParamKindsTo(ctr.spillWriter); err != nil {
+	if err = origBat.MarshalBinaryTo(ctr.spillWriter); err != nil {
 		return spillRecordRef{}, err
 	}
 	ctr.spillOffset += int64(payloadSize)
@@ -1192,7 +1192,7 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 		}
 		reuseBat.CleanOnlyData()
 		reader := io.NewSectionReader(ctr.spillFile, record.offset, record.size)
-		if err := reuseBat.UnmarshalFromReaderWithPrepareParamKindsForSpill(
+		if err := reuseBat.UnmarshalFromReaderWithMetadataForSpill(
 			reader,
 			record.size,
 			proc.Mp(),

@@ -496,32 +496,36 @@ func TestJsonConstructorPreparedMetadata(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name        string
-		typ         types.T
+		typ         types.Type
 		binary      bool
-		kind        vector.PrepareParamKind
 		input, want string
 	}{
-		{"binary", types.T_binary, true, vector.PrepareParamNone, "ab", `"base64:type254:YWI="`},
-		{"varbinary", types.T_varbinary, true, vector.PrepareParamNone, "ab", `"base64:type15:YWI="`},
-		{"blob", types.T_blob, true, vector.PrepareParamNone, "ab", `"base64:type252:YWI="`},
-		{"float32", types.T_float32, false, vector.PrepareParamFloat, "0.1", "0.10000000149011612"},
-		{"kind_only", types.T_any, false, vector.PrepareParamInteger, "42", "42"},
-		{"text", types.T_any, false, vector.PrepareParamNone, "ab", `"ab"`},
+		{"binary", types.New(types.T_binary, 2, 0), true, "ab", `"base64:type254:YWI="`},
+		{"varbinary", types.New(types.T_varbinary, 10, 0), true, "ab", `"base64:type15:YWI="`},
+		{"blob", types.T_blob.ToType(), true, "ab", `"base64:type252:YWI="`},
+		{"float32", types.T_float32.ToType(), false, "0.1", "0.10000000149011612"},
+		{"text", types.T_text.ToType(), false, "ab", `"ab"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			v := vector.NewVec(types.T_text.ToType())
+			// Prepared parameters reach execution as typed values.
+			v := vector.NewVec(tc.typ)
 			defer v.Free(proc.Mp())
-			require.NoError(t, vector.AppendBytes(v, []byte(tc.input), false, proc.Mp()))
-			v.SetPrepareParamType(tc.typ)
-			v.SetPrepareParamKind(tc.kind)
-			v.SetIsBinaryString(tc.binary)
+			if tc.typ.Oid == types.T_float32 {
+				require.NoError(t, vector.AppendFixed(v, float32(0.1), false, proc.Mp()))
+			} else {
+				require.NoError(t, vector.AppendBytes(v, []byte(tc.input), false, proc.Mp()))
+			}
 			value, err := newOpBuiltInJsonArray().convertToAny(proc, v, 0, defines.MORPCVersion52)
 			require.NoError(t, err)
 			got, err := bytejson.CreateByteJSON(value)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got.String())
 			if tc.binary {
-				key, err := newOpBuiltInJsonObject().convertKeyToAny(proc, newOpBuiltInJsonArray(), v, 0, defines.MORPCVersion51)
+				// A text-typed key keeps its raw bytes.
+				k := vector.NewVec(types.T_text.ToType())
+				defer k.Free(proc.Mp())
+				require.NoError(t, vector.AppendBytes(k, []byte(tc.input), false, proc.Mp()))
+				key, err := newOpBuiltInJsonObject().convertKeyToAny(proc, newOpBuiltInJsonArray(), k, 0, defines.MORPCVersion51)
 				require.NoError(t, err)
 				require.Equal(t, tc.input, key)
 			}

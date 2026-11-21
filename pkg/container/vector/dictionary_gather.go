@@ -15,19 +15,19 @@
 package vector
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"math"
 )
 
 // unionDictionaryBatch runs after ordinary destination preflight/admission.
 // It gathers directly from the immutable backing into the existing destination;
 // source metadata remains indexed by logical row, including repeated values.
 func (v *Vector) unionDictionaryBatch(w *Vector, offset int64, count int, flags []uint8,
-	overrides []types.StringSource, added int, areaWasDisjoint bool, mp *mpool.MPool) error {
+	added int, areaWasDisjoint bool, mp *mpool.MPool) error {
 	backing := w.dictionaryState()
 	base, rows := backing.base.vec, backing.rows.storageFixed()
 	oldLength := v.length
@@ -59,7 +59,7 @@ func (v *Vector) unionDictionaryBatch(w *Vector, offset int64, count int, flags 
 			}
 			logical := int(offset) + row
 			if w.IsNull(uint64(logical)) {
-				nulls.Add(&v.nsp, uint64(next))
+				v.nsp.Add(uint64(next))
 				if v.typ.IsVarlen() {
 					dstValues[next] = types.Varlena{}
 				}
@@ -79,12 +79,6 @@ func (v *Vector) unionDictionaryBatch(w *Vector, offset int64, count int, flags 
 			next++
 		}
 	}
-	if err := v.propagatePrepareParamKindsBatch(w, oldLength, offset, count, flags, overrides, mp); err != nil {
-		return err
-	}
-	if err := v.propagateBinaryStringBatch(w, oldLength, offset, count, flags, mp); err != nil {
-		return err
-	}
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = areaWasDisjoint
 	}
@@ -96,7 +90,7 @@ func (v *Vector) unionDictionaryBatch(w *Vector, offset int64, count int, flags 
 func gatherDictionarySelection[S int32 | int64](v, w *Vector, sels []S, offset int, areaWasDisjoint bool, mp *mpool.MPool) error {
 	base := w.dictionaryState().base.vec
 	if base.IsConstNull() {
-		nulls.AddRange(&v.nsp, uint64(offset), uint64(v.length))
+		v.nsp.AddRange(uint64(offset), uint64(v.length))
 		clear(v.data[offset*v.typ.TypeSize() : v.length*v.typ.TypeSize()])
 		if v.typ.IsVarlen() {
 			v.areaDisjoint = areaWasDisjoint
@@ -129,7 +123,7 @@ func gatherDictionarySelection[S int32 | int64](v, w *Vector, sels []S, offset i
 				target := v.data[(offset+i)*view.Width : (offset+i+1)*view.Width]
 				if w.nsp.Contains(uint64(row)) {
 					clear(target)
-					nulls.Add(&v.nsp, uint64(offset+i))
+					v.nsp.Add(uint64(offset + i))
 					continue
 				}
 				physical := int(view.Selection[row])
@@ -167,7 +161,7 @@ func gatherDictionarySelection[S int32 | int64](v, w *Vector, sels []S, offset i
 	for i, row := range sels {
 		if view.Nulls.Contains(uint64(row)) {
 			target[offset+i] = types.Varlena{}
-			nulls.Add(&v.nsp, uint64(offset+i))
+			v.nsp.Add(uint64(offset + i))
 			continue
 		}
 		physical := int(view.Selection[row])
@@ -200,7 +194,7 @@ func gatherDictionaryFixed[T any, S int32 | int64](v, w *Vector, sels []S, offse
 		for i, row := range sels {
 			if w.nsp.Contains(uint64(row)) {
 				target[offset+i] = zero
-				nulls.Add(&v.nsp, uint64(offset+i))
+				v.nsp.Add(uint64(offset + i))
 				continue
 			}
 			physical := int(mapping[row])
@@ -309,7 +303,7 @@ func copyDictionaryFixedRows[T any](dst, src *Vector, start, count int, flags []
 	target := types.DecodeSlice[T](dst.data[:dst.length*dst.typ.TypeSize()])[offset : offset+added]
 	if base.IsConstNull() {
 		clear(target)
-		nulls.AddRange(&dst.nsp, uint64(offset), uint64(offset+added))
+		dst.nsp.AddRange(uint64(offset), uint64(offset+added))
 		return
 	}
 	physicalRows := base.length
@@ -353,7 +347,7 @@ func copyDictionaryFixedRows[T any](dst, src *Vector, start, count int, flags []
 		logical := start + i
 		if src.nsp.Contains(uint64(logical)) {
 			target[next] = zero
-			nulls.Add(&dst.nsp, uint64(offset+next))
+			dst.nsp.Add(uint64(offset + next))
 		} else {
 			physical := int(mapping[logical])
 			if base.IsConst() {
@@ -418,34 +412,13 @@ func unionDictionaryRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPoo
 	if err := v.MaterializeOwned(mp); err != nil {
 		return err
 	}
-	if err := v.preflightPrepareParamKindAppend(
-		v.length+len(sels),
-		summarizePrepareParamKindSelection(w, sels),
-		mp,
-	); err != nil {
-		return err
-	}
-	if err := v.preflightBinaryStringAppend(
-		v.length+len(sels),
-		summarizeBinaryStringSelection(w, sels),
-		mp,
-	); err != nil {
-		return err
-	}
-	if err := preflightStringSourceSelectionAppend(
-		v, v.length+len(sels), w, sels, mp,
-	); err != nil {
-		return err
-	}
-	v.RetainStringSourcePreflight()
-	defer v.FinalizeStringSourcePreflight()
 
 	if err := extendWithBitmaps(
 		v,
 		len(sels),
 		mp,
-		w.IsConstNull() || !w.nsp.EmptyByFlag(),
-		w.IsGrouping() || !w.gsp.EmptyByFlag(),
+		w.IsConstNull() || !w.nsp.IsEmpty(),
+		w.IsGrouping() || !w.gsp.IsEmpty(),
 	); err != nil {
 		return err
 	}
@@ -456,13 +429,7 @@ func unionDictionaryRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPoo
 	oldLen := v.length
 	v.setLengthAfterExtend(v.length + len(sels))
 	appendSelectedGrouping(v, w, oldLen, sels)
-	if err := gatherDictionarySelection(v, w, sels, oldLen, preserveDisjointArea, mp); err != nil {
-		return err
-	}
-	if err := propagatePrepareParamKindsSelection(v, w, oldLen, sels, mp); err != nil {
-		return err
-	}
-	return propagateBinaryStringSelection(v, w, oldLen, sels, mp)
+	return gatherDictionarySelection(v, w, sels, oldLen, preserveDisjointArea, mp)
 }
 
 // admitDictionaryBatch is the selected counterpart of the existing bulk
@@ -472,7 +439,6 @@ func (v *Vector) admitDictionaryBatch(
 	offset int64,
 	cnt int,
 	flags []uint8,
-	stringSourceOverrides []types.StringSource,
 	mp *mpool.MPool,
 	selectedAreaBytes int,
 	preflightRowCount int,
@@ -523,16 +489,6 @@ func (v *Vector) admitDictionaryBatch(
 	if err := v.MaterializeOwned(mp); err != nil {
 		return err
 	}
-	if !preflighted {
-		if err := v.PreflightUnionBatchPrepareParamKinds(w, offset, cnt, flags, mp); err != nil {
-			return err
-		}
-		defer v.FinalizeStringSourcePreflight()
-		if err := v.PreflightUnionBatchBinaryString(w, offset, cnt, flags, mp); err != nil {
-			return err
-		}
-	}
-
 	if preflighted {
 		if preflightRowCount != v.length+addCnt ||
 			preflightRowCount*v.typ.TypeSize() > cap(v.data) {
@@ -544,8 +500,8 @@ func (v *Vector) admitDictionaryBatch(
 			v,
 			addCnt,
 			mp,
-			w.IsConstNull() || !w.nsp.EmptyByFlag(),
-			w.IsGrouping() || !w.gsp.EmptyByFlag(),
+			w.IsConstNull() || !w.nsp.IsEmpty(),
+			w.IsGrouping() || !w.gsp.IsEmpty(),
 		); err != nil {
 			return err
 		}
@@ -573,5 +529,5 @@ func (v *Vector) admitDictionaryBatch(
 		}
 	}
 
-	return v.unionDictionaryBatch(w, offset, cnt, flags, stringSourceOverrides, addCnt, areaWasDisjoint, mp)
+	return v.unionDictionaryBatch(w, offset, cnt, flags, addCnt, areaWasDisjoint, mp)
 }

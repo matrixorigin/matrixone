@@ -570,8 +570,7 @@ func TestCountDistinctDrainCommitFailureKeepsResidentOwner(t *testing.T) {
 		account,
 		mpool.AllocationOwnerGroup,
 		AllocationAccountSites{
-			VectorData: 1, VectorArea: 2, VectorNulls: 3,
-			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 		},
 	)
 	require.NoError(t, err)

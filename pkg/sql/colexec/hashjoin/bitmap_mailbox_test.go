@@ -24,59 +24,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newMailboxAccountedBitmap(
-	t *testing.T,
-	mp *mpool.MPool,
-	account *mpool.AllocationAccount,
-) *bitmap.Bitmap {
+func newMailboxBitmap(t *testing.T) *bitmap.Bitmap {
 	t.Helper()
-	value, err := colexec.NewAccountedBitmap(
-		1024,
-		mp,
-		account,
-		mpool.AllocationOwnerHashBuild,
-		hashJoinAllocationSiteMatchedRows,
-	)
+	value, err := colexec.NewRowBitmap(1024)
 	require.NoError(t, err)
 	return value
 }
 
 func TestBitmapMailboxSealOwnsQueuedAndRejectsLateTransfer(t *testing.T) {
-	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
-	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
 	mp := mpool.MustNewZero()
 	mailbox := NewBitmapMailbox(2)
 
-	queued := newMailboxAccountedBitmap(t, mp, account)
-	require.True(t, mailbox.Send(queued))
+	require.True(t, mailbox.Send(newMailboxBitmap(t)))
 	mailbox.SealAndDrain(mp)
-	require.Zero(t, account.Snapshot().Used)
 	require.Empty(t, mailbox.ch)
 
-	late := newMailboxAccountedBitmap(t, mp, account)
-	require.False(t, mailbox.Send(late))
-	require.NotZero(t, account.Snapshot().Used)
-	colexec.FreeAccountedBitmap(late, mp)
-	require.Zero(t, account.Snapshot().Used)
-
-	_, _, err = registry.CompleteTerminal(account)
-	require.NoError(t, err)
+	require.False(t, mailbox.Send(newMailboxBitmap(t)), "a sealed mailbox rejects late transfers")
+	require.Empty(t, mailbox.ch)
 	require.Zero(t, mp.CurrNB())
 }
 
 func TestBitmapMailboxConcurrentSealPreservesSingleOwner(t *testing.T) {
 	const workers = 16
-	registry, err := mpool.NewAllocationAccountRegistry(1, workers+1)
-	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
 	mp := mpool.MustNewZero()
 	mailbox := NewBitmapMailbox(workers)
 	values := make([]*bitmap.Bitmap, workers)
 	for i := range values {
-		values[i] = newMailboxAccountedBitmap(t, mp, account)
+		values[i] = newMailboxBitmap(t)
 	}
 
 	start := make(chan struct{})
@@ -86,9 +60,7 @@ func TestBitmapMailboxConcurrentSealPreservesSingleOwner(t *testing.T) {
 		go func(value *bitmap.Bitmap) {
 			defer wg.Done()
 			<-start
-			if !mailbox.Send(value) {
-				colexec.FreeAccountedBitmap(value, mp)
-			}
+			_ = mailbox.Send(value)
 		}(value)
 	}
 	close(start)
@@ -96,9 +68,6 @@ func TestBitmapMailboxConcurrentSealPreservesSingleOwner(t *testing.T) {
 	wg.Wait()
 	mailbox.SealAndDrain(mp)
 
-	require.Zero(t, account.Snapshot().Used)
 	require.Empty(t, mailbox.ch)
-	_, _, err = registry.CompleteTerminal(account)
-	require.NoError(t, err)
 	require.Zero(t, mp.CurrNB())
 }

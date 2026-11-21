@@ -173,8 +173,8 @@ func TestReplayAutomaticallyConfirmsNamedDelta(t *testing.T) {
 			q := &cache.TableItem{AccountId: 7, DatabaseId: 80, Name: "delayed_table", Ts: to}
 			require.True(t, e.GetLatestCatalogCache().GetTable(q))
 			require.Equal(t, uint32(100), q.Version)
-			require.Equal(t, "delta_column", q.TableDef.Cols[0].Name)
-			require.Equal(t, "delta-100", q.TableDef.Cols[0].Comment)
+			require.Equal(t, "delta_column", q.ReadPlanTableDef().Cols[0].Name)
+			require.Equal(t, "delta-100", q.ReadPlanTableDef().Cols[0].Comment)
 			q.Ts = timestamp.Timestamp{PhysicalTime: 99}
 			require.False(t, e.GetLatestCatalogCache().GetTable(q))
 		})

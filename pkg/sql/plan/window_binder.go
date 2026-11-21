@@ -793,11 +793,10 @@ func windowValidationPrivilegeCarrier(node *plan.Node) *plan.Node {
 	case plan.Node_TABLE_SCAN:
 		return carrier
 	case plan.Node_EXTERNAL_SCAN:
-		if node.ExternScan == nil || node.ExternScan.Type != int32(plan.ExternType_MONGODB_TB) {
+		if !IsExternalScanRequiringSelectPrivilege(node) {
 			return nil
 		}
-		// The frontend recognizes MongoDB scans from this discriminator alone.
-		carrier.ExternScan = &plan.ExternScan{Type: node.ExternScan.Type}
+		carrier.ExternScan = &plan.ExternScan{Type: node.GetExternScan().GetType()}
 		return carrier
 	case plan.Node_FUNCTION_SCAN:
 		if node.TableDef == nil || node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name != "table_changes" {
@@ -1655,7 +1654,7 @@ func makeWindowFrameConstValue(
 			Len: int32(vec.Length()), Data: data, DecimalLiteralRequiresV82: requiresDecimal,
 		}}}, nil
 	}
-	c := rule.GetConstantValue(vec, false, 0)
+	c := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(e, proc))
 	rule.PreserveFoldedDecimalLiteralSemantics(e, c)
 
 	return &plan.Expr{
@@ -1785,7 +1784,7 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 	if err != nil {
 		return nil, err
 	}
-	c := rule.GetConstantValue(vec, false, 0)
+	c := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(numberExpr, proc))
 
 	var finalValue int64
 	if c.Isnull {

@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -61,16 +60,16 @@ const (
 	GroupAllocationSiteHashIterator
 	GroupAllocationSiteKeyData
 	GroupAllocationSiteKeyArea
-	GroupAllocationSiteKeyNulls
-	GroupAllocationSiteKeyGrouping
+	_ // reserved: was GroupAllocationSiteKeyNulls
+	_ // reserved: was GroupAllocationSiteKeyGrouping
 	GroupAllocationSiteExpressionData
 	GroupAllocationSiteExpressionArea
-	GroupAllocationSiteExpressionNulls
-	GroupAllocationSiteExpressionGrouping
+	_ // reserved: was GroupAllocationSiteExpressionNulls
+	_ // reserved: was GroupAllocationSiteExpressionGrouping
 	GroupAllocationSiteAggregateData
 	GroupAllocationSiteAggregateArea
-	GroupAllocationSiteAggregateNulls
-	GroupAllocationSiteAggregateGrouping
+	_ // reserved: was GroupAllocationSiteAggregateNulls
+	_ // reserved: was GroupAllocationSiteAggregateGrouping
 	GroupAllocationSiteAggregateArgumentCount
 	GroupAllocationSiteAggregateArgumentArena
 	GroupAllocationSitePartialOutput
@@ -295,13 +294,16 @@ type container struct {
 	aggArgEvaluate []colexec.ExprEvalVector
 
 	// group by columns
-	groupByTypes                 []types.Type
-	groupByBatches               []*batch.Batch
-	groupByStandby               *batch.Batch
-	groupingRollup               []*vector.Vector
-	groupByHashKey               []int32
-	hashKeyVecs                  []*vector.Vector
-	groupKeyStringSourceMetadata bool
+	groupByTypes   []types.Type
+	groupByBatches []*batch.Batch
+	groupByStandby *batch.Batch
+	// groupByPreflights holds, for the current (last) group-by batch and the
+	// standby batch, each column's SelectedBatchPreflight for the next
+	// append into that batch.
+	groupByPreflights [2]groupByPreflight
+	groupingRollup    []*vector.Vector
+	groupByHashKey    []int32
+	hashKeyVecs       []*vector.Vector
 
 	// MergeGroup locks the partial wire metadata on the first input. It must
 	// survive resident spills, because later partials and queued spill records
@@ -320,8 +322,7 @@ type container struct {
 	warningRetentionSet         bool
 	groupConcatWarnings         aggexec.GroupConcatWarningAccumulator
 	sortRollup                  *sortRollupState
-	prepareParamKind            aggexec.PrepareParamKindStates
-	prepareParamKindWireV1      bool
+	rowMetadataTrailerWire      bool
 	legacyTextMinMax            bool
 	legacyVarianceState         bool
 	legacyDecimalSumState       bool
@@ -349,7 +350,7 @@ type container struct {
 	autoSpill               bool
 	memoryGrowthParticipant *process.ExecutionMemoryGrowthParticipant
 	spillAggList            []aggexec.GroupAggFuncExec
-	spillBkts               list.Deque[*spillBucket]
+	spillBkts               []*spillBucket
 	currentSpillBkt         []*spillBucket
 
 	// reusable buffers for spill to avoid per-call allocations
@@ -412,8 +413,6 @@ func (ctr *container) setAllocationAccount(
 		mpool.AllocationOwnerGroup,
 		GroupAllocationSiteKeyData,
 		GroupAllocationSiteKeyArea,
-		GroupAllocationSiteKeyNulls,
-		GroupAllocationSiteKeyGrouping,
 	)
 	if err != nil {
 		return err
@@ -423,8 +422,6 @@ func (ctr *container) setAllocationAccount(
 		mpool.AllocationOwnerGroup,
 		GroupAllocationSiteExpressionData,
 		GroupAllocationSiteExpressionArea,
-		GroupAllocationSiteExpressionNulls,
-		GroupAllocationSiteExpressionGrouping,
 	)
 	if err != nil {
 		return err
@@ -433,12 +430,10 @@ func (ctr *container) setAllocationAccount(
 		account,
 		mpool.AllocationOwnerGroup,
 		aggexec.AllocationAccountSites{
-			VectorData:     GroupAllocationSiteAggregateData,
-			VectorArea:     GroupAllocationSiteAggregateArea,
-			VectorNulls:    GroupAllocationSiteAggregateNulls,
-			VectorGrouping: GroupAllocationSiteAggregateGrouping,
-			ArgumentCount:  GroupAllocationSiteAggregateArgumentCount,
-			ArgumentArena:  GroupAllocationSiteAggregateArgumentArena,
+			VectorData:    GroupAllocationSiteAggregateData,
+			VectorArea:    GroupAllocationSiteAggregateArea,
+			ArgumentCount: GroupAllocationSiteAggregateArgumentCount,
+			ArgumentArena: GroupAllocationSiteAggregateArgumentArena,
 		},
 	)
 	if err != nil {
@@ -462,8 +457,6 @@ func (ctr *container) setAllocationAccount(
 		mpool.AllocationOwnerGroup,
 		GroupAllocationSiteKeyData,
 		GroupAllocationSiteKeyArea,
-		GroupAllocationSiteKeyNulls,
-		GroupAllocationSiteKeyGrouping,
 		recoveryClass,
 	)
 	if err != nil {
@@ -473,12 +466,10 @@ func (ctr *container) setAllocationAccount(
 		account,
 		mpool.AllocationOwnerGroup,
 		aggexec.AllocationAccountSites{
-			VectorData:     GroupAllocationSiteAggregateData,
-			VectorArea:     GroupAllocationSiteAggregateArea,
-			VectorNulls:    GroupAllocationSiteAggregateNulls,
-			VectorGrouping: GroupAllocationSiteAggregateGrouping,
-			ArgumentCount:  GroupAllocationSiteAggregateArgumentCount,
-			ArgumentArena:  GroupAllocationSiteAggregateArgumentArena,
+			VectorData:    GroupAllocationSiteAggregateData,
+			VectorArea:    GroupAllocationSiteAggregateArea,
+			ArgumentCount: GroupAllocationSiteAggregateArgumentCount,
+			ArgumentArena: GroupAllocationSiteAggregateArgumentArena,
 		},
 		recoveryClass,
 	)
@@ -575,7 +566,7 @@ func (ctr *container) releaseFinalRecoveryCapacity() error {
 		return nil
 	}
 	if ctr.currentSpillBkt != nil ||
-		ctr.spillBkts != nil && ctr.spillBkts.Len() != 0 {
+		len(ctr.spillBkts) != 0 {
 		return nil
 	}
 	ctr.releaseMemoryGrowthParticipant()
@@ -693,13 +684,10 @@ func (ctr *container) freeSpillReloadStaging() {
 
 func (ctr *container) freeSpillBkts() {
 	// free all spill buckets.
-	if ctr.spillBkts != nil {
-		ctr.spillBkts.Iter(0, func(bkt *spillBucket) bool {
-			bkt.free()
-			return true
-		})
-		ctr.spillBkts.Clear()
+	for _, bkt := range ctr.spillBkts {
+		bkt.free()
 	}
+	ctr.spillBkts = nil
 
 	for _, bkt := range ctr.currentSpillBkt {
 		bkt.free()
@@ -715,12 +703,48 @@ func (ctr *container) freeGroupByBatches() {
 		}
 	}
 	ctr.groupByBatches = nil
-	ctr.groupKeyStringSourceMetadata = false
 	if ctr.groupByStandby != nil {
 		ctr.groupByStandby.Clean(ctr.mp)
 		ctr.groupByStandby = nil
 	}
+	ctr.clearGroupByPreflights()
 	ctr.currBatchIdx = 0
+}
+
+// groupByPreflight is the per-column preflight of one group-by batch.
+type groupByPreflight struct {
+	batch *batch.Batch
+	vecs  []vector.SelectedBatchPreflight
+}
+
+func (p *groupByPreflight) reset(b *batch.Batch) {
+	p.batch = b
+	if b == nil {
+		p.vecs = p.vecs[:0]
+		return
+	}
+	if cap(p.vecs) < len(b.Vecs) {
+		p.vecs = make([]vector.SelectedBatchPreflight, len(b.Vecs))
+		return
+	}
+	p.vecs = p.vecs[:len(b.Vecs)]
+	clear(p.vecs)
+}
+
+// groupByPreflightsFor returns the preflights retained for batch b, or nil.
+func (ctr *container) groupByPreflightsFor(b *batch.Batch) []vector.SelectedBatchPreflight {
+	for i := range ctr.groupByPreflights {
+		if p := &ctr.groupByPreflights[i]; b != nil && p.batch == b {
+			return p.vecs
+		}
+	}
+	return nil
+}
+
+func (ctr *container) clearGroupByPreflights() {
+	for i := range ctr.groupByPreflights {
+		ctr.groupByPreflights[i].reset(nil)
+	}
 }
 
 func (ctr *container) freeGroupingRollups() {
@@ -761,9 +785,8 @@ func (ctr *container) free(expressionMP *mpool.MPool) {
 	}
 	ctr.freeAggList()
 	ctr.groupConcatWarnings.Reset()
-	ctr.prepareParamKind.Reset(nil)
 	ctr.aggExprs = nil
-	ctr.prepareParamKindWireV1 = false
+	ctr.rowMetadataTrailerWire = false
 	ctr.freeSpillReloadStaging()
 	ctr.freeSpillBkts()
 	if ctr.distinctSpill != nil {

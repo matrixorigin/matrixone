@@ -448,8 +448,7 @@ func BenchmarkCountDistinctSavedArguments(b *testing.B) {
 	}
 	allocation, err := NewAllocationAccount(
 		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-			VectorData: 1, VectorArea: 2, VectorNulls: 3,
-			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 		})
 	if err != nil {
 		b.Fatal(err)
@@ -512,8 +511,7 @@ func BenchmarkCountDistinctSavedArgumentMerge(b *testing.B) {
 	}
 	allocation, err := NewAllocationAccount(
 		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-			VectorData: 1, VectorArea: 2, VectorNulls: 3,
-			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 		})
 	if err != nil {
 		b.Fatal(err)
@@ -617,8 +615,7 @@ func BenchmarkCountDistinctSavedArgumentUnmarshal(b *testing.B) {
 	}
 	allocation, err := NewAllocationAccount(
 		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-			VectorData: 1, VectorArea: 2, VectorNulls: 3,
-			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 		})
 	if err != nil {
 		b.Fatal(err)
@@ -764,8 +761,7 @@ func BenchmarkArgumentPreflightCardinality(b *testing.B) {
 			}
 			allocation, err := NewAllocationAccount(
 				account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-					VectorData: 1, VectorArea: 2, VectorNulls: 3,
-					VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+					VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 				})
 			if err != nil {
 				b.Fatal(err)
@@ -1270,8 +1266,7 @@ func BenchmarkAccountedMedianRetainedInput(b *testing.B) {
 			}
 			allocation, err := NewAllocationAccount(
 				account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-					VectorData: 1, VectorArea: 2, VectorNulls: 3,
-					VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+					VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 				})
 			if err != nil {
 				b.Fatal(err)

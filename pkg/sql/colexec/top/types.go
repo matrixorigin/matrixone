@@ -210,8 +210,6 @@ func (ctr *container) setAllocationAccount(
 		mpool.AllocationOwnerTop,
 		topsites.TopExpressionData,
 		topsites.TopExpressionArea,
-		topsites.TopExpressionNulls,
-		topsites.TopExpressionGrouping,
 	)
 	if err != nil {
 		return err
@@ -230,8 +228,6 @@ func (ctr *container) setAllocationAccount(
 		mpool.AllocationOwnerTop,
 		topsites.TopRetainedData,
 		topsites.TopRetainedArea,
-		topsites.TopRetainedNulls,
-		topsites.TopRetainedGrouping,
 		recoveryClass,
 	)
 	if err != nil {
@@ -242,8 +238,6 @@ func (ctr *container) setAllocationAccount(
 		mpool.AllocationOwnerTop,
 		topsites.TopOutputData,
 		topsites.TopOutputArea,
-		topsites.TopOutputNulls,
-		topsites.TopOutputGrouping,
 		recoveryClass,
 	)
 	if err != nil {

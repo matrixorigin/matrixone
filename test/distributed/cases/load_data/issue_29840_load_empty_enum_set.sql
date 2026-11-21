@@ -1,6 +1,8 @@
--- issue #29840: an empty / whitespace ENUM member and the empty SET are values,
--- not NULL. LOAD must read back exactly what native INSERT stores, in every
--- applicable LOAD mode; explicit NULL still loads as NULL.
+-- issue #29840: an empty ENUM member and the empty SET are values, not NULL.
+-- LOAD must read back exactly what native INSERT stores, in every applicable
+-- LOAD mode; explicit NULL still loads as NULL. ENUM labels lose trailing
+-- spaces at CREATE (as in MySQL), so a ' ' value matches the '' member, and a
+-- definition with both ' ' and '' is a duplicate.
 -- SET('0','a') makes a zero-filled empty SET visible as member '0'.
 -- SET(' a','a','中文',...) checks that a leading-space member is not trimmed into 'a';
 -- the last three members start or end with U+00A0 / U+3000, which TrimSpace also strips.
@@ -12,7 +14,8 @@ drop table if exists issue_29840_csv_par;
 drop table if exists issue_29840_csv_local;
 drop table if exists issue_29840_jl;
 drop table if exists issue_29840_jl_par;
-create table issue_29840_ins(id int primary key, e enum(' ','red',''), s set('0','a'), t set(' a','a','中文',' a','　a','a '));
+create table issue_29840_dup(e enum(' ','red',''));
+create table issue_29840_ins(id int primary key, e enum('red',''), s set('0','a'), t set(' a','a','中文',' a','　a','a '));
 insert into issue_29840_ins values (1,'','',' a'), (2,' ','','中文'), (3,'red','a','a'), (4,null,null,null), (5,'','0',' a,a'), (6,'red','0,a','a '), (7,'red','a',' a'), (8,'red','a','　a'), (9,'red','a','a '), (10,'red','a',' a,a ');
 select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null, concat('[',t,']') t, t+0 t_bits from issue_29840_ins order by id;
 create table issue_29840_csv like issue_29840_ins;

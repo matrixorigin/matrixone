@@ -20,7 +20,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { immutableChanges } = require('./change-scope.cjs');
-const { inventory, selectPackages } = require('./static-analysis.cjs');
+const { inventory, localChanges, selectPackages } = require('./static-analysis.cjs');
 
 const root = '/repo';
 const records = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(name => ({
@@ -117,6 +117,28 @@ test('immutable tree comparison handles shallow bases, moves, dirt and unavailab
   assert.equal(immutableChanges({ env: { ...env, GITHUB_EVENT_NAME: 'push' }, git }), null);
 });
 
+test('local working-tree comparison includes untracked inputs and falls back on Git failure', () => {
+  const git = args => {
+    if (args[0] === 'merge-base') return 'c'.repeat(40) + '\n';
+    if (args[0] === 'diff') return 'M\0pkg/a/a.go\0D\0pkg/b/old.go\0';
+    if (args[0] === 'ls-files') return 'pkg/c/new.go\0';
+    throw new Error(`unexpected git ${args.join(' ')}`);
+  };
+  assert.deepEqual(localChanges({ base: 'upstream/main', git }),
+    [file('pkg/a/a.go'), file('pkg/b/old.go', 'D'), file('pkg/c/new.go', 'A')]);
+  assert.deepEqual(localChanges({ base: 'upstream/main', git: args => args[0] === 'diff' ? '' : git(args) }),
+    [file('pkg/c/new.go', 'A')]);
+  for (const failed of ['merge-base', 'diff', 'ls-files']) {
+    const reasons = [];
+    assert.equal(localChanges({ base: 'upstream/main', report: r => reasons.push(r), git: args => {
+      if (args[0] === failed) throw new Error('unavailable');
+      return git(args);
+    } }), null);
+    assert.match(reasons.join(), /local merge base with "upstream\/main"/);
+  }
+  assert.equal(localChanges({ base: 'x', git: args => args[0] === 'diff' ? 'R100\0a\0b\0' : git(args) }), null);
+});
+
 test('real Make consumer shares selection, keeps full override, and propagates analyzer failures', { timeout: 90000 }, t => {
   const dir = temporary(t), repo = path.join(dir, 'repo'), bin = path.join(dir, 'bin');
   fs.mkdirSync(repo); fs.mkdirSync(bin);
@@ -161,9 +183,9 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, REAL_GO: realGo, COMMAND_LOG: log,
     GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'pull_request_target', GITHUB_EVENT_PATH: event,
     GITHUB_REPOSITORY: 'matrixorigin/matrixone', GOWORK: 'off', GOFLAGS: '', GOTOOLCHAIN: 'local' };
-  function run(extra = {}) {
+  function run(extra = {}, target = ['static-check-analysis']) {
     fs.writeFileSync(log, '');
-    const result = spawnSync('make', ['--no-print-directory', 'static-check-analysis', 'GOLANGCI_LINT_CONCURRENCY=1'],
+    const result = spawnSync('make', ['--no-print-directory', ...target, 'GOLANGCI_LINT_CONCURRENCY=1'],
       { cwd: repo, env: { ...env, ...extra }, encoding: 'utf8', timeout: 60000 });
     return { result, commands: fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) };
   }
@@ -212,6 +234,23 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   assert.equal(local.result.status, 0, local.result.stderr);
   assert.match(local.result.stderr, /full graph \(local invocation\)/);
   assert.ok(local.commands.every(command => command.endsWith('./...')));
+  const localEnv = { GITHUB_ACTIONS: 'false' };
+  const changed = run(localEnv, ['static-check-changed', `STATIC_CHECK_BASE=${base}`]);
+  assert.equal(changed.result.status, 0, changed.result.stderr);
+  assert.match(changed.result.stderr, /SCA selection: 3\/8 packages/);
+  assert.equal(changed.commands.length, 2);
+  for (const command of changed.commands) assert.ok(command.endsWith('./pkg/a ./pkg/b ./pkg/c'), command);
+  const untracked = path.join(repo, 'pkg/g/extra.go');
+  fs.writeFileSync(untracked, 'package g\nvar Extra = 1\n');
+  const dirty = run(localEnv, ['static-check-changed', `STATIC_CHECK_BASE=${head}`]);
+  fs.unlinkSync(untracked);
+  assert.equal(dirty.result.status, 0, dirty.result.stderr);
+  for (const command of dirty.commands) assert.ok(command.endsWith(' ./pkg/g'), command);
+  const missingBase = run(localEnv, ['static-check-changed', 'STATIC_CHECK_BASE=no-such-ref']);
+  assert.equal(missingBase.result.status, 0, missingBase.result.stderr);
+  assert.match(missingBase.result.stderr, /local merge base with "no-such-ref"/);
+  assert.ok(missingBase.commands.every(command => command.endsWith('./...')));
+  assert.notEqual(run({ ...localEnv, FAIL_MOLINT: '7' }, ['static-check-changed', `STATIC_CHECK_BASE=${base}`]).result.status, 0);
   fs.writeFileSync(path.join(repo, 'pkg/a/a.go'), 'not a Go package\n');
   const invalid = run();
   assert.notEqual(invalid.result.status, 0);
