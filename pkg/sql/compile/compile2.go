@@ -21,6 +21,7 @@ import (
 	"maps"
 	"math"
 	gotrace "runtime/trace"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,6 +40,7 @@ import (
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1264,6 +1266,25 @@ func (c *Compile) bindRetryPlanGeneration(runC *Compile, rebuildPlan bool) {
 	c.planGenerationRebuilt = true
 }
 
+func (c *Compile) lockReadQueryContext(ctx context.Context) context.Context {
+	var lockReadRoot *resource.Root
+	root := resource.RootFromContext(ctx)
+	if root.LockReadEnabled() && c.resourceAttemptOwnerEligible && !c.isInternal {
+		if stmt, ok := c.stmt.(*tree.Select); ok && stmt != nil {
+			if query := c.pn.GetQuery(); query != nil && query.StmtType == plan.Query_SELECT {
+				// Metadata locks also occur on ordinary SELECTs. Use the bound
+				// plan to identify locking reads, including table fallbacks.
+				if slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+					return node.GetNodeType() == plan.Node_LOCK_OP
+				}) {
+					lockReadRoot = root
+				}
+			}
+		}
+	}
+	return resource.ContextWithLockReadRoot(ctx, lockReadRoot)
+}
+
 // InitPipelineContextToExecuteQuery initializes the context for each pipeline tree.
 //
 // the entire process must follow these rules:
@@ -1271,7 +1292,7 @@ func (c *Compile) bindRetryPlanGeneration(runC *Compile, rebuildPlan bool) {
 // 2. if there's a data transfer between two pipelines, the lifecycle of the sender's context ends with the receiver's termination.
 func (c *Compile) InitPipelineContextToExecuteQuery() {
 	contextBase := c.proc.Base.GetContextBase()
-	contextBase.BuildQueryCtx(c.proc.GetTopContext())
+	contextBase.BuildQueryCtx(c.lockReadQueryContext(c.proc.GetTopContext()))
 	contextBase.SaveToQueryContext(defines.EngineKey{}, c.e)
 	queryContext := contextBase.WithCounterSetToQueryContext(c.counterSet)
 

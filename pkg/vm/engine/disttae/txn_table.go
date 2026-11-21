@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"math"
 	"slices"
 	"strings"
@@ -3690,7 +3691,10 @@ func (tbl *txnTable) primaryKeysMayBeChangedWithHistory(
 	var snap *logtailreplay.PartitionState
 	if requireSubscribed {
 		var ready bool
+		observation := resource.LockReadPKFromContext(ctx)
+		start := observation.Start()
 		snap, ready, err = tbl.getPartitionStateForPKCheck(ctx, to)
+		observation.Finish(ctx, resource.LockReadPKReadiness, start, err)
 		if err != nil {
 			return false, err
 		}

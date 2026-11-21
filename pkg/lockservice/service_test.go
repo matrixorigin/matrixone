@@ -16,6 +16,8 @@ package lockservice
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -38,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -576,6 +579,78 @@ func TestRowLockWithWaitQueue(t *testing.T) {
 				})
 		})
 	}
+}
+
+func TestLockReadWitnessAfterHolderHandoff(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, ss []*service) {
+		s := ss[0]
+		ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		const table = 10
+		rows := newTestRows(1)
+		options := newTestRowExclusiveOptions()
+		first, next, waiting := []byte("first-holder-txn"), []byte("next-holder--txn"), []byte("waiting-read-txn")
+		var workers sync.WaitGroup
+		defer func() {
+			stop()
+			workers.Wait()
+			for _, txn := range [][]byte{first, next, waiting} {
+				assert.NoError(t, s.Unlock(context.Background(), txn, timestamp.Timestamp{}))
+			}
+		}()
+
+		_, err := s.Lock(ctx, table, rows, first, options)
+		require.NoError(t, err)
+		lockTable, err := s.getLockTable(ctx, 0, table)
+		require.NoError(t, err)
+		lt := lockTable.(*localLockTable)
+		nextAcquired := make(chan error, 1)
+		workers.Go(func() {
+			_, err := s.Lock(ctx, table, rows, next, options)
+			nextAcquired <- err
+		})
+		require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
+
+		waitCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		observation := &resource.LockReadObservation{}
+		waitCtx = resource.ContextWithLockReadAcquisition(waitCtx, observation)
+		waitDone := make(chan error, 1)
+		workers.Go(func() {
+			start := observation.Start()
+			result, err := s.Lock(waitCtx, table, rows, waiting, options)
+			observation.Finish(waitCtx, resource.LockReadAcquisition, start, err)
+			observation.ObserveAcquisitionConflict(result.HasConflict, err)
+			waitDone <- err
+		})
+		require.NoError(t, waitLocalWaiters(lt, rows[0], 2))
+		require.NoError(t, s.Unlock(ctx, first, timestamp.Timestamp{}))
+		select {
+		case err := <-nextAcquired:
+			require.NoError(t, err)
+		case <-ctx.Done():
+			t.Fatal("second transaction did not acquire the lock")
+		}
+		require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
+
+		cancel()
+		select {
+		case err := <-waitDone:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-ctx.Done():
+			t.Fatal("canceled lock wait did not return")
+		}
+		checkLock(t, lt, rows[0], [][]byte{next}, nil, nil)
+		root := resource.NewRoot(resource.ConnExternal)
+		root.MergeLockRead(observation)
+		_, snapshot := root.SealWithLockRead(0)
+		diagnostic := snapshot.Diagnostic([16]byte{}, 1, true)
+		require.True(t, diagnostic.Conflict)
+		require.Equal(t, "acquisition", diagnostic.LastIncomplete)
+		wire, err := json.Marshal(diagnostic)
+		require.NoError(t, err)
+		require.Contains(t, string(wire), `"observed_conflict_txn_id":"`+hex.EncodeToString(first)+`"`)
+		require.NotContains(t, string(wire), `"conflict_txn_id":`)
+	})
 }
 
 func TestRangeLockWithWaitQueue(t *testing.T) {

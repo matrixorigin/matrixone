@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -157,4 +158,31 @@ func TestStatementDiagnosticsFormatConfiguration(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, started)
 	require.Same(t, before, GetTracerProvider())
+}
+
+func TestLockReadCompactFallbackPublishesOnlyTerminalObservation(t *testing.T) {
+	old := GetTracerProvider()
+	SetTracerProvider(newMOTracerProvider(EnableTracer(true), WithStatementDiagnosticsFormat("compact-v1"), WithLongQueryTime(1)))
+	t.Cleanup(func() { SetTracerProvider(old) })
+	stub := gostub.Stub(&ReportStatement, func(context.Context, *StatementInfo) error { return nil })
+	t.Cleanup(stub.Reset)
+	ctx := context.Background()
+
+	s, root := prepareLockReadStatement(NewLockReadLimiter(), uuid.New(), 200*time.Millisecond)
+	t.Cleanup(s.FreeExecPlan)
+	at := time.Now()
+	o := &resource.LockReadObservation{}
+	o.Record(ctx, resource.LockReadAcquisition, at, at.Add(100*time.Millisecond), context.DeadlineExceeded)
+	root.MergeLockRead(o)
+	require.Equal(t, "{}", string(s.ExecPlan2Json(ctx)))
+	require.Nil(t, root.PreResponseSummary().LockRead)
+
+	s.EndStatement(ctx, context.DeadlineExceeded, 0, 0, 0)
+	require.IsType(t, &summaryDiagnosticPlan{}, s.ExecPlan)
+	var result models.ExplainData
+	require.NoError(t, json.Unmarshal(s.ExecPlan2Json(ctx), &result))
+	require.NotNil(t, result.StatementDiagnostics)
+	require.NotNil(t, result.StatementDiagnostics.Summary)
+	require.Equal(t, s.resourceSummary.LockRead, result.StatementDiagnostics.Summary.LockRead)
+	require.Equal(t, uuid.UUID(s.StatementID), result.StatementDiagnostics.Summary.LockRead.StatementID)
 }
