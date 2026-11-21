@@ -273,6 +273,15 @@ func TestBottomKMergeCountsBlockPresenceAcrossEvictions(t *testing.T) {
 			require.ErrorIs(t, err, ErrInvalidNDVInput)
 		}
 	}
+	// A large Kth rank can yield a raw estimate below K. And an estimated
+	// non-null population can itself be smaller than the observed frame.
+	high := makePart([]uint64{12, 13, 14, 15})
+	for _, pop := range []float64{1, 100} {
+		v, err := high.Estimate(pop, MustFraction(1, 1))
+		require.NoError(t, err)
+		require.Equal(t, 3., v.Point)
+		require.LessOrEqual(t, v.Point, v.RelationalUpper)
+	}
 }
 
 func TestFullScanNDVAccumulatorIsBoundedAndMergeable(t *testing.T) {

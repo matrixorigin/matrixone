@@ -475,7 +475,7 @@ func (s *incidenceSketch) point(pop float64, q float64) float64 {
 	}
 	d := float64(len(s.nodes))
 	if s.truncated {
-		d = float64(s.k-1) * math.Exp2(64) / float64(s.nodes[s.heap[0]].hash)
+		d = max(d, float64(s.k-1)*math.Exp2(64)/float64(s.nodes[s.heap[0]].hash))
 	}
 	return min(float64(pop), max(d, d*n/(n-f1+q*f1)))
 }
