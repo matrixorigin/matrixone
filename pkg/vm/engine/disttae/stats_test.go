@@ -32,9 +32,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -255,6 +260,7 @@ func insertTable(
 	e *Engine,
 	did, tid uint64,
 	dname, tname string,
+	cols ...catalog.Column,
 ) (uint64, uint64) {
 	tbl := catalog.Table{
 		AccountId:    0,
@@ -266,24 +272,28 @@ func insertTable(
 		TableName:    tname,
 	}
 	packer := types.NewPacker()
+	defer packer.Close()
 	bat, err := catalog.GenCreateTableTuple(tbl, e.mp, packer)
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	defer bat.Clean(e.mp)
 	_, err = fillRandomRowidAndZeroTs(bat, e.mp)
 	assert.NoError(t, err)
 	ccache := e.catalog.Load()
 	ccache.InsertTable(bat)
 	tableItem := ccache.GetTableByName(0, did, tname)
 	assert.NotNil(t, tableItem)
-	defs, err := catalog.GenColumnsFromDefs(
-		0,
-		tname,
-		dname,
-		tid,
-		did,
-		catalog.GetDefines(e.service).MoDatabaseTableDefs,
-	)
-	assert.NoError(t, err)
-	cache.InitTableItemWithColumns(tableItem, defs)
+	if len(cols) == 0 {
+		cols, err = catalog.GenColumnsFromDefs(
+			0,
+			tname,
+			dname,
+			tid,
+			did,
+			catalog.GetDefines(e.service).MoDatabaseTableDefs,
+		)
+		require.NoError(t, err)
+	}
+	cache.InitTableItemWithColumns(tableItem, cols)
 	return tableItem.DatabaseId, tableItem.Id
 }
 
@@ -321,26 +331,63 @@ func TestUpdateStats(t *testing.T) {
 		})
 	})
 
-	t.Run("objs", func(t *testing.T) {
+	t.Run("persisted object", func(t *testing.T) {
 		runTest(t, func(ctx context.Context, e *Engine) {
-			did := uint64(1000)
-			dname := "test-db"
-			tid := uint64(1001)
-			tname := "test-table"
-			did1, tid1 := insertTable(t, e, did, tid, dname, tname)
-			assert.Equal(t, did, did1)
-			assert.Equal(t, tid, tid1)
-			k := statsinfo.StatsInfoKey{
-				DatabaseID: did,
-				TableID:    tid,
-			}
-			stats := plan2.NewStatsInfo()
+			columnType := types.T_int64.ToType()
+			typ, err := columnType.Marshal()
+			require.NoError(t, err)
+			rowIDType := types.T_Rowid.ToType()
+			rowID, err := rowIDType.Marshal()
+			require.NoError(t, err)
+			const seqnum = 3
+			did, tid := insertTable(t, e, 1000, 1001, "test-db", "events",
+				catalog.Column{Name: "event_id", Num: 1, Seqnum: seqnum, Typ: typ},
+				catalog.Column{Name: catalog.Row_ID, Num: 2, Seqnum: objectio.SEQNUM_ROWID, Typ: rowID, IsHidden: 1},
+			)
+			item := e.catalog.Load().GetTableByName(0, did, "events")
+			require.True(t, item.SchemaSource().Valid())
+
+			fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			e.fs = fs
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(columnType)
+			defer bat.Clean(e.mp)
+			values := []int64{10, 20, 30}
+			require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, e.mp))
+			bat.SetRowCount(len(values))
+			id := objectio.NewObjectid()
+			writer, err := ioutil.NewBlockWriterNew(fs, objectio.BuildObjectNameWithObjectID(&id), 0, []uint16{seqnum}, false)
+			require.NoError(t, err)
+			_, err = writer.WriteBatch(bat)
+			require.NoError(t, err)
+			_, _, err = writer.Sync(ctx)
+			require.NoError(t, err)
+
+			ts := types.BuildTS(1, 0)
 			ps := logtailreplay.NewPartitionState("", true, tid, false)
-			updated, _ := e.globalStats.executeStatsUpdate(ctx, ps, k, stats)
-			assert.True(t, updated)
-		}, WithApproxObjectNumUpdater(func() int64 {
-			return 10
-		}))
+			ps.UpdateDuration(types.TS{}, types.MaxTs())
+			require.NoError(t, ps.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+				ObjectStats: writer.GetObjectStats(),
+				CreateTime:  ts,
+			}, false))
+
+			key := statsinfo.StatsInfoKey{DatabaseID: did, TableID: tid}
+			borrowed := plan2.NewStatsInfo()
+			updated, ratio := e.globalStats.executeStatsUpdate(ctx, ps, key, borrowed)
+			require.True(t, updated)
+			require.Equal(t, 1.0, ratio)
+			require.Equal(t, float64(len(values)), borrowed.TableCnt)
+			require.EqualValues(t, 1, borrowed.AccurateObjectNumber)
+			require.EqualValues(t, 1, borrowed.BlockNumber)
+			require.Equal(t, 3.0, borrowed.NdvMap["event_id"])
+
+			owned := plan2.NewStatsInfo()
+			req := newUpdateStatsRequest(item.ReadPlanTableDef(), ps, fs, ts, 1, owned)
+			_, err = CollectAndCalculateStats(ctx, req, e.globalStats.concurrentExecutor)
+			require.NoError(t, err)
+			require.Equal(t, owned, borrowed)
+		})
 	})
 }
 
