@@ -43,7 +43,7 @@ func dateSelectionFixture(t testing.TB, values []types.Date, lower, upper types.
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 	require.NoError(t, err)
 	typ := types.T_date.ToType()
 	input := batch.NewWithSize(1)
@@ -113,7 +113,7 @@ func TestDateBetweenSelection(t *testing.T) {
 }
 
 func TestDateBetweenSelectionDeclinesUnprovedShapes(t *testing.T) {
-	for _, shape := range []string{"null-input", "grouping", "constant-input", "dictionary", "binary-metadata", "parameter-metadata", "string-source", "null-bound", "dynamic-bound", "wrong-type", "unloaded", "short-domain", "empty", "oversized", "memo", "callback"} {
+	for _, shape := range []string{"null-input", "grouping", "constant-input", "dictionary", "null-bound", "dynamic-bound", "wrong-type", "unloaded", "short-domain", "empty", "oversized", "memo", "callback"} {
 		t.Run(shape, func(t *testing.T) {
 			proc, input, executor, allocation := dateSelectionFixture(t, []types.Date{0, 1, 2, 3}, 1, 2)
 			var root ExpressionExecutor = executor
@@ -135,12 +135,6 @@ func TestDateBetweenSelectionDeclinesUnprovedShapes(t *testing.T) {
 				require.True(t, admitted)
 				input = &batch.Batch{Vecs: outputs}
 				input.SetRowCount(3)
-			case "binary-metadata":
-				source.SetIsBinaryString(true)
-			case "parameter-metadata":
-				source.SetPrepareParamType(types.T_date)
-			case "string-source":
-				require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
 			case "null-bound":
 				bound := executor.parameterExecutor[1].(*FixedVectorExpressionExecutor)
 				null, err := newExpressionConstNull(types.T_date.ToType(), 1, allocation)

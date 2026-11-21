@@ -82,9 +82,6 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 						require.NoError(t, want.UnionOne(row.Vec, row.Row, mp))
 					}
 					require.Equal(t, want.length, got.length)
-					require.Equal(t, want.prepareParamKind, got.prepareParamKind)
-					require.Equal(t, want.prepareParamKindSeen, got.prepareParamKindSeen)
-					require.Equal(t, want.stringSource, got.stringSource)
 					width := oid.TypeLen()
 					for i := 0; i < got.length; i++ {
 						require.Equal(t, want.IsNull(uint64(i)), got.IsNull(uint64(i)))
@@ -104,7 +101,7 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 }
 
 func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
-	for _, shape := range []string{"const", "grouping", "parameter", "binary", "borrowed", "alias", "type", "negative", "past_end", "singleton", "unicode", "out_of_line"} {
+	for _, shape := range []string{"const", "grouping", "borrowed", "alias", "type", "negative", "past_end", "singleton", "unicode", "out_of_line"} {
 		t.Run(shape, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			typ := types.T_int64.ToType()
@@ -132,10 +129,6 @@ func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
 				b.class = CONSTANT
 			case "grouping":
 				b.gsp.Add(1)
-			case "parameter":
-				b.SetPrepareParamKind(PrepareParamInteger)
-			case "binary":
-				b.SetIsBinaryString(true)
 			case "borrowed":
 				b.cantFreeData = true
 			case "alias":

@@ -56,5 +56,5 @@ func bulkCopySourcesAreFlat(sources []*Vector) bool {
 }
 
 func (v *Vector) unionBatchFlatRange(w *Vector, offset int64, count int, flags []uint8, mp *mpool.MPool) error {
-	return v.unionBatchFlat(w, offset, count, flags, nil, mp, 0, 0, false)
+	return v.unionBatchFlat(w, offset, count, flags, mp, 0, 0, false)
 }

@@ -63,7 +63,7 @@ func TestBooleanNonNullPreparationTransitions(t *testing.T) {
 			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			checkValues(result)
-			require.Zero(t, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+			require.Zero(t, result.GetNulls().GetBitmap().CapWords())
 			input.Vecs[0].SetNull(0)
 			input.Vecs[0].SetNull(1)
 			result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
@@ -71,13 +71,11 @@ func TestBooleanNonNullPreparationTransitions(t *testing.T) {
 			for row, want := range tc.nullRows {
 				require.Equal(t, want, result.IsNull(uint64(row)))
 			}
-			capacity := result.GetNulls().GetBitmap().ExternalStorageCapacity()
-			require.Positive(t, capacity)
+			require.Positive(t, result.GetNulls().GetBitmap().CapWords())
 			input.Vecs[0].GetNulls().Reset()
 			result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			checkValues(result)
-			require.Equal(t, capacity, result.GetNulls().GetBitmap().ExternalStorageCapacity())
 			result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, true, true, true})
 			require.NoError(t, err)
 			require.True(t, result.IsNull(0), "masked rows must keep normal NULL admission")
@@ -152,18 +150,18 @@ func TestNumericComparisonValidityWithoutDictionaryCapability(t *testing.T) {
 			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.Equal(t, []bool{true, false, false, true}, vector.MustFixedColNoTypeCheck[bool](result))
-			require.Zero(t, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+			require.Zero(t, result.GetNulls().GetBitmap().CapWords())
 			input.Vecs[0].SetNull(1)
 			result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.True(t, result.IsNull(1))
-			require.Positive(t, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+			require.Positive(t, result.GetNulls().GetBitmap().CapWords())
 		})
 	}
 }
 
 func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
-	for _, shape := range []string{"constant", "grouping", "prepared-json"} {
+	for _, shape := range []string{"constant", "grouping"} {
 		t.Run(shape, func(t *testing.T) {
 			proc, allocation, _ := dependentTestAllocation(t)
 			input := batch.NewWithSize(2)
@@ -176,8 +174,6 @@ func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
 			input.SetRowCount(4)
 			if shape == "grouping" {
 				input.Vecs[0].GetGrouping().Add(1)
-			} else if shape == "prepared-json" {
-				input.Vecs[0].SetPreparedJSONComparisonParam()
 			}
 			cols := make([]*plan.Expr, 0, 2)
 			for side := range 2 {
@@ -189,7 +185,7 @@ func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
 			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.Equal(t, []bool{true, true, true, true}, vector.MustFixedColNoTypeCheck[bool](result))
-			require.Equal(t, shape != "constant", result.GetNulls().GetBitmap().ExternalStorageCapacity() > 0)
+			require.False(t, result.HasNull())
 		})
 	}
 }
@@ -206,7 +202,7 @@ func TestBooleanValidityAdmissionFailure(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 	require.NoError(t, err)
 	input := batch.NewWithSize(1)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
@@ -220,10 +216,12 @@ func TestBooleanValidityAdmissionFailure(t *testing.T) {
 	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, 8, account.Snapshot().Used)
-	require.Zero(t, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+	require.Zero(t, result.GetNulls().GetBitmap().CapWords())
 	input.Vecs[0].SetNull(0)
-	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity, "nullable fallback still admits its bitmap")
+	result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err, "the NULL bitmap is Go-owned and is not admitted")
+	require.True(t, result.IsNull(0))
+	require.EqualValues(t, 8, account.Snapshot().Used)
 	input.Vecs[0].GetNulls().Reset()
 	result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)

@@ -73,7 +73,6 @@ func jsonDepthCheckPreparedInput(
 		return nil
 	}
 
-	preparedType := input.GetPrepareParamType()
 	for row := 0; row < length; row++ {
 		if selectList != nil && selectList.Contains(uint64(row)) {
 			continue
@@ -86,19 +85,10 @@ func jsonDepthCheckPreparedInput(
 			continue
 		}
 
-		if input.GetIsBinaryStringAt(physicalRow) {
+		if isBinaryStringVector(input) {
 			return jsonDepthInvalidBinary(proc)
 		}
 		if !jsonDepthTypeSupported(*input.GetType()) {
-			return jsonDepthInvalidType(proc)
-		}
-		if preparedType != types.T_any {
-			if !jsonDepthTypeSupported(preparedType.ToType()) {
-				return jsonDepthInvalidType(proc)
-			}
-			continue
-		}
-		if input.GetPrepareParamKindAt(physicalRow) != vector.PrepareParamNone {
 			return jsonDepthInvalidType(proc)
 		}
 	}

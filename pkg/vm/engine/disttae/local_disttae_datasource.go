@@ -1489,7 +1489,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 		return nil, err
 	}
 
-	offsets = readutil.RemoveIf(offsets, func(t int64) bool {
+	offsets = slices.DeleteFunc(offsets, func(t int64) bool {
 		return deletedRows.Contains(uint64(t))
 	})
 
@@ -1707,7 +1707,7 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 		return nil, err
 	}
 
-	offsets = readutil.RemoveIf(offsets, func(t int64) bool {
+	offsets = slices.DeleteFunc(offsets, func(t int64) bool {
 		return deletedRows.Contains(uint64(t))
 	})
 

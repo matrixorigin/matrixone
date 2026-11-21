@@ -172,12 +172,6 @@ func isMySQLFullGroupBySingleValueExpr(expr *Expr) bool {
 	case *pbplan.Expr_Lit, *pbplan.Expr_P, *pbplan.Expr_V, *pbplan.Expr_Vec, *pbplan.Expr_T:
 		return true
 	case *pbplan.Expr_F:
-		id, _ := function.DecodeOverloadID(e.F.Func.Obj)
-		if id == function.INTERNAL_JSON_COMPARISON_PARAM || id == function.INTERNAL_JSON_ORDERING_PARAM {
-			// Runtime numeric metadata can make distinct JSON values match one
-			// parameter. A stable payload does not prove a singleton JSON value.
-			return false
-		}
 		overload, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
 		if !ok || overload.IsVolatile() {
 			return false

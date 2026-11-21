@@ -36,8 +36,8 @@ const (
 	preInsertUniqueAllocationSiteHashDescriptor
 	preInsertUniqueAllocationSiteRetainedData
 	preInsertUniqueAllocationSiteRetainedArea
-	preInsertUniqueAllocationSiteRetainedNulls
-	preInsertUniqueAllocationSiteRetainedGrouping
+	_ // reserved: was preInsertUniqueAllocationSiteRetainedNulls
+	_ // reserved: was preInsertUniqueAllocationSiteRetainedGrouping
 )
 
 type container struct {
@@ -121,8 +121,6 @@ func (preInsertUnique *PreInsertUnique) SetAllocationAccount(
 		mpool.AllocationOwnerDML,
 		preInsertUniqueAllocationSiteRetainedData,
 		preInsertUniqueAllocationSiteRetainedArea,
-		preInsertUniqueAllocationSiteRetainedNulls,
-		preInsertUniqueAllocationSiteRetainedGrouping,
 	)
 	if err != nil {
 		return err

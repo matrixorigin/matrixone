@@ -47,7 +47,7 @@ func smallShuffleRetryFixture(t *testing.T) (*process.Process, *ShufflePool, *ba
 		require.Zero(t, stats.Used)
 		require.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	input := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
 	t.Cleanup(func() { input.Clean(mp) })

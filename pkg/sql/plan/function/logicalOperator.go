@@ -39,14 +39,14 @@ func opMultiAnd(params []*vector.Vector, result vector.FunctionResultWrapper, _ 
 		for i := 0; i < length; i++ {
 			rsArr[i] = false
 		}
-		nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		rsVec.GetNulls().AddRange(0, uint64(length))
 	} else if params[0].IsConst() {
 		for i := 0; i < length; i++ {
 			rsArr[i] = arr0[0]
 		}
 	} else {
 		copy(rsArr, arr0)
-		nulls.Set(rsVec.GetNulls(), params[0].GetNulls())
+		rsVec.GetNulls().Or(params[0].GetNulls())
 	}
 
 	for idx := 1; idx < len(params); idx++ {
@@ -107,14 +107,14 @@ func opMultiOr(params []*vector.Vector, result vector.FunctionResultWrapper, _ *
 		for i := 0; i < length; i++ {
 			rsArr[i] = false
 		}
-		nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		rsVec.GetNulls().AddRange(0, uint64(length))
 	} else if params[0].IsConst() {
 		for i := 0; i < length; i++ {
 			rsArr[i] = arr0[0]
 		}
 	} else {
 		copy(rsArr, arr0)
-		nulls.Set(rsVec.GetNulls(), params[0].GetNulls())
+		rsVec.GetNulls().Or(params[0].GetNulls())
 	}
 
 	for idx := 1; idx < len(params); idx++ {

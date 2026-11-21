@@ -22,11 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// XXX confused function.
 func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
@@ -55,24 +55,21 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 		if err != nil {
 			return moerr.NewInvalidInputf(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)
 		}
-		if err = process.CheckIndexRelationDefinitionAccess(proc, relation.GetTableName(), relation.GetTableDef(proc.Ctx)); err != nil {
+		tableDef := relation.GetTableDef(proc.Ctx)
+		if err = process.CheckIndexRelationDefinitionAccess(proc, relation.GetTableName(), tableDef); err != nil {
 			return err
 		}
-		tableId := relation.GetTableID(proc.Ctx)
-		engineDefs, err := relation.TableDefs(proc.Ctx)
-		if err != nil {
-			return err
-		}
-		autoIncrCol := getTableAutoIncrCol(engineDefs)
+		autoIncrCol := getTableAutoIncrCol(tableDef)
 		if autoIncrCol != "" {
+			tableID := relation.GetTableID(proc.Ctx)
 			ctx := observationCtx
 			if extra := relation.GetExtraInfo(); extra != nil {
-				ctx = incrservice.WithAutoIDCachePolicy(ctx, tableId, extra.AutoIdCache)
+				ctx = incrservice.WithAutoIDCachePolicy(ctx, tableID, extra.AutoIdCache)
 			}
 			autoIncrement, err := getCurrentValue(
 				ctx,
 				proc.GetService(),
-				tableId,
+				tableID,
 				autoIncrCol,
 			)
 			if err != nil {
@@ -90,23 +87,22 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 	return nil
 }
 
-func getTableAutoIncrCol(engineDefs []engine.TableDef) string {
-	autoIncrCol := ""
-	for _, def := range engineDefs {
-		if _, ok := def.(*engine.ViewDef); ok {
-			return ""
-		}
-
-		// Select the first user column with the auto increment property. The
-		// synthetic primary key (fake pk) of a table without a primary key is
-		// also auto-increment, but it is not the table's AUTO_INCREMENT column.
-		if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.AutoIncrement &&
-			(!catalog.IsFakePkName(attr.Attr.Name) || !attr.Attr.IsHidden) {
-			autoIncrCol = attr.Attr.Name
-			break
-		}
+func getTableAutoIncrCol(tableDef *plan.TableDef) string {
+	if tableDef.GetViewSql().GetView() != "" {
+		return ""
 	}
-	return autoIncrCol
+	for _, col := range tableDef.Cols {
+		if col == nil || !col.Typ.AutoIncr {
+			continue
+		}
+		name := col.GetOriginCaseName()
+		if name == catalog.Row_ID || (col.Hidden && catalog.IsFakePkName(name)) {
+			continue
+		}
+		// Allocator rows are keyed by the planner column name.
+		return col.Name
+	}
+	return ""
 }
 
 func getCurrentValue(

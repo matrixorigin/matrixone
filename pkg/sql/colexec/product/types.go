@@ -45,8 +45,8 @@ type container struct {
 const (
 	productAllocationSiteResultData mpool.AllocationSite = iota + 94
 	productAllocationSiteResultArea
-	productAllocationSiteResultNulls
-	productAllocationSiteResultGrouping
+	_ // reserved: was productAllocationSiteResultNulls
+	_ // reserved: was productAllocationSiteResultGrouping
 )
 
 type Product struct {
@@ -83,8 +83,6 @@ func (product *Product) SetAllocationAccount(
 		mpool.AllocationOwnerHashBuild,
 		productAllocationSiteResultData,
 		productAllocationSiteResultArea,
-		productAllocationSiteResultNulls,
-		productAllocationSiteResultGrouping,
 	)
 	if err != nil {
 		return err

@@ -1845,6 +1845,9 @@ func TestEmptyDomainTypeReplay(t *testing.T) {
 		domain, formatted string
 	}{
 		{"enum('')", types.T_enum, "", "ENUM('')"}, {"set('')", types.T_uint64, ",", "SET('')"}, {"set('   ')", types.T_uint64, ",", "SET('')"}, {"bigint unsigned", types.T_uint64, "", "BIGINT UNSIGNED"},
+		// ENUM labels lose trailing (not leading) spaces at CREATE, as in MySQL.
+		{"enum('   ')", types.T_enum, "", "ENUM('')"},
+		{"enum('a  ','  B ','c')", types.T_enum, "a,  B,c", "ENUM('a','  B','c')"},
 	} {
 		t.Run(tc.ddl, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(context.Background(), "create table t(v "+tc.ddl+")", 1)
@@ -1868,4 +1871,62 @@ func TestEmptyDomainTypeReplay(t *testing.T) {
 			require.Equal(t, typ, replayType)
 		})
 	}
+}
+
+func TestEnumDDLRejectsMembersEqualAfterTrim(t *testing.T) {
+	for _, ddl := range []string{
+		"enum(' ','red','')", "enum('a','a ')", "enum('a','A')", "enum('x  ','X')",
+	} {
+		t.Run(ddl, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t(v "+ddl+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = getTypeFromAst(context.Background(), stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+			require.ErrorContains(t, err, "duplicate enum member")
+		})
+	}
+	// Leading spaces are significant, so these are distinct members.
+	stmt, err := mysql.ParseOne(context.Background(), "create table t(v enum(' a','a'))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	typ, err := getTypeFromAst(context.Background(), stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+	require.NoError(t, err)
+	require.Equal(t, " a,a", typ.Enumvalues)
+}
+
+// Catalogs written before CREATE-time trimming may store ENUM domains that new
+// DDL rejects. LIKE/CLONE/COPY replay of such an unchanged column must keep the
+// stored labels and ordinals; a changed or new declaration is still normalized.
+func TestEnumReplayPreservesLegacyDomain(t *testing.T) {
+	legacy := &plan.TableDef{
+		Name: "t",
+		Cols: []*plan.ColDef{{ColId: 1, Name: "v", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: " ,red,"}}},
+	}
+	replayCtx := WithPersistedDDLReplay(context.Background(), legacy, legacy)
+	replay := ddlReplayForTable(replayCtx, "t")
+	require.NotNil(t, replay)
+
+	column := func(ddl string) (*tree.ColumnTableDef, func()) {
+		stmt, err := mysql.ParseOne(context.Background(), "create table t(v "+ddl+")", 1)
+		require.NoError(t, err)
+		return stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef), func() { stmt.Free() }
+	}
+
+	col, free := column("enum(' ','red','')")
+	defer free()
+	typ, err := getColumnTypeFromAst(replayCtx, col, uint32(types.CharsetUTF8), replay)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_enum), typ.Id)
+	require.Equal(t, " ,red,", typ.Enumvalues)
+
+	// The same declaration outside replay is a new domain.
+	_, err = getColumnTypeFromAst(context.Background(), col, uint32(types.CharsetUTF8), nil)
+	require.ErrorContains(t, err, "duplicate enum member")
+
+	// A changed declaration during replay is normalized as new metadata.
+	changed, freeChanged := column("enum('red  ','blue')")
+	defer freeChanged()
+	typ, err = getColumnTypeFromAst(replayCtx, changed, uint32(types.CharsetUTF8), replay)
+	require.NoError(t, err)
+	require.Equal(t, "red,blue", typ.Enumvalues)
 }

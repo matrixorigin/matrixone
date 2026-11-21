@@ -101,9 +101,21 @@ func (tableScan *TableScan) prepareColumnUses() {
 			}
 		}
 	}
-	// Domain probes can subsequently shrink the whole batch. Preserve aligned
-	// values for every column in that mode instead of publishing empty slots.
-	if len(tableScan.ctr.domainSources)+len(tableScan.ctr.domainProbes) > 0 {
+	// A source builder still needs its key after projection. Handled membership
+	// reads may drop other private inputs; unsupported readers need aligned data.
+	for _, source := range tableScan.ctr.domainSources {
+		if uses[source.column] == engine.ReaderColumnUnused {
+			uses[source.column] = engine.ReaderColumnOwned
+		}
+	}
+	if request := tableScan.ctr.readerFilter; request != nil && request.Membership != nil {
+		request.Membership.ColumnUses = append(request.Membership.ColumnUses[:0], uses...)
+	}
+	active := false
+	for _, probe := range tableScan.ctr.domainProbes {
+		active = active || !probe.pass
+	}
+	if active {
 		for i, use := range uses {
 			if use == engine.ReaderColumnUnused {
 				uses[i] = engine.ReaderColumnOwned

@@ -23,7 +23,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -63,7 +62,6 @@ type sqlExecutor struct {
 	qc          qclient.QueryClient
 	hakeeper    logservice.CNHAKeeperClient
 	us          udf.Service
-	buf         *buffer.Buffer
 	taskservice taskservice.TaskService
 }
 
@@ -140,7 +138,6 @@ func NewSQLExecutor(
 		hakeeper:    hakeeper,
 		us:          us,
 		mp:          mp,
-		buf:         buffer.New(),
 		taskservice: taskService,
 	}
 }
@@ -646,7 +643,6 @@ func (exec *txnExecutor) exec(
 	// SQL file admission and all downstream execution paths observe them.
 	proc.Base.SessionInfo.Account, proc.Base.SessionInfo.Role = statementOption.SessionIdentity()
 	proc.Base.SessionInfo.User = statementOption.SessionUser()
-	proc.Base.SessionInfo.Buf = exec.s.buf
 	proc.Base.SessionInfo.StorageEngine = exec.s.eng
 	proc.Base.QueryClient = exec.s.qc
 	defer func() {
@@ -894,25 +890,6 @@ func resultCloneBytes(bat *batch.Batch, used, limit uint64) (uint64, error) {
 		if !charge(uint64(rows) * uint64(width)) {
 			return exceeded()
 		}
-		// Sidecars for flat vectors can expand to one entry per output row.
-		// Constants retain the exact source sidecars after broadcasting.
-		for _, n := range []int{len(vec.GetPrepareParamKinds()), len(vec.GetStringSources())} {
-			if n != 0 && !vec.IsConst() {
-				n = max(n, rows)
-			}
-			if !charge(uint64(n)) {
-				return exceeded()
-			}
-		}
-		if vec.HasBinaryStringMetadata() {
-			words := uint64(rows) / 64
-			if rows%64 != 0 {
-				words++
-			}
-			if words > ^uint64(0)/16 || !charge(words*16) {
-				return exceeded()
-			}
-		}
 		if !vec.GetType().IsVarlen() || rows == 0 || vec.IsConstNull() {
 			continue
 		}
@@ -1028,7 +1005,6 @@ func (exec *txnExecutor) LockTable(table string) error {
 	proc.Base.IsFrontend = exec.opts.IsFrontend()
 	applyExecutorLockWaitTimeout(proc, exec.opts)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
-	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {
 		proc.Free()
 	}()

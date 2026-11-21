@@ -106,7 +106,7 @@ func TestDictionaryFunctionFallbackAndMaskedArguments(t *testing.T) {
 			_, _, err := registry.CompleteTerminal(account)
 			require.NoError(t, err)
 		})
-		selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+		selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 		require.NoError(t, err)
 		var retained Batches
 		t.Cleanup(func() { retained.Clean(mp) })
@@ -150,7 +150,7 @@ func TestDictionaryFunctionStateCapacityFailureCleanup(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
 	require.NoError(t, err)
 	executor := &FunctionExpressionExecutor{m: mp, allocation: selection}
 	t.Cleanup(executor.freeDictionaryParameters)
@@ -296,7 +296,7 @@ func TestComparisonNonNullPreparationRuntimeDomain(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			})
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 			require.NoError(t, err)
 			source := vector.NewVec(types.T_int64.ToType())
 			t.Cleanup(func() { source.Free(mp) })
@@ -335,7 +335,7 @@ func TestComparisonNonNullPreparationRuntimeDomain(t *testing.T) {
 					root := executor.(*FunctionExpressionExecutor)
 					result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 					require.NoError(t, err)
-					require.Zero(t, result.GetNulls().GetBitmap().ExternalStorageCapacity(), "proved non-NULL result must not reserve validity")
+					require.Zero(t, result.GetNulls().GetBitmap().CapWords(), "proved non-NULL result must not reserve validity")
 					require.False(t, result.HasNull())
 					for i, row := range physical {
 						value := values[row]
@@ -368,8 +368,7 @@ func TestComparisonNonNullPreparationRuntimeDomain(t *testing.T) {
 					result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 					require.NoError(t, err)
 					require.True(t, result.IsNull(1))
-					capacity := result.GetNulls().GetBitmap().ExternalStorageCapacity()
-					require.Positive(t, capacity)
+					require.Positive(t, result.GetNulls().GetBitmap().CapWords())
 					if shape == "dictionary" {
 						input.Vecs[0].GetNulls().Del(1)
 					} else {
@@ -378,7 +377,6 @@ func TestComparisonNonNullPreparationRuntimeDomain(t *testing.T) {
 					result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 					require.NoError(t, err)
 					require.False(t, result.HasNull())
-					require.Equal(t, capacity, result.GetNulls().GetBitmap().ExternalStorageCapacity())
 					// A full mask still uses the conservative ordinary preparation; a
 					// partial mask must preserve masked rows as NULL.
 					mask := make([]bool, input.RowCount())
@@ -387,7 +385,7 @@ func TestComparisonNonNullPreparationRuntimeDomain(t *testing.T) {
 					}
 					result, err = executor.Eval(proc, []*batch.Batch{input}, mask)
 					require.NoError(t, err)
-					require.EqualValues(t, input.RowCount(), result.GetNulls().GetBitmap().Len())
+					require.False(t, result.HasNull())
 					mask[0] = false
 					result, err = executor.Eval(proc, []*batch.Batch{input}, mask)
 					require.NoError(t, err)
@@ -396,7 +394,6 @@ func TestComparisonNonNullPreparationRuntimeDomain(t *testing.T) {
 					result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 					require.NoError(t, err)
 					require.False(t, result.HasNull())
-					require.Equal(t, capacity, result.GetNulls().GetBitmap().ExternalStorageCapacity())
 					require.Equal(t, op != "between", root.booleanProducesNoNulls())
 				})
 			}

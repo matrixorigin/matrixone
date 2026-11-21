@@ -1573,7 +1573,6 @@ func TestFoldRemoteJSONVariablePreservesTypeAndBinding(t *testing.T) {
 			require.Equal(t, types.T_json, vec.GetType().Oid)
 			require.True(t, vec.IsConst())
 			require.Equal(t, 3, vec.Length())
-			require.Equal(t, types.StringSourceUserVariable, vec.GetStringSourceAt(0))
 			if tc.value == nil {
 				require.True(t, vec.IsConstNull())
 			} else {

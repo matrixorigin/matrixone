@@ -105,62 +105,69 @@ func TestScopedSubstringMembershipLifetime(t *testing.T) {
 func TestScopedSubstringDomainsAndOwnedOutput(t *testing.T) {
 	for _, oid := range []types.T{types.T_char, types.T_varchar} {
 		for _, arity := range []int{2, 3} {
-			t.Run(oid.String()+"/"+strconv.Itoa(arity), func(t *testing.T) {
-				proc, allocation, _ := dependentTestAllocation(t)
-				typ := types.New(oid, 64, 0)
-				input := batch.NewWithSize(1)
-				t.Cleanup(func() { input.Clean(proc.Mp()) })
-				input.Vecs[0] = vector.NewVec(typ)
-				suffix := strings.Repeat("x", 40)
-				for range 2 {
-					require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("a你好b"+suffix), false, proc.Mp()))
-				}
-				require.NoError(t, vector.AppendBytes(input.Vecs[0], nil, true, proc.Mp()))
-				require.NoError(t, input.Vecs[0].SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{types.RuntimeStringText, types.RuntimeStringBinary, types.RuntimeStringText}, proc.Mp()))
-				input.SetRowCount(3)
-				column := &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
-				integer := func(n int64) *plan.Expr {
-					return &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: n}}}}
-				}
-				args := []*plan.Expr{column, integer(2)}
-				if arity == 3 {
-					args = append(args, integer(1))
-				}
-				executor, err := NewExpressionExecutorWithAllocation(proc, bindTestFunction(t, proc, "substring", args...), allocation)
-				require.NoError(t, err)
-				t.Cleanup(executor.Free)
-				require.True(t, predicateBorrowsInputs(executor))
-				frame := &DictionaryInputFrame{}
-				t.Cleanup(func() { frame.Free(proc.Mp()) })
-				frame.Begin(input, allocation, proc.Mp())
-				selected, borrowed, err := frame.predicateBatch(proc, input, nil, executor, []int64{1, 0, 1, 2}, allocation)
-				require.NoError(t, err)
-				require.True(t, borrowed)
-				require.True(t, selected.HasDictionary())
-				frame.Begin(selected, allocation, proc.Mp())
-				frame.Bind([]ExpressionExecutor{executor})
-				out, err := executor.Eval(proc, []*batch.Batch{selected}, nil)
-				require.NoError(t, err)
-				require.Zero(t, frame.Gathers)
-				binary, text := []byte("你好b"+suffix), []byte("你好b"+suffix)
-				if arity == 3 {
-					binary, text = []byte{0xe4}, []byte("你")
-				}
-				check := func() {
-					t.Helper()
-					for row, want := range [][]byte{binary, text, binary} {
-						require.Equal(t, want, out.GetBytesAt(row))
-						require.Equal(t, row != 1, out.GetIsBinaryStringAt(row))
+			for _, binaryCharset := range []bool{false, true} {
+				t.Run(oid.String()+"/"+strconv.Itoa(arity)+"/binary="+strconv.FormatBool(binaryCharset), func(t *testing.T) {
+					proc, allocation, _ := dependentTestAllocation(t)
+					typ := types.New(oid, 64, 0)
+					if binaryCharset {
+						typ.Charset = types.CharsetBinary
 					}
-					require.True(t, out.IsNull(3))
-				}
-				check()
-				frame.End()
-				require.Nil(t, executor.(*FunctionExpressionExecutor).parameterResults[0])
-				input.Vecs[0].CleanOnlyData()
-				require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("new generation"), false, proc.Mp()))
-				check()
-			})
+					input := batch.NewWithSize(1)
+					t.Cleanup(func() { input.Clean(proc.Mp()) })
+					input.Vecs[0] = vector.NewVec(typ)
+					suffix := strings.Repeat("x", 40)
+					for range 2 {
+						require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("a你好b"+suffix), false, proc.Mp()))
+					}
+					require.NoError(t, vector.AppendBytes(input.Vecs[0], nil, true, proc.Mp()))
+					input.SetRowCount(3)
+					column := &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+					integer := func(n int64) *plan.Expr {
+						return &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: n}}}}
+					}
+					args := []*plan.Expr{column, integer(2)}
+					if arity == 3 {
+						args = append(args, integer(1))
+					}
+					executor, err := NewExpressionExecutorWithAllocation(proc, bindTestFunction(t, proc, "substring", args...), allocation)
+					require.NoError(t, err)
+					t.Cleanup(executor.Free)
+					require.True(t, predicateBorrowsInputs(executor))
+					frame := &DictionaryInputFrame{}
+					t.Cleanup(func() { frame.Free(proc.Mp()) })
+					frame.Begin(input, allocation, proc.Mp())
+					selected, borrowed, err := frame.predicateBatch(proc, input, nil, executor, []int64{1, 0, 1, 2}, allocation)
+					require.NoError(t, err)
+					require.True(t, borrowed)
+					require.True(t, selected.HasDictionary())
+					frame.Begin(selected, allocation, proc.Mp())
+					frame.Bind([]ExpressionExecutor{executor})
+					out, err := executor.Eval(proc, []*batch.Batch{selected}, nil)
+					require.NoError(t, err)
+					require.Zero(t, frame.Gathers)
+					// The static type alone selects byte vs character semantics.
+					want := []byte("你好b" + suffix)
+					if arity == 3 {
+						want = []byte("你")
+						if binaryCharset {
+							want = []byte{0xe4}
+						}
+					}
+					check := func() {
+						t.Helper()
+						for row := range 3 {
+							require.Equal(t, want, out.GetBytesAt(row))
+						}
+						require.True(t, out.IsNull(3))
+					}
+					check()
+					frame.End()
+					require.Nil(t, executor.(*FunctionExpressionExecutor).parameterResults[0])
+					input.Vecs[0].CleanOnlyData()
+					require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("new generation"), false, proc.Mp()))
+					check()
+				})
+			}
 		}
 	}
 }
@@ -207,7 +214,9 @@ func TestScopedSubstringUnprovedShapeKeepsBank(t *testing.T) {
 	}
 }
 
-func TestScopedSubstringMetadataCapacityFallback(t *testing.T) {
+// NULL bitmaps are Go-owned and not charged to the account, so scoped NULL
+// metadata binds without falling back to an owned gather.
+func TestScopedSubstringNullMetadataBindsScope(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	t.Cleanup(proc.Free)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
@@ -219,7 +228,7 @@ func TestScopedSubstringMetadataCapacityFallback(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
 	require.NoError(t, err)
 	typ := types.New(types.T_char, 15, 0)
 	input := batch.NewWithSize(1)
@@ -239,19 +248,10 @@ func TestScopedSubstringMetadataCapacityFallback(t *testing.T) {
 	frame := &DictionaryInputFrame{}
 	t.Cleanup(func() { frame.Free(proc.Mp()) })
 	frame.Begin(input, allocation, proc.Mp())
-	stale, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, allocation)
-	require.NoError(t, err)
-	frame.predicateVectors = []*vector.Vector{stale}
-	require.NoError(t, stale.PreExtend(4, proc.Mp()))
-	require.EqualValues(t, 112, account.Snapshot().Used)
-	// Scoped NULL metadata cannot fit until the optional old bank yields.
 	selected, borrowed, err := frame.predicateBatch(proc, input, nil, executor, []int64{1}, allocation)
 	require.NoError(t, err)
-	require.False(t, borrowed)
-	t.Cleanup(func() { selected.Clean(proc.Mp()) })
-	require.False(t, selected.HasDictionary())
+	require.True(t, borrowed, "the frame owns the scoped batch")
 	require.True(t, selected.Vecs[0].IsNull(0))
-	require.Nil(t, frame.predicateVectors[0])
 	out, err := executor.Eval(proc, []*batch.Batch{selected}, nil)
 	require.NoError(t, err)
 	require.True(t, out.IsNull(0))

@@ -1521,7 +1521,7 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 			}
 		}
 	}
-	return setContributingStringResultDomain(parameters, result, proc)
+	return nil
 }
 
 func builtInIntervalCheck(_ []overload, inputs []types.Type) checkResult {
@@ -2395,7 +2395,7 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(parameters[0], result, proc)
+	return nil
 }
 
 func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2420,7 +2420,7 @@ func builtInPad(
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	maxResultLen := maxStringFunctionResultLength(result)
 	maxTextCharacterWidth := maxPadTextCharacterWidth(parameters[0].GetType())
-	uniformBinary, perRow := stringDomainMode(parameters[0])
+	uniformBinary := isBinaryStringVector(parameters[0])
 
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
@@ -2439,7 +2439,7 @@ func builtInPad(
 			continue
 		}
 
-		binary := binaryStringAt(parameters[0], int(row), uniformBinary, perRow)
+		binary := uniformBinary
 		resultBytes, shouldNull := 0, false
 		if binary {
 			resultBytes, shouldNull = padBinaryResultByteLength(source, target, pad, maxResultLen)
@@ -2464,7 +2464,7 @@ func builtInPad(
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(parameters[0], result, proc)
+	return nil
 }
 
 func padBinaryResultByteLength(source []byte, target int64, pad []byte, maxBytes int64) (int, bool) {
@@ -3642,7 +3642,7 @@ func (op *opSerial) builtInSerial(parameters []*vector.Vector, result vector.Fun
 			rs.SetNullResult(uint64(length))
 			return nil
 		}
-		bitMap.Merge(v.GetNulls())
+		bitMap.Or(v.GetNulls())
 	}
 
 	if len(op.funcs) == 0 {
@@ -3997,7 +3997,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeBool(b)
@@ -4015,7 +4015,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 				if isFull {
 					ps[i].EncodeNull()
 				} else {
-					nulls.Add(bitMap, uint64(i))
+					bitMap.Add(uint64(i))
 				}
 			} else {
 				ps[i].EncodeUint64(b)
@@ -4029,7 +4029,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeInt8(b)
@@ -4048,7 +4048,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeInt16(b)
@@ -4067,7 +4067,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeInt32(b)
@@ -4086,7 +4086,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeInt64(b)
@@ -4105,7 +4105,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeUint8(b)
@@ -4124,7 +4124,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeUint16(b)
@@ -4143,7 +4143,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeUint32(b)
@@ -4162,7 +4162,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeUint64(b)
@@ -4181,7 +4181,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeFloat32(b)
@@ -4200,7 +4200,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeFloat64(b)
@@ -4219,7 +4219,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeDate(b)
@@ -4238,7 +4238,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeTime(b)
@@ -4257,7 +4257,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeDatetime(b)
@@ -4276,7 +4276,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeTimestamp(b)
@@ -4291,11 +4291,11 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		s := vector.MustFixedColWithTypeCheck[types.Enum](v)
 		if hasNull {
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.GetNulls().Contains(uint64(i)) {
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeEnum(b)
@@ -4310,11 +4310,11 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		s := vector.MustFixedColWithTypeCheck[types.MoYear](v)
 		if hasNull {
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.GetNulls().Contains(uint64(i)) {
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeMoYear(b)
@@ -4333,7 +4333,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeDecimal64(b)
@@ -4352,7 +4352,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeDecimal128(b)
@@ -4371,7 +4371,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeDecimal256(b)
@@ -4390,7 +4390,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						bitMap.Add(uint64(i))
 					}
 				} else {
 					ps[i].EncodeUuid(b)
@@ -4415,7 +4415,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, i)
+						bitMap.Add(i)
 					}
 					continue
 				}
@@ -5419,9 +5419,9 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
 	}
 	input := parameters[0]
-	binary, perRow := stringDomainMode(input)
+	binary := isBinaryStringVector(input)
 	if input.IsConst() || result.GetResultVector().IsConst() || input.HasNull() ||
-		binary || perRow || !selectList.ShouldEvalAllRow() || selectList.IgnoreAllRow() {
+		binary || !selectList.ShouldEvalAllRow() || selectList.IgnoreAllRow() {
 		return opUnaryBytesToBytesByStringDomain(
 			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
 	}
@@ -5478,7 +5478,7 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(input, result, proc)
+	return nil
 }
 
 // buildInMOCU extract cu or calculate cu from parameters

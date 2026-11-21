@@ -222,10 +222,6 @@ func normalizeQueryResultBatchForWrite(
 			return nil, nil, err
 		}
 		cloned = append(cloned, dup)
-		// Prepared-parameter provenance is execution-only and is not part of the
-		// stable vector encoding. Drop it before extending the persisted logical
-		// length so a heterogeneous sidecar cannot grow with the result batch.
-		dup.SetPrepareParamKinds(nil)
 		if vec.IsConst() {
 			dup.SetLength(rowCount)
 		} else {
@@ -734,6 +730,9 @@ func getTablesFromPlan(p *plan.Plan) string {
 	cnt := 0
 	if q, ok := p.Plan.(*plan.Plan_Query); ok {
 		for _, n := range q.Query.Nodes {
+			if n == nil || n.GetTableDef().GetName() == "" {
+				continue
+			}
 			if n.NodeType == plan.Node_EXTERNAL_SCAN || n.NodeType == plan.Node_TABLE_SCAN {
 				if cnt > 0 {
 					buf.WriteString(", ")

@@ -98,6 +98,19 @@ func (v *Vector) DictionaryRetainedBytes() int64 {
 	return v.dictionaryState().AccountedBytes()
 }
 
+// DictionaryBaseRetainedBytes reports the backing that a new selection would
+// retain. The existing selection's indices are replaced when composing a view.
+func (v *Vector) DictionaryBaseRetainedBytes() int64 {
+	if !v.IsDictionary() {
+		return 0
+	}
+	backing := v.dictionaryState()
+	if backing.refs.Load() < 0 {
+		return 0 // scoped views do not own a retained base
+	}
+	return backing.base.RetainedBytes()
+}
+
 func (v *Vector) requirePhysical() {
 	if v.class == DICTIONARY {
 		panic(errDictionaryPhysicalAccess)
@@ -308,15 +321,6 @@ func composeDictionaryRows(source *RowSelection, logical []int64, mp *mpool.MPoo
 }
 
 func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) error {
-	if err := dst.preflightStringSourceAppend(len(rows), summarizeStringSourceSelection(source, rows), mp); err != nil {
-		return err
-	}
-	if err := dst.preflightPrepareParamKindAppend(len(rows), summarizePrepareParamKindSelection(source, rows), mp); err != nil {
-		return err
-	}
-	if err := dst.preflightBinaryStringAppend(len(rows), summarizeBinaryStringSelection(source, rows), mp); err != nil {
-		return err
-	}
 	if source.HasNull() {
 		if err := dst.ensureNullCapacity(len(rows), mp); err != nil {
 			return err
@@ -327,9 +331,9 @@ func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) 
 			return err
 		}
 	}
-	dst.setLengthAfterExtendWithSource(len(rows), source.stringSource, false)
+	dst.setLengthAfterExtend(len(rows))
 	if source.IsConstNull() {
-		nulls.AddRange(&dst.nsp, 0, uint64(len(rows)))
+		dst.nsp.AddRange(0, uint64(len(rows)))
 	} else if !source.IsConst() && source.HasNull() {
 		for i, row := range rows {
 			if source.nsp.Contains(uint64(row)) {
@@ -343,12 +347,6 @@ func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) 
 				dst.gsp.Add(uint64(i))
 			}
 		}
-	}
-	if err := propagatePrepareParamKindsSelection(dst, source, 0, rows, mp); err != nil {
-		return err
-	}
-	if err := propagateBinaryStringSelection(dst, source, 0, rows, mp); err != nil {
-		return err
 	}
 	source.CopyExpressionMetadataTo(dst)
 	return nil
@@ -510,14 +508,6 @@ func (v *Vector) materializeDictionaryWithBuilder(mp *mpool.MPool, account *Allo
 	flat.length, flat.sorted = v.length, v.sorted
 	// Row metadata is already in logical coordinates. Copy it once; payload
 	// gathering below must not invoke append helpers that rewrite provenance.
-	if err := v.CopyPrepareParamMetadataToWithMP(flat, mp); err != nil {
-		flat.Free(mp)
-		return nil, err
-	}
-	if err := v.copyBinaryStringTo(flat, mp); err != nil {
-		flat.Free(mp)
-		return nil, err
-	}
 	if err := v.copyWindowBitmapsOwned(flat, 0, v.length, mp); err != nil {
 		flat.Free(mp)
 		return nil, err

@@ -24,7 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -232,7 +232,7 @@ func (pw *ParquetWriter) writeBatchChunk(bat *batch.Batch, start, end int, maxBu
 				var raw []byte
 				switch v := val.(type) {
 				case string:
-					raw = util2.UnsafeStringToBytes(v)
+					raw = commonutil.UnsafeStringToBytes(v)
 				case []byte:
 					raw = v
 				}

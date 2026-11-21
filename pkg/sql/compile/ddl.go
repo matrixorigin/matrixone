@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -3912,7 +3913,7 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 			pred := func(fkDef *plan.ForeignKeyDef) bool {
 				return fkDef.Name == dropName
 			}
-			def.Fkeys = plan2.RemoveIf[*plan.ForeignKeyDef](def.Fkeys, pred)
+			def.Fkeys = slices.DeleteFunc(def.Fkeys, pred)
 			oldCt.Cts[i] = def
 		case *engine.IndexDef:
 			pred := func(index *plan.IndexDef) bool {
@@ -3924,7 +3925,7 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 				}
 				return index.IndexName == dropName
 			}
-			def.Indexes = plan2.RemoveIf[*plan.IndexDef](def.Indexes, pred)
+			def.Indexes = slices.DeleteFunc(def.Indexes, pred)
 			oldCt.Cts[i] = def
 		}
 	}
@@ -3969,14 +3970,14 @@ func MakeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 			_, ok = ct.(*engine.ForeignKeyDef)
 			return ok
 		}
-		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
+		oldCt.Cts = slices.DeleteFunc(oldCt.Cts, pred)
 		oldCt.Cts = append(oldCt.Cts, c)
 	case *engine.RefChildTableDef:
 		pred = func(ct engine.Constraint) bool {
 			_, ok = ct.(*engine.RefChildTableDef)
 			return ok
 		}
-		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
+		oldCt.Cts = slices.DeleteFunc(oldCt.Cts, pred)
 		oldCt.Cts = append(oldCt.Cts, c)
 	case *engine.IndexDef:
 		ok := false
@@ -4054,7 +4055,7 @@ func setRefChildTableIDs(constraintDef *engine.ConstraintDef, tableIDs []uint64)
 		seen[tableID] = struct{}{}
 		canonical = append(canonical, tableID)
 	}
-	constraintDef.Cts = plan2.RemoveIf(
+	constraintDef.Cts = slices.DeleteFunc(
 		constraintDef.Cts,
 		func(constraint engine.Constraint) bool {
 			_, ok := constraint.(*engine.RefChildTableDef)
@@ -4085,7 +4086,7 @@ func addRefChildTableIDs(constraintDef *engine.ConstraintDef, added []uint64) {
 
 func removeRefChildTableID(constraintDef *engine.ConstraintDef, removed uint64) {
 	tableIDs := canonicalRefChildTableIDs(constraintDef)
-	tableIDs = plan2.RemoveIf(tableIDs, func(tableID uint64) bool {
+	tableIDs = slices.DeleteFunc(tableIDs, func(tableID uint64) bool {
 		return tableID == removed
 	})
 	setRefChildTableIDs(constraintDef, tableIDs)
