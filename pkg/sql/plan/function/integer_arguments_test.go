@@ -504,7 +504,7 @@ func TestIntegerArgumentTextWarningControls(t *testing.T) {
 				NewFunctionTestInput(tc.source.ToType(), tc.values, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
 			}, NewFunctionTestResult(types.T_int64.ToType(), tc.wantErr, tc.want, tc.nulls), NewIntegerArgumentCast).WithSelectList(tc.mask)
-			fc.parameters[0].SetIsBin(tc.binary)
+			fc.result.SetArgumentIsBin([]bool{tc.binary})
 			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 			require.Len(t, session.warnings, tc.warnings)

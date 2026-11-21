@@ -5010,7 +5010,7 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 				return err
 			}
 		} else if stringsInput != nil && len(value) == 0 {
-			if !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+			if !result.ArgumentIsBin(0) && isTemporalTextSource(ivecs[0].GetType().Oid) {
 				appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
 			}
 			if err = rs.AppendBytes(nil, true); err != nil {
@@ -5029,7 +5029,7 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 					d, err = types.ParseDatetime(text, 6)
 					if err != nil {
 						if isTemporalLexicalConversionError(err) {
-							if !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+							if !result.ArgumentIsBin(0) && isTemporalTextSource(ivecs[0].GetType().Oid) {
 								appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
 							}
 							if err = rs.AppendBytes(nil, true); err != nil {
@@ -7576,7 +7576,7 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-	uniformBinary := isBinaryStringVector(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
@@ -7697,7 +7697,7 @@ func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
-	uniformBinary := isBinaryStringVector(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
@@ -8714,8 +8714,8 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 	// INSTR's domain routing and MySQL's both-argument comparison resolution.
 	fold := likeFoldModeFor(ivecs[1].GetType().Charset)
 	listType := *ivecs[1].GetType()
-	needleBinary := isBinaryStringVector(ivecs[0])
-	listBinary := isBinaryStringVector(ivecs[1])
+	needleBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
+	listBinary := isBinaryStringVector(ivecs[1], result.ArgumentIsBin(1))
 	needles := vector.GenerateFunctionStrParameter(ivecs[0])
 	lists := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[Tr](result)
@@ -8825,7 +8825,7 @@ func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 	haystacks := vector.GenerateFunctionStrParameter(ivecs[0])
 	needles := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[int64](result)
-	uniformBinary := isBinaryStringVector(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 	caseInsensitive := types.IsCaseInsensitiveCollation(ivecs[0].GetType().Charset)
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
@@ -8852,7 +8852,7 @@ func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	uniformBinary := isBinaryStringVector(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
@@ -8907,7 +8907,7 @@ func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	uniformBinary := isBinaryStringVector(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
@@ -9633,9 +9633,8 @@ func makeTimeDecimal256IntegerGetter(vec *vector.Vector) func(uint64) (int64, bo
 	}
 }
 
-func makeTimeStringIntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) {
+func makeTimeStringIntegerGetter(vec *vector.Vector, isBinary bool) func(uint64) (int64, bool) {
 	param := vector.GenerateFunctionStrParameter(vec)
-	isBinary := vec.GetIsBin()
 	return func(i uint64) (int64, bool) {
 		value, null := param.GetStrValue(i)
 		if null {
@@ -9792,9 +9791,8 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 		uint32(totalMicroseconds % types.MicroSecsPerSec), false
 }
 
-func makeTimeStringSecondGetter(vec *vector.Vector) func(uint64) (int64, uint32, bool) {
+func makeTimeStringSecondGetter(vec *vector.Vector, isBinary bool) func(uint64) (int64, uint32, bool) {
 	param := vector.GenerateFunctionStrParameter(vec)
-	isBinary := vec.GetIsBin()
 	return func(i uint64) (int64, uint32, bool) {
 		value, null := param.GetStrValue(i)
 		if null {
@@ -9816,7 +9814,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	var getSecondValue func(uint64) (int64, uint32, bool)
 
 	if ivecs[0].GetType().Oid.IsMySQLString() {
-		getHourValue = makeTimeStringIntegerGetter(ivecs[0])
+		getHourValue = makeTimeStringIntegerGetter(ivecs[0], result.ArgumentIsBin(0))
 	} else if ivecs[0].GetType().Oid == types.T_decimal128 {
 		getHourValue = makeTimeDecimal128IntegerGetter(ivecs[0])
 	} else if ivecs[0].GetType().Oid == types.T_decimal256 {
@@ -9850,7 +9848,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 
 	if ivecs[1].GetType().Oid.IsMySQLString() {
-		getMinuteValue = makeTimeStringIntegerGetter(ivecs[1])
+		getMinuteValue = makeTimeStringIntegerGetter(ivecs[1], result.ArgumentIsBin(1))
 	} else if ivecs[1].GetType().Oid == types.T_decimal128 {
 		getMinuteValue = makeTimeDecimal128IntegerGetter(ivecs[1])
 	} else if ivecs[1].GetType().Oid == types.T_decimal256 {
@@ -9881,7 +9879,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 
 	if ivecs[2].GetType().Oid.IsMySQLString() {
-		getSecondValue = makeTimeStringSecondGetter(ivecs[2])
+		getSecondValue = makeTimeStringSecondGetter(ivecs[2], result.ArgumentIsBin(2))
 	} else if getter, ok := makeTimeIntegerGetter(ivecs[2]); ok {
 		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			value, null := getter(i)
@@ -10632,7 +10630,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
 	p4 := vector.GenerateFunctionStrParameter(ivecs[3])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	uniformBinary := isBinaryStringVector(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err = rs.AppendBytes(nil, true); err != nil {

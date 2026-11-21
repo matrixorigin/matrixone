@@ -939,6 +939,24 @@ func TestGetExprValue(t *testing.T) {
 			cvey.So(ses.txnCompileCtx.execCtx, cvey.ShouldEqual, ec)
 		}
 
+		// A SET value read back from the synthetic SELECT's result is a
+		// column of that result and never a binary literal, even when the
+		// expression is a bare hex/bit literal or a binary user variable.
+		ec.proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+		cvey.So(setUserDefinedVarWithIsBin(ses, "bin_src", []byte("A"), "set @bin_src = 0x41", true), cvey.ShouldBeNil)
+		for _, sql := range []string{
+			"set @x=0x41", "set @x=X'41'", "set @x=b'01000001'", "set @x=(0x41)",
+			"set @x=concat(0x41)", "set @x=(select 0x41)", "set @x=@bin_src",
+		} {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+			cvey.So(err, cvey.ShouldBeNil)
+			isBin := true
+			value, err := getExprValue(stmt.(*tree.SetVar).Assignments[0].Value, ses, ec, &isBin)
+			cvey.So(err, cvey.ShouldBeNil)
+			cvey.So(value, cvey.ShouldNotBeNil)
+			cvey.So(isBin, cvey.ShouldBeFalse)
+		}
+
 		// The next statement in the same packet must still be able to plan
 		// through the session compiler context after SET evaluation.
 		nextStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select 1", 1)

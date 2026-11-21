@@ -322,7 +322,8 @@ func (t *dependentExpressionTask) Step(ctx context.Context) (vm.ContinuationStep
 		switch instruction.fid {
 		case function.IFF:
 			if t.next == 0 {
-				truth, err := function.IffConditionTruthyAt(value, 0, function.CompatibilityModeFromProcess(f.proc))
+				isBin := isBinaryLiteralResult(f.cells[arg].executor, value)
+				truth, err := function.IffConditionTruthyAt(value, 0, isBin, function.CompatibilityModeFromProcess(f.proc))
 				if err != nil {
 					return vm.ContinuationStep{}, err
 				}

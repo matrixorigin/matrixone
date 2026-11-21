@@ -340,7 +340,10 @@ func getExprValueWithPrepareMeta(
 	}
 
 	if len(isBin) > 0 {
-		*isBin[0] = resultVec.GetIsBin()
+		// The value reaches SET as a column of the synthetic SELECT's copied
+		// result, and a column is never a binary literal. (Result batches are
+		// copied into the session, so this path has never reported one.)
+		*isBin[0] = false
 	}
 	if runtimeDomain != nil {
 		*runtimeDomain = types.RuntimeStringInherit
@@ -641,7 +644,9 @@ func getPreparedPlanExprValueWithMeta(
 		return nil, plan.Type{}, err
 	}
 	if isBin != nil {
-		*isBin = result.GetIsBin()
+		if *isBin, err = colexec.ExprIsBinLiteral(execCtx.proc, expr); err != nil {
+			return nil, plan.Type{}, err
+		}
 	}
 	if runtimeDomain != nil {
 		*runtimeDomain = types.RuntimeStringInherit

@@ -131,11 +131,6 @@ func (bat *Batch) CompactInto(dst *Batch, mp *mpool.MPool) error {
 			}
 		}
 	}
-	for i, vec := range bat.Vecs {
-		if vec != nil {
-			vec.CopyExpressionMetadataTo(dst.Vecs[i])
-		}
-	}
 	dst.Attrs = append(dst.Attrs[:0], bat.Attrs...)
 	dst.Recursive, dst.ShuffleIDX = bat.Recursive, bat.ShuffleIDX
 	dst.SetRowCount(bat.rowCount)
