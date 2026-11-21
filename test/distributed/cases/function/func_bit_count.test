@@ -312,6 +312,13 @@ SELECT x, BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_co
 # Merged projection forwards the CAST; LIMIT makes the projected value a field.
 SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1) s;
 SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1 LIMIT 1) s;
+# A merged selector keeps the conversion of the selected arm in projections and filters.
+SELECT id, BIT_COUNT(x) AS bits FROM (SELECT id, IF(id = 1, d, CAST(d AS DOUBLE)) AS x FROM t_bit_count_float WHERE id IN (1,5,6)) s ORDER BY id;
+SELECT id, BIT_COUNT(x) AS bits FROM (SELECT id, CASE WHEN id = 1 THEN d ELSE CAST(d AS DOUBLE) END AS x FROM t_bit_count_float WHERE id IN (1,5,6) LIMIT 3) s ORDER BY id;
+SELECT id FROM (SELECT id, IF(id = 1, d, CAST(d AS DOUBLE)) AS x FROM t_bit_count_float WHERE id IN (1,5,6)) s WHERE BIT_COUNT(x) = 2 ORDER BY id;
+# A shared projection is retained, and WHERE and SELECT use the same field conversion.
+SELECT id, x, BIT_COUNT(x) AS bits FROM (SELECT id, IF(id = 1, d, CAST(d AS DOUBLE)) AS x FROM t_bit_count_float WHERE id IN (1,5,6)) s WHERE BIT_COUNT(x) = 1 ORDER BY id;
+SELECT id, id IN (SELECT 1 WHERE CONCAT('a','b','c','d',CAST(o.id AS CHAR)) = 'abcd1') AS matched FROM t_bit_count_float o WHERE id IN (1,6) ORDER BY id;
 # A row-dependent SELECT-list subquery materializes the derived table, so the
 # outer BIT_COUNT consumes a floating field. Uncorrelated subqueries and WHERE
 # subqueries do not make this projection boundary materialized.

@@ -4475,6 +4475,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		rootID = builder.rewriteEffectlessAggToProject(rootID)
 		var points compositePointCapture
+		builder.deferredBitCountFilter = false
 		rootID, points, err = builder.optimizeFilters(rootID, &pointBudget)
 		if err != nil {
 			return nil, err
@@ -4500,6 +4501,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+		if builder.deferredBitCountFilter {
+			// A removed projection can expose a scan-local predicate. Retry
+			// before costing joins so it can reduce their input cardinality.
+			rootID, _ = builder.pushdownFilters(rootID, nil, false)
+		}
 		builder.removeUnobservedCountSorts(rootID)
 		if err = builder.distributeTextDomainInQuery(); err != nil {
 			return nil, err

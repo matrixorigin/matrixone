@@ -272,9 +272,11 @@ func speculativeConstantFoldSafety(expr *plan.Expr, budget *speculativeConstantF
 			}
 		}
 		var stackBounds [4]speculativeFoldStringBound
-		argBounds := stackBounds[:len(f.Args)]
-		if len(f.Args) > len(stackBounds) {
+		argBounds := stackBounds[:]
+		if len(f.Args) > len(argBounds) {
 			argBounds = make([]speculativeFoldStringBound, len(f.Args))
+		} else {
+			argBounds = argBounds[:len(f.Args)]
 		}
 		for i, arg := range f.Args {
 			bytes, hasBytes, safe := speculativeConstantFoldSafety(arg, budget)
