@@ -323,8 +323,8 @@ func TestAccountedFixedCrossDomainConstBroadcastUsesPhysicalMetadata(t *testing.
 	})
 	require.NoError(t, err)
 	require.Equal(t, 65, result.Length())
-	require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(0))
-	require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(64))
+	require.Equal(t, "selected", result.GetStringAt(0))
+	require.Equal(t, "selected", result.GetStringAt(64))
 	require.Equal(t, used, account.Snapshot().Used)
 
 	executor.Free()

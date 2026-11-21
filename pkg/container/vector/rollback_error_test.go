@@ -26,7 +26,7 @@ import (
 )
 
 func TestRollbackAppendRejectsBeforeMutation(t *testing.T) {
-	for _, name := range []string{"length", "area", "negative", "overflow", "binary"} {
+	for _, name := range []string{"length", "area", "negative", "overflow"} {
 		t.Run(name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			v := NewVec(types.T_varchar.ToType())
@@ -44,8 +44,6 @@ func TestRollbackAppendRejectsBeforeMutation(t *testing.T) {
 				attempted = -1
 			case "overflow":
 				attempted = math.MaxInt
-			case "binary":
-				cp.hadBinaryStringRows = true
 			}
 			err := v.RollbackAppend(cp, attempted)
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)

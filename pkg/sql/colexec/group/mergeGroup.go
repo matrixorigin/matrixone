@@ -578,16 +578,6 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 		if err := ctr.spillAggList[i].UnmarshalFromReader(reader, ctr.mp); err != nil {
 			return err
 		}
-		if vec := aggResultVectorForChunk(ctr.spillAggList[i], 0); vec != nil &&
-			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
-			return moerr.NewInvalidStateNoCtx(
-				"aggregate binary-string metadata requires MORPCVersion18")
-		}
-		if vec := aggResultVectorForChunk(ctr.spillAggList[i], 0); vec != nil &&
-			vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
-			return moerr.NewInvalidStateNoCtx(
-				"aggregate explicit-text metadata requires MORPCVersion23")
-		}
 		if err := validateDecodedAggregateGroupCount(
 			ctr.spillAggList[i], bat.RowCount()); err != nil {
 			return err

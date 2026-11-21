@@ -1526,9 +1526,6 @@ func TestPreparedSourceBindingStringConsumers(t *testing.T) {
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
 			proc.SetPrepareParams(params)
-			if tc.typ == types.T_varbinary {
-				proc.SetPrepareParamsWithMetadata(params, nil, []bool{true})
-			}
 			q := p.GetQuery()
 			result, free, err := colexec.GetReadonlyResultFromExpression(proc, q.Nodes[q.Steps[0]].ProjectList[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
 			if free != nil {
@@ -1702,7 +1699,7 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 	}
 }
 
-func TestPreparedBinarySourceKeepsRuntimeTextWidth(t *testing.T) {
+func TestPreparedBinarySourceKeepsDeclaredWidth(t *testing.T) {
 	for _, sql := range []string{"select left(?,1)", "select left(v,1) from (select ? v) s"} {
 		t.Run(sql, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -1710,7 +1707,7 @@ func TestPreparedBinarySourceKeepsRuntimeTextWidth(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: sourceType}}, []any{ParamValue{Value: "你好", SourceType: sourceType, HasSourceType: true, RuntimeStringDomain: types.RuntimeStringText}})
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: sourceType}}, []any{ParamValue{Value: "你好", SourceType: sourceType, HasSourceType: true}})
 			require.NoError(t, err)
 			expr := findPlanFunctionExpr(bound.Plan, "left")
 			require.NotNil(t, expr)
@@ -1719,7 +1716,6 @@ func TestPreparedBinarySourceKeepsRuntimeTextWidth(t *testing.T) {
 			params := vector.NewVec(types.T_text.ToType())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			require.NoError(t, vector.AppendBytes(params, []byte("你好"), false, proc.Mp()))
-			require.NoError(t, params.SetRuntimeStringDomainWithMP(types.RuntimeStringText, proc.Mp()))
 			proc.SetPrepareParams(params)
 			for _, value := range []string{"你好", "世界", "你好"} {
 				func() {
@@ -1729,7 +1725,8 @@ func TestPreparedBinarySourceKeepsRuntimeTextWidth(t *testing.T) {
 						defer free()
 					}
 					require.NoError(t, err)
-					require.Equal(t, string([]rune(value)[:1]), result.GetStringAt(0))
+					// The static VARBINARY type owns the row semantics: LEFT slices bytes.
+					require.Equal(t, value[:1], result.GetStringAt(0))
 				}()
 			}
 		})

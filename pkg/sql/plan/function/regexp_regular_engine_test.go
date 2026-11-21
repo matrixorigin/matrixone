@@ -37,15 +37,16 @@ func TestRegexpRegularSubjectAdmission(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				proc := testutil.NewProcess(t)
+				subjectType := types.T_varchar.ToType()
+				if binary {
+					subjectType = types.T_varbinary.ToType()
+				}
 				fc := NewFunctionTestCase(proc, []FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{"a\n" + strings.Repeat("y", size) + "\r"}, nil),
+					NewFunctionTestInput(subjectType, []string{"a\n" + strings.Repeat("y", size) + "\r"}, nil),
 					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`^a\s`}, nil),
 					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"m"}, nil),
 				}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil), newOpBuiltInRegexp().builtInRegexpLike)
 				defer fc.Free()
-				if binary {
-					require.NoError(t, fc.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
-				}
 				ok, info := fc.Run()
 				require.True(t, ok, info)
 			})
@@ -75,15 +76,16 @@ func BenchmarkRegexpPredicateModes(b *testing.B) {
 					subjects[i] = tc.subject
 					want[i] = true
 				}
-				inputs := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), subjects, nil), NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`^alpha`}, nil)}
+				subjectType := types.T_varchar.ToType()
+				if tc.binary {
+					subjectType = types.T_varbinary.ToType()
+				}
+				inputs := []FunctionTestInput{NewFunctionTestInput(subjectType, subjects, nil), NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`^alpha`}, nil)}
 				if mode != "" {
 					inputs = append(inputs, NewFunctionTestConstInput(types.T_varchar.ToType(), []string{mode}, nil))
 				}
 				fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_bool.ToType(), false, want, nil), newOpBuiltInRegexp().builtInRegexpLike)
 				defer fc.Free()
-				if tc.binary {
-					require.NoError(b, fc.parameters[0].SetRuntimeStringDomainWithMP(types.RuntimeStringBinary, proc.Mp()))
-				}
 				fc.Benchmark(b)
 			})
 		}

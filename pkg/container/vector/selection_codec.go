@@ -173,36 +173,6 @@ func (v *Vector) marshalSelectedRowsTo(
 			}
 		}
 	}
-	var firstDomain types.RuntimeStringDomain
-	binarySeen := false
-	binaryMixed := false
-	if v.HasBinaryStringMetadata() {
-		// Dynamic binary provenance is uncommon. Keep its extra scan entirely
-		// off the ordinary spill path instead of adding work to every row in the
-		// mandatory NULL/grouping/parameter-kind pass above.
-		for i := 0; i < count; i++ {
-			row := rowAt(i)
-			if v.IsNull(uint64(row)) {
-				continue
-			}
-			domain := v.GetRuntimeStringDomainAt(row)
-			if !binarySeen {
-				firstDomain, binarySeen = domain, true
-			} else if domain != firstDomain {
-				binaryMixed = true
-			}
-		}
-	}
-	binaryMode := selectedRowsBinaryNone
-	if binarySeen && firstDomain == types.RuntimeStringBinary {
-		binaryMode = selectedRowsBinaryUniform
-	} else if binarySeen && firstDomain == types.RuntimeStringText {
-		binaryMode = selectedRowsBinaryText
-	}
-	if binaryMixed {
-		binaryMode = selectedRowsBinaryRows
-	}
-	metadata |= binaryMode << selectedRowsBinaryShift
 	if err := writeSelectedRowsByte(w, metadata, &encoded); err != nil {
 		return err
 	}
@@ -216,8 +186,7 @@ func (v *Vector) marshalSelectedRowsTo(
 		}
 	}
 
-	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsHasGrouping) != 0 ||
-		binaryMode == selectedRowsBinaryRows
+	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsHasGrouping) != 0
 	if !v.IsConst() && isVarlen && !withRowFlags && rows != nil {
 		if fastWriter, ok := w.(selectedVarlenaRowsWriter); ok {
 			values := MustFixedColNoTypeCheck[types.Varlena](v)
@@ -271,14 +240,6 @@ func (v *Vector) marshalSelectedRowsTo(
 			}
 			if v.gsp.Contains(uint64(row)) {
 				rowFlags |= selectedRowsHasGrouping
-			}
-			if binaryMode == selectedRowsBinaryRows &&
-				v.GetRuntimeStringDomainAt(row) == types.RuntimeStringBinary {
-				rowFlags |= selectedRowsRowBinary
-			}
-			if binaryMode == selectedRowsBinaryRows &&
-				v.GetRuntimeStringDomainAt(row) == types.RuntimeStringText {
-				rowFlags |= selectedRowsRowText
 			}
 			if err := writeSelectedRowsByte(w, rowFlags, &encoded); err != nil {
 				return err
@@ -334,6 +295,7 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 		return err
 	}
 	kindMode := (metadata & selectedRowsKindMask) >> selectedRowsKindShift
+	// The binary-string field (bits 4-5) is retired; writers no longer set it.
 	binaryMode := (metadata & selectedRowsBinaryMask) >> selectedRowsBinaryShift
 	sourceMode := (metadata & selectedRowsSourceMask) >> selectedRowsSourceShift
 	if kindMode > selectedRowsKindRows || binaryMode > selectedRowsBinaryText ||
@@ -396,14 +358,9 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 			return err
 		}
 	}
-	if binaryMode == selectedRowsBinaryRows || binaryMode == selectedRowsBinaryText {
-		if err := v.ensureBinaryStringCapacity(count, mp); err != nil {
-			return err
-		}
-		v.binaryStringRows.InitWithSize(int64(count))
-		v.textStringRows.InitWithSize(int64(count))
-	}
 	v.SetLength(count)
+	// Per-row binary/text flags come only from older writers; they are
+	// validated and dropped.
 	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsHasGrouping) != 0 ||
 		binaryMode == selectedRowsBinaryRows
 	if !isVarlen && !withRowFlags {
@@ -444,12 +401,6 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 				v.SetNull(uint64(row))
 				continue
 			}
-			if rowFlags&selectedRowsRowBinary != 0 {
-				v.binaryStringRows.Add(uint64(row))
-			}
-			if rowFlags&selectedRowsRowText != 0 {
-				v.textStringRows.Add(uint64(row))
-			}
 			valueSize := fixedWidth
 			if isVarlen {
 				if _, err = io.ReadFull(r, encoded[:]); err != nil {
@@ -486,18 +437,6 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 				return moerr.NewInvalidInputNoCtx("invalid selected vector string source")
 			}
 		}
-	}
-	switch binaryMode {
-	case selectedRowsBinaryUniform:
-		v.setBinaryStringScalar(true)
-	case selectedRowsBinaryText:
-		if err := v.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp); err != nil {
-			return err
-		}
-	case selectedRowsBinaryRows:
-		v.binaryString = true
-		v.binaryStringRowsActive = true
-		v.normalizeBinaryStringRows()
 	}
 	return nil
 }

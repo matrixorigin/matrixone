@@ -89,7 +89,6 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 					}
 				}
 				payload.GetGrouping().Add(2)
-				payload.SetIsBinaryString(true)
 				build := makeInt32Batch(tc.proc, buildValues)
 				inputs = append(inputs, build)
 				probe.Vecs[0].GetNulls().Add(0)
@@ -134,7 +133,6 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 								expected = "7"
 							}
 							require.Equal(t, expected, string(output.GetBytesAt(row)))
-							require.True(t, output.GetIsBinaryStringAt(row))
 						}
 						next++
 					}
