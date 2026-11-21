@@ -3197,6 +3197,25 @@ func TestZeroLimitScalarSourceRejectsVisibleCTE(t *testing.T) {
 	}
 }
 
+func TestZeroLimitScalarControlCheckVisitsSiblings(t *testing.T) {
+	for _, tc := range []struct {
+		expr string
+		want bool
+	}{
+		{"abs(mo_ctl('CN', 'PING', '')) + abs(1)", true},
+		{"abs(1) + abs(mo_ctl('CN', 'PING', ''))", true},
+		{"abs(fault_inject('x', 'y')) + abs(1)", true},
+		{"abs(1) + abs(2)", false},
+	} {
+		t.Run(tc.expr, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select "+tc.expr+" limit 0", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, tc.want, zeroLimitScalarHasControlFunction(stmt.(*tree.Select)))
+		})
+	}
+}
+
 func TestZeroLimitScalarSourceSafety(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

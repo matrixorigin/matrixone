@@ -1275,8 +1275,13 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 			if err := b.builder.validateZeroScalarSpecialSources(sources); err != nil {
 				return nil, err
 			}
-		} else if err := b.builder.retainZeroScalarAuthorizationSources(sources); err != nil {
-			return nil, err
+		} else {
+			if err := b.builder.retainZeroScalarAuthorizationSources(sources); err != nil {
+				return nil, err
+			}
+			if len(sources) != 0 {
+				b.builder.zeroScalarRetainedWrappers = append(b.builder.zeroScalarRetainedWrappers, nodeID)
+			}
 		}
 	}
 	subCtx.zeroScalarRootSourceSafe = zeroScalarSourceSafe && udfExpansionDepth == 0 &&
@@ -3865,10 +3870,7 @@ func (b *baseBinder) bindPreparedNumericPrecisionFuncExpr(
 // name on the stored-function/UDF path. With IGNORE_SPACE disabled, MySQL does
 // not recognize that spelling as a native built-in call.
 func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
-	zeroScalarRewriteGeneration := uint64(0)
-	if b.builder != nil {
-		zeroScalarRewriteGeneration = b.builder.zeroScalarRewriteGeneration
-	}
+	zeroScalarArgs := b.builder.beginZeroScalarArguments()
 	args := make([]*Expr, len(astArgs))
 	for i, arg := range astArgs {
 		expr, err := b.impl.BindExpr(arg, depth, false)
@@ -3889,7 +3891,7 @@ func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, d
 	if err != nil {
 		return nil, err
 	}
-	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarRewriteGeneration)
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarArgs)
 }
 
 // bindGroupingFuncExpr binds GROUPING arguments directly to their registered
@@ -4640,10 +4642,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.Expr, depth int32) (boundExpr *plan.Expr, bindErr error) {
-	zeroScalarRewriteGeneration := uint64(0)
-	if b.builder != nil {
-		zeroScalarRewriteGeneration = b.builder.zeroScalarRewriteGeneration
-	}
+	zeroScalarArgs := b.builder.beginZeroScalarArguments()
 	var requiredZeroScalarRoots map[int32]struct{}
 	builtinResult := false
 	defer func() {
@@ -5380,7 +5379,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 		return nil, err
 	}
 	requiredZeroScalarRoots = nil // The UDF binder owns argument retention.
-	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarRewriteGeneration)
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarArgs)
 }
 
 func (builder *QueryBuilder) validateZeroScalarSpecialSources(sources map[int32]struct{}) error {
@@ -5829,8 +5828,7 @@ func isUDFArgumentAuthorizationSource(node *plan.Node) bool {
 	case plan.Node_TABLE_SCAN:
 		return true
 	case plan.Node_EXTERNAL_SCAN:
-		return node.GetExternScan() != nil &&
-			node.GetExternScan().GetType() == int32(plan.ExternType_MONGODB_TB)
+		return IsExternalScanRequiringSelectPrivilege(node)
 	case plan.Node_FUNCTION_SCAN:
 		tableDef := node.GetTableDef()
 		return tableDef != nil && tableDef.GetTblFunc() != nil &&
@@ -6069,6 +6067,23 @@ func udfAuthorizationSourceHasRetainedCarrier(builder *QueryBuilder, source int3
 	return false
 }
 
+// A call can prove provenance only from the work performed while binding its
+// own arguments. A folded wrapper may no longer appear in their bound trees.
+type zeroScalarArgumentScope struct {
+	rewriteGeneration uint64
+	retainedWrappers  int
+}
+
+func (builder *QueryBuilder) beginZeroScalarArguments() zeroScalarArgumentScope {
+	if builder == nil {
+		return zeroScalarArgumentScope{}
+	}
+	return zeroScalarArgumentScope{
+		rewriteGeneration: builder.zeroScalarRewriteGeneration,
+		retainedWrappers:  len(builder.zeroScalarRetainedWrappers),
+	}
+}
+
 func bindFuncExprImplUdf(
 	b *baseBinder,
 	name string,
@@ -6076,7 +6091,7 @@ func bindFuncExprImplUdf(
 	astArgs []tree.Expr,
 	boundArgs []*plan.Expr,
 	depth int32,
-	zeroScalarRewriteGeneration uint64,
+	zeroScalarArgs zeroScalarArgumentScope,
 ) (*plan.Expr, error) {
 	if udf == nil {
 		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
@@ -6087,7 +6102,8 @@ func bindFuncExprImplUdf(
 		return nil, &UdfDisallowedInPublicationViewBinding{Name: name}
 	}
 	requiresUDFSourceValidation := b.builder != nil &&
-		(b.builder.zeroScalarRewriteGeneration != zeroScalarRewriteGeneration ||
+		(b.builder.zeroScalarRewriteGeneration != zeroScalarArgs.rewriteGeneration ||
+			len(b.builder.zeroScalarRetainedWrappers) != zeroScalarArgs.retainedWrappers ||
 			udfArgsContainCorrelatedRootZero(b.builder, boundArgs))
 	var requiredSources map[int32]struct{}
 	if requiresUDFSourceValidation {
@@ -6097,7 +6113,8 @@ func bindFuncExprImplUdf(
 		// Capture the original authorization dependencies before binding the
 		// SQL UDF body can mutate or discard the bound argument graph.
 		var err error
-		requiredSources, err = collectUDFArgumentAuthorizationSources(b.builder, boundArgs, nil)
+		retainedWrappers := b.builder.zeroScalarRetainedWrappers[zeroScalarArgs.retainedWrappers:]
+		requiredSources, err = collectUDFArgumentAuthorizationSources(b.builder, boundArgs, retainedWrappers)
 		if err != nil {
 			return nil, err
 		}

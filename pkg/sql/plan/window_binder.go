@@ -843,12 +843,20 @@ func (builder *QueryBuilder) retainZeroScalarAuthorizationSources(sources map[in
 			builder.appendValidationNotCacheableMarker()
 		}
 		carrier := validationPrivilegeCarrier(node)
-		if !builder.appendValidationCarrier(carrier) {
+		carrierAdded := builder.appendValidationCarrier(carrier)
+		if !carrierAdded && node.NodeType == plan.Node_TABLE_SCAN {
 			continue
 		}
-		if node.NodeType == plan.Node_TABLE_SCAN {
+		switch node.NodeType {
+		case plan.Node_TABLE_SCAN:
 			if err := builder.recordPreparedPluginDependencies(node); err != nil {
 				return err
+			}
+		case plan.Node_EXTERNAL_SCAN:
+			if carrier != nil && builder.isReusablePlan() {
+				builder.qry.CatalogDependencies = appendPrepareSchemas(
+					builder.qry.CatalogDependencies,
+					prepareSchemaRefWithSnapshot(node.ObjRef, node.TableDef, node.ScanSnapshot))
 			}
 		}
 	}

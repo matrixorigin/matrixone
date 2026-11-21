@@ -68,7 +68,7 @@ func init() {
 	testutil.SetupAutoIncrService("")
 }
 
-func TestCollectScalarSubqueriesCollate(t *testing.T) {
+func TestCollectOuterSubqueriesCollate(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		sql  string
@@ -87,7 +87,7 @@ func TestCollectScalarSubqueriesCollate(t *testing.T) {
 			defer stmts[0].Free()
 			expr := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
 			var subqueries []*tree.Subquery
-			collectScalarSubqueries(expr, &subqueries)
+			tree.CollectOuterSubqueries(expr, &subqueries)
 			got := make([]string, len(subqueries))
 			for i, subquery := range subqueries {
 				got[i] = tree.StringWithOpts(subquery, dialect.MYSQL, tree.WithSingleQuoteString())

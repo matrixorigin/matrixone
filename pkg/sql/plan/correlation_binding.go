@@ -51,6 +51,9 @@ func zeroLimitScalarHasControlFunction(statement tree.SelectStatement) bool {
 
 	found := false
 	walkGroupingSetOrderByExpr(&tree.Subquery{Select: statement}, func(expr tree.Expr) bool {
+		if found {
+			return false
+		}
 		fn, ok := expr.(*tree.FuncExpr)
 		if ok && fn.FuncName != nil {
 			name := strings.ToLower(fn.FuncName.Origin())
