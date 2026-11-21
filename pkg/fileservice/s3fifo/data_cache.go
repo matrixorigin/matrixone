@@ -148,7 +148,8 @@ func (d *DataCache) EvictToTargetWithWait(ctx context.Context, target int64) int
 }
 
 // EvictForPressure admits new batches only while the pressure walk is live.
-// Once admitted, a batch owns its removal callbacks through completion.
-func (d *DataCache) EvictForPressure(ctx context.Context, target int64) int64 {
+// It returns the remaining usage and whether any callbacks for removed entries
+// completed, so the caller can reclaim the allocator even after cancellation.
+func (d *DataCache) EvictForPressure(ctx context.Context, target int64) (used int64, removed bool) {
 	return d.c.evictTo(ctx, target, true)
 }

@@ -33,7 +33,7 @@ import (
 
 type memoryCacheBacking interface {
 	fscache.DataCache
-	EvictForPressure(context.Context, int64) int64
+	EvictForPressure(context.Context, int64) (used int64, removed bool)
 }
 
 type MemCache struct {
@@ -900,13 +900,14 @@ func (m *MemCache) evictForPressure(ctx context.Context, target int64, drainIdle
 	if m.closed.Load() || fscache.PressureEvictionCanceled(ctx) {
 		return m.cache.Used()
 	}
+	idleReleased := false
 	if drainIdle {
-		m.releaseIdleCacheDataBeforeCancel(ctx)
+		idleReleased = m.releaseIdleCacheDataBeforeCancel(ctx) > 0
 	}
-	used := m.cache.EvictForPressure(ctx, target)
-	// An admitted walk can finish releasing removed buffers across Close.
-	// The retiring cache or the next live walk owns any remaining purge.
-	if !m.closed.Load() && !fscache.PressureEvictionCanceled(ctx) {
+	used, removed := m.cache.EvictForPressure(ctx, target)
+	// Cancellation stops new work. Purging a live arena completes work
+	// already admitted, including idle buffers released before FIFO eviction.
+	if !m.closed.Load() && (removed || idleReleased || !fscache.PressureEvictionCanceled(ctx)) {
 		m.reclaimAllocator()
 	}
 	return used

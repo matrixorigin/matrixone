@@ -84,28 +84,38 @@ func resolvePressureCgroupV2(group string, mountinfo []byte, publishRoot func(st
 	if err != nil {
 		return ceiling, err
 	}
-	ceiling.readRoot = views[0].root
 	ceiling.bytes, err = pressureCgroupV2Hierarchy(filepath.Clean(group), views)
+	if err == nil || errors.Is(err, memlimit.ErrNoLimit) {
+		ceiling.readRoot = views[0].root
+	} else {
+		ceiling.incomplete = true
+	}
 	return ceiling, err
 }
 
 // Read each visible ancestor once successfully. Alternate mount views can
 // expose a masked descendant without hiding a stricter ancestor in the wider
-// view. An unreadable level makes the whole ceiling incomplete.
+// view. Each finite limit bounds the process independently. A read error
+// leaves that bound usable for pressure but rules out recovery.
 func pressureCgroupV2Hierarchy(group string, views []pressureCgroupView) (uint64, error) {
 	root := views[0].root
 	var minimum uint64
+	var firstErr error
 	for level := group; ; level = filepath.Dir(level) {
 		limit, err := pressureCgroupV2Level(level, root, views)
 		if err != nil {
-			return 0, err
-		}
-		if limit != 0 && (minimum == 0 || limit < minimum) {
+			if firstErr == nil {
+				firstErr = err
+			}
+		} else if limit != 0 && (minimum == 0 || limit < minimum) {
 			minimum = limit
 		}
 		if level == root {
 			break
 		}
+	}
+	if firstErr != nil {
+		return minimum, firstErr
 	}
 	if minimum == 0 {
 		return 0, memlimit.ErrNoLimit
@@ -139,11 +149,11 @@ func pressureCgroupV2Level(level, root string, views []pressureCgroupView) (uint
 }
 
 func readPressureCgroupV2Level(view pressureCgroupView, dir, level, root string, views []pressureCgroupView) (uint64, error) {
-	if err := view.stat(dir, "cgroup.controllers"); err != nil {
-		return 0, err
-	}
 	data, err := view.read(dir, "memory.max")
 	if errors.Is(err, os.ErrNotExist) {
+		if statErr := view.stat(dir, "cgroup.controllers"); statErr != nil {
+			return 0, statErr
+		}
 		var enabled bool
 		var readErr error
 		if level == root {

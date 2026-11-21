@@ -201,9 +201,6 @@ func (m *memThrottler) refreshMemoryWithPressure(
 		}
 		switch {
 		case pressureErr == nil:
-			if total != 0 {
-				pressureLimit.bytes = min(pressureLimit.bytes, total)
-			}
 		case errors.Is(pressureErr, memlimit.ErrNoLimit),
 			errors.Is(pressureErr, memlimit.ErrNoCgroup),
 			errors.Is(pressureErr, memlimit.ErrCgroupsNotSupported):
@@ -211,10 +208,15 @@ func (m *memThrottler) refreshMemoryWithPressure(
 			// cgroup coverage evidence attached to that limit.
 			pressureLimit.bytes = total
 		default:
-			pressureLimit.bytes = 0
+			if !pressureLimit.incomplete {
+				pressureLimit.bytes = 0
+			}
 			if resolvePressure != nil {
 				pressureResolutionErr = pressureErr
 			}
+		}
+		if total != 0 {
+			pressureLimit.bytes = min(pressureLimit.bytes, total)
 		}
 		m.rssPressure.observe(sample.at, sample.rss, sample.reservedAfter, sample.live, pressureLimit)
 	}

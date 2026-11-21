@@ -1349,9 +1349,11 @@ func TestMemoryCachePressureStopsBeforeBatch(t *testing.T) {
 	for _, cancelAt := range []struct {
 		name string
 		read int
+		idle bool
 	}{
-		{name: "target snapshot", read: 1},
+		{name: "target snapshot", read: 1, idle: true},
 		{name: "under evictor lock", read: 2},
+		{name: "under evictor lock after releasing idle buffers", read: 2, idle: true},
 	} {
 		t.Run(cancelAt.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
@@ -1378,15 +1380,20 @@ func TestMemoryCachePressureStopsBeforeBatch(t *testing.T) {
 				key := fscache.CacheKey{Path: fmt.Sprint(i), Sz: 10}
 				requireDataCacheSet(t, cache.cache, ctx, key, staticTestData(make([]byte, 10)))
 			}
-			cache.AllocateCacheData(ctx, 4096).Release()
+			if cancelAt.idle {
+				cache.AllocateCacheData(ctx, 4096).Release()
+			}
 			idleBytes := cache.reservedBytes.Load()
-			require.Positive(t, idleBytes)
 			armed = true
 			EvictMemoryCachesToCapacityPercent(ctx, 50)
 			require.ErrorIs(t, ctx.Err(), context.Canceled)
 			require.Equal(t, int64(80), cache.cache.Used())
 			require.Zero(t, evictions)
-			require.Zero(t, tracking.reclaims.Load())
+			if cancelAt.read == 2 && cancelAt.idle {
+				require.EqualValues(t, 1, tracking.reclaims.Load(), "idle page release was already admitted")
+			} else {
+				require.Zero(t, tracking.reclaims.Load())
+			}
 			if cancelAt.read == 1 {
 				require.Equal(t, idleBytes, cache.reservedBytes.Load())
 			} else {
@@ -1394,6 +1401,41 @@ func TestMemoryCachePressureStopsBeforeBatch(t *testing.T) {
 			}
 		})
 	}
+}
+
+type controlledPressureDeadline struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c *controlledPressureDeadline) Deadline() (time.Time, bool) { return c.deadline, true }
+
+func TestMemoryCachePressureReclaimsAdmittedBatchAfterDeadline(t *testing.T) {
+	ctx := &controlledPressureDeadline{Context: t.Context(), deadline: time.Now().Add(time.Hour)}
+	callbacks := 0
+	cache := NewMemCache(fscache.ConstCapacity(1<<20), &CacheCallbacks{
+		PostEvict: []CacheCallbackFunc{func(_ fscache.CacheKey, data fscache.Data) {
+			require.Equal(t, "cached value", string(data.Bytes()))
+			callbacks++
+			ctx.deadline = time.Now().Add(-time.Second)
+		}},
+	}, nil, "pressure-reclaim-after-deadline")
+	defer cache.Close(t.Context())
+	tracking := &reclaimTrackingAllocator{MemoryCacheAllocator: cache.arenaAllocator}
+	cache.arenaAllocator = tracking
+	const batchSize = 64
+	const value = "cached value"
+	for i := range batchSize + 1 {
+		func() {
+			data := cache.CopyToCacheData(t.Context(), []byte(value))
+			defer data.Release()
+			requireDataCacheSet(t, cache.cache, t.Context(), fscache.CacheKey{Path: fmt.Sprint(i), Sz: int64(len(value))}, data)
+		}()
+	}
+	require.EqualValues(t, cache.BackingSize(len(value)), cache.EvictToCapacityPercent(ctx, 0))
+	require.NoError(t, ctx.Err(), "elapsed deadline can precede the timeout notification")
+	require.Equal(t, batchSize, callbacks)
+	require.EqualValues(t, 1, tracking.reclaims.Load(), "the walk purges after completing the batch")
 }
 
 func TestMemoryCacheCloseDuringPressureEviction(t *testing.T) {

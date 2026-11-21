@@ -245,6 +245,85 @@ func TestPressureCgroupV2CoveredMounts(t *testing.T) {
 	}
 }
 
+func TestPressureCgroupV2UsesFiniteBoundsAcrossUnreadableLevels(t *testing.T) {
+	base := t.TempDir()
+	parent := filepath.Join(base, "parent")
+	leaf := filepath.Join(parent, "child")
+	require.NoError(t, os.MkdirAll(leaf, 0700))
+	for dir, value := range map[string]string{base: "2000", parent: "900", leaf: "1000"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "memory.max"), []byte(value), 0600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "cgroup.controllers"), nil, 0600))
+	}
+	const group = "/tenant/parent/child"
+	mount := fmt.Sprintf("30 1 0:1 /tenant %s rw - cgroup2 cgroup rw\n", base)
+	masked := fmt.Sprintf("%s31 30 0:2 / %s rw - tmpfs tmpfs rw\n", mount, filepath.Join(parent, "memory.max"))
+	observeRoot := func(string) {}
+	ceiling, err := resolvePressureCgroupV2(group, []byte(masked), observeRoot)
+	require.ErrorContains(t, err, "covered by another mount")
+	require.Equal(t, rssPressureLimit{bytes: 1000, knownRoot: "/tenant", incomplete: true}, ceiling)
+	metadataMasked := fmt.Sprintf("%s32 30 0:2 / %s rw - tmpfs tmpfs rw\n", masked, filepath.Join(leaf, "cgroup.controllers"))
+	ceiling, err = resolvePressureCgroupV2(group, []byte(metadataMasked), observeRoot)
+	require.ErrorContains(t, err, "covered by another mount")
+	require.EqualValues(t, 1000, ceiling.bytes, "a directly readable limit needs no controller inference")
+
+	// A failure at one level does not hide a valid stricter bound above it.
+	ancestorLimit := filepath.Join(base, "memory.max")
+	require.NoError(t, os.WriteFile(ancestorLimit, []byte("500"), 0600))
+	ceiling, err = resolvePressureCgroupV2(group, []byte(masked), observeRoot)
+	require.ErrorContains(t, err, "covered by another mount")
+	require.EqualValues(t, 500, ceiling.bytes)
+	require.NoError(t, os.WriteFile(ancestorLimit, []byte("2000"), 0600))
+
+	targets := make(chan int64, 2)
+	walks := make(chan context.Context, 1)
+	clears := 0
+	c := rssPressureController{
+		setTarget:   func(target int64, _ time.Time) { targets <- target },
+		clearTarget: func() { clears++ },
+		evict: func(ctx context.Context, _ int64) {
+			walks <- ctx
+			<-ctx.Done()
+		},
+		free: func() {},
+	}
+	source := c.attach()
+	defer source.Close()
+	m := memThrottler{rssPressure: source}
+	refresh := func(mountinfo string, rss uint64) {
+		m.refreshMemoryWithPressure(
+			func() (*process.MemoryInfoStat, error) { return &process.MemoryInfoStat{RSS: rss}, nil },
+			func() (uint64, error) { return 4096, nil },
+			func(_ uint64, _ error, publishRoot func(string)) (rssPressureLimit, error) {
+				return resolvePressureCgroupV2(group, []byte(mountinfo), publishRoot)
+			},
+		)
+	}
+
+	refresh(masked, 950)
+	require.Equal(t, rssCacheHardTarget, receivePressureEvent(t, targets))
+	walk := receivePressureEvent(t, walks)
+	require.EqualValues(t, 4096, m.actualTotalMemory.Load(), "local admission keeps its own ceiling")
+	expiry := c.expires
+	refresh(masked, 600)
+	require.Equal(t, expiry, c.expires)
+	require.NoError(t, walk.Err())
+	// Neither an intact max above the gap nor one below it proves recovery.
+	require.NoError(t, os.WriteFile(ancestorLimit, []byte("max"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(leaf, "memory.max"), []byte("max"), 0600))
+	ceiling, err = resolvePressureCgroupV2(group, []byte(masked), observeRoot)
+	require.ErrorContains(t, err, "covered by another mount")
+	require.Zero(t, ceiling.bytes)
+	refresh(masked, 600)
+	require.Equal(t, expiry, c.expires)
+	require.NoError(t, walk.Err())
+	require.Zero(t, clears)
+	require.Empty(t, targets)
+
+	refresh(mount, 600)
+	receivePressureEvent(t, walk.Done())
+	require.Equal(t, 1, clears)
+}
+
 func TestPressureCgroupV2VisibilityChangeRetainsLease(t *testing.T) {
 	const group = "/tenant/child"
 	wide, narrow := t.TempDir(), t.TempDir()

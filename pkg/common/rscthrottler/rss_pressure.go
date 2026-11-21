@@ -92,8 +92,9 @@ type rssPressureLimit struct {
 	bytes uint64
 	// Logical cgroup v2 hierarchy paths, independent of mount aliases.
 	// Other sources leave both empty.
-	readRoot  string
-	knownRoot string
+	readRoot   string
+	knownRoot  string
+	incomplete bool // The limit is only an upper bound when a level could not be read.
 }
 
 func cgroupPathContains(root, group string) bool {
@@ -246,7 +247,7 @@ func (s *RSSPressureSource) observe(at time.Time, rss, reserved, live int64, cei
 	}
 	limit := int64(ceiling.bytes)
 	latestCapture := !at.Before(c.lastRSSCapture)
-	partial := ceiling.readRoot != "" && !cgroupPathContains(ceiling.readRoot, requiredRoot)
+	partial := ceiling.incomplete || ceiling.readRoot != "" && !cgroupPathContains(ceiling.readRoot, requiredRoot)
 	next := nextRSSPressureState(previous, float64(rss)/float64(limit))
 	// An upper bound can establish pressure, but cannot prove recovery.
 	if partial && next == rssPressureNone ||

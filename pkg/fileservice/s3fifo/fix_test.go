@@ -107,10 +107,14 @@ func TestPressureEvictionFinishesAdmittedBatch(t *testing.T) {
 
 	expired := elapsedEvictionDeadline{Context: t.Context()}
 	require.NoError(t, expired.Err(), "deadline can elapse before the timer updates Err")
-	require.EqualValues(t, evictBatch+1, c.evictTo(expired, 0, true))
+	used, removed := c.evictTo(expired, 0, true)
+	require.EqualValues(t, evictBatch+1, used)
+	require.False(t, removed)
 	require.Zero(t, callbacks)
 
-	require.EqualValues(t, 1, c.evictTo(ctx, 0, true))
+	used, removed = c.evictTo(ctx, 0, true)
+	require.EqualValues(t, 1, used)
+	require.True(t, removed)
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
 	require.Equal(t, evictBatch, callbacks)
 	freed := 0

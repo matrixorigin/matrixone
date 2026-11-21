@@ -531,10 +531,12 @@ func (c *Cache[K, V]) DeleteGroup(group string) {
 // Used can be over target or the capacity when it returns. Values whose insertion is still
 // being notified are counted in Used but not yet evictable.
 func (c *Cache[K, V]) EvictTo(ctx context.Context, target int64) int64 {
-	return c.evictTo(ctx, target, false)
+	used, _ := c.evictTo(ctx, target, false)
+	return used
 }
 
-func (c *Cache[K, V]) evictTo(ctx context.Context, target int64, pressure bool) int64 {
+func (c *Cache[K, V]) evictTo(ctx context.Context, target int64, pressure bool) (int64, bool) {
+	removedAny := false
 	var buf [evictBatch]removal[K, V]
 	target = max(target, 0)
 	for {
@@ -543,23 +545,24 @@ func (c *Cache[K, V]) evictTo(ctx context.Context, target int64, pressure bool) 
 		c.evictor.Lock()
 		if pressure && fscache.PressureEvictionCanceled(ctx) {
 			c.evictor.Unlock()
-			return c.Used()
+			return c.Used(), removedAny
 		}
 		capacity := c.capacity()
 		batchTarget := target
 		if pressure {
 			if fscache.PressureEvictionCanceled(ctx) {
 				c.evictor.Unlock()
-				return c.Used()
+				return c.Used(), removedAny
 			}
 			batchTarget = min(target, capacity)
 		}
 		removed, used, done := c.evictBatch(capacity, batchTarget, buf[:0])
 		c.evictor.Unlock()
 		c.finishAll(removed)
+		removedAny = removedAny || len(removed) > 0
 		clear(removed)
 		if done || ctx.Err() != nil {
-			return used
+			return used, removedAny
 		}
 	}
 }
