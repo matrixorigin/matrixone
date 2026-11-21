@@ -1659,7 +1659,7 @@ func TestAObjectHandleNextPrefetchTarget_SkipsPrunedBlocks(t *testing.T) {
 		},
 	}
 
-	gotObj, blk, ok, err := handle.nextPrefetchTarget(context.Background())
+	gotObj, blk, ok, err := handle.nextPrefetchTarget(context.Background(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, obj, gotObj)
@@ -1675,7 +1675,7 @@ func TestAObjectHandleNextPrefetchTarget_SkipsEmptyObjects(t *testing.T) {
 		blockPlans: make(map[string]*aobjBlockPlan),
 	}
 
-	obj, blk, ok, err := handle.nextPrefetchTarget(context.Background())
+	obj, blk, ok, err := handle.nextPrefetchTarget(context.Background(), nil)
 	require.NoError(t, err)
 	require.Nil(t, obj)
 	require.Zero(t, blk)
@@ -3028,14 +3028,14 @@ func TestNextPrefetchTarget(t *testing.T) {
 	}
 
 	// First call should skip block 0, return block 1
-	retObj, blk, ok, err := h.nextPrefetchTarget(context.Background())
+	retObj, blk, ok, err := h.nextPrefetchTarget(context.Background(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, uint16(1), blk)
 	require.Equal(t, obj, retObj)
 
 	// Second call should return no more targets
-	_, _, ok, err = h.nextPrefetchTarget(context.Background())
+	_, _, ok, err = h.nextPrefetchTarget(context.Background(), nil)
 	require.NoError(t, err)
 	require.False(t, ok)
 }
