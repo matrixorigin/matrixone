@@ -735,6 +735,16 @@ func buildDeallocate(stmt *tree.Deallocate, _ CompilerContext) (*Plan, error) {
 	}, nil
 }
 
+// BindSetVariableResultType binds the expression for type recovery after the
+// frontend has evaluated and authorized it through a synthetic SELECT.
+func BindSetVariableResultType(expr tree.Expr, ctx CompilerContext, prepared bool) (*Expr, error) {
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, prepared, false)
+	builder.zeroScalarPolicy = zeroScalarValidateOnly
+	bindCtx := NewBindContext(builder, nil)
+	binder := NewProjectionBinder(builder, bindCtx, NewHavingBinder(builder, bindCtx))
+	return binder.BindExpr(expr, 0, false)
+}
+
 func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	p, _, err := buildSetVariablesWithQuery(stmt, ctx, isPrepareStmt)
 	return p, err
@@ -760,7 +770,20 @@ func buildSetVariablesWithQuery(
 		if assignment.Value == nil {
 			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "Set statement has no value")
 		}
+		// EXECUTE reevaluates a scalar SET subquery from its AST in the same
+		// session. Preserve catalog dependencies for PREPARE even if an
+		// expression inside that subquery folds away.
+		if sub, ok := unwrapParenExpr(assignment.Value).(*tree.Subquery); isPrepareStmt && ok && !sub.Exists {
+			builder.zeroScalarPolicy = zeroScalarRetainOnly
+		}
+		retained := builder.zeroScalarRetentionGeneration
 		item.Value, err = binder.baseBindExpr(assignment.Value, 0, true)
+		builder.zeroScalarPolicy = zeroScalarDisabled
+		if err == nil && builder.zeroScalarRetentionGeneration != retained &&
+			(item.Value.GetSub() == nil || len(builder.zeroScalarRequiredLiveNodes) != 0) {
+			return nil, nil, moerr.NewNYI(ctx.GetContext(),
+				"prepared SET cannot retain correlated scalar LIMIT 0 source validation")
+		}
 		if err != nil {
 			return nil, nil, err
 		}

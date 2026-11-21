@@ -2303,3 +2303,25 @@ func TestSQLUDFForwardedRepeatedZeroScalarArgument(t *testing.T) {
 	_, err = NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
 	require.ErrorContains(t, err, "SQL UDF with a repeated correlated scalar LIMIT 0 argument")
 }
+
+func TestSQLUDFDiscardedZeroScalarKeepsTableDependency(t *testing.T) {
+	for _, call := range []string{"f_discard(%s)", "f_constant_query(%s)", "f_keep_second(%s, 1)"} {
+		t.Run(call, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+				"select "+strings.Replace(call, "%s", "(select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0)", 1)+" from nation n", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+			query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+			require.NoError(t, err)
+			found := false
+			for _, node := range query.Nodes {
+				if node.GetObjRef().GetObjName() == "region" {
+					require.True(t, IsValidationPrivilegeCarrier(node))
+					found = true
+				}
+			}
+			require.True(t, found)
+		})
+	}
+}
