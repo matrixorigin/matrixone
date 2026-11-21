@@ -481,14 +481,14 @@ const (
 	// unsignedDecimalStringViolate: the value the cast stores is negative
 	// nonzero before target-scale rounding.
 	unsignedDecimalStringViolate
-	// unsignedDecimalStringViolateRetained: under the IGNORE policy the cast
+	// unsignedDecimalStringViolateRetained: under a lenient assignment policy the cast
 	// retains a negative nonzero numeric prefix after a conversion failure at
 	// either stage; admission owns the truncation diagnostic first and the
 	// 1264 clip second.
 	unsignedDecimalStringViolateRetained
 	// unsignedDecimalStringAbstain: a conversion failure whose diagnostics
 	// stay with the cast (lexical errors, no-prefix invalid input, special
-	// syntax, retained-prefix overflow). Admission must not run.
+	// syntax, an invalid destination). Admission must not run.
 	unsignedDecimalStringAbstain
 )
 
@@ -499,7 +499,7 @@ const (
 //     the cast's own combine rule over the radix expansion (stored negative
 //     iff the scanned sign differs from the token sign), nonzero iff the
 //     scanned mantissa contains a nonzero digit;
-//   - failure at tokenization or after tokenization: under the IGNORE policy
+//   - failure at tokenization or after tokenization: under a lenient assignment policy
 //     the cast retains the numeric prefix when it re-parses at the target;
 //     that retained prefix classifies with the pure decimal grammar (sign
 //     plus nonzero digit). A retained prefix whose own re-parse fails keeps
@@ -507,7 +507,7 @@ const (
 //
 // targetType supplies the destination width/scale for the retained-prefix
 // re-parse decision.
-func classifyUnsignedDecimalStringSource(s string, ignorePolicy bool, targetType types.Type) unsignedDecimalStringOutcome {
+func classifyUnsignedDecimalStringSource(s string, retainPrefix bool, targetType types.Type) unsignedDecimalStringOutcome {
 	token, tokenErr := parseCastNumericToken(s)
 	if tokenErr == nil {
 		expanded, expandErr := prefixedDigitsToDecimalString(token.digits, token.base)
@@ -524,8 +524,8 @@ func classifyUnsignedDecimalStringSource(s string, ignorePolicy bool, targetType
 	}
 	// Conversion failure at either stage: the cast keeps its own diagnostics
 	// for special syntax under every policy, and for every failure under the
-	// non-IGNORE policies.
-	if !ignorePolicy || isAssignmentSpecialNumericSyntax(s) {
+	// strict policies.
+	if !retainPrefix || isAssignmentSpecialNumericSyntax(s) {
 		return unsignedDecimalStringAbstain
 	}
 	prefix, ok := assignmentDecimalPrefix(s)
@@ -534,33 +534,32 @@ func classifyUnsignedDecimalStringSource(s string, ignorePolicy bool, targetType
 		// invalid-input warning; that value is non-negative by construction.
 		return unsignedDecimalStringAbstain
 	}
-	if !unsignedDecimalPrefixReparses(prefix, targetType) {
-		// A retained prefix whose conversion overflows keeps the cast's
-		// original error; nothing is stored and admission abstains.
+	clipped, err := unsignedDecimalPrefixRange(prefix, targetType)
+	if err != nil {
 		return unsignedDecimalStringAbstain
 	}
 	var prefixFacts decimalPrefixFacts
 	_, prefixNegative, _ := scanDecimalPrefix(prefix, &prefixFacts)
 	if prefixNegative && prefixFacts.first >= 0 {
+		if clipped {
+			return unsignedDecimalStringViolate
+		}
 		return unsignedDecimalStringViolateRetained
 	}
 	return unsignedDecimalStringPass
 }
 
-// unsignedDecimalPrefixReparses mirrors the IGNORE retention re-parse of the
-// strToDecimal* assignment casts: converting the retained prefix at the
-// destination width/scale must succeed for retention to happen at all.
-func unsignedDecimalPrefixReparses(prefix string, targetType types.Type) bool {
-	var err error
+// unsignedDecimalPrefixRange mirrors the assignment cast's retained-prefix policy.
+func unsignedDecimalPrefixRange(prefix string, targetType types.Type) (clipped bool, err error) {
 	switch targetType.Oid {
 	case types.T_decimal64:
-		_, err = parseDecimal64CastString(prefix, targetType.Width, targetType.Scale)
+		_, clipped, err = parseDecimal64CastStringWithOverflow(prefix, targetType.Width, targetType.Scale, true)
 	case types.T_decimal128:
-		_, err = parseDecimal128CastString(prefix, targetType.Width, targetType.Scale)
+		_, clipped, err = parseDecimal128CastStringWithOverflow(prefix, targetType.Width, targetType.Scale, true)
 	default:
-		_, err = parseDecimal256CastString(prefix, targetType.Width, targetType.Scale)
+		_, clipped, err = parseDecimal256CastStringWithOverflow(prefix, targetType.Width, targetType.Scale, true)
 	}
-	return err == nil
+	return clipped, err
 }
 
 // classifyMySQLDecimalPrefixSource classifies the charset-255 prefix branch of
@@ -596,6 +595,8 @@ func unsignedDecimalAdmissionVarlena(
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	src := vector.GenerateFunctionStrParameter(from)
+	retainPrefix := entry == unsignedDecimalAdmissionIgnore ||
+		(entry == unsignedDecimalAdmissionMode && !StrictSqlModeForAssignment(proc))
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -615,7 +616,7 @@ func unsignedDecimalAdmissionVarlena(
 		if mysqlPrefix {
 			outcome = classifyMySQLDecimalPrefixSource(s)
 		} else {
-			outcome = classifyUnsignedDecimalStringSource(s, entry == unsignedDecimalAdmissionIgnore, targetType)
+			outcome = classifyUnsignedDecimalStringSource(s, retainPrefix, targetType)
 		}
 		switch outcome {
 		case unsignedDecimalStringViolate, unsignedDecimalStringViolateRetained:

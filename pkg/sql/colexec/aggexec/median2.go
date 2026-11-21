@@ -2135,16 +2135,10 @@ func averageMedianDecimal(
 	if err != nil {
 		return types.Decimal128{}, err
 	}
-	if ret.Sign() {
-		if ret, err = ret.Minus().Scale(1); err != nil {
-			return types.Decimal128{}, err
-		}
-		return ret.Right(1).Minus(), nil
-	}
-	if ret, err = ret.Scale(1); err != nil {
-		return types.Decimal128{}, err
-	}
-	return ret.Right(1), nil
+	// The result has one extra decimal place, so its coefficient is 5*(v1+v2).
+	// Scaling the sum by ten before halving can overflow for valid inputs.
+	ret, _, err = ret.Mul(types.Decimal128{B0_63: 5}, 0, 0)
+	return ret, err
 }
 
 func averageMedianDecimalWide(v1, v2 types.Decimal256) (types.Decimal256, error) {

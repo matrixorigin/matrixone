@@ -1025,7 +1025,7 @@ func TestUnsignedDecimalAdmissionMySQLPrefixCharsetSource(t *testing.T) {
 // TestUnsignedDecimalAdmissionStringOutcomeBranches walks the text
 // classifier's remaining outcomes: clean non-negative pass, the IGNORE
 // retained-prefix clip at DECIMAL128/DECIMAL256 destinations, and the
-// abstain for an overflowing retained prefix.
+// range clip for an overflowing retained prefix.
 func TestUnsignedDecimalAdmissionStringOutcomeBranches(t *testing.T) {
 	strT := types.T_varchar.ToType()
 
@@ -1067,8 +1067,7 @@ func TestUnsignedDecimalAdmissionStringOutcomeBranches(t *testing.T) {
 	require.Len(t, session256.warnings, 2)
 	requireAdmissionWarning(t, session256.warnings[1], "v", 1)
 
-	// An overflowing retained prefix keeps the cast's own diagnostics:
-	// admission abstains and passes the row through unchanged.
+	// An overflowing negative prefix clips directly to zero with one range warning.
 	procNarrow, sessionNarrow := unsignedDecimalAdmissionProc(t, "STRICT_TRANS_TABLES")
 	narrow := types.New(types.T_decimal64, 4, 0)
 	from = testutil.NewVector(1, strT, procNarrow.Mp(), false, []string{"-99999junk"})
@@ -1076,9 +1075,9 @@ func TestUnsignedDecimalAdmissionStringOutcomeBranches(t *testing.T) {
 		unsignedDecimalAdmissionIgnore, "v")
 	require.NoError(t, err)
 	vec = vector.MustFunctionResult[types.Varlena](result).GetResultVector()
-	require.Equal(t, "-99999junk", vec.GetStringAt(0),
-		"the cast owns the overflow diagnostic for an unretainable prefix")
-	require.Empty(t, sessionNarrow.warnings, "abstention owns no admission diagnostics")
+	require.Equal(t, "0", vec.GetStringAt(0))
+	require.Len(t, sessionNarrow.warnings, 1)
+	requireAdmissionWarning(t, sessionNarrow.warnings[0], "v", 1)
 }
 
 // TestUnsignedDecimalAdmissionVarlenaNullRows checks NULL text rows pass as

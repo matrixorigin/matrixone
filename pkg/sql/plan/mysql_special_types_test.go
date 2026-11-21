@@ -108,9 +108,11 @@ func TestPreparedUpdateEnumSetMarkers(t *testing.T) {
 					col.Typ.Enumvalues = "low,high"
 				}
 			}
-			query := buildPreparedQuery(t, mock,
-				"prepare special_update from 'update constraint_test.emp set sal=? where empno=?'")
-			require.NotNil(t, query)
+			for _, rhs := range []string{"?", "(?)", "coalesce(?, sal)"} {
+				query := buildPreparedQuery(t, mock,
+					"prepare special_update from 'update constraint_test.emp set sal="+rhs+" where empno=?'")
+				require.NotNil(t, query, rhs)
+			}
 		})
 	}
 }

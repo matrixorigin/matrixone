@@ -2133,12 +2133,30 @@ func insertNumericLiteralNeedsAdjustment(proc *process.Process, numVal *tree.Num
 	return err != nil || !canInsert
 }
 
+// decimalRadixAssignmentSource preserves the numeric spelling of a radix
+// literal. The ordinary binder produces binary bytes for the same syntax.
+func decimalRadixAssignmentSource(ast tree.Expr) *plan.Expr {
+	if num, ok := unwrapParenExpr(ast).(*tree.NumVal); ok &&
+		(num.ValType == tree.P_hexnum || num.ValType == tree.P_bit) {
+		return MakePlan2StringConstExprWithType(num.String())
+	}
+	return nil
+}
+
 func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (*plan.Expr, error) {
 	if numVal.ValType == tree.P_null || numVal.ValType == tree.P_nulltext {
 		return makePlan2NullConstExprWithType(), nil
 	}
-	if colType.Oid.IsDecimal() && (isIgnore || !function.StrictSqlModeForAssignment(proc) ||
-		function.DecimalAssignmentLosesScale(numVal.String(), colType.Scale)) &&
+	decimalTarget := colType.Oid.IsDecimal()
+	lenient := decimalTarget && (isIgnore || !function.StrictSqlModeForAssignment(proc))
+	scaleLoss := decimalTarget && !lenient && function.DecimalAssignmentLosesScale(numVal.String(), colType.Scale)
+	if decimalTarget && (numVal.ValType == tree.P_hexnum || numVal.ValType == tree.P_bit) &&
+		(colType.Oid == types.T_decimal256 || lenient && insertNumericLiteralNeedsAdjustment(proc, numVal, colType)) {
+		// The numeric cast must see the radix spelling rather than binary bytes.
+		source := decimalRadixAssignmentSource(numVal)
+		return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
+	}
+	if decimalTarget && (lenient || scaleLoss) &&
 		(numVal.ValType == tree.P_decimal || numVal.ValType == tree.P_int64 ||
 			numVal.ValType == tree.P_uint64 || numVal.ValType == tree.P_float64) &&
 		insertNumericLiteralNeedsAdjustment(proc, numVal, colType) {
@@ -2163,7 +2181,7 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 	// building the plan. The runtime assignment cast owns the adjustment and
 	// warning so INSERT ... VALUES, INSERT ... SELECT, UPDATE, and prepared
 	// executions share one contract and diagnostics are emitted per logical row.
-	if (isIgnore || colType.Oid == types.T_date ||
+	if (isIgnore || colType.Oid == types.T_date || scaleLoss ||
 		(!function.StrictSqlModeForAssignment(proc) && useSqlModeAssignmentCast(makePlan2Type(colType)))) &&
 		numVal.ValType == tree.P_char &&
 		useIgnoreConversionAssignmentCast(makePlan2Type(colType)) {
@@ -2476,6 +2494,16 @@ func buildValueScan(
 					}
 					if handled {
 						hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(expr)
+						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{Expr: expr})
+						continue
+					}
+				}
+				if isAttributedDecimalPlanType(col.Typ) {
+					if source := decimalRadixAssignmentSource(r[i]); source != nil {
+						expr, err := builder.forceCastExpr2(source, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
+						if err != nil {
+							return nil, err
+						}
 						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{Expr: expr})
 						continue
 					}

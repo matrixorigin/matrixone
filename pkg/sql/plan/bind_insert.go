@@ -6553,6 +6553,16 @@ func (builder *QueryBuilder) buildValueScan(
 						continue
 					}
 				}
+				if isAttributedDecimalPlanType(col.Typ) {
+					if source := decimalRadixAssignmentSource(r[i]); source != nil {
+						expr, err := builder.forceCastExpr2(source, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
+						if err != nil {
+							return 0, nil, err
+						}
+						appendValueExpr(i, expr)
+						continue
+					}
+				}
 				// An attributed decimal literal must bind in its natural type and
 				// pass through unsigned-domain admission; the const fast path
 				// materializes the target type directly and would bypass the
