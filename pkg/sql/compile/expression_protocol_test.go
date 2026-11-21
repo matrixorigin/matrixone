@@ -670,7 +670,8 @@ func TestRoutinePayloadPreservesExistingRemoteFeatureGuards(t *testing.T) {
 	client.version = defines.MORPCVersion132
 	require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
-	// The official VIEWS contract remains independent of routine metadata.
+	// The official VIEWS contract retains its destination and receiver
+	// checks without requiring a second probe on the execution stream.
 	viewOnly := &pipeline.Pipeline{Node: p.Node, InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{viewDefinition}}}}
 	viewFeatures, err := planpb.RequiredRemoteExpressionFeatures(viewOnly)
 	require.NoError(t, err)
@@ -683,7 +684,7 @@ func TestRoutinePayloadPreservesExistingRemoteFeatureGuards(t *testing.T) {
 	required = 0
 	viewWire, err := encodeRemoteScopeWithProtocol(scope, c.proc, &required)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion126, required)
+	require.Zero(t, required)
 	decoded, err = decodeScope(viewWire, c.proc, true, nil)
 	require.NoError(t, err)
 	decoded.release()
@@ -725,7 +726,7 @@ func TestRoutinePayloadPreservesExistingRemoteFeatureGuards(t *testing.T) {
 	required = 0
 	fractionalWire, err := encodeRemoteScopeWithProtocol(scope, c.proc, &required)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion124, required)
+	require.Zero(t, required)
 	decoded, err = decodeScope(fractionalWire, c.proc, true, nil)
 	require.NoError(t, err)
 	decoded.release()

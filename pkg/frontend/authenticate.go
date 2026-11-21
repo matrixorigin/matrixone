@@ -13274,17 +13274,6 @@ func persistUserDefinedFunction(
 					*functionID,
 				)
 			}
-
-			previousReturnType, returnErr := readUserDefinedFunctionReturnType(ctx, bh, *functionID)
-			if returnErr != nil {
-				return returnErr
-			}
-			if !strings.EqualFold(previousReturnType, definition.retType) {
-				return moerr.NewInvalidInputNoCtxf(
-					"SQL REPLACE cannot change return type from %q to %q; use DROP and CREATE",
-					previousReturnType, definition.retType,
-				)
-			}
 		}
 		body := escapeSQLStringForDoubleQuotes(definition.body)
 		if err := bh.Exec(ctx, fmt.Sprintf(updateMoUserDefinedFunctionFormat,
@@ -13398,25 +13387,6 @@ func readUserDefinedFunctionLanguage(ctx context.Context, bh BackgroundExec, fun
 		return "", err
 	}
 	return language, nil
-}
-
-func readUserDefinedFunctionReturnType(ctx context.Context, bh BackgroundExec, functionID int64) (string, error) {
-	bh.ClearExecResultSet()
-	if err := bh.Exec(ctx, fmt.Sprintf(
-		"select rettype from mo_catalog.mo_user_defined_function where function_id = %d;",
-		functionID,
-	)); err != nil {
-		return "", err
-	}
-	rows, err := getResultSet(ctx, bh)
-	if err != nil {
-		return "", err
-	}
-	row, err := exactlyOneCatalogRow(ctx, rows, fmt.Sprintf("function identity %d while checking its return type", functionID))
-	if err != nil {
-		return "", err
-	}
-	return row.GetString(ctx, 0, 0)
 }
 
 func readPythonRevisionBody(ctx context.Context, bh BackgroundExec, functionID int64, revision, namespace uint64) (string, error) {

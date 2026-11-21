@@ -75,6 +75,7 @@ func TestReleasedCatalogLoginRepairsRoutineSchema(t *testing.T) {
 						source.ddl,
 						"create database routine_repair",
 						`insert into mo_catalog.mo_user_defined_function(name,owner,args,rettype,body,language,db,definer,type,security_type) values ('legacy_plus_seven',2,'[{"name":"x","type":"bigint"}]','bigint','$1 + 7','sql','routine_repair','root','SQL','INVOKER')`,
+						`insert into mo_catalog.mo_user_defined_function(name,owner,args,rettype,body,language,db,definer,type,security_type) values ('legacy_python_sibling',2,'[{"name":"x","type":"bigint"},{"name":"y","type":"bigint"}]','bigint','def f(x, y): return x + y','python','routine_repair','root','FUNCTION','INVOKER')`,
 						"drop table mo_catalog.mo_function_revisions",
 					} {
 						res, err := txn.Exec(statement, versions.UpgradeStatementOption(accountID))
@@ -170,9 +171,74 @@ func TestReleasedCatalogLoginRepairsRoutineSchema(t *testing.T) {
 					checkCatalog("4.0.7", true)
 					checkResult()
 				}
+				t.Run("legacy_python_sibling", func(t *testing.T) {
+					conn, err := tenantDB.Conn(ctx)
+					require.NoError(t, err)
+					defer conn.Close()
+					_, err = conn.ExecContext(ctx, "use routine_repair")
+					require.NoError(t, err)
+					_, err = conn.ExecContext(ctx, "create function legacy_python_sibling(x bigint) returns bigint language sql as '$1 + 7'")
+					require.NoError(t, err)
+					var result int64
+					require.NoError(t, conn.QueryRowContext(ctx, "select legacy_python_sibling(5)").Scan(&result))
+					require.Equal(t, int64(12), result)
+					err = conn.QueryRowContext(ctx, "select legacy_python_sibling(5, 6)").Scan(&result)
+					require.ErrorContains(t, err, "UNSUPPORTED_ROUTINE_VERSION")
+				})
+				t.Run("replace_sql_return_type", func(t *testing.T) {
+					checkSQLRoutineReturnTypeReplacement(t, ctx, tenantDB)
+				})
 			})
 		}
 	})
+}
+
+func checkSQLRoutineReturnTypeReplacement(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	_, err := db.ExecContext(ctx, "create function routine_repair.replace_return_type(x bigint) returns bigint language sql as '$1 + 7'")
+	require.NoError(t, err)
+	reader, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer reader.Close()
+	_, err = reader.ExecContext(ctx, "use routine_repair")
+	require.NoError(t, err)
+
+	const query = "select replace_return_type(5)"
+	prepared, err := reader.PrepareContext(ctx, query)
+	require.NoError(t, err)
+	defer prepared.Close()
+	checkRow := func(rows *sql.Rows, wantType, wantValue string) {
+		t.Helper()
+		columns, err := rows.ColumnTypes()
+		require.NoError(t, err)
+		require.Len(t, columns, 1)
+		require.Equal(t, wantType, columns[0].DatabaseTypeName())
+		require.True(t, rows.Next())
+		var result string
+		require.NoError(t, rows.Scan(&result))
+		require.Equal(t, wantValue, result)
+		require.False(t, rows.Next())
+	}
+	check := func(wantType, wantValue string) {
+		t.Helper()
+		rows, err := reader.QueryContext(ctx, query)
+		require.NoError(t, err)
+		defer rows.Close()
+		checkRow(rows, wantType, wantValue)
+		require.NoError(t, rows.Err())
+		preparedRows, err := prepared.QueryContext(ctx)
+		require.NoError(t, err)
+		defer preparedRows.Close()
+		checkRow(preparedRows, wantType, wantValue)
+		require.NoError(t, preparedRows.Err())
+	}
+	check("BIGINT", "12")
+
+	// Replace from another session so the reader retains its cached and
+	// prepared plans and must observe the new revision on its next execution.
+	_, err = db.ExecContext(ctx, "create or replace function routine_repair.replace_return_type(x bigint) returns varchar(32) language sql as 'hex($1 + 8)'")
+	require.NoError(t, err)
+	check("VARCHAR", "D")
 }
 
 type routineRepairTxn struct {
