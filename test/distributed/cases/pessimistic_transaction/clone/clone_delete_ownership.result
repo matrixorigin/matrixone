@@ -59,5 +59,43 @@ select id,a,b from b order by id;
 1  ¦  10  ¦  100  𝄀
 2  ¦  20  ¦  200  𝄀
 3  ¦  30  ¦  300
+create table persisted(id int primary key);
+insert into persisted values (1),(2),(3);
+set @flush_result = (select mo_ctl('dn','flush','clone_delete_ownership.persisted'));
+create table persisted_a clone persisted;
+delete from persisted_a where id=1;
+begin;
+create table persisted_b clone persisted_a;
+select id from persisted order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from persisted_a order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from persisted_b order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+rollback;
+begin;
+create table persisted_b clone persisted_a;
+select id from persisted order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+commit;
+select id from persisted order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from persisted_b order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
 set session transaction_isolation=default;
 drop database clone_delete_ownership;

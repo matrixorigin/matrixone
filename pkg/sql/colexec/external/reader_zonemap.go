@@ -17,7 +17,7 @@ package external
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -165,103 +165,68 @@ func (r *ZonemapReader) needRead(ctx context.Context, proc *process.Process) boo
 // getBatchFromZonemapFile reads one block from the zonemap file into bat.
 // Migrated from external.go getBatchFromZonemapFile.
 func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *process.Process, bat *batch.Batch) error {
-	var tmpBat *batch.Batch
-	var vecTmp *vector.Vector
-	var release func()
-	mp := proc.Mp()
-	param := r.param
-
 	ctx, span := trace.Start(ctx, "getBatchFromZonemapFile")
-	defer func() {
-		span.End()
-		if tmpBat != nil {
-			for i, v := range tmpBat.Vecs {
-				if v == vecTmp {
-					tmpBat.Vecs[i] = nil
-				}
-			}
-			tmpBat.Clean(mp)
-		}
-		if vecTmp != nil {
-			vecTmp.Free(mp)
-		}
-		if release != nil {
-			release()
-		}
-	}()
-
+	defer span.End()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if r.zoneparam.offset >= len(r.zoneparam.bs) {
 		return nil
 	}
 
-	rows := 0
-	idxs := make([]uint16, len(param.Attrs))
-	meta := r.zoneparam.bs[r.zoneparam.offset].GetMeta()
-	colCnt := meta.BlockHeader().ColumnCount()
-	for i := 0; i < len(param.Attrs); i++ {
-		// Column positions inside the file live in ColFieldIndex: the query
-		// may prune or projection-reorder the scan schema, remapping ColIndex
-		// to the position in the output schema. Using ColIndex here reads
-		// the wrong file column (issue #30571).
-		fieldIdx := param.Attrs[i].ColFieldIndex
-		if fieldIdx < 0 || fieldIdx >= int32(colCnt) {
-			idxs[i] = 0 // column absent from the file; an all-null column is produced below
-			continue
+	block := r.zoneparam.bs[r.zoneparam.offset]
+	rows := int(block.GetRows())
+	colCount := int32(block.GetColumnCount())
+	attrs := r.param.Attrs
+	idxs := make([]uint16, 0, len(attrs))
+	for _, attr := range attrs {
+		// RESULT_SCAN maps saved columns by physical ordinal, even if their
+		// names match virtual columns used by ordinary external tables.
+		if field := attr.ColFieldIndex; field >= 0 && field < colCount {
+			idxs = append(idxs, uint16(field))
 		}
-		idxs[i] = uint16(fieldIdx)
 	}
 
-	var err error
-	tmpBat, release, err = r.blockReader.LoadColumns(ctx, idxs, nil,
-		r.zoneparam.bs[r.zoneparam.offset].BlockHeader().BlockID().Sequence(), mp)
-	if err != nil {
-		return err
-	}
-	filepathBytes := []byte(param.Fileparam.Filepath)
-
-	var sels []int64
-	for i := 0; i < len(param.Attrs); i++ {
-		attr := &param.Attrs[i]
-		if attr.ColFieldIndex < 0 || attr.ColFieldIndex >= int32(colCnt) {
-			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[attr.ColIndex].Typ, false), rows, nil)
-			if err != nil {
-				return err
-			}
-			for j := 0; j < rows; j++ {
-				vecTmp.GetNulls().Add(uint64(j))
-			}
-		} else if catalog.ContainExternalHidenCol(param.Attrs[i].ColName) {
-			if rows == 0 {
-				rows = tmpBat.Vecs[i].Length()
-			}
-			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
-			if err != nil {
-				return err
-			}
-			for j := 0; j < rows; j++ {
-				if err = vector.SetBytesAt(vecTmp, j, filepathBytes, mp); err != nil {
-					return err
-				}
-			}
-		} else {
-			vecTmp = tmpBat.Vecs[i]
-			rows = vecTmp.Length()
+	mp := proc.Mp()
+	var loaded *batch.Batch
+	if len(idxs) > 0 {
+		var release func()
+		var err error
+		loaded, release, err = r.blockReader.LoadColumns(ctx, idxs, nil,
+			block.BlockHeader().BlockID().Sequence(), mp)
+		if err == nil && release != nil {
+			defer release()
 		}
-		if cap(sels) >= vecTmp.Length() {
-			sels = sels[:vecTmp.Length()]
-		} else {
-			sels = make([]int64, vecTmp.Length())
-			for j, k := int64(0), int64(len(sels)); j < k; j++ {
-				sels[j] = j
-			}
+		if loaded != nil {
+			defer loaded.Clean(mp)
 		}
-
-		if err = bat.Vecs[i].Union(vecTmp, sels, proc.GetMPool()); err != nil {
+		if err != nil {
 			return err
 		}
 	}
 
-	n := bat.Vecs[0].Length()
-	bat.SetRowCount(n)
+	fileColumn := 0
+	for i, attr := range attrs {
+		dst := bat.Vecs[i]
+		if attr.ColFieldIndex < 0 || attr.ColFieldIndex >= colCount {
+			if err := vector.AppendMultiFixed(dst, 0, true, rows, mp); err != nil {
+				return err
+			}
+			continue
+		}
+		src := loaded.Vecs[fileColumn]
+		fileColumn++
+		// Saved-result projection metadata and the physical vector type are not
+		// guaranteed to have identical Oids. Preserve the previous reader's
+		// compatibility instead of introducing a new strict-type requirement.
+		if src.Length() != rows {
+			return moerr.NewInvalidInput(ctx, "saved result column length does not match the block row count")
+		}
+		if err := dst.UnionBatch(src, 0, rows, nil, mp); err != nil {
+			return err
+		}
+	}
+
+	bat.AddRowCount(rows)
 	return nil
 }
