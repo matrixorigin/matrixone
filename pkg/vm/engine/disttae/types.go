@@ -699,13 +699,9 @@ type Transaction struct {
 	// Map logical table ID to its uncommitted CN objects and their metadata.
 	// Transaction-local clones may share an object, so each table owns a separate
 	// object map. Guarded by txn.Lock() and has the transaction lifecycle.
-	cnObjsSummary map[uint64]map[types.Objectid]Summary
-	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
-	cn_flushed_s3_tombstone_object_stats_list *sync.Map
-	//cn_flushed_s3_tombstone_object_stats_list struct {
-	//	sync.RWMutex
-	//	data []objectio.ObjectStats
-	//}
+	cnObjsSummary     map[uint64]map[types.Objectid]Summary
+	flushedTombstones workspaceFlushedTombstones
+
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
 
@@ -1053,8 +1049,7 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		// The recorded-name holder installs at construction (round-41):
 		// a GC job the pool accepts captures it — never the
 		// transaction — as the settle state of its parked callback.
-		recordedUnpublishedObjects:                &txnRecordedUnpublished{},
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+		recordedUnpublishedObjects: &txnRecordedUnpublished{},
 
 		commitWorkspaceThreshold: eng.config.commitWorkspaceThreshold,
 		writeWorkspaceThreshold:  eng.config.writeWorkspaceThreshold,
@@ -1081,8 +1076,49 @@ func (txn *Transaction) SupportsAutoIncrEpochFence() bool {
 	return true
 }
 
-func (txn *Transaction) StashFlushedTombstones(stats objectio.ObjectStats) {
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(stats, nil)
+// Flushed workspace tombstones can reference data blocks shared by several
+// clone tables. Count live entries so transfers and rollback preserve any
+// remaining registration for the logical table.
+type workspaceFlushedTombstones struct {
+	mu     sync.RWMutex
+	tables map[uint64]map[objectio.ObjectStats]int
+}
+
+func (t *workspaceFlushedTombstones) adjust(tableID uint64, stats *vector.Vector, delta int) {
+	if stats.Length() == 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	objects := t.tables[tableID]
+	if delta > 0 && objects == nil {
+		if t.tables == nil {
+			t.tables = make(map[uint64]map[objectio.ObjectStats]int)
+		}
+		objects = make(map[objectio.ObjectStats]int, stats.Length())
+		t.tables[tableID] = objects
+	}
+	for i := range stats.Length() {
+		key := objectio.ObjectStats(stats.GetBytesAt(i))
+		count := objects[key] + delta
+		if count <= 0 {
+			delete(objects, key)
+		} else {
+			objects[key] = count
+		}
+	}
+	if len(objects) == 0 {
+		delete(t.tables, tableID)
+	}
+}
+
+func (t *workspaceFlushedTombstones) forEach(tableID uint64, fn func(objectio.ObjectStats)) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for stats := range t.tables[tableID] {
+		fn(stats)
+	}
 }
 
 func (txn *Transaction) Readonly() bool {
@@ -1630,9 +1666,7 @@ func (txn *Transaction) GCObjsByIdxRange(start, end int) (err error) {
 
 // recordedWorkspaceNames selects the storage-object names the workspace
 // entries in [start, end] recorded — every write entry that carries a
-// published file — and retires tombstone objects from the CN summary
-// list the moment their GC is scheduled (their producer can no longer
-// flush them). Both GC front doors share this selection so the clone
+// published file. Both GC front doors share this selection so the clone
 // filters downstream see identical name sets.
 func (txn *Transaction) recordedWorkspaceNames(start, end int) []string {
 	var objsName []string
@@ -1656,9 +1690,6 @@ func (txn *Transaction) recordedWorkspaceNames(start, end int) []string {
 
 			for j := range vec.Length() {
 				ss := objectio.ObjectStats(vec.GetBytesAt(j))
-				if txn.writes[i].typ == DELETE {
-					txn.cn_flushed_s3_tombstone_object_stats_list.Delete(ss)
-				}
 				objsName = append(objsName, ss.ObjectName().String())
 			}
 		}
