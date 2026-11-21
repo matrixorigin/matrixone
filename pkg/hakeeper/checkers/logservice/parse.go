@@ -216,32 +216,109 @@ func removeReplicasOnChangedStoreIncarnation(
 	}
 }
 
-// canRepairVotingMembership limits scheduling for shards with expired voters
-// to cases where a majority of the current voters still report.
-func canRepairVotingMembership(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo, expired []string) bool {
-	hasExpiredVoter := false
-	for _, uuid := range shard.Replicas {
-		if contains(expired, uuid) {
-			hasExpiredVoter = true
-			break
-		}
-	}
-	if !hasExpiredVoter {
-		return true
-	}
-	reporting := 0
+// isReportingVotingExecutor verifies that target still represents its configured
+// voting replica and reported that exact identity in the current heartbeat.
+func isReportingVotingExecutor(
+	shard pb.LogShardInfo,
+	stores map[string]pb.LogStoreInfo,
+	expired []string,
+	target string,
+) bool {
 	for replicaID, uuid := range shard.Replicas {
-		if contains(expired, uuid) || replicaStoreIncarnationChanged(replicaID, uuid, shard.ReplicaStoreIncarnations, stores) {
+		if uuid != target || contains(expired, uuid) {
 			continue
+		}
+		if replicaStoreIncarnationChanged(replicaID, uuid, shard.ReplicaStoreIncarnations, stores) {
+			return false
 		}
 		for _, report := range stores[uuid].Replicas {
 			if report.ShardID == shard.ShardID && report.ReplicaID == replicaID && !report.IsNonVoting {
-				reporting++
-				break
+				return true
 			}
 		}
+		return false
 	}
-	return reporting > len(shard.Replicas)/2
+	return false
+}
+
+// IsReportingVotingExecutor reports whether target is a live, current voter for
+// this shard. It is shared with coordinator cleanup of stale membership work.
+func IsReportingVotingExecutor(
+	shard pb.LogShardInfo,
+	stores map[string]pb.LogStoreInfo,
+	expired []string,
+	target string,
+) bool {
+	return isReportingVotingExecutor(shard, stores, expired, target)
+}
+
+func canRemoveVotingReplica(
+	shard pb.LogShardInfo,
+	stores map[string]pb.LogStoreInfo,
+	expired []string,
+	replicaToRemove replica,
+) bool {
+	voters := len(shard.Replicas)
+	if voters < 2 || shard.Replicas[replicaToRemove.replicaID] != replicaToRemove.uuid {
+		return false
+	}
+
+	reporting := reportingVotingExecutors(shard, stores, expired)
+	if len(reporting) <= voters/2 {
+		return false
+	}
+	if isReportingVotingExecutor(shard, stores, expired, replicaToRemove.uuid) {
+		reporting = reporting[:len(reporting)-1]
+	}
+	return len(reporting) > (voters-1)/2
+}
+
+// reportingVotingExecutors returns configured voters that are live and have
+// reported the same voter identity for this shard in the current heartbeat.
+func reportingVotingExecutors(
+	shard pb.LogShardInfo,
+	stores map[string]pb.LogStoreInfo,
+	expired []string,
+) []string {
+	executors := make([]string, 0, len(shard.Replicas))
+	for _, uuid := range shard.Replicas {
+		if isReportingVotingExecutor(shard, stores, expired, uuid) {
+			executors = append(executors, uuid)
+		}
+	}
+	slices.Sort(executors)
+	return executors
+}
+
+// hasVotingMajority reports whether current voting membership has a strict
+// majority of live stores reporting their configured voter identities.
+func hasVotingMajority(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo, expired []string) bool {
+	return len(shard.Replicas) > 0 &&
+		len(reportingVotingExecutors(shard, stores, expired)) > len(shard.Replicas)/2
+}
+
+// canRepairVotingMembership limits configuration changes to reporting voters.
+// If any configured voter is unavailable, a strict majority must remain.
+func canRepairVotingMembership(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo, expired []string) bool {
+	// Empty voter sets are the initial bootstrap case, which has no existing
+	// configuration to change and is handled by checkToBootstrap.
+	if len(shard.Replicas) == 0 {
+		return true
+	}
+	// Preserve the existing no-failure policy. When a voter is expired (or its
+	// storage incarnation changed on main), require a reporting majority before
+	// scheduling any membership change.
+	for replicaID, uuid := range shard.Replicas {
+		if contains(expired, uuid) || replicaStoreIncarnationChanged(
+			replicaID,
+			uuid,
+			shard.ReplicaStoreIncarnations,
+			stores,
+		) {
+			return len(reportingVotingExecutors(shard, stores, expired)) > len(shard.Replicas)/2
+		}
+	}
+	return true
 }
 
 // parseLogShards collects stats for further use.
@@ -283,11 +360,13 @@ func parseLogShards(
 				normalStats.toRemove[shardID] = removals
 			}
 		}
-		if fixingNonVoting.toAdd > 0 {
-			nonVotingStats.toAdd[shardID] = fixingNonVoting.toAdd
-		}
-		if len(toRemoveNonVoting) > 0 {
-			nonVotingStats.toRemove[shardID] = toRemoveNonVoting
+		if canRepairVotingMembership(shardInfo, infos.Stores, expired) {
+			if fixingNonVoting.toAdd > 0 {
+				nonVotingStats.toAdd[shardID] = fixingNonVoting.toAdd
+			}
+			if len(toRemoveNonVoting) > 0 {
+				nonVotingStats.toRemove[shardID] = toRemoveNonVoting
+			}
 		}
 		normalStats.toStart = append(normalStats.toStart, toStartNormal...)
 		nonVotingStats.toStart = append(nonVotingStats.toStart, toStartNonVoting...)

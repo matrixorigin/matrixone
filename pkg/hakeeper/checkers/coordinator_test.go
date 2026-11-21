@@ -611,7 +611,7 @@ func TestFixExpiredStore(t *testing.T) {
 								NonVotingReplicas: map[uint64]string{4: "d", 5: "e"},
 								Epoch:             1,
 								LeaderID:          1},
-							ReplicaID: 2,
+							ReplicaID: 1,
 						}},
 					},
 					"b": {

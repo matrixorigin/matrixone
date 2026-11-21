@@ -408,3 +408,271 @@ func TestCoordinatorRepairsAfterMissingReplicaReport(t *testing.T) {
 	state.LogState.Shards[1] = data
 	require.True(t, hasChange(recoveryCommands(), pb.AddReplica, 1, "log-d"), "replace the expired voter after removal")
 }
+
+func TestCoordinatorSerializesRepairThroughReportingVoters(t *testing.T) {
+	c, state, alloc := tnStartScenario(t)
+	state.Tick = 10000
+	state.ClusterInfo.LogShards = []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 5}}
+	members := map[uint64]string{1: "log-a", 2: "log-b", 3: "log-c", 4: "log-d", 5: "log-e"}
+	state.LogState = pb.LogState{
+		Shards: make(map[uint64]pb.LogShardInfo),
+		Stores: make(map[string]pb.LogStoreInfo),
+	}
+	for _, uuid := range []string{"log-a", "log-b", "log-c", "log-d", "log-e", "log-f", "log-g"} {
+		tick := state.Tick
+		if uuid == "log-a" || uuid == "log-b" {
+			tick = 0
+		}
+		state.LogState.Stores[uuid] = pb.LogStoreInfo{Tick: tick}
+	}
+
+	observe := func(epoch uint64, voters map[uint64]string, reporting []uint64) {
+		data := pb.LogShardInfo{ShardID: 1, Epoch: epoch, Replicas: voters}
+		data.ReplicaStoreIncarnations = make(map[uint64]string, len(voters))
+		for id, uuid := range voters {
+			data.ReplicaStoreIncarnations[id] = "inc-" + uuid
+		}
+		state.LogState.Shards[1] = data
+		for _, uuid := range voters {
+			store := state.LogState.Stores[uuid]
+			if store.Tick == 0 { // Keep expired stores' last-known reports; they are not evidence.
+				continue
+			}
+			store.Replicas = nil
+			state.LogState.Stores[uuid] = store
+		}
+		for _, id := range reporting {
+			uuid := voters[id]
+			store := state.LogState.Stores[uuid]
+			store.Replicas = append(store.Replicas, pb.LogReplicaInfo{LogShardInfo: data, ReplicaID: id})
+			store.StoreIncarnation = "inc-" + uuid
+			state.LogState.Stores[uuid] = store
+		}
+	}
+	observe(1, members, []uint64{3, 4, 5})
+	for id, uuid := range members {
+		store := state.LogState.Stores[uuid]
+		if store.Tick == 0 {
+			store.Replicas = []pb.LogReplicaInfo{{LogShardInfo: state.LogState.Shards[1], ReplicaID: id}}
+			state.LogState.Stores[uuid] = store
+		}
+	}
+
+	membershipChanges := func() []pb.ScheduleCommand {
+		commands := c.Check(alloc, state, false)
+		var changes []pb.ScheduleCommand
+		for _, command := range commands {
+			if command.ServiceType != pb.LogService || command.ConfigChange == nil {
+				continue
+			}
+			switch command.ConfigChange.ChangeType {
+			case pb.AddReplica, pb.AddNonVotingReplica, pb.RemoveReplica, pb.RemoveNonVotingReplica:
+				changes = append(changes, command)
+			}
+		}
+		return changes
+	}
+	assertLiveExecutor := func(command pb.ScheduleCommand) {
+		require.Contains(t, []string{"log-c", "log-d", "log-e"}, command.UUID)
+	}
+
+	changes := membershipChanges()
+	require.Len(t, changes, 1, "only one config change may use the observed shard epoch")
+	require.Equal(t, pb.RemoveReplica, changes[0].ConfigChange.ChangeType)
+	require.Equal(t, "log-a", changes[0].ConfigChange.Replica.UUID)
+	assertLiveExecutor(changes[0])
+
+	members = map[uint64]string{2: "log-b", 3: "log-c", 4: "log-d", 5: "log-e"}
+	observe(2, members, []uint64{3, 4, 5})
+	changes = membershipChanges()
+	require.Len(t, changes, 1, "the second removal waits for the observed epoch advance")
+	require.Equal(t, pb.RemoveReplica, changes[0].ConfigChange.ChangeType)
+	require.Equal(t, "log-b", changes[0].ConfigChange.Replica.UUID)
+	assertLiveExecutor(changes[0])
+
+	members = map[uint64]string{3: "log-c", 4: "log-d", 5: "log-e"}
+	observe(3, members, []uint64{3, 4, 5})
+	changes = membershipChanges()
+	require.Len(t, changes, 1, "only one replacement is proposed per observed epoch")
+	require.Equal(t, pb.AddReplica, changes[0].ConfigChange.ChangeType)
+	assertLiveExecutor(changes[0])
+	added := changes[0].ConfigChange.Replica
+	require.Contains(t, []string{"log-f", "log-g"}, added.UUID)
+
+	members[added.ReplicaID] = added.UUID
+	observe(4, members, []uint64{3, 4, 5})
+	commands := c.Check(alloc, state, false)
+	started := false
+	for _, command := range commands {
+		if command.ConfigChange != nil && command.ConfigChange.ChangeType == pb.StartReplica &&
+			command.ConfigChange.Replica.UUID == added.UUID {
+			started = true
+		}
+	}
+	require.True(t, started, "the configured replacement is started after membership is observed")
+
+	observe(4, members, []uint64{3, 4, 5, added.ReplicaID})
+	commands = c.Check(alloc, state, false)
+	for _, command := range commands {
+		if command.ConfigChange != nil {
+			require.False(t, command.ConfigChange.ChangeType == pb.StartReplica && command.ConfigChange.Replica.UUID == added.UUID,
+				"a reported replacement is no longer started repeatedly")
+		}
+	}
+}
+
+func TestCoordinatorPreservesVotingQuorumAfterRemoval(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		failedID   uint64
+		wantRemove string
+	}{
+		{name: "remove unavailable voter before losing quorum", failedID: 5, wantRemove: "log-e"},
+		{name: "do not remove a reporting voter when projection loses quorum", failedID: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			currentTick := uint64(1)
+			if tc.failedID != 0 {
+				currentTick = expiredTick + 1
+			}
+			c := NewCoordinator("", hakeeper.Config{})
+			state := pb.CheckerState{
+				Tick: currentTick,
+				ClusterInfo: pb.ClusterInfo{
+					LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}},
+				},
+				LogState: pb.LogState{
+					Shards: map[uint64]pb.LogShardInfo{},
+					Stores: map[string]pb.LogStoreInfo{},
+				},
+			}
+			voters := map[uint64]string{1: "log-a", 2: "log-b", 3: "log-c", 4: "log-d", 5: "log-e"}
+			shard := pb.LogShardInfo{ShardID: 1, Epoch: 7, Replicas: voters}
+			state.LogState.Shards[1] = shard
+			for id, uuid := range voters {
+				tick := currentTick
+				if id == tc.failedID {
+					tick = 0
+				}
+				store := pb.LogStoreInfo{Tick: tick}
+				if id <= 3 {
+					store.Replicas = []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: id}}
+				}
+				state.LogState.Stores[uuid] = store
+			}
+
+			commands := c.Check(util.NewTestIDAllocator(100), state, false)
+			var membership []pb.ScheduleCommand
+			for _, command := range commands {
+				if command.ServiceType == pb.LogService && command.ConfigChange != nil {
+					switch command.ConfigChange.ChangeType {
+					case pb.AddReplica, pb.AddNonVotingReplica, pb.RemoveReplica, pb.RemoveNonVotingReplica:
+						membership = append(membership, command)
+					}
+				}
+			}
+			if tc.wantRemove == "" {
+				require.Empty(t, membership)
+				return
+			}
+			require.Len(t, membership, 1)
+			require.Equal(t, pb.RemoveReplica, membership[0].ConfigChange.ChangeType)
+			require.Equal(t, tc.wantRemove, membership[0].ConfigChange.Replica.UUID)
+			require.Contains(t, []string{"log-a", "log-b", "log-c"}, membership[0].UUID)
+		})
+	}
+}
+
+func TestCoordinatorRetiresStaleMembershipOperators(t *testing.T) {
+	for _, staleBy := range []string{"epoch", "executor", "destination_missing", "destination_expired"} {
+		t.Run(staleBy, func(t *testing.T) {
+			c := NewCoordinator("", hakeeper.Config{})
+			shard := pb.LogShardInfo{ShardID: 1, Epoch: 1, Replicas: map[uint64]string{1: "log-a", 2: "log-b", 3: "log-c"}}
+			state := pb.CheckerState{
+				Tick:        1,
+				ClusterInfo: pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 4}}},
+				LogState: pb.LogState{
+					Shards: map[uint64]pb.LogShardInfo{1: shard},
+					Stores: map[string]pb.LogStoreInfo{
+						"log-a": {Tick: 1, Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 1}}},
+						"log-b": {Tick: 1, Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 2}}},
+						"log-c": {Tick: 1, Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 3}}},
+						"log-d": {Tick: 1},
+						"log-e": {Tick: 1},
+					},
+				},
+			}
+			stale := operator.NewOperator("stale", 1, 1, operator.AddLogService{
+				Target: "log-a", Replica: operator.Replica{UUID: "log-d", ShardID: 1, ReplicaID: 4, Epoch: 1},
+			})
+			commands := c.OperatorController.Dispatch([]*operator.Operator{stale}, state.LogState, state.TNState, state.CNState, state.ProxyState)
+			require.Len(t, commands, 1)
+
+			switch staleBy {
+			case "epoch":
+				shard.Epoch = 2
+				state.LogState.Shards[1] = shard
+			case "executor":
+				store := state.LogState.Stores["log-a"]
+				store.Replicas = nil
+				state.LogState.Stores["log-a"] = store
+			case "destination_missing":
+				delete(state.LogState.Stores, "log-d")
+			case "destination_expired":
+				state.Tick = expiredTick + 2
+				for _, uuid := range []string{"log-a", "log-b", "log-c", "log-e"} {
+					store := state.LogState.Stores[uuid]
+					store.Tick = state.Tick
+					state.LogState.Stores[uuid] = store
+				}
+			}
+
+			commands = c.Check(util.NewTestIDAllocator(100), state, false)
+			require.Equal(t, operator.CANCELED, stale.Status())
+			var add *pb.ScheduleCommand
+			for i := range commands {
+				if commands[i].ServiceType == pb.LogService && commands[i].ConfigChange != nil &&
+					commands[i].ConfigChange.ChangeType == pb.AddReplica {
+					add = &commands[i]
+					break
+				}
+			}
+			require.NotNil(t, add, "fresh membership repair must proceed without waiting for operator TTL")
+			require.Equal(t, shard.Epoch, add.ConfigChange.Replica.Epoch)
+			if staleBy == "executor" {
+				require.NotEqual(t, "log-a", add.UUID)
+			}
+		})
+	}
+}
+
+func TestCoordinatorGatesMembershipWithoutVoterMajority(t *testing.T) {
+	c := NewCoordinator("", hakeeper.Config{})
+	shard := pb.LogShardInfo{ShardID: 1, Epoch: 3, Replicas: map[uint64]string{1: "log-a", 2: "log-b", 3: "log-c"}}
+	state := pb.CheckerState{
+		Tick: 1,
+		ClusterInfo: pb.ClusterInfo{
+			LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 5}},
+		},
+		NonVotingReplicaNum: 1,
+		LogState: pb.LogState{
+			Shards: map[uint64]pb.LogShardInfo{1: shard},
+			Stores: map[string]pb.LogStoreInfo{
+				"log-a": {Tick: 1, Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 1}}},
+				"log-b": {Tick: 1},
+				"log-c": {Tick: 1},
+				"log-d": {Tick: 1},
+				"log-e": {Tick: 1},
+			},
+		},
+	}
+	commands := c.Check(util.NewTestIDAllocator(100), state, false)
+	for _, command := range commands {
+		if command.ServiceType == pb.LogService && command.ConfigChange != nil {
+			switch command.ConfigChange.ChangeType {
+			case pb.AddReplica, pb.AddNonVotingReplica, pb.RemoveReplica, pb.RemoveNonVotingReplica:
+				t.Fatalf("membership change without voting majority: %+v", command)
+			}
+		}
+	}
+}

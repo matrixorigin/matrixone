@@ -48,21 +48,47 @@ func PendingOperators(fields hakeeper.CheckerCommonFields, state pb.LogState,
 		bootstrap[shard.ShardID] = shard.NumberOfReplicas > 0 && uint64(normal.toAdd[shard.ShardID]) == shard.NumberOfReplicas
 	}
 	live := func(uuid string) bool { _, ok := working[uuid]; return ok }
+	reportingExecutor := func(shardID uint64, uuid string) bool {
+		shard, ok := state.Shards[shardID]
+		return ok && isReportingVotingExecutor(shard, state.Stores, expired, uuid)
+	}
+	membershipScheduled := make(map[uint64]struct{})
 	currentEpoch := func(r operator.Replica) bool {
 		shard, ok := state.Shards[r.ShardID]
 		return ok && shard.Epoch == r.Epoch
 	}
 	add := func(role int, r operator.Replica, target string) bool {
-		if additions[role][r.ShardID] == 0 || !currentEpoch(r) || !live(r.UUID) || !live(target) {
+		shard, exists := state.Shards[r.ShardID]
+		if _, scheduled := membershipScheduled[r.ShardID]; scheduled ||
+			!exists || !hasVotingMajority(shard, state.Stores, expired) ||
+			additions[role][r.ShardID] == 0 || !currentEpoch(r) ||
+			!live(r.UUID) || !live(target) || !reportingExecutor(r.ShardID, target) {
 			return false
 		}
 		additions[role][r.ShardID]--
+		membershipScheduled[r.ShardID] = struct{}{}
 		return true
 	}
 	remove := func(role int, r operator.Replica, target string) bool {
 		key := r
 		key.Epoch = 0
-		return removes[role][key] && currentEpoch(r) && live(target)
+		shard, exists := state.Shards[r.ShardID]
+		if _, scheduled := membershipScheduled[r.ShardID]; scheduled ||
+			!exists || !hasVotingMajority(shard, state.Stores, expired) ||
+			!removes[role][key] || !currentEpoch(r) ||
+			!live(target) || !reportingExecutor(r.ShardID, target) {
+			return false
+		}
+		if role == 0 {
+			shard := state.Shards[r.ShardID]
+			if !canRemoveVotingReplica(shard, state.Stores, expired, replica{
+				uuid: r.UUID, shardID: r.ShardID, replicaID: r.ReplicaID,
+			}) {
+				return false
+			}
+		}
+		membershipScheduled[r.ShardID] = struct{}{}
+		return true
 	}
 	var pending []*operator.Operator
 	seen := make(map[*operator.Operator]bool, len(ops))
