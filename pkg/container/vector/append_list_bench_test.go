@@ -73,8 +73,6 @@ func BenchmarkAppendFixedListReuse(b *testing.B) {
 						require.False(b, vec.IsNull(uint64(i)))
 						require.Equal(b, values[i], GetFixedAtNoTypeCheck[int64](vec, i))
 					}
-					require.Equal(b, PrepareParamNone, vec.GetPrepareParamKindAt(i))
-					require.Equal(b, types.StringSourceExpression, vec.GetStringSourceAt(i))
 				}
 			})
 		}

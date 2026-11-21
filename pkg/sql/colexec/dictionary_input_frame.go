@@ -169,6 +169,10 @@ func (f *DictionaryInputFrame) bind(executors []ExpressionExecutor, hasDictionar
 				e.dictionaryState = &functionDictionaryState{frame: f}
 			}
 			f.bind(e.parameterExecutor, hasDictionary)
+		case *ParamExpressionExecutor:
+			if e.textFallback != nil {
+				f.bind([]ExpressionExecutor{e.textFallback}, hasDictionary)
+			}
 		case *decimalTypedExecutor:
 			f.bind([]ExpressionExecutor{e.root}, hasDictionary)
 		case *decimalMulSubExecutor:

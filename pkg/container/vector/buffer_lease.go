@@ -276,7 +276,7 @@ func (v *Vector) CopyWithReadonlyArea(source *Vector, mp *mpool.MPool) error {
 	private.offHeap = v.offHeap
 	private.sorted = v.sorted
 	private.isBin = v.isBin
-	private.prepareParamType = v.prepareParamType
+
 	if err := private.SetAllocationAccount(v.allocationAccount); err != nil {
 		private.Free(mp)
 		return err
