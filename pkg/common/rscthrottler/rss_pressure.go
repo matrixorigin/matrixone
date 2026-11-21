@@ -86,16 +86,11 @@ func NewRSSPressureSource() *RSSPressureSource {
 	return processRSSPressure.attach()
 }
 
-type rssReservationSample struct {
-	at       time.Time
-	reserved int64
-}
-
 type rssPressureController struct {
-	// lifecycle excludes a new attach while the last close joins admitted work.
-	lifecycle      sync.Mutex
+	// Order RSS measurements without blocking reporter detach or cache work.
+	sampleMu       sync.Mutex
 	mu             sync.Mutex
-	sources        map[*RSSPressureSource]rssReservationSample
+	sources        map[*RSSPressureSource]struct{}
 	lastSample     time.Time
 	lastEvict      time.Time
 	lastFree       time.Time
@@ -104,7 +99,7 @@ type rssPressureController struct {
 	pending        bool
 	running        bool
 	cancelEviction context.CancelFunc
-	active         sync.WaitGroup
+	freeRunning    bool
 
 	setTarget   func(int64, time.Time)
 	clearTarget func()
@@ -113,34 +108,30 @@ type rssPressureController struct {
 }
 
 func (c *rssPressureController) attach() *RSSPressureSource {
-	c.lifecycle.Lock()
-	defer c.lifecycle.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.sources == nil {
-		c.sources = make(map[*RSSPressureSource]rssReservationSample)
+		c.sources = make(map[*RSSPressureSource]struct{})
 	}
 	source := &RSSPressureSource{controller: c}
-	c.sources[source] = rssReservationSample{}
+	c.sources[source] = struct{}{}
 	return source
 }
 
-// Close stops reports from this source and joins admitted work on last detach.
+// Close stops reports and cancels recovery on last detach. The process worker
+// retains admitted callbacks until they return.
 func (s *RSSPressureSource) Close() {
 	if s == nil {
 		return
 	}
 	c := s.controller
-	c.lifecycle.Lock()
-	defer c.lifecycle.Unlock()
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if _, ok := c.sources[s]; !ok {
-		c.mu.Unlock()
 		return
 	}
 	delete(c.sources, s)
 	if len(c.sources) != 0 {
-		c.mu.Unlock()
 		return
 	}
 	if c.state != rssPressureNone {
@@ -150,11 +141,8 @@ func (s *RSSPressureSource) Close() {
 	c.state = rssPressureNone
 	c.lastSample = time.Time{}
 	c.lastEvict = time.Time{}
-	c.lastFree = time.Time{}
 	c.expires = time.Time{}
 	c.sources = nil
-	c.mu.Unlock()
-	c.active.Wait()
 }
 
 // resetEviction invalidates queued work and requests cancellation of the active walk.
@@ -178,7 +166,6 @@ func (s *RSSPressureSource) observe(at time.Time, rss, limit, reserved, live int
 		return
 	}
 	c.lastSample = at
-	c.sources[s] = rssReservationSample{at: at, reserved: reserved}
 	previous := c.state
 	c.state = nextRSSPressureState(previous, float64(rss)/float64(limit))
 	target := rssPressureCacheTarget(c.state)
@@ -205,24 +192,17 @@ func (s *RSSPressureSource) observe(at time.Time, rss, limit, reserved, live int
 		c.pending = true
 		if !c.running {
 			c.running = true
-			c.active.Add(1)
 			go c.runEvictions()
 		}
 	}
 
-	// Either component may supply the low-visible-memory sample. Expired
-	// samples cannot keep an idle component's estimate in the decision.
-	for _, sample := range c.sources {
-		if !sample.at.IsZero() && at.Sub(sample.at) <= refreshMaxInterval {
-			reserved = min(reserved, sample.reserved)
-		}
-	}
+	// Visibility is measured by the reporting throttler in the same refresh.
 	visible := max(0, reserved+live)
-	free := float64(visible) < float64(rss)*rssScavengeVisibleRate &&
+	free := !c.freeRunning && float64(visible) < float64(rss)*rssScavengeVisibleRate &&
 		at.Sub(c.lastFree) > rssScavengeInterval
 	if free {
 		c.lastFree = at
-		c.active.Add(1)
+		c.freeRunning = true
 	}
 	state := c.state
 	c.mu.Unlock()
@@ -231,13 +211,14 @@ func (s *RSSPressureSource) observe(at time.Time, rss, limit, reserved, live int
 		logRSSPressure(rss, limit, visible, target, free, evict, previous, state)
 	}
 	if free {
-		defer c.active.Done()
 		c.free()
+		c.mu.Lock()
+		c.freeRunning = false
+		c.mu.Unlock()
 	}
 }
 
 func (c *rssPressureController) runEvictions() {
-	defer c.active.Done()
 	for {
 		c.mu.Lock()
 		now := time.Now()

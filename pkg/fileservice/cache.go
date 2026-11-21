@@ -451,6 +451,9 @@ func EvictMemoryCachesToCapacityPercent(ctx context.Context, percent int64) map[
 			return false
 		}
 		cache := k.(*MemCache)
+		if cache.closed.Load() {
+			return true
+		}
 		name := v.(memoryCacheRegistration).name
 		capacity := cache.cache.Capacity()
 		target := capacity * percent / 100
