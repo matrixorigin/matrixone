@@ -70,6 +70,7 @@ func (txn *Transaction) accountWorkspaceEntryLocked(entry *Entry) {
 
 	entry.accountedSize = uint64(entry.bat.Size())
 	txn.workspaceSize += entry.accountedSize
+	txn.adjustFlushedTombstonesLocked(entry, 1)
 	if entry.fileName != "" || catalog.IsSystemTable(entry.tableId) {
 		return
 	}
@@ -98,6 +99,7 @@ func (txn *Transaction) unaccountWorkspaceEntryLocked(entry *Entry) {
 	}
 
 	txn.workspaceSize -= entry.accountedSize
+	txn.adjustFlushedTombstonesLocked(entry, -1)
 	if entry.fileName == "" && !catalog.IsSystemTable(entry.tableId) {
 		switch entry.typ {
 		case INSERT:
@@ -115,6 +117,13 @@ func (txn *Transaction) unaccountWorkspaceEntryLocked(entry *Entry) {
 		}
 	}
 	entry.accountedSize = 0
+}
+
+func (txn *Transaction) adjustFlushedTombstonesLocked(entry *Entry, delta int) {
+	if entry.typ == DELETE && entry.fileName != "" {
+		// File-backed DELETE entries store object stats in the first vector.
+		txn.flushedTombstones.adjust(entry.tableId, entry.bat.Vecs[0], delta)
+	}
 }
 
 func (txn *Transaction) appendWorkspaceEntryLocked(entry Entry) {
@@ -3764,14 +3773,6 @@ func (txn *Transaction) publishStagedWorkspaceRecordLocked(s *stagedWorkspaceRec
 
 	txn.readOnly.Store(false)
 
-	if s.typ == DELETE {
-		col, area := vector.MustVarlenaRawData(s.bat.Vecs[0])
-		for i := range col {
-			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
-			txn.StashFlushedTombstones(stats)
-		}
-	}
-
 	txn.appendWorkspaceEntryLocked(Entry{
 		typ:                s.typ,
 		accountId:          s.accountId,
@@ -5595,20 +5596,6 @@ func collectObjectStatsFromEntry(entry Entry) []objectio.ObjectStats {
 	return statsList
 }
 
-// TODO::remove it after workspace refactor.
-func (txn *Transaction) getUncommittedS3Tombstone(
-	appendTo func(stats *objectio.ObjectStats),
-) (err error) {
-
-	txn.cn_flushed_s3_tombstone_object_stats_list.Range(func(k, v any) bool {
-		ss := k.(objectio.ObjectStats)
-		appendTo(&ss)
-		return true
-	})
-
-	return nil
-}
-
 type tombstoneTransferKey struct {
 	accountId           uint32
 	databaseId, tableId uint64
@@ -6255,7 +6242,6 @@ func (txn *Transaction) delTransaction() {
 	txn.tableOps = nil
 	txn.databaseOps = nil
 
-	txn.cn_flushed_s3_tombstone_object_stats_list = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
 	// Retirement removes exactly the segment-map entries THIS workspace
@@ -6379,7 +6365,6 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		},
 		cnObjsSummary:   map[uint64]map[types.Objectid]Summary{},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 
 		commitWorkspaceThreshold: txn.commitWorkspaceThreshold,
 		writeWorkspaceThreshold:  txn.writeWorkspaceThreshold,

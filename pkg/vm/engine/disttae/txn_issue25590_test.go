@@ -578,7 +578,6 @@ func TestIssue25590RetirementKeepsSurvivingEntriesAcrossDumpAndRollback(t *testi
 	txn.tablesInVain = make(map[uint64]int)
 	txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 	txn.cnObjsSummary = make(map[uint64]map[types.Objectid]Summary)
-	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	// thresholds far above the working set: admissions never dump on their
 	// own; the one flush below is issued explicitly from the statement's
@@ -711,7 +710,6 @@ func TestIssue25590AdmissionFailureKeepsRollbackBoundaryExact(t *testing.T) {
 	txn.tablesInVain = make(map[uint64]int)
 	txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 	txn.cnObjsSummary = make(map[uint64]map[types.Objectid]Summary)
-	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	// no dumps during the setup statements
 	txn.writeWorkspaceThreshold = 1 << 40
@@ -923,7 +921,6 @@ func issue25590InitDumpableFixture(t *testing.T, txn *Transaction) {
 	txn.tablesInVain = make(map[uint64]int)
 	txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 	txn.cnObjsSummary = make(map[uint64]map[types.Objectid]Summary)
-	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	txn.writeWorkspaceThreshold = 1 << 40
 	txn.commitWorkspaceThreshold = 1 << 40
@@ -7476,9 +7473,6 @@ func issue25590BlockDrainUntilObserved(t *testing.T, e *Engine, fs *issue25590Po
 func issue25590BindRound21Txn(t *testing.T, txn *Transaction) {
 	t.Helper()
 	txn.proc.Base.TxnOperator = txn.op
-	if txn.cn_flushed_s3_tombstone_object_stats_list == nil {
-		txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
-	}
 	if mockOp, ok := txn.op.(*mock_frontend.MockTxnOperator); ok {
 		mockOp.EXPECT().EnterIncrStmt().AnyTimes()
 		mockOp.EXPECT().ExitIncrStmt().AnyTimes()
