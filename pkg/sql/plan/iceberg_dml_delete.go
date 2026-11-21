@@ -378,6 +378,11 @@ func appendIcebergDMLMetadataProjection(ctx context.Context, query *plan.Query, 
 	if scan.TableDef == nil || scan.ExternScan == nil {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg DELETE scan is malformed")
 	}
+	targetRef := icebergDMLTargetRefFromRoot(query, rootID)
+	if !icebergDMLSameObjectRef(targetRef, scan.ObjRef) {
+		return nil, moerr.NewInvalidInput(ctx, "Iceberg DML scan does not match its write target")
+	}
+	scan.ExtraOptions = icebergapi.DMLTargetScanPlanExtraOptions
 	if preserveTableColumns {
 		ensureIcebergDMLScanProjectsTableColumns(scan, icebergDMLRootTargetTableDef(root))
 	}
