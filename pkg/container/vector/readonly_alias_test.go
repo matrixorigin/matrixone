@@ -25,21 +25,25 @@ import (
 )
 
 func readonlyAliasVectors(
-	t *testing.T, mp *mpool.MPool, values [][]byte, leased bool, selection *AllocationAccountSelection,
+	t *testing.T, mp *mpool.MPool, values [][]byte, leased bool, destinationMP *mpool.MPool,
 ) (*Vector, *Vector) {
 	t.Helper()
 	source := NewOffHeapVecWithType(types.T_text.ToType())
 	t.Cleanup(func() { source.Free(mp) })
 	destination := NewOffHeapVecWithType(types.T_text.ToType())
 	t.Cleanup(func() { destination.Free(mp) })
-	require.NoError(t, destination.SetAllocationAccount(selection))
+	// destinationMP (an accounted view, or nil for mp) allocates the
+	// destination's private copy.
+	if destinationMP == nil {
+		destinationMP = mp
+	}
 	for _, value := range values {
 		require.NoError(t, AppendBytes(source, value, value == nil, mp))
 	}
 	if leased {
-		require.NoError(t, destination.CopyWithReadonlyArea(source, mp))
+		require.NoError(t, destination.CopyWithReadonlyArea(source, destinationMP))
 	} else {
-		require.NoError(t, destination.UnionBatch(source, 0, source.Length(), nil, mp))
+		require.NoError(t, destination.UnionBatch(source, 0, source.Length(), nil, destinationMP))
 	}
 	return source, destination
 }
@@ -250,14 +254,11 @@ func TestReadonlyWindowMutationFailure(t *testing.T) {
 				controller := &rejectNextVectorAllocation{}
 				class, err := state.account.RegisterCapacityController(controller)
 				require.NoError(t, err)
-				state.selection, err = NewAllocationAccountSelectionWithCapacityClass(
-					state.account, testVectorAllocationOwner, testVectorDataAllocationSite,
-					testVectorAreaAllocationSite, class,
-				)
-				require.NoError(t, err)
+				state.class = class
 				values := [][]byte{[]byte("aaaaaa"), bytes.Repeat([]byte{'b'}, 64), bytes.Repeat([]byte{'c'}, 64)}
-				_, destination := readonlyAliasVectors(t, mp, values, true, state.selection)
-				require.NoError(t, destination.Shrink([]int64{2}, true, mp))
+				amp := state.view(t, mp)
+				_, destination := readonlyAliasVectors(t, mp, values, true, amp)
+				require.NoError(t, destination.Shrink([]int64{2}, true, amp))
 				input, err := destination.Window(0, 1)
 				require.NoError(t, err)
 				t.Cleanup(func() { input.Free(mp) })
@@ -265,7 +266,7 @@ func TestReadonlyWindowMutationFailure(t *testing.T) {
 				beforeAccount := state.account.Snapshot().Used
 				beforeController := controller.used
 				controller.failAt = controller.calls + failAfter
-				require.ErrorIs(t, mutation.run(destination, input, mp), mpool.ErrAllocationAccountCapacity)
+				require.ErrorIs(t, mutation.run(destination, input, amp), mpool.ErrAllocationAccountCapacity)
 				require.True(t, controller.rejected)
 				require.Equal(t, beforeMP, mp.CurrNB())
 				require.Equal(t, beforeAccount, state.account.Snapshot().Used)
@@ -277,7 +278,7 @@ func TestReadonlyWindowMutationFailure(t *testing.T) {
 					require.Equal(t, values[row], destination.GetBytesAt(row))
 				}
 				controller.failAt = 0
-				require.NoError(t, mutation.run(destination, input, mp))
+				require.NoError(t, mutation.run(destination, input, amp))
 				if mutation.copy {
 					require.Equal(t, 2, destination.Length())
 					require.Equal(t, values[0], destination.GetBytesAt(0))

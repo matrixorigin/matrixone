@@ -6207,7 +6207,8 @@ func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 	repubNames := make([]string, 0, objCount-1)
 	require.Positive(t, account.Snapshot().Used)
 	for _, index := range idxes {
-		require.True(t, vector.AllocationAccountSelectionsEqual(txn.workspaceSelection, txn.writes[index].bat.AllocationAccountSelection()),
+		// Every staged batch is a workspace copy charged to the workspace account.
+		require.Contains(t, txn.workspaceCopies, txn.writes[index].bat,
 			"dirty replacement and every clean republication need the workspace account")
 	}
 	for i := 1; i < objCount; i++ {

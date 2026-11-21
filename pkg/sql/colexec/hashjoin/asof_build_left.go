@@ -266,14 +266,15 @@ func (ctr *container) initAsofBuildLeftState(hashJoin *HashJoin, proc *process.P
 	for column := range hashJoin.RightTypes {
 		bestRight.Vecs[column] = vector.NewOffHeapVecWithType(hashJoin.RightTypes[column])
 	}
-	if err = bestRight.SetAllocationAccount(hashJoin.asofCandidateAllocation); err != nil {
+	candidateMP, err := hashJoin.asofCandidateAllocation.MP(proc.Mp())
+	if err != nil {
 		return err
 	}
 	for _, vec := range bestRight.Vecs {
-		if err = vec.PreExtend(slotCount, proc.Mp()); err != nil {
+		if err = vec.PreExtend(slotCount, candidateMP); err != nil {
 			return err
 		}
-		if err = vec.PreExtendNulls(slotCount, proc.Mp()); err != nil {
+		if err = vec.PreExtendNulls(slotCount, candidateMP); err != nil {
 			return err
 		}
 		vec.SetLength(slotCount)
@@ -299,6 +300,7 @@ func (ctr *container) initAsofBuildLeftState(hashJoin *HashJoin, proc *process.P
 	ctr.asofBuildLeftIndexed = indexed
 	ctr.asofBuildLeftProbeSequence = 0
 	ctr.asofBuildLeftBestRight = bestRight
+	ctr.asofBuildLeftBestRightMP = candidateMP
 	ctr.asofBuildLeftFinalRow = 0
 	ctr.asofBuildLeftInitialized = true
 	committed = true
@@ -818,7 +820,7 @@ func (ctr *container) copyAsofBuildLeftRightRow(
 		sourceVec := source.Vecs[column]
 		oldBytes := asofRetainedAreaBytes(destination, destinationRow)
 		newBytes := asofRetainedAreaBytes(sourceVec, sourceRow)
-		if err := destination.Copy(sourceVec, int64(destinationRow), int64(sourceRow), proc.Mp()); err != nil {
+		if err := destination.Copy(sourceVec, int64(destinationRow), int64(sourceRow), ctr.asofBuildLeftBestRightMP); err != nil {
 			return err
 		}
 		if ctr.asofBuildLeftIndexed {
@@ -845,7 +847,7 @@ func (ctr *container) compactAsofBuildLeftCandidates(hashJoin *HashJoin, proc *p
 		if old == nil {
 			continue
 		}
-		clone, err := old.CloneToFlatCompactWithAllocation(proc.Mp(), hashJoin.asofCandidateAllocation)
+		clone, err := old.CloneToFlatCompact(ctr.asofBuildLeftBestRightMP)
 		if err != nil {
 			for _, created := range clones {
 				if created != nil {

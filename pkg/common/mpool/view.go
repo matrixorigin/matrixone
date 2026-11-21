@@ -89,3 +89,79 @@ func (mp *MPool) ViewAccount() *AllocationAccount {
 	}
 	return mp.view.request.account
 }
+
+// SameView reports whether two MPool values charge fresh allocations the
+// same way: the same pool and the same account, owner, site and class (or
+// both unaccounted).
+func SameView(a, b *MPool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.poolCore != b.poolCore {
+		return false
+	}
+	if a.view == nil || b.view == nil {
+		return a.view == nil && b.view == nil
+	}
+	if a.view.admit != nil || b.view.admit != nil {
+		return a.view == b.view
+	}
+	return a.view.request == b.view.request
+}
+
+// NewAccountedBuffer creates owned auxiliary bytes charged the way mp charges
+// fresh off-heap allocations. The caller must Free the buffer or transfer it
+// to an owner that releases it through its MPool.
+func (mp *MPool) NewAccountedBuffer() (*AccountedBuffer, error) {
+	if mp == nil || mp.view == nil {
+		return nil, ErrAllocationAccountInvalid
+	}
+	if mp.view.admit != nil {
+		return NewAdmittedBuffer(mp, mp.view.admit)
+	}
+	r := mp.view.request
+	return NewAccountedBufferWithCapacityClass(mp, r.account, r.owner, r.site, r.capacityClass)
+}
+
+// ReservePinnedCapacity charges a non-MPool backing retained by a reader to
+// mp's account. The caller owns the returned lease and releases it when the
+// retained data no longer pins the backing.
+func (mp *MPool) ReservePinnedCapacity(capacity uint64) (*CapacityLease, error) {
+	if mp == nil || mp.view == nil {
+		return nil, ErrAllocationAccountInvalid
+	}
+	if mp.view.admit != nil {
+		return NewAdmittedCapacityLease(capacity, mp.view.admit)
+	}
+	r := mp.view.request
+	reservation, err := r.account.ReserveCapacityWithClass(capacity, r.capacityClass, r.owner, r.site)
+	if err != nil {
+		return nil, err
+	}
+	lease, err := reservation.Commit(capacity)
+	if err != nil {
+		reservation.Abort()
+		return nil, err
+	}
+	return lease, nil
+}
+
+// ViewOwner and ViewCapacityClass describe an accounted view's charge.
+func (mp *MPool) ViewOwner() AllocationOwner {
+	if mp == nil || mp.view == nil {
+		return 0
+	}
+	return mp.view.request.owner
+}
+
+func (mp *MPool) ViewCapacityClass() AllocationCapacityClass {
+	if mp == nil || mp.view == nil {
+		return AllocationCapacityClassDefault
+	}
+	return mp.view.request.capacityClass
+}
+
+// IsAdmissionView reports whether mp is a transient-admission view.
+func (mp *MPool) IsAdmissionView() bool {
+	return mp != nil && mp.view != nil && mp.view.admit != nil
+}

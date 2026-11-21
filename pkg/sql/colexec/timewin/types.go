@@ -64,6 +64,8 @@ type container struct {
 	// the operator flushes at each boundary.
 	partSet []func(v, w *vector.Vector, sel int64, length int) error
 	partOut []*vector.Vector
+	// partSetMP is the pool the partSet closures were bound to.
+	partSetMP *mpool.MPool
 
 	tsExe colexec.ExpressionExecutor
 	tsVec []*vector.Vector
@@ -227,7 +229,10 @@ func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err er
 
 	ctr := &timeWin.ctr
 	ctr.resetExes()
-	releaseInheritedAccount := ctr.hasAccountedBufferedVector()
+	// Buffered input caches are allocated through the operator's accounted
+	// view when an account is bound; that backing must not cross a
+	// statement-attempt generation.
+	releaseInheritedAccount := ctr.allocation.Account != nil
 	// The last flushed batch and the aggregate executors belong to the finished
 	// generation. In the sliding path the batch owns its aggregate prefix (the
 	// boundaries belong to their expression executors and the partition keys to
@@ -247,10 +252,8 @@ func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err er
 	}
 	ctr.bat = nil
 	if releaseInheritedAccount {
-		// Dup preserves the source vector's allocation selection. An upstream
-		// accounted Order/MergeOrder can therefore charge these reusable input
-		// caches to the current statement attempt. Such backing must not cross a
-		// prepared-statement generation; unaccounted caches retain legacy reuse.
+		// Account-charged caches must not cross a prepared-statement
+		// generation; unaccounted caches retain legacy reuse.
 		ctr.freeVector(proc.Mp())
 	}
 	ctr.freeAgg()
@@ -498,40 +501,13 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 	}
 }
 
-func (ctr *container) hasAccountedBufferedVector() bool {
-	if ctr == nil {
-		return false
+// expressionMP is the pool expression executors charge: the operator's
+// accounted view when an account is bound, otherwise nil (unaccounted).
+func (ctr *container) expressionMP(proc *process.Process) (*mpool.MPool, error) {
+	if ctr.allocation.Account == nil {
+		return nil, nil
 	}
-	hasAccount := func(vec *vector.Vector) bool {
-		return vec != nil && vec.AllocationAccountSelection() != nil
-	}
-	for _, vec := range ctr.tsVec {
-		if hasAccount(vec) {
-			return true
-		}
-	}
-	for _, aggregateVecs := range ctr.aggVec {
-		for _, vecs := range aggregateVecs {
-			for _, vec := range vecs {
-				if hasAccount(vec) {
-					return true
-				}
-			}
-		}
-	}
-	for _, vecs := range ctr.partVec {
-		for _, vec := range vecs {
-			if hasAccount(vec) {
-				return true
-			}
-		}
-	}
-	for _, vec := range ctr.partOut {
-		if hasAccount(vec) {
-			return true
-		}
-	}
-	return hasAccount(ctr.startVec) || hasAccount(ctr.endVec)
+	return ctr.allocation.MP(proc)
 }
 
 func (ctr *container) freePartOut(mp *mpool.MPool) {

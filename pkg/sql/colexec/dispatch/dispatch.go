@@ -55,7 +55,11 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 		}
 		return nil
 	}
-	ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), uint32(len(dispatch.LocalRegs)))
+	spoolMP, err := dispatch.spoolMP(proc)
+	if err != nil {
+		return err
+	}
+	ctr.sp = pSpool.InitMyPipelineSpool(spoolMP, uint32(len(dispatch.LocalRegs)))
 
 	switch dispatch.FuncId {
 	case SendToAllFunc:

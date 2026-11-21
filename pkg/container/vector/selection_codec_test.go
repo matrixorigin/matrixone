@@ -541,7 +541,8 @@ func BenchmarkSelectedRowsVarlenaDecode(b *testing.B) {
 				b.Cleanup(func() { mpool.DeleteMPool(mp) })
 				source := NewVec(tc.typ)
 				account := newTestVectorAllocationAccount(b, 16<<20, 64)
-				destination := newAccountedTestVector(b, tc.typ, account.selection)
+				destination := newAccountedTestVector(b, tc.typ)
+				dmp := account.view(b, mp)
 				b.Cleanup(func() {
 					destination.Free(mp)
 					source.Free(mp)
@@ -559,13 +560,13 @@ func BenchmarkSelectedRowsVarlenaDecode(b *testing.B) {
 				reader := bytes.NewReader(payload)
 				// Warm the reusable, accounted destination before measuring the
 				// per-record codec cost; setup and capacity growth are separate.
-				require.NoError(b, destination.UnmarshalSelectedRowsFrom(reader, rows, mp))
+				require.NoError(b, destination.UnmarshalSelectedRowsFrom(reader, rows, dmp))
 				b.ReportAllocs()
 				b.SetBytes(int64(len(payload)))
 				b.ResetTimer()
 				for b.Loop() {
 					reader.Reset(payload)
-					if err := destination.UnmarshalSelectedRowsFrom(reader, rows, mp); err != nil {
+					if err := destination.UnmarshalSelectedRowsFrom(reader, rows, dmp); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -610,7 +611,8 @@ func TestSelectedRowsVarlenaDecodeInlineBoundaryAndReuse(t *testing.T) {
 			t.Cleanup(func() { mpool.DeleteMPool(mp) })
 			source := NewVec(tc.typ)
 			account := newTestVectorAllocationAccount(t, 1<<20, 64)
-			destination := newAccountedTestVector(t, tc.typ, account.selection)
+			destination := newAccountedTestVector(t, tc.typ)
+			dmp := account.view(t, mp)
 			t.Cleanup(func() {
 				destination.Free(mp)
 				source.Free(mp)
@@ -624,7 +626,7 @@ func TestSelectedRowsVarlenaDecodeInlineBoundaryAndReuse(t *testing.T) {
 			for _, selected := range [][]int32{{0, 1, 2, 3, 4}, {3, 2, 1, 0, 4}} {
 				var encoded bytes.Buffer
 				require.NoError(t, source.MarshalSelectedRowsTo(&encoded, selected))
-				require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, len(selected), mp))
+				require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, len(selected), dmp))
 				require.Zero(t, encoded.Len())
 				descriptors := MustFixedColNoTypeCheck[types.Varlena](destination)
 				for row, input := range selected {
@@ -663,16 +665,17 @@ func TestSelectedRowsVarlenaDecodeAccountCapacityAndReuse(t *testing.T) {
 	run := func(t *testing.T, limit uint64, rejected bool) uint64 {
 		t.Helper()
 		account := newTestVectorAllocationAccount(t, limit, 64)
-		destination := newAccountedTestVector(t, source.typ, account.selection)
+		destination := newAccountedTestVector(t, source.typ)
+		dmp := account.view(t, mp)
 		t.Cleanup(func() {
 			destination.Free(mp)
 			finalizeTestVectorAllocationAccount(t, account)
 		})
-		err := destination.UnmarshalSelectedRowsFrom(bytes.NewReader(encoded.Bytes()), 2, mp)
+		err := destination.UnmarshalSelectedRowsFrom(bytes.NewReader(encoded.Bytes()), 2, dmp)
 		if rejected {
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.Zero(t, destination.Length(), "the earlier inline row must not be published")
-			require.NoError(t, destination.UnmarshalSelectedRowsFrom(bytes.NewReader(recovery.Bytes()), 1, mp))
+			require.NoError(t, destination.UnmarshalSelectedRowsFrom(bytes.NewReader(recovery.Bytes()), 1, dmp))
 			require.Equal(t, []byte("inline"), destination.GetBytesAt(0))
 		} else {
 			require.NoError(t, err)

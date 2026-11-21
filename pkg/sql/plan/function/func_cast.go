@@ -10284,7 +10284,7 @@ func tryReserveAssignedText(
 			return false, nil
 		}
 	}
-	if err := result.PreExtendWithArea(0, total, proc.Mp()); err != nil {
+	if err := result.PreExtendWithArea(0, total, resultMPool(to, proc)); err != nil {
 		return true, err
 	}
 	for row := 0; row < length; row++ {

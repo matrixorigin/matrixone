@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -398,7 +397,7 @@ func TestBorrowedWorkspacePreparationFailurePreservesState(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	var rows [2]types.Rowid
 	rows[0].SetRowOffset(0)
@@ -407,7 +406,7 @@ func TestBorrowedWorkspacePreparationFailurePreservesState(t *testing.T) {
 	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
 	require.NoError(t, err)
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0], err = vector.NewBorrowedFixedVectorWithAllocation(types.T_Rowid.ToType(), len(rows), data, lease, selection)
+	bat.Vecs[0], err = vector.NewBorrowedFixedVector(types.T_Rowid.ToType(), len(rows), data, lease)
 	require.NoError(t, err)
 	bat.SetRowCount(len(rows))
 	defer func() {
@@ -417,7 +416,7 @@ func TestBorrowedWorkspacePreparationFailurePreservesState(t *testing.T) {
 		_, finalErr := registry.Finalize(account)
 		require.NoError(t, finalErr)
 	}()
-	txn := &Transaction{proc: proc, writes: []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: bat}},
+	txn := &Transaction{proc: proc, workspaceView: selection, writes: []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: bat}},
 		batchSelectList: map[*batch.Batch][]int64{bat: {1, 0}},
 		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}}
 	txn.accountWorkspaceEntryLocked(&txn.writes[0])
@@ -438,20 +437,8 @@ func TestBorrowedWorkspacePreparationFailurePreservesState(t *testing.T) {
 	require.Equal(t, []int64{1, 0}, txn.batchSelectList[bat])
 	require.Equal(t, 2, bat.RowCount())
 
-	out, err := txn.deleteBatch(bat, 7, 42)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	require.Same(t, bat, out)
-	require.Equal(t, beforeSize, txn.workspaceSize)
-	require.Equal(t, []int64{1, 0}, txn.batchSelectList[bat])
-	require.Empty(t, txn.deletedBlocks.offsets)
-
-	deleteTxn := newTransactionWithActivePKTableForTest(t, "pk")
-	deleteTxn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false)
-	tbl := deleteTxn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
-	require.NotNil(t, tbl)
-	bat.Attrs = []string{catalog.Row_ID}
-	err = tbl.Delete(context.Background(), bat, "")
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	require.Empty(t, deleteTxn.writes)
+	// deleteBatch and txnTable.Delete mutate the caller's batch, which no
+	// longer carries the caller's allocation account; their materialization
+	// of borrowed data is unaccounted, so they have no capacity failure here.
 	require.Equal(t, 2, bat.RowCount())
 }

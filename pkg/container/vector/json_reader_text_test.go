@@ -38,7 +38,7 @@ func TestJSONReaderSynchronousTextSelection(t *testing.T) {
 		live += capacity
 		return func() { live -= capacity }, nil
 	}
-	builder, err := NewJSONReaderBuilder(mp, nil, admission)
+	builder, err := NewJSONReaderBuilder(mp, admission)
 	require.NoError(t, err)
 	defer builder.Close()
 	raw := jsonAdmissionValue(t, `{"keep":"owned text","items":[1,2],"null":null}`)
@@ -97,7 +97,7 @@ func TestJSONReaderSynchronousTextSelection(t *testing.T) {
 func TestJSONReaderStringTextMatchesUnquote(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	builder, err := NewJSONReaderBuilder(mp, nil)
+	builder, err := NewJSONReaderBuilder(mp)
 	require.NoError(t, err)
 	defer builder.Close()
 	literals := []string{`""`, `"plain"`, `"\"quoted\""`, `"slash\\line\n"`, `"猫🌍"`, `"\u0000"`}

@@ -90,7 +90,7 @@ func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 	if err := validateJSONLegacyWire(data); err != nil {
 		return err
 	}
-	if v.allocationAccount != nil || v.hasOwnedBackingStorage() {
+	if v.hasOwnedBackingStorage() {
 		return allocationAccountInvalid("cannot replace owned vector storage with aliases")
 	}
 	var decoded Vector
@@ -111,11 +111,6 @@ func (v *Vector) unmarshalBinaryV1(data []byte) error {
 	typ, err := types.DecodeTypeChecked(data[1 : 1+types.TSize])
 	if err != nil {
 		return err
-	}
-	if v.allocationAccount != nil {
-		return allocationAccountInvalid(
-			"cannot install aliases in an accounted vector",
-		)
 	}
 	// read class
 	v.class = int(decodedPhysicalClass(data[0]))
@@ -163,7 +158,6 @@ func (v *Vector) unmarshalBinaryV1(data []byte) error {
 
 	v.cantFreeData = true
 	v.cantFreeArea = true
-	v.allocationAccount = nil
 
 	return nil
 }

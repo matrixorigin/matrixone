@@ -15,14 +15,14 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Projection struct {
-	inputAllocation  *vector.AllocationAccountSelection
+	inputAllocation  *mpool.MPool
 	projectBat       *batch.Batch
 	ProjectList      []*plan.Expr
 	ProjectExecutors []ExpressionExecutor
@@ -38,7 +38,7 @@ func (projection *Projection) PrepareProjection(proc *process.Process) (err erro
 // preserves the legacy unaccounted behavior.
 func (projection *Projection) PrepareProjectionWithAllocation(
 	proc *process.Process,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 ) (err error) {
 	if len(projection.ProjectList) == 0 {
 		return

@@ -35,13 +35,14 @@ func TestReadonlyBinarySetterAdmission(t *testing.T) {
 					controller := &readonlyWriteController{}
 					state := readonlyWriteAccount(t, controller)
 					values := [][]byte{[]byte("old"), []byte("source"), bytes.Repeat([]byte{'a'}, 64)}
-					_, destination := readonlyAliasVectors(t, mp, values, leased, state.selection)
+					amp := state.view(t, mp)
+					_, destination := readonlyAliasVectors(t, mp, values, leased, amp)
 					var snapshot *Vector
 					var err error
 					if leased {
-						snapshot, err = destination.RetainedReadonlyViewWithMP(mp)
+						snapshot, err = destination.RetainedReadonlyViewWithMP(amp)
 					} else {
-						snapshot, err = destination.CloneWindowWithAllocation(0, 3, mp, state.selection)
+						snapshot, err = destination.CloneWindow(0, 3, amp)
 					}
 					require.NoError(t, err)
 					t.Cleanup(func() { snapshot.Free(mp) })
@@ -54,7 +55,7 @@ func TestReadonlyBinarySetterAdmission(t *testing.T) {
 					if failAfter != 0 {
 						controller.failAt = controller.calls + failAfter
 					}
-					err = SetBytesAt(destination, 0, input, mp)
+					err = SetBytesAt(destination, 0, input, amp)
 					if err != nil {
 						require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 						require.True(t, controller.rejected)
@@ -66,7 +67,7 @@ func TestReadonlyBinarySetterAdmission(t *testing.T) {
 						if alias {
 							input = destination.GetBytesAt(1)
 						}
-						require.NoError(t, SetBytesAt(destination, 0, input, mp))
+						require.NoError(t, SetBytesAt(destination, 0, input, amp))
 					} else {
 						require.False(t, controller.rejected)
 					}

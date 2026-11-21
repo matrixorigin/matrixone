@@ -256,7 +256,7 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 			}
 		}
 
-		if err = bat.Vecs[i].Union(vecTmp, sels, proc.GetMPool()); err != nil {
+		if err = bat.Vecs[i].Union(vecTmp, sels, param.outputPool(proc)); err != nil {
 			return err
 		}
 	}

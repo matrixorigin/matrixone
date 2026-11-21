@@ -118,7 +118,8 @@ func TestCopyWithReadonlyAreaAllocationFailures(t *testing.T) {
 			mp := mpool.MustNewZero()
 			state := newTestVectorAllocationAccount(t, limit, 32)
 			source := NewOffHeapVecWithType(types.T_varchar.ToType())
-			destination := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+			destination := newAccountedTestVector(t, types.T_varchar.ToType())
+			amp := state.view(t, mp)
 			defer func() {
 				source.Free(mp)
 				destination.Free(mp)
@@ -129,27 +130,25 @@ func TestCopyWithReadonlyAreaAllocationFailures(t *testing.T) {
 			value := bytes.Repeat([]byte{'a'}, 1024)
 			require.NoError(t, AppendBytes(source, value, false, mp))
 			if limit == 128 {
-				require.NoError(t, destination.PreExtendWithArea(1, 32, mp))
+				require.NoError(t, destination.PreExtendWithArea(1, 32, amp))
 				before := state.account.Snapshot().Used
 				beforeMP := mp.CurrNB()
-				require.ErrorIs(t, destination.CopyWithReadonlyArea(source, mp), mpool.ErrAllocationAccountCapacity)
+				require.ErrorIs(t, destination.CopyWithReadonlyArea(source, amp), mpool.ErrAllocationAccountCapacity)
 				require.Zero(t, destination.Length())
 				require.False(t, destination.HasBorrowedBacking())
-				require.Same(t, state.selection, destination.AllocationAccountSelection())
 				require.Equal(t, before, state.account.Snapshot().Used)
 				require.Equal(t, beforeMP, mp.CurrNB())
 				require.Equal(t, value, source.GetBytesAt(0))
 				return
 			}
 
-			require.NoError(t, destination.CopyWithReadonlyArea(source, mp))
-			require.Same(t, state.selection, destination.AllocationAccountSelection())
-			view, err := destination.RetainedReadonlyViewWithMP(mp)
+			require.NoError(t, destination.CopyWithReadonlyArea(source, amp))
+			view, err := destination.RetainedReadonlyViewWithMP(amp)
 			require.NoError(t, err)
 			defer view.Free(mp)
 			before := state.account.Snapshot().Used
 			beforeMP := mp.CurrNB()
-			require.ErrorIs(t, view.MaterializeOwned(mp), mpool.ErrAllocationAccountCapacity)
+			require.ErrorIs(t, view.MaterializeOwned(amp), mpool.ErrAllocationAccountCapacity)
 			require.True(t, view.HasBorrowedBacking())
 			require.Equal(t, before, state.account.Snapshot().Used)
 			require.Equal(t, beforeMP, mp.CurrNB())
@@ -343,7 +342,8 @@ func TestCopyWithReadonlyAreaMutationFailure(t *testing.T) {
 			mp := mpool.MustNewZero()
 			state := newTestVectorAllocationAccount(t, 512, 32)
 			source := NewOffHeapVecWithType(types.T_text.ToType())
-			destination := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+			destination := newAccountedTestVector(t, types.T_text.ToType())
+			amp := state.view(t, mp)
 			extra := NewOffHeapVecWithType(types.T_text.ToType())
 			defer func() {
 				source.Free(mp)
@@ -357,16 +357,15 @@ func TestCopyWithReadonlyAreaMutationFailure(t *testing.T) {
 			for range 3 {
 				require.NoError(t, AppendBytes(source, value, false, mp))
 			}
-			require.NoError(t, destination.CopyWithReadonlyArea(source, mp))
+			require.NoError(t, destination.CopyWithReadonlyArea(source, amp))
 			require.NoError(t, AppendBytes(extra, bytes.Repeat([]byte{'x'}, 4096), false, mp))
 			extra.GetGrouping().Add(0)
 			beforeMP := mp.CurrNB()
 			beforeAccount := state.account.Snapshot().Used
-			err := mutation.run(destination, extra, mp)
+			err := mutation.run(destination, extra, amp)
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.Equal(t, beforeMP, mp.CurrNB())
 			require.Equal(t, beforeAccount, state.account.Snapshot().Used)
-			require.Same(t, state.selection, destination.AllocationAccountSelection())
 			require.True(t, destination.HasBorrowedBacking())
 			require.Equal(t, 3, destination.Length())
 			require.False(t, destination.GetGrouping().Any())

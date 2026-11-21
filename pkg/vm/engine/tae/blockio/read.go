@@ -230,6 +230,16 @@ func BlockDataReadWithFilter(
 	return preFilterRows, err
 }
 
+// readerOutputMP is the pool a filtered read allocates through. Output vectors
+// carry no allocation account, so a request with an output allocation view
+// reads through that view and the produced columns stay charged to it.
+func readerOutputMP(mp *mpool.MPool, applyFilter *engine.ReaderFilterRequest) *mpool.MPool {
+	if applyFilter != nil && applyFilter.OutputAllocation != nil {
+		return applyFilter.OutputAllocation
+	}
+	return mp
+}
+
 func blockDataRead(
 	ctx context.Context,
 	info *objectio.BlockInfo,
@@ -252,6 +262,7 @@ func blockDataRead(
 	applyFilter *engine.ReaderFilterRequest,
 	preFilterRows *int,
 ) error {
+	mp = readerOutputMP(mp, applyFilter)
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
 	}
@@ -1021,6 +1032,7 @@ func blockDataReadWithFilter(
 	orderByLimit *objectio.IndexReaderTopOp,
 	preFilterRows *int,
 ) (err error) {
+	mp = readerOutputMP(mp, applyFilter)
 	if err = validateLateMaterializationOutput(columns, colTypes, outputBat); err != nil {
 		return err
 	}

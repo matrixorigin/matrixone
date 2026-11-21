@@ -1106,23 +1106,23 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account,
-		1,
-		102,
-		103,
-	)
+	producerMP, err := mp.WithAccount(account, 1, 102, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	src := batch.NewOffHeapWithSize(1)
-	require.NoError(t, src.SetAllocationAccount(selection))
 	src.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
-	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, producerMP))
 	src.SetRowCount(1)
+	sourceUsed := account.Snapshot().Used
 
-	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	// The spool is built on the bound account's view, as Prepare does.
+	spoolMP, err := mp.WithAccount(account, mpool.AllocationOwnerSelection,
+		dispatchAllocationSiteSpool, mpool.AllocationCapacityClassDefault)
+	require.NoError(t, err)
+	sp := pSpool.InitMyPipelineSpool(spoolMP, 1)
 	done, err := sp.SendBatch(context.Background(), 0, src, nil)
 	require.NoError(t, err)
 	require.False(t, done)
+	require.Greater(t, account.Snapshot().Used, sourceUsed)
 
 	d := &Dispatch{}
 	require.NoError(t, d.SetAllocationAccount(account))
@@ -1969,4 +1969,26 @@ func TestShuffleLocalReceiverTermination(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestDispatchSpoolChargesBoundAccount(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	d := &Dispatch{}
+	unbound, err := d.spoolMP(proc)
+	require.NoError(t, err)
+	require.Same(t, proc.Mp(), unbound)
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	require.NoError(t, d.SetAllocationAccount(account))
+	bound, err := d.spoolMP(proc)
+	require.NoError(t, err)
+	require.Same(t, account, bound.ViewAccount())
+	require.NoError(t, d.ClearAllocationAccount(account))
+	require.Zero(t, account.Seal().Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
 }

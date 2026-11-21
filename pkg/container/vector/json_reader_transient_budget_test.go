@@ -49,7 +49,7 @@ func TestJSONReaderTransientAdmissionCoversBacking(t *testing.T) {
 				require.NoError(t, AppendBytes(source, large, false, mp))
 				before := mp.CurrNB()
 				limit = 8192
-				reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 1, mp, nil, admission)
+				reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 1, mp, admission)
 				if reader != nil {
 					reader.Close()
 				}
@@ -58,13 +58,13 @@ func TestJSONReaderTransientAdmissionCoversBacking(t *testing.T) {
 				require.Equal(t, before, mp.CurrNB())
 			case "builder":
 				limit = 8192
-				builder, err := NewJSONReaderBuilder(mp, nil, admission)
+				builder, err := NewJSONReaderBuilder(mp, admission)
 				require.NoError(t, err)
 				defer builder.Close()
 				require.ErrorIs(t, builder.Append(large, false), want)
 				builder.Close()
 			case "select", "materialize":
-				builder, err := NewJSONReaderBuilder(mp, nil, admission)
+				builder, err := NewJSONReaderBuilder(mp, admission)
 				require.NoError(t, err)
 				defer builder.Close()
 				value := large
@@ -118,13 +118,13 @@ func TestJSONReaderTransientMutableLifetime(t *testing.T) {
 	require.NoError(t, AppendBytes(source, nil, true, mp))
 	require.NoError(t, AppendBytes(source, large, false, mp))
 	limit = 8192
-	reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 3, mp, nil, admission)
+	reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 3, mp, admission)
 	require.ErrorIs(t, err, want)
 	require.False(t, invalid)
 	require.Nil(t, reader)
 	require.Zero(t, live)
 	limit = 1 << 30
-	reader, invalid, err = TryNewJSONReaderSnapshotForRows(source, 3, mp, nil, admission)
+	reader, invalid, err = TryNewJSONReaderSnapshotForRows(source, 3, mp, admission)
 	require.NoError(t, err)
 	require.False(t, invalid)
 	defer reader.Close()
@@ -155,7 +155,7 @@ func TestJSONReaderTransientViewsRetainBacking(t *testing.T) {
 		live += size
 		return func() { live -= size }, nil
 	}
-	builder, err := NewJSONReaderBuilder(mp, nil, admission)
+	builder, err := NewJSONReaderBuilder(mp, admission)
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"k":123}`), false))
@@ -185,7 +185,7 @@ func TestJSONReaderTransientIndependentConcurrentReaders(t *testing.T) {
 		live.Add(int64(size))
 		return func() { live.Add(-int64(size)) }, nil
 	}
-	builder, err := NewJSONReaderBuilder(mp, nil, admission)
+	builder, err := NewJSONReaderBuilder(mp, admission)
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"k":123}`), false))

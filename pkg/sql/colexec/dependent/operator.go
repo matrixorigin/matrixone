@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -30,7 +29,7 @@ type Operator struct {
 	vm.OperatorBase
 	Template    *Template
 	account     *mpool.AllocationAccount
-	allocation  *vector.AllocationAccountSelection
+	allocation  *mpool.MPool
 	execution   *Execution
 	terminalErr error
 	done        bool
@@ -52,11 +51,11 @@ func (o *Operator) SetAllocationAccount(account *mpool.AllocationAccount) error 
 	if o.execution != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65)
-	if err != nil {
-		return err
+	if account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
 	}
-	o.account, o.allocation, o.terminalErr = account, selection, nil
+	// The view is built on the process pool in Prepare.
+	o.account, o.terminalErr = account, nil
 	return nil
 }
 func (o *Operator) ClearAllocationAccount(account *mpool.AllocationAccount) error {
@@ -76,15 +75,20 @@ func (o *Operator) Prepare(proc *process.Process) error {
 	if err := proc.RequireDependentProtocol(); err != nil {
 		return err
 	}
-	if o.Template == nil || o.allocation == nil || o.execution != nil {
+	if o.Template == nil || o.account == nil || o.execution != nil {
 		return moerr.NewInternalErrorNoCtx("invalid dependent operator generation")
 	}
+	view, err := proc.Mp().WithAccount(
+		o.account, mpool.AllocationOwnerDependent, 64, mpool.AllocationCapacityClassDefault)
+	if err != nil {
+		return err
+	}
+	o.allocation = view
 	if o.OpAnalyzer == nil {
 		o.OpAnalyzer = process.NewAnalyzer(o.GetIdx(), o.IsFirst, o.IsLast, "dependent")
 	} else {
 		o.OpAnalyzer.Reset()
 	}
-	var err error
 	o.done = false
 	o.affectedRows = 0
 	o.execution, err = o.Template.NewExecution(proc, o.allocation, o.account)

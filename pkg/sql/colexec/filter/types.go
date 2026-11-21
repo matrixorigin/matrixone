@@ -15,6 +15,7 @@
 package filter
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -70,7 +71,8 @@ func (filter *Filter) Release() {
 }
 
 type container struct {
-	outputAllocation          *vector.AllocationAccountSelection
+	account                   *mpool.AllocationAccount
+	outputAllocation          *mpool.MPool
 	buf                       *batch.Batch
 	executors                 []colexec.ExpressionExecutor
 	bs                        vector.FunctionParameterWrapper[bool]
@@ -91,7 +93,7 @@ func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err erro
 	filter.ctr.resetExecutor()
 	filter.ctr.cleanRuntimeExecutor()
 	filter.RuntimeFilterExprs = nil
-	if filter.ctr.outputAllocation != nil {
+	if filter.ctr.account != nil {
 		filter.Free(proc, pipelineFailed, err)
 	}
 }

@@ -44,6 +44,10 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 		filter.OpAnalyzer.Reset()
 	}
 
+	if err = filter.ctr.bindOutputAllocation(proc); err != nil {
+		return
+	}
+
 	if len(filter.ctr.executors) == 0 && filter.FilterExprs != nil {
 		if filter.OwnsConstantCastWarnings {
 			filter.ctr.executors, err = colexec.NewOwnedConstantFilterExecutors(proc, filter.FilterExprs)
@@ -198,36 +202,29 @@ func (ctr *container) shrinkWithSels(proc *process.Process, bat *batch.Batch, se
 		return batch.EmptyBatch, nil
 	}
 	if bat == ctr.buf {
-		if err := ctr.buf.Shrink(sels, false, proc.Mp()); err != nil {
+		if err := ctr.buf.Shrink(sels, false, ctr.mp(proc)); err != nil {
 			return nil, err
 		}
 	} else {
 		if ctr.buf == nil {
 			ctr.buf = batch.NewOffHeapWithSize(len(bat.Vecs))
-			if err := ctr.buf.SetAllocationAccount(ctr.outputAllocation); err != nil {
-				return nil, err
-			}
 			ctr.buf.SetAttributes(bat.Attrs)
 			ctr.buf.Recursive = bat.Recursive
 			for j, vec := range bat.Vecs {
 				typ := *bat.GetVector(int32(j)).GetType()
-				destination, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, ctr.outputAllocation)
-				if err != nil {
-					return nil, err
-				}
-				ctr.buf.Vecs[j] = destination
+				ctr.buf.Vecs[j] = vector.NewOffHeapVecWithType(typ)
 				ctr.buf.Vecs[j].SetSorted(vec.GetSorted())
 			}
 			ctr.buf.SetRowCount(bat.RowCount())
 			ctr.buf.ShuffleIDX = bat.ShuffleIDX
-			err := ctr.buf.PreExtend(proc.Mp(), len(sels))
+			err := ctr.buf.PreExtend(ctr.mp(proc), len(sels))
 			if err != nil {
 				return nil, err
 			}
 		} else {
 			ctr.buf.CleanOnlyData()
 		}
-		err := ctr.buf.Union(bat, sels, proc.Mp())
+		err := ctr.buf.Union(bat, sels, ctr.mp(proc))
 		if err != nil {
 			return nil, err
 		}

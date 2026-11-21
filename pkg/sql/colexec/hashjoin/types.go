@@ -150,10 +150,13 @@ type container struct {
 	asofBuildLeftIndexed       bool
 	asofBuildLeftProbeSequence uint64
 	asofBuildLeftBestRight     *batch.Batch
-	asofBuildLeftInitialized   bool
-	asofBuildLeftFinalRow      int64
-	asofBuildLeftLiveBytes     int64
-	asofBuildLeftDeadBytes     int64
+	// asofBuildLeftBestRightMP is the candidate-account view the retained
+	// right payload grows through.
+	asofBuildLeftBestRightMP *mpool.MPool
+	asofBuildLeftInitialized bool
+	asofBuildLeftFinalRow    int64
+	asofBuildLeftLiveBytes   int64
+	asofBuildLeftDeadBytes   int64
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -262,8 +265,8 @@ type HashJoin struct {
 	// retain bounded predecessor candidates, then finalize the left rows.
 	AsofBuildLeft           bool
 	allocationAccount       *mpool.AllocationAccount
-	resultAllocation        *vector.AllocationAccountSelection
-	asofCandidateAllocation *vector.AllocationAccountSelection
+	resultAllocation        *mpool.AccountBinding
+	asofCandidateAllocation *mpool.AccountBinding
 	// recursiveProbe is derived from the operator tree during Prepare. An empty
 	// build must still drain a recursive probe until its round marker.
 	recursiveProbe bool
@@ -290,20 +293,18 @@ func (hashJoin *HashJoin) SetAllocationAccount(
 	if hashJoin.allocationAccount == account {
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		hashJoinAllocationSiteResultData,
-		hashJoinAllocationSiteResultArea,
 	)
 	if err != nil {
 		return err
 	}
-	asofCandidateSelection, err := vector.NewAllocationAccountSelection(
+	asofCandidateSelection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		hashJoinAllocationSiteAsofCandidateData,
-		hashJoinAllocationSiteAsofCandidateArea,
 	)
 	if err != nil {
 		return err
@@ -352,6 +353,12 @@ func (hashJoin *HashJoin) ClearAllocationAccount(
 	hashJoin.resultAllocation = nil
 	hashJoin.asofCandidateAllocation = nil
 	return nil
+}
+
+// resultMP returns the pool result-batch vectors grow through: the result
+// account view when an account is bound, otherwise proc's pool.
+func (hashJoin *HashJoin) resultMP(proc *process.Process) (*mpool.MPool, error) {
+	return hashJoin.resultAllocation.MP(proc.Mp())
 }
 
 func (hashJoin *HashJoin) GetOperatorBase() *vm.OperatorBase {
@@ -504,6 +511,7 @@ func (ctr *container) cleanAsofBuildLeftState(proc *process.Process) {
 	ctr.asofBuildLeftIndexed = false
 	ctr.asofBuildLeftProbeSequence = 0
 	ctr.asofBuildLeftBestRight = nil
+	ctr.asofBuildLeftBestRightMP = nil
 	ctr.asofBuildLeftInitialized = false
 	ctr.asofBuildLeftFinalRow = 0
 	ctr.asofBuildLeftLiveBytes = 0

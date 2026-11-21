@@ -167,13 +167,12 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 		require.NoError(t, finalizeErr)
 		require.Zero(t, failureMP.CurrNB())
 	})
-	selectionFailure, err := vector.NewAllocationAccountSelection(accountFailure, 1, 1, 2)
+	selectionFailure, err := failureMP.WithAccount(accountFailure, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	failureOutput := batch.NewWithSize(1)
 	failureOutput.Vecs[0] = vector.NewOffHeapVecWithType(typs[0])
 	t.Cleanup(func() { failureOutput.Clean(failureMP) })
-	require.NoError(t, failureOutput.Vecs[0].SetAllocationAccount(selectionFailure))
-	err = CopyBlockData(ctx, info.MetaLocation(), []int64{0}, []uint16{0}, typs[:1], failureOutput, countingFS, failureMP)
+	err = CopyBlockData(ctx, info.MetaLocation(), []int64{0}, []uint16{0}, typs[:1], failureOutput, countingFS, selectionFailure)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Positive(t, countingFS.acquired)
 	require.Equal(t, countingFS.acquired, countingFS.released)
@@ -259,13 +258,12 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 		_, finalizeErr := registry.Finalize(account)
 		require.NoError(t, finalizeErr)
 	}()
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	selection, err := queryMP.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	require.NoError(t, full.Vecs[2].SetAllocationAccount(selection))
 	// An earlier owned/selected read may leave empty scratch in the reused
 	// output. The next full block fits this account, but staging another copy
 	// alongside unused scratch does not. End that old generation first.
-	require.NoError(t, full.Vecs[2].PreExtendWithArea(16, 1024, queryMP))
+	require.NoError(t, full.Vecs[2].PreExtendWithArea(16, 1024, selection))
 	require.NoError(t, BlockDataReadInner(
 		ctx,
 		&info,
@@ -279,7 +277,7 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 		fileservice.Policy(0),
 		full,
 		cacheVectors,
-		queryMP,
+		selection,
 		fs,
 	))
 	require.Equal(t, 14, full.Vecs[0].Length())
@@ -786,11 +784,10 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.NoError(t, err)
 			account, err := registry.Open(1 << 20)
 			require.NoError(t, err)
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+			allocation, err := queryMP.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			output.Clean(queryMP)
 			output = batch.NewWithSchema(true, nil, colTypes)
-			require.NoError(t, output.SetAllocationAccount(allocation))
 			original := append([]*vector.Vector(nil), output.Vecs...)
 			predicates := []int{1}
 			if tc.keyPredicate {
@@ -902,7 +899,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.NoError(t, err)
 			account, err := registry.Open(1 << 20)
 			require.NoError(t, err)
-			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+			selection, err := queryMP.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			output.Clean(queryMP)
 			output = batch.NewOffHeapWithSize(len(colTypes))
@@ -917,10 +914,8 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 					output.Vecs[i] = vector.NewOffHeapVecWithType(colTypes[i])
 				}
 			})
-			require.NoError(t, output.SetAllocationAccount(selection))
 			for i := range colTypes {
-				output.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[i], selection)
-				require.NoError(t, err)
+				output.Vecs[i] = vector.NewOffHeapVecWithType(colTypes[i])
 			}
 			early := []int{0}
 			if complete {
@@ -972,14 +967,12 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			_, _, err := registry.CompleteTerminal(account)
 			require.NoError(t, err)
 		})
-		allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+		allocation, err := queryMP.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 		require.NoError(t, err)
 		out := batch.NewOffHeapWithSize(2)
-		require.NoError(t, out.SetAllocationAccount(allocation))
 		t.Cleanup(func() { out.Clean(queryMP); cacheVectors.Free(queryMP) })
 		for i := range colTypes {
-			out.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[i], allocation)
-			require.NoError(t, err)
+			out.Vecs[i] = vector.NewOffHeapVecWithType(colTypes[i])
 		}
 		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 			t.Fatal("selected reader must not rerun Apply")
@@ -1008,14 +1001,12 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			_, _, err := registry.CompleteTerminal(account)
 			require.NoError(t, err)
 		})
-		allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+		allocation, err := queryMP.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 		require.NoError(t, err)
 		out := batch.NewOffHeapWithSize(2)
-		require.NoError(t, out.SetAllocationAccount(allocation))
 		t.Cleanup(func() { out.Clean(queryMP); cacheVectors.Free(queryMP) })
 		for i := range colTypes {
-			out.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[i], allocation)
-			require.NoError(t, err)
+			out.Vecs[i] = vector.NewOffHeapVecWithType(colTypes[i])
 		}
 		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 			t.Fatal("selected read must not rerun Apply")
@@ -1080,14 +1071,12 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			_, _, err := registry.CompleteTerminal(account)
 			require.NoError(t, err)
 		})
-		allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+		allocation, err := queryMP.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 		require.NoError(t, err)
 		out := batch.NewOffHeapWithSize(2)
-		require.NoError(t, out.SetAllocationAccount(allocation))
 		t.Cleanup(func() { out.Clean(queryMP); cacheVectors.Free(queryMP) })
 		for i := range colTypes {
-			out.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[i], allocation)
-			require.NoError(t, err)
+			out.Vecs[i] = vector.NewOffHeapVecWithType(colTypes[i])
 		}
 		original := out.Vecs[1]
 		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned}, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {

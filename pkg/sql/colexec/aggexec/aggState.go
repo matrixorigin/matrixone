@@ -2614,7 +2614,11 @@ func (ag *aggState) freeOpaqueStates() {
 }
 
 type aggExec struct {
-	mp *mpool.MPool
+	// mp allocates the executor's state. While an allocation account is
+	// bound it is an accounted view of baseMP, so every state vector growth
+	// is charged to that account.
+	mp     *mpool.MPool
+	baseMP *mpool.MPool
 	aggInfo
 	chunkSize              int
 	state                  []aggState
@@ -2693,8 +2697,24 @@ func (ae *aggExec) SetAllocationAccount(allocation *AllocationAccount) error {
 		return moerr.NewNotSupportedNoCtxf(
 			"aggregate %d has opaque allocation state", ae.aggInfo.aggId)
 	}
+	if ae.mp != nil {
+		view, err := allocation.VectorMP(ae.mp)
+		if err != nil {
+			return err
+		}
+		ae.baseMP, ae.mp = ae.mp, view
+	}
 	ae.allocation = allocation
 	return nil
+}
+
+// accountedMP returns the pool decoded state must allocate from: the
+// executor's accounted view while an account is bound, otherwise mp.
+func (ae *aggExec) accountedMP(mp *mpool.MPool) *mpool.MPool {
+	if ae != nil && ae.allocation != nil && ae.mp != nil {
+		return ae.mp
+	}
+	return mp
 }
 
 func (ae *aggExec) ClearAllocationAccount(allocation *AllocationAccount) error {
@@ -2707,6 +2727,7 @@ func (ae *aggExec) ClearAllocationAccount(allocation *AllocationAccount) error {
 	if len(ae.state) != 0 || len(ae.standby) != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
+	ae.mp, ae.baseMP = ae.baseMP, nil
 	ae.allocation = nil
 	return nil
 }
@@ -2963,6 +2984,7 @@ func (ae *aggExec) UnmarshalSpillFromReader(
 	if ae == nil || reader == nil || mp == nil {
 		return moerr.NewInvalidInputNoCtx("invalid aggregate spill decoder")
 	}
+	mp = ae.accountedMP(mp)
 	magic, err := types.ReadUint64(reader)
 	if err != nil {
 		return err
@@ -3074,6 +3096,7 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retEr
 	if ae == nil || reader == nil || mp == nil {
 		return moerr.NewInvalidInputNoCtx("invalid aggregate state decoder")
 	}
+	mp = ae.accountedMP(mp)
 	defer func() {
 		if retErr != nil {
 			ae.Free()

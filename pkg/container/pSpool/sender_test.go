@@ -228,42 +228,19 @@ func TestPipelineSpoolForceCleanupRetainsUntilReceiversDrained(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
+// The spool charges its copies through the MPool it was built with: an
+// accounted view charges every copy, and reused cached backing stays charged
+// once.
+func TestCachedBatchChargesSpoolAllocationView(t *testing.T) {
 	mp := mpool.MustNewZero()
 	registry, err := mpool.NewAllocationAccountRegistry(2, 32)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account,
-		1,
-		1,
-		2,
-	)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	equivalentSelection, err := vector.NewAllocationAccountSelection(
-		account,
-		1,
-		1,
-		2,
-	)
-	require.NoError(t, err)
-	require.NotSame(t, selection, equivalentSelection)
-	otherAccount, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-	otherSelection, err := vector.NewAllocationAccountSelection(
-		otherAccount,
-		1,
-		1,
-		2,
-	)
-	require.NoError(t, err)
-	newSource := func(
-		value string,
-		target *vector.AllocationAccountSelection,
-	) *batch.Batch {
+	newSource := func(value string) *batch.Batch {
 		source := batch.NewOffHeapWithSize(1)
-		require.NoError(t, source.SetAllocationAccount(target))
 		vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 		source.SetVector(0, vec)
 		require.NoError(t, vector.AppendBytes(
@@ -277,21 +254,18 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 		source.SetRowCount(1)
 		return source
 	}
-	firstSource := newSource("first cached allocation payload", selection)
-	secondSource := newSource("second", equivalentSelection)
+	firstSource := newSource("first cached allocation payload")
+	secondSource := newSource("second")
 	secondSource.Vecs[0].ToConst()
-	cache := initCachedBatch(mp, 1)
+	require.Zero(t, account.Snapshot().Used)
+	cache := initCachedBatch(view, 1)
 
 	first, useCache, cacheID, err := cache.GetCopiedBatch(firstSource)
 	require.NoError(t, err)
 	require.True(t, useCache)
-	require.Same(t, selection, first.AllocationAccountSelection())
-	require.Same(
-		t,
-		selection,
-		first.Vecs[0].AllocationAccountSelection(),
-	)
 	require.True(t, first.Vecs[0].GetGrouping().Contains(0))
+	require.Equal(t, "first cached allocation payload", first.Vecs[0].GetStringAt(0))
+	require.Positive(t, account.Snapshot().Used)
 	cache.CacheBatch(useCache, cacheID, first)
 	beforeReuse := account.Snapshot().Used
 
@@ -299,42 +273,26 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, useCache)
 	require.Greater(t, account.Snapshot().Used, beforeReuse)
-	require.Same(t, selection, second.AllocationAccountSelection())
-	require.Same(
-		t,
-		equivalentSelection,
-		second.Vecs[0].AllocationAccountSelection(),
-	)
 	require.True(t, second.Vecs[0].GetGrouping().Contains(0))
 	cache.CacheBatch(useCache, cacheID, second)
 	require.Equal(t, beforeReuse, account.Snapshot().Used)
 
-	otherSource := newSource("other allocation account", otherSelection)
-	firstAccountBeforeOther := account.Snapshot().Used
-	otherBeforeCopy := otherAccount.Snapshot().Used
-	other, useCache, cacheID, err := cache.GetCopiedBatch(otherSource)
+	// A spool on the base pool leaves the account untouched.
+	plain := initCachedBatch(mp, 1)
+	other, useCache, cacheID, err := plain.GetCopiedBatch(firstSource)
 	require.NoError(t, err)
-	require.Equal(t, firstAccountBeforeOther, account.Snapshot().Used)
-	require.Greater(t, otherAccount.Snapshot().Used, otherBeforeCopy)
-	require.Same(
-		t,
-		otherSelection,
-		other.Vecs[0].AllocationAccountSelection(),
-	)
-	cache.CacheBatch(useCache, cacheID, other)
+	require.Equal(t, beforeReuse, account.Snapshot().Used)
+	plain.CacheBatch(useCache, cacheID, other)
 
 	firstSource.Clean(mp)
 	secondSource.Clean(mp)
-	otherSource.Clean(mp)
 	cache.free()
+	plain.free()
 	require.Zero(t, account.Snapshot().Used)
-	require.Zero(t, otherAccount.Snapshot().Used)
 	require.Zero(t, registry.LiveAllocationMetadata())
+	require.Zero(t, mp.CurrNB())
 	account.Seal()
-	otherAccount.Seal()
 	_, err = registry.Finalize(account)
-	require.NoError(t, err)
-	_, err = registry.Finalize(otherAccount)
 	require.NoError(t, err)
 }
 
@@ -344,25 +302,19 @@ func TestCachedBatchAllocationFailureReturnsCacheOwnership(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(64)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account,
-		1,
-		1,
-		2,
-	)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	source := batch.NewOffHeapWithSize(1)
-	require.NoError(t, source.SetAllocationAccount(selection))
 	source.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
 	require.NoError(t, vector.AppendFixedList(
 		source.Vecs[0],
 		[]int64{1, 2, 3, 4, 5, 6, 7, 8},
 		nil,
-		mp,
+		view,
 	))
 	source.SetRowCount(8)
 	require.Equal(t, uint64(64), account.Snapshot().Used)
-	cache := initCachedBatch(mp, 1)
+	cache := initCachedBatch(view, 1)
 
 	_, _, _, err = cache.GetCopiedBatch(source)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)

@@ -122,12 +122,12 @@ func TestBorrowedVectorAppendWithinCapacity(t *testing.T) {
 			lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
 			require.NoError(t, err)
 			t.Cleanup(lease.Release)
-			vec, err := NewBorrowedFixedVectorWithAllocation(
-				types.T_int64.ToType(), 3, data[:3*8], lease, state.selection,
+			vec, err := NewBorrowedFixedVector(
+				types.T_int64.ToType(), 3, data[:3*8], lease,
 			)
 			require.NoError(t, err)
 			t.Cleanup(func() { vec.Free(mp) })
-			err = AppendFixed(vec, int64(44), false, mp)
+			err = AppendFixed(vec, int64(44), false, state.view(t, mp))
 			if limit == 16 {
 				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 				require.Equal(t, BorrowedLease, vec.DataBackingKind())
@@ -182,25 +182,25 @@ func TestBorrowedVectorMaterializeOwnedCopiesValidityIntoAccount(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 1, 2,
-	)
-	require.NoError(t, err)
-	vec, err := NewBorrowedFixedVectorWithAllocation(
-		types.T_int64.ToType(), 3, data, dataLease, selection,
+	vec, err := NewBorrowedFixedVector(
+		types.T_int64.ToType(), 3, data, dataLease,
 	)
 	require.NoError(t, err)
 	vec.GetNulls().Add(1)
 	dataLease.Release()
 
 	mp := mpool.MustNewZero()
+	view, err := mp.WithAccount(
+		account, mpool.AllocationOwnerExternal, 1, mpool.AllocationCapacityClassDefault,
+	)
+	require.NoError(t, err)
 	clone, err := vec.CloneWindow(0, vec.Length(), mp)
 	require.NoError(t, err)
 	require.False(t, clone.HasBorrowedBacking())
 	require.Equal(t, []uint64{1}, clone.GetNulls().ToArray())
 	clone.Free(mp)
 
-	require.NoError(t, vec.MaterializeOwned(mp))
+	require.NoError(t, vec.MaterializeOwned(view))
 	require.False(t, vec.HasBorrowedBacking())
 	require.Equal(t, []uint64{1}, vec.GetNulls().ToArray())
 	require.Equal(t, []int64{11, 22, 33}, MustFixedColNoTypeCheck[int64](vec))
@@ -435,11 +435,11 @@ func TestPrepareDataForInplaceMutationAccountRejection(t *testing.T) {
 	lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
 	require.NoError(t, err)
 	defer lease.Release()
-	vec, err := NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), len(values), data, lease, state.selection)
+	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data, lease)
 	require.NoError(t, err)
 	defer vec.Free(mp)
 
-	require.ErrorIs(t, vec.PrepareDataForInplaceMutation(mp), mpool.ErrAllocationAccountCapacity)
+	require.ErrorIs(t, vec.PrepareDataForInplaceMutation(state.view(t, mp)), mpool.ErrAllocationAccountCapacity)
 	require.Equal(t, BorrowedLease, vec.DataBackingKind())
 	require.Equal(t, values, MustFixedColNoTypeCheck[int64](vec))
 	require.Zero(t, state.account.Snapshot().Used)

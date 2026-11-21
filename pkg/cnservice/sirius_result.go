@@ -68,10 +68,7 @@ func decodeEmbeddedSiriusResult(result siriusbridge.Result, request compile.Siri
 	for i, v := range result.Vectors {
 		t := request.OutputTypes[i]
 		typ := types.New(types.T(t.Id), t.Width, t.Scale)
-		vec, createErr := vector.NewOffHeapVecWithTypeAndAllocation(typ, nil)
-		if createErr != nil {
-			return bat, createErr
-		}
+		vec := vector.NewOffHeapVecWithType(typ)
 		bat.Vecs[i] = vec
 		if err = vec.InstallBorrowedData(v.Data, lease); err != nil {
 			return bat, err

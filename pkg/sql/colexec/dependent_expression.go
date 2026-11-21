@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -44,7 +45,7 @@ type dependentExprInstruction struct {
 	args   []int
 	typ    types.Type
 	fid    int32
-	native func(*process.Process, *vector.AllocationAccountSelection, []ExpressionExecutor) (ExpressionExecutor, error)
+	native func(*process.Process, *mpool.MPool, []ExpressionExecutor) (ExpressionExecutor, error)
 }
 
 // DependentExpressionProgram contains only immutable bound instructions. Native
@@ -137,7 +138,7 @@ func CompileDependentExpressions(ctx context.Context, roots []*plan.Expr) (*Depe
 				}
 				overloadID := f.Func.Obj
 				stringToNumericCast := !overload.CannotFold() && isStringToNumericCast(top.expr, false)
-				instruction.native = func(proc *process.Process, allocation *vector.AllocationAccountSelection, args []ExpressionExecutor) (ExpressionExecutor, error) {
+				instruction.native = func(proc *process.Process, allocation *mpool.MPool, args []ExpressionExecutor) (ExpressionExecutor, error) {
 					executor := NewFunctionExpressionExecutor()
 					executor.overloadID = overloadID
 					executor.fid = fid
@@ -159,7 +160,7 @@ func CompileDependentExpressions(ctx context.Context, roots []*plan.Expr) (*Depe
 					return nil, moerr.NewInternalError(ctx, "unlowered dependent scalar expression")
 				}
 				expr := top.expr
-				instruction.native = func(proc *process.Process, allocation *vector.AllocationAccountSelection, _ []ExpressionExecutor) (ExpressionExecutor, error) {
+				instruction.native = func(proc *process.Process, allocation *mpool.MPool, _ []ExpressionExecutor) (ExpressionExecutor, error) {
 					return NewExpressionExecutorWithAllocation(proc, expr, allocation)
 				}
 			}
@@ -219,7 +220,7 @@ type DependentExpressionFrame struct {
 	program    *DependentExpressionProgram
 	proc       *process.Process
 	factory    DependentProgramFactory
-	allocation *vector.AllocationAccountSelection
+	allocation *mpool.MPool
 	budget     *process.ExecutionResourceGeneration
 	inputs     []DependentInput
 	cells      []dependentExprCell
@@ -228,7 +229,7 @@ type DependentExpressionFrame struct {
 	closed     bool
 }
 
-func (p *DependentExpressionProgram) NewFrame(proc *process.Process, inputs []DependentInput, factory DependentProgramFactory, allocation *vector.AllocationAccountSelection) (*DependentExpressionFrame, error) {
+func (p *DependentExpressionProgram) NewFrame(proc *process.Process, inputs []DependentInput, factory DependentProgramFactory, allocation *mpool.MPool) (*DependentExpressionFrame, error) {
 	if p == nil || proc == nil || allocation == nil {
 		return nil, moerr.NewInternalErrorNoCtx("dependent frame requires owner")
 	}
@@ -392,14 +393,10 @@ func (t *dependentExpressionTask) Step(ctx context.Context) (vm.ContinuationStep
 		if err := f.reserve(uint64(unsafe.Sizeof(vector.Vector{}))); err != nil {
 			return vm.ContinuationStep{}, err
 		}
-		var err error
-		cell.value, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, f.allocation)
-		if err != nil {
-			return vm.ContinuationStep{}, err
-		}
+		cell.value = vector.NewOffHeapVecWithType(typ)
 		cell.owned = true
-		set := vector.GetConstSetFunction(typ, f.proc.Mp())
-		if err = set(cell.value, input.Batch.Vecs[col.ColPos], int64(input.Row), 1); err != nil {
+		set := vector.GetConstSetFunction(typ, f.allocation)
+		if err := set(cell.value, input.Batch.Vecs[col.ColPos], int64(input.Row), 1); err != nil {
 			return vm.ContinuationStep{}, err
 		}
 	} else {
@@ -423,10 +420,7 @@ func (t *dependentExpressionTask) Step(ctx context.Context) (vm.ContinuationStep
 		}()
 		for i, index := range instruction.args {
 			typ := f.program.instructions[index].typ
-			null, err := vector.NewConstNullWithAllocation(typ, 1, f.allocation)
-			if err != nil {
-				return vm.ContinuationStep{}, err
-			}
+			null := vector.NewConstNull(typ, 1, f.allocation)
 			args[i] = &dependentValueReference{frame: f, index: index, null: null}
 		}
 		executor, err := instruction.native(f.proc, f.allocation, args)
@@ -462,13 +456,9 @@ func (t *dependentExpressionTask) Accept(child vm.Continuation) error {
 	if err := f.reserve(uint64(unsafe.Sizeof(vector.Vector{}))); err != nil {
 		return err
 	}
-	var err error
-	cell.value, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, f.allocation)
-	if err != nil {
-		return err
-	}
+	cell.value = vector.NewOffHeapVecWithType(typ)
 	cell.owned = true
-	if err = cell.value.UnionOne(result.Vecs[0], 0, f.proc.Mp()); err != nil {
+	if err := cell.value.UnionOne(result.Vecs[0], 0, f.allocation); err != nil {
 		return err
 	}
 	cell.ready = true
@@ -524,7 +514,7 @@ func (r *dependentValueReference) TypeName() string   { return "dependent frame 
 // NewScalarExecutor instances a bound comparison DAG without overload lookup.
 // Every instruction has one owner; parameter edges borrow it, including shared
 // tuple operands. This entry point deliberately excludes relational demand.
-func (p *DependentExpressionProgram) NewScalarExecutor(proc *process.Process, allocation *vector.AllocationAccountSelection) (ExpressionExecutor, error) {
+func (p *DependentExpressionProgram) NewScalarExecutor(proc *process.Process, allocation *mpool.MPool) (ExpressionExecutor, error) {
 	if len(p.roots) != 1 {
 		return nil, moerr.NewInternalErrorNoCtx("scalar program requires one root")
 	}

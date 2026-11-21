@@ -37,7 +37,7 @@ func TestJSONReaderResidentWork(t *testing.T) {
 					raw := jsonAdmissionValue(t, document)
 					var reader JSONReader
 					if mode == "builder" {
-						builder, err := NewJSONReaderBuilder(mp, nil)
+						builder, err := NewJSONReaderBuilder(mp)
 						require.NoError(t, err)
 						defer builder.Close()
 						require.NoError(t, builder.Append(raw, false))

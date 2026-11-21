@@ -56,8 +56,8 @@ func TestNonuniqueInnerLongProbePayloadCapacity(t *testing.T) {
 				require.NoError(t, err)
 			})
 			// Bound result copies independently of the retained build hash table.
-			join.arg.resultAllocation, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerHashBuild,
-				hashJoinAllocationSiteResultData, hashJoinAllocationSiteResultArea)
+			join.arg.resultAllocation, err = mpool.NewAccountBinding(account, mpool.AllocationOwnerHashBuild,
+				hashJoinAllocationSiteResultData)
 			require.NoError(t, err)
 			probe := batch.NewWithSchema(false, nil, join.arg.LeftTypes)
 			build := batch.NewWithSchema(false, nil, join.arg.RightTypes)

@@ -222,7 +222,7 @@ func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs 
 func NewExpressionExecutorsFromPlanExpressionsWithAllocation(
 	proc *process.Process,
 	planExprs []*plan.Expr,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 	foldOwnedConstantCasts ...bool,
 ) (executors []ExpressionExecutor, err error) {
 	return newExpressionExecutorsWithScope(proc, planExprs, selection, expressionDiagnosticScope{
@@ -235,7 +235,7 @@ func NewExpressionExecutorsFromPlanExpressionsWithAllocation(
 func NewJoinBuildExpressionExecutors(
 	proc *process.Process,
 	planExprs []*plan.Expr,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 	owner *DeferredJoinDiagnostic,
 ) ([]ExpressionExecutor, error) {
 	return newExpressionExecutorsWithScope(proc, planExprs, selection, expressionDiagnosticScope{
@@ -250,7 +250,7 @@ func NewJoinBuildExpressionExecutors(
 func NewJoinProbeExpressionExecutors(
 	proc *process.Process,
 	planExprs []*plan.Expr,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 	owner *DeferredJoinDiagnostic,
 ) ([]ExpressionExecutor, []ExpressionExecutor, error) {
 	if owner == nil {
@@ -283,7 +283,7 @@ func NewJoinProbeExpressionExecutors(
 func newExpressionExecutorsWithScope(
 	proc *process.Process,
 	planExprs []*plan.Expr,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 	scope expressionDiagnosticScope,
 ) (executors []ExpressionExecutor, err error) {
 	if err := plan.RequireLegacyCollations(planExprs); err != nil {
@@ -313,7 +313,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 func NewExpressionExecutorWithAllocation(
 	proc *process.Process,
 	planExpr *plan.Expr,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 ) (ExpressionExecutor, error) {
 	if err := plan.RequireLegacyCollations(planExpr); err != nil {
 		return nil, err
@@ -329,7 +329,7 @@ func NewExpressionExecutorWithAllocation(
 func newExpressionExecutorWithAllocation(
 	proc *process.Process,
 	planExpr *plan.Expr,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 	buildCtx *expressionExecutorBuildContext,
 	scope expressionDiagnosticScope,
 ) (ExpressionExecutor, error) {
@@ -356,6 +356,9 @@ func newExpressionExecutorWithAllocation(
 		buildCtx.states = append(buildCtx.states, state)
 		return &memoExpressionExecutor{state: state}, nil
 	}
+	// ownerMP allocates every vector this executor owns; an accounted view
+	// charges them to the expression's account.
+	ownerMP := expressionAllocationMP(proc.Mp(), selection)
 	switch t := planExpr.Expr.(type) {
 	case *plan.Expr_Slot:
 		return newDependentSlotExecutor(proc, t.Slot, typ, selection)
@@ -364,19 +367,19 @@ func newExpressionExecutorWithAllocation(
 		if err != nil {
 			return nil, err
 		}
-		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
+		return NewFixedVectorExpressionExecutor(ownerMP, false, vec), nil
 
 	case *plan.Expr_T:
 		vec, err := newExpressionConstNull(typ, 1, selection)
 		if err != nil {
 			return nil, err
 		}
-		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
+		return NewFixedVectorExpressionExecutor(ownerMP, false, vec), nil
 
 	case *plan.Expr_Col:
 		ce := NewColumnExpressionExecutor()
 		*ce = ColumnExpressionExecutor{
-			mp:         proc.Mp(),
+			mp:         ownerMP,
 			relIndex:   int(t.Col.RelPos),
 			colIndex:   int(t.Col.ColPos),
 			typ:        typ,
@@ -390,7 +393,7 @@ func newExpressionExecutorWithAllocation(
 		return ce, nil
 
 	case *plan.Expr_P:
-		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
+		executor := NewParamExpressionExecutor(ownerMP, int(t.P.Pos), typ)
 		executor.allocation = selection
 		if typ.Oid != types.T_any && !typ.Oid.IsMySQLString() {
 			// ParamRef describes the SQL source domain. When the process has no
@@ -425,7 +428,7 @@ func newExpressionExecutorWithAllocation(
 		}
 		ve := NewVarExpressionExecutor()
 		*ve = VarExpressionExecutor{
-			mp:         proc.Mp(),
+			mp:         ownerMP,
 			name:       t.V.Name,
 			system:     t.V.System,
 			global:     t.V.Global,
@@ -503,7 +506,7 @@ func newExpressionExecutorWithAllocation(
 		executor := NewFunctionExpressionExecutor()
 		{
 			// init function folding status.
-			executor.folded.reset(proc.Mp())
+			executor.folded.reset(ownerMP)
 		}
 		{
 			// init function information for evaluation.
@@ -593,25 +596,28 @@ func isStringToNumericCast(expr *plan.Expr, foldOwnedLiteral bool) bool {
 		!function.IsStatementConstantInput(f.Args[0])
 }
 
+// expressionAllocationMP returns the pool expression-owned vectors allocate
+// from: the accounted view when the expression has one, otherwise mp.
+func expressionAllocationMP(mp *mpool.MPool, allocation *mpool.MPool) *mpool.MPool {
+	if allocation != nil {
+		return allocation
+	}
+	return mp
+}
+
 func newExpressionOffHeapVector(
 	typ types.Type,
-	selection *vector.AllocationAccountSelection,
+	_ *mpool.MPool,
 ) (*vector.Vector, error) {
-	if selection == nil {
-		return vector.NewOffHeapVecWithType(typ), nil
-	}
-	return vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
+	return vector.NewOffHeapVecWithType(typ), nil
 }
 
 func newExpressionConstNull(
 	typ types.Type,
 	length int,
-	selection *vector.AllocationAccountSelection,
+	allocation *mpool.MPool,
 ) (*vector.Vector, error) {
-	if selection == nil {
-		return vector.NewConstNull(typ, length, nil), nil
-	}
-	return vector.NewConstNullWithAllocation(typ, length, selection)
+	return vector.NewConstNull(typ, length, allocation), nil
 }
 
 func newExpressionConstFixed[T any](
@@ -619,12 +625,9 @@ func newExpressionConstFixed[T any](
 	value T,
 	length int,
 	mp *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
+	allocation *mpool.MPool,
 ) (*vector.Vector, error) {
-	if selection == nil {
-		return vector.NewConstFixed(typ, value, length, mp)
-	}
-	return vector.NewConstFixedWithAllocation(typ, value, length, mp, selection)
+	return vector.NewConstFixed(typ, value, length, expressionAllocationMP(mp, allocation))
 }
 
 func newExpressionConstBytes(
@@ -632,12 +635,9 @@ func newExpressionConstBytes(
 	value []byte,
 	length int,
 	mp *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
+	allocation *mpool.MPool,
 ) (*vector.Vector, error) {
-	if selection == nil {
-		return vector.NewConstBytes(typ, value, length, mp)
-	}
-	return vector.NewConstBytesWithAllocation(typ, value, length, mp, selection)
+	return vector.NewConstBytes(typ, value, length, expressionAllocationMP(mp, allocation))
 }
 
 func newExpressionConstArray[T types.ArrayElement](
@@ -645,12 +645,9 @@ func newExpressionConstArray[T types.ArrayElement](
 	value []T,
 	length int,
 	mp *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
+	allocation *mpool.MPool,
 ) (*vector.Vector, error) {
-	if selection == nil {
-		return vector.NewConstArray(typ, value, length, mp)
-	}
-	return vector.NewConstArrayWithAllocation(typ, value, length, mp, selection)
+	return vector.NewConstArray(typ, value, length, expressionAllocationMP(mp, allocation))
 }
 
 // FixedVectorExpressionExecutor
@@ -669,7 +666,7 @@ type FixedVectorExpressionExecutor struct {
 
 type FunctionExpressionExecutor struct {
 	m          *mpool.MPool
-	allocation *vector.AllocationAccountSelection
+	allocation *mpool.MPool
 	// resultType is the declared function return type. Some built-ins refine
 	// result metadata (for example temporal scale or decimal width/scale) at
 	// runtime, so reusable result vectors must start each evaluation from this
@@ -706,7 +703,7 @@ type FunctionExpressionExecutor struct {
 
 type ColumnExpressionExecutor struct {
 	mp         *mpool.MPool
-	allocation *vector.AllocationAccountSelection
+	allocation *mpool.MPool
 	relIndex   int
 	colIndex   int
 
@@ -728,7 +725,7 @@ func (expr *ColumnExpressionExecutor) GetColIndex() int {
 
 type ParamExpressionExecutor struct {
 	mp         *mpool.MPool
-	allocation *vector.AllocationAccountSelection
+	allocation *mpool.MPool
 	null       *vector.Vector
 	// maskedNull is separate from null/vec because it is not a resolved
 	// parameter value and must never participate in the folded-value cache.
@@ -806,7 +803,7 @@ func (expr *ParamExpressionExecutor) evalTyped(src *vector.Vector, rowCount int)
 			expr.typedVec.Free(expr.mp)
 			expr.typedVec = nil
 		}
-		vec, err := src.DupOffHeapWithAllocation(expr.mp, expr.allocation)
+		vec, err := src.DupOffHeap(expr.mp)
 		if err != nil {
 			return nil, err
 		}
@@ -874,7 +871,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 			expr.typ, val, 1, proc.Mp(), expr.allocation,
 		)
 	} else {
-		err = vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
+		err = vector.SetConstBytes(expr.vec, val, 1, expr.mp)
 	}
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
@@ -949,7 +946,7 @@ func (expr *ParamExpressionExecutor) IsColumnExpr() bool {
 
 type VarExpressionExecutor struct {
 	mp         *mpool.MPool
-	allocation *vector.AllocationAccountSelection
+	allocation *mpool.MPool
 	null       *vector.Vector
 	// maskedNull lets a skipped variable avoid the resolver without changing
 	// the value cache used by a later selected evaluation.
@@ -1023,11 +1020,11 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	} else {
 		switch v := val.(type) {
 		case []byte:
-			err = vector.SetConstBytes(expr.vec, v, 1, proc.GetMPool())
+			err = vector.SetConstBytes(expr.vec, v, 1, expr.mp)
 		case string:
-			err = vector.SetConstBytes(expr.vec, commonutil.UnsafeStringToBytes(v), 1, proc.GetMPool())
+			err = vector.SetConstBytes(expr.vec, commonutil.UnsafeStringToBytes(v), 1, expr.mp)
 		default:
-			err = vector.SetConstBytes(expr.vec, commonutil.UnsafeStringToBytes(fmt.Sprintf("%v", v)), 1, proc.GetMPool())
+			err = vector.SetConstBytes(expr.vec, commonutil.UnsafeStringToBytes(fmt.Sprintf("%v", v)), 1, expr.mp)
 		}
 	}
 	if err == nil {
@@ -1075,7 +1072,7 @@ func (expr *VarExpressionExecutor) IsColumnExpr() bool {
 
 type ListExpressionExecutor struct {
 	mp         *mpool.MPool
-	allocation *vector.AllocationAccountSelection
+	allocation *mpool.MPool
 
 	typ               types.Type
 	resultVector      *vector.Vector
@@ -1093,7 +1090,7 @@ func (expr *ListExpressionExecutor) Eval(proc *process.Process, batches []*batch
 	} else {
 		expr.resultVector.CleanOnlyData()
 	}
-	if err := expr.resultVector.PreExtend(len(expr.parameterExecutor), proc.Mp()); err != nil {
+	if err := expr.resultVector.PreExtend(len(expr.parameterExecutor), expr.mp); err != nil {
 		return nil, err
 	}
 	for i := range expr.parameterExecutor {
@@ -1149,9 +1146,9 @@ func (expr *ListExpressionExecutor) init(
 	proc *process.Process,
 	typ types.Type,
 	parameterNum int,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 ) error {
-	m := proc.Mp()
+	m := expressionAllocationMP(proc.Mp(), selection)
 
 	expr.typ = typ
 	expr.mp = m
@@ -1183,9 +1180,9 @@ func (expr *FunctionExpressionExecutor) init(
 	proc *process.Process,
 	parameterNum int,
 	retType types.Type,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 ) (err error) {
-	m := proc.Mp()
+	m := expressionAllocationMP(proc.Mp(), selection)
 
 	expr.m = m
 	expr.allocation = selection
@@ -1193,8 +1190,8 @@ func (expr *FunctionExpressionExecutor) init(
 	expr.parameterResults = make([]*vector.Vector, parameterNum)
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
 
-	expr.resultVector, err = vector.NewFunctionResultWrapperWithAllocation(retType, m, selection)
-	return err
+	expr.resultVector = vector.NewFunctionResultWrapper(retType, m)
+	return nil
 }
 
 func (expr *FunctionExpressionExecutor) resetResultType(result vector.FunctionResultWrapper) {
@@ -1615,7 +1612,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			} else {
 				selected.Reset(*parameter.GetType())
 			}
-			if err := selected.Union(parameter, expr.selectedRows, proc.Mp()); err != nil {
+			if err := selected.Union(parameter, expr.selectedRows, expr.m); err != nil {
 				return nil, err
 			}
 			parameter.CopyExpressionMetadataTo(selected)
@@ -1630,13 +1627,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		return nil, err
 	}
 	if expr.selectedResult == nil {
-		var err error
-		expr.selectedResult, err = vector.NewFunctionResultWrapperWithAllocation(
-			expr.resultType, expr.m, expr.allocation,
-		)
-		if err != nil {
-			return nil, err
-		}
+		expr.selectedResult = vector.NewFunctionResultWrapper(expr.resultType, expr.m)
 	}
 	expr.resetResultType(expr.selectedResult)
 	if err := expr.selectedResult.PreExtendAndReset(selectedCount); err != nil {
@@ -1660,7 +1651,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		// first selected value through our owned result wrapper before widening
 		// its logical length. In particular row zero may have been skipped.
 		// Skipped rows are not evaluated or observed by the masked parent.
-		if err := result.UnionOne(selectedResult, 0, proc.Mp()); err != nil {
+		if err := result.UnionOne(selectedResult, 0, expr.m); err != nil {
 			return nil, err
 		}
 		result.ToConst()
@@ -1684,16 +1675,16 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		// Reserve for the runtime type before publishing its full logical domain.
 		// The wrapper normally already admitted this storage; refinements may
 		// change the physical result width.
-		if err := result.PreExtend(rowCount, proc.Mp()); err != nil {
+		if err := result.PreExtend(rowCount, expr.m); err != nil {
 			return nil, err
 		}
-		if err := result.PreExtendNulls(rowCount, proc.Mp()); err != nil {
+		if err := result.PreExtendNulls(rowCount, expr.m); err != nil {
 			return nil, err
 		}
 		result.SetLength(rowCount)
 		result.GetNulls().AddRange(0, uint64(rowCount))
 		for compactRow, row := range expr.selectedRows {
-			if err := result.Copy(selectedResult, row, int64(compactRow), proc.Mp()); err != nil {
+			if err := result.Copy(selectedResult, row, int64(compactRow), expr.m); err != nil {
 				return nil, err
 			}
 		}
@@ -1714,11 +1705,11 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		selectedRow := int64(0)
 		for row := 0; row < rowCount; row++ {
 			if selectList[row] {
-				if err := result.UnionOne(selectedResult, selectedRow, proc.Mp()); err != nil {
+				if err := result.UnionOne(selectedResult, selectedRow, expr.m); err != nil {
 					return nil, err
 				}
 				selectedRow++
-			} else if err := result.UnionOne(expr.selectedNullResult, 0, proc.Mp()); err != nil {
+			} else if err := result.UnionOne(expr.selectedNullResult, 0, expr.m); err != nil {
 				return nil, err
 			}
 		}
@@ -1882,7 +1873,7 @@ func (expr *FunctionExpressionExecutor) EvalWithoutResultReusing(proc *process.P
 		return nil, err
 	}
 	if expr.folded.canFold {
-		return vec.Dup(proc.Mp())
+		return vec.Dup(expr.m)
 	}
 	expr.resultVector.SetResultVector(nil)
 	return vec, nil
@@ -2011,7 +2002,7 @@ func (expr *FixedVectorExpressionExecutor) EvalWithoutResultReusing(proc *proces
 	if err != nil {
 		return nil, err
 	}
-	return vec.Dup(proc.Mp())
+	return vec.Dup(expr.m)
 }
 
 func (expr *FixedVectorExpressionExecutor) Free() {
@@ -2034,7 +2025,7 @@ func generateConstExpressionExecutor(
 	proc *process.Process,
 	typ types.Type,
 	con *plan.Literal,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 ) (vec *vector.Vector, err error) {
 	// Validate the plan field even though the value carries no source.
 	if _, err = DecodeLiteralStringSource(con); err != nil {
@@ -3851,7 +3842,7 @@ func MakeEvalVector(proc *process.Process, expressions []*plan.Expr) (ev ExprEva
 func MakeEvalVectorWithAllocation(
 	proc *process.Process,
 	expressions []*plan.Expr,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 ) (ev ExprEvalVector, err error) {
 	if len(expressions) == 0 {
 		return

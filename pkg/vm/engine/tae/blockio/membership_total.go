@@ -94,7 +94,7 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 		}
 		var physical []int64
 		if !member.All {
-			if err := s.Physical.PreExtend(count, mp); err != nil {
+			if err := s.Physical.PreExtend(count, request.OutputAllocation); err != nil {
 				if mpool.IsRetryableAllocationCapacity(err) {
 					fallback = true
 					return nil
@@ -110,11 +110,9 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 			defer freeMembershipViews(s, predicates, mp)
 			for _, column := range predicates {
 				source := s.Sources[column]
-				view, err := vector.NewOffHeapVecWithTypeAndAllocation(*source.GetType(), request.OutputAllocation)
-				if err == nil {
-					s.Views[column] = view
-					err = view.Union(source, physical, mp)
-				}
+				view := vector.NewOffHeapVecWithType(*source.GetType())
+				s.Views[column] = view
+				err := view.Union(source, physical, request.OutputAllocation)
 				if err != nil {
 					if mpool.IsRetryableAllocationCapacity(err) {
 						// Optional staging must not force a temporary payload

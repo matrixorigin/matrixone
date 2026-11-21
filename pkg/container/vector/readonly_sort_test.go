@@ -68,26 +68,27 @@ func TestReadonlySortAndCompact(t *testing.T) {
 					for _, value := range shape.values {
 						require.NoError(t, AppendBytes(source, value, false, mp))
 					}
-					destination := newAccountedTestVector(t, family.typ, state.selection)
+					destination := newAccountedTestVector(t, family.typ)
+					amp := state.view(t, mp)
 					t.Cleanup(func() { destination.Free(mp) })
 					if leased {
-						require.NoError(t, destination.CopyWithReadonlyArea(source, mp))
+						require.NoError(t, destination.CopyWithReadonlyArea(source, amp))
 					} else {
-						require.NoError(t, destination.UnionBatch(source, 0, source.Length(), nil, mp))
+						require.NoError(t, destination.UnionBatch(source, 0, source.Length(), nil, amp))
 					}
 					var snapshot *Vector
 					var err error
 					if destination.HasBorrowedBacking() {
-						snapshot, err = destination.RetainedReadonlyViewWithMP(mp)
+						snapshot, err = destination.RetainedReadonlyViewWithMP(amp)
 					} else {
-						snapshot, err = destination.CloneWindowWithAllocation(0, destination.Length(), mp, state.selection)
+						snapshot, err = destination.CloneWindow(0, destination.Length(), amp)
 					}
 					require.NoError(t, err)
 					t.Cleanup(func() { snapshot.Free(mp) })
 					data, area, lease := destination.data, destination.area, destination.areaLease
 					beforeMP, beforeAccount, calls := mp.CurrNB(), state.account.Snapshot().Used, controller.calls
 					controller.failAt = calls + 1
-					require.NoError(t, destination.InplaceSortAndCompact(mp))
+					require.NoError(t, destination.InplaceSortAndCompact(amp))
 					require.Equal(t, len(shape.want), destination.Length())
 					require.True(t, destination.GetSorted())
 					for row, value := range shape.want {
@@ -114,7 +115,7 @@ func TestReadonlySortAndCompact(t *testing.T) {
 						require.Equal(t, value, snapshot.GetBytesAt(row))
 					}
 					// Repeated compaction is idempotent and still cannot allocate.
-					require.NoError(t, destination.InplaceSortAndCompact(mp))
+					require.NoError(t, destination.InplaceSortAndCompact(amp))
 					require.Equal(t, len(shape.want), destination.Length())
 					require.Equal(t, calls, controller.calls)
 					for row, value := range shape.want {

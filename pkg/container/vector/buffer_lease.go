@@ -171,28 +171,12 @@ func NewBorrowedFixedVector(
 	data []byte,
 	lease BufferLease,
 ) (*Vector, error) {
-	return NewBorrowedFixedVectorWithAllocation(typ, rows, data, lease, nil)
-}
-
-// NewBorrowedFixedVectorWithAllocation installs selection before borrowed
-// backing, so any later COW or bitmap materialization remains in the same
-// statement account.
-func NewBorrowedFixedVectorWithAllocation(
-	typ types.Type,
-	rows int,
-	data []byte,
-	lease BufferLease,
-	selection *AllocationAccountSelection,
-) (*Vector, error) {
 	if rows < 0 || typ.IsVarlen() || typ.TypeSize() <= 0 ||
 		uint64(rows) > uint64(^uint(0)>>1)/uint64(typ.TypeSize()) ||
 		len(data) != rows*typ.TypeSize() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid borrowed fixed vector layout")
 	}
-	vec, err := NewOffHeapVecWithTypeAndAllocation(typ, selection)
-	if err != nil {
-		return nil, err
-	}
+	vec := NewOffHeapVecWithType(typ)
 	if err := vec.InstallBorrowedData(data, lease); err != nil {
 		vec.Free(nil)
 		return nil, err
@@ -264,19 +248,14 @@ func (v *Vector) CopyWithReadonlyArea(source *Vector, mp *mpool.MPool) error {
 	private.sorted = v.sorted
 	private.isBin = v.isBin
 
-	if err := private.SetAllocationAccount(v.allocationAccount); err != nil {
-		private.Free(mp)
-		return err
-	}
 	if err := private.UnionBatch(source, 0, source.length, nil, mp); err != nil {
 		private.Free(mp)
 		return err
 	}
 	if len(private.area) > 0 {
 		buffer := DetachedBuffer{
-			data:      private.area,
-			selection: private.allocationAccount,
-			kind:      DetachedAreaBuffer,
+			data: private.area,
+			kind: DetachedAreaBuffer,
 		}
 		lease, err := NewRefCountedBufferLease(private.area, int64(buffer.Capacity()), func() {
 			buffer.Free(mp)
@@ -304,7 +283,7 @@ func (v *Vector) MaterializeOwned(mp *mpool.MPool) error {
 	if mp == nil {
 		return moerr.NewInternalErrorNoCtx("borrowed vector materialization does not have a mpool")
 	}
-	owned, err := v.dup(mp, true, true, v.allocationAccount)
+	owned, err := v.dup(mp, true, true)
 	if err != nil {
 		return err
 	}
@@ -352,17 +331,7 @@ func (v *Vector) RetainedReadonlyWindowWithMP(start, end int, mp *mpool.MPool) (
 		return nil, moerr.NewInternalErrorNoCtx("owned vector has no shared backing lease")
 	}
 
-	var (
-		view *Vector
-		err  error
-	)
-	if v.allocationAccount != nil {
-		view, err = v.WindowByLogicalRowsWithAllocation(
-			start, end, mp, v.allocationAccount,
-		)
-	} else {
-		view, err = v.window(start, end, mp, nil, true)
-	}
+	view, err := v.window(start, end, mp, true)
 	if err != nil {
 		return nil, err
 	}
@@ -406,27 +375,21 @@ func RetainBorrowedBufferInto(dst, source *Vector, lease BufferLease, mp *mpool.
 	if dst == nil || source == nil || mp == nil || dst == source || lease == nil || dst.HasBorrowedBacking() || dst.Length() != 0 || dst.Allocated() != 0 || source.HasBorrowedBacking() || (source.DataBackingKind() != LegacyAlias && cap(source.data) > 0) || (source.AreaBackingKind() != LegacyAlias && cap(source.area) > 0) {
 		return false, nil
 	}
-	account := dst.allocationAccount
+	// mp is the destination's allocation view: an accounted view charges the
+	// cache pin to the destination's account.
 	var pin *mpool.CapacityLease
-	if account != nil {
-		if err := account.validate(); err != nil {
-			return false, err
-		}
+	if mp.IsView() {
 		// A transient policy cannot promote an account-only cache pin.
 		// Decline so the loader copies through its admitted owned path.
-		if account.transient != nil {
+		if mp.IsAdmissionView() {
 			return false, nil
 		}
 		size := lease.AccountedBytes()
 		if size < 0 {
 			return false, moerr.NewInvalidInputNoCtx("invalid cache pin size")
 		}
-		reservation, err := account.account.ReserveCapacityWithClass(uint64(size), account.capacityClass, account.owner, account.dataSite)
-		if err != nil {
-			return false, err
-		}
-		defer reservation.Abort()
-		pin, err = reservation.Commit(uint64(size))
+		var err error
+		pin, err = mp.ReservePinnedCapacity(uint64(size))
 		if err != nil {
 			return false, err
 		}
@@ -446,10 +409,10 @@ func RetainBorrowedBufferInto(dst, source *Vector, lease BufferLease, mp *mpool.
 	temporary.dataLease, temporary.areaLease = counted, counted
 	// window retains each used backing; the scoped decoder itself owns neither.
 	oldType, oldOffHeap := dst.typ, dst.offHeap
-	_, err = temporary.windowInto(0, source.length, mp, account, dst)
+	_, err = temporary.windowInto(0, source.length, mp, dst)
 	if err != nil {
 		dst.Free(mp)
-		*dst = Vector{typ: oldType, offHeap: oldOffHeap, allocationAccount: account}
+		*dst = Vector{typ: oldType, offHeap: oldOffHeap}
 		return false, err
 	}
 	source.CopyExpressionMetadataTo(dst)

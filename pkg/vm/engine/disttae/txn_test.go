@@ -1854,29 +1854,24 @@ func TestDupVectorWithoutNullsLeavesSealedStatementOwner(t *testing.T) {
 			require.NoError(t, err)
 			account, err := registry.Open(1 << 20)
 			require.NoError(t, err)
-			selection, err := vector.NewAllocationAccountSelection(
+			selection, err := mp.WithAccount(
 				account,
 				mpool.AllocationOwner(1),
 				mpool.AllocationSite(1),
-				mpool.AllocationSite(2),
+				mpool.AllocationCapacityClassDefault,
 			)
 			require.NoError(t, err)
-			source, err := vector.NewOffHeapVecWithTypeAndAllocation(
-				types.T_int64.ToType(),
-				selection,
-			)
-			require.NoError(t, err)
-			require.NoError(t, vector.AppendFixed(source, int64(1), false, mp))
+			source := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(source, int64(1), false, selection))
 			if tc.withNulls {
-				require.NoError(t, vector.AppendFixed(source, int64(0), true, mp))
+				require.NoError(t, vector.AppendFixed(source, int64(0), true, selection))
 			}
-			require.NoError(t, vector.AppendFixed(source, int64(2), false, mp))
+			require.NoError(t, vector.AppendFixed(source, int64(2), false, selection))
 
 			used := account.Seal().Used
 			require.NotZero(t, used)
 			out, err := dupVectorWithoutNulls(source, mp)
 			require.NoError(t, err)
-			require.Nil(t, out.AllocationAccountSelection())
 			require.Equal(t, used, account.Snapshot().Used)
 			require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](out))
 

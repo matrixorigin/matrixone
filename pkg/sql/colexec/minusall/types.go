@@ -76,7 +76,7 @@ func (minusAll *MinusAll) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr := &minusAll.ctr
 	ctr.state = buildingHashMap
 	// Account-bound batches and key evaluators cannot survive EXECUTE reset.
-	if minusAll.ExpressionAllocation() != nil {
+	if minusAll.HasAllocationAccount() {
 		minusAll.Free(proc, pipelineFailed, err)
 		return
 	}

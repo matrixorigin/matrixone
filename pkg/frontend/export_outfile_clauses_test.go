@@ -1804,7 +1804,7 @@ func BenchmarkOutfileCSVRow(b *testing.B) {
 						ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
 						ch := make(chan *BatchByte, 1)
 						emit = func() error {
-							dup, err := bat.DupWithoutAllocationAccount(mp)
+							dup, err := bat.Dup(mp)
 							if err != nil {
 								return err
 							}

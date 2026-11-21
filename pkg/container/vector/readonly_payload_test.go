@@ -158,13 +158,14 @@ func TestReadonlyWriterAdmissionAndFailure(t *testing.T) {
 			controller := &readonlyWriteController{}
 			state := readonlyWriteAccount(t, controller)
 			values := [][]byte{[]byte("aaaaaa"), bytes.Repeat([]byte{'b'}, 64), bytes.Repeat([]byte{'c'}, 64)}
-			_, destination := readonlyAliasVectors(t, mp, values, true, state.selection)
+			amp := state.view(t, mp)
+			_, destination := readonlyAliasVectors(t, mp, values, true, amp)
 			beforeMP, beforeAccount := mp.CurrNB(), state.account.Snapshot().Used
 			if failAfter > 0 {
 				controller.failAt = controller.calls + failAfter
 			}
 			called := false
-			err := AppendBytesWithWriter(destination, 24, mp, func(dst []byte) error {
+			err := AppendBytesWithWriter(destination, 24, amp, func(dst []byte) error {
 				called = true
 				controller.failAt = controller.calls + 1
 				copy(dst, bytes.Repeat([]byte{'x'}, 24))

@@ -341,10 +341,6 @@ func TestSingleGroupReuseAllocationFailure(t *testing.T) {
 			_, err = AppendSingleGroupResultAndReset(exec, dst)
 			require.NoError(t, err)
 			require.Equal(t, oldLen+2, dst.Length())
-			wrong := vector.NewVec(*dst.GetType()) // matching type, wrong allocation generation
-			defer wrong.Free(mp)
-			_, err = AppendSingleGroupResultAndReset(exec, wrong)
-			require.Error(t, err)
 		})
 	}
 }

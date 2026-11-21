@@ -193,17 +193,21 @@ func (ctr *container) fitGroupOutput(
 }
 
 func (ctr *container) appendOutputRow(hashJoin *HashJoin, proc *process.Process, row outputRow) error {
+	resMP, err := hashJoin.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	for i, column := range hashJoin.ResultCols {
 		dst := ctr.resBat.Vecs[i]
 		if column.Rel == -1 {
-			if err := vector.AppendFixed(dst, row.markValue, row.markNull, proc.Mp()); err != nil {
+			if err := vector.AppendFixed(dst, row.markValue, row.markNull, resMP); err != nil {
 				return err
 			}
 			continue
 		}
 		source, sel := row.source(column.Rel)
 		if source == nil {
-			if err := dst.UnionNull(proc.Mp()); err != nil {
+			if err := dst.UnionNull(resMP); err != nil {
 				return err
 			}
 			continue
@@ -211,7 +215,7 @@ func (ctr *container) appendOutputRow(hashJoin *HashJoin, proc *process.Process,
 		if column.Pos < 0 || int(column.Pos) >= len(source.Vecs) {
 			return moerr.NewInternalErrorNoCtx("hash join output column is out of range")
 		}
-		if err := dst.UnionOne(source.Vecs[column.Pos], sel, proc.Mp()); err != nil {
+		if err := dst.UnionOne(source.Vecs[column.Pos], sel, resMP); err != nil {
 			return err
 		}
 	}

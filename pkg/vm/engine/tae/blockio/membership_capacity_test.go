@@ -81,13 +81,11 @@ func TestMembershipMetadataRefusalRunsBorrowedPredicate(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+	allocation, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	output := batch.NewOffHeapWithSize(2)
-	require.NoError(t, output.SetAllocationAccount(allocation))
 	for i := range output.Vecs {
-		output.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(types_[i], allocation)
-		require.NoError(t, err)
+		output.Vecs[i] = vector.NewOffHeapVecWithType(types_[i])
 	}
 	original := append([]*vector.Vector(nil), output.Vecs...)
 	request := &engine.ReaderFilterRequest{
@@ -198,11 +196,10 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 					_, _, err := registry.CompleteTerminal(account)
 					require.NoError(t, err)
 				})
-				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+				allocation, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 				require.NoError(t, err)
 				output := batch.NewWithSchema(true, nil, typs)
 				t.Cleanup(func() { output.Clean(mp) })
-				require.NoError(t, output.SetAllocationAccount(allocation))
 				original := append([]*vector.Vector(nil), output.Vecs...)
 				request := &engine.ReaderFilterRequest{
 					OutputAllocation: allocation,

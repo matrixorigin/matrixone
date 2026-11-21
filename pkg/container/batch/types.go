@@ -65,10 +65,6 @@ type Batch struct {
 	selection    *bitmap.Bitmap
 	physicalRows int
 
-	// allocationAccount is the destination selection for owned off-heap
-	// vectors created or reused by this batch. Alias vectors do not copy it.
-	allocationAccount *vector.AllocationAccountSelection
-
 	// extraBufMP owns ExtraBuf only when it was detached from an accounted
 	// off-heap buffer. Ordinary Go-heap ExtraBuf values leave this nil.
 	extraBufMP *mpool.MPool

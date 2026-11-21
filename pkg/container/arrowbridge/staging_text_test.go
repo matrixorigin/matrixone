@@ -443,7 +443,7 @@ func TestConvertStagedTextCanceledContext(t *testing.T) {
 	_, _, err = materializeConverted(ctx, values, columnPlan{
 		target: stagedTextTarget("v"),
 		kind:   conversionMaterializeText,
-	}, mp, nil, nil)
+	}, mp, nil)
 	require.Error(t, err, "a canceled context aborts the staged per-column loop")
 
 	record.Release()

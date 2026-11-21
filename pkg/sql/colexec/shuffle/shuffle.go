@@ -96,7 +96,11 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 			shuffle.ctr.shufflePool.ownedColumns != shuffle.OwnedColumnCount {
 			return mpool.ErrAllocationAccountMismatch
 		}
-		if err := shuffle.ctr.shufflePool.initOwned(proc, shuffle.outputAllocation); err != nil {
+		outputMP, err := shuffle.outputAllocation.MP(proc.Mp())
+		if err != nil {
+			return err
+		}
+		if err := shuffle.ctr.shufflePool.initOwned(proc, outputMP); err != nil {
 			return err
 		}
 		if err := shuffle.ctr.shufflePool.ownedFailure(proc, nil); err != nil {
@@ -523,17 +527,16 @@ func (shuffle *Shuffle) shuffleCompleteKey(bat *batch.Batch, proc *process.Proce
 	}
 	if shuffle.ctr.keyHashes == nil {
 		// NewVec defaults to Go-heap storage, which bypasses mpool capacity.
-		if shuffle.OwnedOutput {
-			var err error
-			shuffle.ctr.keyHashes, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_uint64.ToType(), shuffle.outputAllocation)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			shuffle.ctr.keyHashes = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
+		shuffle.ctr.keyHashes = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
+	}
+	hashMP := proc.Mp()
+	if shuffle.OwnedOutput {
+		var err error
+		if hashMP, err = shuffle.outputAllocation.MP(proc.Mp()); err != nil {
+			return nil, err
 		}
 	}
-	if err := shuffle.ctr.keyHashes.PreExtend(bat.RowCount(), proc.Mp()); err != nil {
+	if err := shuffle.ctr.keyHashes.PreExtend(bat.RowCount(), hashMP); err != nil {
 		return nil, err
 	}
 	shuffle.ctr.keyHashes.SetLength(bat.RowCount())

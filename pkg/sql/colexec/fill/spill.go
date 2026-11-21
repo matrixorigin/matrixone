@@ -312,11 +312,15 @@ func addOriginalNullMarkers(
 	bat *batch.Batch,
 	colLen int,
 	mp *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
+	view *mpool.MPool,
 ) error {
 	rows := bat.RowCount()
 	vecCount := len(bat.Vecs)
 	attrCount := len(bat.Attrs)
+	allocMP := mp
+	if view != nil {
+		allocMP = view
+	}
 	rollback := func() {
 		for _, marker := range bat.Vecs[vecCount:] {
 			if marker != nil {
@@ -328,18 +332,13 @@ func addOriginalNullMarkers(
 	}
 	for c := 0; c < colLen; c++ {
 		marker := vector.NewVec(types.T_bool.ToType())
-		if selection != nil {
+		if view != nil {
 			marker = vector.NewOffHeapVecWithType(types.T_bool.ToType())
-			if err := marker.SetAllocationAccount(selection); err != nil {
-				marker.Free(mp)
-				rollback()
-				return err
-			}
 		}
 		bat.Vecs = append(bat.Vecs, nil)
 		bat.Attrs = append(bat.Attrs, "")
 		bat.SetVector(int32(len(bat.Vecs)-1), marker)
-		if err := marker.PreExtend(rows, mp); err != nil {
+		if err := marker.PreExtend(rows, allocMP); err != nil {
 			rollback()
 			return err
 		}
@@ -360,12 +359,12 @@ func addLinearDistanceMarkers(
 	bat *batch.Batch,
 	colLen int,
 	mp *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
+	view *mpool.MPool,
 ) error {
 	if colLen == 0 {
 		return nil
 	}
-	markers, err := makeLinearDistanceMarkers(bat.RowCount(), colLen, mp, selection)
+	markers, err := makeLinearDistanceMarkers(bat.RowCount(), colLen, mp, view)
 	if err != nil {
 		return err
 	}
@@ -380,22 +379,19 @@ func addLinearDistanceMarkers(
 func makeLinearDistanceMarkers(
 	rows, colLen int,
 	mp *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
+	view *mpool.MPool,
 ) ([]*vector.Vector, error) {
 	markers := make([]*vector.Vector, colLen)
+	allocMP := mp
+	if view != nil {
+		allocMP = view
+	}
 	for col := range markers {
 		marker := vector.NewVec(types.T_uint64.ToType())
-		if selection != nil {
+		if view != nil {
 			marker = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
-			if err := marker.SetAllocationAccount(selection); err != nil {
-				marker.Free(mp)
-				for _, allocated := range markers[:col] {
-					allocated.Free(mp)
-				}
-				return nil, err
-			}
 		}
-		if err := vector.AppendMultiFixed(marker, uint64(0), false, rows, mp); err != nil {
+		if err := vector.AppendMultiFixed(marker, uint64(0), false, rows, allocMP); err != nil {
 			marker.Free(mp)
 			for _, allocated := range markers[:col] {
 				allocated.Free(mp)
@@ -411,7 +407,7 @@ func makeBorrowedSpillBatch(
 	source *batch.Batch,
 	colLen int,
 	mp *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
+	view *mpool.MPool,
 ) (*batch.Batch, error) {
 	if source == nil || colLen < 0 || colLen > len(source.Vecs) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid fill spill input batch")
@@ -421,7 +417,7 @@ func makeBorrowedSpillBatch(
 	bat.Recursive = source.Recursive
 	bat.ShuffleIDX = source.ShuffleIDX
 	bat.SetRowCount(source.RowCount())
-	if err := addOriginalNullMarkers(bat, colLen, mp, selection); err != nil {
+	if err := addOriginalNullMarkers(bat, colLen, mp, view); err != nil {
 		clear(bat.Vecs)
 		bat.Vecs = nil
 		bat.Attrs = nil
@@ -604,20 +600,21 @@ func (s *fillSpill) readRecordReverse(
 	if types.DecodeInt64(head[:]) != size {
 		return nil, moerr.NewInternalErrorNoCtx("fill spill record length mismatch")
 	}
+	decodedMP := mp
+	if s.allocation != nil {
+		var err error
+		if decodedMP, err = s.allocation.DecodedMP(mp); err != nil {
+			return nil, err
+		}
+	}
 	allocated := reuse == nil
 	if reuse == nil {
 		reuse = batch.NewOffHeapWithSize(0)
-		if s.allocation != nil {
-			if err := s.allocation.ConfigureDecodedBatch(reuse); err != nil {
-				reuse.Clean(mp)
-				return nil, err
-			}
-		}
 	} else {
 		reuse.CleanOnlyData()
 	}
 	section := io.NewSectionReader(fd, start+8, size)
-	if err := reuse.UnmarshalFromReaderWithMetadataForSpill(section, size, mp); err != nil {
+	if err := reuse.UnmarshalFromReaderWithMetadataForSpill(section, size, decodedMP); err != nil {
 		if allocated {
 			reuse.Clean(mp)
 		}
@@ -691,17 +688,13 @@ func makeEndpoint(
 	vec *vector.Vector,
 	row int,
 	proc *process.Process,
-	selection *vector.AllocationAccountSelection,
+	view *mpool.MPool,
 ) (*vector.Vector, error) {
 	result := vector.NewVec(*vec.GetType())
-	if selection != nil {
+	if view != nil {
 		result = vector.NewOffHeapVecWithType(*vec.GetType())
-		if err := result.SetAllocationAccount(selection); err != nil {
-			result.Free(proc.Mp())
-			return nil, err
-		}
 	}
-	if err := appendValue(result, vec, row, proc); err != nil {
+	if err := appendValue(result, vec, row, orMP(view, proc)); err != nil {
 		result.Free(proc.Mp())
 		return nil, err
 	}
@@ -713,14 +706,14 @@ func setEndpoint(
 	src *vector.Vector,
 	row int,
 	proc *process.Process,
-	selection *vector.AllocationAccountSelection,
+	view *mpool.MPool,
 ) error {
 	if *dst == nil {
 		var err error
-		*dst, err = makeEndpoint(src, row, proc, selection)
+		*dst, err = makeEndpoint(src, row, proc, view)
 		return err
 	}
-	return setValue(*dst, src, 0, row, proc)
+	return setValue(*dst, src, 0, row, orMP(view, proc))
 }
 
 func clearEndpoints(valid []bool) {
@@ -733,19 +726,17 @@ func cloneBatchWindow(
 	bat *batch.Batch,
 	start, end int,
 	mp *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
+	view *mpool.MPool,
 ) (*batch.Batch, error) {
 	result := batch.NewWithSize(len(bat.Vecs))
-	if selection != nil {
+	cloneMP := mp
+	if view != nil {
 		result = batch.NewOffHeapWithSize(len(bat.Vecs))
-		if err := result.SetAllocationAccount(selection); err != nil {
-			result.Clean(mp)
-			return nil, err
-		}
+		cloneMP = view
 	}
 	result.Attrs = append(result.Attrs, bat.Attrs...)
 	for i, vec := range bat.Vecs {
-		cloned, err := vec.CloneWindowWithAllocation(start, end, mp, selection)
+		cloned, err := vec.CloneWindow(start, end, cloneMP)
 		if err != nil {
 			result.Clean(mp)
 			return nil, err
@@ -786,6 +777,13 @@ func (s *fillSpill) transformReverse(ap *Fill, proc *process.Process) error {
 		fillAllocationSitePartitionSnapshot,
 	)
 	defer part.free()
+	decodedMP, err := ctr.decodedMP(proc)
+	if err != nil {
+		return err
+	}
+	if err = ctr.allocationViews(proc.Mp()); err != nil {
+		return err
+	}
 	for {
 		bat, err := s.readRecordReverse(s.input, &pos, proc.Mp(), reuse)
 		if err == io.EOF {
@@ -822,7 +820,7 @@ func (s *fillSpill) transformReverse(ap *Fill, proc *process.Process) error {
 								return err
 							}
 						}
-						if err = setValue(bat.Vecs[col], next[col], row, 0, proc); err != nil {
+						if err = setValue(bat.Vecs[col], next[col], row, 0, decodedMP); err != nil {
 							return err
 						}
 					} else {
@@ -1143,6 +1141,9 @@ func (s *fillSpill) replayNext(ctr *container, ap *Fill, proc *process.Process) 
 		s.replay.Clean(proc.Mp())
 		s.replay = nil
 	}
+	if err := ctr.allocationViews(proc.Mp()); err != nil {
+		return nil, err
+	}
 	for {
 		bat, err := s.readRecordReverse(s.output, &s.outputReversePos, proc.Mp(), nil)
 		if err != nil {
@@ -1161,7 +1162,11 @@ func (s *fillSpill) replayNext(ctr *container, ap *Fill, proc *process.Process) 
 			s.safeRows -= rows
 			s.replay = bat
 			if ap.FillType == plan.Node_LINEAR {
-				if err = s.finishLinearBatch(ctr, ap, proc, bat); err != nil {
+				decodedMP, err := ctr.decodedMP(proc)
+				if err != nil {
+					return nil, err
+				}
+				if err = s.finishLinearBatch(ctr, ap, proc, bat, decodedMP); err != nil {
 					return nil, err
 				}
 			}
@@ -1198,7 +1203,7 @@ func (s *fillSpill) replayNext(ctr *container, ap *Fill, proc *process.Process) 
 		s.safeRows = 0
 		s.replay = prefix
 		if ap.FillType == plan.Node_LINEAR {
-			if err = s.finishLinearBatch(ctr, ap, proc, prefix); err != nil {
+			if err = s.finishLinearBatch(ctr, ap, proc, prefix, orMP(ctr.outputAllocation, proc)); err != nil {
 				return nil, err
 			}
 		}
@@ -1304,7 +1309,7 @@ func (ctr *container) finishSpillReplay(
 	return nil
 }
 
-func (s *fillSpill) finishLinearBatch(ctr *container, ap *Fill, proc *process.Process, bat *batch.Batch) error {
+func (s *fillSpill) finishLinearBatch(ctr *container, ap *Fill, proc *process.Process, bat *batch.Batch, batMP *mpool.MPool) error {
 	for row := 0; row < bat.RowCount(); row++ {
 		if row&255 == 0 {
 			if err, canceled := vm.CancelCheck(proc); canceled {
@@ -1351,7 +1356,7 @@ func (s *fillSpill) finishLinearBatch(ctr *container, ap *Fill, proc *process.Pr
 				if err != nil {
 					return err
 				}
-				if err = setValue(bat.Vecs[col], value, row, 0, proc); err != nil {
+				if err = setValue(bat.Vecs[col], value, row, 0, batMP); err != nil {
 					if owned {
 						value.Free(proc.Mp())
 					}

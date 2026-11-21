@@ -185,15 +185,14 @@ func TestCommittedReplayAdmitsOutputBeforeAdvancing(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			}()
-			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+			selection, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			out := batch.NewOffHeapWithSize(1)
 			defer out.Clean(mp)
 			out.Attrs = []string{"id"}
 			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
-			require.NoError(t, out.SetAllocationAccount(selection))
 
-			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, mp, out)
+			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, selection, out)
 			if tc.name == "fits" {
 				require.NoError(t, err)
 				require.Equal(t, []int64{42, 43}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))

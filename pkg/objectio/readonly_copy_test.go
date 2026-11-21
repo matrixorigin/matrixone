@@ -216,29 +216,30 @@ func TestRetainedCachedVectorPinRefusal(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+	allocation, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	for _, transient := range []bool{false, true} {
 		func() {
-			selection := allocation
+			allocMP := allocation
 			var transientBytes uint64
 			if transient {
-				selection = vector.JSONReaderAllocationSelection(nil, func(size uint64) (func(), error) {
+				var err error
+				allocMP, err = vector.JSONReaderAllocationMP(mp, func(size uint64) (func(), error) {
 					transientBytes += size
 					return func() { transientBytes -= size }, nil
 				})
+				require.NoError(t, err)
 				defer func() { require.Zero(t, transientBytes) }()
 			}
-			destination, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_varchar.ToType(), selection)
-			require.NoError(t, err)
+			destination := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 			defer destination.Free(mp)
-			admitted, err := TryBorrowCachedVector(destination, data, mp)
+			admitted, err := TryBorrowCachedVector(destination, data, allocMP)
 			require.NoError(t, err)
 			require.False(t, admitted)
 			require.Zero(t, destination.Length())
 
 			if transient {
-				require.NoError(t, CopyCachedVectorAll(destination, data, mp))
+				require.NoError(t, CopyCachedVectorAll(destination, data, allocMP))
 				require.Equal(t, source.GetBytesAt(0), destination.GetBytesAt(0))
 				require.False(t, destination.HasBorrowedBacking())
 				require.Positive(t, transientBytes)

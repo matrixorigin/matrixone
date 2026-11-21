@@ -137,7 +137,7 @@ type container struct {
 	spillBucketOffsets     [spillNumBuckets + 1]int32
 	spillBucketWriteRows   [spillNumBuckets]int64
 	spillKeyVecs           []*vector.Vector
-	spillBatchAllocation   *vector.AllocationAccountSelection
+	spillBatchAllocation   *mpool.AccountBinding
 	spillAllocationMP      *mpool.MPool
 	spillAccountedWrite    *mpool.AccountedBuffer
 	spillAccountedBuckets  [spillNumBuckets]*mpool.AccountedBuffer
@@ -527,11 +527,10 @@ func (hashBuild *HashBuild) GetOperatorBase() *vm.OperatorBase {
 func (hashBuild *HashBuild) SetAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
-		HashBuildSpillAllocationSiteSelectedArea,
 	)
 	if err != nil {
 		return err
@@ -570,11 +569,10 @@ func (hashBuild *HashBuild) installRecoveryCapacity(
 		_ = capacity.Close()
 		return err
 	}
-	selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(
+	selection, err := mpool.NewAccountBindingWithCapacityClass(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
-		HashBuildSpillAllocationSiteSelectedArea,
 		class,
 	)
 	if err != nil {
@@ -624,11 +622,10 @@ func (hashBuild *HashBuild) releaseRecoveryCapacity(
 		ctr.spillBatchAllocation = nil
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
-		HashBuildSpillAllocationSiteSelectedArea,
 	)
 	if err != nil {
 		ctr.spillBatchAllocation = nil
@@ -669,20 +666,18 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
-	batchSelection, err := vector.NewAllocationAccountSelection(
+	batchSelection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteBatchData,
-		HashBuildAllocationSiteBatchArea,
 	)
 	if err != nil {
 		return err
 	}
-	uniqueKeySelection, err := vector.NewAllocationAccountSelection(
+	uniqueKeySelection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteUniqueKeyData,
-		HashBuildAllocationSiteUniqueKeyArea,
 	)
 	if err != nil {
 		return err

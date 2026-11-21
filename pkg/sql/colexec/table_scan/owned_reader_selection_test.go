@@ -106,7 +106,7 @@ func TestOwnedOutputReaderSelectionEntry(t *testing.T) {
 		t.Run(shape, func(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			t.Cleanup(proc.Free)
-			var allocation *vector.AllocationAccountSelection
+			var allocation *mpool.MPool
 			if shape != "missing-account" {
 				registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 				require.NoError(t, err)
@@ -117,7 +117,7 @@ func TestOwnedOutputReaderSelectionEntry(t *testing.T) {
 					_, _, err := registry.CompleteTerminal(account)
 					require.NoError(t, err)
 				})
-				allocation, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+				allocation, err = proc.Mp().WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 				require.NoError(t, err)
 			}
 			if shape == "summary" {

@@ -122,11 +122,17 @@ type container struct {
 	compares  []compare.Compare
 
 	buf *batch.Batch
+	// sortMP is the pool a standalone SortBatch charges its resident sorted
+	// copies and result to; nil means proc's pool.
+	sortMP *mpool.MPool
 
-	allocationAccount    *mpool.AllocationAccount
-	retainedAllocation   *vector.AllocationAccountSelection
-	expressionAllocation *vector.AllocationAccountSelection
-	outputAllocation     *vector.AllocationAccountSelection
+	allocationAccount *mpool.AllocationAccount
+	// Accounted views of allocationViewPool, built on first use because the
+	// account is bound before the operator knows its process pool.
+	allocationViewPool   *mpool.MPool
+	retainedAllocation   *mpool.MPool
+	expressionAllocation *mpool.MPool
+	outputAllocation     *mpool.MPool
 	spillAllocation      *spillutil.SpillAllocationAccount
 	budget               *process.ExecutionResourceGeneration
 	growthParticipant    *process.ExecutionMemoryGrowthParticipant
@@ -213,7 +219,7 @@ func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, 
 		ctr.executors = nil
 	}
 	if ctr.buf != nil {
-		if ctr.buf.HasAllocationAccount() {
+		if ctr.allocationAccount != nil {
 			// Accounted output cannot survive its statement-attempt boundary.
 			ctr.buf.Clean(proc.Mp())
 			ctr.buf = nil
@@ -284,33 +290,6 @@ func (ctr *container) setAllocationAccount(
 		len(ctr.spillReaders) != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	retained, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerOrder,
-		ordersites.MergeOrderRetainedData,
-		ordersites.MergeOrderRetainedArea,
-	)
-	if err != nil {
-		return err
-	}
-	expression, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerOrder,
-		ordersites.MergeOrderExpressionData,
-		ordersites.MergeOrderExpressionArea,
-	)
-	if err != nil {
-		return err
-	}
-	output, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerOrder,
-		ordersites.MergeOrderOutputData,
-		ordersites.MergeOrderOutputArea,
-	)
-	if err != nil {
-		return err
-	}
 	spill, err := spillutil.NewSpillAllocationAccount(
 		account,
 		mpool.AllocationOwnerOrder,
@@ -319,11 +298,78 @@ func (ctr *container) setAllocationAccount(
 		return err
 	}
 	ctr.allocationAccount = account
-	ctr.retainedAllocation = retained
-	ctr.expressionAllocation = expression
-	ctr.outputAllocation = output
+	ctr.allocationViewPool = nil
+	ctr.retainedAllocation = nil
+	ctr.expressionAllocation = nil
+	ctr.outputAllocation = nil
 	ctr.spillAllocation = spill
 	return nil
+}
+
+// allocationViews builds the accounted views of mp the bound account charges
+// through. It is a no-op when no account is bound or the views already view mp.
+func (ctr *container) allocationViews(mp *mpool.MPool) error {
+	if ctr.allocationAccount == nil || mp == nil ||
+		(ctr.allocationViewPool == mp && ctr.retainedAllocation != nil) {
+		return nil
+	}
+	views := [3]*mpool.MPool{}
+	for i, site := range []mpool.AllocationSite{
+		ordersites.MergeOrderRetainedData,
+		ordersites.MergeOrderExpressionData,
+		ordersites.MergeOrderOutputData,
+	} {
+		view, err := mp.WithAccount(
+			ctr.allocationAccount,
+			mpool.AllocationOwnerOrder,
+			site,
+			mpool.AllocationCapacityClassDefault,
+		)
+		if err != nil {
+			return err
+		}
+		views[i] = view
+	}
+	ctr.allocationViewPool = mp
+	ctr.retainedAllocation = views[0]
+	ctr.expressionAllocation = views[1]
+	ctr.outputAllocation = views[2]
+	return nil
+}
+
+// retainedView returns the view retained input copies allocate through, or
+// nil when no account is bound.
+func (ctr *container) retainedView(proc *process.Process) (*mpool.MPool, error) {
+	if err := ctr.allocationViews(proc.Mp()); err != nil {
+		return nil, err
+	}
+	return ctr.retainedAllocation, nil
+}
+
+// outputView returns the view output batches allocate through, or nil when
+// no account is bound.
+func (ctr *container) outputView(proc *process.Process) (*mpool.MPool, error) {
+	if err := ctr.allocationViews(proc.Mp()); err != nil {
+		return nil, err
+	}
+	return ctr.outputAllocation, nil
+}
+
+// outputMP returns the pool output batches allocate from.
+func (ctr *container) outputMP(proc *process.Process) (*mpool.MPool, error) {
+	view, err := ctr.outputView(proc)
+	if err != nil || view != nil {
+		return view, err
+	}
+	return proc.Mp(), nil
+}
+
+// decodedMP returns the pool spill reads decode into.
+func (ctr *container) decodedMP(proc *process.Process) (*mpool.MPool, error) {
+	if ctr.spillAllocation == nil {
+		return proc.Mp(), nil
+	}
+	return ctr.spillAllocation.DecodedMP(proc.Mp())
 }
 
 func (ctr *container) clearAllocationAccount(
@@ -342,6 +388,7 @@ func (ctr *container) clearAllocationAccount(
 		return mpool.ErrAllocationAccountInvariant
 	}
 	ctr.allocationAccount = nil
+	ctr.allocationViewPool = nil
 	ctr.retainedAllocation = nil
 	ctr.expressionAllocation = nil
 	ctr.outputAllocation = nil
@@ -586,22 +633,16 @@ func (r *spillRunReader) readNextBatch(proc *process.Process, ctr *container) (b
 	}
 	if r.batch == nil {
 		r.batch = batch.NewOffHeapWithSize(0)
-		if ctr.spillAllocation != nil {
-			if err := ctr.spillAllocation.ConfigureDecodedBatch(r.batch); err != nil {
-				return false, err
-			}
-		}
 	}
 	if r.keyBatch == nil {
 		r.keyBatch = batch.NewOffHeapWithSize(0)
-		if ctr.spillAllocation != nil {
-			if err := ctr.spillAllocation.ConfigureDecodedBatch(r.keyBatch); err != nil {
-				return false, err
-			}
-		}
 	}
 
-	bat, keyBatch, err := readSpillBatches(proc, r.reader, r.batch, r.keyBatch)
+	decodedMP, err := ctr.decodedMP(proc)
+	if err != nil {
+		return false, err
+	}
+	bat, keyBatch, err := readSpillBatches(proc, r.reader, r.batch, r.keyBatch, decodedMP)
 	if err != nil {
 		if err == io.EOF {
 			return false, nil

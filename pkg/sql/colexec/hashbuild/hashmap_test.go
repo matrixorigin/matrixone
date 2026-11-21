@@ -240,9 +240,9 @@ func TestHashmapBuilderPhysicalAllocationsChargeOnce(t *testing.T) {
 	)
 	require.NoError(t, hb.copyBuildBatch(input, proc))
 	require.NotEmpty(t, hb.Batches.Buf)
-	for _, copied := range hb.Batches.Buf {
-		require.Same(t, hb.batchAllocation, copied.AllocationAccountSelection())
-	}
+	batchView, err := hb.batchAllocation.MP(proc.Mp())
+	require.NoError(t, err)
+	require.True(t, mpool.SameView(batchView, hb.Batches.Allocation()))
 	hb.InputBatchRowCount = input.RowCount()
 	input.Clean(proc.Mp())
 

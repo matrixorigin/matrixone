@@ -272,7 +272,7 @@ func (tableScan *TableScan) readBatch(
 				ctx,
 				tableScan.Attrs,
 				nil,
-				proc.Mp(),
+				tableScan.mp(proc),
 				tableScan.ctr.buf,
 			)
 		})
@@ -287,7 +287,7 @@ func (tableScan *TableScan) readBatch(
 				tableScan.Attrs,
 				tableScan.ctr.earlyColumns,
 				tableScan.ctr.readerFilter,
-				proc.Mp(),
+				tableScan.mp(proc),
 				tableScan.ctr.buf,
 			)
 		},

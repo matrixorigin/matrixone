@@ -964,7 +964,7 @@ func TestExportWorkerBatchEndsStatementAllocationOwnership(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	selection, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
 	source := batch.NewWithSchema(
@@ -972,15 +972,15 @@ func TestExportWorkerBatchEndsStatementAllocationOwnership(t *testing.T) {
 		[]string{"value"},
 		[]types.Type{types.T_int64.ToType()},
 	)
-	require.NoError(t, source.SetAllocationAccount(selection))
-	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, selection))
 	source.SetRowCount(1)
-	require.Positive(t, account.Snapshot().Used)
+	usedBefore := account.Snapshot().Used
+	require.Positive(t, usedBefore)
 
 	workerBatch, err := cloneExportWorkerBatch(source, mp)
 	require.NoError(t, err)
-	require.Nil(t, workerBatch.AllocationAccountSelection())
-	require.Nil(t, workerBatch.Vecs[0].AllocationAccountSelection())
+	// The worker copy crosses the ownership boundary unaccounted.
+	require.Equal(t, usedBefore, account.Snapshot().Used)
 
 	source.Clean(mp)
 	snapshot := account.Seal()

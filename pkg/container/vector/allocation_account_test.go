@@ -38,9 +38,23 @@ const (
 )
 
 type testVectorAllocationAccount struct {
-	registry  *mpool.AllocationAccountRegistry
-	account   *mpool.AllocationAccount
-	selection *AllocationAccountSelection
+	registry *mpool.AllocationAccountRegistry
+	account  *mpool.AllocationAccount
+	// class is the capacity class of the views state.view returns.
+	class mpool.AllocationCapacityClass
+}
+
+// view returns an accounted view of mp that charges the test account.
+func (s testVectorAllocationAccount) view(t testing.TB, mp *mpool.MPool) *mpool.MPool {
+	t.Helper()
+	view, err := mp.WithAccount(
+		s.account,
+		testVectorAllocationOwner,
+		testVectorDataAllocationSite,
+		s.class,
+	)
+	require.NoError(t, err)
+	return view
 }
 
 type rejectNextVectorAllocation struct {
@@ -77,17 +91,9 @@ func newTestVectorAllocationAccount(
 	require.NoError(t, err)
 	account, err := registry.Open(limit)
 	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(
-		account,
-		testVectorAllocationOwner,
-		testVectorDataAllocationSite,
-		testVectorAreaAllocationSite,
-	)
-	require.NoError(t, err)
 	return testVectorAllocationAccount{
-		registry:  registry,
-		account:   account,
-		selection: selection,
+		registry: registry,
+		account:  account,
 	}
 }
 
@@ -103,15 +109,11 @@ func finalizeTestVectorAllocationAccount(
 	require.NoError(t, err)
 }
 
-func newAccountedTestVector(
-	t testing.TB,
-	typ types.Type,
-	selection *AllocationAccountSelection,
-) *Vector {
+// newAccountedTestVector returns an empty vector for a test that allocates it
+// through an accounted view (state.view). The vector itself carries no account.
+func newAccountedTestVector(t testing.TB, typ types.Type) *Vector {
 	t.Helper()
-	vec := NewOffHeapVecWithType(typ)
-	require.NoError(t, vec.SetAllocationAccount(selection))
-	return vec
+	return NewOffHeapVecWithType(typ)
 }
 
 func TestUnionBatchFailedGroupedAppendRollbackAndReuse(t *testing.T) {
@@ -120,7 +122,8 @@ func TestUnionBatchFailedGroupedAppendRollbackAndReuse(t *testing.T) {
 	mp, err := mpool.NewMPool("grouped-append-rollback", limit, mpool.NoFixed)
 	require.NoError(t, err)
 	srcMP := mpool.MustNewZero()
-	dst := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	view := state.view(t, mp)
+	dst := newAccountedTestVector(t, types.T_varchar.ToType())
 	src := NewVec(types.T_varchar.ToType())
 	replacement := NewVec(types.T_varchar.ToType())
 	var ballast [][]byte
@@ -137,9 +140,9 @@ func TestUnionBatchFailedGroupedAppendRollbackAndReuse(t *testing.T) {
 		finalizeTestVectorAllocationAccount(t, state)
 	})
 
-	require.NoError(t, AppendBytes(dst, []byte("kept"), false, mp))
-	require.NoError(t, dst.PreExtend(2, mp))
-	require.NoError(t, dst.PreExtendGrouping(2, mp))
+	require.NoError(t, AppendBytes(dst, []byte("kept"), false, view))
+	require.NoError(t, dst.PreExtend(2, view))
+	require.NoError(t, dst.PreExtendGrouping(2, view))
 	dst.GetGrouping().Set(0)
 	require.NoError(t, AppendBytes(src, bytes.Repeat([]byte("x"), 32<<10), false, srcMP))
 	src.GetGrouping().Set(0)
@@ -151,7 +154,7 @@ func TestUnionBatchFailedGroupedAppendRollbackAndReuse(t *testing.T) {
 		require.NoError(t, allocErr)
 		ballast = append(ballast, b)
 	}
-	err = dst.UnionBatch(src, 0, 1, nil, mp)
+	err = dst.UnionBatch(src, 0, 1, nil, view)
 	require.Truef(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "error: %v", err)
 	require.Equal(t, 1, dst.Length())
 	require.True(t, dst.GetGrouping().Contains(1), "failure must occur after grouping publication")
@@ -161,7 +164,7 @@ func TestUnionBatchFailedGroupedAppendRollbackAndReuse(t *testing.T) {
 	}
 	ballast = nil
 
-	require.NoError(t, dst.UnionBatch(replacement, 0, 1, nil, mp))
+	require.NoError(t, dst.UnionBatch(replacement, 0, 1, nil, view))
 	require.Equal(t, []string{"kept", "new"}, InefficientMustStrCol(dst))
 	require.False(t, dst.IsNull(0))
 	require.False(t, dst.IsNull(1))
@@ -171,46 +174,46 @@ func TestUnionBatchFailedGroupedAppendRollbackAndReuse(t *testing.T) {
 
 func TestVectorAllocationAccountConfiguration(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 8)
-	mp := mpool.MustNewZero()
+	base := mpool.MustNewZero()
 
-	_, err := NewAllocationAccountSelection(
+	_, err := base.WithAccount(
 		nil,
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
-		testVectorAreaAllocationSite,
+		mpool.AllocationCapacityClassDefault,
 	)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 
+	mp := state.view(t, base)
+	// A view charges only off-heap allocations; vector allocations through a
+	// view are always off-heap, even for an on-heap vector.
 	onHeap := NewVec(types.T_int64.ToType())
-	require.ErrorIs(
-		t,
-		onHeap.SetAllocationAccount(state.selection),
-		mpool.ErrAllocationAccountInvalid,
-	)
+	require.NoError(t, AppendFixed(onHeap, int64(1), false, mp))
+	require.Positive(t, state.account.Snapshot().Used)
+	onHeap.Free(mp)
+	require.Zero(t, state.account.Snapshot().Used)
 
-	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
-	require.Same(t, state.selection, vec.AllocationAccountSelection())
+	vec := newAccountedTestVector(t, types.T_int64.ToType())
 	require.NoError(t, AppendFixed(vec, int64(1), false, mp))
-	require.ErrorIs(
-		t,
-		vec.SetAllocationAccount(nil),
-		mpool.ErrAllocationAccountInvalid,
-	)
-	require.Panics(t, func() {
-		vec.SetOffHeap(false)
-	})
 	sourceUsed := state.account.Snapshot().Used
 	dup, err := vec.Dup(mp)
 	require.NoError(t, err)
-	require.Same(t, state.selection, dup.AllocationAccountSelection())
 	require.Greater(t, state.account.Snapshot().Used, sourceUsed)
 	dup.Free(mp)
 	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
-	_, err = vec.CloneToFlatCompact(mp)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	compact, err := vec.CloneToFlatCompact(mp)
+	require.NoError(t, err)
+	require.Greater(t, state.account.Snapshot().Used, sourceUsed)
+	compact.Free(mp)
+	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
+
+	// Through the base pool a copy is unaccounted.
+	unaccounted, err := vec.Dup(base)
+	require.NoError(t, err)
+	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
+	unaccounted.Free(base)
 
 	vec.Free(mp)
-	require.Nil(t, vec.AllocationAccountSelection())
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
@@ -221,34 +224,31 @@ func TestShuffleWithAllocationAccountUsesAlternateCapacityClass(t *testing.T) {
 	ordinaryController := &rejectNextVectorAllocation{}
 	account, err := registry.OpenWithController(1<<20, ordinaryController)
 	require.NoError(t, err)
-	ordinary, err := NewAllocationAccountSelection(
+	ordinary, err := mp.WithAccount(
 		account,
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
-		testVectorAreaAllocationSite,
+		mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
 	recoveryController := &rejectNextVectorAllocation{}
 	class, err := account.RegisterCapacityController(recoveryController)
 	require.NoError(t, err)
-	recovery, err := NewAllocationAccountSelectionWithCapacityClass(
+	recovery, err := mp.WithAccount(
 		account,
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
-		testVectorAreaAllocationSite,
 		class,
 	)
 	require.NoError(t, err)
 
-	vec := newAccountedTestVector(t, types.T_int64.ToType(), ordinary)
+	vec := newAccountedTestVector(t, types.T_int64.ToType())
 	require.NoError(t, AppendFixedList(
-		vec, []int64{3, 1, 2}, nil, mp))
+		vec, []int64{3, 1, 2}, nil, ordinary))
 	ordinaryController.failAt = ordinaryController.calls + 1
-	require.NoError(t, vec.ShuffleWithAllocationAccount(
-		[]int64{1, 2, 0}, mp, recovery))
+	require.NoError(t, vec.Shuffle([]int64{1, 2, 0}, recovery))
 	require.Equal(t, []int64{1, 2, 3},
 		MustFixedColWithTypeCheck[int64](vec))
-	require.Same(t, ordinary, vec.AllocationAccountSelection())
 	require.False(t, ordinaryController.rejected)
 	require.Zero(t, ordinaryController.used)
 	require.Positive(t, recoveryController.used)
@@ -271,21 +271,20 @@ func TestUnionBatchWithAllocationAccountDoesNotPropagateCapacityClass(t *testing
 	ordinaryController := &rejectNextVectorAllocation{}
 	account, err := registry.OpenWithController(1<<20, ordinaryController)
 	require.NoError(t, err)
-	ordinary, err := NewAllocationAccountSelection(
+	ordinary, err := mp.WithAccount(
 		account,
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
-		testVectorAreaAllocationSite,
+		mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
 	recoveryController := &rejectNextVectorAllocation{}
 	class, err := account.RegisterCapacityController(recoveryController)
 	require.NoError(t, err)
-	recovery, err := NewAllocationAccountSelectionWithCapacityClass(
+	recovery, err := mp.WithAccount(
 		account,
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite,
-		testVectorAreaAllocationSite,
 		class,
 	)
 	require.NoError(t, err)
@@ -293,22 +292,19 @@ func TestUnionBatchWithAllocationAccountDoesNotPropagateCapacityClass(t *testing
 	source := NewVec(types.T_int64.ToType())
 	require.NoError(t, AppendFixedList(
 		source, []int64{3, 1, 2}, nil, mp))
-	destination := newAccountedTestVector(
-		t, types.T_int64.ToType(), ordinary)
+	destination := newAccountedTestVector(t, types.T_int64.ToType())
 	ordinaryController.failAt = ordinaryController.calls + 1
-	require.NoError(t, destination.UnionBatchWithAllocationAccount(
-		source, 0, source.Length(), nil, mp, recovery))
+	require.NoError(t, destination.UnionBatch(
+		source, 0, source.Length(), nil, recovery))
 	require.Equal(t, []int64{3, 1, 2},
 		MustFixedColWithTypeCheck[int64](destination))
-	require.Same(t, ordinary, destination.AllocationAccountSelection())
 	require.False(t, ordinaryController.rejected)
 	require.Zero(t, ordinaryController.used)
 	require.Positive(t, recoveryController.used)
 
 	// The private class applies only to the retained copy. A downstream copy
-	// follows the persistent ordinary selection and therefore cannot borrow the
-	// producer's recovery floor.
-	_, err = destination.Dup(mp)
+	// through the ordinary view cannot borrow the producer's recovery floor.
+	_, err = destination.Dup(ordinary)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.True(t, ordinaryController.rejected)
 
@@ -324,37 +320,31 @@ func TestUnionBatchWithAllocationAccountDoesNotPropagateCapacityClass(t *testing
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestAllocationAccountSelectionsEqual(t *testing.T) {
+func TestAllocationAccountViewsEqual(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 8)
-	equivalent, err := NewAllocationAccountSelection(
-		state.account,
-		testVectorAllocationOwner,
-		testVectorDataAllocationSite,
-		testVectorAreaAllocationSite,
-	)
-	require.NoError(t, err)
-	differentSite, err := NewAllocationAccountSelection(
+	mp := mpool.MustNewZero()
+	view := state.view(t, mp)
+	equivalent := state.view(t, mp)
+	differentSite, err := mp.WithAccount(
 		state.account,
 		testVectorAllocationOwner,
 		testVectorDataAllocationSite+1,
-		testVectorAreaAllocationSite,
+		mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
 
-	require.NotSame(t, state.selection, equivalent)
-	require.True(t, AllocationAccountSelectionsEqual(state.selection, equivalent))
-	require.False(t, AllocationAccountSelectionsEqual(state.selection, differentSite))
-	require.False(t, AllocationAccountSelectionsEqual(state.selection, nil))
-	require.True(t, AllocationAccountSelectionsEqual(nil, nil))
+	require.NotSame(t, view, equivalent)
+	require.True(t, mpool.SameView(view, equivalent))
+	require.False(t, mpool.SameView(view, differentSite))
+	require.False(t, mpool.SameView(view, nil))
+	require.True(t, mpool.SameView(nil, nil))
 
-	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
-	require.NoError(t, AppendFixed(vec, int64(1), false, mp))
-	require.NoError(t, vec.CanSetAllocationAccount(equivalent))
-	require.NoError(t, vec.SetAllocationAccount(equivalent))
-	// Equivalent provenance is a no-op: existing physical ownership remains
-	// attached to the original immutable selection.
-	require.Same(t, state.selection, vec.AllocationAccountSelection())
+	vec := newAccountedTestVector(t, types.T_int64.ToType())
+	require.NoError(t, AppendFixed(vec, int64(1), false, view))
+	// Growth through an equivalent view keeps the allocation's own charge.
+	used := state.account.Snapshot().Used
+	require.NoError(t, vec.PreExtend(1024, equivalent))
+	require.Greater(t, state.account.Snapshot().Used, used)
 	vec.Free(mp)
 
 	finalizeTestVectorAllocationAccount(t, state)
@@ -362,8 +352,8 @@ func TestAllocationAccountSelectionsEqual(t *testing.T) {
 
 func TestVectorAllocationAccountFixedResetReuseAndFree(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 16)
-	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	mp := state.view(t, mpool.MustNewZero())
+	vec := newAccountedTestVector(t, types.T_int64.ToType())
 
 	require.NoError(t, vec.PreExtend(128, mp))
 	initial := state.account.Snapshot()
@@ -404,8 +394,8 @@ func TestVectorAllocationAccountFixedResetReuseAndFree(t *testing.T) {
 
 func TestVectorAllocationAccountVarlenaDataAndArea(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 16)
-	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	mp := state.view(t, mpool.MustNewZero())
+	vec := newAccountedTestVector(t, types.T_varchar.ToType())
 
 	require.NoError(t, vec.PreExtendWithArea(64, 4096, mp))
 	initial := state.account.Snapshot()
@@ -428,8 +418,8 @@ func TestVectorAllocationAccountVarlenaDataAndArea(t *testing.T) {
 
 func TestVectorAllocationAccountBitmapResetReuseAndFree(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 8<<20, 16)
-	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	mp := state.view(t, mpool.MustNewZero())
+	vec := newAccountedTestVector(t, types.T_int64.ToType())
 
 	require.NoError(t, vec.PreExtend(32*1024, mp))
 	require.NoError(t, vec.PreExtendBitmap(32*1024, mp))
@@ -467,8 +457,8 @@ func TestVectorAllocationAccountBitmapResetReuseAndFree(t *testing.T) {
 
 func TestVectorAllocationAccountBitmapUsesExclusiveRowBoundary(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 4)
-	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	mp := state.view(t, mpool.MustNewZero())
+	vec := newAccountedTestVector(t, types.T_int64.ToType())
 
 	require.NoError(t, vec.PreExtendBitmap(64, mp))
 	require.Equal(t, 1, vec.nsp.GetBitmap().CapWords())
@@ -486,8 +476,8 @@ func TestVectorAllocationAccountBitmapUsesExclusiveRowBoundary(t *testing.T) {
 
 func TestVectorAllocationAccountBitmapShrinkUsesNoScratch(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 8<<20, 16)
-	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	mp := state.view(t, mpool.MustNewZero())
+	vec := newAccountedTestVector(t, types.T_int64.ToType())
 	require.NoError(t, vec.PreExtend(130, mp))
 	require.NoError(t, vec.PreExtendBitmap(130, mp))
 	for i := range 130 {
@@ -524,10 +514,11 @@ func TestVectorAllocationAccountShrinkSparseBitmaps(t *testing.T) {
 				t.Run(fmt.Sprintf("decoded=%t/%s/rows=%d", decoded, mode, rows), func(t *testing.T) {
 					state := newTestVectorAllocationAccount(t, 1<<20, 16)
 					t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
-					mp := mpool.MustNewZero()
-					t.Cleanup(func() { mpool.DeleteMPool(mp) })
-					t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-					source := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+					base := mpool.MustNewZero()
+					t.Cleanup(func() { mpool.DeleteMPool(base) })
+					t.Cleanup(func() { require.Zero(t, base.CurrNB()) })
+					mp := state.view(t, base)
+					source := newAccountedTestVector(t, types.T_int64.ToType())
 					t.Cleanup(func() { source.Free(mp) })
 					vec := source
 					for row := range rows + 2 {
@@ -540,7 +531,7 @@ func TestVectorAllocationAccountShrinkSparseBitmaps(t *testing.T) {
 						require.NoError(t, err)
 						var grouping bytes.Buffer
 						require.NoError(t, vec.MarshalGroupingTo(&grouping))
-						restored := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+						restored := newAccountedTestVector(t, types.T_int64.ToType())
 						t.Cleanup(func() { restored.Free(mp) })
 						require.NoError(t, restored.UnmarshalBinaryWithCopy(data, mp))
 						require.NoError(t, restored.UnmarshalGroupingFromReader(&grouping, grouping.Len(), mp))
@@ -582,8 +573,8 @@ func TestVectorAllocationAccountShrinkSparseBitmaps(t *testing.T) {
 
 func TestVectorAllocationAccountDupPreservesSparseBitmapRowDomain(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 8<<20, 16)
-	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	mp := state.view(t, mpool.MustNewZero())
+	vec := newAccountedTestVector(t, types.T_int64.ToType())
 	require.NoError(t, AppendFixed(vec, int64(0), true, mp))
 	for i := 1; i < 130; i++ {
 		require.NoError(t, AppendFixed(vec, int64(i), false, mp))
@@ -613,8 +604,8 @@ func TestVectorAllocationAccountDupPreservesSparseBitmapRowDomain(t *testing.T) 
 func TestVectorAllocationAccountDupPreservesStaleBitmapExtent(t *testing.T) {
 	t.Run("flat null and grouping", func(t *testing.T) {
 		state := newTestVectorAllocationAccount(t, 8<<20, 16)
-		mp := mpool.MustNewZero()
-		vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+		mp := state.view(t, mpool.MustNewZero())
+		vec := newAccountedTestVector(t, types.T_int64.ToType())
 		require.NoError(t, vec.PreExtend(130, mp))
 		require.NoError(t, vec.PreExtendBitmap(130, mp))
 		for i := range 130 {
@@ -637,8 +628,8 @@ func TestVectorAllocationAccountDupPreservesStaleBitmapExtent(t *testing.T) {
 
 	t.Run("constant grouping", func(t *testing.T) {
 		state := newTestVectorAllocationAccount(t, 8<<20, 16)
-		mp := mpool.MustNewZero()
-		vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+		mp := state.view(t, mpool.MustNewZero())
+		vec := newAccountedTestVector(t, types.T_int64.ToType())
 		require.NoError(t, AppendFixed(vec, int64(1), false, mp))
 		vec.SetClass(CONSTANT)
 		require.NoError(t, vec.PreExtendGrouping(130, mp))
@@ -657,8 +648,8 @@ func TestVectorAllocationAccountDupPreservesStaleBitmapExtent(t *testing.T) {
 
 	t.Run("empty stale extent", func(t *testing.T) {
 		state := newTestVectorAllocationAccount(t, 8<<20, 16)
-		mp := mpool.MustNewZero()
-		vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+		mp := state.view(t, mpool.MustNewZero())
+		vec := newAccountedTestVector(t, types.T_int64.ToType())
 		require.NoError(t, AppendFixed(vec, int64(1), false, mp))
 		require.NoError(t, vec.PreExtendBitmap(130, mp))
 		vec.SetNull(129)
@@ -681,8 +672,8 @@ func TestVectorAllocationAccountDupPreservesStaleBitmapExtent(t *testing.T) {
 
 func TestVectorAllocationAccountBitmapShuffleAccountsScratch(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 8<<20, 16)
-	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	mp := state.view(t, mpool.MustNewZero())
+	vec := newAccountedTestVector(t, types.T_int64.ToType())
 	require.NoError(t, vec.PreExtend(130, mp))
 	require.NoError(t, vec.PreExtendBitmap(130, mp))
 	for i := range 130 {
@@ -721,18 +712,10 @@ func TestVectorAllocationAccountBitmapShuffleAccountsScratch(t *testing.T) {
 
 func TestVectorAllocationAccountBitmapGrowthIsUnaccounted(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 8)
-	mp := mpool.MustNewZero()
-	unaccounted := NewOffHeapVecWithType(types.T_int64.ToType())
-	unaccounted.GetNulls().Add(0)
-	require.ErrorIs(
-		t,
-		unaccounted.SetAllocationAccount(state.selection),
-		mpool.ErrAllocationAccountInvalid,
-	)
-	unaccounted.Free(mp)
-
-	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	mp := state.view(t, mpool.MustNewZero())
+	vec := newAccountedTestVector(t, types.T_int64.ToType())
 	vec.GetNulls().Add(0)
+	require.NoError(t, vec.PreExtendNulls(1024, mp))
 	require.True(t, vec.GetNulls().Contains(0))
 	require.Zero(t, state.account.Snapshot().Used)
 
@@ -743,6 +726,7 @@ func TestVectorAllocationAccountBitmapGrowthIsUnaccounted(t *testing.T) {
 func TestVectorAllocationAccountBitmapCopyDecode(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 32)
 	mp := mpool.MustNewZero()
+	view := state.view(t, mp)
 	source := NewOffHeapVecWithType(types.T_int64.ToType())
 	for i := 0; i < 128; i++ {
 		require.NoError(t, AppendFixed(source, int64(i), i%7 == 0, mp))
@@ -751,38 +735,28 @@ func TestVectorAllocationAccountBitmapCopyDecode(t *testing.T) {
 	encoded, err := source.MarshalBinary()
 	require.NoError(t, err)
 
-	copied := newAccountedTestVector(
-		t,
-		types.T_int64.ToType(),
-		state.selection,
-	)
-	require.NoError(t, copied.UnmarshalBinaryWithCopy(encoded, mp))
+	copied := newAccountedTestVector(t, types.T_int64.ToType())
+	require.NoError(t, copied.UnmarshalBinaryWithCopy(encoded, view))
 	require.Equal(t, source.Length(), copied.Length())
 	require.True(t, copied.GetNulls().IsSame(source.GetNulls()))
+	require.Positive(t, state.account.Snapshot().Used)
 	copied.Free(mp)
+	require.Zero(t, state.account.Snapshot().Used)
 
-	fromReader := newAccountedTestVector(
-		t,
-		types.T_int64.ToType(),
-		state.selection,
-	)
-	require.NoError(t, fromReader.UnmarshalWithReader(bytes.NewReader(encoded), mp))
+	fromReader := newAccountedTestVector(t, types.T_int64.ToType())
+	require.NoError(t, fromReader.UnmarshalWithReader(bytes.NewReader(encoded), view))
 	require.Equal(t, source.Length(), fromReader.Length())
 	require.True(t, fromReader.GetNulls().IsSame(source.GetNulls()))
 	fromReader.Free(mp)
 
-	duplicate, err := source.DupOffHeapWithAllocation(mp, state.selection)
+	duplicate, err := source.DupOffHeap(view)
 	require.NoError(t, err)
+	require.Positive(t, state.account.Snapshot().Used)
 	require.True(t, duplicate.GetNulls().IsSame(source.GetNulls()))
 	require.True(t, duplicate.GetGrouping().IsSame(source.GetGrouping()))
 	duplicate.Free(mp)
 
-	window, err := source.CloneWindowWithAllocation(
-		1,
-		65,
-		mp,
-		state.selection,
-	)
+	window, err := source.CloneWindow(1, 65, view)
 	require.NoError(t, err)
 	require.Equal(t, 64, window.Length())
 	require.True(t, window.IsNull(6))
@@ -793,7 +767,7 @@ func TestVectorAllocationAccountBitmapCopyDecode(t *testing.T) {
 	rollup.SetLength(128)
 	rollup.GetGrouping().AddRange(0, 128)
 	rollup.ToConst()
-	rollupCopy, err := rollup.DupOffHeapWithAllocation(mp, state.selection)
+	rollupCopy, err := rollup.DupOffHeap(view)
 	require.NoError(t, err)
 	require.True(t, rollupCopy.IsConstNull())
 	require.True(t, rollupCopy.GetGrouping().IsSame(rollup.GetGrouping()))
@@ -808,48 +782,52 @@ func TestVectorAllocationAccountViewAndDeepCopy(t *testing.T) {
 	stateA := newTestVectorAllocationAccount(t, 1<<20, 32)
 	stateB := newTestVectorAllocationAccount(t, 1<<20, 32)
 	mp := mpool.MustNewZero()
+	viewA := stateA.view(t, mp)
+	viewB := stateB.view(t, mp)
 
-	source := newAccountedTestVector(t, types.T_varchar.ToType(), stateA.selection)
+	source := newAccountedTestVector(t, types.T_varchar.ToType())
 	for _, value := range [][]byte{
 		[]byte("first value that is not inline"),
 		[]byte("second value that is not inline"),
 		[]byte("third value that is not inline"),
 	} {
-		require.NoError(t, AppendBytes(source, value, false, mp))
+		require.NoError(t, AppendBytes(source, value, false, viewA))
 	}
 	sourceUsed := stateA.account.Snapshot().Used
 
 	view, err := source.Window(1, 3)
 	require.NoError(t, err)
-	require.Nil(t, view.AllocationAccountSelection())
 	require.Equal(t, sourceUsed, stateA.account.Snapshot().Used)
 	view.Free(mp)
 	require.Equal(t, sourceUsed, stateA.account.Snapshot().Used)
 
-	dup, err := source.DupOffHeap(mp)
+	dup, err := source.DupOffHeap(viewA)
 	require.NoError(t, err)
-	require.Same(t, stateA.selection, dup.AllocationAccountSelection())
 	require.Greater(t, stateA.account.Snapshot().Used, sourceUsed)
 	dup.Free(mp)
 	require.Equal(t, sourceUsed, stateA.account.Snapshot().Used)
 
-	crossOwner, err := source.DupOffHeapWithAllocation(mp, stateB.selection)
+	crossOwner, err := source.DupOffHeap(viewB)
 	require.NoError(t, err)
 	require.Equal(t, sourceUsed, stateA.account.Snapshot().Used)
 	require.NotZero(t, stateB.account.Snapshot().Used)
 	crossOwner.Free(mp)
 	require.Zero(t, stateB.account.Snapshot().Used)
 
-	window, err := source.CloneWindowWithAllocation(1, 3, mp, stateB.selection)
+	window, err := source.CloneWindow(1, 3, viewB)
 	require.NoError(t, err)
 	require.Equal(t, source.GetBytesAt(1), window.GetBytesAt(0))
 	require.Equal(t, source.GetBytesAt(2), window.GetBytesAt(1))
+	require.NotZero(t, stateB.account.Snapshot().Used)
 	window.Free(mp)
+	require.Zero(t, stateB.account.Snapshot().Used)
 
-	compact, err := source.CloneToFlatCompactWithAllocation(mp, stateB.selection)
+	compact, err := source.CloneToFlatCompact(viewB)
 	require.NoError(t, err)
 	require.Equal(t, source.Length(), compact.Length())
+	require.NotZero(t, stateB.account.Snapshot().Used)
 	compact.Free(mp)
+	require.Zero(t, stateB.account.Snapshot().Used)
 
 	source.Free(mp)
 	finalizeTestVectorAllocationAccount(t, stateA)
@@ -922,7 +900,7 @@ func TestAccountedWindowOwnsRangeBitmaps(t *testing.T) {
 	require.NoError(t, AppendFixedList(source, []int64{0, 1, 2, 3}, []bool{false, true, false, true}, mp))
 	source.GetGrouping().Add(1, 2)
 
-	window, err := source.WindowWithAllocation(1, 4, mp, state.selection)
+	window, err := source.Window(1, 4)
 	require.NoError(t, err)
 	require.True(t, window.GetGrouping().Contains(0))
 	require.True(t, window.GetGrouping().Contains(1))
@@ -987,7 +965,7 @@ func TestVectorAllocationAccountCopyRollback(t *testing.T) {
 		),
 	)
 
-	_, err := source.DupOffHeapWithAllocation(mp, state.selection)
+	_, err := source.DupOffHeap(state.view(t, mp))
 	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
 	require.Zero(t, state.account.Snapshot().Used)
 	require.Zero(t, state.registry.LiveAllocationMetadata())
@@ -1001,8 +979,8 @@ func TestVectorAllocationAccountCrossPoolFreeAndSeal(t *testing.T) {
 		state := newTestVectorAllocationAccount(t, 1<<20, 8)
 		ownerPool := mpool.MustNewZero()
 		freeingPool := mpool.MustNewZero()
-		vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
-		require.NoError(t, vec.PreExtend(128, ownerPool))
+		vec := newAccountedTestVector(t, types.T_int64.ToType())
+		require.NoError(t, vec.PreExtend(128, state.view(t, ownerPool)))
 		require.NotZero(t, state.account.Snapshot().Used)
 
 		vec.Free(freeingPool)
@@ -1012,8 +990,8 @@ func TestVectorAllocationAccountCrossPoolFreeAndSeal(t *testing.T) {
 
 	t.Run("sealed before allocation", func(t *testing.T) {
 		state := newTestVectorAllocationAccount(t, 1<<20, 8)
-		mp := mpool.MustNewZero()
-		vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+		mp := state.view(t, mpool.MustNewZero())
+		vec := newAccountedTestVector(t, types.T_int64.ToType())
 		state.account.Seal()
 
 		err := AppendFixed(vec, int64(1), false, mp)
@@ -1028,10 +1006,10 @@ func TestVectorAllocationAccountCrossPoolFreeAndSeal(t *testing.T) {
 
 func TestVectorAllocationAccountRandomizedAppendAndSelection(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 8<<20, 64)
-	mp := mpool.MustNewZero()
+	mp := state.view(t, mpool.MustNewZero())
 	rng := rand.New(rand.NewSource(26459))
 
-	fixed := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	fixed := newAccountedTestVector(t, types.T_int64.ToType())
 	var fixedExpected []int64
 	for i := 0; i < 2_000; i++ {
 		value := rng.Int63()
@@ -1040,7 +1018,7 @@ func TestVectorAllocationAccountRandomizedAppendAndSelection(t *testing.T) {
 	}
 	require.Equal(t, fixedExpected, MustFixedColNoTypeCheck[int64](fixed))
 
-	varlen := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	varlen := newAccountedTestVector(t, types.T_varchar.ToType())
 	var expected [][]byte
 	for i := 0; i < 1_000; i++ {
 		size := rng.Intn(96)
@@ -1054,7 +1032,7 @@ func TestVectorAllocationAccountRandomizedAppendAndSelection(t *testing.T) {
 		require.True(t, bytes.Equal(expected[i], varlen.GetBytesAt(i)))
 	}
 
-	selected := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	selected := newAccountedTestVector(t, types.T_varchar.ToType())
 	sels := []int64{1, 3, 7, 11, 23, 101, 509, 999}
 	require.NoError(t, selected.Union(varlen, sels, mp))
 	for i, sel := range sels {
@@ -1069,7 +1047,8 @@ func TestVectorAllocationAccountRandomizedAppendAndSelection(t *testing.T) {
 
 func TestVectorAccountedUnionPreservesGroupingWithoutNulls(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 8<<20, 64)
-	mp := mpool.MustNewZero()
+	base := mpool.MustNewZero()
+	mp := state.view(t, base)
 
 	for _, typ := range []types.Type{
 		types.T_int32.ToType(),
@@ -1079,9 +1058,9 @@ func TestVectorAccountedUnionPreservesGroupingWithoutNulls(t *testing.T) {
 			source := NewOffHeapVecWithType(typ)
 			for i := range 6 {
 				if typ.IsVarlen() {
-					require.NoError(t, AppendBytes(source, []byte{byte('a' + i)}, false, mp))
+					require.NoError(t, AppendBytes(source, []byte{byte('a' + i)}, false, base))
 				} else {
-					require.NoError(t, AppendFixed(source, int32(i), false, mp))
+					require.NoError(t, AppendFixed(source, int32(i), false, base))
 				}
 			}
 			source.GetGrouping().Add(1, 4)
@@ -1122,15 +1101,17 @@ func TestVectorAccountedUnionPreservesGroupingWithoutNulls(t *testing.T) {
 			}
 			for _, test := range tests {
 				t.Run(test.name, func(t *testing.T) {
-					dst := newAccountedTestVector(t, typ, state.selection)
+					dst := newAccountedTestVector(t, typ)
 					require.NoError(t, test.run(dst))
 					for row, want := range test.want {
 						require.Equal(t, want, dst.GetGrouping().Contains(uint64(row)))
 					}
+					require.Positive(t, state.account.Snapshot().Used)
 					dst.Free(mp)
+					require.Zero(t, state.account.Snapshot().Used)
 				})
 			}
-			source.Free(mp)
+			source.Free(base)
 		})
 	}
 	finalizeTestVectorAllocationAccount(t, state)
@@ -1146,14 +1127,15 @@ func TestVectorAllocationAccountDecodeCopyAndReader(t *testing.T) {
 	)
 	encoded, err := source.MarshalBinary()
 	require.NoError(t, err)
+	view := state.view(t, mp)
 
-	copied := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
-	require.NoError(t, copied.UnmarshalBinaryWithCopy(encoded, mp))
+	copied := newAccountedTestVector(t, types.T_varchar.ToType())
+	require.NoError(t, copied.UnmarshalBinaryWithCopy(encoded, view))
 	require.Equal(t, source.GetBytesAt(0), copied.GetBytesAt(0))
 	require.Equal(t, uint64(2), state.registry.LiveAllocationMetadata())
 	require.ErrorIs(
 		t,
-		copied.UnmarshalBinaryWithCopy(encoded, mp),
+		copied.UnmarshalBinaryWithCopy(encoded, view),
 		mpool.ErrAllocationAccountInvalid,
 	)
 	require.ErrorIs(
@@ -1163,26 +1145,19 @@ func TestVectorAllocationAccountDecodeCopyAndReader(t *testing.T) {
 	)
 	copied.Free(mp)
 
-	aliased := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
-	require.ErrorIs(
-		t,
-		aliased.UnmarshalBinary(encoded),
-		mpool.ErrAllocationAccountInvalid,
-	)
-	aliased.Free(mp)
-
-	readerDecoded := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
-	require.NoError(t, readerDecoded.UnmarshalWithReader(bytes.NewReader(encoded), mp))
+	readerDecoded := newAccountedTestVector(t, types.T_varchar.ToType())
+	require.NoError(t, readerDecoded.UnmarshalWithReader(bytes.NewReader(encoded), view))
+	require.Positive(t, state.account.Snapshot().Used)
 	require.Equal(t, source.GetBytesAt(0), readerDecoded.GetBytesAt(0))
 	readerDecoded.Free(mp)
 
-	short := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	short := newAccountedTestVector(t, types.T_varchar.ToType())
 	dataHeader := 1 + types.TSize + 4 + 4
 	require.Error(
 		t,
 		short.UnmarshalWithReader(
 			bytes.NewReader(encoded[:dataHeader+1]),
-			mp,
+			view,
 		),
 	)
 	require.Zero(t, state.account.Snapshot().Used)
@@ -1199,6 +1174,7 @@ func TestVectorAccountedReaderRejectsMalformedWire(t *testing.T) {
 	require.NoError(t, AppendFixed(source, int64(7), true, mp))
 	encoded, err := source.MarshalBinary()
 	require.NoError(t, err)
+	view := state.view(t, mp)
 
 	lengthOffset := 1 + types.TSize
 	dataLengthOffset := lengthOffset + 4
@@ -1251,25 +1227,25 @@ func TestVectorAccountedReaderRejectsMalformedWire(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			data := append([]byte(nil), encoded...)
 			test.mutate(data)
-			decoded := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+			decoded := newAccountedTestVector(t, types.T_int64.ToType())
 			require.NotPanics(t, func() {
-				require.Error(t, decoded.UnmarshalWithReader(bytes.NewReader(data), mp))
+				require.Error(t, decoded.UnmarshalWithReader(bytes.NewReader(data), view))
 			})
 			decoded.Free(mp)
 			require.Zero(t, state.account.Snapshot().Used)
 
-			copied := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+			copied := newAccountedTestVector(t, types.T_int64.ToType())
 			require.NotPanics(t, func() {
-				require.Error(t, copied.UnmarshalBinaryWithCopy(data, mp))
+				require.Error(t, copied.UnmarshalBinaryWithCopy(data, view))
 			})
 			copied.Free(mp)
 			require.Zero(t, state.account.Snapshot().Used)
 		})
 	}
 	for end := range encoded {
-		accounted := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+		accounted := newAccountedTestVector(t, types.T_int64.ToType())
 		require.NotPanics(t, func() {
-			require.Error(t, accounted.UnmarshalBinaryWithCopy(encoded[:end], mp))
+			require.Error(t, accounted.UnmarshalBinaryWithCopy(encoded[:end], view))
 		})
 		accounted.Free(mp)
 		require.Zero(t, state.account.Snapshot().Used)
@@ -1289,6 +1265,7 @@ func BenchmarkVectorAllocationAccount(b *testing.B) {
 	const rows = 8192
 	mp := mpool.MustNewZero()
 	state := newTestVectorAllocationAccount(b, 1<<40, 64)
+	view := state.view(b, mp)
 
 	b.Run("unaccounted-fixed-preextend-free", func(b *testing.B) {
 		b.ReportAllocs()
@@ -1304,10 +1281,7 @@ func BenchmarkVectorAllocationAccount(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			vec := NewOffHeapVecWithType(types.T_int64.ToType())
-			if err := vec.SetAllocationAccount(state.selection); err != nil {
-				b.Fatal(err)
-			}
-			if err := vec.PreExtend(rows, mp); err != nil {
+			if err := vec.PreExtend(rows, view); err != nil {
 				b.Fatal(err)
 			}
 			vec.Free(mp)
@@ -1327,18 +1301,15 @@ func BenchmarkVectorAllocationAccount(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			vec := NewOffHeapVecWithType(types.T_varchar.ToType())
-			if err := vec.SetAllocationAccount(state.selection); err != nil {
-				b.Fatal(err)
-			}
-			if err := vec.PreExtendWithArea(rows, 1<<20, mp); err != nil {
+			if err := vec.PreExtendWithArea(rows, 1<<20, view); err != nil {
 				b.Fatal(err)
 			}
 			vec.Free(mp)
 		}
 	})
 	b.Run("accounted-fixed-reset-reuse", func(b *testing.B) {
-		vec := newAccountedTestVector(b, types.T_int64.ToType(), state.selection)
-		if err := vec.PreExtend(rows, mp); err != nil {
+		vec := newAccountedTestVector(b, types.T_int64.ToType())
+		if err := vec.PreExtend(rows, view); err != nil {
 			b.Fatal(err)
 		}
 		b.ReportAllocs()
@@ -1374,10 +1345,9 @@ func BenchmarkVectorElementAccounting(b *testing.B) {
 		}
 		b.Run("union-one/"+mode, func(b *testing.B) {
 			destination := NewOffHeapVecWithType(types.T_int64.ToType())
+			mp := mp
 			if accounted {
-				if err := destination.SetAllocationAccount(state.selection); err != nil {
-					b.Fatal(err)
-				}
+				mp = state.view(b, mp)
 			}
 			if err := destination.PreExtend(1, mp); err != nil {
 				b.Fatal(err)
@@ -1396,10 +1366,9 @@ func BenchmarkVectorElementAccounting(b *testing.B) {
 
 		b.Run("copy/"+mode, func(b *testing.B) {
 			destination := NewOffHeapVecWithType(types.T_int64.ToType())
+			mp := mp
 			if accounted {
-				if err := destination.SetAllocationAccount(state.selection); err != nil {
-					b.Fatal(err)
-				}
+				mp = state.view(b, mp)
 			}
 			if err := destination.PreExtend(1, mp); err != nil {
 				b.Fatal(err)
@@ -1420,8 +1389,8 @@ func BenchmarkVectorElementAccounting(b *testing.B) {
 
 func TestVectorAllocationAccountErrorsAreTyped(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1, 1)
-	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	mp := state.view(t, mpool.MustNewZero())
+	vec := newAccountedTestVector(t, types.T_int64.ToType())
 	err := vec.PreExtend(1, mp)
 	require.True(t, errors.Is(err, mpool.ErrAllocationAccountCapacity))
 	vec.Free(mp)
@@ -1431,16 +1400,12 @@ func TestVectorAllocationAccountErrorsAreTyped(t *testing.T) {
 func TestDetachedBufferPreservesAllocationProvenance(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 8)
 	mp := mpool.MustNewZero()
-	source := newAccountedTestVector(
-		t,
-		types.T_varchar.ToType(),
-		state.selection,
-	)
+	source := newAccountedTestVector(t, types.T_varchar.ToType())
 	require.NoError(t, AppendBytes(
 		source,
 		[]byte("detached allocation payload that uses the vector area"),
 		false,
-		mp,
+		state.view(t, mp),
 	))
 	used := state.account.Snapshot().Used
 	require.Positive(t, used)
@@ -1452,21 +1417,11 @@ func TestDetachedBufferPreservesAllocationProvenance(t *testing.T) {
 	source.Free(mp)
 	require.Equal(t, used, state.account.Snapshot().Used)
 
-	equivalent, err := NewAllocationAccountSelection(
-		state.account,
-		testVectorAllocationOwner,
-		testVectorDataAllocationSite,
-		testVectorAreaAllocationSite,
-	)
-	require.NoError(t, err)
-	require.NotSame(t, state.selection, equivalent)
-	destination := newAccountedTestVector(
-		t,
-		types.T_varchar.ToType(),
-		equivalent,
-	)
+	// The detached allocations keep their own charge; reattaching never
+	// relabels memory, and either buffer may serve either backing.
+	destination := newAccountedTestVector(t, types.T_varchar.ToType())
 	require.True(t, data.CanAttachTo(destination, DetachedDataBuffer))
-	require.False(t, data.CanAttachTo(destination, DetachedAreaBuffer))
+	require.True(t, data.CanAttachTo(destination, DetachedAreaBuffer))
 	require.NoError(t, data.AttachTo(destination, DetachedDataBuffer))
 	require.NoError(t, area.AttachTo(destination, DetachedAreaBuffer))
 	require.Zero(t, data.Capacity())
@@ -1482,12 +1437,8 @@ func TestDetachedBufferPreservesAllocationProvenance(t *testing.T) {
 
 func TestSetTypeAndFixDataAllocationFailureIsAtomic(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 512, 4)
-	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(
-		t,
-		types.T_date.ToType(),
-		state.selection,
-	)
+	mp := state.view(t, mpool.MustNewZero())
+	vec := newAccountedTestVector(t, types.T_date.ToType())
 	require.NoError(t, vec.PreExtend(128, mp))
 	vec.SetLength(128)
 	used := state.account.Snapshot().Used
@@ -1550,18 +1501,16 @@ func TestDetachedUnaccountedBufferAndTypeChange(t *testing.T) {
 
 func TestVectorAllocationAccountHelperBoundaries(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 8)
-	mp := mpool.MustNewZero()
-	var nilVec *Vector
-	require.Nil(t, nilVec.AllocationAccountSelection())
-	require.ErrorIs(
-		t,
-		nilVec.CanSetAllocationAccount(state.selection),
-		mpool.ErrAllocationAccountInvalid,
-	)
+	mp := state.view(t, mpool.MustNewZero())
 
-	vec := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
-	_, err := vec.allocOwned(mp, 1, false, true)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	vec := newAccountedTestVector(t, types.T_varchar.ToType())
+	// An allocation through a view is off-heap and charged even when the
+	// caller asks for on-heap memory.
+	owned, err := vec.allocOwned(mp, 1, false, true)
+	require.NoError(t, err)
+	require.Positive(t, state.account.Snapshot().Used)
+	mp.Free(owned)
+	require.Zero(t, state.account.Snapshot().Used)
 	_, err = vec.growData(nil, 1)
 	require.Error(t, err)
 	_, err = vec.growData(mp, mpool.CapLimit)
@@ -1602,15 +1551,16 @@ func TestUnionAllPreservesConstGrouping(t *testing.T) {
 		t.Run(typ.String(), func(t *testing.T) {
 			state := newTestVectorAllocationAccount(t, 1<<20, 32)
 			mp := mpool.MustNewZero()
-			destination := newAccountedTestVector(t, typ, state.selection)
+			view := state.view(t, mp)
+			destination := newAccountedTestVector(t, typ)
 			if typ.IsVarlen() {
-				require.NoError(t, AppendBytes(destination, []byte("prefix"), false, mp))
+				require.NoError(t, AppendBytes(destination, []byte("prefix"), false, view))
 			} else {
-				require.NoError(t, AppendFixed(destination, int64(1), false, mp))
+				require.NoError(t, AppendFixed(destination, int64(1), false, view))
 			}
 
 			rollup := NewRollupConst(typ, 3, mp)
-			require.NoError(t, GetUnionAllFunction(typ, mp)(destination, rollup))
+			require.NoError(t, GetUnionAllFunction(typ, view)(destination, rollup))
 			require.Equal(t, 4, destination.Length())
 			for row := uint64(1); row < 4; row++ {
 				require.True(t, destination.GetGrouping().Contains(row))
@@ -1626,7 +1576,7 @@ func TestUnionAllPreservesConstGrouping(t *testing.T) {
 			}
 			require.NoError(t, err)
 			ordinary.GetGrouping().Add(1)
-			require.NoError(t, GetUnionAllFunction(typ, mp)(destination, ordinary))
+			require.NoError(t, GetUnionAllFunction(typ, view)(destination, ordinary))
 			require.Equal(t, 7, destination.Length())
 			require.True(t, destination.GetGrouping().Contains(5))
 			require.False(t, destination.GetGrouping().Contains(4))
@@ -1689,9 +1639,9 @@ func TestUnmarshalBinaryReplacesBorrowedAliases(t *testing.T) {
 func TestVectorAllocationAccountConstNullCloneReuse(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 8)
 	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
-	mp := mpool.MustNewZero()
+	mp := state.view(t, mpool.MustNewZero())
 	typ := types.T_int64.ToType()
-	dst := newAccountedTestVector(t, typ, state.selection)
+	dst := newAccountedTestVector(t, typ)
 	t.Cleanup(func() { dst.Free(mp) })
 	src := NewConstNull(typ, 2, mp)
 	t.Cleanup(func() { src.Free(mp) })
@@ -1714,8 +1664,8 @@ func TestVectorAllocationAccountConstNullCloneReuse(t *testing.T) {
 func TestAccountedMixedStringShuffleThenSort(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 32)
 	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
-	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+	mp := state.view(t, mpool.MustNewZero())
+	vec := newAccountedTestVector(t, types.T_text.ToType())
 	t.Cleanup(func() { vec.Free(mp) })
 	require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("z"), []byte("a")}, nil, mp))
 	vec.GetGrouping().Add(0)
@@ -1742,8 +1692,8 @@ func TestAccountedMixedStringShuffleThenSort(t *testing.T) {
 func TestAccountedShuffleFailureRetainsBorrowedArea(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 1)
 	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
-	mp := mpool.MustNewZero()
-	v := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	mp := state.view(t, mpool.MustNewZero())
+	v := newAccountedTestVector(t, types.T_varchar.ToType())
 	t.Cleanup(func() { v.Free(mp) })
 	require.NoError(t, v.PreExtend(2, mp))
 	v.SetLength(2)
@@ -1783,18 +1733,19 @@ func TestAccountedSortExpandsSparseNullAndGrouping(t *testing.T) {
 		finalizeTestVectorAllocationAccount(t, state)
 		mpool.DeleteMPool(mp)
 	}()
-	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	vec := newAccountedTestVector(t, types.T_int64.ToType())
 	defer vec.Free(mp)
+	view := state.view(t, mp)
 	values := make([]int64, 65)
 	for i := range values {
 		values[i] = int64(len(values) - i)
 	}
-	require.NoError(t, AppendFixedList(vec, values, nil, mp))
+	require.NoError(t, AppendFixedList(vec, values, nil, view))
 	require.NoError(t, vec.ensureNullCapacity(1, mp))
 	require.NoError(t, vec.ensureGroupingCapacity(2, mp))
 	vec.GetNulls().Add(0)
 	vec.GetGrouping().Add(1)
-	require.NoError(t, vec.InplaceSort(mp))
+	require.NoError(t, vec.InplaceSort(view))
 	require.True(t, vec.IsNull(0))
 	require.Equal(t, int64(65), GetFixedAtNoTypeCheck[int64](vec, 0))
 	require.True(t, vec.GetGrouping().Contains(64))

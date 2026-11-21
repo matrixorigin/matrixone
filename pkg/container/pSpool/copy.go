@@ -72,15 +72,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 	cacheID, dst = cb.buffer.getCacheID()
 	dst.Recursive = src.Recursive
 	dst.ShuffleIDX = src.ShuffleIDX
-	if sourceSelection := src.AllocationAccountSelection(); !vector.AllocationAccountSelectionsEqual(
-		sourceSelection,
-		dst.AllocationAccountSelection(),
-	) {
-		if err = dst.SetAllocationAccount(sourceSelection); err != nil {
-			cb.CacheBatch(true, cacheID, dst)
-			return nil, false, 0, err
-		}
-	}
 
 	if cap(dst.Vecs) >= len(src.Vecs) {
 		dst.Vecs = dst.Vecs[:len(src.Vecs)]
@@ -142,19 +133,7 @@ copyVectors:
 
 		typ := *vec.GetType()
 		if dst.Vecs[i] == nil {
-			selection := vec.AllocationAccountSelection()
-			if selection == nil {
-				dst.Vecs[i] = vector.NewOffHeapVecWithType(typ)
-			} else {
-				dst.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(
-					typ,
-					selection,
-				)
-				if err != nil {
-					cb.CacheBatch(true, cacheID, dst)
-					return nil, false, 0, err
-				}
-			}
+			dst.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 		}
 
 		destination := dst.Vecs[i]
@@ -289,15 +268,7 @@ func prepareSpoolSuffix(src, dst *batch.Batch, first int) (bool, error) {
 			continue
 		}
 		if dst.Vecs[i] == nil {
-			var err error
-			if selection := source.AllocationAccountSelection(); selection == nil {
-				dst.Vecs[i] = vector.NewOffHeapVecWithType(*source.GetType())
-			} else {
-				dst.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(*source.GetType(), selection)
-				if err != nil {
-					return false, err
-				}
-			}
+			dst.Vecs[i] = vector.NewOffHeapVecWithType(*source.GetType())
 		} else if i > first {
 			aliases = true
 		}
