@@ -931,6 +931,7 @@ func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 	runC.resultSink = c.resultSink
 	runC.executionGeneration = c.executionGeneration
+	runC.resourceAttemptOwnerEligible = c.resourceAttemptOwnerEligible
 	c.copyAllocationAccountLifecycleTo(runC)
 	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
@@ -999,12 +1000,12 @@ func (c *Compile) InitPipelineContextToExecuteQuery() {
 	}
 }
 
-// InitPipelineContextToRetryQuery initializes the context for each pipeline tree.
-// the only place diff to InitPipelineContextToExecuteQuery is this function build query context from the last query.
+// InitPipelineContextToRetryQuery rebuilds the pipeline contexts from the
+// current query context, which Compile may have reset to the top context.
 func (c *Compile) InitPipelineContextToRetryQuery() {
 	lastQueryCtx, _ := process.GetQueryCtxFromProc(c.proc)
 	contextBase := c.proc.Base.GetContextBase()
-	contextBase.BuildQueryCtx(lastQueryCtx)
+	contextBase.BuildQueryCtx(c.lockReadQueryContext(lastQueryCtx))
 	contextBase.SaveToQueryContext(defines.EngineKey{}, c.e)
 	queryContext := contextBase.WithCounterSetToQueryContext(c.counterSet)
 	queryContext = c.installCurrentRolesExecutionCache(queryContext)

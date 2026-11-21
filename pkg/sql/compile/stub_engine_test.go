@@ -118,6 +118,10 @@ func newStubRelation(name string) *stubRelation {
 	return &stubRelation{name: name}
 }
 
+func (r *stubRelation) GetTableName() string {
+	return r.name
+}
+
 func (r *stubRelation) GetTableID(ctx context.Context) uint64 {
 	if r.tableID != 0 {
 		return r.tableID
