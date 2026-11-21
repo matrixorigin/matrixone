@@ -9113,8 +9113,12 @@ func strToDecimal64(
 					}
 					if (mode == castModeAssignment || mode == castModeAssignmentIgnore) && !isAssignmentSpecialNumericSyntax(s) {
 						if prefix, ok := assignmentDecimalPrefix(s); ok {
-							if prefixed, prefixErr := parseDecimal64CastString(prefix, totype.Width, totype.Scale); prefixErr == nil {
-								appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
+							if prefixed, clipped, prefixErr := parseDecimal64CastStringWithOverflow(prefix, totype.Width, totype.Scale, true); prefixErr == nil {
+								if clipped {
+									appendDecimalCastRangeWarning(proc, i)
+								} else {
+									appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
+								}
 								if err = to.Append(prefixed, false); err != nil {
 									return err
 								}
@@ -9481,8 +9485,12 @@ func strToDecimal128(
 					}
 					if (mode == castModeAssignment || mode == castModeAssignmentIgnore) && !isAssignmentSpecialNumericSyntax(s) {
 						if prefix, ok := assignmentDecimalPrefix(s); ok {
-							if prefixed, prefixErr := parseDecimal128CastString(prefix, totype.Width, totype.Scale); prefixErr == nil {
-								appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
+							if prefixed, clipped, prefixErr := parseDecimal128CastStringWithOverflow(prefix, totype.Width, totype.Scale, true); prefixErr == nil {
+								if clipped {
+									appendDecimalCastRangeWarning(proc, i)
+								} else {
+									appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
+								}
 								if err = to.Append(prefixed, false); err != nil {
 									return err
 								}
@@ -9604,8 +9612,12 @@ func strToDecimal256(
 					}
 					if (mode == castModeAssignment || mode == castModeAssignmentIgnore) && !isAssignmentSpecialNumericSyntax(s) {
 						if prefix, ok := assignmentDecimalPrefix(s); ok {
-							if prefixed, prefixErr := parseDecimal256CastString(prefix, totype.Width, totype.Scale); prefixErr == nil {
-								appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
+							if prefixed, clipped, prefixErr := parseDecimal256CastStringWithOverflow(prefix, totype.Width, totype.Scale, true); prefixErr == nil {
+								if clipped {
+									appendDecimalCastRangeWarning(proc, i)
+								} else {
+									appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
+								}
 								if err = to.Append(prefixed, false); err != nil {
 									return err
 								}

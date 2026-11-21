@@ -149,6 +149,71 @@ func TestPR32002ReviewBoundaries(t *testing.T) {
 		require.Equal(t, []string{"12.3", "12.3", "123.5"}, values)
 
 		exec("set session sql_mode='STRICT_TRANS_TABLES'")
+		exec("delete from decimals")
+		exec("insert into decimals values ('12.34567')")
+		require.Equal(t, []int{int(moerr.WARN_DATA_TRUNCATED)}, warningCodes())
+		var assigned string
+		require.NoError(t, conn.QueryRowContext(ctx, "select d from decimals").Scan(&assigned))
+		require.Equal(t, "12.3", assigned)
+
+		for _, source := range []string{"0xfff", "X'0FFF'", "0b111111111111", "b'111111111111'", "'9999tail'"} {
+			_, err := conn.ExecContext(ctx, "insert into decimals values ("+source+")")
+			require.Error(t, err, source)
+			exec("delete from decimals")
+			exec("insert ignore into decimals values (" + source + ")")
+			require.Equal(t, []int{int(moerr.ER_WARN_DATA_OUT_OF_RANGE)}, warningCodes(), source)
+			require.NoError(t, conn.QueryRowContext(ctx, "select d from decimals").Scan(&assigned))
+			require.Equal(t, "999.9", assigned, source)
+		}
+		exec("set session sql_mode=''")
+		exec("create table unsigned_decimal (d numeric(4,1) unsigned)")
+		exec("insert into unsigned_decimal values ('-9999tail')")
+		require.Equal(t, []int{int(moerr.ER_WARN_DATA_OUT_OF_RANGE)}, warningCodes())
+		require.NoError(t, conn.QueryRowContext(ctx, "select d from unsigned_decimal").Scan(&assigned))
+		require.Equal(t, "0.0", assigned)
+		exec("delete from unsigned_decimal")
+		exec("insert into unsigned_decimal values (0x10)")
+		require.Empty(t, warningCodes())
+		require.NoError(t, conn.QueryRowContext(ctx, "select d from unsigned_decimal").Scan(&assigned))
+		require.Equal(t, "16.0", assigned)
+		exec("set session sql_mode='STRICT_TRANS_TABLES'")
+
+		exec("create table prepared_special (id int primary key, e enum('2','other'), s set('left','right'))")
+		exec("insert into prepared_special values (1,'other','left')")
+		checkPrepared := func(rhs string, value any, want string) {
+			t.Helper()
+			stmt, err := conn.PrepareContext(ctx, "update prepared_special set e="+rhs+" where id=?")
+			require.NoError(t, err, rhs)
+			defer stmt.Close()
+			_, err = stmt.ExecContext(ctx, value, 1)
+			require.NoError(t, err, rhs)
+			require.NoError(t, conn.QueryRowContext(ctx, "select e from prepared_special where id=1").Scan(&assigned))
+			require.Equal(t, want, assigned, rhs)
+		}
+		checkPrepared("coalesce(?,e)", "2", "2")
+		checkPrepared("coalesce(?,e)", nil, "2")
+		checkMarkerReuse := func(rhs string) [2]string {
+			t.Helper()
+			stmt, err := conn.PrepareContext(ctx, "update prepared_special set e="+rhs+" where id=?")
+			require.NoError(t, err)
+			defer stmt.Close()
+			var results [2]string
+			for i, value := range []any{"2", int64(2)} {
+				_, err := stmt.ExecContext(ctx, value, 1)
+				require.NoError(t, err, rhs)
+				require.NoError(t, conn.QueryRowContext(ctx, "select e from prepared_special where id=1").Scan(&results[i]))
+			}
+			return results
+		}
+		bare := checkMarkerReuse("?")
+		require.Equal(t, "2", bare[0])
+		require.Equal(t, bare, checkMarkerReuse("(?)"))
+
+		exec("create table median_near_limit (v decimal(37,0))")
+		exec("insert into median_near_limit values (9999999999999999999999999999999999999),(9999999999999999999999999999999999998)")
+		require.NoError(t, conn.QueryRowContext(ctx, "select median(v) from median_near_limit").Scan(&assigned))
+		require.Equal(t, "9999999999999999999999999999999999998.5", assigned)
+
 		exec("create table decimal_source (d decimal(12,2))")
 		exec("create table decimal_wider (d decimal(14,2))")
 		exec("insert into decimal_source values (-9999999999.99), (0.01), (null)")
