@@ -134,14 +134,14 @@ type ProcedureName struct {
 
 func (node *ProcedureName) Format(ctx *FmtCtx) {
 	if node.Name.ExplicitCatalog {
-		ctx.WriteString(string(node.Name.CatalogName))
+		ctx.WriteIdentifier(node.Name.CatalogName)
 		ctx.WriteByte('.')
 	}
 	if node.Name.ExplicitSchema {
-		ctx.WriteString(string(node.Name.SchemaName))
+		ctx.WriteIdentifier(node.Name.SchemaName)
 		ctx.WriteByte('.')
 	}
-	ctx.WriteString(string(node.Name.ObjectName))
+	ctx.WriteIdentifier(node.Name.ObjectName)
 }
 
 func (node *ProcedureName) HasNoNameQualifier() bool {

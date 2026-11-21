@@ -32,6 +32,13 @@ import (
 	"go.uber.org/zap"
 )
 
+var matrixoneStarlarkFileOptions = &syntax.FileOptions{
+	While:           true,
+	TopLevelControl: true,
+	GlobalReassign:  true,
+	Recursion:       true,
+}
+
 type starlarkInterpreter struct {
 	interp      *Interpreter
 	thread      *starlark.Thread
@@ -228,12 +235,7 @@ func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg
 
 	interpreter.setAffectedRows(interpreter.initialAffectedRows)
 	globals, err := starlark.ExecFileOptions(
-		&syntax.FileOptions{
-			While:           true,
-			TopLevelControl: true,
-			GlobalReassign:  true,
-			Recursion:       true,
-		},
+		matrixoneStarlarkFileOptions,
 		si.thread,
 		"",
 		spBody,
