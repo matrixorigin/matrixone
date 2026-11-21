@@ -589,7 +589,8 @@ func unsignedDecimalAdmissionVarlena(
 	// selects the prefix grammar (matching strToDecimal64 & friends) even for
 	// a const IsBin source, and every other IsBin source converts through the
 	// binary decimal decoder.
-	isBin := from.GetIsBin()
+	// from is the cast's first argument.
+	isBin := result.ArgumentIsBin(0)
 	mysqlPrefix := targetType.Charset == 255 && (!isBin || from.IsConst())
 	if isBin && !mysqlPrefix {
 		return unsignedDecimalAdmissionBinary(proc, from, targetType, result, length, selectList, entry, column)

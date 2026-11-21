@@ -367,7 +367,9 @@ func newExpressionExecutorWithAllocation(
 		if err != nil {
 			return nil, err
 		}
-		return NewFixedVectorExpressionExecutor(ownerMP, false, vec), nil
+		executor := NewFixedVectorExpressionExecutor(ownerMP, false, vec)
+		executor.isBin = LiteralIsBin(t.Lit)
+		return executor, nil
 
 	case *plan.Expr_T:
 		vec, err := newExpressionConstNull(typ, 1, selection)
@@ -395,7 +397,7 @@ func newExpressionExecutorWithAllocation(
 	case *plan.Expr_P:
 		executor := NewParamExpressionExecutor(ownerMP, int(t.P.Pos), typ)
 		executor.allocation = selection
-		if typ.Oid != types.T_any && !typ.Oid.IsMySQLString() {
+		if !paramTypeReadsTextTransport(typ.Oid) {
 			// ParamRef describes the SQL source domain. When the process has no
 			// typed value for it (for example a remote peer that only received
 			// the TEXT transport), read the TEXT value through a cast built in
@@ -662,6 +664,9 @@ type FixedVectorExpressionExecutor struct {
 
 	noNeedToSetLength bool
 	resultVector      *vector.Vector
+	// isBin records that resultVector is a plan literal spelled as a
+	// hex/bit literal (see LiteralIsBin).
+	isBin bool
 }
 
 type FunctionExpressionExecutor struct {
@@ -698,7 +703,10 @@ type FunctionExpressionExecutor struct {
 	// parameters related
 	parameterResults  []*vector.Vector
 	parameterExecutor []ExpressionExecutor
-	iffNullResults    [2]*vector.Vector
+	// argumentIsBin is the per-argument binary-literal flag published to the
+	// kernel through its result wrapper; nil while no argument is binary.
+	argumentIsBin  []bool
+	iffNullResults [2]*vector.Vector
 }
 
 type ColumnExpressionExecutor struct {
@@ -748,6 +756,10 @@ type ParamExpressionExecutor struct {
 	// from typ.
 	adapter       ExpressionExecutor
 	adapterSource types.Type
+
+	// vecIsBin records that vec holds a binary-flagged prepared parameter
+	// of this execution.
+	vecIsBin bool
 }
 
 func sameParamType(a, b types.Type) bool {
@@ -758,7 +770,7 @@ func sameParamType(a, b types.Type) bool {
 // typed value itself (typed), or a cast adapter. Both nil means the TEXT
 // transport is read directly.
 func (expr *ParamExpressionExecutor) route(proc *process.Process) (typed *vector.Vector, adapter ExpressionExecutor, err error) {
-	if expr.typ.Oid == types.T_any || expr.typ.Oid.IsMySQLString() {
+	if paramTypeReadsTextTransport(expr.typ.Oid) {
 		return nil, nil, nil
 	}
 	src := proc.GetTypedPrepareParam(expr.pos)
@@ -874,7 +886,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		err = vector.SetConstBytes(expr.vec, val, 1, expr.mp)
 	}
 	if err == nil {
-		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
+		expr.vecIsBin = proc.GetPrepareParamIsBin(expr.pos)
 		expr.folded = true
 		expr.foldedNull = false
 		expr.vec.SetLength(rowCount)
@@ -957,6 +969,10 @@ type VarExpressionExecutor struct {
 	system bool
 	global bool
 	typ    types.Type
+
+	// isBin records that the variable's current value (vec or null) is
+	// binary-flagged; it is resolved on every evaluation.
+	isBin bool
 }
 
 func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
@@ -982,12 +998,8 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	if err != nil {
 		return nil, err
 	}
-	isBin := false
-	if resolveIsBin := proc.GetResolveVariableIsBinFunc(); resolveIsBin != nil {
-		isBin, err = resolveIsBin(expr.name, expr.system, expr.global)
-		if err != nil {
-			return nil, err
-		}
+	if expr.isBin, err = userVariableIsBin(proc, expr.name, expr.system, expr.global); err != nil {
+		return nil, err
 	}
 	if val == nil {
 		if expr.null == nil {
@@ -996,7 +1008,6 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			)
 		}
 		if err == nil {
-			expr.null.SetIsBin(isBin)
 			expr.null.SetLength(rowCount)
 		}
 		return expr.null, err
@@ -1028,7 +1039,6 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 	}
 	if err == nil {
-		expr.vec.SetIsBin(isBin)
 		expr.vec.SetLength(rowCount)
 	}
 	return expr.vec, err
@@ -1200,7 +1210,6 @@ func (expr *FunctionExpressionExecutor) resetResultType(result vector.FunctionRe
 	}
 	if vec := result.GetResultVector(); vec != nil {
 		vec.SetType(expr.resultType)
-		vec.SetIsBin(false)
 	}
 }
 
@@ -1225,6 +1234,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 	trueBranch := expr.selectList1[:rowCount]
 	falseBranch := expr.selectList2[:rowCount]
 	mode := function.CompatibilityModeFromProcess(proc)
+	conditionIsBin := isBinaryLiteralResult(expr.parameterExecutor[0], expr.parameterResults[0])
 
 	for i := 0; i < rowCount; i++ {
 		if selectList != nil {
@@ -1237,7 +1247,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		if !trueBranch[i] {
 			continue
 		}
-		truth, err := function.IffConditionTruthyAt(expr.parameterResults[0], uint64(i), mode)
+		truth, err := function.IffConditionTruthyAt(expr.parameterResults[0], uint64(i), conditionIsBin, mode)
 		if err != nil {
 			return err
 		}
@@ -1461,7 +1471,7 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 				// JSON condition (legacy admission), so it keeps the base
 				// behavior below byte-identically.
 				for j := 0; j < rowCount; j++ {
-					truth, evalErr := function.IffConditionTruthyAt(expr.parameterResults[i], uint64(j), mode)
+					truth, evalErr := function.IffConditionTruthyAt(expr.parameterResults[i], uint64(j), false, mode)
 					if evalErr != nil {
 						return evalErr
 					}
@@ -1615,7 +1625,6 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			if err := selected.Union(parameter, expr.selectedRows, expr.m); err != nil {
 				return nil, err
 			}
-			parameter.CopyExpressionMetadataTo(selected)
 			expr.selectedParameterResults[i] = selected
 			continue
 		}
@@ -1634,6 +1643,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		return nil, err
 	}
 	parameters := expr.selectedParameterResults
+	expr.publishArgumentIsBin(expr.selectedResult)
 	if err := expr.evalFn(
 		expr.semanticParameterVectors(parameters), expr.selectedResult, proc, selectedCount, nil); err != nil {
 		return nil, err
@@ -1656,7 +1666,6 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		}
 		result.ToConst()
 		result.SetLength(rowCount)
-		selectedResult.CopyExpressionMetadataTo(result)
 		return result, nil
 	}
 	sourceData, destinationData := selectedResult.GetData(), result.GetData()
@@ -1701,7 +1710,6 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			expr.selectedNullResult.SetType(runtimeType)
 			expr.selectedNullResult.SetLength(1)
 		}
-		expr.selectedNullResult.SetIsBin(selectedResult.GetIsBin())
 		selectedRow := int64(0)
 		for row := 0; row < rowCount; row++ {
 			if selectList[row] {
@@ -1715,7 +1723,6 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		}
 	}
 
-	selectedResult.CopyExpressionMetadataTo(result)
 	return result, nil
 }
 
@@ -1815,6 +1822,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	}
 
 	parameters := expr.parameterResults
+	expr.publishArgumentIsBin(expr.resultVector)
 	if err = expr.evalFn(
 		expr.semanticParameterVectors(parameters), expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
@@ -2158,9 +2166,6 @@ func generateConstExpressionExecutor(
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
-		if err == nil {
-			vec.SetIsBin(con.IsBin)
-		}
 	}
 	return vec, err
 }
@@ -2303,7 +2308,6 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 			default:
 				return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", t.GetValue()))
 			}
-			vec.SetIsBin(t.IsBin)
 		}
 	}
 	return vec, nil

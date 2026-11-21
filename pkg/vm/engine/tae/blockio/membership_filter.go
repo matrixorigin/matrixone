@@ -166,7 +166,6 @@ func (p *scopedMembershipPredicates) gather(output *batch.Batch, rows []int64, a
 		if err != nil {
 			return err
 		}
-		source.CopyExpressionMetadataTo(destination)
 		output.Vecs[column] = destination
 	}
 	return nil

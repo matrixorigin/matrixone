@@ -109,7 +109,6 @@ func blockDataReadScopedOwned(ctx context.Context, info *objectio.BlockInfo, col
 				if err != nil {
 					return err
 				}
-				inputs[i].CopyExpressionMetadataTo(destination)
 			} else if !selected.All {
 				if err = destination.Shrink(selected.Sels, false, mp); err != nil {
 					return err
