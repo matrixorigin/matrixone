@@ -35,8 +35,6 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
-	dictionaryInputs          *colexec.DictionaryInputFrame
-	dictionaryBoundary        vm.DictionaryOutputState
 	maxAllocSize              int
 	buf                       *batch.Batch
 	msgReceiver               *message.MessageReceiver
@@ -47,19 +45,15 @@ type container struct {
 	earlyColumns              []int
 	lateColumns               []int
 	filterRows                []int64
+	flatSels                  []int64
 	filterReadMetrics         bool
 	filterLateMaterialized    bool
 	membershipPrepared        bool
 	membershipApplied         bool
 	filterActiveDuration      time.Duration
 	readerFilter              *engine.ReaderFilterRequest
-	readerWorkspace           []*vector.Vector
-	readerHeaders             []*vector.Vector
-	readerSnapshots           []*vector.DictionaryVectorSlot
-	readerSelection           *vector.DictionaryVectorSlot
 	columnUses                []engine.ReaderColumnUse
 	columnUsesReady           bool
-	columnUsesOwned           bool
 	metricView                *batch.Batch
 	padCharToFullLength       bool
 	subjectReuseAdmissionDone bool
@@ -141,44 +135,21 @@ func (tableScan *TableScan) ClearAllocationAccount(account *mpool.AllocationAcco
 	return nil
 }
 
-func (tableScan *TableScan) DictionaryOutput() (bool, *vector.AllocationAccountSelection) {
-	return tableScan.OutputAllocation != nil && tableScan.ActivatesAllocationAccountLifecycle() &&
-		!tableScan.ctr.padCharToFullLength && colexec.ExpressionsAcceptDictionary(tableScan.ctr.allFilterExecutors) &&
-		colexec.ExpressionsAcceptDictionary(tableScan.ProjectExecutors), tableScan.OutputAllocation
-}
-func (tableScan *TableScan) DictionaryOutputState() *vm.DictionaryOutputState {
-	return &tableScan.ctr.dictionaryBoundary
-}
-
 func (tableScan *TableScan) GetOperatorBase() *vm.OperatorBase {
 	return &tableScan.OperatorBase
 }
 
 func init() {
 	reuse.CreatePool[TableScan](
-		newTableScanArgument,
-		resetTableScanArgument,
+		func() *TableScan {
+			return &TableScan{}
+		},
+		func(a *TableScan) {
+			*a = TableScan{}
+		},
 		reuse.DefaultOptions[TableScan]().
 			WithEnableChecker(),
 	)
-}
-
-// Keep the frame in the same allocation, outside the operator's reset range.
-type tableScanArgument struct {
-	operator TableScan
-	frame    colexec.DictionaryInputFrame
-}
-
-func newTableScanArgument() *TableScan {
-	a := new(tableScanArgument)
-	a.operator.ctr.dictionaryInputs = &a.frame
-	return &a.operator
-}
-
-func resetTableScanArgument(a *TableScan) {
-	frame := a.ctr.dictionaryInputs
-	*a = TableScan{}
-	a.ctr.dictionaryInputs = frame
 }
 
 func (tableScan TableScan) TypeName() string {
@@ -246,30 +217,9 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
-	for i, vec := range tableScan.ctr.readerWorkspace {
-		if vec != nil {
-			vec.Free(proc.Mp())
-			tableScan.ctr.readerWorkspace[i] = nil
-		}
-	}
-	tableScan.ctr.readerWorkspace = nil
-	for _, v := range tableScan.ctr.readerHeaders {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	tableScan.ctr.readerHeaders = nil
-	for _, slot := range tableScan.ctr.readerSnapshots {
-		slot.Free(proc.Mp())
-	}
-	tableScan.ctr.readerSnapshots = nil
-	tableScan.ctr.readerSelection.Free(proc.Mp())
-	tableScan.ctr.readerSelection = nil
 	tableScan.ctr.columnUses = nil
 	tableScan.ctr.columnUsesReady = false
-	tableScan.ctr.columnUsesOwned = false
 
-	tableScan.ctr.dictionaryInputs.Free(proc.Mp())
 	tableScan.releaseLocalDomains()
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.Clean(proc.Mp())
@@ -329,11 +279,10 @@ func (tableScan *TableScan) ExecProjection(proc *process.Process, input *batch.B
 	batch := input
 	if tableScan.ProjectList != nil {
 		batch, err = tableScan.EvalProjection(input, proc)
-		tableScan.ObserveDictionaryInputs(tableScan.OpAnalyzer)
 	}
 
 	if err != nil {
 		return nil, err
 	}
-	return tableScan.ctr.dictionaryBoundary.Normalize(batch, proc.Mp())
+	return batch, nil
 }

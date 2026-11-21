@@ -493,8 +493,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		preInsertUnique.ctr.buf.CleanOnlyData()
 	}
 
-	sels := vector.GetSels()
-	defer vector.PutSels(sels)
+	var sels []int64
 	sels = sels[:0]
 	var firstGenerated uint64
 	for row := 0; row < inputBat.RowCount(); row++ {

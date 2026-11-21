@@ -393,7 +393,7 @@ func (v *Vector) CanSetAllocationAccount(
 }
 
 func (v *Vector) hasBackingStorage() bool {
-	return v.IsDictionary() || cap(v.data) != 0 ||
+	return cap(v.data) != 0 ||
 		cap(v.area) != 0 ||
 		v.nsp.GetBitmap().Size() != 0 ||
 		v.gsp.GetBitmap().Size() != 0
@@ -404,7 +404,7 @@ func (v *Vector) hasBackingStorage() bool {
 // borrowed aliases; bitmap backing is always Go-owned and remains GC-visible
 // after replacement.
 func (v *Vector) hasOwnedBackingStorage() bool {
-	return v.IsDictionary() || v.dataLease != nil || v.areaLease != nil ||
+	return v.dataLease != nil || v.areaLease != nil ||
 		cap(v.data) != 0 && !v.cantFreeData ||
 		cap(v.area) != 0 && !v.cantFreeArea
 }

@@ -132,7 +132,5 @@ func (ctr *container) probeInnerPayload(join *HashJoin, proc *process.Process, r
 }
 
 func repeatProbeArea(source *vector.Vector) bool {
-	// Dictionary UnionMulti uses its existing selected scalar copier, so keep
-	// those sources on the selected bulk path rather than adding row calls.
-	return !source.IsDictionary() && source.GetType().IsVarlen() && len(source.GetArea()) != 0
+	return source.GetType().IsVarlen() && len(source.GetArea()) != 0
 }

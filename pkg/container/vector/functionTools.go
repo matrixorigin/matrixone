@@ -59,11 +59,6 @@ var _ FunctionParameterWrapper[types.Varlena] = &FunctionParameterNormalSpecial1
 var _ FunctionParameterWrapper[types.Varlena] = &FunctionParameterWithoutNullSpecial1[types.Varlena]{}
 
 func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector) FunctionParameterWrapper[T] {
-	if v.IsDictionary() {
-		backing := v.dictionaryState()
-		return &functionParameterDictionary[T]{source: v, rows: backing.rows.storageFixed()[:v.length], hasNull: v.HasNull(),
-			base: GenerateFunctionFixedTypeParameter[T](backing.base.vec)}
-	}
 	t := v.GetType()
 	if v.IsConstNull() {
 		return &FunctionParameterScalarNull[T]{
@@ -178,18 +173,6 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 }
 
 func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector, f FunctionParameterWrapper[T]) bool {
-	if v.IsDictionary() {
-		r, ok := f.(*functionParameterDictionary[T])
-		if !ok {
-			return false
-		}
-		backing := v.dictionaryState()
-		if !ReuseFunctionFixedTypeParameter(backing.base.vec, r.base) {
-			r.base = GenerateFunctionFixedTypeParameter[T](backing.base.vec)
-		}
-		r.source, r.rows, r.hasNull = v, backing.rows.storageFixed()[:v.length], v.HasNull()
-		return true
-	}
 	// A different effective type must be rebuilt by the parameter conversion owner.
 	if f.GetType() != *v.GetType() {
 		return false
@@ -237,11 +220,6 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 }
 
 func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varlena] {
-	if v.IsDictionary() {
-		backing := v.dictionaryState()
-		return &functionParameterDictionary[types.Varlena]{source: v, rows: backing.rows.storageFixed()[:v.length], hasNull: v.HasNull(),
-			base: GenerateFunctionStrParameter(backing.base.vec)}
-	}
 	t := v.GetType()
 	if v.IsConstNull() {
 		return &FunctionParameterScalarNull[types.Varlena]{
@@ -293,18 +271,6 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 }
 
 func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varlena]) bool {
-	if v.IsDictionary() {
-		r, ok := f.(*functionParameterDictionary[types.Varlena])
-		if !ok {
-			return false
-		}
-		backing := v.dictionaryState()
-		if !ReuseFunctionStrParameter(backing.base.vec, r.base) {
-			r.base = GenerateFunctionStrParameter(backing.base.vec)
-		}
-		r.source, r.rows, r.hasNull = v, backing.rows.storageFixed()[:v.length], v.HasNull()
-		return true
-	}
 	// A different effective type must be rebuilt by the parameter conversion owner.
 	if f.GetType() != *v.GetType() {
 		return false

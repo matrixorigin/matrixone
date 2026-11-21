@@ -1597,13 +1597,6 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 	if len(leftRows) <= stepCnt {
 		// stack allocation
 		deletedOffsets = make([]int64, 0, stepCnt)
-	} else {
-		deletedOffsets = vector.GetSels()
-		defer func() {
-			if deletedOffsets != nil {
-				vector.PutSels(deletedOffsets)
-			}
-		}()
 	}
 
 	for delIter.Next() {

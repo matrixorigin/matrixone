@@ -76,11 +76,6 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 }
 
 func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
-	filter.ctr.dictionaryBoundary.BeginCall()
-	if filter.ctr.viewOutput != nil {
-		filter.ctr.viewOutput.Clean(proc.Mp())
-		filter.ctr.viewOutput = nil
-	}
 	analyzer := filter.OpAnalyzer
 
 	inputResult, err := vm.ChildrenCall(filter.GetChildren(0), proc, analyzer)
@@ -92,26 +87,21 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return inputResult, nil
 	}
 
-	if filter.ctr.dictionaryBoundary.AllowsDictionaryOutput() &&
-		(!filter.ctr.dictionaryBoundary.PrefersOwnedOutput() || inputResult.Batch.HasDictionary()) && len(inputResult.Batch.ExtraBuf) == 0 {
-		output, err := filter.selectedCall(proc, inputResult.Batch)
+	if filter.ctr.selection.output || inputResult.Batch.HasSelection() {
+		output, err := filter.selectionCall(proc, inputResult.Batch)
 		if err != nil {
 			return vm.CancelResult, err
 		}
-		if filter.IsEnd {
-			output = nil
-		}
 		result := vm.NewCallResult()
-		result.Batch = output
+		if !filter.IsEnd {
+			result.Batch = output
+		}
 		return result, nil
 	}
+
 	filterBat := inputResult.Batch
-	var sels []int64
-	defer func() {
-		if sels != nil {
-			vector.PutSels(sels)
-		}
-	}()
+	sels := filter.ctr.flatSels[:0]
+	defer func() { filter.ctr.flatSels = sels }()
 	firstInvocation := !filter.ctr.subjectReuseAdmissionDone
 	filter.ctr.subjectReuseAdmissionDone = true
 	for i := range filter.ctr.allExecutors {
@@ -165,9 +155,6 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 		} else {
-			if sels == nil {
-				sels = vector.GetSels()
-			}
 			sels = sels[:0]
 
 			l := uint64(vec.Length())

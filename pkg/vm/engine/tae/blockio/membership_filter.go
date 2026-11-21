@@ -169,8 +169,5 @@ func (p *scopedMembershipPredicates) gather(output *batch.Batch, rows []int64, a
 		source.CopyExpressionMetadataTo(destination)
 		output.Vecs[column] = destination
 	}
-	if request.ObserveSelection != nil {
-		request.ObserveSelection(output.RowCount(), 0, 0)
-	}
 	return nil
 }

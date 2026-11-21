@@ -1874,7 +1874,7 @@ func TestOwnedVarlenaMarshalKeepsBulkLayout(t *testing.T) {
 
 	encoded, err := vec.MarshalBinary()
 	require.NoError(t, err)
-	decoded := NewVecFromReuse()
+	decoded := new(Vector)
 	defer decoded.Free(nil)
 	require.NoError(t, decoded.UnmarshalBinary(encoded))
 	require.Equal(t, values[0], decoded.GetBytesAt(0))
@@ -1892,7 +1892,7 @@ func TestOwnedVarlenaMarshalKeepsBulkLayout(t *testing.T) {
 	require.Nil(t, nullablePlan.normalizedVarlenData)
 	nullableEncoded, err := nullable.MarshalBinary()
 	require.NoError(t, err)
-	nullableDecoded := NewVecFromReuse()
+	nullableDecoded := new(Vector)
 	defer nullableDecoded.Free(nil)
 	require.NoError(t, nullableDecoded.UnmarshalBinary(nullableEncoded))
 	require.True(t, nullableDecoded.IsNull(1))
@@ -1909,7 +1909,7 @@ func TestOwnedVarlenaMarshalKeepsBulkLayout(t *testing.T) {
 
 	staleEncoded, err := stale.MarshalBinary()
 	require.NoError(t, err)
-	staleDecoded := NewVecFromReuse()
+	staleDecoded := new(Vector)
 	defer staleDecoded.Free(nil)
 	require.NoError(t, staleDecoded.UnmarshalBinary(staleEncoded))
 	require.True(t, staleDecoded.IsNull(0))
@@ -1923,7 +1923,7 @@ func TestOwnedVarlenaMarshalKeepsBulkLayout(t *testing.T) {
 		"a window retaining a larger source area must use canonical serialization")
 	windowEncoded, err := window.MarshalBinary()
 	require.NoError(t, err)
-	windowDecoded := NewVecFromReuse()
+	windowDecoded := new(Vector)
 	defer windowDecoded.Free(nil)
 	require.NoError(t, windowDecoded.UnmarshalBinary(windowEncoded))
 	require.Equal(t, values[2], windowDecoded.GetBytesAt(0))
@@ -1943,7 +1943,7 @@ func TestNullableFixedWidthMarshalDoesNotCastAsVarlena(t *testing.T) {
 	size, err := vec.MarshalBinarySize()
 	require.NoError(t, err)
 	require.Equal(t, len(encoded), size)
-	decoded := NewVecFromReuse()
+	decoded := new(Vector)
 	defer decoded.Free(nil)
 	require.NoError(t, decoded.UnmarshalBinary(encoded))
 	require.Equal(t, []int64{11, 0, 33}, MustFixedColNoTypeCheck[int64](decoded))
@@ -1964,11 +1964,11 @@ func TestMarshalAndUnMarshal(t *testing.T) {
 	require.NoError(t, v.MarshalBinaryTo(&streamed))
 	require.Equal(t, data, streamed.Bytes())
 	require.ErrorIs(t, v.MarshalBinaryTo(shortVectorMarshalWriter{}), io.ErrShortWrite)
-	w := NewVecFromReuse()
+	w := new(Vector)
 	err = w.UnmarshalBinary(data)
 	require.NoError(t, err)
 	require.Equal(t, MustFixedColWithTypeCheck[int8](v), MustFixedColWithTypeCheck[int8](w))
-	w = NewVecFromReuse()
+	w = new(Vector)
 	err = w.UnmarshalBinaryWithCopy(data, mp)
 	require.NoError(t, err)
 	require.Equal(t, MustFixedColWithTypeCheck[int8](v), MustFixedColWithTypeCheck[int8](w))
@@ -2010,7 +2010,7 @@ func TestUnmarshalBinaryAcceptsNullBitmapCoveragePastLength(t *testing.T) {
 	data, err := source.MarshalBinary()
 	require.NoError(t, err)
 
-	target := NewVecFromReuse()
+	target := new(Vector)
 	require.NoError(t, target.UnmarshalBinary(data))
 	require.Equal(t, 1, target.Length())
 	require.True(t, target.IsNull(0))
@@ -2030,7 +2030,7 @@ func TestUnmarshalBinaryAcceptsStaleVarlenaInNullRow(t *testing.T) {
 	data, err := source.MarshalBinary()
 	require.NoError(t, err)
 
-	target := NewVecFromReuse()
+	target := new(Vector)
 	require.NoError(t, target.UnmarshalBinary(data))
 	require.Equal(t, 1, target.Length())
 	require.True(t, target.IsNull(0))
@@ -2061,7 +2061,7 @@ func TestUnmarshalBinaryRejectsOverflowingNullBitmapLength(t *testing.T) {
 	copy(corrupted[nspDataOffset+8:nspDataOffset+16], types.EncodeUint64(&bitmapLen))
 	copy(corrupted[nspDataOffset+16:nspDataOffset+24], types.EncodeUint64(&bitmapDataLen))
 
-	target := NewVecFromReuse()
+	target := new(Vector)
 	require.Error(t, target.UnmarshalBinary(corrupted))
 }
 
@@ -2101,7 +2101,7 @@ func TestUnmarshalBinaryRejectsMisalignedArrayPayload(t *testing.T) {
 			varlenOffset := 1 + types.TSize + 4 + 4
 			test.corruptLen(corrupted, varlenOffset)
 
-			target := NewVecFromReuse()
+			target := new(Vector)
 			var unmarshalErr error
 			require.NotPanics(t, func() {
 				unmarshalErr = target.UnmarshalBinary(corrupted)
@@ -2121,7 +2121,7 @@ func TestUnmarshalBinaryRejectsUnsupportedZeroSizeType(t *testing.T) {
 			data, err := source.MarshalBinary()
 			require.NoError(t, err)
 
-			target := NewVecFromReuse()
+			target := new(Vector)
 			var unmarshalErr error
 			require.NotPanics(t, func() {
 				unmarshalErr = target.UnmarshalBinary(data)
@@ -2140,7 +2140,7 @@ func TestUnmarshalBinaryTrustedKeepsStructuralChecks(t *testing.T) {
 	source.Free(mp)
 
 	for end := len(data) - 1; end >= 0; end-- {
-		target := NewVecFromReuse()
+		target := new(Vector)
 		var unmarshalErr error
 		require.NotPanics(t, func() {
 			unmarshalErr = target.UnmarshalBinaryTrusted(data[:end])
@@ -2165,10 +2165,10 @@ func TestUnmarshalBinaryTrustedRequiresPriorSemanticValidation(t *testing.T) {
 	invalidOffset := uint32(len(data) + 1)
 	copy(corrupted[varlenOffset+4:varlenOffset+8], types.EncodeUint32(&invalidOffset))
 
-	checked := NewVecFromReuse()
+	checked := new(Vector)
 	require.Error(t, checked.UnmarshalBinary(corrupted))
 
-	trusted := NewVecFromReuse()
+	trusted := new(Vector)
 	require.NoError(t, trusted.UnmarshalBinaryTrusted(corrupted))
 }
 
@@ -2179,11 +2179,11 @@ func TestStrMarshalAndUnMarshal(t *testing.T) {
 	require.NoError(t, err)
 	data, err := v.MarshalBinary()
 	require.NoError(t, err)
-	w := NewVecFromReuse()
+	w := new(Vector)
 	err = w.UnmarshalBinary(data)
 	require.NoError(t, err)
 	require.Equal(t, InefficientMustStrCol(v), InefficientMustStrCol(w))
-	w = NewVecFromReuse()
+	w = new(Vector)
 	err = w.UnmarshalBinaryWithCopy(data, mp)
 	require.NoError(t, err)
 	require.Equal(t, InefficientMustStrCol(v), InefficientMustStrCol(w))
@@ -2202,11 +2202,11 @@ func TestArrayMarshalAndUnMarshal(t *testing.T) {
 		require.NoError(t, err)
 		data, err := v.MarshalBinary()
 		require.NoError(t, err)
-		w := NewVecFromReuse()
+		w := new(Vector)
 		err = w.UnmarshalBinary(data)
 		require.NoError(t, err)
 		require.Equal(t, MustArrayCol[float32](v), MustArrayCol[float32](w))
-		w = NewVecFromReuse()
+		w = new(Vector)
 		err = w.UnmarshalBinaryWithCopy(data, mp)
 		require.NoError(t, err)
 		require.Equal(t, MustArrayCol[float32](v), MustArrayCol[float32](w))
@@ -2224,11 +2224,11 @@ func TestArrayMarshalAndUnMarshal(t *testing.T) {
 		require.NoError(t, err)
 		data, err := v.MarshalBinary()
 		require.NoError(t, err)
-		w := NewVecFromReuse()
+		w := new(Vector)
 		err = w.UnmarshalBinary(data)
 		require.NoError(t, err)
 		require.Equal(t, MustArrayCol[float64](v), MustArrayCol[float64](w))
-		w = NewVecFromReuse()
+		w = new(Vector)
 		err = w.UnmarshalBinaryWithCopy(data, mp)
 		require.NoError(t, err)
 		require.Equal(t, MustArrayCol[float64](v), MustArrayCol[float64](w))

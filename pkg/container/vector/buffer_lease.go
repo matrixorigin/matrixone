@@ -76,9 +76,6 @@ func (v *Vector) AreaBackingKind() BackingKind {
 	if v == nil {
 		return OwnedMPoolUnique
 	}
-	if v.IsDictionary() {
-		return BorrowedLease
-	}
 	if v.areaLease != nil {
 		return BorrowedLease
 	}
@@ -122,7 +119,7 @@ func sameBufferLease(left, right BufferLease) bool {
 }
 
 func (v *Vector) CanDetach(part BackingPart) bool {
-	if v == nil || v.IsDictionary() {
+	if v == nil {
 		return false
 	}
 	switch part {
@@ -139,7 +136,7 @@ func (v *Vector) CanDetach(part BackingPart) bool {
 // Vector must not already own data capacity; callers must Free or materialize
 // the previous generation first.
 func (v *Vector) InstallBorrowedData(data []byte, lease BufferLease) error {
-	if v == nil || v.IsDictionary() || lease == nil || cap(v.data) != 0 || v.dataLease != nil {
+	if v == nil || lease == nil || cap(v.data) != 0 || v.dataLease != nil {
 		return moerr.NewInternalErrorNoCtx("cannot install borrowed vector data")
 	}
 	if !lease.Retain() {
@@ -154,7 +151,7 @@ func (v *Vector) InstallBorrowedData(data []byte, lease BufferLease) error {
 // InstallBorrowedArea is the independently-owned area counterpart of
 // InstallBorrowedData.
 func (v *Vector) InstallBorrowedArea(area []byte, lease BufferLease) error {
-	if v == nil || v.IsDictionary() || lease == nil || cap(v.area) != 0 || v.areaLease != nil {
+	if v == nil || lease == nil || cap(v.area) != 0 || v.areaLease != nil {
 		return moerr.NewInternalErrorNoCtx("cannot install borrowed vector area")
 	}
 	if !lease.Retain() {
@@ -208,9 +205,6 @@ func NewBorrowedFixedVectorWithAllocation(
 // changing values, row metadata, or the independently owned varlen area.
 // A failed allocation leaves the existing backing and lease unchanged.
 func (v *Vector) PrepareDataForInplaceMutation(mp *mpool.MPool) error {
-	if v.IsDictionary() {
-		return v.EnsureFlat(mp)
-	}
 	if !v.cantFreeData || len(v.data) == 0 {
 		return nil
 	}
@@ -230,9 +224,6 @@ func (v *Vector) releaseBorrowedData() {
 		return
 	}
 	lease := v.dataLease
-	if owned, ok := lease.(*dictionaryPayloadLease); ok {
-		owned.origin.CompareAndSwap(v, nil)
-	}
 	v.dataLease = nil
 	v.data = nil
 	v.cantFreeData = false
@@ -244,9 +235,6 @@ func (v *Vector) releaseBorrowedArea() {
 		return
 	}
 	lease := v.areaLease
-	if owned, ok := lease.(*dictionaryPayloadLease); ok {
-		owned.origin.CompareAndSwap(v, nil)
-	}
 	v.areaLease = nil
 	v.area = nil
 	v.cantFreeArea = false
@@ -257,7 +245,6 @@ func (v *Vector) releaseBorrowedBacking() {
 	if v == nil {
 		return
 	}
-	v.releaseDictionary()
 	v.releaseBorrowedArea()
 	v.releaseBorrowedData()
 }
@@ -311,13 +298,6 @@ func (v *Vector) CopyWithReadonlyArea(source *Vector, mp *mpool.MPool) error {
 // MaterializeOwned performs copy-on-write transactionally. Allocation failure
 // leaves the borrowed Vector unchanged and readable.
 func (v *Vector) MaterializeOwned(mp *mpool.MPool) error {
-	// Ordinary scalar destinations have no workspace lease to reclaim.
-	if v != nil && (v.dataLease != nil || v.areaLease != nil) {
-		v.ReclaimDictionaryWorkspace()
-	}
-	if v.IsDictionary() {
-		return v.EnsureFlat(mp)
-	}
 	if v == nil || !v.HasBorrowedBacking() {
 		return nil
 	}
@@ -329,7 +309,6 @@ func (v *Vector) MaterializeOwned(mp *mpool.MPool) error {
 		return err
 	}
 	v.CopyExpressionMetadataTo(owned)
-	v.retireDictionaryWorkspaceOrigin()
 	old := *v
 	*v = *owned
 	old.Free(mp)
@@ -418,4 +397,61 @@ func (v *Vector) RetainedReadonlyWindowWithMP(start, end int, mp *mpool.MPool) (
 		view.cantFreeArea = false
 	}
 	return view, nil
+}
+
+// RetainBorrowedBufferInto converts a scoped legacy decoder into an owned
+// header with immutable leased payload and private metadata. The full foreign
+// capacity is charged before publication. Free/COW releases the cache pin.
+func RetainBorrowedBufferInto(dst, source *Vector, lease BufferLease, mp *mpool.MPool) (bool, error) {
+	if dst == nil || source == nil || mp == nil || dst == source || lease == nil || dst.HasBorrowedBacking() || dst.Length() != 0 || dst.Allocated() != 0 || source.HasBorrowedBacking() || (source.DataBackingKind() != LegacyAlias && cap(source.data) > 0) || (source.AreaBackingKind() != LegacyAlias && cap(source.area) > 0) {
+		return false, nil
+	}
+	account := dst.allocationAccount
+	var pin *mpool.CapacityLease
+	if account != nil {
+		if err := account.validate(); err != nil {
+			return false, err
+		}
+		// A transient policy cannot promote an account-only cache pin.
+		// Decline so the loader copies through its admitted owned path.
+		if account.transient != nil {
+			return false, nil
+		}
+		size := lease.AccountedBytes()
+		if size < 0 {
+			return false, moerr.NewInvalidInputNoCtx("invalid cache pin size")
+		}
+		reservation, err := account.account.ReserveCapacityWithClass(uint64(size), account.capacityClass, account.owner, account.dataSite)
+		if err != nil {
+			return false, err
+		}
+		defer reservation.Abort()
+		pin, err = reservation.Commit(uint64(size))
+		if err != nil {
+			return false, err
+		}
+	}
+	if !lease.Retain() {
+		pin.Release()
+		return false, moerr.NewInvalidInputNoCtx("immutable decoder lease is closed")
+	}
+	counted, err := NewRefCountedBufferLease(lease.Bytes(), lease.AccountedBytes(), func() { lease.Release(); pin.Release() })
+	if err != nil {
+		lease.Release()
+		pin.Release()
+		return false, err
+	}
+	defer counted.Release()
+	temporary := *source
+	temporary.dataLease, temporary.areaLease = counted, counted
+	// window retains each used backing; the scoped decoder itself owns neither.
+	oldType, oldOffHeap := dst.typ, dst.offHeap
+	_, err = temporary.windowInto(0, source.length, mp, account, dst)
+	if err != nil {
+		dst.Free(mp)
+		*dst = Vector{typ: oldType, offHeap: oldOffHeap, allocationAccount: account, areaDisjoint: true}
+		return false, err
+	}
+	source.CopyExpressionMetadataTo(dst)
+	return true, nil
 }
