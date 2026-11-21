@@ -140,10 +140,15 @@ func (m *memThrottler) refreshMemory(
 	m.refreshMemoryWithPressure(readRSS, readCgroup, nil)
 }
 
+type rssPressureLimit struct {
+	bytes   uint64
+	partial bool // A finite value is an upper bound when an ancestor is hidden.
+}
+
 func (m *memThrottler) refreshMemoryWithPressure(
 	readRSS func() (*process.MemoryInfoStat, error),
 	readCgroup func() (uint64, error),
-	resolvePressure func(uint64, error) (uint64, error),
+	resolvePressure func(uint64, error) (rssPressureLimit, error),
 ) {
 	prevRSS := m.rss.Load()
 	prevBase := m.rssReservedBase.Load()
@@ -193,19 +198,19 @@ func (m *memThrottler) refreshMemoryWithPressure(
 	if rssErr != nil {
 		err = rssErr
 	} else if m.rssPressure != nil {
-		pressureLimit, pressureErr := cgroup, err
+		pressureLimit, pressureErr := rssPressureLimit{bytes: cgroup}, err
 		if resolvePressure != nil {
 			pressureLimit, pressureErr = resolvePressure(cgroup, err)
 		}
-		if pressureErr == nil && pressureLimit != 0 {
+		if pressureErr == nil && pressureLimit.bytes != 0 {
 			if total != 0 {
-				pressureLimit = min(pressureLimit, total)
+				pressureLimit.bytes = min(pressureLimit.bytes, total)
 			}
-			m.rssPressure.observe(sample.at, sample.rss, int64(pressureLimit), sample.reservedAfter, sample.live)
-		} else if errors.Is(pressureErr, memlimit.ErrNoLimit) ||
+			m.rssPressure.observe(sample.at, sample.rss, int64(pressureLimit.bytes), sample.reservedAfter, sample.live, pressureLimit.partial)
+		} else if !pressureLimit.partial && (errors.Is(pressureErr, memlimit.ErrNoLimit) ||
 			errors.Is(pressureErr, memlimit.ErrNoCgroup) ||
-			errors.Is(pressureErr, memlimit.ErrCgroupsNotSupported) {
-			m.rssPressure.observe(sample.at, sample.rss, int64(total), sample.reservedAfter, sample.live)
+			errors.Is(pressureErr, memlimit.ErrCgroupsNotSupported)) {
+			m.rssPressure.observe(sample.at, sample.rss, int64(total), sample.reservedAfter, sample.live, false)
 		} else if pressureErr != nil && resolvePressure != nil {
 			pressureResolutionErr = pressureErr
 		}
@@ -227,7 +232,8 @@ type rssSample struct {
 }
 
 func (m *memThrottler) sampleRSS(readRSS func() (*process.MemoryInfoStat, error)) (rssSample, error) {
-	if source := m.rssPressure; source != nil {
+	source := m.rssPressure
+	if source != nil {
 		source.controller.sampleMu.Lock()
 		defer source.controller.sampleMu.Unlock()
 	}
@@ -242,6 +248,9 @@ func (m *memThrottler) sampleRSS(readRSS func() (*process.MemoryInfoStat, error)
 	sample.rss = int64(info.RSS)
 	sample.reservedAfter = max(0, m.reserved.Load())
 	sample.live = mpool.GlobalStats().NumCurrBytes.Load()
+	if source != nil {
+		source.recordRSSCapture(sample.at)
+	}
 	return sample, nil
 }
 

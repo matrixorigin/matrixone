@@ -33,43 +33,45 @@ import (
 
 // Resolve the pressure ceiling from the process membership. A mount at the
 // conventional cgroup path need not be the view exposing that membership.
-func resolvePressureCgroup(_ uint64, legacyErr error) (uint64, error) {
+func resolvePressureCgroup(_ uint64, legacyErr error) (rssPressureLimit, error) {
 	controllers, unified, err := cgroups.ParseCgroupFileUnified("/proc/self/cgroup")
 	if err == nil {
 		if group, ok := controllers["memory"]; ok {
-			return pressureCgroupV1Limit(group)
+			limit, err := pressureCgroupV1Limit(group)
+			return rssPressureLimit{bytes: limit}, err
 		}
 		if unified != "" {
 			return pressureCgroupV2Limit(unified)
 		}
 		if len(controllers) != 0 {
-			return 0, memlimit.ErrNoCgroup
+			return rssPressureLimit{}, memlimit.ErrNoCgroup
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return 0, err
+		return rssPressureLimit{}, err
 	}
 	// A genuine lack of cgroups permits host fallback. An empty or missing
 	// membership with an accessible mount is an incomplete observation.
 	if errors.Is(legacyErr, memlimit.ErrNoCgroup) {
 		var st unix.Statfs_t
 		if statErr := unix.Statfs("/sys/fs/cgroup", &st); errors.Is(statErr, unix.ENOENT) {
-			return 0, legacyErr
+			return rssPressureLimit{}, legacyErr
 		} else if statErr != nil {
-			return 0, statErr
+			return rssPressureLimit{}, statErr
 		}
 	}
 	if err != nil {
-		return 0, err
+		return rssPressureLimit{}, err
 	}
-	return 0, moerr.NewInternalError(moerr.NoReportContext(), "cgroup membership unavailable")
+	return rssPressureLimit{}, moerr.NewInternalError(moerr.NoReportContext(), "cgroup membership unavailable")
 }
 
-func pressureCgroupV2Limit(group string) (uint64, error) {
-	views, err := pressureCgroupViews(group, "cgroup2")
+func pressureCgroupV2Limit(group string) (rssPressureLimit, error) {
+	views, partial, err := pressureCgroupViews(group, "cgroup2")
 	if err != nil {
-		return 0, err
+		return rssPressureLimit{}, err
 	}
-	return pressureCgroupV2Hierarchy(filepath.Clean(group), views)
+	limit, err := pressureCgroupV2Hierarchy(filepath.Clean(group), views)
+	return rssPressureLimit{bytes: limit, partial: partial}, err
 }
 
 // Read each visible ancestor once successfully. Alternate mount views can
@@ -205,7 +207,7 @@ func hasMemoryController(data []byte) bool {
 }
 
 func pressureCgroupV1Limit(group string) (uint64, error) {
-	views, err := pressureCgroupViews(group, "cgroup")
+	views, _, err := pressureCgroupViews(group, "cgroup")
 	if err != nil {
 		return 0, err
 	}
@@ -296,19 +298,20 @@ func (v pressureCgroupView) directory(group string) (string, bool) {
 	return filepath.Join(v.mount, rel), true
 }
 
-func pressureCgroupViews(group, fsType string) ([]pressureCgroupView, error) {
+func pressureCgroupViews(group, fsType string) ([]pressureCgroupView, bool, error) {
 	data, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	return parsePressureCgroupViews(data, group, fsType)
 }
 
 // A mount can expose just a subtree of the same process hierarchy. Keep all
 // reachable views; start at the widest root and preserve order for equal roots.
-func parsePressureCgroupViews(data []byte, group, fsType string) ([]pressureCgroupView, error) {
+// The second result indicates that a covered wider view may hide a limit.
+func parsePressureCgroupViews(data []byte, group, fsType string) ([]pressureCgroupView, bool, error) {
 	if !inCgroupNamespace(group) {
-		return nil, moerr.NewInternalErrorf(moerr.NoReportContext(), "cgroup membership %q is outside the visible namespace", group)
+		return nil, false, moerr.NewInternalErrorf(moerr.NoReportContext(), "cgroup membership %q is outside the visible namespace", group)
 	}
 	group = filepath.Clean(group)
 	mounts := make(map[string]pressureMount)
@@ -318,6 +321,7 @@ func parsePressureCgroupViews(data []byte, group, fsType string) ([]pressureCgro
 		root  string
 	}
 	var matched []candidate
+	widestRootLen := len(group)
 	unescape := strings.NewReplacer("\\040", " ", "\\011", "\t", "\\012", "\n", "\\134", "\\")
 	for _, line := range strings.Split(string(data), "\n") {
 		left, right, ok := strings.Cut(line, " - ")
@@ -348,11 +352,12 @@ func parsePressureCgroupViews(data []byte, group, fsType string) ([]pressureCgro
 		}
 		root = filepath.Clean(root)
 		if mountContains(root, group) {
+			widestRootLen = min(widestRootLen, len(root))
 			matched = append(matched, candidate{mount: mount, root: root})
 		}
 	}
 	if len(matched) == 0 {
-		return nil, moerr.NewInternalErrorf(moerr.NoReportContext(), "memory cgroup mount not found for %q", group)
+		return nil, false, moerr.NewInternalErrorf(moerr.NoReportContext(), "memory cgroup mount not found for %q", group)
 	}
 	views := make([]pressureCgroupView, 0, len(matched))
 	for _, candidate := range matched {
@@ -372,12 +377,12 @@ func parsePressureCgroupViews(data []byte, group, fsType string) ([]pressureCgro
 		})
 	}
 	if len(views) == 0 {
-		return nil, moerr.NewInternalErrorf(moerr.NoReportContext(), "all memory cgroup mounts for %q are covered by another mount", group)
+		return nil, false, moerr.NewInternalErrorf(moerr.NoReportContext(), "all memory cgroup mounts for %q are covered by another mount", group)
 	}
 	slices.SortStableFunc(views, func(a, b pressureCgroupView) int {
 		return cmp.Compare(len(a.root), len(b.root))
 	})
-	return views, nil
+	return views, len(views[0].root) > widestRootLen, nil
 }
 
 func inCgroupNamespace(path string) bool {

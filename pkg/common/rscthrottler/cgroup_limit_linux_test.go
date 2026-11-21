@@ -17,12 +17,16 @@
 package rscthrottler
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/KimMachineGun/automemlimit/memlimit"
+	"github.com/shirou/gopsutil/v3/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,16 +84,16 @@ func TestParsePressureCgroupViews(t *testing.T) {
 	data := []byte("30 1 0:1 /docker/abc /sys/fs/cgroup/memory rw - cgroup cgroup rw,memory\n" +
 		"32 1 0:2 /tenant/nested /mnt/bind rw - cgroup2 cgroup rw\n" +
 		"31 1 0:2 /tenant /sys/fs/cgroup/unified rw - cgroup2 cgroup rw\n")
-	v1, err := parsePressureCgroupViews(data, "/docker/abc", "cgroup")
+	v1, _, err := parsePressureCgroupViews(data, "/docker/abc", "cgroup")
 	require.NoError(t, err)
 	require.Equal(t, []pressureCgroupView{{root: "/docker/abc", mount: "/sys/fs/cgroup/memory"}}, v1)
-	v2, err := parsePressureCgroupViews(data, "/tenant/nested", "cgroup2")
+	v2, _, err := parsePressureCgroupViews(data, "/tenant/nested", "cgroup2")
 	require.NoError(t, err)
 	require.Equal(t, []pressureCgroupView{
 		{root: "/tenant", mount: "/sys/fs/cgroup/unified"},
 		{root: "/tenant/nested", mount: "/mnt/bind"},
 	}, v2)
-	_, err = parsePressureCgroupViews(data, "/docker/abcd", "cgroup")
+	_, _, err = parsePressureCgroupViews(data, "/docker/abcd", "cgroup")
 	require.Error(t, err)
 }
 
@@ -110,7 +114,7 @@ func TestPressureCgroupV2AlternateViews(t *testing.T) {
 				"30 1 0:1 /tenant %s rw - cgroup2 cgroup rw\n31 1 0:1 %s %s rw - cgroup2 cgroup rw\n",
 				broad, root, alternate,
 			))
-			views, err := parsePressureCgroupViews(data, group, "cgroup2")
+			views, _, err := parsePressureCgroupViews(data, group, "cgroup2")
 			require.NoError(t, err)
 			leaf, ok := views[1].directory(group)
 			require.True(t, ok)
@@ -219,8 +223,9 @@ func TestPressureCgroupV2CoveredMounts(t *testing.T) {
 				wide, tc.parentID, filepath.Join(parent, tc.mountpoint),
 			)
 			withAlternate := fmt.Appendf(mountinfo, "32 1 0:1 %s %s rw - cgroup2 cgroup rw\n", group, alternate)
-			views, err := parsePressureCgroupViews(withAlternate, group, "cgroup2")
+			views, partial, err := parsePressureCgroupViews(withAlternate, group, "cgroup2")
 			require.NoError(t, err)
+			require.Equal(t, tc.fullCover, partial)
 			limit, err := pressureCgroupV2Hierarchy(group, views)
 			require.NoError(t, err)
 			if tc.fullCover {
@@ -229,7 +234,7 @@ func TestPressureCgroupV2CoveredMounts(t *testing.T) {
 				require.Equal(t, uint64(500), limit, "the partially covered mount still exposes a stricter ancestor")
 			}
 
-			views, err = parsePressureCgroupViews(mountinfo, group, "cgroup2")
+			views, _, err = parsePressureCgroupViews(mountinfo, group, "cgroup2")
 			if !tc.fullCover {
 				require.NoError(t, err)
 				_, err = pressureCgroupV2Hierarchy(group, views)
@@ -237,6 +242,88 @@ func TestPressureCgroupV2CoveredMounts(t *testing.T) {
 			require.ErrorContains(t, err, "covered by another mount")
 		})
 	}
+}
+
+func TestPressureCgroupV2HiddenAncestorRetainsLease(t *testing.T) {
+	const group = "/tenant/child"
+	wide, narrow := t.TempDir(), t.TempDir()
+	leaf := filepath.Join(wide, "child")
+	require.NoError(t, os.Mkdir(leaf, 0700))
+	for dir, limit := range map[string]string{wide: "500", leaf: "max", narrow: "1000"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "cgroup.controllers"), nil, 0600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "memory.max"), []byte(limit), 0600))
+	}
+	mounts := fmt.Sprintf("30 1 0:1 /tenant %s rw - cgroup2 cgroup rw\n32 1 0:1 %s %s rw - cgroup2 cgroup rw\n", wide, group, narrow)
+	covered := fmt.Sprintf("%s31 30 0:2 / %s rw - tmpfs tmpfs rw\n", mounts, wide)
+
+	walks := make(chan context.Context, 1)
+	var targets []int64
+	var cleared int
+	controller := rssPressureController{
+		setTarget:   func(target int64, _ time.Time) { targets = append(targets, target) },
+		clearTarget: func() { cleared++ },
+		evict: func(ctx context.Context, _ int64) {
+			walks <- ctx
+			<-ctx.Done()
+		},
+		free: func() {},
+	}
+	cn, workspace := controller.attach(), controller.attach()
+	defer cn.Close()
+	defer workspace.Close()
+	refresh := func(source *RSSPressureSource, mountInfo string, rss uint64, beforeResolve func()) {
+		throttler := memThrottler{rssPressure: source}
+		throttler.refreshMemoryWithPressure(
+			func() (*process.MemoryInfoStat, error) { return &process.MemoryInfoStat{RSS: rss}, nil },
+			func() (uint64, error) { return 0, nil },
+			func(_ uint64, _ error) (rssPressureLimit, error) {
+				if beforeResolve != nil {
+					beforeResolve()
+				}
+				views, partial, err := parsePressureCgroupViews([]byte(mountInfo), group, "cgroup2")
+				if err != nil {
+					return rssPressureLimit{}, err
+				}
+				limit, err := pressureCgroupV2Hierarchy(group, views)
+				return rssPressureLimit{bytes: limit, partial: partial}, err
+			})
+	}
+	refresh(cn, mounts, 475, nil)
+	walk := receivePressureEvent(t, walks)
+	require.Equal(t, []int64{rssCacheHardTarget}, targets)
+
+	// Both finite and unlimited partial readings supersede an older RSS
+	// capture but cannot themselves authorize recovery from hard pressure.
+	for _, limit := range []string{"1000", "max"} {
+		t.Run(limit, func(t *testing.T) {
+			require.NoError(t, os.WriteFile(filepath.Join(narrow, "memory.max"), []byte(limit), 0600))
+			captured, release, reported := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(release) })
+			go func() {
+				defer close(reported)
+				refresh(cn, mounts, 350, func() {
+					close(captured)
+					<-release
+				})
+			}()
+			defer func() {
+				unblock()
+				receivePressureEvent(t, reported)
+			}()
+			receivePressureEvent(t, captured)
+			refresh(workspace, covered, 475, nil)
+			unblock()
+			receivePressureEvent(t, reported)
+			require.Zero(t, cleared, "a delayed complete sample cannot override newer RSS")
+			require.NoError(t, walk.Err())
+		})
+	}
+
+	require.Equal(t, []int64{rssCacheHardTarget}, targets, "weaker readings leave the lease unmodified")
+
+	refresh(cn, mounts, 350, nil)
+	receivePressureEvent(t, walk.Done())
+	require.Equal(t, 1, cleared, "a complete healthy reading clears the hard target")
 }
 
 func TestPressureCgroupV1CoveredStat(t *testing.T) {
@@ -248,7 +335,7 @@ func TestPressureCgroupV1CoveredStat(t *testing.T) {
 		"30 1 0:1 /tenant %s rw - cgroup cgroup rw,memory\n31 30 0:3 / %s rw - tmpfs tmpfs rw\n32 1 0:1 /tenant %s rw - cgroup cgroup rw,memory\n",
 		wide, path, alternate,
 	)
-	views, err := parsePressureCgroupViews(mountinfo, "/tenant", "cgroup")
+	views, _, err := parsePressureCgroupViews(mountinfo, "/tenant", "cgroup")
 	require.NoError(t, err)
 	limit, err := pressureCgroupV1Hierarchy("/tenant", views)
 	require.NoError(t, err)
@@ -258,9 +345,9 @@ func TestPressureCgroupV1CoveredStat(t *testing.T) {
 func TestParsePressureCgroupNamespaceRoot(t *testing.T) {
 	mountinfo := []byte("30 1 0:1 /.. /inherit rw - cgroup2 cgroup rw\n" +
 		"31 1 0:1 / /namespace rw - cgroup2 cgroup rw\n")
-	views, err := parsePressureCgroupViews(mountinfo, "/", "cgroup2")
+	views, _, err := parsePressureCgroupViews(mountinfo, "/", "cgroup2")
 	require.NoError(t, err)
 	require.Equal(t, []pressureCgroupView{{root: "/", mount: "/namespace"}}, views)
-	_, err = parsePressureCgroupViews(mountinfo, "/../other", "cgroup2")
+	_, _, err = parsePressureCgroupViews(mountinfo, "/../other", "cgroup2")
 	require.ErrorContains(t, err, "outside the visible namespace")
 }

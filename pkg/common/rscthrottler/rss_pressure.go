@@ -88,9 +88,12 @@ func NewRSSPressureSource() *RSSPressureSource {
 
 type rssPressureController struct {
 	// Order RSS measurements without blocking reporter detach or cache work.
-	sampleMu       sync.Mutex
-	mu             sync.Mutex
-	sources        map[*RSSPressureSource]struct{}
+	sampleMu sync.Mutex
+	mu       sync.Mutex
+	sources  map[*RSSPressureSource]struct{}
+	// A successful RSS capture can rule out an older recovery decision
+	// even when its own ceiling cannot be resolved.
+	lastRSSCapture time.Time
 	lastSample     time.Time
 	lastEvict      time.Time
 	lastFree       time.Time
@@ -139,6 +142,7 @@ func (s *RSSPressureSource) Close() {
 	}
 	c.resetEviction()
 	c.state = rssPressureNone
+	c.lastRSSCapture = time.Time{}
 	c.lastSample = time.Time{}
 	c.lastEvict = time.Time{}
 	c.expires = time.Time{}
@@ -154,20 +158,41 @@ func (c *rssPressureController) resetEviction() {
 	}
 }
 
-func (s *RSSPressureSource) observe(at time.Time, rss, limit, reserved, live int64) {
+// Called under sampleMu, in RSS capture order.
+func (s *RSSPressureSource) recordRSSCapture(at time.Time) {
+	c := s.controller
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.sources[s]; ok {
+		c.lastRSSCapture = at
+	}
+}
+
+func (s *RSSPressureSource) observe(at time.Time, rss, limit, reserved, live int64, partial bool) {
 	if limit <= 0 || limit == math.MaxInt64 {
 		return
 	}
 	c := s.controller
 	c.mu.Lock()
+	now := time.Now()
 	expires := at.Add(rssPressureTTL)
-	if _, ok := c.sources[s]; !ok || at.Before(c.lastSample) || !time.Now().Before(expires) {
+	if _, ok := c.sources[s]; !ok || at.Before(c.lastSample) || !now.Before(expires) {
+		c.mu.Unlock()
+		return
+	}
+	previous := c.state
+	if partial && !now.Before(c.expires) {
+		previous = rssPressureNone
+	}
+	next := nextRSSPressureState(previous, float64(rss)/float64(limit))
+	// An upper bound can establish pressure, but cannot prove recovery.
+	if partial && next == rssPressureNone ||
+		next < previous && (partial || at.Before(c.lastRSSCapture)) {
 		c.mu.Unlock()
 		return
 	}
 	c.lastSample = at
-	previous := c.state
-	c.state = nextRSSPressureState(previous, float64(rss)/float64(limit))
+	c.state = next
 	target := rssPressureCacheTarget(c.state)
 	if previous != c.state {
 		c.resetEviction()
