@@ -1299,7 +1299,7 @@ BINARY
   case "$*" in
    *TestOne*)
     printf '%s\n' '{"Action":"run","Package":"example/plan","Test":"TestOne"}'
-    printf '%s' '{"Action":"fail","Package":"example/plan"}'
+    printf '%s' '{"Action":"fail","Package":"example/plan"'
     exit 1
     ;;
    *TestTwo*)

@@ -159,8 +159,8 @@ function collect_ut_report_sources(){
 }
 
 # Seal a stopped writer's incomplete line before concatenating another report.
-# Keep its bytes for diagnosis and ensure replay still rejects the fragment,
-# even if cancellation happened immediately before a valid JSON line's newline.
+# Keep report bytes for diagnosis. A complete JSON record without its newline
+# remains usable once the writer has stopped.
 function copy_ut_report_chunk(){
     local source=$1
     local last_byte_lines
@@ -168,7 +168,7 @@ function copy_ut_report_chunk(){
     if [[ -s "${source}" ]]; then
         last_byte_lines=$(set -o pipefail; tail -c 1 "${source}" | wc -l) || return 1
         if (( last_byte_lines == 0 )); then
-            printf ' [incomplete UT record]\n' || return 1
+            printf '\n' || return 1
         fi
     fi
 }

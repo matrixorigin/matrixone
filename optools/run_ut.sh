@@ -3547,7 +3547,18 @@ function ut_summary(){
     analysis_status=1
     logger "ERR" "failed to install go-ut-analysis"
   else
-    "${analysis_tool}" test -f "${UT_REPORT}" --first 10 --report-path "${report_path}" --stdout=false
+    (
+      local analyzer_input="${UT_REPORT}"
+      if [[ "${report_validation}" =~ [[:space:]]malformed=[1-9][0-9]*[[:space:]] ]]; then
+        # Keep malformed fragments in the raw report. The pinned analyzer
+        # needs a view containing only complete JSON objects.
+        analyzer_input=$(mktemp "${UT_REPORT}.analyzer.XXXXXX") || exit 1
+        trap 'rm -f "${analyzer_input}"' EXIT
+        python3 "${BUILD_WKSP}/optools/validate_ut_report.py" --emit-analyzer-input \
+          "${UT_REPORT}" > "${analyzer_input}" || exit 1
+      fi
+      "${analysis_tool}" test -f "${analyzer_input}" --first 10 --report-path "${report_path}" --stdout=false
+    )
     analysis_status=$?
   fi
 
