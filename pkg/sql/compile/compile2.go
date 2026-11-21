@@ -21,7 +21,6 @@ import (
 	"maps"
 	"math"
 	gotrace "runtime/trace"
-	"slices"
 	"strings"
 	"time"
 
@@ -170,7 +169,7 @@ func (c *Compile) Compile(
 
 	// Reject unsupported lock policies before query scheduling, source/scope
 	// construction, Sirius offload, or any later MergeRun can publish work.
-	if err = c.validateNonBlockingLockPlan(queryPlan); err != nil {
+	if err = c.validateLockPlan(queryPlan); err != nil {
 		return err
 	}
 	c.capturedExecutionTopology = c.capturedExecutionTopology || requiresCapturedExecution
@@ -881,7 +880,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 
 		// rebuild context for the retry.
-		runC.InitPipelineContextToRetryQuery()
+		runC.initPipelineContextToRetryQuery(c.resourceAttemptOwnerEligible)
 		carriedPreRunWall = time.Since(attemptStart)
 		attemptPreRunWall = carriedPreRunWall
 		coordinatorPhaseStart = time.Time{}
@@ -1205,6 +1204,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan, safeFallback bool, existingOffs
 		// after physical compilation succeeds. A subsequent ordinary retry must
 		// inherit this generation rather than the one that first hit the fence.
 		c.pn = planForRetry
+		c.lockingReadPlan = runC.lockingReadPlan
 		c.capturedExecutionTopology = runC.capturedExecutionTopology
 		c.preparedJoinDiagnosticFree = runC.preparedJoinDiagnosticFree
 		c.inheritPlanSnapshot(runC)
@@ -1266,19 +1266,14 @@ func (c *Compile) bindRetryPlanGeneration(runC *Compile, rebuildPlan bool) {
 	c.planGenerationRebuilt = true
 }
 
-func (c *Compile) lockReadQueryContext(ctx context.Context) context.Context {
+func (c *Compile) lockReadQueryContext(ctx context.Context, ownerEligible bool) context.Context {
 	var lockReadRoot *resource.Root
-	root := resource.RootFromContext(ctx)
-	if root.LockReadEnabled() && c.resourceAttemptOwnerEligible && !c.isInternal {
+	// Metadata locks can also occur on ordinary SELECTs. Use the compiled
+	// locking-read classification to avoid walking the plan on execution.
+	if c.lockingReadPlan && ownerEligible && !c.isInternal {
 		if stmt, ok := c.stmt.(*tree.Select); ok && stmt != nil {
-			if query := c.pn.GetQuery(); query != nil && query.StmtType == plan.Query_SELECT {
-				// Metadata locks also occur on ordinary SELECTs. Use the bound
-				// plan to identify locking reads, including table fallbacks.
-				if slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
-					return node.GetNodeType() == plan.Node_LOCK_OP
-				}) {
-					lockReadRoot = root
-				}
+			if root := resource.RootFromContext(ctx); root.LockReadEnabled() {
+				lockReadRoot = root
 			}
 		}
 	}
@@ -1292,7 +1287,7 @@ func (c *Compile) lockReadQueryContext(ctx context.Context) context.Context {
 // 2. if there's a data transfer between two pipelines, the lifecycle of the sender's context ends with the receiver's termination.
 func (c *Compile) InitPipelineContextToExecuteQuery() {
 	contextBase := c.proc.Base.GetContextBase()
-	contextBase.BuildQueryCtx(c.lockReadQueryContext(c.proc.GetTopContext()))
+	contextBase.BuildQueryCtx(c.lockReadQueryContext(c.proc.GetTopContext(), c.resourceAttemptOwnerEligible))
 	contextBase.SaveToQueryContext(defines.EngineKey{}, c.e)
 	queryContext := contextBase.WithCounterSetToQueryContext(c.counterSet)
 
@@ -1306,12 +1301,12 @@ func (c *Compile) InitPipelineContextToExecuteQuery() {
 	}
 }
 
-// InitPipelineContextToRetryQuery initializes the context for each pipeline tree.
-// the only place diff to InitPipelineContextToExecuteQuery is this function build query context from the last query.
-func (c *Compile) InitPipelineContextToRetryQuery() {
+// initPipelineContextToRetryQuery retains the statement context and determines
+// lock observation eligibility from the retry's compiled plan.
+func (c *Compile) initPipelineContextToRetryQuery(ownerEligible bool) {
 	lastQueryCtx, _ := process.GetQueryCtxFromProc(c.proc)
 	contextBase := c.proc.Base.GetContextBase()
-	contextBase.BuildQueryCtx(lastQueryCtx)
+	contextBase.BuildQueryCtx(c.lockReadQueryContext(lastQueryCtx, ownerEligible))
 	contextBase.SaveToQueryContext(defines.EngineKey{}, c.e)
 	queryContext := contextBase.WithCounterSetToQueryContext(c.counterSet)
 

@@ -179,10 +179,17 @@ func TestLockReadCompactFallbackPublishesOnlyTerminalObservation(t *testing.T) {
 
 	s.EndStatement(ctx, context.DeadlineExceeded, 0, 0, 0)
 	require.IsType(t, &summaryDiagnosticPlan{}, s.ExecPlan)
+	payload := s.ExecPlan2Json(ctx)
 	var result models.ExplainData
-	require.NoError(t, json.Unmarshal(s.ExecPlan2Json(ctx), &result))
+	require.NoError(t, json.Unmarshal(payload, &result))
 	require.NotNil(t, result.StatementDiagnostics)
 	require.NotNil(t, result.StatementDiagnostics.Summary)
-	require.Equal(t, s.resourceSummary.LockRead, result.StatementDiagnostics.Summary.LockRead)
-	require.Equal(t, uuid.UUID(s.StatementID), result.StatementDiagnostics.Summary.LockRead.StatementID)
+	require.Equal(t, &models.DiagnosticLockRead{
+		AttemptCount:  s.resourceSummary.LockRead.AttemptCount,
+		AcquisitionNS: uint64(100 * time.Millisecond),
+		Seen:          1, LastIncomplete: "acquisition", Outcome: "failed",
+	}, result.StatementDiagnostics.Summary.LockRead)
+	require.Equal(t, uuid.UUID(s.StatementID), s.resourceSummary.LockRead.StatementID)
+	require.NotContains(t, string(payload), `"statement_id"`)
+	require.NotContains(t, string(payload), uuid.UUID(s.StatementID).String())
 }

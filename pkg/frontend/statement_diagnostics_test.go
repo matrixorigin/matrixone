@@ -381,5 +381,13 @@ func TestLockReadCompactProjectionRetainsBoundedScalarWhenPlanWasCaptured(t *tes
 	var result models.ExplainData
 	require.NoError(t, json.Unmarshal(out.Bytes(), &result))
 	require.NotNil(t, result.StatementDiagnostics)
-	require.Equal(t, lockRead, result.StatementDiagnostics.Summary.LockRead)
+	require.Equal(t, &models.DiagnosticLockRead{
+		AttemptCount: math.MaxUint64, AcquisitionNS: math.MaxUint64, LogtailNS: math.MaxUint64,
+		PKCheckNS: math.MaxUint64, PKReadinessNS: math.MaxUint64, Seen: 15, Conflict: true,
+		RemotePKSubstagesUnavailable: true, LastIncomplete: "pk_readiness", Outcome: "success",
+	}, result.StatementDiagnostics.Summary.LockRead)
+	require.NotContains(t, out.String(), `"statement_id"`)
+	require.NotContains(t, out.String(), lockRead.StatementID.String())
+	require.NotContains(t, out.String(), `"observed_conflict_txn_id"`)
+	require.NotContains(t, out.String(), lockRead.ObservedConflictTxnID)
 }

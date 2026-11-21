@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,26 +45,54 @@ func TestLockReadQueryContextUsesCurrentSelectOwner(t *testing.T) {
 	selectPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
 		StmtType: plan.Query_SELECT, Nodes: []*plan.Node{{NodeType: plan.Node_LOCK_OP}},
 	}}}
-	selectCompile := &Compile{stmt: &tree.Select{}, pn: selectPlan, resourceAttemptOwnerEligible: true}
-	query := selectCompile.lockReadQueryContext(ctx)
+	proc := testutil.NewProcess(t)
+	selectCompile := NewCompile("test", "test", "", "", "", newStubEngine(), proc, &tree.Select{}, false, nil, time.Now())
+	t.Cleanup(selectCompile.Release)
+	selectCompile.pn = selectPlan
+	selectCompile.SetResourceAttemptOwnerEligible()
+	require.NoError(t, selectCompile.validateLockPlan(selectCompile.pn))
+	query := selectCompile.lockReadQueryContext(ctx, selectCompile.resourceAttemptOwnerEligible)
 	require.Same(t, root, resource.LockReadRootFromContext(query))
 
 	for _, c := range []*Compile{
 		{stmt: &tree.Update{}, pn: selectPlan, resourceAttemptOwnerEligible: true},
 		{stmt: &tree.Delete{}, pn: selectPlan, resourceAttemptOwnerEligible: true},
+		{stmt: (*tree.Select)(nil), pn: selectPlan, resourceAttemptOwnerEligible: true},
 		{stmt: &tree.Select{}, pn: selectPlan, resourceAttemptOwnerEligible: true, isInternal: true},
 		{stmt: &tree.Select{}, pn: selectPlan},
 		{stmt: &tree.Select{}, resourceAttemptOwnerEligible: true},
 		{stmt: &tree.Select{}, pn: &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}}}, resourceAttemptOwnerEligible: true},
-		{stmt: &tree.Select{}, pn: &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_UPDATE}}}, resourceAttemptOwnerEligible: true},
+		{stmt: &tree.Select{}, pn: &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_UPDATE, Nodes: selectPlan.GetQuery().Nodes,
+		}}}, resourceAttemptOwnerEligible: true},
 	} {
-		require.Nil(t, resource.LockReadRootFromContext(c.lockReadQueryContext(query)))
+		require.NoError(t, c.validateLockPlan(c.pn))
+		require.Nil(t, resource.LockReadRootFromContext(c.lockReadQueryContext(query, c.resourceAttemptOwnerEligible)))
 	}
-	require.Nil(t, resource.LockReadRootFromContext(selectCompile.lockReadQueryContext(context.Background())))
+	require.Nil(t, resource.LockReadRootFromContext(selectCompile.lockReadQueryContext(context.Background(), true)))
 	nextRoot := resource.NewRoot(resource.ConnExternal)
 	nextRoot.EnableLockRead()
 	next := resource.ContextWithRoot(query, nextRoot)
-	require.Same(t, nextRoot, resource.LockReadRootFromContext(selectCompile.lockReadQueryContext(next)))
+	require.Same(t, nextRoot, resource.LockReadRootFromContext(selectCompile.lockReadQueryContext(next, true)))
+
+	proc.ReplaceTopCtx(next)
+	require.NoError(t, selectCompile.Reset(proc, time.Now(), nil, "execute prepared_lock_read"))
+	selectCompile.InitPipelineContextToExecuteQuery()
+	require.Same(t, nextRoot, resource.LockReadRootFromContext(proc.Ctx))
+
+	// Retry keeps the statement root and uses its own compiled plan generation.
+	retry := &Compile{proc: proc, stmt: selectCompile.stmt, counterSet: new(perfcounter.CounterSet)}
+	retry.initPipelineContextToRetryQuery(true)
+	require.Nil(t, resource.LockReadRootFromContext(proc.Ctx))
+	retryCtx, _ := process.GetQueryCtxFromProc(proc)
+	require.Same(t, nextRoot, resource.RootFromContext(retryCtx))
+	require.NoError(t, retry.validateLockPlan(selectPlan))
+	retry.initPipelineContextToRetryQuery(true)
+	require.Same(t, nextRoot, resource.LockReadRootFromContext(proc.Ctx))
+	retry.initPipelineContextToRetryQuery(false)
+	require.Nil(t, resource.LockReadRootFromContext(proc.Ctx))
+	require.NoError(t, retry.validateLockPlan(nil))
+	require.False(t, retry.lockingReadPlan)
 }
 
 func TestLockReadPrePipelineAcquisition(t *testing.T) {
@@ -111,6 +140,7 @@ func TestLockReadPrePipelineAcquisition(t *testing.T) {
 				pn:                           &plan.Plan{Plan: &plan.Plan_Query{Query: q}},
 				resourceAttemptOwnerEligible: true, lockMeta: NewLockMeta(), counterSet: new(perfcounter.CounterSet),
 			}
+			require.NoError(t, c.validateLockPlan(c.pn))
 			defer c.lockMeta.clear(proc)
 			if tc.granularity == lock.Granularity_Row {
 				eng := mock_frontend.NewMockEngine(ctrl)
