@@ -18,57 +18,46 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
-func autoIncrAttr(name string, autoIncr, hidden bool) *engine.AttributeDef {
-	return &engine.AttributeDef{Attr: engine.Attribute{Name: name, AutoIncrement: autoIncr, IsHidden: hidden}}
-}
-
-// A table without a primary key gets a hidden auto-increment fake pk column.
-// It must not be reported as the table's AUTO_INCREMENT column.
-func TestGetTableAutoIncrColSkipsFakePrimaryKey(t *testing.T) {
-	// no user auto-increment column: only the fake pk
-	defs := []engine.TableDef{
-		autoIncrAttr("a", false, false),
-		autoIncrAttr(catalog.FakePrimaryKeyColName, true, true),
+func TestGetTableAutoIncrCol(t *testing.T) {
+	auto := plan.Type{AutoIncr: true}
+	fakePK := &plan.ColDef{Name: catalog.FakePrimaryKeyColName, Typ: auto, Hidden: true}
+	userColumn := &plan.ColDef{Name: "id", OriginName: "ID", Typ: auto}
+	for _, tc := range []struct {
+		name string
+		def  *plan.TableDef
+		want string
+	}{
+		{
+			name: "hidden fake primary key only",
+			def:  &plan.TableDef{Cols: []*plan.ColDef{{Name: "payload"}, fakePK}},
+		},
+		{
+			name: "first user allocator",
+			def: &plan.TableDef{Cols: []*plan.ColDef{
+				nil,
+				{Name: catalog.Row_ID, Typ: auto, Hidden: true},
+				fakePK,
+				userColumn,
+				{Name: "another", Typ: auto},
+			}},
+			want: "id",
+		},
+		{
+			name: "visible fake primary key name",
+			def:  &plan.TableDef{Cols: []*plan.ColDef{{Name: catalog.FakePrimaryKeyColName, Typ: auto}}},
+			want: catalog.FakePrimaryKeyColName,
+		},
+		{
+			name: "view over an auto increment column",
+			def:  &plan.TableDef{ViewSql: &plan.ViewDef{View: "select ID from t"}, Cols: []*plan.ColDef{userColumn}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, getTableAutoIncrCol(tc.def))
+		})
 	}
-	require.Equal(t, "", getTableAutoIncrCol(defs))
-
-	// fake pk listed before a user auto-increment column (no pk, auto_increment unique key)
-	defs = []engine.TableDef{
-		autoIncrAttr(catalog.FakePrimaryKeyColName, true, true),
-		autoIncrAttr("id", true, false),
-	}
-	require.Equal(t, "id", getTableAutoIncrCol(defs))
-
-	// ordinary user auto-increment column
-	defs = []engine.TableDef{
-		autoIncrAttr("id", true, false),
-		autoIncrAttr("b", false, false),
-	}
-	require.Equal(t, "id", getTableAutoIncrCol(defs))
-
-	// views have no AUTO_INCREMENT
-	defs = []engine.TableDef{&engine.ViewDef{}, autoIncrAttr("id", true, false)}
-	require.Equal(t, "", getTableAutoIncrCol(defs))
-}
-
-// A visible user column that reuses the fake pk name is a real
-// AUTO_INCREMENT column and must not be skipped by the fake-pk filter.
-func TestGetTableAutoIncrColKeepsVisibleFakePkNameColumn(t *testing.T) {
-	// explicit primary key: MO adds no hidden fake pk, and the visible
-	// same-name column is the table's real AUTO_INCREMENT column.
-	defs := []engine.TableDef{
-		autoIncrAttr("a", false, false),
-		autoIncrAttr(catalog.FakePrimaryKeyColName, true, false),
-	}
-	require.Equal(t, catalog.FakePrimaryKeyColName, getTableAutoIncrCol(defs))
-
-	// the hidden synthetic fake pk is still skipped.
-	defs = []engine.TableDef{
-		autoIncrAttr(catalog.FakePrimaryKeyColName, true, true),
-	}
-	require.Equal(t, "", getTableAutoIncrCol(defs))
 }

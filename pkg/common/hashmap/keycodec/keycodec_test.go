@@ -64,15 +64,6 @@ func TestValidVectorsAcceptsBroadcastConstants(t *testing.T) {
 	constantNull := vector.NewConstNull(types.T_int32.ToType(), 1, mp)
 	emptyConstant := vector.NewConstNull(types.T_int32.ToType(), 0, mp)
 	groupingConstant := vector.NewRollupConst(types.T_int32.ToType(), 1, mp)
-	provenanceConstant, err := vector.NewConstFixed(types.T_int32.ToType(), int32(7), 2, mp)
-	require.NoError(t, err)
-	require.NoError(t, provenanceConstant.SetPrepareParamKindsWithMP(
-		[]vector.PrepareParamKind{
-			vector.PrepareParamInteger,
-			vector.PrepareParamFloat,
-		},
-		mp,
-	))
 	defer func() {
 		flat.Free(mp)
 		short.Free(mp)
@@ -80,7 +71,6 @@ func TestValidVectorsAcceptsBroadcastConstants(t *testing.T) {
 		constantNull.Free(mp)
 		emptyConstant.Free(mp)
 		groupingConstant.Free(mp)
-		provenanceConstant.Free(mp)
 		require.Zero(t, mp.CurrNB())
 	}()
 	require.NoError(t, vector.AppendFixedList(flat, []int32{1, 2, 3}, nil, mp))
@@ -100,7 +90,6 @@ func TestValidVectorsAcceptsBroadcastConstants(t *testing.T) {
 		{name: "empty const for rows", vecs: []*vector.Vector{emptyConstant}, rows: 1, want: false},
 		{name: "empty const for empty input", vecs: []*vector.Vector{emptyConstant}, rows: 0, want: true},
 		{name: "short grouping const", vecs: []*vector.Vector{groupingConstant}, rows: 3, want: false},
-		{name: "short provenance const", vecs: []*vector.Vector{provenanceConstant}, rows: 3, want: false},
 		{name: "nil vector", vecs: []*vector.Vector{nil}, rows: 3, want: false},
 		{name: "no vectors", rows: 3, want: false},
 		{name: "negative rows", vecs: []*vector.Vector{constant}, rows: -1, want: false},

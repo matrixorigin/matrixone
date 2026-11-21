@@ -15,6 +15,8 @@
 package colexec
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -80,6 +82,30 @@ func (bs *Batches) CopyIntoBatchesWithAllocation(
 	proc *process.Process,
 	selection *vector.AllocationAccountSelection,
 ) (err error) {
+	return bs.copyWithAllocation(src, proc, selection, 0)
+}
+
+// CopyIntoBoundedBatches retains ordinary vectors, opening a new batch when
+// either the row limit or the physical allocation limit of a column is reached.
+func (bs *Batches) CopyIntoBoundedBatches(
+	src *batch.Batch,
+	proc *process.Process,
+	selection *vector.AllocationAccountSelection,
+) error {
+	for _, vec := range src.Vecs {
+		if vec == nil {
+			return mpool.ErrAllocationAccountInvalid
+		}
+	}
+	return bs.copyWithAllocation(src, proc, selection, mpool.MaxAllocationSize())
+}
+
+func (bs *Batches) copyWithAllocation(
+	src *batch.Batch,
+	proc *process.Process,
+	selection *vector.AllocationAccountSelection,
+	allocationLimit int64,
+) (err error) {
 	if len(bs.Buf) > 0 &&
 		!vector.AllocationAccountSelectionsEqual(
 			bs.Buf[len(bs.Buf)-1].AllocationAccountSelection(),
@@ -110,12 +136,13 @@ func (bs *Batches) CopyIntoBatchesWithAllocation(
 			tailCheckpoints[i] = originalTail.Vecs[i].MakeAppendCheckpoint()
 		}
 	}
-	if err = bs.copyIntoBatches(src, proc, selection); err == nil {
+	if err = bs.copyIntoBatches(src, proc, selection, allocationLimit); err == nil {
 		return nil
 	}
 	for i := originalLen; i < len(bs.Buf); i++ {
 		bs.Buf[i].Clean(proc.Mp())
 	}
+	clear(bs.Buf[originalLen:])
 	bs.Buf = bs.Buf[:originalLen]
 	if originalNil {
 		bs.Buf = nil
@@ -138,6 +165,7 @@ func (bs *Batches) copyIntoBatches(
 	src *batch.Batch,
 	proc *process.Process,
 	selection *vector.AllocationAccountSelection,
+	allocationLimit int64,
 ) (err error) {
 	if bs.Buf == nil {
 		bs.Buf = make([]*batch.Batch, 0, 16)
@@ -151,7 +179,8 @@ func (bs *Batches) copyIntoBatches(
 	}
 
 	var tmp *batch.Batch
-	if src.RowCount() == DefaultBatchSize {
+	if src.RowCount() == DefaultBatchSize &&
+		(allocationLimit == 0 || appendableRows(nil, src, 0, DefaultBatchSize, allocationLimit) == DefaultBatchSize) {
 		if selection == nil {
 			tmp, err = src.Dup(proc.Mp())
 		} else {
@@ -166,6 +195,9 @@ func (bs *Batches) copyIntoBatches(
 			}
 			return err
 		}
+		if allocationLimit != 0 {
+			tmp.SetAttributes(slices.Clone(tmp.Attrs))
+		}
 		bs.MemSize += int64(tmp.Size())
 		bs.Buf = append(bs.Buf, tmp)
 		lenBuf := len(bs.Buf)
@@ -177,44 +209,109 @@ func (bs *Batches) copyIntoBatches(
 	}
 
 	offset := 0
-	appendRows := 0
 	length := src.RowCount()
 
 	for offset < length {
 		lenBuf := len(bs.Buf)
+		var rows int
+		tmp = nil
 		if lenBuf > 0 && bs.Buf[lenBuf-1].RowCount() != DefaultBatchSize {
 			tmp = bs.Buf[lenBuf-1]
+			if len(tmp.Vecs) != len(src.Vecs) {
+				return moerr.NewInternalError(proc.Ctx, "unexpected error happens in batch append")
+			}
 			if !vector.AllocationAccountSelectionsEqual(
 				tmp.AllocationAccountSelection(),
 				selection,
 			) {
 				return mpool.ErrAllocationAccountMismatch
 			}
-		} else {
-			preAllocSize := length - offset
-			if preAllocSize > DefaultBatchSize {
-				preAllocSize = DefaultBatchSize
+			rows = min(length-offset, DefaultBatchSize-tmp.RowCount())
+			if allocationLimit != 0 {
+				rows = appendableRows(tmp, src, offset, rows, allocationLimit)
+				if rows == 0 {
+					bs.MemSize += int64(tmp.Size())
+					tmp = nil
+				}
+			}
+		}
+		if tmp == nil {
+			rows = min(length-offset, DefaultBatchSize)
+			if allocationLimit != 0 {
+				rows = appendableRows(nil, src, offset, rows, allocationLimit)
+				if rows == 0 {
+					return mpool.ErrAllocationAllocatorLimit
+				}
 			}
 			tmp, err = proc.NewBatchFromSrcWithAllocation(
 				src,
-				preAllocSize,
+				rows,
 				selection,
 			)
 			if err != nil {
 				return err
 			}
+			if allocationLimit != 0 {
+				tmp.SetAttributes(slices.Clone(tmp.Attrs))
+			}
 			bs.Buf = append(bs.Buf, tmp)
 		}
-		appendRows, err = appendToFixedSizeFromOffset(tmp, src, offset, proc)
-		if err != nil {
+		if err = appendBatchRange(tmp, src, offset, rows, proc); err != nil {
 			return err
 		}
 		if tmp.RowCount() == DefaultBatchSize {
 			bs.MemSize += int64(tmp.Size())
 		}
-		offset += appendRows
+		offset += rows
 	}
 	return nil
+}
+
+// appendableRows projects UnionBatch's physical copies, one column at a time.
+// Only ranges whose area cannot be bounded in constant time inspect values.
+func appendableRows(dst, src *batch.Batch, start, rows int, limit int64) int {
+	var dstRows int
+	if dst != nil {
+		dstRows = dst.RowCount()
+	}
+	for i, vec := range src.Vecs {
+		if size := vec.GetType().TypeSize(); int64(dstRows+rows)*int64(size) > limit {
+			rows = min(rows, max(0, int(limit/int64(size))-dstRows))
+		}
+		if rows == 0 || !vec.GetType().IsVarlen() {
+			continue
+		}
+		available := limit
+		if dst != nil {
+			available -= int64(len(dst.Vecs[i].GetArea()))
+		}
+		if vec.IsConst() {
+			// UnionBatch copies a flat constant once and fills the descriptors.
+			if vector.VarlenaPayloadSize(vec, 0) > available {
+				return 0
+			}
+			continue
+		}
+		if !vec.IsDictionary() {
+			area := int64(len(vec.GetArea()))
+			if area == 0 || (vec.VarlenaAreaIsDisjoint() && area <= available) || area <= available/int64(rows) {
+				continue
+			}
+			if vec.CanCopyWholeVarlenaArea() && start == 0 && rows == vec.Length() {
+				// UnionBatch would copy the whole area, including dead bytes.
+				// Use a partial range so it uses only live descriptors instead.
+				rows--
+			}
+		}
+		for row := 0; row < rows; row++ {
+			available -= vector.VarlenaPayloadSize(vec, start+row)
+			if available < 0 {
+				rows = row
+				break
+			}
+		}
+	}
+	return rows
 }
 
 func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error {
@@ -282,20 +379,10 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 	return nil
 }
 
-func appendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int, proc *process.Process) (int, error) {
+func appendBatchRange(dst *batch.Batch, src *batch.Batch, offset, length int, proc *process.Process) error {
 	var err error
-	if dst == nil {
-		panic("should not be nil")
-	}
-	if dst.RowCount() >= DefaultBatchSize {
-		panic("can't call AppendToFixedSizeFromOffset when batch is full!")
-	}
 	if len(dst.Vecs) != len(src.Vecs) {
-		return 0, moerr.NewInternalError(proc.Ctx, "unexpected error happens in batch append")
-	}
-	length := DefaultBatchSize - dst.RowCount()
-	if length+offset > src.RowCount() {
-		length = src.RowCount() - offset
+		return moerr.NewInternalError(proc.Ctx, "unexpected error happens in batch append")
 	}
 	var localCheckpoints [16]vector.AppendCheckpoint
 	var checkpoints []vector.AppendCheckpoint
@@ -306,7 +393,7 @@ func appendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int,
 	}
 	for i := range dst.Vecs {
 		if err := dst.Vecs[i].MaterializeOwned(proc.Mp()); err != nil {
-			return 0, err
+			return err
 		}
 		checkpoints[i] = dst.Vecs[i].MakeAppendCheckpoint()
 	}
@@ -315,10 +402,10 @@ func appendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int,
 			for j := 0; j <= i; j++ {
 				err = vector.JoinAppendRollbackError(err, dst.Vecs[j].RollbackAppend(checkpoints[j], length))
 			}
-			return 0, err
+			return err
 		}
 		dst.Vecs[i].SetSorted(false)
 	}
 	dst.AddRowCount(length)
-	return length, nil
+	return nil
 }

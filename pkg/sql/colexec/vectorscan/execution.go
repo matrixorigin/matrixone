@@ -143,7 +143,7 @@ func foldScalarExpr(expr **plan.Expr, proc *process.Process) error {
 	if vec == nil || vec.Length() == 0 {
 		return nil
 	}
-	lit := rule.GetConstantValue(vec, true, 0)
+	lit := rule.GetConstantValue(vec, true, 0, rule.ExprStringSource(*expr, proc))
 	if lit == nil {
 		return nil
 	}
@@ -211,7 +211,7 @@ func (b *Execution) RequestAt(row int, identity searchplugin.ScanIdentity) (req 
 		if vec.IsConst() {
 			at = 0
 		}
-		lit := rule.GetConstantValue(vec, true, at)
+		lit := rule.GetConstantValue(vec, true, at, rule.ExprStringSource(b.spec.AlgoExprs[i], nil))
 		if lit == nil {
 			return searchplugin.Request{}, false, moerr.NewInvalidInputNoCtxf(
 				"vector index algorithm expression %s did not evaluate to a constant", b.spec.AlgoExprNames[i])

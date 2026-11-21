@@ -579,12 +579,6 @@ func TestBoundedRunsPreserveTransientMetadataAtSink(t *testing.T) {
 			}
 			input.SetRowCount(4)
 			input.Vecs[1].GetGrouping().Add(1, 3)
-			require.NoError(t, input.Vecs[1].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
-				vector.PrepareParamFloat, vector.PrepareParamNone, vector.PrepareParamInteger, vector.PrepareParamFloat,
-			}, mp))
-			require.NoError(t, input.Vecs[1].SetStringSourcesWithMP([]types.StringSource{
-				types.StringSourceCOMStmt, types.StringSourceSQLPrepare, types.StringSourceExpression, types.StringSourceCOMStmt,
-			}, mp))
 			require.NoError(t, input.Vecs[1].SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
 				types.RuntimeStringBinary, types.RuntimeStringText, types.RuntimeStringInherit, types.RuntimeStringBinary,
 			}, mp))
@@ -596,8 +590,6 @@ func TestBoundedRunsPreserveTransientMetadataAtSink(t *testing.T) {
 					require.False(t, seen[id])
 					seen[id] = true
 					require.Equal(t, input.Vecs[1].GetGrouping().Contains(uint64(original)), got.Vecs[1].GetGrouping().Contains(uint64(row)))
-					require.Equal(t, input.Vecs[1].GetPrepareParamKindAt(original), got.Vecs[1].GetPrepareParamKindAt(row))
-					require.Equal(t, input.Vecs[1].GetStringSourceAt(original), got.Vecs[1].GetStringSourceAt(row))
 					require.Equal(t, input.Vecs[1].GetRuntimeStringDomainAt(original), got.Vecs[1].GetRuntimeStringDomainAt(row))
 				}
 			}}
@@ -862,25 +854,18 @@ func TestBoundedRunSortFailureReleasesAndResets(t *testing.T) {
 	input := batch.NewWithSchema(true, attrs, typs)
 	t.Cleanup(func() { input.Clean(mp) })
 	const rows = 128
-	sources := make([]types.StringSource, rows)
 	for i := 0; i < rows; i++ {
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(rows-1-i), false, mp))
 		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("value"), false, mp))
-		if i%2 == 0 {
-			sources[i] = types.StringSourceCOMStmt
-		} else {
-			sources[i] = types.StringSourceSQLPrepare
-		}
 	}
 	input.SetRowCount(rows)
-	require.NoError(t, input.Vecs[1].SetStringSourcesWithMP(sources, mp))
 	file := &countFileSinker{}
 	sink := NewSinker(0, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, mp, nil,
 		WithMemorySizeThreshold(capacity), WithTailSizeCap(0), WithOffHeap(), WithBoundedRuns())
 	t.Cleanup(func() { require.NoError(t, sink.Close()) })
 	require.NoError(t, sink.Write(context.Background(), input))
 	require.Len(t, sink.GetInMemoryData(), 1)
-	// Leave less than the 128-byte sidecar needed by sorting.
+	// Leave too little memory for the sync to complete.
 	remaining := capacity - int(mp.CurrNB()) - 64
 	require.Positive(t, remaining)
 	filler, err := mp.Alloc(remaining, true)
@@ -898,51 +883,6 @@ func TestBoundedRunSortFailureReleasesAndResets(t *testing.T) {
 	filler = nil
 	sink.Reset()
 	require.NoError(t, sink.Write(context.Background(), input))
-	require.NoError(t, sink.Sync(context.Background()))
-	require.Equal(t, rows, file.rows)
-}
-
-func TestUnboundedRunSortFailureKeepsStagedData(t *testing.T) {
-	const capacity = 1 << 20
-	mp, err := mpool.NewMPool("unbounded-sort-failure", capacity, mpool.NoFixed)
-	require.NoError(t, err)
-	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	attrs := []string{"key"}
-	typs := []types.Type{types.T_text.ToType()}
-	input := batch.NewWithSchema(true, attrs, typs)
-	t.Cleanup(func() { input.Clean(mp) })
-	const rows = 128
-	sources := make([]types.StringSource, rows)
-	for i := range sources {
-		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(fmt.Sprintf("%03d", rows-1-i)), false, mp))
-		if i%2 == 0 {
-			sources[i] = types.StringSourceCOMStmt
-		} else {
-			sources[i] = types.StringSourceSQLPrepare
-		}
-	}
-	input.SetRowCount(rows)
-	require.NoError(t, input.Vecs[0].SetStringSourcesWithMP(sources, mp))
-	file := &countFileSinker{}
-	sink := NewSinker(0, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, mp, nil,
-		WithMemorySizeThreshold(capacity), WithTailSizeCap(0), WithOffHeap())
-	t.Cleanup(func() { require.NoError(t, sink.Close()) })
-	require.NoError(t, sink.Write(context.Background(), input))
-	require.Len(t, sink.GetInMemoryData(), 1)
-	remaining := capacity - int(mp.CurrNB()) - 64
-	require.Positive(t, remaining)
-	filler, err := mp.Alloc(remaining, true)
-	require.NoError(t, err)
-	defer func() {
-		if filler != nil {
-			mp.Free(filler)
-		}
-	}()
-	require.Error(t, sink.Sync(context.Background()))
-	require.Len(t, sink.GetInMemoryData(), 1)
-	require.Equal(t, "127", string(sink.GetInMemoryData()[0].Vecs[0].GetBytesAt(0)))
-	mp.Free(filler)
-	filler = nil
 	require.NoError(t, sink.Sync(context.Background()))
 	require.Equal(t, rows, file.rows)
 }

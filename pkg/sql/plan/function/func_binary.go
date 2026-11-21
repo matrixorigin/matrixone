@@ -2597,7 +2597,7 @@ func dateInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	rss := vector.MustFixedColNoTypeCheck[types.Date](rsVec)
 	rsNull := rsVec.GetNulls()
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 
@@ -2768,7 +2768,7 @@ func timestampInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		loc = time.Local
 	}
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 	for i := uint64(0); i < uint64(length); i++ {
@@ -2884,7 +2884,7 @@ func timeInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	values := vector.MustFixedColNoTypeCheck[types.Time](rsv)
 	nullsVec := rsv.GetNulls()
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(nullsVec, 0, uint64(length))
+		nullsVec.AddRange(0, uint64(length))
 		return nil
 	}
 	for i := uint64(0); i < uint64(length); i++ {
@@ -2941,7 +2941,7 @@ func timeIntervalRaw(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	values := vector.MustFixedColNoTypeCheck[types.Time](rs.GetResultVector())
 	nullsVec := rs.GetResultVector().GetNulls()
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(nullsVec, 0, uint64(length))
+		nullsVec.AddRange(0, uint64(length))
 		return nil
 	}
 	for i := uint64(0); i < uint64(length); i++ {

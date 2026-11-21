@@ -236,9 +236,7 @@ func convertColIntoSql(
 		byteLength := (bitLength + 7) / 8
 		b := types.EncodeUint64(&value)[:byteLength]
 		slices.Reverse(b)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendBytes(sqlBuff, b)
-		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendHex(sqlBuff, b)
 	case types.T_int8:
 		value := data.(int8)
 		sqlBuff = appendInt64(sqlBuff, int64(value))

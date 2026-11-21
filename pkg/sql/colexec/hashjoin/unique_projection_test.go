@@ -56,15 +56,11 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 		for row, value := range values {
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), source == 0 && row == 1, proc.Mp()))
 		}
-		origin := types.StringSourceLiteral
 		if source == 1 {
-			origin = types.StringSourceExpression
-			bat.Vecs[0].SetPrepareParamKind(vector.PrepareParamInteger)
 			bat.Vecs[0].SetIsBinaryString(true)
 		} else {
 			bat.Vecs[0].GetGrouping().Add(1)
 		}
-		require.NoError(t, bat.Vecs[0].SetStringSource(origin))
 		bat.SetRowCount(2)
 	}
 	// The helper's input is resolved global build ordinals, with the existing
@@ -87,15 +83,9 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 	for row, value := range []string{"a", "", "c", "d", "a"} {
 		require.Equal(t, row == 1, payload.IsNull(uint64(row)))
 		require.Equal(t, row == 1, payload.GetGrouping().Contains(uint64(row)))
-		origin, kind := types.StringSourceLiteral, vector.PrepareParamNone
 		binary := row == 2 || row == 3
-		if binary {
-			origin, kind = types.StringSourceExpression, vector.PrepareParamInteger
-		}
-		require.Equal(t, origin, payload.GetStringSourceAt(row))
 		if row != 1 {
 			require.Equal(t, value, string(payload.GetBytesAt(row)))
-			require.Equal(t, kind, payload.GetPrepareParamKindAt(row))
 			require.Equal(t, binary, payload.GetIsBinaryStringAt(row))
 		}
 	}
@@ -209,15 +199,11 @@ func TestHashJoinUniqueProjectionProbeRange(t *testing.T) {
 			if shape == "constant" {
 				source.ToConst()
 				source.SetLength(6)
-				source.SetPrepareParamKind(vector.PrepareParamFloat)
 				source.SetIsBinaryString(true)
-				require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
 			} else {
 				source.SetNull(2)
 				physical, _ := vector.MustVarlenaRawData(source)
 				physical[2].SetOffsetLen(1<<30, 65536) // NULL payload must not be read.
-				require.NoError(t, source.SetPrepareParamKindAtWithMP(1, vector.PrepareParamInteger, proc.Mp()))
-				require.NoError(t, source.SetStringSourceAtWithMP(1, types.StringSourceLiteral, proc.Mp()))
 				require.NoError(t, source.SetRuntimeStringDomainAtWithMP(4, types.RuntimeStringBinary, proc.Mp()))
 			}
 			source.GetGrouping().Add(3)
@@ -241,8 +227,6 @@ func TestHashJoinUniqueProjectionProbeRange(t *testing.T) {
 			for row := range want.Length() {
 				require.Equal(t, want.IsNull(uint64(row)), got.IsNull(uint64(row)))
 				require.Equal(t, want.GetGrouping().Contains(uint64(row)), got.GetGrouping().Contains(uint64(row)))
-				require.Equal(t, want.GetPrepareParamKindAt(row), got.GetPrepareParamKindAt(row))
-				require.Equal(t, want.GetStringSourceAt(row), got.GetStringSourceAt(row))
 				require.Equal(t, want.GetRuntimeStringDomainAt(row), got.GetRuntimeStringDomainAt(row))
 				if !want.IsNull(uint64(row)) {
 					require.Equal(t, want.GetBytesAt(row), got.GetBytesAt(row))
@@ -517,7 +501,11 @@ func benchmarkHashJoinUniqueProjection(b *testing.B, typ types.Type, nullable bo
 									continue
 								}
 								idx := int64(match - 1)
-								if err := ctr.appendOneMatch(arg, proc, int64(ctr.lastIdx+row), idx/colexec.DefaultBatchSize, idx%colexec.DefaultBatchSize); err != nil {
+								selected := outputRow{
+									left: ctr.leftBat, leftRow: int64(ctr.lastIdx + row),
+									right: ctr.rightBats[idx/colexec.DefaultBatchSize], rightRow: idx % colexec.DefaultBatchSize,
+								}
+								if err := ctr.appendOutputRow(arg, proc, selected); err != nil {
 									b.Fatal(err)
 								}
 							}
