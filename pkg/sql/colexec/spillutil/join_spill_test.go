@@ -258,7 +258,6 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 	for _, value := range []string{"raw", "text", "plain"} {
 		require.NoError(t, vector.AppendBytes(source.Vecs[1], []byte(value), false, proc.Mp()))
 	}
-	require.NoError(t, source.Vecs[1].SetIsBinaryStringAt(0, true))
 	defer source.Clean(proc.Mp())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
 	require.NoError(t, err)
@@ -279,8 +278,8 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, got.RowCount())
 	require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColNoTypeCheck[int32](got.Vecs[0]))
-	require.True(t, got.Vecs[1].GetIsBinaryStringAt(0))
-	require.False(t, got.Vecs[1].GetIsBinaryStringAt(1))
+	require.Equal(t, "raw", got.Vecs[1].GetStringAt(0))
+	require.Equal(t, "text", got.Vecs[1].GetStringAt(1))
 	got.Clean(proc.Mp())
 	_, err = reader.ReadBatch(proc, decoded)
 	require.ErrorIs(t, err, io.EOF)

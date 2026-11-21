@@ -308,7 +308,6 @@ func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 			t.Cleanup(func() { arg.Free(proc, false, nil) })
 			arg.AppendChild(child)
 			var wantText string
-			var wantDomain types.RuntimeStringDomain
 			for start := 0; start < 515; start += 257 {
 				end := min(start+257, 515)
 				rows := make([]topOneRunRow, end-start)
@@ -323,17 +322,14 @@ func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 				child.WithBatchs([]*batch.Batch{bat})
 				payload := vector.NewVec(types.T_varchar.ToType())
 				bat.Vecs = append(bat.Vecs, payload)
-				domains := make([]types.RuntimeStringDomain, len(rows))
 				for i := range rows {
 					id := start + i
 					text := fmt.Sprintf("%d:%s", id, strings.Repeat("payload", 12))
 					require.NoError(t, vector.AppendBytes(payload, []byte(text), false, proc.Mp()))
-					domains[i] = []types.RuntimeStringDomain{types.RuntimeStringInherit, types.RuntimeStringText, types.RuntimeStringBinary}[id%3]
 					if id == winner {
-						wantText, wantDomain = text, domains[i]
+						wantText = text
 					}
 				}
-				require.NoError(t, payload.SetRuntimeStringDomainsWithMP(domains, proc.Mp()))
 			}
 			require.NoError(t, arg.Prepare(proc))
 			result, err := arg.Call(proc)
@@ -343,7 +339,6 @@ func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 			require.Equal(t, int64(winner), vector.GetFixedAtWithTypeCheck[int64](result.Batch.Vecs[3], 0))
 			payload := result.Batch.Vecs[4]
 			require.Equal(t, wantText, string(payload.GetBytesAt(0)))
-			require.Equal(t, wantDomain, payload.GetRuntimeStringDomainAt(0))
 			result, err = arg.Call(proc)
 			require.NoError(t, err)
 			require.True(t, result.Batch == nil || result.Status == vm.ExecStop)

@@ -203,18 +203,12 @@ func consumeReplayColumnsWithFaults(ctx context.Context, bs []*batch.Batch, mp *
 			w.Clean(nil)
 		}
 		if tail < rows {
-			if carry == nil {
-				carry = batch.NewWithSize(len(b.Vecs))
-				carry.Attrs = b.Attrs
-				for j, v := range b.Vecs {
-					carry.Vecs[j] = vector.NewVec(*v.GetType())
-				}
+			carry = batch.NewWithSize(len(b.Vecs))
+			carry.Attrs = b.Attrs
+			for j, v := range b.Vecs {
+				carry.Vecs[j] = vector.NewVec(*v.GetType())
 			}
 			if err := copyCarry(carry, b, tail, rows-tail); err != nil {
-				return err
-			}
-		} else if carry != nil {
-			if err := flush(); err != nil {
 				return err
 			}
 		}

@@ -5,7 +5,7 @@ create table no_pk(a int, b varchar(10));
 insert into no_pk values (1, 'x'), (2, 'y'), (3, 'z');
 create table with_pk(a int primary key, b int);
 insert into with_pk values (1, 1);
-create table with_ai(id int auto_increment primary key, b int);
+create table with_ai(ID int auto_increment primary key, b int);
 insert into with_ai(b) values (1), (2);
 create table no_pk_ai(id int auto_increment, b int, unique key(id));
 insert into no_pk_ai(b) values (1), (2), (3);
@@ -32,4 +32,8 @@ visible_fake_pk  ¦  3
 select internal_auto_increment('ai_no_pk_meta', 'visible_fake_pk');
 ➤ internal_auto_increment(ai_no_pk_meta, visible_fake_pk)[-5,64,0]  𝄀
 3
+create view ai_view as select ID from with_ai;
+select internal_auto_increment('ai_no_pk_meta', 'ai_view') is null;
+➤ internal_auto_increment(ai_no_pk_meta, ai_view) is null[-6,8,0]  𝄀
+1
 drop database ai_no_pk_meta;

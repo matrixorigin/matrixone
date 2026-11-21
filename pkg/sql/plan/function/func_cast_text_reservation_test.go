@@ -62,8 +62,6 @@ func TestTextAssignmentReservationPreservesOwnedResults(t *testing.T) {
 			values := [][]byte{bytes.Repeat([]byte("a"), 80), nil, []byte("short"),
 				bytes.Repeat([]byte("b"), 110)}
 			proc, source, result := newTextReservationFixture(t, typ, values)
-			// Ordinary assignment must not propagate transient source metadata.
-			source.SetIsBinaryString(true)
 
 			target := vector.NewVec(typ)
 			t.Cleanup(func() { target.Free(proc.Mp()) })
@@ -71,7 +69,6 @@ func TestTextAssignmentReservationPreservesOwnedResults(t *testing.T) {
 			out := result.GetResultVector()
 			require.Equal(t, typ, *out.GetType())
 			require.Equal(t, len(values), out.Length())
-			require.False(t, out.HasBinaryStringMetadata())
 			for row, value := range values {
 				require.Equal(t, value == nil, out.IsNull(uint64(row)))
 				if value != nil {

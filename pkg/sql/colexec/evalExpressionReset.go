@@ -176,14 +176,6 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 	proc *process.Process,
 	atRuntime bool,
 ) (bool, error) {
-	expr.resetFlowControlMetadata()
-	observeSelected := func(index int, folded bool, err error) (bool, error) {
-		if err == nil && folded {
-			expr.observeFlowControlMetadata(
-				expr.parameterResults[index], expr.parameterExecutor[index], []bool{true})
-		}
-		return folded, err
-	}
 	switch expr.fid {
 	case function.ELT:
 		folded, err := expr.tryFoldParameter(proc, atRuntime, 0)
@@ -225,7 +217,7 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 			selected = 1
 		}
 		folded, err = expr.tryFoldParameter(proc, atRuntime, selected)
-		return observeSelected(selected, folded, err)
+		return folded, err
 
 	case function.CASE:
 		parameterCount := len(expr.parameterExecutor)
@@ -239,13 +231,13 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 			if !isNull && value {
 				selected := conditionIndex + 1
 				folded, err = expr.tryFoldParameter(proc, atRuntime, selected)
-				return observeSelected(selected, folded, err)
+				return folded, err
 			}
 		}
 		if parameterCount%2 == 1 {
 			selected := parameterCount - 1
 			folded, err := expr.tryFoldParameter(proc, atRuntime, selected)
-			return observeSelected(selected, folded, err)
+			return folded, err
 		}
 		return true, nil
 
@@ -256,8 +248,6 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 				return folded, err
 			}
 			if !expr.parameterResults[i].IsNull(0) {
-				expr.observeFlowControlMetadata(
-					expr.parameterResults[i], expr.parameterExecutor[i], []bool{true})
 				return true, nil
 			}
 		}
@@ -335,12 +325,6 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 	}
 	if probe != nil && probe.Warned() {
 		return nil
-	}
-	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
-		if err := expr.applyFlowControlMetadata(
-			expr.resultVector.GetResultVector(), execLen, proc.Mp()); err != nil {
-			return err
-		}
 	}
 	if execLen == 1 {
 		expr.resultVector.GetResultVector().ToConst()

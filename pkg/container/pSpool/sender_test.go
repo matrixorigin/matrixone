@@ -29,43 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func TestCachedBatchPreservesStringMetadata(t *testing.T) {
-	mp := mpool.MustNewZeroNoFixed()
-	defer mpool.DeleteMPool(mp)
-
-	source := batch.NewWithSize(1)
-	// A varbinary vector carrying an explicit text domain is non-default
-	// string metadata the copy must preserve.
-	source.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
-	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
-	require.NoError(t, source.Vecs[0].SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
-	require.Equal(t, types.RuntimeStringText, source.Vecs[0].GetRuntimeStringDomainAt(0))
-	source.SetRowCount(1)
-	defer source.Clean(mp)
-
-	cache := initCachedBatch(mp, 1)
-	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
-	require.NoError(t, err)
-	require.Equal(t, "5", copied.Vecs[0].GetStringAt(0))
-	require.Equal(t, types.RuntimeStringText, copied.Vecs[0].GetRuntimeStringDomainAt(0))
-	cache.CacheBatch(useCache, cacheID, copied)
-	cache.free()
-
-	constant := batch.NewWithSize(1)
-	constant.Vecs[0], err = vector.NewConstBytes(types.T_text.ToType(), []byte("raw"), 2, mp)
-	require.NoError(t, err)
-	constant.Vecs[0].SetIsBinaryString(true)
-	constant.SetRowCount(2)
-	defer constant.Clean(mp)
-	constantCache := initCachedBatch(mp, 1)
-	constantCopy, useCache, cacheID, err := constantCache.GetCopiedBatch(constant)
-	require.NoError(t, err)
-	require.True(t, constantCopy.Vecs[0].GetIsBinaryStringAt(0))
-	require.True(t, constantCopy.Vecs[0].GetIsBinaryStringAt(1))
-	constantCache.CacheBatch(useCache, cacheID, constantCopy)
-	constantCache.free()
-}
-
 func TestSpoolCacheNeverDetachesBorrowedVectorBacking(t *testing.T) {
 	data := types.EncodeSlice([]int64{11})
 	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
@@ -159,27 +122,6 @@ func TestSpoolCopiesVarlenDescriptorsAndRetainsBorrowedPayload(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestCachedBatchPreservesMixedBinaryStringRows(t *testing.T) {
-	mp := mpool.MustNewZeroNoFixed()
-	defer mpool.DeleteMPool(mp)
-
-	source := batch.NewWithSize(1)
-	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("raw"), false, mp))
-	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("text"), false, mp))
-	require.NoError(t, source.Vecs[0].SetIsBinaryStringAt(0, true))
-	source.SetRowCount(2)
-	defer source.Clean(mp)
-
-	cache := initCachedBatch(mp, 1)
-	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
-	require.NoError(t, err)
-	require.True(t, copied.Vecs[0].GetIsBinaryStringAt(0))
-	require.False(t, copied.Vecs[0].GetIsBinaryStringAt(1))
-	cache.CacheBatch(useCache, cacheID, copied)
-	cache.free()
-}
-
 func TestCachedBatchMovesAccountedExtraBufferOwnership(t *testing.T) {
 	mp := mpool.MustNewZero()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
@@ -210,43 +152,6 @@ func TestCachedBatchMovesAccountedExtraBufferOwnership(t *testing.T) {
 	require.Zero(t, account.Snapshot().Used)
 	source.Clean(mp)
 	cache.free()
-	account.Seal()
-	_, err = registry.Finalize(account)
-	require.NoError(t, err)
-}
-
-func TestCachedBatchHeterogeneousBinaryStringSingleCopy(t *testing.T) {
-	mp := mpool.MustNewZero()
-	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
-	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
-	require.NoError(t, err)
-
-	source := batch.NewOffHeapWithSize(1)
-	require.NoError(t, source.SetAllocationAccount(selection))
-	source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
-	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
-	require.NoError(t, source.Vecs[0].SetBinaryStringRowsWithMP([]bool{true, false}, mp))
-	source.SetRowCount(2)
-
-	cache := initCachedBatch(mp, 1)
-	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
-	require.NoError(t, err)
-	require.True(t, useCache)
-	require.True(t, copied.Vecs[0].GetIsBinaryStringAt(0))
-	require.False(t, copied.Vecs[0].GetIsBinaryStringAt(1))
-	// The union path owns the destination sidecar. A second metadata copy
-	// would make the account peak exceed the live source+destination usage.
-	snapshot := account.Snapshot()
-	require.Equal(t, snapshot.Used, snapshot.Peak)
-
-	cache.CacheBatch(useCache, cacheID, copied)
-	source.Clean(mp)
-	cache.free()
-	require.Zero(t, account.Snapshot().Used)
 	account.Seal()
 	_, err = registry.Finalize(account)
 	require.NoError(t, err)

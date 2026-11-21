@@ -42,7 +42,6 @@ func TestBatchCopySelection(t *testing.T) {
 	constant, err := NewConstBytes(types.T_varchar.ToType(), []byte("a non-inline constant payload"), 3, mp)
 	require.NoError(t, err)
 	t.Cleanup(func() { constant.Free(mp) })
-	constant.SetIsBinaryString(true)
 	constant.GetGrouping().Add(2)
 
 	// Reuse the batch's vector slots across representation generations. Each
@@ -70,9 +69,6 @@ func TestBatchCopySelection(t *testing.T) {
 				b, err := want.MarshalBinary()
 				require.NoError(t, err)
 				require.Equal(t, b, a)
-				for row := range got.Length() {
-					require.Equal(t, want.GetIsBinaryStringAt(row), got.GetIsBinaryStringAt(row))
-				}
 			}()
 		}
 	}

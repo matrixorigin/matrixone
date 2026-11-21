@@ -91,18 +91,6 @@ func (proc *Process) BuildProcessInfo(
 
 		vec := proc.GetPrepareParams()
 		if vec != nil {
-			var runtimeStringDomains []uint32
-			if vec.HasBinaryStringMetadata() {
-				runtimeStringDomains = make([]uint32, vec.Length())
-				for i := range runtimeStringDomains {
-					runtimeStringDomains[i] = uint32(vec.GetRuntimeStringDomainAt(i))
-				}
-			}
-			runtimeStringDomains, err = RuntimeStringDomainPrepareParamMetadataForRemote(
-				proc.GetService(), vec.Length(), runtimeStringDomains)
-			if err != nil {
-				return procInfo, err
-			}
 			// The wire keeps one source per parameter; they share one value.
 			var stringSources []uint32
 			if source := proc.Base.prepareParamsStringSource; source != types.StringSourceExpression {
@@ -113,11 +101,6 @@ func (proc *Process) BuildProcessInfo(
 			}
 			stringSources, err = StringSourcePrepareParamMetadataForRemote(
 				proc.GetService(), vec.Length(), stringSources)
-			if err != nil {
-				return procInfo, err
-			}
-			binaryStringMetadata, err := BinaryStringPrepareParamMetadataForRemote(
-				proc.GetService(), vec.Length(), proc.Base.prepareParamsBinaryString)
 			if err != nil {
 				return procInfo, err
 			}
@@ -139,11 +122,7 @@ func (proc *Process) BuildProcessInfo(
 				return procInfo, err
 			}
 			procInfo.PrepareParams.IsBin = metadata
-			if binaryStringMetadata != nil {
-				procInfo.PrepareParams.IsBinaryString = binaryStringMetadata
-			}
 			procInfo.PrepareParams.StringSources = stringSources
-			procInfo.PrepareParams.RuntimeStringDomains = runtimeStringDomains
 			if procInfo.PrepareParams.TypedParams, err = encodeTypedPrepareParams(
 				proc.Base.typedPrepareParams, vec.Length()); err != nil {
 				return procInfo, err
@@ -327,12 +306,13 @@ func (c *codecService) Decode(
 	if err != nil {
 		return nil, err
 	}
-	binaryStringMetadata, err := BinaryStringPrepareParamMetadataForRemote(
+	// Binary-string flags and runtime string domains are retired: an older
+	// peer's values are validated and dropped. Plan types carry the domain.
+	if _, err = BinaryStringPrepareParamMetadataForRemote(
 		service,
 		int(value.PrepareParams.Length),
 		value.PrepareParams.IsBinaryString,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, err
 	}
 	stringSources, err := StringSourcePrepareParamMetadataForRemote(
@@ -343,12 +323,11 @@ func (c *codecService) Decode(
 	if err != nil {
 		return nil, err
 	}
-	runtimeStringDomains, err := RuntimeStringDomainPrepareParamMetadataForRemote(
+	if _, err = RuntimeStringDomainPrepareParamMetadataForRemote(
 		service,
 		int(value.PrepareParams.Length),
 		value.PrepareParams.RuntimeStringDomains,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, err
 	}
 	txnOp, err := c.txnClient.NewWithSnapshot(ctx, value.Snapshot)
@@ -412,11 +391,7 @@ func (c *codecService) Decode(
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithMetadata(
-			prepareParams,
-			prepareParamMetadata,
-			binaryStringMetadata,
-		)
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
 		// Older peers could send a different source per parameter; all
 		// parameters of one execution share one origin, so merge them.
 		if len(stringSources) > 0 {
@@ -428,17 +403,6 @@ func (c *codecService) Decode(
 				}
 			}
 			proc.SetPrepareParamsStringSource(merged)
-		}
-		if len(runtimeStringDomains) > 0 {
-			domains := make([]types.RuntimeStringDomain, len(runtimeStringDomains))
-			for i, domain := range runtimeStringDomains {
-				domains[i] = types.RuntimeStringDomain(domain)
-			}
-			if err = prepareParams.SetRuntimeStringDomainsWithMP(domains, proc.Mp()); err != nil {
-				prepareParams.Free(proc.Mp())
-				proc.Free()
-				return nil, err
-			}
 		}
 		typed, err := decodeTypedPrepareParams(
 			value.PrepareParams.TypedParams, prepareParams.Length(), proc.Mp())
