@@ -78,6 +78,12 @@ Compose configures a separate worker endpoint for each CN. The `PYTHON_UDF`
 mo-service role wraps a Go Supervisor; the standalone worker image runs Python
 under init. These are different launch forms for the same Flight service.
 
+During a shutdown upgrade, a retained v4.2.6 `[python-udf-server]` configuration
+logs a migration diagnostic and skips the retired role. To use the development
+adapter, configure `[python-udf-worker]` and explicitly enable the CN Python
+client. Worker configuration and process launch errors leave ordinary SQL
+available.
+
 Gateway and worker must match the current capability contract, including tzdata.
 The worker image replaces its entire zoneinfo tree from the MO runtime base;
 upgrading tzdata also changes the environment digest of definitions. Check existing

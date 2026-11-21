@@ -89,6 +89,36 @@ func TestManagedPythonWorkerExitDoesNotFailServiceSupervisor(t *testing.T) {
 	}
 }
 
+func TestManagedPythonWorkerStartupFailureIsIsolated(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "worker.py"), nil, 0600))
+	for _, tc := range []struct {
+		name string
+		cfg  python.Config
+	}{
+		{name: "invalid config"},
+		{name: "missing interpreter", cfg: python.Config{
+			Address: "127.0.0.1:0", Path: dir, Python: filepath.Join(dir, "missing-python"),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lifecycle := newServiceSupervisor()
+			tasks := stopper.NewStopper("worker-startup-test")
+			t.Cleanup(tasks.Stop)
+			require.NoError(t, startManagedPythonWorker(tc.cfg, tasks, lifecycle))
+
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			require.NoError(t, lifecycle.stopRole(ctx, serviceRolePython))
+			select {
+			case err := <-lifecycle.failureC():
+				t.Fatalf("worker startup delivered a database service failure: %v", err)
+			default:
+			}
+		})
+	}
+}
+
 func TestServiceSupervisorKeepsPythonProviderUntilCNDrains(t *testing.T) {
 	s := newServiceSupervisor()
 	var mu sync.Mutex

@@ -119,6 +119,8 @@ type Config struct {
 	ProxyConfig proxy.Config `toml:"proxy"`
 	// PythonUdfWorkerConfig is the config of the Python UDF worker.
 	PythonUdfWorkerConfig python.Config `toml:"python-udf-worker"`
+	// Released manifests used this role for the retired Python server.
+	legacyPythonUdfServer bool
 	// Observability parameters for the metric/trace
 	Observability config.ObservabilityParameters `toml:"observability"`
 
@@ -194,7 +196,14 @@ func parseFromString(data string, cfg any) error {
 	if err != nil {
 		return err
 	}
-	return cnservice.ValidateSiriusConfigKeys(metadata)
+	if err := cnservice.ValidateSiriusConfigKeys(metadata); err != nil {
+		return err
+	}
+	if serviceConfig, ok := cfg.(*Config); ok {
+		serviceConfig.legacyPythonUdfServer =
+			metadata.IsDefined("python-udf-server") && !metadata.IsDefined("python-udf-worker")
+	}
+	return nil
 }
 
 func (c *Config) validate() error {

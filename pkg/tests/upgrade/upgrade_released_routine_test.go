@@ -74,7 +74,7 @@ func TestReleasedCatalogLoginRepairsRoutineSchema(t *testing.T) {
 						"drop table mo_catalog.mo_user_defined_function",
 						source.ddl,
 						"create database routine_repair",
-						`insert into mo_catalog.mo_user_defined_function(name,owner,args,rettype,body,language,db,definer,type,security_type) values ('legacy_plus_seven',2,'[{"name":"x","type":"bigint"}]','bigint','$1 + 7','sql','routine_repair','root','SQL','INVOKER')`,
+						releasedLegacySQLRoutineRow,
 						`insert into mo_catalog.mo_user_defined_function(name,owner,args,rettype,body,language,db,definer,type,security_type) values ('legacy_python_sibling',2,'[{"name":"x","type":"bigint"},{"name":"y","type":"bigint"}]','bigint','def f(x, y): return x + y','python','routine_repair','root','FUNCTION','INVOKER')`,
 						`insert into mo_catalog.mo_user_defined_function(name,owner,args,rettype,body,language,db,definer,type,security_type) values ('same_arity_python_sibling',2,'[{"name":"x","type":"varchar"}]','varchar','def f(x): return x','python','routine_repair','root','FUNCTION','INVOKER')`,
 						"drop table mo_catalog.mo_function_revisions",
@@ -196,9 +196,71 @@ func TestReleasedCatalogLoginRepairsRoutineSchema(t *testing.T) {
 				t.Run("replace_sql_return_type", func(t *testing.T) {
 					checkSQLRoutineReturnTypeReplacement(t, ctx, tenantDB)
 				})
+				if sourceVersion == "4.0.6" {
+					t.Run("restore_retained_snapshot", func(t *testing.T) {
+						checkRetainedRoutineSnapshotRestore(t, ctx, tenantDB, sqlExecutor, accountID, source.ddl)
+					})
+				}
 			})
 		}
 	})
+}
+
+const releasedLegacySQLRoutineRow = `insert into mo_catalog.mo_user_defined_function(name,owner,args,rettype,body,language,db,definer,type,security_type) values ('legacy_plus_seven',2,'[{"name":"x","type":"bigint"}]','bigint','$1 + 7','sql','routine_repair','root','SQL','INVOKER')`
+
+func checkRetainedRoutineSnapshotRestore(
+	t *testing.T,
+	ctx context.Context,
+	db *sql.DB,
+	sqlExecutor executor.SQLExecutor,
+	accountID uint32,
+	releasedDDL string,
+) {
+	t.Helper()
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	exec := func(statement string) {
+		t.Helper()
+		_, err := conn.ExecContext(ctx, statement)
+		require.NoError(t, err, statement)
+	}
+	exec("use routine_repair")
+	exec("create view released_udf_view as select legacy_plus_seven(5) as result")
+	const readView = "select result from routine_repair.released_udf_view"
+	var result int64
+	require.NoError(t, conn.QueryRowContext(ctx, readView).Scan(&result))
+	require.Equal(t, int64(12), result)
+
+	// The view is already bound. Replace the routine catalog with the released
+	// layout before capturing the snapshot, then repair only the live catalog.
+	opts := executor.Options{}.WithDatabase(catalog.MO_CATALOG).
+		WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()
+	require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+		for _, statement := range []string{
+			"drop table mo_catalog.mo_user_defined_function",
+			releasedDDL,
+			releasedLegacySQLRoutineRow,
+			"drop table mo_catalog.mo_function_revisions",
+		} {
+			res, err := txn.Exec(statement, versions.UpgradeStatementOption(accountID))
+			if err != nil {
+				return err
+			}
+			res.Close()
+		}
+		return nil
+	}, opts))
+	exec("create snapshot routine_repair_before_revision for account")
+	defer exec("drop snapshot routine_repair_before_revision")
+	require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+		return v4_0_7.Handler.HandleTenantUpgrade(ctx, int32(accountID), txn)
+	}, opts))
+
+	exec("drop view released_udf_view")
+	exec(`restore database routine_repair{snapshot="routine_repair_before_revision"}`)
+	require.NoError(t, conn.QueryRowContext(ctx, readView).Scan(&result))
+	require.Equal(t, int64(12), result)
 }
 
 func checkSQLRoutineReturnTypeReplacement(t *testing.T, ctx context.Context, db *sql.DB) {

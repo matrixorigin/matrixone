@@ -264,6 +264,10 @@ func startService(
 	if err != nil {
 		return err
 	}
+	if st == metadata.ServiceType_PYTHON_UDF && cfg.legacyPythonUdfServer {
+		logutil.GetGlobalLogger().Warn("skipping retired [python-udf-server] role; use [python-udf-worker] and explicitly enable the CN Python UDF client to use Arrow Flight")
+		return nil
+	}
 
 	setupServiceRuntime(cfg, stopper)
 
@@ -798,10 +802,12 @@ func startManagedPythonWorker(cfg python.Config, stopper *stopper.Stopper, lifec
 		defer cancelRole()
 		s, err := python.NewSupervisor(cfg)
 		if err != nil {
-			panic(err)
+			logutil.GetGlobalLogger().Error("invalid Python UDF worker configuration", zap.Error(err))
+			return
 		}
 		if err := s.Start(); err != nil {
-			panic(err)
+			logutil.GetGlobalLogger().Error("failed to start Python UDF worker", zap.Error(err))
+			return
 		}
 		workerDone := s.Done()
 		select {

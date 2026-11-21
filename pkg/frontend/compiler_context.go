@@ -1491,7 +1491,11 @@ func readSQLRevision(
 		"select active_revision, namespace_version, security_type from %s where function_id = %d;",
 		baseTable, functionID,
 	)); err != nil {
-		if isMissingCatalogObjectError(err) {
+		// A retained snapshot may predate the revision columns. The
+		// historical binder reports an absent column as ErrBadFieldError.
+		var catalogErr *moerr.Error
+		if isMissingCatalogObjectError(err) ||
+			(snapshot != nil && snapshot.TS != nil && errors.As(err, &catalogErr) && catalogErr.ErrorCode() == moerr.ErrBadFieldError) {
 			return sqlRevisionCatalogRow{}, false, nil
 		}
 		return sqlRevisionCatalogRow{}, false, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision head is unavailable", functionID)
