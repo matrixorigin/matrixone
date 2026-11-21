@@ -81,8 +81,9 @@ under init. These are different launch forms for the same Flight service.
 During a shutdown upgrade, a retained v4.2.6 `[python-udf-server]` configuration
 logs a migration diagnostic and skips the retired role. To use the development
 adapter, configure `[python-udf-worker]` and explicitly enable the CN Python
-client. Worker configuration and process launch errors leave ordinary SQL
-available.
+client. In a shared launch, worker startup failures and unexpected exits
+leave ordinary SQL available. A dedicated `mo-service -cfg` Python worker
+exits with an error in those cases so its supervisor can restart the service.
 
 Gateway and worker must match the current capability contract, including tzdata.
 The worker image replaces its entire zoneinfo tree from the MO runtime base;

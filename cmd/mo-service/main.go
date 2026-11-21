@@ -147,6 +147,7 @@ func main() {
 	if *launchFile != "" {
 		startErr = startCluster(ctx, stopper, shutdownC)
 	} else if *configFile != "" {
+		serviceLifecycle.pythonWorkerRequired = true
 		cfg := NewConfig()
 		if err := parseConfigFromFile(*configFile, cfg); err != nil {
 			startErr = fmt.Errorf("failed to parse config from %s, error: %w", *configFile, err)
@@ -800,13 +801,19 @@ func startManagedPythonWorker(cfg python.Config, stopper *stopper.Stopper, lifec
 		defer func() { finishTask(closeErr) }()
 		roleCtx, cancelRole := lifecycle.roleContext(ctx, serviceRolePython)
 		defer cancelRole()
+		reportFailure := func(message string, err error) {
+			logutil.GetGlobalLogger().Error(message, zap.Error(err))
+			if lifecycle != nil && lifecycle.pythonWorkerRequired && roleCtx.Err() == nil {
+				lifecycle.notifyFatal(fmt.Errorf("%s: %w", message, err))
+			}
+		}
 		s, err := python.NewSupervisor(cfg)
 		if err != nil {
-			logutil.GetGlobalLogger().Error("invalid Python UDF worker configuration", zap.Error(err))
+			reportFailure("invalid Python UDF worker configuration", err)
 			return
 		}
 		if err := s.Start(); err != nil {
-			logutil.GetGlobalLogger().Error("failed to start Python UDF worker", zap.Error(err))
+			reportFailure("failed to start Python UDF worker", err)
 			return
 		}
 		workerDone := s.Done()
@@ -817,15 +824,14 @@ func startManagedPythonWorker(cfg python.Config, stopper *stopper.Stopper, lifec
 				logutil.GetGlobalLogger().Error("failed to close Python UDF worker", zap.Error(err))
 			}
 		case <-workerDone:
-			// The supervisor has reaped the worker. Its exit only makes the
-			// configured Python endpoint unavailable. CN and ordinary SQL
-			// continue to run, and the Gateway reports Python transport errors.
+			// The supervisor has reaped the worker. A shutdown-driven exit
+			// is already handled by the role's lifecycle.
 			if roleCtx.Err() == nil {
 				workerErr := s.Err()
 				if workerErr == nil {
 					workerErr = errors.New("process exited without an error")
 				}
-				logutil.GetGlobalLogger().Error("Python UDF worker exited unexpectedly", zap.Error(workerErr))
+				reportFailure("Python UDF worker exited unexpectedly", workerErr)
 			}
 		}
 	})
