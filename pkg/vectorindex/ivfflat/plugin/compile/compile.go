@@ -378,6 +378,7 @@ func ivfIndexCentroidsTable(
 	pkColName := srcAlias + "." + originalTableDef.Pkey.PkeyColName
 
 	cfg := vectorindex.IndexTableConfig{
+		SourceTableID: originalTableDef.TblId,
 		MetadataTable: metadataTableName,
 		IndexTable:    indexDef.IndexTableName,
 		DbName:        qryDatabase,
