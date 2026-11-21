@@ -1211,7 +1211,7 @@ func TestShrinkWithSelsFailureFreedByOperator(t *testing.T) {
 			lease.Release()
 		}
 	}()
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, lease)
+	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data)
 	require.NoError(t, err)
 	defer func() {
 		if vec != nil {

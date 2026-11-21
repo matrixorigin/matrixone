@@ -286,18 +286,14 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 		[]int32{0, 10, 30, 40, 50, 60, 70, 80, 100, 110, 120, 130, 140, 150},
 		vector.MustFixedColWithTypeCheck[int32](full.Vecs[0]),
 	)
-	require.True(t, full.Vecs[2].HasBorrowedBacking(), "full persisted read publishes private readonly payload")
+	require.False(t, full.Vecs[2].HasBorrowedBacking(), "full persisted read publishes an owned private payload")
 	require.False(t, full.Vecs[0].HasBorrowedBacking(), "fixed-width materialization stays owned")
 	fullRowids := vector.MustFixedColWithTypeCheck[types.Rowid](full.Vecs[1])
 	for i, expected := range []uint32{0, 1, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15} {
 		require.Equal(t, expected, fullRowids[i].GetRowOffset())
 		require.Equal(t, "row-value-longer-than-inline-"+string(rune('a'+expected)), full.Vecs[2].GetStringAt(i))
 	}
-	retained, err := full.Vecs[2].RetainedReadonlyViewWithMP(queryMP)
-	require.NoError(t, err)
 	full.Clean(queryMP)
-	require.Equal(t, "row-value-longer-than-inline-p", retained.GetStringAt(13))
-	retained.Free(queryMP)
 	require.Zero(t, account.Snapshot().Used)
 
 	errorOutput := batch.NewWithSize(len(columns))
@@ -1014,8 +1010,8 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		}, ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnUnused}, Select: func(b *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			require.Equal(t, 8, b.RowCount())
 			require.Equal(t, 8, b.Vecs[1].Length())
-			require.False(t, b.Vecs[1].HasBorrowedBacking(), "owned/unused demand must avoid transient cache leases")
-			require.Equal(t, vector.LegacyAlias, b.Vecs[1].DataBackingKind(), "validated varlen input should stay pinned only in the callback")
+			require.Zero(t, out.HeldLeases(), "owned/unused demand must avoid cache leases")
+			require.Equal(t, vector.BorrowedAlias, b.Vecs[1].DataBackingKind(), "validated varlen input should stay pinned only in the callback")
 			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
 		}}
 		scratch := request.SelectionScratch(2)
@@ -1084,7 +1080,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			return engine.ReaderFilterResult{}, nil
 		}, Select: func(b *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 			require.Equal(t, []int{1}, loaded)
-			require.Equal(t, vector.LegacyAlias, b.Vecs[1].DataBackingKind())
+			require.Equal(t, vector.BorrowedAlias, b.Vecs[1].DataBackingKind())
 			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
 		}}
 		scratch := request.SelectionScratch(2)

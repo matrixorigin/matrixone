@@ -40,7 +40,7 @@ func TestReadonlyBinarySetterAdmission(t *testing.T) {
 					var snapshot *Vector
 					var err error
 					if leased {
-						snapshot, err = destination.RetainedReadonlyViewWithMP(amp)
+						snapshot, err = readonlyView(destination, amp)
 					} else {
 						snapshot, err = destination.CloneWindow(0, 3, amp)
 					}

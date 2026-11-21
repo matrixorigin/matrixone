@@ -17,6 +17,7 @@ package batch
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
@@ -68,4 +69,11 @@ type Batch struct {
 	// extraBufMP owns ExtraBuf only when it was detached from an accounted
 	// off-heap buffer. Ordinary Go-heap ExtraBuf values leave this nil.
 	extraBufMP *mpool.MPool
+
+	// leases keeps alive the lent backings (for example pinned FileService
+	// cache entries) that this batch's vectors alias. The batch is the lender:
+	// it releases them whenever it drops or reuses its column data (Clean,
+	// CleanOnlyData, FreeColumns, decoding into the batch). A vector moved out of
+	// the batch must be copied (MaterializeOwned) if it outlives that point.
+	leases bufferlease.Holder
 }

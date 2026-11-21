@@ -29,33 +29,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// poisonedLease models a lender's backing that is reused once its last
+// reference goes: the release overwrites the bytes, so any read through a
+// stale alias observes garbage.
+func poisonedLease(t *testing.T, backing []byte) *vector.RefCountedBufferLease {
+	lease, err := vector.NewRefCountedBufferLease(backing, int64(cap(backing)), func() {
+		for i := range backing {
+			backing[i] = 0xFF
+		}
+	})
+	require.NoError(t, err)
+	return lease
+}
+
 func TestSpoolCacheNeverDetachesBorrowedVectorBacking(t *testing.T) {
 	data := types.EncodeSlice([]int64{11})
-	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	lease := poisonedLease(t, data)
+	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, data)
 	require.NoError(t, err)
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, data, lease)
-	require.NoError(t, err)
-	lease.Release()
 	bat := batch.NewOffHeap([]string{"v"})
+	require.NoError(t, bat.HoldLease(lease))
+	lease.Release()
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)
 
 	buffer := initSpoolBuffer(1)
 	cacheID, _ := buffer.getCacheID()
 	buffer.putCacheID(nil, cacheID, bat)
-	require.Empty(t, buffer.bytesCache[0].buffers)
-	require.Nil(t, lease.Bytes())
+	require.Empty(t, buffer.bytesCache[0].buffers, "a borrowed backing is never cached for reuse")
+	require.Nil(t, lease.Bytes(), "reusing the batch releases what it lent")
 }
 
-func TestSpoolRetainsBorrowedPayloadWithoutCopy(t *testing.T) {
+// The spool copies an aliased producer batch: the copy must stay valid after
+// the producer's lender releases the lent backing at its next call.
+func TestSpoolCopiesBorrowedFixedPayload(t *testing.T) {
 	mp := mpool.MustNewZero()
 	data := types.EncodeSlice([]int64{11, 22})
-	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	lease := poisonedLease(t, data)
+	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 2, data)
 	require.NoError(t, err)
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 2, data, lease)
-	require.NoError(t, err)
-	lease.Release()
 	source := batch.NewOffHeap([]string{"v"})
+	require.NoError(t, source.HoldLease(lease))
+	lease.Release()
 	source.Vecs[0] = vec
 	source.SetRowCount(2)
 
@@ -63,27 +78,27 @@ func TestSpoolRetainsBorrowedPayloadWithoutCopy(t *testing.T) {
 	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
 	require.NoError(t, err)
 	require.True(t, useCache)
-	require.Equal(t,
+	require.NotEqual(t,
 		uintptr(unsafe.Pointer(unsafe.SliceData(source.Vecs[0].GetData()))),
 		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetData()))),
 	)
+	require.False(t, copied.Vecs[0].HasBorrowedBacking())
+	require.Zero(t, copied.HeldLeases())
 	source.Clean(mp)
+	require.Nil(t, lease.Bytes(), "the producer batch released its lease")
 	require.Equal(t, []int64{11, 22}, vector.MustFixedColNoTypeCheck[int64](copied.Vecs[0]))
-	require.NotNil(t, lease.Bytes())
 
 	cache.CacheBatch(useCache, cacheID, copied)
-	require.Nil(t, lease.Bytes())
 	cache.free()
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestSpoolCopiesVarlenDescriptorsAndRetainsBorrowedPayload(t *testing.T) {
+func TestSpoolCopiesBorrowedVarlenPayload(t *testing.T) {
 	mp := mpool.MustNewZero()
 	first := []byte("first payload longer than twenty three bytes")
 	second := []byte("second payload longer than twenty three bytes")
 	area := append(append([]byte(nil), first...), second...)
-	lease, err := vector.NewRefCountedBufferLease(area, int64(cap(area)), nil)
-	require.NoError(t, err)
+	lease := poisonedLease(t, area)
 
 	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 	require.NoError(t, vec.PreExtend(2, mp))
@@ -91,10 +106,11 @@ func TestSpoolCopiesVarlenDescriptorsAndRetainsBorrowedPayload(t *testing.T) {
 	descriptors := vector.MustFixedColNoTypeCheck[types.Varlena](vec)
 	descriptors[0].SetOffsetLen(0, uint32(len(first)))
 	descriptors[1].SetOffsetLen(uint32(len(first)), uint32(len(second)))
-	require.NoError(t, vec.InstallBorrowedArea(area, lease))
-	lease.Release()
+	require.NoError(t, vec.InstallBorrowedArea(area))
 
 	source := batch.NewOffHeap([]string{"v"})
+	require.NoError(t, source.HoldLease(lease))
+	lease.Release()
 	source.Vecs[0] = vec
 	source.SetRowCount(2)
 	sourceDataPointer := uintptr(unsafe.Pointer(unsafe.SliceData(vec.GetData())))
@@ -105,19 +121,18 @@ func TestSpoolCopiesVarlenDescriptorsAndRetainsBorrowedPayload(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, useCache)
 	require.NotEqual(t, sourceDataPointer,
-		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetData()))),
-		"mutable varlena descriptors must not be shared")
-	require.Equal(t, sourceAreaPointer,
+		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetData()))))
+	require.NotEqual(t, sourceAreaPointer,
 		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetArea()))),
-		"long-value payload should stay zero-copy")
+		"the borrowed area is copied at the spool boundary")
+	require.False(t, copied.Vecs[0].HasBorrowedBacking())
 
 	source.Clean(mp)
+	require.Nil(t, lease.Bytes())
 	require.Equal(t, string(first), copied.Vecs[0].GetStringAt(0))
 	require.Equal(t, string(second), copied.Vecs[0].GetStringAt(1))
-	require.NotNil(t, lease.Bytes())
 
 	cache.CacheBatch(useCache, cacheID, copied)
-	require.Nil(t, lease.Bytes())
 	cache.free()
 	require.Zero(t, mp.CurrNB())
 }

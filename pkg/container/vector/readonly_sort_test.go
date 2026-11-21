@@ -72,20 +72,20 @@ func TestReadonlySortAndCompact(t *testing.T) {
 					amp := state.view(t, mp)
 					t.Cleanup(func() { destination.Free(mp) })
 					if leased {
-						require.NoError(t, destination.CopyWithReadonlyArea(source, amp))
+						require.NoError(t, copyWithBorrowedArea(destination, source, amp))
 					} else {
 						require.NoError(t, destination.UnionBatch(source, 0, source.Length(), nil, amp))
 					}
 					var snapshot *Vector
 					var err error
 					if destination.HasBorrowedBacking() {
-						snapshot, err = destination.RetainedReadonlyViewWithMP(amp)
+						snapshot, err = readonlyView(destination, amp)
 					} else {
 						snapshot, err = destination.CloneWindow(0, destination.Length(), amp)
 					}
 					require.NoError(t, err)
 					t.Cleanup(func() { snapshot.Free(mp) })
-					data, area, lease := destination.data, destination.area, destination.areaLease
+					data, area, kind := destination.data, destination.area, destination.AreaBackingKind()
 					beforeMP, beforeAccount, calls := mp.CurrNB(), state.account.Snapshot().Used, controller.calls
 					controller.failAt = calls + 1
 					require.NoError(t, destination.InplaceSortAndCompact(amp))
@@ -104,7 +104,7 @@ func TestReadonlySortAndCompact(t *testing.T) {
 					if cap(area) > 0 {
 						require.True(t, &area[:cap(area)][0] == &destination.area[:cap(destination.area)][0], "readonly payload must stay in place")
 					}
-					require.True(t, lease == destination.areaLease, "compaction must retain the same lease")
+					require.Equal(t, kind, destination.AreaBackingKind(), "compaction must keep the same backing kind")
 					require.Equal(t, beforeMP, mp.CurrNB())
 					require.Equal(t, beforeAccount, state.account.Snapshot().Used)
 					require.Equal(t, calls, controller.calls)

@@ -65,12 +65,12 @@ type Vector struct {
 	nsp nulls.Nulls // nulls list
 	gsp nulls.Nulls // grouping list
 
+	// cantFreeData/cantFreeArea mark a backing the Vector aliases but does not
+	// own (a window, a decoded buffer, or bytes borrowed from a lender such as
+	// the FileService cache). The Vector never frees an aliased backing and
+	// copies it before any mutation; the lender keeps it alive.
 	cantFreeData bool
 	cantFreeArea bool
-	// Borrowed leases are independent release owners for data and area. The
-	// cantFree bits remain only as the legacy-alias compatibility marker.
-	dataLease BufferLease
-	areaLease BufferLease
 
 	sorted bool // for some optimization
 
@@ -130,7 +130,7 @@ func (v *Vector) SetSorted(b bool) {
 // Reset update vector's fields with a specific type.
 // we should redefine the value of capacity and values-ptr because of the possible change in type.
 func (v *Vector) Reset(typ types.Type) {
-	v.releaseBorrowedBacking()
+	v.dropAliasedBacking()
 	v.typ = typ
 
 	v.class = FLAT
@@ -146,7 +146,7 @@ func (v *Vector) Reset(typ types.Type) {
 }
 
 func (v *Vector) ResetWithSameType() {
-	v.releaseBorrowedBacking()
+	v.dropAliasedBacking()
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
@@ -159,13 +159,13 @@ func (v *Vector) ResetWithSameType() {
 }
 
 func (v *Vector) ResetArea() {
-	v.releaseBorrowedArea()
+	v.dropAliasedArea()
 	v.area = v.area[:0]
 }
 
 // TODO: It is semantically same as Reset, need to merge them later.
 func (v *Vector) ResetWithNewType(t *types.Type) {
-	v.releaseBorrowedBacking()
+	v.dropAliasedBacking()
 	v.typ = *t
 	v.class = FLAT
 	if v.area != nil {
@@ -520,7 +520,7 @@ func (v *Vector) GetRawBytesAt(i int) []byte {
 }
 
 func (v *Vector) CleanOnlyData() {
-	v.releaseBorrowedBacking()
+	v.dropAliasedBacking()
 	// Constant NULLs have logical rows without a payload allocation.
 	v.length = 0
 	if v.area != nil {
@@ -811,7 +811,7 @@ func (v *Vector) UnsetNull(i uint64) {
 
 // call this function if type already checked
 func SetFixedAtNoTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
-	if v.HasBorrowedBacking() {
+	if v.cantFreeData {
 		return moerr.NewInternalErrorNoCtx("borrowed vector must be materialized before mutation")
 	}
 	vacol := MustFixedColNoTypeCheck[T](v)
@@ -828,7 +828,7 @@ func SetFixedAtNoTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
 // Note:
 // it is 10x slower than SetFixedAtNoTypeCheck
 func SetFixedAtWithTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
-	if v.HasBorrowedBacking() {
+	if v.cantFreeData {
 		return moerr.NewInternalErrorNoCtx("borrowed vector must be materialized before mutation")
 	}
 	// Let it panic if v is not a varlena vec
@@ -1067,14 +1067,10 @@ func (v *Vector) Free(mp *mpool.MPool) {
 		return
 	}
 
-	if v.dataLease != nil {
-		v.releaseBorrowedData()
-	} else if !v.cantFreeData {
+	if !v.cantFreeData {
 		mp.Free(v.data)
 	}
-	if v.areaLease != nil {
-		v.releaseBorrowedArea()
-	} else if !v.cantFreeArea {
+	if !v.cantFreeArea {
 		mp.Free(v.area)
 	}
 	v.class = FLAT
@@ -1083,8 +1079,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.length = 0
 	v.cantFreeData = false
 	v.cantFreeArea = false
-	v.dataLease = nil
-	v.areaLease = nil
 
 	v.nsp.Reset()
 	v.gsp.Reset()
@@ -6618,10 +6612,8 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 		mp.Free(data)
 		return err
 	}
-	// Retire the old lease before installing data: releaseBorrowedData clears v.data.
-	if v.dataLease != nil {
-		v.releaseBorrowedData()
-	} else if v.cantFreeData {
+	// An aliased backing is not ours to free; only stop referencing it.
+	if v.cantFreeData {
 		v.cantFreeData = false
 	} else {
 		mp.Free(olddata)
@@ -6724,20 +6716,6 @@ func (v *Vector) windowInto(start, end int, mp *mpool.MPool, w *Vector) (*Vector
 	if v.IsConst() {
 		w.data = v.data
 		w.area = v.area
-		if v.dataLease != nil {
-			if !v.dataLease.Retain() {
-				w.Free(mp)
-				return nil, moerr.NewInternalErrorNoCtx("buffer lease is already released")
-			}
-			w.dataLease = v.dataLease
-		}
-		if v.areaLease != nil {
-			if !v.areaLease.Retain() {
-				w.Free(mp)
-				return nil, moerr.NewInternalErrorNoCtx("buffer lease is already released")
-			}
-			w.areaLease = v.areaLease
-		}
 		// Const-null is a scalar property. In particular, an offset logical
 		// window must not lose it merely because the physical null marker (when
 		// present) lives at row zero.
@@ -6751,22 +6729,8 @@ func (v *Vector) windowInto(start, end int, mp *mpool.MPool, w *Vector) (*Vector
 	if start != end {
 		w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
 	}
-	if v.dataLease != nil {
-		if !v.dataLease.Retain() {
-			w.Free(mp)
-			return nil, moerr.NewInternalErrorNoCtx("buffer lease is already released")
-		}
-		w.dataLease = v.dataLease
-	}
 	if v.typ.IsVarlen() {
 		w.area = v.area
-		if v.areaLease != nil {
-			if !v.areaLease.Retain() {
-				w.Free(mp)
-				return nil, moerr.NewInternalErrorNoCtx("buffer lease is already released")
-			}
-			w.areaLease = v.areaLease
-		}
 	}
 	w.cantFreeData = true
 	w.cantFreeArea = true
@@ -6873,9 +6837,7 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 	if v.IsConstNull() {
 		w.class = CONSTANT
 		w.length = end - start
-		if w.dataLease != nil {
-			w.releaseBorrowedData()
-		} else if w.cantFreeData {
+		if w.cantFreeData {
 			w.data = nil
 			w.cantFreeData = false
 		} else {

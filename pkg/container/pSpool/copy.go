@@ -114,23 +114,9 @@ copyVectors:
 				}
 			}
 		}
-		if vec.HasBorrowedBacking() {
-			if dst.Vecs[i] != nil {
-				continue
-			}
-			dst.Vecs[i], err = vec.RetainedReadonlyViewWithMP(cb.mp)
-			if err != nil {
-				cb.CacheBatch(true, cacheID, dst)
-				return nil, false, 0, err
-			}
-			for j := i + 1; j < len(src.Vecs); j++ {
-				if dst.Vecs[j] == nil && src.Vecs[j] == vec {
-					dst.Vecs[j] = dst.Vecs[i]
-				}
-			}
-			continue
-		}
-
+		// Every source is copied, aliased ones included: an alias is valid only
+		// while its lender (the producer's batch) holds the lent backing, which
+		// ends at the producer's next call, before consumers read this copy.
 		typ := *vec.GetType()
 		if dst.Vecs[i] == nil {
 			dst.Vecs[i] = vector.NewOffHeapVecWithType(typ)
@@ -217,7 +203,7 @@ func (mc *oneBatchMemoryCache) prepareCopyBacking(src, dst *batch.Batch, column 
 	largestLater := 0
 	for i := column + 1; i < len(src.Vecs); i++ {
 		future := src.Vecs[i]
-		if future == nil || future.IsConst() || future.HasBorrowedBacking() || dst.Vecs[i] != nil {
+		if future == nil || future.IsConst() || dst.Vecs[i] != nil {
 			continue
 		}
 		if size := future.Length() * future.GetType().TypeSize(); size > largestLater {
@@ -258,13 +244,13 @@ func (mc *oneBatchMemoryCache) prepareCopyBacking(src, dst *batch.Batch, column 
 	return true, aliases, nil
 }
 
-// prepareSpoolSuffix creates owned shells only. Payload allocation and
-// borrowed snapshots stay in the source-order copy loop.
+// prepareSpoolSuffix creates owned shells only. Payload allocation stays in
+// the source-order copy loop.
 func prepareSpoolSuffix(src, dst *batch.Batch, first int) (bool, error) {
 	aliases := false
 	for i := first; i < len(src.Vecs); i++ {
 		source := src.Vecs[i]
-		if source == nil || source.HasBorrowedBacking() {
+		if source == nil {
 			continue
 		}
 		if dst.Vecs[i] == nil {
@@ -447,7 +433,7 @@ func (mc *oneBatchMemoryCache) setSuitableBatchBuffers(src, dst *batch.Batch, fi
 	// The caller already attempted both exact fits for the first column.
 	for column := first + 1; column < len(src.Vecs) && len(mc.buffers) > 0; column++ {
 		source := src.Vecs[column]
-		if source == nil || source.IsConst() || source.HasBorrowedBacking() {
+		if source == nil || source.IsConst() {
 			continue
 		}
 		target := dst.Vecs[column]
@@ -483,7 +469,7 @@ func (mc *oneBatchMemoryCache) setSuitableBatchBuffers(src, dst *batch.Batch, fi
 		bestColumn := -1
 		for column := first; column < len(src.Vecs); column++ {
 			source := src.Vecs[column]
-			if source == nil || source.IsConst() || source.HasBorrowedBacking() {
+			if source == nil || source.IsConst() {
 				continue
 			}
 			target := dst.Vecs[column]
@@ -525,7 +511,7 @@ func (mc *oneBatchMemoryCache) setSuitableBatchBuffers(src, dst *batch.Batch, fi
 	// copied, so their release is not postponed behind unrelated allocations.
 	for column := first; column < len(src.Vecs) && len(mc.buffers) > 0; column++ {
 		source := src.Vecs[column]
-		if source == nil || source.IsConst() || source.HasBorrowedBacking() {
+		if source == nil || source.IsConst() {
 			continue
 		}
 		target := dst.Vecs[column]

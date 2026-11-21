@@ -41,7 +41,7 @@ func readonlyAliasVectors(
 		require.NoError(t, AppendBytes(source, value, value == nil, mp))
 	}
 	if leased {
-		require.NoError(t, destination.CopyWithReadonlyArea(source, destinationMP))
+		require.NoError(t, copyWithBorrowedArea(destination, source, destinationMP))
 	} else {
 		require.NoError(t, destination.UnionBatch(source, 0, source.Length(), nil, destinationMP))
 	}
@@ -165,7 +165,7 @@ func TestReadonlyWindowSelfAndRetainedSource(t *testing.T) {
 				input := destination
 				if retained {
 					var err error
-					input, err = destination.RetainedReadonlyViewWithMP(mp)
+					input, err = readonlyView(destination, mp)
 					require.NoError(t, err)
 					t.Cleanup(func() { input.Free(mp) })
 					require.False(t, byteSlicesOverlap(destination.data, input.data))
@@ -218,7 +218,7 @@ func TestReadonlyFixedWindowMutations(t *testing.T) {
 			lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
 			require.NoError(t, err)
 			t.Cleanup(lease.Release)
-			destination, err := NewBorrowedFixedVector(types.T_int64.ToType(), 2, data[:16], lease)
+			destination, err := NewBorrowedFixedVector(types.T_int64.ToType(), 2, data[:16])
 			require.NoError(t, err)
 			t.Cleanup(func() { destination.Free(mp) })
 			input, err := destination.Window(0, 1)

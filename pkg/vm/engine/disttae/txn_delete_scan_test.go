@@ -406,7 +406,7 @@ func TestBorrowedWorkspacePreparationFailurePreservesState(t *testing.T) {
 	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
 	require.NoError(t, err)
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0], err = vector.NewBorrowedFixedVector(types.T_Rowid.ToType(), len(rows), data, lease)
+	bat.Vecs[0], err = vector.NewBorrowedFixedVector(types.T_Rowid.ToType(), len(rows), data)
 	require.NoError(t, err)
 	bat.SetRowCount(len(rows))
 	defer func() {

@@ -43,8 +43,7 @@ func (v *Vector) hasBackingStorage() bool {
 // borrowed aliases; bitmap backing is always Go-owned and remains GC-visible
 // after replacement.
 func (v *Vector) hasOwnedBackingStorage() bool {
-	return v.dataLease != nil || v.areaLease != nil ||
-		cap(v.data) != 0 && !v.cantFreeData ||
+	return cap(v.data) != 0 && !v.cantFreeData ||
 		cap(v.area) != 0 && !v.cantFreeArea
 }
 

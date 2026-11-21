@@ -1710,17 +1710,17 @@ func TestAccountedShuffleFailureRetainsBorrowedArea(t *testing.T) {
 			lease.Release()
 		}
 	})
-	require.NoError(t, v.InstallBorrowedArea(area, lease))
-	lease.Release()
-	lease = nil
+	require.NoError(t, v.InstallBorrowedArea(area))
 	before := state.account.Snapshot().Used
 	err = v.Shuffle([]int64{1, 0}, mp)
 	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
 	require.Equal(t, before, state.account.Snapshot().Used)
 	require.Equal(t, first, v.GetStringAt(0))
 	require.Equal(t, second, v.GetStringAt(1))
-	require.Zero(t, releases)
 	v.Free(mp)
+	require.Zero(t, releases, "a vector never releases its lender's lease")
+	lease.Release()
+	lease = nil
 	require.Equal(t, 1, releases)
 	require.Zero(t, mp.CurrNB())
 }

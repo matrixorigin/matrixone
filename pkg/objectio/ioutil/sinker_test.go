@@ -50,10 +50,11 @@ func TestSinkerWriteOwnedRejectsBorrowedBackingBeforeStaging(t *testing.T) {
 	data := types.EncodeSlice([]int64{7})
 	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
 	require.NoError(t, err)
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, data, lease)
+	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, data)
 	require.NoError(t, err)
-	lease.Release()
 	bat := batch.NewOffHeap([]string{"v"})
+	require.NoError(t, bat.HoldLease(lease))
+	lease.Release()
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)
 

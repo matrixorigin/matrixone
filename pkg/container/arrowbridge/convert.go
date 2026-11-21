@@ -77,8 +77,11 @@ func newOutputVector(typ types.Type) (*vector.Vector, error) {
 	return vector.NewOffHeapVecWithType(typ), nil
 }
 
-// Convert builds a complete batch transactionally. On any error every vector
-// and lease already installed in the partial batch is released.
+// Convert builds a complete batch transactionally. Borrowed columns alias
+// Arrow buffers whose references the returned batch holds (batch.HoldLease)
+// until it is cleaned or reuses its columns; a vector moved out of the batch
+// must be materialized first. On any error every vector and lease already
+// installed in the partial batch is released.
 func (p *Plan) Convert(
 	ctx context.Context,
 	record arrow.RecordBatch,
@@ -159,12 +162,12 @@ func (p *Plan) convert(
 		switch binding.kind {
 		case conversionBorrowFixed:
 			vec, columnStats, err = convertFixed(
-				ctx, column, binding.target.Type, mp, options.ForceMaterialize, nullCount,
+				ctx, column, binding.target.Type, mp, options.ForceMaterialize, nullCount, bat,
 			)
 		case conversionBorrowVarlen:
 			vec, columnStats, err = convertVarlen(
 				ctx, column, binding.target.Type, mp, options.MaxPinAmplification,
-				options.ForceMaterialize, nullCount,
+				options.ForceMaterialize, nullCount, bat,
 			)
 		default:
 			vec, columnStats, err = materializeConverted(ctx, column, binding, mp, options.Location)
@@ -315,6 +318,7 @@ func convertFixed(
 	mp *mpool.MPool,
 	forceMaterialize bool,
 	nullCount int,
+	keeper bufferlease.Keeper,
 ) (*vector.Vector, ConvertStats, error) {
 	var stats ConvertStats
 	if column.DataType().ID() == arrow.TIME64 {
@@ -382,12 +386,10 @@ func convertFixed(
 		return vec, stats, err
 	}
 
-	lease, err := newArrayDataLease(data, view, int64(buffers[1].Cap()))
-	if err != nil {
+	if err := holdArrayData(keeper, data, view, int64(buffers[1].Cap())); err != nil {
 		return nil, stats, err
 	}
-	vec, err := vector.NewBorrowedFixedVector(target, column.Len(), view, lease)
-	lease.Release()
+	vec, err := vector.NewBorrowedFixedVector(target, column.Len(), view)
 	if err != nil {
 		return nil, stats, err
 	}
@@ -435,11 +437,18 @@ func materializeFixedLayout(
 	return vec, stats, nil
 }
 
-func newArrayDataLease(
+// holdArrayData makes keeper (the output batch) the lender of view: it holds
+// a reference to the Arrow ArrayData until it drops or reuses its columns.
+// Vectors aliasing view hold no lease of their own.
+func holdArrayData(
+	keeper bufferlease.Keeper,
 	data arrow.ArrayData,
 	view []byte,
 	accounted int64,
-) (*bufferlease.RefCounted, error) {
+) error {
+	if keeper == nil {
+		return moerr.NewInternalErrorNoCtx("borrowed Arrow buffer has no lender")
+	}
 	// Arrow ArrayData is the physical lifetime root visible to this package. A
 	// File reader may in turn have attached a RangeLease to that object graph;
 	// retaining ArrayData therefore preserves both layers without teaching the
@@ -448,9 +457,11 @@ func newArrayDataLease(
 	lease, err := bufferlease.NewRefCounted(view, accounted, data.Release)
 	if err != nil {
 		data.Release()
-		return nil, err
+		return err
 	}
-	return lease, nil
+	// The keeper takes its own reference; ours is dropped here.
+	defer lease.Release()
+	return keeper.HoldLease(lease)
 }
 
 // installValidity converts the Arrow validity bitmap (1 = valid) into the
@@ -490,6 +501,7 @@ func convertVarlen(
 	maxPinAmplification float64,
 	forceMaterialize bool,
 	nullCount int,
+	keeper bufferlease.Keeper,
 ) (*vector.Vector, ConvertStats, error) {
 	view, err := inspectVarlen(ctx, column)
 	if err != nil {
@@ -573,14 +585,11 @@ func convertVarlen(
 	}
 
 	data := column.Data()
-	lease, err := newArrayDataLease(data, view.values, view.retainedCapacity)
-	if err != nil {
+	if err = holdArrayData(keeper, data, view.values, view.retainedCapacity); err != nil {
 		vec.Free(mp)
 		return nil, ConvertStats{}, err
 	}
-	err = vec.InstallBorrowedArea(view.values, lease)
-	lease.Release()
-	if err != nil {
+	if err = vec.InstallBorrowedArea(view.values); err != nil {
 		vec.Free(mp)
 		return nil, ConvertStats{}, err
 	}

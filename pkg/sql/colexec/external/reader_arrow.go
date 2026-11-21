@@ -635,8 +635,10 @@ func fitArrowBatchToWireBudget(
 }
 
 // stableArrowBatchPrefix keeps the zero-copy contract column-local while
-// making a prefix independent of the source batch lifetime. Borrowed columns
-// retain their leased payloads; materialized columns copy only selected rows.
+// making a prefix independent of the source batch's vectors. Borrowed columns
+// become windows of their Arrow payloads and the source's Arrow references
+// move to the prefix (the caller cleans source next); materialized columns
+// copy only the selected rows.
 func stableArrowBatchPrefix(source *batch.Batch, rows int, mp *mpool.MPool) (_ *batch.Batch, err error) {
 	if source == nil || mp == nil || rows <= 0 || rows > source.RowCount() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid Arrow batch prefix")
@@ -655,7 +657,7 @@ func stableArrowBatchPrefix(source *batch.Batch, rows int, mp *mpool.MPool) (_ *
 		}
 		var snapshot *vector.Vector
 		if sourceVector.HasBorrowedBacking() {
-			snapshot, err = sourceVector.RetainedReadonlyWindowWithMP(0, rows, mp)
+			snapshot, err = sourceVector.WindowCopyingOwnedParts(0, rows, mp)
 		} else {
 			var window *vector.Vector
 			window, err = sourceVector.WindowByLogicalRows(0, rows)
@@ -669,6 +671,9 @@ func stableArrowBatchPrefix(source *batch.Batch, rows int, mp *mpool.MPool) (_ *
 		}
 		stable.SetVector(int32(index), snapshot)
 	}
+	// The borrowed windows alias the Arrow buffers source holds; the prefix
+	// becomes their lender.
+	stable.MoveLeasesFrom(source)
 	stable.SetRowCount(rows)
 	return stable, nil
 }
@@ -756,6 +761,9 @@ func replaceArrowBatch(dst, src *batch.Batch, mp *mpool.MPool) error {
 		dst.SetVector(int32(i), src.Vecs[i])
 		src.SetVector(int32(i), nil)
 	}
+	// The moved vectors may alias Arrow buffers src holds; dst becomes their
+	// lender (its previous columns were freed above).
+	dst.MoveLeasesFrom(src)
 	dst.SetRowCount(src.RowCount())
 	src.Clean(mp)
 	return nil

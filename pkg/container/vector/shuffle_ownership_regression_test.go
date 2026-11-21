@@ -16,8 +16,6 @@ package vector
 
 import (
 	"fmt"
-	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -36,10 +34,8 @@ func TestShuffleBorrowedDataRetiresOwner(t *testing.T) {
 			lease.Release()
 		}
 	})
-	v, err := NewBorrowedFixedVector(types.T_int64.ToType(), 4, data, lease)
+	v, err := NewBorrowedFixedVector(types.T_int64.ToType(), 4, data)
 	require.NoError(t, err)
-	lease.Release()
-	lease = nil
 	t.Cleanup(func() { v.Free(mp) })
 	view, err := v.Window(0, 4)
 	require.NoError(t, err)
@@ -49,17 +45,19 @@ func TestShuffleBorrowedDataRetiresOwner(t *testing.T) {
 	require.Equal(t, []int64{1, 2, 3, 4}, MustFixedColWithTypeCheck[int64](view))
 	// Preserve a handle to the orphaned allocation for cleanup on the broken baseline.
 	replacement := v.GetData()
-	orphan := v.DataBackingKind() == BorrowedLease
+	orphan := v.DataBackingKind() == BorrowedAlias
 	v.Free(mp)
 	remaining := mp.CurrNB()
 	if orphan {
 		mp.Free(replacement)
 	}
 	require.Zero(t, remaining, "replacement must be freed by Vector.Free")
-	require.Zero(t, releases, "retained view still owns the original backing")
 	view.Free(mp)
-	require.Equal(t, 1, releases)
-	require.False(t, orphan, "replacement must not retain the old data lease")
+	require.Zero(t, releases, "a vector never releases its lender's lease")
+	lease.Release()
+	lease = nil
+	require.Equal(t, 1, releases, "the lender's release is the last one")
+	require.False(t, orphan, "replacement must not keep aliasing the old data")
 }
 
 func TestShuffleBorrowedSortedContiguous(t *testing.T) {
@@ -70,8 +68,7 @@ func TestShuffleBorrowedSortedContiguous(t *testing.T) {
 			releases := 0
 			lease, err := NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
 			require.NoError(t, err)
-			v, err := NewBorrowedFixedVector(types.T_int64.ToType(), 4, data, lease)
-			lease.Release()
+			v, err := NewBorrowedFixedVector(types.T_int64.ToType(), 4, data)
 			require.NoError(t, err)
 			t.Cleanup(func() { v.Free(mp) })
 			view, err := v.Window(0, 4)
@@ -87,12 +84,13 @@ func TestShuffleBorrowedSortedContiguous(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.True(t, v.GetSorted())
-			require.NotEqual(t, BorrowedLease, v.DataBackingKind())
+			require.NotEqual(t, BorrowedAlias, v.DataBackingKind())
 			require.Equal(t, []int64{1, 2, 3, 4}, MustFixedColWithTypeCheck[int64](v))
 			v.Free(mp)
 			require.Equal(t, []int64{1, 2, 3, 4}, MustFixedColWithTypeCheck[int64](view))
-			require.Zero(t, releases)
 			view.Free(mp)
+			require.Zero(t, releases, "a vector never releases its lender's lease")
+			lease.Release()
 			require.Equal(t, 1, releases)
 			require.Zero(t, mp.CurrNB())
 		})
@@ -125,10 +123,8 @@ func TestShuffleVarlenSharedLeaseAndLegacyAlias(t *testing.T) {
 								lease.Release()
 							}
 						})
-						require.NoError(t, v.InstallBorrowedData(data, lease))
-						require.NoError(t, v.InstallBorrowedArea(area, lease))
-						lease.Release()
-						lease = nil
+						require.NoError(t, v.InstallBorrowedData(data))
+						require.NoError(t, v.InstallBorrowedArea(area))
 					}
 					v.SetLength(2)
 					view, err := v.Window(0, 2)
@@ -150,100 +146,15 @@ func TestShuffleVarlenSharedLeaseAndLegacyAlias(t *testing.T) {
 					for i, source := range sels {
 						require.Equal(t, []string{first, second}[source], v.GetStringAt(i))
 					}
-					require.NotEqual(t, BorrowedLease, v.DataBackingKind())
+					require.NotEqual(t, BorrowedAlias, v.DataBackingKind())
 					v.Free(mp)
 					require.Equal(t, first, view.GetStringAt(0))
 					require.Equal(t, second, view.GetStringAt(1))
-					require.Zero(t, releases)
 					view.Free(mp)
-					if !legacy {
-						require.Equal(t, 1, releases)
-					}
+					require.Zero(t, releases, "a vector never releases its lender's lease")
 					require.Zero(t, mp.CurrNB())
 				})
 			}
 		}
-	}
-}
-
-// pauseRelease intercepts the vector's lease retirement without blocking other owners.
-type pauseRelease struct {
-	BufferLease
-	armed   atomic.Bool
-	entered chan struct{}
-	resume  chan struct{}
-}
-
-func (l *pauseRelease) Release() {
-	if l.armed.CompareAndSwap(true, false) {
-		close(l.entered)
-		<-l.resume
-	}
-	l.BufferLease.Release()
-}
-
-func TestShuffleBorrowedLeaseLifecycle(t *testing.T) {
-	for _, order := range []string{"no-view", "view-first", "vector-first", "interleaved"} {
-		t.Run(order, func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			data := types.EncodeSlice([]int64{1, 2, 3, 4})
-			var releases atomic.Int32
-			base, err := NewRefCountedBufferLease(data, int64(cap(data)), func() { releases.Add(1) })
-			require.NoError(t, err)
-			initial := true
-			t.Cleanup(func() {
-				if initial {
-					base.Release()
-				}
-			})
-			lease := &pauseRelease{BufferLease: base, entered: make(chan struct{}), resume: make(chan struct{})}
-			v, err := NewBorrowedFixedVector(types.T_int64.ToType(), 4, data, lease)
-			require.NoError(t, err)
-			t.Cleanup(func() { v.Free(mp) })
-			base.Release()
-			initial = false
-			var view *Vector
-			if order != "no-view" {
-				view, err = v.Window(0, 4)
-				require.NoError(t, err)
-				t.Cleanup(func() { view.Free(mp) })
-			}
-			if order == "interleaved" {
-				var once sync.Once
-				unblock := func() { once.Do(func() { close(lease.resume) }) }
-				done := make(chan error, 1)
-				lease.armed.Store(true)
-				go func() { done <- v.Shuffle([]int64{3, 1}, mp) }()
-				t.Cleanup(func() { unblock(); <-done })
-				<-lease.entered
-				require.Equal(t, []int64{1, 2, 3, 4}, MustFixedColWithTypeCheck[int64](view))
-				view.Free(mp)
-				require.Zero(t, releases.Load())
-				unblock()
-				err := <-done
-				// Leave a completion token for failure-safe cleanup.
-				done <- nil
-				require.NoError(t, err)
-			} else {
-				require.NoError(t, v.Shuffle([]int64{3, 1}, mp))
-			}
-			require.Equal(t, []int64{4, 2}, MustFixedColWithTypeCheck[int64](v))
-			require.Equal(t, OwnedMPoolUnique, v.DataBackingKind())
-			if view != nil && order != "interleaved" {
-				require.Equal(t, []int64{1, 2, 3, 4}, MustFixedColWithTypeCheck[int64](view))
-				require.Zero(t, releases.Load())
-				if order == "view-first" {
-					view.Free(mp)
-					require.EqualValues(t, 1, releases.Load())
-				}
-			}
-			v.Free(mp)
-			if order == "vector-first" {
-				require.Zero(t, releases.Load())
-				view.Free(mp)
-			}
-			require.EqualValues(t, 1, releases.Load())
-			require.Zero(t, mp.CurrNB())
-		})
 	}
 }

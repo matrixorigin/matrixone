@@ -113,8 +113,8 @@ func TestReadonlyAppendInterleavedSnapshots(t *testing.T) {
 			}
 			require.NoError(t, err)
 			t.Cleanup(lease.Release)
-			require.NoError(t, base.InstallBorrowedArea(buffer.data, lease))
-			first, err := base.RetainedReadonlyViewWithMP(amp)
+			require.NoError(t, base.InstallBorrowedArea(buffer.data))
+			first, err := readonlyView(base, amp)
 			require.NoError(t, err)
 			t.Cleanup(func() { first.Free(mp) })
 			// An independently owned source descriptor keeps the second retained
@@ -125,8 +125,8 @@ func TestReadonlyAppendInterleavedSnapshots(t *testing.T) {
 			require.NoError(t, secondSource.PreExtend(1, secondMP))
 			secondSource.SetLength(1)
 			copy(secondSource.data, base.data[:types.VarlenaSize])
-			require.NoError(t, secondSource.InstallBorrowedArea(base.area, lease))
-			second, err := secondSource.RetainedReadonlyViewWithMP(secondMP)
+			require.NoError(t, secondSource.InstallBorrowedArea(base.area))
+			second, err := readonlyView(secondSource, secondMP)
 			require.NoError(t, err)
 			t.Cleanup(func() { second.Free(secondMP) })
 			if !leased {
