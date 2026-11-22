@@ -166,7 +166,7 @@ func runMergeReservationAccountingProbe(t *testing.T, originSize uint32, checkGl
 					}
 					// Estimate uses metadata only; the size never allocates a
 					// corresponding physical object or merge input payload.
-					estimate := int64(mergesort.EstimateMergeSize(IterStats(table.stats[:3])))
+					estimate := int64(mergesort.EstimateMergeSizeWithBlockRows(IterStats(table.stats[:3]), table.GetBlockMaxRows()))
 					require.Positive(t, estimate)
 					if !checkGlobalGuard {
 						require.Less(t, estimate, int64(1024))
@@ -289,8 +289,8 @@ func TestMergeReservationContinuesAfterDenial(t *testing.T) {
 			table.stats = append(table.stats, newTestObjectStats(t, lo, lo+1, size, 2, 1, nil, 0))
 		}
 	}
-	large := int64(mergesort.EstimateMergeSize(IterStats(table.stats[:3])))
-	small := int64(mergesort.EstimateMergeSize(IterStats(table.stats[6:])))
+	large := int64(mergesort.EstimateMergeSizeWithBlockRows(IterStats(table.stats[:3]), table.GetBlockMaxRows()))
+	small := int64(mergesort.EstimateMergeSizeWithBlockRows(IterStats(table.stats[6:]), table.GetBlockMaxRows()))
 	require.Less(t, small, large/2)
 	clock := newFakeClock()
 	rc := &reservationProbeRSC{limit: large * 3 / 2}
@@ -347,14 +347,17 @@ func (e *inlineCompletionExecutor) ExecuteFor(_ catalog.MergeTable, task mergeTa
 }
 
 func TestMergeReservationInlineCompletion(t *testing.T) {
-	table := &reservationProbeTable{MergeTable: promotionTable(8903)}
+	const blockRows = uint32(16384)
+	table := &reservationProbeTable{MergeTable: mergeTableWithBlockRows(8903, blockRows)}
 	for cluster := range 3 {
 		for range 3 {
 			lo := int32(cluster*100 + 1)
-			table.stats = append(table.stats, newTestObjectStats(t, lo, lo+1, 64*common.Const1MBytes, 2, 1, nil, 0))
+			table.stats = append(table.stats, newTestObjectStats(t, lo, lo+1, 64*common.Const1MBytes, blockRows, 1, nil, 0))
 		}
 	}
-	size := int64(mergesort.EstimateMergeSize(IterStats(table.stats[:3])))
+	size := int64(mergesort.EstimateMergeSizeWithBlockRows(IterStats(table.stats[:3]), table.GetBlockMaxRows()))
+	defaultSize := mergesort.EstimateMergeSizeWithBlockRows(IterStats(table.stats[:3]), objectio.BlockMaxRows)
+	require.Greater(t, size, int64(defaultSize))
 	rc := &reservationProbeRSC{limit: size * 2}
 	executor := &inlineCompletionExecutor{rc: rc}
 	clock := newFakeClock()

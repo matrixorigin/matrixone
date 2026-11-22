@@ -2491,6 +2491,28 @@ func TestSetFunction(t *testing.T) {
 	}
 }
 
+func TestSetAnyConstNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_any.ToType()
+	set := GetConstSetFunction(typ, mp)
+	constant := NewConstNull(typ, 2, mp)
+	flat := NewVec(typ)
+	flat.SetLength(2)
+	flat.SetNull(1)
+	dst := NewVec(typ)
+
+	for _, src := range []*Vector{constant, flat} {
+		require.NoError(t, set(dst, src, 1, 3))
+		require.True(t, dst.IsConstNull())
+		require.Equal(t, 3, dst.Length())
+	}
+	require.ErrorContains(t, set(dst, flat, 0, 1), "non-NULL value of type ANY")
+	constant.Free(mp)
+	flat.Free(mp)
+	dst.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestSortAndCompact(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v := NewVec(types.New(types.T_array_float32, 4, 0), mp)

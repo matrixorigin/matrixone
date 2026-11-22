@@ -84,7 +84,7 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 			if err != nil {
 				return err
 			}
-			ctr.partSet[i] = getPartitionSetFunction(types.MustTypeFromPlan(
+			ctr.partSet[i] = vector.GetConstSetFunction(types.MustTypeFromPlan(
 				expr.Typ,
 			), proc.Mp())
 		}
@@ -239,25 +239,6 @@ func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process)
 		ctr.status = end
 	}
 	return nil
-}
-
-func getPartitionSetFunction(
-	typ types.Type,
-	mp *mpool.MPool,
-) func(v, w *vector.Vector, sel int64, length int) error {
-	if typ.Oid != types.T_any {
-		return vector.GetConstSetFunction(typ, mp)
-	}
-
-	// T_any is the physical type of an untyped NULL literal. It has no value
-	// representation for GetConstSetFunction to copy, but GROUP BY NULL is a
-	// valid single partition and its key still occupies an output-layout slot.
-	return func(v, w *vector.Vector, sel int64, length int) error {
-		if !w.IsConstNull() && !w.IsNull(uint64(sel)) {
-			return moerr.NewInternalErrorNoCtx("time window received a non-NULL T_any partition key")
-		}
-		return vector.SetConstNull(v, length, mp)
-	}
 }
 
 func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
@@ -1611,7 +1592,7 @@ func (ctr *container) setPartVecsForWindows(slot, length int, proc *process.Proc
 		// The broadcast closures capture the pool partOut grows through; rebind
 		// them when the operator's accounted view changes.
 		for p, src := range ctr.partVec[ctr.partIdx] {
-			ctr.partSet[p] = getPartitionSetFunction(*src.GetType(), vecMP)
+			ctr.partSet[p] = vector.GetConstSetFunction(*src.GetType(), vecMP)
 		}
 		ctr.partSetMP = vecMP
 	}
