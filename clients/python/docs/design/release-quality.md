@@ -1,9 +1,86 @@
-# Python SDK release compatibility boundaries
+# Python SDK released-server compatibility
 
-The SDK supports the 4.1.x and 4.2.x release families through common execution
-and SQL construction contracts. Version banners identify test targets; they do
-not establish that a server supports a feature. Explicit native operations stay
-authoritative. Related issues: #30963, #31023, #30067, #30068, #30069.
+The SDK targets **published MatrixOne releases**. Main is a separate forward
+compatibility target. A future server fix does not replace an SDK contract on
+the version users can install today.
+
+## Maintaining version contracts
+
+For each released-server operation, prefer an equivalent implementation that
+preserves values, identifiers, types, transactions and cleanup. If that is not
+possible, give a specific actionable SDK error and verify its effects. Do not
+silently change ASYNC to sync, rename columns, widen types, retry writes or
+replace branch deletion with DROP. A generic native error is not compatibility.
+
+Qualified release profiles include official **v4.2.8**, revision
+`10d204b8763f19b2b37ba2147d1d4c1a7828d6d4`, immutable image
+`matrixorigin/matrixone@sha256:eec6cee1ab0d1ddaa5c81cbc9d79ef6a59ecf13f2b5835631ef3b03ee6822fc6`,
+and official **v4.2.8-hotfix-20261114**, revision
+`c66030006fcc30f3f987be34c5981ab5c1d5bdf0`. The latter Linux/x86_64 ZIP has
+SHA-256 `2c309a2112c83b969eb6ed362ab5af53de3ef9f52f138043ca7b7569402a5616`.
+Both immutable releases retain the native TLS defect described below.
+The maintained `v4.2.8-hotfix` source branch has a separate release-family
+profile and mandatory test revision pin; its fixed candidate is not a published
+release image. Use its real branch identity, including the initial `v`, when
+building with `MO_VERSION=v4.2.8-hotfix` so the server retains the complete name.
+Runtime decisions read the **selected physical connection's handshake**;
+`MO_SDK_TARGET`, `MO_SDK_SOURCE_LINE` and caller version overrides are not runtime
+feature switches. Other unknown/custom/source builds keep their own execution path
+and require qualification. A custom patched build should advertise a distinct
+build/release identity. Do not guess an unpublished minimum fixed version.
+
+| Surface on qualified 4.2.8 release-family profiles | SDK behavior and usable alternative |
+|---|---|
+| Numeric tokens adjacent to dollar aliases | Insert token-separating whitespace on SDK-managed SQL. Preserve values, aliases, bound parameters and export bytes. `execute_driver` keeps its exact SQL; use `execute` or supply whitespace explicitly. |
+| BOOL, uppercase view types, DATE display width and unsigned modifiers | Adopt the SDK dialect with `Client.from_engine(engine)` or use an SDK-created engine. Normalize metadata spelling, preserving native types, dimensions, values and processors. Plain MySQL engines remain owned by SQLAlchemy. |
+| SET member case in source tables | Restore the original native catalog domain on the same connection, scoped by current account and the server's table-name case rules. Preserve SET options, binding and result processing. Do not lowercase domain values. |
+| View ENUM/SET provenance | Preserve actual native VARCHAR metadata when the old view already lost its domain. If metadata cannot construct a usable type, raise an actionable metadata error. Declare types from the known source model explicitly, or recreate the view on a fixed release; the SDK cannot invent lost provenance. |
+| Arrow-input upload | Use checked Parquet staging after the exact native Arrow-format rejection. All public upload value/transaction/streaming/cancellation/cleanup assertions still execute. Native Arrow LOAD remains unsupported. |
+| TLS negotiation | The released frontend can lose buffered ClientHello bytes. The SDK preserves native EOF/timeout failures and adds conditional advice before authentication; it never retries, disables TLS or relaxes verification. The root repair is backported to the actual hotfix branch in [#32748](https://github.com/matrixorigin/matrixone/pull/32748). The 4.2-dev companion alone does not modify this release branch. A verified single-write protocol control passes on the fixed candidate. |
+| gojieba dictionaries | The published 20261114 Linux ZIP lacks runtime dictionaries. An exact native missing-dictionary error keeps its original errno/cause and gains installation advice. Install matching release dictionaries beside the binary or configure `MO_JIEBA_DICT_DIR`, then restart affected CNs. [CI #478](https://github.com/matrixorigin/CI/pull/478) repairs both Linux archives; no parser, input text or expected search value is substituted. |
+| Hotfix version detection | Parse the base X.Y.Z for ordinary version comparisons, retaining the full physical banner for compatibility decisions and exact test identity. A dated hotfix and a source candidate cannot qualify as each other. |
+| Special FULLTEXT identifiers and ASYNC gojieba | Reject the known unsafe definition before dispatch with the release, feature and advice. Keep ordinary FULLTEXT and ASYNC indexing supported. Explicitly choose ordinary identifiers or synchronous parsing only if those meet the application's needs; otherwise upgrade to a release containing #32723. An unrelated quoted column is permitted. Only ASYNC and gojieba options of the same index select the parser limitation; a column/index named `async` and options of separate indexes do not. |
+| Apostrophe Stage names/values | Reject unsafe catalog serialization before dispatch, including bound values. Percent-encode URI path characters where appropriate; quoted credentials/comments require a fixed server. No input is removed or changed silently. |
+| CREATE STAGE with enable=False | Reject before creation: the release ignores the option. Explicit CREATE-enabled followed by ALTER-disabled is usable only when an initially enabled Stage is acceptable; otherwise a fixed release is required. |
+| VECF4/VECF8 | Explain that the requested precision is unavailable. Choose supported precision explicitly. These storage types are outside the #32723 bug-fix backport. |
+| Empty database branch deletion | Preserve the real native identity rejection, source/target state and cause. Explain the release limitation and upgrade requirement. Never substitute DROP DATABASE. Populated supported branches retain normal deletion. |
+| ENUM/SET SHOW CREATE/replay defects | Preserve the native failure with an actionable schema diagnostic, including SQLAlchemy's reflection path that bypasses error listeners. Source data/domain queries remain usable; complex replay needs a fixed release. |
+| Parquet FLOAT32 infinity | Preserve the native error and transaction/cleanup evidence. Explicitly cast the input/schema to FLOAT64 if acceptable; all special values are checked. No implicit storage widening. |
+
+`matrixone/_release_compat.py` owns these narrow release adaptations and
+messages. Engine-local listeners cover sync/async Client, both Session facades,
+adopted engines, export and analytics on the selected checkout. No global MySQL
+registry, new worker, capability cache, queue or write retry is added. SET
+reflection uses one read-only catalog query only when needed, with bound names,
+binary equality, server case normalization and `current_account_id()`.
+The release listener issues zero SQL before dispatch. At most four quote-mode
+interpretations must agree before it rewrites/refuses SQL; ambiguous raw input
+keeps its native path. In particular, compatibility inspection cannot start a
+transaction before Stage DDL. It never commits/rolls back the caller's work.
+
+Unsupported preflight errors have `phase='compatibility'`,
+`committed=False`, `statement_acknowledged=False` and **no fabricated native
+errno or cause**. Metadata-only refusal uses `phase='metadata_reflection'`.
+Known native failures retain `orig`, errno and SQLSTATE; effect/rollback status
+remains owned by the executing transaction. QueryError exposes
+`compatibility_feature`, `compatibility_hint` and `backend_version`; manager
+exceptions retain the diagnostic through their message/cause. Diagnostic
+messages do not copy SQL, credentials, values or paths. Permissions, transport
+failures and unrelated errors are not recast as known release limitations.
+
+Reopen a limitation when a native implementation, contrary public-path evidence
+or an expanded product requirement changes its premises. Qualify new releases
+and then update the pinned CI target together with its expected identity. Kernel
+companion [#32723](https://github.com/matrixorigin/matrixone/pull/32723) adds native
+capabilities to the 4.2 line; it is not required for the SDK's supported release
+paths and explicit limitation contracts above.
+
+Design and separate root review precede implementation:
+[release contract r2](released-server-compatibility.md),
+[r1 review](released-server-compatibility-review-r1.md),
+[SET amendment review](released-server-compatibility-review-r2.md),
+[transaction-neutral amendment](released-server-compatibility-mode-amendment.md)
+and [r3 review](released-server-compatibility-mode-review-r3.md).
 
 ## SQL construction
 
@@ -49,12 +126,62 @@ rows, empty SELECTs and DML affected counts. QueryError retains the original
 exception and native errno; existing QueryError instances are not rewrapped.
 Cancellation remains cancellation rather than a query failure.
 
+Typed `filter(a, b)` and `where(a, b)` conjoin predicates. A raw SQL fragment
+continues to own its positional values (`filter('id = ?', 1)`). Combine raw
+fragments with typed predicates through separate chained calls or explicit
+SQLAlchemy text expressions; a bound value cannot become SQL by accident.
+Single wildcard projections use server column names, including CTE results,
+and retain mapped result processors instead of exposing a field named `*`.
+
+## Autocommit and pool ownership
+
+SDK-created autocommit engines suspend the physical driver's autocommit for
+ordinary SQLAlchemy transactions. An explicit SQLAlchemy `AUTOCOMMIT` execution
+option retains its semantics. Before a raw checkout returns to the pool,
+abandoned work is rolled back before autocommit is enabled; cleanup failures
+invalidate the connection. Checkout restores the requested baseline after
+SQLAlchemy's isolation finalizers, before another borrower receives the lease.
+Explicit commits remain committed, while rollback and abandonment remain
+uncommitted. No write is retried during cleanup.
+
+Driver-parameter migration warnings describe the list form of executemany
+without rendering any bound values, including collection-valued parameters.
+Session error reporting also preserves the database exception when either
+query or error logging itself fails. Cancellation remains outside that
+secondary `Exception` guard.
+
+## Portable pagination
+
+OFFSET without a user LIMIT uses MySQL's unlimited unsigned row count,
+`LIMIT 18446744073709551615 OFFSET n`. This preserves the requested slice on
+released grammar which rejects standalone OFFSET. Explicit LIMIT 0 remains
+empty; omitting both arguments adds neither clause. ORM/index SQL and both
+direct fulltext renderers share the same constant-time compiler helper.
+
+## Export quote boundaries
+
+OUTFILE follows trailing comments on a new line. Terminator normalization shares
+the native dollar-tag, identifier and numeric token rules with parameter
+rendering. Raw backslash-bearing SQL also depends on the executing connection's
+`NO_BACKSLASH_ESCAPES` and `ANSI_QUOTES` settings.
+
+Exports render structured queries once, preserving callable bind identity. For
+backslash-bearing rendered SQL, the existing deferred literal executor reads
+the actual selected checkout's SQL mode before normalizing the query. The same
+checkout executes OUTFILE, including when a Session routing hook wraps the
+statement. This introduces one read-only mode query, no additional pool lease,
+no SQL mode mutation and no write retry. Existing Client buffering, Session
+ownership, async timeout and cancellation cleanup remain authoritative.
+
 ## CLONE completion and no-op semantics
 
 Ordinary clone managers execute plain CLONE followed by SHOW CREATE on the same
 executor. A missing target after acknowledgement is an explicit CloneError with
 its original source. The SDK does not claim row identity from this existence
 check, issue compensating DROP, or take transaction ownership from Session.
+Live database clones first verify their source with SHOW CREATE on the same
+executor: some releases otherwise acknowledge a missing source by creating an
+empty target. Snapshot clones do not require that source to remain live.
 
 Native CLONE IF NOT EXISTS can append data to an existing target in supported
 releases. Safe manager if_not_exists therefore observes the target using bounded,
@@ -62,8 +189,9 @@ read-only information_schema queries on the same executor. Existing targets
 return immediately. Missing targets use plain CLONE and verification. Names
 are decoded and compared as binary catalog values, preserving exact spelling
 when `lower_case_table_names=0` and using server LOWER for the other modes.
-The operation introduces one query for an existing target, or three for a missing
-target. Ordinary CLONE uses two queries.
+The operation introduces one query for an existing target. A missing target
+uses three queries for table/snapshot clones, or four for live database clones.
+Ordinary clones use two queries, or three for live databases.
 
 In tested 4.1 and 4.2 releases, the server's internal CLONE executor can still
 lowercase a new target in mode 0. A conflicting lowercase sibling can therefore
@@ -99,19 +227,148 @@ their cursor. Negative sizes raise ValueError and preserve remaining rows.
 Noninteger sizes retain TypeError, while bool and NumPy integer inputs retain
 Python's integer-index semantics. No network or server cursor is involved.
 
-## Qualification
+## Qualification and outcome reporting
 
-The required runner selects nonempty offline or explicit server contracts,
-rejects skips/errors/failures and input drift, and checks exact observed release
-identity. Full server contracts include shared export/file access; core contracts
-cover queries, transactions, values, snapshots, errors, administration, metadata,
-fulltext zero limits and safe clone no-ops without an export mount.
+A required SDK case on a release proves either the equivalent positive result
+or the exact actionable limitation, native control, unchanged state and cleanup.
+Where usable, execute the explicit alternative as well. Main and the fixed 4.2
+candidate keep the full original positive feature scenarios, including special
+identifiers, ASYNC parser configuration, exact metadata/replay and Stage file
+consumers. Keep unique privilege/account/error/resource-lifecycle checks.
 
-Test 4.1.0/4.1.6/4.2.0/4.2.6 with the full suite and every intermediate stable
-patch with core contracts. Independently test SQLAlchemy 1.4, 2.0 and 2.1.
-Native unsupported outcomes are accepted only by a narrow native-versus-SDK
-negative contract, recorded as feature outcomes rather than hidden skips.
-Optional TLS/S3/HNSW, multi-CN topologies and async Arrow are separate qualification
-surfaces; passing this matrix does not certify them. Direct registered
-`matrixone://` engine URLs still lack a DBAPI entrypoint in the baseline and are
-not qualified here; use SDK connect or adopt a configured MySQL driver engine.
+JUnit feature outcomes distinguish `supported`, `equivalent-implementation` and
+`unsupported-with-actionable-error`. A green SDK compatibility suite **does not
+mean every native feature is supported**. Generic QueryError, unrelated native
+failures, xfail, skipped tests and substituted inputs cannot certify a feature.
+Native controls use independent driver execution where necessary. The test-only
+release selector verifies the actual release banner and pinned revision.
+
+The required runner rejects empty selections, skips, errors, failures, identity
+mismatch and source drift. Required/extended CI phases partition the same full
+collection without omissions or duplicates. The existing release/current-source
+targets and runner count remain unchanged. Online workflow jobs require their
+configured disposable server; skipped jobs provide no online proof.
+
+### Current validation round
+
+Latest main is frozen at `625865c470631f33da52793a2e2766d63e5a316e`, a fresh
+Go 1.27.1 build with binary SHA-256
+`214ef3bb7da119bf84afb353aef65e5eeab0cf018a3c17801c11d533fc9bed03`.
+The actual release-branch TLS candidate is [#32748](https://github.com/matrixorigin/matrixone/pull/32748),
+`dbd8358db6258b59d66d874a21801cbac0f43712` on published hotfix source
+`c66030006fc`, Go 1.26.4, full banner `8.0.30-MatrixOne-v4.2.8-hotfix`,
+binary SHA-256 `e16a080574bcc8a8ef7d3ddcaa990f0a86a45ce64a295023309f471261ae2688`.
+It contains the complete existing TLS fix, without the unrelated 4.2-dev
+capability backports. Its release-family compatibility tests therefore retain
+the released-server alternatives and precise limitations.
+
+| Target / selection | Terminal result |
+|---|---|
+| Latest main `625865c4706` | Complete online 1298/1298 and analytics 340/340; zero failures/errors/skips. The final hotfix parsing addition is renewed through all 12 online version tests. |
+| Fixed actual hotfix source `dbd8358db62` | Complete online 1298/1298 and analytics 340/340; zero failures/errors/skips. Required TLS, certificate/hostname rejection, metadata and unchanged Chinese parser positives remain active. |
+| Native TLS boundary | All nine TLS/disconnect roots pass normally and under race; complete frontend, gofmt, vet and scoped lint pass. An SDK-independent verified TLS 1.3 single-write SSLRequest/ClientHello control authenticates SELECT 1. |
+| Python 3.12 / SQLAlchemy 1.4.54, 2.0.43, 2.1.8 | Complete offline: 3458, 3454, 3462; zero failures/errors/skips. |
+| Python 3.10 / SQLAlchemy 1.4.54, 2.0.57 | Complete offline: 3458, 3454; zero failures/errors/skips. |
+| Python 3.11 / SQLAlchemy 2.1.8 | Complete offline: 3462; zero failures/errors/skips. |
+| Python 3.12 / SQLAlchemy 2.0.57; exact PyMySQL 1.2.3 floor tuple | Complete offline: 3454 each; zero failures/errors/skips. |
+| Published hotfix dictionary installation | Original ZIP and binary hashes retained. Before installation, the exact native error gains SDK advice and the failed insert leaves zero rows. After installing the same c660300 source's dictionaries and restarting the owned service, the identical Chinese text/parser/query returns `(1, 7)`. This separate plaintext packaging probe does not qualify the published binary's TLS. |
+| Installed package / oldest supported Python | Wheel and sdist pass Twine; all 63 runtime modules byte-match source. Python 3.8/SQLAlchemy 1.4 and Python 3.9/SQLAlchemy 2.0 each pass 147 installed-wheel checks without Arrow, failures or skips, including TLS diagnostics and hotfix detection. |
+| CI contracts / collection | All 50 scope/routing contracts pass. Actual 1638 executed scenarios partition into 207 required and 1431 extended, without duplicates or omissions; the existing two online targets and runner count remain unchanged. |
+| Archive workflow | [CI #478](https://github.com/matrixorigin/CI/pull/478) executes both real Linux staging blocks and ZIP checks: six complete/fallback/old-release layout subcases and ten missing-file rejection subcases pass; actionlint passes. |
+
+The earlier full candidate sweep exposed eight version-detection failures:
+`-hotfix` was not recognized, leaving the SDK backend version unset. Those
+original assertions now pass after fixing the shared parser. The failed sweep
+is retained, alongside the earlier published-release TLS failures. No skip,
+expected generic error, retry, TLS downgrade or increased timeout turns them green.
+
+The final `socket.timeout` catch also covers Python 3.8/3.9, where it is distinct
+from built-in TimeoutError. On every full-matrix Python 3.10+ runtime it is the
+same class, preserving the recorded sweep semantics. Installed core and focused
+legacy-timeout tests are renewed separately. Native MySQL view metadata
+controls retain their exact uppercase-type failure; all original SDK reflection,
+value and replay assertions run through SDK adoption on every target.
+
+### Previous validation round
+
+Release: official v4.2.8 above. Main: frozen at
+`71390fb3c16f986b5cbe77e44ea0e5b7f5dbcff6`, fetched and merged in this round,
+fresh Go 1.27.1 build SHA-256
+`55e3651e0954d03203c0ec59fea66ec0df555a7c7f3ffad4d15f50e88181a0cc`.
+The 4.2 candidate uses #32723, based on
+`1a3e7fb6960995e9a143e5cc3d5a50f2feb0980f`; real-service build
+`ec0e3ad8af2`, binary SHA-256
+`3286723ad0a7ba28faa43c5c93c4ff6538eca9066c4c1ae1b0784967fa03c917`.
+Later native nil-process/saved-result fixes have their own owning-package and
+BVT evidence; this is not a claim of an identical current-head candidate binary.
+
+| Target / selection | Terminal result |
+|---|---|
+| Original official v4.2.8 | Earlier complete online 1298/1298 and analytics 340/340, zero failures/errors/skips. After the option-scope correction, a full online sweep completes with 1292 passes and six TLS setup errors, zero assertion failures/skips. Those six original cases subsequently pass once on the same TLS configuration; that does not erase the failed sweep or qualify TLS reliability. |
+| Main `71390fb3c16` | Full online 1298/1298 and analytics 340/340, zero failures/errors/skips. Final-source SQLAlchemy 2.1 consumer renewal: 12/12. |
+| Fixed 4.2 service `ec0e3ad8af2` | Full online 1298/1298 and analytics 340/340, zero failures/errors/skips. Final-source consumer renewal: 5/5. |
+| Release with SQLAlchemy 1.4 | Final-source actual-service checks: 102/102, including changed metadata, Stage, FULLTEXT, numeric and upload surfaces. |
+| Python 3.12 / SQLAlchemy 1.4.54, 2.0.43, 2.1.8 | Complete offline suites: 3431, 3427, 3435; all pass, zero skips. |
+| Python 3.10 / SQLAlchemy 1.4.54, 2.0.57 | Complete offline suites: 3431, 3427; all pass, zero skips. |
+| Python 3.11 / SQLAlchemy 2.1.8 | Complete offline suite: 3435; all pass, zero skips. |
+| Python 3.12 / SQLAlchemy 2.0.57; exact PyMySQL 1.2.3 floor tuple | Complete offline suites: 3427 each; all pass, zero skips. |
+| Python 3.8 / SQLAlchemy 1.4; Python 3.9 / SQLAlchemy 2.0 | Final installed wheel, no Arrow: imports/portable query compilation and 139 runtime checks each pass, zero skips. |
+| Packaging and CI selection | Wheel/sdist build and Twine checks pass; all 63 runtime modules byte-match source. All 50 CI scope contracts pass. Collection partitions 1638 scenarios into 207 required and 1431 extended, with no omissions or duplicates. Black on 18 changed Python files, fatal Flake8 and diff checks pass. |
+
+The full main/candidate sweeps precede the transaction-neutral listener
+amendment and the focused FULLTEXT option-scope correction. Both change only
+the official-4.2.8 branch after its unchanged physical-banner guard, plus
+release-specific assertions and offline regressions. Main/candidate do not
+select that branch. Their full sweep evidence is reused with the actual
+consumer renewals above; this is not a second full sweep of the final source.
+The release online suite and all eight offline profiles were rerun
+completely, without source drift, with their distinct results above. The failed
+full online sweep remains failed; focused renewal is not reported as a second
+passing full sweep. Independent native handshake failure remains reproducible.
+Analytics 340/340 is retained from the full
+transaction-neutral run: the later fix only narrows FULLTEXT option matching;
+analytics has no FULLTEXT queries and those paths are unchanged.
+
+The option-scope correction adds ten lexical boundary controls, bringing the
+focused suite to 68 passes on each of SQLAlchemy 1.4/2.0/2.1. Independent native
+and SDK calls on original 4.2.8 both create/search synchronous gojieba indexes
+when a column or index is named `async`; the old SDK listener wrongly refused
+all three controls. The persistent online alternative retains its original
+Chinese search data and additionally exercises these legal identifiers.
+
+Server sweeps use Python 3.12.16, SQLAlchemy 2.0.43, PyMySQL 1.2.4 and aiomysql
+0.3.2. The offline dependency matrix is separate from full online qualification.
+Python 3.8/3.9 core imports and packaging remain required. Each backend owns
+independent data, deployment/control-plane/status ports and a whole-fixture
+lease through readiness and teardown. S3 buckets use unique names. Client
+budgets and cleanup assertions are unchanged; fixtures use owned NVMe data.
+
+### Retained history and scope limits
+
+Before these SDK release adaptations, the original immutable server produced
+27 online and nine analytics failures under full native-positive assertions.
+That is a retained native reproduction baseline, not the current SDK acceptance
+contract. The previous kernel-first requirement was incorrect for SDK delivery
+and is superseded here. Original failed artifacts and revisions remain retained.
+An initial missing Docker tmpfiles bind caused 25 additional file-access
+failures; the corrected baseline excludes those environment failures.
+
+Existing Arrow staging and pending-close lifecycle designs remain authoritative:
+[upload compatibility](legacy-arrow-upload.md),
+[bounded close amendment](legacy-arrow-upload-cleanup-amendment.md).
+The two existing async admissions stay charged until actual close/producer
+completion; no third producer/checkout/DDL is admitted early. The real SQLite
+lifecycle fixture retains its one-slot pool, original deadlines, single DROP,
+unrelated row, absence and reuse assertions.
+
+This round does not certify every historical 4.1/4.2 patch, optional driver,
+GPU or topology. Registered `matrixone://` DBAPI URLs remain unqualified; use SDK
+connect or adopt a configured MySQL driver engine. Main's detached v1.3.0 banner
+is not a release identity; exact source revisions and binary hashes identify its
+code. The 4.2 candidate uses `MO_VERSION=4.2-dev`, not digits manufactured from a
+worktree branch name.
+
+Native upgrades are shutdown-only. Original released data and physical-upgrade
+copies are retained; old binaries must not open newly written data. Old unmarked
+empty databases cannot safely be inferred as branches, and old view domain
+provenance cannot be reconstructed by upgrading alone.

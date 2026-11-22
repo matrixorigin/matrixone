@@ -7,7 +7,7 @@ import sys
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 from matrixone import with_snapshot
 
@@ -57,6 +57,10 @@ def mysql_transport(request, monkeypatch):
         def execute(self, sql, params=None):
             wire.append(formatter.mogrify(sql, params))
             self.rows = [(1,)]
+
+        def executemany(self, sql, parameters):
+            for params in parameters:
+                self.execute(sql, params)
 
         def fetchone(self):
             return self.rows.pop(0) if self.rows else None
@@ -164,6 +168,60 @@ def test_snapshot_driver_formatting_preserves_identity(mysql_transport, snapshot
             check(session)
     assert all(cache[key] is value for key, value in warmed.items())
     assert statement._annotations['matrixone_snapshot'] == snapshot
+
+
+@pytest.mark.parametrize('owner', ['client', 'session'])
+def test_driver_tuple_with_collection_first_item_is_single_execution(mysql_transport, owner):
+    engine, wire, formatter = mysql_transport
+    client = Client.from_engine(engine, logger=Mock(), sql_log_mode='off')
+    sql = 'INSERT INTO t VALUES (%s, %s)'
+    params = ([1.0, 2.0], "O'Reilly")
+    with client.session() as session:
+        executor = client if owner == 'client' else session
+        executor.execute_driver(sql, params)
+        assert wire[-1] == formatter.mogrify(sql, params)
+
+
+def test_driver_list_of_tuples_remains_executemany(mysql_transport):
+    engine, wire, formatter = mysql_transport
+    client = Client.from_engine(engine, logger=Mock(), sql_log_mode='off')
+    sql = 'INSERT INTO t VALUES (%s, %s)'
+    parameters = [([1.0, 2.0], 'first'), ([3.0, 4.0], 'second')]
+    result = client.execute_driver(sql, parameters)
+    assert result.affected_rows >= 0
+    assert wire[-2:] == [formatter.mogrify(sql, params) for params in parameters]
+
+
+@pytest.mark.parametrize('mysql_transport', ['pyformat'], indirect=True)
+def test_driver_dict_remains_named_binding(mysql_transport):
+    engine, wire, formatter = mysql_transport
+    client = Client.from_engine(engine, logger=Mock(), sql_log_mode='off')
+    sql = 'SELECT %(value)s AS value'
+    params = {'value': "O'Reilly"}
+    assert client.execute_driver(sql, params).scalar() == 1
+    assert wire[-1] == formatter.mogrify(sql, params)
+
+
+@pytest.mark.asyncio
+async def test_async_driver_tuple_with_collection_first_item_is_single_execution():
+    sql = 'INSERT INTO t VALUES (%s, %s)'
+    params = ([1.0, 2.0], "O'Reilly")
+    result = SimpleNamespace(returns_rows=False, rowcount=1)
+    connection = SimpleNamespace(exec_driver_sql=AsyncMock(return_value=result))
+
+    class Begin:
+        async def __aenter__(self):
+            return connection
+
+        async def __aexit__(self, *args):
+            return None
+
+    client = AsyncClient(logger=Mock(), sql_log_mode='off')
+    client._engine = SimpleNamespace(begin=lambda: Begin())
+    assert (await client.execute_driver(sql, params)).affected_rows == 1
+    connection.exec_driver_sql.assert_awaited_once_with(
+        sql, [params], execution_options={'no_parameters': False, '_matrixone_preserve_driver_sql': True}
+    )
 
 
 @pytest.mark.parametrize(
@@ -359,7 +417,7 @@ def test_admin_string_authority_and_consumers(engine):
     cdc = BaseCDCManager(client)
     sql = cdc._build_create_sql('cdc-name', 'mysql://source', 'mysql', "mysql://O'Reilly", 'db.t:db.t')
     assert "CREATE CDC `cdc-name` 'mysql://source' 'mysql' 'mysql://O''Reilly'" in sql
-    assert "task_name = 'O''Reilly'" in cdc._build_select_tasks_sql("O'Reilly")
+    assert cdc._build_list_sql() == 'SHOW CDC ALL'
 
 
 @pytest.mark.parametrize('value', ['a\\b', 'a\0b'])
@@ -427,20 +485,29 @@ def test_snapshot_foreign_engine_and_invalid_name_are_explicit(engine):
 
 @pytest.mark.parametrize('entry', ['query', 'client', 'index'])
 @pytest.mark.parametrize('limit', [None, 0, 2])
-def test_fulltext_pagination_preserves_explicit_zero(entry, limit):
+@pytest.mark.parametrize('offset', [None, 0, 1])
+def test_fulltext_pagination_preserves_explicit_zero(entry, limit, offset):
     if entry == 'query':
-        sql = FulltextQueryBuilder().must('hello').as_sql('docs', ['body'], limit=limit)
+        sql = FulltextQueryBuilder().must('hello').as_sql('docs', ['body'], limit=limit, offset=offset)
     elif entry == 'client':
         builder = FulltextSearchBuilder(None).table('docs').columns(['body']).query('hello')
         if limit is not None:
             builder.limit(limit)
+        if offset is not None:
+            builder.offset(offset)
         sql = builder.explain()
     else:
         builder = IndexSearch('docs', ['body']).search('hello')
         if limit is not None:
             builder.limit(limit)
+        if offset is not None:
+            builder.offset(offset)
         sql = builder.build_sql()
-    assert ('LIMIT' not in sql) if limit is None else sql.endswith('LIMIT ' + str(limit))
+    if offset is None:
+        assert ('LIMIT' not in sql) if limit is None else sql.endswith('LIMIT ' + str(limit))
+    else:
+        effective_limit = 18446744073709551615 if limit is None else limit
+        assert sql.endswith(f'LIMIT {effective_limit} OFFSET {offset}')
 
 
 def test_classified_query_error_retains_exact_source_without_double_wrapping():
@@ -467,6 +534,40 @@ def test_public_query_error_chain_and_reuse(engine, entry):
             assert executor.execute('SELECT 42').scalar() == 42
     assert isinstance(raised.value.orig, sa.exc.SQLAlchemyError)
     assert raised.value.__cause__ is raised.value.orig
+
+
+@pytest.mark.parametrize('entry', ['client', 'client_session', 'exported_session'])
+@pytest.mark.parametrize('logger_failure', [None, 'log_query', 'log_error'])
+def test_deferred_preparation_error_is_not_replaced_by_error_logging(engine, entry, logger_failure):
+    from matrixone._session_execution import _LiteralSQL, deferred_literal_options
+
+    source = sa.exc.OperationalError('SELECT mode', (), RuntimeError('mode lookup failed'))
+
+    class FailedPreparation(_LiteralSQL):
+        inherit_cache = False
+
+        def _render_on_connection(self, connection, **kwargs):
+            raise source
+
+    statement = FailedPreparation('SELECT 1', client=object())
+    client = Client(logger=Mock(), sql_log_mode='off')
+    client._engine = engine
+    if logger_failure:
+        getattr(client.logger, logger_failure).side_effect = OSError('log destination failed')
+    if entry == 'client':
+        with pytest.raises(QueryError) as raised:
+            client.execute(statement)
+    else:
+        context = client.session() if entry == 'client_session' else Session(bind=engine, client=client)
+        with context as session:
+            with pytest.raises(QueryError) as raised:
+                session.execute(statement, **deferred_literal_options(statement))
+    assert raised.value.orig is source
+    assert raised.value.__cause__ is source
+    assert 'mode lookup failed' in str(raised.value)
+    if logger_failure:
+        getattr(client.logger, logger_failure).side_effect = None
+    assert client.execute('SELECT 42').scalar() == 42
 
 
 @pytest.mark.parametrize('async_mode', [False, True])
@@ -559,7 +660,7 @@ async def test_async_driver_adoption_keeps_owner_and_compiles_snapshots():
         await engine.dispose()
 
 
-@pytest.mark.parametrize('version', ['4.1.0', '4.1.6', '4.2.0', '4.2.6'])
+@pytest.mark.parametrize('version', ['4.1.0', '4.1.6', '4.2.0', '4.2.6', '4.2.8-hotfix-20261114'])
 def test_release_target_requires_exact_observed_identity(version):
     assert release_target(version) == version
     validate_server_identity('8.0.30-MatrixOne-v' + version, 'gitsha', version)
@@ -573,6 +674,11 @@ def test_source_identity_requires_revision_and_banner():
     validate_server_identity('8.0.30-MatrixOne-v20261026', 'abcdef', 'v20261026', 'abc')
     with pytest.raises(ValueError, match='Source identity'):
         validate_server_identity('8.0.30-MatrixOne-v20261026', 'abcdef', 'v20261026')
+
+
+def test_hotfix_cannot_be_reported_as_the_original_release():
+    with pytest.raises(ValueError, match='differs'):
+        validate_server_identity('8.0.30-MatrixOne-v4.2.8-hotfix-20261114', 'c660300', '4.2.8')
 
 
 def test_full_server_contracts_require_explicit_disposable_opt_in(tmp_path):
@@ -612,15 +718,77 @@ async def test_clone_noop_or_plain_write_uses_same_executor(async_mode, existing
     result = manager._clone(object_type, target, 'missing_source', None, True)
     if async_mode:
         await result
-    assert len(calls) == (1 if existing else 3)
+    assert len(calls) == (1 if existing else 4 if object_type == 'DATABASE' else 3)
     assert calls[0].startswith('SELECT 1 FROM information_schema.')
     assert "@@lower_case_table_names=0 THEN 'Mixed-" in calls[0]
     if object_type == 'TABLE':
         assert "@@lower_case_table_names=0 THEN 'Db' ELSE LOWER('Db')" in calls[0]
     if not existing:
-        assert calls[1].startswith('CREATE ' + object_type + ' ')
-        assert calls[2].startswith('SHOW CREATE ' + object_type + ' ')
+        if object_type == 'DATABASE':
+            assert calls[1] == 'SHOW CREATE DATABASE missing_source'
+        assert calls[-2].startswith('CREATE ' + object_type + ' ')
+        assert calls[-1].startswith('SHOW CREATE ' + object_type + ' ')
     assert not any('IF NOT EXISTS' in sql for sql in calls)
+
+
+@pytest.mark.parametrize('async_mode', [False, True])
+@pytest.mark.parametrize('source_outcome', ['absent', 'error', 'cancelled'])
+@pytest.mark.asyncio
+async def test_clone_missing_live_database_never_creates_empty_target(async_mode, source_outcome):
+    client = Client(logger=Mock(), sql_log_mode='off')
+    client._engine = object()
+    client.set_backend_version('4.2.8')
+    calls = []
+
+    def execute(sql):
+        calls.append(sql)
+        assert sql == 'SHOW CREATE DATABASE source'
+        if source_outcome == 'error':
+            raise QueryError('unknown source database')
+        if source_outcome == 'cancelled':
+            raise asyncio.CancelledError()
+        return SimpleNamespace(rows=[])
+
+    async def execute_async(sql):
+        return execute(sql)
+
+    manager = (AsyncCloneManager if async_mode else CloneManager)(
+        client, executor=SimpleNamespace(execute=execute_async if async_mode else execute)
+    )
+    expected = asyncio.CancelledError if source_outcome == 'cancelled' else CloneError
+    with pytest.raises(expected):
+        value = manager.clone_database('target', 'source')
+        if async_mode:
+            await value
+    assert calls == ['SHOW CREATE DATABASE source']
+
+
+@pytest.mark.parametrize('async_mode', [False, True])
+@pytest.mark.asyncio
+async def test_clone_historical_database_does_not_require_live_source(async_mode):
+    client = Client(logger=Mock(), sql_log_mode='off')
+    client._engine = object()
+    client.set_backend_version('4.2.8')
+    calls = []
+
+    def execute(sql):
+        calls.append(sql)
+        assert sql != 'SHOW CREATE DATABASE deleted_source'
+        return SimpleNamespace(rows=[(1,)])
+
+    async def execute_async(sql):
+        return execute(sql)
+
+    manager = (AsyncCloneManager if async_mode else CloneManager)(
+        client, executor=SimpleNamespace(execute=execute_async if async_mode else execute)
+    )
+    value = manager.clone_database('target', 'deleted_source', snapshot_name='historical')
+    if async_mode:
+        await value
+    assert calls == [
+        "CREATE DATABASE target CLONE deleted_source {snapshot = 'historical'}",
+        'SHOW CREATE DATABASE target',
+    ]
 
 
 @pytest.mark.parametrize('phase', ['observation', 'write'])
@@ -941,3 +1109,9 @@ def test_vector_ddl_missing_default_schema_fails_before_transport(mysql_transpor
     error = caught.value.orig if isinstance(caught.value, sa.exc.StatementError) else caught.value
     assert isinstance(error, sa.exc.CompileError)
     assert wire == []
+
+
+def test_source_release_branch_identity_cannot_match_a_dated_published_hotfix():
+    validate_server_identity('8.0.30-MatrixOne-v4.2.8-hotfix', 'abcdef', '4.2.8-hotfix', 'abc')
+    with pytest.raises(ValueError, match='Source identity'):
+        validate_server_identity('8.0.30-MatrixOne-v4.2.8-hotfix-20261114', 'abcdef', '4.2.8-hotfix', 'abc')

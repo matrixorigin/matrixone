@@ -175,14 +175,15 @@ def sql_literal(value):
     return "'%s'" % value.replace("'", "''")
 
 
-def substitute_parameters(sql, params, *, sql_mode='', qmark_only=False):
+def substitute_parameters(sql, params, *, sql_mode='', qmark_only=False, _portable_numeric_aliases=False):
     """Render data once; qmark-only builders retain raw SQL modulo expressions."""
-    if params is None:
+    if params is None and not _portable_numeric_aliases:
         return sql
+    render_parameters = params is not None
     named = isinstance(params, dict)
-    if not named and not isinstance(params, (tuple, list)):
+    if render_parameters and not named and not isinstance(params, (tuple, list)):
         raise TypeError('SQL parameters must be a mapping, tuple or list')
-    values = iter(params) if not named else None
+    values = iter(params) if render_parameters and not named else None
     used = set()
     modes = {mode.strip().upper() for mode in sql_mode.split(',')}
     output = []
@@ -257,7 +258,11 @@ def substitute_parameters(sql, params, *, sql_mode='', qmark_only=False):
                 used.add(key)
                 i = match.end()
                 continue
-        if not named and (char == '?' or (not qmark_only and char == '%' and sql.startswith('%s', i))):
+        if (
+            render_parameters
+            and not named
+            and (char == '?' or (not qmark_only and char == '%' and sql.startswith('%s', i)))
+        ):
             try:
                 value = next(values)
             except StopIteration as error:
@@ -270,6 +275,10 @@ def substitute_parameters(sql, params, *, sql_mode='', qmark_only=False):
             if number:
                 output.append(number.group())
                 i = number.end()
+                if _portable_numeric_aliases and _DOLLAR_TAG.match(sql, i):
+                    # Released scanners join adjacent numeric/dollar tokens.
+                    # Whitespace keeps the same numeric value and string alias.
+                    output.append(' ')
                 continue
         # Consume identifiers as tokens, so name$tag$ never starts a string.
         word = _WORD.match(sql, i)
@@ -282,7 +291,7 @@ def substitute_parameters(sql, params, *, sql_mode='', qmark_only=False):
     if named:
         if set(params) != used:
             raise ValueError('Unused named SQL parameters: %s' % sorted(set(params) - used))
-    else:
+    elif render_parameters:
         try:
             next(values)
         except StopIteration:

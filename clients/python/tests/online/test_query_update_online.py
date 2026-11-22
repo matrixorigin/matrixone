@@ -402,7 +402,7 @@ class TestQueryUpdateOnline:
         assert "UPDATE test_users_update SET" in sql
         assert "name = 'SQL Test'" in sql
         assert "email = 'sql@example.com'" in sql
-        assert "WHERE id = 1" in sql
+        assert "WHERE test_users_update.id = 1" in sql
 
     def test_update_with_explain_analyze(self, test_client):
         """Test explaining and analyzing an update query"""

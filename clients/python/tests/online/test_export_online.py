@@ -21,6 +21,7 @@ These tests verify the pandas-style to_csv() and to_jsonl() methods.
 import pytest
 import os
 import tempfile
+import posixpath
 from matrixone import Client
 from matrixone.orm import declarative_base
 from sqlalchemy import Column, Integer, String, select, func
@@ -31,8 +32,16 @@ from .test_config import online_config
 Base = declarative_base()
 
 # Create tmpfiles directory if it doesn't exist
-TMPFILES_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'tmpfiles')
+TMPFILES_DIR = os.environ.get('MO_SDK_EXPORT_LOCAL_DIR') or os.path.join(
+    os.path.dirname(__file__), '..', '..', 'tmpfiles'
+)
 os.makedirs(TMPFILES_DIR, exist_ok=True)
+
+
+def _server_path(local_path):
+    """Translate files in the shared fixture into the server's mount path."""
+    remote = os.environ.get('MO_SDK_EXPORT_DIR')
+    return posixpath.join(remote, os.path.relpath(local_path, TMPFILES_DIR)) if remote else local_path
 
 
 # Define table model for export tests
@@ -69,7 +78,7 @@ class TestExportToCSV:
 
         try:
             # Export using pandas-style API
-            result = test_client.export.to_csv(export_file, "SELECT * FROM export_test_data")
+            result = test_client.export.to_csv(_server_path(export_file), "SELECT * FROM export_test_data")
 
             assert result is not None
             assert os.path.exists(export_file)
@@ -93,7 +102,7 @@ class TestExportToCSV:
 
         try:
             # Export with tab separator (pandas-style)
-            result = test_client.export.to_csv(export_file, "SELECT * FROM export_test_data", sep='\t')
+            result = test_client.export.to_csv(_server_path(export_file), "SELECT * FROM export_test_data", sep='\t')
 
             assert result is not None
 
@@ -116,7 +125,7 @@ class TestExportToCSV:
 
         try:
             # Export with pipe separator (pandas-style)
-            result = test_client.export.to_csv(export_file, "SELECT * FROM export_test_data", sep='|')
+            result = test_client.export.to_csv(_server_path(export_file), "SELECT * FROM export_test_data", sep='|')
 
             assert result is not None
 
@@ -139,7 +148,9 @@ class TestExportToCSV:
 
         try:
             # Export with quotechar (pandas-style)
-            result = test_client.export.to_csv(export_file, "SELECT * FROM export_test_data", quotechar='"')
+            result = test_client.export.to_csv(
+                _server_path(export_file), "SELECT * FROM export_test_data", quotechar='"'
+            )
 
             assert result is not None
 
@@ -165,7 +176,7 @@ class TestExportToCSV:
             # Use SQLAlchemy select() statement
             stmt = select(ExportTestData).where(ExportTestData.value > 100)
 
-            result = test_client.export.to_csv(export_file, stmt, sep=',')
+            result = test_client.export.to_csv(_server_path(export_file), stmt, sep=',')
 
             assert result is not None
 
@@ -191,7 +202,7 @@ class TestExportToCSV:
             # Use MatrixOne query builder
             query = test_client.query(ExportTestData).filter(ExportTestData.value > 100)
 
-            result = test_client.export.to_csv(export_file, query)
+            result = test_client.export.to_csv(_server_path(export_file), query)
 
             assert result is not None
 
@@ -219,7 +230,7 @@ class TestExportToJSONL:
 
         try:
             # Export using pandas-style API
-            result = test_client.export.to_jsonl(export_file, "SELECT * FROM export_test_data")
+            result = test_client.export.to_jsonl(_server_path(export_file), "SELECT * FROM export_test_data")
 
             assert result is not None
             assert os.path.exists(export_file)
@@ -246,7 +257,7 @@ class TestExportToJSONL:
             # Use SQLAlchemy select() statement
             stmt = select(ExportTestData).where(ExportTestData.id > 0)
 
-            result = test_client.export.to_jsonl(export_file, stmt)
+            result = test_client.export.to_jsonl(_server_path(export_file), stmt)
 
             assert result is not None
 
@@ -276,10 +287,12 @@ class TestExportToStage:
 
         try:
             # Create stage
-            test_client.stage.create(stage_name, f"file://{tmpdir}/", if_not_exists=True)
+            test_client.stage.create(stage_name, f"file://{_server_path(tmpdir)}/", if_not_exists=True)
 
             # Export using stage:// path (pandas-style)
-            result = test_client.export.to_csv(f'stage://{stage_name}/test_export.csv', "SELECT * FROM export_test_data")
+            result = test_client.export.to_csv(
+                f'stage://{stage_name}/test_export.csv', "SELECT * FROM export_test_data"
+            )
 
             assert result is not None
 
@@ -309,15 +322,19 @@ class TestExportToStage:
 
         try:
             # Create stage
-            test_client.stage.create(stage_name, f"file://{tmpdir}/", if_not_exists=True)
+            test_client.stage.create(stage_name, f"file://{_server_path(tmpdir)}/", if_not_exists=True)
 
             # Export using stage:// path (pandas-style)
-            result = test_client.export.to_jsonl(f'stage://{stage_name}/test_export.jsonl', "SELECT * FROM export_test_data")
+            result = test_client.export.to_jsonl(
+                f'stage://{stage_name}/test_export.jsonl', "SELECT * FROM export_test_data"
+            )
 
             assert result is not None
 
             # Test new to_jsonl_stage method (pandas-style)
-            result2 = test_client.export.to_jsonl_stage(stage_name, 'test_export2.jsonl', "SELECT * FROM export_test_data")
+            result2 = test_client.export.to_jsonl_stage(
+                stage_name, 'test_export2.jsonl', "SELECT * FROM export_test_data"
+            )
 
             assert result2 is not None
 
@@ -344,10 +361,12 @@ class TestExportToStage:
 
         try:
             # Create stage
-            test_client.stage.create(stage_name, f"file://{tmpdir}/", if_not_exists=True)
+            test_client.stage.create(stage_name, f"file://{_server_path(tmpdir)}/", if_not_exists=True)
 
             # Export aggregated data using SQLAlchemy
-            stmt = select(ExportTestData.name, func.sum(ExportTestData.value).label('total')).group_by(ExportTestData.name)
+            stmt = select(ExportTestData.name, func.sum(ExportTestData.value).label('total')).group_by(
+                ExportTestData.name
+            )
 
             result = test_client.export.to_csv(f'stage://{stage_name}/aggregated.csv', stmt)
 
@@ -377,7 +396,9 @@ class TestExportEdgeCases:
 
         try:
             # Export empty results
-            result = test_client.export.to_csv(export_file, "SELECT * FROM export_test_data WHERE id > 1000")
+            result = test_client.export.to_csv(
+                _server_path(export_file), "SELECT * FROM export_test_data WHERE id > 1000"
+            )
 
             assert result is not None
 
@@ -400,7 +421,9 @@ class TestExportEdgeCases:
 
         try:
             # Export with quotechar to handle special characters
-            result = test_client.export.to_csv(export_file, "SELECT * FROM export_test_data", quotechar='"')
+            result = test_client.export.to_csv(
+                _server_path(export_file), "SELECT * FROM export_test_data", quotechar='"'
+            )
 
             assert result is not None
 
@@ -425,7 +448,7 @@ class TestExportEdgeCases:
             # Export using session
             with test_client.session() as session:
                 stmt = select(ExportTestData).where(ExportTestData.id > 0)
-                result = session.export.to_csv(export_file, stmt)
+                result = session.export.to_csv(_server_path(export_file), stmt)
                 assert result is not None
 
         finally:

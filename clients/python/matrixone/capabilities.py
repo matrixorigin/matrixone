@@ -142,21 +142,36 @@ def _raise_arrow_rejection(error):
         raise error
 
 
-def check_arrow_load(connection):
+# Qualified 4.2 builds lack native Arrow LOAD, including the #32723 candidate.
+# Public SDK Arrow-input upload still has to succeed through checked Parquet;
+# this exact format rejection is not a general error-to-success conversion.
+# Reassess from the selected checkout's probe, never from a release threshold.
+# See docs/design/release-quality.md#maintaining-version-contracts.
+def check_arrow_load(connection, allow_parquet=False):
     """Qualify only this selected write checkout; pooled observations are hints."""
     try:
         result = connection.exec_driver_sql(_probe_statement('arrow_load', PROBES['arrow_load']))
         result.close()
     except DBAPIError as error:
+        if allow_parquet and error.connection_invalidated:
+            raise
+        if allow_parquet and failed_observation(error, (), 'arrow_load').state == 'unsupported':
+            return 'parquet'
         _raise_arrow_rejection(error)
+    return 'arrow' if allow_parquet else None
 
 
-async def check_arrow_load_async(connection):
+async def check_arrow_load_async(connection, allow_parquet=False):
     try:
         result = await connection.exec_driver_sql(_probe_statement('arrow_load', PROBES['arrow_load']))
         result.close()
     except DBAPIError as error:
+        if allow_parquet and error.connection_invalidated:
+            raise
+        if allow_parquet and failed_observation(error, (), 'arrow_load').state == 'unsupported':
+            return 'parquet'
         _raise_arrow_rejection(error)
+    return 'arrow' if allow_parquet else None
 
 
 def get_capabilities(client, refresh=False):

@@ -76,7 +76,7 @@ class TestFulltextComprehensive:
             result = test_client.query(
                 "test_documents.title",
                 "test_documents.content",
-                boolean_match("title", "content").encourage("machine learning"),
+                boolean_match("title", "content").encourage("machine").encourage("learning"),
             ).execute()
 
             assert result is not None
@@ -130,7 +130,7 @@ class TestFulltextComprehensive:
             result = test_client.query(
                 "test_docs_tx.title",
                 "test_docs_tx.content",
-                boolean_match("title", "content").encourage("python programming"),
+                boolean_match("title", "content").encourage("python").encourage("programming"),
             ).execute()
 
             assert result is not None
@@ -185,7 +185,9 @@ class TestFulltextComprehensive:
         try:
             # Test async search functionality
             result = await test_async_client.query(
-                "async_documents.title", "async_documents.content", boolean_match("title", "content").encourage("database")
+                "async_documents.title",
+                "async_documents.content",
+                boolean_match("title", "content").encourage("database"),
             ).execute()
 
             assert result is not None
@@ -242,7 +244,7 @@ class TestFulltextComprehensive:
             result = await test_async_client.query(
                 "async_docs_tx.title",
                 "async_docs_tx.content",
-                boolean_match("title", "content").encourage("async programming"),
+                boolean_match("title", "content").encourage("async").encourage("programming"),
             ).execute()
 
             assert result is not None
@@ -297,7 +299,6 @@ class TestFulltextComprehensive:
             test_table,
             name="ftidx_test",
             columns=["title", "content"],
-            algorithm=FulltextAlgorithmType.BM25,
         )
 
         # Verify index was created by checking if we can search
@@ -328,7 +329,6 @@ class TestFulltextComprehensive:
                 "test_fulltext_async",
                 name="ftidx_async_test",
                 columns=["title", "content"],
-                algorithm=FulltextAlgorithmType.BM25,
             )
 
             # Verify index was created by checking if we can search
@@ -434,7 +434,7 @@ class TestFulltextComprehensive:
             result = test_client.query(
                 "manual_tx_docs.title",
                 "manual_tx_docs.content",
-                boolean_match("title", "content").encourage("transaction management"),
+                boolean_match("title", "content").encourage("transaction").encourage("management"),
             ).execute()
 
             assert result is not None
@@ -493,7 +493,7 @@ class TestFulltextComprehensive:
             result = await test_async_client.query(
                 "manual_async_tx_docs.title",
                 "manual_async_tx_docs.content",
-                boolean_match("title", "content").encourage("async transactions"),
+                boolean_match("title", "content").encourage("async").encourage("transactions"),
             ).execute()
 
             assert result is not None
@@ -617,9 +617,9 @@ class TestFulltextComprehensive:
                 await test_async_client.query("async_advanced_docs.title", "async_advanced_docs.content")
                 .filter(
                     boolean_match("title", "content").encourage("programming"),
-                    "async_advanced_docs.category = 'Programming'",
-                    "async_advanced_docs.priority > 1",
                 )
+                .filter("async_advanced_docs.category = 'Programming'")
+                .filter("async_advanced_docs.priority > 1")
                 .execute()
             )
 
@@ -736,25 +736,35 @@ class TestFulltextComprehensive:
 
         try:
             # Create fulltext index
-            await test_async_client.fulltext_index.create("async_concurrent_docs", "ftidx_concurrent", ["title", "content"])
+            await test_async_client.fulltext_index.create(
+                "async_concurrent_docs", "ftidx_concurrent", ["title", "content"]
+            )
 
             # Create multiple concurrent search tasks (use database prefix to avoid connection pool issues)
             table_name = "async_concurrent_test.async_concurrent_docs"
             tasks = [
                 test_async_client.query(
-                    f"{table_name}.title", f"{table_name}.content", boolean_match("title", "content").encourage("python")
+                    f"{table_name}.title",
+                    f"{table_name}.content",
+                    boolean_match("title", "content").encourage("python"),
                 ).execute(),
                 test_async_client.query(
-                    f"{table_name}.title", f"{table_name}.content", boolean_match("title", "content").encourage("javascript")
+                    f"{table_name}.title",
+                    f"{table_name}.content",
+                    boolean_match("title", "content").encourage("javascript"),
                 ).execute(),
                 test_async_client.query(
-                    f"{table_name}.title", f"{table_name}.content", boolean_match("title", "content").encourage("database")
+                    f"{table_name}.title",
+                    f"{table_name}.content",
+                    boolean_match("title", "content").encourage("database"),
                 ).execute(),
                 test_async_client.query(
                     f"{table_name}.title", f"{table_name}.content", boolean_match("title", "content").encourage("web")
                 ).execute(),
                 test_async_client.query(
-                    f"{table_name}.title", f"{table_name}.content", boolean_match("title", "content").encourage("testing")
+                    f"{table_name}.title",
+                    f"{table_name}.content",
+                    boolean_match("title", "content").encourage("testing"),
                 ).execute(),
             ]
 
@@ -770,11 +780,14 @@ class TestFulltextComprehensive:
 
             # Verify each search returned relevant results (row[0] is title, row[1] is content)
             python_results = results[0]
-            assert any("python" in str(row[0]).lower() or "python" in str(row[1]).lower() for row in python_results.rows)
+            assert any(
+                "python" in str(row[0]).lower() or "python" in str(row[1]).lower() for row in python_results.rows
+            )
 
             javascript_results = results[1]
             assert any(
-                "javascript" in str(row[0]).lower() or "javascript" in str(row[1]).lower() for row in javascript_results.rows
+                "javascript" in str(row[0]).lower() or "javascript" in str(row[1]).lower()
+                for row in javascript_results.rows
             )
 
             database_results = results[2]
@@ -829,7 +842,9 @@ class TestFulltextComprehensive:
         try:
             # Test natural language mode
             result = test_client.query(
-                "test_modes.title", "test_modes.content", boolean_match("title", "content").encourage("machine learning")
+                "test_modes.title",
+                "test_modes.content",
+                boolean_match("title", "content").encourage("machine").encourage("learning"),
             ).execute()
             assert result is not None
 
@@ -1013,7 +1028,9 @@ class TestFulltextComprehensive:
 
             # Test search on multiple columns
             result = (
-                test_client.query(JsonMulti).filter(boolean_match(JsonMulti.json1, JsonMulti.json2).must("red")).execute()
+                test_client.query(JsonMulti)
+                .filter(boolean_match(JsonMulti.json1, JsonMulti.json2).must("red"))
+                .execute()
             )
 
             assert result is not None
@@ -1069,7 +1086,9 @@ class TestFulltextComprehensive:
 
             # Test search for Chinese content
             result = (
-                test_client.query(JsonChinese).filter(boolean_match(JsonChinese.json_data).must("中文學習教材")).execute()
+                test_client.query(JsonChinese)
+                .filter(boolean_match(JsonChinese.json_data).must("中文學習教材"))
+                .execute()
             )
 
             assert result is not None
@@ -1133,7 +1152,9 @@ class TestFulltextComprehensive:
 
             # Test ORM query with JSON parser
             result = (
-                test_client.query(JsonDocument).filter(boolean_match(JsonDocument.json_content).must("Django")).execute()
+                test_client.query(JsonDocument)
+                .filter(boolean_match(JsonDocument.json_content).must("Django"))
+                .execute()
             )
 
             assert result is not None
@@ -1213,7 +1234,9 @@ class TestFulltextComprehensive:
             assert len(rows) == 5, "Should have 5 rows after single insert"
 
             # Test fulltext search on JSON data
-            result = test_client.query(JsonColonTest).filter(boolean_match(JsonColonTest.json_data).must("red")).execute()
+            result = (
+                test_client.query(JsonColonTest).filter(boolean_match(JsonColonTest.json_data).must("red")).execute()
+            )
 
             rows = result.fetchall()
             assert len(rows) >= 1, "Should find JSON with 'red'"
@@ -1254,7 +1277,11 @@ class TestFulltextComprehensive:
                     "title": "神雕侠侣 第二回 故人之子",
                     "body": "正自发痴，忽听左首屋中传出一人喝道：这是在人家府上，你又提小龙女干什么？",
                 },
-                {"id": 3, "title": "神雕侠侣 第三回 投师终南", "body": "郭靖在舟中潜运神功，数日间伤势便已痊愈了大半。"},
+                {
+                    "id": 3,
+                    "title": "神雕侠侣 第三回 投师终南",
+                    "body": "郭靖在舟中潜运神功，数日间伤势便已痊愈了大半。",
+                },
                 {
                     "id": 4,
                     "title": "神雕侠侣 第四回 全真门下",
@@ -1323,7 +1350,9 @@ class TestFulltextComprehensive:
             id = Column(Integer, primary_key=True, autoincrement=True)
             title = Column(String(255))
             content = Column(Text)
-            __table_args__ = (FulltextIndex("ftidx_ngram_mixed", ["title", "content"], parser=FulltextParserType.NGRAM),)
+            __table_args__ = (
+                FulltextIndex("ftidx_ngram_mixed", ["title", "content"], parser=FulltextParserType.NGRAM),
+            )
 
         try:
             test_client.create_table(MixedArticle)
@@ -1377,7 +1406,7 @@ class TestFulltextComprehensive:
 
         class BM25Article(Base):
             __tablename__ = "bm25_articles"
-            id = Column(Integer, primary_key=True)
+            id = Column(Integer, primary_key=True, autoincrement=False)
             body = Column(String(500))
             title = Column(Text)
             __table_args__ = (FulltextIndex("ftidx_bm25", ["body", "title"]),)
@@ -1435,7 +1464,7 @@ class TestFulltextComprehensive:
 
         class WildcardTest(Base):
             __tablename__ = "wildcard_test"
-            id = Column(Integer, primary_key=True)
+            id = Column(Integer, primary_key=True, autoincrement=False)
             body = Column(String(500))
             title = Column(Text)
             __table_args__ = (FulltextIndex("ftidx_wildcard", ["body", "title"]),)
@@ -1473,7 +1502,7 @@ class TestFulltextComprehensive:
 
         class PhraseTest(Base):
             __tablename__ = "phrase_test"
-            id = Column(Integer, primary_key=True)
+            id = Column(Integer, primary_key=True, autoincrement=False)
             body = Column(String(500))
             title = Column(Text)
             __table_args__ = (FulltextIndex("ftidx_phrase", ["body", "title"]),)
@@ -1522,7 +1551,7 @@ class TestFulltextComprehensive:
 
         class UpdateTest(Base):
             __tablename__ = "update_test"
-            id = Column(Integer, primary_key=True)
+            id = Column(Integer, primary_key=True, autoincrement=False)
             body = Column(String(500))
             title = Column(Text)
             __table_args__ = (FulltextIndex("ftidx_update", ["body", "title"]),)
@@ -1568,7 +1597,7 @@ class TestFulltextComprehensive:
 
         class DeleteTest(Base):
             __tablename__ = "delete_test"
-            id = Column(Integer, primary_key=True)
+            id = Column(Integer, primary_key=True, autoincrement=False)
             body = Column(String(500))
             title = Column(Text)
             __table_args__ = (FulltextIndex("ftidx_delete", ["body", "title"]),)
@@ -1626,7 +1655,12 @@ class TestFulltextComprehensive:
             # Insert test data
             employees = [
                 {"employee_number": 1002, "last_name": "Murphy", "first_name": "Diane", "email": "dmurphy@test.com"},
-                {"employee_number": 1056, "last_name": "Patterson", "first_name": "Mary", "email": "mpatterso@test.com"},
+                {
+                    "employee_number": 1056,
+                    "last_name": "Patterson",
+                    "first_name": "Mary",
+                    "email": "mpatterso@test.com",
+                },
             ]
             test_client.batch_insert(AlterTest, employees)
 
@@ -1666,7 +1700,7 @@ class TestFulltextComprehensive:
 
         class NullTest(Base):
             __tablename__ = "null_test"
-            id = Column(Integer, primary_key=True)
+            id = Column(Integer, primary_key=True, autoincrement=False)
             body = Column(String(500))
             title = Column(Text)
             __table_args__ = (FulltextIndex("ftidx_null", ["body", "title"]),)
@@ -1743,7 +1777,7 @@ class TestFulltextComprehensive:
         try:
             # Use create_all() to create table with fulltext index
             with test_client.session() as session:
-                Base.metadata.create_all(session.get_bind())
+                Base.metadata.create_all(session.connection())
                 session.commit()
 
             # Verify index was created
@@ -1767,6 +1801,6 @@ class TestFulltextComprehensive:
 
         finally:
             with test_client.session() as session:
-                Base.metadata.drop_all(session.get_bind())
+                Base.metadata.drop_all(session.connection())
                 session.commit()
             test_client.execute("DROP DATABASE fulltext_create_all_test")

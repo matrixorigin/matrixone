@@ -317,7 +317,9 @@ class VersionManager:
             return "999.0.0"
 
         # Pattern 2: Release version "8.0.30-MatrixOne-v3.0.0" (v followed by complete version number)
-        release_pattern = r"^(\d+\.\d+\.\d+)-MatrixOne-v(\d+\.\d+\.\d+)$"
+        # Hotfix suffixes retain the base semantic version for comparisons.
+        # Runtime compatibility still uses the full physical handshake identity.
+        release_pattern = r"^(\d+\.\d+\.\d+)-MatrixOne-v(\d+\.\d+\.\d+)(?:-hotfix(?:-[0-9]{8})?)?$"
         release_match = re.search(release_pattern, version_string)
         if release_match:
             # Extract the semantic version part
@@ -536,6 +538,7 @@ def requires_version(
             return True
 
         if inspect.iscoroutinefunction(func):
+
             @functools.wraps(func)
             async def wrapper(*args, **kwargs):
                 if not check_version(args):
@@ -543,6 +546,7 @@ def requires_version(
                 return await func(*args, **kwargs)
 
         else:
+
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
                 if not check_version(args):

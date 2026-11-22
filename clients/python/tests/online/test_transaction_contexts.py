@@ -368,7 +368,9 @@ class TestTransactionContextCompatibility:
             """)
 
             # Insert test data
-            await client.execute("INSERT INTO async_compat_tx_docs (title, content) VALUES ('Test Title', 'Test Content')")
+            await client.execute(
+                "INSERT INTO async_compat_tx_docs (title, content) VALUES ('Test Title', 'Test Content')"
+            )
 
             # Create fulltext index
             await client.fulltext_index.create("async_compat_tx_docs", "ftidx_async_compat", ["title", "content"])
@@ -468,7 +470,9 @@ class TestTransactionContextFeatures:
         with client.session() as tx:
             # Test basic search
             result = tx.query(
-                "features_tx_docs.title", "features_tx_docs.content", boolean_match("title", "content").encourage("feature")
+                "features_tx_docs.title",
+                "features_tx_docs.content",
+                boolean_match("title", "content").encourage("feature"),
             ).execute()
             assert len(result.fetchall()) > 0
 
@@ -491,7 +495,8 @@ class TestTransactionContextFeatures:
             # Test with WHERE conditions
             result = (
                 tx.query("features_tx_docs.title", "features_tx_docs.content")
-                .filter(boolean_match("title", "content").encourage("test"), "features_tx_docs.category = 'Category1'")
+                .filter(boolean_match("title", "content").encourage("test"))
+                .filter("features_tx_docs.category = 'Category1'")
                 .execute()
             )
             assert len(result.fetchall()) > 0
@@ -581,9 +586,8 @@ class TestTransactionContextFeatures:
                 # Test with WHERE conditions
                 result = (
                     await tx.query("async_features_tx_docs.title", "async_features_tx_docs.content")
-                    .filter(
-                        boolean_match("title", "content").encourage("test"), "async_features_tx_docs.category = 'Category1'"
-                    )
+                    .filter(boolean_match("title", "content").encourage("test"))
+                    .filter("async_features_tx_docs.category = 'Category1'")
                     .execute()
                 )
                 assert len(result.fetchall()) > 0

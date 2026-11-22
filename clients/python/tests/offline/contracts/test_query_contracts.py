@@ -120,6 +120,36 @@ async def resolve(value):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('method', ['filter', 'where'])
+async def test_multiple_typed_predicates_preserve_grouping_and_binding(query_client, method):
+    query = query_client.query(Item).order_by(Item.id)
+    getattr(query, method)(sa.or_(Item.id == 1, Item.id == 2), Item.value < 2, Item.text != None)
+    rows = await resolve(query.all())
+    assert [row.id for row in rows] == [2]
+    # Raw fragments retain their positional-value API.
+    rows = await resolve(query_client.query(Item).filter('id = ? AND text = ?', 1, 'red').all())
+    assert [row.id for row in rows] == [1]
+
+
+@pytest.mark.asyncio
+async def test_invalid_additional_predicate_does_not_modify_query(query_client):
+    query = query_client.query(Item).filter(Item.id == 1)
+    with pytest.raises(ValueError, match='carry their own parameters'):
+        query.filter(Item.text == 'blue', Item.value == 1, 'bound-value')
+    assert [row.id for row in await resolve(query.all())] == [1]
+
+
+def test_multiple_fulltext_and_column_predicates(query_client):
+    from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
+
+    query = query_client.query(Item).filter(boolean_match('text').encourage('red'), Item.id == 1)
+    sql, params = query._build_sql()
+    assert "MATCH(`text`) AGAINST('red' IN BOOLEAN MODE)" in sql
+    assert ' AND items.id = 1' in sql
+    assert params == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('query_client', ['sync', 'async'], indirect=True)
 async def test_table_mapped_model_without_tablename_materializes_rows(query_client):
     metadata = sa.MetaData()
@@ -512,6 +542,41 @@ async def test_recursive_cte_executes_and_nonrecursive_control(query_client):
     ordinary = query_client.query(CTE('plain', 'SELECT 7 AS n')).select('n')
     assert (await resolve(ordinary.first())).n == 7
     assert ordinary._build_sql()[0].startswith('WITH plain ')
+
+
+@pytest.mark.asyncio
+async def test_cte_default_wildcard_materializes_every_result_column(query_client):
+    from matrixone.orm import CTE
+
+    query = query_client.query(CTE('all_fields', "SELECT 1 AS id, 2 AS value, 'red' AS text"))
+    row = await resolve(query.first())
+    assert (row.id, row.value, row.text) == (1, 2, 'red')
+    assert tuple(row) == (1, 2, 'red')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('projection', ['*', 'items.*', sa.literal_column('*')])
+async def test_mapped_wildcard_preserves_names_types_and_nulls(query_client, projection):
+    class Tagged(sa.TypeDecorator):
+        impl = sa.Integer
+        cache_ok = True
+
+        def process_result_value(self, value, dialect):
+            return None if value is None else f'value:{value}'
+
+    class Mapped(declarative_base()):
+        __tablename__ = 'items'
+        id = sa.Column(sa.Integer, primary_key=True)
+        value = sa.Column(Tagged())
+        text = sa.Column(sa.String)
+
+    rows = await resolve(query_client.query(Mapped).select(projection).order_by(Mapped.id).all())
+    assert [(row.id, row.value, row.text) for row in rows] == [
+        (1, 'value:2', 'red'),
+        (2, 'value:1', 'blue'),
+        (3, None, None),
+    ]
+    assert all(len(row) == 3 for row in rows)
 
 
 def test_async_export_manager_is_stable_public_entry():

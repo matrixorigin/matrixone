@@ -259,8 +259,18 @@ async def test_duplicate_write_rejection(trial, asynchronous, source):
         assert wrapped.connection_invalidated is False and wrapped.orig.args[0] == 1062
         assert trial.client.execute('SELECT * FROM ' + table + ' ORDER BY id').rows == [(100, 'sentinel')]
         good = pa.table({'id': [300], 'note': ['control']})
-        operation = client.analytics.upload_arrow(table, good, trial.directory, create=False)
-        assert (await operation if asynchronous else operation) == 1
+        if source == 'file':
+            path = trial.directory / 'control.parquet'
+            pq.write_table(good, path)
+            if asynchronous:
+                async with await client.analytics.read_parquet(path) as control:
+                    assert await control.import_into(table) == 1
+            else:
+                with client.analytics.read_parquet(path) as control:
+                    assert control.import_into(table) == 1
+        else:
+            operation = client.analytics.upload_arrow(table, good, trial.directory, create=False)
+            assert (await operation if asynchronous else operation) == 1
         assert trial.client.execute('SELECT * FROM ' + table + ' ORDER BY id').rows == [
             (100, 'sentinel'),
             (300, 'control'),

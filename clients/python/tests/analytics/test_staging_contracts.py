@@ -14,53 +14,146 @@ pa = pytest.importorskip('pyarrow', minversion='18.0.0')
 from matrixone.analytics import _plan_files, _stage_arrow
 
 
-def stage(data, tmp_path, limit=1 << 20, cancelled=None):
+@pytest.mark.asyncio
+@pytest.mark.parametrize('asynchronous', [False, True])
+@pytest.mark.parametrize('formats,rejected', [(('arrow', 'parquet'), True), (('parquet', 'arrow'), False)])
+async def test_upload_requalifies_format_before_target_mutation(tmp_path, monkeypatch, asynchronous, formats, rejected):
+    from contextlib import contextmanager, asynccontextmanager
+    from types import SimpleNamespace
+    from sqlalchemy.exc import OperationalError
+    from matrixone import Client, AsyncClient
+    from matrixone.exceptions import QueryError
+    import matrixone.analytics as sync_module
+    import matrixone.async_analytics as async_module
+
+    probes = iter(formats)
+    statements, loaded = [], []
+
+    def execute(sql, params=None):
+        statements.append(sql)
+        if sql.startswith('EXPLAIN') and next(probes) == 'parquet':
+            raise OperationalError(sql, {}, Exception(20300, "format 'arrow' is not supported"))
+        if sql.startswith('LOAD'):
+            import pyarrow.parquet as pq
+
+            assert "'format'='parquet'" in sql
+            loaded.append(pq.read_table(params[0]))
+        return SimpleNamespace(close=lambda: None)
+
+    async def execute_async(sql, params=None):
+        return execute(sql, params)
+
+    async def close_async():
+        pass
+
+    connection = SimpleNamespace(exec_driver_sql=execute_async if asynchronous else execute, close=close_async)
+
+    @contextmanager
+    def connect():
+        yield connection
+
+    async def connect_async():
+        return connection
+
+    @contextmanager
+    def transaction(*args, **kwargs):
+        yield connection
+
+    @asynccontextmanager
+    async def transaction_async(*args, **kwargs):
+        yield connection
+
+    client = AsyncClient() if asynchronous else Client()
+    client._engine = SimpleNamespace(connect=connect_async if asynchronous else connect)
+    manager = client.analytics
+    monkeypatch.setattr(
+        async_module if asynchronous else sync_module,
+        '_write_transaction',
+        transaction_async if asynchronous else transaction,
+    )
+    data = pa.table({'id': [1, 2]})
+    try:
+
+        async def upload():
+            result = manager.upload_arrow('format_qualification', data, tmp_path)
+            return await result if asynchronous else result
+
+        if rejected:
+            with pytest.raises(QueryError) as caught:
+                await upload()
+            assert caught.value.phase == 'capability' and caught.value.committed is False
+            assert all(sql.startswith('EXPLAIN') for sql in statements)
+            assert not loaded
+        else:
+            assert await upload() == 2
+            assert len(loaded) == 1 and loaded[0].equals(data)
+        assert len([sql for sql in statements if sql.startswith('EXPLAIN')]) == 2
+        assert not list(tmp_path.glob('mo_py_arrow_*'))
+    finally:
+        if asynchronous:
+            await manager.disconnect()
+        client._engine = None
+
+
+def stage(data, tmp_path, limit=1 << 20, cancelled=None, file_format='arrow'):
     paths = []
     try:
-        result = _stage_arrow(data, tmp_path, None, 2, limit, paths.append, cancelled)
+        result = _stage_arrow(data, tmp_path, None, 2, limit, paths.append, cancelled, file_format=file_format)
         return result, paths
     except BaseException as error:
         error.test_owned_paths = paths
         raise
 
 
-def test_staging_is_readable_ipc_with_checked_types(tmp_path):
+@pytest.mark.parametrize('file_format', ['arrow', 'parquet'])
+def test_staging_is_readable_with_checked_types(tmp_path, file_format):
     table = pa.table({'id': [1, 2, None], 'value': ['a', '', 'b']})
-    staged, paths = stage(table, tmp_path)
+    staged, paths = stage(table, tmp_path, file_format=file_format)
     try:
         assert staged.rows == 3
         assert paths == [staged.path]
-        with pa.ipc.open_file(staged.path) as reader:
-            assert reader.read_all().equals(table)
-            assert reader.num_record_batches == 2
+        assert staged.path.endswith('.' + file_format)
+        if file_format == 'arrow':
+            with pa.ipc.open_file(staged.path) as reader:
+                assert reader.read_all().equals(table)
+                assert reader.num_record_batches == 2
+        else:
+            import pyarrow.parquet as pq
+
+            with pq.ParquetFile(staged.path) as reader:
+                assert reader.read().equals(table)
+                assert reader.num_row_groups == 2
     finally:
         for path in paths:
             os.unlink(path)
 
 
 @pytest.mark.parametrize('limit', [1, 100, 1024])
-def test_byte_budget_applies_before_large_value_or_footer_write(tmp_path, limit):
+@pytest.mark.parametrize('file_format', ['arrow', 'parquet'])
+def test_byte_budget_applies_before_large_value_or_footer_write(tmp_path, limit, file_format):
     with pytest.raises(ValueError, match='byte limit') as caught:
-        stage(pa.table({'s': ['x' * 10000]}), tmp_path, limit)
+        stage(pa.table({'s': ['x' * 10000]}), tmp_path, limit, file_format=file_format)
     for path in caught.value.test_owned_paths:
         assert os.stat(path).st_size <= limit
         os.unlink(path)
 
 
-def test_empty_file_footer_cannot_exceed_budget(tmp_path):
+@pytest.mark.parametrize('file_format', ['arrow', 'parquet'])
+def test_empty_file_footer_cannot_exceed_budget(tmp_path, file_format):
     empty = pa.table({'id': pa.array([], type=pa.int64())})
-    staged, paths = stage(empty, tmp_path)
+    staged, paths = stage(empty, tmp_path, file_format=file_format)
     full_size = os.stat(staged.path).st_size
     os.unlink(staged.path)
     with pytest.raises(ValueError, match='byte limit') as caught:
-        stage(empty, tmp_path, full_size - 1)
+        stage(empty, tmp_path, full_size - 1, file_format=file_format)
     assert caught.value.test_owned_paths
     for path in caught.value.test_owned_paths:
         assert os.stat(path).st_size < full_size
         os.unlink(path)
 
 
-def test_reader_error_remains_primary_and_reserved_file_is_closed(tmp_path):
+@pytest.mark.parametrize('file_format', ['arrow', 'parquet'])
+def test_reader_error_remains_primary_and_reserved_file_is_closed(tmp_path, file_format):
     original = RuntimeError('reader failed')
 
     def batches():
@@ -69,7 +162,7 @@ def test_reader_error_remains_primary_and_reserved_file_is_closed(tmp_path):
 
     reader = pa.RecordBatchReader.from_batches(pa.schema([('id', pa.int64())]), batches())
     with pytest.raises(RuntimeError) as caught:
-        stage(reader, tmp_path)
+        stage(reader, tmp_path, file_format=file_format)
     assert caught.value is original
     for path in caught.value.test_owned_paths:
         os.unlink(path)

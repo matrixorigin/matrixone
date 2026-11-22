@@ -111,7 +111,8 @@ class TestSQLAlchemyIntegration(unittest.TestCase):
 
         expected_sql = "CREATE DATABASE target_db CLONE source_db"
         self.assertEqual(
-            mock_client.execute.call_args_list, [call(expected_sql), call('SHOW CREATE DATABASE target_db')]
+            mock_client.execute.call_args_list,
+            [call('SHOW CREATE DATABASE source_db'), call(expected_sql), call('SHOW CREATE DATABASE target_db')],
         )
 
     def test_transaction_wrapper(self):
@@ -156,7 +157,11 @@ class TestSQLAlchemyIntegration(unittest.TestCase):
         # Verify that the transaction's execute was called
         self.assertEqual(
             mock_tx.execute.call_args_list,
-            [call('CREATE DATABASE target_db CLONE source_db'), call('SHOW CREATE DATABASE target_db')],
+            [
+                call('SHOW CREATE DATABASE source_db'),
+                call('CREATE DATABASE target_db CLONE source_db'),
+                call('SHOW CREATE DATABASE target_db'),
+            ],
         )
 
     def test_sqlalchemy_integration_pattern(self):

@@ -873,7 +873,7 @@ class MatrixOneCLI(cmd.Cmd):
                 SELECT DISTINCT mo_tables.relname AS table_name
                 FROM mo_catalog.mo_indexes
                 JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
-                WHERE mo_indexes.type IN ('MULTIPLE', 'UNIQUE') AND mo_tables.reldatabase = ?
+                WHERE mo_indexes.type IN ('MULTIPLE', 'UNIQUE', 'FULLTEXT') AND mo_tables.reldatabase = ?
                 ORDER BY mo_tables.relname
             """
             result = self.client.execute(sql, (database,))
