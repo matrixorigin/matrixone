@@ -122,7 +122,6 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 					}
 					return err
 				}
-				source.CopyExpressionMetadataTo(view)
 				output.Vecs[column] = view
 			}
 		}

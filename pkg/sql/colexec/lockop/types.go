@@ -57,6 +57,7 @@ type LockOptions struct {
 	changeDef                bool
 	refreshTableSnapshot     bool
 	admissionOnly            bool
+	reuseOwnedRange          bool
 	admissionResult          *lock.Result
 	noWait                   bool
 	skipLocked               bool
