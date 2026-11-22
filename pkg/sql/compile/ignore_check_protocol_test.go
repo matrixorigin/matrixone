@@ -90,6 +90,28 @@ func TestIgnoreCheckCoordinatorCompatibility(t *testing.T) {
 	}
 }
 
+func TestSnapshotAssertionExecutesOnCoordinator(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	c.addr = "coordinator:6001"
+	leaf := newLazyUnionAllLeaf(c, value_scan.NewArgument())
+	leaf.NodeInfo.Addr = "worker:6001"
+	assertion := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.MO_ASSERT_SNAPSHOT_AFTER, 0)},
+			Args: []*plan.Expr{plan2.MakePlan2StringConstExprWithType("1-0")},
+		}},
+	}
+	node := &plan.Node{NodeType: plan.Node_FILTER, FilterList: []*plan.Expr{assertion}}
+	result := c.compileRestrict(node, []*Scope{leaf})
+	require.Len(t, result, 1)
+	defer freeLazyUnionAllTestScope(c, result[0])
+	require.NotSame(t, leaf, result[0])
+	require.True(t, c.scopesRunOnCoordinator(result))
+	require.IsType(t, &filter.Filter{}, result[0].RootOp)
+	require.False(t, c.isRetryErr(moerr.NewSnapshotNotAfter(t.Context())))
+}
+
 func TestStatementIgnoreEnabledHandlesIncompleteProcess(t *testing.T) {
 	require.False(t, statementIgnoreEnabled(nil))
 	require.False(t, statementIgnoreEnabled(&process.Process{}))

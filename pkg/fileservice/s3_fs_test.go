@@ -285,7 +285,7 @@ type heldWriter struct {
 }
 
 type blockingDataCache struct {
-	fscache.DataCache
+	memoryCacheBacking
 	updateStarted chan struct{}
 	releaseUpdate chan struct{}
 	updateCount   atomic.Int64
@@ -312,7 +312,7 @@ func (b *blockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data 
 		case <-b.releaseUpdate:
 		}
 	}
-	return b.DataCache.Set(ctx, key, data)
+	return b.memoryCacheBacking.Set(ctx, key, data)
 }
 
 func (g *generatedRangeObjectStorage) Read(
@@ -2979,9 +2979,9 @@ func TestS3FSIOMerger(t *testing.T) {
 	require.NoError(t, err)
 
 	cache := &blockingDataCache{
-		DataCache:     fs.memCache.cache,
-		updateStarted: make(chan struct{}),
-		releaseUpdate: make(chan struct{}),
+		memoryCacheBacking: fs.memCache.cache,
+		updateStarted:      make(chan struct{}),
+		releaseUpdate:      make(chan struct{}),
 	}
 	fs.memCache.cache = cache
 	storage := &blockingReadObjectStorage{
