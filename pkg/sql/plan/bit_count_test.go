@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -969,6 +970,72 @@ func TestBitCountGroupedHavingBoundReads(t *testing.T) {
 			require.Equal(t, map[string]bool{"yes,no": true, "z,a": true}, filterDomains)
 			require.Equal(t, tc.explicit, independentEnum, "the explicit ENUM aggregate keeps its own input")
 		})
+	}
+}
+
+func TestBitCountGroupedOuterJoinRowPresence(t *testing.T) {
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+	ctx := optimizer.CurrentContext().(*MockCompilerContext)
+	ctx.SetSqlModeOverride("")
+	ctx.isDml = true // Keep the hidden row identity exposed by the engine catalog.
+	left := ctx.tables["emp"]
+	pos, ok := tableColumnPosition(left, "sal")
+	require.True(t, ok)
+	left.Cols[pos].Typ = pb.Type{Id: int32(types.T_float64)}
+	ctx.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")] = left
+
+	ddl, err := runOneStmt(optimizer, t, `create table constraint_test.group_virtual (
+		id int primary key, ts timestamp null, g int generated always as (year(ts)) virtual)`)
+	require.NoError(t, err)
+	right := ddl.GetDdl().GetCreateTable().GetTableDef()
+	require.NotNil(t, right)
+	right.TblId = 9001
+	// A table read from the engine catalog exposes a hidden row identity.
+	if _, ok := tableColumnPosition(right, catalog.Row_ID); !ok {
+		right.Cols = append(right.Cols, &pb.ColDef{Name: catalog.Row_ID, Hidden: true,
+			ColId: uint64(len(right.Cols)), Typ: types.T_Rowid.ToType().PlanType()})
+	}
+	right.Name2ColIndex = make(map[string]int32, len(right.Cols))
+	for i, col := range right.Cols {
+		right.Name2ColIndex[col.Name] = int32(i)
+	}
+	rightName := mockQualifiedTableName("constraint_test", "group_virtual")
+	ctx.tablesByQualifiedName[rightName] = right
+	ctx.objectsByQualifiedName[rightName] = &pb.ObjectRef{SchemaName: "constraint_test", ObjName: "group_virtual", Obj: int64(right.TblId)}
+
+	p, err := runOneStmt(optimizer, t, `select r.g, r.g+1, s.g,
+		bit_count(if(l.empno=1,l.sal,cast(l.sal as double)))
+		from constraint_test.emp l left join constraint_test.group_virtual r on l.empno=r.id
+		left join constraint_test.group_virtual s on l.mgr=s.id
+		group by if(l.empno=1,l.sal,cast(l.sal as double))
+		having r.g is null order by ifnull(s.g,r.g)`)
+	require.NoError(t, err)
+	tuple := findPlanFunctionExpr(p, "serial_full")
+	require.NotNil(t, tuple)
+	guards := make(map[[2]int32]struct{})
+	count := 0
+	for _, input := range tuple.GetF().Args {
+		fn := input.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) != 1 || fn.Args[0].Typ.Id != int32(types.T_Rowid) {
+			continue
+		}
+		id, _ := function.DecodeOverloadID(fn.Func.Obj)
+		require.Equal(t, int32(function.ISNULL), id)
+		require.Equal(t, int32(types.T_bool), input.Typ.Id)
+		rowID := fn.Args[0].GetCol()
+		require.NotNil(t, rowID)
+		guards[[2]int32{rowID.RelPos, rowID.ColPos}] = struct{}{}
+		count++
+	}
+	require.Len(t, guards, 2, "each nullable join binding contributes one presence field")
+	require.Equal(t, len(guards), count, "repeated reads reuse each binding's presence field")
+	for _, node := range p.GetQuery().Nodes {
+		for _, agg := range node.AggList {
+			fn := agg.GetF()
+			if fn.GetFunc().GetObjName() == "any_value" {
+				require.NotEqual(t, int32(types.T_Rowid), fn.Args[0].Typ.Id, "no separate row identity aggregate")
+			}
+		}
 	}
 }
 
