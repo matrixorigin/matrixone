@@ -100,8 +100,10 @@ func (bat *Batch) PhysicalView(dst *Batch) {
 
 // CompactInto copies the selected rows of bat into dst, which must be an
 // owned batch with the same column layout (its vectors are reset and
-// refilled). An unselected bat is copied whole.
-func (bat *Batch) CompactInto(dst *Batch, mp *mpool.MPool) error {
+// refilled). An unselected bat is copied whole. rows, when not nil, is the
+// caller's scratch for the selected row list, reused across calls so a
+// steady stream of batches does not allocate one per call.
+func (bat *Batch) CompactInto(dst *Batch, mp *mpool.MPool, rows *[]int64) error {
 	if len(dst.Vecs) != len(bat.Vecs) {
 		return moerr.NewInternalErrorNoCtx("compact batch column count mismatch")
 	}
@@ -116,7 +118,14 @@ func (bat *Batch) CompactInto(dst *Batch, mp *mpool.MPool) error {
 			}
 		}
 	} else {
-		sels := bat.SelectionRows(nil)
+		var scratch []int64
+		if rows != nil {
+			scratch = *rows
+		}
+		sels := bat.SelectionRows(scratch)
+		if rows != nil {
+			*rows = sels
+		}
 		for i, vec := range bat.Vecs {
 			if vec == nil {
 				continue

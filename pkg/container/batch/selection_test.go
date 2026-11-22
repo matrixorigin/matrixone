@@ -62,13 +62,22 @@ func TestBatchSelection(t *testing.T) {
 	compact := NewWithSize(2)
 	compact.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	compact.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
-	require.NoError(t, bat.CompactInto(compact, mp))
-	require.False(t, compact.HasSelection())
-	require.Equal(t, 3, compact.RowCount())
-	require.Equal(t, []int64{10, 40, 50}, vector.MustFixedColNoTypeCheck[int64](compact.Vecs[0]))
-	require.Equal(t, "b", compact.Vecs[1].GetStringAt(0))
-	require.True(t, compact.Vecs[1].IsNull(1))
-	require.Equal(t, "f", compact.Vecs[1].GetStringAt(2))
+	// Compacting without and with a row scratch gives the same rows; the
+	// scratch holds the selected rows and is reused by the next call.
+	var rows []int64
+	for _, scratch := range []*[]int64{nil, &rows, &rows} {
+		require.NoError(t, bat.CompactInto(compact, mp, scratch))
+		require.False(t, compact.HasSelection())
+		require.Equal(t, 3, compact.RowCount())
+		require.Equal(t, []int64{10, 40, 50}, vector.MustFixedColNoTypeCheck[int64](compact.Vecs[0]))
+		require.Equal(t, "b", compact.Vecs[1].GetStringAt(0))
+		require.True(t, compact.Vecs[1].IsNull(1))
+		require.Equal(t, "f", compact.Vecs[1].GetStringAt(2))
+	}
+	require.Equal(t, bat.SelectionRows(nil), rows)
+	reused := &rows[0]
+	require.NoError(t, bat.CompactInto(compact, mp, &rows))
+	require.Same(t, reused, &rows[0], "the row scratch is reused")
 
 	// Any explicit row count replaces the selection.
 	bat.ClearSelection()
