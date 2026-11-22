@@ -178,7 +178,7 @@ func (db *txnDatabase) RelationExists(ctx context.Context, name string, proc any
 func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 	db.getTxn().beginCatalogMutation()
 	defer db.getTxn().endCatalogMutation()
-	return db.deleteTable(ctx, name, false, false)
+	return db.deleteTable(ctx, name, false, false, nil)
 }
 
 // deleteTable deletes a table.
@@ -189,7 +189,13 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 // 2. useAlterNote means that the batch sent to TN will be just used
 // to insert into or delete from mo_tables and mo_columns,
 // rather than trigger an actual create or delete operation for table.
-func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bool, useAlterNote bool) error {
+func (db *txnDatabase) deleteTable(
+	ctx context.Context,
+	name string,
+	forAlter bool,
+	useAlterNote bool,
+	ownership *tableCatalogOwnership,
+) error {
 	var id uint64
 	var rowid types.Rowid
 	var rowids []types.Rowid
@@ -227,7 +233,11 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	colPKs = getColPks(accountId, db.databaseName, name, toDelTbl.tableDef.Cols, packer)
 
 	// 1.1 table rowid
-	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, sqlquote.String(db.databaseName), sqlquote.String(name))
+	columns := catalog.Row_ID
+	if ownership != nil {
+		columns += ", " + catalog.SystemRelAttr_Creator + ", " + catalog.SystemRelAttr_Owner + ", " + catalog.SystemRelAttr_CreateAt
+	}
+	sql := fmt.Sprintf(catalog.MoTablesRowByNameQueryFormat, columns, accountId, sqlquote.String(db.databaseName), sqlquote.String(name))
 
 	rmFault := func() {}
 
@@ -259,7 +269,13 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			zap.String("workspace", db.getTxn().PPString()))
 		panic("delete table failed: query failed")
 	}
-	rowid = vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
+	vecs := res.Batches[0].Vecs
+	rowid = vector.GetFixedAtNoTypeCheck[types.Rowid](vecs[0], 0)
+	if ownership != nil {
+		ownership.creator = vector.GetFixedAtNoTypeCheck[uint32](vecs[1], 0)
+		ownership.owner = vector.GetFixedAtNoTypeCheck[uint32](vecs[2], 0)
+		ownership.createdTime = vector.GetFixedAtNoTypeCheck[types.Timestamp](vecs[3], 0)
+	}
 
 	// 1.2 table column rowids
 	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, sqlquote.String(db.databaseName), sqlquote.String(name), id), true)

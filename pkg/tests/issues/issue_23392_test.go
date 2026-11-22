@@ -17,6 +17,7 @@ package issues
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,12 +39,12 @@ func TestIssue23392RenameIndexInplace(t *testing.T) {
 		other := issue30936Open(t, cluster, reader)
 		defer other.Close()
 
-		database := testutils.GetDatabaseName(t)
+		database := strings.ToLower(testutils.GetDatabaseName(t))
 		table := database + ".target"
 		execSQLRequire(t, ctx, db, "create database "+database)
 		defer execSQLMaybe(t, context.Background(), db, "drop database if exists "+database)
 		execSQLRequire(t, ctx, db, "create table "+table+
-			" (id int primary key, v int, w int, body mediumtext, index ix_a(v,w), unique key ix_b(w))")
+			" (id int primary key, v int, w int, body mediumtext, index ix_a(v,w), unique key ix_b(w), unique key spare(id,w))")
 		execSQLRequire(t, ctx, db, "insert into "+table+" values (1, 10, 20, repeat('x', 70000))")
 
 		type indexIdentity struct {
@@ -53,18 +54,21 @@ func TestIssue23392RenameIndexInplace(t *testing.T) {
 		}
 		readIndex := func(name string) []indexIdentity {
 			t.Helper()
-			query := fmt.Sprintf("select i.table_id, i.id, h.rel_id, i.ordinal_position, i.column_name "+
+			query := fmt.Sprintf("select i.table_id, i.id, h.rel_id, i.ordinal_position, i.column_name, i.name "+
 				"from mo_catalog.mo_indexes i join mo_catalog.mo_tables p on i.table_id = p.rel_id "+
 				"join mo_catalog.mo_tables h on i.index_table_name = h.relname and p.reldatabase_id = h.reldatabase_id "+
-				"where p.reldatabase = '%s' and p.relname = 'target' and binary i.name = binary ? order by i.ordinal_position", database)
-			rows, err := other.QueryContext(ctx, query, name)
+				"where p.reldatabase = '%s' and p.relname = 'target' order by i.ordinal_position", database)
+			rows, err := other.QueryContext(ctx, query)
 			require.NoError(t, err)
 			defer rows.Close()
 			var identities []indexIdentity
 			for rows.Next() {
 				var index indexIdentity
-				require.NoError(t, rows.Scan(&index.tableID, &index.indexID, &index.hiddenTableID, &index.position, &index.column))
-				identities = append(identities, index)
+				var actualName string
+				require.NoError(t, rows.Scan(&index.tableID, &index.indexID, &index.hiddenTableID, &index.position, &index.column, &actualName))
+				if actualName == name {
+					identities = append(identities, index)
+				}
 			}
 			require.NoError(t, rows.Err())
 			return identities
@@ -84,6 +88,20 @@ func TestIssue23392RenameIndexInplace(t *testing.T) {
 			return digest
 		}
 
+		type ownership struct {
+			creator, owner uint32
+			createdTime    string
+			logicalID      uint64
+		}
+		readOwnership := func() ownership {
+			t.Helper()
+			query := fmt.Sprintf("select creator, owner, cast(created_time as char), rel_logical_id "+
+				"from mo_catalog.mo_tables where reldatabase = '%s' and relname = 'target'", database)
+			var result ownership
+			require.NoError(t, other.QueryRowContext(ctx, query).Scan(&result.creator, &result.owner, &result.createdTime, &result.logicalID))
+			return result
+		}
+		originalOwner := readOwnership()
 		first := readIndex("ix_a")
 		second := readIndex("ix_b")
 		require.GreaterOrEqual(t, len(first), 2)
@@ -96,6 +114,7 @@ func TestIssue23392RenameIndexInplace(t *testing.T) {
 		require.Empty(t, readIndex("ix_a"))
 		require.Empty(t, readIndex("ix_temp"))
 		require.Equal(t, originalHash, readBodyHash())
+		require.Equal(t, originalOwner, readOwnership())
 		require.Contains(t, readShowCreate(), "Ix_B")
 		require.Contains(t, readShowCreate(), "Ix_A")
 
@@ -120,10 +139,23 @@ func TestIssue23392RenameIndexInplace(t *testing.T) {
 		_, err = other.ExecContext(ctx, "insert into "+table+" values (2, 11, 20, 'duplicate')")
 		issue289RequireMySQLError(t, err, 1062)
 
+		publication := database + "_pub"
+		defer execSQLMaybe(t, context.Background(), db, "drop publication if exists "+publication)
+		for _, source := range []string{database, "*"} {
+			execSQLRequire(t, ctx, db, "create publication "+publication+" database "+source+" account all")
+			_, err = other.ExecContext(ctx, "alter table "+table+" rename index Ix_B to published_name")
+			require.ErrorContains(t, err, "published source database")
+			require.Equal(t, first, readIndex("Ix_B"))
+			require.Empty(t, readIndex("published_name"))
+			execSQLRequire(t, ctx, db, "drop publication "+publication)
+		}
+
 		execSQLRequire(t, ctx, db, "create table "+database+".child (id int primary key, v int, "+
 			"constraint fk foreign key(v) references "+table+"(w))")
 		_, err = db.ExecContext(ctx, "alter table "+table+" rename index Ix_A to new_unique")
-		require.ErrorContains(t, err, "referenced table")
+		issue289RequireMySQLError(t, err, 1553)
+		execSQLRequire(t, ctx, db, "alter table "+table+" rename index spare to spare_renamed")
+		require.NotEmpty(t, readIndex("spare_renamed"))
 		execSQLRequire(t, ctx, db, "alter table "+table+" rename index Ix_B to allowed")
 		require.Equal(t, first, readIndex("allowed"))
 		require.Equal(t, second, readIndex("Ix_A"))

@@ -463,8 +463,10 @@ func tableDumpManifestCreateSQL(
 	}
 	needsLegacyCollationRebuild := tableDumpHasLegacyTextMetadata(def)
 	needsLegacyBlobRebuild := tableDumpHasLegacyUnboundedBlob(def)
-	if (!sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) && !needsLegacyCollationRebuild && !needsLegacyBlobRebuild) ||
-		!canReconstructTableSchema(def) {
+	// CREATE SQL may retain the original inline keys after INPLACE index
+	// DDL. The manifest must use the same live indexes as its schema hash.
+	if !canReconstructTableSchema(def) ||
+		(len(def.Indexes) == 0 && !sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) && !needsLegacyCollationRebuild && !needsLegacyBlobRebuild) {
 		return def.Createsql, nil
 	}
 	clone := sqlplan.CloneTableDefForPlan(def, true)

@@ -109,9 +109,6 @@ func ResolveIndexRenames(ctx context.Context, table *TableDef, actions []*plan.A
 			functionalIndexColumn(table, index) != nil {
 			return nil, moerr.NewNotSupported(ctx, "RENAME INDEX requires an ordinary column index")
 		}
-		if index.Unique && len(table.RefChildTbls) != 0 {
-			return nil, moerr.NewNotSupported(ctx, "RENAME INDEX on a unique index of a referenced table")
-		}
 		delete(byName, oldKey)
 		byName[newKey] = index
 		if rename.NewName == index.IndexName {

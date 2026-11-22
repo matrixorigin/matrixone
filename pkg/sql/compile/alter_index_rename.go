@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -39,8 +40,9 @@ func (c *Compile) renameIndexes(db engine.Database, tableName string, qry *plan.
 	if c.shouldBlockCCPRReadOnly(qry.TableDef) {
 		return moerr.NewCCPRReadOnly(ctx)
 	}
-	if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		return moerr.NewNotSupported(ctx, "RENAME INDEX requires a pessimistic transaction")
+	txn := c.proc.GetTxnOperator().Txn()
+	if !txn.IsPessimistic() || !txn.IsRCIsolation() {
+		return moerr.NewNotSupported(ctx, "RENAME INDEX requires a pessimistic read-committed transaction")
 	}
 	// The INPLACE locks already cover table identity, concurrent DDL and FK
 	// publication. A wildcard publication does not take a source database lock.
@@ -54,7 +56,8 @@ func (c *Compile) renameIndexes(db engine.Database, tableName string, qry *plan.
 	if rel.GetTableID(ctx) != qry.TableDef.TblId || rel.GetTableDef(ctx).GetVersion() != qry.TableDef.Version {
 		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 	}
-	renames, err := plan2.ResolveIndexRenames(ctx, rel.GetTableDef(ctx), qry.Actions)
+	tableDef := rel.GetTableDef(ctx)
+	renames, err := plan2.ResolveIndexRenames(ctx, tableDef, qry.Actions)
 	if err != nil || len(renames) == 0 {
 		return err
 	}
@@ -76,13 +79,8 @@ func (c *Compile) renameIndexes(db engine.Database, tableName string, qry *plan.
 	if len(changed) != len(renames) {
 		return moerr.NewInternalError(ctx, "inconsistent RENAME INDEX constraint definition")
 	}
-	for _, index := range changed {
-		if index.Unique {
-			if err := c.rejectRenameIndexForeignKeys(qry.Database, tableName); err != nil {
-				return err
-			}
-			break
-		}
+	if err := c.checkRenameIndexForeignKeys(qry.Database, tableName, tableDef, changed); err != nil {
+		return err
 	}
 	if err := c.renameIndexCatalogRows(rel.GetDBID(ctx), rel.GetTableID(ctx), changed, renames); err != nil {
 		return err
@@ -108,18 +106,32 @@ func (c *Compile) checkRenameIndexPublication(databaseID uint64) error {
 	if err != nil {
 		return err
 	}
-	keys, err := pubs.GetPrimaryKeys(sysCtx)
-	if err != nil {
+	// Account-wide publications have no database key to pin. Lock just
+	// this publisher's existing (account_id, pub_name) primary-key range.
+	packer := types.NewPacker()
+	defer packer.Close()
+	packer.EncodeInt32(int32(accountID))
+	packer.EncodeStringType([]byte{})
+	first := packer.Bytes()
+	packer.Reset()
+	packer.EncodeInt32(int32(accountID))
+	packer.EncodeStringTypeMax()
+	last := packer.Bytes()
+	if err := lockop.LockVarlenaPKRange(sysCtx, c.e, c.proc, pubs.GetTableID(sysCtx), first, last, lock.LockMode_Shared); err != nil {
 		return err
 	}
-	if len(keys) != 1 {
-		return moerr.NewInternalError(ctx, "missing mo_pubs primary key for RENAME INDEX")
+	// The range lock can be granted without a conflicting holder. In that
+	// case its result need not include the latest commit on a publication row.
+	barrier, ok := getLogtailReadBarrier(c.e)
+	if !ok {
+		return moerr.NewNotSupported(ctx, "RENAME INDEX requires a logtail read barrier")
 	}
-	// Serialize the absence check with catalog writes, including insertions
-	// for DATABASE *. The shared lock allows concurrent local renames.
-	if err := lockop.LockTableForSnapshotRefreshWithContext(
-		sysCtx, c.e, c.proc, pubs.GetTableID(sysCtx), keys[0].Type, lock.LockMode_Shared, false,
-	); err != nil {
+	txn := c.proc.GetTxnOperator()
+	if err := advanceCatalogLifecycleSnapshot(ctx, catalogLifecycleSnapshotHooks{
+		acquireReadBarrier: barrier.AcquireLogtailReadBarrier,
+		currentSnapshot:    txn.SnapshotTS,
+		updateSnapshot:     txn.UpdateSnapshot,
+	}, "index rename publication admission"); err != nil {
 		return err
 	}
 	query := fmt.Sprintf("select 1 from mo_catalog.mo_pubs where database_id = %d or (database_id = 0 and account_id = %d) limit 1", databaseID, accountID)
@@ -134,16 +146,54 @@ func (c *Compile) checkRenameIndexPublication(databaseID uint64) error {
 	return nil
 }
 
-func (c *Compile) rejectRenameIndexForeignKeys(database, table string) error {
-	query := fmt.Sprintf("select 1 from mo_catalog.mo_foreign_keys where refer_db_name = %s and refer_table_name = %s limit 1",
-		sqlquote.String(database), sqlquote.String(table))
-	res, err := c.runSqlWithResult(query, NoAccountId)
+func (c *Compile) checkRenameIndexForeignKeys(database, table string, def *plan.TableDef, changed []*plan.IndexDef) error {
+	ctx := c.proc.Ctx
+	var uniqueNames []string
+	children := make(map[uint64]*plan.TableDef)
+	for _, index := range changed {
+		if !index.Unique {
+			continue
+		}
+		uniqueNames = append(uniqueNames, index.IndexName)
+		if err := plan2.CheckDropReferencedKeyForeignKeyDependency(ctx, def, index.IndexName, nil,
+			func(id uint64) (*plan.TableDef, error) {
+				if child := children[id]; child != nil {
+					return child, nil
+				}
+				_, _, rel, err := c.e.GetRelationById(ctx, c.proc.GetTxnOperator(), id)
+				if err != nil {
+					return nil, err
+				}
+				children[id] = rel.GetTableDef(ctx)
+				return children[id], nil
+			}); err != nil {
+			return err
+		}
+	}
+	if len(uniqueNames) == 0 {
+		return nil
+	}
+	// A pending catalog declaration may already carry a selected key. Read
+	// it through the same tenant-layout decoder used by FK publication.
+	fkCatalog, err := getRelFromMoCatalog(c, catalog.MOForeignKeys)
 	if err != nil {
 		return err
 	}
-	defer res.Close()
-	if len(res.Batches) > 0 && res.Batches[0].RowCount() > 0 {
-		return moerr.NewNotSupported(c.proc.Ctx, "RENAME INDEX on a unique index of a referenced table")
+	declarations, _, err := plan2.ReadForeignKeysReferredTo(fkCatalog.GetTableDef(ctx), database, table,
+		func(query string) (executor.Result, error) {
+			return c.runSqlWithResultAndOptions(query, NoAccountId, executor.StatementOption{}.WithDisableLog())
+		})
+	if err != nil {
+		return err
+	}
+	for _, constraints := range declarations {
+		for _, parts := range constraints {
+			for _, index := range uniqueNames {
+				if len(parts) != 0 && plan2.IndexNamesEqual(parts[0].ReferencedIndexName, index) {
+					return moerr.NewErrDropIndexNeededInForeignKey(ctx, index)
+				}
+			}
+		}
 	}
 	return nil
 }

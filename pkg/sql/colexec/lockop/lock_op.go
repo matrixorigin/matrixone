@@ -633,6 +633,29 @@ func LockTableWithMode(
 	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef, true, false, 0)
 }
 
+// LockVarlenaPKRange locks an inclusive range of varlena primary keys.
+// The caller provides primary-key values, before the lock-service encoding.
+func LockVarlenaPKRange(
+	ctx context.Context, eng engine.Engine, proc *process.Process,
+	tableID uint64, lower, upper []byte, mode lock.LockMode,
+) error {
+	packer := types.NewPacker()
+	defer packer.Close()
+	packer.EncodeStringType(lower)
+	first := packer.Bytes()
+	packer.Reset()
+	packer.EncodeStringType(upper)
+	last := packer.Bytes()
+	opts := DefaultLockOptions(packer).
+		WithLockMode(mode).
+		WithFetchLockRowsFunc(func(*vector.Vector, *types.Packer, types.Type, int, bool, RowsFilter, []int32) (bool, [][]byte, lock.Granularity) {
+			return true, [][]byte{first, last}, lock.Granularity_Range
+		})
+	_, _, _, err := doLock(ctx, eng, process.NewTempAnalyzer(), nil, tableID, proc, nil, 0,
+		types.T_varchar.ToType(), -1, opts, 0)
+	return err
+}
+
 // LockTableForSnapshotRefreshWithContext acquires a table lock and advances an
 // RC transaction's snapshot past the latest commit on that table without
 // turning the refresh into the ordinary retry signal. A fixed-snapshot

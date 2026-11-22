@@ -989,6 +989,7 @@ func (s *Scope) AlterTableInplace(c *Compile) (err error) {
 
 func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	renameIndexes := len(qry.Actions) > 0 && qry.Actions[0].GetRenameIndex() != nil
 	dbName := qry.Database
 	if dbName == "" {
 		dbName = c.db
@@ -1077,7 +1078,12 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
 		// 0. lock origin database metadata in catalog
-		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		databaseLock := lock.LockMode_Shared
+		if renameIndexes {
+			// Named publications pin the same database catalog key in share mode.
+			databaseLock = lock.LockMode_Exclusive
+		}
+		if err = lockMoDatabase(c, dbName, databaseLock); err != nil {
 			return err
 		}
 
@@ -1224,7 +1230,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		}
 	}
 
-	if len(qry.Actions) > 0 && qry.Actions[0].GetRenameIndex() != nil {
+	if renameIndexes {
 		return c.renameIndexes(dbSource, tblName, qry)
 	}
 

@@ -1012,9 +1012,9 @@ var (
 		SystemRelAttr_Name, MO_CATALOG, MO_TABLES,
 		SystemRelAttr_AccID, SystemRelAttr_DBName)
 
-	MoTablesRowidQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%s and %s = %%s",
-		Row_ID, MO_CATALOG, MO_TABLES,
+	MoTablesRowByNameQueryFormat = fmt.Sprintf(
+		"select %%s from `%s`.`%s` where %s = %%d and %s = %%s and %s = %%s",
+		MO_CATALOG, MO_TABLES,
 		SystemRelAttr_AccID, SystemRelAttr_DBName, SystemRelAttr_Name)
 
 	MoTablesQueryNameById = fmt.Sprintf(
