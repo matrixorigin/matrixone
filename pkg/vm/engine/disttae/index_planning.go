@@ -70,8 +70,8 @@ func planningContextCause(ctx context.Context) error {
 	return context.Cause(ctx)
 }
 
-// ReadIndexCostStats copies one ordinary observation under its existing GS
-// lock. Unbound metadata is a heuristic; no number authorizes executable rows.
+// ReadIndexCostStats copies one ordinary observation without waiting for a
+// cache writer. Unbound metadata is a heuristic; it cannot authorize rows.
 func (tbl *txnTableDelegate) ReadIndexCostStats(ctx context.Context, read client.CatalogReadStamp, observed *pb.StatsInfo, column string) (engine.IndexCostStats, bool, error) {
 	var out engine.IndexCostStats
 	t, txn, ok := tbl.planningRead(ctx, read)
@@ -79,17 +79,16 @@ func (tbl *txnTableDelegate) ReadIndexCostStats(ctx context.Context, read client
 		return out, false, planningContextCause(ctx)
 	}
 	gs := txn.engine.globalStats
-	if gs == nil || gs.ctx == nil || context.Cause(gs.ctx) != nil || !gs.mu.TryLock() {
+	if gs == nil || gs.ctx == nil || context.Cause(gs.ctx) != nil || !gs.cache.TryRLock() {
 		return out, false, planningContextCause(ctx)
 	}
 	key := pb.StatsInfoKey{AccId: t.accountId, DatabaseID: t.db.databaseId, TableID: t.tableId, DbName: t.db.databaseName, TableName: t.tableName}
 	version := t.version
 	current, complete, incompatible := gs.statsInfoForTableVersionLocked(key, &version, false)
-	boundVersion, versioned := gs.mu.tableDefVersions[key]
 	// Ordinary metadata publications are intentionally unbound, matching
 	// GetAtTableVersion. These copied estimates have no schema authority;
 	// an explicitly bound incompatible observation still declines.
-	ok = complete && !incompatible && (!versioned || boundVersion == version) && current == observed
+	ok = complete && !incompatible && current == observed
 	if ok {
 		var minOK, maxOK, ndvOK, kindOK, nullOK bool
 		var kind uint64
@@ -102,7 +101,7 @@ func (tbl *txnTableDelegate) ReadIndexCostStats(ctx context.Context, read client
 		out.Nulls, nullOK = current.NullCntMap[column]
 		ok = minOK && maxOK && ndvOK && kindOK && nullOK && uint64(out.Kind) == kind
 	}
-	gs.mu.Unlock()
+	gs.cache.RUnlock()
 	ok = ok && context.Cause(gs.ctx) == nil && planningReadStillCurrent(tbl, ctx, read, t, txn)
 	return out, ok, planningContextCause(ctx)
 }

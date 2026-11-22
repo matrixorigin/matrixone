@@ -212,7 +212,7 @@ func metaCachePressureTarget(capacity int64) (int64, bool) {
 func newMetaCache(capacity fscache.CapacityFunc) *s3fifo.Cache[mataCacheKey, metaBytes] {
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge("", "meta")
 	capacityBytes.Set(float64(capacity()))
-	return s3fifo.New(s3fifo.Options[mataCacheKey, metaBytes]{
+	return s3fifo.NewWithConcurrentRetain(s3fifo.Options[mataCacheKey, metaBytes]{
 		Capacity:  capacity,
 		Hash:      shardMetaCacheKey,
 		Admission: metaCachePressureTarget,

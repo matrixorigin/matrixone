@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -42,7 +43,7 @@ type temporalNativeFixture struct {
 	gs               *GlobalStats
 }
 
-func newTemporalNativeFixture(t *testing.T) *temporalNativeFixture {
+func newTemporalNativeFixture(t testing.TB) *temporalNativeFixture {
 	t.Helper()
 	ctx := defines.AttachAccountId(t.Context(), 7)
 	op, closeClient := client.NewTestTxnOperator(ctx)
@@ -72,13 +73,102 @@ func newTemporalNativeFixture(t *testing.T) *temporalNativeFixture {
 	t.Cleanup(gs.Close)
 	stats := &pb.StatsInfo{TableCnt: 1000, BlockNumber: 10, ShuffleRangeMap: map[string]*pb.ShuffleRange{"d": {Overlap: .25}}, MinValMap: map[string]float64{"d": 100}, MaxValMap: map[string]float64{"d": 200}, NdvMap: map[string]float64{"d": 100}, NullCntMap: map[string]uint64{"d": 0}, DataTypeMap: map[string]uint64{"d": uint64(types.T_datetime)}}
 	key := pb.StatsInfoKey{AccId: 7, DatabaseID: 10, TableID: 98, DbName: "db", TableName: "base"}
-	gs.mu.statsInfoMap = map[pb.StatsInfoKey]*pb.StatsInfo{key: stats}
-	gs.mu.tableDefVersions = map[pb.StatsInfoKey]uint32{key: 2}
+	gs.cache.statsInfoMap = map[pb.StatsInfoKey]*pb.StatsInfo{key: stats}
+	gs.cache.tableDefVersions = map[pb.StatsInfoKey]uint32{key: 2}
 	return &temporalNativeFixture{ctx: ctx, read: read, base: base, hidden: hidden, full: full, hiddenFull: hiddenFull, stats: stats, key: key, gs: gs}
 }
 func (f *temporalNativeFixture) pair() engine.IndexPairCheck {
 	return engine.IndexPairCheck{BaseRef: &plan.ObjectRef{Obj: 98, SchemaName: "db", ObjName: "base"}, HiddenRef: &plan.ObjectRef{Obj: 99, SchemaName: "db", ObjName: f.hiddenFull.Name}, BaseFull: f.full, BaseScan: f.full, HiddenFull: f.hiddenFull, Index: f.full.Indexes[0], Column: "d", Hidden: f.hidden, HiddenRead: f.read}
 }
+
+func TestIndexCostStatsAvailableDuringCoordination(t *testing.T) {
+	f := newTemporalNativeFixture(t)
+	f.gs.mu.Lock()
+	defer f.gs.mu.Unlock()
+
+	value, ok, err := f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "d")
+	require.NoError(t, err)
+	require.True(t, ok, "coordination alone must not hide published statistics")
+	require.Equal(t, 100., value.Min)
+	require.Equal(t, 200., value.Max)
+}
+
+func TestIndexCostStatsRecoverAfterWriter(t *testing.T) {
+	f := newTemporalNativeFixture(t)
+	var ok bool
+	var err error
+	func() {
+		f.gs.cache.Lock()
+		defer f.gs.cache.Unlock()
+		_, ok, err = f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "d")
+	}()
+	require.NoError(t, err)
+	require.False(t, ok, "an active writer must not block the observation")
+
+	value, ok, err := f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "d")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 100., value.Min)
+}
+
+func TestIndexCostStatsFollowPublicationLifetime(t *testing.T) {
+	f := newTemporalNativeFixture(t)
+	f.gs.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
+	oldGeneration := f.gs.currentOrCreateUpdateRecord(f.key)
+	f.gs.RemoveTid(f.key.TableID)
+	_, ok, err := f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "d")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	newStats := *f.stats
+	newGeneration := f.gs.currentOrCreateUpdateRecord(f.key)
+	require.NotSame(t, oldGeneration, newGeneration)
+	published, err := f.gs.publishStatsForGeneration(f.ctx, f.key, newGeneration, &newStats)
+	require.NoError(t, err)
+	require.True(t, published)
+	_, ok, err = f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "d")
+	require.NoError(t, err)
+	require.False(t, ok, "equal values from a replacement do not validate an old pointer")
+	value, ok, err := f.base.ReadIndexCostStats(f.ctx, f.read, &newStats, "d")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 100., value.Min)
+}
+
+func BenchmarkIndexCostStatsRead(b *testing.B) {
+	for _, withCacheLookup := range []bool{false, true} {
+		name := "observation"
+		if withCacheLookup {
+			name = "cache_and_observation"
+		}
+		b.Run(name, func(b *testing.B) {
+			f := newTemporalNativeFixture(b)
+			var observed atomic.Uint64
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				var successes uint64
+				for pb.Next() {
+					if withCacheLookup {
+						f.gs.Get(f.ctx, f.key, false)
+					}
+					_, ok, err := f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "d")
+					if err != nil {
+						b.Error(err)
+						return
+					}
+					if ok {
+						successes++
+					}
+				}
+				observed.Add(successes)
+			})
+			b.StopTimer()
+			b.ReportMetric(float64(observed.Load())/float64(b.N), "observed/op")
+		})
+	}
+}
+
 func TestTemporalCBOStatsCopiesOrdinaryValuesWithoutTransport(t *testing.T) {
 	f := newTemporalNativeFixture(t)
 	require.Nil(t, f.gs.engine.pClient.subscriber, "metadata needs no transport/ledger/worker")
@@ -88,23 +178,26 @@ func TestTemporalCBOStatsCopiesOrdinaryValuesWithoutTransport(t *testing.T) {
 	require.Equal(t, 1000., value.Rows)
 	require.Equal(t, 100., value.Min)
 	require.EqualValues(t, 10, value.Blocks)
-	for _, scenario := range []string{"unbound", "missing nulls", "wrong pointer", "wrong version", "contended", "cancelled", "closed"} {
+	for _, scenario := range []string{"unbound", "missing nulls", "wrong pointer", "wrong version", "reader active", "writer active", "cancelled", "closed"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newTemporalNativeFixture(t)
 			observed := f.stats
 			ctx := f.ctx
 			switch scenario {
 			case "unbound":
-				delete(f.gs.mu.tableDefVersions, f.key)
+				delete(f.gs.cache.tableDefVersions, f.key)
 			case "missing nulls":
 				delete(f.stats.NullCntMap, "d")
 			case "wrong pointer":
 				observed = &pb.StatsInfo{}
 			case "wrong version":
-				f.gs.mu.tableDefVersions[f.key]++
-			case "contended":
-				f.gs.mu.Lock()
-				defer f.gs.mu.Unlock()
+				f.gs.cache.tableDefVersions[f.key]++
+			case "reader active":
+				f.gs.cache.RLock()
+				defer f.gs.cache.RUnlock()
+			case "writer active":
+				f.gs.cache.Lock()
+				defer f.gs.cache.Unlock()
 			case "cancelled":
 				var cancel context.CancelCauseFunc
 				ctx, cancel = context.WithCancelCause(ctx)
@@ -118,7 +211,7 @@ func TestTemporalCBOStatsCopiesOrdinaryValuesWithoutTransport(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			require.Equal(t, scenario == "unbound", ok)
+			require.Equal(t, scenario == "unbound" || scenario == "reader active", ok)
 		})
 	}
 }
@@ -151,6 +244,10 @@ func TestTemporalCBOStatsSnapshotConcurrentPatch(t *testing.T) {
 		}
 	}
 	require.NoError(t, <-done)
+	value, ok, err := f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "d")
+	require.NoError(t, err)
+	require.True(t, ok, "the observation must recover after patching stops")
+	require.Equal(t, 2*value.Min, value.Max)
 }
 func TestTemporalCBONativePairUsesActualRelationsAndLayouts(t *testing.T) {
 	for _, scenario := range []string{"valid", "wrong parent", "wrong kind", "wrong account", "wrong base ref", "wrong hidden version", "swapped varchar columns", "read mutation", "snapshot ABA", "budget exhausted"} {

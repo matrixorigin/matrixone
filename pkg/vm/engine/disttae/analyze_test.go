@@ -417,11 +417,17 @@ func TestByteRangePatchPublishesNewOwner(t *testing.T) {
 	original := plan2.NewStatsInfo()
 	original.TableCnt = 10
 	original.ByteRangeMap = map[string]*pbstats.ByteRangeDistribution{"name": {Version: 1, PopulationRows: 10, SampleRows: 10, CompleteSample: true}}
-	gs.mu.statsInfoMap[key] = original
+	gs.cache.Lock()
+	gs.cache.statsInfoMap[key] = original
+	gs.cache.Unlock()
 	n := 20.0
 	require.NoError(t, gs.PatchStats(key, &PatchArgs{TableCnt: &n}))
-	require.NotSame(t, original, gs.mu.statsInfoMap[key])
-	require.Empty(t, gs.mu.statsInfoMap[key].ByteRangeMap)
+	gs.cache.RLock()
+	published := gs.cache.statsInfoMap[key]
+	remaining := len(published.ByteRangeMap)
+	gs.cache.RUnlock()
+	require.NotSame(t, original, published)
+	require.Zero(t, remaining)
 	require.Equal(t, 10.0, original.TableCnt)
 	require.NotEmpty(t, original.ByteRangeMap, "existing readers keep an immutable sampled generation")
 }

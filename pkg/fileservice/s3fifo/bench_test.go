@@ -84,3 +84,106 @@ func BenchmarkDataCache(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkMetadataCacheRead(b *testing.B) {
+	for _, tc := range []struct {
+		name    string
+		shared  bool
+		withTry bool
+	}{
+		{name: "default_get"},
+		{name: "metadata_get", shared: true},
+		{name: "metadata_get_and_try", shared: true, withTry: true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			opts := Options[int, intValue]{Capacity: func() int64 { return 100 }, Hash: hashInt}
+			var c *Cache[int, intValue]
+			if tc.shared {
+				c = NewWithConcurrentRetain(opts)
+			} else {
+				c = New(opts)
+			}
+			if inserted, _ := c.Set(1, 1, 1); !inserted {
+				b.Fatal("failed to seed the cache")
+			}
+			b.Cleanup(func() { c.Delete(1) })
+			var hits, failures atomic.Uint64
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				var localHits, localFailures uint64
+				for pb.Next() {
+					value, _, ok, err := c.Get(1, nil)
+					if err != nil || !ok || value != 1 {
+						localFailures++
+						continue
+					}
+					value.Release()
+					if tc.withTry {
+						value, _, ok, err = c.TryGet(1, nil)
+						if err != nil {
+							localFailures++
+						} else if ok {
+							localHits++
+							value.Release()
+						}
+					} else {
+						localHits++
+					}
+				}
+				hits.Add(localHits)
+				failures.Add(localFailures)
+			})
+			b.StopTimer()
+			if failures.Load() != 0 {
+				b.Fatalf("%d unexpected cache errors", failures.Load())
+			}
+			b.ReportMetric(float64(hits.Load())/float64(b.N), "hits/op")
+		})
+	}
+}
+
+func BenchmarkMetadataSecondChance(b *testing.B) {
+	for _, shared := range []bool{false, true} {
+		name := "default"
+		if shared {
+			name = "metadata"
+		}
+		b.Run(name, func(b *testing.B) {
+			opts := Options[int, intValue]{Capacity: func() int64 { return 100 }, Hash: hashInt}
+			var c *Cache[int, intValue]
+			if shared {
+				c = NewWithConcurrentRetain(opts)
+			} else {
+				c = New(opts)
+			}
+			if inserted, _ := c.Set(1, 1, 1); !inserted {
+				b.Fatal("failed to seed the cache")
+			}
+			b.Cleanup(func() { c.Delete(1) })
+			for range 2 {
+				value, _, ok, err := c.Get(1, nil)
+				if err != nil || !ok {
+					b.Fatal("failed to warm the cache")
+				}
+				value.Release()
+			}
+			ps := c.policyOf(hashInt(1))
+			if _, evicted := c.step(ps, true, ps.small.head.Load()); evicted {
+				b.Fatal("failed to promote the entry")
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				value, _, ok, err := c.Get(1, nil)
+				if err != nil || !ok {
+					b.Fatal("cache hit failed")
+				}
+				value.Release()
+				if _, evicted := c.step(ps, false, ps.main.head.Load()); evicted {
+					b.Fatal("hot entry was evicted")
+				}
+			}
+		})
+	}
+}

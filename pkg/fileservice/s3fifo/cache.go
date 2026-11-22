@@ -103,15 +103,16 @@ type Options[K comparable, V Value] struct {
 
 // Cache is an S3-FIFO cache. Its methods are safe for concurrent use.
 type Cache[K comparable, V Value] struct {
-	opts       Options[K, V]
-	index      [IndexShards]indexShard[K, V]
-	policy     [PolicyShards]policyShard[K, V]
-	used       atomic.Int64
-	smallBytes atomic.Int64
-	mainBytes  atomic.Int64
-	ghostBytes atomic.Int64
-	seq        atomic.Uint64
-	order      atomic.Uint64
+	opts             Options[K, V]
+	concurrentRetain bool
+	index            [IndexShards]indexShard[K, V]
+	policy           [PolicyShards]policyShard[K, V]
+	used             atomic.Int64
+	smallBytes       atomic.Int64
+	mainBytes        atomic.Int64
+	ghostBytes       atomic.Int64
+	seq              atomic.Uint64
+	order            atomic.Uint64
 	// evictor is held by the goroutine evicting.
 	evictor sync.Mutex
 }
@@ -143,7 +144,7 @@ type entry[K comparable, V Value] struct {
 }
 
 type indexShard[K comparable, V Value] struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	index map[K]*entry[K, V]
 	// groups holds the first entry of each group.
 	groups map[string]*entry[K, V]
@@ -185,6 +186,15 @@ func New[K comparable, V Value](opts Options[K, V]) *Cache[K, V] {
 	return c
 }
 
+// NewWithConcurrentRetain permits admission-free hits to retain the same value
+// concurrently. Values supplied to this cache must support concurrent Retain;
+// calls with an admission callback retain the ordinary exclusive behavior.
+func NewWithConcurrentRetain[K comparable, V Value](opts Options[K, V]) *Cache[K, V] {
+	c := New(opts)
+	c.concurrentRetain = true
+	return c
+}
+
 func (c *Cache[K, V]) indexOf(hash uint64) *indexShard[K, V] {
 	return &c.index[hash%IndexShards]
 }
@@ -210,29 +220,43 @@ func (c *Cache[K, V]) Used() int64 {
 // Get returns the value of key retained for the caller, who releases it. admit, when not nil,
 // runs before the value is retained, with the value's size; an error from it is a miss for
 // which release is not returned. Admission, Retain, and any admission release on failure run
-// under the index-shard lock and must not call into the cache.
+// under the index-shard lock and must not call into the cache. A cache created
+// with NewWithConcurrentRetain may run admission-free Retain calls concurrently.
 func (c *Cache[K, V]) Get(key K, admit func(size int64) (release func(), err error)) (value V, release func(), ok bool, err error) {
 	return c.get(key, admit, false)
 }
 
 // TryGet has Get's value and admission ownership contract, but returns a miss
-// if the index shard is locked. Admission and Retain run under that lock and
-// must not call into the cache. Hash, admission and value callbacks must also
-// be bounded when the caller requires a bounded lookup.
+// if it cannot immediately acquire the index-shard lock. An admission-free
+// lookup in a cache created with NewWithConcurrentRetain can share that lock
+// with other readers. Admission and Retain must not call into the cache. Hash,
+// admission and value callbacks must also be bounded when the caller requires
+// a bounded lookup.
 func (c *Cache[K, V]) TryGet(key K, admit func(size int64) (release func(), err error)) (value V, release func(), ok bool, err error) {
 	return c.get(key, admit, true)
 }
 
 func (c *Cache[K, V]) get(key K, admit func(size int64) (release func(), err error), try bool) (value V, release func(), ok bool, err error) {
 	ix := c.indexOf(c.opts.Hash(key))
-	if try {
-		if !ix.mu.TryLock() {
-			return value, nil, false, nil
+	if c.concurrentRetain && admit == nil {
+		if try {
+			if !ix.mu.TryRLock() {
+				return value, nil, false, nil
+			}
+		} else {
+			ix.mu.RLock()
 		}
+		defer ix.mu.RUnlock()
 	} else {
-		ix.mu.Lock()
+		if try {
+			if !ix.mu.TryLock() {
+				return value, nil, false, nil
+			}
+		} else {
+			ix.mu.Lock()
+		}
+		defer ix.mu.Unlock()
 	}
-	defer ix.mu.Unlock()
 	e := ix.index[key]
 	if e == nil {
 		return value, nil, false, nil
@@ -681,7 +705,16 @@ func (c *Cache[K, V]) step(ps *policyShard[K, V], small bool, head uint64) (remo
 		return removal[K, V]{}, false
 	}
 	if !small && e.freq.Load() > 0 {
-		e.freq.Add(-1)
+		if c.concurrentRetain {
+			// Prevent decay while shared hits perform their saturated increment.
+			// With the policy lock already held, policy -> index is the usual order.
+			ix := c.indexOf(e.hash)
+			ix.mu.Lock()
+			e.freq.Add(-1)
+			ix.mu.Unlock()
+		} else {
+			e.freq.Add(-1)
+		}
 		ps.main.push(e, c.order.Add(1))
 		return removal[K, V]{}, false
 	}
