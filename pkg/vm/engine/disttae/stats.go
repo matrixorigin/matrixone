@@ -263,8 +263,7 @@ type GlobalStats struct {
 	// order; unrelated tables normally remain parallel.
 	refreshAdmission [optimizerStatsRefreshStripes]chan struct{}
 
-	// statsInfoMap is the global stats info in engine which
-	// contains all subscribed tables stats info.
+	// mu coordinates ordinary cache operations, producers, cleanup, and waiters.
 	mu struct {
 		sync.Mutex
 
@@ -272,7 +271,7 @@ type GlobalStats struct {
 		// If sync parameter is false, it is unuseful.
 		cond *sync.Cond
 
-		// statsInfoMap is the real stats info data.
+		// statsInfoMap contains the published statistics.
 		statsInfoMap map[pb.StatsInfoKey]*pb.StatsInfo
 
 		// tableDefVersions is present only for statistics that contain a
@@ -290,6 +289,11 @@ type GlobalStats struct {
 	KeyRouter client.KeyRouter[pb.StatsInfoKey]
 
 	concurrentExecutor ConcurrentExecutor
+
+	// observationMu protects the planner's optional scalar copy. Ordinary
+	// readers take mu. The planner uses only TryRLock here. Statistics and
+	// version mutations take mu and then observationMu, which is a leaf lock.
+	observationMu sync.RWMutex
 
 	// approxObjectNumUpdater is for test only currently.
 	approxObjectNumUpdater func() int64
@@ -536,12 +540,14 @@ func (gs *GlobalStats) RemoveTid(tableID uint64) {
 	defer gs.mu.Unlock()
 	gs.updatingMu.Lock()
 	defer gs.updatingMu.Unlock()
+	gs.observationMu.Lock()
 	for key := range gs.mu.statsInfoMap {
 		if key.TableID == tableID {
 			delete(gs.mu.statsInfoMap, key)
 			delete(gs.mu.tableDefVersions, key)
 		}
 	}
+	gs.observationMu.Unlock()
 	for key := range gs.updatingMu.updating {
 		if key.TableID == tableID {
 			delete(gs.updatingMu.updating, key)
@@ -667,8 +673,10 @@ func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
 		return nil
 	}
 
+	gs.observationMu.Lock()
 	gs.mu.statsInfoMap[key] = remoteInfo
 	delete(gs.mu.tableDefVersions, key)
+	gs.observationMu.Unlock()
 	if gs.mu.cond != nil {
 		gs.mu.cond.Broadcast()
 	}
@@ -700,7 +708,8 @@ func (gs *GlobalStats) GetAtTableVersion(
 
 // statsInfoForTableVersionLocked distinguishes a true cache miss from a
 // schema-bound entry that this reader must not consume. A mismatched entry is
-// retained because an older snapshot reader may still match it.
+// retained because an older snapshot reader may still match it. The caller
+// holds mu or the observation read lock.
 func (gs *GlobalStats) statsInfoForTableVersionLocked(
 	key pb.StatsInfoKey,
 	tableDefVersion *uint32,
@@ -1335,6 +1344,16 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
+	gs.patchStatsCache(key, patch)
+	gs.broadcastStats(key)
+	gs.mu.cond.Broadcast()
+	return nil
+}
+
+// patchStatsCache updates one published value while the caller owns gs.mu.
+func (gs *GlobalStats) patchStatsCache(key pb.StatsInfoKey, patch *PatchArgs) {
+	gs.observationMu.Lock()
+	defer gs.observationMu.Unlock()
 
 	stats := gs.mu.statsInfoMap[key]
 	if stats == nil {
@@ -1421,13 +1440,6 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 			sr.Result = result
 		}
 	}
-
-	gs.broadcastStats(key)
-
-	// Broadcast update
-	gs.mu.cond.Broadcast()
-
-	return nil
 }
 
 // broadcastStats send the table stats key to gossip manager.
@@ -1495,17 +1507,33 @@ func (gs *GlobalStats) completeAutomaticStatsCacheUpdate(
 		}
 		return false
 	}
-	if updated {
-		gs.mu.statsInfoMap[key] = stats
-		delete(gs.mu.tableDefVersions, key)
+	committed := func() bool {
+		if !updated {
+			if _, exists := gs.mu.statsInfoMap[key]; exists {
+				return false
+			}
+		}
+		gs.observationMu.Lock()
+		defer gs.observationMu.Unlock()
+		// The owner may stop while this writer waits for an observation.
+		if gs.ctx != nil && context.Cause(gs.ctx) != nil {
+			return false
+		}
+		if updated {
+			gs.mu.statsInfoMap[key] = stats
+			delete(gs.mu.tableDefVersions, key)
+		} else {
+			gs.mu.statsInfoMap[key] = nil
+		}
+		return true
+	}()
+	if committed && updated {
 		gs.broadcastStats(key)
-	} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
-		gs.mu.statsInfoMap[key] = nil
 	}
 	if gs.mu.cond != nil {
 		gs.mu.cond.Broadcast()
 	}
-	return updated
+	return committed && updated
 }
 
 func (gs *GlobalStats) coordinateStatsUpdateJob(job statsUpdateJob) {
@@ -2001,7 +2029,7 @@ func (gs *GlobalStats) publishStatsForGeneration(
 ) (bool, error) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
-	published, err := gs.publishStatsForGenerationLocked(ctx, key, generation, stats)
+	published, err := gs.publishStatsForGenerationLocked(ctx, key, generation, stats, nil)
 	if published {
 		gs.broadcastStats(key)
 	}
@@ -2022,22 +2050,31 @@ func (gs *GlobalStats) publishStatsForGenerationLocked(
 	key pb.StatsInfoKey,
 	generation *updateRecord,
 	stats *pb.StatsInfo,
+	tableDefVersion *uint32,
 ) (bool, error) {
 	if generation == nil || stats == nil {
 		return false, nil
 	}
 	generationActive := gs.statsUpdateGenerationActive(key, generation)
-	// Generation validation is the last operation that can wait on another
-	// application lock. Check cancellation after it so a request canceled while
-	// waiting for updatingMu cannot cross the cache-swap commit point.
+	if !generationActive {
+		return false, gs.statsRefreshCancellationCause(ctx)
+	}
+	gs.observationMu.Lock()
+	defer gs.observationMu.Unlock()
+	// Both generation validation and cache acquisition can wait. Cancellation
+	// observed before the swap wins; a completed swap remains published.
 	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 		return false, cause
 	}
-	if !generationActive {
-		return false, nil
-	}
 	gs.mu.statsInfoMap[key] = stats
-	delete(gs.mu.tableDefVersions, key)
+	if tableDefVersion == nil {
+		delete(gs.mu.tableDefVersions, key)
+	} else {
+		if gs.mu.tableDefVersions == nil {
+			gs.mu.tableDefVersions = make(map[pb.StatsInfoKey]uint32)
+		}
+		gs.mu.tableDefVersions[key] = *tableDefVersion
+	}
 	return true, nil
 }
 
@@ -2073,13 +2110,7 @@ func (gs *GlobalStats) publishStatsForGenerationAtTableVersion(
 			gs.mu.Lock()
 			statsLocked = true
 			published, publicationErr = gs.publishStatsForGenerationLocked(
-				ctx, key, generation, stats)
-			if published {
-				if gs.mu.tableDefVersions == nil {
-					gs.mu.tableDefVersions = make(map[pb.StatsInfoKey]uint32)
-				}
-				gs.mu.tableDefVersions[key] = expectedVersion
-			}
+				ctx, key, generation, stats, &expectedVersion)
 		},
 	)
 	if statsLocked {
