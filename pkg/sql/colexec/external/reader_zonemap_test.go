@@ -176,13 +176,14 @@ func TestZonemapSavedResultProjection(t *testing.T) {
 					_, err := registry.Finalize(account)
 					require.NoError(t, err)
 				}()
-				selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerExternal, 1, 2)
+				// Output vectors are charged through the operator's output view,
+				// and the account admits no fresh allocation. Column 0 is pre-sized
+				// from the base pool, so the failure is the second column's first
+				// allocation, after the first column was already filled.
+				outputMP, err := mp.WithAccount(account, mpool.AllocationOwnerExternal, 1, mpool.AllocationCapacityClassDefault)
 				require.NoError(t, err)
-				dst := buf.Vecs[1]
-				typ := *dst.GetType()
-				dst.Free(mp)
-				buf.Vecs[1], err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
-				require.NoError(t, err)
+				require.NoError(t, buf.Vecs[0].PreExtend(5, mp))
+				param.outputMP = outputMP
 				defer buf.Clean(mp)
 			}
 			for block, rows := range []int{5, 2} {

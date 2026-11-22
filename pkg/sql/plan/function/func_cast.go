@@ -10240,8 +10240,8 @@ func tryReserveAssignedText(
 	if proc == nil || source == nil || result == nil || length < 2 ||
 		(toType.Oid != types.T_text && toType.Oid != types.T_blob) ||
 		*result.GetType() != toType || source.GetType().Oid != toType.Oid ||
-		source == result || source.IsConst() || source.IsDictionary() ||
-		source.Length() != length || result.IsConst() || result.IsDictionary() ||
+		source == result || source.IsConst() ||
+		source.Length() != length || result.IsConst() ||
 		result.Length() != 0 || result.HasBorrowedBacking() ||
 		result.DataBackingKind() != vector.OwnedMPoolUnique ||
 		result.AreaBackingKind() != vector.OwnedMPoolUnique ||
@@ -10284,7 +10284,7 @@ func tryReserveAssignedText(
 			return false, nil
 		}
 	}
-	if err := result.PreExtendWithArea(0, total, proc.Mp()); err != nil {
+	if err := result.PreExtendWithArea(0, total, resultMPool(to, proc)); err != nil {
 		return true, err
 	}
 	for row := 0; row < length; row++ {

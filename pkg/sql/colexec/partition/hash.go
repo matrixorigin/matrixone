@@ -443,22 +443,7 @@ func (ctr *hashContainer) finalizeSortFallback(proc *process.Process, analyzer p
 // large, wide input, so cancellation must be observed during final copying too.
 func (ctr *hashContainer) shuffleRetained(proc *process.Process, analyzer process.Analyzer, selections []int64) (err error) {
 	attrs, attrTypes := ctr.retained.GetSchema()
-	materializing := batch.NewWithSchema(ctr.retained.HasAllocationAccount(), attrs, attrTypes)
-	if selection := ctr.retained.AllocationAccountSelection(); selection != nil {
-		if err = materializing.SetAllocationAccount(selection); err != nil {
-			materializing.Clean(proc.Mp())
-			return err
-		}
-	} else {
-		for i, vec := range ctr.retained.Vecs {
-			if selection := vec.AllocationAccountSelection(); selection != nil {
-				if err = materializing.Vecs[i].SetAllocationAccount(selection); err != nil {
-					materializing.Clean(proc.Mp())
-					return err
-				}
-			}
-		}
-	}
+	materializing := batch.NewWithSchema(false, attrs, attrTypes)
 	ctr.materializing = materializing
 	ctr.accountMemory(analyzer)
 	defer func() {

@@ -1097,14 +1097,13 @@ func CompactRowIdCol(
 	bitMap *nulls.Nulls,
 	proc *process.Process,
 ) error {
-	sels := vector.GetSels()
+	var sels []int64
 	for i := 0; i < v.Length(); i++ {
 		if !bitMap.Contains(uint64(i)) {
 			sels = append(sels, int64(i))
 		}
 	}
 	err := vec.Union(v, sels, proc.Mp())
-	vector.PutSels(sels)
 	return err
 }
 

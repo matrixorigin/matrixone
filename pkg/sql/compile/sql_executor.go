@@ -925,7 +925,7 @@ func cloneInternalExecutorResultBatch(
 	mp *mpool.MPool,
 	streaming bool,
 ) (*batch.Batch, error) {
-	return bat.CloneWithoutAllocationAccount(mp, streaming)
+	return bat.Clone(mp, streaming)
 }
 
 // publishInternalExecutorStreamResult transfers result ownership only after a

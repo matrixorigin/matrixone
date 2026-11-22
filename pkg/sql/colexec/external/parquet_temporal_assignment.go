@@ -173,7 +173,7 @@ func processParquetTemporalAssignment[T types.Timestamp | types.Datetime](
 ) error {
 	staging := vector.NewVec(stagingType)
 	defer staging.Free(proc.Mp())
-	if err := processParquetValuesToFixed(proc.Ctx, mp, page, proc, staging, T(0), convert); err != nil {
+	if err := processParquetValuesToFixed(proc.Ctx, mp.stagingMapper(), page, proc, staging, T(0), convert); err != nil {
 		return err
 	}
 	length := staging.Length()
@@ -193,7 +193,7 @@ func processParquetTemporalAssignment[T types.Timestamp | types.Datetime](
 		return err
 	}
 	checkpoint := vec.MakeAppendCheckpoint()
-	if err := vec.UnionBatch(result.GetResultVector(), 0, length, nil, proc.Mp()); err != nil {
+	if err := vec.UnionBatch(result.GetResultVector(), 0, length, nil, mp.outputPool(proc)); err != nil {
 		return vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, length))
 	}
 	return nil

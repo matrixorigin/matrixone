@@ -834,9 +834,10 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 			}
 			state := newTestVectorAllocationAccount(t, 64*1024, 32)
 			t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
-			dst := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+			dst := newAccountedTestVector(t, types.T_varchar.ToType())
+			dmp := state.view(t, mp)
 			t.Cleanup(func() { dst.Free(mp) })
-			require.NoError(t, AppendBytes(dst, []byte("prefix"), false, mp))
+			require.NoError(t, AppendBytes(dst, []byte("prefix"), false, dmp))
 			selected := 0
 			liveBytes := 0
 			for i, f := range flags {
@@ -848,10 +849,10 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 					liveBytes += len(input.GetBytesAt(offset + i))
 				}
 			}
-			preflight, err := dst.PreExtendSelectedBatch(input, offset, count, flags, 1+selected, mp)
+			preflight, err := dst.PreExtendSelectedBatch(input, offset, count, flags, 1+selected, dmp)
 			require.NoError(t, err)
 			admitted := state.account.Snapshot().Used
-			require.NoError(t, dst.UnionBatchPreflighted(input, int64(offset), count, flags, &preflight, mp))
+			require.NoError(t, dst.UnionBatchPreflighted(input, int64(offset), count, flags, &preflight, dmp))
 			require.Equal(t, admitted, state.account.Snapshot().Used, "publication cannot allocate")
 			require.Len(t, dst.GetArea(), liveBytes, "only admitted live bytes may be copied")
 			next := 1

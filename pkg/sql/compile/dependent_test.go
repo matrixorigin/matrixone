@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -30,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -62,7 +60,7 @@ func TestDependentValueSourceAllocation(t *testing.T) {
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	}()
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2)
+	allocation, err := p.Mp().WithAccount(account, mpool.AllocationOwnerDependent, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	typ := types.T_int32.ToType().PlanType()
 	n := &plan.Node{NodeType: plan.Node_VALUE_SCAN,
@@ -83,7 +81,7 @@ func TestDependentValueSourceAllocation(t *testing.T) {
 	b, err := source.Read(p.Ctx)
 	require.NoError(t, err)
 	require.Equal(t, []int32{1, 2}, vector.MustFixedColNoTypeCheck[int32](b.Vecs[0]))
-	require.Same(t, allocation, b.Vecs[0].AllocationAccountSelection())
+	require.Positive(t, account.Snapshot().Used)
 	require.NoError(t, source.Close())
 	require.Zero(t, account.Snapshot().Used)
 	require.Zero(t, budget.Used())
@@ -318,32 +316,28 @@ func TestDependentNativeStages(t *testing.T) {
 				_, err := registry.Finalize(account)
 				require.NoError(t, err)
 			}()
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65)
+			allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerDependent, 64, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			compiled, opened, closed := 0, 0, 0
 			sourceCompiler := func(node *plan.Node) (dependent.SourceFactory, error) {
 				compiled++
 				if node.NodeType == plan.Node_VALUE_SCAN {
-					return func(p *process.Process, sourceAllocation *vector.AllocationAccountSelection, account *mpool.AllocationAccount) (dependent.Source, error) {
+					return func(p *process.Process, sourceAllocation *mpool.MPool, account *mpool.AllocationAccount) (dependent.Source, error) {
 						opened++
 						return &dependentFixtureSource{batch: batch.EmptyForConstFoldBatch, rows: 1, close: func() { closed++ }}, nil
 					}, nil
 				}
-				return func(p *process.Process, sourceAllocation *vector.AllocationAccountSelection, account *mpool.AllocationAccount) (dependent.Source, error) {
+				return func(p *process.Process, sourceAllocation *mpool.MPool, account *mpool.AllocationAccount) (dependent.Source, error) {
 					opened++
 					b := batch.NewWithSize(len(node.TableDef.Cols))
 					for i, col := range node.TableDef.Cols {
-						b.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), sourceAllocation)
-						if err != nil {
-							b.Clean(p.Mp())
-							return nil, err
-						}
+						b.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
 						for key := int32(1); key <= 3; key++ {
 							v := key
 							if col.Name == "n_regionkey" {
 								v = key * 10
 							}
-							if err := vector.AppendFixed(b.Vecs[i], v, false, p.Mp()); err != nil {
+							if err := vector.AppendFixed(b.Vecs[i], v, false, dependentFixtureMP(p, sourceAllocation)); err != nil {
 								b.Clean(p.Mp())
 								return nil, err
 							}
@@ -494,7 +488,7 @@ func TestDependentExternalSourceReuse(t *testing.T) {
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	}()
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65)
+	selection, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerDependent, 64, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	for range 2 {
 		func() {
@@ -564,14 +558,9 @@ func TestDependentFuzzyFilterDemand(t *testing.T) {
 					if node.NodeType == plan.Node_VALUE_SCAN {
 						return c.compileDependentSource(node)
 					}
-					return func(p *process.Process, a *vector.AllocationAccountSelection, _ *mpool.AllocationAccount) (dependent.Source, error) {
+					return func(p *process.Process, a *mpool.MPool, _ *mpool.AllocationAccount) (dependent.Source, error) {
 						b := batch.NewWithSize(1)
-						var err error
-						b.Vecs[0], err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), a)
-						if err != nil {
-							b.Clean(p.Mp())
-							return nil, err
-						}
+						b.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
 						keys := []int32{1, 2, 3}
 						if node.NodeId == left.NodeId {
 							keys = []int32{9}
@@ -580,7 +569,7 @@ func TestDependentFuzzyFilterDemand(t *testing.T) {
 							}
 						}
 						for _, v := range keys {
-							if err := vector.AppendFixed(b.Vecs[0], v, false, p.Mp()); err != nil {
+							if err := vector.AppendFixed(b.Vecs[0], v, false, dependentFixtureMP(p, a)); err != nil {
 								b.Clean(p.Mp())
 								return nil, err
 							}
@@ -602,7 +591,7 @@ func TestDependentFuzzyFilterDemand(t *testing.T) {
 					_, err := registry.Finalize(account)
 					require.NoError(t, err)
 				}()
-				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65)
+				allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerDependent, 64, mpool.AllocationCapacityClassDefault)
 				require.NoError(t, err)
 				for range 2 {
 					func() {
@@ -630,32 +619,6 @@ func TestDependentFuzzyFilterDemand(t *testing.T) {
 }
 
 func TestDependentSourceAdmissionBeforeOpen(t *testing.T) {
-	t.Run("table-scan-private-frame", func(t *testing.T) {
-		p := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-		t.Cleanup(p.Free)
-		// This admits the operator and source wrapper alone, but cannot hold
-		// the private frame coallocated by TableScan.NewArgument. Rejection
-		// must precede the database open (there is deliberately no engine).
-		limit := uint64(reflect.TypeFor[table_scan.TableScan]().Size() + reflect.TypeFor[dependentNativeSource]().Size())
-		budget := process.MustNewExecutionResourceBudget(limit, limit)
-		t.Cleanup(budget.Close)
-		generation, err := budget.OpenGeneration(1)
-		require.NoError(t, err)
-		t.Cleanup(generation.Close)
-		require.NoError(t, p.SetExecutionResourceBudgetForTesting(generation))
-		c := &Compile{proc: p}
-		factory, err := c.compileDependentSource(&plan.Node{
-			NodeType: plan.Node_TABLE_SCAN,
-			ObjRef:   &plan.ObjectRef{SchemaName: "frame_admission", ObjName: "t"},
-			TableDef: &plan.TableDef{},
-		})
-		require.NoError(t, err)
-		source, err := factory(p, nil, nil)
-		require.Error(t, err)
-		require.Nil(t, source)
-		require.Zero(t, generation.Used())
-	})
-
 	p := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer p.Free()
 	budget := process.MustNewExecutionResourceBudget(64, 64)
@@ -666,7 +629,7 @@ func TestDependentSourceAdmissionBeforeOpen(t *testing.T) {
 	require.NoError(t, p.SetExecutionResourceBudgetForTesting(generation))
 	opened := 0
 	failure := errors.New("source open failure")
-	factory := dependentSourceFactory(128, func(*process.Process, *vector.AllocationAccountSelection) (vm.Operator, error) {
+	factory := dependentSourceFactory(128, func(*process.Process, *mpool.MPool) (vm.Operator, error) {
 		opened++
 		return nil, failure
 	})
@@ -692,4 +655,13 @@ func TestDependentSourceAdmissionBeforeOpen(t *testing.T) {
 		require.Zero(t, next.Used())
 	}
 	require.Equal(t, 2, opened)
+}
+
+// dependentFixtureMP returns the pool a fixture source batch allocates from:
+// the execution's source view when one is bound, otherwise p's pool.
+func dependentFixtureMP(p *process.Process, view *mpool.MPool) *mpool.MPool {
+	if view != nil {
+		return view
+	}
+	return p.Mp()
 }

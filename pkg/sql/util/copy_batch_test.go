@@ -98,18 +98,12 @@ func TestCopyBatchCrossesAllocationOwnershipBoundary(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account,
-		1,
-		1,
-		2,
-	)
+	selection, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
 	src := batch.NewOffHeapWithSize(1)
 	vec := vector.NewOffHeapVecWithType(types.T_int64.ToType())
-	require.NoError(t, vec.SetAllocationAccount(selection))
-	require.NoError(t, vector.AppendFixed(vec, int64(42), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, int64(42), false, selection))
 	src.SetVector(0, vec)
 	src.SetRowCount(1)
 	sourceUsed := account.Snapshot().Used
@@ -117,7 +111,6 @@ func TestCopyBatchCrossesAllocationOwnershipBoundary(t *testing.T) {
 
 	got, err := CopyBatch(src, proc)
 	require.NoError(t, err)
-	require.Nil(t, got.Vecs[0].AllocationAccountSelection())
 	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
 	require.Equal(t, sourceUsed, account.Snapshot().Used)
 
@@ -252,13 +245,12 @@ func TestCopyBatchDestinationAdmission(t *testing.T) {
 			require.NoError(t, err)
 			account, err := registry.Open(limit)
 			require.NoError(t, err)
-			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerTxnWorkspace, 1, 2)
+			selection, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerTxnWorkspace, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			dst, err := CopyBatchWithAllocation(src, proc, selection)
 			if limit == 1<<20 {
 				require.NoError(t, err)
 				require.Positive(t, account.Snapshot().Used)
-				require.NotNil(t, dst.AllocationAccountSelection())
 				require.Equal(t, src.RowCount(), dst.RowCount())
 				require.Equal(t, src.Vecs[1].GetBytesAt(0), dst.Vecs[1].GetBytesAt(0))
 				dst.Clean(proc.Mp())
@@ -288,7 +280,7 @@ func BenchmarkCopyBatchDestinationAdmission(b *testing.B) {
 	require.NoError(b, err)
 	account, err := registry.Open(64 << 20)
 	require.NoError(b, err)
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerTxnWorkspace, 1, 2)
+	selection, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerTxnWorkspace, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(b, err)
 	generation, err := proc.GetExecutionResourceBudget()
 	require.NoError(b, err)
@@ -302,11 +294,11 @@ func BenchmarkCopyBatchDestinationAdmission(b *testing.B) {
 		require.NoError(b, err)
 		generation.Close()
 	})
-	cnSelection, err := vector.NewAllocationAccountSelection(cnAccount, mpool.AllocationOwnerTxnWorkspace, 1, 2)
+	cnSelection, err := proc.Mp().WithAccount(cnAccount, mpool.AllocationOwnerTxnWorkspace, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(b, err)
 	for _, tc := range []struct {
 		name      string
-		selection *vector.AllocationAccountSelection
+		selection *mpool.MPool
 	}{{"generic", nil}, {"workspace", selection}, {"workspace_cn", cnSelection}} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
@@ -332,15 +324,14 @@ func TestCopyBatchKeepsSourceAndDestinationChargesIndependent(t *testing.T) {
 	require.NoError(t, err)
 	target, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	srcSelection, err := vector.NewAllocationAccountSelection(source, mpool.AllocationOwnerDML, 1, 2)
+	srcSelection, err := proc.Mp().WithAccount(source, mpool.AllocationOwnerDML, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	dstSelection, err := vector.NewAllocationAccountSelection(target, mpool.AllocationOwnerTxnWorkspace, 1, 2)
+	dstSelection, err := proc.Mp().WithAccount(target, mpool.AllocationOwnerTxnWorkspace, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	src := batch.NewOffHeapWithSize(1)
-	require.NoError(t, src.SetAllocationAccount(srcSelection))
 	src.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
 	defer src.Clean(proc.Mp())
-	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(42), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(42), false, srcSelection))
 	src.SetRowCount(1)
 	used := source.Snapshot().Used
 	dst, err := CopyBatchWithAllocation(src, proc, dstSelection)

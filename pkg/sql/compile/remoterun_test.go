@@ -3141,7 +3141,7 @@ func Test_convertToProcessSessionInfo(t *testing.T) {
 }
 
 func Test_decodeBatch(t *testing.T) {
-	mp := &mpool.MPool{}
+	mp := mpool.MustNewZero()
 	bat := &batch.Batch{
 		Recursive:  0,
 		ShuffleIDX: 0,

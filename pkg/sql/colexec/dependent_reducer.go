@@ -15,13 +15,15 @@
 package colexec
 
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"unsafe"
 )
 
 // DependentReducer owns at most one output tuple plus a three-valued summary.
@@ -29,9 +31,11 @@ import (
 // A decisive summary requests producer retirement; it is not proof that all
 // started producers succeeded. The region owner publishes only after cleanup.
 type DependentReducer struct {
-	budget     *process.ExecutionResourceGeneration
-	charged    uint64
-	proc       *process.Process
+	budget  *process.ExecutionResourceGeneration
+	charged uint64
+	proc    *process.Process
+	// mp is the reducer's accounted allocation view.
+	mp         *mpool.MPool
 	kind       plan.SubqueryRef_Type
 	lhs        *batch.Batch
 	tuple      *batch.Batch
@@ -46,7 +50,7 @@ type DependentReducer struct {
 	failure    error
 }
 
-func NewDependentReducer(proc *process.Process, call *plan.DependentExpr, output []plan.Type, lhs *batch.Batch, allocation *vector.AllocationAccountSelection, comparisons ...*DependentExpressionProgram) (r *DependentReducer, err error) {
+func NewDependentReducer(proc *process.Process, call *plan.DependentExpr, output []plan.Type, lhs *batch.Batch, allocation *mpool.MPool, comparisons ...*DependentExpressionProgram) (r *DependentReducer, err error) {
 	if proc == nil || call == nil || allocation == nil || len(output) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("invalid dependent reducer owner")
 	}
@@ -67,7 +71,7 @@ func NewDependentReducer(proc *process.Process, call *plan.DependentExpr, output
 	if err = budget.AcquireAllocationCapacity(size); err != nil {
 		return nil, err
 	}
-	r = &DependentReducer{proc: proc, kind: call.Reducer, lhs: lhs, value: call.Reducer == plan.SubqueryRef_ALL, budget: budget, charged: size}
+	r = &DependentReducer{proc: proc, mp: allocation, kind: call.Reducer, lhs: lhs, value: call.Reducer == plan.SubqueryRef_ALL, budget: budget, charged: size}
 	defer func() {
 		if err != nil {
 			r.Close()
@@ -105,18 +109,12 @@ func NewDependentReducer(proc *process.Process, call *plan.DependentExpr, output
 			if typeErr != nil {
 				return r, typeErr
 			}
-			r.tuple.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(native, allocation)
-			if err != nil {
-				return r, err
-			}
+			r.tuple.Vecs[i] = vector.NewOffHeapVecWithType(native)
 		}
 	}
 	if call.Reducer != plan.SubqueryRef_SCALAR || r.comparison != nil {
 		r.result = batch.NewWithSize(1)
-		r.result.Vecs[0], err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_bool.ToType(), allocation)
-		if err != nil {
-			return r, err
-		}
+		r.result.Vecs[0] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
 	}
 	return r, nil
 }
@@ -159,7 +157,7 @@ func (r *DependentReducer) Feed(input *batch.Batch) (stop bool, err error) {
 				return false, moerr.NewInternalErrorNoCtx("dependent output type changed")
 			}
 			r.tuple.Vecs[i].CleanOnlyData()
-			if err = r.tuple.Vecs[i].UnionOne(source, int64(row), r.proc.Mp()); err != nil {
+			if err = r.tuple.Vecs[i].UnionOne(source, int64(row), r.mp); err != nil {
 				return false, err
 			}
 		}
@@ -225,7 +223,7 @@ func (r *DependentReducer) Finish() (*batch.Batch, error) {
 	if r.kind == plan.SubqueryRef_SCALAR {
 		if r.rows == 0 {
 			for _, vec := range r.tuple.Vecs {
-				if err := vector.SetConstNull(vec, 1, r.proc.Mp()); err != nil {
+				if err := vector.SetConstNull(vec, 1, r.mp); err != nil {
 					r.failure = err
 					return nil, err
 				}
@@ -250,7 +248,7 @@ func (r *DependentReducer) Finish() (*batch.Batch, error) {
 	if r.kind == plan.SubqueryRef_NOT_IN {
 		value = !value
 	}
-	if err := vector.AppendFixed(r.result.Vecs[0], value, r.unknown, r.proc.Mp()); err != nil {
+	if err := vector.AppendFixed(r.result.Vecs[0], value, r.unknown, r.mp); err != nil {
 		r.failure = err
 		return nil, err
 	}

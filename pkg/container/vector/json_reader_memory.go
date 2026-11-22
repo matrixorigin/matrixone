@@ -18,6 +18,7 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 // JSONReaderMemoryAdmission charges reader memory to a statement budget,
@@ -26,23 +27,23 @@ import (
 // does not attest that any bytes are valid or immutable.
 type JSONReaderMemoryAdmission func(uint64) (func(), error)
 
-// JSONReaderAllocationSelection supplies physical allocation provenance when
-// the caller has a transient budget but no statement allocation account.
-// It is an allocation policy only; it never confers JSON reader authority.
-func JSONReaderAllocationSelection(selection *AllocationAccountSelection, admission JSONReaderMemoryAdmission) *AllocationAccountSelection {
-	if selection == nil && admission != nil {
-		return &AllocationAccountSelection{transient: admission}
+// JSONReaderAllocationMP returns the MPool a JSON reader allocates through.
+// An accounted (or admission) view of mp is used as is. When mp is not a view
+// and the caller has a transient budget but no statement allocation account,
+// it returns a transient admission view of mp. It is an allocation policy
+// only; it never confers JSON reader authority.
+func JSONReaderAllocationMP(mp *mpool.MPool, admission JSONReaderMemoryAdmission) (*mpool.MPool, error) {
+	if mp.IsView() || admission == nil {
+		return mp, nil
 	}
-	return selection
-}
-
-func (s *AllocationAccountSelection) admitPhysical(size uint64) (func(), error) {
-	// MPool records the requested physical capacity exactly. The extra
-	// allowance covers the registry entry and opaque release token.
-	if size > math.MaxUint64-256 {
-		return nil, moerr.NewInvalidInputNoCtx("JSON reader allocation size overflow")
-	}
-	return ReserveJSONReaderMetadata(nil, s.transient, size+256)
+	return mp.WithAdmission(func(size uint64) (func(), error) {
+		// MPool records the requested physical capacity exactly. The extra
+		// allowance covers the registry entry and opaque release token.
+		if size > math.MaxUint64-256 {
+			return nil, moerr.NewInvalidInputNoCtx("JSON reader allocation size overflow")
+		}
+		return ReserveJSONReaderMetadata(nil, admission, size+256)
+	})
 }
 
 // JSONReaderMetadataCapacity conservatively covers Go size-class rounding,
@@ -68,24 +69,14 @@ func JSONReaderContainerMetadataCapacity(objectBytes uintptr, entries int) (uint
 	return base + uint64(entries)*perEntry, nil
 }
 
-// ReserveJSONReaderMetadata uses the selected statement allocation account if
-// present; otherwise it delegates to the statement's transient admission. A
-// standalone caller with neither has no statement account to charge.
-func ReserveJSONReaderMetadata(selection *AllocationAccountSelection, admission JSONReaderMemoryAdmission, capacity uint64) (func(), error) {
-	if selection != nil {
-		if err := selection.validate(); err != nil {
-			return nil, err
-		}
-		if selection.transient != nil {
-			return ReserveJSONReaderMetadata(nil, selection.transient, capacity)
-		}
-		reservation, err := selection.account.ReserveCapacityWithClass(capacity, selection.capacityClass, selection.owner, selection.dataSite)
+// ReserveJSONReaderMetadata charges the statement allocation account of an
+// accounted MPool view if mp is one; otherwise it delegates to the
+// statement's transient admission. A standalone caller with neither has no
+// statement account to charge.
+func ReserveJSONReaderMetadata(mp *mpool.MPool, admission JSONReaderMemoryAdmission, capacity uint64) (func(), error) {
+	if mp.IsView() && !mp.IsAdmissionView() {
+		lease, err := mp.ReservePinnedCapacity(capacity)
 		if err != nil {
-			return nil, err
-		}
-		lease, err := reservation.Commit(capacity)
-		if err != nil {
-			reservation.Abort()
 			return nil, err
 		}
 		return lease.Release, nil
@@ -108,11 +99,11 @@ func ReserveJSONReaderMetadata(selection *AllocationAccountSelection, admission 
 
 // ReserveJSONReaderBacking admits a Go-backed query allocation before it is
 // made. The allowance includes allocator rounding and the release token.
-func ReserveJSONReaderBacking(selection *AllocationAccountSelection, admission JSONReaderMemoryAdmission, size uint64) (func(), error) {
+func ReserveJSONReaderBacking(mp *mpool.MPool, admission JSONReaderMemoryAdmission, size uint64) (func(), error) {
 	if size > (math.MaxUint64-256)/2 {
 		return nil, moerr.NewInvalidInputNoCtx("JSON reader allocation size overflow")
 	}
-	return ReserveJSONReaderMetadata(selection, admission, 2*size+256)
+	return ReserveJSONReaderMetadata(mp, admission, 2*size+256)
 }
 
 func releaseJSONReaderMetadata(release func()) {

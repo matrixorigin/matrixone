@@ -124,7 +124,7 @@ func loadMembershipColumns(ctx context.Context, info *objectio.BlockInfo, column
 		scratch.Sources = append(scratch.Sources, output.Vecs[position])
 	}
 	_, err := ioutil.LoadColumnsDataIntoBorrowed(ctx, scratch.Seqnums, scratch.Types, fs, info.MetaLocation(), scratch.Sources,
-		mp, policy, request.BorrowColumns(positions, len(output.Vecs)))
+		mp, policy, request.BorrowColumns(positions, len(output.Vecs)), output)
 	if err != nil {
 		return err
 	}
@@ -168,9 +168,6 @@ func (p *scopedMembershipPredicates) gather(output *batch.Batch, rows []int64, a
 		}
 		source.CopyExpressionMetadataTo(destination)
 		output.Vecs[column] = destination
-	}
-	if request.ObserveSelection != nil {
-		request.ObserveSelection(output.RowCount(), 0, 0)
 	}
 	return nil
 }

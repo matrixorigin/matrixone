@@ -586,7 +586,7 @@ func TestBatchUnmarshalSeparatesBorrowedAliasedReuseVectorsWithoutMpool(t *testi
 	seed.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 
-	shared := vector.NewVecFromReuse()
+	shared := new(vector.Vector)
 	require.NoError(t, shared.UnmarshalBinary(seedData))
 	target := NewWithSize(2)
 	target.Vecs[0] = shared
@@ -610,7 +610,7 @@ func TestBatchShrink(t *testing.T) {
 }
 
 func TestBatch_ReplaceVector(t *testing.T) {
-	v1, v2, v3 := vector.NewVecFromReuse(), vector.NewVecFromReuse(), vector.NewVecFromReuse()
+	v1, v2, v3 := new(vector.Vector), new(vector.Vector), new(vector.Vector)
 	bat := &Batch{
 		Vecs: []*vector.Vector{
 			v1,
@@ -1838,7 +1838,7 @@ func TestBatchUnmarshalWithAnyMp_SerializedAttrsLenLessThanVecsLen(t *testing.T)
 	reusedBat.Attrs = []string{"old1", "old2", "old3"} // Simulate stale Attrs
 	reusedBat.Vecs = make([]*vector.Vector, 3)
 	for i := range reusedBat.Vecs {
-		reusedBat.Vecs[i] = vector.NewVecFromReuse()
+		reusedBat.Vecs[i] = new(vector.Vector)
 	}
 
 	// Unmarshal the inconsistent data
@@ -1874,7 +1874,7 @@ func TestShrinkFailureLeavesRowCountUnpublished(t *testing.T) {
 			lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
 			require.NoError(t, err)
 			t.Cleanup(lease.Release)
-			bat.Vecs[1], err = vector.NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data, lease)
+			bat.Vecs[1], err = vector.NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data)
 			require.NoError(t, err)
 			bat.SetRowCount(3)
 			if mask {

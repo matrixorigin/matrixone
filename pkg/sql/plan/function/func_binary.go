@@ -3028,7 +3028,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}
 	vec := result.GetResultVector()
 	if vec.GetType().Oid != typ.Oid {
-		if err := vec.SetTypeAndFixData(typ, proc.Mp()); err != nil {
+		if err := vec.SetTypeAndFixData(typ, resultMPool(result, proc)); err != nil {
 			return err
 		}
 	} else if hasTime {

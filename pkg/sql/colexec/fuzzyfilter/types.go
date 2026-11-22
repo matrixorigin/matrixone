@@ -67,7 +67,7 @@ type container struct {
 type FuzzyFilter struct {
 	ctr                     container
 	allocationAccount       *mpool.AllocationAccount
-	runtimeFilterAllocation *vector.AllocationAccountSelection
+	runtimeFilterAllocation *mpool.AccountBinding
 	filterBudget            *process.ExecutionResourceGeneration
 	filterCharge            uint64
 	keyCharge               uint64
@@ -96,11 +96,10 @@ func (fuzzyFilter *FuzzyFilter) SetAllocationAccount(
 		}
 		return mpool.ErrAllocationAccountMismatch
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerFuzzyFilter,
 		fuzzyFilterAllocationSiteRuntimeFilterData,
-		fuzzyFilterAllocationSiteRuntimeFilterArea,
 	)
 	if err != nil {
 		return err

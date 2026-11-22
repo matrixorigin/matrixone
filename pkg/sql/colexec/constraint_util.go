@@ -33,8 +33,7 @@ import (
 
 func FilterRowIdForDel(proc *process.Process, retBat *batch.Batch, srcBat *batch.Batch,
 	idx int, primaryKeyIdx int) error {
-	sels := vector.GetSels()
-	defer vector.PutSels(sels)
+	var sels []int64
 	rowidVec := retBat.Vecs[0]
 	primaryVec := retBat.Vecs[1]
 	rowIdMap := make(map[types.Rowid]bool)

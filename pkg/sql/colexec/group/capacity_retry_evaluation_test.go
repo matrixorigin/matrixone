@@ -37,7 +37,7 @@ type retryStringExpression struct {
 	colexec.ExpressionExecutor
 	vec         *vector.Vector
 	mp          *mpool.MPool
-	selection   *vector.AllocationAccountSelection
+	selection   *mpool.MPool
 	borrowed    bool
 	calls, rows int
 }
@@ -55,16 +55,15 @@ func (e *retryStringExpression) Eval(proc *process.Process, inputs []*batch.Batc
 		e.vec.Free(proc.Mp())
 	}
 	e.mp = proc.Mp()
-	e.calls++
-	var err error
-	e.vec, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_varchar.ToType(), e.selection)
-	if err != nil {
-		return nil, err
+	if e.selection != nil {
+		e.mp = e.selection
 	}
+	e.calls++
+	e.vec = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 	for range inputs[0].RowCount() {
 		e.rows++
 		value := fmt.Sprintf("%05d-%s", e.rows, strings.Repeat("x", 96))
-		if err := vector.AppendBytes(e.vec, []byte(value), false, proc.Mp()); err != nil {
+		if err := vector.AppendBytes(e.vec, []byte(value), false, e.mp); err != nil {
 			return nil, err
 		}
 	}
@@ -89,7 +88,7 @@ type retryIntExpression struct {
 	colexec.ExpressionExecutor
 	vec         *vector.Vector
 	mp          *mpool.MPool
-	selection   *vector.AllocationAccountSelection
+	selection   *mpool.MPool
 	calls, rows int
 }
 
@@ -98,15 +97,15 @@ func (e *retryIntExpression) Eval(proc *process.Process, inputs []*batch.Batch, 
 		e.vec.Free(proc.Mp())
 	}
 	e.mp = proc.Mp()
+	if e.selection != nil {
+		e.mp = e.selection
+	}
 	e.calls++
 	var err error
-	e.vec, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), e.selection)
-	if err != nil {
-		return nil, err
-	}
+	e.vec = vector.NewOffHeapVecWithType(types.T_int32.ToType())
 	for range inputs[0].RowCount() {
 		e.rows++
-		if err = vector.AppendFixed(e.vec, int32(e.rows), false, proc.Mp()); err != nil {
+		if err = vector.AppendFixed(e.vec, int32(e.rows), false, e.mp); err != nil {
 			return nil, err
 		}
 	}

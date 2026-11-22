@@ -171,6 +171,18 @@ type ExParam struct {
 	icebergDeleteLoaded         bool
 	IcebergBatchDataFile        string
 	IcebergBatchStartRowOrdinal int64
+	// outputMP is the External operator's OutputAllocation view (nil when
+	// unaccounted). Readers allocate output-batch vectors through it.
+	outputMP *mpool.MPool
+}
+
+// outputPool returns the pool output-batch vectors allocate from: the
+// operator's OutputAllocation view when one is bound, otherwise proc's pool.
+func (param *ExternalParam) outputPool(proc *process.Process) *mpool.MPool {
+	if param != nil && param.outputMP != nil {
+		return param.outputMP
+	}
+	return proc.Mp()
 }
 
 type ExFileparam struct {
@@ -220,7 +232,8 @@ type container struct {
 type External struct {
 	// OutputAllocation belongs to the coordinator source owner. Reader-specific
 	// scratch retains its native allocation provenance.
-	OutputAllocation  *vector.AllocationAccountSelection
+	// It is an accounted view of the process pool (nil = unaccounted).
+	OutputAllocation  *mpool.MPool
 	ctr               container
 	Es                *ExternalParam
 	reader            ExternalFileReader // unified file reader
@@ -530,6 +543,8 @@ type ParquetHandler struct {
 	rowCountOnly                   bool
 	currentRowGroup                int
 	rowCountRemaining              int64
+	// outputMP is the External OutputAllocation view, nil when unaccounted.
+	outputMP *mpool.MPool
 }
 
 type columnMapper struct {
@@ -546,4 +561,6 @@ type columnMapper struct {
 	mapper           func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
 	listValuesMapper func(mp *columnMapper, values []parquet.Value, numRows int, proc *process.Process, vec *vector.Vector) error
 	rowBuffer        *parquet.Buffer
+	// pool is the External OutputAllocation view, nil when unaccounted.
+	pool *mpool.MPool
 }

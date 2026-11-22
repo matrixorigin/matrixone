@@ -212,11 +212,11 @@ func TestPointerMetadataRejectsDuplicateAcrossKinds(t *testing.T) {
 	lease := allocationLease{}
 
 	t.Run("no-lock", func(t *testing.T) {
-		mp := &MPool{
+		mp := &MPool{poolCore: &poolCore{
 			noLock: true,
 			ptrs:   make(map[unsafe.Pointer]memHdr),
 			onHeap: new(onHeapOwnership),
-		}
+		}}
 		require.NoError(t, mp.recordPtrHdr(ptr, hdr))
 		require.Error(t, mp.recordAccountedPtrMetadata(ptr, hdr, lease))
 
@@ -241,7 +241,7 @@ func TestPointerMetadataRejectsDuplicateAcrossKinds(t *testing.T) {
 			shard.mu.Unlock()
 		}()
 
-		mp := &MPool{onHeap: new(onHeapOwnership)}
+		mp := &MPool{poolCore: &poolCore{onHeap: new(onHeapOwnership)}}
 		require.NoError(t, mp.recordPtrHdr(ptr, hdr))
 		require.Error(t, gRecordAccountedPtrMetadata(ptr, hdr, lease))
 		var removedLease allocationLease

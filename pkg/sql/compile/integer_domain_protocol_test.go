@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	"testing"
+
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestIntegerArithmeticNegotiatesWorkerVersionAndFencesSender(t *testing.T) {

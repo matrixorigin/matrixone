@@ -58,6 +58,9 @@ func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
 	} else {
 		mergeTop.OpAnalyzer.Reset()
 	}
+	if err = mergeTop.ctr.allocationViews(proc.Mp()); err != nil {
+		return err
+	}
 	if mergeTop.OrderedStreams {
 		return mergeTop.prepareStream(proc)
 	}
@@ -225,14 +228,6 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 				for i, vec := range bat.Vecs {
 					ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
 				}
-				if ctr.retainedAllocation != nil {
-					if err := ctr.bat.SetAllocationAccount(ctr.retainedAllocation); err != nil {
-						bat.Clean(proc.Mp())
-						ctr.bat.Clean(proc.Mp())
-						ctr.bat = nil
-						return false, err
-					}
-				}
 			}
 
 			for i := 0; i < len(bat.Vecs); i++ {
@@ -264,6 +259,10 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 }
 
 func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process.Process) error {
+	retainedMP, err := ctr.retainedMP(proc)
+	if err != nil {
+		return err
+	}
 	rowCount := bat.RowCount()
 	processCount := colexec.TopRowsToFill(limit, len(ctr.sels), rowCount)
 
@@ -298,7 +297,7 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 				0,
 				processCount,
 				nil,
-				proc.Mp(),
+				retainedMP,
 			); err != nil {
 				for i := range checkpoints {
 					err = vector.JoinAppendRollbackError(err, ctr.bat.Vecs[i].RollbackAppend(checkpoints[i], processCount))
@@ -329,8 +328,8 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 	for i, j := processCount, rowCount; i < j; i++ {
 		rowIdx := int64(i)
 		if ctr.compare(1, 0, rowIdx, ctr.sels[0]) < 0 {
-			for _, cmp := range ctr.cmps {
-				if err := cmp.Copy(1, 0, rowIdx, ctr.sels[0], proc); err != nil {
+			for i, cmp := range ctr.cmps {
+				if err := copyCompareRow(cmp, bat.Vecs[i], rowIdx, ctr.sels[0], retainedMP, proc); err != nil {
 					return err
 				}
 			}
@@ -352,7 +351,11 @@ func (ctr *container) eval(limit uint64, proc *process.Process, analyzer process
 		heap.Pop(ctr)
 	}
 	ctr.sels = ordered
-	if err := ctr.bat.Shuffle(ctr.sels, proc.Mp()); err != nil {
+	retainedMP, err := ctr.retainedMP(proc)
+	if err != nil {
+		return err
+	}
+	if err := ctr.bat.Shuffle(ctr.sels, retainedMP); err != nil {
 		return err
 	}
 	for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
@@ -366,16 +369,16 @@ func (ctr *container) eval(limit uint64, proc *process.Process, analyzer process
 func cloneMergeTopBatch(
 	proc *process.Process,
 	source *batch.Batch,
-	selection *vector.AllocationAccountSelection,
+	view *mpool.MPool,
 ) (*batch.Batch, error) {
-	if selection == nil {
+	if view == nil {
 		return source.Dup(proc.Mp())
 	}
-	destination, err := proc.NewBatchFromSrcWithAllocation(source, 0, selection)
+	destination, err := proc.NewBatchFromSrcWithAllocation(source, 0, view)
 	if err != nil {
 		return nil, err
 	}
-	if err = source.CloneTo(destination, proc.Mp()); err != nil {
+	if err = source.CloneTo(destination, view); err != nil {
 		destination.Clean(proc.Mp())
 		return nil, err
 	}

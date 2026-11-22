@@ -30,15 +30,6 @@ func TestBatchCopySelection(t *testing.T) {
 	require.NoError(t, AppendFixedList(flat, []int64{11, 22, 33}, nil, mp))
 	flat.SetNull(1)
 	flat.GetGrouping().Add(2)
-	base, err := FreezeVector(flat, mp, nil)
-	require.NoError(t, err)
-	t.Cleanup(base.Release)
-	rows, err := NewRowSelection([]int64{2, 0, 1}, 3, mp, nil)
-	require.NoError(t, err)
-	t.Cleanup(rows.Release)
-	dict, err := NewDictionaryVector(base, rows, mp, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { dict.Free(mp) })
 	constant, err := NewConstBytes(types.T_varchar.ToType(), []byte("a non-inline constant payload"), 3, mp)
 	require.NoError(t, err)
 	t.Cleanup(func() { constant.Free(mp) })
@@ -47,7 +38,7 @@ func TestBatchCopySelection(t *testing.T) {
 	// Reuse the batch's vector slots across representation generations. Each
 	// fresh selection must honor the current source, including reordered rows.
 	sources := make([]*Vector, 1)
-	for _, src := range []*Vector{flat, constant, dict, flat} {
+	for _, src := range []*Vector{flat, constant, flat} {
 		sources[0] = src
 		multi := GetUnionMultiFunction(sources)
 		batch := GetUnionBatchFunction(sources)
@@ -72,13 +63,14 @@ func TestBatchCopySelection(t *testing.T) {
 			}()
 		}
 	}
-	// Unknown/mixed batches retain a callable generic fallback. The valid
-	// dictionary operand proves that fallback uses logical rather than base rows.
-	for _, unknown := range [][]*Vector{nil, {nil}, {flat, dict}, {{class: 255}}} {
+	// Unknown/mixed batches retain a callable generic fallback.
+	for _, unknown := range [][]*Vector{nil, {nil}, {flat, constant}, {{class: 255}}} {
 		out := NewVec(types.T_int64.ToType())
-		require.NoError(t, GetUnionBatchFunction(unknown)(out, dict, 0, 3, nil, mp))
-		require.Equal(t, []int64{33, 11}, MustFixedColNoTypeCheck[int64](out)[:2])
-		require.True(t, out.IsNull(2))
+		require.NoError(t, GetUnionBatchFunction(unknown)(out, flat, 0, 3, nil, mp))
+		values := MustFixedColNoTypeCheck[int64](out)
+		require.Equal(t, int64(11), values[0])
+		require.Equal(t, int64(33), values[2])
+		require.True(t, out.IsNull(1))
 		out.Free(mp)
 	}
 	var multi UnionMultiFunc
@@ -108,13 +100,14 @@ func TestBatchCopySelectionAliasAndAdmission(t *testing.T) {
 			}
 			state := newTestVectorAllocationAccount(t, 1, 128)
 			t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
-			out := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+			out := newAccountedTestVector(t, types.T_int64.ToType())
+			dmp := state.view(t, mp)
 			t.Cleanup(func() { out.Free(mp) })
 			var err error
 			if rangeCopy {
-				err = batch(out, source, 0, 3, nil, mp)
+				err = batch(out, source, 0, 3, nil, dmp)
 			} else {
-				err = multi(out, source, 0, 3, mp)
+				err = multi(out, source, 0, 3, dmp)
 			}
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.Zero(t, out.Length())

@@ -39,7 +39,7 @@ func TestJSONReaderDirectTextCopiesToAccountedResult(t *testing.T) {
 		live += n
 		return func() { live -= n }, nil
 	}
-	builder, err := NewJSONReaderBuilder(mp, nil, admission)
+	builder, err := NewJSONReaderBuilder(mp, admission)
 	require.NoError(t, err)
 	defer builder.Close()
 	long := strings.Repeat("x", 8192)
@@ -97,7 +97,7 @@ func TestJSONReaderQueryRespectsBudget(t *testing.T) {
 		live += n
 		return func() { live -= n }, nil
 	}
-	builder, err := NewJSONReaderBuilder(mp, nil, admission)
+	builder, err := NewJSONReaderBuilder(mp, admission)
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `["`+strings.Repeat("x", 8192)+`","y"]`), false))
@@ -146,7 +146,7 @@ func TestJSONReaderQueryBudgetLifecycle(t *testing.T) {
 		return func() { live -= n }, nil
 	}
 	defer func() { require.Zero(t, live) }()
-	builder, err := NewJSONReaderBuilder(mp, nil, admission)
+	builder, err := NewJSONReaderBuilder(mp, admission)
 	require.NoError(t, err)
 	defer builder.Close()
 	value := strings.Repeat("x", 128)
@@ -206,7 +206,7 @@ func TestJSONReaderQueryUsesAllocationAccount(t *testing.T) {
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
 	state := newTestVectorAllocationAccount(t, 1<<20, 128)
 	defer finalizeTestVectorAllocationAccount(t, state)
-	builder, err := NewJSONReaderBuilder(mp, state.selection)
+	builder, err := NewJSONReaderBuilder(state.view(t, mp))
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `["`+strings.Repeat("x", 8192)+`","y"]`), false))
@@ -222,8 +222,7 @@ func TestJSONReaderQueryUsesAllocationAccount(t *testing.T) {
 	result.Close()
 	require.Equal(t, baseline, state.account.Snapshot().Used)
 
-	output, err := NewFunctionResultWrapperWithAllocation(types.T_varchar.ToType(), mp, state.selection)
-	require.NoError(t, err)
+	output := NewFunctionResultWrapper(types.T_varchar.ToType(), state.view(t, mp))
 	defer output.Free()
 	require.NoError(t, output.PreExtendAndReset(1))
 	snapshot := state.account.Snapshot()
@@ -269,7 +268,7 @@ func TestJSONReaderIndependentBudgetedReaders(t *testing.T) {
 			mu.Unlock()
 		}, nil
 	}
-	builder, err := NewJSONReaderBuilder(mp, nil, admission)
+	builder, err := NewJSONReaderBuilder(mp, admission)
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `["first","second",123]`), false))

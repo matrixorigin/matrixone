@@ -48,7 +48,7 @@ func TestJSONCacheReaderDirectTextCopiesToAccountedResult(t *testing.T) {
 		live += n
 		return func() { live -= n }, nil
 	}
-	reader, err := OpenJSONReader(data, mp, nil, admission)
+	reader, err := OpenJSONReader(data, mp, admission)
 	require.NoError(t, err)
 	defer reader.Close()
 	direct, ok := reader.(vector.JSONDirectTextReader)
@@ -112,7 +112,7 @@ func TestJSONCacheReaderQueryRespectsBudget(t *testing.T) {
 		live += n
 		return func() { live -= n }, nil
 	}
-	reader, err := OpenJSONReader(data, mp, nil, admission)
+	reader, err := OpenJSONReader(data, mp, admission)
 	require.NoError(t, err)
 	defer reader.Close()
 	_, ok := reader.(*cacheJSONReader)
@@ -169,7 +169,7 @@ func TestJSONCacheReaderQueryBudgetLifecycle(t *testing.T) {
 		return func() { live -= n }, nil
 	}
 	defer func() { require.Zero(t, live) }()
-	reader, err := OpenJSONReader(data, mp, nil, admission)
+	reader, err := OpenJSONReader(data, mp, admission)
 	require.NoError(t, err)
 	defer reader.Close()
 	cursor, err := reader.OpenCursor()
