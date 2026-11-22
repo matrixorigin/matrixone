@@ -76,7 +76,7 @@ func runFinalizeFixture(
 			break
 		}
 		if res.Batch.RowCount() > 0 {
-			cloned, cloneErr := res.Batch.DupWithoutAllocationAccount(cloneMP)
+			cloned, cloneErr := res.Batch.Dup(cloneMP)
 			require.NoError(t, cloneErr)
 			out = append(out, cloned)
 		}
@@ -889,7 +889,7 @@ func TestUnionSelsByBatch(t *testing.T) {
 		defer dst.Free(proc.Mp())
 
 		sels := []int32{0, 2, 4} // length 3 ≤ 16
-		require.NoError(t, unionSelsByBatch(dst, []*batch.Batch{bat}, 0, sels, proc))
+		require.NoError(t, unionSelsByBatch(dst, []*batch.Batch{bat}, 0, sels, proc.Mp()))
 
 		got := vector.MustFixedColNoTypeCheck[int32](dst)
 		require.Equal(t, []int32{10, 30, 50}, got)
@@ -915,7 +915,7 @@ func TestUnionSelsByBatch(t *testing.T) {
 
 		dst := vector.NewOffHeapVecWithType(types.T_int32.ToType())
 		defer dst.Free(proc.Mp())
-		require.NoError(t, unionSelsByBatch(dst, []*batch.Batch{bat}, 0, sels, proc))
+		require.NoError(t, unionSelsByBatch(dst, []*batch.Batch{bat}, 0, sels, proc.Mp()))
 
 		got := vector.MustFixedColNoTypeCheck[int32](dst)
 		require.Equal(t, want, got)
@@ -954,7 +954,7 @@ func TestUnionSelsByBatch(t *testing.T) {
 
 		dst := vector.NewOffHeapVecWithType(types.T_int32.ToType())
 		defer dst.Free(proc.Mp())
-		require.NoError(t, unionSelsByBatch(dst, []*batch.Batch{bat0, bat1}, 0, sels, proc))
+		require.NoError(t, unionSelsByBatch(dst, []*batch.Batch{bat0, bat1}, 0, sels, proc.Mp()))
 
 		got := vector.MustFixedColNoTypeCheck[int32](dst)
 		require.Equal(t, want, got)
@@ -977,12 +977,12 @@ func TestUnionSelsByBatch(t *testing.T) {
 		sels := []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 		dstLarge := vector.NewOffHeapVecWithType(types.T_int32.ToType())
 		defer dstLarge.Free(proc.Mp())
-		require.NoError(t, unionSelsByBatch(dstLarge, []*batch.Batch{bat}, 0, sels, proc))
+		require.NoError(t, unionSelsByBatch(dstLarge, []*batch.Batch{bat}, 0, sels, proc.Mp()))
 
 		// Drop one to force the ≤16 fallback path.
 		dstSmall := vector.NewOffHeapVecWithType(types.T_int32.ToType())
 		defer dstSmall.Free(proc.Mp())
-		require.NoError(t, unionSelsByBatch(dstSmall, []*batch.Batch{bat}, 0, sels[:16], proc))
+		require.NoError(t, unionSelsByBatch(dstSmall, []*batch.Batch{bat}, 0, sels[:16], proc.Mp()))
 
 		require.Equal(t,
 			vector.MustFixedColNoTypeCheck[int32](dstSmall),

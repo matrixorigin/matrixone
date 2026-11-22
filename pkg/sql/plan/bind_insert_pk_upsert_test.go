@@ -109,6 +109,12 @@ func TestInsertOnDupExistingPrimaryKeyNoop(t *testing.T) {
 			columns: []int32{0, 1, 2},
 		},
 		{
+			name: "composite primary key with computed SELECT",
+			sql: "insert into tpch.partsupp select 1,2,3,v,'x' from (select cast(4.50 as decimal(15,2)) v) s " +
+				"on duplicate key update ps_partkey=ps_partkey, ps_suppkey=ps_suppkey, ps_availqty=values(ps_availqty)",
+			columns: []int32{0, 1, 2},
+		},
+		{
 			name: "secondary unique arbiter",
 			sql: "insert into constraint_test.dept(deptno,dname,loc) values (999,'Sales','NY') " +
 				"on duplicate key update deptno=dept.deptno, loc=values(loc)",

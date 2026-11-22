@@ -1079,6 +1079,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Ignored:      ignored,
 		}
 	case *projection.Projection:
+		if t.ValuesWarningRow != 0 {
+			return -1, nil, moerr.NewInternalError(proc.Ctx, "VALUES warning projection must run on the coordinator")
+		}
 		in.ProjectList = t.ProjectList
 		in.ProjectionGroupingFlags = t.GroupingFlags
 		in.ProjectionGroupingSetCount = int32(t.GroupingSetCount)

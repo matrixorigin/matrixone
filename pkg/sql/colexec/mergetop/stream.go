@@ -191,8 +191,11 @@ func (mergeTop *MergeTop) callStream(
 
 	first := ctr.streams[ctr.heap.items[0]].bat
 	var err error
-	ctr.output, err = proc.NewBatchFromSrcWithAllocation(
-		first, 0, mergeTop.ctr.retainedAllocation)
+	outputMP, err := mergeTop.ctr.retainedMP(proc)
+	if err != nil {
+		return vm.CancelResult, err
+	}
+	ctr.output, err = proc.NewBatchFromSrcWithAllocation(first, 0, outputMP)
 	if err != nil {
 		return vm.CancelResult, err
 	}
@@ -212,7 +215,7 @@ func (mergeTop *MergeTop) callStream(
 		chunk := ctr.winnerChunk(winner, int(maxRows)-rows)
 		for col := range ctr.output.Vecs {
 			if err = ctr.output.Vecs[col].UnionBatch(
-				stream.bat.Vecs[col], stream.row, chunk, nil, proc.Mp()); err != nil {
+				stream.bat.Vecs[col], stream.row, chunk, nil, outputMP); err != nil {
 				return vm.CancelResult, err
 			}
 		}

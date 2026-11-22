@@ -974,12 +974,15 @@ const (
 	TEMPORAL_DATETIME_BOUND  = 634
 	TEMPORAL_TIMESTAMP_BOUND = 635
 
+	MO_ASSERT_SNAPSHOT_AFTER = 636
+
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 636
+	FUNCTION_END_NUMBER = 637
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"mo_assert_snapshot_after":      MO_ASSERT_SNAPSHOT_AFTER,
 	"__mo_temporal_datetime_bound":  TEMPORAL_DATETIME_BOUND,
 	"__mo_temporal_timestamp_bound": TEMPORAL_TIMESTAMP_BOUND,
 	"timestampadd_second_interval":  TIMESTAMPADD_SECOND_INTERVAL,

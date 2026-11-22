@@ -256,7 +256,7 @@ func TestReadOneBlockAllColumnsWindowNormalizesLegacyClass(t *testing.T) {
 				name    string
 				tag     byte
 				invalid bool
-			}{{"flat", vector.FLAT, false}, {"legacy", vector.DICTIONARY, false}, {"unknown", vector.DICTIONARY + 1, true}} {
+			}{{"flat", vector.FLAT, false}, {"legacy", vector.LegacyRowBufferClass, false}, {"unknown", vector.LegacyRowBufferClass + 1, true}} {
 				if class.invalid && kind == "varlen" {
 					continue
 				}
@@ -340,7 +340,6 @@ func TestReadOneBlockAllColumnsWindowNormalizesLegacyClass(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, 2, bat.RowCount())
-			require.False(t, bat.Vecs[0].IsDictionary())
 			require.Equal(t, typ, *bat.Vecs[0].GetType())
 			require.True(t, bat.Vecs[0].IsNull(0))
 			require.False(t, bat.Vecs[0].IsNull(1))

@@ -949,12 +949,9 @@ func (tbl *txnTable) collectTombstones(
 		}
 
 		//collect uncommitted persisted tombstones.
-		if err := tbl.getTxn().getUncommittedS3Tombstone(
-			func(stats *objectio.ObjectStats) {
-				tombstone.AppendFiles(*stats)
-			}); err != nil {
-			return nil, err
-		}
+		tbl.getTxn().flushedTombstones.forEach(tbl.tableId, func(stats objectio.ObjectStats) {
+			tombstone.AppendFiles(stats)
+		})
 	}
 
 	//collect committed tombstones.
@@ -3919,12 +3916,8 @@ func (tbl *txnTable) GetExtraInfo() *api.SchemaExtra {
 // If v has no NULLs it returns Dup(v). The caller must Free the result.
 func dupVectorWithoutNulls(v *vector.Vector, mp *mpool.MPool) (*vector.Vector, error) {
 	if !v.HasNull() {
-		if v.AllocationAccountSelection() != nil {
-			// PK validation borrows caller-owned data. Its locally sorted copy is a
-			// short-lived transaction-engine owner, not a continuation of the
-			// statement owner, so make that ownership exit explicit.
-			return v.DupOffHeapWithAllocation(mp, nil)
-		}
+		// PK validation borrows caller-owned data. Its locally sorted copy is a
+		// short-lived transaction-engine owner charged through mp.
 		return v.Dup(mp)
 	}
 	filtered := vector.NewVec(*v.GetType())

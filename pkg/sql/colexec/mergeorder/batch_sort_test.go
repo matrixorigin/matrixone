@@ -351,6 +351,7 @@ func TestSortBatchWithPrecomputedOrderAndReleaseTransfersSourceOwnership(t *test
 		[]*vector.Vector{key},
 		[]*vector.Vector{extra},
 		release,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, callbackCount)
@@ -447,6 +448,7 @@ func TestSortBatchWithPrecomputedOrderAndReleaseBoundsWidePartitionPeak(t *testi
 					extra = nil
 					releaseAfter = proc.Mp().CurrNB()
 				},
+				nil,
 			)
 		} else {
 			sorted, sortedKeys, sortedExtra, err = SortBatchWithPrecomputedOrder(

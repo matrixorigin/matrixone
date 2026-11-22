@@ -53,14 +53,23 @@ func downloading(t *testing.T) (*DiskCache, *io.PipeWriter, chan error) {
 	return cache, pw, filled
 }
 
-func readRange(ctx context.Context, cache *DiskCache, offset, size int64) chan *IOVector {
-	done := make(chan *IOVector, 1)
+func readRange(t *testing.T, ctx context.Context, cache *DiskCache, offset, size int64) chan *IOVector {
+	t.Helper()
+	ctx, cancel := context.WithCancel(ctx)
+	result := make(chan *IOVector, 1)
+	done := make(chan struct{})
+	vec := &IOVector{FilePath: "obj", Entries: []IOEntry{{Offset: offset, Size: size}}}
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		vec.Release()
+	})
 	go func() {
-		vec := &IOVector{FilePath: "obj", Entries: []IOEntry{{Offset: offset, Size: size}}}
+		defer close(done)
 		_ = cache.Read(ctx, vec)
-		done <- vec
+		result <- vec
 	}()
-	return done
+	return result
 }
 
 func waitVector(t *testing.T, done chan *IOVector) *IOVector {
@@ -88,11 +97,11 @@ func TestDiskCacheReadWaitsForDownloadedBytes(t *testing.T) {
 	_, err := pw.Write([]byte("hello"))
 	require.NoError(t, err)
 
-	vec := waitVector(t, readRange(context.Background(), cache, 1, 3))
+	vec := waitVector(t, readRange(t, context.Background(), cache, 1, 3))
 	require.True(t, vec.Entries[0].done, "bytes already written")
 	require.Equal(t, []byte("ell"), vec.Entries[0].Data)
 
-	later := readRange(context.Background(), cache, 6, 5)
+	later := readRange(t, context.Background(), cache, 6, 5)
 	select {
 	case <-later:
 		t.Fatal("read returned before its bytes were written")
@@ -118,7 +127,7 @@ func TestDiskCacheReadFallsBackWhenDownloadFails(t *testing.T) {
 	_, err := pw.Write([]byte("hello"))
 	require.NoError(t, err)
 
-	pending := readRange(context.Background(), cache, 6, 5)
+	pending := readRange(t, context.Background(), cache, 6, 5)
 	require.NoError(t, pw.CloseWithError(errors.New("source failed")))
 	vec := waitVector(t, pending)
 	require.False(t, vec.Entries[0].done)
@@ -130,9 +139,34 @@ func TestDiskCacheReadOfDownloadStopsOnCancel(t *testing.T) {
 	rangeReadsCost(t, time.Hour)
 	cache, _, _ := downloading(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	pending := readRange(ctx, cache, 6, 5)
+	pending := readRange(t, ctx, cache, 6, 5)
 	cancel()
 	require.False(t, waitVector(t, pending).Entries[0].done)
+}
+
+func TestDiskCacheReadCleanupCancelsPendingRead(t *testing.T) {
+	t.Run("unconsumed result", func(t *testing.T) {
+		rangeReadsCost(t, time.Hour)
+		cache, pw, _ := downloading(t)
+		_, err := pw.Write([]byte("hello"))
+		require.NoError(t, err)
+		var pending <-chan *IOVector
+		// This runs after readRange's cleanup and before the download is closed.
+		t.Cleanup(func() {
+			select {
+			case <-pending:
+			default:
+				t.Error("pending read did not finish before download cleanup")
+			}
+			require.NotNil(t, cache.download(cache.pathForFile("obj")))
+		})
+		pending = readRange(t, context.Background(), cache, 6, 5)
+		select {
+		case <-pending:
+			t.Fatal("read returned before its bytes were written")
+		case <-time.After(20 * time.Millisecond):
+		}
+	})
 }
 
 func TestDiskCacheDownloadCleanupJoinsAbandonedFill(t *testing.T) {
@@ -156,7 +190,7 @@ func TestDiskCacheDownloadCleanupJoinsAbandonedFill(t *testing.T) {
 func TestDiskCacheReadBeyondDownloadedObject(t *testing.T) {
 	rangeReadsCost(t, time.Hour)
 	cache, pw, filled := downloading(t)
-	pending := readRange(context.Background(), cache, 2, 10)
+	pending := readRange(t, context.Background(), cache, 2, 10)
 	_, err := pw.Write([]byte("hello"))
 	require.NoError(t, err)
 	require.NoError(t, pw.Close())
@@ -205,6 +239,7 @@ func TestDiskCacheReadDeclinesDownloadFarBehind(t *testing.T) {
 		diskCacheLifecycleTestTimeout, time.Millisecond)
 
 	vec := &IOVector{FilePath: "obj", Entries: []IOEntry{{Offset: 1, Size: 3}, {Offset: 100 << 20, Size: 3}}}
+	defer vec.Release()
 	require.NoError(t, cache.Read(context.Background(), vec))
 	require.True(t, vec.Entries[0].done, "bytes already written")
 	require.Equal(t, []byte("ell"), vec.Entries[0].Data)
@@ -244,7 +279,7 @@ func TestDiskCacheReadWaitsWhenItWouldDuplicateTheDownload(t *testing.T) {
 	require.Eventually(t, func() bool { written, _ := download.estimate(5); return written == 5 },
 		diskCacheLifecycleTestTimeout, time.Millisecond)
 
-	pending := readRange(context.Background(), cache, 5, 20)
+	pending := readRange(t, context.Background(), cache, 5, 20)
 	select {
 	case <-pending:
 		t.Fatal("a read most of the download's next bytes did not wait for them")
@@ -267,7 +302,7 @@ func TestDiskCacheDownloadReadsCountAsCachedFileReads(t *testing.T) {
 	cache, pw, filled := downloading(t)
 	_, err := pw.Write([]byte("hello"))
 	require.NoError(t, err)
-	require.True(t, waitVector(t, readRange(context.Background(), cache, 1, 3)).Entries[0].done)
+	require.True(t, waitVector(t, readRange(t, context.Background(), cache, 1, 3)).Entries[0].done)
 	require.NoError(t, pw.Close())
 	require.NoError(t, <-filled)
 
@@ -314,13 +349,17 @@ func TestS3FSRangeReadCostTimesOnlyDrainedReads(t *testing.T) {
 	rangeReadCosts.latency = sentinel
 
 	var streamed io.ReadCloser
-	require.NoError(t, fs.Read(ctx, &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 1, Size: 100, ReadCloserForRead: &streamed}}}))
+	streamVector := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 1, Size: 100, ReadCloserForRead: &streamed}}}
+	defer streamVector.Release()
+	require.NoError(t, fs.Read(ctx, streamVector))
 	_, err = io.ReadAll(streamed)
 	require.NoError(t, err)
 	require.NoError(t, streamed.Close())
 	require.Equal(t, float64(sentinel), rangeReadCosts.latency, "a read streamed to the caller")
 
-	require.NoError(t, fs.Read(ctx, &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 1, Size: 100}}}))
+	bufferVector := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 1, Size: 100}}}
+	defer bufferVector.Release()
+	require.NoError(t, fs.Read(ctx, bufferVector))
 	require.NotEqual(t, float64(sentinel), rangeReadCosts.latency, "a read the file service drains")
 }
 
@@ -360,8 +399,7 @@ func TestDiskCacheDownloadReadsCountWhenEvictedOnPublish(t *testing.T) {
 	data := make([]byte, 4096)
 	_, err = pw.Write(data)
 	require.NoError(t, err)
-	vec := waitVector(t, readRange(ctx, cache, 0, 4096))
-	defer vec.Release()
+	vec := waitVector(t, readRange(t, ctx, cache, 0, 4096))
 	require.True(t, vec.Entries[0].done)
 	require.NoError(t, pw.Close())
 	require.NoError(t, <-filled)

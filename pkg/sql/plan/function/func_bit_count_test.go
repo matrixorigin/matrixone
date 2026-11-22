@@ -260,9 +260,9 @@ func TestBitCountVarcharWithIsBin(t *testing.T) {
 		mp,
 	)
 	defer input.Free(mp)
-	input.SetIsBin(true)
 
 	result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
+	result.SetArgumentIsBin([]bool{true})
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(input.Length()))
 
@@ -326,7 +326,7 @@ func TestBitCountStringWarnings(t *testing.T) {
 			}
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), tc.values, tc.nulls)}, NewFunctionTestResult(types.T_uint64.ToType(), false, tc.want, outputNulls), BitCountNonBinaryString).WithSelectList(tc.mask)
 			defer fc.Free()
-			fc.parameters[0].SetIsBin(tc.binary)
+			fc.result.SetArgumentIsBin([]bool{tc.binary})
 			if tc.constant {
 				fc.parameters[0].SetClass(vector.CONSTANT)
 				fc.fnLength = 3

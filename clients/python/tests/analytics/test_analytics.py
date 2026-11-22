@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from matrixone import Client
-from matrixone.analytics import AnalyticsManager, _identifier, _sql_type, _validate_schema, _wire_schema
+from matrixone.analytics import AnalyticsManager, _identifier, _protocol_schema, _rows_to_batch, _sql_type, _validate_schema, _wire_schema
 
 pa = pytest.importorskip("pyarrow", minversion="18.0.0")
 pq = pytest.importorskip("pyarrow.parquet")
@@ -119,6 +119,29 @@ def test_schema_and_identifiers():
             _validate_schema(pa.schema([(n, pa.int64()) for n in names]))
     wire = _wire_schema(pa.schema([("d", pa.decimal128(10, 2)), ("t", pa.timestamp("ns", "Asia/Shanghai"))]))
     assert wire.types == [pa.decimal128(19, 2), pa.timestamp("us", "UTC")]
+
+
+def test_wide_median_decimal_protocol_to_arrow():
+    from pymysql.constants import FIELD_TYPE as ft
+
+    field = SimpleNamespace(type_code=ft.NEWDECIMAL, length=41, scale=1,
+                            flags=0, name="median", charsetnr=63)
+    cursor = SimpleNamespace(_result=SimpleNamespace(fields=[field]))
+    schema = _protocol_schema(cursor)
+    assert schema.field("median").type == pa.decimal256(39, 1)
+    batch = _rows_to_batch([(Decimal("1.5"),)], schema, schema)
+    assert batch.column(0).to_pylist() == [Decimal("1.5")]
+
+
+def test_wide_median_arrow_query(analytics):
+    with analytics.query(
+        "SELECT MEDIAN(v) AS m FROM ("
+        "SELECT CAST(1 AS DECIMAL(38,0)) AS v UNION ALL "
+        "SELECT CAST(2 AS DECIMAL(38,0)) AS v) values_to_median"
+    ) as result:
+        table = result.to_arrow()
+    assert table.schema.field("m").type == pa.decimal256(39, 1)
+    assert table.column("m").to_pylist() == [Decimal("1.5")]
 
 
 def test_disconnected_and_invalid_inputs(tmp_path):

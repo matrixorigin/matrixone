@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -185,15 +184,14 @@ func TestCommittedReplayAdmitsOutputBeforeAdvancing(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			}()
-			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+			selection, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			out := batch.NewOffHeapWithSize(1)
 			defer out.Clean(mp)
 			out.Attrs = []string{"id"}
 			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
-			require.NoError(t, out.SetAllocationAccount(selection))
 
-			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, mp, out)
+			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, selection, out)
 			if tc.name == "fits" {
 				require.NoError(t, err)
 				require.Equal(t, []int64{42, 43}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
@@ -282,9 +280,8 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
 	defer closeFunc()
 
-	txnOp.AddWorkspace(&Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
-	})
+	txn := &Transaction{}
+	txnOp.AddWorkspace(txn)
 
 	txnDB := txnDatabase{
 		op: txnOp,
@@ -308,7 +305,6 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		pState: pState,
 	}
 
-	//var stats []objectio.ObjectStats
 	int32Type := types.T_int32.ToType()
 	var tombstoneRowIds []types.Rowid
 	for i := 0; i < 3; i++ {
@@ -337,13 +333,16 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		require.Equal(t, 1, len(ss))
 		require.False(t, ss[0].IsZero())
 
-		//stats = append(stats, ss)
-		txnOp.GetWorkspace().(*Transaction).StashFlushedTombstones(ss[0])
+		stats := vector.NewVec(types.T_blob.ToType())
+		require.NoError(t, vector.AppendBytes(stats, ss[0][:], false, proc.Mp()))
+		txn.flushedTombstones.adjust(txnTbl.tableId, stats, 1)
+		stats.Free(proc.Mp())
 	}
 
 	deletedMask := objectio.GetReusableBitmap()
 	defer deletedMask.Release()
 	for i := range tombstoneRowIds {
+		deletedMask.Clear()
 		bid := tombstoneRowIds[i].BorrowBlockID()
 		left, err := ls.applyWorkspaceFlushedS3Deletes(bid, nil, &deletedMask)
 		require.NoError(t, err)
@@ -365,8 +364,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	s3Bat.SetRowCount(8193)
 	s3Bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
 	txn := &Transaction{
-		proc: testutil.NewProc(t),
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+		proc:          testutil.NewProc(t),
 		op:            txnOp,
 		deletedBlocks: &deletedBlocks{},
 		writes: []Entry{

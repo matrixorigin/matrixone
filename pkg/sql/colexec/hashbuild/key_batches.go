@@ -122,11 +122,7 @@ func (hb *HashmapBuilder) newUniqueKeyBatch(mp *mpool.MPool) (out uniqueKeyBatch
 		if !hb.collectUniqueKeySlot(i) {
 			continue
 		}
-		out.vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(*src.GetType(), hb.uniqueKeyAllocation)
-		if err != nil {
-			out.free(mp)
-			return uniqueKeyBatch{}, err
-		}
+		out.vecs[i] = vector.NewOffHeapVecWithType(*src.GetType())
 		if capacityHint > 0 {
 			if err = out.vecs[i].PreExtend(capacityHint, mp); err != nil {
 				out.free(mp)
@@ -293,6 +289,10 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 	if len(hb.curVecs) == 0 {
 		return nil
 	}
+	keyMP, err := hb.uniqueKeyAllocation.MP(proc.Mp())
+	if err != nil {
+		return err
+	}
 	b := &hb.uniqueKeys
 	oldChunks, oldRows := len(b.rest), b.count()
 	if count > math.MaxInt32-oldRows {
@@ -353,7 +353,7 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 		}
 		if len(tail.vecs) == 0 {
 			var next uniqueKeyBatch
-			next, err = hb.newUniqueKeyBatch(proc.Mp())
+			next, err = hb.newUniqueKeyBatch(keyMP)
 			if err != nil {
 				return err
 			}
@@ -370,7 +370,7 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 		}
 		if n == 0 {
 			var next uniqueKeyBatch
-			next, err = hb.newUniqueKeyBatch(proc.Mp())
+			next, err = hb.newUniqueKeyBatch(keyMP)
 			if err != nil {
 				return err
 			}
@@ -388,9 +388,9 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 				continue
 			}
 			if sels == nil {
-				err = v.UnionBatch(hb.curVecs[i], int64(start), n, nil, proc.Mp())
+				err = v.UnionBatch(hb.curVecs[i], int64(start), n, nil, keyMP)
 			} else {
-				err = v.Union(hb.curVecs[i], sels[:n], proc.Mp())
+				err = v.Union(hb.curVecs[i], sels[:n], keyMP)
 			}
 			if err != nil {
 				return err

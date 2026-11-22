@@ -210,7 +210,7 @@ func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 	exec := newRuntimeTestExecutor()
 	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
 	spec := &JobSpec{
-		ConsumerInfo: ConsumerInfo{InitSQL: "select 1"},
+		ConsumerInfo: ConsumerInfo{ConsumerType: int8(ConsumerType_IndexSync), InitSQL: "select 1"},
 		TriggerSpec:  TriggerSpec{JobType: TriggerType_Default},
 	}
 	watermark := types.BuildTS(10, 0)
@@ -253,7 +253,7 @@ func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 		require.Len(t, iter.jobNames, 1)
 	}
 
-	// Normal running jobs retain the existing shared-iteration behavior.
+	// In-step Running index jobs share one change read.
 	table.AddOrUpdateSinker(
 		context.Background(),
 		"index_hv",
@@ -459,7 +459,7 @@ func TestUpdateWatermarkDiscontinuityFencesWithoutAdvancing(t *testing.T) {
 		_ []uint64,
 		_ []uint64,
 		statuses []*JobStatus,
-		_ types.TS,
+		_ *types.TS,
 		state int8,
 		_ []uint64,
 	) error {
@@ -499,7 +499,7 @@ func TestUpdateWatermarkDiscontinuityKeepsLocalStateWhenFenceFails(t *testing.T)
 	FlushJobStatusOnIterationState = func(
 		context.Context, string, engine.Engine, client.TxnClient,
 		uint32, uint64, []string, []uint64, []uint64, []*JobStatus,
-		types.TS, int8, []uint64,
+		*types.TS, int8, []uint64,
 	) error {
 		return wantErr
 	}
@@ -542,7 +542,7 @@ func TestJobEntryUpdateFencesDurableWatermarkRegression(t *testing.T) {
 		_ []uint64,
 		lsns []uint64,
 		statuses []*JobStatus,
-		_ types.TS,
+		_ *types.TS,
 		state int8,
 		prevLSN []uint64,
 	) error {
@@ -594,7 +594,7 @@ func TestJobEntryUpdateKeepsLocalStateWhenRegressionFenceFails(t *testing.T) {
 	FlushJobStatusOnIterationState = func(
 		context.Context, string, engine.Engine, client.TxnClient,
 		uint32, uint64, []string, []uint64, []uint64, []*JobStatus,
-		types.TS, int8, []uint64,
+		*types.TS, int8, []uint64,
 	) error {
 		return wantErr
 	}
@@ -640,7 +640,7 @@ func TestJobEntryUpdateAcceptsDurableErrorWithoutRefencing(t *testing.T) {
 	FlushJobStatusOnIterationState = func(
 		context.Context, string, engine.Engine, client.TxnClient,
 		uint32, uint64, []string, []uint64, []uint64, []*JobStatus,
-		types.TS, int8, []uint64,
+		*types.TS, int8, []uint64,
 	) error {
 		t.Fatal("an already durable Error must not be fenced again")
 		return nil
@@ -682,7 +682,7 @@ func TestNestedStatusRetriesStopOnCASLoss(t *testing.T) {
 					FlushJobStatusOnIterationState = func(
 						_ context.Context, _ string, _ engine.Engine, _ client.TxnClient,
 						_ uint32, _ uint64, _ []string, _ []uint64, _ []uint64,
-						_ []*JobStatus, _ types.TS, gotState int8, _ []uint64,
+						_ []*JobStatus, _ *types.TS, gotState int8, _ []uint64,
 					) error {
 						writes++
 						require.Equal(t, state, gotState)
@@ -694,7 +694,7 @@ func TestNestedStatusRetriesStopOnCASLoss(t *testing.T) {
 					err := retryISCPTaskIteration(context.Background(), func() error {
 						attempts++
 						return flushFinalJobStatusOnIterationState(context.Background(), "", nil, nil,
-							iter, 0, &JobStatus{Stage: JobStage_Running}, types.TS{}, state)
+							iter, 0, &JobStatus{Stage: JobStage_Running}, nil, state)
 					})
 					require.Equal(t, 1, writes)
 					require.Equal(t, 1, attempts)
@@ -726,7 +726,7 @@ func TestFlushPermanentErrorMessagePopulatesDefaultStatus(t *testing.T) {
 		_ []uint64,
 		_ []uint64,
 		got []*JobStatus,
-		_ types.TS,
+		_ *types.TS,
 		state int8,
 		_ []uint64,
 	) error {
@@ -742,7 +742,7 @@ func TestFlushPermanentErrorMessagePopulatesDefaultStatus(t *testing.T) {
 	err := FlushPermanentErrorMessage(
 		context.Background(), "cn", nil, nil,
 		1, 2, []string{"job"}, []uint64{3}, []uint64{7}, statuses,
-		types.MaxTs(), "invalid catalog status", []uint64{6},
+		"invalid catalog status", []uint64{6},
 	)
 
 	require.NoError(t, err)
@@ -1177,7 +1177,7 @@ func TestUpdateWatermarkValidatesSharedIterationBeforeAdvancing(t *testing.T) {
 	FlushJobStatusOnIterationState = func(
 		context.Context, string, engine.Engine, client.TxnClient,
 		uint32, uint64, []string, []uint64, []uint64, []*JobStatus,
-		types.TS, int8, []uint64,
+		*types.TS, int8, []uint64,
 	) error {
 		return nil
 	}

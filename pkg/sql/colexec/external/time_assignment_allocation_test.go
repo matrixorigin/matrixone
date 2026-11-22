@@ -54,14 +54,14 @@ func TestPrepareTimeStagingPreservesOutputAllocation(t *testing.T) {
 					arg := NewArgument().WithEs(param)
 					var account *mpool.AllocationAccount
 					var registry *mpool.AllocationAccountRegistry
-					var selection *vector.AllocationAccountSelection
+					var selection *mpool.MPool
 					if accounted {
 						var err error
 						registry, err = mpool.NewAllocationAccountRegistry(1, 128)
 						require.NoError(t, err)
 						account, err = registry.Open(64 << 20)
 						require.NoError(t, err)
-						selection, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerExternal, 1, 2)
+						selection, err = proc.Mp().WithAccount(account, mpool.AllocationOwnerExternal, 1, mpool.AllocationCapacityClassDefault)
 						require.NoError(t, err)
 						arg.OutputAllocation = selection
 					}
@@ -78,14 +78,19 @@ func TestPrepareTimeStagingPreservesOutputAllocation(t *testing.T) {
 					}()
 					require.NoError(t, arg.Prepare(proc))
 					vec := arg.ctr.buf.Vecs[0]
-					require.True(t, vector.AllocationAccountSelectionsEqual(selection, vec.AllocationAccountSelection()))
+					out := param.outputPool(proc)
+					if accounted {
+						require.True(t, mpool.SameView(selection, out))
+					} else {
+						require.Same(t, proc.Mp(), out)
+					}
 					if load && format == tree.CSV {
 						require.Equal(t, types.T_varchar, vec.GetType().Oid)
-						require.NoError(t, vector.AppendBytes(vec, []byte("838:59:59.999999"), false, proc.Mp()))
+						require.NoError(t, vector.AppendBytes(vec, []byte("838:59:59.999999"), false, out))
 						require.Equal(t, "838:59:59.999999", vec.GetStringAt(0))
 					} else {
 						require.Equal(t, types.T_time, vec.GetType().Oid)
-						require.NoError(t, vector.AppendFixed(vec, types.Time(1234567), false, proc.Mp()))
+						require.NoError(t, vector.AppendFixed(vec, types.Time(1234567), false, out))
 						require.Equal(t, []types.Time{1234567}, vector.MustFixedColWithTypeCheck[types.Time](vec))
 					}
 					if accounted {

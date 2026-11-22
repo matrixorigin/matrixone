@@ -40,17 +40,17 @@ func TestWorkspaceAllocationIndependentClose(t *testing.T) {
 	defer parent.Close()
 	txn := &Transaction{proc: proc}
 	clone := txn.CloneSnapshotWS().(*Transaction)
-	v, err := txn.newWorkspaceVector(types.T_int64.ToType())
+	v, vmp, err := txn.newWorkspaceVector(types.T_int64.ToType())
 	require.NoError(t, err)
-	require.NoError(t, vector.AppendFixed(v, int64(42), false, proc.Mp()))
-	w, err := clone.newWorkspaceVector(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(v, int64(42), false, vmp))
+	w, wmp, err := clone.newWorkspaceVector(types.T_int64.ToType())
 	require.NoError(t, err)
-	require.NoError(t, vector.AppendFixed(w, int64(7), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(w, int64(7), false, wmp))
 	v.Free(proc.Mp())
 	txn.closeWorkspaceAllocation()
 	txn.closeWorkspaceAllocation()
 	require.False(t, parent.Closed())
-	require.NoError(t, vector.AppendFixed(w, int64(8), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(w, int64(8), false, wmp))
 	_, err = txn.workspaceAllocation()
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountSealed)
 	w.Free(proc.Mp())
@@ -68,7 +68,7 @@ func TestWorkspaceAllocationConcurrentInitialization(t *testing.T) {
 	txn := &Transaction{proc: proc}
 	defer txn.closeWorkspaceAllocation()
 	const workers = 16
-	selections := make([]*vector.AllocationAccountSelection, workers)
+	selections := make([]*mpool.MPool, workers)
 	errs := make([]error, workers)
 	var wg sync.WaitGroup
 	start := make(chan struct{})
@@ -256,28 +256,36 @@ func TestWorkspaceInsertPreservesRawBatchProvenance(t *testing.T) {
 			txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 			b := batch.NewWithSize(1)
 			var account *mpool.AllocationAccount
-			var selection *vector.AllocationAccountSelection
+			appendMP := txn.proc.Mp()
 			registry, err := parent.AllocationAccountRegistry()
 			require.NoError(t, err)
 			if accounted {
 				account, err = registry.OpenWithController(1<<20, parent)
 				require.NoError(t, err)
 				defer func() { _, _, err := registry.CompleteTerminal(account); require.NoError(t, err) }()
-				selection, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDML, 1, 2)
+				appendMP, err = txn.proc.Mp().WithAccount(account, mpool.AllocationOwnerDML, 1, mpool.AllocationCapacityClassDefault)
 				require.NoError(t, err)
 				b = batch.NewOffHeapWithSize(1)
-				require.NoError(t, b.SetAllocationAccount(selection))
 				b.SetVector(0, vector.NewOffHeapVecWithType(types.T_int8.ToType()))
 			} else {
 				b.SetVector(0, vector.NewVec(types.T_int8.ToType()))
 			}
 			defer b.Clean(txn.proc.Mp())
 			b.Attrs = []string{"v"}
-			require.NoError(t, vector.AppendFixed(b.Vecs[0], int8(1), false, txn.proc.Mp()))
+			require.NoError(t, vector.AppendFixed(b.Vecs[0], int8(1), false, appendMP))
 			b.SetRowCount(1)
+			var payloadUsed uint64
+			if account != nil {
+				payloadUsed = account.Snapshot().Used
+			}
 			rowids, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", b, DNStore{})
 			require.NoError(t, err)
-			require.True(t, vector.AllocationAccountSelectionsEqual(selection, rowids.AllocationAccountSelection()))
+			require.Same(t, rowids, b.Vecs[0])
+			if account != nil {
+				// A raw batch carries no account: its rowid copy is not charged
+				// to the caller's account either.
+				require.Equal(t, payloadUsed, account.Snapshot().Used)
+			}
 			require.Zero(t, txn.workspaceAccount.Snapshot().Used, "temporary workspace rowids were released")
 			txn.delTransaction()
 			require.Zero(t, budget.AggregateUsed())

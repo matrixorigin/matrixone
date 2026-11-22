@@ -140,12 +140,12 @@ func TestCombinedTxnTable_CollectChanges(t *testing.T) {
 		types.TS{},
 		types.TS{},
 		false,
-		&mpool.MPool{},
+		mpool.MustNewZero(),
 	)
 	assert.NoError(t, err)
 	assert.NotNil(t, handle)
 
-	data, tombstone, hint, err := handle.Next(context.Background(), &mpool.MPool{})
+	data, tombstone, hint, err := handle.Next(context.Background(), mpool.MustNewZero())
 	assert.NoError(t, err)
 	assert.Nil(t, data)
 	assert.Nil(t, tombstone)
@@ -355,7 +355,7 @@ func TestCombinedChangesHandle_NextCloseErrorClosesRemainingHandles(t *testing.T
 	second := &mockChangesHandle{}
 	handle := &combinedChangesHandle{handles: []engine.ChangesHandle{first, second}}
 
-	data, tombstone, _, err := handle.Next(context.Background(), &mpool.MPool{})
+	data, tombstone, _, err := handle.Next(context.Background(), mpool.MustNewZero())
 	assert.ErrorIs(t, err, errFirst)
 	assert.Nil(t, data)
 	assert.Nil(t, tombstone)

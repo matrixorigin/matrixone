@@ -319,6 +319,10 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 		return mpool.ErrAllocationAccountInvalid
 	}
 	ctr.spillAllocationMP = proc.Mp()
+	selectedMP, err := ctr.spillBatchAllocation.MP(proc.Mp())
+	if err != nil {
+		return err
+	}
 	if !sourceAlreadyCharged {
 		externalBytes := bat.Allocated()
 		if size := bat.Size(); size > externalBytes {
@@ -334,7 +338,6 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 	if !keycodec.ValidVectors(bat.Vecs, rows) {
 		return process.ErrExecutionResourceInvalid
 	}
-	var err error
 
 	if cap(ctr.spillKeyVecs) < len(executors) {
 		ctr.spillKeyVecs = make([]*vector.Vector, len(executors))
@@ -436,23 +439,11 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 		}
 		if selected == nil {
 			selected = batch.NewOffHeapWithSize(len(bat.Vecs))
-			if err := selected.SetAllocationAccount(
-				ctr.spillBatchAllocation,
-			); err != nil {
-				return err
-			}
 			for i, vec := range bat.Vecs {
 				if vec == nil {
 					return process.ErrExecutionResourceInvalid
 				}
-				selected.Vecs[i], err =
-					vector.NewOffHeapVecWithTypeAndAllocation(
-						*vec.GetType(),
-						ctr.spillBatchAllocation,
-					)
-				if err != nil {
-					return err
-				}
+				selected.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
 			}
 		}
 		cursor := start
@@ -469,10 +460,10 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 						spillErr = process.ErrExecutionResourceInvalid
 						break
 					}
-					if spillErr = selected.Vecs[i].PreExtend(n, proc.Mp()); spillErr != nil {
+					if spillErr = selected.Vecs[i].PreExtend(n, selectedMP); spillErr != nil {
 						break
 					}
-					if spillErr = selected.Vecs[i].UnionInt32(vec, sels, proc.Mp()); spillErr != nil {
+					if spillErr = selected.Vecs[i].UnionInt32(vec, sels, selectedMP); spillErr != nil {
 						break
 					}
 				}
@@ -656,9 +647,7 @@ func (ctr *container) spillBatchWithPressure(
 		current := bat
 		if start != 0 || end != rows {
 			var err error
-			current, err = bat.WindowWithAllocation(
-				start, end, proc.Mp(), ctr.spillBatchAllocation,
-			)
+			current, err = bat.Window(start, end)
 			if err != nil {
 				return err
 			}

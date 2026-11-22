@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -125,4 +126,31 @@ func insertPlanHasNodeType(logicPlan *Plan, nodeType planpb.Node_NodeType) bool 
 		}
 	}
 	return false
+}
+
+// A set materializes byte strings before assignment. In particular, neither
+// UTF-8 rune length nor CHAR padding may change the visible binary payload.
+func TestSetOperationMaterializesBinaryCharacterResults(t *testing.T) {
+	for _, tc := range []struct {
+		name, query string
+		wantWidth   int32
+	}{
+		{"UTF-8 bytes", "select 0xc3a9 union all select 0x00", 2},
+		{"trailing space", "select 0x31 union select 0x3120", 2},
+		{"NULL", "select null union all select 0xc3a9", 2},
+		{"bit literals", "select b'00110001' union all select b'00110010'", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.query)
+			require.NoError(t, err)
+			set := lastSetOperationNode(p.GetQuery())
+			require.NotNil(t, set)
+			require.Len(t, set.ProjectList, 1)
+			got := set.ProjectList[0].Typ
+			require.Equal(t, int32(types.T_varbinary), got.Id)
+			require.Equal(t, uint32(types.CharsetBinary), got.Charset)
+			require.Equal(t, tc.wantWidth, got.Width)
+			require.False(t, got.PadSpace)
+		})
+	}
 }

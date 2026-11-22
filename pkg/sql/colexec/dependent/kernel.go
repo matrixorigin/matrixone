@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -142,7 +141,7 @@ func openKernel(proc *process.Process, factory KernelFactory, children int, acco
 	}
 	for _, op := range k.operators {
 		if binder, ok := op.(interface {
-			BindDependent(colexec.DependentProgramFactory, *vector.AllocationAccountSelection)
+			BindDependent(colexec.DependentProgramFactory, *mpool.MPool)
 		}); ok {
 			binder.BindDependent(execution, execution.allocation)
 		}
@@ -160,7 +159,7 @@ func openKernel(proc *process.Process, factory KernelFactory, children int, acco
 			return k, err
 		}
 	}
-	vm.ConfigureDictionaryBoundaries(k.root)
+	vm.ConfigureSelectionEdges(k.root)
 	return k, nil
 }
 func (k *nativeKernel) read() (*batch.Batch, int, vm.Continuation, error) {

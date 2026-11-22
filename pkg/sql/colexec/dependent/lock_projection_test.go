@@ -61,7 +61,7 @@ func TestDependentImplicitLockProjection(t *testing.T) {
 	defer func() { account.Seal(); _, err := registry.Finalize(account); require.NoError(t, err) }()
 	opened, closed := 0, 0
 	template, err := dependent.Compile(proc.Ctx, q, func(node *plan.Node) (dependent.SourceFactory, error) {
-		return func(child *process.Process, allocation *vector.AllocationAccountSelection, _ *mpool.AllocationAccount) (dependent.Source, error) {
+		return func(child *process.Process, allocation *mpool.MPool, _ *mpool.AllocationAccount) (dependent.Source, error) {
 			opened++
 			width := len(node.ProjectList)
 			if node.TableDef != nil {
@@ -69,9 +69,9 @@ func TestDependentImplicitLockProjection(t *testing.T) {
 			}
 			b := batch.NewWithSize(width)
 			for i := range b.Vecs {
-				b.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), allocation)
+				b.Vecs[i], err = vector.NewOffHeapVecWithType(types.T_int32.ToType()), nil
 				require.NoError(t, err)
-				require.NoError(t, vector.AppendFixed(b.Vecs[i], int32(11), false, child.Mp()))
+				require.NoError(t, vector.AppendFixed(b.Vecs[i], int32(11), false, allocation))
 			}
 			b.SetRowCount(1)
 			return &testSource{batch: b, close: func() { closed++; b.Clean(child.Mp()) }}, nil

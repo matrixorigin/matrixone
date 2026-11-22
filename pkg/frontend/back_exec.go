@@ -1052,6 +1052,7 @@ func executeStmtInSameSession(
 	ses *Session,
 	execCtx *ExecCtx,
 	stmt tree.Statement,
+	resper Responser,
 	preparedExpression bool,
 	preparedParamVals []any,
 	preparedBinaryExecute bool,
@@ -1077,10 +1078,8 @@ func executeStmtInSameSession(
 	// the result batch will be saved in the session.
 	// you can get the result batch by calling GetResultBatches()
 	ses.SetOutputCallback(batchFetcher)
-	//2. replace protocol by FakeProtocol.
-	// Any response yielded during running query will be dropped by the NullResp.
-	// The client will not receive any response from the NullResp.
-	prevProto := ses.ReplaceResponser(&NullResp{})
+	//2. Use the internal responder so query output never reaches the client.
+	prevProto := ses.ReplaceResponser(resper)
 	//3. replace the derived stmt
 	prevDerivedStmt := ses.ReplaceDerivedStmt(true)
 	// inherit database

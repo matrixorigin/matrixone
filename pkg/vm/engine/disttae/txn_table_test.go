@@ -138,7 +138,6 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 		t.Run(fmt.Sprintf("skip-transfer=%v", skipTransfer), func(t *testing.T) {
 			txn := newTransactionWithActivePKTableForTest(t, "pk")
 			txn.tnStores = []DNStore{{}}
-			txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 			txn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false).AnyTimes()
 
 			tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))

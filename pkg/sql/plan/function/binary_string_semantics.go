@@ -20,14 +20,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// isBinaryStringVector reports whether a string vector has byte-string
+// isBinaryStringVector reports whether a string argument has byte-string
 // semantics. The static type is authoritative; vectors carry no per-row
-// string domain.
-func isBinaryStringVector(vec *vector.Vector) bool {
+// string domain. isBin is the caller-published binary-literal flag of the
+// argument (vector.FunctionResultWrapper.ArgumentIsBin).
+func isBinaryStringVector(vec *vector.Vector, isBin bool) bool {
 	if vec == nil {
 		return false
 	}
-	return types.StaticStringDomain(*vec.GetType()) == types.StringDomainBinary || vec.GetIsBin()
+	return types.StaticStringDomain(*vec.GetType()) == types.StringDomainBinary || isBin
+}
+
+// IsBinaryCharacterType identifies byte strings carried in CHAR/VARCHAR,
+// the physical representation of SQL HEX and BIT literals and their aliases.
+func IsBinaryCharacterType(typ types.Type) bool {
+	return typ.Charset == types.CharsetBinary && (typ.Oid == types.T_char || typ.Oid == types.T_varchar)
 }
 
 func stringCharsetAndCollationName(typ types.Type) (charset, collation string) {
@@ -72,7 +79,7 @@ func opUnaryBytesToFixedByStringDomain[T types.FixedSizeTExceptStrType](
 	selectList *FunctionSelectList,
 ) error {
 	fn := textFn
-	if isBinaryStringVector(parameters[0]) {
+	if isBinaryStringVector(parameters[0], result.ArgumentIsBin(0)) {
 		fn = binaryFn
 	}
 	return opUnaryBytesToFixed[T](parameters, result, proc, length, fn, selectList)
@@ -88,7 +95,7 @@ func opUnaryBytesToBytesByStringDomain(
 	selectList *FunctionSelectList,
 ) error {
 	fn := textFn
-	if isBinaryStringVector(parameters[0]) {
+	if isBinaryStringVector(parameters[0], result.ArgumentIsBin(0)) {
 		fn = binaryFn
 	}
 	return opUnaryBytesToBytes(parameters, result, proc, length, fn, selectList)

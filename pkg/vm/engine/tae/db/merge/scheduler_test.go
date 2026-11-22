@@ -1033,3 +1033,78 @@ func TestXxx(t *testing.T) {
 	now := time.Now().AddDate(0, 0, 3)
 	t.Log(now.UnixNano(), " // ", now)
 }
+
+func mergeTableWithBlockRows(id uint64, rows uint32) catalog.MergeTable {
+	table := promotionTable(id).(catalog.TNMergeTable)
+	table.GetLastestSchema(false).Extra.BlockMaxRows = rows
+	return table
+}
+
+func TestLaunchPadUsesTableBlockMaxRows(t *testing.T) {
+	objects := []*objectio.ObjectStats{
+		newTestObjectStats(t, 1, 2, 16<<20, 16384, 1, nil, 0),
+		newTestObjectStats(t, 3, 4, 16<<20, 16384, 1, nil, 0),
+		newTestObjectStats(t, 5, 6, 16<<20, 16384, 1, nil, 0),
+		newTestObjectStats(t, 7, 8, 16<<20, 16384, 1, nil, 0),
+	}
+	for _, tc := range []struct {
+		name  string
+		table catalog.MergeTable
+		want  int
+		size  int
+	}{
+		{"large", mergeTableWithBlockRows(9511, 16384), 2, 93257728},
+		{"small", mergeTableWithBlockRows(9511, 1000), 4, 119406592},
+		{"standard", mergeTableWithBlockRows(9511, 8192), 4, 119406592},
+		{"default", mergeTableWithBlockRows(9511, 0), 4, 119406592},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pad := newLaunchPad(newFakeClock())
+			trigger := NewMMsgTaskTrigger(tc.table).WithAssignedTasks([]mergeTask{{objs: objects}})
+			tasks := pad.gatherByTrigger(t.Context(), trigger, pad.clock.Now(), newTestRscController(192<<20))
+			require.Len(t, tasks, 1)
+			require.Len(t, tasks[0].objs, tc.want)
+			require.Equal(t, tc.size, tasks[0].eSize)
+		})
+	}
+}
+
+func TestLaunchPadCapacityAcrossGatherPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		table catalog.MergeTable
+		want  int
+		size  int
+	}{
+		{"zero", mergeTableWithBlockRows(9511, 0), 4, 119406592},
+		{"large", mergeTableWithBlockRows(9511, 16384), 2, 93257728},
+	} {
+		for _, path := range []string{"l0", "ln", "tombstone"} {
+			t.Run(tc.name+"/"+path, func(t *testing.T) {
+				objects := make([]*objectio.ObjectStats, 0, 4)
+				for i := range 4 {
+					objects = append(objects, newTestObjectStats(t, 1, 100, 16<<20, 16384, 0, nil, uint16(i)))
+				}
+				pad := newLaunchPad(newFakeClock())
+				pad.table = tc.table
+				pad.lastMergeTime = time.Hour
+				rc := newTestRscController(192 << 20)
+				switch path {
+				case "l0":
+					pad.leveledObjects[0] = objects
+					opts := NewLayerZeroOpts().WithToleranceDegressionCurve(1, 1, time.Hour, [4]float64{})
+					pad.gatherL0Tasks(t.Context(), opts, rc)
+				case "ln":
+					pad.leveledObjects[1] = objects
+					pad.gatherLnTasks(t.Context(), NewOverlapOptions().WithMinPointDepthPerCluster(2), 1, 1, rc)
+				case "tombstone":
+					pad.tombstoneStats = objects
+					pad.gatherTombstoneTasks(t.Context(), NewTombstoneOpts().WithOneShot(true), rc)
+				}
+				require.Len(t, pad.revisedResults, 1)
+				require.Len(t, pad.revisedResults[0].objs, tc.want)
+				require.Equal(t, tc.size, pad.revisedResults[0].eSize)
+			})
+		}
+	}
+}

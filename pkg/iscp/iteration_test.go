@@ -162,7 +162,7 @@ func TestGetJobSpecsMissingJobFlushesPermanentErrorWithoutNilStatuses(t *testing
 		_ []uint64,
 		_ []uint64,
 		jobStatuses []*JobStatus,
-		_ types.TS,
+		_ *types.TS,
 		_ int8,
 		_ []uint64,
 	) error {
@@ -281,7 +281,7 @@ func TestGetJobSpecsFlushesPermanentErrorForInvalidRows(t *testing.T) {
 				_ []uint64,
 				_ []uint64,
 				jobStatuses []*JobStatus,
-				_ types.TS,
+				_ *types.TS,
 				_ int8,
 				_ []uint64,
 			) error {
@@ -360,7 +360,7 @@ func TestFlushFinalJobStatusUsesCurrentJobLSNAsPrevLSN(t *testing.T) {
 		jobIDs []uint64,
 		lsns []uint64,
 		jobStatuses []*JobStatus,
-		_ types.TS,
+		_ *types.TS,
 		state int8,
 		prevLSN []uint64,
 	) error {
@@ -381,7 +381,7 @@ func TestFlushFinalJobStatusUsesCurrentJobLSNAsPrevLSN(t *testing.T) {
 		iterCtx,
 		1,
 		status,
-		status.From,
+		nil,
 		ISCPJobState_Error,
 	)
 	require.NoError(t, err)
@@ -508,7 +508,7 @@ func TestFlushStatusSucceedsOnOneAffectedRow(t *testing.T) {
 		"test_job",
 		1,
 		&JobStatus{Stage: JobStage_Running},
-		types.TS{},
+		nil,
 		ISCPJobState_Error,
 		0,
 	)
@@ -534,7 +534,7 @@ func TestFlushStatusErrorsOnZeroAffectedRows(t *testing.T) {
 		"test_job",
 		1,
 		&JobStatus{Stage: JobStage_Running},
-		types.TS{},
+		nil,
 		ISCPJobState_Error,
 		0,
 	)
@@ -584,7 +584,7 @@ func TestGetJobSpecsPermanentErrorFailsWhenFlushReturnsError(t *testing.T) {
 		_ []uint64,
 		_ []uint64,
 		_ []*JobStatus,
-		_ types.TS,
+		_ *types.TS,
 		_ int8,
 		_ []uint64,
 	) error {

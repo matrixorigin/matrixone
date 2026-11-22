@@ -47,8 +47,7 @@ func reusableSingleGroup(agg AggFuncExec) (singleGroupReuse, *aggExec, bool) {
 	}
 	for i, v := range s.vecs {
 		if v == nil || v.IsConst() || v.Length() != 1 || v.Capacity() < AggBatchSize ||
-			!v.GetType().Eq(state.stateTypes[i]) ||
-			!vector.AllocationAccountSelectionsEqual(v.AllocationAccountSelection(), state.allocation.vectorSelection()) {
+			!v.GetType().Eq(state.stateTypes[i]) {
 			return nil, nil, false
 		}
 	}
@@ -96,8 +95,7 @@ func AppendSingleGroupResultAndReset(agg AggFuncExec, dst *vector.Vector) (*vect
 			return nil, err
 		}
 	} else {
-		if dst.IsConst() || !dst.GetType().Eq(state.retType) ||
-			!vector.AllocationAccountSelectionsEqual(dst.AllocationAccountSelection(), state.allocation.vectorSelection()) {
+		if dst.IsConst() || !dst.GetType().Eq(state.retType) {
 			return nil, moerr.NewInternalErrorNoCtx("invalid single-group result destination")
 		}
 		for _, v := range state.state[0].vecs {

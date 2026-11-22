@@ -36,9 +36,9 @@ const opName = "merge_order"
 func newBatchWithAllocation(
 	proc *process.Process,
 	source *batch.Batch,
-	selection *vector.AllocationAccountSelection,
+	view *mpool.MPool,
 ) (*batch.Batch, error) {
-	destination, err := proc.NewBatchFromSrcWithAllocation(source, 0, selection)
+	destination, err := proc.NewBatchFromSrcWithAllocation(source, 0, view)
 	if err != nil {
 		return nil, err
 	}
@@ -54,16 +54,16 @@ func newBatchWithAllocation(
 func cloneBatchWithAllocation(
 	proc *process.Process,
 	source *batch.Batch,
-	selection *vector.AllocationAccountSelection,
+	view *mpool.MPool,
 ) (*batch.Batch, error) {
-	if selection == nil {
+	if view == nil {
 		return source.Dup(proc.Mp())
 	}
-	destination, err := newBatchWithAllocation(proc, source, selection)
+	destination, err := newBatchWithAllocation(proc, source, view)
 	if err != nil {
 		return nil, err
 	}
-	if err = source.CloneTo(destination, proc.Mp()); err != nil {
+	if err = source.CloneTo(destination, view); err != nil {
 		return nil, err
 	}
 	return destination, nil
@@ -326,12 +326,15 @@ func (ctr *container) removeInMemoryBatch(proc *process.Process, index int) erro
 }
 
 func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) (sendOver bool, err error) {
-	mp := proc.Mp()
+	mp, err := ctr.outputMP(proc)
+	if err != nil {
+		return false, err
+	}
 	if ctr.buf == nil {
 		ctr.buf, err = newBatchWithAllocation(
 			proc,
 			ctr.batchList[0],
-			ctr.outputAllocation,
+			mp,
 		)
 		if err != nil {
 			return false, err
@@ -448,7 +451,7 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 			}
 		}
 
-		if err = appendContiguousRows(ctr.buf, ctr.batchList[choice], ctr.indexList[choice], 1, proc); err != nil {
+		if err = appendContiguousRows(ctr.buf, ctr.batchList[choice], ctr.indexList[choice], 1, mp); err != nil {
 			return false, err
 		}
 
@@ -517,6 +520,9 @@ func (mergeOrder *MergeOrder) Prepare(proc *process.Process) (err error) {
 			ctr.releaseGrowthParticipant()
 		}
 	}()
+	if err = ctr.allocationViews(proc.Mp()); err != nil {
+		return err
+	}
 	if len(mergeOrder.ctr.executors) == 0 {
 		ctr.batchList = make([]*batch.Batch, 0, defaultCacheBatchSize)
 		ctr.orderCols = make([][]*vector.Vector, 0, defaultCacheBatchSize)
@@ -643,10 +649,15 @@ func (mergeOrder *MergeOrder) Call(
 				continue
 			}
 
+			retained, err := ctr.retainedView(proc)
+			if err != nil {
+				freeOrderColumns(proc.Mp(), input.Batch, orderCols)
+				return vm.CancelResult, err
+			}
 			bat, err := cloneBatchWithAllocation(
 				proc,
 				input.Batch,
-				ctr.retainedAllocation,
+				retained,
 			)
 			if err != nil && mpool.IsRetryableAllocationCapacity(err) {
 				ctr.generateCompares(mergeOrder.OrderBySpecs)

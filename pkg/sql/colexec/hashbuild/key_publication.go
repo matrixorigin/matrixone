@@ -215,6 +215,10 @@ func (hashBuild *HashBuild) handleDirectRuntimeFilterRuns(proc *process.Process,
 		return err
 	}
 	defer lease.Release()
+	keyMP, err := hb.uniqueKeyAllocation.MP(proc.Mp())
+	if err != nil {
+		return err
+	}
 	runs := make([]*vector.Vector, 0, count)
 	rows := 0
 	sortInEncoding := runtimefilter.ExactFilterDataSorter(*hb.uniqueKeys.first.vecs[slot].GetType()) != nil
@@ -227,13 +231,13 @@ func (hashBuild *HashBuild) handleDirectRuntimeFilterRuns(proc *process.Process,
 		}
 		v := vecs[slot]
 		if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed {
-			if err := runtimefilter.CloseFloatSignedZero(v, proc.Mp()); err != nil {
+			if err := runtimefilter.CloseFloatSignedZero(v, keyMP); err != nil {
 				return err
 			}
 		}
 		v.GetNulls().Reset()
 		if !sortInEncoding {
-			if err := v.InplaceSort(proc.Mp()); err != nil {
+			if err := v.InplaceSort(keyMP); err != nil {
 				return err
 			}
 		}

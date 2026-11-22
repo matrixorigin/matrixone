@@ -102,6 +102,7 @@ func TestBoundedDeleteIndexRuntimeFilterSQL(t *testing.T) {
 		return ctx
 	}
 
+	const limit = 1000
 	parse := func(limit int) *tree.Delete {
 		stmt, err := mysql.ParseOne(t.Context(), fmt.Sprintf("delete from bounded_delete limit %d", limit), 1)
 		require.NoError(t, err)
@@ -112,8 +113,8 @@ func TestBoundedDeleteIndexRuntimeFilterSQL(t *testing.T) {
 		ctx := newContext()
 		ndv := ctx.statsByID[targetID].NdvMap[ctx.tables[targetName].Pkey.PkeyColName]
 		require.Equal(t, float64(1000), ndv)
-		require.Less(t, float64(99)/ndv, 0.1)
-		require.GreaterOrEqual(t, float64(100)/ndv, 0.1)
+		require.GreaterOrEqual(t, float64(limit)/ndv, 0.1, "stale NDV alone would reject the bounded lookup")
+		require.Less(t, float64(limit)/ctx.statsByID[targetID].TableCnt, 0.1, "the full PK matches at most one row per key")
 		builder := NewQueryBuilder(planpb.Query_DELETE, ctx, false, true)
 		root, err := builder.bindDelete(ctx, parse(limit), NewBindContext(builder, nil))
 		require.NoError(t, err)
@@ -135,22 +136,22 @@ func TestBoundedDeleteIndexRuntimeFilterSQL(t *testing.T) {
 		return builder, query, targetTag
 	}
 
-	publicPlan, err := BuildPlan(newContext(), parse(99), false, nil)
+	publicPlan, err := BuildPlan(newContext(), parse(limit), false, nil)
 	require.NoError(t, err)
 	publicScan, publicJoin, _ := boundedDeleteSQLTarget(t, publicPlan.GetQuery(), targetID)
 	t.Run("BuildPlan", func(t *testing.T) {
-		assertBoundedDeleteSQLPair(t, publicScan, publicJoin, 99)
+		assertBoundedDeleteSQLPair(t, publicScan, publicJoin, limit)
 	})
 
-	builder, positive, tag := planWithBuilder(99, false)
+	builder, positive, tag := planWithBuilder(limit, false)
 	scan, join, live := boundedDeleteSQLTarget(t, positive, targetID)
 	registration := builder.deleteIndexScanTables[tag]
 	require.Same(t, scan, registration.rejectedScan, "ordinary generation must reject this scan")
 	require.Same(t, join, registration.rejectedJoin, "rejection must belong to this live join")
-	assertBoundedDeleteSQLPremises(t, positive, scan, join, live, 99)
-	assertBoundedDeleteSQLPair(t, scan, join, 99)
+	assertBoundedDeleteSQLPremises(t, positive, scan, join, live, limit)
+	assertBoundedDeleteSQLPair(t, scan, join, limit)
 
-	_, baseline, _ := planWithBuilder(99, true)
+	_, baseline, _ := planWithBuilder(limit, true)
 	baselineScan, baselineJoin, baselineLive := boundedDeleteSQLTarget(t, baseline, targetID)
 	require.Empty(t, baselineScan.RuntimeFilterProbeList)
 	require.Empty(t, baselineJoin.RuntimeFilterBuildList)
@@ -158,17 +159,6 @@ func TestBoundedDeleteIndexRuntimeFilterSQL(t *testing.T) {
 
 	require.Equal(t, scan.RuntimeFilterProbeList, publicScan.RuntimeFilterProbeList)
 	require.Equal(t, join.RuntimeFilterBuildList, publicJoin.RuntimeFilterBuildList)
-
-	controlBuilder, control, controlTag := planWithBuilder(100, false)
-	controlScan, controlJoin, controlLive := boundedDeleteSQLTarget(t, control, targetID)
-	controlRegistration := controlBuilder.deleteIndexScanTables[controlTag]
-	require.Same(t, controlScan, controlRegistration.rejectedScan)
-	require.Same(t, controlJoin, controlRegistration.rejectedJoin)
-	assertBoundedDeleteSQLPremises(t, control, controlScan, controlJoin, controlLive, 100)
-	require.Len(t, controlJoin.OnList, 1)
-	require.True(t, exprStructuralEqual(join.OnList[0], controlJoin.OnList[0]), "the control must retain the same join key")
-	require.Empty(t, controlScan.RuntimeFilterProbeList, "100/1000 reaches the cost boundary")
-	require.Empty(t, controlJoin.RuntimeFilterBuildList, "100/1000 reaches the cost boundary")
 }
 
 // Traverse only executable nodes: the optimizer may retain discarded joins.
