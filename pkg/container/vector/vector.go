@@ -8733,9 +8733,17 @@ func (v *Vector) growArea(mp *mpool.MPool, size int) ([]byte, error) {
 }
 
 // growOwned grows old to size bytes through v's pool; mp must be that pool.
+// A size past the allocator limit returns ErrAllocationAllocatorLimit, which
+// callers classify as memory exhaustion; mpool's own limit error stays a plain
+// moerr for its other users.
 func (v *Vector) growOwned(mp *mpool.MPool, old []byte, size int) ([]byte, error) {
 	if err := v.checkMP(mp); err != nil {
 		return nil, err
+	}
+	if size > cap(old) {
+		if _, ok := mpool.GrowCapacity(int64(cap(old)), int64(size)); !ok {
+			return nil, mpool.ErrAllocationAllocatorLimit
+		}
 	}
 	return v.mp.Grow(old, size, true)
 }

@@ -4604,7 +4604,7 @@ func TestUnionBatchCapacityFailurePreservesDestinationArea(t *testing.T) {
 	beforeArea := bytes.Clone(destination.GetArea())
 
 	err := destination.UnionBatch(source, 0, 1, nil, mp)
-	require.ErrorContains(t, err, "invalid mpool grow capacity")
+	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
 	require.Equal(t, beforeLength, destination.Length())
 	require.Equal(t, beforeArea, destination.GetArea())
 }
