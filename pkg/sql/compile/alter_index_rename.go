@@ -16,6 +16,7 @@ package compile
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -148,13 +149,13 @@ func (c *Compile) checkRenameIndexPublication(databaseID uint64) error {
 
 func (c *Compile) checkRenameIndexForeignKeys(database, table string, def *plan.TableDef, changed []*plan.IndexDef) error {
 	ctx := c.proc.Ctx
-	var uniqueNames []string
+	var uniqueIndexes []*plan.IndexDef
 	children := make(map[uint64]*plan.TableDef)
 	for _, index := range changed {
 		if !index.Unique {
 			continue
 		}
-		uniqueNames = append(uniqueNames, index.IndexName)
+		uniqueIndexes = append(uniqueIndexes, index)
 		if err := plan2.CheckDropReferencedKeyForeignKeyDependency(ctx, def, index.IndexName, nil,
 			func(id uint64) (*plan.TableDef, error) {
 				if child := children[id]; child != nil {
@@ -170,7 +171,7 @@ func (c *Compile) checkRenameIndexForeignKeys(database, table string, def *plan.
 			return err
 		}
 	}
-	if len(uniqueNames) == 0 {
+	if len(uniqueIndexes) == 0 {
 		return nil
 	}
 	// A pending catalog declaration may already carry a selected key. Read
@@ -188,9 +189,17 @@ func (c *Compile) checkRenameIndexForeignKeys(database, table string, def *plan.
 	}
 	for _, constraints := range declarations {
 		for _, parts := range constraints {
-			for _, index := range uniqueNames {
-				if len(parts) != 0 && plan2.IndexNamesEqual(parts[0].ReferencedIndexName, index) {
-					return moerr.NewErrDropIndexNeededInForeignKey(ctx, index)
+			for _, index := range uniqueIndexes {
+				if len(parts) == 0 || len(parts) > len(index.Parts) ||
+					!plan2.IndexNamesEqual(parts[0].ReferencedIndexName, index.IndexName) {
+					continue
+				}
+				// A declaration left by an old table may reuse the name.
+				// The catalog reader orders composite parts by constraint_id.
+				if slices.EqualFunc(index.Parts[:len(parts)], parts, func(column string, part *plan2.FkReferDef) bool {
+					return column == part.ReferCol
+				}) {
+					return moerr.NewErrDropIndexNeededInForeignKey(ctx, index.IndexName)
 				}
 			}
 		}

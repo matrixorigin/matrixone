@@ -16,13 +16,19 @@ package issues
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -150,6 +156,10 @@ func TestIssue23392RenameIndexInplace(t *testing.T) {
 			execSQLRequire(t, ctx, db, "drop publication "+publication)
 		}
 
+		checkRenamePublicationLock(t, ctx, cluster, db, other, table, publication)
+		require.Equal(t, first, readIndex("Ix_B"))
+		require.Empty(t, readIndex("published_name"))
+
 		execSQLRequire(t, ctx, db, "create table "+database+".child (id int primary key, v int, "+
 			"constraint fk foreign key(v) references "+table+"(w))")
 		_, err = db.ExecContext(ctx, "alter table "+table+" rename index Ix_A to new_unique")
@@ -159,5 +169,134 @@ func TestIssue23392RenameIndexInplace(t *testing.T) {
 		execSQLRequire(t, ctx, db, "alter table "+table+" rename index Ix_B to allowed")
 		require.Equal(t, first, readIndex("allowed"))
 		require.Equal(t, second, readIndex("Ix_A"))
+
+		// Dropping the referenced parent with checks disabled leaves a
+		// declaration under the old name. The replacement key uses other
+		// columns and must not inherit that declaration's dependency.
+		execSQLRequire(t, ctx, db, "create table "+database+".composite_child (v int, w int, "+
+			"foreign key(v,w) references "+table+"(id,w))")
+		replacement := database + ".replacement"
+		execSQLRequire(t, ctx, db, "create table "+replacement+
+			" (id int primary key, v int, w int, unique key Ix_A(v), unique key spare_renamed(w,id))")
+		execSQLRequire(t, ctx, db, "set foreign_key_checks=0")
+		execSQLRequire(t, ctx, db, "drop table "+table)
+		execSQLRequire(t, ctx, db, "rename table "+replacement+" to "+table)
+		execSQLRequire(t, ctx, db, "alter table "+table+
+			" rename index Ix_A to unrelated_name, rename index spare_renamed to reversed_name")
+		require.NotEmpty(t, readIndex("unrelated_name"))
+		require.NotEmpty(t, readIndex("reversed_name"))
 	})
+}
+
+// Publication creation owns its own transaction. Hold its exact catalog INSERT
+// in a test transaction to control when that writer commits.
+func checkRenamePublicationLock(t *testing.T, ctx context.Context, cluster embed.Cluster, db, other *sql.DB, table, name string) {
+	t.Helper()
+	var tableID uint64
+	require.NoError(t, db.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables "+
+		"where reldatabase = 'mo_catalog' and relname = 'mo_pubs'").Scan(&tableID))
+	cn, err := cluster.GetCNService(0)
+	require.NoError(t, err)
+	value, ok := runtime.ServiceRuntime(cn.ServiceID()).GetGlobalVariables(runtime.InternalSQLExecutor)
+	require.True(t, ok)
+	exec := value.(executor.SQLExecutor)
+	opts := executor.Options{}.WithAccountID(0)
+	insertPublication := func(accountID int) string {
+		return fmt.Sprintf("insert into mo_catalog.mo_pubs "+
+			"(account_id, account_name, pub_name, database_name, database_id, all_table, table_list, account_list, created_time, owner, creator, comment) "+
+			"values (%d, 'sys', %s, '*', 0, true, '*', '*', now(), 0, 0, '')", accountID, sqlquote.String(name))
+	}
+	deletePublication := "delete from mo_catalog.mo_pubs where pub_name = " + sqlquote.String(name)
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		res, err := exec.Exec(cleanup, deletePublication, opts)
+		require.NoError(t, err)
+		res.Close()
+	}()
+
+	publisherCtx, cancelPublisher := context.WithCancel(ctx)
+	ready, commit, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var publisherErr error
+	go func() {
+		defer close(done)
+		publisherErr = exec.ExecTxn(publisherCtx, func(tx executor.TxnExecutor) error {
+			res, err := tx.Exec(insertPublication(0), executor.StatementOption{})
+			if err != nil {
+				return err
+			}
+			res.Close()
+			close(ready)
+			select {
+			case <-commit:
+				return nil
+			case <-publisherCtx.Done():
+				return publisherCtx.Err()
+			}
+		}, opts)
+	}()
+	defer func() {
+		cancelPublisher()
+		<-done
+	}()
+	select {
+	case <-ready:
+	case <-done:
+		require.NoError(t, publisherErr)
+		t.Fatal("publication transaction ended before inserting the row")
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	renameSQL := "alter table " + table + " rename index Ix_B to published_name"
+	renameCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := other.ExecContext(renameCtx, renameSQL)
+		result <- err
+	}()
+	services := issue27487LockServices(cluster)
+	require.Eventually(t, func() bool {
+		waiting := false
+		for _, service := range services {
+			service.IterLocks(func(id uint64, _ [][]byte, held lockservice.Lock) bool {
+				if id == tableID {
+					held.IterWaiters(func(lockpb.WaitTxn) bool {
+						waiting = true
+						return false
+					})
+				}
+				return !waiting
+			})
+			if waiting {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "rename must wait on the concurrent publication row")
+	close(commit)
+	<-done
+	require.NoError(t, publisherErr)
+	select {
+	case err := <-result:
+		require.ErrorContains(t, err, "published source database")
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	res, err := exec.Exec(ctx, deletePublication, opts)
+	require.NoError(t, err)
+	res.Close()
+
+	rename, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer rename.Rollback()
+	_, err = rename.ExecContext(ctx, renameSQL)
+	require.NoError(t, err)
+	// An independent account's publication is outside this held PK range.
+	unrelatedCtx, cancelUnrelated := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelUnrelated()
+	res, err = exec.Exec(unrelatedCtx, insertPublication(1), opts)
+	require.NoError(t, err)
+	res.Close()
+	require.NoError(t, rename.Rollback())
 }
