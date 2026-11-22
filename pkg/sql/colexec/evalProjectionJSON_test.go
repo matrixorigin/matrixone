@@ -224,37 +224,112 @@ func TestProjectionJSONSharedGuardHonorsPhysicalMask(t *testing.T) {
 	require.Equal(t, 2, *parses, "one parse per demanded physical row")
 }
 
-func TestProjectionJSONCombinedCacheAdmission(t *testing.T) {
+func TestProjectionJSONRequiredOutputBudget(t *testing.T) {
+	const limit = 33536
+	proc := testutil.NewProcess(t)
+	pool := proc.Mp()
+	input := batch.NewWithSize(1)
+	defer input.Clean(pool)
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	input.SetRowCount(1)
+	value := strings.Repeat("x", 2048)
+	doc := fmt.Sprintf(`{"a":%q,"b":%q}`, value, value)
+	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{doc}, nil, pool))
+	exprs := []*plan.Expr{
+		jsonProjectionTestExtract(t, proc, 0, "$.a"),
+		jsonProjectionTestExtract(t, proc, 0, "$.b"),
+	}
+	check := func(t *testing.T, proc *process.Process, execs []ExpressionExecutor, frame *ProjectionJSONFrame) {
+		t.Helper()
+		defer func() {
+			for _, exec := range execs {
+				exec.Free()
+			}
+		}()
+		if frame != nil {
+			frame.Begin(input)
+			defer frame.End()
+		}
+		for _, exec := range execs {
+			got, err := exec.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, value, string(types.DecodeJson(got.GetBytesAt(0)).GetString()))
+		}
+	}
+	compare := func(t *testing.T, proc *process.Process, selection *mpool.MPool, share bool) {
+		t.Helper()
+		t.Run("ordinary", func(t *testing.T) {
+			execs, err := NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, exprs, selection)
+			require.NoError(t, err)
+			check(t, proc, execs, nil)
+		})
+		t.Run("projection", func(t *testing.T) {
+			execs, frame, err := NewProjectionExecutors(proc, exprs, selection)
+			require.NoError(t, err)
+			check(t, proc, execs, frame)
+			require.Equal(t, share, frame != nil)
+		})
+	}
+	t.Run("account", func(t *testing.T) {
+		registry, err := mpool.NewAllocationAccountRegistry(1, 256)
+		require.NoError(t, err)
+		account, err := registry.Open(limit)
+		require.NoError(t, err)
+		defer func() {
+			require.Zero(t, account.Snapshot().Used)
+			account.Seal()
+			_, err := registry.Finalize(account)
+			require.NoError(t, err)
+		}()
+		selection, err := pool.WithAccount(account, mpool.AllocationOwnerDependent, 1, mpool.AllocationCapacityClassDefault)
+		require.NoError(t, err)
+		compare(t, proc, selection, false)
+	})
+	t.Run("physical admission inherited from process", func(t *testing.T) {
+		used := uint64(0)
+		selection, err := pool.WithAdmission(func(size uint64) (func(), error) {
+			if size > limit-used {
+				return nil, mpool.ErrAllocationAccountCapacity
+			}
+			used += size
+			return func() { used -= size }, nil
+		})
+		require.NoError(t, err)
+		inherited := testutil.NewProcess(t, testutil.WithMPool(selection))
+		compare(t, inherited, nil, false)
+		require.Zero(t, used)
+	})
+	t.Run("base pool off-heap limit", func(t *testing.T) {
+		limited, err := mpool.NewMPool("json-projection-output-budget", 1<<20, mpool.NoFixed)
+		require.NoError(t, err)
+		defer mpool.DeleteMPool(limited)
+		reserved, err := limited.Alloc(int(limited.Cap())-limit, true)
+		require.NoError(t, err)
+		defer limited.Free(reserved)
+		compare(t, proc, limited, true)
+		require.EqualValues(t, len(reserved), limited.CurrNB())
+		bytes, objects := limited.OnHeapOutstanding()
+		require.Zero(t, bytes)
+		require.Zero(t, objects)
+	})
+}
+
+func TestProjectionJSONMetadataBudget(t *testing.T) {
 	tests := []struct {
 		name        string
 		rows, paths int
-		account     uint64
 		admitted    bool
 	}{
-		{name: "dense", rows: 1024, paths: 7, account: jsonProjectionCacheLimit, admitted: true},
-		{name: "wide batch", rows: 8192, paths: 128, account: 2 * jsonProjectionCacheLimit},
-		{name: "metadata denied", rows: 1024, paths: 7, account: 4096},
-		{name: "pages denied", rows: 1024, paths: 7, account: 65536},
+		{name: "dense", rows: 1024, paths: 7, admitted: true},
+		{name: "wide batch", rows: 8192, paths: 128},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			pool := proc.Mp()
 			start := pool.CurrNB()
-			registry, err := mpool.NewAllocationAccountRegistry(1, 256)
-			require.NoError(t, err)
-			account, err := registry.Open(tt.account)
-			require.NoError(t, err)
-			defer func() {
-				require.Zero(t, account.Snapshot().Used)
-				require.Equal(t, start, pool.CurrNB())
-				account.Seal()
-				_, err := registry.Finalize(account)
-				require.NoError(t, err)
-			}()
-			selection, err := pool.WithAccount(account, mpool.AllocationOwnerDependent, 1, mpool.AllocationCapacityClassDefault)
-			require.NoError(t, err)
-			frame := &ProjectionJSONFrame{mp: selection, parse: bytejson.ParseFromByteSliceWithCancellation}
+			heapStart, objectsStart := pool.OnHeapOutstanding()
+			frame := &ProjectionJSONFrame{mp: pool, parse: bytejson.ParseFromByteSliceWithCancellation}
 			group := &jsonProjectionGroup{frame: frame, paths: make([]bytejson.Path, tt.paths)}
 			frame.groups = append(frame.groups, group)
 			path, err := bytejson.ParseJsonPath("$.a")
@@ -265,20 +340,22 @@ func TestProjectionJSONCombinedCacheAdmission(t *testing.T) {
 			input := batch.NewWithSize(0)
 			input.SetRowCount(tt.rows)
 			frame.Begin(input)
-			defer frame.End()
+			defer func() {
+				frame.End()
+				heap, objects := pool.OnHeapOutstanding()
+				require.Equal(t, heapStart, heap)
+				require.Equal(t, objectsStart, objects)
+			}()
 			first := jsonProjectionBinding{group: group}
 			value, exists, err := first.extract(proc.Ctx, 0, []byte(`{"a":1}`))
 			require.NoError(t, err)
 			require.True(t, exists)
 			require.Equal(t, "1", value.String())
 			require.Equal(t, tt.admitted, group.metadata != nil)
-			require.EqualValues(t, frame.cacheBytes, pool.CurrNB()-start)
-			require.EqualValues(t, frame.cacheBytes, account.Snapshot().Used)
+			require.Equal(t, start, pool.CurrNB())
+			heap, _ := pool.OnHeapOutstanding()
+			require.EqualValues(t, frame.cacheBytes, heap-heapStart)
 			require.LessOrEqual(t, frame.cacheBytes, jsonProjectionCacheLimit)
-			if tt.name == "pages denied" {
-				require.True(t, frame.pagesFull)
-				require.Empty(t, frame.pages)
-			}
 			if !tt.admitted {
 				require.Zero(t, frame.cacheBytes)
 			}
@@ -296,6 +373,7 @@ func TestProjectionJSONCombinedCacheLimit(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	pool := proc.Mp()
 	start := pool.CurrNB()
+	heapStart, objectsStart := pool.OnHeapOutstanding()
 	firstLeaf := jsonProjectionTestExtract(t, proc, 0, "$.a")
 	lastLeaf := jsonProjectionTestExtract(t, proc, 0, "$.b")
 	bindings, frame := bindProjectionJSON([]*plan.Expr{firstLeaf, lastLeaf})
@@ -307,6 +385,9 @@ func TestProjectionJSONCombinedCacheLimit(t *testing.T) {
 	defer func() {
 		frame.End()
 		require.Equal(t, start, pool.CurrNB())
+		heap, objects := pool.OnHeapOutstanding()
+		require.Equal(t, heapStart, heap)
+		require.Equal(t, objectsStart, objects)
 	}()
 
 	payload := strings.Repeat("x", 3072)
@@ -316,7 +397,9 @@ func TestProjectionJSONCombinedCacheLimit(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.True(t, frame.pagesFull)
-	require.EqualValues(t, frame.cacheBytes, pool.CurrNB()-start)
+	require.Equal(t, start, pool.CurrNB())
+	heap, _ := pool.OnHeapOutstanding()
+	require.EqualValues(t, frame.cacheBytes, heap-heapStart)
 	require.NotEmpty(t, first.group.metadata)
 	require.Less(t, len(frame.pages)*jsonProjectionPageSize, jsonProjectionCacheLimit)
 	require.LessOrEqual(t, frame.cacheBytes, jsonProjectionCacheLimit)

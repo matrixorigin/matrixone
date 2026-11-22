@@ -72,9 +72,16 @@ type jsonProjectionBinding struct {
 // physical project list. Other callers of the expression builder stay local
 // to a single expression.
 func NewProjectionExecutors(proc *process.Process, exprs []*plan.Expr, allocation *mpool.MPool) ([]ExpressionExecutor, *ProjectionJSONFrame, error) {
+	mp := expressionAllocationMP(proc.Mp(), allocation)
+	if mp.IsView() {
+		// An execution account or physical admission must leave its capacity
+		// available for required expression results throughout the projection.
+		executors, err := NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, exprs, allocation)
+		return executors, nil, err
+	}
 	bindings, frame := bindProjectionJSON(exprs)
 	if frame != nil {
-		frame.mp = expressionAllocationMP(proc.Mp(), allocation)
+		frame.mp = mp
 	}
 	executors, err := newExpressionExecutorsWithBindings(proc, exprs, allocation, expressionDiagnosticScope{}, bindings)
 	return executors, frame, err
@@ -220,14 +227,14 @@ func (f *ProjectionJSONFrame) End() {
 	f.cacheBytes, f.pagesFull = 0, false
 }
 
-// allocate admits the retained capacity before allocating either metadata or
-// payload. Storage belongs to the same MPool and execution selection as the
-// projection, including when an error exits the batch early.
+// allocate bounds retained metadata and payload together. On an unaccounted
+// pool this scratch storage uses tracked Go heap bytes so it cannot displace
+// required off-heap output under either the pool or global cap.
 func (f *ProjectionJSONFrame) allocate(size, headroom int) []byte {
 	if size > jsonProjectionCacheLimit-f.cacheBytes-headroom {
 		return nil
 	}
-	data, err := f.mp.Alloc(size, true)
+	data, err := f.mp.Alloc(size, false)
 	if err != nil {
 		return nil
 	}
