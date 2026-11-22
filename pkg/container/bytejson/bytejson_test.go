@@ -539,6 +539,53 @@ func TestJSONQueryCancellationDuringTraversalAndMerge(t *testing.T) {
 	})
 }
 
+func deepSimpleJSONQuery(t testing.TB, depth int) (ByteJson, []*Path) {
+	t.Helper()
+	doc, err := ParseFromString(strings.Repeat(`{"a":`, depth) + `{"value":9,"nil":null}` + strings.Repeat("}", depth))
+	require.NoError(t, err)
+	paths := make([]*Path, 0, 3)
+	for _, suffix := range []string{".value", ".missing", ".nil"} {
+		path, err := ParseJsonPath("$" + strings.Repeat(".a", depth) + suffix)
+		require.NoError(t, err)
+		paths = append(paths, &path)
+	}
+	return doc, paths
+}
+
+func TestJSONQueryDeepSimplePaths(t *testing.T) {
+	doc, paths := deepSimpleJSONQuery(t, 512)
+	want, exists := doc.QuerySimpleWithExists(paths)
+	require.True(t, exists)
+	require.JSONEq(t, `[9,null]`, want.String())
+	got, exists, err := doc.QueryWithExistsContext(context.Background(), paths)
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.Equal(t, want, got)
+
+	for _, selected := range [][]*Path{paths[:1], paths} {
+		ctx := &cancelJSONQueryAfter{Context: context.Background(), remaining: 4}
+		got, exists, err := doc.QueryWithExistsContext(ctx, selected)
+		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, exists)
+		require.Equal(t, Null, got)
+	}
+}
+
+func BenchmarkJSONQueryDeepSimplePaths(b *testing.B) {
+	doc, paths := deepSimpleJSONQuery(b, 512)
+	paths = []*Path{paths[0], paths[2]}
+	b.Run("ordinary", func(b *testing.B) {
+		for b.Loop() {
+			doc.QuerySimpleWithExists(paths)
+		}
+	})
+	b.Run("cancellable", func(b *testing.B) {
+		for b.Loop() {
+			doc.QueryWithExistsContext(context.Background(), paths)
+		}
+	})
+}
+
 func TestQueryWithExistsPreservesJSONNull(t *testing.T) {
 	bj, err := ParseFromString(`{"a":null,"b":1,"items":[null,2]}`)
 	require.NoError(t, err)

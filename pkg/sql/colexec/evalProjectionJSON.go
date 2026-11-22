@@ -38,6 +38,11 @@ const (
 
 type jsonDocumentColumn struct{ relation, column int32 }
 
+type jsonProjectionDemand struct {
+	document jsonDocumentColumn
+	guard    string
+}
+
 // ProjectionJSONFrame owns this invocation's extraction metadata and values.
 // Executable bindings are immutable between invocations.
 type ProjectionJSONFrame struct {
@@ -80,19 +85,31 @@ func bindProjectionJSON(exprs []*plan.Expr) (map[*plan.Function]*jsonProjectionB
 		fn   *plan.Function
 		path bytejson.Path
 	}
-	var columns map[jsonDocumentColumn][]candidate
-	var visit func(*plan.Expr)
-	visit = func(expr *plan.Expr) {
+	var columns map[jsonProjectionDemand][]candidate
+	var visit func(*plan.Expr, string)
+	visit = func(expr *plan.Expr, guard string) {
 		// Existing memoized subtrees have their own evaluation contract.
 		if expr == nil || expr.AuxId < 0 {
 			return
 		}
 		if f := expr.GetF(); f != nil {
 			fid, overload := function.DecodeOverloadID(f.GetFunc().GetObj())
-			// These executors can mask their arguments per row. A shared
-			// group would query their paths even when the branch is unused.
+			// Eagerly extract sibling paths only when their row demand
+			// is identical. COALESCE's first child inherits that demand.
 			switch fid {
-			case function.CASE, function.IFF, function.COALESCE:
+			case function.CASE:
+				return
+			case function.COALESCE:
+				if len(f.Args) != 0 {
+					visit(f.Args[0], guard)
+				}
+				return
+			case function.IFF:
+				if guard == "" && len(f.Args) == 3 && isJSONProjectionGuard(f.Args[0]) {
+					if key, err := f.Args[0].Marshal(); err == nil {
+						visit(f.Args[1], string(key))
+					}
+				}
 				return
 			case function.ELT:
 				if overload == 1 {
@@ -106,21 +123,21 @@ func bindProjectionJSON(exprs []*plan.Expr) (map[*plan.Function]*jsonProjectionB
 					if str, ok := lit.Value.(*plan.Literal_Sval); ok && len(str.Sval) <= 1024 {
 						if path, err := bytejson.ParseJsonPath(str.Sval); err == nil && path.IsSimple() {
 							if columns == nil {
-								columns = make(map[jsonDocumentColumn][]candidate)
+								columns = make(map[jsonProjectionDemand][]candidate)
 							}
-							key := jsonDocumentColumn{col.RelPos, col.ColPos}
+							key := jsonProjectionDemand{jsonDocumentColumn{col.RelPos, col.ColPos}, guard}
 							columns[key] = append(columns[key], candidate{f, path})
 						}
 					}
 				}
 			}
 			for _, arg := range f.Args {
-				visit(arg)
+				visit(arg, guard)
 			}
 		}
 	}
 	for _, expr := range exprs {
-		visit(expr)
+		visit(expr, "")
 	}
 	var frame *ProjectionJSONFrame
 	var bindings map[*plan.Function]*jsonProjectionBinding
@@ -143,6 +160,45 @@ func bindProjectionJSON(exprs []*plan.Expr) (map[*plan.Function]*jsonProjectionB
 		frame.groups = append(frame.groups, group)
 	}
 	return bindings, frame
+}
+
+// Match the predicates used to select an UPDATE target row. A materialized
+// Boolean column can also select rows. These guards depend solely on input
+// columns, so identical predicates generate identical masks for the batch.
+func isJSONProjectionGuard(expr *plan.Expr) bool {
+	if expr == nil || expr.AuxId < 0 || types.T(expr.Typ.Id) != types.T_bool {
+		return false
+	}
+	if expr.GetCol() != nil {
+		return true
+	}
+	f := expr.GetF()
+	if f == nil {
+		return false
+	}
+	fid, _ := function.DecodeOverloadID(f.GetFunc().GetObj())
+	isColumn := func(e *plan.Expr, typ types.T) bool {
+		return e != nil && e.AuxId >= 0 && e.GetCol() != nil && types.T(e.Typ.Id) == typ
+	}
+	switch fid {
+	case function.ISNOTNULL:
+		return len(f.Args) == 1 && isColumn(f.Args[0], types.T_Rowid)
+	case function.EQUAL:
+		if len(f.Args) != 2 {
+			return false
+		}
+		isOne := func(e *plan.Expr) bool {
+			lit := e.GetLit()
+			return e != nil && e.AuxId >= 0 && types.T(e.Typ.Id) == types.T_int64 &&
+				lit != nil && !lit.Isnull && lit.GetI64Val() == 1
+		}
+		return isColumn(f.Args[0], types.T_int64) && isOne(f.Args[1]) ||
+			isColumn(f.Args[1], types.T_int64) && isOne(f.Args[0])
+	case function.AND:
+		return len(f.Args) == 2 && isJSONProjectionGuard(f.Args[0]) && isJSONProjectionGuard(f.Args[1])
+	default:
+		return false
+	}
 }
 
 func (f *ProjectionJSONFrame) Begin(input *batch.Batch) {
@@ -278,12 +334,18 @@ func (b *jsonProjectionBinding) extract(ctx context.Context, row int, raw []byte
 	return out, exists, nil
 }
 
-func (b *jsonProjectionBinding) eval(proc *process.Process, arguments []*vector.Vector, result vector.FunctionResultWrapper, rows int) error {
+func (b *jsonProjectionBinding) eval(proc *process.Process, arguments []*vector.Vector, result vector.FunctionResultWrapper, rows int, mask []bool) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	input := vector.GenerateFunctionStrParameter(arguments[0])
 	for row := 0; row < rows; row++ {
 		if err := function.CheckJSONExtractRow(proc.Ctx, row); err != nil {
 			return err
+		}
+		if mask != nil && !mask[row] {
+			if err := rs.AppendByteJson(bytejson.ByteJson{}, true); err != nil {
+				return err
+			}
+			continue
 		}
 		raw, null := input.GetStrValue(uint64(row))
 		if null {

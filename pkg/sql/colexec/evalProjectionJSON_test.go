@@ -56,11 +56,11 @@ func jsonProjectionTestExtract(t testing.TB, proc *process.Process, col int32, p
 	return jsonProjectionTestCall(t, proc, "json_extract", types.T_json, doc, literal)
 }
 
-func countProjectionParses(t *testing.T, projection *Projection) *int {
+func CountProjectionJSONParses(t *testing.T, frame *ProjectionJSONFrame) *int {
 	t.Helper()
-	require.NotNil(t, projection.jsonFrame)
+	require.NotNil(t, frame)
 	count := new(int)
-	projection.jsonFrame.parse = func(ctx context.Context, data []byte) (bytejson.ByteJson, error) {
+	frame.parse = func(ctx context.Context, data []byte) (bytejson.ByteJson, error) {
 		*count++
 		return bytejson.ParseFromByteSliceWithCancellation(ctx, data)
 	}
@@ -83,7 +83,7 @@ func TestProjectionJSONSharesSevenConsumers(t *testing.T) {
 		}
 		require.NoError(t, projection.PrepareProjection(proc))
 		defer projection.FreeProjection(proc)
-		count := countProjectionParses(t, &projection)
+		count := CountProjectionJSONParses(t, projection.jsonFrame)
 		require.Len(t, projection.jsonFrame.groups, 1)
 		require.Len(t, projection.jsonFrame.groups[0].paths, 7)
 
@@ -178,6 +178,50 @@ func TestProjectionJSONSparseMasksUseOriginalRows(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.Vecs[0].IsNull(1))
 	require.Equal(t, "40", types.DecodeJson(result.Vecs[0].GetBytesAt(0)).String())
+}
+
+func TestProjectionJSONSharedGuardHonorsPhysicalMask(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := batch.NewWithSize(3)
+	defer input.Clean(proc.Mp())
+	input.SetRowCount(4)
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{`{"a":10,"b":20}`, "invalid", "invalid", `{"a":30}`}, nil, proc.Mp()))
+	for i, values := range [][]bool{{true, false, true, true}, {true, true, false, false}} {
+		input.Vecs[i+1] = vector.NewVec(types.T_bool.ToType())
+		require.NoError(t, vector.AppendFixedList(input.Vecs[i+1], values, nil, proc.Mp()))
+	}
+	build := func(path string, guard int32) *plan.Expr {
+		extract := jsonProjectionTestExtract(t, proc, 0, path)
+		missing := &plan.Expr{Typ: plan.Type{Id: int32(types.T_json)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+		fallback := jsonProjectionTestCall(t, proc, "coalesce", types.T_json, extract, missing)
+		return jsonProjectionTestCall(t, proc, "if", types.T_json, jsonProjectionTestCol(guard, types.T_bool), fallback, missing)
+	}
+	exprs := []*plan.Expr{build("$.a", 1), build("$.b", 1)}
+	_, separate := bindProjectionJSON([]*plan.Expr{exprs[0], build("$.b", 2)})
+	require.Nil(t, separate)
+	executors, frame, err := NewProjectionExecutors(proc, exprs, nil)
+	require.NoError(t, err)
+	require.NotNil(t, frame)
+	for _, executor := range executors {
+		defer executor.Free()
+	}
+	parses := CountProjectionJSONParses(t, frame)
+	frame.Begin(input)
+	defer frame.End()
+	for i, want := range []string{"10", "20"} {
+		vec, err := executors[i].Eval(proc, []*batch.Batch{input}, []bool{true, true, false, true})
+		require.NoError(t, err)
+		require.Equal(t, want, types.DecodeJson(vec.GetBytesAt(0)).String())
+		require.True(t, vec.IsNull(1))
+		require.True(t, vec.IsNull(2))
+		if i == 0 {
+			require.Equal(t, "30", types.DecodeJson(vec.GetBytesAt(3)).String())
+		} else {
+			require.True(t, vec.IsNull(3))
+		}
+	}
+	require.Equal(t, 2, *parses, "one parse per demanded physical row")
 }
 
 func TestProjectionJSONCombinedCacheAdmission(t *testing.T) {

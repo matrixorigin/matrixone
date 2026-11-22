@@ -1806,14 +1806,14 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	// Share extraction only for unmasked consumers of this batch.
-	if bound := expr.jsonProjection; bound != nil && selectList == nil && bound.group.frame.input == batches[0] &&
+	// Bound consumers share the same row demand and use physical row indexes.
+	if bound := expr.jsonProjection; bound != nil && bound.group.frame.input == batches[0] &&
 		expr.parameterResults[0].GetType().Oid != types.T_json {
 		expr.resetResultType(expr.resultVector)
 		if err := expr.resultVector.PreExtendAndReset(rowCount); err != nil {
 			return nil, err
 		}
-		if err := bound.eval(proc, expr.parameterResults, expr.resultVector, rowCount); err != nil {
+		if err := bound.eval(proc, expr.parameterResults, expr.resultVector, rowCount, selectList); err != nil {
 			return nil, err
 		}
 		return expr.resultVector.GetResultVector(), nil

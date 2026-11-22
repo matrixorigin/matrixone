@@ -1205,15 +1205,21 @@ func (bj ByteJson) QueryWithExistsContext(ctx context.Context, paths []*Path) (B
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if len(paths) == 1 && paths[0].IsSimple() {
-		if err := ctx.Err(); err != nil {
-			return Null, false, err
-		}
-		value, exists := bj.querySimpleExist(paths[0], true)
-		return value, exists, nil
-	}
 	collector := queryCollector{ctx: ctx}
 	for _, path := range paths {
+		if path.IsSimple() {
+			value, exists, err := bj.querySimpleExistWithContext(ctx, path, true, true)
+			if err != nil || len(paths) == 1 {
+				return value, exists, err
+			}
+			if exists {
+				collector.append(value)
+				if collector.err != nil {
+					return Null, false, collector.err
+				}
+			}
+			continue
+		}
 		bj.query(&collector, path)
 		if collector.err != nil {
 			return Null, false, collector.err
@@ -1408,34 +1414,49 @@ func (bj ByteJson) querySimpleExist(path *Path, autowrapScalarIndex bool) (ByteJ
 // querySimpleExistWithWrapping keeps scalar and object index wrapping explicit.
 // ARRAY_INSERT must follow only real arrays when seeking its parent.
 func (bj ByteJson) querySimpleExistWithWrapping(path *Path, autowrapScalarIndex, autowrapObjectIndex bool) (ByteJson, bool) {
+	value, exists, _ := bj.querySimpleExistWithContext(nil, path, autowrapScalarIndex, autowrapObjectIndex)
+	return value, exists
+}
+
+func (bj ByteJson) querySimpleExistWithContext(ctx context.Context, path *Path, autowrapScalarIndex, autowrapObjectIndex bool) (ByteJson, bool, error) {
 	cur := bj
 	// don't go through th step(), recursive call route.  We know
 	// we have a simple path, each step will bring us to ONE SINGLE next value.
 
-	for _, sub := range path.paths {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return Null, false, err
+		}
+	}
+	for i, sub := range path.paths {
+		if ctx != nil && i != 0 && i%queryCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return Null, false, err
+			}
+		}
 		if cur.Type == TpCodeObject {
 			switch sub.tp {
 			case subPathIdx:
 				if !autowrapObjectIndex {
-					return Null, false
+					return Null, false, nil
 				}
 				// obj[0] is itself, continue
 				start, _, _ := sub.idx.genIndex(1)
 				if start != 0 {
-					return Null, false
+					return Null, false, nil
 				}
 			case subPathKey:
 				var ok bool
 				cur, ok = cur.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
 				if !ok {
-					return Null, false
+					return Null, false, nil
 				}
 			default:
-				return Null, false
+				return Null, false, nil
 			}
 		} else if cur.Type == TpCodeArray {
 			if sub.tp != subPathIdx {
-				return Null, false
+				return Null, false, nil
 			}
 			cnt := cur.GetElemCnt()
 			idx, _, _ := sub.idx.genIndex(cnt)
@@ -1444,7 +1465,7 @@ func (bj ByteJson) querySimpleExistWithWrapping(path *Path, autowrapScalarIndex,
 			// if (last && idx < 0) || cnt <= idx {
 			if idx < 0 || cnt <= idx {
 				// out of range
-				return Null, false
+				return Null, false, nil
 			} else {
 				cur = cur.getArrayElem(idx)
 			}
@@ -1455,10 +1476,10 @@ func (bj ByteJson) querySimpleExistWithWrapping(path *Path, autowrapScalarIndex,
 					continue
 				}
 			}
-			return Null, false
+			return Null, false, nil
 		}
 	}
-	return cur, true
+	return cur, true, nil
 }
 
 func (bj ByteJson) QuerySimple(paths []*Path) ByteJson {
