@@ -14,7 +14,10 @@
 
 package vector
 
-import "github.com/matrixorigin/matrixone/pkg/common/mpool"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+)
 
 // DetachedBuffer transfers one owned Vector backing allocation through the
 // pipeline spool. The allocation keeps its own charge (its MPool metadata),
@@ -77,20 +80,20 @@ func (b *DetachedBuffer) AttachTo(
 	kind DetachedBufferKind,
 ) error {
 	if !b.CanAttachTo(v, kind) {
-		return allocationAccountInvalid(
+		return moerr.NewInternalErrorNoCtx(
 			"detached vector buffer provenance mismatch",
 		)
 	}
 	if kind == DetachedAreaBuffer {
 		if cap(v.area) != 0 {
-			return allocationAccountInvalid(
+			return moerr.NewInternalErrorNoCtx(
 				"vector area already has backing storage",
 			)
 		}
 		v.area = b.data
 	} else {
 		if cap(v.data) != 0 {
-			return allocationAccountInvalid(
+			return moerr.NewInternalErrorNoCtx(
 				"vector data already has backing storage",
 			)
 		}

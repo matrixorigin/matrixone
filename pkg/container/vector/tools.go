@@ -229,15 +229,15 @@ func extendWithBitmaps(
 	tgtLen := v.length + rows
 	switch {
 	case needNulls && needGrouping:
-		if err := v.ensureBitmapCapacity(tgtLen, m); err != nil {
+		if err := v.ensureBitmapCapacity(tgtLen); err != nil {
 			return err
 		}
 	case needNulls:
-		if err := v.ensureNullCapacity(tgtLen, m); err != nil {
+		if err := v.ensureNullCapacity(tgtLen); err != nil {
 			return err
 		}
 	case needGrouping:
-		if err := v.ensureGroupingCapacity(tgtLen, m); err != nil {
+		if err := v.ensureGroupingCapacity(tgtLen); err != nil {
 			return err
 		}
 	}
