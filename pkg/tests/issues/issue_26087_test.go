@@ -227,6 +227,7 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 					snapshotCtx, cancelSnapshot := context.WithCancel(execCtx)
 					snapshotDone := make(chan error, 1)
 					joined := false
+					snapshotReleased := false
 					defer func() {
 						cancelSnapshot()
 						cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -239,8 +240,10 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 								t.Error("snapshot cleanup did not return")
 							}
 						}
-						if _, err := sysDB.ExecContext(cleanupCtx, "drop snapshot if exists "+snapshotName); err != nil {
-							t.Errorf("snapshot cleanup: %v", err)
+						if !snapshotReleased {
+							if _, err := sysDB.ExecContext(cleanupCtx, "drop snapshot if exists "+snapshotName); err != nil {
+								t.Errorf("snapshot cleanup: %v", err)
+							}
 						}
 					}()
 					go func() {
@@ -276,6 +279,7 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 						require.Equal(t, 1, value)
 					}
 					execSQLRequire(t, ctx, sysDB, "drop snapshot "+snapshotName)
+					snapshotReleased = true
 					if terminalPath.wantRows != 0 {
 						require.NoError(t, execConn(conn1, "data branch delete table branch_quota_race."+tableName))
 					}
