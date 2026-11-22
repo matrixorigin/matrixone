@@ -1224,6 +1224,10 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		}
 	}
 
+	if len(qry.Actions) > 0 && qry.Actions[0].GetRenameIndex() != nil {
+		return c.renameIndexes(dbSource, tblName, qry)
+	}
+
 	initialForeignKeyParents := foreignKeyParentIDs(oTableDef.Fkeys)
 
 	var hasUpdateConstraints bool
