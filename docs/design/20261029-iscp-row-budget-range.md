@@ -54,11 +54,15 @@ that fits.
 If no nonempty prefix fits, select the first timestamp as the oversized-commit
 exception. Finally reopen the selected range for normal consumer delivery.
 
-Probe reads disable `quickNext` so a pure insert/delete range cannot be
-materialized in one unbounded batch. The final read retains `quickNext` when
-the probe proved the entire selected range fits the target. The oversized-first
-commit final read disables it as well. This permits the fast path when its
-complete output fits, while keeping the exceptional case streamed.
+Probes and oversized-first-commit final reads disable `quickNext` in each
+physical reader. The final read retains it when the selected range fits the
+target. A combined partition reader assembles all inserts and tombstones for
+one commit timestamp before `Next` returns. Both the probe and final read may
+therefore hold a whole oversized commit and pending partition batches.
+
+Registration and spec updates reject invalid row targets before writing the
+catalog. A job replayed with an invalid target stays unscheduled at its current
+watermark until its spec is corrected.
 
 Because the probe and final read use the same source transaction snapshot, the
 selected range cannot acquire new committed rows between those reads. A probe

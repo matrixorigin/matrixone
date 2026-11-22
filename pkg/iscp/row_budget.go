@@ -41,13 +41,25 @@ func (iterCtx *IterationContext) rowBudget(specs []*JobSpec) (int, error) {
 }
 
 func validateRowBudget(target int, jobType uint16, indexJob bool) error {
-	if target < 0 {
-		return moerr.NewInvalidInputNoCtx("negative ISCP target rows")
-	}
-	if target > 0 && !indexJob && jobType != TriggerType_AlwaysUpdate {
-		return moerr.NewInvalidInputNoCtx("ISCP target rows requires an independent AlwaysUpdate job")
+	if reason := invalidRowBudgetReason(target, jobType, indexJob); reason != "" {
+		return moerr.NewInvalidInputNoCtx(reason)
 	}
 	return nil
+}
+
+// The scheduler checks this without constructing or reporting an error.
+func invalidRowBudgetReason(target int, jobType uint16, indexJob bool) string {
+	if target < 0 {
+		return "negative ISCP target rows"
+	}
+	if target > 0 && !indexJob && jobType != TriggerType_AlwaysUpdate {
+		return "ISCP target rows requires an index-sync or independent AlwaysUpdate job"
+	}
+	return ""
+}
+
+func (spec *JobSpec) validateRowBudget() error {
+	return validateRowBudget(spec.TargetRows, spec.JobType, spec.ConsumerInfo.ConsumerType == int8(ConsumerType_IndexSync))
 }
 
 func rowBudgetForJobs(specs []*JobSpec) (int, error) {
@@ -58,7 +70,7 @@ func rowBudgetForJobs(specs []*JobSpec) (int, error) {
 			return 0, moerr.NewInternalErrorNoCtx("nil ISCP job spec")
 		}
 		current := spec.TargetRows
-		if err := validateRowBudget(current, spec.JobType, spec.ConsumerInfo.ConsumerType == int8(ConsumerType_IndexSync)); err != nil {
+		if err := spec.validateRowBudget(); err != nil {
 			return 0, err
 		}
 		if targetSet && target != current {

@@ -68,16 +68,27 @@ func (t *TableEntry) AddOrUpdateSinker(
 		JobID:   jobID,
 	}
 	jobEntry, ok := t.jobs[key]
-	if !ok || jobEntry.jobID < jobID {
+	indexJob := jobSpec.ConsumerInfo.ConsumerType == int8(ConsumerType_IndexSync)
+	if !ok {
 		newCreate = true
 		jobEntry = NewJobEntryWithStatus(t, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
 		t.jobs[key] = jobEntry
-		return
+	} else {
+		budgetChanged := jobEntry.jobSpec.TargetRows != jobSpec.TargetRows ||
+			jobEntry.jobSpec.JobType != jobSpec.JobType || jobEntry.isIndexJob != indexJob
+		if err = jobEntry.update(ctx, jobSpec, jobStatus, watermark, state, dropAt); err != nil {
+			return
+		}
+		jobEntry.isIndexJob = indexJob
+		if !budgetChanged {
+			return
+		}
 	}
-	if jobEntry.jobID > jobID {
-		return
+	if reason := invalidRowBudgetReason(jobSpec.TargetRows, jobSpec.JobType, indexJob); reason != "" && dropAt == 0 {
+		logutil.Warn("ISCP job has an invalid row budget",
+			zap.Uint32("account", t.accountID), zap.Uint64("table", t.tableID),
+			zap.String("job", jobName), zap.Uint64("jobID", jobID), zap.String("reason", reason))
 	}
-	err = jobEntry.update(ctx, jobSpec, jobStatus, watermark, state, dropAt)
 	return
 }
 
@@ -149,6 +160,10 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 			continue
 		}
 		if sinker.dropAt != 0 {
+			continue
+		}
+		// Replayed invalid specs stay ineligible without moving their watermark.
+		if invalidRowBudgetReason(sinker.jobSpec.TargetRows, sinker.jobSpec.JobType, sinker.isIndexJob) != "" {
 			continue
 		}
 		if t.exec != nil && t.exec.IsJobFenced(NewJobRuntimeKey(t.accountID, t.tableID, sinker.jobName, sinker.jobID)) {

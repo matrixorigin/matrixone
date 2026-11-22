@@ -276,8 +276,8 @@ func ExecuteIterationWithRuntime(
 				return
 			}
 			if observedRows > targetRows {
-				// An oversized first commit is accepted but should still be
-				// streamed in ordinary batches rather than one quick batch.
+				// Avoid a quick batch in each reader. A combined partition
+				// reader may still assemble the entire commit before delivery.
 				collectCtx = engine.WithCollectChangesDisableQuick(collectCtx)
 			}
 		}

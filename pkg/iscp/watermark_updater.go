@@ -247,6 +247,9 @@ func registerJob(
 	if tenantId, err = defines.GetAccountId(ctx); err != nil {
 		return
 	}
+	if err = jobSpec.validateRowBudget(); err != nil {
+		return
+	}
 	if jobSpec.TriggerSpec.JobType == 0 {
 		jobSpec.TriggerSpec.JobType = TriggerType_Default
 	}
@@ -506,6 +509,9 @@ func updateJobSpec(
 		)
 	}()
 	if tenantId, err = defines.GetAccountId(ctx); err != nil {
+		return
+	}
+	if err = jobSpec.validateRowBudget(); err != nil {
 		return
 	}
 	if jobSpec.TriggerSpec.JobType == 0 {

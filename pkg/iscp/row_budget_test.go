@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -92,6 +94,46 @@ func TestRowBudgetRequiresIndependentJob(t *testing.T) {
 	require.ErrorContains(t, err, "mixed ISCP row budgets")
 	_, err = rowBudgetForJobs([]*JobSpec{ordinary, budgeted})
 	require.ErrorContains(t, err, "mixed ISCP row budgets")
+}
+
+func TestInvalidReplayedRowBudgetDoesNotJoinHealthyJobs(t *testing.T) {
+	table := NewTableEntry(newRuntimeTestExecutor(), 1, 2, 3, "db", "table")
+	watermark := types.BuildTS(20, 0)
+	status := &JobStatus{Stage: JobStage_Running}
+	spec := JobSpec{
+		ConsumerInfo: ConsumerInfo{ConsumerType: int8(ConsumerType_IndexSync)},
+		TriggerSpec:  TriggerSpec{JobType: TriggerType_Default, TargetRows: 100},
+	}
+	invalid := spec
+	invalid.ConsumerInfo.ConsumerType = int8(ConsumerType_CNConsumer)
+	_, err := table.AddOrUpdateSinker(t.Context(), "healthy", &spec, status, 1, watermark, ISCPJobState_Completed, 0)
+	require.NoError(t, err)
+	_, err = table.AddOrUpdateSinker(t.Context(), "invalid", &invalid, status, 1, watermark, ISCPJobState_Completed, 0)
+	require.NoError(t, err)
+
+	previousReporter := errutil.GetReportErrorFunc()
+	var reports atomic.Int32
+	errutil.SetErrorReporter(func(context.Context, error, int) { reports.Add(1) })
+	t.Cleanup(func() { errutil.SetErrorReporter(previousReporter) })
+
+	table.getCandidate()
+	iter, _ := table.getCandidate()
+	require.Len(t, iter, 1)
+	require.Equal(t, []string{"healthy"}, iter[0].jobNames)
+	require.Zero(t, reports.Load(), "scheduler scans must not report an already logged invalid policy")
+	got, exists := table.GetWatermark("invalid")
+	require.True(t, exists)
+	require.Equal(t, watermark, got)
+
+	_, err = table.AddOrUpdateSinker(t.Context(), "invalid", &spec, status, 1, watermark, ISCPJobState_Completed, 0)
+	require.NoError(t, err)
+	iter, _ = table.getCandidate()
+	require.Len(t, iter, 1)
+	require.ElementsMatch(t, []string{"healthy", "invalid"}, iter[0].jobNames)
+	require.Equal(t, watermark.Next(), iter[0].fromTS)
+	target, err := iter[0].rowBudget(nil)
+	require.NoError(t, err)
+	require.Equal(t, spec.TargetRows, target)
 }
 
 func TestRowBudgetTwoIterationsKeepDeferredPhysicalCommit(t *testing.T) {
