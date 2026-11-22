@@ -7742,9 +7742,9 @@ func TestOctBinaryLiteral(t *testing.T) {
 		proc.Mp(),
 	)
 	defer input.Free(proc.Mp())
-	input.SetIsBin(true)
 
 	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	result.SetArgumentIsBin([]bool{true})
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(input.Length()))
 	require.NoError(t, OctString([]*vector.Vector{input}, result, proc, input.Length(), nil))

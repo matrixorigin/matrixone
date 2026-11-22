@@ -158,7 +158,6 @@ func (v *Vector) InstallBorrowedView(source *Vector, mp *mpool.MPool) error {
 		*v = Vector{typ: oldType, offHeap: oldOffHeap}
 		return err
 	}
-	source.CopyExpressionMetadataTo(v)
 	return nil
 }
 
@@ -220,7 +219,6 @@ func (v *Vector) MaterializeOwned(mp *mpool.MPool) error {
 	if err != nil {
 		return err
 	}
-	v.CopyExpressionMetadataTo(owned)
 	old := *v
 	*v = *owned
 	old.Free(mp)

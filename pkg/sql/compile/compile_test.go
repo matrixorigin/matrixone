@@ -391,7 +391,12 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 					return nil
 				}
 				require.Len(t, bat.Vecs, 1)
-				require.True(t, bat.Vecs[0].GetIsBin(), "binary semantics were lost on evaluation %d", evaluations+1)
+				// Vectors carry no binary flag; the consumer derives it from the
+				// final projection and the execution's parameter metadata.
+				query := pn.GetQuery()
+				isBin, err := colexec.ExprIsBinLiteral(proc, query.Nodes[query.Steps[query.MainOutputStep()]].ProjectList[0])
+				require.NoError(t, err)
+				require.True(t, isBin, "binary semantics were lost on evaluation %d", evaluations+1)
 				require.Equal(t, want, bat.Vecs[0].GetBytesAt(0))
 				evaluations++
 				if evaluations <= 2 {

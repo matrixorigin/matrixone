@@ -74,9 +74,6 @@ type Vector struct {
 
 	sorted bool // for some optimization
 
-	// FIXME: Bad design! Will be deleted soon.
-	isBin bool
-
 	offHeap bool
 }
 
@@ -142,7 +139,6 @@ func (v *Vector) Reset(typ types.Type) {
 	v.nsp.Clear()
 	v.gsp.Clear()
 	v.sorted = false
-	v.isBin = false
 }
 
 func (v *Vector) ResetWithSameType() {
@@ -155,7 +151,6 @@ func (v *Vector) ResetWithSameType() {
 	v.nsp.Reset()
 	v.gsp.Reset()
 	v.sorted = false
-	v.isBin = false
 }
 
 func (v *Vector) ResetArea() {
@@ -175,7 +170,6 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.gsp.Clear()
 	v.length = 0
 	v.sorted = false
-	v.isBin = false
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
@@ -390,21 +384,6 @@ func (v *Vector) HasGrouping() bool {
 
 func (v *Vector) AllNull() bool {
 	return v.IsConstNull() || (v.length != 0 && v.nsp.Count() == v.length)
-}
-
-func (v *Vector) GetIsBin() bool {
-	return v.isBin
-}
-
-func (v *Vector) SetIsBin(isBin bool) {
-	v.isBin = isBin
-}
-
-// CopyExpressionMetadataTo preserves scalar identity when a single expression
-// result is materialized at different row coordinates. It does not merge sources
-// or copy row sidecars; the row materializer owns their selection mapping.
-func (v *Vector) CopyExpressionMetadataTo(dst *Vector) {
-	dst.isBin = v.isBin
 }
 
 func (v *Vector) prepareOrdinaryAppendMetadata(rows int, mp *mpool.MPool) error {
@@ -1083,7 +1062,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.nsp.Reset()
 	v.gsp.Reset()
 	v.sorted = false
-	v.isBin = false
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
@@ -5591,7 +5569,6 @@ func (v *Vector) withOwnedMutation(rows, area int, mp *mpool.MPool, mutate func(
 		return err
 	}
 	defer owned.Free(mp)
-	owned.isBin = v.isBin
 	class := owned.class
 	owned.class = FLAT
 	reserveRows := max(rows, v.Capacity()-owned.length)
