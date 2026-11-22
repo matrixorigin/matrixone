@@ -78,6 +78,9 @@ message LockOptions {
   // NoWait is valid only on the capability-bearing TryLock/ForwardTryLock
   // protocol and requests exact row admission with FastFail semantics.
   bool                NoWait            = 15;
+  // A shared KeepRows request can reuse a covering lock it already owns.
+  // It still takes only points when acquiring additional keys.
+  bool                ReuseOwnedRange   = 16;
 }
 
 // LockTable describes which CN manages a Table's Locks.
