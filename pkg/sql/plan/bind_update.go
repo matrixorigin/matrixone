@@ -481,6 +481,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			return 0, err
 		}
 	}
+	// Mirror the INSERT forward path: record the statement's own IGNORE bit so
+	// shared radix-cast binding routes the write policy correctly (the builder
+	// outlives every RHS bind of this UPDATE).
+	builder.isUpdateIgnore = stmt.Ignore
 	onDuplicateAction := plan.Node_FAIL
 	if stmt.Ignore {
 		onDuplicateAction = plan.Node_IGNORE
