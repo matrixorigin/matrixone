@@ -387,7 +387,7 @@ func (v *Vector) HasNull() bool {
 }
 
 func (v *Vector) AllNull() bool {
-	return v.IsConstNull() || (v.length != 0 && v.nsp.Count() == v.length)
+	return v.IsConstNull() || (v.length != 0 && v.nsp.CountRange(0, uint64(v.length)) == v.length)
 }
 
 func (v *Vector) prepareOrdinaryAppendMetadata(rows int, mp *mpool.MPool) error {
@@ -2255,6 +2255,20 @@ func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 	if err := v.checkMP(mp); err != nil {
 		return err
 	}
+	if v.typ.Oid == types.T_any && (v.length == 0 || v.AllNull()) {
+		if err := v.MaterializeOwned(mp); err != nil {
+			return err
+		}
+		newLength := len(sels)
+		if negate {
+			newLength = v.length - len(sels)
+		}
+		if !negate || len(sels) > 0 {
+			nulls.FilterInPlaceOrdered(&v.gsp, sels, negate)
+			nulls.FilterInPlaceOrdered(&v.nsp, sels, negate)
+		}
+		return SetConstNull(v, newLength, mp)
+	}
 	switch v.typ.Oid {
 	case types.T_bool:
 		shrinkFixed[bool](v, sels, negate)
@@ -2342,6 +2356,18 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, m
 	if err := v.checkMP(mp); err != nil {
 		return err
 	}
+	if v.typ.Oid == types.T_any && (v.length == 0 || v.AllNull()) {
+		if err := v.MaterializeOwned(mp); err != nil {
+			return err
+		}
+		newLength := sels.Count()
+		if negate {
+			newLength = v.length - newLength
+		}
+		nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, negate, offset)
+		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, negate, offset)
+		return SetConstNull(v, newLength, mp)
+	}
 	switch v.typ.Oid {
 	case types.T_bool:
 		shrinkFixedByMask[bool](v, sels, negate, offset)
@@ -2417,6 +2443,17 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, m
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.IsConst() {
 		return nil
+	}
+	// ANY has no value payload. Preserve the selected cardinality while
+	// canonicalizing an empty or all-NULL vector as a constant NULL.
+	if v.typ.Oid == types.T_any && (v.length == 0 || v.AllNull()) {
+		if err := v.MaterializeOwned(mp); err != nil {
+			return err
+		}
+		if err := v.remapShuffleBitmaps(sels, mp); err != nil {
+			return err
+		}
+		return SetConstNull(v, len(sels), mp)
 	}
 	switch v.typ.Oid {
 	case types.T_bool:
@@ -2496,6 +2533,15 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err error) {
 	if v.IsConst() {
 		return nil
+	}
+	if v.typ.Oid == types.T_any && (v.length == 0 || v.AllNull()) {
+		if err := v.MaterializeOwned(mp); err != nil {
+			return err
+		}
+		if err := v.remapShuffleBitmaps(sels, mp); err != nil {
+			return err
+		}
+		return SetConstNull(v, len(sels), mp)
 	}
 	// The reusable buffer is Go-heap storage and therefore has no physical
 	// allocation provenance. Allocation-accounted vectors must use Shuffle,
