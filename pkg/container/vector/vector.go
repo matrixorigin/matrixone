@@ -8817,7 +8817,7 @@ func (v *Vector) growData(mp *mpool.MPool, size int) ([]byte, error) {
 	if err := v.materializeBorrowedForGrowth(mp); err != nil {
 		return nil, err
 	}
-	return mp.Grow(v.data, size, v.offHeap)
+	return v.growOwned(mp, v.data, size)
 }
 
 // growArea grows v.area to size bytes, as growData does for v.data.
@@ -8825,7 +8825,19 @@ func (v *Vector) growArea(mp *mpool.MPool, size int) ([]byte, error) {
 	if err := v.materializeBorrowedForGrowth(mp); err != nil {
 		return nil, err
 	}
-	return mp.Grow(v.area, size, v.offHeap)
+	return v.growOwned(mp, v.area, size)
+}
+
+// growOwned grows an owned buffer through mp. A size past the allocator limit
+// returns ErrAllocationAllocatorLimit, which callers classify as memory
+// exhaustion; mpool's own limit error stays a plain moerr for its other users.
+func (v *Vector) growOwned(mp *mpool.MPool, old []byte, size int) ([]byte, error) {
+	if size > cap(old) {
+		if _, ok := mpool.GrowCapacity(int64(cap(old)), int64(size)); !ok {
+			return nil, mpool.ErrAllocationAllocatorLimit
+		}
+	}
+	return mp.Grow(old, size, v.offHeap)
 }
 
 func (v *Vector) materializeBorrowedForGrowth(mp *mpool.MPool) error {

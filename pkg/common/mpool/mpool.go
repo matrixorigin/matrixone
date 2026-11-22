@@ -15,7 +15,6 @@
 package mpool
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"runtime/debug"
@@ -1131,8 +1130,7 @@ func (mp *MPool) allocWithDetailK(detailk string, sz int64, offHeap bool) ([]byt
 	// reject unexpected alloc size.
 	if sz < 0 || sz > maxAllocationSize() {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
-		return nil, errors.Join(ErrAllocationAllocatorLimit,
-			moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz))
+		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
 	}
 	if sz == 0 {
 		return nil, nil
@@ -1515,8 +1513,7 @@ func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHea
 		var ok bool
 		newSz, ok = GrowCapacity(int64(cap(old)), sz)
 		if !ok {
-			return nil, errors.Join(ErrAllocationAllocatorLimit,
-				moerr.NewInternalErrorNoCtxf("invalid mpool grow capacity, old %d, required %d", cap(old), sz))
+			return nil, moerr.NewInternalErrorNoCtxf("invalid mpool grow capacity, old %d, required %d", cap(old), sz)
 		}
 	}
 
@@ -1593,10 +1590,10 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	// A view allocates off-heap, as in allocWithDetailK.
 	offHeap = offHeap || mp.view != nil
 	if int64(sz) < 0 || int64(sz) > maxAllocationSize() {
-		return nil, errors.Join(ErrAllocationAllocatorLimit, moerr.NewInternalErrorNoCtxf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"mpool memory allocation exceed limit with requested size %d",
 			sz,
-		))
+		)
 	}
 
 	// Resizing within the caller-visible capacity cannot change allocator
