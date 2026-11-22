@@ -6160,7 +6160,7 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) []*Scope {
-	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node) &&
+	if (!nodeHasUserLevelLockFunction(node) && !nodeHasCoordinatorSessionFunction(node) &&
 		!c.needsCoordinatorIgnoreCheck(node) && !c.needsCoordinatorConstantFilterDiagnostic(node)) || c.scopesRunOnCoordinator(ss) {
 		return ss
 	}
@@ -6265,32 +6265,32 @@ func nodeHasUserLevelLockFunction(node *plan.Node) bool {
 	return false
 }
 
-func nodeHasFoundRowsFunction(node *plan.Node) bool {
+func nodeHasCoordinatorSessionFunction(node *plan.Node) bool {
 	if node == nil {
 		return false
 	}
-	if hasFoundRowsFunction(node.ProjectList) ||
-		hasFoundRowsFunction(node.OnList) ||
-		hasFoundRowsFunction(node.FilterList) ||
-		hasFoundRowsFunction(node.GroupBy) ||
-		hasFoundRowsFunction(node.AggList) ||
-		hasFoundRowsFunction(node.WinSpecList) ||
-		orderBySpecsHaveFoundRowsFunction(node.OrderBy) ||
-		exprHasFoundRowsFunction(node.Limit) ||
-		exprHasFoundRowsFunction(node.Offset) ||
-		hasFoundRowsFunction(node.TblFuncExprList) ||
-		hasFoundRowsFunction(node.BlockFilterList) ||
-		exprHasFoundRowsFunction(node.Interval) ||
-		exprHasFoundRowsFunction(node.Sliding) ||
-		exprHasFoundRowsFunction(node.Timestamp) ||
-		exprHasFoundRowsFunction(node.WEnd) ||
-		hasFoundRowsFunction(node.FillVal) ||
-		hasFoundRowsFunction(node.OnUpdateExprs) {
+	if hasCoordinatorSessionFunction(node.ProjectList) ||
+		hasCoordinatorSessionFunction(node.OnList) ||
+		hasCoordinatorSessionFunction(node.FilterList) ||
+		hasCoordinatorSessionFunction(node.GroupBy) ||
+		hasCoordinatorSessionFunction(node.AggList) ||
+		hasCoordinatorSessionFunction(node.WinSpecList) ||
+		orderBySpecsHaveCoordinatorSessionFunction(node.OrderBy) ||
+		exprHasCoordinatorSessionFunction(node.Limit) ||
+		exprHasCoordinatorSessionFunction(node.Offset) ||
+		hasCoordinatorSessionFunction(node.TblFuncExprList) ||
+		hasCoordinatorSessionFunction(node.BlockFilterList) ||
+		exprHasCoordinatorSessionFunction(node.Interval) ||
+		exprHasCoordinatorSessionFunction(node.Sliding) ||
+		exprHasCoordinatorSessionFunction(node.Timestamp) ||
+		exprHasCoordinatorSessionFunction(node.WEnd) ||
+		hasCoordinatorSessionFunction(node.FillVal) ||
+		hasCoordinatorSessionFunction(node.OnUpdateExprs) {
 		return true
 	}
 	if node.IndexReaderParam != nil {
-		return orderBySpecsHaveFoundRowsFunction(node.IndexReaderParam.OrderBy) ||
-			exprHasFoundRowsFunction(node.IndexReaderParam.Limit)
+		return orderBySpecsHaveCoordinatorSessionFunction(node.IndexReaderParam.OrderBy) ||
+			exprHasCoordinatorSessionFunction(node.IndexReaderParam.Limit)
 	}
 	return false
 }
@@ -6304,16 +6304,16 @@ func hasUserLevelLockFunction(exprs []*plan.Expr) bool {
 	return false
 }
 
-func hasFoundRowsFunction(exprs []*plan.Expr) bool {
+func hasCoordinatorSessionFunction(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
-		if exprHasFoundRowsFunction(expr) {
+		if exprHasCoordinatorSessionFunction(expr) {
 			return true
 		}
 	}
 	return false
 }
 
-func exprHasFoundRowsFunction(expr *plan.Expr) bool {
+func exprHasCoordinatorSessionFunction(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
@@ -6324,22 +6324,22 @@ func exprHasFoundRowsFunction(expr *plan.Expr) bool {
 		}
 		if e.F.Func != nil {
 			fid, _ := function.DecodeOverloadID(e.F.Func.Obj)
-			if fid == function.FOUND_ROWS {
+			if fid == function.FOUND_ROWS || fid == function.MO_ASSERT_SNAPSHOT_AFTER {
 				return true
 			}
 		}
-		return hasFoundRowsFunction(e.F.Args)
+		return hasCoordinatorSessionFunction(e.F.Args)
 	case *plan.Expr_List:
-		return e.List != nil && hasFoundRowsFunction(e.List.List)
+		return e.List != nil && hasCoordinatorSessionFunction(e.List.List)
 	case *plan.Expr_W:
 		if e.W == nil {
 			return false
 		}
-		if exprHasFoundRowsFunction(e.W.WindowFunc) || hasFoundRowsFunction(e.W.PartitionBy) {
+		if exprHasCoordinatorSessionFunction(e.W.WindowFunc) || hasCoordinatorSessionFunction(e.W.PartitionBy) {
 			return true
 		}
 		for _, orderBy := range e.W.OrderBy {
-			if orderBy != nil && exprHasFoundRowsFunction(orderBy.Expr) {
+			if orderBy != nil && exprHasCoordinatorSessionFunction(orderBy.Expr) {
 				return true
 			}
 		}
@@ -6347,9 +6347,9 @@ func exprHasFoundRowsFunction(expr *plan.Expr) bool {
 	return false
 }
 
-func orderBySpecsHaveFoundRowsFunction(specs []*plan.OrderBySpec) bool {
+func orderBySpecsHaveCoordinatorSessionFunction(specs []*plan.OrderBySpec) bool {
 	for _, spec := range specs {
-		if spec != nil && exprHasFoundRowsFunction(spec.Expr) {
+		if spec != nil && exprHasCoordinatorSessionFunction(spec.Expr) {
 			return true
 		}
 	}
