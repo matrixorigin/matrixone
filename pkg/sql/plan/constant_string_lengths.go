@@ -32,14 +32,15 @@ const (
 
 // foldConstantStringLengths changes only the proof copy. The original SQL
 // still evaluates the original expressions and owns their diagnostics.
-func foldConstantStringLengths(expr *plan.Expr, ctx context.Context) {
-	proof := stringLengthProof{ctx: ctx, workLeft: maxStringLengthProofWork}
+func foldConstantStringLengths(expr *plan.Expr, ctx context.Context, integerFold *singletonIntegerFold) {
+	proof := stringLengthProof{ctx: ctx, workLeft: maxStringLengthProofWork, integerFold: integerFold}
 	proof.fold(expr, maxStringLengthProofDepth)
 }
 
 type stringLengthProof struct {
-	ctx      context.Context
-	workLeft int
+	ctx         context.Context
+	workLeft    int
+	integerFold *singletonIntegerFold
 }
 
 func (p *stringLengthProof) spend(work int) bool {
@@ -59,6 +60,13 @@ func (p *stringLengthProof) fold(expr *plan.Expr, depth int) {
 	if fn == nil || fn.Func == nil {
 		return
 	}
+	// A measurement can itself supply another producer's size.
+	for _, arg := range fn.Args {
+		if p.workLeft == 0 || p.ctx.Err() != nil {
+			return
+		}
+		p.fold(arg, depth-1)
+	}
 	id, _ := function.DecodeOverloadID(fn.Func.Obj)
 	if (id == function.LENGTH || id == function.LENGTH_UTF8 || id == function.BIT_LENGTH) &&
 		len(fn.Args) == 1 && expr.Typ.Id == int32(types.T_int64) &&
@@ -74,17 +82,7 @@ func (p *stringLengthProof) fold(expr *plan.Expr, depth int) {
 				length *= 8
 			}
 			expr.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: length}}}
-			return
 		}
-	}
-	if depth == 1 {
-		return
-	}
-	for _, arg := range fn.Args {
-		if p.workLeft == 0 || p.ctx.Err() != nil {
-			return
-		}
-		p.fold(arg, depth-1)
 	}
 }
 
@@ -134,7 +132,8 @@ func (p *stringLengthProof) measure(expr *plan.Expr, text bool, depth int) (cons
 	case function.SPACE:
 		limit := min(int64(types.MaxBlobLen), mpool.MaxAllocationSize())
 		if len(args) == 1 {
-			if n, ok := speculativeConstantInt64Within(args[0], depth-1, p.spend); ok && n >= 0 && n <= limit {
+			if n, ok := p.integerFold.resolve(args[0], depth-1, p.spend); ok && n <= limit {
+				n = max(0, n)
 				return constantStringMeasure{bytes: n, characters: n}, true
 			}
 		}
@@ -211,11 +210,11 @@ func (p *stringLengthProof) repeat(value, count *plan.Expr, text bool, depth int
 	if !ok {
 		return constantStringMeasure{}, false
 	}
-	n, ok := speculativeConstantInt64Within(count, depth, p.spend)
-	if !ok || n < 0 {
+	n, ok := p.integerFold.resolve(count, depth, p.spend)
+	if !ok {
 		return constantStringMeasure{}, false
 	}
-	if source.bytes == 0 || n == 0 {
+	if source.bytes == 0 || n <= 0 {
 		return constantStringMeasure{}, true
 	}
 	if n > limit/source.bytes {
@@ -311,7 +310,7 @@ func (p *stringLengthProof) slice(id int32, args []*plan.Expr, text bool, depth 
 	if !ok {
 		return constantStringMeasure{}, false
 	}
-	count, ok := speculativeConstantInt64Within(args[1], depth, p.spend)
+	count, ok := p.integerFold.resolve(args[1], depth, p.spend)
 	if !ok {
 		return constantStringMeasure{}, false
 	}
@@ -324,7 +323,7 @@ func (p *stringLengthProof) slice(id int32, args []*plan.Expr, text bool, depth 
 	case function.SUBSTRING:
 		var length int64
 		if len(args) == 3 {
-			length, ok = speculativeConstantInt64Within(args[2], depth, p.spend)
+			length, ok = p.integerFold.resolve(args[2], depth, p.spend)
 			if !ok {
 				return constantStringMeasure{}, false
 			}

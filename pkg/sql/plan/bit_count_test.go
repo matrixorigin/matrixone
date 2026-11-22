@@ -367,16 +367,16 @@ func TestBitCountStringMeasureBypassesAllocationBudget(t *testing.T) {
 	signed, err := makePlan2CastExpr(bindCtx, unsigned, makePlan2Type(&types.Type{Oid: types.T_int64}))
 	require.NoError(t, err)
 	outOfRangeCast := bind("length", bind("repeat", strLit("a"), bind("unary_minus", signed)))
-	foldConstantStringLengths(outOfRangeCast, bindCtx)
+	foldConstantStringLengths(outOfRangeCast, bindCtx, nil)
 	require.NotNil(t, outOfRangeCast.GetF(), "proof must leave the checked cast to normal execution")
 
 	oversize := bind("length", bind("repeat", strLit("aa"), intLit(1<<62)))
-	foldConstantStringLengths(oversize, bindCtx)
+	foldConstantStringLengths(oversize, bindCtx, nil)
 	require.NotNil(t, oversize.GetF(), "the execution limit must still apply")
 	cancelled, cancel := context.WithCancel(bindCtx)
 	cancel()
 	length := bind("length", producer)
-	foldConstantStringLengths(length, cancelled)
+	foldConstantStringLengths(length, cancelled, nil)
 	require.NotNil(t, length.GetF(), "cancelled proof must not rewrite")
 }
 
@@ -413,20 +413,20 @@ func TestBitCountReverseProofPreservesStringDomains(t *testing.T) {
 	// Text reversal can expand invalid bytes when it re-encodes runes.
 	invalid := text(string([]byte{0xff}))
 	metric := bind("length", bind("reverse", DeepCopyExpr(invalid)))
-	foldConstantStringLengths(metric, ctx)
+	foldConstantStringLengths(metric, ctx, nil)
 	require.NotNil(t, metric.GetF())
 
 	legacyBinary := DeepCopyExpr(invalid)
 	legacyBinary.GetLit().IsBin = true
 	metric = bind("length", bind("reverse", legacyBinary))
-	foldConstantStringLengths(metric, ctx)
+	foldConstantStringLengths(metric, ctx, nil)
 	require.NotNil(t, metric.GetLit())
 	require.Equal(t, int64(1), metric.GetLit().GetI64Val())
 
 	staticBinary := text("é")
 	staticBinary.Typ = makePlan2Type(&types.Type{Oid: types.T_blob, Charset: types.CharsetBinary})
 	metric = bind("character_length", bind("reverse", staticBinary))
-	foldConstantStringLengths(metric, ctx)
+	foldConstantStringLengths(metric, ctx, nil)
 	require.NotNil(t, metric.GetLit())
 	require.Equal(t, int64(2), metric.GetLit().GetI64Val())
 
@@ -494,7 +494,7 @@ func TestBitCountMeasuresConstantStringSlices(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expr := bind(tc.metric, tc.value)
-			foldConstantStringLengths(expr, ctx)
+			foldConstantStringLengths(expr, ctx, nil)
 			if tc.refused {
 				require.NotNil(t, expr.GetF(), "unknown text bytes must retain runtime evaluation")
 			} else {
@@ -546,7 +546,7 @@ func TestBitCountExactMixedWidthProjection(t *testing.T) {
 	large := bind("repeat", literal, integer(8<<20))
 	last := bind("length", bind("right", large, integer(3)))
 	copy := DeepCopyExpr(last)
-	foldConstantStringLengths(copy, ctx)
+	foldConstantStringLengths(copy, ctx, nil)
 	require.NotNil(t, copy.GetLit())
 	require.Equal(t, int64(10), copy.GetLit().GetI64Val())
 	require.NotNil(t, last.GetF())
@@ -560,7 +560,7 @@ func TestBitCountExactMixedWidthProjection(t *testing.T) {
 	}
 	copy = DeepCopyExpr(last)
 	copy.GetF().Args[0].GetF().Args[1] = count
-	foldConstantStringLengths(copy, ctx)
+	foldConstantStringLengths(copy, ctx, nil)
 	require.NotNil(t, copy.GetF(), "fixed arguments must obey the proof depth limit")
 
 	proof := stringLengthProof{ctx: ctx, workLeft: 2}
@@ -570,7 +570,7 @@ func TestBitCountExactMixedWidthProjection(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	foldConstantStringLengths(last, cancelled)
+	foldConstantStringLengths(last, cancelled, nil)
 	require.NotNil(t, last.GetF(), "a cancelled request cannot publish a length proof")
 }
 
@@ -1141,4 +1141,113 @@ func TestBitCountPadProofRespectsOutputBudget(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBitCountComputedStringSizeSingleton(t *testing.T) {
+	for _, tc := range []struct {
+		name, condition, limit string
+		field                  bool
+	}{
+		{name: "pad ABS", condition: "length(lpad('a',abs(-4),'b'))=4"},
+		{name: "pad GREATEST and checked cast", condition: "length(rpad('é',cast(greatest(2,4) as unsigned),'😀'))=14"},
+		{name: "space LEAST", condition: "length(space(least(4,7)))=4"},
+		{name: "repeat ABS", condition: "length(repeat('a',abs(-4)))=4"},
+		{name: "nested size", condition: "length(lpad('a',length(repeat('a',abs(-4))),'b'))=4"},
+		{name: "case size", condition: "length(lpad('a',case when 1=1 then 4 else 5 end,'b'))=4"},
+		{name: "case predicate", condition: "case when 1=1 then length(lpad('a',abs(-4),'b'))=4 else false end"},
+		{name: "negative repeat", condition: "length(repeat('a',greatest(-4,-5)))=0"},
+		{name: "negative space", condition: "length(space(greatest(-4,-5)))=0"},
+		{name: "negative pad is null", condition: "lpad('a',greatest(-4,-5),'b') is null"},
+		{name: "large symbolic slice", condition: "length(substring(repeat('aé',abs(-20000000)),abs(-2),least(2,4)))=3"},
+		{name: "false", condition: "length(lpad('a',abs(-4),'b'))=5", field: true},
+		{name: "null", condition: "length(rpad('a',abs(NULL),'b'))=4", field: true},
+		{name: "volatile", condition: "length(lpad('a',cast(greatest(rand(),4) as signed),'b'))=4", field: true},
+		{name: "limit", condition: "length(lpad('a',abs(-4),'b'))=4", limit: " limit 5", field: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			p, err := runOneStmt(optimizer, t, `select bit_count(x), z from (
+				select cast(e.sal as double) x, e.empno in (select 1 where `+tc.condition+`) z
+				from constraint_test.emp e`+tc.limit+`) s`)
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(p, "bit_count")
+			require.NotNil(t, fn)
+			_, overload := function.DecodeOverloadID(fn.GetF().GetFunc().GetObj())
+			want := int32(16)
+			if tc.field {
+				want = function.BitCountFloat64FieldOverload
+			}
+			require.Equal(t, want, overload)
+		})
+	}
+}
+
+func TestSingletonIntegerOperandFoldGuard(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	bindCtx := proc.Ctx
+	bind := func(name string, args ...*pb.Expr) *pb.Expr {
+		t.Helper()
+		expr, err := BindFuncExprImplByPlanExpr(bindCtx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	newProof := func(ctx context.Context, work int) *singletonIntegerFold {
+		eval := proc.NewNoContextChildProc(0)
+		eval.Ctx = ctx
+		budget := &speculativeConstantFoldBudget{ctx: ctx}
+		budget.integerFold = &singletonIntegerFold{eval: eval, budget: budget, workLeft: work}
+		return budget.integerFold
+	}
+	const expected = 4
+	intLit := makePlan2Int64ConstExprWithType
+	expr := bind("abs", intLit(-expected))
+	proof := newProof(bindCtx, maxSingletonIntegerFoldWork)
+	n, ok := proof.resolve(expr, maxStringLengthProofDepth, nil)
+	require.True(t, ok)
+	require.EqualValues(t, expected, n)
+	require.NotNil(t, expr.GetLit())
+
+	masked := bind("case", makePlan2BoolConstExprWithType(true), intLit(expected), bind("abs", intLit(-1<<63)))
+	require.False(t, function.IsFoldCandidate(masked, false), "ordinary folding keeps CASE")
+	n, ok = proof.resolve(masked, maxStringLengthProofDepth, nil)
+	require.True(t, ok, "the unselected error cannot escape CASE")
+	require.EqualValues(t, expected, n)
+
+	date, err := makePlan2CastExpr(bindCtx, makePlan2StringConstExprWithType("0000-00-00"), makePlan2Type(&types.Type{Oid: types.T_date}))
+	require.NoError(t, err)
+	day := bind("day", date)
+	folded, err := constantFoldForSingletonProof(day, proof.eval)
+	require.NoError(t, err)
+	require.Same(t, day, folded)
+	require.NotNil(t, folded.GetF(), "the proof must leave session-dependent temporal expressions executable")
+
+	wrapping, err := makePlan2CastExpr(bindCtx, makePlan2Uint64ConstExprWithType(^uint64(3)), makePlan2Type(&types.Type{Oid: types.T_int64}))
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name string
+		expr *pb.Expr
+		ctx  context.Context
+		work int
+	}{
+		{"checked cast", bind("abs", wrapping), bindCtx, maxSingletonIntegerFoldWork},
+		{"arithmetic error", bind("abs", intLit(-1<<63)), bindCtx, maxSingletonIntegerFoldWork},
+		{"selected CASE error", bind("case", makePlan2BoolConstExprWithType(false), intLit(expected), bind("abs", intLit(-1<<63))), bindCtx, maxSingletonIntegerFoldWork},
+		{"work limit", bind("abs", intLit(-expected)), bindCtx, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proof := newProof(tc.ctx, tc.work)
+			before := DeepCopyExpr(tc.expr)
+			_, ok := proof.resolve(tc.expr, maxStringLengthProofDepth, nil)
+			require.False(t, ok)
+			require.Equal(t, before, tc.expr, "a declined proof must not rewrite the operand")
+		})
+	}
+
+	cancelled, cancel := context.WithCancel(bindCtx)
+	cancel()
+	expr = bind("abs", intLit(-expected))
+	proof = newProof(cancelled, maxSingletonIntegerFoldWork)
+	_, ok = proof.resolve(expr, maxStringLengthProofDepth, nil)
+	require.False(t, ok)
+	require.NotNil(t, expr.GetF())
 }

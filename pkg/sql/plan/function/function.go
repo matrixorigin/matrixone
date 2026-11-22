@@ -417,6 +417,12 @@ func IsFoldCandidate(expr *plan.Expr, varAndParamIsConst bool) bool {
 	return isConstant(expr, varAndParamIsConst, varAndParamIsConst, constantForFoldCandidate)
 }
 
+// IsProofFoldCandidate also admits CASE for a bounded planner proof copy.
+// The selector's executor retains ownership of branch demand and diagnostics.
+func IsProofFoldCandidate(expr *plan.Expr, varAndParamIsConst bool) bool {
+	return isConstant(expr, varAndParamIsConst, varAndParamIsConst, constantForProofFoldCandidate)
+}
+
 // IsStatementConstant conservatively admits speculative evaluation and endpoint
 // CONST provenance. Parameters and variables must already be materialized.
 func IsStatementConstant(expr *plan.Expr) bool {
@@ -473,6 +479,7 @@ const (
 	constantForFolding constantPurpose = iota
 	constantForRuntime
 	constantForFoldCandidate
+	constantForProofFoldCandidate
 )
 
 func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose constantPurpose) bool {
@@ -504,12 +511,12 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose
 		if purpose != constantForRuntime && RequiresRuntimeEvaluation(expr) {
 			return false
 		}
-		if fid == CASE && purpose != constantForRuntime {
+		if fid == CASE && purpose != constantForRuntime && purpose != constantForProofFoldCandidate {
 			return false
 		}
 		f, ok := GetFunctionByIdWithoutError(e.F.Func.GetObj())
 		if !ok || f.IsVolatile() ||
-			(f.HasRowScopedDiagnostics() && purpose != constantForFoldCandidate) ||
+			(f.HasRowScopedDiagnostics() && purpose != constantForFoldCandidate && purpose != constantForProofFoldCandidate) ||
 			(f.IsRealTimeRelated() && !currentExecution) {
 			return false
 		}

@@ -211,6 +211,7 @@ const (
 type speculativeConstantFoldBudget struct {
 	ctx         context.Context
 	outputBytes int64
+	integerFold *singletonIntegerFold
 }
 
 func (budget *speculativeConstantFoldBudget) consume(bytes int64) bool {
@@ -294,39 +295,39 @@ func speculativeConstantFoldSafety(expr *plan.Expr, budget *speculativeConstantF
 		if budget == nil || types.T(expr.Typ.Id).FixedLength() >= 0 {
 			return unknown, true
 		}
-		bound := speculativeStringOutputBound(f, argBounds)
+		bound := speculativeStringOutputBound(f, argBounds, budget)
 		return bound, bound.known && budget.consume(bound.bytes)
 	default:
 		return unknown, false
 	}
 }
 
-func speculativeStringOutputBound(f *plan.Function, args []speculativeFoldStringBound) speculativeFoldStringBound {
+func speculativeStringOutputBound(f *plan.Function, args []speculativeFoldStringBound, budget *speculativeConstantFoldBudget) speculativeFoldStringBound {
 	var unknown speculativeFoldStringBound
 	name := strings.ToLower(f.Func.GetObjName())
 	switch name {
 	case "space":
 		if len(args) == 1 {
-			length, ok := speculativeConstantInt64(f.Args[0])
-			if ok && length >= 0 {
-				return speculativeFoldStringBound{bytes: length, known: true, validUTF8: true}
+			length, ok := budget.integerFold.resolve(f.Args[0], maxStringLengthProofDepth, nil)
+			if ok {
+				return speculativeFoldStringBound{bytes: max(0, length), known: true, validUTF8: true}
 			}
 		}
 	case "repeat":
 		if len(args) != 2 || !args[0].known {
 			break
 		}
-		repeats, ok := speculativeConstantInt64(f.Args[1])
-		if ok && repeats >= 0 && (repeats == 0 || args[0].bytes <= maxSpeculativeFoldValueBytes/repeats) {
+		repeats, ok := budget.integerFold.resolve(f.Args[1], maxStringLengthProofDepth, nil)
+		if ok && (repeats <= 0 || args[0].bytes <= maxSpeculativeFoldValueBytes/repeats) {
 			return speculativeFoldStringBound{
-				bytes: args[0].bytes * repeats, known: true, validUTF8: args[0].validUTF8,
+				bytes: args[0].bytes * max(0, repeats), known: true, validUTF8: args[0].validUTF8,
 			}
 		}
 	case "lpad", "rpad":
 		if len(args) != 3 {
 			break
 		}
-		target, ok := speculativeConstantInt64(f.Args[1])
+		target, ok := budget.integerFold.resolve(f.Args[1], maxStringLengthProofDepth, nil)
 		if !ok {
 			break
 		}
@@ -335,7 +336,8 @@ func speculativeStringOutputBound(f *plan.Function, args []speculativeFoldString
 		if binary {
 			unitBytes = 1
 		}
-		if bound, ok := padResultByteBound(target, unitBytes); ok && bound <= maxSpeculativeFoldValueBytes {
+		// A negative size produces SQL NULL without allocating a payload.
+		if bound, ok := padResultByteBound(max(0, target), unitBytes); ok && bound <= maxSpeculativeFoldValueBytes {
 			return speculativeFoldStringBound{
 				bytes: int64(bound), known: true, validUTF8: !binary && args[0].validUTF8 && args[2].validUTF8,
 			}
@@ -419,10 +421,6 @@ func speculativeStringOutputBound(f *plan.Function, args []speculativeFoldString
 		return bound
 	}
 	return unknown
-}
-
-func speculativeConstantInt64(expr *plan.Expr) (int64, bool) {
-	return speculativeConstantInt64Within(expr, maxStringLengthProofDepth, nil)
 }
 
 func speculativeConstantInt64Within(expr *plan.Expr, depth int, spend func(int) bool) (int64, bool) {

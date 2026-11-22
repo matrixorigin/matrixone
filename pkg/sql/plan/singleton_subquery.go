@@ -17,7 +17,6 @@ package plan
 import (
 	"slices"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -127,23 +126,26 @@ func singletonWhereIsTrue(builder *QueryBuilder, ctx *BindContext, filters []*Ex
 				return false
 			}
 			if budget == nil {
+				proc := builder.compCtx.GetProcess()
+				if proc == nil {
+					return false
+				}
+				// The compiler may lend a process from an earlier statement.
+				// Borrow its resources, using the current bind request's deadline.
+				eval := proc.NewNoContextChildProc(0)
+				eval.Ctx = bindCtx
 				budget = &speculativeConstantFoldBudget{ctx: bindCtx}
+				budget.integerFold = &singletonIntegerFold{
+					eval: eval, budget: budget, workLeft: maxSingletonIntegerFoldWork,
+				}
 			}
 			foldExpr := DeepCopyExpr(filter)
-			foldConstantStringLengths(foldExpr, bindCtx)
+			foldConstantStringLengths(foldExpr, bindCtx, budget.integerFold)
 			if !isSpeculativeConstantFoldSafe(foldExpr, budget) {
 				return false
 			}
-			proc := builder.compCtx.GetProcess()
-			if proc == nil {
-				return false
-			}
-			// The compiler may lend a process from an earlier statement.
-			// Borrow its resources, using the current bind request's deadline.
-			eval := proc.NewNoContextChildProc(0)
-			eval.Ctx = bindCtx
 			var err error
-			folded, err = ConstantFold(batch.EmptyForConstFoldBatch, foldExpr, eval, false, false)
+			folded, err = constantFoldForSingletonProof(foldExpr, budget.integerFold.eval)
 			if err != nil || folded == nil || bindCtx.Err() != nil {
 				return false
 			}
