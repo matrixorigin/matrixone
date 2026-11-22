@@ -2283,6 +2283,8 @@ func getSqlForDropAccount() []string {
 // row is locked first so CREATE TASK cannot commit after this cleanup has
 // passed, and task definitions are disabled before deleting dependent rows so
 // concurrent schedulers and run acquisition serialize with the cleanup.
+// Publication target validation also relies on this exclusive account-ID
+// lock being held before DROP inspects subscriptions, even for taskless tenants.
 func getSqlForDropAccountSQLTasks(accountID int64) []string {
 	return []string{
 		fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update;", accountID),

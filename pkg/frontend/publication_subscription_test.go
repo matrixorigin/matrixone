@@ -40,6 +40,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+type publicationSQLMock struct {
+	*mock_frontend.MockBackgroundExec
+}
+
+func (m publicationSQLMock) execWithProcessHook(ctx context.Context, sql string, _ backExecProcessHook) error {
+	return m.Exec(ctx, sql)
+}
+
+func mockPublicationTargetRows(bh *backgroundExecTest, ids ...int32) {
+	rows := make([][]interface{}, 0, len(ids))
+	for _, id := range ids {
+		rows = append(rows, []interface{}{int64(id)})
+	}
+	sql := "select account_id from mo_catalog.mo_account where account_id in (" + pubsub.JoinAccountIds(ids) + ")"
+	bh.sql2result[sql] = newMrsForRestoreStringRows([]string{"account_id"}, rows)
+	bh.sql2result[sql+" for share"] = bh.sql2result[sql]
+}
+
+func TestLockPublicationTargetAccounts(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	bh := &backgroundExecTest{}
+	bh.init()
+	require.NoError(t, lockPublicationTargetAccounts(ctx, bh, nil, false))
+	const query = "select account_id from mo_catalog.mo_account where account_id in (3,8)"
+	targets := map[int32]*pubsub.AccountInfo{8: {Id: 8}, 3: {Id: 3}}
+	mockPublicationTargetRows(bh, 3, 8)
+	require.NoError(t, lockPublicationTargetAccounts(ctx, bh, targets, true))
+	require.NoError(t, lockPublicationTargetAccounts(ctx, bh, targets, false))
+	bh.sql2result[query] = newMrsForRestoreStringRows([]string{"account_id"}, [][]interface{}{{int64(3)}})
+	require.True(t, moerr.IsMoErrCode(lockPublicationTargetAccounts(ctx, bh, targets, false), moerr.ErrTxnNeedRetry))
+	fail := errors.New("locking read failed")
+	bh.sql2err[query] = fail
+	require.ErrorIs(t, lockPublicationTargetAccounts(ctx, bh, targets, false), fail)
+}
+
 func TestIsUserDatabaseType(t *testing.T) {
 	for _, version := range []int64{defines.MORPCVersion74, defines.MORPCVersion75} {
 		require.True(t, isUserDatabaseType("", version))
@@ -174,6 +209,7 @@ func Test_doCreatePublication(t *testing.T) {
 		// get all accounts
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedAccountsResults(ctrl))
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForRestoreStringRows([]string{"account_id"}, [][]interface{}{{int64(1)}})})
 		// get db id and type
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedDbResults(ctrl))
@@ -292,6 +328,7 @@ func newCreatePublicationIfNotExistsTest(
 		{int64(sysAccountID), sysAccountName, "open", uint64(1), nil},
 		{int64(1), "acc1", "open", uint64(1), nil},
 	})
+	mockPublicationTargetRows(bh, 1)
 	dbSQL, err := getSqlForGetDbIdAndType(ctx, "db1", true, uint64(sysAccountID))
 	require.NoError(t, err)
 	bh.sql2result[dbSQL] = newMrsForRestoreStringRows(
@@ -344,10 +381,37 @@ func TestCreatePublicationIfNotExistsSkipsExistingPublication(t *testing.T) {
 	bh, ctx, stmt := newCreatePublicationIfNotExistsTest(t, true, true)
 
 	require.NoError(t, createPublication(ctx, bh, stmt, int64(1)))
-	require.Len(t, bh.executedSQLs, 7) // account, database, tables, relations, stability relations, schema and publication reads
 	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, sql, "select account_id from mo_catalog.mo_account where account_id in")
 		require.NotContains(t, sql, "insert into mo_catalog.mo_pubs")
 		require.NotContains(t, sql, "mo_catalog.mo_subs")
+	}
+}
+
+func TestCreatePublicationIfNotExistsRechecksAfterSourceValidation(t *testing.T) {
+	for _, lookupErr := range []error{nil, context.Canceled} {
+		t.Run(fmt.Sprintf("lookup=%v", lookupErr), func(t *testing.T) {
+			bh, ctx, stmt := newCreatePublicationIfNotExistsTest(t, true, true)
+			pubSQL := fmt.Sprintf(getPubInfoSql, sysAccountID) + " and pub_name = 'pub1'"
+			// A concurrent DROP commits after the first lookup. The source
+			// validation phase is the boundary between the two snapshots.
+			lockPublicationDatabase = func(context.Context, BackgroundExec, string, uint64) (string, error) {
+				bh.sql2result[pubSQL] = newMrsForRestoreStringRows(nil, nil)
+				bh.sql2err[pubSQL] = lookupErr
+				return "", nil
+			}
+			err := createPublication(ctx, bh, stmt, 1)
+			if lookupErr != nil {
+				require.ErrorIs(t, err, lookupErr)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry), "got %v", err)
+			}
+			for _, sql := range bh.executedSQLs {
+				require.NotContains(t, sql, "select account_id from mo_catalog.mo_account where account_id in")
+				require.NotContains(t, sql, "insert into mo_catalog.mo_pubs")
+				require.NotContains(t, sql, "mo_catalog.mo_subs")
+			}
+		})
 	}
 }
 
@@ -426,6 +490,7 @@ func TestCreatePublicationIfNotExistsTxnOutcome(t *testing.T) {
 		tolerated                              bool
 	}{
 		{name: "existing no-op", existing: true, commits: 1},
+		{name: "existing publication still validates source", existing: true, phase: "source", opErr: operationErr, rollbacks: 1},
 		{name: "create", commits: 1, inserts: 1, subWrites: 1},
 		{name: "ordinary duplicate", ordinary: true, phase: "insert", opErr: duplicateErr, rollbacks: 1, inserts: 1},
 		{name: "schema lookup failure", phase: "schema", opErr: operationErr, rollbacks: 1},
@@ -446,6 +511,10 @@ func TestCreatePublicationIfNotExistsTxnOutcome(t *testing.T) {
 			subSQL := getSubsSql + " and pub_account_name = 'sys' and pub_name = 'pub1'"
 			bh.sql2result[subSQL] = newMrsForRestoreStringRows(nil, nil)
 			switch tc.phase {
+			case "source":
+				lockPublicationDatabase = func(context.Context, BackgroundExec, string, uint64) (string, error) {
+					return "", tc.opErr
+				}
 			case "schema":
 				bh.sql2err["select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'"] = tc.opErr
 			case "lookup":
@@ -474,7 +543,7 @@ func TestCreatePublicationIfNotExistsTxnOutcome(t *testing.T) {
 				}
 			}
 			ctrl := gomock.NewController(t)
-			exec := mock_frontend.NewMockBackgroundExec(ctrl)
+			exec := publicationSQLMock{mock_frontend.NewMockBackgroundExec(ctrl)}
 			exec.EXPECT().Close().Times(1)
 			exec.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(bh.Exec).AnyTimes()
 			exec.EXPECT().GetExecResultSet().DoAndReturn(bh.GetExecResultSet).AnyTimes()
@@ -752,7 +821,7 @@ func Test_doAlterPublication(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh := publicationSQLMock{mock_frontend.NewMockBackgroundExec(ctrl)}
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
@@ -772,6 +841,7 @@ func Test_doAlterPublication(t *testing.T) {
 		// get pub info
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedPubInfoResults(ctrl))
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForRestoreStringRows([]string{"account_id"}, [][]interface{}{{int64(1)}})})
 		// get db id and type
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedDbResults(ctrl))
@@ -864,7 +934,7 @@ func Test_doAlterPublication2(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh := publicationSQLMock{mock_frontend.NewMockBackgroundExec(ctrl)}
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
@@ -883,6 +953,7 @@ func Test_doAlterPublication2(t *testing.T) {
 		// get pub info
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedPubInfoResults(ctrl))
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForRestoreStringRows([]string{"account_id"}, [][]interface{}{{int64(1)}})})
 		// get db id and type
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		// show tables
@@ -1014,6 +1085,7 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 				{int64(sysAccountID), sysAccountName, "open", uint64(1), nil},
 				{int64(1), "acc1", "open", uint64(1), nil},
 			})
+			mockPublicationTargetRows(bh, 1)
 			columnCheckSQL := "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'"
 			bh.sql2result[columnCheckSQL] = newMrsForRestoreStringRows([]string{"exists"}, [][]interface{}{{1}})
 			publicationAccounts := test.publicationAccounts
