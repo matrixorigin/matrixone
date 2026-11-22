@@ -73,12 +73,7 @@ func (bat *Batch) SelectionRows(dst []int64) []int64 {
 	if bat.selection == nil {
 		return nil
 	}
-	dst = dst[:0]
-	itr := bat.selection.IteratorValue()
-	for itr.HasNext() {
-		dst = append(dst, int64(itr.Next()))
-	}
-	return dst
+	return bitmap.AppendRows(bat.selection, dst[:0])
 }
 
 // PhysicalRowCount returns the number of rows in the batch's vectors.
@@ -148,17 +143,7 @@ func (bat *Batch) SelectionMask(mask []bool) []bool {
 
 // SelectionMaskOf expands sel into a per-row mask of length physicalRows.
 func SelectionMaskOf(sel *bitmap.Bitmap, physicalRows int, mask []bool) []bool {
-	if cap(mask) < physicalRows {
-		mask = make([]bool, physicalRows)
-	} else {
-		mask = mask[:physicalRows]
-		clear(mask)
-	}
-	itr := sel.IteratorValue()
-	for itr.HasNext() {
-		mask[itr.Next()] = true
-	}
-	return mask
+	return sel.ExpandBools(mask, physicalRows)
 }
 
 func errSelectedBatch() error {
