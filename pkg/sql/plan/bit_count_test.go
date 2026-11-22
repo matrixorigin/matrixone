@@ -1065,3 +1065,80 @@ func TestBitCountBoundedTrimAndReplaceProjection(t *testing.T) {
 		})
 	}
 }
+
+func TestBitCountPaddedSingletonUsesBoundedReduction(t *testing.T) {
+	for _, tc := range []struct {
+		name, predicate, limit string
+		mark, field            bool
+	}{
+		{name: "LPAD", predicate: "length(lpad('a',4,'b'))=4"},
+		{name: "RPAD UTF8", predicate: "length(rpad('é',4,'😀'))=14"},
+		{name: "LPAD binary", predicate: "length(lpad(_binary 'é',3,'b'))=3"},
+		{name: "nested PAD", predicate: "length(lpad(rpad('a',2,'é'),cast(4 as signed),'b'))=5"},
+		{name: "false", predicate: "length(lpad('a',4,'b'))=5", mark: true, field: true},
+		{name: "null", predicate: "length(rpad('a',4,NULL))=4", mark: true, field: true},
+		{name: "limit", predicate: "length(lpad('a',4,'b'))=4", limit: " limit 5", field: true},
+		{name: "volatile target", predicate: "length(rpad('a',4+rand(),'b'))=4", mark: true, field: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			p, err := runOneStmt(optimizer, t, `select bit_count(x), z from (
+				select cast(e.sal as double) x, e.empno in (select 1 where `+tc.predicate+`) z
+				from constraint_test.emp e`+tc.limit+`) s`)
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(p, "bit_count")
+			require.NotNil(t, fn)
+			_, id := function.DecodeOverloadID(fn.GetF().GetFunc().GetObj())
+			require.Equal(t, tc.field, id == function.BitCountFloat64FieldOverload)
+			if !tc.field {
+				require.Equal(t, int32(16), id)
+			}
+			query := p.GetQuery()
+			mark := false
+			var visit func(int32)
+			visit = func(id int32) {
+				node := query.Nodes[id]
+				mark = mark || node.NodeType == pb.Node_JOIN && node.JoinType == pb.Node_MARK
+				for _, child := range node.Children {
+					visit(child)
+				}
+			}
+			for _, root := range query.Steps {
+				visit(root)
+			}
+			require.Equal(t, tc.mark, mark)
+		})
+	}
+}
+
+func TestBitCountPadProofRespectsOutputBudget(t *testing.T) {
+	ctx := context.Background()
+	// Use the same binder and safety check as the singleton predicate, without
+	// executing the intentionally large proposed folds.
+	for _, tc := range []struct {
+		name      string
+		source    string
+		target    int64
+		wantBytes int64
+		safe      bool
+	}{
+		{name: "zero", source: "a", target: 0, safe: true},
+		{name: "limit", source: "é", target: maxSpeculativeFoldValueBytes / 4, wantBytes: maxSpeculativeFoldValueBytes, safe: true},
+		{name: "over limit", source: "é", target: maxSpeculativeFoldValueBytes/4 + 1},
+		{name: "overflow", source: "é", target: 1<<63 - 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "rpad", []*Expr{
+				MakePlan2StringConstExprWithType(tc.source), MakePlan2Int64ConstExprWithType(tc.target),
+				MakePlan2StringConstExprWithType("😀"),
+			})
+			require.NoError(t, err)
+			budget := &speculativeConstantFoldBudget{ctx: ctx}
+			bound, safe := speculativeConstantFoldSafety(expr, budget)
+			require.Equal(t, tc.safe, safe)
+			if safe {
+				require.Equal(t, tc.wantBytes, bound.bytes)
+			}
+		})
+	}
+}

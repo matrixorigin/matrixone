@@ -477,3 +477,40 @@ SET @bit_count_f = NULL;
 SET @bit_count_d = NULL;
 EXECUTE bit_count_float_marker USING @bit_count_f, @bit_count_d;
 DEALLOCATE PREPARE bit_count_float_marker;
+
+# A grouped virtual column keeps the presence of the same joined row.
+SET @bit_count_saved_mode = @@session.sql_mode;
+SET @bit_count_saved_zone = @@session.time_zone;
+SET SESSION sql_mode = '';
+SET SESSION time_zone = '+00:00';
+DROP TABLE IF EXISTS t_bit_count_join_right;
+DROP TABLE IF EXISTS t_bit_count_join_left;
+CREATE TABLE t_bit_count_join_left (id INT PRIMARY KEY, flag INT, d DOUBLE);
+CREATE TABLE t_bit_count_join_right (
+    id INT PRIMARY KEY, ts TIMESTAMP NOT NULL,
+    g VARCHAR(8) AS (IF(DATE(ts)='2024-03-01','match','other')) VIRTUAL
+);
+INSERT INTO t_bit_count_join_left VALUES (1,NULL,3.9),(2,1,3.9);
+INSERT INTO t_bit_count_join_right(id,ts) VALUES (1,'2024-03-01 12:00:00'),(2,'2024-03-01 12:00:00');
+SELECT COUNT(*) AS groups_seen,
+    COUNT(CASE WHEN (flag IS NULL AND ga='match' AND gb IS NULL AND n=2)
+            OR (flag=1 AND ga IS NULL AND gb='match' AND n=1) THEN 1 END) AS coherent_groups
+FROM (
+    SELECT l.flag, a.g AS ga, b.g AS gb, BIT_COUNT(IF(l.flag=1,l.d,CAST(l.d AS DOUBLE))) AS n
+    FROM t_bit_count_join_left l
+    LEFT JOIN t_bit_count_join_right a ON l.id=a.id AND l.flag IS NULL
+    LEFT JOIN t_bit_count_join_right b ON l.id=b.id AND l.flag=1
+    GROUP BY IF(l.flag=1,l.d,CAST(l.d AS DOUBLE))
+    HAVING (l.flag IS NULL AND a.g='match' AND b.g IS NULL) OR (l.flag=1 AND a.g IS NULL AND b.g='match')
+) s;
+SELECT BIT_COUNT(x) AS n, z
+FROM (
+    SELECT id, CAST(d AS DOUBLE) AS x,
+        id IN (SELECT 1 WHERE LENGTH(LPAD('a',4,'b'))=4) AS z
+    FROM t_bit_count_join_left
+) s
+ORDER BY id;
+DROP TABLE t_bit_count_join_right;
+DROP TABLE t_bit_count_join_left;
+SET SESSION time_zone = @bit_count_saved_zone;
+SET SESSION sql_mode = @bit_count_saved_mode;

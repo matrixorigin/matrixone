@@ -11066,11 +11066,18 @@ func refinePadLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
 	if !sourceKnown || !padKnown {
 		return
 	}
-	maxRuneBytes := max(sourceRuneBytes, padRuneBytes)
-	if maxRuneBytes != 0 && uint64(target) > math.MaxUint64/maxRuneBytes {
-		return
+	if width, ok := padResultByteBound(target, max(sourceRuneBytes, padRuneBytes)); ok {
+		refineKnownStringResultType(returnType, width, true)
 	}
-	refineKnownStringResultType(returnType, uint64(target)*maxRuneBytes, true)
+}
+
+// PAD emits at most target units. A unit is one byte in binary evaluation
+// and at most one encoded rune in text evaluation.
+func padResultByteBound(target int64, maxBytesPerUnit uint64) (uint64, bool) {
+	if target < 0 || maxBytesPerUnit != 0 && uint64(target) > math.MaxUint64/maxBytesPerUnit {
+		return 0, false
+	}
+	return uint64(target) * maxBytesPerUnit, true
 }
 
 func binaryExprMaxRuntimeRuneBytes(expr *plan.Expr) (uint64, bool) {

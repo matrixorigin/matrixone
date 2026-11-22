@@ -322,6 +322,24 @@ func speculativeStringOutputBound(f *plan.Function, args []speculativeFoldString
 				bytes: args[0].bytes * repeats, known: true, validUTF8: args[0].validUTF8,
 			}
 		}
+	case "lpad", "rpad":
+		if len(args) != 3 {
+			break
+		}
+		target, ok := speculativeConstantInt64(f.Args[1])
+		if !ok {
+			break
+		}
+		binary := stringExprUsesBytes(f.Args[0])
+		unitBytes := uint64(utf8.UTFMax)
+		if binary {
+			unitBytes = 1
+		}
+		if bound, ok := padResultByteBound(target, unitBytes); ok && bound <= maxSpeculativeFoldValueBytes {
+			return speculativeFoldStringBound{
+				bytes: int64(bound), known: true, validUTF8: !binary && args[0].validUTF8 && args[2].validUTF8,
+			}
+		}
 	case "concat", "concat_ws":
 		values := args
 		if name == "concat_ws" {
