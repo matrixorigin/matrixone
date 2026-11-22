@@ -1523,9 +1523,16 @@ func doSetVar(
 				// Keep all subqueries inside the original expression. Evaluating
 				// them separately can execute dead CASE branches and loses the
 				// AST-to-plan identity after runtime parameter specialization.
+				var leafIsBin *bool
+				// A scalar subquery result is a computed value. Only a prepared
+				// expression that already reduced to a leaf can carry this flag.
+				switch preparedItems[index].Value.Expr.(type) {
+				case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V:
+					leafIsBin = &isBin
+				}
 				value, valueType, evalErr = getExprValueWithPrepareMeta(
-					assign.Value, ses, execCtx, true, nil,
-					&prepareParamKind, &runtimeDomain, &isBin)
+					assign.Value, ses, execCtx, true,
+					&prepareParamKind, &runtimeDomain, leafIsBin)
 			} else {
 				value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
 					preparedItems[index].Value, ses, execCtx,
@@ -1533,8 +1540,8 @@ func doSetVar(
 			}
 		} else {
 			value, valueType, evalErr = getExprValueWithPrepareMeta(
-				assign.Value, ses, execCtx, preparedExpression, nil,
-				&prepareParamKind, &runtimeDomain, &isBin)
+				assign.Value, ses, execCtx, preparedExpression,
+				&prepareParamKind, &runtimeDomain, nil)
 		}
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr

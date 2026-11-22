@@ -59,7 +59,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	planrule "github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -197,18 +196,26 @@ func WildcardMatch(pattern, target string) bool {
 
 // getExprValue executes the expression and returns the value.
 func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (interface{}, error) {
-	return getExprValueWithPrepareMode(e, ses, execCtx, false, isBin...)
+	if len(isBin) > 0 {
+		*isBin[0] = false
+	}
+	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, false, nil, nil, nil)
+	return value, err
 }
 
-func getExprValueWithPrepareMode(
-	e tree.Expr,
-	ses *Session,
-	execCtx *ExecCtx,
-	preparedExpression bool,
-	isBin ...*bool,
-) (interface{}, error) {
-	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, nil, nil, isBin...)
-	return value, err
+// Capture the binary-literal flag from the SELECT generation that produced the
+// value. The result batches do not carry it, and the PREPARE binding may be stale.
+type setReplayResponder struct {
+	NullResp
+	isBin *bool
+}
+
+func (r *setReplayResponder) RespPreMeta(execCtx *ExecCtx, _ any) error {
+	isBin, err := selectIntoResultIsBin(execCtx.proc, execCtx.cw.Plan())
+	if err == nil && len(isBin) == 1 {
+		*r.isBin = isBin[0]
+	}
+	return err
 }
 
 func getExprValueWithPrepareMeta(
@@ -216,10 +223,9 @@ func getExprValueWithPrepareMeta(
 	ses *Session,
 	execCtx *ExecCtx,
 	preparedExpression bool,
-	materializedResult **plan.Expr,
 	prepareParamKind *types.StringConversionKind,
 	runtimeDomain *types.RuntimeStringDomain,
-	isBin ...*bool,
+	leafIsBin *bool,
 ) (interface{}, plan.Type, error) {
 	/*
 		CORNER CASE:
@@ -230,9 +236,6 @@ func getExprValueWithPrepareMeta(
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
-		if len(isBin) > 0 {
-			*isBin[0] = false
-		}
 		if prepareParamKind != nil {
 			*prepareParamKind = types.StringConversionString
 		}
@@ -291,8 +294,12 @@ func getExprValueWithPrepareMeta(
 		preparedParamVals = execCtx.cw.ParamVals()
 		preparedBinaryExecute = execCtx.input != nil && execCtx.input.isBinaryProtExecute
 	}
+	var resper Responser = &NullResp{}
+	if leafIsBin != nil {
+		resper = &setReplayResponder{isBin: leafIsBin}
+	}
 	err = executeStmtInSameSession(
-		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect,
+		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, resper,
 		preparedExpression, preparedParamVals, preparedBinaryExecute)
 	if err != nil {
 		return nil, plan.Type{}, err
@@ -339,12 +346,6 @@ func getExprValueWithPrepareMeta(
 		}
 	}
 
-	if len(isBin) > 0 {
-		// The value reaches SET as a column of the synthetic SELECT's copied
-		// result, and a column is never a binary literal. (Result batches are
-		// copied into the session, so this path has never reported one.)
-		*isBin[0] = false
-	}
 	if runtimeDomain != nil {
 		*runtimeDomain = types.RuntimeStringInherit
 	}
@@ -366,6 +367,9 @@ func getExprValueWithPrepareMeta(
 		planExpr.Typ.Scale = int32(resultVec.GetType().Scale)
 	}
 	if resultVec.IsNull(0) {
+		if leafIsBin != nil {
+			*leafIsBin = false
+		}
 		resultType = planExpr.Typ
 		runtimeType := resultVec.GetType()
 		if preparedExpression && runtimeType.Oid != types.T_any &&
@@ -383,28 +387,7 @@ func getExprValueWithPrepareMeta(
 		}
 	}
 	value, err := getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
-	if err != nil {
-		return nil, plan.Type{}, err
-	}
-	if materializedResult != nil {
-		source := setExprStringSource(e, ses)
-		literal := planrule.GetConstantValue(resultVec, false, 0, source)
-		if literal == nil && resultVec.GetType().Oid == types.T_enum {
-			literal = planrule.GetConstantValue(resultVec, true, 0, source)
-		}
-		if literal != nil {
-			*materializedResult = &plan.Expr{Typ: resultType, Expr: &plan.Expr_Lit{Lit: literal}}
-		} else {
-			source := plan2.MakePlan2StringConstExprWithType(fmt.Sprintf("%v", value))
-			target := &plan.Expr{Typ: resultType, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
-			*materializedResult, err = plan2.BindFuncExprImplByPlanExpr(
-				execCtx.reqCtx, "cast", []*plan.Expr{source, target})
-			if err != nil {
-				return nil, plan.Type{}, err
-			}
-		}
-	}
-	return value, resultType, nil
+	return value, resultType, err
 }
 
 func getPreparedPlanExprValueWithMeta(
@@ -442,47 +425,6 @@ func getPreparedPlanExprValueWithMeta(
 	}
 	value, err := getValueFromVector(execCtx.reqCtx, result, ses, expr)
 	return value, plan2.MakePlan2Type(result.GetType()), err
-}
-
-// setExprStringSource is where the value of a SET expression comes from, by
-// the rules constant folding applies to plan expressions: a literal is a
-// literal, a variable a user variable, a parameter has its execution's source,
-// COALESCE takes its first arm that is not a NULL literal, and anything else
-// computes a new value.
-func setExprStringSource(e tree.Expr, ses *Session) types.StringSource {
-	for {
-		switch expr := e.(type) {
-		case *tree.ParenExpr:
-			e = expr.Expr
-		case *tree.NumVal, *tree.StrVal:
-			return types.StringSourceLiteral
-		case *tree.VarExpr:
-			return types.StringSourceUserVariable
-		case *tree.ParamExpr:
-			if proc := ses.GetProc(); proc != nil {
-				return proc.GetPrepareParamsStringSource()
-			}
-			return types.StringSourceExpression
-		case *tree.FuncExpr:
-			if expr.FuncName == nil || !strings.EqualFold(expr.FuncName.Origin(), "coalesce") {
-				return types.StringSourceExpression
-			}
-			next := tree.Expr(nil)
-			for _, arg := range expr.Exprs {
-				if num, isNum := arg.(*tree.NumVal); isNum && num.ValType == tree.P_null {
-					continue
-				}
-				next = arg
-				break
-			}
-			if next == nil {
-				return types.StringSourceExpression
-			}
-			e = next
-		default:
-			return types.StringSourceExpression
-		}
-	}
 }
 
 // transparentPrepareParamKind closes the metadata boundary introduced by SET's

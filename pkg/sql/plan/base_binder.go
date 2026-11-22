@@ -1279,9 +1279,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 			if err := b.builder.retainZeroScalarAuthorizationSources(sources); err != nil {
 				return nil, err
 			}
-			if len(sources) != 0 {
-				b.builder.zeroScalarRetainedWrappers = append(b.builder.zeroScalarRetainedWrappers, nodeID)
-			}
+		}
+		if len(sources) != 0 {
+			b.builder.zeroScalarArgumentWrappers = append(b.builder.zeroScalarArgumentWrappers, nodeID)
 		}
 	}
 	subCtx.zeroScalarRootSourceSafe = zeroScalarSourceSafe && udfExpansionDepth == 0 &&
@@ -6012,10 +6012,23 @@ func validateUDFArgumentAuthorizationSources(
 		return err
 	}
 	missing := make(map[int32]struct{})
+	retainedByValidation := false
 	for source := range required {
-		if _, inBody := bodySources[source]; !inBody {
-			missing[source] = struct{}{}
+		if _, inBody := bodySources[source]; inBody {
+			continue
 		}
+		// Validation owners collect ordinary sources from the original bound
+		// nodes even when the UDF result no longer reaches them.
+		if builder.zeroScalarPolicy == zeroScalarValidateOnly &&
+			zeroScalarNodeLiveRequirements(builder.qry.Nodes[source]) == 0 {
+			retainedByValidation = true
+			continue
+		}
+		missing[source] = struct{}{}
+	}
+	if retainedByValidation {
+		// Notify enclosing wrappers and the named-window special-source check.
+		builder.zeroScalarRetentionGeneration++
 	}
 	if len(missing) == 0 {
 		return nil
@@ -6071,7 +6084,7 @@ func udfAuthorizationSourceHasRetainedCarrier(builder *QueryBuilder, source int3
 // own arguments. A folded wrapper may no longer appear in their bound trees.
 type zeroScalarArgumentScope struct {
 	rewriteGeneration uint64
-	retainedWrappers  int
+	argumentWrappers  int
 }
 
 func (builder *QueryBuilder) beginZeroScalarArguments() zeroScalarArgumentScope {
@@ -6080,7 +6093,7 @@ func (builder *QueryBuilder) beginZeroScalarArguments() zeroScalarArgumentScope 
 	}
 	return zeroScalarArgumentScope{
 		rewriteGeneration: builder.zeroScalarRewriteGeneration,
-		retainedWrappers:  len(builder.zeroScalarRetainedWrappers),
+		argumentWrappers:  len(builder.zeroScalarArgumentWrappers),
 	}
 }
 
@@ -6103,7 +6116,7 @@ func bindFuncExprImplUdf(
 	}
 	requiresUDFSourceValidation := b.builder != nil &&
 		(b.builder.zeroScalarRewriteGeneration != zeroScalarArgs.rewriteGeneration ||
-			len(b.builder.zeroScalarRetainedWrappers) != zeroScalarArgs.retainedWrappers ||
+			len(b.builder.zeroScalarArgumentWrappers) != zeroScalarArgs.argumentWrappers ||
 			udfArgsContainCorrelatedRootZero(b.builder, boundArgs))
 	var requiredSources map[int32]struct{}
 	if requiresUDFSourceValidation {
@@ -6113,8 +6126,8 @@ func bindFuncExprImplUdf(
 		// Capture the original authorization dependencies before binding the
 		// SQL UDF body can mutate or discard the bound argument graph.
 		var err error
-		retainedWrappers := b.builder.zeroScalarRetainedWrappers[zeroScalarArgs.retainedWrappers:]
-		requiredSources, err = collectUDFArgumentAuthorizationSources(b.builder, boundArgs, retainedWrappers)
+		argumentWrappers := b.builder.zeroScalarArgumentWrappers[zeroScalarArgs.argumentWrappers:]
+		requiredSources, err = collectUDFArgumentAuthorizationSources(b.builder, boundArgs, argumentWrappers)
 		if err != nil {
 			return nil, err
 		}

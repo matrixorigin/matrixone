@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -2402,4 +2403,48 @@ func TestSQLUDFDiscardedZeroScalarKeepsTableDependency(t *testing.T) {
 			require.True(t, found)
 		})
 	}
+}
+
+func TestSQLUDFFoldedZeroScalarRetainsValidationSources(t *testing.T) {
+	const wrapped = "f_identity(null + (select (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1))"
+	build := func(t *testing.T, sql string) *plan.Plan {
+		t.Helper()
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+		built, err := BuildPlan(ctx, stmt, false, nil)
+		require.NoError(t, err)
+		return built
+	}
+
+	t.Run("view dependencies", func(t *testing.T) {
+		built := build(t, "create view v as select "+wrapped+" as x")
+		table := built.GetDdl().GetCreateView().GetTableDef()
+		var data ViewData
+		require.NoError(t, json.Unmarshal([]byte(table.GetViewSql().GetView()), &data))
+		names := make([]string, len(data.Dependencies))
+		for i, dep := range data.Dependencies {
+			names[i] = dep.RelationName
+		}
+		require.ElementsMatch(t, []string{"customer", "region"}, names)
+	})
+
+	t.Run("unused window dependencies", func(t *testing.T) {
+		query := build(t, "select n_nationkey from nation window unused_w as (order by "+wrapped+")").GetQuery()
+		var privileges []string
+		for _, node := range query.Nodes {
+			if IsValidationPrivilegeCarrier(node) {
+				privileges = append(privileges, node.GetObjRef().GetObjName())
+			}
+		}
+		dependencies := make([]string, len(query.CatalogDependencies))
+		for i, dep := range query.CatalogDependencies {
+			dependencies[i] = dep.ObjName
+		}
+		require.ElementsMatch(t, []string{"customer", "region"}, privileges)
+		require.ElementsMatch(t, []string{"nation", "customer", "region"}, dependencies)
+		require.False(t, queryHasReachableTable(query, "customer"))
+		require.False(t, queryHasReachableTable(query, "region"))
+	})
 }

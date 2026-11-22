@@ -78,6 +78,18 @@ select o.a, cast(null as signed) + (select o.a from inner_rows i where i.d > o.a
 select * from issue_32869_view order by a;
 select o.a from outer_rows o
 window unused_w as (order by null + (select o.a from inner_rows i where i.d > o.a limit 0));
+-- A folded SQL UDF argument still carries both subquery sources during validation.
+create view issue_32869_udf_view as
+select o.a, issue_32869_identity(null +
+    (select (select i.d from secret_rows s where s.s > i.d limit 0)
+     from inner_rows i limit 1)) as v
+from outer_rows o;
+select v from issue_32869_udf_view;
+select o.a from outer_rows o
+window unused_w as (order by issue_32869_identity(null +
+    (select (select i.d from secret_rows s where s.s > i.d limit 0)
+     from inner_rows i limit 1)))
+order by o.a;
 create table issue_32869_dml (a int);
 insert into issue_32869_dml select null + (select o.a from inner_rows i where i.d > o.a limit 0) from outer_rows o;
 select count(*) as rows_inserted, count(a) as nonnull from issue_32869_dml;
@@ -125,6 +137,11 @@ window unused_w as (order by (select null + (select q.a from test_issue_32869.in
 select i.d from test_issue_32869.inner_rows i
 window unused_w as (order by null + (select i.d from test_issue_32869.inner_rows r where r.d > i.d limit 0),
                     (select q.a from result_scan(@issue_32869_saved) q limit 1));
+select i.d from test_issue_32869.inner_rows i
+window unused_w as (order by issue_32869_identity(null +
+    (select (select w.a from test_issue_32869.inner_rows r where r.d > w.a limit 0)
+     from test_issue_32869.outer_rows w limit 1)),
+    (select q.a from result_scan(@issue_32869_saved) q limit 1));
 set role moadmin;
 set save_query_result = off;
 -- @session:id=1&user=sys:issue_32869_reader:issue_32869_role&password=111
@@ -137,6 +154,14 @@ select o.a from test_issue_32869.outer_rows o
 window unused_w as (order by null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0));
 select null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0)
 from test_issue_32869.outer_rows o;
+select o.a from test_issue_32869.outer_rows o
+window unused_w as (order by issue_32869_identity(null +
+    (select (select i.d from test_issue_32869.secret_rows s where s.s > i.d limit 0)
+     from test_issue_32869.inner_rows i limit 1)));
+select o.a from test_issue_32869.outer_rows o
+window unused_w as (order by issue_32869_identity(null +
+    (select null + (select i.d from test_issue_32869.inner_rows s where s.d > i.d limit 0)
+     from test_issue_32869.restricted_wrapper i limit 1)));
 select null + (select null + (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
                from test_issue_32869.restricted_wrapper c limit 1)
 from test_issue_32869.outer_rows;
@@ -200,6 +225,11 @@ select issue_32869_constant_expr((select o.a from inner_rows i where i.d > o.a l
        issue_32869_constant_query((select o.a from inner_rows i where i.d > o.a limit 0)) as query_value,
        issue_32869_constant_mixed((select o.a from inner_rows i where i.d > o.a limit 0), 13) as mixed_value
 from outer_rows o where o.a = 11;
+create function issue_32869_hex(x int) returns varchar(1) language sql as 'X''31''';
+prepare issue_32869_set_hex from 'set @hex_answer = issue_32869_hex((select d from inner_rows)), @scalar_answer = (select X''31'')';
+execute issue_32869_set_hex;
+select @hex_answer + 0 as hex_value, @scalar_answer + 0 as scalar_value;
+deallocate prepare issue_32869_set_hex;
 prepare issue_32869_set_lazy from 'set @answer = case when exists(select 1 from outer_rows) then 7 else (select (select o.a from inner_rows i where i.d > o.a limit 0) from outer_rows o) end';
 execute issue_32869_set_lazy;
 select @answer;
