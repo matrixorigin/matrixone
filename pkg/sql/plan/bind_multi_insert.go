@@ -60,6 +60,7 @@ func bindAndOptimizeMultiInsertQuery(ctx CompilerContext, stmt *tree.MultiInsert
 	}()
 
 	builder := NewQueryBuilder(plan.Query_INSERT, ctx, isPrepareStmt, true)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	builder.parseOptimizeHints()
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {

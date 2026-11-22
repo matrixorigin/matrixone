@@ -34,10 +34,11 @@ func (v *allocationView) alloc(mp *MPool, detailk string, sz int64) ([]byte, err
 	return result, nil
 }
 
-// WithAccount returns a view of mp whose fresh off-heap allocations are
-// charged to account under owner/site/class. The view shares mp's state: it
-// frees and grows mp's allocations and is never deleted on its own. On-heap
-// allocations through the view stay unaccounted.
+// WithAccount returns a view of mp whose fresh allocations are charged to
+// account under owner/site/class. The view shares mp's state: it frees and
+// grows mp's allocations and is never deleted on its own. Every allocation
+// through the view is off-heap and charged, whatever off-heap mode the caller
+// requests: accounting is decided here, not by the caller.
 func (mp *MPool) WithAccount(
 	account *AllocationAccount,
 	owner AllocationOwner,

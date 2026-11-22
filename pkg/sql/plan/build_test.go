@@ -11133,3 +11133,61 @@ func TestCentroidxIndexParametersAreInternal(t *testing.T) {
 	_, err := runOneStmt(mock, t, "SELECT N_NAME FROM NATION CENTROIDX('vector_l2_ops', '{}', '{\"ignored\":\"t\"}') JOIN REGION ON N_REGIONKEY = R_REGIONKEY")
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 }
+
+func TestPreparedSetRetainsFoldedZeroScalarSources(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @p = ?, @answer = 1 + (select cast(null as signed) + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n limit 1)'")
+	require.NoError(t, err)
+	prepared := p.GetDcl().GetPrepare()
+	require.Len(t, prepared.ParamTypes, 1)
+	require.True(t, hasSubquery(prepared.Plan.GetDcl().GetSetVariables().Items[1].Value))
+	names := make([]string, 0, len(prepared.Schemas))
+	for _, schema := range prepared.Schemas {
+		names = append(names, schema.ObjName)
+	}
+	require.ElementsMatch(t, []string{"nation", "region"}, names)
+}
+
+func TestPreparedSetRetainsFoldedZeroScalarSourcesWithExists(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = case when exists(select 1 from nation) then (select cast(null as signed) + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n limit 1) else 1 end'")
+	require.NoError(t, err)
+	prepared := p.GetDcl().GetPrepare()
+	require.True(t, hasSubquery(prepared.Plan.GetDcl().GetSetVariables().Items[0].Value))
+	names := make([]string, 0, len(prepared.Schemas))
+	for _, schema := range prepared.Schemas {
+		names = append(names, schema.ObjName)
+	}
+	require.Contains(t, names, "region")
+}
+
+func TestPreparedSetRetainsFoldedZeroScalarSourcesAfterRebinding(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = ? + cast((select (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n limit 1) as decimal(10,2))'")
+	require.NoError(t, err)
+	prepared := p.GetDcl().GetPrepare()
+	require.Len(t, prepared.ParamTypes, 1)
+	require.True(t, hasSubquery(prepared.Plan.GetDcl().GetSetVariables().Items[0].Value))
+	names := make([]string, 0, len(prepared.Schemas))
+	for _, schema := range prepared.Schemas {
+		names = append(names, schema.ObjName)
+	}
+	require.ElementsMatch(t, []string{"nation", "region"}, names)
+}
+
+func TestPreparedSetRetainsRepeatedCaseSubquerySources(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = case (select (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n where n.n_nationkey = ? limit 1) when 1 then 11 when 2 then 12 else 13 end'")
+	require.NoError(t, err)
+	prepared := p.GetDcl().GetPrepare()
+	require.Len(t, prepared.ParamTypes, 1)
+	names := make([]string, 0, len(prepared.Schemas))
+	for _, schema := range prepared.Schemas {
+		names = append(names, schema.ObjName)
+	}
+	require.ElementsMatch(t, []string{"nation", "region"}, names)
+}

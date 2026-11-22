@@ -91,7 +91,7 @@ func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 		return err
 	}
 	if v.hasOwnedBackingStorage() {
-		return allocationAccountInvalid("cannot replace owned vector storage with aliases")
+		return moerr.NewInternalErrorNoCtx("cannot replace owned vector storage with aliases")
 	}
 	var decoded Vector
 	if err := decoded.unmarshalBinaryV1(data); err != nil {
@@ -106,7 +106,7 @@ func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 
 func (v *Vector) unmarshalBinaryV1(data []byte) error {
 	if len(data) < 1+types.TSize {
-		return allocationAccountInvalid("short legacy vector type")
+		return moerr.NewInternalErrorNoCtx("short legacy vector type")
 	}
 	typ, err := types.DecodeTypeChecked(data[1 : 1+types.TSize])
 	if err != nil {

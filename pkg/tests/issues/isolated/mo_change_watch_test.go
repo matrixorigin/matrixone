@@ -41,8 +41,12 @@ import (
 )
 
 func TestChangeWatchProxy(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
+	// The proxy and the DB handles run on ctx and are closed by t.Cleanup.
+	// Cancel ctx only after they close: a defer, or t.Context() (cancelled
+	// before cleanups), lets the proxy shut down first, and db.Close then
+	// fails on the dropped socket with "bad connection".
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
 	cluster, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithTestAdmissionContext(ctx), embed.WithPreStart(func(service embed.ServiceOperator) {
 		if service.ServiceType() == metadata.ServiceType_CN {
 			service.Adjust(func(config *embed.ServiceConfig) {

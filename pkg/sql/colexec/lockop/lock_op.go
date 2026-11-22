@@ -748,7 +748,18 @@ func LockRows(
 	sharding lock.Sharding,
 	group uint32,
 ) error {
-	return lockRows(eng, proc, rel, tableID, bat, idx, pkType, lockMode, sharding, group, true)
+	return lockRows(eng, proc, rel, tableID, bat, idx, pkType, true, LockOptions{mode: lockMode, sharding: sharding, group: group})
+}
+
+// LockSharedRowsWithoutWidening protects the supplied keys until transaction
+// end. A covering lock already held by the transaction is sufficient.
+func LockSharedRowsWithoutWidening(
+	eng engine.Engine, proc *process.Process, rel engine.Relation, tableID uint64,
+	bat *batch.Batch, idx int32, pkType types.Type, group uint32,
+) error {
+	return lockRows(eng, proc, rel, tableID, bat, idx, pkType, true, LockOptions{
+		mode: lock.LockMode_Shared, group: group, reuseOwnedRange: true,
+	})
 }
 
 // LockRowsWithWaitPolicy uses the existing row-lock path with a request-local policy.
@@ -757,7 +768,7 @@ func LockRowsWithWaitPolicy(
 	bat *batch.Batch, idx int32, pkType types.Type, mode lock.LockMode,
 	sharding lock.Sharding, group uint32, policy lock.WaitPolicy,
 ) error {
-	return lockRows(eng, proc, rel, tableID, bat, idx, pkType, mode, sharding, group, true, policy)
+	return lockRows(eng, proc, rel, tableID, bat, idx, pkType, true, LockOptions{mode: mode, sharding: sharding, group: group, waitPolicy: &policy})
 }
 
 // LockRowsForSnapshotRefresh admits caller-supplied rows before their values
@@ -776,7 +787,7 @@ func LockRowsForSnapshotRefresh(
 	sharding lock.Sharding,
 	group uint32,
 ) error {
-	return lockRows(eng, proc, rel, tableID, bat, idx, pkType, lockMode, sharding, group, false)
+	return lockRows(eng, proc, rel, tableID, bat, idx, pkType, false, LockOptions{mode: lockMode, sharding: sharding, group: group})
 }
 
 func lockRows(
@@ -787,11 +798,8 @@ func lockRows(
 	bat *batch.Batch,
 	idx int32,
 	pkType types.Type,
-	lockMode lock.LockMode,
-	sharding lock.Sharding,
-	group uint32,
 	retryOnRefresh bool,
-	waitPolicy ...lock.WaitPolicy,
+	opts LockOptions,
 ) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
@@ -822,15 +830,8 @@ func lockRows(
 		})
 	}()
 
-	opts := DefaultLockOptions(parker).
-		WithLockTable(false, false).
-		WithLockSharding(sharding).
-		WithLockMode(lockMode).
-		WithLockGroup(group).
-		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
-	if len(waitPolicy) > 0 {
-		opts.waitPolicy = &waitPolicy[0]
-	}
+	opts.parker = parker
+	opts.fetchFunc = GetFetchRowsFunc(pkType)
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
 		eng,
@@ -960,7 +961,8 @@ func doLock(
 		Policy:          proc.GetWaitPolicy(),
 		Mode:            opts.mode,
 		WriterFair:      isWriterFairLockRequest(ctx),
-		KeepRows:        opts.admissionOnly || exactMutation,
+		KeepRows:        opts.admissionOnly || exactMutation || opts.reuseOwnedRange,
+		ReuseOwnedRange: opts.reuseOwnedRange,
 		TableDefChanged: opts.changeDef,
 		Sharding:        opts.sharding,
 		Group:           opts.group,
@@ -1512,7 +1514,7 @@ func LockWithMayUpgrade(
 	if opts.noWait || opts.skipLocked || options.NoWait {
 		return result, err
 	}
-	if (opts.admissionOnly || exactMutationRows(ctx)) && !opts.lockTable {
+	if options.KeepRows && !opts.lockTable {
 		// Catalog name admission must not widen to unrelated catalog rows.
 		return result, err
 	}
