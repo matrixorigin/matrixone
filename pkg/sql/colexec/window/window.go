@@ -115,10 +115,14 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(ctr.aggVecs) == 0 {
+		exprMP, err := ctr.expressionMP(proc)
+		if err != nil {
+			return err
+		}
 		ctr.aggVecs = make([]colexec.ExprEvalVector, len(window.Aggs))
 		for i, ag := range window.Aggs {
 			expressions := ag.GetArgExpressions()
-			if ctr.aggVecs[i], err = colexec.MakeEvalVectorWithAllocation(proc, expressions, ctr.allocation.Vector); err != nil {
+			if ctr.aggVecs[i], err = colexec.MakeEvalVectorWithAllocation(proc, expressions, exprMP); err != nil {
 				return err
 			}
 		}
@@ -314,30 +318,16 @@ func decimal256RangeOffset(expr *plan.Expr, orderType plan.Type) (types.Decimal2
 	return offset, nil
 }
 
-// appendInput owns the materialized input independently of the child. Dup
-// inherits the source selection, which can be absent (e.g. VALUE_SCAN) or
-// belong to a different owner. Configure empty destination vectors before
-// copying so every retained data/area/null/grouping allocation is admitted by
-// Window's account. Without a Window account, retain the legacy copy policy.
+// appendInput owns the materialized input independently of the child. With a
+// Window account bound, every retained data/area/null/grouping allocation is
+// copied through Window's accounted view (an off-heap copy); without one, the
+// legacy copy policy is retained.
 func (ctr *container) appendInput(proc *process.Process, input *batch.Batch) error {
-	if ctr.bat == nil && ctr.allocation.Vector != nil {
-		attrs, typs := input.GetSchema()
-		owned := batch.NewWithSchema(true, attrs, typs)
-		owned.Recursive = input.Recursive
-		if err := owned.SetAllocationAccount(ctr.allocation.Vector); err != nil {
-			owned.Clean(proc.Mp())
-			return err
-		}
-		// CloneTo preserves the first batch's vector metadata and cleans the
-		// destination on failure. Publish only the fully admitted first copy.
-		if err := input.CloneTo(owned, proc.Mp()); err != nil {
-			return err
-		}
-		ctr.bat = owned
-		return nil
+	mp, err := ctr.allocation.MP(proc)
+	if err != nil {
+		return err
 	}
-	var err error
-	ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), input)
+	ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, mp, input)
 	return err
 }
 
@@ -457,9 +447,13 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			}
 			if window.Fs != nil {
 				if len(ctr.orderVecs) == 0 {
+					exprMP, err := ctr.expressionMP(proc)
+					if err != nil {
+						return result, err
+					}
 					ctr.orderVecs = make([]colexec.ExprEvalVector, len(window.Fs))
 					for j := range ctr.orderVecs {
-						ctr.orderVecs[j], err = colexec.MakeEvalVectorWithAllocation(proc, []*plan.Expr{window.Fs[j].Expr}, ctr.allocation.Vector)
+						ctr.orderVecs[j], err = colexec.MakeEvalVectorWithAllocation(proc, []*plan.Expr{window.Fs[j].Expr}, exprMP)
 						if err != nil {
 							return result, err
 						}
@@ -701,6 +695,10 @@ func (ctr *container) processAggregateFuncRange(
 	outputStart int,
 	outputEnd int,
 ) (*vector.Vector, error) {
+	vecMP, mpErr := ctr.allocation.MP(proc)
+	if mpErr != nil {
+		return nil, mpErr
+	}
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	frame := ctr.frameAt(idx, w.Frame)
 	wholeFrame := fullPartitionWindowFrame(frame) ||
@@ -792,7 +790,7 @@ func (ctr *container) processAggregateFuncRange(
 	// groupCount is bounded by DefaultBatchSize (the aggregate chunk size),
 	// so this is normally the zero-copy one-vector path. Keep the merge for
 	// defensive compatibility with aggregate implementations that split early.
-	vec, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+	vec, err := aggexec.MergeSplitResult(vecs, vecMP)
 	if err != nil {
 		return nil, err
 	}
@@ -855,6 +853,10 @@ func (ctr *container) processFullPartitionRange(
 	outputStart int,
 	outputEnd int,
 ) (_ *vector.Vector, retErr error) {
+	vecMP, mpErr := ctr.allocation.MP(proc)
+	if mpErr != nil {
+		return nil, mpErr
+	}
 	n := ctr.bat.RowCount()
 	eager := orderedSetWindowAggregate(ap.WinSpecList[idx].GetW().Name)
 	if outputStart != ctr.fullPartitionNextRow {
@@ -902,7 +904,7 @@ func (ctr *container) processFullPartitionRange(
 		}
 		visibleEnd := min(end, outputEnd)
 		if err := result.UnionMulti(
-			ctr.fullPartitionResults, int64(ctr.fullPartitionResultIndex), visibleEnd-row, proc.Mp()); err != nil {
+			ctr.fullPartitionResults, int64(ctr.fullPartitionResultIndex), visibleEnd-row, vecMP); err != nil {
 			return nil, err
 		}
 		row = visibleEnd
@@ -926,6 +928,10 @@ func (ctr *container) processFullPartitionRange(
 func (ctr *container) evaluateFullPartitions(
 	idx int, ap *Window, proc *process.Process, firstPartition, outputEnd int, eager bool,
 ) (*vector.Vector, error) {
+	vecMP, mpErr := ctr.allocation.MP(proc)
+	if mpErr != nil {
+		return nil, mpErr
+	}
 	groups := 1
 	if len(ctr.ps) > 0 {
 		if eager {
@@ -966,7 +972,7 @@ func (ctr *container) evaluateFullPartitions(
 	if err != nil {
 		return nil, err
 	}
-	result, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+	result, err := aggexec.MergeSplitResult(vecs, vecMP)
 	if err != nil {
 		return nil, err
 	}
@@ -1132,6 +1138,10 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 	outputStart int,
 	outputEnd int,
 ) (_ *vector.Vector, retErr error) {
+	vecMP, mpErr := ctr.allocation.MP(proc)
+	if mpErr != nil {
+		return nil, mpErr
+	}
 	if outputStart != ctr.runningNextRow {
 		ctr.freeRunningAgg()
 		return nil, moerr.NewInternalErrorNoCtx("cumulative window output is not sequential")
@@ -1211,7 +1221,7 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 	if err != nil {
 		return nil, err
 	}
-	vec, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+	vec, err := aggexec.MergeSplitResult(vecs, vecMP)
 	if err != nil {
 		return nil, err
 	}
@@ -1237,6 +1247,10 @@ func (ctr *container) processSlidingAggregateFuncRange(
 	frame *plan.FrameClause,
 	prefix bool,
 ) (_ *vector.Vector, retErr error) {
+	vecMP, mpErr := ctr.allocation.MP(proc)
+	if mpErr != nil {
+		return nil, mpErr
+	}
 	if outputStart != ctr.runningNextRow {
 		ctr.freeRunningAgg()
 		return nil, moerr.NewInternalErrorNoCtx("sliding window output is not sequential")
@@ -1344,7 +1358,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 	if err != nil {
 		return nil, err
 	}
-	vec, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+	vec, err := aggexec.MergeSplitResult(vecs, vecMP)
 	if err != nil {
 		return nil, err
 	}
@@ -1363,6 +1377,10 @@ func (ctr *container) processOrderFuncRange(
 	outputStart int,
 	outputEnd int,
 ) (*vector.Vector, error) {
+	vecMP, mpErr := ctr.allocation.MP(proc)
+	if mpErr != nil {
+		return nil, mpErr
+	}
 	n := ctr.bat.RowCount()
 	funcName := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name
 	if funcName == "row_number" {
@@ -1374,7 +1392,7 @@ func (ctr *container) processOrderFuncRange(
 		if err != nil {
 			return nil, err
 		}
-		if err = vec.PreExtend(count, proc.Mp()); err != nil {
+		if err = vec.PreExtend(count, vecMP); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err
 		}
@@ -1429,7 +1447,7 @@ func (ctr *container) processOrderFuncRange(
 		if err != nil {
 			return nil, err
 		}
-		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+		if err := vector.AppendFixedList(vec, values, nil, vecMP); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err
 		}
@@ -1452,7 +1470,7 @@ func (ctr *container) processOrderFuncRange(
 		if err != nil {
 			return nil, err
 		}
-		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+		if err := vector.AppendFixedList(vec, values, nil, vecMP); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err
 		}
@@ -1487,7 +1505,7 @@ func (ctr *container) processOrderFuncRange(
 		if err != nil {
 			return nil, err
 		}
-		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+		if err := vector.AppendFixedList(vec, values, nil, vecMP); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err
 		}
@@ -1592,6 +1610,10 @@ func (ctr *container) processValueFuncRange(
 	outputStart int,
 	outputEnd int,
 ) (result *vector.Vector, err error) {
+	vecMP, mpErr := ctr.allocation.MP(proc)
+	if mpErr != nil {
+		return nil, mpErr
+	}
 	n := ctr.bat.RowCount()
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	funcName := w.Name
@@ -1643,12 +1665,12 @@ func (ctr *container) processValueFuncRange(
 				start, _ = buildPartitionInterval(ctr.ps, j, n)
 			}
 			if offset > int64(j-start) {
-				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
+				if err := appendDefaultOrNull(localResult, defaultVec, j, vecMP); err != nil {
 					return nil, err
 				}
 			} else {
 				srcRow := j - int(offset)
-				if err := localResult.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
+				if err := localResult.UnionOne(srcVec, int64(srcRow), vecMP); err != nil {
 					return nil, err
 				}
 			}
@@ -1686,12 +1708,12 @@ func (ctr *container) processValueFuncRange(
 				_, end = buildPartitionInterval(ctr.ps, j, n)
 			}
 			if offset >= int64(end-j) {
-				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
+				if err := appendDefaultOrNull(localResult, defaultVec, j, vecMP); err != nil {
 					return nil, err
 				}
 			} else {
 				srcRow := j + int(offset)
-				if err := localResult.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
+				if err := localResult.UnionOne(srcVec, int64(srcRow), vecMP); err != nil {
 					return nil, err
 				}
 			}
@@ -1718,20 +1740,20 @@ func (ctr *container) processValueFuncRange(
 			}
 			if selection != nil {
 				if len(selection.spans) == 0 {
-					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+					if err := vector.AppendAny(localResult, nil, true, vecMP); err != nil {
 						return nil, err
 					}
-				} else if err := localResult.UnionOne(srcVec, int64(selection.spans[0].start), proc.Mp()); err != nil {
+				} else if err := localResult.UnionOne(srcVec, int64(selection.spans[0].start), vecMP); err != nil {
 					return nil, err
 				}
 				continue
 			}
 			if left >= right {
-				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+				if err := vector.AppendAny(localResult, nil, true, vecMP); err != nil {
 					return nil, err
 				}
 			} else {
-				if err := localResult.UnionOne(srcVec, int64(left), proc.Mp()); err != nil {
+				if err := localResult.UnionOne(srcVec, int64(left), vecMP); err != nil {
 					return nil, err
 				}
 			}
@@ -1758,20 +1780,20 @@ func (ctr *container) processValueFuncRange(
 			}
 			if selection != nil {
 				if len(selection.spans) == 0 {
-					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+					if err := vector.AppendAny(localResult, nil, true, vecMP); err != nil {
 						return nil, err
 					}
-				} else if err := localResult.UnionOne(srcVec, int64(selection.spans[len(selection.spans)-1].end-1), proc.Mp()); err != nil {
+				} else if err := localResult.UnionOne(srcVec, int64(selection.spans[len(selection.spans)-1].end-1), vecMP); err != nil {
 					return nil, err
 				}
 				continue
 			}
 			if left >= right {
-				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+				if err := vector.AppendAny(localResult, nil, true, vecMP); err != nil {
 					return nil, err
 				}
 			} else {
-				if err := localResult.UnionOne(srcVec, int64(right-1), proc.Mp()); err != nil {
+				if err := localResult.UnionOne(srcVec, int64(right-1), vecMP); err != nil {
 					return nil, err
 				}
 			}
@@ -1802,7 +1824,7 @@ func (ctr *container) processValueFuncRange(
 				}
 			}
 			if !ok || nthVal < 1 {
-				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+				if err := vector.AppendAny(localResult, nil, true, vecMP); err != nil {
 					return nil, err
 				}
 				continue
@@ -1824,21 +1846,21 @@ func (ctr *container) processValueFuncRange(
 			if selection != nil {
 				frameRow, ok := selection.nth(int(nthVal))
 				if !ok {
-					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+					if err := vector.AppendAny(localResult, nil, true, vecMP); err != nil {
 						return nil, err
 					}
-				} else if err := localResult.UnionOne(srcVec, int64(frameRow), proc.Mp()); err != nil {
+				} else if err := localResult.UnionOne(srcVec, int64(frameRow), vecMP); err != nil {
 					return nil, err
 				}
 				continue
 			}
 			if left >= right || nthVal > int64(right-left) {
-				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+				if err := vector.AppendAny(localResult, nil, true, vecMP); err != nil {
 					return nil, err
 				}
 			} else {
 				targetRow := left + int(nthVal) - 1
-				if err := localResult.UnionOne(srcVec, int64(targetRow), proc.Mp()); err != nil {
+				if err := localResult.UnionOne(srcVec, int64(targetRow), vecMP); err != nil {
 					return nil, err
 				}
 			}
@@ -1976,7 +1998,7 @@ func (ctr *container) processValueFuncRange(
 				return nil, err
 			}
 			if localRankValueIsNull(srcVec, j) {
-				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+				if err := vector.AppendAny(localResult, nil, true, vecMP); err != nil {
 					return nil, err
 				}
 				continue
@@ -2011,7 +2033,7 @@ func (ctr *container) processValueFuncRange(
 					// Empty frame: the shared resolver's non-NULL-key
 					// NULL-arithmetic branch (an empty window mirrors the
 					// aggregate-over-empty-frame semantics with a NULL rank).
-					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+					if err := vector.AppendAny(localResult, nil, true, vecMP); err != nil {
 						return nil, err
 					}
 					continue
@@ -2022,7 +2044,7 @@ func (ctr *container) processValueFuncRange(
 				}
 				count = c
 			}
-			if err := vector.AppendAny(localResult, count+1, false, proc.Mp()); err != nil {
+			if err := vector.AppendAny(localResult, count+1, false, vecMP); err != nil {
 				return nil, err
 			}
 		}
@@ -2722,6 +2744,10 @@ func buildPartitionInterval(ps []int64, j int, l int) (int, int) {
 }
 
 func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) (err error) {
+	vecMP, mpErr := ctr.allocation.MP(proc)
+	if mpErr != nil {
+		return mpErr
+	}
 	input := []*batch.Batch{bat}
 
 	for i := range ctr.aggVecs {
@@ -2732,11 +2758,11 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) (er
 			}
 			if ctr.aggVecs[i].Vec[j] != nil {
 				ctr.aggVecs[i].Vec[j].CleanOnlyData()
-				if err = ctr.aggVecs[i].Vec[j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+				if err = ctr.aggVecs[i].Vec[j].UnionBatch(vec, 0, vec.Length(), nil, vecMP); err != nil {
 					return err
 				}
 			} else {
-				ctr.aggVecs[i].Vec[j], err = vec.Dup(proc.Mp())
+				ctr.aggVecs[i].Vec[j], err = vec.Dup(vecMP)
 				if err != nil {
 					return err
 				}
@@ -2782,6 +2808,10 @@ func makePartitionTopNOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
 }
 
 func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (err error) {
+	vecMP, mpErr := ctr.allocation.MP(proc)
+	if mpErr != nil {
+		return mpErr
+	}
 	// Eval reuses ctr.orderVecs' backing vectors by replacing their data below.
 	// Fold detection is derived from that data, so entries keyed by a vector
 	// pointer must never survive into the next materialized input batch.
@@ -2806,13 +2836,13 @@ func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (
 			owned := ctr.orderVecs[i].Vec[j]
 			if owned != nil && !owned.IsConst() && !vec.IsConst() {
 				owned.CleanOnlyData()
-				if err = owned.UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+				if err = owned.UnionBatch(vec, 0, vec.Length(), nil, vecMP); err != nil {
 					return err
 				}
 			} else {
 				// UnionBatch appends into a flat vector; preserve constant
 				// representation and acquire the replacement before freeing old data.
-				next, err := vec.Dup(proc.Mp())
+				next, err := vec.Dup(vecMP)
 				if err != nil {
 					return err
 				}
@@ -2830,6 +2860,10 @@ func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (
 }
 
 func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *process.Process) (bool, error) {
+	vecMP, mpErr := ctr.allocation.MP(proc)
+	if mpErr != nil {
+		return false, mpErr
+	}
 	makeArgFs(ap)
 	ctr.clearSortState()
 
@@ -2929,6 +2963,10 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			}
 		}
 
+		sortMP, err := ctr.allocation.MP(proc)
+		if err != nil {
+			return false, err
+		}
 		sorted, sortedOrderVecs, sortedAggVecs, err := mergeorder.SortBatchWithPrecomputedOrderAndRelease(
 			proc,
 			bat,
@@ -2938,6 +2976,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			orderCols,
 			extraAggVecs,
 			inputConsumed,
+			sortMP,
 		)
 		if err != nil {
 			return false, err
@@ -3097,7 +3136,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		ctr.os = nil
 	}
 
-	if err := bat.Shuffle(ctr.sels, proc.Mp()); err != nil {
+	if err := bat.Shuffle(ctr.sels, vecMP); err != nil {
 		return false, err
 	}
 
@@ -3105,7 +3144,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	for k := idx; k < len(ctr.aggVecs); k++ {
 		for v := range ctr.aggVecs[k].Vec {
 			if ctr.aggVecs[k].Vec[v] != nil && !ctr.aggVecs[k].Vec[v].IsConst() {
-				if err := ctr.aggVecs[k].Vec[v].Shuffle(ctr.sels, proc.Mp()); err != nil {
+				if err := ctr.aggVecs[k].Vec[v].Shuffle(ctr.sels, vecMP); err != nil {
 					return false, err
 				}
 			}
@@ -3114,7 +3153,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 
 	t := len(ctr.orderVecs) - 1
 	if len(ctr.orderVecs[t].Vec) > 0 {
-		if err := ctr.orderVecs[t].Vec[0].Shuffle(ctr.sels, proc.Mp()); err != nil {
+		if err := ctr.orderVecs[t].Vec[0].Shuffle(ctr.sels, vecMP); err != nil {
 			return false, err
 		}
 	}

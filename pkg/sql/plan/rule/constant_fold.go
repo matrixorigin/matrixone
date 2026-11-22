@@ -827,14 +827,6 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64, source type
 				Sval: vec.GetStringAt(int(row)),
 			},
 		}
-		if vec.GetType().Oid.IsMySQLString() {
-			switch vec.GetRuntimeStringDomainAt(int(row)) {
-			case types.RuntimeStringText:
-				literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
-			case types.RuntimeStringBinary:
-				literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
-			}
-		}
 		return literal
 	case types.T_json:
 		if !transAll {
@@ -1401,7 +1393,9 @@ func ContainsTruncatedFloatTextConversion(expr *plan.Expr) bool {
 					}
 				}
 				// scalarConstantVector is a borrowed view of the literal payload.
-				if vec := scalarConstantVector(source); vec != nil && !vec.IsNull(0) && !vec.GetIsBin() &&
+				// A LiteralVec payload carries no binary-literal flag; IsBin
+				// exists only on plan.Literal, checked above.
+				if vec := scalarConstantVector(source); vec != nil && !vec.IsNull(0) &&
 					function.FloatTextTruncated(vec.GetStringAt(0)) {
 					return true
 				}

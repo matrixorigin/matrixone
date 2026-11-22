@@ -97,7 +97,10 @@ func terminalBudgetError(
 	switch budgetErr.Component {
 	case process.ExecutionResourceComponentMemory:
 		resource = "memory"
-		if operator == "hash build" {
+		if budgetErr.PhysicalMemory != nil {
+			reason = budgetErr.PhysicalMemory.String()
+			action = "reduce physical memory pressure or query concurrency"
+		} else if operator == "hash build" {
 			action = "reduce join build width or query concurrency, increase processLimitationSize, or lower join_spill_mem for an eligible shuffle join; automatic spill can still exhaust recovery headroom for wide or skewed partitions"
 		} else {
 			action = "reduce query width or concurrency, or increase processLimitationSize"

@@ -52,7 +52,7 @@ func TestPipelineGroupingRoundTrip(t *testing.T) {
 	input.Vecs[0].GetGrouping().Reset()
 	plain, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true)
 	require.NoError(t, err)
-	legacy, err := input.MarshalBinaryWithMetadata(&bytes.Buffer{}, true)
+	legacy, err := input.MarshalBinaryWithBuffer(&bytes.Buffer{}, true)
 	require.NoError(t, err)
 	require.Equal(t, legacy, plain, "ordinary batches must retain their legacy wire bytes")
 	require.NoError(t, output.UnmarshalBinaryForPipeline(plain, mp))
@@ -137,9 +137,10 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 	require.NoError(t, output.UnmarshalBinaryForPipeline(groupOnly, mp))
 	require.True(t, output.Vecs[0].GetGrouping().Contains(2))
 
-	input.Vecs[0].SetIsBinaryString(true)
-	current, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true)
-	require.NoError(t, err)
+	// An older writer inserted a version-1 transport trailer between the
+	// stable payload and the grouping section.
+	current := append(legacyV1TransportWire(t, groupOnly[:prefix],
+		[]byte{batchMetadataModeNone | batchMetadataBinaryFlag}), groupOnly[prefix:]...)
 	for _, tc := range []struct {
 		name    string
 		encoded []byte
@@ -158,7 +159,7 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 			require.Equal(t, tc.version, encoded[prefix+3])
 			require.NoError(t, output.UnmarshalBinaryForPipeline(encoded, mp))
 			require.True(t, output.Vecs[0].GetGrouping().Contains(2))
-			require.True(t, output.Vecs[0].GetIsBinaryString())
+			requireStringValues(t, output.Vecs[0], "one", "two", "three")
 			end := len(encoded) - pipelineGroupingFooterSize
 			size := binary.LittleEndian.Uint64(encoded[end+8:])
 			crossesStable := bytes.Clone(encoded)
@@ -180,5 +181,5 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 	require.Error(t, output.UnmarshalBinaryForPipeline(plain[:len(plain)-1], mp))
 	require.NoError(t, output.UnmarshalBinaryForPipeline(plain, mp))
 	require.False(t, output.HasGrouping())
-	require.False(t, output.Vecs[0].GetIsBinaryString())
+	requireStringValues(t, output.Vecs[0], "one", "two", "three")
 }

@@ -1,0 +1,318 @@
+drop database if exists test_diff_output_as_altered;
+create database test_diff_output_as_altered;
+use test_diff_output_as_altered;
+create table added_base(id int primary key, note varchar(20) not null);
+insert into added_base values (1,'one'),(2,'two');
+data branch create table added_tar from added_base;
+alter table added_tar add column extra int not null default 7;
+update added_tar set note = 'target' where id = 1;
+update added_base set note = 'base' where id = 2;
+data branch diff added_tar against added_base columns (note,extra) output as added_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`added_diff`
+show create table added_diff;
+➤ Table[12,10,0]  ¦  Create Table[12,201,0]  𝄀
+added_diff  ¦  CREATE TABLE `added_diff` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `id` int NOT NULL,
+  `note` varchar(20) NOT NULL,
+  `extra` int DEFAULT NULL
+)
+select __mo_diff_source, __mo_diff_flag, id, note, extra from added_diff order by id;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  note[12,20,0]  ¦  extra[4,32,0]  𝄀
+added_tar  ¦  UPDATE  ¦  1  ¦  target  ¦  7  𝄀
+added_base  ¦  UPDATE  ¦  2  ¦  base  ¦  null
+create table rename_base(id int primary key, note varchar(20) not null);
+insert into rename_base values (1,'one'),(2,'two');
+data branch create table rename_tar from rename_base;
+alter table rename_tar algorithm=instant, rename column note to label;
+update rename_tar set label = 'target' where id = 1;
+update rename_base set note = 'base' where id = 2;
+data branch diff rename_tar against rename_base columns (label) output as rename_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`rename_diff`
+show create table rename_diff;
+➤ Table[12,11,0]  ¦  Create Table[12,175,0]  𝄀
+rename_diff  ¦  CREATE TABLE `rename_diff` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `id` int NOT NULL,
+  `label` varchar(20) NOT NULL
+)
+select __mo_diff_source, __mo_diff_flag, id, label from rename_diff order by id;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  label[12,20,0]  𝄀
+rename_tar  ¦  UPDATE  ¦  1  ¦  target  𝄀
+rename_base  ¦  UPDATE  ¦  2  ¦  base
+create table copy_base(id int primary key, amount decimal(9,2) not null);
+insert into copy_base values (1,10.50),(2,20.00);
+data branch create table copy_tar from copy_base;
+alter table copy_tar algorithm=copy, add column extra int not null default 9 first;
+update copy_tar set amount = 11.75 where id = 1;
+update copy_base set amount = 21.25 where id = 2;
+data branch diff copy_tar against copy_base columns (amount,extra);
+➤ diff copy_tar against copy_base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  amount[3,9,2]  ¦  extra[4,32,0]  𝄀
+copy_tar  ¦  UPDATE  ¦  1  ¦  11.75  ¦  9  𝄀
+copy_base  ¦  UPDATE  ¦  2  ¦  21.25  ¦  null
+data branch diff copy_tar against copy_base columns (amount,extra) output as copy_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`copy_diff`
+show create table copy_diff;
+➤ Table[12,9,0]  ¦  Create Table[12,203,0]  𝄀
+copy_diff  ¦  CREATE TABLE `copy_diff` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `id` int NOT NULL,
+  `amount` decimal(9,2) NOT NULL,
+  `extra` int DEFAULT NULL
+)
+select __mo_diff_source, __mo_diff_flag, id, amount, extra from copy_diff order by id;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  amount[3,9,2]  ¦  extra[4,32,0]  𝄀
+copy_tar  ¦  UPDATE  ¦  1  ¦  11.75  ¦  9  𝄀
+copy_base  ¦  UPDATE  ¦  2  ¦  21.25  ¦  null
+data branch diff copy_tar against copy_base output as copy_full_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`copy_full_diff`
+show create table copy_full_diff;
+➤ Table[12,14,0]  ¦  Create Table[12,208,0]  𝄀
+copy_full_diff  ¦  CREATE TABLE `copy_full_diff` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `extra` int DEFAULT NULL,
+  `id` int NOT NULL,
+  `amount` decimal(9,2) NOT NULL
+)
+select * from copy_full_diff order by id;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  extra[4,32,0]  ¦  id[4,32,0]  ¦  amount[3,9,2]  𝄀
+copy_tar  ¦  UPDATE  ¦  9  ¦  1  ¦  11.75  𝄀
+copy_base  ¦  UPDATE  ¦  null  ¦  2  ¦  21.25
+create table base_copy_base(id int primary key, note varchar(20) not null, amount int not null);
+insert into base_copy_base values (1,'one',10),(2,'two',20);
+data branch create table base_copy_tar from base_copy_base;
+alter table base_copy_base algorithm=copy, modify column note varchar(20) not null first;
+data branch diff base_copy_tar against base_copy_base output as empty_reordered_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`empty_reordered_diff`
+show create table empty_reordered_diff;
+➤ Table[12,20,0]  ¦  Create Table[12,208,0]  𝄀
+empty_reordered_diff  ¦  CREATE TABLE `empty_reordered_diff` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `id` int NOT NULL,
+  `note` varchar(20) NOT NULL,
+  `amount` int NOT NULL
+)
+select * from empty_reordered_diff;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  note[12,20,0]  ¦  amount[4,32,0]
+update base_copy_tar set note = 'target', amount = 11 where id = 1;
+update base_copy_base set note = 'base', amount = 21 where id = 2;
+data branch diff base_copy_tar against base_copy_base output as base_copy_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`base_copy_diff`
+show create table base_copy_diff;
+➤ Table[12,14,0]  ¦  Create Table[12,202,0]  𝄀
+base_copy_diff  ¦  CREATE TABLE `base_copy_diff` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `id` int NOT NULL,
+  `note` varchar(20) NOT NULL,
+  `amount` int NOT NULL
+)
+select * from base_copy_diff order by id;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  note[12,20,0]  ¦  amount[4,32,0]  𝄀
+base_copy_tar  ¦  UPDATE  ¦  1  ¦  target  ¦  11  𝄀
+base_copy_base  ¦  UPDATE  ¦  2  ¦  base  ¦  21
+create table drop_base(id int primary key, x int, y int, amount decimal(9,2) not null);
+insert into drop_base values (10,11,22,10.00);
+data branch create table drop_tar from drop_base;
+insert into drop_base values (20,77,88,20.00);
+update drop_base set amount = 15.25 where id = 10;
+alter table drop_base algorithm=copy, drop column x, drop column y;
+data branch diff drop_tar against drop_base output as drop_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`drop_diff`
+show create table drop_diff;
+➤ Table[12,9,0]  ¦  Create Table[12,223,0]  𝄀
+drop_diff  ¦  CREATE TABLE `drop_diff` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `id` int NOT NULL,
+  `x` int DEFAULT NULL,
+  `y` int DEFAULT NULL,
+  `amount` decimal(9,2) NOT NULL
+)
+select * from drop_diff order by id;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  x[4,32,0]  ¦  y[4,32,0]  ¦  amount[3,9,2]  𝄀
+drop_base  ¦  UPDATE  ¦  10  ¦  null  ¦  null  ¦  15.25  𝄀
+drop_base  ¦  INSERT  ¦  20  ¦  null  ¦  null  ¦  20.00
+create table empty_copy_base(id int primary key, amount int not null);
+insert into empty_copy_base values (1,10);
+data branch create table empty_copy_tar from empty_copy_base;
+alter table empty_copy_base algorithm=copy, add column extra int not null default 9 first;
+alter table empty_copy_tar algorithm=copy, add column extra int not null default 9 first;
+data branch diff empty_copy_tar against empty_copy_base output as empty_copy_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`empty_copy_diff`
+show create table empty_copy_diff;
+➤ Table[12,15,0]  ¦  Create Table[12,196,0]  𝄀
+empty_copy_diff  ¦  CREATE TABLE `empty_copy_diff` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `extra` int NOT NULL,
+  `id` int NOT NULL,
+  `amount` int NOT NULL
+)
+select * from empty_copy_diff;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  extra[4,32,0]  ¦  id[4,32,0]  ¦  amount[4,32,0]
+set @previous_time_zone = @@session.time_zone;
+set time_zone = '+00:00';
+create table typed_copy_base(id int primary key, wall_time datetime(6), payload json, code binary(4), event_time timestamp(6));
+insert into typed_copy_base values
+(1,'2024-01-01 01:02:03.010203','{"id":1}',x'01020304','2024-01-01 04:05:06.040506'),
+(2,'2024-01-02 01:02:03.010203','{"id":2}',x'05060708','2024-01-02 04:05:06.040506');
+data branch create table typed_copy_tar from typed_copy_base;
+alter table typed_copy_tar algorithm=copy, add column extra int not null default 9 first;
+update typed_copy_tar set wall_time = '2024-02-01 12:34:56.123456', payload = '{"side":"target"}',
+code = x'00ff275c', event_time = '2024-02-01 06:07:08.654321' where id = 1;
+update typed_copy_base set wall_time = '2024-02-02 12:34:56.654321', payload = '{"side":"base"}',
+code = x'61008000', event_time = '2024-02-02 06:07:08.123456' where id = 2;
+data branch diff typed_copy_tar against typed_copy_base output as typed_copy_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`typed_copy_diff`
+show create table typed_copy_diff;
+➤ Table[12,15,0]  ¦  Create Table[12,326,0]  𝄀
+typed_copy_diff  ¦  CREATE TABLE `typed_copy_diff` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `extra` int DEFAULT NULL,
+  `id` int NOT NULL,
+  `wall_time` datetime(6) DEFAULT NULL,
+  `payload` json DEFAULT NULL,
+  `code` binary(4) DEFAULT NULL,
+  `event_time` timestamp(6) NULL DEFAULT NULL
+)
+select __mo_diff_source, __mo_diff_flag, extra, id, wall_time, payload, hex(code), event_time from typed_copy_diff order by id;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  extra[4,32,0]  ¦  id[4,32,0]  ¦  wall_time[93,26,0]  ¦  payload[-1,2147483647,0]  ¦  hex(code)[12,8,0]  ¦  event_time[93,26,0]  𝄀
+typed_copy_tar  ¦  UPDATE  ¦  9  ¦  1  ¦  2024-02-01 12:34:56.123456000  ¦  {"side": "target"}  ¦  00FF275C  ¦  2024-02-01 06:07:08.654321000  𝄀
+typed_copy_base  ¦  UPDATE  ¦  null  ¦  2  ¦  2024-02-02 12:34:56.654321000  ¦  {"side": "base"}  ¦  61008000  ¦  2024-02-02 06:07:08.123456000
+create table dst_base(id int primary key, ts timestamp(6));
+data branch create table dst_tar from dst_base;
+alter table dst_tar algorithm=copy, add column extra int not null default 9 first;
+insert into dst_tar (id,ts) values (1,'2024-11-03 05:30:00.123456'),(2,'2024-11-03 06:30:00.123456');
+set time_zone = 'America/New_York';
+data branch diff dst_tar against dst_base output as dst_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`dst_diff`
+set time_zone = '+00:00';
+select __mo_diff_source, __mo_diff_flag, id, ts from dst_diff order by id;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  ts[93,26,0]  𝄀
+dst_tar  ¦  INSERT  ¦  1  ¦  2024-11-03 05:30:00.123456000  𝄀
+dst_tar  ¦  INSERT  ¦  2  ¦  2024-11-03 06:30:00.123456000
+set time_zone = '-05:00';
+create table timestamp_max_base(id int primary key, ts timestamp(6));
+data branch create table timestamp_max_tar from timestamp_max_base;
+insert into timestamp_max_tar values (1,'2024-11-03 01:30:00.123456'),(2,'9999-12-31 23:59:59.999999');
+alter table timestamp_max_tar algorithm=copy, add column extra int not null default 9 first;
+data branch diff timestamp_max_tar against timestamp_max_base output as timestamp_max_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`timestamp_max_diff`
+show create table timestamp_max_diff;
+➤ Table[12,18,0]  ¦  Create Table[12,217,0]  𝄀
+timestamp_max_diff  ¦  CREATE TABLE `timestamp_max_diff` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `extra` int DEFAULT NULL,
+  `id` int NOT NULL,
+  `ts` timestamp(6) NULL DEFAULT NULL
+)
+select __mo_diff_source, __mo_diff_flag, extra, id, ts from timestamp_max_diff order by id;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  extra[4,32,0]  ¦  id[4,32,0]  ¦  ts[93,26,0]  𝄀
+timestamp_max_tar  ¦  INSERT  ¦  9  ¦  1  ¦  2024-11-03 01:30:00.123456000  𝄀
+timestamp_max_tar  ¦  INSERT  ¦  9  ¦  2  ¦  9999-12-31 23:59:59.999999000
+set time_zone = '+05:00';
+create table timestamp_min_base(id int primary key, ts timestamp(6));
+data branch create table timestamp_min_tar from timestamp_min_base;
+insert into timestamp_min_tar values (1,'1970-01-01 05:00:01.000000');
+data branch diff timestamp_min_tar against timestamp_min_base output as timestamp_min_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`timestamp_min_diff`
+select __mo_diff_source, __mo_diff_flag, id, ts from timestamp_min_diff;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  ts[93,26,0]  𝄀
+timestamp_min_tar  ¦  INSERT  ¦  1  ¦  1970-01-01 05:00:01
+set time_zone = '+06:00';
+select id, ts from timestamp_min_diff;
+➤ id[4,32,0]  ¦  ts[93,26,0]  𝄀
+1  ¦  1970-01-01 06:00:01
+set time_zone = '-05:00';
+create table timestamp_mixed_base(id int primary key, ts_min timestamp(6) not null, ts_max timestamp(6));
+data branch create table timestamp_mixed_tar from timestamp_mixed_base;
+insert into timestamp_mixed_tar values (1,'1969-12-31 19:00:01.000000','9999-12-31 23:59:59.999999');
+set time_zone = '+05:00';
+data branch diff timestamp_mixed_tar against timestamp_mixed_base output as timestamp_mixed_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`timestamp_mixed_diff`
+show create table timestamp_mixed_diff;
+➤ Table[12,20,0]  ¦  Create Table[12,229,0]  𝄀
+timestamp_mixed_diff  ¦  CREATE TABLE `timestamp_mixed_diff` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `id` int NOT NULL,
+  `ts_min` timestamp(6) NOT NULL,
+  `ts_max` timestamp(6) NULL DEFAULT NULL
+)
+set time_zone = '-05:00';
+select __mo_diff_source, __mo_diff_flag, id, ts_min, ts_max from timestamp_mixed_diff;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  ts_min[93,26,0]  ¦  ts_max[93,26,0]  𝄀
+timestamp_mixed_tar  ¦  INSERT  ¦  1  ¦  1969-12-31 19:00:01  ¦  9999-12-31 23:59:59.999999000
+set time_zone = '+05:00';
+select __mo_diff_source, __mo_diff_flag, id, ts_min, cast(ts_max as varchar(27)) as ts_max from timestamp_mixed_diff;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  ts_min[93,26,0]  ¦  ts_max[12,27,0]  𝄀
+timestamp_mixed_tar  ¦  INSERT  ¦  1  ¦  1970-01-01 05:00:01  ¦  10000-01-01 09:59:59.999999
+set time_zone = @previous_time_zone;
+create table b(id int primary key, pad decimal(9,2), v decimal(9,2) unsigned);
+create table t(id int primary key, v decimal(9,2), pad decimal(9,2));
+insert into t values (1, -1.25, 0);
+data branch diff t against b columns (v) output as dec_unsigned_diff;
+internal error: schema compatibility check: column 'v' has different type attributes
+show tables like 'dec_unsigned_diff';
+➤ Tables_in_test_diff_output_as_altered[12,5000,0]
+create table dec_ok_b(id int primary key, pad decimal(9,2), v decimal(9,2) unsigned);
+create table dec_ok_t(id int primary key, v decimal(9,2) unsigned, pad decimal(9,2));
+insert into dec_ok_b values (1, 0, 2.50);
+insert into dec_ok_t values (2, 1.25, 0);
+data branch diff dec_ok_t against dec_ok_b columns (v) output as dec_ok_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`dec_ok_diff`
+show create table dec_ok_diff;
+➤ Table[12,11,0]  ¦  Create Table[12,185,0]  𝄀
+dec_ok_diff  ¦  CREATE TABLE `dec_ok_diff` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `id` int NOT NULL,
+  `v` decimal(9,2) unsigned DEFAULT NULL
+)
+select __mo_diff_source, __mo_diff_flag, id, v from dec_ok_diff order by id;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  v[3,9,2]  𝄀
+dec_ok_b  ¦  INSERT  ¦  1  ¦  2.50  𝄀
+dec_ok_t  ¦  INSERT  ¦  2  ¦  1.25
+create table fold_base(id int primary key, `__mo_diff_ſource` int);
+insert into fold_base values (1, 10);
+data branch create table fold_tar from fold_base;
+alter table fold_tar algorithm=copy, add column extra int not null default 9 first;
+update fold_tar set `__mo_diff_ſource` = 20 where id = 1;
+data branch diff fold_tar against fold_base output as fold_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as_altered`.`fold_diff`
+show create table fold_diff;
+➤ Table[12,9,0]  ¦  Create Table[12,210,0]  𝄀
+fold_diff  ¦  CREATE TABLE `fold_diff` (
+  `__mo_diff_source_1` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `extra` int DEFAULT NULL,
+  `id` int NOT NULL,
+  `__mo_diff_ſource` int DEFAULT NULL
+)
+select * from fold_diff order by id;
+➤ __mo_diff_source_1[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  extra[4,32,0]  ¦  id[4,32,0]  ¦  __mo_diff_ſource[4,32,0]  𝄀
+fold_tar  ¦  UPDATE  ¦  9  ¦  1  ¦  20
+drop database test_diff_output_as_altered;

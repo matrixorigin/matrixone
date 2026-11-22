@@ -29,17 +29,17 @@ import (
 type castFn func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
 
 // runBinarySourceTextCast drives a real cast overload with a binary-flagged
-// varlena source (IsBin set, as binary literals arrive) and a text-family target,
+// varlena source (published as a binary-literal argument) and a text-family target,
 // returning the result vector. The numericWarningSession sink records exact
 // (code, message) diagnostics appended to the statement warning sink.
 func runBinarySourceTextCast(t *testing.T, proc *process.Process, fn castFn, value []byte, target types.Type) *vector.Vector {
 	t.Helper()
 	input := testutil.MakeVarlenaVector([][]byte{value}, nil, types.T_varbinary.ToType(), proc.Mp())
-	input.SetIsBin(true)
 	t.Cleanup(func() { input.Free(proc.Mp()) })
 	targetMarker := testutil.MakeVarlenaVector([][]byte{{0}}, nil, target, proc.Mp())
 	t.Cleanup(func() { targetMarker.Free(proc.Mp()) })
 	result := vector.NewFunctionResultWrapper(target, proc.Mp())
+	result.SetArgumentIsBin([]bool{true})
 	t.Cleanup(result.Free)
 	require.NoError(t, result.PreExtendAndReset(input.Length()))
 	require.NoError(t, fn([]*vector.Vector{input, targetMarker}, result, proc, input.Length(), nil))
@@ -158,10 +158,7 @@ func staticBinaryVector(t *testing.T, proc *process.Process, rows [][]byte, null
 	typ := unhexReturnType([]types.Type{types.New(types.T_varchar, 16, 0)})
 	vec := testutil.MakeVarlenaVector(rows, nulls, typ, proc.Mp())
 	t.Cleanup(func() { vec.Free(proc.Mp()) })
-	require.False(t, vec.GetIsBin(), "binary domain must come from the static type, not the legacy literal flag")
-	ub, pr := stringDomainMode(vec)
-	require.True(t, ub, "static CharsetBinary varbinary type must resolve to the uniform binary domain")
-	require.False(t, pr)
+	require.True(t, isBinaryStringVector(vec, false), "static CharsetBinary varbinary type must resolve to the binary domain without a binary-literal flag")
 	return vec
 }
 
@@ -214,39 +211,6 @@ func TestExplicitCastStaticBinaryDomainWithoutLegacyFlag(t *testing.T) {
 	res := runExplicitCastOn(t, proc, staticBinaryVector(t, proc, [][]byte{{0xFF}}, nil), types.T_varchar.ToType(), nil)
 	require.True(t, res.IsNull(0))
 	require.Equal(t, []numericWarning{{1300, "Invalid utf8mb4 character string: 'ff'"}}, sink.warnings)
-}
-
-// Runtime uniform binary marker (GetIsBinaryString) on a text-family type.
-func TestExplicitCastRuntimeUniformBinaryMarker(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	sink := &numericWarningSession{}
-	proc.WarningSink = sink
-	vec := testutil.MakeVarlenaVector([][]byte{{0xFF}}, nil, types.T_varchar.ToType(), proc.Mp())
-	t.Cleanup(func() { vec.Free(proc.Mp()) })
-	vec.SetIsBinaryString(true)
-	res := runExplicitCastOn(t, proc, vec, types.T_varchar.ToType(), nil)
-	require.True(t, res.IsNull(0))
-	require.Equal(t, []numericWarning{{1300, "Invalid utf8mb4 character string: 'ff'"}}, sink.warnings)
-}
-
-// Per-row sidecar: binary-marked rows are judged; text-override rows keep
-// their payload and stay warning-free even when not valid UTF-8.
-func TestExplicitCastPerRowSidecarJudgment(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	sink := &numericWarningSession{}
-	proc.WarningSink = sink
-	vec := testutil.MakeVarlenaVector([][]byte{{0xFF}, {0xC3, 0x28}}, nil, types.T_varchar.ToType(), proc.Mp())
-	t.Cleanup(func() { vec.Free(proc.Mp()) })
-	require.NoError(t, vec.SetIsBinaryStringAt(0, true, proc.Mp()))
-	ub, pr := stringDomainMode(vec)
-	require.False(t, ub)
-	require.True(t, pr, "row sidecar must select the per-row domain path")
-	res := runExplicitCastOn(t, proc, vec, types.T_varchar.ToType(), nil)
-	require.True(t, res.IsNull(0), "binary-marked row 0 becomes NULL")
-	require.False(t, res.IsNull(1), "text-override row 1 keeps its payload")
-	require.Equal(t, []byte{0xC3, 0x28}, res.GetBytesAt(1))
-	require.Equal(t, []numericWarning{{1300, "Invalid utf8mb4 character string: 'ff'"}}, sink.warnings,
-		"exactly one warning, only for the binary-marked row")
 }
 
 // NULL rows and selection-skipped rows never emit the 1300 warning.

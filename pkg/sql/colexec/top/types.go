@@ -75,10 +75,13 @@ type container struct {
 	bat                     *batch.Batch
 	buildBat                *batch.Batch //temp batch, do not need free or reset
 
-	allocationAccount      *mpool.AllocationAccount
-	retainedAllocation     *vector.AllocationAccountSelection
-	expressionAllocation   *vector.AllocationAccountSelection
-	outputAllocation       *vector.AllocationAccountSelection
+	allocationAccount *mpool.AllocationAccount
+	// Accounted views of allocationViewPool, built on first use because the
+	// account is bound before the operator knows its process pool.
+	allocationViewPool     *mpool.MPool
+	retainedAllocation     *mpool.MPool
+	expressionAllocation   *mpool.MPool
+	outputAllocation       *mpool.MPool
 	spillAllocation        *spillutil.SpillAllocationAccount
 	budget                 *process.ExecutionResourceGeneration
 	recoveryCapacity       *process.ExecutionRecoveryCapacity
@@ -205,15 +208,6 @@ func (ctr *container) setAllocationAccount(
 		len(ctr.rowRefs) != 0 || ctr.spillFile != nil || ctr.spillWriter != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	expression, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerTop,
-		topsites.TopExpressionData,
-		topsites.TopExpressionArea,
-	)
-	if err != nil {
-		return err
-	}
 	recoveryCapacity := process.NewExecutionRecoveryCapacitySlot()
 	recoveryClass, err := account.RegisterCapacityController(recoveryCapacity)
 	if err != nil {
@@ -222,26 +216,6 @@ func (ctr *container) setAllocationAccount(
 	rollbackRecovery := func(cause error) error {
 		_ = account.UnregisterCapacityController(recoveryClass, recoveryCapacity)
 		return cause
-	}
-	retained, err := vector.NewAllocationAccountSelectionWithCapacityClass(
-		account,
-		mpool.AllocationOwnerTop,
-		topsites.TopRetainedData,
-		topsites.TopRetainedArea,
-		recoveryClass,
-	)
-	if err != nil {
-		return rollbackRecovery(err)
-	}
-	output, err := vector.NewAllocationAccountSelectionWithCapacityClass(
-		account,
-		mpool.AllocationOwnerTop,
-		topsites.TopOutputData,
-		topsites.TopOutputArea,
-		recoveryClass,
-	)
-	if err != nil {
-		return rollbackRecovery(err)
 	}
 	spill, err := spillutil.NewSpillAllocationAccountWithCapacityClass(
 		account,
@@ -252,9 +226,10 @@ func (ctr *container) setAllocationAccount(
 		return rollbackRecovery(err)
 	}
 	ctr.allocationAccount = account
-	ctr.retainedAllocation = retained
-	ctr.expressionAllocation = expression
-	ctr.outputAllocation = output
+	ctr.allocationViewPool = nil
+	ctr.retainedAllocation = nil
+	ctr.expressionAllocation = nil
+	ctr.outputAllocation = nil
 	ctr.spillAllocation = spill
 	ctr.recoveryCapacity = recoveryCapacity
 	ctr.recoveryCapacityClass = recoveryClass
@@ -280,12 +255,91 @@ func (ctr *container) clearAllocationAccount(
 		return err
 	}
 	ctr.allocationAccount = nil
+	ctr.allocationViewPool = nil
 	ctr.retainedAllocation = nil
 	ctr.expressionAllocation = nil
 	ctr.outputAllocation = nil
 	ctr.spillAllocation = nil
 	ctr.budget = nil
 	return nil
+}
+
+// allocationViews builds the accounted views of mp the bound account charges
+// through. It is a no-op when no account is bound or the views already view mp.
+func (ctr *container) allocationViews(mp *mpool.MPool) error {
+	if ctr.allocationAccount == nil || mp == nil ||
+		(ctr.allocationViewPool == mp && ctr.retainedAllocation != nil) {
+		return nil
+	}
+	expression, err := mp.WithAccount(
+		ctr.allocationAccount,
+		mpool.AllocationOwnerTop,
+		topsites.TopExpressionData,
+		mpool.AllocationCapacityClassDefault,
+	)
+	if err != nil {
+		return err
+	}
+	retained, err := mp.WithAccount(
+		ctr.allocationAccount,
+		mpool.AllocationOwnerTop,
+		topsites.TopRetainedData,
+		ctr.recoveryCapacityClass,
+	)
+	if err != nil {
+		return err
+	}
+	output, err := mp.WithAccount(
+		ctr.allocationAccount,
+		mpool.AllocationOwnerTop,
+		topsites.TopOutputData,
+		ctr.recoveryCapacityClass,
+	)
+	if err != nil {
+		return err
+	}
+	ctr.allocationViewPool = mp
+	ctr.expressionAllocation = expression
+	ctr.retainedAllocation = retained
+	ctr.outputAllocation = output
+	return nil
+}
+
+// retainedMP returns the pool retained Top state allocates from.
+func (ctr *container) retainedMP(proc *process.Process) (*mpool.MPool, error) {
+	if ctr.allocationAccount == nil {
+		return proc.Mp(), nil
+	}
+	if err := ctr.allocationViews(proc.Mp()); err != nil {
+		return nil, err
+	}
+	return ctr.retainedAllocation, nil
+}
+
+// outputMP returns the pool spill output batches allocate from.
+func (ctr *container) outputMP(proc *process.Process) (*mpool.MPool, error) {
+	if ctr.allocationAccount == nil {
+		return proc.Mp(), nil
+	}
+	if err := ctr.allocationViews(proc.Mp()); err != nil {
+		return nil, err
+	}
+	return ctr.outputAllocation, nil
+}
+
+// copyCompareRow replaces dst row dstRow of cmp's retained vector with src
+// row srcRow, allocating any growth through mp.
+func copyCompareRow(
+	cmp compare.Compare,
+	src *vector.Vector,
+	srcRow, dstRow int64,
+	mp *mpool.MPool,
+	proc *process.Process,
+) error {
+	if !mp.IsView() {
+		return cmp.Copy(1, 0, srcRow, dstRow, proc)
+	}
+	return cmp.Vector().Copy(src, dstRow, srcRow, mp)
 }
 
 func (ctr *container) installRecoveryCapacity() error {

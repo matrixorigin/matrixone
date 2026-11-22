@@ -579,9 +579,6 @@ func TestBoundedRunsPreserveTransientMetadataAtSink(t *testing.T) {
 			}
 			input.SetRowCount(4)
 			input.Vecs[1].GetGrouping().Add(1, 3)
-			require.NoError(t, input.Vecs[1].SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
-				types.RuntimeStringBinary, types.RuntimeStringText, types.RuntimeStringInherit, types.RuntimeStringBinary,
-			}, mp))
 			seen := make(map[int32]bool)
 			file := &metadataCaptureSink{visit: func(got *batch.Batch) {
 				ids := vector.MustFixedColNoTypeCheck[int32](got.Vecs[0])
@@ -590,7 +587,6 @@ func TestBoundedRunsPreserveTransientMetadataAtSink(t *testing.T) {
 					require.False(t, seen[id])
 					seen[id] = true
 					require.Equal(t, input.Vecs[1].GetGrouping().Contains(uint64(original)), got.Vecs[1].GetGrouping().Contains(uint64(row)))
-					require.Equal(t, input.Vecs[1].GetRuntimeStringDomainAt(original), got.Vecs[1].GetRuntimeStringDomainAt(row))
 				}
 			}}
 			sink := NewSinker(sortKey, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, mp, nil,

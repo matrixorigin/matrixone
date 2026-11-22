@@ -68,7 +68,7 @@ func init() {
 	testutil.SetupAutoIncrService("")
 }
 
-func TestCollectScalarSubqueriesCollate(t *testing.T) {
+func TestCollectOuterSubqueriesCollate(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		sql  string
@@ -87,7 +87,7 @@ func TestCollectScalarSubqueriesCollate(t *testing.T) {
 			defer stmts[0].Free()
 			expr := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
 			var subqueries []*tree.Subquery
-			collectScalarSubqueries(expr, &subqueries)
+			tree.CollectOuterSubqueries(expr, &subqueries)
 			got := make([]string, len(subqueries))
 			for i, subquery := range subqueries {
 				got[i] = tree.StringWithOpts(subquery, dialect.MYSQL, tree.WithSingleQuoteString())
@@ -747,10 +747,10 @@ func TestBindSetVariableResultExprUsesPreparedModeForDecimalParam(t *testing.T) 
 	selectStmt := stmt.(*tree.Select)
 	expr := selectStmt.Select.(*tree.SelectClause).Exprs[0].Expr
 
-	_, err = bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), false)
+	_, err = plan.BindSetVariableResultType(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), false)
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")
 
-	bound, err := bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), true)
+	bound, err := plan.BindSetVariableResultType(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), true)
 	require.NoError(t, err)
 	require.NotNil(t, bound)
 }
@@ -937,6 +937,24 @@ func TestGetExprValue(t *testing.T) {
 			// execution context, because the next statement in the packet
 			// reuses it for planning.
 			cvey.So(ses.txnCompileCtx.execCtx, cvey.ShouldEqual, ec)
+		}
+
+		// A SET value read back from the synthetic SELECT's result is a
+		// column of that result and never a binary literal, even when the
+		// expression is a bare hex/bit literal or a binary user variable.
+		ec.proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+		cvey.So(setUserDefinedVarWithIsBin(ses, "bin_src", []byte("A"), "set @bin_src = 0x41", true), cvey.ShouldBeNil)
+		for _, sql := range []string{
+			"set @x=0x41", "set @x=X'41'", "set @x=b'01000001'", "set @x=(0x41)",
+			"set @x=concat(0x41)", "set @x=(select 0x41)", "set @x=@bin_src",
+		} {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+			cvey.So(err, cvey.ShouldBeNil)
+			isBin := true
+			value, err := getExprValue(stmt.(*tree.SetVar).Assignments[0].Value, ses, ec, &isBin)
+			cvey.So(err, cvey.ShouldBeNil)
+			cvey.So(value, cvey.ShouldNotBeNil)
+			cvey.So(isBin, cvey.ShouldBeFalse)
 		}
 
 		// The next statement in the same packet must still be able to plan

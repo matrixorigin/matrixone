@@ -49,7 +49,7 @@ type columnChunkMeta struct {
 func marshalColumnVectorWindow(
 	vec *vector.Vector, start, end int, mp *mpool.MPool,
 ) ([]byte, error) {
-	window, err := vec.CloneWindowWithAllocation(start, end, mp, nil)
+	window, err := vec.CloneWindow(start, end, mp)
 	if err != nil {
 		return nil, err
 	}

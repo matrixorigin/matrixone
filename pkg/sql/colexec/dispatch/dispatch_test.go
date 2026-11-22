@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -73,32 +72,6 @@ func TestMarshalRemoteBatchGroupingProtocolGate(t *testing.T) {
 	defer decoded.Clean(proc.Mp())
 	require.NoError(t, decoded.UnmarshalBinaryForPipeline(data, proc.Mp()))
 	require.Equal(t, 2, decoded.Vecs[0].GetGrouping().Count())
-}
-
-func TestMarshalRemoteBatchExplicitTextProtocolGate(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	vec := vector.NewVec(types.T_varbinary.ToType())
-	require.NoError(t, vector.AppendBytes(vec, []byte("text"), false, proc.Mp()))
-	require.NoError(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringText, proc.Mp()))
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vec
-	bat.SetRowCount(1)
-	defer bat.Clean(proc.Mp())
-
-	runtime := moruntime.ServiceRuntime(proc.GetService())
-	original, hadOriginal := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if hadOriginal {
-			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-		}
-	})
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
-	_, err := marshalRemoteBatch(proc, bat, &bytes.Buffer{})
-	require.ErrorContains(t, err, "MORPCVersion23")
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
-	_, err = marshalRemoteBatch(proc, bat, &bytes.Buffer{})
-	require.NoError(t, err)
 }
 
 func (child *emptyDispatchChild) Call(*process.Process) (vm.CallResult, error) {
@@ -237,76 +210,6 @@ func (s *unknownServiceLockService) GetConfig() lockservice.Config {
 	return s.cfg
 }
 
-func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	runtime := moruntime.ServiceRuntime(proc.GetService())
-	original, hadOriginal := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if hadOriginal {
-			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-		} else {
-			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	})
-
-	newBatch := func(typ types.Type) *batch.Batch {
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(typ)
-		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("raw"), false, proc.Mp()))
-		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("text"), false, proc.Mp()))
-		bat.SetRowCount(2)
-		return bat
-	}
-
-	dynamic := newBatch(types.T_text.ToType())
-	require.NoError(t, dynamic.Vecs[0].SetIsBinaryStringAt(0, true))
-	defer dynamic.Clean(proc.Mp())
-	for _, version := range []int64{
-		defines.MORPCVersion12,
-		defines.MORPCVersion13,
-		defines.MORPCVersion14,
-		defines.MORPCVersion15,
-		defines.MORPCVersion16,
-		defines.MORPCVersion17,
-	} {
-		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		buf := bytes.NewBufferString("sentinel")
-		_, err := marshalRemoteBatch(proc, dynamic, buf)
-		require.ErrorContains(t, err, "binary-string provenance requires MORPCVersion18")
-		require.Equal(t, "sentinel", buf.String())
-	}
-
-	staticSource := newBatch(types.T_varbinary.ToType())
-	defer staticSource.Clean(proc.Mp())
-	staticRows := batch.NewWithSize(1)
-	staticRows.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
-	require.NoError(t, staticRows.Vecs[0].UnionBatch(
-		staticSource.Vecs[0], 0, staticSource.RowCount(), nil, proc.Mp()))
-	staticRows.SetRowCount(staticSource.RowCount())
-	require.False(t, staticRows.HasBinaryStringMetadata())
-	defer staticRows.Clean(proc.Mp())
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
-	buf := bytes.NewBufferString("sentinel")
-	staticEncoded, err := marshalRemoteBatch(proc, staticRows, buf)
-	require.NoError(t, err)
-	staticDecoded := batch.NewOffHeapEmpty()
-	defer staticDecoded.Clean(proc.Mp())
-	require.NoError(t, staticDecoded.UnmarshalBinaryWithMetadata(staticEncoded, proc.Mp()))
-	require.Equal(t, staticRows.RowCount(), staticDecoded.RowCount())
-
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion18)
-	buf.Reset()
-	encoded, err := marshalRemoteBatch(proc, dynamic, buf)
-	require.NoError(t, err)
-	decoded := batch.NewOffHeapEmpty()
-	defer decoded.Clean(proc.Mp())
-	require.NoError(t, decoded.UnmarshalBinaryWithMetadata(encoded, proc.Mp()))
-	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
-	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
-
-}
-
 func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -314,33 +217,18 @@ func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {
 		cfg: lockservice.Config{ServiceID: "dispatch-unknown-service"},
 	}
 
-	prepared := batch.NewWithSize(1)
-	prepared.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(prepared.Vecs[0], []byte("5"), false, proc.Mp()))
-	require.NoError(t, prepared.Vecs[0].SetIsBinaryStringAt(0, true))
-	prepared.SetRowCount(1)
-	defer prepared.Clean(proc.Mp())
-
-	require.NotPanics(t, func() {
-		require.False(t, binaryStringRemoteWireEnabled(proc))
-	})
-	buf := bytes.NewBufferString("sentinel")
-	var err error
-	require.NotPanics(t, func() {
-		_, err = marshalRemoteBatch(proc, prepared, buf)
-	})
-	require.ErrorContains(t, err, "binary-string provenance requires MORPCVersion18")
-	require.Equal(t, "sentinel", buf.String(),
-		"unknown service must reject metadata before writing the stable batch")
-
 	legacy := batch.NewWithSize(1)
 	legacy.Vecs[0] = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(legacy.Vecs[0], []byte("plain"), false, proc.Mp()))
 	legacy.SetRowCount(1)
 	defer legacy.Clean(proc.Mp())
 
-	buf.Reset()
-	encoded, err := marshalRemoteBatch(proc, legacy, buf)
+	buf := bytes.NewBufferString("sentinel")
+	var encoded []byte
+	var err error
+	require.NotPanics(t, func() {
+		encoded, err = marshalRemoteBatch(proc, legacy, buf)
+	})
 	require.NoError(t, err)
 	expected, err := legacy.MarshalBinary()
 	require.NoError(t, err)
@@ -1218,23 +1106,23 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account,
-		1,
-		102,
-		103,
-	)
+	producerMP, err := mp.WithAccount(account, 1, 102, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	src := batch.NewOffHeapWithSize(1)
-	require.NoError(t, src.SetAllocationAccount(selection))
 	src.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
-	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, producerMP))
 	src.SetRowCount(1)
+	sourceUsed := account.Snapshot().Used
 
-	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	// The spool is built on the bound account's view, as Prepare does.
+	spoolMP, err := mp.WithAccount(account, mpool.AllocationOwnerSelection,
+		dispatchAllocationSiteSpool, mpool.AllocationCapacityClassDefault)
+	require.NoError(t, err)
+	sp := pSpool.InitMyPipelineSpool(spoolMP, 1)
 	done, err := sp.SendBatch(context.Background(), 0, src, nil)
 	require.NoError(t, err)
 	require.False(t, done)
+	require.Greater(t, account.Snapshot().Used, sourceUsed)
 
 	d := &Dispatch{}
 	require.NoError(t, d.SetAllocationAccount(account))
@@ -2081,4 +1969,26 @@ func TestShuffleLocalReceiverTermination(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestDispatchSpoolChargesBoundAccount(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	d := &Dispatch{}
+	unbound, err := d.spoolMP(proc)
+	require.NoError(t, err)
+	require.Same(t, proc.Mp(), unbound)
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	require.NoError(t, d.SetAllocationAccount(account))
+	bound, err := d.spoolMP(proc)
+	require.NoError(t, err)
+	require.Same(t, account, bound.ViewAccount())
+	require.NoError(t, d.ClearAllocationAccount(account))
+	require.Zero(t, account.Seal().Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
 }

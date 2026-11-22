@@ -29,70 +29,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func TestCachedBatchPreservesStringMetadata(t *testing.T) {
-	mp := mpool.MustNewZeroNoFixed()
-	defer mpool.DeleteMPool(mp)
-
-	source := batch.NewWithSize(1)
-	// A varbinary vector carrying an explicit text domain is non-default
-	// string metadata the copy must preserve.
-	source.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
-	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
-	require.NoError(t, source.Vecs[0].SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
-	require.Equal(t, types.RuntimeStringText, source.Vecs[0].GetRuntimeStringDomainAt(0))
-	source.SetRowCount(1)
-	defer source.Clean(mp)
-
-	cache := initCachedBatch(mp, 1)
-	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
+// poisonedLease models a lender's backing that is reused once its last
+// reference goes: the release overwrites the bytes, so any read through a
+// stale alias observes garbage.
+func poisonedLease(t *testing.T, backing []byte) *vector.RefCountedBufferLease {
+	lease, err := vector.NewRefCountedBufferLease(backing, int64(cap(backing)), func() {
+		for i := range backing {
+			backing[i] = 0xFF
+		}
+	})
 	require.NoError(t, err)
-	require.Equal(t, "5", copied.Vecs[0].GetStringAt(0))
-	require.Equal(t, types.RuntimeStringText, copied.Vecs[0].GetRuntimeStringDomainAt(0))
-	cache.CacheBatch(useCache, cacheID, copied)
-	cache.free()
-
-	constant := batch.NewWithSize(1)
-	constant.Vecs[0], err = vector.NewConstBytes(types.T_text.ToType(), []byte("raw"), 2, mp)
-	require.NoError(t, err)
-	constant.Vecs[0].SetIsBinaryString(true)
-	constant.SetRowCount(2)
-	defer constant.Clean(mp)
-	constantCache := initCachedBatch(mp, 1)
-	constantCopy, useCache, cacheID, err := constantCache.GetCopiedBatch(constant)
-	require.NoError(t, err)
-	require.True(t, constantCopy.Vecs[0].GetIsBinaryStringAt(0))
-	require.True(t, constantCopy.Vecs[0].GetIsBinaryStringAt(1))
-	constantCache.CacheBatch(useCache, cacheID, constantCopy)
-	constantCache.free()
+	return lease
 }
 
 func TestSpoolCacheNeverDetachesBorrowedVectorBacking(t *testing.T) {
 	data := types.EncodeSlice([]int64{11})
-	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	lease := poisonedLease(t, data)
+	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, data)
 	require.NoError(t, err)
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, data, lease)
-	require.NoError(t, err)
-	lease.Release()
 	bat := batch.NewOffHeap([]string{"v"})
+	require.NoError(t, bat.HoldLease(lease))
+	lease.Release()
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)
 
 	buffer := initSpoolBuffer(1)
 	cacheID, _ := buffer.getCacheID()
 	buffer.putCacheID(nil, cacheID, bat)
-	require.Empty(t, buffer.bytesCache[0].buffers)
-	require.Nil(t, lease.Bytes())
+	require.Empty(t, buffer.bytesCache[0].buffers, "a borrowed backing is never cached for reuse")
+	require.Nil(t, lease.Bytes(), "reusing the batch releases what it lent")
 }
 
-func TestSpoolRetainsBorrowedPayloadWithoutCopy(t *testing.T) {
+// The spool copies an aliased producer batch: the copy must stay valid after
+// the producer's lender releases the lent backing at its next call.
+func TestSpoolCopiesBorrowedFixedPayload(t *testing.T) {
 	mp := mpool.MustNewZero()
 	data := types.EncodeSlice([]int64{11, 22})
-	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	lease := poisonedLease(t, data)
+	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 2, data)
 	require.NoError(t, err)
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 2, data, lease)
-	require.NoError(t, err)
-	lease.Release()
 	source := batch.NewOffHeap([]string{"v"})
+	require.NoError(t, source.HoldLease(lease))
+	lease.Release()
 	source.Vecs[0] = vec
 	source.SetRowCount(2)
 
@@ -100,27 +78,27 @@ func TestSpoolRetainsBorrowedPayloadWithoutCopy(t *testing.T) {
 	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
 	require.NoError(t, err)
 	require.True(t, useCache)
-	require.Equal(t,
+	require.NotEqual(t,
 		uintptr(unsafe.Pointer(unsafe.SliceData(source.Vecs[0].GetData()))),
 		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetData()))),
 	)
+	require.False(t, copied.Vecs[0].HasBorrowedBacking())
+	require.Zero(t, copied.HeldLeases())
 	source.Clean(mp)
+	require.Nil(t, lease.Bytes(), "the producer batch released its lease")
 	require.Equal(t, []int64{11, 22}, vector.MustFixedColNoTypeCheck[int64](copied.Vecs[0]))
-	require.NotNil(t, lease.Bytes())
 
 	cache.CacheBatch(useCache, cacheID, copied)
-	require.Nil(t, lease.Bytes())
 	cache.free()
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestSpoolCopiesVarlenDescriptorsAndRetainsBorrowedPayload(t *testing.T) {
+func TestSpoolCopiesBorrowedVarlenPayload(t *testing.T) {
 	mp := mpool.MustNewZero()
 	first := []byte("first payload longer than twenty three bytes")
 	second := []byte("second payload longer than twenty three bytes")
 	area := append(append([]byte(nil), first...), second...)
-	lease, err := vector.NewRefCountedBufferLease(area, int64(cap(area)), nil)
-	require.NoError(t, err)
+	lease := poisonedLease(t, area)
 
 	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 	require.NoError(t, vec.PreExtend(2, mp))
@@ -128,10 +106,11 @@ func TestSpoolCopiesVarlenDescriptorsAndRetainsBorrowedPayload(t *testing.T) {
 	descriptors := vector.MustFixedColNoTypeCheck[types.Varlena](vec)
 	descriptors[0].SetOffsetLen(0, uint32(len(first)))
 	descriptors[1].SetOffsetLen(uint32(len(first)), uint32(len(second)))
-	require.NoError(t, vec.InstallBorrowedArea(area, lease))
-	lease.Release()
+	require.NoError(t, vec.InstallBorrowedArea(area))
 
 	source := batch.NewOffHeap([]string{"v"})
+	require.NoError(t, source.HoldLease(lease))
+	lease.Release()
 	source.Vecs[0] = vec
 	source.SetRowCount(2)
 	sourceDataPointer := uintptr(unsafe.Pointer(unsafe.SliceData(vec.GetData())))
@@ -142,42 +121,20 @@ func TestSpoolCopiesVarlenDescriptorsAndRetainsBorrowedPayload(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, useCache)
 	require.NotEqual(t, sourceDataPointer,
-		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetData()))),
-		"mutable varlena descriptors must not be shared")
-	require.Equal(t, sourceAreaPointer,
+		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetData()))))
+	require.NotEqual(t, sourceAreaPointer,
 		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetArea()))),
-		"long-value payload should stay zero-copy")
+		"the borrowed area is copied at the spool boundary")
+	require.False(t, copied.Vecs[0].HasBorrowedBacking())
 
 	source.Clean(mp)
+	require.Nil(t, lease.Bytes())
 	require.Equal(t, string(first), copied.Vecs[0].GetStringAt(0))
 	require.Equal(t, string(second), copied.Vecs[0].GetStringAt(1))
-	require.NotNil(t, lease.Bytes())
 
 	cache.CacheBatch(useCache, cacheID, copied)
-	require.Nil(t, lease.Bytes())
 	cache.free()
 	require.Zero(t, mp.CurrNB())
-}
-
-func TestCachedBatchPreservesMixedBinaryStringRows(t *testing.T) {
-	mp := mpool.MustNewZeroNoFixed()
-	defer mpool.DeleteMPool(mp)
-
-	source := batch.NewWithSize(1)
-	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("raw"), false, mp))
-	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("text"), false, mp))
-	require.NoError(t, source.Vecs[0].SetIsBinaryStringAt(0, true))
-	source.SetRowCount(2)
-	defer source.Clean(mp)
-
-	cache := initCachedBatch(mp, 1)
-	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
-	require.NoError(t, err)
-	require.True(t, copied.Vecs[0].GetIsBinaryStringAt(0))
-	require.False(t, copied.Vecs[0].GetIsBinaryStringAt(1))
-	cache.CacheBatch(useCache, cacheID, copied)
-	cache.free()
 }
 
 func TestCachedBatchMovesAccountedExtraBufferOwnership(t *testing.T) {
@@ -210,43 +167,6 @@ func TestCachedBatchMovesAccountedExtraBufferOwnership(t *testing.T) {
 	require.Zero(t, account.Snapshot().Used)
 	source.Clean(mp)
 	cache.free()
-	account.Seal()
-	_, err = registry.Finalize(account)
-	require.NoError(t, err)
-}
-
-func TestCachedBatchHeterogeneousBinaryStringSingleCopy(t *testing.T) {
-	mp := mpool.MustNewZero()
-	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
-	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
-	require.NoError(t, err)
-
-	source := batch.NewOffHeapWithSize(1)
-	require.NoError(t, source.SetAllocationAccount(selection))
-	source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
-	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
-	require.NoError(t, source.Vecs[0].SetBinaryStringRowsWithMP([]bool{true, false}, mp))
-	source.SetRowCount(2)
-
-	cache := initCachedBatch(mp, 1)
-	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
-	require.NoError(t, err)
-	require.True(t, useCache)
-	require.True(t, copied.Vecs[0].GetIsBinaryStringAt(0))
-	require.False(t, copied.Vecs[0].GetIsBinaryStringAt(1))
-	// The union path owns the destination sidecar. A second metadata copy
-	// would make the account peak exceed the live source+destination usage.
-	snapshot := account.Snapshot()
-	require.Equal(t, snapshot.Used, snapshot.Peak)
-
-	cache.CacheBatch(useCache, cacheID, copied)
-	source.Clean(mp)
-	cache.free()
-	require.Zero(t, account.Snapshot().Used)
 	account.Seal()
 	_, err = registry.Finalize(account)
 	require.NoError(t, err)
@@ -323,42 +243,19 @@ func TestPipelineSpoolForceCleanupRetainsUntilReceiversDrained(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
+// The spool charges its copies through the MPool it was built with: an
+// accounted view charges every copy, and reused cached backing stays charged
+// once.
+func TestCachedBatchChargesSpoolAllocationView(t *testing.T) {
 	mp := mpool.MustNewZero()
 	registry, err := mpool.NewAllocationAccountRegistry(2, 32)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account,
-		1,
-		1,
-		2,
-	)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	equivalentSelection, err := vector.NewAllocationAccountSelection(
-		account,
-		1,
-		1,
-		2,
-	)
-	require.NoError(t, err)
-	require.NotSame(t, selection, equivalentSelection)
-	otherAccount, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-	otherSelection, err := vector.NewAllocationAccountSelection(
-		otherAccount,
-		1,
-		1,
-		2,
-	)
-	require.NoError(t, err)
-	newSource := func(
-		value string,
-		target *vector.AllocationAccountSelection,
-	) *batch.Batch {
+	newSource := func(value string) *batch.Batch {
 		source := batch.NewOffHeapWithSize(1)
-		require.NoError(t, source.SetAllocationAccount(target))
 		vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 		source.SetVector(0, vec)
 		require.NoError(t, vector.AppendBytes(
@@ -372,21 +269,18 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 		source.SetRowCount(1)
 		return source
 	}
-	firstSource := newSource("first cached allocation payload", selection)
-	secondSource := newSource("second", equivalentSelection)
+	firstSource := newSource("first cached allocation payload")
+	secondSource := newSource("second")
 	secondSource.Vecs[0].ToConst()
-	cache := initCachedBatch(mp, 1)
+	require.Zero(t, account.Snapshot().Used)
+	cache := initCachedBatch(view, 1)
 
 	first, useCache, cacheID, err := cache.GetCopiedBatch(firstSource)
 	require.NoError(t, err)
 	require.True(t, useCache)
-	require.Same(t, selection, first.AllocationAccountSelection())
-	require.Same(
-		t,
-		selection,
-		first.Vecs[0].AllocationAccountSelection(),
-	)
 	require.True(t, first.Vecs[0].GetGrouping().Contains(0))
+	require.Equal(t, "first cached allocation payload", first.Vecs[0].GetStringAt(0))
+	require.Positive(t, account.Snapshot().Used)
 	cache.CacheBatch(useCache, cacheID, first)
 	beforeReuse := account.Snapshot().Used
 
@@ -394,42 +288,26 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, useCache)
 	require.Greater(t, account.Snapshot().Used, beforeReuse)
-	require.Same(t, selection, second.AllocationAccountSelection())
-	require.Same(
-		t,
-		equivalentSelection,
-		second.Vecs[0].AllocationAccountSelection(),
-	)
 	require.True(t, second.Vecs[0].GetGrouping().Contains(0))
 	cache.CacheBatch(useCache, cacheID, second)
 	require.Equal(t, beforeReuse, account.Snapshot().Used)
 
-	otherSource := newSource("other allocation account", otherSelection)
-	firstAccountBeforeOther := account.Snapshot().Used
-	otherBeforeCopy := otherAccount.Snapshot().Used
-	other, useCache, cacheID, err := cache.GetCopiedBatch(otherSource)
+	// A spool on the base pool leaves the account untouched.
+	plain := initCachedBatch(mp, 1)
+	other, useCache, cacheID, err := plain.GetCopiedBatch(firstSource)
 	require.NoError(t, err)
-	require.Equal(t, firstAccountBeforeOther, account.Snapshot().Used)
-	require.Greater(t, otherAccount.Snapshot().Used, otherBeforeCopy)
-	require.Same(
-		t,
-		otherSelection,
-		other.Vecs[0].AllocationAccountSelection(),
-	)
-	cache.CacheBatch(useCache, cacheID, other)
+	require.Equal(t, beforeReuse, account.Snapshot().Used)
+	plain.CacheBatch(useCache, cacheID, other)
 
 	firstSource.Clean(mp)
 	secondSource.Clean(mp)
-	otherSource.Clean(mp)
 	cache.free()
+	plain.free()
 	require.Zero(t, account.Snapshot().Used)
-	require.Zero(t, otherAccount.Snapshot().Used)
 	require.Zero(t, registry.LiveAllocationMetadata())
+	require.Zero(t, mp.CurrNB())
 	account.Seal()
-	otherAccount.Seal()
 	_, err = registry.Finalize(account)
-	require.NoError(t, err)
-	_, err = registry.Finalize(otherAccount)
 	require.NoError(t, err)
 }
 
@@ -439,25 +317,19 @@ func TestCachedBatchAllocationFailureReturnsCacheOwnership(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(64)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account,
-		1,
-		1,
-		2,
-	)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	source := batch.NewOffHeapWithSize(1)
-	require.NoError(t, source.SetAllocationAccount(selection))
 	source.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
 	require.NoError(t, vector.AppendFixedList(
 		source.Vecs[0],
 		[]int64{1, 2, 3, 4, 5, 6, 7, 8},
 		nil,
-		mp,
+		view,
 	))
 	source.SetRowCount(8)
 	require.Equal(t, uint64(64), account.Snapshot().Used)
-	cache := initCachedBatch(mp, 1)
+	cache := initCachedBatch(view, 1)
 
 	_, _, _, err = cache.GetCopiedBatch(source)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)

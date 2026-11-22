@@ -16,9 +16,10 @@ package compile
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"testing"
 )
 
 func newPlanTestProcess(t testing.TB) *process.Process {

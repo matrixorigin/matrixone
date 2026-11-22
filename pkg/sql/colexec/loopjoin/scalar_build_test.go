@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -76,16 +77,30 @@ func TestLoopJoinScalarBuildDoesNotPublishOnFailure(t *testing.T) {
 			join.ctr.setProbeBatch(input)
 			require.NoError(t, join.resetResultBat())
 			if !cancel {
+				// Size the result account for exactly one column so the second
+				// column is refused after the first column has copied.
+				measureRegistry, err := mpool.NewAllocationAccountRegistry(1, 16)
+				require.NoError(t, err)
+				measureAccount, err := measureRegistry.Open(1 << 30)
+				require.NoError(t, err)
+				measureMP, err := proc.Mp().WithAccount(measureAccount,
+					mpool.AllocationOwnerHashBuild, loopJoinAllocationSiteResultData,
+					mpool.AllocationCapacityClassDefault)
+				require.NoError(t, err)
+				measured := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+				require.NoError(t, measured.UnionBatch(input.Vecs[0], 0, input.RowCount(), nil, measureMP))
+				oneColumn := measureAccount.Snapshot().Used
+				require.Positive(t, oneColumn)
+				measured.Free(proc.Mp())
+				require.Zero(t, measureAccount.Snapshot().Used)
+
 				registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 				require.NoError(t, err)
-				account, err := registry.Open(1)
+				account, err := registry.Open(oneColumn)
 				require.NoError(t, err)
-				selection, err := vector.NewAllocationAccountSelection(account,
-					mpool.AllocationOwnerHashBuild, loopJoinAllocationSiteResultData,
-					loopJoinAllocationSiteResultArea)
+				join.resultAllocation, err = mpool.NewAccountBinding(account,
+					mpool.AllocationOwnerHashBuild, loopJoinAllocationSiteResultData)
 				require.NoError(t, err)
-				// Refuse the second column after the first column has copied.
-				require.NoError(t, join.ctr.resBat.Vecs[1].SetAllocationAccount(selection))
 				t.Cleanup(func() { join.Reset(proc, true, nil); require.Zero(t, account.Snapshot().Used) })
 			} else {
 				ctx, stop := context.WithCancel(proc.Ctx)

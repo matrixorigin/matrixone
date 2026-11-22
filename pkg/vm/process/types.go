@@ -531,7 +531,6 @@ type BaseProcess struct {
 	resolveVariableStringDomainFunc func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
 	prepareParams                   *vector.Vector
 	prepareParamsIsBin              []bool
-	prepareParamsBinaryString       []bool
 	prepareParamsOwned              bool
 	// typedPrepareParams carries each prepared parameter as one row of its
 	// source SQL type (column i is parameter i). It is nil when the caller
@@ -881,10 +880,6 @@ func (proc *Process) getPrepareParamMeta(i, section int) bool {
 		proc.Base.prepareParamsIsBin[offset]
 }
 
-func (proc *Process) GetPrepareParamIsBinaryString(i int) bool {
-	return i >= 0 && i < len(proc.Base.prepareParamsBinaryString) && proc.Base.prepareParamsBinaryString[i]
-}
-
 // SetIncrStatementDisabled marks this process (and every child process
 // sharing its BaseProcess) as running internal SQL that must not advance the
 // workspace snapshot write offset. See BaseProcess.incrStatementDisabled.
@@ -916,14 +911,9 @@ func (proc *Process) GetResolveVariableTypeFunc() func(string, bool, bool) (plan
 	return proc.Base.resolveVariableTypeFunc
 }
 
-func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
-	proc.Base.resolveVariableIsBinFunc = f
-}
-
-func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
-	return proc.Base.resolveVariableIsBinFunc
-}
-
+// SetResolveVariableStringDomainFunc installs the session lookup for a user
+// variable's assignment-time string domain. SQL EXECUTE uses it to give a
+// parameter its static source type; vectors carry no string domain.
 func (proc *Process) SetResolveVariableStringDomainFunc(
 	f func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error),
 ) {
@@ -936,29 +926,12 @@ func (proc *Process) GetResolveVariableStringDomainFunc() func(
 	return proc.Base.resolveVariableStringDomainFunc
 }
 
-// SetResolveVariableBinaryStringFunc is a compatibility adapter for callers
-// that still consume a binary boolean instead of the three-state domain.
-func (proc *Process) SetResolveVariableBinaryStringFunc(
-	f func(varName string, isSystemVar, isGlobalVar bool) (bool, error),
-) {
-	proc.SetResolveVariableStringDomainFunc(func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error) {
-		binary, err := f(varName, isSystemVar, isGlobalVar)
-		if err != nil || !binary {
-			return types.RuntimeStringInherit, err
-		}
-		return types.RuntimeStringBinary, nil
-	})
+func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
+	proc.Base.resolveVariableIsBinFunc = f
 }
 
-func (proc *Process) GetResolveVariableBinaryStringFunc() func(string, bool, bool) (bool, error) {
-	f := proc.GetResolveVariableStringDomainFunc()
-	if f == nil {
-		return nil
-	}
-	return func(name string, system, global bool) (bool, error) {
-		domain, err := f(name, system, global)
-		return domain == types.RuntimeStringBinary, err
-	}
+func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
+	return proc.Base.resolveVariableIsBinFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

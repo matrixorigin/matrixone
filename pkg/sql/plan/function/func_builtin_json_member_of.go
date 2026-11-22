@@ -50,7 +50,7 @@ func jsonMemberOfRightHasBinaryDomain(typ types.Type) bool {
 	}
 }
 
-func jsonMemberOfRightIsBinary(parameter *vector.Vector, row int) bool {
+func jsonMemberOfRightIsBinary(parameter *vector.Vector, isBin bool, row int) bool {
 	if parameter == nil || parameter.IsNull(uint64(row)) {
 		return false
 	}
@@ -58,7 +58,7 @@ func jsonMemberOfRightIsBinary(parameter *vector.Vector, row int) bool {
 	if jsonMemberOfRightHasBinaryDomain(typ) {
 		return true
 	}
-	return parameter.GetIsBinaryStringAt(row)
+	return isBinaryStringVector(parameter, isBin)
 }
 
 // jsonMemberOfRightHasInvalidRuntimeType preserves the SQL domain of a direct
@@ -134,10 +134,12 @@ func jsonMemberOfCheckFn(_ []overload, inputs []types.Type) checkResult {
 
 type jsonMemberOfValueOperand struct {
 	parameter *vector.Vector
-	cached    bool
-	document  bytejson.ByteJson
-	isNull    bool
-	err       error
+	// isBin is parameter's binary-literal flag.
+	isBin    bool
+	cached   bool
+	document bytejson.ByteJson
+	isNull   bool
+	err      error
 }
 
 func (operand *jsonMemberOfValueOperand) documentAt(row uint64, proc *process.Process) (bytejson.ByteJson, bool, error) {
@@ -169,7 +171,7 @@ func (operand *jsonMemberOfValueOperand) documentAt(row uint64, proc *process.Pr
 			ctx,
 			operand.parameter.GetBytesAt(int(row)),
 			operand.parameter.GetType().Oid,
-			operand.parameter.GetIsBinaryStringAt(int(row)),
+			isBinaryStringVector(operand.parameter, operand.isBin),
 			jsonSessionProtocolVersion(proc),
 		)
 	} else if operand.parameter.GetType().Oid == types.T_year {
@@ -186,7 +188,7 @@ func (operand *jsonMemberOfValueOperand) documentAt(row uint64, proc *process.Pr
 		}
 		err = geoErr
 	} else {
-		elem, err = (&opBuiltInJsonArray{}).convertToAny(proc, operand.parameter, int(row), jsonSessionProtocolVersion(proc))
+		elem, err = (&opBuiltInJsonArray{}).convertToAny(proc, operand.parameter, operand.isBin, int(row), jsonSessionProtocolVersion(proc))
 	}
 	if err == nil {
 		operand.document, err = bytejson.CreateByteJSON(elem)
@@ -220,7 +222,7 @@ func jsonMemberOf(
 	}
 
 	rs.UseOptFunctionParamFrame(2)
-	left := jsonMemberOfValueOperand{parameter: parameters[0]}
+	left := jsonMemberOfValueOperand{parameter: parameters[0], isBin: result.ArgumentIsBin(0)}
 	right := jsonOverlapOperand{
 		parameter:    parameters[1],
 		functionName: jsonMemberOfFunctionName,
@@ -270,7 +272,7 @@ func jsonMemberOf(
 			}
 			continue
 		}
-		if jsonMemberOfRightIsBinary(parameters[1], int(row)) {
+		if jsonMemberOfRightIsBinary(parameters[1], result.ArgumentIsBin(1), int(row)) {
 			return jsonMemberOfInvalidRightType(proc, true)
 		}
 		if jsonMemberOfRightHasInvalidRuntimeType(parameters[1], int(row)) {

@@ -226,11 +226,11 @@ func TestByteSlicesOverlapBoundaries(t *testing.T) {
 }
 
 func TestShuffleWithBufStringMetadata(t *testing.T) {
-	for _, metadata := range []string{"uniform", "domain"} {
+	for _, typ := range []types.Type{types.T_text.ToType(), types.T_varbinary.ToType()} {
 		for _, identity := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/identity=%v", metadata, identity), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/identity=%v", typ.Oid, identity), func(t *testing.T) {
 				mp := mpool.MustNewZero()
-				v := NewVec(types.T_text.ToType())
+				v := NewVec(typ)
 				t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
 				values := [][]byte{
 					[]byte("first payload longer than the inline limit"),
@@ -240,15 +240,6 @@ func TestShuffleWithBufStringMetadata(t *testing.T) {
 				require.NoError(t, AppendBytesList(v, values, nil, mp))
 				v.SetNull(1)
 				v.GetGrouping().Add(2)
-				v.areaDisjoint = true
-				require.NoError(t, v.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
-				if metadata == "domain" {
-					require.NoError(t, v.SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, mp))
-				}
-				var domains [3]types.RuntimeStringDomain
-				for row := range values {
-					domains[row] = v.GetRuntimeStringDomainAt(row)
-				}
 				sels := []int64{2, 0, 1}
 				if identity {
 					sels = []int64{0, 1, 2}
@@ -260,9 +251,7 @@ func TestShuffleWithBufStringMetadata(t *testing.T) {
 					require.Equal(t, values[source], v.GetBytesAt(row))
 					require.Equal(t, source == 1, v.IsNull(uint64(row)))
 					require.Equal(t, source == 2, v.GetGrouping().Contains(uint64(row)))
-					require.Equal(t, domains[source], v.GetRuntimeStringDomainAt(row))
 				}
-				require.False(t, v.areaDisjoint)
 				if identity {
 					require.True(t, v.GetSorted())
 				}

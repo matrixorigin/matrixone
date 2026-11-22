@@ -1037,8 +1037,8 @@ func BitCountDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
-	if !perRow && uniformBinary {
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
+	if uniformBinary {
 		return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
 	}
 	param := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -1059,7 +1059,7 @@ func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResul
 		}
 		var count uint64
 		var err error
-		binary := binaryStringAt(ivecs[0], int(row), uniformBinary, perRow)
+		binary := uniformBinary
 		if binary {
 			count = bitCountFromBinaryString(value)
 		} else {
@@ -1323,7 +1323,7 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			// ParseDatetime reports only invalid-input errors. Malformed strings
 			// share the input-NULL path without consulting the zero-date policy.
 			parsed, err = types.ParseDatetime(functionUtil.QuickBytesToStr(value), 6)
-			if err != nil && !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+			if err != nil && !result.ArgumentIsBin(0) && isTemporalTextSource(ivecs[0].GetType().Oid) {
 				appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
 			}
 			null = err != nil
@@ -1522,7 +1522,7 @@ func Empty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 
 func JsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	single := func(str string, row int) ([]byte, error) {
-		if ivecs[0].GetIsBinaryStringAt(row) {
+		if isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0)) {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_quote")
 		}
 		if !utf8.ValidString(str) {
@@ -1593,7 +1593,7 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		// NULL and masked rows.  Runtime binary provenance can vary within a
 		// VARCHAR vector, and a selected text row can override a static binary
 		// result type.
-		if ivecs[0].GetIsBinaryStringAt(row) {
+		if isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0)) {
 			return "", moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_unquote")
 		}
 		if ivecs[0].GetType().Oid.IsMySQLString() {
@@ -1638,7 +1638,7 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			continue
 		}
 		if !utf8.Valid(value) {
-			isBinary := ivecs[0].GetIsBinaryStringAt(int(row))
+			isBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 			if isBinary {
 				return moerr.NewCannotConvertString(proc.Ctx, string(value), "binary", "utf8mb4")
 			}
@@ -6800,7 +6800,7 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		sels[j] = int64(j)
 	}
 
-	err := toVec.Union(fromVec, sels, proc.GetMPool())
+	err := toVec.Union(fromVec, sels, resultMPool(result, proc))
 	return err
 }
 
@@ -6810,7 +6810,7 @@ func builtInNameConst(parameters []*vector.Vector, result vector.FunctionResultW
 	toVec.Reset(*toVec.GetType())
 
 	for i := 0; i < length; i++ {
-		if err := toVec.UnionOne(fromVec, int64(i), proc.Mp()); err != nil {
+		if err := toVec.UnionOne(fromVec, int64(i), resultMPool(result, proc)); err != nil {
 			return err
 		}
 	}
@@ -9769,7 +9769,7 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 			data, null := source.GetStrValue(j)
 			if !null {
 				decodedSize := base64.StdEncoding.DecodedLen(len(data))
-				_ = rs.GetResultVector().PreExtendWithArea(length, decodedSize*length, proc.Mp())
+				_ = rs.GetResultVector().PreExtendWithArea(length, decodedSize*length, resultMPool(result, proc))
 				break
 			}
 		}
@@ -10162,7 +10162,7 @@ func Rtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	input := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -10177,7 +10177,7 @@ func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			}
 			continue
 		}
-		if binaryStringAt(ivecs[0], int(row), uniformBinary, perRow) {
+		if uniformBinary {
 			if err := rs.AppendBytesWithWriter(len(value), func(dst []byte) error {
 				for i := range value {
 					dst[len(value)-1-i] = value[i]
@@ -10192,7 +10192,7 @@ func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func reverse(str string) string {
@@ -10248,7 +10248,7 @@ func OctTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 // MySQL converts a string to its integer prefix before formatting it in base 8.
 // The empty string is NULL; a non-empty string without a numeric prefix is 0.
 func OctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	isBinaryLiteral := ivecs[0].GetIsBin()
+	isBinaryLiteral := result.ArgumentIsBin(0)
 	resultNulls := result.GetResultVector().GetNulls()
 	err := opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, func(v []byte, row int) (string, error) {
 		if len(v) == 0 {
@@ -10704,7 +10704,7 @@ func randomBytesTextLength(
 	return parseMySQLIntegerPrefix(value), nil
 }
 
-func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (randomBytesLengthGetter, error) {
+func makeRandomBytesLengthGetter(param *vector.Vector, paramIsBin bool, proc *process.Process) (randomBytesLengthGetter, error) {
 	if param == nil {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "function random_bytes", "nil argument")
 	}
@@ -10858,27 +10858,14 @@ func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (r
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary:
 		p := vector.GenerateFunctionStrParameter(param)
-		staticBinary := param.GetIsBin() ||
+		staticBinary := paramIsBin ||
 			types.StaticStringDomain(*param.GetType()) == types.StringDomainBinary
 		return func(i uint64) (int64, bool, error) {
 			value, null := p.GetStrValue(i)
 			if null {
 				return 0, true, nil
 			}
-			isBinary := staticBinary
-			switch param.GetRuntimeStringDomainAt(int(i)) {
-			case types.RuntimeStringText:
-				// A selected CASE/IF/COALESCE value can explicitly restore
-				// character semantics even when the common vector type is
-				// VARBINARY/BLOB.  The row-level override must win over the
-				// static type and any conservative vector summary.
-				isBinary = false
-			case types.RuntimeStringBinary:
-				isBinary = true
-			default:
-				isBinary = isBinary || param.GetIsBinaryStringAt(int(i))
-			}
-			if isBinary {
+			if staticBinary {
 				if len(value) == 0 {
 					return 0, false, moerr.NewInvalidArg(proc.Ctx, "cast to int", value)
 				}
@@ -10918,7 +10905,7 @@ func randomBytesWithReader(
 		return moerr.NewInvalidArg(proc.Ctx, "function random_bytes", fmt.Sprintf("expected 1 argument, got %d", len(parameters)))
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	getLength, err := makeRandomBytesLengthGetter(parameters[0], proc)
+	getLength, err := makeRandomBytesLengthGetter(parameters[0], result.ArgumentIsBin(0), proc)
 	if err != nil {
 		return err
 	}

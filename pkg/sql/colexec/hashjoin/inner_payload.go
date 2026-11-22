@@ -25,6 +25,10 @@ import (
 // resolved tuples across small duplicate groups instead of projecting each
 // group/row separately. No lookup result or selection escapes its JoinMap.
 func (ctr *container) probeInnerPayload(join *HashJoin, proc *process.Process, result *vm.CallResult) error {
+	resMP, err := join.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	rows := ctr.leftBat.RowCount()
 	outputLimit := ctr.maxOutputRows()
 	outputRows := 0
@@ -47,7 +51,7 @@ func (ctr *container) probeInnerPayload(join *HashJoin, proc *process.Process, r
 					repeats := min(len(ctr.sels), outputLimit-outputRows-count)
 					for column, position := range join.ResultCols {
 						if position.Rel == 0 && repeatProbeArea(ctr.leftBat.Vecs[position.Pos]) {
-							if err := ctr.resBat.Vecs[column].UnionMulti(ctr.leftBat.Vecs[position.Pos], int64(ctr.lastIdx-1), repeats, proc.Mp()); err != nil {
+							if err := ctr.resBat.Vecs[column].UnionMulti(ctr.leftBat.Vecs[position.Pos], int64(ctr.lastIdx-1), repeats, resMP); err != nil {
 								return err
 							}
 						}
@@ -106,7 +110,7 @@ func (ctr *container) probeInnerPayload(join *HashJoin, proc *process.Process, r
 						if repeatPayload && repeatProbeArea(ctr.leftBat.Vecs[position.Pos]) {
 							continue
 						}
-						if err := ctr.resBat.Vecs[column].Union(ctr.leftBat.Vecs[position.Pos], left, proc.Mp()); err != nil {
+						if err := ctr.resBat.Vecs[column].Union(ctr.leftBat.Vecs[position.Pos], left, resMP); err != nil {
 							return err
 						}
 					}
@@ -132,7 +136,5 @@ func (ctr *container) probeInnerPayload(join *HashJoin, proc *process.Process, r
 }
 
 func repeatProbeArea(source *vector.Vector) bool {
-	// Dictionary UnionMulti uses its existing selected scalar copier, so keep
-	// those sources on the selected bulk path rather than adding row calls.
-	return !source.IsDictionary() && source.GetType().IsVarlen() && len(source.GetArea()) != 0
+	return source.GetType().IsVarlen() && len(source.GetArea()) != 0
 }

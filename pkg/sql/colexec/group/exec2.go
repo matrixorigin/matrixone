@@ -109,6 +109,9 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		if err != nil {
 			return err
 		}
+		if err = group.ctr.bindAllocationViews(proc); err != nil {
+			return err
+		}
 		if err = group.ctr.installRecoveryCapacity(); err != nil {
 			return err
 		}
@@ -1064,7 +1067,7 @@ func (ctr *container) preflightBuildChunk(
 				return mpool.ErrAllocationAccountInvariant
 			}
 			preflight, err := destination.PreExtendSelectedBatchValidated(
-				vs[i], offset, rows, flags, targetRows, ctr.mp,
+				vs[i], offset, rows, flags, targetRows, ctr.groupByMP(),
 			)
 			if err != nil {
 				return err
@@ -1203,14 +1206,14 @@ func (ctr *container) createNewGroupByBatch(
 	return ctr.createNewGroupByBatchWithAllocation(
 		vs,
 		size,
-		ctr.groupByAllocation,
+		ctr.groupByMP(),
 	)
 }
 
 func (ctr *container) createNewGroupByBatchWithAllocation(
 	vs []*vector.Vector,
 	size int,
-	allocation *vector.AllocationAccountSelection,
+	mp *mpool.MPool,
 ) (*batch.Batch, error) {
 	// initialize the groupByTypes.   this is again very bad design.
 	// types should be resolved at plan time.
@@ -1224,11 +1227,7 @@ func (ctr *container) createNewGroupByBatchWithAllocation(
 	for i, typ := range ctr.groupByTypes {
 		b.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 	}
-	if err := b.SetAllocationAccount(allocation); err != nil {
-		b.Clean(ctr.mp)
-		return nil, err
-	}
-	if err := b.PreExtend(ctr.mp, size); err != nil {
+	if err := b.PreExtend(mp, size); err != nil {
 		b.Clean(ctr.mp)
 		return nil, err
 	}
@@ -1284,7 +1283,7 @@ func (ctr *container) appendGroupByBatch(
 			preflight = &preflights[i]
 		}
 		if err := vec.UnionBatchPreflighted(
-			vs[i], int64(offset), len(thisTime), thisTime, preflight, ctr.mp); err != nil {
+			vs[i], int64(offset), len(thisTime), thisTime, preflight, ctr.groupByMP()); err != nil {
 			return err
 		}
 	}
@@ -1427,16 +1426,6 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 			!canonicalDistinctKeyWireEnabled(proc) {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
 				"canonical DISTINCT argument keys require MORPCVersion79")
-		}
-		if vec := aggResultVectorForChunk(ag, curr); vec != nil &&
-			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
-			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
-				"aggregate binary-string metadata requires MORPCVersion18")
-		}
-		if vec := aggResultVectorForChunk(ag, curr); vec != nil &&
-			vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
-			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
-				"aggregate explicit-text metadata requires MORPCVersion23")
 		}
 		if err := ag.SaveIntermediateResultOfChunk(curr, writer); err != nil {
 			return vm.CancelResult, false, err

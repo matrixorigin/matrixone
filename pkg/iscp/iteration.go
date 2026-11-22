@@ -155,7 +155,6 @@ func ExecuteIterationWithRuntime(
 					iterCtx.jobIDs,
 					iterCtx.lsn,
 					statuses,
-					types.MaxTs(),
 					errMsg,
 					preLSN,
 				)
@@ -166,12 +165,16 @@ func ExecuteIterationWithRuntime(
 	}
 	if needInit {
 		completedStatus := atomicInitCompletionStatus(prevStatus[0], iterCtx.lsn[0])
+		retirement := &initSQLRetirement{
+			job: NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0]),
+		}
 		err = runInitSQLWithRuntime(
 			ctx,
 			runtime,
 			iterCtx,
 			func(initCtx context.Context) error {
 				ctxWithAccount := context.WithValue(initCtx, defines.TenantIDKey{}, iterCtx.accountID)
+				ctxWithAccount = context.WithValue(ctxWithAccount, initSQLRetirementKey{}, retirement)
 				return processInitSQL(
 					ctxWithAccount, cnUUID, cnEngine, cnTxnClient,
 					jobSpecs[0].ConsumerInfo.InitSQL,
@@ -181,7 +184,7 @@ func ExecuteIterationWithRuntime(
 					func(completeCtx context.Context, txn client.TxnOperator) error {
 						completeCtx = context.WithValue(
 							completeCtx, defines.TenantIDKey{}, catalog.System_Account)
-						return FlushStatus(
+						return flushStatus(
 							completeCtx,
 							cnUUID,
 							txn,
@@ -190,9 +193,10 @@ func ExecuteIterationWithRuntime(
 							iterCtx.jobNames[0],
 							iterCtx.jobIDs[0],
 							&completedStatus,
-							iterCtx.fromTS,
+							nil,
 							ISCPJobState_Completed,
 							preLSN[0],
+							!retirement.retired.Load(),
 						)
 					},
 					iterCtx.tableID,
@@ -215,7 +219,6 @@ func ExecuteIterationWithRuntime(
 					iterCtx.jobIDs,
 					iterCtx.lsn,
 					statuses,
-					types.MaxTs(),
 					err.Error(),
 					preLSN,
 				)
@@ -248,6 +251,37 @@ func ExecuteIterationWithRuntime(
 	if iterCtx.fromTS.IsEmpty() {
 		iterCtx.toTS = types.TimestampToTS(txnOp.SnapshotTS())
 	}
+	collectCtx := collectChangesCtxForJobs(ctxWithoutTimeout, jobSpecs, prevStatus, committedWatermark)
+	if !iterCtx.fromTS.IsEmpty() {
+		var targetRows int
+		targetRows, err = iterCtx.rowBudget(jobSpecs)
+		if err != nil {
+			return
+		}
+		if targetRows > 0 {
+			var observedRows int
+			observedRows, err = selectRowBudgetForIteration(
+				collectChangesCtxForJobs(ctx, jobSpecs, prevStatus, committedWatermark),
+				iterCtx, targetRows,
+				func(probeCtx context.Context, from, to types.TS, target int) (int, error) {
+					return probeChangeRows(
+						probeCtx, from, to, target, mp,
+						func(readCtx context.Context, readFrom, readTo types.TS) (engine.ChangesHandle, error) {
+							return CollectChanges(readCtx, rel, readFrom, readTo, mp)
+						},
+					)
+				},
+			)
+			if err != nil {
+				return
+			}
+			if observedRows > targetRows {
+				// Avoid a quick batch in each reader. A combined partition
+				// reader may still assemble the entire commit before delivery.
+				collectCtx = engine.WithCollectChangesDisableQuick(collectCtx)
+			}
+		}
+	}
 
 	startAt := types.BuildTS(time.Now().UnixNano(), 0)
 	for i := range iterCtx.jobNames {
@@ -259,7 +293,7 @@ func ExecuteIterationWithRuntime(
 		statuses[i].StartAt = startAt
 	}
 	changes, err := CollectChanges(
-		collectChangesCtxForJobs(ctxWithoutTimeout, jobSpecs, prevStatus, committedWatermark),
+		collectCtx,
 		rel, iterCtx.fromTS, iterCtx.toTS, mp,
 	)
 	if err != nil {
@@ -323,7 +357,7 @@ func ExecuteIterationWithRuntime(
 		iterCtx.jobIDs,
 		iterCtx.lsn,
 		statuses,
-		iterCtx.fromTS,
+		nil,
 		ISCPJobState_Running,
 		preLSN,
 	)
@@ -348,17 +382,16 @@ func ExecuteIterationWithRuntime(
 	)
 	var finalErr error
 	for i, status := range statuses {
-		if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])) {
-			continue
-		}
+		// Consumer handles have drained. The terminal CAS can wait for
+		// the retiring DDL: rollback allows settlement, commit rejects it.
 		if status.ErrorCode != 0 || typ == ISCPDataType_Snapshot {
 			state := ISCPJobState_Completed
 			if status.PermanentlyFailed() {
 				state = ISCPJobState_Error
 			}
-			watermark := status.From
+			var watermark *types.TS
 			if status.ErrorCode == 0 {
-				watermark = status.To
+				watermark = &status.To
 			}
 			err = flushFinalJobStatusOnIterationState(
 				ctx,
@@ -513,10 +546,17 @@ func runISCPTaskIterationConsumers(
 	changeHandelWg.Add(1)
 	go func() {
 		var dataLength int
+		var pendingInsert, pendingDelete *AtomicBatch
+		defer changeHandelWg.Done()
 		defer func() {
+			if pendingInsert != nil {
+				pendingInsert.Close()
+			}
+			if pendingDelete != nil {
+				pendingDelete.Close()
+			}
 			logutil.Infof("ISCP-Task iteration %s, data length %d", iterCtx.String(), dataLength)
 		}()
-		defer changeHandelWg.Done()
 		for {
 			select {
 			case <-ctxWithCancel.Done():
@@ -524,64 +564,84 @@ func runISCPTaskIterationConsumers(
 			default:
 			}
 			var data *ISCPData
-			insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
-			if insertData != nil {
-				dataLength += insertData.RowCount()
-			}
-			// injection is for ut
-			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
-				err = moerr.NewInternalErrorNoCtx(msg)
-				objectio.WaitForISCPExecutorFault(ctxWithCancel, msg)
-			}
-			if err != nil {
-				jobNames := ""
-				for _, jobName := range iterCtx.jobNames {
-					jobNames = fmt.Sprintf("%s%s, ", jobNames, jobName)
+			// Keep current source batches in this iteration's scope. Appending a
+			// batch transfers ownership to an AtomicBatch; every other path
+			// releases it before the next source read.
+			func() {
+				insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
+				defer func() {
+					if insertData != nil {
+						insertData.Clean(mp)
+					}
+					if deleteData != nil {
+						deleteData.Clean(mp)
+					}
+				}()
+				if insertData != nil {
+					dataLength += insertData.RowCount()
 				}
-				logutil.Error(
-					"ISCP-Task sink iteration failed",
-					zap.Uint32("tenantID", iterCtx.accountID),
-					zap.Uint64("tableID", iterCtx.tableID),
-					zap.String("jobName", jobNames),
-					zap.Error(err),
-					zap.String("from", iterCtx.fromTS.ToString()),
-					zap.String("to", iterCtx.toTS.ToString()),
-				)
-				data = NewISCPData(true, nil, nil, err)
-			} else {
-				// both nil denote no more data (end of this tail)
-				if insertData == nil && deleteData == nil {
+				// injection is for ut
+				if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
+					err = moerr.NewInternalErrorNoCtx(msg)
+					objectio.WaitForISCPExecutorFault(ctxWithCancel, msg)
+				}
+				if err != nil {
+					jobNames := ""
+					for _, jobName := range iterCtx.jobNames {
+						jobNames = fmt.Sprintf("%s%s, ", jobNames, jobName)
+					}
+					logutil.Error(
+						"ISCP-Task sink iteration failed",
+						zap.Uint32("tenantID", iterCtx.accountID),
+						zap.Uint64("tableID", iterCtx.tableID),
+						zap.String("jobName", jobNames),
+						zap.Error(err),
+						zap.String("from", iterCtx.fromTS.ToString()),
+						zap.String("to", iterCtx.toTS.ToString()),
+					)
+					data = NewISCPData(true, nil, nil, err)
+				} else if insertData == nil && deleteData == nil {
+					if pendingInsert != nil || currentHint == engine.ChangesHandle_Tail_wip {
+						err = moerr.NewInternalErrorNoCtx("incomplete ISCP tail change group")
+					}
 					data = NewISCPData(true, nil, nil, err)
 				} else {
-					var insertAtmBatch *AtomicBatch
-					var deleteAtmBatch *AtomicBatch
 					switch currentHint {
 					case engine.ChangesHandle_Snapshot:
-						if typ != ISCPDataType_Snapshot {
-							err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid type %d, should be snapshot", typ))
-							data = NewISCPData(true, nil, nil, err)
-						} else {
-							insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-							insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-							data = NewISCPData(false, insertAtmBatch, nil, nil)
+						if typ != ISCPDataType_Snapshot || pendingInsert != nil || deleteData != nil {
+							err = moerr.NewInternalErrorNoCtx("invalid ISCP snapshot change group")
+							break
 						}
-					case engine.ChangesHandle_Tail_wip:
-						err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid hint %d", currentHint))
-						data = NewISCPData(true, nil, nil, err)
-					case engine.ChangesHandle_Tail_done:
+						insertAtmBatch := NewAtomicBatch(mp)
+						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+						insertData = nil
+						data = NewISCPData(false, insertAtmBatch, nil, nil)
+					case engine.ChangesHandle_Tail_wip, engine.ChangesHandle_Tail_done:
 						if typ != ISCPDataType_Tail {
-							err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid type %d, should be tail", typ))
-							data = NewISCPData(true, nil, nil, err)
-						} else {
-							insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-							deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-							insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-							deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
-							data = NewISCPData(false, insertAtmBatch, deleteAtmBatch, nil)
+							err = moerr.NewInternalErrorNoCtx("invalid ISCP tail change group")
+							break
 						}
-
+						pendingInsert = allocateAtomicBatchIfNeed(pendingInsert)
+						pendingDelete = allocateAtomicBatchIfNeed(pendingDelete)
+						pendingInsert.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+						insertData = nil
+						pendingDelete.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
+						deleteData = nil
+						if currentHint == engine.ChangesHandle_Tail_wip {
+							return
+						}
+						data = NewISCPData(false, pendingInsert, pendingDelete, nil)
+						pendingInsert, pendingDelete = nil, nil
+					default:
+						err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid hint %d", currentHint))
+					}
+					if err != nil {
+						data = NewISCPData(true, nil, nil, err)
 					}
 				}
+			}()
+			if data == nil {
+				continue
 			}
 
 			noMoreData := data.noMoreData
@@ -636,7 +696,9 @@ func runISCPTaskIterationConsumers(
 					dataRetrievers[i].Cancel,
 				)
 				if !ok {
-					dataRetrievers[i].Cancel(moerr.NewInternalErrorNoCtx("iscp job consumer canceled"))
+					err := moerr.NewInternalErrorNoCtx("iscp job consumer canceled")
+					statuses[i].SetError(err)
+					dataRetrievers[i].Cancel(err)
 					return
 				}
 				if objectio.WaitInjected(objectio.FJ_ISCPCancelAfterRegisterConsumer) {
@@ -649,6 +711,8 @@ func runISCPTaskIterationConsumers(
 			}
 			err := consumerEntry.Consume(consumerCtx, dataRetrievers[i])
 			if err != nil {
+				statuses[i].SetError(err)
+				dataRetrievers[i].SetError(err)
 				if runtime != nil && runtime.IsJobFenced(key) {
 					return
 				}
@@ -661,8 +725,6 @@ func runISCPTaskIterationConsumers(
 					zap.String("from", iterCtx.fromTS.ToString()),
 					zap.String("to", iterCtx.toTS.ToString()),
 				)
-				dataRetrievers[i].SetError(err)
-				statuses[i].SetError(err)
 			}
 		}(i)
 	}
@@ -682,7 +744,7 @@ func flushFinalJobStatusOnIterationState(
 	iterCtx *IterationContext,
 	jobIdx int,
 	status *JobStatus,
-	watermark types.TS,
+	watermark *types.TS,
 	state int8,
 ) error {
 	return retry(
@@ -721,7 +783,7 @@ var FlushJobStatusOnIterationState = func(
 	jobIDs []uint64,
 	lsns []uint64,
 	jobStatuses []*JobStatus,
-	watermark types.TS,
+	watermark *types.TS,
 	state int8,
 	prevLSN []uint64,
 ) (err error) {
@@ -761,6 +823,13 @@ var FlushJobStatusOnIterationState = func(
 			prevLSN[i],
 		)
 		if err != nil {
+			// Running still needs an all-or-nothing claim. A terminal
+			// status-only update can settle its live members even if
+			// another member was retired or advanced by another owner.
+			if len(jobNames) > 1 && watermark == nil && state != ISCPJobState_Running && isSupersededIteration(err) {
+				err = nil
+				continue
+			}
 			return
 		}
 	}
@@ -776,25 +845,26 @@ func FlushStatus(
 	jobName string,
 	jobID uint64,
 	jobStatus *JobStatus,
-	watermark types.TS,
+	watermark *types.TS,
 	state int8,
 	prevLSN uint64,
 ) (err error) {
-	statusJson, err := MarshalJobStatus(jobStatus)
+	return flushStatus(ctx, cnUUID, txn, tenantId, tableID, jobName, jobID, jobStatus,
+		watermark, state, prevLSN, state != ISCPJobState_Running)
+}
+
+func flushStatus(
+	ctx context.Context, cnUUID string, txn client.TxnOperator, tenantID uint32,
+	tableID uint64, jobName string, jobID uint64, jobStatus *JobStatus, watermark *types.TS,
+	state int8, prevLSN uint64, requireActive bool,
+) (err error) {
+	statusJSON, err := MarshalJobStatus(jobStatus)
 	if err != nil {
 		return
 	}
-	sql := cdc.CDCSQLBuilder.ISCPLogUpdateResultSQL(
-		tenantId,
-		tableID,
-		jobName,
-		jobID,
-		watermark,
-		statusJson,
-		jobStatus.Stage,
-		jobStatus.LifecycleVersion,
-		state,
-		prevLSN,
+	sql := cdc.CDCSQLBuilder.ISCPLogUpdateIterationSQL(
+		tenantID, tableID, jobName, jobID, watermark, statusJSON, jobStatus.Stage,
+		jobStatus.LifecycleVersion, state, prevLSN, requireActive,
 	)
 	result, err := ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {
@@ -909,7 +979,6 @@ var GetJobSpecs = func(
 			jobIDs,
 			lsns,
 			jobStatuses,
-			types.MaxTs(),
 			permanentErrMsg,
 			prevLSNs,
 		)
@@ -985,7 +1054,6 @@ func FlushPermanentErrorMessage(
 	jobIDs []uint64,
 	lsns []uint64,
 	jobStatuses []*JobStatus,
-	watermark types.TS,
 	errMsg string,
 	prevLSN []uint64,
 ) (err error) {
@@ -1015,7 +1083,7 @@ func FlushPermanentErrorMessage(
 		jobIDs,
 		lsns,
 		jobStatuses,
-		watermark,
+		nil,
 		ISCPJobState_Error,
 		prevLSN,
 	)
@@ -1273,6 +1341,9 @@ func processInitSQL(
 	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
 	if err != nil {
 		return finishISCPTransaction(ctx, txnOp, err)
+	}
+	if retirement, ok := ctx.Value(initSQLRetirementKey{}).(*initSQLRetirement); ok {
+		retirement.txn = txnOp
 	}
 	return runInitSQLTransaction(
 		ctx,

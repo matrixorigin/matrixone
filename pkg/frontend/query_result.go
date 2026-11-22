@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -730,7 +731,7 @@ func getTablesFromPlan(p *plan.Plan) string {
 	cnt := 0
 	if q, ok := p.Plan.(*plan.Plan_Query); ok {
 		for _, n := range q.Query.Nodes {
-			if n == nil || n.GetTableDef().GetName() == "" {
+			if n == nil || plan2.IsValidationPrivilegeCarrier(n) || n.GetTableDef().GetName() == "" {
 				continue
 			}
 			if n.NodeType == plan.Node_EXTERNAL_SCAN || n.NodeType == plan.Node_TABLE_SCAN {

@@ -577,10 +577,11 @@ func filterTargetRows(
 		matchedSemanticAffectedRows += uint64(activeCount)
 	}
 
-	// The input can carry a build-side allocation account whose lifetime ends
-	// at the operator boundary. The filtered batch is independently owned by
-	// MULTI_UPDATE, so do not inherit that execution-local account.
-	filtered, err := input.CloneWithoutAllocationAccount(proc.Mp(), true)
+	// The input can be charged to a build-side allocation account whose
+	// lifetime ends at the operator boundary. The filtered batch is
+	// independently owned by MULTI_UPDATE and is copied through proc's pool, so
+	// it does not charge that execution-local account.
+	filtered, err := input.Clone(proc.Mp(), true)
 	if err != nil {
 		return nil, false, 0, err
 	}
@@ -680,7 +681,7 @@ func filterODKUPhysicalRows(
 			selections = append(selections, int64(row))
 		}
 	}
-	filtered, err := input.CloneWithoutAllocationAccount(proc.Mp(), true)
+	filtered, err := input.Clone(proc.Mp(), true)
 	if err != nil {
 		return nil, false, 0, err
 	}

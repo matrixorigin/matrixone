@@ -258,10 +258,16 @@ func TestPreparedPaginationTopBoundRejectsUnprovedConversions(t *testing.T) {
 	installPaginationTypedParam(t, c.proc, types.StringConversionFloat, "127")
 	_, _, ok = preparedPaginationTopBound(c.proc, limit)
 	require.False(t, ok, "float transport is not an integer conversion proof")
-	c.proc.SetPrepareParamsWithMetadata(params, []bool{true}, nil)
+	c.proc.SetPrepareParamsWithIsBin(params, []bool{true})
 	_, _, ok = preparedPaginationTopBound(c.proc, limit)
 	require.False(t, ok, "binary-number transport is not decimal text")
-	c.proc.SetPrepareParamsWithMetadata(params, nil, []bool{true})
+	c.proc.SetPrepareParams(params)
+	binaryTyped := vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendBytes(binaryTyped, []byte("127"), false, c.proc.Mp()))
+	typed := batch.NewWithSize(1)
+	typed.Vecs[0] = binaryTyped
+	typed.SetRowCount(1)
+	c.proc.SetTypedPrepareParams(typed)
 	_, _, ok = preparedPaginationTopBound(c.proc, limit)
 	require.False(t, ok, "binary-string conversion retains its runtime owner")
 }

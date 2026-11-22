@@ -45,9 +45,8 @@ func (fF *functionFolding) reset(_ *mpool.MPool) {
 type functionInformationForEval struct {
 	// Keep pointers together and pack small execution flags into the tail.
 	// Folding and flow-control state are promoted to the expression as before.
-	dictionaryInput func([]*vector.Vector) bool
-	overloadID      int64
-	evalFn          func(
+	overloadID int64
+	evalFn     func(
 		parameters []*vector.Vector,
 		result vector.FunctionResultWrapper,
 		proc *process.Process,
@@ -91,7 +90,6 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 	// reset the function information.
 	expr.functionInformationForEval.reset()
 	expr.freeIffNullResults()
-	expr.freeDictionaryParameters()
 
 	// reset its parameters.
 	for i, param := range expr.parameterExecutor {
@@ -176,14 +174,6 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 	proc *process.Process,
 	atRuntime bool,
 ) (bool, error) {
-	expr.resetFlowControlMetadata()
-	observeSelected := func(index int, folded bool, err error) (bool, error) {
-		if err == nil && folded {
-			expr.observeFlowControlMetadata(
-				expr.parameterResults[index], expr.parameterExecutor[index], []bool{true})
-		}
-		return folded, err
-	}
 	switch expr.fid {
 	case function.ELT:
 		folded, err := expr.tryFoldParameter(proc, atRuntime, 0)
@@ -216,7 +206,9 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 			return folded, err
 		}
 		value, err := function.IffConditionTruthyAt(
-			expr.parameterResults[0], 0, function.CompatibilityModeFromProcess(proc))
+			expr.parameterResults[0], 0,
+			isBinaryLiteralResult(expr.parameterExecutor[0], expr.parameterResults[0]),
+			function.CompatibilityModeFromProcess(proc))
 		if err != nil {
 			return false, err
 		}
@@ -225,7 +217,7 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 			selected = 1
 		}
 		folded, err = expr.tryFoldParameter(proc, atRuntime, selected)
-		return observeSelected(selected, folded, err)
+		return folded, err
 
 	case function.CASE:
 		parameterCount := len(expr.parameterExecutor)
@@ -239,13 +231,13 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 			if !isNull && value {
 				selected := conditionIndex + 1
 				folded, err = expr.tryFoldParameter(proc, atRuntime, selected)
-				return observeSelected(selected, folded, err)
+				return folded, err
 			}
 		}
 		if parameterCount%2 == 1 {
 			selected := parameterCount - 1
 			folded, err := expr.tryFoldParameter(proc, atRuntime, selected)
-			return observeSelected(selected, folded, err)
+			return folded, err
 		}
 		return true, nil
 
@@ -256,8 +248,6 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 				return folded, err
 			}
 			if !expr.parameterResults[i].IsNull(0) {
-				expr.observeFlowControlMetadata(
-					expr.parameterResults[i], expr.parameterExecutor[i], []bool{true})
 				return true, nil
 			}
 		}
@@ -321,10 +311,8 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 		evalProc.Ctx = proc.Ctx
 		evalProc.WarningSink = probe
 	}
-	parameters, normalizeErr := expr.normalizeDictionaryParameters(expr.parameterResults, true)
-	if normalizeErr != nil {
-		return normalizeErr
-	}
+	parameters := expr.parameterResults
+	expr.publishArgumentIsBin(expr.resultVector)
 	if err := expr.evalFn(parameters, expr.resultVector, evalProc, execLen, nil); err != nil {
 		if probe != nil {
 			// Selection owns failures as well as warnings. Leave the expression
@@ -335,12 +323,6 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 	}
 	if probe != nil && probe.Warned() {
 		return nil
-	}
-	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
-		if err := expr.applyFlowControlMetadata(
-			expr.resultVector.GetResultVector(), execLen, proc.Mp()); err != nil {
-			return err
-		}
 	}
 	if execLen == 1 {
 		expr.resultVector.GetResultVector().ToConst()

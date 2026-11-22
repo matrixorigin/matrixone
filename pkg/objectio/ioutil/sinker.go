@@ -1606,7 +1606,7 @@ func (sinker *Sinker) WriteOwned(ctx context.Context, data *batch.Batch) (owned 
 		if vec == nil {
 			return false, moerr.NewInvalidInputf(ctx, "Sinker.WriteOwned batch has a nil vector at column %d", i)
 		}
-		if vec.HasBorrowedBacking() || vec.NeedDup() {
+		if vec.NeedDup() {
 			return false, moerr.NewInvalidInputf(ctx, "Sinker.WriteOwned requires unique-owned vector backing at column %d", i)
 		}
 		if limit > 0 {

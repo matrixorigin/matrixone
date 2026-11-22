@@ -153,35 +153,17 @@ func (proc *Process) GetPrepareParams() *vector.Vector {
 
 // SetPrepareParams borrows prepareParams. The caller remains responsible for releasing it.
 func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
-	proc.setPrepareParams(prepareParams, nil, nil, false)
+	proc.setPrepareParams(prepareParams, nil, false)
 }
 
 // SetPrepareParamsWithIsBin borrows prepareParams. The caller remains responsible for releasing it.
 func (proc *Process) SetPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
-	proc.setPrepareParams(prepareParams, isBin, nil, false)
-}
-
-// SetPrepareParamsWithMetadata borrows prepareParams and keeps literal numeric
-// metadata separate from binary-string metadata.
-func (proc *Process) SetPrepareParamsWithMetadata(
-	prepareParams *vector.Vector,
-	isBin, binaryString []bool,
-) {
-	proc.setPrepareParams(prepareParams, isBin, binaryString, false)
+	proc.setPrepareParams(prepareParams, isBin, false)
 }
 
 // SetOwnedPrepareParamsWithIsBin transfers prepareParams to proc. Replacing or freeing proc releases it.
 func (proc *Process) SetOwnedPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
-	proc.setPrepareParams(prepareParams, isBin, nil, true)
-}
-
-// SetOwnedPrepareParamsWithMetadata transfers prepareParams to proc and keeps
-// literal numeric metadata separate from binary-string metadata.
-func (proc *Process) SetOwnedPrepareParamsWithMetadata(
-	prepareParams *vector.Vector,
-	isBin, binaryString []bool,
-) {
-	proc.setPrepareParams(prepareParams, isBin, binaryString, true)
+	proc.setPrepareParams(prepareParams, isBin, true)
 }
 
 // PrepareParamMetadataForRemote validates the packed per-parameter binary
@@ -334,7 +316,7 @@ func prepareParamProtocolVersion(service string) int64 {
 
 func (proc *Process) setPrepareParams(
 	prepareParams *vector.Vector,
-	isBin, binaryString []bool,
+	isBin []bool,
 	owned bool,
 ) {
 	if proc.Base.prepareParams == prepareParams && proc.Base.prepareParamsOwned {
@@ -345,7 +327,6 @@ func (proc *Process) setPrepareParams(
 	}
 	proc.Base.prepareParams = prepareParams
 	proc.Base.prepareParamsIsBin = isBin
-	proc.Base.prepareParamsBinaryString = binaryString
 	proc.Base.prepareParamsOwned = owned && prepareParams != nil
 	// Typed values and the source describe one execution's parameters; a
 	// caller installs them after the TEXT transport.
@@ -401,7 +382,6 @@ func (proc *Process) GetTypedPrepareParams() *batch.Batch {
 type PrepareParamsState struct {
 	prepareParams *vector.Vector
 	isBin         []bool
-	binaryString  []bool
 	owned         bool
 	typed         *batch.Batch
 	typedOwned    bool
@@ -415,7 +395,6 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 	state := PrepareParamsState{
 		prepareParams: proc.Base.prepareParams,
 		isBin:         proc.Base.prepareParamsIsBin,
-		binaryString:  proc.Base.prepareParamsBinaryString,
 		owned:         proc.Base.prepareParamsOwned,
 		typed:         proc.Base.typedPrepareParams,
 		typedOwned:    proc.Base.typedPrepareParamsOwned,
@@ -423,7 +402,6 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 	}
 	proc.Base.prepareParams = nil
 	proc.Base.prepareParamsIsBin = nil
-	proc.Base.prepareParamsBinaryString = nil
 	proc.Base.prepareParamsOwned = false
 	proc.Base.typedPrepareParams = nil
 	proc.Base.typedPrepareParamsOwned = false
@@ -434,7 +412,7 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 // their ownership back to proc. It lets nested work use the parameters while
 // Process.Free releases only resources owned by that nested work.
 func (proc *Process) BorrowPrepareParams(state PrepareParamsState) {
-	proc.setPrepareParams(state.prepareParams, state.isBin, state.binaryString, false)
+	proc.setPrepareParams(state.prepareParams, state.isBin, false)
 	proc.setTypedPrepareParams(state.typed, false)
 	proc.Base.prepareParamsStringSource = state.source
 }
@@ -442,7 +420,7 @@ func (proc *Process) BorrowPrepareParams(state PrepareParamsState) {
 // RestorePrepareParams restores state previously returned by
 // DetachPrepareParams.
 func (proc *Process) RestorePrepareParams(state PrepareParamsState) {
-	proc.setPrepareParams(state.prepareParams, state.isBin, state.binaryString, state.owned)
+	proc.setPrepareParams(state.prepareParams, state.isBin, state.owned)
 	proc.setTypedPrepareParams(state.typed, state.typedOwned)
 	proc.Base.prepareParamsStringSource = state.source
 }
@@ -469,11 +447,13 @@ func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch
 }
 
 // NewBatchFromSrcWithAllocation creates an empty off-heap destination whose
-// first vector growth uses the supplied immutable allocation provenance.
+// preallocation is made through mp (an accounted view charges its account).
+// A nil mp means proc.Mp(). Later growth of the vectors charges whatever pool
+// the owner passes then; the batch carries no account.
 func (proc *Process) NewBatchFromSrcWithAllocation(
 	src *batch.Batch,
 	preAllocSize int,
-	selection *vector.AllocationAccountSelection,
+	mp *mpool.MPool,
 ) (_ *batch.Batch, retErr error) {
 	if proc == nil || src == nil || preAllocSize < 0 {
 		return nil, mpool.ErrAllocationAccountInvalid
@@ -492,15 +472,13 @@ func (proc *Process) NewBatchFromSrcWithAllocation(
 		}
 		bat.Vecs[i] = vector.NewOffHeapVecWithType(*src.Vecs[i].GetType())
 	}
-	if selection != nil {
-		if err := bat.SetAllocationAccount(selection); err != nil {
-			return nil, err
-		}
+	if mp == nil {
+		mp = proc.Mp()
 	}
 	for i := range bat.Vecs {
 		v := bat.Vecs[i]
 		if v.Capacity() < preAllocSize {
-			err := v.PreExtend(preAllocSize, proc.Mp())
+			err := v.PreExtend(preAllocSize, mp)
 			if err != nil {
 				return nil, err
 			}

@@ -1521,7 +1521,7 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 			}
 		}
 	}
-	return setContributingStringResultDomain(parameters, result, proc)
+	return nil
 }
 
 func builtInIntervalCheck(_ []overload, inputs []types.Type) checkResult {
@@ -1923,7 +1923,7 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			// Direct integer parsing avoids float64 precision loss
 			// for large values (e.g. '9007199254740993').
 			sp := vector.GenerateFunctionStrParameter(param)
-			isBin := param.GetIsBin()
+			isBin := result.ArgumentIsBin(i)
 			getters[i] = func(idx uint64) (int64, bool) {
 				v, null := sp.GetStrValue(idx)
 				if null {
@@ -1931,7 +1931,7 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				}
 				if isBin {
 					// hex/bit literals (e.g. 0x41, b'01000001') arrive as raw
-					// bytes with IsBin set; interpret them as a big-endian
+					// bytes flagged as a binary-literal argument; interpret them as a big-endian
 					// integer, mirroring the varchar->int64 cast path
 					// (strToSigned) that CHAR used before.
 					if len(v) > 8 {
@@ -2395,7 +2395,7 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(parameters[0], result, proc)
+	return nil
 }
 
 func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2420,7 +2420,7 @@ func builtInPad(
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	maxResultLen := maxStringFunctionResultLength(result)
 	maxTextCharacterWidth := maxPadTextCharacterWidth(parameters[0].GetType())
-	uniformBinary, perRow := stringDomainMode(parameters[0])
+	uniformBinary := isBinaryStringVector(parameters[0], result.ArgumentIsBin(0))
 
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
@@ -2439,7 +2439,7 @@ func builtInPad(
 			continue
 		}
 
-		binary := binaryStringAt(parameters[0], int(row), uniformBinary, perRow)
+		binary := uniformBinary
 		resultBytes, shouldNull := 0, false
 		if binary {
 			resultBytes, shouldNull = padBinaryResultByteLength(source, target, pad, maxResultLen)
@@ -2464,7 +2464,7 @@ func builtInPad(
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(parameters[0], result, proc)
+	return nil
 }
 
 func padBinaryResultByteLength(source []byte, target int64, pad []byte, maxBytes int64) (int, bool) {
@@ -5419,9 +5419,9 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
 	}
 	input := parameters[0]
-	binary, perRow := stringDomainMode(input)
+	binary := isBinaryStringVector(input, result.ArgumentIsBin(0))
 	if input.IsConst() || result.GetResultVector().IsConst() || input.HasNull() ||
-		binary || perRow || !selectList.ShouldEvalAllRow() || selectList.IgnoreAllRow() {
+		binary || !selectList.ShouldEvalAllRow() || selectList.IgnoreAllRow() {
 		return opUnaryBytesToBytesByStringDomain(
 			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
 	}
@@ -5478,7 +5478,7 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(input, result, proc)
+	return nil
 }
 
 // buildInMOCU extract cu or calculate cu from parameters

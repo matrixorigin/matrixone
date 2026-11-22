@@ -129,7 +129,7 @@ func TestPadCharColumnsToFullLength(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], nil, true, proc.Mp()))
 	bat.SetRowCount(3)
 
-	require.NoError(t, padCharColumnsToFullLength(bat, proc))
+	require.NoError(t, padCharColumnsToFullLength(bat, proc.Mp()))
 	require.Equal(t, "MO      ", string(bat.Vecs[0].GetBytesAt(0)))
 	require.Equal(t, "你好      ", string(bat.Vecs[0].GetBytesAt(1)))
 	require.True(t, bat.Vecs[0].GetNulls().Contains(2))

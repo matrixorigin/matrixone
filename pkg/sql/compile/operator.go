@@ -29,6 +29,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -3487,8 +3488,11 @@ func constructTableScan(node *plan.Node) *table_scan.TableScan {
 	return table_scan.NewArgument().WithTypes(types)
 }
 
-func constructValueScan(proc *process.Process, node *plan.Node, allocations ...*vector.AllocationAccountSelection) (*value_scan.ValueScan, error) {
+func constructValueScan(proc *process.Process, node *plan.Node, allocations ...*mpool.MPool) (*value_scan.ValueScan, error) {
 	op := value_scan.NewArgument()
+	if len(allocations) > 0 {
+		op.Allocation = allocations[0]
+	}
 	if node == nil {
 		return op, nil
 	}
@@ -3510,22 +3514,22 @@ func constructValueScan(proc *process.Process, node *plan.Node, allocations ...*
 
 	for i, col := range node.RowsetData.Cols {
 		typ := plan2.MakeTypeByPlan2Type(node.TableDef.Cols[i].Typ)
-		var vec *vector.Vector
-		if len(allocations) > 0 && allocations[0] != nil {
-			var err error
-			vec, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, allocations[0])
-			if err != nil {
-				op.Free(proc, true, err)
-				op.Release()
-				return nil, err
-			}
+		// An accounted value batch folds constants into unaccounted scratch
+		// and copies them into an off-heap vector through the view.
+		vec := vector.NewVec(typ)
+		var accounted *vector.Vector
+		if op.Allocation != nil {
+			accounted = vector.NewOffHeapVecWithType(typ)
+			op.Batchs[0].Vecs[i] = accounted
 		} else {
-			vec = vector.NewVec(typ)
+			op.Batchs[0].Vecs[i] = vec
 		}
-		op.Batchs[0].Vecs[i] = vec
 		for j, rowsetExpr := range col.Data {
 			get, err := rule.GetConstantValue2(proc, rowsetExpr.Expr, vec)
 			if err != nil {
+				if accounted != nil {
+					vec.Free(proc.Mp())
+				}
 				op.Free(proc, true, err)
 				op.Release()
 				return nil, err
@@ -3534,6 +3538,15 @@ func constructValueScan(proc *process.Process, node *plan.Node, allocations ...*
 				bound := *rowsetExpr
 				bound.RowPos = int32(j)
 				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &bound)
+			}
+		}
+		if accounted != nil {
+			err := accounted.UnionBatch(vec, 0, vec.Length(), nil, op.Allocation)
+			vec.Free(proc.Mp())
+			if err != nil {
+				op.Free(proc, true, err)
+				op.Release()
+				return nil, err
 			}
 		}
 	}

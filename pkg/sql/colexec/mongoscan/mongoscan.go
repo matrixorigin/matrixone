@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -253,13 +254,7 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 	bat := scan.ctr.converter.NewBatch()
 	if scan.OutputAllocation != nil {
 		for i, old := range bat.Vecs {
-			owned, allocErr := vector.NewOffHeapVecWithTypeAndAllocation(*old.GetType(), scan.OutputAllocation)
-			if allocErr != nil {
-				bat.Clean(proc.Mp())
-				scan.ctr.done = true
-				scan.closeResources(proc.Ctx)
-				return result, allocErr
-			}
+			owned := vector.NewOffHeapVecWithType(*old.GetType())
 			old.Free(proc.Mp())
 			bat.Vecs[i] = owned
 		}
@@ -323,7 +318,7 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 			break
 		}
 		decodeStarted := time.Now()
-		if err = scan.ctr.converter.AppendDocumentWithBudget(proc.Ctx, bat, raw, proc.Mp(), maxBatchBytes); err != nil {
+		if err = scan.ctr.converter.AppendDocumentWithBudget(proc.Ctx, bat, raw, scan.mp(proc), maxBatchBytes); err != nil {
 			metric.MongoDBPhaseDurationHistogram.WithLabelValues("decode_append").Observe(time.Since(decodeStarted).Seconds())
 			if mongodb.IsDecodedBatchBudgetExceeded(err) && bat.RowCount() > 0 {
 				// The current document did not fit the decoded/vector budget. Keep
@@ -389,6 +384,15 @@ func (scan *MongoScan) explicitQueryContextError() error {
 	return scan.ctr.queryCtx.Err()
 }
 
+// mp returns the pool output vectors allocate from: the OutputAllocation view
+// when one is bound, otherwise proc's pool.
+func (scan *MongoScan) mp(proc *process.Process) *mpool.MPool {
+	if scan.OutputAllocation != nil {
+		return scan.OutputAllocation
+	}
+	return proc.Mp()
+}
+
 func (scan *MongoScan) appendQueryColumn(proc *process.Process, bat *batch.Batch, maxBatchBytes int64) error {
 	if !scan.Scan.IncludeQueryColumn || bat == nil || bat.RowCount() == 0 {
 		return nil
@@ -396,20 +400,11 @@ func (scan *MongoScan) appendQueryColumn(proc *process.Process, bat *batch.Batch
 	queryType := types.T_varchar.ToType()
 	var queryVector *vector.Vector
 	var err error
-	if scan.OutputAllocation != nil {
-		if scan.ctr.userQuery == nil {
-			queryVector, err = vector.NewConstNullWithAllocation(queryType, bat.RowCount(), scan.OutputAllocation)
-		} else {
-			queryVector, err = vector.NewConstBytesWithAllocation(queryType, []byte(scan.ctr.userQuery.Source), bat.RowCount(), proc.Mp(), scan.OutputAllocation)
-		}
-		if err != nil {
-			return err
-		}
-	} else if scan.ctr.userQuery == nil {
-		queryVector = vector.NewConstNull(queryType, bat.RowCount(), proc.Mp())
+	if scan.ctr.userQuery == nil {
+		queryVector = vector.NewConstNull(queryType, bat.RowCount(), scan.mp(proc))
 	} else {
 		queryVector, err = vector.NewConstBytes(
-			queryType, []byte(scan.ctr.userQuery.Source), bat.RowCount(), proc.Mp())
+			queryType, []byte(scan.ctr.userQuery.Source), bat.RowCount(), scan.mp(proc))
 		if err != nil {
 			if queryVector != nil {
 				queryVector.Free(proc.Mp())

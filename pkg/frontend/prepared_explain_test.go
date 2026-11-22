@@ -621,7 +621,7 @@ func TestCompileOutputCallbackCapturesSelectIntoUserVariables(t *testing.T) {
 	require.NoError(t, compileOutputCallback(execCtx, ses, stmt, fill)(bat, nil))
 	require.False(t, called)
 	require.NotNil(t, execCtx.selectInto)
-	require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select abs(-5) into @out"))
+	require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select abs(-5) into @out", nil))
 	variable, err := ses.GetUserDefinedVar("out")
 	require.NoError(t, err)
 	require.Equal(t, int64(5), variable.Value)

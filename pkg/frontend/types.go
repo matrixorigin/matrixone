@@ -376,7 +376,6 @@ type PrepareStmt struct {
 	hasPaginationParams        bool
 	hasLagLeadParams           bool
 	paramKinds                 []types.StringConversionKind
-	paramBinaryStrings         []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
 	// generation; the protocol type decides those parameters' binding kind.
 	jsonComparisonParamPositions []int32
@@ -1725,7 +1724,7 @@ func (ses *feSessionImpl) GetResultBatches() []*batch.Batch {
 func (ses *feSessionImpl) AppendResultBatch(bat *batch.Batch) error {
 	// Result batches belong to the session and can remain reachable after the
 	// producing statement has sealed its allocation account.
-	copied, err := bat.DupWithoutAllocationAccount(ses.pool)
+	copied, err := bat.Dup(ses.pool)
 	if err != nil {
 		return err
 	}

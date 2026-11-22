@@ -670,10 +670,7 @@ func SortByKey(
 		}
 	}
 	rowCount := int64(bat.RowCount())
-	sels := vector.GetSels()
-	defer func() {
-		vector.PutSels(sels)
-	}()
+	var sels []int64
 	for i := int64(0); i < rowCount; i++ {
 		sels = append(sels, i)
 	}

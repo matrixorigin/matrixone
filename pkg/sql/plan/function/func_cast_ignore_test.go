@@ -45,7 +45,7 @@ func runAssignmentIgnoreStringCast(t *testing.T, sourceType, targetType types.Ty
 		NewAssignIgnoreCast,
 	).WithSelectList(selectList)
 	t.Cleanup(tc.Free)
-	tc.parameters[0].SetIsBin(binary)
+	tc.result.SetArgumentIsBin([]bool{binary})
 	result, err := tc.DebugRun()
 	if err != nil {
 		return nil, session, err

@@ -228,15 +228,13 @@ func TestRowMetadataTrailerDomainRequiresCapabilities(t *testing.T) {
 
 // An older writer appended the row-metadata trailer, including retired
 // per-aggregate (uniform) or per-row category data, after the aggregate state.
-// Current readers must accept and discard it while the aggregate state's own
-// string-domain metadata is still restored.
+// Current readers must accept and discard it and still restore the aggregate
+// state's values.
 func TestOldRowMetadataTrailerWithRetiredKindsDecodes(t *testing.T) {
 	mp := mpool.MustNewZero()
 	input := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(input, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(input, []byte("b"), false, mp))
-	require.NoError(t, input.SetRuntimeStringDomainsWithMP(
-		[]types.RuntimeStringDomain{types.RuntimeStringBinary, types.RuntimeStringText}, mp))
 	source, err := aggexec.MakeGroupAgg(
 		mp, aggexec.AggIdOfAny, false, nil, nil, types.T_varchar.ToType())
 	require.NoError(t, err)
@@ -278,8 +276,8 @@ func TestOldRowMetadataTrailerWithRetiredKindsDecodes(t *testing.T) {
 			results, err := restored.Flush()
 			require.NoError(t, err)
 			require.Len(t, results, 1)
-			require.Equal(t, types.RuntimeStringBinary, results[0].GetRuntimeStringDomainAt(0))
-			require.Equal(t, types.RuntimeStringText, results[0].GetRuntimeStringDomainAt(1))
+			require.Equal(t, "a", results[0].GetStringAt(0))
+			require.Equal(t, "b", results[0].GetStringAt(1))
 			results[0].Free(mp)
 		})
 	}

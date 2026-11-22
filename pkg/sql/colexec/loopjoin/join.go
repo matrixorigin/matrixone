@@ -207,23 +207,27 @@ func (loopJoin *LoopJoin) build(proc *process.Process, analyzer process.Analyzer
 }
 
 func (ctr *container) emptyProbe(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {
+	resMP, err := ap.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	start := ctr.probeIdx
 	count := ctr.emptyProbeChunk(ap, start)
 	for i, rp := range ap.ResultCols {
 		if rp.Rel == 0 {
 			if err := ctr.resBat.Vecs[i].UnionBatch(
-				ctr.inBat.Vecs[rp.Pos], int64(start), count, nil, proc.Mp()); err != nil {
+				ctr.inBat.Vecs[rp.Pos], int64(start), count, nil, resMP); err != nil {
 				return err
 			}
 		} else {
 			switch ap.JoinType {
 			case plan.Node_LEFT, plan.Node_SINGLE, plan.Node_OUTER:
-				if err := vector.SetConstNull(ctr.resBat.Vecs[i], count, proc.Mp()); err != nil {
+				if err := vector.SetConstNull(ctr.resBat.Vecs[i], count, resMP); err != nil {
 					return err
 				}
 
 			case plan.Node_MARK:
-				err := vector.SetConstFixed(ctr.resBat.Vecs[i], false, count, proc.Mp())
+				err := vector.SetConstFixed(ctr.resBat.Vecs[i], false, count, resMP)
 				if err != nil {
 					return err
 				}
@@ -350,11 +354,6 @@ func (loopJoin *LoopJoin) resetResultBat() error {
 				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
 			}
 		}
-		if err := ctr.resBat.SetAllocationAccount(loopJoin.resultAllocation); err != nil {
-			ctr.resBat.Clean(nil)
-			ctr.resBat = nil
-			return err
-		}
 	}
 	return nil
 }
@@ -396,6 +395,10 @@ func (ctr *container) initRightMatchedBitmap(
 // finalize emits one batch worth of unmatched build rows with NULL probe
 // columns. Iterator is monotonic, so rightMatchedBat only advances.
 func (ctr *container) finalize(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {
+	resMP, err := ap.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	bats := ctr.mp.GetBatches()
 	if err := ap.resetResultBat(); err != nil {
 		return err
@@ -428,7 +431,7 @@ func (ctr *container) finalize(ap *LoopJoin, proc *process.Process, result *vm.C
 		}
 		for i, rp := range ap.ResultCols {
 			if rp.Rel == 1 {
-				if err := ctr.resBat.Vecs[i].UnionOne(bats[ctr.rightMatchedBat].Vecs[rp.Pos], j, proc.Mp()); err != nil {
+				if err := ctr.resBat.Vecs[i].UnionOne(bats[ctr.rightMatchedBat].Vecs[rp.Pos], j, resMP); err != nil {
 					return err
 				}
 			}
@@ -443,7 +446,7 @@ func (ctr *container) finalize(ap *LoopJoin, proc *process.Process, result *vm.C
 	}
 	for i, rp := range ap.ResultCols {
 		if rp.Rel != 1 {
-			if err := vector.AppendMultiFixed(ctr.resBat.Vecs[i], 0, true, rowCnt, proc.Mp()); err != nil {
+			if err := vector.AppendMultiFixed(ctr.resBat.Vecs[i], 0, true, rowCnt, resMP); err != nil {
 				return err
 			}
 		}

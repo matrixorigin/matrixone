@@ -1463,9 +1463,6 @@ func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors 
 	// With at most 256 rows, the 256th group can have only one input row.
 	if len(exec.state) == 1 && exec.state[0].length <= 256 &&
 		(exec.localAddSafe || len(groups) <= 256) {
-		if vectors[0].IsDictionary() {
-			return exec.batchFillDenseDictionary(offset, groups, vectors[0])
-		}
 		return exec.batchFillDense(offset, groups, vectors[0])
 	}
 	if exec.isSum {

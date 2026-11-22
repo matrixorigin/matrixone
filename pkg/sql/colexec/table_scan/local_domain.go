@@ -21,11 +21,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -144,9 +141,7 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 	for i := range tableScan.ctr.domainSources {
 		s := &tableScan.ctr.domainSources[i]
 		start := time.Now()
-		if err := tableScan.withFlatDomainKey(proc, bat.Vecs[s.column], func(key *vector.Vector) error {
-			return s.producer.AddVector(proc.Ctx, key, bat.RowCount())
-		}); err != nil {
+		if err := s.producer.AddVector(proc.Ctx, bat.Vecs[s.column], bat.RowCount()); err != nil {
 			return err
 		}
 		s.elapsed += time.Since(start)
@@ -161,23 +156,6 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 		return err
 	}
 	if len(rows) == bat.RowCount() {
-		return nil
-	}
-	if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() && len(bat.ExtraBuf) == 0 {
-		next, _, err := colexec.SelectBatchColumns(bat, nil, rows, proc.Mp(), tableScan.OutputAllocation, true)
-		if err != nil {
-			if mpool.IsRetryableAllocationCapacity(err) {
-				// The join remains the correctness owner. Optional publication
-				// must not invalidate an already completed ordinary read.
-				if tableScan.OpAnalyzer != nil {
-					tableScan.OpAnalyzer.GetOpStats().AddExtraStat("RuntimeDomainPublicationCapacityFallbackRows", int64(bat.RowCount()))
-				}
-				return nil
-			}
-			return err
-		}
-		bat.Clean(proc.Mp())
-		tableScan.ctr.buf = next
 		return nil
 	}
 	return shrinkPopulatedVecs(bat, rows, proc.Mp())
@@ -210,19 +188,7 @@ func (tableScan *TableScan) selectLocalDomains(proc *process.Process, bat *batch
 		vec := bat.Vecs[p.column]
 		matched := false
 		if vec.GetType().Oid == p.domain.KeyType() && ((!vec.IsConst() && vec.Length() == bat.RowCount()) || vec.IsConst() && vec.Length() > 0) {
-			if err := tableScan.withFlatDomainKey(proc, vec, func(key *vector.Vector) error {
-				matched = p.bloom.TestFixedVectorInto(key, p.mask)
-				return nil
-			}); err != nil {
-				if mpool.IsRetryableAllocationCapacity(err) {
-					// Optional key normalization must not invalidate a completed
-					// read. Other domains can still prune through their own masks.
-					p.pass = true
-					p.bypassed += int64(bat.RowCount())
-					continue
-				}
-				return nil, false, err
-			}
+			matched = p.bloom.TestFixedVectorInto(vec, p.mask)
 		}
 		if !matched {
 			p.pass = true
@@ -446,18 +412,4 @@ func (tableScan *TableScan) recordLocalDomainSnapshot(snapshot runtimefilter.Loc
 		}
 		stats.AddExtraStat("RuntimeDomainProbeNDV", value)
 	}
-}
-
-// Native Bloom APIs require contiguous keys. Normalize only the needed key,
-// rather than flattening all selected payload columns at this internal boundary.
-func (tableScan *TableScan) withFlatDomainKey(proc *process.Process, key *vector.Vector, consume func(*vector.Vector) error) error {
-	if !key.IsDictionary() {
-		return consume(key)
-	}
-	flat, err := key.DupOffHeapWithAllocation(proc.Mp(), tableScan.OutputAllocation)
-	if err != nil {
-		return err
-	}
-	defer flat.Free(proc.Mp())
-	return consume(flat)
 }

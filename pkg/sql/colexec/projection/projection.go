@@ -53,7 +53,7 @@ func (projection *Projection) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(projection.ctr.projExecutors) == 0 {
-		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, projection.ProjectList, projection.ctr.outputAllocation)
+		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
 
 		projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 		if projection.GroupingSetCount > 0 {
@@ -73,7 +73,6 @@ func (projection *Projection) Prepare(proc *process.Process) (err error) {
 }
 
 func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error) {
-	projection.ctr.dictionaryBoundary.BeginCall()
 	analyzer := projection.OpAnalyzer
 	if projection.GroupingSetCount > 0 && projection.ctr.hasInput {
 		return projection.emitGroupingSet(proc)
@@ -105,20 +104,16 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	batches := []*batch.Batch{bat}
-	if bat.HasDictionary() {
-		if projection.ctr.dictionaryInputs == nil {
-			projection.ctr.dictionaryInputs = &colexec.DictionaryInputFrame{}
-		}
-		projection.ctr.dictionaryInputs.Begin(bat, projection.ctr.outputAllocation, proc.Mp())
-		projection.ctr.dictionaryInputs.Bind(projection.ctr.projExecutors)
-		defer func() {
-			projection.ctr.dictionaryInputs.Observe(projection.OpAnalyzer)
-			projection.ctr.dictionaryInputs.End()
-		}()
+	var mask []bool
+	if bat.HasSelection() {
+		bat.PhysicalView(&projection.ctr.selection.physical)
+		batches[0] = &projection.ctr.selection.physical
+		projection.ctr.selection.mask = bat.SelectionMask(projection.ctr.selection.mask)
+		mask = projection.ctr.selection.mask
 	}
 
 	for i := range projection.ctr.projExecutors {
-		vec, err := projection.ctr.projExecutors[i].Eval(proc, batches, nil)
+		vec, err := projection.ctr.projExecutors[i].Eval(proc, batches, mask)
 		if err != nil {
 			return vm.CancelResult, err
 		}
@@ -130,6 +125,14 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		projection.ctr.buf.Vecs[i] = vec
 	}
 	projection.maxAllocSize = max(projection.maxAllocSize, projection.ctr.buf.Size())
+	if bat.HasSelection() {
+		output, err := projection.finishSelected(bat, proc.Mp())
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		result.Batch = output
+		return result, nil
+	}
 	projection.ctr.buf.SetRowCount(bat.RowCount())
 	if projection.GroupingSetCount > 0 {
 		projection.ctr.hasInput = true
@@ -176,10 +179,7 @@ func (projection *Projection) emitRuntimeEmptyGroupingSet(proc *process.Process)
 		output.Vecs[i] = vec
 	}
 	for i := groupCount; i < len(output.Vecs)-2; i++ {
-		vec, err := vector.NewConstNullWithAllocation(planTypeToType(projection.ProjectList[i].Typ), 1, nil)
-		if err != nil {
-			return vm.CancelResult, err
-		}
+		vec := vector.NewConstNull(planTypeToType(projection.ProjectList[i].Typ), 1, proc.Mp())
 		projection.ctr.expandOwned = append(projection.ctr.expandOwned, vec)
 		output.Vecs[i] = vec
 	}

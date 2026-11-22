@@ -45,7 +45,7 @@ func (bat *Batch) HasGrouping() bool {
 // provenance. Callers must gate grouping-bearing batches on MORPCVersion87.
 // Batches without grouping retain the previous transport bytes exactly.
 func (bat *Batch) MarshalBinaryForPipeline(w *bytes.Buffer, reset bool) ([]byte, error) {
-	if _, err := bat.MarshalBinaryWithMetadata(w, reset); err != nil {
+	if _, err := bat.MarshalBinaryWithBuffer(w, reset); err != nil {
 		return nil, err
 	}
 	if !bat.HasGrouping() {

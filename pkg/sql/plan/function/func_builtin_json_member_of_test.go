@@ -104,29 +104,6 @@ func TestJSONMemberOfYearUsesNumericJSONDomain(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, nil))
 }
 
-func TestJSONMemberOfPreparedBinaryStringKeepsOpaqueDomain(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	raw := string([]byte{0, 1, 2})
-	array, err := bytejson.CreateByteJSON([]any{newTypedByteJson(bytejson.TpCodeOpaque, raw)})
-	require.NoError(t, err)
-	encoded, err := array.Marshal()
-	require.NoError(t, err)
-
-	testCase := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_text.ToType(), []string{raw}, nil),
-			NewFunctionTestConstInput(types.T_json.ToType(), []string{string(encoded)}, nil),
-		},
-		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
-		jsonMemberOf,
-	)
-	defer testCase.Free()
-	testCase.parameters[0].SetIsBinaryString(true)
-	succeed, message := testCase.Run()
-	require.True(t, succeed, message)
-}
-
 func TestJSONMemberOfStaticBinaryLeftMatchesBinarySubtype(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	raw := string([]byte{0, 1, 2})
@@ -486,13 +463,12 @@ func TestJSONMemberOfRejectsBinaryRightRuntimeProvenance(t *testing.T) {
 		proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
-			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`[1]`}, nil),
+			NewFunctionTestConstInput(types.T_varbinary.ToType(), []string{`[1]`}, nil),
 		},
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonMemberOf,
 	)
 	defer testCase.Free()
-	testCase.parameters[1].SetIsBinaryString(true)
 	require.NoError(t, testCase.result.PreExtendAndReset(1))
 	err := testCase.fn(testCase.parameters, testCase.result, proc, 1, nil)
 	require.EqualError(t, err, "Cannot create a JSON value from a string with CHARACTER SET 'binary'.")

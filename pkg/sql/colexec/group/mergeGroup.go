@@ -52,6 +52,9 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 		if err != nil {
 			return err
 		}
+		if err = mergeGroup.ctr.bindAllocationViews(proc); err != nil {
+			return err
+		}
 		if err = mergeGroup.ctr.installRecoveryCapacity(); err != nil {
 			return err
 		}
@@ -577,16 +580,6 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 	for i := int32(0); i < nAggs; i++ {
 		if err := ctr.spillAggList[i].UnmarshalFromReader(reader, ctr.mp); err != nil {
 			return err
-		}
-		if vec := aggResultVectorForChunk(ctr.spillAggList[i], 0); vec != nil &&
-			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
-			return moerr.NewInvalidStateNoCtx(
-				"aggregate binary-string metadata requires MORPCVersion18")
-		}
-		if vec := aggResultVectorForChunk(ctr.spillAggList[i], 0); vec != nil &&
-			vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
-			return moerr.NewInvalidStateNoCtx(
-				"aggregate explicit-text metadata requires MORPCVersion23")
 		}
 		if err := validateDecodedAggregateGroupCount(
 			ctr.spillAggList[i], bat.RowCount()); err != nil {

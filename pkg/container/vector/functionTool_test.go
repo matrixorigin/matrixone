@@ -68,10 +68,11 @@ func TestAppendBytesWithWriterOwnsFinalAreaAndRollsBack(t *testing.T) {
 func TestAppendBytesWithWriterAdmitsDescriptorBeforeWriter(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1, 1)
 	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_blob.ToType(), state.selection)
+	vec := newAccountedTestVector(t, types.T_blob.ToType())
+	dmp := state.view(t, mp)
 	called := false
 
-	err := AppendBytesWithWriter(vec, 1, mp, func([]byte) error {
+	err := AppendBytesWithWriter(vec, 1, dmp, func([]byte) error {
 		called = true
 		return nil
 	})
@@ -89,21 +90,16 @@ func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(
-		types.T_int64.ToType(), mp, selection,
-	)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_int64.ToType(), view)
 	require.NoError(t, wrapper.PreExtendAndReset(64))
 	transferred := wrapper.GetResultVector()
-	require.Same(t, selection, transferred.AllocationAccountSelection())
 	firstUsed := account.Snapshot().Used
 	require.Positive(t, firstUsed)
 
 	wrapper.SetResultVector(nil)
 	require.NoError(t, wrapper.PreExtendAndReset(64))
-	require.Same(t, selection, wrapper.GetResultVector().AllocationAccountSelection())
 	require.Greater(t, account.Snapshot().Used, firstUsed)
 
 	transferred.Free(mp)
@@ -117,12 +113,9 @@ func TestFunctionResultAllocationBoundsNullUnion(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(
-		types.T_int64.ToType(), mp, selection,
-	)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_int64.ToType(), view)
 	require.NoError(t, wrapper.PreExtendAndReset(1))
 	result := MustFunctionResult[int64](wrapper)
 	require.NoError(t, result.Append(42, false))
@@ -617,10 +610,9 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(types.T_bool.ToType(), mp, selection)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_bool.ToType(), view)
 	t.Cleanup(wrapper.Free)
 	result := MustFunctionResult[bool](wrapper)
 	require.NoError(t, result.PreExtendAndResetNonNull(0))
@@ -629,7 +621,6 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 	require.Error(t, result.PreExtendAndResetNonNull(-1))
 	require.Zero(t, result.vec.Length())
 	require.NoError(t, result.PreExtendAndResetNonNull(128))
-	require.Same(t, selection, result.vec.AllocationAccountSelection())
 	require.Positive(t, account.Snapshot().Used, "value storage is still charged")
 	require.Zero(t, result.vec.GetNulls().GetBitmap().CapWords(), "non-null preparation allocates no bitmap")
 	require.Len(t, result.cols, 128)
@@ -660,7 +651,6 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 	t.Cleanup(func() { transferred.Free(mp) })
 	require.NoError(t, result.PreExtendAndResetNonNull(8))
 	require.Zero(t, result.vec.GetNulls().GetBitmap().CapWords())
-	require.Same(t, selection, result.vec.AllocationAccountSelection())
 }
 
 func TestFunctionResultNonNullPreparationAdmitsValueAllocation(t *testing.T) {
@@ -675,10 +665,9 @@ func TestFunctionResultNonNullPreparationAdmitsValueAllocation(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(types.T_bool.ToType(), mp, selection)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_bool.ToType(), view)
 	t.Cleanup(wrapper.Free)
 	require.ErrorIs(t, MustFunctionResult[bool](wrapper).PreExtendAndResetNonNull(128), mpool.ErrAllocationAccountCapacity)
 	require.Zero(t, wrapper.GetResultVector().Length())

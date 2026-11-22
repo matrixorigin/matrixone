@@ -395,6 +395,10 @@ type updateTargetScope struct {
 }
 
 type QueryBuilder struct {
+	// mixedDomainCoalesce is set when the statement binds a binary-typed
+	// COALESCE that can return a text value; see coalesce_text_domain.go.
+	mixedDomainCoalesce bool
+
 	updateTargetScope *updateTargetScope
 
 	// DELETE owns these generated scan identities. Optimizer consumers must
@@ -455,13 +459,14 @@ type QueryBuilder struct {
 	// Synthetic scalar reaggregations preserve earlier scalar outputs as
 	// grouping keys. Each alias keeps its original column identity through
 	// final column pruning without changing the executable plan format.
-	scalarReaggAliases      map[int32][]scalarReaggAlias
-	headingProvenanceByNode map[int32]headingProvenanceMap
-	windowValidationScans   []*plan.Node
-	nameByColRef            map[[2]int32]string
-	protectedScans          map[int32]int
-	updateTargetScans       map[int32]struct{}
-	projectSpecialGuards    map[int32]*specialIndexGuard
+	scalarReaggAliases             map[int32][]scalarReaggAlias
+	headingProvenanceByNode        map[int32]headingProvenanceMap
+	validationPrivilegeCarriers    []*plan.Node
+	validationPrivilegeCarrierKeys map[string]struct{}
+	nameByColRef                   map[[2]int32]string
+	protectedScans                 map[int32]int
+	updateTargetScans              map[int32]struct{}
+	projectSpecialGuards           map[int32]*specialIndexGuard
 	// projectAnchoredSorts holds Top-K SORT node ids that a PROJECT directly above them
 	// will anchor the vector rewrite on. applyIndices walks children first, so without
 	// this the SORT-anchored entry point would claim the classic
@@ -532,9 +537,21 @@ type QueryBuilder struct {
 	// synthetic bindings must not make arbitrary carried estimates authoritative.
 	syntheticNDVCols map[[2]int32]struct{}
 
-	nextBindTag      int32
-	nextMsgTag       int32
-	nextSQLUdfCallID uint64
+	nextBindTag                 int32
+	nextMsgTag                  int32
+	nextSQLUdfCallID            uint64
+	udfResolutionCount          uint64
+	udfExpansionDepth           uint32
+	zeroScalarRewriteGeneration uint64
+	zeroScalarArgumentWrappers  []int32
+	// Tracks discarded scalar sources even when their carrier was deduplicated.
+	zeroScalarRetentionGeneration uint64
+	// Tracks special checks in isolated validation builders nested in a scalar.
+	zeroScalarValidationSpecialGeneration uint64
+	zeroScalarPrograms                    map[uint32]struct{}
+	zeroScalarPolicy                      zeroScalarPolicy
+	zeroScalarRequiredLiveNodes           map[int32]zeroScalarLiveRequirement
+	hasZeroScalarSourceCandidate          bool
 	// Negative AuxIds identify memoized expression sources across every bind
 	// context that can contribute expressions to this query.
 	nextVolatileExprMemoID int32
@@ -1135,6 +1152,10 @@ type BindContext struct {
 	// names for its $n parameters; resolving those markers from a child query
 	// block turns the argument's column references into correlated references.
 	sqlUdfArgs map[string]*plan.Expr
+	// zeroScalarRootSourceSafe is set only after the original AST and the
+	// complete binding pass prove the narrow LIMIT 0 source has no hidden
+	// dependency or UDF expansion.
+	zeroScalarRootSourceSafe bool
 
 	// for join tables
 	bindingTree *BindingTreeNode
@@ -1336,6 +1357,7 @@ type TableBinder struct {
 
 type WhereBinder struct {
 	baseBinder
+	preparedSetSubqueries map[*tree.Subquery][]int32
 }
 
 type GroupBinder struct {

@@ -127,15 +127,6 @@ func TestJsonDepthRejectsMalformedTypeAndBinaryDomain(t *testing.T) {
 		JsonDepth)
 	succeed, info := fc.RunAndFree()
 	require.True(t, succeed, info)
-
-	input := vector.NewVec(types.T_varchar.ToType())
-	defer input.Free(proc.Mp())
-	require.NoError(t, vector.AppendBytes(input, []byte(`1`), false, proc.Mp()))
-	input.SetIsBinaryString(true)
-	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
-	defer result.Free()
-	require.NoError(t, result.PreExtendAndReset(1))
-	require.Error(t, JsonDepth([]*vector.Vector{input}, result, proc, 1, nil))
 }
 
 func TestJsonDepthRejectsEmptyTypedPayloadWithoutPanic(t *testing.T) {

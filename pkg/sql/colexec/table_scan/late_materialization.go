@@ -266,6 +266,9 @@ func (tableScan *TableScan) readBatch(
 		tableScan.prepareColumnUses()
 		tableScan.ctr.readerFilter.ColumnUses = tableScan.ctr.columnUses
 	}
+	// The reader allocates through proc's pool, so its internal buffers are
+	// not charged to the statement account. The output batch it fills is
+	// charged by a capacity lease once Call is about to emit it.
 	if !ok || tableScan.ctr.readerFilter == nil || readerSummaryEnabled {
 		return process.MeasureFilesystemWait(tableScan.OpAnalyzer, func() (bool, error) {
 			return tableScan.Reader.Read(

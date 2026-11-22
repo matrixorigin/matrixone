@@ -765,13 +765,11 @@ func TestResetForSpillReleasesGroupingSentinel(t *testing.T) {
 	require.NoError(t, g.Prepare(proc))
 
 	before := allocation.account.Snapshot().Used
-	rollup, err := vector.NewRollupConstWithAllocation(
+	rollup := vector.NewRollupConst(
 		types.T_int32.ToType(),
 		hashmap.UnitLimit,
-		g.ctr.mp,
-		g.ctr.expressionAllocation,
+		g.ctr.rollupMP(),
 	)
-	require.NoError(t, err)
 	g.ctr.groupingRollup = []*vector.Vector{rollup}
 
 	g.ctr.resetForSpill()
@@ -811,11 +809,8 @@ func TestAccountedGroupProjectionClosesBeforePreparedAttemptTerminal(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
 	require.Len(t, result.Batch.Vecs, 1)
-	require.Same(
-		t,
-		g.ctr.expressionAllocation,
-		result.Batch.Vecs[0].AllocationAccountSelection(),
-	)
+	require.NotNil(t, g.ctr.expressionAllocation)
+	require.Same(t, allocation.account, g.ctr.expressionAllocation.ViewAccount())
 
 	// Prepared execution performs Reset without Free before the statement
 	// allocation attempt reaches its terminal boundary.
@@ -883,18 +878,17 @@ func TestConstVarlenaGroupKeyPreflightCopiesPayloadOnce(t *testing.T) {
 		require.NoError(t, err)
 		account, err := registry.Open(limit)
 		require.NoError(t, err)
-		selection, err := vector.NewAllocationAccountSelection(
+		view, err := mp.WithAccount(
 			account,
 			mpool.AllocationOwnerGroup,
 			GroupAllocationSiteKeyData,
-			GroupAllocationSiteKeyArea,
+			mpool.AllocationCapacityClassDefault,
 		)
 		require.NoError(t, err)
 		source, err := vector.NewConstBytes(
 			types.T_text.ToType(), payload, rows, mp)
 		require.NoError(t, err)
 		destination := vector.NewOffHeapVecWithType(types.T_text.ToType())
-		require.NoError(t, destination.SetAllocationAccount(selection))
 		defer func() {
 			destination.Free(mp)
 			source.Free(mp)
@@ -907,10 +901,10 @@ func TestConstVarlenaGroupKeyPreflightCopiesPayloadOnce(t *testing.T) {
 
 		var preflight vector.SelectedBatchPreflight
 		preflight, err = destination.PreExtendSelectedBatch(
-			source, 0, rows, flags, rows, mp)
+			source, 0, rows, flags, rows, view)
 		admitted := account.Snapshot().Used
 		if err == nil {
-			err = destination.UnionBatchPreflighted(source, 0, rows, flags, &preflight, mp)
+			err = destination.UnionBatchPreflighted(source, 0, rows, flags, &preflight, view)
 			if err == nil {
 				require.Equal(t, admitted, account.Snapshot().Used)
 				require.Equal(t, len(payload), len(destination.GetArea()))
@@ -1145,7 +1139,7 @@ func TestPreAllocateBuildChunkIncludesVectorBitmaps(t *testing.T) {
 	input.Clean(proc.Mp())
 }
 
-func TestGroupSelectedBinaryPreflightAllocatesNothingAfterHashCommit(t *testing.T) {
+func TestGroupSelectedPreflightAllocatesNothingAfterHashCommit(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
@@ -1155,8 +1149,6 @@ func TestGroupSelectedBinaryPreflightAllocatesNothingAfterHashCommit(t *testing.
 		vector.AppendBytes(input.Vecs[0], []byte("binary"), false, proc.Mp()))
 	require.NoError(t,
 		vector.AppendBytes(input.Vecs[0], []byte("text"), false, proc.Mp()))
-	require.NoError(t, input.Vecs[0].SetBinaryStringRowsWithMP(
-		[]bool{true, false}, proc.Mp()))
 	input.SetRowCount(2)
 
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)}, nil)
@@ -1207,8 +1199,8 @@ func TestGroupSelectedBinaryPreflightAllocatesNothingAfterHashCommit(t *testing.
 	require.Equal(t, uint64(2), g.ctr.hr.Hash.GroupCount())
 	require.Len(t, g.ctr.groupByBatches, 1)
 	keys := g.ctr.groupByBatches[0].Vecs[0]
-	require.True(t, keys.GetBinaryStringMetadataAt(0))
-	require.False(t, keys.GetBinaryStringMetadataAt(1))
+	require.Equal(t, "binary", keys.GetStringAt(0))
+	require.Equal(t, "text", keys.GetStringAt(1))
 
 	g.Free(proc, false, nil)
 	require.Zero(t, account.Snapshot().Used)
@@ -1556,27 +1548,22 @@ func TestAccountedGroupResidentAndSpillMatchForH8AndHStr(t *testing.T) {
 	}
 }
 
-func TestAccountedGroupSpillPreservesBinaryStringProvenance(t *testing.T) {
+func TestAccountedGroupSpillPreservesStringKeys(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
 	const groups = 1024
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	binaryRows := make([]bool, 0, groups*2)
-	wantBinary := make(map[string]bool, groups)
+	wantKeys := make(map[string]bool, groups)
 	for pass := 0; pass < 2; pass++ {
 		for group := 0; group < groups; group++ {
 			key := "key-" + strconv.Itoa(group) + "-binary-provenance"
 			require.NoError(t,
 				vector.AppendBytes(input.Vecs[0], []byte(key), false, proc.Mp()))
-			binary := group%2 == 0
-			binaryRows = append(binaryRows, binary)
-			wantBinary[key] = binary
+			wantKeys[key] = true
 		}
 	}
-	require.NoError(t,
-		input.Vecs[0].SetBinaryStringRowsWithMP(binaryRows, proc.Mp()))
 	input.SetRowCount(groups * 2)
 
 	g := newGroupOp(
@@ -1600,8 +1587,8 @@ func TestAccountedGroupSpillPreservesBinaryStringProvenance(t *testing.T) {
 		for row, count := range counts {
 			key := string(result.Batch.Vecs[0].GetBytesAt(row))
 			require.Equal(t, int64(2), count)
-			require.Equal(t, wantBinary[key],
-				result.Batch.Vecs[0].GetBinaryStringMetadataAt(row), "key=%s", key)
+			require.True(t, wantKeys[key], "key=%s", key)
+			delete(wantKeys, key)
 			seen++
 		}
 	}
@@ -3160,7 +3147,7 @@ func TestStreamingGroupMixedDistinctSpill(t *testing.T) {
 							break
 						}
 						// The transport copy outlives this producer's allocation account.
-						cloned, err := result.Batch.DupWithoutAllocationAccount(proc.Mp())
+						cloned, err := result.Batch.Dup(proc.Mp())
 						require.NoError(t, err)
 						cloned.ExtraBuf = append([]byte(nil), result.Batch.ExtraBuf...)
 						partials = append(partials, cloned)

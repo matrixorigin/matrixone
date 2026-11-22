@@ -296,23 +296,6 @@ func TestRandomBytesDecimalHighScalePathsAgree(t *testing.T) {
 	require.Equal(t, 2, run(t, NewFunctionTestConstInput(typ, []types.Decimal128{value}, nil)))
 }
 
-func TestRandomBytesHonorsRuntimeTextOverrideForBinaryCommonType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	t.Run("constant text override", func(t *testing.T) {
-		input, err := vector.NewConstBytes(types.T_varbinary.ToType(), []byte("2"), 1, proc.Mp())
-		require.NoError(t, err)
-		defer input.Free(proc.Mp())
-		require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, proc.Mp()))
-
-		result := vector.NewFunctionResultWrapper(types.T_blob.ToType(), proc.Mp())
-		defer result.Free()
-		require.NoError(t, result.PreExtendAndReset(1))
-		require.NoError(t, RandomBytes([]*vector.Vector{input}, result, proc, 1, nil))
-		require.Len(t, result.GetResultVector().GetBytesAt(0), 2)
-	})
-}
-
 func TestRandomBytesCoversAllAcceptedScalarGetterTypes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	year, err := types.ParseMoYearFromInt(1)
@@ -398,7 +381,7 @@ func TestRandomBytesRejectsInvalidParameterShapeAndType(t *testing.T) {
 
 	unsupported := vector.NewVec(types.T_date.ToType())
 	defer unsupported.Free(proc.Mp())
-	_, err := makeRandomBytesLengthGetter(unsupported, proc)
+	_, err := makeRandomBytesLengthGetter(unsupported, false, proc)
 	require.Error(t, err)
 }
 

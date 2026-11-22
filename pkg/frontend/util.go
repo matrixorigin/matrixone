@@ -59,7 +59,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	planrule "github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -197,18 +196,26 @@ func WildcardMatch(pattern, target string) bool {
 
 // getExprValue executes the expression and returns the value.
 func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (interface{}, error) {
-	return getExprValueWithPrepareMode(e, ses, execCtx, false, isBin...)
+	if len(isBin) > 0 {
+		*isBin[0] = false
+	}
+	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, false, nil, nil, nil)
+	return value, err
 }
 
-func getExprValueWithPrepareMode(
-	e tree.Expr,
-	ses *Session,
-	execCtx *ExecCtx,
-	preparedExpression bool,
-	isBin ...*bool,
-) (interface{}, error) {
-	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, nil, nil, isBin...)
-	return value, err
+// Capture the binary-literal flag from the SELECT generation that produced the
+// value. The result batches do not carry it, and the PREPARE binding may be stale.
+type setReplayResponder struct {
+	NullResp
+	isBin *bool
+}
+
+func (r *setReplayResponder) RespPreMeta(execCtx *ExecCtx, _ any) error {
+	isBin, err := selectIntoResultIsBin(execCtx.proc, execCtx.cw.Plan())
+	if err == nil && len(isBin) == 1 {
+		*r.isBin = isBin[0]
+	}
+	return err
 }
 
 func getExprValueWithPrepareMeta(
@@ -216,10 +223,9 @@ func getExprValueWithPrepareMeta(
 	ses *Session,
 	execCtx *ExecCtx,
 	preparedExpression bool,
-	materializedResult **plan.Expr,
 	prepareParamKind *types.StringConversionKind,
 	runtimeDomain *types.RuntimeStringDomain,
-	isBin ...*bool,
+	leafIsBin *bool,
 ) (interface{}, plan.Type, error) {
 	/*
 		CORNER CASE:
@@ -230,9 +236,6 @@ func getExprValueWithPrepareMeta(
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
-		if len(isBin) > 0 {
-			*isBin[0] = false
-		}
 		if prepareParamKind != nil {
 			*prepareParamKind = types.StringConversionString
 		}
@@ -291,8 +294,12 @@ func getExprValueWithPrepareMeta(
 		preparedParamVals = execCtx.cw.ParamVals()
 		preparedBinaryExecute = execCtx.input != nil && execCtx.input.isBinaryProtExecute
 	}
+	var resper Responser = &NullResp{}
+	if leafIsBin != nil {
+		resper = &setReplayResponder{isBin: leafIsBin}
+	}
 	err = executeStmtInSameSession(
-		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect,
+		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, resper,
 		preparedExpression, preparedParamVals, preparedBinaryExecute)
 	if err != nil {
 		return nil, plan.Type{}, err
@@ -332,18 +339,15 @@ func getExprValueWithPrepareMeta(
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
 	if oid == types.T_decimal64 || oid == types.T_decimal128 || oid == types.T_decimal256 || resultVec.IsNull(0) {
-		planExpr, err = bindSetVariableResultExpr(
+		planExpr, err = plan2.BindSetVariableResultType(
 			e, ses.GetTxnCompileCtx(), preparedExpression)
 		if err != nil {
 			return nil, plan.Type{}, err
 		}
 	}
 
-	if len(isBin) > 0 {
-		*isBin[0] = resultVec.GetIsBin()
-	}
 	if runtimeDomain != nil {
-		*runtimeDomain = resultVec.GetRuntimeStringDomainAt(0)
+		*runtimeDomain = types.RuntimeStringInherit
 	}
 	if prepareParamKind != nil {
 		*prepareParamKind, err = transparentPrepareParamKind(e, ses)
@@ -355,8 +359,23 @@ func getExprValueWithPrepareMeta(
 		}
 	}
 	resultType := plan2.MakePlan2Type(resultVec.GetType())
+	if planExpr != nil &&
+		(oid == types.T_decimal64 || oid == types.T_decimal128 || oid == types.T_decimal256) {
+		// EXECUTE can specialize the result scale after the assignment binder
+		// captures the template type. Keep the synthetic SELECT's runtime scale
+		// for both formatting and typed NULL assignment.
+		planExpr.Typ.Scale = int32(resultVec.GetType().Scale)
+	}
 	if resultVec.IsNull(0) {
+		if leafIsBin != nil {
+			*leafIsBin = false
+		}
 		resultType = planExpr.Typ
+		runtimeType := resultVec.GetType()
+		if preparedExpression && runtimeType.Oid != types.T_any &&
+			(runtimeType.Oid != types.T_text || planExpr.Typ.Id == int32(types.T_text)) {
+			resultType = plan2.MakePlan2Type(runtimeType)
+		}
 		// A user-variable NULL is displayed as TEXT by the projection binder,
 		// but SET @dst = @src must copy its logical source domain. In
 		// particular, an untyped NULL must remain ANY for the next consumer.
@@ -368,254 +387,7 @@ func getExprValueWithPrepareMeta(
 		}
 	}
 	value, err := getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
-	if err != nil {
-		return nil, plan.Type{}, err
-	}
-	if materializedResult != nil {
-		source := setExprStringSource(e, ses)
-		literal := planrule.GetConstantValue(resultVec, false, 0, source)
-		if literal == nil && resultVec.GetType().Oid == types.T_enum {
-			literal = planrule.GetConstantValue(resultVec, true, 0, source)
-		}
-		if literal != nil {
-			*materializedResult = &plan.Expr{Typ: resultType, Expr: &plan.Expr_Lit{Lit: literal}}
-		} else {
-			source := plan2.MakePlan2StringConstExprWithType(fmt.Sprintf("%v", value))
-			target := &plan.Expr{Typ: resultType, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
-			*materializedResult, err = plan2.BindFuncExprImplByPlanExpr(
-				execCtx.reqCtx, "cast", []*plan.Expr{source, target})
-			if err != nil {
-				return nil, plan.Type{}, err
-			}
-		}
-	}
-	return value, resultType, nil
-}
-
-func collectScalarSubqueries(expr tree.Expr, subqueries *[]*tree.Subquery) {
-	if expr == nil {
-		return
-	}
-	switch current := expr.(type) {
-	case *tree.Subquery:
-		*subqueries = append(*subqueries, current)
-	case *tree.ComparisonExpr:
-		collectScalarSubqueries(current.Left, subqueries)
-		collectScalarSubqueries(current.Right, subqueries)
-	case *tree.AndExpr:
-		collectScalarSubqueries(current.Left, subqueries)
-		collectScalarSubqueries(current.Right, subqueries)
-	case *tree.OrExpr:
-		collectScalarSubqueries(current.Left, subqueries)
-		collectScalarSubqueries(current.Right, subqueries)
-	case *tree.XorExpr:
-		collectScalarSubqueries(current.Left, subqueries)
-		collectScalarSubqueries(current.Right, subqueries)
-	case *tree.BinaryExpr:
-		collectScalarSubqueries(current.Left, subqueries)
-		collectScalarSubqueries(current.Right, subqueries)
-	case *tree.UnaryExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.NotExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.ParenExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.IsNullExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.IsNotNullExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.IsUnknownExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.IsNotUnknownExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.IsTrueExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.IsNotTrueExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.IsFalseExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.IsNotFalseExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.CastExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.CollateExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.BitCastExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.IntervalExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-	case *tree.SerialExtractExpr:
-		collectScalarSubqueries(current.SerialExpr, subqueries)
-		collectScalarSubqueries(current.IndexExpr, subqueries)
-	case *tree.FuncExpr:
-		for _, arg := range current.Exprs {
-			collectScalarSubqueries(arg, subqueries)
-		}
-		for _, order := range current.OrderBy {
-			if order != nil {
-				collectScalarSubqueries(order.Expr, subqueries)
-			}
-		}
-		if current.WindowSpec != nil {
-			for _, partition := range current.WindowSpec.PartitionBy {
-				collectScalarSubqueries(partition, subqueries)
-			}
-			for _, order := range current.WindowSpec.OrderBy {
-				if order != nil {
-					collectScalarSubqueries(order.Expr, subqueries)
-				}
-			}
-			if frame := current.WindowSpec.Frame; frame != nil {
-				if frame.Start != nil {
-					collectScalarSubqueries(frame.Start.Expr, subqueries)
-				}
-				if frame.End != nil {
-					collectScalarSubqueries(frame.End.Expr, subqueries)
-				}
-			}
-		}
-	case *tree.Tuple:
-		for _, item := range current.Exprs {
-			collectScalarSubqueries(item, subqueries)
-		}
-	case *tree.RangeCond:
-		collectScalarSubqueries(current.Left, subqueries)
-		collectScalarSubqueries(current.From, subqueries)
-		collectScalarSubqueries(current.To, subqueries)
-	case *tree.CaseExpr:
-		collectScalarSubqueries(current.Expr, subqueries)
-		for _, when := range current.Whens {
-			collectScalarSubqueries(when.Cond, subqueries)
-			collectScalarSubqueries(when.Val, subqueries)
-		}
-		collectScalarSubqueries(current.Else, subqueries)
-	case *tree.ExprList:
-		for _, item := range current.Exprs {
-			collectScalarSubqueries(item, subqueries)
-		}
-	}
-}
-
-func replacePreparedPlanSubqueries(expr *plan.Expr, replacements []*plan.Expr, position *int) (*plan.Expr, error) {
-	if expr == nil {
-		return nil, nil
-	}
-	if expr.GetSub() != nil {
-		if *position >= len(replacements) {
-			return nil, moerr.NewInternalErrorNoCtx("prepared SET expression subquery count mismatch")
-		}
-		replacement := replacements[*position]
-		*position = *position + 1
-		if replacement.GetLit().GetIsnull() {
-			replacement.Typ = expr.Typ
-		}
-		return replacement, nil
-	}
-	if fn := expr.GetF(); fn != nil {
-		for i, arg := range fn.Args {
-			var err error
-			fn.Args[i], err = replacePreparedPlanSubqueries(arg, replacements, position)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	if list := expr.GetList(); list != nil {
-		for i, item := range list.List {
-			var err error
-			list.List[i], err = replacePreparedPlanSubqueries(item, replacements, position)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	if lit := expr.GetLit(); lit != nil && lit.Src != nil {
-		var err error
-		lit.Src, err = replacePreparedPlanSubqueries(lit.Src, replacements, position)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if window := expr.GetW(); window != nil {
-		var err error
-		window.WindowFunc, err = replacePreparedPlanSubqueries(window.WindowFunc, replacements, position)
-		if err != nil {
-			return nil, err
-		}
-		for i, partition := range window.PartitionBy {
-			window.PartitionBy[i], err = replacePreparedPlanSubqueries(partition, replacements, position)
-			if err != nil {
-				return nil, err
-			}
-		}
-		for _, order := range window.OrderBy {
-			if order != nil {
-				order.Expr, err = replacePreparedPlanSubqueries(order.Expr, replacements, position)
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
-		if frame := window.Frame; frame != nil {
-			if frame.Start != nil {
-				frame.Start.Val, err = replacePreparedPlanSubqueries(frame.Start.Val, replacements, position)
-				if err != nil {
-					return nil, err
-				}
-			}
-			if frame.End != nil {
-				frame.End.Val, err = replacePreparedPlanSubqueries(frame.End.Val, replacements, position)
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
-	}
-	return expr, nil
-}
-
-func getPreparedPlanExprValueWithSubqueries(
-	astExpr tree.Expr,
-	specializedExpr *plan.Expr,
-	ses *Session,
-	execCtx *ExecCtx,
-	prepareParamKind *types.StringConversionKind,
-	runtimeDomain *types.RuntimeStringDomain,
-	isBin *bool,
-) (interface{}, plan.Type, error) {
-	var subqueries []*tree.Subquery
-	collectScalarSubqueries(astExpr, &subqueries)
-	replacements := make([]*plan.Expr, len(subqueries))
-	for i, subquery := range subqueries {
-		var subqueryKind types.StringConversionKind
-		var subqueryIsBin bool
-		_, _, err := getExprValueWithPrepareMeta(
-			subquery, ses, execCtx, true, &replacements[i], &subqueryKind, nil, &subqueryIsBin)
-		if err != nil {
-			return nil, plan.Type{}, err
-		}
-	}
-	runtimeExpr := plan2.DeepCopyExpr(specializedExpr)
-	position := 0
-	var err error
-	runtimeExpr, err = replacePreparedPlanSubqueries(runtimeExpr, replacements, &position)
-	if err != nil {
-		return nil, plan.Type{}, err
-	}
-	if position != len(replacements) {
-		return nil, plan.Type{}, moerr.NewInternalErrorNoCtx("prepared SET expression subquery count mismatch")
-	}
-	return getPreparedPlanExprValueWithMeta(
-		runtimeExpr, ses, execCtx, prepareParamKind, runtimeDomain, isBin)
-}
-
-func preparedPlanExprContainsSubquery(expr *plan.Expr) bool {
-	contains := false
-	_ = plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
-		contains = contains || candidate.GetSub() != nil
-		return nil
-	})
-	return contains
+	return value, resultType, err
 }
 
 func getPreparedPlanExprValueWithMeta(
@@ -641,57 +413,18 @@ func getPreparedPlanExprValueWithMeta(
 		return nil, plan.Type{}, err
 	}
 	if isBin != nil {
-		*isBin = result.GetIsBin()
+		if *isBin, err = colexec.ExprIsBinLiteral(execCtx.proc, expr); err != nil {
+			return nil, plan.Type{}, err
+		}
 	}
 	if runtimeDomain != nil {
-		*runtimeDomain = result.GetRuntimeStringDomainAt(0)
+		*runtimeDomain = types.RuntimeStringInherit
 	}
 	if prepareParamKind != nil {
 		*prepareParamKind = prepareParamKindFromType(result.GetType().Oid)
 	}
 	value, err := getValueFromVector(execCtx.reqCtx, result, ses, expr)
 	return value, plan2.MakePlan2Type(result.GetType()), err
-}
-
-// setExprStringSource is where the value of a SET expression comes from, by
-// the rules constant folding applies to plan expressions: a literal is a
-// literal, a variable a user variable, a parameter has its execution's source,
-// COALESCE takes its first arm that is not a NULL literal, and anything else
-// computes a new value.
-func setExprStringSource(e tree.Expr, ses *Session) types.StringSource {
-	for {
-		switch expr := e.(type) {
-		case *tree.ParenExpr:
-			e = expr.Expr
-		case *tree.NumVal, *tree.StrVal:
-			return types.StringSourceLiteral
-		case *tree.VarExpr:
-			return types.StringSourceUserVariable
-		case *tree.ParamExpr:
-			if proc := ses.GetProc(); proc != nil {
-				return proc.GetPrepareParamsStringSource()
-			}
-			return types.StringSourceExpression
-		case *tree.FuncExpr:
-			if expr.FuncName == nil || !strings.EqualFold(expr.FuncName.Origin(), "coalesce") {
-				return types.StringSourceExpression
-			}
-			next := tree.Expr(nil)
-			for _, arg := range expr.Exprs {
-				if num, isNum := arg.(*tree.NumVal); isNum && num.ValType == tree.P_null {
-					continue
-				}
-				next = arg
-				break
-			}
-			if next == nil {
-				return types.StringSourceExpression
-			}
-			e = next
-		default:
-			return types.StringSourceExpression
-		}
-	}
 }
 
 // transparentPrepareParamKind closes the metadata boundary introduced by SET's
@@ -724,18 +457,6 @@ func transparentPrepareParamKind(e tree.Expr, ses *Session) (types.StringConvers
 			return types.StringConversionString, nil
 		}
 	}
-}
-
-func bindSetVariableResultExpr(
-	e tree.Expr,
-	compilerContext plan2.CompilerContext,
-	preparedExpression bool,
-) (*plan.Expr, error) {
-	builder := plan2.NewQueryBuilder(
-		plan.Query_SELECT, compilerContext, preparedExpression, false)
-	bindContext := plan2.NewBindContext(builder, nil)
-	binder := plan2.NewProjectionBinder(builder, bindContext, plan2.NewHavingBinder(builder, bindContext))
-	return binder.BindExpr(e, 0, false)
 }
 
 // bindFrontendExpressionContext borrows only the pipeline context field for

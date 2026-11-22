@@ -329,7 +329,8 @@ func TestAccountedFillLinearDecimal256ExpressionSelection(t *testing.T) {
 			result, owned, err := linearFillValue(&op.ctr, proc, 0, input, 0, input, 1)
 			require.NoError(t, err)
 			require.True(t, owned)
-			require.Same(t, op.ctr.expressionAllocation, result.AllocationAccountSelection())
+			require.NotNil(t, op.ctr.expressionAllocation)
+			require.Equal(t, state.account, op.ctr.expressionAllocation.ViewAccount())
 			if test.typ.Oid == types.T_decimal256 {
 				require.Equal(t, types.Decimal256FromInt64(115), vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
 			} else {
@@ -352,7 +353,9 @@ func TestAccountedFillLinearDecimal256ExpressionSelection(t *testing.T) {
 func TestAccountedFillLinearDecimal256RejectsInvalidExpressionSelection(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
-	op.ctr.expressionAllocation = new(vector.AllocationAccountSelection)
+	// An account the pool cannot build a view for must fail before the
+	// result vector is allocated.
+	op.ctr.allocationAccount = new(mpool.AllocationAccount)
 	input := makeAccountedDecimal256Batch(t, proc, []int64{100, 130}, nil)
 
 	result, owned, err := linearFillValue(&op.ctr, proc, 0, input, 0, input, 1)
@@ -361,7 +364,7 @@ func TestAccountedFillLinearDecimal256RejectsInvalidExpressionSelection(t *testi
 	require.False(t, owned)
 
 	input.Clean(proc.Mp())
-	op.ctr.expressionAllocation = nil
+	op.ctr.allocationAccount = nil
 	op.Free(proc, true, err)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -380,7 +383,7 @@ func TestUnaccountedFillLinearDecimal256KeepsRegularVector(t *testing.T) {
 	result, owned, err := linearFillValue(&op.ctr, proc, 0, input, 0, input, 1)
 	require.NoError(t, err)
 	require.True(t, owned)
-	require.Nil(t, result.AllocationAccountSelection())
+	require.Nil(t, op.ctr.expressionAllocation)
 	require.Equal(t, types.Decimal256FromInt64(115), vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
 	result.Free(proc.Mp())
 	input.Clean(proc.Mp())

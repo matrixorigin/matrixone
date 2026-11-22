@@ -125,11 +125,6 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 						ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*buildBat.Vecs[rp.Pos].GetType())
 					}
 				}
-				if err := ctr.rbat.SetAllocationAccount(product.resultAllocation); err != nil {
-					ctr.rbat.Clean(proc.Mp())
-					ctr.rbat = nil
-					return result, err
-				}
 			} else {
 				ctr.rbat.CleanOnlyData()
 			}
@@ -164,6 +159,10 @@ func (product *Product) build(proc *process.Process, analyzer process.Analyzer) 
 }
 
 func (ctr *container) probe(ap *Product, proc *process.Process, result *vm.CallResult) error {
+	resMP, err := ap.resultAllocation.MP(proc.Mp())
+	if err != nil {
+		return err
+	}
 	count := ctr.inBat.RowCount()
 	batches := ctr.mp.GetBatches()
 	for ctr.buildBatIdx < len(batches) {
@@ -177,11 +176,11 @@ func (ctr *container) probe(ap *Product, proc *process.Process, result *vm.CallR
 			for probeRow := 0; probeRow < count; probeRow++ {
 				for k, rp := range ap.Result {
 					if rp.Rel == 0 {
-						if err := ctr.rbat.Vecs[k].UnionOne(ctr.inBat.Vecs[rp.Pos], int64(probeRow), proc.Mp()); err != nil {
+						if err := ctr.rbat.Vecs[k].UnionOne(ctr.inBat.Vecs[rp.Pos], int64(probeRow), resMP); err != nil {
 							return err
 						}
 					} else {
-						if err := ctr.rbat.Vecs[k].UnionOne(buildBat.Vecs[rp.Pos], int64(row), proc.Mp()); err != nil {
+						if err := ctr.rbat.Vecs[k].UnionOne(buildBat.Vecs[rp.Pos], int64(row), resMP); err != nil {
 							return err
 						}
 					}

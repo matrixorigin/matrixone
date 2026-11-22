@@ -1875,7 +1875,7 @@ rowLoop:
 				}
 				continue rowLoop
 			}
-			val, err := op.buildJsonModifyValue(proc, parameters[j], int(i), protocolVersion)
+			val, err := op.buildJsonModifyValue(proc, parameters[j], result.ArgumentIsBin(j), int(i), protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -1922,8 +1922,8 @@ func jsonModifyFunctionName(jsonFuncType bytejson.JsonModifyType) string {
 	}
 }
 
-func (op *opBuiltInJsonSet) buildJsonModifyValue(proc *process.Process, v *vector.Vector, row int, protocolVersion int64) (bytejson.ByteJson, error) {
-	elem, err := (&opBuiltInJsonArray{}).convertToAny(proc, v, row, protocolVersion)
+func (op *opBuiltInJsonSet) buildJsonModifyValue(proc *process.Process, v *vector.Vector, isBin bool, row int, protocolVersion int64) (bytejson.ByteJson, error) {
+	elem, err := (&opBuiltInJsonArray{}).convertToAny(proc, v, isBin, row, protocolVersion)
 	if err != nil {
 		return bytejson.Null, err
 	}
@@ -1959,7 +1959,7 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 		}
 		elems := make([]any, 0, len(params))
 		for i := 0; i < len(params); i++ {
-			elem, err := op.convertToAny(proc, params[i], j, protocolVersion)
+			elem, err := op.convertToAny(proc, params[i], result.ArgumentIsBin(i), j, protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -1981,7 +1981,9 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 	return nil
 }
 
-func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vector, row int, protocolVersion int64) (any, error) {
+// convertToAny converts row of v to a JSON value. isBin is v's
+// binary-literal flag (vector.FunctionResultWrapper.ArgumentIsBin).
+func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vector, isBin bool, row int, protocolVersion int64) (any, error) {
 	ctx := context.Background()
 	if proc != nil {
 		ctx = proc.Ctx
@@ -1989,7 +1991,7 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 	if !v.IsNull(uint64(row)) {
 		switch v.GetType().Oid {
 		case types.T_char, types.T_varchar, types.T_text:
-			if v.GetIsBinaryStringAt(row) {
+			if isBinaryStringVector(v, isBin) {
 				return newTypedByteJson(bytejson.TpCodeOpaque, string(v.GetBytesAt(row))), nil
 			}
 		}
@@ -2130,7 +2132,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 				key = fmt.Sprint(v)
 			}
 
-			elem, err := arrayOp.convertToAny(proc, params[i+1], j, protocolVersion)
+			elem, err := arrayOp.convertToAny(proc, params[i+1], result.ArgumentIsBin(i+1), j, protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -2193,7 +2195,8 @@ func (op *opBuiltInJsonObject) convertKeyToAny(
 	case types.T_geometry:
 		return string(v.GetBytesAt(row)), nil
 	default:
-		return arrayOp.convertToAny(proc, v, row, protocolVersion)
+		// The string types the binary-literal flag applies to return above.
+		return arrayOp.convertToAny(proc, v, false, row, protocolVersion)
 	}
 }
 

@@ -168,13 +168,13 @@ func TestIntervalResultPreservesAccountedInputVectors(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account, 1, 1, 2)
+	view, err := mp.WithAccount(
+		account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
 	value := vector.NewOffHeapVecWithType(types.T_int64.ToType())
-	require.NoError(t, value.SetAllocationAccount(selection))
-	require.NoError(t, vector.AppendFixed(value, int64(42), false, mp))
+	require.NoError(t, vector.AppendFixed(value, int64(42), false, view))
+	require.Positive(t, account.Snapshot().Used)
 	ctr := container{
 		colCnt: 1,
 		i:      1,
@@ -195,28 +195,29 @@ func TestIntervalResultPreservesAccountedInputVectors(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestTimeWinResetReleasesInheritedAccountedInput(t *testing.T) {
+func TestTimeWinResetReleasesAccountedInputCaches(t *testing.T) {
 	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	shared := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	budget, err := shared.OpenGeneration(1)
+	require.NoError(t, err)
+	defer shared.Close()
+	defer budget.Close()
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(budget))
 	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
 	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerOrder, 1, 2)
+	account, err := registry.OpenWithController(1<<20, budget)
 	require.NoError(t, err)
 
-	ts := vector.NewOffHeapVecWithType(types.T_datetime.ToType())
-	require.NoError(t, ts.SetAllocationAccount(selection))
+	ts := vector.NewVec(types.T_datetime.ToType())
 	require.NoError(t, vector.AppendFixed(ts, types.Datetime(1), false, mp))
-	value := vector.NewOffHeapVecWithType(types.T_int32.ToType())
-	require.NoError(t, value.SetAllocationAccount(selection))
+	value := vector.NewVec(types.T_int32.ToType())
 	require.NoError(t, vector.AppendFixed(value, int32(42), false, mp))
-	input := batch.NewOffHeapWithSize(2)
+	input := batch.NewWithSize(2)
 	input.SetVector(0, ts)
 	input.SetVector(1, value)
 	input.SetRowCount(1)
 
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	arg := &TimeWin{
 		Types:    []types.Type{types.T_int32.ToType()},
 		Aggs:     []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil)},
@@ -225,13 +226,14 @@ func TestTimeWinResetReleasesInheritedAccountedInput(t *testing.T) {
 		EndExpr:  newExpression(0),
 		Interval: makeInterval(),
 	}
+	require.NoError(t, arg.SetAllocationAccount(account))
 	require.NoError(t, arg.Prepare(proc))
 	ok, err := arg.ctr.evalVector(input, proc)
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	// Pipeline cleanup resets children before parents. Once the input owner is
-	// gone, only TimeWin's inherited duplicate capacity remains in the attempt.
+	// The input owner is unaccounted; the buffered duplicates are charged to
+	// TimeWin's own account through its view.
 	input.Clean(mp)
 	require.Positive(t, account.Snapshot().Used)
 	arg.Reset(proc, false, nil)
@@ -239,6 +241,7 @@ func TestTimeWinResetReleasesInheritedAccountedInput(t *testing.T) {
 
 	require.NoError(t, arg.Prepare(proc))
 	arg.Free(proc, false, nil)
+	require.NoError(t, arg.ClearAllocationAccount(account))
 	snapshot := account.Seal()
 	require.Zero(t, snapshot.Used)
 	_, err = registry.Finalize(account)

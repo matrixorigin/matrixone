@@ -456,169 +456,6 @@ func TestConstantExpressionMaterialization(t *testing.T) {
 	}
 }
 
-func TestFlowControlMetadataMethods(t *testing.T) {
-	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
-	t.Run("PreservesSelectedBinaryStringRows", func(t *testing.T) {
-		checkExpressionStorageAfterCleanup(t, proc)
-		binary := vector.NewVec(types.T_varchar.ToType())
-		text := vector.NewVec(types.T_varchar.ToType())
-		result := vector.NewVec(types.T_varchar.ToType())
-		defer binary.Free(proc.Mp())
-		defer text.Free(proc.Mp())
-		defer result.Free(proc.Mp())
-		require.NoError(t, vector.AppendBytes(binary, []byte("binary"), false, proc.Mp()))
-		require.NoError(t, vector.AppendBytes(binary, []byte("inactive"), false, proc.Mp()))
-		require.NoError(t, binary.SetIsBinaryStringAt(0, true, proc.Mp()))
-		require.NoError(t, vector.AppendBytes(text, []byte("inactive"), false, proc.Mp()))
-		require.NoError(t, vector.AppendBytes(text, []byte("text"), false, proc.Mp()))
-		require.NoError(t, vector.AppendBytes(result, []byte("binary"), false, proc.Mp()))
-		require.NoError(t, vector.AppendBytes(result, []byte("text"), false, proc.Mp()))
-
-		expr := &FunctionExpressionExecutor{resultType: types.T_varchar.ToType()}
-		expr.resetFlowControlMetadata()
-		expr.observeFlowControlMetadata(binary, nil, []bool{true, false})
-		expr.observeFlowControlMetadata(text, nil, []bool{false, true})
-		require.NoError(t, expr.applyFlowControlMetadata(result, 2, proc.Mp()))
-		require.True(t, result.GetBinaryStringMetadataAt(0))
-		require.False(t, result.GetBinaryStringMetadataAt(1))
-	})
-
-	t.Run("PromotesSelectedStaticTextUnderBinaryResult", func(t *testing.T) {
-		checkExpressionStorageAfterCleanup(t, proc)
-		text := vector.NewVec(types.T_varchar.ToType())
-		result := vector.NewVec(types.T_varbinary.ToType())
-		defer text.Free(proc.Mp())
-		defer result.Free(proc.Mp())
-		require.NoError(t, vector.AppendBytes(text, []byte("text"), false, proc.Mp()))
-		require.NoError(t, vector.AppendBytes(result, []byte("text"), false, proc.Mp()))
-
-		expr := &FunctionExpressionExecutor{resultType: types.T_varbinary.ToType()}
-		expr.resetFlowControlMetadata()
-		expr.observeFlowControlMetadata(text, nil, []bool{true})
-		require.NoError(t, expr.applyFlowControlMetadata(result, 1, proc.Mp()))
-		require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(0))
-	})
-
-	t.Run("SameDomainWithoutProvenanceKeepsFastPath", func(t *testing.T) {
-		checkExpressionStorageAfterCleanup(t, proc)
-		value, err := vector.NewConstBytes(
-			types.T_varchar.ToType(), []byte("ordinary"), 2, proc.Mp())
-		require.NoError(t, err)
-		defer value.Free(proc.Mp())
-		materialized := vector.NewVec(*value.GetType())
-		defer materialized.Free(proc.Mp())
-		require.NoError(t, materialized.UnionBatch(value, 0, value.Length(), nil, proc.Mp()))
-
-		for _, input := range []*vector.Vector{value, materialized} {
-			for _, fid := range []int32{function.IFF, function.CASE, function.COALESCE} {
-				for _, tc := range []struct {
-					name      string
-					selection []bool
-					seen      bool
-				}{
-					{"selected", []bool{false, true}, true},
-					{"inactive", []bool{false, false}, false},
-					{"empty", nil, false},
-					{"beyond flat length", []bool{false, false, true}, input.IsConst()},
-				} {
-					t.Run(fmt.Sprintf("const=%t/fid=%d/%s", input.IsConst(), fid, tc.name), func(t *testing.T) {
-						expr := &FunctionExpressionExecutor{resultType: types.T_varchar.ToType()}
-						expr.fid = fid
-						expr.observeFlowControlMetadata(input, nil, tc.selection)
-						require.Nil(t, expr.flowControlStringDomains)
-					})
-				}
-			}
-		}
-	})
-
-	t.Run("OrdinarySelectionKeepsInheritedDomain", func(t *testing.T) {
-		checkExpressionStorageAfterCleanup(t, proc)
-		typ := types.T_varchar.ToType()
-		prior := vector.NewVec(typ)
-		defer prior.Free(proc.Mp())
-		ordinary := vector.NewVec(typ)
-		defer ordinary.Free(proc.Mp())
-		result := vector.NewVec(typ)
-		defer result.Free(proc.Mp())
-		for _, value := range []*vector.Vector{prior, ordinary, result} {
-			require.NoError(t, vector.AppendBytesList(value, [][]byte{[]byte("a"), []byte("b")}, nil, proc.Mp()))
-		}
-		prior.SetNull(0)
-		expr := &FunctionExpressionExecutor{resultType: typ}
-		expr.fid = function.COALESCE
-		expr.observeFlowControlMetadata(prior, nil, []bool{true, true})
-		expr.observeFlowControlMetadata(ordinary, nil, []bool{true, false})
-		require.NoError(t, expr.applyFlowControlMetadata(result, 2, proc.Mp()))
-		require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(0))
-		require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(1))
-	})
-
-	t.Run("UsesSourceDomainBeforeImplicitCast", func(t *testing.T) {
-		checkExpressionStorageAfterCleanup(t, proc)
-		tests := []struct {
-			name       string
-			sourceType types.Type
-			castType   types.Type
-			want       types.RuntimeStringDomain
-		}{
-			{name: "text under binary result", sourceType: types.T_varchar.ToType(), castType: types.T_varbinary.ToType(), want: types.RuntimeStringText},
-			{name: "binary under text result", sourceType: types.T_varbinary.ToType(), castType: types.T_varchar.ToType(), want: types.RuntimeStringBinary},
-		}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				source := vector.NewVec(tt.sourceType)
-				casted := vector.NewVec(tt.castType)
-				result := vector.NewVec(tt.castType)
-				defer source.Free(proc.Mp())
-				defer casted.Free(proc.Mp())
-				defer result.Free(proc.Mp())
-				require.NoError(t, vector.AppendBytes(source, []byte("selected"), false, proc.Mp()))
-				require.NoError(t, vector.AppendBytes(casted, []byte("selected"), false, proc.Mp()))
-				require.NoError(t, vector.AppendBytes(result, []byte("selected"), false, proc.Mp()))
-
-				castExecutor := &FunctionExpressionExecutor{
-					functionInformationForEval: functionInformationForEval{
-						fid:        function.CAST,
-						overloadID: function.EncodeOverloadID(function.CAST, 0),
-					},
-					parameterResults:  []*vector.Vector{source},
-					parameterExecutor: []ExpressionExecutor{nil},
-				}
-				expr := &FunctionExpressionExecutor{resultType: tt.castType}
-				expr.observeFlowControlMetadata(casted, castExecutor, []bool{true})
-				require.NoError(t, expr.applyFlowControlMetadata(result, 1, proc.Mp()))
-				require.Equal(t, tt.want, result.GetRuntimeStringDomainAt(0))
-			})
-		}
-	})
-
-	t.Run("KeepsExplicitCastAsSemanticBoundary", func(t *testing.T) {
-		checkExpressionStorageAfterCleanup(t, proc)
-		source := vector.NewVec(types.T_varchar.ToType())
-		casted := vector.NewVec(types.T_varbinary.ToType())
-		result := vector.NewVec(types.T_varbinary.ToType())
-		defer source.Free(proc.Mp())
-		defer casted.Free(proc.Mp())
-		defer result.Free(proc.Mp())
-		for _, vec := range []*vector.Vector{source, casted, result} {
-			require.NoError(t, vector.AppendBytes(vec, []byte("selected"), false, proc.Mp()))
-		}
-		castExecutor := &FunctionExpressionExecutor{
-			functionInformationForEval: functionInformationForEval{
-				fid:        function.CAST,
-				overloadID: function.EncodeOverloadID(function.CAST, 1),
-			},
-			parameterResults:  []*vector.Vector{source},
-			parameterExecutor: []ExpressionExecutor{nil},
-		}
-		expr := &FunctionExpressionExecutor{resultType: types.T_varbinary.ToType()}
-		expr.observeFlowControlMetadata(casted, castExecutor, []bool{true})
-		require.NoError(t, expr.applyFlowControlMetadata(result, 1, proc.Mp()))
-		require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(0))
-	})
-}
-
 func TestLiteralMaterialization(t *testing.T) {
 	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
 	checkExpressionStorageAfterCleanup(t, proc)
@@ -627,17 +464,14 @@ func TestLiteralMaterialization(t *testing.T) {
 			name          string
 			typ           types.Type
 			form          plan.StringLiteralForm
-			want          types.RuntimeStringDomain
 			wantEffective types.StringDomain
 			wantVarchar   bool
 		}{
-			{name: "text on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainText},
-			{name: "text on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringText, wantEffective: types.StringDomainText},
-			{name: "binary on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringBinary, wantEffective: types.StringDomainBinary},
-			{name: "binary on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary},
-			{name: "raw hex", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_HEX, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary, wantVarchar: true},
-			{name: "raw bit", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_BIT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary, wantVarchar: true},
-			{name: "char text uses varchar container", typ: types.NewWithCharset(types.T_char, 0, 0, types.CharsetUTF8), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainText, wantVarchar: true},
+			{name: "text on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, wantEffective: types.StringDomainText},
+			{name: "binary on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, wantEffective: types.StringDomainBinary},
+			{name: "raw hex", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_HEX, wantEffective: types.StringDomainBinary, wantVarchar: true},
+			{name: "raw bit", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_BIT, wantEffective: types.StringDomainBinary, wantVarchar: true},
+			{name: "char text uses varchar container", typ: types.NewWithCharset(types.T_char, 0, 0, types.CharsetUTF8), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, wantEffective: types.StringDomainText, wantVarchar: true},
 		}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
@@ -650,14 +484,10 @@ func TestLiteralMaterialization(t *testing.T) {
 					t.Cleanup(func() { vec.Free(proc.Mp()) })
 				}
 				require.NoError(t, err)
-				require.Equal(t, test.want, vec.GetRuntimeStringDomainAt(0))
-				effective := types.StaticStringDomain(*vec.GetType())
-				if test.want == types.RuntimeStringText {
-					effective = types.StringDomainText
-				} else if test.want == types.RuntimeStringBinary {
-					effective = types.StringDomainBinary
-				}
-				require.Equal(t, test.wantEffective, effective)
+				// The literal form no longer stamps a runtime domain; the
+				// static type alone carries the string semantics.
+				require.Equal(t, test.wantEffective, types.StaticStringDomain(*vec.GetType()))
+				require.Equal(t, "selected", vec.GetStringAt(0))
 				if test.wantVarchar {
 					require.Equal(t, types.T_varchar, vec.GetType().Oid)
 				}
@@ -908,19 +738,14 @@ func TestStringSourceConsumerTotality(t *testing.T) {
 				}
 			}
 			if name == "numeric" {
-				defer input.Vecs[0].SetIsBin(false)
-				for _, test := range []struct {
-					binary bool
-					want   int64
-				}{{true, 53}, {false, 5}} {
-					input.Vecs[0].SetIsBin(test.binary)
-					result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, false, true})
-					require.NoError(t, err)
-					for row := range sources {
-						require.Equal(t, row%2 != 0, result.IsNull(uint64(row)))
-						if row%2 == 0 {
-							require.Equal(t, test.want, vector.GetFixedAtNoTypeCheck[int64](result, row))
-						}
+				// A column reference is never a binary literal: its bytes
+				// convert as numeric text on the selected-row path too.
+				result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, false, true})
+				require.NoError(t, err)
+				for row := range sources {
+					require.Equal(t, row%2 != 0, result.IsNull(uint64(row)))
+					if row%2 == 0 {
+						require.Equal(t, int64(5), vector.GetFixedAtNoTypeCheck[int64](result, row))
 					}
 				}
 			}
@@ -1083,20 +908,19 @@ func TestFlowControlFolding(t *testing.T) {
 		require.Equal(t, 1, foldCalls)
 	})
 
-	t.Run("selected metadata", func(t *testing.T) {
+	t.Run("selected value", func(t *testing.T) {
 		tests := []struct {
 			name       string
 			fid        int32
 			sourceType types.Type
 			resultType types.Type
-			wantDomain types.RuntimeStringDomain
 		}{
-			{name: "if text to binary common-domain", fid: function.IFF, sourceType: types.T_varchar.ToType(), resultType: types.T_varbinary.ToType(), wantDomain: types.RuntimeStringText},
-			{name: "case text to binary common-domain", fid: function.CASE, sourceType: types.T_varchar.ToType(), resultType: types.T_varbinary.ToType(), wantDomain: types.RuntimeStringText},
-			{name: "coalesce text to binary selected-value", fid: function.COALESCE, sourceType: types.T_varchar.ToType(), resultType: types.T_varbinary.ToType(), wantDomain: types.RuntimeStringText},
-			{name: "if binary to text common-domain", fid: function.IFF, sourceType: types.T_varbinary.ToType(), resultType: types.T_varchar.ToType(), wantDomain: types.RuntimeStringBinary},
-			{name: "case binary to text common-domain", fid: function.CASE, sourceType: types.T_varbinary.ToType(), resultType: types.T_varchar.ToType(), wantDomain: types.RuntimeStringBinary},
-			{name: "coalesce binary to text selected-value", fid: function.COALESCE, sourceType: types.T_varbinary.ToType(), resultType: types.T_varchar.ToType(), wantDomain: types.RuntimeStringBinary},
+			{name: "if text to binary common-domain", fid: function.IFF, sourceType: types.T_varchar.ToType(), resultType: types.T_varbinary.ToType()},
+			{name: "case text to binary common-domain", fid: function.CASE, sourceType: types.T_varchar.ToType(), resultType: types.T_varbinary.ToType()},
+			{name: "coalesce text to binary selected-value", fid: function.COALESCE, sourceType: types.T_varchar.ToType(), resultType: types.T_varbinary.ToType()},
+			{name: "if binary to text common-domain", fid: function.IFF, sourceType: types.T_varbinary.ToType(), resultType: types.T_varchar.ToType()},
+			{name: "case binary to text common-domain", fid: function.CASE, sourceType: types.T_varbinary.ToType(), resultType: types.T_varchar.ToType()},
+			{name: "coalesce binary to text selected-value", fid: function.COALESCE, sourceType: types.T_varbinary.ToType(), resultType: types.T_varchar.ToType()},
 		}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
@@ -1139,7 +963,6 @@ func TestFlowControlFolding(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, expr.folded.canFold)
 				require.Equal(t, "selected", result.GetStringAt(0))
-				require.Equal(t, test.wantDomain, result.GetRuntimeStringDomainAt(0))
 
 				zeroBatch := batch.New(nil)
 				zeroBatch.SetRowCount(0)
@@ -1154,7 +977,6 @@ func TestFlowControlFolding(t *testing.T) {
 				require.Equal(t, 4, result.Length())
 				for row := 0; row < result.Length(); row++ {
 					require.Equal(t, "selected", result.GetStringAt(row))
-					require.Equal(t, test.wantDomain, result.GetRuntimeStringDomainAt(row))
 				}
 			})
 		}
@@ -1197,7 +1019,7 @@ func TestParamExpressionExecutorLifecycle(t *testing.T) {
 				result, err := executor.Eval(proc, nil, nil)
 				require.NoError(t, err, test.name)
 				require.Equal(t, test.value, result.GetStringAt(0), test.name)
-				require.Equal(t, test.binary, result.GetIsBin(), test.name)
+				require.Equal(t, test.binary, isBinaryLiteralResult(executor, result), test.name)
 			}()
 		}
 	})
@@ -1552,13 +1374,14 @@ func TestPrivateIntegerArgumentScalarLifecycle(t *testing.T) {
 
 }
 
-func TestFlowControlPreservesPreparedBinaryStringOnPartialSelection(t *testing.T) {
+func TestFlowControlPreparedParamOnPartialSelection(t *testing.T) {
 	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
 	checkExpressionStorageAfterCleanup(t, proc)
 	params := vector.NewVec(types.T_text.ToType())
 	defer params.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("5.5"), false, proc.Mp()))
-	proc.SetPrepareParamsWithMetadata(params, nil, []bool{true})
+	proc.SetPrepareParams(params)
+	defer proc.SetPrepareParams(nil)
 
 	column := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_bool), NotNullable: true},
@@ -1594,18 +1417,16 @@ func TestFlowControlPreservesPreparedBinaryStringOnPartialSelection(t *testing.T
 			result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{true, false})
 			require.NoError(t, err)
 			require.Equal(t, "5.5", result.GetStringAt(0))
-			require.True(t, result.GetBinaryStringMetadataAt(0))
 			require.True(t, result.IsNull(1))
 
 			result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
-			require.True(t, result.GetBinaryStringMetadataAt(0))
-			require.True(t, result.GetBinaryStringMetadataAt(1))
+			require.Equal(t, "5.5", result.GetStringAt(0))
+			require.Equal(t, "5.5", result.GetStringAt(1))
 
 			result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, true})
 			require.NoError(t, err)
 			require.Equal(t, "5.5", result.GetStringAt(1))
-			require.True(t, result.GetBinaryStringMetadataAt(1))
 			require.True(t, result.IsNull(0))
 		})
 	}
@@ -1624,8 +1445,8 @@ func TestFlowControlPreservesPreparedBinaryStringOnPartialSelection(t *testing.T
 			defer executor.Free()
 			result, err := executor.Eval(proc, []*batch.Batch{mixedInput}, nil)
 			require.NoError(t, err)
-			require.True(t, result.GetBinaryStringMetadataAt(0))
-			require.False(t, result.GetBinaryStringMetadataAt(1))
+			require.Equal(t, "5.5", result.GetStringAt(0))
+			require.Equal(t, "fallback", result.GetStringAt(1))
 		})
 	}
 
@@ -1779,8 +1600,6 @@ func TestVariableExpressionLifecycle(t *testing.T) {
 		{"binary", types.T_blob.ToType(), types.RuntimeStringInherit, true},
 		{"binary charset on varchar", types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), types.RuntimeStringInherit, true},
 		{"text charset on varbinary", types.NewWithCharset(types.T_varbinary, 0, 0, types.CharsetUTF8), types.RuntimeStringInherit, false},
-		{"bound text on binary charset", types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), types.RuntimeStringText, false},
-		{"bound binary on text", types.T_varchar.ToType(), types.RuntimeStringBinary, true},
 	} {
 		runLeaf("domain "+tc.name, func(t *testing.T) {
 			var value any = "你"
@@ -1825,19 +1644,7 @@ func TestVariableExpressionLifecycle(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, 2, vec.Length())
 				require.Equal(t, tc.typ, *vec.GetType())
-				for row := 0; row < 2; row++ {
-					if value != nil {
-						require.Equal(t, tc.binary, vec.GetIsBinaryStringAt(row))
-					}
-					wantDomain := types.RuntimeStringInherit
-					if value != nil {
-						wantDomain = tc.domain
-						if tc.typ.Oid == types.T_varbinary && !tc.binary {
-							wantDomain = types.RuntimeStringText
-						}
-					}
-					require.Equal(t, wantDomain, vec.GetRuntimeStringDomainAt(row))
-				}
+				require.Equal(t, tc.binary, types.StaticStringDomain(*vec.GetType()) == types.StringDomainBinary)
 				require.Equal(t, value == nil, vec.IsConstNull())
 				if value != nil {
 					want := "你"
@@ -1859,7 +1666,7 @@ func TestVariableExpressionLifecycle(t *testing.T) {
 			vec, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.Equal(t, "你", vec.GetStringAt(0))
-			require.Equal(t, tc.binary, vec.GetIsBinaryStringAt(0))
+			require.Equal(t, tc.binary, types.StaticStringDomain(*vec.GetType()) == types.StringDomainBinary)
 			require.Zero(t, domainCalls)
 			if tc.name == "text" {
 				value = nil
@@ -2104,30 +1911,30 @@ func TestVariableExpressionLifecycle(t *testing.T) {
 
 		vec, err := executor.Eval(proc, nil, nil)
 		require.NoError(t, err)
-		require.True(t, vec.GetIsBin())
+		require.True(t, isBinaryLiteralResult(executor, vec))
 		require.Equal(t, "AB\x00\x00", vec.GetStringAt(0))
 
 		value, isBin = "5.0", false
 		vec, err = executor.Eval(proc, nil, nil)
 		require.NoError(t, err)
-		require.False(t, vec.GetIsBin())
+		require.False(t, isBinaryLiteralResult(executor, vec))
 		require.Equal(t, "5.0", vec.GetStringAt(0))
 
 		value = "text"
 		vec, err = executor.Eval(proc, nil, nil)
 		require.NoError(t, err)
-		require.False(t, vec.GetIsBin())
+		require.False(t, isBinaryLiteralResult(executor, vec))
 		require.Equal(t, "text", vec.GetStringAt(0))
 
 		value, isBin = "CD\x00\x00", true
 		vec, err = executor.Eval(proc, nil, nil)
 		require.NoError(t, err)
-		require.True(t, vec.GetIsBin())
+		require.True(t, isBinaryLiteralResult(executor, vec))
 		require.Equal(t, "CD\x00\x00", vec.GetStringAt(0))
 
 		// Resolver errors must stop before later metadata callbacks or publication.
 		resolverErr := moerr.NewInternalErrorNoCtx("variable metadata resolver failed")
-		calls := [3]int{}
+		calls := [2]int{}
 		failStage := -1
 		failure := func(stage int) error {
 			calls[stage]++
@@ -2138,9 +1945,6 @@ func TestVariableExpressionLifecycle(t *testing.T) {
 		}
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "7", failure(0) })
 		proc.SetResolveVariableIsBinFunc(func(string, bool, bool) (bool, error) { return true, failure(1) })
-		proc.SetResolveVariableStringDomainFunc(func(string, bool, bool) (types.RuntimeStringDomain, error) {
-			return types.RuntimeStringText, failure(2)
-		})
 		expectedText := types.Type{Oid: types.T_text, Charset: types.CharsetLegacy, Size: 24}
 		checkRecovered := func(result *vector.Vector, rows int) {
 			t.Helper()
@@ -2150,24 +1954,24 @@ func TestVariableExpressionLifecycle(t *testing.T) {
 			for row := 0; row < rows; row++ {
 				require.False(t, result.IsNull(uint64(row)))
 				require.Equal(t, "7", result.GetStringAt(row))
-				require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(row))
 			}
-			require.True(t, result.GetIsBin())
+			// The executor resolved the variable's binary flag for this value.
+			require.True(t, executor.(*VarExpressionExecutor).isBin)
 		}
-		for stage, expectedCalls := range [][3]int{{1, 0, 0}, {1, 1, 0}, {1, 1, 1}} {
-			failStage, calls = stage, [3]int{}
+		for stage, expectedCalls := range [][2]int{{1, 0}, {1, 1}} {
+			failStage, calls = stage, [2]int{}
 			result, err := executor.Eval(proc, nil, nil)
 			require.ErrorIs(t, err, resolverErr)
 			require.Nil(t, result)
 			require.Equal(t, expectedCalls, calls)
-			failStage, calls = -1, [3]int{}
+			failStage, calls = -1, [2]int{}
 			func() {
 				owned, err := executor.EvalWithoutResultReusing(proc, nil, nil)
 				if owned != nil {
 					defer owned.Free(proc.Mp())
 				}
 				require.NoError(t, err)
-				require.Equal(t, [3]int{1, 1, 1}, calls)
+				require.Equal(t, [2]int{1, 1}, calls)
 				checkRecovered(owned, 1)
 			}()
 			require.Zero(t, proc.Mp().CurrNB())
@@ -2175,19 +1979,19 @@ func TestVariableExpressionLifecycle(t *testing.T) {
 			require.Zero(t, bytes)
 			require.Zero(t, objects)
 		}
-		failStage, calls = -2, [3]int{}
+		failStage, calls = -2, [2]int{}
 		input := batch.New(nil)
 		input.SetRowCount(3)
 		masked, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, false, false})
 		require.NoError(t, err)
-		require.Equal(t, [3]int{}, calls)
+		require.Equal(t, [2]int{}, calls)
 		require.Equal(t, expectedText, *masked.GetType())
 		require.Equal(t, 3, masked.Length())
 		require.True(t, masked.IsConstNull())
 		failStage = -1
 		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 		require.NoError(t, err)
-		require.Equal(t, [3]int{1, 1, 1}, calls)
+		require.Equal(t, [2]int{1, 1}, calls)
 		checkRecovered(result, 3)
 
 	})

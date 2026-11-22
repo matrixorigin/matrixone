@@ -1677,6 +1677,8 @@ func getNumOfCharacters(str string) int {
 	return len(strRune)
 }
 
+// Preserve every input until binding and execution. SQL formatting is lossy,
+// and even identical inputs may produce different rows or have side effects.
 func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tree.Statement, unionTypes *[]plan.Node_NodeType) error {
 	switch leftStmt := stmt.Left.(type) {
 	case *tree.UnionClause:
@@ -1697,24 +1699,10 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	// right is not UNION always
 	switch rightStmt := stmt.Right.(type) {
 	case *tree.SelectClause:
-		if stmt.Type == tree.UNION && !stmt.All {
-			rightStr := tree.String(rightStmt, dialect.MYSQL)
-			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
-				return nil
-			}
-		}
-
 		*selects = append(*selects, rightStmt)
 	case *tree.ValuesClause:
 		*selects = append(*selects, rightStmt)
 	case *tree.ParenSelect:
-		if stmt.Type == tree.UNION && !stmt.All {
-			rightStr := tree.String(rightStmt.Select, dialect.MYSQL)
-			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
-				return nil
-			}
-		}
-
 		*selects = append(*selects, rightStmt.Select)
 	default:
 		return moerr.NewParseErrorf(ctx, "unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
@@ -3772,6 +3760,9 @@ func resetPreparePlan(
 				}
 			}
 		}
+		if transientQuery != nil {
+			subqueryRoots.pending = append(subqueryRoots.pending, transientQuery.Steps...)
+		}
 		visitedRoots := make(map[int32]struct{})
 		for len(subqueryRoots.pending) > 0 {
 			root := subqueryRoots.pending[0]
@@ -3820,6 +3811,7 @@ func resetPreparePlan(
 			querySchemas = appendPrepareSchemas(
 				querySchemas, transientQuery.GetCatalogDependencies()...)
 		}
+		querySchemas = appendPrepareSchemas(nil, querySchemas...)
 		return querySchemas, getParamRule.paramTypes, nil
 	}
 

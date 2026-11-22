@@ -951,10 +951,12 @@ func TestFitArrowBatchRetainsEligibleBorrowedPrefix(t *testing.T) {
 	data := types.EncodeSlice([]int64{11, 22, 33})
 	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
 	require.NoError(t, err)
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, lease)
+	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data)
 	require.NoError(t, err)
-	lease.Release()
 	bat := batch.NewOffHeap([]string{"v"})
+	// The converted batch is the lender of the Arrow buffer.
+	require.NoError(t, bat.HoldLease(lease))
+	lease.Release()
 	bat.Vecs[0] = vec
 	bat.SetRowCount(3)
 
@@ -980,7 +982,8 @@ func TestFitArrowBatchRetainsEligibleBorrowedPrefix(t *testing.T) {
 	require.Equal(t, sourcePointer,
 		uintptr(unsafe.Pointer(unsafe.SliceData(fitted.Vecs[0].GetData()))))
 	require.Equal(t, []int64{11}, vector.MustFixedColNoTypeCheck[int64](fitted.Vecs[0]))
-	require.NotNil(t, lease.Bytes())
+	require.NotNil(t, lease.Bytes(), "the source batch's lease moved with the borrowed prefix")
+	require.Equal(t, 1, fitted.HeldLeases())
 
 	fitted.Clean(mp)
 	require.Nil(t, lease.Bytes())

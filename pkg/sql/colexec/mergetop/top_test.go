@@ -625,7 +625,7 @@ func TestMergeTopFloatNaNLastAndPeerTieBreak(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
-func TestMergeTopUniqueOrderPrefixes(t *testing.T) {
+func TestMergeTopRepeatedKeyOrderPrefixes(t *testing.T) {
 	for _, order := range []struct {
 		name string
 		flag plan.OrderBySpec_OrderByFlag
@@ -641,6 +641,7 @@ func TestMergeTopUniqueOrderPrefixes(t *testing.T) {
 					[]*plan.OrderBySpec{
 						{Expr: newExpression(0), Flag: order.flag},
 						{Expr: newExpression(1), Flag: order.flag},
+						{Expr: newExpression(0), Flag: order.flag ^ plan.OrderBySpec_DESC},
 					})
 				t.Cleanup(func() {
 					tc.arg.Free(tc.proc, false, nil)

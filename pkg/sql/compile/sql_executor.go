@@ -890,15 +890,6 @@ func resultCloneBytes(bat *batch.Batch, used, limit uint64) (uint64, error) {
 		if !charge(uint64(rows) * uint64(width)) {
 			return exceeded()
 		}
-		if vec.HasBinaryStringMetadata() {
-			words := uint64(rows) / 64
-			if rows%64 != 0 {
-				words++
-			}
-			if words > ^uint64(0)/16 || !charge(words*16) {
-				return exceeded()
-			}
-		}
 		if !vec.GetType().IsVarlen() || rows == 0 || vec.IsConstNull() {
 			continue
 		}
@@ -934,7 +925,7 @@ func cloneInternalExecutorResultBatch(
 	mp *mpool.MPool,
 	streaming bool,
 ) (*batch.Batch, error) {
-	return bat.CloneWithoutAllocationAccount(mp, streaming)
+	return bat.Clone(mp, streaming)
 }
 
 // publishInternalExecutorStreamResult transfers result ownership only after a
