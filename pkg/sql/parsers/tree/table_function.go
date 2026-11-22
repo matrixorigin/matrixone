@@ -14,8 +14,6 @@
 
 package tree
 
-import "strings"
-
 type TableFunction struct {
 	statementImpl
 	Func       *FuncExpr
@@ -31,7 +29,7 @@ func (t *TableFunction) Format(ctx *FmtCtx) {
 		sourceCtx.singleQuoteString = true
 		t.Func.Exprs[0].Format(&sourceCtx)
 		ctx.WriteString(", ")
-		formatJSONTableString(ctx, t.JSONTable.Path)
+		formatSQLTextLiteral(ctx, t.JSONTable.Path)
 		formatJSONTableColumns(ctx, t.JSONTable.Columns)
 		ctx.WriteByte(')')
 		return
@@ -84,7 +82,7 @@ func formatJSONTableColumns(ctx *FmtCtx, columns []*JSONTableColumn) {
 		}
 		if column.Kind == "nested" {
 			ctx.WriteString("nested path ")
-			formatJSONTableString(ctx, column.Path)
+			formatSQLTextLiteral(ctx, column.Path)
 			formatJSONTableColumns(ctx, column.Children)
 			continue
 		}
@@ -100,13 +98,13 @@ func formatJSONTableColumns(ctx *FmtCtx, columns []*JSONTableColumn) {
 		column.Type.InternalType.Format(ctx)
 		if column.Charset != nil {
 			ctx.WriteString(" character set ")
-			formatJSONTableString(ctx, *column.Charset)
+			formatSQLTextLiteral(ctx, *column.Charset)
 		}
 		if column.Kind == "exists" {
 			ctx.WriteString(" exists")
 		}
 		ctx.WriteString(" path ")
-		formatJSONTableString(ctx, column.Path)
+		formatSQLTextLiteral(ctx, column.Path)
 		for _, response := range []struct {
 			value  *JSONTableResponse
 			clause string
@@ -116,24 +114,11 @@ func formatJSONTableColumns(ctx *FmtCtx, columns []*JSONTableColumn) {
 				ctx.WriteString(response.value.Action)
 				if response.value.Action == "default" {
 					ctx.WriteByte(' ')
-					formatJSONTableString(ctx, response.value.Default)
+					formatSQLTextLiteral(ctx, response.value.Default)
 				}
 				ctx.WriteString(" on" + response.clause)
 			}
 		}
 	}
 	ctx.WriteByte(')')
-}
-
-func formatJSONTableString(ctx *FmtCtx, value string) {
-	// Paths and DEFAULTs require text literals, not expressions. In particular,
-	// mode-independent NumVal formatting may emit CAST, which is not legal in
-	// this grammar. Always quote these literals and honor the reparse SQL mode.
-	literalCtx := *ctx
-	literalCtx.quoteString = false
-	literalCtx.singleQuoteString = true
-	if !ctx.NoBackslashEscape() {
-		value = strings.ReplaceAll(value, "\\", "\\\\")
-	}
-	literalCtx.WriteValue(P_char, value)
 }

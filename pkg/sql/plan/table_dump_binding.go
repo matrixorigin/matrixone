@@ -797,6 +797,111 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 	return analyzeTableDumpBindingsWithCandidateVisitLimit(ctx, target, supplied, tableDumpMaxCandidateVisits)
 }
 
+// ReconstructV428TableDumpBindings recovers simple floating BIT_COUNT
+// generated columns from an independently identified v4.2.8 archive.
+// Other expressions must have a unique binding under the ordinary v1 rules.
+func ReconstructV428TableDumpBindings(ctx CompilerContext, target *planpb.TableDef) (*planpb.TableDef, bool, error) {
+	proc := newTableDumpProofProcess(ctx)
+	defer proc.Free()
+	ctx = tableDumpBindContext{CompilerContext: ctx, ctx: ctx.GetContext(), proc: proc}
+	restored := DeepCopyTableDef(target, true)
+	unambiguous := *target
+	unambiguous.Cols = append([]*planpb.ColDef(nil), target.Cols...)
+	ddlScope := tableDumpDDLColumnScope(target)
+	var textBytes, nodes int
+	var changed bool
+	for i, col := range restored.Cols {
+		if err := ctx.GetContext().Err(); err != nil {
+			return nil, false, err
+		}
+		generated := col.GetGeneratedCol()
+		if generated == nil {
+			continue
+		}
+		call := unwrapCast(generated.Expr).GetF()
+		if call == nil || call.Func == nil || call.Func.ObjName != "bit_count" || len(call.Args) != 1 {
+			continue
+		}
+		arg := call.Args[0]
+		if arg == nil || !v428BitCountColumnOperand(arg) {
+			continue
+		}
+		if releasedBitCountFloatOverload(types.T(arg.Typ.Id)) < 0 {
+			continue
+		}
+		origin := generated.OriginString
+		textBytes += len(origin)
+		if textBytes > tableDumpMaxExpressionText {
+			return nil, false, moerr.NewInvalidInputNoCtx("table dump expression text exceeds limit")
+		}
+		if len(tableDumpParserModesForOrigin(origin)) != 1 {
+			continue
+		}
+		stmt, ast, visit, err := parseTableDumpExpression(ctx.GetContext(), origin, "")
+		if err != nil {
+			return nil, false, err
+		}
+		// A generated-column assignment CAST can wrap the bound call. The
+		// original SQL must still be a direct BIT_COUNT expression.
+		source, ok := unwrapParenExpr(ast).(*tree.FuncExpr)
+		if !ok || numericAstFunctionName(source) != "bit_count" || len(source.Exprs) != 1 {
+			stmt.Free()
+			continue
+		}
+		nodes += visit.nodes
+		if nodes > tableDumpMaxExpressionNodes {
+			stmt.Free()
+			return nil, false, moerr.NewInvalidInputNoCtx("table dump expression AST exceeds limit")
+		}
+		item := tableDumpExpression{kind: "generated", name: col.Name, col: target.Cols[i]}
+		bound, err := bindTableDumpExpression(ctx, target, item, ast, 0, tableDumpBindingReleasedBitCount, &tableDumpDefaultSession{})
+		if err == nil && ddlScope != nil {
+			scope, declaration, mode := tableDumpBindingScope(target, ddlScope, item, tableDumpBindingReleasedBitCount|tableDumpBindingDDLColumnScope)
+			var ddlBound *planpb.Expr
+			ddlBound, err = bindTableDumpExpression(ctx, scope, declaration, ast, 0, mode, &tableDumpDefaultSession{})
+			if err == nil && !sameTableDumpBoundExpression(bound, ddlBound) {
+				err = moerr.NewInvalidInputNoCtx("v4.2.8 table dump cannot verify the generated column binding scope")
+			}
+		}
+		stmt.Free()
+		if err != nil {
+			return nil, false, err
+		}
+		changed = changed || !sameTableDumpBoundExpression(generated.Expr, bound)
+		generated.Expr = bound
+		// The source declaration identifies this binding; prove that every
+		// other expression can still be recovered by the ordinary v1 rules.
+		ordinary := *target.Cols[i]
+		ordinary.GeneratedCol = nil
+		unambiguous.Cols[i] = &ordinary
+	}
+	sensitive, err := AnalyzeTableDumpBindings(ctx, &unambiguous, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	if sensitive {
+		return nil, false, moerr.NewInvalidInputNoCtx("v4.2.8 table dump contains other ambiguous expression bindings")
+	}
+	if _, err = AnalyzeTableDumpBindings(ctx, target, restored); err != nil {
+		return nil, false, err
+	}
+	return restored, changed, nil
+}
+
+func v428BitCountColumnOperand(arg *planpb.Expr) bool {
+	if arg.GetCol() != nil {
+		return true
+	}
+	cast := arg.GetF()
+	if cast == nil || cast.Func == nil || len(cast.Args) != 2 {
+		return false
+	}
+	input := cast.Args[0]
+	id, overload := function.DecodeOverloadID(cast.Func.Obj)
+	return id == function.CAST && (overload == 1 || cast.SyntaxExplicitCast) &&
+		input.GetCol() != nil && releasedBitCountFloatOverload(types.T(input.Typ.Id)) >= 0
+}
+
 // newTableDumpProofProcess isolates speculative session settings and warnings.
 // The caller owns and frees the returned process.
 func newTableDumpProofProcess(ctx CompilerContext) *process.Process {

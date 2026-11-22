@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "source_database": "bitbackup",
+  "source_table": "t",
+  "create_sql": "create table t(id int primary key, d double, f float, s bigint generated always as (bit_count(d)) stored, x bigint generated always as (bit_count(cast(d as double))) stored, v bigint generated always as (bit_count(f)) virtual, vx bigint generated always as (bit_count(cast(d as double))) virtual)",
+  "schema_hash": "219e2c439e6577c71e36f5d12e93ce5aac970fde414363695d43069097b8a48f",
+  "metadata_only": false,
+  "relations": [
+    {
+      "role": "main",
+      "source_table": "t",
+      "schema_hash": "219e2c439e6577c71e36f5d12e93ce5aac970fde414363695d43069097b8a48f",
+      "objects": [
+        {
+          "name": "01a200c9-475c-7ad5-bbfa-3d8db0a6c75a_00000",
+          "stats": "AaIAyUdcetW7+j2NsKbHWgAAMDFhMjAwYzktNDc1Yy03YWQ1LWJiZmEtM2Q4ZGIwYTZjNzVhXzAwMDAwAXgDAAAAAgAADwoAAAQAAAABAAAAAQAAAAAAAAAKAAAAAAAAAAAAAAAAAAAAAAAAAAAABAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAS/FrgFAADfDwAAAg==",
+          "tombstone": false,
+          "size": 1464,
+          "sha256": "6b14aa5946a07e74ecf309fbdc8f89b6ccad33e64b468ba0e32af675279ff178",
+          "fixture_path": "objects/01a200c9-475c-7ad5-bbfa-3d8db0a6c75a_00000"
+        }
+      ]
+    }
+  ]
+}

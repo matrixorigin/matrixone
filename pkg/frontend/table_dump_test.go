@@ -982,7 +982,7 @@ func TestHandleDumpTable(t *testing.T) {
 	require.NoError(t, handleDumpTable(context.Background(), ses, stmt))
 	dumpFS, err := fileservice.NewLocalETLFS("dump", dumpRoot)
 	require.NoError(t, err)
-	manifest, err := readTableDumpManifest(context.Background(), dumpFS)
+	manifest, err := readTableDumpManifest(context.Background(), dumpFS, "")
 	require.NoError(t, err)
 	require.Len(t, manifest.Relations, 1)
 	require.Len(t, manifest.Relations[0].Objects, 1)
@@ -1065,7 +1065,7 @@ func TestDumpLoadLegacyTinyTextUpgrade(t *testing.T) {
 
 	dumpFS, err := fileservice.NewLocalETLFS("dump", dumpRoot)
 	require.NoError(t, err)
-	manifest, err := readTableDumpManifest(ctx, dumpFS)
+	manifest, err := readTableDumpManifest(ctx, dumpFS, "")
 	require.NoError(t, err)
 	require.Contains(t, manifest.CreateSQL, "COLLATE=utf8mb4_bin")
 
@@ -1259,14 +1259,14 @@ func TestTableDumpManifestAndCopy(t *testing.T) {
 		}},
 	}}}
 	require.NoError(t, writeTableDumpJSON(ctx, fixture, tableDumpManifestName, manifest))
-	read, err := readTableDumpManifest(ctx, fixture)
+	read, err := readTableDumpManifest(ctx, fixture, "")
 	require.NoError(t, err)
 	require.Equal(t, manifest.Relations, read.Relations)
-	created, err := installTableDumpObject(ctx, fixture, dst, read.Relations[0].Objects[0])
+	created, err := installTableDumpObject(ctx, fixture, dst, read.Relations[0].Objects[0], false)
 	require.NoError(t, err)
 	require.True(t, created)
 	require.NoError(t, verifyTableDumpObject(ctx, dst, "obj", size, hash))
-	created, err = installTableDumpObject(ctx, fixture, dst, read.Relations[0].Objects[0])
+	created, err = installTableDumpObject(ctx, fixture, dst, read.Relations[0].Objects[0], false)
 	require.NoError(t, err)
 	require.False(t, created)
 
@@ -1274,7 +1274,7 @@ func TestTableDumpManifestAndCopy(t *testing.T) {
 	require.NoError(t, err)
 	wrongChecksum := read.Relations[0].Objects[0]
 	wrongChecksum.SHA256 = strings.Repeat("0", sha256.Size*2)
-	created, err = installTableDumpObject(ctx, fixture, streamDst, wrongChecksum)
+	created, err = installTableDumpObject(ctx, fixture, streamDst, wrongChecksum, false)
 	require.Error(t, err)
 	require.True(t, created)
 
@@ -1285,7 +1285,7 @@ func TestTableDumpManifestAndCopy(t *testing.T) {
 		data:        content,
 		rejectRead:  true,
 	}
-	created, err = installTableDumpObject(ctx, fixture, serverSideCopier, read.Relations[0].Objects[0])
+	created, err = installTableDumpObject(ctx, fixture, serverSideCopier, read.Relations[0].Objects[0], false)
 	require.NoError(t, err)
 	require.True(t, created)
 	require.NoError(t, verifyTableDumpObject(ctx, serverSideDst, "obj", size, hash))
@@ -1293,30 +1293,40 @@ func TestTableDumpManifestAndCopy(t *testing.T) {
 	badDst, err := fileservice.NewLocalETLFS("bad-dst", t.TempDir())
 	require.NoError(t, err)
 	badCopier := &testTableDumpObjectCopier{FileService: badDst, data: []byte("corrupt object byte")}
-	created, err = installTableDumpObject(ctx, fixture, badCopier, read.Relations[0].Objects[0])
+	created, err = installTableDumpObject(ctx, fixture, badCopier, read.Relations[0].Objects[0], false)
 	require.NoError(t, err)
 	require.True(t, created)
 	_, err = badDst.StatFile(ctx, "obj")
 	require.NoError(t, err)
+
+	verifiedDst, err := fileservice.NewLocalETLFS("verified-dst", t.TempDir())
+	require.NoError(t, err)
+	sameSizeCorruption := &testTableDumpObjectCopier{
+		FileService: verifiedDst,
+		data:        []byte(strings.Repeat("x", len(content))),
+	}
+	created, err = installTableDumpObject(ctx, fixture, sameSizeCorruption, read.Relations[0].Objects[0], true)
+	require.ErrorContains(t, err, "does not match manifest checksum")
+	require.True(t, created)
 }
 
 func TestReadTableDumpManifestRejectsInvalidInput(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewLocalETLFS("fixture", t.TempDir())
 	require.NoError(t, err)
-	_, err = readTableDumpManifest(ctx, fs)
+	_, err = readTableDumpManifest(ctx, fs, "")
 	require.Error(t, err)
 
 	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
 		FilePath: tableDumpManifestName,
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("{")}},
 	}))
-	_, err = readTableDumpManifest(ctx, fs)
+	_, err = readTableDumpManifest(ctx, fs, "")
 	require.Error(t, err)
 	require.NoError(t, fs.Delete(ctx, tableDumpManifestName))
 
 	require.NoError(t, writeTableDumpJSON(ctx, fs, tableDumpManifestName, &tableDumpManifest{Version: tableDumpFormatVersion + 1}))
-	_, err = readTableDumpManifest(ctx, fs)
+	_, err = readTableDumpManifest(ctx, fs, "")
 	require.Error(t, err)
 	require.Error(t, writeTableDumpJSON(ctx, fs, "bad.json", make(chan int)))
 }
@@ -1638,7 +1648,7 @@ func TestInstallTableDumpObjectsUsesBoundedConcurrency(t *testing.T) {
 	go func() {
 		resultCh <- installTableDumpObjects(ctx, fixture, copier, objects, func(string) {
 			tracked.Add(1)
-		})
+		}, false)
 	}()
 	require.Eventually(t, func() bool {
 		return copier.maximum.Load() == fileservice.DefaultObjectCopyConcurrency
@@ -1681,7 +1691,7 @@ func TestInstallTableDumpObjectsCancelsWorkers(t *testing.T) {
 	go func() {
 		resultCh <- installTableDumpObjects(ctx, fixture, copier, objects, func(string) {
 			tracked.Add(1)
-		})
+		}, false)
 	}()
 	require.Eventually(t, func() bool {
 		return copier.maximum.Load() == fileservice.DefaultObjectCopyConcurrency
@@ -2205,7 +2215,7 @@ func TestReadTableDumpManifestBindingFormats(t *testing.T) {
 	require.NoError(t, err)
 	for _, version := range []int{tableDumpLegacyBoundFormatVersion, tableDumpBoundFormatVersion, tableDumpBoundFormatVersion + 1} {
 		require.NoError(t, writeTableDumpJSON(ctx, fs, tableDumpManifestName, &tableDumpManifest{Version: version, BoundExpressions: payload, ExpressionHash: digest}))
-		got, err := readTableDumpManifest(ctx, fs)
+		got, err := readTableDumpManifest(ctx, fs, "")
 		if version == tableDumpBoundFormatVersion+1 {
 			require.ErrorContains(t, err, "unsupported table dump format version")
 		} else {

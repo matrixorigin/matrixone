@@ -2013,6 +2013,16 @@ func TestTableDumpAndLoadParse(t *testing.T) {
 				load.Free()
 			},
 		},
+		{
+			sql: "load table t1 from '/tmp/owner''s' with release 'v4.2.8' checksum 'abc'",
+			check: func(t *testing.T, stmt tree.Statement) {
+				load, ok := stmt.(*tree.LoadTable)
+				require.True(t, ok)
+				require.Equal(t, "/tmp/owner's", load.Path)
+				require.Equal(t, &tree.TableDumpSource{Release: "v4.2.8", Checksum: "abc"}, load.Source)
+				require.Equal(t, "load table t1 from '/tmp/owner''s' with release 'v4.2.8' checksum 'abc'", tree.String(load, dialect.MYSQL))
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.sql, func(t *testing.T) {

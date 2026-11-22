@@ -272,6 +272,19 @@ func (ctx *FmtCtx) PrintExpr(currentExpr Expr, expr Expr, left bool) {
 	}
 }
 
+func formatSQLTextLiteral(ctx *FmtCtx, value string) {
+	// Some grammar positions require text literals, not expressions. In particular,
+	// mode-independent NumVal formatting may emit CAST, which is not legal in
+	// this grammar. Always quote these literals and honor the reparse SQL mode.
+	literalCtx := *ctx
+	literalCtx.quoteString = false
+	literalCtx.singleQuoteString = true
+	if !ctx.NoBackslashEscape() {
+		value = strings.ReplaceAll(value, "\\", "\\\\")
+	}
+	literalCtx.WriteValue(P_char, value)
+}
+
 func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 	start := ctx.Len()
 	var n int

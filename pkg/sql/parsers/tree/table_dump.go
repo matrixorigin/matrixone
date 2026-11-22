@@ -45,16 +45,28 @@ func (node *DumpTable) String() string           { return node.GetStatementType(
 // empty table.
 type LoadTable struct {
 	statementImpl
-	Table *TableName
-	Path  string
+	Table  *TableName
+	Path   string
+	Source *TableDumpSource
+}
+
+// TableDumpSource describes an independently identified legacy archive.
+type TableDumpSource struct {
+	Release  string
+	Checksum string
 }
 
 func (node *LoadTable) Format(ctx *FmtCtx) {
 	ctx.WriteString("load table ")
 	node.Table.Format(ctx)
-	ctx.WriteString(" from '")
-	ctx.WriteString(node.Path)
-	ctx.WriteByte('\'')
+	ctx.WriteString(" from ")
+	formatSQLTextLiteral(ctx, node.Path)
+	if node.Source != nil {
+		ctx.WriteString(" with release ")
+		formatSQLTextLiteral(ctx, node.Source.Release)
+		ctx.WriteString(" checksum ")
+		formatSQLTextLiteral(ctx, node.Source.Checksum)
+	}
 }
 
 func (node *LoadTable) StmtKind() StmtKind       { return frontendStatusTyp }

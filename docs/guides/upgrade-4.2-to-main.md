@@ -59,6 +59,33 @@ any commits with an unknown outcome have resolved; a network error can leave a
 remote commit pending after its local operation exits. Do not treat an empty
 metadata or job table as proof that remote writes have finished.
 
+## Restore a verified v4.2.8 physical table dump
+
+A physical v1 table dump records schema and object checksums. It omits the
+source build and the executable bindings of generated expressions. Establish
+from your source records that the archive and the relevant generated columns
+were authored by v4.2.8. Obtain the SHA-256 of the original `manifest.json`
+from your verified backup records. The checksum identifies the archived bytes.
+The source records establish their provenance.
+
+Create an empty target from the source DDL, then run as a restore administrator.
+Replace the path and manifest checksum with your verified values.
+
+```sql
+LOAD TABLE restored FROM '/archive/table'
+  WITH RELEASE 'v4.2.8' CHECKSUM '<manifest-sha256>';
+```
+
+This option checks the v4.2.8 schema fingerprint and each object checksum. It
+recovers generated `BIT_COUNT` on a FLOAT or DOUBLE column or a direct
+floating cast of that column when the binding is verifiable. The target must
+use the default table collation and have numeric columns with no secondary
+index relations. The release fingerprint does not identify text collations or
+the current packed index key metadata. Ambiguity in other expressions or the
+column binding scope causes the restore to fail. For an archive with uncertain
+provenance, recover an authoritative source copy. Upgrade that copy to a
+version that writes bound dumps, then export a new archive.
+
 ## Ambiguous snapshot ownership
 
 Some old system table snapshots can have names also used by branch protection.
