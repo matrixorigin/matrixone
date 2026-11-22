@@ -5562,7 +5562,7 @@ var _ loadLocalDrainCapable = &MysqlProtocolImpl{}
 // usable. An unlimited stream is retired by the drain budgets. Only the upload
 // owner frees its buffer; the cancellation watcher interrupts I/O and is
 // joined before owner cleanup.
-func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, reader *io.PipeReader) (err error) {
+func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
 	mysqlRwer := ses.GetResponser().MysqlRrWr()
 	defer func() {
 		_ = writer.CloseWithError(err)
@@ -5585,7 +5585,9 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 		defer close(watcherDone)
 		select {
 		case <-ctx.Done():
-			_ = reader.CloseWithError(ctx.Err())
+			// Publish cancellation to the consumer through the writer. Closing
+			// the read end would make the consumer see io.ErrClosedPipe.
+			_ = writer.CloseWithError(ctx.Err())
 			if drainer, ok := mysqlRwer.(loadLocalDrainCapable); ok {
 				// Interrupt the in-flight network I/O without closing the
 				// socket; the owner below decides between drain and retire.

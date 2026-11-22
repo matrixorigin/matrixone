@@ -283,7 +283,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				}()
 				loadLocalErrGroup = new(errgroup.Group)
 				loadLocalErrGroup.Go(func() error {
-					return processLoadLocal(uploadCtx, ses, execCtx, st.Param, writer, reader)
+					return processLoadLocal(uploadCtx, ses, execCtx, st.Param, writer)
 				})
 			}
 		}
