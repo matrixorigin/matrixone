@@ -1208,7 +1208,7 @@ func (bj ByteJson) QueryWithExistsContext(ctx context.Context, paths []*Path) (B
 	collector := queryCollector{ctx: ctx}
 	for _, path := range paths {
 		if path.IsSimple() {
-			value, exists, err := bj.querySimpleExistWithContext(ctx, path, true, true)
+			value, exists, err := bj.querySimpleExistWithCancellation(path, true, true, ctx.Err)
 			if err != nil || len(paths) == 1 {
 				return value, exists, err
 			}
@@ -1414,23 +1414,22 @@ func (bj ByteJson) querySimpleExist(path *Path, autowrapScalarIndex bool) (ByteJ
 // querySimpleExistWithWrapping keeps scalar and object index wrapping explicit.
 // ARRAY_INSERT must follow only real arrays when seeking its parent.
 func (bj ByteJson) querySimpleExistWithWrapping(path *Path, autowrapScalarIndex, autowrapObjectIndex bool) (ByteJson, bool) {
-	value, exists, _ := bj.querySimpleExistWithContext(nil, path, autowrapScalarIndex, autowrapObjectIndex)
+	value, exists, _ := bj.querySimpleExistWithCancellation(path, autowrapScalarIndex, autowrapObjectIndex, nil)
 	return value, exists
 }
 
-func (bj ByteJson) querySimpleExistWithContext(ctx context.Context, path *Path, autowrapScalarIndex, autowrapObjectIndex bool) (ByteJson, bool, error) {
+func (bj ByteJson) querySimpleExistWithCancellation(path *Path, autowrapScalarIndex, autowrapObjectIndex bool, checkCanceled func() error) (ByteJson, bool, error) {
 	cur := bj
-	// don't go through th step(), recursive call route.  We know
-	// we have a simple path, each step will bring us to ONE SINGLE next value.
+	// Each step of a simple path resolves to at most one value.
 
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
+	if checkCanceled != nil {
+		if err := checkCanceled(); err != nil {
 			return Null, false, err
 		}
 	}
 	for i, sub := range path.paths {
-		if ctx != nil && i != 0 && i%queryCheckInterval == 0 {
-			if err := ctx.Err(); err != nil {
+		if checkCanceled != nil && i != 0 && i%queryCheckInterval == 0 {
+			if err := checkCanceled(); err != nil {
 				return Null, false, err
 			}
 		}

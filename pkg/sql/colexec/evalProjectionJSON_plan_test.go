@@ -120,7 +120,7 @@ func TestProjectionJSONPlannedJoinedUpdate(t *testing.T) {
 
 	frame.Begin(input)
 	defer frame.End()
-	var firstRow []string
+	firstRow := make([]string, 0, len(execs))
 	for _, exec := range execs {
 		got, err := exec.Eval(proc, []*batch.Batch{input}, nil)
 		require.NoError(t, err)
