@@ -3719,6 +3719,13 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 // which avoids having to do type conversions and type judgements every time you append.
 func getConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel int64, length int) error {
 	switch typ.Oid {
+	case types.T_any:
+		return func(v, w *Vector, sel int64, length int) error {
+			if !w.IsNull(uint64(sel)) {
+				return moerr.NewInternalErrorNoCtx("cannot copy a non-NULL value of type ANY")
+			}
+			return SetConstNull(v, length, mp)
+		}
 	case types.T_bool:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {

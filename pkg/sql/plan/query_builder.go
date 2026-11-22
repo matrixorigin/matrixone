@@ -4438,6 +4438,21 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 	return childNodeID
 }
 
+func (builder *QueryBuilder) appendValidationPrivilegeCarriers() {
+	if builder.qry == nil {
+		return
+	}
+	for _, carrier := range builder.validationPrivilegeCarriers {
+		if carrier == nil {
+			continue
+		}
+		carrier.NodeId = int32(len(builder.qry.Nodes))
+		carrier.ExtraOptions = validationPrivilegeCarrierExtraOptions
+		builder.qry.Nodes = append(builder.qry.Nodes, carrier)
+		builder.ctxByNode = append(builder.ctxByNode, nil)
+	}
+}
+
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	if err := builder.qry.ValidateIntegerPrecision(); err != nil {
 		return nil, err
@@ -4452,7 +4467,15 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	}
 	builder.finalizeCTEIdentity()
 	if builder.qry.Correlation != nil {
-		return builder.createDependentQuery()
+		query, err := builder.createDependentQuery()
+		if err != nil {
+			return nil, err
+		}
+		if err := builder.validateZeroScalarLiveNodes(); err != nil {
+			return nil, err
+		}
+		builder.appendValidationPrivilegeCarriers()
+		return query, nil
 	}
 	var err error
 	colRefBool := make(map[[2]int32]bool)
@@ -4750,13 +4773,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 	}
 	builder.hintQueryType()
-	for _, scan := range builder.windowValidationScans {
-		if scan == nil {
-			continue
-		}
-		scan.NodeId = int32(len(builder.qry.Nodes))
-		builder.qry.Nodes = append(builder.qry.Nodes, scan)
+	if err := builder.validateZeroScalarLiveNodes(); err != nil {
+		return nil, err
 	}
+	builder.appendValidationPrivilegeCarriers()
 	// Empty BlockFilterList can mean either a stats choice or an explicit
 	// blockFilter=2 hint. Preserve the latter in the prepared plan so physical
 	// compilation cannot backfill a block predicate for a later binding.

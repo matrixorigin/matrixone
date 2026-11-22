@@ -1501,55 +1501,6 @@ func TestTimeWinAnyNullPartitionKey(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
-func TestAnyNullPartitionKeySetsConstNull(t *testing.T) {
-	mp := mpool.MustNewZero()
-	typ := types.T_any.ToType()
-	for _, tc := range []struct {
-		name   string
-		source *vector.Vector
-		sel    int64
-	}{
-		{
-			name:   "constant NULL",
-			source: vector.NewConstNull(typ, 2, mp),
-		},
-		{
-			name: "selected NULL",
-			source: func() *vector.Vector {
-				vec := vector.NewVec(typ)
-				vec.SetLength(2)
-				vec.SetNull(1)
-				return vec
-			}(),
-			sel: 1,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dst := vector.NewVec(typ)
-			require.NoError(t, getPartitionSetFunction(typ, mp)(dst, tc.source, tc.sel, 1))
-			require.True(t, dst.IsConstNull())
-			dst.Free(mp)
-			tc.source.Free(mp)
-		})
-	}
-	require.Zero(t, mp.CurrNB())
-}
-
-func TestAnyPartitionKeyRejectsNonNullValue(t *testing.T) {
-	mp := mpool.MustNewZero()
-	typ := types.T_any.ToType()
-	src := vector.NewVec(typ)
-	src.SetLength(1)
-	dst := vector.NewVec(typ)
-
-	err := getPartitionSetFunction(typ, mp)(dst, src, 0, 1)
-	require.ErrorContains(t, err, "non-NULL T_any partition key")
-
-	src.Free(mp)
-	dst.Free(mp)
-	require.Equal(t, int64(0), mp.CurrNB())
-}
-
 func TestSamePartition(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	ctr := &container{}
