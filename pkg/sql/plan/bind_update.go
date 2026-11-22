@@ -219,6 +219,8 @@ func (builder *QueryBuilder) normalizeUpdateAssignment(
 		if err != nil {
 			return nil, err
 		}
+	} else if radix := boundDecimalRadixAssignmentSource(rhs, col.Typ); radix != nil {
+		rhs = radix
 	}
 	rhs, err = builder.wrapLegacyTimestampAssignment(col, rhs)
 	if err != nil {

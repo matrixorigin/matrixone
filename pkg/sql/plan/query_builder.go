@@ -5404,7 +5404,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		// semantic keys so duplicate output aliases retain normal ORDER BY
 		// first-match/ambiguity behavior above the grouping-set UNION.
 		ctx.projectSemanticKeys = make([]string, resultLen)
-		for _, field := range subCtxList[0].projectByAst {
+		first := subCtxList[0]
+		ctx.sampledProjectFields = first.sampleFunc.hasSampleFunc || first.sampledProjectFields
+		for _, field := range first.projectByAst {
 			if field.pos < 0 || int(field.pos) >= resultLen {
 				continue
 			}

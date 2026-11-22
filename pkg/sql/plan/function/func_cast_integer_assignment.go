@@ -188,6 +188,15 @@ func retryMediumIntRadixText[I constraints.Integer](
 	return I(min(max(int64(value), minimum), maximum)), true, nil
 }
 
+// HEX and BIT literals use a character container with binary charset.
+// Opaque BINARY/VARBINARY data and prepared binary parameters keep their
+// existing conversion rules even if the vector has its binary flag set.
+func isIntegerAssignmentRadixLiteral(source *vector.Vector, isBinary bool) bool {
+	typ := source.GetType()
+	return isBinary && typ.Charset == types.CharsetBinary &&
+		(typ.Oid == types.T_varchar || typ.Oid == types.T_char)
+}
+
 // A binary literal carries a big-endian unsigned magnitude. Check the range
 // while reading the bytes so neither a uint64 nor the physical target wraps.
 func binaryToIntegerAssignment[I constraints.Integer](ctx context.Context, proc *process.Process,

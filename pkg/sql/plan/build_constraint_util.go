@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 
@@ -645,6 +646,10 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				return false, nil, nil, err
 			}
 		} else {
+			projExpr, err = builder.insertDecimalRadixAssignment(info.rootId, i, projExpr, tableDef.Cols[colIdx].Typ)
+			if err != nil {
+				return false, nil, nil, err
+			}
 			projExpr, err = builder.forceProjectedAssignmentCastExpr(
 				projExpr, oldProject[i], tableDef.Cols[colIdx].Typ, builder.isInsertIgnore, tableDef.Cols[colIdx].Name)
 			if err != nil {
@@ -853,6 +858,9 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 						defExpr, err = binder.BindExpr(updateExpr, 0, true)
 						if err != nil {
 							return false, nil, nil, err
+						}
+						if radix := boundDecimalRadixAssignmentSource(defExpr, col.Typ); radix != nil {
+							defExpr = radix
 						}
 					}
 					defExpr, err = builder.forceAssignmentCastExpr(defExpr, col.Typ, builder.isInsertIgnore, col.Name)
@@ -1668,6 +1676,9 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	); err != nil {
 		return nil, err
 	}
+	if radix := boundDecimalRadixAssignmentSource(sourceExpr, targetType); radix != nil {
+		expr = radix
+	}
 	var err error
 	var rewritten bool
 	expr, rewritten, err = builder.rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr, targetType)
@@ -1684,7 +1695,8 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	}
 	if sourceExpr != nil && sourceExpr.GetCol() != nil && types.T(targetType.Id).IsDecimal() &&
 		!isAttributedDecimalPlanType(targetType) &&
-		makeTypeByPlan2Expr(sourceExpr).Eq(makeTypeByPlan2Type(targetType)) {
+		makeTypeByPlan2Expr(sourceExpr).Eq(makeTypeByPlan2Type(targetType)) &&
+		makeTypeByPlan2Expr(expr).Eq(makeTypeByPlan2Type(targetType)) {
 		// A stored DECIMAL column has already passed its declared precision
 		// boundary. Preserve the direct projection when DML carries it forward.
 		return expr, nil
@@ -2120,14 +2132,55 @@ func insertDecimalLiteralNeedsAdjustment(proc *process.Process, numVal *tree.Num
 	return err != nil || !canInsert
 }
 
-// decimalRadixAssignmentSource preserves the numeric spelling of a radix
-// literal. The ordinary binder produces binary bytes for the same syntax.
-func decimalRadixAssignmentSource(ast tree.Expr) *plan.Expr {
-	if num, ok := unwrapParenExpr(ast).(*tree.NumVal); ok &&
-		(num.ValType == tree.P_hexnum || num.ValType == tree.P_bit) {
-		return MakePlan2StringConstExprWithType(num.String())
+// boundDecimalRadixAssignmentSource normalizes only syntax-owned radix
+// literals. Binary data and persisted column expressions keep their decoding.
+func boundDecimalRadixAssignmentSource(source *Expr, target Type) *Expr {
+	if !types.T(target.Id).IsDecimal() || !isBinaryNumericLiteral(source) {
+		return nil
 	}
-	return nil
+	lit := source.GetLit()
+	if lit.Isnull || lit.Src != nil {
+		return nil
+	}
+	value, ok := lit.Value.(*plan.Literal_Sval)
+	if !ok {
+		return nil
+	}
+	raw := strings.TrimLeft(value.Sval, "\x00")
+	if len(raw) > 32 {
+		return MakePlan2StringConstExprWithType("1e77")
+	}
+	var magnitude big.Int
+	return MakePlan2StringConstExprWithType(magnitude.SetBytes([]byte(raw)).String())
+}
+
+// decimalRadixAssignmentSource serves VALUES before binding their literals.
+// Bound the expansion to DECIMAL's range without narrowing to uint64.
+func decimalRadixAssignmentSource(ast tree.Expr) *plan.Expr {
+	num, ok := unwrapParenExpr(ast).(*tree.NumVal)
+	if !ok {
+		return nil
+	}
+	var base, limit int
+	switch num.ValType {
+	case tree.P_hexnum:
+		base, limit = 16, 64
+	case tree.P_bit:
+		base, limit = 2, 256
+	default:
+		return nil
+	}
+	digits := strings.TrimLeft(num.String()[2:], "0")
+	if len(digits) > limit {
+		return MakePlan2StringConstExprWithType("1e77")
+	}
+	var magnitude big.Int
+	if digits != "" {
+		if _, ok = magnitude.SetString(digits, base); !ok {
+			return nil
+		}
+	}
+	return MakePlan2StringConstExprWithType(magnitude.String())
 }
 
 // Use the same checked conversion to decide whether a fast-path integer
@@ -2168,11 +2221,10 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 	decimalTarget := colType.Oid.IsDecimal()
 	lenient := decimalTarget && (isIgnore || !function.StrictSqlModeForAssignment(proc))
 	scaleLoss := decimalTarget && !lenient && function.DecimalAssignmentLosesScale(numVal.String(), colType.Scale)
-	if decimalTarget && (numVal.ValType == tree.P_hexnum || numVal.ValType == tree.P_bit) &&
-		(colType.Oid == types.T_decimal256 || lenient && insertDecimalLiteralNeedsAdjustment(proc, numVal, colType)) {
-		// The numeric cast must see the radix spelling rather than binary bytes.
-		source := decimalRadixAssignmentSource(numVal)
-		return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
+	if decimalTarget {
+		if source := decimalRadixAssignmentSource(numVal); source != nil {
+			return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
+		}
 	}
 	if decimalTarget && (lenient || scaleLoss) &&
 		(numVal.ValType == tree.P_decimal || numVal.ValType == tree.P_int64 ||

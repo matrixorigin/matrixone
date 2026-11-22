@@ -1121,6 +1121,9 @@ type BindContext struct {
 	projectColByAst map[string]int32
 
 	projectByAst []SelectField
+	// sampledProjectFields means the visible fields came from a grouping
+	// branch whose SAMPLE executor can rearrange the physical slots.
+	sampledProjectFields bool
 	// projectSemanticKeys is populated only when preserveOrderSemanticKeys is
 	// set, keeping the ordinary-query projection path allocation-free.
 	projectSemanticKeys []string

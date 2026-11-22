@@ -3164,6 +3164,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				if err != nil {
 					return 0, err
 				}
+				if radix := boundDecimalRadixAssignmentSource(updateExpr, colDef.Typ); radix != nil {
+					updateExpr = radix
+				}
 			}
 
 			isPrimaryKey := slices.Contains(tableDef.Pkey.Names, colDef.Name)
@@ -5474,6 +5477,39 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	return builder.appendInsertReplaceSourceCasts(bindCtx, lastNodeID, insertColumns, objRef, tableDef, isReplace)
 }
 
+// insertDecimalRadixAssignment uses the visible SELECT field rather than
+// its physical projection. Grouping and window rewrites retain those fields
+// by ordinal, but the resulting slot can contain a synthetic NULL.
+func (builder *QueryBuilder) insertDecimalRadixAssignment(nodeID int32, pos int, source *Expr, target Type) (*Expr, error) {
+	if !types.T(target.Id).IsDecimal() ||
+		(source.Typ.Id != int32(types.T_char) && source.Typ.Id != int32(types.T_varchar)) {
+		return source, nil
+	}
+	ctx := builder.ctxByNode[nodeID]
+	node := builder.qry.Nodes[nodeID]
+	// SAMPLE can move duplicate sampled fields ahead of the visible list.
+	if ctx == nil || ctx.sampleFunc.hasSampleFunc || ctx.sampledProjectFields || len(node.BindingTags) != 1 ||
+		(node.BindingTags[0] != ctx.projectTag && node.BindingTags[0] != ctx.resultTag) ||
+		pos >= len(ctx.projectByAst) || ctx.projectByAst[pos].pos != int32(pos) {
+		return source, nil
+	}
+	radix := decimalRadixAssignmentSource(ctx.projectByAst[pos].ast)
+	if radix == nil {
+		return source, nil
+	}
+	if source.Typ.NotNullable {
+		return radix, nil
+	}
+	isNull, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*Expr{source})
+	if err != nil {
+		return nil, err
+	}
+	nullValue := makePlan2NullConstExprWithType()
+	nullValue.Typ = radix.Typ
+	nullValue.Typ.NotNullable = false
+	return BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*Expr{isNull, nullValue, radix})
+}
+
 // castInsertSourceColumn casts one bound source column to its target column
 // type with INSERT assignment semantics (ENUM/SET/GEOMETRY aware). sourceExpr is
 // the projection the column came from, used to recognize display-value
@@ -5527,6 +5563,10 @@ func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext
 					ColPos: int32(i),
 				},
 			},
+		}
+		projExpr, err = builder.insertDecimalRadixAssignment(lastNodeID, i, projExpr, tableDef.Cols[colIdx].Typ)
+		if err != nil {
+			return 0, nil, nil, -1, err
 		}
 		projExpr, err = builder.castInsertSourceColumn(projExpr, lastNode.ProjectList[i], tableDef.Cols[colIdx])
 		if err != nil {

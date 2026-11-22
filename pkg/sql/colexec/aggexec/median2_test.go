@@ -877,13 +877,22 @@ func TestAccountedMedianDenseDecimalTypes(t *testing.T) {
 			typ:    types.New(types.T_decimal128, 20, 2),
 			values: mustDecimal128s(t, "1.00", "3.00", "2.00", "4.00", "6.00"),
 		},
+		{
+			name:   "decimal128_widened",
+			typ:    types.New(types.T_decimal128, 38, 2),
+			values: mustDecimal128s(t, "1.00", "3.00", "2.00", "4.00", "6.00"),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 			registry, account, allocation := newTestAggregateAllocation(t)
+			t.Cleanup(func() { finishTestAggregateAllocation(t, registry, account) })
 			exec, err := MakeSingleGroupAgg(
 				mp, AggIdOfMedian, false, nil, nil, tc.typ)
 			require.NoError(t, err)
+			t.Cleanup(exec.Free)
 			owner := exec.(AllocationAccountOwner)
 			require.NoError(t, owner.SetAllocationAccount(allocation))
 			SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
@@ -900,6 +909,7 @@ func TestAccountedMedianDenseDecimalTypes(t *testing.T) {
 			require.NoError(t, exec.GroupGrow(1))
 
 			input := medianTestVector(t, mp, tc.typ, tc.values)
+			t.Cleanup(func() { input.Free(mp) })
 			groups := []uint64{1, 1, 1, 1, 1}
 			require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
 				0, groups, []*vector.Vector{input}))
@@ -907,17 +917,17 @@ func TestAccountedMedianDenseDecimalTypes(t *testing.T) {
 				0, groups, []*vector.Vector{input}))
 
 			results, err := exec.Flush()
+			t.Cleanup(func() { freeAggResultVectors(results, mp) })
 			require.NoError(t, err)
-			require.Equal(t, "3.000",
-				vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0).
-					Format(results[0].GetType().Scale))
-
-			results[0].Free(mp)
-			input.Free(mp)
-			exec.Free()
-			require.NoError(t, owner.ClearAllocationAccount(allocation))
-			finishTestAggregateAllocation(t, registry, account)
-			require.Zero(t, mp.CurrNB())
+			resultType := results[0].GetType()
+			require.Equal(t, int32(3), resultType.Scale)
+			if tc.typ.Width == 38 {
+				require.Equal(t, types.T_decimal256, resultType.Oid)
+				require.Equal(t, "3.000", vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0).Format(resultType.Scale))
+			} else {
+				require.Equal(t, types.T_decimal128, resultType.Oid)
+				require.Equal(t, "3.000", vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0).Format(resultType.Scale))
+			}
 		})
 	}
 }

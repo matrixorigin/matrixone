@@ -588,10 +588,9 @@ func unsignedDecimalAdmissionVarlena(
 	// selects the prefix grammar (matching strToDecimal64 & friends) even for
 	// a const IsBin source, and every other IsBin source converts through the
 	// binary decimal decoder.
-	radix := isAssignmentRadixLiteral(from, result.ArgumentIsBin(0))
 	isBin := result.ArgumentIsBin(0)
-	mysqlPrefix := !radix && targetType.Charset == 255 && (!isBin || from.IsConst())
-	if isBin && !mysqlPrefix && !radix {
+	mysqlPrefix := targetType.Charset == 255 && (!isBin || from.IsConst())
+	if isBin && !mysqlPrefix {
 		return unsignedDecimalAdmissionBinary(proc, from, targetType, result, length, selectList, entry, column)
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -608,14 +607,6 @@ func unsignedDecimalAdmissionVarlena(
 		v, null := src.GetStrValue(i)
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-		if radix {
-			// Radix literals are nonnegative. Pass the full magnitude to the
-			// outer assignment cast, which owns precision and diagnostics.
-			if err := rs.AppendBytes([]byte(radixAssignmentDecimalText(v)), false); err != nil {
 				return err
 			}
 			continue

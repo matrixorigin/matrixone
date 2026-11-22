@@ -330,6 +330,52 @@ func TestIssue31161ColumnDefaultMetadata(t *testing.T) {
 		requireValue("select dh1 from "+dbName+".f where id = 1", "0.0051")
 		requireValue("select dh2 from "+dbName+".f where id = 1", "0.0051")
 		requireValue("select db3 from "+dbName+".f where id = 1", "0.0051")
+		exec("insert into " + dbName + ".f(id, db1) values (2, default)")
+		exec("insert into " + dbName + ".f(id, db1) select 3, b'00110011'")
+		requireValue("select db1 from "+dbName+".f where id = 2", "0.0051")
+		requireValue("select db1 from "+dbName+".f where id = 3", "51.0000")
+		exec("insert into " + dbName + ".f(id, db1) select distinct 4, b'00110011'")
+		exec("insert into " + dbName + ".f(id, db1) values (5, 0) on duplicate key update db1=0x33")
+		exec("insert into " + dbName + ".f(id, db1) values (5, 0) on duplicate key update db1=0x33")
+		requireValue("select db1 from "+dbName+".f where id = 4", "51.0000")
+		requireValue("select db1 from "+dbName+".f where id = 5", "51.0000")
+		exec("update " + dbName + ".f set db1=default where id=5")
+		requireValue("select db1 from "+dbName+".f where id = 5", "0.0051")
+
+		// A generated column replays a catalog expression too. By magnitude
+		// 51 would fail this precision; the coefficient 0.0051 fits.
+		exec("create table " + dbName + ".radix_generated (" +
+			"id int primary key, g decimal(4,4) unsigned generated always as (b'00110011') stored)")
+		exec("insert into " + dbName + ".radix_generated(id) values (1)")
+		requireValue("select g from "+dbName+".radix_generated where id = 1", "0.0051")
+
+		exec("create table " + dbName + ".radix_grouped(v decimal(10,4) unsigned)")
+		exec("insert into " + dbName + ".radix_grouped select 0x33 from " + dbName + ".f group by 1")
+		requireValue("select v from "+dbName+".radix_grouped", "51.0000")
+		exec("truncate table " + dbName + ".radix_grouped")
+		exec("insert into " + dbName + ".radix_grouped select 0x33 from " + dbName + ".f group by rollup(0x33)")
+		requireValue("select concat(count(*), ',', count(v), ',', max(v)) from "+
+			dbName+".radix_grouped", "2,1,51.0000")
+		exec("alter table " + dbName + ".radix_grouped add column rn bigint")
+		exec("truncate table " + dbName + ".radix_grouped")
+		exec("insert into " + dbName + ".radix_grouped select 0x33, row_number() over () from " +
+			dbName + ".f group by rollup(0x33)")
+		requireValue("select concat(count(*), ',', count(v), ',', max(v)) from "+
+			dbName+".radix_grouped", "2,1,51.0000")
+
+		exec("create table " + dbName + ".radix_sample_source(v decimal(10,4) not null)")
+		exec("insert into " + dbName + ".radix_sample_source values (1.2345)")
+		exec("create table " + dbName + ".radix_sample_dest(a decimal(10,4), b decimal(10,4), c decimal(10,4))")
+		exec("insert into " + dbName + ".radix_sample_dest select 0x33, sample(v, v, 1 rows) from " +
+			dbName + ".radix_sample_source")
+		requireValue("select a from "+dbName+".radix_sample_dest", "1.2345")
+
+		exec("create table " + dbName + ".radix_sample_group(k int, v varchar(10) not null)")
+		exec("insert into " + dbName + ".radix_sample_group values (1, '1.2345')")
+		exec("truncate table " + dbName + ".radix_sample_dest")
+		exec("insert into " + dbName + ".radix_sample_dest select 0x33, sample(v, v, 1 rows) from " +
+			dbName + ".radix_sample_group group by rollup(k)")
+		requireValue("select concat(min(a), ',', max(a)) from "+dbName+".radix_sample_dest", "1.2345,1.2345")
 
 		// I4: reference columns keep their reference origin and mark; the
 		// referenced literal column keeps its literal metadata.

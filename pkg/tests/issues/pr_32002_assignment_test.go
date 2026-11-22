@@ -328,6 +328,14 @@ func TestPR32002ReviewBoundaries(t *testing.T) {
 			exec("drop table decimal_radix")
 		}
 
+		exec("set sql_mode='STRICT_TRANS_TABLES'")
+		exec("create table decimal_radix (v decimal(20,0))")
+		exec("insert into decimal_radix values (0x10000000000000000)")
+		var wideValue string
+		require.NoError(t, conn.QueryRowContext(ctx, "select v from decimal_radix").Scan(&wideValue))
+		require.Equal(t, "18446744073709551616", wideValue)
+		exec("drop table decimal_radix")
+
 		exec("create table decimal_radix (v decimal(40,1))")
 		exec("insert into decimal_radix select 0x10000000000000000")
 		require.Empty(t, warningCodes())
@@ -335,6 +343,7 @@ func TestPR32002ReviewBoundaries(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, "select v from decimal_radix").Scan(&wideRadix))
 		require.Equal(t, "18446744073709551616.0", wideRadix)
 		exec("delete from decimal_radix")
+		exec("set sql_mode=''")
 		exec("insert into decimal_radix select 0x01" + strings.Repeat("00", 32))
 		require.Equal(t, []int{int(moerr.ER_WARN_DATA_OUT_OF_RANGE)}, warningCodes())
 		require.NoError(t, conn.QueryRowContext(ctx, "select v from decimal_radix").Scan(&wideRadix))
