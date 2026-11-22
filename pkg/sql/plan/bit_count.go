@@ -17,9 +17,7 @@ package plan
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -115,12 +113,12 @@ func bitCountSubqueryScope(builder *QueryBuilder, sub *plan.SubqueryRef) *BindCo
 	return builder.ctxByNode[sub.NodeId]
 }
 
+// MySQL can reduce a one-row RHS in the logical query even when MatrixOne
+// keeps its physical operator, for example DISTINCT or one-row VALUES.
 func bitCountInSubqueryCanReduce(builder *QueryBuilder, scope *BindContext, sub *plan.SubqueryRef) bool {
-	if scope == nil || !scope.canReduceInToSubqueryFreeComparison || sub == nil || sub.RowSize != 1 || sub.Child == nil {
-		return false
-	}
-	return (sub.Typ == plan.SubqueryRef_IN || sub.Typ == plan.SubqueryRef_ANY && sub.Op == "=") &&
-		bitCountWhereIsEffectivelyTrue(builder, scope)
+	return scope != nil && scope.canReduceInToSubqueryFreeComparison && sub != nil &&
+		sub.Child != nil && isEqualitySingletonComparison(sub) &&
+		singletonWhereIsTrue(builder, scope, scope.whereFilters)
 }
 
 func isBitCountScalarRef(sub *plan.SubqueryRef) bool {
@@ -128,75 +126,8 @@ func isBitCountScalarRef(sub *plan.SubqueryRef) bool {
 }
 
 func bitCountCanReduceScalar(builder *QueryBuilder, scope *BindContext) bool {
-	return scope != nil && scope.reducibleTablelessScalar && bitCountWhereIsEffectivelyTrue(builder, scope)
-}
-
-func (bc *BindContext) setWhereFilters(filters []*plan.Expr) {
-	bc.whereFilters = filters
-	bc.bitCountWhereProofKnown = false
-	bc.bitCountWhereProofValue = false
-	bc.bitCountWhereProofNeedsContext = false
-}
-
-func bitCountWhereIsEffectivelyTrue(builder *QueryBuilder, ctx *BindContext) bool {
-	if ctx == nil {
-		return false
-	}
-	if ctx.bitCountWhereProofKnown {
-		if ctx.bitCountWhereProofValue && ctx.bitCountWhereProofNeedsContext {
-			if builder == nil || builder.compCtx == nil {
-				return false
-			}
-			bindCtx := builder.GetContext()
-			if bindCtx == nil || defines.IsNoEvaluationViewBinding(bindCtx) || bindCtx.Err() != nil {
-				return false
-			}
-		}
-		return ctx.bitCountWhereProofValue
-	}
-	ctx.bitCountWhereProofKnown = true
-	ctx.bitCountWhereProofValue = false
-	ctx.bitCountWhereProofNeedsContext = false
-	var budget *speculativeConstantFoldBudget
-	for _, filter := range ctx.whereFilters {
-		folded := filter
-		if filter.GetLit() == nil {
-			ctx.bitCountWhereProofNeedsContext = true
-			if builder == nil || builder.compCtx == nil {
-				return false
-			}
-			bindCtx := builder.GetContext()
-			if bindCtx == nil || defines.IsNoEvaluationViewBinding(bindCtx) || bindCtx.Err() != nil {
-				return false
-			}
-			if budget == nil {
-				budget = &speculativeConstantFoldBudget{ctx: bindCtx}
-			}
-			foldExpr := DeepCopyExpr(filter)
-			foldConstantStringLengths(foldExpr, bindCtx)
-			if !isSpeculativeConstantFoldSafe(foldExpr, budget) {
-				return false
-			}
-			proc := builder.compCtx.GetProcess()
-			if proc == nil {
-				return false
-			}
-			// The compiler may lend a process from an earlier statement.
-			// Borrow its resources, using the current bind request's deadline.
-			eval := proc.NewNoContextChildProc(0)
-			eval.Ctx = bindCtx
-			var err error
-			folded, err = ConstantFold(batch.EmptyForConstFoldBatch, foldExpr, eval, false, false)
-			if err != nil || folded == nil || bindCtx.Err() != nil {
-				return false
-			}
-		}
-		if lit := folded.GetLit(); folded.Typ.Id != int32(types.T_bool) || lit == nil || lit.Isnull || !lit.GetBval() {
-			return false
-		}
-	}
-	ctx.bitCountWhereProofValue = true
-	return true
+	return scope != nil && scope.reducibleTablelessScalar &&
+		singletonWhereIsTrue(builder, scope, scope.whereFilters)
 }
 
 func bitCountProjectionDependsOnRows(builder *QueryBuilder, expr *Expr, direct bool, seen map[int32]bool) bool {
@@ -253,6 +184,9 @@ func bitCountProjectionDependsOnRows(builder *QueryBuilder, expr *Expr, direct b
 // Bind the count inside each selected arm so the control-flow executor keeps
 // its row masks and the operand reaches BIT_COUNT with its own conversion.
 func (b *baseBinder) bindBitCountOperand(expr *Expr) (*Expr, error) {
+	if grouped, err := b.bindGroupedBitCount(expr); grouped != nil || err != nil {
+		return grouped, err
+	}
 	ctx := b.GetContext()
 	if releasedBitCountFloatOverload(types.T(expr.Typ.Id)) >= 0 {
 		if fn := expr.GetF(); fn != nil && fn.Func != nil {

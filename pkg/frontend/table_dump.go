@@ -1748,6 +1748,7 @@ func prepareV428TableDumpLoad(ctx context.Context, ses *Session, dbName string, 
 		oid := types.T(col.Typ.Id)
 		typ := types.Type{Oid: oid}
 		// SET has an integer storage type but its labels are text metadata.
+		// typeswitch:partial v4.2.8 persisted only the native FLOAT and DOUBLE encodings.
 		if col.Typ.Enumvalues == "" && (typ.IsIntOrUint() || typ.IsDecimal() || oid == types.T_bit ||
 			oid == types.T_float32 || oid == types.T_float64 || (col.Hidden && oid == types.T_Rowid)) {
 			continue

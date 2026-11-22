@@ -1111,13 +1111,13 @@ type BindContext struct {
 	projectByExpr     map[string]int32
 	timeByAst         map[string]int32
 	whereFilters      []*plan.Expr
-	// bitCountWhereProof caches the query-block-local constant proof used by
+	// singletonWhereProof caches the query-block-local constant proof used by
 	// BIT_COUNT reduction. bindWhere invalidates it whenever the filter list is
 	// replaced; it is never carried into execution or prepared-plan state.
-	bitCountWhereProofKnown        bool
-	bitCountWhereProofValue        bool
-	bitCountWhereProofNeedsContext bool
-	flattenedVolatileExprs         map[int32]*plan.Expr
+	singletonWhereProofKnown        bool
+	singletonWhereProofValue        bool
+	singletonWhereProofNeedsContext bool
+	flattenedVolatileExprs          map[int32]*plan.Expr
 	// Pagination is bound before SELECT expressions are flattened, but its
 	// plan node is attached afterwards. Replay must not evaluate a skipped row.
 	outerPaginationPending bool
@@ -1173,6 +1173,10 @@ type BindContext struct {
 	// contexts created while binding one FROM clause inherit the owner, while a
 	// nested SELECT replaces it when bindSelect starts.
 	queryBlockOwner *BindContext
+	// groupedBitCounts is keyed by the original group slot. A selector's
+	// SELECT, HAVING and ORDER BY consumers share its representative.
+	groupedBitCounts map[int32]*Expr
+
 	// reducibleTablelessScalar describes a scalar SELECT that MySQL may
 	// replace with its sole projection. hasDependentProjectionSubquery records
 	// whether a visible projection contains a row-dependent or unstable

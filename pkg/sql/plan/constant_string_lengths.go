@@ -143,6 +143,18 @@ func (p *stringLengthProof) measure(expr *plan.Expr, text bool, depth int) (cons
 			limit := min(function.StringFunctionResultByteLimit(types.T(expr.Typ.Id)), mpool.MaxAllocationSize())
 			return p.repeat(args[0], args[1], text, depth-1, limit)
 		}
+	case function.LOWER, function.UPPER:
+		if len(args) == 1 {
+			if stringExprUsesBytes(args[0]) {
+				return p.measure(args[0], text, depth-1)
+			}
+			// The case mapper is one rune at a time. A valid UTF-8
+			// source with one byte per rune stays ASCII after mapping.
+			source, ok := p.measure(args[0], true, depth-1)
+			if ok && source.bytes == source.characters {
+				return source, true
+			}
+		}
 	case function.REVERSE:
 		if len(args) == 1 {
 			return p.reverse(args[0], text, depth-1)

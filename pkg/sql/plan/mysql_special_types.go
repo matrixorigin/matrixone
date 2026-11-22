@@ -347,6 +347,20 @@ func speculativeStringOutputBound(f *plan.Function, args []speculativeFoldString
 			result.validUTF8 = result.validUTF8 && args[0].validUTF8
 		}
 		return result
+	case "lower", "upper", "to_lower", "to_upper", "lcase", "ucase":
+		if len(args) != 1 || !args[0].known {
+			break
+		}
+		if stringExprUsesBytes(f.Args[0]) {
+			return args[0]
+		}
+		// The Unicode case mapper emits at most one UTF-8 rune per input
+		// byte. This also bounds replacement of malformed input.
+		if args[0].bytes <= maxSpeculativeFoldValueBytes/utf8.UTFMax {
+			return speculativeFoldStringBound{
+				bytes: args[0].bytes * utf8.UTFMax, known: true, validUTF8: true,
+			}
+		}
 	case "reverse", "substring", "substr", "left", "right":
 		if len(args) == 0 || !args[0].known {
 			break

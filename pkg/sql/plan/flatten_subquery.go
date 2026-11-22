@@ -571,19 +571,10 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		}
 	}
 
-	// Strip unnecessary subqueries which have no FROM clause
+	// A proven-true singleton filter is part of the same simplification as a
+	// tableless projection without a WHERE clause.
 	subNode := builder.qry.Nodes[subID]
-	var noFromInput *plan.Node
-	if subNode.NodeType == plan.Node_PROJECT && len(subNode.Children) == 1 &&
-		subNode.Limit == nil && subNode.Offset == nil && subNode.RankOption == nil {
-		childID := subNode.Children[0]
-		if childID >= 0 && int(childID) < len(builder.qry.Nodes) {
-			noFromInput = builder.qry.Nodes[childID]
-		}
-	}
-	if noFromInput != nil && noFromInput.NodeType == plan.Node_VALUE_SCAN &&
-		noFromInput.TableDef == nil && noFromInput.Limit == nil &&
-		noFromInput.Offset == nil && noFromInput.RankOption == nil {
+	if builder.tablelessSingletonProject(subID, canInlineFilteredSingleton(subquery)) != nil {
 		switch subquery.Typ {
 		case plan.SubqueryRef_SCALAR:
 			if subquery.Child != nil {

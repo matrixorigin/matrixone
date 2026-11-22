@@ -248,11 +248,11 @@ func TestBitCountPredicateFoldUsesBindingContext(t *testing.T) {
 	like, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "like", []*Expr{text, DeepCopyExpr(text)})
 	require.NoError(t, err)
 	ctx := &BindContext{whereFilters: []*Expr{like}}
-	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx))
+	require.True(t, singletonWhereIsTrue(builder, ctx, ctx.whereFilters))
 	require.NotNil(t, like.GetF(), "speculative folding must leave the bound predicate intact")
 
 	compCtx.SetContext(oldStatement)
-	require.False(t, bitCountWhereIsEffectivelyTrue(builder, ctx))
+	require.False(t, singletonWhereIsTrue(builder, ctx, ctx.whereFilters))
 }
 
 func TestBitCountPredicateProofHandlesLongPredicatesAndBoundedStrings(t *testing.T) {
@@ -269,17 +269,17 @@ func TestBitCountPredicateProofHandlesLongPredicatesAndBoundedStrings(t *testing
 
 	ctx := &BindContext{}
 	ctx.setWhereFilters(filters)
-	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "distinct eligible conjuncts must not share an arbitrary node cutoff")
-	require.True(t, ctx.bitCountWhereProofKnown)
-	require.True(t, ctx.bitCountWhereProofValue)
-	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "repeat probes should use the cached scope proof")
+	require.True(t, singletonWhereIsTrue(builder, ctx, ctx.whereFilters), "distinct eligible conjuncts must not share an arbitrary node cutoff")
+	require.True(t, ctx.singletonWhereProofKnown)
+	require.True(t, ctx.singletonWhereProofValue)
+	require.True(t, singletonWhereIsTrue(builder, ctx, ctx.whereFilters), "repeat probes should use the cached scope proof")
 	proofContext := builder.GetContext()
 	cancelledContext, cancel := context.WithCancel(proofContext)
 	cancel()
 	builder.compCtx.SetContext(cancelledContext)
-	require.False(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "a cached proof must not bypass the current request cancellation")
+	require.False(t, singletonWhereIsTrue(builder, ctx, ctx.whereFilters), "a cached proof must not bypass the current request cancellation")
 	builder.compCtx.SetContext(proofContext)
-	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "restoring the active request context may reuse the proof")
+	require.True(t, singletonWhereIsTrue(builder, ctx, ctx.whereFilters), "restoring the active request context may reuse the proof")
 
 	longDisjunction := DeepCopyExpr(filters[0])
 	for _, filter := range filters[1:] {
@@ -288,12 +288,12 @@ func TestBitCountPredicateProofHandlesLongPredicatesAndBoundedStrings(t *testing
 		require.NoError(t, err)
 	}
 	ctx.setWhereFilters([]*pb.Expr{longDisjunction})
-	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "one large pure boolean tree must be admitted")
+	require.True(t, singletonWhereIsTrue(builder, ctx, ctx.whereFilters), "one large pure boolean tree must be admitted")
 	ctx.setWhereFilters(append(append([]*pb.Expr(nil), filters...), makePlan2BoolConstExprWithType(false)))
-	require.False(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "a false suffix must retain the materialization boundary")
+	require.False(t, singletonWhereIsTrue(builder, ctx, ctx.whereFilters), "a false suffix must retain the materialization boundary")
 	null := &pb.Expr{Typ: pb.Type{Id: int32(types.T_bool)}, Expr: &pb.Expr_Lit{Lit: &pb.Literal{Isnull: true}}}
 	ctx.setWhereFilters(append(append([]*pb.Expr(nil), filters...), null))
-	require.False(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "a NULL suffix must retain the materialization boundary")
+	require.False(t, singletonWhereIsTrue(builder, ctx, ctx.whereFilters), "a NULL suffix must retain the materialization boundary")
 
 	makeLengthPredicate := func(name string, size, want int64) *pb.Expr {
 		space, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "space", []*pb.Expr{makePlan2Int64ConstExprWithType(size)})
@@ -305,7 +305,7 @@ func TestBitCountPredicateProofHandlesLongPredicatesAndBoundedStrings(t *testing
 		return predicate
 	}
 	ctx.setWhereFilters([]*pb.Expr{makeLengthPredicate("length", 65536, 65536)})
-	require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "bounded 64 KiB string output should fold")
+	require.True(t, singletonWhereIsTrue(builder, ctx, ctx.whereFilters), "bounded 64 KiB string output should fold")
 	largeSpace, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "space", []*pb.Expr{makePlan2Int64ConstExprWithType(64 << 20)})
 	require.NoError(t, err)
 	budget := &speculativeConstantFoldBudget{ctx: builder.GetContext()}
@@ -319,7 +319,7 @@ func TestBitCountPredicateProofHandlesLongPredicatesAndBoundedStrings(t *testing
 			}
 			predicate := makeLengthPredicate(name, size, want)
 			ctx.setWhereFilters([]*pb.Expr{predicate})
-			require.True(t, bitCountWhereIsEffectivelyTrue(builder, ctx), "SPACE length should fold symbolically")
+			require.True(t, singletonWhereIsTrue(builder, ctx, ctx.whereFilters), "SPACE length should fold symbolically")
 			require.NotNil(t, predicate.GetF().Args[0].GetF().Args[0].GetF(), "the proof must leave the runtime predicate intact")
 		})
 	}
@@ -354,7 +354,7 @@ func TestBitCountStringMeasureBypassesAllocationBudget(t *testing.T) {
 			for _, want := range []int64{tc.want, tc.want - 1} {
 				predicate := bind("=", DeepCopyExpr(length), intLit(want))
 				proof.setWhereFilters([]*pb.Expr{predicate})
-				require.Equal(t, want == tc.want, bitCountWhereIsEffectivelyTrue(builder, proof))
+				require.Equal(t, want == tc.want, singletonWhereIsTrue(builder, proof, proof.whereFilters))
 				require.NotNil(t, predicate.GetF().Args[0].GetF(), "proof must preserve the original expression")
 			}
 		})
@@ -404,7 +404,7 @@ func TestBitCountReverseProofPreservesStringDomains(t *testing.T) {
 			metric := bind(tc.metric, bind("reverse", DeepCopyExpr(large)))
 			proof := &BindContext{}
 			proof.setWhereFilters([]*pb.Expr{bind("=", metric, integer(tc.want))})
-			require.True(t, bitCountWhereIsEffectivelyTrue(builder, proof))
+			require.True(t, singletonWhereIsTrue(builder, proof, proof.whereFilters))
 			require.NotNil(t, metric.GetF(), "keep the execution predicate intact")
 		})
 	}
@@ -743,6 +743,117 @@ func TestBitCountLowersReducedScalarSelector(t *testing.T) {
 				id, overload := function.DecodeOverloadID(arm.GetF().GetFunc().GetObj())
 				require.Equal(t, int32(function.BIT_COUNT), id)
 				require.Equal(t, want, overload)
+			}
+		})
+	}
+}
+
+func TestBitCountSingletonProjectionUsesOwnedReduction(t *testing.T) {
+	for _, tc := range []struct {
+		name, predicate, limit string
+		want                   int32
+	}{
+		{"true small Unicode transforms", "length(ucase(lower(repeat('é',4))))=8", "", 16},
+		{"true large ASCII proof", "length(lower(repeat('Ab',25000000)))=50000000", "", 16},
+		{"false", "length(lower(repeat('a',4)))=5", "", function.BitCountFloat64FieldOverload},
+		{"null", "NULL", "", function.BitCountFloat64FieldOverload},
+		{"LIMIT", "length(lower(repeat('a',4)))=4", " limit 5", function.BitCountFloat64FieldOverload},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			p, err := runOneStmt(optimizer, t, `select bit_count(x), z from (
+				select cast(e.sal as double) x, e.empno in (select 1 where `+tc.predicate+`) z
+				from constraint_test.emp e`+tc.limit+`) s`)
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(p, "bit_count")
+			require.NotNil(t, fn)
+			_, id := function.DecodeOverloadID(fn.GetF().GetFunc().GetObj())
+			require.Equal(t, tc.want, id)
+		})
+	}
+}
+
+func TestBitCountLogicalSingletonReductionKeepsCast(t *testing.T) {
+	for _, rhs := range []string{
+		"e.empno in (select abs(-1) where true)",
+		"e.empno in (select e.empno where true)",
+		"(select e.empno where true)",
+		"(select e.empno limit 1)",
+		"e.empno = any (values row(1))",
+		"e.empno in (select distinct 1)",
+		"e.empno in (select 1 group by 1)",
+	} {
+		t.Run(rhs, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			p, err := runOneStmt(optimizer, t, "select bit_count(x), z from ("+
+				"select cast(e.sal as double) x, "+rhs+" z from constraint_test.emp e) s")
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(p, "bit_count")
+			require.NotNil(t, fn)
+			_, overload := function.DecodeOverloadID(fn.GetF().GetFunc().GetObj())
+			require.Equal(t, int32(16), overload)
+		})
+	}
+}
+
+func TestBitCountFilteredSingletonRetainsVolatileRowComparison(t *testing.T) {
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(optimizer, t,
+		"select (1,0) < (select get_lock('bit_count_group_test',0),1 where true)")
+	require.NoError(t, err)
+	require.NotNil(t, findPlanFunctionExpr(p, "get_lock"))
+}
+
+func TestBitCountGroupedSelectorKeepsGroupingContract(t *testing.T) {
+	const selector = "if(e.empno=1,e.sal,cast(e.sal as double))"
+	for _, tc := range []struct {
+		name, mode, operand, keys      string
+		wantError, wantTuple, wantArms bool
+	}{
+		{"determinant", "ONLY_FULL_GROUP_BY", selector, "e.empno,e.sal," + selector, false, false, true},
+		{"unproved determinant", "ONLY_FULL_GROUP_BY", selector, selector, true, false, false},
+		{"permissive representative", "", selector, selector, false, true, true},
+		{"native exact group key", "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE", selector, selector, false, false, false},
+		{"rollup grouping NULL", "", selector, selector + " with rollup", false, false, false},
+		{"warning-bearing cast", "", "if(cast(e.ename as signed)=1,e.sal,cast(e.sal as double))", "k", false, false, false},
+		{"volatile condition", "", "if(rand()>0.5,e.sal,cast(e.sal as double))", "k", false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			ctx := optimizer.CurrentContext().(*MockCompilerContext)
+			ctx.SetSqlModeOverride(tc.mode)
+			table := ctx.tables["emp"]
+			for _, col := range table.Cols {
+				if col.Name == "sal" {
+					col.Typ = pb.Type{Id: int32(types.T_float64)}
+				}
+			}
+			ctx.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")] = table
+			selectList := "bit_count(" + tc.operand + ")"
+			if tc.keys == "k" {
+				selectList = tc.operand + " as k, " + selectList
+			}
+			p, err := runOneStmt(optimizer, t, "select "+selectList+" from constraint_test.emp e group by "+tc.keys)
+			if tc.wantError {
+				require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantTuple, findPlanFunctionExpr(p, "serial_full") != nil)
+			if !tc.wantArms {
+				return
+			}
+			q := p.GetQuery()
+			proj := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+			require.NotNil(t, proj.GetF())
+			selectorID, _ := function.DecodeOverloadID(proj.GetF().GetFunc().GetObj())
+			require.Equal(t, int32(function.IFF), selectorID)
+			require.Len(t, proj.GetF().GetArgs(), 3)
+			want := []int32{function.BitCountFloat64FieldOverload, 16}
+			for i, arg := range proj.GetF().GetArgs()[1:] {
+				id, overload := function.DecodeOverloadID(arg.GetF().GetFunc().GetObj())
+				require.Equal(t, int32(function.BIT_COUNT), id)
+				require.Equal(t, want[i], overload)
 			}
 		})
 	}
