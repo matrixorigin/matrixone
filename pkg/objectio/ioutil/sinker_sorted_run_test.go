@@ -194,9 +194,6 @@ func TestWholeAliasedBatchSpillReadback(t *testing.T) {
 				headers := vector.MustFixedColNoTypeCheck[types.Varlena](input.Vecs[1])
 				require.NoError(t, vector.SetFixedAtNoTypeCheck(input.Vecs[1], 1, headers[0]))
 				input.SetRowCount(rows)
-				sizes := make([]int, len(typs))
-				_, hasSize := materializedBatchSizeWithPayloadSizes(input, sizes)
-				require.True(t, hasSize, "the full-window payload estimate must be available")
 				want := make(map[int32]string, rows)
 				nulls := make(map[int32]bool, rows)
 				for i := 0; i < rows; i++ {
@@ -1223,7 +1220,7 @@ func TestCloseCleansAfterAsynchronousWorkerFailure(t *testing.T) {
 	close(gate)
 	gate = nil
 	require.Same(t, fs.writeErr, sink.drainPipeline())
-	require.False(t, sink.staged.aborted)
+	require.Equal(t, spillRunReady, sink.staged.state)
 	require.Same(t, fs.writeErr, sink.Close(), "cleanup must not replace the pipeline error")
 	require.NotEmpty(t, sink.staged.persisted)
 	fs.deleteErr = nil

@@ -375,6 +375,14 @@ func (s *sinkerStats) updateBytes(n int) {
 	}
 }
 
+type spillRunState uint8
+
+const (
+	spillRunReady spillRunState = iota
+	spillRunAborted
+	spillRunResetPending
+)
+
 type Sinker struct {
 	closed bool
 	schema struct {
@@ -403,7 +411,7 @@ type Sinker struct {
 		persisted           []objectio.ObjectStats
 		inMemorySize        int
 		memorySizeThreshold int
-		aborted             bool
+		state               spillRunState
 	}
 	result struct {
 		persisted []objectio.ObjectStats
@@ -693,7 +701,7 @@ func (sinker *Sinker) cleanupUnpublishedRun(ctx context.Context) error {
 		return moerr.NewInternalErrorNoCtx("missing file service for unpublished object cleanup")
 	}
 	cleanupCtx, cancel := context.WithTimeoutCause(
-		context.WithoutCancel(ctx), failedRunCleanupTimeout, moerr.CauseCleanUpUselessFiles,
+		ctx, failedRunCleanupTimeout, moerr.CauseCleanUpUselessFiles,
 	)
 	defer cancel()
 	_, err := DeleteUnpublishedObjects(cleanupCtx, sinker.fs, names...)
@@ -711,10 +719,10 @@ func (sinker *Sinker) cleanupUnpublishedRun(ctx context.Context) error {
 // A panic leaves completed false; cleanup runs while the original panic keeps
 // unwinding. Returned errors retain their original type and code.
 func (sinker *Sinker) cleanupRunOnFailure(ctx context.Context, errp *error, completed *bool) {
-	if (!*completed || *errp != nil) && !sinker.staged.aborted {
-		sinker.staged.aborted = true
+	if (!*completed || *errp != nil) && sinker.staged.state == spillRunReady {
+		sinker.staged.state = spillRunAborted
 		sinker.cleanupInMemoryStaged()
-		_ = sinker.cleanupUnpublishedRun(ctx)
+		_ = sinker.cleanupUnpublishedRun(context.WithoutCancel(ctx))
 	}
 }
 
@@ -1081,8 +1089,8 @@ func (sinker *Sinker) Write(
 	ctx context.Context,
 	data *batch.Batch,
 ) (err error) {
-	if sinker.closed || sinker.staged.aborted {
-		return moerr.NewInternalErrorNoCtx("cannot write an aborted spill run")
+	if err = sinker.readyForRun(ctx, "write"); err != nil {
+		return err
 	}
 	var curr *batch.Batch
 	currBound := 0
@@ -1090,33 +1098,11 @@ func (sinker *Sinker) Write(
 	limit := sinker.runSizeLimit()
 	inputSize := 0
 	wholeInputFits := false
-	// Keep the optional, per-call copy sizes on the stack for typical schemas.
-	var payloadSizeStorage [64]int
-	var payloadSizes []int
 	if limit > 0 {
 		if sinker.config.cleanupFailedRun {
 			defer sinker.cleanupRunOnFailure(ctx, &err, &completed)
 		}
-		if data.RowCount() <= objectio.BlockMaxRows {
-			if len(data.Vecs) <= len(payloadSizeStorage) {
-				payloadSizes = payloadSizeStorage[:len(data.Vecs)]
-			} else {
-				// Wide schemas need scratch only for columns whose payload must
-				// already be scanned and may benefit from a whole-window hint.
-				for _, vec := range data.Vecs {
-					if vec.GetType().IsVarlen() && !vec.IsConst() &&
-						len(vec.GetArea()) > 0 && !vec.VarlenaAreaIsDisjoint() {
-						payloadSizes = make([]int, len(data.Vecs))
-						break
-					}
-				}
-			}
-		}
-		var hasPayloadSize bool
-		inputSize, hasPayloadSize = materializedBatchSizeWithPayloadSizes(data, payloadSizes)
-		if !hasPayloadSize {
-			payloadSizes = nil
-		}
+		inputSize = materializedBatchSize(data)
 		wholeInputFits = inputSize != math.MaxInt && sinker.staged.inMemorySize <= limit &&
 			inputSize <= limit-sinker.staged.inMemorySize
 	}
@@ -1214,8 +1200,6 @@ func (sinker *Sinker) Write(
 		}
 		if useOne {
 			err = curr.UnionOne(data, int64(offset), sinker.mp)
-		} else if wholeInputFits && offset == 0 && toAdd == data.RowCount() && payloadSizes != nil {
-			err = curr.UnionWholeBatchWithPayloadSizes(data, payloadSizes, sinker.mp)
 		} else {
 			err = curr.UnionWindow(data, offset, toAdd, sinker.mp)
 		}
@@ -1268,8 +1252,8 @@ func (sinker *Sinker) WriteOwned(
 	ctx context.Context,
 	data *batch.Batch,
 ) (owned bool, err error) {
-	if sinker.closed || sinker.staged.aborted {
-		return false, moerr.NewInternalErrorNoCtx("cannot write an aborted spill run")
+	if err = sinker.readyForRun(ctx, "write"); err != nil {
+		return false, err
 	}
 	if sinker.runSizeLimit() > 0 && sinker.config.cleanupFailedRun {
 		completed := false
@@ -1328,8 +1312,8 @@ func (sinker *Sinker) writeOwned(
 }
 
 func (sinker *Sinker) Sync(ctx context.Context) (err error) {
-	if sinker.closed || sinker.staged.aborted {
-		return moerr.NewInternalErrorNoCtx("cannot sync an aborted spill run")
+	if err = sinker.readyForRun(ctx, "sync"); err != nil {
+		return err
 	}
 	if sinker.runSizeLimit() > 0 && sinker.config.cleanupFailedRun {
 		completed := false
@@ -1505,21 +1489,40 @@ func (sinker *Sinker) Close() error {
 	return drainErr
 }
 
+// A failed run remains aborted until Reset starts retirement. If storage was
+// unavailable during Reset, the next run must finish that same cleanup before
+// it can stage or publish anything.
+func (sinker *Sinker) readyForRun(ctx context.Context, action string) error {
+	if sinker.closed || sinker.staged.state == spillRunAborted {
+		return moerr.NewInternalErrorNoCtxf("cannot %s an aborted spill run", action)
+	}
+	if sinker.staged.state == spillRunResetPending {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		return sinker.reset(ctx)
+	}
+	return nil
+}
+
 // Reset discards all staged and result data without tearing down the sinker.
 // It is safe to call after an aborted pipeline execution so that the next
 // Write/Sync cycle starts from a clean state. The buf pool, file-sinker
 // executor (and its arena), mpool, and fileservice references are all kept
 // alive so they can be reused without reallocation.
 func (sinker *Sinker) Reset() {
-	if sinker.closed {
-		return
+	if !sinker.closed {
+		_ = sinker.reset(context.Background())
 	}
+}
+
+func (sinker *Sinker) reset(ctx context.Context) error {
 	if sinker.config.cleanupFailedRun && sinker.runSizeLimit() > 0 &&
 		(len(sinker.staged.persisted) > 0 || sinker.pipe.result != nil) {
-		if err := sinker.cleanupUnpublishedRun(context.Background()); err != nil {
-			sinker.staged.aborted = true
+		if err := sinker.cleanupUnpublishedRun(ctx); err != nil {
+			sinker.staged.state = spillRunResetPending
 			sinker.cleanupInMemoryStaged()
-			return // Keep unpublished objects until a later retry succeeds.
+			return err
 		}
 	}
 	// Drain any in-flight pipeline jobs before clearing state, so pool
@@ -1533,7 +1536,6 @@ func (sinker *Sinker) Reset() {
 
 	sinker.cleanupInMemoryStaged()
 	sinker.staged.persisted = sinker.staged.persisted[:0]
-	sinker.staged.aborted = false
 
 	for i := range sinker.result.tail {
 		if sinker.result.tail[i] != nil {
@@ -1547,4 +1549,6 @@ func (sinker *Sinker) Reset() {
 	if sinker.fSinker.executor != nil {
 		sinker.fSinker.executor.Reset()
 	}
+	sinker.staged.state = spillRunReady
+	return nil
 }

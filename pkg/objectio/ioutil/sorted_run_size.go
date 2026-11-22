@@ -41,20 +41,8 @@ func multiplyRunBytes(a, b int) int {
 // dead area and shared descriptors, respectively. The bound travels with the
 // staged batch, including when sorting clears its disjointness flag.
 func materializedBatchSize(bat *batch.Batch) int {
-	size, _ := materializedBatchSizeWithPayloadSizes(bat, nil)
-	return size
-}
-
-// payloadSizes, when provided, receives exact live payload sizes for
-// non-constant columns that required a scan. The values are valid only while
-// this batch remains unchanged and can be reused by the same full-window copy.
-func materializedBatchSizeWithPayloadSizes(bat *batch.Batch, payloadSizes []int) (int, bool) {
 	size := 0
-	hasPayloadSize := false
-	for i, vec := range bat.Vecs {
-		if payloadSizes != nil {
-			payloadSizes[i] = -1
-		}
+	for _, vec := range bat.Vecs {
 		rows := vec.Length()
 		if vec.IsConst() {
 			// A constant may have one physical/logical slot while the batch
@@ -79,7 +67,7 @@ func materializedBatchSizeWithPayloadSizes(bat *batch.Batch, payloadSizes []int)
 			if !values[0].IsSmall() {
 				_, n := values[0].OffsetLen()
 				if uint64(n) > uint64(math.MaxInt) {
-					return math.MaxInt, false
+					return math.MaxInt
 				}
 				payload = multiplyRunBytes(rows, int(n))
 			}
@@ -106,20 +94,16 @@ func materializedBatchSizeWithPayloadSizes(bat *batch.Batch, payloadSizes []int)
 					if !values[i].IsSmall() {
 						_, n := values[i].OffsetLen()
 						if uint64(n) > uint64(math.MaxInt) {
-							return math.MaxInt, false
+							return math.MaxInt
 						}
 						payload = addRunBytes(payload, int(n))
 					}
 				}
 			}
 		}
-		if payloadSizes != nil && !vec.IsConst() && rows == bat.RowCount() && payload != math.MaxInt {
-			payloadSizes[i] = payload
-			hasPayloadSize = true
-		}
 		size = addRunBytes(size, max(len(vec.GetArea()), payload))
 	}
-	return size, hasPayloadSize
+	return size
 }
 
 // UnionWindow stores a constant varlen payload once and broadcasts its

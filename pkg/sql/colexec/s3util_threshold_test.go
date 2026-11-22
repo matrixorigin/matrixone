@@ -233,21 +233,29 @@ func testCNS3WriterTableDef() *plan.TableDef {
 	}
 }
 
-type closeFailureFS struct {
+type writerFailureFS struct {
 	fileservice.FileService
-	writes     int
-	failDelete bool
+	writes       int
+	failWriteAt  int
+	failDelete   bool
+	beforeDelete func()
 }
 
-func (f *closeFailureFS) Write(ctx context.Context, v fileservice.IOVector) error {
+func (f *writerFailureFS) Write(ctx context.Context, v fileservice.IOVector) error {
 	f.writes++
-	if f.writes == 2 {
+	if f.writes == f.failWriteAt {
 		return errors.New("injected object write failure")
 	}
 	return f.FileService.Write(ctx, v)
 }
 
-func (f *closeFailureFS) Delete(ctx context.Context, names ...string) error {
+func (f *writerFailureFS) Delete(ctx context.Context, names ...string) error {
+	if f.beforeDelete != nil {
+		f.beforeDelete()
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+	}
 	if f.failDelete {
 		return errors.New("injected delete failure")
 	}
@@ -258,7 +266,7 @@ func TestCNS3WriterCloseFreesBlockInfoWhenDeleteFails(t *testing.T) {
 	ctx := context.Background()
 	base := testutil.NewSharedFS()
 	defer base.Close(ctx)
-	fs := &closeFailureFS{FileService: base, failDelete: true}
+	fs := &writerFailureFS{FileService: base, failWriteAt: 2, failDelete: true}
 	mp := mpool.MustNewZero()
 	writer := NewCNS3DataWriter(mp, fs, testCNS3WriterTableDef(), 128, false)
 	require.NoError(t, vector.AppendBytes(writer.blockInfoBat.Vecs[0], []byte(strings.Repeat("m", 128)), false, mp))
@@ -284,4 +292,51 @@ func TestCNS3WriterCloseFreesBlockInfoWhenDeleteFails(t *testing.T) {
 	files, err := fileservice.SortedList(base.List(ctx, ""))
 	require.NoError(t, err)
 	require.Empty(t, files)
+}
+
+func TestCNS3WriterReuseRetriesFailedReset(t *testing.T) {
+	ctx := context.Background()
+	base := testutil.NewSharedFS()
+	defer base.Close(ctx)
+	fs := &writerFailureFS{FileService: base}
+	mp := mpool.MustNewZero()
+	writer := NewCNS3DataWriter(mp, fs, testCNS3WriterTableDef(), 64, false)
+	defer writer.Close()
+
+	bat := batch.NewWithSchema(false, []string{"a", "b"}, []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()})
+	defer bat.Clean(mp)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(strings.Repeat("x", 64)), false, mp))
+	bat.SetRowCount(1)
+	require.NoError(t, writer.Write(ctx, bat))
+
+	files, err := fileservice.SortedList(base.List(ctx, ""))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	oldObject := files[0].Name
+
+	fs.failDelete = true
+	writer.Reset()
+	require.ErrorContains(t, writer.Write(ctx, bat), "injected delete failure")
+	require.Equal(t, 1, fs.writes, "retry must finish before a new object can be written")
+	_, err = base.StatFile(ctx, oldObject)
+	require.NoError(t, err, "the unpublished object stays owned after a failed retry")
+
+	retryCtx, cancelRetry := context.WithCancel(ctx)
+	defer cancelRetry()
+	fs.beforeDelete = cancelRetry
+	require.ErrorContains(t, writer.Write(retryCtx, bat), context.Canceled.Error())
+	require.Equal(t, 1, fs.writes)
+	fs.beforeDelete = nil
+
+	fs.failDelete = false
+	require.NoError(t, writer.Write(ctx, bat))
+	stats, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, stats, 1, "the new execution must publish only its own object")
+	files, err = fileservice.SortedList(base.List(ctx, ""))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, stats[0].ObjectName().String(), files[0].Name)
+	require.NotEqual(t, oldObject, files[0].Name)
 }
