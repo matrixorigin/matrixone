@@ -1241,7 +1241,7 @@ func TestS3FSSelectedDecodeMemoryHits(t *testing.T) {
 }
 
 type failingDecodeCache struct {
-	fscache.DataCache
+	memoryCacheBacking
 	calls int
 }
 
@@ -1282,7 +1282,7 @@ func TestS3FSSelectedDecodeFailureIsolation(t *testing.T) {
 	// S3FS currently keeps memory-cache update errors local; they must not
 	// invalidate the caller's data or detach its generation ticket.
 	fs = newSelectedDecodeFS(t, false)
-	failedCache := &failingDecodeCache{DataCache: fs.memCache.cache}
+	failedCache := &failingDecodeCache{memoryCacheBacking: fs.memCache.cache}
 	fs.memCache.cache = failedCache
 	v := selectedDecodeVector(1)
 	defer v.ReleaseReadResultOnError()
