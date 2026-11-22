@@ -6180,21 +6180,11 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
 	col := MustFixedColWithTypeCheck[T](vec)
-	if len(vals) >= 16 && !hasNull && (len(isNulls) == 0 || len(isNulls) >= len(vals)) {
-		// An ordinary bulk append can copy the complete typed input at once.
-		// Keep small lists on the original loop to avoid the overlap check.
-		// Preserve the old forward-loop behavior if a caller passes a slice
-		// overlapping the destination (including unused vector capacity).
-		src := uintptr(unsafe.Pointer(unsafe.SliceData(vals)))
-		dst := uintptr(unsafe.Pointer(&col[length]))
-		bytes := uintptr(len(vals)) * unsafe.Sizeof(vals[0])
-		if bytes == 0 || (src <= dst && dst-src < bytes) || (dst < src && src-dst < bytes) {
-			for i, w := range vals {
-				col[length+i] = w
-			}
-		} else {
-			copy(col[length:], vals)
-		}
+	if !hasNull && (len(isNulls) == 0 || len(isNulls) >= len(vals)) {
+		// No null rows: copy the whole input at once. copy is memmove, so an
+		// input overlapping the destination (e.g. the vector's own unused
+		// capacity) is appended as it was before the call.
+		copy(col[length:], vals)
 		return nil
 	}
 	for i, w := range vals {
