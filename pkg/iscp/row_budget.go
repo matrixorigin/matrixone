@@ -32,11 +32,12 @@ type iterationRowBudget struct {
 	captured bool
 }
 
-func (iter *IterationContext) rowBudget(specs []*JobSpec) (int, error) {
-	if !iter.budget.captured {
+func (iterCtx *IterationContext) rowBudget(specs []*JobSpec) (int, error) {
+	if !iterCtx.budget.captured {
 		return rowBudgetForJobs(specs)
 	}
-	return iter.budget.target, validateRowBudget(iter.budget.target, iter.budget.jobType, iter.indexJob)
+	budget := iterCtx.budget
+	return budget.target, validateRowBudget(budget.target, budget.jobType, iterCtx.indexJob)
 }
 
 func validateRowBudget(target int, jobType uint16, indexJob bool) error {

@@ -5562,6 +5562,38 @@ func TestInitSql(t *testing.T) {
 
 	require.NoError(t, txn.Commit(ctxWithAccount))
 
+	// An external retirement must not let this old initialization commit,
+	// even when a caller still holds an iteration for its exact generation.
+	retired := &iscp.JobID{JobName: "retired", DBName: "srcdb", TableName: "src_table"}
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	registered, err := iscp.RegisterJob(ctxWithAccount, "", txn, &iscp.JobSpec{
+		ConsumerInfo: iscp.ConsumerInfo{
+			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+			InitSQL:      "create database retired_init_marker;",
+		},
+	}, retired, false)
+	require.NoError(t, err)
+	require.True(t, registered)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
+
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	unregistered, err := iscp.UnregisterJob(ctxWithAccount, "", txn, retired)
+	require.NoError(t, err)
+	require.True(t, unregistered)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
+
+	err = iscp.ExecuteIteration(ctxWithTimeout, "", disttaeEngine.Engine, disttaeEngine.GetTxnClient(),
+		iscp.NewIterationContext(tableAccountID, tableID, []string{retired.JobName},
+			[]uint64{1}, []uint64{1}, types.TS{}, types.TS{}), common.DebugAllocator)
+	require.ErrorContains(t, err, "affected 0 rows")
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	_, err = disttaeEngine.Engine.Database(ctxWithAccount, "retired_init_marker", txn)
+	require.Error(t, err, "a retired generation must roll back its initialization SQL")
+	require.NoError(t, txn.Rollback(ctxWithTimeout))
+
 	// init cdc executor
 	opts := &iscp.ISCPExecutorOption{
 		GCInterval:             time.Hour,

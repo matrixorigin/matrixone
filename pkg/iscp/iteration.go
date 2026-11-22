@@ -165,12 +165,16 @@ func ExecuteIterationWithRuntime(
 	}
 	if needInit {
 		completedStatus := atomicInitCompletionStatus(prevStatus[0], iterCtx.lsn[0])
+		retirement := &initSQLRetirement{
+			job: NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0]),
+		}
 		err = runInitSQLWithRuntime(
 			ctx,
 			runtime,
 			iterCtx,
 			func(initCtx context.Context) error {
 				ctxWithAccount := context.WithValue(initCtx, defines.TenantIDKey{}, iterCtx.accountID)
+				ctxWithAccount = context.WithValue(ctxWithAccount, initSQLRetirementKey{}, retirement)
 				return processInitSQL(
 					ctxWithAccount, cnUUID, cnEngine, cnTxnClient,
 					jobSpecs[0].ConsumerInfo.InitSQL,
@@ -180,7 +184,7 @@ func ExecuteIterationWithRuntime(
 					func(completeCtx context.Context, txn client.TxnOperator) error {
 						completeCtx = context.WithValue(
 							completeCtx, defines.TenantIDKey{}, catalog.System_Account)
-						return FlushStatus(
+						return flushStatus(
 							completeCtx,
 							cnUUID,
 							txn,
@@ -192,6 +196,7 @@ func ExecuteIterationWithRuntime(
 							nil,
 							ISCPJobState_Completed,
 							preLSN[0],
+							!retirement.retired.Load(),
 						)
 					},
 					iterCtx.tableID,
@@ -844,15 +849,22 @@ func FlushStatus(
 	state int8,
 	prevLSN uint64,
 ) (err error) {
-	statusJson, err := MarshalJobStatus(jobStatus)
+	return flushStatus(ctx, cnUUID, txn, tenantId, tableID, jobName, jobID, jobStatus,
+		watermark, state, prevLSN, state != ISCPJobState_Running)
+}
+
+func flushStatus(
+	ctx context.Context, cnUUID string, txn client.TxnOperator, tenantID uint32,
+	tableID uint64, jobName string, jobID uint64, jobStatus *JobStatus, watermark *types.TS,
+	state int8, prevLSN uint64, requireActive bool,
+) (err error) {
+	statusJSON, err := MarshalJobStatus(jobStatus)
 	if err != nil {
 		return
 	}
-	// Running is an atomic group claim with its original CAS contract.
-	// A terminal result needs the same generation to remain active.
 	sql := cdc.CDCSQLBuilder.ISCPLogUpdateIterationSQL(
-		tenantId, tableID, jobName, jobID, watermark, statusJson, jobStatus.Stage,
-		jobStatus.LifecycleVersion, state, prevLSN, state != ISCPJobState_Running,
+		tenantID, tableID, jobName, jobID, watermark, statusJSON, jobStatus.Stage,
+		jobStatus.LifecycleVersion, state, prevLSN, requireActive,
 	)
 	result, err := ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {
@@ -1329,6 +1341,9 @@ func processInitSQL(
 	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
 	if err != nil {
 		return finishISCPTransaction(ctx, txnOp, err)
+	}
+	if retirement, ok := ctx.Value(initSQLRetirementKey{}).(*initSQLRetirement); ok {
+		retirement.txn = txnOp
 	}
 	return runInitSQLTransaction(
 		ctx,

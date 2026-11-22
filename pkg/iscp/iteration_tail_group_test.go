@@ -206,13 +206,14 @@ func TestISCPIterationWaitsForPendingTailCleanup(t *testing.T) {
 				close(released)
 			})
 			require.NoError(t, err)
-			pk, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, pkData, lease)
+			pk, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, pkData)
 			require.NoError(t, err)
-			lease.Release() // the vector now owns the borrowed backing
 			firstBatch := testutil.NewBatchWithVectors([]*vector.Vector{
 				pk,
 				testutil.NewVector(1, types.T_TS.ToType(), mp, false, []types.TS{types.BuildTS(1, 0)}),
 			}, nil)
+			require.NoError(t, firstBatch.HoldLease(lease))
+			lease.Release() // the batch owns the lease for its borrowed vector
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
