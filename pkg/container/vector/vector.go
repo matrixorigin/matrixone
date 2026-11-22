@@ -702,7 +702,7 @@ func NewVecWithDataCopy(
 	vec.length = length
 	var err error
 	if len(data) > 0 {
-		vec.data, err = vec.allocData(mp, len(data))
+		vec.data, err = mp.Alloc(len(data), vec.offHeap)
 		if err != nil {
 			vec.Free(mp)
 			return nil, err
@@ -710,7 +710,7 @@ func NewVecWithDataCopy(
 		copy(vec.data, data)
 	}
 	if len(area) > 0 {
-		vec.area, err = vec.allocArea(mp, len(area))
+		vec.area, err = mp.Alloc(len(area), vec.offHeap)
 		if err != nil {
 			vec.Free(mp)
 			return nil, err
@@ -1567,7 +1567,7 @@ func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
 		return err
 	}
 	if v.hasOwnedBackingStorage() {
-		return allocationAccountInvalid(
+		return moerr.NewInternalErrorNoCtx(
 			"cannot replace owned vector storage with aliases",
 		)
 	}
@@ -1723,7 +1723,7 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 		return io.ErrClosedPipe
 	}
 	if v.hasBackingStorage() {
-		return allocationAccountInvalid(
+		return moerr.NewInternalErrorNoCtx(
 			"cannot replace vector storage without Free",
 		)
 	}
@@ -1742,14 +1742,14 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	decoded.class = int(layout.class)
 	decoded.length = layout.length
 	if len(layout.data) > 0 {
-		decoded.data, err = decoded.allocData(mp, len(layout.data))
+		decoded.data, err = mp.Alloc(len(layout.data), decoded.offHeap)
 		if err != nil {
 			return err
 		}
 		copy(decoded.data, layout.data)
 	}
 	if len(layout.area) > 0 {
-		decoded.area, err = decoded.allocArea(mp, len(layout.area))
+		decoded.area, err = mp.Alloc(len(layout.area), decoded.offHeap)
 		if err != nil {
 			return err
 		}
@@ -1974,7 +1974,7 @@ func (v *Vector) PreExtendBitmap(rows int, mp *mpool.MPool) error {
 	if err := v.MaterializeOwned(mp); err != nil {
 		return err
 	}
-	return v.ensureBitmapCapacity(rows, mp)
+	return v.ensureBitmapCapacity(rows)
 }
 
 // PreExtendNulls ensures allocation-accounted null storage can represent rows.
@@ -1983,13 +1983,13 @@ func (v *Vector) PreExtendNulls(rows int, mp *mpool.MPool) error {
 	if err := v.MaterializeOwned(mp); err != nil {
 		return err
 	}
-	return v.ensureNullCapacity(rows, mp)
+	return v.ensureNullCapacity(rows)
 }
 
 // PreExtendGrouping ensures allocation-accounted grouping storage can
 // represent rows. Unaccounted vectors are unchanged.
 func (v *Vector) PreExtendGrouping(rows int, mp *mpool.MPool) error {
-	return v.ensureGroupingCapacity(rows, mp)
+	return v.ensureGroupingCapacity(rows)
 }
 
 // PreExtendArea use to expand the mpool and area of vector
@@ -2236,10 +2236,7 @@ func (v *Vector) dup(
 	if v.IsConstNull() {
 		w.length = v.length
 		if v.HasGrouping() {
-			if err := w.ensureGroupingCapacity(
-				max(v.length, int(v.GetGrouping().GetBitmap().Len())),
-				mp,
-			); err != nil {
+			if err := w.ensureGroupingCapacity(max(v.length, int(v.GetGrouping().GetBitmap().Len()))); err != nil {
 				w.Free(mp)
 				return nil, err
 			}
@@ -2268,19 +2265,13 @@ func (v *Vector) dup(
 	// validity, which lets the destination admit its owned bitmap first.
 	nullLength := v.GetNulls().Len()
 	if nullLength > 0 {
-		if err := w.ensureNullCapacity(
-			max(v.length, int(nullLength)),
-			mp,
-		); err != nil {
+		if err := w.ensureNullCapacity(max(v.length, int(nullLength))); err != nil {
 			w.Free(mp)
 			return nil, err
 		}
 	}
 	if v.GetGrouping().GetBitmap().Len() > 0 {
-		if err := w.ensureGroupingCapacity(
-			max(v.length, int(v.GetGrouping().GetBitmap().Len())),
-			mp,
-		); err != nil {
+		if err := w.ensureGroupingCapacity(max(v.length, int(v.GetGrouping().GetBitmap().Len()))); err != nil {
 			w.Free(mp)
 			return nil, err
 		}
@@ -2291,7 +2282,7 @@ func (v *Vector) dup(
 	copy(w.data, v.data[:dataLen])
 
 	if len(v.area) > 0 {
-		if w.area, err = w.allocOwned(mp, len(v.area), areaOffHeap, false); err != nil {
+		if w.area, err = mp.Alloc(len(v.area), areaOffHeap); err != nil {
 			w.Free(mp)
 			return nil, err
 		}
@@ -2356,7 +2347,7 @@ func (v *Vector) CloneToFlatCompact(mp *mpool.MPool) (*Vector, error) {
 	}
 	if totalArea > 0 {
 		var err error
-		w.area, err = w.allocArea(mp, totalArea)
+		w.area, err = mp.Alloc(totalArea, w.offHeap)
 		if err != nil {
 			w.Free(mp)
 			return nil, err
@@ -2804,12 +2795,12 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && w.GetNulls().Contains(uint64(wi)))
 	if sourceGrouping && mp.IsView() {
-		if err := v.ensureGroupingCapacity(int(vi)+1, mp); err != nil {
+		if err := v.ensureGroupingCapacity(int(vi) + 1); err != nil {
 			return err
 		}
 	}
 	if sourceNull && mp.IsView() {
-		if err := v.ensureNullCapacity(int(vi)+1, mp); err != nil {
+		if err := v.ensureNullCapacity(int(vi) + 1); err != nil {
 			return err
 		}
 	}
@@ -2884,7 +2875,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			// across the const vector's logical rows.
 			oldLength := v.length
 			if w.gsp.Any() {
-				if err := v.ensureGroupingCapacity(oldLength+w.length, mp); err != nil {
+				if err := v.ensureGroupingCapacity(oldLength + w.length); err != nil {
 					return err
 				}
 			}
@@ -2899,7 +2890,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		}
 		oldLength := v.length
 		if w.gsp.Any() {
-			if err := v.ensureGroupingCapacity(oldLength+w.length, mp); err != nil {
+			if err := v.ensureGroupingCapacity(oldLength + w.length); err != nil {
 				return err
 			}
 		}
@@ -4048,7 +4039,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 		grouping := w.gsp.Contains(uint64(sel))
 		if grouping {
-			if err := v.ensureGroupingCapacity(length, mp); err != nil {
+			if err := v.ensureGroupingCapacity(length); err != nil {
 				return err
 			}
 		}
@@ -4666,7 +4657,7 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 	var addCnt int
 	if preflighted {
 		if preflightRowCount < v.length {
-			return allocationAccountInvalid(
+			return moerr.NewInternalErrorNoCtx(
 				"preflighted vector row count is invalid")
 		}
 		addCnt = preflightRowCount - v.length
@@ -4703,7 +4694,7 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 	if preflighted {
 		if preflightRowCount != v.length+addCnt ||
 			preflightRowCount*v.typ.TypeSize() > cap(v.data) {
-			return allocationAccountInvalid(
+			return moerr.NewInternalErrorNoCtx(
 				"preflighted vector row capacity is insufficient")
 		}
 	} else {
@@ -4814,7 +4805,7 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 				return err
 			}
 		} else if selectedAreaBytes > cap(v.area)-len(v.area) {
-			return allocationAccountInvalid(
+			return moerr.NewInternalErrorNoCtx(
 				"preflighted vector area capacity is insufficient",
 			)
 		}
@@ -5554,7 +5545,7 @@ func (v *Vector) withClonedBytes(source []byte, mp *mpool.MPool, consume func([]
 	if mp == nil {
 		return moerr.NewInternalErrorNoCtx("source preservation requires a mpool")
 	}
-	owned, err := v.allocOwned(mp, len(source), true, false)
+	owned, err := mp.Alloc(len(source), true)
 	if err != nil {
 		return err
 	}
@@ -6601,7 +6592,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	ns := len(sels)
 	var vs []T
 	ToFixedColNoTypeCheck(v, &vs)
-	data, err := v.allocData(mp, ns*v.GetType().TypeSize())
+	data, err := mp.Alloc(ns*v.GetType().TypeSize(), v.offHeap)
 	if err != nil {
 		return err
 	}
@@ -7710,12 +7701,12 @@ func (v *Vector) InplaceSortAndCompact(mp *mpool.MPool) error {
 			return err
 		}
 		if !v.nsp.IsEmpty() {
-			if err := v.ensureNullCapacity(v.length, mp); err != nil {
+			if err := v.ensureNullCapacity(v.length); err != nil {
 				return err
 			}
 		}
 		if !v.gsp.IsEmpty() {
-			if err := v.ensureGroupingCapacity(v.length, mp); err != nil {
+			if err := v.ensureGroupingCapacity(v.length); err != nil {
 				return err
 			}
 		}
@@ -8096,12 +8087,12 @@ func (v *Vector) InplaceSort(mp *mpool.MPool) error {
 			return err
 		}
 		if !v.nsp.IsEmpty() {
-			if err := v.ensureNullCapacity(v.length, mp); err != nil {
+			if err := v.ensureNullCapacity(v.length); err != nil {
 				return err
 			}
 		}
 		if !v.gsp.IsEmpty() {
-			if err := v.ensureGroupingCapacity(v.length, mp); err != nil {
+			if err := v.ensureGroupingCapacity(v.length); err != nil {
 				return err
 			}
 		}
@@ -8801,4 +8792,175 @@ func (v *Vector) FillRawPtrLen(dest []uintptr) {
 		dest[4] = uintptr(unsafe.Pointer(&v.area[0]))
 		dest[5] = uintptr(len(v.area))
 	}
+}
+
+// hasBackingStorage reports whether v holds any data, area or bitmap storage.
+func (v *Vector) hasBackingStorage() bool {
+	return cap(v.data) != 0 ||
+		cap(v.area) != 0 ||
+		v.nsp.GetBitmap().Size() != 0 ||
+		v.gsp.GetBitmap().Size() != 0
+}
+
+// hasOwnedBackingStorage reports storage that UnmarshalBinary cannot replace
+// without losing an MPool-owned allocation. Data and area marked cantFree are
+// borrowed aliases; bitmap backing is always Go-owned and remains GC-visible
+// after replacement.
+func (v *Vector) hasOwnedBackingStorage() bool {
+	return cap(v.data) != 0 && !v.cantFreeData ||
+		cap(v.area) != 0 && !v.cantFreeArea
+}
+
+// Bitmaps always use Go-owned memory. When a vector grows, it reserves room in
+// the bitmaps it uses for all of its rows; a bitmap also grows itself on write.
+
+func validBitmapRows(rows int) error {
+	if rows < 0 || rows > math.MaxInt-63 {
+		return moerr.NewInvalidInputNoCtxf("invalid bitmap row count %d", rows)
+	}
+	return nil
+}
+
+func (v *Vector) ensureBitmapCapacity(rows int) error {
+	if err := v.ensureNullCapacity(rows); err != nil {
+		return err
+	}
+	return v.ensureGroupingCapacity(rows)
+}
+
+func (v *Vector) ensureNullCapacity(rows int) error {
+	if err := validBitmapRows(rows); err != nil {
+		return err
+	}
+	v.nsp.GetBitmap().Reserve(rows)
+	return nil
+}
+
+func (v *Vector) ensureGroupingCapacity(rows int) error {
+	if err := validBitmapRows(rows); err != nil {
+		return err
+	}
+	v.gsp.GetBitmap().Reserve(rows)
+	return nil
+}
+
+// growData grows v.data to size bytes through mp. A borrowed backing is
+// copied into owned storage first; mpool decides how the growth is charged.
+func (v *Vector) growData(mp *mpool.MPool, size int) ([]byte, error) {
+	if err := v.materializeBorrowedForGrowth(mp); err != nil {
+		return nil, err
+	}
+	return mp.Grow(v.data, size, v.offHeap)
+}
+
+// growArea grows v.area to size bytes, as growData does for v.data.
+func (v *Vector) growArea(mp *mpool.MPool, size int) ([]byte, error) {
+	if err := v.materializeBorrowedForGrowth(mp); err != nil {
+		return nil, err
+	}
+	return mp.Grow(v.area, size, v.offHeap)
+}
+
+func (v *Vector) materializeBorrowedForGrowth(mp *mpool.MPool) error {
+	if !v.HasBorrowedBacking() {
+		return nil
+	}
+	return v.MaterializeOwned(mp)
+}
+
+// growArea2 grows v.area to size bytes and appends src after its current
+// length.
+func (v *Vector) growArea2(
+	mp *mpool.MPool,
+	src []byte,
+	size int,
+) ([]byte, error) {
+	oldLen := len(v.area)
+	if size < oldLen+len(src) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"mpool grow2 actually shrinks, %d+%d, %d",
+			oldLen,
+			len(src),
+			size,
+		)
+	}
+	grown, err := v.growArea(mp, size)
+	if err != nil {
+		return nil, err
+	}
+	copy(grown[oldLen:oldLen+len(src)], src)
+	return grown, nil
+}
+
+func (v *Vector) readSizeBytes(
+	r io.Reader,
+	mp *mpool.MPool,
+	data bool,
+) (int32, []byte, error) {
+	size, err := types.ReadInt32(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	var old []byte
+	if data {
+		old = v.data
+	} else {
+		old = v.area
+	}
+	if size == 0 {
+		if old != nil {
+			old = old[:0]
+		}
+		if data {
+			v.data = old
+		} else {
+			v.area = old
+		}
+		return 0, old, nil
+	}
+	if size < 0 {
+		return size, nil, moerr.NewInvalidInputNoCtx(
+			"negative vector buffer size",
+		)
+	}
+	if err := validateStreamingReadSize(r, int64(size)); err != nil {
+		return size, nil, err
+	}
+	var buf []byte
+	if data {
+		buf, err = v.growData(mp, int(size))
+	} else {
+		buf, err = v.growArea(mp, int(size))
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	// Grow may already have freed the old allocation. Publish its replacement
+	// before reading so a short reader still leaves one reachable cleanup owner.
+	if data {
+		v.data = buf
+	} else {
+		v.area = buf
+	}
+	if _, err = io.ReadFull(r, buf); err != nil {
+		return size, buf, err
+	}
+	return size, buf, nil
+}
+
+func validateStreamingReadSize(r io.Reader, size int64) error {
+	if size < 0 {
+		return moerr.NewInvalidInputNoCtx("negative vector buffer size")
+	}
+	var remaining int64 = -1
+	switch reader := r.(type) {
+	case *io.LimitedReader:
+		remaining = reader.N
+	case interface{ Len() int }:
+		remaining = int64(reader.Len())
+	}
+	if remaining >= 0 && size > remaining {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
 }
