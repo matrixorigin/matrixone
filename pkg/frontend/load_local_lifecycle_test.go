@@ -215,7 +215,7 @@ func TestProcessLoadLocalProtocolTermination(t *testing.T) {
 			protocol.blockRequest = name == "request write cancel"
 			done := make(chan error, 1)
 			go func() {
-				done <- processLoadLocal(ctx, ses, ec, param, writer, reader)
+				done <- processLoadLocal(ctx, ses, ec, param, writer)
 			}()
 			if name == "already canceled" || name == "invalid config" {
 				select {
@@ -398,7 +398,7 @@ func TestProcessLoadLocalDrainAfterCancel(t *testing.T) {
 			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "test.csv"}}
 			done := make(chan error, 1)
 			go func() {
-				done <- processLoadLocal(ctx, ses, ec, param, writer, reader)
+				done <- processLoadLocal(ctx, ses, ec, param, writer)
 			}()
 			select {
 			case <-protocol.reading:
@@ -406,6 +406,7 @@ func TestProcessLoadLocalDrainAfterCancel(t *testing.T) {
 				t.Fatal("upload did not enter network read")
 			}
 			cancel()
+			var consumerErr error
 			if name == "finite tail reaches EOF" {
 				// The drain parks in its own read before the client tail is
 				// written; the packets below then reach the drained connection
@@ -415,6 +416,7 @@ func TestProcessLoadLocalDrainAfterCancel(t *testing.T) {
 				case <-time.After(5 * time.Second):
 					t.Fatal("cancellation did not enter the drain read")
 				}
+				_, consumerErr = reader.Read(make([]byte, 1))
 				// net.Pipe writes return only after those bytes have been consumed.
 				_, err := client.Write([]byte{1, 0, 0, 1, 'x'})
 				require.NoError(t, err)
@@ -429,6 +431,7 @@ func TestProcessLoadLocalDrainAfterCancel(t *testing.T) {
 			}
 			require.EqualValues(t, 1, protocol.interrupts.Load())
 			if name == "finite tail reaches EOF" {
+				require.ErrorIs(t, consumerErr, context.Canceled)
 				require.Zero(t, protocol.disconnects.Load())
 				// The drained connection serves the next command.
 				written := make(chan error, 1)
@@ -480,7 +483,7 @@ func TestProcessLoadLocalDrainsOrdinaryErrorToEOF(t *testing.T) {
 	}()
 	done := make(chan error, 1)
 	go func() {
-		done <- processLoadLocal(ctx, ses, ec, param, writer, reader)
+		done <- processLoadLocal(ctx, ses, ec, param, writer)
 	}()
 	select {
 	case <-protocol.reading:
@@ -554,7 +557,7 @@ func TestProcessLoadLocalDrainsOrdinaryPipeErrorToEOF(t *testing.T) {
 	}()
 	done := make(chan error, 1)
 	go func() {
-		done <- processLoadLocal(ctx, ses, ec, param, writer, reader)
+		done <- processLoadLocal(ctx, ses, ec, param, writer)
 	}()
 	select {
 	case <-protocol.reading:
@@ -844,7 +847,7 @@ func TestProcessLoadLocalJoinsWatcherBeforeDrainInterrupt(t *testing.T) {
 	reader, writer := io.Pipe()
 	t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
 	done := make(chan error, 1)
-	go func() { done <- processLoadLocal(ctx, ses, ec, param, writer, reader) }()
+	go func() { done <- processLoadLocal(ctx, ses, ec, param, writer) }()
 	// Nobody consumes the pipe: once the owner has read the first uploaded
 	// packet it blocks in writer.Write until the pipe is retired by the
 	// watcher.
@@ -1084,7 +1087,7 @@ func TestProcessLoadLocalBrokenFrameCancelRetiresConn(t *testing.T) {
 			reader, writer := io.Pipe()
 			t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
 			done := make(chan error, 1)
-			go func() { done <- processLoadLocal(ctx, ses, ec, param, writer, reader) }()
+			go func() { done <- processLoadLocal(ctx, ses, ec, param, writer) }()
 			select {
 			case <-protocol.reading:
 			case <-time.After(5 * time.Second):
@@ -1320,7 +1323,7 @@ func TestProcessLoadLocalDataPlusErrorCancelRetiresConn(t *testing.T) {
 			ownerExited := make(chan struct{})
 			go func() {
 				defer close(ownerExited)
-				done <- processLoadLocal(ctx, ses, ec, param, writer, reader)
+				done <- processLoadLocal(ctx, ses, ec, param, writer)
 			}()
 			// Failure-safe owner join, registered immediately at launch so it
 			// is armed before every wait/assert below (running FIRST, LIFO,
@@ -1428,7 +1431,7 @@ func TestProcessLoadLocalResumesInterruptedFrame(t *testing.T) {
 			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "test.csv"}}
 			done := make(chan error, 1)
 			exited := make(chan struct{})
-			go func() { defer close(exited); done <- processLoadLocal(ctx, ses, ec, param, writer, reader) }()
+			go func() { defer close(exited); done <- processLoadLocal(ctx, ses, ec, param, writer) }()
 			t.Cleanup(func() {
 				cancel()
 				protocol.releaseInterruptGate()

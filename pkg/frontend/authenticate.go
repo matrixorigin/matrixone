@@ -12404,7 +12404,7 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 				Filepath: localPath,
 			},
 		}
-		return processLoadLocal(funcCtx, ses, execCtx, param, loadLocalWriter, loadLocalReader)
+		return processLoadLocal(funcCtx, ses, execCtx, param, loadLocalWriter)
 	})
 
 	// read from pipe and upload
