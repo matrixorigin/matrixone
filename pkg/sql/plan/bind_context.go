@@ -213,6 +213,16 @@ func (bc *BindContext) topTag() int32 {
 	}
 }
 
+// displacedCandidateVisible reports whether a definition displaced by a
+// later same-name declaration may serve the current lookup: it must not
+// itself be a still-pending declaration under any active declaration-order
+// restriction. A recursive seed reading an enclosing name can otherwise bind
+// a later enclosing sibling that has not come into scope yet instead of
+// failing (or falling back to a genuine physical table).
+func (bc *BindContext) displacedCandidateVisible(name string, outer *CTERef) bool {
+	return bc.cteOwnerChain == nil || !bc.cteOwnerChain.pendingCTE(name, outer)
+}
+
 func (bc *BindContext) findCTE(name string) *CTERef {
 	// the cte is masked already, we don't go further
 	if bc.cteState.masked(name) {
@@ -235,7 +245,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 				// for the displaced sibling once.
 				if cte, ok := frame.cteByName[name]; ok && cur != nil && cte != cur &&
 					cte.withClause != nil && cte.withClause == cur.withClause {
-					if outer := cte.shadowedOuter; outer != nil && outer != cte {
+					if outer := cte.shadowedOuter; outer != nil && outer != cte && bc.displacedCandidateVisible(name, outer) {
 						return outer
 					}
 				}
@@ -243,12 +253,20 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 			}
 			if cte, ok := frame.cteByName[name]; ok {
 				if cur != nil && cte != cur && cte.withClause != nil && cte.withClause == cur.withClause {
-					if outer := cte.shadowedOuter; outer != nil && outer != cte {
+					if outer := cte.shadowedOuter; outer != nil && outer != cte && bc.displacedCandidateVisible(name, outer) {
 						return outer
 					}
-					return nil
+					// The displaced link served nothing: an older lexically
+					// visible definition of this name may still live in an
+					// enclosing frame, so keep walking instead of failing here.
+				} else if !bc.displacedCandidateVisible(name, cte) {
+					// An enclosing-scope declaration serves only when it is not
+					// itself still pending in this binding; pending ones are
+					// skipped and the walk continues toward older scopes.
+					continue
+				} else {
+					return cte
 				}
-				return cte
 			}
 		}
 		return nil
@@ -261,7 +279,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 			// withheld (or resolves to the definition it displaced) while
 			// earlier siblings keep serving normally.
 			if bc.cteOwnerChain != nil && bc.cteOwnerChain.pendingCTE(name, cte) {
-				if outer := cte.shadowedOuter; outer != nil && outer != cte {
+				if outer := cte.shadowedOuter; outer != nil && outer != cte && bc.displacedCandidateVisible(name, outer) {
 					return outer
 				}
 				return nil
@@ -278,7 +296,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 			// definition of a chain-pending sibling that this frame can
 			// reach.
 			if cte, ok := parent.cteByName[name]; ok && bc.cteOwnerChain != nil && bc.cteOwnerChain.pendingCTE(name, cte) {
-				if outer := cte.shadowedOuter; outer != nil && outer != cte {
+				if outer := cte.shadowedOuter; outer != nil && outer != cte && bc.displacedCandidateVisible(name, outer) {
 					return outer
 				}
 			}
@@ -287,7 +305,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 		if cte, ok := parent.cteByName[name]; ok {
 			if !parent.cteState.masked(name) {
 				if bc.cteOwnerChain != nil && bc.cteOwnerChain.pendingCTE(name, cte) {
-					if outer := cte.shadowedOuter; outer != nil && outer != cte {
+					if outer := cte.shadowedOuter; outer != nil && outer != cte && bc.displacedCandidateVisible(name, outer) {
 						return outer
 					}
 					return nil
@@ -305,20 +323,6 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 func (bc *BindContext) recordCteInBinding(name string, cte CteBindState) {
 	bc.boundCtes[name] = cte.cte
 	bc.cteState = cte
-}
-
-func (bc *BindContext) cteInBinding(name string) bool {
-	if _, ok := bc.boundCtes[name]; ok {
-		return true
-	}
-	cur := bc.parent
-	for cur != nil {
-		if _, ok := cur.boundCtes[name]; ok {
-			return true
-		}
-		cur = cur.parent
-	}
-	return false
 }
 
 func (bc *BindContext) activeRecursiveCteState(cte *CTERef) (CteBindState, bool) {
@@ -339,6 +343,25 @@ func (bc *BindContext) activeRecursiveCteState(cte *CTERef) (CteBindState, bool)
 // anchor again without bound. Only the resolved declaration counts: the same
 // word bound to a different CTE (an inner WITH) or used as a derived-table
 // alias resolves to a different declaration and stays resolvable.
+// cteRefInBinding returns the CTE reference currently bound under the given
+// name on this context or any enclosing context, if any. Self-reference
+// guards compare the resolved declaration with this reference by identity so
+// a same-spelling nested declaration that shadows the binding name stays
+// legal.
+func (bc *BindContext) cteRefInBinding(name string) (*CTERef, bool) {
+	if ref, ok := bc.boundCtes[name]; ok {
+		return ref, true
+	}
+	cur := bc.parent
+	for cur != nil {
+		if ref, ok := cur.boundCtes[name]; ok {
+			return ref, true
+		}
+		cur = cur.parent
+	}
+	return nil, false
+}
+
 func (bc *BindContext) initStmtInBinding(cte *CTERef) bool {
 	for cur := bc; cur != nil; cur = cur.parent {
 		state := cur.cteState

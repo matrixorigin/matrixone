@@ -5506,7 +5506,13 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		//ifInsertFromUniqueColMap = make(map[string]bool)
 
 	case *tree.ParenSelect:
-		astSelect = selectImpl.Select
+		// Bind the complete source select, not only the paren body: any WITH
+		// attached to the enclosing source node - and its wrapper clauses -
+		// carries the source's own lexical scope, so dropping the outer node
+		// lets a same-name physical table silently take over (or the CTE
+		// vanish entirely when no homonym exists). The binder resolves the
+		// paren body natively once the scope reaches it.
+		astSelect = rowsForInsert
 
 		subCtx := NewBindContext(builder, bindCtx)
 		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)

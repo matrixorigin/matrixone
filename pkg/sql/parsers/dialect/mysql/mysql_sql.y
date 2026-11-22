@@ -15170,6 +15170,20 @@ function_call_generic:
             Exprs: tree.Exprs{$3},
         }
     }
+|   VALUES '(' END ')'
+    {
+        // Syntax: VALUES(<column>) in INSERT ... ON DUPLICATE KEY UPDATE
+        // resolves the conflicting row's column value. The ON DUPLICATE KEY
+        // UPDATE binder owns this accessor, and the bare END keyword resolves
+        // as that column reference only here; every other END use outside its
+        // explicitly admitted positions stays rejected.
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{tree.NewUnresolvedName(tree.NewCStr($3, 1))},
+        }
+    }
 
 trim_direction:
     BOTH

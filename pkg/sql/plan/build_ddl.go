@@ -283,21 +283,16 @@ func inferViewColumns(
 		expandedSelectLists = bindCtx.expandedSelectLists
 	}
 	var err error
-	switch s := stmt.Select.(type) {
-	case *tree.ParenSelect:
-		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
-			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
-			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil)
-		if err != nil {
-			return nil, err
-		}
+	// Bind the COMPLETE defining select: a WITH attached to the enclosing
+	// source node carries the view's own lexical scope, so unwrapping a
+	// top-level ParenSelect before binding would drop it and let a
+	// same-name physical table silently take over (or the CTE vanish
+	// when no homonym exists).
+	stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
+		plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true,
+		objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil)
+	if err != nil {
+		return nil, err
 	}
 
 	query := stmtPlan.GetQuery()
@@ -1663,9 +1658,9 @@ func genAsSelectCols(
 		bindCtx.ctasExecutionProtocolRequirement = &executionProtocol
 	}
 
-	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
-		stmt = s.Select
-	}
+	// The complete CTAS source select carries any enclosing WITH and wrapper
+	// clauses; peeling the paren body would drop the source's own lexical
+	// scope and expose a same-name physical table instead of the declared CTE.
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
 		return nil, nil, 0, err
 	}

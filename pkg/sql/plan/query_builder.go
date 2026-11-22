@@ -6062,29 +6062,6 @@ func (builder *QueryBuilder) deriveRecursiveCTENullability(
 	}
 }
 
-// saturatingAddExprs sums two non-negative pagination bounds without
-// uint64 wraparound: the addend is clipped to the remaining headroom first,
-// mirroring the saturation recursiveCTEPrefixLimit applies to the emission
-// cover.
-func saturatingAddExprs(ctx context.Context, a, b *Expr) (*Expr, error) {
-	if a == nil {
-		return b, nil
-	}
-	if b == nil {
-		return a, nil
-	}
-	maxConst := MakePlan2Uint64ConstExprWithType(math.MaxUint64)
-	remaining, err := BindFuncExprImplByPlanExpr(ctx, "-", []*Expr{DeepCopyExpr(maxConst), DeepCopyExpr(a)})
-	if err != nil {
-		return nil, err
-	}
-	clipped, err := BindFuncExprImplByPlanExpr(ctx, "least", []*Expr{DeepCopyExpr(b), remaining})
-	if err != nil {
-		return nil, err
-	}
-	return BindFuncExprImplByPlanExpr(ctx, "+", []*Expr{DeepCopyExpr(a), clipped})
-}
-
 func (builder *QueryBuilder) bindRecursiveCte(
 	ctx *BindContext,
 	s *tree.Select,
@@ -6348,72 +6325,126 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		builder.qry.Nodes[nodeID].Limit = nil
 		return nodeID, initCtx, nil
 	}
-	pageStart, pageEnd := offsetExpr, limitExpr
-	// An absent Count is unbounded, not a numeric zero: leave pageEnd nil so
-	// enclosing stages open the end instead of freezing it at the offset.
-	if pageEnd != nil && pageStart != nil {
-		if pageEnd, err = saturatingAddExprs(builder.GetContext(), pageEnd, pageStart); err != nil {
-			return 0, nil, err
+	// Compose the pagination stages over an exact signed scale-zero decimal
+	// carrier. MO's uint64 subtraction raises a typed out-of-range error on
+	// underflow while the lazily guarded case form duplicates the prior
+	// width per stage, so each channel references its growing prior
+	// coordinate exactly once here: the floored width subtract and the
+	// clamped start add operate on exact width-fixed decimal128 (never
+	// floats), and both coordinates convert back exactly - already
+	// clamped into the uint64 range - at the sink boundary.
+	decimalTyp := types.T_decimal128.ToType()
+	decPlanType := makePlan2Type(&decimalTyp)
+	widen := func(e *Expr) (*Expr, error) {
+		if e == nil {
+			return nil, nil
 		}
+		return makePlan2CastExpr(builder.GetContext(), e, decPlanType)
+	}
+	decZero, zerr := widen(MakePlan2Uint64ConstExprWithType(0))
+	if zerr != nil {
+		return 0, nil, zerr
+	}
+	decMax, merr := widen(MakePlan2Uint64ConstExprWithType(math.MaxUint64))
+	if merr != nil {
+		return 0, nil, merr
+	}
+	startCarrier, oerr := widen(offsetExpr)
+	if oerr != nil {
+		return 0, nil, oerr
+	}
+	widthCarrier, werr := widen(limitExpr)
+	if werr != nil {
+		return 0, nil, werr
 	}
 	for _, stage := range enclosingClauses {
 		stageOffset, stageLimit, _, serr := builder.bindLimit(ctx, stage, nil)
 		if serr != nil {
 			return 0, nil, serr
 		}
-		// A prepared NULL OFFSET means skip-nothing, the same normalization
-		// the plain offset channel applies; without it NULL would propagate
-		// through the composed sums and shrink the result to zero rows. A
-		// prepared NULL COUNT keeps yielding no rows, and an absent COUNT
-		// stays unbounded - only the offset is coalesced to zero here.
+		// A prepared NULL OFFSET means skip-nothing (coalesced to zero); a
+		// prepared NULL COUNT keeps yielding empty rows and an absent COUNT
+		// stays unbounded - only the offset is normalized here.
 		if stageOffset != nil && (stageOffset.GetLit() == nil || stageOffset.GetLit().Isnull) {
 			zero := MakePlan2Uint64ConstExprWithType(0)
-			if stageOffset, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce",
-				[]*Expr{DeepCopyExpr(stageOffset), zero}); err != nil {
+			co, cerr := BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce",
+				[]*Expr{DeepCopyExpr(stageOffset), zero})
+			if cerr != nil {
+				return 0, nil, cerr
+			}
+			stageOffset = co
+		}
+		skipDec, serr2 := widen(stageOffset)
+		if serr2 != nil {
+			return 0, nil, serr2
+		}
+		if skipDec != nil && startCarrier != nil {
+			sum, aerr := BindFuncExprImplByPlanExpr(builder.GetContext(), "+",
+				[]*Expr{startCarrier, skipDec})
+			if aerr != nil {
+				return 0, nil, aerr
+			}
+			if startCarrier, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "least",
+				[]*Expr{sum, DeepCopyExpr(decMax)}); err != nil {
 				return 0, nil, err
 			}
+		} else if skipDec != nil && startCarrier == nil {
+			startCarrier = skipDec
 		}
-		prevStart := pageStart
-		if stageOffset != nil {
-			if pageStart, err = saturatingAddExprs(builder.GetContext(), pageStart, stageOffset); err != nil {
+		if skipDec != nil && widthCarrier != nil {
+			diff, derr2 := BindFuncExprImplByPlanExpr(builder.GetContext(), "-",
+				[]*Expr{widthCarrier, skipDec})
+			if derr2 != nil {
+				return 0, nil, derr2
+			}
+			// Eager and exact: the carrier ranges within [-MaxUint64, MaxUint64],
+			// so the floored subtract can afford one reference per stage and the
+			// serialized tree stays linear in the number of admitted stages.
+			if widthCarrier, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "greatest",
+				[]*Expr{diff, DeepCopyExpr(decZero)}); err != nil {
 				return 0, nil, err
 			}
 		}
 		if stageLimit != nil {
-			cand := DeepCopyExpr(stageLimit)
-			for _, part := range []*Expr{prevStart, stageOffset} {
-				if cand, err = saturatingAddExprs(builder.GetContext(), cand, part); err != nil {
+			countDec, cerr2 := widen(stageLimit)
+			if cerr2 != nil {
+				return 0, nil, cerr2
+			}
+			if widthCarrier == nil {
+				widthCarrier = countDec
+			} else {
+				negCount, nerr := BindFuncExprImplByPlanExpr(builder.GetContext(), "<",
+					[]*Expr{DeepCopyExpr(countDec), DeepCopyExpr(decZero)})
+				if nerr != nil {
+					return 0, nil, nerr
+				}
+				intersected, ierr := BindFuncExprImplByPlanExpr(builder.GetContext(), "least",
+					[]*Expr{widthCarrier, DeepCopyExpr(countDec)})
+				if ierr != nil {
+					return 0, nil, ierr
+				}
+				if widthCarrier, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case",
+					[]*Expr{negCount, DeepCopyExpr(decZero), intersected}); err != nil {
 					return 0, nil, err
 				}
 			}
-			if pageEnd == nil {
-				pageEnd = cand
-			} else if pageEnd, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "least",
-				[]*Expr{pageEnd, cand}); err != nil {
-				return 0, nil, err
-			}
 		}
 	}
-	outputLimit := pageEnd
-	if pageEnd != nil && pageStart != nil {
-		negativePage, nerr := BindFuncExprImplByPlanExpr(builder.GetContext(), "<",
-			[]*Expr{DeepCopyExpr(pageEnd), DeepCopyExpr(pageStart)})
-		if nerr != nil {
-			return 0, nil, nerr
-		}
-		remaining, derr := BindFuncExprImplByPlanExpr(builder.GetContext(), "-",
-			[]*Expr{DeepCopyExpr(pageEnd), DeepCopyExpr(pageStart)})
-		if derr != nil {
-			return 0, nil, derr
-		}
-		zero := MakePlan2Uint64ConstExprWithType(0)
-		if outputLimit, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case",
-			[]*Expr{negativePage, zero, remaining}); err != nil {
+	// Exact conversion at the consumer boundary: both carriers are already
+	// clamped inside the uint64 range, so the casts are exact and never
+	// approximate.
+	u64Typ := types.T_uint64.ToType()
+	u64PlanType := makePlan2Type(&u64Typ)
+	if startCarrier != nil {
+		if builder.qry.Nodes[nodeID].Offset, err = makePlan2CastExpr(builder.GetContext(), startCarrier, u64PlanType); err != nil {
 			return 0, nil, err
 		}
 	}
-	builder.qry.Nodes[nodeID].Offset = pageStart
-	builder.qry.Nodes[nodeID].Limit = outputLimit
+	if widthCarrier != nil {
+		if builder.qry.Nodes[nodeID].Limit, err = makePlan2CastExpr(builder.GetContext(), widthCarrier, u64PlanType); err != nil {
+			return 0, nil, err
+		}
+	}
 	outputCtx = initCtx
 	return
 }
@@ -6445,6 +6476,22 @@ func (bc *BindContext) bindingRecurStmt() bool {
 func (bc *BindContext) bindingRecurQueryBlock() bool {
 	return bc.bindingRecurStmt() &&
 		bc.queryBlockOwner == bc.cteState.recursiveRefQueryBlock
+}
+
+// bodyWithDeclaresName reports whether the body select's own WITH declares a
+// CTE of the given spelling: such a declaration lexically shadows the outer
+// CTE for every later reference in the body, so the union inspection cannot
+// count those references as the outer name's self-reference.
+func bodyWithDeclaresName(s *tree.Select, name string) bool {
+	if s == nil || s.With == nil {
+		return false
+	}
+	for _, c := range s.With.CTEs {
+		if c != nil && c.Name != nil && string(c.Name.Alias) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // selectTreePreservingWith peels parenthesized wrappers like getSelectTree but
@@ -6490,17 +6537,43 @@ func (builder *QueryBuilder) bindCte(
 	}
 	viewCount := len(cteRef.declarationCtx.views)
 	var s *tree.Select
+	var fullBody *tree.Select
 	switch stmt := cteRef.ast.Stmt.(type) {
 	case *tree.Select:
-		// Peel parenthesized wrappers but stop at a node carrying its own
-		// WITH: an inner WITH behind intermediate wrappers must reach
-		// bindSelect with its whole lexical scope.
 		s = selectTreePreservingWith(stmt)
+		fullBody = stmt
 	case *tree.ParenSelect:
 		s = selectTreePreservingWith(stmt.Select)
+		fullBody = stmt.Select
 	default:
 		err = moerr.NewParseErrorf(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
 		return
+	}
+
+	// Wrappers outside the first WITH-bearing select still own pagination of
+	// the same query expression; their clauses must survive the
+	// scope-preserving peel above and join the enclosing chain as the
+	// outermost stages so no owner is silently discarded.
+	var outerClauses []*tree.Limit
+	var outerOrderBy tree.OrderBy
+	for outer := fullBody; outer != nil && outer != s; {
+		if outer.Limit != nil {
+			outerClauses = append(outerClauses, outer.Limit)
+		}
+		if len(outerOrderBy) == 0 && len(outer.OrderBy) > 0 {
+			outerOrderBy = outer.OrderBy
+		}
+		inner := outer
+		switch sel := inner.Select.(type) {
+		case *tree.ParenSelect:
+			inner = sel.Select
+		case *tree.Select:
+			inner = sel
+		}
+		if inner == outer {
+			break
+		}
+		outer = inner
 	}
 
 	var outputCtx *BindContext
@@ -6518,16 +6591,31 @@ func (builder *QueryBuilder) bindCte(
 		}
 		inspection = paren.Select.Select
 	}
-	left, distinct, err = builder.splitRecursiveMember(&inspection, table, &stmts)
-	if err != nil {
-		return 0, err
+	// Classification follows resolved declaration identity, not spelling: a
+	// same-spelling declaration in the body's own WITH shadows the outer name
+	// for every reference the union inspection collects, so the spelling walk
+	// is skipped entirely in that case - its recursive-only guards (multiple
+	// recursive tables, outer-join members) must not fire for a shadowed
+	// ordinary reference from the earliest error path down. A true
+	// self-reference (no shadowing declaration) and the RECURSIVE-keyword
+	// contract still reach those guards unchanged.
+	shadowed := bodyWithDeclaresName(s, table)
+	if !shadowed {
+		left, distinct, err = builder.splitRecursiveMember(&inspection, table, &stmts)
+		if err != nil {
+			return 0, err
+		}
 	}
 	isR := len(stmts) > 0
+	if shadowed {
+		isR = false
+		stmts = nil
+	}
 
 	if isR && !cteRef.isRecursive {
 		return 0, moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
 	} else if !isR {
-		nodeID, err = builder.bindNoRecursiveCte(ctx, s, cteRef, table)
+		nodeID, err = builder.bindNoRecursiveCte(ctx, fullBody, cteRef, table)
 		if err != nil {
 			return 0, err
 		}
@@ -6548,6 +6636,14 @@ func (builder *QueryBuilder) bindCte(
 			for n, r := range cteRef.declarationCtx.cteByName {
 				scope.cteByName[n] = r
 			}
+			// The copied declaration map records what the enclosing WITH
+			// declared, but it does not carry this recursion's own
+			// declaration-order restrictions: record the recursive owner on
+			// the exclusive body scope so a displaced enclosing candidate is
+			// still checked against the sibling order that makes it pending
+			// here (a declaration following this CTE is not in scope inside
+			// its body).
+			scope.cteOwnerChain = &cteOwnerNode{cte: cteRef, next: scope.cteOwnerChain}
 			return scope
 		}
 		var bodyScope *BindContext
@@ -6599,6 +6695,17 @@ func (builder *QueryBuilder) bindCte(
 			for i := n - 2; i >= 0; i-- {
 				enclosingClauses = append(enclosingClauses, wrapperClauses[i])
 			}
+		}
+		// Wrappers outside the first WITH-bearing select are the outermost
+		// pagination owners of the same body: append them after the inside
+		// wrappers so the pages still compose inside out.
+		for i := len(outerClauses) - 1; i >= 0; i-- {
+			enclosingClauses = append(enclosingClauses, outerClauses[i])
+		}
+		// An outer wrapper may carry the consumer ordering that no inner
+		// clause owns; capture it with the same first-owner rule.
+		if len(effectiveOrderBy) == 0 && len(outerOrderBy) > 0 {
+			effectiveOrderBy = outerOrderBy
 		}
 		nodeID, outputCtx, err = builder.bindRecursiveCte(recursiveCtx, s, cteRef, table, left, stmts, distinct, bodyScope, effectiveLimit, enclosingClauses, effectiveOrderBy)
 		if err != nil {
@@ -14187,8 +14294,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		}
 
 		if len(schema) == 0 && ctx.bindingNonRecurCte() && table == ctx.cteName {
-			return 0, "", moerr.NewParseErrorf(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
-		} else if len(schema) == 0 {
+			// A same-spelling nested declaration can legally shadow the CTE
+			// currently being bound: reject by resolved declaration identity,
+			// not spelling, so shadowed references still reach the inner CTE.
+			resolved := ctx.findCTE(table)
+			if refIn, inBinding := ctx.cteRefInBinding(table); resolved == nil || (inBinding && resolved == refIn) {
+				return 0, "", moerr.NewParseErrorf(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
+			}
+		}
+		if len(schema) == 0 {
 			cteRef := ctx.findCTE(table)
 			if cteRef != nil {
 				// The reference resolved to the very declaration that is being
@@ -14201,7 +14315,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					return 0, "", moerr.NewParseErrorf(builder.GetContext(),
 						"In the initial statement of Recursive Common Table Expression %s, the recursive table must not be referenced", table)
 				}
-				if ctx.cteInBinding(table) {
+				if refIn, inBinding := ctx.cteRefInBinding(table); inBinding && cteRef == refIn {
 					if ctx.bindingNonRecurCte() {
 						return 0, "", moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
 					}
