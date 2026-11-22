@@ -1367,9 +1367,9 @@ func Test_BuiltInCharIsBin(t *testing.T) {
 
 	for _, c := range cases {
 		input := testutil.MakeVarlenaVector([][]byte{c.input}, nil, types.T_varchar.ToType(), mp)
-		input.SetIsBin(true)
 
 		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+		result.SetArgumentIsBin([]bool{true})
 		require.NoError(t, result.PreExtendAndReset(1))
 
 		err := builtInChar([]*vector.Vector{input}, result, proc, 1, nil)

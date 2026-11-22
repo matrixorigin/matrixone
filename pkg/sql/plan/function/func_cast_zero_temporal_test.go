@@ -48,7 +48,7 @@ func TestEmptyTimeConversionPreservesReleaseContract(t *testing.T) {
 						tc := NewFunctionTestCase(proc, inputs, expect, fn).
 							WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false}})
 						defer tc.Free()
-						tc.parameters[0].SetIsBin(binary)
+						tc.result.SetArgumentIsBin([]bool{binary})
 						ok, info := tc.Run()
 						require.True(t, ok, info)
 						if source == types.T_varchar && !binary && name != "assignment" {
@@ -421,7 +421,7 @@ func TestDatetimeInvalidCastRetainsRestrictedDomains(t *testing.T) {
 				NewFunctionTestInput(target, []types.Datetime{}, nil),
 			}, NewFunctionTestResult(target, true, []types.Datetime{}, nil), tc.fn)
 			defer fc.Free()
-			fc.parameters[0].SetIsBin(tc.binary)
+			fc.result.SetArgumentIsBin([]bool{tc.binary})
 			require.NoError(t, fc.result.PreExtendAndReset(1))
 			err := tc.fn(fc.parameters, fc.result, proc, 1, nil)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)

@@ -206,7 +206,9 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 			return folded, err
 		}
 		value, err := function.IffConditionTruthyAt(
-			expr.parameterResults[0], 0, function.CompatibilityModeFromProcess(proc))
+			expr.parameterResults[0], 0,
+			isBinaryLiteralResult(expr.parameterExecutor[0], expr.parameterResults[0]),
+			function.CompatibilityModeFromProcess(proc))
 		if err != nil {
 			return false, err
 		}
@@ -310,6 +312,7 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 		evalProc.WarningSink = probe
 	}
 	parameters := expr.parameterResults
+	expr.publishArgumentIsBin(expr.resultVector)
 	if err := expr.evalFn(parameters, expr.resultVector, evalProc, execLen, nil); err != nil {
 		if probe != nil {
 			// Selection owns failures as well as warnings. Leave the expression

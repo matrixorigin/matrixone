@@ -29,17 +29,17 @@ import (
 type castFn func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
 
 // runBinarySourceTextCast drives a real cast overload with a binary-flagged
-// varlena source (IsBin set, as binary literals arrive) and a text-family target,
+// varlena source (published as a binary-literal argument) and a text-family target,
 // returning the result vector. The numericWarningSession sink records exact
 // (code, message) diagnostics appended to the statement warning sink.
 func runBinarySourceTextCast(t *testing.T, proc *process.Process, fn castFn, value []byte, target types.Type) *vector.Vector {
 	t.Helper()
 	input := testutil.MakeVarlenaVector([][]byte{value}, nil, types.T_varbinary.ToType(), proc.Mp())
-	input.SetIsBin(true)
 	t.Cleanup(func() { input.Free(proc.Mp()) })
 	targetMarker := testutil.MakeVarlenaVector([][]byte{{0}}, nil, target, proc.Mp())
 	t.Cleanup(func() { targetMarker.Free(proc.Mp()) })
 	result := vector.NewFunctionResultWrapper(target, proc.Mp())
+	result.SetArgumentIsBin([]bool{true})
 	t.Cleanup(result.Free)
 	require.NoError(t, result.PreExtendAndReset(input.Length()))
 	require.NoError(t, fn([]*vector.Vector{input, targetMarker}, result, proc, input.Length(), nil))
@@ -158,8 +158,7 @@ func staticBinaryVector(t *testing.T, proc *process.Process, rows [][]byte, null
 	typ := unhexReturnType([]types.Type{types.New(types.T_varchar, 16, 0)})
 	vec := testutil.MakeVarlenaVector(rows, nulls, typ, proc.Mp())
 	t.Cleanup(func() { vec.Free(proc.Mp()) })
-	require.False(t, vec.GetIsBin(), "binary domain must come from the static type, not the legacy literal flag")
-	require.True(t, isBinaryStringVector(vec), "static CharsetBinary varbinary type must resolve to the binary domain")
+	require.True(t, isBinaryStringVector(vec, false), "static CharsetBinary varbinary type must resolve to the binary domain without a binary-literal flag")
 	return vec
 }
 

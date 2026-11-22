@@ -381,7 +381,7 @@ func TestRandomBytesRejectsInvalidParameterShapeAndType(t *testing.T) {
 
 	unsupported := vector.NewVec(types.T_date.ToType())
 	defer unsupported.Free(proc.Mp())
-	_, err := makeRandomBytesLengthGetter(unsupported, proc)
+	_, err := makeRandomBytesLengthGetter(unsupported, false, proc)
 	require.Error(t, err)
 }
 

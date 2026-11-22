@@ -480,11 +480,11 @@ func TestJsonConstructorBinaryValuesUseAdmittedProtocolVersion(t *testing.T) {
 			defer v.Free(mp)
 
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion51)
-			_, err := newOpBuiltInJsonArray().convertToAny(proc, v, 0, jsonSessionProtocolVersion(proc))
+			_, err := newOpBuiltInJsonArray().convertToAny(proc, v, false, 0, jsonSessionProtocolVersion(proc))
 			require.ErrorContains(t, err, "MORPC protocol version 52")
 
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion52)
-			value, err := newOpBuiltInJsonArray().convertToAny(proc, v, 0, jsonSessionProtocolVersion(proc))
+			value, err := newOpBuiltInJsonArray().convertToAny(proc, v, false, 0, jsonSessionProtocolVersion(proc))
 			require.NoError(t, err)
 			_, err = bytejson.CreateByteJSON(value)
 			require.NoError(t, err)
@@ -515,7 +515,7 @@ func TestJsonConstructorPreparedMetadata(t *testing.T) {
 			} else {
 				require.NoError(t, vector.AppendBytes(v, []byte(tc.input), false, proc.Mp()))
 			}
-			value, err := newOpBuiltInJsonArray().convertToAny(proc, v, 0, defines.MORPCVersion52)
+			value, err := newOpBuiltInJsonArray().convertToAny(proc, v, false, 0, defines.MORPCVersion52)
 			require.NoError(t, err)
 			got, err := bytejson.CreateByteJSON(value)
 			require.NoError(t, err)

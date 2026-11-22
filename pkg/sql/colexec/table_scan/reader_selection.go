@@ -162,7 +162,6 @@ func gatherSelectedColumns(proc *process.Process, input *batch.Batch, loaded []i
 		if err := dst.Union(source, rows, mp); err != nil {
 			return err
 		}
-		source.CopyExpressionMetadataTo(dst)
 		return nil
 	}
 	if loaded == nil {

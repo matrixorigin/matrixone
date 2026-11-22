@@ -189,6 +189,8 @@ func integerArgumentRows[T types.FixedSizeTExceptStrType, R int64 | uint64](
 
 func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *vector.FunctionResult[R], proc *process.Process, length int, selectList *FunctionSelectList, textBits bool) error {
 	input := vector.GenerateFunctionStrParameter(source)
+	// The source is the call's first argument.
+	isBin := result.ArgumentIsBin(0)
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := result.Append(0, true); err != nil {
@@ -203,7 +205,7 @@ func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *ve
 			}
 			continue
 		}
-		normalized := textIntegerArgument(value, source.GetIsBin())
+		normalized := textIntegerArgument(value, isBin)
 		var integer R
 		var err error
 		if textBits && normalized.negative {
@@ -218,7 +220,7 @@ func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *ve
 		if err != nil {
 			return err
 		}
-		if !source.GetIsBin() {
+		if !isBin {
 			// Keep the original value policy and diagnose only successfully
 			// evaluated text arguments. Binary literals carry numeric bytes.
 			text := convertByteSliceToString(value)
