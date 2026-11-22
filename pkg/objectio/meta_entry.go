@@ -14,6 +14,8 @@
 
 package objectio
 
+import "github.com/matrixorigin/matrixone/pkg/container/types"
+
 type ObjectMeta []byte
 
 func (e ObjectMeta) MustGetMeta(metaType DataMetaType) ObjectDataMeta {
@@ -38,4 +40,47 @@ func (e ObjectMeta) MustTombstoneMeta() ObjectDataMeta {
 
 func (e ObjectMeta) SubMeta(pos uint16) (ObjectDataMeta, bool) {
 	return objectMetaV3(e[IOEntryHeaderSize:]).SubMeta(pos)
+}
+
+// CheckedDataBlocks returns borrowed metadata for the expected zero-based data
+// blocks. It validates the block index and column metadata bounds before slicing.
+func (e ObjectMeta) CheckedDataBlocks(expected uint16) ([]BlockObject, bool) {
+	if len(e) < IOEntryHeaderSize+metaHeaderLen || DecodeIOEntryHeader(e).Type != IOET_ObjMeta || expected == 0 {
+		return nil, false
+	}
+	payload := e[IOEntryHeaderSize:]
+	offset := uint64(types.DecodeUint32(payload[dataMetaCount:tombstoneMetaCountOff]))
+	if offset < metaHeaderLen || offset+headerLen > uint64(len(payload)) || e.DataMetaCount() != expected {
+		return nil, false
+	}
+	data := ObjectDataMeta(payload[offset:])
+	if data.BlockCount() != uint32(expected) || data.BlockHeader().StartID() != 0 {
+		return nil, false
+	}
+	indexSize := blockCountLen + uint32(expected)*posLen
+	indexEnd := data.Length() + indexSize
+	if uint64(indexEnd) > uint64(len(data)) {
+		return nil, false
+	}
+	idx := data.BlockIndex()[:indexSize]
+	if idx.BlockCount() != uint32(expected) {
+		return nil, false
+	}
+
+	blocks := make([]BlockObject, expected)
+	previousEnd := uint64(indexEnd)
+	for i := range blocks {
+		offset, length := idx.BlockMetaPos(uint32(i))
+		end := uint64(offset) + uint64(length)
+		if uint64(offset) < previousEnd || length < headerLen || end > uint64(len(data)) {
+			return nil, false
+		}
+		block := BlockObject(data[offset:end])
+		if block.GetID() != uint16(i) || headerLen+uint32(block.GetMetaColumnCount())*colMetaLen > length {
+			return nil, false
+		}
+		blocks[i] = block
+		previousEnd = end
+	}
+	return blocks, true
 }

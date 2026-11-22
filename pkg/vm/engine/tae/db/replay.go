@@ -31,9 +31,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
@@ -47,6 +49,37 @@ var (
 		pkgcatalog.MO_COLUMNS_ID:  true,
 	}
 )
+
+// watchReplayHistoryFloor returns the inclusive prefix the dirty logtail
+// cannot prove. An ICKP can consume WAL through its end, so that end normally
+// needs a durable table-ID index. A GCKP built from that ICKP advances its
+// timestamp by one tick and retains the ICKP's LSN. When both entries prove
+// that handoff, WAL replay includes the equality tick of the GCKP (it skips
+// only older timestamps and LSNs through the matched ICKP's LSN).
+func watchReplayHistoryFloor(
+	end types.TS,
+	lsn uint64,
+	latest, predecessor *checkpoint.CheckpointEntry,
+) types.TS {
+	if end.IsEmpty() || lsn == 0 ||
+		!isIndexedReplayCheckpoint(latest) || !latest.IsGlobal() || latest.GetEnd() != end || latest.LSN() != lsn ||
+		!isIndexedReplayCheckpoint(predecessor) || !predecessor.IsIncremental() || predecessor.LSN() != lsn {
+		return end
+	}
+	previous := end.Prev()
+	if predecessor.GetEnd() != previous {
+		return end
+	}
+	return previous
+}
+
+func isIndexedReplayCheckpoint(entry *checkpoint.CheckpointEntry) bool {
+	if entry == nil || !entry.IsFinished() || entry.GetVersion() != logtail.CheckpointCurrentVersion {
+		return false
+	}
+	locations := entry.GetTableIDLocation()
+	return locations.Len() > 0 && len(locations)%objectio.LocationLen == 0
+}
 
 type replayCtl struct {
 	startTime   time.Time
