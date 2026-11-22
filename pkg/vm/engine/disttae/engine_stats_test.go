@@ -321,11 +321,10 @@ func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
 		)
 		require.ErrorContains(t, err, "current version 1")
 		require.False(t, published)
-		e.globalStats.cache.RLock()
-		current, version := e.globalStats.cache.statsInfoMap[key], e.globalStats.cache.tableDefVersions[key]
-		e.globalStats.cache.RUnlock()
-		require.Same(t, firstStats, current)
-		require.Equal(t, uint32(0), version)
+		e.globalStats.mu.Lock()
+		require.Same(t, firstStats, e.globalStats.mu.statsInfoMap[key])
+		require.Equal(t, uint32(0), e.globalStats.mu.tableDefVersions[key])
+		e.globalStats.mu.Unlock()
 		require.Same(t, firstStats,
 			e.globalStats.GetAtTableVersion(ctx, key, false, 0))
 		require.Nil(t, e.globalStats.GetAtTableVersion(ctx, key, false, 1),
@@ -407,13 +406,12 @@ func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
 			require.ErrorIs(t, canceledResult.err, wantCancellation)
 			require.False(t, canceledResult.published)
 			e.globalStats.beforeVersionedStatsPublish = nil
-			e.globalStats.cache.RLock()
-			current, version := e.globalStats.cache.statsInfoMap[key], e.globalStats.cache.tableDefVersions[key]
-			e.globalStats.cache.RUnlock()
-			require.Same(t, secondStats, current,
+			e.globalStats.mu.Lock()
+			require.Same(t, secondStats, e.globalStats.mu.statsInfoMap[key],
 				"cancellation before the final cache swap must preserve last-good statistics")
-			require.Equal(t, uint32(1), version,
+			require.Equal(t, uint32(1), e.globalStats.mu.tableDefVersions[key],
 				"cancellation before the final cache swap must preserve the schema binding")
+			e.globalStats.mu.Unlock()
 		})
 	})
 }
@@ -522,7 +520,7 @@ func TestCompleteAutomaticStatsRefreshKeepsMetadataInsideAdmission(t *testing.T)
 	gs := &GlobalStats{}
 	gs.initStatsRefreshAdmission()
 	gs.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
-	gs.cache.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
+	gs.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
 	gs.mu.cond = sync.NewCond(&gs.mu)
 	key := pb.StatsInfoKey{AccId: 1, TableID: 42}
 
@@ -572,7 +570,7 @@ func TestCoordinateStatsUpdateSubscribeFailurePreservesLastPublishedStats(t *tes
 		gs := &GlobalStats{engine: &Engine{}}
 		gs.initStatsRefreshAdmission()
 		gs.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
-		gs.cache.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
+		gs.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
 		gs.mu.cond = sync.NewCond(&gs.mu)
 		return gs
 	}
@@ -588,7 +586,7 @@ func TestCoordinateStatsUpdateSubscribeFailurePreservesLastPublishedStats(t *tes
 	t.Run("retain last successful publication", func(t *testing.T) {
 		gs := newGlobalStats()
 		lastGood := newStats()
-		gs.cache.statsInfoMap[key] = lastGood
+		gs.mu.statsInfoMap[key] = lastGood
 
 		generation := gs.currentOrCreateUpdateRecord(key)
 		gs.coordinateStatsUpdateJob(statsUpdateJob{
@@ -596,9 +594,9 @@ func TestCoordinateStatsUpdateSubscribeFailurePreservesLastPublishedStats(t *tes
 			expectedRecord: generation,
 		})
 
-		gs.cache.Lock()
-		got, exists := gs.cache.statsInfoMap[key]
-		gs.cache.Unlock()
+		gs.mu.Lock()
+		got, exists := gs.mu.statsInfoMap[key]
+		gs.mu.Unlock()
 		require.True(t, exists)
 		require.Same(t, lastGood, got,
 			"a failed automatic refresh must not erase the last successful publication")
@@ -613,9 +611,9 @@ func TestCoordinateStatsUpdateSubscribeFailurePreservesLastPublishedStats(t *tes
 			expectedRecord: generation,
 		})
 
-		gs.cache.Lock()
-		got, exists := gs.cache.statsInfoMap[key]
-		gs.cache.Unlock()
+		gs.mu.Lock()
+		got, exists := gs.mu.statsInfoMap[key]
+		gs.mu.Unlock()
 		require.True(t, exists,
 			"the first failed automatic generation must still wake synchronous waiters")
 		require.Nil(t, got)
@@ -659,7 +657,7 @@ func TestInitialStatsGetSubscribeFailureDoesNotQueueOwnerlessGeneration(t *testi
 		queueWatcher: newQueueWatcher(),
 	}
 	gs.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
-	gs.cache.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
+	gs.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
 	gs.mu.cond = sync.NewCond(&gs.mu)
 
 	fault.Enable()

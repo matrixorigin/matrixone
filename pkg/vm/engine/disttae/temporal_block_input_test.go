@@ -256,8 +256,8 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 				f.gs.mu.Lock()
 				t.Cleanup(f.gs.mu.Unlock)
 			case "cache writer":
-				f.gs.cache.Lock()
-				t.Cleanup(f.gs.cache.Unlock)
+				f.gs.observationMu.Lock()
+				t.Cleanup(f.gs.observationMu.Unlock)
 			case "two matching blocks":
 				bound := date.ToTimestamp(time.UTC)
 				copy(request.Bound[:], types.EncodeTimestamp(&bound))

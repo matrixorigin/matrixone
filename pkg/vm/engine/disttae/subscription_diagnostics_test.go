@@ -208,9 +208,7 @@ func TestSubscriptionDiagnosticsReleaseStateLock(t *testing.T) {
 				message = "logtail.consumer.set.table.unsubscribe"
 				c.subscribed.m[diagnosticCold] = &subEntry{dbID: diagnosticDB, state: Subscribed}
 				c.eng.GetOrCreateLatestPart(t.Context(), 0, diagnosticDB, diagnosticCold)
-				c.eng.globalStats.cache.Lock()
-				c.eng.globalStats.cache.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{{DatabaseID: diagnosticDB, TableID: diagnosticCold}: nil, {DatabaseID: diagnosticDB, TableID: diagnosticWarm}: nil}
-				c.eng.globalStats.cache.Unlock()
+				c.eng.globalStats.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{{DatabaseID: diagnosticDB, TableID: diagnosticCold}: nil, {DatabaseID: diagnosticDB, TableID: diagnosticWarm}: nil}
 				action = func(ctx context.Context) error {
 					if scenario == "unsubscribe action" {
 						cmd := &cmdToConsumeUnSub{log: &logtail.UnSubscribeResponse{Table: &api.TableID{DbId: diagnosticDB, TbId: diagnosticCold}}}
@@ -323,12 +321,8 @@ func TestSubscriptionDiagnosticsReleaseStateLock(t *testing.T) {
 				if unsubscribeCleanup {
 					require.NotContains(t, c.subscribed.m, diagnosticCold)
 					require.NotContains(t, c.eng.partitions, [2]uint64{diagnosticDB, diagnosticCold})
-					c.eng.globalStats.cache.RLock()
-					_, coldPresent := c.eng.globalStats.cache.statsInfoMap[statsinfo.StatsInfoKey{DatabaseID: diagnosticDB, TableID: diagnosticCold}]
-					_, warmPresent := c.eng.globalStats.cache.statsInfoMap[statsinfo.StatsInfoKey{DatabaseID: diagnosticDB, TableID: diagnosticWarm}]
-					c.eng.globalStats.cache.RUnlock()
-					require.False(t, coldPresent)
-					require.True(t, warmPresent)
+					require.NotContains(t, c.eng.globalStats.mu.statsInfoMap, statsinfo.StatsInfoKey{DatabaseID: diagnosticDB, TableID: diagnosticCold})
+					require.Contains(t, c.eng.globalStats.mu.statsInfoMap, statsinfo.StatsInfoKey{DatabaseID: diagnosticDB, TableID: diagnosticWarm})
 				}
 			})
 			require.ErrorIs(t, err, wantErr)

@@ -65,7 +65,7 @@ func newTestGlobalStats(
 func TestPatchStatsOwnsShuffleResult(t *testing.T) {
 	gs := &GlobalStats{}
 	key := statsinfo.StatsInfoKey{AccId: 1, DatabaseID: 2, TableID: 3}
-	gs.cache.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
+	gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
 	gs.mu.cond = sync.NewCond(&gs.mu.Mutex)
 
 	values := []float64{7, 8}
@@ -74,16 +74,16 @@ func TestPatchStatsOwnsShuffleResult(t *testing.T) {
 	}}
 	require.NoError(t, gs.PatchStats(key, patch))
 	values[0] = 999
-	require.Equal(t, []float64{7, 8}, gs.cache.statsInfoMap[key].ShuffleRangeMap["d"].Result)
+	require.Equal(t, []float64{7, 8}, gs.mu.statsInfoMap[key].ShuffleRangeMap["d"].Result)
 
 	patch.ShuffleRangeMap["d"].Result = nil
 	require.NoError(t, gs.PatchStats(key, patch))
-	require.Equal(t, []float64{7, 8}, gs.cache.statsInfoMap[key].ShuffleRangeMap["d"].Result)
+	require.Equal(t, []float64{7, 8}, gs.mu.statsInfoMap[key].ShuffleRangeMap["d"].Result)
 
 	patch.ShuffleRangeMap["d"].Result = []float64{}
 	require.NoError(t, gs.PatchStats(key, patch))
-	require.NotNil(t, gs.cache.statsInfoMap[key].ShuffleRangeMap["d"].Result)
-	require.Empty(t, gs.cache.statsInfoMap[key].ShuffleRangeMap["d"].Result)
+	require.NotNil(t, gs.mu.statsInfoMap[key].ShuffleRangeMap["d"].Result)
+	require.Empty(t, gs.mu.statsInfoMap[key].ShuffleRangeMap["d"].Result)
 }
 
 func TestGlobalStatsCloseJoinsOwnedRoots(t *testing.T) {
@@ -1851,9 +1851,9 @@ func TestCleanMemoryTableWithTable(t *testing.T) {
 
 			// Insert a stats entry for the same table
 			k := statsinfo.StatsInfoKey{DatabaseID: dbId, TableID: tblId, TableName: "t"}
-			e.globalStats.cache.Lock()
-			e.globalStats.cache.statsInfoMap[k] = plan2.NewStatsInfo()
-			e.globalStats.cache.Unlock()
+			e.globalStats.mu.Lock()
+			e.globalStats.mu.statsInfoMap[k] = plan2.NewStatsInfo()
+			e.globalStats.mu.Unlock()
 
 			// Call cleanMemoryTableWithTable
 			e.cleanMemoryTableWithTable(dbId, tblId)
@@ -1865,9 +1865,9 @@ func TestCleanMemoryTableWithTable(t *testing.T) {
 			assert.False(t, partOk, "partition should be removed")
 
 			// Verify stats entry removed via RemoveTid
-			e.globalStats.cache.Lock()
-			_, statsOk := e.globalStats.cache.statsInfoMap[k]
-			e.globalStats.cache.Unlock()
+			e.globalStats.mu.Lock()
+			_, statsOk := e.globalStats.mu.statsInfoMap[k]
+			e.globalStats.mu.Unlock()
 			assert.False(t, statsOk, "stats entry should be removed")
 		})
 	})
@@ -1890,14 +1890,14 @@ func TestRemoveTid(t *testing.T) {
 			k2 := statsinfo.StatsInfoKey{DatabaseID: 100, TableID: 1001, TableName: "t1_alt"}
 			k3 := statsinfo.StatsInfoKey{DatabaseID: 200, TableID: 2001, TableName: "t2"}
 
-			gs.cache.Lock()
-			gs.cache.statsInfoMap[k1] = plan2.NewStatsInfo()
-			gs.cache.statsInfoMap[k2] = nil // simulate failed update
-			gs.cache.statsInfoMap[k3] = plan2.NewStatsInfo()
-			gs.cache.tableDefVersions[k1] = 7
-			gs.cache.tableDefVersions[k2] = 7
-			gs.cache.tableDefVersions[k3] = 9
-			gs.cache.Unlock()
+			gs.mu.Lock()
+			gs.mu.statsInfoMap[k1] = plan2.NewStatsInfo()
+			gs.mu.statsInfoMap[k2] = nil // simulate failed update
+			gs.mu.statsInfoMap[k3] = plan2.NewStatsInfo()
+			gs.mu.tableDefVersions[k1] = 7
+			gs.mu.tableDefVersions[k2] = 7
+			gs.mu.tableDefVersions[k3] = 9
+			gs.mu.Unlock()
 			generation := gs.currentOrCreateUpdateRecord(k1)
 			gs.currentOrCreateUpdateRecord(k2)
 			gs.currentOrCreateUpdateRecord(k3)
@@ -1919,14 +1919,14 @@ func TestRemoveTid(t *testing.T) {
 			gs.completeAutomaticStatsRefresh(
 				k1, generation, plan2.NewStatsInfo(), true, 3, 1, func() {})
 
-			gs.cache.Lock()
-			_, ok1 := gs.cache.statsInfoMap[k1]
-			_, ok2 := gs.cache.statsInfoMap[k2]
-			_, ok3 := gs.cache.statsInfoMap[k3]
-			_, version1 := gs.cache.tableDefVersions[k1]
-			_, version2 := gs.cache.tableDefVersions[k2]
-			version3 := gs.cache.tableDefVersions[k3]
-			gs.cache.Unlock()
+			gs.mu.Lock()
+			_, ok1 := gs.mu.statsInfoMap[k1]
+			_, ok2 := gs.mu.statsInfoMap[k2]
+			_, ok3 := gs.mu.statsInfoMap[k3]
+			_, version1 := gs.mu.tableDefVersions[k1]
+			_, version2 := gs.mu.tableDefVersions[k2]
+			version3 := gs.mu.tableDefVersions[k3]
+			gs.mu.Unlock()
 			assert.False(t, ok1, "k1 should be removed")
 			assert.False(t, ok2, "k2 should be removed")
 			assert.True(t, ok3, "k3 should not be removed")
@@ -1956,9 +1956,9 @@ func TestRemoveTid(t *testing.T) {
 			_, oldGenerationStarted := gs.startAutomaticUpdate(k1, generation)
 			assert.False(t, oldGenerationStarted, "an old queued generation should be rejected")
 
-			gs.cache.Lock()
-			_, oldStatsPublished := gs.cache.statsInfoMap[k1]
-			gs.cache.Unlock()
+			gs.mu.Lock()
+			_, oldStatsPublished := gs.mu.statsInfoMap[k1]
+			gs.mu.Unlock()
 			assert.False(t, oldStatsPublished, "an old generation should not publish into its replacement")
 			gs.updatingMu.Lock()
 			current := gs.updatingMu.updating[k1]
@@ -1975,7 +1975,7 @@ func TestRemoveTid(t *testing.T) {
 			queueWatcher: newQueueWatcher(),
 		}
 		gs.updatingMu.updating = make(map[statsinfo.StatsInfoKey]*updateRecord)
-		gs.cache.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
+		gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
 		gs.mu.cond = sync.NewCond(&gs.mu)
 
 		key := statsinfo.StatsInfoKey{DatabaseID: 100, TableID: 1001, TableName: "t1"}
@@ -1996,9 +1996,9 @@ func TestRemoveTid(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, published)
 
-		gs.cache.Lock()
-		_, cached := gs.cache.statsInfoMap[key]
-		gs.cache.Unlock()
+		gs.mu.Lock()
+		_, cached := gs.mu.statsInfoMap[key]
+		gs.mu.Unlock()
 		gs.updatingMu.Lock()
 		_, scheduled := gs.updatingMu.updating[key]
 		gs.updatingMu.Unlock()
@@ -2017,10 +2017,9 @@ func TestRemoveTid(t *testing.T) {
 			context.Background(), key, replacement, fresh)
 		require.NoError(t, err)
 		require.True(t, published)
-		gs.cache.RLock()
-		current := gs.cache.statsInfoMap[key]
-		gs.cache.RUnlock()
-		assert.Same(t, fresh, current)
+		gs.mu.Lock()
+		assert.Same(t, fresh, gs.mu.statsInfoMap[key])
+		gs.mu.Unlock()
 	})
 
 	t.Run("explicit_completion_preserves_admitted_automatic_refresh", func(t *testing.T) {
@@ -2047,16 +2046,16 @@ func TestRemoveTid(t *testing.T) {
 			gs := e.globalStats
 
 			k := statsinfo.StatsInfoKey{DatabaseID: 100, TableID: 1001}
-			gs.cache.Lock()
-			gs.cache.statsInfoMap[k] = plan2.NewStatsInfo()
-			gs.cache.Unlock()
+			gs.mu.Lock()
+			gs.mu.statsInfoMap[k] = plan2.NewStatsInfo()
+			gs.mu.Unlock()
 
 			// Remove a non-existent table — should not panic
 			gs.RemoveTid(9999)
 
-			gs.cache.Lock()
-			defer gs.cache.Unlock()
-			_, ok := gs.cache.statsInfoMap[k]
+			gs.mu.Lock()
+			defer gs.mu.Unlock()
+			_, ok := gs.mu.statsInfoMap[k]
 			assert.True(t, ok, "existing entry should remain")
 		})
 	})
@@ -2075,7 +2074,7 @@ func TestStatsPublicationRejectsStoppedOwnerLifecycle(t *testing.T) {
 		samplingRatio:   0.25,
 	}
 	gs := &GlobalStats{ctx: ownerCtx}
-	gs.cache.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: lastGood}
+	gs.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: lastGood}
 	gs.mu.cond = sync.NewCond(&gs.mu)
 	gs.updatingMu.updating = map[statsinfo.StatsInfoKey]*updateRecord{key: generation}
 
@@ -2090,11 +2089,10 @@ func TestStatsPublicationRejectsStoppedOwnerLifecycle(t *testing.T) {
 	require.False(t, published)
 	require.Equal(t, 1, releases)
 
-	gs.cache.RLock()
-	current := gs.cache.statsInfoMap[key]
-	gs.cache.RUnlock()
-	require.Same(t, lastGood, current,
+	gs.mu.Lock()
+	require.Same(t, lastGood, gs.mu.statsInfoMap[key],
 		"shutdown must preserve the last successfully published statistics")
+	gs.mu.Unlock()
 	gs.updatingMu.Lock()
 	require.False(t, generation.inProgress)
 	require.Equal(t, int64(7), generation.baseObjectCount,
@@ -2114,8 +2112,8 @@ func TestStatsPublicationCanceledWhileWaitingForCache(t *testing.T) {
 			ctx, stopRequest := context.WithCancelCause(context.Background())
 			defer stopRequest(nil)
 			gs := &GlobalStats{ctx: owner}
-			gs.cache.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: old}
-			gs.cache.tableDefVersions = map[statsinfo.StatsInfoKey]uint32{key: 7}
+			gs.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: old}
+			gs.mu.tableDefVersions = map[statsinfo.StatsInfoKey]uint32{key: 7}
 			gs.updatingMu.updating = map[statsinfo.StatsInfoKey]*updateRecord{key: generation}
 
 			type result struct {
@@ -2123,12 +2121,12 @@ func TestStatsPublicationCanceledWhileWaitingForCache(t *testing.T) {
 				err       error
 			}
 			done := make(chan result, 1)
-			gs.cache.RLock()
+			gs.observationMu.RLock()
 			locked := true
 			finished := false
 			defer func() {
 				if locked {
-					gs.cache.RUnlock()
+					gs.observationMu.RUnlock()
 				}
 				if !finished {
 					select {
@@ -2151,11 +2149,11 @@ func TestStatsPublicationCanceledWhileWaitingForCache(t *testing.T) {
 			// handoff after generation validation and before cache publication.
 			guard := time.NewTimer(5 * time.Second)
 			defer guard.Stop()
-			for gs.cache.TryRLock() {
-				gs.cache.RUnlock()
+			for gs.observationMu.TryRLock() {
+				gs.observationMu.RUnlock()
 				select {
 				case <-guard.C:
-					t.Fatal("publication did not reach the cache writer")
+					t.Fatal("publication did not reserve the observation write lock")
 				default:
 					goruntime.Gosched()
 				}
@@ -2166,7 +2164,7 @@ func TestStatsPublicationCanceledWhileWaitingForCache(t *testing.T) {
 			} else {
 				stopOwner(want)
 			}
-			gs.cache.RUnlock()
+			gs.observationMu.RUnlock()
 			locked = false
 			select {
 			case got := <-done:
@@ -2178,11 +2176,11 @@ func TestStatsPublicationCanceledWhileWaitingForCache(t *testing.T) {
 					require.ErrorIs(t, got.err, want)
 				}
 			case <-guard.C:
-				t.Fatal("publication did not return after the cache reader released")
+				t.Fatal("publication did not return after the observation finished")
 			}
-			gs.cache.RLock()
-			current, version := gs.cache.statsInfoMap[key], gs.cache.tableDefVersions[key]
-			gs.cache.RUnlock()
+			gs.mu.Lock()
+			current, version := gs.mu.statsInfoMap[key], gs.mu.tableDefVersions[key]
+			gs.mu.Unlock()
 			require.Same(t, old, current)
 			require.Equal(t, uint32(7), version)
 		})
@@ -2195,20 +2193,18 @@ func TestMetadataRefreshClearsSchemaBoundObservationVersion(t *testing.T) {
 	fresh := plan2.NewStatsInfo()
 	generation := &updateRecord{inProgress: true}
 	gs := &GlobalStats{}
-	gs.cache.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: old}
-	gs.cache.tableDefVersions = map[statsinfo.StatsInfoKey]uint32{key: 7}
+	gs.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: old}
+	gs.mu.tableDefVersions = map[statsinfo.StatsInfoKey]uint32{key: 7}
 	gs.mu.cond = sync.NewCond(&gs.mu)
 	gs.updatingMu.updating = map[statsinfo.StatsInfoKey]*updateRecord{key: generation}
 
 	require.True(t, gs.completeAutomaticStatsCacheUpdate(
 		key, generation, fresh, true))
-	gs.cache.RLock()
-	current := gs.cache.statsInfoMap[key]
-	_, versioned := gs.cache.tableDefVersions[key]
-	gs.cache.RUnlock()
-	require.Same(t, fresh, current)
-	require.False(t, versioned,
+	gs.mu.Lock()
+	require.Same(t, fresh, gs.mu.statsInfoMap[key])
+	require.NotContains(t, gs.mu.tableDefVersions, key,
 		"metadata-only statistics are not bound to the ANALYZE schema observation")
+	gs.mu.Unlock()
 	require.Same(t, fresh, gs.GetForRemote(context.Background(), key),
 		"unbound metadata statistics remain safe for remote export")
 }
@@ -2221,8 +2217,8 @@ func TestStatsWaiterRejectsOldSchemaUntilReplacementPublishes(t *testing.T) {
 	fresh.TableCnt = 8
 	generation := &updateRecord{inProgress: true}
 	gs := &GlobalStats{}
-	gs.cache.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: old}
-	gs.cache.tableDefVersions = map[statsinfo.StatsInfoKey]uint32{key: 7}
+	gs.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: old}
+	gs.mu.tableDefVersions = map[statsinfo.StatsInfoKey]uint32{key: 7}
 	gs.mu.cond = sync.NewCond(&gs.mu)
 	gs.updatingMu.updating = map[statsinfo.StatsInfoKey]*updateRecord{key: generation}
 
@@ -2246,10 +2242,8 @@ func TestStatsWaiterRejectsOldSchemaUntilReplacementPublishes(t *testing.T) {
 	}
 
 	gs.mu.Lock()
-	gs.cache.Lock()
-	gs.cache.statsInfoMap[key] = fresh
-	delete(gs.cache.tableDefVersions, key)
-	gs.cache.Unlock()
+	gs.mu.statsInfoMap[key] = fresh
+	delete(gs.mu.tableDefVersions, key)
 	gs.mu.cond.Broadcast()
 	gs.mu.Unlock()
 	require.Same(t, fresh, <-done)
@@ -2333,9 +2327,7 @@ func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
 		muAcquired := make(chan struct{})
 		go func() {
 			gs.mu.Lock()
-			gs.cache.Lock()
-			gs.cache.statsInfoMap[key] = published
-			gs.cache.Unlock()
+			gs.mu.statsInfoMap[key] = published
 			gs.mu.Unlock()
 			close(muAcquired)
 		}()
@@ -2404,7 +2396,7 @@ func newSynchronousStatsGetHarness(
 		queueWatcher: newQueueWatcher(),
 	}
 	gs.updatingMu.updating = make(map[statsinfo.StatsInfoKey]*updateRecord)
-	gs.cache.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
+	gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
 	gs.mu.cond = sync.NewCond(&gs.mu)
 	gs.initStatsRefreshAdmission()
 	return gs, ent
@@ -2735,7 +2727,7 @@ func TestStatsUpdateGenerationRequiresLiveSubscriptionOwner(t *testing.T) {
 		queueWatcher: newQueueWatcher(),
 	}
 	gs.updatingMu.updating = make(map[statsinfo.StatsInfoKey]*updateRecord)
-	gs.cache.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
+	gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
 	gs.mu.cond = sync.NewCond(&gs.mu)
 	e.pClient.subscribed.rw.Lock()
 	e.pClient.subscribed.m = make(map[uint64]*subEntry)
@@ -2840,10 +2832,7 @@ func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {
 			gs.mu.Lock()
 			defer gs.mu.Unlock()
 			for {
-				gs.cache.RLock()
-				_, ok := gs.cache.statsInfoMap[key]
-				gs.cache.RUnlock()
-				if ok {
+				if _, ok := gs.mu.statsInfoMap[key]; ok {
 					break
 				}
 				waitOnce.Do(func() { close(waitEntered) })
@@ -2880,19 +2869,16 @@ func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {
 		boundInfo := plan2.NewStatsInfo()
 		boundInfo.TableCnt = 84
 		gs.mu.Lock()
-		gs.cache.Lock()
-		gs.cache.statsInfoMap[key] = boundInfo
-		gs.cache.tableDefVersions[key] = 7
-		gs.cache.Unlock()
+		gs.mu.statsInfoMap[key] = boundInfo
+		gs.mu.tableDefVersions[key] = 7
 		gs.mu.Unlock()
 		rejected := gs.cacheRemoteInfoIfSubscribed(
 			key, ent, remoteInfo, nil, true)
 		require.Nil(t, rejected)
-		gs.cache.RLock()
-		current, version := gs.cache.statsInfoMap[key], gs.cache.tableDefVersions[key]
-		gs.cache.RUnlock()
-		require.Same(t, boundInfo, current)
-		require.Equal(t, uint32(7), version)
+		gs.mu.Lock()
+		require.Same(t, boundInfo, gs.mu.statsInfoMap[key])
+		require.Equal(t, uint32(7), gs.mu.tableDefVersions[key])
+		gs.mu.Unlock()
 	})
 }
 
@@ -2974,9 +2960,9 @@ func TestGlobalStatsGetDoesNotCacheRemoteInfoAfterUnsubscribe(t *testing.T) {
 			t.Fatal("GlobalStats.Get did not return after unsubscribe")
 		}
 
-		gs.cache.Lock()
-		_, ok := gs.cache.statsInfoMap[key]
-		gs.cache.Unlock()
+		gs.mu.Lock()
+		_, ok := gs.mu.statsInfoMap[key]
+		gs.mu.Unlock()
 		assert.False(t, ok)
 		require.Equal(t, int32(1), qc.releases.Load())
 	})

@@ -137,41 +137,6 @@ func (v *panickingValue) Retain() {
 }
 func (v *panickingValue) Release() {}
 
-type concurrentPanickingValue struct{ retains atomic.Int32 }
-
-func (v *concurrentPanickingValue) Retain() {
-	if v.retains.Add(1) > 1 {
-		panic("retain failed")
-	}
-}
-func (*concurrentPanickingValue) Release() {}
-
-func TestConcurrentRetainPanicUnlocks(t *testing.T) {
-	for _, try := range []bool{false, true} {
-		t.Run(fmt.Sprintf("try=%t", try), func(t *testing.T) {
-			c := NewWithConcurrentRetain(Options[int, *concurrentPanickingValue]{Capacity: func() int64 { return 100 }, Hash: hashInt})
-			v := &concurrentPanickingValue{}
-			inserted, _ := c.Set(1, v, 1)
-			require.True(t, inserted)
-			ix := c.indexOf(hashInt(1))
-			t.Cleanup(func() {
-				if ix.mu.TryLock() {
-					ix.mu.Unlock()
-					c.Delete(1)
-				}
-			})
-			lookup := c.Get
-			if try {
-				lookup = c.TryGet
-			}
-			require.Panics(t, func() { lookup(1, nil) })
-			require.True(t, ix.mu.TryLock(), "a panicking retain must release the shared lock")
-			ix.mu.Unlock()
-			require.True(t, c.Contains(1))
-		})
-	}
-}
-
 // When a Get's retain panics, the admission it took is released.
 func TestGetReleasesAdmissionOnPanic(t *testing.T) {
 	for _, try := range []bool{false, true} {

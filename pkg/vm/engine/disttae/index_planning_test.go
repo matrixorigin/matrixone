@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -73,8 +74,8 @@ func newTemporalNativeFixture(t testing.TB) *temporalNativeFixture {
 	t.Cleanup(gs.Close)
 	stats := &pb.StatsInfo{TableCnt: 1000, BlockNumber: 10, ShuffleRangeMap: map[string]*pb.ShuffleRange{"d": {Overlap: .25}}, MinValMap: map[string]float64{"d": 100}, MaxValMap: map[string]float64{"d": 200}, NdvMap: map[string]float64{"d": 100}, NullCntMap: map[string]uint64{"d": 0}, DataTypeMap: map[string]uint64{"d": uint64(types.T_datetime)}}
 	key := pb.StatsInfoKey{AccId: 7, DatabaseID: 10, TableID: 98, DbName: "db", TableName: "base"}
-	gs.cache.statsInfoMap = map[pb.StatsInfoKey]*pb.StatsInfo{key: stats}
-	gs.cache.tableDefVersions = map[pb.StatsInfoKey]uint32{key: 2}
+	gs.mu.statsInfoMap = map[pb.StatsInfoKey]*pb.StatsInfo{key: stats}
+	gs.mu.tableDefVersions = map[pb.StatsInfoKey]uint32{key: 2}
 	return &temporalNativeFixture{ctx: ctx, read: read, base: base, hidden: hidden, full: full, hiddenFull: hiddenFull, stats: stats, key: key, gs: gs}
 }
 func (f *temporalNativeFixture) pair() engine.IndexPairCheck {
@@ -98,8 +99,8 @@ func TestIndexCostStatsRecoverAfterWriter(t *testing.T) {
 	var ok bool
 	var err error
 	func() {
-		f.gs.cache.Lock()
-		defer f.gs.cache.Unlock()
+		f.gs.observationMu.Lock()
+		defer f.gs.observationMu.Unlock()
 		_, ok, err = f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "d")
 	}()
 	require.NoError(t, err)
@@ -109,6 +110,31 @@ func TestIndexCostStatsRecoverAfterWriter(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, 100., value.Min)
+}
+
+func TestStatsGetDoesNotWaitForObservationLock(t *testing.T) {
+	f := newTemporalNativeFixture(t)
+	f.gs.observationMu.Lock()
+	done := make(chan *pb.StatsInfo, 1)
+	joined := false
+	defer func() {
+		f.gs.observationMu.Unlock()
+		if !joined {
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("ordinary lookup did not exit")
+			}
+		}
+	}()
+	go func() { done <- f.gs.Get(f.ctx, f.key, false) }()
+	select {
+	case info := <-done:
+		joined = true
+		require.Same(t, f.stats, info)
+	case <-time.After(5 * time.Second):
+		t.Fatal("ordinary lookup waited for the observation lock")
+	}
 }
 
 func TestIndexCostStatsFollowPublicationLifetime(t *testing.T) {
@@ -185,19 +211,19 @@ func TestTemporalCBOStatsCopiesOrdinaryValuesWithoutTransport(t *testing.T) {
 			ctx := f.ctx
 			switch scenario {
 			case "unbound":
-				delete(f.gs.cache.tableDefVersions, f.key)
+				delete(f.gs.mu.tableDefVersions, f.key)
 			case "missing nulls":
 				delete(f.stats.NullCntMap, "d")
 			case "wrong pointer":
 				observed = &pb.StatsInfo{}
 			case "wrong version":
-				f.gs.cache.tableDefVersions[f.key]++
+				f.gs.mu.tableDefVersions[f.key]++
 			case "reader active":
-				f.gs.cache.RLock()
-				defer f.gs.cache.RUnlock()
+				f.gs.observationMu.RLock()
+				defer f.gs.observationMu.RUnlock()
 			case "writer active":
-				f.gs.cache.Lock()
-				defer f.gs.cache.Unlock()
+				f.gs.observationMu.Lock()
+				defer f.gs.observationMu.Unlock()
 			case "cancelled":
 				var cancel context.CancelCauseFunc
 				ctx, cancel = context.WithCancelCause(ctx)

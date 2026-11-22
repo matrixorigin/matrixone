@@ -79,7 +79,7 @@ func (tbl *txnTableDelegate) ReadIndexCostStats(ctx context.Context, read client
 		return out, false, planningContextCause(ctx)
 	}
 	gs := txn.engine.globalStats
-	if gs == nil || gs.ctx == nil || context.Cause(gs.ctx) != nil || !gs.cache.TryRLock() {
+	if gs == nil || gs.ctx == nil || context.Cause(gs.ctx) != nil || !gs.observationMu.TryRLock() {
 		return out, false, planningContextCause(ctx)
 	}
 	key := pb.StatsInfoKey{AccId: t.accountId, DatabaseID: t.db.databaseId, TableID: t.tableId, DbName: t.db.databaseName, TableName: t.tableName}
@@ -101,7 +101,7 @@ func (tbl *txnTableDelegate) ReadIndexCostStats(ctx context.Context, read client
 		out.Nulls, nullOK = current.NullCntMap[column]
 		ok = minOK && maxOK && ndvOK && kindOK && nullOK && uint64(out.Kind) == kind
 	}
-	gs.cache.RUnlock()
+	gs.observationMu.RUnlock()
 	ok = ok && context.Cause(gs.ctx) == nil && planningReadStillCurrent(tbl, ctx, read, t, txn)
 	return out, ok, planningContextCause(ctx)
 }
