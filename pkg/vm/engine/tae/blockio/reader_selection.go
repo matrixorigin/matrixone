@@ -15,9 +15,16 @@
 package blockio
 
 import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -53,5 +60,62 @@ func publishReaderSelection(output *batch.Batch, positions []int, rows []int64, 
 		}
 	}
 	output.SetRowCount(len(rows))
+	return nil
+}
+
+// publishBatchSelection keeps the read columns' physical rows and publishes
+// rows as output's selection, in the caller-owned request.PublishSelection.
+// Columns the caller marked unused are cleared.
+func publishBatchSelection(output *batch.Batch, positions []int, rows []int64, physicalRows int, request *engine.ReaderFilterRequest) {
+	width := len(output.Vecs)
+	for _, pos := range positions {
+		if request.ColumnUse(pos, width) == engine.ReaderColumnUnused {
+			output.Vecs[pos].CleanOnlyData()
+		}
+	}
+	sel := request.PublishSelection
+	sel.InitWithSize(int64(physicalRows))
+	for _, row := range rows {
+		sel.Add(uint64(row))
+	}
+	output.SetSelection(physicalRows, sel)
+}
+
+// loadBorrowedLateColumns loads every column not read for the filter in
+// full, as read-only references pinned by output, so they stay aligned with
+// the early columns' physical rows.
+func loadBorrowedLateColumns(
+	ctx context.Context,
+	info *objectio.BlockInfo,
+	columns []uint16,
+	colTypes []types.Type,
+	early []int,
+	policy fileservice.Policy,
+	output *batch.Batch,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	request *engine.ReaderFilterRequest,
+) error {
+	late := columnPositionsComplement(early, len(columns))
+	if len(late) == 0 {
+		return nil
+	}
+	seqnums := make([]uint16, len(late))
+	typs := make([]types.Type, len(late))
+	dest := make([]*vector.Vector, len(late))
+	for i, pos := range late {
+		seqnums[i], typs[i], dest[i] = columns[pos], colTypes[pos], output.Vecs[pos]
+	}
+	if _, err := ioutil.LoadColumnsDataIntoBorrowed(ctx, seqnums, typs, fs, info.MetaLocation(), dest, mp, policy,
+		request.BorrowColumns(late, len(output.Vecs)), output); err != nil {
+		return err
+	}
+	physical := output.PhysicalRowCount()
+	for _, pos := range late {
+		if output.Vecs[pos].Length() != physical {
+			return moerr.NewInvalidInputNoCtxf("late column %d has %d rows for %d physical rows",
+				pos, output.Vecs[pos].Length(), physical)
+		}
+	}
 	return nil
 }

@@ -265,6 +265,11 @@ func (tableScan *TableScan) readBatch(
 	if tableScan.ctr.readerFilter != nil {
 		tableScan.prepareColumnUses()
 		tableScan.ctr.readerFilter.ColumnUses = tableScan.ctr.columnUses
+		tableScan.ctr.readerFilter.PublishSelection = nil
+		if tableScan.publishesSelection() {
+			tableScan.ctr.readerFilter.PublishSelection = &tableScan.ctr.selection.rows
+			tableScan.ctr.readerFilter.ColumnUses = tableScan.ctr.selection.borrowedUses(tableScan.ctr.columnUses)
+		}
 	}
 	if !ok || tableScan.ctr.readerFilter == nil || readerSummaryEnabled {
 		return process.MeasureFilesystemWait(tableScan.OpAnalyzer, func() (bool, error) {

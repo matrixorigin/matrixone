@@ -16,6 +16,7 @@ package table_scan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,7 +38,10 @@ type ownedSelectionTestReader struct {
 	selectCalls    int
 	expectedSelect bool
 	applyOnly      bool
-	uses           []engine.ReaderColumnUse
+	// publish makes the reader honor filter.PublishSelection: it keeps every
+	// physical row and publishes the filter's rows as the batch selection.
+	publish bool
+	uses    []engine.ReaderColumnUse
 }
 
 func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string, early []int, filter *engine.ReaderFilterRequest, mp *mpool.MPool, out *batch.Batch) (bool, error) {
@@ -78,6 +82,22 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 		}
 		count = source.RowCount()
 		selected.All = true
+	}
+	if r.publish && filter.PublishSelection != nil && !selected.All {
+		for col, v := range source.Vecs {
+			if filter.ColumnUse(col, len(out.Vecs)) == engine.ReaderColumnUnused {
+				continue
+			}
+			if err := out.Vecs[col].UnionBatch(v, 0, source.RowCount(), nil, mp); err != nil {
+				return false, err
+			}
+		}
+		filter.PublishSelection.InitWithSize(int64(source.RowCount()))
+		for _, row := range selected.Sels {
+			filter.PublishSelection.Add(uint64(row))
+		}
+		out.SetSelection(source.RowCount(), filter.PublishSelection)
+		return false, nil
 	}
 	for col, v := range source.Vecs {
 		if filter.ColumnUse(col, len(out.Vecs)) == engine.ReaderColumnUnused {
@@ -173,6 +193,8 @@ func TestOwnedOutputReaderSelectionEntry(t *testing.T) {
 					require.NotNil(t, result.Batch)
 					require.Equal(t, []types.Decimal64{100, 200}, vector.MustFixedColNoTypeCheck[types.Decimal64](result.Batch.Vecs[0]))
 					require.Equal(t, 2, result.Batch.RowCount())
+					// The scan is the root here, so it publishes compacted rows and
+					// the reader copies the columns it outputs.
 					require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnUnused}, reader.uses)
 					require.Equal(t, shape != "pad-char" && !reader.applyOnly, reader.selectCalls > 0)
 					result, err = vm.Exec(scan, proc)
@@ -182,6 +204,73 @@ func TestOwnedOutputReaderSelectionEntry(t *testing.T) {
 				scan.Reset(proc, false, nil)
 				require.True(t, reader.closed)
 			}
+		})
+	}
+}
+
+// A reader that publishes a selection hands the scan its physical rows. The
+// scan projects them masked to the selection and either keeps the selection
+// (a parent that reads selected batches) or compacts the projected rows into
+// its own pool.
+func TestTableScanPublishesReaderSelection(t *testing.T) {
+	for _, parentAccepts := range []bool{false, true} {
+		t.Run(fmt.Sprintf("parent-accepts=%v", parentAccepts), func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			t.Cleanup(proc.Free)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			require.NoError(t, err)
+			account, err := registry.Open(1 << 20)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			})
+			allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
+			require.NoError(t, err)
+
+			balance, phone := types.New(types.T_decimal64, 15, 2), types.New(types.T_char, 15, 0)
+			gt, err := function.GetFunctionByName(proc.Ctx, ">", []types.Type{balance, balance})
+			require.NoError(t, err)
+			zero := &pb.Expr{Typ: balance.PlanType(), Expr: &pb.Expr_Lit{Lit: &pb.Literal{Value: &pb.Literal_Decimal64Val{Decimal64Val: &pb.Decimal64{}}}}}
+			filterExpr := &pb.Expr{Typ: gt.GetReturnType().PlanType(), Expr: &pb.Expr_F{F: &pb.Function{
+				Func: &pb.ObjectRef{ObjName: ">", Obj: gt.GetEncodedOverloadID()}, Args: []*pb.Expr{lateTestCol(0, balance), zero}}}}
+			scan := &TableScan{Attrs: []string{"c_acctbal", "c_phone"}, Types: []pb.Type{balance.PlanType(), phone.PlanType()},
+				OutputAllocation: allocation, FilterExprs: []*pb.Expr{filterExpr}}
+			scan.ProjectList = []*pb.Expr{lateTestCol(0, balance)}
+			t.Cleanup(func() { scan.Free(proc, false, nil) })
+			reader := &ownedSelectionTestReader{t: t, expectedSelect: true, publish: true}
+			scan.Reader = reader
+			require.NoError(t, scan.Prepare(proc))
+			scan.SetSelectionOutput(parentAccepts)
+			t.Cleanup(func() {
+				// Only a parent that reads selections gets the reader to publish
+				// one; the reader otherwise compacts the columns it copies.
+				want := engine.ReaderColumnOwned
+				if parentAccepts {
+					want = engine.ReaderColumnRetain
+				}
+				require.Equal(t, []engine.ReaderColumnUse{want, engine.ReaderColumnUnused}, reader.uses)
+			})
+
+			result, err := vm.Exec(scan, proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			out := result.Batch
+			require.Equal(t, 3, out.RowCount())
+			require.Equal(t, parentAccepts, out.HasSelection())
+			if parentAccepts {
+				require.Equal(t, 4, out.PhysicalRowCount())
+				require.Equal(t, []int64{0, 2, 3}, out.SelectionRows(nil))
+				require.Equal(t, []types.Decimal64{100, 0, 200, 300}, vector.MustFixedColNoTypeCheck[types.Decimal64](out.Vecs[0]))
+			} else {
+				require.Equal(t, []types.Decimal64{100, 200, 300}, vector.MustFixedColNoTypeCheck[types.Decimal64](out.Vecs[0]))
+			}
+			result, err = vm.Exec(scan, proc)
+			require.NoError(t, err)
+			require.Nil(t, result.Batch)
+			scan.Reset(proc, false, nil)
+			require.True(t, reader.closed)
 		})
 	}
 }

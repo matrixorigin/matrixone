@@ -1126,7 +1126,7 @@ func blockDataReadWithFilter(
 			}
 		}
 
-		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) && !objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(colTypes) {
+		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && applyFilter.PublishSelection == nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) && !objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(colTypes) {
 			defer tombstones.Release()
 			return blockDataReadScopedOwned(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter, preFilterRows)
 		}
@@ -1223,10 +1223,21 @@ func blockDataReadWithFilter(
 		if err = validateReaderFilterResult(filterResult, liveRows, selectedRows); err != nil {
 			return err
 		}
+		// The block's live rows are its physical rows only without deletes or
+		// a storage row selection. Then every column can stay a read-only
+		// reference to the cache and the batch carries the selection.
+		publishSelection := applyFilter.PublishSelection != nil && deleteMask.IsEmpty() &&
+			physicalRows == nil && objectio.JSONReadSetFromContext(ctx) == nil
 		if !filterResult.All {
+			if publishSelection && len(filterResult.Sels) > 0 {
+				publishBatchSelection(outputBat, earlyColumns, filterResult.Sels, liveRows, applyFilter)
+				return loadBorrowedLateColumns(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter)
+			}
 			if err = publishReaderSelection(outputBat, earlyColumns, filterResult.Sels, applyFilter, mp); err != nil {
 				return err
 			}
+		} else if publishSelection {
+			return loadBorrowedLateColumns(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter)
 		}
 	} else {
 		filterResult, err = applyFilter.Apply(outputBat, earlyColumns)

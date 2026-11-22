@@ -15,8 +15,12 @@
 package blockio
 
 import (
+	"fmt"
+
 	"context"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -2595,5 +2599,91 @@ func freeTestBatchWithOwnPools(bat *batch.Batch) {
 		bat.CleanOwned()
 		// With no vectors left, Clean only releases the batch's leases.
 		bat.Clean(nil)
+	}
+}
+
+// A Select read with PublishSelection keeps the block's physical rows in
+// every column (early and late) and publishes the kept rows as the batch
+// selection. A block with deletes has no physical-row identity and compacts.
+func TestBlockDataReadWithFilterPublishesSelection(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	colTypes := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
+	writeMP := mpool.MustNewZero()
+	input := batch.NewWithSize(len(colTypes))
+	for i := range colTypes {
+		input.Vecs[i] = vector.NewVec(colTypes[i], writeMP)
+	}
+	for i := 0; i < 8; i++ {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i), false, writeMP))
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("a payload longer than the inline varlena-"+string(rune('0'+i))), false, writeMP))
+	}
+	input.SetRowCount(8)
+	writer := ioutil.ConstructWriter(0, []uint16{0, 1}, -1, false, false, fs)
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	info := stats.ConstructBlockInfo(0)
+	input.Clean(writeMP)
+
+	for _, deleted := range [][]uint64{nil, {3}} {
+		t.Run(fmt.Sprintf("deleted=%v", deleted), func(t *testing.T) {
+			queryMP := mpool.MustNewZero()
+			defer mpool.DeleteMPool(queryMP)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			require.NoError(t, err)
+			account, err := registry.Open(1 << 20)
+			require.NoError(t, err)
+			allocation, err := queryMP.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
+			require.NoError(t, err)
+			output := batch.NewWithSchema(nil, colTypes, allocation)
+			cacheVectors := containers.NewVectors(len(colTypes) + 2)
+			var sel bitmap.Bitmap
+			request := &engine.ReaderFilterRequest{
+				OutputAllocation: allocation,
+				ColumnUses:       []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnRetain},
+				PublishSelection: &sel,
+				Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+					t.Fatal("a Select read must not call Apply")
+					return engine.ReaderFilterResult{}, nil
+				},
+				Select: func(bat *batch.Batch, columns []int) (engine.ReaderFilterResult, error) {
+					require.Equal(t, []int{0}, columns)
+					var keep []int64
+					for row := 0; row < bat.RowCount(); row++ {
+						if v := vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], row); v%2 == 0 {
+							keep = append(keep, int64(row))
+						}
+					}
+					return engine.ReaderFilterResult{Sels: keep}, nil
+				},
+			}
+			_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{deleted: deleted}, []uint16{0, 1}, colTypes, -1,
+				timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "publish-selection",
+				output, cacheVectors, queryMP, fs, []int{0}, request)
+			require.NoError(t, err)
+			require.Equal(t, 4, output.RowCount())
+			if deleted == nil {
+				require.True(t, output.HasSelection())
+				require.Equal(t, 8, output.PhysicalRowCount())
+				require.Equal(t, []int64{0, 2, 4, 6}, output.SelectionRows(nil))
+				for _, v := range output.Vecs {
+					require.Equal(t, 8, v.Length())
+				}
+				require.Equal(t, "a payload longer than the inline varlena-5", output.Vecs[1].GetStringAt(5))
+			} else {
+				require.False(t, output.HasSelection())
+				require.Equal(t, []int32{0, 2, 4, 6}, vector.MustFixedColNoTypeCheck[int32](output.Vecs[0]))
+				require.Equal(t, "a payload longer than the inline varlena-6", output.Vecs[1].GetStringAt(3))
+			}
+			output.CleanOnlyData()
+			freeTestBatchWithOwnPools(output)
+			cacheVectors.Free(queryMP)
+			require.Zero(t, account.Snapshot().Used)
+			_, _, err = registry.CompleteTerminal(account)
+			require.NoError(t, err)
+		})
 	}
 }

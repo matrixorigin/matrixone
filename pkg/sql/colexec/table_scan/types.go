@@ -68,6 +68,8 @@ type container struct {
 	domainRows                []int64
 	domainsReady              bool
 	domainEmpty               bool
+	// selection is the scan's selected-output machinery (selection.go).
+	selection selectionState
 }
 
 type TableScan struct {
@@ -266,6 +268,7 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.CleanOnlyData()
 	}
+	tableScan.ctr.selection.reset()
 	if tableScan.allocationAccount != nil {
 		tableScan.Free(proc, pipelineFailed, err)
 	}
@@ -276,6 +279,7 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	tableScan.ctr.columnUsesReady = false
 
 	tableScan.releaseLocalDomains()
+	tableScan.ctr.selection.free(tableScan.mp(proc))
 	if tableScan.ctr.buf != nil {
 		// The output vectors were created with the scan's output pool.
 		tableScan.ctr.buf.Clean(tableScan.mp(proc))
@@ -336,6 +340,9 @@ func (tableScan *TableScan) closeReader() {
 }
 
 func (tableScan *TableScan) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	if input.HasSelection() {
+		return tableScan.execSelectedProjection(proc, input)
+	}
 	var err error
 	batch := input
 	if tableScan.ProjectList != nil {
