@@ -262,6 +262,7 @@ func WithMoServerStateChecker(checker func() bool) EngineOptions {
 }
 
 type Engine struct {
+	rssPressure *rscthrottler.RSSPressureSource
 	sync.RWMutex
 	service  string
 	mp       *mpool.MPool

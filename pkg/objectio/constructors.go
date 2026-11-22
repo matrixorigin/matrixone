@@ -45,6 +45,11 @@ var eventVectorDestinationNotEmpty = logutil.Event{
 type CacheConstructor = func(ctx context.Context, r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (fscache.Data, error)
 type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
 
+// NewColumnReadEntry prepares a physical column read with ObjectIO's cache validator.
+func NewColumnReadEntry(ext Extent) fileservice.IOEntry {
+	return newColumnIOEntry(ext, columnCacheConstructorFactory)
+}
+
 func newColumnIOEntry(ext Extent, factory CacheConstructorFactory) fileservice.IOEntry {
 	return fileservice.IOEntry{
 		Offset:            int64(ext.Offset()),
