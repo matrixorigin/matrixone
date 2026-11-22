@@ -347,6 +347,25 @@ func speculativeStringOutputBound(f *plan.Function, args []speculativeFoldString
 			result.validUTF8 = result.validUTF8 && args[0].validUTF8
 		}
 		return result
+	case "trim":
+		// Binder order: direction, cut string, source.
+		if len(args) == 3 && args[2].known {
+			bound := args[2]
+			bound.validUTF8 = bound.validUTF8 && args[1].validUTF8
+			return bound
+		}
+	case "ltrim", "rtrim":
+		if len(args) == 1 {
+			return args[0]
+		}
+	case "replace":
+		if len(args) == 3 && args[0].known && args[1].known && args[2].known {
+			bound, ok := function.ReplacementStringOutputBound(uint64(args[0].bytes), uint64(args[2].bytes))
+			if ok && bound <= uint64(maxSpeculativeFoldValueBytes) {
+				return speculativeFoldStringBound{bytes: int64(bound), known: true,
+					validUTF8: args[0].validUTF8 && args[1].validUTF8 && args[2].validUTF8}
+			}
+		}
 	case "lower", "upper", "to_lower", "to_upper", "lcase", "ucase":
 		if len(args) != 1 || !args[0].known {
 			break

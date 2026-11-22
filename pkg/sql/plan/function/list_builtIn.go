@@ -269,11 +269,9 @@ func replacementStringReturnType(parameters []types.Type) types.Type {
 	}
 	source := boundFor(parameters[0])
 	replacement := boundFor(parameters[2])
-	if replacement.unknown || source.unknown {
-		return stringResultTypeForDomain(parameters, 0, unknownStringResultBound())
-	}
-	factor := max(uint64(1), replacement.bytes)
-	return stringResultTypeForDomain(parameters, 0, multiplyStringResultBound(source, factor))
+	width, known := ReplacementStringOutputBound(source.bytes, replacement.bytes)
+	return stringResultTypeForDomain(parameters, 0,
+		stringResultBound{bytes: width, unknown: source.unknown || replacement.unknown || !known})
 }
 
 func insertStringReturnType(parameters []types.Type) types.Type {

@@ -858,3 +858,72 @@ func TestBitCountGroupedSelectorKeepsGroupingContract(t *testing.T) {
 		})
 	}
 }
+
+func TestBitCountSharedImplicitGroupRepresentative(t *testing.T) {
+	const selector = "if(e.empno=1,e.sal,cast(e.sal as double))"
+	for _, tc := range []struct {
+		name, project, suffix string
+		fields                int
+	}{
+		{"expression and having", "if(e.empno=1,bit_count(" + selector + "),0) n", " having e.ename is not null order by n", 3},
+		{"having only", "count(*)", " having bit_count(" + selector + ")=1", 2},
+		{"legacy having", "count(*)", " having e.ename is not null", 0},
+		{"legacy HAVING BETWEEN", "count(*)", " having e.empno between e.empno and 2", 0},
+		{"HAVING BETWEEN shares row", "bit_count(" + selector + ")", " having e.empno between e.empno and 2", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			ctx := optimizer.CurrentContext().(*MockCompilerContext)
+			ctx.SetSqlModeOverride("")
+			table := ctx.tables["emp"]
+			pos, ok := tableColumnPosition(table, "sal")
+			require.True(t, ok)
+			table.Cols[pos].Typ = pb.Type{Id: int32(types.T_float64)}
+			ctx.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")] = table
+			p, err := runOneStmt(optimizer, t, "select "+tc.project+" from constraint_test.emp e group by "+selector+tc.suffix)
+			require.NoError(t, err)
+			var tuples []*Expr
+			for _, node := range p.GetQuery().Nodes {
+				for _, agg := range node.AggList {
+					args := agg.GetF().GetArgs()
+					if len(args) == 1 && args[0].GetF().GetFunc().GetObjName() == "serial_full" {
+						tuples = append(tuples, args[0])
+					}
+				}
+			}
+			if tc.fields == 0 {
+				require.Empty(t, tuples)
+				return
+			}
+			require.Len(t, tuples, 1)
+			require.Len(t, tuples[0].GetF().GetArgs(), tc.fields)
+		})
+	}
+}
+
+func TestBitCountBoundedTrimAndReplaceProjection(t *testing.T) {
+	for _, tc := range []struct {
+		predicate string
+		want      int32
+	}{
+		{"length(trim(repeat('a',4)))=4", 16},
+		{"length(trim(both 'ab' from 'abxxab'))=2", 16},
+		{"length(replace(repeat('a',4),'a','é'))=8", 16},
+		{"length(replace('aa','','é'))=2", 16},
+		{"length(replace('aa','a',NULL))=2", function.BitCountFloat64FieldOverload},
+		{"length(trim(repeat('a',4)))=5", function.BitCountFloat64FieldOverload},
+		{"length(replace(repeat('a',25000000),'a','é'))=50000000", function.BitCountFloat64FieldOverload},
+	} {
+		t.Run(tc.predicate, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			p, err := runOneStmt(optimizer, t, "select bit_count(x) from ("+
+				"select cast(e.sal as double) x, e.empno in (select 1 where "+tc.predicate+
+				") z from constraint_test.emp e) s")
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(p, "bit_count")
+			require.NotNil(t, fn)
+			_, overload := function.DecodeOverloadID(fn.GetF().GetFunc().GetObj())
+			require.Equal(t, tc.want, overload)
+		})
+	}
+}

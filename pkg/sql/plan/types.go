@@ -1175,7 +1175,9 @@ type BindContext struct {
 	queryBlockOwner *BindContext
 	// groupedBitCounts is keyed by the original group slot. A selector's
 	// SELECT, HAVING and ORDER BY consumers share its representative.
-	groupedBitCounts map[int32]*Expr
+	groupedBitCounts        map[int32]*Expr
+	needsGroupedBitCountRow bool
+	implicitGroupHaving     map[int32]*Expr
 
 	// reducibleTablelessScalar describes a scalar SELECT that MySQL may
 	// replace with its sole projection. hasDependentProjectionSubquery records

@@ -87,31 +87,11 @@ func (b *baseBinder) bindGroupedBitCount(operand *Expr) (*Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	var representatives []*Expr
-	if b.builder.mysqlCompatible && (len(inputs) > 1 || len(inputs) == 1 && !inputs[0].Typ.NotNullable) {
-		// ANY_VALUE skips NULLs. A non-NULL row tuple keeps the nullable
-		// source values together in permissive mode.
-		tuple, err := BindFuncExprImplByPlanExpr(ctx, "serial_full", inputs)
-		if err != nil {
-			return nil, err
-		}
-		packed, err := BindFuncExprImplByPlanExpr(ctx, "any_value", []*Expr{tuple})
-		if err != nil {
-			return nil, err
-		}
-		slot := GetColExpr(packed.Typ, b.ctx.aggregateTag, int32(len(b.ctx.aggregates)))
-		for i, input := range inputs {
-			col := input.GetCol()
-			value, err := MakeSerialExtractExpr(ctx, DeepCopyExpr(slot), input.Typ, int64(i))
-			if err != nil {
-				return nil, err
-			}
-			replacements[[2]int32{col.RelPos, col.ColPos}] = value
-		}
-		representatives = append(representatives, packed)
+	if b.builder.mysqlCompatible {
+		// Defer row selection until HAVING, SELECT, and ORDER BY can all
+		// share the same source row.
+		b.ctx.needsGroupedBitCountRow = b.ctx.needsGroupedBitCountRow || len(inputs) > 0
 	} else {
-		// Strict-mode functional dependencies make each such column stable
-		// within the group. A nonnullable single permissive input needs no tuple.
 		for _, input := range inputs {
 			value, err := BindFuncExprImplByPlanExpr(ctx, "any_value", []*Expr{input})
 			if err != nil {
@@ -119,11 +99,10 @@ func (b *baseBinder) bindGroupedBitCount(operand *Expr) (*Expr, error) {
 			}
 			col := input.GetCol()
 			replacements[[2]int32{col.RelPos, col.ColPos}] = GetColExpr(
-				value.Typ, b.ctx.aggregateTag, int32(len(b.ctx.aggregates)+len(representatives)))
-			representatives = append(representatives, value)
+				value.Typ, b.ctx.aggregateTag, int32(len(b.ctx.aggregates)))
+			b.ctx.aggregates = append(b.ctx.aggregates, value)
 		}
 	}
-	b.ctx.aggregates = append(b.ctx.aggregates, representatives...)
 	lowered = replaceGroupedBitCountColumns(lowered, replacements)
 	if b.ctx.groupedBitCounts == nil {
 		b.ctx.groupedBitCounts = make(map[int32]*Expr)

@@ -278,6 +278,15 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
 		colPos := len(b.ctx.aggregates)
 		b.ctx.aggregates = append(b.ctx.aggregates, newExpr)
+		// The aggregate slot survives alias expansion and BETWEEN's clones.
+		// Track only implicit scalar references for the representative rewrite.
+		if col := expr.GetCol(); depth == 0 && col != nil && b.ctx.bindingByTag[col.RelPos] != nil &&
+			function.SerialTypeSupported(types.T(expr.Typ.Id)) && canShareGroupedBitCountRow(b.ctx) {
+			if b.ctx.implicitGroupHaving == nil {
+				b.ctx.implicitGroupHaving = make(map[int32]*Expr)
+			}
+			b.ctx.implicitGroupHaving[int32(colPos)] = expr
+		}
 		return &plan.Expr{
 			Typ: b.ctx.aggregates[colPos].Typ,
 			Expr: &plan.Expr_Col{
