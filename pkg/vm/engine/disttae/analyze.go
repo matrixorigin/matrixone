@@ -38,6 +38,7 @@ import (
 	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	analyzestats "github.com/matrixorigin/matrixone/pkg/statistics/analyze"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -213,10 +214,17 @@ func (tbl *txnTable) AnalyzeTable(
 	stringSlots := analyzeByteRangeSlots(columns, qBlocks)
 	columnsPerPass := int(request.ColumnsPerPass)
 	var domains []analyzeIntegerDomain
-	var decisions []analyzeRowDecisions
-	if columnsPerPass < len(columns) && q.Numerator < q.Denominator {
-		// Bound even a custom over-sized sample to 8 MiB of memoization.
-		decisions = make([]analyzeRowDecisions, min(len(selected), int(analyzestats.DefaultMaxBlocks)))
+	var memo analyzeDecisionCache
+	stmt, _ := request.ResourceProcess.(*process.Process)
+	if stmt != nil && stmt.Base != nil && columnsPerPass < len(columns) && q.Numerator < q.Denominator {
+		reserve, err := stmt.GetExecutionTransientMemoryAdmission()
+		if err != nil {
+			return nil, err
+		}
+		defer memo.release()
+		if err := memo.allocate(len(selected), reserve); err != nil {
+			return nil, err
+		}
 	}
 	// At most one column pass owns a reservation. Release on all returns.
 	var held *process.ExecutionTransientMemoryReservation
@@ -247,7 +255,7 @@ func (tbl *txnTable) AnalyzeTable(
 		}
 		workers, sessionDOP := 1, -1
 		scanCPU := min(system.GoMaxProcs(), runtime.GOMAXPROCS(0))
-		if stmt, ok := request.ResourceProcess.(*process.Process); ok && stmt != nil && stmt.Base != nil && len(states) == 1 && analyzeParallelFixedType(states[0].typ.Oid) && !request.FullScan && request.MaxDistinctValues >= analyzestats.SampleSketchCapacity {
+		if stmt != nil && stmt.Base != nil && len(states) == 1 && analyzeParallelFixedType(states[0].typ.Oid) && !request.FullScan && request.MaxDistinctValues >= analyzestats.SampleSketchCapacity {
 			if resolve := stmt.GetResolveVariableFunc(); resolve != nil {
 				v, e := resolve("max_dop", true, false)
 				if e != nil {
@@ -266,7 +274,7 @@ func (tbl *txnTable) AnalyzeTable(
 				if blockCount > 0 && selected[0].block.IsMemBlk() {
 					blockCount--
 				}
-				workers, held, e = admitAnalyzeWorkers(ctx, scanCPU, sessionDOP, blockCount, reserve)
+				workers, held, e = admitAnalyzeWorkers(ctx, scanCPU, sessionDOP, blockCount, reserve, &memo)
 				if e != nil {
 					return nil, e
 				}
@@ -274,9 +282,9 @@ func (tbl *txnTable) AnalyzeTable(
 		}
 		var passRows, passBytes uint64
 		if workers > 1 {
-			passRows, passBytes, err = tbl.scanAnalyzeColumnParallel(ctx, proc, selectedData, selected, states, request.Seed, workers, decisions)
+			passRows, passBytes, err = tbl.scanAnalyzeColumnParallel(ctx, proc, selectedData, selected, states, request.Seed, workers, memo.rows)
 		} else {
-			passRows, passBytes, err = tbl.scanAnalyzeColumnGroup(ctx, proc, selectedData, selected, states, request.Seed, decisions, nil)
+			passRows, passBytes, err = tbl.scanAnalyzeColumnGroup(ctx, proc, selectedData, selected, states, request.Seed, memo.rows, nil)
 		}
 		if err != nil {
 			return nil, err
@@ -338,7 +346,38 @@ func analyzeParallelFixedType(t types.T) bool {
 	return t.IsInteger() || t == types.T_decimal64
 }
 
-func admitAnalyzeWorkers(ctx context.Context, cpu, dop, blocks int, reserve func(uint64) (*process.ExecutionTransientMemoryReservation, error)) (int, *process.ExecutionTransientMemoryReservation, error) {
+type analyzeMemoryAdmission func(uint64) (*process.ExecutionTransientMemoryReservation, error)
+
+type analyzeDecisionCache struct {
+	rows []analyzeRowDecisions
+	held *process.ExecutionTransientMemoryReservation
+}
+
+func (c *analyzeDecisionCache) allocate(blocks int, reserve analyzeMemoryAdmission) error {
+	n := min(blocks, int(analyzestats.DefaultMaxBlocks))
+	if n == 0 {
+		return nil
+	}
+	const bytesPerBlock = 8 * (len(analyzeRowDecisions{}.known) + len(analyzeRowDecisions{}.retained))
+	held, err := reserve(uint64(n) * uint64(bytesPerBlock))
+	if errors.Is(err, process.ErrExecutionResourceAdmission) {
+		return nil // memoization is optional
+	}
+	if err != nil {
+		return err
+	}
+	c.held = held
+	c.rows = make([]analyzeRowDecisions, n)
+	return nil
+}
+
+func (c *analyzeDecisionCache) release() {
+	c.rows = nil
+	c.held.Release()
+	c.held = nil
+}
+
+func admitAnalyzeWorkers(ctx context.Context, cpu, dop, blocks int, reserve analyzeMemoryAdmission, memo *analyzeDecisionCache) (int, *process.ExecutionTransientMemoryReservation, error) {
 	n := max(1, min(cpu, 8, blocks/16))
 	if dop > 0 {
 		n = min(n, dop)
@@ -363,7 +402,14 @@ func admitAnalyzeWorkers(ctx context.Context, cpu, dop, blocks int, reserve func
 			}
 			r.Release()
 		}
-		if n == 1 || !errors.Is(err, process.ErrExecutionResourceAdmission) {
+		if !errors.Is(err, process.ErrExecutionResourceAdmission) {
+			return 0, nil, err
+		}
+		if memo.held != nil {
+			memo.release() // Retry the same scan without an optional cache.
+			continue
+		}
+		if n == 1 {
 			return 0, nil, err
 		}
 		n = max(1, n/2)
@@ -743,9 +789,19 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 				"ANALYZE expected one reader, got %d", len(readers))
 		}
 		reader := readers[0]
+		// Test the worker's read-error path after it owns a real reader.
+		// Poll only once per persisted shard, never on the per-row path.
+		failRead := false
+		if builds != nil && rangeIndex == 0 {
+			_, target, on := fault.TriggerFault("analyze_parallel_read_error")
+			failRead = on && target == tbl.tableName
+		}
 		for {
 			data.CleanOnlyData()
 			end, readErr := reader.Read(ctx, attrs, nil, proc.Mp(), data)
+			if failRead && readErr == nil {
+				readErr = moerr.NewInternalErrorNoCtx("injected parallel ANALYZE reader failure")
+			}
 			if readErr != nil {
 				_ = reader.Close()
 				return 0, 0, readErr

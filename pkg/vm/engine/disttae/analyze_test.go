@@ -29,8 +29,31 @@ import (
 	analyzestats "github.com/matrixorigin/matrixone/pkg/statistics/analyze"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAnalyzeCacheYieldsToScan(t *testing.T) {
+	// 4096 slots take 8 MiB; 1024 fit initially (2 MiB) but would
+	// crowd out the serial sketch and its reader headroom under this cap.
+	for _, blocks := range []int{4096, 1024, 16} {
+		budget := process.MustNewExecutionResourceBudget(6<<20, 6<<20)
+		g, err := budget.OpenGeneration(1)
+		require.NoError(t, err)
+		var cache analyzeDecisionCache
+		require.NoError(t, cache.allocate(blocks, g.ReserveTransientMemory))
+		require.Equal(t, blocks != 4096, cache.held != nil)
+		require.Equal(t, uint64(len(cache.rows))*2048, g.Snapshot().Used)
+		workers, r, err := admitAnalyzeWorkers(t.Context(), 1, 1, blocks, g.ReserveTransientMemory, &cache)
+		require.NoError(t, err)
+		require.Equal(t, 1, workers)
+		require.Equal(t, blocks == 16, cache.held != nil)
+		r.Release()
+		cache.release()
+		require.Zero(t, g.Snapshot().Used)
+		require.Zero(t, budget.AggregateUsed())
+	}
+}
 
 func TestAnalyzeRowDecisionsMatchVisibleIdentity(t *testing.T) {
 	seed := sha256.Sum256([]byte("sample across column passes"))

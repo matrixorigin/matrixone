@@ -318,7 +318,9 @@ sketch for those arrays, the row witnesses and growth. Charge worker and
 coordinator sketches on the admitted path; this is not a bound on total RSS.
 Across column passes, memoize only row-inclusion decisions, keyed by the
 persisted block identity and physical row offset, at most 8 MiB per statement.
-Unknown identities use the original predicate. Keep reader construction
+Charge the bitmap to the statement and CN before allocation and until its last
+use. If it cannot be admitted, or it crowds out a scan, discard it and use the
+original row predicate. Unknown identities also use that predicate. Keep reader construction
 serialized where the relation setup is shared; do not share active readers.
 
 **Alternatives and acceptance.** Exact maps preserve sample frequencies but
