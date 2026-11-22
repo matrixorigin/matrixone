@@ -96,6 +96,24 @@ null  ¦  null  𝄀
 1  ¦  1  𝄀
 1  ¦  1  𝄀
 11  ¦  11
+set save_query_result = on;
+/* save_result */select cast(null +
+(select (select c.d from inner_rows r where r.d > c.d limit 0)
+from restricted_wrapper c limit 1) as signed) as folded_metadata
+from outer_rows;
+➤ folded_metadata[-5,64,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
+select tables from meta_scan(last_query_id()) as meta;
+➤ tables[12,0,0]  𝄀
+outer_rows
+set save_query_result = off;
+select (select mo_ctl('cn', 'GetProtocolVersion', '') from outer_rows o
+where (select o.a from inner_rows i where i.d > o.a limit 0) is null limit 0) as control_wrapper;
+➤ control_wrapper[12,-1,0]  𝄀
+null
 select (select count(*) from (select d from inner_rows limit 0) q) as nested_count;
 ➤ nested_count[-5,64,0]  𝄀
 0
@@ -167,6 +185,9 @@ null  𝄀
 1  𝄀
 1  𝄀
 11
+select (select mo_ctl('cn', 'GetProtocolVersion', '') from outer_rows o
+where (select o.a from inner_rows i where i.d > o.a limit 0) is null limit 0) as control_wrapper;
+internal error: do not have privilege to execute the statement
 select null + (select null + (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
 from test_issue_32869.restricted_wrapper c limit 1)
 from test_issue_32869.outer_rows;

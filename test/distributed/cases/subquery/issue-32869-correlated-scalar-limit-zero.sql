@@ -45,6 +45,19 @@ from outer_rows o order by o.a;
 select o.a, (select o.a from inner_rows i where i.d > o.a limit 1) as positive_limit
 from outer_rows o order by o.a;
 
+-- The result metadata lists the real scan, while authorization retains the folded source.
+set save_query_result = on;
+/* save_result */select cast(null +
+  (select (select c.d from inner_rows r where r.d > c.d limit 0)
+   from restricted_wrapper c limit 1) as signed) as folded_metadata
+from outer_rows;
+select tables from meta_scan(last_query_id()) as meta;
+set save_query_result = off;
+
+-- A surviving control projection keeps the frontend administrator check.
+select (select mo_ctl('cn', 'GetProtocolVersion', '') from outer_rows o
+        where (select o.a from inner_rows i where i.d > o.a limit 0) is null limit 0) as control_wrapper;
+
 -- A nested zero boundary does not erase its enclosing aggregate.
 select (select count(*) from (select d from inner_rows limit 0) q) as nested_count;
 
@@ -81,6 +94,8 @@ grant select on table test_issue_32869.inner_rows to issue_32869_role;
 -- @session:id=1&user=sys:issue_32869_reader:issue_32869_role&password=111
 use test_issue_32869;
 select a from outer_rows order by a;
+select (select mo_ctl('cn', 'GetProtocolVersion', '') from outer_rows o
+        where (select o.a from inner_rows i where i.d > o.a limit 0) is null limit 0) as control_wrapper;
 select null + (select null + (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
                from test_issue_32869.restricted_wrapper c limit 1)
 from test_issue_32869.outer_rows;
