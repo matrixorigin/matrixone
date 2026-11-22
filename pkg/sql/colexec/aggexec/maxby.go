@@ -413,15 +413,8 @@ func compactMaxByStateVector(vec *vector.Vector, usage *maxByVarlenaUsage, mp *m
 		usage.staleBytes <= usage.liveBytes+maxByVarlenaCompactionSlack {
 		return nil
 	}
-	var (
-		compact *vector.Vector
-		err     error
-	)
-	if selection := vec.AllocationAccountSelection(); selection != nil {
-		compact, err = vec.CloneToFlatCompactWithAllocation(mp, selection)
-	} else {
-		compact, err = vec.CloneToFlatCompact(mp)
-	}
+	// mp is the executor's pool: its accounted view while an account is bound.
+	compact, err := vec.CloneToFlatCompact(mp)
 	if err != nil {
 		return err
 	}

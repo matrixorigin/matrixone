@@ -54,6 +54,23 @@ func newTestAggregateAllocation(
 	return registry, account, allocation
 }
 
+// freeAccountedVector frees vec and requires that its backing storage was
+// charged to account: a vector with allocated storage must release charge.
+func freeAccountedVector(
+	t testing.TB,
+	account *mpool.AllocationAccount,
+	vec *vector.Vector,
+	mp *mpool.MPool,
+) {
+	t.Helper()
+	allocated := vec.Allocated()
+	before := account.Snapshot().Used
+	vec.Free(mp)
+	if allocated > 0 {
+		require.Less(t, account.Snapshot().Used, before)
+	}
+}
+
 func finishTestAggregateAllocation(
 	t testing.TB,
 	registry *mpool.AllocationAccountRegistry,
@@ -130,9 +147,7 @@ func TestAllocationAccountSupportedAggregateFamilies(t *testing.T) {
 			require.NoError(t, err)
 			require.NotEmpty(t, results)
 			for _, result := range results {
-				require.True(t, vector.AllocationAccountSelectionsEqual(
-					allocation.vectorSelection(), result.AllocationAccountSelection()))
-				result.Free(mp)
+				freeAccountedVector(t, account, result, mp)
 			}
 			exec.Free()
 			require.NoError(t, exec.ClearAllocationAccount(allocation))
@@ -907,12 +922,8 @@ func TestAccountedApproxPercentilePreflightAndSpillRoundTrip(t *testing.T) {
 	require.Equal(t,
 		vector.GetFixedAtNoTypeCheck[float64](resident[0], 0),
 		vector.GetFixedAtNoTypeCheck[float64](spilled[0], 0))
-	require.True(t, vector.AllocationAccountSelectionsEqual(
-		allocation.vectorSelection(), resident[0].AllocationAccountSelection()))
-	require.True(t, vector.AllocationAccountSelectionsEqual(
-		allocation.vectorSelection(), spilled[0].AllocationAccountSelection()))
-	resident[0].Free(mp)
-	spilled[0].Free(mp)
+	freeAccountedVector(t, account, resident[0], mp)
+	freeAccountedVector(t, account, spilled[0], mp)
 	exec.Free()
 	restored.Free()
 	require.NoError(t, owner.ClearAllocationAccount(allocation))

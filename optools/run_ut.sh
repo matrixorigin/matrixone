@@ -644,10 +644,16 @@ function report_active_ut_cases(){
         return 0
     fi
 
-    logger "ERR" "Active or incomplete UT cases from ${UT_REPORT}:"
-    awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${UT_REPORT}" |
-        LC_ALL=C sort |
-        sed 's/^/[active_ut_cases] /'
+    local lifecycle_report="${UT_REPORT}.lifecycle"
+    if [[ -s "${lifecycle_report}" ]]; then
+        logger "ERR" "Active or incomplete UT cases from ${UT_REPORT}:"
+        sed 's/^/[active_ut_cases] /' "${lifecycle_report}"
+    else
+        logger "ERR" "Unclassified UT cases from ${UT_REPORT}:"
+        awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${UT_REPORT}" |
+            LC_ALL=C sort |
+            sed -e 's/^active UT /UT /' -e 's/^/[unclassified_ut_cases] /'
+    fi
 }
 
 function report_slow_ut_cases(){
@@ -658,8 +664,15 @@ function report_slow_ut_cases(){
 
     local slow_report="${UT_DIAGNOSTIC_DIR}/top.txt"
     local slow_output=""
-    if ! slow_output=$(python3 "${BUILD_WKSP}/optools/summarize_ut_slow_cases.py" "${UT_REPORT}" 2>&1); then
-        logger "ERR" "failed to summarize slow UT cases: ${slow_output}"
+    local lifecycle_report="${UT_REPORT}.lifecycle"
+    local -a lifecycle_args=(--active-out "${lifecycle_report}")
+    if [[ -n "${CURRENT_UT_PID}" ]] || (( CURRENT_UT_DRAIN_FAILED != 0 )); then
+        lifecycle_args+=(--require-lifecycle-lf)
+    fi
+    rm -f "${lifecycle_report}"
+    if ! slow_output=$(python3 -B "${BUILD_WKSP}/optools/summarize_ut_slow_cases.py" \
+        "${UT_REPORT}" "${lifecycle_args[@]}"); then
+        logger "ERR" "failed to summarize slow UT cases from ${UT_REPORT}"
         return 0
     fi
 
@@ -789,7 +802,7 @@ function start_ut_heartbeat(){
                 wait "${heartbeat_scan_pid}" 2>/dev/null || true
                 heartbeat_scan_pid=""
             fi
-            rm -f "${UT_HEARTBEAT_STATE}" "${UT_HEARTBEAT_STATE}.out"
+            rm -f "${UT_HEARTBEAT_STATE}" "${UT_HEARTBEAT_STATE}.out" "${UT_HEARTBEAT_STATE}.tmp."*
             exit 0
         }
         trap request_heartbeat_stop TERM INT
@@ -816,8 +829,8 @@ function start_ut_heartbeat(){
             fi
             [[ "${UT_TERMINATING}" == 0 ]] || exit 0
 
-            local latest stage label active_cases active_detail active_records process_count memory report
-            local -a heartbeat_reports
+            local latest stage label active_cases active_detail active_records unresolved_cases process_count memory report
+            local -a helper_reports
             # A heartbeat can race a stage transition. Never read our own stale
             # stage back as the source of truth on the next tick.
             latest=$(awk '!/event=heartbeat / { latest=$0 } END { print latest }' "${UT_CHECKPOINT}" 2>/dev/null || true)
@@ -828,33 +841,28 @@ function start_ut_heartbeat(){
             # The heartbeat is forked before run_tests assigns the helper
             # report variables. Discover reports from the immutable run
             # workspace instead of relying on those later parent-shell values.
-            heartbeat_reports=(
-                "${UT_REPORT}"
+            helper_reports=(
                 "${G_WKSP}/${G_TS}-light-race-report.out"
                 "${G_WKSP}/${G_TS}-engine-race-report.out"
-                "${G_WKSP}/${G_TS}-engine-race-report.out".*
                 "${G_WKSP}/${G_TS}-plan-race-report.out"
-                "${G_WKSP}/${G_TS}-plan-race-report.out".*
                 "${G_WKSP}/${G_TS}-issues-race-report.out"
-                "${G_WKSP}/${G_TS}-issues-race-report.out".*
                 "${G_WKSP}/${G_TS}-embedded-race-report.out"
-                "${G_WKSP}/${G_TS}-embedded-race-report.out".*
                 "${G_WKSP}/${G_TS}-embedded-batched-race-report.out"
-                "${G_WKSP}/${G_TS}-embedded-batched-race-report.out".*
             )
             # Own the finite scan as a group. A large first scan or fallback
             # must not outlive heartbeat cancellation or keep its pipes open.
             set -m
             (
                 trap - TERM INT
+                local -a heartbeat_reports=("${UT_REPORT}") sources=()
+                for report in "${helper_reports[@]}"; do
+                    if collect_ut_report_sources "${report}" 2>/dev/null && (( ${#sources[@]} > 0 )); then
+                        heartbeat_reports+=("${sources[@]}")
+                    fi
+                done
                 if ! python3 "${BUILD_WKSP}/optools/active_ut_incremental.py" \
                     --state "${UT_HEARTBEAT_STATE}" "${heartbeat_reports[@]}" 2>/dev/null; then
-                    # The original full-scan reader remains the recovery path.
-                    for report in "${heartbeat_reports[@]}"; do
-                        if [[ -s "${report}" ]]; then
-                            awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${report}" 2>/dev/null || true
-                        fi
-                    done
+                    printf '%s\n' "UT lifecycle classification unavailable"
                 fi
             ) > "${UT_HEARTBEAT_STATE}.out" &
             heartbeat_scan_pid=$!
@@ -866,6 +874,12 @@ function start_ut_heartbeat(){
             active_records=$(< "${UT_HEARTBEAT_STATE}.out")
             active_cases=$(grep -c '^active UT case:' <<< "${active_records}" || true)
             active_detail=$(grep '^active UT case:' <<< "${active_records}" | LC_ALL=C sort -u | head -n 3 | paste -sd ';' - || true)
+            unresolved_cases=$(grep -c '^unresolved UT case' <<< "${active_records}" || true)
+            if [[ "${active_records}" == *"UT lifecycle classification unavailable"* ]]; then
+                active_cases=unknown
+                unresolved_cases=unknown
+                active_detail="unclassified report; see raw UT diagnostics"
+            fi
             local process_snapshot
             process_snapshot=$(ps -eo pid=,ppid=,rss=,comm= 2>/dev/null || true)
             process_count=$(awk 'NF { n++ } END { print n+0 }' <<< "${process_snapshot}")
@@ -876,9 +890,9 @@ function start_ut_heartbeat(){
             local top_rss
             top_rss=$(LC_ALL=C sort -k3,3nr <<< "${process_snapshot}" | awk 'NF && NR <= 8 { printf "pid=%s,ppid=%s,rss_kib=%s,comm=%s;", $1, $2, $3, $4 }' || true)
             memory+=" processes.top_rss=${top_rss:-unavailable}"
-            logger "INF" "[ut_heartbeat] stage=${stage} label=${label} active_cases=${active_cases:-0} active=${active_detail:-none} processes=${process_count:-unknown} memory=${memory:-unknown} report=${UT_REPORT}"
+            logger "INF" "[ut_heartbeat] stage=${stage} label=${label} active_cases=${active_cases:-0} active=${active_detail:-none} unresolved_cases=${unresolved_cases:-0} processes=${process_count:-unknown} memory=${memory:-unknown} report=${UT_REPORT}"
             checkpoint_ut_event "heartbeat" "${stage}" "${label}" "" \
-                "active_cases=${active_cases:-0} active=${active_detail:-none} processes=${process_count:-unknown} memory=${memory:-unknown}"
+                "active_cases=${active_cases:-0} active=${active_detail:-none} unresolved_cases=${unresolved_cases:-0} processes=${process_count:-unknown} memory=${memory:-unknown}"
         done
     ) &
     UT_HEARTBEAT_PID=$!
@@ -1974,7 +1988,7 @@ function run_plan_race_shards(){
         if (( shard_counts[shard] == 0 )); then
             continue
         fi
-        if ! cat "${shard_reports[shard]}" >> "${report_staging}"; then
+        if ! copy_ut_report_chunk "${shard_reports[shard]}" >> "${report_staging}"; then
             logger "ERR" "failed to assemble plan race shard ${shard} report"
             rm -f "${report_staging}"
             restore_ut_term_trap "${previous_term_trap}"
@@ -3537,7 +3551,18 @@ function ut_summary(){
     analysis_status=1
     logger "ERR" "failed to install go-ut-analysis"
   else
-    "${analysis_tool}" test -f "${UT_REPORT}" --first 10 --report-path "${report_path}" --stdout=false
+    (
+      local analyzer_input="${UT_REPORT}"
+      if [[ "${report_validation}" =~ [[:space:]]malformed=[1-9][0-9]*[[:space:]] ]]; then
+        # Keep malformed fragments in the raw report. The pinned analyzer
+        # needs a view containing only complete JSON objects.
+        analyzer_input=$(mktemp "${UT_REPORT}.analyzer.XXXXXX") || exit 1
+        trap 'rm -f "${analyzer_input}"' EXIT
+        python3 "${BUILD_WKSP}/optools/validate_ut_report.py" --emit-analyzer-input \
+          "${UT_REPORT}" > "${analyzer_input}" || exit 1
+      fi
+      "${analysis_tool}" test -f "${analyzer_input}" --first 10 --report-path "${report_path}" --stdout=false
+    )
     analysis_status=$?
   fi
 

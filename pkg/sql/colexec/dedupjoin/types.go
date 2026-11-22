@@ -368,8 +368,8 @@ type DedupJoin struct {
 	OldColCapturePlaceholderIdxList []int32
 	OldColCaptureProbeIdxList       []int32
 	allocationAccount               *mpool.AllocationAccount
-	stateAllocation                 *vector.AllocationAccountSelection
-	resultAllocation                *vector.AllocationAccountSelection
+	stateAllocation                 *mpool.AccountBinding
+	resultAllocation                *mpool.AccountBinding
 
 	vm.OperatorBase
 }
@@ -392,20 +392,18 @@ func (dedupJoin *DedupJoin) SetAllocationAccount(
 	if dedupJoin.allocationAccount == account {
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		dedupJoinAllocationSiteCaptureData,
-		dedupJoinAllocationSiteCaptureArea,
 	)
 	if err != nil {
 		return err
 	}
-	resultSelection, err := vector.NewAllocationAccountSelection(
+	resultSelection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		dedupJoinAllocationSiteResultData,
-		dedupJoinAllocationSiteResultArea,
 	)
 	if err != nil {
 		return err

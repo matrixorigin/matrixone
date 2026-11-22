@@ -51,46 +51,9 @@ type Shuffle struct {
 	OwnedOutput       bool
 	OwnedColumnCount  int
 	allocationAccount *mpool.AllocationAccount
-	outputAllocation  *vector.AllocationAccountSelection
+	outputAllocation  *mpool.AccountBinding
 	retiredOwnedPool  *ShufflePool
 	vm.OperatorBase
-}
-
-// Ordinary shuffle can forward a selected batch; admit upstream views only
-// when its destination can keep that representation. Owned complete-key mode
-// consumes selected rows directly into its accounted partition buffers.
-func (shuffle *Shuffle) AcceptsDictionary(child int) bool {
-	return shuffle.dictionaryInputSupported(child) &&
-		(shuffle.OwnedOutput || shuffle.ctr.dictionaryBoundary.AllowsDictionaryOutput())
-}
-
-// Mechanical capability is independent of negotiated output admission. Using
-// AcceptsDictionary here would make capability discovery depend on a state
-// which boundary configuration has not yet established.
-func (shuffle *Shuffle) dictionaryInputSupported(child int) bool {
-	if child == 0 && !shuffle.OwnedOutput && len(shuffle.ShuffleKeyColumns) == 0 && shuffle.ShuffleExpr == nil && shuffle.BucketNum > 0 {
-		return shuffle.ShuffleType == int32(plan.ShuffleType_Hash) || shuffle.ShuffleType == int32(plan.ShuffleType_Range)
-	}
-	return child == 0 && shuffle.OwnedOutput && shuffle.DrainAllBuckets &&
-		len(shuffle.ShuffleKeyColumns) > 0 && shuffle.ShuffleExpr == nil &&
-		shuffle.ShuffleType == int32(plan.ShuffleType_Hash)
-}
-
-// Marker forwarding can preserve a dictionary even though ordinary owned
-// partitions stay flat. Declare that edge so unknown destinations remain safe.
-func (shuffle *Shuffle) DictionaryOutput() (bool, *vector.AllocationAccountSelection) {
-	if !shuffle.OwnedOutput && shuffle.dictionaryInputSupported(0) && len(shuffle.Children) > 0 {
-		if child, ok := shuffle.GetChildren(0).(vm.DictionaryProducer); ok {
-			return child.DictionaryOutput()
-		}
-	}
-	return shuffle.OwnedOutput, shuffle.outputAllocation
-}
-func (shuffle *Shuffle) DictionaryOutputState() *vm.DictionaryOutputState {
-	return &shuffle.ctr.dictionaryBoundary
-}
-func (shuffle *Shuffle) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return shuffle.ctr.dictionaryBoundary.Normalize(input, proc.Mp())
 }
 
 func (shuffle *Shuffle) GetOperatorBase() *vm.OperatorBase {
@@ -132,13 +95,11 @@ func (shuffle *Shuffle) Release() {
 }
 
 type container struct {
-	dictionaryBoundary vm.DictionaryOutputState
 	ending             bool
 	pendingWholeBucket bool
 	sels               [][]int32
 	buf                *batch.Batch
 	pendingBat         *batch.Batch
-	partitionViews     *shufflePartitionViews
 	// Mixed input saves a visit ordinal; whole input saves its physical bucket.
 	pendingPosition      int
 	pendingOffset        int
@@ -195,7 +156,7 @@ func (shuffle *Shuffle) SetAllocationAccount(account *mpool.AllocationAccount) e
 	if shuffle.allocationAccount != nil && shuffle.allocationAccount != account {
 		return mpool.ErrAllocationAccountMismatch
 	}
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSet, 9, 10)
+	selection, err := mpool.NewAccountBinding(account, mpool.AllocationOwnerSet, 9)
 	if err != nil {
 		return err
 	}
@@ -307,7 +268,6 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.shufflePool = nil
 	shuffle.ctr.sels = nil
 	shuffle.ctr.ending = false
-	shuffle.freePartitionViews(proc)
 	shuffle.ctr.pendingBat = nil
 	shuffle.ctr.pendingPosition = 0
 	shuffle.ctr.pendingOffset = 0
@@ -380,7 +340,6 @@ func (shuffle *Shuffle) stopLocalProducer(failed bool, err error) {
 func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {
 	shuffle.freeKeyScratch(proc)
 	shuffle.ctr.buf = nil
-	shuffle.freePartitionViews(proc)
 	shuffle.ctr.pendingBat = nil
 	shuffle.ctr.pendingPosition = 0
 	shuffle.ctr.pendingOffset = 0

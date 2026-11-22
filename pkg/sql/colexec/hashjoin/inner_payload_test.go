@@ -32,15 +32,13 @@ import (
 
 func TestNonuniqueInnerLongProbePayloadCapacity(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		matches    int
-		probeRows  int
-		dictionary bool
+		name      string
+		matches   int
+		probeRows int
 	}{
 		{name: "duplicate group", matches: 128, probeRows: 1},
 		{name: "across gather chunks", matches: 2*hashmap.UnitLimit + 1, probeRows: 1},
 		{name: "different probe values", matches: 128, probeRows: 2},
-		{name: "dictionary bulk control", matches: 128, probeRows: 1, dictionary: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			keyType, textType := types.T_int64.ToType(), types.T_varchar.ToType()
@@ -50,13 +48,7 @@ func TestNonuniqueInnerLongProbePayloadCapacity(t *testing.T) {
 			join.arg.LeftTypes, join.arg.RightTypes = []types.Type{keyType, textType}, []types.Type{keyType}
 			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 			require.NoError(t, err)
-			limit := uint64(64 << 10)
-			if tc.dictionary {
-				// The existing dictionary repeat copier stores each payload.
-				// This control preserves its bulk-copy route and footprint.
-				limit = 4 << 20
-			}
-			account, err := registry.Open(limit)
+			account, err := registry.Open(64 << 10)
 			require.NoError(t, err)
 			t.Cleanup(func() {
 				require.Zero(t, account.Snapshot().Used)
@@ -64,8 +56,8 @@ func TestNonuniqueInnerLongProbePayloadCapacity(t *testing.T) {
 				require.NoError(t, err)
 			})
 			// Bound result copies independently of the retained build hash table.
-			join.arg.resultAllocation, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerHashBuild,
-				hashJoinAllocationSiteResultData, hashJoinAllocationSiteResultArea)
+			join.arg.resultAllocation, err = mpool.NewAccountBinding(account, mpool.AllocationOwnerHashBuild,
+				hashJoinAllocationSiteResultData)
 			require.NoError(t, err)
 			probe := batch.NewWithSchema(false, nil, join.arg.LeftTypes)
 			build := batch.NewWithSchema(false, nil, join.arg.RightTypes)
@@ -86,16 +78,6 @@ func TestNonuniqueInnerLongProbePayloadCapacity(t *testing.T) {
 				require.NoError(t, vector.AppendBytes(probe.Vecs[1], []byte(strings.Repeat(string(rune('a'+row)), 4096)), false, join.proc.Mp()))
 			}
 			probe.SetRowCount(tc.probeRows)
-			if tc.dictionary {
-				selected := make([]*vector.Vector, len(probe.Vecs))
-				admitted, err := vector.TrySelectDictionaryVectors(probe.Vecs, selected, []int64{0}, 1, join.proc.Mp(), nil)
-				require.NoError(t, err)
-				require.True(t, admitted)
-				for _, v := range probe.Vecs {
-					v.Free(join.proc.Mp())
-				}
-				probe.Vecs = selected
-			}
 			for range tc.matches {
 				require.NoError(t, vector.AppendFixed(build.Vecs[0], int64(1), false, join.proc.Mp()))
 			}
@@ -110,9 +92,6 @@ func TestNonuniqueInnerLongProbePayloadCapacity(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.probeRows*tc.matches, result.Batch.RowCount())
 			area := tc.probeRows * 4096
-			if tc.dictionary {
-				area *= tc.matches
-			}
 			require.Equal(t, area, len(result.Batch.Vecs[0].GetArea()))
 			for row := range result.Batch.RowCount() {
 				require.Equal(t, strings.Repeat(string(rune('a'+row/tc.matches)), 4096), string(result.Batch.Vecs[0].GetBytesAt(row)))

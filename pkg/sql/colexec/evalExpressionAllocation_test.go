@@ -28,8 +28,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// requireAccountCovers requires that account is charged at least the backing
+// storage of vecs: storage that grew outside the accounted view would leave
+// the account short.
+func requireAccountCovers(t *testing.T, account *mpool.AllocationAccount, vecs ...*vector.Vector) {
+	t.Helper()
+	var allocated uint64
+	for _, vec := range vecs {
+		if vec != nil {
+			allocated += uint64(vec.Allocated())
+		}
+	}
+	used := account.Snapshot().Used
+	require.Positive(t, used)
+	require.GreaterOrEqual(t, used, allocated)
+}
+
 func TestAccountedPrefixBetweenResultValidity(t *testing.T) {
-	proc, allocation, _ := dependentTestAllocation(t)
+	proc, allocation, account := dependentTestAllocation(t)
 	typ := types.T_varchar.ToType()
 	input := batch.NewWithSize(3)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
@@ -47,7 +63,7 @@ func TestAccountedPrefixBetweenResultValidity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []bool{false, true, false}, vector.MustFixedColNoTypeCheck[bool](result))
 	require.Zero(t, result.GetNulls().GetBitmap().CapWords())
-	require.Same(t, allocation, result.AllocationAccountSelection())
+	requireAccountCovers(t, account, result)
 	for _, arg := range input.Vecs {
 		arg.GetNulls().Add(1)
 		result, err = executor.Eval(proc, batches, nil)
@@ -60,7 +76,7 @@ func TestAccountedPrefixBetweenResultValidity(t *testing.T) {
 func TestAccountedFixedMaskedResultNullsAndReuse(t *testing.T) {
 	for _, oid := range []types.T{types.T_int64, types.T_decimal128} {
 		t.Run(oid.String(), func(t *testing.T) {
-			proc, allocation, _ := dependentTestAllocation(t)
+			proc, allocation, account := dependentTestAllocation(t)
 			typ := types.New(oid, 18, 0)
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
@@ -104,7 +120,7 @@ func TestAccountedFixedMaskedResultNullsAndReuse(t *testing.T) {
 						require.Equal(t, types.Decimal128{B0_63: uint64(row + 1)}, vector.GetFixedAtNoTypeCheck[types.Decimal128](result, row))
 					}
 				}
-				require.Same(t, allocation, result.AllocationAccountSelection())
+				requireAccountCovers(t, account, result)
 			}
 		})
 	}
@@ -132,7 +148,7 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 		_, err := registry.Finalize(account)
 		assert.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	typ := types.T_varchar.ToType()
 	column := &plan.Expr{
@@ -171,13 +187,13 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 
 	assertFunctionStorage := func(function *FunctionExpressionExecutor) {
 		t.Helper()
-		require.Same(t, selection, function.resultVector.GetResultVector().AllocationAccountSelection())
-		require.Same(t, selection, function.selectedResult.GetResultVector().AllocationAccountSelection())
-		for _, selected := range function.selectedParameterVectors {
-			if selected != nil {
-				require.Same(t, selection, selected.AllocationAccountSelection())
-			}
-		}
+		vecs := make([]*vector.Vector, 0, 2+len(function.selectedParameterVectors))
+		vecs = append(vecs,
+			function.resultVector.GetResultVector(),
+			function.selectedResult.GetResultVector(),
+		)
+		vecs = append(vecs, function.selectedParameterVectors...)
+		requireAccountCovers(t, account, vecs...)
 	}
 	// Grow the selected path beyond its account budget, then retry the same
 	// executor with a small partial batch. Admission failure must not poison it.
@@ -195,11 +211,13 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"aaAA-", "", "ccCC-", ""}, vector.InefficientMustStrCol(result))
 
+	fixed := root.parameterExecutor[2].(*FixedVectorExpressionExecutor)
 	assertFunctionStorage(root)
 	assertFunctionStorage(nested)
-	fixed := root.parameterExecutor[2].(*FixedVectorExpressionExecutor)
-	require.Same(t, selection, fixed.resultVector.AllocationAccountSelection())
-	require.Positive(t, account.Snapshot().Used)
+	requireAccountCovers(t, account,
+		root.resultVector.GetResultVector(), root.selectedResult.GetResultVector(),
+		nested.resultVector.GetResultVector(), nested.selectedResult.GetResultVector(),
+		fixed.resultVector)
 
 	// Reuse the allocation-accounted result vectors after the first evaluation.
 	// ResetWithSameType clears the bitmap logical length while retaining its
@@ -297,7 +315,7 @@ func TestAccountedFixedCrossDomainConstBroadcastUsesPhysicalMetadata(t *testing.
 		_, err := registry.Finalize(account)
 		assert.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	expression := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_varbinary)},

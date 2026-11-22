@@ -143,6 +143,13 @@ type Handler interface {
 		resp *cmd_util.GetChangedTableListResp,
 	) (func(), error)
 
+	HandleGetScopedChangedTables(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *cmd_util.GetScopedChangedTablesReq,
+		resp *cmd_util.GetScopedChangedTablesResp,
+	) (func(), error)
+
 	HandleFaultInject(
 		ctx context.Context,
 		meta txn.TxnMeta,

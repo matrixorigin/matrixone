@@ -227,7 +227,8 @@ func TestSortRollupAppendFailureAbortsAndReprepares(t *testing.T) {
 				} else {
 					require.Zero(t, s.outputRows)
 				}
-				oldSelection := s.output.Vecs[1].AllocationAccountSelection()
+				oldAccount := g.ctr.groupByAllocation.ViewAccount()
+				require.NotNil(t, oldAccount)
 				_, rejected := controller.snapshot()
 				require.True(t, rejected)
 				g.Reset(proc, true, err)
@@ -253,7 +254,8 @@ func TestSortRollupAppendFailureAbortsAndReprepares(t *testing.T) {
 				result, err = vm.Exec(g, proc)
 				require.NoError(t, err)
 				require.NotNil(t, result.Batch)
-				require.False(t, vector.AllocationAccountSelectionsEqual(oldSelection, result.Batch.Vecs[1].AllocationAccountSelection()))
+				require.NotSame(t, oldAccount, g.ctr.groupByAllocation.ViewAccount())
+				require.Same(t, allocation.account, g.ctr.groupByAllocation.ViewAccount())
 				require.Equal(t, []int64{1, 1}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1]))
 				for row := 0; row < 2; row++ {
 					require.Equal(t, types.Decimal128FromInt64(7), vector.GetFixedAtNoTypeCheck[types.Decimal128](result.Batch.Vecs[2], row))

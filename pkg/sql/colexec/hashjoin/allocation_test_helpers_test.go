@@ -50,8 +50,10 @@ func TestHashJoinResultBatchUsesAllocationAccount(t *testing.T) {
 	}
 	account := installTestAllocation(t, arg)
 	require.NoError(t, arg.resetResultBat())
-	require.Same(t, arg.resultAllocation, arg.ctr.resBat.Vecs[0].AllocationAccountSelection())
-	require.NoError(t, vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, proc.Mp()))
+	resMP, err := arg.resultMP(proc)
+	require.NoError(t, err)
+	require.Same(t, account, resMP.ViewAccount())
+	require.NoError(t, vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, resMP))
 	used := account.Snapshot().Used
 	require.Positive(t, used)
 	require.NoError(t, arg.resetResultBat())
@@ -76,7 +78,9 @@ func TestHashJoinResultBatchHonorsAllocationCapacity(t *testing.T) {
 	}
 	require.NoError(t, arg.SetAllocationAccount(account))
 	require.NoError(t, arg.resetResultBat())
-	err = vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, proc.Mp())
+	resMP, err := arg.resultMP(proc)
+	require.NoError(t, err)
+	err = vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, resMP)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Zero(t, account.Snapshot().Used)
 	arg.Reset(proc, false, nil)

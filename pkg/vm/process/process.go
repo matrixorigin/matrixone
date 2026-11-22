@@ -447,11 +447,13 @@ func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch
 }
 
 // NewBatchFromSrcWithAllocation creates an empty off-heap destination whose
-// first vector growth uses the supplied immutable allocation provenance.
+// preallocation is made through mp (an accounted view charges its account).
+// A nil mp means proc.Mp(). Later growth of the vectors charges whatever pool
+// the owner passes then; the batch carries no account.
 func (proc *Process) NewBatchFromSrcWithAllocation(
 	src *batch.Batch,
 	preAllocSize int,
-	selection *vector.AllocationAccountSelection,
+	mp *mpool.MPool,
 ) (_ *batch.Batch, retErr error) {
 	if proc == nil || src == nil || preAllocSize < 0 {
 		return nil, mpool.ErrAllocationAccountInvalid
@@ -470,15 +472,13 @@ func (proc *Process) NewBatchFromSrcWithAllocation(
 		}
 		bat.Vecs[i] = vector.NewOffHeapVecWithType(*src.Vecs[i].GetType())
 	}
-	if selection != nil {
-		if err := bat.SetAllocationAccount(selection); err != nil {
-			return nil, err
-		}
+	if mp == nil {
+		mp = proc.Mp()
 	}
 	for i := range bat.Vecs {
 		v := bat.Vecs[i]
 		if v.Capacity() < preAllocSize {
-			err := v.PreExtend(preAllocSize, proc.Mp())
+			err := v.PreExtend(preAllocSize, mp)
 			if err != nil {
 				return nil, err
 			}

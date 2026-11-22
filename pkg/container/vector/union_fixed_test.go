@@ -57,8 +57,9 @@ func TestUnionPlainFixedSelectionReuse(t *testing.T) {
 								mp.Free(data)
 							}
 							require.NoError(t, leaseErr)
-							input, err = NewBorrowedFixedVector(oid.ToType(), 4, data, lease)
-							lease.Release()
+							input, err = NewBorrowedFixedVector(oid.ToType(), 4, data)
+							// The test is the lender: it frees data after input.
+							t.Cleanup(lease.Release)
 						}
 						require.NoError(t, err)
 						t.Cleanup(func() { input.Free(mp) })

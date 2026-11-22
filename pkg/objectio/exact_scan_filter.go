@@ -97,7 +97,6 @@ func (s *ExactScanState) Close() {
 	}
 	s.clearViews()
 	if s.rows != nil {
-		vector.PutSels(s.rows)
 		s.rows = nil
 	}
 	s.views = nil
@@ -171,9 +170,6 @@ func MaterializeExactScan(ctx context.Context, entries []fileservice.IOEntry,
 	}
 	rows := inputRows
 	if eligible {
-		if state.rows == nil {
-			state.rows = vector.GetSels()
-		}
 		if need := max(n, len(inputRows)); cap(state.rows) < need {
 			state.rows = make([]int64, 0, need)
 		}

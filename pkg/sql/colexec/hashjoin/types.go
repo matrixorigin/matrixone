@@ -67,12 +67,10 @@ const (
 )
 
 type container struct {
-	dictionaryBoundary vm.DictionaryOutputState
-	probeOutput        *identityProbeOutput
-	state              int
-	itr                hashmap.Iterator
-	rightBats          []*batch.Batch
-	rightRowCnt        int64
+	state       int
+	itr         hashmap.Iterator
+	rightBats   []*batch.Batch
+	rightRowCnt int64
 	// globalBuildRowCnt is independent of the currently loaded spill bucket.
 	// MARK join needs the global empty-build fact for SQL three-valued logic.
 	globalBuildRowCnt int64
@@ -152,10 +150,13 @@ type container struct {
 	asofBuildLeftIndexed       bool
 	asofBuildLeftProbeSequence uint64
 	asofBuildLeftBestRight     *batch.Batch
-	asofBuildLeftInitialized   bool
-	asofBuildLeftFinalRow      int64
-	asofBuildLeftLiveBytes     int64
-	asofBuildLeftDeadBytes     int64
+	// asofBuildLeftBestRightMP is the candidate-account view the retained
+	// right payload grows through.
+	asofBuildLeftBestRightMP *mpool.MPool
+	asofBuildLeftInitialized bool
+	asofBuildLeftFinalRow    int64
+	asofBuildLeftLiveBytes   int64
+	asofBuildLeftDeadBytes   int64
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -264,8 +265,8 @@ type HashJoin struct {
 	// retain bounded predecessor candidates, then finalize the left rows.
 	AsofBuildLeft           bool
 	allocationAccount       *mpool.AllocationAccount
-	resultAllocation        *vector.AllocationAccountSelection
-	asofCandidateAllocation *vector.AllocationAccountSelection
+	resultAllocation        *mpool.AccountBinding
+	asofCandidateAllocation *mpool.AccountBinding
 	// recursiveProbe is derived from the operator tree during Prepare. An empty
 	// build must still drain a recursive probe until its round marker.
 	recursiveProbe bool
@@ -292,20 +293,18 @@ func (hashJoin *HashJoin) SetAllocationAccount(
 	if hashJoin.allocationAccount == account {
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		hashJoinAllocationSiteResultData,
-		hashJoinAllocationSiteResultArea,
 	)
 	if err != nil {
 		return err
 	}
-	asofCandidateSelection, err := vector.NewAllocationAccountSelection(
+	asofCandidateSelection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		hashJoinAllocationSiteAsofCandidateData,
-		hashJoinAllocationSiteAsofCandidateArea,
 	)
 	if err != nil {
 		return err
@@ -356,6 +355,12 @@ func (hashJoin *HashJoin) ClearAllocationAccount(
 	return nil
 }
 
+// resultMP returns the pool result-batch vectors grow through: the result
+// account view when an account is bound, otherwise proc's pool.
+func (hashJoin *HashJoin) resultMP(proc *process.Process) (*mpool.MPool, error) {
+	return hashJoin.resultAllocation.MP(proc.Mp())
+}
+
 func (hashJoin *HashJoin) GetOperatorBase() *vm.OperatorBase {
 	return &hashJoin.OperatorBase
 }
@@ -403,7 +408,6 @@ func (hashJoin *HashJoin) Release() {
 }
 
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	hashJoin.observeProbeOutput()
 	if hashJoin.JoinDiagnostic != nil {
 		hashJoin.JoinDiagnostic.Reset()
 	}
@@ -445,7 +449,6 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
-	hashJoin.observeProbeOutput()
 	if hashJoin.JoinDiagnostic != nil {
 		hashJoin.JoinDiagnostic.Reset()
 	}
@@ -508,6 +511,7 @@ func (ctr *container) cleanAsofBuildLeftState(proc *process.Process) {
 	ctr.asofBuildLeftIndexed = false
 	ctr.asofBuildLeftProbeSequence = 0
 	ctr.asofBuildLeftBestRight = nil
+	ctr.asofBuildLeftBestRightMP = nil
 	ctr.asofBuildLeftInitialized = false
 	ctr.asofBuildLeftFinalRow = 0
 	ctr.asofBuildLeftLiveBytes = 0
@@ -522,10 +526,6 @@ func (ctr *container) cleanNonEqCondExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	if ctr.probeOutput != nil {
-		ctr.probeOutput.free(proc)
-		ctr.probeOutput = nil
-	}
 	ctr.rightBats = nil
 	if ctr.resBat != nil {
 		ctr.resBat.Clean(proc.GetMPool())

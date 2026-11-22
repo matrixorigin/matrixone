@@ -857,11 +857,10 @@ func TestCaseFixedNullElse(t *testing.T) {
 		require.NoError(t, err)
 		account, err := registry.Open(1 << 20)
 		require.NoError(t, err)
-		selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+		selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 		require.NoError(t, err)
 		tc.result.Free()
-		tc.result, err = vector.NewFunctionResultWrapperWithAllocation(types.T_int64.ToType(), proc.Mp(), selection)
-		require.NoError(t, err)
+		tc.result = vector.NewFunctionResultWrapper(types.T_int64.ToType(), selection)
 		for _, n := range []int{130, 65, 130} {
 			require.NoError(t, tc.result.PreExtendAndReset(n))
 			require.NoError(t, caseFn(tc.parameters, tc.result, proc, n, nil))

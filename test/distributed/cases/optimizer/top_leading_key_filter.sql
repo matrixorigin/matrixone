@@ -20,6 +20,7 @@ select id, k from history order by k desc, id desc limit 3;
 select id, k from history order by k desc, id asc limit 3;
 select id, k from history order by k asc, id desc limit 3;
 select id, k from history order by k desc, id desc limit 2 offset 1;
+select id, k from history order by k desc, id asc, k asc limit 2 offset 1;
 select id, k from history order by k desc, id desc limit 20;
 select id, k from history where k < 0 order by k desc, id desc limit 3;
 
@@ -31,6 +32,8 @@ select id, k from history order by k asc, id desc limit 3;
 select id, k from history order by k desc, id desc limit 2 offset 1;
 set session optimizer_hints = 'execType=2,sendMessageFromTopToScan=1';
 select id, k from history order by k desc, id asc limit 3;
+
+select id, k from history order by k desc, id asc, k asc limit 2 offset 1;
 
 -- NULL 和表达式首键保守回退，不改变排序语义。
 create table nullable_keys (id int not null, k int);

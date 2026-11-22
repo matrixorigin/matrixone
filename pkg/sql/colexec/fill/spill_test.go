@@ -104,17 +104,17 @@ func TestFillSpillLinearMarkerFailurePreservesSource(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(mpool.MB)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
+	view, err := markerMP.WithAccount(
 		account,
 		mpool.AllocationOwnerFill,
 		fillAllocationSiteRetainedData,
-		fillAllocationSiteRetainedArea,
+		mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
-	borrowed, err := makeBorrowedSpillBatch(source, 1, markerMP, selection)
+	borrowed, err := makeBorrowedSpillBatch(source, 1, markerMP, view)
 	require.NoError(t, err)
 	linearMarkers := false
-	err = addLinearDistanceMarkers(borrowed, 1, markerMP, selection)
+	err = addLinearDistanceMarkers(borrowed, 1, markerMP, view)
 	require.Error(t, err)
 	releaseBorrowedSpillBatch(borrowed, 1, linearMarkers, markerMP)
 

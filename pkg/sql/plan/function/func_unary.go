@@ -6800,7 +6800,7 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		sels[j] = int64(j)
 	}
 
-	err := toVec.Union(fromVec, sels, proc.GetMPool())
+	err := toVec.Union(fromVec, sels, resultMPool(result, proc))
 	return err
 }
 
@@ -6810,7 +6810,7 @@ func builtInNameConst(parameters []*vector.Vector, result vector.FunctionResultW
 	toVec.Reset(*toVec.GetType())
 
 	for i := 0; i < length; i++ {
-		if err := toVec.UnionOne(fromVec, int64(i), proc.Mp()); err != nil {
+		if err := toVec.UnionOne(fromVec, int64(i), resultMPool(result, proc)); err != nil {
 			return err
 		}
 	}
@@ -9769,7 +9769,7 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 			data, null := source.GetStrValue(j)
 			if !null {
 				decodedSize := base64.StdEncoding.DecodedLen(len(data))
-				_ = rs.GetResultVector().PreExtendWithArea(length, decodedSize*length, proc.Mp())
+				_ = rs.GetResultVector().PreExtendWithArea(length, decodedSize*length, resultMPool(result, proc))
 				break
 			}
 		}

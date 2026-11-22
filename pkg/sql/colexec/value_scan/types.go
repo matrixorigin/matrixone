@@ -15,6 +15,7 @@
 package value_scan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -37,6 +38,9 @@ type ValueScan struct {
 	Batchs        []*batch.Batch
 	RowsetData    *plan2.RowsetData
 	ExprExecLists [][]colexec.ExpressionExecutor
+	// Allocation is the accounted view of the process pool that Batchs'
+	// vectors allocate through, or nil for unaccounted batches.
+	Allocation *mpool.MPool
 }
 
 type container struct {

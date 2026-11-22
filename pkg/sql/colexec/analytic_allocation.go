@@ -15,20 +15,23 @@
 package colexec
 
 import (
+	"math"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
-	"unsafe"
 )
 
 // AnalyticAllocation keeps expression, buffered-vector and aggregate payloads
 // in the same statement account across Window and TimeWin native generations.
 type AnalyticAllocation struct {
-	Account   *mpool.AllocationAccount
-	Vector    *vector.AllocationAccountSelection
+	Account *mpool.AllocationAccount
+	// vectors is the accounted view of the operator's pool that charges its
+	// output vectors; built on first use by MP.
+	vectors   *mpool.MPool
 	Aggregate *aggexec.AllocationAccount
 	budget    *process.ExecutionResourceGeneration
 	metadata  uint64
@@ -44,16 +47,12 @@ func (a *AnalyticAllocation) Set(account *mpool.AllocationAccount) error {
 	if a.Account == account {
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerWindow, 1, 2)
-	if err != nil {
-		return err
-	}
 	aggregate, err := aggexec.NewAllocationAccount(account, mpool.AllocationOwnerWindow, aggexec.AllocationAccountSites{
 		VectorData: 5, VectorArea: 6, ArgumentCount: 9, ArgumentArena: 10})
 	if err != nil {
 		return err
 	}
-	a.Account, a.Vector, a.Aggregate = account, selection, aggregate
+	a.Account, a.vectors, a.Aggregate = account, nil, aggregate
 	return nil
 }
 func (a *AnalyticAllocation) Clear(account *mpool.AllocationAccount) error {
@@ -140,11 +139,31 @@ func GrowAnalyticSlice[T any](old []T, length int, proc *process.Process, a *Ana
 	a.ReleaseMetadata(uint64(cap(old)) * width)
 	return next, nil
 }
+
+// NewVector creates an empty output vector. With an account bound it is an
+// off-heap vector the caller must grow through MP(proc).
 func (a *AnalyticAllocation) NewVector(typ types.Type) (*vector.Vector, error) {
-	if a.Vector == nil {
+	if a.Account == nil {
 		return vector.NewVec(typ), nil
 	}
-	return vector.NewOffHeapVecWithTypeAndAllocation(typ, a.Vector)
+	return vector.NewOffHeapVecWithType(typ), nil
+}
+
+// MP returns the pool analytic output vectors allocate from: an accounted view
+// of proc's pool when an account is bound, otherwise proc's pool.
+func (a *AnalyticAllocation) MP(proc *process.Process) (*mpool.MPool, error) {
+	if a.Account == nil {
+		return proc.Mp(), nil
+	}
+	if a.vectors == nil {
+		view, err := proc.Mp().WithAccount(
+			a.Account, mpool.AllocationOwnerWindow, 1, mpool.AllocationCapacityClassDefault)
+		if err != nil {
+			return nil, err
+		}
+		a.vectors = view
+	}
+	return a.vectors, nil
 }
 func (a *AnalyticAllocation) BindAggregate(exec aggexec.AggFuncExec) error {
 	if a.Aggregate == nil {

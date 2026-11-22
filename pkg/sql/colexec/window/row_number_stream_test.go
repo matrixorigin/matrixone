@@ -63,27 +63,30 @@ func newStreamingRowNumber(t *testing.T) *Window {
 		Frame:      &plan.FrameClause{Type: plan.FrameClause_ROWS, Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true}, End: &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, UnBounded: true}},
 	}}}}}
 }
-func rowNumberInput(t *testing.T, proc *process.Process, selection *vector.AllocationAccountSelection, start, n int) *batch.Batch {
+func rowNumberInput(t *testing.T, proc *process.Process, view *mpool.MPool, start, n int) *batch.Batch {
 	b := batch.NewWithSize(2)
 	t.Cleanup(func() { b.Clean(proc.Mp()) })
+	mp := proc.Mp()
+	if view != nil {
+		mp = view
+	}
 	for col, typ := range []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()} {
 		var err error
-		if selection != nil {
-			b.Vecs[col], err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
-			require.NoError(t, err)
+		if view != nil {
+			b.Vecs[col] = vector.NewOffHeapVecWithType(typ)
 		} else {
 			b.Vecs[col] = vector.NewVec(typ)
 		}
 		for i := range n {
 			if col == 0 {
-				err = vector.AppendFixed(b.Vecs[col], int64(start+i), false, proc.Mp())
+				err = vector.AppendFixed(b.Vecs[col], int64(start+i), false, mp)
 			} else {
-				err = vector.AppendBytes(b.Vecs[col], []byte(strings.Repeat("x", 64)), i%3 == 1, proc.Mp())
+				err = vector.AppendBytes(b.Vecs[col], []byte(strings.Repeat("x", 64)), i%3 == 1, mp)
 			}
 			require.NoError(t, err)
 		}
 	}
-	require.NoError(t, b.Vecs[1].PreExtendGrouping(n, proc.Mp()))
+	require.NoError(t, b.Vecs[1].PreExtendGrouping(n, mp))
 	for i := range n {
 		if i%5 == 2 {
 			b.Vecs[1].GetGrouping().Set(uint64(i))
@@ -103,11 +106,11 @@ func TestRowNumberStreamStreaming(t *testing.T) {
 			sourceRegistry, err := mpool.NewAllocationAccountRegistry(1, 64)
 			require.NoError(t, err)
 			var source *mpool.AllocationAccount
-			var selection *vector.AllocationAccountSelection
+			var selection *mpool.MPool
 			if sourceAccounted {
 				source, err = sourceRegistry.Open(4 << 20)
 				require.NoError(t, err)
-				selection, err = vector.NewAllocationAccountSelection(source, mpool.AllocationOwnerOrder, 1, 2)
+				selection, err = mp.WithAccount(source, mpool.AllocationOwnerOrder, 1, mpool.AllocationCapacityClassDefault)
 				require.NoError(t, err)
 			}
 			first := rowNumberInput(t, proc, selection, 0, 3)
@@ -284,7 +287,7 @@ func TestRowNumberStreamSharedAccountAndInputReuse(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(4 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2)
+	selection, err := mp.WithAccount(account, mpool.AllocationOwnerOrder, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	rows := colexec.DefaultBatchSize + 3
 	input := rowNumberInput(t, proc, selection, 0, rows)

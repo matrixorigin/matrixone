@@ -161,7 +161,6 @@ func TestHashJoinProbeOutputArea(t *testing.T) {
 		joinType       plan.Node_JoinType
 		valueBytes     int
 		uniqueBuild    bool
-		dictionary     bool
 		residual       bool
 		buildPayload   bool
 		probeKeys      []int32
@@ -175,16 +174,8 @@ func TestHashJoinProbeOutputArea(t *testing.T) {
 			buildKeys: []int32{1, 1, 2}, batchRows: []int{2},
 		},
 		{
-			name: "semi-dictionary", joinType: plan.Node_SEMI, valueBytes: 600 << 10,
-			buildKeys: []int32{1, 1, 2}, dictionary: true, batchRows: []int{1, 1}, checkProbeArea: true,
-		},
-		{
 			name: "unique-inner-flat", joinType: plan.Node_INNER, valueBytes: 256 << 10,
 			uniqueBuild: true, batchRows: []int{2},
-		},
-		{
-			name: "unique-inner-dictionary", joinType: plan.Node_INNER, valueBytes: 600 << 10,
-			uniqueBuild: true, dictionary: true, batchRows: []int{1, 1}, checkProbeArea: true,
 		},
 		{
 			name: "inner-flat-fan-out", joinType: plan.Node_INNER, valueBytes: 384 << 10,
@@ -256,25 +247,11 @@ func TestHashJoinProbeOutputArea(t *testing.T) {
 			}
 			payload := vector.NewOffHeapVecWithType(textType)
 			value := bytes.Repeat([]byte{'x'}, shape.valueBytes)
-			if shape.dictionary {
-				t.Cleanup(func() { payload.Free(mp) })
+			source.Vecs = append(source.Vecs, payload)
+			for range source.RowCount() {
 				require.NoError(t, vector.AppendBytes(payload, value, false, mp))
-				base, err := vector.FreezeVector(payload, mp, nil)
-				require.NoError(t, err)
-				t.Cleanup(base.Release)
-				selection, err := vector.NewRowSelection([]int64{0, 0}, 1, mp, nil)
-				require.NoError(t, err)
-				t.Cleanup(selection.Release)
-				dictionary, err := vector.NewDictionaryVector(base, selection, mp, nil)
-				require.NoError(t, err)
-				source.Vecs = append(source.Vecs, dictionary)
-			} else {
-				source.Vecs = append(source.Vecs, payload)
-				for range source.RowCount() {
-					require.NoError(t, vector.AppendBytes(payload, value, false, mp))
-				}
-				require.True(t, payload.VarlenaAreaIsDisjoint())
 			}
+			require.True(t, payload.VarlenaAreaIsDisjoint())
 
 			resetChildrenWithBatch(tc.arg, probe)
 			resetHashBuildChildrenWithBatch(tc.barg, build)

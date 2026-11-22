@@ -1775,7 +1775,7 @@ func cloneExportWorkerBatch(
 	bat *batch.Batch,
 	mp *mpool.MPool,
 ) (*batch.Batch, error) {
-	return bat.DupWithoutAllocationAccount(mp)
+	return bat.Dup(mp)
 }
 
 // writeParquet writes a batch to the parquet writer

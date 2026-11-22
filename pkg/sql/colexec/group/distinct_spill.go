@@ -495,7 +495,7 @@ func (c *distinctSpillController) readRecordWithRepresentative(
 		return
 	}
 	aggregate = int(aggregate32)
-	if err = unmarshalSpillGroupByRows(payloadReader, groups, 1, c.ctr.mp); err != nil {
+	if err = unmarshalSpillGroupByRows(payloadReader, groups, 1, c.ctr.spillGroupByMP()); err != nil {
 		return
 	}
 	payloadLength, readErr := types.ReadInt32AsInt(payloadReader)
@@ -747,7 +747,7 @@ func (c *distinctSpillController) readContribution(
 		return
 	}
 	aggregate = int(aggregate32)
-	if err = unmarshalSpillGroupByRows(payloadReader, groups, 1, c.ctr.mp); err != nil {
+	if err = unmarshalSpillGroupByRows(payloadReader, groups, 1, c.ctr.spillGroupByMP()); err != nil {
 		return
 	}
 	if count, err = types.ReadUint64(payloadReader); err != nil {
@@ -1291,7 +1291,7 @@ func (c *distinctSpillController) externalSortH0Partition(
 		return nil, err
 	}
 	groups, err := c.ctr.createNewGroupByBatchWithAllocation(
-		nil, 1, c.ctr.spillGroupByAllocation)
+		nil, 1, c.ctr.spillGroupByMP())
 	if err != nil {
 		return nil, err
 	}
@@ -1915,7 +1915,7 @@ func (ctr *container) finalizeH0ExactCountDistinct(
 	}
 	controller := ctr.distinctSpill
 	groups, err := ctr.createNewGroupByBatchWithAllocation(
-		nil, 1, ctr.spillGroupByAllocation)
+		nil, 1, ctr.spillGroupByMP())
 	if err != nil {
 		return err
 	}
@@ -1965,37 +1965,21 @@ func (ctr *container) finalizeGroupedDistinctLeaf(
 	}
 	defer reader.Free()
 
-	aggregateVector, err := vector.NewOffHeapVecWithTypeAndAllocation(
-		types.T_int32.ToType(), ctr.spillGroupByAllocation)
-	if err != nil {
-		return err
-	}
+	aggregateVector := vector.NewOffHeapVecWithType(types.T_int32.ToType())
 	defer aggregateVector.Free(ctr.mp)
-	payloadVector, err := vector.NewOffHeapVecWithTypeAndAllocation(
-		types.T_varbinary.ToType(), ctr.spillGroupByAllocation)
-	if err != nil {
-		return err
-	}
+	payloadVector := vector.NewOffHeapVecWithType(types.T_varbinary.ToType())
 	defer payloadVector.Free(ctr.mp)
 	composite := make([]*vector.Vector, len(ctr.groupByTypes)+2)
 
 	uniqueGroups, err := ctr.createNewGroupByBatchWithAllocation(
-		nil, min(int(partition.cnt), hashmap.UnitLimit), ctr.spillGroupByAllocation)
+		nil, min(int(partition.cnt), hashmap.UnitLimit), ctr.spillGroupByMP())
 	if err != nil {
 		return err
 	}
 	defer uniqueGroups.Clean(ctr.mp)
-	uniqueAggregates, err := vector.NewOffHeapVecWithTypeAndAllocation(
-		types.T_int32.ToType(), ctr.spillGroupByAllocation)
-	if err != nil {
-		return err
-	}
+	uniqueAggregates := vector.NewOffHeapVecWithType(types.T_int32.ToType())
 	defer uniqueAggregates.Free(ctr.mp)
-	uniqueHashes, err := vector.NewOffHeapVecWithTypeAndAllocation(
-		types.T_uint64.ToType(), ctr.spillGroupByAllocation)
-	if err != nil {
-		return err
-	}
+	uniqueHashes := vector.NewOffHeapVecWithType(types.T_uint64.ToType())
 	defer uniqueHashes.Free(ctr.mp)
 
 	var dedup ResHashRelated
@@ -2046,10 +2030,10 @@ func (ctr *container) finalizeGroupedDistinctLeaf(
 		aggregateVector.CleanOnlyData()
 		payloadVector.CleanOnlyData()
 		if err := vector.AppendFixed(
-			aggregateVector, int32(aggregate), false, ctr.mp); err != nil {
+			aggregateVector, int32(aggregate), false, ctr.spillGroupByMP()); err != nil {
 			return err
 		}
-		if err := vector.AppendBytes(payloadVector, payload, false, ctr.mp); err != nil {
+		if err := vector.AppendBytes(payloadVector, payload, false, ctr.spillGroupByMP()); err != nil {
 			return err
 		}
 		copy(composite, groups.Vecs)
@@ -2064,17 +2048,17 @@ func (ctr *container) finalizeGroupedDistinctLeaf(
 		}
 		for column := range uniqueGroups.Vecs {
 			if err := uniqueGroups.Vecs[column].UnionOne(
-				groups.Vecs[column], 0, ctr.mp); err != nil {
+				groups.Vecs[column], 0, ctr.spillGroupByMP()); err != nil {
 				return err
 			}
 		}
 		uniqueGroups.AddRowCount(1)
 		if err := vector.AppendFixed(
-			uniqueAggregates, int32(aggregate), false, ctr.mp); err != nil {
+			uniqueAggregates, int32(aggregate), false, ctr.spillGroupByMP()); err != nil {
 			return err
 		}
 		if err := vector.AppendFixed(
-			uniqueHashes, groupHash, false, ctr.mp); err != nil {
+			uniqueHashes, groupHash, false, ctr.spillGroupByMP()); err != nil {
 			return err
 		}
 	}
@@ -2268,22 +2252,14 @@ func (ctr *container) writeCompactedDistinctContributions(
 	composite[len(uniqueGroups.Vecs)] = uniqueAggregates
 
 	compactGroups, err := ctr.createNewGroupByBatchWithAllocation(
-		nil, min(rows, hashmap.UnitLimit), ctr.spillGroupByAllocation)
+		nil, min(rows, hashmap.UnitLimit), ctr.spillGroupByMP())
 	if err != nil {
 		return err
 	}
 	defer compactGroups.Clean(ctr.mp)
-	compactAggregates, err := vector.NewOffHeapVecWithTypeAndAllocation(
-		types.T_int32.ToType(), ctr.spillGroupByAllocation)
-	if err != nil {
-		return err
-	}
+	compactAggregates := vector.NewOffHeapVecWithType(types.T_int32.ToType())
 	defer compactAggregates.Free(ctr.mp)
-	compactHashes, err := vector.NewOffHeapVecWithTypeAndAllocation(
-		types.T_uint64.ToType(), ctr.spillGroupByAllocation)
-	if err != nil {
-		return err
-	}
+	compactHashes := vector.NewOffHeapVecWithType(types.T_uint64.ToType())
 	defer compactHashes.Free(ctr.mp)
 	counts, err := resizeGroupScratch[uint64](
 		ctr, nil, rows, GroupAllocationSiteSpillRows)
@@ -2318,17 +2294,17 @@ func (ctr *container) writeCompactedDistinctContributions(
 		}
 		for column := range compactGroups.Vecs {
 			if err := compactGroups.Vecs[column].UnionOne(
-				uniqueGroups.Vecs[column], int64(row), ctr.mp); err != nil {
+				uniqueGroups.Vecs[column], int64(row), ctr.spillGroupByMP()); err != nil {
 				return err
 			}
 		}
 		compactGroups.AddRowCount(1)
 		if err := vector.AppendFixed(
-			compactAggregates, aggregates[row], false, ctr.mp); err != nil {
+			compactAggregates, aggregates[row], false, ctr.spillGroupByMP()); err != nil {
 			return err
 		}
 		if err := vector.AppendFixed(
-			compactHashes, hashes[row], false, ctr.mp); err != nil {
+			compactHashes, hashes[row], false, ctr.spillGroupByMP()); err != nil {
 			return err
 		}
 	}
@@ -2384,7 +2360,7 @@ func (ctr *container) finalizeSingleGroupDistinctPartition(
 		return false, err
 	}
 	representative, err := ctr.createNewGroupByBatchWithAllocation(
-		nil, 1, ctr.spillGroupByAllocation)
+		nil, 1, ctr.spillGroupByMP())
 	if err != nil {
 		return false, err
 	}
@@ -2415,7 +2391,7 @@ func (ctr *container) finalizeSingleGroupDistinctPartition(
 		groupHash = recordGroupHash
 		for column := range representative.Vecs {
 			if err := representative.Vecs[column].UnionOne(
-				decodeGroups.Vecs[column], 0, ctr.mp); err != nil {
+				decodeGroups.Vecs[column], 0, ctr.spillGroupByMP()); err != nil {
 				return false, err
 			}
 		}
@@ -2612,7 +2588,7 @@ func (c *distinctSpillController) repartitionContributions(
 	}
 	defer reader.Free()
 	groups, err := c.ctr.createNewGroupByBatchWithAllocation(
-		nil, 1, c.ctr.spillGroupByAllocation)
+		nil, 1, c.ctr.spillGroupByMP())
 	if err != nil {
 		return err
 	}
@@ -2791,7 +2767,7 @@ func (ctr *container) applyDistinctContributions(
 	}
 	defer reader.Free()
 	groups, err := ctr.createNewGroupByBatchWithAllocation(
-		nil, 1, ctr.spillGroupByAllocation)
+		nil, 1, ctr.spillGroupByMP())
 	if err != nil {
 		return err
 	}
@@ -2881,7 +2857,7 @@ func (ctr *container) prepareGroupedDistinctContributions(
 	}
 	controller := ctr.distinctSpill
 	groups, err := ctr.createNewGroupByBatchWithAllocation(
-		nil, 1, ctr.spillGroupByAllocation)
+		nil, 1, ctr.spillGroupByMP())
 	if err != nil {
 		return err
 	}
@@ -3041,7 +3017,7 @@ func (ctr *container) loadNextDistinctPartialLeaf(
 	}
 	controller := ctr.distinctSpill
 	decodeGroups, err := ctr.createNewGroupByBatchWithAllocation(
-		nil, 1, ctr.spillGroupByAllocation)
+		nil, 1, ctr.spillGroupByMP())
 	if err != nil {
 		return false, err
 	}

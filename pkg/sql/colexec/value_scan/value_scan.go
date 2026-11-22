@@ -19,6 +19,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -37,6 +38,7 @@ func (valueScan *ValueScan) String(buf *bytes.Buffer) {
 }
 
 func evalRowsetData(proc *process.Process, rowsetExpr []*plan.RowsetExpr, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor, input *batch.Batch,
+	mp *mpool.MPool,
 ) error {
 	if vec == nil {
 		return moerr.NewInternalErrorNoCtx("value scan has no destination vector")
@@ -97,7 +99,7 @@ func evalRowsetData(proc *process.Process, rowsetExpr []*plan.RowsetExpr, vec *v
 		}
 		// Constant/folded executors return a scalar vector; row-local executors
 		// receive a one-row window. Both are copied from their first value.
-		if err := vec.Copy(val, int64(rowsetExpr[i].RowPos), 0, proc.Mp()); err != nil {
+		if err := vec.Copy(val, int64(rowsetExpr[i].RowPos), 0, mp); err != nil {
 			return err
 		}
 	}
@@ -238,6 +240,15 @@ func valueScanColumnOrder(rowsetData *plan.RowsetData) ([]int, error) {
 	return order, nil
 }
 
+// mp returns the pool the value batch allocates from: the Allocation view
+// when one is bound, otherwise proc's pool.
+func (valueScan *ValueScan) mp(proc *process.Process) *mpool.MPool {
+	if valueScan.Allocation != nil {
+		return valueScan.Allocation
+	}
+	return proc.Mp()
+}
+
 func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (err error) {
 	var exprList []colexec.ExpressionExecutor
 
@@ -273,7 +284,7 @@ func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (err error
 			continue
 		}
 		vec := bat.Vecs[i]
-		if err := evalRowsetData(proc, valueScan.RowsetData.Cols[i].Data, vec, exprList, bat); err != nil {
+		if err := evalRowsetData(proc, valueScan.RowsetData.Cols[i].Data, vec, exprList, bat, valueScan.mp(proc)); err != nil {
 			return err
 		}
 	}

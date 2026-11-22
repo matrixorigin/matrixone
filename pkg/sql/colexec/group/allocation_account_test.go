@@ -765,13 +765,11 @@ func TestResetForSpillReleasesGroupingSentinel(t *testing.T) {
 	require.NoError(t, g.Prepare(proc))
 
 	before := allocation.account.Snapshot().Used
-	rollup, err := vector.NewRollupConstWithAllocation(
+	rollup := vector.NewRollupConst(
 		types.T_int32.ToType(),
 		hashmap.UnitLimit,
-		g.ctr.mp,
-		g.ctr.expressionAllocation,
+		g.ctr.rollupMP(),
 	)
-	require.NoError(t, err)
 	g.ctr.groupingRollup = []*vector.Vector{rollup}
 
 	g.ctr.resetForSpill()
@@ -811,11 +809,8 @@ func TestAccountedGroupProjectionClosesBeforePreparedAttemptTerminal(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
 	require.Len(t, result.Batch.Vecs, 1)
-	require.Same(
-		t,
-		g.ctr.expressionAllocation,
-		result.Batch.Vecs[0].AllocationAccountSelection(),
-	)
+	require.NotNil(t, g.ctr.expressionAllocation)
+	require.Same(t, allocation.account, g.ctr.expressionAllocation.ViewAccount())
 
 	// Prepared execution performs Reset without Free before the statement
 	// allocation attempt reaches its terminal boundary.
@@ -883,18 +878,17 @@ func TestConstVarlenaGroupKeyPreflightCopiesPayloadOnce(t *testing.T) {
 		require.NoError(t, err)
 		account, err := registry.Open(limit)
 		require.NoError(t, err)
-		selection, err := vector.NewAllocationAccountSelection(
+		view, err := mp.WithAccount(
 			account,
 			mpool.AllocationOwnerGroup,
 			GroupAllocationSiteKeyData,
-			GroupAllocationSiteKeyArea,
+			mpool.AllocationCapacityClassDefault,
 		)
 		require.NoError(t, err)
 		source, err := vector.NewConstBytes(
 			types.T_text.ToType(), payload, rows, mp)
 		require.NoError(t, err)
 		destination := vector.NewOffHeapVecWithType(types.T_text.ToType())
-		require.NoError(t, destination.SetAllocationAccount(selection))
 		defer func() {
 			destination.Free(mp)
 			source.Free(mp)
@@ -907,10 +901,10 @@ func TestConstVarlenaGroupKeyPreflightCopiesPayloadOnce(t *testing.T) {
 
 		var preflight vector.SelectedBatchPreflight
 		preflight, err = destination.PreExtendSelectedBatch(
-			source, 0, rows, flags, rows, mp)
+			source, 0, rows, flags, rows, view)
 		admitted := account.Snapshot().Used
 		if err == nil {
-			err = destination.UnionBatchPreflighted(source, 0, rows, flags, &preflight, mp)
+			err = destination.UnionBatchPreflighted(source, 0, rows, flags, &preflight, view)
 			if err == nil {
 				require.Equal(t, admitted, account.Snapshot().Used)
 				require.Equal(t, len(payload), len(destination.GetArea()))
@@ -3153,7 +3147,7 @@ func TestStreamingGroupMixedDistinctSpill(t *testing.T) {
 							break
 						}
 						// The transport copy outlives this producer's allocation account.
-						cloned, err := result.Batch.DupWithoutAllocationAccount(proc.Mp())
+						cloned, err := result.Batch.Dup(proc.Mp())
 						require.NoError(t, err)
 						cloned.ExtraBuf = append([]byte(nil), result.Batch.ExtraBuf...)
 						partials = append(partials, cloned)

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -56,7 +57,7 @@ func dependentFunction(t *testing.T, proc *process.Process, name string, args ..
 
 type dependentTestFactory struct {
 	t          *testing.T
-	allocation *vector.AllocationAccountSelection
+	allocation *mpool.MPool
 	opened     []uint32
 	closed     []uint32
 	fail       map[uint32]error
@@ -72,11 +73,8 @@ func (f *dependentTestFactory) Open(proc *process.Process, call *plan.DependentE
 	if len(inputs) > 0 {
 		value = vector.GetFixedAtNoTypeCheck[int64](inputs[0], 0)
 	}
-	v, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), f.allocation)
-	if err != nil {
-		return nil, err
-	}
-	if err = vector.AppendFixed(v, value, false, proc.Mp()); err != nil {
+	v := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	if err := vector.AppendFixed(v, value, false, f.allocation); err != nil {
 		v.Free(proc.Mp())
 		return nil, err
 	}

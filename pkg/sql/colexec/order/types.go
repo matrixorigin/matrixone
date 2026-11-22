@@ -111,17 +111,71 @@ type container struct {
 	recoveryCapacityClass  mpool.AllocationCapacityClass
 	recoveryCapacityActive bool
 	recoveryCapacityFloor  uint64
-	finalizationAllocation *vector.AllocationAccountSelection
+	// finalizationAllocation is the view the final shuffle allocates
+	// through; it is the recovery view once views are built.
+	finalizationAllocation *mpool.MPool
 	// pendingInput is borrowed from the child. When memory pressure closes the
 	// current run, keep the just-received batch here instead of copying it while
 	// that run is still live. The child is not called again until pendingInput
 	// has been consumed, so the borrowed batch remains valid.
 	pendingInput *batch.Batch
 
-	allocationAccount    *mpool.AllocationAccount
-	retainedAllocation   *vector.AllocationAccountSelection
-	recoveryAllocation   *vector.AllocationAccountSelection
-	expressionAllocation *vector.AllocationAccountSelection
+	allocationAccount *mpool.AllocationAccount
+	// Accounted views of allocationViewPool, built on first use because the
+	// account is bound before the operator knows its process pool.
+	allocationViewPool   *mpool.MPool
+	retainedAllocation   *mpool.MPool
+	recoveryAllocation   *mpool.MPool
+	expressionAllocation *mpool.MPool
+}
+
+// allocationViews builds the accounted views of mp the bound account charges
+// through. It is a no-op when no account is bound or the views already view mp.
+func (ctr *container) allocationViews(mp *mpool.MPool) error {
+	if ctr.allocationAccount == nil || mp == nil ||
+		(ctr.allocationViewPool == mp && ctr.retainedAllocation != nil) {
+		return nil
+	}
+	retained, err := mp.WithAccount(
+		ctr.allocationAccount,
+		mpool.AllocationOwnerOrder,
+		ordersites.OrderRetainedData,
+		mpool.AllocationCapacityClassDefault,
+	)
+	if err != nil {
+		return err
+	}
+	expression, err := mp.WithAccount(
+		ctr.allocationAccount,
+		mpool.AllocationOwnerOrder,
+		ordersites.OrderExpressionData,
+		mpool.AllocationCapacityClassDefault,
+	)
+	if err != nil {
+		return err
+	}
+	var recovery *mpool.MPool
+	if ctr.recoveryCapacityClass != mpool.AllocationCapacityClassDefault {
+		recovery, err = mp.WithAccount(
+			ctr.allocationAccount,
+			mpool.AllocationOwnerOrder,
+			ordersites.OrderRetainedData,
+			ctr.recoveryCapacityClass,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	ctr.allocationViewPool = mp
+	ctr.retainedAllocation = retained
+	ctr.expressionAllocation = expression
+	ctr.recoveryAllocation = recovery
+	// The floor is admitted before a child batch is retained. Charge both the
+	// retained run and its replacement shuffle to that same floor; reserving
+	// progress capacity while allocating the run from the ordinary class can
+	// otherwise strand an entirely unused floor at a saturated query cap.
+	ctr.finalizationAllocation = recovery
+	return nil
 }
 
 func (order *Order) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -129,7 +183,7 @@ func (order *Order) Reset(proc *process.Process, pipelineFailed bool, err error)
 	order.ScanCutoff = nil
 	ctr := &order.ctr
 	if ctr.batWaitForSort != nil {
-		if ctr.batWaitForSort.HasAllocationAccount() ||
+		if ctr.allocationAccount != nil ||
 			ctr.batWaitForSort.RowCount() > colexec.DefaultBatchSize {
 			// A partially accumulated sort batch can survive when an upstream
 			// pipeline is stopped before sortAndSend transfers it to rbat. Its
@@ -203,54 +257,19 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		ctr.sortDiffsMP != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	retained, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerOrder,
-		ordersites.OrderRetainedData,
-		ordersites.OrderRetainedArea,
-	)
-	if err != nil {
-		return err
-	}
-	expression, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerOrder,
-		ordersites.OrderExpressionData,
-		ordersites.OrderExpressionArea,
-	)
-	if err != nil {
-		return err
-	}
 	recoveryCapacity := process.NewExecutionRecoveryCapacitySlot()
 	recoveryClass, err := account.RegisterCapacityController(recoveryCapacity)
 	if err != nil {
 		return err
 	}
-	rollbackRecovery := func(cause error) error {
-		_ = account.UnregisterCapacityController(recoveryClass, recoveryCapacity)
-		return cause
-	}
-	recovery, err := vector.NewAllocationAccountSelectionWithCapacityClass(
-		account,
-		mpool.AllocationOwnerOrder,
-		ordersites.OrderRetainedData,
-		ordersites.OrderRetainedArea,
-		recoveryClass,
-	)
-	if err != nil {
-		return rollbackRecovery(err)
-	}
 	ctr.allocationAccount = account
-	ctr.retainedAllocation = retained
-	ctr.recoveryAllocation = recovery
-	ctr.expressionAllocation = expression
+	ctr.allocationViewPool = nil
+	ctr.retainedAllocation = nil
+	ctr.recoveryAllocation = nil
+	ctr.expressionAllocation = nil
+	ctr.finalizationAllocation = nil
 	ctr.recoveryCapacity = recoveryCapacity
 	ctr.recoveryCapacityClass = recoveryClass
-	// The floor is admitted before a child batch is retained. Charge both the
-	// retained run and its replacement shuffle to that same floor; reserving
-	// progress capacity while allocating the run from the ordinary class can
-	// otherwise strand an entirely unused floor at a saturated query cap.
-	ctr.finalizationAllocation = recovery
 	return nil
 }
 
@@ -273,9 +292,11 @@ func (ctr *container) clearAllocationAccount(account *mpool.AllocationAccount) e
 		return err
 	}
 	ctr.allocationAccount = nil
+	ctr.allocationViewPool = nil
 	ctr.retainedAllocation = nil
 	ctr.recoveryAllocation = nil
 	ctr.expressionAllocation = nil
+	ctr.finalizationAllocation = nil
 	return nil
 }
 
@@ -284,8 +305,7 @@ func (ctr *container) installRecoveryCapacity(
 ) error {
 	if ctr == nil || ctr.allocationAccount == nil || budget == nil ||
 		ctr.recoveryCapacity == nil ||
-		ctr.recoveryCapacityClass == mpool.AllocationCapacityClassDefault ||
-		ctr.finalizationAllocation == nil {
+		ctr.recoveryCapacityClass == mpool.AllocationCapacityClassDefault {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	if ctr.recoveryCapacityActive {
@@ -342,7 +362,10 @@ func (ctr *container) clearRecoveryCapacity(
 	}
 	ctr.recoveryCapacity = nil
 	ctr.recoveryCapacityClass = mpool.AllocationCapacityClassDefault
+	ctr.allocationViewPool = nil
+	ctr.retainedAllocation = nil
 	ctr.recoveryAllocation = nil
+	ctr.expressionAllocation = nil
 	ctr.finalizationAllocation = nil
 	return nil
 }

@@ -47,7 +47,7 @@ func TestCacheJSONReaderTransientBackingAdmission(t *testing.T) {
 				live += size
 				return func() { live -= size }, nil
 			}
-			reader, err := OpenJSONReader(data, mp, nil, admission)
+			reader, err := OpenJSONReader(data, mp, admission)
 			require.NoError(t, err)
 			defer reader.Close()
 			require.True(t, IsPrivateJSONCacheReader(reader))

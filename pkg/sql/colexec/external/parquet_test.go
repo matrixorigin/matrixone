@@ -2336,7 +2336,7 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 					require.ErrorContains(t, mp.mapping(page, proc, vec), "Dest length 0")
 					require.Equal(t, 1, vec.Length())
 					if tc.name == "string" {
-						require.ErrorContains(t, appendLeafValue(tc.value, f.Root().Column("c"), vec, def, proc), "Dest length 0")
+						require.ErrorContains(t, appendLeafValue(tc.value, f.Root().Column("c"), vec, def, proc, proc.Mp()), "Dest length 0")
 						require.Equal(t, 1, vec.Length())
 					}
 					require.True(t, vec.IsNull(0))
@@ -2356,7 +2356,7 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 			t.Run(tc.target.String(), func(t *testing.T) {
 				vec := vector.NewVec(types.New(tc.target, tc.width, 0))
 				t.Cleanup(func() { vec.Free(proc.Mp()) })
-				require.NoError(t, appendParquetVarlenValue(proc.Ctx, vec, []byte("x"), false, proc, *vec.GetType()))
+				require.NoError(t, appendParquetVarlenValue(proc.Ctx, vec, []byte("x"), false, proc.Mp(), *vec.GetType()))
 				require.Equal(t, []byte("x"), vec.GetBytesAt(0))
 			})
 		}
@@ -2469,7 +2469,7 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 		} {
 			vec := vector.NewVec(types.New(tc.target, 4, 0))
 			def := &plan.ColDef{Typ: plan.Type{Id: int32(tc.target), Width: 4}}
-			require.NoError(t, appendLeafValue(parquet.ByteArrayValue([]byte("ab")), col, vec, def, proc))
+			require.NoError(t, appendLeafValue(parquet.ByteArrayValue([]byte("ab")), col, vec, def, proc, proc.Mp()))
 			require.Equal(t, tc.want, vec.GetBytesAt(0))
 			vec.Free(proc.Mp())
 		}
@@ -3525,7 +3525,7 @@ func TestParquetRowModeLeafConversionsRejectOverflow(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			vec := vector.NewVec(types.New(tc.target, 0, 0))
 			def := &plan.ColDef{Typ: plan.Type{Id: int32(tc.target)}}
-			err := appendLeafValue(tc.value, tc.col, vec, def, proc)
+			err := appendLeafValue(tc.value, tc.col, vec, def, proc, proc.Mp())
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.want)
 			require.Zero(t, vec.Length())
@@ -4395,10 +4395,9 @@ func TestParquet_NullableMappingWithAllocationAccount(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	vec, err := vector.NewOffHeapVecWithTypeAndAllocation(types.New(types.T_bool, 0, 0), selection)
-	require.NoError(t, err)
+	vec := vector.NewOffHeapVecWithType(types.New(types.T_bool, 0, 0))
 	defer func() {
 		vec.Free(proc.Mp())
 		require.Zero(t, account.Snapshot().Used)
@@ -4426,10 +4425,12 @@ func TestParquet_NullableMappingWithAllocationAccount(t *testing.T) {
 			f, page := writeColumnAndGetPage(t, tc.node, rows)
 			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
 			require.NotNil(t, mp)
+			mp.pool = selection
 			vec.ResetWithSameType()
 			require.NoError(t, mp.mapping(page, proc, vec))
 			require.Equal(t, []bool{true, false, false}, vector.MustFixedColWithTypeCheck[bool](vec))
 			require.True(t, vec.GetNulls().Contains(1))
+			require.Positive(t, account.Snapshot().Used)
 		})
 	}
 }
@@ -4442,10 +4443,9 @@ func TestParquet_NullableStringFixedMappingWithAllocationAccount(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	vec, err := vector.NewOffHeapVecWithTypeAndAllocation(types.New(types.T_int32, 0, 0), selection)
-	require.NoError(t, err)
+	vec := vector.NewOffHeapVecWithType(types.New(types.T_int32, 0, 0))
 	defer func() {
 		vec.Free(proc.Mp())
 		require.Zero(t, account.Snapshot().Used)
@@ -4463,9 +4463,11 @@ func TestParquet_NullableStringFixedMappingWithAllocationAccount(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32)})
 	require.NotNil(t, mp)
+	mp.pool = selection
 	require.NoError(t, mp.mapping(page, proc, vec))
 	require.Equal(t, []int32{1, 0, 2}, vector.MustFixedColWithTypeCheck[int32](vec))
 	require.True(t, vec.GetNulls().Contains(1))
+	require.Positive(t, account.Snapshot().Used)
 }
 
 func TestParquet_StringFixedMappingRollsBackOnParseError(t *testing.T) {
@@ -4533,10 +4535,9 @@ func TestParquetStringMappingValidatesBeforeAllocating(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	vec, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_varchar.ToType(), selection)
-	require.NoError(t, err)
+	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 	defer func() {
 		vec.Free(proc.Mp())
 		require.Zero(t, account.Snapshot().Used)
@@ -4555,6 +4556,7 @@ func TestParquetStringMappingValidatesBeforeAllocating(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), NotNullable: true})
 	require.NotNil(t, mp)
+	mp.pool = selection
 	usedBefore := account.Snapshot().Used
 	err = mp.mapping(badPage, proc, vec)
 	require.ErrorContains(t, err, "exceeds buffer length")
