@@ -85,7 +85,6 @@ func newBackSelectIntoStatusTestContext(t *testing.T, stmt *tree.Select, runner 
 
 func seedSelectIntoCollector(collector *selectIntoUserVariables, value any) {
 	collector.row = []any{value}
-	collector.rowIsBin = []bool{false}
 	collector.rowCount = 1
 }
 

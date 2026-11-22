@@ -80,7 +80,7 @@ func NewBitwiseAggregateCast(
 		// A stale prepared plan must not reinterpret a binary packet as a numeric
 		// string. The prepared visitor is responsible for rebinding the aggregate
 		// to the binary domain before this overload can execute.
-		if from.GetIsBin() {
+		if to.ArgumentIsBin(0) {
 			return moerr.NewInternalErrorNoCtx("binary value reached numeric bitwise aggregate cast")
 		}
 		return bitwiseAggregateStringToInt64(from, to, proc, length, selectList)

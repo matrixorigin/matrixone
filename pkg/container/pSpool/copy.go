@@ -161,7 +161,6 @@ copyVectors:
 			}
 			destination.SetGrouping(vec.GetGrouping())
 		}
-		destination.SetIsBin(vec.GetIsBin())
 
 		if !planned {
 			// range src and found the same vector.

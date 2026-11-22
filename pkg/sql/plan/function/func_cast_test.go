@@ -1161,12 +1161,12 @@ func TestBinaryToFloatConversion(t *testing.T) {
 
 			inputVec := testutil.MakeVarlenaVector(inputs, tt.nulls, types.T_blob.ToType(), mp)
 			defer inputVec.Free(mp)
-			inputVec.SetIsBin(true)
 
 			from := vector.GenerateFunctionStrParameter(inputVec)
 
 			resultType := types.T_float64.ToType()
 			to := vector.NewFunctionResultWrapper(resultType, mp).(*vector.FunctionResult[float64])
+			to.SetArgumentIsBin([]bool{true})
 			defer to.Free()
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
@@ -1187,9 +1187,9 @@ func TestBinaryToFloatConversion(t *testing.T) {
 		t.Run("invalid_"+input, func(t *testing.T) {
 			inputVec := testutil.MakeVarlenaVector([][]byte{[]byte(input)}, nil, types.T_blob.ToType(), mp)
 			defer inputVec.Free(mp)
-			inputVec.SetIsBin(true)
 
 			to := vector.NewFunctionResultWrapper(types.T_float64.ToType(), mp).(*vector.FunctionResult[float64])
+			to.SetArgumentIsBin([]bool{true})
 			defer to.Free()
 			require.NoError(t, to.PreExtendAndReset(1))
 
@@ -1201,8 +1201,8 @@ func TestBinaryToFloatConversion(t *testing.T) {
 
 	inputVec := testutil.MakeVarlenaVector([][]byte{{}}, nil, types.T_blob.ToType(), mp)
 	defer inputVec.Free(mp)
-	inputVec.SetIsBin(true)
 	to := vector.NewFunctionResultWrapper(types.T_float64.ToType(), mp).(*vector.FunctionResult[float64])
+	to.SetArgumentIsBin([]bool{true})
 	defer to.Free()
 	require.NoError(t, to.PreExtendAndReset(1))
 	require.NoError(t, strToFloat(ctx, SQLCompatibilityMySQL, vector.GenerateFunctionStrParameter(inputVec), to, 64, 1, nil))
@@ -3464,12 +3464,12 @@ func Test_strToSigned_Binary(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			inputVec := testutil.MakeVarlenaVector(tt.inputs, tt.nulls, types.T_blob.ToType(), mp)
 			defer inputVec.Free(mp)
-			inputVec.SetIsBin(true)
 
 			from := vector.GenerateFunctionStrParameter(inputVec)
 
 			resultType := types.T_int64.ToType()
 			to := vector.NewFunctionResultWrapper(resultType, mp).(*vector.FunctionResult[int64])
+			to.SetArgumentIsBin([]bool{true})
 			defer to.Free()
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
@@ -3518,10 +3518,10 @@ func Test_strToUnsigned_BinaryIntroducedHexText(t *testing.T) {
 	run := func(t *testing.T, isBin bool, want uint64) {
 		inputVec := testutil.MakeVarlenaVector([][]byte{[]byte("12")}, nil, types.T_varbinary.ToType(), mp)
 		defer inputVec.Free(mp)
-		inputVec.SetIsBin(isBin)
 
 		from := vector.GenerateFunctionStrParameter(inputVec)
 		to := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp).(*vector.FunctionResult[uint64])
+		to.SetArgumentIsBin([]bool{isBin})
 		defer to.Free()
 		require.NoError(t, to.PreExtendAndReset(1))
 
@@ -3594,7 +3594,6 @@ func Benchmark_strToSigned_Binary(b *testing.B) {
 		b.Run(bc.name, func(b *testing.B) {
 			inputVec := testutil.MakeVarlenaVector(bc.inputs, bc.nulls, types.T_blob.ToType(), mp)
 			defer inputVec.Free(mp)
-			inputVec.SetIsBin(true)
 
 			resultType := types.T_int64.ToType()
 
@@ -3602,6 +3601,7 @@ func Benchmark_strToSigned_Binary(b *testing.B) {
 
 			for i := 0; i < b.N; i++ {
 				to := vector.NewFunctionResultWrapper(resultType, mp).(*vector.FunctionResult[int64])
+				to.SetArgumentIsBin([]bool{true})
 				err := to.PreExtendAndReset(len(bc.inputs))
 				if err != nil {
 					b.Fatalf("PreExtendAndReset failed: %v", err)

@@ -10337,7 +10337,7 @@ func TestProcessLoadLocal(t *testing.T) {
 			}
 		}(buffer)
 		ec := newTestExecCtx(context.Background(), ctrl)
-		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
@@ -10526,7 +10526,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {
 		proc.Ctx = ctx
 		ec.proc = proc
 
-		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer)
 		convey.So(err, convey.ShouldEqual, expected)
 		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 1)
 	})
@@ -10586,7 +10586,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorInLoop(t *testing.T) {
 		proc.Ctx = ctx
 		ec.proc = proc
 
-		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer)
 		convey.So(err, convey.ShouldEqual, expected)
 		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 2)
 		convey.So(buffer[:5], convey.ShouldResemble, []byte("hello"))
@@ -10663,7 +10663,7 @@ func TestProcessLoadLocal_NetworkTimeout(t *testing.T) {
 		}()
 
 		ec := newTestExecCtx(context.Background(), ctrl)
-		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer)
 
 		// Should return error containing "network read timeout"
 		convey.So(err, convey.ShouldNotBeNil)
