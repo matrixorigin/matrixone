@@ -1050,23 +1050,22 @@ func TestIffConditionTruthyAt(t *testing.T) {
 		false, true, true, true, false, true, false, false,
 		true, true, true, false, false,
 	} {
-		got, err := IffConditionTruthyAt(stringVec, uint64(row), SQLCompatibilityMySQL)
+		got, err := IffConditionTruthyAt(stringVec, uint64(row), false, SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
-	got, err := IffConditionTruthyAt(stringVec, 4, SQLCompatibilityMatrixOne)
+	got, err := IffConditionTruthyAt(stringVec, 4, false, SQLCompatibilityMatrixOne)
 	require.NoError(t, err)
 	require.True(t, got, "native mode retains NaN truthiness")
 	for _, row := range []uint64{5, 6, 7, 8, 9, 10, 11, 12} {
-		_, err := IffConditionTruthyAt(stringVec, row, SQLCompatibilityMatrixOne)
+		_, err := IffConditionTruthyAt(stringVec, row, false, SQLCompatibilityMatrixOne)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	}
 
 	binaryVec := newVectorByType(proc.Mp(), types.T_varbinary.ToType(),
 		[]string{"\x00", "16", "\x10", "0x10\x00"}, nil)
-	binaryVec.SetIsBin(true)
 	for row, want := range []bool{false, true, true, true} {
-		got, err := IffConditionTruthyAt(binaryVec, uint64(row), SQLCompatibilityMySQL)
+		got, err := IffConditionTruthyAt(binaryVec, uint64(row), true, SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
@@ -1074,7 +1073,7 @@ func TestIffConditionTruthyAt(t *testing.T) {
 	intVec := newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{0, -1, 9}, nil)
 	intVec.GetNulls().Add(2)
 	for row, want := range []bool{false, true, false} {
-		got, err := IffConditionTruthyAt(intVec, uint64(row), SQLCompatibilityMySQL)
+		got, err := IffConditionTruthyAt(intVec, uint64(row), false, SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
@@ -1082,7 +1081,7 @@ func TestIffConditionTruthyAt(t *testing.T) {
 	floatVec := newVectorByType(proc.Mp(), types.T_float64.ToType(), []float64{0, -0.1, 1}, nil)
 	floatVec.GetNulls().Add(2)
 	for row, want := range []bool{false, true, false} {
-		got, err := IffConditionTruthyAt(floatVec, uint64(row), SQLCompatibilityMySQL)
+		got, err := IffConditionTruthyAt(floatVec, uint64(row), false, SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
@@ -1090,7 +1089,7 @@ func TestIffConditionTruthyAt(t *testing.T) {
 	decimalVec := newVectorByType(proc.Mp(), types.New(types.T_decimal64, 10, 1), []types.Decimal64{0, 1, 1}, nil)
 	decimalVec.GetNulls().Add(2)
 	for row, want := range []bool{false, true, false} {
-		got, err := IffConditionTruthyAt(decimalVec, uint64(row), SQLCompatibilityMySQL)
+		got, err := IffConditionTruthyAt(decimalVec, uint64(row), false, SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
@@ -1098,7 +1097,7 @@ func TestIffConditionTruthyAt(t *testing.T) {
 	bitVec := newVectorByType(proc.Mp(), types.T_bit.ToType(), []uint64{0, 1, 1}, nil)
 	bitVec.GetNulls().Add(2)
 	for row, want := range []bool{false, true, false} {
-		got, err := IffConditionTruthyAt(bitVec, uint64(row), SQLCompatibilityMySQL)
+		got, err := IffConditionTruthyAt(bitVec, uint64(row), false, SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
@@ -1106,7 +1105,7 @@ func TestIffConditionTruthyAt(t *testing.T) {
 	enumVec := newVectorByType(proc.Mp(), types.T_enum.ToType(), []types.Enum{0, 2, 1}, nil)
 	enumVec.GetNulls().Add(2)
 	for row, want := range []bool{false, true, false} {
-		got, err := IffConditionTruthyAt(enumVec, uint64(row), SQLCompatibilityMySQL)
+		got, err := IffConditionTruthyAt(enumVec, uint64(row), false, SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}

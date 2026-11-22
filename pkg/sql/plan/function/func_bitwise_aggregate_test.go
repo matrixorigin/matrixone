@@ -351,7 +351,7 @@ func TestBitwiseAggregateCastDispatchAndErrors(t *testing.T) {
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
 	}, NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), NewBitwiseAggregateCast)
 	defer binaryTextCase.Free()
-	binaryTextCase.parameters[0].SetIsBin(true)
+	binaryTextCase.result.SetArgumentIsBin([]bool{true})
 	success, info := binaryTextCase.Run()
 	require.True(t, success, info)
 	assertBitwiseAggregateCastFails(t, proc, []FunctionTestInput{

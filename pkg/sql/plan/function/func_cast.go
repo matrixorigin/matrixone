@@ -7584,7 +7584,7 @@ func strToSignedWithProc[T constraints.Signed](
 	length int, selectList *FunctionSelectList, mode castMode, explicit ...bool) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.GetSourceVector().GetIsBin()
+	isBinary := to.ArgumentIsBin(0)
 
 	var result T
 	for i = 0; i < l; i++ {
@@ -8709,7 +8709,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 	length int, selectList *FunctionSelectList, mode castMode, explicit ...bool) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.GetSourceVector().GetIsBin()
+	isBinary := to.ArgumentIsBin(0)
 
 	var val uint64
 	var tErr error
@@ -8820,7 +8820,7 @@ func strToFloatWithProc[T constraints.Float](
 
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.GetSourceVector().GetIsBin()
+	isBinary := to.ArgumentIsBin(0)
 	if selectList != nil && selectList.IgnoreAllRow() {
 		to.SetNullResult(l)
 		return nil
@@ -8882,7 +8882,7 @@ func strToDecimal64(
 	var l = uint64(length)
 	var dft types.Decimal64
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
+	isb := to.ArgumentIsBin(0)
 	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
 		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
 			func(s string) (types.Decimal64, error) {
@@ -9247,7 +9247,7 @@ func strToDecimal128(
 	var l = uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
+	isb := to.ArgumentIsBin(0)
 	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
 		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
 			func(s string) (types.Decimal128, error) {
@@ -9367,7 +9367,7 @@ func strToDecimal256(
 	var l = uint64(length)
 	var dft types.Decimal256
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
+	isb := to.ArgumentIsBin(0)
 	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
 		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
 			func(s string) (types.Decimal256, error) {
@@ -9701,7 +9701,7 @@ func strToDate(proc *process.Process,
 	var i uint64
 	var l = uint64(length)
 	var dft types.Date
-	isBinary := from.GetSourceVector().GetIsBin()
+	isBinary := to.ArgumentIsBin(0)
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	modeChecked := false
 	nullifyZero := false
@@ -9793,7 +9793,7 @@ func strToTime(
 	proc *process.Process, from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList, mode castMode) error {
 	ctx := proc.Ctx
-	isBinary := from.GetSourceVector().GetIsBin()
+	isBinary := to.ArgumentIsBin(0)
 	var i uint64
 	var l = uint64(length)
 	var dft types.Time
@@ -9961,7 +9961,7 @@ func strToDatetime(proc *process.Process,
 	var i uint64
 	var l = uint64(length)
 	var dft types.Datetime
-	isBinary := from.GetSourceVector().GetIsBin()
+	isBinary := to.ArgumentIsBin(0)
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	totype := to.GetType()
 	truncateFractional, err := process.ResolveTimeTruncateFractional(proc)
@@ -10061,7 +10061,7 @@ func strToTimestamp(proc *process.Process,
 	var i uint64
 	var l = uint64(length)
 	var dft types.Timestamp
-	isBinary := from.GetSourceVector().GetIsBin()
+	isBinary := to.ArgumentIsBin(0)
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	totype := to.GetType()
 	truncateFractional, err := process.ResolveTimeTruncateFractional(proc)
@@ -10391,10 +10391,10 @@ func strToStr(
 	// binary/geometry targets all keep their existing contracts.
 	// The effective binary source domain is authoritative
 	// (binary_string_semantics.go): static CharsetBinary type, runtime uniform
-	// marker, legacy IsBin literal flag, or a per-row sidecar. Function results
+	// marker, the binary-literal argument flag, or a per-row sidecar. Function results
 	// such as UNHEX carry a static binary-domain varbinary type that the legacy
 	// literal flag alone misses.
-	srcUniformBinary := isBinaryStringVector(from.GetSourceVector())
+	srcUniformBinary := isBinaryStringVector(from.GetSourceVector(), to.ArgumentIsBin(0))
 	binarySourceToText := mode == castModeExplicit && srcUniformBinary &&
 		toType.Charset != types.CharsetBinary &&
 		(toType.Oid == types.T_char || toType.Oid == types.T_varchar || toType.Oid == types.T_text)

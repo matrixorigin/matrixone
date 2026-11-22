@@ -738,19 +738,14 @@ func TestStringSourceConsumerTotality(t *testing.T) {
 				}
 			}
 			if name == "numeric" {
-				defer input.Vecs[0].SetIsBin(false)
-				for _, test := range []struct {
-					binary bool
-					want   int64
-				}{{true, 53}, {false, 5}} {
-					input.Vecs[0].SetIsBin(test.binary)
-					result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, false, true})
-					require.NoError(t, err)
-					for row := range sources {
-						require.Equal(t, row%2 != 0, result.IsNull(uint64(row)))
-						if row%2 == 0 {
-							require.Equal(t, test.want, vector.GetFixedAtNoTypeCheck[int64](result, row))
-						}
+				// A column reference is never a binary literal: its bytes
+				// convert as numeric text on the selected-row path too.
+				result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, false, true})
+				require.NoError(t, err)
+				for row := range sources {
+					require.Equal(t, row%2 != 0, result.IsNull(uint64(row)))
+					if row%2 == 0 {
+						require.Equal(t, int64(5), vector.GetFixedAtNoTypeCheck[int64](result, row))
 					}
 				}
 			}
@@ -1024,7 +1019,7 @@ func TestParamExpressionExecutorLifecycle(t *testing.T) {
 				result, err := executor.Eval(proc, nil, nil)
 				require.NoError(t, err, test.name)
 				require.Equal(t, test.value, result.GetStringAt(0), test.name)
-				require.Equal(t, test.binary, result.GetIsBin(), test.name)
+				require.Equal(t, test.binary, isBinaryLiteralResult(executor, result), test.name)
 			}()
 		}
 	})
@@ -1916,25 +1911,25 @@ func TestVariableExpressionLifecycle(t *testing.T) {
 
 		vec, err := executor.Eval(proc, nil, nil)
 		require.NoError(t, err)
-		require.True(t, vec.GetIsBin())
+		require.True(t, isBinaryLiteralResult(executor, vec))
 		require.Equal(t, "AB\x00\x00", vec.GetStringAt(0))
 
 		value, isBin = "5.0", false
 		vec, err = executor.Eval(proc, nil, nil)
 		require.NoError(t, err)
-		require.False(t, vec.GetIsBin())
+		require.False(t, isBinaryLiteralResult(executor, vec))
 		require.Equal(t, "5.0", vec.GetStringAt(0))
 
 		value = "text"
 		vec, err = executor.Eval(proc, nil, nil)
 		require.NoError(t, err)
-		require.False(t, vec.GetIsBin())
+		require.False(t, isBinaryLiteralResult(executor, vec))
 		require.Equal(t, "text", vec.GetStringAt(0))
 
 		value, isBin = "CD\x00\x00", true
 		vec, err = executor.Eval(proc, nil, nil)
 		require.NoError(t, err)
-		require.True(t, vec.GetIsBin())
+		require.True(t, isBinaryLiteralResult(executor, vec))
 		require.Equal(t, "CD\x00\x00", vec.GetStringAt(0))
 
 		// Resolver errors must stop before later metadata callbacks or publication.
@@ -1960,7 +1955,8 @@ func TestVariableExpressionLifecycle(t *testing.T) {
 				require.False(t, result.IsNull(uint64(row)))
 				require.Equal(t, "7", result.GetStringAt(row))
 			}
-			require.True(t, result.GetIsBin())
+			// The executor resolved the variable's binary flag for this value.
+			require.True(t, executor.(*VarExpressionExecutor).isBin)
 		}
 		for stage, expectedCalls := range [][2]int{{1, 0}, {1, 1}} {
 			failStage, calls = stage, [2]int{}
