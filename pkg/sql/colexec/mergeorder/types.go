@@ -398,8 +398,12 @@ func (ctr *container) clearAllocationAccount(
 }
 
 func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
-	mp := proc.Mp()
 	ctr := &mergeOrder.ctr
+	// Resident batches were created with residentMP (the retained view when
+	// an account is bound); free them with that pool, as the sending and
+	// spilling paths do. Reset after a failed pipeline reaches here with
+	// batches still resident.
+	mp := ctr.residentMP(proc)
 	for i := range ctr.batchList {
 		if ctr.batchList[i] != nil && i < len(ctr.orderCols) && ctr.orderCols[i] != nil {
 			freeOrderColumns(mp, ctr.batchList[i], ctr.orderCols[i])
