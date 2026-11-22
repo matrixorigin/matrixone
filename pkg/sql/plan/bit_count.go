@@ -72,8 +72,7 @@ func bitCountProjectionRetainsSubqueryAfterReduction(builder *QueryBuilder, expr
 	}
 	if sub := expr.GetSub(); sub != nil {
 		scope := bitCountSubqueryScope(builder, sub)
-		if direct && sub.Typ == plan.SubqueryRef_SCALAR && sub.Child == nil && sub.RowSize == 1 &&
-			scope != nil && bitCountCanReduceScalar(builder, scope) {
+		if direct && isBitCountScalarRef(sub) && bitCountCanReduceScalar(builder, scope) {
 			return scope.singleProjectionRetainsSubquery
 		}
 		if direct && bitCountInSubqueryCanReduce(builder, scope, sub) {
@@ -98,8 +97,8 @@ func bitCountProjectionRetainsSubqueryAfterReduction(builder *QueryBuilder, expr
 	return false
 }
 
-func bitCountProjectionSource(ctx *BindContext, expr *Expr) *Expr {
-	if ctx == nil || expr == nil {
+func bitCountGroupSource(ctx *BindContext, expr *Expr) *Expr {
+	if ctx == nil || ctx.groupTag <= 0 || expr == nil {
 		return expr
 	}
 	col := expr.GetCol()
@@ -124,8 +123,12 @@ func bitCountInSubqueryCanReduce(builder *QueryBuilder, scope *BindContext, sub 
 		bitCountWhereIsEffectivelyTrue(builder, scope)
 }
 
+func isBitCountScalarRef(sub *plan.SubqueryRef) bool {
+	return sub != nil && sub.Typ == plan.SubqueryRef_SCALAR && sub.Child == nil && sub.RowSize == 1
+}
+
 func bitCountCanReduceScalar(builder *QueryBuilder, scope *BindContext) bool {
-	return scope.reducibleTablelessScalar && bitCountWhereIsEffectivelyTrue(builder, scope)
+	return scope != nil && scope.reducibleTablelessScalar && bitCountWhereIsEffectivelyTrue(builder, scope)
 }
 
 func (bc *BindContext) setWhereFilters(filters []*plan.Expr) {
@@ -206,8 +209,7 @@ func bitCountProjectionDependsOnRows(builder *QueryBuilder, expr *Expr, direct b
 			!bitCountProjectionRetainsSubqueryAfterReduction(builder, sub.Child, true) {
 			return false
 		}
-		if direct && sub.Typ == plan.SubqueryRef_SCALAR && sub.Child == nil && sub.RowSize == 1 &&
-			scope != nil && bitCountCanReduceScalar(builder, scope) {
+		if direct && isBitCountScalarRef(sub) && bitCountCanReduceScalar(builder, scope) {
 			return scope.hasDependentProjectionSubquery
 		}
 		if sub.Child != nil && bitCountProjectionDependsOnRows(builder, sub.Child, false, seen) {
@@ -316,7 +318,7 @@ func bitCountSelector(value *Expr) *Expr {
 }
 
 func bitCountReducibleScalarProjection(builder *QueryBuilder, sub *plan.SubqueryRef) *Expr {
-	if sub == nil || sub.Typ != plan.SubqueryRef_SCALAR || sub.Child != nil || sub.RowSize != 1 {
+	if !isBitCountScalarRef(sub) {
 		return nil
 	}
 	scope := bitCountSubqueryScope(builder, sub)
@@ -417,10 +419,7 @@ func (b *baseBinder) bitCountFloatOverload(expr *Expr) int32 {
 	fromProjection := false
 	// A same-block group slot represents the original GROUP BY expression.
 	// Inspect its conversion without replacing the slot used for evaluation.
-	if col := expr.GetCol(); col != nil && b.ctx != nil && b.ctx.groupTag > 0 &&
-		col.RelPos == b.ctx.groupTag && col.ColPos >= 0 && int(col.ColPos) < len(b.ctx.groups) {
-		expr = b.ctx.groups[col.ColPos]
-	}
+	expr = bitCountGroupSource(b.ctx, expr)
 	// Projections are bound before consumers. The decreasing node ID keeps
 	// recursive or self-referencing projections from reopening the lookup.
 	var nodes []*plan.Node

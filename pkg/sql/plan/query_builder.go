@@ -10209,7 +10209,7 @@ func (builder *QueryBuilder) bindProjection(
 	resultLen = len(ctx.projects)
 	ctx.hasDependentProjectionSubquery = false
 	ctx.singleProjectionRetainsSubquery = resultLen == 1 &&
-		bitCountProjectionRetainsSubqueryAfterReduction(builder, bitCountProjectionSource(ctx, ctx.projects[0]), true)
+		bitCountProjectionRetainsSubqueryAfterReduction(builder, bitCountGroupSource(ctx, ctx.projects[0]), true)
 	ctx.projectSemanticKeys = ctx.projectSemanticKeys[:0]
 	for i, proj := range ctx.projects {
 		if !ctx.hasDependentProjectionSubquery && bitCountProjectionHasDependentSubquery(builder, proj) {
