@@ -1161,30 +1161,11 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		readFullObject = false
 	}
 
-	// Split a small number of sparse buffered reads while retaining the
-	// existing full-object and streaming lifecycles.
+	// HDFS preserves its envelope read because seeking past EOF returns a
+	// backend-specific error rather than HTTP 416.
 	if !readFullObject {
-		_, _, expensive := vector.expensiveMinimalRangeRead()
-		misses := 0
-		buffered := true
-		ordered := true
-		var previousOffset int64
-		for _, entry := range vector.Entries {
-			if !entry.done {
-				if misses > 0 && entry.Offset < previousOffset {
-					ordered = false
-				}
-				previousOffset = entry.Offset
-				misses++
-				buffered = buffered && entry.WriterForRead == nil && entry.ReadCloserForRead == nil
-			}
-		}
-		if expensive && buffered && ordered && misses <= 4 {
-			// HDFS Seek returns a non-HTTP error for offsets past EOF. Keep the
-			// envelope read so a later short range retains its existing error.
-			if _, isHDFS := s.rawStorage.(*HDFS); !isHDFS {
-				return s.readEntriesIndividually(ctx, vector)
-			}
+		if _, isHDFS := s.rawStorage.(*HDFS); !isHDFS && vector.shouldSplitSparseRead(min, max) {
+			return s.readEntriesIndividually(ctx, vector)
 		}
 	}
 

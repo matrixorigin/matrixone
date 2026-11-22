@@ -3390,6 +3390,8 @@ func TestS3FSOrdinarySparseRangeRead(t *testing.T) {
 	}{
 		{"sparse", []int64{0, 16 << 20}, 2},
 		{"adjacent", []int64{0, 4096}, 1},
+		{"exact span threshold", []int64{0, minExpensiveRangeReadSpan - 4096}, 1},
+		{"above span threshold", []int64{0, minExpensiveRangeReadSpan - 4095}, 2},
 		{"out of order", []int64{16 << 20, 0}, 1},
 		{"four sparse", []int64{0, 16 << 20, 32 << 20, 48 << 20}, 4},
 		{"five sparse", []int64{0, 16 << 20, 32 << 20, 48 << 20, 64 << 20}, 1},
@@ -3769,17 +3771,33 @@ func TestS3FSSparsePartialCacheAndStreaming(t *testing.T) {
 	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(context.Background()) })
-	t.Run("partial cache", func(t *testing.T) {
+	t.Run("two misses in a larger vector", func(t *testing.T) {
 		storage := &sparseTrackingStorage{}
 		fs.storage = storage
-		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{&sparseFirstEntryCache{}}, Entries: []IOEntry{
-			{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096}, {Offset: 32 << 20, Size: 4096},
+		cache := &callbackVectorCache{onRead: func(vector *IOVector) {
+			for pos := range vector.Entries[:4] {
+				vector.Entries[pos].Data = []byte("cached")
+				vector.Entries[pos].done = true
+			}
+		}}
+		// Cached entries include a streaming destination and a descending offset.
+		// The decision uses only the two buffered misses.
+		var cachedOutput bytes.Buffer
+		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{cache}, Entries: []IOEntry{
+			{Offset: 64 << 20, Size: 4096},
+			{Offset: 0, Size: 4096, WriterForRead: &cachedOutput},
+			{Offset: 4096, Size: 4096},
+			{Offset: 8192, Size: 4096},
+			{Offset: 16 << 20, Size: 4096},
+			{Offset: 32 << 20, Size: 4096},
 		}}
 		t.Cleanup(vector.Release)
 		require.NoError(t, fs.Read(ctx, vector))
-		require.Equal(t, []byte("cached"), vector.Entries[0].Data)
-		require.Equal(t, bytes.Repeat([]byte{2}, 4096), vector.Entries[1].Data)
-		require.Equal(t, bytes.Repeat([]byte{3}, 4096), vector.Entries[2].Data)
+		for _, entry := range vector.Entries[:4] {
+			require.Equal(t, []byte("cached"), entry.Data)
+		}
+		require.Equal(t, bytes.Repeat([]byte{2}, 4096), vector.Entries[4].Data)
+		require.Equal(t, bytes.Repeat([]byte{3}, 4096), vector.Entries[5].Data)
 		require.Equal(t, 2, storage.opens)
 		require.Equal(t, 2, storage.closes)
 		require.Equal(t, int64(8192), storage.bytes)
