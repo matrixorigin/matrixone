@@ -36,8 +36,8 @@ const (
 	preInsertUniqueAllocationSiteHashDescriptor
 	preInsertUniqueAllocationSiteRetainedData
 	preInsertUniqueAllocationSiteRetainedArea
-	preInsertUniqueAllocationSiteRetainedNulls
-	preInsertUniqueAllocationSiteRetainedGrouping
+	_ // reserved: was preInsertUniqueAllocationSiteRetainedNulls
+	_ // reserved: was preInsertUniqueAllocationSiteRetainedGrouping
 )
 
 type container struct {
@@ -78,7 +78,7 @@ type PreInsertUnique struct {
 
 	allocationAccount  *mpool.AllocationAccount
 	hashAllocation     *hashtable.AllocationAccountSelection
-	retainedAllocation *vector.AllocationAccountSelection
+	retainedAllocation *mpool.AccountBinding
 
 	vm.OperatorBase
 }
@@ -116,13 +116,10 @@ func (preInsertUnique *PreInsertUnique) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
-	retainedAllocation, err := vector.NewAllocationAccountSelection(
+	retainedAllocation, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerDML,
 		preInsertUniqueAllocationSiteRetainedData,
-		preInsertUniqueAllocationSiteRetainedArea,
-		preInsertUniqueAllocationSiteRetainedNulls,
-		preInsertUniqueAllocationSiteRetainedGrouping,
 	)
 	if err != nil {
 		return err

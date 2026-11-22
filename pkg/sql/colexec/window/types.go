@@ -64,8 +64,6 @@ type container struct {
 	os      []int64 // Sorted partitions
 	aggVecs []colexec.ExprEvalVector
 
-	prepareParamKind aggexec.PrepareParamKindStates
-
 	// indicatorEvals caches one technical-indicator evaluation state per
 	// window expression (issue #29949). Each cached prefix belongs to
 	// exactly one materialized generation and is freed at every eval
@@ -207,7 +205,6 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	ctr.freeLocalRankIndex()
 	ctr.cleanOutput(proc.Mp())
 	ctr.resetParam()
-	ctr.prepareParamKind.Reset(nil)
 	ctr.resetVectors()
 	// Release aggregators here too: on an error exit from Call the normal
 	// freeAggFun() at the end of the eval loop is skipped, so batAggs would
@@ -219,9 +216,9 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	ctr.freeAggregateStates(proc.Mp())
 	ctr.freeIndicatorState(proc.Mp())
 	ctr.freeEwmState()
-	if ctr.hasAccountedBufferedData() {
-		// AppendWithCopy and Dup preserve a source vector's allocation
-		// selection. Release inherited backing at the prepared-statement
+	if ctr.allocation.Account != nil {
+		// Buffered input and evaluated vectors are charged to Window's account
+		// through its view. Release that backing at the prepared-statement
 		// generation boundary; only unaccounted buffers may be reused.
 		ctr.freeBatch(proc.Mp())
 		ctr.freeVector(proc.Mp())
@@ -252,7 +249,6 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr.orderVecs, ctr.aggVecs = nil, nil
 	ctr.clearSortState()
 	ctr.allocation.FreeMetadata()
-	ctr.prepareParamKind.Reset(nil)
 }
 
 func (ctr *container) resetParam() {
@@ -396,28 +392,13 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 
 }
 
-func (ctr *container) hasAccountedBufferedData() bool {
-	if ctr == nil {
-		return false
+// expressionMP is the pool expression executors charge: Window's accounted
+// view when an account is bound, otherwise nil (unaccounted).
+func (ctr *container) expressionMP(proc *process.Process) (*mpool.MPool, error) {
+	if ctr.allocation.Account == nil {
+		return nil, nil
 	}
-	if ctr.bat != nil && ctr.bat.HasAllocationAccount() {
-		return true
-	}
-	for _, eval := range ctr.orderVecs {
-		for _, vec := range eval.Vec {
-			if vec != nil && vec.AllocationAccountSelection() != nil {
-				return true
-			}
-		}
-	}
-	for _, eval := range ctr.aggVecs {
-		for _, vec := range eval.Vec {
-			if vec != nil && vec.AllocationAccountSelection() != nil {
-				return true
-			}
-		}
-	}
-	return false
+	return ctr.allocation.MP(proc)
 }
 
 func (ctr *container) clearSortState() {

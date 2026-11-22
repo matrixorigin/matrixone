@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -195,7 +196,7 @@ type deferredJoinConstantExecutor struct {
 	executor  ExpressionExecutor
 	owner     *DeferredJoinDiagnostic
 	typ       types.Type
-	selection *vector.AllocationAccountSelection
+	selection *mpool.MPool
 	null      *vector.Vector
 	captured  *process.Process
 	failed    bool
@@ -251,7 +252,7 @@ func (e *deferredJoinConstantExecutor) EvalWithoutResultReusing(
 		if err != nil {
 			return nil, err
 		}
-		return value.Dup(proc.Mp())
+		return value.Dup(expressionAllocationMP(proc.Mp(), e.selection))
 	}
 	value, err := e.executor.EvalWithoutResultReusing(e.capturedProcess(proc), batches, selectList)
 	if err == nil || !deferJoinExpressionError(err) || !e.owner.canDeferError() {

@@ -258,10 +258,6 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 	for _, value := range []string{"raw", "text", "plain"} {
 		require.NoError(t, vector.AppendBytes(source.Vecs[1], []byte(value), false, proc.Mp()))
 	}
-	require.NoError(t, source.Vecs[1].SetIsBinaryStringAt(0, true))
-	require.NoError(t, source.Vecs[1].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
-		vector.PrepareParamInteger, vector.PrepareParamNone, vector.PrepareParamFloat,
-	}, proc.Mp()))
 	defer source.Clean(proc.Mp())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
 	require.NoError(t, err)
@@ -276,16 +272,13 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 		fd:         writeBuildFile(proc, t.Name(), source),
 		allocation: allocation,
 	}
-	decoded, err := newSpillBatch(0, reader.allocation.decoded)
-	require.NoError(t, err)
+	decoded := newSpillBatch(0)
 	got, err := reader.ReadBatch(proc, decoded)
 	require.NoError(t, err)
 	require.Equal(t, 3, got.RowCount())
 	require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColNoTypeCheck[int32](got.Vecs[0]))
-	require.True(t, got.Vecs[1].GetIsBinaryStringAt(0))
-	require.False(t, got.Vecs[1].GetIsBinaryStringAt(1))
-	require.Equal(t, vector.PrepareParamInteger, got.Vecs[1].GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamFloat, got.Vecs[1].GetPrepareParamKindAt(2))
+	require.Equal(t, "raw", got.Vecs[1].GetStringAt(0))
+	require.Equal(t, "text", got.Vecs[1].GetStringAt(1))
 	got.Clean(proc.Mp())
 	_, err = reader.ReadBatch(proc, decoded)
 	require.ErrorIs(t, err, io.EOF)
@@ -300,8 +293,7 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 		fd:         makeCorruptBatchFile(t),
 		allocation: corruptState.allocation,
 	}
-	bad, err := newSpillBatch(0, corruptState.allocation.decoded)
-	require.NoError(t, err)
+	bad := newSpillBatch(0)
 	_, err = corrupt.ReadBatch(proc, bad)
 	require.Error(t, err)
 	corrupt.Close()
@@ -333,9 +325,8 @@ func TestBucketReaderRejectsSchemaChangeBeforeMerge(t *testing.T) {
 		mergeRecords: true,
 		allocation:   state.allocation,
 	}
-	reuse, err := newSpillBatch(0, state.allocation.decoded)
-	require.NoError(t, err)
-	_, err = reader.ReadBatch(proc, reuse)
+	reuse := newSpillBatch(0)
+	_, err := reader.ReadBatch(proc, reuse)
 	require.ErrorContains(t, err, "spill batch schema changed")
 	reader.Close()
 	require.Zero(t, state.account.Snapshot().Used)

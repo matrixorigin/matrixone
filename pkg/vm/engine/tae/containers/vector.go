@@ -200,7 +200,7 @@ func (vec *vectorWrapper) IsNull(i int) bool {
 	if inner.IsConst() {
 		return false
 	}
-	return nulls.Contains(inner.GetNulls(), uint64(i))
+	return inner.GetNulls().Contains(uint64(i))
 }
 
 func (vec *vectorWrapper) NullMask() *nulls.Nulls {
@@ -434,7 +434,7 @@ func (vec *vectorWrapper) NullCount() int {
 		return 0
 	}
 	if vec.NullMask() != nil {
-		return vec.NullMask().GetCardinality()
+		return vec.NullMask().Count()
 	}
 	return 0
 }
@@ -470,11 +470,11 @@ func (vec *vectorWrapper) TryConvertConst() Vector {
 	return vec
 }
 
-func (vec *vectorWrapper) Foreach(op ItOp, sels *nulls.Bitmap) error {
+func (vec *vectorWrapper) Foreach(op ItOp, sels *nulls.Nulls) error {
 	return vec.ForeachWindow(0, vec.wrapped.Length(), op, sels)
 }
 
-func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels *nulls.Bitmap) (err error) {
+func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels *nulls.Nulls) (err error) {
 	return ForeachVectorWindow(vec, offset, length, nil, op, sels)
 }
 
@@ -581,14 +581,13 @@ func (vec *vectorWrapper) extendWithOffset(src *vector.Vector, srcOff, srcLen in
 	return
 }
 
-func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Bitmap) {
+func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Nulls) {
 	if mask.IsEmpty() {
 		return
 	}
 	vec.tryCOW()
 
-	dels := vector.GetSels()
-	defer func() { vector.PutSels(dels) }()
+	var dels []int64
 	mask.Foreach(func(i uint64) bool {
 		dels = append(dels, int64(i))
 		return true
@@ -604,8 +603,7 @@ func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
 	}
 	vec.tryCOW()
 
-	dels := vector.GetSels()
-	defer func() { vector.PutSels(dels) }()
+	var dels []int64
 	itr := deletes.Iterator()
 	for itr.HasNext() {
 		r := itr.Next()

@@ -45,17 +45,20 @@ func (timeWin *TimeWin) OpType() vm.OpType {
 
 func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	ctr := &timeWin.ctr
-	ctr.prepareParamKind.Reset(timeWin.Aggs)
 	if timeWin.OpAnalyzer == nil {
 		timeWin.OpAnalyzer = process.NewAnalyzer(timeWin.GetIdx(), timeWin.IsFirst, timeWin.IsLast, "time_window")
 	} else {
 		timeWin.OpAnalyzer.Reset()
 	}
 
+	exprMP, err := ctr.expressionMP(proc)
+	if err != nil {
+		return err
+	}
 	if len(ctr.aggExe) == 0 {
 		ctr.aggExe = make([]colexec.ExprEvalVector, len(timeWin.Aggs))
 		for i, ag := range timeWin.Aggs {
-			ctr.aggExe[i], err = colexec.MakeEvalVectorWithAllocation(proc, ag.GetArgExpressions(), ctr.allocation.Vector)
+			ctr.aggExe[i], err = colexec.MakeEvalVectorWithAllocation(proc, ag.GetArgExpressions(), exprMP)
 			if err != nil {
 				return err
 			}
@@ -75,8 +78,9 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	if len(ctr.partExe) == 0 && len(timeWin.PartitionBy) > 0 {
 		ctr.partExe = make([]colexec.ExpressionExecutor, len(timeWin.PartitionBy))
 		ctr.partSet = make([]func(v, w *vector.Vector, sel int64, length int) error, len(timeWin.PartitionBy))
+		ctr.partSetMP = nil
 		for i, expr := range timeWin.PartitionBy {
-			ctr.partExe[i], err = colexec.NewExpressionExecutorWithAllocation(proc, expr, ctr.allocation.Vector)
+			ctr.partExe[i], err = colexec.NewExpressionExecutorWithAllocation(proc, expr, exprMP)
 			if err != nil {
 				return err
 			}
@@ -87,7 +91,7 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if ctr.tsExe == nil {
-		ctr.tsExe, err = colexec.NewExpressionExecutorWithAllocation(proc, timeWin.Ts, ctr.allocation.Vector)
+		ctr.tsExe, err = colexec.NewExpressionExecutorWithAllocation(proc, timeWin.Ts, exprMP)
 		if err != nil {
 			return err
 		}
@@ -97,7 +101,7 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 			if err != nil {
 				return err
 			}
-			ctr.startExe, err = colexec.NewExpressionExecutorWithAllocation(proc, s, ctr.allocation.Vector)
+			ctr.startExe, err = colexec.NewExpressionExecutorWithAllocation(proc, s, exprMP)
 			if err != nil {
 				return err
 			}
@@ -111,7 +115,7 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 					return err
 				}
 			}
-			ctr.endExe, err = colexec.NewExpressionExecutorWithAllocation(proc, e, ctr.allocation.Vector)
+			ctr.endExe, err = colexec.NewExpressionExecutorWithAllocation(proc, e, exprMP)
 			if err != nil {
 				return err
 			}
@@ -122,13 +126,13 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	}
 	if timeWin.hasGapFillBounds() {
 		if ctr.gapFillStartExe == nil {
-			ctr.gapFillStartExe, err = colexec.NewExpressionExecutorWithAllocation(proc, timeWin.GapFillStart, ctr.allocation.Vector)
+			ctr.gapFillStartExe, err = colexec.NewExpressionExecutorWithAllocation(proc, timeWin.GapFillStart, exprMP)
 			if err != nil {
 				return err
 			}
 		}
 		if ctr.gapFillEndExe == nil {
-			ctr.gapFillEndExe, err = colexec.NewExpressionExecutorWithAllocation(proc, timeWin.GapFillEnd, ctr.allocation.Vector)
+			ctr.gapFillEndExe, err = colexec.NewExpressionExecutorWithAllocation(proc, timeWin.GapFillEnd, exprMP)
 			if err != nil {
 				return err
 			}
@@ -252,16 +256,7 @@ func getPartitionSetFunction(
 		if !w.IsConstNull() && !w.IsNull(uint64(sel)) {
 			return moerr.NewInternalErrorNoCtx("time window received a non-NULL T_any partition key")
 		}
-		if err := vector.SetConstNull(v, length, mp); err != nil {
-			return err
-		}
-		// A reused output vector may carry metadata from an earlier flush;
-		// NULL is not an observed conversion category, but it retains the
-		// independently selected value owner.
-		if err := v.SetPrepareParamKindsWithMP(nil, mp); err != nil {
-			return err
-		}
-		return v.SetStringSource(w.GetStringSourceAt(int(sel)))
+		return vector.SetConstNull(v, length, mp)
 	}
 }
 
@@ -292,7 +287,6 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			if !ok {
 				continue
 			}
-			timeWin.observePrepareParamKinds()
 
 			if err = ctr.calResForInterval(timeWin, proc); err != nil {
 				return result, err
@@ -330,7 +324,6 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			if !ok {
 				continue
 			}
-			timeWin.observePrepareParamKinds()
 
 			if ctr.curVecIdx == 0 && ctr.curRowIdx == 0 {
 				ctr.status = firstWindow
@@ -531,22 +524,6 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		}
 
-	}
-}
-
-func (timeWin *TimeWin) observePrepareParamKinds() {
-	batchIndex := timeWin.ctr.i - 1
-	if batchIndex < 0 || batchIndex >= len(timeWin.ctr.aggVec) {
-		return
-	}
-	for i := range timeWin.Aggs {
-		if i < len(timeWin.ctr.aggVec[batchIndex]) &&
-			len(timeWin.ctr.aggVec[batchIndex][i]) > 0 {
-			arg := timeWin.ctr.aggVec[batchIndex][i][0]
-			if arg.Length() > 0 && !arg.AllNull() {
-				timeWin.ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
-			}
-		}
 	}
 }
 
@@ -1228,21 +1205,14 @@ func appendTimestampBoundaryVector(
 	values []types.Datetime,
 	typ plan.Type,
 	proc *process.Process,
-	selections ...*vector.AllocationAccountSelection,
+	views ...*mpool.MPool,
 ) (vec *vector.Vector, err error) {
 	tsType := types.NewWithCharset(types.T_timestamp, typ.Width, typ.Scale, uint8(typ.Charset))
-	var selection *vector.AllocationAccountSelection
-	if len(selections) > 0 {
-		selection = selections[0]
+	mp := proc.Mp()
+	if len(views) > 0 && views[0] != nil {
+		mp = views[0]
 	}
-	if selection == nil {
-		vec = vector.NewOffHeapVecWithType(tsType)
-	} else {
-		vec, err = vector.NewOffHeapVecWithTypeAndAllocation(tsType, selection)
-		if err != nil {
-			return nil, err
-		}
-	}
+	vec = vector.NewOffHeapVecWithType(tsType)
 	defer func() {
 		if err != nil {
 			vec.Free(proc.Mp())
@@ -1252,9 +1222,9 @@ func appendTimestampBoundaryVector(
 	for _, value := range values {
 		tsValue := types.Timestamp(value)
 		if !timestampIntervalBoundaryInDomain(tsValue) {
-			err = vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp())
+			err = vector.AppendFixed(vec, types.Timestamp(0), true, mp)
 		} else {
-			err = vector.AppendFixed(vec, tsValue, false, proc.Mp())
+			err = vector.AppendFixed(vec, tsValue, false, mp)
 		}
 		if err != nil {
 			return vec, err
@@ -1269,21 +1239,14 @@ func appendTimestampIntervalBoundaryVector(
 	end bool,
 	typ plan.Type,
 	proc *process.Process,
-	selections ...*vector.AllocationAccountSelection,
+	views ...*mpool.MPool,
 ) (vec *vector.Vector, err error) {
 	tsType := types.NewWithCharset(types.T_timestamp, typ.Width, typ.Scale, uint8(typ.Charset))
-	var selection *vector.AllocationAccountSelection
-	if len(selections) > 0 {
-		selection = selections[0]
+	mp := proc.Mp()
+	if len(views) > 0 && views[0] != nil {
+		mp = views[0]
 	}
-	if selection == nil {
-		vec = vector.NewOffHeapVecWithType(tsType)
-	} else {
-		vec, err = vector.NewOffHeapVecWithTypeAndAllocation(tsType, selection)
-		if err != nil {
-			return nil, err
-		}
-	}
+	vec = vector.NewOffHeapVecWithType(tsType)
 	defer func() {
 		if err != nil {
 			vec.Free(proc.Mp())
@@ -1308,7 +1271,7 @@ func appendTimestampIntervalBoundaryVector(
 			value = types.Timestamp(vector.GetFixedAtNoTypeCheck[types.Date](starts, i).ToDatetime())
 		}
 		if starts.IsNull(uint64(i)) {
-			err = vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp())
+			err = vector.AppendFixed(vec, types.Timestamp(0), true, mp)
 			if err != nil {
 				return vec, err
 			}
@@ -1317,7 +1280,7 @@ func appendTimestampIntervalBoundaryVector(
 		if end && value != types.ZeroTimestamp {
 			boundary, ok := addTimestampIntervalBoundary(value, interval, proc.GetSessionInfo().TimeZone)
 			if !ok {
-				err = vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp())
+				err = vector.AppendFixed(vec, types.Timestamp(0), true, mp)
 				if err != nil {
 					return vec, err
 				}
@@ -1326,13 +1289,13 @@ func appendTimestampIntervalBoundaryVector(
 			value = boundary
 		}
 		if !timestampIntervalBoundaryInDomain(value) {
-			err = vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp())
+			err = vector.AppendFixed(vec, types.Timestamp(0), true, mp)
 			if err != nil {
 				return vec, err
 			}
 			continue
 		}
-		err = vector.AppendFixed(vec, value, false, proc.Mp())
+		err = vector.AppendFixed(vec, value, false, mp)
 		if err != nil {
 			return vec, err
 		}
@@ -1359,22 +1322,23 @@ func timestampIntervalBoundaryInDomain(value types.Timestamp) bool {
 
 func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.freeFlushedAggVecs(proc.Mp())
+	vecMP, err := ctr.allocation.MP(proc)
+	if err != nil {
+		return err
+	}
 	// Aggregate results can carry a statement allocation account.  The result
 	// batch takes ownership of those vectors and therefore must preserve their
 	// off-heap/accounted storage class.
 	ctr.bat = batch.NewOffHeapWithSize(ctr.colCnt)
 	i := 0
-	for aggIndex, agg := range ctr.aggs {
+	for _, agg := range ctr.aggs {
 		vecs, err := agg.Flush()
 		if err != nil {
 			return err
 		}
-		result, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+		result, err := aggexec.MergeSplitResult(vecs, vecMP)
 		if err != nil {
 			return err
-		}
-		if !result.HasPrepareParamKind() {
-			result.SetPrepareParamKind(ctr.prepareParamKind.Get(aggIndex))
 		}
 
 		ctr.bat.SetVector(int32(i), result)
@@ -1399,7 +1363,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	bat := batch.NewOffHeapWithSize(1)
 	if ap.WStart {
 		if ap.timestampWindow() {
-			ctr.startVec, err = appendTimestampBoundaryVector(ctr.wStart, ap.TsType, proc, ctr.allocation.Vector)
+			ctr.startVec, err = appendTimestampBoundaryVector(ctr.wStart, ap.TsType, proc, vecMP)
 			if err != nil {
 				return err
 			}
@@ -1416,7 +1380,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 					return err
 				}
 			}
-			err = vector.AppendFixedList(ctr.startVec, ctr.wStart, nil, proc.Mp())
+			err = vector.AppendFixedList(ctr.startVec, ctr.wStart, nil, vecMP)
 			if err != nil {
 				return err
 			}
@@ -1433,7 +1397,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 
 	if ap.WEnd {
 		if ap.timestampWindow() {
-			ctr.endVec, err = appendTimestampBoundaryVector(ctr.wEnd, ap.TsType, proc, ctr.allocation.Vector)
+			ctr.endVec, err = appendTimestampBoundaryVector(ctr.wEnd, ap.TsType, proc, vecMP)
 			if err != nil {
 				return err
 			}
@@ -1450,7 +1414,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 					return err
 				}
 			}
-			err = vector.AppendFixedList(ctr.endVec, ctr.wEnd, nil, proc.Mp())
+			err = vector.AppendFixedList(ctr.endVec, ctr.wEnd, nil, vecMP)
 			if err != nil {
 				return err
 			}
@@ -1479,14 +1443,15 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 
 func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.freeIntervalTimestampBoundaryVecs(proc.Mp())
+	vecMP, err := ctr.allocation.MP(proc)
+	if err != nil {
+		return err
+	}
 	// Input expressions can forward allocation-accounted vectors.  Both the
 	// result owner and the temporary expression batch must keep them off-heap.
 	ctr.bat = batch.NewOffHeapWithSize(ctr.colCnt)
 	i := 0
-	for aggIndex, vecs := range ctr.aggVec[ctr.i-1] {
-		if !vecs[0].HasPrepareParamKind() {
-			vecs[0].SetPrepareParamKind(ctr.prepareParamKind.Get(aggIndex))
-		}
+	for _, vecs := range ctr.aggVec[ctr.i-1] {
 		ctr.bat.SetVector(int32(i), vecs[0])
 		i++
 	}
@@ -1500,7 +1465,7 @@ func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err
 	}
 	if ap.timestampWindow() {
 		if ap.WStart {
-			ctr.startVec, err = appendTimestampIntervalBoundaryVector(ctr.tsVec[ctr.i-1], 0, false, ap.TsType, proc, ctr.allocation.Vector)
+			ctr.startVec, err = appendTimestampIntervalBoundaryVector(ctr.tsVec[ctr.i-1], 0, false, ap.TsType, proc, vecMP)
 			if err != nil {
 				return err
 			}
@@ -1510,7 +1475,7 @@ func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err
 		}
 
 		if ap.WEnd {
-			ctr.endVec, err = appendTimestampIntervalBoundaryVector(ctr.tsVec[ctr.i-1], ap.Interval, true, ap.TsType, proc, ctr.allocation.Vector)
+			ctr.endVec, err = appendTimestampIntervalBoundaryVector(ctr.tsVec[ctr.i-1], ap.Interval, true, ap.TsType, proc, vecMP)
 			if err != nil {
 				return err
 			}
@@ -1638,6 +1603,18 @@ func (ctr *container) setPartVecsForWindows(slot, length int, proc *process.Proc
 			return err
 		}
 	}
+	vecMP, err := ctr.allocation.MP(proc)
+	if err != nil {
+		return err
+	}
+	if ctr.partSetMP != vecMP {
+		// The broadcast closures capture the pool partOut grows through; rebind
+		// them when the operator's accounted view changes.
+		for p, src := range ctr.partVec[ctr.partIdx] {
+			ctr.partSet[p] = getPartitionSetFunction(*src.GetType(), vecMP)
+		}
+		ctr.partSetMP = vecMP
+	}
 	for p, src := range ctr.partVec[ctr.partIdx] {
 		if ctr.partOut[p] == nil {
 			var err error
@@ -1697,7 +1674,11 @@ func (ctr *container) filterNullTimeRows(bat *batch.Batch, proc *process.Process
 			sels = append(sels, int64(i))
 		}
 	}
-	if err := ts.Shrink(sels, false, proc.Mp()); err != nil {
+	vecMP, err := ctr.allocation.MP(proc)
+	if err != nil {
+		return false, err
+	}
+	if err := ts.Shrink(sels, false, vecMP); err != nil {
 		return false, err
 	}
 	for i, vec := range bat.Vecs {
@@ -1712,7 +1693,7 @@ func (ctr *container) filterNullTimeRows(bat *batch.Batch, proc *process.Process
 			}
 		}
 		if !duplicate {
-			if err := vec.Shrink(sels, false, proc.Mp()); err != nil {
+			if err := vec.Shrink(sels, false, vecMP); err != nil {
 				return false, err
 			}
 		}
@@ -1724,6 +1705,10 @@ func (ctr *container) filterNullTimeRows(bat *batch.Batch, proc *process.Process
 func (ctr *container) evalPartVector(bat *batch.Batch, proc *process.Process) error {
 	if len(ctr.partExe) == 0 {
 		return nil
+	}
+	vecMP, err := ctr.allocation.MP(proc)
+	if err != nil {
+		return err
 	}
 	f := len(ctr.partVec) > ctr.i
 	if !f {
@@ -1744,11 +1729,11 @@ func (ctr *container) evalPartVector(bat *batch.Batch, proc *process.Process) er
 		}
 		if f {
 			ctr.partVec[ctr.i][i].CleanOnlyData()
-			if err = ctr.partVec[ctr.i][i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+			if err = ctr.partVec[ctr.i][i].UnionBatch(vec, 0, vec.Length(), nil, vecMP); err != nil {
 				return err
 			}
 		} else {
-			ctr.partVec[ctr.i][i], err = vec.Dup(proc.Mp())
+			ctr.partVec[ctr.i][i], err = vec.Dup(vecMP)
 			if err != nil {
 				return err
 			}
@@ -1777,6 +1762,10 @@ func (ctr *container) samePartition(vecIdx1, rowIdx1, vecIdx2, rowIdx2 int) bool
 }
 
 func (ctr *container) evalTsVector(bat *batch.Batch, proc *process.Process) error {
+	vecMP, err := ctr.allocation.MP(proc)
+	if err != nil {
+		return err
+	}
 	vec, err := ctr.tsExe.Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return err
@@ -1784,7 +1773,7 @@ func (ctr *container) evalTsVector(bat *batch.Batch, proc *process.Process) erro
 
 	if len(ctr.tsVec) > ctr.i {
 		ctr.tsVec[ctr.i].CleanOnlyData()
-		if err = ctr.tsVec[ctr.i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+		if err = ctr.tsVec[ctr.i].UnionBatch(vec, 0, vec.Length(), nil, vecMP); err != nil {
 			return err
 		}
 	} else {
@@ -1792,7 +1781,7 @@ func (ctr *container) evalTsVector(bat *batch.Batch, proc *process.Process) erro
 		if err != nil {
 			return err
 		}
-		tv, err := vec.Dup(proc.Mp())
+		tv, err := vec.Dup(vecMP)
 		if err != nil {
 			return err
 		}
@@ -1803,6 +1792,10 @@ func (ctr *container) evalTsVector(bat *batch.Batch, proc *process.Process) erro
 }
 
 func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) error {
+	vecMP, err := ctr.allocation.MP(proc)
+	if err != nil {
+		return err
+	}
 	f := len(ctr.aggVec) > ctr.i
 	if !f {
 		var err error
@@ -1830,14 +1823,11 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) err
 			}
 			if f {
 				ctr.aggVec[ctr.i][i][j].CleanOnlyData()
-				if err = ctr.aggVec[ctr.i][i][j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+				if err = ctr.aggVec[ctr.i][i][j].UnionBatch(vec, 0, vec.Length(), nil, vecMP); err != nil {
 					return err
 				}
-				if !ctr.aggVec[ctr.i][i][j].HasPrepareParamKind() {
-					ctr.aggVec[ctr.i][i][j].SetPrepareParamKind(vec.GetPrepareParamKind())
-				}
 			} else {
-				ctr.aggVec[ctr.i][i][j], err = vec.Dup(proc.Mp())
+				ctr.aggVec[ctr.i][i][j], err = vec.Dup(vecMP)
 				if err != nil {
 					return err
 				}

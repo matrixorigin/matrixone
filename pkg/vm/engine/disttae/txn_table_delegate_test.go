@@ -67,7 +67,7 @@ func TestTxnTableDelegate_CollectChanges(t *testing.T) {
 		types.TS{},
 		types.TS{},
 		false,
-		&mpool.MPool{},
+		mpool.MustNewZero(),
 	)
 	assert.NoError(t, err)
 	assert.NotNil(t, handle)

@@ -64,15 +64,6 @@ func TestValidVectorsAcceptsBroadcastConstants(t *testing.T) {
 	constantNull := vector.NewConstNull(types.T_int32.ToType(), 1, mp)
 	emptyConstant := vector.NewConstNull(types.T_int32.ToType(), 0, mp)
 	groupingConstant := vector.NewRollupConst(types.T_int32.ToType(), 1, mp)
-	provenanceConstant, err := vector.NewConstFixed(types.T_int32.ToType(), int32(7), 2, mp)
-	require.NoError(t, err)
-	require.NoError(t, provenanceConstant.SetPrepareParamKindsWithMP(
-		[]vector.PrepareParamKind{
-			vector.PrepareParamInteger,
-			vector.PrepareParamFloat,
-		},
-		mp,
-	))
 	defer func() {
 		flat.Free(mp)
 		short.Free(mp)
@@ -80,7 +71,6 @@ func TestValidVectorsAcceptsBroadcastConstants(t *testing.T) {
 		constantNull.Free(mp)
 		emptyConstant.Free(mp)
 		groupingConstant.Free(mp)
-		provenanceConstant.Free(mp)
 		require.Zero(t, mp.CurrNB())
 	}()
 	require.NoError(t, vector.AppendFixedList(flat, []int32{1, 2, 3}, nil, mp))
@@ -100,7 +90,6 @@ func TestValidVectorsAcceptsBroadcastConstants(t *testing.T) {
 		{name: "empty const for rows", vecs: []*vector.Vector{emptyConstant}, rows: 1, want: false},
 		{name: "empty const for empty input", vecs: []*vector.Vector{emptyConstant}, rows: 0, want: true},
 		{name: "short grouping const", vecs: []*vector.Vector{groupingConstant}, rows: 3, want: false},
-		{name: "short provenance const", vecs: []*vector.Vector{provenanceConstant}, rows: 3, want: false},
 		{name: "nil vector", vecs: []*vector.Vector{nil}, rows: 3, want: false},
 		{name: "no vectors", rows: 3, want: false},
 		{name: "negative rows", vecs: []*vector.Vector{constant}, rows: -1, want: false},
@@ -1102,28 +1091,4 @@ func TestCanonicalVecBlockKeyMatchesEquality(t *testing.T) {
 	// a malformed cell keeps its bytes
 	require.Equal(t, []byte{1, 2, 3}, AppendCanonicalValue(nil, f8, []byte{1, 2, 3}))
 	require.Equal(t, 3, CanonicalValueSize(f8, []byte{1, 2, 3}))
-}
-
-func TestComputeXXHashDictionaryFloatLogicalRows(t *testing.T) {
-	mp := mpool.MustNewZero()
-	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	source := vector.NewVec(types.T_float64.ToType())
-	t.Cleanup(func() { source.Free(mp) })
-	require.NoError(t, vector.AppendFixedList(source, []float64{math.Copysign(0, -1), 1.5, 0}, []bool{false, false, true}, mp))
-	base, err := vector.FreezeVector(source, mp, nil)
-	require.NoError(t, err)
-	t.Cleanup(base.Release)
-	rows, err := vector.NewRowSelection([]int64{1, 0, 1, 2}, 3, mp, nil)
-	require.NoError(t, err)
-	t.Cleanup(rows.Release)
-	dict, err := vector.NewDictionaryVector(base, rows, mp, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { dict.Free(mp) })
-	control := vector.NewVec(types.T_float64.ToType())
-	t.Cleanup(func() { control.Free(mp) })
-	require.NoError(t, vector.AppendFixedList(control, []float64{1.5, 0, 1.5, 0}, []bool{false, false, false, true}, mp))
-	want, got := make([]uint64, 4), make([]uint64, 4)
-	ComputeXXHash([]*vector.Vector{control}, want, 7)
-	ComputeXXHash([]*vector.Vector{dict}, got, 7)
-	require.Equal(t, want, got)
 }

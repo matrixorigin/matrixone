@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -106,7 +105,7 @@ func ReadDataByFilter(
 		}
 		sels = searchFunc(cacheVectors)
 		if !deleteMask.IsEmpty() {
-			sels = util.RemoveIf(sels, func(i int64) bool {
+			sels = slices.DeleteFunc(sels, func(i int64) bool {
 				return deleteMask.Contains(uint64(i))
 			})
 		}
@@ -337,6 +336,7 @@ func blockDataRead(
 	if applyFilter != nil && applyFilter.Exact != nil &&
 		orderByLimit == nil && !info.IsAppendable() && phyAddrColumnPos < 0 {
 		cacheVectors.Free(mp)
+		applyFilter.FreeMembership(mp)
 		return blockDataReadExactFilter(ctx, info, ds, columns, colTypes, sels, policy, bat, mp, fs, applyFilter, preFilterRows)
 	}
 
@@ -1025,6 +1025,11 @@ func blockDataReadWithFilter(
 		return err
 	}
 	cacheVectors.Free(mp)
+	stageMembership := phyAddrColumnPos < 0 && orderByLimit == nil && ds != nil && len(outputBat.ExtraBuf) == 0 &&
+		canReadMembership(ctx, info, columns, colTypes, storageSelectRows, earlyColumns, applyFilter)
+	if !stageMembership {
+		applyFilter.FreeMembership(mp)
+	}
 	if len(storageSelectRows) > 0 &&
 		!info.IsAppendable() && orderByLimit != nil && !orderByLimit.OrderedLimit {
 		topColPos := int(orderByLimit.ColPos)
@@ -1085,6 +1090,18 @@ func blockDataReadWithFilter(
 			tombstones.Release()
 			return tombstoneErr
 		}
+		if stageMembership {
+			if tombstones.IsEmpty() {
+				handled, memberErr := blockDataReadMembership(ctx, info, columns, colTypes, earlyColumns,
+					policy, outputBat, mp, fs, applyFilter, preFilterRows)
+				if handled || memberErr != nil {
+					tombstones.Release()
+					return memberErr
+				}
+			} else {
+				applyFilter.FreeMembership(mp)
+			}
+		}
 
 		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) && !objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(colTypes) {
 			defer tombstones.Release()
@@ -1103,7 +1120,9 @@ func blockDataReadWithFilter(
 				typs[i] = colTypes[pos]
 				dest[i] = outputBat.Vecs[pos]
 			}
-			_, err = ioutil.LoadColumnsDataIntoBorrowed(ctx, idxes, typs, fs, info.MetaLocation(), dest, mp, policy, applyFilter.BorrowColumns(earlyColumns, len(outputBat.Vecs)))
+			// The output batch is the lender of every borrowed column: it holds the
+			// cache pins until its next CleanOnlyData/Clean.
+			_, err = ioutil.LoadColumnsDataIntoBorrowed(ctx, idxes, typs, fs, info.MetaLocation(), dest, mp, policy, applyFilter.BorrowColumns(earlyColumns, len(outputBat.Vecs)), outputBat)
 		} else {
 			deleteMask, err = materializeBlockColumnsAtPositions(
 				ctx,
@@ -1134,8 +1153,7 @@ func blockDataReadWithFilter(
 
 		physicalRowCount = outputBat.Vecs[earlyColumns[0]].Length()
 		if !deleteMask.IsEmpty() {
-			deleted := vector.GetSels()
-			defer func() { vector.PutSels(deleted) }()
+			var deleted []int64
 			deleted = deleteMask.ToI64Array(&deleted)
 			for _, pos := range earlyColumns {
 				if err := outputBat.Vecs[pos].Shrink(deleted, true, mp); err != nil {
@@ -1223,8 +1241,11 @@ func blockDataReadWithFilter(
 		// Map only the surviving logical rows back to block offsets. In
 		// particular, a zero-result filter returns above without building an
 		// O(block rows) live-row slice.
-		selectedPhysicalRows = vector.GetSels()
-		defer func() { vector.PutSels(selectedPhysicalRows) }()
+		capacity := len(filterResult.Sels)
+		if filterResult.All {
+			capacity = physicalRowCount
+		}
+		selectedPhysicalRows = make([]int64, 0, capacity)
 		nextSelected := 0
 		liveRow := int64(0)
 		for physicalRow := 0; physicalRow < physicalRowCount; physicalRow++ {
@@ -1244,8 +1265,8 @@ func blockDataReadWithFilter(
 		if physicalRows == nil {
 			selectedPhysicalRows = filterResult.Sels
 		} else {
-			selectedPhysicalRows = vector.GetSels()
-			defer func() { vector.PutSels(selectedPhysicalRows) }()
+			// A new slice: physicalRows belongs to the caller.
+			selectedPhysicalRows = make([]int64, 0, len(filterResult.Sels))
 			for _, row := range filterResult.Sels {
 				selectedPhysicalRows = append(selectedPhysicalRows, physicalRows[row])
 			}
@@ -1440,7 +1461,7 @@ func blockDataReadWithSelectedFilterTopK(
 				return selectedPhysicalRows, nil
 			}
 
-			pooledPhysicalRows = vector.GetSels()
+			pooledPhysicalRows = pooledPhysicalRows[:0]
 			for _, row := range filterResult.Sels {
 				pooledPhysicalRows = append(pooledPhysicalRows, storageSelectRows[row])
 			}
@@ -1451,9 +1472,6 @@ func blockDataReadWithSelectedFilterTopK(
 		mp,
 		policy,
 	)
-	if pooledPhysicalRows != nil {
-		defer vector.PutSels(pooledPhysicalRows)
-	}
 	if err != nil {
 		return err
 	}
@@ -1639,8 +1657,7 @@ func BlockDataReadInner(
 		defer deleteMask.Release()
 
 		if !deleteMask.IsEmpty() {
-			arr := vector.GetSels()
-			defer vector.PutSels(arr)
+			var arr []int64
 			deletedRows = deleteMask.ToI64Array(&arr)
 			for i := range columns {
 				if err := outputBat.Vecs[i].Shrink(deletedRows, true, mp); err != nil {
@@ -1773,10 +1790,7 @@ func BlockDataReadInner(
 	// transform delete mask to deleted rows
 	// TODO: avoid this transformation
 	if !deleteMask.IsEmpty() {
-		arr := vector.GetSels()
-		defer func() {
-			vector.PutSels(arr)
-		}()
+		var arr []int64
 
 		deletedRows = deleteMask.ToI64Array(&arr)
 	}

@@ -117,9 +117,6 @@ func blockDataReadScopedOwned(ctx context.Context, info *objectio.BlockInfo, col
 			}
 		}
 		output.SetRowCount(count)
-		if request.ObserveSelection != nil {
-			request.ObserveSelection(count, 0, 0)
-		}
 		return nil
 	})
 	if err != nil {

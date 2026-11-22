@@ -823,3 +823,16 @@ func TestLocalityFormat(t *testing.T) {
 	}}
 	assert.Equal(t, "k1:v1;k2:v2", l1.Format())
 }
+
+func TestParseLocality(t *testing.T) {
+	cases := map[string]map[string]string{
+		"":            nil,
+		"k1:v1":       {"k1": "v1"},
+		"k1:v1;k2:v2": {"k2": "v2", "k1": "v1"},
+		"k1:v1;k2":    {"k2": "", "k1": "v1"},
+		"k1:v1;k2:":   {"k2": "", "k1": "v1"},
+	}
+	for k, v := range cases {
+		assert.Equal(t, v, ParseLocality(k))
+	}
+}

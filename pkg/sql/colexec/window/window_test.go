@@ -1817,14 +1817,8 @@ func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
-	require.NoError(t, err)
-	for col, vec := range bat.Vecs {
-		copied, err := vec.DupOffHeapWithAllocation(proc.Mp(), selection)
-		require.NoError(t, err)
-		bat.Vecs[col] = copied
-		vec.Free(proc.Mp())
-	}
+	// Window's materialized copies are charged to its own account.
+	require.NoError(t, arg.SetAllocationAccount(account))
 
 	require.NoError(t, arg.Prepare(proc))
 	_, err = vm.Exec(arg, proc)
@@ -1837,6 +1831,8 @@ func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	require.Positive(t, account.Snapshot().Used)
 	arg.Reset(proc, true, err)
 	require.Nil(t, arg.ctr.batAggs, "Reset must release window aggregators after an error")
+	require.Zero(t, account.Snapshot().Used)
+	require.NoError(t, arg.ClearAllocationAccount(account))
 
 	terminal, _, terminalErr := registry.CompleteTerminal(account)
 	require.NoError(t, terminalErr)
@@ -2669,14 +2665,6 @@ func TestCumulativePrefixWithinOutputChunk(t *testing.T) {
 				}
 			}
 			bat.SetRowCount(8)
-			if tc.function == "max" {
-				require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
-				require.NoError(t, input.SetStringSourceAtWithMP(6, types.StringSourceUserVariable, proc.Mp()))
-				require.NoError(t, input.SetPrepareParamKindAtWithMP(5, vector.PrepareParamInteger, proc.Mp()))
-				if tc.typ.IsVarlen() {
-					require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, proc.Mp()))
-				}
-			}
 			overload, err := function.GetFunctionByName(proc.Ctx, tc.function, []types.Type{tc.typ})
 			require.NoError(t, err)
 			expression := aggexec.MakeAggFunctionExpression(overload.GetEncodedOverloadID(), tc.distinct, []*plan.Expr{newColExprWithType(0, tc.typ)}, nil)
@@ -2708,9 +2696,6 @@ func TestCumulativePrefixWithinOutputChunk(t *testing.T) {
 					require.Equal(t, want[0].IsNull(uint64(expected)), got.IsNull(uint64(row)))
 					if !got.IsNull(uint64(row)) {
 						require.Equal(t, want[0].GetRawBytesAt(expected), got.GetRawBytesAt(row))
-						require.Equal(t, want[0].GetPrepareParamKindAt(expected), got.GetPrepareParamKindAt(row))
-						require.Equal(t, want[0].GetStringSourceAt(expected), got.GetStringSourceAt(row))
-						require.Equal(t, want[0].GetRuntimeStringDomainAt(expected), got.GetRuntimeStringDomainAt(row))
 					}
 				}
 				start = end

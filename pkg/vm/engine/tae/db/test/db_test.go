@@ -69,6 +69,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -1473,7 +1474,7 @@ func TestFlushTabletail(t *testing.T) {
 				defer view.Close()
 				viewDel := 0
 				if view.Deletes != nil {
-					viewDel = view.Deletes.GetCardinality()
+					viewDel = view.Deletes.Count()
 				}
 				assert.Equal(t, dels[i], viewDel)
 				view.Compact()
@@ -1515,7 +1516,7 @@ func TestFlushTabletail(t *testing.T) {
 
 				viewDel := 0
 				if views.Deletes != nil {
-					viewDel = views.Deletes.GetCardinality()
+					viewDel = views.Deletes.Count()
 				}
 				assert.Equal(t, dels[i], viewDel)
 				views.Compact()
@@ -2356,7 +2357,7 @@ func TestADA(t *testing.T) {
 			err := blk.HybridScan(ctx, &view, uint16(j), []int{schema.GetSingleSortKeyIdx()}, common.DefaultAllocator)
 			assert.NoError(t, err)
 			assert.Equal(t, 4, view.Length())
-			assert.Equal(t, 3, view.Deletes.GetCardinality())
+			assert.Equal(t, 3, view.Deletes.Count())
 			view.Close()
 
 		}
@@ -2525,7 +2526,7 @@ func TestChaos1(t *testing.T) {
 	mask := view.Deletes
 	view.Compact()
 	t.Log(view.String())
-	assert.Equal(t, int(deleteCnt), mask.GetCardinality())
+	assert.Equal(t, int(deleteCnt), mask.Count())
 }
 
 // Testing Steps
@@ -4267,6 +4268,17 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 	require.NoError(t, abortTxn.PrePrepare(ctx))
 	require.NoError(t, abortTxn.PreApplyCommit())
 	require.NoError(t, abortTxn.Rollback(ctx))
+
+	// Insert a terminal reservation with no prepare timestamp. Unlike the
+	// rollback above, the range collector omits this slot entirely. The
+	// following ordinary append still uses the next physical offset.
+	gapTxn, gapRel := tae.GetRelation()
+	metas := testutil.GetAllAppendableMetas(gapRel, false)
+	require.Len(t, metas, 1)
+	gap := updates.NewAppendNode(nil, 2, 3, false, nil)
+	gap.Start, gap.End, gap.Aborted = abortTxn.GetStartTS(), abortTxn.GetCommitTS(), true
+	require.NoError(t, metas[0].GetObjectData().OnReplayAppend(gap))
+	require.NoError(t, gapTxn.Rollback(ctx))
 	tae.DoAppend(tail)
 
 	deleteTxn, deleteRel := tae.GetRelation()
@@ -4274,7 +4286,7 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 	key := tail.Vecs[sortKeyIdx].Get(0)
 	id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(key))
 	require.NoError(t, err)
-	require.Equal(t, uint32(2), offset, "rollback hole must retain its physical slot")
+	require.Equal(t, uint32(3), offset, "both holes must retain their physical slots")
 	oldBlockID := id.BlockID
 	require.NoError(t, deleteRel.RangeDelete(id, offset, offset, handle.DT_Normal))
 	require.NoError(t, deleteTxn.Commit(ctx))
@@ -4297,8 +4309,14 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 
 	// The historical snapshot is held open while the aobject location is
 	// replaced, so it cannot use tombstones transferred by the later flush.
-	// Its tombstone still targets original offset 2; it must hide that row while
-	// preserving the later live row at offset 3.
+	// Its tombstone targets physical offset 3 and the surviving value is still
+	// at offset 4 in both point-read paths.
+	for _, skipDeleteCheck := range []bool{false, true} {
+		value, isNull, err := snapshotRel.GetValue(id, 4, uint16(sortKeyIdx), skipDeleteCheck)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, rows.Vecs[sortKeyIdx].Get(3), value)
+	}
 	var view *containers.Batch
 	err = tables.HybridScanByBlock(
 		ctx,

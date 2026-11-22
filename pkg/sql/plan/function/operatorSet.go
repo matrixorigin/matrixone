@@ -319,6 +319,10 @@ func coalesceBinaryStringResult(overloads []overload, inputs []types.Type) (chec
 			continue
 		case types.T_binary, types.T_varbinary:
 			hasBinary = true
+		case types.T_char, types.T_varchar:
+			// MySQL gives a COALESCE over byte and character strings the
+			// binary string type, as it does IF and CASE. The type is the
+			// only carrier of that domain: vectors have no per-row domain.
 		default:
 			return checkResult{}, false
 		}
@@ -1702,6 +1706,11 @@ func unaryMinusMatch(overloads []overload, inputs []types.Type) checkResult {
 		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 			// The low-precision floats widen losslessly to float32 (overload 4).
 			return newCheckResultWithCast(4, []types.Type{types.T_float32.ToType()})
+		case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+			// MySQL evaluates unary temporal negation in DOUBLE, unlike binary
+			// subtraction. The temporal-to-FLOAT64 cast preserves its numeric
+			// calendar representation and session-time-zone interpretation.
+			return newCheckResultWithCast(5, []types.Type{types.T_float64.ToType()})
 		}
 	}
 	return fixedTypeMatch(overloads, inputs)

@@ -55,9 +55,12 @@ type container struct {
 
 	executorsForOrderList []colexec.ExpressionExecutor
 
-	allocationAccount    *mpool.AllocationAccount
-	retainedAllocation   *vector.AllocationAccountSelection
-	expressionAllocation *vector.AllocationAccountSelection
+	allocationAccount *mpool.AllocationAccount
+	// Accounted views of allocationViewPool, built on first use because the
+	// account is bound before the operator knows its process pool.
+	allocationViewPool   *mpool.MPool
+	retainedAllocation   *mpool.MPool
+	expressionAllocation *mpool.MPool
 	appendScratch        *mpool.AccountedBuffer
 
 	// stream is non-nil when MergeTop is the leaf of an ordered merge scope.
@@ -162,32 +165,68 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		len(ctr.executorsForOrderList) != 0 || cap(ctr.sels) != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	retained, err := vector.NewAllocationAccountSelection(
-		account,
+	ctr.allocationAccount = account
+	ctr.allocationViewPool = nil
+	ctr.retainedAllocation = nil
+	ctr.expressionAllocation = nil
+	return nil
+}
+
+// allocationViews builds the accounted views of mp the bound account charges
+// through. It is a no-op when no account is bound or the views already view mp.
+func (ctr *container) allocationViews(mp *mpool.MPool) error {
+	if ctr.allocationAccount == nil || mp == nil ||
+		(ctr.allocationViewPool == mp && ctr.retainedAllocation != nil) {
+		return nil
+	}
+	retained, err := mp.WithAccount(
+		ctr.allocationAccount,
 		mpool.AllocationOwnerTop,
 		topsites.MergeTopRetainedData,
-		topsites.MergeTopRetainedArea,
-		topsites.MergeTopRetainedNulls,
-		topsites.MergeTopRetainedGrouping,
+		mpool.AllocationCapacityClassDefault,
 	)
 	if err != nil {
 		return err
 	}
-	expression, err := vector.NewAllocationAccountSelection(
-		account,
+	expression, err := mp.WithAccount(
+		ctr.allocationAccount,
 		mpool.AllocationOwnerTop,
 		topsites.MergeTopExpressionData,
-		topsites.MergeTopExpressionArea,
-		topsites.MergeTopExpressionNulls,
-		topsites.MergeTopExpressionGrouping,
+		mpool.AllocationCapacityClassDefault,
 	)
 	if err != nil {
 		return err
 	}
-	ctr.allocationAccount = account
+	ctr.allocationViewPool = mp
 	ctr.retainedAllocation = retained
 	ctr.expressionAllocation = expression
 	return nil
+}
+
+// retainedMP returns the pool retained merge-top state allocates from.
+func (ctr *container) retainedMP(proc *process.Process) (*mpool.MPool, error) {
+	if ctr.allocationAccount == nil {
+		return proc.Mp(), nil
+	}
+	if err := ctr.allocationViews(proc.Mp()); err != nil {
+		return nil, err
+	}
+	return ctr.retainedAllocation, nil
+}
+
+// copyCompareRow replaces dst row dstRow of cmp's retained vector with src
+// row srcRow, allocating any growth through mp.
+func copyCompareRow(
+	cmp compare.Compare,
+	src *vector.Vector,
+	srcRow, dstRow int64,
+	mp *mpool.MPool,
+	proc *process.Process,
+) error {
+	if !mp.IsView() {
+		return cmp.Copy(1, 0, srcRow, dstRow, proc)
+	}
+	return cmp.Vector().Copy(src, dstRow, srcRow, mp)
 }
 
 func (ctr *container) clearAllocationAccount(account *mpool.AllocationAccount) error {
@@ -202,6 +241,7 @@ func (ctr *container) clearAllocationAccount(account *mpool.AllocationAccount) e
 		return mpool.ErrAllocationAccountInvariant
 	}
 	ctr.allocationAccount = nil
+	ctr.allocationViewPool = nil
 	ctr.retainedAllocation = nil
 	ctr.expressionAllocation = nil
 	return nil

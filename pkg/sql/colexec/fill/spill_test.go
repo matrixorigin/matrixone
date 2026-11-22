@@ -36,62 +36,6 @@ func (fillShortWriter) Write(value []byte) (int, error) {
 	return len(value) - 1, nil
 }
 
-func TestFillSpillRoundTripPreservesPrepareParamKinds(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-
-	spill, err := newFillSpill(&container{}, proc)
-	require.NoError(t, err)
-	defer spill.close(proc)
-
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, proc.Mp()))
-	bat.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
-	bat.SetRowCount(1)
-	_, err = spill.writeRecord(proc, spill.input, bat)
-	require.NoError(t, err)
-	require.NoError(t, spill.input.finishWriting())
-	bat.Clean(proc.Mp())
-
-	pos := int64(-1)
-	got, err := spill.readRecordReverse(spill.input, &pos, proc.Mp(), nil)
-	require.NoError(t, err)
-	require.Equal(t, vector.PrepareParamFloat, got.Vecs[0].GetPrepareParamKindAt(0))
-	got.Clean(proc.Mp())
-}
-
-func TestFillSpillRoundTripPreservesHeterogeneousPrepareParamKinds(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-
-	spill, err := newFillSpill(&container{}, proc)
-	require.NoError(t, err)
-	defer spill.close(proc)
-
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	for range 2 {
-		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, proc.Mp()))
-	}
-	bat.Vecs[0].SetPrepareParamKinds([]vector.PrepareParamKind{
-		vector.PrepareParamFloat,
-		vector.PrepareParamNone,
-	})
-	bat.SetRowCount(2)
-	_, err = spill.writeRecord(proc, spill.input, bat)
-	require.NoError(t, err)
-	require.NoError(t, spill.input.finishWriting())
-	bat.Clean(proc.Mp())
-
-	pos := int64(-1)
-	got, err := spill.readRecordReverse(spill.input, &pos, proc.Mp(), nil)
-	require.NoError(t, err)
-	require.Equal(t, vector.PrepareParamFloat, got.Vecs[0].GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamNone, got.Vecs[0].GetPrepareParamKindAt(1))
-	got.Clean(proc.Mp())
-}
-
 func TestFillSpillWriteRejectsShortIO(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -160,19 +104,17 @@ func TestFillSpillLinearMarkerFailurePreservesSource(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(mpool.MB)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
+	view, err := markerMP.WithAccount(
 		account,
 		mpool.AllocationOwnerFill,
 		fillAllocationSiteRetainedData,
-		fillAllocationSiteRetainedArea,
-		fillAllocationSiteRetainedNulls,
-		fillAllocationSiteRetainedGrouping,
+		mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
-	borrowed, err := makeBorrowedSpillBatch(source, 1, markerMP, selection)
+	borrowed, err := makeBorrowedSpillBatch(source, 1, markerMP, view)
 	require.NoError(t, err)
 	linearMarkers := false
-	err = addLinearDistanceMarkers(borrowed, 1, markerMP, selection)
+	err = addLinearDistanceMarkers(borrowed, 1, markerMP, view)
 	require.Error(t, err)
 	releaseBorrowedSpillBatch(borrowed, 1, linearMarkers, markerMP)
 

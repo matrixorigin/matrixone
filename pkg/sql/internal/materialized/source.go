@@ -52,7 +52,7 @@ type Source struct {
 	memoryBatchLimit   int
 	spillFile          *os.File
 	spillConfig        SpillConfig
-	allocation         *vector.AllocationAccountSelection
+	allocation         *mpool.MPool
 	spillDisk          GrowingReservation
 	spillFD            Reservation
 	spillStartPosition int
@@ -131,8 +131,8 @@ type SpillConfig struct {
 const (
 	cteAllocationSiteData mpool.AllocationSite = iota + 1
 	cteAllocationSiteArea
-	cteAllocationSiteNulls
-	cteAllocationSiteGrouping
+	_ // reserved: was cteAllocationSiteNulls
+	_ // reserved: was cteAllocationSiteGrouping
 )
 
 // CTESinkOption marks a planner-approved bounded multi-consumer CTE source.
@@ -188,18 +188,20 @@ func (s *Source) Begin(mp *mpool.MPool, spillConfig ...SpillConfig) error {
 			)
 		}
 		owner := s.spillConfig.AllocationOwner
-		sites := [4]mpool.AllocationSite{cteAllocationSiteData, cteAllocationSiteArea, cteAllocationSiteNulls, cteAllocationSiteGrouping}
+		sites := [2]mpool.AllocationSite{cteAllocationSiteData, cteAllocationSiteArea}
 		switch owner {
 		case 0, mpool.AllocationOwnerCTE:
 			owner = mpool.AllocationOwnerCTE
 		case mpool.AllocationOwnerTop:
-			sites = [4]mpool.AllocationSite{topsites.AdaptiveTopRetainedData, topsites.AdaptiveTopRetainedArea, topsites.AdaptiveTopRetainedNulls, topsites.AdaptiveTopRetainedGrouping}
+			sites = [2]mpool.AllocationSite{topsites.AdaptiveTopRetainedData, topsites.AdaptiveTopRetainedArea}
 		default:
 			return mpool.ErrAllocationAccountInvalid
 		}
-		allocation, err := vector.NewAllocationAccountSelection(
+		// A view charges one site: the retained data site. The area site of
+		// the former selection has no separate charge.
+		allocation, err := mp.WithAccount(
 			s.spillConfig.AllocationAccount, owner,
-			sites[0], sites[1], sites[2], sites[3],
+			sites[0], mpool.AllocationCapacityClassDefault,
 		)
 		if err != nil {
 			return err
@@ -572,7 +574,7 @@ func readSpilledBatch(
 	offset, availableBytes int64,
 	mp *mpool.MPool,
 	budget SpillBudget,
-	allocation *vector.AllocationAccountSelection,
+	allocation *mpool.MPool,
 ) (*batch.Batch, int64, error) {
 	if file == nil || offset < 0 || offset > availableBytes-spillBatchHeaderSize {
 		return nil, offset, moerr.NewInternalErrorNoCtx("invalid materialized sink spill offset")
@@ -613,7 +615,7 @@ func readSpilledBatch(
 func unmarshalSpillBatch(
 	data []byte,
 	mp *mpool.MPool,
-	allocation *vector.AllocationAccountSelection,
+	allocation *mpool.MPool,
 ) (*batch.Batch, error) {
 	if len(data) == 0 || mp == nil || allocation == nil {
 		return nil, moerr.NewInternalErrorNoCtx("invalid materialized sink spill payload")
@@ -624,9 +626,7 @@ func unmarshalSpillBatch(
 	switch data[0] {
 	case spillPayloadGrouping:
 		decoded = batch.NewOffHeapWithSize(0)
-		if err = decoded.SetAllocationAccount(allocation); err == nil {
-			err = decoded.UnmarshalFromReaderWithGrouping(r, mp)
-		}
+		err = decoded.UnmarshalFromReaderWithGrouping(r, allocation)
 	case spillPayloadSelectedRange:
 		decoded, err = unmarshalSelectedSpillBatchFrom(r, mp, allocation)
 	default:
@@ -648,7 +648,7 @@ func unmarshalSpillBatch(
 func cloneMaterializedBatch(
 	source *batch.Batch,
 	mp *mpool.MPool,
-	allocation *vector.AllocationAccountSelection,
+	allocation *mpool.MPool,
 ) (*batch.Batch, error) {
 	if source == nil || mp == nil {
 		return nil, moerr.NewInternalErrorNoCtx(
@@ -662,12 +662,8 @@ func cloneMaterializedBatch(
 	}
 	attrs, attrTypes := source.GetSchema()
 	cloned := batch.NewWithSchema(true, attrs, attrTypes)
-	if err := cloned.SetAllocationAccount(allocation); err != nil {
-		cloned.Clean(mp)
-		return nil, err
-	}
 	cloned.Recursive = source.Recursive
-	if err := source.CloneTo(cloned, mp); err != nil {
+	if err := source.CloneTo(cloned, allocation); err != nil {
 		return nil, err
 	}
 	return cloned, nil
@@ -754,7 +750,7 @@ func marshalSelectedSpillBatchTo(
 func unmarshalSelectedSpillBatchFrom(
 	r *bytes.Reader,
 	mp *mpool.MPool,
-	allocation *vector.AllocationAccountSelection,
+	allocation *mpool.MPool,
 ) (*batch.Batch, error) {
 	if r == nil || mp == nil || allocation == nil {
 		return nil, moerr.NewInvalidInputNoCtx("invalid materialized sink spill decoder")
@@ -775,10 +771,6 @@ func unmarshalSelectedSpillBatchFrom(
 		return nil, moerr.NewInvalidInputNoCtx("invalid materialized sink spill column count")
 	}
 	decoded := batch.NewOffHeapWithSize(columns)
-	if err = decoded.SetAllocationAccount(allocation); err != nil {
-		decoded.Clean(mp)
-		return nil, err
-	}
 	for i := range columns {
 		typ, readErr := types.ReadType(r)
 		if readErr != nil {
@@ -795,12 +787,8 @@ func unmarshalSelectedSpillBatchFrom(
 				"invalid materialized sink spill sorted flag",
 			)
 		}
-		decoded.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(typ, allocation)
-		if err != nil {
-			decoded.Clean(mp)
-			return nil, err
-		}
-		if err = decoded.Vecs[i].UnmarshalSelectedRowsFrom(r, int(rows64), mp); err != nil {
+		decoded.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+		if err = decoded.Vecs[i].UnmarshalSelectedRowsFrom(r, int(rows64), allocation); err != nil {
 			decoded.Clean(mp)
 			return nil, err
 		}
@@ -992,7 +980,7 @@ func spillBatchSizeWithLimit(
 			return 0, 0, moerr.NewInternalErrorNoCtx("invalid materialized sink spill vector data")
 		}
 		nullBytes := uint64(0)
-		if !vec.GetNulls().EmptyByFlag() {
+		if !vec.GetNulls().IsEmpty() {
 			nullBytes = uint64(nulls.Size(vec.GetNulls())) + 24
 		}
 		if nullBytes > math.MaxUint32 {
@@ -1028,15 +1016,7 @@ func spillBatchSizeWithLimit(
 			return 0, 0, err
 		}
 	}
-	metadataBytes, metadataErr := bat.PrepareParamKindMetadataSize()
-	if metadataErr != nil {
-		return 0, 0, metadataErr
-	}
-	serialized, err = addSpillBatchTail(
-		serialized,
-		uint64(len(bat.ExtraBuf)),
-		uint64(metadataBytes),
-	)
+	serialized, err = checkedAdd(serialized, uint64(len(bat.ExtraBuf)))
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1065,14 +1045,6 @@ func spillBatchSizeWithLimit(
 	}
 	scratch, err = checkedAdd(scratch, serialized)
 	return serialized, scratch, err
-}
-
-func addSpillBatchTail(serialized, extraBytes, metadataBytes uint64) (uint64, error) {
-	withExtra, err := checkedAdd(serialized, extraBytes)
-	if err != nil {
-		return 0, err
-	}
-	return checkedAdd(withExtra, metadataBytes)
 }
 
 func checkedAdd(values ...uint64) (uint64, error) {

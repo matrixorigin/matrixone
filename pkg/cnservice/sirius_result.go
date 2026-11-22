@@ -65,28 +65,27 @@ func decodeEmbeddedSiriusResult(result siriusbridge.Result, request compile.Siri
 	}()
 	bat.Attrs = request.Headings
 	bat.SetRowCount(int(result.Rows))
+	// The batch is the lender of the native window its vectors alias; the
+	// window stays valid for the callback that consumes and cleans the batch.
+	if err = bat.HoldLease(lease); err != nil {
+		return bat, err
+	}
 	for i, v := range result.Vectors {
 		t := request.OutputTypes[i]
 		typ := types.New(types.T(t.Id), t.Width, t.Scale)
-		vec, createErr := vector.NewOffHeapVecWithTypeAndAllocation(typ, nil)
-		if createErr != nil {
-			return bat, createErr
-		}
+		vec := vector.NewOffHeapVecWithType(typ)
 		bat.Vecs[i] = vec
-		if err = vec.InstallBorrowedData(v.Data, lease); err != nil {
+		if err = vec.InstallBorrowedData(v.Data); err != nil {
 			return bat, err
 		}
 		if len(v.Area) > 0 {
-			if err = vec.InstallBorrowedArea(v.Area, lease); err != nil {
+			if err = vec.InstallBorrowedArea(v.Area); err != nil {
 				return bat, err
 			}
 		}
 		vec.SetLength(int(result.Rows))
-		// Reserve bitmap allocation while errors can still unwind this batch.
 		if len(v.Nulls) != 0 {
-			if err = vec.PrepareBorrowedValidity(int(result.Rows), mp); err != nil {
-				return bat, err
-			}
+			vec.GetNulls().InitWithSize(int(result.Rows))
 			for row := uint32(0); row < result.Rows; row++ {
 				if v.Nulls[row/8]&(1<<(row%8)) != 0 {
 					vec.SetNull(uint64(row))

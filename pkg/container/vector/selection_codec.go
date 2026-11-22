@@ -50,16 +50,19 @@ const (
 	selectedRowsRowBinary = byte(1 << 2)
 	selectedRowsRowText   = byte(1 << 3)
 
-	selectedRowsKindNone    = byte(0)
-	selectedRowsKindUniform = byte(1)
-	selectedRowsKindRows    = byte(2)
+	// The kind field (bits 2-3) is retired; readers skip what an older writer
+	// put there.
+	selectedRowsKindUniform    = byte(1)
+	selectedRowsKindRows       = byte(2)
+	selectedRowsRetiredKindMax = byte(4)
 
 	selectedRowsBinaryNone    = byte(0)
 	selectedRowsBinaryUniform = byte(1)
 	selectedRowsBinaryRows    = byte(2)
 	selectedRowsBinaryText    = byte(3)
 
-	selectedRowsSourceNone    = byte(0)
+	// The string-source field (bits 6-7) is retired; readers skip what an
+	// older writer put there.
 	selectedRowsSourceUniform = byte(1)
 	selectedRowsSourceRows    = byte(2)
 )
@@ -132,9 +135,6 @@ func (v *Vector) marshalSelectedRowsTo(
 	rows []int32,
 	rowAt func(int) int,
 ) error {
-	if v.IsDictionary() {
-		return errDictionaryPhysicalAccess
-	}
 	if v == nil || w == nil || count < 0 || count > math.MaxInt32 {
 		return moerr.NewInvalidInputNoCtx("invalid selected vector rows")
 	}
@@ -147,20 +147,14 @@ func (v *Vector) marshalSelectedRowsTo(
 	}
 
 	metadata := byte(0)
-	var firstKind PrepareParamKind
-	kindSeen := false
-	kindMixed := false
-	if rows != nil && count == len(rows) && !v.IsConst() && v.nsp.EmptyByFlag() &&
-		v.gsp.EmptyByFlag() && len(v.prepareParamKinds) == 0 {
+	if rows != nil && count == len(rows) && !v.IsConst() && v.nsp.IsEmpty() &&
+		v.gsp.IsEmpty() {
 		// Every selected row has uniform metadata, but selection bounds still
 		// need validation before passing rows to a specialized writer.
 		for _, row := range rows {
 			if row < 0 || int(row) >= v.length {
 				return moerr.NewInvalidInputNoCtx("selected vector row out of range")
 			}
-		}
-		if count > 0 && v.prepareParamKindSeen {
-			firstKind, kindSeen = v.prepareParamKind, true
 		}
 	} else {
 		for i := 0; i < count; i++ {
@@ -170,95 +164,14 @@ func (v *Vector) marshalSelectedRowsTo(
 			}
 			if v.IsNull(uint64(row)) {
 				metadata |= selectedRowsHasNull
-			} else {
-				if v.prepareParamKindSeen || len(v.prepareParamKinds) != 0 {
-					kind := v.GetPrepareParamKindAt(row)
-					if !kindSeen {
-						firstKind, kindSeen = kind, true
-					} else if kind != firstKind {
-						kindMixed = true
-					}
-				}
 			}
 			if v.gsp.Contains(uint64(row)) {
 				metadata |= selectedRowsHasGrouping
 			}
 		}
 	}
-	kindMode := selectedRowsKindNone
-	if kindSeen {
-		kindMode = selectedRowsKindUniform
-		if kindMixed {
-			kindMode = selectedRowsKindRows
-		}
-		metadata |= kindMode << selectedRowsKindShift
-	}
-	var firstDomain types.RuntimeStringDomain
-	binarySeen := false
-	binaryMixed := false
-	if v.HasBinaryStringMetadata() {
-		// Dynamic binary provenance is uncommon. Keep its extra scan entirely
-		// off the ordinary spill path instead of adding work to every row in the
-		// mandatory NULL/grouping/parameter-kind pass above.
-		for i := 0; i < count; i++ {
-			row := rowAt(i)
-			if v.IsNull(uint64(row)) {
-				continue
-			}
-			domain := v.GetRuntimeStringDomainAt(row)
-			if !binarySeen {
-				firstDomain, binarySeen = domain, true
-			} else if domain != firstDomain {
-				binaryMixed = true
-			}
-		}
-	}
-	binaryMode := selectedRowsBinaryNone
-	if binarySeen && firstDomain == types.RuntimeStringBinary {
-		binaryMode = selectedRowsBinaryUniform
-	} else if binarySeen && firstDomain == types.RuntimeStringText {
-		binaryMode = selectedRowsBinaryText
-	}
-	if binaryMixed {
-		binaryMode = selectedRowsBinaryRows
-	}
-	metadata |= binaryMode << selectedRowsBinaryShift
-	var firstSource types.StringSource
-	sourceSeen := false
-	sourceMixed := false
-	if v.HasStringSourceMetadata() {
-		for i := 0; i < count; i++ {
-			source := v.GetStringSourceAt(rowAt(i))
-			if !source.Valid() {
-				return moerr.NewInvalidInputNoCtx("invalid selected vector string source")
-			}
-			if !sourceSeen {
-				firstSource, sourceSeen = source, true
-			} else if source != firstSource {
-				sourceMixed = true
-			}
-		}
-	}
-	sourceMode := selectedRowsSourceNone
-	if sourceSeen && firstSource != types.StringSourceExpression {
-		sourceMode = selectedRowsSourceUniform
-	}
-	if sourceMixed {
-		sourceMode = selectedRowsSourceRows
-	}
-	metadata |= sourceMode << selectedRowsSourceShift
 	if err := writeSelectedRowsByte(w, metadata, &encoded); err != nil {
 		return err
-	}
-	if kindMode == selectedRowsKindUniform {
-		if err := writeSelectedRowsByte(w, byte(firstKind), &encoded); err != nil {
-			return err
-		}
-	}
-	if sourceMode == selectedRowsSourceUniform {
-		if err := writeSelectedRowsByte(w, byte(firstSource), &encoded); err != nil {
-			return err
-		}
 	}
 	if !isVarlen {
 		fixedWidth := v.typ.TypeSize()
@@ -270,8 +183,7 @@ func (v *Vector) marshalSelectedRowsTo(
 		}
 	}
 
-	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsHasGrouping) != 0 ||
-		binaryMode == selectedRowsBinaryRows
+	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsHasGrouping) != 0
 	if !v.IsConst() && isVarlen && !withRowFlags && rows != nil {
 		if fastWriter, ok := w.(selectedVarlenaRowsWriter); ok {
 			values := MustFixedColNoTypeCheck[types.Varlena](v)
@@ -326,14 +238,6 @@ func (v *Vector) marshalSelectedRowsTo(
 			if v.gsp.Contains(uint64(row)) {
 				rowFlags |= selectedRowsHasGrouping
 			}
-			if binaryMode == selectedRowsBinaryRows &&
-				v.GetRuntimeStringDomainAt(row) == types.RuntimeStringBinary {
-				rowFlags |= selectedRowsRowBinary
-			}
-			if binaryMode == selectedRowsBinaryRows &&
-				v.GetRuntimeStringDomainAt(row) == types.RuntimeStringText {
-				rowFlags |= selectedRowsRowText
-			}
 			if err := writeSelectedRowsByte(w, rowFlags, &encoded); err != nil {
 				return err
 			}
@@ -356,20 +260,6 @@ func (v *Vector) marshalSelectedRowsTo(
 	}
 
 metadataTrailers:
-	if kindMode == selectedRowsKindRows {
-		for i := 0; i < count; i++ {
-			if err := writeSelectedRowsByte(w, byte(v.GetPrepareParamKindAt(rowAt(i))), &encoded); err != nil {
-				return err
-			}
-		}
-	}
-	if sourceMode == selectedRowsSourceRows {
-		for i := 0; i < count; i++ {
-			if err := writeSelectedRowsByte(w, byte(v.GetStringSourceAt(rowAt(i))), &encoded); err != nil {
-				return err
-			}
-		}
-	}
 	return nil
 }
 
@@ -402,31 +292,32 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 		return err
 	}
 	kindMode := (metadata & selectedRowsKindMask) >> selectedRowsKindShift
+	// The binary-string field (bits 4-5) is retired; writers no longer set it.
 	binaryMode := (metadata & selectedRowsBinaryMask) >> selectedRowsBinaryShift
 	sourceMode := (metadata & selectedRowsSourceMask) >> selectedRowsSourceShift
 	if kindMode > selectedRowsKindRows || binaryMode > selectedRowsBinaryText ||
 		sourceMode > selectedRowsSourceRows {
 		return moerr.NewInvalidInputNoCtx("invalid selected vector metadata")
 	}
-	var uniformKind PrepareParamKind
+	// The kind field is retired: writers no longer set it, and a value from an
+	// older writer is validated and dropped.
 	if kindMode == selectedRowsKindUniform {
 		encoded, err := types.ReadByte(r)
 		if err != nil {
 			return err
 		}
-		uniformKind = PrepareParamKind(encoded)
-		if uniformKind > PrepareParamBoolean {
+		if encoded > selectedRowsRetiredKindMax {
 			return moerr.NewInvalidInputNoCtx("invalid selected vector parameter kind")
 		}
 	}
-	var uniformSource types.StringSource
+	// The string-source field is retired: writers no longer set it, and a
+	// value from an older writer is validated and dropped.
 	if sourceMode == selectedRowsSourceUniform {
 		encoded, err := types.ReadByte(r)
 		if err != nil {
 			return err
 		}
-		uniformSource = types.StringSource(encoded)
-		if !uniformSource.Valid() || uniformSource == types.StringSourceExpression {
+		if source := types.StringSource(encoded); !source.Valid() || source == types.StringSourceExpression {
 			return moerr.NewInvalidInputNoCtx("invalid selected vector string source")
 		}
 	}
@@ -464,14 +355,9 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 			return err
 		}
 	}
-	if binaryMode == selectedRowsBinaryRows || binaryMode == selectedRowsBinaryText {
-		if err := v.ensureBinaryStringCapacity(count, mp); err != nil {
-			return err
-		}
-		v.binaryStringRows.InitWithSize(int64(count))
-		v.textStringRows.InitWithSize(int64(count))
-	}
 	v.SetLength(count)
+	// Per-row binary/text flags come only from older writers; they are
+	// validated and dropped.
 	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsHasGrouping) != 0 ||
 		binaryMode == selectedRowsBinaryRows
 	if !isVarlen && !withRowFlags {
@@ -512,12 +398,6 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 				v.SetNull(uint64(row))
 				continue
 			}
-			if rowFlags&selectedRowsRowBinary != 0 {
-				v.binaryStringRows.Add(uint64(row))
-			}
-			if rowFlags&selectedRowsRowText != 0 {
-				v.textStringRows.Add(uint64(row))
-			}
 			valueSize := fixedWidth
 			if isVarlen {
 				if _, err = io.ReadFull(r, encoded[:]); err != nil {
@@ -533,35 +413,27 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 			}
 		}
 	}
-	switch kindMode {
-	case selectedRowsKindUniform:
-		v.SetPrepareParamKind(uniformKind)
-	case selectedRowsKindRows:
-		if err := v.SetPrepareParamKindsFromReader(r, count, mp); err != nil {
-			return err
+	if kindMode == selectedRowsKindRows {
+		for i := 0; i < count; i++ {
+			encoded, err := types.ReadByte(r)
+			if err != nil {
+				return err
+			}
+			if encoded > selectedRowsRetiredKindMax {
+				return moerr.NewInvalidInputNoCtx("invalid selected vector parameter kind")
+			}
 		}
 	}
-	switch sourceMode {
-	case selectedRowsSourceUniform:
-		if err := v.SetStringSource(uniformSource); err != nil {
-			return err
+	if sourceMode == selectedRowsSourceRows {
+		for i := 0; i < count; i++ {
+			encoded, err := types.ReadByte(r)
+			if err != nil {
+				return err
+			}
+			if !types.StringSource(encoded).Valid() {
+				return moerr.NewInvalidInputNoCtx("invalid selected vector string source")
+			}
 		}
-	case selectedRowsSourceRows:
-		if err := v.SetStringSourcesFromReader(r, count, mp); err != nil {
-			return err
-		}
-	}
-	switch binaryMode {
-	case selectedRowsBinaryUniform:
-		v.setBinaryStringScalar(true)
-	case selectedRowsBinaryText:
-		if err := v.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp); err != nil {
-			return err
-		}
-	case selectedRowsBinaryRows:
-		v.binaryString = true
-		v.binaryStringRowsActive = true
-		v.normalizeBinaryStringRows()
 	}
 	return nil
 }
@@ -593,7 +465,6 @@ func (v *Vector) readRawBytesAt(
 		if err := validateJSONPayload(v.typ, value.GetByteSlice(nil)); err != nil {
 			return err
 		}
-		v.areaDisjoint = false
 		return nil
 	}
 	oldAreaLength := len(v.area)
@@ -617,6 +488,5 @@ func (v *Vector) readRawBytesAt(
 	*value = types.Varlena{}
 	value.SetOffsetLen(uint32(oldAreaLength), uint32(size))
 	v.area = area
-	v.areaDisjoint = true
 	return nil
 }

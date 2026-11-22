@@ -313,10 +313,6 @@ func TestAccountedMedianResidentAndSpillRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, resident, 1)
 			require.Len(t, spilled, 1)
-			require.True(t, vector.AllocationAccountSelectionsEqual(
-				allocation.vectorSelection(), resident[0].AllocationAccountSelection()))
-			require.True(t, vector.AllocationAccountSelectionsEqual(
-				allocation.vectorSelection(), spilled[0].AllocationAccountSelection()))
 			for row, want := range []float64{5, 5, 0} {
 				if row == 2 {
 					require.True(t, resident[0].IsNull(uint64(row)))
@@ -332,8 +328,8 @@ func TestAccountedMedianResidentAndSpillRoundTrip(t *testing.T) {
 					vector.GetFixedAtNoTypeCheck[float64](spilled[0], row))
 			}
 
-			resident[0].Free(mp)
-			spilled[0].Free(mp)
+			freeAccountedVector(t, account, resident[0], mp)
+			freeAccountedVector(t, account, spilled[0], mp)
 			input.Free(mp)
 			exec.Free()
 			restored.Free()
@@ -984,8 +980,7 @@ func TestAccountedMedianFinalizationExactCap(t *testing.T) {
 		require.NoError(t, err)
 		allocation, err := NewAllocationAccount(
 			account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-				VectorData: 1, VectorArea: 2, VectorNulls: 3,
-				VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+				VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 			})
 		require.NoError(t, err)
 
@@ -1577,11 +1572,13 @@ func accountedMedianTestVectors[T numeric | types.Decimal64 | types.Decimal128](
 	segments [][]T,
 ) *Vectors[T] {
 	t.Helper()
-	ret := &Vectors[T]{allocation: allocation.vectorSelection()}
+	view, err := allocation.VectorMP(mp)
+	require.NoError(t, err)
+	ret := &Vectors[T]{allocation: view}
 	for _, values := range segments {
 		vec, err := allocation.newVector(typ)
 		require.NoError(t, err)
-		require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+		require.NoError(t, vector.AppendFixedList(vec, values, nil, view))
 		ret.vecs = append(ret.vecs, vec)
 	}
 	ret.appendAt = len(ret.vecs) - 1

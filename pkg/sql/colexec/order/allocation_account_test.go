@@ -705,9 +705,8 @@ func TestAccountedOrderMultiColumnAppendFailureRollsBack(t *testing.T) {
 		op.ctr.batWaitForSort.Vecs[i] =
 			vector.NewOffHeapVecWithType(*input.Vecs[i].GetType())
 	}
-	require.NoError(t,
-		op.ctr.batWaitForSort.SetAllocationAccount(op.ctr.retainedAllocation))
-	require.NoError(t, op.ctr.batWaitForSort.Vecs[0].PreExtend(1, proc.Mp()))
+	require.NoError(t, op.ctr.allocationViews(proc.Mp()))
+	require.NoError(t, op.ctr.batWaitForSort.Vecs[0].PreExtend(1, op.ctr.retainedAllocation))
 	_, err := op.ctr.appendCheckpoints(len(op.ctr.batWaitForSort.Vecs), proc)
 	require.NoError(t, err)
 	controller.arm()
@@ -850,19 +849,19 @@ func TestAccountedOrderDoesNotInheritSealedInputAccount(t *testing.T) {
 	require.NoError(t, err)
 	inputAccount, err := inputRegistry.Open(1 << 20)
 	require.NoError(t, err)
-	inputSelection, err := vector.NewAllocationAccountSelection(
+	inputView, err := proc.Mp().WithAccount(
 		inputAccount,
 		mpool.AllocationOwnerOrder,
-		1, 2, 3, 4,
+		1,
+		mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
 	input := batch.NewOffHeapWithSize(2)
 	for i := range input.Vecs {
 		input.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
 	}
-	require.NoError(t, input.SetAllocationAccount(inputSelection))
-	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(1), false, proc.Mp()))
-	require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(2), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(1), false, inputView))
+	require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(2), false, inputView))
 	input.SetRowCount(1)
 
 	op := newAccountedOrder(

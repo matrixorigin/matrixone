@@ -507,16 +507,24 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 		containers.Options{Allocator: common.DefaultAllocator},
 	)
 	defer input.Close()
-	for _, vec := range input.Vecs {
-		for range 3 {
-			vec.Append(nil, true)
+	for row := range 4 {
+		for col, vec := range input.Vecs {
+			if col == 0 {
+				vec.Append(int32(10+row), false)
+			} else {
+				vec.Append(nil, true)
+			}
 		}
 	}
 	_, err := mnode.ApplyAppendLocked(input)
 	require.NoError(t, err)
 	defer mnode.data.Close()
 
-	for row := uint32(0); row < 3; row++ {
+	for row := uint32(0); row < 4; row++ {
+		// A physical payload slot can be absent from the append history.
+		if row == 2 {
+			continue
+		}
 		appendNode, _ := mvcc.AddAppendNodeLocked(nil, row, row+1)
 		ts := types.BuildTS(int64(row+1), 0)
 		appendNode.Start, appendNode.Prepare, appendNode.End = ts, ts, ts
@@ -525,12 +533,22 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 		}
 	}
 
+	ctx := context.Background()
+	end := types.BuildTS(4, 0)
+	denseBatches := make(map[uint32]*containers.BatchWithVersion)
+	require.NoError(t, mnode.getDataWindowOnWriteSchema(ctx, denseBatches, types.TS{}, end, common.DefaultAllocator))
+	dense := denseBatches[schema.Version]
+	require.NotNil(t, dense)
+	defer dense.Close()
+	require.Equal(t, 3, dense.Length(), "range readers only receive records with an append node")
+	require.Equal(t, int32(13), dense.Vecs[0].Get(2))
+
 	flushBatches := make(map[uint32]*containers.BatchWithVersion)
 	err = mnode.getDataWindowOnWriteSchema(
-		context.Background(),
+		WithPreservePhysicalRows(ctx),
 		flushBatches,
 		types.TS{},
-		types.BuildTS(3, 0),
+		end,
 		common.DefaultAllocator,
 	)
 	require.NoError(t, err)
@@ -541,17 +559,18 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	aborts := vector.MustFixedColWithTypeCheck[bool](
 		flushBatch.GetVectorByName(objectio.TombstoneAttr_Abort_Attr).GetDownstreamVector(),
 	)
-	require.Equal(t, []bool{false, true, false}, aborts)
+	require.Equal(t, []bool{false, true, true, false}, aborts)
+	require.Equal(t, int32(13), flushBatch.Vecs[0].Get(3), "snapshot offsets must match the original object")
 
 	// During a rolling upgrade, the TN keeps the legacy layout and marks abort
 	// holes uncommitted so old readers hide them without shifting RowID offsets.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion10)
 	legacyBatches := make(map[uint32]*containers.BatchWithVersion)
 	err = mnode.getDataWindowOnWriteSchema(
-		context.Background(),
+		WithPreservePhysicalRows(ctx),
 		legacyBatches,
 		types.TS{},
-		types.BuildTS(3, 0),
+		end,
 		common.DefaultAllocator,
 	)
 	require.NoError(t, err)
@@ -561,19 +580,22 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	require.NotContains(t, legacyBatch.Seqnums, uint16(objectio.SEQNUM_ABORT))
 	require.NotContains(t, legacyBatch.Nameidx, objectio.TombstoneAttr_Abort_Attr)
 	require.Contains(t, legacyBatch.Seqnums, uint16(objectio.SEQNUM_COMMITTS))
-	require.Equal(t, 3, legacyBatch.Length())
+	require.Equal(t, 4, legacyBatch.Length())
 	legacyCommitTS := vector.MustFixedColWithTypeCheck[types.TS](
 		legacyBatch.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).GetDownstreamVector(),
 	)
 	require.Equal(t, types.BuildTS(1, 0), legacyCommitTS[0])
 	require.Equal(t, txnif.UncommitTS, legacyCommitTS[1])
-	require.Equal(t, types.BuildTS(3, 0), legacyCommitTS[2])
+	require.Equal(t, txnif.UncommitTS, legacyCommitTS[2])
+	require.True(t, legacyBatch.Vecs[0].IsNull(2))
+	require.Equal(t, types.BuildTS(4, 0), legacyCommitTS[3])
+	require.Equal(t, int32(13), legacyBatch.Vecs[0].Get(3))
 
 	var output *containers.Batch
 	err = mnode.Scan(
 		context.Background(),
 		&output,
-		updates.MockTxnWithStartTS(types.BuildTS(3, 0)),
+		updates.MockTxnWithStartTS(end),
 		schema,
 		0,
 		[]int{0},
@@ -582,10 +604,11 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	defer output.Close()
-	require.Equal(t, 3, output.Length())
+	require.Equal(t, 4, output.Length())
 	require.True(t, output.IsDeleted(1))
 	require.False(t, output.IsDeleted(0))
-	require.False(t, output.IsDeleted(2))
+	require.True(t, output.IsDeleted(2))
+	require.False(t, output.IsDeleted(3))
 }
 
 func TestAppendableDuplicatedRowsTimestampWindow(t *testing.T) {

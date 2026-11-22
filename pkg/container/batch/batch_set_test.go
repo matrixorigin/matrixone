@@ -52,7 +52,9 @@ func TestBatchSetUnionRangeSplitsAndFillsTail(t *testing.T) {
 	require.Equal(t, []int64{16}, vector.MustFixedColNoTypeCheck[int64](queue.Get(2).Vecs[0]))
 }
 
-func TestBatchSetOwnedDestinationAcrossInputProvenance(t *testing.T) {
+// BatchSet copies charge the MPool the caller passes: an accounted view
+// charges the destination account, never the input's.
+func TestBatchSetChargesCopiesToCallerView(t *testing.T) {
 	mp := mpool.MustNewZero()
 	registry, err := mpool.NewAllocationAccountRegistry(2, 32)
 	require.NoError(t, err)
@@ -60,11 +62,11 @@ func TestBatchSetOwnedDestinationAcrossInputProvenance(t *testing.T) {
 	require.NoError(t, err)
 	source, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	dstSelection, err := vector.NewAllocationAccountSelection(destination, mpool.AllocationOwnerSet, 9, 10, 11, 12)
+	dstView, err := mp.WithAccount(destination, mpool.AllocationOwnerSet, 9, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	srcSelection, err := vector.NewAllocationAccountSelection(source, mpool.AllocationOwnerSet, 9, 10, 11, 12)
+	srcView, err := mp.WithAccount(source, mpool.AllocationOwnerSet, 9, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	queue := NewBatchSetWithAllocation(4, dstSelection)
+	queue := NewBatchSet(4)
 	var inputs []*Batch
 	t.Cleanup(func() {
 		queue.Clean(mp)
@@ -78,40 +80,34 @@ func TestBatchSetOwnedDestinationAcrossInputProvenance(t *testing.T) {
 		}
 		require.Zero(t, mp.CurrNB())
 	})
-	newInput := func(selection *vector.AllocationAccountSelection, values ...int64) *Batch {
+	newInput := func(alloc *mpool.MPool, values ...int64) *Batch {
 		input := NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
 		inputs = append(inputs, input)
-		if selection != nil {
-			require.NoError(t, input.SetAllocationAccount(selection))
-		}
-		require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, mp))
+		require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, alloc))
 		input.SetRowCount(len(values))
 		return input
 	}
 
-	first := newInput(nil, 1, 2)
+	first := newInput(mp, 1, 2)
 	require.Zero(t, queue.ReadyDeltaFor(first, first.RowCount()))
-	_, err = queue.Extend(mp, first, nil)
+	_, err = queue.Extend(dstView, first, nil)
 	require.NoError(t, err)
-	second := newInput(srcSelection, 3, 4)
+	require.Positive(t, destination.Snapshot().Used)
+	second := newInput(srcView, 3, 4)
+	sourceUsed := source.Snapshot().Used
 	require.Equal(t, 1, queue.ReadyDeltaFor(second, second.RowCount()))
-	_, err = queue.Union(mp, second, []int32{0, 1}, nil)
+	_, err = queue.Union(dstView, second, []int32{0, 1}, nil)
 	require.NoError(t, err)
+	require.Equal(t, sourceUsed, source.Snapshot().Used, "copies must not charge the input's account")
 	require.Equal(t, 1, queue.ReadyCount())
 	full := queue.PopFront()
-	require.Same(t, dstSelection, full.AllocationAccountSelection())
-	require.Same(t, srcSelection, second.AllocationAccountSelection(), "copy must not relabel the input")
 	require.Equal(t, []int64{1, 2, 3, 4}, vector.MustFixedColNoTypeCheck[int64](full.Vecs[0]))
 
-	third := newInput(nil, 5, 6, 7)
-	consumed, err := queue.Union(mp, third, []int32{0, 2}, full)
+	third := newInput(mp, 5, 6, 7)
+	consumed, err := queue.Union(dstView, third, []int32{0, 2}, full)
 	require.NoError(t, err)
 	require.True(t, consumed, "a matching owned batch can be recycled")
 	require.Equal(t, []int64{5, 7}, vector.MustFixedColNoTypeCheck[int64](queue.Get(0).Vecs[0]))
-	require.Same(t, dstSelection, queue.Get(0).AllocationAccountSelection())
-	// Push transfers ownership; an input with different provenance cannot be
-	// silently published as an owned destination.
-	require.ErrorIs(t, queue.Push(mp, third), mpool.ErrAllocationAccountMismatch)
 }
 
 func TestBatchSetOwnedDestinationAllocationFailure(t *testing.T) {
@@ -120,9 +116,9 @@ func TestBatchSetOwnedDestinationAllocationFailure(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSet, 9, 10, 11, 12)
+	view, err := mp.WithAccount(account, mpool.AllocationOwnerSet, 9, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	queue := NewBatchSetWithAllocation(4, selection)
+	queue := NewBatchSet(4)
 	input := NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
 	t.Cleanup(func() {
 		queue.Clean(mp)
@@ -134,9 +130,170 @@ func TestBatchSetOwnedDestinationAllocationFailure(t *testing.T) {
 	})
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int64{1, 2}, nil, mp))
 	input.SetRowCount(2)
-	_, err = queue.Extend(mp, input, nil)
+	_, err = queue.Extend(view, input, nil)
 	require.Error(t, err)
 	require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](input.Vecs[0]))
+}
+
+// A mixed-account input is copied into the existing tail through the
+// caller's MPool.
+func TestBatchSetMixedInputDestinationReuse(t *testing.T) {
+	for _, mode := range []string{"union", "range", "extend"} {
+		t.Run(mode, func(t *testing.T) {
+			mp, first, destination := batchSetCopyInput(t, 4, true)
+			if mode == "extend" {
+				rows := 2
+				for _, v := range first.Vecs {
+					v.SetLength(rows)
+				}
+				first.SetRowCount(rows)
+			}
+			queue := NewBatchSet(4)
+			t.Cleanup(func() { queue.Clean(mp) })
+			appendRows := func(input *Batch) {
+				var err error
+				switch mode {
+				case "union":
+					_, err = queue.Union(destination, input, []int32{0, 2}, nil)
+				case "range":
+					_, err = queue.UnionRange(destination, input, 0, 2, nil)
+				default:
+					_, err = queue.Extend(destination, input, nil)
+				}
+				require.NoError(t, err)
+			}
+			appendRows(first)
+			tail := queue.Get(0)
+			require.Equal(t, 1, queue.ReadyDeltaFor(first, 2))
+			appendRows(first)
+			require.Equal(t, 1, queue.ReadyCount(), "reservation and actual readiness must agree")
+			require.Equal(t, 1, queue.Length(), "a copied destination must fill its existing tail")
+			require.Same(t, tail, queue.Get(0))
+			want := []int64{0, 1, 0, 1}
+			if mode == "union" {
+				want = []int64{0, 2, 0, 2}
+			}
+			for _, v := range tail.Vecs {
+				require.Equal(t, want, vector.MustFixedColNoTypeCheck[int64](v))
+			}
+		})
+	}
+}
+
+// batchSetCopyInput returns a base pool, an input batch and an accounted
+// destination view. With mixed, column 0 of the input is charged to a
+// foreign account.
+func batchSetCopyInput(t testing.TB, rows int, mixed bool) (*mpool.MPool, *Batch, *mpool.MPool) {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(2, 32)
+	require.NoError(t, err)
+	accounts := make([]*mpool.AllocationAccount, 0, 2)
+	input := NewWithSchema(true, nil, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+	t.Cleanup(func() {
+		input.Clean(mp)
+		for _, account := range accounts {
+			require.Zero(t, account.Seal().Used)
+			_, err := registry.Finalize(account)
+			require.NoError(t, err)
+		}
+		require.Zero(t, mp.CurrNB())
+	})
+	views := make([]*mpool.MPool, 0, 2)
+	for range 2 {
+		account, err := registry.Open(1 << 20)
+		require.NoError(t, err)
+		accounts = append(accounts, account)
+		view, err := mp.WithAccount(account, mpool.AllocationOwnerSet, 9, mpool.AllocationCapacityClassDefault)
+		require.NoError(t, err)
+		views = append(views, view)
+	}
+	values := make([]int64, rows)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	for i, v := range input.Vecs {
+		alloc := mp
+		if mixed && i == 0 {
+			alloc = views[1]
+		}
+		require.NoError(t, vector.AppendFixedList(v, values, nil, alloc))
+	}
+	input.SetRowCount(rows)
+	return mp, input, views[0]
+}
+
+func BenchmarkBatchSetMixedInputDestination(b *testing.B) {
+	for _, mixed := range []bool{false, true} {
+		name := "flat"
+		if mixed {
+			name = "mixed"
+		}
+		b.Run(name, func(b *testing.B) {
+			mp, input, _ := batchSetCopyInput(b, 4, mixed)
+			queue := NewBatchSet(16)
+			b.Cleanup(func() { queue.Clean(mp) })
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				queue.Clean(mp)
+				for range 8 {
+					if _, err := queue.Union(mp, input, []int32{0, 2}, nil); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestBatchSetFullMixedInputTailOrderAndReuse(t *testing.T) {
+	for _, method := range []string{"extend", "union all"} {
+		for _, reuseKind := range []string{"none", "destination"} {
+			t.Run(method+"/"+reuseKind, func(t *testing.T) {
+				mp, input, destination := batchSetCopyInput(t, 4, true)
+				queue := NewBatchSet(4)
+				var reuse *Batch
+				consumed := false
+				t.Cleanup(func() {
+					queue.Clean(mp)
+					if reuse != nil && !consumed {
+						reuse.Clean(mp)
+					}
+				})
+				_, err := queue.Union(destination, input, []int32{2, 3}, nil)
+				require.NoError(t, err)
+				if reuseKind != "none" {
+					reuse = NewWithSchema(true, nil, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+					for _, v := range reuse.Vecs {
+						require.NoError(t, vector.AppendFixedList(v, []int64{-1, -2}, nil, destination))
+					}
+					reuse.SetRowCount(2)
+				}
+				ready := queue.ReadyCount()
+				expectedDelta := queue.ReadyDeltaFor(input, input.RowCount())
+				if method == "extend" {
+					consumed, err = queue.Extend(destination, input, reuse)
+				} else {
+					consumed, err = queue.Union(destination, input, []int32{0, 1, 2, 3}, reuse)
+				}
+				require.NoError(t, err)
+				require.Equal(t, expectedDelta, queue.ReadyCount()-ready)
+				require.Equal(t, reuseKind == "destination", consumed)
+				if consumed {
+					require.Same(t, reuse, queue.Get(0))
+				}
+				rows := make([]int64, 0, 6)
+				for i := 0; i < queue.Length(); i++ {
+					bat := queue.Get(i)
+					rows = append(rows, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])...)
+				}
+				// A full input takes the full-batch shortcut ahead of the
+				// partial tail, as for any input: batches carry no account.
+				require.Equal(t, []int64{0, 1, 2, 3, 2, 3}, rows)
+			})
+		}
+	}
 }
 
 func TestBatchSetSortedMetadataAfterAppend(t *testing.T) {

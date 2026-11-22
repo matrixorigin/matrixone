@@ -108,35 +108,36 @@ func TestOrder(t *testing.T) {
 	}
 }
 
-func TestOrderResetReleasesPartiallyAccumulatedAccountedBatch(t *testing.T) {
+func TestOrderCopyDoesNotRetainUpstreamAccount(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	view, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
 	input := batch.NewOffHeapWithSize(2)
 	for i := range input.Vecs {
 		input.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
 	}
-	require.NoError(t, input.SetAllocationAccount(selection))
 	for i := range 64 {
-		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i), false, proc.Mp()))
-		require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(i), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i), false, view))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(i), false, view))
 	}
+	require.Positive(t, account.Snapshot().Used)
 	input.SetRowCount(64)
 
 	arg := &Order{}
 	_, err = arg.ctr.appendBatch(proc, input)
 	require.NoError(t, err)
+	// An unaccounted Order copies into its own pool: the producer's account
+	// is fully released once the producer frees its batch.
 	input.Clean(proc.Mp())
-	require.Positive(t, account.Snapshot().Used)
+	require.NotNil(t, arg.ctr.batWaitForSort)
+	require.Zero(t, account.Snapshot().Used)
 
 	arg.Reset(proc, true, nil)
-	require.Nil(t, arg.ctr.batWaitForSort)
-	require.Zero(t, account.Snapshot().Used)
 	_, _, err = registry.CompleteTerminal(account)
 	require.NoError(t, err)
 

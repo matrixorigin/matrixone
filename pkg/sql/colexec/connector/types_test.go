@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -472,25 +473,23 @@ func testConnectorAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account,
-		1,
-		102,
-		103,
-		104,
-		105,
-	)
+	producerMP, err := mp.WithAccount(account, 1, 102, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	src := batch.NewOffHeapWithSize(1)
-	require.NoError(t, src.SetAllocationAccount(selection))
 	src.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
-	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, producerMP))
 	src.SetRowCount(1)
+	sourceUsed := account.Snapshot().Used
 
-	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	// The spool is built on the bound account's view, as Prepare does.
+	spoolMP, err := mp.WithAccount(account, mpool.AllocationOwnerSelection,
+		connectorAllocationSiteSpool, mpool.AllocationCapacityClassDefault)
+	require.NoError(t, err)
+	sp := pSpool.InitMyPipelineSpool(spoolMP, 1)
 	done, err := sp.SendBatch(context.Background(), 0, src, nil)
 	require.NoError(t, err)
 	require.False(t, done)
+	require.Greater(t, account.Snapshot().Used, sourceUsed)
 	conn := &Connector{}
 	require.NoError(t, conn.SetAllocationAccount(account))
 	if abort {
@@ -532,4 +531,26 @@ func newConnectorSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.
 	require.NoError(t, vector.AppendFixedList[int64](src.Vecs[0], values, nil, mp))
 	src.SetRowCount(len(values))
 	return src
+}
+
+func TestConnectorSpoolChargesBoundAccount(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	conn := &Connector{}
+	unbound, err := conn.spoolMP(proc)
+	require.NoError(t, err)
+	require.Same(t, proc.Mp(), unbound)
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	require.NoError(t, conn.SetAllocationAccount(account))
+	bound, err := conn.spoolMP(proc)
+	require.NoError(t, err)
+	require.Same(t, account, bound.ViewAccount())
+	require.NoError(t, conn.ClearAllocationAccount(account))
+	require.Zero(t, account.Seal().Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
 }

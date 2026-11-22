@@ -34,7 +34,6 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -42,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -619,7 +617,7 @@ func (ses *Session) setUserDefinedVarWithKind(
 	value interface{},
 	sql string,
 	isBin bool,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 ) error {
 	return ses.setUserDefinedVarWithTypeAndKind(
 		name, value, sql, isBin, inferUserDefinedVarType(value), kind)
@@ -630,7 +628,7 @@ func (ses *Session) setUserDefinedVarWithKindAndReplayability(
 	value interface{},
 	sql string,
 	isBin bool,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 	replayable bool,
 ) error {
 	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
@@ -643,7 +641,7 @@ func (ses *Session) setUserDefinedVarWithTypeAndKind(
 	sql string,
 	isBin bool,
 	typ plan.Type,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 ) error {
 	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
 		name, value, sql, isBin, typ, kind, false)
@@ -655,7 +653,7 @@ func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
 	sql string,
 	isBin bool,
 	typ plan.Type,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 	replayable bool,
 	runtimeDomains ...types.RuntimeStringDomain,
 ) error {
@@ -2077,7 +2075,6 @@ func NewSession(
 	// owning transaction and cleaned at every terminal transaction outcome.
 	ses.seqObligations = process.NewSequenceObligationSet()
 
-	ses.buf = buffer.New()
 	ses.sqlHelper = &SqlHelper{ses: ses}
 	u, _ := util.FastUuid()
 	ses.uuid = uuid.UUID(u)
@@ -2338,11 +2335,6 @@ func (ses *Session) Close() {
 
 	for _, bat := range ses.resultBatches {
 		bat.Clean(ses.pool)
-	}
-
-	if ses.buf != nil {
-		ses.buf.Free()
-		ses.buf = nil
 	}
 
 	//  The mpool cleanup must be placed at the end,

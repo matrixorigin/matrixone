@@ -202,7 +202,7 @@ func TestJSONReadSetPublicationAllocationFailure(t *testing.T) {
 				require.Zero(t, controller.used)
 				require.NoError(t, account.UnregisterCapacityController(class, controller))
 			}()
-			selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(account, 1, 1, 2, 3, 4, class)
+			selection, err := mp.WithAccount(account, 1, 1, class)
 			require.NoError(t, err)
 			set := NewJSONReadSet([]int{0, 1}, selection)
 			defer set.Close()
@@ -218,7 +218,7 @@ func TestJSONReadSetPublicationAllocationFailure(t *testing.T) {
 			} else {
 				set = NewJSONReadSet([]int{0}, selection)
 				defer set.Close()
-				builder, err := vector.NewJSONReaderBuilder(mp, selection)
+				builder, err := vector.NewJSONReaderBuilder(selection)
 				require.NoError(t, err)
 				defer builder.Close()
 				require.NoError(t, builder.Append(nil, true))

@@ -35,10 +35,12 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
-	dictionaryInputs          *colexec.DictionaryInputFrame
-	dictionaryBoundary        vm.DictionaryOutputState
-	maxAllocSize              int
-	buf                       *batch.Batch
+	maxAllocSize int
+	buf          *batch.Batch
+	// outputLease charges buf's retained capacity to OutputAllocation while
+	// the emitted batch is live. buf is allocated through proc's pool, so the
+	// lease is its only charge; it is released before buf is refilled.
+	outputLease               *mpool.CapacityLease
 	msgReceiver               *message.MessageReceiver
 	filterExecutors           []colexec.ExpressionExecutor
 	runtimeFilterExecutors    []colexec.ExpressionExecutor
@@ -47,17 +49,15 @@ type container struct {
 	earlyColumns              []int
 	lateColumns               []int
 	filterRows                []int64
+	flatSels                  []int64
 	filterReadMetrics         bool
 	filterLateMaterialized    bool
+	membershipPrepared        bool
+	membershipApplied         bool
 	filterActiveDuration      time.Duration
 	readerFilter              *engine.ReaderFilterRequest
-	readerWorkspace           []*vector.Vector
-	readerHeaders             []*vector.Vector
-	readerSnapshots           []*vector.DictionaryVectorSlot
-	readerSelection           *vector.DictionaryVectorSlot
 	columnUses                []engine.ReaderColumnUse
 	columnUsesReady           bool
-	columnUsesOwned           bool
 	metricView                *batch.Batch
 	padCharToFullLength       bool
 	subjectReuseAdmissionDone bool
@@ -70,7 +70,8 @@ type container struct {
 
 type TableScan struct {
 	// OutputAllocation belongs to the caller execution and is installed before reading.
-	OutputAllocation  *vector.AllocationAccountSelection
+	// It is an accounted view of the process pool (nil = unaccounted).
+	OutputAllocation  *mpool.MPool
 	allocationAccount *mpool.AllocationAccount
 	ctr               container
 	TopValueMsgTag    int32
@@ -109,19 +110,60 @@ func (tableScan *TableScan) SetAllocationAccount(account *mpool.AllocationAccoun
 	if tableScan.ctr.buf != nil || len(tableScan.ctr.filterExecutors) != 0 || tableScan.HasPreparedProjection() {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	if tableScan.OutputAllocation != nil {
-		if !tableScan.OutputAllocation.UsesAccount(account) {
-			return mpool.ErrAllocationAccountMismatch
-		}
-	} else {
-		selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
-		if err != nil {
-			return err
-		}
-		tableScan.OutputAllocation = selection
+	if tableScan.OutputAllocation != nil && tableScan.OutputAllocation.ViewAccount() != account {
+		return mpool.ErrAllocationAccountMismatch
 	}
+	// Without a caller-installed view, Prepare builds one on the process pool.
 	tableScan.allocationAccount = account
 	return nil
+}
+
+// bindOutputAllocation builds the accounted view of proc's pool for a bound
+// account when the caller did not install one. Binding happens before the
+// operator knows its process pool, so the view is built on first use.
+func (tableScan *TableScan) bindOutputAllocation(proc *process.Process) error {
+	if tableScan.allocationAccount == nil || tableScan.OutputAllocation != nil {
+		return nil
+	}
+	view, err := proc.Mp().WithAccount(
+		tableScan.allocationAccount, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
+	if err != nil {
+		return err
+	}
+	tableScan.OutputAllocation = view
+	return nil
+}
+
+// BoundAllocationAccount returns the statement account bound by
+// SetAllocationAccount, or nil.
+func (tableScan *TableScan) BoundAllocationAccount() *mpool.AllocationAccount {
+	return tableScan.allocationAccount
+}
+
+// chargeOutput charges the batch about to be emitted to OutputAllocation by
+// a capacity lease of buf's retained capacity. Everything written into buf
+// (reader fills, in-place filtering and padding) uses proc's pool, so the
+// lease is buf's only charge and nothing is counted twice.
+func (tableScan *TableScan) chargeOutput() error {
+	tableScan.releaseOutputLease()
+	if tableScan.OutputAllocation == nil || tableScan.ctr.buf == nil {
+		return nil
+	}
+	size := tableScan.ctr.buf.Allocated()
+	if size <= 0 {
+		return nil
+	}
+	lease, err := tableScan.OutputAllocation.ReservePinnedCapacity(uint64(size))
+	if err != nil {
+		return err
+	}
+	tableScan.ctr.outputLease = lease
+	return nil
+}
+
+func (tableScan *TableScan) releaseOutputLease() {
+	tableScan.ctr.outputLease.Release()
+	tableScan.ctr.outputLease = nil
 }
 
 func (tableScan *TableScan) ClearAllocationAccount(account *mpool.AllocationAccount) error {
@@ -139,44 +181,21 @@ func (tableScan *TableScan) ClearAllocationAccount(account *mpool.AllocationAcco
 	return nil
 }
 
-func (tableScan *TableScan) DictionaryOutput() (bool, *vector.AllocationAccountSelection) {
-	return tableScan.OutputAllocation != nil && tableScan.ActivatesAllocationAccountLifecycle() &&
-		!tableScan.ctr.padCharToFullLength && colexec.ExpressionsAcceptDictionary(tableScan.ctr.allFilterExecutors) &&
-		colexec.ExpressionsAcceptDictionary(tableScan.ProjectExecutors), tableScan.OutputAllocation
-}
-func (tableScan *TableScan) DictionaryOutputState() *vm.DictionaryOutputState {
-	return &tableScan.ctr.dictionaryBoundary
-}
-
 func (tableScan *TableScan) GetOperatorBase() *vm.OperatorBase {
 	return &tableScan.OperatorBase
 }
 
 func init() {
 	reuse.CreatePool[TableScan](
-		newTableScanArgument,
-		resetTableScanArgument,
+		func() *TableScan {
+			return &TableScan{}
+		},
+		func(a *TableScan) {
+			*a = TableScan{}
+		},
 		reuse.DefaultOptions[TableScan]().
 			WithEnableChecker(),
 	)
-}
-
-// Keep the frame in the same allocation, outside the operator's reset range.
-type tableScanArgument struct {
-	operator TableScan
-	frame    colexec.DictionaryInputFrame
-}
-
-func newTableScanArgument() *TableScan {
-	a := new(tableScanArgument)
-	a.operator.ctr.dictionaryInputs = &a.frame
-	return &a.operator
-}
-
-func resetTableScanArgument(a *TableScan) {
-	frame := a.ctr.dictionaryInputs
-	*a = TableScan{}
-	a.ctr.dictionaryInputs = frame
 }
 
 func (tableScan TableScan) TypeName() string {
@@ -228,44 +247,34 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
 		tableScan.ctr.readerFilter.Exact.Close()
 	}
+	tableScan.ctr.readerFilter.FreeMembership(proc.Mp())
 	tableScan.ctr.readerFilter = nil
+	tableScan.ctr.membershipPrepared = false
+	tableScan.ctr.membershipApplied = false
 	tableScan.RuntimeFilterExprs = nil
 	tableScan.ctr.maxAllocSize = 0
 	if tableScan.OpAnalyzer != nil {
 		tableScan.OpAnalyzer.Alloc(allocSize)
 	}
 	tableScan.closeReader()
+	tableScan.releaseOutputLease()
+	// The output batch is the lender of the cache pins its borrowed columns
+	// alias; nothing reads it after Reset, so do not keep the pins while the
+	// operator waits to be reused.
+	if tableScan.ctr.buf != nil {
+		tableScan.ctr.buf.CleanOnlyData()
+	}
 	if tableScan.allocationAccount != nil {
 		tableScan.Free(proc, pipelineFailed, err)
 	}
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
-	for i, vec := range tableScan.ctr.readerWorkspace {
-		if vec != nil {
-			vec.Free(proc.Mp())
-			tableScan.ctr.readerWorkspace[i] = nil
-		}
-	}
-	tableScan.ctr.readerWorkspace = nil
-	for _, v := range tableScan.ctr.readerHeaders {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	tableScan.ctr.readerHeaders = nil
-	for _, slot := range tableScan.ctr.readerSnapshots {
-		slot.Free(proc.Mp())
-	}
-	tableScan.ctr.readerSnapshots = nil
-	tableScan.ctr.readerSelection.Free(proc.Mp())
-	tableScan.ctr.readerSelection = nil
 	tableScan.ctr.columnUses = nil
 	tableScan.ctr.columnUsesReady = false
-	tableScan.ctr.columnUsesOwned = false
 
-	tableScan.ctr.dictionaryInputs.Free(proc.Mp())
 	tableScan.releaseLocalDomains()
+	tableScan.releaseOutputLease()
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.Clean(proc.Mp())
 		tableScan.ctr.buf = nil
@@ -299,7 +308,10 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
 		tableScan.ctr.readerFilter.Exact.Close()
 	}
+	tableScan.ctr.readerFilter.FreeMembership(proc.Mp())
 	tableScan.ctr.readerFilter = nil
+	tableScan.ctr.membershipPrepared = false
+	tableScan.ctr.membershipApplied = false
 	if tableScan.ctr.metricView != nil {
 		tableScan.ctr.metricView.Vecs = nil
 		tableScan.ctr.metricView = nil
@@ -321,11 +333,10 @@ func (tableScan *TableScan) ExecProjection(proc *process.Process, input *batch.B
 	batch := input
 	if tableScan.ProjectList != nil {
 		batch, err = tableScan.EvalProjection(input, proc)
-		tableScan.ObserveDictionaryInputs(tableScan.OpAnalyzer)
 	}
 
 	if err != nil {
 		return nil, err
 	}
-	return tableScan.ctr.dictionaryBoundary.Normalize(batch, proc.Mp())
+	return batch, nil
 }

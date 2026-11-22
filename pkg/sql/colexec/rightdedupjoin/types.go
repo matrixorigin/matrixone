@@ -44,8 +44,8 @@ const rightDedupJoinAllocationSiteMatched mpool.AllocationSite = 90
 const (
 	rightDedupJoinAllocationSiteResultData mpool.AllocationSite = iota + 114
 	rightDedupJoinAllocationSiteResultArea
-	rightDedupJoinAllocationSiteResultNulls
-	rightDedupJoinAllocationSiteResultGrouping
+	_ // reserved: was rightDedupJoinAllocationSiteResultNulls
+	_ // reserved: was rightDedupJoinAllocationSiteResultGrouping
 )
 
 type container struct {
@@ -97,7 +97,7 @@ type RightDedupJoin struct {
 	UpdateColIdxList  []int32
 	UpdateColExprList []*plan.Expr
 	allocationAccount *mpool.AllocationAccount
-	resultAllocation  *vector.AllocationAccountSelection
+	resultAllocation  *mpool.AccountBinding
 
 	vm.OperatorBase
 }
@@ -115,13 +115,10 @@ func (rightDedupJoin *RightDedupJoin) SetAllocationAccount(
 	if rightDedupJoin.allocationAccount == account {
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		rightDedupJoinAllocationSiteResultData,
-		rightDedupJoinAllocationSiteResultArea,
-		rightDedupJoinAllocationSiteResultNulls,
-		rightDedupJoinAllocationSiteResultGrouping,
 	)
 	if err != nil {
 		return err
@@ -239,7 +236,6 @@ func (ctr *container) cleanHashMap() {
 }
 
 func (ctr *container) cleanBitmap(proc *process.Process) {
-	colexec.FreeAccountedBitmap(ctr.matched, proc.Mp())
 	ctr.matched = nil
 }
 
@@ -272,12 +268,13 @@ func (rightDedupJoin *RightDedupJoin) resetResultBatch() error {
 			)
 		}
 	}
-	if err := ctr.resultBatch.SetAllocationAccount(rightDedupJoin.resultAllocation); err != nil {
-		ctr.resultBatch.Clean(nil)
-		ctr.resultBatch = nil
-		return err
-	}
 	return nil
+}
+
+// resultMP returns the pool result vectors grow through: the result account
+// view when an account is bound, otherwise proc's pool.
+func (rightDedupJoin *RightDedupJoin) resultMP(proc *process.Process) (*mpool.MPool, error) {
+	return rightDedupJoin.resultAllocation.MP(proc.Mp())
 }
 
 func (ctr *container) cleanResultBatch(proc *process.Process) {

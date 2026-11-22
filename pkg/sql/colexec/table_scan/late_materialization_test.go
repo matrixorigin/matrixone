@@ -328,7 +328,7 @@ func TestTableScanUsesLateMaterializationReader(t *testing.T) {
 }
 
 func TestProjectionColumnUses(t *testing.T) {
-	for _, shape := range []string{"mixed", "single-batch-tag", "forward-priority", "domain", "unknown"} {
+	for _, shape := range []string{"mixed", "single-batch-tag", "forward-priority", "domain", "membership", "domain-pass", "unknown"} {
 		t.Run(shape, func(t *testing.T) {
 			proc := testutil.NewProc(t)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
@@ -340,7 +340,7 @@ func TestProjectionColumnUses(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			})
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			typ := types.T_int32.ToType()
 			scan := &TableScan{Types: []pbplan.Type{typ.PlanType(), typ.PlanType(), typ.PlanType()}, OutputAllocation: allocation, FilterExprs: []*pbplan.Expr{lateTestCompare(t, ">", 1, 0)}}
@@ -354,78 +354,30 @@ func TestProjectionColumnUses(t *testing.T) {
 			}
 			require.NoError(t, scan.PrepareProjection(proc))
 			t.Cleanup(func() { scan.FreeProjection(proc) })
-			if shape == "domain" {
-				scan.ctr.domainProbes = []localDomainProbeState{{column: 2, pass: true}}
+			if shape == "domain" || shape == "membership" || shape == "domain-pass" {
+				scan.ctr.domainProbes = []localDomainProbeState{{column: 2, pass: shape == "domain-pass"}}
+				if shape == "membership" {
+					scan.ctr.readerFilter = &engine.ReaderFilterRequest{Membership: &engine.ReaderMembershipFilter{}}
+				}
 			}
 			if shape == "unknown" {
-				scan.ProjectExecutors[0].Free()
-				scan.ProjectExecutors[0] = nil
+				// An expression form whose column use is not understood keeps
+				// every column owned.
+				scan.ProjectList[0] = &pbplan.Expr{Typ: typ.PlanType(), Expr: &pbplan.Expr_Sub{Sub: &pbplan.SubqueryRef{}}}
 			}
-			consumer := &ownedColumnUseConsumer{MockOperator: colexec.NewMockOperator()}
-			consumer.AppendChild(scan)
-			vm.ConfigureDictionaryBoundaries(consumer)
 			scan.prepareColumnUses()
 			if shape == "unknown" {
 				require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned, engine.ReaderColumnOwned}, scan.ctr.columnUses)
 				return
 			}
-			want := []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnOwned, engine.ReaderColumnUnused}
-			if shape == "forward-priority" {
-				want[1] = engine.ReaderColumnRetain
-			}
-			if shape == "domain" {
+			want := []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned, engine.ReaderColumnUnused}
+			if shape == "domain" || shape == "membership" {
 				want[2] = engine.ReaderColumnOwned
+			}
+			if shape == "membership" {
+				require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned, engine.ReaderColumnUnused}, scan.ctr.readerFilter.Membership.ColumnUses)
 			}
 			require.Equal(t, want, scan.ctr.columnUses)
 		})
 	}
-}
-
-type ownedColumnUseConsumer struct {
-	*colexec.MockOperator
-	owned bool
-}
-
-func (*ownedColumnUseConsumer) AcceptsDictionary(child int) bool { return child == 0 }
-func (c *ownedColumnUseConsumer) PrefersOwnedDictionaryInput(child int) bool {
-	return child == 0 && c.owned
-}
-
-func TestConsumerOwnedDemandUpdatesColumnUses(t *testing.T) {
-	proc := testutil.NewProc(t)
-	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
-	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.Zero(t, account.Snapshot().Used)
-		_, _, err := registry.CompleteTerminal(account)
-		require.NoError(t, err)
-	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
-	require.NoError(t, err)
-	typ := types.T_int32.ToType()
-	scan := &TableScan{Types: []pbplan.Type{typ.PlanType(), typ.PlanType()}, FilterExprs: []*pbplan.Expr{lateTestCompare(t, ">", 1, 0)}, OutputAllocation: allocation}
-	scan.ProjectList = []*pbplan.Expr{lateTestCol(0, typ)}
-	require.NoError(t, scan.PrepareProjectionWithAllocation(proc, allocation))
-	t.Cleanup(func() { scan.FreeProjection(proc) })
-	consumer := &ownedColumnUseConsumer{MockOperator: colexec.NewMockOperator(), owned: true}
-	consumer.AppendChild(scan)
-	vm.ConfigureDictionaryBoundaries(consumer)
-	require.True(t, scan.ctr.dictionaryBoundary.AllowsDictionaryOutput())
-	scan.prepareColumnUses()
-	require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnUnused}, scan.ctr.columnUses)
-	consumer.owned = false
-	vm.ConfigureDictionaryBoundaries(consumer)
-	scan.prepareColumnUses()
-	require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnUnused}, scan.ctr.columnUses)
-	flat := colexec.NewMockOperator()
-	flat.AppendChild(scan)
-	vm.ConfigureDictionaryBoundaries(flat)
-	require.False(t, scan.ctr.dictionaryBoundary.AllowsDictionaryOutput())
-	scan.prepareColumnUses()
-	require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnUnused}, scan.ctr.columnUses)
-	vm.ConfigureDictionaryBoundaries(consumer)
-	scan.prepareColumnUses()
-	require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnUnused}, scan.ctr.columnUses)
 }

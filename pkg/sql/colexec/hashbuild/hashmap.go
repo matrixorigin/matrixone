@@ -36,21 +36,23 @@ import (
 type HashmapBuilder struct {
 	needDupVec bool
 	// InputBatchRowCount is the physical retained row count published with the JoinMap.
-	InputBatchRowCount int
-	TrackNullKeys      bool
-	HasNullKey         bool
-	curVecs            []*vector.Vector // evaluated key vecs for the current batch
-	IntHashMap         *hashmap.IntHashMap
-	StrHashMap         *hashmap.StrHashMap
-	Sels               message.GroupSels
-	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
-	Batches            colexec.Batches
-	executors          []colexec.ExpressionExecutor
-	uniqueKeys         uniqueKeyBatches
-	uniqueKeySlots     []bool
-	uniqueSels         []int64
-	cachedIntIterator  hashmap.Iterator
-	cachedStrIterator  hashmap.Iterator
+	InputBatchRowCount    int
+	TrackNullKeys         bool
+	HasNullKey            bool
+	curVecs               []*vector.Vector // evaluated key vecs for the current batch
+	IntHashMap            *hashmap.IntHashMap
+	StrHashMap            *hashmap.StrHashMap
+	Sels                  message.GroupSels
+	keyWidth              int // keyWidth is the width of hash columns, it determines which hash map to use.
+	Batches               colexec.Batches
+	boundBatchAllocations bool
+	batchRowEnds          []int64
+	executors             []colexec.ExpressionExecutor
+	uniqueKeys            uniqueKeyBatches
+	uniqueKeySlots        []bool
+	uniqueSels            []int64
+	cachedIntIterator     hashmap.Iterator
+	cachedStrIterator     hashmap.Iterator
 
 	IsDedup            bool
 	DedupBuildKeepLast bool
@@ -91,13 +93,13 @@ type HashmapBuilder struct {
 	mapAllocationAccount             *mpool.AllocationAccount
 	mapAllocation                    *hashtable.AllocationAccountSelection
 	iteratorAllocation               *hashmap.IteratorAllocation
-	batchAllocation                  *vector.AllocationAccountSelection
-	uniqueKeyAllocation              *vector.AllocationAccountSelection
+	batchAllocation                  *mpool.AccountBinding
+	uniqueKeyAllocation              *mpool.AccountBinding
 	recoveryCapacityClass            mpool.AllocationCapacityClass
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
-	var sz int64
+	sz := int64(cap(hb.batchRowEnds)) * 8
 	if hb.IntHashMap != nil {
 		sz += hb.IntHashMap.Size()
 	} else if hb.StrHashMap != nil {
@@ -136,6 +138,8 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	hb.Sels = message.GroupSels{}
 	jmDelRows := hb.DelRows
 	jm := message.NewJoinMap(sels, hb.IntHashMap, hb.StrHashMap, jmDelRows, hb.Batches.Buf, mp)
+	jm.SetBatchRowEnds(hb.batchRowEnds)
+	hb.batchRowEnds = nil
 	jm.SetHasNullKey(hb.HasNullKey)
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
@@ -147,10 +151,29 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	hb.freeIgnoreRows(mp)
 	hb.uniqueSels = nil
 	hb.curVecs = nil
-	jm.SetMemoryRelease(func() {
-		releaseDedupBitmap(jmDelRows, mp)
-	})
 	return jm
+}
+
+func (hb *HashmapBuilder) prepareBatchRowEnds(proc *process.Process) error {
+	batches := hb.Batches.Buf
+	for i := 0; i+1 < len(batches); i++ {
+		if batches[i].RowCount() == colexec.DefaultBatchSize {
+			continue
+		}
+		ends, err := mpool.MakeSliceAccounted[int64](len(batches), proc.Mp(),
+			hb.mapAllocationAccount, mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteBatchRowEnds)
+		if err != nil {
+			return err
+		}
+		var end int64
+		for j, bat := range batches {
+			end += int64(bat.RowCount())
+			ends[j] = end
+		}
+		hb.batchRowEnds = ends
+		break
+	}
+	return nil
 }
 
 func (hb *HashmapBuilder) GetGroupCount() uint64 {
@@ -337,6 +360,8 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 		hb.StrHashMap = nil
 	}
 	hb.Sels.Free(proc.Mp())
+	mpool.FreeSlice(proc.Mp(), hb.batchRowEnds)
+	hb.batchRowEnds = nil
 	hb.Batches.Clean(proc.Mp())
 	hb.retainedSpillTailSelected = 0
 	hb.freeIgnoreRows(proc.Mp())
@@ -363,7 +388,18 @@ func (hb *HashmapBuilder) evalBatch(batchIdx int, proc *process.Process) error {
 			return evalErr
 		}
 		if hb.needDupVec {
-			hb.curVecs[idx], evalErr = vec.DupOffHeap(proc.Mp())
+			// The executor result is charged to the build account; keep its
+			// copy on the same expression charge.
+			dupMP, viewErr := proc.Mp().WithAccount(
+				hb.mapAllocationAccount,
+				mpool.AllocationOwnerHashBuild,
+				executionResourceAllocationSiteExpressionData,
+				hb.recoveryCapacityClass,
+			)
+			if viewErr != nil {
+				return viewErr
+			}
+			hb.curVecs[idx], evalErr = vec.DupOffHeap(dupMP)
 			if evalErr != nil {
 				return evalErr
 			}
@@ -794,22 +830,35 @@ func (hb *HashmapBuilder) buildHashmap(
 		ignoreCandidateOldKey = make([]*vector.Vector, 1)
 	}
 
+	var vecIdx1, vecIdx2, n, nextCancelCheck int
+	estimateSize := !hashOnPK && !hb.IsDedup && hb.InputBatchRowCount > hashmap.HashMapSizeThreshHold
 buildUnits:
-	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
-		if i%(hashmap.UnitLimit*32) == 0 {
+	for i := 0; i < hb.InputBatchRowCount; i, vecIdx2 = i+n, vecIdx2+n {
+		if i >= nextCancelCheck {
 			if err := checkHashBuildCanceled(proc); err != nil {
 				return err
 			}
 			runtime.Gosched()
+			nextCancelCheck = i + hashmap.UnitLimit*32
 		}
-		n := hb.InputBatchRowCount - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
+		n = min(hashmap.UnitLimit, hb.InputBatchRowCount-i)
+		if hb.boundBatchAllocations {
+			for vecIdx1 < len(hb.Batches.Buf) && vecIdx2 == hb.Batches.Buf[vecIdx1].RowCount() {
+				vecIdx1++
+				vecIdx2 = 0
+			}
+			if vecIdx1 == len(hb.Batches.Buf) {
+				return process.ErrExecutionResourceInvalid
+			}
+			n = min(n, hb.Batches.Buf[vecIdx1].RowCount()-vecIdx2)
+		} else {
+			vecIdx1, vecIdx2 = i/colexec.DefaultBatchSize, i%colexec.DefaultBatchSize
 		}
 
 		// if not hash on primary key, estimate the hashmap size after 8192 rows
 		//preAlloc to improve performance and reduce memory reAlloc
-		if !hashOnPK && !hb.IsDedup && hb.InputBatchRowCount > hashmap.HashMapSizeThreshHold && i == hashmap.HashMapSizeEstimate {
+		if estimateSize && i >= hashmap.HashMapSizeEstimate {
+			estimateSize = false
 			if useIntHashMap {
 				groupCount := hb.IntHashMap.GroupCount()
 				rate := float64(groupCount) / float64(i)
@@ -833,8 +882,6 @@ buildUnits:
 			}
 		}
 
-		vecIdx1 := i / colexec.DefaultBatchSize
-		vecIdx2 := i % colexec.DefaultBatchSize
 		if vecIdx1 != lastBatch {
 			if err = hb.evalBatch(vecIdx1, proc); err != nil {
 				return err
@@ -1303,19 +1350,13 @@ func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Proces
 		bat.Clean(proc.Mp())
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	deleteOnlyMP, err := proc.Mp().WithAccount(
 		hb.mapAllocationAccount,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteDedupDeleteOnlyData,
-		HashBuildAllocationSiteDedupDeleteOnlyArea,
-		HashBuildAllocationSiteDedupDeleteOnlyNulls,
-		HashBuildAllocationSiteDedupDeleteOnlyGrouping,
+		mpool.AllocationCapacityClassDefault,
 	)
 	if err != nil {
-		bat.Clean(proc.Mp())
-		return nil, err
-	}
-	if err = bat.SetAllocationAccount(selection); err != nil {
 		bat.Clean(proc.Mp())
 		return nil, err
 	}
@@ -1337,10 +1378,10 @@ func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Proces
 		for colIdx, dst := range bat.Vecs {
 			src := hb.Batches.Buf[srcBatIdx].Vecs[colIdx]
 			if _, keep := keepCols[int32(colIdx)]; keep || src.IsNull(uint64(srcRowIdx)) {
-				if err := dst.UnionOne(src, srcRowIdx, proc.Mp()); err != nil {
+				if err := dst.UnionOne(src, srcRowIdx, deleteOnlyMP); err != nil {
 					return nil, err
 				}
-			} else if err := dst.UnionNull(proc.Mp()); err != nil {
+			} else if err := dst.UnionNull(deleteOnlyMP); err != nil {
 				return nil, err
 			}
 		}

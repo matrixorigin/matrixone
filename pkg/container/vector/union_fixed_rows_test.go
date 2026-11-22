@@ -82,9 +82,6 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 						require.NoError(t, want.UnionOne(row.Vec, row.Row, mp))
 					}
 					require.Equal(t, want.length, got.length)
-					require.Equal(t, want.prepareParamKind, got.prepareParamKind)
-					require.Equal(t, want.prepareParamKindSeen, got.prepareParamKindSeen)
-					require.Equal(t, want.stringSource, got.stringSource)
 					width := oid.TypeLen()
 					for i := 0; i < got.length; i++ {
 						require.Equal(t, want.IsNull(uint64(i)), got.IsNull(uint64(i)))
@@ -104,7 +101,7 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 }
 
 func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
-	for _, shape := range []string{"const", "grouping", "parameter", "binary", "borrowed", "alias", "type", "negative", "past_end", "singleton", "unicode", "out_of_line"} {
+	for _, shape := range []string{"const", "grouping", "borrowed", "alias", "type", "negative", "past_end", "singleton", "unicode", "out_of_line"} {
 		t.Run(shape, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			typ := types.T_int64.ToType()
@@ -132,10 +129,6 @@ func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
 				b.class = CONSTANT
 			case "grouping":
 				b.gsp.Add(1)
-			case "parameter":
-				b.SetPrepareParamKind(PrepareParamInteger)
-			case "binary":
-				b.SetIsBinaryString(true)
 			case "borrowed":
 				b.cantFreeData = true
 			case "alias":
@@ -162,7 +155,8 @@ func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
 			state := newTestVectorAllocationAccount(t, 1, 16)
 			mp := mpool.MustNewZero()
 			src := NewVec(types.T_int64.ToType())
-			dst := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+			dst := newAccountedTestVector(t, types.T_int64.ToType())
+			dmp := state.view(t, mp)
 			t.Cleanup(func() {
 				src.Free(mp)
 				dst.Free(mp)
@@ -171,7 +165,7 @@ func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
 			})
 			require.NoError(t, AppendFixed(src, int64(10), nullable, mp))
 			require.NoError(t, AppendFixed(src, int64(20), false, mp))
-			used, err := dst.TryUnionFlatFixedRows([]FixedSourceRow{{src, 0}, {src, 1}}, mp)
+			used, err := dst.TryUnionFlatFixedRows([]FixedSourceRow{{src, 0}, {src, 1}}, dmp)
 			require.True(t, used)
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.Zero(t, dst.length)

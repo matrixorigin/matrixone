@@ -85,7 +85,7 @@ func TestBlockScaledVectorOps(t *testing.T) {
 			// Marshal round trip validates every live cell.
 			data, err := vec.MarshalBinary()
 			require.NoError(t, err)
-			decoded := NewVecFromReuse()
+			decoded := new(Vector)
 			require.NoError(t, decoded.UnmarshalBinaryWithCopy(data, mp))
 			requireBlockScaledRows(t, decoded, texts)
 			decoded.Free(mp)
@@ -143,7 +143,7 @@ func TestBlockScaledVectorUnmarshalRejectsMalformedCell(t *testing.T) {
 			corrupted := append([]byte(nil), data...)
 			corrupted[pos] = 0x7f // version byte
 
-			target := NewVecFromReuse()
+			target := new(Vector)
 			require.Error(t, target.UnmarshalBinaryWithCopy(corrupted, mp))
 			target.Free(mp)
 

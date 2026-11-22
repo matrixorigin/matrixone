@@ -27,65 +27,59 @@ func TestReadonlyBinarySetterAdmission(t *testing.T) {
 	mpool.EnableDebugPoisonOnFree()
 	t.Cleanup(mpool.DisableDebugPoisonOnFree)
 	for _, leased := range []bool{false, true} {
-		for _, binaryString := range []bool{false, true} {
-			for _, alias := range []bool{false, true} {
-				for failAfter := range 10 {
-					t.Run(fmt.Sprintf("leased=%t/binary=%t/alias=%t/fail=%d", leased, binaryString, alias, failAfter), func(t *testing.T) {
-						mp := mpool.MustNewZero()
-						t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
-						controller := &readonlyWriteController{}
-						state := readonlyWriteAccount(t, controller)
-						values := [][]byte{[]byte("old"), []byte("source"), bytes.Repeat([]byte{'a'}, 64)}
-						_, destination := readonlyAliasVectors(t, mp, values, leased, state.selection)
-						destination.SetIsBinaryString(!binaryString)
-						var snapshot *Vector
-						var err error
-						if leased {
-							snapshot, err = destination.RetainedReadonlyViewWithMP(mp)
-						} else {
-							snapshot, err = destination.CloneWindowWithAllocation(0, 3, mp, state.selection)
+		for _, alias := range []bool{false, true} {
+			for failAfter := range 10 {
+				t.Run(fmt.Sprintf("leased=%t/alias=%t/fail=%d", leased, alias, failAfter), func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+					controller := &readonlyWriteController{}
+					state := readonlyWriteAccount(t, controller)
+					values := [][]byte{[]byte("old"), []byte("source"), bytes.Repeat([]byte{'a'}, 64)}
+					amp := state.view(t, mp)
+					_, destination := readonlyAliasVectors(t, mp, values, leased, amp)
+					var snapshot *Vector
+					var err error
+					if leased {
+						snapshot, err = readonlyView(destination, amp)
+					} else {
+						snapshot, err = destination.CloneWindow(0, 3, amp)
+					}
+					require.NoError(t, err)
+					t.Cleanup(func() { snapshot.Free(mp) })
+					want := []byte("replacement")
+					input := want
+					if alias {
+						want = values[1]
+						input = destination.GetBytesAt(1)
+					}
+					if failAfter != 0 {
+						controller.failAt = controller.calls + failAfter
+					}
+					err = SetBytesAt(destination, 0, input, amp)
+					if err != nil {
+						require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+						require.True(t, controller.rejected)
+						for row, value := range values {
+							require.Equal(t, value, destination.GetBytesAt(row), "failed admission must not publish payload")
 						}
-						require.NoError(t, err)
-						t.Cleanup(func() { snapshot.Free(mp) })
-						want := []byte("replacement")
-						input := want
+						controller.failAt = 0
+						input = want
 						if alias {
-							want = values[1]
 							input = destination.GetBytesAt(1)
 						}
-						if failAfter != 0 {
-							controller.failAt = controller.calls + failAfter
-						}
-						err = SetBytesAtWithBinaryString(destination, 0, input, binaryString, mp)
-						if err != nil {
-							require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-							require.True(t, controller.rejected)
-							for row, value := range values {
-								require.Equal(t, value, destination.GetBytesAt(row), "failed admission must not publish payload")
-								require.Equal(t, !binaryString, destination.GetIsBinaryStringAt(row))
-							}
-							controller.failAt = 0
-							input = want
-							if alias {
-								input = destination.GetBytesAt(1)
-							}
-							require.NoError(t, SetBytesAtWithBinaryString(destination, 0, input, binaryString, mp))
-						} else {
-							require.False(t, controller.rejected)
-						}
-						require.Equal(t, 3, destination.Length())
-						require.Equal(t, want, destination.GetBytesAt(0))
-						require.Equal(t, binaryString, destination.GetIsBinaryStringAt(0))
-						for row := 1; row < 3; row++ {
-							require.Equal(t, values[row], destination.GetBytesAt(row))
-							require.Equal(t, !binaryString, destination.GetIsBinaryStringAt(row))
-						}
-						for row, value := range values {
-							require.Equal(t, value, snapshot.GetBytesAt(row))
-							require.Equal(t, !binaryString, snapshot.GetIsBinaryStringAt(row))
-						}
-					})
-				}
+						require.NoError(t, SetBytesAt(destination, 0, input, amp))
+					} else {
+						require.False(t, controller.rejected)
+					}
+					require.Equal(t, 3, destination.Length())
+					require.Equal(t, want, destination.GetBytesAt(0))
+					for row := 1; row < 3; row++ {
+						require.Equal(t, values[row], destination.GetBytesAt(row))
+					}
+					for row, value := range values {
+						require.Equal(t, value, snapshot.GetBytesAt(row))
+					}
+				})
 			}
 		}
 	}

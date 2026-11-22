@@ -15,9 +15,6 @@
 package vector
 
 import (
-	"math"
-	"reflect"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
@@ -29,9 +26,12 @@ import (
 type BackingKind uint8
 
 const (
+	// OwnedMPoolUnique backings were allocated by the Vector and are freed by it.
 	OwnedMPoolUnique BackingKind = iota
-	BorrowedLease
-	LegacyAlias
+	// BorrowedAlias backings are aliases the Vector neither owns nor frees: a
+	// window, a decoded buffer, or bytes lent by an external owner. Whoever lent
+	// the bytes keeps them alive; the Vector copies them before any mutation.
+	BorrowedAlias
 )
 
 // BackingPart selects one independently-owned Vector backing.
@@ -44,7 +44,9 @@ const (
 
 // BufferLease is a ref-counted immutable byte backing. Retain must fail after
 // the refcount reaches zero; every successful Retain requires one Release.
-// Bytes is valid only while the caller owns a live reference.
+// Bytes is valid only while the caller owns a live reference. Vectors never
+// hold a BufferLease: the lender that publishes aliasing vectors holds it (see
+// bufferlease.Holder and batch.Batch.HoldLease).
 type BufferLease = bufferlease.BufferLease
 
 // RefCountedBufferLease is the default lease implementation used by external
@@ -61,180 +63,79 @@ func NewRefCountedBufferLease(
 }
 
 func (v *Vector) DataBackingKind() BackingKind {
-	if v == nil {
-		return OwnedMPoolUnique
-	}
-	if v.dataLease != nil {
-		return BorrowedLease
-	}
-	if v.cantFreeData {
-		return LegacyAlias
+	if v != nil && v.cantFreeData {
+		return BorrowedAlias
 	}
 	return OwnedMPoolUnique
 }
 
 func (v *Vector) AreaBackingKind() BackingKind {
-	if v == nil {
-		return OwnedMPoolUnique
-	}
-	if v.IsDictionary() {
-		return BorrowedLease
-	}
-	if v.areaLease != nil {
-		return BorrowedLease
-	}
-	if v.cantFreeArea {
-		return LegacyAlias
+	if v != nil && v.cantFreeArea {
+		return BorrowedAlias
 	}
 	return OwnedMPoolUnique
 }
 
+// HasBorrowedBacking reports whether either backing is an alias the Vector
+// does not own. Such a Vector must be copied (MaterializeOwned) before it is
+// mutated or kept past the lifetime its lender guarantees.
 func (v *Vector) HasBorrowedBacking() bool {
-	return v != nil && (v.dataLease != nil || v.areaLease != nil || v.nsp.HasBorrowedValidity())
+	return v != nil && (v.cantFreeData || v.cantFreeArea)
 }
 
-func (v *Vector) BorrowedAccountedBytes() int64 {
-	if v == nil {
-		return 0
-	}
-	bytes := int64(0)
-	if v.dataLease != nil {
-		bytes += v.dataLease.AccountedBytes()
-	}
-	if v.areaLease != nil && !sameBufferLease(v.areaLease, v.dataLease) {
-		bytes += v.areaLease.AccountedBytes()
-	}
-	bytes += v.nsp.BorrowedAccountedBytes()
-	return bytes
-}
-
-// sameBufferLease only de-duplicates implementations whose dynamic values are
-// comparable. BufferLease is a public interface and can legally be
-// implemented by slice-backed value types; comparing those interfaces
-// directly would panic. When identity cannot be proven, accounting both
-// references is the safe upper bound.
-func sameBufferLease(left, right BufferLease) bool {
-	if left == nil || right == nil {
-		return false
-	}
-	leftValue := reflect.ValueOf(left)
-	rightValue := reflect.ValueOf(right)
-	return leftValue.Type() == rightValue.Type() &&
-		leftValue.Comparable() && leftValue.Interface() == rightValue.Interface()
-}
-
+// CanDetach reports whether part is owned by the Vector and may therefore be
+// moved to another owner.
 func (v *Vector) CanDetach(part BackingPart) bool {
-	if v == nil || v.IsDictionary() {
+	if v == nil {
 		return false
 	}
 	switch part {
 	case BackingData:
-		return v.dataLease == nil && !v.cantFreeData
+		return !v.cantFreeData
 	case BackingArea:
-		return v.areaLease == nil && !v.cantFreeArea
+		return !v.cantFreeArea
 	default:
 		return false
 	}
 }
 
-// InstallBorrowedData atomically installs a retained read-only data view. The
-// Vector must not already own data capacity; callers must Free or materialize
-// the previous generation first.
-func (v *Vector) InstallBorrowedData(data []byte, lease BufferLease) error {
-	if v == nil || v.IsDictionary() || lease == nil || cap(v.data) != 0 || v.dataLease != nil {
+// InstallBorrowedData installs a read-only alias of data. The Vector must not
+// own data capacity. The caller (the lender) keeps data alive for every read
+// through this Vector and through any window or alias derived from it.
+func (v *Vector) InstallBorrowedData(data []byte) error {
+	if v == nil || cap(v.data) != 0 && !v.cantFreeData {
 		return moerr.NewInternalErrorNoCtx("cannot install borrowed vector data")
 	}
-	if !lease.Retain() {
-		return moerr.NewInternalErrorNoCtx("buffer lease is already released")
-	}
 	v.data = data
-	v.dataLease = lease
 	v.cantFreeData = true
 	return nil
 }
 
 // InstallBorrowedArea is the independently-owned area counterpart of
 // InstallBorrowedData.
-func (v *Vector) InstallBorrowedArea(area []byte, lease BufferLease) error {
-	if v == nil || v.IsDictionary() || lease == nil || cap(v.area) != 0 || v.areaLease != nil {
+func (v *Vector) InstallBorrowedArea(area []byte) error {
+	if v == nil || cap(v.area) != 0 && !v.cantFreeArea {
 		return moerr.NewInternalErrorNoCtx("cannot install borrowed vector area")
 	}
-	if !lease.Retain() {
-		return moerr.NewInternalErrorNoCtx("buffer lease is already released")
-	}
 	v.area = area
-	v.areaLease = lease
 	v.cantFreeArea = true
 	return nil
 }
 
-// PrepareBorrowedValidity reserves the owned COW destination before a
-// borrowed Arrow validity view is published. Nulls' legacy mutation APIs
-// cannot return allocation errors, so admission must happen here while the
-// bridge can still fail transactionally. The bitmap remains logically empty
-// until the validity view is materialized.
-func (v *Vector) PrepareBorrowedValidity(rows int, mp *mpool.MPool) error {
-	if v == nil || mp == nil || rows < 0 || rows > math.MaxInt-63 ||
-		v.nsp.HasBorrowedValidity() || v.nsp.Len() != 0 {
-		return moerr.NewInvalidInputNoCtx("invalid borrowed validity reservation")
-	}
-	requiredWords := (rows + 63) / 64
-	bitmap := v.nsp.GetBitmap()
-	if requiredWords > bitmap.ExternalStorageCapacity() {
-		var (
-			storage []uint64
-			err     error
-		)
-		if v.allocationAccount == nil {
-			storage, err = mpool.MakeSlice[uint64](requiredWords, mp, v.offHeap)
-		} else {
-			storage, err = v.allocateBitmapGrowth(
-				bitmap, rows, mp, v.allocationAccount.nullsSite,
-			)
-		}
-		if err != nil {
-			return err
-		}
-		if cap(storage) > 0 {
-			previous := bitmap.InstallExternalStorage(storage)
-			mpool.FreeSlice(mp, previous)
-		}
-	}
-	bitmap.Reset()
-	return nil
-}
-
-// NewBorrowedFixedVector constructs a fixed-width immutable Vector. The
-// constructor retains lease; the caller continues to own its incoming ref.
+// NewBorrowedFixedVector constructs a fixed-width immutable Vector aliasing
+// data. The caller keeps data alive while the Vector is read.
 func NewBorrowedFixedVector(
 	typ types.Type,
 	rows int,
 	data []byte,
-	lease BufferLease,
-) (*Vector, error) {
-	return NewBorrowedFixedVectorWithAllocation(typ, rows, data, lease, nil)
-}
-
-// NewBorrowedFixedVectorWithAllocation installs selection before borrowed
-// backing, so any later COW or bitmap materialization remains in the same
-// statement account.
-func NewBorrowedFixedVectorWithAllocation(
-	typ types.Type,
-	rows int,
-	data []byte,
-	lease BufferLease,
-	selection *AllocationAccountSelection,
 ) (*Vector, error) {
 	if rows < 0 || typ.IsVarlen() || typ.TypeSize() <= 0 ||
 		uint64(rows) > uint64(^uint(0)>>1)/uint64(typ.TypeSize()) ||
 		len(data) != rows*typ.TypeSize() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid borrowed fixed vector layout")
 	}
-	vec, err := NewOffHeapVecWithTypeAndAllocation(typ, selection)
-	if err != nil {
-		return nil, err
-	}
-	if err := vec.InstallBorrowedData(data, lease); err != nil {
+	vec := NewOffHeapVecWithType(typ)
+	if err := vec.InstallBorrowedData(data); err != nil {
 		vec.Free(nil)
 		return nil, err
 	}
@@ -242,14 +143,35 @@ func NewBorrowedFixedVectorWithAllocation(
 	return vec, nil
 }
 
+// InstallBorrowedView replaces an empty destination with a full-row read-only
+// alias of source: payload bytes are aliased, row metadata (nulls, grouping) is
+// private. dst must not own data or area storage. The caller keeps the source
+// bytes alive for every read through dst. On failure dst keeps its type and
+// allocation mode and holds no storage.
+func (v *Vector) InstallBorrowedView(source *Vector, mp *mpool.MPool) error {
+	if v == nil || source == nil || v == source || v.length != 0 || v.hasOwnedBackingStorage() {
+		return moerr.NewInternalErrorNoCtx("cannot install a borrowed vector view")
+	}
+	oldType, oldOffHeap := v.typ, v.offHeap
+	if _, err := source.windowInto(0, source.length, mp, v); err != nil {
+		v.Free(mp)
+		*v = Vector{typ: oldType, offHeap: oldOffHeap}
+		return err
+	}
+	source.CopyExpressionMetadataTo(v)
+	return nil
+}
+
 // PrepareDataForInplaceMutation makes the data backing writable without
 // changing values, row metadata, or the independently owned varlen area.
-// A failed allocation leaves the existing backing and lease unchanged.
+// A failed allocation leaves the existing backing unchanged.
 func (v *Vector) PrepareDataForInplaceMutation(mp *mpool.MPool) error {
-	if v.IsDictionary() {
-		return v.EnsureFlat(mp)
+	if !v.cantFreeData {
+		return nil
 	}
-	if !v.cantFreeData || len(v.data) == 0 {
+	if len(v.data) == 0 {
+		v.data = nil
+		v.cantFreeData = false
 		return nil
 	}
 	data, err := v.allocData(mp, len(v.data))
@@ -257,179 +179,69 @@ func (v *Vector) PrepareDataForInplaceMutation(mp *mpool.MPool) error {
 		return err
 	}
 	copy(data, v.data)
-	v.releaseBorrowedData()
 	v.data = data
 	v.cantFreeData = false
 	return nil
 }
 
-func (v *Vector) releaseBorrowedData() {
-	if v == nil || v.dataLease == nil {
-		return
+// dropAliasedData stops referencing an aliased data backing. Owned storage is
+// kept for reuse.
+func (v *Vector) dropAliasedData() {
+	if v != nil && v.cantFreeData {
+		v.data = nil
+		v.cantFreeData = false
 	}
-	lease := v.dataLease
-	if owned, ok := lease.(*dictionaryPayloadLease); ok {
-		owned.origin.CompareAndSwap(v, nil)
-	}
-	v.dataLease = nil
-	v.data = nil
-	v.cantFreeData = false
-	lease.Release()
 }
 
-func (v *Vector) releaseBorrowedArea() {
-	if v == nil || v.areaLease == nil {
-		return
+// dropAliasedArea is the area counterpart of dropAliasedData.
+func (v *Vector) dropAliasedArea() {
+	if v != nil && v.cantFreeArea {
+		v.area = nil
+		v.cantFreeArea = false
 	}
-	lease := v.areaLease
-	if owned, ok := lease.(*dictionaryPayloadLease); ok {
-		owned.origin.CompareAndSwap(v, nil)
-	}
-	v.areaLease = nil
-	v.area = nil
-	v.cantFreeArea = false
-	lease.Release()
 }
 
-func (v *Vector) releaseBorrowedBacking() {
-	if v == nil {
-		return
-	}
-	v.releaseDictionary()
-	v.releaseBorrowedArea()
-	v.releaseBorrowedData()
+func (v *Vector) dropAliasedBacking() {
+	v.dropAliasedArea()
+	v.dropAliasedData()
 }
 
-// CopyWithReadonlyArea replaces an empty varlen destination with a private
-// materialization of source. Only the newly copied area becomes leased; neither
-// source storage nor a previously published destination backing is shared.
-// The destination's type, allocation mode and account are preserved. Failure
-// leaves both source and destination unchanged.
-func (v *Vector) CopyWithReadonlyArea(source *Vector, mp *mpool.MPool) error {
-	if v == nil || source == nil || mp == nil || v == source ||
-		v.length != 0 || v.IsConst() || !v.typ.IsVarlen() || v.typ.Oid != source.typ.Oid {
-		return moerr.NewInvalidInputNoCtx("readonly area copy requires an empty compatible varlen destination")
-	}
-	private := NewVec(v.typ)
-	private.offHeap = v.offHeap
-	private.sorted = v.sorted
-	private.isBin = v.isBin
-	private.prepareParamType = v.prepareParamType
-	if err := private.SetAllocationAccount(v.allocationAccount); err != nil {
-		private.Free(mp)
-		return err
-	}
-	if err := private.UnionBatch(source, 0, source.length, nil, mp); err != nil {
-		private.Free(mp)
-		return err
-	}
-	if len(private.area) > 0 {
-		buffer := DetachedBuffer{
-			data:      private.area,
-			selection: private.allocationAccount,
-			kind:      DetachedAreaBuffer,
-		}
-		lease, err := NewRefCountedBufferLease(private.area, int64(buffer.Capacity()), func() {
-			buffer.Free(mp)
-		})
-		if err != nil {
-			private.Free(mp)
-			return err
-		}
-		// The initial reference moves to this unpublished Vector. The callback
-		// captures only the physical allocation, not the Vector or its lease.
-		private.areaLease = lease
-		private.cantFreeArea = true
-	}
-	v.Free(mp)
-	*v = *private
-	return nil
-}
-
-// MaterializeOwned performs copy-on-write transactionally. Allocation failure
-// leaves the borrowed Vector unchanged and readable.
+// MaterializeOwned performs copy-on-write transactionally: every aliased
+// backing is replaced by a private copy. Allocation failure leaves the
+// borrowed Vector unchanged and readable.
 func (v *Vector) MaterializeOwned(mp *mpool.MPool) error {
-	// Ordinary scalar destinations have no workspace lease to reclaim.
-	if v != nil && (v.dataLease != nil || v.areaLease != nil) {
-		v.ReclaimDictionaryWorkspace()
-	}
-	if v.IsDictionary() {
-		return v.EnsureFlat(mp)
-	}
 	if v == nil || !v.HasBorrowedBacking() {
 		return nil
 	}
 	if mp == nil {
 		return moerr.NewInternalErrorNoCtx("borrowed vector materialization does not have a mpool")
 	}
-	owned, err := v.dup(mp, true, true, v.allocationAccount)
+	owned, err := v.dup(mp, true, true)
 	if err != nil {
 		return err
 	}
 	v.CopyExpressionMetadataTo(owned)
-	v.retireDictionaryWorkspaceOrigin()
 	old := *v
 	*v = *owned
 	old.Free(mp)
 	return nil
 }
 
-// RetainedReadonlyView returns an explicitly retained full-row view. Legacy
-// aliases are excluded because they do not carry a lifetime owner.
-func (v *Vector) RetainedReadonlyView() (*Vector, error) {
-	if v == nil || v.DataBackingKind() == LegacyAlias || v.AreaBackingKind() == LegacyAlias {
-		return nil, moerr.NewInternalErrorNoCtx("vector backing has no retainable owner")
-	}
-	if !v.HasBorrowedBacking() {
-		return nil, moerr.NewInternalErrorNoCtx("owned vector has no shared backing lease")
-	}
-	return v.WindowByLogicalRows(0, v.length)
-}
-
-// RetainedReadonlyViewWithMP creates an asynchronously safe full-row snapshot.
-// Borrowed backings are retained; unique-owned backings are copied so the
-// source may be recycled immediately. The result remains immutable while any
-// retained backing is present and must be materialized before mutation.
-func (v *Vector) RetainedReadonlyViewWithMP(mp *mpool.MPool) (*Vector, error) {
-	if v == nil {
-		return nil, moerr.NewInvalidInputNoCtx("retained vector snapshot requires a vector and mpool")
-	}
-	return v.RetainedReadonlyWindowWithMP(0, v.length, mp)
-}
-
-// RetainedReadonlyWindowWithMP is the row-range form of
-// RetainedReadonlyViewWithMP. It preserves leased payload backings while
-// copying source-owned descriptors and other unique-owned slices.
-func (v *Vector) RetainedReadonlyWindowWithMP(start, end int, mp *mpool.MPool) (*Vector, error) {
+// WindowCopyingOwnedParts returns a [start, end) window that does not depend
+// on v's own allocations: parts v owns are copied, parts v merely aliases stay
+// aliased to the same backing. The caller keeps the lender of those aliased
+// parts alive (for example by moving the lender's leases along with the
+// window). The result must be materialized before mutation.
+func (v *Vector) WindowCopyingOwnedParts(start, end int, mp *mpool.MPool) (*Vector, error) {
 	if v == nil || mp == nil {
-		return nil, moerr.NewInvalidInputNoCtx("retained vector snapshot requires a vector and mpool")
+		return nil, moerr.NewInvalidInputNoCtx("vector window copy requires a vector and mpool")
 	}
-	if v.DataBackingKind() == LegacyAlias || v.AreaBackingKind() == LegacyAlias {
-		return nil, moerr.NewInternalErrorNoCtx("vector backing has no retainable owner")
-	}
-	if !v.HasBorrowedBacking() {
-		return nil, moerr.NewInternalErrorNoCtx("owned vector has no shared backing lease")
-	}
-
-	var (
-		view *Vector
-		err  error
-	)
-	if v.allocationAccount != nil {
-		view, err = v.WindowByLogicalRowsWithAllocation(
-			start, end, mp, v.allocationAccount,
-		)
-	} else {
-		view, err = v.window(start, end, mp, nil, true)
-	}
+	view, err := v.window(start, end, mp, true)
 	if err != nil {
 		return nil, err
 	}
 	view.offHeap = true
-
-	// Window can safely alias only a leased source backing. Copy every
-	// source-owned part before the source becomes reusable.
-	if v.dataLease == nil && len(view.data) > 0 {
+	if !v.cantFreeData && len(view.data) > 0 {
 		owned, allocErr := view.allocOwned(mp, len(view.data), true, true)
 		if allocErr != nil {
 			view.Free(mp)
@@ -439,7 +251,7 @@ func (v *Vector) RetainedReadonlyWindowWithMP(start, end int, mp *mpool.MPool) (
 		view.data = owned
 		view.cantFreeData = false
 	}
-	if v.areaLease == nil && len(view.area) > 0 {
+	if !v.cantFreeArea && len(view.area) > 0 {
 		owned, allocErr := view.allocOwned(mp, len(view.area), true, false)
 		if allocErr != nil {
 			view.Free(mp)
@@ -449,10 +261,12 @@ func (v *Vector) RetainedReadonlyWindowWithMP(start, end int, mp *mpool.MPool) (
 		view.area = owned
 		view.cantFreeArea = false
 	}
-	if view.dataLease == nil && len(view.data) == 0 {
+	if len(view.data) == 0 {
+		view.data = nil
 		view.cantFreeData = false
 	}
-	if view.areaLease == nil && len(view.area) == 0 {
+	if len(view.area) == 0 {
+		view.area = nil
 		view.cantFreeArea = false
 	}
 	return view, nil

@@ -68,10 +68,11 @@ func TestAppendBytesWithWriterOwnsFinalAreaAndRollsBack(t *testing.T) {
 func TestAppendBytesWithWriterAdmitsDescriptorBeforeWriter(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1, 1)
 	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_blob.ToType(), state.selection)
+	vec := newAccountedTestVector(t, types.T_blob.ToType())
+	dmp := state.view(t, mp)
 	called := false
 
-	err := AppendBytesWithWriter(vec, 1, mp, func([]byte) error {
+	err := AppendBytesWithWriter(vec, 1, dmp, func([]byte) error {
 		called = true
 		return nil
 	})
@@ -89,21 +90,16 @@ func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(
-		types.T_int64.ToType(), mp, selection,
-	)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_int64.ToType(), view)
 	require.NoError(t, wrapper.PreExtendAndReset(64))
 	transferred := wrapper.GetResultVector()
-	require.Same(t, selection, transferred.AllocationAccountSelection())
 	firstUsed := account.Snapshot().Used
 	require.Positive(t, firstUsed)
 
 	wrapper.SetResultVector(nil)
 	require.NoError(t, wrapper.PreExtendAndReset(64))
-	require.Same(t, selection, wrapper.GetResultVector().AllocationAccountSelection())
 	require.Greater(t, account.Snapshot().Used, firstUsed)
 
 	transferred.Free(mp)
@@ -117,12 +113,9 @@ func TestFunctionResultAllocationBoundsNullUnion(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(
-		types.T_int64.ToType(), mp, selection,
-	)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_int64.ToType(), view)
 	require.NoError(t, wrapper.PreExtendAndReset(1))
 	result := MustFunctionResult[int64](wrapper)
 	require.NoError(t, result.Append(42, false))
@@ -131,26 +124,23 @@ func TestFunctionResultAllocationBoundsNullUnion(t *testing.T) {
 	require.True(t, result.vec.IsConst())
 
 	// A folded result resets before growing, while an ordinary reused result
-	// resets after capacity growth. Both generations must publish the same
-	// owner-provided NULL row bound.
+	// resets after capacity growth. The null bitmap is allocated lazily.
 	require.NoError(t, wrapper.PreExtendAndReset(64))
 	require.False(t, result.vec.IsConst())
-	require.EqualValues(t, 64, result.vec.GetNulls().GetBitmap().Len())
 	result.AddNullAt(63)
+	require.True(t, result.GetNullAt(63))
 	require.NoError(t, wrapper.PreExtendAndReset(4))
 
 	result = MustFunctionResult[int64](wrapper)
-	capacityRows := result.GetResultVector().GetNulls().GetBitmap().ExternalStorageCapacity() * 64
-	require.GreaterOrEqual(t, capacityRows, 4)
-	source := nulls.NewWithSize(capacityRows + 1)
-	source.Add(1, uint64(capacityRows))
+	require.False(t, result.GetNullAt(63), "reset must drop the previous generation's NULLs")
+	source := nulls.NewWithSize(130)
+	source.Add(1, 129)
 
 	require.NotPanics(t, func() {
 		result.AddNulls(source)
 	})
 	require.True(t, result.GetNullAt(1))
-	require.False(t, result.GetNullAt(uint64(capacityRows)))
-	require.EqualValues(t, 4, result.GetResultVector().GetNulls().GetBitmap().Len())
+	require.False(t, result.GetNullAt(0))
 
 	wrapper.Free()
 	require.Zero(t, account.Snapshot().Used)
@@ -162,7 +152,6 @@ func TestFunctionResultUnaccountedKeepsLazyNullBitmap(t *testing.T) {
 	require.NoError(t, wrapper.PreExtendAndReset(64))
 
 	bitmap := wrapper.GetResultVector().GetNulls().GetBitmap()
-	require.False(t, bitmap.HasExternalStorage())
 	require.Zero(t, bitmap.Len())
 	require.Zero(t, bitmap.Size())
 
@@ -621,10 +610,9 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(types.T_bool.ToType(), mp, selection)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_bool.ToType(), view)
 	t.Cleanup(wrapper.Free)
 	result := MustFunctionResult[bool](wrapper)
 	require.NoError(t, result.PreExtendAndResetNonNull(0))
@@ -633,9 +621,8 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 	require.Error(t, result.PreExtendAndResetNonNull(-1))
 	require.Zero(t, result.vec.Length())
 	require.NoError(t, result.PreExtendAndResetNonNull(128))
-	require.Same(t, selection, result.vec.AllocationAccountSelection())
 	require.Positive(t, account.Snapshot().Used, "value storage is still charged")
-	require.Zero(t, result.vec.GetNulls().GetBitmap().ExternalStorageCapacity())
+	require.Zero(t, result.vec.GetNulls().GetBitmap().CapWords(), "non-null preparation allocates no bitmap")
 	require.Len(t, result.cols, 128)
 	for i := 0; i < 128; i++ {
 		require.NoError(t, result.Append(i%2 == 0, false))
@@ -645,17 +632,16 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 	require.NoError(t, result.PreExtendAndResetNonNull(256))
 	require.False(t, result.vec.IsConst())
 	require.Len(t, result.cols, 256)
-	require.Zero(t, result.vec.GetNulls().GetBitmap().ExternalStorageCapacity())
+	require.Zero(t, result.vec.GetNulls().GetBitmap().CapWords())
 	require.NoError(t, result.PreExtendAndReset(64))
 	result.AddNullAt(63)
 	require.True(t, result.vec.IsNull(63))
-	bitmapCapacity := result.vec.GetNulls().GetBitmap().ExternalStorageCapacity()
-	require.Positive(t, bitmapCapacity)
-	// A larger all-valid generation must not grow a previously small bitmap.
+	require.Positive(t, result.vec.GetNulls().GetBitmap().CapWords())
+	// A larger all-valid generation must not allocate a bitmap.
 	require.NoError(t, result.PreExtendAndResetNonNull(512))
 	require.False(t, result.vec.HasNull())
 	require.Zero(t, result.vec.GetNulls().GetBitmap().Len())
-	require.Equal(t, bitmapCapacity, result.vec.GetNulls().GetBitmap().ExternalStorageCapacity())
+	require.Zero(t, result.vec.GetNulls().GetBitmap().CapWords())
 	require.NoError(t, result.PreExtendAndReset(512))
 	result.AddNullAt(511)
 	require.True(t, result.vec.IsNull(511))
@@ -664,8 +650,7 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 	wrapper.SetResultVector(nil)
 	t.Cleanup(func() { transferred.Free(mp) })
 	require.NoError(t, result.PreExtendAndResetNonNull(8))
-	require.Zero(t, result.vec.GetNulls().GetBitmap().ExternalStorageCapacity())
-	require.Same(t, selection, result.vec.AllocationAccountSelection())
+	require.Zero(t, result.vec.GetNulls().GetBitmap().CapWords())
 }
 
 func TestFunctionResultNonNullPreparationAdmitsValueAllocation(t *testing.T) {
@@ -680,10 +665,9 @@ func TestFunctionResultNonNullPreparationAdmitsValueAllocation(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(types.T_bool.ToType(), mp, selection)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_bool.ToType(), view)
 	t.Cleanup(wrapper.Free)
 	require.ErrorIs(t, MustFunctionResult[bool](wrapper).PreExtendAndResetNonNull(128), mpool.ErrAllocationAccountCapacity)
 	require.Zero(t, wrapper.GetResultVector().Length())

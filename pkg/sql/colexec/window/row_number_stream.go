@@ -18,7 +18,6 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -67,7 +66,12 @@ func (window *Window) callRowNumber(proc *process.Process) (vm.CallResult, error
 			if err != nil {
 				return vm.NewCallResult(), err
 			}
-			if err = vec.PreExtend(count, proc.Mp()); err != nil {
+			vecMP, err := ctr.allocation.MP(proc)
+			if err != nil {
+				vec.Free(proc.Mp())
+				return vm.NewCallResult(), err
+			}
+			if err = vec.PreExtend(count, vecMP); err != nil {
 				vec.Free(proc.Mp())
 				return vm.NewCallResult(), err
 			}
@@ -80,17 +84,11 @@ func (window *Window) callRowNumber(proc *process.Process) (vm.CallResult, error
 				}
 				values[i] = ctr.rowNumberCounter + uint64(i) + 1
 			}
-			var output *batch.Batch
-			if ctr.allocation.Vector != nil {
-				output, err = ctr.rowNumberInput.WindowWithAllocation(start, end, proc.Mp(), ctr.allocation.Vector)
-			} else {
-				output, err = ctr.rowNumberInput.Window(start, end)
-			}
+			output, err := ctr.rowNumberInput.Window(start, end)
 			if err != nil {
 				vec.Free(proc.Mp())
 				return vm.NewCallResult(), err
 			}
-			vec.SetPrepareParamKind(ctr.prepareParamKind.Get(0))
 			output.Vecs = append(output.Vecs, vec)
 			window.OpAnalyzer.Alloc(int64(vec.Size()))
 			ctr.rBat = output

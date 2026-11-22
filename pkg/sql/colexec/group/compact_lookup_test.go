@@ -153,12 +153,11 @@ func BenchmarkCompactGroupLookup(b *testing.B) {
 
 func TestCompactGroupCanonicalKeysAndSpill(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		columns    int
-		dictionary bool
-		spill      int64
+		name    string
+		columns int
+		spill   int64
 	}{
-		{"single", 1, false, 0}, {"tuple", 2, false, 0}, {"spill", 2, false, 2}, {"dictionary", 2, true, 0},
+		{"single", 1, 0}, {"tuple", 2, 0}, {"spill", 2, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
@@ -192,21 +191,6 @@ func TestCompactGroupCanonicalKeysAndSpill(t *testing.T) {
 				expected[canonical]++
 			}
 			input.SetRowCount(rows)
-			if tc.dictionary {
-				mapping := make([]int64, rows)
-				for i := range mapping {
-					mapping[i] = int64(rows - 1 - i)
-				}
-				selected := make([]*vector.Vector, tc.columns)
-				admitted, err := vector.TrySelectDictionaryVectors(input.Vecs, selected, mapping, rows, proc.Mp(), nil)
-				require.NoError(t, err)
-				require.True(t, admitted)
-				for _, source := range input.Vecs {
-					source.Free(proc.Mp())
-				}
-				input.Vecs = selected
-			}
-
 			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 			g := newGroupOp(proc, exprs, []aggexec.AggFuncExecExpression{countStarAgg()})
 			g.SpillMem = tc.spill
@@ -269,11 +253,6 @@ func TestCompactGroupFallbackAndGeneration(t *testing.T) {
 	require.True(t, hit)
 	require.True(t, preview.existingOnly)
 	require.Equal(t, []uint64{7}, preview.values)
-	ctr.groupKeyStringSourceMetadata = true
-	_, hit, err = ctr.previewCompactGroups([]*vector.Vector{vec}, 0, 1)
-	require.NoError(t, err)
-	require.False(t, hit, "resident source metadata keeps the generic publication path")
-	ctr.groupKeyStringSourceMetadata = false
 	vec.GetNulls().Add(0)
 	_, hit, err = ctr.previewCompactGroups([]*vector.Vector{vec}, 0, 1)
 	require.NoError(t, err)

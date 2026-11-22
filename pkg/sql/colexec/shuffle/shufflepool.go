@@ -60,19 +60,18 @@ type shuffleBatchPoolShard struct {
 }
 
 type ShufflePool struct {
-	bucketNum            int32
-	maxHolders           int32
-	drainAll             bool
-	ownedOutput          bool
-	ownedColumns         int
-	ownedInit            sync.Once
-	ownedInitErr         error
-	ownedReservation     *process.ExecutionTransientMemoryReservation
-	outputAllocation     *vector.AllocationAccountSelection
+	bucketNum        int32
+	maxHolders       int32
+	drainAll         bool
+	ownedOutput      bool
+	ownedColumns     int
+	ownedInit        sync.Once
+	ownedInitErr     error
+	ownedReservation *process.ExecutionTransientMemoryReservation
+	// outputAllocation is the accounted view owned output is copied through;
+	// nil copies through the writer's pool.
+	outputAllocation     *mpool.MPool
 	producerBatchMaxRows int
-	sharedLaneOnce       sync.Once
-	sharedBatchAccount   *vector.AllocationAccountSelection
-	sharedVecAccounts    []*vector.AllocationAccountSelection
 
 	holders    int32
 	finished   int32
@@ -84,10 +83,8 @@ type ShufflePool struct {
 	cleaned    bool
 	producers  map[int32]context.CancelCauseFunc
 
-	// Each destination bucket keeps one writable lane per producer. Accounted
-	// vectors cannot change allocation provenance after their first allocation,
-	// so sharing one tail across producers would seal and publish a partial batch
-	// on every producer switch.
+	// Each destination bucket keeps one writable lane per producer, plus one
+	// shared full-sized lane at high DOP.
 	batchSets      [][]*batch.BatchSet
 	readyProducers [][]int32
 	batchLocks     []sync.Mutex
@@ -131,7 +128,7 @@ func NewOwnedShufflePool(bucketNum, maxHolders int32, columns int) *ShufflePool 
 	return &ShufflePool{bucketNum: bucketNum, maxHolders: maxHolders, drainAll: true, ownedOutput: true, ownedColumns: columns}
 }
 
-func (sp *ShufflePool) initBuckets(selection *vector.AllocationAccountSelection) {
+func (sp *ShufflePool) initBuckets(selection *mpool.MPool) {
 	bucketNum, maxHolders, allBuckets := sp.bucketNum, sp.maxHolders, sp.drainAll
 	readyLimit := max(2, int(maxHolders)*2)
 	batchPoolShards := max(1, int(maxHolders))
@@ -169,13 +166,12 @@ func (sp *ShufflePool) initBuckets(selection *vector.AllocationAccountSelection)
 	for i := range sp.batchSets {
 		sp.batchSets[i] = make([]*batch.BatchSet, producerLanes)
 		for producer := range sp.batchSets[i] {
-			sp.batchSets[i][producer] = batch.NewBatchSetWithAllocation(producerBatchMaxRows, selection)
+			sp.batchSets[i][producer] = batch.NewBatchSet(producerBatchMaxRows)
 		}
 		if producerBatchMaxRows < objectio.BlockMaxRows {
-			// Inputs with identical allocation provenance can share a full-sized
-			// tail. Other provenance continues to use bounded producer-local lanes.
-			// This adds at most one block per destination, not one per producer.
-			sp.batchSets[i] = append(sp.batchSets[i], batch.NewBatchSetWithAllocation(objectio.BlockMaxRows, selection))
+			// Producers share a full-sized tail. This adds at most one block per
+			// destination, not one per producer.
+			sp.batchSets[i] = append(sp.batchSets[i], batch.NewBatchSet(objectio.BlockMaxRows))
 		}
 		sp.batchWaiters[i] = make(chan bool, 1)
 		sp.endingWaiters[i] = make(chan bool, 1)
@@ -183,7 +179,7 @@ func (sp *ShufflePool) initBuckets(selection *vector.AllocationAccountSelection)
 	}
 }
 
-func (sp *ShufflePool) initOwned(proc *process.Process, selection *vector.AllocationAccountSelection) error {
+func (sp *ShufflePool) initOwned(proc *process.Process, selection *mpool.MPool) error {
 	sp.ownedInit.Do(func() {
 		if err := sp.ownedFailure(proc, nil); err != nil {
 			sp.ownedInitErr = err
@@ -245,7 +241,7 @@ func (sp *ShufflePool) initOwned(proc *process.Process, selection *vector.Alloca
 	if sp.ownedInitErr != nil {
 		return sp.ownedInitErr
 	}
-	if !vector.AllocationAccountSelectionsEqual(sp.outputAllocation, selection) {
+	if !mpool.SameView(sp.outputAllocation, selection) {
 		return mpool.ErrAllocationAccountMismatch
 	}
 	return nil
@@ -906,9 +902,16 @@ func (sp *ShufflePool) tryWriteMode(
 	producer %= int32(max(1, int(sp.maxHolders)))
 	lane := producer
 	maxRows := sp.producerBatchMaxRows
-	if maxRows < objectio.BlockMaxRows && sp.matchesSharedLane(srcBatch) {
-		lane = int32(max(1, int(sp.maxHolders)))
+	// Vectors carry no allocation provenance, so every producer can share the
+	// full-sized tail whenever the pool has one.
+	if shared := max(1, int(sp.maxHolders)); maxRows < objectio.BlockMaxRows &&
+		shared < len(sp.batchSets[0]) {
+		lane = int32(shared)
 		maxRows = objectio.BlockMaxRows
+	}
+	writeMP := proc.Mp()
+	if sp.outputAllocation != nil {
+		writeMP = sp.outputAllocation
 	}
 	bucketCount := len(sp.batchSets)
 	bucket, limit := startPosition, bucketCount
@@ -964,9 +967,9 @@ func (sp *ShufflePool) tryWriteMode(
 				var consumed bool
 				var writeErr error
 				if wholeBucket {
-					consumed, writeErr = batchSet.UnionRange(proc.Mp(), srcBatch, offset, end-offset, buf)
+					consumed, writeErr = batchSet.UnionRange(writeMP, srcBatch, offset, end-offset, buf)
 				} else {
-					consumed, writeErr = batchSet.Union(proc.Mp(), srcBatch, current[offset:end], buf)
+					consumed, writeErr = batchSet.Union(writeMP, srcBatch, current[offset:end], buf)
 				}
 				if !consumed && buf != nil {
 					sp.putBatchToPool(buf, proc.Mp())
@@ -1000,37 +1003,4 @@ func (sp *ShufflePool) tryWriteMode(
 		visitBase += bucketCount
 	}
 	return len(sp.batchSets), 0, nil, true, nil
-}
-
-// The first input selects one shared lane for this pool generation. Keep only
-// immutable allocation selections, never source vectors or their payloads.
-// Equality includes capacity classes: a producer's private spill recovery
-// capacity must not be spent by another producer's writes.
-func (sp *ShufflePool) matchesSharedLane(bat *batch.Batch) bool {
-	if sp.outputAllocation != nil {
-		return true
-	}
-	sp.sharedLaneOnce.Do(func() {
-		sp.sharedBatchAccount = bat.AllocationAccountSelection()
-		sp.sharedVecAccounts = make([]*vector.AllocationAccountSelection, len(bat.Vecs))
-		for i, vec := range bat.Vecs {
-			if vec != nil {
-				sp.sharedVecAccounts[i] = vec.AllocationAccountSelection()
-			}
-		}
-	})
-	if len(sp.sharedVecAccounts) != len(bat.Vecs) ||
-		!vector.AllocationAccountSelectionsEqual(sp.sharedBatchAccount, bat.AllocationAccountSelection()) {
-		return false
-	}
-	for i, vec := range bat.Vecs {
-		var selection *vector.AllocationAccountSelection
-		if vec != nil {
-			selection = vec.AllocationAccountSelection()
-		}
-		if !vector.AllocationAccountSelectionsEqual(sp.sharedVecAccounts[i], selection) {
-			return false
-		}
-	}
-	return true
 }

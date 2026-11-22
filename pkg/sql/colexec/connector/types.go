@@ -91,6 +91,25 @@ func (connector *Connector) ActivatesAllocationAccountLifecycle() bool {
 	return false
 }
 
+// connectorAllocationSiteSpool is the account site of the spool's copied batches.
+const connectorAllocationSiteSpool mpool.AllocationSite = 64
+
+// spoolMP returns the pool the pipeline spool copies batches through. The
+// spool copy used to be charged to each source batch's allocation account;
+// vectors no longer carry one, so the spool charges the statement account
+// compile bound to this operator, or proc's pool when none is bound.
+func (connector *Connector) spoolMP(proc *process.Process) (*mpool.MPool, error) {
+	if connector.allocationAccount == nil {
+		return proc.Mp(), nil
+	}
+	return proc.Mp().WithAccount(
+		connector.allocationAccount,
+		mpool.AllocationOwnerSelection,
+		connectorAllocationSiteSpool,
+		mpool.AllocationCapacityClassDefault,
+	)
+}
+
 func (connector *Connector) ClearAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {

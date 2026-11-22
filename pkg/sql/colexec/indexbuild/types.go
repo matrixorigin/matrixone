@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -36,8 +35,8 @@ const (
 const (
 	indexBuildAllocationSiteRuntimeFilterData mpool.AllocationSite = iota + 1
 	indexBuildAllocationSiteRuntimeFilterArea
-	indexBuildAllocationSiteRuntimeFilterNulls
-	indexBuildAllocationSiteRuntimeFilterGrouping
+	_ // reserved: was indexBuildAllocationSiteRuntimeFilterNulls
+	_ // reserved: was indexBuildAllocationSiteRuntimeFilterGrouping
 	indexBuildAllocationSiteRuntimeFilterPayload
 )
 
@@ -52,7 +51,7 @@ type IndexBuild struct {
 	ctr                     container
 	RuntimeFilterSpec       *plan.RuntimeFilterSpec
 	allocationAccount       *mpool.AllocationAccount
-	runtimeFilterAllocation *vector.AllocationAccountSelection
+	runtimeFilterAllocation *mpool.AccountBinding
 	vm.OperatorBase
 }
 
@@ -68,13 +67,10 @@ func (indexBuild *IndexBuild) SetAllocationAccount(
 		}
 		return mpool.ErrAllocationAccountMismatch
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerIndexBuild,
 		indexBuildAllocationSiteRuntimeFilterData,
-		indexBuildAllocationSiteRuntimeFilterArea,
-		indexBuildAllocationSiteRuntimeFilterNulls,
-		indexBuildAllocationSiteRuntimeFilterGrouping,
 	)
 	if err != nil {
 		return err

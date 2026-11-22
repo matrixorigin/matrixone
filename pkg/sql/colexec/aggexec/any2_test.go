@@ -16,7 +16,6 @@ package aggexec
 
 import (
 	"bytes"
-	"io"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -59,189 +58,128 @@ func TestAnyValueBatchMergeReturnsSetRawBytesAtError(t *testing.T) {
 	require.True(t, target.state[0].vecs[0].IsNull(0))
 }
 
-func TestAnyValuePreservesFirstPrepareParamKind(t *testing.T) {
-	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(input, []byte("5"), false, mp))
-	require.NoError(t, vector.AppendBytes(input, []byte("9"), false, mp))
-	input.SetPrepareParamKinds([]vector.PrepareParamKind{
-		vector.PrepareParamFloat,
-		vector.PrepareParamNone,
-	})
-	require.NoError(t, input.SetBinaryStringRowsWithMP([]bool{true, false}, mp))
-
-	exec := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
-	defer func() {
-		input.Free(mp)
-		exec.Free()
-		require.Zero(t, mp.CurrNB())
-	}()
-	require.NoError(t, exec.GroupGrow(1))
-	require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
-	results, err := exec.Flush()
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Equal(t, vector.PrepareParamFloat, results[0].GetPrepareParamKindAt(0))
-	require.True(t, results[0].GetBinaryStringMetadataAt(0))
-	results[0].Free(mp)
-}
-
-func TestAnyValueIntermediateRoundTripAllStringSources(t *testing.T) {
-	for _, source := range []types.StringSource{
-		types.StringSourceExpression,
-		types.StringSourceLiteral,
-		types.StringSourceUserVariable,
-		types.StringSourceSQLPrepare,
+// TestAnyValueIntermediateDecodesLegacyStringStateTrailer checks wire
+// compatibility with older writers that emitted a per-row string trailer
+// (the domain-only trailer, or the retired string-state trailer that packs a
+// string source above the domain in each row byte) before the closing magic.
+// Current writers emit no trailer; readers must validate and drop it.
+func TestAnyValueIntermediateDecodesLegacyStringStateTrailer(t *testing.T) {
+	domains := []types.RuntimeStringDomain{
+		types.RuntimeStringBinary,
+		types.RuntimeStringText,
+		types.RuntimeStringInherit,
+	}
+	legacySources := []types.StringSource{
 		types.StringSourceCOMStmt,
-	} {
-		for _, saveChunk := range []bool{false, true} {
-			mp := mpool.MustNewZero()
-			input := vector.NewVec(types.T_text.ToType())
+		types.StringSourceLiteral,
+		types.StringSourceSQLPrepare,
+	}
+	for _, saveChunk := range []bool{false, true} {
+		mp := mpool.MustNewZero()
+		input := vector.NewVec(types.T_text.ToType())
+		for range domains {
 			require.NoError(t, vector.AppendBytes(input, []byte("value"), false, mp))
-			require.NoError(t, input.SetStringSource(source))
-			exec := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
-			require.NoError(t, exec.GroupGrow(1))
-			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
-			var wire bytes.Buffer
-			if saveChunk {
-				require.NoError(t, exec.SaveIntermediateResultOfChunk(0, &wire))
-			} else {
-				require.NoError(t, exec.SaveIntermediateResult(1, [][]uint8{{1}}, &wire))
-			}
+		}
+		source := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+		require.NoError(t, source.GroupGrow(len(domains)))
+		require.NoError(t, source.BatchFill(0, []uint64{1, 2, 3}, []*vector.Vector{input}))
+		var wire bytes.Buffer
+		if saveChunk {
+			require.NoError(t, source.SaveIntermediateResultOfChunk(0, &wire))
+		} else {
+			require.NoError(t, source.SaveIntermediateResult(3, [][]uint8{{1, 1, 1}}, &wire))
+		}
 
+		var marker, stateMarker, magic bytes.Buffer
+		require.NoError(t, types.WriteUint64(&marker, aggStringDomainTrailerMagic))
+		require.NoError(t, types.WriteUint64(&stateMarker, aggStringStateTrailerMagic))
+		require.NoError(t, types.WriteUint64(&magic, magicNumber))
+		require.Equal(t, -1, bytes.Index(wire.Bytes(), marker.Bytes()),
+			"writers must not emit the string-domain trailer")
+		require.Equal(t, -1, bytes.Index(wire.Bytes(), stateMarker.Bytes()),
+			"writers must not emit the retired string-state trailer")
+		require.True(t, bytes.HasSuffix(wire.Bytes(), magic.Bytes()))
+		body := wire.Bytes()[:wire.Len()-magic.Len()]
+
+		legacyWith := func(trailerMagic []byte, rowBytes []byte) []byte {
+			var out bytes.Buffer
+			out.Write(body)
+			out.Write(trailerMagic)
+			require.NoError(t, types.WriteInt32(&out, int32(len(rowBytes))))
+			out.Write(rowBytes)
+			out.Write(magic.Bytes())
+			return out.Bytes()
+		}
+		domainRows := make([]byte, len(domains))
+		stateRows := make([]byte, len(domains))
+		for row, domain := range domains {
+			domainRows[row] = byte(domain)
+			stateRows[row] = byte(domain) | byte(legacySources[row])<<2
+		}
+		invalidRows := append([]byte(nil), stateRows...)
+		invalidRows[0] = byte(domains[0]) | 0xfc // source=63
+
+		restored := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+		require.ErrorContains(t,
+			restored.UnmarshalFromReader(bytes.NewReader(legacyWith(stateMarker.Bytes(), invalidRows)), mp),
+			"invalid aggregate binary provenance")
+		restored.Free()
+
+		for name, legacy := range map[string][]byte{
+			"domain": legacyWith(marker.Bytes(), domainRows),
+			"state":  legacyWith(stateMarker.Bytes(), stateRows),
+		} {
 			restored := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
-			require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
+			require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(legacy), mp), name)
 			results, err := restored.Flush()
 			require.NoError(t, err)
-			require.Equal(t, source, results[0].GetStringSourceAt(0))
+			require.Len(t, results, 1)
+			for row := range domains {
+				require.Equal(t, []byte("value"), results[0].GetBytesAt(row), "%s row %d", name, row)
+			}
+
+			// Re-encoding the decoded state yields the trailer-free current form.
+			reencoder := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+			require.NoError(t, reencoder.UnmarshalFromReader(bytes.NewReader(legacy), mp))
+			var reencoded bytes.Buffer
+			if saveChunk {
+				require.NoError(t, reencoder.SaveIntermediateResultOfChunk(0, &reencoded))
+			} else {
+				require.NoError(t, reencoder.SaveIntermediateResult(3, [][]uint8{{1, 1, 1}}, &reencoded))
+			}
+			require.Equal(t, wire.Bytes(), reencoded.Bytes(), name)
+			reencoder.Free()
 			results[0].Free(mp)
 			restored.Free()
-			exec.Free()
-			input.Free(mp)
-			require.Zero(t, mp.CurrNB(), "source=%v saveChunk=%v", source, saveChunk)
 		}
+
+		source.Free()
+		input.Free(mp)
+		require.Zero(t, mp.CurrNB(), "saveChunk=%v", saveChunk)
 	}
 }
 
-func TestAnyValueIntermediateRejectsInvalidStringSourceAndReusesDecoder(t *testing.T) {
+func TestAnyValueIntermediateRoundTripPreservesStringValue(t *testing.T) {
 	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(input, []byte("value"), false, mp))
-	require.NoError(t, input.SetStringSource(types.StringSourceCOMStmt))
-	source := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
-	require.NoError(t, source.GroupGrow(1))
-	require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
-	var wire bytes.Buffer
-	require.NoError(t, source.SaveIntermediateResultOfChunk(0, &wire))
-	valid := append([]byte(nil), wire.Bytes()...)
-	invalid := append([]byte(nil), valid...)
-	require.GreaterOrEqual(t, len(invalid), 9)
-	invalid[len(invalid)-9] = 0xfc // source=63, runtime-domain=inherit
-
-	restored := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
-	require.ErrorContains(t,
-		restored.UnmarshalFromReader(bytes.NewReader(invalid), mp),
-		"invalid aggregate binary provenance")
-	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(valid), mp))
-	results, err := restored.Flush()
-	require.NoError(t, err)
-	require.Equal(t, types.StringSourceCOMStmt, results[0].GetStringSourceAt(0))
-	results[0].Free(mp)
-	restored.Free()
-	source.Free()
-	input.Free(mp)
-	require.Zero(t, mp.CurrNB())
-}
-
-func TestMergeEqualAggregateCandidatesMergesStringSources(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer func() { require.Zero(t, mp.CurrNB()) }()
-	for _, test := range []struct {
-		left, right types.StringSource
-		want        types.StringSource
-	}{
-		{types.StringSourceLiteral, types.StringSourceLiteral, types.StringSourceLiteral},
-		{types.StringSourceCOMStmt, types.StringSourceCOMStmt, types.StringSourceCOMStmt},
-		{types.StringSourceLiteral, types.StringSourceCOMStmt, types.StringSourceExpression},
-		{types.StringSourceExpression, types.StringSourceSQLPrepare, types.StringSourceExpression},
-	} {
-		left := vector.NewVec(types.T_text.ToType())
-		right := vector.NewVec(types.T_text.ToType())
-		require.NoError(t, vector.AppendBytes(left, []byte("same"), false, mp))
-		require.NoError(t, vector.AppendBytes(right, []byte("same"), false, mp))
-		require.NoError(t, left.SetStringSource(test.left))
-		require.NoError(t, right.SetStringSource(test.right))
-		require.NoError(t, mergeEqualRuntimeStringDomain(left, 0, right, 0, mp))
-		require.Equal(t, test.want, left.GetStringSourceAt(0))
-		left.Free(mp)
-		right.Free(mp)
-	}
-}
-
-func TestAnyValueIntermediateRoundTripPreservesStringSemantics(t *testing.T) {
-	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_text.ToType())
+	typ := types.T_varbinary.ToType()
+	input := vector.NewVec(typ)
 	require.NoError(t, vector.AppendBytes(input, []byte("binary"), false, mp))
-	input.SetIsBinaryString(true)
-	require.NoError(t, input.SetStringSource(types.StringSourceCOMStmt))
-	source := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+	source := makeAnyValueExec(mp, AggIdOfAny, typ)
 	require.NoError(t, source.GroupGrow(1))
 	require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
 	var wire bytes.Buffer
 	require.NoError(t, source.SaveIntermediateResultOfChunk(0, &wire))
 
-	restored := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+	restored := makeAnyValueExec(mp, AggIdOfAny, typ)
 	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
 	results, err := restored.Flush()
 	require.NoError(t, err)
-	require.True(t, results[0].GetBinaryStringMetadataAt(0))
-	require.Equal(t, types.StringSourceCOMStmt, results[0].GetStringSourceAt(0))
+	require.Equal(t, typ.Oid, results[0].GetType().Oid)
+	require.Equal(t, "binary", results[0].GetStringAt(0))
 
 	results[0].Free(mp)
 	restored.Free()
 	source.Free()
-	input.Free(mp)
-	require.Zero(t, mp.CurrNB())
-}
-
-func TestAnyValueIntermediateOldPeerOmitsStringSource(t *testing.T) {
-	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(input, []byte("literal"), false, mp))
-	require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
-	source := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
-	require.NoError(t, source.GroupGrow(1))
-	require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
-	var wire bytes.Buffer
-	protocolWriter := source.(interface {
-		SaveIntermediateResultOfChunkWithStringSource(int, io.Writer, bool) error
-	})
-	require.NoError(t, protocolWriter.SaveIntermediateResultOfChunkWithStringSource(0, &wire, false))
-	restored := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
-	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
-	results, err := restored.Flush()
-	require.NoError(t, err)
-	require.False(t, results[0].HasStringSourceMetadata())
-	results[0].Free(mp)
-	restored.Free()
-	source.Free()
-	input.Free(mp)
-	require.Zero(t, mp.CurrNB())
-}
-
-func TestAnyValuePreservesExplicitTextFromNullSlot(t *testing.T) {
-	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_varbinary.ToType())
-	require.NoError(t, vector.AppendBytes(input, []byte("text"), false, mp))
-	require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
-	exec := makeAnyValueExec(mp, AggIdOfAny, types.T_varbinary.ToType())
-	require.NoError(t, exec.GroupGrow(1))
-	require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
-	results, err := exec.Flush()
-	require.NoError(t, err)
-	require.Equal(t, types.RuntimeStringText, results[0].GetRuntimeStringDomainAt(0))
-	results[0].Free(mp)
-	exec.Free()
 	input.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }

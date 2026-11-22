@@ -180,10 +180,7 @@ func TestSpillAllocationAccountDecodedBatchLifecycle(t *testing.T) {
 	decoded, err := reader.ReadBatch(proc, reuse)
 	require.NoError(t, err)
 	require.Same(t, reuse, decoded)
-	require.NotNil(t, decoded.AllocationAccountSelection())
-	for _, vec := range decoded.Vecs {
-		require.NotNil(t, vec.AllocationAccountSelection())
-	}
+	require.Len(t, decoded.Vecs, 2)
 	require.Positive(t, state.account.Snapshot().Used)
 
 	reader.Close()
@@ -325,7 +322,6 @@ func TestSpillAllocationAccountDecodedReuseRetriesFromCleanRecord(t *testing.T) 
 	firstUsed := measure.account.Snapshot().Used
 	require.Positive(t, firstUsed)
 	reuse.Clean(proc.Mp())
-	require.NoError(t, reuse.SetAllocationAccount(measure.allocation.decoded))
 	_, err = reader.ReadBatch(proc, reuse)
 	require.NoError(t, err)
 	secondUsed := measure.account.Snapshot().Used
@@ -566,7 +562,6 @@ func TestSpillAllocationAccountScatterReducesBroadcastConstKey(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer constant.Free(proc.Mp())
-	constant.SetPrepareParamKind(vector.PrepareParamInteger)
 	source := testutil.NewBatchWithVectors([]*vector.Vector{
 		testutil.MakeInt64Vector(values, nil, proc.Mp()),
 	}, nil)

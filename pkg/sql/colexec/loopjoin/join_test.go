@@ -41,9 +41,9 @@ func TestLoopJoinAllocationSiteLedger(t *testing.T) {
 	require.Equal(t, uint8(92), uint8(loopJoinAllocationSiteMatched))
 	require.Equal(t, uint8(93), uint8(loopJoinAllocationSiteBatchOffsets))
 	require.Equal(t, uint8(106), uint8(loopJoinAllocationSiteResultData))
-	require.Equal(t, uint8(109), uint8(loopJoinAllocationSiteResultGrouping))
+	require.Equal(t, uint8(107), uint8(loopJoinAllocationSiteResultArea))
 	require.Equal(t, uint8(118), uint8(loopJoinAllocationSiteConditionData))
-	require.Equal(t, uint8(121), uint8(loopJoinAllocationSiteConditionGrouping))
+	require.Equal(t, uint8(119), uint8(loopJoinAllocationSiteConditionArea))
 }
 
 // add unit tests for cases
@@ -147,8 +147,10 @@ func TestLoopJoinResultBatchUsesAllocationAccount(t *testing.T) {
 	}
 	account := installLoopJoinTestAllocation(t, arg)
 	require.NoError(t, arg.resetResultBat())
-	require.Same(t, arg.resultAllocation, arg.ctr.resBat.Vecs[0].AllocationAccountSelection())
-	require.NoError(t, vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, proc.Mp()))
+	resMP, err := arg.resultMP(proc)
+	require.NoError(t, err)
+	require.Same(t, account, resMP.ViewAccount())
+	require.NoError(t, vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, resMP))
 	used := account.Snapshot().Used
 	require.Positive(t, used)
 	require.NoError(t, arg.resetResultBat())
@@ -173,7 +175,9 @@ func TestLoopJoinResultBatchHonorsAllocationCapacity(t *testing.T) {
 	}
 	require.NoError(t, arg.SetAllocationAccount(account))
 	require.NoError(t, arg.resetResultBat())
-	err = vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, proc.Mp())
+	resMP, err := arg.resultMP(proc)
+	require.NoError(t, err)
+	err = vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, resMP)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Zero(t, account.Snapshot().Used)
 	arg.Reset(proc, false, nil)

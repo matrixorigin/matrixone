@@ -366,9 +366,10 @@ type Rule interface {
 
 // BaseOptimizer is base optimizer, capable of handling only a few simple rules
 type BaseOptimizer struct {
-	qry   *Query
-	rules []Rule
-	ctx   CompilerContext
+	skipLocalDomains bool
+	qry              *Query
+	rules            []Rule
+	ctx              CompilerContext
 }
 
 type ViewData struct {
@@ -394,6 +395,10 @@ type updateTargetScope struct {
 }
 
 type QueryBuilder struct {
+	// mixedDomainCoalesce is set when the statement binds a binary-typed
+	// COALESCE that can return a text value; see coalesce_text_domain.go.
+	mixedDomainCoalesce bool
+
 	updateTargetScope *updateTargetScope
 
 	// DELETE owns these generated scan identities. Optimizer consumers must

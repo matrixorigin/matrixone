@@ -47,8 +47,7 @@ func reusableSingleGroup(agg AggFuncExec) (singleGroupReuse, *aggExec, bool) {
 	}
 	for i, v := range s.vecs {
 		if v == nil || v.IsConst() || v.Length() != 1 || v.Capacity() < AggBatchSize ||
-			!v.GetType().Eq(state.stateTypes[i]) ||
-			!vector.AllocationAccountSelectionsEqual(v.AllocationAccountSelection(), state.allocation.vectorSelection()) {
+			!v.GetType().Eq(state.stateTypes[i]) {
 			return nil, nil, false
 		}
 	}
@@ -96,8 +95,7 @@ func AppendSingleGroupResultAndReset(agg AggFuncExec, dst *vector.Vector) (*vect
 			return nil, err
 		}
 	} else {
-		if dst.IsConst() || !dst.GetType().Eq(state.retType) ||
-			!vector.AllocationAccountSelectionsEqual(dst.AllocationAccountSelection(), state.allocation.vectorSelection()) {
+		if dst.IsConst() || !dst.GetType().Eq(state.retType) {
 			return nil, moerr.NewInternalErrorNoCtx("invalid single-group result destination")
 		}
 		for _, v := range state.state[0].vecs {
@@ -307,15 +305,14 @@ func (exec *minMaxExecFixed[T]) singleGroupReuseState() (*aggExec, bool) {
 	if exec == nil || exec.hasExtra || exec.comp == nil || len(exec.state) != 1 ||
 		len(exec.state[0].vecs) != 1 || exec.state[0].vecs[0] == nil ||
 		len(exec.argTypes) != 1 || len(exec.stateTypes) != 1 ||
-		!exec.retType.Eq(exec.stateTypes[0]) || !exec.argTypes[0].Eq(exec.stateTypes[0]) ||
-		!hasDefaultFixedMinMaxMetadata(exec.state[0].vecs[0]) {
+		!exec.retType.Eq(exec.stateTypes[0]) || !exec.argTypes[0].Eq(exec.stateTypes[0]) {
 		return nil, false
 	}
 	return &exec.aggExec, true
 }
 
 func (exec *minMaxExecFixed[T]) singleGroupReuseInput(vectors []*vector.Vector) bool {
-	return len(vectors) == 1 && vectors[0] != nil && hasDefaultFixedMinMaxMetadata(vectors[0])
+	return len(vectors) == 1 && vectors[0] != nil
 }
 
 func (exec *minMaxExecFixed[T]) appendSingleGroupResult(dst *vector.Vector) error {
@@ -335,7 +332,6 @@ func (exec *minMaxExecFixed[T]) appendSingleGroupResult(dst *vector.Vector) erro
 func (exec *minMaxExecFixed[T]) bulkFillSingleGroupRange(offset, rows int, vectors []*vector.Vector) error {
 	input := vectors[0]
 	state := exec.state[0].vecs[0]
-	defer state.FinalizeStringSourcePreflight()
 	values := vector.MustFixedColNoTypeCheck[T](input)
 	var winner T
 	found := false
@@ -368,5 +364,5 @@ func (exec *minMaxExecFixed[T]) bulkFillSingleGroupRange(offset, rows int, vecto
 			return nil
 		}
 	}
-	return state.SetPrepareParamKindAtWithMP(0, vector.PrepareParamNone, exec.mp)
+	return nil
 }

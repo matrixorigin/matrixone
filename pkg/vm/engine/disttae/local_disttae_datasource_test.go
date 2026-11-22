@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -137,6 +136,73 @@ func TestLocalDisttaeDataSourceUsesTombstoneObjectIndex(t *testing.T) {
 	require.Len(t, ls.pStateTombstoneObjects.index.objects, 1)
 }
 
+type countedReplayRows struct {
+	logtailreplay.RowsIter
+	calls int
+}
+
+func (it *countedReplayRows) Next() bool {
+	it.calls++
+	return it.RowsIter.Next()
+}
+
+func TestCommittedReplayAdmitsOutputBeforeAdvancing(t *testing.T) {
+	ctx := t.Context()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	block, stamp := testBlockID(7), types.BuildTS(4, 0)
+	rows := []testMaterializedSnapshotRow{
+		{rowID: types.NewRowid(&block, 0), ts: stamp, id: 42},
+		{rowID: types.NewRowid(&block, 1), ts: stamp, id: 43},
+		{rowID: types.NewRowid(&block, 2), ts: stamp.Next(), id: 44},
+	}
+	state := newTestMaterializedSnapshotPartitionState(t, mp, rows)
+	typ := types.T_int64.ToType()
+	for _, tc := range []struct {
+		name   string
+		budget uint64
+		calls  int
+	}{
+		{"first-row-denied", 7, 1},
+		{"growth-denied", 23, 2},
+		{"fits", 24, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			it := &countedReplayRows{RowsIter: state.NewRowsIter(stamp, nil, false)}
+			ls := &LocalDisttaeDataSource{ctx: ctx, pState: state, snapshotTS: stamp,
+				tombstonePolicy: engine.Policy_SkipAll, memPKFilter: &readutil.MemPKFilter{}}
+			ls.pStateRows.insIter = it
+			defer ls.Close()
+
+			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+			require.NoError(t, err)
+			account, err := registry.Open(tc.budget)
+			require.NoError(t, err)
+			defer func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			}()
+			selection, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
+			require.NoError(t, err)
+			out := batch.NewOffHeapWithSize(1)
+			defer out.Clean(mp)
+			out.Attrs = []string{"id"}
+			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+
+			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, selection, out)
+			if tc.name == "fits" {
+				require.NoError(t, err)
+				require.Equal(t, []int64{42, 43}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
+			} else {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			}
+			require.Equal(t, tc.calls, it.calls)
+		})
+	}
+}
+
 func TestLocalCommittedInsertReadsTimeFromRowEntry(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -214,9 +280,8 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
 	defer closeFunc()
 
-	txnOp.AddWorkspace(&Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
-	})
+	txn := &Transaction{}
+	txnOp.AddWorkspace(txn)
 
 	txnDB := txnDatabase{
 		op: txnOp,
@@ -240,7 +305,6 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		pState: pState,
 	}
 
-	//var stats []objectio.ObjectStats
 	int32Type := types.T_int32.ToType()
 	var tombstoneRowIds []types.Rowid
 	for i := 0; i < 3; i++ {
@@ -269,13 +333,16 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		require.Equal(t, 1, len(ss))
 		require.False(t, ss[0].IsZero())
 
-		//stats = append(stats, ss)
-		txnOp.GetWorkspace().(*Transaction).StashFlushedTombstones(ss[0])
+		stats := vector.NewVec(types.T_blob.ToType())
+		require.NoError(t, vector.AppendBytes(stats, ss[0][:], false, proc.Mp()))
+		txn.flushedTombstones.adjust(txnTbl.tableId, stats, 1)
+		stats.Free(proc.Mp())
 	}
 
 	deletedMask := objectio.GetReusableBitmap()
 	defer deletedMask.Release()
 	for i := range tombstoneRowIds {
+		deletedMask.Clear()
 		bid := tombstoneRowIds[i].BorrowBlockID()
 		left, err := ls.applyWorkspaceFlushedS3Deletes(bid, nil, &deletedMask)
 		require.NoError(t, err)
@@ -297,8 +364,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	s3Bat.SetRowCount(8193)
 	s3Bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
 	txn := &Transaction{
-		proc: testutil.NewProc(t),
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+		proc:          testutil.NewProc(t),
 		op:            txnOp,
 		deletedBlocks: &deletedBlocks{},
 		writes: []Entry{

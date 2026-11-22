@@ -62,9 +62,6 @@ func TestTextAssignmentReservationPreservesOwnedResults(t *testing.T) {
 			values := [][]byte{bytes.Repeat([]byte("a"), 80), nil, []byte("short"),
 				bytes.Repeat([]byte("b"), 110)}
 			proc, source, result := newTextReservationFixture(t, typ, values)
-			// Ordinary assignment must not propagate transient source metadata.
-			source.SetPrepareParamKind(vector.PrepareParamFloat)
-			source.SetIsBinaryString(true)
 
 			target := vector.NewVec(typ)
 			t.Cleanup(func() { target.Free(proc.Mp()) })
@@ -72,8 +69,6 @@ func TestTextAssignmentReservationPreservesOwnedResults(t *testing.T) {
 			out := result.GetResultVector()
 			require.Equal(t, typ, *out.GetType())
 			require.Equal(t, len(values), out.Length())
-			require.False(t, out.HasPrepareParamKind())
-			require.False(t, out.HasBinaryStringMetadata())
 			for row, value := range values {
 				require.Equal(t, value == nil, out.IsNull(uint64(row)))
 				if value != nil {
@@ -266,8 +261,14 @@ func TestTextAssignmentReservationFromRetainedArea(t *testing.T) {
 	proc, source, result := newTextReservationFixture(t, typ, values)
 	retained := vector.NewOffHeapVecWithType(typ)
 	t.Cleanup(func() { retained.Free(proc.Mp()) })
-	require.NoError(t, retained.CopyWithReadonlyArea(source, proc.Mp()))
-	require.Equal(t, vector.BorrowedLease, retained.AreaBackingKind())
+	// Owned descriptors over a borrowed (lent) area, the shape a cache reader
+	// publishes for a varlen column.
+	require.NoError(t, retained.UnionBatch(source, 0, source.Length(), nil, proc.Mp()))
+	lent := bytes.Clone(retained.GetArea())
+	owned := vector.DetachVectorArea(retained)
+	owned.Free(proc.Mp())
+	require.NoError(t, retained.InstallBorrowedArea(lent))
+	require.Equal(t, vector.BorrowedAlias, retained.AreaBackingKind())
 
 	require.NoError(t, runTextReservationCast(proc, retained, result, typ, len(values), castModeStrictStringWidth, nil))
 	// Retiring both input generations cannot invalidate the independent output.

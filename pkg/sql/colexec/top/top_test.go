@@ -218,7 +218,11 @@ func TestTopMultiKeyThresholdAndReset(t *testing.T) {
 					typs = append(typs, types.T_varchar.ToType())
 				}
 				tc := newTestCase(t, mpool.MustNewZero(), typs, 2,
-					[]*plan.OrderBySpec{{Expr: first, Flag: plan.OrderBySpec_DESC}, {Expr: second, Flag: plan.OrderBySpec_DESC}})
+					[]*plan.OrderBySpec{
+						{Expr: first, Flag: plan.OrderBySpec_DESC},
+						{Expr: second, Flag: plan.OrderBySpec_DESC},
+						{Expr: first},
+					})
 				tc.arg.TopValueTag = 42
 				tc.arg.OrderedOutput = ordered
 				tc.proc.SetMessageBoard(message.NewMessageBoard())
@@ -272,6 +276,16 @@ func TestTopMultiKeyThresholdAndReset(t *testing.T) {
 							if mode == "migrate" && i == 2 {
 								require.True(t, tc.arg.ctr.boundedResident)
 								require.False(t, tc.arg.ctr.spilling)
+							}
+							if mode == "migrate" && i == 3 {
+								ctr := &tc.arg.ctr
+								require.True(t, ctr.spilling)
+								require.Positive(t, ctr.spillOffset)
+								// The secondary-key replacement happened after migration.
+								// Both copies of the repeated key must own fresh bindings.
+								for key, cmp := range ctr.cmps {
+									require.Same(t, ctr.bat.Vecs[key], cmp.Vector())
+								}
 							}
 						})
 						var keys, secondary []int64
@@ -993,44 +1007,6 @@ func testTopSpillOutputUsesRowAndByteBounds(t *testing.T, limit int, orderedOutp
 	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestTopSpillPrepareParamMetadata(t *testing.T) {
-	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	arg := &Top{
-		Limit: plan2.MakePlan2Uint64ConstExprWithType(topSpillThreshold + 1),
-		Fs: []*plan.OrderBySpec{{
-			Expr: newExpression(0),
-		}},
-	}
-	src := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(vec, []byte("1"), false, mp))
-	require.NoError(t, vector.AppendBytes(vec, []byte("2"), false, mp))
-	vec.SetPrepareParamKinds([]vector.PrepareParamKind{
-		vector.PrepareParamInteger, vector.PrepareParamNone,
-	})
-	require.NoError(t, vec.SetIsBinaryStringAt(0, true))
-	src.Vecs[0] = vec
-	src.SetRowCount(2)
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{src})
-	arg.AppendChild(child)
-	require.NoError(t, arg.Prepare(proc))
-	result, err := vm.Exec(arg, proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	require.Equal(t, vector.PrepareParamInteger,
-		result.Batch.Vecs[0].GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamNone,
-		result.Batch.Vecs[0].GetPrepareParamKindAt(1))
-	require.True(t, result.Batch.Vecs[0].GetIsBinaryStringAt(0))
-	require.False(t, result.Batch.Vecs[0].GetIsBinaryStringAt(1))
-
-	child.Free(proc, false, nil)
-	arg.Free(proc, false, nil)
-	proc.Free()
-	require.Zero(t, mp.CurrNB())
 }
 
 func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {

@@ -144,7 +144,7 @@ type dependentJoinWorkCounter struct {
 	pairs *int
 }
 
-func (j *dependentJoinWorkCounter) BindDependent(factory colexec.DependentProgramFactory, allocation *vector.AllocationAccountSelection) {
+func (j *dependentJoinWorkCounter) BindDependent(factory colexec.DependentProgramFactory, allocation *mpool.MPool) {
 	j.JoinKernel.BindDependent(factory, allocation)
 	if join, ok := j.Join.(*loopjoin.LoopJoin); ok && join.PairCondition != nil {
 		pair := join.PairCondition
@@ -178,24 +178,24 @@ func TestDependentIndependentJoinWork(t *testing.T) {
 				_, err := registry.Finalize(account)
 				require.NoError(t, err)
 			}()
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65, 66, 67)
+			allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerDependent, 64, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			opened, closed, pairs, hashJoins := 0, 0, 0, 0
 			sourceCompiler := func(node *plan.Node) (dependent.SourceFactory, error) {
-				return func(p *process.Process, selection *vector.AllocationAccountSelection, _ *mpool.AllocationAccount) (dependent.Source, error) {
+				return func(p *process.Process, selection *mpool.MPool, _ *mpool.AllocationAccount) (dependent.Source, error) {
 					if node.NodeType == plan.Node_VALUE_SCAN {
 						opened++
 						return &dependentFixtureSource{batch: batch.EmptyForConstFoldBatch, rows: 1, close: func() { closed++ }}, nil
 					}
 					b := batch.NewWithSize(len(node.TableDef.Cols))
 					for i := range b.Vecs {
-						b.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), selection)
+						b.Vecs[i], err = vector.NewOffHeapVecWithType(types.T_int32.ToType()), nil
 						if err != nil {
 							b.Clean(p.Mp())
 							return nil, err
 						}
 						for key := int32(1); key <= size; key++ {
-							if err := vector.AppendFixed(b.Vecs[i], key, false, p.Mp()); err != nil {
+							if err := vector.AppendFixed(b.Vecs[i], key, false, dependentFixtureMP(p, selection)); err != nil {
 								b.Clean(p.Mp())
 								return nil, err
 							}

@@ -88,11 +88,7 @@ func readonlyWriteAccount(t *testing.T, controller *readonlyWriteController) tes
 	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
 	class, err := state.account.RegisterCapacityController(controller)
 	require.NoError(t, err)
-	state.selection, err = NewAllocationAccountSelectionWithCapacityClass(
-		state.account, testVectorAllocationOwner, testVectorDataAllocationSite,
-		testVectorAreaAllocationSite, testVectorNullAllocationSite, testVectorGroupAllocationSite, class,
-	)
-	require.NoError(t, err)
+	state.class = class
 	return state
 }
 
@@ -105,10 +101,11 @@ func TestReadonlyAppendInterleavedSnapshots(t *testing.T) {
 			t.Cleanup(func() { require.Zero(t, secondMP.CurrNB()); mpool.DeleteMPool(secondMP) })
 			controller := &readonlyWriteController{}
 			state := readonlyWriteAccount(t, controller)
-			base := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+			base := newAccountedTestVector(t, types.T_text.ToType())
+			amp := state.view(t, mp)
 			t.Cleanup(func() { base.Free(mp) })
-			require.NoError(t, AppendBytes(base, bytes.Repeat([]byte{'a'}, 64), false, mp))
-			require.NoError(t, base.PreExtendWithArea(0, 128, mp))
+			require.NoError(t, AppendBytes(base, bytes.Repeat([]byte{'a'}, 64), false, amp))
+			require.NoError(t, base.PreExtendWithArea(0, 128, amp))
 			buffer := DetachVectorArea(base)
 			lease, err := NewRefCountedBufferLease(buffer.data, int64(buffer.Capacity()), func() { buffer.Free(mp) })
 			if err != nil {
@@ -116,8 +113,8 @@ func TestReadonlyAppendInterleavedSnapshots(t *testing.T) {
 			}
 			require.NoError(t, err)
 			t.Cleanup(lease.Release)
-			require.NoError(t, base.InstallBorrowedArea(buffer.data, lease))
-			first, err := base.RetainedReadonlyViewWithMP(mp)
+			require.NoError(t, base.InstallBorrowedArea(buffer.data))
+			first, err := readonlyView(base, amp)
 			require.NoError(t, err)
 			t.Cleanup(func() { first.Free(mp) })
 			// An independently owned source descriptor keeps the second retained
@@ -128,14 +125,14 @@ func TestReadonlyAppendInterleavedSnapshots(t *testing.T) {
 			require.NoError(t, secondSource.PreExtend(1, secondMP))
 			secondSource.SetLength(1)
 			copy(secondSource.data, base.data[:types.VarlenaSize])
-			require.NoError(t, secondSource.InstallBorrowedArea(base.area, lease))
-			second, err := secondSource.RetainedReadonlyViewWithMP(secondMP)
+			require.NoError(t, secondSource.InstallBorrowedArea(base.area))
+			second, err := readonlyView(secondSource, secondMP)
 			require.NoError(t, err)
 			t.Cleanup(func() { second.Free(secondMP) })
 			if !leased {
-				require.NoError(t, first.MaterializeOwned(mp))
+				require.NoError(t, first.MaterializeOwned(amp))
 				require.NoError(t, second.MaterializeOwned(secondMP))
-				require.NoError(t, first.PreExtendWithArea(0, 128, mp))
+				require.NoError(t, first.PreExtendWithArea(0, 128, amp))
 				require.NoError(t, second.PreExtendWithArea(0, 128, secondMP))
 			}
 			x, y := bytes.Repeat([]byte{'x'}, 24), bytes.Repeat([]byte{'y'}, 24)
@@ -144,7 +141,7 @@ func TestReadonlyAppendInterleavedSnapshots(t *testing.T) {
 				interleaved = true
 				require.NoError(t, AppendBytes(second, y, false, secondMP))
 			}
-			require.NoError(t, AppendBytes(first, x, false, mp))
+			require.NoError(t, AppendBytes(first, x, false, amp))
 			controller.onAcquire = nil
 			if !interleaved {
 				require.NoError(t, AppendBytes(second, y, false, secondMP))
@@ -167,12 +164,13 @@ func TestReadonlyFixedPreflightPublication(t *testing.T) {
 				t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
 				controller := &readonlyWriteController{}
 				state := readonlyWriteAccount(t, controller)
-				destination := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+				destination := newAccountedTestVector(t, types.T_int64.ToType())
+				amp := state.view(t, mp)
 				t.Cleanup(func() { destination.Free(mp) })
 				for _, value := range []int64{11, 22, 33} {
-					require.NoError(t, AppendFixed(destination, value, false, mp))
+					require.NoError(t, AppendFixed(destination, value, false, amp))
 				}
-				require.NoError(t, destination.Shrink([]int64{2}, true, mp))
+				require.NoError(t, destination.Shrink([]int64{2}, true, amp))
 				var input *Vector
 				if alias {
 					var err error
@@ -184,22 +182,23 @@ func TestReadonlyFixedPreflightPublication(t *testing.T) {
 				}
 				t.Cleanup(func() { input.Free(mp) })
 				before := mp.CurrNB()
+				var preflight SelectedBatchPreflight
 				var err error
 				if validated {
-					err = destination.PreExtendSelectedBatchValidated(input, 0, 1, []uint8{1}, 3, mp)
+					preflight, err = destination.PreExtendSelectedBatchValidated(input, 0, 1, []uint8{1}, 3, amp)
 				} else {
-					err = destination.PreExtendSelectedBatch(input, 0, 1, []uint8{1}, 3, mp)
+					preflight, err = destination.PreExtendSelectedBatch(input, 0, 1, []uint8{1}, 3, amp)
 				}
 				if alias {
 					require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 					require.Equal(t, before, mp.CurrNB())
-					require.False(t, destination.preflightAreaReady)
+					require.False(t, preflight.Ready())
 					return
 				}
 				require.NoError(t, err)
 				calls := controller.calls
 				controller.failAt = calls + 1
-				require.NoError(t, destination.UnionBatchPreflighted(input, 0, 1, []uint8{1}, mp))
+				require.NoError(t, destination.UnionBatchPreflighted(input, 0, 1, []uint8{1}, &preflight, amp))
 				require.Equal(t, calls, controller.calls)
 				require.Equal(t, []int64{11, 22, 42}, MustFixedColNoTypeCheck[int64](destination))
 			})

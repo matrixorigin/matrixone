@@ -115,16 +115,11 @@ func (s *sortRollupState) init(group *Group) error {
 				"sort rollup has no equality fast path for type %s", typ.String())
 		}
 		s.equalers[i] = equaler
-		rollup, err := vector.NewRollupConstWithAllocation(
+		rollup := vector.NewRollupConst(
 			typ,
 			1,
-			group.ctr.mp,
-			group.ctr.expressionAllocation,
+			group.ctr.rollupMP(),
 		)
-		if err != nil {
-			s.free(group.ctr.mp)
-			return err
-		}
 		s.rollupSources = append(s.rollupSources, rollup)
 	}
 
@@ -368,18 +363,13 @@ func (s *sortRollupState) updateLastKeys(
 ) error {
 	for i := range group.GroupBy {
 		if s.lastExprKeys[i] == nil {
-			vec, err := vector.NewOffHeapVecWithTypeAndAllocation(
+			s.lastExprKeys[i] = vector.NewOffHeapVecWithType(
 				group.ctr.groupByEvaluate.Typ[i],
-				group.ctr.expressionAllocation,
 			)
-			if err != nil {
-				return err
-			}
-			s.lastExprKeys[i] = vec
 		} else {
 			s.lastExprKeys[i].CleanOnlyData()
 		}
-		if err := s.lastExprKeys[i].UnionOne(keyVecs[i], int64(row), group.ctr.mp); err != nil {
+		if err := s.lastExprKeys[i].UnionOne(keyVecs[i], int64(row), group.ctr.rollupMP()); err != nil {
 			return err
 		}
 	}
@@ -449,7 +439,7 @@ func (s *sortRollupState) appendOutputRow(
 		if source == nil {
 			return moerr.NewInternalErrorNoCtx("sort rollup output key is not initialized")
 		}
-		if err := s.output.Vecs[col].UnionOne(source, 0, group.ctr.mp); err != nil {
+		if err := s.output.Vecs[col].UnionOne(source, 0, group.ctr.groupByMP()); err != nil {
 			return err
 		}
 	}
@@ -473,11 +463,6 @@ func (s *sortRollupState) appendOutputRow(
 					// Take ownership before metadata or a later column can fail.
 					s.output.Vecs = append(s.output.Vecs, vec)
 				}
-				if err := vec.SetPrepareParamKindAtWithMP(
-					s.outputRows, group.ctr.prepareParamKind.Get(i), group.ctr.mp,
-				); err != nil {
-					return err
-				}
 				continue
 			}
 			vecs, err := aggexec.FlushWithContext(proc.Ctx, agg)
@@ -491,11 +476,7 @@ func (s *sortRollupState) appendOutputRow(
 				return moerr.NewInternalErrorNoCtxf(
 					"sort rollup aggregate %d did not produce one result row", i)
 			}
-			vec := vecs[0]
-			if !vec.HasPrepareParamKind() {
-				vec.SetPrepareParamKind(group.ctr.prepareParamKind.Get(i))
-			}
-			resultVecs = append(resultVecs, vec)
+			resultVecs = append(resultVecs, vecs[0])
 		}
 	}
 
@@ -504,7 +485,7 @@ func (s *sortRollupState) appendOutputRow(
 			s.output.Vecs = append(s.output.Vecs, resultVecs...)
 		} else {
 			for i, vec := range resultVecs {
-				if err := s.output.Vecs[keyCount+i].UnionOne(vec, 0, group.ctr.mp); err != nil {
+				if err := s.output.Vecs[keyCount+i].UnionOne(vec, 0, group.ctr.groupByMP()); err != nil {
 					freeSortRollupVectors(resultVecs[i:], group.ctr.mp)
 					return err
 				}
@@ -645,12 +626,7 @@ func (group *Group) fillSortRollupLevels(
 			}
 			var window *vector.Vector
 			var err error
-			if group.ctr.expressionAllocation != nil {
-				window, err = vec.WindowByLogicalRowsWithAllocation(
-					offset, end, group.ctr.mp, group.ctr.expressionAllocation)
-			} else {
-				window, err = vec.WindowByLogicalRows(offset, end)
-			}
+			window, err = vec.WindowByLogicalRows(offset, end)
 			if err != nil {
 				freeSortRollupArgWindows(argWindows, argWindowOwned, group.ctr.mp)
 				return err

@@ -35,9 +35,6 @@ func TestReadonlyRawAppendSources(t *testing.T) {
 		run  func(*Vector, []byte, *mpool.MPool) error
 	}{
 		{"bytes", func(v *Vector, value []byte, mp *mpool.MPool) error { return AppendBytes(v, value, false, mp) }},
-		{"source", func(v *Vector, value []byte, mp *mpool.MPool) error {
-			return AppendBytesWithStringSource(v, value, false, types.StringSourceSQLPrepare, mp)
-		}},
 		{"multi", func(v *Vector, value []byte, mp *mpool.MPool) error { return AppendMultiBytes(v, value, false, 2, mp) }},
 		{"bytes-list", func(v *Vector, value []byte, mp *mpool.MPool) error {
 			return AppendBytesList(v, [][]byte{value}, nil, mp)
@@ -69,9 +66,6 @@ func TestReadonlyRawAppendSources(t *testing.T) {
 					for i := 3; i < destination.Length(); i++ {
 						require.Equal(t, values[row], destination.GetBytesAt(i))
 					}
-					if operation.name == "source" {
-						require.Equal(t, types.StringSourceSQLPrepare, destination.GetStringSourceAt(3))
-					}
 				})
 			}
 		}
@@ -90,7 +84,7 @@ func readonlyPayloadVector(t *testing.T, typ types.Type, leased bool, fill func(
 	destination := NewOffHeapVecWithType(typ)
 	t.Cleanup(func() { destination.Free(mp) })
 	if leased {
-		require.NoError(t, destination.CopyWithReadonlyArea(source, mp))
+		require.NoError(t, copyWithBorrowedArea(destination, source, mp))
 	} else {
 		require.NoError(t, destination.UnionBatch(source, 0, 3, nil, mp))
 	}
@@ -164,13 +158,14 @@ func TestReadonlyWriterAdmissionAndFailure(t *testing.T) {
 			controller := &readonlyWriteController{}
 			state := readonlyWriteAccount(t, controller)
 			values := [][]byte{[]byte("aaaaaa"), bytes.Repeat([]byte{'b'}, 64), bytes.Repeat([]byte{'c'}, 64)}
-			_, destination := readonlyAliasVectors(t, mp, values, true, state.selection)
+			amp := state.view(t, mp)
+			_, destination := readonlyAliasVectors(t, mp, values, true, amp)
 			beforeMP, beforeAccount := mp.CurrNB(), state.account.Snapshot().Used
 			if failAfter > 0 {
 				controller.failAt = controller.calls + failAfter
 			}
 			called := false
-			err := AppendBytesWithWriter(destination, 24, mp, func(dst []byte) error {
+			err := AppendBytesWithWriter(destination, 24, amp, func(dst []byte) error {
 				called = true
 				controller.failAt = controller.calls + 1
 				copy(dst, bytes.Repeat([]byte{'x'}, 24))
@@ -255,9 +250,7 @@ func TestReadonlySetterAndWriterMetadata(t *testing.T) {
 			values := [][]byte{[]byte("aaaaaa"), bytes.Repeat([]byte{'b'}, 64), nil}
 			_, destination := readonlyAliasVectors(t, mp, values, true, nil)
 			destination.GetGrouping().Add(1)
-			sources := []types.StringSource{types.StringSourceLiteral, types.StringSourceUserVariable, types.StringSourceSQLPrepare}
-			require.NoError(t, destination.SetStringSourcesWithMP(sources, mp))
-			snapshot, err := destination.RetainedReadonlyViewWithMP(mp)
+			snapshot, err := readonlyView(destination, mp)
 			require.NoError(t, err)
 			t.Cleanup(func() { snapshot.Free(mp) })
 			input, err := destination.Window(1, 2)
@@ -268,29 +261,22 @@ func TestReadonlySetterAndWriterMetadata(t *testing.T) {
 				require.NoError(t, GetConstSetFunction(*destination.GetType(), mp)(destination, input, 0, 3))
 				for row := range 3 {
 					require.Equal(t, values[1], destination.GetBytesAt(row))
-					require.Equal(t, sources[1], destination.GetStringSourceAt(row))
 					require.True(t, destination.GetGrouping().Contains(uint64(row)))
 					require.False(t, destination.IsNull(uint64(row)))
 				}
 			case "unset":
 				require.NoError(t, destination.SetRawBytesAtFromAndUnsetNull(2, input, 0, mp))
 				require.Equal(t, values[1], destination.GetBytesAt(2))
-				require.Equal(t, sources[1], destination.GetStringSourceAt(2))
 				require.False(t, destination.IsNull(2))
 				require.True(t, destination.GetGrouping().Contains(1))
 			case "writer":
 				value := input.GetBytesAt(0)
 				require.NoError(t, AppendBytesWithWriter(destination, len(value), mp, func(dst []byte) error { copy(dst, value); return nil }))
 				require.Equal(t, values[1], destination.GetBytesAt(3))
-				require.Equal(t, types.StringSourceExpression, destination.GetStringSourceAt(3))
 				require.True(t, destination.IsNull(2))
 				require.True(t, destination.GetGrouping().Contains(1))
-				for row, source := range sources {
-					require.Equal(t, source, destination.GetStringSourceAt(row))
-				}
 			}
-			for row, source := range sources {
-				require.Equal(t, source, snapshot.GetStringSourceAt(row))
+			for row := range values {
 				require.Equal(t, row == 2, snapshot.IsNull(uint64(row)))
 				require.Equal(t, row == 1, snapshot.GetGrouping().Contains(uint64(row)))
 				if row != 2 {
@@ -314,8 +300,9 @@ func TestReadonlyFixedRawSetter(t *testing.T) {
 		mp.Free(data)
 	}
 	require.NoError(t, err)
-	destination, err := NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, lease)
-	lease.Release()
+	destination, err := NewBorrowedFixedVector(types.T_int64.ToType(), 3, data)
+	// The test is the lender: it frees data after destination.
+	t.Cleanup(lease.Release)
 	require.NoError(t, err)
 	t.Cleanup(func() { destination.Free(mp) })
 	require.NoError(t, destination.SetRawBytesAt(1, destination.GetRawBytesAt(0), mp))

@@ -37,7 +37,7 @@ type retryStringExpression struct {
 	colexec.ExpressionExecutor
 	vec         *vector.Vector
 	mp          *mpool.MPool
-	selection   *vector.AllocationAccountSelection
+	selection   *mpool.MPool
 	borrowed    bool
 	calls, rows int
 }
@@ -55,16 +55,15 @@ func (e *retryStringExpression) Eval(proc *process.Process, inputs []*batch.Batc
 		e.vec.Free(proc.Mp())
 	}
 	e.mp = proc.Mp()
-	e.calls++
-	var err error
-	e.vec, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_varchar.ToType(), e.selection)
-	if err != nil {
-		return nil, err
+	if e.selection != nil {
+		e.mp = e.selection
 	}
+	e.calls++
+	e.vec = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 	for range inputs[0].RowCount() {
 		e.rows++
 		value := fmt.Sprintf("%05d-%s", e.rows, strings.Repeat("x", 96))
-		if err := vector.AppendBytes(e.vec, []byte(value), false, proc.Mp()); err != nil {
+		if err := vector.AppendBytes(e.vec, []byte(value), false, e.mp); err != nil {
 			return nil, err
 		}
 	}
@@ -89,7 +88,7 @@ type retryIntExpression struct {
 	colexec.ExpressionExecutor
 	vec         *vector.Vector
 	mp          *mpool.MPool
-	selection   *vector.AllocationAccountSelection
+	selection   *mpool.MPool
 	calls, rows int
 }
 
@@ -98,15 +97,15 @@ func (e *retryIntExpression) Eval(proc *process.Process, inputs []*batch.Batch, 
 		e.vec.Free(proc.Mp())
 	}
 	e.mp = proc.Mp()
+	if e.selection != nil {
+		e.mp = e.selection
+	}
 	e.calls++
 	var err error
-	e.vec, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), e.selection)
-	if err != nil {
-		return nil, err
-	}
+	e.vec = vector.NewOffHeapVecWithType(types.T_int32.ToType())
 	for range inputs[0].RowCount() {
 		e.rows++
-		if err = vector.AppendFixed(e.vec, int32(e.rows), false, proc.Mp()); err != nil {
+		if err = vector.AppendFixed(e.vec, int32(e.rows), false, e.mp); err != nil {
 			return nil, err
 		}
 	}
@@ -522,62 +521,4 @@ func TestGroupCapacityErrorIsNotReplayedAcrossBoundaries(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestGroupRollupSentinelCapacityErrorIsNotReplayed(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	t.Cleanup(func() {
-		proc.Free()
-		require.Zero(t, proc.Mp().CurrNB())
-	})
-	makeInput := func(n int) *batch.Batch {
-		values := make([]int32, n)
-		for i := range values {
-			values[i] = int32(i)
-		}
-		input := batch.NewWithSize(2)
-		t.Cleanup(func() { input.Clean(proc.Mp()) })
-		input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
-		input.Vecs[1] = testutil.MakeInt32Vector(values, nil, proc.Mp())
-		input.SetRowCount(n)
-		return input
-	}
-	first, second := makeInput(256), makeInput(2)
-	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)},
-		[]aggexec.AggFuncExecExpression{sumAgg(1)})
-	g.GroupingFlag = []bool{true, false}
-	g.SpillMem = 1 << 30
-	generation := installGroupTestResourceBudget(t, proc)
-	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
-	require.NoError(t, err)
-	controller := &rejectNextGroupAllocationController{}
-	account, err := registry.OpenWithController(64<<20, controller)
-	require.NoError(t, err)
-	require.NoError(t, g.ctr.setAllocationAccount(account))
-	allocation := groupTestAllocation{generation: generation, registry: registry, account: account}
-	t.Cleanup(func() {
-		g.Free(proc, true, mpool.ErrAllocationAccountCapacity)
-		defer finalizeGroupTestAllocation(t, g, allocation)
-		require.Zero(t, generation.Snapshot().SpillDiskUsed)
-		require.Zero(t, generation.Snapshot().SpillFDUsed)
-	})
-	g.AppendChild(colexec.NewMockOperator().
-		WithBatchs([]*batch.Batch{first, second, batch.EmptyBatch}).
-		WithBatchCallback(func(index int) {
-			if index == 1 {
-				controller.arm()
-			}
-		}))
-	require.NoError(t, g.Prepare(proc))
-	key := &failOnceRetryExpression{ExpressionExecutor: g.ctr.groupByEvaluate.Executor[0]}
-	arg := &failOnceRetryExpression{ExpressionExecutor: g.ctr.aggArgEvaluate[0].Executor[0]}
-	g.ctr.groupByEvaluate.Executor[0] = key
-	g.ctr.aggArgEvaluate[0].Executor[0] = arg
-
-	_, err = vm.Exec(g, proc)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	_, rejected := controller.snapshot()
-	require.True(t, rejected)
-	require.Equal(t, 2, key.calls)
-	require.Equal(t, 2, arg.calls)
 }

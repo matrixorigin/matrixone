@@ -105,7 +105,7 @@ func TestBooleanFilterSparseNullBitmap(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			})
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			boolType, intType := types.T_bool.ToType(), types.T_int32.ToType()
 			scan := &TableScan{
@@ -119,13 +119,12 @@ func TestBooleanFilterSparseNullBitmap(t *testing.T) {
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			input.Vecs[0] = vector.NewVec(boolType)
 			input.Vecs[1] = vector.NewOffHeapVecWithType(intType)
-			require.NoError(t, input.Vecs[1].SetAllocationAccount(allocation))
 			for row := range 66 {
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], row != 0, false, proc.Mp()))
-				require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(row), row == 2, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(row), row == 2, allocation))
 			}
 			input.SetRowCount(66)
-			require.Equal(t, 1, input.Vecs[1].GetNulls().GetBitmap().ExternalStorageCapacity())
+			require.Equal(t, 1, input.Vecs[1].GetNulls().GetBitmap().CapWords())
 			before := account.Snapshot()
 			var loaded []int
 			if late {

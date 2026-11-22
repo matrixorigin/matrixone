@@ -214,10 +214,9 @@ func localRankTestBudget(t *testing.T, limit uint64) (*process.Process, *process
 func localRankAccountedWindow(t *testing.T, n, width int, withNulls bool, limit uint64) (*Window, *process.Process, *process.ExecutionResourceGeneration) {
 	t.Helper()
 	proc, generation, account := localRankTestBudget(t, limit)
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+	selection, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerOrder, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	input, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), selection)
-	require.NoError(t, err)
+	input := vector.NewOffHeapVecWithType(types.T_int32.ToType())
 	t.Cleanup(func() {
 		if input != nil {
 			input.Free(proc.Mp())
@@ -227,7 +226,7 @@ func localRankAccountedWindow(t *testing.T, n, width int, withNulls bool, limit 
 	for i := range values {
 		values[i], nulls[i] = int32(i), withNulls && i%7 == 0
 	}
-	require.NoError(t, vector.AppendFixedList(input, values, nulls, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(input, values, nulls, selection))
 	bat := localRankBatch(proc.Mp(), n, input)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	input = nil // ownership transferred to the mock child

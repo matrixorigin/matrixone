@@ -167,10 +167,9 @@ func runIssue25590Statements(
 			prevRowid := prevRowids[0]
 			deleteBlkId := map[types.Blockid]bool{prevRowid.CloneBlockID(): true}
 			rows := map[types.Rowid]uint8{prevRowid: 0}
-			sels := vector.GetSels()
+			var sels []int64
 			txn.deleteTableWrites(issue25590DBID, issue25590TableID, sels, deleteBlkId,
 				prevRowid.GetRowOffset(), prevRowid.GetRowOffset(), rows)
-			vector.PutSels(sels)
 		}
 
 		insert := issue25590InsertBatch(t, txn, newV)
@@ -379,10 +378,9 @@ func TestIssue25590RollbackAfterRetiredHistory(t *testing.T) {
 	liveRowid := vector.MustFixedColWithTypeCheck[types.Rowid](liveBat.GetVector(0))[0]
 	deleteBlkId := map[types.Blockid]bool{liveRowid.CloneBlockID(): true}
 	rows := map[types.Rowid]uint8{liveRowid: 0}
-	sels := vector.GetSels()
+	var sels []int64
 	txn.deleteTableWrites(issue25590DBID, issue25590TableID, sels, deleteBlkId,
 		liveRowid.GetRowOffset(), liveRowid.GetRowOffset(), rows)
-	vector.PutSels(sels)
 	bat := issue25590InsertBatch(t, txn, prelude+1)
 	txn.appendWorkspaceEntryLocked(Entry{
 		typ:          INSERT,
@@ -550,9 +548,8 @@ func issue25590MarkRows(t *testing.T, txn *Transaction, bat *batch.Batch, idxs .
 			max = all[i].GetRowOffset()
 		}
 	}
-	sels := vector.GetSels()
+	var sels []int64
 	txn.deleteTableWrites(issue25590DBID, issue25590TableID, sels, deleteBlkId, min, max, rows)
-	vector.PutSels(sels)
 }
 
 //   - a batch shrunk only PARTIALLY must never be retired (the value the
@@ -578,7 +575,6 @@ func TestIssue25590RetirementKeepsSurvivingEntriesAcrossDumpAndRollback(t *testi
 	txn.tablesInVain = make(map[uint64]int)
 	txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 	txn.cnObjsSummary = make(map[uint64]map[types.Objectid]Summary)
-	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	// thresholds far above the working set: admissions never dump on their
 	// own; the one flush below is issued explicitly from the statement's
@@ -711,7 +707,6 @@ func TestIssue25590AdmissionFailureKeepsRollbackBoundaryExact(t *testing.T) {
 	txn.tablesInVain = make(map[uint64]int)
 	txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 	txn.cnObjsSummary = make(map[uint64]map[types.Objectid]Summary)
-	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	// no dumps during the setup statements
 	txn.writeWorkspaceThreshold = 1 << 40
@@ -923,7 +918,6 @@ func issue25590InitDumpableFixture(t *testing.T, txn *Transaction) {
 	txn.tablesInVain = make(map[uint64]int)
 	txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 	txn.cnObjsSummary = make(map[uint64]map[types.Objectid]Summary)
-	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	txn.writeWorkspaceThreshold = 1 << 40
 	txn.commitWorkspaceThreshold = 1 << 40
@@ -6210,7 +6204,8 @@ func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 	repubNames := make([]string, 0, objCount-1)
 	require.Positive(t, account.Snapshot().Used)
 	for _, index := range idxes {
-		require.True(t, vector.AllocationAccountSelectionsEqual(txn.workspaceSelection, txn.writes[index].bat.AllocationAccountSelection()),
+		// Every staged batch is a workspace copy charged to the workspace account.
+		require.Contains(t, txn.workspaceCopies, txn.writes[index].bat,
 			"dirty replacement and every clean republication need the workspace account")
 	}
 	for i := 1; i < objCount; i++ {
@@ -7476,9 +7471,6 @@ func issue25590BlockDrainUntilObserved(t *testing.T, e *Engine, fs *issue25590Po
 func issue25590BindRound21Txn(t *testing.T, txn *Transaction) {
 	t.Helper()
 	txn.proc.Base.TxnOperator = txn.op
-	if txn.cn_flushed_s3_tombstone_object_stats_list == nil {
-		txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
-	}
 	if mockOp, ok := txn.op.(*mock_frontend.MockTxnOperator); ok {
 		mockOp.EXPECT().EnterIncrStmt().AnyTimes()
 		mockOp.EXPECT().ExitIncrStmt().AnyTimes()

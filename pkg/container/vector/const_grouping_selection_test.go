@@ -53,7 +53,8 @@ func TestConstGroupingSelectionCopies(t *testing.T) {
 					source.GetGrouping().Add(0, 2, 8)
 				}
 				state := newTestVectorAllocationAccount(t, 1<<20, 64)
-				dst := newAccountedTestVector(t, typ, state.selection)
+				dst := newAccountedTestVector(t, typ)
+				dmp := state.view(t, mp)
 				defer func() {
 					source.Free(mp)
 					dst.Free(mp)
@@ -61,7 +62,7 @@ func TestConstGroupingSelectionCopies(t *testing.T) {
 					require.Zero(t, mp.CurrNB())
 				}()
 				// Existing data and marks must survive repeated appends.
-				require.NoError(t, dst.UnionOne(source, 0, mp))
+				require.NoError(t, dst.UnionOne(source, 0, dmp))
 				// At most five selected rows are appended in each of two rounds.
 				want := make([]bool, 1, 11)
 				want[0] = true
@@ -70,31 +71,35 @@ func TestConstGroupingSelectionCopies(t *testing.T) {
 					switch method {
 					case "union":
 						rows = []int64{4, 2, 0, 2, 1}
-						err = dst.Union(source, rows, mp)
+						err = dst.Union(source, rows, dmp)
 					case "union-int32":
 						rows = []int64{4, 2, 0, 2, 1}
-						err = dst.UnionInt32(source, []int32{4, 2, 0, 2, 1}, mp)
+						err = dst.UnionInt32(source, []int32{4, 2, 0, 2, 1}, dmp)
 					case "batch":
 						rows = []int64{1, 2, 3, 4}
-						err = dst.UnionBatch(source, 1, 4, nil, mp)
+						err = dst.UnionBatch(source, 1, 4, nil, dmp)
 					case "batch-flags":
 						rows = []int64{1, 2, 4}
-						err = dst.UnionBatch(source, 1, 4, []uint8{1, 1, 0, 1}, mp)
+						err = dst.UnionBatch(source, 1, 4, []uint8{1, 1, 0, 1}, dmp)
 					case "batch-preflighted":
 						rows = []int64{1, 2, 3, 4}
 						flags := []uint8{1, 1, 1, 1}
-						require.NoError(t, dst.PreExtendSelectedBatch(source, 1, 4, flags, dst.Length()+4, mp))
-						err = dst.UnionBatchPreflighted(source, 1, 4, flags, mp)
+						var preflight SelectedBatchPreflight
+						preflight, err = dst.PreExtendSelectedBatch(source, 1, 4, flags, dst.Length()+4, dmp)
+						require.NoError(t, err)
+						err = dst.UnionBatchPreflighted(source, 1, 4, flags, &preflight, dmp)
 					case "batch-preflighted-flags":
 						rows = []int64{1, 2, 4}
 						flags := []uint8{1, 1, 0, 1}
-						require.NoError(t, dst.PreExtendSelectedBatch(source, 1, 4, flags, dst.Length()+3, mp))
-						err = dst.UnionBatchPreflighted(source, 1, 4, flags, mp)
+						var preflight SelectedBatchPreflight
+						preflight, err = dst.PreExtendSelectedBatch(source, 1, 4, flags, dst.Length()+3, dmp)
+						require.NoError(t, err)
+						err = dst.UnionBatchPreflighted(source, 1, 4, flags, &preflight, dmp)
 					case "empty-flags":
-						err = dst.UnionBatch(source, 1, 4, []uint8{0, 0, 0, 0}, mp)
+						err = dst.UnionBatch(source, 1, 4, []uint8{0, 0, 0, 0}, dmp)
 					case "multi-control":
 						rows = []int64{2, 2, 2}
-						err = dst.UnionMulti(source, 2, 3, mp)
+						err = dst.UnionMulti(source, 2, 3, dmp)
 					}
 					require.NoError(t, err)
 					for _, row := range rows {

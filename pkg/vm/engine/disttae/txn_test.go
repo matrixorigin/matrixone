@@ -15,7 +15,6 @@
 package disttae
 
 import (
-	"bytes"
 	"context"
 	"math"
 	"math/rand"
@@ -425,43 +424,41 @@ func TestWorkspaceFlushKeySeparatesAutoIncrEpochs(t *testing.T) {
 	require.Len(t, batches, 2)
 }
 
-func Test_GetUncommittedS3Tombstone(t *testing.T) {
-	var statsList []objectio.ObjectStats
-	for i := 0; i < 3; i++ {
-		row := types.RandomRowid()
-		stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), false, false, true)
-		objectio.SetObjectStatsRowCnt(stats, uint32(10+i*10))
-		statsList = append(statsList, *stats)
+func TestWorkspaceFlushedTombstoneOwnership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	rowID := types.RandomRowid()
+	stats := objectio.NewObjectStatsWithObjectID(rowID.BorrowObjectID(), false, false, true)
+	bat := batch.NewWithSize(1)
+	bat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+	bat.Vecs[0] = vector.NewVec(types.T_blob.ToType())
+	defer bat.Clean(mp)
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], stats[:], false, mp))
+	bat.SetRowCount(1)
+
+	var txn Transaction
+	a := Entry{typ: DELETE, tableId: 1, fileName: "tombstone", bat: bat}
+	b := Entry{typ: DELETE, tableId: 2, fileName: "tombstone", bat: bat}
+	duplicate := a
+	txn.accountWorkspaceEntryLocked(&a)
+	txn.accountWorkspaceEntryLocked(&duplicate)
+	txn.accountWorkspaceEntryLocked(&b)
+	collect := func(tableID uint64) []objectio.ObjectStats {
+		var result []objectio.ObjectStats
+		txn.flushedTombstones.forEach(tableID, func(stats objectio.ObjectStats) {
+			result = append(result, stats)
+		})
+		return result
 	}
-
-	txn := &Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
-	}
-
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[0], nil)
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[1], nil)
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[2], nil)
-
-	objectSlice := objectio.ObjectStatsSlice{}
-
-	require.NoError(t, txn.getUncommittedS3Tombstone(func(stats *objectio.ObjectStats) {
-		objectSlice.Append(stats[:])
-	}))
-	require.Equal(t, len(statsList), objectSlice.Len())
-
-	txn.cn_flushed_s3_tombstone_object_stats_list.Range(func(key, value any) bool {
-		ss := key.(objectio.ObjectStats)
-		found := false
-		for i := range objectSlice.Len() {
-			if bytes.Equal(ss[:], objectSlice.Get(i)[:]) {
-				found = true
-				break
-			}
-		}
-
-		require.True(t, found)
-		return true
-	})
+	require.Equal(t, []objectio.ObjectStats{*stats}, collect(1))
+	require.Equal(t, []objectio.ObjectStats{*stats}, collect(2))
+	require.Empty(t, collect(3))
+	txn.unaccountWorkspaceEntryLocked(&duplicate)
+	require.Equal(t, []objectio.ObjectStats{*stats}, collect(1))
+	txn.unaccountWorkspaceEntryLocked(&a)
+	require.Empty(t, collect(1))
+	require.Equal(t, []objectio.ObjectStats{*stats}, collect(2))
+	txn.unaccountWorkspaceEntryLocked(&b)
+	require.Empty(t, collect(2))
 }
 
 func Test_BatchAllocNewRowIds(t *testing.T) {
@@ -1854,31 +1851,24 @@ func TestDupVectorWithoutNullsLeavesSealedStatementOwner(t *testing.T) {
 			require.NoError(t, err)
 			account, err := registry.Open(1 << 20)
 			require.NoError(t, err)
-			selection, err := vector.NewAllocationAccountSelection(
+			selection, err := mp.WithAccount(
 				account,
 				mpool.AllocationOwner(1),
 				mpool.AllocationSite(1),
-				mpool.AllocationSite(2),
-				mpool.AllocationSite(3),
-				mpool.AllocationSite(4),
+				mpool.AllocationCapacityClassDefault,
 			)
 			require.NoError(t, err)
-			source, err := vector.NewOffHeapVecWithTypeAndAllocation(
-				types.T_int64.ToType(),
-				selection,
-			)
-			require.NoError(t, err)
-			require.NoError(t, vector.AppendFixed(source, int64(1), false, mp))
+			source := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(source, int64(1), false, selection))
 			if tc.withNulls {
-				require.NoError(t, vector.AppendFixed(source, int64(0), true, mp))
+				require.NoError(t, vector.AppendFixed(source, int64(0), true, selection))
 			}
-			require.NoError(t, vector.AppendFixed(source, int64(2), false, mp))
+			require.NoError(t, vector.AppendFixed(source, int64(2), false, selection))
 
 			used := account.Seal().Used
 			require.NotZero(t, used)
 			out, err := dupVectorWithoutNulls(source, mp)
 			require.NoError(t, err)
-			require.Nil(t, out.AllocationAccountSelection())
 			require.Equal(t, used, account.Snapshot().Used)
 			require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](out))
 

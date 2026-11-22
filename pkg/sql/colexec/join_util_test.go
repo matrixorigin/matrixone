@@ -154,8 +154,7 @@ func TestBatchesShrinkPreservesAllocationAndRollback(t *testing.T) {
 		require.NoError(t, err)
 		account, err := registry.Open(limit)
 		require.NoError(t, err)
-		selection, err := vector.NewAllocationAccountSelection(
-			account, 1, 1, 2, 3, 4)
+		selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 		require.NoError(t, err)
 		var batches Batches
 		require.NoError(t, batches.CopyIntoBatchesWithAllocation(input, proc, selection))
@@ -169,9 +168,14 @@ func TestBatchesShrinkPreservesAllocationAndRollback(t *testing.T) {
 			shrinkErr = batches.Shrink(ignore, proc)
 			if shrinkErr == nil {
 				require.Equal(t, DefaultBatchSize-1, batches.RowCount())
+				require.Same(t, selection, batches.Allocation())
+				var allocated uint64
 				for _, bat := range batches.Buf {
-					require.Same(t, selection, bat.AllocationAccountSelection())
+					for _, vec := range bat.Vecs {
+						allocated += uint64(vec.Allocated())
+					}
 				}
+				require.GreaterOrEqual(t, account.Snapshot().Used, allocated)
 			} else {
 				require.Equal(t, 1, ignore.Count(), "failed shrink restores ignore-row checkpoint")
 				require.Equal(t, DefaultBatchSize, batches.RowCount())
@@ -201,9 +205,9 @@ func TestCopyIntoBatchesAcceptsEquivalentAllocationSelection(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	first, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	first, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	second, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	second, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	require.NotSame(t, first, second)
 	input := testutil.NewBatch(
@@ -219,7 +223,7 @@ func TestCopyIntoBatchesAcceptsEquivalentAllocationSelection(t *testing.T) {
 	require.NoError(t, batches.CopyIntoBatchesWithAllocation(input, proc, second))
 	require.Len(t, batches.Buf, 1)
 	require.Equal(t, 64, batches.RowCount())
-	require.Same(t, first, batches.Buf[0].AllocationAccountSelection())
+	require.Same(t, first, batches.Allocation())
 
 	batches.Clean(proc.Mp())
 	require.Zero(t, account.Snapshot().Used)
@@ -236,7 +240,7 @@ func TestCopyIntoBatchesAllocationFailureRollsBackPartialTail(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.OpenWithController(1<<60, controller)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
 	typesInTail := []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}
@@ -285,7 +289,7 @@ func TestCopyIntoBatchesFailureRollsBackEarlierTailChunk(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.OpenWithController(1<<60, controller)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
 	typesInTail := []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}

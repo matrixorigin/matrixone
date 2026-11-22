@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -272,7 +271,7 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		nulls.Add(test.vecs[1].GetNulls(), 1)
+		test.vecs[1].GetNulls().Add(1)
 		//if JudgeIsCompositeIndexColumn(test.f) {
 		packers := PackerList{}
 		if len(test.parts) >= 2 {

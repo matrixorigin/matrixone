@@ -38,7 +38,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -309,7 +308,6 @@ func TestAlterTableInplaceUpdatesVisibilityForAllLogicalIndexParts(t *testing.T)
 			}}}}
 
 			proc := testutil.NewProcess(t)
-			proc.Base.SessionInfo.Buf = buffer.New()
 			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 			proc.Ctx = ctx
 			proc.ReplaceTopCtx(ctx)
@@ -768,7 +766,6 @@ func TestCompileRunRetriesCreateDatabaseAtCatalogLockBoundary(t *testing.T) {
 
 			ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 			proc := testutil.NewProcess(t)
-			proc.GetSessionInfo().Buf = buffer.New()
 			proc.Ctx = ctx
 			proc.ReplaceTopCtx(ctx)
 			txnClient, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
@@ -790,7 +787,6 @@ func TestCompileRunRetriesCreateDatabaseAtCatalogLockBoundary(t *testing.T) {
 			require.Equal(t, tc.wantAffected, result.AffectRows)
 			require.Equal(t, tc.wantEvents, events)
 			c.Release()
-			proc.GetSessionInfo().Buf.Free()
 		})
 	}
 
@@ -813,7 +809,6 @@ func TestCompileRunRetriesCreateDatabaseAtCatalogLockBoundary(t *testing.T) {
 
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 		proc := testutil.NewProcess(t)
-		proc.GetSessionInfo().Buf = buffer.New()
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
 		txnClient, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
@@ -832,7 +827,6 @@ func TestCompileRunRetriesCreateDatabaseAtCatalogLockBoundary(t *testing.T) {
 		require.ErrorIs(t, err, lockErr)
 		require.Zero(t, c.retryTimes)
 		c.Release()
-		proc.GetSessionInfo().Buf.Free()
 	})
 }
 
@@ -840,7 +834,6 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 	newCompileWithStubEngine := func(t *testing.T, eng *stubEngine, sql string) *Compile {
 		t.Helper()
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 		ctrl := gomock.NewController(t)
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
@@ -995,7 +988,6 @@ func TestCreateIndexLockProtocol(t *testing.T) {
 	newCompile := func(t *testing.T, eng *stubEngine) *Compile {
 		t.Helper()
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 		return NewCompile("test", "db1", "create index idx_a on t1(a)", "", "", eng, proc, nil, false, nil, time.Now())
 	}
@@ -1397,7 +1389,6 @@ func TestScope_CreateTable(t *testing.T) {
 
 	convey.Convey("create table FaultTolerance1", t, func() {
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 
 		eng := newStubEngine()
@@ -1411,7 +1402,6 @@ func TestScope_CreateTable(t *testing.T) {
 
 	convey.Convey("create table FaultTolerance2", t, func() {
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 
 		eng := newStubEngine()
@@ -1426,7 +1416,6 @@ func TestScope_CreateTable(t *testing.T) {
 
 	convey.Convey("create table FaultTolerance3", t, func() {
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 
 		eng := newStubEngine()
@@ -1443,7 +1432,6 @@ func TestScope_CreateTable(t *testing.T) {
 
 	convey.Convey("create table FaultTolerance4", t, func() {
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 
 		eng := newStubEngine()
@@ -1465,7 +1453,6 @@ func TestScope_CreateTable(t *testing.T) {
 
 	convey.Convey("create table FaultTolerance5", t, func() {
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 
 		eng := newStubEngine()
@@ -1489,7 +1476,6 @@ func TestScope_CreateTable(t *testing.T) {
 
 	convey.Convey("create table FaultTolerance10", t, func() {
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 
 		eng := newStubEngine()
@@ -1789,7 +1775,6 @@ func TestScope_CreateView(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
@@ -1818,7 +1803,6 @@ func TestScope_CreateView(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
@@ -1889,7 +1873,6 @@ func TestScope_CreateTableIfNotExistsAsSelectWhenTableExists(t *testing.T) {
 	}
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 
 	eng := newStubEngine()
@@ -2034,7 +2017,6 @@ func TestAlterTableInplaceDropIndexUsesParentOwnedDelete(t *testing.T) {
 	unexpectedSQL := make(chan string, 1)
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
@@ -2126,7 +2108,6 @@ func TestDropSequenceCleansLogicalObjectPrivileges(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	var sqls []string
 	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
 		moruntime.InternalSQLExecutor,
@@ -2198,7 +2179,6 @@ func TestCreateOrReplaceViewPreservesIdentity(t *testing.T) {
 			stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
 			stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return tc.lockErr })
 			proc := testutil.NewProcess(t)
-			proc.Base.SessionInfo.Buf = buffer.New()
 			proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 			c := NewCompile("test", "db", "create or replace view v as select 1", "", "", eng, proc, nil, false, nil, time.Now())
 			s := &Scope{Proc: proc, Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
@@ -2245,7 +2225,6 @@ func TestAlterViewPreservesLogicalID(t *testing.T) {
 	}}}}
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 	c := NewCompile("test", "db", "alter view v as select 1", "", "", eng, proc, nil, false, nil, time.Now())
 	err := s.AlterView(c)
@@ -2282,7 +2261,6 @@ func TestAlterViewUsesPlanDatabase(t *testing.T) {
 	}}}}
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 	c := NewCompile("test", "current_db", "alter view target_db.v as select 1", "", "", eng, proc, nil, false, nil, time.Now())
 	err := s.AlterView(c)
@@ -2321,7 +2299,6 @@ func TestAlterViewEmptyDatabaseFallsBackToSession(t *testing.T) {
 	}}}}
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 	c := NewCompile("test", "current_db", "alter view v as select 1", "", "", eng, proc, nil, false, nil, time.Now())
 	err := s.AlterView(c)
@@ -2641,7 +2618,6 @@ func TestDoLockTableForSnapshotRefresh(t *testing.T) {
 func TestAlterTableAddForeignKeyLocksDistinctParentData(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	txnClient, txnOp := newTestTxnClientAndOpWithPessimistic(ctrl)
 	proc.Base.TxnClient = txnClient
 	proc.Base.TxnOperator = txnOp
@@ -2768,7 +2744,6 @@ func TestScope_Database(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		proc.Ctx = context.Background()
 		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
@@ -3137,7 +3112,6 @@ func TestDropDatabaseKeepsFixedSISnapshot(t *testing.T) {
 			}
 			return executor.Result{}, nil
 		}))
-		proc.Base.SessionInfo.Buf = buffer.New()
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
@@ -3197,7 +3171,6 @@ func TestRemoveFkeysRelationshipsSkipsDeletedRelationsDuringDropDatabase(t *test
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
@@ -3240,7 +3213,6 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
@@ -3336,7 +3308,6 @@ func TestDropDatabaseSkipsForeignKeyCleanupWhenIgnored(t *testing.T) {
 	installDropDDLExecutor(t, proc, executor.NewMemExecutor(func(string) (executor.Result, error) {
 		return executor.Result{}, nil
 	}))
-	proc.Base.SessionInfo.Buf = buffer.New()
 	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 	ctx = context.WithValue(ctx, defines.IgnoreForeignKey{}, true)
 	proc.Ctx = ctx
@@ -3393,7 +3364,6 @@ func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing
 	installDropDDLExecutor(t, proc, executor.NewMemExecutor(func(string) (executor.Result, error) {
 		return executor.Result{}, nil
 	}))
-	proc.Base.SessionInfo.Buf = buffer.New()
 	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
@@ -3490,7 +3460,6 @@ func TestDropDatabaseLookupErrorIsNotMissing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
-			proc.Base.SessionInfo.Buf = buffer.New()
 			ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 			proc.Ctx = ctx
 			proc.ReplaceTopCtx(ctx)
@@ -3544,7 +3513,6 @@ func TestRemoveFkeysRelationshipsSkipsDeletedChildTableIds(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
@@ -3591,7 +3559,6 @@ func TestRemoveFkeysRelationshipsSkipsDeletedParentTableIds(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
@@ -3702,7 +3669,6 @@ func TestDropTableSingleSkipsMissingFkTables(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
@@ -3813,7 +3779,6 @@ func TestAlterTemporaryTableRejectsRecreatedRelation(t *testing.T) {
 func TestTruncateLocksLifecycleBeforeTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc.ReplaceTopCtx(proc.Ctx)
 	txnClient, txnOp := newTestTxnClientAndOpWithPessimistic(ctrl)

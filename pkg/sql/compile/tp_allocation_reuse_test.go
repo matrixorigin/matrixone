@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -112,7 +113,7 @@ func TestTPReusableOperatorsAllocationScope(t *testing.T) {
 				attempt, err := c.beginAllocationAccountAttempt()
 				require.NoError(t, err)
 				require.NotNil(t, attempt)
-				require.NotNil(t, scan.OutputAllocation)
+				require.NotNil(t, scan.BoundAllocationAccount())
 				require.NoError(t, c.finishAllocationAccountAttempt())
 			}
 
@@ -139,10 +140,10 @@ func TestTPReusableOperatorsAllocationScope(t *testing.T) {
 			clone.FilterExprs = []*plan.Expr{col}
 			require.NoError(t, c.attachRuntimeAllocationOwners([]*Scope{{RootOp: clone}}))
 			if execType == plan2.ExecTypeTP {
-				require.Nil(t, scan.OutputAllocation)
-				require.Nil(t, clone.OutputAllocation)
+				require.Nil(t, scan.BoundAllocationAccount())
+				require.Nil(t, clone.BoundAllocationAccount())
 			} else {
-				require.True(t, clone.OutputAllocation.UsesAccount(attempt.account))
+				require.Same(t, attempt.account, clone.BoundAllocationAccount())
 			}
 			require.NoError(t, c.finishAllocationAccountAttempt())
 			clone.Release()
@@ -151,7 +152,7 @@ func TestTPReusableOperatorsAllocationScope(t *testing.T) {
 }
 
 type tpReuseReader struct {
-	dictionaryPipelineReader
+	pipelineAccountReader
 	err error
 }
 
@@ -159,7 +160,7 @@ func (r *tpReuseReader) Read(ctx context.Context, attrs []string, expr *plan.Exp
 	if r.err != nil {
 		return false, r.err
 	}
-	return r.dictionaryPipelineReader.Read(ctx, attrs, expr, mp, out)
+	return r.pipelineAccountReader.Read(ctx, attrs, expr, mp, out)
 }
 
 type tpReusePipeline struct {
@@ -288,7 +289,6 @@ func TestTPReusablePipelineQueries(t *testing.T) {
 						var got []string
 						var count int64
 						err := f.execute(tc.param, tc.null, tc.err, func(b *batch.Batch) {
-							require.False(t, b.HasDictionary(), "root must publish flat results")
 							if aggregate {
 								count += vector.GetFixedAtNoTypeCheck[int64](b.Vecs[0], 0)
 								return
@@ -315,6 +315,67 @@ func TestTPReusablePipelineQueries(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+// TestTPReusePowerProjectionDomainErrorRecovery binds a real Power projection
+// consumer (power(v-2, 0.5)) onto the reused prepared-TP pipeline: the same
+// compiled f.c/f.root must serve repeated executions, surface the typed
+// out-of-range rejection for domain rows WITHOUT publishing the failed batch
+// to the consumer, and recover valid results on the next execution.
+func TestTPReusePowerProjectionDomainErrorRecovery(t *testing.T) {
+	f := newTPReusePipeline(t, plan2.ExecTypeTP, false)
+	keyType := types.T_varchar.ToType()
+	valueType := types.T_int32.ToType()
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		expr, err := plan2.BindFuncExprImplByPlanExpr(f.proc.Ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	col := func(pos int32, typ types.Type) *plan.Expr {
+		return &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+	}
+	project := f.root.(*projection.Projection)
+	// One-shot real consumer binding: keep the key column and project
+	// power(v-2, 0.5). The reader rows are k=A/B/B with v=1/2/3, so the bases
+	// are -1/0/1 and only the v=1 row is inside the rejected real domain.
+	two := &plan.Expr{Typ: valueType.PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 2}}}}
+	half := &plan.Expr{Typ: types.T_float64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 0.5}}}}
+	project.ProjectList = []*plan.Expr{col(0, keyType), bind("power", bind("-", col(1, valueType), two), half)}
+
+	runSelected := func() ([]string, error) {
+		var got []string
+		err := f.execute("A", false, nil, func(b *batch.Batch) {
+			for row := range b.RowCount() {
+				got = append(got, fmt.Sprintf("%s:%v", b.Vecs[0].GetStringAt(row), vector.GetFixedAtNoTypeCheck[float64](b.Vecs[1], row)))
+			}
+		})
+		return got, err
+	}
+	var warmBytes int64
+	for cycle := range 2 {
+		got, err := runSelected()
+		require.NoError(t, err)
+		require.Equal(t, []string{"B:0", "B:1"}, got)
+		var failedBatchRows []string
+		err = f.execute("", false, nil, func(b *batch.Batch) {
+			for row := range b.RowCount() {
+				failedBatchRows = append(failedBatchRows, b.Vecs[0].GetStringAt(row))
+			}
+		})
+		var moErr *moerr.Error
+		require.True(t, errors.As(err, &moErr) && moerr.IsMoErrCode(moErr, moerr.ErrOutOfRange),
+			"empty-param selection must surface the typed domain rejection, got %v", err)
+		require.Empty(t, failedBatchRows, "the failed batch must not be published to the consumer")
+		got, err = runSelected()
+		require.NoError(t, err)
+		require.Equal(t, []string{"B:0", "B:1"}, got)
+		if cycle == 0 {
+			warmBytes = f.proc.Mp().CurrNB()
+		} else {
+			require.Equal(t, warmBytes, f.proc.Mp().CurrNB(),
+				"prepared TP executor reuse must not retain capacity")
 		}
 	}
 }

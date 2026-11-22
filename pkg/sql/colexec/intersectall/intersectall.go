@@ -53,7 +53,11 @@ func (intersectAll *IntersectAll) Prepare(proc *process.Process) error {
 		return err
 	}
 	intersectAll.ctr.iterator = intersectAll.ctr.hashTable.NewIterator()
-	if err = intersectAll.ctr.keyEvaluator.Prepare(proc, intersectAll.KeyExprs, intersectAll.ExpressionAllocation()); err != nil {
+	allocation, err := intersectAll.ExpressionAllocation(proc)
+	if err != nil {
+		return err
+	}
+	if err = intersectAll.ctr.keyEvaluator.Prepare(proc, intersectAll.KeyExprs, allocation); err != nil {
 		return err
 	}
 
@@ -202,6 +206,10 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 			}
 		}
 		ctr.buf.CleanOnlyData()
+		outMP, err := intersectAll.MP(proc)
+		if err != nil {
+			return false, err
+		}
 
 		// probe hashTable
 		{
@@ -245,7 +253,7 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 
 				if cnt > 0 {
 					for colNum := range input.Batch.Vecs {
-						if err := ctr.buf.Vecs[colNum].UnionBatch(input.Batch.Vecs[colNum], int64(i), cnt, inserted[:n], proc.Mp()); err != nil {
+						if err := ctr.buf.Vecs[colNum].UnionBatch(input.Batch.Vecs[colNum], int64(i), cnt, inserted[:n], outMP); err != nil {
 							return false, err
 						}
 					}

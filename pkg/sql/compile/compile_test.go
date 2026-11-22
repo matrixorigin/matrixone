@@ -54,7 +54,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -355,7 +354,6 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 			proc := testutil.NewProcess(t)
 			proc.Base.SessionInfo.ApplySQLSelectLimit = true
-			proc.GetSessionInfo().Buf = buffer.New()
 			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 				if name == plan2.SQLSelectLimitVariable {
 					return ^uint64(0), nil
@@ -422,7 +420,6 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			}
 			c.Release()
 			proc.Free()
-			proc.GetSessionInfo().Buf.Free()
 
 		})
 	}
@@ -432,10 +429,8 @@ func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
 	proc.Base.SessionInfo.ApplySQLSelectLimit = true
-	proc.GetSessionInfo().Buf = buffer.New()
 	t.Cleanup(func() {
 		proc.Free()
-		proc.GetSessionInfo().Buf.Free()
 	})
 	limitValue := uint64(1)
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
@@ -543,10 +538,8 @@ func TestSQLSelectLimitOperatorSelection(t *testing.T) {
 			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 			proc := testutil.NewProcess(t)
 			proc.Base.SessionInfo.ApplySQLSelectLimit = true
-			proc.GetSessionInfo().Buf = buffer.New()
 			t.Cleanup(func() {
 				proc.Free()
-				proc.GetSessionInfo().Buf.Free()
 			})
 			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 				if name == plan2.SQLSelectLimitVariable {
@@ -1002,7 +995,6 @@ func TestResultWriterCapturesExecutionGeneration(t *testing.T) {
 func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().Buf = buffer.New()
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		if name == plan2.SQLSelectLimitVariable {
 			return ^uint64(0), nil
@@ -1058,7 +1050,6 @@ func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 
 	c.Release()
 	proc.Free()
-	proc.GetSessionInfo().Buf.Free()
 }
 
 func TestApplyExecutorLockWaitTimeout(t *testing.T) {
@@ -2629,7 +2620,6 @@ func TestLockMeta_doLock(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = context.Background()
 	eng := mock_frontend.NewMockEngine(ctrl)
 
