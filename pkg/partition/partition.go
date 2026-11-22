@@ -35,7 +35,7 @@ func genericPartition[T types.FixedSizeT](sels []int64, diffs []bool, partitions
 	// sort key in pkg/sql/colexec/order/order.go and per partition spec in
 	// pkg/sql/colexec/window/window.go). We must only OR new boundaries in
 	// and never overwrite existing ones with false.
-	if !vec.IsConst() {
+	if !vec.IsConst() && !(vec.GetType().Oid == types.T_any && vec.AllNull()) {
 		var n bool
 		var v T
 
@@ -62,7 +62,7 @@ func genericPartition[T types.FixedSizeT](sels []int64, diffs []bool, partitions
 			}
 		}
 	}
-	// vec.IsConst(): all rows equal under this key, no new boundaries.
+	// Constant and NULL-only ANY vectors add no boundaries under this key.
 
 	for i, j := int64(0), int64(len(diffs)); i < j; i++ {
 		if diffs[i] {
@@ -364,7 +364,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		// vecf8/vecf4 cells are equal when their decoded values are
 		return bytesPartitionBy(sels, diffs, partitions, vec, true)
 	default:
-		if vec.IsConst() {
+		if vec.IsConst() || (vec.GetType().Oid == types.T_any && (vec.Length() == 0 || vec.AllNull())) {
 			// Even untyped NULL contributes no boundaries. This path never
 			// reads values, so the helper's type parameter is immaterial.
 			return genericPartition[bool](sels, diffs, partitions, vec)
