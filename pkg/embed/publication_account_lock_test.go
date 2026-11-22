@@ -55,7 +55,8 @@ func startPublicationAccountLockCluster(t *testing.T, lockBudget toml.ByteSize) 
 }
 
 func TestCreatePublicationExplicitTargetLockScope(t *testing.T) {
-	const lockBudget = 16
+	// Keep the budget small while testing more targets than one lock batch.
+	const lockBudget = 4
 	c := startPublicationAccountLockCluster(t, lockBudget)
 	fixture := newPublicationAccountSQL(t, c)
 	defer fixture.stopStatements()
@@ -76,7 +77,7 @@ func TestCreatePublicationExplicitTargetLockScope(t *testing.T) {
 	}
 	unrelatedID := accountID("pub_lock_unrelated_wide")
 	require.Less(t, accountID(targets[0]), unrelatedID)
-	require.Less(t, unrelatedID, accountID(targets[len(targets)-1]))
+	require.Less(t, unrelatedID, accountID(targets[1]))
 
 	t.Run("existing publication during recipient drop", func(t *testing.T) {
 		f := newPublicationAccountSQL(t, c)

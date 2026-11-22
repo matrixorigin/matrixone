@@ -103,3 +103,13 @@ func TestISCPLogSQLBuildersEscapeStringLiterals(t *testing.T) {
 		`job_name = 'job_''name\\path'`,
 	)
 }
+
+func TestISCPStatusUpdateKeepsWatermarkAndFencesRetirement(t *testing.T) {
+	sql := CDCSQLBuilder.ISCPLogUpdateIterationSQL(
+		1, 2, "job", 3, nil, "{\"LSN\":5}", 1, 0, 3, 4, true)
+	require.NotContains(t, sql, "watermark")
+	require.Contains(t, sql, "job_state = 3,job_status = JSON_SET")
+	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.LSN') = '4'")
+	require.Contains(t, sql, "job_state != 4")
+	require.Contains(t, sql, "AND drop_at IS NULL")
+}
