@@ -29,11 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
 
-func TestCreatePublicationExplicitTargetLockScope(t *testing.T) {
-	const lockBudget = 16
+func startPublicationAccountLockCluster(t *testing.T, lockBudget toml.ByteSize) Cluster {
+	t.Helper()
 	// This fixture needs a small row-lock threshold. Release any idle shared
 	// fixture before starting a cluster with that configuration.
 	require.NoError(t, CloseBaseClusterTests())
@@ -50,7 +51,12 @@ func TestCreatePublicationExplicitTargetLockScope(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, c.Close()) })
 	}
 	require.NoError(t, err)
+	return c
+}
 
+func TestCreatePublicationExplicitTargetLockScope(t *testing.T) {
+	const lockBudget = 16
+	c := startPublicationAccountLockCluster(t, lockBudget)
 	fixture := newPublicationAccountSQL(t, c)
 	defer fixture.stopStatements()
 	fixture.exec(fixture.left, "create database pub_lock_src")
@@ -180,10 +186,9 @@ func TestCreatePublicationExplicitTargetLockScope(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, waited, "publication must retain its target locks while waiting on the source database")
 
-			waited, err = f.waitForLockOrResult(f.start(f.left, "drop account "+tc.unrelated), 0, "mo_account")
-			t.Logf("target count: %d; unrelated DROP waited on mo_account: %v", len(tc.targets), waited)
-			require.NoError(t, err)
-			require.False(t, waited, "unrelated DROP must commit while the source database remains locked")
+			// A CN-wide wait sample can belong to another transaction. Commit the
+			// unrelated DROP while the publication is still held at the source.
+			f.exec(f.left, "drop account "+tc.unrelated)
 			require.Zero(t, f.number(f.left, "select count(*) from mo_catalog.mo_account where account_name=?", tc.unrelated))
 
 			dropping := f.start(f.left, "drop account "+target)
@@ -316,4 +321,57 @@ func (f *publicationAccountSQL) waitForLockOrResult(result <-chan error, index i
 			f.t.Fatalf("CN %d neither finished nor waited on %v: %v", index, tables, ctx.Err())
 		}
 	}
+}
+
+func TestPublicationAccountCoveringRange(t *testing.T) {
+	c := startPublicationAccountLockCluster(t, 4)
+	setup := newPublicationAccountSQL(t, c)
+	setup.exec(setup.left, "create database pub_range_db")
+	setup.exec(setup.left, "create table pub_range_db.t (id int primary key)")
+	// ACCOUNT ALL with five subscribers crosses the row budget.
+	for _, name := range []string{"range_a", "range_b", "range_c", "range_d", "range_e"} {
+		setup.createAccount(name)
+	}
+	const active = "select count(*) from mo_catalog.mo_subs where pub_account_id=0 and status=0 and pub_name=?"
+
+	t.Run("foreign range", func(t *testing.T) {
+		f := newPublicationAccountSQL(t, c)
+		defer f.stopStatements()
+		tx, err := f.left.BeginTx(f.ctx, nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		rows, err := tx.QueryContext(f.ctx, "select account_id from mo_catalog.mo_account for share")
+		require.NoError(t, err)
+		defer rows.Close()
+		n := 0
+		for rows.Next() {
+			var id int
+			require.NoError(t, rows.Scan(&id))
+			n++
+		}
+		require.NoError(t, rows.Err())
+		require.Greater(t, n, 4)
+		require.NoError(t, rows.Close())
+		publishing := f.start(f.right, "create publication range_foreign database pub_range_db account range_a,range_e")
+		waited, err := f.waitForLockOrResult(publishing, 1, "mo_account")
+		require.NoError(t, err)
+		require.True(t, waited)
+		require.NoError(t, tx.Rollback())
+		require.NoError(t, <-publishing)
+		require.Equal(t, 2, f.number(f.left, active, "range_foreign"))
+		require.Equal(t, 2, f.number(f.left, active+" and sub_account_name in ('range_a','range_e')", "range_foreign"))
+		f.exec(f.left, "drop publication range_foreign")
+	})
+	t.Run("restore owned range", func(t *testing.T) {
+		f := newPublicationAccountSQL(t, c)
+		f.exec(f.left, "create publication a_range_all database pub_range_db account all")
+		f.exec(f.left, "create publication z_range_named database pub_range_db account range_a,range_e")
+		f.exec(f.left, "create snapshot pub_range_snap for cluster")
+		f.exec(f.left, "drop publication a_range_all")
+		f.exec(f.left, "drop publication z_range_named")
+		f.exec(f.right, "restore cluster {snapshot='pub_range_snap'}")
+		require.Equal(t, 5, f.number(f.left, active, "a_range_all"))
+		require.Equal(t, 2, f.number(f.left, active, "z_range_named"))
+		require.Equal(t, 2, f.number(f.left, active+" and sub_account_name in ('range_a','range_e')", "z_range_named"))
+	})
 }

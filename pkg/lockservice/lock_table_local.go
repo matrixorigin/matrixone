@@ -1050,12 +1050,15 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 		return err
 	}
 
+	if c.opts.ReuseOwnedRange && (!c.opts.KeepRows || c.opts.Mode != pb.LockMode_Shared) {
+		return moerr.NewInvalidInputNoCtx("range reuse requires a shared exact-row request")
+	}
 	if c.opts.KeepRows {
 		if c.opts.Granularity != pb.Granularity_Row || len(c.rows) == 0 {
 			return moerr.NewInvalidInputNoCtx("exact-row admission requires nonempty rows")
 		}
 		if h := c.txn.lockHolders[l.bind.Group]; h != nil {
-			if _, coarsened := h.coarsenedTables()[l.bind.Table]; coarsened {
+			if _, coarsened := h.coarsenedTables()[l.bind.Table]; coarsened && !c.opts.ReuseOwnedRange {
 				return moerr.NewLockNeedUpgradeNoCtx()
 			}
 		}
@@ -1114,9 +1117,6 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 		if ok &&
 			(bytes.Equal(key, row) ||
 				lock.isLockRangeEnd()) {
-			if c.opts.KeepRows && !lock.isLockRow() && lock.holders.contains(c.txn.txnID) {
-				return moerr.NewLockNeedUpgradeNoCtx()
-			}
 			hold, newHolder, err := lock.tryHold(
 				l.logger,
 				c,

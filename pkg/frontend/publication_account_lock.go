@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -57,9 +56,6 @@ func execWithExplicitPublicationAccountLocks(ctx context.Context, bh BackgroundE
 		}
 		tableID := rel.GetTableID(ctx)
 		pkType := types.T_int32.ToType()
-		previous := proc.Ctx
-		proc.Ctx = lockop.WithExactMutationRows(previous)
-		defer func() { proc.Ctx = previous }()
 		keys := batch.NewWithSize(1)
 		keys.Vecs[0] = vector.NewVec(pkType)
 		defer keys.Clean(proc.Mp())
@@ -69,7 +65,7 @@ func execWithExplicitPublicationAccountLocks(ctx context.Context, bh BackgroundE
 				return err
 			}
 			keys.SetRowCount(len(chunk))
-			if err := lockop.LockRows(eng, proc, rel, tableID, keys, 0, pkType, lock.LockMode_Shared, lock.Sharding_None, catalog.System_Account); err != nil {
+			if err := lockop.LockSharedRowsWithoutWidening(eng, proc, rel, tableID, keys, 0, pkType, catalog.System_Account); err != nil {
 				return err
 			}
 		}
