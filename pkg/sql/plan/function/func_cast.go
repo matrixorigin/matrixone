@@ -1190,6 +1190,15 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}
 	}
 	from := parameters[0]
+	if mode == castModeExplicit && toType.IsDecimal() &&
+		proc != nil && proc.IsDMLStatement() && IsBinaryCharacterType(*fromType) {
+		// A radix CAST in a write must check its own precision before a
+		// projection can erase the bytes and expose a wrapped coefficient.
+		mode = castModeAssignment
+		if explicitCastMustErrorOnStrictDML(proc) {
+			mode = castModeStrictStringWidth
+		}
+	}
 	// Low-precision float types (bf16/float16/float8/float4) bridge through float32.
 	// Route them ahead of the integer/decimal fast-paths below so a low-precision
 	// source or target is never misdispatched into a specialization that lacks it.
@@ -1430,7 +1439,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(execProc, s, *toType, result, length, selectList, mode, allowTrailingSpaceTrim, reportDataTooLong)
-		if !result.ArgumentIsBin(0) || isIntegerAssignmentRadixLiteral(from, result.ArgumentIsBin(0)) {
+		if !result.ArgumentIsBin(0) || IsBinaryCharacterType(*fromType) {
 			return err
 		}
 	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
@@ -7675,7 +7684,7 @@ func strToSignedWithProc[T constraints.Signed](
 	isBinary := to.ArgumentIsBin(0)
 	if mode.isAssignment() {
 		bitSize = integerAssignmentBitSize(to.GetType(), bitSize)
-		if isIntegerAssignmentRadixLiteral(from.GetSourceVector(), isBinary) {
+		if isBinary && IsBinaryCharacterType(from.GetType()) {
 			return binaryToIntegerAssignment(ctx, proc, from, to, bitSize, length, selectList, mode)
 		}
 	}
@@ -8868,7 +8877,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 	isBinary := to.ArgumentIsBin(0)
 	if mode.isAssignment() {
 		bitSize = integerAssignmentBitSize(to.GetType(), bitSize)
-		if isIntegerAssignmentRadixLiteral(from.GetSourceVector(), isBinary) {
+		if isBinary && IsBinaryCharacterType(from.GetType()) {
 			return binaryToIntegerAssignment(ctx, proc, from, to, bitSize, length, selectList, mode)
 		}
 	}
@@ -9069,9 +9078,12 @@ func strToDecimal64(
 	var l = uint64(length)
 	var dft types.Decimal64
 	totype := to.GetType()
-	isb := to.ArgumentIsBin(0)
-	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
-		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
+	source := from.GetSourceVector()
+	radixCoefficient := mode.isAssignment() && IsBinaryCharacterType(*source.GetType())
+	isb := to.ArgumentIsBin(0) || radixCoefficient
+	binaryAssignment := isb && mode.isAssignment()
+	if !binaryAssignment && totype.Charset == 255 && (!isb || source.IsConst()) {
+		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{source}, to, proc, length,
 			func(s string) (types.Decimal64, error) {
 				return parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
 			}, selectList)
@@ -9090,7 +9102,14 @@ func strToDecimal64(
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			if !isb {
+			if binaryAssignment {
+				decoded, err := renderDecimalBinarySource(v, totype, radixCoefficient)
+				if err != nil {
+					return err
+				}
+				s = decoded.text
+			}
+			if !isb || binaryAssignment {
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal64
 				var err error
@@ -9151,7 +9170,7 @@ func strToDecimal64(
 					}
 					return err
 				}
-				if mode.isAssignment() && !overflow && DecimalAssignmentLosesScale(s, totype.Scale) {
+				if !isb && mode.isAssignment() && !overflow && DecimalAssignmentLosesScale(s, totype.Scale) {
 					appendDecimalAssignmentScaleWarning(proc, i)
 				}
 				if err = to.Append(result, false); err != nil {
@@ -9441,9 +9460,12 @@ func strToDecimal128(
 	var l = uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
-	isb := to.ArgumentIsBin(0)
-	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
-		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
+	source := from.GetSourceVector()
+	radixCoefficient := mode.isAssignment() && IsBinaryCharacterType(*source.GetType())
+	isb := to.ArgumentIsBin(0) || radixCoefficient
+	binaryAssignment := isb && mode.isAssignment()
+	if !binaryAssignment && totype.Charset == 255 && (!isb || source.IsConst()) {
+		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{source}, to, proc, length,
 			func(s string) (types.Decimal128, error) {
 				return parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
 			}, selectList)
@@ -9462,7 +9484,14 @@ func strToDecimal128(
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			if !isb {
+			if binaryAssignment {
+				decoded, err := renderDecimalBinarySource(v, totype, radixCoefficient)
+				if err != nil {
+					return err
+				}
+				s = decoded.text
+			}
+			if !isb || binaryAssignment {
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal128
 				var err error
@@ -9523,7 +9552,7 @@ func strToDecimal128(
 					}
 					return err
 				}
-				if mode.isAssignment() && !overflow && DecimalAssignmentLosesScale(s, totype.Scale) {
+				if !isb && mode.isAssignment() && !overflow && DecimalAssignmentLosesScale(s, totype.Scale) {
 					appendDecimalAssignmentScaleWarning(proc, i)
 				}
 				if err = to.Append(result, false); err != nil {
@@ -9568,9 +9597,12 @@ func strToDecimal256(
 	var l = uint64(length)
 	var dft types.Decimal256
 	totype := to.GetType()
-	isb := to.ArgumentIsBin(0)
-	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
-		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
+	source := from.GetSourceVector()
+	radixCoefficient := mode.isAssignment() && IsBinaryCharacterType(*source.GetType())
+	isb := to.ArgumentIsBin(0) || radixCoefficient
+	binaryAssignment := isb && mode.isAssignment()
+	if !binaryAssignment && totype.Charset == 255 && (!isb || source.IsConst()) {
+		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{source}, to, proc, length,
 			func(s string) (types.Decimal256, error) {
 				return parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
 			}, selectList)
@@ -9589,7 +9621,14 @@ func strToDecimal256(
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			if !isb {
+			if binaryAssignment {
+				decoded, err := renderDecimalBinarySource(v, totype, radixCoefficient)
+				if err != nil {
+					return err
+				}
+				s = decoded.text
+			}
+			if !isb || binaryAssignment {
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal256
 				var err error
@@ -9650,7 +9689,7 @@ func strToDecimal256(
 					}
 					return err
 				}
-				if mode.isAssignment() && !overflow && DecimalAssignmentLosesScale(s, totype.Scale) {
+				if !isb && mode.isAssignment() && !overflow && DecimalAssignmentLosesScale(s, totype.Scale) {
 					appendDecimalAssignmentScaleWarning(proc, i)
 				}
 				if err = to.Append(result, false); err != nil {

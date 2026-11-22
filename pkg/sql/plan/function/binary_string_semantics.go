@@ -31,6 +31,12 @@ func isBinaryStringVector(vec *vector.Vector, isBin bool) bool {
 	return types.StaticStringDomain(*vec.GetType()) == types.StringDomainBinary || isBin
 }
 
+// IsBinaryCharacterType identifies byte strings carried in CHAR/VARCHAR,
+// the physical representation of SQL HEX and BIT literals and their aliases.
+func IsBinaryCharacterType(typ types.Type) bool {
+	return typ.Charset == types.CharsetBinary && (typ.Oid == types.T_char || typ.Oid == types.T_varchar)
+}
+
 func stringCharsetAndCollationName(typ types.Type) (charset, collation string) {
 	if !typ.Oid.IsMySQLString() || types.StaticStringDomain(typ) == types.StringDomainBinary {
 		return "binary", "binary"

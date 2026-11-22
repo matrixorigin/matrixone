@@ -3359,10 +3359,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			// columns positionally and the restored row image exports them as
 			// columns; keep the materialization physical instead of inlining
 			// the key expressions past the FILTER.
-			if builder.materializedLockKeyProjects == nil {
-				builder.materializedLockKeyProjects = make(map[int32]struct{})
-			}
-			builder.materializedLockKeyProjects[lastNodeID] = struct{}{}
+			builder.preserveDMLProject(lastNodeID)
 			if err = builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, selectNode); err != nil {
 				return 0, err
 			}
@@ -3518,6 +3515,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 	odkuActionValidationApplied := false
 	if onDupAction == plan.Node_UPDATE {
+		// DEDUP overwrites these columns with its affected-row metadata.
+		// Keep their slots even when their initial values are constants.
+		builder.preserveDMLProject(selectNode.NodeId)
 		affectedRowsInputPos = int32(len(selectNode.ProjectList))
 		selectNode.ProjectList = append(selectNode.ProjectList, makePlan2Uint64ConstExprWithType(1))
 		physicalChangedRowsInputPos = int32(len(selectNode.ProjectList))
@@ -5474,7 +5474,8 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		return 0, nil, nil, -1, err
 	}
 
-	return builder.appendInsertReplaceSourceCasts(bindCtx, lastNodeID, insertColumns, objRef, tableDef, isReplace)
+	_, typedValues := rowsForInsert.Select.(*tree.ValuesClause)
+	return builder.appendInsertReplaceSourceCasts(bindCtx, lastNodeID, insertColumns, objRef, tableDef, isReplace, typedValues)
 }
 
 // insertDecimalRadixAssignment uses the visible SELECT field rather than
@@ -5543,7 +5544,7 @@ func (builder *QueryBuilder) castInsertSourceColumn(projExpr, sourceExpr *plan.E
 // pre-insert nodes (defaults, auto-increment, composite keys, ...) plus the
 // per-table dedup/write nodes. It is shared by single-table INSERT/REPLACE and
 // by every target of a multi-table INSERT.
-func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext, lastNodeID int32, insertColumns []string, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool) (int32, map[string]int32, []bool, int32, error) {
+func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext, lastNodeID int32, insertColumns []string, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace, typedValues bool) (int32, map[string]int32, []bool, int32, error) {
 	var err error
 	lastNode := builder.qry.Nodes[lastNodeID]
 	if len(insertColumns) != len(lastNode.ProjectList) {
@@ -5564,11 +5565,18 @@ func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext
 				},
 			},
 		}
-		projExpr, err = builder.insertDecimalRadixAssignment(lastNodeID, i, projExpr, tableDef.Cols[colIdx].Typ)
+		col := tableDef.Cols[colIdx]
+		if typedValues && types.T(col.Typ.Id).IsDecimal() && !isAttributedDecimalPlanType(col.Typ) &&
+			makeTypeByPlan2Expr(projExpr).Eq(makeTypeByPlan2Type(col.Typ)) {
+			// buildValueScan already assigns each cell to this destination.
+			insertColToExpr[column] = projExpr
+			continue
+		}
+		projExpr, err = builder.insertDecimalRadixAssignment(lastNodeID, i, projExpr, col.Typ)
 		if err != nil {
 			return 0, nil, nil, -1, err
 		}
-		projExpr, err = builder.castInsertSourceColumn(projExpr, lastNode.ProjectList[i], tableDef.Cols[colIdx])
+		projExpr, err = builder.castInsertSourceColumn(projExpr, lastNode.ProjectList[i], col)
 		if err != nil {
 			return 0, nil, nil, -1, err
 		}
@@ -5581,6 +5589,13 @@ func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext
 	} else {
 		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr, builder.isInsertIgnore)
 	}
+}
+
+func (builder *QueryBuilder) preserveDMLProject(nodeID int32) {
+	if builder.materializedDMLProjects == nil {
+		builder.materializedDMLProjects = make(map[int32]struct{})
+	}
+	builder.materializedDMLProjects[nodeID] = struct{}{}
 }
 
 // localProtocolEnablesRightDedupInputKeysUnique reads the deployment-managed

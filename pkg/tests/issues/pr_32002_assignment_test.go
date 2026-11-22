@@ -329,6 +329,86 @@ func TestPR32002ReviewBoundaries(t *testing.T) {
 		}
 
 		exec("set sql_mode='STRICT_TRANS_TABLES'")
+		exec("create table decimal_derived (v decimal(4,1))")
+		for _, source := range []string{
+			"select v from (select 0xffffffffffffffff as v) s",
+			"select v from (select 0x10000000000000000 as v) s",
+			"select v from (select cast(0xffffffffffffffff as decimal(4,1)) as v) s",
+			"select v from (select cast(0x10000000000000000 as decimal(4,1)) as v) s",
+			"select v from (select 0xffff as v) s",
+			"with s as (select 0xffff as v) select v from s",
+			"select v from (select cast(0xffff as decimal(4,1)) as v) s",
+		} {
+			_, err := conn.ExecContext(ctx, "insert into decimal_derived "+source)
+			require.Error(t, err, source)
+			var count int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from decimal_derived").Scan(&count))
+			require.Zero(t, count, source)
+			exec("insert ignore into decimal_derived " + source)
+			require.Equal(t, []int{int(moerr.ER_WARN_DATA_OUT_OF_RANGE)}, warningCodes(), source)
+			var value string
+			require.NoError(t, conn.QueryRowContext(ctx, "select v from decimal_derived").Scan(&value))
+			require.Equal(t, "999.9", value, source)
+			exec("delete from decimal_derived")
+		}
+		exec("set sql_mode=''")
+		exec("insert into decimal_derived select v from (select 0xffff as v) s")
+		require.Equal(t, []int{int(moerr.ER_WARN_DATA_OUT_OF_RANGE)}, warningCodes())
+		exec("set sql_mode='STRICT_TRANS_TABLES'")
+		exec("create table decimal_derived_scaled (v decimal(10,4))")
+		exec("insert into decimal_derived_scaled select v from (select 0x33 as v) s")
+		require.Empty(t, warningCodes())
+		var derivedValue string
+		require.NoError(t, conn.QueryRowContext(ctx, "select v from decimal_derived_scaled").Scan(&derivedValue))
+		require.Equal(t, "0.0051", derivedValue)
+		exec("insert into decimal_derived_scaled select v from (select v from decimal_derived_scaled) s")
+		var copies int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from decimal_derived_scaled where v=0.0051").Scan(&copies))
+		require.Equal(t, 2, copies)
+		exec("create table decimal_derived_unsigned (v decimal(4,1) unsigned)")
+		const derivedUnsigned = "select v from (select 0xffffffffffffffff as v) s"
+		_, err = conn.ExecContext(ctx, "insert into decimal_derived_unsigned "+derivedUnsigned)
+		require.Error(t, err)
+		exec("insert ignore into decimal_derived_unsigned " + derivedUnsigned)
+		require.Equal(t, []int{int(moerr.ER_WARN_DATA_OUT_OF_RANGE)}, warningCodes())
+		require.NoError(t, conn.QueryRowContext(ctx, "select v from decimal_derived_unsigned").Scan(&derivedValue))
+		require.Equal(t, "999.9", derivedValue)
+
+		exec("create table decimal_upsert (a int, b int, qty int, v decimal(4,1), primary key (a,b))")
+		exec("insert into decimal_upsert values (1,2,1,8.0)")
+		const decimalUpsert = "insert into decimal_upsert select 1,2,3,v from (select cast(0x33 as decimal(4,1)) v) s " +
+			"on duplicate key update a=a,b=b,qty=values(qty)"
+		for _, want := range []int64{2, 0} {
+			result, err := conn.ExecContext(ctx, decimalUpsert)
+			require.NoError(t, err)
+			affected, err := result.RowsAffected()
+			require.NoError(t, err)
+			require.Equal(t, want, affected)
+		}
+		var qty int
+		require.NoError(t, conn.QueryRowContext(ctx, "select qty,v from decimal_upsert").Scan(&qty, &derivedValue))
+		require.Equal(t, 3, qty)
+		require.Equal(t, "8.0", derivedValue)
+
+		for _, tc := range []struct {
+			width int
+			radix string
+		}{
+			{20, "0x056bc75e2d63100000"},
+			{40, "0x1d6329f1c35ca4bfabb9f5610000000000"},
+		} {
+			exec(fmt.Sprintf("create table decimal_derived_wide (v decimal(%d,1))", tc.width))
+			source := "select v from (select " + tc.radix + " as v) s"
+			_, err := conn.ExecContext(ctx, "insert into decimal_derived_wide "+source)
+			require.Error(t, err, "DECIMAL(%d,1)", tc.width)
+			exec("insert ignore into decimal_derived_wide " + source)
+			require.Equal(t, []int{int(moerr.ER_WARN_DATA_OUT_OF_RANGE)}, warningCodes())
+			var value string
+			require.NoError(t, conn.QueryRowContext(ctx, "select v from decimal_derived_wide").Scan(&value))
+			require.Equal(t, strings.Repeat("9", tc.width-1)+".9", value)
+			exec("drop table decimal_derived_wide")
+		}
+
 		exec("create table decimal_radix (v decimal(20,0))")
 		exec("insert into decimal_radix values (0x10000000000000000)")
 		var wideValue string

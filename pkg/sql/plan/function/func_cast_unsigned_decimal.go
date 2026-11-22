@@ -17,6 +17,8 @@ package function
 import (
 	"context"
 	"fmt"
+	"math/big"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -379,22 +381,34 @@ func unsignedDecimalAdmissionJSON(
 	return nil
 }
 
-// unsignedDecimalBinaryOutcome decodes one IsBin source row and renders it as
+// decimalBinaryOutcome decodes one IsBin source row and renders it as
 // canonical fixed-point text for the outer cast's text grammar.
-type unsignedDecimalBinaryOutcome struct {
+type decimalBinaryOutcome struct {
 	text     string
 	negative bool
 }
 
-// renderUnsignedDecimalBinarySource decodes a MySQL binary decimal payload
-// through the exact entry the outer assignment cast dispatches to when its
-// source vector is IsBin (strToDecimal64/128/256), then renders the canonical
-// fixed-point text. Re-parsing that text through the outer cast yields the
-// identical value, so the plan-composed identity wrapper preserves the binary
-// conversion contract without depending on the IsBin flag surviving the
-// function-executor result reset (which clears it). Decode errors propagate
-// unchanged, exactly as the cast propagates them.
-func renderUnsignedDecimalBinarySource(v []byte, targetType types.Type) (outcome unsignedDecimalBinaryOutcome, err error) {
+// renderDecimalBinarySource preserves the destination-scale interpretation of
+// the legacy binary coefficient. The assignment parser then applies its own
+// precision and warning policy. Text also lets unsigned admission preserve that
+// interpretation when the vector executor clears IsBin on the result.
+func renderDecimalBinarySource(v []byte, targetType types.Type, radixCoefficient bool) (outcome decimalBinaryOutcome, err error) {
+	if radixCoefficient && len(v) != 0 {
+		for len(v) > 0 && v[0] == 0 {
+			v = v[1:]
+		}
+		// More than 32 significant bytes exceed every declared DECIMAL
+		// coefficient. Feed the assignment parser a bounded overflow token.
+		if len(v) > 32 {
+			return decimalBinaryOutcome{text: "1e77"}, nil
+		}
+		var coefficient big.Int
+		text := coefficient.SetBytes(v).String()
+		if targetType.Scale > 0 {
+			text += "e-" + strconv.FormatInt(int64(targetType.Scale), 10)
+		}
+		return decimalBinaryOutcome{text: text}, nil
+	}
 	s := convertByteSliceToString(v)
 	switch targetType.Oid {
 	case types.T_decimal64:
@@ -402,19 +416,19 @@ func renderUnsignedDecimalBinarySource(v []byte, targetType types.Type) (outcome
 		if e != nil {
 			return outcome, e
 		}
-		return unsignedDecimalBinaryOutcome{text: d.Format(targetType.Scale), negative: d.Sign()}, nil
+		return decimalBinaryOutcome{text: d.Format(targetType.Scale), negative: d.Sign()}, nil
 	case types.T_decimal128:
 		d, e := types.ParseDecimal128FromByte(s, targetType.Width, targetType.Scale)
 		if e != nil {
 			return outcome, e
 		}
-		return unsignedDecimalBinaryOutcome{text: d.Format(targetType.Scale), negative: d.Sign()}, nil
+		return decimalBinaryOutcome{text: d.Format(targetType.Scale), negative: d.Sign()}, nil
 	default:
 		d, e := types.ParseDecimal256FromByte(s, targetType.Width, targetType.Scale)
 		if e != nil {
 			return outcome, e
 		}
-		return unsignedDecimalBinaryOutcome{text: d.Format(targetType.Scale), negative: d.Sign()}, nil
+		return decimalBinaryOutcome{text: d.Format(targetType.Scale), negative: d.Sign()}, nil
 	}
 }
 
@@ -436,6 +450,7 @@ func unsignedDecimalAdmissionBinary(
 ) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	src := vector.GenerateFunctionStrParameter(from)
+	radixCoefficient := IsBinaryCharacterType(*from.GetType())
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -450,7 +465,7 @@ func unsignedDecimalAdmissionBinary(
 			}
 			continue
 		}
-		outcome, err := renderUnsignedDecimalBinarySource(v, targetType)
+		outcome, err := renderDecimalBinarySource(v, targetType, radixCoefficient)
 		if err != nil {
 			return err
 		}
@@ -590,7 +605,7 @@ func unsignedDecimalAdmissionVarlena(
 	// binary decimal decoder.
 	isBin := result.ArgumentIsBin(0)
 	mysqlPrefix := targetType.Charset == 255 && (!isBin || from.IsConst())
-	if isBin && !mysqlPrefix {
+	if IsBinaryCharacterType(*from.GetType()) || (isBin && !mysqlPrefix) {
 		return unsignedDecimalAdmissionBinary(proc, from, targetType, result, length, selectList, entry, column)
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)

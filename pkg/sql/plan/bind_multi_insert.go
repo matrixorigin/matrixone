@@ -581,7 +581,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 			return err
 		}
 		lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err = builder.appendInsertReplaceSourceCasts(
-			tCtx, lastNodeID, branch.insertColumns, objRef, tableDef, false)
+			tCtx, lastNodeID, branch.insertColumns, objRef, tableDef, false, false)
 		if err != nil {
 			return err
 		}

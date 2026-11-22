@@ -1188,6 +1188,12 @@ func forceUnsignedDecimalAdmissionExpr(
 	if err != nil {
 		return nil, err
 	}
+	resultType := expr.Typ
+	if function.IsBinaryCharacterType(t1) {
+		// Admission renders the coefficient as text. The outer cast must
+		// parse that text without applying the byte interpretation again.
+		resultType.Charset = uint32(types.CharsetUTF8)
+	}
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
@@ -1209,7 +1215,7 @@ func forceUnsignedDecimalAdmissionExpr(
 				}},
 			},
 		},
-		Typ: expr.Typ,
+		Typ: resultType,
 	}, nil
 }
 
@@ -1693,10 +1699,10 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 		// pass through their strict destination-assignment owners.
 		return expr, nil
 	}
-	if sourceExpr != nil && sourceExpr.GetCol() != nil && types.T(targetType.Id).IsDecimal() &&
+	if types.T(targetType.Id).IsDecimal() &&
 		!isAttributedDecimalPlanType(targetType) &&
-		makeTypeByPlan2Expr(sourceExpr).Eq(makeTypeByPlan2Type(targetType)) &&
-		makeTypeByPlan2Expr(expr).Eq(makeTypeByPlan2Type(targetType)) {
+		makeTypeByPlan2Expr(expr).Eq(makeTypeByPlan2Type(targetType)) &&
+		builder.isStoredDecimalAssignmentSource(sourceExpr, makeTypeByPlan2Type(targetType)) {
 		// A stored DECIMAL column has already passed its declared precision
 		// boundary. Preserve the direct projection when DML carries it forward.
 		return expr, nil
@@ -1708,6 +1714,41 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 			assignmentCastFunctionName(targetType, isIgnore, builder.compCtx.GetProcess()), true, true)
 	}
 	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore, columnName...)
+}
+
+func (builder *QueryBuilder) isStoredDecimalAssignmentSource(expr *Expr, target types.Type) bool {
+	nextNodeID := int32(len(builder.qry.Nodes))
+	for expr != nil && makeTypeByPlan2Expr(expr).Eq(target) {
+		col := expr.GetCol()
+		if col == nil || col.ColPos < 0 {
+			return false
+		}
+		nodeID, ok := builder.tag2NodeID[col.RelPos]
+		if !ok || nodeID < 0 || nodeID >= nextNodeID {
+			return false
+		}
+		node := builder.qry.Nodes[nodeID]
+		switch node.NodeType {
+		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
+			if node.NodeType == plan.Node_EXTERNAL_SCAN {
+				iceberg, err := IsIcebergTableDef(builder.GetContext(), node.TableDef)
+				if err != nil || !iceberg {
+					return false
+				}
+			}
+			cols := node.TableDef.GetCols()
+			return int(col.ColPos) < len(cols) && makeTypeByPlan2Type(cols[col.ColPos].Typ).Eq(target)
+		case plan.Node_PROJECT:
+			if int(col.ColPos) >= len(node.ProjectList) {
+				return false
+			}
+			expr = node.ProjectList[col.ColPos]
+			nextNodeID = nodeID
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {

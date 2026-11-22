@@ -418,12 +418,9 @@ type QueryBuilder struct {
 	pendingExistentials     map[uint64]*pendingExistential
 	hadPendingExistentials  bool
 	existentialGateProjects map[int32]struct{}
-	// Lock-key materializations built for the pass-through CHECK/FK barrier
-	// FILTER keep their PROJECT physical: the barrier FILTER hands computed
-	// unique lock-key vectors through positionally, and the restored row
-	// image must export those vectors as columns instead of re-evaluating
-	// the key expression in every downstream consumer.
-	materializedLockKeyProjects map[int32]struct{}
+	// DML projects that must export physical columns for downstream consumers,
+	// including lock keys across CHECK/FK barriers and conflict-action slots.
+	materializedDMLProjects map[int32]struct{}
 
 	qry     *plan.Query
 	compCtx CompilerContext
