@@ -147,7 +147,7 @@ func TestExternalRoutineEvalReusesGroupWithNewEpoch(t *testing.T) {
 }
 
 func TestExternalRoutineEvalOwnsSelectionAndStrictNullGuard(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc, allocation, account := dependentTestAllocation(t)
 	proc.SetQueryId("runtime-query")
 	proc.GetSessionInfo().TimeZone = time.FixedZone("FixedZone", 8*60*60)
 	proc.GetSessionInfo().User = "alice"
@@ -163,23 +163,27 @@ func TestExternalRoutineEvalOwnsSelectionAndStrictNullGuard(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(input, int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(input, int64(0), true, mp))
 	require.NoError(t, vector.AppendFixed(input, int64(3), false, mp))
+	require.NoError(t, vector.AppendFixed(input, int64(99), false, mp))
 
 	runtime := &externalRoutineCaptureRuntime{}
 	proc.Base.UdfService = runtime
 	call := testExternalRoutineCall(t, "SCALAR", udf.NullReturnNull)
 	evaluator, err := newExternalRoutineEval(proc, call, []ExpressionExecutor{
 		&externalRoutineTestExecutor{vector: input},
-	}, nil)
+	}, allocation)
 	require.NoError(t, err)
 	defer evaluator.Free()
 
 	inputBatch := batch.NewWithSize(0)
-	inputBatch.SetRowCount(3)
-	result, err := evaluator.Eval(proc, []*batch.Batch{inputBatch}, []bool{true, true, true})
+	inputBatch.SetRowCount(4)
+	// Selection-aware operators supply a physical batch and the survivor mask.
+	result, err := evaluator.Eval(proc, []*batch.Batch{inputBatch}, []bool{true, true, true, false})
 	require.NoError(t, err)
-	require.Equal(t, 2, runtime.invocation.Length, "the parent evaluator removes strict NULL rows before dispatch")
-	require.Equal(t, []int64{2, 0, 4}, vector.MustFixedColNoTypeCheck[int64](result))
+	require.Equal(t, 2, runtime.invocation.Length, "only selected non-NULL rows reach the worker")
+	require.Equal(t, []int64{2, 0, 4, 0}, vector.MustFixedColNoTypeCheck[int64](result))
 	require.True(t, result.IsNull(1), "the skipped row is scattered back as NULL")
+	require.True(t, result.IsNull(3), "the masked row is scattered back as NULL")
+	require.Positive(t, account.Snapshot().Used, "the evaluator owns the result through the allocation pool")
 	require.Equal(t, "runtime-query", runtime.invocation.Context["statement_id"])
 	require.Equal(t, "[\"ANSI\",\"STRICT_TRANS_TABLES\"]", runtime.invocation.Context["sql_mode"])
 	require.Equal(t, "+480", runtime.invocation.Context["session_timezone_offset_minutes"])

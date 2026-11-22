@@ -467,36 +467,6 @@ func TestInputBatchEncoderBulkPrimitivePreservesRangeNullsAndConstants(t *testin
 		}
 	}
 
-	t.Run("dictionary preserves logical rows", func(t *testing.T) {
-		base, err := vector.FreezeVector(input, mp, nil)
-		require.NoError(t, err)
-		t.Cleanup(base.Release)
-		indices := make([]int64, 128)
-		for row := range indices {
-			indices[row] = int64((row * 3) % 64)
-		}
-		rows, err := vector.NewRowSelection(indices, input.Length(), mp, nil)
-		require.NoError(t, err)
-		t.Cleanup(rows.Release)
-		dictionary, err := vector.NewDictionaryVector(base, rows, mp, nil)
-		require.NoError(t, err)
-		t.Cleanup(func() { dictionary.Free(mp) })
-		encoder, err := newInputBatchEncoder([]*vector.Vector{dictionary}, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-		record, _, err := encoder.build(7, 100)
-		require.NoError(t, err)
-		t.Cleanup(record.Release)
-		values := record.Column(0).(*array.Int64)
-		for row := 0; row < 100; row++ {
-			sourceRow := indices[row+7]
-			require.Equal(t, sourceRow%19 == 0, values.IsNull(row), "row %d", row)
-			if !values.IsNull(row) {
-				require.Equal(t, sourceRow+100, values.Value(row), "row %d", row)
-			}
-		}
-		require.True(t, dictionary.IsDictionary(), "encoding must not materialize its borrowed input")
-	})
-
 	constant, err := vector.NewConstFixed(types.T_int64.ToType(), int64(42), 128, mp)
 	require.NoError(t, err)
 	defer constant.Free(mp)

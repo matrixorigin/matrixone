@@ -45,7 +45,6 @@ import (
 // already-admitted selected rows and never owns SQL CASE semantics.
 type ExternalRoutineEval struct {
 	mp         *mpool.MPool
-	allocation *vector.AllocationAccountSelection
 	call       *planpb.RoutineCall
 	resultType types.Type
 
@@ -71,7 +70,7 @@ func newExternalRoutineEval(
 	proc *process.Process,
 	call *planpb.RoutineCall,
 	parameters []ExpressionExecutor,
-	allocation *vector.AllocationAccountSelection,
+	allocation *mpool.MPool,
 ) (*ExternalRoutineEval, error) {
 	if proc == nil || proc.Base == nil {
 		return nil, udferr.Newf("python udf: evaluator has no process")
@@ -84,18 +83,14 @@ func newExternalRoutineEval(
 		return nil, udferr.Newf("python udf: typed routine has %d argument descriptors but %d bound arguments", len(call.ArgumentTypes), len(parameters))
 	}
 	resultType := planTypeToSQL(call.ReturnType)
-	result, err := vector.NewFunctionResultWrapperWithAllocation(resultType, proc.Mp(), allocation)
-	if err != nil {
-		return nil, err
-	}
+	mp := expressionAllocationMP(proc.Mp(), allocation)
 	return &ExternalRoutineEval{
-		mp:                proc.Mp(),
-		allocation:        allocation,
+		mp:                mp,
 		call:              call,
 		resultType:        resultType,
 		parameterExecutor: parameters,
 		parameterResults:  make([]*vector.Vector, len(parameters)),
-		result:            result,
+		result:            vector.NewFunctionResultWrapper(resultType, mp),
 	}, nil
 }
 
@@ -259,7 +254,7 @@ func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch
 		return e.nullResult(rowCount)
 	}
 
-	inputs, err := e.compactParameters(proc, rowCount)
+	inputs, err := e.compactParameters(rowCount)
 	if err != nil {
 		// compactParameters may have already materialized earlier selected
 		// arguments before a later column fails. There is no execution defer
@@ -272,10 +267,7 @@ func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch
 	selectedResult := e.result
 	if len(e.selectedRows) != rowCount {
 		if e.selectedResult == nil {
-			e.selectedResult, err = vector.NewFunctionResultWrapperWithAllocation(e.resultType, e.mp, e.allocation)
-			if err != nil {
-				return nil, err
-			}
+			e.selectedResult = vector.NewFunctionResultWrapper(e.resultType, e.mp)
 		}
 		selectedResult = e.selectedResult
 	}
@@ -343,7 +335,7 @@ func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch
 	if proc.Base.UdfService == nil {
 		return nil, udferr.Newf("RESOURCE_UNAVAILABLE: Python UDF runtime is not enabled")
 	}
-	if err := proc.Base.UdfService.Execute(proc.Ctx, invocation, selectedResult, proc.Mp()); err != nil {
+	if err := proc.Base.UdfService.Execute(proc.Ctx, invocation, selectedResult, e.mp); err != nil {
 		return nil, err
 	}
 	if selectedResult.ResultLength() != len(e.selectedRows) {
@@ -355,7 +347,7 @@ func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch
 	if len(e.selectedRows) == rowCount {
 		return e.result.GetResultVector(), nil
 	}
-	return e.scatter(proc, selectedResult.GetResultVector(), rowCount)
+	return e.scatter(selectedResult.GetResultVector(), rowCount)
 }
 
 // attachInvocationGroup gives one physical evaluator ownership of a reusable
@@ -411,7 +403,7 @@ func pythonFunctionAccountID(call *planpb.RoutineCall) uint64 {
 	return call.FunctionRef.AccountId
 }
 
-func (e *ExternalRoutineEval) compactParameters(proc *process.Process, rowCount int) ([]*vector.Vector, error) {
+func (e *ExternalRoutineEval) compactParameters(rowCount int) ([]*vector.Vector, error) {
 	if len(e.selectedRows) == 0 {
 		return nil, nil
 	}
@@ -424,13 +416,9 @@ func (e *ExternalRoutineEval) compactParameters(proc *process.Process, rowCount 
 			e.selectedParameters = append(e.selectedParameters, input)
 			continue
 		}
-		selected, err := vector.NewOffHeapVecWithTypeAndAllocation(*input.GetType(), e.allocation)
-		if err != nil {
-			return nil, err
-		}
-		selected.SetIsBin(input.GetIsBin())
-		if err := selected.Union(input, e.selectedRows, proc.Mp()); err != nil {
-			selected.Free(proc.Mp())
+		selected := vector.NewOffHeapVecWithType(*input.GetType())
+		if err := selected.Union(input, e.selectedRows, e.mp); err != nil {
+			selected.Free(e.mp)
 			return nil, err
 		}
 		e.selectedOwned = append(e.selectedOwned, selected)
@@ -492,7 +480,7 @@ func (e *ExternalRoutineEval) nullResult(rowCount int) (*vector.Vector, error) {
 	return result, nil
 }
 
-func (e *ExternalRoutineEval) scatter(proc *process.Process, selected *vector.Vector, rowCount int) (*vector.Vector, error) {
+func (e *ExternalRoutineEval) scatter(selected *vector.Vector, rowCount int) (*vector.Vector, error) {
 	if err := e.result.PreExtendAndReset(rowCount); err != nil {
 		return nil, err
 	}
@@ -502,16 +490,16 @@ func (e *ExternalRoutineEval) scatter(proc *process.Process, selected *vector.Ve
 		if e.selectedNull != nil {
 			e.selectedNull.Free(e.mp)
 		}
-		e.selectedNull = vector.NewConstNull(*selected.GetType(), 1, proc.Mp())
+		e.selectedNull = vector.NewConstNull(*selected.GetType(), 1, e.mp)
 	}
 	selectedRow := 0
 	for row := 0; row < rowCount; row++ {
 		if selectedRow < len(e.selectedRows) && e.selectedRows[selectedRow] == int64(row) {
-			if err := result.UnionOne(selected, int64(selectedRow), proc.Mp()); err != nil {
+			if err := result.UnionOne(selected, int64(selectedRow), e.mp); err != nil {
 				return nil, err
 			}
 			selectedRow++
-		} else if err := result.UnionOne(e.selectedNull, 0, proc.Mp()); err != nil {
+		} else if err := result.UnionOne(e.selectedNull, 0, e.mp); err != nil {
 			return nil, err
 		}
 	}

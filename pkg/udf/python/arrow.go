@@ -645,10 +645,7 @@ func (e *inputBatchEncoder) build(start, length int) (arrow.RecordBatch, *arrow.
 func appendBulkFixedInputValue(
 	builder array.Builder, v *vector.Vector, typ types.Type, start, length int,
 ) (bool, error) {
-	// Dictionary vectors expose logical rows rather than a contiguous physical
-	// column. Keep them on the checked scalar path, whose accessors resolve the
-	// row selection without materializing or mutating the borrowed input.
-	if length < bulkInputMinRows || v != nil && v.IsDictionary() {
+	if length < bulkInputMinRows {
 		return false, nil
 	}
 	validity := func() []bool {

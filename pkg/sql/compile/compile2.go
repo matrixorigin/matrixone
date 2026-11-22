@@ -54,7 +54,7 @@ type runSQLCoordinatorWithSQL interface {
 	CancelAndWaitRunningSQLWithSQL(ctx context.Context, keepToken uint64, currentSQL string) error
 }
 
-var errPythonRoutineInRetryPlan = errors.New("retry plan contains a Python routine")
+var errPythonRoutineInRetryPlan = moerr.NewInternalErrorNoCtx("retry plan contains a Python routine")
 
 // A worker can have run on another CN even when this coordinator only saw a
 // transaction conflict. Inspect the failed attempt's bound expressions,
