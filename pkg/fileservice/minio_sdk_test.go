@@ -24,6 +24,10 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"runtime/pprof"
+	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -151,6 +155,45 @@ func TestMinioPutObjectPhysicalAccounting(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, int64(1), failed.FileService.S3.Put.Load())
 	require.Zero(t, failed.FileService.S3WriteSize.Load())
+}
+
+func TestMinioDeleteDrainsBulkErrors(t *testing.T) {
+	ctx := context.Background()
+	var batches atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !r.URL.Query().Has("delete") {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		batches.Add(1)
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = io.WriteString(w, "<DeleteResult>"+
+			strings.Repeat("<Error><Key>object</Key><Code>AccessDenied</Code><Message>denied</Message></Error>", 6)+
+			"</DeleteResult>")
+	}))
+	t.Cleanup(server.Close)
+	endpoint, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	client, err := minio.New(endpoint.Host, &minio.Options{
+		Creds:     credentials.NewStaticV4("id", "secret", ""),
+		Region:    "us-east-1",
+		Transport: server.Client().Transport,
+	})
+	require.NoError(t, err)
+	sdk := &MinioSDK{bucket: "bucket", client: client}
+
+	err = sdk.Delete(ctx, "a", "b", "c", "d", "e", "f")
+	var response minio.ErrorResponse
+	require.ErrorAs(t, err, &response)
+	require.Equal(t, "AccessDenied", response.Code)
+	var stacks bytes.Buffer
+	require.NoError(t, pprof.Lookup("goroutine").WriteTo(&stacks, 2))
+	require.NotContains(t, stacks.String(), "github.com/minio/minio-go/v7.processRemoveMultiObjectsResponse(")
+
+	err = sdk.Delete(ctx, slices.Repeat([]string{"object"}, 1001)...)
+	require.ErrorAs(t, err, &response)
+	require.Equal(t, int32(3), batches.Load(), "the failed first batch must not strand the next batch")
 }
 
 func startMinio(dir string) (*exec.Cmd, error) {
