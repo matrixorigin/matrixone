@@ -629,7 +629,7 @@ func (b *HavingBinder) bindOrderedSetAggregate(
 
 	var expr *plan.Expr
 	if b.builder == nil || b.builder.compCtx == nil {
-		expr, err = bindFuncExprImplByPlanExprWithArithmeticNull(
+		expr, err = bindFuncExprImplByPlanExpr(
 			b.GetContext(), nil, funcName, args, true, nil, nil, false, b.arithmeticOrigins())
 	} else {
 		expr, err = bindFuncExprAndConstFoldWithArithmeticNull(

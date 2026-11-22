@@ -2598,7 +2598,7 @@ func TestArithmeticNullOriginAcrossAliasCopies(t *testing.T) {
 		require.NoError(t, err)
 		require.NotSame(t, original.GetLit(), copied.GetLit())
 		uuid := &plan.Expr{Typ: types.T_uuid.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
-		result, err := bindFuncExprImplByPlanExprWithArithmeticNull(t.Context(), nil, "+", []*Expr{copied, uuid}, false, nil, nil, false, &builder.arithmeticNullOrigins)
+		result, err := bindFuncExprImplByPlanExpr(t.Context(), nil, "+", []*Expr{copied, uuid}, false, nil, nil, false, &builder.arithmeticNullOrigins)
 		require.NoError(t, err)
 		require.True(t, result.GetLit().GetIsnull())
 	}

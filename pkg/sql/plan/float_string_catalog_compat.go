@@ -619,7 +619,7 @@ func rebindFloatStringFunction(ctx context.Context, original *planpb.Expr, args 
 			}
 		}
 	}
-	bound, err := bindFuncExprImplByPlanExpr(ctx, nil, fn.Func.ObjName, args, true, nil, nil, true)
+	bound, err := bindFuncExprImplByPlanExpr(ctx, nil, fn.Func.ObjName, args, true, nil, nil, true, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -657,7 +657,7 @@ func rebindFloatStringInComparison(ctx context.Context, original *planpb.Expr, a
 		return nil, errLegacyFloatStringRebind
 	}
 	list := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_tuple)}, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: args[1:]}}}
-	return bindFuncExprImplByPlanExpr(ctx, nil, name, []*planpb.Expr{args[0], list}, true, nil, nil, true)
+	return bindFuncExprImplByPlanExpr(ctx, nil, name, []*planpb.Expr{args[0], list}, true, nil, nil, true, nil)
 }
 
 // chargeFloatStringRebind bounds subtree copies and binder passes, including

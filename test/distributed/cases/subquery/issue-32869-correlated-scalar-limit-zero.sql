@@ -235,10 +235,21 @@ select issue_32869_keep_second(cast(null as signed) +
   (select (select i.d from test_issue_32869.secret_rows s where s.s > i.d limit 0)
    from test_issue_32869.inner_rows i limit 1), 42) as folded_discarded_wrapper;
 select s from test_issue_32869.secret_rows;
+-- A contextual NULL scalar must still authorize its table source.
+select coalesce((select null + 1 from test_issue_32869.restricted_wrapper limit 1),
+                cast('[1,2]' as vecf32(2))) as scalar_value;
+select d.a, coalesce((select d.x from test_issue_32869.restricted_wrapper i where i.d > d.a limit 0),
+                     cast('[1,2]' as vecf32(2))) as correlated_zero
+from (select a, null + 1 as x from test_issue_32869.outer_rows) d order by d.a;
 -- @session
 grant select on table test_issue_32869.restricted_wrapper to issue_32869_role;
 -- @session:id=2&user=sys:issue_32869_reader:issue_32869_role&password=111
 use test_issue_32869;
+select coalesce((select null + 1 from test_issue_32869.restricted_wrapper limit 1),
+                cast('[1,2]' as vecf32(2))) as scalar_value;
+select d.a, coalesce((select d.x from test_issue_32869.restricted_wrapper i where i.d > d.a limit 0),
+                     cast('[1,2]' as vecf32(2))) as correlated_zero
+from (select a, null + 1 as x from test_issue_32869.outer_rows) d order by d.a;
 select o.a, (null + 1) + (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
                           from test_issue_32869.restricted_wrapper c limit 1) as v
 from test_issue_32869.outer_rows o order by o.a;

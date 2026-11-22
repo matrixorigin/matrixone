@@ -38,7 +38,7 @@ func temporalIntegerSource(expr *Expr) bool {
 // Alias expansion must rebind graph references rather than shallow-copy their
 // identities (see aliasProjectionNeedsRebind). The program is the value owner,
 // not the opaque dependent call returned to the consumer.
-func temporalIntegerScalarOutput(expr *Expr, binder *baseBinder) (*planpb.Node, *BindContext, *planpb.CorrelationProgram) {
+func scalarExpressionOutput(expr *Expr, binder *baseBinder) (*planpb.Node, *BindContext, *planpb.CorrelationProgram) {
 	if binder == nil || binder.builder == nil {
 		return nil, nil, nil
 	}
@@ -77,7 +77,7 @@ func appendTemporalIntegerCast(ctx context.Context, expr *Expr, target Type, bin
 	if (types.T(target.Id) != types.T_int64 && types.T(target.Id) != types.T_uint64) || !temporalIntegerSource(expr) {
 		return appendCastBeforeExprWithOverload(ctx, expr, target, 1)
 	}
-	if node, subCtx, program := temporalIntegerScalarOutput(expr, binder); node != nil {
+	if node, subCtx, program := scalarExpressionOutput(expr, binder); node != nil {
 		if len(node.ProjectList) > 0 && subCtx != nil && len(subCtx.results) > 0 {
 			// A final result projection above DISTINCT/SORT is a different owner
 			// from ctx.projects. Only synchronize the logical slot when it is the

@@ -396,8 +396,27 @@ from test_issue_32869.inner_rows i limit 1), 42) as folded_discarded_wrapper;
 internal error: do not have privilege to execute the statement
 select s from test_issue_32869.secret_rows;
 internal error: do not have privilege to execute the statement
+select coalesce((select null + 1 from test_issue_32869.restricted_wrapper limit 1),
+cast('[1,2]' as vecf32(2))) as scalar_value;
+internal error: do not have privilege to execute the statement
+select d.a, coalesce((select d.x from test_issue_32869.restricted_wrapper i where i.d > d.a limit 0),
+cast('[1,2]' as vecf32(2))) as correlated_zero
+from (select a, null + 1 as x from test_issue_32869.outer_rows) d order by d.a;
+internal error: do not have privilege to execute the statement
 grant select on table test_issue_32869.restricted_wrapper to issue_32869_role;
 use test_issue_32869;
+select coalesce((select null + 1 from test_issue_32869.restricted_wrapper limit 1),
+cast('[1,2]' as vecf32(2))) as scalar_value;
+➤ scalar_value[12,2,0]  𝄀
+[1, 2]
+select d.a, coalesce((select d.x from test_issue_32869.restricted_wrapper i where i.d > d.a limit 0),
+cast('[1,2]' as vecf32(2))) as correlated_zero
+from (select a, null + 1 as x from test_issue_32869.outer_rows) d order by d.a;
+➤ a[4,32,0]  ¦  correlated_zero[12,2,0]  𝄀
+null  ¦  [1, 2]  𝄀
+1  ¦  [1, 2]  𝄀
+1  ¦  [1, 2]  𝄀
+11  ¦  [1, 2]
 select o.a, (null + 1) + (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
 from test_issue_32869.restricted_wrapper c limit 1) as v
 from test_issue_32869.outer_rows o order by o.a;

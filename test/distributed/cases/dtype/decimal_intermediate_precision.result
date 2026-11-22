@@ -114,7 +114,7 @@ NULL  𝄀
 -16602069666338596288379303336614035456000000000000000000  𝄀
 16602069666338596286579303336614035474000000000000000000
 select c*null as null_product, cast(c as decimal(38,0))+null as null_sum, cast(c as decimal(38,0))-null as null_difference from checked_carriers;
-➤ null_product[0,2147483647,0]  ¦  null_sum[0,2147483647,0]  ¦  null_difference[0,2147483647,0]  𝄀
+➤ null_product[3,38,0]  ¦  null_sum[3,38,0]  ¦  null_difference[3,38,0]  𝄀
 null  ¦  null  ¦  null  𝄀
 null  ¦  null  ¦  null  𝄀
 null  ¦  null  ¦  null

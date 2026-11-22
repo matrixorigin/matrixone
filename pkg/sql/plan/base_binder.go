@@ -4657,15 +4657,16 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 // It is shared by the statement's binders, but never becomes plan metadata.
 type arithmeticNullOrigins map[*plan.Literal]struct{}
 
-func (o *arithmeticNullOrigins) legacyNull(expr *plan.Expr) bool {
-	if isNullExpr(expr) {
-		return true
-	}
+func (o *arithmeticNullOrigins) recorded(expr *plan.Expr) bool {
 	if o == nil || !isNullLiteralExpr(expr) || expr.GetLit().GetSrc() != nil || expr.GetPreparedNumeric() != nil {
 		return false
 	}
 	_, ok := (*o)[expr.GetLit()]
 	return ok
+}
+
+func (o *arithmeticNullOrigins) legacyNull(expr *plan.Expr) bool {
+	return isNullExpr(expr) || o.recorded(expr)
 }
 
 func (o *arithmeticNullOrigins) remember(expr *plan.Expr) {
@@ -4695,6 +4696,75 @@ func (b *baseBinder) copyExprPreservingArithmeticNull(expr *plan.Expr) *plan.Exp
 	copied := DeepCopyExpr(expr)
 	b.arithmeticOrigins().inheritCopy(expr, copied)
 	return copied
+}
+
+// contextualArithmeticNull restores the pre-typing domain for a proven
+// arithmetic NULL at a common-value boundary. Scalar and correlated sources
+// are reattached after type resolution so their execution remains intact.
+func (b *baseBinder) contextualArithmeticNull(expr *plan.Expr) (*plan.Expr, bool) {
+	if b.arithmeticOrigins().recorded(expr) {
+		return makePlan2NullConstExprWithType(), true
+	}
+	if b.ctx != nil && (expr.GetCol() != nil || expr.GetCorr() != nil) &&
+		b.ctx.outputColumnProvenanceForExpr(expr).State.arithmeticNull() {
+		return makePlan2NullConstExprWithType(), true
+	}
+	node, subCtx, _ := scalarExpressionOutput(expr, b)
+	if node != nil && subCtx != nil && len(node.ProjectList) > 0 && len(subCtx.results) > 0 &&
+		subCtx.outputColumnProvenanceForProject(0).State.arithmeticNull() {
+		return makePlan2NullConstExprWithType(), true
+	}
+	return expr, false
+}
+
+// Keep scalar queries and correlated captures executable after resolving a
+// common type with a neutral NULL. Their original physical type is preserved;
+// only the nullable result of this wrapper uses the selected type.
+func arithmeticNullWithSource(ctx context.Context, source *plan.Expr, target plan.Type) (*plan.Expr, error) {
+	condition, err := BindFuncExprImplByPlanExpr(ctx, "isnull", []*plan.Expr{source})
+	if err != nil {
+		return nil, err
+	}
+	null := makePlan2NullConstExprWithType()
+	null.Typ = target
+	null.Typ.NotNullable = false
+	wrapped, err := BindFuncExprImplByPlanExpr(ctx, "if", []*plan.Expr{condition, null, DeepCopyExpr(null)})
+	if err != nil {
+		return nil, err
+	}
+	if wrapped.Typ.Id != null.Typ.Id {
+		return nil, moerr.NewInternalError(ctx, "source-preserving NULL common type changed")
+	}
+	wrapped.Typ = null.Typ
+	return wrapped, nil
+}
+
+func retainArithmeticNullSources(ctx context.Context, result *plan.Expr, sources map[int]*plan.Expr) error {
+	for idx, source := range sources {
+		fn := result.GetF()
+		if fn == nil || idx >= len(fn.Args) {
+			return moerr.NewInternalError(ctx, "missing common-value NULL argument")
+		}
+		target := fn.Args[idx].Typ
+		if types.T(target.Id) == types.T_any {
+			// FIELD can select an overload without coercing NULL arguments.
+			for _, arg := range fn.Args {
+				if types.T(arg.Typ.Id) != types.T_any {
+					target = arg.Typ
+					break
+				}
+			}
+			if types.T(target.Id) == types.T_any {
+				target = makeSimplePlan2Type(types.T_varchar)
+			}
+		}
+		wrapped, err := arithmeticNullWithSource(ctx, source, target)
+		if err != nil {
+			return err
+		}
+		fn.Args[idx] = wrapped
+	}
+	return nil
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.Expr, depth int32) (boundExpr *plan.Expr, bindErr error) {
@@ -4814,6 +4884,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 
 	// bind ast function's args
 	var args []*Expr
+	var retainedNullSources map[int]*plan.Expr
 	if name == "bit_cast" {
 		bitCastExpr := astArgs[0].(*tree.BitCastExpr)
 		binExpr, err := b.impl.BindExpr(bitCastExpr.Expr, depth, false)
@@ -4974,18 +5045,39 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 				}
 			}
 
+			// A folded arithmetic NULL keeps its resolved type as a projection,
+			// but historically contributed no type to these value alternatives.
+			// Use a fresh contextual NULL so shared projections keep their type.
+			commonValue := conditionalValueIndex(name, len(astArgs), idx) ||
+				name == "greatest" || name == "least" || name == "field"
+			if commonValue {
+				if contextual, ok := b.contextualArithmeticNull(expr); ok {
+					if expr.GetCorr() != nil || expr.GetSub() != nil || expr.GetDependent() != nil ||
+						b.ctx != nil && expr.GetCol() != nil && b.ctx.outputColumnProvenanceForExpr(expr).State == ProvenanceArithmeticNullWithSource {
+						if retainedNullSources == nil {
+							retainedNullSources = make(map[int]*plan.Expr)
+						}
+						retainedNullSources[idx] = expr
+					}
+					expr = contextual
+				}
+			}
 			if (name == "field" || name == "coalesce") && b.ctx != nil &&
 				b.ctx.outputColumnProvenanceForExpr(expr).State == ProvenancePureNull {
-				// A transparent projected NULL needs a concrete TEXT column for
-				// materialization, but is still untyped when FIELD or COALESCE
-				// chooses a common domain. SQL user-variable NULLs retain their
-				// TEXT parameter reference instead of PureNull provenance.
 				expr = makePlan2NullConstExprWithType()
 			}
 			args[idx] = expr
 		}
 	}
 	requiredZeroScalarRoots = zeroScalarSubqueryRoots(b.builder, args)
+	for _, source := range retainedNullSources {
+		for root := range zeroScalarSubqueryRoots(b.builder, []*plan.Expr{source}) {
+			if requiredZeroScalarRoots == nil {
+				requiredZeroScalarRoots = make(map[int32]struct{})
+			}
+			requiredZeroScalarRoots[root] = struct{}{}
+		}
+	}
 	if name == "coalesce" && b.builder != nil && b.builder.isPrepareStatement &&
 		preparedSourceBindings(b.GetContext()) == nil {
 		var err error
@@ -5318,6 +5410,9 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 				false, false, b.observeExpressionProtocol, b.arithmeticOrigins())
 		}
 		if err == nil {
+			if err := retainArithmeticNullSources(b.GetContext(), e, retainedNullSources); err != nil {
+				return nil, err
+			}
 			if b.builder != nil && b.builder.integerPrecision != nil {
 				b.builder.integerPrecision.captureFunction(name, integerInputs, e)
 			}
@@ -5390,9 +5485,12 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 	} else {
 		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		// first look for builtin func
-		builtinExpr, err := bindFuncExprImplByPlanExprWithArithmeticNull(
+		builtinExpr, err := bindFuncExprImplByPlanExpr(
 			b.GetContext(), nil, name, args, false, nil, nil, findInSetInternalArgs, b.arithmeticOrigins())
 		if err == nil {
+			if err := retainArithmeticNullSources(b.GetContext(), builtinExpr, retainedNullSources); err != nil {
+				return nil, err
+			}
 			if isNullIf {
 				b.rememberPreparedFieldNullIfDomain(builtinExpr, args)
 			}
@@ -6721,7 +6819,7 @@ func bindFuncExprAndConstFoldWithArithmeticNull(
 	// own operator set, so the marker's no-evaluation contract keeps
 	// covering every other function of the definition.
 	foldGeometrySRIDConstArg(proc, name, args)
-	retExpr, err := bindFuncExprImplByPlanExprWithArithmeticNull(
+	retExpr, err := bindFuncExprImplByPlanExpr(
 		ctx, proc, name, args, descendFunctions, nil, nil, allowInternalFunctionArgs, origins)
 	if err != nil {
 		return nil, err
@@ -8470,7 +8568,7 @@ func preparedRegexpResultStringOperandCount(name string, arity int) int {
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
-	return bindFuncExprImplByPlanExpr(ctx, nil, name, args, true, nil, nil, false)
+	return bindFuncExprImplByPlanExpr(ctx, nil, name, args, true, nil, nil, false, nil)
 }
 
 func preparedBetweenHasMixedNumericText(ctx context.Context, args []*Expr) bool {
@@ -8536,24 +8634,10 @@ func bindPreparedFuncExprImplByPlanExpr(
 		stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 	}
 	return bindFuncExprImplByPlanExpr(
-		ctx, nil, name, args, true, stringDomainModes, originalBoundExpr, true)
+		ctx, nil, name, args, true, stringDomainModes, originalBoundExpr, true, nil)
 }
 
 func bindFuncExprImplByPlanExpr(
-	ctx context.Context,
-	proc *process.Process,
-	name string,
-	args []*Expr,
-	descendFunctions bool,
-	stringDomainModes []function.StringDomainCheckMode,
-	originalBoundExpr *Expr,
-	allowInternalFunctionArgs bool,
-) (*plan.Expr, error) {
-	return bindFuncExprImplByPlanExprWithArithmeticNull(ctx, proc, name, args,
-		descendFunctions, stringDomainModes, originalBoundExpr, allowInternalFunctionArgs, nil)
-}
-
-func bindFuncExprImplByPlanExprWithArithmeticNull(
 	ctx context.Context,
 	proc *process.Process,
 	name string,
