@@ -272,8 +272,7 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 		fd:         writeBuildFile(proc, t.Name(), source),
 		allocation: allocation,
 	}
-	decoded, err := newSpillBatch(0, reader.allocation.decoded)
-	require.NoError(t, err)
+	decoded := newSpillBatch(0)
 	got, err := reader.ReadBatch(proc, decoded)
 	require.NoError(t, err)
 	require.Equal(t, 3, got.RowCount())
@@ -294,8 +293,7 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 		fd:         makeCorruptBatchFile(t),
 		allocation: corruptState.allocation,
 	}
-	bad, err := newSpillBatch(0, corruptState.allocation.decoded)
-	require.NoError(t, err)
+	bad := newSpillBatch(0)
 	_, err = corrupt.ReadBatch(proc, bad)
 	require.Error(t, err)
 	corrupt.Close()
@@ -327,9 +325,8 @@ func TestBucketReaderRejectsSchemaChangeBeforeMerge(t *testing.T) {
 		mergeRecords: true,
 		allocation:   state.allocation,
 	}
-	reuse, err := newSpillBatch(0, state.allocation.decoded)
-	require.NoError(t, err)
-	_, err = reader.ReadBatch(proc, reuse)
+	reuse := newSpillBatch(0)
+	_, err := reader.ReadBatch(proc, reuse)
 	require.ErrorContains(t, err, "spill batch schema changed")
 	reader.Close()
 	require.Zero(t, state.account.Snapshot().Used)

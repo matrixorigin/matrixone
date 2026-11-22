@@ -189,7 +189,7 @@ func TestUserDefinedVarMigrationRoundTripsJSON(t *testing.T) {
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
 	require.NoError(t, collector.capture(context.Background(), source, bat))
-	require.NoError(t, collector.apply(context.Background(), source, "select json_array(1, true, null) into @document"))
+	require.NoError(t, collector.apply(context.Background(), source, "select json_array(1, true, null) into @document", nil))
 	variable, err := source.GetUserDefinedVar("document")
 	require.NoError(t, err)
 	require.Equal(t, jsonValue, variable.Value)

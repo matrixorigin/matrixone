@@ -61,7 +61,7 @@ func TestMergeSortBatchesPreservesOwnedVarlena(t *testing.T) {
 				"merge copies each value into owned storage; serialization must retain that proof")
 			encoded, err := out.Vecs[1].MarshalBinary()
 			require.NoError(t, err)
-			decoded := vector.NewVecFromReuse()
+			decoded := new(vector.Vector)
 			defer decoded.Free(nil)
 			require.NoError(t, decoded.UnmarshalBinary(encoded))
 			for row, value := range values {

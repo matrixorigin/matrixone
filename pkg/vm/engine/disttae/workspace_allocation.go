@@ -24,18 +24,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func (txn *Transaction) workspaceAllocation() (*vector.AllocationAccountSelection, error) {
+// workspaceAllocation returns the accounted view of the transaction's pool that
+// charges workspace-owned memory to the workspace account. Workspace batches
+// carry no account: every allocation that grows them goes through this view.
+func (txn *Transaction) workspaceAllocation() (*mpool.MPool, error) {
 	return txn.workspaceAllocationWithLimit(0)
 }
 
-func (txn *Transaction) workspaceAllocationWithLimit(limit uint64) (*vector.AllocationAccountSelection, error) {
+// workspaceMP is the pool that grows existing workspace batches: the workspace
+// view once it exists, otherwise the transaction's pool. Growth of an existing
+// allocation keeps that allocation's own account either way.
+func (txn *Transaction) workspaceMP() *mpool.MPool {
+	txn.workspaceAllocationMu.Lock()
+	defer txn.workspaceAllocationMu.Unlock()
+	if txn.workspaceView != nil {
+		return txn.workspaceView
+	}
+	return txn.proc.Mp()
+}
+
+func (txn *Transaction) workspaceAllocationWithLimit(limit uint64) (*mpool.MPool, error) {
 	txn.workspaceAllocationMu.Lock()
 	defer txn.workspaceAllocationMu.Unlock()
 	if txn.workspaceAllocationClosed {
 		return nil, mpool.ErrAllocationAccountSealed
 	}
-	if txn.workspaceSelection != nil {
-		return txn.workspaceSelection, nil
+	if txn.workspaceView != nil {
+		return txn.workspaceView, nil
 	}
 	parent, err := txn.proc.GetExecutionResourceBudget()
 	if err != nil {
@@ -58,25 +73,29 @@ func (txn *Transaction) workspaceAllocationWithLimit(limit uint64) (*vector.Allo
 		generation.Close()
 		return nil, err
 	}
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerTxnWorkspace, 1, 2)
+	view, err := txn.proc.Mp().WithAccount(account, mpool.AllocationOwnerTxnWorkspace, 1, mpool.AllocationCapacityClassDefault)
 	if err != nil {
 		_, _, _ = registry.CompleteTerminal(account)
 		generation.Close()
 		return nil, err
 	}
-	txn.workspaceGeneration, txn.workspaceAccount, txn.workspaceSelection = generation, account, selection
-	return selection, nil
+	txn.workspaceGeneration, txn.workspaceAccount, txn.workspaceView = generation, account, view
+	return view, nil
 }
 
+// copyWorkspaceBatch copies src into a workspace-owned batch charged to the
+// workspace account. The copy is remembered so that an INSERT of it adopts
+// its generated rowids instead of copying them.
 func (txn *Transaction) copyWorkspaceBatch(src *batch.Batch) (*batch.Batch, error) {
-	selection, err := txn.workspaceAllocation()
+	view, err := txn.workspaceAllocation()
 	if err != nil {
 		return nil, err
 	}
-	dst, err := util.CopyBatchWithAllocation(src, txn.proc, selection)
+	dst, err := util.CopyBatchWithAllocation(src, txn.proc, view)
 	if err != nil {
 		return nil, err
 	}
+	txn.rememberWorkspaceCopy(dst)
 	dst.Recursive, dst.ShuffleIDX = src.Recursive, src.ShuffleIDX
 	for i, vec := range src.Vecs {
 		dst.Vecs[i].SetSorted(vec.GetSorted())
@@ -84,16 +103,14 @@ func (txn *Transaction) copyWorkspaceBatch(src *batch.Batch) (*batch.Batch, erro
 	return dst, nil
 }
 
-func (txn *Transaction) newWorkspaceVector(typ types.Type) (*vector.Vector, error) {
-	selection, err := txn.workspaceAllocation()
+// newWorkspaceVector returns an empty workspace-owned vector and the view its
+// allocations must go through.
+func (txn *Transaction) newWorkspaceVector(typ types.Type) (*vector.Vector, *mpool.MPool, error) {
+	view, err := txn.workspaceAllocation()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	v := vector.NewOffHeapVecWithType(typ)
-	if err := v.SetAllocationAccount(selection); err != nil {
-		return nil, err
-	}
-	return v, nil
+	return vector.NewOffHeapVecWithType(typ), view, nil
 }
 
 // Called after all workspace batches have been cleaned, under txn's terminal
@@ -105,6 +122,7 @@ func (txn *Transaction) closeWorkspaceAllocation() {
 		return
 	}
 	txn.workspaceAllocationClosed = true
+	txn.workspaceCopies = nil
 	if txn.workspaceGeneration == nil {
 		return
 	}
@@ -120,9 +138,36 @@ func (txn *Transaction) closeWorkspaceAllocation() {
 
 // The keyed injection narrows the real account; it does not manufacture an error.
 func (txn *Transaction) copyWorkspaceBatchForTable(src *batch.Batch, database string) (*batch.Batch, error) {
-	selection, err := txn.workspaceAllocationWithLimit(objectio.CNWorkspaceAllocationLimit(database))
+	view, err := txn.workspaceAllocationWithLimit(objectio.CNWorkspaceAllocationLimit(database))
 	if err != nil {
 		return nil, err
 	}
-	return util.CopyBatchWithAllocation(src, txn.proc, selection)
+	dst, err := util.CopyBatchWithAllocation(src, txn.proc, view)
+	if err != nil {
+		return nil, err
+	}
+	txn.rememberWorkspaceCopy(dst)
+	return dst, nil
+}
+
+// Batches carry no allocation account, so the workspace remembers which
+// batches it copied itself. A remembered batch is workspace-owned: INSERT
+// adopts its workspace-charged rowids. A raw caller batch is not, and gets an
+// independent rowid copy.
+func (txn *Transaction) rememberWorkspaceCopy(bat *batch.Batch) {
+	txn.workspaceAllocationMu.Lock()
+	defer txn.workspaceAllocationMu.Unlock()
+	if txn.workspaceCopies == nil {
+		txn.workspaceCopies = make(map[*batch.Batch]struct{})
+	}
+	txn.workspaceCopies[bat] = struct{}{}
+}
+
+// takeWorkspaceCopy reports whether bat is a workspace copy and forgets it.
+func (txn *Transaction) takeWorkspaceCopy(bat *batch.Batch) bool {
+	txn.workspaceAllocationMu.Lock()
+	defer txn.workspaceAllocationMu.Unlock()
+	_, ok := txn.workspaceCopies[bat]
+	delete(txn.workspaceCopies, bat)
+	return ok
 }

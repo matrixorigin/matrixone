@@ -52,6 +52,9 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 		if err != nil {
 			return err
 		}
+		if err = mergeGroup.ctr.bindAllocationViews(proc); err != nil {
+			return err
+		}
 		if err = mergeGroup.ctr.installRecoveryCapacity(); err != nil {
 			return err
 		}

@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -150,8 +151,10 @@ func TestLoadReadonlyPublishesJSONCacheVersion(t *testing.T) {
 	defer borrowedPublication.Close()
 	borrowedPublication.BindColumns([]uint16{0})
 	borrowedDestination := vector.NewOffHeapVecWithType(typ)
+	var borrowedKeeper bufferlease.Holder
+	defer borrowedKeeper.Release()
 	defer borrowedDestination.Free(mp)
-	hit, err = LoadColumnsDataIntoBorrowed(objectio.WithJSONReadSet(ctx, borrowedPublication), []uint16{0}, []types.Type{typ}, fs, location, []*vector.Vector{borrowedDestination}, mp, 0, nil)
+	hit, err = LoadColumnsDataIntoBorrowed(objectio.WithJSONReadSet(ctx, borrowedPublication), []uint16{0}, []types.Type{typ}, fs, location, []*vector.Vector{borrowedDestination}, mp, 0, nil, &borrowedKeeper)
 	require.NoError(t, err)
 	require.True(t, hit)
 	require.False(t, borrowedDestination.HasBorrowedBacking())
@@ -171,7 +174,7 @@ func TestLoadReadonlyPublishesJSONCacheVersion(t *testing.T) {
 	failedPublication.BindColumns([]uint16{0})
 	mismatchedDestination := vector.NewOffHeapVecWithType(types.T_int64.ToType())
 	defer mismatchedDestination.Free(mp)
-	_, err = LoadColumnsDataIntoBorrowed(objectio.WithJSONReadSet(ctx, failedPublication), []uint16{0}, []types.Type{typ}, fs, location, []*vector.Vector{mismatchedDestination}, mp, 0, nil)
+	_, err = LoadColumnsDataIntoBorrowed(objectio.WithJSONReadSet(ctx, failedPublication), []uint16{0}, []types.Type{typ}, fs, location, []*vector.Vector{mismatchedDestination}, mp, 0, nil, &borrowedKeeper)
 	require.Error(t, err)
 	require.Nil(t, failedPublication.Readers(), "failed borrowing must release an already published JSON owner")
 

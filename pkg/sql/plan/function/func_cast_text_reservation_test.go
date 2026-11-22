@@ -261,8 +261,14 @@ func TestTextAssignmentReservationFromRetainedArea(t *testing.T) {
 	proc, source, result := newTextReservationFixture(t, typ, values)
 	retained := vector.NewOffHeapVecWithType(typ)
 	t.Cleanup(func() { retained.Free(proc.Mp()) })
-	require.NoError(t, retained.CopyWithReadonlyArea(source, proc.Mp()))
-	require.Equal(t, vector.BorrowedLease, retained.AreaBackingKind())
+	// Owned descriptors over a borrowed (lent) area, the shape a cache reader
+	// publishes for a varlen column.
+	require.NoError(t, retained.UnionBatch(source, 0, source.Length(), nil, proc.Mp()))
+	lent := bytes.Clone(retained.GetArea())
+	owned := vector.DetachVectorArea(retained)
+	owned.Free(proc.Mp())
+	require.NoError(t, retained.InstallBorrowedArea(lent))
+	require.Equal(t, vector.BorrowedAlias, retained.AreaBackingKind())
 
 	require.NoError(t, runTextReservationCast(proc, retained, result, typ, len(values), castModeStrictStringWidth, nil))
 	// Retiring both input generations cannot invalidate the independent output.

@@ -81,20 +81,8 @@ func (indexBuild *IndexBuild) newRuntimeFilterBatch(
 	if indexBuild.runtimeFilterAllocation == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	vec, err := vector.NewOffHeapVecWithTypeAndAllocation(
-		typ,
-		indexBuild.runtimeFilterAllocation,
-	)
-	if err != nil {
-		return nil, err
-	}
+	vec := vector.NewOffHeapVecWithType(typ)
 	buf := batch.NewOffHeapWithSize(1)
-	if err = buf.SetAllocationAccount(
-		indexBuild.runtimeFilterAllocation,
-	); err != nil {
-		vec.Free(nil)
-		return nil, err
-	}
 	buf.SetVector(0, vec)
 	return buf, nil
 }
@@ -192,6 +180,10 @@ func (ctr *container) fallbackRuntimeFilter(
 }
 
 func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.Process, analyzer process.Analyzer) error {
+	rfMP, err := indexBuild.runtimeFilterAllocation.MP(proc.Mp())
+	if err != nil {
+		return err
+	}
 	// A legacy or contradictory contract can only produce PASS. Avoid scanning
 	// and retaining the index solely for an optimization we cannot safely send.
 	if !ctr.runtimeFilterUsable {
@@ -231,7 +223,7 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 						return err
 					}
 				}
-				if err = ctr.buf.UnionOne(result.Batch, 0, proc.Mp()); err != nil {
+				if err = ctr.buf.UnionOne(result.Batch, 0, rfMP); err != nil {
 					err = runtimefilter.MarkOptionalAllocationError(err)
 					if ctr.fallbackRuntimeFilter(indexBuild, proc, err) {
 						return nil
@@ -252,7 +244,7 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 					return err
 				}
 			}
-			ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+			ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, rfMP, result.Batch)
 			if err != nil {
 				err = runtimefilter.MarkOptionalAllocationError(err)
 				if ctr.fallbackRuntimeFilter(indexBuild, proc, err) {
@@ -281,6 +273,10 @@ func (ctr *container) build(ap *IndexBuild, proc *process.Process, anal process.
 }
 
 func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process) error {
+	rfMP, err := ap.runtimeFilterAllocation.MP(proc.Mp())
+	if err != nil {
+		return err
+	}
 	if ap.RuntimeFilterSpec == nil {
 		return nil
 	}
@@ -320,13 +316,9 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 		// Batch.Dup preserves a first-batch constant vector. Materialize only
 		// its one distinct value: expanding every repeated row would waste
 		// memory and AppendFixed cannot add signed-zero closure to a const vec.
-		flat, err := vector.NewOffHeapVecWithTypeAndAllocation(
-			*vec.GetType(), ap.runtimeFilterAllocation)
-		if err != nil {
-			return err
-		}
+		flat := vector.NewOffHeapVecWithType(*vec.GetType())
 		if !vec.IsConstNull() && vec.Length() > 0 {
-			if err := flat.UnionOne(vec, 0, proc.Mp()); err != nil {
+			if err := flat.UnionOne(vec, 0, rfMP); err != nil {
 				flat.Free(proc.Mp())
 				err = runtimefilter.MarkOptionalAllocationError(err)
 				if ctr.fallbackRuntimeFilter(ap, proc, err) {
@@ -354,7 +346,7 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 		return nil
 	}
 	if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed {
-		if err := runtimefilter.CloseFloatSignedZero(vec, proc.Mp()); err != nil {
+		if err := runtimefilter.CloseFloatSignedZero(vec, rfMP); err != nil {
 			if ctr.fallbackRuntimeFilter(ap, proc, err) {
 				return nil
 			}
@@ -373,7 +365,7 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 	// InplaceSort preserves exact duplicate representations and marks supported
 	// payload types sorted for pruning.
 	vec.GetNulls().Reset()
-	if err := vec.InplaceSort(proc.Mp()); err != nil {
+	if err := vec.InplaceSort(rfMP); err != nil {
 		if ctr.fallbackRuntimeFilter(ap, proc, err) {
 			return nil
 		}

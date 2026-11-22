@@ -34,7 +34,7 @@ import (
 func newTestDecimalAggregateExecutor(p *process.Process, e *plan.Expr) (ExpressionExecutor, error) {
 	return newTestDecimalAggregateExecutorWithAllocation(p, e, nil)
 }
-func newTestDecimalAggregateExecutorWithAllocation(p *process.Process, e *plan.Expr, selection *vector.AllocationAccountSelection) (ExpressionExecutor, error) {
+func newTestDecimalAggregateExecutorWithAllocation(p *process.Process, e *plan.Expr, selection *mpool.MPool) (ExpressionExecutor, error) {
 	ex, err := NewExpressionExecutorWithAllocation(p, e, selection)
 	if err != nil {
 		return nil, err
@@ -181,7 +181,7 @@ func TestDecimalMulSubAdmissionAndAllocationFailure(t *testing.T) {
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	}()
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	selection, err := p.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	ex, err := newTestDecimalAggregateExecutorWithAllocation(p, expression, selection)
 	require.NoError(t, err)
@@ -203,7 +203,7 @@ func TestDecimalMulSubAdmissionAndAllocationFailure(t *testing.T) {
 	input.SetRowCount(1)
 	out, err := ex.Eval(p, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
-	require.Same(t, selection, out.AllocationAccountSelection())
+	requireAccountCovers(t, account, out)
 	// Actual avoided intermediates are distinct from a timing assertion.
 	for _, child := range fused.root.parameterExecutor {
 		if v := child.(*FunctionExpressionExecutor).resultVector.GetResultVector(); v != nil {

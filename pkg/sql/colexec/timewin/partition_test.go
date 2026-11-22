@@ -17,6 +17,7 @@ package timewin
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -237,7 +238,20 @@ func newBoundedPartArg(
 	return arg
 }
 
-// runPartArg drives the operator to exhaustion and returns (wstart, max, part)
+func decimalSumValues(t testing.TB, vec *vector.Vector) []int64 {
+	t.Helper()
+	require.Equal(t, types.T_decimal128, vec.GetType().Oid)
+	values := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
+	result := make([]int64, len(values))
+	for i, value := range values {
+		var err error
+		result[i], err = strconv.ParseInt(value.Format(0), 10, 64)
+		require.NoError(t, err)
+	}
+	return result
+}
+
+// runPartArg drives the operator to exhaustion and returns (wstart, sum, part)
 // per output row.
 func runPartArg(t testing.TB, arg *TimeWin, proc *process.Process, in *batch.Batch) (starts []types.Datetime, sums []int64, parts []int64) {
 	t.Helper()
@@ -257,7 +271,7 @@ func runPartArg(t testing.TB, arg *TimeWin, proc *process.Process, in *batch.Bat
 		bat := res.Batch
 		n := bat.Vecs[0].Length()
 		// Layout: [max, _wstart, part...]
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, bat.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Datetime](bat.Vecs[1])[:n]...)
 		if len(arg.PartitionBy) > 0 {
 			pv := bat.Vecs[2]
@@ -294,7 +308,7 @@ func runTemporalBoundArg(t testing.TB, arg *TimeWin, proc *process.Process, inpu
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		startVec := res.Batch.Vecs[1]
 		switch startVec.GetType().Oid {
 		case types.T_date:
@@ -1501,55 +1515,6 @@ func TestTimeWinAnyNullPartitionKey(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
-func TestAnyNullPartitionKeySetsConstNull(t *testing.T) {
-	mp := mpool.MustNewZero()
-	typ := types.T_any.ToType()
-	for _, tc := range []struct {
-		name   string
-		source *vector.Vector
-		sel    int64
-	}{
-		{
-			name:   "constant NULL",
-			source: vector.NewConstNull(typ, 2, mp),
-		},
-		{
-			name: "selected NULL",
-			source: func() *vector.Vector {
-				vec := vector.NewVec(typ)
-				vec.SetLength(2)
-				vec.SetNull(1)
-				return vec
-			}(),
-			sel: 1,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dst := vector.NewVec(typ)
-			require.NoError(t, getPartitionSetFunction(typ, mp)(dst, tc.source, tc.sel, 1))
-			require.True(t, dst.IsConstNull())
-			dst.Free(mp)
-			tc.source.Free(mp)
-		})
-	}
-	require.Zero(t, mp.CurrNB())
-}
-
-func TestAnyPartitionKeyRejectsNonNullValue(t *testing.T) {
-	mp := mpool.MustNewZero()
-	typ := types.T_any.ToType()
-	src := vector.NewVec(typ)
-	src.SetLength(1)
-	dst := vector.NewVec(typ)
-
-	err := getPartitionSetFunction(typ, mp)(dst, src, 0, 1)
-	require.ErrorContains(t, err, "non-NULL T_any partition key")
-
-	src.Free(mp)
-	dst.Free(mp)
-	require.Equal(t, int64(0), mp.CurrNB())
-}
-
 func TestSamePartition(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	ctr := &container{}
@@ -1739,7 +1704,7 @@ func runPartArgBats(t testing.TB, arg *TimeWin, proc *process.Process, bats []*b
 		}
 		bat := res.Batch
 		n := bat.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, bat.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Datetime](bat.Vecs[1])[:n]...)
 		if len(arg.PartitionBy) > 0 {
 			pv := bat.Vecs[2]

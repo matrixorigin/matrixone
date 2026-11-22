@@ -19,6 +19,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -37,13 +38,17 @@ func (valueScan *ValueScan) String(buf *bytes.Buffer) {
 }
 
 func evalRowsetData(proc *process.Process, rowsetExpr []*plan.RowsetExpr, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor, input *batch.Batch,
+	mp *mpool.MPool,
+	ordinals []int64,
 ) error {
 	if vec == nil {
 		return moerr.NewInternalErrorNoCtx("value scan has no destination vector")
 	}
 	var inputWindow *batch.Batch
 	var inputWindowRow int32 = -1
+	previousWarningRowOffset := proc.WarningRowOffset
 	defer func() {
+		proc.WarningRowOffset = previousWarningRowOffset
 		if inputWindow != nil {
 			inputWindow.Clean(nil)
 		}
@@ -85,6 +90,10 @@ func evalRowsetData(proc *process.Process, rowsetExpr []*plan.RowsetExpr, vec *v
 			}
 			bats = []*batch.Batch{inputWindow}
 		}
+		proc.WarningRowOffset = uint64(rowPos)
+		if ordinals != nil {
+			proc.WarningRowOffset = uint64(ordinals[rowPos])
+		}
 		val, err := expr.Eval(proc, bats, nil)
 		if err != nil {
 			return err
@@ -97,7 +106,7 @@ func evalRowsetData(proc *process.Process, rowsetExpr []*plan.RowsetExpr, vec *v
 		}
 		// Constant/folded executors return a scalar vector; row-local executors
 		// receive a one-row window. Both are copied from their first value.
-		if err := vec.Copy(val, int64(rowsetExpr[i].RowPos), 0, proc.Mp()); err != nil {
+		if err := vec.Copy(val, int64(rowsetExpr[i].RowPos), 0, mp); err != nil {
 			return err
 		}
 	}
@@ -238,6 +247,15 @@ func valueScanColumnOrder(rowsetData *plan.RowsetData) ([]int, error) {
 	return order, nil
 }
 
+// mp returns the pool the value batch allocates from: the Allocation view
+// when one is bound, otherwise proc's pool.
+func (valueScan *ValueScan) mp(proc *process.Process) *mpool.MPool {
+	if valueScan.Allocation != nil {
+		return valueScan.Allocation
+	}
+	return proc.Mp()
+}
+
 func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (err error) {
 	var exprList []colexec.ExpressionExecutor
 
@@ -262,6 +280,10 @@ func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (err error
 
 	// select * from (values row(1,1), row(2,2), row(3,3)) a;
 	bat := valueScan.Batchs[0]
+	var ordinals []int64
+	if col := valueScan.ValuesWarningOrdinalColumn; col != 0 {
+		ordinals = vector.MustFixedColNoTypeCheck[int64](bat.Vecs[col-1])
+	}
 
 	order, err := valueScanColumnOrder(valueScan.RowsetData)
 	if err != nil {
@@ -273,7 +295,7 @@ func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (err error
 			continue
 		}
 		vec := bat.Vecs[i]
-		if err := evalRowsetData(proc, valueScan.RowsetData.Cols[i].Data, vec, exprList, bat); err != nil {
+		if err := evalRowsetData(proc, valueScan.RowsetData.Cols[i].Data, vec, exprList, bat, valueScan.mp(proc), ordinals); err != nil {
 			return err
 		}
 	}

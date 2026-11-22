@@ -16,6 +16,9 @@ package compile
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 func TestWeekRemoteSessionRoundTrip(t *testing.T) {

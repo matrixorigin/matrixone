@@ -18,7 +18,6 @@ import (
 	"context"
 	"math/rand"
 	"strconv"
-	"sync"
 	"testing"
 
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -98,7 +97,6 @@ func newIssue26796TxnWithTable(
 		databaseOps:     newDbOps(),
 		deletedBlocks:   &deletedBlocks{},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 	}
 	op := newTxnOperatorForTestWithWorkspace(t, txn)
 	txn.op = op

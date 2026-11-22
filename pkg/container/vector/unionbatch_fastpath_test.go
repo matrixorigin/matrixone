@@ -834,9 +834,10 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 			}
 			state := newTestVectorAllocationAccount(t, 64*1024, 32)
 			t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
-			dst := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+			dst := newAccountedTestVector(t, types.T_varchar.ToType())
+			dmp := state.view(t, mp)
 			t.Cleanup(func() { dst.Free(mp) })
-			require.NoError(t, AppendBytes(dst, []byte("prefix"), false, mp))
+			require.NoError(t, AppendBytes(dst, []byte("prefix"), false, dmp))
 			selected := 0
 			liveBytes := 0
 			for i, f := range flags {
@@ -848,10 +849,10 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 					liveBytes += len(input.GetBytesAt(offset + i))
 				}
 			}
-			preflight, err := dst.PreExtendSelectedBatch(input, offset, count, flags, 1+selected, mp)
+			preflight, err := dst.PreExtendSelectedBatch(input, offset, count, flags, 1+selected, dmp)
 			require.NoError(t, err)
 			admitted := state.account.Snapshot().Used
-			require.NoError(t, dst.UnionBatchPreflighted(input, int64(offset), count, flags, &preflight, mp))
+			require.NoError(t, dst.UnionBatchPreflighted(input, int64(offset), count, flags, &preflight, dmp))
 			require.Equal(t, admitted, state.account.Snapshot().Used, "publication cannot allocate")
 			require.Len(t, dst.GetArea(), liveBytes, "only admitted live bytes may be copied")
 			next := 1
@@ -903,6 +904,29 @@ func BenchmarkPreflightedVarlenSelection(b *testing.B) {
 			dst.Free(mp)
 			src.Free(mp)
 			require.Zero(b, mp.CurrNB())
+		})
+	}
+}
+
+func TestConstNullCleanAndUnionBatch(t *testing.T) {
+	for _, oid := range []types.T{types.T_any, types.T_int32, types.T_float64, types.T_text} {
+		t.Run(oid.String(), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			src := NewConstNull(oid.ToType(), 3, mp)
+			dst := NewConstNull(oid.ToType(), 3, mp)
+			defer func() { src.Free(mp); dst.Free(mp); require.Zero(t, mp.CurrNB()) }()
+			for _, length := range []int{3, 1, 0, 4} {
+				t.Run(fmt.Sprintf("length_%d", length), func(t *testing.T) {
+					src.SetLength(length)
+					dst.CleanOnlyData()
+					require.Zero(t, dst.Length(), "clean must remove logical rows even without a payload")
+					require.NoError(t, dst.UnionBatch(src, 0, length, nil, mp))
+					require.Equal(t, length, dst.Length())
+					for row := 0; row < dst.Length(); row++ {
+						require.True(t, dst.IsNull(uint64(row)))
+					}
+				})
+			}
 		})
 	}
 }

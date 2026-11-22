@@ -15,8 +15,10 @@
 package compile
 
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"unsafe"
 )
 
 // The ordinary source compiler owns authorization, catalog resolution and file
@@ -69,7 +70,7 @@ func (c *Compile) compileDependentExternal(node *plan.Node) (dependent.SourceFac
 		return nil, moerr.NewInternalErrorf(c.proc.Ctx, "unexpected dependent source metadata %T", metadata)
 	}
 	metadataSize := max(unsafe.Sizeof(external.External{})+unsafe.Sizeof(external.ExternalParam{})+unsafe.Sizeof(external.ExFileparam{})+unsafe.Sizeof(external.FilterParam{}), unsafe.Sizeof(mongoscan.MongoScan{}), unsafe.Sizeof(value_scan.ValueScan{}))
-	return dependentSourceFactory(uint64(metadataSize), func(proc *process.Process, allocation *vector.AllocationAccountSelection) (vm.Operator, error) {
+	return dependentSourceFactory(uint64(metadataSize), func(proc *process.Process, allocation *mpool.MPool) (vm.Operator, error) {
 		var op vm.Operator
 		switch meta := metadata.(type) {
 		case *external.External:

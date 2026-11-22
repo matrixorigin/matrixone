@@ -86,7 +86,7 @@ func TestTypedReadBorrowedFixedKeepsBacking(t *testing.T) {
 	lease, err := NewRefCountedBufferLease(data, 16, func() { releases++ })
 	require.NoError(t, err)
 	defer lease.Release()
-	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), 2, data, lease)
+	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), 2, data)
 	require.NoError(t, err)
 	defer vec.Free(nil)
 	require.Equal(t, int64(11), GetFixedAtNoTypeCheck[int64](vec, 0))

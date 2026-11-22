@@ -34,11 +34,11 @@ func TestInternalExecutorResultEndsStatementAllocationOwnership(t *testing.T) {
 			require.NoError(t, err)
 			account, err := registry.Open(1 << 20)
 			require.NoError(t, err)
-			selection, err := vector.NewAllocationAccountSelection(
+			selection, err := mp.WithAccount(
 				account,
 				1,
 				1,
-				2,
+				mpool.AllocationCapacityClassDefault,
 			)
 			require.NoError(t, err)
 
@@ -47,17 +47,16 @@ func TestInternalExecutorResultEndsStatementAllocationOwnership(t *testing.T) {
 				[]string{"id", "value"},
 				[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
 			)
-			require.NoError(t, source.SetAllocationAccount(selection))
-			require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, mp))
-			require.NoError(t, vector.AppendBytes(source.Vecs[1], []byte("result"), false, mp))
+			require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, selection))
+			require.NoError(t, vector.AppendBytes(source.Vecs[1], []byte("result"), false, selection))
 			source.SetRowCount(1)
+			usedBefore := account.Snapshot().Used
+			require.Positive(t, usedBefore)
 
 			cloned, err := cloneInternalExecutorResultBatch(source, mp, streaming)
 			require.NoError(t, err)
-			require.Nil(t, cloned.AllocationAccountSelection())
-			for _, vec := range cloned.Vecs {
-				require.Nil(t, vec.AllocationAccountSelection())
-			}
+			// The clone crosses the ownership boundary unaccounted.
+			require.Equal(t, usedBefore, account.Snapshot().Used)
 
 			var result executor.Result
 			if streaming {
@@ -96,7 +95,7 @@ func TestInternalExecutorStreamCancellationCleansUnpublishedResult(t *testing.T)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	selection, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
 	source := batch.NewWithSchema(
@@ -104,8 +103,7 @@ func TestInternalExecutorStreamCancellationCleansUnpublishedResult(t *testing.T)
 		[]string{"value"},
 		[]types.Type{types.T_int64.ToType()},
 	)
-	require.NoError(t, source.SetAllocationAccount(selection))
-	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, selection))
 	source.SetRowCount(1)
 
 	cloned, err := cloneInternalExecutorResultBatch(source, mp, true)

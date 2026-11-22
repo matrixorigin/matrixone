@@ -93,8 +93,8 @@ type HashmapBuilder struct {
 	mapAllocationAccount             *mpool.AllocationAccount
 	mapAllocation                    *hashtable.AllocationAccountSelection
 	iteratorAllocation               *hashmap.IteratorAllocation
-	batchAllocation                  *vector.AllocationAccountSelection
-	uniqueKeyAllocation              *vector.AllocationAccountSelection
+	batchAllocation                  *mpool.AccountBinding
+	uniqueKeyAllocation              *mpool.AccountBinding
 	recoveryCapacityClass            mpool.AllocationCapacityClass
 }
 
@@ -388,7 +388,18 @@ func (hb *HashmapBuilder) evalBatch(batchIdx int, proc *process.Process) error {
 			return evalErr
 		}
 		if hb.needDupVec {
-			hb.curVecs[idx], evalErr = vec.DupOffHeap(proc.Mp())
+			// The executor result is charged to the build account; keep its
+			// copy on the same expression charge.
+			dupMP, viewErr := proc.Mp().WithAccount(
+				hb.mapAllocationAccount,
+				mpool.AllocationOwnerHashBuild,
+				executionResourceAllocationSiteExpressionData,
+				hb.recoveryCapacityClass,
+			)
+			if viewErr != nil {
+				return viewErr
+			}
+			hb.curVecs[idx], evalErr = vec.DupOffHeap(dupMP)
 			if evalErr != nil {
 				return evalErr
 			}
@@ -1339,17 +1350,13 @@ func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Proces
 		bat.Clean(proc.Mp())
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	deleteOnlyMP, err := proc.Mp().WithAccount(
 		hb.mapAllocationAccount,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteDedupDeleteOnlyData,
-		HashBuildAllocationSiteDedupDeleteOnlyArea,
+		mpool.AllocationCapacityClassDefault,
 	)
 	if err != nil {
-		bat.Clean(proc.Mp())
-		return nil, err
-	}
-	if err = bat.SetAllocationAccount(selection); err != nil {
 		bat.Clean(proc.Mp())
 		return nil, err
 	}
@@ -1371,10 +1378,10 @@ func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Proces
 		for colIdx, dst := range bat.Vecs {
 			src := hb.Batches.Buf[srcBatIdx].Vecs[colIdx]
 			if _, keep := keepCols[int32(colIdx)]; keep || src.IsNull(uint64(srcRowIdx)) {
-				if err := dst.UnionOne(src, srcRowIdx, proc.Mp()); err != nil {
+				if err := dst.UnionOne(src, srcRowIdx, deleteOnlyMP); err != nil {
 					return nil, err
 				}
-			} else if err := dst.UnionNull(proc.Mp()); err != nil {
+			} else if err := dst.UnionNull(deleteOnlyMP); err != nil {
 				return nil, err
 			}
 		}

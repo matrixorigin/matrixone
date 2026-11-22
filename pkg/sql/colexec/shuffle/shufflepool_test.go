@@ -284,80 +284,18 @@ func TestShufflePoolWholeBucketResumesWithoutSelection(t *testing.T) {
 	require.True(t, ownsStats)
 }
 
-func TestShufflePoolReservesReadyCreditForProvenanceChange(t *testing.T) {
-	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	defer proc.Free()
-	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
-	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
-	require.NoError(t, err)
-
-	sp := NewShufflePool(1, 1, true)
-	unaccounted := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, false, 2, mp)
-	done, err := writeBatchToBucketForTest(sp, unaccounted, proc, 0)
-	require.NoError(t, err)
-	require.True(t, done)
-	require.Zero(t, sp.readyCount)
-
-	accounted := batch.NewWithSchema(
-		true,
-		nil,
-		[]types.Type{types.T_int64.ToType()},
-	)
-	require.NoError(t, accounted.SetAllocationAccount(selection))
-	require.NoError(t, vector.AppendFixed(accounted.Vecs[0], int64(7), false, mp))
-	accounted.SetRowCount(1)
-	done, err = writeBatchToBucketForTest(sp, accounted, proc, 0)
-	require.NoError(t, err)
-	require.True(t, done)
-	require.Equal(t, 1, sp.readyCount)
-
-	ready := sp.getAnyFullBatch()
-	require.NotNil(t, ready)
-	require.Equal(t, 2, ready.RowCount())
-	sp.discardBatch(ready, mp)
-	require.Zero(t, sp.readyCount)
-	tail := sp.getAnyLastBatch()
-	require.NotNil(t, tail)
-	require.Equal(t, 1, tail.RowCount())
-	require.Same(t, selection, tail.AllocationAccountSelection())
-	sp.discardBatch(tail, mp)
-
-	unaccounted.Clean(mp)
-	accounted.Clean(mp)
-	sp.abort(mp)
-	require.Zero(t, account.Seal().Used)
-	_, err = registry.Finalize(account)
-	require.NoError(t, err)
-	require.Equal(t, int64(0), mp.CurrNB())
-}
-
 func TestShufflePoolKeepsIndependentProducerTails(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer proc.Free()
-	registry, err := mpool.NewAllocationAccountRegistry(2, 64)
-	require.NoError(t, err)
 
-	accounts := make([]*mpool.AllocationAccount, 2)
-	selections := make([]*vector.AllocationAccountSelection, 2)
 	inputs := make([]*batch.Batch, 2)
 	for producer := range inputs {
-		accounts[producer], err = registry.Open(1 << 20)
-		require.NoError(t, err)
-		selections[producer], err = vector.NewAllocationAccountSelection(
-			accounts[producer], 1, 1, 2,
-		)
-		require.NoError(t, err)
 		inputs[producer] = batch.NewWithSchema(
 			true,
 			nil,
 			[]types.Type{types.T_int64.ToType()},
 		)
-		require.NoError(t, inputs[producer].SetAllocationAccount(selections[producer]))
 		for row := range 2 {
 			require.NoError(t, vector.AppendFixed(
 				inputs[producer].Vecs[0], int64(producer*10+row), false, mp,
@@ -371,11 +309,6 @@ func TestShufflePoolKeepsIndependentProducerTails(t *testing.T) {
 		sp.abort(mp)
 		for _, input := range inputs {
 			input.Clean(mp)
-		}
-		for _, account := range accounts {
-			require.Zero(t, account.Seal().Used)
-			_, finalizeErr := registry.Finalize(account)
-			require.NoError(t, finalizeErr)
 		}
 		require.Zero(t, mp.CurrNB())
 	}()
@@ -420,11 +353,10 @@ func TestShufflePoolKeepsIndependentProducerTails(t *testing.T) {
 		require.True(t, done)
 	}
 	require.Equal(t, 2, sp.readyCount)
-	for producer := range inputs {
+	for range inputs {
 		output := sp.getFullBatch(0)
 		require.NotNil(t, output)
 		require.Equal(t, objectio.BlockMaxRows, output.RowCount())
-		require.Same(t, selections[producer], output.AllocationAccountSelection())
 		sp.discardBatch(output, mp)
 	}
 	require.Nil(t, sp.getFullBatch(0))
@@ -433,15 +365,11 @@ func TestShufflePoolKeepsIndependentProducerTails(t *testing.T) {
 
 func TestShufflePoolMatchingProducersCoalesce(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		drainAll   bool
-		accounted  bool
-		vectorOnly bool
+		name     string
+		drainAll bool
 	}{
 		{name: "fixed bucket"},
 		{name: "all buckets", drainAll: true},
-		{name: "same batch account", accounted: true},
-		{name: "same vector account", accounted: true, vectorOnly: true, drainAll: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const producers = 16
@@ -453,32 +381,8 @@ func TestShufflePoolMatchingProducersCoalesce(t *testing.T) {
 			if tc.drainAll {
 				getFull = sp.getAnyFullBatch
 			}
-			var registry *mpool.AllocationAccountRegistry
-			var account *mpool.AllocationAccount
-			defer func() {
-				sp.abort(proc.Mp())
-				if account != nil {
-					require.Zero(t, account.Seal().Used)
-					_, err := registry.Finalize(account)
-					require.NoError(t, err)
-				}
-			}()
 			input := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
 			defer input.Clean(proc.Mp())
-			if tc.accounted {
-				var err error
-				registry, err = mpool.NewAllocationAccountRegistry(1, 64)
-				require.NoError(t, err)
-				account, err = registry.Open(1 << 20)
-				require.NoError(t, err)
-				selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
-				require.NoError(t, err)
-				if tc.vectorOnly {
-					require.NoError(t, input.Vecs[0].SetAllocationAccount(selection))
-				} else {
-					require.NoError(t, input.SetAllocationAccount(selection))
-				}
-			}
 			sels := make([]int32, objectio.BlockMaxRows)
 			for row := range sels {
 				sels[row] = int32(row)
@@ -505,7 +409,7 @@ func TestShufflePoolMatchingProducersCoalesce(t *testing.T) {
 			}
 			output := getFull()
 			require.NotNil(t, output,
-				"inputs with identical allocation provenance can share one full-sized tail")
+				"producers share one full-sized tail")
 			defer func() { sp.discardBatch(output, proc.Mp()) }()
 			require.Equal(t, objectio.BlockMaxRows, output.RowCount())
 			expected := slices.Clone(vector.MustFixedColNoTypeCheck[int64](input.Vecs[0]))
@@ -545,68 +449,6 @@ func TestShufflePoolMatchingProducersCoalesce(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestShufflePoolSplitsInputsAtProducerLaneCapacity(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-	sp := NewShufflePool(1, 16, false)
-	defer sp.abort(proc.Mp())
-	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
-	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-	defer func() {
-		sp.abort(proc.Mp())
-		require.Zero(t, account.Seal().Used)
-		_, err := registry.Finalize(account)
-		require.NoError(t, err)
-	}()
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
-	require.NoError(t, err)
-	// Reserve the shared lane for a different provenance, then verify that
-	// accounted input still obeys the bounded producer-local fallback.
-	seed := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
-	defer seed.Clean(proc.Mp())
-	seedSelection, err := vector.NewAllocationAccountSelection(account, 1, 5, 6)
-	require.NoError(t, err)
-	require.NoError(t, seed.Vecs[0].SetAllocationAccount(seedSelection))
-	require.NoError(t, vector.AppendFixed(seed.Vecs[0], int64(0), false, proc.Mp()))
-	seed.SetRowCount(1)
-	done, err := writeBatchToBucketForTest(sp, seed, proc, 0)
-	require.NoError(t, err)
-	require.True(t, done)
-	sp.discardBatch(sp.getLastBatch(0), proc.Mp())
-
-	rows := sp.producerBatchMaxRows * shuffleFixedBucketReadyLimit
-	input := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
-	defer input.Clean(proc.Mp())
-	// Per-vector provenance matters even without a batch-level selection.
-	require.NoError(t, input.Vecs[0].SetAllocationAccount(selection))
-	for row := range rows {
-		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(row), false, proc.Mp()))
-	}
-	input.SetRowCount(rows)
-	sels := make([]int32, rows)
-	for row := range sels {
-		sels[row] = int32(row)
-	}
-
-	done, err = writeSelectionsForProducerForTest(
-		sp, input, [][]int32{sels}, 0, proc,
-	)
-	require.NoError(t, err)
-	require.True(t, done)
-	require.Equal(t, shuffleFixedBucketReadyLimit, sp.readyCount)
-	for range shuffleFixedBucketReadyLimit {
-		output := sp.getFullBatch(0)
-		require.NotNil(t, output)
-		require.Equal(t, sp.producerBatchMaxRows, output.RowCount())
-		require.Same(t, selection, output.Vecs[0].AllocationAccountSelection())
-		sp.discardBatch(output, proc.Mp())
-	}
-	require.Nil(t, sp.getFullBatch(0))
-	require.Zero(t, sp.readyCount)
 }
 
 func TestShufflePoolFixedBucketsHaveIndependentBackpressure(t *testing.T) {
@@ -983,52 +825,23 @@ func BenchmarkShufflePoolProducerTails(b *testing.B) {
 		rowsPerBatch  = 1024
 	)
 	for _, tc := range []struct {
-		name        string
-		sharedLane  bool
-		unaccounted bool
-		sameAccount bool
+		name       string
+		sharedLane bool
 	}{
 		{name: "shared-tail", sharedLane: true},
 		{name: "producer-tails"},
-		{name: "unaccounted-producer-tails", unaccounted: true},
-		{name: "same-account-producer-tails", sameAccount: true},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			mp := mpool.MustNewZero()
 			proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
-			registry, err := mpool.NewAllocationAccountRegistry(
-				producerCount, 1<<20,
-			)
-			if err != nil {
-				b.Fatal(err)
-			}
-			accounts := make([]*mpool.AllocationAccount, producerCount)
+			var err error
 			inputs := make([]*batch.Batch, producerCount)
 			for producer := range inputs {
-				accounts[producer], err = registry.Open(64 << 20)
-				if err != nil {
-					b.Fatal(err)
-				}
-				account := accounts[producer]
-				if tc.sameAccount {
-					account = accounts[0]
-				}
-				selection, selectionErr := vector.NewAllocationAccountSelection(
-					account, 1, 1, 2,
-				)
-				if selectionErr != nil {
-					b.Fatal(selectionErr)
-				}
 				inputs[producer] = batch.NewWithSchema(
 					true,
 					nil,
 					[]types.Type{types.T_int64.ToType()},
 				)
-				if !tc.unaccounted {
-					if err = inputs[producer].SetAllocationAccount(selection); err != nil {
-						b.Fatal(err)
-					}
-				}
 				for row := range rowsPerBatch {
 					if err = vector.AppendFixed(
 						inputs[producer].Vecs[0], int64(row), false, mp,
@@ -1077,14 +890,6 @@ func BenchmarkShufflePoolProducerTails(b *testing.B) {
 			sp.abort(mp)
 			for _, input := range inputs {
 				input.Clean(mp)
-			}
-			for _, account := range accounts {
-				if used := account.Seal().Used; used != 0 {
-					b.Fatalf("account retained %d bytes", used)
-				}
-				if _, err = registry.Finalize(account); err != nil {
-					b.Fatal(err)
-				}
 			}
 			proc.Free()
 			if current := mp.CurrNB(); current != 0 {

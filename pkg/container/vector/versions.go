@@ -25,9 +25,6 @@ import (
 
 // MarshalBinaryWithBufferV1 in version 1, vector.nulls.bitmap is v1
 func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
-	if v.IsDictionary() {
-		return moerr.NewInvalidStateNoCtx("dictionary vectors must be materialized before legacy serialization")
-	}
 
 	// write class
 	buf.WriteByte(uint8(v.class))
@@ -76,7 +73,7 @@ func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
 }
 
 func (v *Vector) UnmarshalBinaryV1(data []byte) error {
-	if v.IsDictionary() || (len(data) > 0 && data[0] > DICTIONARY) {
+	if len(data) > 0 && data[0] > LegacyRowBufferClass {
 		return moerr.NewInvalidInputNoCtx("invalid legacy vector representation")
 	}
 	// Keep the legacy decoder contract for unrelated types. JSON needs complete
@@ -93,8 +90,8 @@ func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 	if err := validateJSONLegacyWire(data); err != nil {
 		return err
 	}
-	if v.allocationAccount != nil || v.hasOwnedBackingStorage() {
-		return allocationAccountInvalid("cannot replace owned vector storage with aliases")
+	if v.hasOwnedBackingStorage() {
+		return moerr.NewInternalErrorNoCtx("cannot replace owned vector storage with aliases")
 	}
 	var decoded Vector
 	if err := decoded.unmarshalBinaryV1(data); err != nil {
@@ -109,17 +106,11 @@ func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 
 func (v *Vector) unmarshalBinaryV1(data []byte) error {
 	if len(data) < 1+types.TSize {
-		return allocationAccountInvalid("short legacy vector type")
+		return moerr.NewInternalErrorNoCtx("short legacy vector type")
 	}
 	typ, err := types.DecodeTypeChecked(data[1 : 1+types.TSize])
 	if err != nil {
 		return err
-	}
-	v.areaDisjoint = false
-	if v.allocationAccount != nil {
-		return allocationAccountInvalid(
-			"cannot install aliases in an accounted vector",
-		)
 	}
 	// read class
 	v.class = int(decodedPhysicalClass(data[0]))
@@ -167,7 +158,6 @@ func (v *Vector) unmarshalBinaryV1(data []byte) error {
 
 	v.cantFreeData = true
 	v.cantFreeArea = true
-	v.allocationAccount = nil
 
 	return nil
 }

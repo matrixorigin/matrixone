@@ -90,7 +90,7 @@ type container struct {
 func (minus *Minus) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	minus.ctr.state = buildingHashMap
 	// PREPARE retains the operator, not resources from the retired account.
-	if minus.ExpressionAllocation() != nil {
+	if minus.HasAllocationAccount() {
 		minus.Free(proc, pipelineFailed, err)
 		return
 	}

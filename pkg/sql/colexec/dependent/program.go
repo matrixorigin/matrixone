@@ -40,22 +40,23 @@ type Source interface {
 	Read(context.Context) (*batch.Batch, error)
 	Close() error
 }
-type SourceFactory func(*process.Process, *vector.AllocationAccountSelection, *mpool.AllocationAccount) (Source, error)
+type SourceFactory func(*process.Process, *mpool.MPool, *mpool.AllocationAccount) (Source, error)
 type SourceCompiler func(*plan.Node) (SourceFactory, error)
 
 type nodeTemplate struct {
-	countFoundRows bool
-	readerIDs      []int
-	node           *plan.Node
-	expressions    *colexec.DependentExpressionProgram
-	source         SourceFactory
-	output         []types.Type
-	children       []int32
-	kernel         KernelFactory
-	inputExtra     int
-	bounds         *colexec.DependentExpressionProgram
-	limitIndex     int
-	offsetIndex    int
+	countFoundRows   bool
+	valuesWarningRow uint64
+	readerIDs        []int
+	node             *plan.Node
+	expressions      *colexec.DependentExpressionProgram
+	source           SourceFactory
+	output           []types.Type
+	children         []int32
+	kernel           KernelFactory
+	inputExtra       int
+	bounds           *colexec.DependentExpressionProgram
+	limitIndex       int
+	offsetIndex      int
 }
 type regionTemplate struct {
 	owner         uint32
@@ -161,7 +162,7 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 						Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(j)}}})
 				}
 			}
-			nt := &nodeTemplate{node: n, children: append([]int32(nil), n.Children...)}
+			nt := &nodeTemplate{node: n, valuesWarningRow: n.ValuesWarningRow(), children: append([]int32(nil), n.Children...)}
 			nt.limitIndex, nt.offsetIndex = -1, -1
 			var bounds []*plan.Expr
 			if n.Limit != nil && n.NodeType != plan.Node_PARTITION {
@@ -309,7 +310,7 @@ type Execution struct {
 	affectedRows uint64
 	template     *Template
 	proc         *process.Process
-	allocation   *vector.AllocationAccountSelection
+	allocation   *mpool.MPool
 	main         *region
 	account      *mpool.AllocationAccount
 }
@@ -325,7 +326,7 @@ func (t *Template) CountFoundRowsAt(nodeID int32) error {
 	return nil
 }
 
-func (t *Template) NewExecution(proc *process.Process, allocation *vector.AllocationAccountSelection, accounts ...*mpool.AllocationAccount) (*Execution, error) {
+func (t *Template) NewExecution(proc *process.Process, allocation *mpool.MPool, accounts ...*mpool.AllocationAccount) (*Execution, error) {
 	if proc == nil || allocation == nil {
 		return nil, moerr.NewInternalErrorNoCtx("dependent execution requires owner")
 	}
@@ -796,6 +797,7 @@ func (t *pullTask) Step(ctx context.Context) (vm.ContinuationStep, error) {
 			if err != nil {
 				return vm.ContinuationStep{}, err
 			}
+			c.frame.ValuesWarningRow = c.template.valuesWarningRow
 			c.expr = 0
 			c.countedRow = false
 		}
@@ -846,11 +848,7 @@ func (t *pullTask) Step(ctx context.Context) (vm.ContinuationStep, error) {
 			}
 			c.output = batch.NewWithSize(noutputs)
 			for i, typ := range c.template.output[:noutputs] {
-				var err error
-				c.output.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(typ, r.execution.allocation)
-				if err != nil {
-					return vm.ContinuationStep{}, err
-				}
+				c.output.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 			}
 		}
 		for i, vec := range c.output.Vecs {
@@ -858,7 +856,7 @@ func (t *pullTask) Step(ctx context.Context) (vm.ContinuationStep, error) {
 			if err != nil {
 				return vm.ContinuationStep{}, err
 			}
-			if err = vec.UnionOne(value, 0, r.proc.Mp()); err != nil {
+			if err = vec.UnionOne(value, 0, r.execution.allocation); err != nil {
 				return vm.ContinuationStep{}, err
 			}
 		}

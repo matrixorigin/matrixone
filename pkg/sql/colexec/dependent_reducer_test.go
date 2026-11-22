@@ -15,6 +15,8 @@
 package colexec
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,10 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
-func dependentTestAllocation(t *testing.T) (*process.Process, *vector.AllocationAccountSelection, *mpool.AllocationAccount) {
+func dependentTestAllocation(t *testing.T) (*process.Process, *mpool.MPool, *mpool.AllocationAccount) {
 	t.Helper()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	t.Cleanup(proc.Free)
@@ -42,7 +43,7 @@ func dependentTestAllocation(t *testing.T) (*process.Process, *vector.Allocation
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2)
+	selection, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerDependent, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	return proc, selection, account
 }
@@ -192,7 +193,7 @@ func TestDependentExistsAndBudgetFailure(t *testing.T) {
 		_, err := registry.Finalize(limited)
 		require.NoError(t, err)
 	}()
-	selection, err := vector.NewAllocationAccountSelection(limited, mpool.AllocationOwnerDependent, 1, 2)
+	selection, err := proc.Mp().WithAccount(limited, mpool.AllocationOwnerDependent, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	r, err := NewDependentReducer(proc, &plan.DependentExpr{Reducer: plan.SubqueryRef_SCALAR}, []plan.Type{{Id: int32(types.T_int64)}}, nil, selection)
 	require.NoError(t, err)

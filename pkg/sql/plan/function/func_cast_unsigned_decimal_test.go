@@ -50,7 +50,21 @@ func runUnsignedDecimalAdmission(
 	entry unsignedDecimalAdmissionEntry,
 	column string,
 ) (vector.FunctionResultWrapper, error) {
+	return runUnsignedDecimalAdmissionWithArgumentIsBin(proc, from, target, resultType, length, entry, column, false)
+}
+
+func runUnsignedDecimalAdmissionWithArgumentIsBin(
+	proc *process.Process,
+	from *vector.Vector,
+	target types.Type,
+	resultType types.Type,
+	length int,
+	entry unsignedDecimalAdmissionEntry,
+	column string,
+	fromIsBin bool,
+) (vector.FunctionResultWrapper, error) {
 	result := vector.NewFunctionResultWrapper(resultType, proc.Mp())
+	result.SetArgumentIsBin([]bool{fromIsBin})
 	targetCarrier := vector.NewVec(target)
 	nameCarrier, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(column), length, proc.Mp())
 	if err != nil {
@@ -64,6 +78,20 @@ func runUnsignedDecimalAdmission(
 	err = newUnsignedDecimalAdmission(
 		[]*vector.Vector{from, targetCarrier, nameCarrier}, result, proc, length, nil, entry)
 	return result, err
+}
+
+// runBinaryLiteralUnsignedDecimalAdmission runs the admission with from
+// published as a binary literal argument.
+func runBinaryLiteralUnsignedDecimalAdmission(
+	proc *process.Process,
+	from *vector.Vector,
+	target types.Type,
+	resultType types.Type,
+	length int,
+	entry unsignedDecimalAdmissionEntry,
+	column string,
+) (vector.FunctionResultWrapper, error) {
+	return runUnsignedDecimalAdmissionWithArgumentIsBin(proc, from, target, resultType, length, entry, column, true)
 }
 
 // d64 parses a signed decimal64 literal for test vectors (Decimal64 is an
@@ -531,7 +559,6 @@ func TestUnsignedDecimalAdmissionBinarySource(t *testing.T) {
 			strs[i] = string(p)
 		}
 		vec := testutil.NewVector(len(payloads), binT, proc.Mp(), false, strs)
-		vec.SetIsBin(true)
 		return vec
 	}
 	// reparseProof replays the outer cast on the admission output and compares
@@ -557,7 +584,7 @@ func TestUnsignedDecimalAdmissionBinarySource(t *testing.T) {
 	// Lenient pass-through and clip.
 	proc, session := unsignedDecimalAdmissionProc(t, "ONLY_FULL_GROUP_BY")
 	from := newBinVec(proc, p150, pZero, pDigits, pNineZeros, pMinus1Bytes, pNeg)
-	result, err := runUnsignedDecimalAdmission(proc, from, typ, binT, 6, unsignedDecimalAdmissionMode, "b")
+	result, err := runBinaryLiteralUnsignedDecimalAdmission(proc, from, typ, binT, 6, unsignedDecimalAdmissionMode, "b")
 	require.NoError(t, err)
 	reparseProof(t, result, p150, 0)
 	reparseProof(t, result, pZero, 1)
@@ -572,7 +599,7 @@ func TestUnsignedDecimalAdmissionBinarySource(t *testing.T) {
 	// Strict reject of the same decoded negative names the column and row.
 	proc, session = unsignedDecimalAdmissionProc(t, "STRICT_TRANS_TABLES")
 	from = newBinVec(proc, pNeg)
-	_, err = runUnsignedDecimalAdmission(proc, from, typ, binT, 1, unsignedDecimalAdmissionMode, "b")
+	_, err = runBinaryLiteralUnsignedDecimalAdmission(proc, from, typ, binT, 1, unsignedDecimalAdmissionMode, "b")
 	requireOutOfRangeForColumn(t, err, "b", 1)
 	require.Empty(t, session.warnings)
 
@@ -580,16 +607,15 @@ func TestUnsignedDecimalAdmissionBinarySource(t *testing.T) {
 	// empty payload is the only byte shape the FromByte decoders reject, so
 	// it must surface here exactly as the direct cast surfaces it.
 	from = newBinVec(proc, []byte{})
-	_, err = runUnsignedDecimalAdmission(proc, from, typ, binT, 1, unsignedDecimalAdmissionMode, "b")
+	_, err = runBinaryLiteralUnsignedDecimalAdmission(proc, from, typ, binT, 1, unsignedDecimalAdmissionMode, "b")
 	require.Error(t, err, "the empty payload must fail just like the direct cast decode")
 	require.False(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRangeValueForColumn),
 		"decode failures are the cast's diagnostics, never a misclassified 1264")
 
 	// NULL rows pass as NULL.
 	fromNull := vector.NewVec(binT)
-	fromNull.SetIsBin(true)
 	require.NoError(t, vector.AppendBytes(fromNull, nil, true, proc.Mp()))
-	result, err = runUnsignedDecimalAdmission(proc, fromNull, typ, binT, 1, unsignedDecimalAdmissionMode, "b")
+	result, err = runBinaryLiteralUnsignedDecimalAdmission(proc, fromNull, typ, binT, 1, unsignedDecimalAdmissionMode, "b")
 	require.NoError(t, err)
 	vec = vector.MustFunctionResult[types.Varlena](result).GetResultVector()
 	require.True(t, vec.GetNulls().Contains(0))
@@ -880,6 +906,8 @@ func TestUnsignedDecimalAdmissionSelectListSkipsRows(t *testing.T) {
 		nameCarrier, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("s"), 2, proc.Mp())
 		require.NoError(t, err)
 		result := vector.NewFunctionResultWrapper(resultType, proc.Mp())
+		// The binary shape's source stands for a binary literal.
+		result.SetArgumentIsBin([]bool{resultType.Oid == types.T_varbinary})
 		require.NoError(t, result.PreExtendAndReset(2))
 		err = newUnsignedDecimalAdmission(
 			[]*vector.Vector{from, targetCarrier, nameCarrier}, result, proc, 2, skip0, entry)
@@ -927,7 +955,6 @@ func TestUnsignedDecimalAdmissionSelectListSkipsRows(t *testing.T) {
 		binT := types.T_varbinary.ToType()
 		from := testutil.NewVector(2, binT, proc.Mp(), false,
 			[]string{string([]byte{0x00, 0x96}), string([]byte{0x00, 0x96})})
-		from.SetIsBin(true)
 		result, err := run(from, binT, proc, unsignedDecimalAdmissionStrict)
 		require.NoError(t, err)
 		vec := vector.MustFunctionResult[types.Varlena](result).GetResultVector()
@@ -963,7 +990,6 @@ func TestUnsignedDecimalAdmissionBinaryDecimal128And256(t *testing.T) {
 			strs[i] = string(p)
 		}
 		vec := testutil.NewVector(len(payloads), binT, proc.Mp(), false, strs)
-		vec.SetIsBin(true)
 		return vec
 	}
 
@@ -971,28 +997,28 @@ func TestUnsignedDecimalAdmissionBinaryDecimal128And256(t *testing.T) {
 	proc, session := unsignedDecimalAdmissionProc(t, "STRICT_TRANS_TABLES")
 	typ128 := types.New(types.T_decimal128, 20, 2)
 	from := newBinVec(proc, p150)
-	result, err := runUnsignedDecimalAdmission(proc, from, typ128, binT, 1,
+	result, err := runBinaryLiteralUnsignedDecimalAdmission(proc, from, typ128, binT, 1,
 		unsignedDecimalAdmissionStrict, "b")
 	require.NoError(t, err)
 	vec := vector.MustFunctionResult[types.Varlena](result).GetResultVector()
 	require.Equal(t, "1.50", vec.GetStringAt(0))
 
 	from = newBinVec(proc, []byte{})
-	_, err = runUnsignedDecimalAdmission(proc, from, typ128, binT, 1,
+	_, err = runBinaryLiteralUnsignedDecimalAdmission(proc, from, typ128, binT, 1,
 		unsignedDecimalAdmissionStrict, "b")
 	require.Error(t, err, "the DECIMAL128 decoder's own failure propagates unchanged")
 
 	// DECIMAL(38,2) decodes through ParseDecimal256FromByte.
 	typ256 := types.New(types.T_decimal256, 38, 2)
 	from = newBinVec(proc, p150)
-	result, err = runUnsignedDecimalAdmission(proc, from, typ256, binT, 1,
+	result, err = runBinaryLiteralUnsignedDecimalAdmission(proc, from, typ256, binT, 1,
 		unsignedDecimalAdmissionStrict, "b")
 	require.NoError(t, err)
 	vec = vector.MustFunctionResult[types.Varlena](result).GetResultVector()
 	require.Equal(t, "1.50", vec.GetStringAt(0))
 
 	from = newBinVec(proc, []byte{})
-	_, err = runUnsignedDecimalAdmission(proc, from, typ256, binT, 1,
+	_, err = runBinaryLiteralUnsignedDecimalAdmission(proc, from, typ256, binT, 1,
 		unsignedDecimalAdmissionStrict, "b")
 	require.Error(t, err, "the DECIMAL256 decoder's own failure propagates unchanged")
 	require.Empty(t, session.warnings)
@@ -1025,7 +1051,7 @@ func TestUnsignedDecimalAdmissionMySQLPrefixCharsetSource(t *testing.T) {
 // TestUnsignedDecimalAdmissionStringOutcomeBranches walks the text
 // classifier's remaining outcomes: clean non-negative pass, the IGNORE
 // retained-prefix clip at DECIMAL128/DECIMAL256 destinations, and the
-// abstain for an overflowing retained prefix.
+// range clip for an overflowing retained prefix.
 func TestUnsignedDecimalAdmissionStringOutcomeBranches(t *testing.T) {
 	strT := types.T_varchar.ToType()
 
@@ -1067,8 +1093,7 @@ func TestUnsignedDecimalAdmissionStringOutcomeBranches(t *testing.T) {
 	require.Len(t, session256.warnings, 2)
 	requireAdmissionWarning(t, session256.warnings[1], "v", 1)
 
-	// An overflowing retained prefix keeps the cast's own diagnostics:
-	// admission abstains and passes the row through unchanged.
+	// An overflowing negative prefix clips directly to zero with one range warning.
 	procNarrow, sessionNarrow := unsignedDecimalAdmissionProc(t, "STRICT_TRANS_TABLES")
 	narrow := types.New(types.T_decimal64, 4, 0)
 	from = testutil.NewVector(1, strT, procNarrow.Mp(), false, []string{"-99999junk"})
@@ -1076,9 +1101,9 @@ func TestUnsignedDecimalAdmissionStringOutcomeBranches(t *testing.T) {
 		unsignedDecimalAdmissionIgnore, "v")
 	require.NoError(t, err)
 	vec = vector.MustFunctionResult[types.Varlena](result).GetResultVector()
-	require.Equal(t, "-99999junk", vec.GetStringAt(0),
-		"the cast owns the overflow diagnostic for an unretainable prefix")
-	require.Empty(t, sessionNarrow.warnings, "abstention owns no admission diagnostics")
+	require.Equal(t, "0", vec.GetStringAt(0))
+	require.Len(t, sessionNarrow.warnings, 1)
+	requireAdmissionWarning(t, sessionNarrow.warnings[0], "v", 1)
 }
 
 // TestUnsignedDecimalAdmissionVarlenaNullRows checks NULL text rows pass as

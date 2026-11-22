@@ -1103,10 +1103,14 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 		return nil
 	}
 
+	keyMP, err := ctr.hashmapBuilder.uniqueKeyAllocation.MP(proc.Mp())
+	if err != nil {
+		return err
+	}
 	if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed {
 		if err := runtimefilter.CloseFloatSignedZero(
 			keyVec,
-			proc.Mp(),
+			keyMP,
 		); err != nil {
 			if hashBuild.fallbackOptionalRuntimeFilter(err, &runtimeFilter, spec, proc) {
 				return nil
@@ -1121,7 +1125,7 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 		return nil
 	}
 	keyVec.GetNulls().Reset()
-	if err := keyVec.InplaceSort(proc.Mp()); err != nil {
+	if err := keyVec.InplaceSort(keyMP); err != nil {
 		if hashBuild.fallbackOptionalRuntimeFilter(err, &runtimeFilter, spec, proc) {
 			return nil
 		}
@@ -1434,20 +1438,18 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilterChunk(
 	if areaBound+uint64(rowCount)*uint64(payloadType.TypeSize())+4096 > uint64(mpool.MaxAllocationSize()) {
 		return nil, 0, false, runtimefilter.ErrOptionalKeySize
 	}
-	payload, err := vector.NewOffHeapVecWithTypeAndAllocation(
-		payloadType,
-		hashBuild.ctr.hashmapBuilder.uniqueKeyAllocation,
-	)
+	payloadMP, err := hashBuild.ctr.hashmapBuilder.uniqueKeyAllocation.MP(proc.Mp())
 	if err != nil {
 		return nil, 0, false, err
 	}
+	payload := vector.NewOffHeapVecWithType(payloadType)
 	defer func() {
 		if err != nil || !usable {
 			payload.Free(proc.Mp())
 		}
 	}()
 	if err = payload.PreExtendWithArea(
-		rowCount, int(areaBound), proc.Mp(),
+		rowCount, int(areaBound), payloadMP,
 	); err != nil {
 		return nil, 0, false,
 			runtimefilter.MarkOptionalAllocationError(err)
@@ -1511,7 +1513,7 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilterChunk(
 		// capacities. An append error contradicts that oracle and must remain
 		// an unmarked fatal invariant error.
 		if err = vector.AppendBytes(
-			payload, packer.GetBuf(), false, proc.Mp(),
+			payload, packer.GetBuf(), false, payloadMP,
 		); err != nil {
 			return nil, 0, false, err
 		}
@@ -1529,7 +1531,7 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilterChunk(
 	if outputRows == 0 {
 		return payload, 0, true, nil
 	}
-	if err := payload.InplaceSort(proc.Mp()); err != nil {
+	if err := payload.InplaceSort(payloadMP); err != nil {
 		return nil, 0, false, err
 	}
 	return payload, outputRows, true, nil

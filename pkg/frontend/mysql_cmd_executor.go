@@ -316,6 +316,13 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.QueryType = getStatementType(statement).GetQueryType()
 	stm.ConnType = transferSessionConnType2StatisticConnType(ses.connType)
 	stm.SetResourceRoot(root)
+	// Direct MySQL connections leave connType unset. Client ownership comes
+	// from the routine, independently of the proxy's connection-class flag.
+	if sqlType != constant.InternalSql && !ses.IsDerivedStmt() && ses.GetFromRealUser() && !ses.GetIsInternal() {
+		if rm := ses.getRoutineManager(); rm != nil {
+			stm.SetLockReadLimiter(rm.lockReadLimiter)
+		}
+	}
 	if proc != nil {
 		stm.SetResourceMemoryPoolEpoch(proc.Mp(), resourceMPeakEpoch)
 	}
@@ -1517,10 +1524,22 @@ func doSetVar(
 		var runtimeDomain types.RuntimeStringDomain
 		var evalErr error
 		if index < len(preparedItems) && preparedItems[index].Value != nil {
-			if preparedPlanExprContainsSubquery(preparedItems[index].Value) {
-				value, valueType, evalErr = getPreparedPlanExprValueWithSubqueries(
-					assign.Value, preparedItems[index].Value, ses, execCtx,
-					&prepareParamKind, &runtimeDomain, &isBin)
+			var subqueries []*tree.Subquery
+			tree.CollectOuterSubqueries(assign.Value, &subqueries)
+			if len(subqueries) != 0 {
+				// Keep all subqueries inside the original expression. Evaluating
+				// them separately can execute dead CASE branches and loses the
+				// AST-to-plan identity after runtime parameter specialization.
+				var leafIsBin *bool
+				// A scalar subquery result is a computed value. Only a prepared
+				// expression that already reduced to a leaf can carry this flag.
+				switch preparedItems[index].Value.Expr.(type) {
+				case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V:
+					leafIsBin = &isBin
+				}
+				value, valueType, evalErr = getExprValueWithPrepareMeta(
+					assign.Value, ses, execCtx, true,
+					&prepareParamKind, &runtimeDomain, leafIsBin)
 			} else {
 				value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
 					preparedItems[index].Value, ses, execCtx,
@@ -1528,8 +1547,8 @@ func doSetVar(
 			}
 		} else {
 			value, valueType, evalErr = getExprValueWithPrepareMeta(
-				assign.Value, ses, execCtx, preparedExpression, nil,
-				&prepareParamKind, &runtimeDomain, &isBin)
+				assign.Value, ses, execCtx, preparedExpression,
+				&prepareParamKind, &runtimeDomain, nil)
 		}
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
@@ -2335,7 +2354,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			}
 
 			bs := vector.MustFixedColWithTypeCheck[bool](vec)
-			sels := vector.GetSels()
+			var sels []int64
 			for i, b := range bs {
 				if b {
 					sels = append(sels, int64(i))
@@ -2343,7 +2362,6 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			}
 
 			err = bat.Shrink(sels, false, ses.proc.Mp())
-			vector.PutSels(sels)
 			if err != nil {
 				return err
 			}
@@ -3924,7 +3942,7 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 			}
 
 			bs := vector.MustFixedColWithTypeCheck[bool](vec)
-			sels := vector.GetSels()
+			var sels []int64
 			for i, b := range bs {
 				if b {
 					sels = append(sels, int64(i))
@@ -3932,7 +3950,6 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 			}
 
 			err = bat.Shrink(sels, false, proc.Mp())
-			vector.PutSels(sels)
 			if err != nil {
 				return err
 			}
@@ -4533,8 +4550,11 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 			return true, nil
 		}
 		for i := range p.Query.Nodes {
-			if def := p.Query.Nodes[i].TableDef; def != nil {
-				flag, err := checkFn(p.Query.Nodes[i].ObjRef, def, p.Query.Nodes[i].ScanSnapshot)
+			node := p.Query.Nodes[i]
+			// table_changes has a synthetic output schema. Its source is
+			// validated through CatalogDependencies below.
+			if def := node.TableDef; def != nil && !isTableChangesScan(node) {
+				flag, err := checkFn(node.ObjRef, def, node.ScanSnapshot)
 				if err != nil || flag {
 					return true, err
 				}
@@ -5564,7 +5584,7 @@ var _ loadLocalDrainCapable = &MysqlProtocolImpl{}
 // usable. An unlimited stream is retired by the drain budgets. Only the upload
 // owner frees its buffer; the cancellation watcher interrupts I/O and is
 // joined before owner cleanup.
-func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, reader *io.PipeReader) (err error) {
+func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
 	mysqlRwer := ses.GetResponser().MysqlRrWr()
 	defer func() {
 		_ = writer.CloseWithError(err)
@@ -5587,7 +5607,9 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 		defer close(watcherDone)
 		select {
 		case <-ctx.Done():
-			_ = reader.CloseWithError(ctx.Err())
+			// Publish cancellation to the consumer through the writer. Closing
+			// the read end would make the consumer see io.ErrClosedPipe.
+			_ = writer.CloseWithError(ctx.Err())
 			if drainer, ok := mysqlRwer.(loadLocalDrainCapable); ok {
 				// Interrupt the in-flight network I/O without closing the
 				// socket; the owner below decides between drain and retire.
@@ -8111,6 +8133,13 @@ func (h *jsonPlanHandler) SetResourceSummary(summary resource.StatementResourceS
 		return
 	}
 	h.marshalHandler.SetResourceSummary(summary)
+	if summary.LockRead != nil && h.marshalHandler.marshalPlan != nil {
+		if h.buffer != nil {
+			releaseMarshalPlanBufferPool(h.buffer)
+			h.buffer = nil
+		}
+		h.jsonBytes = nil
+	}
 }
 
 func (h *jsonPlanHandler) Stats(ctx context.Context) (statistic.StatsArray, motrace.Statistic) {
@@ -8427,6 +8456,9 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, _ FeSession) (statsByte 
 	if h.query != nil {
 		options := &explain.MarshalPlanOptions
 		for _, node := range h.query.Nodes {
+			if plan2.IsValidationPrivilegeCarrier(node) {
+				continue
+			}
 			if h.isInternalSubStmt {
 				s := explain.GetStatistic4Trace(ctx, node, options)
 				statsByte.Add(&s)

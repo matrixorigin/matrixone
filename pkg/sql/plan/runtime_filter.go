@@ -746,6 +746,13 @@ func (builder *QueryBuilder) generateNodeRuntimeFilterInTree(nodeID int32, keyBo
 			buildSize := node.Stats.HashmapStats.HashmapSize
 			if keyBound > 0 {
 				buildSize = keyBound
+				// The bounded DELETE proof uses the complete hidden index PK.
+				// Each exact key can match at most one visible index row, even
+				// when the sampled distinct count is stale.
+				if sortOrder == 0 && probeCol.Name == tableDef.Pkey.PkeyColName &&
+					hasKnownScanCardinality(leftChild.Stats) {
+					probeNdv = max(probeNdv, leftChild.Stats.TableCnt)
+				}
 			}
 			// DEDUP probes complete stored keys, including REPLACE's serialized
 			// composite PK. Stale small-table NDV must not turn a bounded key

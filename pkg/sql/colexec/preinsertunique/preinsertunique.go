@@ -126,13 +126,8 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 		if odkuArbitration {
 			preInsertUnique.ctr.acceptedRows = make([]*vector.Vector, keyCount)
 			for i := range keyCount {
-				acceptedRows, err := vector.NewOffHeapVecWithTypeAndAllocation(
-					types.T_int64.ToType(), preInsertUnique.retainedAllocation)
-				if err != nil {
-					preInsertUnique.freeAcceptedState(proc)
-					return err
-				}
-				preInsertUnique.ctr.acceptedRows[i] = acceptedRows
+				preInsertUnique.ctr.acceptedRows[i] = vector.NewOffHeapVecWithType(
+					types.T_int64.ToType())
 			}
 		}
 	}
@@ -261,13 +256,13 @@ func (preInsertUnique *PreInsertUnique) callODKUTargetArbitration(
 		}
 		preInsertUnique.ctr.acceptedKeyVecs[i][0] = inputBat.Vecs[keyPos]
 	}
+	retainedMP, err := preInsertUnique.retainedAllocation.MP(proc.Mp())
+	if err != nil {
+		return vm.CancelResult, err
+	}
 	if preInsertUnique.ctr.acceptedTarget == nil {
-		var err error
-		preInsertUnique.ctr.acceptedTarget, err = vector.NewOffHeapVecWithTypeAndAllocation(
-			*inputBat.Vecs[pkColumn].GetType(), preInsertUnique.retainedAllocation)
-		if err != nil {
-			return vm.CancelResult, err
-		}
+		preInsertUnique.ctr.acceptedTarget = vector.NewOffHeapVecWithType(
+			*inputBat.Vecs[pkColumn].GetType())
 	} else if !preInsertUnique.ctr.acceptedTarget.GetType().Eq(*inputBat.Vecs[pkColumn].GetType()) {
 		return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx,
 			"ODKU target primary-key type changed between input batches")
@@ -346,7 +341,7 @@ func (preInsertUnique *PreInsertUnique) callODKUTargetArbitration(
 			}
 			targetRow := int64(preInsertUnique.ctr.acceptedTarget.Length())
 			if err := preInsertUnique.ctr.acceptedTarget.UnionOne(
-				inputBat.Vecs[pkColumn], int64(row), proc.Mp()); err != nil {
+				inputBat.Vecs[pkColumn], int64(row), retainedMP); err != nil {
 				return vm.CancelResult, err
 			}
 			for keyIdx := range ctx.KeyColumns {
@@ -364,7 +359,7 @@ func (preInsertUnique *PreInsertUnique) callODKUTargetArbitration(
 						"ODKU accepted-key state changed during row commit")
 				}
 				if err := vector.AppendFixed(
-					preInsertUnique.ctr.acceptedRows[keyIdx], targetRow, false, proc.Mp()); err != nil {
+					preInsertUnique.ctr.acceptedRows[keyIdx], targetRow, false, retainedMP); err != nil {
 					return vm.CancelResult, err
 				}
 			}
@@ -493,8 +488,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		preInsertUnique.ctr.buf.CleanOnlyData()
 	}
 
-	sels := vector.GetSels()
-	defer vector.PutSels(sels)
+	var sels []int64
 	sels = sels[:0]
 	var firstGenerated uint64
 	for row := 0; row < inputBat.RowCount(); row++ {

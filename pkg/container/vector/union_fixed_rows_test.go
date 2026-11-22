@@ -155,7 +155,8 @@ func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
 			state := newTestVectorAllocationAccount(t, 1, 16)
 			mp := mpool.MustNewZero()
 			src := NewVec(types.T_int64.ToType())
-			dst := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+			dst := newAccountedTestVector(t, types.T_int64.ToType())
+			dmp := state.view(t, mp)
 			t.Cleanup(func() {
 				src.Free(mp)
 				dst.Free(mp)
@@ -164,7 +165,7 @@ func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
 			})
 			require.NoError(t, AppendFixed(src, int64(10), nullable, mp))
 			require.NoError(t, AppendFixed(src, int64(20), false, mp))
-			used, err := dst.TryUnionFlatFixedRows([]FixedSourceRow{{src, 0}, {src, 1}}, mp)
+			used, err := dst.TryUnionFlatFixedRows([]FixedSourceRow{{src, 0}, {src, 1}}, dmp)
 			require.True(t, used)
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.Zero(t, dst.length)

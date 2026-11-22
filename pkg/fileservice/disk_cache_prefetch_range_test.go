@@ -790,7 +790,7 @@ func TestS3FSRangeReadCachesItsEntriesNotItsPrefetchObject(t *testing.T) {
 			Entries: []IOEntry{{Offset: 5000, Size: 10}, {Offset: 5010, Size: 10}}}
 		if rangeRead {
 			// A read that caches whole objects reads ranges when it does not download one.
-			require.NoError(t, fs.read(context.Background(), vec, true))
+			require.NoError(t, fs.read(context.Background(), vec, true, false))
 		} else {
 			require.NoError(t, fs.Read(context.Background(), vec))
 		}

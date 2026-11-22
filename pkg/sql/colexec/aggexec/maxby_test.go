@@ -126,15 +126,14 @@ func TestCompactMaxByStateVectorPreservesAllocationOwner(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(8 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
+	view, err := mp.WithAccount(
 		account,
 		mpool.AllocationOwner(1),
 		mpool.AllocationSite(1),
-		mpool.AllocationSite(2),
+		mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
 	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
-	require.NoError(t, vec.SetAllocationAccount(selection))
 	defer func() {
 		vec.Free(mp)
 		snapshot := account.Seal()
@@ -146,10 +145,10 @@ func TestCompactMaxByStateVectorPreservesAllocationOwner(t *testing.T) {
 	}()
 
 	value := []byte(strings.Repeat("x", 4096))
-	require.NoError(t, vector.AppendBytes(vec, value, false, mp))
+	require.NoError(t, vector.AppendBytes(vec, value, false, view))
 	for i := 0; i < 400; i++ {
 		value[0] = byte(i)
-		require.NoError(t, vec.SetRawBytesAt(0, value, mp))
+		require.NoError(t, vec.SetRawBytesAt(0, value, view))
 	}
 	before := account.Snapshot()
 	require.Greater(t, before.Used, uint64(maxByVarlenaCompactionSlack))
@@ -158,8 +157,7 @@ func TestCompactMaxByStateVectorPreservesAllocationOwner(t *testing.T) {
 		liveBytes:  maxByAreaBytes(vec.GetRawBytesAt(0)),
 		staleBytes: len(vec.GetArea()) - maxByAreaBytes(vec.GetRawBytesAt(0)),
 	}
-	require.NoError(t, compactMaxByStateVector(vec, usage, mp))
-	require.Same(t, selection, vec.AllocationAccountSelection())
+	require.NoError(t, compactMaxByStateVector(vec, usage, view))
 	require.Equal(t, value, vec.GetBytesAt(0))
 	after := account.Snapshot()
 	require.Less(t, after.Used, before.Used)

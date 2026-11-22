@@ -36,7 +36,7 @@ import (
 )
 
 type localBlockingDataCache struct {
-	fscache.DataCache
+	memoryCacheBacking
 	updateStarted chan struct{}
 	releaseUpdate chan struct{}
 	once          sync.Once
@@ -138,7 +138,7 @@ func (c *localBlockingDataCache) Set(ctx context.Context, key fscache.CacheKey, 
 		return false, ctx.Err()
 	case <-c.releaseUpdate:
 	}
-	return c.DataCache.Set(ctx, key, data)
+	return c.memoryCacheBacking.Set(ctx, key, data)
 }
 
 func TestLocalFSStatFileReturnsNonNotExistError(t *testing.T) {
@@ -207,9 +207,9 @@ func TestLocalFSMergeCompletesAfterCacheUpdate(t *testing.T) {
 	}))
 
 	cache := &localBlockingDataCache{
-		DataCache:     local.memCache.cache,
-		updateStarted: make(chan struct{}),
-		releaseUpdate: make(chan struct{}),
+		memoryCacheBacking: local.memCache.cache,
+		updateStarted:      make(chan struct{}),
+		releaseUpdate:      make(chan struct{}),
 	}
 	local.memCache.cache = cache
 	releaseUpdate := sync.OnceFunc(func() { close(cache.releaseUpdate) })

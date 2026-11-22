@@ -15,6 +15,8 @@
 package colexec_test
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestSetOperationAllocationResetAndFailure(t *testing.T) {

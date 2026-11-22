@@ -326,8 +326,8 @@ func TestAccountedMergeTopMultiColumnAppendFailureRollsBack(t *testing.T) {
 	for i := range input.Vecs {
 		op.ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(*input.Vecs[i].GetType())
 	}
-	require.NoError(t, op.ctr.bat.SetAllocationAccount(op.ctr.retainedAllocation))
-	require.NoError(t, op.ctr.bat.Vecs[0].PreExtend(1, proc.Mp()))
+	require.NoError(t, op.ctr.allocationViews(proc.Mp()))
+	require.NoError(t, op.ctr.bat.Vecs[0].PreExtend(1, op.ctr.retainedAllocation))
 	var err error
 	op.ctr.sels, err = growMergeTopSelections(
 		op.ctr.sels, 2, proc, op.ctr.allocationAccount)
@@ -386,7 +386,7 @@ func TestAccountedMergeTopHardVectorCapacityFailureIsControlled(t *testing.T) {
 	for i := range input.Vecs {
 		op.ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(*input.Vecs[i].GetType())
 	}
-	require.NoError(t, op.ctr.bat.SetAllocationAccount(op.ctr.retainedAllocation))
+	require.NoError(t, op.ctr.allocationViews(proc.Mp()))
 
 	for range 100 {
 		if err := op.ctr.processBatch(100, input, proc); err != nil {

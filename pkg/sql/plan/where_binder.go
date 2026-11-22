@@ -47,7 +47,12 @@ func (b *WhereBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth
 }
 
 func (b *WhereBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return b.baseBindSubquery(astExpr, isRoot)
+	expr, err := b.baseBindSubquery(astExpr, isRoot)
+	if err == nil && b.preparedSetSubqueries != nil {
+		b.preparedSetSubqueries[astExpr] = append(
+			b.preparedSetSubqueries[astExpr], expr.GetSub().NodeId)
+	}
+	return expr, err
 }
 
 func (b *WhereBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

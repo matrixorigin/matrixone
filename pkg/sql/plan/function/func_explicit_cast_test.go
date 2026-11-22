@@ -155,7 +155,7 @@ func TestExplicitCastLexicalIntegerDiagnostics(t *testing.T) {
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"x"}, nil),
 				NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil),
 			}, NewFunctionTestResult(tc.target, false, want, nil), NewExplicitCast)
-			fc.parameters[0].SetIsBin(true)
+			fc.result.SetArgumentIsBin([]bool{true})
 			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 			require.Empty(t, sink.warnings)

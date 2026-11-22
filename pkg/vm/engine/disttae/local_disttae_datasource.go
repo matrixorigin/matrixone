@@ -944,6 +944,9 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		physicalColumn    vector.Vector
 		physicalColumnPtr *vector.Vector
 		physicalColumnPos int
+		// physicalMP grows the rowid column. A private rowid scratch column is
+		// not output, so it is never charged to an accounted view of mp.
+		physicalMP = mp
 	)
 	if physicalColumnPos = slices.Index(
 		outBatch.Attrs,
@@ -951,7 +954,8 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	); physicalColumnPos == -1 {
 		physicalColumn.SetType(objectio.RowidType)
 		physicalColumnPtr = &physicalColumn
-		defer physicalColumn.Free(mp)
+		physicalMP = mp.Base()
+		defer physicalColumn.Free(physicalMP)
 	} else {
 		physicalColumnPtr = outBatch.Vecs[physicalColumnPos]
 	}
@@ -1021,7 +1025,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				physicalColumnPtr,
 				entry.RowID,
 				false,
-				mp,
+				physicalMP,
 			); err != nil {
 				return err
 			}
@@ -1072,7 +1076,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		if deletedMask.Count() > 0 {
 			delInFile += deletedMask.Count()
 			if physicalColumnPos == -1 {
-				if err := physicalColumnPtr.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset), mp); err != nil {
+				if err := physicalColumnPtr.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset), physicalMP); err != nil {
 					deletedMask.Release()
 					return err
 				}
@@ -1453,12 +1457,9 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 	leftRows = offsets
 
-	s3FlushedDeletes := ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
-
 	var tombstones []objectio.ObjectStats
-	s3FlushedDeletes.Range(func(key, value any) bool {
-		tombstones = append(tombstones, key.(objectio.ObjectStats))
-		return true
+	ls.table.getTxn().flushedTombstones.forEach(ls.table.tableId, func(stats objectio.ObjectStats) {
+		tombstones = append(tombstones, stats)
 	})
 
 	if len(tombstones) == 0 {
@@ -1603,13 +1604,6 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 	if len(leftRows) <= stepCnt {
 		// stack allocation
 		deletedOffsets = make([]int64, 0, stepCnt)
-	} else {
-		deletedOffsets = vector.GetSels()
-		defer func() {
-			if deletedOffsets != nil {
-				vector.PutSels(deletedOffsets)
-			}
-		}()
 	}
 
 	for delIter.Next() {

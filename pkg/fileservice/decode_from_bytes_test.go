@@ -61,7 +61,7 @@ func TestDecodeFromBytesCacheAndSharing(t *testing.T) {
 	second.ReleaseReadResultOnError()
 	requireDecodeDrained(t, fs.decodedReads)
 
-	fs.memCache.cache = &failingDecodeCache{DataCache: fs.memCache.cache}
+	fs.memCache.cache = &failingDecodeCache{memoryCacheBacking: fs.memCache.cache}
 	// Skip-memory policy bypasses both admission and sharing, but still converts.
 	v := byteDecodeVector()
 	v.Policy |= SkipMemoryCache
@@ -93,7 +93,7 @@ func TestDecodeFromBytesErrors(t *testing.T) {
 		require.Nil(t, v.Entries[0].CachedData)
 		requireDecodeDrained(t, fs.decodedReads)
 	}
-	fs.memCache.cache = &failingDecodeCache{DataCache: fs.memCache.cache}
+	fs.memCache.cache = &failingDecodeCache{memoryCacheBacking: fs.memCache.cache}
 	v := byteDecodeVector()
 	require.ErrorContains(t, DecodeFromBytes(t.Context(), fs, &v, []byte("abc")), "cache update failure")
 	require.Nil(t, v.Entries[0].CachedData)

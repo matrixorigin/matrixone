@@ -221,6 +221,7 @@ func Test_createPubByPitr(t *testing.T) {
 			{int64(sysAccountID), sysAccountName, "open", uint64(1), nil},
 			{int64(1), "acc01", "open", uint64(1), nil},
 		})
+		mockPublicationTargetRows(bh, 1)
 		bh.sql2result[getSubsSql+" and pub_account_name = 'sys' and pub_name = 'pub01'"] =
 			newMrsForSqlForGetSubs([][]interface{}{})
 

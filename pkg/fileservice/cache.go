@@ -514,18 +514,18 @@ func EvictMemoryCaches(ctx context.Context) map[string]int64 {
 func EvictMemoryCachesToCapacityPercent(ctx context.Context, percent int64) map[string]int64 {
 	ret := make(map[string]int64)
 
-	if percent < 0 {
-		percent = 0
-	}
-	if percent > 100 {
-		percent = 100
-	}
-
+	percent = min(max(percent, 0), 100)
 	allMemoryCaches.Range(func(k, v any) bool {
+		if fscache.PressureEvictionCanceled(ctx) {
+			return false
+		}
 		cache := k.(*MemCache)
+		if cache.closed.Load() {
+			return true
+		}
 		name := v.(memoryCacheRegistration).name
 		capacity := cache.cache.Capacity()
-		target := capacity * percent / 100
+		target := memoryCachePercentTarget(capacity, percent)
 		beforeUsed := cache.cache.Used()
 		start := time.Now()
 		logutil.Info("memory cache pressure evict begin",
@@ -535,7 +535,7 @@ func EvictMemoryCachesToCapacityPercent(ctx context.Context, percent int64) map[
 			zap.Int64("target", target),
 			zap.Int64("target-percent", percent),
 		)
-		used := cache.EvictToCapacityPercent(ctx, percent)
+		used := cache.evictForPressure(ctx, target, percent < 100)
 		metric.FSCachePressureMemoryEvictCounter.Inc()
 		metric.FSCachePressureMemoryEvictDuration.Observe(time.Since(start).Seconds())
 		ret[name] = used

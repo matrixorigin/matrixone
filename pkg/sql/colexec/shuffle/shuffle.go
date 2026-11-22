@@ -96,7 +96,11 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 			shuffle.ctr.shufflePool.ownedColumns != shuffle.OwnedColumnCount {
 			return mpool.ErrAllocationAccountMismatch
 		}
-		if err := shuffle.ctr.shufflePool.initOwned(proc, shuffle.outputAllocation); err != nil {
+		outputMP, err := shuffle.outputAllocation.MP(proc.Mp())
+		if err != nil {
+			return err
+		}
+		if err := shuffle.ctr.shufflePool.initOwned(proc, outputMP); err != nil {
 			return err
 		}
 		if err := shuffle.ctr.shufflePool.ownedFailure(proc, nil); err != nil {
@@ -151,7 +155,6 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 }
 
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
-	shuffle.ctr.dictionaryBoundary.BeginReusableCall()
 	if !shuffle.DrainAllBuckets {
 		return shuffle.callLocal(proc)
 	}
@@ -458,24 +461,18 @@ func (shuffle *Shuffle) stopWritingOnce() {
 }
 
 func (shuffle *Shuffle) flushPending(proc *process.Process) (bool, <-chan struct{}, error) {
-	var views **shufflePartitionViews
-	if shuffle.ctr.dictionaryBoundary.AllowsDictionaryOutput() && !shuffle.ctr.dictionaryBoundary.PrefersOwnedOutput() {
-		views = &shuffle.ctr.partitionViews
-	}
-	nextBucket, nextOffset, waiter, done, err := shuffle.ctr.shufflePool.tryWriteModeWithViews(
+	nextBucket, nextOffset, waiter, done, err := shuffle.ctr.shufflePool.tryWriteMode(
 		shuffle.ctr.pendingBat,
 		shuffle.ctr.sels,
 		shuffle.CurrentShuffleIdx,
 		shuffle.ctr.pendingPosition,
 		shuffle.ctr.pendingOffset,
 		shuffle.ctr.pendingWholeBucket,
-		views,
 		proc,
 	)
 	shuffle.ctr.pendingPosition = nextBucket
 	shuffle.ctr.pendingOffset = nextOffset
 	if done || err != nil {
-		shuffle.freePartitionViews(proc)
 		shuffle.ctr.pendingBat = nil
 		shuffle.ctr.pendingPosition = 0
 		shuffle.ctr.pendingOffset = 0
@@ -530,17 +527,16 @@ func (shuffle *Shuffle) shuffleCompleteKey(bat *batch.Batch, proc *process.Proce
 	}
 	if shuffle.ctr.keyHashes == nil {
 		// NewVec defaults to Go-heap storage, which bypasses mpool capacity.
-		if shuffle.OwnedOutput {
-			var err error
-			shuffle.ctr.keyHashes, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_uint64.ToType(), shuffle.outputAllocation)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			shuffle.ctr.keyHashes = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
+		shuffle.ctr.keyHashes = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
+	}
+	hashMP := proc.Mp()
+	if shuffle.OwnedOutput {
+		var err error
+		if hashMP, err = shuffle.outputAllocation.MP(proc.Mp()); err != nil {
+			return nil, err
 		}
 	}
-	if err := shuffle.ctr.keyHashes.PreExtend(bat.RowCount(), proc.Mp()); err != nil {
+	if err := shuffle.ctr.keyHashes.PreExtend(bat.RowCount(), hashMP); err != nil {
 		return nil, err
 	}
 	shuffle.ctr.keyHashes.SetLength(bat.RowCount())
@@ -1001,9 +997,6 @@ func partitionIntegerHash[T shuffleInteger](values []T, buckets uint64, partitio
 }
 
 func hashShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
-	if bat.Vecs[ap.ShuffleColIdx].IsDictionary() {
-		return ap.shuffleDictionaryKey(bat, proc)
-	}
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.IsConstNull() {
 		return ap.routeSingleBucket(bat, 0, proc)
@@ -1042,105 +1035,62 @@ func allBatchInOneRange(ap *Shuffle, bat *batch.Batch) (bool, uint64) {
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		signed = true
-		if groupByVec.IsDictionary() {
-			first, last := dictionaryRangeEndpoints[int64](groupByVec)
-			firstValueSigned = int64(first)
-			lastValueSigned = int64(last)
+		groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
+		firstValueSigned = groupByCol[0]
+		if groupByVec.IsConst() {
+			lastValueSigned = firstValueSigned
 		} else {
-			groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
-			firstValueSigned = groupByCol[0]
-			if groupByVec.IsConst() {
-				lastValueSigned = firstValueSigned
-			} else {
-				lastValueSigned = groupByCol[groupByVec.Length()-1]
-			}
+			lastValueSigned = groupByCol[groupByVec.Length()-1]
 		}
 	case types.T_int32:
 		signed = true
-		if groupByVec.IsDictionary() {
-			first, last := dictionaryRangeEndpoints[int32](groupByVec)
-			firstValueSigned = int64(first)
-			lastValueSigned = int64(last)
+		groupByCol := vector.MustFixedColNoTypeCheck[int32](groupByVec)
+		firstValueSigned = int64(groupByCol[0])
+		if groupByVec.IsConst() {
+			lastValueSigned = firstValueSigned
 		} else {
-			groupByCol := vector.MustFixedColNoTypeCheck[int32](groupByVec)
-			firstValueSigned = int64(groupByCol[0])
-			if groupByVec.IsConst() {
-				lastValueSigned = firstValueSigned
-			} else {
-				lastValueSigned = int64(groupByCol[groupByVec.Length()-1])
-			}
+			lastValueSigned = int64(groupByCol[groupByVec.Length()-1])
 		}
 	case types.T_int16:
 		signed = true
-		if groupByVec.IsDictionary() {
-			first, last := dictionaryRangeEndpoints[int16](groupByVec)
-			firstValueSigned = int64(first)
-			lastValueSigned = int64(last)
+		groupByCol := vector.MustFixedColNoTypeCheck[int16](groupByVec)
+		firstValueSigned = int64(groupByCol[0])
+		if groupByVec.IsConst() {
+			lastValueSigned = firstValueSigned
 		} else {
-			groupByCol := vector.MustFixedColNoTypeCheck[int16](groupByVec)
-			firstValueSigned = int64(groupByCol[0])
-			if groupByVec.IsConst() {
-				lastValueSigned = firstValueSigned
-			} else {
-				lastValueSigned = int64(groupByCol[groupByVec.Length()-1])
-			}
+			lastValueSigned = int64(groupByCol[groupByVec.Length()-1])
 		}
 	case types.T_uint64:
-		if groupByVec.IsDictionary() {
-			first, last := dictionaryRangeEndpoints[uint64](groupByVec)
-			firstValueUnsigned = uint64(first)
-			lastValueUnsigned = uint64(last)
+		groupByCol := vector.MustFixedColNoTypeCheck[uint64](groupByVec)
+		firstValueUnsigned = groupByCol[0]
+		if groupByVec.IsConst() {
+			lastValueUnsigned = firstValueUnsigned
 		} else {
-			groupByCol := vector.MustFixedColNoTypeCheck[uint64](groupByVec)
-			firstValueUnsigned = groupByCol[0]
-			if groupByVec.IsConst() {
-				lastValueUnsigned = firstValueUnsigned
-			} else {
-				lastValueUnsigned = groupByCol[groupByVec.Length()-1]
-			}
+			lastValueUnsigned = groupByCol[groupByVec.Length()-1]
 		}
 	case types.T_uint32:
-		if groupByVec.IsDictionary() {
-			first, last := dictionaryRangeEndpoints[uint32](groupByVec)
-			firstValueUnsigned = uint64(first)
-			lastValueUnsigned = uint64(last)
+		groupByCol := vector.MustFixedColNoTypeCheck[uint32](groupByVec)
+		firstValueUnsigned = uint64(groupByCol[0])
+		if groupByVec.IsConst() {
+			lastValueUnsigned = firstValueUnsigned
 		} else {
-			groupByCol := vector.MustFixedColNoTypeCheck[uint32](groupByVec)
-			firstValueUnsigned = uint64(groupByCol[0])
-			if groupByVec.IsConst() {
-				lastValueUnsigned = firstValueUnsigned
-			} else {
-				lastValueUnsigned = uint64(groupByCol[groupByVec.Length()-1])
-			}
+			lastValueUnsigned = uint64(groupByCol[groupByVec.Length()-1])
 		}
 	case types.T_uint16:
-		if groupByVec.IsDictionary() {
-			first, last := dictionaryRangeEndpoints[uint16](groupByVec)
-			firstValueUnsigned = uint64(first)
-			lastValueUnsigned = uint64(last)
+		groupByCol := vector.MustFixedColNoTypeCheck[uint16](groupByVec)
+		firstValueUnsigned = uint64(groupByCol[0])
+		if groupByVec.IsConst() {
+			lastValueUnsigned = firstValueUnsigned
 		} else {
-			groupByCol := vector.MustFixedColNoTypeCheck[uint16](groupByVec)
-			firstValueUnsigned = uint64(groupByCol[0])
-			if groupByVec.IsConst() {
-				lastValueUnsigned = firstValueUnsigned
-			} else {
-				lastValueUnsigned = uint64(groupByCol[groupByVec.Length()-1])
-			}
+			lastValueUnsigned = uint64(groupByCol[groupByVec.Length()-1])
 		}
 	case types.T_char, types.T_varchar, types.T_text:
-		if groupByVec.IsDictionary() {
-			first, last := dictionaryRangeEndpoints[types.Varlena](groupByVec)
-			view := vector.ResolveVarlenaReadView(groupByVec)
-			firstValueUnsigned = plan2.VarlenaToUint64(&first, view.Area)
-			lastValueUnsigned = plan2.VarlenaToUint64(&last, view.Area)
+		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
+		firstValueUnsigned = plan2.VarlenaToUint64(&groupByCol[0], area)
+		if groupByVec.IsConst() {
+			lastValueUnsigned = firstValueUnsigned
 		} else {
-			groupByCol, area := vector.MustVarlenaRawData(groupByVec)
-			firstValueUnsigned = plan2.VarlenaToUint64(&groupByCol[0], area)
-			if groupByVec.IsConst() {
-				lastValueUnsigned = firstValueUnsigned
-			} else {
-				lastValueUnsigned = plan2.VarlenaToUint64(&groupByCol[groupByVec.Length()-1], area)
-			}
+			lastValueUnsigned = plan2.VarlenaToUint64(&groupByCol[groupByVec.Length()-1], area)
 		}
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
@@ -1649,14 +1599,6 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch, partition *bu
 }
 
 func rangeShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
-	if key := bat.Vecs[ap.ShuffleColIdx]; key.IsDictionary() {
-		if key.GetSorted() && key.Length() > 0 && !key.HasNull() {
-			if same, bucket := allBatchInOneRange(ap, bat); same {
-				return ap.routeSingleBucket(bat, int32(bucket), proc)
-			}
-		}
-		return ap.shuffleDictionaryKey(bat, proc)
-	}
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.GetSorted() || groupByVec.IsConst() {
 		ok, regIndex := allBatchInOneRange(ap, bat)
