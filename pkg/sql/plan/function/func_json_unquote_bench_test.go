@@ -50,7 +50,7 @@ func jsonUnquoteBeforeBorrowedString(ivecs []*vector.Vector, result vector.Funct
 	}
 
 	single := func(v []byte, row int) (string, error) {
-		if isBinaryStringVector(ivecs[0]) {
+		if isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0)) {
 			return "", moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_unquote")
 		}
 		if ivecs[0].GetType().Oid.IsMySQLString() {

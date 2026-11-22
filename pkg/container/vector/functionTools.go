@@ -549,6 +549,16 @@ type FunctionResultWrapper interface {
 	GetResultVector() *Vector
 	Free()
 	PreExtendAndReset(size int) error
+
+	// SetArgumentIsBin publishes, for each argument of the call, whether its
+	// value was spelled as a hex/bit literal or comes from a binary-flagged
+	// prepared parameter or user variable. The caller that produced the
+	// arguments owns this fact; vectors do not carry it. The slice is borrowed
+	// until the next call; nil means no argument is a binary literal.
+	SetArgumentIsBin(flags []bool)
+	// ArgumentIsBin reports the published flag of argument i, false when it
+	// was not published or i is out of range.
+	ArgumentIsBin(i int) bool
 }
 
 type reusableParameterWrapper interface{}
@@ -600,6 +610,15 @@ type FunctionResult[T types.FixedSizeT] struct {
 	//  this field is for optimisation to reduce the allocation of FunctionParameterWrapper pointer.
 	// 	there are still many built-in functions don't use it now, and will be fixed in the future.
 	convenientParam []reusableParameterWrapper
+
+	// argumentIsBin is the caller-published binary-literal flag per argument.
+	argumentIsBin []bool
+}
+
+func (fr *FunctionResult[T]) SetArgumentIsBin(flags []bool) { fr.argumentIsBin = flags }
+
+func (fr *FunctionResult[T]) ArgumentIsBin(i int) bool {
+	return i >= 0 && i < len(fr.argumentIsBin) && fr.argumentIsBin[i]
 }
 
 // MPool returns the pool the result allocates through (an accounted view
