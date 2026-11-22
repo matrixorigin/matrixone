@@ -294,7 +294,7 @@ type Engine struct {
 
 	//latest catalog will be loaded from TN when engine is initialized.
 	catalog atomic.Pointer[cache.CatalogCache]
-	//latest partitions which be protected by e.Lock().
+	// Latest partitions are protected by the engine's read/write mutex.
 	partitions map[[2]uint64]*logtailreplay.Partition
 
 	//snapshot partitions manager
