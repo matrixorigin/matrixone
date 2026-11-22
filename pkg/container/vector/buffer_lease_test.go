@@ -20,19 +20,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
-
-type nonComparableBufferLease []byte
-
-func (l nonComparableBufferLease) Retain() bool          { return true }
-func (l nonComparableBufferLease) Release()              {}
-func (l nonComparableBufferLease) Bytes() []byte         { return l }
-func (l nonComparableBufferLease) AccountedBytes() int64 { return int64(cap(l)) }
 
 func TestRefCountedBufferLeaseTerminalState(t *testing.T) {
 	var cleanup atomic.Int32
@@ -75,21 +67,13 @@ func TestRefCountedBufferLeaseConcurrentRetainRelease(t *testing.T) {
 	require.Equal(t, int32(1), cleanup.Load())
 }
 
-func TestBorrowedFixedVectorWindowAndCleanRelease(t *testing.T) {
+func TestBorrowedFixedVectorWindowAndClean(t *testing.T) {
 	data := types.EncodeSlice([]int64{11, 22, 33, 44})
-	var cleanup atomic.Int32
-	lease, err := NewRefCountedBufferLease(data, int64(cap(data)), func() {
-		cleanup.Add(1)
-	})
+	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), 4, data)
 	require.NoError(t, err)
-
-	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), 4, data, lease)
-	require.NoError(t, err)
-	lease.Release() // transfer the source reference to vec
-	require.Equal(t, BorrowedLease, vec.DataBackingKind())
-	// Borrowed storage has a stable retained lifetime, but it is still
-	// immutable and non-owning. Legacy ownership/COW boundaries must duplicate
-	// it before mutation or receiver reuse.
+	require.Equal(t, BorrowedAlias, vec.DataBackingKind())
+	// Borrowed storage is immutable and non-owning. Ownership/COW boundaries
+	// must duplicate it before mutation or receiver reuse.
 	require.True(t, vec.NeedDup())
 	require.False(t, vec.CanDetach(BackingData))
 	detached := DetachVectorData(vec)
@@ -101,10 +85,12 @@ func TestBorrowedFixedVectorWindowAndCleanRelease(t *testing.T) {
 	require.Equal(t, []int64{22, 33}, MustFixedColNoTypeCheck[int64](window))
 	vec.CleanOnlyData()
 	require.Zero(t, vec.Length())
-	require.Equal(t, int32(0), cleanup.Load())
+	require.Equal(t, OwnedMPoolUnique, vec.DataBackingKind(), "reuse drops the alias")
+	require.Nil(t, vec.GetData())
+	// The lender (this test) still keeps data alive for the window.
 	require.Equal(t, []int64{22, 33}, MustFixedColNoTypeCheck[int64](window))
 	window.Free(nil)
-	require.Equal(t, int32(1), cleanup.Load())
+	require.Equal(t, []int64{11, 22, 33, 44}, types.DecodeSlice[int64](data))
 }
 
 func TestBorrowedVectorAppendWithinCapacity(t *testing.T) {
@@ -122,15 +108,15 @@ func TestBorrowedVectorAppendWithinCapacity(t *testing.T) {
 			lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
 			require.NoError(t, err)
 			t.Cleanup(lease.Release)
-			vec, err := NewBorrowedFixedVectorWithAllocation(
-				types.T_int64.ToType(), 3, data[:3*8], lease, state.selection,
+			vec, err := NewBorrowedFixedVector(
+				types.T_int64.ToType(), 3, data[:3*8],
 			)
 			require.NoError(t, err)
 			t.Cleanup(func() { vec.Free(mp) })
-			err = AppendFixed(vec, int64(44), false, mp)
+			err = AppendFixed(vec, int64(44), false, state.view(t, mp))
 			if limit == 16 {
 				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-				require.Equal(t, BorrowedLease, vec.DataBackingKind())
+				require.Equal(t, BorrowedAlias, vec.DataBackingKind())
 				require.Equal(t, 3, vec.Length())
 				require.Zero(t, state.account.Snapshot().Used)
 			} else {
@@ -147,28 +133,22 @@ func TestBorrowedVectorMaterializeOwnedIsTransactional(t *testing.T) {
 	values := make([]int64, mpool.MB/8+1)
 	copy(values, []int64{7, 8, 9})
 	data := types.EncodeSlice(values)
-	var cleanup atomic.Int32
-	lease, err := NewRefCountedBufferLease(data, int64(cap(data)), func() {
-		cleanup.Add(1)
-	})
+	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data)
 	require.NoError(t, err)
-	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data, lease)
-	require.NoError(t, err)
-	lease.Release()
 
 	tooSmall, err := mpool.NewMPool("borrowed-cow-failure", mpool.MB, mpool.NoFixed)
 	require.NoError(t, err)
 	require.Error(t, vec.MaterializeOwned(tooSmall))
-	require.Equal(t, BorrowedLease, vec.DataBackingKind())
+	require.Equal(t, BorrowedAlias, vec.DataBackingKind())
 	require.Equal(t, []int64{7, 8, 9}, MustFixedColNoTypeCheck[int64](vec)[:3])
-	require.Equal(t, int32(0), cleanup.Load())
 
 	mp := mpool.MustNewZero()
 	require.NoError(t, vec.MaterializeOwned(mp))
 	require.Equal(t, OwnedMPoolUnique, vec.DataBackingKind())
 	require.Equal(t, []int64{7, 8, 9}, MustFixedColNoTypeCheck[int64](vec)[:3])
-	require.Equal(t, int32(1), cleanup.Load())
 	require.True(t, vec.CanDetach(BackingData))
+	MustFixedColNoTypeCheck[int64](vec)[0] = 70
+	require.Equal(t, int64(7), values[0], "the lent backing is never written")
 	vec.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
@@ -182,25 +162,25 @@ func TestBorrowedVectorMaterializeOwnedCopiesValidityIntoAccount(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 1, 2,
-	)
-	require.NoError(t, err)
-	vec, err := NewBorrowedFixedVectorWithAllocation(
-		types.T_int64.ToType(), 3, data, dataLease, selection,
+	vec, err := NewBorrowedFixedVector(
+		types.T_int64.ToType(), 3, data,
 	)
 	require.NoError(t, err)
 	vec.GetNulls().Add(1)
 	dataLease.Release()
 
 	mp := mpool.MustNewZero()
+	view, err := mp.WithAccount(
+		account, mpool.AllocationOwnerExternal, 1, mpool.AllocationCapacityClassDefault,
+	)
+	require.NoError(t, err)
 	clone, err := vec.CloneWindow(0, vec.Length(), mp)
 	require.NoError(t, err)
 	require.False(t, clone.HasBorrowedBacking())
 	require.Equal(t, []uint64{1}, clone.GetNulls().ToArray())
 	clone.Free(mp)
 
-	require.NoError(t, vec.MaterializeOwned(mp))
+	require.NoError(t, vec.MaterializeOwned(view))
 	require.False(t, vec.HasBorrowedBacking())
 	require.Equal(t, []uint64{1}, vec.GetNulls().ToArray())
 	require.Equal(t, []int64{11, 22, 33}, MustFixedColNoTypeCheck[int64](vec))
@@ -217,16 +197,9 @@ func TestUnionOneBorrowedFixedValidity(t *testing.T) {
 	for _, withNull := range []bool{false, true} {
 		t.Run(fmt.Sprintf("null=%t", withNull), func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			releases := 0
-			t.Cleanup(func() {
-				require.Zero(t, mp.CurrNB())
-				require.Equal(t, 1, releases, "the borrowed owner releases exactly once")
-			})
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 			data := types.EncodeSlice([]int64{11, 22, 33})
-			dataLease, err := NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
-			require.NoError(t, err)
-			t.Cleanup(dataLease.Release)
-			source, err := NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, dataLease)
+			source, err := NewBorrowedFixedVector(types.T_int64.ToType(), 3, data)
 			require.NoError(t, err)
 			t.Cleanup(func() { source.Free(nil) })
 			if withNull {
@@ -247,66 +220,18 @@ func TestUnionOneBorrowedFixedValidity(t *testing.T) {
 	}
 }
 
-func TestRetainedReadonlyViewWithMPCopiesOwnedDescriptorsAndRetainsArea(t *testing.T) {
-	mp := mpool.MustNewZero()
+func TestBorrowedVectorResetDropsEachAlias(t *testing.T) {
+	data, area := []byte{1}, []byte("long-value")
 	vec := NewOffHeapVecWithType(types.T_varchar.ToType())
-	require.NoError(t, vec.PreExtend(2, mp))
-	vec.SetLength(2)
-	first := []byte("first payload longer than twenty three bytes")
-	second := []byte("second payload longer than twenty three bytes")
-	area := append(append([]byte(nil), first...), second...)
-	descriptors := MustFixedColNoTypeCheck[types.Varlena](vec)
-	descriptors[0].SetOffsetLen(0, uint32(len(first)))
-	descriptors[1].SetOffsetLen(uint32(len(first)), uint32(len(second)))
-	lease, err := NewRefCountedBufferLease(area, int64(cap(area)), nil)
-	require.NoError(t, err)
-	require.NoError(t, vec.InstallBorrowedArea(area, lease))
-	lease.Release()
-
-	dataPointer := uintptr(unsafe.Pointer(unsafe.SliceData(vec.GetData())))
-	areaPointer := uintptr(unsafe.Pointer(unsafe.SliceData(vec.GetArea())))
-	view, err := vec.RetainedReadonlyViewWithMP(mp)
-	require.NoError(t, err)
-	require.NotEqual(t, dataPointer, uintptr(unsafe.Pointer(unsafe.SliceData(view.GetData()))))
-	require.Equal(t, areaPointer, uintptr(unsafe.Pointer(unsafe.SliceData(view.GetArea()))))
-	require.Equal(t, BorrowedLease, view.AreaBackingKind())
-	require.Equal(t, OwnedMPoolUnique, view.DataBackingKind())
-
-	vec.Free(mp)
-	require.Equal(t, string(first), view.GetStringAt(0))
-	require.Equal(t, string(second), view.GetStringAt(1))
-	require.NotNil(t, lease.Bytes())
-	view.Free(mp)
-	require.Nil(t, lease.Bytes())
-	require.Zero(t, mp.CurrNB())
-}
-
-func TestBorrowedVectorResetReleasesEachBacking(t *testing.T) {
-	dataLease, err := NewRefCountedBufferLease([]byte{1}, 1, nil)
-	require.NoError(t, err)
-	areaLease, err := NewRefCountedBufferLease([]byte("long-value"), 10, nil)
-	require.NoError(t, err)
-	vec := NewOffHeapVecWithType(types.T_varchar.ToType())
-	require.NoError(t, vec.InstallBorrowedData([]byte{1}, dataLease))
-	require.NoError(t, vec.InstallBorrowedArea([]byte("long-value"), areaLease))
-	dataLease.Release()
-	areaLease.Release()
+	require.NoError(t, vec.InstallBorrowedData(data))
+	require.NoError(t, vec.InstallBorrowedArea(area))
 
 	vec.ResetWithSameType()
 	require.Equal(t, OwnedMPoolUnique, vec.DataBackingKind())
 	require.Equal(t, OwnedMPoolUnique, vec.AreaBackingKind())
-	require.Nil(t, dataLease.Bytes())
-	require.Nil(t, areaLease.Bytes())
-}
-
-func TestBorrowedAccountedBytesDoesNotCompareNonComparableLease(t *testing.T) {
-	lease := nonComparableBufferLease(make([]byte, 0, 7))
-	vec := NewOffHeapVecWithType(types.T_varchar.ToType())
-	require.NoError(t, vec.InstallBorrowedData(lease, lease))
-	require.NoError(t, vec.InstallBorrowedArea(lease, lease))
-	require.Equal(t, int64(14), vec.BorrowedAccountedBytes(),
-		"unknown lease identity must be accounted conservatively")
-	vec.Free(nil)
+	require.Nil(t, vec.GetData())
+	require.Nil(t, vec.GetArea())
+	require.Equal(t, []byte("long-value"), area, "dropping an alias never touches the lent bytes")
 }
 
 func TestBorrowedVarlenMarshalUsesCanonicalCompactedArea(t *testing.T) {
@@ -327,8 +252,8 @@ func TestBorrowedVarlenMarshalUsesCanonicalCompactedArea(t *testing.T) {
 	areaLease, err := NewRefCountedBufferLease(area, int64(cap(area)), nil)
 	require.NoError(t, err)
 	vec := NewOffHeapVecWithType(types.T_varchar.ToType())
-	require.NoError(t, vec.InstallBorrowedData(data, dataLease))
-	require.NoError(t, vec.InstallBorrowedArea(area, areaLease))
+	require.NoError(t, vec.InstallBorrowedData(data))
+	require.NoError(t, vec.InstallBorrowedArea(area))
 	dataLease.Release()
 	areaLease.Release()
 	vec.SetLength(3)
@@ -357,7 +282,7 @@ func TestBorrowedVarlenMarshalUsesCanonicalCompactedArea(t *testing.T) {
 	require.Nil(t, areaLease.Bytes())
 }
 
-func TestCloneWindowToConstNullReleasesDataLease(t *testing.T) {
+func TestCloneWindowToConstNullDropsDataAlias(t *testing.T) {
 	for _, sharedArea := range []bool{false, true} {
 		t.Run(fmt.Sprintf("sharedArea=%v", sharedArea), func(t *testing.T) {
 			mp := mpool.MustNewZero()
@@ -366,18 +291,12 @@ func TestCloneWindowToConstNullReleasesDataLease(t *testing.T) {
 				typ = types.T_varchar.ToType()
 			}
 			backing := make([]byte, typ.TypeSize()+32)
-			releases := 0
-			lease, err := NewRefCountedBufferLease(backing, int64(len(backing)), func() { releases++ })
-			require.NoError(t, err)
-			releaseIncoming := sync.OnceFunc(lease.Release)
-			t.Cleanup(releaseIncoming)
 			dst := NewOffHeapVecWithType(typ)
 			t.Cleanup(func() { dst.Free(mp) })
-			require.NoError(t, dst.InstallBorrowedData(backing[:typ.TypeSize()], lease))
+			require.NoError(t, dst.InstallBorrowedData(backing[:typ.TypeSize()]))
 			if sharedArea {
-				require.NoError(t, dst.InstallBorrowedArea(backing[typ.TypeSize():], lease))
+				require.NoError(t, dst.InstallBorrowedArea(backing[typ.TypeSize():]))
 			}
-			releaseIncoming()
 			src := NewConstNull(typ, 1, mp)
 			t.Cleanup(func() { src.Free(mp) })
 			require.NoError(t, src.CloneWindowTo(dst, 0, 1, nil))
@@ -385,17 +304,15 @@ func TestCloneWindowToConstNullReleasesDataLease(t *testing.T) {
 			require.Equal(t, OwnedMPoolUnique, dst.DataBackingKind())
 			require.Nil(t, dst.GetData())
 			if sharedArea {
-				require.Zero(t, releases, "dropping the data reference must preserve the area's reference")
-				require.Equal(t, BorrowedLease, dst.AreaBackingKind())
+				require.Equal(t, BorrowedAlias, dst.AreaBackingKind(), "dropping the data alias keeps the area alias")
 				require.Equal(t, backing[typ.TypeSize():], dst.GetArea())
 			} else {
-				require.Equal(t, 1, releases)
 				dst.ResetWithNewType(&typ)
 				require.NoError(t, AppendFixed(dst, int64(7), false, mp))
 				require.Equal(t, int64(7), GetFixedAtNoTypeCheck[int64](dst, 0))
 			}
 			dst.Free(mp)
-			require.Equal(t, 1, releases)
+			require.Equal(t, make([]byte, len(backing)), backing, "the lent backing is never written")
 			require.Zero(t, mp.CurrNB())
 		})
 	}
@@ -409,12 +326,12 @@ func TestPrepareDataForInplaceMutation(t *testing.T) {
 	lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
 	require.NoError(t, err)
 	defer lease.Release()
-	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data, lease)
+	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data)
 	require.NoError(t, err)
 	defer vec.Free(mp)
 
 	require.Error(t, vec.PrepareDataForInplaceMutation(nil))
-	require.Equal(t, BorrowedLease, vec.DataBackingKind())
+	require.Equal(t, BorrowedAlias, vec.DataBackingKind())
 	require.Equal(t, []int64{11, 22, 33}, MustFixedColNoTypeCheck[int64](vec))
 	require.NoError(t, vec.PrepareDataForInplaceMutation(mp))
 	require.Equal(t, OwnedMPoolUnique, vec.DataBackingKind())
@@ -435,12 +352,12 @@ func TestPrepareDataForInplaceMutationAccountRejection(t *testing.T) {
 	lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
 	require.NoError(t, err)
 	defer lease.Release()
-	vec, err := NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), len(values), data, lease, state.selection)
+	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data)
 	require.NoError(t, err)
 	defer vec.Free(mp)
 
-	require.ErrorIs(t, vec.PrepareDataForInplaceMutation(mp), mpool.ErrAllocationAccountCapacity)
-	require.Equal(t, BorrowedLease, vec.DataBackingKind())
+	require.ErrorIs(t, vec.PrepareDataForInplaceMutation(state.view(t, mp)), mpool.ErrAllocationAccountCapacity)
+	require.Equal(t, BorrowedAlias, vec.DataBackingKind())
 	require.Equal(t, values, MustFixedColNoTypeCheck[int64](vec))
 	require.Zero(t, state.account.Snapshot().Used)
 }
@@ -456,4 +373,77 @@ func TestFixedSortCompactKeepsOwnedStorage(t *testing.T) {
 	require.True(t, vec.GetSorted())
 	require.NoError(t, AppendFixed(vec, int64(4), false, mp))
 	require.Equal(t, []int64{1, 2, 3, 4}, MustFixedColNoTypeCheck[int64](vec))
+}
+
+// Every copying API applied to an aliased vector yields a result that is
+// independent of the lent backing: it survives the lender reusing the bytes.
+func TestCopiesOfBorrowedVectorsDoNotAliasTheLender(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	long := "a payload that is longer than the inline varlena capacity"
+	desc := make([]types.Varlena, 2)
+	desc[0].SetOffsetLen(0, uint32(len(long)))
+	desc[1][0] = 5
+	copy(desc[1][1:], "short")
+	data := types.EncodeSlice(desc)
+	area := []byte(long)
+	source := NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, source.InstallBorrowedData(data))
+	require.NoError(t, source.InstallBorrowedArea(area))
+	source.SetLength(2)
+	defer source.Free(mp)
+
+	copies := map[string]func() (*Vector, error){
+		"Dup":                func() (*Vector, error) { return source.Dup(mp) },
+		"CloneWindow":        func() (*Vector, error) { return source.CloneWindow(0, 2, mp) },
+		"CloneToFlatCompact": func() (*Vector, error) { return source.CloneToFlatCompact(mp) },
+		"UnionBatch": func() (*Vector, error) {
+			w := NewOffHeapVecWithType(types.T_varchar.ToType())
+			return w, w.UnionBatch(source, 0, 2, nil, mp)
+		},
+	}
+	results := make(map[string]*Vector, len(copies))
+	for name, copyFn := range copies {
+		w, err := copyFn()
+		require.NoError(t, err, name)
+		require.False(t, w.HasBorrowedBacking(), name)
+		results[name] = w
+	}
+	// The lender reuses its bytes.
+	for i := range data {
+		data[i] = 0xFF
+	}
+	for i := range area {
+		area[i] = 0xFF
+	}
+	for name, w := range results {
+		require.Equal(t, long, w.GetStringAt(0), name)
+		require.Equal(t, "short", w.GetStringAt(1), name)
+		w.Free(mp)
+	}
+}
+
+func TestWindowCopyingOwnedPartsKeepsOnlyLentAliases(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	first := "first payload longer than twenty three bytes"
+	second := "second payload longer than twenty three bytes"
+	area := []byte(first + second)
+	vec := NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, vec.PreExtend(2, mp))
+	vec.SetLength(2)
+	desc := MustFixedColNoTypeCheck[types.Varlena](vec)
+	desc[0].SetOffsetLen(0, uint32(len(first)))
+	desc[1].SetOffsetLen(uint32(len(first)), uint32(len(second)))
+	require.NoError(t, vec.InstallBorrowedArea(area))
+
+	view, err := vec.WindowCopyingOwnedParts(0, 2, mp)
+	require.NoError(t, err)
+	require.Equal(t, OwnedMPoolUnique, view.DataBackingKind(), "owned descriptors are copied")
+	require.Equal(t, BorrowedAlias, view.AreaBackingKind(), "the lent area stays aliased")
+	require.Same(t, &area[0], &view.GetArea()[0])
+	vec.Free(mp)
+	require.Equal(t, first, view.GetStringAt(0))
+	require.Equal(t, second, view.GetStringAt(1))
+	view.Free(mp)
 }

@@ -30,27 +30,20 @@ type dependentSlotExecutor struct {
 	mp    *mpool.MPool
 }
 
-func newDependentSlotExecutor(proc *process.Process, slot *plan.CorrelationSlot, typ types.Type, allocation *vector.AllocationAccountSelection) (ExpressionExecutor, error) {
+func newDependentSlotExecutor(proc *process.Process, slot *plan.CorrelationSlot, typ types.Type, allocation *mpool.MPool) (ExpressionExecutor, error) {
 	if slot == nil {
 		return nil, moerr.NewInternalErrorNoCtx("dependent slot requires allocation owner")
 	}
 	if allocation == nil {
 		// Native operators may use the ordinary executor constructor. Their
 		// private slot still belongs to the active invocation's captured value.
-		source, err := proc.DependentSlot(slot.ProgramId, slot.Ordinal)
-		if err != nil {
+		if _, err := proc.DependentSlot(slot.ProgramId, slot.Ordinal); err != nil {
 			return nil, err
 		}
-		allocation = source.AllocationAccountSelection()
-		if allocation == nil {
-			return nil, moerr.NewInternalErrorNoCtx("dependent slot requires allocation owner")
-		}
 	}
-	value, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, allocation)
-	if err != nil {
-		return nil, err
-	}
-	return &dependentSlotExecutor{slot: *slot, value: value, mp: proc.Mp()}, nil
+	mp := expressionAllocationMP(proc.Mp(), allocation)
+	value := vector.NewOffHeapVecWithType(typ)
+	return &dependentSlotExecutor{slot: *slot, value: value, mp: mp}, nil
 }
 
 func (e *dependentSlotExecutor) Eval(proc *process.Process, batches []*batch.Batch, selection []bool) (*vector.Vector, error) {
@@ -85,7 +78,7 @@ func (e *dependentSlotExecutor) EvalWithoutResultReusing(proc *process.Process, 
 	if err != nil {
 		return nil, err
 	}
-	return value.DupOffHeapWithAllocation(e.mp, e.value.AllocationAccountSelection())
+	return value.DupOffHeap(e.mp)
 }
 func (e *dependentSlotExecutor) ResetForNextQuery() {
 	if e.value != nil {

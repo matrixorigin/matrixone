@@ -1724,7 +1724,7 @@ func (ses *feSessionImpl) GetResultBatches() []*batch.Batch {
 func (ses *feSessionImpl) AppendResultBatch(bat *batch.Batch) error {
 	// Result batches belong to the session and can remain reachable after the
 	// producing statement has sealed its allocation account.
-	copied, err := bat.DupWithoutAllocationAccount(ses.pool)
+	copied, err := bat.Dup(ses.pool)
 	if err != nil {
 		return err
 	}

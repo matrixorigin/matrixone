@@ -130,7 +130,7 @@ func TestJSONStoragePublicationComposesLateFilterRows(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	}()
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+	allocation, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	for _, selectedOwned := range []bool{false, true} {
 		for _, earlyColumn := range []int{0, 1} {
@@ -139,9 +139,6 @@ func TestJSONStoragePublicationComposesLateFilterRows(t *testing.T) {
 				output.Vecs[0] = vector.NewOffHeapVecWithType(typ)
 				output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
 				defer output.Clean(mp)
-				if selectedOwned {
-					require.NoError(t, output.SetAllocationAccount(allocation))
-				}
 				publication := objectio.NewJSONReadSet([]int{0})
 				defer publication.Close()
 				publication.BindColumns([]uint16{0, 1})

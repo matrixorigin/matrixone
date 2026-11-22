@@ -51,7 +51,7 @@ type Shuffle struct {
 	OwnedOutput       bool
 	OwnedColumnCount  int
 	allocationAccount *mpool.AllocationAccount
-	outputAllocation  *vector.AllocationAccountSelection
+	outputAllocation  *mpool.AccountBinding
 	retiredOwnedPool  *ShufflePool
 	vm.OperatorBase
 }
@@ -156,7 +156,7 @@ func (shuffle *Shuffle) SetAllocationAccount(account *mpool.AllocationAccount) e
 	if shuffle.allocationAccount != nil && shuffle.allocationAccount != account {
 		return mpool.ErrAllocationAccountMismatch
 	}
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSet, 9, 10)
+	selection, err := mpool.NewAccountBinding(account, mpool.AllocationOwnerSet, 9)
 	if err != nil {
 		return err
 	}

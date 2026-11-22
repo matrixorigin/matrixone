@@ -35,8 +35,12 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
-	maxAllocSize              int
-	buf                       *batch.Batch
+	maxAllocSize int
+	buf          *batch.Batch
+	// outputLease charges buf's retained capacity to OutputAllocation while
+	// the emitted batch is live. buf is allocated through proc's pool, so the
+	// lease is its only charge; it is released before buf is refilled.
+	outputLease               *mpool.CapacityLease
 	msgReceiver               *message.MessageReceiver
 	filterExecutors           []colexec.ExpressionExecutor
 	runtimeFilterExecutors    []colexec.ExpressionExecutor
@@ -66,7 +70,8 @@ type container struct {
 
 type TableScan struct {
 	// OutputAllocation belongs to the caller execution and is installed before reading.
-	OutputAllocation  *vector.AllocationAccountSelection
+	// It is an accounted view of the process pool (nil = unaccounted).
+	OutputAllocation  *mpool.MPool
 	allocationAccount *mpool.AllocationAccount
 	ctr               container
 	TopValueMsgTag    int32
@@ -105,19 +110,60 @@ func (tableScan *TableScan) SetAllocationAccount(account *mpool.AllocationAccoun
 	if tableScan.ctr.buf != nil || len(tableScan.ctr.filterExecutors) != 0 || tableScan.HasPreparedProjection() {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	if tableScan.OutputAllocation != nil {
-		if !tableScan.OutputAllocation.UsesAccount(account) {
-			return mpool.ErrAllocationAccountMismatch
-		}
-	} else {
-		selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
-		if err != nil {
-			return err
-		}
-		tableScan.OutputAllocation = selection
+	if tableScan.OutputAllocation != nil && tableScan.OutputAllocation.ViewAccount() != account {
+		return mpool.ErrAllocationAccountMismatch
 	}
+	// Without a caller-installed view, Prepare builds one on the process pool.
 	tableScan.allocationAccount = account
 	return nil
+}
+
+// bindOutputAllocation builds the accounted view of proc's pool for a bound
+// account when the caller did not install one. Binding happens before the
+// operator knows its process pool, so the view is built on first use.
+func (tableScan *TableScan) bindOutputAllocation(proc *process.Process) error {
+	if tableScan.allocationAccount == nil || tableScan.OutputAllocation != nil {
+		return nil
+	}
+	view, err := proc.Mp().WithAccount(
+		tableScan.allocationAccount, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
+	if err != nil {
+		return err
+	}
+	tableScan.OutputAllocation = view
+	return nil
+}
+
+// BoundAllocationAccount returns the statement account bound by
+// SetAllocationAccount, or nil.
+func (tableScan *TableScan) BoundAllocationAccount() *mpool.AllocationAccount {
+	return tableScan.allocationAccount
+}
+
+// chargeOutput charges the batch about to be emitted to OutputAllocation by
+// a capacity lease of buf's retained capacity. Everything written into buf
+// (reader fills, in-place filtering and padding) uses proc's pool, so the
+// lease is buf's only charge and nothing is counted twice.
+func (tableScan *TableScan) chargeOutput() error {
+	tableScan.releaseOutputLease()
+	if tableScan.OutputAllocation == nil || tableScan.ctr.buf == nil {
+		return nil
+	}
+	size := tableScan.ctr.buf.Allocated()
+	if size <= 0 {
+		return nil
+	}
+	lease, err := tableScan.OutputAllocation.ReservePinnedCapacity(uint64(size))
+	if err != nil {
+		return err
+	}
+	tableScan.ctr.outputLease = lease
+	return nil
+}
+
+func (tableScan *TableScan) releaseOutputLease() {
+	tableScan.ctr.outputLease.Release()
+	tableScan.ctr.outputLease = nil
 }
 
 func (tableScan *TableScan) ClearAllocationAccount(account *mpool.AllocationAccount) error {
@@ -211,6 +257,13 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 		tableScan.OpAnalyzer.Alloc(allocSize)
 	}
 	tableScan.closeReader()
+	tableScan.releaseOutputLease()
+	// The output batch is the lender of the cache pins its borrowed columns
+	// alias; nothing reads it after Reset, so do not keep the pins while the
+	// operator waits to be reused.
+	if tableScan.ctr.buf != nil {
+		tableScan.ctr.buf.CleanOnlyData()
+	}
 	if tableScan.allocationAccount != nil {
 		tableScan.Free(proc, pipelineFailed, err)
 	}
@@ -221,6 +274,7 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	tableScan.ctr.columnUsesReady = false
 
 	tableScan.releaseLocalDomains()
+	tableScan.releaseOutputLease()
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.Clean(proc.Mp())
 		tableScan.ctr.buf = nil

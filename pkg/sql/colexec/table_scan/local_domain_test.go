@@ -179,7 +179,7 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 			probeReader := &localDomainTestReader{values: []int64{1, 2, 99, 0}, nullAt: 3}
 			if tc.tight {
 				probeReader.values, probeReader.nullAt = []int64{1, 99, 99, 99, 99, 99, 99, 99}, -1
-				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+				allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 				require.NoError(t, err)
 				probe.OutputAllocation = allocation
 			}

@@ -179,10 +179,7 @@ func (projection *Projection) emitRuntimeEmptyGroupingSet(proc *process.Process)
 		output.Vecs[i] = vec
 	}
 	for i := groupCount; i < len(output.Vecs)-2; i++ {
-		vec, err := vector.NewConstNullWithAllocation(planTypeToType(projection.ProjectList[i].Typ), 1, nil)
-		if err != nil {
-			return vm.CancelResult, err
-		}
+		vec := vector.NewConstNull(planTypeToType(projection.ProjectList[i].Typ), 1, proc.Mp())
 		projection.ctr.expandOwned = append(projection.ctr.expandOwned, vec)
 		output.Vecs[i] = vec
 	}

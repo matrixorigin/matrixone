@@ -255,18 +255,23 @@ type container struct {
 	mp     *mpool.MPool
 	budget *process.ExecutionResourceGeneration
 
-	allocationAccount    *mpool.AllocationAccount
-	hashAllocation       *hashtable.AllocationAccountSelection
-	hashIterator         *hashmap.IteratorAllocation
-	groupByAllocation    *vector.AllocationAccountSelection
-	expressionAllocation *vector.AllocationAccountSelection
+	allocationAccount *mpool.AllocationAccount
+	hashAllocation    *hashtable.AllocationAccountSelection
+	hashIterator      *hashmap.IteratorAllocation
+	// groupByAllocation, rollupAllocation and spillGroupByAllocation are
+	// accounted views of ctr.mp; expressionAllocation is an accounted view of
+	// the process pool used by expression executors and the projection. All
+	// are rebuilt by bindAllocationViews for each execution generation.
+	groupByAllocation    *mpool.MPool
+	expressionAllocation *mpool.MPool
+	rollupAllocation     *mpool.MPool
 	aggregateAllocation  *aggexec.AllocationAccount
 
 	recoveryCapacity         *process.ExecutionRecoveryCapacity
 	recoveryCapacityClass    mpool.AllocationCapacityClass
 	recoveryCapacityActive   bool
 	recoveryCapacityFloor    uint64
-	spillGroupByAllocation   *vector.AllocationAccountSelection
+	spillGroupByAllocation   *mpool.MPool
 	spillAggregateAllocation *aggexec.AllocationAccount
 
 	inputDone    bool
@@ -407,24 +412,6 @@ func (ctr *container) setAllocationAccount(
 	if err != nil {
 		return err
 	}
-	groupByAllocation, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerGroup,
-		GroupAllocationSiteKeyData,
-		GroupAllocationSiteKeyArea,
-	)
-	if err != nil {
-		return err
-	}
-	expressionAllocation, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerGroup,
-		GroupAllocationSiteExpressionData,
-		GroupAllocationSiteExpressionArea,
-	)
-	if err != nil {
-		return err
-	}
 	aggregateAllocation, err := aggexec.NewAllocationAccount(
 		account,
 		mpool.AllocationOwnerGroup,
@@ -451,16 +438,6 @@ func (ctr *container) setAllocationAccount(
 		_ = account.UnregisterCapacityController(recoveryClass, recoveryCapacity)
 		return cause
 	}
-	spillGroupByAllocation, err := vector.NewAllocationAccountSelectionWithCapacityClass(
-		account,
-		mpool.AllocationOwnerGroup,
-		GroupAllocationSiteKeyData,
-		GroupAllocationSiteKeyArea,
-		recoveryClass,
-	)
-	if err != nil {
-		return rollbackRecovery(err)
-	}
 	spillAggregateAllocation, err := aggexec.NewAllocationAccountWithCapacityClass(
 		account,
 		mpool.AllocationOwnerGroup,
@@ -479,14 +456,89 @@ func (ctr *container) setAllocationAccount(
 	ctr.allocationAccount = account
 	ctr.hashAllocation = hashAllocation
 	ctr.hashIterator = hashIterator
-	ctr.groupByAllocation = groupByAllocation
-	ctr.expressionAllocation = expressionAllocation
 	ctr.aggregateAllocation = aggregateAllocation
 	ctr.recoveryCapacity = recoveryCapacity
 	ctr.recoveryCapacityClass = recoveryClass
-	ctr.spillGroupByAllocation = spillGroupByAllocation
 	ctr.spillAggregateAllocation = spillAggregateAllocation
 	return nil
+}
+
+// bindAllocationViews builds the accounted MPool views of the bound account
+// for the current execution generation. The key, rollup and recovery views
+// are views of the private ctr.mp; the expression view is a view of the
+// process pool, from which expression executors allocate.
+func (ctr *container) bindAllocationViews(proc *process.Process) error {
+	ctr.unbindAllocationViews()
+	if ctr.allocationAccount == nil {
+		return nil
+	}
+	if ctr.mp == nil || proc == nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	account := ctr.allocationAccount
+	groupBy, err := ctr.mp.WithAccount(account, mpool.AllocationOwnerGroup,
+		GroupAllocationSiteKeyData, mpool.AllocationCapacityClassDefault)
+	if err != nil {
+		return err
+	}
+	rollup, err := ctr.mp.WithAccount(account, mpool.AllocationOwnerGroup,
+		GroupAllocationSiteExpressionData, mpool.AllocationCapacityClassDefault)
+	if err != nil {
+		return err
+	}
+	expression, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerGroup,
+		GroupAllocationSiteExpressionData, mpool.AllocationCapacityClassDefault)
+	if err != nil {
+		return err
+	}
+	var spillGroupBy *mpool.MPool
+	if ctr.recoveryCapacity != nil {
+		spillGroupBy, err = ctr.mp.WithAccount(account, mpool.AllocationOwnerGroup,
+			GroupAllocationSiteKeyData, ctr.recoveryCapacityClass)
+		if err != nil {
+			return err
+		}
+	}
+	ctr.groupByAllocation = groupBy
+	ctr.rollupAllocation = rollup
+	ctr.expressionAllocation = expression
+	ctr.spillGroupByAllocation = spillGroupBy
+	return nil
+}
+
+// unbindAllocationViews drops the views of ctr.mp. The expression view is
+// kept: executors built from it may outlive the private pool generation.
+func (ctr *container) unbindAllocationViews() {
+	ctr.groupByAllocation = nil
+	ctr.rollupAllocation = nil
+	ctr.spillGroupByAllocation = nil
+}
+
+// groupByMP returns the pool through which resident group-by key storage
+// allocates and grows.
+func (ctr *container) groupByMP() *mpool.MPool {
+	if ctr.groupByAllocation != nil {
+		return ctr.groupByAllocation
+	}
+	return ctr.mp
+}
+
+// spillGroupByMP returns the pool through which recovery-class group-by
+// key storage allocates and grows.
+func (ctr *container) spillGroupByMP() *mpool.MPool {
+	if ctr.spillGroupByAllocation != nil {
+		return ctr.spillGroupByAllocation
+	}
+	return ctr.mp
+}
+
+// rollupMP returns the pool through which expression-scaled storage owned by
+// the private pool (rollup constants, sort-rollup keys) allocates.
+func (ctr *container) rollupMP() *mpool.MPool {
+	if ctr.rollupAllocation != nil {
+		return ctr.rollupAllocation
+	}
+	return ctr.mp
 }
 
 func (ctr *container) installRecoveryCapacity() error {
@@ -495,7 +547,7 @@ func (ctr *container) installRecoveryCapacity() error {
 	}
 	if ctr.recoveryCapacity == nil ||
 		ctr.recoveryCapacityClass == mpool.AllocationCapacityClassDefault ||
-		ctr.spillGroupByAllocation == nil || ctr.spillAggregateAllocation == nil {
+		ctr.spillAggregateAllocation == nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	if ctr.recoveryCapacityActive {
@@ -606,6 +658,7 @@ func (ctr *container) clearAllocationAccount(
 	ctr.hashIterator = nil
 	ctr.groupByAllocation = nil
 	ctr.expressionAllocation = nil
+	ctr.rollupAllocation = nil
 	ctr.aggregateAllocation = nil
 	return nil
 }
@@ -811,6 +864,7 @@ func (ctr *container) free(expressionMP *mpool.MPool) {
 	ctr.legacyDistinctFloatKeys = false
 	ctr.budget = nil
 
+	ctr.unbindAllocationViews()
 	mpool.DeleteMPool(ctr.mp)
 	ctr.mp = nil
 }
@@ -929,16 +983,11 @@ func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.
 	// grouping flag
 	for i, flag := range group.GroupingFlag {
 		if !flag {
-			rollup, err := vector.NewRollupConstWithAllocation(
+			rollup := vector.NewRollupConst(
 				group.ctr.groupByEvaluate.Typ[i],
 				group.ctr.groupByEvaluate.Vec[i].Length(),
-				group.ctr.mp,
-				group.ctr.expressionAllocation,
+				group.ctr.rollupMP(),
 			)
-			if err != nil {
-				group.ctr.freeGroupingRollups()
-				return err
-			}
 			if group.ctr.groupingRollup == nil {
 				group.ctr.groupingRollup = make([]*vector.Vector, len(group.GroupingFlag))
 			}

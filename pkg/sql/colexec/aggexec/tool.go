@@ -119,9 +119,19 @@ func SyncAggregatorsToChunkSize[T AggFuncExec](as []T, syncLimit int) {
 }
 
 type Vectors[T numeric | types.Decimal64 | types.Decimal128] struct {
-	vecs       []*vector.Vector
-	allocation *vector.AllocationAccountSelection
+	vecs []*vector.Vector
+	// allocation is the accounted MPool view the vectors grow through, or nil
+	// when they grow through the caller's pool.
+	allocation *mpool.MPool
 	appendAt   int
+}
+
+// growMP returns the pool vs grows through: its accounted view, else mp.
+func (vs *Vectors[T]) growMP(mp *mpool.MPool) *mpool.MPool {
+	if vs.allocation != nil {
+		return vs.allocation
+	}
+	return mp
 }
 
 const (
@@ -133,20 +143,18 @@ func NewVectors[T numeric | types.Decimal64 | types.Decimal128](typ types.Type) 
 	return &Vectors[T]{vecs: []*vector.Vector{vec}}
 }
 
+// newAccountedVectors creates vectors that grow through view, an accounted
+// view of the owning executor's pool.
 func newAccountedVectors[T numeric | types.Decimal64 | types.Decimal128](
 	typ types.Type,
-	allocation *AllocationAccount,
+	view *mpool.MPool,
 ) (*Vectors[T], error) {
-	if allocation == nil {
+	if !view.IsView() {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	vec, err := allocation.newVector(typ)
-	if err != nil {
-		return nil, err
-	}
 	return &Vectors[T]{
-		vecs:       []*vector.Vector{vec},
-		allocation: allocation.vectorSelection(),
+		vecs:       []*vector.Vector{vector.NewOffHeapVecWithType(typ)},
+		allocation: view,
 	}, nil
 }
 
@@ -239,18 +247,7 @@ func (vs *Vectors[T]) getAppendableVector() (*vector.Vector, error) {
 		vs.appendAt++
 	}
 	if vs.appendAt == len(vs.vecs) {
-		var vec *vector.Vector
-		var err error
-		if vs.allocation == nil {
-			vec = vector.NewOffHeapVecWithType(*vs.vecs[0].GetType())
-		} else {
-			vec, err = vector.NewOffHeapVecWithTypeAndAllocation(
-				*vs.vecs[0].GetType(), vs.allocation)
-			if err != nil {
-				return nil, err
-			}
-		}
-		vs.vecs = append(vs.vecs, vec)
+		vs.vecs = append(vs.vecs, vector.NewOffHeapVecWithType(*vs.vecs[0].GetType()))
 	}
 	return vs.vecs[vs.appendAt], nil
 }
@@ -269,26 +266,13 @@ func (vs *Vectors[T]) PreExtend(rows int, mp *mpool.MPool) error {
 	remaining := rows
 	for index := vs.appendAt; remaining > 0; index++ {
 		if index == len(vs.vecs) {
-			var (
-				vec *vector.Vector
-				err error
-			)
-			if vs.allocation == nil {
-				vec = vector.NewOffHeapVecWithType(*vs.vecs[0].GetType())
-			} else {
-				vec, err = vector.NewOffHeapVecWithTypeAndAllocation(
-					*vs.vecs[0].GetType(), vs.allocation)
-			}
-			if err != nil {
-				return err
-			}
-			vs.vecs = append(vs.vecs, vec)
+			vs.vecs = append(vs.vecs, vector.NewOffHeapVecWithType(*vs.vecs[0].GetType()))
 		}
 		vec := vs.vecs[index]
 		available := MaxVectorLength - vec.Length()
 		reserve := min(remaining, available)
 		if reserve > 0 {
-			if err := vec.PreExtend(reserve, mp); err != nil {
+			if err := vec.PreExtend(reserve, vs.growMP(mp)); err != nil {
 				return err
 			}
 			remaining -= reserve
@@ -315,7 +299,7 @@ func (vs *Vectors[T]) Union(other *Vectors[T], mp *mpool.MPool) error {
 				appendableCount = left
 			}
 
-			if err := vector.AppendFixedList(vec, vals[:appendableCount], nil, mp); err != nil {
+			if err := vector.AppendFixedList(vec, vals[:appendableCount], nil, vs.growMP(mp)); err != nil {
 				return err
 			}
 			left -= appendableCount
@@ -356,7 +340,7 @@ func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs *Vect
 		if appendCnt > leftRow {
 			appendCnt = leftRow
 		}
-		if err := vector.AppendMultiFixed(vec, vals, isNull, appendCnt, mp); err != nil {
+		if err := vector.AppendMultiFixed(vec, vals, isNull, appendCnt, vecs.growMP(mp)); err != nil {
 			return err
 		}
 		leftRow -= appendCnt

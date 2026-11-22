@@ -184,7 +184,7 @@ func TestDecimal128ValidityAdmissionFailure(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			})
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+			allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			typ := types.New(types.T_decimal64, 15, 2)
 			input := batch.NewWithSize(2)

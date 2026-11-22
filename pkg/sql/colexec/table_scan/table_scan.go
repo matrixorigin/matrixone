@@ -55,6 +55,9 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	if tableScan.ctr.padCharToFullLength, err = process.ResolvePadCharToFullLength(proc); err != nil {
 		return err
 	}
+	if err = tableScan.bindOutputAllocation(proc); err != nil {
+		return err
+	}
 
 	if tableScan.TopValueMsgTag > 0 {
 		tableScan.ctr.msgReceiver = message.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress(), proc.GetMessageBoard())
@@ -99,12 +102,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 			tableScan.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(plan.MakeTypeByPlan2Type(tableScan.Types[i]))
 		}
 	}
-	if tableScan.OutputAllocation != nil {
-		err = tableScan.ctr.buf.SetAllocationAccount(tableScan.OutputAllocation)
-	}
-	if err == nil {
-		err = tableScan.prepareLocalDomains(proc)
-	}
+	err = tableScan.prepareLocalDomains(proc)
 	return
 }
 
@@ -149,6 +147,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		// read data from storage engine
+		tableScan.releaseOutputLease()
 		tableScan.ctr.buf.CleanOnlyData()
 		tableScan.ctr.filterReadMetrics = false
 		tableScan.ctr.filterLateMaterialized = false
@@ -218,7 +217,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		if tableScan.ctr.padCharToFullLength {
-			if err = padCharColumnsToFullLength(tableScan.ctr.buf, proc); err != nil {
+			if err = padCharColumnsToFullLength(tableScan.ctr.buf, proc.Mp()); err != nil {
 				return vm.CancelResult, err
 			}
 		}
@@ -234,12 +233,15 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		break
 	}
 
+	if err := tableScan.chargeOutput(); err != nil {
+		return vm.CancelResult, err
+	}
 	retBatch := tableScan.ctr.buf
 
 	return vm.CallResult{Batch: retBatch, Status: vm.ExecNext}, nil
 }
 
-func padCharColumnsToFullLength(bat *batch.Batch, proc *process.Process) error {
+func padCharColumnsToFullLength(bat *batch.Batch, mp *mpool.MPool) error {
 	for _, vec := range bat.Vecs {
 		if vec == nil || vec.GetType().Oid != types.T_char || vec.IsConstNull() {
 			continue
@@ -273,7 +275,7 @@ func padCharColumnsToFullLength(bat *batch.Batch, proc *process.Process) error {
 			for i := len(value); i < len(padded); i++ {
 				padded[i] = ' '
 			}
-			if err := vector.SetBytesAt(vec, row, padded, proc.Mp()); err != nil {
+			if err := vector.SetBytesAt(vec, row, padded, mp); err != nil {
 				return err
 			}
 		}
@@ -331,7 +333,7 @@ func (tableScan *TableScan) evalFilter(
 		tableScan.ctr.subjectReuseAdmissionDone = true
 	}
 	if tableScan.ctr.padCharToFullLength {
-		if err := padCharColumnsToFullLength(bat, proc); err != nil {
+		if err := padCharColumnsToFullLength(bat, proc.Mp()); err != nil {
 			return engine.ReaderFilterResult{}, err
 		}
 	}

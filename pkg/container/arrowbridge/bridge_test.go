@@ -842,8 +842,9 @@ func TestMaterializedConversionUsesStatementAllocationSelection(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 20, 21,
+	mp := mpool.MustNewZero()
+	selection, err := mp.WithAccount(
+		account, mpool.AllocationOwnerExternal, 20, mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
 	allocator := memory.NewGoAllocator()
@@ -857,10 +858,8 @@ func TestMaterializedConversionUsesStatementAllocationSelection(t *testing.T) {
 		Name: "v", Type: types.T_bool.ToType(),
 	}}, MatchByName)
 	require.NoError(t, err)
-	mp := mpool.MustNewZero()
 	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{Allocation: selection})
 	require.NoError(t, err)
-	require.Same(t, selection, bat.Vecs[0].AllocationAccountSelection())
 	require.Positive(t, account.Snapshot().Used)
 	record.Release()
 	values.Release()
@@ -879,8 +878,9 @@ func TestConvertReleasesUnpublishedVectorWhenPreExtendIsRejected(t *testing.T) {
 	// owned by the conversion helper rather than by the output batch.
 	account, err := registry.Open(1)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 20, 21,
+	mp := mpool.MustNewZero()
+	selection, err := mp.WithAccount(
+		account, mpool.AllocationOwnerExternal, 20, mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
 
@@ -896,7 +896,6 @@ func TestConvertReleasesUnpublishedVectorWhenPreExtendIsRejected(t *testing.T) {
 	}}, MatchByName)
 	require.NoError(t, err)
 
-	mp := mpool.MustNewZero()
 	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{
 		Allocation:       selection,
 		ForceMaterialize: true,
@@ -919,8 +918,9 @@ func TestConvertReleasesBorrowedVarlenVectorWhenDescriptorAdmissionIsRejected(t 
 	require.NoError(t, err)
 	account, err := registry.Open(1)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerExternal, 20, 21,
+	mp := mpool.MustNewZero()
+	selection, err := mp.WithAccount(
+		account, mpool.AllocationOwnerExternal, 20, mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
 
@@ -936,7 +936,6 @@ func TestConvertReleasesBorrowedVarlenVectorWhenDescriptorAdmissionIsRejected(t 
 	}}, MatchByName)
 	require.NoError(t, err)
 
-	mp := mpool.MustNewZero()
 	bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{
 		Allocation:          selection,
 		MaxPinAmplification: 100,

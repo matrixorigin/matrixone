@@ -37,7 +37,7 @@ import (
 type assignmentFactory struct {
 	opened     int
 	failAt     int
-	allocation *vector.AllocationAccountSelection
+	allocation *mpool.MPool
 }
 
 func (f *assignmentFactory) Open(p *process.Process, _ *plan.DependentExpr, inputs, _ []*vector.Vector) (colexec.DependentInvocation, error) {
@@ -45,7 +45,7 @@ func (f *assignmentFactory) Open(p *process.Process, _ *plan.DependentExpr, inpu
 	if f.opened == f.failAt {
 		return nil, errors.New("assignment subquery failed")
 	}
-	v, err := inputs[0].DupOffHeapWithAllocation(p.Mp(), f.allocation)
+	v, err := inputs[0].DupOffHeap(f.allocation)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func TestDependentOrderedAssignmentImages(t *testing.T) {
 				_, err := registry.Finalize(account)
 				require.NoError(t, err)
 			}()
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2)
+			allocation, err := p.Mp().WithAccount(account, mpool.AllocationOwnerDependent, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			typ := types.T_int64.ToType().PlanType()
 			col := func(rel, pos int32) *plan.Expr { return plan2.GetColExpr(typ, rel, pos) }

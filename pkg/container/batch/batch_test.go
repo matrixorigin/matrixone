@@ -1874,7 +1874,7 @@ func TestShrinkFailureLeavesRowCountUnpublished(t *testing.T) {
 			lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
 			require.NoError(t, err)
 			t.Cleanup(lease.Release)
-			bat.Vecs[1], err = vector.NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data, lease)
+			bat.Vecs[1], err = vector.NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data)
 			require.NoError(t, err)
 			bat.SetRowCount(3)
 			if mask {

@@ -1349,7 +1349,7 @@ type ReaderFilterRequest struct {
 	// next callback. A supporting reader gathers that mapping once; unsupported
 	// readers continue calling Apply.
 	Select           ReaderSelection
-	OutputAllocation *vector.AllocationAccountSelection
+	OutputAllocation *mpool.MPool
 	Apply            ReaderFilter
 	Exact            *objectio.ExactScanState
 	Observe          func(objectio.ExactScanStats)
@@ -1395,11 +1395,7 @@ func (r *ReaderFilterRequest) MembershipScratch(width int) (*ReaderMembershipScr
 	}
 	s := r.Membership.scratch
 	if s.Physical == nil {
-		var err error
-		s.Physical, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), r.OutputAllocation)
-		if err != nil {
-			return nil, err
-		}
+		s.Physical = vector.NewOffHeapVecWithType(types.T_int64.ToType())
 	}
 	return s, nil
 }

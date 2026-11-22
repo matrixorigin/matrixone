@@ -363,12 +363,11 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 				require.NoError(t, err)
 				account, err := registry.Open(1 << 20)
 				require.NoError(t, err)
-				selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+				view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 				require.NoError(t, err)
 
 				destination := vector.NewOffHeapVecWithType(tc.typ)
-				require.NoError(t, destination.SetAllocationAccount(selection))
-				require.NoError(t, tc.append(destination, false, mp))
+				require.NoError(t, tc.append(destination, false, view))
 				require.Zero(t, destination.GetNulls().GetBitmap().CapWords())
 				require.Zero(t, destination.GetGrouping().GetBitmap().CapWords())
 
@@ -414,12 +413,11 @@ func TestCopyAccountedNullUsesGoBitmap(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
 	destination := vector.NewOffHeapVecWithType(types.T_int64.ToType())
-	require.NoError(t, destination.SetAllocationAccount(selection))
-	require.NoError(t, vector.AppendFixed(destination, int64(7), false, mp))
+	require.NoError(t, vector.AppendFixed(destination, int64(7), false, view))
 	used := account.Snapshot().Used
 
 	source := vector.NewVec(types.T_int64.ToType())

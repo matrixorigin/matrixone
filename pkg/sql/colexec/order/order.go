@@ -273,6 +273,9 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 	}
 	all := s1 + s2
 
+	if err = ctr.allocationViews(proc.Mp()); err != nil {
+		return false, err
+	}
 	if ctr.batWaitForSort == nil && ctr.retainedAllocation != nil {
 		ctr.batWaitForSort, err = proc.NewBatchFromSrcWithAllocation(
 			bat,
@@ -322,13 +325,14 @@ func (ctr *container) appendBatchAccounted(
 	}
 	for i := range ctr.batWaitForSort.Vecs {
 		if ctr.recoveryCapacityActive {
-			err = ctr.batWaitForSort.Vecs[i].UnionBatchWithAllocationAccount(
-				bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.Mp(),
+			err = ctr.batWaitForSort.Vecs[i].UnionBatch(
+				bat.Vecs[i], 0, bat.Vecs[i].Length(), nil,
 				ctr.recoveryAllocation,
 			)
 		} else {
 			err = ctr.batWaitForSort.Vecs[i].UnionBatch(
-				bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.Mp())
+				bat.Vecs[i], 0, bat.Vecs[i].Length(), nil,
+				ctr.retainedAllocation)
 		}
 		if err != nil {
 			for j := range ctr.batWaitForSort.Vecs {
@@ -410,12 +414,14 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 			)
 		}
 
+		if err = ctr.allocationViews(proc.Mp()); err != nil {
+			return err
+		}
 		if ctr.finalizationAllocation == nil {
 			err = ctr.batWaitForSort.Shuffle(ctr.resultOrderList, proc.Mp())
 		} else {
-			err = ctr.batWaitForSort.ShuffleWithAllocationAccount(
+			err = ctr.batWaitForSort.Shuffle(
 				ctr.resultOrderList,
-				proc.Mp(),
 				ctr.finalizationAllocation,
 			)
 		}
@@ -509,6 +515,11 @@ func (order *Order) Prepare(proc *process.Process) (err error) {
 		planExprs := make([]*pbplan.Expr, len(order.OrderBySpec))
 		for i := range order.OrderBySpec {
 			planExprs[i] = order.OrderBySpec[i].Expr
+		}
+		if err = ctr.allocationViews(proc.Mp()); err != nil {
+			ctr.desc = nil
+			ctr.nullsLast = nil
+			return err
 		}
 		ctr.sortExprExecutor, err =
 			colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(

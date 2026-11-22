@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -140,26 +141,23 @@ func compactPredicateRows(value *vector.Vector, count int, rows []int64, selecte
 
 // gatherSelectedColumns copies the selected rows of the loaded (or, for nil,
 // every populated) column into a private flat batch with input's schema.
-func gatherSelectedColumns(proc *process.Process, input *batch.Batch, loaded []int, rows []int64, allocation *vector.AllocationAccountSelection) (_ *batch.Batch, retErr error) {
+func gatherSelectedColumns(proc *process.Process, input *batch.Batch, loaded []int, rows []int64, allocation *mpool.MPool) (_ *batch.Batch, retErr error) {
 	mp := proc.Mp()
+	if allocation != nil {
+		mp = allocation
+	}
 	output := batch.NewOffHeapWithSize(len(input.Vecs))
 	defer func() {
 		if retErr != nil {
 			output.Clean(mp)
 		}
 	}()
-	if err := output.SetAllocationAccount(allocation); err != nil {
-		return nil, err
-	}
 	gather := func(pos int) error {
 		source := input.Vecs[pos]
 		if source == nil || (source.Length() == 0 && input.RowCount() != 0) {
 			return nil
 		}
-		dst, err := vector.NewOffHeapVecWithTypeAndAllocation(*source.GetType(), allocation)
-		if err != nil {
-			return err
-		}
+		dst := vector.NewOffHeapVecWithType(*source.GetType())
 		output.Vecs[pos] = dst
 		if err := dst.Union(source, rows, mp); err != nil {
 			return err

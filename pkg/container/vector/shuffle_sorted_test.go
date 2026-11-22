@@ -240,7 +240,6 @@ func TestShuffleWithBufStringMetadata(t *testing.T) {
 				require.NoError(t, AppendBytesList(v, values, nil, mp))
 				v.SetNull(1)
 				v.GetGrouping().Add(2)
-				v.areaDisjoint = true
 				sels := []int64{2, 0, 1}
 				if identity {
 					sels = []int64{0, 1, 2}
@@ -253,7 +252,6 @@ func TestShuffleWithBufStringMetadata(t *testing.T) {
 					require.Equal(t, source == 1, v.IsNull(uint64(row)))
 					require.Equal(t, source == 2, v.GetGrouping().Contains(uint64(row)))
 				}
-				require.False(t, v.areaDisjoint)
 				if identity {
 					require.True(t, v.GetSorted())
 				}

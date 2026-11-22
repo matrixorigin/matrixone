@@ -46,7 +46,12 @@ func (minusAll *MinusAll) Prepare(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	if err = minusAll.ctr.keyEvaluator.Prepare(proc, minusAll.KeyExprs, minusAll.ExpressionAllocation()); err != nil {
+	allocation, err := minusAll.ExpressionAllocation(proc)
+	if err != nil {
+		minusAll.ctr.cleanHashMap()
+		return err
+	}
+	if err = minusAll.ctr.keyEvaluator.Prepare(proc, minusAll.KeyExprs, allocation); err != nil {
 		minusAll.ctr.cleanHashMap()
 		return err
 	}
@@ -166,6 +171,10 @@ func (minusAll *MinusAll) probe(proc *process.Process, analyzer process.Analyzer
 			}
 		}
 		ctr.bat.CleanOnlyData()
+		outMP, err := minusAll.MP(proc)
+		if err != nil {
+			return false, err
+		}
 		keyVecs, err := ctr.keyEvaluator.Eval(proc, input.Batch)
 		if err != nil {
 			return false, err
@@ -192,7 +201,7 @@ func (minusAll *MinusAll) probe(proc *process.Process, analyzer process.Analyzer
 			ctr.bat.AddRowCount(selected)
 			if selected > 0 {
 				for col := range input.Batch.Vecs {
-					if err := ctr.bat.Vecs[col].UnionBatch(input.Batch.Vecs[col], int64(i), selected, selection[:n], proc.Mp()); err != nil {
+					if err := ctr.bat.Vecs[col].UnionBatch(input.Batch.Vecs[col], int64(i), selected, selection[:n], outMP); err != nil {
 						return false, err
 					}
 				}

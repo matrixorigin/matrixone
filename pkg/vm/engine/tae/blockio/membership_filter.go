@@ -124,7 +124,7 @@ func loadMembershipColumns(ctx context.Context, info *objectio.BlockInfo, column
 		scratch.Sources = append(scratch.Sources, output.Vecs[position])
 	}
 	_, err := ioutil.LoadColumnsDataIntoBorrowed(ctx, scratch.Seqnums, scratch.Types, fs, info.MetaLocation(), scratch.Sources,
-		mp, policy, request.BorrowColumns(positions, len(output.Vecs)))
+		mp, policy, request.BorrowColumns(positions, len(output.Vecs)), output)
 	if err != nil {
 		return err
 	}

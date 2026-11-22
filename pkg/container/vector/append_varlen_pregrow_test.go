@@ -114,7 +114,8 @@ func TestAppendVarlenListPregrowGuards(t *testing.T) {
 
 	nullState := newTestVectorAllocationAccount(t, 2048, 8)
 	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, nullState) })
-	nullVec := newAccountedTestVector(t, types.T_varbinary.ToType(), nullState.selection)
+	nullVec := newAccountedTestVector(t, types.T_varbinary.ToType())
+	nmp := nullState.view(t, mp)
 	t.Cleanup(func() { nullVec.Free(mp) })
 	deadPayload := bytes.Repeat([]byte("x"), 256)
 	nullValues := make([][]byte, 32)
@@ -124,7 +125,7 @@ func TestAppendVarlenListPregrowGuards(t *testing.T) {
 		nullMask[i] = true
 	}
 	nullValues[1], nullMask[1] = []byte("ok"), false
-	require.NoError(t, AppendBytesList(nullVec, nullValues, nullMask, mp))
+	require.NoError(t, AppendBytesList(nullVec, nullValues, nullMask, nmp))
 	require.Equal(t, len(nullValues), nullVec.Length())
 	require.Zero(t, len(nullVec.area))
 	for i := range nullValues {
@@ -134,14 +135,15 @@ func TestAppendVarlenListPregrowGuards(t *testing.T) {
 
 	state := newTestVectorAllocationAccount(t, 2048, 8)
 	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
-	unicode := newAccountedTestVector(t, types.NewWithCharset(types.T_varchar, 128, 0, types.CharsetUTF8MB4UnicodeCI), state.selection)
+	unicode := newAccountedTestVector(t, types.NewWithCharset(types.T_varchar, 128, 0, types.CharsetUTF8MB4UnicodeCI))
+	ump := state.view(t, mp)
 	t.Cleanup(func() { unicode.Free(mp) })
 	invalid := string(append([]byte{0xff}, bytes.Repeat([]byte("x"), 127)...))
 	values := make([]string, 32)
 	for i := range values {
 		values[i] = invalid
 	}
-	err := AppendStringList(unicode, values, nil, mp)
+	err := AppendStringList(unicode, values, nil, ump)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "got %v", err)
 	require.Zero(t, unicode.Length())
 }
@@ -176,12 +178,13 @@ func TestAppendVarlenListPregrowBudgetRollback(t *testing.T) {
 				require.Zero(t, mp.CurrNB())
 				require.Zero(t, mp.OnHeapCurrNB())
 			})
-			vec := newAccountedTestVector(t, tc.oid.ToType(), state.selection)
+			vec := newAccountedTestVector(t, tc.oid.ToType())
+			dmp := state.view(t, mp)
 			t.Cleanup(func() { vec.Free(mp) })
-			require.ErrorIs(t, tc.add(vec, mp), mpool.ErrAllocationAccountCapacity)
+			require.ErrorIs(t, tc.add(vec, dmp), mpool.ErrAllocationAccountCapacity)
 			require.Zero(t, vec.Length())
 			require.Zero(t, len(vec.area))
-			require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("ok")}, nil, mp))
+			require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("ok")}, nil, dmp))
 			require.Equal(t, []byte("ok"), vec.GetBytesAt(0))
 		})
 	}

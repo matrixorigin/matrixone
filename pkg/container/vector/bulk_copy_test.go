@@ -100,13 +100,14 @@ func TestBatchCopySelectionAliasAndAdmission(t *testing.T) {
 			}
 			state := newTestVectorAllocationAccount(t, 1, 128)
 			t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
-			out := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+			out := newAccountedTestVector(t, types.T_int64.ToType())
+			dmp := state.view(t, mp)
 			t.Cleanup(func() { out.Free(mp) })
 			var err error
 			if rangeCopy {
-				err = batch(out, source, 0, 3, nil, mp)
+				err = batch(out, source, 0, 3, nil, dmp)
 			} else {
-				err = multi(out, source, 0, 3, mp)
+				err = multi(out, source, 0, 3, dmp)
 			}
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.Zero(t, out.Length())

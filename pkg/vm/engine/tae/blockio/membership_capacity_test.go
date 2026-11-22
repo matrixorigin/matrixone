@@ -81,13 +81,11 @@ func TestMembershipMetadataRefusalRunsBorrowedPredicate(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+	allocation, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	output := batch.NewOffHeapWithSize(2)
-	require.NoError(t, output.SetAllocationAccount(allocation))
 	for i := range output.Vecs {
-		output.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(types_[i], allocation)
-		require.NoError(t, err)
+		output.Vecs[i] = vector.NewOffHeapVecWithType(types_[i])
 	}
 	original := append([]*vector.Vector(nil), output.Vecs...)
 	request := &engine.ReaderFilterRequest{
@@ -176,7 +174,9 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 		{name: "identity", limit: 128},
 		{name: "selective output fits", limit: 128, selective: true},
 		{name: "early output pressure", limit: 64, selective: true, bypass: true, stagedPressure: true},
-		{name: "late output pressure", limit: 96, selective: true, bypass: true},
+		// Output is filled through the reader's pool and charged by the caller
+		// after the read, so member staging that fits never starves it.
+		{name: "late output pressure", limit: 96, selective: true},
 		{name: "callback capacity error", limit: 128, predicateError: true},
 		{name: "real predicate result pressure", limit: 64, selective: true, bypass: true, realPredicate: true, stagedPressure: true},
 		{name: "generic ordinary fallback", limit: 128, ordinary: true},
@@ -198,11 +198,10 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 					_, _, err := registry.CompleteTerminal(account)
 					require.NoError(t, err)
 				})
-				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+				allocation, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 				require.NoError(t, err)
 				output := batch.NewWithSchema(true, nil, typs)
 				t.Cleanup(func() { output.Clean(mp) })
-				require.NoError(t, output.SetAllocationAccount(allocation))
 				original := append([]*vector.Vector(nil), output.Vecs...)
 				request := &engine.ReaderFilterRequest{
 					OutputAllocation: allocation,

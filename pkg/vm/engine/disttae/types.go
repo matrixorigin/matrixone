@@ -519,7 +519,8 @@ type Transaction struct {
 	workspaceAllocationMu     sync.Mutex
 	workspaceGeneration       *process.ExecutionResourceGeneration
 	workspaceAccount          *mpool.AllocationAccount
-	workspaceSelection        *vector.AllocationAccountSelection
+	workspaceView             *mpool.MPool
+	workspaceCopies           map[*batch.Batch]struct{}
 	workspaceAllocationClosed bool
 
 	catalogVisibilityRevision atomic.Uint64

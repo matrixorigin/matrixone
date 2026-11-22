@@ -1657,7 +1657,7 @@ func TestAppendContiguousOrderRows(t *testing.T) {
 	dst.Vecs[1] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
 	defer dst.Clean(proc.Mp())
 
-	err := appendContiguousOrderRows(dst, []*vector.Vector{src0, src1}, []int{1, 0}, 1, 2, proc)
+	err := appendContiguousOrderRows(dst, []*vector.Vector{src0, src1}, []int{1, 0}, 1, 2, proc.Mp())
 	require.NoError(t, err)
 	require.Equal(t, []int8{5, 6}, vector.MustFixedColWithTypeCheck[int8](dst.Vecs[0]))
 	require.Equal(t, []int8{2, 3}, vector.MustFixedColWithTypeCheck[int8](dst.Vecs[1]))
@@ -1874,21 +1874,23 @@ func TestMergeOrderResetReleasesAccountedResult(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	arg := &MergeOrder{}
+	require.NoError(t, arg.SetAllocationAccount(account))
+	view, err := arg.ctr.outputView(proc)
 	require.NoError(t, err)
+	require.NotNil(t, view)
 
 	result := batch.NewOffHeapWithSize(1)
 	result.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
-	require.NoError(t, result.SetAllocationAccount(selection))
-	require.NoError(t, vector.AppendFixed(result.Vecs[0], int64(1), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(result.Vecs[0], int64(1), false, view))
 	result.SetRowCount(1)
 	require.Positive(t, account.Snapshot().Used)
 
-	arg := &MergeOrder{}
 	arg.ctr.buf = result
 	arg.Reset(proc, false, nil)
 	require.Nil(t, arg.ctr.buf)
 	require.Zero(t, account.Snapshot().Used)
+	require.NoError(t, arg.ClearAllocationAccount(account))
 	_, _, err = registry.CompleteTerminal(account)
 	require.NoError(t, err)
 
@@ -1903,17 +1905,16 @@ func TestRemoveInMemoryBatchReleasesAccountedBatch(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	view, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
 	input := batch.NewOffHeapWithSize(2)
 	for i := range input.Vecs {
 		input.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
 	}
-	require.NoError(t, input.SetAllocationAccount(selection))
 	for i := range 17 {
-		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i), false, proc.Mp()))
-		require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(i), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i), false, view))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(i), false, view))
 	}
 	input.SetRowCount(17)
 	require.Positive(t, account.Snapshot().Used)
@@ -1975,9 +1976,9 @@ func TestSpillHelperBranches(t *testing.T) {
 	reuseKey.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
 	defer reuseKey.Clean(proc.Mp())
 
-	_, err = readSpillPayload(proc, bufio.NewReader(bytes.NewReader(nil)), reuse)
+	_, err = readSpillPayload(proc, bufio.NewReader(bytes.NewReader(nil)), reuse, proc.Mp())
 	require.Error(t, err)
-	_, _, err = readSpillBatches(proc, bufio.NewReader(bytes.NewReader(nil)), reuse, reuseKey)
+	_, _, err = readSpillBatches(proc, bufio.NewReader(bytes.NewReader(nil)), reuse, reuseKey, proc.Mp())
 	require.ErrorIs(t, err, io.EOF)
 
 	var partial bytes.Buffer
@@ -1987,7 +1988,7 @@ func TestSpillHelperBranches(t *testing.T) {
 	require.NoError(t, err)
 	keyCount := int64(1)
 	partial.Write(types.EncodeInt64(&keyCount))
-	_, _, err = readSpillBatches(proc, bufio.NewReader(bytes.NewReader(partial.Bytes())), reuse, reuseKey)
+	_, _, err = readSpillBatches(proc, bufio.NewReader(bytes.NewReader(partial.Bytes())), reuse, reuseKey, proc.Mp())
 	require.Error(t, err)
 
 	ctrRestore := &container{

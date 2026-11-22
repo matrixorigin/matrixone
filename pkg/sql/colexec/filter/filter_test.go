@@ -1201,7 +1201,7 @@ func TestShrinkWithSelsFailureFreedByOperator(t *testing.T) {
 			}
 		}
 	}()
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	view, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	data := types.EncodeSlice([]int64{1, 2, 3})
 	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
@@ -1211,7 +1211,7 @@ func TestShrinkWithSelsFailureFreedByOperator(t *testing.T) {
 			lease.Release()
 		}
 	}()
-	vec, err := vector.NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), 3, data, lease, selection)
+	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data)
 	require.NoError(t, err)
 	defer func() {
 		if vec != nil {
@@ -1223,6 +1223,7 @@ func TestShrinkWithSelsFailureFreedByOperator(t *testing.T) {
 	bat.SetRowCount(3)
 	filter := NewArgument()
 	filter.ctr.buf = bat
+	filter.ctr.outputAllocation = view
 	vec = nil // the operator owns the batch and vector
 	defer func() {
 		if filter != nil {

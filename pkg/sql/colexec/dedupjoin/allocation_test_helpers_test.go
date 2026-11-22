@@ -53,7 +53,9 @@ func TestDedupJoinResultAndFinalizeBatchesUseAllocationAccount(t *testing.T) {
 	}
 	account := installTestAllocation(t, arg)
 	require.NoError(t, arg.resetRBat())
-	require.Same(t, arg.resultAllocation, arg.ctr.rbat.Vecs[0].AllocationAccountSelection())
+	resMP, err := arg.resultMP(proc)
+	require.NoError(t, err)
+	require.Same(t, account, resMP.ViewAccount())
 
 	arg.ctr.matched = &bitmap.Bitmap{}
 	first := batch.NewWithSize(0)
@@ -63,9 +65,6 @@ func TestDedupJoinResultAndFinalizeBatchesUseAllocationAccount(t *testing.T) {
 	arg.ctr.batches = []*batch.Batch{first, second}
 	require.NoError(t, arg.ctr.finalize(arg, proc))
 	require.Len(t, arg.ctr.buf, 2)
-	for _, result := range arg.ctr.buf {
-		require.Same(t, arg.resultAllocation, result.Vecs[0].AllocationAccountSelection())
-	}
 	require.Positive(t, account.Snapshot().Used)
 
 	arg.Reset(proc, false, nil)
@@ -94,7 +93,9 @@ func TestDedupJoinResultAndFinalizeBatchesHonorAllocationCapacity(t *testing.T) 
 		}
 		require.NoError(t, arg.SetAllocationAccount(account))
 		require.NoError(t, arg.resetRBat())
-		err := vector.AppendFixed(arg.ctr.rbat.Vecs[0], int64(1), false, proc.Mp())
+		resMP, err := arg.resultMP(proc)
+		require.NoError(t, err)
+		err = vector.AppendFixed(arg.ctr.rbat.Vecs[0], int64(1), false, resMP)
 		require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 		require.Zero(t, account.Snapshot().Used)
 		arg.Reset(proc, false, nil)

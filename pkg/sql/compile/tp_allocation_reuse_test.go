@@ -113,7 +113,7 @@ func TestTPReusableOperatorsAllocationScope(t *testing.T) {
 				attempt, err := c.beginAllocationAccountAttempt()
 				require.NoError(t, err)
 				require.NotNil(t, attempt)
-				require.NotNil(t, scan.OutputAllocation)
+				require.NotNil(t, scan.BoundAllocationAccount())
 				require.NoError(t, c.finishAllocationAccountAttempt())
 			}
 
@@ -140,10 +140,10 @@ func TestTPReusableOperatorsAllocationScope(t *testing.T) {
 			clone.FilterExprs = []*plan.Expr{col}
 			require.NoError(t, c.attachRuntimeAllocationOwners([]*Scope{{RootOp: clone}}))
 			if execType == plan2.ExecTypeTP {
-				require.Nil(t, scan.OutputAllocation)
-				require.Nil(t, clone.OutputAllocation)
+				require.Nil(t, scan.BoundAllocationAccount())
+				require.Nil(t, clone.BoundAllocationAccount())
 			} else {
-				require.True(t, clone.OutputAllocation.UsesAccount(attempt.account))
+				require.Same(t, attempt.account, clone.BoundAllocationAccount())
 			}
 			require.NoError(t, c.finishAllocationAccountAttempt())
 			clone.Release()

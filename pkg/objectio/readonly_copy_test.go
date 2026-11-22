@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -86,7 +87,7 @@ func TestCopyCachedVectorAllReadonlyIsolatesCache(t *testing.T) {
 				}()
 
 				require.NoError(t, CopyCachedVectorAllReadonly(one, cacheData, mp))
-				require.True(t, one.HasBorrowedBacking())
+				require.False(t, one.HasBorrowedBacking(), "the readonly loader publishes an owned private copy")
 				require.Equal(t, first, one.GetBytesAt(0))
 				require.Equal(t, second, one.GetBytesAt(1))
 				require.True(t, one.GetNulls().Contains(2))
@@ -140,7 +141,7 @@ func TestCopyCachedVectorAllReadonlySmallControls(t *testing.T) {
 			destination = vector.NewOffHeapVecWithType(typ)
 			require.NoError(t, CopyCachedVectorAllReadonly(destination, cacheData, mp))
 			require.Equal(t, source.Length(), destination.Length())
-			require.Equal(t, shape == "constant", destination.HasBorrowedBacking())
+			require.False(t, destination.HasBorrowedBacking())
 			if shape == "constant" {
 				for row := 0; row < 4; row++ {
 					require.Equal(t, bytes.Repeat([]byte{'x'}, 64), destination.GetBytesAt(row))
@@ -177,13 +178,29 @@ func TestRetainedCachedVectorLifetimeAndCow(t *testing.T) {
 	t.Cleanup(data.Release)
 	probe := &retainedDictionaryCacheProbe{validatedVectorBytesProbe: &validatedVectorBytesProbe{backing: data.(validatedVectorCacheDataMarker).validatedVectorBackingForScope()}}
 	probe.refs.Store(1)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, account.Snapshot().Used)
+		_, _, err := registry.CompleteTerminal(account)
+		require.NoError(t, err)
+	})
+	allocation, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
+	require.NoError(t, err)
 	destination := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 	t.Cleanup(func() { destination.Free(mp) })
-	admitted, err := TryBorrowCachedVector(destination, probe, mp)
+	// The lender (normally the output batch) holds the pin, not the Vector.
+	var keeper bufferlease.Holder
+	t.Cleanup(keeper.Release)
+	admitted, err := TryBorrowCachedVector(destination, probe, allocation, &keeper)
 	require.NoError(t, err)
 	require.True(t, admitted)
+	require.Equal(t, 1, keeper.Len())
 	require.True(t, destination.HasBorrowedBacking())
 	require.Zero(t, probe.bytesCalls.Load())
+	require.GreaterOrEqual(t, account.Snapshot().Used, uint64(probe.Capacity()), "the full pinned capacity is charged while held")
 	visible := destination.GetBytesAt(0)
 	position := bytes.Index(probe.backing, long)
 	require.GreaterOrEqual(t, position, 0)
@@ -195,7 +212,10 @@ func TestRetainedCachedVectorLifetimeAndCow(t *testing.T) {
 	require.NoError(t, destination.MaterializeOwned(mp))
 	require.NoError(t, vector.SetBytesAt(destination, 0, []byte("changed"), mp))
 	require.Equal(t, before, probe.backing)
+	require.Zero(t, probe.released.Load(), "copy-on-write does not release the lender's pin")
+	keeper.Release()
 	require.Equal(t, int32(1), probe.released.Load())
+	require.Zero(t, account.Snapshot().Used, "releasing the holder returns the pin reservation")
 }
 
 func TestRetainedCachedVectorPinRefusal(t *testing.T) {
@@ -216,29 +236,32 @@ func TestRetainedCachedVectorPinRefusal(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+	allocation, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	for _, transient := range []bool{false, true} {
 		func() {
-			selection := allocation
+			allocMP := allocation
 			var transientBytes uint64
 			if transient {
-				selection = vector.JSONReaderAllocationSelection(nil, func(size uint64) (func(), error) {
+				var err error
+				allocMP, err = vector.JSONReaderAllocationMP(mp, func(size uint64) (func(), error) {
 					transientBytes += size
 					return func() { transientBytes -= size }, nil
 				})
+				require.NoError(t, err)
 				defer func() { require.Zero(t, transientBytes) }()
 			}
-			destination, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_varchar.ToType(), selection)
-			require.NoError(t, err)
+			destination := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 			defer destination.Free(mp)
-			admitted, err := TryBorrowCachedVector(destination, data, mp)
+			var keeper bufferlease.Holder
+			admitted, err := TryBorrowCachedVector(destination, data, allocMP, &keeper)
 			require.NoError(t, err)
 			require.False(t, admitted)
+			require.Zero(t, keeper.Len(), "a refused pin is not held")
 			require.Zero(t, destination.Length())
 
 			if transient {
-				require.NoError(t, CopyCachedVectorAll(destination, data, mp))
+				require.NoError(t, CopyCachedVectorAll(destination, data, allocMP))
 				require.Equal(t, source.GetBytesAt(0), destination.GetBytesAt(0))
 				require.False(t, destination.HasBorrowedBacking())
 				require.Positive(t, transientBytes)
@@ -266,7 +289,7 @@ func TestCachedColumnScopePinsOnlyForCallback(t *testing.T) {
 	failure := moerr.NewInvalidInputNoCtx("injected scoped consumer failure")
 	err = scope.With(entries, []*vector.Vector{output}, func(inputs []*vector.Vector, marked []bool) error {
 		require.True(t, marked[0])
-		require.Equal(t, vector.LegacyAlias, inputs[0].DataBackingKind())
+		require.Equal(t, vector.BorrowedAlias, inputs[0].DataBackingKind())
 		require.Equal(t, int32(1), probe.refs.Load(), "the existing pinned read owns cache lifetime")
 		position := bytes.Index(probe.backing, payload)
 		require.GreaterOrEqual(t, position, 0)
@@ -311,7 +334,7 @@ func TestCachedColumnScopeFixedValidationAndLifetime(t *testing.T) {
 	failure := moerr.NewInvalidInputNoCtx("fixed scoped consumer failure")
 	err := scope.WithFixed(entries, []*vector.Vector{output}, func(inputs []*vector.Vector, marked []bool) error {
 		require.True(t, marked[0])
-		require.Equal(t, vector.LegacyAlias, inputs[0].DataBackingKind())
+		require.Equal(t, vector.BorrowedAlias, inputs[0].DataBackingKind())
 		require.True(t, inputs[0].IsNull(1))
 		require.NoError(t, output.Union(inputs[0], []int64{0, 2}, mp))
 		return failure

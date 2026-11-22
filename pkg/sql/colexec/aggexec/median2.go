@@ -190,7 +190,7 @@ func (exec *medianColumnExecSelf[T, R]) prepareDenseGroups(total int) error {
 	for i := range pending {
 		var err error
 		pending[i], err = newAccountedVectors[T](
-			exec.argType, exec.accounted.allocation)
+			exec.argType, exec.accounted.mp)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				pending[j].Free(exec.mp)
@@ -297,7 +297,7 @@ func (exec *medianColumnExecSelf[T, R]) saveAccountedIntermediateChunk(
 
 func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
 	if exec.accounted != nil {
-		return exec.unmarshalAccountedIntermediate(reader, mp)
+		return exec.unmarshalAccountedIntermediate(reader, exec.accounted.accountedMP(mp))
 	}
 	replacement := newMedianColumnExecSelf[T, R](
 		mp, exec.singleAggInfo, exec.ret.InitialValue)
@@ -672,7 +672,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshalAccountedIntermediate(
 		replacementGroups = make([]*Vectors[T], int(rows))
 		for group := range replacementGroups {
 			replacementGroups[group], err = newAccountedVectors[T](
-				exec.argType, replacement.allocation)
+				exec.argType, replacement.mp)
 			if err != nil {
 				return err
 			}
@@ -1289,7 +1289,11 @@ func (exec *medianColumnExecSelf[T, R]) SetAllocationAccount(
 		return mpool.ErrAllocationAccountInvalid
 	}
 	if exec.accounted != nil {
-		return exec.accounted.SetAllocationAccount(allocation)
+		if err := exec.accounted.SetAllocationAccount(allocation); err != nil {
+			return err
+		}
+		exec.mp = exec.accounted.mp
+		return nil
 	}
 	if len(exec.groups) != 0 || len(exec.ret.resultList) != 1 ||
 		exec.ret.resultList[0].Length() != 0 {
@@ -1319,6 +1323,9 @@ func (exec *medianColumnExecSelf[T, R]) SetAllocationAccount(
 	}
 	exec.distinctHash.free()
 	exec.accounted = base
+	// The executor's own pool becomes the accounted view, so its accounted
+	// groups and result vectors are charged wherever they grow.
+	exec.mp = base.mp
 	return nil
 }
 
@@ -1326,7 +1333,10 @@ func (exec *medianColumnExecSelf[T, R]) ClearAllocationAccount(
 	allocation *AllocationAccount,
 ) error {
 	if exec.accounted != nil {
-		return exec.accounted.ClearAllocationAccount(allocation)
+		if err := exec.accounted.ClearAllocationAccount(allocation); err != nil {
+			return err
+		}
+		exec.mp = exec.accounted.mp
 	}
 	return nil
 }
@@ -1397,7 +1407,7 @@ func (exec *medianColumnExecSelf[T, R]) UnmarshalSpillFromReader(
 		return moerr.NewNotSupportedNoCtx("median has no bounded spill state")
 	}
 	if exec.usesDenseAccountedState() {
-		return exec.unmarshalDenseMedianSpill(reader, mp)
+		return exec.unmarshalDenseMedianSpill(reader, exec.accounted.accountedMP(mp))
 	}
 	return exec.accounted.UnmarshalSpillFromReader(reader, mp)
 }
@@ -1486,7 +1496,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshalDenseMedianSpill(
 		return err
 	}
 	for groupIndex := range replacementGroups {
-		group, err := newAccountedVectors[T](exec.argType, replacement.allocation)
+		group, err := newAccountedVectors[T](exec.argType, replacement.mp)
 		if err != nil {
 			return err
 		}

@@ -219,6 +219,7 @@ func (external *External) Prepare(proc *process.Process) error {
 	// Error-mode columns are resolved from the pruned attribute list before any
 	// reader is built, so every reader sees the same decision.
 	resolveExternalErrorMode(param)
+	param.outputMP = external.OutputAllocation
 
 	// Create reader (single dispatch point)
 	switch {
@@ -274,15 +275,7 @@ func (external *External) Prepare(proc *process.Process) error {
 			colType := &param.Cols[colIndex].Typ
 			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)) ||
 				loadAttributedDecimalTextInput(param, colType))
-			if external.OutputAllocation != nil {
-				vec, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, external.OutputAllocation)
-				if err != nil {
-					return err
-				}
-				external.ctr.buf.Vecs[i] = vec
-			} else {
-				external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
-			}
+			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 		}
 	}
 	return nil
@@ -1920,7 +1913,7 @@ func getOneRowData(proc *process.Process, bat *batch.Batch, line []csvparser.Fie
 // materialize: every user column NULL, __mo_filepath and __mo_file_line as
 // usual, and the two error columns describing the failure.
 func appendErrorRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, cause error) error {
-	mp := proc.GetMPool()
+	mp := param.outputPool(proc)
 	message := cause.Error()
 	text := recordText(line, param)
 	for _, attr := range param.Attrs {
@@ -1986,7 +1979,7 @@ func recordText(line []csvparser.Field, param *ExternalParam) string {
 }
 
 func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam) error {
-	mp := proc.GetMPool()
+	mp := param.outputPool(proc)
 	// Kafka JSONL object conversion already checks the declared key count.
 	// Its field slice contains only projected data positions, so its length
 	// cannot be used as the record width. Synthetic attrs are filled by

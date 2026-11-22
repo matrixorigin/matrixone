@@ -346,6 +346,9 @@ type indicatorRowFn func(row int, position int) (float64, bool, error)
 // every eval entry, at Window.Reset and at Window.Free (design section 5.2,
 // the three lifecycle reset points).
 type indicatorEvaluator struct {
+	// mp is the pool prefix grows through: Window's accounted view when an
+	// account is bound, otherwise proc's pool.
+	mp       *mpool.MPool
 	kernel   indicatorKernel
 	n        int
 	funcName string
@@ -759,10 +762,10 @@ func (ev *indicatorEvaluator) advanceTo(
 			return err
 		}
 		if ev.kernel == kernelCumPositiveStreak {
-			if err := vector.AppendFixed(ev.prefix, int64(val), false, proc.Mp()); err != nil {
+			if err := vector.AppendFixed(ev.prefix, int64(val), false, ev.mp); err != nil {
 				return err
 			}
-		} else if err := vector.AppendFixed(ev.prefix, val, !defined, proc.Mp()); err != nil {
+		} else if err := vector.AppendFixed(ev.prefix, val, !defined, ev.mp); err != nil {
 			return err
 		}
 	}
@@ -786,6 +789,11 @@ func (ctr *container) newIndicatorEvaluator(
 		funcName: funcName,
 		retType:  types.MustTypeFromPlan(w.WindowFunc.Typ),
 	}
+	mp, err := ctr.allocation.MP(proc)
+	if err != nil {
+		return nil, err
+	}
+	ev.mp = mp
 	prefixVec, err := ctr.allocation.NewVector(ev.retType)
 	if err != nil {
 		return nil, err
@@ -904,7 +912,7 @@ func (ctr *container) processIndicatorFuncRange(
 		if err = checkCanceled(proc, j-outputStart); err != nil {
 			return nil, err
 		}
-		if err = localResult.UnionOne(ev.prefix, int64(j), proc.Mp()); err != nil {
+		if err = localResult.UnionOne(ev.prefix, int64(j), ev.mp); err != nil {
 			return nil, err
 		}
 	}

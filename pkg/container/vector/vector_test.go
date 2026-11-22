@@ -4226,7 +4226,7 @@ func TestVarlenaAreaDisjointLifecycle(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestVarlenaAreaDisjointAppendFailureFailsClosed(t *testing.T) {
+func TestVarlenaAppendFailureReleasesMemory(t *testing.T) {
 	mp, err := mpool.NewMPool("varlena-disjoint-failure", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
 	defer mpool.DeleteMPool(mp)
@@ -4240,8 +4240,6 @@ func TestVarlenaAreaDisjointAppendFailureFailsClosed(t *testing.T) {
 		mp,
 	)
 	require.Error(t, err)
-	require.False(t, vec.VarlenaAreaIsDisjoint(),
-		"a partially initialized logical range must never retain the fast proof")
 
 	vec.Free(mp)
 	require.Zero(t, mp.CurrNB())

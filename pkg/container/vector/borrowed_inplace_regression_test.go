@@ -31,7 +31,7 @@ func TestBorrowedDataShrinkPreservesRetainedView(t *testing.T) {
 	lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
 	require.NoError(t, err)
 	t.Cleanup(lease.Release)
-	v, err := NewBorrowedFixedVector(types.T_int64.ToType(), 4, data, lease)
+	v, err := NewBorrowedFixedVector(types.T_int64.ToType(), 4, data)
 	require.NoError(t, err)
 	t.Cleanup(func() { v.Free(mp) })
 	view, err := v.Window(0, 4)
@@ -181,14 +181,14 @@ func TestBorrowedInplaceMutationIsolationAndFailure(t *testing.T) {
 			lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
 			require.NoError(t, err)
 			defer lease.Release()
-			vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data, lease)
+			vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data)
 			require.NoError(t, err)
 			defer vec.Free(mp)
 			view, err := vec.Window(0, len(values))
 			require.NoError(t, err)
 			defer view.Free(mp)
 			require.Error(t, tc.mutate(vec, nil))
-			require.Equal(t, BorrowedLease, vec.DataBackingKind())
+			require.Equal(t, BorrowedAlias, vec.DataBackingKind())
 			require.Equal(t, []int64{3, 1, 3, 2}, MustFixedColNoTypeCheck[int64](vec))
 			require.NoError(t, tc.mutate(vec, mp))
 			require.Equal(t, tc.want, MustFixedColNoTypeCheck[int64](vec))
@@ -203,11 +203,11 @@ func TestBorrowedShrinkWithoutDataMovementDoesNotAllocate(t *testing.T) {
 	lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
 	require.NoError(t, err)
 	defer lease.Release()
-	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data, lease)
+	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data)
 	require.NoError(t, err)
 	defer vec.Free(nil)
 	require.NoError(t, vec.Shrink([]int64{0, 1}, false, nil))
-	require.Equal(t, BorrowedLease, vec.DataBackingKind())
+	require.Equal(t, BorrowedAlias, vec.DataBackingKind())
 	require.Equal(t, []int64{1, 2}, MustFixedColNoTypeCheck[int64](vec))
 	require.Equal(t, []int64{1, 2, 3}, values)
 }
@@ -278,12 +278,8 @@ func TestBorrowedVarlenInplacePreservesAreaAndView(t *testing.T) {
 					vec.Free(mp)
 				}
 			}()
-			require.NoError(t, vec.InstallBorrowedData(data, dataLease))
-			require.NoError(t, vec.InstallBorrowedArea(area, areaLease))
-			dataLease.Release()
-			dataLease = nil
-			areaLease.Release()
-			areaLeaseOwned = false
+			require.NoError(t, vec.InstallBorrowedData(data))
+			require.NoError(t, vec.InstallBorrowedArea(area))
 			vec.SetLength(len(values))
 			view, err := vec.Window(0, len(values))
 			require.NoError(t, err)
@@ -293,9 +289,9 @@ func TestBorrowedVarlenInplacePreservesAreaAndView(t *testing.T) {
 				}
 			}()
 			require.Error(t, tc.mutate(vec, nil))
-			require.Same(t, areaLease, vec.areaLease)
+			require.Equal(t, BorrowedAlias, vec.AreaBackingKind())
 			require.NoError(t, tc.mutate(vec, mp))
-			require.Same(t, areaLease, vec.areaLease)
+			require.Equal(t, BorrowedAlias, vec.AreaBackingKind())
 			for i, want := range tc.want {
 				require.Equal(t, want, string(vec.GetBytesAt(i)))
 			}
@@ -309,6 +305,12 @@ func TestBorrowedVarlenInplacePreservesAreaAndView(t *testing.T) {
 			require.Zero(t, areaReleased.Load())
 			view.Free(mp)
 			view = nil
+			require.Zero(t, dataReleased.Load(), "a vector never releases its lender's lease")
+			require.Zero(t, areaReleased.Load())
+			dataLease.Release()
+			dataLease = nil
+			areaLease.Release()
+			areaLeaseOwned = false
 			require.EqualValues(t, 1, dataReleased.Load())
 			require.EqualValues(t, 1, areaReleased.Load())
 			require.Zero(t, mp.CurrNB())
@@ -344,7 +346,7 @@ func TestLegacyAliasInplaceLeavesEncodedBytesUnchanged(t *testing.T) {
 			vec := NewVec(types.T_any.ToType())
 			defer vec.Free(mp)
 			require.NoError(t, vec.UnmarshalBinary(encoded))
-			require.Equal(t, LegacyAlias, vec.DataBackingKind())
+			require.Equal(t, BorrowedAlias, vec.DataBackingKind())
 			require.NoError(t, tc.mutate(vec, mp))
 			require.Equal(t, before, encoded)
 		})
@@ -375,10 +377,8 @@ func TestInplaceDataCOWKeepsSharedAreaLease(t *testing.T) {
 			vec.Free(mp)
 		}
 	}()
-	require.NoError(t, vec.InstallBorrowedData(backing[:len(encoded)], lease))
-	require.NoError(t, vec.InstallBorrowedArea(backing[len(encoded):], lease))
-	lease.Release()
-	leaseOwned = false
+	require.NoError(t, vec.InstallBorrowedData(backing[:len(encoded)]))
+	require.NoError(t, vec.InstallBorrowedArea(backing[len(encoded):]))
 	vec.SetLength(2)
 	view, err := vec.Window(0, 2)
 	require.NoError(t, err)
@@ -388,7 +388,7 @@ func TestInplaceDataCOWKeepsSharedAreaLease(t *testing.T) {
 		}
 	}()
 	require.NoError(t, vec.Shrink([]int64{1}, false, mp))
-	require.Same(t, lease, vec.areaLease)
+	require.Equal(t, BorrowedAlias, vec.AreaBackingKind())
 	require.Equal(t, payload, vec.GetBytesAt(0))
 	require.Equal(t, payload, view.GetBytesAt(0))
 	vec.Free(mp)
@@ -396,6 +396,9 @@ func TestInplaceDataCOWKeepsSharedAreaLease(t *testing.T) {
 	require.Zero(t, released.Load())
 	view.Free(mp)
 	view = nil
+	require.Zero(t, released.Load(), "a vector never releases its lender's lease")
+	lease.Release()
+	leaseOwned = false
 	require.EqualValues(t, 1, released.Load())
 	require.Zero(t, mp.CurrNB())
 }
@@ -408,9 +411,8 @@ func TestBorrowedInplaceWindowFirstReleaseAndReuse(t *testing.T) {
 	var releases atomic.Int32
 	lease, err := NewRefCountedBufferLease(data, int64(cap(data)), func() { releases.Add(1) })
 	require.NoError(t, err)
-	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, lease)
+	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), 3, data)
 	require.NoError(t, err)
-	lease.Release()
 	t.Cleanup(func() {
 		if vec != nil {
 			vec.Free(mp)
@@ -427,14 +429,17 @@ func TestBorrowedInplaceWindowFirstReleaseAndReuse(t *testing.T) {
 	view = nil
 	require.Zero(t, releases.Load())
 	require.NoError(t, vec.Shrink([]int64{1, 2}, false, mp))
-	require.EqualValues(t, 1, releases.Load())
+	require.Zero(t, releases.Load(), "copy-on-write leaves the lender's lease alone")
 	require.Equal(t, []int64{4, 7}, MustFixedColNoTypeCheck[int64](vec))
+	require.Equal(t, []int64{9, 4, 7}, types.DecodeSlice[int64](data), "the lent backing is never written")
 	vec.ResetWithNewType(&vec.typ)
 	require.NoError(t, AppendFixedList(vec, []int64{8, 2}, nil, mp))
 	require.NoError(t, vec.InplaceSort(mp))
 	require.Equal(t, []int64{2, 8}, MustFixedColNoTypeCheck[int64](vec))
 	vec.Free(mp)
 	vec = nil
+	require.Zero(t, releases.Load())
+	lease.Release()
 	require.EqualValues(t, 1, releases.Load())
 	require.Zero(t, mp.CurrNB())
 }

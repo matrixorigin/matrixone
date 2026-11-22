@@ -100,7 +100,7 @@ func TestJSONReaderRejectsUnselectedCorruptionAndDescriptors(t *testing.T) {
 func TestJSONReaderBuilderTypedAppend(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	builder, err := NewJSONReaderBuilder(mp, nil)
+	builder, err := NewJSONReaderBuilder(mp)
 	require.NoError(t, err)
 	defer builder.Close()
 	value, err := types.ParseStringToByteJson(`{"keep":1}`)
@@ -128,7 +128,7 @@ func TestJSONReaderBuilderTypedAppend(t *testing.T) {
 func TestJSONReaderBuilderViewsAndOwnedOutput(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	builder, err := NewJSONReaderBuilder(mp, nil)
+	builder, err := NewJSONReaderBuilder(mp)
 	require.NoError(t, err)
 	defer builder.Close()
 	raw := jsonAdmissionValue(t, `{"keep":"retained payload longer than inline"}`)
@@ -177,7 +177,7 @@ func TestJSONReaderBuilderViewsAndOwnedOutput(t *testing.T) {
 func TestJSONReaderIndependentConcurrentReaders(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	builder, err := NewJSONReaderBuilder(mp, nil)
+	builder, err := NewJSONReaderBuilder(mp)
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"keep":1}`), false))
@@ -283,19 +283,16 @@ func TestJSONReaderSnapshotAllocationFailure(t *testing.T) {
 			state := newTestVectorAllocationAccount(t, 1<<20, 128)
 			defer finalizeTestVectorAllocationAccount(t, state)
 			defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-			source, err := NewOffHeapVecWithTypeAndAllocation(types.T_json.ToType(), state.selection)
-			require.NoError(t, err)
+			source := NewOffHeapVecWithType(types.T_json.ToType())
 			defer source.Free(mp)
-			require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `{"keep":1,"large":[0,0]}`), false, mp))
+			require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `{"keep":1,"large":[0,0]}`), false, state.view(t, mp)))
 			controller := &rejectNextVectorAllocation{failAt: failAt}
 			class, err := state.account.RegisterCapacityController(controller)
 			require.NoError(t, err)
 			defer func() { require.NoError(t, state.account.UnregisterCapacityController(class, controller)) }()
-			selection := *state.selection
-			selection.capacityClass = class
-			source.allocationAccount = &selection
+			state.class = class
 			before := mp.CurrNB()
-			reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, source.Length(), mp, &selection)
+			reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, source.Length(), state.view(t, mp))
 			require.Error(t, err)
 			require.Nil(t, reader)
 			require.False(t, invalid, "allocation failure cannot be deferred as bad input")
@@ -313,12 +310,12 @@ func TestJSONReaderSnapshotReportsInvalidWithoutPublishing(t *testing.T) {
 	require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `{"keep":1}`), false, mp))
 	source.GetBytesAt(0)[0] = 0xfd
 	before := mp.CurrNB()
-	reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 1, mp, nil)
+	reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 1, mp)
 	require.Nil(t, reader)
 	require.True(t, invalid)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	require.Equal(t, before, mp.CurrNB())
-	reader, err = NewJSONReaderSnapshotForRows(source, 1, mp, nil)
+	reader, err = NewJSONReaderSnapshotForRows(source, 1, mp)
 	require.Nil(t, reader)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 }
@@ -326,7 +323,7 @@ func TestJSONReaderSnapshotReportsInvalidWithoutPublishing(t *testing.T) {
 func TestJSONReaderCursorRetainsAndReuses(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	builder, err := NewJSONReaderBuilder(mp, nil)
+	builder, err := NewJSONReaderBuilder(mp)
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"keep":1}`), false))
@@ -357,7 +354,7 @@ func TestJSONReaderCursorRetainsAndReuses(t *testing.T) {
 func TestJSONReaderCursorsRetainClosedParent(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	builder, err := NewJSONReaderBuilder(mp, nil)
+	builder, err := NewJSONReaderBuilder(mp)
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"keep":1}`), false))
@@ -416,7 +413,7 @@ func TestJSONReaderConstantBatchDomain(t *testing.T) {
 	source, err := NewConstBytes(types.T_json.ToType(), raw, 1, mp)
 	require.NoError(t, err)
 	defer source.Free(mp)
-	reader, err := NewJSONReaderSnapshotForRows(source, 64, mp, nil)
+	reader, err := NewJSONReaderSnapshotForRows(source, 64, mp)
 	require.NoError(t, err)
 	defer reader.Close()
 	require.Equal(t, 1, source.Length(), "publication must not resize mutable input")
@@ -448,7 +445,7 @@ func TestJSONReaderConstantBatchDomain(t *testing.T) {
 	flat := NewVec(types.T_json.ToType())
 	defer flat.Free(mp)
 	require.NoError(t, AppendBytes(flat, raw, false, mp))
-	_, err = NewJSONReaderSnapshotForRows(flat, 64, mp, nil)
+	_, err = NewJSONReaderSnapshotForRows(flat, 64, mp)
 	require.Error(t, err, "flat inputs cannot silently change row domain")
 }
 
@@ -476,7 +473,7 @@ type wrappedJSONReader struct{ JSONReader }
 func TestJSONReaderRepeatView(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	builder, err := NewJSONReaderBuilder(mp, nil)
+	builder, err := NewJSONReaderBuilder(mp)
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"keep":1}`), false))
