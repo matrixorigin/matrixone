@@ -36,7 +36,7 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 	if aliasExpr, projectPos, ok := b.ctx.isAliasExpansion(astExpr); ok {
 		if projectPos >= 0 && int(projectPos) < len(b.ctx.projects) {
 			if !aliasProjectionNeedsRebind(b.ctx.projects[projectPos]) {
-				return b.copyExprPreservingArithmeticNull(b.ctx.projects[projectPos]), nil
+				return DeepCopyExpr(b.ctx.projects[projectPos]), nil
 			}
 			aliasExpr = &tree.ParenExpr{Expr: cloneTreeExpr(aliasExpr.Expr)}
 		}

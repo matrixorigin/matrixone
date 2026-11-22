@@ -26,7 +26,7 @@ import (
 func TestPartitionAllNullAny(t *testing.T) {
 	mp := mpool.MustNewZero()
 	func() {
-		v := vector.NewVec(types.T_any.ToType())
+		v := vector.NewVec(types.T_any.ToType(), mp)
 		defer v.Free(mp)
 		for range 4 {
 			require.NoError(t, vector.AppendNull(v, mp))
@@ -46,7 +46,7 @@ func TestPartitionAllNullAny(t *testing.T) {
 func TestPartitionEmptyAny(t *testing.T) {
 	mp := mpool.MustNewZero()
 	func() {
-		v := vector.NewVec(types.T_any.ToType())
+		v := vector.NewVec(types.T_any.ToType(), mp)
 		defer v.Free(mp)
 		require.NotPanics(t, func() {
 			require.Empty(t, Partition(nil, nil, nil, v))
@@ -58,7 +58,7 @@ func TestPartitionEmptyAny(t *testing.T) {
 func TestPartitionAllNullAnyAfterSetLength(t *testing.T) {
 	mp := mpool.MustNewZero()
 	func() {
-		v := vector.NewVec(types.T_any.ToType())
+		v := vector.NewVec(types.T_any.ToType(), mp)
 		defer v.Free(mp)
 		for range 4 {
 			require.NoError(t, vector.AppendNull(v, mp))
@@ -80,7 +80,7 @@ func TestPartitionAllNullAnyAfterSetLength(t *testing.T) {
 func TestPartitionRejectsNonNullAny(t *testing.T) {
 	mp := mpool.MustNewZero()
 	func() {
-		v := vector.NewVec(types.T_any.ToType())
+		v := vector.NewVec(types.T_any.ToType(), mp)
 		defer v.Free(mp)
 		require.NoError(t, vector.AppendNull(v, mp))
 		v.UnsetNull(0)

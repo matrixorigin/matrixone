@@ -4960,18 +4960,18 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// remain neutral even after transparent derived-table or CTE projection,
 	// without mistaking an explicit CAST(NULL AS string) for a neutral branch.
 	integerBranches := make([][]uint32, len(subCtxList))
-	setBranchNullState := make([][]ProvenanceState, len(subCtxList))
+	setBranchPureNull := make([][]bool, len(subCtxList))
 	setBranchOrderTypes := make([][]*plan.Type, len(subCtxList))
 	setBranchPadSpaceProvenance := make([][]bool, len(subCtxList))
 	setOperationKeyRequired := make([]bool, projectLength)
 	for branchIdx, branchCtx := range subCtxList {
-		setBranchNullState[branchIdx] = make([]ProvenanceState, projectLength)
+		setBranchPureNull[branchIdx] = make([]bool, projectLength)
 		integerBranches[branchIdx] = make([]uint32, projectLength)
 		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
 		setBranchPadSpaceProvenance[branchIdx] = make([]bool, projectLength)
 		for colIdx := 0; colIdx < projectLength && colIdx < len(branchCtx.projects); colIdx++ {
-			setBranchNullState[branchIdx][colIdx] =
-				branchCtx.outputColumnProvenanceForProject(int32(colIdx)).State
+			setBranchPureNull[branchIdx][colIdx] =
+				branchCtx.outputColumnProvenanceForProject(int32(colIdx)).State == ProvenancePureNull
 			integerBranches[branchIdx][colIdx] = branchCtx.outputColumnProvenanceForProject(int32(colIdx)).IntegerPrecisionID
 			setBranchOrderTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
 			setBranchPadSpaceProvenance[branchIdx][colIdx] =
@@ -4982,17 +4982,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// reset all select's return Projection(type cast up)
 	// we use coalesce function's type check&type cast rule
 	for columnIdx, argsType := range projectTypList {
-		for branchIdx := range argsType {
-			if setBranchNullState[branchIdx][columnIdx].arithmeticNull() {
-				argsType[branchIdx] = types.T_any.ToType()
-			}
-		}
 		// we don't cast null as any type in function
 		// but we will cast null as some target type in union/intersect/minus
 		var tmpArgsType []types.Type
 		hasDecimalInput := false
 		for branchIdx, typ := range argsType {
-			if !setBranchNullState[branchIdx][columnIdx].commonTypeNeutral() && typ.Oid.IsDecimal() {
+			if !setBranchPureNull[branchIdx][columnIdx] && typ.Oid.IsDecimal() {
 				hasDecimalInput = true
 				break
 			}
@@ -5001,7 +4996,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			// A top-level NULL is carried as legacy T_text only so the binder has
 			// a concrete container. It has no collation or width of its own and
 			// must not change the common type chosen from real values.
-			if typ.Oid != types.T_any && !setBranchNullState[branchIdx][columnIdx].commonTypeNeutral() {
+			if typ.Oid != types.T_any && !setBranchPureNull[branchIdx][columnIdx] {
 				if hasDecimalInput && columnIdx < len(subCtxList[branchIdx].results) {
 					if exact, ok := setOperationIntegerLiteralDecimalType(
 						subCtxList[branchIdx].results[columnIdx],
@@ -5022,25 +5017,6 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			}
 		}
 
-		if len(tmpArgsType) == 0 {
-			// A scalar with an executable source cannot be reduced to a bare
-			// ANY NULL: its cardinality check must still run. Use its concrete
-			// carrier when there is no other common-domain input.
-			for branchIdx, nodeID := range nodes {
-				if setBranchNullState[branchIdx][columnIdx] == ProvenanceArithmeticNullWithSource {
-					tmpArgsType = append(tmpArgsType, makeTypeByPlan2Expr(builder.qry.Nodes[nodeID].ProjectList[columnIdx]))
-					break
-				}
-			}
-		}
-		if len(tmpArgsType) == 0 {
-			// With no typed peer the old arithmetic shortcut produced ANY.
-			for branchIdx, nodeID := range nodes {
-				if setBranchNullState[branchIdx][columnIdx] == ProvenanceArithmeticNull {
-					builder.qry.Nodes[nodeID].ProjectList[columnIdx] = makePlan2NullConstExprWithType()
-				}
-			}
-		}
 		if len(tmpArgsType) > 0 {
 			var targetType plan.Type
 			var targetArgType types.Type
@@ -5169,9 +5145,6 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			branchExprs := make([]*Expr, len(nodes))
 			for i, id := range nodes {
 				branchExprs[i] = builder.qry.Nodes[id].ProjectList[columnIdx]
-				if setBranchNullState[i][columnIdx].arithmeticNull() {
-					branchExprs[i] = makePlan2NullConstExprWithType()
-				}
 			}
 			materialize := !shareGroupingInput && groupingOrderResolve == nil &&
 				types.T(targetType.Id).IsMySQLString() && slices.ContainsFunc(tmpArgsType, function.IsBinaryCharacterType)
@@ -5239,18 +5212,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 				if needsCast {
 					source := node.ProjectList[columnIdx]
-					if setBranchNullState[idx][columnIdx] == ProvenanceArithmeticNullWithSource {
-						node.ProjectList[columnIdx], err = arithmeticNullWithSource(builder.GetContext(), source, targetType)
-						if err != nil {
-							return 0, err
-						}
-					} else if setBranchNullState[idx][columnIdx] == ProvenanceArithmeticNull {
-						// A transparent source can be a BIGINT column reference, not a
-						// literal. Retyping that reference would mislabel its vector.
-						nullExpr := makePlan2NullConstExprWithType()
-						nullExpr.Typ = targetType
-						node.ProjectList[columnIdx] = nullExpr
-					} else if argsType[idx].Oid == types.T_any || setBranchNullState[idx][columnIdx].commonTypeNeutral() {
+					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
 						node.ProjectList[columnIdx].Typ = targetType
 					} else if targetArgType.Oid == types.T_char {
 						node.ProjectList[columnIdx], err = appendSetOperationCastBeforeExpr(
@@ -5432,7 +5394,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			if !shareGroupingInput {
 				var inputs []uint32
 				for branchIdx := range subCtxList {
-					if !setBranchNullState[branchIdx][colIdx].commonTypeNeutral() {
+					if !setBranchPureNull[branchIdx][colIdx] {
 						inputs = append(inputs, integerBranches[branchIdx][colIdx])
 					}
 				}
@@ -5449,27 +5411,19 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			}
 		}
 	}
-	// Preserve the old set-output contract across transparent boundaries.
-	// A mixture of bare and arithmetic NULLs may resolve to the bare NULL's
-	// concrete TEXT placeholder, so it must not inherit either origin.
+	// A set-operation output is itself pure NULL only when every branch is pure
+	// NULL. Preserve that fact for another transparent derived-table or CTE
+	// boundary so a later set operation still treats the column as neutral.
 	for colIdx := range ctx.projects {
-		state := setBranchNullState[0][colIdx]
-		if !state.commonTypeNeutral() {
-			continue
-		}
-		for branchIdx := 1; branchIdx < len(setBranchNullState); branchIdx++ {
-			other := setBranchNullState[branchIdx][colIdx]
-			if state.arithmeticNull() && other.arithmeticNull() {
-				if other == ProvenanceArithmeticNullWithSource {
-					state = other
-				}
-			} else if other != state {
-				state = ProvenanceNone
+		allPureNull := true
+		for branchIdx := range setBranchPureNull {
+			if colIdx >= len(setBranchPureNull[branchIdx]) || !setBranchPureNull[branchIdx][colIdx] {
+				allPureNull = false
 				break
 			}
 		}
-		if state != ProvenanceNone {
-			ctx.setOutputColumnProvenance(int32(colIdx), OutputColumnProvenance{State: state})
+		if allPureNull {
+			ctx.setOutputColumnProvenance(int32(colIdx), OutputColumnProvenance{State: ProvenancePureNull})
 		}
 	}
 	// A set-operation result keeps ENUM/SET definition-order provenance only
@@ -5486,7 +5440,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		for branchIdx := range subCtxList {
 			branchType := setBranchOrderTypes[branchIdx][colIdx]
 			if branchType == nil {
-				if colIdx >= len(setBranchNullState[branchIdx]) || !setBranchNullState[branchIdx][colIdx].commonTypeNeutral() {
+				if colIdx >= len(setBranchPureNull[branchIdx]) || !setBranchPureNull[branchIdx][colIdx] {
 					compatible = false
 					break
 				}
@@ -11752,12 +11706,6 @@ func (builder *QueryBuilder) bindValues(
 				return
 			}
 
-			// The legacy arithmetic shortcut fed VALUES an untyped NULL. Keep
-			// that context without changing a separately published projection.
-			if builder.arithmeticNullOrigins.recorded(planExpr) ||
-				ctx.outputColumnProvenanceForExpr(planExpr).State == ProvenanceArithmeticNull {
-				planExpr = makePlan2NullConstExprWithType()
-			}
 			columnExprs[j] = planExpr
 			pureNulls[j] = isNullAstExpr(unwrapParenExpr(valuesClause.Rows[j][i]))
 		}
@@ -12353,19 +12301,10 @@ func (builder *QueryBuilder) appendProjectionNode(
 	notCacheable bool,
 ) (newNodeID int32, err error) {
 	for i, proj := range ctx.projects {
-		scalarNull := false
-		if proj.GetSub() != nil || proj.GetDependent() != nil {
-			_, scalarNull = (&baseBinder{builder: builder, ctx: ctx}).contextualArithmeticNull(proj)
-		}
 		if nodeID, proj, err = builder.flattenSubqueries(nodeID, proj, ctx); err != nil {
 			return
 		}
 		ctx.projects[i] = proj
-		if scalarNull && !builder.arithmeticNullOrigins.recorded(proj) {
-			provenance := ctx.outputColumnProvenanceForProject(int32(i))
-			provenance.State = ProvenanceArithmeticNullWithSource
-			ctx.setOutputColumnProvenance(int32(i), provenance)
-		}
 	}
 
 	nodeID = builder.appendNode(&plan.Node{

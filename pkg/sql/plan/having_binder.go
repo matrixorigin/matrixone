@@ -44,7 +44,7 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	if aliasExpr, projectPos, ok := b.ctx.isAliasExpansion(astExpr); ok {
 		if projectPos >= 0 && int(projectPos) < len(b.ctx.projects) {
 			if !aliasProjectionNeedsRebind(b.ctx.projects[projectPos]) {
-				return b.copyExprPreservingArithmeticNull(b.ctx.projects[projectPos]), nil
+				return DeepCopyExpr(b.ctx.projects[projectPos]), nil
 			}
 			aliasExpr = &tree.ParenExpr{Expr: cloneTreeExpr(aliasExpr.Expr)}
 		}
@@ -629,12 +629,12 @@ func (b *HavingBinder) bindOrderedSetAggregate(
 
 	var expr *plan.Expr
 	if b.builder == nil || b.builder.compCtx == nil {
-		expr, err = bindFuncExprImplByPlanExpr(
-			b.GetContext(), nil, funcName, args, true, nil, nil, false, b.arithmeticOrigins())
+		expr, err = BindFuncExprImplByPlanExpr(b.GetContext(), funcName, args)
 	} else {
-		expr, err = bindFuncExprAndConstFoldWithArithmeticNull(
-			b.GetContext(), b.builder.compCtx.GetProcess(), funcName, args,
-			true, false, nil, b.arithmeticOrigins())
+		expr, err = bindFuncExprAndConstFold(
+			b.GetContext(), b.builder.compCtx.GetProcess(), funcName,
+			args,
+		)
 	}
 	if err != nil {
 		return nil, err

@@ -79,14 +79,31 @@ insert into secret_rows values (5);
 create view issue_32869_view as
 select o.a, cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) as v from outer_rows o;
 select * from issue_32869_view order by a;
--- Issue #33056: the untyped arithmetic result must also survive view sorting.
+-- Issue #33056: exercise the untyped producer through a view and direct sort.
 create table issue_33056_rows (a int);
 insert into issue_33056_rows values (2), (20);
 create view issue_33056_view as
 select o.a, null + (select o.a from inner_rows i where i.d > o.a limit 0) as v
 from issue_33056_rows o;
+select count(*) as rows_seen, count(v) as non_nulls from issue_33056_view;
+-- @metacmp(true)
 select a, v from issue_33056_view order by a;
+select a, v from issue_33056_view order by v, a;
+select a, v from issue_33056_view order by v, a limit 1 offset 1;
+select a, row_number() over (partition by v order by a) as rn from issue_33056_view order by a;
+select o.a, null + (select o.a from inner_rows i where i.d > o.a limit 0) as v
+from issue_33056_rows o order by o.a;
 select a, cast(v as signed) as v from issue_33056_view order by a;
+-- Preserve legacy coercion for comparisons, explicit casts and assignments.
+select cast(null + 1 as uuid), cast(null + 1 as vecf32(2)), cast(null + 1 as date);
+select coalesce(null + 1, cast('[1,2]' as vecf32(2)));
+create table issue_33056_types (u uuid, v vecf32(2));
+insert into issue_33056_types values (null + 1, null + 1);
+update issue_33056_types set u = null + 1, v = null + 1;
+select u, v from issue_33056_types;
+select cast(cast(null + 1 as signed) as uuid);
+select null + 1 into @issue_33056_null;
+select cast(@issue_33056_null as uuid);
 alter view issue_32869_view as
 select o.a, cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) as v from outer_rows o;
 select * from issue_32869_view order by a;
@@ -183,13 +200,6 @@ window unused_w as (order by issue_32869_identity(null +
 select null + (select null + (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
                from test_issue_32869.restricted_wrapper c limit 1)
 from test_issue_32869.outer_rows;
-select (null + 1) + (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
-                     from test_issue_32869.restricted_wrapper c limit 1)
-from test_issue_32869.outer_rows;
-select issue_32869_identity(null + 1) +
-       (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
-        from test_issue_32869.restricted_wrapper c limit 1)
-from test_issue_32869.outer_rows;
 select (select o.a from test_issue_32869.inner_rows i where i.d > o.a limit 0) as root_zero
 from test_issue_32869.outer_rows o
 window unused_w as (order by (select s from test_issue_32869.secret_rows limit 1));
@@ -235,28 +245,6 @@ select issue_32869_keep_second(cast(null as signed) +
   (select (select i.d from test_issue_32869.secret_rows s where s.s > i.d limit 0)
    from test_issue_32869.inner_rows i limit 1), 42) as folded_discarded_wrapper;
 select s from test_issue_32869.secret_rows;
--- A contextual NULL scalar must still authorize its table source.
-select coalesce((select null + 1 from test_issue_32869.restricted_wrapper limit 1),
-                cast('[1,2]' as vecf32(2))) as scalar_value;
-select d.a, coalesce((select d.x from test_issue_32869.restricted_wrapper i where i.d > d.a limit 0),
-                     cast('[1,2]' as vecf32(2))) as correlated_zero
-from (select a, null + 1 as x from test_issue_32869.outer_rows) d order by d.a;
--- @session
-grant select on table test_issue_32869.restricted_wrapper to issue_32869_role;
--- @session:id=2&user=sys:issue_32869_reader:issue_32869_role&password=111
-use test_issue_32869;
-select coalesce((select null + 1 from test_issue_32869.restricted_wrapper limit 1),
-                cast('[1,2]' as vecf32(2))) as scalar_value;
-select d.a, coalesce((select d.x from test_issue_32869.restricted_wrapper i where i.d > d.a limit 0),
-                     cast('[1,2]' as vecf32(2))) as correlated_zero
-from (select a, null + 1 as x from test_issue_32869.outer_rows) d order by d.a;
-select o.a, (null + 1) + (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
-                          from test_issue_32869.restricted_wrapper c limit 1) as v
-from test_issue_32869.outer_rows o order by o.a;
-select o.a, issue_32869_identity(null + 1) +
-       (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
-        from test_issue_32869.restricted_wrapper c limit 1) as v
-from test_issue_32869.outer_rows o order by o.a;
 -- @session
 drop user issue_32869_reader;
 drop role issue_32869_role;

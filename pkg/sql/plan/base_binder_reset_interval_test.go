@@ -664,7 +664,7 @@ func TestResetDateFunction(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			args, err := resetDateFunction(ctx, tc.dateExpr, tc.intervalExpr, nil)
+			args, err := resetDateFunction(ctx, tc.dateExpr, tc.intervalExpr)
 
 			if tc.expectError {
 				require.Error(t, err)

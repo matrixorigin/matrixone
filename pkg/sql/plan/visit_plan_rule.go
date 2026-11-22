@@ -1800,7 +1800,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 		if name == "+" || name == "-" || name == "*" {
 			originalBoundExpr = expr
 		}
-		bound, err := bindFuncExprImplByPlanExpr(rule.ctx, nil, name, copy.GetF().Args, true, nil, originalBoundExpr, false, nil)
+		bound, err := bindFuncExprImplByPlanExpr(rule.ctx, nil, name, copy.GetF().Args, true, nil, originalBoundExpr, false)
 		if err != nil {
 			return nil, false, err
 		}

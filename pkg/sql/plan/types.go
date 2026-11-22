@@ -534,11 +534,9 @@ type QueryBuilder struct {
 	// synthetic bindings must not make arbitrary carried estimates authoritative.
 	syntheticNDVCols map[[2]int32]struct{}
 
-	nextBindTag      int32
-	nextMsgTag       int32
-	nextSQLUdfCallID uint64
-	// Typed strict-arithmetic NULLs that used to be untyped during binding.
-	arithmeticNullOrigins       arithmeticNullOrigins
+	nextBindTag                 int32
+	nextMsgTag                  int32
+	nextSQLUdfCallID            uint64
 	udfResolutionCount          uint64
 	udfExpansionDepth           uint32
 	zeroScalarRewriteGeneration uint64
@@ -1272,12 +1270,11 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx                context.Context
-	builder               *QueryBuilder
-	ctx                   *BindContext
-	impl                  Binder
-	boundCols             []boundColumn
-	arithmeticNullOrigins arithmeticNullOrigins // fallback for a binder without a query builder
+	sysCtx    context.Context
+	builder   *QueryBuilder
+	ctx       *BindContext
+	impl      Binder
+	boundCols []boundColumn
 	// Catalog FORMAT must choose its legacy string contract before binding
 	// precision: some historical source types (e.g. DATE) cannot cast to INT64.
 	persistedFormatCompatibility bool

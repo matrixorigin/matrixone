@@ -538,7 +538,6 @@ func TestBuiltinFoldedZeroScalarRetainsSources(t *testing.T) {
 	}{
 		{"direct", "select null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n", []string{"region"}},
 		{"nested wrapper", "select null + (select null + (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1) from nation n", []string{"region", "customer"}},
-		{"nested arithmetic", "select (null + 1) + (select (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1) from nation n", []string{"region", "customer"}},
 		{"deduplicated inner source", "select null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0), null + (select null + (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1) from nation n", []string{"region", "customer"}},
 		{"folded wrapper argument to UDF", "select f_identity(null + (select (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1)) from nation n", []string{"region", "customer"}},
 		{"folded argument to UDF", "select f_identity(null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0)) from nation n", []string{"region"}},
@@ -559,40 +558,10 @@ func TestBuiltinFoldedZeroScalarRetainsSources(t *testing.T) {
 			}
 			for _, source := range tc.sources {
 				require.True(t, retained[source], "folded scalar must retain %s for authorization and catalog validation", source)
-				if tc.name != "folded wrapper argument to UDF" && tc.name != "nested arithmetic" && source == "region" {
+				if tc.name != "folded wrapper argument to UDF" && source == "region" {
 					require.False(t, queryHasReachableTable(query, source), "the root LIMIT 0 source must not execute")
 				}
-				if tc.name == "nested arithmetic" && source == "customer" {
-					require.False(t, queryHasReachableTable(query, source), "the discarded wrapper must not execute")
-				}
 			}
-			if tc.name == "nested arithmetic" {
-				// Dependent programs retain their own plan steps. With no call
-				// stage, their source is compiled but never invoked by the main query.
-				require.Empty(t, query.GetCorrelation().GetStages())
-				root := query.Steps[query.MainOutputStep()]
-				for id, node := range query.Nodes {
-					if node != nil && node.NodeType == plan.Node_TABLE_SCAN && node.GetObjRef().GetObjName() == "region" {
-						require.False(t, planNodeDependsOn(query, root, int32(id), make(map[int32]struct{})))
-					}
-				}
-			}
-		})
-	}
-}
-
-func TestNullArithmeticDoesNotDiscardOtherNullProducers(t *testing.T) {
-	for _, expression := range []string{"cast(null as signed)", "(1 / 0)"} {
-		t.Run(expression, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
-			sql := "select " + expression + " + (select (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1) from nation n"
-			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
-			require.NoError(t, err)
-			defer stmt.Free()
-			query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
-			require.NoError(t, err)
-			require.True(t, queryHasReachableTable(query, "customer"))
-			require.NotEmpty(t, query.GetCorrelation().GetStages())
 		})
 	}
 }
@@ -2498,110 +2467,4 @@ func TestSQLUDFFoldedZeroScalarRetainsValidationSources(t *testing.T) {
 		require.False(t, queryHasReachableTable(query, "customer"))
 		require.False(t, queryHasReachableTable(query, "region"))
 	})
-}
-
-func TestArithmeticNullOriginThroughSQLUDF(t *testing.T) {
-	const wrapper = "(select (select c.c_custkey from region r where r.r_regionkey > c.c_custkey limit 0) from customer c limit 1)"
-	for _, tc := range []struct {
-		expr string
-		live bool
-	}{
-		{"f_identity(null + 1)", false},
-		{"f_increment(null + 1)", false},
-		{"f_identity(f_identity(null + 1))", false},
-		{"f_identity(cast(null as signed))", true},
-		{"f_identity(1 / 0)", true},
-	} {
-		t.Run(tc.expr, func(t *testing.T) {
-			ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
-			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select "+tc.expr+" + "+wrapper+" from nation n", 1)
-			require.NoError(t, err)
-			defer stmt.Free()
-			query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
-			require.NoError(t, err)
-			require.Equal(t, tc.live, queryHasReachableTable(query, "customer"))
-			if tc.live {
-				require.NotEmpty(t, query.GetCorrelation().GetStages())
-				return
-			}
-			require.Empty(t, query.GetCorrelation().GetStages())
-			retained := make(map[string]bool)
-			for _, node := range query.Nodes {
-				if IsValidationPrivilegeCarrier(node) && node.ObjRef != nil {
-					retained[node.ObjRef.ObjName] = node.TableDef != nil
-				}
-			}
-			require.True(t, retained["region"])
-			require.True(t, retained["customer"])
-		})
-	}
-}
-
-func TestArithmeticNullOriginDateAdmission(t *testing.T) {
-	for _, fn := range []string{"date_add", "date_sub", "adddate", "subdate"} {
-		for _, tc := range []struct {
-			expr   string
-			reject bool
-		}{
-			{"null + 1", true},
-			{"f_identity(null + 1)", true},
-			{"cast(null as signed)", false},
-			{"1 / 0", false},
-		} {
-			t.Run(fn+"/"+tc.expr, func(t *testing.T) {
-				ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
-				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select "+fn+"('2024-01-01', "+tc.expr+")", 1)
-				require.NoError(t, err)
-				defer stmt.Free()
-				_, err = BuildPlan(ctx, stmt, false, nil)
-				if tc.reject {
-					require.True(t, moerr.IsMoErrCode(err, moerr.ErrSyntaxError), "%v", err)
-				} else {
-					require.NoError(t, err)
-				}
-			})
-		}
-	}
-}
-
-func TestArithmeticNullOriginPercentileAdmission(t *testing.T) {
-	for _, sql := range []string{
-		"select approx_percentile(n_nationkey, null + 1) from nation",
-		"select approx_percentile(n_nationkey, null + 1) over () from nation",
-		"select percentile_cont(null + 1) within group (order by n_nationkey) from nation",
-		"select quantileExactWeighted(n_nationkey, n_regionkey, null + 1) from nation",
-	} {
-		t.Run(sql, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
-			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
-			require.NoError(t, err)
-			defer stmt.Free()
-			_, err = BuildPlan(ctx, stmt, false, nil)
-			require.ErrorContains(t, err, "non-null constant or parameter")
-		})
-	}
-}
-
-func TestArithmeticNullOriginAcrossAliasCopies(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx(t)
-	projection := NewProjectionBinder(builder, bindCtx, nil)
-	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select null + 1", 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-	ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
-	original, err := projection.BindExpr(ast, 0, false)
-	require.NoError(t, err)
-	bindCtx.projects = []*plan.Expr{original}
-	alias := bindCtx.wrapAliasExpansion(ast, 0)
-	for _, binder := range []Binder{projection, NewHavingBinder(builder, bindCtx)} {
-		copied, err := binder.BindExpr(alias, 0, false)
-		require.NoError(t, err)
-		require.NotSame(t, original.GetLit(), copied.GetLit())
-		uuid := &plan.Expr{Typ: types.T_uuid.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
-		result, err := bindFuncExprImplByPlanExpr(t.Context(), nil, "+", []*Expr{copied, uuid}, false, nil, nil, false, &builder.arithmeticNullOrigins)
-		require.NoError(t, err)
-		require.True(t, result.GetLit().GetIsnull())
-	}
-	var fresh arithmeticNullOrigins
-	require.False(t, fresh.legacyNull(original), "binding evidence must not leak into another statement")
 }

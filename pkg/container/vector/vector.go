@@ -2254,20 +2254,9 @@ func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
 func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 
 	if v.IsConst() {
-		if v.HasGrouping() {
-			if err := v.MaterializeOwned(mp); err != nil {
+		if v.typ.Oid == types.T_any {
+			if err := v.checkMP(mp); err != nil {
 				return err
-			}
-			if negate {
-				// Constant vectors historically accept unordered selections.
-				// Complement compaction needs an ordered list of removed rows.
-				if !slices.IsSorted(sels) {
-					sels = slices.Clone(sels)
-					slices.Sort(sels)
-				}
-				nulls.FilterInPlaceOrdered(&v.gsp, sels, true)
-			} else {
-				nulls.Filter(&v.gsp, sels, false)
 			}
 		}
 		if negate {
@@ -2275,28 +2264,25 @@ func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 		} else {
 			v.length = len(sels)
 		}
-		trimVectorBitmap(&v.gsp, v.length)
 		return nil
 	}
 	if err := v.checkMP(mp); err != nil {
 		return err
 	}
 	if v.typ.Oid == types.T_any && (v.length == 0 || v.AllNull()) {
-		if err := v.MaterializeOwned(mp); err != nil {
-			return err
-		}
 		newLength := len(sels)
 		if negate {
 			newLength = v.length - len(sels)
 		}
 		if !negate || len(sels) > 0 {
-			nulls.FilterInPlaceOrdered(&v.gsp, sels, negate)
 			nulls.FilterInPlaceOrdered(&v.nsp, sels, negate)
 		}
 		v.length = newLength
-		trimVectorBitmap(&v.gsp, newLength)
 		trimVectorBitmap(&v.nsp, newLength)
 		return nil
+	}
+	if v.typ.Oid == types.T_any {
+		return moerr.NewNotSupportedNoCtx("non-NULL ANY selection")
 	}
 	switch v.typ.Oid {
 	case types.T_bool:
@@ -2375,37 +2361,33 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, m
 		return nil
 	}
 	if v.IsConst() {
-		if v.HasGrouping() {
-			if err := v.MaterializeOwned(mp); err != nil {
+		if v.typ.Oid == types.T_any {
+			if err := v.checkMP(mp); err != nil {
 				return err
 			}
-			nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, negate, offset)
 		}
 		if negate {
 			v.length -= sels.Count()
 		} else {
 			v.length = sels.Count()
 		}
-		trimVectorBitmap(&v.gsp, v.length)
 		return nil
 	}
 	if err := v.checkMP(mp); err != nil {
 		return err
 	}
 	if v.typ.Oid == types.T_any && (v.length == 0 || v.AllNull()) {
-		if err := v.MaterializeOwned(mp); err != nil {
-			return err
-		}
 		newLength := sels.Count()
 		if negate {
 			newLength = v.length - newLength
 		}
-		nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, negate, offset)
 		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, negate, offset)
 		v.length = newLength
-		trimVectorBitmap(&v.gsp, newLength)
 		trimVectorBitmap(&v.nsp, newLength)
 		return nil
+	}
+	if v.typ.Oid == types.T_any {
+		return moerr.NewNotSupportedNoCtx("non-NULL ANY selection")
 	}
 	switch v.typ.Oid {
 	case types.T_bool:
@@ -2481,20 +2463,17 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, m
 // Shuffle use to shrink vectors, sels can be disordered
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.IsConst() {
-		if v.HasGrouping() {
-			if err := v.MaterializeOwned(mp); err != nil {
+		if v.typ.Oid == types.T_any {
+			if err := v.checkMP(mp); err != nil {
 				return err
 			}
-			nulls.Filter(&v.gsp, sels, false)
-			v.length = len(sels)
-		} else if v.typ.Oid == types.T_any {
 			v.length = len(sels)
 		}
 		return nil
 	}
 	// ANY has no value payload; its row metadata still follows the selection.
 	if v.typ.Oid == types.T_any && (v.length == 0 || v.AllNull()) {
-		if err := v.MaterializeOwned(mp); err != nil {
+		if err := v.checkMP(mp); err != nil {
 			return err
 		}
 		if err := v.remapShuffleBitmaps(sels, mp); err != nil {
@@ -2502,6 +2481,9 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		}
 		v.length = len(sels)
 		return nil
+	}
+	if v.typ.Oid == types.T_any {
+		return moerr.NewNotSupportedNoCtx("non-NULL ANY selection")
 	}
 	switch v.typ.Oid {
 	case types.T_bool:
@@ -2744,6 +2726,17 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
 	union := getUnionAllFunction(typ, mp)
 	return func(v, w *Vector) error {
+		if typ.Oid == types.T_any {
+			if v.length < 0 || w.length < 0 || w.length > math.MaxInt-v.length {
+				return moerr.NewInternalErrorNoCtx("invalid ANY vector length")
+			}
+			if err := validBitmapRows(v.length + w.length); err != nil {
+				return err
+			}
+			if (v.length != 0 && !v.AllNull()) || (w.length != 0 && !w.AllNull()) {
+				return moerr.NewInternalErrorNoCtx("cannot copy a non-NULL value of type ANY")
+			}
+		}
 
 		// A Window retains the area lease but may alias our owned descriptors.
 		if v.dataAliases(w) {
@@ -2754,7 +2747,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		if err := v.checkMP(mp); err != nil {
 			return err
 		}
-		if w.IsConst() {
+		if w.IsConst() && typ.Oid != types.T_any {
 			// The raw const append helpers classify their input as ordinary data.
 			// UnionMulti copies a source value instead and therefore preserves its
 			// provenance without a second, post-publication sidecar transition.
@@ -2786,6 +2779,24 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 	}
 
 	switch typ.Oid {
+	case types.T_any:
+		return func(v, w *Vector) error {
+			if w.length == 0 {
+				return nil
+			}
+			oldLength := v.length
+			if err := extendWithBitmaps(v, w.length, mp, true); err != nil {
+				return err
+			}
+			// SetLength can leave metadata past the visible prefix on a reused
+			// destination. New rows must not inherit those stale NULL bits.
+			if end := v.nsp.Len(); end > int64(oldLength) {
+				nulls.RemoveRange(&v.nsp, uint64(oldLength), uint64(end))
+			}
+			v.nsp.AddRange(uint64(oldLength), uint64(oldLength+w.length))
+			v.setLengthAfterExtend(oldLength + w.length)
+			return nil
+		}
 	case types.T_bool:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {

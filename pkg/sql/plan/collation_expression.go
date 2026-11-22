@@ -679,29 +679,24 @@ func setExpressionCollation(ctx context.Context, name string, args []*Expr, typ 
 	return nil
 }
 
-// conditionalValueIndex identifies result alternatives; IFNULL and NULLIF
-// have already been lowered to CASE by the binder.
-func conditionalValueIndex(name string, arity, index int) bool {
+// conditionalValueIndexes returns the value arguments of CASE, IF and
+// COALESCE. IFNULL and NULLIF are bound as CASE.
+func conditionalValueIndexes(name string, arity int) []int {
+	var indexes []int
 	switch name {
 	case "case":
-		return index%2 == 1 || arity%2 == 1 && index == arity-1
+		for i := 1; i < arity; i += 2 {
+			indexes = append(indexes, i)
+		}
+		if arity%2 == 1 {
+			indexes = append(indexes, arity-1)
+		}
 	case "if", "iff":
-		return arity == 3 && index > 0
+		if arity == 3 {
+			indexes = []int{1, 2}
+		}
 	case "coalesce":
-		return true
-	}
-	return false
-}
-
-func conditionalValueIndexes(name string, arity int) []int {
-	switch name {
-	case "case", "if", "iff", "coalesce":
-	default:
-		return nil
-	}
-	var indexes []int
-	for i := 0; i < arity; i++ {
-		if conditionalValueIndex(name, arity, i) {
+		for i := 0; i < arity; i++ {
 			indexes = append(indexes, i)
 		}
 	}

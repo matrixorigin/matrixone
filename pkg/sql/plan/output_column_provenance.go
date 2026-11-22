@@ -31,21 +31,7 @@ const (
 	// of it. Unlike a source column, it contributes no type or collation contract
 	// when a set operation resolves a common output type.
 	ProvenancePureNull
-	// ProvenanceArithmeticNull retains the old untyped common-domain behavior
-	// of a typed arithmetic NULL across transparent query/view boundaries.
-	ProvenanceArithmeticNull
-	// ProvenanceArithmeticNullWithSource is also always NULL, but its
-	// producer must execute (for example, a scalar cardinality check).
-	ProvenanceArithmeticNullWithSource
 )
-
-func (s ProvenanceState) arithmeticNull() bool {
-	return s == ProvenanceArithmeticNull || s == ProvenanceArithmeticNullWithSource
-}
-
-func (s ProvenanceState) commonTypeNeutral() bool {
-	return s == ProvenancePureNull || s.arithmeticNull()
-}
 
 // CTASDefaultPolicy is deliberately separate from source-column identity.
 // View schema generation consumes the source snapshot directly, while CTAS
@@ -209,9 +195,6 @@ func (bc *BindContext) outputColumnProvenanceForExpr(expr *plan.Expr) (result Ou
 			return provenance
 		}
 	}
-	if bc.builder != nil && bc.builder.arithmeticNullOrigins.recorded(expr) {
-		return OutputColumnProvenance{State: ProvenanceArithmeticNull}
-	}
 	if isPureNullLiteralExpr(expr) {
 		return OutputColumnProvenance{State: ProvenancePureNull}
 	}
@@ -224,20 +207,6 @@ func (bc *BindContext) outputColumnProvenanceForExpr(expr *plan.Expr) (result Ou
 		if id == planfunction.INTEGER_DIV && expr.Typ.Width > 0 && expr.Typ.Width <= 20 && expr.Typ.Scale == 0 {
 			return OutputColumnProvenance{State: ProvenanceNone, DecimalDivDisplayLength: expr.Typ.Width}
 		}
-	}
-	if corr := expr.GetCorr(); corr != nil {
-		owner := bc
-		for depth := int32(0); depth < corr.Depth && owner != nil; depth++ {
-			owner = owner.parent
-		}
-		if owner != nil {
-			ref := &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: corr.RelPos, ColPos: corr.ColPos}}}
-			if provenance := owner.outputColumnProvenanceForExpr(ref); provenance.State.arithmeticNull() {
-				provenance.State = ProvenanceArithmeticNullWithSource
-				return provenance
-			}
-		}
-		return OutputColumnProvenance{State: ProvenanceNone}
 	}
 	col := expr.GetCol()
 	if col == nil {
