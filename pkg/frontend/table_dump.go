@@ -1746,9 +1746,21 @@ func prepareV428TableDumpLoad(ctx context.Context, ses *Session, dbName string, 
 			return moerr.NewInvalidInputNoCtx("v4.2.8 table dump has an invalid target column")
 		}
 		oid := types.T(col.Typ.Id)
-		if !(types.Type{Oid: oid}).IsNumeric() && !(col.Hidden && oid == types.T_Rowid) {
-			return moerr.NewInvalidInputNoCtx("v4.2.8 LOAD TABLE requires numeric columns")
+		typ := types.Type{Oid: oid}
+		// SET has an integer storage type but its labels are text metadata.
+		if col.Typ.Enumvalues == "" && (typ.IsIntOrUint() || typ.IsDecimal() || oid == types.T_bit ||
+			oid == types.T_float32 || oid == types.T_float64 || (col.Hidden && oid == types.T_Rowid)) {
+			continue
 		}
+		// Composite keys pack the declared numeric components into a hidden
+		// VARCHAR in both versions. The release hash checks component order
+		// and types through the visible columns and PRIMARY KEY clause.
+		pk := def.Pkey
+		if col.Hidden && col.Primary && oid == types.T_varchar && col.Name == catalog.CPrimaryKeyColName &&
+			pk != nil && pk.PkeyColName == col.Name && pk.CompPkeyCol != nil && len(pk.Names) > 1 {
+			continue
+		}
+		return moerr.NewInvalidInputNoCtx("v4.2.8 LOAD TABLE requires numeric columns")
 	}
 	relation := manifest.Relations[0]
 	if relation.LogicalSchemaHash != "" || len(relation.AutoIncrement) != 0 {

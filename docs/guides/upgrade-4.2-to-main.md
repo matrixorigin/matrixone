@@ -80,8 +80,12 @@ This option checks the v4.2.8 schema fingerprint and each object checksum. It
 recovers generated `BIT_COUNT` on a FLOAT or DOUBLE column or a direct
 floating cast of that column when the binding is verifiable. The target must
 use the default table collation and have numeric columns with no secondary
-index relations. The release fingerprint does not identify text collations or
-the current packed index key metadata. Ambiguity in other expressions or the
+index relations. Numeric composite primary keys are supported when the
+target reproduces the v4.2.8 schema fingerprint, including the declared key
+order. Differences in historical schema rendering can still prevent a match,
+for example when a MEDIUMINT column rendered as INT in the release hash. The
+release fingerprint does not identify text collations or secondary index
+key metadata. Ambiguity in other expressions or the
 column binding scope causes the restore to fail. For an archive with uncertain
 provenance, recover an authoritative source copy. Upgrade that copy to a
 version that writes bound dumps, then export a new archive.
