@@ -46,77 +46,100 @@ func TestFlightTransitionForegroundReadNotHeldByWaitingFileConnection(t *testing
 	require.Equal(t, data[offset:offset+ranges[0].Size], got)
 }
 
-// A column read that copied its first entry from a flight that ended, and waits for the
-// flight of its second, holds no budget for the first.
+// A column read of two ranges two flights read holds only the flight of the range it waits
+// for: once either flight ends, the read holds no budget for it, a read of another range is
+// not held by the read, and the range of a flight that ended before the read reached it is
+// read from the disk cache, not object storage.
 func TestFlightTransitionColumnReadReleasesCopiedFlight(t *testing.T) {
-	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
-	ranges := columnRanges(3, 40<<10, 1<<10)
-	unit := flightBufSize(ranges[0].Size)
-	fs.diskCache.prefetchFlightBytes = 2 * unit
-	gx, gy := make(chan struct{}), make(chan struct{})
-	releaseX, releaseY := sync.OnceFunc(func() { close(gx) }), sync.OnceFunc(func() { close(gy) })
-	defer releaseX()
-	defer releaseY()
-	g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return false })
-	g.gated = func(_ string, offset int64) chan struct{} {
-		switch offset {
-		case ranges[0].Offset:
-			return gx
-		case ranges[1].Offset:
-			return gy
-		}
-		return nil
-	}
-	fs.storage = g
-	ctx := context.Background()
-	key := fs.pathToKey("object")
-	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 2 << 10, Ranges: ranges[:2], Scan: &PrefetchScan{}}))
-	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 2 }, 5*time.Second, time.Millisecond)
-
-	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		vec := &IOVector{FilePath: "object", Policy: ColumnPrefetch | SkipFullFilePreloads | SkipMemoryCache,
-			Entries: []IOEntry{ranges[0].entry(), ranges[1].entry()}}
-		err := fs.Read(readCtx, vec)
-		if err == nil {
-			vec.Release()
-		}
-		done <- err
-	}()
-	// The read holds both flights.
-	require.Eventually(t, func() bool {
-		f := &fs.diskCache.prefetchObjects
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		for _, o := range f.m[fs.diskCache.pathForFile("object")] {
-			if fl, ok := o.(*memoryPrefetchObject); ok {
-				fl.mu.Lock()
-				refs := fl.refs
-				fl.mu.Unlock()
-				if refs < 2 {
-					return false
+	for _, tc := range []struct {
+		name  string
+		first int
+	}{
+		{"the first range ends first", 0},
+		{"the second range ends first", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
+			ranges := columnRanges(3, 40<<10, 1<<10)
+			unit := flightBufSize(ranges[0].Size)
+			fs.diskCache.prefetchFlightBytes = 2 * unit
+			gates := []chan struct{}{make(chan struct{}), make(chan struct{})}
+			release := []func(){sync.OnceFunc(func() { close(gates[0]) }), sync.OnceFunc(func() { close(gates[1]) })}
+			defer release[0]()
+			defer release[1]()
+			g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return false })
+			g.gated = func(_ string, offset int64) chan struct{} {
+				for i := range gates {
+					if offset == ranges[i].Offset {
+						return gates[i]
+					}
 				}
+				return nil
 			}
-		}
-		return true
-	}, 5*time.Second, time.Millisecond)
-	releaseX()
-	// X ended and was copied; only Y, which reads, holds budget.
-	assertEventuallyBytes(t, fs, unit)
+			fs.storage = g
+			ctx := context.Background()
+			key := fs.pathToKey("object")
+			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 2 << 10, Ranges: ranges[:2], Scan: &PrefetchScan{}}))
+			require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 2 }, 5*time.Second, time.Millisecond)
 
-	// A read of another range, which needs one buffer, is not held by Y.
-	otherCtx, cancelOther := context.WithTimeout(ctx, 2*time.Second)
-	defer cancelOther()
-	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
-		Entries: []IOEntry{ranges[2].entry()}}
-	if assert.NoError(t, fs.Read(otherCtx, vec), "a read of another range is not held by Y") {
-		assert.Equal(t, data[ranges[2].Offset:ranges[2].Offset+ranges[2].Size], vec.Entries[0].Data)
-		vec.Release()
+			readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			type result struct {
+				data [2][]byte
+				err  error
+			}
+			done := make(chan result, 1)
+			go func() {
+				vec := &IOVector{FilePath: "object", Policy: ColumnPrefetch | SkipFullFilePreloads | SkipMemoryCache,
+					Entries: []IOEntry{ranges[0].entry(), ranges[1].entry()}}
+				var r result
+				if r.err = fs.Read(readCtx, vec); r.err == nil {
+					for i := range r.data {
+						r.data[i] = append([]byte(nil), vec.Entries[i].Data...)
+					}
+					vec.Release()
+				}
+				done <- r
+			}()
+			// The read waits for the first range.
+			require.Eventually(t, func() bool { return flightRefs(fs, ranges[0].Offset) >= 2 }, 5*time.Second, time.Millisecond)
+			release[tc.first]()
+			// Only the flight still reading holds budget.
+			assertEventuallyBytes(t, fs, unit)
+
+			otherCtx, cancelOther := context.WithTimeout(ctx, 2*time.Second)
+			defer cancelOther()
+			vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
+				Entries: []IOEntry{ranges[2].entry()}}
+			if assert.NoError(t, fs.Read(otherCtx, vec), "a read of another range is not held by the read") {
+				assert.Equal(t, data[ranges[2].Offset:ranges[2].Offset+ranges[2].Size], vec.Entries[0].Data)
+				vec.Release()
+			}
+			release[1-tc.first]()
+			r := <-done
+			require.NoError(t, r.err)
+			for i := range r.data {
+				require.Equal(t, data[ranges[i].Offset:ranges[i].Offset+ranges[i].Size], r.data[i])
+			}
+			_, _, total := g.counts(key)
+			require.Equal(t, 3, total, "each range is read from object storage once")
+		})
 	}
-	releaseY()
-	require.NoError(t, <-done)
+}
+
+// flightRefs returns the holders of the flight of the object that starts at offset.
+func flightRefs(fs *S3FS, offset int64) int {
+	f := &fs.diskCache.prefetchObjects
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, o := range f.m[fs.diskCache.pathForFile("object")] {
+		if fl, ok := o.(*memoryPrefetchObject); ok && fl.start == offset {
+			fl.mu.Lock()
+			defer fl.mu.Unlock()
+			return fl.refs
+		}
+	}
+	return 0
 }
 
 // A range read that copied a block from a flight that ended, and waits for the flight of

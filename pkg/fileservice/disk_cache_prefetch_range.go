@@ -1026,8 +1026,10 @@ func (f *memoryPrefetchObject) fitsLocked() bool {
 }
 
 // readFromFlights fills the entries of vector not done, of the object at filePath, from the
-// flights reading their bytes, waiting for the bytes to arrive. An entry no flight holds,
-// or whose flight ends without its bytes, is left to the caller.
+// flights reading their bytes, waiting for the bytes to arrive. Each entry holds its flight
+// only while it waits for and copies its bytes. An entry whose flight ended before the read
+// reached it is read from the disk cache; one no flight holds, or whose flight ends without
+// its bytes, is left to the caller.
 func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector *IOVector) error {
 	diskPath := d.pathForFile(filePath)
 	f := &d.prefetchObjects
@@ -1036,14 +1038,13 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 		f.mu.Unlock()
 		return nil
 	}
-	flights := make([]prefetchObject, len(vector.Entries))
+	inFlight := make([]bool, len(vector.Entries))
 	found := false
 	now := time.Now()
 	for i := range vector.Entries {
 		if e := &vector.Entries[i]; !e.done && e.Size > 0 {
-			if fl := f.fastestLocked(diskPath, e.Offset, e.Offset+e.Size, now, d.downloadMaxExtraWait, true); fl != nil {
-				fl.hold()
-				flights[i], found = fl, true
+			if f.fastestLocked(diskPath, e.Offset, e.Offset+e.Size, now, d.downloadMaxExtraWait, true) != nil {
+				inFlight[i], found = true, true
 			}
 		}
 	}
@@ -1051,26 +1052,28 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 	if !found {
 		return nil
 	}
-	defer func() {
-		for _, fl := range flights {
-			if fl != nil {
-				fl.release()
-			}
-		}
-	}()
-	for i, fl := range flights {
-		if fl == nil {
+	ended := false
+	for i := range vector.Entries {
+		if !inFlight[i] {
 			continue
 		}
 		e := &vector.Entries[i]
+		f.mu.Lock()
+		fl := f.fastestLocked(diskPath, e.Offset, e.Offset+e.Size, time.Now(), d.downloadMaxExtraWait, true)
+		if fl != nil {
+			fl.hold()
+		}
+		f.mu.Unlock()
+		if fl == nil {
+			ended = true
+			continue
+		}
 		var decodeErr error
 		err := fl.use(ctx, e.Offset, e.Size, func(bs []byte) error {
 			decodeErr = e.readFrom(ctx, bytes.NewReader(bs), d.cacheDataAllocator)
 			return decodeErr
 		})
-		// The entry is copied: the flight's buffer is not held for the next one.
 		fl.release()
-		flights[i] = nil
 		if decodeErr != nil {
 			return decodeErr
 		}
@@ -1087,6 +1090,9 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 		}
 		e.done = true
 		e.fromCache = d
+	}
+	if ended {
+		return readCache(ctx, d, vector)
 	}
 	return nil
 }
