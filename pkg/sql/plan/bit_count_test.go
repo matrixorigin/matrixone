@@ -901,6 +901,77 @@ func TestBitCountSharedImplicitGroupRepresentative(t *testing.T) {
 	}
 }
 
+func TestBitCountGroupedHavingBoundReads(t *testing.T) {
+	const selector = "if(e.empno=1,e.sal,cast(e.sal as double))"
+	const predicate = " having length(e.ename) between 1 and 3 and length(e.job)>0"
+	for _, tc := range []struct {
+		name, project string
+		shared        bool
+		explicit      bool
+	}{
+		{"qualified ENUM and SET", "bit_count(" + selector + ")", true, false},
+		{"separate explicit aggregate", "bit_count(" + selector + "), any_value(e.ename)", true, true},
+		{"inactive representative", "count(*)", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			ctx := optimizer.CurrentContext().(*MockCompilerContext)
+			ctx.SetSqlModeOverride("")
+			table := ctx.tables["emp"]
+			for name, typ := range map[string]pb.Type{
+				"sal":   {Id: int32(types.T_float64)},
+				"ename": {Id: int32(types.T_enum), Enumvalues: "yes,no"},
+				"job":   {Id: int32(types.T_uint64), Enumvalues: "z,a"},
+			} {
+				pos, ok := tableColumnPosition(table, name)
+				require.True(t, ok)
+				table.Cols[pos].Typ = typ
+			}
+			ctx.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")] = table
+			p, err := runOneStmt(optimizer, t, "select "+tc.project+" from constraint_test.emp e group by "+selector+predicate)
+			require.NoError(t, err)
+			tuple := findPlanFunctionExpr(p, "serial_full")
+			if !tc.shared {
+				require.Nil(t, tuple)
+				return
+			}
+			require.NotNil(t, tuple)
+			var domains []string
+			for _, input := range tuple.GetF().Args {
+				require.NotNil(t, input.GetCol())
+				if input.Typ.Enumvalues != "" {
+					domains = append(domains, input.Typ.Enumvalues)
+				}
+			}
+			require.Len(t, tuple.GetF().Args, 4, "BETWEEN copies must reuse the ENUM field")
+			require.ElementsMatch(t, []string{"yes,no", "z,a"}, domains)
+			filterDomains := make(map[string]bool)
+			independentEnum := false
+			for _, node := range p.GetQuery().Nodes {
+				for _, filter := range node.FilterList {
+					require.NoError(t, pb.VisitExprTree(filter, func(expr *Expr) error {
+						fn := expr.GetF()
+						if fn.GetFunc().GetObjName() == "serial_extract" {
+							if domain := fn.Args[2].Typ.Enumvalues; domain != "" {
+								filterDomains[domain] = true
+							}
+						}
+						return nil
+					}))
+				}
+				for _, agg := range node.AggList {
+					fn := agg.GetF()
+					if fn.GetFunc().GetObjName() == "any_value" && fn.Args[0].GetF().GetFunc().GetObjName() == moEnumCastIndexToValueFun {
+						independentEnum = true
+					}
+				}
+			}
+			require.Equal(t, map[string]bool{"yes,no": true, "z,a": true}, filterDomains)
+			require.Equal(t, tc.explicit, independentEnum, "the explicit ENUM aggregate keeps its own input")
+		})
+	}
+}
+
 func TestBitCountBoundedTrimAndReplaceProjection(t *testing.T) {
 	for _, tc := range []struct {
 		predicate string

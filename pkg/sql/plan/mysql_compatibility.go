@@ -105,30 +105,38 @@ func (builder *QueryBuilder) finalizeGroupedBitCountRow(
 			visitGroupedSourceColumns(timeOrderBy.Expr, visit)
 		}
 	}
-	sourceKey := func(expr *Expr) ([2]int32, bool) {
+	inputForReference := func(expr *Expr) (key [2]int32, input, display *Expr) {
 		col := expr.GetCol()
 		if col.RelPos == ctx.aggregateTag {
 			expr = ctx.implicitGroupHaving[col.ColPos]
+			if expr == nil {
+				return
+			}
+			if source, ok := transparentOutputSourceExpr(expr); ok && expr.GetF().Args[0].GetLit() != nil {
+				display, expr = expr, source
+			}
+			if expr.GetCol() == nil {
+				// Compute a bound read that is more than a display adapter at
+				// its original input stage, before choosing the group row.
+				return [2]int32{col.RelPos, col.ColPos}, expr, nil
+			}
 			col = expr.GetCol()
 		}
-		if col == nil || ctx.bindingByTag[col.RelPos] == nil || !function.SerialTypeSupported(types.T(expr.Typ.Id)) {
-			return [2]int32{}, false
+		if ctx.bindingByTag[col.RelPos] == nil || !function.SerialTypeSupported(types.T(expr.Typ.Id)) {
+			return [2]int32{}, nil, nil
 		}
-		return [2]int32{col.RelPos, col.ColPos}, true
+		return [2]int32{col.RelPos, col.ColPos}, expr, display
 	}
 	var inputs []*Expr
 	positions := make(map[[2]int32]int)
 	walk(func(expr *Expr) {
-		key, eligible := sourceKey(expr)
-		if !eligible {
+		key, input, _ := inputForReference(expr)
+		if input == nil {
 			return
 		}
 		if _, ok := positions[key]; !ok {
-			if col := expr.GetCol(); col.RelPos == ctx.aggregateTag {
-				expr = ctx.implicitGroupHaving[col.ColPos]
-			}
 			positions[key] = len(inputs)
-			inputs = append(inputs, DeepCopyExpr(expr))
+			inputs = append(inputs, DeepCopyExpr(input))
 		}
 	})
 	if len(inputs) == 0 {
@@ -156,11 +164,17 @@ func (builder *QueryBuilder) finalizeGroupedBitCountRow(
 	}
 	ctx.aggregates = append(ctx.aggregates, representative)
 	walk(func(expr *Expr) {
-		key, eligible := sourceKey(expr)
-		if pos, ok := positions[key]; eligible && ok {
-			typ := expr.Typ
-			*expr = *DeepCopyExpr(values[pos])
-			expr.Typ = typ
+		key, input, display := inputForReference(expr)
+		if pos, ok := positions[key]; input != nil && ok {
+			value := DeepCopyExpr(values[pos])
+			if display != nil {
+				value.Typ = input.Typ
+				wrapped := DeepCopyExpr(display)
+				wrapped.GetF().Args[1] = value
+				value = wrapped
+			}
+			value.Typ = expr.Typ
+			*expr = *value
 		}
 	})
 	return nil
