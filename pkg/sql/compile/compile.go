@@ -6093,6 +6093,16 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 	}
 
 	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+	if node.ValuesWarningRow() != 0 {
+		// The session warning sink lives on the coordinator. Only the final
+		// singleton assignment projection needs it; its child keeps its placement.
+		if !c.scopesRunOnCoordinator(ss) {
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
+		c.setProjection(node, ss[0])
+		c.anal.isFirst = false
+		return ss
+	}
 	if _, groupingSetExpand := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
 		for i := range ss {
 			c.setProjection(node, ss[i])

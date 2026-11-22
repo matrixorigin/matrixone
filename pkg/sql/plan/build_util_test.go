@@ -1329,7 +1329,7 @@ func TestExportedAssignmentCastUsesRuntimeSQLModeSemantics(t *testing.T) {
 		plan.Type{Id: int32(types.T_date)},
 	)
 	require.NoError(t, err)
-	require.Equal(t, "cast_strict", dateExpr.GetF().GetFunc().GetObjName())
+	require.Equal(t, "cast_assign", dateExpr.GetF().GetFunc().GetObjName())
 }
 
 func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
@@ -1703,7 +1703,7 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, test.want, blobCasted.GetF().GetFunc().GetObjName())
 	}
-	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
 	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
 		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
 	}, false, proc))
@@ -1757,8 +1757,8 @@ func TestIgnoreConversionAssignmentCastTargets(t *testing.T) {
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
 	for _, target := range targets {
-		want := "cast"
-		if target.typ.Oid == types.T_date || target.typ.Oid == types.T_datetime || target.typ.Oid == types.T_timestamp {
+		want := "cast_ignore"
+		if target.typ.Oid == types.T_datetime || target.typ.Oid == types.T_timestamp {
 			want = "cast_strict"
 		}
 		require.Equal(t, want, assignmentCastFunctionName(makePlan2Type(&target.typ), true, proc), target.name)

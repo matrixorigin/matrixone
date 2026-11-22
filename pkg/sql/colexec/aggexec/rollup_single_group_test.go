@@ -237,24 +237,24 @@ func TestSingleGroupReuseRangeErrorsAndOverflow(t *testing.T) {
 	defer func() { require.Zero(t, mp.CurrNB()) }()
 	input := buildAvgFixedVector(t, mp, types.T_int32.ToType(), []int32{1, 2})
 	defer input.Free(mp)
-	for _, sum := range []bool{true, false} {
-		exec := newSumAvgExec[int64, int32](mp, int64OfCheck, sum, AggIdOfSum, false, types.T_int32.ToType()).(*sumAvgExec[int64, int32])
-		defer exec.Free()
-		exec.modifyChunkSize(1)
-		require.NoError(t, exec.GroupGrow(1))
-		for _, bounds := range [][2]int{{-1, 1}, {0, -1}, {2, 1}, {math.MaxInt, 1}, {1, math.MaxInt}} {
-			require.Error(t, BulkFillSingleGroupRange(exec, bounds[0], bounds[1], []*vector.Vector{input}))
-		}
-		vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[0])[0] = math.MaxInt64
-		require.Error(t, BulkFillSingleGroupRange(exec, 0, 1, []*vector.Vector{input}))
-		require.Equal(t, int64(math.MaxInt64), vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[0])[0])
-		wrong := vector.NewVec(types.T_float64.ToType())
-		defer wrong.Free(mp)
-		_, err := AppendSingleGroupResultAndReset(exec, wrong)
-		require.Error(t, err)
-		_, err = AppendSingleGroupResultAndReset(exec, exec.state[0].vecs[0])
-		require.Error(t, err)
+	// Integer SUM now uses a DECIMAL128 state; the int64 overflow path
+	// exercised here belongs to AVG's native accumulator.
+	exec := newSumAvgExec[int64, int32](mp, int64OfCheck, false, AggIdOfAvg, false, types.T_int32.ToType()).(*sumAvgExec[int64, int32])
+	defer exec.Free()
+	exec.modifyChunkSize(1)
+	require.NoError(t, exec.GroupGrow(1))
+	for _, bounds := range [][2]int{{-1, 1}, {0, -1}, {2, 1}, {math.MaxInt, 1}, {1, math.MaxInt}} {
+		require.Error(t, BulkFillSingleGroupRange(exec, bounds[0], bounds[1], []*vector.Vector{input}))
 	}
+	vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[0])[0] = math.MaxInt64
+	require.Error(t, BulkFillSingleGroupRange(exec, 0, 1, []*vector.Vector{input}))
+	require.Equal(t, int64(math.MaxInt64), vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[0])[0])
+	wrong := vector.NewVec(types.T_float64.ToType())
+	defer wrong.Free(mp)
+	_, err := AppendSingleGroupResultAndReset(exec, wrong)
+	require.Error(t, err)
+	_, err = AppendSingleGroupResultAndReset(exec, exec.state[0].vecs[0])
+	require.Error(t, err)
 }
 
 func TestSingleGroupReuseAllocationFailure(t *testing.T) {

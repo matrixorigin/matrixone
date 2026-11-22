@@ -112,6 +112,12 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		mask = projection.ctr.selection.mask
 	}
 
+	if projection.ValuesWarningRow != 0 {
+		previous := proc.WarningRowOffset
+		proc.WarningRowOffset = projection.ValuesWarningRow - 1
+		defer func() { proc.WarningRowOffset = previous }()
+	}
+
 	for i := range projection.ctr.projExecutors {
 		vec, err := projection.ctr.projExecutors[i].Eval(proc, batches, mask)
 		if err != nil {

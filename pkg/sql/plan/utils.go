@@ -7722,6 +7722,18 @@ func preparedSetOperationCommonType(
 		original := makeTypeByPlan2Expr(&plan.Expr{Typ: currentOutputType})
 		return original, original.Oid != types.T_any, nil
 	}
+	// Recompute the string domain and bound when EXECUTE replaces provisional
+	// input types. A raw binary-character output still belongs to the original
+	// grouping or expression producer rather than a materialized set column.
+	oldType := makeTypeByPlan2Type(currentOutputType)
+	if oldType.Oid.IsMySQLString() && !function.IsBinaryCharacterType(oldType) &&
+		slices.ContainsFunc(argTypes, function.IsBinaryCharacterType) {
+		target, err := setOperationMaterializedStringType(ctx, argExprs, currentOutputType)
+		if err != nil {
+			return types.Type{}, false, err
+		}
+		return makeTypeByPlan2Type(target), true, nil
+	}
 	if pureCharType, ok := setOperationPureCharCommonType(argTypes); ok {
 		return pureCharType, true, nil
 	}

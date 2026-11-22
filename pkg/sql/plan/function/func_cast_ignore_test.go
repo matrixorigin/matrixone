@@ -148,20 +148,22 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 		}, stripWarningMessages(session.warnings))
 	})
 
-	t.Run("unsigned negative remains a range error", func(t *testing.T) {
-		_, session, err := runAssignmentIgnoreStringCast(
+	t.Run("unsigned negative clips to zero", func(t *testing.T) {
+		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"-1"}, nil, false, nil)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "bad value -1")
-		require.Empty(t, session.warnings)
+		require.NoError(t, err)
+		require.Equal(t, []uint32{0}, vector.MustFixedColWithTypeCheck[uint32](result))
+		require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
+			stripWarningMessages(session.warnings))
 	})
 
-	t.Run("integer range remains an error", func(t *testing.T) {
-		_, session, err := runAssignmentIgnoreStringCast(
+	t.Run("integer range adjusts with a warning", func(t *testing.T) {
+		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_int8.ToType(), []string{"999"}, nil, false, nil)
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
-		require.Empty(t, session.warnings)
+		require.NoError(t, err)
+		require.Equal(t, []int8{math.MaxInt8}, vector.MustFixedColWithTypeCheck[int8](result))
+		require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
+			stripWarningMessages(session.warnings))
 	})
 
 	t.Run("extension numeric syntax is not treated as a decimal prefix", func(t *testing.T) {
@@ -287,11 +289,14 @@ func TestAssignmentIgnoreDecimalClassification(t *testing.T) {
 				stripWarningMessages(session.warnings))
 		})
 
-		t.Run(tc.name+" range is not lexical", func(t *testing.T) {
-			_, session, err := runAssignmentIgnoreStringCast(
+		t.Run(tc.name+" range adjusts with a warning", func(t *testing.T) {
+			result, session, err := runAssignmentIgnoreStringCast(
 				t, types.T_varchar.ToType(), tc.target, []string{"999999999999999999999999999999999999999"}, nil, false, nil)
-			require.Error(t, err)
-			require.Empty(t, session.warnings)
+			require.NoError(t, err)
+			require.Equal(t, strings.Repeat("9", int(tc.target.Width-tc.target.Scale))+".99",
+				decimalVectorValueString(result, tc.target))
+			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
+				stripWarningMessages(session.warnings))
 		})
 
 		t.Run(tc.name+" prefix is retained", func(t *testing.T) {
@@ -303,12 +308,15 @@ func TestAssignmentIgnoreDecimalClassification(t *testing.T) {
 			require.Equal(t, "12.34", decimalVectorValueString(result, tc.target))
 		})
 
-		t.Run(tc.name+" prefixed range remains an error", func(t *testing.T) {
-			_, session, err := runAssignmentIgnoreStringCast(
+		t.Run(tc.name+" prefixed range clips with one warning", func(t *testing.T) {
+			result, session, err := runAssignmentIgnoreStringCast(
 				t, types.T_varchar.ToType(), tc.target,
-				[]string{"999999999999999999999999999999999999999tail"}, nil, false, nil)
-			require.Error(t, err)
-			require.Empty(t, session.warnings)
+				[]string{"-" + strings.Repeat("9", int(tc.target.Width)) + "tail"}, nil, false, nil)
+			require.NoError(t, err)
+			require.Equal(t, "-"+strings.Repeat("9", int(tc.target.Width-tc.target.Scale))+".99",
+				decimalVectorValueString(result, tc.target))
+			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
+				stripWarningMessages(session.warnings))
 		})
 	}
 }
@@ -362,24 +370,26 @@ func TestAssignmentIgnoreIntegerPrefixRoundingBoundaries(t *testing.T) {
 		name   string
 		target types.Type
 		value  string
+		want   any
 	}{
-		{name: "signed int8 positive carry", target: types.T_int8.ToType(), value: "127.5tail"},
-		{name: "signed int8 negative carry", target: types.T_int8.ToType(), value: "-128.5tail"},
-		{name: "signed int16 carry", target: types.T_int16.ToType(), value: "32767.5tail"},
-		{name: "signed int32 carry", target: types.T_int32.ToType(), value: "2147483647.5tail"},
-		{name: "signed int64 minimum carry", target: types.T_int64.ToType(), value: "-9223372036854775808.5tail"},
-		{name: "signed int64 maximum carry", target: types.T_int64.ToType(), value: "9223372036854775807.5tail"},
-		{name: "unsigned uint8 carry", target: types.T_uint8.ToType(), value: "255.5tail"},
-		{name: "unsigned uint16 carry", target: types.T_uint16.ToType(), value: "65535.5tail"},
-		{name: "unsigned uint32 carry", target: types.T_uint32.ToType(), value: "4294967295.5tail"},
-		{name: "unsigned uint64 carry", target: types.T_uint64.ToType(), value: "18446744073709551615.5tail"},
+		{name: "signed int8 positive carry", target: types.T_int8.ToType(), value: "127.5tail", want: []int8{math.MaxInt8}},
+		{name: "signed int8 negative carry", target: types.T_int8.ToType(), value: "-128.5tail", want: []int8{math.MinInt8}},
+		{name: "signed int16 carry", target: types.T_int16.ToType(), value: "32767.5tail", want: []int16{math.MaxInt16}},
+		{name: "signed int32 carry", target: types.T_int32.ToType(), value: "2147483647.5tail", want: []int32{math.MaxInt32}},
+		{name: "signed int64 minimum carry", target: types.T_int64.ToType(), value: "-9223372036854775808.5tail", want: []int64{math.MinInt64}},
+		{name: "signed int64 maximum carry", target: types.T_int64.ToType(), value: "9223372036854775807.5tail", want: []int64{math.MaxInt64}},
+		{name: "unsigned uint8 carry", target: types.T_uint8.ToType(), value: "255.5tail", want: []uint8{math.MaxUint8}},
+		{name: "unsigned uint16 carry", target: types.T_uint16.ToType(), value: "65535.5tail", want: []uint16{math.MaxUint16}},
+		{name: "unsigned uint32 carry", target: types.T_uint32.ToType(), value: "4294967295.5tail", want: []uint32{math.MaxUint32}},
+		{name: "unsigned uint64 carry", target: types.T_uint64.ToType(), value: "18446744073709551615.5tail", want: []uint64{math.MaxUint64}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, session, err := runAssignmentIgnoreStringCast(
+			result, session, err := runAssignmentIgnoreStringCast(
 				t, types.T_varchar.ToType(), tc.target, []string{tc.value}, nil, false, nil)
-			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
-			require.Empty(t, session.warnings)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, assignmentIntegerVectorValues(result, tc.target.Oid))
+			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
+				stripWarningMessages(session.warnings))
 		})
 	}
 
@@ -396,7 +406,7 @@ func TestAssignmentIgnoreIntegerPrefixRoundingBoundaries(t *testing.T) {
 		}, stripWarningMessages(session.warnings))
 	})
 
-	t.Run("unsigned negative values are accepted only when rounded to zero", func(t *testing.T) {
+	t.Run("unsigned negative rounded values clip to zero", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"-0.4tail"}, nil, false, nil)
 		require.NoError(t, err)
@@ -404,10 +414,12 @@ func TestAssignmentIgnoreIntegerPrefixRoundingBoundaries(t *testing.T) {
 		require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}},
 			stripWarningMessages(session.warnings))
 
-		_, session, err = runAssignmentIgnoreStringCast(
+		result, session, err = runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"-0.5tail"}, nil, false, nil)
-		require.Error(t, err)
-		require.Empty(t, session.warnings)
+		require.NoError(t, err)
+		require.Equal(t, []uint32{0}, vector.MustFixedColWithTypeCheck[uint32](result))
+		require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
+			stripWarningMessages(session.warnings))
 	})
 }
 
@@ -448,13 +460,14 @@ func TestAssignmentIgnoreIntegerPrefixExponentIsBounded(t *testing.T) {
 		require.Len(t, session.warnings, 1)
 	})
 
-	t.Run("huge positive exponent remains a range error", func(t *testing.T) {
-		_, session, err := runAssignmentIgnoreStringCast(
+	t.Run("huge positive exponent clips at target bound", func(t *testing.T) {
+		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_uint64.ToType(),
 			[]string{"1e999999999999999999999999tail"}, nil, false, nil)
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
-		require.Empty(t, session.warnings)
+		require.NoError(t, err)
+		require.Equal(t, []uint64{math.MaxUint64}, vector.MustFixedColWithTypeCheck[uint64](result))
+		require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
+			stripWarningMessages(session.warnings))
 	})
 }
 
@@ -543,6 +556,60 @@ func TestAssignmentPrefixClassification(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAssignmentIgnoreClipsRoundedStringToIntegerBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target types.Type
+		value  string
+		want   any
+	}{
+		{"signed negative magnitude overflow", types.T_int8.ToType(), "-18446744073709551616", []int8{-128}},
+		{"unsigned negative magnitude overflow", types.T_uint8.ToType(), "-18446744073709551616", []uint8{0}},
+		{"signed positive exponent", types.T_int8.ToType(), "3e2", []int8{127}},
+		{"unsigned positive exponent", types.T_uint8.ToType(), "3e2", []uint8{255}},
+		{"unsigned negative exponent", types.T_uint8.ToType(), "-3e2", []uint8{0}},
+		{"signed positive prefix overflow", types.T_int8.ToType(), "300tail", []int8{127}},
+		{"signed negative prefix overflow", types.T_int8.ToType(), "-300tail", []int8{-128}},
+		{"unsigned positive prefix overflow", types.T_uint8.ToType(), "300tail", []uint8{255}},
+		{"unsigned negative prefix", types.T_uint8.ToType(), "-1tail", []uint8{0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, session, err := runAssignmentIgnoreStringCast(
+				t, types.T_varchar.ToType(), tc.target, []string{tc.value}, nil, false, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, assignmentIntegerVectorValues(result, tc.target.Oid))
+			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
+				stripWarningMessages(session.warnings))
+		})
+	}
+}
+
+func TestNonStrictStringAssignmentClipsNegativeMagnitude(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+	warnings := &numericWarningSession{}
+	proc.WarningSink = warnings
+	target := types.T_int8.ToType()
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"-18446744073709551616"}, nil),
+		NewFunctionTestInput(target, []int8{}, nil),
+	}, NewFunctionTestResult(target, false, []int8{-128}, nil), NewAssignCast)
+	t.Cleanup(tc.Free)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+	require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
+		stripWarningMessages(warnings.warnings))
 }
 
 func stripWarningMessages(warnings []numericWarning) []numericWarning {

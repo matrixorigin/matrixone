@@ -751,6 +751,9 @@ type Process struct {
 	// WarningSink is an immutable execution-attempt destination. Children inherit
 	// the pointer; remote callbacks retain it after a failed attempt is sealed.
 	WarningSink any
+	// WarningRowOffset maps a singleton VALUES evaluation to its statement row.
+	// VALUE_SCAN restores it before leaving the current evaluation.
+	WarningRowOffset uint64
 }
 
 type sqlHelper interface {

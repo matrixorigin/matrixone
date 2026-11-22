@@ -253,11 +253,26 @@ func (builder *QueryBuilder) outerDomainProbeIsTotal(agg *plan.Node) bool {
 			return false
 		}
 		arg, result := types.T(fn.Args[0].Typ.Id), types.T(expr.Typ.Id)
-		if !arg.IsInteger() || !result.IsInteger() || arg.IsUnsignedInt() != result.IsUnsignedInt() {
+		if !arg.IsInteger() {
 			return false
 		}
 		bits, known := builder.outerDomainGroupRowBits(agg.Children[0], agg.GroupBy)
-		if !known || bits+8*arg.TypeLen() > 8*result.TypeLen() {
+		if !known {
+			return false
+		}
+		sumBits := bits + 8*arg.TypeLen()
+		switch {
+		case result.IsInteger():
+			if arg.IsUnsignedInt() != result.IsUnsignedInt() || sumBits > 8*result.TypeLen() {
+				return false
+			}
+		case result.IsDecimal() && expr.Typ.Scale == 0 && expr.Typ.Width > 0:
+			// 2^(3*precision) is below 10^precision. This conservative bound
+			// keeps every partial SUM within the declared decimal precision.
+			if sumBits > 3*int(expr.Typ.Width) {
+				return false
+			}
+		default:
 			return false
 		}
 	}

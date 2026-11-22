@@ -331,7 +331,7 @@ func TestTimeWinCallSkipsAllNullTimeBatch(t *testing.T) {
 	result, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
-	require.Equal(t, []int64{10, 20}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+	require.Equal(t, []int64{10, 20}, decimalSumValues(t, result.Batch.Vecs[0]))
 	first, err := types.ParseDatetime("2026-01-01 00:01:00", 6)
 	require.NoError(t, err)
 	second, err := types.ParseDatetime("2026-01-01 00:02:00", 6)
@@ -443,7 +443,7 @@ func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 	require.NotNil(t, result.Batch)
 	require.Empty(t, arg.ctr.wStart)
 	require.Empty(t, arg.ctr.wEnd)
-	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])
+	resultValues := decimalSumValues(t, result.Batch.Vecs[0])
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
 		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
@@ -463,7 +463,7 @@ func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 	secondResult, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.NotNil(t, secondResult.Batch)
-	require.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](secondResult.Batch.Vecs[0]))
+	require.Equal(t, []int64{1}, decimalSumValues(t, secondResult.Batch.Vecs[0]))
 	require.Empty(t, arg.ctr.wStart)
 	require.Empty(t, arg.ctr.wEnd)
 
@@ -628,7 +628,7 @@ func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
 		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
 		if res.Status == vm.ExecStop {
@@ -698,7 +698,7 @@ func TestTimeWinTimestampSubHourFoldBoundariesAdvanceForward(t *testing.T) {
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
 		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
 		if res.Status == vm.ExecStop {
@@ -756,7 +756,7 @@ func TestTimeWinTimestampNonDivisorFoldBoundary(t *testing.T) {
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
 		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
 		if res.Status == vm.ExecStop {
@@ -829,7 +829,7 @@ func TestTimeWinTimestampFoldInteriorNormalization(t *testing.T) {
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
 		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
 		if res.Status == vm.ExecStop {
@@ -885,7 +885,7 @@ func TestTimeWinTimestampLordHoweFoldKeepsFirstOccurrence(t *testing.T) {
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
 		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
 		if res.Status == vm.ExecStop {
@@ -948,7 +948,7 @@ func TestTimeWinTimestampDSTSpringGapKeepsCivilGridPhase(t *testing.T) {
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
 		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
 		if res.Status == vm.ExecStop {
