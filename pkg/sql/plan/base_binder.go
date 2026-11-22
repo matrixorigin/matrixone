@@ -4652,6 +4652,51 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	return expr, err
 }
 
+// arithmeticNullOrigins is binding-only evidence that a typed NULL was
+// produced by an arithmetic shortcut which used to return an untyped NULL.
+// It is shared by the statement's binders, but never becomes plan metadata.
+type arithmeticNullOrigins map[*plan.Literal]struct{}
+
+func (o *arithmeticNullOrigins) legacyNull(expr *plan.Expr) bool {
+	if isNullExpr(expr) {
+		return true
+	}
+	if o == nil || !isNullLiteralExpr(expr) || expr.GetLit().GetSrc() != nil || expr.GetPreparedNumeric() != nil {
+		return false
+	}
+	_, ok := (*o)[expr.GetLit()]
+	return ok
+}
+
+func (o *arithmeticNullOrigins) remember(expr *plan.Expr) {
+	if o == nil || !isNullLiteralExpr(expr) || expr.GetLit().GetSrc() != nil || expr.GetPreparedNumeric() != nil {
+		return
+	}
+	if *o == nil {
+		*o = make(arithmeticNullOrigins)
+	}
+	(*o)[expr.GetLit()] = struct{}{}
+}
+
+func (o *arithmeticNullOrigins) inheritCopy(source, copied *plan.Expr) {
+	if o != nil && o.legacyNull(source) && !isNullExpr(source) {
+		o.remember(copied)
+	}
+}
+
+func (b *baseBinder) arithmeticOrigins() *arithmeticNullOrigins {
+	if b.builder != nil {
+		return &b.builder.arithmeticNullOrigins
+	}
+	return &b.arithmeticNullOrigins
+}
+
+func (b *baseBinder) copyExprPreservingArithmeticNull(expr *plan.Expr) *plan.Expr {
+	copied := DeepCopyExpr(expr)
+	b.arithmeticOrigins().inheritCopy(expr, copied)
+	return copied
+}
+
 func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.Expr, depth int32) (boundExpr *plan.Expr, bindErr error) {
 	zeroScalarArgs := b.builder.beginZeroScalarArguments()
 	var requiredZeroScalarRoots map[int32]struct{}
@@ -5268,9 +5313,9 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 				b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
 				b.observeExpressionProtocol)
 		} else {
-			e, err = bindBoundFuncExprAndConstFoldWithObserver(
+			e, err = bindFuncExprAndConstFoldWithArithmeticNull(
 				b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
-				b.observeExpressionProtocol)
+				false, false, b.observeExpressionProtocol, b.arithmeticOrigins())
 		}
 		if err == nil {
 			if b.builder != nil && b.builder.integerPrecision != nil {
@@ -5345,8 +5390,8 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 	} else {
 		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		// first look for builtin func
-		builtinExpr, err := bindFuncExprImplByPlanExpr(
-			b.GetContext(), nil, name, args, false, nil, nil, findInSetInternalArgs)
+		builtinExpr, err := bindFuncExprImplByPlanExprWithArithmeticNull(
+			b.GetContext(), nil, name, args, false, nil, nil, findInSetInternalArgs, b.arithmeticOrigins())
 		if err == nil {
 			if isNullIf {
 				b.rememberPreparedFieldNullIfDomain(builtinExpr, args)
@@ -6383,6 +6428,7 @@ func (b *baseBinder) bindSQLUdfArgument(name *tree.UnresolvedName) (*plan.Expr, 
 	for ctx := b.ctx; ctx != nil; ctx = ctx.parent {
 		if arg, ok := ctx.sqlUdfArgs[argName]; ok {
 			expr, correlated := correlateSQLUdfArgument(arg, depth)
+			b.arithmeticOrigins().inheritCopy(arg, expr)
 			if correlated {
 				for inner := b.ctx; inner != nil && inner != ctx; inner = inner.parent {
 					inner.isCorrelated = true
@@ -6632,6 +6678,20 @@ func bindFuncExprAndConstFoldInternal(
 	allowInternalFunctionArgs bool,
 	observer func(*plan.Expr) error,
 ) (*plan.Expr, error) {
+	return bindFuncExprAndConstFoldWithArithmeticNull(ctx, proc, name, args,
+		descendFunctions, allowInternalFunctionArgs, observer, nil)
+}
+
+func bindFuncExprAndConstFoldWithArithmeticNull(
+	ctx context.Context,
+	proc *process.Process,
+	name string,
+	args []*Expr,
+	descendFunctions bool,
+	allowInternalFunctionArgs bool,
+	observer func(*plan.Expr) error,
+	origins *arithmeticNullOrigins,
+) (*plan.Expr, error) {
 	// The two comparison folders run ConstantFold on non-literal constant
 	// operands before the resolver, and a constant expression of a stored
 	// definition can wrap a side-effect builtin (CAST(enable_fault_injection()
@@ -6661,8 +6721,8 @@ func bindFuncExprAndConstFoldInternal(
 	// own operator set, so the marker's no-evaluation contract keeps
 	// covering every other function of the definition.
 	foldGeometrySRIDConstArg(proc, name, args)
-	retExpr, err := bindFuncExprImplByPlanExpr(
-		ctx, proc, name, args, descendFunctions, nil, nil, allowInternalFunctionArgs)
+	retExpr, err := bindFuncExprImplByPlanExprWithArithmeticNull(
+		ctx, proc, name, args, descendFunctions, nil, nil, allowInternalFunctionArgs, origins)
 	if err != nil {
 		return nil, err
 	}
@@ -6958,12 +7018,12 @@ func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) 
 	return args[0], true, nil
 }
 
-func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
+func validateApproxPercentileArgs(ctx context.Context, args []*Expr, origins *arithmeticNullOrigins) error {
 	if len(args) != 2 {
 		return nil
 	}
 	percentile := args[1]
-	if percentile == nil || isNullExpr(percentile) ||
+	if percentile == nil || origins.legacyNull(percentile) ||
 		!IsPercentileConfigExpr(percentile) {
 		return moerr.NewInvalidInput(ctx,
 			"percentile argument of approx_percentile must be a non-null constant or parameter")
@@ -6973,13 +7033,13 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 
 // validateVectorMatmulArgs requires the topk, queries and options arguments of
 // vector_matmul to be non-null constants, parameters or variables.
-func validateVectorMatmulArgs(ctx context.Context, args []*Expr) error {
+func validateVectorMatmulArgs(ctx context.Context, args []*Expr, origins *arithmeticNullOrigins) error {
 	if len(args) != 4 && len(args) != 5 {
 		return moerr.NewInvalidInputf(ctx, "vector_matmul requires 4 or 5 arguments, got %d", len(args))
 	}
 	for _, i := range VectorMatmulConfigArgs(len(args)) {
 		arg := args[i]
-		if arg == nil || isNullExpr(arg) || !IsVectorMatmulConfigExpr(arg) {
+		if arg == nil || origins.legacyNull(arg) || !IsVectorMatmulConfigExpr(arg) {
 			return moerr.NewInvalidInput(ctx,
 				"topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables")
 		}
@@ -7032,12 +7092,12 @@ func IsVectorMatmulConfigExpr(expr *Expr) bool {
 // ordered-set percentile aggregates. The aggregate executor consumes the
 // percentile as compile-time configuration, while the first argument is the
 // value expression ordered by WITHIN GROUP.
-func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Expr) error {
+func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Expr, origins *arithmeticNullOrigins) error {
 	if len(args) != 2 {
 		return moerr.NewInvalidInputf(ctx, "%s requires a value and a percentile argument", name)
 	}
 	percentile := args[1]
-	if percentile == nil || isNullExpr(percentile) ||
+	if percentile == nil || origins.legacyNull(percentile) ||
 		!IsPercentileConfigExpr(percentile) {
 		return moerr.NewInvalidInputf(ctx,
 			"percentile argument of %s must be a non-null constant or parameter", name)
@@ -7049,13 +7109,13 @@ func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Exp
 // of quantileExactWeighted: [value, weight, level]. The level is stripped into
 // execution-invariant aggregate configuration exactly like the ordered-set
 // percentiles' percentile argument; the value and weight remain row arguments.
-func validateQuantileExactWeightedArgs(ctx context.Context, name string, args []*Expr) error {
+func validateQuantileExactWeightedArgs(ctx context.Context, name string, args []*Expr, origins *arithmeticNullOrigins) error {
 	if len(args) != 3 {
 		return moerr.NewInvalidInputf(ctx,
 			"%s requires a value, a weight, and a level argument", name)
 	}
 	level := args[2]
-	if level == nil || isNullExpr(level) || !IsPercentileConfigExpr(level) {
+	if level == nil || origins.legacyNull(level) || !IsPercentileConfigExpr(level) {
 		return moerr.NewInvalidInputf(ctx,
 			"level argument of %s must be a non-null constant or parameter in [0,1]", name)
 	}
@@ -8489,8 +8549,34 @@ func bindFuncExprImplByPlanExpr(
 	originalBoundExpr *Expr,
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
+	return bindFuncExprImplByPlanExprWithArithmeticNull(ctx, proc, name, args,
+		descendFunctions, stringDomainModes, originalBoundExpr, allowInternalFunctionArgs, nil)
+}
+
+func bindFuncExprImplByPlanExprWithArithmeticNull(
+	ctx context.Context,
+	proc *process.Process,
+	name string,
+	args []*Expr,
+	descendFunctions bool,
+	stringDomainModes []function.StringDomainCheckMode,
+	originalBoundExpr *Expr,
+	allowInternalFunctionArgs bool,
+	origins *arithmeticNullOrigins,
+) (*plan.Expr, error) {
 	var err error
-	var nullArithmeticResult *plan.Expr
+	var nullArithmeticResult *Expr
+	if len(args) == 2 {
+		switch name {
+		case "+", "-", "*", "/", "%":
+			for _, arg := range args {
+				if origins.legacyNull(arg) && arg.GetLit().GetSrc() == nil && arg.GetPreparedNumeric() == nil {
+					nullArithmeticResult = arg
+					break
+				}
+			}
+		}
+	}
 	// The unsigned-DECIMAL admission entries exist only for the plan-composed
 	// assignment boundary. Their retType mirrors the source type, so a public
 	// call with an ANY-typed source (for example a bare NULL) would publish an
@@ -8588,22 +8674,22 @@ func bindFuncExprImplByPlanExpr(
 		rejectIntervalArgs = rejectStandaloneIntervalFunctionArgs
 	}
 	if name == NameApproxPercentile {
-		if err = validateApproxPercentileArgs(ctx, args); err != nil {
+		if err = validateApproxPercentileArgs(ctx, args, origins); err != nil {
 			return nil, err
 		}
 	}
 	if name == NameVectorMatmul {
-		if err = validateVectorMatmulArgs(ctx, args); err != nil {
+		if err = validateVectorMatmulArgs(ctx, args, origins); err != nil {
 			return nil, err
 		}
 	}
 	if name == NamePercentileCont || name == NamePercentileDisc {
-		if err = validateOrderedPercentileArgs(ctx, name, args); err != nil {
+		if err = validateOrderedPercentileArgs(ctx, name, args, origins); err != nil {
 			return nil, err
 		}
 	}
 	if strings.EqualFold(name, NameQuantileExactWeighted) {
-		if err = validateQuantileExactWeightedArgs(ctx, name, args); err != nil {
+		if err = validateQuantileExactWeightedArgs(ctx, name, args, origins); err != nil {
 			return nil, err
 		}
 	}
@@ -8819,11 +8905,7 @@ func bindFuncExprImplByPlanExpr(
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "date_add/date_sub function need two args", len(args))
 		}
-		// MySQL behavior: NULL literal as second argument should return syntax error
-		if isNullExpr(args[1]) {
-			return nil, moerr.NewSyntaxError(ctx, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'null)' at line 1")
-		}
-		args, err = resetDateFunction(ctx, args[0], args[1])
+		args, err = resetDateFunction(ctx, args[0], args[1], origins)
 		if err != nil {
 			return nil, err
 		}
@@ -8885,7 +8967,7 @@ func bindFuncExprImplByPlanExpr(
 				return nil, err
 			}
 		}
-		args, err = resetDateFunction(ctx, args[0], args[1])
+		args, err = resetDateFunction(ctx, args[0], args[1], origins)
 		if err != nil {
 			return nil, err
 		}
@@ -8907,7 +8989,7 @@ func bindFuncExprImplByPlanExpr(
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "adddate/subdate function need two args", len(args))
 		}
-		args, err = resetDateFunction(ctx, args[0], args[1])
+		args, err = resetDateFunction(ctx, args[0], args[1], origins)
 		if err != nil {
 			return nil, err
 		}
@@ -8919,11 +9001,6 @@ func bindFuncExprImplByPlanExpr(
 	case "+":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "operator + need two args", len(args))
-		}
-		if isNullExpr(args[0]) {
-			nullArithmeticResult = args[0]
-		} else if isNullExpr(args[1]) {
-			nullArithmeticResult = args[1]
 		}
 		if args[0].Typ.Id == int32(types.T_date) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
@@ -8976,11 +9053,6 @@ func bindFuncExprImplByPlanExpr(
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "operator - need two args", len(args))
 		}
-		if isNullExpr(args[0]) {
-			nullArithmeticResult = args[0]
-		} else if isNullExpr(args[1]) {
-			nullArithmeticResult = args[1]
-		}
 		// rewrite "date '2001' - interval '1 day'" to date_sub(date '2001', 1, day(unit))
 		if args[0].Typ.Id == int32(types.T_date) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
@@ -9010,11 +9082,6 @@ func bindFuncExprImplByPlanExpr(
 	case "*", "/", "%":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, fmt.Sprintf("operator %s need two args", name), len(args))
-		}
-		if isNullExpr(args[0]) {
-			nullArithmeticResult = args[0]
-		} else if isNullExpr(args[1]) {
-			nullArithmeticResult = args[1]
 		}
 	case "unary_plus":
 		// MySQL's parser drops unary plus, so +<temporal> keeps the operand's
@@ -9375,7 +9442,7 @@ func bindFuncExprImplByPlanExpr(
 			// ParamRef lets execute-time rebinding consume the complete value.
 			lookupTypes = []types.Type{types.NewWithCharset(
 				types.T_varchar, types.MaxVarcharLen/utf8.UTFMax, 0, types.CharsetUTF8)}
-		case isNullExpr(args[0]) || (args[0].GetP() != nil && args[0].Typ.Id == int32(types.T_any)):
+		case origins.legacyNull(args[0]) || (args[0].GetP() != nil && args[0].Typ.Id == int32(types.T_any)):
 			// A static NULL has zero input characters, so JSON_QUOTE adds only the
 			// two framing quotes to its nullable result bound.
 			lookupTypes = []types.Type{types.NewWithCharset(
@@ -9459,6 +9526,15 @@ func bindFuncExprImplByPlanExpr(
 			stringDomainModes[i] = function.StringDomainCheckBinaryBlob
 		}
 	}
+	if name == "/" && nullArithmeticResult != nil && len(args) == 2 {
+		for i, arg := range args {
+			if arg == nullArithmeticResult && lookupTypes[i].Oid == types.T_any && lookupTypes[1-i].Oid != types.T_any {
+				lookupTypes = append([]types.Type(nil), lookupTypes...)
+				lookupTypes[i] = lookupTypes[1-i]
+				break
+			}
+		}
+	}
 	if stringDomainModes != nil {
 		fGet, err = function.GetFunctionByNameWithStringDomainCheckModes(
 			ctx, name, lookupTypes, stringDomainModes)
@@ -9466,7 +9542,7 @@ func bindFuncExprImplByPlanExpr(
 		fGet, err = function.GetFunctionByName(ctx, name, lookupTypes)
 	}
 	if err != nil {
-		if nullArithmeticResult != nil {
+		if nullArithmeticResult != nil && ctx.Err() == nil && moerr.IsMoErrCode(err, moerr.ErrInvalidArg) {
 			// Preserve the established strict-NULL fold when no viable overload
 			// exists; the old shortcut never resolved that operand either.
 			return nullArithmeticResult, nil
@@ -10286,10 +10362,14 @@ func bindFuncExprImplByPlanExpr(
 		// the result type. Publishing the function wrapper would retain a
 		// correlated LIMIT 0 source that this fold is required to discard.
 		folded := *nullArithmeticResult
+		literal := *nullArithmeticResult.GetLit()
+		folded.Expr = &plan.Expr_Lit{Lit: &literal}
 		folded.Typ = Typ
 		if preparedCalendarResult != nil {
 			folded.Typ = makePlan2Type(preparedCalendarResult)
 		}
+		folded.Typ.NotNullable = false
+		origins.remember(&folded)
 		return &folded, nil
 	}
 	result := &Expr{
@@ -14243,9 +14323,9 @@ func bindStringIntervalExpr(ctx context.Context, expr *Expr, intervalType types.
 	return numberExpr, normalizedType, true, nil
 }
 
-func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
+func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr, origins *arithmeticNullOrigins) ([]*Expr, error) {
 	// MySQL behavior: NULL literal as interval argument should return syntax error
-	if isNullExpr(intervalExpr) {
+	if origins.legacyNull(intervalExpr) {
 		return nil, moerr.NewSyntaxError(ctx, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'null)' at line 1")
 	}
 	switch intervalExpr.Expr.(type) {

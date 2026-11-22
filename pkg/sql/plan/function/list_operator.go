@@ -1935,19 +1935,7 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				lookup := inputs
-				nullPeer := false
-				// A single untyped NULL has no numeric domain of its own. Use its
-				// peer's domain for overload lookup, and retain casts so the NULL
-				// operand cannot leak T_any into the expression result type.
-				if inputs[0].Oid == types.T_any && inputs[1].Oid != types.T_any {
-					lookup = []types.Type{inputs[1], inputs[1]}
-					nullPeer = true
-				} else if inputs[1].Oid == types.T_any && inputs[0].Oid != types.T_any {
-					lookup = []types.Type{inputs[0], inputs[0]}
-					nullPeer = true
-				}
-				has, t1, t2 := fixedTypeCastRule2(lookup[0], lookup[1])
+				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
 				if has {
 					if divOperatorSupportsVectorScalar(t1, t2) {
 						return newCheckResultWithCast(1, []types.Type{t1, t2})
@@ -1955,10 +1943,7 @@ var supportedOperators = []FuncNew{
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
-					if divOperatorSupports(lookup[0], lookup[1]) {
-						if nullPeer {
-							return newCheckResultWithCast(0, lookup)
-						}
+					if divOperatorSupports(inputs[0], inputs[1]) {
 						return newCheckResultWithSuccess(0)
 					}
 				}

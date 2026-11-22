@@ -387,7 +387,16 @@ func (v *Vector) HasNull() bool {
 }
 
 func (v *Vector) AllNull() bool {
-	return v.IsConstNull() || (v.length != 0 && v.nsp.CountRange(0, uint64(v.length)) == v.length)
+	if v.IsConstNull() {
+		return true
+	}
+	if v.length == 0 || v.nsp.Count() < v.length {
+		return false
+	}
+	if v.nsp.Len() <= int64(v.length) {
+		return v.nsp.Count() == v.length
+	}
+	return v.nsp.CountRange(0, uint64(v.length)) == v.length
 }
 
 func (v *Vector) prepareOrdinaryAppendMetadata(rows int, mp *mpool.MPool) error {
@@ -2245,11 +2254,28 @@ func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
 func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 
 	if v.IsConst() {
+		if v.HasGrouping() {
+			if err := v.MaterializeOwned(mp); err != nil {
+				return err
+			}
+			if negate {
+				// Constant vectors historically accept unordered selections.
+				// Complement compaction needs an ordered list of removed rows.
+				if !slices.IsSorted(sels) {
+					sels = slices.Clone(sels)
+					slices.Sort(sels)
+				}
+				nulls.FilterInPlaceOrdered(&v.gsp, sels, true)
+			} else {
+				nulls.Filter(&v.gsp, sels, false)
+			}
+		}
 		if negate {
 			v.length -= len(sels)
 		} else {
 			v.length = len(sels)
 		}
+		trimVectorBitmap(&v.gsp, v.length)
 		return nil
 	}
 	if err := v.checkMP(mp); err != nil {
@@ -2267,7 +2293,10 @@ func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 			nulls.FilterInPlaceOrdered(&v.gsp, sels, negate)
 			nulls.FilterInPlaceOrdered(&v.nsp, sels, negate)
 		}
-		return SetConstNull(v, newLength, mp)
+		v.length = newLength
+		trimVectorBitmap(&v.gsp, newLength)
+		trimVectorBitmap(&v.nsp, newLength)
+		return nil
 	}
 	switch v.typ.Oid {
 	case types.T_bool:
@@ -2346,11 +2375,18 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, m
 		return nil
 	}
 	if v.IsConst() {
+		if v.HasGrouping() {
+			if err := v.MaterializeOwned(mp); err != nil {
+				return err
+			}
+			nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, negate, offset)
+		}
 		if negate {
 			v.length -= sels.Count()
 		} else {
 			v.length = sels.Count()
 		}
+		trimVectorBitmap(&v.gsp, v.length)
 		return nil
 	}
 	if err := v.checkMP(mp); err != nil {
@@ -2366,7 +2402,10 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, m
 		}
 		nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, negate, offset)
 		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, negate, offset)
-		return SetConstNull(v, newLength, mp)
+		v.length = newLength
+		trimVectorBitmap(&v.gsp, newLength)
+		trimVectorBitmap(&v.nsp, newLength)
+		return nil
 	}
 	switch v.typ.Oid {
 	case types.T_bool:
@@ -2442,10 +2481,18 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, m
 // Shuffle use to shrink vectors, sels can be disordered
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.IsConst() {
+		if v.HasGrouping() {
+			if err := v.MaterializeOwned(mp); err != nil {
+				return err
+			}
+			nulls.Filter(&v.gsp, sels, false)
+			v.length = len(sels)
+		} else if v.typ.Oid == types.T_any {
+			v.length = len(sels)
+		}
 		return nil
 	}
-	// ANY has no value payload. Preserve the selected cardinality while
-	// canonicalizing an empty or all-NULL vector as a constant NULL.
+	// ANY has no value payload; its row metadata still follows the selection.
 	if v.typ.Oid == types.T_any && (v.length == 0 || v.AllNull()) {
 		if err := v.MaterializeOwned(mp); err != nil {
 			return err
@@ -2453,7 +2500,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		if err := v.remapShuffleBitmaps(sels, mp); err != nil {
 			return err
 		}
-		return SetConstNull(v, len(sels), mp)
+		v.length = len(sels)
+		return nil
 	}
 	switch v.typ.Oid {
 	case types.T_bool:
@@ -2531,17 +2579,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 // alloc/free churn when the permutation preserves the element count.
 // buf is grown as needed and retained across calls.
 func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err error) {
-	if v.IsConst() {
-		return nil
-	}
-	if v.typ.Oid == types.T_any && (v.length == 0 || v.AllNull()) {
-		if err := v.MaterializeOwned(mp); err != nil {
-			return err
-		}
-		if err := v.remapShuffleBitmaps(sels, mp); err != nil {
-			return err
-		}
-		return SetConstNull(v, len(sels), mp)
+	if v.IsConst() || v.typ.Oid == types.T_any {
+		return v.Shuffle(sels, mp)
 	}
 	// The reusable buffer is Go-heap storage and therefore has no physical
 	// allocation provenance. Allocation-accounted vectors must use Shuffle,
@@ -2558,6 +2597,13 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 		return v.Shuffle(sels, mp)
 	}
 	return v.shuffleWithBufData(sels, buf)
+}
+
+// trimVectorBitmap drops stale rows left by a previous shortened view.
+func trimVectorBitmap(bitmap *nulls.Nulls, length int) {
+	if uint64(length) < uint64(bitmap.Len()) {
+		nulls.RemoveRange(bitmap, uint64(length), uint64(bitmap.Len()))
+	}
 }
 
 // shuffleWithBufData performs the common payload/bitmap permutation after all

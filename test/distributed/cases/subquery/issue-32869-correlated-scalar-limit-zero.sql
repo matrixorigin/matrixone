@@ -79,6 +79,14 @@ insert into secret_rows values (5);
 create view issue_32869_view as
 select o.a, cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) as v from outer_rows o;
 select * from issue_32869_view order by a;
+-- Issue #33056: the untyped arithmetic result must also survive view sorting.
+create table issue_33056_rows (a int);
+insert into issue_33056_rows values (2), (20);
+create view issue_33056_view as
+select o.a, null + (select o.a from inner_rows i where i.d > o.a limit 0) as v
+from issue_33056_rows o;
+select a, v from issue_33056_view order by a;
+select a, cast(v as signed) as v from issue_33056_view order by a;
 alter view issue_32869_view as
 select o.a, cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) as v from outer_rows o;
 select * from issue_32869_view order by a;
@@ -175,6 +183,13 @@ window unused_w as (order by issue_32869_identity(null +
 select null + (select null + (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
                from test_issue_32869.restricted_wrapper c limit 1)
 from test_issue_32869.outer_rows;
+select (null + 1) + (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
+                     from test_issue_32869.restricted_wrapper c limit 1)
+from test_issue_32869.outer_rows;
+select issue_32869_identity(null + 1) +
+       (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
+        from test_issue_32869.restricted_wrapper c limit 1)
+from test_issue_32869.outer_rows;
 select (select o.a from test_issue_32869.inner_rows i where i.d > o.a limit 0) as root_zero
 from test_issue_32869.outer_rows o
 window unused_w as (order by (select s from test_issue_32869.secret_rows limit 1));
@@ -220,6 +235,17 @@ select issue_32869_keep_second(cast(null as signed) +
   (select (select i.d from test_issue_32869.secret_rows s where s.s > i.d limit 0)
    from test_issue_32869.inner_rows i limit 1), 42) as folded_discarded_wrapper;
 select s from test_issue_32869.secret_rows;
+-- @session
+grant select on table test_issue_32869.restricted_wrapper to issue_32869_role;
+-- @session:id=2&user=sys:issue_32869_reader:issue_32869_role&password=111
+use test_issue_32869;
+select o.a, (null + 1) + (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
+                          from test_issue_32869.restricted_wrapper c limit 1) as v
+from test_issue_32869.outer_rows o order by o.a;
+select o.a, issue_32869_identity(null + 1) +
+       (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
+        from test_issue_32869.restricted_wrapper c limit 1) as v
+from test_issue_32869.outer_rows o order by o.a;
 -- @session
 drop user issue_32869_reader;
 drop role issue_32869_role;

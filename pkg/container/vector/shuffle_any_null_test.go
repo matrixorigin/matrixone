@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -66,7 +67,10 @@ func TestShuffleAllNullAny(t *testing.T) {
 					})
 					require.NoError(t, err)
 					require.Equal(t, len(tc.sels), v.Length())
-					require.True(t, v.IsConstNull())
+					require.False(t, v.IsConst())
+					if len(tc.sels) > 0 {
+						require.True(t, v.AllNull())
+					}
 					require.ElementsMatch(t, tc.expectedGrouping, v.GetGrouping().ToArray())
 					expectedNulls := make([]uint64, len(tc.sels))
 					for i := range tc.sels {
@@ -152,7 +156,10 @@ func TestShrinkAllNullAny(t *testing.T) {
 					})
 					require.NoError(t, err)
 					require.Equal(t, tc.length, v.Length())
-					require.True(t, v.AllNull())
+					require.False(t, v.IsConst())
+					if tc.length > 0 {
+						require.True(t, v.AllNull())
+					}
 					require.ElementsMatch(t, tc.grouping, v.GetGrouping().ToArray())
 					expectedNulls := make([]uint64, tc.length)
 					for i := range expectedNulls {
@@ -246,4 +253,165 @@ func TestAllNullUsesLogicalLength(t *testing.T) {
 		}()
 		require.Equal(t, int64(0), mp.CurrNB())
 	})
+}
+
+func TestNullAnySelectionsPreserveRowMetadata(t *testing.T) {
+	for _, constant := range []bool{false, true} {
+		name := "flat"
+		if constant {
+			name = "constant"
+		}
+		t.Run(name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			v := NewVec(types.T_any.ToType())
+			if constant {
+				v = NewConstNull(types.T_any.ToType(), 4, mp)
+				// Some existing constant representations retain the scalar null bit.
+				v.GetNulls().Add(0)
+			}
+			t.Cleanup(func() {
+				v.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			if !constant {
+				for range 4 {
+					require.NoError(t, AppendNull(v, mp))
+				}
+			}
+			v.GetGrouping().Add(0)
+			v.GetGrouping().Add(2)
+			require.NoError(t, v.Shrink([]int64{1, 2, 3}, false, mp))
+			var mask bitmap.Bitmap
+			mask.InitWithSize(1)
+			mask.Add(0)
+			require.NoError(t, v.ShrinkByMask(&mask, false, 1, mp))
+			require.Equal(t, 1, v.Length())
+			require.True(t, v.IsNull(0))
+			require.Equal(t, []uint64{0}, v.GetGrouping().ToArray())
+			require.Equal(t, constant, v.IsConst())
+		})
+	}
+}
+
+func TestNullAnyShuffleComposition(t *testing.T) {
+	for _, constant := range []bool{false, true} {
+		t.Run(map[bool]string{false: "flat", true: "constant"}[constant], func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			v := NewVec(types.T_any.ToType())
+			if constant {
+				v = NewConstNull(types.T_any.ToType(), 4, mp)
+			}
+			t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
+			if !constant {
+				for range 4 {
+					require.NoError(t, AppendNull(v, mp))
+				}
+			}
+			v.GetGrouping().Add(0)
+			v.GetGrouping().Add(2)
+			require.NoError(t, v.Shuffle([]int64{3, 0, 1}, mp))
+			require.Equal(t, []uint64{1}, v.GetGrouping().ToArray())
+			var buf []byte
+			require.NoError(t, v.ShuffleWithBuf([]int64{1, 0, 1}, mp, &buf))
+			require.Equal(t, []uint64{0, 2}, v.GetGrouping().ToArray())
+			require.NoError(t, v.Shuffle([]int64{2}, mp))
+			require.Equal(t, 1, v.Length())
+			require.True(t, v.IsNull(0))
+			require.Equal(t, []uint64{0}, v.GetGrouping().ToArray())
+			require.NoError(t, v.Shuffle(nil, mp))
+			require.Zero(t, v.Length())
+			require.Empty(t, v.GetGrouping().ToArray())
+		})
+	}
+}
+
+func TestNullAnyComplementTrimsStaleBitmapRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v := NewVec(types.T_any.ToType())
+	t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
+	for range 5 {
+		require.NoError(t, AppendNull(v, mp))
+	}
+	v.GetGrouping().Add(0)
+	v.GetGrouping().Add(4)
+	v.SetLength(3)
+	var mask bitmap.Bitmap
+	mask.InitWithSize(1)
+	mask.Add(0)
+	require.NoError(t, v.ShrinkByMask(&mask, true, 1, mp))
+	require.Equal(t, 2, v.Length())
+	require.Equal(t, []uint64{0}, v.GetGrouping().ToArray())
+	require.Equal(t, []uint64{0, 1}, v.GetNulls().ToArray())
+}
+
+func TestNullAnySelectionKeepsBorrowedWireUnchanged(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_any.ToType())
+	first := NewVec(types.T_any.ToType())
+	second := NewVec(types.T_any.ToType())
+	t.Cleanup(func() {
+		first.Free(mp)
+		second.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	for range 4 {
+		require.NoError(t, AppendNull(source, mp))
+	}
+	wire, err := source.MarshalBinary()
+	require.NoError(t, err)
+	before := bytes.Clone(wire)
+	require.NoError(t, first.UnmarshalBinary(wire))
+	require.NoError(t, second.UnmarshalBinary(wire))
+	first.GetGrouping().Add(2)
+	second.GetGrouping().Add(2)
+	require.True(t, first.HasBorrowedBacking())
+	require.Error(t, first.Shuffle([]int64{2, 1}, nil))
+	require.Equal(t, 4, first.Length())
+	require.Equal(t, []uint64{2}, first.GetGrouping().ToArray())
+	require.Equal(t, before, wire)
+	require.NoError(t, first.Shuffle([]int64{2, 1}, mp))
+	require.False(t, first.HasBorrowedBacking())
+	require.Equal(t, []uint64{0}, first.GetGrouping().ToArray())
+	require.Equal(t, before, wire)
+	require.Equal(t, 4, second.Length())
+	require.Equal(t, []uint64{2}, second.GetGrouping().ToArray())
+	for row := range 4 {
+		require.True(t, second.IsNull(uint64(row)))
+	}
+}
+
+func TestGroupedConstantShrinkUnordered(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, tc := range []struct {
+		name     string
+		sels     []int64
+		negate   bool
+		length   int
+		grouping []uint64
+	}{
+		{"keep", append(makeRows(64, 128), makeRows(0, 64)...), false, 128, []uint64{1, 64}},
+		{"remove", []int64{64, 2, 0}, true, 127, []uint64{62}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := NewConstNull(types.T_any.ToType(), 130, mp)
+			defer v.Free(mp)
+			v.GetGrouping().Add(0)
+			v.GetGrouping().Add(65)
+			original := append([]int64(nil), tc.sels...)
+			require.NoError(t, v.Shrink(tc.sels, tc.negate, mp))
+			require.Equal(t, original, tc.sels, "selection belongs to the caller")
+			require.Equal(t, tc.length, v.Length())
+			require.Equal(t, tc.grouping, v.GetGrouping().ToArray())
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func makeRows(start, end int) []int64 {
+	rows := make([]int64, end-start)
+	for i := range rows {
+		rows[i] = int64(start + i)
+	}
+	return rows
 }
