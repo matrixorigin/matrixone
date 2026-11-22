@@ -1651,6 +1651,7 @@ type StatsRefresherWithOptions interface {
 // collection. The relation owns snapshot visibility and physical range
 // selection; callers provide only bounded policy inputs and resolved columns.
 type AnalyzeTableRequest struct {
+	ResourceProcess   any
 	Process           any
 	Columns           []string
 	FullScan          bool
