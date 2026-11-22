@@ -1182,15 +1182,12 @@ cgroup_resource_breakdown "$CASE_DIR/missing"
 func TestUTHeartbeatStopsCleanly(t *testing.T) {
 	t.Parallel()
 	script := `source ./run_ut.sh UT
-mkfifo "$CASE_DIR/heartbeat-ready"
-exec 9<> "$CASE_DIR/heartbeat-ready"
-trap 'stop_ut_heartbeat; exec 9>&-' EXIT
+mkfifo "$CASE_DIR/heartbeat-tick" "$CASE_DIR/heartbeat-waiting" || exit 90
+exec 8<> "$CASE_DIR/heartbeat-tick"
+exec 9<> "$CASE_DIR/heartbeat-waiting"
+trap 'stop_ut_heartbeat; exec 8>&- 9>&-' EXIT
 function logger() {
     printf "%s\n" "$2" >> "$CASE_DIR/ut.log"
-    if [[ "$2" == *active_cases=unknown* ||
-          ( "$2" == *active_cases=3* && "$2" == *TestPrivate* && "$2" == *TestShard* && "$2" == *TestBatched* ) ]]; then
-        printf 'ready\n' >&9
-    fi
 }
 UT_HEARTBEAT_INTERVAL=60
 start_ut_heartbeat
@@ -1202,12 +1199,30 @@ stop_ut_heartbeat
 ! kill -0 "$heartbeat_pid" 2>/dev/null || exit 90
 
 UT_HEARTBEAT_INTERVAL=1
+# Release one timer only after the reports are ready. Its next wait confirms
+# the previous iteration wrote both the log and checkpoint.
+function sleep() {
+    if [[ "$*" == 1 ]]; then
+        printf 'waiting\n' >&9
+        read -r tick <&8
+    else
+        command sleep "$@"
+    fi
+}
+function heartbeat_waiting() {
+    local state
+    read -r -t 10 state <&9 && [[ "$state" == waiting ]]
+}
+function heartbeat_tick() {
+    printf 'tick\n' >&8 && heartbeat_waiting
+}
 # Exercise the actual heartbeat formatting without exposing real process data.
 function ps() {
     [[ "$*" == '-eo pid=,ppid=,rss=,comm=' ]] || return 93
     printf '1 0 100 tiny\n2 1 200 small\n3 1 300 third\n4 1 400 fourth\n5 1 500 fifth\n6 1 600 sixth\n7 1 700 seventh\n8 1 800 eighth\n9 1 900 largest\n'
 }
 start_ut_heartbeat
+heartbeat_waiting || exit 92
 LIGHT_RACE_REPORT="$G_WKSP/${G_TS}-light-race-report.out"
 cat > "$LIGHT_RACE_REPORT" <<'EOF'
 {"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/light","Test":"TestPrivate"}
@@ -1226,18 +1241,18 @@ cat > "$UT_REPORT" <<'EOF'
 {"Time":"2026-09-10T00:00:01Z","Action":"run","Package":"example/retired","Test":"TestRetired"}
 {"Time":"2026-09-10T00:00:02Z","Action":"fail","Package":"example/retired"}
 EOF
-read -r -t 10 heartbeat_ready <&9 || exit 92
+heartbeat_tick || exit 92
 stop_ut_heartbeat
 [[ -z "$UT_HEARTBEAT_PID" ]] || exit 91
-grep -q 'event=heartbeat' "$UT_CHECKPOINT"
-grep -q 'active_cases=3' "$CASE_DIR/ut.log"
-grep -q 'TestPrivate' "$CASE_DIR/ut.log"
-grep -q 'TestShard' "$CASE_DIR/ut.log"
-grep -q 'TestBatched' "$CASE_DIR/ut.log"
-! grep -qE 'TestRetired|TestStaged' "$CASE_DIR/ut.log" || exit 94
-grep -q 'processes=9' "$CASE_DIR/ut.log"
-grep -q 'processes.top_rss=pid=9,ppid=1,rss_kib=900,comm=largest;pid=8,ppid=1,rss_kib=800,comm=eighth;' "$CASE_DIR/ut.log"
-grep -q 'pid=2,ppid=1,rss_kib=200,comm=small;' "$CASE_DIR/ut.log"
+grep -q 'event=heartbeat ' "$UT_CHECKPOINT" || exit 93
+grep -q 'active_cases=3 ' "$CASE_DIR/ut.log" || exit 93
+grep -q 'TestPrivate' "$CASE_DIR/ut.log" || exit 93
+grep -q 'TestShard' "$CASE_DIR/ut.log" || exit 93
+grep -q 'TestBatched' "$CASE_DIR/ut.log" || exit 93
+! grep -qE 'active_cases=unknown|TestRetired|TestStaged' "$CASE_DIR/ut.log" || exit 94
+grep -q 'processes=9' "$CASE_DIR/ut.log" || exit 93
+grep -q 'processes.top_rss=pid=9,ppid=1,rss_kib=900,comm=largest;pid=8,ppid=1,rss_kib=800,comm=eighth;' "$CASE_DIR/ut.log" || exit 93
+grep -q 'pid=2,ppid=1,rss_kib=200,comm=small;' "$CASE_DIR/ut.log" || exit 93
 ! grep -q 'pid=1,ppid=0,rss_kib=100,comm=tiny;' "$CASE_DIR/ut.log" || exit 95
 
 function python3() { return 1; }
@@ -1250,9 +1265,9 @@ function awk() {
 }
 : > "$CASE_DIR/ut.log"
 start_ut_heartbeat
-read -r -t 10 heartbeat_ready <&9 || exit 96
+heartbeat_waiting && heartbeat_tick || exit 96
 stop_ut_heartbeat
-exec 9>&-
+exec 8>&- 9>&-
 grep -q 'active_cases=unknown active=unclassified report' "$CASE_DIR/ut.log" && [[ ! -e "$CASE_DIR/rescanned" ]]
 `
 	mock := `#!/bin/bash
