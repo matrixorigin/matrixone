@@ -18,19 +18,27 @@ import (
 	"context"
 	"errors"
 	"math"
+	"runtime"
 	"strings"
+	"sync"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	analyzestats "github.com/matrixorigin/matrixone/pkg/statistics/analyze"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -52,6 +60,40 @@ type analyzeSelectedRange struct {
 	rowThresholdAll    bool
 	incidenceThreshold [16]byte
 	incidenceAll       bool
+}
+
+// Column passes read the same snapshot but need not return rows in the same
+// order. Memoize the V1 decision by physical row ID, not by batch position.
+type analyzeRowDecisions struct {
+	known, retained [objectio.BlockMaxRows / 64]uint64
+}
+
+// The cache may end in the middle of a persisted block shard. Cap the
+// returned slice so even an append cannot write into a neighbor's bitmap.
+func analyzeDecisionShard(decisions []analyzeRowDecisions, lo, hi int) []analyzeRowDecisions {
+	end := min(hi, len(decisions))
+	return decisions[min(lo, end):end:end]
+}
+
+func (r *analyzeSelectedRange) retainRow(seed *[32]byte, identity []byte, cache *analyzeRowDecisions) bool {
+	if r.rowThresholdAll {
+		return true
+	}
+	if cache != nil && len(identity) == types.RowidSize {
+		id := (*types.Rowid)(identity)
+		block, offset := id.Decode()
+		if *block == r.block.BlockID && offset < objectio.BlockMaxRows {
+			word, bit := offset/64, uint64(1)<<(offset%64)
+			if cache.known[word]&bit == 0 {
+				if analyzestats.RetainRow(*seed, identity, r.rowThreshold, false) {
+					cache.retained[word] |= bit
+				}
+				cache.known[word] |= bit
+			}
+			return cache.retained[word]&bit != 0
+		}
+	}
+	return analyzestats.RetainRow(*seed, identity, r.rowThreshold, false)
 }
 
 type analyzeColumnState struct {
@@ -171,6 +213,26 @@ func (tbl *txnTable) AnalyzeTable(
 
 	stringSlots := analyzeByteRangeSlots(columns, qBlocks)
 	columnsPerPass := int(request.ColumnsPerPass)
+	var domains []analyzeIntegerDomain
+	var memo analyzeDecisionCache
+	stmt, _ := request.ResourceProcess.(*process.Process)
+	if stmt != nil && stmt.Base != nil && columnsPerPass < len(columns) && q.Numerator < q.Denominator {
+		reserve, err := stmt.GetExecutionTransientMemoryAdmission()
+		if err != nil {
+			return nil, err
+		}
+		defer memo.release()
+		if err := memo.allocate(len(selected), reserve); err != nil {
+			return nil, err
+		}
+	}
+	// At most one column pass owns a reservation. Release on all returns.
+	var held *process.ExecutionTransientMemoryReservation
+	defer func() {
+		if held != nil {
+			held.Release()
+		}
+	}()
 	for first := 0; first < len(columns); first += columnsPerPass {
 		last := min(first+columnsPerPass, len(columns))
 		states := make([]analyzeColumnState, last-first)
@@ -191,8 +253,39 @@ func (tbl *txnTable) AnalyzeTable(
 			}
 			states[i].zoneMap = index.NewZM(states[i].typ.Oid, states[i].typ.Scale)
 		}
-		passRows, passBytes, err := tbl.scanAnalyzeColumnGroup(
-			ctx, proc, selectedData, selected, states, request.Seed)
+		workers, sessionDOP := 1, -1
+		scanCPU := min(system.GoMaxProcs(), runtime.GOMAXPROCS(0))
+		if stmt != nil && stmt.Base != nil && len(states) == 1 && analyzeParallelFixedType(states[0].typ.Oid) && !request.FullScan && request.MaxDistinctValues >= analyzestats.SampleSketchCapacity {
+			if resolve := stmt.GetResolveVariableFunc(); resolve != nil {
+				v, e := resolve("max_dop", true, false)
+				if e != nil {
+					return nil, e
+				}
+				if n, ok := v.(int64); ok && n >= 0 {
+					sessionDOP = int(n)
+				}
+			}
+			if sessionDOP >= 0 {
+				reserve, e := stmt.GetExecutionTransientMemoryAdmission()
+				if e != nil {
+					return nil, e
+				}
+				blockCount := len(selected)
+				if blockCount > 0 && selected[0].block.IsMemBlk() {
+					blockCount--
+				}
+				workers, held, e = admitAnalyzeWorkers(ctx, scanCPU, sessionDOP, blockCount, reserve, &memo)
+				if e != nil {
+					return nil, e
+				}
+			}
+		}
+		var passRows, passBytes uint64
+		if workers > 1 {
+			passRows, passBytes, err = tbl.scanAnalyzeColumnParallel(ctx, proc, selectedData, selected, states, request.Seed, workers, memo.rows)
+		} else {
+			passRows, passBytes, err = tbl.scanAnalyzeColumnGroup(ctx, proc, selectedData, selected, states, request.Seed, memo.rows, nil)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -212,8 +305,211 @@ func (tbl *txnTable) AnalyzeTable(
 			q.Numerator == q.Denominator); err != nil {
 			return nil, err
 		}
+		for i, state := range states {
+			if request.FullScan {
+				break // Leave FULLSCAN's HLL result unchanged.
+			}
+			point := stats.NdvMap[state.name]
+			if point <= integerDomainWidth(state.zoneMap) {
+				continue
+			}
+			if q.Numerator == q.Denominator {
+				stats.NdvMap[state.name] = integerDomainWidth(state.zoneMap)
+			} else {
+				domains = append(domains, analyzeIntegerDomain{state.name, uint16(columns[first+i].Seqnum), state.zoneMap})
+			}
+		}
+		if held != nil {
+			held.Release()
+			held = nil
+		}
+	}
+	if len(domains) > 0 {
+		fs, fsErr := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
+		if fsErr == nil {
+			boundAnalyzeDomains(ctx, ranges.GetBlockInfoSlice(), fs, analyzeDomainMetaBytes, domains, stats.NdvMap)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
+}
+
+// At K=32768 the incidence arrays use 1.375 MiB. Allow for the bounded
+// row witness set and overlapping old/new backing storage during growth.
+const analyzeSketchCharge = 4 << 20
+
+// Keep admission limited to tested fixed-width readers. In particular, do
+// not let IsDecimal expand this path to DECIMAL128/256 or affect NDV bounds.
+func analyzeParallelFixedType(t types.T) bool {
+	return t.IsInteger() || t == types.T_decimal64
+}
+
+type analyzeMemoryAdmission func(uint64) (*process.ExecutionTransientMemoryReservation, error)
+
+type analyzeDecisionCache struct {
+	rows []analyzeRowDecisions
+	held *process.ExecutionTransientMemoryReservation
+}
+
+func (c *analyzeDecisionCache) allocate(blocks int, reserve analyzeMemoryAdmission) error {
+	n := min(blocks, int(analyzestats.DefaultMaxBlocks))
+	if n == 0 {
+		return nil
+	}
+	const bytesPerBlock = 8 * (len(analyzeRowDecisions{}.known) + len(analyzeRowDecisions{}.retained))
+	held, err := reserve(uint64(n) * uint64(bytesPerBlock))
+	if errors.Is(err, process.ErrExecutionResourceAdmission) {
+		return nil // memoization is optional
+	}
+	if err != nil {
+		return err
+	}
+	c.held = held
+	c.rows = make([]analyzeRowDecisions, n)
+	return nil
+}
+
+func (c *analyzeDecisionCache) release() {
+	c.rows = nil
+	c.held.Release()
+	c.held = nil
+}
+
+func admitAnalyzeWorkers(ctx context.Context, cpu, dop, blocks int, reserve analyzeMemoryAdmission, memo *analyzeDecisionCache) (int, *process.ExecutionTransientMemoryReservation, error) {
+	n := max(1, min(cpu, 8, blocks/16))
+	if dop > 0 {
+		n = min(n, dop)
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, nil, err
+		}
+		states := n
+		if n > 1 {
+			states++
+		} // coordinator merges while workers' sketches are live
+		r, err := reserve(uint64(states) * analyzeSketchCharge)
+		if err == nil {
+			// Probe headroom for reader batches without holding a second charge
+			// against the same buffers during execution. This isn't a hard RSS cap.
+			var headroom *process.ExecutionTransientMemoryReservation
+			headroom, err = reserve(uint64(n) * 512 << 10)
+			if err == nil {
+				headroom.Release()
+				return n, r, nil
+			}
+			r.Release()
+		}
+		if !errors.Is(err, process.ErrExecutionResourceAdmission) {
+			return 0, nil, err
+		}
+		if memo.held != nil {
+			memo.release() // Retry the same scan without an optional cache.
+			continue
+		}
+		if n == 1 {
+			return 0, nil, err
+		}
+		n = max(1, n/2)
+	}
+}
+
+type analyzeIntegerDomain struct {
+	name string
+	seq  uint16
+	zm   index.ZM
+}
+
+// An unknown or lossy width must never tighten a cardinality estimate.
+func integerDomainWidth(zm index.ZM) float64 {
+	if !zm.IsInited() || !zm.GetType().IsInteger() {
+		return math.Inf(1)
+	}
+	typ := zm.GetType().ToType()
+	lo, loOK := tryGetMinMaxValueByFloat64(typ, zm.GetMinBuf())
+	hi, hiOK := tryGetMinMaxValueByFloat64(typ, zm.GetMaxBuf())
+	if !loOK || !hiOK || lo > hi || math.Abs(lo) >= 1<<52 || math.Abs(hi) >= 1<<52 {
+		return math.Inf(1)
+	}
+	return hi - lo + 1
+}
+
+// The retained-row range is only a trigger. Union every visible object's
+// bounds with ALL in-memory values (collected by scanAnalyzeColumnGroup).
+// Deletes only widen this superset. Preflight the entire object list before
+// any optional I/O; projecting fewer columns does not change its cost.
+func boundAnalyzeDomains(ctx context.Context, blocks objectio.BlockInfoSlice, fs fileservice.FileService, budget uint64, domains []analyzeIntegerDomain, ndvs map[string]float64) {
+	locs, ok := analyzeDomainLocations(ctx, blocks, budget, analyzeDomainMetaObjects)
+	if !ok {
+		return
+	}
+	for _, loc := range locs {
+		if len(domains) == 0 || ctx.Err() != nil {
+			return
+		}
+		meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+		if err != nil {
+			return
+		}
+		data, ok := meta.DataMeta()
+		if !ok {
+			return
+		}
+		remaining := domains[:0]
+		for _, d := range domains {
+			if d.seq >= data.BlockHeader().MetaColumnCount() || d.seq > data.BlockHeader().MaxSeqnum() {
+				continue
+			}
+			z := data.MustGetColumn(d.seq).ZoneMap()
+			if !z.IsInited() || z.GetType() != d.zm.GetType() {
+				continue
+			}
+			index.MergeZM(d.zm, z)
+			if integerDomainWidth(d.zm) < ndvs[d.name] {
+				remaining = append(remaining, d)
+			}
+		}
+		domains = remaining
+	}
+	for _, d := range domains {
+		ndvs[d.name] = integerDomainWidth(d.zm)
+	}
+}
+
+const (
+	analyzeDomainMetaBytes   = 256 << 20
+	analyzeDomainMetaObjects = 4096
+)
+
+// The locations borrow the immutable block list for the duration of this
+// collection. Reject the whole list on the first excess, never its prefix.
+func analyzeDomainLocations(ctx context.Context, blocks objectio.BlockInfoSlice, bytesLeft uint64, objectLimit int) ([]objectio.Location, bool) {
+	seen := make(map[types.Objectid]struct{})
+	var locs []objectio.Location
+	for i := 0; i < blocks.Len(); i++ {
+		if i%1024 == 0 && ctx.Err() != nil {
+			return nil, false
+		}
+		block := blocks.Get(i)
+		if block.IsMemBlk() {
+			continue
+		}
+		id := *block.BlockID.Object()
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		loc := block.MetaLocation()
+		size := uint64(loc.Extent().Length())
+		if size == 0 || size > bytesLeft || len(locs) >= objectLimit {
+			return nil, false
+		}
+		bytesLeft -= size
+		seen[id] = struct{}{}
+		locs = append(locs, loc)
+	}
+	return locs, true
 }
 
 func applyAnalyzeDefaults(request *engine.AnalyzeTableRequest) {
@@ -363,6 +659,63 @@ func selectAnalyzeRanges(
 	return selected, populationBlocks, samplePlan.Q, samplePlan.QBlocks, nil
 }
 
+// Only disjoint persisted ranges run concurrently; the coordinator owns
+// the memory range and merges partial columns only after all readers finish.
+func (tbl *txnTable) scanAnalyzeColumnParallel(ctx context.Context, proc *process.Process, data engine.RelData, selected []analyzeSelectedRange, states []analyzeColumnState, seed [32]byte, n int, decisions []analyzeRowDecisions) (uint64, uint64, error) {
+	var rows, bytes uint64
+	var err error
+	first := 0
+	if selected[0].block.IsMemBlk() {
+		rows, bytes, err = tbl.scanAnalyzeColumnGroup(ctx, proc, data.DataSlice(0, 1), selected[:1], states, seed, nil, nil)
+		if err != nil {
+			return 0, 0, err
+		}
+		first++
+	}
+	type part struct {
+		s           []analyzeColumnState
+		rows, bytes uint64
+	}
+	parts := make([]part, n)
+	var builds sync.Mutex
+	g, child := errgroup.WithContext(ctx)
+	for i := range parts {
+		lo := first + (len(selected)-first)*i/n
+		hi := first + (len(selected)-first)*(i+1)/n
+		if lo == hi {
+			continue
+		}
+		p := &parts[i]
+		typ := states[0].typ
+		p.s = []analyzeColumnState{{name: states[0].name, typ: typ, ndv: analyzestats.NewNDVAccumulator(defaultAnalyzeDistinctValues), zoneMap: index.NewZM(typ.Oid, typ.Scale)}}
+		shard := data.DataSlice(lo, hi)
+		memo := analyzeDecisionShard(decisions, lo, hi)
+		g.Go(func() error {
+			var e error
+			p.rows, p.bytes, e = tbl.scanAnalyzeColumnGroup(child, proc, shard, selected[lo:hi], p.s, seed, memo, &builds)
+			return e
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return 0, 0, err
+	}
+	for _, p := range parts {
+		if p.s == nil {
+			continue
+		}
+		s := p.s[0]
+		if err := states[0].ndv.Merge(s.ndv); err != nil {
+			return 0, 0, err
+		}
+		rows += p.rows
+		bytes += p.bytes
+		states[0].sampleNulls += s.sampleNulls
+		states[0].sampleBytes += s.sampleBytes
+		index.MergeZM(states[0].zoneMap, s.zoneMap)
+	}
+	return rows, bytes, nil
+}
+
 func (tbl *txnTable) scanAnalyzeColumnGroup(
 	ctx context.Context,
 	proc *process.Process,
@@ -370,6 +723,8 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 	selected []analyzeSelectedRange,
 	states []analyzeColumnState,
 	seed [32]byte,
+	decisions []analyzeRowDecisions,
+	builds *sync.Mutex,
 ) (retainedRows, readBytes uint64, err error) {
 	hasDistribution := false
 	attrs := make([]string, 0, len(states)+1)
@@ -385,7 +740,11 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 	data := batch.NewWithSchema(true, attrs, attrTypes)
 	defer data.Clean(proc.Mp())
 	for rangeIndex := range selected {
-		descriptor := selected[rangeIndex]
+		descriptor := &selected[rangeIndex]
+		var cache *analyzeRowDecisions
+		if rangeIndex < len(decisions) && !descriptor.block.IsMemBlk() {
+			cache = &decisions[rangeIndex]
+		}
 		incidence := analyzestats.RetainIncidenceBlock(
 			seed,
 			descriptor.block.BlockID[:],
@@ -399,6 +758,12 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 				}
 			}
 		}
+		if err := ctx.Err(); err != nil {
+			return 0, 0, err
+		}
+		if builds != nil {
+			builds.Lock()
+		}
 		readers, buildErr := tbl.BuildReaders(
 			ctx,
 			proc,
@@ -410,6 +775,9 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 			engine.Policy_CheckAll,
 			engine.FilterHint{},
 		)
+		if builds != nil {
+			builds.Unlock()
+		}
 		if buildErr != nil {
 			return 0, 0, buildErr
 		}
@@ -421,9 +789,19 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 				"ANALYZE expected one reader, got %d", len(readers))
 		}
 		reader := readers[0]
+		// Test the worker's read-error path after it owns a real reader.
+		// Poll only once per persisted shard, never on the per-row path.
+		failRead := false
+		if builds != nil && rangeIndex == 0 {
+			_, target, on := fault.TriggerFault("analyze_parallel_read_error")
+			failRead = on && target == tbl.tableName
+		}
 		for {
 			data.CleanOnlyData()
 			end, readErr := reader.Read(ctx, attrs, nil, proc.Mp(), data)
+			if failRead && readErr == nil {
+				readErr = moerr.NewInternalErrorNoCtx("injected parallel ANALYZE reader failure")
+			}
 			if readErr != nil {
 				_ = reader.Close()
 				return 0, 0, readErr
@@ -441,8 +819,7 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 			rowIDs := data.Vecs[len(states)]
 			for row := 0; row < data.RowCount(); row++ {
 				identity := rowIDs.GetRawBytesAt(row)
-				retainRow := analyzestats.RetainRow(
-					seed, identity, descriptor.rowThreshold, descriptor.rowThresholdAll)
+				retainRow := descriptor.retainRow(&seed, identity, cache)
 				if retainRow {
 					retainedRows++
 				}
@@ -497,8 +874,10 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 							return 0, 0, observeErr
 						}
 					}
-					if retainRow {
+					if retainRow || (descriptor.block.IsMemBlk() && states[columnIndex].typ.Oid.IsInteger()) {
 						index.UpdateZM(states[columnIndex].zoneMap, raw)
+					}
+					if retainRow {
 						if observeErr := states[columnIndex].ndv.ObserveSampleValue(valueHash); observeErr != nil &&
 							!errors.Is(observeErr, analyzestats.ErrAccumulatorLimit) {
 							_ = reader.Close()

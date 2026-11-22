@@ -18,11 +18,126 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAnalyzeParallelVisibilityAndFailure(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db := recoverySQLClient(t, cn)
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(t.Context(), 0), time.Minute)
+		defer cancel()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		exec := func(q string) {
+			t.Helper()
+			_, err := conn.ExecContext(ctx, q)
+			require.NoError(t, err, q)
+		}
+		const table = "analyze_worker_test.worker_visibility"
+		exec("create database analyze_worker_test")
+		defer func() {
+			cleanup, done := context.WithTimeout(context.Background(), 10*time.Second)
+			defer done()
+			_, err := conn.ExecContext(cleanup, "drop database analyze_worker_test")
+			require.NoError(t, err)
+		}()
+		// Exercise the parallel path even in a one-P test process. Restore
+		// both limits (they need not originally match).
+		if n, procs := system.GoMaxProcs(), runtime.GOMAXPROCS(0); min(n, procs) < 2 {
+			system.SetGoMaxProcs(2)
+			defer func() { system.SetGoMaxProcs(n); runtime.GOMAXPROCS(procs) }()
+		}
+		// Use the minimum 32 regular persisted blocks required for two workers.
+		svc := cn.RawService().(cnservice.Service)
+		exec("create table " + table + "(id int primary key, v int)")
+		exec("insert into " + table + " select result, if(result=262144,99,result%4) from generate_series(1,262144) g")
+		exec("select mo_ctl('dn','flush','" + table + "')")
+		exec("delete from " + table + " where id=262144")
+		exec("select mo_ctl('dn','flush','" + table + "')")
+		exec("insert into " + table + " values (262145,77),(262146,null)")
+		stats := func() [4]int {
+			t.Helper()
+			var v [4]int
+			err := conn.QueryRowContext(ctx, "select table_cnt, cast(json_extract(ndv_map,'$.v') as signed), cast(json_extract(null_cnt_map,'$.v') as signed), cast(json_extract(max_val_map,'$.v') as signed) from table_stats('"+table+"','get','normal') g").Scan(&v[0], &v[1], &v[2], &v[3])
+			require.NoError(t, err)
+			return v
+		}
+		const analyze = "analyze table " + table + "(v)"
+		exec("set session max_dop=1")
+		exec(analyze)
+		want := [4]int{262145, 5, 1, 77}
+		require.Equal(t, want, stats())
+		exec("set session max_dop=2")
+		exec(analyze)
+		require.Equal(t, want, stats())
+
+		// Give the previous publication a distinguishable marker. Only a
+		// real parallel worker can trigger this failure after opening a reader.
+		exec(`select table_cnt from table_stats('` + table + `','patch','{"ndv_map":{"v":3}}') g`)
+		prior := stats()
+		require.Equal(t, 3, prior[1])
+		func() {
+			if fault.Enable() {
+				defer fault.Disable()
+			}
+			const point = "analyze_parallel_read_error"
+			require.NoError(t, fault.AddFaultPoint(ctx, point, ":::", "echo", 0, "worker_visibility", false))
+			defer fault.RemoveFaultPoint(ctx, point)
+			_, err = conn.ExecContext(ctx, analyze)
+			require.ErrorContains(t, err, "injected parallel ANALYZE reader failure")
+			// Exercise the same error against an isolated statement/CN ledger,
+			// this time with row sampling and more than one column pass.
+			b := process.MustNewExecutionResourceBudget(32<<20, 32<<20)
+			g, err := b.OpenGeneration(1)
+			require.NoError(t, err)
+			stmt := testutil.NewProcess(t)
+			require.NoError(t, stmt.SetExecutionResourceBudgetForTesting(g))
+			stmt.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return int64(2), nil })
+			err = svc.GetSQLExecutor().ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+				db, err := svc.GetEngine().Database(ctx, "analyze_worker_test", tx.Txn())
+				if err != nil {
+					return err
+				}
+				rel, err := db.Relation(ctx, "worker_visibility", nil)
+				if err != nil {
+					return err
+				}
+				tombstones, err := rel.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
+				if err != nil {
+					return err
+				}
+				require.True(t, tombstones.HasAnyTombstoneFile(), "exercise persisted delete visibility")
+				_, err = rel.(engine.AnalyzableRelation).AnalyzeTable(ctx, engine.AnalyzeTableRequest{
+					ResourceProcess: stmt, Columns: []string{"v", "id"}, TargetRows: 1000,
+				})
+				return err
+			}, executor.Options{})
+			require.ErrorContains(t, err, "injected parallel ANALYZE reader failure")
+			require.Greater(t, g.Peak(), uint64(12<<20))
+			require.Zero(t, g.Used())
+			require.Zero(t, b.AggregateUsed())
+		}()
+		require.Equal(t, prior, stats())
+		exec(analyze)
+		require.Equal(t, want, stats())
+	})
+}
 
 func TestPreparedAnalyzeOverMySQLProtocol(t *testing.T) {
 	RunSingleCNBaseClusterTests(t, func(c Cluster) {
