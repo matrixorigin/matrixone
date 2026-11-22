@@ -243,7 +243,7 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 	}
 	var visibleWork int
 	stopCause := errors.New("optional observation cancelled")
-	for _, scenario := range []string{"complete", "two matching blocks", "missing overlap", "NaN overlap", "empty", "budget", "cancelled", "stale stats", "row population", "block population", "pending", "transport unavailable", "entry replaced", "unrelated subscription", "engine contended", "subscriber contended"} {
+	for _, scenario := range []string{"complete", "coordination held", "cache writer", "two matching blocks", "missing overlap", "NaN overlap", "empty", "budget", "cancelled", "stale stats", "row population", "block population", "pending", "transport unavailable", "entry replaced", "unrelated subscription", "engine contended", "subscriber contended"} {
 		t.Run(scenario, func(t *testing.T) {
 			request := req
 			request.Bound = append([]byte(nil), req.Bound...)
@@ -252,6 +252,12 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 			e.pClient.subscriber.swapClient(&service.LogtailClient{})
 			e.pClient.subscribed.m[98].pendingTo.Store(nil)
 			switch scenario {
+			case "coordination held":
+				f.gs.mu.Lock()
+				t.Cleanup(f.gs.mu.Unlock)
+			case "cache writer":
+				f.gs.observationMu.Lock()
+				t.Cleanup(f.gs.observationMu.Unlock)
 			case "two matching blocks":
 				bound := date.ToTimestamp(time.UTC)
 				copy(request.Bound[:], types.EncodeTimestamp(&bound))
@@ -326,7 +332,7 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			wantRows := scenario == "complete" || scenario == "two matching blocks" || scenario == "missing overlap" || scenario == "NaN overlap"
+			wantRows := scenario == "complete" || scenario == "coordination held" || scenario == "two matching blocks" || scenario == "missing overlap" || scenario == "NaN overlap"
 			require.Equal(t, wantRows || scenario == "empty", complete)
 			if wantRows {
 				want := engine.IndexBlockInput{Rows: 2, Blocks: 1}

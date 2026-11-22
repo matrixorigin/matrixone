@@ -332,6 +332,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op := projection.NewArgument()
 		op.ProjectList = t.ProjectList
 		op.GroupingSetCount = t.GroupingSetCount
+		op.ValuesWarningRow = t.ValuesWarningRow
 		op.GroupingFlags = t.GroupingFlags
 		op.SetInfo(&info)
 		return op
@@ -1426,6 +1427,7 @@ func buildExternalInsertArg(
 func constructProjection(node *plan.Node) *projection.Projection {
 	arg := projection.NewArgument()
 	arg.ProjectList = node.ProjectList
+	arg.ValuesWarningRow = node.ValuesWarningRow()
 	if count, ok := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); ok {
 		arg.GroupingSetCount = count
 		arg.GroupingFlags = node.GroupingFlag
@@ -3501,6 +3503,18 @@ func constructValueScan(proc *process.Process, node *plan.Node, allocations ...*
 		return op, nil
 	}
 
+	if node.ExtraOptions == plan.ValuesWarningOrdinalScan {
+		i := slices.IndexFunc(node.TableDef.Cols, func(col *plan.ColDef) bool {
+			return col.Name == plan.ValuesWarningOrdinalColumn
+		})
+		if i < 0 || i >= len(node.RowsetData.Cols) || node.TableDef.Cols[i].Typ.Id != int32(types.T_int64) ||
+			len(node.RowsetData.Cols[i].Data) != len(node.RowsetData.Cols[0].Data) {
+			op.Release()
+			return nil, moerr.NewInternalError(proc.Ctx, "missing or invalid VALUES warning ordinal column")
+		}
+		op.ValuesWarningOrdinalColumn = i + 1
+	}
+
 	op.ColCount = len(node.TableDef.Cols)
 	op.Batchs = make([]*batch.Batch, 2)
 	op.Batchs[0] = batch.NewWithSize(len(node.RowsetData.Cols))
@@ -3526,6 +3540,10 @@ func constructValueScan(proc *process.Process, node *plan.Node, allocations ...*
 		}
 		for j, rowsetExpr := range col.Data {
 			get, err := rule.GetConstantValue2(proc, rowsetExpr.Expr, vec)
+			if err == nil && i+1 == op.ValuesWarningOrdinalColumn &&
+				(!get || vec.IsNull(uint64(j)) || vector.GetFixedAtNoTypeCheck[int64](vec, j) < 0) {
+				err = moerr.NewInternalError(proc.Ctx, "invalid VALUES warning ordinal")
+			}
 			if err != nil {
 				if accounted != nil {
 					vec.Free(proc.Mp())

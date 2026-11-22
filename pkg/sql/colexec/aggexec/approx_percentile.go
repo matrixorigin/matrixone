@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"math"
 	"math/big"
@@ -42,6 +43,9 @@ func ApproxPercentileReturnType(args []types.Type) types.Type {
 	if !args[0].IsDecimal() {
 		return types.T_float64.ToType()
 	}
+	if args[0].Oid == types.T_decimal256 {
+		return args[0]
+	}
 	scale := args[0].Scale
 	if args[0].Width < approxPercentileDecimalWidth {
 		scale++
@@ -50,7 +54,7 @@ func ApproxPercentileReturnType(args []types.Type) types.Type {
 }
 
 type quantileValue interface {
-	numeric | types.Decimal64 | types.Decimal128
+	numeric | types.Decimal64 | types.Decimal128 | types.Decimal256
 }
 
 // quantileSketch is a bounded, mergeable KLL-style sketch. Each level stores
@@ -604,7 +608,7 @@ func (s *quantileSketch[T]) decode(reader io.Reader) (_ *quantileSketch[T], retE
 	if err != nil || hasValue > 1 {
 		return nil, moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch extrema flag")
 	}
-	var encodedStorage [types.Decimal128Size]byte
+	var encodedStorage [types.Decimal256Size]byte
 	if valueSize > len(encodedStorage) {
 		return nil, moerr.NewInternalErrorNoCtx(
 			"approx_percentile: unsupported encoded value size")
@@ -762,13 +766,15 @@ func (fraction percentileFraction) sign() int {
 // buffers needed by percentile rank and interpolation arithmetic. One scratch
 // is reused for a complete executor Flush, so group cardinality cannot create
 // a proportional Go-heap allocation stream. The buffers grow only to the
-// immutable percentile precision plus the fixed 128-bit value/count domain.
+// immutable percentile precision plus the fixed-width value and count domains.
 type percentileArithmeticScratch struct {
 	one       big.Int
 	two       big.Int
 	ten       big.Int
 	pow2_127  big.Int
 	pow2_128  big.Int
+	pow2_255  big.Int
+	pow2_256  big.Int
 	rank      big.Int
 	quotient  big.Int
 	remainder big.Int
@@ -993,13 +999,63 @@ func (scratch *percentileArithmeticScratch) interpolateDecimal(
 	fraction percentileFraction,
 	scaleDelta int32,
 ) (types.Decimal128, error) {
-	if scaleDelta < 0 || scaleDelta > 1 {
-		return types.Decimal128{}, moerr.NewInternalErrorNoCtx(
-			"approx_percentile: invalid decimal result scale")
-	}
 	scratch.constants()
 	scratch.decimal128ToInt(&scratch.left, lo)
 	scratch.decimal128ToInt(&scratch.right, hi)
+	if err := scratch.interpolateDecimalCoefficients(fraction, scaleDelta); err != nil {
+		return types.Decimal128{}, err
+	}
+	return scratch.decimal128FromInt(&scratch.result)
+}
+
+func (scratch *percentileArithmeticScratch) interpolateDecimal256(
+	lo, hi types.Decimal256, fraction percentileFraction, scaleDelta int32,
+) (types.Decimal256, error) {
+	scratch.constants()
+	if scratch.pow2_256.Sign() == 0 {
+		scratch.pow2_255.Lsh(&scratch.one, 255)
+		scratch.pow2_256.Lsh(&scratch.one, 256)
+	}
+	scratch.decimal256ToInt(&scratch.left, lo)
+	scratch.decimal256ToInt(&scratch.right, hi)
+	if err := scratch.interpolateDecimalCoefficients(fraction, scaleDelta); err != nil {
+		return types.Decimal256{}, err
+	}
+	value := &scratch.result
+	scratch.comparison.Neg(&scratch.pow2_255)
+	if value.Cmp(&scratch.comparison) < 0 || value.Cmp(&scratch.pow2_255) >= 0 {
+		return types.Decimal256{}, moerr.NewInvalidInputNoCtx("approx_percentile: decimal interpolation overflow")
+	}
+	if value.Sign() < 0 {
+		value.Add(value, &scratch.pow2_256)
+	}
+	var encoded [types.Decimal256Size]byte
+	value.FillBytes(encoded[:])
+	return types.Decimal256{
+		B192_255: binary.BigEndian.Uint64(encoded[0:8]),
+		B128_191: binary.BigEndian.Uint64(encoded[8:16]),
+		B64_127:  binary.BigEndian.Uint64(encoded[16:24]),
+		B0_63:    binary.BigEndian.Uint64(encoded[24:32]),
+	}, nil
+}
+
+func (scratch *percentileArithmeticScratch) decimal256ToInt(dst *big.Int, value types.Decimal256) {
+	var encoded [types.Decimal256Size]byte
+	binary.BigEndian.PutUint64(encoded[0:8], value.B192_255)
+	binary.BigEndian.PutUint64(encoded[8:16], value.B128_191)
+	binary.BigEndian.PutUint64(encoded[16:24], value.B64_127)
+	binary.BigEndian.PutUint64(encoded[24:32], value.B0_63)
+	dst.SetBytes(encoded[:])
+	if value.Sign() {
+		dst.Sub(dst, &scratch.pow2_256)
+	}
+}
+
+// interpolateDecimalCoefficients rounds once at the final result scale.
+func (scratch *percentileArithmeticScratch) interpolateDecimalCoefficients(fraction percentileFraction, scaleDelta int32) error {
+	if scaleDelta < 0 || scaleDelta > 1 {
+		return moerr.NewInternalErrorNoCtx("approx_percentile: invalid decimal result scale")
+	}
 	scratch.difference.Sub(&scratch.right, &scratch.left)
 	scratch.numerator.Mul(&scratch.left, fraction.denominator)
 	scratch.product.Mul(&scratch.difference, fraction.numerator)
@@ -1018,7 +1074,7 @@ func (scratch *percentileArithmeticScratch) interpolateDecimal(
 			scratch.result.Add(&scratch.result, &scratch.one)
 		}
 	}
-	return scratch.decimal128FromInt(&scratch.result)
+	return nil
 }
 
 func percentileRanks(count uint64, p *big.Rat) (lo, hi uint64, frac *big.Rat) {
@@ -1581,14 +1637,15 @@ func (exec *approxPercentileNumericExec[T]) Flush() (_ []*vector.Vector, retErr 
 	return results, nil
 }
 
-type approxPercentileDecimalExec[T types.Decimal64 | types.Decimal128] struct {
+type approxPercentileDecimalExec[T types.Decimal64 | types.Decimal128 | types.Decimal256, R types.Decimal128 | types.Decimal256] struct {
 	approxPercentileExecBase[T]
+	interpolate func(*percentileArithmeticScratch, T, T, percentileFraction, int32) (R, error)
 }
 
-func (exec *approxPercentileDecimalExec[T]) PreflightBatchMerge(
+func (exec *approxPercentileDecimalExec[T, R]) PreflightBatchMerge(
 	next AggFuncExec, offset int, groups []uint64,
 ) error {
-	other, ok := next.(*approxPercentileDecimalExec[T])
+	other, ok := next.(*approxPercentileDecimalExec[T, R])
 	if !ok {
 		return mpool.ErrAllocationAccountInvalid
 	}
@@ -1596,15 +1653,15 @@ func (exec *approxPercentileDecimalExec[T]) PreflightBatchMerge(
 		&other.approxPercentileExecBase, offset, groups)
 }
 
-func (exec *approxPercentileDecimalExec[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
-	return exec.merge(&next.(*approxPercentileDecimalExec[T]).approxPercentileExecBase, groupIdx1, groupIdx2)
+func (exec *approxPercentileDecimalExec[T, R]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	return exec.merge(&next.(*approxPercentileDecimalExec[T, R]).approxPercentileExecBase, groupIdx1, groupIdx2)
 }
 
-func (exec *approxPercentileDecimalExec[T]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
-	return exec.batchMerge(&next.(*approxPercentileDecimalExec[T]).approxPercentileExecBase, offset, groups)
+func (exec *approxPercentileDecimalExec[T, R]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	return exec.batchMerge(&next.(*approxPercentileDecimalExec[T, R]).approxPercentileExecBase, offset, groups)
 }
 
-func (exec *approxPercentileDecimalExec[T]) Flush() (_ []*vector.Vector, retErr error) {
+func (exec *approxPercentileDecimalExec[T, R]) Flush() (_ []*vector.Vector, retErr error) {
 	if exec.percentile == nil {
 		return nil, moerr.NewInternalErrorNoCtx("approx_percentile: percentile configuration is not set")
 	}
@@ -1631,7 +1688,7 @@ func (exec *approxPercentileDecimalExec[T]) Flush() (_ []*vector.Vector, retErr 
 			return nil, err
 		}
 		result.SetLength(int(state.length))
-		values := vector.MustFixedColNoTypeCheck[types.Decimal128](result)
+		values := vector.MustFixedColNoTypeCheck[R](result)
 		for y := 0; y < int(state.length); y++ {
 			if state.mobs[y] == nil || state.mobs[y].(*quantileSketch[T]).count == 0 {
 				result.SetNull(uint64(y))
@@ -1644,8 +1701,8 @@ func (exec *approxPercentileDecimalExec[T]) Flush() (_ []*vector.Vector, retErr 
 			if err != nil {
 				return nil, err
 			}
-			values[y], err = exec.arithmetic.interpolateDecimal(
-				toDecimal128(lo), toDecimal128(hi), fraction,
+			values[y], err = exec.interpolate(
+				&exec.arithmetic, lo, hi, fraction,
 				exec.retType.Scale-exec.argTypes[0].Scale,
 			)
 			if err != nil {
@@ -1654,17 +1711,6 @@ func (exec *approxPercentileDecimalExec[T]) Flush() (_ []*vector.Vector, retErr 
 		}
 	}
 	return results, nil
-}
-
-func toDecimal128[T types.Decimal64 | types.Decimal128](value T) types.Decimal128 {
-	switch value := any(value).(type) {
-	case types.Decimal64:
-		return FromD64ToD128(value)
-	case types.Decimal128:
-		return value
-	default:
-		panic("unreachable")
-	}
 }
 
 func interpolateDecimal(lo, hi types.Decimal128, frac *big.Rat, scaleDelta int32) (types.Decimal128, error) {
@@ -1706,10 +1752,24 @@ func newApproxPercentileExec(mp *mpool.MPool, info singleAggInfo) (AggFuncExec, 
 		return &approxPercentileNumericExec[float64]{newApproxPercentileExecBase[float64](mp, info, orderedCompare[float64])}, nil
 	case types.T_decimal64:
 		compare := func(a, b types.Decimal64) int { return a.Compare(b) }
-		return &approxPercentileDecimalExec[types.Decimal64]{newApproxPercentileExecBase[types.Decimal64](mp, info, compare)}, nil
+		return &approxPercentileDecimalExec[types.Decimal64, types.Decimal128]{
+			newApproxPercentileExecBase[types.Decimal64](mp, info, compare),
+			func(s *percentileArithmeticScratch, lo, hi types.Decimal64, f percentileFraction, scale int32) (types.Decimal128, error) {
+				return s.interpolateDecimal(FromD64ToD128(lo), FromD64ToD128(hi), f, scale)
+			},
+		}, nil
 	case types.T_decimal128:
 		compare := func(a, b types.Decimal128) int { return a.Compare(b) }
-		return &approxPercentileDecimalExec[types.Decimal128]{newApproxPercentileExecBase[types.Decimal128](mp, info, compare)}, nil
+		return &approxPercentileDecimalExec[types.Decimal128, types.Decimal128]{
+			newApproxPercentileExecBase[types.Decimal128](mp, info, compare),
+			(*percentileArithmeticScratch).interpolateDecimal,
+		}, nil
+	case types.T_decimal256:
+		compare := func(a, b types.Decimal256) int { return a.Compare(b) }
+		return &approxPercentileDecimalExec[types.Decimal256, types.Decimal256]{
+			newApproxPercentileExecBase[types.Decimal256](mp, info, compare),
+			(*percentileArithmeticScratch).interpolateDecimal256,
+		}, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unsupported type for approx_percentile()")
 	}

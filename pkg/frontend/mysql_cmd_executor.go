@@ -316,6 +316,13 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.QueryType = getStatementType(statement).GetQueryType()
 	stm.ConnType = transferSessionConnType2StatisticConnType(ses.connType)
 	stm.SetResourceRoot(root)
+	// Direct MySQL connections leave connType unset. Client ownership comes
+	// from the routine, independently of the proxy's connection-class flag.
+	if sqlType != constant.InternalSql && !ses.IsDerivedStmt() && ses.GetFromRealUser() && !ses.GetIsInternal() {
+		if rm := ses.getRoutineManager(); rm != nil {
+			stm.SetLockReadLimiter(rm.lockReadLimiter)
+		}
+	}
 	if proc != nil {
 		stm.SetResourceMemoryPoolEpoch(proc.Mp(), resourceMPeakEpoch)
 	}
@@ -8126,6 +8133,13 @@ func (h *jsonPlanHandler) SetResourceSummary(summary resource.StatementResourceS
 		return
 	}
 	h.marshalHandler.SetResourceSummary(summary)
+	if summary.LockRead != nil && h.marshalHandler.marshalPlan != nil {
+		if h.buffer != nil {
+			releaseMarshalPlanBufferPool(h.buffer)
+			h.buffer = nil
+		}
+		h.jsonBytes = nil
+	}
 }
 
 func (h *jsonPlanHandler) Stats(ctx context.Context) (statistic.StatsArray, motrace.Statistic) {

@@ -236,7 +236,7 @@ func TestEvalRowsetDataUsesBoundedRowWindows(t *testing.T) {
 		defer probes[row].Free()
 	}
 
-	require.NoError(t, evalRowsetData(proc, rowset, target, execs, input, proc.Mp()))
+	require.NoError(t, evalRowsetData(proc, rowset, target, execs, input, proc.Mp(), nil))
 	for row, probe := range probes {
 		require.Equal(t, []int{1}, probe.seenRows,
 			"row %d must not evaluate its expression against the full VALUES batch", row)
@@ -440,7 +440,7 @@ func TestEvalRowsetDataDoesNotEvaluateLocalDefaultOnOtherRows(t *testing.T) {
 	}}
 	beforeEval := proc.Mp().CurrNB()
 	require.NoError(t, evalRowsetData(proc, rowsetExpr, result,
-		[]colexec.ExpressionExecutor{expr}, input, proc.Mp()))
+		[]colexec.ExpressionExecutor{expr}, input, proc.Mp(), nil))
 	require.Equal(t, []float64{0, 5}, vector.MustFixedColNoTypeCheck[float64](result))
 
 	// The expression owns its reusable result vector. It must release that

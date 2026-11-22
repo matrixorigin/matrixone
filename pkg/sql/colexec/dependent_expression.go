@@ -217,16 +217,18 @@ type dependentExprCell struct {
 }
 
 type DependentExpressionFrame struct {
-	program    *DependentExpressionProgram
-	proc       *process.Process
-	factory    DependentProgramFactory
-	allocation *mpool.MPool
-	budget     *process.ExecutionResourceGeneration
-	inputs     []DependentInput
-	cells      []dependentExprCell
-	charged    uint64
-	failure    error
-	closed     bool
+	// ValuesWarningRow scopes synchronous assignment evaluation for this tuple.
+	ValuesWarningRow uint64
+	program          *DependentExpressionProgram
+	proc             *process.Process
+	factory          DependentProgramFactory
+	allocation       *mpool.MPool
+	budget           *process.ExecutionResourceGeneration
+	inputs           []DependentInput
+	cells            []dependentExprCell
+	charged          uint64
+	failure          error
+	closed           bool
 }
 
 // pool is the pool the frame's owned cell values are created with and
@@ -436,6 +438,11 @@ func (t *dependentExpressionTask) Step(ctx context.Context) (vm.ContinuationStep
 		}
 		cell.executor = executor
 		transferred = true
+		if f.ValuesWarningRow != 0 {
+			previous := f.proc.WarningRowOffset
+			f.proc.WarningRowOffset = f.ValuesWarningRow - 1
+			defer func() { f.proc.WarningRowOffset = previous }()
+		}
 		cell.value, err = executor.Eval(f.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 		if err != nil {
 			return vm.ContinuationStep{}, err

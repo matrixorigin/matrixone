@@ -44,18 +44,19 @@ type SourceFactory func(*process.Process, *mpool.MPool, *mpool.AllocationAccount
 type SourceCompiler func(*plan.Node) (SourceFactory, error)
 
 type nodeTemplate struct {
-	countFoundRows bool
-	readerIDs      []int
-	node           *plan.Node
-	expressions    *colexec.DependentExpressionProgram
-	source         SourceFactory
-	output         []types.Type
-	children       []int32
-	kernel         KernelFactory
-	inputExtra     int
-	bounds         *colexec.DependentExpressionProgram
-	limitIndex     int
-	offsetIndex    int
+	countFoundRows   bool
+	valuesWarningRow uint64
+	readerIDs        []int
+	node             *plan.Node
+	expressions      *colexec.DependentExpressionProgram
+	source           SourceFactory
+	output           []types.Type
+	children         []int32
+	kernel           KernelFactory
+	inputExtra       int
+	bounds           *colexec.DependentExpressionProgram
+	limitIndex       int
+	offsetIndex      int
 }
 type regionTemplate struct {
 	owner         uint32
@@ -161,7 +162,7 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 						Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(j)}}})
 				}
 			}
-			nt := &nodeTemplate{node: n, children: append([]int32(nil), n.Children...)}
+			nt := &nodeTemplate{node: n, valuesWarningRow: n.ValuesWarningRow(), children: append([]int32(nil), n.Children...)}
 			nt.limitIndex, nt.offsetIndex = -1, -1
 			var bounds []*plan.Expr
 			if n.Limit != nil && n.NodeType != plan.Node_PARTITION {
@@ -798,6 +799,7 @@ func (t *pullTask) Step(ctx context.Context) (vm.ContinuationStep, error) {
 			if err != nil {
 				return vm.ContinuationStep{}, err
 			}
+			c.frame.ValuesWarningRow = c.template.valuesWarningRow
 			c.expr = 0
 			c.countedRow = false
 		}

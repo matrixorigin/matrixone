@@ -637,6 +637,7 @@ func (c *Compile) clear() {
 	c.temporaryDropRetryStage = nil
 	c.temporaryDropRetryActive = false
 	c.resourceAttemptOwnerEligible = false
+	c.lockingReadPlan = false
 	c.allocationAccountRegistry = nil
 	c.allocationAccountLimit = 0
 	c.allocationControllerProvider = nil
@@ -6093,6 +6094,16 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 	}
 
 	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+	if node.ValuesWarningRow() != 0 {
+		// The session warning sink lives on the coordinator. Only the final
+		// singleton assignment projection needs it; its child keeps its placement.
+		if !c.scopesRunOnCoordinator(ss) {
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
+		c.setProjection(node, ss[0])
+		c.anal.isFirst = false
+		return ss
+	}
 	if _, groupingSetExpand := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
 		for i := range ss {
 			c.setProjection(node, ss[i])
@@ -10096,16 +10107,21 @@ func (c *Compile) validateNonBlockingLockTargets(targets []*plan.LockTarget) err
 	return nil
 }
 
-func (c *Compile) validateNonBlockingLockPlan(logicalPlan *plan.Plan) error {
-	if logicalPlan == nil || logicalPlan.GetQuery() == nil {
+func (c *Compile) validateLockPlan(logicalPlan *plan.Plan) error {
+	c.lockingReadPlan = false
+	query := logicalPlan.GetQuery()
+	if query == nil {
 		return nil
 	}
-	for _, node := range logicalPlan.GetQuery().GetNodes() {
+	for _, node := range query.GetNodes() {
 		if node == nil {
 			continue
 		}
 		if err := c.validateNonBlockingLockTargets(node.GetLockTargets()); err != nil {
 			return err
+		}
+		if node.NodeType == plan.Node_LOCK_OP && query.StmtType == plan.Query_SELECT {
+			c.lockingReadPlan = true
 		}
 	}
 	return nil

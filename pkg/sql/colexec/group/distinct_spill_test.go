@@ -1510,12 +1510,12 @@ func TestGroupedDistinctSpillPreservesMixedAggregateState(t *testing.T) {
 		}
 		output := result.Batch
 		keys := vector.MustFixedColNoTypeCheck[int32](output.Vecs[0])
-		sums := vector.MustFixedColNoTypeCheck[int64](output.Vecs[1])
+		sums := vector.MustFixedColWithTypeCheck[types.Decimal128](output.Vecs[1])
 		rows := vector.MustFixedColNoTypeCheck[int64](output.Vecs[2])
 		distinct := vector.MustFixedColNoTypeCheck[int64](output.Vecs[3])
 		for row, key := range keys {
 			got[key] = aggregateResult{
-				sum: sums[row], rows: rows[row], distinct: distinct[row],
+				sum: int64(sums[row].B0_63), rows: rows[row], distinct: distinct[row],
 			}
 		}
 	}
