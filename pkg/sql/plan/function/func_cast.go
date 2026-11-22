@@ -1595,7 +1595,8 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 		return decimal256ToDecimal256(s, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		s := vector.GenerateFunctionStrParameter(from)
-		return strToDecimal256(proc, s, rs, length, selectList, mode)
+		return strToDecimal(proc, s, rs, length, selectList, mode,
+			parseDecimal256CastStringWithOverflow, parseMySQLDecimal256Prefix, types.ParseDecimal256FromByte)
 	default:
 		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from %s to %s", from.GetType(), toType))
 	}
@@ -3160,10 +3161,12 @@ func strTypeToOthers(proc *process.Process,
 		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 64, length, selectList, mode)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return strToDecimal64(proc, source, rs, length, selectList, mode)
+		return strToDecimal(proc, source, rs, length, selectList, mode,
+			parseDecimal64CastStringWithOverflow, parseMySQLDecimal64Prefix, types.ParseDecimal64FromByte)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return strToDecimal128(proc, source, rs, length, selectList, mode)
+		return strToDecimal(proc, source, rs, length, selectList, mode,
+			parseDecimal128CastStringWithOverflow, parseMySQLDecimal128Prefix, types.ParseDecimal128FromByte)
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return strToBool(source, rs, length, selectList)
@@ -9068,123 +9071,106 @@ func strToFloatWithProc[T constraints.Float](
 	return nil
 }
 
-func strToDecimal64(
+// strToDecimal owns text and byte conversion policy for every DECIMAL width.
+func strToDecimal[D types.FixedSizeTExceptStrType](
 	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList,
+	to *vector.FunctionResult[D], length int, selectList *FunctionSelectList,
 	mode castMode,
+	parse func(string, int32, int32, bool) (D, bool, error),
+	parsePrefix func(string, int32, int32) (D, error),
+	parseBytes func(string, int32, int32) (D, error),
 ) error {
-	var i uint64
-	var l = uint64(length)
-	var dft types.Decimal64
-	totype := to.GetType()
+	var zero D
+	target := to.GetType()
 	source := from.GetSourceVector()
-	radixCoefficient := mode.isAssignment() && IsBinaryCharacterType(*source.GetType())
-	isb := to.ArgumentIsBin(0) || radixCoefficient
-	binaryAssignment := isb && mode.isAssignment()
-	if !binaryAssignment && totype.Charset == 255 && (!isb || source.IsConst()) {
+	assignment := mode.isAssignment()
+	radixCoefficient := assignment && IsBinaryCharacterType(*source.GetType())
+	binary := to.ArgumentIsBin(0) || radixCoefficient
+	if !(binary && assignment) && target.Charset == 255 && (!binary || source.IsConst()) {
 		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{source}, to, proc, length,
-			func(s string) (types.Decimal64, error) {
-				return parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
-			}, selectList)
+			func(s string) (D, error) { return parsePrefix(s, target.Width, target.Scale) }, selectList)
 	}
-	for i = 0; i < l; i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := to.Append(dft, true); err != nil {
+
+	explicit := mode == castModeExplicit
+	adjustAssignment := mode == castModeAssignment || mode == castModeAssignmentIgnore
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := to.Append(zero, true); err != nil {
 				return err
 			}
 			continue
 		}
-		v, null := from.GetStrValue(i)
+		raw, null := from.GetStrValue(row)
 		if null {
-			if err := to.Append(dft, true); err != nil {
+			if err := to.Append(zero, true); err != nil {
 				return err
 			}
-		} else {
-			s := convertByteSliceToString(v)
-			if binaryAssignment {
-				decoded, err := renderDecimalBinarySource(v, totype, radixCoefficient)
+			continue
+		}
+
+		text := convertByteSliceToString(raw)
+		if binary {
+			if !assignment {
+				value, err := parseBytes(text, target.Width, target.Scale)
 				if err != nil {
 					return err
 				}
-				s = decoded.text
+				if err := to.Append(value, false); err != nil {
+					return err
+				}
+				continue
 			}
-			if !isb || binaryAssignment {
-				isExplicit := mode == castModeExplicit
-				var result types.Decimal64
-				var err error
-				var overflow bool
-				if isExplicit || mode == castModeAssignment || mode == castModeAssignmentIgnore {
-					result, overflow, err = parseDecimal64CastStringWithOverflow(s, totype.Width, totype.Scale, true)
-					if err == nil && overflow {
-						appendDecimalCastRangeWarning(proc, i)
-					}
-				} else {
-					result, err = parseDecimal64CastString(s, totype.Width, totype.Scale)
-				}
-				if err != nil {
-					if mode == castModeExplicit && !isAssignmentSpecialNumericSyntax(s) && isDecimalLexicalConversionError(err) && !explicitCastMustErrorOnStrictDML(proc) {
-						// MySQL explicit CAST keeps the numeric prefix, or zero
-						// when none exists, reporting a truncated-value warning
-						// instead of an error (issue #30417). Special numeric
-						// syntax (nan/inf/radix) keeps its own established
-						// contract, hard-fail included.
-						if prefix, ok := assignmentDecimalPrefix(s); ok {
-							if prefixed, prefixOverflow, prefixErr := parseDecimal64CastStringWithOverflow(prefix, totype.Width, totype.Scale, true); prefixErr == nil {
-								appendExplicitDecimalCastWarning(proc, s)
-								if prefixOverflow {
-									appendDecimalCastRangeWarning(proc, i)
-								}
-								if err = to.Append(prefixed, false); err != nil {
-									return err
-								}
-								continue
-							}
-						}
-						appendExplicitDecimalCastWarning(proc, s)
-						if err = to.Append(dft, false); err != nil {
-							return err
-						}
-						continue
-					}
-					if (mode == castModeAssignment || mode == castModeAssignmentIgnore) && !isAssignmentSpecialNumericSyntax(s) {
-						if prefix, ok := assignmentDecimalPrefix(s); ok {
-							if prefixed, clipped, prefixErr := parseDecimal64CastStringWithOverflow(prefix, totype.Width, totype.Scale, true); prefixErr == nil {
-								if clipped {
-									appendDecimalCastRangeWarning(proc, i)
-								} else {
-									appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
-								}
-								if err = to.Append(prefixed, false); err != nil {
-									return err
-								}
-								continue
-							}
-						} else if isDecimalLexicalConversionError(err) {
-							appendInvalidAssignmentConversionWarning(proc, "DECIMAL", s)
-							if err = to.Append(dft, false); err != nil {
-								return err
-							}
-							continue
+			decoded, err := renderDecimalBinarySource(raw, target, radixCoefficient)
+			if err != nil {
+				return err
+			}
+			text = decoded.text
+		}
+
+		value, overflow, err := parse(text, target.Width, target.Scale, explicit || adjustAssignment)
+		if err == nil {
+			if overflow {
+				appendDecimalCastRangeWarning(proc, row)
+			} else if assignment && !binary && DecimalAssignmentLosesScale(text, target.Scale) {
+				appendDecimalAssignmentScaleWarning(proc, row)
+			}
+		} else if !isAssignmentSpecialNumericSyntax(text) {
+			if explicit && isDecimalLexicalConversionError(err) && !explicitCastMustErrorOnStrictDML(proc) {
+				// MySQL explicit CAST retains a numeric prefix, or zero when
+				// none is usable, and reports the original invalid text.
+				value = zero
+				appendExplicitDecimalCastWarning(proc, text)
+				if prefix, ok := assignmentDecimalPrefix(text); ok {
+					if prefixed, clipped, prefixErr := parse(prefix, target.Width, target.Scale, true); prefixErr == nil {
+						value = prefixed
+						if clipped {
+							appendDecimalCastRangeWarning(proc, row)
 						}
 					}
-					return err
 				}
-				if !isb && mode.isAssignment() && !overflow && DecimalAssignmentLosesScale(s, totype.Scale) {
-					appendDecimalAssignmentScaleWarning(proc, i)
-				}
-				if err = to.Append(result, false); err != nil {
-					return err
-				}
-			} else {
-				result, err := types.ParseDecimal64FromByte(s, totype.Width, totype.Scale)
-				if err != nil {
-					return err
-				}
-				if err = to.Append(result, false); err != nil {
-					return err
+				err = nil
+			} else if adjustAssignment {
+				if prefix, ok := assignmentDecimalPrefix(text); ok {
+					if prefixed, clipped, prefixErr := parse(prefix, target.Width, target.Scale, true); prefixErr == nil {
+						value, err = prefixed, nil
+						if clipped {
+							appendDecimalCastRangeWarning(proc, row)
+						} else {
+							appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", text)
+						}
+					}
+				} else if isDecimalLexicalConversionError(err) {
+					value, err = zero, nil
+					appendInvalidAssignmentConversionWarning(proc, "DECIMAL", text)
 				}
 			}
+		}
+		if err != nil {
+			return err
+		}
+		if err := to.Append(value, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -9450,128 +9436,6 @@ func parseDecimal256CastStringWithOverflow(s string, width, scale int32, explici
 	return result, false, err
 }
 
-func strToDecimal128(
-	proc *process.Process,
-	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList,
-	mode castMode,
-) error {
-	var i uint64
-	var l = uint64(length)
-	var dft types.Decimal128
-	totype := to.GetType()
-	source := from.GetSourceVector()
-	radixCoefficient := mode.isAssignment() && IsBinaryCharacterType(*source.GetType())
-	isb := to.ArgumentIsBin(0) || radixCoefficient
-	binaryAssignment := isb && mode.isAssignment()
-	if !binaryAssignment && totype.Charset == 255 && (!isb || source.IsConst()) {
-		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{source}, to, proc, length,
-			func(s string) (types.Decimal128, error) {
-				return parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
-			}, selectList)
-	}
-	for i = 0; i < l; i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := to.Append(dft, true); err != nil {
-				return err
-			}
-			continue
-		}
-		v, null := from.GetStrValue(i)
-		if null {
-			if err := to.Append(dft, true); err != nil {
-				return err
-			}
-		} else {
-			s := convertByteSliceToString(v)
-			if binaryAssignment {
-				decoded, err := renderDecimalBinarySource(v, totype, radixCoefficient)
-				if err != nil {
-					return err
-				}
-				s = decoded.text
-			}
-			if !isb || binaryAssignment {
-				isExplicit := mode == castModeExplicit
-				var result types.Decimal128
-				var err error
-				var overflow bool
-				if isExplicit || mode == castModeAssignment || mode == castModeAssignmentIgnore {
-					result, overflow, err = parseDecimal128CastStringWithOverflow(s, totype.Width, totype.Scale, true)
-					if err == nil && overflow {
-						appendDecimalCastRangeWarning(proc, i)
-					}
-				} else {
-					result, err = parseDecimal128CastString(s, totype.Width, totype.Scale)
-				}
-				if err != nil {
-					if mode == castModeExplicit && !isAssignmentSpecialNumericSyntax(s) && isDecimalLexicalConversionError(err) && !explicitCastMustErrorOnStrictDML(proc) {
-						// MySQL explicit CAST keeps the numeric prefix, or zero
-						// when none exists, reporting a truncated-value warning
-						// instead of an error (issue #30417). Special numeric
-						// syntax (nan/inf/radix) keeps its own established
-						// contract, hard-fail included.
-						if prefix, ok := assignmentDecimalPrefix(s); ok {
-							if prefixed, prefixOverflow, prefixErr := parseDecimal128CastStringWithOverflow(prefix, totype.Width, totype.Scale, true); prefixErr == nil {
-								appendExplicitDecimalCastWarning(proc, s)
-								if prefixOverflow {
-									appendDecimalCastRangeWarning(proc, i)
-								}
-								if err = to.Append(prefixed, false); err != nil {
-									return err
-								}
-								continue
-							}
-						}
-						appendExplicitDecimalCastWarning(proc, s)
-						if err = to.Append(dft, false); err != nil {
-							return err
-						}
-						continue
-					}
-					if (mode == castModeAssignment || mode == castModeAssignmentIgnore) && !isAssignmentSpecialNumericSyntax(s) {
-						if prefix, ok := assignmentDecimalPrefix(s); ok {
-							if prefixed, clipped, prefixErr := parseDecimal128CastStringWithOverflow(prefix, totype.Width, totype.Scale, true); prefixErr == nil {
-								if clipped {
-									appendDecimalCastRangeWarning(proc, i)
-								} else {
-									appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
-								}
-								if err = to.Append(prefixed, false); err != nil {
-									return err
-								}
-								continue
-							}
-						} else if isDecimalLexicalConversionError(err) {
-							appendInvalidAssignmentConversionWarning(proc, "DECIMAL", s)
-							if err = to.Append(dft, false); err != nil {
-								return err
-							}
-							continue
-						}
-					}
-					return err
-				}
-				if !isb && mode.isAssignment() && !overflow && DecimalAssignmentLosesScale(s, totype.Scale) {
-					appendDecimalAssignmentScaleWarning(proc, i)
-				}
-				if err = to.Append(result, false); err != nil {
-					return err
-				}
-			} else {
-				result, err := types.ParseDecimal128FromByte(s, totype.Width, totype.Scale)
-				if err != nil {
-					return err
-				}
-				if err = to.Append(result, false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
 func clampDecimal128Value(negative bool, width, scale int32) (types.Decimal128, error) {
 	if width <= 0 || width > 38 || scale < 0 || scale > width {
 		return types.Decimal128{}, moerr.NewInvalidInputNoCtxf("invalid Decimal128(%d,%d)", width, scale)
@@ -9585,128 +9449,6 @@ func clampDecimal128Value(negative bool, width, scale int32) (types.Decimal128, 
 		result = result.Minus()
 	}
 	return result, nil
-}
-
-func strToDecimal256(
-	proc *process.Process,
-	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList,
-	mode castMode,
-) error {
-	var i uint64
-	var l = uint64(length)
-	var dft types.Decimal256
-	totype := to.GetType()
-	source := from.GetSourceVector()
-	radixCoefficient := mode.isAssignment() && IsBinaryCharacterType(*source.GetType())
-	isb := to.ArgumentIsBin(0) || radixCoefficient
-	binaryAssignment := isb && mode.isAssignment()
-	if !binaryAssignment && totype.Charset == 255 && (!isb || source.IsConst()) {
-		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{source}, to, proc, length,
-			func(s string) (types.Decimal256, error) {
-				return parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
-			}, selectList)
-	}
-	for i = 0; i < l; i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := to.Append(dft, true); err != nil {
-				return err
-			}
-			continue
-		}
-		v, null := from.GetStrValue(i)
-		if null {
-			if err := to.Append(dft, true); err != nil {
-				return err
-			}
-		} else {
-			s := convertByteSliceToString(v)
-			if binaryAssignment {
-				decoded, err := renderDecimalBinarySource(v, totype, radixCoefficient)
-				if err != nil {
-					return err
-				}
-				s = decoded.text
-			}
-			if !isb || binaryAssignment {
-				isExplicit := mode == castModeExplicit
-				var result types.Decimal256
-				var err error
-				var overflow bool
-				if isExplicit || mode == castModeAssignment || mode == castModeAssignmentIgnore {
-					result, overflow, err = parseDecimal256CastStringWithOverflow(s, totype.Width, totype.Scale, true)
-					if err == nil && overflow {
-						appendDecimalCastRangeWarning(proc, i)
-					}
-				} else {
-					result, err = parseDecimal256CastString(s, totype.Width, totype.Scale)
-				}
-				if err != nil {
-					if mode == castModeExplicit && !isAssignmentSpecialNumericSyntax(s) && isDecimalLexicalConversionError(err) && !explicitCastMustErrorOnStrictDML(proc) {
-						// MySQL explicit CAST keeps the numeric prefix, or zero
-						// when none exists, reporting a truncated-value warning
-						// instead of an error (issue #30417). Special numeric
-						// syntax (nan/inf/radix) keeps its own established
-						// contract, hard-fail included.
-						if prefix, ok := assignmentDecimalPrefix(s); ok {
-							if prefixed, prefixOverflow, prefixErr := parseDecimal256CastStringWithOverflow(prefix, totype.Width, totype.Scale, true); prefixErr == nil {
-								appendExplicitDecimalCastWarning(proc, s)
-								if prefixOverflow {
-									appendDecimalCastRangeWarning(proc, i)
-								}
-								if err = to.Append(prefixed, false); err != nil {
-									return err
-								}
-								continue
-							}
-						}
-						appendExplicitDecimalCastWarning(proc, s)
-						if err = to.Append(dft, false); err != nil {
-							return err
-						}
-						continue
-					}
-					if (mode == castModeAssignment || mode == castModeAssignmentIgnore) && !isAssignmentSpecialNumericSyntax(s) {
-						if prefix, ok := assignmentDecimalPrefix(s); ok {
-							if prefixed, clipped, prefixErr := parseDecimal256CastStringWithOverflow(prefix, totype.Width, totype.Scale, true); prefixErr == nil {
-								if clipped {
-									appendDecimalCastRangeWarning(proc, i)
-								} else {
-									appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
-								}
-								if err = to.Append(prefixed, false); err != nil {
-									return err
-								}
-								continue
-							}
-						} else if isDecimalLexicalConversionError(err) {
-							appendInvalidAssignmentConversionWarning(proc, "DECIMAL", s)
-							if err = to.Append(dft, false); err != nil {
-								return err
-							}
-							continue
-						}
-					}
-					return err
-				}
-				if !isb && mode.isAssignment() && !overflow && DecimalAssignmentLosesScale(s, totype.Scale) {
-					appendDecimalAssignmentScaleWarning(proc, i)
-				}
-				if err = to.Append(result, false); err != nil {
-					return err
-				}
-			} else {
-				result, err := types.ParseDecimal256FromByte(s, totype.Width, totype.Scale)
-				if err != nil {
-					return err
-				}
-				if err = to.Append(result, false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
 }
 
 func clampDecimal256Value(negative bool, width, scale int32) (types.Decimal256, error) {

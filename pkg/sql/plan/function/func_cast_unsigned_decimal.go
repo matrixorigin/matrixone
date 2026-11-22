@@ -381,8 +381,8 @@ func unsignedDecimalAdmissionJSON(
 	return nil
 }
 
-// decimalBinaryOutcome decodes one IsBin source row and renders it as
-// canonical fixed-point text for the outer cast's text grammar.
+// decimalBinaryOutcome carries the decoded sign and decimal text that the
+// assignment parser will consume.
 type decimalBinaryOutcome struct {
 	text     string
 	negative bool
@@ -390,8 +390,8 @@ type decimalBinaryOutcome struct {
 
 // renderDecimalBinarySource preserves the destination-scale interpretation of
 // the legacy binary coefficient. The assignment parser then applies its own
-// precision and warning policy. Text also lets unsigned admission preserve that
-// interpretation when the vector executor clears IsBin on the result.
+// precision and warning policy. An unsigned admission result carries text,
+// so the outer cast parses the coefficient without decoding its bytes again.
 func renderDecimalBinarySource(v []byte, targetType types.Type, radixCoefficient bool) (outcome decimalBinaryOutcome, err error) {
 	if radixCoefficient && len(v) != 0 {
 		for len(v) > 0 && v[0] == 0 {
@@ -432,12 +432,9 @@ func renderDecimalBinarySource(v []byte, targetType types.Type, radixCoefficient
 	}
 }
 
-// unsignedDecimalAdmissionBinary evaluates admission over IsBin varlena
-// sources: byte payloads decoded as MySQL binary decimals (the outer cast's
-// ParseDecimal*FromByte branch). The byte-level magnitude cannot be reused
-// for classification because the flag does not reach the outer cast after
-// the executor reset; classifying the decoded decimal and re-rendering it as
-// text keeps admission and conversion on one numeric fact.
+// unsignedDecimalAdmissionBinary checks the sign of the decoded coefficient.
+// Opaque binary inputs can decode to a negative value. The text result
+// preserves that interpretation through the outer cast.
 func unsignedDecimalAdmissionBinary(
 	proc *process.Process,
 	from *vector.Vector,
@@ -509,7 +506,7 @@ const (
 
 // classifyUnsignedDecimalStringSource derives the value the assignment cast
 // will store from a text varlena source, before target-scale quantization,
-// following the strToDecimal64/128/256 sub-paths exactly:
+// following the strToDecimal paths:
 //   - token accepted and complete consumption validated: the effective sign is
 //     the cast's own combine rule over the radix expansion (stored negative
 //     iff the scanned sign differs from the token sign), nonzero iff the
@@ -599,10 +596,9 @@ func unsignedDecimalAdmissionVarlena(
 	entry unsignedDecimalAdmissionEntry,
 	column string,
 ) error {
-	// Mirror the cast branch predicate: the private numeric marker charset
-	// selects the prefix grammar (matching strToDecimal64 & friends) even for
-	// a const IsBin source, and every other IsBin source converts through the
-	// binary decimal decoder.
+	// The private numeric marker uses the text-prefix grammar, including for
+	// constant opaque binary arguments. Binary CHAR/VARCHAR carries a
+	// coefficient even when projection removes the literal argument flag.
 	isBin := result.ArgumentIsBin(0)
 	mysqlPrefix := targetType.Charset == 255 && (!isBin || from.IsConst())
 	if IsBinaryCharacterType(*from.GetType()) || (isBin && !mysqlPrefix) {
