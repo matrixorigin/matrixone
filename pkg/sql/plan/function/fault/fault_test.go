@@ -262,7 +262,7 @@ func Test_FaultInjectCopiesArguments(t *testing.T) {
 	mp := proc.Mp()
 
 	call := func(service, command, parameter string) []byte {
-		var args []*vector.Vector
+		args := make([]*vector.Vector, 0, 3)
 		for _, s := range []string{service, command, parameter} {
 			v, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(s), 1, mp)
 			require.NoError(t, err)

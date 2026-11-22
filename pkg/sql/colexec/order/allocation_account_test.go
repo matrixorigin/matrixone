@@ -101,13 +101,6 @@ func (c *orderTestCapacityController) arm() {
 	c.rejectNext = true
 }
 
-func (c *orderTestCapacityController) freeze() uint64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.limit = c.used
-	return c.used
-}
-
 func (c *orderTestCapacityController) current() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
