@@ -114,6 +114,9 @@ message Literal {
   // could round or reject the value differently, so persisted owners carrying
   // this bit require the Decimal256 literal protocol fence.
   bool decimal_literal_requires_v82 = 30;
+  // Source category of a folded native floating expression for BIT_COUNT:
+  // 0 = ordinary real literal, 1 = arithmetic, 2 = transparent cast.
+  uint32 float_conversion_source = 31;
 }
 
 // Bounded param for prepared statement.  User fill on execution.

@@ -1903,18 +1903,7 @@ func normalizeNativeRangeDirection(expr *plan.Expr, proc *process.Process) (*pla
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
 	return constantFoldWithPreparedExactSource(
-		bat, expr, proc, varAndParamIsConst, foldInExpr, containsDynamicParam(expr), false, false, function.IsFoldCandidate)
-}
-
-// Only bounded, privately owned proof trees reach this entry point.
-func constantFoldForSingletonProof(expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
-	// A parameter-free subexpression can still depend on SQL mode or time
-	// zone. The prepared plan outlives the session settings used to bind it.
-	if rule.ContainsSqlModeDependentTemporalCall(expr) {
-		return expr, nil
-	}
-	return constantFoldWithPreparedExactSource(batch.EmptyForConstFoldBatch, expr, proc,
-		false, false, containsDynamicParam(expr), false, false, function.IsProofFoldCandidate)
+		bat, expr, proc, varAndParamIsConst, foldInExpr, containsDynamicParam(expr), false, false)
 }
 
 func constantFoldWithPreparedExactSource(
@@ -1926,7 +1915,6 @@ func constantFoldWithPreparedExactSource(
 	preservePreparedExactSource bool,
 	spatialChecked bool,
 	jsonFeatureChecked bool,
-	isFoldCandidate func(*plan.Expr, bool) bool,
 ) (*plan.Expr, error) {
 	if function.RequiresRuntimeEvaluation(expr) {
 		return expr, nil
@@ -1945,7 +1933,7 @@ func constantFoldWithPreparedExactSource(
 		cannotFold := false
 		for i := range exprList {
 			foldExpr, err := constantFoldWithPreparedExactSource(
-				bat, exprList[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked, jsonFeatureChecked, isFoldCandidate)
+				bat, exprList[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked, jsonFeatureChecked)
 			if err != nil {
 				return nil, err
 			}
@@ -2060,7 +2048,7 @@ func constantFoldWithPreparedExactSource(
 	isVec := false
 	for i := range fn.Args {
 		foldExpr, errFold := constantFoldWithPreparedExactSource(
-			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked, jsonFeatureChecked, isFoldCandidate)
+			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked, jsonFeatureChecked)
 		if errFold != nil {
 			if functionID == function.CASE || functionID == function.IFF || functionID == function.COALESCE {
 				// Selection owns branch errors. Retain the failing subtree for
@@ -2079,7 +2067,7 @@ func constantFoldWithPreparedExactSource(
 	if f.IsAgg() || f.IsWin() {
 		return expr, nil
 	}
-	if !isFoldCandidate(expr, varAndParamIsConst) {
+	if !function.IsFoldCandidate(expr, varAndParamIsConst) {
 		return expr, nil
 	}
 	if isVec && !rule.CanMaterializeConstantVector(expr) {

@@ -188,14 +188,12 @@ func (builder *QueryBuilder) removeSimpleProjectionsUnder(nodeID int32, parentTy
 		}
 	}
 
-	if len(projMap) != 0 {
-		replaceColumnsForNode(node, projMap, builder)
-		if node.NodeType == plan.Node_APPLY && len(node.Children) == 2 {
-			// Correlated function arguments consume the left sibling's output,
-			// rather than the function node's own children.
-			right := builder.qry.Nodes[node.Children[1]]
-			replaceColumnsForExprList(right.TblFuncExprList, projMap, builder)
-		}
+	replaceColumnsForNode(node, projMap)
+	if node.NodeType == plan.Node_APPLY && len(node.Children) == 2 {
+		// Correlated function arguments consume the left sibling's output,
+		// rather than the function node's own children.
+		right := builder.qry.Nodes[node.Children[1]]
+		replaceColumnsForExprList(right.TblFuncExprList, projMap)
 	}
 
 	if builder.canRemoveProject(parentType, node, matchAbove) {
@@ -398,30 +396,30 @@ func exprCanRemoveProject(expr *Expr) bool {
 	return true
 }
 
-func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr, builder ...*QueryBuilder) {
-	replaceColumnsForExprList(node.ProjectList, projMap, builder...)
-	replaceColumnsForExprList(node.OnList, projMap, builder...)
-	replaceColumnsForExprList(node.DedupKeyExprs, projMap, builder...)
+func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
+	replaceColumnsForExprList(node.ProjectList, projMap)
+	replaceColumnsForExprList(node.OnList, projMap)
+	replaceColumnsForExprList(node.DedupKeyExprs, projMap)
 	if node.PreInsertUkCtx != nil {
 		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
-			replaceColumnsForExprList(exprs.GetList(), projMap, builder...)
+			replaceColumnsForExprList(exprs.GetList(), projMap)
 		}
 	}
-	replaceColumnsForExprList(node.FilterList, projMap, builder...)
-	replaceColumnsForExprList(node.GroupBy, projMap, builder...)
-	replaceColumnsForExprList(node.PhysicalEqualityKeyList, projMap, builder...)
-	replaceColumnsForExprList(node.AggList, projMap, builder...)
-	replaceColumnsForExprList(node.WinSpecList, projMap, builder...)
-	replaceColumnsForExprList(node.TimeWindowPartitionBy, projMap, builder...)
-	replaceColumnsForExprList(node.TblFuncExprList, projMap, builder...)
+	replaceColumnsForExprList(node.FilterList, projMap)
+	replaceColumnsForExprList(node.GroupBy, projMap)
+	replaceColumnsForExprList(node.PhysicalEqualityKeyList, projMap)
+	replaceColumnsForExprList(node.AggList, projMap)
+	replaceColumnsForExprList(node.WinSpecList, projMap)
+	replaceColumnsForExprList(node.TimeWindowPartitionBy, projMap)
+	replaceColumnsForExprList(node.TblFuncExprList, projMap)
 
 	for i := range node.OrderBy {
-		node.OrderBy[i].Expr = replaceColumnsForExpr(node.OrderBy[i].Expr, projMap, builder...)
+		node.OrderBy[i].Expr = replaceColumnsForExpr(node.OrderBy[i].Expr, projMap)
 	}
 
 	if node.DedupJoinCtx != nil {
 		replaceColumnsForColRefList(node.DedupJoinCtx.OldColList, projMap)
-		replaceColumnsForExprList(node.DedupJoinCtx.UpdateColExprList, projMap, builder...)
+		replaceColumnsForExprList(node.DedupJoinCtx.UpdateColExprList, projMap)
 		for _, col := range dedupJoinMetadataCols(node.DedupJoinCtx) {
 			if col != nil {
 				cols := []plan.ColRef{*col}
@@ -481,12 +479,12 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr, bui
 	}
 }
 
-func replaceColumnsForExprList(exprList []*plan.Expr, projMap map[[2]int32]*plan.Expr, builder ...*QueryBuilder) {
+func replaceColumnsForExprList(exprList []*plan.Expr, projMap map[[2]int32]*plan.Expr) {
 	for i, expr := range exprList {
 		if expr == nil {
 			continue
 		}
-		exprList[i] = replaceColumnsForExpr(expr, projMap, builder...)
+		exprList[i] = replaceColumnsForExpr(expr, projMap)
 	}
 }
 
@@ -510,7 +508,7 @@ func replaceColumnsForColRefList(cols []plan.ColRef, projMap map[[2]int32]*plan.
 	}
 }
 
-func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr, builder ...*QueryBuilder) *plan.Expr {
+func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *plan.Expr {
 	if expr == nil {
 		return nil
 	}
@@ -518,7 +516,7 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr, bui
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_Lit:
 		if ne.Lit != nil {
-			ne.Lit.Src = replaceColumnsForExpr(ne.Lit.Src, projMap, builder...)
+			ne.Lit.Src = replaceColumnsForExpr(ne.Lit.Src, projMap)
 		}
 
 	case *plan.Expr_Col:
@@ -538,47 +536,40 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr, bui
 		if ne.F == nil {
 			return expr
 		}
-		var operand *Expr
-		if len(builder) != 0 && len(ne.F.Args) == 1 && ne.F.Func.GetObjName() == "bit_count" {
-			operand = ne.F.Args[0]
-		}
 		for i, arg := range ne.F.Args {
-			ne.F.Args[i] = replaceColumnsForExpr(arg, projMap, builder...)
-		}
-		if operand != nil && operand != ne.F.Args[0] {
-			return builder[0].lowerProjectedBitCount(expr, operand)
+			ne.F.Args[i] = replaceColumnsForExpr(arg, projMap)
 		}
 
 	case *plan.Expr_W:
 		if ne.W == nil {
 			return expr
 		}
-		ne.W.WindowFunc = replaceColumnsForExpr(ne.W.WindowFunc, projMap, builder...)
+		ne.W.WindowFunc = replaceColumnsForExpr(ne.W.WindowFunc, projMap)
 		for i, arg := range ne.W.PartitionBy {
-			ne.W.PartitionBy[i] = replaceColumnsForExpr(arg, projMap, builder...)
+			ne.W.PartitionBy[i] = replaceColumnsForExpr(arg, projMap)
 		}
 		for i, order := range ne.W.OrderBy {
 			if order != nil {
-				ne.W.OrderBy[i].Expr = replaceColumnsForExpr(order.Expr, projMap, builder...)
+				ne.W.OrderBy[i].Expr = replaceColumnsForExpr(order.Expr, projMap)
 			}
 		}
 		if ne.W.Frame != nil {
 			if ne.W.Frame.Start != nil {
-				ne.W.Frame.Start.Val = replaceColumnsForExpr(ne.W.Frame.Start.Val, projMap, builder...)
+				ne.W.Frame.Start.Val = replaceColumnsForExpr(ne.W.Frame.Start.Val, projMap)
 			}
 			if ne.W.Frame.End != nil {
-				ne.W.Frame.End.Val = replaceColumnsForExpr(ne.W.Frame.End.Val, projMap, builder...)
+				ne.W.Frame.End.Val = replaceColumnsForExpr(ne.W.Frame.End.Val, projMap)
 			}
 		}
 
 	case *plan.Expr_List:
 		if ne.List != nil {
-			replaceColumnsForExprList(ne.List.List, projMap, builder...)
+			replaceColumnsForExprList(ne.List.List, projMap)
 		}
 
 	case *plan.Expr_Sub:
 		if ne.Sub != nil {
-			ne.Sub.Child = replaceColumnsForExpr(ne.Sub.Child, projMap, builder...)
+			ne.Sub.Child = replaceColumnsForExpr(ne.Sub.Child, projMap)
 		}
 	}
 	return expr

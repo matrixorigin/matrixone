@@ -17,6 +17,7 @@ package plan
 import (
 	"bytes"
 	"math"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -305,7 +306,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerGuarded(
 	nullResultRejected bool, consumer existentialConsumer, guarded bool,
 ) (int32, *plan.Expr, error) {
 	guarded = guarded || ctx != nil && ctx.outerPaginationPending
-	nodeID, expr, _, err := builder.flattenSubqueriesWithConsumerAndChange(nodeID, expr, ctx, nullResultRejected, consumer, guarded)
+	nodeID, expr, _, err := builder.flattenSubqueriesWithConsumerAndChange(nodeID, expr, ctx, nullResultRejected, consumer, guarded, false)
 	return nodeID, expr, err
 }
 
@@ -323,7 +324,7 @@ func conditionallyEvaluatesScalarArgument(fn *plan.ObjectRef) bool {
 
 func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 	nodeID int32, expr *plan.Expr, ctx *BindContext,
-	nullResultRejected bool, consumer existentialConsumer, guarded bool,
+	nullResultRejected bool, consumer existentialConsumer, guarded, bitCountSource bool,
 ) (int32, *plan.Expr, bool, error) {
 	memoID := expr.AuxId
 	if memoID < 0 && ctx != nil && ctx.flattenedVolatileExprs != nil {
@@ -372,7 +373,8 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 		for i, arg := range exprImpl.F.Args {
 			var childAffected bool
 			nodeID, exprImpl.F.Args[i], childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
-				nodeID, arg, ctx, childNullResultRejected, existentialIneligible, childGuarded)
+				nodeID, arg, ctx, childNullResultRejected, existentialIneligible, childGuarded,
+				i == 0 && scalarBitCountArg != nil)
 			if err != nil {
 				return 0, nil, false, err
 			}
@@ -405,7 +407,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 		w := exprImpl.W
 		var childAffected bool
 		nodeID, w.WindowFunc, childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
-			nodeID, w.WindowFunc, ctx, false, existentialIneligible, guarded)
+			nodeID, w.WindowFunc, ctx, false, existentialIneligible, guarded, false)
 		if err != nil {
 			return 0, nil, false, err
 		}
@@ -415,7 +417,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 		}
 		for i, key := range w.PartitionBy {
 			nodeID, w.PartitionBy[i], childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
-				nodeID, key, ctx, false, existentialIneligible, guarded)
+				nodeID, key, ctx, false, existentialIneligible, guarded, false)
 			if err != nil {
 				return 0, nil, false, err
 			}
@@ -423,7 +425,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 		}
 		for _, order := range w.OrderBy {
 			nodeID, order.Expr, childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
-				nodeID, order.Expr, ctx, false, existentialIneligible, guarded)
+				nodeID, order.Expr, ctx, false, existentialIneligible, guarded, false)
 			if err != nil {
 				return 0, nil, false, err
 			}
@@ -439,7 +441,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 			// predicate's null-rejection optimization.
 			var childAffected bool
 			nodeID, exprImpl.List.List[i], childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
-				nodeID, item, ctx, false, existentialIneligible, true)
+				nodeID, item, ctx, false, existentialIneligible, true, false)
 			if err != nil {
 				return 0, nil, false, err
 			}
@@ -447,6 +449,13 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 		}
 
 	case *plan.Expr_Sub:
+		if bitCountSource {
+			if value := builder.inlineDeepTablelessScalar(exprImpl.Sub); value != nil {
+				expr = value
+				affected = true
+				break
+			}
+		}
 		nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, exprImpl.Sub, ctx, nullResultRejected, consumer, guarded)
 		affected = true
 	}
@@ -465,6 +474,121 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 	}
 
 	return nodeID, expr, affected, err
+}
+
+// tablelessProjection identifies the single input row that the subquery
+// flattener can replace with its projected expression.
+func (builder *QueryBuilder) tablelessProjection(nodeID int32, allowTrueFilter bool) *plan.Node {
+	if builder == nil || builder.qry == nil || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return nil
+	}
+	project := builder.qry.Nodes[nodeID]
+	if project.NodeType != plan.Node_PROJECT || len(project.Children) != 1 ||
+		project.Limit != nil || project.Offset != nil || project.RankOption != nil {
+		return nil
+	}
+	childID := project.Children[0]
+	if childID < 0 || int(childID) >= len(builder.qry.Nodes) {
+		return nil
+	}
+	input := builder.qry.Nodes[childID]
+	if input.NodeType == plan.Node_FILTER {
+		if !allowTrueFilter || input.FilterIsBarrier || len(input.Children) != 1 ||
+			input.Limit != nil || input.Offset != nil || input.RankOption != nil || len(project.ProjectList) != 1 {
+			return nil
+		}
+		if int(nodeID) >= len(builder.ctxByNode) {
+			return nil
+		}
+		scope := builder.ctxByNode[nodeID]
+		if scope == nil || scope.hasHaving || !slices.Equal(scope.whereFilters, input.FilterList) {
+			return nil
+		}
+		value := project.ProjectList[0]
+		if col := value.GetCorr(); col != nil {
+			if col.Depth != 1 {
+				return nil
+			}
+		} else if !canReplaySelectorExpr(builder.GetContext(), value) {
+			return nil
+		}
+		for _, filter := range input.FilterList {
+			if filter == nil {
+				return nil
+			}
+			lit := filter.GetLit()
+			if filter.Typ.Id != int32(types.T_bool) || lit == nil || lit.Isnull || !lit.GetBval() {
+				return nil
+			}
+		}
+		childID = input.Children[0]
+		if childID < 0 || int(childID) >= len(builder.qry.Nodes) {
+			return nil
+		}
+		input = builder.qry.Nodes[childID]
+	}
+	if input.NodeType != plan.Node_VALUE_SCAN || input.TableDef != nil ||
+		input.Limit != nil || input.Offset != nil || input.RankOption != nil {
+		return nil
+	}
+	return project
+}
+
+// A tableless scalar has exactly one row. Rebase a simple deeply correlated
+// projection before choosing the dependent-subquery path so its expression
+// stays visible to its consumer. More complex plans keep the existing path.
+func (builder *QueryBuilder) inlineDeepTablelessScalar(sub *plan.SubqueryRef) *plan.Expr {
+	if sub == nil || sub.Typ != plan.SubqueryRef_SCALAR || sub.Child != nil || sub.RowSize != 1 {
+		return nil
+	}
+	project := builder.tablelessProjection(sub.NodeId, false)
+	if project == nil || len(project.ProjectList) != 1 || len(project.FilterList) != 0 ||
+		builder.dependentRelations[sub.NodeId] || builder.dependentRelations[project.Children[0]] {
+		return nil
+	}
+	input := builder.qry.Nodes[project.Children[0]]
+	if input.RowsetData != nil || len(input.FilterList) != 0 {
+		return nil
+	}
+	value := project.ProjectList[0]
+	if value == nil || releasedBitCountFloatOverload(types.T(value.Typ.Id)) < 0 {
+		return nil
+	}
+	deep, safe := false, true
+	_ = plan.VisitExprTree(value, func(expr *plan.Expr) error {
+		if expr.GetPreparedNumeric().GetStringDomainSource() != nil {
+			safe = false
+		}
+		switch node := expr.Expr.(type) {
+		case *plan.Expr_Corr:
+			if node.Corr == nil || node.Corr.Depth <= 0 {
+				safe = false
+			} else if node.Corr.Depth > 1 {
+				deep = true
+			}
+		case *plan.Expr_F:
+			if !isProvenPureScalarFunction(node.F) {
+				safe = false
+			}
+		case *plan.Expr_Lit:
+			if node.Lit == nil || node.Lit.Src != nil {
+				safe = false
+			}
+		case *plan.Expr_P:
+			if node.P == nil || node.P.Pos < 0 {
+				safe = false
+			}
+		case *plan.Expr_T:
+		default:
+			safe = false
+		}
+		return nil
+	})
+	if !safe || !deep || containsVolatileFunction(value) {
+		return nil
+	}
+	value, _ = decreaseDepth(DeepCopyExpr(value))
+	return value
 }
 
 func (builder *QueryBuilder) flattenSubqueryWithConsumer(
@@ -571,10 +695,12 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		}
 	}
 
-	// A proven-true singleton filter is part of the same simplification as a
-	// tableless projection without a WHERE clause.
+	// A tableless projection can be substituted without changing row count.
 	subNode := builder.qry.Nodes[subID]
-	if builder.tablelessSingletonProject(subID, canInlineFilteredSingleton(subquery)) != nil {
+	allowTrueFilter := subquery.RowSize == 1 &&
+		(subquery.Typ == plan.SubqueryRef_SCALAR && subquery.Child == nil ||
+			subquery.Typ == plan.SubqueryRef_IN || subquery.Typ == plan.SubqueryRef_ANY && subquery.Op == "=")
+	if builder.tablelessProjection(subID, allowTrueFilter) != nil {
 		switch subquery.Typ {
 		case plan.SubqueryRef_SCALAR:
 			if subquery.Child != nil {

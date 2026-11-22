@@ -1280,6 +1280,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			LiteralForm:               item.Lit.GetLiteralForm(),
 			StringSource:              item.Lit.GetStringSource(),
 			DecimalLiteralRequiresV82: item.Lit.GetDecimalLiteralRequiresV82(),
+			FloatConversionSource:     item.Lit.GetFloatConversionSource(),
 		}
 
 		switch c := item.Lit.Value.(type) {

@@ -1035,16 +1035,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			if projectsMatch {
 				filter = fullTextProjectedScoreAsBool(builder.GetContext(), DeepCopyExpr(filter), projectTag, node.ProjectList)
 			}
-			// Projection elimination must choose one conversion for all consumers
-			// of a conditional. Inlining only the filter could select different
-			// rows than BIT_COUNT on the same retained output column.
-			deferredBitCount := builder.filterUsesProjectedBitCount(filter, projectTag)
-			builder.deferredBitCountFilter = builder.deferredBitCountFilter || deferredBitCount
-			if deferredBitCount || replaceColRefsIntroducesVolatile(filter, projectTag, node.ProjectList) {
+			introducesVolatile := replaceColRefsIntroducesVolatile(filter, projectTag, node.ProjectList)
+			rewritten := replaceColRefs(DeepCopyExpr(filter), projectTag, node.ProjectList)
+			if introducesVolatile {
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
-			canPushdown = append(canPushdown, replaceColRefs(DeepCopyExpr(filter), projectTag, node.ProjectList))
+			canPushdown = append(canPushdown, rewritten)
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)

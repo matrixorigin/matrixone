@@ -7727,16 +7727,15 @@ func substringByDomain(value []byte, start, length int64, withLength, binary boo
 	// Every ASCII code point occupies one byte. Avoid materializing runes and
 	// re-encoding text that can use the existing byte-offset bounds unchanged.
 	if binary || isASCIIBytes(functionUtil.QuickBytesToStr(value)) {
-		left, right := StringSliceBounds(len(value), start, length, withLength)
+		left, right := substringBounds(len(value), start, length, withLength)
 		return value[left:right]
 	}
 	runes := []rune(functionUtil.QuickBytesToStr(value))
-	left, right := StringSliceBounds(len(runes), start, length, withLength)
+	left, right := substringBounds(len(runes), start, length, withLength)
 	return functionUtil.QuickStrToBytes(string(runes[left:right]))
 }
 
-// StringSliceBounds computes the SQL SUBSTRING interval in bytes or characters.
-func StringSliceBounds(total int, start, length int64, withLength bool) (left, right int) {
+func substringBounds(total int, start, length int64, withLength bool) (left, right int) {
 	if start == 0 {
 		return 0, 0
 	}

@@ -1012,11 +1012,12 @@ const (
 	BitCountFloat64FieldOverload      = 18
 	BitCountFloat32ExpressionOverload = 19
 	BitCountFloat64ExpressionOverload = 20
+	BitCountFloat64LiteralOverload    = 21
 )
 
 func IsBitCountFloatOverload(overload int32) bool {
 	return overload == BitCountRoundedFloat32Overload || overload == BitCountRoundedFloat64Overload ||
-		overload >= bitCountTruncatedFloat32Overload && overload <= BitCountFloat64ExpressionOverload
+		overload >= bitCountTruncatedFloat32Overload && overload <= BitCountFloat64LiteralOverload
 }
 
 func bitCountFloatField[T constraints.Float](upperBound float64, saturated int64, rowScopedWarning bool) executeLogicOfOverload {

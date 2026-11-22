@@ -1220,6 +1220,13 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	if b.builder.bitCountScalarTarget == astExpr {
+		next := bitCountForwardedScalar(astExpr)
+		subCtx.bitCountScalarForward = next != nil
+		previous := b.builder.bitCountScalarTarget
+		b.builder.bitCountScalarTarget = next
+		defer func() { b.builder.bitCountScalarTarget = previous }()
+	}
 	zeroScalarSourceSafe := !astExpr.Exists && zeroLimitScalarSourceSafe(astExpr.Select, subCtx)
 	udfResolutionCount := b.builder.udfResolutionCount
 	udfExpansionDepth := b.builder.udfExpansionDepth
@@ -4657,6 +4664,11 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.Expr, depth int32) (boundExpr *plan.Expr, bindErr error) {
+	if name == "bit_count" && len(astArgs) == 1 && b.builder != nil {
+		previous := b.builder.bitCountScalarTarget
+		b.builder.bitCountScalarTarget = bitCountScalarOperand(astArgs[0])
+		defer func() { b.builder.bitCountScalarTarget = previous }()
+	}
 	zeroScalarArgs := b.builder.beginZeroScalarArguments()
 	var requiredZeroScalarRoots map[int32]struct{}
 	builtinResult := false
@@ -5284,6 +5296,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 				b.observeExpressionProtocol)
 		}
 		if err == nil {
+			markFoldedFloatArithmetic(name, args, e)
 			if b.builder != nil && b.builder.integerPrecision != nil {
 				b.builder.integerPrecision.captureFunction(name, integerInputs, e)
 			}

@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -199,301 +198,54 @@ func isGeometrySRIDConstFunction(name string) bool {
 // decode reports its own constant-integer error, exactly like an ordinary
 // build of a non-constant definition.
 func isGeometrySRIDConstFoldSafe(expr *plan.Expr) bool {
-	return isSpeculativeConstantFoldSafe(expr, nil)
-}
-
-const (
-	maxSpeculativeFoldLiteralBytes = 4096
-	maxSpeculativeFoldValueBytes   = 1 << 20
-	maxSpeculativeFoldTotalBytes   = 8 << 20
-)
-
-type speculativeConstantFoldBudget struct {
-	ctx         context.Context
-	outputBytes int64
-	integerFold *singletonIntegerFold
-}
-
-func (budget *speculativeConstantFoldBudget) consume(bytes int64) bool {
-	if budget == nil {
-		return true
-	}
-	if bytes < 0 || bytes > maxSpeculativeFoldValueBytes ||
-		budget.outputBytes > maxSpeculativeFoldTotalBytes-bytes {
+	if expr == nil {
 		return false
-	}
-	budget.outputBytes += bytes
-	return true
-}
-
-// isSpeculativeConstantFoldSafe admits literal trees and executable
-// functions whose value evaluation has been audited for constant folding.
-// Variable-width results are admitted only when a registered producer has a
-// proven byte bound within the fold budget.
-func isSpeculativeConstantFoldSafe(expr *plan.Expr, budget *speculativeConstantFoldBudget) bool {
-	_, safe := speculativeConstantFoldSafety(expr, budget)
-	return safe
-}
-
-type speculativeFoldStringBound struct {
-	bytes     int64
-	known     bool
-	validUTF8 bool
-}
-
-func stringExprUsesBytes(expr *plan.Expr) bool {
-	return expr != nil && (expr.GetLit().GetIsBin() ||
-		types.StaticStringDomain(makeTypeByPlan2Expr(expr)) == types.StringDomainBinary)
-}
-
-func speculativeConstantFoldSafety(expr *plan.Expr, budget *speculativeConstantFoldBudget) (speculativeFoldStringBound, bool) {
-	var unknown speculativeFoldStringBound
-	if expr == nil || budget != nil && budget.ctx != nil && budget.ctx.Err() != nil {
-		return unknown, false
 	}
 	switch node := expr.Expr.(type) {
 	case *plan.Expr_Lit:
-		if budget == nil || types.T(expr.Typ.Id).FixedLength() >= 0 {
-			return unknown, true
-		}
-		value := node.Lit.GetSval()
-		bytes := int64(len(value))
-		if bytes > maxSpeculativeFoldLiteralBytes || !budget.consume(bytes) {
-			return unknown, false
-		}
-		return speculativeFoldStringBound{bytes: bytes, known: true, validUTF8: utf8.ValidString(value)}, true
+		// Any literal atom is admissible: the fold result still has to
+		// decode as a constant integer, so a folded fraction or string meets
+		// the decode's own rejection, the same verdict ordinary binding
+		// gives it.
+		return true
 	case *plan.Expr_T:
-		return unknown, true
+		// Expr_T is the conversion operators' target-type metadata: the
+		// resolver appends it as the trailing argument of every cast node it
+		// builds (appendCastBeforeExprWithOverload in base_binder.go), it
+		// cannot be written from SQL, and nothing executes it - the fold
+		// executor consumes it as a type descriptor. Accepting exactly this
+		// structural leaf lets the implicit casts of otherwise safe
+		// arithmetic ('4325' + 1) pass the walk, while every executable node
+		// keeps requiring the operator whitelist above.
+		return true
 	case *plan.Expr_F:
-		f := node.F
-		if f == nil || f.Func == nil {
-			return unknown, false
+		if !isProvenPureScalarFunction(node.F) {
+			return false
 		}
-		switch f.Func.GetObjName() {
-		case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus",
-			"unary_tilde", "cast", "serial", "serial_full":
-			// The binder's arithmetic, cast and tuple encoding operators.
-		default:
-			if !function.GetFunctionIsProvenPureFoldableById(f.Func.GetObj()) {
-				return unknown, false
+		for _, arg := range node.F.GetArgs() {
+			if !isGeometrySRIDConstFoldSafe(arg) {
+				return false
 			}
 		}
-		var stackBounds [4]speculativeFoldStringBound
-		argBounds := stackBounds[:]
-		if len(f.Args) > len(argBounds) {
-			argBounds = make([]speculativeFoldStringBound, len(f.Args))
-		} else {
-			argBounds = argBounds[:len(f.Args)]
-		}
-		for i, arg := range f.Args {
-			bound, safe := speculativeConstantFoldSafety(arg, budget)
-			if !safe {
-				return unknown, false
-			}
-			argBounds[i] = bound
-		}
-		if budget == nil || types.T(expr.Typ.Id).FixedLength() >= 0 {
-			return unknown, true
-		}
-		bound := speculativeStringOutputBound(f, argBounds, budget)
-		return bound, bound.known && budget.consume(bound.bytes)
-	default:
-		return unknown, false
-	}
-}
-
-func speculativeStringOutputBound(f *plan.Function, args []speculativeFoldStringBound, budget *speculativeConstantFoldBudget) speculativeFoldStringBound {
-	var unknown speculativeFoldStringBound
-	name := strings.ToLower(f.Func.GetObjName())
-	switch name {
-	case "space":
-		if len(args) == 1 {
-			length, ok := budget.integerFold.resolve(f.Args[0], maxStringLengthProofDepth, nil)
-			if ok {
-				return speculativeFoldStringBound{bytes: max(0, length), known: true, validUTF8: true}
-			}
-		}
-	case "repeat":
-		if len(args) != 2 || !args[0].known {
-			break
-		}
-		repeats, ok := budget.integerFold.resolve(f.Args[1], maxStringLengthProofDepth, nil)
-		if ok && (repeats <= 0 || args[0].bytes <= maxSpeculativeFoldValueBytes/repeats) {
-			return speculativeFoldStringBound{
-				bytes: args[0].bytes * max(0, repeats), known: true, validUTF8: args[0].validUTF8,
-			}
-		}
-	case "lpad", "rpad":
-		if len(args) != 3 {
-			break
-		}
-		target, ok := budget.integerFold.resolve(f.Args[1], maxStringLengthProofDepth, nil)
-		if !ok {
-			break
-		}
-		binary := stringExprUsesBytes(f.Args[0])
-		unitBytes := uint64(utf8.UTFMax)
-		if binary {
-			unitBytes = 1
-		}
-		// A negative size produces SQL NULL without allocating a payload.
-		if bound, ok := padResultByteBound(max(0, target), unitBytes); ok && bound <= maxSpeculativeFoldValueBytes {
-			return speculativeFoldStringBound{
-				bytes: int64(bound), known: true, validUTF8: !binary && args[0].validUTF8 && args[2].validUTF8,
-			}
-		}
-	case "concat", "concat_ws":
-		values := args
-		if name == "concat_ws" {
-			if len(args) < 2 || !args[0].known {
-				break
-			}
-			values = args[1:]
-		}
-		result := speculativeFoldStringBound{known: len(values) > 0, validUTF8: true}
-		for _, arg := range values {
-			if !arg.known || result.bytes > maxSpeculativeFoldValueBytes-arg.bytes {
-				return unknown
-			}
-			result.bytes += arg.bytes
-			result.validUTF8 = result.validUTF8 && arg.validUTF8
-		}
-		if name == "concat_ws" && len(values) > 1 {
-			separators := int64(len(values) - 1)
-			if args[0].bytes > (maxSpeculativeFoldValueBytes-result.bytes)/separators {
-				return unknown
-			}
-			result.bytes += separators * args[0].bytes
-			result.validUTF8 = result.validUTF8 && args[0].validUTF8
-		}
-		return result
-	case "trim":
-		// Binder order: direction, cut string, source.
-		if len(args) == 3 && args[2].known {
-			bound := args[2]
-			bound.validUTF8 = bound.validUTF8 && args[1].validUTF8
-			return bound
-		}
-	case "ltrim", "rtrim":
-		if len(args) == 1 {
-			return args[0]
-		}
-	case "replace":
-		if len(args) == 3 && args[0].known && args[1].known && args[2].known {
-			bound, ok := function.ReplacementStringOutputBound(uint64(args[0].bytes), uint64(args[2].bytes))
-			if ok && bound <= uint64(maxSpeculativeFoldValueBytes) {
-				return speculativeFoldStringBound{bytes: int64(bound), known: true,
-					validUTF8: args[0].validUTF8 && args[1].validUTF8 && args[2].validUTF8}
-			}
-		}
-	case "lower", "upper", "to_lower", "to_upper", "lcase", "ucase":
-		if len(args) != 1 || !args[0].known {
-			break
-		}
-		if stringExprUsesBytes(f.Args[0]) {
-			return args[0]
-		}
-		// The Unicode case mapper emits at most one UTF-8 rune per input
-		// byte. This also bounds replacement of malformed input.
-		if args[0].bytes <= maxSpeculativeFoldValueBytes/utf8.UTFMax {
-			return speculativeFoldStringBound{
-				bytes: args[0].bytes * utf8.UTFMax, known: true, validUTF8: true,
-			}
-		}
-	case "reverse", "substring", "substr", "left", "right":
-		if len(args) == 0 || !args[0].known {
-			break
-		}
-		bound := args[0]
-		if stringExprUsesBytes(f.Args[0]) {
-			// Byte reversal or slicing need not preserve UTF-8 boundaries.
-			bound.validUTF8 = false
-		} else if !bound.validUTF8 {
-			// Re-encoding an invalid byte as U+FFFD can take three bytes.
-			const replacementBytes = int64(len(string(utf8.RuneError)))
-			if bound.bytes > maxSpeculativeFoldValueBytes/replacementBytes {
-				break
-			}
-			bound.bytes *= replacementBytes
-			// RIGHT can return its input unchanged when the whole string is selected.
-			bound.validUTF8 = name != "right"
-		}
-		return bound
-	}
-	return unknown
-}
-
-func speculativeConstantInt64Within(expr *plan.Expr, depth int, spend func(int) bool) (int64, bool) {
-	if expr == nil || depth == 0 || spend != nil && !spend(1) {
-		return 0, false
-	}
-	if lit := expr.GetLit(); lit != nil {
-		// This proof can only follow value-preserving integer conversions.
-		// An oversized unsigned literal must not wrap before we inspect its cast.
-		if lit.Src != nil || lit.GetU64Val() > uint64(1<<63-1) {
-			return 0, false
-		}
-		value, isNull, ok := geometrySRIDLiteralValue(lit)
-		return value, ok && !isNull
-	}
-	f := expr.GetF()
-	if f == nil || f.Func == nil || len(f.Args) == 0 {
-		return 0, false
-	}
-	switch strings.ToLower(f.Func.GetObjName()) {
-	case "cast":
-		if len(f.Args) < 2 {
-			return 0, false
-		}
-		value, ok := speculativeConstantInt64Within(f.Args[0], depth-1, spend)
-		if !ok || !isSpeculativeIntegerType(types.T(f.Args[0].Typ.Id)) ||
-			!speculativeIntegerCastPreservesValue(types.T(expr.Typ.Id), value) {
-			return 0, false
-		}
-		return value, true
-	case "unary_plus":
-		return speculativeConstantInt64Within(f.Args[0], depth-1, spend)
-	case "unary_minus":
-		value, ok := speculativeConstantInt64Within(f.Args[0], depth-1, spend)
-		if !ok || value == -1<<63 {
-			return 0, false
-		}
-		return -value, true
-	default:
-		return 0, false
-	}
-}
-
-func isSpeculativeIntegerType(typ types.T) bool {
-	switch typ {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		return true
 	default:
 		return false
 	}
 }
 
-func speculativeIntegerCastPreservesValue(target types.T, value int64) bool {
-	switch target {
-	case types.T_int8:
-		return value >= -(1<<7) && value <= (1<<7)-1
-	case types.T_uint8:
-		return value >= 0 && value <= (1<<8)-1
-	case types.T_int16:
-		return value >= -(1<<15) && value <= (1<<15)-1
-	case types.T_uint16:
-		return value >= 0 && value <= (1<<16)-1
-	case types.T_int32:
-		return value >= -(1<<31) && value <= (1<<31)-1
-	case types.T_uint32:
-		return value >= 0 && value <= (1<<32)-1
-	case types.T_int64:
-		return true
-	case types.T_uint64:
-		return value >= 0
-	default:
+// isProvenPureScalarFunction admits the binder's native scalar operators and
+// the registry's positively verified pure builtins. Absence of a volatility
+// flag alone is insufficient: some builtins perform external side effects.
+func isProvenPureScalarFunction(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil {
 		return false
+	}
+	switch fn.Func.ObjName {
+	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus",
+		"unary_tilde", "cast", "serial", "serial_full":
+		return true
+	default:
+		return function.GetFunctionIsProvenPureFoldableById(fn.Func.Obj)
 	}
 }
 

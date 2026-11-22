@@ -163,13 +163,6 @@ func StringResultByteBound(typ types.Type) (bytes uint64, known bool) {
 	return bound.bytes, !bound.unknown
 }
 
-// ReplacementStringOutputBound covers REPLACE for any needle. A nonempty
-// needle can match at most once per unit of input. An empty needle is a no-op.
-func ReplacementStringOutputBound(source, replacement uint64) (uint64, bool) {
-	bound := multiplyStringResultBound(stringResultBound{bytes: source}, max(uint64(1), replacement))
-	return bound.bytes, !bound.unknown
-}
-
 func binaryStringResultType(bound stringResultBound) types.Type {
 	if bound.unknown || bound.bytes > uint64(types.MaxVarBinaryLen) {
 		return types.T_blob.ToType()

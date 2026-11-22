@@ -269,9 +269,11 @@ func replacementStringReturnType(parameters []types.Type) types.Type {
 	}
 	source := boundFor(parameters[0])
 	replacement := boundFor(parameters[2])
-	width, known := ReplacementStringOutputBound(source.bytes, replacement.bytes)
-	return stringResultTypeForDomain(parameters, 0,
-		stringResultBound{bytes: width, unknown: source.unknown || replacement.unknown || !known})
+	if replacement.unknown || source.unknown {
+		return stringResultTypeForDomain(parameters, 0, unknownStringResultBound())
+	}
+	factor := max(uint64(1), replacement.bytes)
+	return stringResultTypeForDomain(parameters, 0, multiplyStringResultBound(source, factor))
 }
 
 func insertStringReturnType(parameters []types.Type) types.Type {
@@ -8949,6 +8951,15 @@ var supportedMathBuiltIns = []FuncNew{
 				rowScopedDiagnostics: true,
 				retType:              func([]types.Type) types.Type { return types.T_uint64.ToType() },
 				newOp:                func() executeLogicOfOverload { return bitCountFloatExpression[float64] },
+			},
+			{
+				// Real literals clamp at 2^63 without a field warning.
+				overloadId: BitCountFloat64LiteralOverload,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp: func() executeLogicOfOverload {
+					return bitCountFloatField[float64](0x1p63, math.MaxInt64, false)
+				},
 			},
 		},
 	},
