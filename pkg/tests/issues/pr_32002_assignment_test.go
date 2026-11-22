@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -68,6 +69,7 @@ func TestPR32002ReviewBoundaries(t *testing.T) {
 				var level, message string
 				var code int
 				require.NoError(t, rows.Scan(&level, &code, &message))
+				require.True(t, utf8.ValidString(message), "warning %d contains malformed UTF-8", code)
 				codes = append(codes, code)
 			}
 			require.NoError(t, rows.Err())
@@ -351,6 +353,39 @@ func TestPR32002ReviewBoundaries(t *testing.T) {
 			require.Equal(t, "999.9", value, source)
 			exec("delete from decimal_derived")
 		}
+		// A set consumes radix values as bytes in its resolved column domain.
+		// Direct numeric radix assignments are already covered above.
+		const radixSet = "select 0x3e8 union all select 0x64"
+		_, err = conn.ExecContext(ctx, "insert into decimal_derived "+radixSet)
+		var setErr *mysql.MySQLError
+		require.ErrorAs(t, err, &setErr)
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, setErr.Number)
+		var storedRows int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from decimal_derived").Scan(&storedRows))
+		require.Zero(t, storedRows)
+		exec("insert ignore into decimal_derived " + radixSet)
+		badDecimal := int(moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD)
+		require.Equal(t, []int{badDecimal, badDecimal}, warningCodes())
+		var setValues string
+		require.NoError(t, conn.QueryRowContext(ctx, "select group_concat(v) from decimal_derived").Scan(&setValues))
+		require.Equal(t, "0.0,0.0", setValues)
+		exec("delete from decimal_derived")
+
+		const byteSet = "select group_concat(hex(v) order by hex(v)) from (select 0xc3a9 v union select ?) s"
+		preparedSet, err := conn.PrepareContext(ctx, byteSet)
+		require.NoError(t, err)
+		defer preparedSet.Close()
+		for _, tc := range []struct {
+			input []byte
+			want  string
+		}{
+			{[]byte{0}, "00,C3A9"},
+			{[]byte{0xc3, 0xa9}, "C3A9"},
+		} {
+			require.NoError(t, preparedSet.QueryRowContext(ctx, tc.input).Scan(&setValues))
+			require.Equal(t, tc.want, setValues)
+		}
+
 		exec("set sql_mode=''")
 		exec("insert into decimal_derived select v from (select 0xffff as v) s")
 		require.Equal(t, []int{int(moerr.ER_WARN_DATA_OUT_OF_RANGE)}, warningCodes())

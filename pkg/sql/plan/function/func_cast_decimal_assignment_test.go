@@ -16,6 +16,7 @@ package function
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -266,5 +267,62 @@ func BenchmarkDecimalAssignmentWidening(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+func TestDecimalAssignmentFromMaterializedByteString(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		strict     bool
+		wantCode   uint16
+		wantValue  int64
+	}{
+		{"strict invalid bytes", "\x03\xe8", true, moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, 0},
+		{"strict encoded radix", "0x10", true, moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, 0},
+		{"strict decimal overflows", "1000", true, moerr.ER_WARN_DATA_OUT_OF_RANGE, 0},
+		{"ignore invalid syntax", "NaN", false, moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, 0},
+		{"ignore invalid bytes", "\x03\xe8", false, moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, 0},
+		{"ignore numeric prefix with invalid bytes", "1\xe8", false, moerr.WARN_DATA_TRUNCATED, 10},
+		{"ignore retains decimal prefix", "-0x10", false, moerr.WARN_DATA_TRUNCATED, 0},
+		{"ignore clips overflow", "1000", false, moerr.ER_WARN_DATA_OUT_OF_RANGE, 9999},
+		{"valid ASCII digits", "-1.5", true, 0, -15},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newMemoryFunctionTestProcess(t)
+			defer proc.Free()
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			source := vector.NewVec(types.New(types.T_varbinary, 8, 0))
+			defer source.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(source, []byte(tc.text), false, proc.Mp()))
+			typ := types.New(types.T_decimal64, 4, 1)
+			target := vector.NewConstNull(typ, 1, proc.Mp())
+			defer target.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+
+			cast := NewStrictCast
+			if !tc.strict {
+				cast = NewAssignIgnoreCast
+			}
+			err := cast([]*vector.Vector{source, target}, result, proc, 1, nil)
+			if tc.strict && tc.wantCode != 0 {
+				var diagnostic *moerr.Error
+				require.ErrorAs(t, err, &diagnostic)
+				require.Equal(t, tc.wantCode, diagnostic.MySQLCode())
+				require.Empty(t, warnings.warnings)
+				return
+			}
+			require.NoError(t, err)
+			value := vector.GetFixedAtWithTypeCheck[types.Decimal64](result.GetResultVector(), 0)
+			require.Equal(t, tc.wantValue, int64(value))
+			if tc.wantCode == 0 {
+				require.Empty(t, warnings.warnings)
+			} else {
+				require.Equal(t, []numericWarning{{code: tc.wantCode}}, stripWarningMessages(warnings.warnings))
+				require.True(t, utf8.ValidString(warnings.warnings[0].msg))
+			}
+		})
 	}
 }

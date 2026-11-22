@@ -606,6 +606,8 @@ func unsignedDecimalAdmissionVarlena(
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	src := vector.GenerateFunctionStrParameter(from)
+	byteString := types.StaticStringDomain(*from.GetType()) == types.StringDomainBinary &&
+		CompatibilityModeFromProcess(proc) == SQLCompatibilityMySQL
 	retainPrefix := entry == unsignedDecimalAdmissionIgnore ||
 		(entry == unsignedDecimalAdmissionMode && !StrictSqlModeForAssignment(proc))
 	for i := uint64(0); i < uint64(length); i++ {
@@ -624,9 +626,14 @@ func unsignedDecimalAdmissionVarlena(
 		}
 		s := convertByteSliceToString(v)
 		var outcome unsignedDecimalStringOutcome
-		if mysqlPrefix {
+		switch {
+		case mysqlPrefix:
 			outcome = classifyMySQLDecimalPrefixSource(s)
-		} else {
+		case byteString && decimalByteStringHasRadixPrefix(s):
+			// The leading decimal token is zero. Let the assignment cast
+			// diagnose trailing text before any unsigned range decision.
+			outcome = unsignedDecimalStringAbstain
+		default:
 			outcome = classifyUnsignedDecimalStringSource(s, retainPrefix, targetType)
 		}
 		switch outcome {

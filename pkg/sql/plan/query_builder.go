@@ -839,6 +839,56 @@ func setOperationPureBinaryCommonType(source []types.Type) (types.Type, bool) {
 	return result, true
 }
 
+// A SQL set materializes its branches in a common string domain. A raw
+// radix literal supplies bytes here, while its character-shaped type still
+// describes the literal to other expressions and protocol consumers.
+func setOperationMaterializedStringType(ctx context.Context, branches []*Expr, target Type) (Type, error) {
+	chosen, _, err := resolveExpressionCollation(ctx, "union",
+		expressionCollationCandidates(branches, expressionCollationIndexes("union", len(branches))))
+	if err != nil {
+		return Type{}, err
+	}
+	if chosen.charset != uint32(types.CharsetBinary) {
+		chosen.apply(&target)
+		applyMixedTextBinaryCollationType(&target)
+		if oid := types.T(target.Id); oid == types.T_char || oid == types.T_varchar {
+			for _, expr := range branches {
+				if types.T(expr.Typ.Id).IsMySQLString() {
+					target.Width = max(target.Width, expr.Typ.Width)
+				}
+			}
+		}
+		return target, nil
+	}
+
+	var width uint64
+	for _, expr := range branches {
+		input := makeTypeByPlan2Expr(expr)
+		if function.IsBinaryCharacterType(input) {
+			if literal := expr.GetLit(); literal != nil && !literal.Isnull && literal.Src == nil &&
+				expr.GetPreparedNumeric().GetStringDomainSource() == nil {
+				if value, ok := literal.Value.(*plan.Literal_Sval); ok {
+					width = max(width, uint64(len(value.Sval)))
+					continue
+				}
+			}
+		}
+		bound, known := function.StringResultByteBound(input)
+		if !known || bound > uint64(types.MaxVarBinaryLen) {
+			width = uint64(types.MaxVarBinaryLen) + 1
+			break
+		}
+		width = max(width, bound)
+	}
+	byteType := types.T_blob.ToType()
+	if width <= uint64(types.MaxVarBinaryLen) {
+		byteType = types.New(types.T_varbinary, int32(width), 0)
+	}
+	target = makePlan2TypeValue(&byteType)
+	chosen.apply(&target)
+	return target, nil
+}
+
 // A set operation whose value-bearing branches are all legal BIT columns keeps
 // the BIT domain. The coalesce resolver falls back to the integer domain and
 // silently drops the declared bit width, which changes LENGTH bytes and the
@@ -5091,10 +5141,25 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			for i, id := range nodes {
 				branchExprs[i] = builder.qry.Nodes[id].ProjectList[columnIdx]
 			}
-			if err := setExpressionCollation(builder.GetContext(), "union", branchExprs, &targetType); err != nil {
+			materialize := !shareGroupingInput && groupingOrderResolve == nil &&
+				types.T(targetType.Id).IsMySQLString() && slices.ContainsFunc(tmpArgsType, function.IsBinaryCharacterType)
+			if materialize {
+				valueBranches := branchExprs[:0]
+				for i, expr := range branchExprs {
+					if argsType[i].Oid != types.T_any && !setBranchPureNull[i][columnIdx] {
+						valueBranches = append(valueBranches, expr)
+					}
+				}
+				targetType, err = setOperationMaterializedStringType(builder.GetContext(), valueBranches, targetType)
+				if err != nil {
+					return 0, err
+				}
+			} else if err := setExpressionCollation(builder.GetContext(), "union", branchExprs, &targetType); err != nil {
 				return 0, err
 			}
-			if mixedTextBinary {
+			if materialize && targetType.Charset == uint32(types.CharsetBinary) {
+				setOperationKeyRequired[columnIdx] = false
+			} else if mixedTextBinary || materialize {
 				applyMixedTextBinaryCollationType(&targetType)
 				if types.T(targetType.Id) == types.T_varchar || types.T(targetType.Id) == types.T_text {
 					for _, typ := range tmpArgsType {
@@ -5106,6 +5171,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					}
 				}
 			}
+
 			targetArgType = makeTypeByPlan2Type(targetType)
 
 			preparedDeferredColumn := false

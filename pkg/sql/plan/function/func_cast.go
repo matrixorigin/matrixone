@@ -7868,28 +7868,28 @@ func parseCastNumericToken(s string) (castNumericToken, error) {
 		return castNumericToken{}, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", trimmed)
 	}
 
-	token := castNumericToken{
-		digits:   body,
-		base:     10,
-		negative: negative,
-	}
-	if len(body) >= 2 && body[0] == '0' {
-		switch body[1] {
-		case 'b', 'B':
-			token.base = 2
-			token.digits = body[2:]
-		case 'o', 'O':
-			token.base = 8
-			token.digits = body[2:]
-		case 'x', 'X':
-			token.base = 16
-			token.digits = body[2:]
-		}
-		if token.digits == "" {
+	base := castNumericRadix(body)
+	if base != 10 {
+		body = body[2:]
+		if body == "" {
 			return castNumericToken{}, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", trimmed)
 		}
 	}
-	return token, nil
+	return castNumericToken{digits: body, base: base, negative: negative}, nil
+}
+
+func castNumericRadix(body string) int {
+	if len(body) >= 2 && body[0] == '0' {
+		switch body[1] {
+		case 'b', 'B':
+			return 2
+		case 'o', 'O':
+			return 8
+		case 'x', 'X':
+			return 16
+		}
+	}
+	return 10
 }
 
 func prefixedDigitsToDecimalString(digits string, base int) (string, error) {
@@ -8009,9 +8009,10 @@ func appendInvalidAssignmentConversionWarning(proc *process.Process, targetType,
 	if !ok {
 		return
 	}
+	// The bounded sample can contain malformed UTF-8 from a byte string.
 	appender.AppendWarningDiagnostic(
 		moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD,
-		fmt.Sprintf("Incorrect %s value: '%-.128s'", targetType, value),
+		util.Abbreviate(fmt.Sprintf("Incorrect %s value: '%-.128s'", targetType, value), -1),
 	)
 }
 
@@ -8025,7 +8026,7 @@ func appendTruncatedAssignmentConversionWarning(proc *process.Process, targetTyp
 	}
 	appender.AppendWarningDiagnostic(
 		moerr.WARN_DATA_TRUNCATED,
-		fmt.Sprintf("Data truncated for %s value: '%-.128s'", targetType, value),
+		util.Abbreviate(fmt.Sprintf("Data truncated for %s value: '%-.128s'", targetType, value), -1),
 	)
 }
 
@@ -9094,6 +9095,8 @@ func strToDecimal[D types.FixedSizeTExceptStrType](
 
 	explicit := mode == castModeExplicit
 	adjustAssignment := mode == castModeAssignment || mode == castModeAssignmentIgnore
+	byteStringAssignment := proc != nil && assignment && !binary && types.StaticStringDomain(*source.GetType()) == types.StringDomainBinary &&
+		CompatibilityModeFromProcess(proc) == SQLCompatibilityMySQL
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
 			if err := to.Append(zero, true); err != nil {
@@ -9128,14 +9131,26 @@ func strToDecimal[D types.FixedSizeTExceptStrType](
 			text = decoded.text
 		}
 
-		value, overflow, err := parse(text, target.Width, target.Scale, explicit || adjustAssignment)
+		var value D
+		var overflow bool
+		var err error
+		if byteStringAssignment && decimalByteStringHasRadixPrefix(text) {
+			// A byte string that spells "0x..." has a decimal prefix,
+			// but it did not originate as SQL radix syntax.
+			err = moerr.NewInvalidInputNoCtx("radix prefix in a decimal byte string")
+		} else {
+			value, overflow, err = parse(text, target.Width, target.Scale, explicit || adjustAssignment || byteStringAssignment)
+		}
 		if err == nil {
 			if overflow {
+				if byteStringAssignment && !adjustAssignment {
+					return moerr.NewOutOfRangeValueForColumn(proc.Ctx, "DECIMAL", proc.WarningRowOffset+row+1)
+				}
 				appendDecimalCastRangeWarning(proc, row)
 			} else if assignment && !binary && DecimalAssignmentLosesScale(text, target.Scale) {
 				appendDecimalAssignmentScaleWarning(proc, row)
 			}
-		} else if !isAssignmentSpecialNumericSyntax(text) {
+		} else if byteStringAssignment || !isAssignmentSpecialNumericSyntax(text) {
 			if explicit && isDecimalLexicalConversionError(err) && !explicitCastMustErrorOnStrictDML(proc) {
 				// MySQL explicit CAST retains a numeric prefix, or zero when
 				// none is usable, and reports the original invalid text.
@@ -9167,6 +9182,14 @@ func strToDecimal[D types.FixedSizeTExceptStrType](
 			}
 		}
 		if err != nil {
+			if byteStringAssignment && !adjustAssignment && isDecimalLexicalConversionError(err) {
+				prefix, ok := assignmentDecimalPrefix(text)
+				if !ok || prefix != trimASCIISpace(text) {
+					sample := strconv.Quote(text[:min(len(text), 128)])
+					return moerr.NewTruncatedValueForField(proc.Ctx, "decimal", sample, "DECIMAL",
+						int(proc.WarningRowOffset+row+1))
+				}
+			}
 			return err
 		}
 		if err := to.Append(value, false); err != nil {
@@ -9174,6 +9197,11 @@ func strToDecimal[D types.FixedSizeTExceptStrType](
 		}
 	}
 	return nil
+}
+
+func decimalByteStringHasRadixPrefix(text string) bool {
+	_, body, _, _ := splitCastNumericSign(text)
+	return castNumericRadix(body) != 10
 }
 
 func clampDecimal64Value(negative bool, width, scale int32) (types.Decimal64, error) {
