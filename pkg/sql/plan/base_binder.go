@@ -8490,6 +8490,7 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	var nullArithmeticResult *plan.Expr
 	// The unsigned-DECIMAL admission entries exist only for the plan-composed
 	// assignment boundary. Their retType mirrors the source type, so a public
 	// call with an ANY-typed source (for example a bare NULL) would publish an
@@ -8920,10 +8921,9 @@ func bindFuncExprImplByPlanExpr(
 			return nil, moerr.NewInvalidArg(ctx, "operator + need two args", len(args))
 		}
 		if isNullExpr(args[0]) {
-			return args[0], nil
-		}
-		if isNullExpr(args[1]) {
-			return args[1], nil
+			nullArithmeticResult = args[0]
+		} else if isNullExpr(args[1]) {
+			nullArithmeticResult = args[1]
 		}
 		if args[0].Typ.Id == int32(types.T_date) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
@@ -8977,10 +8977,9 @@ func bindFuncExprImplByPlanExpr(
 			return nil, moerr.NewInvalidArg(ctx, "operator - need two args", len(args))
 		}
 		if isNullExpr(args[0]) {
-			return args[0], nil
-		}
-		if isNullExpr(args[1]) {
-			return args[1], nil
+			nullArithmeticResult = args[0]
+		} else if isNullExpr(args[1]) {
+			nullArithmeticResult = args[1]
 		}
 		// rewrite "date '2001' - interval '1 day'" to date_sub(date '2001', 1, day(unit))
 		if args[0].Typ.Id == int32(types.T_date) && args[1].Typ.Id == int32(types.T_interval) {
@@ -9013,10 +9012,9 @@ func bindFuncExprImplByPlanExpr(
 			return nil, moerr.NewInvalidArg(ctx, fmt.Sprintf("operator %s need two args", name), len(args))
 		}
 		if isNullExpr(args[0]) {
-			return args[0], nil
-		}
-		if isNullExpr(args[1]) {
-			return args[1], nil
+			nullArithmeticResult = args[0]
+		} else if isNullExpr(args[1]) {
+			nullArithmeticResult = args[1]
 		}
 	case "unary_plus":
 		// MySQL's parser drops unary plus, so +<temporal> keeps the operand's
@@ -9468,6 +9466,11 @@ func bindFuncExprImplByPlanExpr(
 		fGet, err = function.GetFunctionByName(ctx, name, lookupTypes)
 	}
 	if err != nil {
+		if nullArithmeticResult != nil {
+			// Preserve the established strict-NULL fold when no viable overload
+			// exists; the old shortcut never resolved that operand either.
+			return nullArithmeticResult, nil
+		}
 		if name == "between" {
 			return bindBetweenAsComparisons(ctx, args)
 		}
@@ -10277,6 +10280,17 @@ func bindFuncExprImplByPlanExpr(
 				break
 			}
 		}
+	}
+	if nullArithmeticResult != nil {
+		// Fold strict NULL arithmetic only after overload resolution has fixed
+		// the result type. Publishing the function wrapper would retain a
+		// correlated LIMIT 0 source that this fold is required to discard.
+		folded := *nullArithmeticResult
+		folded.Typ = Typ
+		if preparedCalendarResult != nil {
+			folded.Typ = makePlan2Type(preparedCalendarResult)
+		}
+		return &folded, nil
 	}
 	result := &Expr{
 		Expr: &plan.Expr_F{
