@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 )
 
 func initMoExplainPhyTestCase() []tcTemp {
@@ -1124,6 +1125,19 @@ func TestMoExplainPhyMixedDiagnosticHistory(t *testing.T) {
 	compact2 := `{"statement_diagnostics":{"version":1,"level":2,"captured_level":2,"reasons":1,"outcome":"success","detail":{"capture":"complete"},"logical":[{"index":7,"kind":"SCAN","analyze_available":true,"read_bytes":1024}]}}`
 	compact3 := `{"statement_diagnostics":{"version":1,"level":3,"captured_level":3,"reasons":1,"outcome":"success","detail":{"capture":"complete"},"physical":[{"index":7,"scope":2,"remote":true,"operator":3,"kind":"SCAN","analyze_available":true,"elapsed_ns":10,"output_rows":1}]}}`
 	detail := "detail=complete logical-omitted=0 physical-visited=0 physical-bounded=false physical-candidates-omitted=0\n"
+	lockReadRow := func(lock string) string {
+		return `{"statement_diagnostics":{"version":1,"level":1,"captured_level":1,"reasons":1024,"outcome":"timeout","detail":{"capture":"complete"},"summary":{"attempts":2,"lock_read":` + lock + `}}}`
+	}
+	// Older compact rows can contain identifiers. Keep rendering their stage
+	// data while leaving the identifiers out of the SQL summary.
+	localLock := lockReadRow(`{"statement_id":"1b8d0b79-528a-459b-9f2b-55525987d084","observed_conflict_txn_id":"acfaeea1549c4e66821454005af39afe","attempt_count":2,"seen":15,"conflict":true,"acquisition_ns":5000000,"pk_check_ns":4000000,"pk_readiness_ns":3000000,"last_incomplete":"pk_readiness","outcome":"failed"}`)
+	remoteLock := lockReadRow(`{"attempt_count":2,"seen":5,"acquisition_ns":5000000,"pk_check_ns":18446744073709551615,"last_incomplete":"pk_check","remote_pk_substages_unavailable":true,"outcome":"failed"}`)
+	lockSummary := "Statement diagnostics L1 (captured L1): timeout; reasons=lock-read\n" +
+		fmt.Sprintf("wall=0s elapsed=0s active=0s wait_ns=%v\n", [resource.WaitKindCount]uint64{}) +
+		fmt.Sprintf("max-domain-peak=0B sum-domain-peak-bound=0B; S3 read/write=0/0B requests=%v; spill=0B egress=0B\n", [resource.S3OpCount]uint64{}) +
+		"attempts=2 retry-wall=0ns quality=complete missing-fragments=0 missing-memory-domains=0\n"
+	wantLocalLock := lockSummary + "lock-read attempts=2 conflict=true acquisition=5ms logtail=0s pk_check=4ms pk_readiness=3ms last-incomplete=pk_readiness\n" + detail
+	wantRemoteLock := lockSummary + "lock-read attempts=2 conflict=false acquisition=5ms pk_check=18446744073709551615ns last-incomplete=pk_check remote-pk-substages=unavailable\n" + detail
 	legacyCases := initMoExplainPhyTestCase()
 	for i, mode := range []string{"normal", "verbose", "analyze"} {
 		expected := make([]string, 3)
@@ -1136,10 +1150,10 @@ func TestMoExplainPhyMixedDiagnosticHistory(t *testing.T) {
 		if mode == "analyze" {
 			expected[2] += "instance[7] SCAN scope=2 remote=true op=3 elapsed=10ns rows=0->1\n"
 		}
-		inputs := []string{legacyCases[i].inputs[0].values.([]string)[0], compact1, compact2, compact3, "{", `{}`, `{"statement_diagnostics":{"version":99}}`, compact1, "", compact1}
-		wanted := []string{legacyCases[i].expect.wanted.([]string)[0], expected[0], expected[1], expected[2], "", "", "Unsupported statement diagnostics version 99\n", expected[0], "", ""}
-		inputNull := []bool{false, false, false, false, false, false, false, false, false, true}
-		outputNull := []bool{false, false, false, false, true, false, false, false, true, true}
+		inputs := []string{legacyCases[i].inputs[0].values.([]string)[0], compact1, compact2, compact3, localLock, "{", `{}`, `{"statement_diagnostics":{"version":99}}`, remoteLock, compact1, "", compact1}
+		wanted := []string{legacyCases[i].expect.wanted.([]string)[0], expected[0], expected[1], expected[2], wantLocalLock, "", "", "Unsupported statement diagnostics version 99\n", wantRemoteLock, expected[0], "", ""}
+		inputNull := []bool{false, false, false, false, false, false, false, false, false, false, false, true}
+		outputNull := []bool{false, false, false, false, false, true, false, false, false, false, true, true}
 		for _, reverse := range []bool{false, true} {
 			if reverse {
 				for left, right := 0, len(inputs)-1; left < right; left, right = left+1, right-1 {

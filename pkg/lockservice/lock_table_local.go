@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"sort"
 	"sync"
 	"time"
@@ -1310,6 +1311,7 @@ func (l *localLockTable) handleLockConflictLocked(
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
 	}
 
+	resource.ObserveLocalLockConflict(c.ctx, c.w.waitFor)
 	conflictWith.addWaiter(l.logger, c.w)
 	// Set waiter to blocking before adding to events.mu.blockedWaiters so
 	// waiter_events.check() won't remove it (check removes only non-blocking).
