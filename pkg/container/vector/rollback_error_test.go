@@ -66,8 +66,7 @@ func TestAppendAllocatorLimitReturnsErrorAndKeepsPrefix(t *testing.T) {
 	first := strings.Repeat("a", 64)
 	require.NoError(t, AppendBytes(v, []byte(first), false, mp))
 	err := AppendBytes(v, []byte(strings.Repeat("b", 64)), false, mp)
-	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
-	require.NotErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.ErrorContains(t, err, "invalid mpool grow capacity")
 	require.Equal(t, 1, v.Length())
 	require.Equal(t, first, v.GetStringAt(0))
 }

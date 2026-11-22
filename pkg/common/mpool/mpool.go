@@ -1124,6 +1124,9 @@ func (mp *MPool) AllocAccountedWithCapacityClass(
 }
 
 func (mp *MPool) allocWithDetailK(detailk string, sz int64, offHeap bool) ([]byte, error) {
+	if mp == nil {
+		return nil, moerr.NewInternalErrorNoCtx("allocation does not have a mpool")
+	}
 	// reject unexpected alloc size.
 	if sz < 0 || sz > maxAllocationSize() {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
@@ -1132,7 +1135,9 @@ func (mp *MPool) allocWithDetailK(detailk string, sz int64, offHeap bool) ([]byt
 	if sz == 0 {
 		return nil, nil
 	}
-	if offHeap && mp.view != nil {
+	if mp.view != nil {
+		// A view charges every allocation it makes, so it always allocates
+		// off-heap whatever the caller asked for.
 		return mp.view.alloc(mp, detailk, sz)
 	}
 	return mp.alloc(detailk, sz, offHeap)
@@ -1497,6 +1502,11 @@ func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHea
 	if sz <= int64(cap(old)) {
 		return old[:sz], nil
 	}
+	if mp == nil {
+		return nil, moerr.NewInternalErrorNoCtx("growth does not have a mpool")
+	}
+	// A view allocates off-heap, as in allocWithDetailK.
+	offHeap = offHeap || mp.view != nil
 
 	newSz := sz
 	if bufferMore {
@@ -1577,6 +1587,8 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 // ReallocZero is like Realloc, but it clears the memory.
 func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
+	// A view allocates off-heap, as in allocWithDetailK.
+	offHeap = offHeap || mp.view != nil
 	if int64(sz) < 0 || int64(sz) > maxAllocationSize() {
 		return nil, moerr.NewInternalErrorNoCtxf(
 			"mpool memory allocation exceed limit with requested size %d",

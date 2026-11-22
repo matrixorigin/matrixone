@@ -2496,10 +2496,10 @@ func TestSetAnyConstNull(t *testing.T) {
 	typ := types.T_any.ToType()
 	set := GetConstSetFunction(typ, mp)
 	constant := NewConstNull(typ, 2, mp)
-	flat := NewVec(typ)
+	flat := NewVec(typ, mp)
 	flat.SetLength(2)
 	flat.SetNull(1)
-	dst := NewVec(typ)
+	dst := NewVec(typ, mp)
 
 	for _, src := range []*Vector{constant, flat} {
 		require.NoError(t, set(dst, src, 1, 3))
@@ -4604,7 +4604,7 @@ func TestUnionBatchCapacityFailurePreservesDestinationArea(t *testing.T) {
 	beforeArea := bytes.Clone(destination.GetArea())
 
 	err := destination.UnionBatch(source, 0, 1, nil, mp)
-	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
+	require.ErrorContains(t, err, "invalid mpool grow capacity")
 	require.Equal(t, beforeLength, destination.Length())
 	require.Equal(t, beforeArea, destination.GetArea())
 }

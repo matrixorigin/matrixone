@@ -42,12 +42,15 @@ func TestMPoolAccountedView(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, account.Snapshot().Used, uint64(8192))
 
-	// On-heap allocations through the view are not accounted.
+	// A view decides accounting itself: an on-heap request through it is
+	// allocated off-heap and charged like any other.
 	before := account.Snapshot().Used
 	heap, err := view.Alloc(1024, false)
 	require.NoError(t, err)
-	require.Equal(t, before, account.Snapshot().Used)
+	require.GreaterOrEqual(t, account.Snapshot().Used, before+1024)
 	view.Free(heap)
+	require.Equal(t, before, account.Snapshot().Used)
+	before = account.Snapshot().Used
 
 	// Generic helpers route through the view too.
 	slice, err := MakeSlice[int64](128, view, true)

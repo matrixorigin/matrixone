@@ -709,7 +709,7 @@ func TestColumnSlicesLowPrecFloat(t *testing.T) {
 func TestConvertFlatUntypedNullVectorToSlice(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := vector.NewConstNull(types.T_any.ToType(), 2, mp)
-	vec := vector.NewVec(types.T_any.ToType())
+	vec := vector.NewVec(types.T_any.ToType(), mp)
 	require.NoError(t, vec.UnionOne(source, 0, mp))
 	require.NoError(t, vec.UnionOne(source, 1, mp))
 	require.False(t, vec.IsConstNull())

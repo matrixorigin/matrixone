@@ -16,7 +16,6 @@ package vector
 
 import (
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -139,7 +138,7 @@ func TestDetachedBufferStaysInItsPool(t *testing.T) {
 	dst := NewVec(types.T_int64.ToType(), mp)
 	require.True(t, buf.CanAttachTo(dst, DetachedDataBuffer))
 	require.NoError(t, buf.AttachTo(dst, DetachedDataBuffer))
-	require.NotEqual(t, uintptr(0), uintptr(unsafe.Pointer(unsafe.SliceData(dst.GetData()))))
+	require.NotZero(t, cap(dst.GetData()))
 
 	dst.Free(mp)
 	src.Free(mp)

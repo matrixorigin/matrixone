@@ -80,7 +80,7 @@ func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 		return moerr.NewInvalidInputNoCtx("invalid legacy vector representation")
 	}
 	if v.hasBackingStorage() {
-		return allocationAccountInvalid("cannot replace vector storage without Free")
+		return moerr.NewInternalErrorNoCtx("cannot replace vector storage without Free")
 	}
 	// JSON needs complete admission before any decoded descriptor can become
 	// visible; other types keep the legacy decoder contract.
@@ -128,13 +128,13 @@ func (v *Vector) copyDecoded(decoded *Vector) (err error) {
 	w.length = decoded.length
 	w.sorted = decoded.sorted
 	if len(decoded.data) > 0 {
-		if w.data, err = w.allocData(v.mp, len(decoded.data)); err != nil {
+		if w.data, err = w.alloc(v.mp, len(decoded.data)); err != nil {
 			return err
 		}
 		copy(w.data, decoded.data)
 	}
 	if len(decoded.area) > 0 {
-		if w.area, err = w.allocArea(v.mp, len(decoded.area)); err != nil {
+		if w.area, err = w.alloc(v.mp, len(decoded.area)); err != nil {
 			return err
 		}
 		copy(w.area, decoded.area)
@@ -146,7 +146,7 @@ func (v *Vector) copyDecoded(decoded *Vector) (err error) {
 
 func (v *Vector) unmarshalBinaryV1(data []byte) error {
 	if len(data) < 1+types.TSize {
-		return allocationAccountInvalid("short legacy vector type")
+		return moerr.NewInternalErrorNoCtx("short legacy vector type")
 	}
 	typ, err := types.DecodeTypeChecked(data[1 : 1+types.TSize])
 	if err != nil {

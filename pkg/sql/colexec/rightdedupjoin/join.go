@@ -401,10 +401,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 	if err != nil {
 		return err
 	}
-	resMP, err := ap.resultMP(proc)
-	if err != nil {
-		return err
-	}
 
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
