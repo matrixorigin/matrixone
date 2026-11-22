@@ -308,7 +308,7 @@ type QueryBuilder struct {
 	hasZeroScalarSourceCandidate  bool
 	zeroScalarPrivilegeScans      []*plan.Node
 	zeroScalarPrivilegeSources    map[int32]struct{}
-	zeroScalarRequiredLiveSources map[int32]struct{}
+	zeroScalarRequiredLiveSources map[int32]zeroScalarLiveRequirement
 	zeroScalarRootCtx             *BindContext
 	zeroScalarScanIDs             []int32
 

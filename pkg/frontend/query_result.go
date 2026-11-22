@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -609,20 +610,20 @@ func getTablesFromPlan(p *plan.Plan) string {
 	if p == nil {
 		return ""
 	}
-	buf := new(strings.Builder)
-	cnt := 0
-	if q, ok := p.Plan.(*plan.Plan_Query); ok {
-		for _, n := range q.Query.Nodes {
-			if n.NodeType == plan.Node_EXTERNAL_SCAN || n.NodeType == plan.Node_TABLE_SCAN {
-				if cnt > 0 {
-					buf.WriteString(", ")
-				}
-				buf.WriteString(n.TableDef.Name)
-				cnt++
+	var tables strings.Builder
+	for _, node := range p.GetQuery().GetNodes() {
+		if node == nil || plan2.IsZeroScalarPrivilegeCarrier(node) ||
+			(node.NodeType != plan.Node_EXTERNAL_SCAN && node.NodeType != plan.Node_TABLE_SCAN) {
+			continue
+		}
+		if name := node.GetTableDef().GetName(); name != "" {
+			if tables.Len() > 0 {
+				tables.WriteString(", ")
 			}
+			tables.WriteString(name)
 		}
 	}
-	return buf.String()
+	return tables.String()
 }
 
 func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, error) {

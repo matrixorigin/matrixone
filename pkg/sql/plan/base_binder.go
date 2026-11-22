@@ -665,7 +665,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	}
 	if b.builder.zeroScalarRewriteGeneration != zeroScalarGeneration ||
 		b.builder.zeroScalarRetentionGeneration != zeroScalarRetention {
-		if err := b.builder.retainZeroScalarAuthorizationSources(nodeID); err != nil {
+		if err := b.builder.retainZeroScalarAuthorizationSources(nodeID, zeroLimitScalarHasControlFunction(astExpr.Select)); err != nil {
 			return nil, err
 		}
 	}
@@ -2638,7 +2638,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 			return
 		}
 		for _, root := range missing {
-			if err := b.builder.retainZeroScalarAuthorizationSources(root); err != nil {
+			if err := b.builder.retainZeroScalarAuthorizationSources(root, false); err != nil {
 				boundExpr, bindErr = nil, err
 				return
 			}

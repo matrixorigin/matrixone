@@ -45,6 +45,35 @@ type correlatedPaginationBoundary struct {
 	preds []*plan.Expr
 }
 
+func zeroLimitScalarHasControlFunction(statement tree.SelectStatement) bool {
+	var selectNode *tree.Select
+	switch stmt := statement.(type) {
+	case *tree.ParenSelect:
+		if stmt != nil {
+			selectNode = stmt.Select
+		}
+	case *tree.Select:
+		selectNode = stmt
+	}
+	if selectNode == nil || selectNode.Limit == nil || !zeroLimitLiteral(selectNode.Limit.Count) {
+		return false
+	}
+
+	found := false
+	walkGroupingSetOrderByExpr(&tree.Subquery{Select: statement}, func(expr tree.Expr) bool {
+		if found {
+			return false
+		}
+		fn, ok := expr.(*tree.FuncExpr)
+		if ok && fn.FuncName != nil {
+			name := strings.ToLower(fn.FuncName.Origin())
+			found = name == "mo_ctl" || name == "fault_inject"
+		}
+		return !found
+	})
+	return found
+}
+
 // zeroLimitScalarSourceSafe checks the original SQL tree before binding can
 // inline SQL UDFs or fold away their unused arguments. The planner rewrite is
 // limited to a one-column SELECT over one direct ordinary-table reference.

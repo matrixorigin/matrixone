@@ -31,7 +31,22 @@ func IsZeroScalarPrivilegeCarrier(node *plan.Node) bool {
 		(node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_VALUE_SCAN)
 }
 
-func (builder *QueryBuilder) retainZeroScalarAuthorizationSources(root int32) error {
+type zeroScalarLiveRequirement uint8
+
+const (
+	zeroScalarLiveScan zeroScalarLiveRequirement = iota
+	zeroScalarLiveControl
+)
+
+func (builder *QueryBuilder) requireZeroScalarLiveSource(id int32, requirement zeroScalarLiveRequirement) {
+	if builder.zeroScalarRequiredLiveSources == nil {
+		builder.zeroScalarRequiredLiveSources = make(map[int32]zeroScalarLiveRequirement)
+	}
+	builder.zeroScalarRequiredLiveSources[id] = requirement
+}
+
+func (builder *QueryBuilder) retainZeroScalarAuthorizationSources(root int32, controlRequired bool) error {
+	controlBound := false
 	pending := []int32{root}
 	seen := make(map[int32]struct{})
 	for len(pending) > 0 {
@@ -52,20 +67,14 @@ func (builder *QueryBuilder) retainZeroScalarAuthorizationSources(root int32) er
 			}
 			pending = append(pending, builder.qry.Steps[step])
 		}
-		if node.NodeType == plan.Node_PROJECT {
-			for _, expr := range node.ProjectList {
-				if expr != nil && HasMoCtrl(expr) {
-					return moerr.NewNYI(builder.GetContext(), "control function in correlated scalar LIMIT 0 wrapper")
-				}
-			}
+		if ProjectHasMoCtrl(node) {
+			controlBound = true
+			builder.requireZeroScalarLiveSource(id, zeroScalarLiveControl)
 		}
 		if node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN {
 			// These scans may need separate frontend authorization; the original
 			// node must remain reachable for that consumer to validate it.
-			if builder.zeroScalarRequiredLiveSources == nil {
-				builder.zeroScalarRequiredLiveSources = make(map[int32]struct{})
-			}
-			builder.zeroScalarRequiredLiveSources[id] = struct{}{}
+			builder.requireZeroScalarLiveSource(id, zeroScalarLiveScan)
 			continue
 		}
 		isScan := node.NodeType == plan.Node_TABLE_SCAN && node.ObjRef != nil
@@ -97,6 +106,9 @@ func (builder *QueryBuilder) retainZeroScalarAuthorizationSources(root int32) er
 			}
 		}
 		builder.zeroScalarPrivilegeScans = append(builder.zeroScalarPrivilegeScans, carrier)
+	}
+	if controlRequired && !controlBound {
+		return moerr.NewNYI(builder.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
 	}
 	return nil
 }
@@ -153,8 +165,9 @@ func (builder *QueryBuilder) finalizeZeroScalarAuthorizationSources() error {
 				return moerr.NewInternalError(builder.GetContext(), "correlated scalar LIMIT 0 source is not a table scan")
 			}
 		}
-		for id := range builder.zeroScalarRequiredLiveSources {
-			if _, ok := seen[id]; !ok {
+		for id, requirement := range builder.zeroScalarRequiredLiveSources {
+			_, live := seen[id]
+			if !live || (requirement == zeroScalarLiveControl && !ProjectHasMoCtrl(builder.qry.Nodes[id])) {
 				return moerr.NewNYI(builder.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
 			}
 		}

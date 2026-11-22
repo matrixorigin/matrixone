@@ -868,23 +868,23 @@ func TestZeroScalarAuthorizationSourcesFollowStepsAndViews(t *testing.T) {
 		{NodeType: plan.Node_VALUE_SCAN, DirectView: "constant_view"},
 	}
 	builder.qry.Steps = []int32{1}
-	require.NoError(t, builder.retainZeroScalarAuthorizationSources(0))
-	require.NoError(t, builder.retainZeroScalarAuthorizationSources(2))
-	require.NoError(t, builder.retainZeroScalarAuthorizationSources(0))
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(0, false))
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(2, false))
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(0, false))
 	require.Len(t, builder.zeroScalarPrivilegeScans, 2)
 	require.Equal(t, "source", builder.zeroScalarPrivilegeScans[0].GetObjRef().GetObjName())
 	require.Equal(t, []string{"v"}, builder.zeroScalarPrivilegeScans[0].OriginViews)
 	require.Equal(t, builder.qry.Nodes[1].TableDef, builder.zeroScalarPrivilegeScans[0].TableDef)
 	require.Equal(t, "constant_view", builder.zeroScalarPrivilegeScans[1].DirectView)
-	require.Error(t, builder.retainZeroScalarAuthorizationSources(3))
+	require.Error(t, builder.retainZeroScalarAuthorizationSources(3, false))
 	builder.qry.Nodes[0].SourceStep = []int32{1}
-	require.Error(t, builder.retainZeroScalarAuthorizationSources(0))
+	require.Error(t, builder.retainZeroScalarAuthorizationSources(0, false))
 }
 
-func TestZeroScalarAuthorizationRetentionKeepsNonCacheableAndRejectsControl(t *testing.T) {
+func TestZeroScalarAuthorizationRetentionKeepsNonCacheableAndRequiresLiveControl(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
 	builder.qry.Nodes = []*plan.Node{{NodeType: plan.Node_PROJECT, NotCacheable: true}}
-	require.NoError(t, builder.retainZeroScalarAuthorizationSources(0))
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(0, false))
 	require.Len(t, builder.zeroScalarPrivilegeScans, 1)
 	require.True(t, builder.zeroScalarPrivilegeScans[0].NotCacheable)
 
@@ -894,7 +894,12 @@ func TestZeroScalarAuthorizationRetentionKeepsNonCacheableAndRejectsControl(t *t
 			Func: &plan.ObjectRef{ObjName: "mo_ctl"},
 		}}}},
 	})
-	require.ErrorContains(t, builder.retainZeroScalarAuthorizationSources(1), "control function in correlated scalar LIMIT 0 wrapper")
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(1, true))
+	require.Equal(t, zeroScalarLiveControl, builder.zeroScalarRequiredLiveSources[1])
+	builder.qry.Steps = []int32{1}
+	builder.qry.Nodes[1].ProjectList = nil
+	require.ErrorContains(t, builder.finalizeZeroScalarAuthorizationSources(),
+		"special source in correlated scalar LIMIT 0 wrapper")
 }
 
 type zeroScalarResultScanContext struct{ *MockCompilerContext }

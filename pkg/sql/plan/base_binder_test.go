@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -221,6 +222,41 @@ func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*fu
 		}, nil
 	default:
 		return nil, nil
+	}
+}
+
+func TestZeroScalarControlAuthorization(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	control := "mo_ctl('cn', 'GetProtocolVersion', '')"
+	from := " from nation n where (select n.n_nationkey from region r " +
+		"where r.r_regionkey > n.n_nationkey limit 0) is null"
+	for _, tc := range []struct {
+		name         string
+		sql          string
+		reject       bool
+		keepsControl bool
+	}{
+		{name: "ordinary scalar", sql: "select (select " + control + " limit 0)"},
+		{name: "ordinary exists", sql: "select exists(select " + control + " limit 0)"},
+		{name: "live project", sql: "select (select " + control + from + " limit 0)", keepsControl: true},
+		{name: "discarded project", sql: "select null + (select " + control + from + " limit 1) from nation", reject: true},
+		{name: "folded call", sql: "select (select null + " + control + from + " limit 0)", reject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+			if tc.reject {
+				require.ErrorContains(t, err, "special source in correlated scalar LIMIT 0 wrapper")
+				return
+			}
+			require.NoError(t, err)
+			if tc.keepsControl {
+				require.True(t, slices.ContainsFunc(query.Nodes, ProjectHasMoCtrl),
+					"the frontend must still see the retained control function")
+			}
+		})
 	}
 }
 
