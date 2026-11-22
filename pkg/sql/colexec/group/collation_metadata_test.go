@@ -35,7 +35,7 @@ func TestMergeGroupExtraBufCollationAdmission(t *testing.T) {
 			defer proc.Free()
 			defer func() { require.Zero(t, proc.Mp().CurrNB()) }()
 			typ := types.NewWithCharset(types.T_varchar, 8, 0, 3)
-			input := vector.NewVec(typ)
+			input := vector.NewVec(typ, proc.Mp())
 			defer input.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(input, []byte("A"), false, proc.Mp()))
 			ids := []int64{aggexec.AggIdOfMin, aggexec.AggIdOfMax}
@@ -93,9 +93,9 @@ func TestMergeGroupExtraBufCollationAdmission(t *testing.T) {
 					extra.Write(payload)
 				}
 				partial.ExtraBuf = extra.Bytes()
-				wire, err := partial.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
+				wire, err := partial.MarshalBinaryForPipeline(new(bytes.Buffer), true)
 				require.NoError(t, err)
-				decoded := batch.NewOffHeapEmpty()
+				decoded := batch.NewWithSize(0)
 				require.NoError(t, decoded.UnmarshalBinaryForPipeline(wire, proc.Mp()))
 				_, err = merge.buildOneBatch(proc, decoded)
 				decoded.Clean(proc.Mp())
