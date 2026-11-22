@@ -651,14 +651,26 @@ func TestZeroScalarSavedResultAuthorization(t *testing.T) {
 
 func TestZeroScalarControlAuthorization(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
-	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
-		"select null + (select mo_ctl('cn', 'GetProtocolVersion', '') from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n", 1)
-	require.NoError(t, err)
-	_, err = NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
-	stmt.Free()
-	require.ErrorContains(t, err, "control function in a LIMIT 0 subquery")
+	for _, expr := range []string{
+		"(select mo_ctl('cn', 'GetProtocolVersion', '') limit 0)",
+		"exists(select mo_ctl('cn', 'GetProtocolVersion', '') limit 0)",
+		"(select mo_ctl('cn', 'GetProtocolVersion', '') from nation n where (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) is null limit 0)",
+	} {
+		t.Run(expr, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select "+expr, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+			require.NoError(t, err)
+			var retained bool
+			for _, node := range query.Nodes {
+				retained = retained || NodeHasMoCtrl(node)
+			}
+			require.True(t, retained, "the frontend still needs to authorize the control function")
+		})
+	}
 
-	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
 		"select n.n_nationkey from nation n window w as (order by null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0), mo_ctl('cn', 'GetProtocolVersion', ''))", 1)
 	require.NoError(t, err)
 	_, err = BuildPlan(ctx, stmt, false, nil)
@@ -670,6 +682,13 @@ func TestZeroScalarControlAuthorization(t *testing.T) {
 	require.NoError(t, err)
 	_, err = NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
 	stmt.Free()
+	require.ErrorContains(t, err, "special source in correlated scalar LIMIT 0 wrapper")
+
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select (select null + mo_ctl('cn', 'GetProtocolVersion', '') from nation n where (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) is null limit 0)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
 	require.ErrorContains(t, err, "special source in correlated scalar LIMIT 0 wrapper")
 }
 

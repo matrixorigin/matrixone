@@ -57,6 +57,12 @@ from outer_rows o order by o.a;
 select o.a, (select o.a from inner_rows i where i.d > o.a limit 1) as positive_limit
 from outer_rows o order by o.a;
 
+-- LIMIT 0 still accepts control-function subqueries for administrators.
+select (select mo_ctl('cn', 'GetProtocolVersion', '') limit 0) as control_scalar,
+       exists(select mo_ctl('cn', 'GetProtocolVersion', '') limit 0) as control_exists;
+select (select mo_ctl('cn', 'GetProtocolVersion', '') from outer_rows o
+        where (select o.a from inner_rows i where i.d > o.a limit 0) is null limit 0) as control_wrapper;
+
 -- A nested zero boundary does not erase its enclosing aggregate.
 select (select count(*) from (select d from inner_rows limit 0) q) as nested_count;
 
@@ -147,6 +153,10 @@ set save_query_result = off;
 -- @session:id=1&user=sys:issue_32869_reader:issue_32869_role&password=111
 use test_issue_32869;
 select a from outer_rows order by a;
+select (select mo_ctl('cn', 'GetProtocolVersion', '') limit 0) as control_scalar;
+select exists(select mo_ctl('cn', 'GetProtocolVersion', '') limit 0) as control_exists;
+select (select mo_ctl('cn', 'GetProtocolVersion', '') from outer_rows o
+        where (select o.a from inner_rows i where i.d > o.a limit 0) is null limit 0) as control_wrapper;
 insert into test_issue_32869.issue_32869_dml
 select null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0)
 from test_issue_32869.outer_rows o;

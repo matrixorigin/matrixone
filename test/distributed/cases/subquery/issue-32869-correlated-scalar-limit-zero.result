@@ -119,6 +119,14 @@ null  ¦  null  𝄀
 1  ¦  1  𝄀
 1  ¦  1  𝄀
 11  ¦  11
+select (select mo_ctl('cn', 'GetProtocolVersion', '') limit 0) as control_scalar,
+exists(select mo_ctl('cn', 'GetProtocolVersion', '') limit 0) as control_exists;
+➤ control_scalar[12,65535,0]  ¦  control_exists[-6,8,0]  𝄀
+null  ¦  0
+select (select mo_ctl('cn', 'GetProtocolVersion', '') from outer_rows o
+where (select o.a from inner_rows i where i.d > o.a limit 0) is null limit 0) as control_wrapper;
+➤ control_wrapper[12,65535,0]  𝄀
+null
 select (select count(*) from (select d from inner_rows limit 0) q) as nested_count;
 ➤ nested_count[-5,64,0]  𝄀
 0
@@ -276,6 +284,13 @@ null  𝄀
 1  𝄀
 1  𝄀
 11
+select (select mo_ctl('cn', 'GetProtocolVersion', '') limit 0) as control_scalar;
+internal error: do not have privilege to execute the statement
+select exists(select mo_ctl('cn', 'GetProtocolVersion', '') limit 0) as control_exists;
+internal error: do not have privilege to execute the statement
+select (select mo_ctl('cn', 'GetProtocolVersion', '') from outer_rows o
+where (select o.a from inner_rows i where i.d > o.a limit 0) is null limit 0) as control_wrapper;
+internal error: do not have privilege to execute the statement
 insert into test_issue_32869.issue_32869_dml
 select null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0)
 from test_issue_32869.outer_rows o;

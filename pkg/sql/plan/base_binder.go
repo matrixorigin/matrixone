@@ -1215,9 +1215,6 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	if b.ctx == nil {
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
-	if zeroLimitScalarHasControlFunction(astExpr.Select) {
-		return nil, moerr.NewNYI(b.GetContext(), "control function in a LIMIT 0 subquery")
-	}
 	subCtx := NewBindContext(b.builder, b.ctx)
 	zeroScalarSourceSafe := !astExpr.Exists && zeroLimitScalarSourceSafe(astExpr.Select, subCtx)
 	udfResolutionCount := b.builder.udfResolutionCount
@@ -1270,6 +1267,20 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		sources, err := collectUDFArgumentAuthorizationSources(b.builder, nil, []int32{nodeID})
 		if err != nil {
 			return nil, err
+		}
+		// A control function folded while binding an affected wrapper might
+		// already be missing from the sources checked by the frontend.
+		if zeroLimitScalarHasControlFunction(astExpr.Select) {
+			controlRetained := false
+			for source := range sources {
+				if NodeHasMoCtrl(b.builder.qry.Nodes[source]) {
+					controlRetained = true
+					break
+				}
+			}
+			if !controlRetained {
+				return nil, moerr.NewNYI(b.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
+			}
 		}
 		if b.builder.zeroScalarPolicy == zeroScalarValidateOnly {
 			if err := b.builder.validateZeroScalarSpecialSources(sources); err != nil {
