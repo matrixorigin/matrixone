@@ -221,6 +221,18 @@ func (c *Cache[K, V]) Contains(key K) bool {
 	return s.items[key] != nil
 }
 
+// Size returns the size of key when present, without counting a use.
+func (c *Cache[K, V]) Size(key K) (int64, bool) {
+	s := c.shardOf(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.items[key]
+	if e == nil {
+		return 0, false
+	}
+	return e.Value.(*item[K, V]).size, true
+}
+
 // Delete removes key.
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 	s := c.shardOf(key)

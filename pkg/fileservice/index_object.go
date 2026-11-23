@@ -171,10 +171,10 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 		return nil
 	}
 	name := IndexObjectEntry(p.File)
-	file, gen, done, err := s.indexFileCache.openEntryFile(ctx, name, IndexObjectFile)
+	file, entry, err := s.indexFileCache.openEntryFile(ctx, name, IndexObjectFile)
 	if err != nil {
-		if done != nil {
-			defer done()
+		if entry != nil {
+			defer entry.done()
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -182,24 +182,17 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 		// The entries are read from the other caches or storage. The entry read is
 		// dropped when it cannot be opened, or is indexed without its file; a lack of
 		// resources to open it keeps it.
-		if done == nil || openResourcesExhausted(err) {
+		if entry == nil || openResourcesExhausted(err) {
 			return nil
 		}
 		missing := ""
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			missing = IndexObjectFile
 		}
-		s.indexFileCache.dropBroken(ctx, name, missing, gen)
+		s.indexFileCache.dropBroken(ctx, name, missing, entry.gen, entry.dir, "")
 		return nil
 	}
-	ended := false
-	end := func() {
-		if !ended {
-			ended = true
-			done()
-		}
-	}
-	defer end()
+	defer entry.done()
 	s.touchIndexObject(diskPath)
 	var read int64
 	for i := range vector.Entries {
@@ -218,7 +211,11 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 			// The entry's file is shorter than the object or unreadable: the entry read
 			// is dropped and the entries not done are read from the other caches or
 			// storage.
-			s.indexFileCache.dropBroken(ctx, name, "", gen)
+			seen, statErr := file.Stat()
+			if statErr != nil {
+				return nil
+			}
+			s.indexFileCache.dropBroken(ctx, name, "", entry.gen, seen, IndexObjectFile)
 			return nil
 		}
 		e.done = true

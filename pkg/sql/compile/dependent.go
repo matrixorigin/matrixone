@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -122,6 +123,10 @@ func (c *Compile) compileDependentSource(node *plan.Node) (dependent.SourceFacto
 		if node.ObjRef.PubInfo != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(node.ObjRef.PubInfo.TenantId))
 		}
+		policy := scanReadPolicy(node)
+		if policy != 0 {
+			ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|policy)
+		}
 		db, err := c.e.Database(ctx, node.ObjRef.SchemaName, txn)
 		if err != nil {
 			return nil, err
@@ -149,6 +154,7 @@ func (c *Compile) compileDependentSource(node *plan.Node) (dependent.SourceFacto
 		op := table_scan.NewArgument().WithTypes(typs)
 		op.OutputAllocation = sourceAllocation
 		op.Reader, op.Attrs, op.TableID = readers[0], attrs, node.TableDef.TblId
+		op.ReadPolicy = policy
 		op.SetAnalyzeControl(int(node.NodeId), true)
 		return op, nil
 	}), nil

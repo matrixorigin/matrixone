@@ -1156,6 +1156,31 @@ func (d *DiskCache) dropCachedRange(ctx context.Context, diskPath string) {
 	d.cache.Delete(ctx, diskPath)
 }
 
+// cachedFileExists reports whether the cache file at diskPath is on disk; when it is
+// missing, its index entry is dropped (see dropMissingFile).
+func (d *DiskCache) cachedFileExists(ctx context.Context, diskPath string) bool {
+	if _, err := os.Stat(diskPath); os.IsNotExist(err) {
+		d.dropMissingFile(ctx, diskPath)
+		return false
+	}
+	return true
+}
+
+// dropMissingFile drops the index entry of the cache file at diskPath while the file is
+// missing, unless another holder owns its path.
+func (d *DiskCache) dropMissingFile(ctx context.Context, diskPath string) {
+	owner, ok := d.paths.tryAcquire(diskPath, nil)
+	if !ok {
+		return
+	}
+	defer owner.release()
+	if _, err := os.Stat(diskPath); !os.IsNotExist(err) {
+		return
+	}
+	d.ranges.remove(diskPath)
+	d.cache.Delete(ctx, diskPath)
+}
+
 // memoryPrefetchObject is a prefetch range being read from object storage into buf.
 type memoryPrefetchObject struct {
 	start, end int64

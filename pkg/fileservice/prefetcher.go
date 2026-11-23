@@ -681,17 +681,29 @@ func (s *S3FS) haveObject(req ObjectPrefetch) bool {
 	if s.diskCache.download(diskPath) != nil {
 		return true
 	}
+	ctx := context.Background()
 	if len(req.Ranges) == 0 {
-		_, ok := s.diskCache.cache.Get(context.Background(), diskPath)
-		return ok
+		_, ok := s.diskCache.cache.Get(ctx, diskPath)
+		return ok && s.diskCache.cachedFileExists(ctx, diskPath)
 	}
-	if s.diskCache.cache.Contains(diskPath) {
+	if s.diskCache.cache.Contains(diskPath) && s.diskCache.cachedFileExists(ctx, diskPath) {
 		return true
 	}
 	key := s.diskCache.rangeObjectKey(path.File)
+	checked := make(map[string]struct{})
 	for _, r := range req.Ranges {
-		if _, ok := s.diskCache.ranges.covering(key, r.Offset, r.Size); !ok {
+		rs, ok := s.diskCache.ranges.covering(key, r.Offset, r.Size)
+		if !ok {
 			return false
+		}
+		for _, c := range rs {
+			if _, ok := checked[c.diskPath]; ok {
+				continue
+			}
+			checked[c.diskPath] = struct{}{}
+			if !s.diskCache.cachedFileExists(ctx, c.diskPath) {
+				return false
+			}
 		}
 	}
 	return true

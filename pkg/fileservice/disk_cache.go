@@ -423,7 +423,7 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 			switch name := entry.Name(); {
 			case !d.dirEntries:
 			case strings.HasSuffix(name, cacheDirTrashSuffix):
-				_ = os.RemoveAll(path)
+				_ = d.removeTrash(path, 0)
 				numDeleted++
 				return fs.SkipDir
 			case strings.HasSuffix(name, cacheDirTempSuffix):
@@ -565,6 +565,9 @@ func (d *DiskCache) Read(
 		opened, ok = d.paths.open(ctx, diskPath, generation)
 		if !ok {
 			d.paths.endRead(diskPath, generation)
+			if d.cache.Contains(diskPath) {
+				d.cachedFileExists(ctx, diskPath)
+			}
 			return openedDiskCacheFile{}, false, false
 		}
 		openedFiles[diskPath] = opened

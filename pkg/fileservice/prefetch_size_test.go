@@ -17,6 +17,8 @@ package fileservice
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -81,8 +83,11 @@ func TestPrefetchOfCachedObjectMarksItUsed(t *testing.T) {
 	d := fs.diskCache
 	ctx := context.Background()
 	a, b := d.pathForFile("a"), d.pathForFile("b")
-	d.cache.Set(ctx, a, struct{}{}, 1)
-	d.cache.Set(ctx, b, struct{}{}, 1)
+	for _, p := range []string{a, b} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte{1}, 0o644))
+		d.cache.Set(ctx, p, struct{}{}, 1)
+	}
 	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "a", Size: 1}))
 	require.False(t, fs.prefetcher.isQueued("a"), "a cached object is not queued")
@@ -97,8 +102,11 @@ func TestRangePrefetchOfCachedObjectLeavesItsOrder(t *testing.T) {
 	d := fs.diskCache
 	ctx := context.Background()
 	a, b := d.pathForFile("a"), d.pathForFile("b")
-	d.cache.Set(ctx, a, struct{}{}, 1)
-	d.cache.Set(ctx, b, struct{}{}, 1)
+	for _, p := range []string{a, b} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte{1}, 0o644))
+		d.cache.Set(ctx, p, struct{}{}, 1)
+	}
 	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "a", Size: 1, Ranges: []PrefetchRange{{Offset: 0, Size: 1}}}))
 	require.False(t, fs.prefetcher.isQueued("a"), "a cached object is not queued")
