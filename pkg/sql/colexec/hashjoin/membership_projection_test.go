@@ -82,7 +82,6 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 				payload := vector.NewVec(types.T_varchar.ToType(), tc.proc.Mp())
 				probe.Vecs = append(probe.Vecs, payload)
 				if generation == 3 {
-					// A constant value may still have per-logical-row grouping.
 					require.NoError(t, vector.SetConstBytes(payload, []byte("7"), len(values), tc.proc.Mp()))
 					payload.SetClass(vector.CONSTANT)
 				} else {
@@ -90,7 +89,6 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 						require.NoError(t, vector.AppendBytes(payload, []byte(strconv.Itoa(row)), row == 3, tc.proc.Mp()))
 					}
 				}
-				payload.GetGrouping().Add(2)
 				build := makeInt32Batch(tc.proc, buildValues)
 				inputs = append(inputs, build)
 				probe.Vecs[0].GetNulls().Add(0)
@@ -128,7 +126,6 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 						output := res.Batch.Vecs[1]
 						nullPayload := next == 3 && generation != 3
 						require.Equal(t, nullPayload, output.IsNull(uint64(row)))
-						require.Equal(t, next == 2, output.GetGrouping().Contains(uint64(row)))
 						if !nullPayload {
 							expected := strconv.Itoa(next)
 							if generation == 3 {

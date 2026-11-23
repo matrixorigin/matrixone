@@ -82,7 +82,7 @@ func TestHashJoinSpillDiskV2(t *testing.T) {
 	require.NoError(t, err)
 	defer buildFile.Close()
 	var payload bytes.Buffer
-	err = buildBat.MarshalBinaryWithGroupingTo(&payload)
+	err = buildBat.MarshalBinaryForSpillTo(&payload)
 	require.NoError(t, err)
 	rows, size, magic := int64(buildBat.RowCount()), int64(payload.Len()), uint64(spillutil.SpillMagic)
 	for _, part := range [][]byte{

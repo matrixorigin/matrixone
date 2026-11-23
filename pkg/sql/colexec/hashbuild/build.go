@@ -76,7 +76,6 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.setSpillThreshold(hashBuild.SpillThreshold)
 	hashBuild.ctr.autoSpillTriggered = false
 	hashBuild.ctr.autoSpillLimitAtTrigger = 0
-	hashBuild.ctr.autoSpillHasGrouping = false
 	hashBuild.ctr.spillUUID = fmt.Sprintf("hb_%d", hashBuildSpillSequence.Add(1))
 
 	budget, err := proc.GetExecutionResourceBudget()
@@ -1011,16 +1010,6 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 			return nil
 		}
 		rowCount := ctr.hashmapBuilder.uniqueKeys.count()
-		hasGrouping := false
-		_ = ctr.hashmapBuilder.uniqueKeys.visit(func(keys []*vector.Vector) error {
-			hasGrouping = hasGrouping || keys[0].GetGrouping().GetBitmap().CountRange(0, uint64(keys[0].Length())) > 0
-			return nil
-		})
-		if hasGrouping {
-			runtimeFilter.Typ = message.RuntimeFilter_PASS
-			hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
-			return nil
-		}
 
 		// Always send the unique join keys; the consumer (ivfflat / fulltext
 		// search) decides whether to use them as an exact pk IN filter or to
@@ -1211,9 +1200,8 @@ func (hashBuild *HashBuild) handleScalarRuntimeFilter(
 		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
 		return nil
 	}
-	if keyVec.GetGrouping().GetBitmap().CountRange(0, 1) != 0 ||
-		runtimefilter.ExactKeyEncoding(spec, *keyVec.GetType()) !=
-			keycodec.ExactRuntimeFilterRaw {
+	if runtimefilter.ExactKeyEncoding(spec, *keyVec.GetType()) !=
+		keycodec.ExactRuntimeFilterRaw {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
 		return nil

@@ -73,6 +73,13 @@ func (pd *poolData) replaceValidRow(mp *mpool.MPool, bat *batch.Batch, row1, row
 		if vec.IsConst() {
 			right = 0
 		}
+		// A NULL source row (including a const NULL, which has no payload)
+		// only marks the destination row NULL.
+		if vec.IsNull(uint64(right)) {
+			pd.validBatch.Vecs[i].SetNull(uint64(row1))
+			continue
+		}
+		pd.validBatch.Vecs[i].UnsetNull(uint64(row1))
 		if f := replaceMethods[vec.GetType().Oid]; f != nil {
 			err = f(pd.validBatch.Vecs[i], vec, row1, right, mp)
 		} else {

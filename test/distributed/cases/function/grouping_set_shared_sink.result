@@ -1,0 +1,99 @@
+drop database if exists grouping_set_shared_sink;
+create database grouping_set_shared_sink;
+use grouping_set_shared_sink;
+create table t_empty(a int, b int, c varchar(10));
+explain select count(*) from t_empty group by grouping sets ((a), ()) having count(*) >= 0;
+-- @regex("Sink Scan", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Plan 0:  𝄀
+Sink  𝄀
+  ->  Project  𝄀
+        ->  Aggregate  𝄀
+              Group Key: #[0,0], #[0,3]  𝄀
+              Aggregate Functions: starcount(#[0,1])  𝄀
+              ->  Project  𝄀
+                    ->  Table Scan on grouping_set_shared_sink.t_empty  𝄀
+Plan 1:  𝄀
+Project  𝄀
+  ->  Union All  𝄀
+        ->  Project  𝄀
+              ->  Filter  𝄀
+                    Filter Cond: (#[0,0] >= 0)  𝄀
+                    ->  Filter  𝄀
+                          Filter Cond: (#[0,1] = 0)  𝄀
+                          ->  Sink Scan  𝄀
+                                DataSource: Plan 0  𝄀
+        ->  Project  𝄀
+              ->  Filter  𝄀
+                    Filter Cond: (#[0,0] >= 0)  𝄀
+                    ->  Filter  𝄀
+                          Filter Cond: (#[0,1] = 1)  𝄀
+                          ->  Sink Scan  𝄀
+                                DataSource: Plan 0
+select count(*) from t_empty group by grouping sets ((a), ()) having count(*) >= 0;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t_empty group by grouping sets ((a), ()) having 1 = 0;
+➤ count(*)[-5,64,0]
+select count(*) from t_empty group by grouping sets ((a), ()) having grouping(a) = 0;
+➤ count(*)[-5,64,0]
+select count(*) from t_empty group by grouping sets ((a), ()) having grouping(a) = 1;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*), sum(b) from t_empty group by a with rollup having count(*) >= 0;
+➤ count(*)[-5,64,0]  ¦  sum(b)[3,32,0]
+select count(*) from t_empty group by a with rollup having 1 = 0;
+➤ count(*)[-5,64,0]
+select count(*) from t_empty group by cube(a, b) having grouping(a, b) = 0;
+➤ count(*)[-5,64,0]
+select count(*) from t_empty group by cube(a, b) having grouping(a, b) = 3;
+➤ count(*)[-5,64,0]  𝄀
+0
+select b, count(*) from t_empty group by grouping sets ((a), (b), ()) having count(*) >= 0 order by b;
+➤ b[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  0
+select c, grouping(c), count(*) from t_empty group by grouping sets ((a), (c), ()) having count(*) >= 0 order by grouping(c), c;
+➤ c[12,10,0]  ¦  grouping(c)[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  1  ¦  0
+create table t_rows(a int, b int, c varchar(10));
+insert into t_rows values (1, 10, 'x'), (1, 20, null), (2, 30, 'y'), (null, 40, 'x');
+select count(*) from t_rows group by grouping sets ((a), ()) having count(*) >= 0 order by 1;
+➤ count(*)[-5,64,0]  𝄀
+1  𝄀
+1  𝄀
+2  𝄀
+4
+select count(*) from t_rows group by grouping sets ((a), ()) having 1 = 0;
+➤ count(*)[-5,64,0]
+select count(*) from t_rows group by grouping sets ((a), ()) having grouping(a) = 1;
+➤ count(*)[-5,64,0]  𝄀
+4
+select count(*), sum(b) from t_rows group by a with rollup having count(*) >= 2 order by 1, 2;
+➤ count(*)[-5,64,0]  ¦  sum(b)[3,32,0]  𝄀
+2  ¦  30  𝄀
+4  ¦  100
+select sum(b) from t_rows group by cube(a, c) having grouping(a, c) = 2 order by 1;
+➤ sum(b)[3,32,0]  𝄀
+20  𝄀
+30  𝄀
+50
+select b, count(*) from t_rows group by grouping sets ((a), (b), ()) having count(*) >= 1 order by b, 2;
+➤ b[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  1  𝄀
+null  ¦  1  𝄀
+null  ¦  2  𝄀
+null  ¦  4  𝄀
+10  ¦  1  𝄀
+20  ¦  1  𝄀
+30  ¦  1  𝄀
+40  ¦  1
+select c, grouping(c), count(*) from t_rows group by grouping sets ((a), (c), ()) having count(*) >= 1 order by grouping(c), c, 3;
+➤ c[12,10,0]  ¦  grouping(c)[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  0  ¦  1  𝄀
+x  ¦  0  ¦  2  𝄀
+y  ¦  0  ¦  1  𝄀
+null  ¦  1  ¦  1  𝄀
+null  ¦  1  ¦  1  𝄀
+null  ¦  1  ¦  2  𝄀
+null  ¦  1  ¦  4
+drop database grouping_set_shared_sink;

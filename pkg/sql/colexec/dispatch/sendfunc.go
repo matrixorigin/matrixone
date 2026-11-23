@@ -21,14 +21,12 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -62,43 +60,10 @@ var (
 	sendToAnyRemote = sendToAnyRemoteFunc
 )
 
-// transportMetadataRemoteWireEnabled reports whether the peer reads the batch
-// metadata trailer (MORPC v12 and later).
-func transportMetadataRemoteWireEnabled(proc *process.Process) bool {
-	return remoteBatchWireVersion(proc) >= defines.MORPCVersion12
-}
-
-func remoteBatchWireVersion(proc *process.Process) int64 {
-	if proc == nil {
-		return 0
-	}
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	if rt == nil {
-		return 0
-	}
-	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, ok := value.(int64)
-	if !ok {
-		return 0
-	}
-	return version
-}
-
-// marshalRemoteBatch keeps the stable Batch prefix unchanged and appends the
-// optional transient provenance trailer only after the shared protocol gate is
-// enabled. During a rolling upgrade, source metadata is omitted for an older
-// peer while the already-supported provenance axes remain lossless.
+// marshalRemoteBatch encodes a batch in the stable Batch wire format.
 func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buffer) ([]byte, error) {
 	if bat == nil {
 		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")
-	}
-	if bat.HasGrouping() && remoteBatchWireVersion(proc) < defines.MORPCVersion87 {
-		return nil, moerr.NewInvalidStateNoCtx(
-			"grouping provenance requires MORPCVersion87 for remote dispatch")
-	}
-	wireEnabled := transportMetadataRemoteWireEnabled(proc)
-	if wireEnabled {
-		return bat.MarshalBinaryForPipeline(buf, true)
 	}
 	return bat.MarshalBinaryWithBuffer(buf, true)
 }

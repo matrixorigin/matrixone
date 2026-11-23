@@ -203,7 +203,7 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
-	return extendWithBitmaps(v, rows, m, false, false)
+	return extendWithBitmaps(v, rows, m, false)
 }
 
 func extendWithBitmaps(
@@ -211,7 +211,6 @@ func extendWithBitmaps(
 	rows int,
 	m *mpool.MPool,
 	needNulls bool,
-	needGrouping bool,
 ) error {
 	if err := v.checkMP(m); err != nil {
 		return err
@@ -223,17 +222,8 @@ func extendWithBitmaps(
 	}
 
 	tgtLen := v.length + rows
-	switch {
-	case needNulls && needGrouping:
-		if err := v.ensureBitmapCapacity(tgtLen); err != nil {
-			return err
-		}
-	case needNulls:
+	if needNulls {
 		if err := v.ensureNullCapacity(tgtLen); err != nil {
-			return err
-		}
-	case needGrouping:
-		if err := v.ensureGroupingCapacity(tgtLen); err != nil {
 			return err
 		}
 	}
