@@ -230,13 +230,13 @@ func (builder *QueryBuilder) materializeReturningSource(
 	colPos map[string]int32,
 ) int32 {
 	sinkID := appendSinkNodeWithTag(builder, bindCtx, inputNodeID, inputTag)
-	builder.preserveReturningSinkProjection(sinkID)
+	builder.keepSinkProjection(sinkID)
 	step := builder.appendStep(sinkID)
 	builder.recordReturningSource(step, tableDef, objRef, tableName, alias, colPos)
 	return builder.appendTaggedSinkScan(bindCtx, step, inputTag)
 }
 
-func (builder *QueryBuilder) preserveReturningSinkProjection(nodeID int32) {
+func (builder *QueryBuilder) keepSinkProjection(nodeID int32) {
 	if builder.preserveSinkProjection == nil {
 		builder.preserveSinkProjection = make(map[int32]struct{})
 	}

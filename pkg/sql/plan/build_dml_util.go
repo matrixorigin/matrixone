@@ -4521,6 +4521,9 @@ func reduceSinkSinkScanNodes(qry *Query) {
 			nodeId := stepMaps[key]
 			newStepIdx := len(newSteps)
 			newSteps = append(newSteps, nodeId)
+			if qry.HasReturning && int(qry.ReturningStep) == key {
+				qry.ReturningStep = int32(newStepIdx)
+			}
 			if sinkScanNodeIds, ok := pointToNodeMap[nodeId]; ok {
 				for _, sinkScanNodeId := range sinkScanNodeIds {
 					if len(qry.Nodes[sinkScanNodeId].SourceStep) > 1 {
@@ -5405,7 +5408,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	}
 	if builder.deleteIndexVariants && !isUpdate && !delCtx.isDeleteWithoutFilters &&
 		canBindStoredDeleteRows([]*plan.TableDef{delCtx.tableDef}) && needsDeleteIndexKeyVariants(delCtx.tableDef, indexdef) {
-		return builder.buildDeleteIndexVariantsStep(bindCtx, delCtx, indexdef, uniqueObjRef, uniqueTableDef, posMap, isUk, isSK)
+		return builder.buildDeleteIndexStep(bindCtx, delCtx, indexdef, uniqueObjRef, uniqueTableDef, posMap, isUk, isSK)
 	}
 	var lastNodeId int32
 	var uniqueDeleteIdx int

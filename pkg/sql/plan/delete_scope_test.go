@@ -49,9 +49,13 @@ func TestDeleteIndexKeyRepresentations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			index := &planpb.IndexDef{Parts: tc.parts, Unique: tc.unique}
 			require.True(t, needsDeleteIndexKeyVariants(table, index))
-			stored, display, err := builder.deleteIndexKeyVariants(table, index, positions, 17)
+			stored, display, err := builder.deleteIndexKeys(table, index, positions, 17, true)
 			require.NoError(t, err)
 			require.Equal(t, tc.fn, stored.GetF().Func.ObjName)
+			if !tc.unique {
+				require.Equal(t, "case", display.GetF().Func.ObjName)
+				display = display.GetF().Args[2]
+			}
 			require.Equal(t, tc.fn, display.GetF().Func.ObjName)
 			for i, name := range tc.parts {
 				if name != "e" && name != "s" {
@@ -74,8 +78,38 @@ func TestDeleteIndexKeyRepresentations(t *testing.T) {
 	owner, err := builder.deleteIndexOwner(table, positions, 17)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), owner.GetCol().ColPos)
-	_, _, err = builder.deleteIndexKeyVariants(table, &planpb.IndexDef{Parts: []string{"missing", catalog.Row_ID}}, positions, 17)
+	for _, typ := range []types.T{types.T_float32, types.T_float64} {
+		floatTable := *table
+		floatTable.Cols = append([]*planpb.ColDef(nil), table.Cols...)
+		floatPK := *table.Cols[0]
+		floatPK.Typ.Id = int32(typ)
+		floatTable.Cols[0] = &floatPK
+		owner, err = builder.deleteIndexOwner(&floatTable, positions, 17)
+		require.NoError(t, err)
+		require.Equal(t, "serial", owner.GetF().Func.ObjName)
+		require.Equal(t, int32(0), owner.GetF().Args[0].GetCol().ColPos)
+	}
+	_, _, err = builder.deleteIndexKeys(table, &planpb.IndexDef{Parts: []string{"missing", catalog.Row_ID}}, positions, 17, true)
 	require.Error(t, err)
+}
+
+func TestReduceSinkPreservesReturningStep(t *testing.T) {
+	query := &planpb.Query{
+		HasReturning:  true,
+		ReturningStep: 2,
+		Steps:         []int32{1, 3, 4},
+		Nodes: []*planpb.Node{
+			{NodeType: planpb.Node_VALUE_SCAN},
+			{NodeType: planpb.Node_SINK, Children: []int32{0}},
+			{NodeType: planpb.Node_SINK_SCAN, SourceStep: []int32{0}},
+			{NodeType: planpb.Node_PROJECT, Children: []int32{2}},
+			{NodeType: planpb.Node_PROJECT, Children: []int32{0}},
+		},
+	}
+	reduceSinkSinkScanNodes(query)
+	require.Equal(t, []int32{3, 4}, query.Steps)
+	require.Equal(t, int32(1), query.ReturningStep)
+	require.Equal(t, int32(4), query.Steps[query.ReturningStep])
 }
 
 func TestIsUnrestrictedDelete(t *testing.T) {

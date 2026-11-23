@@ -333,7 +333,8 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	}
 	builder.returningRequested = stmt.HasReturning()
 
-	rootId, err := builder.bindDelete(ctx, stmt, bindCtx)
+	var indexMaintenance deleteIndexMaintenance
+	rootId, err := builder.bindDelete(ctx, stmt, bindCtx, &indexMaintenance)
 	if err != nil {
 		if stmt.HasReturning() {
 			if feature := returningFallbackFeature(err, "legacy DELETE path"); feature != "" {
@@ -359,7 +360,7 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	if err != nil {
 		return nil, err
 	}
-	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+	if err = builder.finishDeleteIndexMaintenance(query, bindCtx, &indexMaintenance); err != nil {
 		return nil, err
 	}
 	return &Plan{

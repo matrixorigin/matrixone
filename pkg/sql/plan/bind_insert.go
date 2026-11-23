@@ -298,7 +298,7 @@ func (builder *QueryBuilder) appendIrregularMaintSource(
 	sinkTag := builder.genNewBindTag()
 	sinkID := appendSinkNodeWithTag(builder, bindCtx, newRowImageID, sinkTag)
 	if forceMaterialize {
-		builder.preserveReturningSinkProjection(sinkID)
+		builder.keepSinkProjection(sinkID)
 	}
 	maintStep := builder.appendStep(sinkID)
 
@@ -870,34 +870,26 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 	return nil
 }
 
-// finishIrregularIndexMaintenance appends the irregular-index maintenance
-// sub-plans after createQuery and runs the same post-processing the legacy insert
-// path uses (reduceSinkSinkScanNodes + tempOptimizeForDML). It is a no-op when the
-// table has no irregular indexes. Shared by the modern INSERT and LOAD paths.
+// finishIrregularIndexMaintenance appends independently maintained irregular
+// indexes and runs the same post-processing used by the legacy DML path.
 func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, bindCtx *BindContext) error {
 	if len(builder.irregularMaintIndexes) == 0 {
 		return nil
 	}
-	if len(builder.irregularMaintIndexes) > 0 {
-		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
-			return err
-		}
+	if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
+		return err
 	}
 	reduceSinkSinkScanNodes(query)
 	builder.tempOptimizeForDML()
-	builder.determineShuffleForDMLSteps()
+	builder.determineShuffleForDMLSteps(query.Steps)
 	reCheckifNeedLockWholeTable(builder)
 	return nil
 }
 
-func (builder *QueryBuilder) determineShuffleForDMLSteps() {
-	// Irregular-index maintenance is appended after createQuery, while the normal
-	// shuffle passes run inside createQuery. tempOptimizeForDML recalculates every
-	// final step with HashmapStats reset, so rerun the passes for the complete,
-	// reduced graph after statistics are final; otherwise both existing joins and
-	// late IVF/fulltext joins retain Shuffle=false and build a broadcast hash table.
-	for i := range builder.qry.Steps {
-		rootID := builder.qry.Steps[i]
+func (builder *QueryBuilder) determineShuffleForDMLSteps(steps []int32) {
+	// These post-createQuery steps have final statistics but have not yet had
+	// their shuffle methods and runtime filters finalized.
+	for _, rootID := range steps {
 		determineShuffleMethodAfterRemap(rootID, builder)
 		determineShuffleMethod2(rootID, -1, builder)
 		builder.forceJoinOnOneCN(rootID, false)
@@ -907,8 +899,8 @@ func (builder *QueryBuilder) determineShuffleForDMLSteps() {
 	// Repeat that pass only after every late DML step has finalized shuffle:
 	// shuffle hashbuild requires a (PASS) runtime-filter spec even when the probe
 	// side is a SINK_SCAN and no data filtering can be pushed into it.
-	for i := range builder.qry.Steps {
-		builder.generateRuntimeFilters(builder.qry.Steps[i])
+	for _, rootID := range steps {
+		builder.generateRuntimeFilters(rootID)
 	}
 }
 

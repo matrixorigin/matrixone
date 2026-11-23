@@ -71,7 +71,7 @@ func isUnrestrictedDelete(stmt *tree.Delete, targetCount int) bool {
 		len(stmt.PartitionNames) == 0
 }
 
-func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, bindCtx *BindContext) (int32, error) {
+func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, bindCtx *BindContext, maint *deleteIndexMaintenance) (int32, error) {
 	if len(stmt.Tables) != 1 {
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
 	}
@@ -162,6 +162,18 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 
 	selectCtx := NewBindContext(builder, bindCtx)
 	storedOldRows := canBindStoredDeleteRows(dmlCtx.tableDefs)
+	var ordinaryIndexes []*plan.IndexDef
+	hasKeyVariants := false
+	if storedOldRows {
+		indexes, _ := getValidIndexes(dmlCtx.tableDefs[0])
+		for _, index := range indexes {
+			hasKeyVariants = hasKeyVariants || needsDeleteIndexKeyVariants(dmlCtx.tableDefs[0], index)
+			if !index.Unique {
+				ordinaryIndexes = append(ordinaryIndexes, index)
+			}
+		}
+	}
+	shareIndexSource := hasKeyVariants && len(ordinaryIndexes) > 0
 	selectCtx.deleteOldRowProjection = storedOldRows
 	lastNodeID, err := builder.bindSelect(astSelect, selectCtx, false)
 	if err != nil {
@@ -180,10 +192,9 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		lastNodeID = builder.appendDistinctNode(selectCtx, lastNodeID)
 	}
 
-	var returningIrregularIndexes []*plan.IndexDef
 	if stmt.HasReturning() {
 		tableDef := dmlCtx.tableDefs[0]
-		returningIrregularIndexes = getIrregularIndexes(tableDef)
+		returningIrregularIndexes := getIrregularIndexes(tableDef)
 		alias := dmlCtx.aliases[0]
 		colPos := make(map[string]int32, len(tableDef.Cols))
 		for _, col := range tableDef.Cols {
@@ -241,6 +252,9 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		idxScanNodes[i] = make([][]*plan.Node, len(idxDefs))
 
 		for j, idxDef := range idxDefs {
+			if shareIndexSource && !idxDef.Unique {
+				continue
+			}
 			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
 			if err != nil {
 				return 0, err
@@ -353,11 +367,32 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				joinType = plan.Node_LEFT
 			}
 
+			joinConditions := []*plan.Expr{joinCond}
+			if hasKeyVariants && idxDef.Unique {
+				owner, err := builder.deleteIndexOwner(tableDef, colName2Idx[i], selectNodeTag)
+				if err != nil {
+					return 0, err
+				}
+				ownerPos, ok := idxTableDef.Name2ColIndex[catalog.IndexTablePrimaryColName]
+				if !ok {
+					return 0, moerr.NewInternalError(builder.GetContext(), "DELETE index table lacks owner")
+				}
+				hiddenOwner := GetColExpr(idxTableDef.Cols[ownerPos].Typ, idxTag, ownerPos)
+				hiddenOwner, err = bindPrimaryKeyIdentityExpr(builder, hiddenOwner, hiddenOwner.Typ)
+				if err != nil {
+					return 0, err
+				}
+				ownerMatch, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{owner, hiddenOwner})
+				if err != nil {
+					return 0, err
+				}
+				joinConditions = append(joinConditions, ownerMatch)
+			}
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: []int32{lastNodeID, idxTableNodeID},
 				JoinType: joinType,
-				OnList:   []*plan.Expr{joinCond},
+				OnList:   joinConditions,
 			}, bindCtx)
 		}
 	}
@@ -470,6 +505,25 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		}, bindCtx)
 
 		reCheckifNeedLockWholeTable(builder)
+	}
+	if shareIndexSource {
+		tableDef := dmlCtx.tableDefs[0]
+		var sourceStep int32
+		var positions map[string]int32
+		lastNodeID, sourceStep, positions, err = builder.shareDeleteIndexSource(
+			bindCtx, lastNodeID, selectNodeTag, selectNode, tableDef, colName2Idx[0], ordinaryIndexes, dmlNode,
+		)
+		if err != nil {
+			return 0, err
+		}
+		maint.sourceStep = sourceStep
+		maint.tableDef = tableDef
+		maint.objRef = dmlCtx.objRefs[0]
+		maint.indexes = ordinaryIndexes
+		maint.positions = make(map[string]int, len(positions))
+		for name, pos := range positions {
+			maint.positions[name] = int(pos)
+		}
 	}
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)

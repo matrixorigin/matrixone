@@ -1253,7 +1253,7 @@ func TestDetermineShuffleForLatePlanStep(t *testing.T) {
 		Steps: []int32{3, 2},
 	}
 
-	builder.determineShuffleForDMLSteps()
+	builder.determineShuffleForDMLSteps(builder.qry.Steps)
 
 	require.True(t, join.Stats.HashmapStats.Shuffle)
 	require.Len(t, join.RuntimeFilterProbeList, 1)
@@ -1272,7 +1272,7 @@ func TestDetermineShuffleForLatePlanStep(t *testing.T) {
 	join.Stats.HashmapStats.Shuffle = false
 	join.RuntimeFilterProbeList = nil
 	join.RuntimeFilterBuildList = nil
-	builder.determineShuffleForDMLSteps()
+	builder.determineShuffleForDMLSteps(builder.qry.Steps)
 	require.False(t, join.Stats.HashmapStats.Shuffle)
 	require.Empty(t, join.RuntimeFilterProbeList)
 	require.Empty(t, join.RuntimeFilterBuildList)
