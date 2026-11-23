@@ -60,6 +60,7 @@ func bindAndOptimizeMultiInsertQuery(ctx CompilerContext, stmt *tree.MultiInsert
 	}()
 
 	builder := NewQueryBuilder(plan.Query_INSERT, ctx, isPrepareStmt, true)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	builder.parseOptimizeHints()
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
@@ -580,7 +581,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 			return err
 		}
 		lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err = builder.appendInsertReplaceSourceCasts(
-			tCtx, lastNodeID, branch.insertColumns, objRef, tableDef, false)
+			tCtx, lastNodeID, branch.insertColumns, objRef, tableDef, false, false)
 		if err != nil {
 			return err
 		}

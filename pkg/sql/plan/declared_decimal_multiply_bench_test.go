@@ -66,7 +66,7 @@ func benchmarkMultiply(b *testing.B, widths [2]int32, rows int, shape string) {
 				if shape == "constant" {
 					input.Vecs[col], err = vector.NewConstFixed(typ, value, rows, mp)
 				} else {
-					input.Vecs[col] = vector.NewVec(typ)
+					input.Vecs[col] = vector.NewVec(typ, mp)
 					for row := range rows {
 						if err = vector.AppendFixed(input.Vecs[col], value, shape == "allnull" || shape == "nullable" && row%17 == 0, mp); err != nil {
 							b.Fatal(err)
@@ -81,7 +81,7 @@ func benchmarkMultiply(b *testing.B, widths [2]int32, rows int, shape string) {
 				if shape == "constant" {
 					input.Vecs[col], err = vector.NewConstFixed(typ, value, rows, mp)
 				} else {
-					input.Vecs[col] = vector.NewVec(typ)
+					input.Vecs[col] = vector.NewVec(typ, mp)
 					for row := range rows {
 						if err = vector.AppendFixed(input.Vecs[col], value, shape == "allnull" || shape == "nullable" && row%17 == 0, mp); err != nil {
 							b.Fatal(err)

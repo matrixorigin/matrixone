@@ -186,7 +186,7 @@ func (exec *avgTwResultFloatExec) Flush() (_ []*vector.Vector, retErr error) {
 	}()
 	for i, st := range exec.state {
 		var err error
-		vecs[i], err = exec.allocation.newVector(exec.retType)
+		vecs[i], err = exec.allocation.newVector(exec.retType, exec.mp)
 		if err != nil {
 			return nil, err
 		}
@@ -398,7 +398,7 @@ func (exec *avgTwResultDecimalExec) Flush() (_ []*vector.Vector, retErr error) {
 	}()
 	for i, st := range exec.state {
 		var err error
-		vecs[i], err = exec.allocation.newVector(exec.retType)
+		vecs[i], err = exec.allocation.newVector(exec.retType, exec.mp)
 		if err != nil {
 			return nil, err
 		}

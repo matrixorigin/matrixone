@@ -122,6 +122,27 @@ func TestIOVectorReadRangeDoesNotMutateReadToEndEntry(t *testing.T) {
 	require.Equal(t, int64(-1), vector.Entries[0].Size)
 }
 
+func TestIOVectorMinimalRangeBoundsAreIndependentOfEntries(t *testing.T) {
+	vector := IOVector{Entries: []IOEntry{
+		{Offset: 4, Size: -1, done: true},
+		{Offset: 16, Size: 8},
+		{Offset: 8, Size: 4},
+	}}
+	minOffset, maxOffset := vector.readMinimalRange()
+	require.Equal(t, int64(8), *minOffset)
+	require.Equal(t, int64(24), *maxOffset)
+
+	vector.Entries[2].Offset = 2
+	*maxOffset = 3
+	require.Equal(t, int64(8), *minOffset)
+	require.Equal(t, int64(8), vector.Entries[1].Size)
+
+	vector.Entries[1].Size = -1
+	minOffset, maxOffset = vector.readMinimalRange()
+	require.Equal(t, int64(2), *minOffset)
+	require.Nil(t, maxOffset)
+}
+
 func TestIOVectorIOMergeKeyDoesNotMutateReadToEndEntry(t *testing.T) {
 	vector := IOVector{
 		FilePath: "foo",

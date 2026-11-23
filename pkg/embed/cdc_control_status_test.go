@@ -16,12 +16,14 @@ package embed
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	dragonboat "github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -41,6 +43,108 @@ type cdcControlResult struct {
 	err error
 }
 
+// cdcClusterStateWithReadiness bounds the initial, idempotent, read-only
+// GetClusterState readiness probe of the CDC claims subtest: its result only
+// feeds state.TaskTableUser below. The current5711 CI UT (job 135195296776,
+// 2026-11-18 23:30:59) observed exactly one raw dragonboat request timeout on
+// this first probe while the log service reported the same checker-state read
+// timing out on its side in the same window; root36 kept the stall's own
+// origin qualified UNKNOWN. This helper absorbs no more than that observed
+// failure class, deterministically: at most three attempts on the caller's
+// unchanged context, retrying only errors.Is(dragonboat.ErrTimeout) chains,
+// stopping at the first success, never issuing another request once the
+// context is done, and returning any other error after the first failed
+// attempt. The caller's require.NoError still owns the final failure; no
+// deadline is raised anywhere and no claims/heartbeat/write path is retried.
+func cdcClusterStateWithReadiness(
+	t *testing.T,
+	ctx context.Context,
+	getState func(context.Context) (logservicepb.CheckerState, error),
+) (logservicepb.CheckerState, error) {
+	t.Helper()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return logservicepb.CheckerState{}, ctxErr
+	}
+	const attempts = 3
+	state, lastErr := getState(ctx)
+	for i := 2; lastErr != nil && i <= attempts; i++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return logservicepb.CheckerState{}, lastErr
+		}
+		if !errors.Is(lastErr, dragonboat.ErrTimeout) {
+			return logservicepb.CheckerState{}, lastErr
+		}
+		t.Logf("initial CDC cluster-state readiness %d/%d: %v", i-1, attempts, lastErr)
+		state, lastErr = getState(ctx)
+	}
+	if lastErr != nil {
+		t.Logf("initial CDC cluster-state readiness failed after at most %d attempts: %v", attempts, lastErr)
+	}
+	return state, lastErr
+}
+
+// TestCDCInitialClusterStateReadinessBounds covers every branch of the
+// readiness helper with deterministic pure consumers: scripted results,
+// recorded request contexts, exact error identities and finite call counts.
+// No cluster, no timing assumptions, no retry framework.
+func TestCDCInitialClusterStateReadinessBounds(t *testing.T) {
+	okState := logservicepb.CheckerState{Tick: 42}
+	nonTimeout := errors.New("cdc readiness probe: not a timeout")
+	for _, s := range []struct {
+		name        string
+		preCanceled bool
+		cancelAfter int // 1-based call index whose side effect cancels ctx; 0 = never
+		succeedAt   int // 1-based call index returning success; 0 = never
+		err         error
+		wantCalls   int
+		wantOK      bool
+		wantErrIs   error
+	}{
+		{name: "immediate success", succeedAt: 1, err: nonTimeout, wantCalls: 1, wantOK: true},
+		{name: "timeout then success", succeedAt: 2, err: dragonboat.ErrTimeout, wantCalls: 2, wantOK: true},
+		{name: "wrapped timeout is recognized then succeeds", succeedAt: 2, err: fmt.Errorf("probe: %w", dragonboat.ErrTimeout), wantCalls: 2, wantOK: true},
+		{name: "persistent timeout stays an error after three requests", err: dragonboat.ErrTimeout, wantCalls: 3, wantErrIs: dragonboat.ErrTimeout},
+		{name: "non timeout is returned after one request", err: nonTimeout, wantCalls: 1, wantErrIs: nonTimeout},
+		{name: "pre canceled context issues no request", preCanceled: true, err: nonTimeout, wantCalls: 0, wantErrIs: context.Canceled},
+		{name: "cancellation between attempts stops the probe", cancelAfter: 1, err: dragonboat.ErrTimeout, wantCalls: 1, wantErrIs: dragonboat.ErrTimeout},
+	} {
+		t.Run(s.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			if s.preCanceled {
+				cancel()
+			}
+			defer cancel()
+			var seen []context.Context
+			calls := 0
+			get := func(c context.Context) (logservicepb.CheckerState, error) {
+				calls++
+				seen = append(seen, c)
+				if calls == s.cancelAfter {
+					cancel()
+				}
+				if s.succeedAt != 0 && calls >= s.succeedAt {
+					return okState, nil
+				}
+				return logservicepb.CheckerState{}, s.err
+			}
+			state, err := cdcClusterStateWithReadiness(t, ctx, get)
+			require.Equal(t, s.wantCalls, calls, "the probe is bounded")
+			for _, c := range seen {
+				require.Same(t, ctx, c, "every request uses the caller's context unchanged")
+			}
+			if s.wantOK {
+				require.NoError(t, err)
+				require.Equal(t, okState, state)
+				return
+			}
+			require.Error(t, err)
+			if s.wantErrIs != nil {
+				require.ErrorIs(t, err, s.wantErrIs)
+			}
+		})
+	}
+}
+
 func testCDCControlConcurrentClaims(t *testing.T, c Cluster) {
 	cn0, err := c.GetCNService(0)
 	require.NoError(t, err)
@@ -51,7 +155,13 @@ func testCDCControlConcurrentClaims(t *testing.T, c Cluster) {
 	hakeeper, err := logservice.NewCNHAKeeperClient(ctx, cn0.GetServiceConfig().CN.UUID, cn0.GetServiceConfig().HAKeeperClient)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, hakeeper.Close()) })
-	state, err := hakeeper.GetClusterState(ctx)
+	// The initial cluster-state probe is a read-only, idempotent readiness
+	// read whose result only feeds state.TaskTableUser below. The bounded
+	// helper absorbs exactly the CI-observed transient single-request
+	// dragonboat timeout class (job 135195296776); claims, heartbeats and
+	// every write path stay single-shot, and the final failure still lands
+	// here unchanged.
+	state, err := cdcClusterStateWithReadiness(t, ctx, hakeeper.GetClusterState)
 	require.NoError(t, err)
 	// The regular task-service address resolver can select either CN. Pin this
 	// test's storage to CN0 so the competing transaction is definitely on CN1.

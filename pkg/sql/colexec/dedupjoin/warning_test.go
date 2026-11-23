@@ -104,7 +104,9 @@ func TestDedupJoinIgnoreReportsExistingKeyConflict(t *testing.T) {
 	dedupArg.Reset(proc, false, nil)
 	buildArg.Reset(proc, false, nil)
 	dedupArg.Free(proc, false, nil)
+	freeTestChildren(dedupArg)
 	buildArg.Free(proc, false, nil)
+	freeTestChildren(buildArg)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }

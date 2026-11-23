@@ -52,7 +52,7 @@ func TestParquetLoadLowPrecisionFloat(t *testing.T) {
 			require.NoError(t, w.Close())
 			f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 			require.NoError(t, err)
-			vec := vector.NewVec(oid.ToType())
+			vec := vector.NewVec(oid.ToType(), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), NotNullable: true})
 			require.NotNil(t, mp, oid.String())
@@ -99,7 +99,7 @@ func TestParquetLoadLowPrecisionFloatExactSource(t *testing.T) {
 		require.NoError(t, w.Close())
 		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 		require.NoError(t, err)
-		vec := vector.NewVec(types.T_bf16.ToType())
+		vec := vector.NewVec(types.T_bf16.ToType(), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bf16), NotNullable: true})
 		require.NotNil(t, mp)

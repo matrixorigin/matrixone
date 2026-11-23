@@ -120,7 +120,8 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				want   []sql.NullInt64
 			}{
 				{"X'61626364'", []sql.NullInt64{{Int64: 12, Valid: true}, {Int64: 3, Valid: true}}},
-				{"if(false, X'ff', '你好')", []sql.NullInt64{{Int64: 6, Valid: true}, {Int64: 0, Valid: true}}},
+				// IF with a binary branch is a binary string (MySQL 8.4): char_length counts bytes.
+				{"if(false, X'ff', '你好')", []sql.NullInt64{{Int64: 18, Valid: true}, {Int64: 0, Valid: true}}},
 				{"null", []sql.NullInt64{{}, {}}},
 				{"X'61626364'", []sql.NullInt64{{Int64: 12, Valid: true}, {Int64: 3, Valid: true}}},
 			} {

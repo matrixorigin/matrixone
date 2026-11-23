@@ -1,0 +1,78 @@
+# Fused two-column compact group lookup
+
+Owner: #30841. Approved for implementation by the requester on 2026-11-16,
+as PR 1 of the four independent TPC-H optimization PRs. Base: f70c37b16e.
+
+## Contract and design
+
+The existing compact table is a derived index of committed current-generation
+groups. Preserve that ownership, the 257-value CHAR domain, allocation layout,
+admission, generic insertion, spill and reset. No API, encoding, cache, group
+creation or aggregate-state changes are authorized.
+
+For two eligible flat CHAR(1) columns, resolve descriptors once and canonicalize
+both values in one row loop. Compute a*257+b and write the existing code scratch
+and the corresponding committed group ID. Do not clear codes first or traverse
+them again. Keep one-column and selected-input routes unchanged.
+
+Only publish eligibility after validating the entire chunk. A miss still checks
+the suffix, then uses generic preview/commit; unsupported input leaves the
+derived table ineligible. Generic publication uses completely initialized codes.
+Empty/PAD SPACE values, embedded NUL, high bytes and non-inline/long values keep
+the existing canonical identity and fallback. No scratch or ID is published
+before its existing owner commits.
+
+The status quo repeats descriptor/code traversals; direct-address group creation
+would introduce a new publication protocol. The chosen change removes redundant
+work without that protocol or any extra retained/temporary allocation.
+
+## Validation and delivery
+
+Extend existing tests for canonical tuples, misses, late unsupported values,
+offsets/tails and new domains. Reuse the existing admission, spill and generation
+tests. Benchmark actual 256-row full dispatch plus tiny/unsupported/miss controls.
+Compare this branch alone against clean current main with all 22 TPC-H queries
+and a Total row, locally in SF10 memory/disk and SF100 disk, without spill/swap.
+One process/configuration loads once, excludes one cold suite and measures five
+warm suites. Report wall time, instructions, allocations/copies and uncertainty;
+scripts execute/drain only. Confirmed regressions block readiness and require a
+reviewed fix, not a waived gate. A historical profile share is not a speedup claim.
+
+R2: arithmetic/key-identity and publication boundaries are affected. Existing
+ownership/lifecycle edges are unchanged. Focus owning tests/static checks and
+self-review on those contracts; no new BVT is needed for this internal algorithm
+with unchanged SQL semantics and existing real Group coverage. Preserve pending
+dictionary work when resolving future source overlaps, without depending on it.
+
+## Approved regression revision — 2026-11-16
+
+The requester approved the four proposed fixes with “then fix”.
+
+Read the existing fixed Varlena length and payload directly, bounded by VarlenaInlineSize, so the canonicalizer can inline without unsafe-slice checks. Preserve all existing key/publication semantics. Require the same instruction and fallback controls before whole-query acceptance.
+# Approved taken-branch revision — 2026-11-16
+
+The requester approved the bounded fix after equal-work counters showed one
+additional taken branch per row in one-column miss/late-unsupported controls,
+despite fewer instructions and unchanged branch misses. Keep the private decoder
+contract and add a direct one-byte path: SPACE maps to zero, any other byte maps
+to byte+1. The existing path retains empty/PAD SPACE, longer and unsupported
+representation handling. Keep all metadata, collation, scratch-publication,
+admission and generation/spill contracts.
+
+Use the fused flat tuple helper only when the chunk contains more than one row;
+single-row tuples use the existing common route to avoid fixed helper-call cost.
+No public API, state, allocation or copy mechanism changes. Verify inlining and
+all18 caller-shape controls, including equal-work cycles/taken branches, before
+isolated all22 local acceptance. Reuse matching main captures and the approved
+controlled-disk condition. Compile and time after ongoing Q13/Q20 collection.
+
+# Approved tiny-control tradeoff — 2026-11-16
+
+The requester explicitly approved the measured fixed setup overhead in
+single-row miss/unsupported controls (about eight instructions and two to three
+cycles, with zero allocation/copy increase), conditional on no confirmed TPC-H
+query, Total or resource regression in the full local acceptance. Keep those
+raw control results visible. Bulk controls, SQL/key identity, fallback, ownership,
+admission and spill/generation correctness remain required. No further code
+change is implied by this acceptance decision.
+

@@ -189,6 +189,28 @@ func TestParseDateCast(t *testing.T) {
 	}
 }
 
+func TestParseDateCastForAssignmentReportsDiscardedClock(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		loss  bool
+	}{
+		{"2026-10-21", false},
+		{"2026-10-21 00:00:00.0000000", false},
+		{"2026.10.21 00:00:00", false},
+		{"2026-10-21 10:20:30", true},
+		{"2026-10-21 10-20-30", true},
+		{"2026-10-21 23:59:59.9999999", true},
+		{"2026-10-21 00:00:00.0000001", true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			date, loss, err := ParseDateCastForAssignment(tc.value)
+			require.NoError(t, err)
+			require.Equal(t, DateFromCalendar(2026, 10, 21), date)
+			require.Equal(t, tc.loss, loss)
+		})
+	}
+}
+
 func TestParseDateCastComponents(t *testing.T) {
 	tests := []struct {
 		name    string

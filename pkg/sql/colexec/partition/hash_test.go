@@ -56,9 +56,11 @@ func TestHashPartitionCompleteStableGroupsAndReset(t *testing.T) {
 
 		arg.Reset(proc, false, nil)
 		child.Free(proc, false, nil)
+		colexec.FreeMockChildren(child)
 	}
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -78,7 +80,9 @@ func TestHashPartitionMemoryFallbackIsExact(t *testing.T) {
 	require.Equal(t, [][]int64{{1, 3}, {0, 2}, {4}}, groups)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -87,9 +91,9 @@ func TestHashPartitionMemoryFallbackIncludesRetainedBatch(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.New([]string{"k", "payload", "id"})
 	input.Vecs = []*vector.Vector{
-		vector.NewVec(types.T_int32.ToType()),
-		vector.NewVec(types.T_varchar.ToType()),
-		vector.NewVec(types.T_int64.ToType()),
+		vector.NewVec(types.T_int32.ToType(), proc.Mp()),
+		vector.NewVec(types.T_varchar.ToType(), proc.Mp()),
+		vector.NewVec(types.T_int64.ToType(), proc.Mp()),
 	}
 	keys := []int32{2, 1, 2, 1, 3, 2, 3, 1}
 	ids := []int64{0, 1, 2, 3, 4, 5, 6, 7}
@@ -121,7 +125,9 @@ func TestHashPartitionMemoryFallbackIncludesRetainedBatch(t *testing.T) {
 	require.Equal(t, [][]int64{{1, 3, 7}, {0, 2, 5}, {4, 6}}, groups)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -143,7 +149,9 @@ func TestHashPartitionFallbackRejectsAdditionalOverBudgetInput(t *testing.T) {
 	require.Equal(t, 8, arg.hash.retained.RowCount(), "only the triggering batch may be retained")
 
 	arg.Free(proc, true, err)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, true, err)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -152,9 +160,9 @@ func TestHashPartitionCompositeNullableKey(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.New([]string{"k1", "k2", "v"})
 	input.Vecs = []*vector.Vector{
-		vector.NewVec(types.T_int32.ToType()),
-		vector.NewVec(types.T_int32.ToType()),
-		vector.NewVec(types.T_int64.ToType()),
+		vector.NewVec(types.T_int32.ToType(), proc.Mp()),
+		vector.NewVec(types.T_int32.ToType(), proc.Mp()),
+		vector.NewVec(types.T_int64.ToType(), proc.Mp()),
 	}
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int32{1, 1, 1, 2, 1}, nil, proc.Mp()))
 	require.NoError(t, vector.AppendFixedList(input.Vecs[1], []int32{0, 0, 1, 0, 0}, []bool{true, true, false, false, true}, proc.Mp()))
@@ -185,7 +193,9 @@ func TestHashPartitionCompositeNullableKey(t *testing.T) {
 	require.Equal(t, [][]int64{{0, 1, 4}, {2}, {3}}, groups)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -196,9 +206,9 @@ func TestHashPartitionCompositeVariableLengthKeysAreFramed(t *testing.T) {
 	varchar.Width = 2
 	input := batch.New([]string{"k1", "k2", "v"})
 	input.Vecs = []*vector.Vector{
-		vector.NewVec(varchar),
-		vector.NewVec(varchar),
-		vector.NewVec(types.T_int64.ToType()),
+		vector.NewVec(varchar, proc.Mp()),
+		vector.NewVec(varchar, proc.Mp()),
+		vector.NewVec(types.T_int64.ToType(), proc.Mp()),
 	}
 	key1 := [][]byte{
 		[]byte("a"), []byte("ab"),
@@ -255,89 +265,9 @@ func TestHashPartitionCompositeVariableLengthKeysAreFramed(t *testing.T) {
 	}, groups)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, false, nil)
-	proc.Free()
-	require.Zero(t, proc.Mp().CurrNB())
-}
-
-func TestHashPartitionTreatsGroupingSentinelAsNull(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	input := makeHashPartitionBatch(t, proc,
-		[]int32{0, 0, 1}, []bool{true, false, false}, []int64{0, 1, 2})
-	input.Vecs[0].GetGrouping().Add(1)
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	arg := newHashPartitionArgument(1 << 30)
-	arg.AppendChild(child)
-
-	require.NoError(t, arg.Prepare(proc))
-	groups := collectHashPartitionRows(t, arg, proc)
-	require.Equal(t, [][]int64{{0, 1}, {2}}, groups)
-	require.True(t, input.Vecs[0].GetNulls().Contains(0))
-	require.False(t, input.Vecs[0].GetNulls().Contains(1))
-	require.True(t, input.Vecs[0].GetGrouping().Contains(1),
-		"hash-key normalization must not mutate borrowed input vectors")
-
-	arg.Free(proc, false, nil)
-	child.Free(proc, false, nil)
-	proc.Free()
-	require.Zero(t, proc.Mp().CurrNB())
-}
-
-func TestHashPartitionTreatsGroupingSentinelAsNullStringHash(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	input := batch.New([]string{"k", "v"})
-	input.Vecs = []*vector.Vector{
-		vector.NewVec(types.T_varchar.ToType()),
-		vector.NewVec(types.T_int64.ToType()),
-	}
-	require.NoError(t, vector.AppendBytesList(
-		input.Vecs[0], [][]byte{[]byte(""), []byte(""), []byte("x")},
-		[]bool{true, false, false}, proc.Mp(),
-	))
-	require.NoError(t, vector.AppendFixedList(
-		input.Vecs[1], []int64{0, 1, 2}, nil, proc.Mp(),
-	))
-	input.Vecs[0].GetGrouping().Add(1)
-	input.SetRowCount(3)
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	arg := &Partition{
-		Algorithm: plan.Node_PARTITION_ALGORITHM_HASH,
-		SpillMem:  1 << 30,
-		OrderBySpecs: []*plan.OrderBySpec{{
-			Expr: newExpression(0, types.T_varchar),
-		}},
-	}
-	arg.AppendChild(child)
-
-	require.NoError(t, arg.Prepare(proc))
-	groups := collectHashPartitionRows(t, arg, proc)
-	require.Equal(t, [][]int64{{0, 1}, {2}}, groups)
-	require.False(t, input.Vecs[0].GetNulls().Contains(1))
-	require.True(t, input.Vecs[0].GetGrouping().Contains(1))
-
-	arg.Free(proc, false, nil)
-	child.Free(proc, false, nil)
-	proc.Free()
-	require.Zero(t, proc.Mp().CurrNB())
-}
-
-func TestHashPartitionGroupingOnNonNullableKeyFallsBackToSort(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	input := makeHashPartitionBatch(t, proc,
-		[]int32{0, 99, 0, 1}, nil, []int64{0, 1, 2, 3})
-	input.Vecs[0].GetGrouping().Add(0, 1)
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	arg := newHashPartitionArgument(1 << 30)
-	arg.OrderBySpecs[0].Expr.Typ.NotNullable = true
-	arg.AppendChild(child)
-
-	require.NoError(t, arg.Prepare(proc))
-	groups := collectHashPartitionRows(t, arg, proc)
-	require.True(t, arg.hash.fallbackToSort)
-	require.Equal(t, [][]int64{{0, 1}, {2}, {3}}, groups)
-
-	arg.Free(proc, false, nil)
-	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -352,6 +282,7 @@ func TestHashPartitionRejectsIncompatibleKey(t *testing.T) {
 			}
 			require.Error(t, arg.Prepare(proc))
 			arg.Free(proc, true, nil)
+			colexec.FreeMockChildren(arg)
 			proc.Free()
 			require.Zero(t, proc.Mp().CurrNB())
 		})
@@ -373,7 +304,9 @@ func TestHashPartitionHonorsCancellationBeforeFinalize(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 
 	arg.Free(proc, true, err)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, true, err)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -400,7 +333,9 @@ func TestHashPartitionSortFallbackHonorsCancellationDuringFinalize(t *testing.T)
 	require.True(t, arg.hash.fallbackToSort)
 
 	arg.Free(proc, true, err)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, true, err)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -429,7 +364,9 @@ func TestHashPartitionHonorsCancellationDuringFinalMaterialization(t *testing.T)
 	require.Nil(t, arg.hash.materializing)
 
 	arg.Free(proc, true, err)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, true, err)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -468,7 +405,9 @@ func TestHashPartitionAccountsHashAndRowIndexMemory(t *testing.T) {
 		"operator statistics must include hash and every finalization row-index workspace")
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -535,7 +474,9 @@ func BenchmarkHashPartition(b *testing.B) {
 						}
 					}
 					arg.Free(proc, false, nil)
+					colexec.FreeMockChildren(arg)
 					child.Free(proc, false, nil)
+					colexec.FreeMockChildren(child)
 					proc.Free()
 					require.Zero(b, mp.CurrNB())
 				}
@@ -587,7 +528,9 @@ func BenchmarkUnicodeCollationHashConsumers(b *testing.B) {
 						}
 					}
 					arg.Free(proc, false, nil)
+					colexec.FreeMockChildren(arg)
 					child.Free(proc, false, nil)
+					colexec.FreeMockChildren(child)
 					if got := mp.CurrNB(); got != 0 {
 						b.Fatalf("hash consumer retained %d bytes after operator release", got)
 					}
@@ -619,7 +562,9 @@ func TestUnicodeCollationHashConsumerRelease(t *testing.T) {
 					}
 				}
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				child.Free(proc, false, nil)
+				colexec.FreeMockChildren(child)
 				proc.Free()
 				require.Zero(t, mp.CurrNB(), "hash consumer retained bytes for charset %d", charset)
 			}()
@@ -631,7 +576,7 @@ func makeStringHashPartitionBatch(t testing.TB, proc *process.Process, size, row
 	t.Helper()
 	typ := types.NewWithCharset(types.T_varchar, int32(size), 0, charset)
 	bat := batch.New([]string{"k", "v"})
-	key := vector.NewVec(typ)
+	key := vector.NewVec(typ, proc.Mp())
 	values := make([][]byte, rows)
 	for row := range values {
 		value := make([]byte, size)
@@ -642,7 +587,7 @@ func makeStringHashPartitionBatch(t testing.TB, proc *process.Process, size, row
 		values[row] = value
 	}
 	require.NoError(t, vector.AppendBytesList(key, values, nil, proc.Mp()))
-	payload := vector.NewVec(types.T_int64.ToType())
+	payload := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	ids := make([]int64, rows)
 	for row := range ids {
 		ids[row] = int64(row)
@@ -752,10 +697,12 @@ func runWindowPartitionBenchmark(b *testing.B, rows, ndv, keyCount int, varlen, 
 		}
 	}
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	if !useHash {
 		arg.GetChildren(0).Free(proc, false, nil)
 	}
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(b, mp.CurrNB())
 	return peak
@@ -775,7 +722,7 @@ func makeWindowPartitionBenchmarkInput(
 	for key := 0; key < keyCount; key++ {
 		bat.Attrs = append(bat.Attrs, fmt.Sprintf("k%d", key))
 		if varlen {
-			vec := vector.NewVec(types.T_varchar.ToType())
+			vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			values := make([][]byte, rows)
 			for row := range values {
 				values[row] = strconv.AppendInt(nil, int64((row*7919+key*104729)%ndv), 10)
@@ -785,7 +732,7 @@ func makeWindowPartitionBenchmarkInput(
 			specs = append(specs, &plan.OrderBySpec{Expr: newExpression(int32(key), types.T_varchar)})
 			continue
 		}
-		vec := vector.NewVec(types.T_int32.ToType())
+		vec := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		values := make([]int32, rows)
 		for row := range values {
 			values[row] = int32((row*7919 + key*104729) % ndv)
@@ -799,7 +746,7 @@ func makeWindowPartitionBenchmarkInput(
 	for row := range payload {
 		payload[row] = int64(row)
 	}
-	payloadVec := vector.NewVec(types.T_int64.ToType())
+	payloadVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(payloadVec, payload, nil, proc.Mp()))
 	bat.Vecs = append(bat.Vecs, payloadVec)
 	bat.SetRowCount(rows)
@@ -825,7 +772,7 @@ func makeHashPartitionBatch(
 ) *batch.Batch {
 	t.Helper()
 	bat := batch.New([]string{"k", "v"})
-	bat.Vecs = []*vector.Vector{vector.NewVec(types.T_int32.ToType()), vector.NewVec(types.T_int64.ToType())}
+	bat.Vecs = []*vector.Vector{vector.NewVec(types.T_int32.ToType(), proc.Mp()), vector.NewVec(types.T_int64.ToType(), proc.Mp())}
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], keys, nulls, proc.Mp()))
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], payload, nil, proc.Mp()))
 	bat.SetRowCount(len(keys))
@@ -836,9 +783,9 @@ func makeWideHashPartitionBatch(t testing.TB, proc *process.Process, start int) 
 	t.Helper()
 	bat := batch.New([]string{"k", "payload", "id"})
 	bat.Vecs = []*vector.Vector{
-		vector.NewVec(types.T_int32.ToType()),
-		vector.NewVec(types.T_varchar.ToType()),
-		vector.NewVec(types.T_int64.ToType()),
+		vector.NewVec(types.T_int32.ToType(), proc.Mp()),
+		vector.NewVec(types.T_varchar.ToType(), proc.Mp()),
+		vector.NewVec(types.T_int64.ToType(), proc.Mp()),
 	}
 	keys := make([]int32, 8)
 	ids := make([]int64, 8)

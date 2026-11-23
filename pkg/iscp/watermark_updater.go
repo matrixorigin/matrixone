@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -437,6 +438,9 @@ func registerJob(
 	if tenantId, err = defines.GetAccountId(ctx); err != nil {
 		return
 	}
+	if err = jobSpec.validateRowBudget(); err != nil {
+		return
+	}
 	if jobSpec.TriggerSpec.JobType == 0 {
 		jobSpec.TriggerSpec.JobType = TriggerType_Default
 	}
@@ -742,6 +746,9 @@ func updateJobSpec(
 	if tenantId, err = defines.GetAccountId(ctx); err != nil {
 		return
 	}
+	if err = jobSpec.validateRowBudget(); err != nil {
+		return
+	}
 	if jobSpec.TriggerSpec.JobType == 0 {
 		jobSpec.TriggerSpec.JobType = TriggerType_Default
 	}
@@ -793,6 +800,18 @@ func updateJobSpec(
 	result.Close()
 	return
 }
+
+type initSQLRetirementKey struct{}
+
+// An index initialization may retire its own job generation and register its
+// successor. Only that transaction's successful retirement can relax the
+// active-row predicate on its completion CAS.
+type initSQLRetirement struct {
+	job     JobRuntimeKey
+	txn     client.TxnOperator
+	retired atomic.Bool
+}
+
 func unregisterJob(
 	ctx context.Context,
 	cnUUID string,
@@ -859,11 +878,23 @@ func unregisterJob(
 		jobID.JobName,
 		internalJobID,
 	)
+	retirement, _ := ctx.Value(initSQLRetirementKey{}).(*initSQLRetirement)
+	ownInit := retirement != nil && retirement.txn == txn &&
+		retirement.job == NewJobRuntimeKey(tenantId, tableID, jobID.JobName, internalJobID)
+	if ownInit {
+		sql += " AND drop_at IS NULL"
+	}
 	result, err := ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
 	if err != nil {
 		return
 	}
-	result.Close()
+	defer result.Close()
+	if ownInit {
+		if result.AffectedRows != 1 {
+			return false, newISCPStatusCASLostError("iscp init sql retire job", jobID.JobName, internalJobID, result.AffectedRows)
+		}
+		retirement.retired.Store(true)
+	}
 	return
 }
 

@@ -61,7 +61,7 @@ func TestBuildSnapshotBlockFilter(t *testing.T) {
 	})
 
 	t.Run("non pk expr", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		defer vec.Free(mp)
 		for _, v := range []int64{1, 3, 5} {
 			require.NoError(t, vector.AppendFixed(vec, v, false, mp))
@@ -78,7 +78,7 @@ func TestBuildSnapshotBlockFilter(t *testing.T) {
 	})
 
 	t.Run("pk in expr", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		defer vec.Free(mp)
 		for _, v := range []int64{1, 3, 5} {
 			require.NoError(t, vector.AppendFixed(vec, v, false, mp))
@@ -275,7 +275,7 @@ func TestBuildSnapshotScanReaderConfig(t *testing.T) {
 		},
 	}
 
-	filterVec := vector.NewVec(types.T_int64.ToType())
+	filterVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer filterVec.Free(mp)
 	require.NoError(t, vector.AppendFixed(filterVec, int64(3), false, mp))
 	filterExpr, cerr := readutil.ConstructInExpr(context.Background(), "id", filterVec)
@@ -562,10 +562,10 @@ func TestCollectSnapshotScanTombstonesUsesProvidedState(t *testing.T) {
 		{rowID: rowID, ts: types.BuildTS(10, 0), id: 7, payload: 70},
 	})
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
-	tombstoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	pkVec := vector.NewVec(types.T_int64.ToType(), mp)
+	tombstoneRowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	defer rowIDVec.Free(mp)
 	defer tsVec.Free(mp)
 	defer pkVec.Free(mp)
@@ -645,7 +645,7 @@ func TestBuildSnapshotBlockFilter_MissingPrimaryKeyColumn(t *testing.T) {
 		},
 	}
 
-	filterVec := vector.NewVec(types.T_int64.ToType())
+	filterVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer filterVec.Free(mp)
 	require.NoError(t, vector.AppendFixed(filterVec, int64(3), false, mp))
 	expr, cerr := readutil.ConstructInExpr(context.Background(), "missing_pk", filterVec)

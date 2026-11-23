@@ -229,6 +229,13 @@ func inferViewColumns(
 	viewName string,
 	forAuthoring bool,
 ) (*viewColumnInference, error) {
+	if !forAuthoring {
+		// Description and regeneration rebind a stored definition, not the
+		// caller's SQL namespace. Authoring must still reject temporary sources.
+		previous := ctx.GetContext()
+		ctx.SetContext(defines.WithPersistentViewBinding(previous))
+		defer ctx.SetContext(previous)
+	}
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
 	dependencyCapture.metadataBudget = !forAuthoring
 	ctx = dependencyCapture
@@ -284,14 +291,14 @@ func inferViewColumns(
 	case *tree.ParenSelect:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName), nil)
+			objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName), nil)
+			objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1650,6 +1657,7 @@ func genAsSelectCols(
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -7652,7 +7660,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		// drops through ALTER so the rebind SQL travels in the same DDL
 		// transaction, exactly as functional-index drops do below.
 		survivingDef := DeepCopyTableDef(tableDef, true)
-		survivingDef.Indexes = RemoveIf(survivingDef.Indexes, func(indexDef *plan.IndexDef) bool {
+		survivingDef.Indexes = slices.DeleteFunc(survivingDef.Indexes, func(indexDef *plan.IndexDef) bool {
 			return indexDef.IndexName == resolvedIndexName
 		})
 		var droppedColumns []string
@@ -8068,7 +8076,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if !name_not_found {
 					delete(currentIndexNames, indexNameKey(constraintName))
 					droppedIndexNames[indexNameKey(constraintName)] = true
-					currentTableDef.Indexes = RemoveIf(currentTableDef.Indexes, func(indexDef *plan.IndexDef) bool {
+					currentTableDef.Indexes = slices.DeleteFunc(currentTableDef.Indexes, func(indexDef *plan.IndexDef) bool {
 						return indexDef.IndexName == constraintName
 					})
 				} else {
@@ -8093,7 +8101,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if !name_not_found {
 					delete(currentForeignKeyNames, constraintName)
 					droppedForeignKeyNames[constraintName] = true
-					currentTableDef.Fkeys = RemoveIf(currentTableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
+					currentTableDef.Fkeys = slices.DeleteFunc(currentTableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
 						return fk.Name == constraintName
 					})
 				} else {

@@ -40,7 +40,7 @@ func stubSql(t *testing.T, mp *mpool.MPool, count int64, sqls *[]string) func() 
 			return executor.Result{}, nil
 		}
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], count, false, mp))
 		bat.SetRowCount(1)
 		return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}, nil
@@ -51,8 +51,8 @@ func stubSql(t *testing.T, mp *mpool.MPool, count int64, sqls *[]string) func() 
 // probeBatch returns a batch of an int32 primary key and a vecf32(1) column.
 func probeBatch(t *testing.T, mp *mpool.MPool, pks []int32, vecs [][]float32, nulls []bool) *batch.Batch {
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 1, 0), mp)
 	for i := range pks {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], pks[i], false, mp))
 		require.NoError(t, vector.AppendArray(bat.Vecs[1], vecs[i], nulls[i], mp))
@@ -104,8 +104,8 @@ func TestLeaveOutRecordsEmptyIntegerVectors(t *testing.T) {
 			ctr.sqlproc = sqlexec.NewSqlProcess(proc)
 			ctr.inBat = batch.NewWithSize(2)
 			defer ctr.inBat.Clean(mp)
-			ctr.inBat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-			ctr.inBat.Vecs[1] = vector.NewVec(types.New(typ, 1, 0))
+			ctr.inBat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+			ctr.inBat.Vecs[1] = vector.NewVec(types.New(typ, 1, 0), mp)
 			for _, pk := range []int32{1, 2} {
 				require.NoError(t, vector.AppendFixed(ctr.inBat.Vecs[0], pk, false, mp))
 			}
@@ -186,7 +186,7 @@ func TestLeaveOutWithoutTable(t *testing.T) {
 func TestPkLiteral(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, []byte{0x01, 'x', '\''}, false, mp))
 	lit, err := (&Ignored{Serial: true}).pkLiteral(proc, vec, 0)
 	require.NoError(t, err)
@@ -200,7 +200,7 @@ func TestPkLiteral(t *testing.T) {
 	defer p.Close()
 	p.EncodeInt64(1)
 	p.EncodeStringType([]byte("x"))
-	serial := vector.NewVec(types.T_varchar.ToType())
+	serial := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(serial, p.GetBuf(), false, mp))
 	ig := &Ignored{Serial: true}
 	lit, err = ig.pkLiteral(proc, serial, 0)
@@ -211,7 +211,7 @@ func TestPkLiteral(t *testing.T) {
 
 	// an ENUM key is its stored number, whether the probe carries the value or its serial
 	ig = &Ignored{Enum: true, EnumValues: "a,b,c"}
-	enum := vector.NewVec(types.T_enum.ToType())
+	enum := vector.NewVec(types.T_enum.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(enum, types.Enum(2), false, mp))
 	require.NoError(t, vector.AppendFixed(enum, types.Enum(0), false, mp))
 	lit, err = ig.pkLiteral(proc, enum, 0)
@@ -221,7 +221,7 @@ func TestPkLiteral(t *testing.T) {
 	require.Equal(t, "0", ig.pkString(enum, 1, ""), "no such member")
 	p.Reset()
 	p.EncodeEnum(types.Enum(3))
-	enumSerial := vector.NewVec(types.T_varbinary.ToType())
+	enumSerial := vector.NewVec(types.T_varbinary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(enumSerial, p.GetBuf(), false, mp))
 	lit, err = ig.pkLiteral(proc, enumSerial, 0)
 	require.NoError(t, err)

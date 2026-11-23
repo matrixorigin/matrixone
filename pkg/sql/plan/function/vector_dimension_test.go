@@ -82,10 +82,10 @@ func TestVectorCastPayloadBounds(t *testing.T) {
 						n = size * (types.MaxArrayDimension + 1)
 						message = "exceeds maximum"
 					}
-					input := vector.NewVec(source)
+					input := vector.NewVec(source, proc.Mp())
 					t.Cleanup(func() { input.Free(proc.Mp()) })
 					require.NoError(t, vector.AppendBytes(input, make([]byte, n), false, proc.Mp()))
-					targetVec := vector.NewVec(target)
+					targetVec := vector.NewVec(target, proc.Mp())
 					t.Cleanup(func() { targetVec.Free(proc.Mp()) })
 					fn, err := GetFunctionByName(proc.Ctx, "cast", []types.Type{source, target})
 					require.NoError(t, err)
@@ -112,13 +112,13 @@ func TestVectorCastActualDimension(t *testing.T) {
 					if blob {
 						source = types.T_blob.ToType()
 					}
-					input := vector.NewVec(source)
+					input := vector.NewVec(source, proc.Mp())
 					t.Cleanup(func() { input.Free(proc.Mp()) })
 					// 元数据标为 2 维，实际载荷为 3 维；验证不能相信源宽度。
 					payload := make([]byte, 3*target.GetArrayElementSize())
 					require.NoError(t, vector.AppendBytes(input, nil, true, proc.Mp()))
 					require.NoError(t, vector.AppendBytes(input, payload, false, proc.Mp()))
-					targetVec := vector.NewVec(target)
+					targetVec := vector.NewVec(target, proc.Mp())
 					t.Cleanup(func() { targetVec.Free(proc.Mp()) })
 					fn, err := GetFunctionByName(proc.Ctx, "cast", []types.Type{source, target})
 					require.NoError(t, err)

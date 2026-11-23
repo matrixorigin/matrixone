@@ -69,5 +69,6 @@ func TestPartitionTopOneRunsLatestNullPayload(t *testing.T) {
 		require.True(t, result.Batch == nil || result.Status == vm.ExecStop)
 		arg.Reset(proc, false, nil)
 		child.Free(proc, false, nil)
+		colexec.FreeMockChildren(child)
 	}
 }

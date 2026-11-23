@@ -1,0 +1,10 @@
+with recursive qn as (select 1 from qn union all select 1 from qn) select * from qn;
+SQL parser error: In the initial statement of Recursive Common Table Expression qn, the recursive table must not be referenced
+select 'after anchor reentry error' as service_status;
+➤ service_status[12,26,0]  𝄀
+after anchor reentry error
+with recursive r(n) as (select 1 union all select n + 1 from r where n < 3) select * from r order by n;
+➤ n[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3

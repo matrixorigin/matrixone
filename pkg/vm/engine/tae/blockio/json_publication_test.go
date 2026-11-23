@@ -37,7 +37,7 @@ func TestJSONStoragePublicationMapsDeletedRows(t *testing.T) {
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
 	typ := types.T_json.ToType()
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(typ)
+	input.Vecs[0] = vector.NewVec(typ, mp)
 	defer input.Clean(mp)
 	for _, text := range []string{`{"keep":1}`, `{"keep":2}`} {
 		value, err := types.ParseStringToByteJson(text)
@@ -55,7 +55,7 @@ func TestJSONStoragePublicationMapsDeletedRows(t *testing.T) {
 	for _, deleted := range []bool{false, true} {
 		func() {
 			output := batch.NewWithSize(1)
-			output.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+			output.Vecs[0] = vector.NewVec(typ, mp)
 			defer output.Clean(mp)
 			publication := objectio.NewJSONReadSet([]int{0})
 			defer publication.Close()
@@ -104,8 +104,8 @@ func TestJSONStoragePublicationComposesLateFilterRows(t *testing.T) {
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
 	typ := types.T_json.ToType()
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(typ)
-	input.Vecs[1] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[0] = vector.NewVec(typ, mp)
+	input.Vecs[1] = vector.NewVec(types.T_bool.ToType(), mp)
 	defer input.Clean(mp)
 	for _, text := range []string{`{"keep":1}`, `{"keep":2}`, `{"keep":3}`} {
 		value, err := types.ParseStringToByteJson(text)
@@ -130,18 +130,15 @@ func TestJSONStoragePublicationComposesLateFilterRows(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	}()
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	for _, selectedOwned := range []bool{false, true} {
 		for _, earlyColumn := range []int{0, 1} {
 			func() {
-				output := batch.NewOffHeapWithSize(2)
-				output.Vecs[0] = vector.NewOffHeapVecWithType(typ)
-				output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
+				output := batch.NewWithSize(2)
+				output.Vecs[0] = vector.NewVec(typ, mp)
+				output.Vecs[1] = vector.NewVec(types.T_bool.ToType(), mp)
 				defer output.Clean(mp)
-				if selectedOwned {
-					require.NoError(t, output.SetAllocationAccount(allocation))
-				}
 				publication := objectio.NewJSONReadSet([]int{0})
 				defer publication.Close()
 				publication.BindColumns([]uint16{0, 1})

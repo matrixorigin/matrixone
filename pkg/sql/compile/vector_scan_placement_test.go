@@ -15,9 +15,10 @@
 package compile
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"slices"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"

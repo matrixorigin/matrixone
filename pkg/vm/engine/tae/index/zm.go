@@ -1941,11 +1941,11 @@ func ZMToVector(zm ZM, vec *vector.Vector, m *mpool.MPool) (*vector.Vector, erro
 	t := zm.GetType().ToType()
 	t.Scale = zm.GetScale()
 	if vec == nil {
-		vec = vector.NewVec(t)
+		vec = vector.NewVec(t, m)
 	}
 
 	if !zm.IsInited() {
-		vector.SetConstNull(vec, 2, m)
+		err = vector.SetConstNull(vec, 2, m)
 		return vec, err
 	}
 

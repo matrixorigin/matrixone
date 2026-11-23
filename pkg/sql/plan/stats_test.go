@@ -36,6 +36,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestValidationCarriersDoNotAffectScheduling(t *testing.T) {
+	query := &planpb.Query{Nodes: []*planpb.Node{
+		{NodeType: planpb.Node_VALUE_SCAN, Stats: &planpb.Stats{}},
+		{NodeType: planpb.Node_TABLE_SCAN, ExtraOptions: validationPrivilegeCarrierExtraOptions},
+		{NodeType: planpb.Node_VALUE_SCAN, ExtraOptions: validationPrivilegeCarrierExtraOptions},
+	}, Steps: []int32{0}}
+	require.Equal(t, ExecTypeTP, GetExecType(query, false, false))
+	require.False(t, HasShuffleInPlan(query))
+	p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: query}}
+	require.NotPanics(t, func() { CalcQueryDOP(p, 1, 1, ExecTypeTP) })
+	require.Equal(t, int32(1), query.Nodes[0].Stats.Dop)
+}
+
 func TestReCalcInnerJoinCardinality(t *testing.T) {
 	ctx := NewMockCompilerContext(false, nil)
 	typ := planpb.Type{Id: int32(types.T_int64)}
@@ -737,6 +750,57 @@ func TestAntiJoinCardinalityUsesPrimaryKeyLowerBound(t *testing.T) {
 			require.Equal(t, test.wantOutcnt, join.Stats.Outcnt)
 			require.LessOrEqual(t, join.Stats.Outcnt, 10.0)
 			require.Equal(t, int32(2), join.Stats.BlockNum)
+		})
+	}
+}
+
+func TestSemiJoinCoverageDoesNotReuseMatchingFilterRatio(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	key := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	eq, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{GetColExpr(key, 10, 0), GetColExpr(key, 20, 0)})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name                 string
+		right, want          float64
+		pk, swap, matchingPK bool
+	}{
+		{name: "unknown overlap", right: 2000, want: 500},
+		{name: "empty matching side"},
+		{name: "unique preserved key bound", right: 100, want: 100, pk: true},
+		{name: "same logical side after swap", right: 2000, want: 500, swap: true},
+		{name: "unique matching dimension keeps domain estimate", right: 100, matchingPK: true},
+		{name: "both unique retain preserved key bound", right: 100, matchingPK: true, pk: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, matchingSelectivity := range []float64{1, .001} {
+				b := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+				left := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{10},
+					TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "id", Typ: key}}, Name2ColIndex: map[string]int32{"id": 0}},
+					Stats:    &planpb.Stats{Outcnt: 1000, Selectivity: .25, BlockNum: 5}}
+				if tc.pk {
+					left.TableDef.Pkey = &planpb.PrimaryKeyDef{Names: []string{"id"}}
+				}
+				right := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{20}, Stats: &planpb.Stats{Outcnt: tc.right, Selectivity: matchingSelectivity}}
+				want := tc.want
+				if tc.matchingPK {
+					left.Stats.Selectivity = 1
+					right.TableDef = &planpb.TableDef{Cols: left.TableDef.Cols, Name2ColIndex: left.TableDef.Name2ColIndex, Pkey: &planpb.PrimaryKeyDef{Names: []string{"id"}}}
+					want = 1000 * matchingSelectivity
+					if tc.pk {
+						want = math.Min(want, tc.right)
+					}
+				}
+				join := &planpb.Node{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_SEMI, Children: []int32{0, 1}, OnList: []*planpb.Expr{DeepCopyExpr(eq)}, Stats: DefaultStats()}
+				b.qry.Nodes = []*planpb.Node{left, right, join}
+				ReCalcNodeStats(2, b, false, false, false)
+				if tc.swap {
+					join.IsRightJoin = true
+					join.Children = []int32{1, 0}
+					reCalcNodeStatsAfterSwap(2, b, false, false, false)
+				}
+				require.Equal(t, want, join.Stats.Outcnt)
+				require.InDelta(t, left.Stats.Selectivity*want/1000, join.Stats.Selectivity, 1e-12)
+			}
 		})
 	}
 }
@@ -2533,7 +2597,7 @@ func TestGuardedDiagnosticKeepsLoopJoinSupportedOrientation(t *testing.T) {
 	param := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_P{
 		P: &planpb.ParamRef{Pos: 0},
 	}}
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), ctx.proc.Mp())
 	proc := ctx.GetProcess()
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))

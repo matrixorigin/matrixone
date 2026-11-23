@@ -698,3 +698,94 @@ DEALLOCATE PREPARE multi_update_fulltext_count;
 DROP TABLE multi_update_fulltext_target;
 DROP TABLE multi_update_fulltext_source;
 DROP TABLE multi_update_fulltext_plain;
+
+-- Repeated-target IGNORE arbitrates current ownership, independently of row order.
+CREATE TABLE multi_update_ignore_reservation(id INT PRIMARY KEY, k INT, v INT, UNIQUE KEY uk(k));
+INSERT INTO multi_update_ignore_reservation VALUES (1,20,200),(2,10,100);
+UPDATE IGNORE multi_update_ignore_reservation x
+JOIN multi_update_ignore_reservation y ON x.id=2 AND y.id=1
+JOIN multi_update_ignore_reservation z ON z.id=x.id
+SET x.k=30,y.k=10,z.k=10,z.v=999;
+SHOW WARNINGS;
+SELECT id,k,v FROM multi_update_ignore_reservation ORDER BY id;
+SELECT id,k FROM multi_update_ignore_reservation FORCE INDEX(uk) WHERE k IS NOT NULL ORDER BY id;
+SELECT COUNT(*),COUNT(DISTINCT k) FROM multi_update_ignore_reservation;
+
+-- A legal later key and a current-key no-op must leave no stale duplicate warning.
+TRUNCATE multi_update_ignore_reservation;
+INSERT INTO multi_update_ignore_reservation VALUES (1,10,100),(2,20,200);
+UPDATE IGNORE multi_update_ignore_reservation x
+JOIN multi_update_ignore_reservation y ON x.id=1 AND y.id=2
+JOIN multi_update_ignore_reservation z ON z.id=x.id
+SET x.k=30,y.k=10,z.k=40,z.v=999;
+SHOW WARNINGS;
+SELECT id,k,v FROM multi_update_ignore_reservation ORDER BY id;
+TRUNCATE multi_update_ignore_reservation;
+INSERT INTO multi_update_ignore_reservation VALUES (1,10,100),(2,20,200);
+UPDATE IGNORE multi_update_ignore_reservation x
+JOIN multi_update_ignore_reservation y ON x.id=1 AND y.id=2
+JOIN multi_update_ignore_reservation z ON z.id=x.id
+SET x.k=30,y.k=10,z.k=30,z.v=999;
+SHOW WARNINGS;
+SELECT id,k,v FROM multi_update_ignore_reservation ORDER BY id;
+DROP TABLE multi_update_ignore_reservation;
+
+-- A CHECK-rejected candidate retains its preceding accepted key reservation.
+CREATE TABLE multi_update_ignore_reservation_check(
+    id INT PRIMARY KEY,k INT UNIQUE,u INT,v INT,CONSTRAINT ck_budget CHECK(u+v<150)
+);
+INSERT INTO multi_update_ignore_reservation_check VALUES (1,10,1,1),(2,20,1,1);
+UPDATE IGNORE multi_update_ignore_reservation_check x
+JOIN multi_update_ignore_reservation_check y ON x.id=1 AND y.id IN(1,2)
+SET x.k=30,x.u=100,y.k=IF(y.id=1,40,30),y.v=IF(y.id=1,100,y.v);
+SHOW WARNINGS;
+SELECT id,k,u,v FROM multi_update_ignore_reservation_check ORDER BY id;
+SELECT id,k FROM multi_update_ignore_reservation_check FORCE INDEX(k) WHERE k IS NOT NULL ORDER BY id;
+SELECT COUNT(*),COUNT(DISTINCT k) FROM multi_update_ignore_reservation_check;
+-- The second alias sees u=1 from the first accepted write.
+UPDATE IGNORE multi_update_ignore_reservation_check x
+JOIN multi_update_ignore_reservation_check y ON x.id=y.id AND x.id=1
+SET x.u=1,y.k=40,y.v=100;
+SHOW WARNINGS;
+SELECT id,k,u,v FROM multi_update_ignore_reservation_check ORDER BY id;
+DROP TABLE multi_update_ignore_reservation_check;
+
+-- Indirect generated primary-key changes obey the repeated-target key guard.
+CREATE TABLE multi_update_generated_pk_guard(
+    a INT,n INT,m INT GENERATED ALWAYS AS(a*2) STORED,
+    g INT GENERATED ALWAYS AS(m+1) STORED,PRIMARY KEY(g)
+);
+INSERT INTO multi_update_generated_pk_guard(a,n) VALUES(1,10),(2,20);
+UPDATE IGNORE multi_update_generated_pk_guard x
+JOIN multi_update_generated_pk_guard y ON x.g=y.g AND x.g=3
+SET x.a=2,y.n=9;
+UPDATE multi_update_generated_pk_guard x
+JOIN multi_update_generated_pk_guard y ON x.g=y.g AND x.g=3
+SET y.n=9,x.a=2;
+SELECT a,n,g FROM multi_update_generated_pk_guard ORDER BY g;
+-- Payload writes remain legal; generated DEFAULT does not create another writer.
+UPDATE IGNORE multi_update_generated_pk_guard x
+JOIN multi_update_generated_pk_guard y ON x.g=y.g AND x.g=3
+SET x.n=11,y.n=9;
+SELECT a,n,g FROM multi_update_generated_pk_guard ORDER BY g;
+UPDATE IGNORE multi_update_generated_pk_guard x
+JOIN multi_update_generated_pk_guard y ON x.g=y.g AND x.g=3
+SET x.a=3,y.m=DEFAULT;
+SELECT a,n,g FROM multi_update_generated_pk_guard ORDER BY g;
+DROP TABLE multi_update_generated_pk_guard;
+
+-- Generated partition roots share the same protected-key dependency guard.
+CREATE TABLE multi_update_generated_partition_guard(
+    a INT,n INT,m INT GENERATED ALWAYS AS(a*2) STORED,
+    g INT GENERATED ALWAYS AS(m+1) STORED
+) PARTITION BY HASH(g) PARTITIONS 2;
+INSERT INTO multi_update_generated_partition_guard(a,n) VALUES(1,10),(2,20);
+UPDATE IGNORE multi_update_generated_partition_guard x
+JOIN multi_update_generated_partition_guard y ON x.g=y.g AND x.g=3
+SET x.a=2,y.n=9;
+SELECT a,n,g FROM multi_update_generated_partition_guard ORDER BY g;
+UPDATE IGNORE multi_update_generated_partition_guard x
+JOIN multi_update_generated_partition_guard y ON x.g=y.g AND x.g=3
+SET x.n=11,y.n=9;
+SELECT a,n,g FROM multi_update_generated_partition_guard ORDER BY g;
+DROP TABLE multi_update_generated_partition_guard;

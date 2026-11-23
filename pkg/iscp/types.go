@@ -97,12 +97,15 @@ type IterationContext struct {
 	accountID    uint32
 	tableID      uint64
 	sourceTables []TableInfo
-	jobNames     []string
-	jobIDs       []uint64
-	lsn          []uint64
-	stages       []int8
-	fromTS       types.TS
-	toTS         types.TS
+	// Index reads keep their own range and batch layout.
+	indexJob bool
+	budget   iterationRowBudget
+	jobNames []string
+	jobIDs   []uint64
+	lsn      []uint64
+	stages   []int8
+	fromTS   types.TS
+	toTS     types.TS
 }
 
 type ISCPData struct {
@@ -221,6 +224,9 @@ type JobEntry struct {
 	// consumerType selects both batch-layout compatibility and watermark flush
 	// policy; the trigger-only jobSpec does not retain the consumer projection.
 	consumerType ConsumerType
+	// isIndexJob marks a ConsumerType_IndexSync job. It selects its own
+	// range, may share an in-step read, and uses IndexFlushWatermarkInterval.
+	isIndexJob bool
 }
 
 type JobKey struct {
@@ -260,6 +266,9 @@ type Schedule struct {
 type TriggerSpec struct {
 	JobType uint16
 	Schedule
+	// TargetRows opts this independent iteration into a soft source-change
+	// row budget. Zero preserves the historical full-range behavior.
+	TargetRows int
 }
 
 type ConsumerInfo struct {

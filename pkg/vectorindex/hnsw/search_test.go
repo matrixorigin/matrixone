@@ -380,10 +380,10 @@ func makeMetaBatch(proc *process.Process) *batch.Batch {
 	indexfile := "resources/hnsw0.bin"
 
 	bat := batch.NewWithSize(4)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))   // index_id
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 65536, 0)) // checksum
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))       // timestamp
-	bat.Vecs[3] = vector.NewVec(types.New(types.T_int64, 8, 0))       // timestamp
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0), proc.Mp())   // index_id
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 65536, 0), proc.Mp()) // checksum
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())       // timestamp
+	bat.Vecs[3] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())       // timestamp
 
 	vector.AppendBytes(bat.Vecs[0], []byte("abc-0"), false, proc.Mp())
 	chksum, err := vectorindex.CheckSum(indexfile)
@@ -406,8 +406,8 @@ func makeMetaBatch(proc *process.Process) *batch.Batch {
 
 func makeIndexBatch(proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))    // chunk_id
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0)) // data
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())    // chunk_id
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0), proc.Mp()) // data
 
 	dat, err := os.ReadFile("resources/hnsw0.bin")
 	if err != nil {
@@ -432,10 +432,10 @@ func makeMetaBatch2Files(proc *process.Process) *batch.Batch {
 	ids := []string{"abc-0", "abc-1"}
 
 	bat := batch.NewWithSize(4)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))   // index_id
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 65536, 0)) // checksum
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))       // timestamp
-	bat.Vecs[3] = vector.NewVec(types.New(types.T_int64, 8, 0))       // timestamp
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0), proc.Mp())   // index_id
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 65536, 0), proc.Mp()) // checksum
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())       // timestamp
+	bat.Vecs[3] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())       // timestamp
 
 	for i, indexfile := range indexfiles {
 
@@ -465,8 +465,8 @@ func makeIndexBatch2Files(proc *process.Process, id int) *batch.Batch {
 	indexfile := indexfiles[id]
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))    // chunk_id
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0)) // data
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())    // chunk_id
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0), proc.Mp()) // data
 
 	dat, err := os.ReadFile(indexfile)
 	if err != nil {
@@ -538,7 +538,7 @@ func TestHnswGenerationSql(t *testing.T) {
 
 func genChecksumResult(t *testing.T, mp *mpool.MPool, sums ...string) executor.Result {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, s := range sums {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(s), false, mp))
 	}
@@ -750,7 +750,7 @@ func TestHnswSearchMembershipExactThreshold(t *testing.T) {
 		s.Indexes = append(s.Indexes, &HnswModel[float32]{Id: fmt.Sprintf("m%d", model), Index: idx})
 	}
 
-	members := vector.NewVec(types.T_int64.ToType())
+	members := vector.NewVec(types.T_int64.ToType(), m)
 	defer members.Free(m)
 	var keys []int64
 	for k := int64(0); k < int64(len(vectors)); k += 7 {

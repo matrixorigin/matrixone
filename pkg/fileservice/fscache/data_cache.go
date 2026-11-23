@@ -16,6 +16,7 @@ package fscache
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -60,4 +61,14 @@ type DataCacheWithPinAdmission interface {
 		CacheKey,
 		DataCachePinAdmission,
 	) (data Data, release func(), ok bool, err error)
+}
+
+// PressureEvictionCanceled checks the deadline at work admission even if the
+// context timer has not yet published its error.
+func PressureEvictionCanceled(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	deadline, ok := ctx.Deadline()
+	return ok && !time.Now().Before(deadline)
 }

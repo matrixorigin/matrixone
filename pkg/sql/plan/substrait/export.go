@@ -1058,7 +1058,7 @@ func literalVectorOptions(encoded *planpb.LiteralVec, expected *planpb.Type) (op
 	}
 	options = make([]*planpb.Expr, physicalLength)
 	for i := 0; i < physicalLength; i++ {
-		value := rule.GetConstantValue(&values, true, uint64(i))
+		value := rule.GetConstantValue(&values, true, uint64(i), types.StringSource(encoded.StringSource))
 		if value == nil {
 			return nil, notEligiblef(EligibilityExpression, "folded IN list uses unsupported type %s", values.GetType().Oid.String())
 		}

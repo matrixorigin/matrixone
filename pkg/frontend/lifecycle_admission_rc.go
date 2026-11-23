@@ -216,8 +216,8 @@ func admitLifecycleRCSplit(
 	} else {
 		// The system retention key serializes local PITR publication only
 		// after the target is admitted, including the first absent row.
-		name := vector.NewVec(types.T_varchar.ToType())
-		creator := vector.NewVec(types.T_uint64.ToType())
+		name := vector.NewVec(types.T_varchar.ToType(), lockProc.Mp())
+		creator := vector.NewVec(types.T_uint64.ToType(), lockProc.Mp())
 		defer name.Free(lockProc.Mp())
 		defer creator.Free(lockProc.Mp())
 		if err = vector.AppendBytes(name, []byte(SYSMOCATALOGPITR), false, lockProc.Mp()); err != nil {
@@ -240,8 +240,8 @@ func admitLifecycleRCSplit(
 	if plan.publicationName != "" {
 		// Publication writers lock D before updating P. Follow that order
 		// so a database snapshot cannot invert their two-row dependency.
-		publisher := vector.NewVec(types.T_int32.ToType())
-		name := vector.NewVec(types.T_varchar.ToType())
+		publisher := vector.NewVec(types.T_int32.ToType(), lockProc.Mp())
+		name := vector.NewVec(types.T_varchar.ToType(), lockProc.Mp())
 		defer publisher.Free(lockProc.Mp())
 		defer name.Free(lockProc.Mp())
 		if err = vector.AppendFixed(publisher, int32(plan.publisher), false, lockProc.Mp()); err != nil {
@@ -336,7 +336,7 @@ func beginLifecycleRCAdmission(ctx context.Context, ses *Session, bh BackgroundE
 	}
 	a.registryID = registry.GetTableID(systemCtx)
 	key := batch.NewWithSize(1)
-	key.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	key.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	if err = vector.AppendBytes(key.Vecs[0], []byte(catalog.SnapshotLifecycleFeatureCode), false, proc.Mp()); err != nil {
 		key.Vecs[0].Free(proc.Mp())
 		return nil, err

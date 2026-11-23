@@ -77,7 +77,7 @@ func newBlockTopNTestFS(t testing.TB) *fileservice.S3FS {
 func persistBlockTopNTest(t testing.TB, fs fileservice.FileService, source *vector.Vector, payload []byte, mp *mpool.MPool) (Location, ObjectDataMeta) {
 	t.Helper()
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0], bat.Vecs[1], bat.Vecs[2] = vector.NewVec(types.T_int64.ToType()), source, vector.NewVec(types.T_array_float32.ToType())
+	bat.Vecs[0], bat.Vecs[1], bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp), source, vector.NewVec(types.T_array_float32.ToType(), mp)
 	defer bat.Vecs[0].Free(mp)
 	defer bat.Vecs[2].Free(mp)
 	for row := range source.Length() {
@@ -162,7 +162,7 @@ func TestBlockTopNSelections(t *testing.T) {
 				require.Positive(t, stats.VectorDecodedBytes)
 			}
 			require.Len(t, fs.requests, 1, "TopN must not fetch chunks again")
-			dst := vector.NewVec(types.T_array_float32.ToType())
+			dst := vector.NewVec(types.T_array_float32.ToType(), mp)
 			defer dst.Free(mp)
 			require.NoError(t, CopyCachedVectorRows(dst, r.Entry(3).CachedData, rows, mp))
 			for i, row := range rows {
@@ -187,8 +187,8 @@ func TestReadBlockBySearchAndTopNReusesFilterColumns(t *testing.T) {
 	storage.FlushCache(t.Context())
 	fs := &blockTopNTestFS{FileService: storage}
 
-	pk := vector.NewVec(types.T_int64.ToType())
-	payloadOut := vector.NewVec(types.T_array_float32.ToType())
+	pk := vector.NewVec(types.T_int64.ToType(), mp)
+	payloadOut := vector.NewVec(types.T_array_float32.ToType(), mp)
 	defer pk.Free(mp)
 	defer payloadOut.Free(mp)
 	op := newTopNTestOp(2)
@@ -231,7 +231,7 @@ func TestReadBlockBySearchAndTopNEmptyFilterSkipsVector(t *testing.T) {
 	topExtent := meta.GetBlockMeta(0).ColumnMeta(1).Location()
 	storage.FlushCache(t.Context())
 	fs := &blockTopNTestFS{FileService: storage}
-	out := vector.NewVec(types.T_int64.ToType())
+	out := vector.NewVec(types.T_int64.ToType(), mp)
 	defer out.Free(mp)
 
 	rows, distances, _, err := ReadBlockBySearchAndTopN(
@@ -263,7 +263,7 @@ func TestReadBlockBySearchAndTopNLegacyVector(t *testing.T) {
 	storage := newBlockTopNTestFS(t)
 	location, _ := persistBlockTopNTest(t, storage, source, nil, mp)
 	storage.FlushCache(t.Context())
-	pk := vector.NewVec(types.T_int64.ToType())
+	pk := vector.NewVec(types.T_int64.ToType(), mp)
 	defer pk.Free(mp)
 
 	rows, distances, _, err := ReadBlockBySearchAndTopN(
@@ -305,7 +305,7 @@ func TestReadBlockBySearchAndTopNRejectsInvalidSelections(t *testing.T) {
 		{name: "past end", rows: []int64{4}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			out := vector.NewVec(types.T_int64.ToType())
+			out := vector.NewVec(types.T_int64.ToType(), mp)
 			defer out.Free(mp)
 			_, _, _, err := ReadBlockBySearchAndTopN(
 				t.Context(),
@@ -344,7 +344,7 @@ func TestReadBlockBySearchAndTopNValidatesContract(t *testing.T) {
 	}
 
 	mp := newTopNTestMP(t)
-	out := vector.NewVec(types.T_int64.ToType())
+	out := vector.NewVec(types.T_int64.ToType(), mp)
 	defer out.Free(mp)
 	valid := func() arguments {
 		return arguments{

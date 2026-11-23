@@ -74,7 +74,8 @@ func isSoftDeleteEntry(fileName string) bool {
 type Handle struct {
 	db *db.DB
 
-	interceptMatchRegexp atomic.Pointer[regexp.Regexp]
+	interceptMatchRegexp         atomic.Pointer[regexp.Regexp]
+	scopedChangedTablesAdmission scopedChangedTablesAdmission
 
 	client client.QueryClient
 }
@@ -485,7 +486,7 @@ func (h *Handle) apiEntryToWriteEntry(
 	prefetch bool,
 ) *cmd_util.WriteReq {
 
-	moBat, err := batch.ProtoBatchToBatch(pe.GetBat())
+	moBat, err := batch.ProtoBatchToBatch(pe.GetBat(), nil)
 	if err != nil {
 		panic(err)
 	}

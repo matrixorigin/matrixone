@@ -218,7 +218,7 @@ func TestBuildSegmentsFromSortedVec_Int32(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.T_int32.ToType()
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	// Add values: 10, 20, 30 (already sorted, close together).
@@ -241,7 +241,7 @@ func TestBuildSegmentsFromSortedVec_Empty(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.T_int64.ToType()
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	segments := buildSegmentsFromSortedVec(vec, pkType)
@@ -254,7 +254,7 @@ func TestBuildPKFilterFromVec_ProducesValidFilter(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.T_int64.ToType()
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 
 	// Two clusters: [1..5] and [1000..1005]
 	for i := int64(1); i <= 5; i++ {
@@ -507,7 +507,7 @@ func TestAppendNumericStringToVec_AllTypes(t *testing.T) {
 			if pkType.Oid == 0 {
 				pkType = tt.oid.ToType()
 			}
-			vec := vector.NewVec(pkType)
+			vec := vector.NewVec(pkType, mp)
 			defer vec.Free(mp)
 
 			err := appendNumericStringToVec(vec, tt.input, pkType, time.UTC, mp)
@@ -524,7 +524,7 @@ func TestAppendNumericStringToVec_BitOutOfRange(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.New(types.T_bit, 8, 0)
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	err = appendNumericStringToVec(vec, "256", pkType, time.UTC, mp)
@@ -538,7 +538,7 @@ func TestAppendNumericStringToVec_UnsupportedType(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.T_json.ToType()
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	err = appendNumericStringToVec(vec, "123", pkType, time.UTC, mp)
@@ -552,7 +552,7 @@ func TestAppendNumericStringToVec_ParseError(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.T_int32.ToType()
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	err = appendNumericStringToVec(vec, "not_a_number", pkType, time.UTC, mp)
@@ -565,7 +565,7 @@ func TestAppendExprToVec_StrVal(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.T_varchar.ToType()
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	expr := tree.NewStrVal("test_value")
@@ -580,7 +580,7 @@ func TestAppendExprToVecWithPrepareParams(t *testing.T) {
 		t.Helper()
 		mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 		require.NoError(t, err)
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), mp)
 		for _, value := range values {
 			require.NoError(t, vector.AppendBytes(params, []byte(value), null, mp))
 		}
@@ -592,7 +592,7 @@ func TestAppendExprToVecWithPrepareParams(t *testing.T) {
 		defer mp.Free(nil)
 		defer params.Free(mp)
 
-		vec := vector.NewVec(types.T_int32.ToType())
+		vec := vector.NewVec(types.T_int32.ToType(), mp)
 		defer vec.Free(mp)
 		expr := tree.NewParentExpr(tree.NewParamExpr(1))
 		require.NoError(t, appendExprToVecWithPrepareParams(
@@ -616,7 +616,7 @@ func TestAppendExprToVecWithPrepareParams(t *testing.T) {
 			defer mp.Free(nil)
 			defer params.Free(mp)
 
-			vec := vector.NewVec(types.T_int32.ToType())
+			vec := vector.NewVec(types.T_int32.ToType(), mp)
 			defer vec.Free(mp)
 			if tc.name == "missing execution values" {
 				params = nil
@@ -635,7 +635,7 @@ func TestAppendExprToVec_BoolLiteral(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.T_bool.ToType()
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	expr := tree.NewNumVal(true, "true", false, tree.P_bool)
@@ -679,7 +679,7 @@ func TestAppendExprToVec_BitLiteral(t *testing.T) {
 			mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 			require.NoError(t, err)
 			defer mp.Free(nil)
-			vec := vector.NewVec(tc.pkType)
+			vec := vector.NewVec(tc.pkType, mp)
 			defer vec.Free(mp)
 
 			err = appendExprToVec(vec, num, tc.pkType, time.UTC, mp)
@@ -727,7 +727,7 @@ func TestAppendExprToVec_UnaryBitLiteral(t *testing.T) {
 			require.NoError(t, err)
 			defer mp.Free(nil)
 			pkType := types.New(types.T_bit, 8, 0)
-			vec := vector.NewVec(pkType)
+			vec := vector.NewVec(pkType, mp)
 			defer vec.Free(mp)
 
 			err = appendExprToVec(vec, unary, pkType, time.UTC, mp)
@@ -774,7 +774,7 @@ func TestAppendExprToVec_ParenthesizedBitLiteral(t *testing.T) {
 			require.NoError(t, err)
 			defer mp.Free(nil)
 			pkType := types.New(types.T_bit, 8, 0)
-			vec := vector.NewVec(pkType)
+			vec := vector.NewVec(pkType, mp)
 			defer vec.Free(mp)
 
 			err = appendExprToVec(vec, stmt.Keys.KeyExprs[0], pkType, time.UTC, mp)
@@ -805,7 +805,7 @@ func TestAppendExprToVec_InvalidBitLiteralAST(t *testing.T) {
 	pkType := types.New(types.T_bit, 8, 0)
 	for _, literal := range tests {
 		t.Run(literal, func(t *testing.T) {
-			vec := vector.NewVec(pkType)
+			vec := vector.NewVec(pkType, mp)
 			defer vec.Free(mp)
 
 			num := tree.NewNumVal(literal, literal, false, tree.P_bit)
@@ -833,7 +833,7 @@ func TestAppendExprToVec_IntegerPKNumericLiteralForms(t *testing.T) {
 	require.NoError(t, err)
 	defer mp.Free(nil)
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 	for _, expr := range stmt.Keys.KeyExprs {
 		require.NoError(t, appendExprToVec(vec, expr, *vec.GetType(), time.UTC, mp))
@@ -868,7 +868,7 @@ func requireBinaryKeys(t *testing.T, pkType types.Type, keyExprs []tree.Expr, wa
 	require.NoError(t, err)
 	defer mp.Free(nil)
 
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 	for _, expr := range keyExprs {
 		require.NoError(t, appendExprToVec(vec, expr, pkType, time.UTC, mp))
@@ -944,7 +944,7 @@ func TestAppendExprToVec_BinaryPKOverCapacityAndUnsupportedLiterals(t *testing.T
 			require.NoError(t, err)
 			defer mp.Free(nil)
 
-			vec := vector.NewVec(pkType)
+			vec := vector.NewVec(pkType, mp)
 			defer vec.Free(mp)
 
 			require.ErrorContains(t, appendExprToVec(vec, keyExprs[0], pkType, time.UTC, mp), tc.wantErr)
@@ -966,7 +966,7 @@ func TestAppendExprToVec_BinaryPKOverCapacityAndUnsupportedLiterals(t *testing.T
 		require.NoError(t, err)
 		defer mp.Free(nil)
 
-		vec := vector.NewVec(pkType)
+		vec := vector.NewVec(pkType, mp)
 		defer vec.Free(mp)
 
 		require.ErrorContains(t, appendNumericStringToVec(vec, "abcd", pkType, time.UTC, mp), "range")
@@ -1008,7 +1008,7 @@ func TestAppendNumericStringToVec_BinaryWidthBoundaries(t *testing.T) {
 			require.NoError(t, err)
 			defer mp.Free(nil)
 
-			vec := vector.NewVec(tc.pkType)
+			vec := vector.NewVec(tc.pkType, mp)
 			defer vec.Free(mp)
 
 			appendErr := appendNumericStringToVec(vec, tc.input, tc.pkType, time.UTC, mp)
@@ -1051,13 +1051,13 @@ func TestAppendExprToVec_BinaryPKPreparedParams(t *testing.T) {
 			require.NoError(t, err)
 			defer mp.Free(nil)
 
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), mp)
 			defer params.Free(mp)
 			for _, value := range tc.values {
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, mp))
 			}
 
-			vec := vector.NewVec(tc.pkType)
+			vec := vector.NewVec(tc.pkType, mp)
 			defer vec.Free(mp)
 			for i := range tc.values {
 				require.NoError(t, appendExprToVecWithPrepareParams(
@@ -1078,13 +1078,13 @@ func TestAppendExprToVec_BinaryPKPreparedParams(t *testing.T) {
 		require.NoError(t, err)
 		defer mp.Free(nil)
 
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), mp)
 		defer params.Free(mp)
 		require.NoError(t, vector.AppendBytes(params, nil, true, mp))              // 1: NULL
 		require.NoError(t, vector.AppendBytes(params, []byte("abcde"), false, mp)) // 2: over capacity
 		require.NoError(t, vector.AppendBytes(params, []byte("a"), false, mp))     // 3: legal
 
-		vec := vector.NewVec(pkType)
+		vec := vector.NewVec(pkType, mp)
 		defer vec.Free(mp)
 
 		require.ErrorContains(t, appendExprToVecWithPrepareParams(
@@ -1123,8 +1123,8 @@ func TestAppendExprToVec_CompositeBinaryPKComponents(t *testing.T) {
 	require.NoError(t, err)
 	defer mp.Free(nil)
 
-	intVec := vector.NewVec(intType)
-	binVec := vector.NewVec(binType)
+	intVec := vector.NewVec(intType, mp)
+	binVec := vector.NewVec(binType, mp)
 	defer intVec.Free(mp)
 	defer binVec.Free(mp)
 
@@ -1141,7 +1141,7 @@ func TestAppendExprToVec_CompositeBinaryPKComponents(t *testing.T) {
 	require.Equal(t, "3633", hex.EncodeToString(binVec.GetBytesAt(2))) // _binary '63': ASCII digits are data
 
 	// One serial()-encoded composite key per tuple.
-	encodedVec := encodeCompositePK(t, []*vector.Vector{intVec, binVec})
+	encodedVec := encodeCompositePK(t, mp, []*vector.Vector{intVec, binVec})
 	defer encodedVec.Free(mp)
 	require.Equal(t, 3, encodedVec.Length())
 }
@@ -1179,7 +1179,7 @@ func TestAppendExprToVec_IntegerPKNumericLiteralBoundaries(t *testing.T) {
 			mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 			require.NoError(t, err)
 			defer mp.Free(nil)
-			vec := vector.NewVec(tc.pkType)
+			vec := vector.NewVec(tc.pkType, mp)
 			defer vec.Free(mp)
 
 			err = appendExprToVec(vec, stmt.Keys.KeyExprs[0], tc.pkType, time.UTC, mp)
@@ -1218,7 +1218,7 @@ func TestAppendExprToVec_PreservesUnarySignForFloatPK(t *testing.T) {
 	require.NoError(t, err)
 	defer mp.Free(nil)
 	pkType := types.T_float64.ToType()
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	require.NoError(t, appendExprToVec(vec, stmt.Keys.KeyExprs[0], pkType, time.UTC, mp))
@@ -1231,7 +1231,7 @@ func TestAppendExprToVec_UnaryMinus(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.T_int32.ToType()
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	num := tree.NewNumVal[int64](42, "42", false, tree.P_int64)
@@ -1248,7 +1248,7 @@ func TestAppendExprToVec_UnaryPlus(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.T_int64.ToType()
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	num := tree.NewNumVal[int64](99, "99", false, tree.P_int64)
@@ -1264,7 +1264,7 @@ func TestAppendExprToVec_UnsupportedExpr(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.T_int32.ToType()
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	expr := &tree.UnresolvedName{}
@@ -1331,7 +1331,7 @@ func TestPKFilterPruning_SinglePK_Int32(t *testing.T) {
 	pkSeqnum := 0
 
 	// Simulate KEYS (10, 20, 30, 50, 51, 52).
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	for _, v := range []int32{10, 20, 30, 50, 51, 52} {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
@@ -1373,7 +1373,7 @@ func TestPKFilterPruning_SinglePK_Varchar(t *testing.T) {
 	pkSeqnum := 2 // simulate column at seqnum 2
 
 	// Simulate KEYS ('apple', 'banana', 'mango').
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	for _, s := range []string{"apple", "banana", "mango"} {
 		require.NoError(t, vector.AppendBytes(vec, []byte(s), false, mp))
 	}
@@ -1408,7 +1408,7 @@ func TestPKFilterPruning_Decimal64(t *testing.T) {
 	pkSeqnum := 0
 
 	// Simulate KEYS (10.50, 20.00, 30.75).
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	for _, s := range []string{"10.50", "20.00", "30.75"} {
 		v, parseErr := types.ParseDecimal64(s, 10, 2)
 		require.NoError(t, parseErr)
@@ -1448,7 +1448,7 @@ func TestPKFilterPruning_SeqnumPreserved(t *testing.T) {
 
 	pkType := types.T_int64.ToType()
 
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	require.NoError(t, vector.AppendFixed(vec, int64(100), false, mp))
 	require.NoError(t, vec.InplaceSort(mp))
 
@@ -1471,7 +1471,7 @@ func TestPKFilterPruning_LargeKeySet(t *testing.T) {
 	pkType := types.T_int64.ToType()
 
 	// Insert 1000 keys: 0, 10, 20, ..., 9990
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	for i := int64(0); i < 1000; i++ {
 		require.NoError(t, vector.AppendFixed(vec, i*10, false, mp))
 	}
@@ -1508,13 +1508,17 @@ func TestPKFilterPruning_LargeKeySet(t *testing.T) {
 
 // encodeCompositePK encodes component vectors into a __mo_cpkey_col vector
 // using the same serial() function that production code uses.
-func encodeCompositePK(t *testing.T, compVecs []*vector.Vector) *vector.Vector {
+// encodeCompositePK returns the serial() encoding of compVecs as a vector of mp.
+func encodeCompositePK(t *testing.T, mp *mpool.MPool, compVecs []*vector.Vector) *vector.Vector {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	encodedVec, err := function.RunFunctionDirectly(
 		proc, function.SerialFunctionEncodeID, compVecs, compVecs[0].Length())
 	require.NoError(t, err)
-	return encodedVec
+	defer encodedVec.Free(proc.Mp())
+	owned, err := encodedVec.Dup(mp)
+	require.NoError(t, err)
+	return owned
 }
 
 // TestPKFilterPruning_CompositePK_IntVarchar verifies that composite PK
@@ -1529,8 +1533,8 @@ func TestPKFilterPruning_CompositePK_IntVarchar(t *testing.T) {
 	// KEYS ((1, 'alice'), (2, 'bob'), (5, 'eve'))
 
 	// Build component vectors.
-	intVec := vector.NewVec(types.T_int32.ToType())
-	varcharVec := vector.NewVec(types.T_varchar.ToType())
+	intVec := vector.NewVec(types.T_int32.ToType(), mp)
+	varcharVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, pair := range []struct {
 		id   int32
 		name string
@@ -1542,7 +1546,7 @@ func TestPKFilterPruning_CompositePK_IntVarchar(t *testing.T) {
 	}
 
 	// Encode into __mo_cpkey_col.
-	encodedVec := encodeCompositePK(t, []*vector.Vector{intVec, varcharVec})
+	encodedVec := encodeCompositePK(t, mp, []*vector.Vector{intVec, varcharVec})
 	defer encodedVec.Free(mp)
 	intVec.Free(mp)
 	varcharVec.Free(mp)
@@ -1579,11 +1583,11 @@ func TestPKFilterPruning_CompositePK_IntVarchar(t *testing.T) {
 
 	// Build an "outside" key that is lexicographically beyond all KEYS values.
 	// Encode (100, 'zzz') — well above our key set.
-	outsideIntVec := vector.NewVec(types.T_int32.ToType())
-	outsideVarcharVec := vector.NewVec(types.T_varchar.ToType())
+	outsideIntVec := vector.NewVec(types.T_int32.ToType(), mp)
+	outsideVarcharVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(outsideIntVec, int32(100), false, mp))
 	require.NoError(t, vector.AppendBytes(outsideVarcharVec, []byte("zzz"), false, mp))
-	outsideEnc := encodeCompositePK(t, []*vector.Vector{outsideIntVec, outsideVarcharVec})
+	outsideEnc := encodeCompositePK(t, mp, []*vector.Vector{outsideIntVec, outsideVarcharVec})
 	defer outsideEnc.Free(mp)
 	outsideIntVec.Free(mp)
 	outsideVarcharVec.Free(mp)
@@ -1603,8 +1607,8 @@ func TestPKFilterPruning_CompositePK_IntInt(t *testing.T) {
 	defer mp.Free(nil)
 
 	// KEYS ((1, 10), (1, 20), (2, 10), (3, 30))
-	col1 := vector.NewVec(types.T_int32.ToType())
-	col2 := vector.NewVec(types.T_int32.ToType())
+	col1 := vector.NewVec(types.T_int32.ToType(), mp)
+	col2 := vector.NewVec(types.T_int32.ToType(), mp)
 	for _, pair := range []struct{ a, b int32 }{
 		{1, 10}, {1, 20}, {2, 10}, {3, 30},
 	} {
@@ -1612,7 +1616,7 @@ func TestPKFilterPruning_CompositePK_IntInt(t *testing.T) {
 		require.NoError(t, vector.AppendFixed(col2, pair.b, false, mp))
 	}
 
-	encodedVec := encodeCompositePK(t, []*vector.Vector{col1, col2})
+	encodedVec := encodeCompositePK(t, mp, []*vector.Vector{col1, col2})
 	defer encodedVec.Free(mp)
 	col1.Free(mp)
 	col2.Free(mp)
@@ -1637,13 +1641,13 @@ func TestPKFilterPruning_CompositePK_IntInt(t *testing.T) {
 	require.True(t, index.AnySegmentOverlaps(blockZM2, pkFilter.Segments))
 
 	// Block below all keys: encode (0, 0) and (0, 5)
-	belowCol1 := vector.NewVec(types.T_int32.ToType())
-	belowCol2 := vector.NewVec(types.T_int32.ToType())
+	belowCol1 := vector.NewVec(types.T_int32.ToType(), mp)
+	belowCol2 := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(belowCol1, int32(0), false, mp))
 	require.NoError(t, vector.AppendFixed(belowCol1, int32(0), false, mp))
 	require.NoError(t, vector.AppendFixed(belowCol2, int32(0), false, mp))
 	require.NoError(t, vector.AppendFixed(belowCol2, int32(5), false, mp))
-	belowEnc := encodeCompositePK(t, []*vector.Vector{belowCol1, belowCol2})
+	belowEnc := encodeCompositePK(t, mp, []*vector.Vector{belowCol1, belowCol2})
 	defer belowEnc.Free(mp)
 	belowCol1.Free(mp)
 	belowCol2.Free(mp)
@@ -1654,13 +1658,13 @@ func TestPKFilterPruning_CompositePK_IntInt(t *testing.T) {
 	require.False(t, index.AnySegmentOverlaps(blockZM3, pkFilter.Segments))
 
 	// Block above all keys: encode (100, 100) and (200, 200)
-	aboveCol1 := vector.NewVec(types.T_int32.ToType())
-	aboveCol2 := vector.NewVec(types.T_int32.ToType())
+	aboveCol1 := vector.NewVec(types.T_int32.ToType(), mp)
+	aboveCol2 := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(aboveCol1, int32(100), false, mp))
 	require.NoError(t, vector.AppendFixed(aboveCol1, int32(200), false, mp))
 	require.NoError(t, vector.AppendFixed(aboveCol2, int32(100), false, mp))
 	require.NoError(t, vector.AppendFixed(aboveCol2, int32(200), false, mp))
-	aboveEnc := encodeCompositePK(t, []*vector.Vector{aboveCol1, aboveCol2})
+	aboveEnc := encodeCompositePK(t, mp, []*vector.Vector{aboveCol1, aboveCol2})
 	defer aboveEnc.Free(mp)
 	aboveCol1.Free(mp)
 	aboveCol2.Free(mp)
@@ -1694,7 +1698,7 @@ func TestAppendStrValToVec_DateTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			vec := vector.NewVec(tt.pkType)
+			vec := vector.NewVec(tt.pkType, mp)
 			defer vec.Free(mp)
 
 			// This used to panic with "unsafe slice cast" for fixed-width types.
@@ -1711,7 +1715,7 @@ func TestAppendStrValToVec_TimestampUsesSessionTimeZone(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.New(types.T_timestamp, 0, 6)
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	loc := time.FixedZone("UTC+08", 8*60*60)
@@ -1736,7 +1740,7 @@ func TestAppendStrValToVec_PrunesCorrectly(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.T_date.ToType()
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	// Add three dates via string literal parsing.
@@ -1776,7 +1780,7 @@ func TestAppendNumericStringToVec_DateAsNumber(t *testing.T) {
 	defer mp.Free(nil)
 
 	pkType := types.T_date.ToType()
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 
 	err = appendNumericStringToVec(vec, "20250103", pkType, time.UTC, mp)
@@ -1789,7 +1793,7 @@ func TestCoercePickKeyVectorToType_RejectsNullEvenWhenTypeMatches(t *testing.T) 
 	require.NoError(t, err)
 	defer mp.Free(nil)
 
-	srcVec := vector.NewVec(types.T_int32.ToType())
+	srcVec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer srcVec.Free(mp)
 
 	require.NoError(t, vector.AppendFixed(srcVec, int32(10), false, mp))
@@ -1807,7 +1811,7 @@ func TestCoercePickKeyVectorToType_RejectsUnsupportedSourceType(t *testing.T) {
 	require.NoError(t, err)
 	defer mp.Free(nil)
 
-	srcVec := vector.NewVec(types.T_json.ToType())
+	srcVec := vector.NewVec(types.T_json.ToType(), mp)
 	defer srcVec.Free(mp)
 
 	jsonValue, err := types.ParseStringToByteJson(`{"k":1}`)
@@ -1835,7 +1839,7 @@ func TestCoercePickKeyVectorToType_Decimal256ReformatsToTargetType(t *testing.T)
 	srcVal, err := types.ParseDecimal256("1234567890123456789012345678901234.5678", srcType.Width, srcType.Scale)
 	require.NoError(t, err)
 
-	srcVec := vector.NewVec(srcType)
+	srcVec := vector.NewVec(srcType, mp)
 	defer srcVec.Free(mp)
 	require.NoError(t, vector.AppendFixed(srcVec, srcVal, false, mp))
 
@@ -1858,7 +1862,7 @@ func TestExtractPKValDecimal256(t *testing.T) {
 	pkVal, err := types.ParseDecimal256("1234567890123456789012345678901234.5678", pkType.Width, pkType.Scale)
 	require.NoError(t, err)
 
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec, pkVal, false, mp))
 
@@ -1873,7 +1877,7 @@ func TestExtractPKValYear(t *testing.T) {
 	pkType := types.T_year.ToType()
 	pkVal := types.MoYear(2024)
 
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec, pkVal, false, mp))
 
@@ -1943,7 +1947,7 @@ func TestExtractPKValArrayTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			vec := vector.NewVec(tt.typ)
+			vec := vector.NewVec(tt.typ, mp)
 			t.Cleanup(func() { vec.Free(mp) })
 			require.NoError(t, tt.append(vec))
 			require.Equal(t, tt.want, extractPKVal(vec, 0))
@@ -2086,7 +2090,7 @@ func TestMaterializeSubqueryUnified_SinglePKSuccessBuildsFilterAndHashmap(t *tes
 	require.True(t, pkFilter == nil || len(pkFilter.Segments) > 0)
 	require.Greater(t, hm.ItemCount(), int64(0))
 
-	probe := vector.NewVec(types.T_int64.ToType())
+	probe := vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 	defer probe.Free(ses.proc.Mp())
 	require.NoError(t, vector.AppendFixed(probe, int64(7), false, ses.proc.Mp()))
 	require.NoError(t, vector.AppendFixed(probe, int64(9), false, ses.proc.Mp()))
@@ -2539,7 +2543,7 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			vec := vector.NewVec(tt.typ)
+			vec := vector.NewVec(tt.typ, mp)
 			defer vec.Free(mp)
 			tt.append(vec)
 
@@ -2567,7 +2571,7 @@ func TestPickKeyDecimal256AndYearPaths(t *testing.T) {
 	yearVal, err := types.ParseMoYear("2025")
 	require.NoError(t, err)
 
-	decVec := vector.NewVec(decType)
+	decVec := vector.NewVec(decType, mp)
 	defer decVec.Free(mp)
 	require.NoError(t, appendNumericStringToVec(decVec, decVal.Format(decType.Scale), decType, time.UTC, mp))
 	require.Equal(t, decVal, extractPKVal(decVec, 0))
@@ -2575,12 +2579,12 @@ func TestPickKeyDecimal256AndYearPaths(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, decVal.Format(decType.Scale), decString)
 
-	decStrVec := vector.NewVec(decType)
+	decStrVec := vector.NewVec(decType, mp)
 	defer decStrVec.Free(mp)
 	require.NoError(t, appendStrValToVec(decStrVec, decVal.Format(decType.Scale), decType, time.UTC, mp))
 	require.Equal(t, decVal, extractPKVal(decStrVec, 0))
 
-	yearVec := vector.NewVec(types.T_year.ToType())
+	yearVec := vector.NewVec(types.T_year.ToType(), mp)
 	defer yearVec.Free(mp)
 	require.NoError(t, appendNumericStringToVec(yearVec, yearVal.String(), types.T_year.ToType(), time.UTC, mp))
 	require.Equal(t, yearVal, extractPKVal(yearVec, 0))
@@ -2588,7 +2592,7 @@ func TestPickKeyDecimal256AndYearPaths(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, yearVal.String(), yearString)
 
-	yearStrVec := vector.NewVec(types.T_year.ToType())
+	yearStrVec := vector.NewVec(types.T_year.ToType(), mp)
 	defer yearStrVec.Free(mp)
 	require.NoError(t, appendStrValToVec(yearStrVec, "2025", types.T_year.ToType(), time.UTC, mp))
 	require.Equal(t, yearVal, extractPKVal(yearStrVec, 0))
@@ -2647,7 +2651,7 @@ func buildPickStreamingBatch(t *testing.T, mp *mpool.MPool, colTypes []types.Typ
 
 	bat := batch.NewWithSize(len(colTypes))
 	for i, typ := range colTypes {
-		bat.Vecs[i] = vector.NewVec(typ)
+		bat.Vecs[i] = vector.NewVec(typ, mp)
 	}
 
 	for _, row := range rows {

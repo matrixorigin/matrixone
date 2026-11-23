@@ -37,7 +37,7 @@ func newTextReservationFixture(t *testing.T, typ types.Type, values [][]byte) (*
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
-	source := vector.NewOffHeapVecWithType(typ)
+	source := vector.NewVec(typ, proc.Mp())
 	t.Cleanup(func() { source.Free(proc.Mp()) })
 	for _, value := range values {
 		require.NoError(t, vector.AppendBytes(source, value, value == nil, proc.Mp()))
@@ -62,18 +62,13 @@ func TestTextAssignmentReservationPreservesOwnedResults(t *testing.T) {
 			values := [][]byte{bytes.Repeat([]byte("a"), 80), nil, []byte("short"),
 				bytes.Repeat([]byte("b"), 110)}
 			proc, source, result := newTextReservationFixture(t, typ, values)
-			// Ordinary assignment must not propagate transient source metadata.
-			source.SetPrepareParamKind(vector.PrepareParamFloat)
-			source.SetIsBinaryString(true)
 
-			target := vector.NewVec(typ)
+			target := vector.NewVec(typ, proc.Mp())
 			t.Cleanup(func() { target.Free(proc.Mp()) })
 			require.NoError(t, NewAssignCast([]*vector.Vector{source, target}, result, proc, len(values), nil))
 			out := result.GetResultVector()
 			require.Equal(t, typ, *out.GetType())
 			require.Equal(t, len(values), out.Length())
-			require.False(t, out.HasPrepareParamKind())
-			require.False(t, out.HasBinaryStringMetadata())
 			for row, value := range values {
 				require.Equal(t, value == nil, out.IsNull(uint64(row)))
 				if value != nil {
@@ -159,32 +154,6 @@ func TestTextAssignmentReservationKeepsDiagnosticsAndSelection(t *testing.T) {
 	})
 }
 
-func TestTextAssignmentReservationFallsBackForAliasedBackings(t *testing.T) {
-	typ := types.New(types.T_text, 1024, 0)
-	values := [][]byte{bytes.Repeat([]byte("a"), 80), bytes.Repeat([]byte("b"), 90)}
-	proc, _, result := newTextReservationFixture(t, typ, nil)
-	out := result.GetResultVector()
-	for _, value := range values {
-		require.NoError(t, vector.AppendBytes(out, value, false, proc.Mp()))
-	}
-	source, err := out.Window(0, len(values))
-	require.NoError(t, err)
-	t.Cleanup(func() { source.Free(nil) })
-	// A reused result can share backing storage with a source window.
-	source.SetLength(1)
-	source.SetLength(2)
-	out.ResetWithSameType()
-	beforeArea := cap(out.GetArea())
-	require.True(t, castVectorsOverlap(source, out))
-	done, err := tryReserveAssignedText(proc, vector.GenerateFunctionStrParameter(source),
-		vector.MustFunctionResult[types.Varlena](result), len(values), typ, nil)
-	require.NoError(t, err)
-	require.False(t, done)
-	require.Equal(t, beforeArea, cap(out.GetArea()))
-	require.Equal(t, values[0], source.GetBytesAt(0))
-	require.Equal(t, values[1], source.GetBytesAt(1))
-}
-
 func TestTextAssignmentReservationWithSharedPayload(t *testing.T) {
 	typ := types.New(types.T_text, 1024, 0)
 	proc, source, result := newTextReservationFixture(t, typ, nil)
@@ -225,7 +194,7 @@ func TestTextAssignmentReservationAllocationFailureCanReuse(t *testing.T) {
 		mpool.DeleteMPool(limitedMP)
 	})
 	typ := types.New(types.T_text, types.MaxLongTextLen, 0)
-	source := vector.NewOffHeapVecWithType(typ)
+	source := vector.NewVec(typ, inputMP)
 	t.Cleanup(func() { source.Free(inputMP) })
 	for i := 0; i < 2; i++ {
 		require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte("a"), 600<<10), false, inputMP))
@@ -264,10 +233,14 @@ func TestTextAssignmentReservationFromRetainedArea(t *testing.T) {
 	typ := types.New(types.T_text, 1024, 0)
 	values := [][]byte{bytes.Repeat([]byte("a"), 80), bytes.Repeat([]byte("b"), 90)}
 	proc, source, result := newTextReservationFixture(t, typ, values)
-	retained := vector.NewOffHeapVecWithType(typ)
-	t.Cleanup(func() { retained.Free(proc.Mp()) })
-	require.NoError(t, retained.CopyWithReadonlyArea(source, proc.Mp()))
-	require.Equal(t, vector.BorrowedLease, retained.AreaBackingKind())
+	owner := vector.NewVec(typ, proc.Mp())
+	t.Cleanup(func() { owner.Free(proc.Mp()) })
+	// A read-only vector over memory it does not own, the shape a cache
+	// reader publishes for a varlen column.
+	require.NoError(t, owner.UnionBatch(source, 0, source.Length(), nil, proc.Mp()))
+	lent := bytes.Clone(owner.GetArea())
+	retained := vector.NewVecWithData(typ, owner.Length(), owner.GetData(), lent, nil)
+	require.True(t, retained.IsReadOnly())
 
 	require.NoError(t, runTextReservationCast(proc, retained, result, typ, len(values), castModeStrictStringWidth, nil))
 	// Retiring both input generations cannot invalidate the independent output.

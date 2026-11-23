@@ -37,7 +37,7 @@ func TestAppendValueToVectorLowPrecisionFloat(t *testing.T) {
 		{types.T_float8, types.EncodeFixed(types.Float8FromFloat32(1.5))},
 		{types.T_float4, types.EncodeFixed(types.Float4FromFloat32(1.5))},
 	} {
-		vec := vector.NewVec(tc.oid.ToType())
+		vec := vector.NewVec(tc.oid.ToType(), mp)
 		require.NoError(t, appendValueToVector(vec, tc.data, tc.oid.ToType(), mp))
 		require.Equal(t, 1, vec.Length())
 		f, ok := vector.GetLowPrecisionFloatAt(vec, 0)

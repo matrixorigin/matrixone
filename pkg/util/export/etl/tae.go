@@ -80,7 +80,7 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 		case types.T_datetime:
 			typ.Scale = 6
 		}
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, pool)
 		if err := vec.PreExtend(batchSize, pool); err != nil {
 			panic(err)
 		}

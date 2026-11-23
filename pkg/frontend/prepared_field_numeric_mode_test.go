@@ -38,7 +38,8 @@ func TestPreparedFieldExplicitCastKeepsHistory(t *testing.T) {
 			execute := func(null, integer bool, want uint64) {
 				cw.discardRuntimeCacheCandidate()
 				prepared.clearBinaryParamState(cw.proc)
-				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+				prepared.paramsMP = cw.proc.Mp()
 				for i, value := range []string{"1", "a", "1"} {
 					require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), null && i == 1, cw.proc.Mp()))
 				}
@@ -106,7 +107,8 @@ func TestPreparedFieldNumericModeGeneration(t *testing.T) {
 			execute := func(null bool, want uint64, fail bool) plan.Type {
 				cw.discardRuntimeCacheCandidate()
 				prepared.clearBinaryParamState(cw.proc)
-				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+				prepared.paramsMP = cw.proc.Mp()
 				require.NoError(t, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
 				payload, operand := "a", "5"
 				typ, operandType := defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VAR_STRING

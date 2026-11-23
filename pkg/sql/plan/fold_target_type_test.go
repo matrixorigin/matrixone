@@ -100,7 +100,7 @@ func TestReplaceFoldExprPreservesCastTargetMetadata(t *testing.T) {
 
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(tc.source)
+			input.Vecs[0] = vector.NewVec(tc.source, proc.Mp())
 			if tc.source.Oid == types.T_bool {
 				require.NoError(t, vector.AppendFixedList(input.Vecs[0], []bool{true, false, false}, []bool{false, false, true}, proc.Mp()))
 			} else {

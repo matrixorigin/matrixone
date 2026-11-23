@@ -468,6 +468,8 @@ type Compile struct {
 	// resourceAttemptOwnerEligible is set only for the top-level statement
 	// Compile. The statement root still arbitrates the single actual owner.
 	resourceAttemptOwnerEligible bool
+	// lockingReadPlan belongs to the compiled plan and survives prepared Reset.
+	lockingReadPlan              bool
 	allocationAccountRegistry    *mpool.AllocationAccountRegistry
 	allocationAccountLimit       uint64
 	allocationControllerProvider func() (mpool.AllocationCapacityController, error)

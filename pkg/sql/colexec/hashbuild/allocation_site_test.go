@@ -28,9 +28,10 @@ func TestHashBuildAllocationSiteRangesDoNotOverlap(t *testing.T) {
 		first, last mpool.AllocationSite
 	}{
 		{"hash-table", hashbuild.HashBuildAllocationSiteHashCell, hashbuild.HashBuildAllocationSiteHashIterator},
-		{"shared-spill", spillutil.SpillAllocationSiteDecodedData, spillutil.SpillAllocationSiteSelectedGrouping},
-		{"runtime-filter-dedup", hashbuild.HashBuildAllocationSiteUniqueKeyData, hashbuild.HashBuildAllocationSiteDedupDeleteOnlyGrouping},
+		{"shared-spill", spillutil.SpillAllocationSiteDecodedData, spillutil.SpillAllocationSiteCoalesceBuffer},
+		{"runtime-filter-dedup", hashbuild.HashBuildAllocationSiteUniqueKeyData, hashbuild.HashBuildAllocationSiteDedupDeleteOnlyArea},
 		{"shared-spill-read", spillutil.SpillAllocationSiteReadBuffer, spillutil.SpillAllocationSiteReadBuffer},
+		{"hashbuild-batch-row-ends", hashbuild.HashBuildAllocationSiteBatchRowEnds, hashbuild.HashBuildAllocationSiteBatchRowEnds},
 		{"hashbuild-spill", hashbuild.HashBuildSpillAllocationSiteSelectedData, hashbuild.HashBuildSpillAllocationSiteCoalesceBuffer},
 		{"hashjoin-matched", 80, 80},
 		{"dedupjoin-state", 82, 88},

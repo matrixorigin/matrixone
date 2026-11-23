@@ -476,7 +476,7 @@ func readSnapshotWithSource(
 	readBatch := batch.NewWithSize(len(cfg.attrs))
 	readBatch.SetAttributes(cfg.attrs)
 	for i := range cfg.attrs {
-		readBatch.Vecs[i] = vector.NewVec(cfg.colTypes[i])
+		readBatch.Vecs[i] = vector.NewVec(cfg.colTypes[i], mp)
 	}
 	defer readBatch.Clean(mp)
 

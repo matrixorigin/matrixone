@@ -487,6 +487,18 @@ const (
 	// error is never silently retried.
 	ErrDataBranchConflict uint16 = 22501
 
+	// Group 18: change watch
+	// ErrSnapshotNotAfter is explicitly retriable by the client with a fresh
+	// transaction. It must never enter the SQL executor's statement retry loop.
+	ErrSnapshotNotAfter uint16 = 22601
+	// ErrChangeWatchHistoryUnavailable tells consumers to establish a new
+	// baseline with a NULL marker after the requested history is no longer provable.
+	ErrChangeWatchHistoryUnavailable uint16 = 22602
+	// ErrChangeWatchRetry tells the watch client to retry the same marker.
+	ErrChangeWatchRetry uint16 = 22603
+	// ErrChangeWatchCapacity means the requested watch exceeds a work limit.
+	ErrChangeWatchCapacity uint16 = 22604
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -845,6 +857,12 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// pass the two conflicting sides and the pk as a single pre-formatted
 	// detail; the leading "conflict: " comes from this catalog template.
 	ErrDataBranchConflict: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "conflict: %s"},
+	// Keep the vendor-specific ERR packet number paired with SQLSTATE 40001.
+	ErrSnapshotNotAfter: {ErrSnapshotNotAfter, []string{"40001"}, "transaction snapshot must be after the requested watermark (retry with a new transaction)"},
+
+	ErrChangeWatchHistoryUnavailable: {ErrChangeWatchHistoryUnavailable, []string{MySQLDefaultSqlState}, "changed-table history unavailable: %s. Restart with a NULL marker"},
+	ErrChangeWatchRetry:              {ErrChangeWatchRetry, []string{MySQLDefaultSqlState}, "changed-table query interrupted: %s. Retry with the same marker"},
+	ErrChangeWatchCapacity:           {ErrChangeWatchCapacity, []string{MySQLDefaultSqlState}, "changed-table capacity exceeded: %s"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1493,8 +1511,24 @@ func NewInvalidTruncateLsn(ctx context.Context, shardId, idx uint64) *Error {
 	return newError(ctx, ErrInvalidTruncateLsn, shardId, idx)
 }
 
+// NewInvalidTruncateLsnWithMessage preserves the diagnostic sent by a remote
+// LogService while retaining the original MO error code and SQL metadata.
+func NewInvalidTruncateLsnWithMessage(ctx context.Context, message string) *Error {
+	err := NewInvalidTruncateLsn(ctx, 0, 0)
+	err.message = message
+	return err
+}
+
 func NewNotLeaseHolder(ctx context.Context, holderId uint64) *Error {
 	return newError(ctx, ErrNotLeaseHolder, holderId)
+}
+
+// NewNotLeaseHolderWithMessage preserves the diagnostic sent by a remote
+// LogService while retaining the original MO error code and SQL metadata.
+func NewNotLeaseHolderWithMessage(ctx context.Context, message string) *Error {
+	err := NewNotLeaseHolder(ctx, 0)
+	err.message = message
+	return err
 }
 
 func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {
@@ -2043,6 +2077,22 @@ func NewErrTooBigPrecision(ctx context.Context, precision int64, funcName string
 
 func NewCCPRReadOnly(ctx context.Context) *Error {
 	return newError(ctx, ErrCCPRReadOnly)
+}
+
+func NewSnapshotNotAfter(ctx context.Context) *Error {
+	return newError(ctx, ErrSnapshotNotAfter)
+}
+
+func NewChangeWatchHistoryUnavailable(ctx context.Context, detail string) *Error {
+	return newError(ctx, ErrChangeWatchHistoryUnavailable, detail)
+}
+
+func NewChangeWatchRetry(ctx context.Context, detail string) *Error {
+	return newError(ctx, ErrChangeWatchRetry, detail)
+}
+
+func NewChangeWatchCapacity(ctx context.Context, detail string) *Error {
+	return newError(ctx, ErrChangeWatchCapacity, detail)
 }
 
 // NewCantExecuteInReadOnlyTransaction reports MySQL ERROR 1792 (25006): a

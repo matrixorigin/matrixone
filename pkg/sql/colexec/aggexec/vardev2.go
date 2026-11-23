@@ -685,7 +685,7 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 	}()
 	for i := range vecs {
 		var err error
-		vecs[i], err = exec.allocation.newVector(resultType)
+		vecs[i], err = exec.allocation.newVector(resultType, exec.mp)
 		if err != nil {
 			return nil, err
 		}
@@ -806,7 +806,7 @@ func (exec *varStdDevExec[T, A]) flushLegacy() (_ []*vector.Vector, retErr error
 	}()
 	for i := range vecs {
 		var err error
-		vecs[i], err = exec.allocation.newVector(resultType)
+		vecs[i], err = exec.allocation.newVector(resultType, exec.mp)
 		if err != nil {
 			return nil, err
 		}

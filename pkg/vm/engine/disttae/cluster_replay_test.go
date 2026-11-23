@@ -176,17 +176,17 @@ func clusterReplaySpecBatch(
 ) (*api.Batch, *objectio.Segmentid) {
 	t.Helper()
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	tenantVec := vector.NewVec(types.T_int32.ToType())
-	deviceVec := vector.NewVec(types.T_int32.ToType())
-	metricVec := vector.NewVec(types.T_int32.ToType())
-	eventTsVec := vector.NewVec(types.T_datetime.ToType())
-	valueVec := vector.NewVec(types.T_float64.ToType())
-	qualityVec := vector.NewVec(types.T_int16.ToType())
-	fakePkVec := vector.NewVec(types.T_uint64.ToType())
-	clusterVec := vector.NewVec(types.T_varchar.ToType())
-	shadowVec := vector.NewVec(types.T_int32.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	tenantVec := vector.NewVec(types.T_int32.ToType(), mp)
+	deviceVec := vector.NewVec(types.T_int32.ToType(), mp)
+	metricVec := vector.NewVec(types.T_int32.ToType(), mp)
+	eventTsVec := vector.NewVec(types.T_datetime.ToType(), mp)
+	valueVec := vector.NewVec(types.T_float64.ToType(), mp)
+	qualityVec := vector.NewVec(types.T_int16.ToType(), mp)
+	fakePkVec := vector.NewVec(types.T_uint64.ToType(), mp)
+	clusterVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	shadowVec := vector.NewVec(types.T_int32.ToType(), mp)
 	newClusterVecOwner(t, mp, rowIDVec, tsVec, tenantVec, deviceVec, metricVec,
 		eventTsVec, valueVec, qualityVec, fakePkVec, clusterVec, shadowVec)
 
@@ -334,7 +334,7 @@ func readClusterReplay(
 
 	out := batch.NewWithSize(1)
 	out.Attrs = []string{"value"}
-	out.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_float64.ToType(), mp)
 	defer out.Clean(mp)
 
 	readBatches := 0
@@ -545,10 +545,10 @@ func TestClusterReplayDataSourceDeletesAndSnapshots(t *testing.T) {
 	pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
 
 	// Delete the device-0 row (ts ordinal 0) at a later commit time.
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	delTSVec := vector.NewVec(types.T_TS.ToType())
-	delPkVec := vector.NewVec(types.T_uint64.ToType())
-	tbRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	delTSVec := vector.NewVec(types.T_TS.ToType(), mp)
+	delPkVec := vector.NewVec(types.T_uint64.ToType(), mp)
+	tbRowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	newClusterVecOwner(t, mp, rowIDVec, delTSVec, delPkVec, tbRowIDVec)
 	rowID := objectio.NewRowid(objectio.NewBlockid(sid, 0, 0), 0)
 	vector.AppendFixed(rowIDVec, rowID, false, mp)
@@ -977,7 +977,7 @@ func TestClusterOneReplayMatchNeverArmsExactHit(t *testing.T) {
 	}
 	out := batch.NewWithSize(1)
 	out.Attrs = []string{"value"}
-	out.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, ls.filterInMemCommittedInserts(
 		ctx, []types.Type{types.T_float64.ToType()}, []uint16{4}, mp, out))
 	require.Equal(t, 1, out.RowCount(), "exactly one replay row matches")
@@ -1090,16 +1090,16 @@ func TestMaterializedSnapshotTombstoneErrorCleansUp(t *testing.T) {
 	// cluster key; rows 3..9 carry other keys. Distinct blocks make each
 	// candidate's tombstone check observable.
 	const rows = 10
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	tenantVec := vector.NewVec(types.T_int32.ToType())
-	deviceVec := vector.NewVec(types.T_int32.ToType())
-	metricVec := vector.NewVec(types.T_int32.ToType())
-	eventTsVec := vector.NewVec(types.T_datetime.ToType())
-	valueVec := vector.NewVec(types.T_float64.ToType())
-	qualityVec := vector.NewVec(types.T_int16.ToType())
-	fakePkVec := vector.NewVec(types.T_uint64.ToType())
-	clusterVec := vector.NewVec(types.T_varchar.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	tenantVec := vector.NewVec(types.T_int32.ToType(), mp)
+	deviceVec := vector.NewVec(types.T_int32.ToType(), mp)
+	metricVec := vector.NewVec(types.T_int32.ToType(), mp)
+	eventTsVec := vector.NewVec(types.T_datetime.ToType(), mp)
+	valueVec := vector.NewVec(types.T_float64.ToType(), mp)
+	qualityVec := vector.NewVec(types.T_int16.ToType(), mp)
+	fakePkVec := vector.NewVec(types.T_uint64.ToType(), mp)
+	clusterVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	newClusterVecOwner(t, mp, rowIDVec, tsVec, tenantVec, deviceVec, metricVec,
 		eventTsVec, valueVec, qualityVec, fakePkVec, clusterVec)
 	sid := objectio.NewSegmentid()

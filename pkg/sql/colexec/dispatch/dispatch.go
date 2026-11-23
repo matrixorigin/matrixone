@@ -55,7 +55,11 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 		}
 		return nil
 	}
-	ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), uint32(len(dispatch.LocalRegs)))
+	spoolMP, err := dispatch.spoolMP(proc)
+	if err != nil {
+		return err
+	}
+	ctr.sp = pSpool.InitMyPipelineSpool(spoolMP, uint32(len(dispatch.LocalRegs)))
 
 	switch dispatch.FuncId {
 	case SendToAllFunc:
@@ -155,17 +159,22 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
-	if whichToSend.Recursive == 1 {
-		if !dispatch.ctr.hasData {
+	switch whichToSend.Recursive {
+	case 1:
+		if dispatch.RecSink && !dispatch.ctr.hasData {
 			result.Status = vm.ExecStop
 			whichToSend.SetEnd()
-		} else {
-			dispatch.ctr.hasData = false
 		}
-	} else if whichToSend.IsEmpty() {
-		return result, nil
-	} else {
-		dispatch.ctr.hasData = true
+		dispatch.ctr.hasData = false
+	case 2:
+		// End is a recursive control marker, not data for the next round.
+	default:
+		if whichToSend.IsEmpty() {
+			return result, nil
+		}
+		if dispatch.RecSink {
+			dispatch.ctr.hasData = true
+		}
 	}
 
 	if dispatch.MaterializedSource != nil {

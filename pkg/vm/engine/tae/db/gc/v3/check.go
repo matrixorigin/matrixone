@@ -67,7 +67,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 	}
 	buffer := MakeGCWindowBuffer(32 * mpool.MB)
 	defer buffer.Close(mp)
-	bat := buffer.Fetch()
+	bat := buffer.Fetch(mp)
 	defer buffer.Putback(bat, mp)
 	objects := make(map[string]*ObjectEntry)
 

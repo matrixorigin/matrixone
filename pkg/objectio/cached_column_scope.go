@@ -23,7 +23,8 @@ import (
 // CachedColumnScope owns only reusable decoder headers. The caller must keep
 // entries pinned throughout With. Inputs/marked flags are borrowed solely for
 // the callback; no header, byte slice or metadata alias may escape that scope.
-// Only privately validated immutable cache entries bind a scoped header.
+// With binds privately validated immutable cache entries. WithFixed also binds
+// fixed-width inputs after ordinary full validation under the same pinned read.
 type CachedColumnScope struct {
 	views  []vector.Vector
 	inputs []*vector.Vector
@@ -31,6 +32,16 @@ type CachedColumnScope struct {
 }
 
 func (s *CachedColumnScope) With(entries []fileservice.IOEntry, destinations []*vector.Vector, consume func([]*vector.Vector, []bool) error) error {
+	return s.with(entries, destinations, false, consume)
+}
+
+// WithFixed lends fixed-width inputs without granting a retained cache alias or
+// a trusted validation marker. Variable-width inputs keep With's admission.
+func (s *CachedColumnScope) WithFixed(entries []fileservice.IOEntry, destinations []*vector.Vector, consume func([]*vector.Vector, []bool) error) error {
+	return s.with(entries, destinations, true, consume)
+}
+
+func (s *CachedColumnScope) with(entries []fileservice.IOEntry, destinations []*vector.Vector, fixed bool, consume func([]*vector.Vector, []bool) error) error {
 	if len(entries) != len(destinations) || consume == nil {
 		return moerr.NewInvalidInputNoCtx("invalid scoped cache column inputs")
 	}
@@ -53,7 +64,7 @@ func (s *CachedColumnScope) With(entries []fileservice.IOEntry, destinations []*
 		if destination == nil {
 			return moerr.NewInvalidInputNoCtx("nil scoped cache column destination")
 		}
-		if _, ok := entry.CachedData.(validatedVectorCacheDataMarker); !ok {
+		if _, ok := entry.CachedData.(validatedVectorCacheDataMarker); !ok && !(fixed && destination.GetType().IsFixedLen()) {
 			s.inputs[i] = destination
 			continue
 		}

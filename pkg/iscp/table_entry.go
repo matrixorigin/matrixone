@@ -68,7 +68,8 @@ func (t *TableEntry) AddOrUpdateSinker(
 		JobID:   jobID,
 	}
 	jobEntry, ok := t.jobs[key]
-	if !ok || jobEntry.jobID < jobID {
+	indexJob := jobSpec.ConsumerInfo.ConsumerType == int8(ConsumerType_IndexSync)
+	if !ok {
 		newCreate = true
 		// Pending/Running is only durable while an iteration is being
 		// admitted or executed.  If this is the first time this job is seen
@@ -82,12 +83,22 @@ func (t *TableEntry) AddOrUpdateSinker(
 		}
 		jobEntry = NewJobEntryWithStatus(t, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
 		t.jobs[key] = jobEntry
-		return
+	} else {
+		budgetChanged := jobEntry.jobSpec.TargetRows != jobSpec.TargetRows ||
+			jobEntry.jobSpec.JobType != jobSpec.JobType || jobEntry.isIndexJob != indexJob
+		if err = jobEntry.update(ctx, jobSpec, jobStatus, watermark, state, dropAt); err != nil {
+			return
+		}
+		jobEntry.isIndexJob = indexJob
+		if !budgetChanged {
+			return
+		}
 	}
-	if jobEntry.jobID > jobID {
-		return
+	if reason := invalidRowBudgetReason(jobSpec.TargetRows, jobSpec.JobType, indexJob); reason != "" && dropAt == 0 {
+		logutil.Warn("ISCP job has an invalid row budget",
+			zap.Uint32("account", t.accountID), zap.Uint64("table", t.tableID),
+			zap.String("job", jobName), zap.Uint64("jobID", jobID), zap.String("reason", reason))
 	}
-	err = jobEntry.update(ctx, jobSpec, jobStatus, watermark, state, dropAt)
 	return
 }
 
@@ -194,20 +205,35 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		if sinker.dropAt != 0 {
 			continue
 		}
+		// Replayed invalid specs stay ineligible without moving their watermark.
+		if invalidRowBudgetReason(sinker.jobSpec.TargetRows, sinker.jobSpec.JobType, sinker.isIndexJob) != "" {
+			continue
+		}
 		if t.exec != nil && t.exec.IsJobFenced(NewJobRuntimeKey(t.accountID, t.tableID, sinker.jobName, sinker.jobID)) {
 			continue
 		}
 		candidates = append(candidates, sinker)
 	}
 	iterations := make([]*IterationContext, 0, len(candidates))
-	shareableIterations := make(map[bool][]*IterationContext, 2)
+	shareableIterations := make(map[[2]bool][]*IterationContext)
+	// Index consumers build and publish their own index generations. Their
+	// progress must not affect the range selected for other consumers.
+	sharedCandidates := make([]*JobEntry, 0, len(candidates))
+	for _, candidate := range candidates {
+		if !candidate.isIndexJob {
+			sharedCandidates = append(sharedCandidates, candidate)
+		}
+	}
 	minFromTS = types.MaxTs()
 	for _, sinker := range candidates {
+		budget := iterationRowBudget{target: sinker.jobSpec.TargetRows, jobType: sinker.jobSpec.JobType, captured: true}
 		if sinker.watermark.IsEmpty() && sinker.state == ISCPJobState_Completed {
 			iterations = append(iterations, &IterationContext{
 				tableID:      t.tableID,
 				accountID:    t.accountID,
 				sourceTables: append([]TableInfo(nil), sinker.sourceTables...),
+				indexJob:     sinker.isIndexJob,
+				budget:       budget,
 				jobNames:     []string{sinker.jobName},
 				jobIDs:       []uint64{sinker.jobID},
 				lsn:          []uint64{sinker.currentLSN + 1},
@@ -217,7 +243,22 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 			})
 			continue
 		}
-		ok, from, to, share := sinker.jobSpec.Check(candidates, sinker, types.MaxTs())
+		var ok, share bool
+		var from, to types.TS
+		if sinker.isIndexJob {
+			// Each index selects from its own watermark. In-step indexes may
+			// share the same read; a lagging index catches up separately.
+			if sinker.jobSpec.JobType == TriggerType_Default {
+				ok, from, to, _ = checkAlwaysUpdateJobConfig(nil, sinker, types.MaxTs())
+			} else {
+				spec := *sinker.jobSpec
+				spec.Share = false
+				ok, from, to, _ = spec.Check(nil, sinker, types.MaxTs())
+			}
+			share = sinker.jobSpec.JobType != TriggerType_Timed || sinker.jobSpec.Share
+		} else {
+			ok, from, to, share = sinker.jobSpec.Check(sharedCandidates, sinker, types.MaxTs())
+		}
 		if !ok {
 			continue
 		}
@@ -232,31 +273,32 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		retainRowID := sinker.consumerType == ConsumerType_MaterializedView
 		foundIteration := false
 		if share {
-			for _, iter := range shareableIterations[retainRowID] {
-				if iter.fromTS.EQ(&from) && iter.toTS.EQ(&to) {
-					if sourceTablesUnionSize(iter.sourceTables, sinker.sourceTables) > MaxSourceTables {
-						// Keep the jobs in separate iterations.  Sharing an iteration
-						// with an oversized source union would make collection fail
-						// before any stream is opened, permanently stalling both jobs.
-						continue
-					}
-					iter.jobNames = append(iter.jobNames, sinker.jobName)
-					iter.jobIDs = append(iter.jobIDs, sinker.jobID)
-					iter.lsn = append(iter.lsn, sinker.currentLSN+1)
-					seen := make(map[[2]uint64]struct{}, len(iter.sourceTables))
-					for _, source := range iter.sourceTables {
-						seen[[2]uint64{source.DBID, source.TableID}] = struct{}{}
-					}
-					for _, source := range sinker.sourceTables {
-						key := [2]uint64{source.DBID, source.TableID}
-						if _, exists := seen[key]; !exists {
-							iter.sourceTables = append(iter.sourceTables, source)
-						}
-					}
-					iter.stages = append(iter.stages, sinker.stage)
-					foundIteration = true
-					break
+			shareKey := [2]bool{retainRowID, sinker.isIndexJob}
+			for _, iter := range shareableIterations[shareKey] {
+				if !iter.fromTS.EQ(&from) || !iter.toTS.EQ(&to) || iter.budget.target != budget.target {
+					continue
 				}
+				if sourceTablesUnionSize(iter.sourceTables, sinker.sourceTables) > MaxSourceTables {
+					// An oversized union cannot be collected by one iteration.
+					continue
+				}
+				iter.jobNames = append(iter.jobNames, sinker.jobName)
+				iter.jobIDs = append(iter.jobIDs, sinker.jobID)
+				iter.lsn = append(iter.lsn, sinker.currentLSN+1)
+				iter.stages = append(iter.stages, sinker.stage)
+				seen := make(map[[2]uint64]struct{}, len(iter.sourceTables))
+				for _, source := range iter.sourceTables {
+					seen[[2]uint64{source.DBID, source.TableID}] = struct{}{}
+				}
+				for _, source := range sinker.sourceTables {
+					key := [2]uint64{source.DBID, source.TableID}
+					if _, exists := seen[key]; !exists {
+						iter.sourceTables = append(iter.sourceTables, source)
+						seen[key] = struct{}{}
+					}
+				}
+				foundIteration = true
+				break
 			}
 		}
 		if !foundIteration {
@@ -264,6 +306,8 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				tableID:      t.tableID,
 				accountID:    t.accountID,
 				sourceTables: append([]TableInfo(nil), sinker.sourceTables...),
+				indexJob:     sinker.isIndexJob,
+				budget:       budget,
 				jobNames:     []string{sinker.jobName},
 				jobIDs:       []uint64{sinker.jobID},
 				lsn:          []uint64{sinker.currentLSN + 1},
@@ -272,8 +316,9 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				toTS:         to,
 			}
 			iterations = append(iterations, iter)
-			if sinker.stage != JobStage_Init {
-				shareableIterations[retainRowID] = append(shareableIterations[retainRowID], iter)
+			if share && sinker.stage != JobStage_Init {
+				shareKey := [2]bool{retainRowID, sinker.isIndexJob}
+				shareableIterations[shareKey] = append(shareableIterations[shareKey], iter)
 			}
 			if from.LT(&minFromTS) {
 				minFromTS = from

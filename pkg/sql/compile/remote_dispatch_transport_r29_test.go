@@ -193,7 +193,7 @@ func r29NewObjectStats(t *testing.T) (objectio.ObjectStats, string) {
 // serializes an embedded metadata tail.
 func r29StatsTailBytes(t *testing.T, mp *mpool.MPool, stats []objectio.ObjectStats) []byte {
 	t.Helper()
-	inner := colexec.AllocCNS3ResultBat(false)
+	inner := colexec.AllocCNS3ResultBat(false, mp)
 	defer inner.Clean(mp)
 	for i := range stats {
 		require.NoError(t, colexec.ExpandObjectStatsToBatch(
@@ -214,11 +214,11 @@ func r29RelayBatch(
 	t.Helper()
 	out := batch.NewWithSize(5)
 	out.SetAttributes([]string{"action", "table_id", "row_count", "name", "data"})
-	out.Vecs[0] = vector.NewVec(types.T_uint8.ToType())
-	out.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
-	out.Vecs[2] = vector.NewVec(types.T_uint64.ToType())
-	out.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
-	out.Vecs[4] = vector.NewVec(types.T_text.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_uint8.ToType(), mp)
+	out.Vecs[1] = vector.NewVec(types.T_uint64.ToType(), mp)
+	out.Vecs[2] = vector.NewVec(types.T_uint64.ToType(), mp)
+	out.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp)
+	out.Vecs[4] = vector.NewVec(types.T_text.ToType(), mp)
 	names := make([]string, 0, objectCount)
 	for i := 0; i < objectCount; i++ {
 		stats, name := r29NewObjectStats(t)
@@ -246,7 +246,7 @@ func r29InsertBatch(
 	t *testing.T, mp *mpool.MPool, objectCount int, malformed bool,
 ) (*batch.Batch, []string) {
 	t.Helper()
-	bat := colexec.AllocCNS3ResultBat(false)
+	bat := colexec.AllocCNS3ResultBat(false, mp)
 	names := make([]string, 0, objectCount)
 	for i := 0; i < objectCount; i++ {
 		if malformed {
@@ -285,11 +285,11 @@ func r29DeleteBatch(
 		catalog.BlockMeta_Partition,
 		catalog.BlockMeta_Deletes_Length,
 	})
-	out.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	out.Vecs[1] = vector.NewVec(types.T_text.ToType())
-	out.Vecs[2] = vector.NewVec(types.T_int8.ToType())
-	out.Vecs[3] = vector.NewVec(types.T_int32.ToType())
-	out.Vecs[4] = vector.NewVec(types.T_int32.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
+	out.Vecs[1] = vector.NewVec(types.T_text.ToType(), mp)
+	out.Vecs[2] = vector.NewVec(types.T_int8.ToType(), mp)
+	out.Vecs[3] = vector.NewVec(types.T_int32.ToType(), mp)
+	out.Vecs[4] = vector.NewVec(types.T_int32.ToType(), mp)
 	names := make([]string, 0, objectCount)
 	for i := 0; i < objectCount; i++ {
 		stats, name := r29NewObjectStats(t)
@@ -695,7 +695,7 @@ func r29StubSender(
 func r29WireBatch(t *testing.T, bat *batch.Batch) *pipeline.Message {
 	t.Helper()
 	var buf bytes.Buffer
-	data, err := bat.MarshalBinaryForPipeline(&buf, true, true)
+	data, err := bat.MarshalBinaryWithBuffer(&buf, true)
 	require.NoError(t, err)
 	return &pipeline.Message{Data: data, BatchSequence: 1}
 }

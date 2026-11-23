@@ -82,7 +82,7 @@ func TestIssue25590SharedEngineReRecordKeepsLedgerCapacityThroughTransfer(t *tes
 
 	stats := mockStatsList(t, 1)
 	name := stats[0].ObjectName().String()
-	recBat := colexec.AllocCNS3ResultBat(false)
+	recBat := colexec.AllocCNS3ResultBat(false, mp)
 	defer recBat.Clean(mp)
 	require.NoError(t, colexec.ExpandObjectStatsToBatch(
 		mp, false, recBat, false, stats[0]))

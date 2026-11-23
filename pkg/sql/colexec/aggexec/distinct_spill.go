@@ -333,7 +333,7 @@ func (exec *countColumnExec) AddDistinctCountContribution(
 		exec.distinctContributions = append(exec.distinctContributions, nil)
 	}
 	if exec.distinctContributions[x] == nil {
-		contributions, err := allocation.newVector(types.T_int64.ToType())
+		contributions, err := allocation.newVector(types.T_int64.ToType(), exec.mp)
 		if err != nil {
 			return err
 		}

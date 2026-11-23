@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -894,7 +893,7 @@ func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot
 		useSessionTemporary = false
 	}
 	isTmpTable := false
-	if useSessionTemporary && resolveTemporaryAlias {
+	if useSessionTemporary && resolveTemporaryAlias && !defines.IsPersistentViewBinding(tcc.GetContext()) {
 		realName, temporary := tcc.GetSession().GetTempTable(dbName, tableName)
 		if temporary {
 			tableName, isTmpTable = realName, true
@@ -1451,7 +1450,7 @@ func (tcc *TxnCompilerContext) ResolveVariableBinaryString(
 func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	varName string,
 	isSystemVar, isGlobalVar bool,
-) (vector.PrepareParamKind, error) {
+) (types.StringConversionKind, error) {
 	if value, declaredType, hasDeclaredType, ok := resolveStoredProcedureVariableWithType(
 		tcc.execCtx.reqCtx, varName,
 	); ok {
@@ -1463,7 +1462,7 @@ func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	if isSystemVar {
 		value, err := tcc.ResolveVariable(varName, true, isGlobalVar)
 		if err != nil {
-			return vector.PrepareParamNone, err
+			return types.StringConversionString, err
 		}
 		return prepareParamKindFromValue(value), nil
 	}
@@ -1471,7 +1470,7 @@ func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	if err != nil {
 		// See ResolveVariable: an unassigned user variable is NULL and has no
 		// prepared-parameter conversion category.
-		return vector.PrepareParamNone, nil
+		return types.StringConversionString, nil
 	}
 	return udVar.PrepareParamKind, nil
 }
@@ -1640,11 +1639,13 @@ func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
 
-	// Resolve temporary table alias: the ObjectRef may carry the original
-	// user-visible name while the real engine name is the session-scoped
-	// temp name.  Without this lookup Stats() would fail with "no such table".
-	if realName, ok := tcc.GetSession().GetTempTable(dbName, tableName); ok {
-		tableName = realName
+	// Only session-owned temporary references may need alias translation.
+	// Statistics can run after leaving the View binding scope; translating a
+	// bound permanent source here would read/cache the shadow's statistics.
+	if obj.NotLockMeta {
+		if realName, ok := tcc.GetSession().GetTempTable(dbName, tableName); ok {
+			tableName = realName
+		}
 	}
 
 	// 1. Check database and subscription

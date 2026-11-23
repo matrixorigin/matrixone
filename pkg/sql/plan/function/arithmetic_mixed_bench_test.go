@@ -39,17 +39,17 @@ func BenchmarkIntegerAddMulBatch(b *testing.B) {
 					const rows = 8192
 					proc := testutil.NewProcess(b)
 					defer proc.Free()
-					a8 := vector.NewVec(types.T_int8.ToType())
+					a8 := vector.NewVec(types.T_int8.ToType(), proc.Mp())
 					defer a8.Free(proc.Mp())
-					b8 := vector.NewVec(types.T_int8.ToType())
+					b8 := vector.NewVec(types.T_int8.ToType(), proc.Mp())
 					defer b8.Free(proc.Mp())
-					u8 := vector.NewVec(types.T_uint8.ToType())
+					u8 := vector.NewVec(types.T_uint8.ToType(), proc.Mp())
 					defer u8.Free(proc.Mp())
-					a64 := vector.NewVec(types.T_int64.ToType())
+					a64 := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 					defer a64.Free(proc.Mp())
-					b64 := vector.NewVec(types.T_int64.ToType())
+					b64 := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 					defer b64.Free(proc.Mp())
-					u64 := vector.NewVec(types.T_uint64.ToType())
+					u64 := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 					defer u64.Free(proc.Mp())
 					active := make([]bool, rows)
 					for i := 0; i < rows; i++ {
@@ -108,9 +108,9 @@ func BenchmarkIntegerAddMulBatch(b *testing.B) {
 					}
 					rightResult := vector.NewFunctionResultWrapper(rt, proc.Mp())
 					defer rightResult.Free()
-					leftTarget := vector.NewVec(types.T_int64.ToType())
+					leftTarget := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 					defer leftTarget.Free(proc.Mp())
-					rightTarget := vector.NewVec(rt)
+					rightTarget := vector.NewVec(rt, proc.Mp())
 					defer rightTarget.Free(proc.Mp())
 					rightSource := b8
 					if mixed {

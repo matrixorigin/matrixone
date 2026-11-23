@@ -27,8 +27,7 @@ import (
 )
 
 // Small producer-local tails make ready-credit exhaustion deterministic without
-// a large fixture. A distinct source account keeps this lane separate from the
-// pool's initially admitted unaccounted provenance.
+// a large fixture.
 func smallShuffleRetryFixture(t *testing.T) (*process.Process, *ShufflePool, *batch.Batch) {
 	t.Helper()
 	mp := mpool.MustNewZero()
@@ -37,28 +36,13 @@ func smallShuffleRetryFixture(t *testing.T) (*process.Process, *ShufflePool, *ba
 		defer proc.Free()
 		require.Zero(t, mp.CurrNB())
 	})
-	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<16)
-	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		stats := account.Seal()
-		_, err := registry.Finalize(account)
-		require.Zero(t, stats.Used)
-		require.NoError(t, err)
-	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
-	require.NoError(t, err)
-	input := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+	input := batch.NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, mp)
 	t.Cleanup(func() { input.Clean(mp) })
-	require.NoError(t, input.SetAllocationAccount(selection))
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}, nil, mp))
 	input.SetRowCount(14)
+	// Two holders have no shared tail, so writes stay on producer-local lanes.
 	sp := NewShufflePool(3, 2, false)
 	t.Cleanup(func() { sp.abort(mp) })
-	unaccounted := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
-	t.Cleanup(func() { unaccounted.Clean(mp) })
-	require.True(t, sp.matchesSharedLane(unaccounted))
 	sp.producerBatchMaxRows = 2
 	for _, lanes := range sp.batchSets {
 		for lane := range lanes {

@@ -668,6 +668,18 @@ func prepareIterationRange(iter *IterationContext, toTS types.TS) bool {
 	return true
 }
 
+// limitIterationTimeSpan bounds a catch-up range before either a
+// worker or the clean-table watermark path can advance it. Init snapshots
+// have no source range yet; their bound is chosen by the worker.
+func limitIterationTimeSpan(iter *IterationContext) {
+	if iter == nil || iter.fromTS.IsEmpty() {
+		return
+	}
+	if iter.toTS.Physical()-iter.fromTS.Physical() > DefaultMaxChangeInterval.Nanoseconds() {
+		iter.toTS = types.BuildTS(iter.fromTS.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
+	}
+}
+
 func shouldReplayISCPLog(err error) bool {
 	return err != nil &&
 		(moerr.IsMoErrCode(err, moerr.ErrStaleRead) || isSupersededIteration(err))

@@ -26,8 +26,8 @@ import (
 	"time"
 
 	gomysql "github.com/go-sql-driver/mysql"
-	"github.com/matrixorigin/matrixone/pkg/common/backoff"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 // ErrorMetadata stores error metadata
@@ -604,7 +604,7 @@ type ExponentialBackoff struct {
 
 // Next implements BackoffStrategy.
 func (b ExponentialBackoff) Next(attempt int) time.Duration {
-	return backoff.Exponential(attempt, b.Base, b.Factor, b.Max, b.Jitter, b.randFn)
+	return util.ExponentialBackoff(attempt, b.Base, b.Factor, b.Max, b.Jitter, b.randFn)
 }
 
 // MultiClassifier chains multiple classifiers; returns true if any classifier deems the error retryable.

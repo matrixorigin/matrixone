@@ -98,16 +98,18 @@ func TestResolveSingleSourceInsertIndexesWithRetainedRowID(t *testing.T) {
 }
 
 func TestResolveMVBatchIndexesUsesRetainedBatchLayout(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
 	def := &planpb.TableDef{
 		Pkey: &planpb.PrimaryKeyDef{Names: []string{"id"}},
 	}
 	bat := batch.NewWithSize(4)
 	bat.Attrs = []string{"__mo_rowid", "id", "service", "__mo_commit_ts"}
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType())
-	defer bat.Clean(nil)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType(), mp)
+	defer bat.Clean(mp)
 
 	tsIdx, pkIdx := resolveMVBatchIndexes(bat, def, true, true)
 	require.Equal(t, 3, tsIdx)
@@ -124,10 +126,10 @@ func TestEnsureISCPInsertBatchAttrsRestoresPersistedObjectSchema(t *testing.T) {
 		{Name: objectio.DefaultCommitTS_Attr},
 	}}
 	bat := batch.NewWithSize(4)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType(), mp)
 	var block types.Blockid
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(&block, 0), false, mp))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(7), false, mp))
@@ -154,14 +156,16 @@ func TestEnsureISCPInsertBatchAttrsRestoresPersistedObjectSchema(t *testing.T) {
 }
 
 func TestEnsureISCPInsertBatchAttrsRejectsUnknownLayout(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
 	def := &planpb.TableDef{Cols: []*planpb.ColDef{
 		{Name: "event_id"},
 		{Name: objectio.DefaultCommitTS_Attr},
 	}}
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	defer bat.Clean(nil)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
+	defer bat.Clean(mp)
 
 	err := ensureISCPInsertBatchAttrs(bat, def, true)
 	require.ErrorContains(t, err, "schema mismatch")
@@ -171,9 +175,9 @@ func TestAtomicBatchRetainsRowsWithDistinctRowIDs(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	defer mpool.DeleteMPool(mp)
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 	var block types.Blockid
 	ts := types.BuildTS(1, 0)
 	for i := 0; i < 3; i++ {
@@ -196,9 +200,9 @@ func TestMaterializedViewDeleteRowsRetainCommitTS(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 	bat := batch.NewWithSize(3)
 	bat.Attrs = []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 	var block types.Blockid
 	rowid := types.NewRowid(&block, 7)
 	commitTS := types.BuildTS(20, 3)
@@ -354,7 +358,7 @@ func TestGetJobSpecsMissingJobFlushesPermanentErrorWithoutNilStatuses(t *testing
 		_ []uint64,
 		_ []uint64,
 		jobStatuses []*JobStatus,
-		_ types.TS,
+		_ *types.TS,
 		_ int8,
 		_ []uint64,
 	) error {
@@ -473,7 +477,7 @@ func TestGetJobSpecsFlushesPermanentErrorForInvalidRows(t *testing.T) {
 				_ []uint64,
 				_ []uint64,
 				jobStatuses []*JobStatus,
-				_ types.TS,
+				_ *types.TS,
 				_ int8,
 				_ []uint64,
 			) error {
@@ -552,7 +556,7 @@ func TestFlushFinalJobStatusUsesCurrentJobLSNAsPrevLSN(t *testing.T) {
 		jobIDs []uint64,
 		lsns []uint64,
 		jobStatuses []*JobStatus,
-		_ types.TS,
+		_ *types.TS,
 		state int8,
 		prevLSN []uint64,
 	) error {
@@ -573,7 +577,7 @@ func TestFlushFinalJobStatusUsesCurrentJobLSNAsPrevLSN(t *testing.T) {
 		iterCtx,
 		1,
 		status,
-		status.From,
+		nil,
 		ISCPJobState_Error,
 	)
 	require.NoError(t, err)
@@ -700,7 +704,7 @@ func TestFlushStatusSucceedsOnOneAffectedRow(t *testing.T) {
 		"test_job",
 		1,
 		&JobStatus{Stage: JobStage_Running},
-		types.TS{},
+		nil,
 		ISCPJobState_Error,
 		0,
 	)
@@ -726,7 +730,7 @@ func TestFlushStatusErrorsOnZeroAffectedRows(t *testing.T) {
 		"test_job",
 		1,
 		&JobStatus{Stage: JobStage_Running},
-		types.TS{},
+		nil,
 		ISCPJobState_Error,
 		0,
 	)
@@ -776,7 +780,7 @@ func TestGetJobSpecsPermanentErrorFailsWhenFlushReturnsError(t *testing.T) {
 		_ []uint64,
 		_ []uint64,
 		_ []*JobStatus,
-		_ types.TS,
+		_ *types.TS,
 		_ int8,
 		_ []uint64,
 	) error {

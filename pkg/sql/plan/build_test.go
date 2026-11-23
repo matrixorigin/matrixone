@@ -4056,7 +4056,36 @@ func requireModernClusterInsertPlan(
 
 	if wantAccountID != nil {
 		accountExpr := writeExpr("account_id")
-		require.True(t, exprContainsIntegerLiteral(accountExpr, *wantAccountID),
+		var containsAccountLiteral func(*plan.Expr, *plan.Node, int) bool
+		containsAccountLiteral = func(expr *plan.Expr, owner *plan.Node, depth int) bool {
+			if expr == nil || depth > len(query.Nodes) || exprContainsIntegerLiteral(expr, *wantAccountID) {
+				return expr != nil && exprContainsIntegerLiteral(expr, *wantAccountID)
+			}
+			if fn := expr.GetF(); fn != nil {
+				for _, arg := range fn.Args {
+					if containsAccountLiteral(arg, owner, depth+1) {
+						return true
+					}
+				}
+			}
+			if col := expr.GetCol(); col != nil {
+				if col.RelPos == 0 && len(owner.Children) == 1 {
+					child := query.Nodes[owner.Children[0]]
+					if col.ColPos >= 0 && int(col.ColPos) < len(child.ProjectList) {
+						return containsAccountLiteral(child.ProjectList[col.ColPos], child, depth+1)
+					}
+				}
+				for _, node := range query.Nodes {
+					for _, tag := range node.BindingTags {
+						if tag == col.RelPos && col.ColPos >= 0 && int(col.ColPos) < len(node.ProjectList) {
+							return containsAccountLiteral(node.ProjectList[col.ColPos], node, depth+1)
+						}
+					}
+				}
+			}
+			return false
+		}
+		require.True(t, containsAccountLiteral(accountExpr, rowImage, 0),
 			"account_id must remain in its target column position: %s", accountExpr.String())
 	}
 
@@ -6125,11 +6154,16 @@ func TestReplaceRewritesLegacyGeneratedColumnCast(t *testing.T) {
 	require.True(t, foundGeneratedAssignment)
 }
 
-func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
+func TestAssignmentCastPlanProtocolSelection(t *testing.T) {
 	proc := newPlanTestProcess(t)
-
-	build := func(version int64) string {
-		setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, version)
+	for _, tc := range []struct {
+		version    int64
+		stringCast string
+	}{
+		{defines.MORPCVersion4, "cast_strict"},
+		{defines.MORPCVersion5, "cast_assign"},
+	} {
+		setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, tc.version)
 		mock := NewMockOptimizer(true, proc)
 		stmt, err := mysql.ParseOne(
 			t.Context(),
@@ -6140,18 +6174,26 @@ func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
 		defer stmt.Free()
 		built, err := mock.Optimize(stmt)
 		require.NoError(t, err)
-		data, err := json.Marshal(built)
-		require.NoError(t, err)
-		return string(data)
+		var integerCasts, stringCasts []string
+		for _, node := range built.Nodes {
+			for _, project := range node.ProjectList {
+				walkPlanExpr(project, func(expr *plan.Expr) {
+					name := expr.GetF().GetFunc().GetObjName()
+					if !IsAssignmentCastFamilyName(name) {
+						return
+					}
+					switch types.T(expr.Typ.Id) {
+					case types.T_uint32:
+						integerCasts = append(integerCasts, name)
+					case types.T_varchar:
+						stringCasts = append(stringCasts, name)
+					}
+				})
+			}
+		}
+		require.Equal(t, []string{"cast_assign"}, integerCasts, "protocol %d", tc.version)
+		require.Equal(t, []string{tc.stringCast, tc.stringCast}, stringCasts, "protocol %d", tc.version)
 	}
-
-	mixedVersionPlan := build(defines.MORPCVersion4)
-	require.Contains(t, mixedVersionPlan, `"obj_name":"cast_strict"`)
-	require.NotContains(t, mixedVersionPlan, `"obj_name":"cast_assign"`)
-	require.NotContains(t, mixedVersionPlan, `"obj_name":"cast_ignore"`)
-
-	upgradedPlan := build(defines.MORPCVersion5)
-	require.Contains(t, upgradedPlan, `"obj_name":"cast_assign"`)
 }
 
 func addPositiveCheck(t *testing.T, mock *MockOptimizer, tableName, columnName string) {
@@ -10916,7 +10958,7 @@ func TestModernMultiTargetGeneratedColumns(t *testing.T) {
 	require.Equal(t, 1, multiUpdates)
 }
 
-func TestUpdateIgnoreChecksRepeatedPhysicalAliasesBeforeFinalRowMerge(t *testing.T) {
+func TestUpdateIgnoreChecksRepeatedPhysicalAliasesAtMergedCandidate(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	tests := []struct {
 		name string
@@ -10950,25 +10992,28 @@ func TestUpdateIgnoreChecksRepeatedPhysicalAliasesBeforeFinalRowMerge(t *testing
 			for nodeID, node := range query.Nodes {
 				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
 					node.OnDuplicateAction == plan.Node_IGNORE {
+					require.NotNil(t, node.DedupJoinCtx)
+					require.NotNil(t, node.DedupJoinCtx.AuxiliaryRowIdCol,
+						"a repeated target must not retain a separate alias-local UNIQUE validator")
 					ignoreDedupIDs = append(ignoreDedupIDs, int32(nodeID))
 				}
 			}
-			require.NotEmpty(t, ignoreDedupIDs)
+			require.Len(t, ignoreDedupIDs, 1, "only one alias in this fixture mutates the UNIQUE key")
 
-			finalMergeAfterIgnore := false
+			arbitrationAfterMerge := false
 			for nodeID, node := range query.Nodes {
 				if node.NodeType != plan.Node_AGG {
 					continue
 				}
 				for _, dedupID := range ignoreDedupIDs {
-					if planNodeDependsOn(query, int32(nodeID), dedupID, make(map[int32]struct{})) {
-						finalMergeAfterIgnore = true
+					if planNodeDependsOn(query, dedupID, int32(nodeID), make(map[int32]struct{})) {
+						arbitrationAfterMerge = true
 						break
 					}
 				}
 			}
-			require.True(t, finalMergeAfterIgnore,
-				"repeated physical aliases must pass alias-level IGNORE checks before RowID merge")
+			require.True(t, arbitrationAfterMerge,
+				"UNIQUE arbitration must consume the merged physical candidate source")
 		})
 	}
 }
@@ -11129,4 +11174,62 @@ func TestCentroidxIndexParametersAreInternal(t *testing.T) {
 	mock := NewMockOptimizer(false, nil)
 	_, err := runOneStmt(mock, t, "SELECT N_NAME FROM NATION CENTROIDX('vector_l2_ops', '{}', '{\"ignored\":\"t\"}') JOIN REGION ON N_REGIONKEY = R_REGIONKEY")
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+}
+
+func TestPreparedSetRetainsFoldedZeroScalarSources(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @p = ?, @answer = 1 + (select cast(null as signed) + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n limit 1)'")
+	require.NoError(t, err)
+	prepared := p.GetDcl().GetPrepare()
+	require.Len(t, prepared.ParamTypes, 1)
+	require.True(t, hasSubquery(prepared.Plan.GetDcl().GetSetVariables().Items[1].Value))
+	names := make([]string, 0, len(prepared.Schemas))
+	for _, schema := range prepared.Schemas {
+		names = append(names, schema.ObjName)
+	}
+	require.ElementsMatch(t, []string{"nation", "region"}, names)
+}
+
+func TestPreparedSetRetainsFoldedZeroScalarSourcesWithExists(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = case when exists(select 1 from nation) then (select cast(null as signed) + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n limit 1) else 1 end'")
+	require.NoError(t, err)
+	prepared := p.GetDcl().GetPrepare()
+	require.True(t, hasSubquery(prepared.Plan.GetDcl().GetSetVariables().Items[0].Value))
+	names := make([]string, 0, len(prepared.Schemas))
+	for _, schema := range prepared.Schemas {
+		names = append(names, schema.ObjName)
+	}
+	require.Contains(t, names, "region")
+}
+
+func TestPreparedSetRetainsFoldedZeroScalarSourcesAfterRebinding(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = ? + cast((select (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n limit 1) as decimal(10,2))'")
+	require.NoError(t, err)
+	prepared := p.GetDcl().GetPrepare()
+	require.Len(t, prepared.ParamTypes, 1)
+	require.True(t, hasSubquery(prepared.Plan.GetDcl().GetSetVariables().Items[0].Value))
+	names := make([]string, 0, len(prepared.Schemas))
+	for _, schema := range prepared.Schemas {
+		names = append(names, schema.ObjName)
+	}
+	require.ElementsMatch(t, []string{"nation", "region"}, names)
+}
+
+func TestPreparedSetRetainsRepeatedCaseSubquerySources(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = case (select (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n where n.n_nationkey = ? limit 1) when 1 then 11 when 2 then 12 else 13 end'")
+	require.NoError(t, err)
+	prepared := p.GetDcl().GetPrepare()
+	require.Len(t, prepared.ParamTypes, 1)
+	names := make([]string, 0, len(prepared.Schemas))
+	for _, schema := range prepared.Schemas {
+		names = append(names, schema.ObjName)
+	}
+	require.ElementsMatch(t, []string{"nation", "region"}, names)
 }

@@ -16,6 +16,7 @@ package lockop
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -57,6 +59,7 @@ type LockOptions struct {
 	changeDef                bool
 	refreshTableSnapshot     bool
 	admissionOnly            bool
+	reuseOwnedRange          bool
 	admissionResult          *lock.Result
 	noWait                   bool
 	skipLocked               bool
@@ -66,6 +69,7 @@ type LockOptions struct {
 	filter                   RowsFilter
 	filterCols               []int32
 	hasNewVersionInRangeFunc hasNewVersionInRangeFunc
+	lockRead                 *resource.LockReadObservation
 }
 
 // LockOp lock op argument.
@@ -146,11 +150,70 @@ type state struct {
 	// skipLockedOutput is the operator-owned copy returned to downstream
 	// consumers. It remains live until the next Call or operator cleanup so a
 	// consumer may finish using the borrowed batch before it is reclaimed.
-	skipLockedOutput     *batch.Batch
+	skipLockedOutput *batch.Batch
+	// refresh holds the operator's own refresh-timestamp vectors (one per
+	// batch column, created once and refilled for every batch) and the view
+	// of the child's batch that publishes them; the child's vectors are
+	// never appended to.
+	refresh              refreshOutput
 	retryError           error
 	defChanged           bool
 	fetchers             []FetchLockRowsFunc
 	relations            []engine.Relation
 	hasNewVersionInRange hasNewVersionInRangeFunc
 	lockCount            int64
+}
+
+// refreshOutput is the refresh-timestamp output of one Call.
+type refreshOutput struct {
+	mp       *mpool.MPool
+	vecs     map[int32]*vector.Vector
+	replaced map[int32]*vector.Vector
+	view     *batch.Batch
+}
+
+// vector returns the operator's empty refresh-timestamp vector for column idx.
+func (r *refreshOutput) vector(idx int32, typ types.Type, mp *mpool.MPool) *vector.Vector {
+	if r.mp != mp {
+		r.free()
+		r.mp = mp
+	}
+	if r.vecs == nil {
+		r.vecs = make(map[int32]*vector.Vector)
+	}
+	vec := r.vecs[idx]
+	if vec != nil && vec.GetType().Eq(typ) {
+		vec.CleanOnlyData()
+		return vec
+	}
+	if vec != nil {
+		vec.Free(r.mp)
+	}
+	vec = vector.NewVec(typ, r.mp)
+	r.vecs[idx] = vec
+	return vec
+}
+
+// publish returns bat, or the operator's view of bat with the refreshed
+// columns installed when performLock refreshed any, and forgets them.
+func (r *refreshOutput) publish(bat *batch.Batch) *batch.Batch {
+	if len(r.replaced) == 0 {
+		return bat
+	}
+	if r.view == nil {
+		r.view = batch.NewWithSize(0)
+	}
+	bat.ViewInto(r.view)
+	for idx, vec := range r.replaced {
+		r.view.Vecs[idx] = vec
+	}
+	clear(r.replaced)
+	return r.view
+}
+
+func (r *refreshOutput) free() {
+	for _, vec := range r.vecs {
+		vec.Free(r.mp)
+	}
+	r.vecs, r.replaced, r.view, r.mp = nil, nil, nil, nil
 }

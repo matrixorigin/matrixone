@@ -418,7 +418,7 @@ func TestMysqlSinker2_CommandProcessing(t *testing.T) {
 
 		// Create an InsertBatch command with real batch data
 		bat := &batch.Batch{
-			Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType())},
+			Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType(), mpool.MustNewZero())},
 		}
 		bat.SetRowCount(1)
 		fromTs := types.BuildTS(100, 0)
@@ -443,7 +443,7 @@ func TestMysqlSinker2_CommandProcessing(t *testing.T) {
 		}()
 
 		cmd := NewInsertBatchCommand(
-			&batch.Batch{Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType())}},
+			&batch.Batch{Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType(), mp)}},
 			mp,
 			types.BuildTS(100, 0),
 			types.BuildTS(200, 0),
@@ -752,7 +752,7 @@ func TestMysqlSinker2_ConsumerExitUnblocksAndRejectsCommands(t *testing.T) {
 
 			var permitReleases atomic.Int32
 			batchCommand := NewInsertBatchCommand(
-				&batch.Batch{Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType())}},
+				&batch.Batch{Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType(), nil)}},
 				nil,
 				types.BuildTS(1, 0),
 				types.BuildTS(2, 0),
@@ -836,8 +836,8 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 		// Create batch
 		bat := batch.NewWithSize(2)
 		t.Cleanup(func() { bat.Clean(mp) }) // Also covers fixture construction failure.
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("Alice"), false, mp))
@@ -894,8 +894,8 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 		// Create batch
 		bat := batch.NewWithSize(2)
 		t.Cleanup(func() { bat.Clean(mp) }) // Also covers fixture construction failure.
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(2), false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("Bob"), false, mp))
@@ -946,7 +946,7 @@ func TestMysqlSinker2_SendCommandCleanupOnClose(t *testing.T) {
 
 		// Create a batch command
 		bat := &batch.Batch{
-			Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType())},
+			Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType(), mpool.MustNewZero())},
 		}
 		bat.SetRowCount(1)
 		cmd := NewInsertBatchCommand(bat, nil, types.BuildTS(1, 0), types.BuildTS(2, 0))

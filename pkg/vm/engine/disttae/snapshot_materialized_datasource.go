@@ -230,7 +230,7 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 	}
 	defer iter.Close()
 
-	out := newMaterializedInMemBatch(attrs, colTypes)
+	out := newMaterializedInMemBatch(attrs, colTypes, mp)
 	totalRows := 0
 	scan := 0
 	bfSkipped := 0
@@ -253,7 +253,7 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 		}
 		if out.RowCount() >= int(objectio.BlockMaxRows) {
 			ds.inMemBatches = append(ds.inMemBatches, out)
-			out = newMaterializedInMemBatch(attrs, colTypes)
+			out = newMaterializedInMemBatch(attrs, colTypes, mp)
 		}
 		if err := appendCommittedInMemEntry(out, entry, seqNums, mp); err != nil {
 			out.Clean(mp)
@@ -332,11 +332,12 @@ func (ds *materializedSnapshotDataSource) isDeletedByCommittedTombstones(
 func newMaterializedInMemBatch(
 	attrs []string,
 	colTypes []types.Type,
+	mp *mpool.MPool,
 ) *batch.Batch {
 	bat := batch.NewWithSize(len(attrs))
 	bat.SetAttributes(attrs)
 	for i := range attrs {
-		bat.Vecs[i] = vector.NewVec(colTypes[i])
+		bat.Vecs[i] = vector.NewVec(colTypes[i], mp)
 	}
 	return bat
 }

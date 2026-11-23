@@ -22,7 +22,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
@@ -469,6 +471,10 @@ func (c *SharedTestCluster) CloseIfActive() error {
 // A topology switch may release an idle fixture, but must not wait for a
 // callback that could be making the switch itself or bypass its cleanup.
 func (c *SharedTestCluster) closeIfActive(waitForCallback bool) error {
+	return c.closeIfActiveWithDiscard(waitForCallback, false)
+}
+
+func (c *SharedTestCluster) closeIfActiveWithDiscard(waitForCallback, discard bool) error {
 	c.initializeRunCondition()
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -487,7 +493,7 @@ func (c *SharedTestCluster) closeIfActive(waitForCallback bool) error {
 	// automatic attempt has happened, this method remains the explicit retry
 	// path for incomplete cleanup.
 	if c.sealed && !c.cleanupTried && len(c.cleanupRegistrations) > 0 {
-		if !waitForCallback {
+		if !waitForCallback || discard {
 			return moerr.NewInvalidStateNoCtx("shared cluster callback cleanup is still pending")
 		}
 		return nil
@@ -501,6 +507,10 @@ func (c *SharedTestCluster) closeIfActive(waitForCallback bool) error {
 		return errors.Join(err, moerr.NewInvalidStateNoCtx("shared cluster cleanup is incomplete"))
 	}
 	c.resetGenerationLocked()
+	if discard && cnservice.IsOnlyViewMetadataWithdrawalTimeout(err) {
+		logutil.Warnf("discarded complete test cluster after final admission withdrawal timed out: %v", err)
+		return nil
+	}
 	return err
 }
 
@@ -733,6 +743,12 @@ func RunSingleCNBaseClusterTests(
 // later shared test still initializes normally.
 func CloseSingleCNBaseClusterTests() error {
 	return singleCNClusterState.CloseIfActive()
+}
+
+// discardSingleCNBaseClusterTests destroys the complete shared topology. A
+// timed-out remote handoff is diagnostic once its HAKeeper is also gone.
+func discardSingleCNBaseClusterTests() error {
+	return singleCNClusterState.closeIfActiveWithDiscard(true, true)
 }
 
 // Admission is exclusive and all owners of this generation have completed

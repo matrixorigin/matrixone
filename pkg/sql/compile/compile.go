@@ -637,6 +637,7 @@ func (c *Compile) clear() {
 	c.temporaryDropRetryStage = nil
 	c.temporaryDropRetryActive = false
 	c.resourceAttemptOwnerEligible = false
+	c.lockingReadPlan = false
 	c.allocationAccountRegistry = nil
 	c.allocationAccountLimit = 0
 	c.allocationControllerProvider = nil
@@ -1526,9 +1527,6 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainGroupConcatTimeZoneWorkers(qry); err != nil {
 		return nil, err
 	}
-	if err = c.validateGroupingTransportPlacement(qry); err != nil {
-		return nil, err
-	}
 
 	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
@@ -1576,9 +1574,6 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}
 	c.validateDeepRuntimeFilterTopology(deepTags, deepLogicalSafe, steps)
 	c.bindLocalRuntimeFilterDomains(qry, steps)
-	if queryNeedsGroupingTransport(qry) {
-		attachGroupingTransportPlan(steps, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}})
-	}
 
 	c.installMarkScanGuard(qry, steps)
 	return steps, err
@@ -6100,6 +6095,16 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 	}
 
 	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+	if node.ValuesWarningRow() != 0 {
+		// The session warning sink lives on the coordinator. Only the final
+		// singleton assignment projection needs it; its child keeps its placement.
+		if !c.scopesRunOnCoordinator(ss) {
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
+		c.setProjection(node, ss[0])
+		c.anal.isFirst = false
+		return ss
+	}
 	if _, groupingSetExpand := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
 		for i := range ss {
 			c.setProjection(node, ss[i])
@@ -6167,7 +6172,7 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) []*Scope {
-	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node) &&
+	if (!nodeHasUserLevelLockFunction(node) && !nodeHasCoordinatorSessionFunction(node) &&
 		!c.needsCoordinatorIgnoreCheck(node) && !c.needsCoordinatorConstantFilterDiagnostic(node)) || c.scopesRunOnCoordinator(ss) {
 		return ss
 	}
@@ -6272,32 +6277,32 @@ func nodeHasUserLevelLockFunction(node *plan.Node) bool {
 	return false
 }
 
-func nodeHasFoundRowsFunction(node *plan.Node) bool {
+func nodeHasCoordinatorSessionFunction(node *plan.Node) bool {
 	if node == nil {
 		return false
 	}
-	if hasFoundRowsFunction(node.ProjectList) ||
-		hasFoundRowsFunction(node.OnList) ||
-		hasFoundRowsFunction(node.FilterList) ||
-		hasFoundRowsFunction(node.GroupBy) ||
-		hasFoundRowsFunction(node.AggList) ||
-		hasFoundRowsFunction(node.WinSpecList) ||
-		orderBySpecsHaveFoundRowsFunction(node.OrderBy) ||
-		exprHasFoundRowsFunction(node.Limit) ||
-		exprHasFoundRowsFunction(node.Offset) ||
-		hasFoundRowsFunction(node.TblFuncExprList) ||
-		hasFoundRowsFunction(node.BlockFilterList) ||
-		exprHasFoundRowsFunction(node.Interval) ||
-		exprHasFoundRowsFunction(node.Sliding) ||
-		exprHasFoundRowsFunction(node.Timestamp) ||
-		exprHasFoundRowsFunction(node.WEnd) ||
-		hasFoundRowsFunction(node.FillVal) ||
-		hasFoundRowsFunction(node.OnUpdateExprs) {
+	if hasCoordinatorSessionFunction(node.ProjectList) ||
+		hasCoordinatorSessionFunction(node.OnList) ||
+		hasCoordinatorSessionFunction(node.FilterList) ||
+		hasCoordinatorSessionFunction(node.GroupBy) ||
+		hasCoordinatorSessionFunction(node.AggList) ||
+		hasCoordinatorSessionFunction(node.WinSpecList) ||
+		orderBySpecsHaveCoordinatorSessionFunction(node.OrderBy) ||
+		exprHasCoordinatorSessionFunction(node.Limit) ||
+		exprHasCoordinatorSessionFunction(node.Offset) ||
+		hasCoordinatorSessionFunction(node.TblFuncExprList) ||
+		hasCoordinatorSessionFunction(node.BlockFilterList) ||
+		exprHasCoordinatorSessionFunction(node.Interval) ||
+		exprHasCoordinatorSessionFunction(node.Sliding) ||
+		exprHasCoordinatorSessionFunction(node.Timestamp) ||
+		exprHasCoordinatorSessionFunction(node.WEnd) ||
+		hasCoordinatorSessionFunction(node.FillVal) ||
+		hasCoordinatorSessionFunction(node.OnUpdateExprs) {
 		return true
 	}
 	if node.IndexReaderParam != nil {
-		return orderBySpecsHaveFoundRowsFunction(node.IndexReaderParam.OrderBy) ||
-			exprHasFoundRowsFunction(node.IndexReaderParam.Limit)
+		return orderBySpecsHaveCoordinatorSessionFunction(node.IndexReaderParam.OrderBy) ||
+			exprHasCoordinatorSessionFunction(node.IndexReaderParam.Limit)
 	}
 	return false
 }
@@ -6311,16 +6316,16 @@ func hasUserLevelLockFunction(exprs []*plan.Expr) bool {
 	return false
 }
 
-func hasFoundRowsFunction(exprs []*plan.Expr) bool {
+func hasCoordinatorSessionFunction(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
-		if exprHasFoundRowsFunction(expr) {
+		if exprHasCoordinatorSessionFunction(expr) {
 			return true
 		}
 	}
 	return false
 }
 
-func exprHasFoundRowsFunction(expr *plan.Expr) bool {
+func exprHasCoordinatorSessionFunction(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
@@ -6331,22 +6336,22 @@ func exprHasFoundRowsFunction(expr *plan.Expr) bool {
 		}
 		if e.F.Func != nil {
 			fid, _ := function.DecodeOverloadID(e.F.Func.Obj)
-			if fid == function.FOUND_ROWS {
+			if fid == function.FOUND_ROWS || fid == function.MO_ASSERT_SNAPSHOT_AFTER {
 				return true
 			}
 		}
-		return hasFoundRowsFunction(e.F.Args)
+		return hasCoordinatorSessionFunction(e.F.Args)
 	case *plan.Expr_List:
-		return e.List != nil && hasFoundRowsFunction(e.List.List)
+		return e.List != nil && hasCoordinatorSessionFunction(e.List.List)
 	case *plan.Expr_W:
 		if e.W == nil {
 			return false
 		}
-		if exprHasFoundRowsFunction(e.W.WindowFunc) || hasFoundRowsFunction(e.W.PartitionBy) {
+		if exprHasCoordinatorSessionFunction(e.W.WindowFunc) || hasCoordinatorSessionFunction(e.W.PartitionBy) {
 			return true
 		}
 		for _, orderBy := range e.W.OrderBy {
-			if orderBy != nil && exprHasFoundRowsFunction(orderBy.Expr) {
+			if orderBy != nil && exprHasCoordinatorSessionFunction(orderBy.Expr) {
 				return true
 			}
 		}
@@ -6354,9 +6359,9 @@ func exprHasFoundRowsFunction(expr *plan.Expr) bool {
 	return false
 }
 
-func orderBySpecsHaveFoundRowsFunction(specs []*plan.OrderBySpec) bool {
+func orderBySpecsHaveCoordinatorSessionFunction(specs []*plan.OrderBySpec) bool {
 	for _, spec := range specs {
-		if spec != nil && exprHasFoundRowsFunction(spec.Expr) {
+		if spec != nil && exprHasCoordinatorSessionFunction(spec.Expr) {
 			return true
 		}
 	}
@@ -8420,7 +8425,7 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
-		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.UsesGroupingAwareHash())
+		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.ProducesGroupingSets())
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(arg)
 	} else {
@@ -8655,7 +8660,7 @@ func (c *Compile) compileMergeGroup(
 		rs := c.newMergeScope([]*Scope{mergeToGroup})
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.UsesGroupingAwareHash())
+		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.ProducesGroupingSets())
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
@@ -8673,7 +8678,7 @@ func (c *Compile) compileMergeGroup(
 
 			if i == 0 {
 				aggs = op.Aggs
-				groupingAware = op.UsesGroupingAwareHash()
+				groupingAware = op.ProducesGroupingSets()
 			}
 		}
 		c.anal.isFirst = false
@@ -10103,16 +10108,21 @@ func (c *Compile) validateNonBlockingLockTargets(targets []*plan.LockTarget) err
 	return nil
 }
 
-func (c *Compile) validateNonBlockingLockPlan(logicalPlan *plan.Plan) error {
-	if logicalPlan == nil || logicalPlan.GetQuery() == nil {
+func (c *Compile) validateLockPlan(logicalPlan *plan.Plan) error {
+	c.lockingReadPlan = false
+	query := logicalPlan.GetQuery()
+	if query == nil {
 		return nil
 	}
-	for _, node := range logicalPlan.GetQuery().GetNodes() {
+	for _, node := range query.GetNodes() {
 		if node == nil {
 			continue
 		}
 		if err := c.validateNonBlockingLockTargets(node.GetLockTargets()); err != nil {
 			return err
+		}
+		if node.NodeType == plan.Node_LOCK_OP && query.StmtType == plan.Query_SELECT {
+			c.lockingReadPlan = true
 		}
 	}
 	return nil

@@ -27,7 +27,7 @@ func TestOperatorStrInRetainsOwnedKeys(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, typ := range []types.Type{types.T_varchar.ToType(), types.New(types.T_char, 64, 0)} {
 		t.Run(typ.Oid.String(), func(t *testing.T) {
-			tuple := vector.NewVec(typ)
+			tuple := vector.NewVec(typ, proc.Mp())
 			defer tuple.Free(proc.Mp())
 			value := []byte("membership key longer than inline vector storage   ")
 			require.NoError(t, vector.AppendBytes(tuple, value, false, proc.Mp()))

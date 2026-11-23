@@ -47,7 +47,7 @@ func (r *keyTestReader) TakeExplainDiagnostics() []*plan.Query {
 func readerTestKeys(t *testing.T, released *atomic.Int32) *keycodec.KeyPayload {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	v := vector.NewVec(types.T_int64.ToType())
+	v := vector.NewVec(types.T_int64.ToType(), mp)
 	defer v.Free(mp)
 	require.NoError(t, vector.AppendFixed(v, int64(42), false, mp))
 	data, err := v.MarshalBinary()

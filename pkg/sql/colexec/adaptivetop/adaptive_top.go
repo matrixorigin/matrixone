@@ -88,7 +88,7 @@ func (a *AdaptiveTop) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 	if a.ctr.output != nil {
-		a.ctr.output.Clean(proc.Mp())
+		a.ctr.output.Clean(a.ctr.outputMP)
 		a.ctr.output = nil
 	}
 	// collect 已确认 EOF 和候选最终成功；不能在此之前调用 Source.Next。
@@ -104,6 +104,7 @@ func (a *AdaptiveTop) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	a.ctr.position++
 	a.ctr.output = bat
+	a.ctr.outputMP = a.ctr.source.BatchMP()
 	result.Batch = bat
 	return result, nil
 }

@@ -44,7 +44,8 @@ func TestPreparedExplainUsesBinaryParameterValues(t *testing.T) {
 	defer prepareStmt.Close()
 
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("42"), false, cw.proc.Mp()))
 
 	_, queryPlan, savedStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
@@ -432,7 +433,8 @@ func TestHandlePreparedExplainDoesNotRebuildUnderlyingStatement(t *testing.T) {
 	defer prepareStmt.Close()
 
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("42"), false, cw.proc.Mp()))
 	_, queryPlan, savedStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
@@ -613,7 +615,7 @@ func TestCompileOutputCallbackCapturesSelectIntoUserVariables(t *testing.T) {
 	}
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(5), false, mp))
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
@@ -621,7 +623,7 @@ func TestCompileOutputCallbackCapturesSelectIntoUserVariables(t *testing.T) {
 	require.NoError(t, compileOutputCallback(execCtx, ses, stmt, fill)(bat, nil))
 	require.False(t, called)
 	require.NotNil(t, execCtx.selectInto)
-	require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select abs(-5) into @out"))
+	require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select abs(-5) into @out", nil))
 	variable, err := ses.GetUserDefinedVar("out")
 	require.NoError(t, err)
 	require.Equal(t, int64(5), variable.Value)

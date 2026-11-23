@@ -770,6 +770,14 @@ func TestNormalizeQCloudContextErrorIsConservative(t *testing.T) {
 		require.Same(t, retryErr, normalizeQCloudContextError(ctx, retryErr))
 	})
 
+	t.Run("joined storage failure", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		joined := errors.Join(context.Canceled, errors.New("read failed"))
+		retryErr := &cos.RetryError{Errs: []error{fmt.Errorf("request failed: %w", joined)}}
+		require.Same(t, retryErr, normalizeQCloudContextError(ctx, retryErr))
+	})
+
 	t.Run("matching deadline", func(t *testing.T) {
 		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 		defer cancel()

@@ -25,7 +25,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hayageek/threadsafe"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -213,7 +212,6 @@ type SessionInfo struct {
 	// CompilerContext is request-local and never serialized. Origin-only metadata
 	// operators use it to bind View definitions in the executing transaction.
 	CompilerContext any
-	Buf             *buffer.Buffer
 	LogLevel        zapcore.Level
 	SessionId       uuid.UUID
 }
@@ -524,33 +522,40 @@ type BaseProcess struct {
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
 	// 0 after DDL, and the affected row count after DML.
-	AffectedRows                        *int64
-	LoadLocalReader                     *io.PipeReader
-	Aicm                                *defines.AutoIncrCacheManager
-	resolveVariableFunc                 func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	resolveVariableTypeFunc             func(varName string, isSystemVar, isGlobalVar bool) (plan.Type, error)
-	resolveVariableIsBinFunc            func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
-	resolveVariableStringDomainFunc     func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
-	resolveVariablePrepareParamKindFunc func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error)
-	prepareParams                       *vector.Vector
-	prepareParamsIsBin                  []bool
-	prepareParamsBinaryString           []bool
-	prepareParamsOwned                  bool
-	QueryClient                         qclient.QueryClient
-	Hakeeper                            logservice.CNHAKeeperClient
-	UdfService                          udf.Service
-	WaitPolicy                          lock.WaitPolicy
-	messageBoard                        *message.MessageBoard
-	executionResourceBudgetBorrowed     bool
-	executionResourceBudgetMu           sync.Mutex
-	executionResourceBudget             *ExecutionResourceGeneration
-	warningDiagnosticBudgetMu           sync.Mutex
-	warningDiagnosticBudget             *WarningDiagnosticBudget
-	cteMemoryBudgetMu                   sync.Mutex
-	cteMemoryBudget                     *CTEMemoryBudget
-	logger                              *log.MOLogger
-	TxnOperator                         client.TxnOperator
-	CloneTxnOperator                    client.TxnOperator
+	AffectedRows                    *int64
+	LoadLocalReader                 *io.PipeReader
+	Aicm                            *defines.AutoIncrCacheManager
+	resolveVariableFunc             func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableTypeFunc         func(varName string, isSystemVar, isGlobalVar bool) (plan.Type, error)
+	resolveVariableIsBinFunc        func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	resolveVariableStringDomainFunc func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
+	prepareParams                   *vector.Vector
+	prepareParamsIsBin              []bool
+	prepareParamsOwned              bool
+	// typedPrepareParams carries each prepared parameter as one row of its
+	// source SQL type (column i is parameter i). It is nil when the caller
+	// only supplied the legacy text transport.
+	typedPrepareParams      *batch.Batch
+	typedPrepareParamsOwned bool
+	// prepareParamsStringSource records where this execution's parameter
+	// values came from (SQL PREPARE or COM_STMT_EXECUTE). Constant folding
+	// stamps it on literals built from parameters.
+	prepareParamsStringSource       types.StringSource
+	QueryClient                     qclient.QueryClient
+	Hakeeper                        logservice.CNHAKeeperClient
+	UdfService                      udf.Service
+	WaitPolicy                      lock.WaitPolicy
+	messageBoard                    *message.MessageBoard
+	executionResourceBudgetBorrowed bool
+	executionResourceBudgetMu       sync.Mutex
+	executionResourceBudget         *ExecutionResourceGeneration
+	warningDiagnosticBudgetMu       sync.Mutex
+	warningDiagnosticBudget         *WarningDiagnosticBudget
+	cteMemoryBudgetMu               sync.Mutex
+	cteMemoryBudget                 *CTEMemoryBudget
+	logger                          *log.MOLogger
+	TxnOperator                     client.TxnOperator
+	CloneTxnOperator                client.TxnOperator
 	// userLevelLockIdentity is session-scoped rather than statement-scoped.
 	// SessionInfo is rebuilt before every statement, so keeping this identity
 	// there would lose the synthetic transaction owner while locks are held.
@@ -746,6 +751,9 @@ type Process struct {
 	// WarningSink is an immutable execution-attempt destination. Children inherit
 	// the pointer; remote callbacks retain it after a failed attempt is sealed.
 	WarningSink any
+	// WarningRowOffset maps a singleton VALUES evaluation to its statement row.
+	// VALUE_SCAN restores it before leaving the current evaluation.
+	WarningRowOffset uint64
 }
 
 type sqlHelper interface {
@@ -865,33 +873,6 @@ func (proc *Process) GetPrepareParamIsBin(i int) bool {
 	return proc.getPrepareParamMeta(i, 0)
 }
 
-func (proc *Process) GetPrepareParamKind(i int) vector.PrepareParamKind {
-	var kind vector.PrepareParamKind
-	if proc.getPrepareParamMeta(i, 1) {
-		kind |= 1
-	}
-	if proc.getPrepareParamMeta(i, 2) {
-		kind |= 2
-	}
-	if proc.getPrepareParamMeta(i, 3) {
-		kind |= 4
-	}
-	return kind
-}
-
-// GetPrepareParamType returns the concrete SQL type retained for a direct
-// prepared parameter. T_any means that the sender did not provide exact type
-// metadata, as is expected for legacy peers and parameters that do not need it.
-func (proc *Process) GetPrepareParamType(i int) types.T {
-	var typ types.T
-	for bit := 0; bit < 8; bit++ {
-		if proc.getPrepareParamMeta(i, 4+bit) {
-			typ |= types.T(1 << bit)
-		}
-	}
-	return typ
-}
-
 func (proc *Process) getPrepareParamMeta(i, section int) bool {
 	paramCount := 0
 	if proc.Base.prepareParams != nil {
@@ -900,10 +881,6 @@ func (proc *Process) getPrepareParamMeta(i, section int) bool {
 	offset := section*paramCount + i
 	return section >= 0 && i >= 0 && i < paramCount && offset < len(proc.Base.prepareParamsIsBin) &&
 		proc.Base.prepareParamsIsBin[offset]
-}
-
-func (proc *Process) GetPrepareParamIsBinaryString(i int) bool {
-	return i >= 0 && i < len(proc.Base.prepareParamsBinaryString) && proc.Base.prepareParamsBinaryString[i]
 }
 
 // SetIncrStatementDisabled marks this process (and every child process
@@ -937,14 +914,9 @@ func (proc *Process) GetResolveVariableTypeFunc() func(string, bool, bool) (plan
 	return proc.Base.resolveVariableTypeFunc
 }
 
-func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
-	proc.Base.resolveVariableIsBinFunc = f
-}
-
-func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
-	return proc.Base.resolveVariableIsBinFunc
-}
-
+// SetResolveVariableStringDomainFunc installs the session lookup for a user
+// variable's assignment-time string domain. SQL EXECUTE uses it to give a
+// parameter its static source type; vectors carry no string domain.
 func (proc *Process) SetResolveVariableStringDomainFunc(
 	f func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error),
 ) {
@@ -957,42 +929,12 @@ func (proc *Process) GetResolveVariableStringDomainFunc() func(
 	return proc.Base.resolveVariableStringDomainFunc
 }
 
-// SetResolveVariableBinaryStringFunc is a compatibility adapter for callers
-// that still consume a binary boolean instead of the three-state domain.
-func (proc *Process) SetResolveVariableBinaryStringFunc(
-	f func(varName string, isSystemVar, isGlobalVar bool) (bool, error),
-) {
-	proc.SetResolveVariableStringDomainFunc(func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error) {
-		binary, err := f(varName, isSystemVar, isGlobalVar)
-		if err != nil || !binary {
-			return types.RuntimeStringInherit, err
-		}
-		return types.RuntimeStringBinary, nil
-	})
+func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
+	proc.Base.resolveVariableIsBinFunc = f
 }
 
-func (proc *Process) GetResolveVariableBinaryStringFunc() func(string, bool, bool) (bool, error) {
-	f := proc.GetResolveVariableStringDomainFunc()
-	if f == nil {
-		return nil
-	}
-	return func(name string, system, global bool) (bool, error) {
-		domain, err := f(name, system, global)
-		return domain == types.RuntimeStringBinary, err
-	}
-}
-
-func (proc *Process) SetResolveVariablePrepareParamKindFunc(
-	f func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error),
-) {
-	proc.Base.resolveVariablePrepareParamKindFunc = f
-}
-
-func (proc *Process) GetResolveVariablePrepareParamKindFunc() func(
-	varName string,
-	isSystemVar, isGlobalVar bool,
-) (vector.PrepareParamKind, error) {
-	return proc.Base.resolveVariablePrepareParamKindFunc
+func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
+	return proc.Base.resolveVariableIsBinFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

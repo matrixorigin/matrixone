@@ -189,7 +189,7 @@ func TestIssue25590AcceptedGCWorkerStallDoesNotRetainCompletedTransaction(t *tes
 	name := stats.ObjectName().String()
 	require.NoError(t, writeObjectToFS(ctx, failFS, name),
 		"the recorded object's file exists before its GC is scheduled")
-	recBat := colexec.AllocCNS3ResultBat(false)
+	recBat := colexec.AllocCNS3ResultBat(false, mp)
 	require.NoError(t, colexec.ExpandObjectStatsToBatch(
 		mp, false, recBat, false, stats))
 	require.NoError(t, txn.WriteFile(

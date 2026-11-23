@@ -73,7 +73,7 @@ func cagraCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, er
 func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
 
 	if !u.inited {
-		u.batch = tf.createResultBatch()
+		u.batch = tf.createResultBatch(proc.Mp())
 		u.inited = true
 	}
 

@@ -139,7 +139,7 @@ func newMergeTopValuesBatch(
 ) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, proc.Mp()))
 	bat.SetRowCount(len(values))
 	return bat
@@ -315,19 +315,20 @@ func TestAccountedMergeTopMultiColumnAppendFailureRollsBack(t *testing.T) {
 	controller := &mergeTopTestCapacityController{limit: ^uint64(0)}
 	state := installMergeTopTestAllocation(t, op, 64<<20, controller)
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(7), false, proc.Mp()))
-	input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("payload"), false, proc.Mp()))
 	input.SetRowCount(1)
 	defer input.Clean(proc.Mp())
 
-	op.ctr.bat = batch.NewOffHeapWithSize(2)
+	require.NoError(t, op.ctr.ensureBufMP(proc))
+	require.NoError(t, op.ctr.allocationViews(op.ctr.bufMP))
+	op.ctr.bat = batch.NewWithSize(2)
 	for i := range input.Vecs {
-		op.ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(*input.Vecs[i].GetType())
+		op.ctr.bat.Vecs[i] = vector.NewVec(*input.Vecs[i].GetType(), op.ctr.retainedAllocation)
 	}
-	require.NoError(t, op.ctr.bat.SetAllocationAccount(op.ctr.retainedAllocation))
-	require.NoError(t, op.ctr.bat.Vecs[0].PreExtend(1, proc.Mp()))
+	require.NoError(t, op.ctr.bat.Vecs[0].PreExtend(1, op.ctr.retainedAllocation))
 	var err error
 	op.ctr.sels, err = growMergeTopSelections(
 		op.ctr.sels, 2, proc, op.ctr.allocationAccount)
@@ -370,9 +371,9 @@ func TestAccountedMergeTopHardVectorCapacityFailureIsControlled(t *testing.T) {
 	}()
 
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(7), false, proc.Mp()))
-	input.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 1024, 0))
+	input.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 1024, 0), proc.Mp())
 	require.NoError(t, vector.AppendArrayList(
 		input.Vecs[1],
 		[][]float32{make([]float32, 1024)},
@@ -382,11 +383,12 @@ func TestAccountedMergeTopHardVectorCapacityFailureIsControlled(t *testing.T) {
 	input.SetRowCount(1)
 	defer input.Clean(proc.Mp())
 
-	op.ctr.bat = batch.NewOffHeapWithSize(2)
+	require.NoError(t, op.ctr.ensureBufMP(proc))
+	require.NoError(t, op.ctr.allocationViews(op.ctr.bufMP))
+	op.ctr.bat = batch.NewWithSize(2)
 	for i := range input.Vecs {
-		op.ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(*input.Vecs[i].GetType())
+		op.ctr.bat.Vecs[i] = vector.NewVec(*input.Vecs[i].GetType(), op.ctr.retainedAllocation)
 	}
-	require.NoError(t, op.ctr.bat.SetAllocationAccount(op.ctr.retainedAllocation))
 
 	for range 100 {
 		if err := op.ctr.processBatch(100, input, proc); err != nil {

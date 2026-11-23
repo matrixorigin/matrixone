@@ -42,7 +42,8 @@ func TestPreparedRuntimeAPCacheReusesPlanNotTopology(t *testing.T) {
 				cw.proc.SetPrepareParams(nil)
 				prepared.Close()
 			})
-			prepared.params = vector.NewVec(types.T_text.ToType())
+			prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+			prepared.paramsMP = cw.proc.Mp()
 			require.NoError(t, vector.AppendBytes(prepared.params, []byte("-1"), false, cw.proc.Mp()))
 			prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
 			_, runtimePlan, _, _, _, err := initExecuteStmtParam(ec, ses, cw, nil, prepared.Name)

@@ -3472,10 +3472,10 @@ func Test_handleInternalGetDdl_GoodPath(t *testing.T) {
 func newDdlBatchForTest(mp *mpool.MPool, records [][]interface{}) *batch.Batch {
 	bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
 	bat.Vecs = []*vector.Vector{
-		vector.NewVec(types.T_varchar.ToType()),
-		vector.NewVec(types.T_varchar.ToType()),
-		vector.NewVec(types.T_int64.ToType()),
-		vector.NewVec(types.T_varchar.ToType()),
+		vector.NewVec(types.T_varchar.ToType(), mp),
+		vector.NewVec(types.T_varchar.ToType(), mp),
+		vector.NewVec(types.T_int64.ToType(), mp),
+		vector.NewVec(types.T_varchar.ToType(), mp),
 	}
 
 	for _, record := range records {

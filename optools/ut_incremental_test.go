@@ -20,6 +20,22 @@ func TestUTIncrementalActiveCases(t *testing.T) {
 	}
 }
 
+func TestUTFailureReporterRequiresNewlineForUndrainedWriter(t *testing.T) {
+	script := `source ./run_ut.sh UT
+printf '%s\n' '{"Action":"start","Package":"p"}' '{"Action":"run","Package":"p","Test":"TestOne"}' > "$UT_REPORT"
+printf '%s' '{"Action":"fail","Package":"p"}' >> "$UT_REPORT"
+CURRENT_UT_DRAIN_FAILED=1
+report_slow_ut_cases
+grep -q '^active UT case: .*test=TestOne' "$UT_REPORT.lifecycle" || exit 90
+CURRENT_UT_DRAIN_FAILED=0
+report_slow_ut_cases
+grep -q '^unfinished UT case at package exit: .*test=TestOne .*package_result=fail$' "$UT_REPORT.lifecycle" || exit 91
+`
+	if out, err := scheduleHarness(t, script); err != nil {
+		t.Fatalf("final report EOF classification: %v\n%s", err, out)
+	}
+}
+
 func TestUTHeartbeatCancelsReader(t *testing.T) {
 	script := `source ./run_ut.sh UT
 mkfifo "$CASE_DIR/reader-ready" "$CASE_DIR/reader-block"

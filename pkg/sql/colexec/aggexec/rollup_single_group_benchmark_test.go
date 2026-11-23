@@ -50,7 +50,7 @@ func BenchmarkSingleGroupReuseMechanisms(b *testing.B) {
 							b.Fatal(err)
 						}
 					}
-					input := vector.NewVec(types.T_int32.ToType())
+					input := vector.NewVec(types.T_int32.ToType(), mp)
 					defer input.Free(mp)
 					for i := 0; i < groups+2; i++ {
 						check(vector.AppendFixed(input, int32(7), false, mp))

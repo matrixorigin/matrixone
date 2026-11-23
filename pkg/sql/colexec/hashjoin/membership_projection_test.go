@@ -15,10 +15,12 @@
 package hashjoin
 
 import (
+	"bytes"
 	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -43,7 +45,9 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 				tc.arg.Reset(tc.proc, false, nil)
 				tc.barg.Reset(tc.proc, false, nil)
 				tc.arg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.arg)
 				tc.barg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.barg)
 				for _, input := range inputs {
 					input.Clean(tc.proc.Mp())
 				}
@@ -75,10 +79,9 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 				}
 				probe := makeInt32Batch(tc.proc, values)
 				inputs = append(inputs, probe)
-				payload := vector.NewVec(types.T_varchar.ToType())
+				payload := vector.NewVec(types.T_varchar.ToType(), tc.proc.Mp())
 				probe.Vecs = append(probe.Vecs, payload)
 				if generation == 3 {
-					// A constant value may still have per-logical-row grouping.
 					require.NoError(t, vector.SetConstBytes(payload, []byte("7"), len(values), tc.proc.Mp()))
 					payload.SetClass(vector.CONSTANT)
 				} else {
@@ -86,10 +89,6 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 						require.NoError(t, vector.AppendBytes(payload, []byte(strconv.Itoa(row)), row == 3, tc.proc.Mp()))
 					}
 				}
-				payload.GetGrouping().Add(2)
-				payload.SetPrepareParamKind(vector.PrepareParamInteger)
-				payload.SetIsBinaryString(true)
-				require.NoError(t, payload.SetStringSource(types.StringSourceLiteral))
 				build := makeInt32Batch(tc.proc, buildValues)
 				inputs = append(inputs, build)
 				probe.Vecs[0].GetNulls().Add(0)
@@ -127,16 +126,12 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 						output := res.Batch.Vecs[1]
 						nullPayload := next == 3 && generation != 3
 						require.Equal(t, nullPayload, output.IsNull(uint64(row)))
-						require.Equal(t, next == 2, output.GetGrouping().Contains(uint64(row)))
-						require.Equal(t, types.StringSourceLiteral, output.GetStringSourceAt(row))
 						if !nullPayload {
 							expected := strconv.Itoa(next)
 							if generation == 3 {
 								expected = "7"
 							}
 							require.Equal(t, expected, string(output.GetBytesAt(row)))
-							require.Equal(t, vector.PrepareParamInteger, output.GetPrepareParamKindAt(row))
-							require.True(t, output.GetIsBinaryStringAt(row))
 						}
 						next++
 					}
@@ -155,6 +150,143 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 	}
 }
 
+func TestHashJoinProbeOutputArea(t *testing.T) {
+	previousLimit := mpool.CapLimit
+	mpool.CapLimit = 1 << 20
+	t.Cleanup(func() { mpool.CapLimit = previousLimit })
+
+	for _, shape := range []struct {
+		name           string
+		joinType       plan.Node_JoinType
+		valueBytes     int
+		uniqueBuild    bool
+		residual       bool
+		buildPayload   bool
+		probeKeys      []int32
+		buildKeys      []int32
+		wantKeys       []int32
+		batchRows      []int
+		checkProbeArea bool
+	}{
+		{
+			name: "semi-flat", joinType: plan.Node_SEMI, valueBytes: 256 << 10,
+			buildKeys: []int32{1, 1, 2}, batchRows: []int{2},
+		},
+		{
+			name: "unique-inner-flat", joinType: plan.Node_INNER, valueBytes: 256 << 10,
+			uniqueBuild: true, batchRows: []int{2},
+		},
+		{
+			name: "inner-flat-fan-out", joinType: plan.Node_INNER, valueBytes: 384 << 10,
+			buildKeys: []int32{1, 1, 2}, wantKeys: []int32{1, 1, 2}, batchRows: []int{3},
+		},
+		{
+			name: "inner-flat-residual-fan-out", joinType: plan.Node_INNER, valueBytes: 384 << 10,
+			residual: true, buildKeys: []int32{1, 1, 2}, wantKeys: []int32{1, 1, 2},
+			batchRows: []int{2, 1}, checkProbeArea: true,
+		},
+		{
+			name: "unique-inner-repeated-build", joinType: plan.Node_INNER, valueBytes: 600 << 10,
+			uniqueBuild: true, buildPayload: true, probeKeys: []int32{1, 1}, buildKeys: []int32{1},
+			batchRows: []int{1, 1},
+		},
+		{
+			name: "inner-empty-probe", joinType: plan.Node_INNER, valueBytes: 600 << 10,
+			uniqueBuild: true, buildPayload: true, probeKeys: []int32{}, buildKeys: []int32{1},
+		},
+		{
+			name: "right-empty-probe-finalizes-build", joinType: plan.Node_RIGHT, valueBytes: 256 << 10,
+			uniqueBuild: true, buildPayload: true, probeKeys: []int32{},
+			wantKeys: []int32{1, 2}, batchRows: []int{2},
+		},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			keyType, textType := types.T_int32.ToType(), types.T_text.ToType()
+			key := newExpr(0, keyType)
+			tc := newTestCase(t, []types.Type{keyType}, nil, [][]*plan.Expr{{key}, {key}})
+			tc.arg.JoinType = shape.joinType
+			tc.arg.IsRightJoin = shape.joinType == plan.Node_RIGHT
+			if !shape.residual {
+				tc.arg.NonEqCond = nil
+			}
+			tc.barg.HashOnPK = shape.uniqueBuild
+			tc.barg.NeedAllocateSels = !shape.uniqueBuild
+			mp := tc.proc.Mp()
+			t.Cleanup(func() {
+				tc.proc.Free()
+				tc.cancel()
+				require.Zero(t, mp.CurrNB())
+			})
+
+			defaultKeys := []int32{1, 2}
+			probeKeys, buildKeys := shape.probeKeys, shape.buildKeys
+			if probeKeys == nil {
+				probeKeys = defaultKeys
+			}
+			if buildKeys == nil {
+				buildKeys = defaultKeys
+			}
+			wantKeys := shape.wantKeys
+			if wantKeys == nil {
+				wantKeys = probeKeys
+			}
+			probe, build := makeInt32Batch(tc.proc, probeKeys), makeInt32Batch(tc.proc, buildKeys)
+			t.Cleanup(func() { probe.Clean(mp) })
+			t.Cleanup(func() { build.Clean(mp) })
+			relation, source := int32(0), probe
+			if shape.buildPayload {
+				relation, source = 1, build
+				tc.arg.RightTypes = append(tc.arg.RightTypes, textType)
+			} else {
+				tc.arg.LeftTypes = append(tc.arg.LeftTypes, textType)
+			}
+			tc.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: relation, Pos: 1}}
+			if tc.arg.IsRightJoin {
+				tc.arg.ResultCols[0].Rel = 1
+			}
+			payload := vector.NewVec(textType, mp)
+			value := bytes.Repeat([]byte{'x'}, shape.valueBytes)
+			source.Vecs = append(source.Vecs, payload)
+			for range source.RowCount() {
+				require.NoError(t, vector.AppendBytes(payload, value, false, mp))
+			}
+			require.True(t, payload.VarlenaAreaIsDisjoint())
+
+			resetChildrenWithBatch(tc.arg, probe)
+			resetHashBuildChildrenWithBatch(tc.barg, build)
+			t.Cleanup(func() { tc.barg.Free(tc.proc, false, nil) })
+			t.Cleanup(func() { tc.arg.Free(tc.proc, false, nil) })
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+			_, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+			next := 0
+			for _, rows := range shape.batchRows {
+				res, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				require.NotNil(t, res.Batch)
+				require.Equal(t, rows, res.Batch.RowCount())
+				require.Equal(t, shape.uniqueBuild, tc.arg.ctr.probeHashOnPK)
+				require.Equal(t, shape.checkProbeArea, tc.arg.ctr.checkProbeArea)
+				require.Equal(t, shape.buildPayload, tc.arg.ctr.checkBuildArea)
+				for row := range rows {
+					require.Equal(t, wantKeys[next], vector.GetFixedAtNoTypeCheck[int32](res.Batch.Vecs[0], row))
+					require.True(t, bytes.Equal(value, res.Batch.Vecs[1].GetBytesAt(row)))
+					next++
+				}
+			}
+			res, err := vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecStop, res.Status)
+			require.Nil(t, res.Batch)
+			require.Equal(t, len(wantKeys), next)
+			if len(wantKeys) == 0 {
+				require.False(t, tc.arg.ctr.checkBuildArea, "empty probe must not inspect build payload")
+			}
+		})
+	}
+}
+
 func BenchmarkHashJoinMembershipProjection(b *testing.B) {
 	for _, joinType := range []plan.Node_JoinType{plan.Node_SEMI, plan.Node_ANTI} {
 		b.Run(joinType.String(), func(b *testing.B) {
@@ -168,7 +300,9 @@ func BenchmarkHashJoinMembershipProjection(b *testing.B) {
 				tc.arg.Reset(tc.proc, false, nil)
 				tc.barg.Reset(tc.proc, false, nil)
 				tc.arg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.arg)
 				tc.barg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.barg)
 				if probe != nil {
 					probe.Clean(tc.proc.Mp())
 				}
@@ -191,7 +325,7 @@ func BenchmarkHashJoinMembershipProjection(b *testing.B) {
 			_, err := vm.Exec(tc.barg, tc.proc)
 			require.NoError(b, err)
 			require.NoError(b, tc.arg.build(tc.arg.OpAnalyzer, tc.proc))
-			require.NoError(b, tc.arg.resetResultBat())
+			require.NoError(b, tc.arg.resetResultBat(tc.proc))
 			ctr := &tc.arg.ctr
 			b.ReportAllocs()
 			b.ResetTimer()

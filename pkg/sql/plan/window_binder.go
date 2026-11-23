@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -670,6 +671,7 @@ func validateNamedWindowDefinitions(builder *QueryBuilder, ctx *BindContext, def
 	}
 
 	validationBuilder := NewQueryBuilder(plan.Query_SELECT, builder.compCtx, builder.isPrepareStatement, true)
+	validationBuilder.zeroScalarPolicy = zeroScalarValidateOnly
 	validationBuilder.nextBindTag = builder.nextBindTag
 	validationCtx := cloneBindContextForWindowValidation(ctx)
 	restoreCTEState := snapshotWindowValidationCTEState(validationCtx)
@@ -682,22 +684,47 @@ func validateNamedWindowDefinitions(builder *QueryBuilder, ctx *BindContext, def
 		if definition == nil || definition.Spec == nil {
 			continue
 		}
+		nodesBefore := len(validationBuilder.qry.Nodes)
+		foldsBefore := validationBuilder.zeroScalarRetentionGeneration
+		specialBefore := validationBuilder.zeroScalarValidationSpecialGeneration
 		windowSpec := cloneWindowSpec(definition.Spec)
 		ensureDefaultWindowFrame(windowSpec)
 		validationExpr := &tree.FuncExpr{WindowSpec: windowSpec}
 		if err := validateWindowFuncNoNested(builder.GetContext(), validationExpr); err != nil {
 			return err
 		}
-		if _, err := bindWindowSpec(
+		boundSpec, err := bindWindowSpec(
 			projectionBinder, validationCtx, "", windowSpec, 0, true, false,
-		); err != nil {
+		)
+		if err != nil {
 			return err
 		}
+		hasSpecialCheck := windowSpecHasMoCtrl(boundSpec)
+		for _, node := range validationBuilder.qry.Nodes[nodesBefore:] {
+			hasSpecialCheck = hasSpecialCheck || zeroScalarNodeLiveRequirements(node) != 0
+		}
+		if hasSpecialCheck {
+			validationBuilder.zeroScalarValidationSpecialGeneration++
+		}
+		if validationBuilder.zeroScalarRetentionGeneration != foldsBefore &&
+			validationBuilder.zeroScalarValidationSpecialGeneration != specialBefore {
+			return moerr.NewNYI(builder.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
+		}
+	}
+	if validationBuilder.zeroScalarRetentionGeneration != 0 {
+		// An enclosing scalar may later be folded away; its source closure
+		// must include work performed in this isolated validation builder.
+		builder.zeroScalarRetentionGeneration++
+	}
+	if validationBuilder.zeroScalarValidationSpecialGeneration != 0 {
+		// Keep the special-check summary on the owning builder so a later fold
+		// in the same query block cannot hide a validation-only source.
+		builder.zeroScalarValidationSpecialGeneration++
 	}
 	if err := mergeWindowValidationDependencies(builder, validationBuilder); err != nil {
 		return err
 	}
-	appendWindowValidationPrivilegeScans(builder, validationBuilder)
+	mergeValidationPrivilegeCarriers(builder, validationBuilder)
 	if builder.isPrepareStatement {
 		seen := make(map[int]struct{})
 		for _, metadata := range builder.qry.Params {
@@ -747,32 +774,122 @@ func validateNamedWindowDefinitions(builder *QueryBuilder, ctx *BindContext, def
 	return nil
 }
 
-// appendWindowValidationPrivilegeScans makes every validation-only relation
-// recognized by the frontend authorization walk visible without connecting it
-// to a query step. They are compact ownership metadata, never executable plan
-// roots: keeping a complete TableDef here would make a legal 127-window query
-// retain a copy of each wide schema it happens to validate.
-func appendWindowValidationPrivilegeScans(builder, validationBuilder *QueryBuilder) {
-	seen := make(map[string]struct{})
+// mergeValidationPrivilegeCarriers keeps validation-only sources visible to
+// frontend authorization without connecting them to executable query steps.
+// Compact carriers avoid copying each full TableDef into the final plan.
+const validationPrivilegeCarrierExtraOptions = "mo:window-validation-privilege-carrier"
+
+// IsValidationPrivilegeCarrier reports metadata that must not be executed.
+func IsValidationPrivilegeCarrier(node *plan.Node) bool {
+	return node != nil && node.ExtraOptions == validationPrivilegeCarrierExtraOptions
+}
+
+func windowSpecHasMoCtrl(spec *plan.WindowSpec) bool {
+	return HasMoCtrl(&plan.Expr{Expr: &plan.Expr_W{W: spec}})
+}
+
+func mergeValidationPrivilegeCarriers(builder, validationBuilder *QueryBuilder) {
 	for _, node := range validationBuilder.qry.Nodes {
-		carrier := windowValidationPrivilegeCarrier(node)
-		if carrier == nil {
-			continue
+		if node != nil && node.NotCacheable {
+			builder.appendValidationNotCacheableMarker()
 		}
-		key := windowValidationPrivilegeCarrierKey(carrier)
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		builder.windowValidationScans = append(builder.windowValidationScans, carrier)
+		builder.appendValidationCarrier(validationPrivilegeCarrier(node))
+	}
+	for _, carrier := range validationBuilder.validationPrivilegeCarriers {
+		builder.appendValidationCarrier(carrier)
 	}
 }
 
-// windowValidationPrivilegeCarrier mirrors the node classes inspected by
+func (builder *QueryBuilder) appendValidationCarrier(carrier *plan.Node) bool {
+	if carrier == nil {
+		return false
+	}
+	if builder.validationPrivilegeCarrierKeys == nil {
+		builder.validationPrivilegeCarrierKeys = make(map[string]struct{})
+	}
+	key := validationPrivilegeCarrierKey(carrier)
+	if _, exists := builder.validationPrivilegeCarrierKeys[key]; exists {
+		return false
+	}
+	builder.validationPrivilegeCarrierKeys[key] = struct{}{}
+	builder.validationPrivilegeCarriers = append(builder.validationPrivilegeCarriers, carrier)
+	return true
+}
+
+func (builder *QueryBuilder) appendValidationNotCacheableMarker() {
+	builder.appendValidationCarrier(&plan.Node{NodeType: plan.Node_VALUE_SCAN, NotCacheable: true})
+}
+
+// retainZeroScalarAuthorizationSources keeps sources of a bound subquery when
+// an enclosing expression may be simplified away after a root-zero rewrite.
+func (builder *QueryBuilder) retainZeroScalarAuthorizationSources(sources map[int32]struct{}) error {
+	ids := make([]int32, 0, len(sources))
+	for id := range sources {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		if id < 0 || int(id) >= len(builder.qry.Nodes) || builder.qry.Nodes[id] == nil {
+			return moerr.NewInternalError(builder.GetContext(), "invalid zero-limit authorization source")
+		}
+		node := builder.qry.Nodes[id]
+		if required := zeroScalarNodeLiveRequirements(node); required != 0 {
+			if builder.zeroScalarRequiredLiveNodes == nil {
+				builder.zeroScalarRequiredLiveNodes = make(map[int32]zeroScalarLiveRequirement)
+			}
+			builder.zeroScalarRequiredLiveNodes[id] |= required
+		}
+		if node.NotCacheable {
+			builder.appendValidationNotCacheableMarker()
+		}
+		carrier := validationPrivilegeCarrier(node)
+		carrierAdded := builder.appendValidationCarrier(carrier)
+		if !carrierAdded && node.NodeType == plan.Node_TABLE_SCAN {
+			continue
+		}
+		switch node.NodeType {
+		case plan.Node_TABLE_SCAN:
+			if err := builder.recordPreparedPluginDependencies(node); err != nil {
+				return err
+			}
+		case plan.Node_EXTERNAL_SCAN:
+			if carrier != nil && builder.isReusablePlan() {
+				builder.qry.CatalogDependencies = appendPrepareSchemas(
+					builder.qry.CatalogDependencies,
+					prepareSchemaRefWithSnapshot(node.ObjRef, node.TableDef, node.ScanSnapshot))
+			}
+		}
+	}
+	return nil
+}
+
+// The frontend checks saved-result and control-function access using the
+// original nodes. Reject a rewrite if compaction would remove those checks.
+func (builder *QueryBuilder) validateZeroScalarLiveNodes() error {
+	if len(builder.zeroScalarRequiredLiveNodes) == 0 {
+		return nil
+	}
+	seen := make(map[int32]struct{}, len(builder.zeroScalarRequiredLiveNodes))
+	if err := plan.WalkQueryNodes(builder.qry, func(id int32, node *plan.Node) error {
+		if required := builder.zeroScalarRequiredLiveNodes[id]; required != 0 &&
+			zeroScalarNodeLiveRequirements(node)&required == required {
+			seen[id] = struct{}{}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(seen) != len(builder.zeroScalarRequiredLiveNodes) {
+		return moerr.NewNYI(builder.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
+	}
+	return nil
+}
+
+// validationPrivilegeCarrier mirrors the node classes inspected by
 // extractPrivilegeTipsFromPlan. Keep this closure in sync with that frontend
 // contract rather than treating TABLE_SCAN as a proxy for every relation that
 // semantic binding can resolve.
-func windowValidationPrivilegeCarrier(node *plan.Node) *plan.Node {
+func validationPrivilegeCarrier(node *plan.Node) *plan.Node {
 	if node == nil || node.ObjRef == nil {
 		return nil
 	}
@@ -785,38 +902,37 @@ func windowValidationPrivilegeCarrier(node *plan.Node) *plan.Node {
 		ViewPath:     DeepCopyViewPath(node.ViewPath),
 	}
 	if node.TableDef != nil {
-		// Authorization only needs the table type to identify cluster tables.
-		carrier.TableDef = &plan.TableDef{TableType: node.TableDef.TableType}
+		// Cache validation also needs the source catalog identity.
+		carrier.TableDef = &plan.TableDef{TableType: node.TableDef.TableType,
+			Name: node.TableDef.Name, TblId: node.TableDef.TblId, Version: node.TableDef.Version,
+			DbName: node.TableDef.DbName, DbId: node.TableDef.DbId}
 	}
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
 		return carrier
 	case plan.Node_EXTERNAL_SCAN:
-		if node.ExternScan == nil || node.ExternScan.Type != int32(plan.ExternType_MONGODB_TB) {
+		if !IsExternalScanRequiringSelectPrivilege(node) {
 			return nil
 		}
-		// The frontend recognizes MongoDB scans from this discriminator alone.
-		carrier.ExternScan = &plan.ExternScan{Type: node.ExternScan.Type}
+		carrier.ExternScan = &plan.ExternScan{Type: node.GetExternScan().GetType()}
 		return carrier
 	case plan.Node_FUNCTION_SCAN:
 		if node.TableDef == nil || node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name != "table_changes" {
 			return nil
 		}
-		// isPrivilegeBearingTableScan identifies this function by name.
-		carrier.TableDef = &plan.TableDef{
-			TableType: node.TableDef.TableType,
-			TblFunc:   &plan.TableFunction{Name: "table_changes"},
-		}
+		// Keep the function discriminator for authorization. Catalog validation
+		// uses the underlying table dependency recorded by buildTableChanges.
+		carrier.TableDef.TblFunc = &plan.TableFunction{Name: "table_changes"}
 		return carrier
 	default:
 		return nil
 	}
 }
 
-// windowValidationPrivilegeCarrierKey preserves distinct view and snapshot
+// validationPrivilegeCarrierKey preserves distinct view and snapshot
 // authorization contexts while coalescing repeated references to one relation.
-func windowValidationPrivilegeCarrierKey(node *plan.Node) string {
+func validationPrivilegeCarrierKey(node *plan.Node) string {
 	data, err := node.Marshal()
 	if err != nil {
 		panic(err) // Compact carriers contain only generated protobuf value fields.
@@ -1655,7 +1771,7 @@ func makeWindowFrameConstValue(
 			Len: int32(vec.Length()), Data: data, DecimalLiteralRequiresV82: requiresDecimal,
 		}}}, nil
 	}
-	c := rule.GetConstantValue(vec, false, 0)
+	c := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(e, proc))
 	rule.PreserveFoldedDecimalLiteralSemantics(e, c)
 
 	return &plan.Expr{
@@ -1785,7 +1901,7 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 	if err != nil {
 		return nil, err
 	}
-	c := rule.GetConstantValue(vec, false, 0)
+	c := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(numberExpr, proc))
 
 	var finalValue int64
 	if c.Isnull {

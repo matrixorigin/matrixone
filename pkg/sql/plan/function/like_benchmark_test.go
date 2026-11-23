@@ -61,7 +61,7 @@ func benchmarkLikePatterns(b *testing.B, cancelable bool) {
 					// Allocate Done before timing, as a running pipeline does.
 					require.NotNil(b, ctx.Done())
 				}
-				values := vector.NewVec(types.T_varchar.ToType())
+				values := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				defer values.Free(proc.Mp())
 				var patterns *vector.Vector
 				if constant {
@@ -69,7 +69,7 @@ func benchmarkLikePatterns(b *testing.B, cancelable bool) {
 					patterns, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.pattern), rows, proc.Mp())
 					require.NoError(b, err)
 				} else {
-					patterns = vector.NewVec(types.T_varchar.ToType())
+					patterns = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 					for row := 0; row < rows; row++ {
 						pattern := tc.pattern
 						if row%2 != 0 {

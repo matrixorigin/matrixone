@@ -159,7 +159,8 @@ func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) 
 
 func (merge *Merge) cleanMaterializedBatch(proc *process.Process) {
 	if merge.ctr.materializedBatch != nil {
-		merge.ctr.materializedBatch.Clean(proc.Mp())
+		// Next returns batches in the source's reader pool.
+		merge.ctr.materializedBatch.Clean(merge.MaterializedSource.ReaderMP())
 		merge.ctr.materializedBatch = nil
 	}
 }

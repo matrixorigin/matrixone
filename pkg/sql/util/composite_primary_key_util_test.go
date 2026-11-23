@@ -203,7 +203,7 @@ func MakeBatch(columnSize int, rowCount int, mp *mpool.MPool) (*batch.Batch, *pl
 	bat := batch.New(attrs)
 	valueCount := make(map[[2]int]interface{})
 	for i := 0; i < columnSize; i++ {
-		bat.Vecs[i] = vector.NewVec(randType().ToType())
+		bat.Vecs[i] = vector.NewVec(randType().ToType(), mp)
 		randInsertValues(bat.Vecs[i], bat.Vecs[i].GetType().Oid, rowCount, valueCount, i, mp)
 	}
 

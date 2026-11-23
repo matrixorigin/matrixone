@@ -652,7 +652,7 @@ func TestJSONOverlapsTypedJSON(t *testing.T) {
 	// Typed JSON now rejects excessive nesting at admission, before an
 	// expression can consume it. Text input still reaches the function's own
 	// document-depth check and retains its argument error below.
-	deepVector := vector.NewVec(types.T_json.ToType())
+	deepVector := vector.NewVec(types.T_json.ToType(), proc.Mp())
 	defer deepVector.Free(proc.Mp())
 	err := vector.AppendBytes(deepVector, []byte(mustJsonBinaryString(t, tooDeep)), false, proc.Mp())
 	require.ErrorContains(t, err, "invalid JSON vector payload")
