@@ -319,11 +319,10 @@ func TestSeedWindowAcrossAbandonedRunningRow(t *testing.T) {
 		return engine.CollectChangesKeepTrailingDeletesFromContext(ctx)
 	}
 
-	// The Running flush wrote watermark = fromTS and no consumer ran; a stop here
-	// leaves exactly this row behind, and repairAbandonedJobs only rewrites
-	// job_state, which the window does not read.
-	require.True(t, keepTrailingDeletes(from),
+	// New Running writes preserve the previously committed watermark.
+	require.True(t, keepTrailingDeletes(from.Prev()),
 		"a range that was selected but never consumed must keep delivering the tombstone")
+	require.True(t, keepTrailingDeletes(from), "legacy Running rows also keep delivering the tombstone")
 
 	// The sink transaction's UpdateWatermark closes the non-index seed window.
 	require.False(t, keepTrailingDeletes(to),

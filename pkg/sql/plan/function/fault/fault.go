@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/json"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -58,13 +57,15 @@ func FaultInject(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	arg1, _ := args1.GetStrValue(0)
 	arg2, _ := args2.GetStrValue(0)
 
-	args := strings.Split(functionUtil.QuickBytesToStr(arg0), ".")
+	// Copy the arguments: the local service keeps them (fault point names and
+	// arguments live in the fault map) after the argument vectors are freed.
+	args := strings.Split(string(arg0), ".")
 	service, pods := serviceType(strings.ToUpper(args[0])), strings.Split(args[1], ",")
 	if pods[0] == "" {
 		pods = []string{}
 	}
-	command := strings.ToUpper(functionUtil.QuickBytesToStr(arg1))
-	parameter := functionUtil.QuickBytesToStr(arg2)
+	command := strings.ToUpper(string(arg1))
+	parameter := string(arg2)
 
 	if service != tn && service != cn && service != all {
 		return moerr.NewNotSupportedf(proc.Ctx, "service %s not supported", service)

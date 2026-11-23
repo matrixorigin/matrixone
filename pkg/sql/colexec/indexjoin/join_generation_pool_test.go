@@ -27,8 +27,8 @@ func TestIndexJoinResetReleasesGenerationResultBuffer(t *testing.T) {
 	defer proc.Free()
 	join := &IndexJoin{}
 	defer join.Free(proc, false, nil)
-	join.ctr.buf = batch.NewOffHeapWithSize(1)
-	join.ctr.buf.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	join.ctr.buf = batch.NewWithSize(1)
+	join.ctr.buf.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(join.ctr.buf.Vecs[0], bytes.Repeat([]byte("x"), 1024), false, proc.Mp()))
 	require.Greater(t, proc.Mp().CurrNB(), int64(0))
 

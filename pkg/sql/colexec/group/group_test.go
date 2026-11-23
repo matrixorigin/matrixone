@@ -552,10 +552,22 @@ func (ctx *cancelOnDoneCheckContext) Err() error {
 }
 
 func resetChildren(g *Group, proc *process.Process) {
+	// Vector memory is off-heap: release the replaced child's input batch.
+	for _, child := range g.Children {
+		child.Free(proc, false, nil)
+	}
 	bat := colexec.MakeMockBatchs(proc.Mp())
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	g.Children = nil
 	g.AppendChild(op)
+}
+
+// freeChildren releases the mock children's input batches; vector memory is
+// off-heap, so they count toward the process pool.
+func freeChildren(g *Group, proc *process.Process) {
+	for _, child := range g.Children {
+		child.Free(proc, false, nil)
+	}
 }
 
 func collectBatches(t *testing.T, op vm.Operator, proc *process.Process) []*batch.Batch {
@@ -643,7 +655,7 @@ func buildPreparedPartial(
 ) *batch.Batch {
 	t.Helper()
 
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer params.Free(proc.Mp())
 	value := spec.value
 	if value == "" {
@@ -727,7 +739,7 @@ func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{0, 1}, nil, proc.Mp())
-	input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	for range 2 {
 		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("5"), false, proc.Mp()))
 	}
@@ -1082,6 +1094,10 @@ func TestGroupByWithSum(t *testing.T) {
 	require.Equal(t, execCalls, g.OpAnalyzer.GetOpStats().CallNum)
 
 	g.Free(proc, false, nil)
+	// Vector memory is off-heap: the mock child's input batch counts too.
+	for _, child := range g.Children {
+		child.Free(proc, false, nil)
+	}
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -1112,11 +1128,11 @@ func TestSortRollupProducesGroupingSentinelsAndAggregates(t *testing.T) {
 		a, b         int32
 		aRoll, bRoll bool
 	}
-	actual := make(map[resultKey]int64)
+	actual := make(map[resultKey]types.Decimal128)
 	for _, result := range results {
 		as := vector.MustFixedColNoTypeCheck[int32](result.Vecs[0])
 		bs := vector.MustFixedColNoTypeCheck[int32](result.Vecs[1])
-		sums := vector.MustFixedColNoTypeCheck[int64](result.Vecs[2])
+		sums := vector.MustFixedColNoTypeCheck[types.Decimal128](result.Vecs[2])
 		for row := 0; row < result.RowCount(); row++ {
 			actual[resultKey{
 				a:     as[row],
@@ -1127,14 +1143,14 @@ func TestSortRollupProducesGroupingSentinelsAndAggregates(t *testing.T) {
 		}
 	}
 
-	want := map[resultKey]int64{
-		{a: 1, b: 10}:              1,
-		{a: 1, b: 20}:              5,
-		{a: 2, b: 10}:              4,
-		{a: 2, b: 20}:              5,
-		{a: 1, bRoll: true}:        6,
-		{a: 2, bRoll: true}:        9,
-		{aRoll: true, bRoll: true}: 15,
+	want := map[resultKey]types.Decimal128{
+		{a: 1, b: 10}:              types.Decimal128FromInt64(1),
+		{a: 1, b: 20}:              types.Decimal128FromInt64(5),
+		{a: 2, b: 10}:              types.Decimal128FromInt64(4),
+		{a: 2, b: 20}:              types.Decimal128FromInt64(5),
+		{a: 1, bRoll: true}:        types.Decimal128FromInt64(6),
+		{a: 2, bRoll: true}:        types.Decimal128FromInt64(9),
+		{aRoll: true, bRoll: true}: types.Decimal128FromInt64(15),
 	}
 	require.Equal(t, want, actual)
 	for _, result := range results {
@@ -1143,6 +1159,7 @@ func TestSortRollupProducesGroupingSentinelsAndAggregates(t *testing.T) {
 
 	g.Free(proc, false, nil)
 	proc.Free()
+	freeChildren(g, proc)
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
@@ -1543,20 +1560,20 @@ func TestSortRollupDistinguishesInputNullFromRollupNull(t *testing.T) {
 	for _, result := range results {
 		as := result.Vecs[0]
 		bs := vector.MustFixedColNoTypeCheck[int32](result.Vecs[1])
-		sums := vector.MustFixedColNoTypeCheck[int64](result.Vecs[2])
+		sums := vector.MustFixedColNoTypeCheck[types.Decimal128](result.Vecs[2])
 		for row := 0; row < result.RowCount(); row++ {
 			aRoll := as.GetGrouping().Contains(uint64(row))
 			bRoll := result.Vecs[1].GetGrouping().Contains(uint64(row))
 			if as.IsNull(uint64(row)) && !aRoll && !bRoll && bs[row] == 1 {
-				require.Equal(t, int64(2), sums[row])
+				require.Equal(t, types.Decimal128FromInt64(2), sums[row])
 				inputNullDetail = true
 			}
 			if as.IsNull(uint64(row)) && !aRoll && bRoll {
-				require.Equal(t, int64(5), sums[row])
+				require.Equal(t, types.Decimal128FromInt64(5), sums[row])
 				inputNullSubtotal = true
 			}
 			if aRoll && bRoll {
-				require.Equal(t, int64(10), sums[row])
+				require.Equal(t, types.Decimal128FromInt64(10), sums[row])
 				grandTotal = true
 			}
 		}
@@ -1730,6 +1747,10 @@ func TestGroupNoGroupBy(t *testing.T) {
 	require.Equal(t, 1, rowCount)
 
 	g.Free(proc, false, nil)
+	// Vector memory is off-heap: the mock child's input batch counts too.
+	for _, child := range g.Children {
+		child.Free(proc, false, nil)
+	}
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -1757,7 +1778,7 @@ func TestGroupNoGroupByCountStarConsumesCompressedRowCount(t *testing.T) {
 
 func TestPreparedCountParamUsesInputRowCount(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("x"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
 
@@ -1808,6 +1829,7 @@ func TestGroupUsesReducedHashKeyAndKeepsFullOutput(t *testing.T) {
 	require.Equal(t, []int32{10, 20}, vector.MustFixedColNoTypeCheck[int32](finals[0].Vecs[1]))
 	require.Equal(t, []int64{2, 1}, vector.MustFixedColNoTypeCheck[int64](finals[0].Vecs[2]))
 	g.Free(proc, false, nil)
+	freeChildren(g, proc)
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
@@ -2180,7 +2202,7 @@ func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
 	_, err := partials[1].MarshalBinaryForPipeline(&wire, true)
 	require.NoError(t, err)
 	partials[1].Clean(proc.Mp())
-	partials[1] = batch.NewOffHeapEmpty()
+	partials[1] = batch.NewWithSize(0)
 	require.NoError(t, partials[1].UnmarshalBinaryForPipeline(wire.Bytes(), proc.Mp()))
 
 	mergeChild := colexec.NewMockOperator().WithBatchs(partials)
@@ -2530,6 +2552,7 @@ func TestGroupSpillReloadUsesReducedHashKey(t *testing.T) {
 	require.Equal(t, groups, rows)
 	require.Positive(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadRecords"])
 	g.Free(proc, false, nil)
+	freeChildren(g, proc)
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
@@ -2790,6 +2813,7 @@ func TestGroupSpillReloadKeepsPreallocationBounded(t *testing.T) {
 	require.NotNil(t, g.ctr.spillReader.buffer)
 	require.NotZero(t, g.ctr.spillReader.buffer.Cap())
 	g.Free(proc, false, nil)
+	freeChildren(g, proc)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
@@ -3318,6 +3342,7 @@ func TestGroupedOrderedGroupConcatComposesWithGenericSpill(t *testing.T) {
 					require.Zero(t, allocation.generation.Snapshot().SpillFDUsed)
 					finalizeGroupTestAllocation(t, g, allocation)
 				}
+				freeChildren(g, proc)
 				require.Zero(t, proc.Mp().CurrNB())
 			})
 		}
@@ -3370,6 +3395,10 @@ func TestGroupResetAndReuse(t *testing.T) {
 	}
 
 	g.Free(proc, false, nil)
+	// Vector memory is off-heap: the mock child's input batch counts too.
+	for _, child := range g.Children {
+		child.Free(proc, false, nil)
+	}
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -3453,8 +3482,8 @@ func TestRemoteShortCharH8PreservesLegacyPadding(t *testing.T) {
 
 	charType := types.New(types.T_char, 2, 0)
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(charType)
-	input.Vecs[1] = vector.NewVec(charType)
+	input.Vecs[0] = vector.NewVec(charType, proc.Mp())
+	input.Vecs[1] = vector.NewVec(charType, proc.Mp())
 	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("a "), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("ab"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("bc"), false, proc.Mp()))
@@ -3482,8 +3511,8 @@ func TestGroupCompositeShortCharKeysPreserveFieldBoundaries(t *testing.T) {
 	defer proc.Free()
 	charType := types.New(types.T_char, 2, 0)
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(charType)
-	input.Vecs[1] = vector.NewVec(charType)
+	input.Vecs[0] = vector.NewVec(charType, proc.Mp())
+	input.Vecs[1] = vector.NewVec(charType, proc.Mp())
 	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("a "), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("ab"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("bc"), false, proc.Mp()))
@@ -3512,8 +3541,8 @@ func TestMergeGroupNormalizesLegacyH8VarlenaMetadata(t *testing.T) {
 
 	varcharType := types.New(types.T_varchar, 2, 0)
 	partial := batch.NewWithSize(2)
-	partial.Vecs[0] = vector.NewVec(varcharType)
-	partial.Vecs[1] = vector.NewVec(varcharType)
+	partial.Vecs[0] = vector.NewVec(varcharType, proc.Mp())
+	partial.Vecs[1] = vector.NewVec(varcharType, proc.Mp())
 	// These rows are already separate partial rows. A legacy H8 producer could
 	// have collapsed the same tuple boundary before serialization, which a
 	// receiver cannot recover. When separate rows do arrive, the new receiver
@@ -3553,8 +3582,8 @@ func TestMergeGroupKeepsLegacyShortCharH8PaddingBeforeV78(t *testing.T) {
 
 	charType := types.New(types.T_char, 2, 0)
 	partial := batch.NewWithSize(2)
-	partial.Vecs[0] = vector.NewVec(charType)
-	partial.Vecs[1] = vector.NewVec(charType)
+	partial.Vecs[0] = vector.NewVec(charType, proc.Mp())
+	partial.Vecs[1] = vector.NewVec(charType, proc.Mp())
 	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("a "), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("ab"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(partial.Vecs[1], []byte("bc"), false, proc.Mp()))
@@ -3590,7 +3619,7 @@ func TestMergeGroupKeepsLegacyLongHStrCompatibleBeforeV78(t *testing.T) {
 
 	longType := types.New(types.T_varchar, 64, 0)
 	partial := batch.NewWithSize(1)
-	partial.Vecs[0] = vector.NewVec(longType)
+	partial.Vecs[0] = vector.NewVec(longType, proc.Mp())
 	require.NoError(t, vector.AppendBytes(
 		partial.Vecs[0], []byte("already-compatible-long-key"), false, proc.Mp()))
 	partial.SetRowCount(1)
@@ -4386,7 +4415,7 @@ func TestRemoteTextMinMaxUsesLegacyComparatorBeforeProtocolV14(t *testing.T) {
 	require.Equal(t, types.CharsetUTF8, resultType.Charset,
 		"compatibility comparator must not change result metadata")
 
-	vec := vector.NewVec(argType)
+	vec := vector.NewVec(argType, proc.Mp())
 	defer vec.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(vec, []byte("B"), false, proc.Mp()))
@@ -4473,7 +4502,7 @@ func TestRemoteFinalDecimalSumPreservesOldCoordinatorResult(t *testing.T) {
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, protocol.version)
 
 					input := batch.NewWithSize(1)
-					input.Vecs[0] = vector.NewVec(test.param)
+					input.Vecs[0] = vector.NewVec(test.param, proc.Mp())
 					require.NoError(t, test.appendOne(input.Vecs[0], proc.Mp()))
 					input.SetRowCount(1)
 					child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
@@ -4543,7 +4572,7 @@ func TestRemoteApproxPercentileUsesLegacyStateBeforeProtocolV76(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer freeAggList(aggs)
-	values := vector.NewVec(types.T_float32.ToType())
+	values := vector.NewVec(types.T_float32.ToType(), proc.Mp())
 	defer values.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(values, float32(1), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(values, float32(math.NaN()), false, proc.Mp()))
@@ -4752,7 +4781,7 @@ func TestRemoteHLLStateRetainsCompatibilityAcrossProtocolVersions(t *testing.T) 
 				aggID, false, []*plan.Expr{arg}, nil),
 		})
 		require.NoError(t, err)
-		values := vector.NewVec(types.T(arg.Typ.Id).ToType())
+		values := vector.NewVec(types.T(arg.Typ.Id).ToType(), proc.Mp())
 		if types.T(arg.Typ.Id) == types.T_array_float32 {
 			require.NoError(t, vector.AppendBytes(values,
 				types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}),
@@ -4894,7 +4923,7 @@ func TestRemoteCanonicalHLLAddStateGate(t *testing.T) {
 						aggexec.AggIdOfHllAdd, false, []*plan.Expr{arg}, nil),
 				})
 				require.NoError(t, err)
-				values := vector.NewVec(tc.typ)
+				values := vector.NewVec(tc.typ, proc.Mp())
 				require.NoError(t, vector.AppendBytes(values, tc.value, false, proc.Mp()))
 				require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
 				var intermediate bytes.Buffer
@@ -4952,7 +4981,7 @@ func TestRemoteFloatHLLAddStateGate(t *testing.T) {
 					aggexec.AggIdOfHllAdd, false, []*plan.Expr{arg}, nil),
 			})
 			require.NoError(t, err)
-			values := vector.NewVec(typ)
+			values := vector.NewVec(typ, proc.Mp())
 			if typ.Oid == types.T_float32 {
 				require.NoError(t, vector.AppendFixedList(values,
 					[]float32{0, float32(math.Copysign(0, -1))}, nil, proc.Mp()))
@@ -5050,8 +5079,8 @@ func TestJSONMinMaxGroupAndMergeGroupPhysicalSpillReload(t *testing.T) {
 	})
 	for _, value := range []int64{1, 256} {
 		input := batch.NewWithSize(2)
-		input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		input.Vecs[1] = vector.NewVec(types.T_json.ToType())
+		input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+		input.Vecs[1] = vector.NewVec(types.T_json.ToType(), proc.Mp())
 		for key := int32(0); key < 64; key++ {
 			require.NoError(t, vector.AppendFixed(input.Vecs[0], key, false, proc.Mp()))
 			require.NoError(t, vector.AppendBytes(input.Vecs[1], encode(value), false, proc.Mp()))
@@ -5105,8 +5134,8 @@ func TestJSONMinMaxFinalGroupPhysicalSpillReload(t *testing.T) {
 	inputs := make([]*batch.Batch, 0, 2)
 	for _, value := range []int64{1, 256} {
 		input := batch.NewWithSize(2)
-		input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		input.Vecs[1] = vector.NewVec(types.T_json.ToType())
+		input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+		input.Vecs[1] = vector.NewVec(types.T_json.ToType(), proc.Mp())
 		bj, err := bytejson.CreateByteJSONWithCheck(value)
 		require.NoError(t, err)
 		raw, err := bj.Marshal()
@@ -5278,7 +5307,7 @@ func TestGroupDecimalAggregateArgumentFusion(t *testing.T) {
 	defer func() { g.Free(proc, false, nil); child.Free(proc, false, nil); require.Zero(t, proc.Mp().CurrNB()) }()
 	input := batch.NewWithSize(3)
 	for i, values := range [][]types.Decimal64{{10000, 20000, 30000}, {5, 10, 20}, {8, 8, 8}} {
-		input.Vecs[i] = vector.NewVec(narrow)
+		input.Vecs[i] = vector.NewVec(narrow, proc.Mp())
 		require.NoError(t, vector.AppendFixedList(input.Vecs[i], values, nil, proc.Mp()))
 	}
 	input.SetRowCount(3)

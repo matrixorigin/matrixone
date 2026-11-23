@@ -64,7 +64,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 
 	if e.DatabaseId == MO_CATALOG_ID && e.TableId == MO_TABLES_ID {
 		if e.TableName == "alter" {
-			bat, err := batch.ProtoBatchToBatch(e.Bat)
+			bat, err := batch.ProtoBatchToBatch(e.Bat, nil)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -101,7 +101,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		if e.TableName == MO_COLUMNS_UPDATE {
 			return e, es[1:], nil
 		}
-		bat, _ := batch.ProtoBatchToBatch(e.Bat)
+		bat, _ := batch.ProtoBatchToBatch(e.Bat, nil)
 		batstr := ""
 		if bat != nil {
 			batstr = common.MoBatchToString(bat, 5)
@@ -109,7 +109,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		return nil, nil, moerr.NewInternalErrorNoCtxf("bad write format %q, %v, batch %s", e.EntryType, len(es), batstr)
 	}
 	if e.EntryType == api.Entry_Alter {
-		bat, err := batch.ProtoBatchToBatch(e.Bat)
+		bat, err := batch.ProtoBatchToBatch(e.Bat, nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -151,7 +151,7 @@ func parseDatabaseEntryBatch(e *api.Entry) (*batch.Batch, error) {
 			return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry vector %d", i)
 		}
 	}
-	bat, err := batch.ProtoBatchToBatch(e.Bat)
+	bat, err := batch.ProtoBatchToBatch(e.Bat, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +184,7 @@ func parseDatabaseEntryBatch(e *api.Entry) (*batch.Batch, error) {
 }
 
 func parseDeleteTable(es []*api.Entry) (any, []*api.Entry, error) {
-	bat, err := batch.ProtoBatchToBatch(es[0].Bat)
+	bat, err := batch.ProtoBatchToBatch(es[0].Bat, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -207,7 +207,7 @@ func parseDeleteTable(es []*api.Entry) (any, []*api.Entry, error) {
 }
 
 func parseCreateTable(es []*api.Entry) (any, []*api.Entry, error) {
-	bat, err := batch.ProtoBatchToBatch(es[0].Bat)
+	bat, err := batch.ProtoBatchToBatch(es[0].Bat, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -231,7 +231,7 @@ func parseCreateTable(es []*api.Entry) (any, []*api.Entry, error) {
 }
 
 func getColumnBatch(e *api.Entry) (*batch.Batch, error) {
-	bat, err := batch.ProtoBatchToBatch(e.Bat)
+	bat, err := batch.ProtoBatchToBatch(e.Bat, nil)
 	if err != nil {
 		return nil, err
 	}

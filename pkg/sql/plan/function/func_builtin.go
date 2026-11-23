@@ -1923,7 +1923,7 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			// Direct integer parsing avoids float64 precision loss
 			// for large values (e.g. '9007199254740993').
 			sp := vector.GenerateFunctionStrParameter(param)
-			isBin := param.GetIsBin()
+			isBin := result.ArgumentIsBin(i)
 			getters[i] = func(idx uint64) (int64, bool) {
 				v, null := sp.GetStrValue(idx)
 				if null {
@@ -1931,7 +1931,7 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				}
 				if isBin {
 					// hex/bit literals (e.g. 0x41, b'01000001') arrive as raw
-					// bytes with IsBin set; interpret them as a big-endian
+					// bytes flagged as a binary-literal argument; interpret them as a big-endian
 					// integer, mirroring the varchar->int64 cast path
 					// (strToSigned) that CHAR used before.
 					if len(v) > 8 {
@@ -2420,7 +2420,7 @@ func builtInPad(
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	maxResultLen := maxStringFunctionResultLength(result)
 	maxTextCharacterWidth := maxPadTextCharacterWidth(parameters[0].GetType())
-	uniformBinary := isBinaryStringVector(parameters[0])
+	uniformBinary := isBinaryStringVector(parameters[0], result.ArgumentIsBin(0))
 
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
@@ -5202,10 +5202,11 @@ func builtInATan2(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	return nil
 }
 
-func builtInDegrees(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[float64, float64](parameters, result, proc, length, func(v float64) float64 {
+func builtInDegrees(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck[float64, float64](parameters, result, length, func(v float64) (float64, bool) {
 		// Convert radians to degrees: degrees = radians * (180 / π)
-		return v * (180.0 / math.Pi)
+		degrees := v * (180.0 / math.Pi)
+		return degrees, math.IsInf(degrees, 0) && !math.IsInf(v, 0)
 	}, selectList)
 }
 
@@ -5419,7 +5420,7 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
 	}
 	input := parameters[0]
-	binary := isBinaryStringVector(input)
+	binary := isBinaryStringVector(input, result.ArgumentIsBin(0))
 	if input.IsConst() || result.GetResultVector().IsConst() || input.HasNull() ||
 		binary || !selectList.ShouldEvalAllRow() || selectList.IgnoreAllRow() {
 		return opUnaryBytesToBytesByStringDomain(

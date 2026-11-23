@@ -16,20 +16,21 @@ package disttae
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestShardingReadPublishesReceivedJSONVersion(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_json.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_json.ToType(), mp)
 	defer input.Clean(mp)
 	value, err := types.ParseStringToByteJson(`{"keep":1}`)
 	require.NoError(t, err)

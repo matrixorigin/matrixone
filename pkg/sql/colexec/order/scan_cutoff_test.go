@@ -41,7 +41,7 @@ func TestScanCutoffWitnessesAndConcurrency(t *testing.T) {
 				inputs := make([]*vector.Vector, 0, 4)
 				all := make([]int32, 0, 4*17)
 				for worker := range 4 {
-					v := vector.NewVec(types.T_int32.ToType())
+					v := vector.NewVec(types.T_int32.ToType(), mp)
 					for i := range 17 {
 						x := int32((worker*19+i*13)%53 - 26)
 						require.NoError(t, vector.AppendFixed(v, x, false, mp))
@@ -112,7 +112,7 @@ func TestScanCutoffSortedOracle(t *testing.T) {
 		for i := 0; i < len(values); {
 			end := min(len(values), i+1+rng.Intn(13))
 			if publishedAt == 0 {
-				v := vector.NewVec(types.T_int32.ToType())
+				v := vector.NewVec(types.T_int32.ToType(), mp)
 				keys := make([]int32, end-i)
 				for j, x := range values[i:end] {
 					keys[j] = x.key
@@ -263,7 +263,7 @@ func TestScanCutoffOutwardStringBounds(t *testing.T) {
 					}
 				}()
 				if sorted {
-					v = vector.NewVec(typ)
+					v = vector.NewVec(typ, mp)
 					require.NoError(t, vector.AppendBytesList(v, [][]byte{nil, []byte("small"), value}, nil, mp))
 					v.SetSorted(true)
 					minimum = nil
@@ -297,7 +297,7 @@ func TestScanCutoffOutwardStringBounds(t *testing.T) {
 	require.False(t, cutoff.Done(), "a truncated batch must leave the summary alive")
 	require.Zero(t, cutoff.certified, "class-(c) non-NULL rows never certify")
 
-	small := vector.NewVec(typ)
+	small := vector.NewVec(typ, mp)
 	defer small.Free(mp)
 	require.NoError(t, vector.AppendBytes(small, []byte("m"), false, mp))
 	require.NoError(t, vector.AppendBytes(small, []byte("m"), false, mp))
@@ -311,7 +311,7 @@ func TestScanCutoffOutwardStringBounds(t *testing.T) {
 	require.Equal(t, []byte("m"), bound.GetMaxBuf())
 	require.True(t, cutoff.Done())
 
-	sorted := vector.NewVec(typ)
+	sorted := vector.NewVec(typ, mp)
 	defer sorted.Free(mp)
 	require.NoError(t, vector.AppendBytes(sorted, value, false, mp))
 	sorted.SetSorted(true)
@@ -324,7 +324,7 @@ func TestScanCutoffOutwardStringBounds(t *testing.T) {
 	// A batch with NULLs keeps its raw extremum fast paths disabled: the
 	// extremum must come from the NULL-skipping scan, never from a NULL
 	// row's raw bytes.
-	sortedNulls := vector.NewVec(typ)
+	sortedNulls := vector.NewVec(typ, mp)
 	defer sortedNulls.Free(mp)
 	require.NoError(t, vector.AppendBytes(sortedNulls, nil, true, mp))
 	require.NoError(t, vector.AppendBytes(sortedNulls, value, false, mp))
@@ -357,14 +357,14 @@ func TestScanCutoffTruncatedCounterexampleShape(t *testing.T) {
 	mid := []byte("mid")
 
 	truncBatch := func() *vector.Vector {
-		v := vector.NewVec(typ)
+		v := vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytes(v, huge, false, mp))
 		require.NoError(t, vector.AppendBytes(v, huge, false, mp))
 		require.NoError(t, vector.AppendBytes(v, huge, false, mp))
 		return v
 	}
 	smallBatch := func(rows int) *vector.Vector {
-		v := vector.NewVec(typ)
+		v := vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytes(v, mid, false, mp))
 		for range rows - 1 {
 			require.NoError(t, vector.AppendBytes(v, []byte("p"), false, mp))
@@ -409,7 +409,7 @@ func TestScanCutoffTruncatedCounterexampleShape(t *testing.T) {
 
 	// Under a leading placement, certified NULL rows can carry K, but the
 	// bound itself still has to come from a usable batch.
-	nulls := vector.NewVec(typ)
+	nulls := vector.NewVec(typ, mp)
 	defer nulls.Free(mp)
 	for range 6 {
 		require.NoError(t, vector.AppendBytes(nulls, nil, true, mp))
@@ -438,7 +438,7 @@ func TestScanCutoffUninitializableDecimal256(t *testing.T) {
 	})
 	typ := types.T_decimal256.ToType()
 	batch := func(nulls bool) *vector.Vector {
-		v := vector.NewVec(typ)
+		v := vector.NewVec(typ, mp)
 		for range 4 {
 			d := types.Decimal256{}
 			require.NoError(t, vector.AppendFixed(v, d, nulls, mp))
@@ -567,7 +567,7 @@ func TestScanCutoffNullableWitnessOracle(t *testing.T) {
 				kept = append(kept, blk.rows...)
 				continue
 			}
-			v := vector.NewVec(types.T_int32.ToType())
+			v := vector.NewVec(types.T_int32.ToType(), mp)
 			nulls := 0
 			for _, r := range blk.rows {
 				require.NoError(t, vector.AppendFixed(v, r.key, r.null, mp))
@@ -644,7 +644,7 @@ func BenchmarkScanCutoffObserve(b *testing.B) {
 	for _, oid := range []types.T{types.T_int64, types.T_varbinary} {
 		b.Run(oid.String(), func(b *testing.B) {
 			mp := mpool.MustNewZero()
-			v := vector.NewVec(oid.ToType())
+			v := vector.NewVec(oid.ToType(), mp)
 			b.Cleanup(func() {
 				v.Free(mp)
 				require.Zero(b, mp.CurrNB())

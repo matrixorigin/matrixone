@@ -56,8 +56,8 @@ func executeLegacyDecimalExpression(t *testing.T, def *pb.TableDef, expression *
 	t.Helper()
 	proc := newPlanTestProcess(t)
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(makeTypeByPlan2Type(def.Cols[0].Typ))
-	input.Vecs[1] = vector.NewVec(makeTypeByPlan2Type(def.Cols[1].Typ))
+	input.Vecs[0] = vector.NewVec(makeTypeByPlan2Type(def.Cols[0].Typ), proc.Mp())
+	input.Vecs[1] = vector.NewVec(makeTypeByPlan2Type(def.Cols[1].Typ), proc.Mp())
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
 	if makeTypeByPlan2Type(def.Cols[0].Typ).IsInt() {
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(value), false, proc.Mp()))

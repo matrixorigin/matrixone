@@ -68,7 +68,7 @@ func TestMarshalRemoteBatchGroupingProtocolGate(t *testing.T) {
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(87))
 	data, err := marshalRemoteBatch(proc, bat, &bytes.Buffer{})
 	require.NoError(t, err)
-	decoded := batch.NewOffHeapEmpty()
+	decoded := batch.NewWithSize(0)
 	defer decoded.Clean(proc.Mp())
 	require.NoError(t, decoded.UnmarshalBinaryForPipeline(data, proc.Mp()))
 	require.Equal(t, 2, decoded.Vecs[0].GetGrouping().Count())
@@ -218,7 +218,7 @@ func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {
 	}
 
 	legacy := batch.NewWithSize(1)
-	legacy.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	legacy.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(legacy.Vecs[0], []byte("plain"), false, proc.Mp()))
 	legacy.SetRowCount(1)
 	defer legacy.Clean(proc.Mp())
@@ -1106,23 +1106,23 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account,
-		1,
-		102,
-		103,
-	)
+	producerMP, err := mp.WithAccount(account, 1, 102, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	src := batch.NewOffHeapWithSize(1)
-	require.NoError(t, src.SetAllocationAccount(selection))
-	src.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
-	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, mp))
+	src := batch.NewWithSize(1)
+	src.SetVector(0, vector.NewVec(types.T_int64.ToType(), producerMP))
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, producerMP))
 	src.SetRowCount(1)
+	sourceUsed := account.Snapshot().Used
 
-	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	// The spool is built on the bound account's view, as Prepare does.
+	spoolMP, err := mp.WithAccount(account, mpool.AllocationOwnerSelection,
+		dispatchAllocationSiteSpool, mpool.AllocationCapacityClassDefault)
+	require.NoError(t, err)
+	sp := pSpool.InitMyPipelineSpool(spoolMP, 1)
 	done, err := sp.SendBatch(context.Background(), 0, src, nil)
 	require.NoError(t, err)
 	require.False(t, done)
+	require.Greater(t, account.Snapshot().Used, sourceUsed)
 
 	d := &Dispatch{}
 	require.NoError(t, d.SetAllocationAccount(account))
@@ -1147,7 +1147,7 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	require.NoError(t, d.ClearAllocationAccount(account))
 	require.Nil(t, d.cleanupSpool)
 
-	src.Clean(mp)
+	src.Clean(producerMP)
 	snapshot := account.Seal()
 	require.Zero(t, snapshot.Used)
 	_, err = registry.Finalize(account)
@@ -1286,7 +1286,7 @@ func TestSendBatchRetiresCertifiedStop(t *testing.T) {
 func newDispatchSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.Batch {
 	t.Helper()
 	src := batch.NewWithSize(1)
-	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0), mp)
 	values := make([]int64, rows)
 	for i := range values {
 		values[i] = int64(i + 1)
@@ -1969,4 +1969,26 @@ func TestShuffleLocalReceiverTermination(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestDispatchSpoolChargesBoundAccount(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	d := &Dispatch{}
+	unbound, err := d.spoolMP(proc)
+	require.NoError(t, err)
+	require.Same(t, proc.Mp(), unbound)
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	require.NoError(t, d.SetAllocationAccount(account))
+	bound, err := d.spoolMP(proc)
+	require.NoError(t, err)
+	require.Same(t, account, bound.ViewAccount())
+	require.NoError(t, d.ClearAllocationAccount(account))
+	require.Zero(t, account.Seal().Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
 }

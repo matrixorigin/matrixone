@@ -137,3 +137,41 @@ func TestFrontendExpressionContextScope(t *testing.T) {
 		require.Same(t, prior, ses.proc.Ctx)
 	})
 }
+
+// A prepared SET evaluates its bound expression directly, so its
+// binary-literal flag comes from that expression: a bare binary literal,
+// binary prepared parameter or binary user variable, never a function result.
+func TestPreparedSetExprValueIsBin(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ec := &ExecCtx{reqCtx: context.Background(), ses: ses, proc: ses.proc}
+	ses.txnCompileCtx.execCtx = ec
+	hex := func(v string, isBin bool) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: v}, IsBin: isBin}}}
+	}
+	concat, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "concat", []*plan2.Expr{hex("A", true)})
+	require.NoError(t, err)
+	binVar := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "bin_src"}}}
+	prior := ses.proc.GetResolveVariableIsBinFunc()
+	ses.proc.SetResolveVariableIsBinFunc(func(name string, _, _ bool) (bool, error) { return name == "bin_src", nil })
+	defer ses.proc.SetResolveVariableIsBinFunc(prior)
+	priorValue := ses.proc.GetResolveVariableFunc()
+	ses.proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "A", nil })
+	defer ses.proc.SetResolveVariableFunc(priorValue)
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		want bool
+	}{
+		{"hex literal", hex("A", true), true},
+		{"text literal", hex("A", false), false},
+		{"function of hex literal", concat, false},
+		{"binary user variable", binVar, true},
+	} {
+		isBin := !tc.want
+		_, _, err := getPreparedPlanExprValueWithMeta(tc.expr, ses, ec, nil, nil, &isBin)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, isBin, tc.name)
+	}
+}

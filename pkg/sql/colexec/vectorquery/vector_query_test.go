@@ -84,7 +84,7 @@ func (f *fixture) begin(t *testing.T) {
 func (f *fixture) send(t *testing.T, branch int, values []int64, null bool) {
 	t.Helper()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), f.proc.Mp())
 	for _, v := range values {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], v, null, f.proc.Mp()))
 	}

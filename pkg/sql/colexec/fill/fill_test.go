@@ -104,7 +104,7 @@ func TestProcessLinearDecimal128(t *testing.T) {
 	defer proc.Free()
 
 	typ := types.New(types.T_decimal128, 38, 0)
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, proc.Mp())
 	defer vec.Free(proc.Mp())
 
 	left := types.Decimal128FromInt64(100)
@@ -279,9 +279,9 @@ func TestSetLinearInterpolatedValueNumericRepresentations(t *testing.T) {
 	})
 
 	t.Run("float64 opposite limits", func(t *testing.T) {
-		left := vector.NewVec(types.T_float64.ToType())
-		right := vector.NewVec(types.T_float64.ToType())
-		dst := vector.NewVec(types.T_float64.ToType())
+		left := vector.NewVec(types.T_float64.ToType(), proc.Mp())
+		right := vector.NewVec(types.T_float64.ToType(), proc.Mp())
+		dst := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 		defer left.Free(proc.Mp())
 		defer right.Free(proc.Mp())
 		defer dst.Free(proc.Mp())
@@ -296,9 +296,9 @@ func TestSetLinearInterpolatedValueNumericRepresentations(t *testing.T) {
 
 	t.Run("decimal256", func(t *testing.T) {
 		typ := types.New(types.T_decimal256, 65, 0)
-		left := vector.NewVec(typ)
-		right := vector.NewVec(typ)
-		dst := vector.NewVec(typ)
+		left := vector.NewVec(typ, proc.Mp())
+		right := vector.NewVec(typ, proc.Mp())
+		dst := vector.NewVec(typ, proc.Mp())
 		defer left.Free(proc.Mp())
 		defer right.Free(proc.Mp())
 		defer dst.Free(proc.Mp())
@@ -343,9 +343,9 @@ func assertLinearFixedValue[T types.FixedSizeT](
 	leftValue, rightValue, expected T,
 ) {
 	t.Helper()
-	left := vector.NewVec(typ)
-	right := vector.NewVec(typ)
-	dst := vector.NewVec(typ)
+	left := vector.NewVec(typ, proc.Mp())
+	right := vector.NewVec(typ, proc.Mp())
+	dst := vector.NewVec(typ, proc.Mp())
 	defer left.Free(proc.Mp())
 	defer right.Free(proc.Mp())
 	defer dst.Free(proc.Mp())
@@ -383,9 +383,9 @@ func TestSetLinearInterpolatedValueRejectsInvalidState(t *testing.T) {
 		"linear interpolation type mismatch")
 
 	boolType := types.T_bool.ToType()
-	boolLeft := vector.NewVec(boolType)
-	boolRight := vector.NewVec(boolType)
-	boolDst := vector.NewVec(boolType)
+	boolLeft := vector.NewVec(boolType, proc.Mp())
+	boolRight := vector.NewVec(boolType, proc.Mp())
+	boolDst := vector.NewVec(boolType, proc.Mp())
 	defer boolLeft.Free(proc.Mp())
 	defer boolRight.Free(proc.Mp())
 	defer boolDst.Free(proc.Mp())
@@ -419,9 +419,9 @@ func BenchmarkSetLinearInterpolatedValueDecimal256(b *testing.B) {
 	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	typ := types.New(types.T_decimal256, 65, 0)
-	left := vector.NewVec(typ)
-	right := vector.NewVec(typ)
-	dst := vector.NewVec(typ)
+	left := vector.NewVec(typ, proc.Mp())
+	right := vector.NewVec(typ, proc.Mp())
+	dst := vector.NewVec(typ, proc.Mp())
 	defer left.Free(proc.Mp())
 	defer right.Free(proc.Mp())
 	defer dst.Free(proc.Mp())
@@ -456,260 +456,260 @@ func Test_appendValue(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	// bool
 	{
-		v1 := vector.NewVec(types.T_bool.ToType())
-		v2 := vector.NewVec(types.T_bool.ToType())
+		v1 := vector.NewVec(types.T_bool.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, true, false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, true, vector.MustFixedColWithTypeCheck[bool](v1)[0])
 	}
 
 	// bit
 	{
-		v1 := vector.NewVec(types.T_bit.ToType())
-		v2 := vector.NewVec(types.T_bit.ToType())
+		v1 := vector.NewVec(types.T_bit.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_bit.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, uint64(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), vector.MustFixedColWithTypeCheck[uint64](v1)[0])
 	}
 
 	// int8
 	{
-		v1 := vector.NewVec(types.T_int8.ToType())
-		v2 := vector.NewVec(types.T_int8.ToType())
+		v1 := vector.NewVec(types.T_int8.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_int8.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, int8(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, int8(1), vector.MustFixedColWithTypeCheck[int8](v1)[0])
 	}
 
 	// int16
 	{
-		v1 := vector.NewVec(types.T_int16.ToType())
-		v2 := vector.NewVec(types.T_int16.ToType())
+		v1 := vector.NewVec(types.T_int16.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_int16.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, int16(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, int16(1), vector.MustFixedColWithTypeCheck[int16](v1)[0])
 	}
 
 	// int32
 	{
-		v1 := vector.NewVec(types.T_int32.ToType())
-		v2 := vector.NewVec(types.T_int32.ToType())
+		v1 := vector.NewVec(types.T_int32.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, int32(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, int32(1), vector.MustFixedColWithTypeCheck[int32](v1)[0])
 	}
 
 	// int64
 	{
-		v1 := vector.NewVec(types.T_int64.ToType())
-		v2 := vector.NewVec(types.T_int64.ToType())
+		v1 := vector.NewVec(types.T_int64.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, int64(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, int64(1), vector.MustFixedColWithTypeCheck[int64](v1)[0])
 	}
 
 	// uint8
 	{
-		v1 := vector.NewVec(types.T_uint8.ToType())
-		v2 := vector.NewVec(types.T_uint8.ToType())
+		v1 := vector.NewVec(types.T_uint8.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_uint8.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, uint8(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, uint8(1), vector.MustFixedColWithTypeCheck[uint8](v1)[0])
 	}
 
 	// uint16
 	{
-		v1 := vector.NewVec(types.T_uint16.ToType())
-		v2 := vector.NewVec(types.T_uint16.ToType())
+		v1 := vector.NewVec(types.T_uint16.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_uint16.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, uint16(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, uint16(1), vector.MustFixedColWithTypeCheck[uint16](v1)[0])
 	}
 
 	// uint32
 	{
-		v1 := vector.NewVec(types.T_uint32.ToType())
-		v2 := vector.NewVec(types.T_uint32.ToType())
+		v1 := vector.NewVec(types.T_uint32.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_uint32.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, uint32(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, uint32(1), vector.MustFixedColWithTypeCheck[uint32](v1)[0])
 	}
 
 	// uint64
 	{
-		v1 := vector.NewVec(types.T_uint64.ToType())
-		v2 := vector.NewVec(types.T_uint64.ToType())
+		v1 := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, uint64(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), vector.MustFixedColWithTypeCheck[uint64](v1)[0])
 	}
 
 	// float32
 	{
-		v1 := vector.NewVec(types.T_float32.ToType())
-		v2 := vector.NewVec(types.T_float32.ToType())
+		v1 := vector.NewVec(types.T_float32.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_float32.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, float32(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, float32(1), vector.MustFixedColWithTypeCheck[float32](v1)[0])
 	}
 
 	// float64
 	{
-		v1 := vector.NewVec(types.T_float64.ToType())
-		v2 := vector.NewVec(types.T_float64.ToType())
+		v1 := vector.NewVec(types.T_float64.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, float64(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, float64(1), vector.MustFixedColWithTypeCheck[float64](v1)[0])
 	}
 
 	// date
 	{
-		v1 := vector.NewVec(types.T_date.ToType())
-		v2 := vector.NewVec(types.T_date.ToType())
+		v1 := vector.NewVec(types.T_date.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_date.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, types.Date(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, types.Date(1), vector.MustFixedColWithTypeCheck[types.Date](v1)[0])
 	}
 
 	// datetime
 	{
-		v1 := vector.NewVec(types.T_datetime.ToType())
-		v2 := vector.NewVec(types.T_datetime.ToType())
+		v1 := vector.NewVec(types.T_datetime.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_datetime.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, types.Datetime(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, types.Datetime(1), vector.MustFixedColWithTypeCheck[types.Datetime](v1)[0])
 	}
 
 	// time
 	{
-		v1 := vector.NewVec(types.T_time.ToType())
-		v2 := vector.NewVec(types.T_time.ToType())
+		v1 := vector.NewVec(types.T_time.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_time.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, types.Time(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, types.Time(1), vector.MustFixedColWithTypeCheck[types.Time](v1)[0])
 	}
 
 	// timestamp
 	{
-		v1 := vector.NewVec(types.T_timestamp.ToType())
-		v2 := vector.NewVec(types.T_timestamp.ToType())
+		v1 := vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, types.Timestamp(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, types.Timestamp(1), vector.MustFixedColWithTypeCheck[types.Timestamp](v1)[0])
 	}
 
 	// enum
 	{
-		v1 := vector.NewVec(types.T_enum.ToType())
-		v2 := vector.NewVec(types.T_enum.ToType())
+		v1 := vector.NewVec(types.T_enum.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_enum.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, types.Enum(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, types.Enum(1), vector.MustFixedColWithTypeCheck[types.Enum](v1)[0])
 	}
 
 	// decimal64
 	{
-		v1 := vector.NewVec(types.T_decimal64.ToType())
-		v2 := vector.NewVec(types.T_decimal64.ToType())
+		v1 := vector.NewVec(types.T_decimal64.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_decimal64.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, types.Decimal64(1), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, types.Decimal64(1), vector.MustFixedColWithTypeCheck[types.Decimal64](v1)[0])
 	}
 
 	// decimal128
 	{
-		v1 := vector.NewVec(types.T_decimal128.ToType())
-		v2 := vector.NewVec(types.T_decimal128.ToType())
+		v1 := vector.NewVec(types.T_decimal128.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_decimal128.ToType(), proc.Mp())
 		dec128 := types.Decimal128{B0_63: 1, B64_127: 0}
 		err := vector.AppendFixed(v2, dec128, false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, dec128, vector.MustFixedColWithTypeCheck[types.Decimal128](v1)[0])
 	}
 
 	// uuid
 	{
-		v1 := vector.NewVec(types.T_uuid.ToType())
-		v2 := vector.NewVec(types.T_uuid.ToType())
+		v1 := vector.NewVec(types.T_uuid.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_uuid.ToType(), proc.Mp())
 		uuid := types.Uuid{}
 		uuid[0] = 1
 		err := vector.AppendFixed(v2, uuid, false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, uuid, vector.MustFixedColWithTypeCheck[types.Uuid](v1)[0])
 	}
 
 	// TS
 	{
-		v1 := vector.NewVec(types.T_TS.ToType())
-		v2 := vector.NewVec(types.T_TS.ToType())
+		v1 := vector.NewVec(types.T_TS.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_TS.ToType(), proc.Mp())
 		ts := types.TS{}
 		ts[0] = 1
 		err := vector.AppendFixed(v2, ts, false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, ts, vector.MustFixedColWithTypeCheck[types.TS](v1)[0])
 	}
 
 	// Rowid
 	{
-		v1 := vector.NewVec(types.T_Rowid.ToType())
-		v2 := vector.NewVec(types.T_Rowid.ToType())
+		v1 := vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 		rowid := types.Rowid{}
 		rowid[0] = 1
 		err := vector.AppendFixed(v2, rowid, false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, rowid, vector.MustFixedColWithTypeCheck[types.Rowid](v1)[0])
 	}
 
 	// char
 	{
-		v1 := vector.NewVec(types.T_char.ToType())
-		v2 := vector.NewVec(types.T_char.ToType())
+		v1 := vector.NewVec(types.T_char.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_char.ToType(), proc.Mp())
 		err := vector.AppendBytes(v2, []byte("1"), false, proc.Mp())
 		require.NoError(t, err)
-		err = appendValue(v1, v2, 0, proc)
+		err = appendValue(v1, v2, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, []byte("1"), v1.GetBytesAt(0))
 	}
@@ -720,249 +720,249 @@ func Test_setValue(t *testing.T) {
 
 	// bool
 	{
-		v1 := vector.NewVec(types.T_bool.ToType())
-		v2 := vector.NewVec(types.T_bool.ToType())
+		v1 := vector.NewVec(types.T_bool.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, true, false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, false, false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, true, vector.MustFixedColWithTypeCheck[bool](v1)[0])
 	}
 
 	// bit
 	{
-		v1 := vector.NewVec(types.T_bit.ToType())
-		v2 := vector.NewVec(types.T_bit.ToType())
+		v1 := vector.NewVec(types.T_bit.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_bit.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, uint64(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, uint64(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), vector.MustFixedColWithTypeCheck[uint64](v1)[0])
 	}
 
 	// int8
 	{
-		v1 := vector.NewVec(types.T_int8.ToType())
-		v2 := vector.NewVec(types.T_int8.ToType())
+		v1 := vector.NewVec(types.T_int8.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_int8.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, int8(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, int8(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, int8(1), vector.MustFixedColWithTypeCheck[int8](v1)[0])
 	}
 
 	// int16
 	{
-		v1 := vector.NewVec(types.T_int16.ToType())
-		v2 := vector.NewVec(types.T_int16.ToType())
+		v1 := vector.NewVec(types.T_int16.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_int16.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, int16(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, int16(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, int16(1), vector.MustFixedColWithTypeCheck[int16](v1)[0])
 	}
 
 	// int32
 	{
-		v1 := vector.NewVec(types.T_int32.ToType())
-		v2 := vector.NewVec(types.T_int32.ToType())
+		v1 := vector.NewVec(types.T_int32.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, int32(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, int32(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, int32(1), vector.MustFixedColWithTypeCheck[int32](v1)[0])
 	}
 
 	// int64
 	{
-		v1 := vector.NewVec(types.T_int64.ToType())
-		v2 := vector.NewVec(types.T_int64.ToType())
+		v1 := vector.NewVec(types.T_int64.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, int64(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, int64(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, int64(1), vector.MustFixedColWithTypeCheck[int64](v1)[0])
 	}
 
 	// uint8
 	{
-		v1 := vector.NewVec(types.T_uint8.ToType())
-		v2 := vector.NewVec(types.T_uint8.ToType())
+		v1 := vector.NewVec(types.T_uint8.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_uint8.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, uint8(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, uint8(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, uint8(1), vector.MustFixedColWithTypeCheck[uint8](v1)[0])
 	}
 
 	// uint16
 	{
-		v1 := vector.NewVec(types.T_uint16.ToType())
-		v2 := vector.NewVec(types.T_uint16.ToType())
+		v1 := vector.NewVec(types.T_uint16.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_uint16.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, uint16(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, uint16(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, uint16(1), vector.MustFixedColWithTypeCheck[uint16](v1)[0])
 	}
 
 	// uint32
 	{
-		v1 := vector.NewVec(types.T_uint32.ToType())
-		v2 := vector.NewVec(types.T_uint32.ToType())
+		v1 := vector.NewVec(types.T_uint32.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_uint32.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, uint32(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, uint32(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, uint32(1), vector.MustFixedColWithTypeCheck[uint32](v1)[0])
 	}
 
 	// uint64
 	{
-		v1 := vector.NewVec(types.T_uint64.ToType())
-		v2 := vector.NewVec(types.T_uint64.ToType())
+		v1 := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, uint64(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, uint64(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), vector.MustFixedColWithTypeCheck[uint64](v1)[0])
 	}
 
 	// float32
 	{
-		v1 := vector.NewVec(types.T_float32.ToType())
-		v2 := vector.NewVec(types.T_float32.ToType())
+		v1 := vector.NewVec(types.T_float32.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_float32.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, float32(1.0), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, float32(0.0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, float32(1.0), vector.MustFixedColWithTypeCheck[float32](v1)[0])
 	}
 
 	// float64
 	{
-		v1 := vector.NewVec(types.T_float64.ToType())
-		v2 := vector.NewVec(types.T_float64.ToType())
+		v1 := vector.NewVec(types.T_float64.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, float64(1.0), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, float64(0.0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, float64(1.0), vector.MustFixedColWithTypeCheck[float64](v1)[0])
 	}
 
 	// date
 	{
-		v1 := vector.NewVec(types.T_date.ToType())
-		v2 := vector.NewVec(types.T_date.ToType())
+		v1 := vector.NewVec(types.T_date.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_date.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, types.Date(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, types.Date(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, types.Date(1), vector.MustFixedColWithTypeCheck[types.Date](v1)[0])
 	}
 
 	// datetime
 	{
-		v1 := vector.NewVec(types.T_datetime.ToType())
-		v2 := vector.NewVec(types.T_datetime.ToType())
+		v1 := vector.NewVec(types.T_datetime.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_datetime.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, types.Datetime(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, types.Datetime(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, types.Datetime(1), vector.MustFixedColWithTypeCheck[types.Datetime](v1)[0])
 	}
 
 	// time
 	{
-		v1 := vector.NewVec(types.T_time.ToType())
-		v2 := vector.NewVec(types.T_time.ToType())
+		v1 := vector.NewVec(types.T_time.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_time.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, types.Time(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, types.Time(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, types.Time(1), vector.MustFixedColWithTypeCheck[types.Time](v1)[0])
 	}
 
 	// timestamp
 	{
-		v1 := vector.NewVec(types.T_timestamp.ToType())
-		v2 := vector.NewVec(types.T_timestamp.ToType())
+		v1 := vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, types.Timestamp(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, types.Timestamp(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, types.Timestamp(1), vector.MustFixedColWithTypeCheck[types.Timestamp](v1)[0])
 	}
 
 	// enum
 	{
-		v1 := vector.NewVec(types.T_enum.ToType())
-		v2 := vector.NewVec(types.T_enum.ToType())
+		v1 := vector.NewVec(types.T_enum.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_enum.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, types.Enum(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, types.Enum(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, types.Enum(1), vector.MustFixedColWithTypeCheck[types.Enum](v1)[0])
 	}
 
 	// decimal64
 	{
-		v1 := vector.NewVec(types.T_decimal64.ToType())
-		v2 := vector.NewVec(types.T_decimal64.ToType())
+		v1 := vector.NewVec(types.T_decimal64.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_decimal64.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, types.Decimal64(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, types.Decimal64(0), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, types.Decimal64(1), vector.MustFixedColWithTypeCheck[types.Decimal64](v1)[0])
 	}
 
 	// decimal128
 	{
-		v1 := vector.NewVec(types.T_decimal128.ToType())
-		v2 := vector.NewVec(types.T_decimal128.ToType())
+		v1 := vector.NewVec(types.T_decimal128.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_decimal128.ToType(), proc.Mp())
 		dec128 := types.Decimal128{B0_63: 1, B64_127: 0}
 		err := vector.AppendFixed(v2, dec128, false, proc.Mp())
 		require.NoError(t, err)
 		dec128Zero := types.Decimal128{B0_63: 0, B64_127: 0}
 		err = vector.AppendFixed(v1, dec128Zero, false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, dec128, vector.MustFixedColWithTypeCheck[types.Decimal128](v1)[0])
 	}
@@ -970,13 +970,13 @@ func Test_setValue(t *testing.T) {
 	// decimal128 target with int64 fill value
 	{
 		targetType := types.T_decimal128.ToTypeWithScale(2)
-		v1 := vector.NewVec(targetType)
-		v2 := vector.NewVec(types.T_int64.ToType())
+		v1 := vector.NewVec(targetType, proc.Mp())
+		v2 := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		err := vector.AppendFixed(v2, int64(1), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, types.Decimal128{}, true, proc.Mp()) // Pre-allocate null target slot
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		expected, err := types.Decimal128FromInt64(1).Scale(2)
 		require.NoError(t, err)
@@ -988,15 +988,15 @@ func Test_setValue(t *testing.T) {
 	{
 		targetType := types.T_decimal128.ToTypeWithScale(4)
 		sourceType := types.T_decimal128.ToTypeWithScale(2)
-		v1 := vector.NewVec(targetType)
-		v2 := vector.NewVec(sourceType)
+		v1 := vector.NewVec(targetType, proc.Mp())
+		v2 := vector.NewVec(sourceType, proc.Mp())
 		source, err := types.ParseDecimal128("1.23", sourceType.Width, sourceType.Scale)
 		require.NoError(t, err)
 		err = vector.AppendFixed(v2, source, false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendFixed(v1, types.Decimal128{}, true, proc.Mp()) // Pre-allocate null target slot
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		expected, err := types.ParseDecimal128("1.2300", targetType.Width, targetType.Scale)
 		require.NoError(t, err)
@@ -1006,8 +1006,8 @@ func Test_setValue(t *testing.T) {
 
 	// uuid
 	{
-		v1 := vector.NewVec(types.T_uuid.ToType())
-		v2 := vector.NewVec(types.T_uuid.ToType())
+		v1 := vector.NewVec(types.T_uuid.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_uuid.ToType(), proc.Mp())
 		uuid := types.Uuid{}
 		uuid[0] = 1
 		err := vector.AppendFixed(v2, uuid, false, proc.Mp())
@@ -1015,15 +1015,15 @@ func Test_setValue(t *testing.T) {
 		uuidZero := types.Uuid{}
 		err = vector.AppendFixed(v1, uuidZero, false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, uuid, vector.MustFixedColWithTypeCheck[types.Uuid](v1)[0])
 	}
 
 	// TS
 	{
-		v1 := vector.NewVec(types.T_TS.ToType())
-		v2 := vector.NewVec(types.T_TS.ToType())
+		v1 := vector.NewVec(types.T_TS.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_TS.ToType(), proc.Mp())
 		ts := types.TS{}
 		ts[0] = 1
 		err := vector.AppendFixed(v2, ts, false, proc.Mp())
@@ -1031,15 +1031,15 @@ func Test_setValue(t *testing.T) {
 		tsZero := types.TS{}
 		err = vector.AppendFixed(v1, tsZero, false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, ts, vector.MustFixedColWithTypeCheck[types.TS](v1)[0])
 	}
 
 	// Rowid
 	{
-		v1 := vector.NewVec(types.T_Rowid.ToType())
-		v2 := vector.NewVec(types.T_Rowid.ToType())
+		v1 := vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 		rowid := types.Rowid{}
 		rowid[0] = 1
 		err := vector.AppendFixed(v2, rowid, false, proc.Mp())
@@ -1047,20 +1047,20 @@ func Test_setValue(t *testing.T) {
 		rowidZero := types.Rowid{}
 		err = vector.AppendFixed(v1, rowidZero, false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, rowid, vector.MustFixedColWithTypeCheck[types.Rowid](v1)[0])
 	}
 
 	// char
 	{
-		v1 := vector.NewVec(types.T_char.ToType())
-		v2 := vector.NewVec(types.T_char.ToType())
+		v1 := vector.NewVec(types.T_char.ToType(), proc.Mp())
+		v2 := vector.NewVec(types.T_char.ToType(), proc.Mp())
 		err := vector.AppendBytes(v2, []byte("1"), false, proc.Mp())
 		require.NoError(t, err)
 		err = vector.AppendBytes(v1, []byte("0"), false, proc.Mp()) // Pre-allocate space
 		require.NoError(t, err)
-		err = setValue(v1, v2, 0, 0, proc)
+		err = setValue(v1, v2, 0, 0, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, []byte("1"), v1.GetBytesAt(0))
 	}
@@ -1076,11 +1076,11 @@ func TestSetDecimal128ValueCastsSourceTypes(t *testing.T) {
 		t.Helper()
 		defer src.Free(proc.Mp())
 
-		dst := vector.NewVec(targetType)
+		dst := vector.NewVec(targetType, proc.Mp())
 		defer dst.Free(proc.Mp())
 		require.NoError(t, vector.AppendFixed(dst, types.Decimal128{}, true, proc.Mp()))
 
-		require.NoError(t, setValue(dst, src, 0, 0, proc))
+		require.NoError(t, setValue(dst, src, 0, 0, proc.Mp()))
 		require.False(t, dst.IsNull(0))
 
 		wantDecimal, err := types.ParseDecimal128(want, targetType.Width, targetType.Scale)
@@ -1089,64 +1089,64 @@ func TestSetDecimal128ValueCastsSourceTypes(t *testing.T) {
 	}
 
 	t.Run("int8", func(t *testing.T) {
-		src := vector.NewVec(types.T_int8.ToType())
+		src := vector.NewVec(types.T_int8.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, int8(-12), false, proc.Mp()))
 		run(t, src, "-12.00")
 	})
 	t.Run("int16", func(t *testing.T) {
-		src := vector.NewVec(types.T_int16.ToType())
+		src := vector.NewVec(types.T_int16.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, int16(-123), false, proc.Mp()))
 		run(t, src, "-123.00")
 	})
 	t.Run("int32", func(t *testing.T) {
-		src := vector.NewVec(types.T_int32.ToType())
+		src := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, int32(-1234), false, proc.Mp()))
 		run(t, src, "-1234.00")
 	})
 	t.Run("int64", func(t *testing.T) {
-		src := vector.NewVec(types.T_int64.ToType())
+		src := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, int64(-12345), false, proc.Mp()))
 		run(t, src, "-12345.00")
 	})
 	t.Run("uint8", func(t *testing.T) {
-		src := vector.NewVec(types.T_uint8.ToType())
+		src := vector.NewVec(types.T_uint8.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, uint8(12), false, proc.Mp()))
 		run(t, src, "12.00")
 	})
 	t.Run("uint16", func(t *testing.T) {
-		src := vector.NewVec(types.T_uint16.ToType())
+		src := vector.NewVec(types.T_uint16.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, uint16(123), false, proc.Mp()))
 		run(t, src, "123.00")
 	})
 	t.Run("uint32", func(t *testing.T) {
-		src := vector.NewVec(types.T_uint32.ToType())
+		src := vector.NewVec(types.T_uint32.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, uint32(1234), false, proc.Mp()))
 		run(t, src, "1234.00")
 	})
 	t.Run("uint64", func(t *testing.T) {
-		src := vector.NewVec(types.T_uint64.ToType())
+		src := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, uint64(18446744073709551615), false, proc.Mp()))
 		run(t, src, "18446744073709551615.00")
 	})
 	t.Run("float32", func(t *testing.T) {
-		src := vector.NewVec(types.T_float32.ToType())
+		src := vector.NewVec(types.T_float32.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, float32(12.25), false, proc.Mp()))
 		run(t, src, "12.25")
 	})
 	t.Run("float64", func(t *testing.T) {
-		src := vector.NewVec(types.T_float64.ToType())
+		src := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, float64(123.45), false, proc.Mp()))
 		run(t, src, "123.45")
 	})
 	t.Run("decimal64", func(t *testing.T) {
 		srcType := types.T_decimal64.ToTypeWithScale(1)
-		src := vector.NewVec(srcType)
+		src := vector.NewVec(srcType, proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, types.Decimal64(123), false, proc.Mp()))
 		run(t, src, "12.30")
 	})
 	t.Run("decimal128_different_scale", func(t *testing.T) {
 		srcType := types.T_decimal128.ToTypeWithScale(4)
-		src := vector.NewVec(srcType)
+		src := vector.NewVec(srcType, proc.Mp())
 		value, err := types.ParseDecimal128("12.3400", srcType.Width, srcType.Scale)
 		require.NoError(t, err)
 		require.NoError(t, vector.AppendFixed(src, value, false, proc.Mp()))
@@ -1158,15 +1158,15 @@ func TestSetDecimal128ValueRejectsUnsupportedSourceType(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	dst := vector.NewVec(types.T_decimal128.ToTypeWithScale(2))
+	dst := vector.NewVec(types.T_decimal128.ToTypeWithScale(2), proc.Mp())
 	defer dst.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(dst, types.Decimal128{}, true, proc.Mp()))
 
-	src := vector.NewVec(types.T_bool.ToType())
+	src := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	defer src.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(src, true, false, proc.Mp()))
 
-	err := setValue(dst, src, 0, 0, proc)
+	err := setValue(dst, src, 0, 0, proc.Mp())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "cannot set decimal128 fill value")
 }
@@ -1225,7 +1225,7 @@ func TestProcessValueFillsNullsWithConstantVector(t *testing.T) {
 	input.SetRowCount(2)
 	defer input.Clean(proc.Mp())
 
-	fillValue := vector.NewVec(types.T_int64.ToType())
+	fillValue := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(fillValue, int64(9), false, proc.Mp()))
 
 	arg := &Fill{ColLen: 1}
@@ -1248,7 +1248,7 @@ func TestProcessValueFillsDecimal128NullsWithIntegerConstant(t *testing.T) {
 	defer proc.Free()
 
 	typ := types.T_decimal128.ToTypeWithScale(0)
-	decimalVec := vector.NewVec(typ)
+	decimalVec := vector.NewVec(typ, proc.Mp())
 	require.NoError(t, vector.AppendFixed(decimalVec, types.Decimal128{}, true, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(decimalVec, types.Decimal128FromInt64(-2109048), false, proc.Mp()))
 
@@ -1257,7 +1257,7 @@ func TestProcessValueFillsDecimal128NullsWithIntegerConstant(t *testing.T) {
 	input.SetRowCount(2)
 	defer input.Clean(proc.Mp())
 
-	fillValue := vector.NewVec(types.T_int64.ToType())
+	fillValue := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(fillValue, int64(100), false, proc.Mp()))
 
 	arg := &Fill{ColLen: 1}
@@ -1350,7 +1350,7 @@ func TestLinearFillValueUsesExpressionForNonDecimal128(t *testing.T) {
 	input.SetRowCount(3)
 	defer input.Clean(proc.Mp())
 
-	resultVec := vector.NewVec(types.T_int64.ToType())
+	resultVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(resultVec, int64(20), false, proc.Mp()))
 	defer resultVec.Free(proc.Mp())
 
@@ -1414,7 +1414,7 @@ func TestConsumeNextStabilizesSelfAliasedVarlenSources(t *testing.T) {
 				payload, err = types.EncodeJson(value)
 				require.NoError(t, err)
 			}
-			vec := vector.NewOffHeapVecWithType(typ)
+			vec := vector.NewVec(typ, proc.Mp())
 			require.NoError(t, vec.PreExtend(rows, proc.Mp()))
 			vec.SetLength(rows)
 			for i := 0; i < rows-1; i++ {
@@ -1449,7 +1449,7 @@ func TestConsumeNextReleasesSnapshotOnAllocationFailure(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer proc.Free()
 
-	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vec.PreExtend(2, mp))
 	vec.SetLength(2)
 	vec.SetNull(0)
@@ -1480,7 +1480,7 @@ func TestConsumeNextReleasesSnapshotOnWriteFailure(t *testing.T) {
 	defer proc.Free()
 
 	payload := bytes.Repeat([]byte("b"), types.VarlenaInlineSize+1)
-	previousVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	previousVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, previousVec.PreExtend(1, mp))
 	previousVec.SetLength(1)
 	previousVec.SetNull(0)
@@ -1488,7 +1488,7 @@ func TestConsumeNextReleasesSnapshotOnWriteFailure(t *testing.T) {
 	previous.SetVector(0, previousVec)
 	previous.SetRowCount(1)
 
-	currentVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	currentVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, currentVec.PreExtend(2, mp))
 	currentVec.SetLength(2)
 	currentVec.SetNull(0)

@@ -68,6 +68,7 @@ func TestHashJoinPrepareFailureCanRetry(t *testing.T) {
 	require.Len(t, arg.ctr.eqCondExecs, 1)
 	require.NotNil(t, arg.ctr.nonEqCondExec)
 	arg.Free(proc, false, nil)
+	freeTestChildren(arg)
 	proc.Free()
 }
 
@@ -279,7 +280,9 @@ func TestJoin(t *testing.T) {
 		tc.barg.GetChildren(0).Free(tc.proc, false, nil)
 
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		tc.proc.Free()
 		require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -313,7 +316,9 @@ func TestHashJoinCountOnlyCollapsesDuplicateMatches(t *testing.T) {
 
 	defer func() {
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		tc.proc.Free()
 		tc.cancel()
 	}()
@@ -360,7 +365,9 @@ func TestHashJoinEmptyProjectionWithoutCountContractStaysBoundedAndCancelable(t 
 
 	defer func() {
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		tc.proc.Free()
 		tc.cancel()
 	}()
@@ -403,13 +410,17 @@ func TestHashJoinPassesRecursiveMarkerWithEmptyBuild(t *testing.T) {
 	probe := &recursiveHashJoinProbe{MockOperator: colexec.NewMockOperator().
 		WithBatchs([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp()), marker}).
 		WithBatchCallback(func(int) { probeCalls++ })}
+	freeTestChildren(tc.arg)
 	tc.arg.Children = nil
 	tc.arg.AppendChild(probe)
 	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
 	defer func() {
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		probe.Free(tc.proc, false, nil)
+		freeTestChildren(probe)
 		tc.proc.Free()
 		tc.cancel()
 	}()
@@ -435,6 +446,7 @@ func TestHashJoinPrepareRecomputesRecursiveProbeForFastPath(t *testing.T) {
 	probe := colexec.NewMockOperator().
 		WithBatchs([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp())}).
 		WithBatchCallback(func(int) { probeCalls++ })
+	freeTestChildren(tc.arg)
 	tc.arg.Children = nil
 	tc.arg.AppendChild(probe)
 	// Model a reused operator whose previous generation had a recursive probe.
@@ -442,8 +454,11 @@ func TestHashJoinPrepareRecomputesRecursiveProbeForFastPath(t *testing.T) {
 	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
 	defer func() {
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		probe.Free(tc.proc, false, nil)
+		freeTestChildren(probe)
 		tc.proc.Free()
 		tc.cancel()
 	}()
@@ -499,7 +514,9 @@ func TestHashJoinPropagatesUnmatchedOutputOOM(t *testing.T) {
 	tc.arg.Reset(tc.proc, false, nil)
 	tc.barg.Reset(tc.proc, false, nil)
 	tc.arg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.arg)
 	tc.barg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.barg)
 	tc.proc.Free()
 	require.Zero(t, limited.CurrNB())
 }
@@ -556,7 +573,9 @@ func TestHashJoinResetAfterEmptyProbe(t *testing.T) {
 	tc.arg.Reset(tc.proc, false, nil)
 	tc.barg.Reset(tc.proc, false, nil)
 	tc.arg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.arg)
 	tc.barg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.barg)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
@@ -613,7 +632,9 @@ func TestHashJoinConstNullAfterNonEmptyProbe(t *testing.T) {
 	tc.arg.Reset(tc.proc, false, nil)
 	tc.barg.Reset(tc.proc, false, nil)
 	tc.arg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.arg)
 	tc.barg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.barg)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
@@ -727,7 +748,9 @@ func TestHashMarkJoinThreeValuedSemantics(t *testing.T) {
 			tc.arg.Reset(tc.proc, false, nil)
 			tc.barg.Reset(tc.proc, false, nil)
 			tc.arg.Free(tc.proc, false, nil)
+			freeTestChildren(tc.arg)
 			tc.barg.Free(tc.proc, false, nil)
+			freeTestChildren(tc.barg)
 			tc.proc.Free()
 			require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 		})
@@ -787,7 +810,9 @@ func TestHashMarkJoinCompositeNotNullKeys(t *testing.T) {
 	tc.arg.Reset(tc.proc, false, nil)
 	tc.barg.Reset(tc.proc, false, nil)
 	tc.arg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.arg)
 	tc.barg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.barg)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
@@ -851,7 +876,9 @@ func TestHashMarkJoinResetClearsBuildNullState(t *testing.T) {
 	tc.arg.Reset(tc.proc, false, nil)
 	tc.barg.Reset(tc.proc, false, nil)
 	tc.arg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.arg)
 	tc.barg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.barg)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
@@ -906,7 +933,9 @@ func TestHashMarkJoinBatchBoundary(t *testing.T) {
 	tc.arg.Reset(tc.proc, false, nil)
 	tc.barg.Reset(tc.proc, false, nil)
 	tc.arg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.arg)
 	tc.barg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.barg)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
@@ -991,7 +1020,9 @@ func TestHashJoinSingleRejectsMultipleRows(t *testing.T) {
 			tc.arg.Reset(tc.proc, true, err)
 			tc.barg.Reset(tc.proc, true, err)
 			tc.arg.Free(tc.proc, true, err)
+			freeTestChildren(tc.arg)
 			tc.barg.Free(tc.proc, true, err)
+			freeTestChildren(tc.barg)
 			tc.proc.Free()
 			require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 		})
@@ -1100,6 +1131,7 @@ func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
 
 	rightBat.Clean(proc.Mp())
 	hashJoin.Free(proc, false, nil)
+	freeTestChildren(hashJoin)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -1143,6 +1175,7 @@ func TestHashJoinMergerFinalizeEmitsUnmatchedBuildRows(t *testing.T) {
 
 	rightBat.Clean(proc.Mp())
 	hashJoin.Free(proc, false, nil)
+	freeTestChildren(hashJoin)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -1185,7 +1218,9 @@ func TestHashJoinTracksBuildMatchesWhenFullOuterIsNotRightOriented(t *testing.T)
 				tc.arg.Reset(tc.proc, false, nil)
 				tc.barg.Reset(tc.proc, false, nil)
 				tc.arg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.arg)
 				tc.barg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.barg)
 				tc.proc.Free()
 				tc.cancel()
 				require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -1256,7 +1291,9 @@ func TestAsofLeftJoinEndToEnd(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		tc.proc.Free()
 		tc.cancel()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -1312,7 +1349,9 @@ func TestAsofBuildLeftStreamsRightAndKeepsOneCandidate(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		tc.proc.Free()
 		tc.cancel()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -1338,7 +1377,7 @@ func TestAsofBuildLeftStreamsRightAndKeepsOneCandidate(t *testing.T) {
 	// Use the same small integer timestamp domain on both sides so the expected
 	// predecessor is obvious and independent of time-zone parsing.
 	logicalLeft.Vecs[1].Free(tc.proc.Mp())
-	logicalLeft.Vecs[1] = vector.NewVec(timeType)
+	logicalLeft.Vecs[1] = vector.NewVec(timeType, tc.proc.Mp())
 	require.NoError(t, vector.AppendFixedList(
 		logicalLeft.Vecs[1], []types.Timestamp{10, 15}, nil, tc.proc.Mp()))
 
@@ -1376,7 +1415,9 @@ func TestAsofBuildLeftEmptyLeftSkipsRightScan(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		tc.proc.Free()
 		tc.cancel()
 		require.Zero(t, tc.proc.Mp().CurrNB())
@@ -1396,6 +1437,7 @@ func TestAsofBuildLeftEmptyLeftSkipsRightScan(t *testing.T) {
 		tc.proc, []int32{1}, []types.Timestamp{1}, []string{"unused"})
 	logicalRight.Vecs[2].Free(tc.proc.Mp())
 	logicalRight.Vecs = logicalRight.Vecs[:2]
+	freeTestChildren(tc.arg)
 	tc.arg.Children = nil
 	tc.arg.AppendChild(colexec.NewMockOperator().
 		WithBatchs([]*batch.Batch{logicalRight}).
@@ -1422,7 +1464,9 @@ func TestAsofBuildLeftRejectsRecursiveProbeBeforeInput(t *testing.T) {
 	)
 	defer func() {
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		tc.proc.Free()
 		tc.cancel()
 	}()
@@ -1436,6 +1480,7 @@ func TestAsofBuildLeftRejectsRecursiveProbeBeforeInput(t *testing.T) {
 	probeCalls := 0
 	probe := &recursiveHashJoinProbe{MockOperator: colexec.NewMockOperator().
 		WithBatchCallback(func(int) { probeCalls++ })}
+	freeTestChildren(tc.arg)
 	tc.arg.Children = nil
 	tc.arg.AppendChild(probe)
 
@@ -1461,7 +1506,9 @@ func TestAsofBuildLeftActualHotGroupUsesBoundedRangeIndex(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		tc.proc.Free()
 		tc.cancel()
 		require.Zero(t, tc.proc.Mp().CurrNB())
@@ -1555,7 +1602,9 @@ func TestAsofBuildLeftRangeIndexSharesAndRecyclesPayload(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		tc.proc.Free()
 		tc.cancel()
 		require.Zero(t, tc.proc.Mp().CurrNB())
@@ -1592,6 +1641,7 @@ func TestAsofBuildLeftRangeIndexSharesAndRecyclesPayload(t *testing.T) {
 		))
 	}
 	resetHashBuildChildrenWithBatch(tc.barg, logicalLeft)
+	freeTestChildren(tc.arg)
 	tc.arg.Children = nil
 	tc.arg.AppendChild(colexec.NewMockOperator().WithBatchs(rightBatches))
 
@@ -1636,7 +1686,9 @@ func TestAsofBuildLeftStrictPredicateRejectsEqualTimestamp(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		tc.proc.Free()
 		tc.cancel()
 		require.Zero(t, tc.proc.Mp().CurrNB())
@@ -1684,7 +1736,9 @@ func TestAsofBuildLeftCompactsRepeatedVarlenaReplacement(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		tc.proc.Free()
 		tc.cancel()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -1728,6 +1782,7 @@ func TestAsofBuildLeftCompactsRepeatedVarlenaReplacement(t *testing.T) {
 			makeAsofPayloadBatch(tc.proc, keys, timestamps, batchPayloads))
 	}
 	resetHashBuildChildrenWithBatch(tc.barg, logicalLeft)
+	freeTestChildren(tc.arg)
 	tc.arg.Children = nil
 	tc.arg.AppendChild(colexec.NewMockOperator().WithBatchs(rightBatches))
 	require.NoError(t, tc.arg.Prepare(tc.proc))
@@ -1757,7 +1812,7 @@ func makeAsofPayloadBatch(
 ) *batch.Batch {
 	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
-	bat.Vecs[1] = vector.NewVec(types.T_timestamp.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
 	if err := vector.AppendFixedList(bat.Vecs[1], timestamps, nil, proc.Mp()); err != nil {
 		panic(err)
 	}
@@ -1892,6 +1947,7 @@ func TestFindAsofPredecessor(t *testing.T) {
 	arg.ctr.leftBat = nil
 	arg.ctr.rightBats = nil
 	arg.Free(proc, false, nil)
+	freeTestChildren(arg)
 	left.Clean(proc.Mp())
 	right.Clean(proc.Mp())
 	proc.Free()
@@ -1915,7 +1971,7 @@ func TestAsofIndexChoosesOrderedOrAdaptiveSearch(t *testing.T) {
 
 	left := batch.NewWithSize(2)
 	left.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
-	left.Vecs[1] = vector.NewVec(timeType)
+	left.Vecs[1] = vector.NewVec(timeType, proc.Mp())
 	require.NoError(t, vector.AppendFixedList(left.Vecs[1], []types.Timestamp{10}, nil, proc.Mp()))
 	left.SetRowCount(1)
 
@@ -1932,7 +1988,7 @@ func TestAsofIndexChoosesOrderedOrAdaptiveSearch(t *testing.T) {
 	nulls[15] = true
 	right := batch.NewWithSize(2)
 	right.Vecs[0] = testutil.MakeInt32Vector(make([]int32, len(rightTimes)), nil, proc.Mp())
-	right.Vecs[1] = vector.NewVec(timeType)
+	right.Vecs[1] = vector.NewVec(timeType, proc.Mp())
 	require.NoError(t, vector.AppendFixedList(right.Vecs[1], rightTimes, nulls, proc.Mp()))
 	right.SetRowCount(len(rightTimes))
 
@@ -1996,6 +2052,7 @@ func TestAsofIndexChoosesOrderedOrAdaptiveSearch(t *testing.T) {
 	arg.ctr.leftBat = nil
 	arg.ctr.rightBats = nil
 	arg.Free(proc, false, nil)
+	freeTestChildren(arg)
 	left.Clean(proc.Mp())
 	right.Clean(proc.Mp())
 	proc.Free()
@@ -2031,7 +2088,7 @@ func TestAsofUnorderedIndexPromotesAfterAmortizationAndReusesAllocation(t *testi
 	leftTimestamps[0] = rowCount - 1
 	left := batch.NewWithSize(2)
 	left.Vecs[0] = testutil.MakeInt32Vector(leftKeys, nil, proc.Mp())
-	left.Vecs[1] = vector.NewVec(timeType)
+	left.Vecs[1] = vector.NewVec(timeType, proc.Mp())
 	require.NoError(t, vector.AppendFixedList(left.Vecs[1], leftTimestamps, nil, proc.Mp()))
 	left.SetRowCount(probeRows)
 
@@ -2046,7 +2103,7 @@ func TestAsofUnorderedIndexPromotesAfterAmortizationAndReusesAllocation(t *testi
 	}
 	right := batch.NewWithSize(2)
 	right.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
-	right.Vecs[1] = vector.NewVec(timeType)
+	right.Vecs[1] = vector.NewVec(timeType, proc.Mp())
 	require.NoError(t, vector.AppendFixedList(right.Vecs[1], timestamps, nil, proc.Mp()))
 	right.SetRowCount(rowCount)
 
@@ -2107,6 +2164,7 @@ func TestAsofUnorderedIndexPromotesAfterAmortizationAndReusesAllocation(t *testi
 	arg.ctr.leftBat = nil
 	arg.ctr.rightBats = nil
 	arg.Free(proc, false, nil)
+	freeTestChildren(arg)
 	left.Clean(proc.Mp())
 	right.Clean(proc.Mp())
 	proc.Free()
@@ -2143,7 +2201,7 @@ func TestAsofSortedIndexAllocationFailureKeepsLinearState(t *testing.T) {
 	require.NoError(t, arg.SetAllocationAccount(account))
 
 	right := batch.NewWithSize(1)
-	right.Vecs[0] = vector.NewVec(types.T_timestamp.ToType())
+	right.Vecs[0] = vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(
 		right.Vecs[0], []types.Timestamp{3, 1, 2}, nil, proc.Mp(),
 	))
@@ -2202,7 +2260,7 @@ func benchmarkAsofUnorderedGroupLookup(b *testing.B, rowCount, stride int) {
 		timestamps[i] = types.Timestamp((i * stride) % rowCount)
 	}
 	right := batch.NewWithSize(2)
-	right.Vecs[1] = vector.NewVec(types.T_timestamp.ToType())
+	right.Vecs[1] = vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
 	if err := vector.AppendFixedList(right.Vecs[1], timestamps, nil, proc.Mp()); err != nil {
 		b.Fatal(err)
 	}
@@ -2289,6 +2347,7 @@ func TestAsofIndexMetadataGrowsAmortizedAndCleans(t *testing.T) {
 	arg.ctr.leftBat = nil
 	arg.ctr.rightBats = nil
 	arg.Free(proc, false, nil)
+	freeTestChildren(arg)
 	left.Clean(proc.Mp())
 	right.Clean(proc.Mp())
 	proc.Free()
@@ -2439,6 +2498,7 @@ func resetChildren(arg *HashJoin, m *mpool.MPool) {
 
 func resetChildrenWithBatch(arg *HashJoin, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	freeTestChildren(arg)
 	arg.Children = nil
 	arg.AppendChild(op)
 }
@@ -2449,6 +2509,7 @@ func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
 
 func resetHashBuildChildrenWithBatch(arg *hashbuild.HashBuild, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	freeTestChildren(arg)
 	arg.Children = nil
 	arg.AppendChild(op)
 }

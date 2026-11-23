@@ -208,7 +208,7 @@ func BenchmarkIntegerWideningCastPipeline(b *testing.B) {
 				}
 				// The fixture uses the real cast dispatcher and arithmetic kernel, with
 				// reused result wrappers just as in expression evaluation.
-				input := vector.NewVec(sourceOID.ToType())
+				input := vector.NewVec(sourceOID.ToType(), proc.Mp())
 				b.Cleanup(func() { input.Free(proc.Mp()) })
 				for row := 0; row < rows; row++ {
 					n := row%7 + 1
@@ -230,7 +230,7 @@ func BenchmarkIntegerWideningCastPipeline(b *testing.B) {
 					}
 					require.NoError(b, err)
 				}
-				target := vector.NewVec(targetOID.ToType())
+				target := vector.NewVec(targetOID.ToType(), proc.Mp())
 				b.Cleanup(func() { target.Free(proc.Mp()) })
 				cast := vector.NewFunctionResultWrapper(targetOID.ToType(), proc.Mp())
 				b.Cleanup(cast.Free)

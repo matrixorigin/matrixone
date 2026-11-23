@@ -384,7 +384,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		logutil.Infof("IVFFLAT END: pick sample")
 
 		if len(res.Batches) == 0 {
-			u.batch = tf.createResultBatch()
+			u.batch = tf.createResultBatch(proc.Mp())
 			u.inited = true
 			return nil
 		}
@@ -448,7 +448,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		// reset slice
 		u.offset = 0
 
-		u.batch = tf.createResultBatch()
+		u.batch = tf.createResultBatch(proc.Mp())
 		u.inited = true
 		//os.Stderr.WriteString(fmt.Sprintf("nsample %d, train_percent %f, iter %d\n", u.nsample, train_percent, u.idxcfg.Ivfflat.KmeansMaxIteration))
 		// cleanup the batch

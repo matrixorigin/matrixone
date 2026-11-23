@@ -101,7 +101,7 @@ func TestTableChangesStartRejectsInvalidArguments(t *testing.T) {
 	defer proc.Free()
 
 	makeString := func(value string) *vector.Vector {
-		v := vector.NewVec(types.T_varchar.ToType())
+		v := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(v, []byte(value), false, proc.Mp()))
 		return v
 	}
@@ -119,12 +119,12 @@ func TestTableChangesStartRejectsInvalidArguments(t *testing.T) {
 		want  string
 	}{
 		{name: "database null", index: 0, make: func() *vector.Vector {
-			v := vector.NewVec(types.T_varchar.ToType())
+			v := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendBytes(v, nil, true, proc.Mp()))
 			return v
 		}, want: "database name cannot be NULL"},
 		{name: "table type", index: 1, make: func() *vector.Vector {
-			v := vector.NewVec(types.T_int64.ToType())
+			v := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixed(v, int64(1), false, proc.Mp()))
 			return v
 		}, want: "table name must be a string"},
@@ -182,7 +182,7 @@ func TestTableChangesStateLifecycleAndAlreadyCalled(t *testing.T) {
 	tf := &TableFunction{Attrs: []string{"value"}, ctr: container{
 		retSchema: []types.Type{types.T_varchar.ToType()},
 	}}
-	state := &tableChangesState{batch: tf.createResultBatch()}
+	state := &tableChangesState{batch: tf.createResultBatch(proc.Mp())}
 	state.handle = mock_frontend.NewMockChangesHandle(ctrl)
 	state.handle.(*mock_frontend.MockChangesHandle).EXPECT().Close().Return(nil)
 	require.NoError(t, state.end(tf, proc))
@@ -216,7 +216,7 @@ func TestTableChangesStartStopsBeforeEngineLookup(t *testing.T) {
 	proc.Base.TxnOperator = txnOp
 	args := make([]*vector.Vector, 4)
 	for i, value := range []string{"db", "table", "", "100-0"} {
-		args[i] = vector.NewVec(types.T_varchar.ToType())
+		args[i] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(args[i], []byte(value), false, proc.Mp()))
 		defer args[i].Free(proc.Mp())
 	}
@@ -268,8 +268,8 @@ func TestTableChangesStartAndCallSuccess(t *testing.T) {
 	).Return(handle, nil)
 
 	data := batch.NewWithSize(2)
-	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	data.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	data.Vecs[1] = vector.NewVec(types.T_TS.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(data.Vecs[0], int64(11), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(data.Vecs[1], until, false, proc.Mp()))
 	data.SetRowCount(1)
@@ -283,7 +283,7 @@ func TestTableChangesStartAndCallSuccess(t *testing.T) {
 
 	args := make([]*vector.Vector, 4)
 	for i, value := range []string{"db", "t", after.ToString(), until.ToString()} {
-		args[i] = vector.NewVec(types.T_varchar.ToType())
+		args[i] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(args[i], []byte(value), false, proc.Mp()))
 		defer args[i].Free(proc.Mp())
 	}
@@ -377,7 +377,7 @@ func TestValidateRuntimeTableChangesSourceContracts(t *testing.T) {
 
 func TestRequiredTableChangesString(t *testing.T) {
 	proc := testutil.NewProc(t)
-	stringsVec := vector.NewVec(types.T_varchar.ToType())
+	stringsVec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(stringsVec, []byte("value"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(stringsVec, nil, true, proc.Mp()))
 	defer stringsVec.Free(proc.Mp())
@@ -390,7 +390,7 @@ func TestRequiredTableChangesString(t *testing.T) {
 	_, err = requiredTableChangesString(proc, nil, 0, "argument")
 	require.ErrorContains(t, err, "cannot be NULL")
 
-	intVec := vector.NewVec(types.T_int64.ToType())
+	intVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(intVec, int64(1), false, proc.Mp()))
 	defer intVec.Free(proc.Mp())
 	_, err = requiredTableChangesString(proc, intVec, 0, "argument")
@@ -420,15 +420,15 @@ func TestTableChangesAppendInsertAndDeleteRows(t *testing.T) {
 		types.T_uint64.ToType(), types.T_uint32.ToType(),
 		types.T_int64.ToType(), types.T_varchar.ToType(),
 	} {
-		state.batch.Vecs[idx] = vector.NewVec(typ)
+		state.batch.Vecs[idx] = vector.NewVec(typ, proc.Mp())
 	}
 	defer state.batch.Clean(proc.Mp())
 
 	commitTS := types.BuildTS(10, 2)
 	inserts := batch.NewWithSize(3)
-	inserts.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	inserts.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-	inserts.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	inserts.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	inserts.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+	inserts.Vecs[2] = vector.NewVec(types.T_TS.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(inserts.Vecs[0], int64(1), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(inserts.Vecs[1], []byte("inserted"), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(inserts.Vecs[2], commitTS, false, proc.Mp()))
@@ -437,8 +437,8 @@ func TestTableChangesAppendInsertAndDeleteRows(t *testing.T) {
 	inserts.Clean(proc.Mp())
 
 	deletes := batch.NewWithSize(2)
-	deletes.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	deletes.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	deletes.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	deletes.Vecs[1] = vector.NewVec(types.T_TS.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(deletes.Vecs[0], int64(2), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(deletes.Vecs[1], commitTS.Next(), false, proc.Mp()))
 	deletes.SetRowCount(1)
@@ -464,12 +464,12 @@ func TestTableChangesDeleteKeyNamesAreCaseInsensitive(t *testing.T) {
 		},
 		batch: batch.NewWithSize(1),
 	}
-	state.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	state.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer state.batch.Clean(proc.Mp())
 
 	deletes := batch.NewWithSize(2)
-	deletes.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	deletes.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	deletes.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	deletes.Vecs[1] = vector.NewVec(types.T_TS.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(deletes.Vecs[0], int64(7), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(deletes.Vecs[1], types.BuildTS(10, 2), false, proc.Mp()))
 	deletes.SetRowCount(1)
@@ -486,8 +486,8 @@ func TestTableChangesDeleteKeyValuesCompositeAndMalformed(t *testing.T) {
 	packer := types.NewPacker()
 	packer.EncodeInt64(11)
 	packer.EncodeStringType([]byte("value"))
-	keyVec := vector.NewVec(types.T_varbinary.ToType())
 	proc := testutil.NewProc(t)
+	keyVec := vector.NewVec(types.T_varbinary.ToType(), proc.Mp())
 	defer proc.Free()
 	defer keyVec.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(keyVec, packer.GetBuf(), false, proc.Mp()))
@@ -496,7 +496,7 @@ func TestTableChangesDeleteKeyValuesCompositeAndMalformed(t *testing.T) {
 	require.Equal(t, int64(11), values["parta"])
 	require.Equal(t, "value", string(values["partb"].([]byte)))
 
-	bad := vector.NewVec(types.T_varbinary.ToType())
+	bad := vector.NewVec(types.T_varbinary.ToType(), proc.Mp())
 	defer bad.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(bad, []byte{1, 2, 3}, false, proc.Mp()))
 	_, err = state.deleteKeyValues(bad, 0)
@@ -569,7 +569,7 @@ func (h *errorWithBatchChangesHandle) Next(
 	mp *mpool.MPool,
 ) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
 	data := batch.NewWithSize(1)
-	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	if err := vector.AppendFixed(data.Vecs[0], int64(1), false, mp); err != nil {
 		return data, nil, engine.ChangesHandle_Tail_done, err
 	}

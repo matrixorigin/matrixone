@@ -3760,6 +3760,9 @@ func resetPreparePlan(
 				}
 			}
 		}
+		if transientQuery != nil {
+			subqueryRoots.pending = append(subqueryRoots.pending, transientQuery.Steps...)
+		}
 		visitedRoots := make(map[int32]struct{})
 		for len(subqueryRoots.pending) > 0 {
 			root := subqueryRoots.pending[0]
@@ -3808,6 +3811,7 @@ func resetPreparePlan(
 			querySchemas = appendPrepareSchemas(
 				querySchemas, transientQuery.GetCatalogDependencies()...)
 		}
+		querySchemas = appendPrepareSchemas(nil, querySchemas...)
 		return querySchemas, getParamRule.paramTypes, nil
 	}
 
@@ -7717,6 +7721,18 @@ func preparedSetOperationCommonType(
 		// operator or spool; a consumer can still treat every value as NULL.
 		original := makeTypeByPlan2Expr(&plan.Expr{Typ: currentOutputType})
 		return original, original.Oid != types.T_any, nil
+	}
+	// Recompute the string domain and bound when EXECUTE replaces provisional
+	// input types. A raw binary-character output still belongs to the original
+	// grouping or expression producer rather than a materialized set column.
+	oldType := makeTypeByPlan2Type(currentOutputType)
+	if oldType.Oid.IsMySQLString() && !function.IsBinaryCharacterType(oldType) &&
+		slices.ContainsFunc(argTypes, function.IsBinaryCharacterType) {
+		target, err := setOperationMaterializedStringType(ctx, argExprs, currentOutputType)
+		if err != nil {
+			return types.Type{}, false, err
+		}
+		return makeTypeByPlan2Type(target), true, nil
 	}
 	if pureCharType, ok := setOperationPureCharCommonType(argTypes); ok {
 		return pureCharType, true, nil

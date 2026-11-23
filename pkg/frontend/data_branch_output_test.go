@@ -705,7 +705,7 @@ func TestMaterializeDiffOutputAsTable_InsertFailureDropsDestination(t *testing.T
 	tblStuff.retPool = &retBatchList{}
 	tblStuff.bufPool = &sync.Pool{New: func() any { return &bytes.Buffer{} }}
 
-	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false, mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 	bat.SetRowCount(1)
 	defer tblStuff.retPool.freeAllRetBatches(mp)
@@ -781,7 +781,7 @@ func TestMaterializeDiffOutputAsTable_PreservesTimestampInstants(t *testing.T) {
 	bat := batch.NewWithSize(len(tblStuff.def.colTypes))
 	defer bat.Clean(mp)
 	for i, typ := range tblStuff.def.colTypes {
-		bat.Vecs[i] = vector.NewVec(typ)
+		bat.Vecs[i] = vector.NewVec(typ, mp)
 	}
 	parse := func(zone *time.Location, literal string) types.Timestamp {
 		t.Helper()
@@ -917,7 +917,7 @@ func TestDataBranchOutputAsTablePhase_BlocksOutputSQLUntilProducerCompletes(t *t
 	tblStuff.def.colNames = []string{"id"}
 	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType()}
 	tblStuff.def.pkColIdx = 0
-	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false, mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 	bat.SetRowCount(1)
 	defer tblStuff.retPool.freeAllRetBatches(mp)
@@ -969,8 +969,8 @@ func TestDataBranchOutputSpool_RoundTrip(t *testing.T) {
 	}()
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_blob.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_blob.ToType(), ses.proc.Mp())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, ses.proc.Mp()))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte{0, '\'', '\\', 0xff}, false, ses.proc.Mp()))
 	bat.SetRowCount(1)
@@ -1300,7 +1300,7 @@ func TestDataBranchOutputLimitBoundaries(t *testing.T) {
 
 			ctrl := gomock.NewController(t)
 			tblStuff := newTestBranchTableStuff(ctrl)
-			bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+			bat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 			t.Cleanup(func() {
 				tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 			})
@@ -1359,7 +1359,7 @@ func TestDataBranchOutputLimitUsesFinalPKOrder(t *testing.T) {
 
 			retCh := make(chan batchWithKind, len(tt.ids))
 			for _, id := range tt.ids {
-				bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+				bat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], id, false, ses.proc.Mp()))
 				require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte{byte(id)}, false, ses.proc.Mp()))
 				require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("hidden"), false, ses.proc.Mp()))
@@ -1427,7 +1427,7 @@ func TestDataBranchOutputColumnsIncludeCompositePrimaryKey(t *testing.T) {
 		require.Equal(t, name, col.Name())
 	}
 
-	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, ses.proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, ses.proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(19), false, ses.proc.Mp()))
@@ -1477,7 +1477,7 @@ func BenchmarkDataBranchOutputLimitWideRows(b *testing.B) {
 	for range b.N {
 		b.StopTimer()
 		ses.SetMysqlResultSet(&MysqlResultSet{})
-		bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+		bat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 		// The first row is the final LIMIT 1 winner. The remaining ascending
 		// keys isolate the cost of rejecting wide payloads.
 		for id := range rowCount {
@@ -1702,7 +1702,7 @@ func TestDataBranchOutputShouldDiffAsCSV(t *testing.T) {
 
 		bat := batch.NewWithSize(1)
 		defer bat.Clean(mp)
-		bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed[uint64](bat.Vecs[0], 3, false, mp))
 		bat.SetRowCount(1)
 
@@ -1720,7 +1720,7 @@ func TestDataBranchOutputShouldDiffAsCSV(t *testing.T) {
 
 		bat := batch.NewWithSize(1)
 		defer bat.Clean(mp)
-		bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed[uint64](bat.Vecs[0], 0, false, mp))
 		bat.SetRowCount(1)
 
@@ -1745,8 +1745,8 @@ func TestSubmitCSVBatchForConversionReturnsCopyErrorBeforeSubmit(t *testing.T) {
 		mpool.DeleteMPool(dstMP)
 	})
 
-	bat := batch.NewOffHeapWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType(), srcMP)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], make([]byte, 2<<20), false, srcMP))
 	bat.SetRowCount(1)
 	t.Cleanup(func() {
@@ -1780,8 +1780,8 @@ func TestSubmitCSVBatchForConversionCleansCopyOnSubmitError(t *testing.T) {
 		mpool.DeleteMPool(dstMP)
 	})
 
-	bat := batch.NewOffHeapWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType(), srcMP)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("value"), false, srcMP))
 	bat.SetRowCount(1)
 	t.Cleanup(func() {
@@ -3550,8 +3550,8 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 
 		bat := batch.NewWithSize(2)
 		bat.SetAttributes([]string{"id", "name"})
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), ses.proc.Mp())
 		defer bat.Clean(ses.proc.Mp())
 
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, ses.proc.Mp()))
@@ -3756,9 +3756,9 @@ func buildFakePKComparisonBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *ba
 
 	bat := batch.NewWithSize(3)
 	bat.SetAttributes([]string{"id", "name", "__mo_fake_pk_col"})
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType(), mp)
 
 	for _, row := range rows {
 		require.Len(t, row, 3)
@@ -3775,9 +3775,9 @@ func buildFakePKInsertBatchWithoutFakePKValue(t *testing.T, mp *mpool.MPool, row
 
 	bat := batch.NewWithSize(3)
 	bat.SetAttributes([]string{"id", "name", "__mo_fake_pk_col"})
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType(), mp)
 
 	for _, row := range rows {
 		require.Len(t, row, 2)
@@ -3827,7 +3827,7 @@ func TestOnlineBranchApplyOrdersPreparationProductionAndCleanup(t *testing.T) {
 					produced = true
 					require.Equal(t, 3, creates)
 					for _, fromUpdate := range []bool{false, true} {
-						bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+						bat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 						require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, ses.proc.Mp()))
 						for _, vec := range bat.Vecs[1:] {
 							require.NoError(t, vector.AppendBytes(vec, []byte("row"), false, ses.proc.Mp()))

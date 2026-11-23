@@ -65,6 +65,7 @@ func jsonDepthCheckFn(_ []overload, inputs []types.Type) checkResult {
 // accepted and is handled by the ordinary strict-function NULL path.
 func jsonDepthCheckPreparedInput(
 	input *vector.Vector,
+	inputIsBin bool,
 	proc *process.Process,
 	length int,
 	selectList *FunctionSelectList,
@@ -85,7 +86,7 @@ func jsonDepthCheckPreparedInput(
 			continue
 		}
 
-		if isBinaryStringVector(input) {
+		if isBinaryStringVector(input, inputIsBin) {
 			return jsonDepthInvalidBinary(proc)
 		}
 		if !jsonDepthTypeSupported(*input.GetType()) {
@@ -102,7 +103,7 @@ func JsonDepth(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
-	if err := jsonDepthCheckPreparedInput(ivecs[0], proc, length, selectList); err != nil {
+	if err := jsonDepthCheckPreparedInput(ivecs[0], result.ArgumentIsBin(0), proc, length, selectList); err != nil {
 		return err
 	}
 	checkCancelled := func() error {

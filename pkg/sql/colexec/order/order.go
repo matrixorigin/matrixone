@@ -262,7 +262,28 @@ func (ctr *container) shouldSortCurrentRun() (bool, error) {
 	return peak > limit, nil
 }
 
+// runMP is the pool the buffered run (batWaitForSort, rbat) is created and
+// grown with: the retained view of the operator's own pool when an account
+// is bound, otherwise the own pool itself.
+func (ctr *container) runMP() *mpool.MPool {
+	if ctr.retainedAllocation != nil {
+		return ctr.retainedAllocation
+	}
+	return ctr.bufMP
+}
+
+// ensureBufMP creates the operator's own pool for the buffered run.
+func (ctr *container) ensureBufMP(proc *process.Process) (err error) {
+	if ctr.bufMP == nil {
+		ctr.bufMP, err = colexec.NewOperatorMPool(proc, "order")
+	}
+	return err
+}
+
 func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enoughToSend bool, err error) {
+	if err = ctr.ensureBufMP(proc); err != nil {
+		return false, err
+	}
 	if len(bat.ExtraBuf) != 0 {
 		return false, moerr.NewInternalError(proc.Ctx,
 			"order build should not have extra buffers")
@@ -273,11 +294,14 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 	}
 	all := s1 + s2
 
-	if ctr.batWaitForSort == nil && ctr.retainedAllocation != nil {
+	if err = ctr.allocationViews(ctr.bufMP); err != nil {
+		return false, err
+	}
+	if ctr.batWaitForSort == nil && ctr.allocationAccount != nil {
 		ctr.batWaitForSort, err = proc.NewBatchFromSrcWithAllocation(
 			bat,
 			0,
-			ctr.retainedAllocation,
+			ctr.runMP(),
 		)
 		if err != nil {
 			return false, err
@@ -288,10 +312,10 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 		ctr.batWaitForSort.ShuffleIDX = bat.ShuffleIDX
 	}
 	if ctr.batWaitForSort == nil {
-		ctr.batWaitForSort, err = bat.Dup(proc.Mp())
+		ctr.batWaitForSort, err = bat.Dup(ctr.runMP())
 	} else if ctr.allocationAccount == nil {
 		ctr.batWaitForSort, err = ctr.batWaitForSort.AppendWithCopy(
-			proc.Ctx, proc.Mp(), bat)
+			proc.Ctx, ctr.runMP(), bat)
 	} else {
 		err = ctr.appendBatchAccounted(proc, bat)
 	}
@@ -321,15 +345,8 @@ func (ctr *container) appendBatchAccounted(
 		checkpoints[i] = ctr.batWaitForSort.Vecs[i].MakeAppendCheckpoint()
 	}
 	for i := range ctr.batWaitForSort.Vecs {
-		if ctr.recoveryCapacityActive {
-			err = ctr.batWaitForSort.Vecs[i].UnionBatchWithAllocationAccount(
-				bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.Mp(),
-				ctr.recoveryAllocation,
-			)
-		} else {
-			err = ctr.batWaitForSort.Vecs[i].UnionBatch(
-				bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.Mp())
-		}
+		err = ctr.batWaitForSort.Vecs[i].UnionBatch(
+			bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, ctr.runMP())
 		if err != nil {
 			for j := range ctr.batWaitForSort.Vecs {
 				err = vector.JoinAppendRollbackError(err, ctr.batWaitForSort.Vecs[j].RollbackAppend(checkpoints[j], bat.Vecs[j].Length()))
@@ -410,15 +427,10 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 			)
 		}
 
-		if ctr.finalizationAllocation == nil {
-			err = ctr.batWaitForSort.Shuffle(ctr.resultOrderList, proc.Mp())
-		} else {
-			err = ctr.batWaitForSort.ShuffleWithAllocationAccount(
-				ctr.resultOrderList,
-				proc.Mp(),
-				ctr.finalizationAllocation,
-			)
+		if err = ctr.allocationViews(ctr.bufMP); err != nil {
+			return err
 		}
+		err = ctr.batWaitForSort.Shuffle(ctr.resultOrderList, ctr.runMP())
 		if err != nil {
 			return err
 		}
@@ -463,6 +475,9 @@ func (order *Order) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr := &order.ctr
+	if err = ctr.ensureBufMP(proc); err != nil {
+		return err
+	}
 	registeredGrowth := false
 	activatedRecovery := false
 	if ctr.allocationAccount != nil && ctr.growthParticipant == nil {
@@ -510,6 +525,11 @@ func (order *Order) Prepare(proc *process.Process) (err error) {
 		for i := range order.OrderBySpec {
 			planExprs[i] = order.OrderBySpec[i].Expr
 		}
+		if err = ctr.allocationViews(ctr.bufMP); err != nil {
+			ctr.desc = nil
+			ctr.nullsLast = nil
+			return err
+		}
 		ctr.sortExprExecutor, err =
 			colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(
 				proc,
@@ -539,7 +559,7 @@ func (order *Order) Call(proc *process.Process) (
 
 	ctr := &order.ctr
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.GetMPool())
+		ctr.rbat.Clean(ctr.runMP())
 		ctr.rbat = nil
 		if err = ctr.trimRecoveryCapacity(); err != nil {
 			return vm.CancelResult, orderTerminalCapacityError(proc.Ctx, err)

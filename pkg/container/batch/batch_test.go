@@ -20,6 +20,8 @@ import (
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -178,7 +180,7 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 func TestBatchWindowBroadcastsScalarConstants(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewWithSize(3)
-	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(
 		source.Vecs[0], []int64{10, 20, 30, 40}, nil, mp,
 	))
@@ -206,13 +208,13 @@ func TestBatchWindowBroadcastsScalarConstants(t *testing.T) {
 	require.Equal(t, int64(7), vector.GetFixedAtWithTypeCheck[int64](window.Vecs[1], 1))
 	require.True(t, window.Vecs[2].IsConstNull())
 	require.Equal(t, 2, window.Vecs[2].Length())
-	window.Clean(nil)
+	window.FreeWindow()
 }
 
 func TestBatchWindowRejectsMissingRowMetadata(t *testing.T) {
 	mp := mpool.MustNewZero()
 	for _, vec := range []*vector.Vector{
-		vector.NewVec(types.T_int64.ToType()),
+		vector.NewVec(types.T_int64.ToType(), mp),
 		vector.NewConstNull(types.T_int64.ToType(), 0, mp),
 		vector.NewRollupConst(types.T_int64.ToType(), 1, mp),
 	} {
@@ -281,7 +283,7 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 
 	source := NewWithSize(1)
 	source.Attrs = []string{"value"}
-	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, mp))
 	source.SetRowCount(1)
 
@@ -318,7 +320,7 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 		} {
 			corrupted := append([]byte(nil), data...)
 			mutate(corrupted)
-			target := NewOffHeapEmpty()
+			target := NewWithSize(0)
 			var unmarshalErr error
 			require.NotPanics(t, func() {
 				unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
@@ -336,7 +338,7 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 		vectorLengthOffset := 16 + 1 + types.TSize
 		copy(corrupted[vectorLengthOffset:vectorLengthOffset+4], types.EncodeUint32(&vectorLength))
 
-		target := NewOffHeapEmpty()
+		target := NewWithSize(0)
 		var unmarshalErr error
 		require.NotPanics(t, func() {
 			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
@@ -356,7 +358,7 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 		vectorTypeSizeOffset := 16 + 1 + 4
 		copy(corrupted[vectorTypeSizeOffset:vectorTypeSizeOffset+4], types.EncodeInt32(&forgedTypeSize))
 
-		target := NewOffHeapEmpty()
+		target := NewWithSize(0)
 		var unmarshalErr error
 		require.NotPanics(t, func() {
 			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
@@ -367,7 +369,7 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 	})
 	t.Run("invalid_null_bitmap_metadata", func(t *testing.T) {
 		source := NewWithSize(1)
-		source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(0), true, mp))
 		source.SetRowCount(1)
 		corrupted, err := source.MarshalBinary()
@@ -385,7 +387,7 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 		copy(corrupted[nspDataOffset+8:nspDataOffset+16], types.EncodeUint64(&bitmapLen))
 		copy(corrupted[nspDataOffset+16:nspDataOffset+24], types.EncodeUint64(&bitmapDataLen))
 
-		target := NewOffHeapEmpty()
+		target := NewWithSize(0)
 		var unmarshalErr error
 		require.NotPanics(t, func() {
 			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
@@ -396,7 +398,7 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 	})
 	t.Run("varlen_offsets_must_stay_within_area", func(t *testing.T) {
 		source := NewWithSize(1)
-		source.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		source.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(source.Vecs[0], bytes.Repeat([]byte("x"), types.VarlenaInlineSize+1), false, mp))
 		source.SetRowCount(1)
 		corrupted, err := source.MarshalBinary()
@@ -408,7 +410,7 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 		invalidAreaOffset := uint32(len(corrupted))
 		copy(corrupted[varlenaOffset+4:varlenaOffset+8], types.EncodeUint32(&invalidAreaOffset))
 
-		target := NewOffHeapEmpty()
+		target := NewWithSize(0)
 		var unmarshalErr error
 		require.NotPanics(t, func() {
 			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
@@ -431,8 +433,8 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 	})
 
 	t.Run("owned_vector", func(t *testing.T) {
-		target := NewOffHeapWithSize(1)
-		target.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		target := NewWithSize(1)
+		target.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(target.Vecs[0], int64(-1), false, mp))
 		require.Positive(t, mp.CurrNB())
 
@@ -446,13 +448,13 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 func TestBatchUnmarshalPreservesIndependentRowCount(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewWithSize(1)
-	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	source.SetRowCount(1)
 	encoded, err := source.MarshalBinary()
 	require.NoError(t, err)
 	source.Clean(mp)
 
-	target := NewOffHeapEmpty()
+	target := NewWithSize(0)
 	require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
 	require.Equal(t, 1, target.RowCount())
 	require.Zero(t, target.Vecs[0].Length())
@@ -463,14 +465,14 @@ func TestBatchUnmarshalPreservesIndependentRowCount(t *testing.T) {
 func TestBatchUnmarshalPreservesShortNonEmptyVector(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewWithSize(1)
-	source.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_binary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("object stats"), false, mp))
 	source.SetRowCount(6)
 	encoded, err := source.MarshalBinary()
 	require.NoError(t, err)
 	source.Clean(mp)
 
-	target := NewOffHeapEmpty()
+	target := NewWithSize(0)
 	require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
 	require.Equal(t, 6, target.RowCount())
 	require.Equal(t, 1, target.Vecs[0].Length())
@@ -483,7 +485,7 @@ func TestBatchUnmarshalRetainsRowCountWhenVectorCountChanges(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewWithSize(2)
 	for i := range source.Vecs {
-		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		source.Vecs[i] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
 	}
 	source.SetRowCount(1)
@@ -491,8 +493,8 @@ func TestBatchUnmarshalRetainsRowCountWhenVectorCountChanges(t *testing.T) {
 	require.NoError(t, err)
 	source.Clean(mp)
 
-	target := NewOffHeapWithSize(1)
-	target.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	target := NewWithSize(1)
+	target.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(target.Vecs[0], int64(-1), false, mp))
 
 	require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
@@ -504,40 +506,13 @@ func TestBatchUnmarshalRetainsRowCountWhenVectorCountChanges(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestBatchUnmarshalRejectsOwnedVectorCountChangeWithoutMpool(t *testing.T) {
-	mp := mpool.MustNewZero()
-	source := NewWithSize(2)
-	for i := range source.Vecs {
-		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
-		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
-	}
-	source.SetRowCount(1)
-	encoded, err := source.MarshalBinary()
-	require.NoError(t, err)
-	source.Clean(mp)
-
-	target := NewWithSize(1)
-	target.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixed(target.Vecs[0], int64(-1), false, mp))
-	t.Cleanup(func() {
-		target.Clean(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	})
-
-	var unmarshalErr error
-	require.NotPanics(t, func() {
-		unmarshalErr = target.UnmarshalBinary(encoded)
-	})
-	require.Error(t, unmarshalErr)
-}
-
 func TestBatchUnmarshalSeparatesAliasedReuseVectors(t *testing.T) {
 	for _, columnCount := range []int{2, 3, 64, 65} {
 		t.Run(fmt.Sprintf("%d_columns", columnCount), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			source := NewWithSize(columnCount)
 			for i := range source.Vecs {
-				source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+				source.Vecs[i] = vector.NewVec(types.T_int64.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
 			}
 			source.SetRowCount(1)
@@ -545,8 +520,8 @@ func TestBatchUnmarshalSeparatesAliasedReuseVectors(t *testing.T) {
 			require.NoError(t, err)
 			source.Clean(mp)
 
-			target := NewOffHeapWithSize(columnCount)
-			shared := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			target := NewWithSize(columnCount)
+			shared := vector.NewVec(types.T_int64.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(shared, int64(-1), false, mp))
 			for i := range target.Vecs {
 				target.Vecs[i] = shared
@@ -571,7 +546,7 @@ func TestBatchUnmarshalSeparatesBorrowedAliasedReuseVectorsWithoutMpool(t *testi
 	mp := mpool.MustNewZero()
 	source := NewWithSize(2)
 	for i := range source.Vecs {
-		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		source.Vecs[i] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
 	}
 	source.SetRowCount(1)
@@ -579,14 +554,14 @@ func TestBatchUnmarshalSeparatesBorrowedAliasedReuseVectorsWithoutMpool(t *testi
 	require.NoError(t, err)
 	source.Clean(mp)
 
-	seed := vector.NewVec(types.T_int64.ToType())
+	seed := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(seed, int64(-1), false, mp))
 	seedData, err := seed.MarshalBinary()
 	require.NoError(t, err)
 	seed.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 
-	shared := vector.NewVecFromReuse()
+	shared := new(vector.Vector)
 	require.NoError(t, shared.UnmarshalBinary(seedData))
 	target := NewWithSize(2)
 	target.Vecs[0] = shared
@@ -603,14 +578,15 @@ func TestBatchUnmarshalSeparatesBorrowedAliasedReuseVectorsWithoutMpool(t *testi
 
 func TestBatchShrink(t *testing.T) {
 	bat := newBatch([]types.Type{types.T_int8.ToType()}, 4)
-	require.NoError(t, bat.Shrink([]int64{0}, true, nil))
+	mp := bat.Vecs[0].MPool()
+	require.NoError(t, bat.Shrink([]int64{0}, true, mp))
 	require.Equal(t, 3, bat.rowCount)
-	require.NoError(t, bat.Shrink([]int64{0, 2}, false, nil))
+	require.NoError(t, bat.Shrink([]int64{0, 2}, false, mp))
 	require.Equal(t, 2, bat.rowCount)
 }
 
 func TestBatch_ReplaceVector(t *testing.T) {
-	v1, v2, v3 := vector.NewVecFromReuse(), vector.NewVecFromReuse(), vector.NewVecFromReuse()
+	v1, v2, v3 := new(vector.Vector), new(vector.Vector), new(vector.Vector)
 	bat := &Batch{
 		Vecs: []*vector.Vector{
 			v1,
@@ -642,7 +618,7 @@ func newBatch(ts []types.Type, rows int) *Batch {
 	for i, typ := range ts {
 		switch typ.Oid {
 		case types.T_int8:
-			vec := vector.NewVec(typ)
+			vec := vector.NewVec(typ, mp)
 			err := vec.PreExtend(rows, mp)
 			if err != nil {
 				panic(err)
@@ -665,12 +641,12 @@ func TestBatch_UnionOne(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	bat1 := NewWithSize(2)
-	bat1.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat1.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 
 	bat2 := NewWithSize(2)
-	bat2.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat2.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 
 	for i := 0; i < 100; i++ {
 		vector.AppendFixed[int32](bat2.Vecs[0], int32(i), false, mp)
@@ -734,7 +710,7 @@ func requireStringValues(t *testing.T, vec *vector.Vector, values ...string) {
 func TestTransportDecoderDropsLegacyV1Trailer(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewWithSize(1)
-	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
 	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("6"), false, mp))
 	source.SetRowCount(2)
@@ -748,7 +724,7 @@ func TestTransportDecoderDropsLegacyV1Trailer(t *testing.T) {
 	require.Equal(t, legacy, plain, "writers never emit the transport trailer")
 
 	encoded := legacyV1TransportWire(t, legacy, legacyV1Rows(batchMetadataBinaryFlag, 0))
-	decoded := NewOffHeapEmpty()
+	decoded := NewWithSize(0)
 	require.NoError(t, decoded.UnmarshalBinaryWithMetadata(encoded, mp))
 	requireStringValues(t, decoded.Vecs[0], "5", "6")
 	require.NoError(t, decoded.UnmarshalFromReaderWithMetadata(
@@ -760,7 +736,7 @@ func TestTransportDecoderDropsLegacyV1Trailer(t *testing.T) {
 	olderWriter := legacyV2TransportWire(t, encoded,
 		legacyRowsStringSource(types.StringSourceCOMStmt, types.StringSourceSQLPrepare))
 	require.Equal(t, batchMetadataVersion, olderWriter[len(legacy)+3])
-	olderDecoded := NewOffHeapEmpty()
+	olderDecoded := NewWithSize(0)
 	require.NoError(t, olderDecoded.UnmarshalBinaryWithMetadata(olderWriter, mp))
 	requireStringValues(t, olderDecoded.Vecs[0], "5", "6")
 	require.NoError(t, olderDecoded.UnmarshalFromReaderWithMetadata(
@@ -771,11 +747,11 @@ func TestTransportDecoderDropsLegacyV1Trailer(t *testing.T) {
 	corrupt := append([]byte(nil), olderWriter...)
 	const sourceRowsOffset = 4 + 4 + 8 + 1 + 4 + 2 + 1 + 4
 	corrupt[len(legacy)+sourceRowsOffset] = 255
-	corruptDecoded := NewOffHeapEmpty()
+	corruptDecoded := NewWithSize(0)
 	require.ErrorContains(t,
 		corruptDecoded.UnmarshalBinaryWithMetadata(corrupt, mp),
 		"invalid string source metadata")
-	corruptDecoded = NewOffHeapEmpty()
+	corruptDecoded = NewWithSize(0)
 	require.ErrorContains(t,
 		corruptDecoded.UnmarshalFromReaderWithMetadata(bytes.NewReader(corrupt), int64(len(corrupt)), mp),
 		"invalid string source metadata")
@@ -787,21 +763,21 @@ func TestTransportDecoderDropsLegacyV1Trailer(t *testing.T) {
 	withKinds := append([]byte(nil), encoded...)
 	withKinds[len(legacy)+binaryRowsOffset] |= 2
 	withKinds[len(legacy)+binaryRowsOffset+1] |= 4
-	kindsDecoded := NewOffHeapEmpty()
+	kindsDecoded := NewWithSize(0)
 	require.NoError(t, kindsDecoded.UnmarshalBinaryWithMetadata(withKinds, mp))
 	requireStringValues(t, kindsDecoded.Vecs[0], "5", "6")
 	kindsDecoded.Clean(mp)
 	withKinds[len(legacy)+binaryRowsOffset+1] |= 5
-	kindsDecoded = NewOffHeapEmpty()
+	kindsDecoded = NewWithSize(0)
 	require.Error(t, kindsDecoded.UnmarshalBinaryWithMetadata(withKinds, mp))
 	kindsDecoded.Clean(mp)
 
 	// A row flagged both binary and text is malformed.
 	both := legacyV1TransportWire(t, legacy,
 		legacyV1Rows(batchMetadataBinaryFlag|batchMetadataTextFlag, 0))
-	bothDecoded := NewOffHeapEmpty()
+	bothDecoded := NewWithSize(0)
 	require.ErrorContains(t, bothDecoded.UnmarshalBinaryWithMetadata(both, mp), "mutually exclusive")
-	bothDecoded = NewOffHeapEmpty()
+	bothDecoded = NewWithSize(0)
 	require.ErrorContains(t, bothDecoded.UnmarshalFromReaderWithMetadata(
 		bytes.NewReader(both), int64(len(both)), mp), "mutually exclusive")
 	bothDecoded.Clean(mp)
@@ -833,12 +809,12 @@ func TestTransportDecoderDropsLegacyStringSourcesOnConstant(t *testing.T) {
 		require.True(t, decoded.Vecs[0].IsConst())
 		require.Equal(t, "value", decoded.Vecs[0].GetStringAt(1))
 	}
-	buffered := NewOffHeapEmpty()
+	buffered := NewWithSize(0)
 	require.NoError(t, buffered.UnmarshalBinaryWithMetadata(encoded, mp))
 	check(buffered)
 	buffered.Clean(mp)
 
-	streaming := NewOffHeapEmpty()
+	streaming := NewWithSize(0)
 	require.NoError(t, streaming.UnmarshalFromReaderWithMetadata(bytes.NewReader(encoded), int64(len(encoded)), mp))
 	check(streaming)
 	streaming.Clean(mp)
@@ -855,7 +831,7 @@ func TestLegacyStringSourcesDroppedByBatchAndGroupingCodecs(t *testing.T) {
 	}
 	values := []string{"v0", "v1", "v2", "v3", "v4"}
 	bat := NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, value := range values {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), false, mp))
 	}
@@ -871,7 +847,7 @@ func TestLegacyStringSourcesDroppedByBatchAndGroupingCodecs(t *testing.T) {
 	encoded := legacyV1TransportWire(t, stable, legacyV1Rows(
 		batchMetadataBinaryFlag, 0, batchMetadataBinaryFlag, 0, batchMetadataTextFlag))
 	encoded = legacyV2TransportWire(t, encoded, legacyRowsStringSource(sources...))
-	decoded := NewOffHeapEmpty()
+	decoded := NewWithSize(0)
 	require.NoError(t, decoded.UnmarshalBinaryWithMetadata(encoded, mp))
 	requireStringValues(t, decoded.Vecs[0], values...)
 	require.NoError(t, decoded.UnmarshalFromReaderWithMetadata(bytes.NewReader(encoded), int64(len(encoded)), mp))
@@ -880,7 +856,7 @@ func TestLegacyStringSourcesDroppedByBatchAndGroupingCodecs(t *testing.T) {
 
 	var wire bytes.Buffer
 	require.NoError(t, bat.MarshalBinaryWithGroupingTo(&wire))
-	grouped := NewOffHeapEmpty()
+	grouped := NewWithSize(0)
 	require.NoError(t, grouped.UnmarshalFromReaderWithGrouping(bytes.NewReader(wire.Bytes()), mp))
 	requireStringValues(t, grouped.Vecs[0], values...)
 	require.True(t, grouped.Vecs[0].GetGrouping().IsSame(bat.Vecs[0].GetGrouping()))
@@ -904,7 +880,7 @@ func TestTransportDropsLegacyVectorFlags(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewWithSize(3)
 	for i := range source.Vecs {
-		source.Vecs[i] = vector.NewVec(types.T_varbinary.ToType())
+		source.Vecs[i] = vector.NewVec(types.T_varbinary.ToType(), mp)
 		require.NoError(t, vector.AppendBytesList(
 			source.Vecs[i], [][]byte{[]byte("a"), []byte("b")}, nil, mp))
 	}
@@ -921,7 +897,7 @@ func TestTransportDropsLegacyVectorFlags(t *testing.T) {
 		[]byte{batchMetadataModeUniform | batchMetadataBinaryFlag, 2},
 	)
 	for _, streaming := range []bool{false, true} {
-		decoded := NewOffHeapEmpty()
+		decoded := NewWithSize(0)
 		if streaming {
 			require.NoError(t, decoded.UnmarshalFromReaderWithMetadata(
 				bytes.NewReader(encoded), int64(len(encoded)), mp))
@@ -953,10 +929,10 @@ func TestTransportDropsLegacyVectorFlags(t *testing.T) {
 		},
 	} {
 		wire := legacyV1TransportWire(t, stable, malformed...)
-		decoded := NewOffHeapEmpty()
+		decoded := NewWithSize(0)
 		require.Error(t, decoded.UnmarshalBinaryWithMetadata(wire, mp))
 		decoded.Clean(mp)
-		decoded = NewOffHeapEmpty()
+		decoded = NewWithSize(0)
 		require.Error(t, decoded.UnmarshalFromReaderWithMetadata(
 			bytes.NewReader(wire), int64(len(wire)), mp))
 		decoded.Clean(mp)
@@ -966,7 +942,7 @@ func TestTransportDropsLegacyVectorFlags(t *testing.T) {
 func TestTransportRejectsMalformedTrailer(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, mp))
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
@@ -977,7 +953,7 @@ func TestTransportRejectsMalformedTrailer(t *testing.T) {
 		encoded[:len(encoded)-1],
 		append(append([]byte(nil), encoded...), 0),
 	} {
-		reused := NewOffHeapEmpty()
+		reused := NewWithSize(0)
 		require.Error(t, reused.UnmarshalBinaryWithMetadata(malformed, mp))
 		reused.Clean(mp)
 	}
@@ -986,7 +962,7 @@ func TestTransportRejectsMalformedTrailer(t *testing.T) {
 func TestTransportRejectsMismatchedCountsBeforeAllocation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewWithSize(1)
-	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
 	source.SetRowCount(1)
 	defer source.Clean(mp)
@@ -999,14 +975,14 @@ func TestTransportRejectsMismatchedCountsBeforeAllocation(t *testing.T) {
 	for _, nVecs := range []int32{0, 2} {
 		malformed := append([]byte(nil), encoded...)
 		copy(malformed[prefixLen+4:prefixLen+8], types.EncodeInt32(&nVecs))
-		reused := NewOffHeapEmpty()
+		reused := NewWithSize(0)
 		require.ErrorContains(t, reused.UnmarshalBinaryWithMetadata(malformed, mp),
 			"vector count mismatch")
 		reused.Clean(mp)
 	}
 
 	heterogeneous := NewWithSize(1)
-	heterogeneous.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	heterogeneous.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
 	for range 2 {
 		require.NoError(t, vector.AppendBytes(heterogeneous.Vecs[0], []byte("5"), false, mp))
 	}
@@ -1023,7 +999,7 @@ func TestTransportRejectsMismatchedCountsBeforeAllocation(t *testing.T) {
 	malformed := append([]byte(nil), heterogeneousEncoded...)
 	amplified := int32(batchMetadataMaxRows)
 	copy(malformed[rowCountOffset:rowCountOffset+4], types.EncodeInt32(&amplified))
-	reused := NewOffHeapEmpty()
+	reused := NewWithSize(0)
 	require.ErrorContains(t, reused.UnmarshalBinaryWithMetadata(malformed, mp),
 		"row count mismatch")
 	reused.Clean(mp)
@@ -1067,7 +1043,7 @@ func TestTransportStreamingRejectsTruncatedRowsBeforeAllocation(t *testing.T) {
 		reader: bytes.NewReader(wire),
 		mp:     mp,
 	}
-	target := NewOffHeapEmpty()
+	target := NewWithSize(0)
 	err = target.UnmarshalFromReaderWithMetadata(reader, int64(len(wire)), mp)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	require.Equal(t, int(batchMetadataMaxRows), target.Vecs[0].Length())
@@ -1081,8 +1057,8 @@ func makeTransportStreamingWire(t *testing.T) (encoded, legacy []byte) {
 	t.Helper()
 	mp := mpool.MustNewZero()
 	source := NewWithSize(2)
-	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
+	source.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	for i, value := range []string{"1.5", "plain", "9.5"} {
 		require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte(value), false, mp))
 		require.NoError(t, vector.AppendFixed(source.Vecs[1], int64(i+1), false, mp))
@@ -1107,7 +1083,7 @@ func TestTransportStreamingRoundTrip(t *testing.T) {
 		"the streaming extension must not change the stable Batch prefix")
 
 	mp := mpool.MustNewZero()
-	target := NewOffHeapEmpty()
+	target := NewWithSize(0)
 	require.NoError(t, target.UnmarshalFromReaderWithMetadata(
 		bytes.NewReader(encoded), int64(len(encoded)), mp))
 	require.Equal(t, 3, target.RowCount())
@@ -1115,7 +1091,7 @@ func TestTransportStreamingRoundTrip(t *testing.T) {
 	require.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[1], 2))
 	target.Clean(mp)
 
-	spillTarget := NewOffHeapEmpty()
+	spillTarget := NewWithSize(0)
 	require.NoError(t, spillTarget.UnmarshalFromReaderWithMetadataForSpill(
 		bytes.NewReader(encoded), int64(len(encoded)), mp))
 	requireStreamingRows(t, spillTarget)
@@ -1128,12 +1104,12 @@ func TestTransportStreamingRoundTrip(t *testing.T) {
 	for row, kind := range []byte{2, 0, 3} {
 		withKinds[firstRow+row] |= kind
 	}
-	kindsTarget := NewOffHeapEmpty()
+	kindsTarget := NewWithSize(0)
 	require.NoError(t, kindsTarget.UnmarshalFromReaderWithMetadata(
 		bytes.NewReader(withKinds), int64(len(withKinds)), mp))
 	requireStreamingRows(t, kindsTarget)
 	kindsTarget.Clean(mp)
-	kindsSpill := NewOffHeapEmpty()
+	kindsSpill := NewWithSize(0)
 	require.NoError(t, kindsSpill.UnmarshalFromReaderWithMetadataForSpill(
 		bytes.NewReader(withKinds), int64(len(withKinds)), mp))
 	requireStreamingRows(t, kindsSpill)
@@ -1144,13 +1120,13 @@ func TestTransportStreamingRoundTrip(t *testing.T) {
 	olderWriter := legacyV2TransportWire(t, encoded,
 		legacyRowsStringSource(types.StringSourceLiteral, types.StringSourceExpression, types.StringSourceCOMStmt),
 		legacyUniformStringSource(types.StringSourceSQLPrepare))
-	olderTarget := NewOffHeapEmpty()
+	olderTarget := NewWithSize(0)
 	require.NoError(t, olderTarget.UnmarshalFromReaderWithMetadata(
 		bytes.NewReader(olderWriter), int64(len(olderWriter)), mp))
 	requireStreamingRows(t, olderTarget)
 	require.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](olderTarget.Vecs[1], 2))
 	olderTarget.Clean(mp)
-	olderSpill := NewOffHeapEmpty()
+	olderSpill := NewWithSize(0)
 	require.NoError(t, olderSpill.UnmarshalFromReaderWithMetadataForSpill(
 		bytes.NewReader(olderWriter), int64(len(olderWriter)), mp))
 	requireStreamingRows(t, olderSpill)
@@ -1161,7 +1137,7 @@ func TestTransportStreamingRoundTrip(t *testing.T) {
 		{0x7f},
 	} {
 		malformed := legacyV2TransportWire(t, encoded, legacyNoStringSource(), section)
-		target := NewOffHeapEmpty()
+		target := NewWithSize(0)
 		require.Error(t, target.UnmarshalFromReaderWithMetadata(
 			bytes.NewReader(malformed), int64(len(malformed)), mp))
 		target.Clean(mp)
@@ -1186,7 +1162,7 @@ func TestSpillStreamingRejectsBatchMetadata(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			source := NewWithSize(1)
-			source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(1), false, mp))
 			source.Attrs = test.attrs
 			source.ExtraBuf = test.extra
@@ -1194,7 +1170,7 @@ func TestSpillStreamingRejectsBatchMetadata(t *testing.T) {
 			var wire bytes.Buffer
 			require.NoError(t, source.MarshalBinaryTo(&wire))
 
-			target := NewOffHeapEmpty()
+			target := NewWithSize(0)
 			err := target.UnmarshalFromReaderWithMetadataForSpill(
 				bytes.NewReader(wire.Bytes()),
 				int64(wire.Len()),
@@ -1217,7 +1193,7 @@ func TestTransportStreamingReservesRemainingRecordsAndFooter(t *testing.T) {
 
 	t.Run("valid multi-vector record", func(t *testing.T) {
 		mp := mpool.MustNewZero()
-		target := NewOffHeapEmpty()
+		target := NewWithSize(0)
 		require.NoError(t, target.UnmarshalFromReaderWithMetadata(
 			bytes.NewReader(encoded), int64(len(encoded)), mp))
 		requireStreamingRows(t, target)
@@ -1235,7 +1211,7 @@ func TestTransportStreamingReservesRemainingRecordsAndFooter(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			reader := &mpoolTrackingReader{reader: bytes.NewReader(tc.wire), mp: mp}
-			target := NewOffHeapEmpty()
+			target := NewWithSize(0)
 			err := target.UnmarshalFromReaderWithMetadata(reader, int64(len(tc.wire)), mp)
 			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 			require.Equal(t, mp.CurrNB(), reader.maxCurrNB,
@@ -1253,7 +1229,7 @@ func TestTransportStreamingMalformedReuse(t *testing.T) {
 	malformed[secondModeOffset] = 0x3f
 
 	mp := mpool.MustNewZero()
-	target := NewOffHeapEmpty()
+	target := NewWithSize(0)
 	require.NoError(t, target.UnmarshalFromReaderWithMetadata(
 		bytes.NewReader(encoded), int64(len(encoded)), mp))
 	requireStreamingRows(t, target)
@@ -1280,16 +1256,16 @@ func TestBatchUnmarshalWithAnyMp_Bug23156(t *testing.T) {
 	// Vecs: [rowid_vec, pk_vec], Attrs: ["rowid", "pk"]
 	bat1 := NewWithSize(2)
 	bat1.Attrs = []string{"rowid", "pk"}
-	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat1.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	bat1.SetRowCount(0)
 
 	// Create second batch: INSERT block info data
 	// Vecs: [block_info_vec, object_stats_vec], Attrs: ["block_info", "object_stats"]
 	bat2 := NewWithSize(2)
 	bat2.Attrs = []string{"block_info", "object_stats"}
-	bat2.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	bat2.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat2.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat2.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	bat2.SetRowCount(0)
 
 	// Marshal both batches
@@ -1304,7 +1280,6 @@ func TestBatchUnmarshalWithAnyMp_Bug23156(t *testing.T) {
 
 	// Reuse the same batch object (simulating UPDATE scenario)
 	reusedBat := &Batch{}
-	reusedBat.offHeap = false
 
 	// First unmarshal: DELETE tombstone data
 	err = reusedBat.UnmarshalBinaryWithAnyMp(data1, mp)
@@ -1338,9 +1313,9 @@ func TestBatchUnmarshalWithAnyMp_VecsAttrsLengthMismatch(t *testing.T) {
 	// Create a batch with Vecs length = 3, Attrs length = 3 (normal case)
 	bat := NewWithSize(3)
 	bat.Attrs = []string{"col1", "col2", "col3"}
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
 	bat.SetRowCount(0)
 
 	// Marshal it
@@ -1371,24 +1346,24 @@ func TestBatchUnmarshalWithAnyMp_ReuseDifferentLengths(t *testing.T) {
 	// Create first batch: 3 Vecs, 3 Attrs
 	bat1 := NewWithSize(3)
 	bat1.Attrs = []string{"col1", "col2", "col3"}
-	bat1.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat1.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+	bat1.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat1.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
 	bat1.SetRowCount(0)
 
 	// Create second batch: 2 Vecs, 2 Attrs (different length)
 	bat2 := NewWithSize(2)
 	bat2.Attrs = []string{"attr1", "attr2"}
-	bat2.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	bat2.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat2.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat2.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	bat2.SetRowCount(0)
 
 	// Create third batch: 3 Vecs, 3 Attrs (back to original length)
 	bat3 := NewWithSize(3)
 	bat3.Attrs = []string{"x", "y", "z"}
-	bat3.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat3.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	bat3.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	bat3.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat3.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat3.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat3.SetRowCount(0)
 
 	// Marshal all
@@ -1401,7 +1376,6 @@ func TestBatchUnmarshalWithAnyMp_ReuseDifferentLengths(t *testing.T) {
 
 	// Reuse the same batch object multiple times
 	reusedBat := &Batch{}
-	reusedBat.offHeap = false
 
 	// First unmarshal: 3 Vecs, 3 Attrs
 	err = reusedBat.UnmarshalBinaryWithAnyMp(data1, mp)
@@ -1450,14 +1424,14 @@ func TestBatchUnmarshalWithAnyMp_Bug21911(t *testing.T) {
 	// Create first batch: 1 Vec, 1 Attr
 	bat1 := NewWithSize(1)
 	bat1.Attrs = []string{"col1"}
-	bat1.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat1.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 	bat1.SetRowCount(0)
 
 	// Create second batch: 2 Vecs, 2 Attrs (length increases - this is the critical case for #21911)
 	bat2 := NewWithSize(2)
 	bat2.Attrs = []string{"attr1", "attr2"}
-	bat2.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat2.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	bat2.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat2.Vecs[1] = vector.NewVec(types.T_float64.ToType(), mp)
 	bat2.SetRowCount(0)
 
 	// Marshal both
@@ -1472,7 +1446,6 @@ func TestBatchUnmarshalWithAnyMp_Bug21911(t *testing.T) {
 
 	// Reuse the same batch object
 	reusedBat := &Batch{}
-	reusedBat.offHeap = false
 
 	// First unmarshal: 1 Vec, 1 Attr
 	err = reusedBat.UnmarshalBinaryWithAnyMp(data1, mp)
@@ -1505,15 +1478,15 @@ func TestBatchUnmarshalWithAnyMp_WithCleanOnlyData(t *testing.T) {
 	// Create first batch: DELETE tombstone data
 	bat1 := NewWithSize(2)
 	bat1.Attrs = []string{"rowid", "pk"}
-	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat1.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	bat1.SetRowCount(0)
 
 	// Create second batch: INSERT block info data
 	bat2 := NewWithSize(2)
 	bat2.Attrs = []string{"block_info", "object_stats"}
-	bat2.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	bat2.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat2.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat2.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	bat2.SetRowCount(0)
 
 	// Marshal both
@@ -1528,7 +1501,6 @@ func TestBatchUnmarshalWithAnyMp_WithCleanOnlyData(t *testing.T) {
 
 	// Reuse the same batch object
 	reusedBat := &Batch{}
-	reusedBat.offHeap = false
 
 	// First unmarshal: DELETE tombstone data
 	err = reusedBat.UnmarshalBinaryWithAnyMp(data1, mp)
@@ -1563,16 +1535,16 @@ func TestBatchUnmarshalWithAnyMp_OffHeap(t *testing.T) {
 	// Create first batch: 2 Vecs, 2 Attrs
 	bat1 := NewWithSize(2)
 	bat1.Attrs = []string{"col1", "col2"}
-	bat1.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat1.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	bat1.SetRowCount(0)
 
 	// Create second batch: 3 Vecs, 3 Attrs (different length)
 	bat2 := NewWithSize(3)
 	bat2.Attrs = []string{"attr1", "attr2", "attr3"}
-	bat2.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat2.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	bat2.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	bat2.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat2.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat2.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat2.SetRowCount(0)
 
 	// Marshal both
@@ -1587,7 +1559,6 @@ func TestBatchUnmarshalWithAnyMp_OffHeap(t *testing.T) {
 
 	// Reuse the same batch object with offHeap
 	reusedBat := &Batch{}
-	reusedBat.offHeap = true
 
 	// First unmarshal: 2 Vecs, 2 Attrs
 	err = reusedBat.UnmarshalBinaryWithAnyMp(data1, mp)
@@ -1620,9 +1591,9 @@ func TestBatchUnmarshalWithAnyMp_FirstTime(t *testing.T) {
 	// Create batch: 3 Vecs, 3 Attrs
 	bat := NewWithSize(3)
 	bat.Attrs = []string{"a", "b", "c"}
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
 	bat.SetRowCount(0)
 
 	// Marshal
@@ -1632,7 +1603,6 @@ func TestBatchUnmarshalWithAnyMp_FirstTime(t *testing.T) {
 
 	// First time unmarshal (nil Vecs)
 	newBat := &Batch{}
-	newBat.offHeap = false
 	err = newBat.UnmarshalBinaryWithAnyMp(data, mp)
 	require.NoError(t, err)
 	require.Equal(t, 3, len(newBat.Vecs), "Vecs length should be 3")
@@ -1655,15 +1625,15 @@ func TestBatchUnmarshalWithAnyMp_SameLengthReuse(t *testing.T) {
 	// Create first batch: 2 Vecs, 2 Attrs
 	bat1 := NewWithSize(2)
 	bat1.Attrs = []string{"old1", "old2"}
-	bat1.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat1.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	bat1.SetRowCount(0)
 
 	// Create second batch: 2 Vecs, 2 Attrs (same length, different content)
 	bat2 := NewWithSize(2)
 	bat2.Attrs = []string{"new1", "new2"}
-	bat2.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat2.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat2.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat2.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat2.SetRowCount(0)
 
 	// Marshal both
@@ -1678,7 +1648,6 @@ func TestBatchUnmarshalWithAnyMp_SameLengthReuse(t *testing.T) {
 
 	// Reuse the same batch object
 	reusedBat := &Batch{}
-	reusedBat.offHeap = false
 
 	// First unmarshal
 	err = reusedBat.UnmarshalBinaryWithAnyMp(data1, mp)
@@ -1712,8 +1681,8 @@ func TestBatchUnmarshalWithAnyMp_SerializedLengthMismatch(t *testing.T) {
 	// Create a normal batch: 2 Vecs, 2 Attrs
 	bat := NewWithSize(2)
 	bat.Attrs = []string{"col1", "col2"}
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	bat.SetRowCount(2)
 	vector.AppendFixed(bat.Vecs[0], int32(1), false, mp)
 	vector.AppendFixed(bat.Vecs[0], int32(2), false, mp)
@@ -1764,7 +1733,6 @@ func TestBatchUnmarshalWithAnyMp_SerializedLengthMismatch(t *testing.T) {
 	// Vecs length = 2 (from serialized data), but serialized Attrs length = 3
 	// The fix should ensure Attrs length matches Vecs length (2), ignoring the extra Attr
 	testBat := &Batch{}
-	testBat.offHeap = false
 	err = testBat.UnmarshalBinaryWithAnyMp(data, mp)
 	require.NoError(t, err)
 
@@ -1789,9 +1757,9 @@ func TestBatchUnmarshalWithAnyMp_SerializedAttrsLenLessThanVecsLen(t *testing.T)
 	// Create a batch: 3 Vecs, 3 Attrs
 	bat := NewWithSize(3)
 	bat.Attrs = []string{"col1", "col2", "col3"}
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
 	bat.SetRowCount(0)
 
 	// Marshal it
@@ -1833,12 +1801,11 @@ func TestBatchUnmarshalWithAnyMp_SerializedAttrsLenLessThanVecsLen(t *testing.T)
 
 	// Reuse a batch object (simulating UPDATE scenario)
 	reusedBat := &Batch{}
-	reusedBat.offHeap = false
 	// First unmarshal with 3 Vecs, 3 Attrs to simulate stale Attrs
 	reusedBat.Attrs = []string{"old1", "old2", "old3"} // Simulate stale Attrs
 	reusedBat.Vecs = make([]*vector.Vector, 3)
 	for i := range reusedBat.Vecs {
-		reusedBat.Vecs[i] = vector.NewVecFromReuse()
+		reusedBat.Vecs[i] = new(vector.Vector)
 	}
 
 	// Unmarshal the inconsistent data
@@ -1867,23 +1834,23 @@ func TestShrinkFailureLeavesRowCountUnpublished(t *testing.T) {
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
 			bat := NewWithSize(2)
 			t.Cleanup(func() { bat.Clean(mp) })
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 			require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{10, 20, 30}, nil, mp))
 			values := []int64{1, 2, 3}
 			data := types.EncodeSlice(values)
-			lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+			lease, err := bufferlease.NewRefCounted(data, int64(cap(data)), nil)
 			require.NoError(t, err)
 			t.Cleanup(lease.Release)
-			bat.Vecs[1], err = vector.NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data, lease)
+			bat.Vecs[1], err = vector.NewVecWithData(types.T_int64.ToType(), len(values), data, nil, nil), error(nil)
 			require.NoError(t, err)
 			bat.SetRowCount(3)
 			if mask {
 				var sels bitmap.Bitmap
 				sels.InitWithSize(3)
 				sels.AddMany([]uint64{1, 2})
-				require.Error(t, bat.ShrinkByMask(&sels, false, 0, nil))
+				require.Error(t, bat.ShrinkByMask(&sels, false, 0, mp))
 			} else {
-				require.Error(t, bat.Shrink([]int64{1, 2}, false, nil))
+				require.Error(t, bat.Shrink([]int64{1, 2}, false, mp))
 			}
 			require.Equal(t, 3, bat.RowCount())
 			require.Equal(t, []int64{20, 30}, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]))
@@ -1908,7 +1875,7 @@ func TestBatchShrinkByMaskRowCount(t *testing.T) {
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
 			bat := NewWithSize(1)
 			t.Cleanup(func() { bat.Clean(mp) })
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 			require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{10, 20, 30}, nil, mp))
 			bat.SetRowCount(3)
 			var sels bitmap.Bitmap

@@ -45,7 +45,7 @@ func TestPreInsertAliasSlotOwnershipTransition(t *testing.T) {
 	defer proc.Free()
 
 	buildVec := func(vals []int64) *vector.Vector {
-		v := vector.NewVec(types.T_int64.ToType())
+		v := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(v, vals, nil, proc.Mp()))
 		return v
 	}
@@ -182,7 +182,7 @@ func TestPreInsertAliasConversionFailurePreservesBorrowedSlots(t *testing.T) {
 	}()
 
 	buildVec := func(vals []int64) *vector.Vector {
-		v := vector.NewVec(types.T_int64.ToType())
+		v := vector.NewVec(types.T_int64.ToType(), childMp)
 		require.NoError(t, vector.AppendFixedList(v, vals, nil, childMp))
 		childVecs = append(childVecs, v)
 		return v

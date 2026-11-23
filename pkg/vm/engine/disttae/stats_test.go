@@ -351,7 +351,7 @@ func TestUpdateStats(t *testing.T) {
 			require.NoError(t, err)
 			e.fs = fs
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(columnType)
+			bat.Vecs[0] = vector.NewVec(columnType, e.mp)
 			defer bat.Clean(e.mp)
 			values := []int64{10, 20, 30}
 			require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, e.mp))
@@ -2099,6 +2099,92 @@ func TestStatsPublicationRejectsStoppedOwnerLifecycle(t *testing.T) {
 		"failed publication must not advance the object-count baseline")
 	require.Equal(t, 0.25, generation.samplingRatio)
 	gs.updatingMu.Unlock()
+}
+
+func TestStatsPublicationCanceledWhileWaitingForCache(t *testing.T) {
+	for _, scenario := range []string{"request", "owner", "automatic owner"} {
+		t.Run(scenario, func(t *testing.T) {
+			key := statsinfo.StatsInfoKey{TableID: 42}
+			old, fresh := plan2.NewStatsInfo(), plan2.NewStatsInfo()
+			generation := &updateRecord{inProgress: true}
+			owner, stopOwner := context.WithCancelCause(context.Background())
+			defer stopOwner(nil)
+			ctx, stopRequest := context.WithCancelCause(context.Background())
+			defer stopRequest(nil)
+			gs := &GlobalStats{ctx: owner}
+			gs.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: old}
+			gs.mu.tableDefVersions = map[statsinfo.StatsInfoKey]uint32{key: 7}
+			gs.updatingMu.updating = map[statsinfo.StatsInfoKey]*updateRecord{key: generation}
+
+			type result struct {
+				published bool
+				err       error
+			}
+			done := make(chan result, 1)
+			gs.observationMu.RLock()
+			locked := true
+			finished := false
+			defer func() {
+				if locked {
+					gs.observationMu.RUnlock()
+				}
+				if !finished {
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						t.Error("publication goroutine did not exit")
+					}
+				}
+			}()
+			go func() {
+				if scenario == "automatic owner" {
+					done <- result{published: gs.completeAutomaticStatsCacheUpdate(key, generation, fresh, true)}
+					return
+				}
+				published, err := gs.publishStatsForGeneration(ctx, key, generation, fresh)
+				done <- result{published: published, err: err}
+			}()
+
+			// A queued RWMutex writer prevents new readers. This is the observable
+			// handoff after generation validation and before cache publication.
+			guard := time.NewTimer(5 * time.Second)
+			defer guard.Stop()
+			for gs.observationMu.TryRLock() {
+				gs.observationMu.RUnlock()
+				select {
+				case <-guard.C:
+					t.Fatal("publication did not reserve the observation write lock")
+				default:
+					goruntime.Gosched()
+				}
+			}
+			want := fmt.Errorf("stop %s publication", scenario)
+			if scenario == "request" {
+				stopRequest(want)
+			} else {
+				stopOwner(want)
+			}
+			gs.observationMu.RUnlock()
+			locked = false
+			select {
+			case got := <-done:
+				finished = true
+				require.False(t, got.published)
+				if scenario == "automatic owner" {
+					require.NoError(t, got.err)
+				} else {
+					require.ErrorIs(t, got.err, want)
+				}
+			case <-guard.C:
+				t.Fatal("publication did not return after the observation finished")
+			}
+			gs.mu.Lock()
+			current, version := gs.mu.statsInfoMap[key], gs.mu.tableDefVersions[key]
+			gs.mu.Unlock()
+			require.Same(t, old, current)
+			require.Equal(t, uint32(7), version)
+		})
+	}
 }
 
 func TestMetadataRefreshClearsSchemaBoundObservationVersion(t *testing.T) {

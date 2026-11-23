@@ -45,7 +45,7 @@ func wideWidthInput(t *testing.T, proc *process.Process, keys []declaredGroupKey
 	t.Helper()
 	input := batch.NewWithSize(len(keys))
 	for column, key := range keys {
-		input.Vecs[column] = vector.NewVec(types.New(key.typ, key.width, 0))
+		input.Vecs[column] = vector.NewVec(types.New(key.typ, key.width, 0), proc.Mp())
 	}
 	owned := true
 	defer func() {

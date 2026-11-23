@@ -52,7 +52,7 @@ func TestRequiredMembershipStoragePaths(t *testing.T) {
 			if tc.integer {
 				typ = types.T_int64
 			}
-			keys := vector.NewVec(typ.ToType())
+			keys := vector.NewVec(typ.ToType(), proc.Mp())
 			defer keys.Free(proc.Mp())
 			if tc.integer {
 				require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
@@ -154,7 +154,7 @@ func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 	spec := &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgoParams: `{"lists":"1","op_type":"vector_l2_ops"}`},
 		SourceTable: &plan.ObjectRef{}, SourceTableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "pk", Typ: plan.Type{Id: int32(types.T_int64)}}},
 			Pkey: &plan.PrimaryKeyDef{PkeyColName: "pk"}, Name2ColIndex: map[string]int32{"pk": 0}}, ScanWork: &plan.IndexSearchScanWork{}}
-	keys := vector.NewVec(types.T_int64.ToType())
+	keys := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer keys.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
 	data, err := keys.MarshalBinary()

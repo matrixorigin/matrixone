@@ -39,10 +39,11 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 				LeftTypes: []types.Type{types.T_int64.ToType()}, RightTypes: []types.Type{typ},
 				ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}},
 			}
-			want := vector.NewVec(typ)
+			want := vector.NewVec(typ, proc.Mp())
 			sources := make([]*batch.Batch, 0, 2)
 			t.Cleanup(func() {
 				arg.Free(proc, false, nil)
+				freeTestChildren(arg)
 				for _, source := range sources {
 					source.Clean(proc.Mp())
 				}
@@ -53,7 +54,7 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 			account := installTestAllocation(t, arg)
 			for range 2 {
 				bat := batch.NewWithSize(1)
-				v := vector.NewVec(typ)
+				v := vector.NewVec(typ, proc.Mp())
 				bat.Vecs[0] = v
 				sources = append(sources, bat)
 				for _, value := range []string{"a non-inline build payload", "unselected", "null", "tail"} {
@@ -130,7 +131,7 @@ func TestHashJoinFinalizeProjectionAllocation(t *testing.T) {
 			}
 			source := batch.NewWithSize(2)
 			for i, typ := range arg.RightTypes {
-				source.Vecs[i] = vector.NewVec(typ)
+				source.Vecs[i] = vector.NewVec(typ, proc.Mp())
 			}
 			t.Cleanup(func() {
 				source.Clean(proc.Mp())
@@ -147,6 +148,7 @@ func TestHashJoinFinalizeProjectionAllocation(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() {
 				arg.Free(proc, true, nil)
+				freeTestChildren(arg)
 				require.NoError(t, arg.ClearAllocationAccount(account))
 				require.Zero(t, account.Seal().Used)
 				_, err := registry.Finalize(account)

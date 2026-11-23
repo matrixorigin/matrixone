@@ -430,7 +430,7 @@ func (proc *Process) OperatorOutofMemory(size int64) bool {
 }
 
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, proc.Mp())
 	err := vec.PreExtend(nele, proc.Mp())
 	if err != nil {
 		return nil, err
@@ -447,19 +447,24 @@ func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch
 }
 
 // NewBatchFromSrcWithAllocation creates an empty off-heap destination whose
-// first vector growth uses the supplied immutable allocation provenance.
+// preallocation is made through mp (an accounted view charges its account).
+// A nil mp means proc.Mp(). The vectors belong to mp: every later call on
+// them, including Clean, must pass mp.
 func (proc *Process) NewBatchFromSrcWithAllocation(
 	src *batch.Batch,
 	preAllocSize int,
-	selection *vector.AllocationAccountSelection,
+	mp *mpool.MPool,
 ) (_ *batch.Batch, retErr error) {
 	if proc == nil || src == nil || preAllocSize < 0 {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	bat := batch.NewOffHeapWithSize(len(src.Vecs))
+	if mp == nil {
+		mp = proc.Mp()
+	}
+	bat := batch.NewWithSize(len(src.Vecs))
 	defer func() {
 		if retErr != nil {
-			bat.Clean(proc.Mp())
+			bat.Clean(mp)
 		}
 	}()
 	bat.SetAttributes(src.Attrs)
@@ -468,17 +473,12 @@ func (proc *Process) NewBatchFromSrcWithAllocation(
 		if src.Vecs[i] == nil {
 			return nil, mpool.ErrAllocationAccountInvalid
 		}
-		bat.Vecs[i] = vector.NewOffHeapVecWithType(*src.Vecs[i].GetType())
-	}
-	if selection != nil {
-		if err := bat.SetAllocationAccount(selection); err != nil {
-			return nil, err
-		}
+		bat.Vecs[i] = vector.NewVec(*src.Vecs[i].GetType(), mp)
 	}
 	for i := range bat.Vecs {
 		v := bat.Vecs[i]
 		if v.Capacity() < preAllocSize {
-			err := v.PreExtend(preAllocSize, proc.Mp())
+			err := v.PreExtend(preAllocSize, mp)
 			if err != nil {
 				return nil, err
 			}

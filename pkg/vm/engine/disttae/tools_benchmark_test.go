@@ -32,13 +32,13 @@ func TestToPBBatchPreservesRepresentation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(4)
 	bat.Attrs = []string{"fixed", "varlen", "const", "null"}
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	longValue := bytes.Repeat([]byte("v"), types.VarlenaInlineSize+17)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], longValue, false, mp))
 	bat.Vecs[2], _ = vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, mp)
-	bat.Vecs[3] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[3], int64(0), true, mp))
 	t.Cleanup(func() { bat.Clean(mp) })
 
@@ -58,7 +58,7 @@ func TestToPBBatchPreservesRepresentation(t *testing.T) {
 	require.Equal(t, byte(1), bat.Vecs[0].GetData()[0])
 	pb.Vecs[1].Area[0] = 'x'
 	require.Equal(t, byte('x'), bat.Vecs[1].GetArea()[0])
-	roundTrip, err := batch.ProtoBatchToBatch(pb)
+	roundTrip, err := batch.ProtoBatchToBatch(pb, mp)
 	require.NoError(t, err)
 	require.Equal(t, bat.Vecs[1].GetStringAt(0), roundTrip.Vecs[1].GetStringAt(0))
 }
@@ -84,7 +84,7 @@ func BenchmarkToPBBatchPreallocation(b *testing.B) {
 func newDisttaeProtoBenchmarkBatch(size int) *batch.Batch {
 	bat := batch.NewWithSize(size)
 	for i := range bat.Vecs {
-		bat.Vecs[i] = vector.NewVecWithData(types.T_int64.ToType(), 1, make([]byte, types.T_int64.ToType().TypeSize()), nil)
+		bat.Vecs[i] = vector.NewVecWithData(types.T_int64.ToType(), 1, make([]byte, types.T_int64.ToType().TypeSize()), nil, mpool.MustNewZero())
 	}
 	return bat
 }

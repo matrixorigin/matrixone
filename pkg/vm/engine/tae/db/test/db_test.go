@@ -220,7 +220,7 @@ func TestPrintVector(t *testing.T) {
 
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
-	vec1 := vector.NewVec(types.T_uint32.ToType())
+	vec1 := vector.NewVec(types.T_uint32.ToType(), mp)
 	defer vec1.Free(mp)
 	for i := 0; i < 10; i++ {
 		err = vector.AppendFixed[uint32](vec1, math.MaxUint32, false, mp)
@@ -2835,7 +2835,7 @@ func TestSegDelLogtail(t *testing.T) {
 	assert.Equal(t, uint32(9), resp.Commands[0].Bat.Vecs[0].Len) /* 5 create + 4 delete */
 	// start ts should not be empty
 	startTSVec := resp.Commands[0].Bat.Vecs[9]
-	cnStartVec, err := vector.ProtoVectorToVector(startTSVec)
+	cnStartVec, err := vector.ProtoVectorToVector(startTSVec, mpool.MustNewZero())
 	assert.NoError(t, err)
 	startTSs := vector.MustFixedColWithTypeCheck[types.TS](cnStartVec)
 	for _, ts := range startTSs {
@@ -2846,7 +2846,7 @@ func TestSegDelLogtail(t *testing.T) {
 	assert.Equal(t, uint32(4), resp.Commands[1].Bat.Vecs[0].Len) /* 2 create + 2 delete */
 	// start ts should not be empty
 	startTSVec = resp.Commands[1].Bat.Vecs[9]
-	cnStartVec, err = vector.ProtoVectorToVector(startTSVec)
+	cnStartVec, err = vector.ProtoVectorToVector(startTSVec, mpool.MustNewZero())
 	assert.NoError(t, err)
 	startTSs = vector.MustFixedColWithTypeCheck[types.TS](cnStartVec)
 	for _, ts := range startTSs {
@@ -5325,7 +5325,7 @@ func TestBlockRead(t *testing.T) {
 				//bat.Attrs = append(bat.Attrs, cols...)
 
 				for i := 0; i < len(typs); i++ {
-					bat.Vecs[i] = vector.NewVec(typs[i])
+					bat.Vecs[i] = vector.NewVec(typs[i], pool)
 				}
 				return bat
 			}
@@ -5470,7 +5470,7 @@ func TestBlockRead2(t *testing.T) {
 				//bat.Attrs = append(bat.Attrs, cols...)
 
 				for i := 0; i < len(typs); i++ {
-					bat.Vecs[i] = vector.NewVec(typs[i])
+					bat.Vecs[i] = vector.NewVec(typs[i], pool)
 				}
 				return bat
 			}
@@ -6971,7 +6971,7 @@ func TestAlterFakePk(t *testing.T) {
 	assert.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)          // data insert
 	assert.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)          // data delete
 
-	dataObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
+	dataObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat, mpool.MustNewZero())
 	assert.NoError(t, err)
 	tnDataObjectBat := containers.NewNonNullBatchWithSharedMemory(dataObjectBat, common.DefaultAllocator)
 	t.Log(tnDataObjectBat.Attrs)
@@ -6980,7 +6980,7 @@ func TestAlterFakePk(t *testing.T) {
 		assert.Equal(t, 1, v.Length())
 	}
 
-	tombstoneObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[1].Bat)
+	tombstoneObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[1].Bat, mpool.MustNewZero())
 	assert.NoError(t, err)
 	tnTombstoneObjectBat := containers.NewNonNullBatchWithSharedMemory(tombstoneObjectBat, common.DefaultAllocator)
 	t.Log(tnTombstoneObjectBat.Attrs)
@@ -6989,7 +6989,7 @@ func TestAlterFakePk(t *testing.T) {
 		assert.Equal(t, 1, v.Length())
 	}
 
-	insBat, err := batch.ProtoBatchToBatch(resp.Commands[2].Bat)
+	insBat, err := batch.ProtoBatchToBatch(resp.Commands[2].Bat, mpool.MustNewZero())
 	assert.NoError(t, err)
 	tnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat, common.DefaultAllocator)
 	t.Log(tnInsBat.Attrs)
@@ -6999,7 +6999,7 @@ func TestAlterFakePk(t *testing.T) {
 	}
 	t.Log(tnInsBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
 
-	delBat, err := batch.ProtoBatchToBatch(resp.Commands[3].Bat)
+	delBat, err := batch.ProtoBatchToBatch(resp.Commands[3].Bat, mpool.MustNewZero())
 	assert.NoError(t, err)
 	tnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat, common.DefaultAllocator)
 	t.Log(tnDelBat.Attrs)
@@ -7586,7 +7586,7 @@ func TestAppendAndGC2(t *testing.T) {
 		if group != wal.GroupFiles {
 			return driver.RE_Nomal
 		}
-		vec := vector.NewVec(types.Type{})
+		vec := vector.NewVec(types.Type{}, mpool.MustNewZero())
 		if err = vec.UnmarshalBinary(payload); err != nil {
 			return driver.RE_Internal
 		}
@@ -9737,7 +9737,8 @@ func TestForceCheckpointWithFullyReservedWAL(t *testing.T) {
 			if group != wal.GroupFiles {
 				return driver.RE_Nomal
 			}
-			vec := vector.NewVec(types.Type{})
+			// A nil pool decodes payload as a read-only reference.
+			vec := vector.NewVec(types.Type{}, nil)
 			defer vec.Free(nil)
 			if err := vec.UnmarshalBinary(payload); err != nil {
 				return driver.RE_Internal
@@ -11072,6 +11073,8 @@ func TestCollectDeletesInRangeAfterEmptyTombstoneFlush(t *testing.T) {
 }
 
 func TestCollectDeletesInRange2(t *testing.T) {
+	// DebugAllocator is shared by the package; check only this test's bytes.
+	debugBaseline := common.DebugAllocator.CurrNB()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11109,7 +11112,7 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 	pkVec.Close()
 	rowidVec.Close()
-	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
+	assert.Equal(t, debugBaseline, common.DebugAllocator.CurrNB())
 
 	txn, rel = tae.GetRelation()
 	blk = testutil.GetOneObject(rel)
@@ -12799,6 +12802,8 @@ func TestTryDeleteByDeltaloc1(t *testing.T) {
 }
 
 func TestTryDeleteByDeltaloc2(t *testing.T) {
+	// DebugAllocator is shared by the package; check only this test's bytes.
+	debugBaseline := common.DebugAllocator.CurrNB()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -12830,7 +12835,7 @@ func TestTryDeleteByDeltaloc2(t *testing.T) {
 	require.False(t, stats.IsZero())
 	pkVec.Close()
 	rowIDVec.Close()
-	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
+	assert.Equal(t, debugBaseline, common.DebugAllocator.CurrNB())
 
 	tae.MergeBlocks(true)
 	t.Log(tae.Catalog.SimplePPString(3))
@@ -13544,6 +13549,8 @@ func TestDeleteWithObjectStats(t *testing.T) {
 }
 
 func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
+	// DebugAllocator is shared by the package; check only this test's bytes.
+	debugBaseline := common.DebugAllocator.CurrNB()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -13576,7 +13583,7 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 		common.DebugAllocator)
 	assert.NoError(t, txn.Commit(ctx))
 	assert.Equal(t, 1, deletes.Count())
-	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
+	assert.Equal(t, debugBaseline, common.DebugAllocator.CurrNB())
 }
 
 func TestTransferS3Deletes(t *testing.T) {

@@ -607,7 +607,7 @@ func (opts StatementOption) Params(
 			areaSize += len(value)
 		}
 	}
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	if err := vec.PreExtendWithArea(len(opts.params), areaSize, mp); err != nil {
 		vec.Free(mp)
 		return nil, err

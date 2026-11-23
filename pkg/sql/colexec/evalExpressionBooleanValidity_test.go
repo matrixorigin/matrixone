@@ -42,7 +42,7 @@ func TestBooleanNonNullPreparationTransitions(t *testing.T) {
 			input := batch.NewWithSize(2)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			for i, values := range [][]bool{{true, true, false, false}, {true, false, true, false}} {
-				input.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+				input.Vecs[i] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendFixedList(input.Vecs[i], values, nil, proc.Mp()))
 			}
 			input.SetRowCount(4)
@@ -53,8 +53,6 @@ func TestBooleanNonNullPreparationTransitions(t *testing.T) {
 			executor, err := NewExpressionExecutorWithAllocation(proc, bindTestFunction(t, proc, tc.op, args...), allocation)
 			require.NoError(t, err)
 			t.Cleanup(executor.Free)
-			root := executor.(*FunctionExpressionExecutor)
-			require.Nil(t, root.dictionaryInput, "physical normalization remains required")
 			checkValues := func(result *vector.Vector) {
 				t.Helper()
 				require.False(t, result.HasNull())
@@ -107,7 +105,7 @@ func TestNumericComparisonValidityWithoutDictionaryCapability(t *testing.T) {
 				if oid.IsDecimal() && side == 0 {
 					typ.Scale = 2
 				}
-				v := vector.NewVec(typ)
+				v := vector.NewVec(typ, proc.Mp())
 				input.Vecs[side] = v
 				values := []uint64{100, 150, 90, 200}
 				if side == 1 {
@@ -145,8 +143,6 @@ func TestNumericComparisonValidityWithoutDictionaryCapability(t *testing.T) {
 			executor, err := NewExpressionExecutorWithAllocation(proc, bindTestFunction(t, proc, ">=", cols...), allocation)
 			require.NoError(t, err)
 			t.Cleanup(executor.Free)
-			root := executor.(*FunctionExpressionExecutor)
-			root.dictionaryInput = nil
 			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.Equal(t, []bool{true, false, false, true}, vector.MustFixedColNoTypeCheck[bool](result))
@@ -202,11 +198,11 @@ func TestBooleanValidityAdmissionFailure(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+	allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	input := batch.NewWithSize(1)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
-	input.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []bool{true, false, true, false, true, false, true, false}, nil, proc.Mp()))
 	input.SetRowCount(8)
 	column := &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}

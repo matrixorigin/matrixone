@@ -34,7 +34,7 @@ func TestParamExpressionExecutorTypedTransport(t *testing.T) {
 
 	// install sets parameter 0: its TEXT spelling and, optionally, its typed value.
 	install := func(text string, typed *vector.Vector) {
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(params, []byte(text), false, proc.Mp()))
 		proc.SetOwnedPrepareParamsWithIsBin(params, nil)
 		if typed != nil {
@@ -135,7 +135,7 @@ func TestParamExpressionExecutorTypedTransport(t *testing.T) {
 	})
 
 	t.Run("NULL typed value", func(t *testing.T) {
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(params, nil, true, proc.Mp()))
 		proc.SetOwnedPrepareParamsWithIsBin(params, nil)
 		bat := batch.NewWithSize(1)

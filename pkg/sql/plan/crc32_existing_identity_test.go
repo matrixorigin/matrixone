@@ -41,7 +41,7 @@ func TestCRC32JSONTextWithExistingFunctionIdentity(t *testing.T) {
 
 	input := batch.NewWithSize(1)
 	defer input.Clean(proc.Mp())
-	input.Vecs[0] = vector.NewVec(types.T_json.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_json.ToType(), proc.Mp())
 	texts := []string{
 		`{"t1": "a"}`,
 		`{"a": 1, "b": 2}`,
@@ -121,7 +121,7 @@ func TestCRC32JSONTextSelectionAndExecutorReuse(t *testing.T) {
 	require.NoError(t, err)
 	input := batch.NewWithSize(1)
 	defer input.Clean(proc.Mp())
-	input.Vecs[0] = vector.NewVec(types.T_json.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_json.ToType(), proc.Mp())
 	for _, text := range []string{`1`, `"x"`} {
 		value, err := types.ParseStringToByteJson(text)
 		require.NoError(t, err)
@@ -184,7 +184,7 @@ func TestCRC32UntypedPreparedRebindingPreservesDomains(t *testing.T) {
 			require.NoError(t, err)
 			input := batch.NewWithSize(1)
 			defer input.Clean(proc.Mp())
-			input.Vecs[0] = vector.NewVec(tc.typ.ToType())
+			input.Vecs[0] = vector.NewVec(tc.typ.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendBytes(input.Vecs[0], tc.value, tc.isNull, proc.Mp()))
 			input.SetRowCount(1)
 			exec, err := colexec.NewExpressionExecutor(proc, bound)

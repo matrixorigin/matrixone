@@ -54,6 +54,7 @@ type StatementDiagnostics struct {
 }
 
 type DiagnosticSummary struct {
+	LockRead                *DiagnosticLockRead            `json:"lock_read,omitempty"`
 	WallNS                  uint64                         `json:"wall_ns"`
 	ElapsedNS               uint64                         `json:"elapsed_ns"`
 	WaitActiveKnown         bool                           `json:"wait_active_known"`
@@ -72,6 +73,21 @@ type DiagnosticSummary struct {
 	Quality                 resource.QualityFlags          `json:"quality"`
 	MissingFragments        uint64                         `json:"missing_fragments,omitempty"`
 	MissingMemoryDomains    uint64                         `json:"missing_memory_domains,omitempty"`
+}
+
+// DiagnosticLockRead is the compact-v1 projection. The statement row and CN
+// event carry correlation IDs. PKCheckNS includes any measured PKReadinessNS.
+type DiagnosticLockRead struct {
+	AttemptCount                 uint64 `json:"attempt_count"`
+	AcquisitionNS                uint64 `json:"acquisition_ns"`
+	LogtailNS                    uint64 `json:"logtail_ns"`
+	PKCheckNS                    uint64 `json:"pk_check_ns"`
+	PKReadinessNS                uint64 `json:"pk_readiness_ns"`
+	RemotePKSubstagesUnavailable bool   `json:"remote_pk_substages_unavailable,omitempty"`
+	Seen                         uint8  `json:"seen"`
+	Conflict                     bool   `json:"conflict"`
+	LastIncomplete               string `json:"last_incomplete,omitempty"`
+	Outcome                      string `json:"outcome"`
 }
 
 type DiagnosticPhases struct {
@@ -176,6 +192,10 @@ func SelectStatementDiagnosticLevel(elapsed, threshold time.Duration, summary *r
 		reasons |= 1
 	}
 	if summary != nil {
+		if summary.LockRead != nil {
+			reasons |= 1 << 10
+			level = max(level, 1)
+		}
 		u := summary.Usage
 		admit(1, u.ExclusiveActiveNS, uint64(time.Second), uint64(4*time.Second), uint64(16*time.Second))
 		var waits uint64
@@ -258,7 +278,40 @@ func (d *StatementDiagnostics) SetSummary(s resource.StatementResourceSummary, w
 	if elapsed < 0 {
 		elapsed = 0
 	}
-	d.Summary = &DiagnosticSummary{WallNS: diagnosticDuration(wall), ElapsedNS: diagnosticDuration(elapsed), WaitActiveKnown: waitKnown, WaitActiveNS: diagnosticDuration(wait), ActiveNS: s.Usage.ExclusiveActiveNS, WaitNS: s.Usage.WaitNS, MaxDomainPeakBytes: s.Memory.MaxDomainPeakLiveBytes, SumDomainPeakBoundBytes: s.Memory.SumDomainPeakLiveBytesBound, S3ReadBytes: s.Usage.S3ReadBytes, S3WriteBytes: s.Usage.S3WriteBytes, S3Requests: s.Usage.S3Requests, EgressBytes: s.Usage.ClientEgressBytes, SpillBytes: s.Usage.SpillBytes, Attempts: s.AttemptCount, RetryWallNS: s.RetryWallNS, Quality: s.Quality, MissingFragments: s.MissingFragmentCount, MissingMemoryDomains: s.MissingMemoryDomainCount}
+	d.Summary = &DiagnosticSummary{
+		WallNS:                  diagnosticDuration(wall),
+		ElapsedNS:               diagnosticDuration(elapsed),
+		WaitActiveKnown:         waitKnown,
+		WaitActiveNS:            diagnosticDuration(wait),
+		ActiveNS:                s.Usage.ExclusiveActiveNS,
+		WaitNS:                  s.Usage.WaitNS,
+		MaxDomainPeakBytes:      s.Memory.MaxDomainPeakLiveBytes,
+		SumDomainPeakBoundBytes: s.Memory.SumDomainPeakLiveBytesBound,
+		S3ReadBytes:             s.Usage.S3ReadBytes,
+		S3WriteBytes:            s.Usage.S3WriteBytes,
+		S3Requests:              s.Usage.S3Requests,
+		EgressBytes:             s.Usage.ClientEgressBytes,
+		SpillBytes:              s.Usage.SpillBytes,
+		Attempts:                s.AttemptCount,
+		RetryWallNS:             s.RetryWallNS,
+		Quality:                 s.Quality,
+		MissingFragments:        s.MissingFragmentCount,
+		MissingMemoryDomains:    s.MissingMemoryDomainCount,
+	}
+	if lock := s.LockRead; lock != nil {
+		d.Summary.LockRead = &DiagnosticLockRead{
+			AttemptCount:                 lock.AttemptCount,
+			AcquisitionNS:                lock.AcquisitionNS,
+			LogtailNS:                    lock.LogtailNS,
+			PKCheckNS:                    lock.PKCheckNS,
+			PKReadinessNS:                lock.PKReadinessNS,
+			RemotePKSubstagesUnavailable: lock.RemotePKSubstagesUnavailable,
+			Seen:                         lock.Seen,
+			Conflict:                     lock.Conflict,
+			LastIncomplete:               lock.LastIncomplete,
+			Outcome:                      lock.Outcome,
+		}
+	}
 }
 
 func (d *StatementDiagnostics) SetPhases(s *statistic.StatsInfo) {
@@ -418,6 +471,9 @@ func RenderStatementDiagnostics(d *StatementDiagnostics, option ExplainOption) s
 		fmt.Fprintf(&b, "wall=%s elapsed=%s active=%s wait_ns=%v\n", diagnosticTime(s.WallNS), diagnosticTime(s.ElapsedNS), diagnosticTime(s.ActiveNS), s.WaitNS)
 		fmt.Fprintf(&b, "max-domain-peak=%dB sum-domain-peak-bound=%dB; S3 read/write=%d/%dB requests=%v; spill=%dB egress=%dB\n", s.MaxDomainPeakBytes, s.SumDomainPeakBoundBytes, s.S3ReadBytes, s.S3WriteBytes, s.S3Requests, s.SpillBytes, s.EgressBytes)
 		fmt.Fprintf(&b, "attempts=%d retry-wall=%dns quality=%s missing-fragments=%d missing-memory-domains=%d\n", s.Attempts, s.RetryWallNS, s.Quality.String(), s.MissingFragments, s.MissingMemoryDomains)
+		if lock := s.LockRead; lock != nil {
+			renderDiagnosticLockRead(&b, lock)
+		}
 	}
 	fmt.Fprintf(&b, "detail=%s logical-omitted=%d physical-visited=%d physical-bounded=%t physical-candidates-omitted=%d\n", d.Detail.Capture, d.Detail.LogicalOmitted, d.Detail.PhysicalVisited, d.Detail.PhysicalTruncated, d.Detail.PhysicalCandidatesOmitted)
 	if option == NormalOption {
@@ -484,6 +540,33 @@ func RenderStatementDiagnostics(d *StatementDiagnostics, option ExplainOption) s
 	return b.String()
 }
 
+func renderDiagnosticLockRead(b *strings.Builder, lock *DiagnosticLockRead) {
+	fmt.Fprintf(b, "lock-read attempts=%d conflict=%t", lock.AttemptCount, lock.Conflict)
+	var lastIncomplete string
+	for stage, ns := range [...]uint64{
+		resource.LockReadAcquisition: lock.AcquisitionNS,
+		resource.LockReadLogtail:     lock.LogtailNS,
+		resource.LockReadPKCheck:     lock.PKCheckNS,
+		resource.LockReadPKReadiness: lock.PKReadinessNS,
+	} {
+		if stage == 0 || lock.Seen&(1<<(stage-1)) == 0 {
+			continue
+		}
+		name := resource.LockReadStage(stage).String()
+		fmt.Fprintf(b, " %s=%s", name, diagnosticTime(ns))
+		if lock.LastIncomplete == name {
+			lastIncomplete = name
+		}
+	}
+	if lastIncomplete != "" {
+		fmt.Fprintf(b, " last-incomplete=%s", lastIncomplete)
+	}
+	if lock.RemotePKSubstagesUnavailable {
+		b.WriteString(" remote-pk-substages=unavailable")
+	}
+	b.WriteByte('\n')
+}
+
 func diagnosticTime(ns uint64) string {
 	if ns > math.MaxInt64 {
 		return fmt.Sprintf("%dns", ns)
@@ -492,7 +575,7 @@ func diagnosticTime(ns uint64) string {
 }
 func diagnosticReasonNames(reasons uint64) string {
 	var names []string
-	for bit, name := range [...]string{"elapsed", "active", "wait", "memory", "S3-bytes", "spill", "failure", "retry", "quality", "scheduling"} {
+	for bit, name := range [...]string{"elapsed", "active", "wait", "memory", "S3-bytes", "spill", "failure", "retry", "quality", "scheduling", "lock-read"} {
 		mask := uint64(1) << bit
 		if reasons&mask != 0 {
 			names = append(names, name)

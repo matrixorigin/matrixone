@@ -475,16 +475,16 @@ func TestJsonConstructorBinaryValuesUseAdmittedProtocolVersion(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			v := vector.NewVec(tc.typ)
+			v := vector.NewVec(tc.typ, mp)
 			require.NoError(t, tc.append(v, mp))
 			defer v.Free(mp)
 
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion51)
-			_, err := newOpBuiltInJsonArray().convertToAny(proc, v, 0, jsonSessionProtocolVersion(proc))
+			_, err := newOpBuiltInJsonArray().convertToAny(proc, v, false, 0, jsonSessionProtocolVersion(proc))
 			require.ErrorContains(t, err, "MORPC protocol version 52")
 
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion52)
-			value, err := newOpBuiltInJsonArray().convertToAny(proc, v, 0, jsonSessionProtocolVersion(proc))
+			value, err := newOpBuiltInJsonArray().convertToAny(proc, v, false, 0, jsonSessionProtocolVersion(proc))
 			require.NoError(t, err)
 			_, err = bytejson.CreateByteJSON(value)
 			require.NoError(t, err)
@@ -508,21 +508,21 @@ func TestJsonConstructorPreparedMetadata(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Prepared parameters reach execution as typed values.
-			v := vector.NewVec(tc.typ)
+			v := vector.NewVec(tc.typ, proc.Mp())
 			defer v.Free(proc.Mp())
 			if tc.typ.Oid == types.T_float32 {
 				require.NoError(t, vector.AppendFixed(v, float32(0.1), false, proc.Mp()))
 			} else {
 				require.NoError(t, vector.AppendBytes(v, []byte(tc.input), false, proc.Mp()))
 			}
-			value, err := newOpBuiltInJsonArray().convertToAny(proc, v, 0, defines.MORPCVersion52)
+			value, err := newOpBuiltInJsonArray().convertToAny(proc, v, false, 0, defines.MORPCVersion52)
 			require.NoError(t, err)
 			got, err := bytejson.CreateByteJSON(value)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got.String())
 			if tc.binary {
 				// A text-typed key keeps its raw bytes.
-				k := vector.NewVec(types.T_text.ToType())
+				k := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				defer k.Free(proc.Mp())
 				require.NoError(t, vector.AppendBytes(k, []byte(tc.input), false, proc.Mp()))
 				key, err := newOpBuiltInJsonObject().convertKeyToAny(proc, newOpBuiltInJsonArray(), k, 0, defines.MORPCVersion51)

@@ -24,6 +24,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -96,8 +98,8 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			stats := objectio.NewObjectStats()
 			require.NoError(t, objectio.SetObjectStatsLocation(stats, location))
 			bat := batch.New([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
-			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
-			bat.SetVector(1, vector.NewVec(types.T_varchar.ToType()))
+			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp()))
+			bat.SetVector(1, vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], objectio.EncodeBlockInfo(&info), false, txn.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[1], stats.Marshal(), false, txn.proc.Mp()))
 			bat.SetRowCount(1)
@@ -126,7 +128,7 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 				require.Equal(t, tc.want, req.(*api.Entry).TableName)
 				require.Empty(t, remaining)
 			}
-			txn.writes[0].bat.Clean(txn.proc.Mp())
+			txn.writes[0].bat.Clean(txn.workspaceMP())
 		})
 	}
 }
@@ -136,7 +138,6 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 		t.Run(fmt.Sprintf("skip-transfer=%v", skipTransfer), func(t *testing.T) {
 			txn := newTransactionWithActivePKTableForTest(t, "pk")
 			txn.tnStores = []DNStore{{}}
-			txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 			txn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false).AnyTimes()
 
 			tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
@@ -148,7 +149,7 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			stats := objectio.NewObjectStats()
 			require.NoError(t, objectio.SetObjectStatsLocation(stats, objectio.NewRandomLocation(1, 1)))
 			bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
-			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], stats.Marshal(), false, txn.proc.Mp()))
 			bat.SetRowCount(1)
 			defer bat.Clean(txn.proc.Mp())
@@ -182,7 +183,7 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 				Bat:        protoBat,
 			}})
 			require.ErrorContains(t, err, "bad write format")
-			txn.writes[0].bat.Clean(txn.proc.Mp())
+			txn.writes[0].bat.Clean(txn.workspaceMP())
 		})
 	}
 }
@@ -257,7 +258,7 @@ func makeBatchForTest(
 	ints ...int64,
 ) *batch.Batch {
 	bat := batch.New([]string{"a"})
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, n := range ints {
 		vector.AppendFixed(vec, n, false, mp)
 	}
@@ -568,9 +569,9 @@ func TestPrimaryKeysMayBeModifiedWaitsForSubscriptionData(t *testing.T) {
 	bat := makeBatchForTest(mp, 7)
 	defer bat.Clean(mp)
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	pkVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer rowIDVec.Free(mp)
 	defer tsVec.Free(mp)
 	defer pkVec.Free(mp)
@@ -676,28 +677,93 @@ func TestPrimaryKeysMayBeModifiedSkipsReadinessForEmptyKeys(t *testing.T) {
 	require.False(t, changed, "an empty key set cannot conflict even while the table is rebuilding")
 }
 
+type pkReadinessWaitContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *pkReadinessWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
 func TestPrimaryKeysMayBeModifiedHonorsPendingTableApply(t *testing.T) {
-	tbl, eng := newPrimaryKeyCheckTableForTest(t)
-	mp := tbl.proc.Load().Mp()
-	bat := makeBatchForTest(mp, 7)
-	defer bat.Clean(mp)
+	for _, name := range []string{"apply", "cancel"} {
+		t.Run(name, func(t *testing.T) {
+			tbl, eng := newPrimaryKeyCheckTableForTest(t)
+			mp := tbl.proc.Load().Mp()
+			bat := makeBatchForTest(mp, 7)
+			defer bat.Clean(mp)
 
-	from := types.BuildTS(10, 0)
-	to := types.BuildTS(20, 0)
-	eng.pClient.SetSubscribeState(10, 42, Subscribed)
-	eng.pClient.subscribed.setTablePendingUpdate(10, 42, to.ToTimestamp())
+			from := types.BuildTS(10, 0)
+			to := types.BuildTS(20, 0)
+			eng.pClient.SetSubscribeState(10, 42, Subscribed)
+			eng.pClient.subscribed.setTablePendingUpdate(10, 42, to.ToTimestamp())
+			part := eng.GetOrCreateLatestPart(context.Background(), 1, 10, 42)
 
-	part := eng.GetOrCreateLatestPart(context.Background(), 1, 10, 42)
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		state, done := part.MutateState()
-		state.UpdateAppliedTo(to.Prev())
-		done()
-	}()
-
-	changed, err := tbl.PrimaryKeysMayBeModified(context.Background(), from, to, bat, 0, -1)
-	require.NoError(t, err)
-	require.False(t, changed, "the PK check must wait for the pending table update before proving no change")
+			base, cancel := context.WithCancel(context.Background())
+			waiting := &pkReadinessWaitContext{Context: base, waiting: make(chan struct{})}
+			observation := &resource.LockReadObservation{}
+			ctx := resource.ContextWithLockReadPK(waiting, observation)
+			type result struct {
+				changed bool
+				err     error
+			}
+			done := make(chan result, 1)
+			received := false
+			go func() {
+				start := observation.Start()
+				changed, err := tbl.PrimaryKeysMayBeModified(ctx, from, to, bat, 0, -1)
+				observation.Finish(ctx, resource.LockReadPKCheck, start, err)
+				done <- result{changed, err}
+			}()
+			defer func() {
+				cancel()
+				if !received {
+					<-done
+				}
+			}()
+			select {
+			case <-waiting.waiting:
+			case <-time.After(time.Second):
+				t.Fatal("PK readiness did not enter the pending wait")
+			}
+			waitedAt := time.Now()
+			releasedAt := time.Now()
+			if name == "cancel" {
+				cancel()
+			} else {
+				state, applied := part.MutateState()
+				state.UpdateAppliedTo(to.Prev())
+				applied()
+			}
+			var got result
+			select {
+			case got = <-done:
+				received = true
+			case <-time.After(time.Second):
+				t.Fatal("PK readiness did not finish")
+			}
+			root := resource.NewRoot(resource.ConnExternal)
+			root.MergeLockRead(observation)
+			_, snapshot := root.SealWithLockRead(0)
+			d := snapshot.Diagnostic(uuid.Nil, 1, got.err != nil)
+			require.False(t, got.changed)
+			require.False(t, d.RemotePKSubstagesUnavailable)
+			require.GreaterOrEqual(t, d.PKCheckNS, d.PKReadinessNS)
+			require.GreaterOrEqual(t, d.PKReadinessNS, uint64(releasedAt.Sub(waitedAt)))
+			if name == "cancel" {
+				require.ErrorIs(t, got.err, context.Canceled)
+				require.Equal(t, "pk_readiness", d.LastIncomplete)
+				require.True(t, snapshot.Qualifies(0, time.Second))
+			} else {
+				require.NoError(t, got.err)
+				require.Empty(t, d.LastIncomplete)
+				require.False(t, snapshot.Qualifies(0, time.Second))
+			}
+		})
+	}
 }
 
 func TestPrimaryKeysMayBeModifiedForTableCreatedInTxn(t *testing.T) {
@@ -883,7 +949,7 @@ func TestWorkspaceInsertRowEstimate(t *testing.T) {
 	other.SetRowCount(500)
 	meta := batch.NewWithSize(1)
 	meta.Attrs = []string{catalog.ObjectMeta_ObjectStats}
-	meta.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	meta.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp())
 	t.Cleanup(func() { meta.Clean(txn.proc.Mp()) })
 	for _, rows := range []uint32{8192, 1844} {
 		stats := objectio.NewObjectStats()
@@ -1014,9 +1080,9 @@ func TestPartitionRowEstimate(t *testing.T) {
 func TestReplayRowColumnSizeIncludesPhysicalRowID(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	idVec := vector.NewVec(types.T_int64.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer rowIDVec.Free(mp)
 	defer tsVec.Free(mp)
 	defer idVec.Free(mp)

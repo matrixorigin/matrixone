@@ -97,7 +97,7 @@ func TestLoadNullIfCollatedPayloadPreservesRawDomain(t *testing.T) {
 			proc := newPlanTestProcess(t)
 			input := batch.NewWithSize(4)
 			defer input.Clean(proc.Mp())
-			input.Vecs[3] = vector.NewVec(types.New(types.T_text, types.MaxLongTextLen, 0))
+			input.Vecs[3] = vector.NewVec(types.New(types.T_text, types.MaxLongTextLen, 0), proc.Mp())
 			values := []string{"keep", strings.Repeat("x", types.MaxVarcharLen+1), "NULL", ""}
 			for i, value := range values {
 				require.NoError(t, vector.AppendBytes(input.Vecs[3], []byte(value), i == 3, proc.Mp()))

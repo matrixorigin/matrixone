@@ -84,32 +84,32 @@ func createTestObjectFileWithBackend(t *testing.T, dir string, filename string, 
 		for i := 0; i < colCount; i++ {
 			switch i {
 			case 0:
-				bat.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+				bat.Vecs[i] = vector.NewVec(types.T_int32.ToType(), mp)
 			case 1:
-				bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+				bat.Vecs[i] = vector.NewVec(types.T_int64.ToType(), mp)
 			case 2:
-				bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType(), mp)
 			case 3:
-				bat.Vecs[i] = vector.NewVec(types.T_float64.ToType())
+				bat.Vecs[i] = vector.NewVec(types.T_float64.ToType(), mp)
 			case 4:
-				bat.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+				bat.Vecs[i] = vector.NewVec(types.T_bool.ToType(), mp)
 			case 5:
-				bat.Vecs[i] = vector.NewVec(types.T_uint64.ToType())
+				bat.Vecs[i] = vector.NewVec(types.T_uint64.ToType(), mp)
 			case 6:
-				bat.Vecs[i] = vector.NewVec(types.T_text.ToType())
+				bat.Vecs[i] = vector.NewVec(types.T_text.ToType(), mp)
 			case 7:
-				bat.Vecs[i] = vector.NewVec(types.T_blob.ToType())
+				bat.Vecs[i] = vector.NewVec(types.T_blob.ToType(), mp)
 			default:
 				// For extra columns, cycle through basic types
 				switch i % 4 {
 				case 0:
-					bat.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+					bat.Vecs[i] = vector.NewVec(types.T_int32.ToType(), mp)
 				case 1:
-					bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+					bat.Vecs[i] = vector.NewVec(types.T_int64.ToType(), mp)
 				case 2:
-					bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+					bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType(), mp)
 				case 3:
-					bat.Vecs[i] = vector.NewVec(types.T_float64.ToType())
+					bat.Vecs[i] = vector.NewVec(types.T_float64.ToType(), mp)
 				}
 			}
 		}

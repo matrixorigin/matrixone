@@ -75,7 +75,7 @@ func TestPublicDependentStreamingExecution(t *testing.T) {
 	}()
 	opened, closed := make(map[int32]int), make(map[int32]int)
 	template, err := dependent.Compile(proc.Ctx, p.GetQuery(), func(node *plan.Node) (dependent.SourceFactory, error) {
-		return func(child *process.Process, sourceAllocation *vector.AllocationAccountSelection, account *mpool.AllocationAccount) (dependent.Source, error) {
+		return func(child *process.Process, sourceAllocation *mpool.MPool, account *mpool.AllocationAccount) (dependent.Source, error) {
 			opened[node.NodeId]++
 			b := batch.NewWithSize(len(node.TableDef.Cols))
 			keys := []int32{1, 2, 3}
@@ -83,9 +83,9 @@ func TestPublicDependentStreamingExecution(t *testing.T) {
 				keys = []int32{1, 2, 2, 4}
 			}
 			for i, col := range node.TableDef.Cols {
-				b.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), sourceAllocation)
+				b.Vecs[i], err = vector.NewVec(types.T_int32.ToType(), sourceAllocation), nil
 				if err != nil {
-					b.Clean(child.Mp())
+					b.Clean(sourceAllocation)
 					return nil, err
 				}
 				for _, key := range keys {
@@ -93,14 +93,14 @@ func TestPublicDependentStreamingExecution(t *testing.T) {
 					if col.Name == "n_regionkey" {
 						v = key * 10
 					}
-					if err = vector.AppendFixed(b.Vecs[i], v, false, child.Mp()); err != nil {
-						b.Clean(child.Mp())
+					if err = vector.AppendFixed(b.Vecs[i], v, false, sourceAllocation); err != nil {
+						b.Clean(sourceAllocation)
 						return nil, err
 					}
 				}
 			}
 			b.SetRowCount(len(keys))
-			return &testSource{batch: b, close: func() { closed[node.NodeId]++; b.Clean(child.Mp()) }}, nil
+			return &testSource{batch: b, close: func() { closed[node.NodeId]++; b.Clean(sourceAllocation) }}, nil
 		}, nil
 	})
 	require.NoError(t, err)

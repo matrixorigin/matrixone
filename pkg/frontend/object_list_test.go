@@ -549,9 +549,9 @@ func Test_handleInternalObjectList_GoodPath(t *testing.T) {
 		mp := mpool.MustNewZero()
 		mockBatch := batch.New([]string{"dbname", "tablename", "object_name"})
 		mockBatch.Vecs = []*vector.Vector{
-			vector.NewVec(types.T_varchar.ToType()),
-			vector.NewVec(types.T_varchar.ToType()),
-			vector.NewVec(types.T_varchar.ToType()),
+			vector.NewVec(types.T_varchar.ToType(), mp),
+			vector.NewVec(types.T_varchar.ToType(), mp),
+			vector.NewVec(types.T_varchar.ToType(), mp),
 		}
 		_ = vector.AppendBytes(mockBatch.Vecs[0], []byte("test_db"), false, mp)
 		_ = vector.AppendBytes(mockBatch.Vecs[1], []byte("test_table"), false, mp)
@@ -572,7 +572,8 @@ func Test_handleInternalObjectList_GoodPath(t *testing.T) {
 			convey.So(dbname, convey.ShouldEqual, "test_db")
 			convey.So(tablename, convey.ShouldEqual, "test_table")
 			convey.So(string(stmt.Snapshot), convey.ShouldEqual, "test_snapshot")
-			return mockBatch, nil
+			// The caller cleans the result with mp.
+			return mockBatch.Dup(mp)
 		})
 		defer processStub.Reset()
 

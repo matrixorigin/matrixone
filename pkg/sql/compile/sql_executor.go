@@ -797,7 +797,6 @@ func (exec *txnExecutor) exec(
 				rows, err := cloneInternalExecutorResultBatch(
 					bat,
 					exec.s.mp,
-					streaming,
 				)
 				if err != nil {
 					return err
@@ -894,7 +893,7 @@ func resultCloneBytes(bat *batch.Batch, used, limit uint64) (uint64, error) {
 			continue
 		}
 		values, area := vector.MustVarlenaRawData(vec)
-		if vec.VarlenaAreaIsDisjoint() && vec.AreaBackingKind() == vector.OwnedMPoolUnique {
+		if vec.VarlenaAreaIsDisjoint() && !vec.IsReadOnly() {
 			if !charge(uint64(len(area))) {
 				return exceeded()
 			}
@@ -923,9 +922,8 @@ func resultCloneBytes(bat *batch.Batch, used, limit uint64) (uint64, error) {
 func cloneInternalExecutorResultBatch(
 	bat *batch.Batch,
 	mp *mpool.MPool,
-	streaming bool,
 ) (*batch.Batch, error) {
-	return bat.CloneWithoutAllocationAccount(mp, streaming)
+	return bat.Clone(mp)
 }
 
 // publishInternalExecutorStreamResult transfers result ownership only after a

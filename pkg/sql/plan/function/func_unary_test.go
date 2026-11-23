@@ -3500,7 +3500,7 @@ func TestBinDynamicCoversRemainingDomains(t *testing.T) {
 	})
 
 	t.Run("untyped marker vector returns NULL", func(t *testing.T) {
-		input := vector.NewVec(types.T_any.ToType())
+		input := vector.NewVec(types.T_any.ToType(), proc.Mp())
 		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 		require.NoError(t, result.PreExtendAndReset(1))
 		require.NoError(t, BinDynamic([]*vector.Vector{input}, result, proc, 1, nil))
@@ -6616,7 +6616,7 @@ func TestMd5LargeStringUsesFullValue(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			input := vector.NewVec(test.typ)
+			input := vector.NewVec(test.typ, proc.Mp())
 			defer input.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(input, payload, false, proc.Mp()))
 
@@ -7742,9 +7742,9 @@ func TestOctBinaryLiteral(t *testing.T) {
 		proc.Mp(),
 	)
 	defer input.Free(proc.Mp())
-	input.SetIsBin(true)
 
 	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	result.SetArgumentIsBin([]bool{true})
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(input.Length()))
 	require.NoError(t, OctString([]*vector.Vector{input}, result, proc, input.Length(), nil))

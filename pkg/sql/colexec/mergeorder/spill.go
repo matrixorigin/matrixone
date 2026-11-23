@@ -230,7 +230,7 @@ func writeSpillBatch(proc *process.Process, bat *batch.Batch, keyCols []*vector.
 	return cnt, written, nil
 }
 
-func readSpillPayload(proc *process.Process, reader io.Reader, reuseBat *batch.Batch) (*batch.Batch, error) {
+func readSpillPayload(proc *process.Process, reader io.Reader, reuseBat *batch.Batch, mp *mpool.MPool) (*batch.Batch, error) {
 	var header [8]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {
 		return nil, err
@@ -240,13 +240,13 @@ func readSpillPayload(proc *process.Process, reader io.Reader, reuseBat *batch.B
 		return nil, moerr.NewInternalError(proc.Ctx, "negative merge-order spill payload size")
 	}
 	reuseBat.CleanOnlyData()
-	if err := reuseBat.UnmarshalFromReaderWithMetadata(reader, batchSize, proc.Mp()); err != nil {
+	if err := reuseBat.UnmarshalFromReaderWithMetadata(reader, batchSize, mp); err != nil {
 		return nil, err
 	}
 	return reuseBat, nil
 }
 
-func readSpillBatches(proc *process.Process, reader io.Reader, reuseBat, reuseKeyBat *batch.Batch) (*batch.Batch, *batch.Batch, error) {
+func readSpillBatches(proc *process.Process, reader io.Reader, reuseBat, reuseKeyBat *batch.Batch, mp *mpool.MPool) (*batch.Batch, *batch.Batch, error) {
 	var header [8]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {
 		if err == io.EOF {
@@ -261,7 +261,7 @@ func readSpillBatches(proc *process.Process, reader io.Reader, reuseBat, reuseKe
 			"negative merge-order spill row count",
 		)
 	}
-	bat, err := readSpillPayload(proc, reader, reuseBat)
+	bat, err := readSpillPayload(proc, reader, reuseBat, mp)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -277,7 +277,7 @@ func readSpillBatches(proc *process.Process, reader io.Reader, reuseBat, reuseKe
 	}
 	keyBat := reuseKeyBat
 	if keyCount > 0 {
-		keyBat, err = readSpillPayload(proc, reader, reuseKeyBat)
+		keyBat, err = readSpillPayload(proc, reader, reuseKeyBat, mp)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -345,14 +345,17 @@ func (ctr *container) ensureSpillTailColumns() {
 	ctr.spillTailCols = ctr.spillTailCols[:len(ctr.executors)]
 }
 
-func (ctr *container) clearSpillTailColumns(mp *mpool.MPool) {
+// clearSpillTailColumns frees the tail key columns, created with
+// spillTailMP (the output pool) in updateActiveRunTail.
+func (ctr *container) clearSpillTailColumns(_ *mpool.MPool) {
 	for i := range ctr.spillTailCols {
 		if ctr.spillTailCols[i] != nil {
-			ctr.spillTailCols[i].Free(mp)
+			ctr.spillTailCols[i].Free(ctr.spillTailMP)
 			ctr.spillTailCols[i] = nil
 		}
 	}
 	ctr.spillTailCols = nil
+	ctr.spillTailMP = nil
 	ctr.spillTailReady = false
 }
 
@@ -372,24 +375,18 @@ func (ctr *container) canAppendToActiveRun(incomingOrderCols []*vector.Vector) b
 
 func (ctr *container) updateActiveRunTail(proc *process.Process, incomingOrderCols []*vector.Vector, rowIdx int64) error {
 	ctr.ensureSpillTailColumns()
+	tailMP, err := ctr.outputMP(proc)
+	if err != nil {
+		return err
+	}
 	for i := range incomingOrderCols {
 		if ctr.spillTailCols[i] == nil {
-			if ctr.outputAllocation == nil {
-				ctr.spillTailCols[i] = vector.NewOffHeapVecWithType(*incomingOrderCols[i].GetType())
-			} else {
-				var err error
-				ctr.spillTailCols[i], err = vector.NewOffHeapVecWithTypeAndAllocation(
-					*incomingOrderCols[i].GetType(),
-					ctr.outputAllocation,
-				)
-				if err != nil {
-					return err
-				}
-			}
+			ctr.spillTailCols[i] = vector.NewVec(*incomingOrderCols[i].GetType(), tailMP)
+			ctr.spillTailMP = tailMP
 		} else {
 			ctr.spillTailCols[i].CleanOnlyData()
 		}
-		if err := ctr.spillTailCols[i].UnionOne(incomingOrderCols[i], rowIdx, proc.Mp()); err != nil {
+		if err := ctr.spillTailCols[i].UnionOne(incomingOrderCols[i], rowIdx, tailMP); err != nil {
 			return err
 		}
 	}
@@ -438,18 +435,18 @@ func computeDrainChunk(src *spillRunReader, currentSize int) int {
 	return remaining
 }
 
-func appendContiguousRows(dst *batch.Batch, src *batch.Batch, start int64, cnt int, proc *process.Process) error {
+func appendContiguousRows(dst *batch.Batch, src *batch.Batch, start int64, cnt int, mp *mpool.MPool) error {
 	for col := range dst.Vecs {
-		if err := dst.Vecs[col].UnionBatch(src.Vecs[col], start, cnt, nil, proc.Mp()); err != nil {
+		if err := dst.Vecs[col].UnionBatch(src.Vecs[col], start, cnt, nil, mp); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func appendContiguousOrderRows(dstOrder *batch.Batch, srcOrderCols []*vector.Vector, keyIdxes []int, start int64, cnt int, proc *process.Process) error {
+func appendContiguousOrderRows(dstOrder *batch.Batch, srcOrderCols []*vector.Vector, keyIdxes []int, start int64, cnt int, mp *mpool.MPool) error {
 	for col, keyIdx := range keyIdxes {
-		if err := dstOrder.Vecs[col].UnionBatch(srcOrderCols[keyIdx], start, cnt, nil, proc.Mp()); err != nil {
+		if err := dstOrder.Vecs[col].UnionBatch(srcOrderCols[keyIdx], start, cnt, nil, mp); err != nil {
 			return err
 		}
 	}
@@ -674,7 +671,7 @@ func (ctr *container) spillCachedRuns(proc *process.Process, analyzer process.An
 			}
 			ctr.spillRuns = append(ctr.spillRuns, run)
 			freeOrderColumns(proc.Mp(), bat, orderCols)
-			ctr.batchList[i].Clean(proc.Mp())
+			ctr.batchList[i].Clean(ctr.residentMP(proc))
 			ctr.batchList[i] = nil
 			ctr.orderCols[i] = nil
 			continue
@@ -683,7 +680,7 @@ func (ctr *container) spillCachedRuns(proc *process.Process, analyzer process.An
 			return err
 		}
 		freeOrderColumns(proc.Mp(), bat, orderCols)
-		ctr.batchList[i].Clean(proc.Mp())
+		ctr.batchList[i].Clean(ctr.residentMP(proc))
 		ctr.batchList[i] = nil
 		ctr.orderCols[i] = nil
 	}
@@ -948,14 +945,18 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 		}
 	}()
 
+	outMP, err := ctr.outputMP(proc)
+	if err != nil {
+		return nil, err
+	}
 	var out *batch.Batch
 	var outOrder *batch.Batch
 	defer func() {
 		if out != nil {
-			out.Clean(proc.Mp())
+			out.Clean(outMP)
 		}
 		if outOrder != nil {
-			outOrder.Clean(proc.Mp())
+			outOrder.Clean(outMP)
 		}
 	}()
 	keyCount := len(ctr.spillKeyIndexes)
@@ -968,20 +969,15 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 			out, err = newBatchWithAllocation(
 				proc,
 				first,
-				ctr.outputAllocation,
+				outMP,
 			)
 			if err != nil {
 				return nil, err
 			}
 			if keyCount > 0 {
-				outOrder = batch.NewOffHeapWithSize(keyCount)
+				outOrder = batch.NewWithSize(keyCount)
 				for i, keyIdx := range ctr.spillKeyIndexes {
-					outOrder.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.spillReaders[0].orderCols[keyIdx].GetType())
-				}
-				if ctr.outputAllocation != nil {
-					if err = outOrder.SetAllocationAccount(ctr.outputAllocation); err != nil {
-						return nil, err
-					}
+					outOrder.Vecs[i] = vector.NewVec(*ctr.spillReaders[0].orderCols[keyIdx].GetType(), outMP)
 				}
 			}
 		} else {
@@ -1024,11 +1020,11 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 				if chunk < 1 {
 					chunk = 1
 				}
-				if err := appendContiguousRows(out, src.batch, src.rowIdx, chunk, proc); err != nil {
+				if err := appendContiguousRows(out, src.batch, src.rowIdx, chunk, outMP); err != nil {
 					return nil, err
 				}
 				if outOrder != nil {
-					if err := appendContiguousOrderRows(outOrder, src.orderCols, ctr.spillKeyIndexes, src.rowIdx, chunk, proc); err != nil {
+					if err := appendContiguousOrderRows(outOrder, src.orderCols, ctr.spillKeyIndexes, src.rowIdx, chunk, outMP); err != nil {
 						return nil, err
 					}
 				}
@@ -1054,11 +1050,11 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 						chunk = 1
 					}
 				}
-				if err := appendContiguousRows(out, src.batch, src.rowIdx, chunk, proc); err != nil {
+				if err := appendContiguousRows(out, src.batch, src.rowIdx, chunk, outMP); err != nil {
 					return nil, err
 				}
 				if outOrder != nil {
-					if err := appendContiguousOrderRows(outOrder, src.orderCols, ctr.spillKeyIndexes, src.rowIdx, chunk, proc); err != nil {
+					if err := appendContiguousOrderRows(outOrder, src.orderCols, ctr.spillKeyIndexes, src.rowIdx, chunk, outMP); err != nil {
 						return nil, err
 					}
 				}
@@ -1083,11 +1079,11 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 				if secondIdx > 0 {
 					chunk := ctr.computeWinnerChunk(src, ctr.spillReaders[secondIdx], budgetChunk)
 					if chunk > 1 {
-						if err := appendContiguousRows(out, src.batch, src.rowIdx, chunk, proc); err != nil {
+						if err := appendContiguousRows(out, src.batch, src.rowIdx, chunk, outMP); err != nil {
 							return nil, err
 						}
 						if outOrder != nil {
-							if err := appendContiguousOrderRows(outOrder, src.orderCols, ctr.spillKeyIndexes, src.rowIdx, chunk, proc); err != nil {
+							if err := appendContiguousOrderRows(outOrder, src.orderCols, ctr.spillKeyIndexes, src.rowIdx, chunk, outMP); err != nil {
 								return nil, err
 							}
 						}
@@ -1105,11 +1101,11 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 			}
 
 			reader := ctr.spillReaders[0]
-			if err := appendContiguousRows(out, reader.batch, reader.rowIdx, 1, proc); err != nil {
+			if err := appendContiguousRows(out, reader.batch, reader.rowIdx, 1, outMP); err != nil {
 				return nil, err
 			}
 			if outOrder != nil {
-				if err := appendContiguousOrderRows(outOrder, reader.orderCols, ctr.spillKeyIndexes, reader.rowIdx, 1, proc); err != nil {
+				if err := appendContiguousOrderRows(outOrder, reader.orderCols, ctr.spillKeyIndexes, reader.rowIdx, 1, outMP); err != nil {
 					return nil, err
 				}
 			}
@@ -1192,20 +1188,27 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 	if err, canceled := vm.CancelCheck(proc); canceled {
 		return false, err
 	}
+	bufMP, err := ctr.outputMP(proc)
+	if err != nil {
+		return false, err
+	}
+	if ctr.buf != nil && ctr.bufMP != bufMP {
+		ctr.cleanBuf()
+	}
 	if ctr.buf == nil {
 		if len(ctr.spillReaders) == 0 {
 			return true, nil
 		}
 		first := ctr.spillReaders[0].batch
-		var err error
 		ctr.buf, err = newBatchWithAllocation(
 			proc,
 			first,
-			ctr.outputAllocation,
+			bufMP,
 		)
 		if err != nil {
 			return false, err
 		}
+		ctr.bufMP = bufMP
 	} else {
 		ctr.buf.CleanOnlyData()
 	}
@@ -1243,7 +1246,7 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 			if chunk < 1 {
 				chunk = 1
 			}
-			if err := appendContiguousRows(ctr.buf, src.batch, src.rowIdx, chunk, proc); err != nil {
+			if err := appendContiguousRows(ctr.buf, src.batch, src.rowIdx, chunk, bufMP); err != nil {
 				return false, err
 			}
 			rows += chunk
@@ -1268,7 +1271,7 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 					chunk = 1
 				}
 			}
-			if err := appendContiguousRows(ctr.buf, src.batch, src.rowIdx, chunk, proc); err != nil {
+			if err := appendContiguousRows(ctr.buf, src.batch, src.rowIdx, chunk, bufMP); err != nil {
 				return false, err
 			}
 			rows += chunk
@@ -1292,7 +1295,7 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 			if secondIdx > 0 {
 				chunk := ctr.computeWinnerChunk(src, ctr.spillReaders[secondIdx], budgetChunk)
 				if chunk > 1 {
-					if err := appendContiguousRows(ctr.buf, src.batch, src.rowIdx, chunk, proc); err != nil {
+					if err := appendContiguousRows(ctr.buf, src.batch, src.rowIdx, chunk, bufMP); err != nil {
 						return false, err
 					}
 					rows += chunk
@@ -1309,7 +1312,7 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 		}
 
 		reader := ctr.spillReaders[0]
-		if err := appendContiguousRows(ctr.buf, reader.batch, reader.rowIdx, 1, proc); err != nil {
+		if err := appendContiguousRows(ctr.buf, reader.batch, reader.rowIdx, 1, bufMP); err != nil {
 			return false, err
 		}
 		rows++

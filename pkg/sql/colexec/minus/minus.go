@@ -46,7 +46,11 @@ func (minus *Minus) Prepare(proc *process.Process) error {
 		return err
 	}
 	minus.ctr.iterator = minus.ctr.hashTable.NewIterator()
-	return minus.ctr.keyEvaluator.Prepare(proc, minus.KeyExprs, minus.ExpressionAllocation())
+	allocation, err := minus.ExpressionAllocation(proc)
+	if err != nil {
+		return err
+	}
+	return minus.ctr.keyEvaluator.Prepare(proc, minus.KeyExprs, allocation)
 }
 
 // Call is the execute method of minus operator
@@ -182,6 +186,10 @@ func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analy
 			}
 		}
 		minus.ctr.bat.CleanOnlyData()
+		outMP, err := minus.MP(proc)
+		if err != nil {
+			return false, err
+		}
 
 		keyVecs, err := minus.ctr.keyEvaluator.Eval(proc, input.Batch)
 		if err != nil {
@@ -214,7 +222,7 @@ func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analy
 			insertCount := int(newHashGroup - oldHashGroup)
 			if insertCount > 0 {
 				for pos := range input.Batch.Vecs {
-					if err := minus.ctr.bat.Vecs[pos].UnionBatch(input.Batch.Vecs[pos], int64(i), insertCount, inserted[:n], proc.Mp()); err != nil {
+					if err := minus.ctr.bat.Vecs[pos].UnionBatch(input.Batch.Vecs[pos], int64(i), insertCount, inserted[:n], outMP); err != nil {
 						return false, err
 					}
 				}

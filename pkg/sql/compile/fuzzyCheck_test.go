@@ -53,7 +53,7 @@ func TestExactFloatFuzzyCheckPreservesStorageIdentity(t *testing.T) {
 	nanPayload0 := encode(math.Float64frombits(0x7ff8000000000000))
 	nanPayload1 := encode(math.Float64frombits(0x7ff8000000000001))
 
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer vec.Free(mp)
 	for _, key := range [][]byte{positiveZero, negativeZero, nanPayload0, nanPayload1} {
 		require.NoError(t, vector.AppendBytes(vec, key, false, mp))
@@ -175,7 +175,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 
 	t.Run("per_row_null_check", func(t *testing.T) {
 		// Vector with mix of NULLs and values
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(42), false, mp))
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(vec, int64(99), false, mp))
@@ -198,7 +198,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 	})
 
 	t.Run("all_nulls", func(t *testing.T) {
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
 		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
 		defer vec.Free(mp)
@@ -213,7 +213,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 	})
 
 	t.Run("varchar_values", func(t *testing.T) {
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(vec, []byte("hello"), false, mp))
 		require.NoError(t, vector.AppendBytes(vec, nil, true, mp)) // NULL
 		defer vec.Free(mp)
@@ -229,7 +229,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 
 	// Cover more type branches in vectorToString
 	t.Run("bool", func(t *testing.T) {
-		vec := vector.NewVec(types.T_bool.ToType())
+		vec := vector.NewVec(types.T_bool.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, true, false, mp))
 		require.NoError(t, vector.AppendFixed(vec, false, true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(vec, false, false, mp))
@@ -245,7 +245,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 
 	t.Run("int_types", func(t *testing.T) {
 		// int8
-		vec8 := vector.NewVec(types.T_int8.ToType())
+		vec8 := vector.NewVec(types.T_int8.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec8, int8(7), false, mp))
 		require.NoError(t, vector.AppendFixed(vec8, int8(0), true, mp))
 		defer vec8.Free(mp)
@@ -255,7 +255,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 		require.Equal(t, "", s)
 
 		// int16
-		vec16 := vector.NewVec(types.T_int16.ToType())
+		vec16 := vector.NewVec(types.T_int16.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec16, int16(16), false, mp))
 		require.NoError(t, vector.AppendFixed(vec16, int16(0), true, mp))
 		defer vec16.Free(mp)
@@ -265,7 +265,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 		require.Equal(t, "", s)
 
 		// int32
-		vec32 := vector.NewVec(types.T_int32.ToType())
+		vec32 := vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec32, int32(32), false, mp))
 		require.NoError(t, vector.AppendFixed(vec32, int32(0), true, mp))
 		defer vec32.Free(mp)
@@ -276,7 +276,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 	})
 
 	t.Run("uint_types", func(t *testing.T) {
-		vec8 := vector.NewVec(types.T_uint8.ToType())
+		vec8 := vector.NewVec(types.T_uint8.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec8, uint8(8), false, mp))
 		require.NoError(t, vector.AppendFixed(vec8, uint8(0), true, mp))
 		defer vec8.Free(mp)
@@ -285,21 +285,21 @@ func TestVectorToStringNullHandling(t *testing.T) {
 		s, _ = vectorToString(vec8, 1)
 		require.Equal(t, "", s)
 
-		vec16 := vector.NewVec(types.T_uint16.ToType())
+		vec16 := vector.NewVec(types.T_uint16.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec16, uint16(16), false, mp))
 		require.NoError(t, vector.AppendFixed(vec16, uint16(0), true, mp))
 		defer vec16.Free(mp)
 		s, _ = vectorToString(vec16, 0)
 		require.Equal(t, "16", s)
 
-		vec32 := vector.NewVec(types.T_uint32.ToType())
+		vec32 := vector.NewVec(types.T_uint32.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec32, uint32(32), false, mp))
 		require.NoError(t, vector.AppendFixed(vec32, uint32(0), true, mp))
 		defer vec32.Free(mp)
 		s, _ = vectorToString(vec32, 0)
 		require.Equal(t, "32", s)
 
-		vec64 := vector.NewVec(types.T_uint64.ToType())
+		vec64 := vector.NewVec(types.T_uint64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec64, uint64(64), false, mp))
 		require.NoError(t, vector.AppendFixed(vec64, uint64(0), true, mp))
 		defer vec64.Free(mp)
@@ -308,7 +308,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 	})
 
 	t.Run("float_types", func(t *testing.T) {
-		vec32 := vector.NewVec(types.T_float32.ToType())
+		vec32 := vector.NewVec(types.T_float32.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec32, float32(1.5), false, mp))
 		require.NoError(t, vector.AppendFixed(vec32, float32(0), true, mp))
 		defer vec32.Free(mp)
@@ -317,7 +317,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 		s, _ = vectorToString(vec32, 1)
 		require.Equal(t, "", s)
 
-		vec64 := vector.NewVec(types.T_float64.ToType())
+		vec64 := vector.NewVec(types.T_float64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec64, float64(2.5), false, mp))
 		require.NoError(t, vector.AppendFixed(vec64, float64(0), true, mp))
 		defer vec64.Free(mp)
@@ -328,7 +328,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 	})
 
 	t.Run("decimal_types", func(t *testing.T) {
-		dec64 := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		dec64 := vector.NewVec(types.New(types.T_decimal64, 10, 2), mp)
 		d64, _ := types.Decimal64FromFloat64(3.14, 64, 2)
 		require.NoError(t, vector.AppendFixed(dec64, d64, false, mp))
 		require.NoError(t, vector.AppendFixed(dec64, d64, true, mp)) // NULL
@@ -338,7 +338,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 		s, _ = vectorToString(dec64, 1)
 		require.Equal(t, "", s)
 
-		dec128 := vector.NewVec(types.New(types.T_decimal128, 20, 2))
+		dec128 := vector.NewVec(types.New(types.T_decimal128, 20, 2), mp)
 		d128, _ := types.Decimal128FromFloat64(6.28, 128, 2)
 		require.NoError(t, vector.AppendFixed(dec128, d128, false, mp))
 		require.NoError(t, vector.AppendFixed(dec128, d128, true, mp))
@@ -350,7 +350,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 	})
 
 	t.Run("bit_type", func(t *testing.T) {
-		vec := vector.NewVec(types.T_bit.ToType())
+		vec := vector.NewVec(types.T_bit.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, uint64(0xFF), false, mp))
 		require.NoError(t, vector.AppendFixed(vec, uint64(0), true, mp))
 		defer vec.Free(mp)
@@ -362,7 +362,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 
 	t.Run("char_text_blob", func(t *testing.T) {
 		for _, oid := range []types.T{types.T_char, types.T_text, types.T_blob, types.T_binary, types.T_varbinary} {
-			vec := vector.NewVec(oid.ToType())
+			vec := vector.NewVec(oid.ToType(), mp)
 			require.NoError(t, vector.AppendBytes(vec, []byte("data"), false, mp))
 			require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
 			defer vec.Free(mp)
@@ -374,7 +374,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 	})
 
 	t.Run("uuid", func(t *testing.T) {
-		vec := vector.NewVec(types.T_uuid.ToType())
+		vec := vector.NewVec(types.T_uuid.ToType(), mp)
 		u, _ := types.ParseUuid("12345678-1234-1234-1234-123456789abc")
 		require.NoError(t, vector.AppendFixed(vec, u, false, mp))
 		require.NoError(t, vector.AppendFixed(vec, u, true, mp))
@@ -387,7 +387,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 
 	t.Run("date_time_types", func(t *testing.T) {
 		// date
-		dv := vector.NewVec(types.T_date.ToType())
+		dv := vector.NewVec(types.T_date.ToType(), mp)
 		d, _ := types.ParseDateCast("2024-01-15")
 		require.NoError(t, vector.AppendFixed(dv, d, false, mp))
 		require.NoError(t, vector.AppendFixed(dv, d, true, mp))
@@ -398,7 +398,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 		require.Equal(t, "", s)
 
 		// time
-		tv := vector.NewVec(types.T_time.ToType())
+		tv := vector.NewVec(types.T_time.ToType(), mp)
 		tm, _ := types.ParseTime("12:30:45", 0)
 		require.NoError(t, vector.AppendFixed(tv, tm, false, mp))
 		require.NoError(t, vector.AppendFixed(tv, tm, true, mp))
@@ -409,7 +409,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 		require.Equal(t, "", s)
 
 		// datetime
-		dtv := vector.NewVec(types.New(types.T_datetime, 0, 0))
+		dtv := vector.NewVec(types.New(types.T_datetime, 0, 0), mp)
 		dt, _ := types.ParseDatetime("2024-01-15 12:30:45", 0)
 		require.NoError(t, vector.AppendFixed(dtv, dt, false, mp))
 		require.NoError(t, vector.AppendFixed(dtv, dt, true, mp))
@@ -420,7 +420,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 		require.Equal(t, "", s)
 
 		// timestamp
-		tsv := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+		tsv := vector.NewVec(types.New(types.T_timestamp, 0, 0), mp)
 		ts, _ := types.ParseTimestamp(time.Local, "2024-01-15 12:30:45", 0)
 		require.NoError(t, vector.AppendFixed(tsv, ts, false, mp))
 		require.NoError(t, vector.AppendFixed(tsv, ts, true, mp))
@@ -431,7 +431,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 		require.Equal(t, "", s)
 
 		// year
-		yv := vector.NewVec(types.T_year.ToType())
+		yv := vector.NewVec(types.T_year.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(yv, types.MoYear(2024), false, mp))
 		require.NoError(t, vector.AppendFixed(yv, types.MoYear(0), true, mp))
 		defer yv.Free(mp)
@@ -442,7 +442,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 	})
 
 	t.Run("enum_type", func(t *testing.T) {
-		vec := vector.NewVec(types.T_enum.ToType())
+		vec := vector.NewVec(types.T_enum.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, types.Enum(3), false, mp))
 		require.NoError(t, vector.AppendFixed(vec, types.Enum(0), true, mp))
 		defer vec.Free(mp)
@@ -453,7 +453,7 @@ func TestVectorToStringNullHandling(t *testing.T) {
 	})
 
 	t.Run("json_type", func(t *testing.T) {
-		vec := vector.NewVec(types.T_json.ToType())
+		vec := vector.NewVec(types.T_json.ToType(), mp)
 		bj, _ := types.ParseStringToByteJson(`{"key":"val"}`)
 		bjBytes, _ := bj.Marshal()
 		require.NoError(t, vector.AppendBytes(vec, bjBytes, false, mp))
@@ -472,7 +472,7 @@ func TestFirstlyCheckSkipsNulls(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	t.Run("all_nulls_no_error", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))
@@ -484,7 +484,7 @@ func TestFirstlyCheckSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("nulls_mixed_with_distinct_values", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(vec, int64(2), false, mp))
@@ -497,7 +497,7 @@ func TestFirstlyCheckSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("real_dup_still_caught", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(5), false, mp))
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))  // NULL
 		require.NoError(t, vector.AppendFixed(vec, int64(5), false, mp)) // dup!
@@ -511,7 +511,7 @@ func TestFirstlyCheckSkipsNulls(t *testing.T) {
 
 	t.Run("compound_all_nulls_no_error", func(t *testing.T) {
 		// Compound key: all rows are NULL (serial() propagated)
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
 		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
 		defer vec.Free(mp)
@@ -532,7 +532,7 @@ func TestFirstlyCheckSkipsNulls(t *testing.T) {
 		packer := types.NewPacker()
 		defer packer.Close()
 
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		// Row 0: packed (1, 10) — non-NULL
 		packer.Reset()
 		packer.EncodeInt64(1)
@@ -563,7 +563,7 @@ func TestFirstlyCheckSkipsNulls(t *testing.T) {
 		packer := types.NewPacker()
 		defer packer.Close()
 
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		// Row 0: packed (1, 10)
 		packer.Reset()
 		packer.EncodeInt64(1)
@@ -598,7 +598,7 @@ func TestGenCollsionKeysSkipsNulls(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	t.Run("non_compound_filters_nulls", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(vec, int64(3), false, mp))
@@ -611,7 +611,7 @@ func TestGenCollsionKeysSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("non_compound_all_nulls", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))
 		defer vec.Free(mp)
@@ -628,7 +628,7 @@ func TestGenCollsionKeysSkipsNulls(t *testing.T) {
 		packer := types.NewPacker()
 		defer packer.Close()
 
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		// Row 0: non-NULL packed tuple
 		packer.Reset()
 		packer.EncodeInt64(1)
@@ -666,7 +666,7 @@ func TestFillAllNullsSkipsBackgroundCheck(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	t.Run("non_compound_all_nulls", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))
 
@@ -686,7 +686,7 @@ func TestFillAllNullsSkipsBackgroundCheck(t *testing.T) {
 	})
 
 	t.Run("non_compound_mixed", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(42), false, mp))
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(vec, int64(99), false, mp))
@@ -710,7 +710,7 @@ func TestFillAllNullsSkipsBackgroundCheck(t *testing.T) {
 	})
 
 	t.Run("compound_all_nulls", func(t *testing.T) {
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
 		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
 
@@ -740,7 +740,7 @@ func TestFillAllNullsSkipsBackgroundCheck(t *testing.T) {
 		packer := types.NewPacker()
 		defer packer.Close()
 
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		// Row 0: packed (1, 10) — non-NULL
 		packer.Reset()
 		packer.EncodeInt64(1)
@@ -786,7 +786,7 @@ func TestFillOnlyInsertHidden(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	t.Run("hidden_with_values", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(10), false, mp))
 		require.NoError(t, vector.AppendFixed(vec, int64(20), false, mp))
 
@@ -812,7 +812,7 @@ func TestFillOnlyInsertHidden(t *testing.T) {
 	t.Run("hidden_dup_caught_by_firstly_check_skipped", func(t *testing.T) {
 		// onlyInsertHidden skips firstlyCheck — duplicates in the hidden table
 		// are caught by backgroundSQLCheck, not the in-batch check.
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(5), false, mp))
 		require.NoError(t, vector.AppendFixed(vec, int64(5), false, mp)) // dup value
 
@@ -845,7 +845,7 @@ func TestFillEndToEndConditionGeneration(t *testing.T) {
 
 	t.Run("non_compound_nulls_skipped_real_dup_caught", func(t *testing.T) {
 		// Multiple NULLs + a real duplicate value. firstlyCheck should catch the dup.
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(7), false, mp))
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))  // NULL
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))  // NULL
@@ -867,7 +867,7 @@ func TestFillEndToEndConditionGeneration(t *testing.T) {
 
 	t.Run("non_compound_nulls_only_skips_background_sql", func(t *testing.T) {
 		// All NULLs → cnt=0, condition="" → backgroundSQLCheck would be skipped
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
 		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
 		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
@@ -891,7 +891,7 @@ func TestFillEndToEndConditionGeneration(t *testing.T) {
 		packer := types.NewPacker()
 		defer packer.Close()
 
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		// Row 0: packed (10, 100) — non-NULL
 		packer.Reset()
 		packer.EncodeInt64(10)
@@ -949,7 +949,7 @@ func TestFillCompoundConditionUsesSingleQuotedSQLLiterals(t *testing.T) {
 	packer.EncodeMoYear(yearVal)
 	packer.EncodeDecimal64(decVal)
 
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, packer.GetBuf(), false, mp))
 
 	bat := batch.NewWithSize(1)
@@ -997,7 +997,7 @@ func TestConcurrentFirstlyCheck(t *testing.T) {
 		go func(goroutineID int) {
 			defer wg.Done()
 			// Each goroutine creates its own vector and fuzzyCheck
-			vec := vector.NewVec(types.T_int64.ToType())
+			vec := vector.NewVec(types.T_int64.ToType(), mp)
 			for i := 0; i < numRows; i++ {
 				isNull := (i % 3) == 0 // every 3rd row is NULL
 				if isNull {

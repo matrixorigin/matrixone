@@ -1517,7 +1517,7 @@ func extractVecValues(litVec *plan.LiteralVec, typ plan.Type) (values []string, 
 		return nil, false
 	}
 
-	vec := vector.NewVec(types.New(oid, typ.Width, typ.Scale))
+	vec := vector.NewVec(types.New(oid, typ.Width, typ.Scale), nil)
 	// UnmarshalBinary aliases litVec.Data and marks vector buffers non-freeable,
 	// so a nil MPool is intentional here.
 	defer vec.Free(nil)

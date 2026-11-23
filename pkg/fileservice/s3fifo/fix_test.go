@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -74,6 +75,56 @@ func TestEvictToStopsOnCancel(t *testing.T) {
 	used := c.EvictTo(ctx, 0)
 	require.Equal(t, int64((1000-evictBatch)*10), used, "one batch, then stop")
 	require.Equal(t, int64(0), c.EvictTo(context.Background(), 0))
+}
+
+type elapsedEvictionDeadline struct{ context.Context }
+
+func (elapsedEvictionDeadline) Deadline() (time.Time, bool) {
+	return time.Unix(1, 0), true
+}
+
+func TestPressureEvictionFinishesAdmittedBatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var misuse atomic.Int32
+	callbacks := 0
+	c := newCache(1<<20, func(options *Options[int, *value]) {
+		options.OnRemove = func(_ int, v *value, _ int64, _ uint64, _ Reason) {
+			require.False(t, v.freed.Load(), "callback owns a live reference")
+			callbacks++
+			cancel()
+		}
+	})
+	t.Cleanup(func() { c.EvictTo(context.Background(), 0) })
+	values := make([]*value, evictBatch+1)
+	for i := range values {
+		v := newValue(i, &misuse)
+		values[i] = v
+		inserted, _ := c.Set(i, v, 1)
+		v.Release()
+		require.True(t, inserted)
+	}
+
+	expired := elapsedEvictionDeadline{Context: t.Context()}
+	require.NoError(t, expired.Err(), "deadline can elapse before the timer updates Err")
+	used, removed := c.evictTo(expired, 0, true)
+	require.EqualValues(t, evictBatch+1, used)
+	require.False(t, removed)
+	require.Zero(t, callbacks)
+
+	used, removed = c.evictTo(ctx, 0, true)
+	require.EqualValues(t, 1, used)
+	require.True(t, removed)
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.Equal(t, evictBatch, callbacks)
+	freed := 0
+	for _, v := range values {
+		if v.freed.Load() {
+			freed++
+		}
+	}
+	require.Equal(t, evictBatch, freed)
+	require.Zero(t, misuse.Load())
 }
 
 type panickingValue struct{ retains int }

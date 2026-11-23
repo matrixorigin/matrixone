@@ -731,12 +731,7 @@ func makeApproxPercentile(
 		argType:   param,
 		emptyNull: true,
 	}
-	switch param.Oid {
-	case types.T_decimal64, types.T_decimal128:
-		info.retType = ApproxPercentileReturnType([]types.Type{param})
-	default:
-		info.retType = types.T_float64.ToType()
-	}
+	info.retType = ApproxPercentileReturnType([]types.Type{param})
 	return newApproxPercentileExec(mp, info)
 }
 

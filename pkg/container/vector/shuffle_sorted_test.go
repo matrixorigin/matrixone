@@ -37,7 +37,7 @@ func TestShuffleSorted(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(fmt.Sprintf("buffered=%v/%s", buffered, tc.name), func(t *testing.T) {
 				mp := mpool.MustNewZero()
-				v := NewVec(types.T_int64.ToType())
+				v := NewVec(types.T_int64.ToType(), mp)
 				t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
 				require.NoError(t, AppendFixedList(v, []int64{1, 2, 3}, nil, mp))
 				v.SetSorted(tc.sorted)
@@ -97,7 +97,7 @@ func TestShuffleSortedGather(t *testing.T) {
 					if varlen {
 						typ = types.T_varchar.ToType()
 					}
-					v := NewVec(typ)
+					v := NewVec(typ, mp)
 					t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
 					values := []string{"a long external value 0", "a long external value 1", "a long external value 2", "a long external value 3"}
 					if varlen {
@@ -142,7 +142,7 @@ func TestShuffleWithBufIdentityAlias(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			v := NewVec(types.T_int64.ToType())
+			v := NewVec(types.T_int64.ToType(), mp)
 			t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
 			require.NoError(t, v.PreExtend(8, mp))
 			require.NoError(t, AppendFixedList(v, []int64{1, 2, 3, 4}, nil, mp))
@@ -171,7 +171,7 @@ func TestShuffleWithBufIdentityAlias(t *testing.T) {
 
 func TestShuffleWithBufIdentityVarlenAlias(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v := NewVec(types.T_text.ToType())
+	v := NewVec(types.T_text.ToType(), mp)
 	t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
 	require.NoError(t, v.PreExtend(5, mp))
 	values := [][]byte{[]byte("first value exceeding the inline storage limit"), []byte("second value exceeding the inline storage limit"), []byte("third value exceeding the inline storage limit"), []byte("fourth value exceeding the inline storage limit")}
@@ -194,7 +194,7 @@ func TestShuffleWithBufIdentityVarlenAlias(t *testing.T) {
 
 func TestShuffleWithBufIdentityReuse(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v := NewVec(types.T_int64.ToType())
+	v := NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
 	require.NoError(t, AppendFixedList(v, []int64{1, 2, 3, 4}, nil, mp))
 	v.SetSorted(true)
@@ -230,7 +230,7 @@ func TestShuffleWithBufStringMetadata(t *testing.T) {
 		for _, identity := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/identity=%v", typ.Oid, identity), func(t *testing.T) {
 				mp := mpool.MustNewZero()
-				v := NewVec(typ)
+				v := NewVec(typ, mp)
 				t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
 				values := [][]byte{
 					[]byte("first payload longer than the inline limit"),
@@ -240,7 +240,6 @@ func TestShuffleWithBufStringMetadata(t *testing.T) {
 				require.NoError(t, AppendBytesList(v, values, nil, mp))
 				v.SetNull(1)
 				v.GetGrouping().Add(2)
-				v.areaDisjoint = true
 				sels := []int64{2, 0, 1}
 				if identity {
 					sels = []int64{0, 1, 2}
@@ -253,7 +252,6 @@ func TestShuffleWithBufStringMetadata(t *testing.T) {
 					require.Equal(t, source == 1, v.IsNull(uint64(row)))
 					require.Equal(t, source == 2, v.GetGrouping().Contains(uint64(row)))
 				}
-				require.False(t, v.areaDisjoint)
 				if identity {
 					require.True(t, v.GetSorted())
 				}
@@ -275,7 +273,7 @@ func BenchmarkShuffle(b *testing.B) {
 						if varlen {
 							typ = types.T_varchar.ToType()
 						}
-						v := NewVec(typ)
+						v := NewVec(typ, mp)
 						defer v.Free(mp)
 						if varlen {
 							vals := make([][]byte, n)

@@ -1410,7 +1410,7 @@ func (p *launchPad) gatherTombstoneTasks(ctx context.Context,
 	rc rscthrottler.RSCThrottler,
 ) {
 	tasks := GatherTombstoneTasks(ctx, IterStats(p.tombstoneStats), tombstoneOpts, p.lastMergeTime)
-	p.revisedResults = append(p.revisedResults, controlTaskMemInPlace(tasks, rc, 1)...)
+	p.revisedResults = append(p.revisedResults, controlTaskMemInPlace(tasks, rc, 1, p.table.GetBlockMaxRows())...)
 }
 
 func (p *launchPad) gatherLnTasks(ctx context.Context,
@@ -1439,7 +1439,7 @@ func (p *launchPad) gatherLnTasks(ctx context.Context,
 		)
 		if err == nil {
 			p.revisedResults = append(p.revisedResults,
-				controlTaskMemInPlace(overlapTasks, rc, 2)...)
+				controlTaskMemInPlace(overlapTasks, rc, 2, p.table.GetBlockMaxRows())...)
 		}
 	}
 }
@@ -1457,7 +1457,7 @@ func (p *launchPad) gatherL0Tasks(ctx context.Context,
 		zap.Int("tasks", len(l0Tasks)),
 	)
 	p.revisedResults = append(p.revisedResults,
-		controlTaskMemInPlace(l0Tasks, rc, 2)...)
+		controlTaskMemInPlace(l0Tasks, rc, 2, p.table.GetBlockMaxRows())...)
 }
 
 func (p *launchPad) gatherByTrigger(ctx context.Context,
@@ -1493,7 +1493,7 @@ func (p *launchPad) gatherByTrigger(ctx context.Context,
 	}
 	if len(trigger.assigns) > 0 {
 		p.revisedResults = append(p.revisedResults,
-			controlTaskMemInPlace(trigger.assigns, rc, 1)...)
+			controlTaskMemInPlace(trigger.assigns, rc, 1, p.table.GetBlockMaxRows())...)
 	}
 	return p.revisedResults
 }
@@ -1510,6 +1510,7 @@ func controlTaskMemInPlace(
 	tasks []mergeTask,
 	rc rscthrottler.RSCThrottler,
 	deleteLessThan int,
+	blockRows uint32,
 ) []mergeTask {
 
 	if len(tasks) == 0 {
@@ -1518,8 +1519,8 @@ func controlTaskMemInPlace(
 	for i := range tasks {
 		task := &tasks[i]
 		original := len(task.objs)
-		estSize := mergesort.EstimateMergeSize(IterStats(task.objs))
-		for ; !resourceAvailable(int64(estSize), rc) && len(task.objs) > 1; estSize = mergesort.EstimateMergeSize(IterStats(task.objs)) {
+		estSize := mergesort.EstimateMergeSizeWithBlockRows(IterStats(task.objs), blockRows)
+		for ; !resourceAvailable(int64(estSize), rc) && len(task.objs) > 1; estSize = mergesort.EstimateMergeSizeWithBlockRows(IterStats(task.objs), blockRows) {
 			task.objs = task.objs[:len(task.objs)/2]
 		}
 		if original-len(task.objs) > 0 {

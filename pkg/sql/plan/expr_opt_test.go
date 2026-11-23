@@ -75,13 +75,13 @@ func TestDoMergeFiltersOnCompositeKeyTemporalDomains(t *testing.T) {
 					if peerType == types.T_timestamp {
 						rhs := folded.GetF().Args[1]
 						require.NotNil(t, rhs.GetVec())
-						decoded := vector.NewVec(types.T_any.ToType())
+						decoded := vector.NewVec(types.T_any.ToType(), proc.Mp())
 						defer decoded.Free(proc.Mp())
 						require.NoError(t, decoded.UnmarshalBinary(rhs.GetVec().Data))
 						require.Equal(t, typ, *decoded.GetType())
 					}
 					input := batch.NewWithSize(1)
-					input.Vecs[0] = vector.NewVec(typ)
+					input.Vecs[0] = vector.NewVec(typ, proc.Mp())
 					defer input.Clean(proc.Mp())
 					for _, value := range append(values, "2024-01-01 00:40:00.123456") {
 						stamp, err := types.ParseTimestamp(zone, value, 6)
@@ -809,7 +809,7 @@ func TestDoMergeFiltersOnCompositeKeySupportsScaleSensitiveFoldedInVector(t *tes
 	tableDef.Cols[1].Typ = makePlan2Type(&decimalType)
 
 	values := []types.Decimal64{250, 375}
-	vec := vector.NewVec(decimalType)
+	vec := vector.NewVec(decimalType, ctx.proc.Mp())
 	for _, value := range values {
 		require.NoError(t, vector.AppendFixed(vec, value, false, ctx.GetProcess().Mp()))
 	}
@@ -917,7 +917,7 @@ func TestInRHSValuesMaterializesFoldedVectorValues(t *testing.T) {
 func TestInRHSValuesRestoresLiteralVecStringSource(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	makeVectorExpr := func(source types.StringSource, null bool) *planpb.Expr {
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(vec, []byte("value"), null, mp))
 		data, err := vec.MarshalBinary()
 		require.NoError(t, err)
@@ -1304,7 +1304,7 @@ func BenchmarkDeduplicateBlockFiltersLargeIN(b *testing.B) {
 	filters := make([]*planpb.Expr, filterCount)
 	mp := mpool.MustNew(b.Name())
 	for filterIndex := range filters {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		for valueIndex := range valueCount {
 			value := int64(valueIndex)
 			if valueIndex == valueCount-1 {
@@ -1477,7 +1477,7 @@ func makeExprOptInExpr(t *testing.T, ctx *MockCompilerContext, tag, pos int32, v
 
 func makeExprOptNullableInt64Vec(t *testing.T, mp *mpool.MPool, value int64) *planpb.Expr {
 	t.Helper()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 	require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))
 	data, err := vec.MarshalBinary()
@@ -1495,7 +1495,7 @@ func makeExprOptNullableInt64Vec(t *testing.T, mp *mpool.MPool, value int64) *pl
 func makeExprOptStringVec(t *testing.T, mp *mpool.MPool, values ...string) *planpb.Expr {
 	t.Helper()
 	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	for _, value := range values {
 		require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
 	}

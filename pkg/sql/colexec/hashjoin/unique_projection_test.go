@@ -38,20 +38,22 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 	ctr := &arg.ctr
 	ctr.leftBat = left
 	ctr.resBat = batch.NewWithSize(2)
-	ctr.resBat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	ctr.resBat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	ctr.resBatMP = proc.Mp()
+	ctr.resBat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	ctr.resBat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	t.Cleanup(func() {
 		left.Clean(proc.Mp())
 		for _, bat := range ctr.rightBats {
 			bat.Clean(proc.Mp())
 		}
 		arg.Free(proc, false, nil)
+		freeTestChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
 	for source, values := range [][]string{{"a", "b"}, {"c", "d"}} {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		ctr.rightBats = append(ctr.rightBats, bat)
 		for row, value := range values {
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), source == 0 && row == 1, proc.Mp()))
@@ -95,6 +97,7 @@ func TestHashJoinUniqueProjectionFixedScattered(t *testing.T) {
 			ctr := &arg.ctr
 			ctr.leftBat = makeInt32Batch(proc, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
 			ctr.resBat = batch.NewWithSize(4)
+			ctr.resBatMP = proc.Mp()
 			want := batch.NewWithSize(4)
 			t.Cleanup(func() {
 				want.Clean(proc.Mp())
@@ -103,19 +106,20 @@ func TestHashJoinUniqueProjectionFixedScattered(t *testing.T) {
 					bat.Clean(proc.Mp())
 				}
 				arg.Free(proc, false, nil)
+				freeTestChildren(arg)
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())
 			})
 			for _, bat := range []*batch.Batch{ctr.resBat, want} {
 				for col, typ := range []types.Type{types.T_int32.ToType(), types.T_int32.ToType(), types.T_decimal128.ToType(), types.T_varchar.ToType()} {
-					bat.Vecs[col] = vector.NewVec(typ)
+					bat.Vecs[col] = vector.NewVec(typ, proc.Mp())
 				}
 			}
 			for source := range 2 {
 				bat := batch.NewWithSize(3)
 				ctr.rightBats = append(ctr.rightBats, bat)
-				bat.Vecs[0], bat.Vecs[1] = vector.NewVec(types.T_int32.ToType()), vector.NewVec(types.T_decimal128.ToType())
-				bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs[0], bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp()), vector.NewVec(types.T_decimal128.ToType(), proc.Mp())
+				bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				for row := range 4 {
 					require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(source*10+row), row == 2, proc.Mp()))
 					require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.Decimal128{B0_63: uint64(source*10 + row)}, row == 1, proc.Mp()))
@@ -177,15 +181,17 @@ func TestHashJoinUniqueProjectionProbeRange(t *testing.T) {
 			ctr := &arg.ctr
 			ctr.leftBat = batch.NewWithSize(1)
 			ctr.resBat = batch.NewWithSize(1)
+			ctr.resBatMP = proc.Mp()
 			typ := types.T_varbinary.ToType()
-			source := vector.NewVec(typ)
+			source := vector.NewVec(typ, proc.Mp())
 			ctr.leftBat.Vecs[0] = source
-			ctr.resBat.Vecs[0] = vector.NewVec(typ)
-			want := vector.NewVec(typ)
+			ctr.resBat.Vecs[0] = vector.NewVec(typ, proc.Mp())
+			want := vector.NewVec(typ, proc.Mp())
 			t.Cleanup(func() {
 				want.Free(proc.Mp())
 				ctr.leftBat.Clean(proc.Mp())
 				arg.Free(proc, false, nil)
+				freeTestChildren(arg)
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())
 			})
@@ -242,7 +248,9 @@ func TestHashJoinUniqueProjectionResumesAndReuses(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		for _, input := range inputs {
 			input.Clean(tc.proc.Mp())
 		}
@@ -273,7 +281,7 @@ func TestHashJoinUniqueProjectionResumesAndReuses(t *testing.T) {
 		probe.Vecs[0].GetNulls().Add(0)
 		inputs = append(inputs, probe, build)
 		for side, input := range []*batch.Batch{probe, build} {
-			payload := vector.NewVec(types.T_decimal128.ToType())
+			payload := vector.NewVec(types.T_decimal128.ToType(), tc.proc.Mp())
 			input.Vecs = append(input.Vecs, payload)
 			for row := range input.RowCount() {
 				require.NoError(t, vector.AppendFixed(payload,
@@ -330,7 +338,7 @@ func TestHashJoinUniqueProjectionSkipsDeadProbeArea(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	typ := types.T_varchar.ToType()
 	left := batch.NewWithSize(1)
-	left.Vecs[0] = vector.NewVec(typ)
+	left.Vecs[0] = vector.NewVec(typ, proc.Mp())
 	arg := &HashJoin{
 		LeftTypes: []types.Type{typ}, ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}},
 	}
@@ -351,9 +359,10 @@ func TestHashJoinUniqueProjectionSkipsDeadProbeArea(t *testing.T) {
 	require.NoError(t, arg.SetAllocationAccount(account))
 	t.Cleanup(func() {
 		arg.Free(proc, false, nil)
+		freeTestChildren(arg)
 		require.NoError(t, arg.ClearAllocationAccount(account))
 	})
-	require.NoError(t, arg.resetResultBat())
+	require.NoError(t, arg.resetResultBat(proc))
 	require.NoError(t, vector.AppendBytes(left.Vecs[0], make([]byte, 128<<10), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(left.Vecs[0], []byte("live"), false, proc.Mp()))
 	left.Vecs[0].SetNull(0)
@@ -380,6 +389,7 @@ func TestHashJoinUniqueProjectionPropagatesAllocationFailure(t *testing.T) {
 	t.Cleanup(func() {
 		arg.Reset(proc, true, nil)
 		arg.Free(proc, true, nil)
+		freeTestChildren(arg)
 		left.Clean(proc.Mp())
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -389,7 +399,7 @@ func TestHashJoinUniqueProjectionPropagatesAllocationFailure(t *testing.T) {
 	account, err := registry.Open(1)
 	require.NoError(t, err)
 	require.NoError(t, arg.SetAllocationAccount(account))
-	require.NoError(t, arg.resetResultBat())
+	require.NoError(t, arg.resetResultBat(proc))
 	arg.ctr.leftBat, arg.ctr.vs, arg.ctr.zvs = left, []uint64{1}, []int64{1}
 	arg.ctr.probeTrackBuildMatches = true
 	arg.ctr.rightRowsMatched = new(bitmap.Bitmap)
@@ -431,6 +441,7 @@ func benchmarkHashJoinUniqueProjection(b *testing.B, typ types.Type, nullable bo
 	ctr := &arg.ctr
 	ctr.leftBat = batch.NewWithSize(4)
 	ctr.resBat = batch.NewWithSize(8)
+	ctr.resBatMP = proc.Mp()
 	for range 2 {
 		ctr.rightBats = append(ctr.rightBats, batch.NewWithSize(4))
 	}
@@ -440,11 +451,12 @@ func benchmarkHashJoinUniqueProjection(b *testing.B, typ types.Type, nullable bo
 			bat.Clean(proc.Mp())
 		}
 		arg.Free(proc, false, nil)
+		freeTestChildren(arg)
 		proc.Free()
 	})
 	for col := range 8 {
 		arg.ResultCols = append(arg.ResultCols, colexec.ResultPos{Rel: int32(col / 4), Pos: int32(col % 4)})
-		ctr.resBat.Vecs[col] = vector.NewVec(typ)
+		ctr.resBat.Vecs[col] = vector.NewVec(typ, proc.Mp())
 	}
 	for _, bat := range append([]*batch.Batch{ctr.leftBat}, ctr.rightBats...) {
 		rows := hashmap.UnitLimit
@@ -452,7 +464,7 @@ func benchmarkHashJoinUniqueProjection(b *testing.B, typ types.Type, nullable bo
 			rows += 2 // Measure a Find window inside a larger probe batch.
 		}
 		for col := range 4 {
-			bat.Vecs[col] = vector.NewVec(typ)
+			bat.Vecs[col] = vector.NewVec(typ, proc.Mp())
 			for row := range rows {
 				isNull := nullable && row%4 == 0
 				switch typ.Oid {

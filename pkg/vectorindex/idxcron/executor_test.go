@@ -394,7 +394,7 @@ func TestIvfflatReindex(t *testing.T) {
 
 			stub2 := gostub.Stub(&ivfflatidxcron.RunGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), mp)
 				vector.AppendFixed[int64](bat.Vecs[0], ta.dsize, false, mp)
 				bat.SetRowCount(1)
 				return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
@@ -473,7 +473,7 @@ func TestIvfflatReindexAutoUpdateOff(t *testing.T) {
 
 			stub2 := gostub.Stub(&ivfflatidxcron.RunGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), mp)
 				vector.AppendFixed[int64](bat.Vecs[0], ta.dsize, false, mp)
 				bat.SetRowCount(1)
 				return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
@@ -689,7 +689,7 @@ func TestUnregisterUpdateByDbNameCompatibility(t *testing.T) {
 						return executor.Result{}, nil
 					}
 					bat := batch.NewWithSize(1)
-					bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+					bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 					require.NoError(t, vector.AppendFixed(bat.Vecs[0], count, false, mp))
 					bat.SetRowCount(1)
 					return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil

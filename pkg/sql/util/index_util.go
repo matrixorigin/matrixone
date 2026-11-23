@@ -148,7 +148,7 @@ func BuildUniqueKeyBatch(
 			v := cIndexVecMap[part]
 			vs = append(vs, v)
 		}
-		b.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		b.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		bitMap, err = serialWithCompacted(vs, b.Vecs[0], proc, packers, DefaultPackerSize)
 	} else {
 		var vec *vector.Vector
@@ -158,7 +158,7 @@ func BuildUniqueKeyBatch(
 				break
 			}
 		}
-		b.Vecs[0] = vector.NewVec(*vec.GetType())
+		b.Vecs[0] = vector.NewVec(*vec.GetType(), proc.Mp())
 		bitMap, err = compactSingleIndexCol(vec, b.Vecs[0], proc)
 	}
 
@@ -169,7 +169,7 @@ func BuildUniqueKeyBatch(
 				vec = vecs[i]
 			}
 		}
-		b.Vecs[1] = vector.NewVec(*vec.GetType())
+		b.Vecs[1] = vector.NewVec(*vec.GetType(), proc.Mp())
 		err = compactPrimaryCol(vec, nil, bitMap, proc)
 	}
 
@@ -745,7 +745,7 @@ func compactSingleIndexCol(
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
+		vec = vector.NewVec(*v.GetType(), proc.Mp())
 		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint64:
 		s := vector.MustFixedColNoTypeCheck[uint64](v)
@@ -773,7 +773,7 @@ func compactSingleIndexCol(
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
+		vec = vector.NewVec(*v.GetType(), proc.Mp())
 		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_date:
 		s := vector.MustFixedColNoTypeCheck[types.Date](v)
@@ -783,7 +783,7 @@ func compactSingleIndexCol(
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
+		vec = vector.NewVec(*v.GetType(), proc.Mp())
 		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_time:
 		s := vector.MustFixedColNoTypeCheck[types.Time](v)
@@ -1097,14 +1097,13 @@ func CompactRowIdCol(
 	bitMap *nulls.Nulls,
 	proc *process.Process,
 ) error {
-	sels := vector.GetSels()
+	var sels []int64
 	for i := 0; i < v.Length(); i++ {
 		if !bitMap.Contains(uint64(i)) {
 			sels = append(sels, int64(i))
 		}
 	}
 	err := vec.Union(v, sels, proc.Mp())
-	vector.PutSels(sels)
 	return err
 }
 

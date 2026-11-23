@@ -475,7 +475,27 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	} else {
 		dependent = builder.rangeScalarNeedsDependent(nodeID, subquery, ctx, guarded)
 	}
+	rootZeroDependent := builder.scalarRootZeroNeedsDependent(subquery)
+	if rootZeroDependent {
+		switch builder.zeroScalarPolicy {
+		case zeroScalarExecutable, zeroScalarValidateOnly:
+			// Validation needs the full query shape for schema and semantic checks.
+			dependent = true
+		case zeroScalarRetainOnly:
+			// This owner preserves authorization metadata without changing the
+			// executable plan. Signal that the source closure must survive an
+			// outer expression fold, then let the existing scalar path bind it.
+			builder.zeroScalarRetentionGeneration++
+			rootZeroDependent = false
+		default:
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated scalar LIMIT 0 in a nested query may lose a table dependency")
+		}
+	}
 	if dependent {
+		if rootZeroDependent {
+			builder.zeroScalarRewriteGeneration++
+		}
 		if subquery.Child != nil && hasSubquery(subquery.Child) {
 			// The left operand has the same demand as the comparison. Hoisting
 			// it into a JOIN would evaluate even an unselected CASE branch.
@@ -486,6 +506,15 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			}
 		}
 		bound, err := builder.bindDependentSubquery(subquery)
+		if err == nil && rootZeroDependent {
+			if bound.GetDependent() == nil {
+				return 0, nil, moerr.NewInternalError(builder.GetContext(), "missing root-zero dependent program")
+			}
+			if builder.zeroScalarPrograms == nil {
+				builder.zeroScalarPrograms = make(map[uint32]struct{})
+			}
+			builder.zeroScalarPrograms[bound.GetDependent().ProgramId] = struct{}{}
+		}
 		return nodeID, bound, err
 	}
 	if subquery.Child != nil && hasSubquery(subquery.Child) {

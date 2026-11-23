@@ -94,8 +94,8 @@ func writeInfoTestObject(t *testing.T, dir string, filename string) {
 	require.NoError(t, err)
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(10), false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("ten"), false, mp))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(20), false, mp))

@@ -116,10 +116,10 @@ func newReorderedMatchedScanBatch(t *testing.T) (*batch.Batch, func()) {
 		api.DMLRowOrdinalColumnName,
 		"id",
 	})
-	pathVec := vector.NewVec(types.T_varchar.ToType())
-	nameVec := vector.NewVec(types.T_varchar.ToType())
-	ordinalVec := vector.NewVec(types.T_int64.ToType())
-	idVec := vector.NewVec(types.T_int32.ToType())
+	pathVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	ordinalVec := vector.NewVec(types.T_int64.ToType(), mp)
+	idVec := vector.NewVec(types.T_int32.ToType(), mp)
 	for _, row := range []struct {
 		id      int32
 		name    string

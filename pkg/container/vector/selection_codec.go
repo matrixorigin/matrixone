@@ -135,9 +135,6 @@ func (v *Vector) marshalSelectedRowsTo(
 	rows []int32,
 	rowAt func(int) int,
 ) error {
-	if v.IsDictionary() {
-		return errDictionaryPhysicalAccess
-	}
 	if v == nil || w == nil || count < 0 || count > math.MaxInt32 {
 		return moerr.NewInvalidInputNoCtx("invalid selected vector rows")
 	}
@@ -468,7 +465,6 @@ func (v *Vector) readRawBytesAt(
 		if err := validateJSONPayload(v.typ, value.GetByteSlice(nil)); err != nil {
 			return err
 		}
-		v.areaDisjoint = false
 		return nil
 	}
 	oldAreaLength := len(v.area)
@@ -492,6 +488,5 @@ func (v *Vector) readRawBytesAt(
 	*value = types.Varlena{}
 	value.SetOffsetLen(uint32(oldAreaLength), uint32(size))
 	v.area = area
-	v.areaDisjoint = true
 	return nil
 }

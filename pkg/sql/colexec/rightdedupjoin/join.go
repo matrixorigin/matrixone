@@ -394,17 +394,21 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 		analyzer.GetOpStats().AddExtraStat("RightDedupInputUniqueRows", int64(count))
 	}
 
-	if err := ap.resetResultBatch(); err != nil {
+	if err := ap.resetResultBatch(proc); err != nil {
+		return err
+	}
+	resMP, err := ap.resultMP(proc)
+	if err != nil {
 		return err
 	}
 
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			if err := ctr.resultBatch.Vecs[i].UnionBatch(bat.Vecs[rp.Pos], 0, count, nil, proc.Mp()); err != nil {
+			if err := ctr.resultBatch.Vecs[i].UnionBatch(bat.Vecs[rp.Pos], 0, count, nil, resMP); err != nil {
 				return err
 			}
 		} else {
-			if err := vector.SetConstNull(ctr.resultBatch.Vecs[i], count, proc.Mp()); err != nil {
+			if err := vector.SetConstNull(ctr.resultBatch.Vecs[i], count, resMP); err != nil {
 				return err
 			}
 		}

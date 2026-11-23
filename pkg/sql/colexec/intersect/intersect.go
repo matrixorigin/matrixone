@@ -47,7 +47,11 @@ func (intersect *Intersect) Prepare(proc *process.Process) error {
 		return err
 	}
 	intersect.ctr.iterator = intersect.ctr.hashTable.NewIterator()
-	return intersect.ctr.keyEvaluator.Prepare(proc, intersect.KeyExprs, intersect.ExpressionAllocation())
+	allocation, err := intersect.ExpressionAllocation(proc)
+	if err != nil {
+		return err
+	}
+	return intersect.ctr.keyEvaluator.Prepare(proc, intersect.KeyExprs, allocation)
 }
 
 func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
@@ -184,6 +188,10 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyzer proce
 			}
 		}
 		ctr.buf.CleanOnlyData()
+		outMP, err := intersect.MP(proc)
+		if err != nil {
+			return false, err
+		}
 		keyVecs, err := ctr.keyEvaluator.Eval(proc, input.Batch)
 		if err != nil {
 			return false, err
@@ -229,7 +237,7 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyzer proce
 
 			if insertcnt > 0 {
 				for pos := range input.Batch.Vecs {
-					if err := ctr.buf.Vecs[pos].UnionBatch(input.Batch.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
+					if err := ctr.buf.Vecs[pos].UnionBatch(input.Batch.Vecs[pos], int64(i), insertcnt, needInsert, outMP); err != nil {
 						return false, err
 					}
 				}

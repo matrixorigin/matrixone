@@ -105,7 +105,7 @@ func TestLowPrecisionFloatCastsMatchFloat32(t *testing.T) {
 	defer proc.Free()
 	vals := []float32{0.5, 1.5, -0.5, -1.5, 2}
 	build := func(oid types.T) *vector.Vector {
-		vec := vector.NewVec(oid.ToType())
+		vec := vector.NewVec(oid.ToType(), proc.Mp())
 		for _, v := range vals {
 			var err error
 			switch oid {
@@ -189,7 +189,7 @@ func TestFormatNumericValueLowPrecisionFloat(t *testing.T) {
 			return vector.AppendFixed(v, types.Float4FromFloat32(1.5), false, proc.Mp())
 		}},
 	} {
-		vec := vector.NewVec(tc.oid.ToType())
+		vec := vector.NewVec(tc.oid.ToType(), proc.Mp())
 		require.NoError(t, tc.add(vec))
 		got, exact, isNull, err := formatNumericValueAt(vec, 0)
 		require.NoError(t, err, tc.oid.String())
@@ -214,14 +214,14 @@ func TestIntegerArgumentLowPrecisionFloat(t *testing.T) {
 		return append([]int64(nil), vector.MustFixedColNoTypeCheck[int64](w.GetResultVector())...)
 	}
 	vals := []float32{1.5, -2, 4, 0.5}
-	f32 := vector.NewVec(types.T_float32.ToType())
+	f32 := vector.NewVec(types.T_float32.ToType(), proc.Mp())
 	for _, v := range vals {
 		require.NoError(t, vector.AppendFixed(f32, v, false, proc.Mp()))
 	}
 	want := convert(f32)
 	f32.Free(proc.Mp())
 	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
-		vec := vector.NewVec(oid.ToType())
+		vec := vector.NewVec(oid.ToType(), proc.Mp())
 		for _, v := range vals {
 			var err error
 			switch oid {
@@ -262,7 +262,7 @@ func TestBlockScaledComparisonKernels(t *testing.T) {
 		left := [][]byte{cell(0.3, 1.7, -2.2, 0.01), cell(1, 2, 0, 4), cell(2, 0, 0, 4)}
 		right := [][]byte{cell(0.3, 1.7, -2.2, 0.01), cell(1, 2, 1, 4), cell(1, 4, 4, 4)}
 		build := func(rows [][]byte) *vector.Vector {
-			vec := vector.NewVec(types.New(oid, 4, 0))
+			vec := vector.NewVec(types.New(oid, 4, 0), proc.Mp())
 			for _, r := range rows {
 				require.NoError(t, vector.AppendBytes(vec, r, false, proc.Mp()))
 			}
@@ -309,7 +309,7 @@ func TestNarrowCastHonorsSelectList(t *testing.T) {
 		return result
 	}
 	text := func(values ...string) *vector.Vector {
-		v := vector.NewVec(types.T_varchar.ToType())
+		v := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		for _, s := range values {
 			require.NoError(t, vector.AppendBytes(v, []byte(s), false, proc.Mp()))
 		}
@@ -358,7 +358,7 @@ func TestCastTextToFloat8DigitSeparators(t *testing.T) {
 		{"1.062_500000000000000000001", 1},
 		{"1.0625e0_0", 1},
 	} {
-		from := vector.NewVec(types.T_varchar.ToType())
+		from := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(from, []byte(tc.text), false, proc.Mp()))
 		target := vector.NewConstNull(types.T_float8.ToType(), 1, proc.Mp())
 		result := vector.NewFunctionResultWrapper(types.T_float8.ToType(), proc.Mp())
@@ -395,7 +395,7 @@ func TestCastTextToFloat8Hexadecimal(t *testing.T) {
 		{"448.000000000000000000000001", 0, true},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
-			from := vector.NewVec(types.T_varchar.ToType())
+			from := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			t.Cleanup(func() { from.Free(proc.Mp()) })
 			require.NoError(t, vector.AppendBytes(from, []byte(tc.text), false, proc.Mp()))
 			target := vector.NewConstNull(types.T_float8.ToType(), 1, proc.Mp())

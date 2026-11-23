@@ -60,15 +60,15 @@ func newPersistedPKCheckTableBlocks(t testing.TB, oid types.T, tombstone bool, b
 	tbl.db.op.AddWorkspace(&Transaction{engine: eng, proc: proc})
 	data := batch.NewWithSize(3)
 	defer data.Clean(mp)
-	pk := vector.NewVec(oid.ToType())
-	ts := vector.NewVec(types.T_TS.ToType())
+	pk := vector.NewVec(oid.ToType(), mp)
+	ts := vector.NewVec(types.T_TS.ToType(), mp)
 	var writer *ioutil.BlockWriter
 	if tombstone {
-		data.Vecs[0], data.Vecs[1], data.Vecs[2] = vector.NewVec(types.T_Rowid.ToType()), pk, ts
+		data.Vecs[0], data.Vecs[1], data.Vecs[2] = vector.NewVec(types.T_Rowid.ToType(), mp), pk, ts
 		require.NoError(t, vector.AppendFixed(data.Vecs[0], types.RandomRowid(), false, mp))
 		writer = ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_CommitTS, fs)
 	} else {
-		data.Vecs[0], data.Vecs[1], data.Vecs[2] = pk, ts, vector.NewVec(types.T_bool.ToType())
+		data.Vecs[0], data.Vecs[1], data.Vecs[2] = pk, ts, vector.NewVec(types.T_bool.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(data.Vecs[2], false, false, mp))
 		writer = ioutil.ConstructWriter(0, []uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}, 0, true, false, fs)
 	}

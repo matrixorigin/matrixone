@@ -57,9 +57,13 @@ type container struct {
 	// probeCnt     int
 	collisionCnt int
 	rbat         *batch.Batch
+	// rbatMP is the pool rbat was created with.
+	rbatMP *mpool.MPool
 
 	// about runtime filter
-	pass2RuntimeFilter  *vector.Vector
+	pass2RuntimeFilter *vector.Vector
+	// pass2MP is the pool pass2RuntimeFilter was created with.
+	pass2MP             *mpool.MPool
 	runtimeFilterUsable bool
 	runtimeFilterDone   bool
 }
@@ -67,7 +71,7 @@ type container struct {
 type FuzzyFilter struct {
 	ctr                     container
 	allocationAccount       *mpool.AllocationAccount
-	runtimeFilterAllocation *vector.AllocationAccountSelection
+	runtimeFilterAllocation *mpool.AccountBinding
 	filterBudget            *process.ExecutionResourceGeneration
 	filterCharge            uint64
 	keyCharge               uint64
@@ -96,11 +100,10 @@ func (fuzzyFilter *FuzzyFilter) SetAllocationAccount(
 		}
 		return mpool.ErrAllocationAccountMismatch
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerFuzzyFilter,
 		fuzzyFilterAllocationSiteRuntimeFilterData,
-		fuzzyFilterAllocationSiteRuntimeFilterArea,
 	)
 	if err != nil {
 		return err
@@ -190,7 +193,7 @@ func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool
 	ctr.runtimeFilterUsable = false
 	ctr.collisionCnt = 0
 	if ctr.pass2RuntimeFilter != nil {
-		ctr.pass2RuntimeFilter.Free(proc.Mp())
+		ctr.pass2RuntimeFilter.Free(ctr.pass2MP)
 		ctr.pass2RuntimeFilter = nil
 	}
 	if ctr.rbat != nil {
@@ -210,11 +213,11 @@ func (fuzzyFilter *FuzzyFilter) Free(proc *process.Process, pipelineFailed bool,
 		fuzzyFilter.ctr.roaringFilter = nil
 	}
 	if fuzzyFilter.ctr.rbat != nil {
-		fuzzyFilter.ctr.rbat.Clean(proc.GetMPool())
+		fuzzyFilter.ctr.rbat.Clean(fuzzyFilter.ctr.rbatMP)
 		fuzzyFilter.ctr.rbat = nil
 	}
 	if fuzzyFilter.ctr.pass2RuntimeFilter != nil {
-		fuzzyFilter.ctr.pass2RuntimeFilter.Free(proc.GetMPool())
+		fuzzyFilter.ctr.pass2RuntimeFilter.Free(fuzzyFilter.ctr.pass2MP)
 		fuzzyFilter.ctr.pass2RuntimeFilter = nil
 	}
 	if fuzzyFilter.filterBudget != nil {

@@ -1015,10 +1015,19 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 	}
 	numParams := len(dcPrepare.Prepare.ParamTypes)
 
+	if stmt.params != nil && stmt.paramsMP != proc.Mp() {
+		// The parameter vector is rewritten through this execution's pool.
+		if stmt.proc.GetPrepareParams() == stmt.params {
+			stmt.proc.SetPrepareParams(nil)
+		}
+		stmt.params.Free(stmt.paramsMP)
+		stmt.params, stmt.paramsMP = nil, nil
+	}
 	if stmt.params == nil {
-		stmt.params = vector.NewVec(types.T_text.ToType())
+		stmt.params = vector.NewVec(types.T_text.ToType(), proc.Mp())
+		stmt.paramsMP = proc.Mp()
 		for i := 0; i < numParams; i++ {
-			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
+			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.Mp())
 			if err != nil {
 				return err
 			}

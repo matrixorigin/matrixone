@@ -73,7 +73,7 @@ func TestTypedPrepareParamsCodec(t *testing.T) {
 	})
 
 	t.Run("multi-row entry is rejected", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
 		require.NoError(t, vector.AppendFixed(vec, int64(2), false, mp))
 		data, err := vec.MarshalBinary()
@@ -95,7 +95,7 @@ func TestTypedPrepareParamsLifecycle(t *testing.T) {
 		bat.SetRowCount(1)
 		return bat
 	}
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
 
 	proc.SetPrepareParams(params)

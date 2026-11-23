@@ -68,7 +68,7 @@ func TestAccountedHllLazilyActivatesNonNullGroups(t *testing.T) {
 		}
 	}
 
-	values := vector.NewVec(types.T_int64.ToType())
+	values := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t,
 		vector.AppendFixedList(values, []int64{7}, nil, mp))
 	require.NoError(t,
@@ -83,7 +83,7 @@ func TestAccountedHllLazilyActivatesNonNullGroups(t *testing.T) {
 	require.Equal(t, uint64(1),
 		vector.GetFixedAtNoTypeCheck[uint64](results[0], 1))
 	for _, result := range results {
-		result.Free(mp)
+		result.Free(result.MPool())
 	}
 	values.Free(mp)
 	nulls.Free(mp)
@@ -114,7 +114,7 @@ func TestAccountedHllPreflightBroadcastsScalarConstPastPhysicalRows(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, uint64(1),
 		vector.GetFixedAtNoTypeCheck[uint64](results[0], 0))
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	input.Free(mp)
 	exec.Free()
 	require.NoError(t, owner.ClearAllocationAccount(allocation))
@@ -132,7 +132,7 @@ func TestAccountedHllCanonicalScratchIsReservedBeforeFill(t *testing.T) {
 	require.NoError(t, exec.GroupGrow(1))
 	baseline := account.Snapshot().Used
 
-	input := vector.NewVec(types.T_json.ToType())
+	input := vector.NewVec(types.T_json.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(
 		input, mustHLLJSON(t, "[1,{\"n\":2.0}]"), false, mp))
 	require.NoError(t, exec.PreflightBatchFill(
@@ -368,7 +368,7 @@ func TestStableEmptyHLLStatePropagatesWriterErrors(t *testing.T) {
 
 func TestConfigureHLLFloatZeroStateOnlyChangesApproxCount(t *testing.T) {
 	mp := mpool.MustNewZero()
-	values := vector.NewVec(types.T_float64.ToType())
+	values := vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(
 		values, math.Copysign(0, -1), false, mp))
 
@@ -397,7 +397,7 @@ func TestConfigureHLLFloatZeroStateOnlyChangesApproxCount(t *testing.T) {
 			expectedVersion = hllVersion
 		}
 		require.Equal(t, expectedVersion, results[0].GetBytesAt(0)[0])
-		results[0].Free(mp)
+		results[0].Free(results[0].MPool())
 		exec.Free()
 	}
 
@@ -509,7 +509,7 @@ func TestHllAddUsesCanonicalTypedStateForCharAndJSON(t *testing.T) {
 				exec := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
 				require.False(t, exec.legacyWireState)
 				require.NoError(t, exec.GroupGrow(1))
-				values := vector.NewVec(tc.typ)
+				values := vector.NewVec(tc.typ, mp)
 				for _, value := range valuesBytes {
 					require.NoError(t, vector.AppendBytes(values, value, false, mp))
 				}
@@ -518,7 +518,7 @@ func TestHllAddUsesCanonicalTypedStateForCharAndJSON(t *testing.T) {
 				require.NoError(t, err)
 				encoded := bytes.Clone(result[0].GetBytesAt(0))
 				require.Equal(t, hllVersion, encoded[0])
-				result[0].Free(mp)
+				result[0].Free(result[0].MPool())
 				values.Free(mp)
 				exec.Free()
 				return encoded
@@ -541,13 +541,13 @@ func TestHllAddUsesCanonicalTypedStateForCharAndJSON(t *testing.T) {
 		exec := makeHllAdd(mp, 1, typ).(*hllAddExec)
 		require.True(t, exec.legacyWireState)
 		require.NoError(t, exec.GroupGrow(1))
-		values := vector.NewVec(typ)
+		values := vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytes(values, value, false, mp))
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
 		result, err := exec.Flush()
 		require.NoError(t, err)
 		encoded := bytes.Clone(result[0].GetBytesAt(0))
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		values.Free(mp)
 		exec.Free()
 		return encoded
@@ -581,7 +581,7 @@ func TestHllAddRestoredLegacyStateKeepsRawHashDomain(t *testing.T) {
 			source := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
 			ConfigureHLLLegacyState(source)
 			require.NoError(t, source.GroupGrow(1))
-			left := vector.NewVec(tc.typ)
+			left := vector.NewVec(tc.typ, mp)
 			require.NoError(t, vector.AppendBytes(left, tc.left, false, mp))
 			require.NoError(t, source.BulkFill(0, []*vector.Vector{left}))
 			var intermediate bytes.Buffer
@@ -591,7 +591,7 @@ func TestHllAddRestoredLegacyStateKeepsRawHashDomain(t *testing.T) {
 			restored := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
 			require.NoError(t, restored.UnmarshalFromReader(
 				bytes.NewReader(intermediate.Bytes()), mp))
-			right := vector.NewVec(tc.typ)
+			right := vector.NewVec(tc.typ, mp)
 			require.NoError(t, vector.AppendBytes(right, tc.right, false, mp))
 			require.NoError(t, restored.BulkFill(0, []*vector.Vector{right}))
 			result, err := restored.Flush()
@@ -601,7 +601,7 @@ func TestHllAddRestoredLegacyStateKeepsRawHashDomain(t *testing.T) {
 			expected := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
 			ConfigureHLLLegacyState(expected)
 			require.NoError(t, expected.GroupGrow(1))
-			both := vector.NewVec(tc.typ)
+			both := vector.NewVec(tc.typ, mp)
 			require.NoError(t, vector.AppendBytes(both, tc.left, false, mp))
 			require.NoError(t, vector.AppendBytes(both, tc.right, false, mp))
 			require.NoError(t, expected.BulkFill(0, []*vector.Vector{both}))
@@ -613,7 +613,7 @@ func TestHllAddRestoredLegacyStateKeepsRawHashDomain(t *testing.T) {
 			expectedResult[0].Free(mp)
 			both.Free(mp)
 			expected.Free()
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			right.Free(mp)
 			restored.Free()
 			left.Free(mp)
@@ -651,7 +651,7 @@ func TestHllLegacyWireStateCoversEmptyAndFloatingPointWidths(t *testing.T) {
 			require.Equal(t, hllLegacyVersion, empty[0].GetBytesAt(0)[0])
 			empty[0].Free(mp)
 
-			values := vector.NewVec(tc.typ)
+			values := vector.NewVec(tc.typ, mp)
 			if tc.typ.Oid == types.T_float32 {
 				require.NoError(t, vector.AppendFixedList(values,
 					[]float32{0, float32(math.Copysign(0, -1))}, nil, mp))
@@ -676,7 +676,7 @@ func TestHllLegacyWireStateCoversEmptyAndFloatingPointWidths(t *testing.T) {
 			require.Equal(t, uint64(2), legacyDecoder.Estimate())
 
 			values.Free(mp)
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			exec.Free()
 			require.Zero(t, mp.CurrNB())
 		})
@@ -712,7 +712,7 @@ func TestHllAddVectorCanonicalizesWithVersionedWireState(t *testing.T) {
 			runOne := func(value []byte) []byte {
 				one := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
 				require.NoError(t, one.GroupGrow(1))
-				input := vector.NewVec(tc.typ)
+				input := vector.NewVec(tc.typ, mp)
 				require.NoError(t, vector.AppendBytes(input, value, false, mp))
 				require.NoError(t, one.BulkFill(0, []*vector.Vector{input}))
 				oneResult, err := one.Flush()
@@ -731,8 +731,8 @@ func TestHllAddVectorCanonicalizesWithVersionedWireState(t *testing.T) {
 			partialRight := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
 			require.NoError(t, partialLeft.GroupGrow(1))
 			require.NoError(t, partialRight.GroupGrow(1))
-			leftValues := vector.NewVec(tc.typ)
-			rightValues := vector.NewVec(tc.typ)
+			leftValues := vector.NewVec(tc.typ, mp)
+			rightValues := vector.NewVec(tc.typ, mp)
 			require.NoError(t, vector.AppendBytes(leftValues, tc.left, false, mp))
 			require.NoError(t, vector.AppendBytes(rightValues, tc.right, false, mp))
 			require.NoError(t, partialLeft.BulkFill(0, []*vector.Vector{leftValues}))
@@ -748,7 +748,7 @@ func TestHllAddVectorCanonicalizesWithVersionedWireState(t *testing.T) {
 			partialLeft.Free()
 			partialRight.Free()
 
-			values := vector.NewVec(tc.typ)
+			values := vector.NewVec(tc.typ, mp)
 			require.NoError(t, vector.AppendBytes(values, tc.left, false, mp))
 			require.NoError(t, vector.AppendBytes(values, tc.right, false, mp))
 			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
@@ -764,7 +764,7 @@ func TestHllAddVectorCanonicalizesWithVersionedWireState(t *testing.T) {
 			require.Equal(t, tc.left, values.GetBytesAt(0))
 			require.Equal(t, tc.right, values.GetBytesAt(1))
 
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			values.Free(mp)
 			exec.Free()
 			require.Zero(t, mp.CurrNB())
@@ -778,14 +778,14 @@ func TestHllAddVectorRestoresVersionedHashDomain(t *testing.T) {
 	legacy := makeHllAdd(mp, 1, typ).(*hllAddExec)
 	ConfigureHLLLegacyState(legacy)
 	require.NoError(t, legacy.GroupGrow(1))
-	oldValue := vector.NewVec(typ)
+	oldValue := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendBytes(oldValue,
 		types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}), false, mp))
 	require.NoError(t, legacy.BulkFill(0, []*vector.Vector{oldValue}))
 	var intermediate bytes.Buffer
 	require.NoError(t, legacy.SaveIntermediateResult(
 		1, [][]uint8{{1}}, &intermediate))
-	newValue := vector.NewVec(typ)
+	newValue := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendBytes(newValue,
 		types.ArrayToBytes([]float32{1, 0, 3}), false, mp))
 	// The legacy producer remains the reference for an old v2 state: appending
@@ -809,7 +809,7 @@ func TestHllAddVectorRestoresVersionedHashDomain(t *testing.T) {
 	require.Equal(t, hllLegacyVersion, result[0].GetBytesAt(0)[0])
 	require.Equal(t, expected, result[0].GetBytesAt(0))
 
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	newValue.Free(mp)
 	oldValue.Free(mp)
 	restored.Free()
@@ -825,7 +825,7 @@ func TestAccountedHllAddVectorReservesCanonicalScratch(t *testing.T) {
 	require.NoError(t, owner.SetAllocationAccount(allocation))
 	require.NoError(t, exec.GroupGrow(1))
 
-	values := vector.NewVec(types.T_array_float32.ToType())
+	values := vector.NewVec(types.T_array_float32.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(values,
 		types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}), false, mp))
 	require.NoError(t, exec.PreflightBatchFill(
@@ -836,7 +836,7 @@ func TestAccountedHllAddVectorReservesCanonicalScratch(t *testing.T) {
 	result, err := exec.Flush()
 	require.NoError(t, err)
 	require.Equal(t, hllVersion, result[0].GetBytesAt(0)[0])
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	values.Free(mp)
 	exec.Free()
 	require.NoError(t, owner.ClearAllocationAccount(allocation))
@@ -873,7 +873,7 @@ func TestHllLegacyWireStateUsesPreflightAndRoundTripsIntermediate(t *testing.T) 
 				}
 				require.NoError(t, source.GroupGrow(1))
 
-				values := vector.NewVec(tc.typ)
+				values := vector.NewVec(tc.typ, mp)
 				if tc.typ.Oid == types.T_float32 {
 					require.NoError(t, vector.AppendFixed(values,
 						float32(math.Copysign(0, -1)), false, mp))
@@ -931,7 +931,7 @@ func TestHllLegacyWireStateUsesPreflightAndRoundTripsIntermediate(t *testing.T) 
 				emptyResult[0].Free(mp)
 				emptyRestored.Free()
 				emptySource.Free()
-				result[0].Free(mp)
+				result[0].Free(result[0].MPool())
 				restored.Free()
 				values.Free(mp)
 				source.Free()
@@ -999,7 +999,7 @@ func TestApproxCountExecFillMergeFlush(t *testing.T) {
 	require.NoError(t, left.GroupGrow(2))
 	require.NoError(t, right.GroupGrow(2))
 
-	values := vector.NewVec(types.T_int64.ToType())
+	values := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(values, []int64{1, 2, 2, 3}, nil, mp))
 	require.NoError(t, left.BatchFill(0, []uint64{1, 1, 1, GroupNotMatched}, []*vector.Vector{values}))
 
@@ -1010,7 +1010,7 @@ func TestApproxCountExecFillMergeFlush(t *testing.T) {
 	nullVec := vector.NewConstNull(types.T_int64.ToType(), 1, mp)
 	require.NoError(t, left.Fill(0, 0, []*vector.Vector{nullVec}))
 
-	rightValues := vector.NewVec(types.T_int64.ToType())
+	rightValues := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(rightValues, []int64{3, 4}, nil, mp))
 	require.NoError(t, right.BatchFill(0, []uint64{1, 2}, []*vector.Vector{rightValues}))
 
@@ -1028,14 +1028,14 @@ func TestApproxCountExecFillMergeFlush(t *testing.T) {
 	constVec.Free(mp)
 	nullVec.Free(mp)
 	rightValues.Free(mp)
-	vecs[0].Free(mp)
+	vecs[0].Free(vecs[0].MPool())
 	left.Free()
 	right.Free()
 }
 
 func TestHllFloatSignedZeroUsesOneSQLValue(t *testing.T) {
 	mp := mpool.MustNewZero()
-	values := vector.NewVec(types.T_float64.ToType())
+	values := vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(values,
 		[]float64{0, math.Copysign(0, -1)}, nil, mp))
 
@@ -1050,7 +1050,7 @@ func TestHllFloatSignedZeroUsesOneSQLValue(t *testing.T) {
 	approxResult[0].Free(mp)
 	approx.Free()
 
-	float32Values := vector.NewVec(types.T_float32.ToType())
+	float32Values := vector.NewVec(types.T_float32.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(float32Values,
 		[]float32{0, float32(math.Copysign(0, -1))}, nil, mp))
 	float32Approx := makeApproxCount(mp, 1, types.T_float32.ToType()).(*approxCountExec)
@@ -1080,7 +1080,7 @@ func TestHllAddFloatSignedZeroUsesCanonicalState(t *testing.T) {
 			exec := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
 			require.False(t, exec.legacyWireState)
 			require.NoError(t, exec.GroupGrow(1))
-			values := vector.NewVec(tc.typ)
+			values := vector.NewVec(tc.typ, mp)
 			switch data := tc.data.(type) {
 			case []float32:
 				require.NoError(t, vector.AppendFixedList(values, data, nil, mp))
@@ -1098,7 +1098,7 @@ func TestHllAddFloatSignedZeroUsesCanonicalState(t *testing.T) {
 			require.NoError(t, restored.UnmarshalBinary(encoded))
 			require.Equal(t, uint64(1), restored.Estimate())
 			values.Free(mp)
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			restored.Free()
 			exec.Free()
 			require.Zero(t, mp.CurrNB())
@@ -1121,7 +1121,7 @@ func TestHllAddRestoredLegacyFloatStateKeepsRawHashDomain(t *testing.T) {
 			source := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
 			ConfigureHLLLegacyState(source)
 			require.NoError(t, source.GroupGrow(1))
-			left := vector.NewVec(tc.typ)
+			left := vector.NewVec(tc.typ, mp)
 			switch value := tc.left.(type) {
 			case float32:
 				require.NoError(t, vector.AppendFixed(left, value, false, mp))
@@ -1134,7 +1134,7 @@ func TestHllAddRestoredLegacyFloatStateKeepsRawHashDomain(t *testing.T) {
 
 			restored := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
 			require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(intermediate.Bytes()), mp))
-			right := vector.NewVec(tc.typ)
+			right := vector.NewVec(tc.typ, mp)
 			switch value := tc.right.(type) {
 			case float32:
 				require.NoError(t, vector.AppendFixed(right, value, false, mp))
@@ -1149,7 +1149,7 @@ func TestHllAddRestoredLegacyFloatStateKeepsRawHashDomain(t *testing.T) {
 			expected := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
 			ConfigureHLLLegacyState(expected)
 			require.NoError(t, expected.GroupGrow(1))
-			both := vector.NewVec(tc.typ)
+			both := vector.NewVec(tc.typ, mp)
 			switch leftValue := tc.left.(type) {
 			case float32:
 				rightValue := tc.right.(float32)
@@ -1168,7 +1168,7 @@ func TestHllAddRestoredLegacyFloatStateKeepsRawHashDomain(t *testing.T) {
 			expectedResult[0].Free(mp)
 			both.Free(mp)
 			expected.Free()
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			right.Free(mp)
 			restored.Free()
 			left.Free(mp)
@@ -1182,7 +1182,7 @@ func TestHllMergeAcceptsNewCanonicalFloatState(t *testing.T) {
 	mp := mpool.MustNewZero()
 	left := makeHllAdd(mp, 1, types.T_float64.ToType()).(*hllAddExec)
 	require.NoError(t, left.GroupGrow(1))
-	leftValues := vector.NewVec(types.T_float64.ToType())
+	leftValues := vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(leftValues, float64(0), false, mp))
 	require.NoError(t, left.BulkFill(0, []*vector.Vector{leftValues}))
 	leftEncoded, err := left.Flush()
@@ -1191,7 +1191,7 @@ func TestHllMergeAcceptsNewCanonicalFloatState(t *testing.T) {
 
 	right := makeHllAdd(mp, 1, types.T_float64.ToType()).(*hllAddExec)
 	require.NoError(t, right.GroupGrow(1))
-	rightValues := vector.NewVec(types.T_float64.ToType())
+	rightValues := vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(
 		rightValues, math.Copysign(0, -1), false, mp))
 	require.NoError(t, right.BulkFill(0, []*vector.Vector{rightValues}))
@@ -1201,7 +1201,7 @@ func TestHllMergeAcceptsNewCanonicalFloatState(t *testing.T) {
 
 	merge := makeHllMerge(mp, 1, types.T_varbinary.ToType()).(*hllMergeExec)
 	require.NoError(t, merge.GroupGrow(1))
-	input := vector.NewVec(types.T_varbinary.ToType())
+	input := vector.NewVec(types.T_varbinary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(input, leftEncoded[0].GetBytesAt(0), false, mp))
 	require.NoError(t, vector.AppendBytes(input, rightEncoded[0].GetBytesAt(0), false, mp))
 	require.NoError(t, merge.BulkFill(0, []*vector.Vector{input}))
@@ -1318,7 +1318,7 @@ func TestHllMergePreservesLegacyWireVersion(t *testing.T) {
 	require.Equal(t, hllLegacyVersion, legacyBytes[0])
 
 	exec := makeHllMerge(mp, 1, types.T_varbinary.ToType()).(*hllMergeExec)
-	values := vector.NewVec(types.T_varbinary.ToType())
+	values := vector.NewVec(types.T_varbinary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(values, legacyBytes, false, mp))
 	require.NoError(t, exec.GroupGrow(1))
 	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
@@ -1333,7 +1333,7 @@ func TestHllMergePreservesLegacyWireVersion(t *testing.T) {
 	require.Equal(t, uint64(1), restored.Estimate())
 
 	values.Free(mp)
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	restored.Free()
 	exec.Free()
 	require.Zero(t, mp.CurrNB())
@@ -1347,11 +1347,11 @@ func TestHllAddExecFillMergeFlush(t *testing.T) {
 	require.NoError(t, left.GroupGrow(2))
 	require.NoError(t, right.GroupGrow(2))
 
-	values := vector.NewVec(types.T_int64.ToType())
+	values := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(values, []int64{1, 2, 2, 3}, nil, mp))
 	require.NoError(t, left.BatchFill(0, []uint64{1, 1, 1, GroupNotMatched}, []*vector.Vector{values}))
 
-	rightValues := vector.NewVec(types.T_int64.ToType())
+	rightValues := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(rightValues, []int64{3, 4}, nil, mp))
 	require.NoError(t, right.BatchFill(0, []uint64{1, 2}, []*vector.Vector{rightValues}))
 
@@ -1383,7 +1383,7 @@ func TestHllAddExecFillMergeFlush(t *testing.T) {
 
 	values.Free(mp)
 	rightValues.Free(mp)
-	vecs[0].Free(mp)
+	vecs[0].Free(vecs[0].MPool())
 	left.Free()
 	right.Free()
 }
@@ -1408,7 +1408,7 @@ func TestHllAddPersistedLegacyStateSurvivesUpgradeAppendAndMerge(t *testing.T) {
 	buildAddState := func(values ...int64) []byte {
 		exec := makeHllAdd(mp, 1, types.T_int64.ToType()).(*hllAddExec)
 		require.NoError(t, exec.GroupGrow(1))
-		input := vector.NewVec(types.T_int64.ToType())
+		input := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(input, values, nil, mp))
 		groups := slices.Repeat([]uint64{1}, len(values))
 		require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{input}))
@@ -1416,7 +1416,7 @@ func TestHllAddPersistedLegacyStateSurvivesUpgradeAppendAndMerge(t *testing.T) {
 		require.NoError(t, err)
 		data := bytes.Clone(result[0].GetBytesAt(0))
 		require.Equal(t, hllLegacyVersion, data[0])
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		input.Free(mp)
 		exec.Free()
 		return data
@@ -1427,7 +1427,7 @@ func TestHllAddPersistedLegacyStateSurvivesUpgradeAppendAndMerge(t *testing.T) {
 
 	merge := makeHllMerge(mp, 1, types.T_varbinary.ToType()).(*hllMergeExec)
 	require.NoError(t, merge.GroupGrow(1))
-	states := vector.NewVec(types.T_varbinary.ToType())
+	states := vector.NewVec(types.T_varbinary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(states, baseState, false, mp))
 	require.NoError(t, vector.AppendBytes(states, appendedState, false, mp))
 	require.NoError(t, merge.BatchFill(0, []uint64{1, 1}, []*vector.Vector{states}))
@@ -1441,7 +1441,7 @@ func TestHllAddPersistedLegacyStateSurvivesUpgradeAppendAndMerge(t *testing.T) {
 	require.NoError(t, restored.UnmarshalBinary(result[0].GetBytesAt(0)))
 	require.Equal(t, uint64(3), restored.Estimate())
 
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	states.Free(mp)
 	restored.Free()
 	merge.Free()
@@ -1469,13 +1469,13 @@ func TestHllMergeExecFillMergeFlush(t *testing.T) {
 	require.NoError(t, left.GroupGrow(2))
 	require.NoError(t, right.GroupGrow(2))
 
-	values := vector.NewVec(types.T_varbinary.ToType())
+	values := vector.NewVec(types.T_varbinary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(values, buildSketch(1, 2), false, mp))
 	require.NoError(t, vector.AppendBytes(values, buildSketch(2, 3), false, mp))
 	require.NoError(t, vector.AppendBytes(values, nil, true, mp))
 	require.NoError(t, left.BatchFill(0, []uint64{1, 1, 2}, []*vector.Vector{values}))
 
-	rightValues := vector.NewVec(types.T_varbinary.ToType())
+	rightValues := vector.NewVec(types.T_varbinary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(rightValues, buildSketch(3, 4), false, mp))
 	require.NoError(t, vector.AppendBytes(rightValues, buildSketch(5), false, mp))
 	require.NoError(t, right.BatchFill(0, []uint64{1, 2}, []*vector.Vector{rightValues}))
@@ -1501,14 +1501,14 @@ func TestHllMergeExecFillMergeFlush(t *testing.T) {
 	group1.Free()
 	group2.Free()
 
-	invalid := vector.NewVec(types.T_varbinary.ToType())
+	invalid := vector.NewVec(types.T_varbinary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(invalid, []byte("bad"), false, mp))
 	require.Error(t, left.BatchFill(0, []uint64{1}, []*vector.Vector{invalid}))
 
 	values.Free(mp)
 	rightValues.Free(mp)
 	invalid.Free(mp)
-	vecs[0].Free(mp)
+	vecs[0].Free(vecs[0].MPool())
 	left.Free()
 	right.Free()
 }

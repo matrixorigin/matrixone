@@ -869,7 +869,7 @@ func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPoo
 // appendTS is a scoped fault injection for testing partial timestamp allocation.
 // The production path uses the normal append directly.
 func fillTsVecForSysTableQueryBatchWithAppend(bat *batch.Batch, ts types.TS, m *mpool.MPool, appendTS func(*vector.Vector, types.TS, *mpool.MPool) error) error {
-	tsvec := vector.NewVec(types.T_TS.ToType())
+	tsvec := vector.NewVec(types.T_TS.ToType(), m)
 	var err error
 	if appendTS == nil {
 		for i := 0; i < bat.RowCount(); i++ {

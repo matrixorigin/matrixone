@@ -47,8 +47,7 @@ func reusableSingleGroup(agg AggFuncExec) (singleGroupReuse, *aggExec, bool) {
 	}
 	for i, v := range s.vecs {
 		if v == nil || v.IsConst() || v.Length() != 1 || v.Capacity() < AggBatchSize ||
-			!v.GetType().Eq(state.stateTypes[i]) ||
-			!vector.AllocationAccountSelectionsEqual(v.AllocationAccountSelection(), state.allocation.vectorSelection()) {
+			!v.GetType().Eq(state.stateTypes[i]) {
 			return nil, nil, false
 		}
 	}
@@ -91,13 +90,12 @@ func AppendSingleGroupResultAndReset(agg AggFuncExec, dst *vector.Vector) (*vect
 	created := dst == nil
 	if created {
 		var err error
-		dst, err = state.allocation.newVector(state.retType)
+		dst, err = state.allocation.newVector(state.retType, state.mp)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		if dst.IsConst() || !dst.GetType().Eq(state.retType) ||
-			!vector.AllocationAccountSelectionsEqual(dst.AllocationAccountSelection(), state.allocation.vectorSelection()) {
+		if dst.IsConst() || !dst.GetType().Eq(state.retType) {
 			return nil, moerr.NewInternalErrorNoCtx("invalid single-group result destination")
 		}
 		for _, v := range state.state[0].vecs {
@@ -150,9 +148,11 @@ func (exec *countColumnExec) singleGroupReuseState() (*aggExec, bool) {
 	return &exec.aggExec, exec.extra == 0 && len(exec.argTypes) == 1 && len(exec.distinctContributions) == 0
 }
 
+// The appendSingleGroup* helpers write into the caller's dst, so they grow it
+// through dst's own pool.
 func appendSingleGroupCount(exec *aggExec, dst *vector.Vector) error {
 	counts := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[0])
-	if err := vector.AppendFixed(dst, counts[0], false, exec.mp); err != nil {
+	if err := vector.AppendFixed(dst, counts[0], false, dst.MPool()); err != nil {
 		return err
 	}
 	counts[0] = 0
@@ -226,19 +226,19 @@ func (exec *sumAvgDecExec[A, S]) appendSingleGroupResult(dst *vector.Vector) err
 	var err error
 	if exec.isSum {
 		if sumVec.IsNull(0) {
-			err = vector.AppendNull(dst, exec.mp)
+			err = vector.AppendNull(dst, dst.MPool())
 		} else if err = validateDecimal256SumResult(sums[0], exec.retType); err == nil {
-			err = vector.AppendFixed(dst, sums[0], false, exec.mp)
+			err = vector.AppendFixed(dst, sums[0], false, dst.MPool())
 		}
 	} else {
 		count := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0]
 		if count == 0 {
-			err = vector.AppendNull(dst, exec.mp)
+			err = vector.AppendNull(dst, dst.MPool())
 		} else {
 			var avg S
 			avg, err = decAvg(sums[0], count, sumAvgDecimalArgScale(exec.argTypes[0]), exec.retType)
 			if err == nil {
-				err = vector.AppendFixed(dst, avg, false, exec.mp)
+				err = vector.AppendFixed(dst, avg, false, dst.MPool())
 			}
 		}
 	}
@@ -268,24 +268,24 @@ func (exec *sumAvgExec[T, A]) appendSingleGroupResult(dst *vector.Vector) error 
 	sums := vector.MustFixedColNoTypeCheck[T](sumVec)
 	var err error
 	if exec.isSum {
-		err = vector.AppendFixed(dst, sums[0], sumVec.IsNull(0), exec.mp)
+		err = vector.AppendFixed(dst, sums[0], sumVec.IsNull(0), dst.MPool())
 	} else {
 		count := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0]
 		if count == 0 {
-			err = vector.AppendNull(dst, exec.mp)
+			err = vector.AppendNull(dst, dst.MPool())
 		} else if !exec.exactAvg {
-			err = vector.AppendFixed(dst, float64(sums[0])/float64(count), false, exec.mp)
+			err = vector.AppendFixed(dst, float64(sums[0])/float64(count), false, dst.MPool())
 		} else if exec.retType.Oid == types.T_decimal256 {
 			var avg types.Decimal256
 			avg, err = decAvg(decimal256FromNativeSum(sums[0]), count, 0, exec.retType)
 			if err == nil {
-				err = appendNativeAvgResult(dst, avg, exec.mp)
+				err = appendNativeAvgResult(dst, avg, dst.MPool())
 			}
 		} else {
 			var avg types.Decimal128
 			avg, err = nativeIntegerAvg128(sums[0], count, exec.retType)
 			if err == nil {
-				err = appendNativeAvgResult(dst, avg, exec.mp)
+				err = appendNativeAvgResult(dst, avg, dst.MPool())
 			}
 		}
 	}
@@ -319,7 +319,7 @@ func (exec *minMaxExecFixed[T]) singleGroupReuseInput(vectors []*vector.Vector) 
 
 func (exec *minMaxExecFixed[T]) appendSingleGroupResult(dst *vector.Vector) error {
 	state := exec.state[0].vecs[0]
-	if err := dst.UnionOne(state, 0, exec.mp); err != nil {
+	if err := dst.UnionOne(state, 0, dst.MPool()); err != nil {
 		return err
 	}
 	values := vector.MustFixedColNoTypeCheck[T](state)

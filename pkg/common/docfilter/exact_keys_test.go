@@ -33,7 +33,7 @@ func TestExactKeysGloballySortedChunks(t *testing.T) {
 	const count = 8192*2 + 1
 	for start := 0; start < count; start += 8192 {
 		func() {
-			v := vector.NewVec(types.T_varchar.ToType())
+			v := vector.NewVec(types.T_varchar.ToType(), mp)
 			defer v.Free(mp)
 			for row := start; row < min(start+8192, count); row++ {
 				require.NoError(t, vector.AppendBytes(v, []byte(fmt.Sprintf("key-%06d", count-row-1)), false, mp))
@@ -69,7 +69,7 @@ func TestExactKeysGloballySortedChunks(t *testing.T) {
 
 func TestExactKeysUsesPrimaryKeyDomain(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v := vector.NewVec(types.T_varchar.ToType())
+	v := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer v.Free(mp)
 	require.NoError(t, vector.AppendBytes(v, []byte("char-key "), false, mp))
 	data, err := v.MarshalBinary()
@@ -87,7 +87,7 @@ func TestExactKeysUsesPrimaryKeyDomain(t *testing.T) {
 
 func TestExactKeysFloatNullAndCancellation(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v := vector.NewVec(types.T_float64.ToType())
+	v := vector.NewVec(types.T_float64.ToType(), mp)
 	defer v.Free(mp)
 	require.NoError(t, vector.AppendFixedList(v, []float64{math.Copysign(0, -1), math.NaN(), 10, 99}, []bool{false, false, false, true}, mp))
 	data, err := v.MarshalBinary()

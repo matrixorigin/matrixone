@@ -77,7 +77,7 @@ func TestBackupDataSinkerCleanupAfterWriteError(t *testing.T) {
 		mpool.DeleteMPool(mp)
 	}()
 
-	data := ckputil.NewObjectListBatch()
+	data := ckputil.NewObjectListBatch(mp)
 	defer data.Clean(mp)
 	stats := objectio.NewObjectStats()
 	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objectio.MockObjectName()))
@@ -576,10 +576,10 @@ func newBackupTombstoneTestBatch(t *testing.T, pkType types.T, trailingTypes []t
 	t.Helper()
 
 	bat := batch.NewWithSize(len(objectio.TombstoneSeqnums_CN_Created) + len(trailingTypes))
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(pkType.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), common.DebugAllocator)
+	bat.Vecs[1] = vector.NewVec(pkType.ToType(), common.DebugAllocator)
 	for pos, typ := range trailingTypes {
-		bat.Vecs[len(objectio.TombstoneSeqnums_CN_Created)+pos] = vector.NewVec(typ.ToType())
+		bat.Vecs[len(objectio.TombstoneSeqnums_CN_Created)+pos] = vector.NewVec(typ.ToType(), common.DebugAllocator)
 	}
 
 	var deletedBlock, physicalBlock types.Blockid

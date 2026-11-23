@@ -187,7 +187,7 @@ func (s *scriptedAppliedSource) ApplyStart(row int, proc *process.Process, _ pro
 	s.starts++
 	if s.result == nil {
 		s.result = batch.NewWithSize(1)
-		s.result.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		s.result.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	} else {
 		s.result.CleanOnlyData()
 	}
@@ -426,7 +426,7 @@ func TestApplyPreparedVectorSourceRebindsPreFiltersPerGeneration(t *testing.T) {
 
 	execute := func(value string) string {
 		t.Helper()
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
 		proc.SetPrepareParams(params)
 		require.NoError(t, arg.Prepare(proc))
@@ -505,7 +505,7 @@ func TestVectorSourceHandlesNullQueryAndCleansUp(t *testing.T) {
 
 	source.reader = &scriptedVectorReader{values: []int64{7}}
 	source.output = batch.NewWithSize(1)
-	source.output.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.output.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(source.output.Vecs[0], int64(7), false, proc.Mp()))
 	source.output.SetRowCount(1)
 	source.Reset(proc, false, nil)

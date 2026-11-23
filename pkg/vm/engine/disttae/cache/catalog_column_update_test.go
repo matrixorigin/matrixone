@@ -84,8 +84,8 @@ func columnUpdateBatch(t testing.TB, cols Columns, at int64) *batch.Batch {
 	require.NoError(t, err)
 	bat := batch.NewWithSize(len(data.Vecs) + MO_OFF)
 	copy(bat.Vecs[MO_OFF:], data.Vecs)
-	bat.Vecs[MO_ROWID_IDX] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[MO_TIMESTAMP_IDX] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[MO_ROWID_IDX] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[MO_TIMESTAMP_IDX] = vector.NewVec(types.T_TS.ToType(), mp)
 	for range cols {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[MO_ROWID_IDX], types.Rowid{}, false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[MO_TIMESTAMP_IDX], types.BuildTS(at, 0), false, mp))

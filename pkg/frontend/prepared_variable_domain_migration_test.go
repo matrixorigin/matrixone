@@ -120,7 +120,8 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 		rewritePolicyCaptured: true,
 		NativeMode:            ses.sqlModeHasMatrixOneNative(), protocolVersion: currentProtocolVersion(cw.proc),
 		proc: cw.proc, ParamTypes: []byte{byte(defines.MYSQL_TYPE_NULL), 0},
-		params: vector.NewVec(types.T_varchar.ToType()),
+		params:   vector.NewVec(types.T_varchar.ToType(), cw.proc.Mp()),
+		paramsMP: cw.proc.Mp(),
 	}
 	require.NoError(t, vector.AppendBytes(prepared.params, nil, true, cw.proc.Mp()))
 	require.NoError(t, ses.SetPrepareStmt(execCtx.reqCtx, prepared.Name, prepared))

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -83,18 +84,6 @@ func New(attrs []string) *Batch {
 	}
 }
 
-func NewOffHeap(attrs []string) *Batch {
-	ret := New(attrs)
-	ret.offHeap = true
-	return ret
-}
-
-func NewOffHeapEmpty() *Batch {
-	return &Batch{
-		offHeap: true,
-	}
-}
-
 func NewWithSize(n int) *Batch {
 	return &Batch{
 		Vecs:     make([]*vector.Vector, n),
@@ -102,26 +91,12 @@ func NewWithSize(n int) *Batch {
 	}
 }
 
-func NewOffHeapWithSize(n int) *Batch {
-	ret := NewWithSize(n)
-	ret.offHeap = true
-	return ret
-}
-
-func NewWithSchema(offHeap bool, attrs []string, attTypes []types.Type) *Batch {
-	var bat *Batch
-	if offHeap {
-		bat = NewOffHeapWithSize(len(attTypes))
-	} else {
-		bat = NewWithSize(len(attTypes))
-	}
+// NewWithSchema returns a batch of empty vectors of attTypes, all from mp.
+func NewWithSchema(attrs []string, attTypes []types.Type, mp *mpool.MPool) *Batch {
+	bat := NewWithSize(len(attTypes))
 	bat.Attrs = attrs
 	for i, t := range attTypes {
-		if offHeap {
-			bat.Vecs[i] = vector.NewOffHeapVecWithType(t)
-		} else {
-			bat.Vecs[i] = vector.NewVec(t)
-		}
+		bat.Vecs[i] = vector.NewVec(t, mp)
 	}
 	return bat
 }
@@ -166,6 +141,9 @@ func (bat *Batch) prepareMarshalBinary(
 ) (int, error) {
 	if bat == nil {
 		return 0, moerr.NewInvalidInputNoCtx("invalid batch for marshal")
+	}
+	if bat.selection != nil {
+		return 0, errSelectedBatch()
 	}
 	const fixedSize = uint64(8 + 4 + 4 + 4 + 4 + 4)
 	total := fixedSize
@@ -226,6 +204,9 @@ func (bat *Batch) prepareMarshalBinary(
 func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 	if bat == nil || w == nil {
 		return io.ErrClosedPipe
+	}
+	if bat.selection != nil {
+		return errSelectedBatch()
 	}
 	var inlinePlans [64]vector.MarshalBinaryPlan
 	var plans []vector.MarshalBinaryPlan
@@ -819,7 +800,8 @@ func (c *batchUnmarshalCursor) readUint32() (uint32, error) {
 }
 
 func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
-	allocationAccount := bat.allocationAccount
+	// Decoding replaces every column; no previous lent backing stays aliased.
+	bat.leases.Release()
 	cursor := batchUnmarshalCursor{data: data}
 	rowCount, err := cursor.readInt64()
 	if err != nil {
@@ -846,15 +828,9 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	// This ensures Vecs are properly reset and prevents stale data from previous unmarshal operations
 	if firstTime || vecsLenChanged {
 		if vecsLenChanged && len(bat.Vecs) > 0 {
-			if mp == nil {
-				for _, vec := range bat.Vecs {
-					if vec != nil && !vec.NeedDup() {
-						return moerr.NewInvalidInputNoCtx("cannot unmarshal into an owned batch vector without a memory pool")
-					}
-				}
+			if err := bat.freeReceivers(mp); err != nil {
+				return err
 			}
-			bat.Clean(mp)
-			bat.allocationAccount = allocationAccount
 		}
 		bat.Vecs = make([]*vector.Vector, vecsLen)
 	}
@@ -899,25 +875,19 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 				usedReceivers[vecs[i]] = struct{}{}
 			}
 		}
-		if vecs[i] == nil {
-			if bat.offHeap {
-				vecs[i] = vector.NewOffHeapVec()
-			} else {
-				vecs[i] = vector.NewVecFromReuse()
-			}
-		} else if vecs[i].Allocated() > 0 || vecs[i].NeedDup() {
-			if mp == nil && !vecs[i].NeedDup() {
-				return moerr.NewInvalidInputNoCtx("cannot unmarshal into an owned batch vector without a memory pool")
-			}
-			vecs[i].Free(mp)
-		}
-		// UnmarshalBinary installs aliases into vecData. An empty accounted
-		// receiver must explicitly drop its future-allocation selection first;
-		// the Batch retains the destination context for a later owned copy.
-		if vecs[i].AllocationAccountSelection() != nil {
-			if err := vecs[i].SetAllocationAccount(nil); err != nil {
+		// A receiver is reused only when it belongs to mp; with a nil mp the
+		// decoded vectors are read-only references to data. A read-only
+		// receiver is dropped; one owned by another pool is not ours to free.
+		if vecs[i] != nil && vecs[i].MPool() != mp {
+			if err := dropReadOnlyReceiver(vecs[i]); err != nil {
 				return err
 			}
+			vecs[i] = nil
+		}
+		if vecs[i] == nil {
+			vecs[i] = vector.NewVec(types.T_any.ToType(), mp)
+		} else {
+			vecs[i].Free(mp)
 		}
 		if err := vecs[i].UnmarshalBinary(vecData); err != nil {
 			return err
@@ -1040,6 +1010,8 @@ func (bat *Batch) unmarshalFromReader(
 	if bat == nil || r == nil {
 		return io.ErrClosedPipe
 	}
+	// Decoding replaces every column; no previous lent backing stays aliased.
+	bat.leases.Release()
 	i64, err := types.ReadInt64(r)
 	if err != nil {
 		return err
@@ -1175,18 +1147,17 @@ func validateReaderElementCount(
 	return nil
 }
 
-// prepareOwnedDecodeVectors makes every destination an independent owner.
-// Alias decoding deliberately installs borrowed vector buffers; those buffers
-// must never be grown or relabeled by the owned streaming decoder.
+// prepareOwnedDecodeVectors makes every destination an independent vector of
+// mp for the streaming decoder.
 func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 	if count < 0 {
 		return moerr.NewInvalidInputNoCtx("invalid batch vector count")
 	}
-	allocationAccount := bat.allocationAccount
 	if count != len(bat.Vecs) {
 		if len(bat.Vecs) > 0 {
-			bat.Clean(mp)
-			bat.allocationAccount = allocationAccount
+			if err := bat.freeReceivers(mp); err != nil {
+				return err
+			}
 		}
 		bat.Vecs = make([]*vector.Vector, count)
 	}
@@ -1195,10 +1166,6 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 	var inline [inlineReceivers]*vector.Vector
 	var used map[*vector.Vector]struct{}
 	for i, vec := range bat.Vecs {
-		selection := allocationAccount
-		if selection == nil && vec != nil {
-			selection = vec.AllocationAccountSelection()
-		}
 		if vec != nil {
 			exists := false
 			if i < inlineReceivers {
@@ -1225,27 +1192,14 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 				vec = nil
 			}
 		}
-		if vec == nil {
-			if bat.offHeap {
-				vec = vector.NewOffHeapVec()
-			} else {
-				vec = vector.NewVecFromReuse()
-			}
-		} else if vec.NeedDup() {
-			vec.Free(mp)
-		}
-		vec.SetOffHeap(bat.offHeap)
-		if !vector.AllocationAccountSelectionsEqual(
-			vec.AllocationAccountSelection(),
-			selection,
-		) {
-			if err := vec.CanSetAllocationAccount(selection); err != nil {
-				vec.Free(mp)
-				vec.SetOffHeap(bat.offHeap)
-			}
-			if err := vec.SetAllocationAccount(selection); err != nil {
+		if vec != nil && vec.MPool() != mp {
+			if err := dropReadOnlyReceiver(vec); err != nil {
 				return err
 			}
+			vec = nil
+		}
+		if vec == nil {
+			vec = vector.NewVec(types.T_any.ToType(), mp)
 		}
 		bat.Vecs[i] = vec
 	}
@@ -1309,29 +1263,6 @@ func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
 	return nil
 }
 
-// ShuffleWithAllocationAccount is Shuffle with replacement vector storage
-// admitted through selection's capacity class.
-func (bat *Batch) ShuffleWithAllocationAccount(
-	sels []int64,
-	m *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
-) error {
-	if len(sels) > 0 {
-		seen := make(map[*vector.Vector]uint8)
-		for _, vec := range bat.Vecs {
-			if _, ok := seen[vec]; ok {
-				continue
-			}
-			seen[vec]++
-			if err := vec.ShuffleWithAllocationAccount(sels, m, selection); err != nil {
-				return err
-			}
-		}
-		bat.rowCount = len(sels)
-	}
-	return nil
-}
-
 func (bat *Batch) Size() int {
 	var size int
 
@@ -1351,15 +1282,6 @@ func (bat *Batch) VectorCount() int {
 
 func (bat *Batch) SetAttributes(attrs []string) {
 	bat.Attrs = attrs
-}
-
-// AllocationAccountSelection returns the immutable destination selection used
-// by this batch's owned off-heap vectors.
-func (bat *Batch) AllocationAccountSelection() *vector.AllocationAccountSelection {
-	if bat == nil {
-		return nil
-	}
-	return bat.allocationAccount
 }
 
 // SetAccountedExtraBuffer transfers one accounted byte buffer into the Batch.
@@ -1410,42 +1332,101 @@ func (bat *Batch) releaseExtraBuf() {
 	bat.extraBufMP = nil
 }
 
-// SetAllocationAccount configures every existing empty destination vector as
-// one transaction. Existing physical allocations are never relabeled.
-func (bat *Batch) SetAllocationAccount(
-	selection *vector.AllocationAccountSelection,
-) error {
-	if bat == nil || (selection != nil && !bat.offHeap) {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	for _, vec := range bat.Vecs {
-		if vec != nil {
-			if err := vec.CanSetAllocationAccount(selection); err != nil {
-				return err
-			}
+// OwnReadOnlyVectors replaces every read-only (reference) vector of bat with
+// a copy in mp, so the batch can be mutated in place. A vector shared by
+// several columns is copied once.
+func (bat *Batch) OwnReadOnlyVectors(mp *mpool.MPool) error {
+	var copied map[*vector.Vector]*vector.Vector
+	for i, vec := range bat.Vecs {
+		if vec == nil || !vec.IsReadOnly() {
+			continue
 		}
-	}
-	for _, vec := range bat.Vecs {
-		if vec != nil {
-			if err := vec.SetAllocationAccount(selection); err != nil {
-				panic(err)
-			}
+		if owned, ok := copied[vec]; ok {
+			bat.Vecs[i] = owned
+			continue
 		}
+		owned, err := vec.Dup(mp)
+		if err != nil {
+			return err
+		}
+		if copied == nil {
+			copied = make(map[*vector.Vector]*vector.Vector)
+		}
+		copied[vec] = owned
+		bat.Vecs[i] = owned
 	}
-	bat.allocationAccount = selection
+	for vec := range copied {
+		vec.Free(nil)
+	}
 	return nil
 }
 
-func (bat *Batch) configureOwnedVector(vec *vector.Vector) {
-	if vec == nil {
-		return
+// errForeignReceiver reports a decode receiver vector owned by a pool other
+// than the decode pool: the batch's owner does not own it, so it must not be
+// freed or reused here.
+func errForeignReceiver() error {
+	return moerr.NewInternalErrorNoCtx("batch decode receiver vector belongs to another pool")
+}
+
+// dropReadOnlyReceiver drops a read-only receiver's references; a receiver
+// owned by any pool is an error.
+func dropReadOnlyReceiver(vec *vector.Vector) error {
+	if !vec.IsReadOnly() {
+		return errForeignReceiver()
 	}
-	vec.SetOffHeap(bat.offHeap)
-	if bat.allocationAccount != nil {
-		if err := vec.SetAllocationAccount(bat.allocationAccount); err != nil {
-			panic(err)
+	vec.Free(nil)
+	return nil
+}
+
+// freeReceivers releases the decode receivers before the vector count
+// changes: receivers of mp are freed, read-only ones dropped, and a receiver
+// of another pool is an error.
+func (bat *Batch) freeReceivers(mp *mpool.MPool) error {
+	for _, vec := range bat.Vecs {
+		if vec != nil && !vec.IsReadOnly() && vec.MPool() != mp {
+			return errForeignReceiver()
 		}
 	}
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(mp)
+		}
+	}
+	bat.Vecs = nil
+	return nil
+}
+
+// FreeWindow releases a batch returned by Window. Its vectors are read-only
+// references, so this only drops them; it panics on an owned vector.
+func (bat *Batch) FreeWindow() {
+	if bat == nil {
+		return
+	}
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(nil)
+		}
+	}
+	bat.Vecs = nil
+	bat.Attrs = nil
+	bat.rowCount = 0
+}
+
+// CleanOwned frees each vector with the pool it belongs to. It is for test
+// fixtures that assemble batches from several pools. Production code must not
+// use it: an owner frees only the vectors it created, with its own pool.
+func (bat *Batch) CleanOwned() {
+	if bat == nil {
+		return
+	}
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(vec.MPool())
+		}
+	}
+	bat.Vecs = nil
+	bat.Attrs = nil
+	bat.rowCount = 0
 }
 
 func (bat *Batch) InsertVector(
@@ -1453,7 +1434,6 @@ func (bat *Batch) InsertVector(
 	attr string,
 	vec *vector.Vector,
 ) {
-	bat.configureOwnedVector(vec)
 	bat.Vecs = append(bat.Vecs, nil)
 	copy(bat.Vecs[pos+1:], bat.Vecs[pos:])
 	bat.Vecs[pos] = vec
@@ -1463,7 +1443,6 @@ func (bat *Batch) InsertVector(
 }
 
 func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
-	bat.configureOwnedVector(vec)
 	bat.Vecs[pos] = vec
 }
 
@@ -1478,18 +1457,9 @@ func (bat *Batch) CloneSelectedColumns(
 ) (cloned *Batch, err error) {
 	cloned = NewWithSize(len(selectCols))
 	cloned.Attrs = selectAttrs
-	cloned.offHeap = bat.offHeap || bat.selectedColumnsHaveAllocationAccount(selectCols)
 	var typ types.Type
 	for idx := range selectCols {
-		if cloned.offHeap {
-			cloned.Vecs[idx] = vector.NewOffHeapVecWithType(typ)
-		} else {
-			cloned.Vecs[idx] = vector.NewVec(typ)
-		}
-	}
-	if err = configureCloneAllocation(bat, cloned, selectCols); err != nil {
-		cloned.Clean(mp)
-		return nil, err
+		cloned.Vecs[idx] = vector.NewVec(typ, mp)
 	}
 	if err = bat.CloneSelectedColumnsTo(selectCols, cloned, mp); err != nil {
 		cloned.Clean(mp)
@@ -1526,11 +1496,23 @@ func (bat *Batch) CloneSelectedColumnsTo(
 	return nil
 }
 
+// ViewInto makes dst a view of bat: the same vectors, attributes, row count
+// and selection. dst owns nothing it references (no vectors, leases or
+// ExtraBuf); it is valid while bat is, and is released by dropping it.
+func (bat *Batch) ViewInto(dst *Batch) {
+	dst.Recursive = bat.Recursive
+	dst.ShuffleIDX = bat.ShuffleIDX
+	dst.Attrs = bat.Attrs
+	dst.Vecs = append(dst.Vecs[:0], bat.Vecs...)
+	dst.ExtraBuf = bat.ExtraBuf
+	dst.rowCount = bat.rowCount
+	dst.selection = bat.selection
+	dst.physicalRows = bat.physicalRows
+}
+
 func (bat *Batch) SelectColumns(cols []int, attrs []string) *Batch {
 	rbat := NewWithSize(len(cols))
 	rbat.Attrs = attrs
-	rbat.offHeap = bat.offHeap
-	rbat.allocationAccount = bat.allocationAccount
 	for i, col := range cols {
 		rbat.Vecs[i] = bat.Vecs[col]
 	}
@@ -1550,12 +1532,13 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 			vec.Free(m)
 		}
 	}
+	bat.leases.Release()
 
 	bat.Vecs = nil
 	bat.Attrs = nil
 	bat.releaseExtraBuf()
 	bat.SetRowCount(0)
-	bat.allocationAccount = nil
+	bat.selection, bat.physicalRows = nil, 0
 }
 
 func (bat *Batch) Last() bool {
@@ -1580,21 +1563,56 @@ func (bat *Batch) CleanOnlyData() {
 			vec.CleanOnlyData()
 		}
 	}
+	bat.leases.Release()
 	bat.rowCount = 0
+	bat.selection, bat.physicalRows = nil, 0
 }
 
 func (bat *Batch) FreeColumns(m *mpool.MPool) {
 	for _, vec := range bat.Vecs {
 		if vec != nil {
-			selection := vec.AllocationAccountSelection()
 			vec.Free(m)
-			if bat.allocationAccount != nil {
-				selection = bat.allocationAccount
-			}
-			if err := vec.SetAllocationAccount(selection); err != nil {
-				panic(err)
-			}
 		}
+	}
+	bat.leases.Release()
+}
+
+// HoldLease makes the batch the lender of lease: it keeps one reference until
+// the batch next drops or reuses its column data. Vectors installed into this
+// batch may alias lease's bytes until then.
+func (bat *Batch) HoldLease(lease bufferlease.BufferLease) error {
+	if bat == nil {
+		return moerr.NewInternalErrorNoCtx("cannot hold a buffer lease in a nil batch")
+	}
+	return bat.leases.Hold(lease)
+}
+
+// MoveLeasesFrom transfers source's lease references to bat, together with
+// the vectors (or aliases of them) the caller moves from source to bat. bat's
+// previous references are released first: the caller has already dropped or
+// replaced the columns that aliased them.
+func (bat *Batch) MoveLeasesFrom(source *Batch) {
+	if bat == nil || source == nil || bat == source {
+		return
+	}
+	bat.leases.Release()
+	bat.leases, source.leases = source.leases, bat.leases
+}
+
+// HeldLeases reports how many lease references the batch holds.
+func (bat *Batch) HeldLeases() int {
+	if bat == nil {
+		return 0
+	}
+	return bat.leases.Len()
+}
+
+// ReleaseLeases drops the batch's lease references. The caller guarantees no
+// vector of the batch still aliases a lent backing (they were reset, freed or
+// materialized).
+func (bat *Batch) ReleaseLeases() {
+	if bat != nil {
+		bat.leases.Release()
 	}
 }
 
@@ -1617,72 +1635,13 @@ func (bat *Batch) GetSchema() (attrs []string, attrTypes []types.Type) {
 	return
 }
 
-func vectorAllocationSelectionsMatch(left, right *Batch) bool {
-	if left == nil || right == nil || len(left.Vecs) != len(right.Vecs) {
-		return false
-	}
-	if !vector.AllocationAccountSelectionsEqual(
-		left.allocationAccount,
-		right.allocationAccount,
-	) {
-		return false
-	}
-	for i := range left.Vecs {
-		if left.Vecs[i] == nil || right.Vecs[i] == nil {
-			if left.Vecs[i] != right.Vecs[i] {
-				return false
-			}
-			continue
-		}
-		if !vector.AllocationAccountSelectionsEqual(
-			left.Vecs[i].AllocationAccountSelection(),
-			right.Vecs[i].AllocationAccountSelection(),
-		) {
-			return false
-		}
-	}
-	return true
-}
-
-func configureCloneAllocation(
-	source, destination *Batch,
-	selectedColumns []int,
-) error {
-	if source == nil || destination == nil {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	if source.allocationAccount != nil {
-		return destination.SetAllocationAccount(source.allocationAccount)
-	}
-	for destinationIdx := range destination.Vecs {
-		sourceIdx := destinationIdx
-		if len(selectedColumns) > 0 {
-			sourceIdx = selectedColumns[destinationIdx]
-		}
-		selection := source.Vecs[sourceIdx].AllocationAccountSelection()
-		if selection == nil {
-			continue
-		}
-		if !destination.offHeap {
-			return mpool.ErrAllocationAccountInvalid
-		}
-		if err := destination.Vecs[destinationIdx].SetAllocationAccount(selection); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (bat *Batch) Clone(mp *mpool.MPool, offHeap bool) (*Batch, error) {
+// Clone copies bat into a new batch whose vectors all come from mp.
+func (bat *Batch) Clone(mp *mpool.MPool) (*Batch, error) {
 	var (
 		cloned           *Batch
 		attrs, attrTypes = bat.GetSchema()
 	)
-	cloned = NewWithSchema(offHeap, attrs, attrTypes)
-	if err := configureCloneAllocation(bat, cloned, nil); err != nil {
-		cloned.Clean(mp)
-		return nil, err
-	}
+	cloned = NewWithSchema(attrs, attrTypes, mp)
 	cloned.Recursive = bat.Recursive
 	err := bat.CloneTo(cloned, mp)
 	if err != nil {
@@ -1710,57 +1669,7 @@ func (bat *Batch) CloneTo(toBat *Batch, mp *mpool.MPool) (err error) {
 // Dup used to copy a Batch object, this method will create a new batch
 // and copy all vectors (Vecs) of the current batch to the new batch.
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
-	return bat.Clone(mp, bat.offHeap || bat.hasAllocationAccountVector())
-}
-
-// CloneWithoutAllocationAccount deep-copies bat without carrying an
-// allocation account into the destination. Use it only at an ownership
-// boundary whose destination can outlive the source account.
-func (bat *Batch) CloneWithoutAllocationAccount(
-	mp *mpool.MPool,
-	offHeap bool,
-) (*Batch, error) {
-	attrs, attrTypes := bat.GetSchema()
-	cloned := NewWithSchema(offHeap, attrs, attrTypes)
-	cloned.Recursive = bat.Recursive
-	if err := bat.CloneTo(cloned, mp); err != nil {
-		return nil, err
-	}
-	return cloned, nil
-}
-
-// DupWithoutAllocationAccount is the ownership-boundary counterpart of Dup.
-func (bat *Batch) DupWithoutAllocationAccount(mp *mpool.MPool) (*Batch, error) {
-	return bat.CloneWithoutAllocationAccount(
-		mp,
-		bat.offHeap || bat.hasAllocationAccountVector(),
-	)
-}
-
-func (bat *Batch) hasAllocationAccountVector() bool {
-	for _, vec := range bat.Vecs {
-		if vec != nil && vec.AllocationAccountSelection() != nil {
-			return true
-		}
-	}
-	return false
-}
-
-// HasAllocationAccount reports whether the batch or one of its vectors owns
-// memory charged to an execution-scoped allocation account.
-func (bat *Batch) HasAllocationAccount() bool {
-	return bat != nil && (bat.extraBufMP != nil || bat.allocationAccount != nil ||
-		bat.hasAllocationAccountVector())
-}
-
-func (bat *Batch) selectedColumnsHaveAllocationAccount(selectCols []int) bool {
-	for _, sourceIdx := range selectCols {
-		vec := bat.Vecs[sourceIdx]
-		if vec != nil && vec.AllocationAccountSelection() != nil {
-			return true
-		}
-	}
-	return false
+	return bat.Clone(mp)
 }
 
 func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
@@ -1855,6 +1764,7 @@ func (bat *Batch) AddRowCount(rowCount int) {
 
 func (bat *Batch) SetRowCount(rowCount int) {
 	bat.rowCount = rowCount
+	bat.selection, bat.physicalRows = nil, 0
 }
 
 func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector, startIndex int) {
@@ -1896,57 +1806,15 @@ func (bat *Batch) Window(start, end int) (*Batch, error) {
 	b := NewWithSize(len(bat.Vecs))
 	var err error
 	b.Attrs = bat.Attrs
-	b.offHeap = bat.offHeap
-	b.allocationAccount = bat.allocationAccount
 	for i, vec := range bat.Vecs {
 		if vec == nil {
-			b.Clean(nil)
+			b.FreeWindow()
 			return nil, moerr.NewInvalidInputNoCtx("invalid batch vector")
 		}
+		// Each window is a read-only reference to its source vector.
 		b.Vecs[i], err = vec.WindowByLogicalRows(start, end)
 		if err != nil {
-			// Plain vector windows borrow data/area and keep any provenance
-			// sidecar's physical MPool owner internally, so nil is the correct
-			// cleanup pool for the successfully-created prefix.
-			b.Clean(nil)
-			return nil, err
-		}
-		b.Vecs[i].SetOffHeap(bat.offHeap)
-	}
-	b.rowCount = end - start
-	return b, nil
-}
-
-// WindowWithAllocation is the allocation-accounted counterpart of Window.
-// Vector data and area remain borrowed; null/grouping range bitmaps are owned
-// by selection and are released when the returned batch is cleaned.
-func (bat *Batch) WindowWithAllocation(
-	start int,
-	end int,
-	mp *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
-) (*Batch, error) {
-	if bat == nil || mp == nil || selection == nil ||
-		start < 0 || end < start || end > bat.RowCount() {
-		return nil, mpool.ErrAllocationAccountInvalid
-	}
-	b := NewOffHeapWithSize(len(bat.Vecs))
-	b.Attrs = bat.Attrs
-	if err := b.SetAllocationAccount(selection); err != nil {
-		b.Clean(mp)
-		return nil, err
-	}
-	for i, vec := range bat.Vecs {
-		if vec == nil {
-			b.Clean(mp)
-			return nil, mpool.ErrAllocationAccountInvalid
-		}
-		var err error
-		b.Vecs[i], err = vec.WindowByLogicalRowsWithAllocation(
-			start, end, mp, selection,
-		)
-		if err != nil {
-			b.Clean(mp)
+			b.FreeWindow()
 			return nil, err
 		}
 	}

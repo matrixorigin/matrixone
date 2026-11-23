@@ -23,8 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // selectIntoUserVariables collects the result of SELECT ... INTO @var.  The
@@ -35,7 +37,6 @@ type selectIntoUserVariables struct {
 	mu        sync.Mutex
 	vars      []*tree.VarExpr
 	row       []any
-	rowIsBin  []bool
 	rowType   []plan2.Type
 	rowDomain []types.RuntimeStringDomain
 	rowCount  uint64
@@ -116,14 +117,12 @@ func (collector *selectIntoUserVariables) capture(ctx context.Context, ses FeSes
 	}
 	if collector.rowCount == 0 {
 		collector.row = make([]any, len(collector.vars))
-		collector.rowIsBin = make([]bool, len(collector.vars))
 		collector.rowType = make([]plan2.Type, len(collector.vars))
 		collector.rowDomain = make([]types.RuntimeStringDomain, len(collector.vars))
 		if err := extractRowFromEveryVector(ctx, ses, bat, 0, collector.row, false); err != nil {
 			return err
 		}
 		for i, vec := range bat.Vecs {
-			collector.rowIsBin[i] = vec.GetIsBin()
 			collector.rowDomain[i] = types.RuntimeStringInherit
 			collector.row[i], collector.rowType[i] = selectIntoUserVariableValueAndType(collector.row[i], *vec.GetType())
 		}
@@ -143,7 +142,6 @@ func (collector *selectIntoUserVariables) resetForRetry() {
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.row = nil
-	collector.rowIsBin = nil
 	collector.rowType = nil
 	collector.rowDomain = nil
 	collector.rowCount = 0
@@ -162,7 +160,37 @@ func selectIntoUserVariableValueAndType(value any, typ types.Type) (any, plan2.T
 	}
 }
 
-func (collector *selectIntoUserVariables) apply(ctx context.Context, ses FeSession, sql string) error {
+// selectIntoResultIsBin reports, per result column of p, whether the final
+// projection expression is a binary literal (a hex/bit literal, a binary
+// prepared parameter or a binary user variable). Vectors carry no such flag;
+// a column reference or function result is never a binary literal.
+func selectIntoResultIsBin(proc *process.Process, p *plan.Plan) ([]bool, error) {
+	query := p.GetQuery()
+	if query == nil || len(query.Steps) == 0 {
+		return nil, nil
+	}
+	step := int(query.MainOutputStep())
+	if step < 0 || step >= len(query.Steps) {
+		return nil, nil
+	}
+	nodeID := query.Steps[step]
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return nil, nil
+	}
+	projections := query.Nodes[nodeID].ProjectList
+	isBin := make([]bool, len(projections))
+	for i, expr := range projections {
+		var err error
+		if isBin[i], err = colexec.ExprIsBinLiteral(proc, expr); err != nil {
+			return nil, err
+		}
+	}
+	return isBin, nil
+}
+
+// apply assigns the captured row. resultIsBin holds each result column's
+// binary-literal flag (see selectIntoResultIsBin); missing entries are false.
+func (collector *selectIntoUserVariables) apply(ctx context.Context, ses FeSession, sql string, resultIsBin []bool) error {
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	if collector.rowCount == 0 {
@@ -174,8 +202,8 @@ func (collector *selectIntoUserVariables) apply(ctx context.Context, ses FeSessi
 	}
 	for i, variable := range collector.vars {
 		var isBin bool
-		if i < len(collector.rowIsBin) {
-			isBin = collector.rowIsBin[i]
+		if i < len(resultIsBin) {
+			isBin = resultIsBin[i]
 		}
 		var typ plan2.Type
 		if i < len(collector.rowType) {

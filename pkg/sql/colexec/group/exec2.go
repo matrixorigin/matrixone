@@ -109,6 +109,9 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		if err != nil {
 			return err
 		}
+		if err = group.ctr.bindAllocationViews(proc); err != nil {
+			return err
+		}
 		if err = group.ctr.installRecoveryCapacity(); err != nil {
 			return err
 		}
@@ -558,13 +561,13 @@ func (group *Group) ensureRuntimeEmptyGroupingSet() error {
 	if len(group.ctr.aggList) != len(group.Aggs) {
 		group.ctr.aggList, err = group.ctr.makeAggList(group.Aggs)
 		if err != nil {
-			output.Clean(group.ctr.mp)
+			group.ctr.cleanGroupBatch(output)
 			return err
 		}
 	}
 	for _, agg := range group.ctr.aggList {
 		if err = agg.GroupGrow(1); err != nil {
-			output.Clean(group.ctr.mp)
+			group.ctr.cleanGroupBatch(output)
 			return err
 		}
 	}
@@ -1064,7 +1067,7 @@ func (ctr *container) preflightBuildChunk(
 				return mpool.ErrAllocationAccountInvariant
 			}
 			preflight, err := destination.PreExtendSelectedBatchValidated(
-				vs[i], offset, rows, flags, targetRows, ctr.mp,
+				vs[i], offset, rows, flags, targetRows, ctr.groupByMP(),
 			)
 			if err != nil {
 				return err
@@ -1203,14 +1206,14 @@ func (ctr *container) createNewGroupByBatch(
 	return ctr.createNewGroupByBatchWithAllocation(
 		vs,
 		size,
-		ctr.groupByAllocation,
+		ctr.groupByMP(),
 	)
 }
 
 func (ctr *container) createNewGroupByBatchWithAllocation(
 	vs []*vector.Vector,
 	size int,
-	allocation *vector.AllocationAccountSelection,
+	mp *mpool.MPool,
 ) (*batch.Batch, error) {
 	// initialize the groupByTypes.   this is again very bad design.
 	// types should be resolved at plan time.
@@ -1220,16 +1223,12 @@ func (ctr *container) createNewGroupByBatchWithAllocation(
 		}
 	}
 
-	b := batch.NewOffHeapWithSize(len(ctr.groupByTypes))
+	b := batch.NewWithSize(len(ctr.groupByTypes))
 	for i, typ := range ctr.groupByTypes {
-		b.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+		b.Vecs[i] = vector.NewVec(typ, mp)
 	}
-	if err := b.SetAllocationAccount(allocation); err != nil {
-		b.Clean(ctr.mp)
-		return nil, err
-	}
-	if err := b.PreExtend(ctr.mp, size); err != nil {
-		b.Clean(ctr.mp)
+	if err := b.PreExtend(mp, size); err != nil {
+		ctr.cleanGroupBatch(b)
 		return nil, err
 	}
 	b.SetRowCount(0)
@@ -1284,7 +1283,7 @@ func (ctr *container) appendGroupByBatch(
 			preflight = &preflights[i]
 		}
 		if err := vec.UnionBatchPreflighted(
-			vs[i], int64(offset), len(thisTime), thisTime, preflight, ctr.mp); err != nil {
+			vs[i], int64(offset), len(thisTime), thisTime, preflight, ctr.groupByMP()); err != nil {
 			return err
 		}
 	}

@@ -140,7 +140,7 @@ func TestByteCandidateReaderAndPKResults(t *testing.T) {
 	table.Pkey = &plan.PrimaryKeyDef{PkeyColName: "amount", Names: []string{"amount"}}
 	prefix := append(bytes.Repeat([]byte{0xff}, 30), 0)
 	values := [][]byte{prefix, append(bytes.Clone(prefix), 0), append(bytes.Repeat([]byte{0xff}, 30), 1), append(bytes.Repeat([]byte{0xff}, 30), 2)}
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	meta := objectio.BuildMetaData(uint16(len(values)), 1)
 	all := index.NewZM(types.T_varchar, 0)

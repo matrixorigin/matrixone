@@ -102,7 +102,7 @@ func newInt64TopBatch(
 ) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, proc.Mp()))
 	bat.SetRowCount(len(values))
 	return bat
@@ -117,9 +117,9 @@ func newNullableVarcharTopBatch(
 ) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], key, false, proc.Mp()))
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], value, isNull, proc.Mp()))
 	bat.SetRowCount(1)
 	return bat

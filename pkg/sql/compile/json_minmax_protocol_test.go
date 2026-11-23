@@ -16,8 +16,9 @@ package compile
 
 import (
 	"context"
-	planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"testing"
+
+	planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"

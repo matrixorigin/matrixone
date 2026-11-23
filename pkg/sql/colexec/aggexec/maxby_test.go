@@ -28,8 +28,8 @@ import (
 
 func assertMaxByFixedCompare[T any](t *testing.T, mp *mpool.MPool, typ types.Type, low, high T) {
 	t.Helper()
-	a := vector.NewVec(typ)
-	b := vector.NewVec(typ)
+	a := vector.NewVec(typ, mp)
+	b := vector.NewVec(typ, mp)
 	t.Cleanup(func() {
 		a.Free(mp)
 		b.Free(mp)
@@ -43,9 +43,9 @@ func assertMaxByFixedCompare[T any](t *testing.T, mp *mpool.MPool, typ types.Typ
 
 func maxByInputs(t *testing.T, mp *mpool.MPool, values []string, nullValue map[int]bool, orders []int64, ties []string) []*vector.Vector {
 	t.Helper()
-	valueVec := vector.NewVec(types.T_varchar.ToType())
-	orderVec := vector.NewVec(types.T_int64.ToType())
-	tieVec := vector.NewVec(types.T_varchar.ToType())
+	valueVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	orderVec := vector.NewVec(types.T_int64.ToType(), mp)
+	tieVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for i := range values {
 		require.NoError(t, vector.AppendBytes(valueVec, []byte(values[i]), nullValue[i], mp))
 		require.NoError(t, vector.AppendFixed(orderVec, orders[i], false, mp))
@@ -59,9 +59,9 @@ func TestMaxByCompactsReplacedVarlenaState(t *testing.T) {
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_int64.ToType()}
 	exec := makeMaxByExec(mp, 7004, false, params).(*maxByExec)
 	require.NoError(t, exec.GroupGrow(1))
-	valueVec := vector.NewVec(types.T_varchar.ToType())
-	orderVec := vector.NewVec(types.T_int64.ToType())
-	tieVec := vector.NewVec(types.T_int64.ToType())
+	valueVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	orderVec := vector.NewVec(types.T_int64.ToType(), mp)
+	tieVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer func() {
 		valueVec.Free(mp)
 		orderVec.Free(mp)
@@ -87,9 +87,9 @@ func TestMaxByDefersCompactionUntilBatchPublicationCompletes(t *testing.T) {
 	}
 	exec := makeMaxByExec(mp, 7014, false, params).(*maxByExec)
 	require.NoError(t, exec.GroupGrow(1))
-	valueVec := vector.NewVec(types.T_varchar.ToType())
-	orderVec := vector.NewVec(types.T_int64.ToType())
-	tieVec := vector.NewVec(types.T_int64.ToType())
+	valueVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	orderVec := vector.NewVec(types.T_int64.ToType(), mp)
+	tieVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer func() {
 		valueVec.Free(mp)
 		orderVec.Free(mp)
@@ -126,17 +126,16 @@ func TestCompactMaxByStateVectorPreservesAllocationOwner(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(8 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
+	view, err := mp.WithAccount(
 		account,
 		mpool.AllocationOwner(1),
 		mpool.AllocationSite(1),
-		mpool.AllocationSite(2),
+		mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
-	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
-	require.NoError(t, vec.SetAllocationAccount(selection))
+	vec := vector.NewVec(types.T_varchar.ToType(), view)
 	defer func() {
-		vec.Free(mp)
+		vec.Free(view)
 		snapshot := account.Seal()
 		require.Zero(t, snapshot.Used)
 		require.Zero(t, registry.LiveAllocationMetadata())
@@ -146,10 +145,10 @@ func TestCompactMaxByStateVectorPreservesAllocationOwner(t *testing.T) {
 	}()
 
 	value := []byte(strings.Repeat("x", 4096))
-	require.NoError(t, vector.AppendBytes(vec, value, false, mp))
+	require.NoError(t, vector.AppendBytes(vec, value, false, view))
 	for i := 0; i < 400; i++ {
 		value[0] = byte(i)
-		require.NoError(t, vec.SetRawBytesAt(0, value, mp))
+		require.NoError(t, vec.SetRawBytesAt(0, value, view))
 	}
 	before := account.Snapshot()
 	require.Greater(t, before.Used, uint64(maxByVarlenaCompactionSlack))
@@ -158,8 +157,7 @@ func TestCompactMaxByStateVectorPreservesAllocationOwner(t *testing.T) {
 		liveBytes:  maxByAreaBytes(vec.GetRawBytesAt(0)),
 		staleBytes: len(vec.GetArea()) - maxByAreaBytes(vec.GetRawBytesAt(0)),
 	}
-	require.NoError(t, compactMaxByStateVector(vec, usage, mp))
-	require.Same(t, selection, vec.AllocationAccountSelection())
+	require.NoError(t, compactMaxByStateVector(vec, usage, view))
 	require.Equal(t, value, vec.GetBytesAt(0))
 	after := account.Snapshot()
 	require.Less(t, after.Used, before.Used)
@@ -172,9 +170,9 @@ func TestMaxByTracksManyGroupVarlenaUsageIncrementally(t *testing.T) {
 	exec := makeMaxByExec(mp, 7012, false, params).(*maxByExec)
 	require.NoError(t, exec.GroupGrow(AggBatchSize))
 
-	valueVec := vector.NewVec(types.T_varchar.ToType())
-	orderVec := vector.NewVec(types.T_int64.ToType())
-	tieVec := vector.NewVec(types.T_int64.ToType())
+	valueVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	orderVec := vector.NewVec(types.T_int64.ToType(), mp)
+	tieVec := vector.NewVec(types.T_int64.ToType(), mp)
 	groups := make([]uint64, AggBatchSize)
 	initialValue := []byte(strings.Repeat("i", 128))
 	for i := range groups {
@@ -186,9 +184,9 @@ func TestMaxByTracksManyGroupVarlenaUsageIncrementally(t *testing.T) {
 	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{valueVec, orderVec, tieVec}))
 	require.Equal(t, AggBatchSize*len(initialValue), exec.varlenaUsage[0][0].liveBytes)
 
-	candidateValue := vector.NewVec(types.T_varchar.ToType())
-	candidateOrder := vector.NewVec(types.T_int64.ToType())
-	candidateTie := vector.NewVec(types.T_int64.ToType())
+	candidateValue := vector.NewVec(types.T_varchar.ToType(), mp)
+	candidateOrder := vector.NewVec(types.T_int64.ToType(), mp)
+	candidateTie := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(candidateValue, []byte(strings.Repeat("w", 64<<10)), false, mp))
 	require.NoError(t, vector.AppendFixed(candidateOrder, int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(candidateTie, int64(0), false, mp))
@@ -217,9 +215,9 @@ func BenchmarkMaxByManyGroupsRepeatedWinners(b *testing.B) {
 	if err := exec.GroupGrow(AggBatchSize); err != nil {
 		b.Fatal(err)
 	}
-	valueVec := vector.NewVec(types.T_varchar.ToType())
-	orderVec := vector.NewVec(types.T_int64.ToType())
-	tieVec := vector.NewVec(types.T_int64.ToType())
+	valueVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	orderVec := vector.NewVec(types.T_int64.ToType(), mp)
+	tieVec := vector.NewVec(types.T_int64.ToType(), mp)
 	groups := make([]uint64, AggBatchSize)
 	initialValue := []byte(strings.Repeat("i", 128))
 	for i := range groups {
@@ -237,9 +235,9 @@ func BenchmarkMaxByManyGroupsRepeatedWinners(b *testing.B) {
 	if err := exec.BatchFill(0, groups, []*vector.Vector{valueVec, orderVec, tieVec}); err != nil {
 		b.Fatal(err)
 	}
-	candidateValue := vector.NewVec(types.T_varchar.ToType())
-	candidateOrder := vector.NewVec(types.T_int64.ToType())
-	candidateTie := vector.NewVec(types.T_int64.ToType())
+	candidateValue := vector.NewVec(types.T_varchar.ToType(), mp)
+	candidateOrder := vector.NewVec(types.T_int64.ToType(), mp)
+	candidateTie := vector.NewVec(types.T_int64.ToType(), mp)
 	if err := vector.AppendBytes(candidateValue, []byte(strings.Repeat("w", 64<<10)), false, mp); err != nil {
 		b.Fatal(err)
 	}
@@ -283,7 +281,7 @@ func TestMaxByNullContractAndDeterministicMerge(t *testing.T) {
 	result, err := keepNull.Flush()
 	require.NoError(t, err)
 	require.True(t, result[0].IsNull(0), "max_by must retain a winning NULL value")
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 
 	skipNull := makeMaxByExec(mp, 7002, true, params).(*maxByExec)
 	require.NoError(t, skipNull.GroupGrow(1))
@@ -291,7 +289,7 @@ func TestMaxByNullContractAndDeterministicMerge(t *testing.T) {
 	result, err = skipNull.Flush()
 	require.NoError(t, err)
 	require.Equal(t, "older", string(result[0].GetBytesAt(0)))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 
 	leftInput := maxByInputs(t, mp, []string{"alpha"}, nil, []int64{10}, []string{"same"})
 	rightInput := maxByInputs(t, mp, []string{"beta"}, nil, []int64{10}, []string{"same"})
@@ -317,7 +315,7 @@ func TestMaxByNullContractAndDeterministicMerge(t *testing.T) {
 	result, err = restored.Flush()
 	require.NoError(t, err)
 	require.Equal(t, "beta", string(result[0].GetBytesAt(0)))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	left.Free()
 	right.Free()
 	restored.Free()
@@ -343,7 +341,7 @@ func TestMaxByNullWinnerYieldsNull(t *testing.T) {
 	result, err := exec.Flush()
 	require.NoError(t, err)
 	require.True(t, result[0].IsNull(0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 }
 
@@ -371,7 +369,7 @@ func TestMaxBySpillPreservesValuesAcrossGroups(t *testing.T) {
 	require.Equal(t, "binary", result[0].GetStringAt(0))
 	require.Equal(t, "text", result[0].GetStringAt(1))
 
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	source.Free()
 	restored.Free()
 	for _, input := range inputs {
@@ -405,7 +403,7 @@ func TestMaxByMergeIsCommutativeAndAssociative(t *testing.T) {
 		result, err := states[0].Flush()
 		require.NoError(t, err)
 		winner := string(result[0].GetBytesAt(0))
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		for _, state := range states {
 			state.Free()
 		}
@@ -458,13 +456,15 @@ func TestMaxByOOMDoesNotPublishMixedWinner(t *testing.T) {
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
 	exec := makeMaxByExec(mp, 7006, false, params).(*maxByExec)
 	require.NoError(t, exec.GroupGrow(1))
-	old := maxByInputs(t, mp, []string{"old"}, nil, []int64{1}, []string{"old"})
-	candidate := maxByInputs(t, mp,
+	// Inputs live outside the aggregate's 1MiB budget.
+	inputMP := mpool.MustNewZero()
+	old := maxByInputs(t, inputMP, []string{"old"}, nil, []int64{1}, []string{"old"})
+	candidate := maxByInputs(t, inputMP,
 		[]string{strings.Repeat("v", 400<<10)}, nil, []int64{2}, []string{strings.Repeat("t", 400<<10)})
 	defer func() {
 		for _, list := range [][]*vector.Vector{old, candidate} {
 			for _, input := range list {
-				input.Free(mp)
+				input.Free(inputMP)
 			}
 		}
 		exec.Free()
@@ -476,7 +476,7 @@ func TestMaxByOOMDoesNotPublishMixedWinner(t *testing.T) {
 	result, err := exec.Flush()
 	require.NoError(t, err)
 	require.Equal(t, "old", string(result[0].GetBytesAt(0)))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 }
 
 func TestMaxByComparisonCoversSupportedOrderTypes(t *testing.T) {
@@ -519,8 +519,8 @@ func TestMaxByComparisonCoversSupportedOrderTypes(t *testing.T) {
 	require.NoError(t, err)
 	assertMaxByFixedCompare(t, mp, types.T_uuid.ToType(), uuidLow, uuidHigh)
 
-	a := vector.NewVec(types.T_varchar.ToType())
-	b := vector.NewVec(types.T_varchar.ToType())
+	a := vector.NewVec(types.T_varchar.ToType(), mp)
+	b := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(a, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(b, []byte("b"), false, mp))
 	require.Less(t, compareVectorValue(a, 0, b, 0, types.T_varchar.ToType()), 0)
@@ -530,8 +530,8 @@ func TestMaxByComparisonCoversSupportedOrderTypes(t *testing.T) {
 
 func TestMaxByNullableAndNaNComparison(t *testing.T) {
 	mp := mpool.MustNewZero()
-	a := vector.NewVec(types.T_varchar.ToType())
-	b := vector.NewVec(types.T_varchar.ToType())
+	a := vector.NewVec(types.T_varchar.ToType(), mp)
+	b := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer func() {
 		a.Free(mp)
 		b.Free(mp)

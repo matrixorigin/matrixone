@@ -353,7 +353,7 @@ func TestPreparedConditionalDeclarationWithoutHistory(t *testing.T) {
 		for _, boundary := range []string{"limit 1", "having x is not null"} {
 			t.Run(value+"/"+boundary, func(t *testing.T) {
 				proc := newPlanTestProcess(t)
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
 				require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
 				proc.SetPrepareParams(params)

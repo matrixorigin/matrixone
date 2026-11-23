@@ -43,7 +43,7 @@ func TestSharedDecodedColumnTopNIsolation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_array_float32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_array_float32.ToType(), mp)
 	t.Cleanup(func() { bat.Clean(mp) })
 	for _, value := range []float32{1, 2, 3, 4} {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], types.ArrayToBytes([]float32{value}), false, mp))

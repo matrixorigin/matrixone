@@ -190,7 +190,7 @@ func TestAccountedAggregateWireFamiliesRejectTruncation(t *testing.T) {
 			name: "json-array", id: AggIdOfJsonArrayAgg,
 			params: []types.Type{types.T_json.ToType()},
 			build: func(t *testing.T, mp *mpool.MPool) []*vector.Vector {
-				vec := vector.NewVec(types.T_json.ToType())
+				vec := vector.NewVec(types.T_json.ToType(), mp)
 				for _, value := range []any{long, int64(2), true, nil} {
 					require.NoError(t, vector.AppendBytes(vec, jsonValue(t, value), false, mp))
 				}

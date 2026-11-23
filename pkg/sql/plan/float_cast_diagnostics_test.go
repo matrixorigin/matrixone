@@ -205,25 +205,42 @@ func TestIffStringTruthExecutionModes(t *testing.T) {
 			}
 			input := batch.NewWithSize(1)
 			defer input.Clean(proc.Mp())
-			input.Vecs[0] = vector.NewVec(oid.ToType())
-			require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"NaN", "Inf", "1.25", "0", ""}, []bool{false, false, false, false, true}, proc.Mp()))
-			input.Vecs[0].SetIsBin(rawBinary)
+			values := []string{"NaN", "Inf", "1.25", "0", ""}
+			nulls := []bool{false, false, false, false, true}
+			input.Vecs[0] = vector.NewVec(oid.ToType(), proc.Mp())
+			require.NoError(t, vector.AppendStringList(input.Vecs[0], values, nulls, proc.Mp()))
 			input.SetRowCount(5)
+			want := []int64{2, 2, 1, 2, 2}
+			if native {
+				want = []int64{1, 1, 1, 2, 2}
+			}
 			for _, alias := range []string{"if", "iff"} {
+				if rawBinary {
+					// Only a binary literal condition reads its bytes as an
+					// unsigned number; a column never does.
+					one := batch.NewWithSize(0)
+					one.SetRowCount(1)
+					for row, value := range []int64{1, 1, 1, 1, 2} {
+						lit := &planpb.Literal{Isnull: nulls[row], IsBin: true}
+						if !nulls[row] {
+							lit.Value = &planpb.Literal_Sval{Sval: values[row]}
+						}
+						source := &planpb.Expr{Typ: oid.ToType().PlanType(), Expr: &planpb.Expr_Lit{Lit: lit}}
+						expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, alias, []*planpb.Expr{source, makePlan2Int64ConstExprWithType(1), makePlan2Int64ConstExprWithType(2)})
+						require.NoError(t, err)
+						got, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{one})
+						require.NoError(t, err)
+						require.Equal(t, value, vector.GetFixedAtNoTypeCheck[int64](got, 0), "alias=%s native=%t binary literal row=%d", alias, native, row)
+						free()
+					}
+				}
 				source := &planpb.Expr{Typ: oid.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
 				expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, alias, []*planpb.Expr{source, makePlan2Int64ConstExprWithType(1), makePlan2Int64ConstExprWithType(2)})
 				require.NoError(t, err)
 				got, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{input})
 				require.NoError(t, err)
-				want := []int64{2, 2, 1, 2, 2}
-				if native {
-					want = []int64{1, 1, 1, 2, 2}
-				}
-				if rawBinary {
-					want = []int64{1, 1, 1, 1, 2}
-				}
 				for row, value := range want {
-					require.Equal(t, value, vector.GetFixedAtNoTypeCheck[int64](got, row), "alias=%s native=%t binary=%t row=%d", alias, native, rawBinary, row)
+					require.Equal(t, value, vector.GetFixedAtNoTypeCheck[int64](got, row), "alias=%s native=%t varbinary=%t row=%d", alias, native, rawBinary, row)
 				}
 				free()
 			}

@@ -81,7 +81,7 @@ func benchmarkHiddenColumnOverheadRows(b *testing.B, rows int) {
 func buildBenchmarkRowIDVector(b *testing.B, rows int) *vector.Vector {
 	b.Helper()
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_Rowid.ToType())
+	vec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	var blk types.Blockid
 	for i := 0; i < rows; i++ {
 		rowid := types.NewRowid(&blk, uint32(i))
@@ -95,7 +95,7 @@ func buildBenchmarkRowIDVector(b *testing.B, rows int) *vector.Vector {
 func buildBenchmarkTSVector(b *testing.B, rows int) *vector.Vector {
 	b.Helper()
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_TS.ToType())
+	vec := vector.NewVec(types.T_TS.ToType(), mp)
 	for i := 0; i < rows; i++ {
 		ts := types.BuildTS(int64(i+1), 0)
 		if err := vector.AppendFixed(vec, ts, false, mp); err != nil {

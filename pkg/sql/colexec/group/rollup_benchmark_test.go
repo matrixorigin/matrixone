@@ -557,7 +557,7 @@ func makeRollupBenchmarkBatch(
 		}
 	}
 	for key := 0; key < len(allValues); key++ {
-		vec := vector.NewVec(types.T_int32.ToType())
+		vec := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		if err := vector.AppendFixedList(vec, allValues[key], nil, proc.Mp()); err != nil {
 			bat.Clean(proc.Mp())
 			return nil, err

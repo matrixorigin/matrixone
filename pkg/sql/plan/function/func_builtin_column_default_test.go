@@ -278,7 +278,7 @@ func Test_BuiltIn_MoShowVisibleBinColumnDefaultTypedAndExtra(t *testing.T) {
 	// decode path: decimal(40,4) value 1.2000.
 	vecTyp := types.T_decimal256.ToType()
 	vecTyp.Width, vecTyp.Scale = 40, 4
-	vec := vector.NewVec(vecTyp)
+	vec := vector.NewVec(vecTyp, proc.Mp())
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal256{B0_63: 12000}, false, proc.Mp()))
 	vecBytes, err := vec.MarshalBinary()
 	require.NoError(t, err)
@@ -538,7 +538,7 @@ func cdLitDec128As(id types.T, w, s int32, a, b int64) *plan.Expr {
 func cdVecDec256(t *testing.T, proc *process.Process, w, s int32, values ...types.Decimal256) *plan.Expr {
 	vecTyp := types.T_decimal256.ToType()
 	vecTyp.Width, vecTyp.Scale = w, s
-	vec := vector.NewVec(vecTyp)
+	vec := vector.NewVec(vecTyp, proc.Mp())
 	for _, v := range values {
 		require.NoError(t, vector.AppendFixed(vec, v, false, proc.Mp()))
 	}
@@ -653,7 +653,7 @@ func TestConvertLiteralToDecimal256Branches(t *testing.T) {
 	// (type mismatch), and a corrupt payload fails the binary decode.
 	dec128VecTyp := types.T_decimal128.ToType()
 	dec128VecTyp.Width, dec128VecTyp.Scale = 38, 0
-	dec128Vec := vector.NewVec(dec128VecTyp)
+	dec128Vec := vector.NewVec(dec128VecTyp, proc.Mp())
 	require.NoError(t, vector.AppendFixed(dec128Vec, types.Decimal128{B0_63: 1}, false, proc.Mp()))
 	dec128VecBytes, err := dec128Vec.MarshalBinary()
 	require.NoError(t, err)
@@ -661,7 +661,7 @@ func TestConvertLiteralToDecimal256Branches(t *testing.T) {
 	nullVec := func() *plan.Expr {
 		vecTyp := types.T_decimal256.ToType()
 		vecTyp.Width, vecTyp.Scale = 40, 4
-		vec := vector.NewVec(vecTyp)
+		vec := vector.NewVec(vecTyp, proc.Mp())
 		require.NoError(t, vector.AppendFixed(vec, types.Decimal256{}, true, proc.Mp()))
 		vecBytes, err := vec.MarshalBinary()
 		require.NoError(t, err)

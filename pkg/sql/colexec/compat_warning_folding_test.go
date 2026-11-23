@@ -195,7 +195,7 @@ func TestTemporalOwnedFilterRespectsRowGuard(t *testing.T) {
 	defer execs[0].Free()
 	b := batch.NewWithSize(1)
 	defer b.Clean(proc.Mp())
-	b.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	b.Vecs[0] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(b.Vecs[0], []bool{true, false}, nil, proc.Mp()))
 	b.SetRowCount(2)
 	_, err = execs[0].Eval(proc, []*batch.Batch{b}, nil)
@@ -230,7 +230,7 @@ func TestTemporalDiagnosticScopeAcrossSiblings(t *testing.T) {
 			defer execs[0].Free()
 			b := batch.NewWithSize(1)
 			defer b.Clean(proc.Mp())
-			b.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+			b.Vecs[0] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(b.Vecs[0], []bool{true, false, true}, nil, proc.Mp()))
 			b.SetRowCount(3)
 			for _, want := range []int{3, 5} {

@@ -34,7 +34,7 @@ func BenchmarkJSONAdmissionExistingPaths(b *testing.B) {
 			for _, operation := range []string{"append", "unmarshal", "unmarshal-copy"} {
 				b.Run(operation, func(b *testing.B) {
 					mp := mpool.MustNewZero()
-					v := NewVec(types.T_json.ToType())
+					v := NewVec(types.T_json.ToType(), mp)
 					b.Cleanup(func() { v.Free(mp); require.Zero(b, mp.CurrNB()) })
 					require.NoError(b, AppendBytes(v, raw, false, mp))
 					wire, err := v.MarshalBinary()

@@ -133,7 +133,7 @@ func TestCapacityPreflightHelperApplicationAndJSONPaths(t *testing.T) {
 	require.NoError(t, err)
 	encoded, err := jsonValue.Marshal()
 	require.NoError(t, err)
-	jsonVec := vector.NewVec(types.T_json.ToType())
+	jsonVec := vector.NewVec(types.T_json.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(jsonVec, encoded, false, mp))
 	size, err := accountedJSONValueSize(jsonVec, 0, nil)
 	require.NoError(t, err)

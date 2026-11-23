@@ -149,7 +149,7 @@ func TestPKCommitTSMatchedInRange(t *testing.T) {
 	from := types.BuildTS(10, 0)
 	to := types.BuildTS(20, 0)
 
-	vec := vector.NewVec(types.T_TS.ToType())
+	vec := vector.NewVec(types.T_TS.ToType(), mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec, types.BuildTS(10, 0), false, mp))
 	require.NoError(t, vector.AppendFixed(vec, types.BuildTS(11, 0), false, mp))
@@ -186,7 +186,7 @@ func TestPKCommitTSMatchedInRange(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, changed)
 
-	aborts := vector.NewVec(types.T_bool.ToType())
+	aborts := vector.NewVec(types.T_bool.ToType(), mp)
 	defer aborts.Free(mp)
 	require.NoError(t, vector.AppendFixedList(aborts, []bool{true, false, false, false}, nil, mp))
 	changed, ok = pkCommitTSMatchedInRange(constant, aborts, []int64{0}, from, to)

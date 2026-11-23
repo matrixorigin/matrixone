@@ -193,8 +193,8 @@ func makeConstInputGojiebaExprsFTT() []*plan.Expr {
 
 func makeBatchGojiebaFTT(proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0))
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0))
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0), proc.Mp())
 
 	vector.AppendFixed[int32](bat.Vecs[0], int32(1), false, proc.Mp())
 	vector.AppendBytes(bat.Vecs[1], []byte("我来到北京"), false, proc.Mp())
@@ -367,9 +367,9 @@ func fullTextTokenizeThreeArgExprs() []*plan.Expr {
 func makeNullableFullTextBatch(t *testing.T, proc *process.Process, left, right string) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 
 	rows := []struct {
 		leftNull  bool
@@ -426,8 +426,8 @@ func makeConstInputExprsFTT() []*plan.Expr {
 // create input vector for arg (id, text)
 func makeBatchFTT(proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0))
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0))
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0), proc.Mp())
 
 	vector.AppendFixed[int32](bat.Vecs[0], int32(1), false, proc.Mp())
 	vector.AppendBytes(bat.Vecs[1], []byte("this is a text"), false, proc.Mp())
@@ -474,8 +474,8 @@ func makeConstInputJSONExprsFTT() []*plan.Expr {
 // create input vector for arg (id, text)
 func makeBatchJSONFTT(proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0))
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0))
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0), proc.Mp())
 
 	vector.AppendFixed[int32](bat.Vecs[0], int32(1), false, proc.Mp())
 	vector.AppendBytes(bat.Vecs[1], []byte("{\"a\":\"abcdedfghijklmnopqrstuvwxyz\"}"), false, proc.Mp())

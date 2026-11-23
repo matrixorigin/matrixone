@@ -445,7 +445,7 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 				{"absent key", keys[2] - 1, false},
 			} {
 				bat := batch.NewWithSize(1)
-				vec := vector.NewVec(types.T_uint64.ToType())
+				vec := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 				bat.SetVector(0, vec)
 				defer bat.Clean(proc.GetMPool())
 				require.NoError(t, vector.AppendFixed(vec, tc.key, false, proc.GetMPool()))

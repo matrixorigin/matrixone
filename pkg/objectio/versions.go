@@ -69,7 +69,7 @@ func EncodeColumnDataV1(ioe any) (buf []byte, err error) {
 // NOTE:
 // Break by MustVector. Need to update MustVector to support new version.
 func DecodeColumnDataV1(buf []byte) (ioe any, err error) {
-	vec := vector.NewVec(types.Type{})
+	vec := vector.NewVec(types.Type{}, nil)
 	if err = vec.UnmarshalBinaryV1(buf); err != nil {
 		return
 	}
@@ -79,7 +79,7 @@ func DecodeColumnDataV1(buf []byte) (ioe any, err error) {
 // NOTE:
 // Break by MustVector. Need to update MustVector to support new version.
 func DecodeColumnDataV2(buf []byte) (ioe any, err error) {
-	vec := vector.NewVec(types.Type{})
+	vec := vector.NewVec(types.Type{}, nil)
 	if err = vec.UnmarshalBinary(buf); err != nil {
 		return
 	}

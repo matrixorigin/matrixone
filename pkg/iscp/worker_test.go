@@ -24,7 +24,9 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/stretchr/testify/require"
 )
@@ -167,4 +169,42 @@ func TestWorkerCancellationUnblocksSubmit(t *testing.T) {
 
 	cancel()
 	require.Error(t, w.Submit(&IterationContext{}))
+}
+
+func TestWorkerFailureWritesStatusWithoutAdvancingProgress(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	exec := newRuntimeTestExecutor()
+	w := worker{ctx: ctx, exec: exec}
+	iter := &IterationContext{
+		accountID: 1, tableID: 2, jobNames: []string{"fenced", "peer"},
+		jobIDs: []uint64{10, 20}, lsn: []uint64{1, 2},
+		stages: []int8{JobStage_Running, JobStage_Running},
+		fromTS: types.BuildTS(20, 0), toTS: types.BuildTS(20, 0),
+	}
+	require.NoError(t, exec.CancelAndDrainJobConsumer(ctx, 1, 2, "fenced", 10))
+
+	oldFlush := FlushJobStatusOnIterationState
+	t.Cleanup(func() { FlushJobStatusOnIterationState = oldFlush })
+	writes := 0
+	FlushJobStatusOnIterationState = func(
+		_ context.Context, _ string, _ engine.Engine, _ client.TxnClient,
+		_ uint32, _ uint64, names []string, _ []uint64, lsns []uint64,
+		statuses []*JobStatus, watermark *types.TS, state int8, prev []uint64,
+	) error {
+		writes++
+		require.Equal(t, []string{"fenced", "peer"}, names, "the CAS owns retirement, including a possible DDL rollback")
+		require.Nil(t, watermark, "the lone commit in this range has not been applied")
+		require.Equal(t, []uint64{1, 2}, lsns)
+		require.Equal(t, []uint64{0, 1}, prev)
+		require.Equal(t, ISCPJobState_Completed, state)
+		require.Len(t, statuses, 2)
+		require.Equal(t, "source read failed", statuses[0].ErrorMsg)
+		return nil
+	}
+	w.finishFailedIteration(iter, errors.New("source read failed"))
+	require.Equal(t, 1, writes)
+	cancel()
+	w.finishFailedIteration(iter, errors.New("source read failed"))
+	require.Equal(t, 1, writes, "canceled worker must not start another status transaction")
 }

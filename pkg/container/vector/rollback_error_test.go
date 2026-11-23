@@ -29,7 +29,7 @@ func TestRollbackAppendRejectsBeforeMutation(t *testing.T) {
 	for _, name := range []string{"length", "area", "negative", "overflow"} {
 		t.Run(name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			v := NewVec(types.T_varchar.ToType())
+			v := NewVec(types.T_varchar.ToType(), mp)
 			defer func() { v.Free(mp); require.Zero(t, mp.CurrNB()); require.Zero(t, mp.OnHeapCurrNB()) }()
 			require.NoError(t, AppendBytes(v, []byte(strings.Repeat("a", 64)), false, mp))
 			v.SetSorted(true)
@@ -61,13 +61,12 @@ func TestAppendAllocatorLimitReturnsErrorAndKeepsPrefix(t *testing.T) {
 	mpool.CapLimit = 128
 	t.Cleanup(func() { mpool.CapLimit = old })
 	mp := mpool.MustNewZero()
-	v := NewVec(types.T_varchar.ToType())
+	v := NewVec(types.T_varchar.ToType(), mp)
 	defer func() { v.Free(mp); require.Zero(t, mp.CurrNB()); require.Zero(t, mp.OnHeapCurrNB()) }()
 	first := strings.Repeat("a", 64)
 	require.NoError(t, AppendBytes(v, []byte(first), false, mp))
 	err := AppendBytes(v, []byte(strings.Repeat("b", 64)), false, mp)
 	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
-	require.NotErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
 	require.Equal(t, 1, v.Length())
 	require.Equal(t, first, v.GetStringAt(0))
 }

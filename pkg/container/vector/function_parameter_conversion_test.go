@@ -43,7 +43,7 @@ func TestConvertedParameterReuse(t *testing.T) {
 				if tc.oid == types.T_decimal64 || tc.oid == types.T_decimal128 {
 					typ.Scale = 2
 				}
-				input := NewVec(typ)
+				input := NewVec(typ, mp)
 				defer input.Free(mp)
 				for i := 0; i < 2; i++ {
 					switch tc.oid {

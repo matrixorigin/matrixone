@@ -209,7 +209,7 @@ func strToLowPrecFloat[Tr types.LowPrecFloat](
 		rs.SetNullResult(uint64(length))
 		return nil
 	}
-	isBinary := from.GetIsBin()
+	isBinary := result.ArgumentIsBin(0)
 	mode := CompatibilityModeFromProcess(proc)
 	var zero Tr
 	for i := 0; i < length; i++ {

@@ -881,7 +881,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 			reader.SetIndexParam(req.IndexParam)
 		}
 		for {
-			bat, makeErr := makeRelationScanBatch(tableDef, req.Columns)
+			bat, makeErr := makeRelationScanBatch(tableDef, req.Columns, res.Mp)
 			if makeErr != nil {
 				return res, makeErr
 			}
@@ -1264,7 +1264,7 @@ func compactRelationTop(res *executor.Result, limit int, desc bool) error {
 	out := batch.NewWithSize(len(first.Vecs))
 	out.Attrs = append(out.Attrs, first.Attrs...)
 	for i, src := range first.Vecs {
-		out.Vecs[i] = vector.NewVec(*src.GetType())
+		out.Vecs[i] = vector.NewVec(*src.GetType(), res.Mp)
 	}
 	for _, selected := range rows {
 		src := res.Batches[selected.batch]
@@ -1288,7 +1288,7 @@ func compactRelationTop(res *executor.Result, limit int, desc bool) error {
 	return nil
 }
 
-func makeRelationScanBatch(tableDef *plan.TableDef, columns []string) (*batch.Batch, error) {
+func makeRelationScanBatch(tableDef *plan.TableDef, columns []string, mp *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(columns))
 	bat.Attrs = append(bat.Attrs, columns...)
 	for i, name := range columns {
@@ -1301,7 +1301,7 @@ func makeRelationScanBatch(tableDef *plan.TableDef, columns []string) (*batch.Ba
 			return nil, moerr.NewInternalErrorNoCtxf("ivfflat hidden column %q not found in %s", name, tableDef.Name)
 		}
 		colType := tableDef.Cols[pos].Typ
-		bat.Vecs[i] = vector.NewVec(types.New(types.T(colType.Id), colType.Width, colType.Scale))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T(colType.Id), colType.Width, colType.Scale), mp)
 	}
 	return bat, nil
 }

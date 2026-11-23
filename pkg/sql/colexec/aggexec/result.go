@@ -229,7 +229,7 @@ type optSplitResult struct {
 }
 
 func (r *optSplitResult) marshalToBuffers(flags [][]uint8, writer io.Writer) error {
-	rvec := vector.NewOffHeapVecWithType(r.resultType)
+	rvec := vector.NewVec(r.resultType, r.mp)
 	defer rvec.Free(r.mp)
 
 	for i := range r.resultList {
@@ -254,7 +254,7 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, writer io.Writer) err
 		return err
 	}
 	if cnt > 0 {
-		mvec := vector.NewOffHeapVecWithType(types.T_bool.ToType())
+		mvec := vector.NewVec(types.T_bool.ToType(), r.mp)
 		defer mvec.Free(r.mp)
 		for i := range r.emptyList {
 			selection, err := aggregateChunkSelection(
@@ -379,7 +379,7 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) (retErr error) {
 	r.resultList = make([]*vector.Vector, 1)
 	r.nowIdx1 = 0
 
-	r.resultList[0] = vector.NewOffHeapVecWithType(r.resultType)
+	r.resultList[0] = vector.NewVec(r.resultType, r.mp)
 	if err = unmarshalAggregateVector(r.resultList[0], reader, r.mp); err != nil {
 		return err
 	}
@@ -395,7 +395,7 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) (retErr error) {
 	if cnt > 0 {
 		r.emptyList = make([]*vector.Vector, 1)
 		r.bsFromEmptyList = make([][]bool, 1)
-		r.emptyList[0] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
+		r.emptyList[0] = vector.NewVec(types.T_bool.ToType(), r.mp)
 		if err = unmarshalAggregateVector(r.emptyList[0], reader, r.mp); err != nil {
 			return err
 		}
@@ -473,9 +473,9 @@ func (r *optSplitResult) init(
 
 func (r *optSplitResult) resetEmpty() {
 	r.free()
-	r.resultList = append(r.resultList, vector.NewOffHeapVecWithType(r.resultType))
+	r.resultList = append(r.resultList, vector.NewVec(r.resultType, r.mp))
 	if r.optInformation.doesThisNeedEmptyList {
-		r.emptyList = append(r.emptyList, vector.NewOffHeapVecWithType(types.T_bool.ToType()))
+		r.emptyList = append(r.emptyList, vector.NewVec(types.T_bool.ToType(), r.mp))
 		r.bsFromEmptyList = append(r.bsFromEmptyList, nil)
 	}
 
@@ -652,9 +652,9 @@ func (r *optSplitResult) setLengthPartK(k int, row int) {
 }
 
 func (r *optSplitResult) appendPartK() int {
-	r.resultList = append(r.resultList, vector.NewOffHeapVecWithType(r.resultType))
+	r.resultList = append(r.resultList, vector.NewVec(r.resultType, r.mp))
 	if r.optInformation.doesThisNeedEmptyList {
-		r.emptyList = append(r.emptyList, vector.NewOffHeapVecWithType(types.T_bool.ToType()))
+		r.emptyList = append(r.emptyList, vector.NewVec(types.T_bool.ToType(), r.mp))
 	}
 	if r.optInformation.hasDistinct {
 		r.distinct = append(r.distinct, newDistinctHash(r.mp))

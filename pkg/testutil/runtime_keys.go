@@ -42,7 +42,7 @@ func RuntimeKeyPayload(t testing.TB, data []byte) *keycodec.KeyPayload {
 		mp := mpool.MustNewZero()
 		for start := 0; start < v.Length(); start += keycodec.KeyChunkRows {
 			func() {
-				chunk := vector.NewVec(*v.GetType())
+				chunk := vector.NewVec(*v.GetType(), mp)
 				defer chunk.Free(mp)
 				require.NoError(t, chunk.UnionBatch(&v, int64(start), min(keycodec.KeyChunkRows, v.Length()-start), nil, mp))
 				encoded, err := chunk.MarshalBinary()

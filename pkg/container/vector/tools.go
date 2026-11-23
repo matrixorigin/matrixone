@@ -26,7 +26,6 @@ import (
 )
 
 func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
-	v.requirePhysical()
 	if v.class == CONSTANT {
 		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
@@ -35,7 +34,6 @@ func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
 }
 
 func ToFixedCol[T any](v *Vector, ret *[]T) {
-	v.requirePhysical()
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
@@ -61,7 +59,6 @@ func MustFixedColNoTypeCheck[T any](v *Vector) (ret []T) {
 // n does not exceed the allocated capacity. Used by aggregation executors for
 // bounds-check-eliminated array access via (*[N]T)(slice) conversion.
 func MustFixedColAsSlice[T any](v *Vector, n int) []T {
-	v.requirePhysical()
 	return unsafe.Slice((*T)(unsafe.Pointer(unsafe.SliceData(v.data))), n)
 }
 
@@ -80,7 +77,6 @@ func MustFixedColWithTypeCheck[T any](v *Vector) (ret []T) {
 //		vs[i].GetByteSlice(area)
 //	}
 func InefficientMustBytesCol(v *Vector) [][]byte {
-	v.requirePhysical()
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -112,7 +108,6 @@ func InefficientMustBytesCol(v *Vector) [][]byte {
 // it will cause the UnsafeGetString method to panic. This is because what is stored here is the offset of the last value.
 // and InefficientMustBytesCol has a same bug.
 func InefficientMustStrCol(v *Vector) []string {
-	v.requirePhysical()
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -130,7 +125,6 @@ func InefficientMustStrCol(v *Vector) []string {
 
 // MustArrayCol  Converts Vector<[]T> to [][]T
 func MustArrayCol[T types.ArrayElement](v *Vector) [][]T {
-	v.requirePhysical()
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -219,12 +213,8 @@ func extendWithBitmaps(
 	needNulls bool,
 	needGrouping bool,
 ) error {
-	// COW may replace data and shrink spare capacity. Complete it before
-	// admitting rows or handing descriptor slices to append callers.
-	if v.HasBorrowedBacking() {
-		if err := v.MaterializeOwned(m); err != nil {
-			return err
-		}
+	if err := v.checkMP(m); err != nil {
+		return err
 	}
 	if rows <= 0 {
 		// we will at least extent by 1.
@@ -235,15 +225,15 @@ func extendWithBitmaps(
 	tgtLen := v.length + rows
 	switch {
 	case needNulls && needGrouping:
-		if err := v.ensureBitmapCapacity(tgtLen, m); err != nil {
+		if err := v.ensureBitmapCapacity(tgtLen); err != nil {
 			return err
 		}
 	case needNulls:
-		if err := v.ensureNullCapacity(tgtLen, m); err != nil {
+		if err := v.ensureNullCapacity(tgtLen); err != nil {
 			return err
 		}
 	case needGrouping:
-		if err := v.ensureGroupingCapacity(tgtLen, m); err != nil {
+		if err := v.ensureGroupingCapacity(tgtLen); err != nil {
 			return err
 		}
 	}
@@ -260,9 +250,6 @@ func extendWithBitmaps(
 }
 
 func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
-	if vec.IsDictionary() {
-		return ret, errDictionaryPhysicalAccess
-	}
 	nsp, err := vec.nsp.Show()
 	if err != nil {
 		return
@@ -287,30 +274,35 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 	}, nil
 }
 
-func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
+// ProtoVectorToVector copies vec into a new vector allocated from mp. With a
+// nil mp the result is a read-only reference to vec's buffers.
+func ProtoVectorToVector(vec api.Vector, mp *mpool.MPool) (*Vector, error) {
 	typ, err := types.TypeFromPlan(vec.Type)
 	if err != nil {
 		return nil, err
 	}
-	rvec := NewVecFromReuse()
-	rvec.area = vec.Area
-	rvec.length = int(vec.Len)
-	rvec.typ = typ
-	rvec.cantFreeData = true
-	rvec.cantFreeArea = true
-
+	var decoded Vector
+	decoded.area = vec.Area
+	decoded.length = int(vec.Len)
+	decoded.typ = typ
 	if vec.IsConst {
-		rvec.class = CONSTANT
+		decoded.class = CONSTANT
 	} else {
-		rvec.class = FLAT
+		decoded.class = FLAT
 	}
-	if err := rvec.nsp.Read(vec.Nsp); err != nil {
+	if err := decoded.nsp.Read(vec.Nsp); err != nil {
 		return nil, err
 	}
-	if rvec.IsConst() && rvec.nsp.Contains(0) {
-		return rvec, nil
+	if !decoded.IsConst() || !decoded.nsp.Contains(0) {
+		decoded.data = vec.Data
 	}
-	rvec.data = vec.Data
+	if mp == nil {
+		return &decoded, nil
+	}
+	rvec := NewVec(typ, mp)
+	if err := rvec.copyDecoded(&decoded); err != nil {
+		return nil, err
+	}
 	return rvec, nil
 }
 

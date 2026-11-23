@@ -267,7 +267,7 @@ func (reader *CKPReader) GetTableRanges(
 		ranges = append(ranges, reader.tombstoneRanges...)
 		return
 	}
-	rangeBat := ckputil.MakeTableRangeBatch()
+	rangeBat := ckputil.MakeTableRangeBatch(reader.mp)
 	defer rangeBat.Clean(reader.mp)
 	if err = ckputil.CollectTableRanges(
 		ctx,
@@ -511,7 +511,7 @@ func readMetaWithTableID(
 		sels[i] = int64(start + i)
 	}
 
-	metaBatch := ckputil.NewMetaBatch()
+	metaBatch := ckputil.NewMetaBatch(mp)
 	defer metaBatch.Clean(mp)
 	if _, _, err = ioutil.LoadColumnsDataInto(
 		ctx, ckputil.MetaSeqnums, ckputil.MetaTypes, fs, location,
@@ -597,8 +597,8 @@ func (reader *CKPReader) GetCheckpointData(ctx context.Context) (ckpData *batch.
 	if reader.withTableID {
 		panic("not support")
 	}
-	ckpData = ckputil.MakeDataScanTableIDBatch()
-	tmpBatch := ckputil.MakeDataScanTableIDBatch()
+	ckpData = ckputil.MakeDataScanTableIDBatch(reader.mp)
+	tmpBatch := ckputil.MakeDataScanTableIDBatch(reader.mp)
 	defer tmpBatch.Clean(reader.mp)
 	for {
 		tmpBatch.CleanOnlyData()
@@ -724,7 +724,7 @@ func (reader *CKPReader) ForEachRow(
 	if reader.withTableID {
 		panic("not support")
 	}
-	tmpBatch := ckputil.MakeDataScanTableIDBatch()
+	tmpBatch := ckputil.MakeDataScanTableIDBatch(reader.mp)
 	defer tmpBatch.Clean(reader.mp)
 	defer reader.ckpDataReader.Reset(ctx)
 	for {
@@ -769,7 +769,7 @@ func (reader *CKPReader) ConsumeCheckpointWithTableID(
 		panic("not support")
 	}
 	if reader.version <= CheckpointVersion12 {
-		tmpBatch := ckputil.MakeDataScanTableIDBatch()
+		tmpBatch := ckputil.MakeDataScanTableIDBatch(reader.mp)
 		defer tmpBatch.Clean(reader.mp)
 		defer reader.ckpDataReader.Reset(ctx)
 		for {

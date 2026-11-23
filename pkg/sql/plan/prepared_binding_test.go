@@ -145,7 +145,7 @@ func TestPreparedDecimalComparisonPruning(t *testing.T) {
 					mock.ctxt.tables[table.Name] = table
 					mock.ctxt.objects[table.Name] = &ObjectRef{ObjName: table.Name, Obj: int64(table.TblId)}
 					proc := mock.ctxt.GetProcess()
-					params := vector.NewVec(types.T_text.ToType())
+					params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 					defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 					require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, proc.Mp()))
 					proc.SetPrepareParams(params)
@@ -172,7 +172,7 @@ func TestPreparedDecimalComparisonPruning(t *testing.T) {
 							{"9223372036854775807", false, false}, {"", true, true},
 						} {
 							func() {
-								current := vector.NewVec(types.T_text.ToType())
+								current := vector.NewVec(types.T_text.ToType(), proc.Mp())
 								defer func() { proc.SetPrepareParams(params); current.Free(proc.Mp()) }()
 								require.NoError(t, vector.AppendBytes(current, []byte(probe.value), probe.null, proc.Mp()))
 								proc.SetPrepareParams(current)
@@ -287,7 +287,7 @@ func TestPreparedDecimalIntegerConsumerPruning(t *testing.T) {
 				mock.ctxt.tables[table.Name] = table
 				mock.ctxt.objects[table.Name] = &ObjectRef{ObjName: table.Name, Obj: int64(table.TblId)}
 				proc := mock.ctxt.GetProcess()
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
 				bindings := make([]PreparedSourceBinding, len(tc.values))
 				values := make([]any, len(tc.values))
@@ -322,7 +322,7 @@ func TestPreparedDecimalIntegerConsumerPruning(t *testing.T) {
 							{"16001", false, true},
 						} {
 							func() {
-								current := vector.NewVec(types.T_text.ToType())
+								current := vector.NewVec(types.T_text.ToType(), proc.Mp())
 								defer func() { proc.SetPrepareParams(params); current.Free(proc.Mp()) }()
 								for i, value := range tc.values {
 									null := false
@@ -533,7 +533,7 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 			mock.ctxt.tables[table.Name] = table
 			mock.ctxt.objects[table.Name] = &ObjectRef{ObjName: table.Name, Obj: int64(table.TblId)}
 			proc := mock.ctxt.GetProcess()
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			bindings := make([]PreparedSourceBinding, len(tc.values))
 			values := make([]any, len(tc.values))
@@ -637,7 +637,7 @@ func TestPreparedTemporalDecimalSpecialization(t *testing.T) {
 			mock := NewMockOptimizer(false, proc)
 			sink := &loadAssignmentWarningSink{}
 			proc.WarningSink = sink
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, fmt.Sprintf(
 				"select 1 where date_sub(time '00:00:00', interval cast(? as decimal(%d,1)) hour) is null", width), 1)
@@ -685,7 +685,7 @@ func TestPreparedTemporalDecimalProbeControls(t *testing.T) {
 			proc := newPlanTestProcess(t)
 			sink := &loadAssignmentWarningSink{}
 			proc.WarningSink = sink
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
 			if !tc.missing {
@@ -832,7 +832,7 @@ func TestPreparedSQLPresentationKeepsDependentProgramTypes(t *testing.T) {
 			t.Run(fmt.Sprintf("binary=%v/%s", binary, tc.name), func(t *testing.T) {
 				mock := NewMockOptimizer(true, newPlanTestProcess(t))
 				proc := mock.ctxt.GetProcess()
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 				for range 2 {
 					require.NoError(t, vector.AppendBytes(params, []byte(fmt.Sprint(tc.value)), tc.value == nil, proc.Mp()))
@@ -954,7 +954,7 @@ func TestPreparedSourceBindingKeepsCurrentValuesAndOrdinals(t *testing.T) {
 	} {
 		func() {
 			proc := testutil.NewProcess(t)
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			for _, value := range tc.values {
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
@@ -993,7 +993,7 @@ func TestPreparedTextSourceRemainsText(t *testing.T) {
 	p, err := runOneStmt(mock, t, "select ?, ?=cast(2 as int)")
 	require.NoError(t, err)
 	proc := testutil.NewProcess(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("你好abc"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("2.5"), false, proc.Mp()))
@@ -1054,7 +1054,7 @@ func TestPreparedSourceTransportDiagnosticOwnership(t *testing.T) {
 				null, safe bool
 			}{{tc.valid, false, true}, {tc.bad, false, false}, {"", true, true}, {tc.valid, false, true}} {
 				func() {
-					params := vector.NewVec(types.T_text.ToType())
+					params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 					defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 					require.NoError(t, vector.AppendBytes(params, []byte(binding.value), binding.null, proc.Mp()))
 					proc.SetPrepareParams(params)
@@ -1136,7 +1136,8 @@ func TestPreparedSourceBindingPreservesUpdateDomains(t *testing.T) {
 	require.NoError(t, planpb.VisitExpressionsInOwner(p, func(root *Expr) error {
 		return planpb.VisitExprTree(root, func(e *Expr) error {
 			fn := e.GetF()
-			if fn != nil && fn.Func.GetObjName() == "cast" && e.Typ.Id == int32(types.T_decimal64) &&
+			if fn != nil && (fn.Func.GetObjName() == "cast" || fn.Func.GetObjName() == "cast_assign") &&
+				e.Typ.Id == int32(types.T_decimal64) &&
 				len(fn.Args) > 0 && fn.Args[0].GetP() != nil && fn.Args[0].GetP().Pos == 0 {
 				require.Equal(t, int32(types.T_float64), fn.Args[0].Typ.Id)
 				writeCast = true
@@ -1186,7 +1187,7 @@ func TestPreparedDMLIntegerKeyDomains(t *testing.T) {
 				table.Cols[0].Typ = makeSimplePlan2Type(tc.column)
 				mock.ctxt.tables["nation"] = table
 				proc := mock.ctxt.GetProcess()
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
 				require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, proc.Mp()))
 				proc.SetPrepareParams(params)
@@ -1273,7 +1274,7 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 			require.Same(t, firstGuard, state.diagnosticCandidates[0])
 			require.Equal(t, int32(types.T_int64), firstGuard.GetF().Args[0].Typ.Id)
 			proc := testutil.NewProcess(t)
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()); proc.Free() })
 			require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
 			proc.SetPrepareParams(params)
@@ -1465,7 +1466,7 @@ func TestPreparedSourceBindingDiagnosticProofIsLocal(t *testing.T) {
 	}, []any{"00:00:01", int32(1)})
 	mock.ctxt.SetContext(ctx)
 	proc := mock.ctxt.GetProcess()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
@@ -1522,7 +1523,7 @@ func TestPreparedSourceBindingStringConsumers(t *testing.T) {
 			}
 			require.NoError(t, err)
 			proc := mock.ctxt.GetProcess()
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
 			proc.SetPrepareParams(params)
@@ -1560,7 +1561,7 @@ func TestPreparedSourceBindingJSONComparisonExecution(t *testing.T) {
 			p, err := runOneStmt(mock, t, "select cast('"+tc.json+"' as json)=?")
 			require.NoError(t, err)
 			proc := mock.ctxt.GetProcess()
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, proc.Mp()))
 			proc.SetPrepareParams(params)
@@ -1647,7 +1648,7 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			proc := mock.ctxt.GetProcess()
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
 			proc.SetPrepareParams(params)
@@ -1713,7 +1714,7 @@ func TestPreparedBinarySourceKeepsDeclaredWidth(t *testing.T) {
 			require.NotNil(t, expr)
 			require.Equal(t, int32(512), expr.Typ.Width)
 			proc := mock.ctxt.GetProcess()
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			require.NoError(t, vector.AppendBytes(params, []byte("你好"), false, proc.Mp()))
 			proc.SetPrepareParams(params)
@@ -1840,7 +1841,7 @@ func TestPreparedExplicitIntegerCastFilters(t *testing.T) {
 				{"safe again", "9", false, true},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					params := vector.NewVec(types.T_text.ToType())
+					params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 					t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
 					values := make([]any, count)
 					for i := range values {
@@ -1905,7 +1906,7 @@ func TestPreparedIntegerComparisonProofDiagnostics(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			proc := mock.ctxt.GetProcess()
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
 			proc.SetPrepareParams(params)
@@ -1930,7 +1931,7 @@ func TestPreparedIntegerComparisonProofDiagnostics(t *testing.T) {
 			require.Empty(t, sink.codes, "a proof must not publish warnings")
 			if tc.warningCode != 0 {
 				input := batch.NewWithSize(1)
-				input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 				defer input.Clean(proc.Mp())
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], tc.row, false, proc.Mp()))
 				input.SetRowCount(1)
@@ -1972,7 +1973,7 @@ func TestPreparedSingletonJoinIntegerComparison(t *testing.T) {
 			mock.ctxt.tables[table.Name] = table
 			mock.ctxt.objects[table.Name] = &ObjectRef{ObjName: table.Name, Obj: int64(table.TblId)}
 			proc := mock.ctxt.GetProcess()
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, proc.Mp()))
 			proc.SetPrepareParams(params)
@@ -2119,7 +2120,7 @@ func TestPreparedLowPrecisionFloatMarkerNarrowing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			proc := mock.ctxt.GetProcess()
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			bindings := make([]PreparedSourceBinding, len(tc.params))
 			values := make([]any, len(tc.params))
@@ -2172,7 +2173,7 @@ func TestPreparedWideIntegerComparisonKeepsColumn(t *testing.T) {
 				require.NoError(t, err)
 				defer stmt.Free()
 				count := tree.ParameterCount(stmt)
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 				bindings := make([]PreparedSourceBinding, count)
 				values := make([]any, count)

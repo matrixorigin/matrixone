@@ -39,7 +39,10 @@ type container struct {
 	// still references the child's vector - such an entry must be replaced
 	// with independent storage when its conversion runs, and it must never
 	// be cleaned or freed in place, on either the fill or the teardown path.
-	ownedVecSlots     map[int]bool
+	ownedVecSlots map[int]bool
+	// ignoreFill owns the vectors the INSERT IGNORE NOT NULL fill installs
+	// into output slots that hold a child's vector.
+	ignoreFill        colexec.IgnoreFill
 	clusterByExecutor colexec.ExpressionExecutor
 	compPkExecutor    colexec.ExpressionExecutor
 	// autoIncrementGenerated is statement-row provenance captured before the
@@ -159,4 +162,5 @@ func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err
 		preInsert.ctr.buf.Clean(proc.Mp())
 		preInsert.ctr.buf = nil
 	}
+	preInsert.ctr.ignoreFill.Free()
 }

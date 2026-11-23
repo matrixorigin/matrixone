@@ -52,6 +52,9 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 		if err != nil {
 			return err
 		}
+		if err = mergeGroup.ctr.bindAllocationViews(proc); err != nil {
+			return err
+		}
 		if err = mergeGroup.ctr.installRecoveryCapacity(); err != nil {
 			return err
 		}
@@ -253,13 +256,13 @@ func (mergeGroup *MergeGroup) ensureRuntimeEmptyGroupingSets() error {
 	ctr.groupingAware = true
 	aggs, err := ctr.makeAggList(mergeGroup.Aggs)
 	if err != nil {
-		output.Clean(ctr.mp)
+		ctr.cleanGroupBatch(output)
 		return err
 	}
 	for _, agg := range aggs {
 		if err = agg.GroupGrow(rows); err != nil {
 			freeAggList(aggs)
-			output.Clean(ctr.mp)
+			ctr.cleanGroupBatch(output)
 			return err
 		}
 	}

@@ -1016,7 +1016,7 @@ func (ctr *container) prepareSpillReloadRecord(
 		ctr.spillGbBatch, err = ctr.createNewGroupByBatchWithAllocation(
 			nil,
 			record.rows,
-			ctr.spillGroupByAllocation,
+			ctr.spillGroupByMP(),
 		)
 		if err != nil {
 			return record, false, err
@@ -1024,7 +1024,7 @@ func (ctr *container) prepareSpillReloadRecord(
 	}
 	gbBatch := ctr.spillGbBatch
 	gbBatch.CleanOnlyData()
-	if err = unmarshalSpillGroupByRows(reader, gbBatch, record.rows, ctr.mp); err != nil {
+	if err = unmarshalSpillGroupByRows(reader, gbBatch, record.rows, ctr.spillGroupByMP()); err != nil {
 		return record, false, err
 	}
 
@@ -1518,30 +1518,18 @@ func (ctr *container) newRuntimeEmptyGroupingSetBatch(
 		rows = len(setIDs)
 		rollupColumns--
 	}
-	output := batch.NewOffHeapWithSize(len(groupTypes))
-	if err := output.SetAllocationAccount(ctr.groupByAllocation); err != nil {
-		output.Clean(ctr.mp)
-		return nil, err
-	}
+	output := batch.NewWithSize(len(groupTypes))
+	groupByMP := ctr.groupByMP()
 	for i := 0; i < rollupColumns; i++ {
-		vec, err := vector.NewRollupConstWithAllocation(
-			groupTypes[i], rows, ctr.mp, ctr.groupByAllocation)
-		if err != nil {
-			output.Clean(ctr.mp)
-			return nil, err
-		}
-		output.Vecs[i] = vec
+		output.Vecs[i] = vector.NewRollupConst(
+			groupTypes[i], rows, groupByMP)
 	}
 	if setIDs != nil {
-		setIDVector, err := vector.NewOffHeapVecWithTypeAndAllocation(
-			groupTypes[len(groupTypes)-1], ctr.groupByAllocation)
-		if err != nil {
-			output.Clean(ctr.mp)
-			return nil, err
-		}
+		setIDVector := vector.NewVec(
+			groupTypes[len(groupTypes)-1], groupByMP)
 		output.Vecs[len(output.Vecs)-1] = setIDVector
-		if err = vector.AppendFixedList(setIDVector, setIDs, nil, ctr.mp); err != nil {
-			output.Clean(ctr.mp)
+		if err := vector.AppendFixedList(setIDVector, setIDs, nil, groupByMP); err != nil {
+			ctr.cleanGroupBatch(output)
 			return nil, err
 		}
 	}

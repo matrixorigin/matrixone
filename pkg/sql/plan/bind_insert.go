@@ -3164,6 +3164,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				if err != nil {
 					return 0, err
 				}
+				if radix := boundDecimalRadixAssignmentSource(updateExpr, colDef.Typ); radix != nil {
+					updateExpr = radix
+				}
 			}
 
 			isPrimaryKey := slices.Contains(tableDef.Pkey.Names, colDef.Name)
@@ -3356,10 +3359,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			// columns positionally and the restored row image exports them as
 			// columns; keep the materialization physical instead of inlining
 			// the key expressions past the FILTER.
-			if builder.materializedLockKeyProjects == nil {
-				builder.materializedLockKeyProjects = make(map[int32]struct{})
-			}
-			builder.materializedLockKeyProjects[lastNodeID] = struct{}{}
+			builder.preserveDMLProject(lastNodeID)
 			if err = builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, selectNode); err != nil {
 				return 0, err
 			}
@@ -3515,6 +3515,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 	odkuActionValidationApplied := false
 	if onDupAction == plan.Node_UPDATE {
+		// DEDUP overwrites these columns with its affected-row metadata.
+		// Keep their slots even when their initial values are constants.
+		builder.preserveDMLProject(selectNode.NodeId)
 		affectedRowsInputPos = int32(len(selectNode.ProjectList))
 		selectNode.ProjectList = append(selectNode.ProjectList, makePlan2Uint64ConstExprWithType(1))
 		physicalChangedRowsInputPos = int32(len(selectNode.ProjectList))
@@ -5471,7 +5474,41 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		return 0, nil, nil, -1, err
 	}
 
-	return builder.appendInsertReplaceSourceCasts(bindCtx, lastNodeID, insertColumns, objRef, tableDef, isReplace)
+	_, typedValues := rowsForInsert.Select.(*tree.ValuesClause)
+	return builder.appendInsertReplaceSourceCasts(bindCtx, lastNodeID, insertColumns, objRef, tableDef, isReplace, typedValues)
+}
+
+// insertDecimalRadixAssignment uses the visible SELECT field rather than
+// its physical projection. Grouping and window rewrites retain those fields
+// by ordinal, but the resulting slot can contain a synthetic NULL.
+func (builder *QueryBuilder) insertDecimalRadixAssignment(nodeID int32, pos int, source *Expr, target Type) (*Expr, error) {
+	if !types.T(target.Id).IsDecimal() ||
+		(source.Typ.Id != int32(types.T_char) && source.Typ.Id != int32(types.T_varchar)) {
+		return source, nil
+	}
+	ctx := builder.ctxByNode[nodeID]
+	node := builder.qry.Nodes[nodeID]
+	// SAMPLE can move duplicate sampled fields ahead of the visible list.
+	if ctx == nil || ctx.sampleFunc.hasSampleFunc || ctx.sampledProjectFields || len(node.BindingTags) != 1 ||
+		(node.BindingTags[0] != ctx.projectTag && node.BindingTags[0] != ctx.resultTag) ||
+		pos >= len(ctx.projectByAst) || ctx.projectByAst[pos].pos != int32(pos) {
+		return source, nil
+	}
+	radix := decimalRadixAssignmentSource(ctx.projectByAst[pos].ast)
+	if radix == nil {
+		return source, nil
+	}
+	if source.Typ.NotNullable {
+		return radix, nil
+	}
+	isNull, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*Expr{source})
+	if err != nil {
+		return nil, err
+	}
+	nullValue := makePlan2NullConstExprWithType()
+	nullValue.Typ = radix.Typ
+	nullValue.Typ.NotNullable = false
+	return BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*Expr{isNull, nullValue, radix})
 }
 
 // castInsertSourceColumn casts one bound source column to its target column
@@ -5507,7 +5544,7 @@ func (builder *QueryBuilder) castInsertSourceColumn(projExpr, sourceExpr *plan.E
 // pre-insert nodes (defaults, auto-increment, composite keys, ...) plus the
 // per-table dedup/write nodes. It is shared by single-table INSERT/REPLACE and
 // by every target of a multi-table INSERT.
-func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext, lastNodeID int32, insertColumns []string, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool) (int32, map[string]int32, []bool, int32, error) {
+func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext, lastNodeID int32, insertColumns []string, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace, typedValues bool) (int32, map[string]int32, []bool, int32, error) {
 	var err error
 	lastNode := builder.qry.Nodes[lastNodeID]
 	if len(insertColumns) != len(lastNode.ProjectList) {
@@ -5528,7 +5565,18 @@ func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext
 				},
 			},
 		}
-		projExpr, err = builder.castInsertSourceColumn(projExpr, lastNode.ProjectList[i], tableDef.Cols[colIdx])
+		col := tableDef.Cols[colIdx]
+		if typedValues && types.T(col.Typ.Id).IsDecimal() && !isAttributedDecimalPlanType(col.Typ) &&
+			makeTypeByPlan2Expr(projExpr).Eq(makeTypeByPlan2Type(col.Typ)) {
+			// buildValueScan already assigns each cell to this destination.
+			insertColToExpr[column] = projExpr
+			continue
+		}
+		projExpr, err = builder.insertDecimalRadixAssignment(lastNodeID, i, projExpr, col.Typ)
+		if err != nil {
+			return 0, nil, nil, -1, err
+		}
+		projExpr, err = builder.castInsertSourceColumn(projExpr, lastNode.ProjectList[i], col)
 		if err != nil {
 			return 0, nil, nil, -1, err
 		}
@@ -5541,6 +5589,13 @@ func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext
 	} else {
 		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr, builder.isInsertIgnore)
 	}
+}
+
+func (builder *QueryBuilder) preserveDMLProject(nodeID int32) {
+	if builder.materializedDMLProjects == nil {
+		builder.materializedDMLProjects = make(map[int32]struct{})
+	}
+	builder.materializedDMLProjects[nodeID] = struct{}{}
 }
 
 // localProtocolEnablesRightDedupInputKeysUnique reads the deployment-managed
@@ -6553,11 +6608,25 @@ func (builder *QueryBuilder) buildValueScan(
 						continue
 					}
 				}
+				if isAttributedDecimalPlanType(col.Typ) {
+					if source := decimalRadixAssignmentSource(r[i]); source != nil {
+						expr, err := builder.forceCastExpr2(source, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
+						if err != nil {
+							return 0, nil, err
+						}
+						appendValueExpr(i, expr)
+						continue
+					}
+				}
 				// An attributed decimal literal must bind in its natural type and
 				// pass through unsigned-domain admission; the const fast path
 				// materializes the target type directly and would bypass the
 				// admission composition.
-				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {
+				literal := r[i]
+				if colTyp.Oid.IsDecimal() || colTyp.Oid.IsInteger() {
+					literal = unwrapParenExpr(literal)
+				}
+				if nv, ok := literal.(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
 						return 0, nil, err
@@ -6922,7 +6991,9 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 				return 0, err
 			}
 		}
+		var warningRowOption string
 		if carryOrdinal {
+			warningRowOption = plan.ValuesWarningRowOption(uint64(rowIdx) + 1)
 			projectList[ordinalPos] = MakePlan2Int64ConstExprWithType(int64(rowIdx))
 		}
 		rowCtx.headings = make([]string, projectWidth)
@@ -6932,10 +7003,11 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 			rowCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
 		}
 		if carryOrdinal {
-			rowCtx.headings[ordinalPos] = "_values_ordinal"
+			rowCtx.headings[ordinalPos] = plan.ValuesWarningOrdinalColumn
 		}
 		branches = append(branches, builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_PROJECT,
+			ExtraOptions: warningRowOption,
 			ProjectList:  projectList,
 			Children:     []int32{dummyID},
 			BindingTags:  []int32{projectTag},
@@ -6966,7 +7038,9 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 				Typ:   targetCols[colIdx].Typ,
 			}
 		}
+		var scanOption string
 		if carryOrdinal {
+			scanOption = plan.ValuesWarningOrdinalScan
 			rowsetData.Cols[ordinalPos] = &plan.ColData{}
 			for _, rowIdx := range literalRows {
 				rowsetData.Cols[ordinalPos].Data = append(rowsetData.Cols[ordinalPos].Data, &plan.RowsetExpr{
@@ -6975,17 +7049,18 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 			}
 			valueScanTableDef.Cols[ordinalPos] = &plan.ColDef{
 				ColId: 0,
-				Name:  "_values_ordinal",
+				Name:  plan.ValuesWarningOrdinalColumn,
 				Typ:   MakePlan2Int64ConstExprWithType(0).Typ,
 			}
 		}
 		nodeID, _ := uuid.NewV7()
 		scanID := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_VALUE_SCAN,
-			RowsetData:  rowsetData,
-			TableDef:    valueScanTableDef,
-			BindingTags: []int32{lastTag},
-			Uuid:        nodeID[:],
+			NodeType:     plan.Node_VALUE_SCAN,
+			ExtraOptions: scanOption,
+			RowsetData:   rowsetData,
+			TableDef:     valueScanTableDef,
+			BindingTags:  []int32{lastTag},
+			Uuid:         nodeID[:],
 		}, rowCtx)
 		projectTag := builder.genNewBindTag()
 		projectList := make([]*plan.Expr, projectWidth)
@@ -7003,7 +7078,7 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 			rowCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
 		}
 		if carryOrdinal {
-			rowCtx.headings[ordinalPos] = "_values_ordinal"
+			rowCtx.headings[ordinalPos] = plan.ValuesWarningOrdinalColumn
 		}
 		branches = append(branches, builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_PROJECT,
@@ -7050,7 +7125,7 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		if colIdx < len(colNames) {
 			unionCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
 		} else {
-			unionCtx.headings[colIdx] = "_values_ordinal"
+			unionCtx.headings[colIdx] = plan.ValuesWarningOrdinalColumn
 		}
 		unionCtx.projects[colIdx] = &plan.Expr{
 			Typ:  builder.qry.Nodes[lastNodeID].ProjectList[colIdx].Typ,

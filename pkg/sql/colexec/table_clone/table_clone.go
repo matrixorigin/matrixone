@@ -238,8 +238,8 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 	txnMeta := proc.GetTxnOperator().Txn()
 	proc.GetTxnOperator().GetWorkspace().SetCloneTxn(txnMeta.SnapshotTS.PhysicalTime)
 
-	tc.dataObjBat = colexec.AllocCNS3ResultBat(false)
-	tc.tombstoneObjBat = colexec.AllocCNS3ResultBat(true)
+	tc.dataObjBat = colexec.AllocCNS3ResultBat(false, proc.Mp())
+	tc.tombstoneObjBat = colexec.AllocCNS3ResultBat(true, proc.Mp())
 
 	tc.srcRel = make(map[string]engine.Relation)
 	tc.srcReader = make(map[string]engine.Reader)

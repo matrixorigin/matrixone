@@ -288,14 +288,14 @@ func inferViewColumns(
 	case *tree.ParenSelect:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName), nil)
+			objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName), nil)
+			objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1654,6 +1654,7 @@ func genAsSelectCols(
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()

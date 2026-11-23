@@ -226,7 +226,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		u.batch.CleanOnlyData()
 		return nil
 	}
-	u.batch = tf.createResultBatch()
+	u.batch = tf.createResultBatch(proc.Mp())
 
 	if len(tf.Params) > 0 {
 		if err = sonic.Unmarshal([]byte(tf.Params), &u.param); err != nil {

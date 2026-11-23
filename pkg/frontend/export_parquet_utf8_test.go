@@ -42,8 +42,8 @@ func newParquetUTF8ResultSet(name string, mysqlType defines.MysqlType, flag uint
 
 func newBytesBatch(t *testing.T, mp *mpool.MPool, typ types.T, width int32, values [][]byte, nulls []bool) *batch.Batch {
 	t.Helper()
-	bat := batch.NewOffHeapWithSize(1)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.New(typ, width, 0))
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.New(typ, width, 0), mp)
 	for i, v := range values {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], v, nulls[i], mp))
 	}

@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,7 +45,7 @@ func BenchmarkInsertIgnoreAutoIncrementArbiter(b *testing.B) {
 					if i < 2 {
 						typ = types.T_int32.ToType()
 					}
-					input.Vecs[i] = vector.NewVec(typ)
+					input.Vecs[i] = vector.NewVec(typ, mp)
 				}
 				for i := 0; i < rows; i++ {
 					require.NoError(b, vector.AppendFixed(input.Vecs[0], int32(i+1), false, mp))
@@ -87,6 +89,7 @@ func BenchmarkInsertIgnoreAutoIncrementArbiter(b *testing.B) {
 						}
 					}
 					arg.Free(proc, false, nil)
+					colexec.FreeMockChildren(arg)
 				}
 				b.StopTimer()
 				summary, _ := mp.ResourceSnapshot()

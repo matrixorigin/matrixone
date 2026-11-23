@@ -47,15 +47,15 @@ func (c *ignoredCtx) RunSqlWithResult(sql string) (executor.Result, error) {
 	mp := mpool.MustNewZero()
 	if strings.HasPrefix(sql, "SELECT COUNT(*)") {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(c.t, vector.AppendFixed(bat.Vecs[0], c.n, false, mp))
 		bat.SetRowCount(1)
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 	}
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(c.t, vector.AppendBytes(bat.Vecs[0], []byte("7"), false, mp))
 	require.NoError(c.t, vector.AppendFixed(bat.Vecs[1], int32(moerr.ErrIndexDatalink), false, mp))
 	require.NoError(c.t, vector.AppendBytes(bat.Vecs[2], []byte(c.reason), c.reason == "", mp))

@@ -147,7 +147,7 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 				input := batch.NewWithSize(len(arg.RightTypes))
 				buildChild.WithBatchs([]*batch.Batch{input})
 				for col, typ := range arg.RightTypes {
-					input.Vecs[col] = vector.NewVec(typ)
+					input.Vecs[col] = vector.NewVec(typ, mp)
 				}
 				for row := first; row < last; row++ {
 					buildKey := int64(1)
@@ -201,7 +201,7 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 
 			probe := batch.NewWithSize(1)
 			probeChild.WithBatchs([]*batch.Batch{probe})
-			probe.Vecs[0] = vector.NewVec(keyType)
+			probe.Vecs[0] = vector.NewVec(keyType, mp)
 			for _, key := range tc.probeKeys {
 				require.NoError(t, vector.AppendFixed(probe.Vecs[0], key, false, mp))
 			}
