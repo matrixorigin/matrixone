@@ -444,38 +444,15 @@ func (a *MinioSDK) Read(
 		}
 	}()
 
-	if max == nil {
-		// read to end
-		r, err := a.getObject(
-			ctx,
-			key,
-			min,
-			nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-		// eager read to expose file not found error
-		_, err = r.Read(nil)
-		if err != nil {
-			return nil, err
-		}
-		return r, nil
+	if min == nil {
+		min = ptrTo[int64](0)
 	}
-
-	r, err = a.getObject(
-		ctx,
-		key,
-		min,
-		max,
-	)
-	if err != nil {
-		return nil, err
+	if max != nil && *max <= *min {
+		return nil, moerr.NewEmptyRangeNoCtx(key)
 	}
-	// eager read to expose file not found error
-	_, err = r.Read(nil)
-	if err != nil {
-		return nil, err
+	r, err = a.getObject(ctx, key, min, max)
+	if err != nil || max == nil {
+		return r, err
 	}
 	return &readCloser{
 		r:         io.LimitReader(r, int64(*max-*min)),
@@ -601,30 +578,35 @@ func (a *MinioSDK) putObject(
 func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.getObject")
 	defer task.End()
-	if min == nil {
-		min = ptrTo[int64](0)
-	}
-	r, err := newRetryableReader(
+	return newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
+			var opts minio.GetObjectOptions
+			// Set the wire range on every attempt. Seek plus LimitReader only
+			// bounds delivery to the caller, not the response drained on Close.
+			if max != nil {
+				if err := opts.SetRange(offset, *max-1); err != nil {
+					return nil, err
+				}
+			} else if offset > 0 {
+				if err := opts.SetRange(offset, 0); err != nil {
+					return nil, err
+				}
+			}
 			obj, err := DoWithRetryContext(
 				ctx,
 				"s3 get object",
-				func() (obj *minio.Object, err error) {
+				func() (io.ReadCloser, error) {
 					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 						counter.FileService.S3.Get.Add(1)
 					}, a.perfCounterSets...)
-					return a.client.GetObject(ctx, a.bucket, key, minio.GetObjectOptions{})
+					body, _, _, err := a.core.GetObject(ctx, a.bucket, key, opts)
+					return body, err
 				},
 				maxRetryAttemps,
 				IsRetryableError,
 			)
 			if err != nil {
 				return nil, err
-			}
-			if offset > 0 {
-				if _, err := obj.Seek(offset, 0); err != nil {
-					return nil, err
-				}
 			}
 			return &readCloser{
 				r: obj,
@@ -638,10 +620,6 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 		*min,
 		IsRetryableError,
 	)
-	if err != nil {
-		return nil, err
-	}
-	return r, nil
 }
 
 func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {

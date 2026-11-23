@@ -733,8 +733,9 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
 	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
-	forceMinimalRangeRead := false
+	readMode := s3ReadDefault
 	forcePerEntryRangeRead := false
+	var openedFullFile bool
 read_memory_cache:
 	if s.memCache != nil {
 
@@ -792,32 +793,14 @@ read_disk_cache:
 	}
 	if s.diskCache != nil {
 
-		t0 := time.Now()
-		LogEvent(ctx, str_read_disk_cache_Caches_begin)
-		// Record which entries are not done before reading from disk cache
-		undoneBefore := make(map[int]bool)
-		for i, entry := range vector.Entries {
-			undoneBefore[i] = !entry.done
-		}
-		err := readCache(ctx, s.diskCache, vector)
-		LogEvent(ctx, str_read_disk_cache_Caches_end)
-		metric.FSReadDurationReadDiskCache.Observe(time.Since(t0).Seconds())
+		opened, err := s.readDiskCache(ctx, vector, readMode == s3ReadAfterSkippedFill)
+		openedFullFile = openedFullFile || opened
 		if err != nil {
 			finishFill()
 			return err
 		}
-		// Count bytes actually read from disk cache (entries that became done and from disk cache)
-		var actualDiskReadBytes int64
-		for i, entry := range vector.Entries {
-			if undoneBefore[i] && entry.done && entry.fromCache == s.diskCache {
-				actualDiskReadBytes += entry.Size
-			}
-		}
-		// Record disk read size
-		if actualDiskReadBytes > 0 {
-			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-				counter.FileService.DiskReadSize.Add(actualDiskReadBytes)
-			})
+		if readMode == s3ReadAfterSkippedFill && ctx.Err() != nil {
+			return ctx.Err()
 		}
 		if vector.allDone() {
 			return nil
@@ -833,6 +816,10 @@ read_disk_cache:
 				finishFill()
 				return sharedDecodeClosed()
 			}
+		}
+
+		if readMode == s3ReadAfterSkippedFill {
+			goto read_s3
 		}
 
 		// try to cache IOEntry if not caching the full file
@@ -866,7 +853,7 @@ read_disk_cache:
 		}
 	}
 
-	if forcePerEntryRangeRead || forceMinimalRangeRead {
+	if forcePerEntryRangeRead || readMode == s3ReadMinimal {
 		goto read_s3
 	}
 	if mayReadMemoryCache || mayReadDiskCache {
@@ -937,7 +924,7 @@ read_disk_cache:
 					forcePerEntryRangeRead = true
 					goto read_s3
 				}
-				forceMinimalRangeRead = true
+				readMode = s3ReadMinimal
 				if rangeKey, ok := s.singleEntryRangeMergeKey(vector); ok {
 					LogEvent(ctx, str_ioMerger_Merge_begin)
 					rangeMergeStart := time.Now()
@@ -994,7 +981,19 @@ read_s3:
 	if forcePerEntryRangeRead {
 		err = s.readEntriesIndividually(ctx, vector)
 	} else {
-		err = s.read(ctx, vector, forceMinimalRangeRead)
+		err = s.read(ctx, vector, readMode)
+		if err == errFullObjectFillSkipped {
+			if err = ctx.Err(); err != nil {
+				return err
+			}
+			readMode = s3ReadAfterSkippedFill
+			// A full file already opened by this read may have failed a
+			// conversion or a read. Advance to storage instead of repeating it.
+			if openedFullFile {
+				goto read_s3
+			}
+			goto read_disk_cache
+		}
 	}
 	if err != nil {
 		return err
@@ -1010,10 +1009,36 @@ read_s3:
 	return nil
 }
 
+func (s *S3FS) readDiskCache(ctx context.Context, vector *IOVector, fullFileOnly bool) (openedFullFile bool, err error) {
+	diskBytes := func() (total int64) {
+		for _, entry := range vector.Entries {
+			if entry.done && entry.fromCache == s.diskCache {
+				total += entry.Size
+			}
+		}
+		return
+	}
+	before := diskBytes()
+	start := time.Now()
+	LogEvent(ctx, str_read_disk_cache_Caches_begin)
+	err = readCacheWith(ctx, s.diskCache, vector, func(cacheCtx context.Context, vector *IOVector) error {
+		opened, err := s.diskCache.read(cacheCtx, vector, fullFileOnly)
+		openedFullFile = opened
+		return err
+	})
+	LogEvent(ctx, str_read_disk_cache_Caches_end)
+	metric.FSReadDurationReadDiskCache.Observe(time.Since(start).Seconds())
+	if bytes := diskBytes() - before; bytes > 0 {
+		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+			counter.FileService.DiskReadSize.Add(bytes)
+		})
+	}
+	return openedFullFile, err
+}
+
 func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) error {
-	// The full-object merge is still stalled after its bounded wait. Read exact
-	// entry ranges sequentially so this follower can progress without fetching
-	// the potentially much larger sparse envelope.
+	// Read exact entry ranges when a full-object cache fill cannot serve this
+	// request, without fetching the potentially much larger sparse envelope.
 	for i := range vector.Entries {
 		if vector.Entries[i].done {
 			continue
@@ -1027,7 +1052,7 @@ func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) er
 			ExpireAt: vector.ExpireAt,
 			Policy:   vector.Policy,
 		}
-		if err := s.read(ctx, single, true); err != nil {
+		if err := s.read(ctx, single, s3ReadMinimal); err != nil {
 			return err
 		}
 		vector.Entries[i] = single.Entries[0]
@@ -1071,7 +1096,16 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
-func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead bool) (err error) {
+type s3ReadMode uint8
+
+const (
+	s3ReadDefault s3ReadMode = iota
+	s3ReadMinimal
+	s3ReadAfterSkippedFill
+)
+const errFullObjectFillSkipped = errorStr("full-object fill did not supply requested entries")
+
+func (s *S3FS) read(ctx context.Context, vector *IOVector, mode s3ReadMode) (err error) {
 	if vector.allDone() {
 		// all cache hit
 		return nil
@@ -1083,7 +1117,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	}
 
 	min, max, readFullObject := vector.readRange()
-	if readFullObject && forceMinimalRangeRead {
+	if readFullObject && mode != s3ReadDefault {
 		min, max = vector.readMinimalRange()
 		readFullObject = false
 	}
@@ -1125,6 +1159,40 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		if done {
 			return nil
 		}
+		return errFullObjectFillSkipped
+	}
+	if mode == s3ReadAfterSkippedFill {
+		if _, _, expensive := vector.expensiveMinimalRangeRead(); expensive {
+			const maxSerialRangeReads = 8
+			missing := 0
+			for _, e := range vector.Entries {
+				if !e.done {
+					missing++
+				}
+			}
+			if missing <= maxSerialRangeReads {
+				return s.readEntriesIndividually(ctx, vector)
+			}
+			// Bound round trips for a large sparse miss. Stream the envelope
+			// rather than retaining the gaps in memory or creating a cache file.
+			r, err := getReader(ctx, min, max)
+			if err != nil {
+				if isHTTPRangeNotSatisfiable(err) {
+					return moerr.NewUnexpectedEOFNoCtx(path.File)
+				}
+				return err
+			}
+			defer r.Close()
+			stream := newFullObjectDiskCacheReader(vector)
+			stream.reader, stream.offset = r, *min
+			if _, err := io.Copy(io.Discard, stream); err != nil {
+				return err
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return stream.fillVector(ctx, s, path.File)
+		}
 	}
 
 	// a function to get data lazily
@@ -1151,6 +1219,11 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 
 		reader, err := getReader(ctx, min, max)
 		if err != nil {
+			// A valid range starting at or beyond EOF can return HTTP 416
+			// instead of an empty body. Use the same per-entry EOF checks below.
+			if !readFullObject && *min >= 0 && (max == nil || *min < *max) && isHTTPRangeNotSatisfiable(err) {
+				return nil, nil
+			}
 			return nil, err
 		}
 		defer reader.Close()
@@ -1430,7 +1503,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	file string,
 	getReader func(context.Context, *int64, *int64) (io.ReadCloser, error),
 ) (done bool, err error) {
-	stream := newFullObjectDiskCacheReader(vector)
+	var stream *fullObjectDiskCacheReader
 
 	t0 := time.Now()
 	LogEvent(ctx, str_disk_cache_setfile_begin)
@@ -1439,8 +1512,8 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		if err != nil {
 			return nil, err
 		}
+		stream = newFullObjectDiskCacheReader(vector)
 		stream.reader = reader
-		stream.opened = true
 		return stream, nil
 	})
 	LogEvent(ctx, str_disk_cache_setfile_end)
@@ -1448,9 +1521,8 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	if err != nil {
 		return true, err
 	}
-	if !stream.opened {
-		// The cache already has an index entry. Fall back to the regular read path,
-		// which can serve the request from cache without opening another S3 reader.
+	if stream == nil {
+		// SetFile skipped the fill. The caller still needs the missing ranges.
 		return false, nil
 	}
 	if stream.err != nil {
@@ -1470,7 +1542,6 @@ type fullObjectDiskCacheReader struct {
 	vector   *IOVector
 	captures []fullObjectEntryCapture
 	offset   int64
-	opened   bool
 	eof      bool
 	err      error
 }

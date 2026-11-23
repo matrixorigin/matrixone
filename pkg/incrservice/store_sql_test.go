@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/golang/mock/gomock"
@@ -43,62 +44,138 @@ import (
 
 func TestDeleteWhenAccountNotExists(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ctx := context.TODO()
-	ctx = defines.AttachAccountId(ctx, 12)
-
-	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
-	mockSqlExecutor.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
-		return execFunc(nil)
-	}).AnyTimes()
-
-	// account not exists
-	var executedSQLs []string
-	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
-		executedSQLs = append(executedSQLs, sql)
-		res := executor.Result{}
-		return res, nil
-	}).AnyTimes()
-
-	s := &sqlStore{
-		exec: mockSqlExecutor,
-	}
-
-	err := s.Delete(ctx, 0)
+	exec := mock_executor.NewMockSQLExecutor(ctrl)
+	ctx := defines.AttachAccountId(t.Context(), 12)
+	exec.EXPECT().Exec(gomock.Any(), "select account_name from mo_catalog.mo_account where account_id = 12", gomock.Any()).
+		DoAndReturn(func(ctx context.Context, _ string, opts executor.Options) (executor.Result, error) {
+			account, err := defines.GetAccountId(ctx)
+			require.NoError(t, err)
+			require.Equal(t, catalog.System_Account, account)
+			require.False(t, opts.WaitCommittedLogApplied())
+			return executor.Result{}, nil
+		})
+	store := &sqlStore{exec: exec}
+	ts, err := store.Delete(ctx, 42, timestamp.Timestamp{})
 	require.NoError(t, err)
-	require.Equal(t, 1, len(executedSQLs))
+	require.True(t, ts.IsEmpty())
 }
 
 func TestDeleteWhenAccountExists(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ctx := context.TODO()
-	ctx = defines.AttachAccountId(ctx, 12)
-
-	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
-	mockSqlExecutor.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
-		return execFunc(nil)
-	}).AnyTimes()
-	var executedSQLs []string
-	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
-		executedSQLs = append(executedSQLs, sql)
-		bat := &batch.Batch{}
-		bat.SetRowCount(1)
-		res := executor.Result{
-			Batches: []*batch.Batch{bat},
-		}
-		return res, nil
-	}).AnyTimes()
-
-	s := &sqlStore{
-		exec: mockSqlExecutor,
+	for _, tc := range []struct {
+		name      string
+		affected  uint64
+		commitTS  timestamp.Timestamp
+		commitErr error
+	}{
+		{name: "deleted", affected: 1, commitTS: timestamp.Timestamp{PhysicalTime: 17}},
+		{name: "no rows"},
+		{name: "commit failed", affected: 1, commitErr: moerr.NewClientClosedNoCtx()},
+		{name: "unknown outcome", affected: 1, commitErr: moerr.NewTxnUnknown(t.Context(), "delete")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			exec := mock_executor.NewMockSQLExecutor(ctrl)
+			te := mock_executor.NewMockTxnExecutor(ctrl)
+			expectDeleteSQL(t, exec, te, tc.affected, tc.commitTS, tc.commitErr)
+			var waited timestamp.Timestamp
+			store := &sqlStore{exec: exec, waitLogtail: func(_ context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+				waited = ts
+				return ts, nil
+			}}
+			ts, err := store.Delete(defines.AttachAccountId(t.Context(), 12), 42, timestamp.Timestamp{})
+			require.ErrorIs(t, err, tc.commitErr)
+			require.Equal(t, tc.commitTS, ts)
+			require.Equal(t, tc.commitTS, waited)
+		})
 	}
+}
 
-	err := s.Delete(ctx, 0)
-	require.NoError(t, err)
-	require.Equal(t, 2, len(executedSQLs))
+// Exercise the actual cleanup loop and the cache lookup guard with an applied
+// timestamp that stays behind the committed DELETE for the first attempt.
+func TestLazyDeleteKeepsCacheGuardUntilApplied(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		exec := mock_executor.NewMockSQLExecutor(ctrl)
+		te := mock_executor.NewMockTxnExecutor(ctrl)
+		commitTS := timestamp.Timestamp{PhysicalTime: 17}
+		expectDeleteSQL(t, exec, te, 1, commitTS, nil)
+		waiter := client.NewTimestampWaiter(runtime.DefaultRuntime().Logger())
+		defer waiter.Close()
+		waiter.NotifyLatestCommitTS(timestamp.Timestamp{PhysicalTime: 16})
+		waitStarted := make(chan timestamp.Timestamp, 2)
+		store := &sqlStore{exec: exec, waitLogtail: func(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+			waitStarted <- ts
+			return waiter.GetTimestamp(ctx, ts)
+		}}
+		s := &service{store: store}
+		s.mu.destroyed = map[uint64]deleteCtx{42: {tableID: 42, accountID: 12}}
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			s.destroyTables(ctx)
+		}()
+		defer func() { cancel(); <-done }()
+
+		synctest.Wait()
+		time.Sleep(lazyDeleteInterval)
+		synctest.Wait()
+		s.mu.Lock()
+		_, guarded := s.mu.destroyed[42]
+		s.mu.Unlock()
+		require.True(t, guarded, "cleanup retired an unapplied delete")
+		require.Len(t, waitStarted, 1)
+		require.Equal(t, commitTS, <-waitStarted)
+		_, err := s.getCommittedTableCache(t.Context(), 42)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "%v", err)
+
+		// The first wait times out at the cleanup budget. The second attempt
+		// must reuse its commit timestamp; the SQL expectations are once-only.
+		time.Sleep(30*time.Second + lazyDeleteInterval)
+		synctest.Wait()
+		require.Len(t, waitStarted, 1)
+		require.Equal(t, commitTS, <-waitStarted)
+		s.mu.Lock()
+		pending := s.mu.destroyed[42].commitTS
+		s.mu.Unlock()
+		require.Equal(t, commitTS, pending)
+		_, err = s.getCommittedTableCache(t.Context(), 42)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "%v", err)
+
+		waiter.NotifyLatestCommitTS(commitTS)
+		synctest.Wait()
+		s.mu.Lock()
+		_, guarded = s.mu.destroyed[42]
+		s.mu.Unlock()
+		require.False(t, guarded)
+	})
+}
+
+func expectDeleteSQL(t *testing.T, exec *mock_executor.MockSQLExecutor, te *mock_executor.MockTxnExecutor,
+	affected uint64, commitTS timestamp.Timestamp, commitErr error) {
+	t.Helper()
+	op := &testTxnOperator{}
+	te.EXPECT().Txn().Return(op)
+	te.EXPECT().Exec("delete from mo_increment_columns where table_id = 42", gomock.Any()).
+		Return(executor.Result{AffectedRows: affected}, nil)
+	bat := &batch.Batch{}
+	bat.SetRowCount(1)
+	gomock.InOrder(
+		exec.EXPECT().Exec(gomock.Any(), "select account_name from mo_catalog.mo_account where account_id = 12", gomock.Any()).
+			Return(executor.Result{Batches: []*batch.Batch{bat}}, nil),
+		exec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, fn func(executor.TxnExecutor) error, opts executor.Options) error {
+				account, err := defines.GetAccountId(ctx)
+				require.NoError(t, err)
+				require.Equal(t, uint32(12), account)
+				require.False(t, opts.WaitCommittedLogApplied())
+				if err := fn(te); err != nil {
+					return err
+				}
+				op.commitTS = commitTS
+				return commitErr
+			}),
+	)
 }
 
 var _ lockservice.LockService = new(testLockService)

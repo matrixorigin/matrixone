@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -522,28 +524,92 @@ func TestPrimaryKeysMayBeModifiedSkipsReadinessForEmptyKeys(t *testing.T) {
 	require.False(t, changed, "an empty key set cannot conflict even while the table is rebuilding")
 }
 
+type pkReadinessWaitContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *pkReadinessWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
 func TestPrimaryKeysMayBeModifiedHonorsPendingTableApply(t *testing.T) {
-	tbl, eng := newPrimaryKeyCheckTableForTest(t)
-	mp := tbl.proc.Load().Mp()
-	bat := makeBatchForTest(mp, 7)
-	defer bat.Clean(mp)
+	for _, name := range []string{"apply", "cancel"} {
+		t.Run(name, func(t *testing.T) {
+			tbl, eng := newPrimaryKeyCheckTableForTest(t)
+			mp := tbl.proc.Load().Mp()
+			bat := makeBatchForTest(mp, 7)
+			defer bat.Clean(mp)
 
-	from := types.BuildTS(10, 0)
-	to := types.BuildTS(20, 0)
-	eng.pClient.SetSubscribeState(10, 42, Subscribed)
-	eng.pClient.subscribed.setTablePendingUpdate(10, 42, to.ToTimestamp())
+			from := types.BuildTS(10, 0)
+			to := types.BuildTS(20, 0)
+			eng.pClient.SetSubscribeState(10, 42, Subscribed)
+			eng.pClient.subscribed.setTablePendingUpdate(10, 42, to.ToTimestamp())
+			part := eng.GetOrCreateLatestPart(context.Background(), 1, 10, 42)
 
-	part := eng.GetOrCreateLatestPart(context.Background(), 1, 10, 42)
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		state, done := part.MutateState()
-		state.UpdateAppliedTo(to.Prev())
-		done()
-	}()
-
-	changed, err := tbl.PrimaryKeysMayBeModified(context.Background(), from, to, bat, 0, -1)
-	require.NoError(t, err)
-	require.False(t, changed, "the PK check must wait for the pending table update before proving no change")
+			base, cancel := context.WithCancel(context.Background())
+			waiting := &pkReadinessWaitContext{Context: base, waiting: make(chan struct{})}
+			observation := &resource.LockReadObservation{}
+			ctx := resource.ContextWithLockReadPK(waiting, observation)
+			type result struct {
+				changed bool
+				err     error
+			}
+			done := make(chan result, 1)
+			received := false
+			go func() {
+				start := observation.Start()
+				changed, err := tbl.PrimaryKeysMayBeModified(ctx, from, to, bat, 0, -1)
+				observation.Finish(ctx, resource.LockReadPKCheck, start, err)
+				done <- result{changed, err}
+			}()
+			defer func() {
+				cancel()
+				if !received {
+					<-done
+				}
+			}()
+			select {
+			case <-waiting.waiting:
+			case <-time.After(time.Second):
+				t.Fatal("PK readiness did not enter the pending wait")
+			}
+			waitedAt := time.Now()
+			releasedAt := time.Now()
+			if name == "cancel" {
+				cancel()
+			} else {
+				state, applied := part.MutateState()
+				state.UpdateAppliedTo(to.Prev())
+				applied()
+			}
+			var got result
+			select {
+			case got = <-done:
+				received = true
+			case <-time.After(time.Second):
+				t.Fatal("PK readiness did not finish")
+			}
+			root := resource.NewRoot(resource.ConnExternal)
+			root.MergeLockRead(observation)
+			_, snapshot := root.SealWithLockRead(0)
+			d := snapshot.Diagnostic(uuid.Nil, 1, got.err != nil)
+			require.False(t, got.changed)
+			require.GreaterOrEqual(t, d.PKCheckNS, d.PKReadinessNS)
+			require.GreaterOrEqual(t, d.PKReadinessNS, uint64(releasedAt.Sub(waitedAt)))
+			if name == "cancel" {
+				require.ErrorIs(t, got.err, context.Canceled)
+				require.Equal(t, "pk_readiness", d.LastIncomplete)
+				require.True(t, snapshot.Qualifies(0, time.Second))
+			} else {
+				require.NoError(t, got.err)
+				require.Empty(t, d.LastIncomplete)
+				require.False(t, snapshot.Qualifies(0, time.Second))
+			}
+		})
+	}
 }
 
 func TestPrimaryKeysMayBeModifiedForTableCreatedInTxn(t *testing.T) {

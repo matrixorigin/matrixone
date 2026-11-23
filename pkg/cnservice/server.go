@@ -1220,6 +1220,7 @@ func (s *service) initIncrService() {
 	store, err := incrservice.NewSQLStore(
 		s.sqlExecutor,
 		s.lockService,
+		s._txnClient.WaitLogTailAppliedAt,
 	)
 	if err != nil {
 		panic(err)

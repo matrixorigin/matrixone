@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -653,17 +654,14 @@ func (tbl *txnTable) CollectTombstones(
 			})
 
 		//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
-		tbl.getTxn().deletedBlocks.getDeletedRowIDs(func(row types.Rowid) {
+		tbl.getTxn().deletedBlocks.getDeletedRowIDs(tbl.tableId, func(row types.Rowid) {
 			tombstone.AppendInMemory(row)
 		})
 
 		//collect uncommitted persisted tombstones.
-		if err := tbl.getTxn().getUncommittedS3Tombstone(
-			func(stats *objectio.ObjectStats) {
-				tombstone.AppendFiles(*stats)
-			}); err != nil {
-			return nil, err
-		}
+		tbl.getTxn().flushedTombstones.forEach(tbl.tableId, func(stats objectio.ObjectStats) {
+			tombstone.AppendFiles(stats)
+		})
 	}
 
 	//collect committed tombstones.
@@ -3223,7 +3221,10 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	var snap *logtailreplay.PartitionState
 	if requireSubscribed {
 		var ready bool
+		observation := resource.LockReadPKFromContext(ctx)
+		start := observation.Start()
 		snap, ready, err = tbl.getPartitionStateForPKCheck(ctx, to)
+		observation.Finish(ctx, resource.LockReadPKReadiness, start, err)
 		if err != nil {
 			return false, err
 		}

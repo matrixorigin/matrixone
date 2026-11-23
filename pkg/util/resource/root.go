@@ -23,11 +23,13 @@ import (
 // request. Producers publish immutable child summaries; they never share its
 // counters in their hot paths.
 type Root struct {
-	mu            sync.Mutex
-	summary       StatementResourceSummary
-	memoryPreview func() (uint64, bool)
-	attemptOwner  bool
-	sealed        bool
+	mu              sync.Mutex
+	summary         StatementResourceSummary
+	memoryPreview   func() (uint64, bool)
+	attemptOwner    bool
+	sealed          bool
+	lockReadEnabled bool
+	lockRead        *lockReadTotals
 }
 
 // NewRoot creates an empty request root.
@@ -167,13 +169,24 @@ func (r *Root) PreResponseSummary() StatementResourceSummary {
 // Seal sets the request wall duration and returns an immutable summary. It is
 // idempotent so panic/error defers can safely converge on one path.
 func (r *Root) Seal(statementWallNS uint64) StatementResourceSummary {
+	summary, _ := r.SealWithLockRead(statementWallNS)
+	return summary
+}
+
+// SealWithLockRead returns the statement summary and unpublished lock
+// observations at the same terminal boundary.
+func (r *Root) SealWithLockRead(statementWallNS uint64) (StatementResourceSummary, LockReadSnapshot) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.sealed {
 		r.summary.StatementWallNS = statementWallNS
 		r.sealed = true
 	}
-	return r.summary
+	var observed LockReadSnapshot
+	if r.lockRead != nil {
+		observed.totals = *r.lockRead
+	}
+	return r.summary, observed
 }
 
 type rootContextKey struct{}

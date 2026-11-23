@@ -305,6 +305,7 @@ func (c *Compile) recompileImportMemory(ctx context.Context, parallel int) (*Com
 	next := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 	next.resultSink = c.resultSink
 	next.executionGeneration = c.executionGeneration
+	next.resourceAttemptOwnerEligible = c.resourceAttemptOwnerEligible
 	c.copyAllocationAccountLifecycleTo(next)
 	next.importMemoryPrepared = c.isPrepare || c.importMemoryPrepared
 	next.SetQuerySchedulingIntent(c.querySchedulingIntent)

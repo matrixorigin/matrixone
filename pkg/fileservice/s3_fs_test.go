@@ -21,6 +21,9 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -29,13 +32,16 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tencentyun/cos-go-sdk-v5"
 	"go.uber.org/zap"
 )
 
@@ -1068,6 +1074,94 @@ func TestS3FSFullObjectDiskCacheFillDoesNotReturnWholeObjectDataWithCachedData(t
 	vec.Release()
 }
 
+type diskCacheWaitLocker struct {
+	sync.Mutex
+	unlocked chan struct{}
+}
+
+func (l *diskCacheWaitLocker) Unlock() {
+	l.Mutex.Unlock()
+	select {
+	case l.unlocked <- struct{}{}:
+	default:
+	}
+}
+
+func TestS3FSRangeCacheWaitStopsOnCancel(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy Policy
+	}{
+		{name: "reading the cache entry"},
+		{name: "filling the cache entry", policy: SkipDiskCacheReads},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			store, err := NewS3FS(
+				ctx,
+				ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()},
+				CacheConfig{DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](1 << 20)},
+				nil, false, false,
+			)
+			require.NoError(t, err)
+			defer store.Close(ctx)
+
+			const path = "history/object"
+			require.NoError(t, store.Write(ctx, IOVector{
+				FilePath: path,
+				Entries:  []IOEntry{{Size: 5, Data: []byte("abcde")}},
+				Policy:   SkipAllCache,
+			}))
+
+			cache := store.diskCache
+			locker := &diskCacheWaitLocker{unlocked: make(chan struct{}, 1)}
+			cache.updatingPaths.Cond = sync.NewCond(locker)
+			vector := &IOVector{
+				FilePath: path,
+				Entries:  []IOEntry{{Offset: 1, Size: 3}},
+				Policy:   tc.policy | SkipFullFilePreloads,
+			}
+			diskPath := cache.pathForIOEntry(path, vector.Entries[0])
+			release := holdDiskCacheUpdate(t, cache, diskPath)
+			<-locker.unlocked
+			readCtx, cancel := context.WithCancel(ctx)
+			done := make(chan struct{})
+			var readErr error
+			go func() {
+				defer close(done)
+				readErr = store.Read(readCtx, vector)
+			}()
+			defer func() {
+				cancel()
+				release()
+				<-done
+				vector.Release()
+			}()
+
+			select {
+			case <-locker.unlocked:
+			case <-done:
+				t.Fatalf("read returned before encountering the held range: %v", readErr)
+			case <-time.After(2 * time.Second):
+				t.Fatal("read did not reach the held disk-cache range")
+			}
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("cancellation left the read waiting for the cache writer")
+			}
+			if tc.policy.Any(SkipDiskCacheReads) {
+				require.NoError(t, readErr)
+				require.Equal(t, []byte("bcd"), vector.Entries[0].Data)
+			} else {
+				require.ErrorIs(t, readErr, context.Canceled)
+			}
+			require.True(t, cache.isUpdating(diskPath), "cancelling a waiter must not release the writer")
+		})
+	}
+}
+
 func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
 	ctx := context.Background()
 	fs, err := NewS3FS(
@@ -1103,7 +1197,7 @@ func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
 	assert.Nil(t, err)
 
 	updatingPath := fs.diskCache.pathForFile("foo/bar")
-	doneUpdate := fs.diskCache.startUpdate(updatingPath)
+	doneUpdate := holdDiskCacheUpdate(t, fs.diskCache, updatingPath)
 	released := false
 	release := func() {
 		if !released {
@@ -1945,6 +2039,300 @@ func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotOpenReaderWhenCacheExists(
 	assert.Nil(t, err)
 	assert.False(t, done)
 	assert.Zero(t, getReaderCalls)
+}
+
+// Count bytes consumed, not just the ranges passed to ObjectStorage.Read.
+// The fixture drives prefetch and foreground reads serially.
+type cacheFillReadMeter struct {
+	ObjectStorage
+	bytes         atomic.Int64
+	opens, closes int
+	beforeOpen    func() error
+	afterClose    func()
+}
+
+func (m *cacheFillReadMeter) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
+	if m.beforeOpen != nil {
+		if err := m.beforeOpen(); err != nil {
+			return nil, err
+		}
+	}
+	r, err := m.ObjectStorage.Read(ctx, key, min, max)
+	if err != nil {
+		return nil, err
+	}
+	m.opens++
+	return &readCloser{r: &countingReader{R: r, C: &m.bytes}, closeFunc: func() error {
+		m.closes++
+		err := r.Close()
+		if m.afterClose != nil {
+			m.afterClose()
+		}
+		return err
+	}}, nil
+}
+
+func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
+	const far = 9 << 20
+	data := make([]byte, far+4096)
+	for i := range data {
+		data[i] = byte(i*31 + i/251)
+	}
+	injected := errors.New("second range read failed")
+	for _, tc := range []struct {
+		name                    string
+		second, size, wantBytes int64
+		wantOpens               int
+		wantErr                 error
+	}{
+		{"many-published", far, 1, 0, 0, nil},
+		{"many-missing", far, 1, far - 4096 + 1, 1, nil},
+		{"partly-published", far, 17, 17, 1, nil},
+		{"sparse", far, 17, 30, 2, nil},
+		{"dense", 4112, 17, 33, 1, nil},
+		{"to-end", far, -1, 4096, 1, nil},
+		{"second-range-error", far, 17, 13, 1, injected},
+		{"cancel-between-ranges", far, 17, 13, 1, context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var counter perfcounter.CounterSet
+			ctx = perfcounter.WithCounterSet(ctx, &counter)
+			fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{
+				DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](32 << 20), MemoryCapacity: ptrTo[toml.ByteSize](0),
+			}, nil, false, true)
+			require.NoError(t, err)
+			defer fs.Close(t.Context())
+			const path = "object"
+			require.NoError(t, fs.Write(ctx, IOVector{FilePath: path, Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipDiskCache | SkipMemoryCache}))
+			m := &cacheFillReadMeter{ObjectStorage: fs.storage}
+			fs.storage = m
+			v := &IOVector{FilePath: path, Entries: []IOEntry{{Offset: 4096, Size: 13}, {Offset: tc.second, Size: tc.size}}}
+			defer v.Release()
+			if tc.size < 0 {
+				v.Entries = v.Entries[1:]
+			}
+			if strings.HasPrefix(tc.name, "many-") {
+				v.Entries = nil
+				for i := int64(0); i < 64; i++ {
+					v.Entries = append(v.Entries, IOEntry{Offset: 4096 + i*(far-4096)/63, Size: 1})
+				}
+			}
+			// Preserve a real partial cache hit in the sparse fallback.
+			if tc.name == "sparse" {
+				hit := IOEntry{Offset: 100, Size: 3, Data: data[100:103]}
+				require.NoError(t, fs.diskCache.Update(ctx, &IOVector{FilePath: path, Entries: []IOEntry{hit}}, false))
+				v.Entries = append([]IOEntry{{Offset: hit.Offset, Size: hit.Size}}, v.Entries...)
+			}
+			// Disk lookup precedes remote lookup. Publish synchronously at this
+			// boundary: the foreground request missed the file but its SetFile
+			// will find it. No sleeps or production scheduling hooks are needed.
+			readDone := make(chan struct{})
+			var updateDone chan struct{}
+			var updateGuardExpired bool
+			finishRead := sync.OnceFunc(func() {
+				close(readDone)
+				if updateDone != nil {
+					<-updateDone
+				}
+			})
+			defer finishRead()
+			fs.remoteCache = NewRemoteCache(nil, func() client.KeyRouter[fscache.CacheKey] {
+				require.NoError(t, fs.PrefetchFile(ctx, path))
+				require.Equal(t, int64(len(data)), m.bytes.Load())
+				require.Equal(t, 1, m.opens)
+				require.Equal(t, 1, m.closes)
+				if tc.name == "many-published" && updateDone == nil {
+					// This update started after the initial disk lookup. Reusing
+					// the full file must not wait for an unrelated entry writer.
+					entryPath := fs.diskCache.pathForIOEntry(path, v.Entries[0])
+					finish := holdDiskCacheUpdate(t, fs.diskCache, entryPath)
+					updateDone = make(chan struct{})
+					go func() {
+						defer close(updateDone)
+						defer finish()
+						timer := time.NewTimer(5 * time.Second)
+						defer timer.Stop()
+						select {
+						case <-readDone:
+						case <-timer.C:
+							updateGuardExpired = true
+						}
+					}()
+				}
+				if tc.name != "many-published" {
+					// A short local file cannot satisfy the requested ranges. SetFile
+					// still skips it; the foreground request must fall back to storage.
+					usable := int64(3)
+					if tc.name == "partly-published" {
+						usable = 4109
+					} // covers only the first missing entry
+					require.NoError(t, os.Truncate(fs.diskCache.pathForFile(path), usable))
+				}
+				if tc.wantErr == context.Canceled {
+					m.afterClose = cancel
+					m.beforeOpen = func() error {
+						require.NoError(t, ctx.Err(), "must not attempt another read after cancellation")
+						return nil
+					}
+				} else if tc.wantErr != nil {
+					m.beforeOpen = func() error {
+						if m.opens == 2 {
+							return injected
+						}
+						return nil
+					}
+				}
+				return nil
+			})
+			err = fs.Read(ctx, v)
+			finishRead()
+			require.False(t, updateGuardExpired, "full file recheck waited for an entry update")
+			if tc.wantErr == nil {
+				require.NoError(t, err)
+				for _, e := range v.Entries {
+					require.Equal(t, data[e.Offset:e.Offset+e.Size], e.Data)
+				}
+			} else {
+				require.ErrorIs(t, err, tc.wantErr)
+				require.Equal(t, data[4096:4109], v.Entries[0].Data)
+				require.Empty(t, v.Entries[1].Data)
+			}
+			require.Equal(t, tc.wantBytes, m.bytes.Load()-int64(len(data)), "foreground bytes consumed")
+			require.Equal(t, tc.wantOpens, m.opens-1)
+			require.Equal(t, m.opens, m.closes)
+			if tc.name == "many-published" {
+				require.NotNil(t, updateDone, "fixture must park an entry update")
+				require.EqualValues(t, 64, counter.FileService.DiskReadSize.Load())
+				require.Zero(t, counter.FileService.S3ReadSize.Load())
+			}
+			if tc.name == "partly-published" {
+				require.EqualValues(t, 13, counter.FileService.DiskReadSize.Load())
+				require.EqualValues(t, 17, counter.FileService.S3ReadSize.Load())
+			}
+			warm := &IOVector{FilePath: path, Entries: []IOEntry{{Offset: 0, Size: 3}}}
+			defer warm.Release()
+			require.NoError(t, fs.Read(t.Context(), warm))
+			require.Equal(t, data[:3], warm.Entries[0].Data)
+			require.Equal(t, tc.wantOpens, m.opens-1, "a new read should hit the published file")
+		})
+	}
+}
+
+// Count the HTTP body written by the endpoint, including bytes the SDK drains
+// on Close, rather than bytes returned by ObjectStorage.Read to S3FS.
+type rangeResponseWriter struct {
+	http.ResponseWriter
+	n      int64
+	status int
+}
+
+func (w *rangeResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *rangeResponseWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	w.n += int64(n)
+	return n, err
+}
+
+func TestS3FSSkippedFillHTTPRanges(t *testing.T) {
+	const far = 9 << 20
+	data := make([]byte, 16<<20)
+	data[0], data[far] = 'a', 'b'
+	for _, backend := range []string{"minio", "aws", "cos", "oss"} {
+		for _, mode := range []string{"sparse", "at-eof", "past-eof-fixed", "not-found"} {
+			t.Run(backend+"/"+mode, func(t *testing.T) {
+				var mu sync.Mutex
+				var ranges []string
+				var statuses []int
+				var bodyBytes int64
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("ETag", `"test"`)
+					out := &rangeResponseWriter{ResponseWriter: w}
+					defer func() {
+						if r.Method == http.MethodGet {
+							mu.Lock()
+							defer mu.Unlock()
+							ranges = append(ranges, r.Header.Get("Range"))
+							statuses = append(statuses, out.status)
+							bodyBytes += out.n
+						}
+					}()
+					if mode == "not-found" || mode == "at-eof" || mode == "past-eof-fixed" {
+						w.Header().Set("Content-Type", "application/xml")
+						if mode == "not-found" {
+							out.WriteHeader(http.StatusNotFound)
+							_, _ = io.WriteString(out, `<Error><Code>NoSuchKey</Code><Message>Not found</Message></Error>`)
+						} else {
+							out.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+							_, _ = io.WriteString(out, `<Error><Code>InvalidRange</Code><Message>Outside object</Message></Error>`)
+						}
+						return
+					}
+					http.ServeContent(out, r, "object", time.Unix(1, 0), bytes.NewReader(data))
+				}))
+				defer srv.Close()
+				ctx := t.Context()
+				fs, err := NewS3FS(ctx, ObjectStorageArguments{
+					Name: "s3", Endpoint: srv.URL, Bucket: "bucket", Region: "us-east-1", IsMinio: backend == "minio",
+					NoBucketValidation: true, KeyID: "id", KeySecret: "secret",
+				}, CacheConfig{
+					DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](32 << 20), MemoryCapacity: ptrTo[toml.ByteSize](0),
+				}, nil, false, true)
+				require.NoError(t, err)
+				defer fs.Close(ctx)
+				// The production router recognizes vendor hostnames; point the real
+				// clients directly at the loopback endpoint instead.
+				switch backend {
+				case "cos":
+					u, err := url.Parse(srv.URL)
+					require.NoError(t, err)
+					c := cos.NewClient(&cos.BaseURL{BucketURL: u}, srv.Client())
+					c.Conf.RetryOpt.Count = 0
+					fs.storage = &QCloudSDK{client: c}
+				case "oss":
+					c, err := oss.New(srv.URL, "id", "secret", oss.UseCname(true), oss.HTTPClient(srv.Client()))
+					require.NoError(t, err)
+					b, err := c.Bucket("bucket")
+					require.NoError(t, err)
+					fs.storage = &AliyunSDK{bucket: b}
+				}
+				fs.remoteCache = NewRemoteCache(nil, func() client.KeyRouter[fscache.CacheKey] {
+					require.NoError(t, fs.diskCache.SetFile(ctx, "object", func(context.Context) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(nil)), nil }))
+					return nil
+				})
+				v := IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 0, Size: 1}, {Offset: far, Size: 1}}}
+				defer v.Release()
+				if mode == "at-eof" || mode == "not-found" {
+					v.Entries = []IOEntry{{Offset: int64(len(data)), Size: -1}}
+				} else if mode == "past-eof-fixed" {
+					v.Entries = []IOEntry{{Offset: int64(len(data)) + 1, Size: 1}}
+				}
+				err = fs.Read(ctx, &v)
+				srv.Close() // join handlers before inspecting byte counts
+				switch mode {
+				case "sparse":
+					require.NoError(t, err)
+					require.Equal(t, []byte{'a'}, v.Entries[0].Data)
+					require.Equal(t, []byte{'b'}, v.Entries[1].Data)
+					require.Equal(t, int64(2), bodyBytes, "HTTP response body bytes")
+					require.Equal(t, []string{"bytes=0-0", "bytes=9437184-9437184"}, ranges)
+				case "at-eof":
+					require.Equal(t, []int{http.StatusRequestedRangeNotSatisfiable}, statuses)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrEmptyRange), "%v", err)
+				case "past-eof-fixed":
+					require.Equal(t, []int{http.StatusRequestedRangeNotSatisfiable}, statuses)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF), "%v", err)
+				case "not-found":
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
+				}
+			})
+		}
+	}
 }
 
 func TestS3FSReadFullObjectToDiskCacheStreamingReturnsReaderError(t *testing.T) {

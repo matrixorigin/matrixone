@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/version"
@@ -222,6 +223,8 @@ func TestServiceStartDoesNotBootstrapBeforeClusterSelfReady(t *testing.T) {
 		defer ctrl.Finish()
 		ls := mock_lock.NewMockLockService(ctrl)
 		ls.EXPECT().Close().Return(nil).Times(2)
+		txn := mock_frontend.NewMockTxnClient(ctrl)
+		txn.EXPECT().Close().Return(nil)
 		cfg := &Config{
 			UUID:           t.Name(),
 			ServiceAddress: address,
@@ -240,6 +243,7 @@ func TestServiceStartDoesNotBootstrapBeforeClusterSelfReady(t *testing.T) {
 			cancelMoServerFunc: func() {},
 			server:             closeOnlyRPCServer{},
 			lockService:        ls,
+			_txnClient:         txn,
 			moCluster:          cluster,
 			hakeeperConnected:  heartbeatReady,
 		}

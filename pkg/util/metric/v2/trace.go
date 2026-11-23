@@ -19,6 +19,7 @@ import "github.com/prometheus/client_golang/prometheus"
 // trace.go observe motrace, mometric those packages' behavior
 
 func initTraceMetrics() {
+	registry.MustRegister(SlowLockDiagnosticsSuppressedCounter)
 	registry.MustRegister(traceCollectorDurationHistogram)
 	registry.MustRegister(traceCollectorSignalTotal)
 	registry.MustRegister(traceCollectorDiscardCounter)
@@ -38,6 +39,13 @@ func initTraceMetrics() {
 }
 
 var (
+	SlowLockDiagnosticsSuppressedCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "mo",
+		Subsystem: "trace",
+		Name:      "slow_lock_diagnostics_suppressed_total",
+		Help:      "Terminal slow locking read diagnostics suppressed by the CN rate budget.",
+	})
+
 	traceCollectorDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
@@ -143,7 +151,6 @@ var (
 	TraceETLMergeExistFailedCounter  = traceETLMergeCounter.WithLabelValues("exist_failed")
 	TraceETLMergeOpenFailedCounter   = traceETLMergeCounter.WithLabelValues("open_failed")
 	TraceETLMergeReadFailedCounter   = traceETLMergeCounter.WithLabelValues("read_failed")
-	TraceETLMergeParseFailedCounter  = traceETLMergeCounter.WithLabelValues("parse_failed")
 	TraceETLMergeWriteFailedCounter  = traceETLMergeCounter.WithLabelValues("write_failed")
 	TraceETLMergeDeleteFailedCounter = traceETLMergeCounter.WithLabelValues("delete_failed")
 

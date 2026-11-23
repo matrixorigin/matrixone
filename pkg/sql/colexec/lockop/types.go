@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -61,6 +62,8 @@ type LockOptions struct {
 	filter                   RowsFilter
 	filterCols               []int32
 	hasNewVersionInRangeFunc hasNewVersionInRangeFunc
+	lockReadRoot             *resource.Root
+	lockRead                 *resource.LockReadObservation
 }
 
 // LockOp lock op argument.

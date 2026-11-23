@@ -65,7 +65,7 @@ export GOWORK
 UNAME_S := $(shell uname -s | tr A-Z a-z)
 UNAME_M := $(shell uname -m)
 GOPATH := $(shell go env GOPATH)
-GO_VERSION=$(shell go version)
+GO_VERSION=$(shell GOPROXY="$(GOPROXY)" $(GOEXPERIMENT_OPT) $(GO) version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
 BUILD_TIME=$(shell date +%s)
@@ -224,7 +224,7 @@ pb: generate-pb
 # build mo-service
 ###############################################################################
 
-VERSION_INFO :=-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'
+VERSION_INFO = -X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'
 THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 CGO_DIR=$(ROOT_DIR)/cgo
 JIEBA_DICT_SRC_DIR=$(ROOT_DIR)/pkg/monlp/tokenizer/dict
@@ -255,7 +255,9 @@ ifeq ("$(UNAME_M)", "x86_64")
 	GOEXPERIMENT_OPT += GOAMD64=$(GOAMD64)
   endif
   ifneq ($(GOEXPERIMENT_SIMD),)
-	GOEXPERIMENT_OPT += GOEXPERIMENT=$(GOEXPERIMENT_SIMD)
+	# The experimental archsimd API can change across Go releases. Use the
+	# branch's Go version even when the shared CI image has a newer compiler.
+	GOEXPERIMENT_OPT += GOTOOLCHAIN=go$(shell awk '$$1 == "go" {print $$2; exit}' "$(ROOT_DIR)/go.mod") GOEXPERIMENT=$(GOEXPERIMENT_SIMD)
   endif
 endif
 
@@ -278,7 +280,7 @@ CGO_OPTS :=CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA
 GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
 ifeq ("$(UNAME_S)","darwin")
-GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
+GOLDFLAGS=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
 endif
 
 # Keep all mo-service build variants on one compiler/feature contract. Targets
@@ -349,7 +351,7 @@ musl-thirdparties: musl-install
 	
 .PHONY: musl
 musl: override CGO_OPTS += CC=$(MUSL_CC)
-musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
+musl: override GOLDFLAGS=-ldflags="--linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
 musl: override TAGS := -tags musl
 musl: musl-install musl-cgo config musl-thirdparties jieba-dict
 musl:
