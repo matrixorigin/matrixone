@@ -880,7 +880,11 @@ func TestBroadcastProductIndependentRootsRetireProducer(t *testing.T) {
 			c.InitPipelineContextToExecuteQuery()
 			done := make(chan error, 1)
 			finished := make(chan struct{})
-			go func() { defer close(finished); done <- c.runOnce() }()
+			go func() {
+				defer close(finished)
+				_, err := c.runOnce()
+				done <- err
+			}()
 			acknowledged := false
 			t.Cleanup(func() {
 				c.proc.Cancel(context.Canceled)
