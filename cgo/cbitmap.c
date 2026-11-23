@@ -119,6 +119,41 @@ void mo_cbitmap_free(void *f) {
   free(b);
 }
 
+int mo_cbitmap_create(uint64_t base, uint64_t nbits, void **out) {
+  if (!out) return MO_CBITMAP_INVALID_INPUT;
+  *out = NULL;
+  if (nbits > UINT64_MAX - 63 || (nbits && base > UINT64_MAX - (nbits - 1)) ||
+      (nbits + 63) / 64 > SIZE_MAX / sizeof(uint64_t)) return MO_CBITMAP_RANGE_TOO_LARGE;
+  mo_cbitmap_t *f = malloc(sizeof(mo_cbitmap_t));
+  if (!f) return MO_CBITMAP_OOM;
+  f->base = base;
+  f->nbits = nbits;
+  f->words = nbits ? calloc((nbits + 63) / 64, sizeof(uint64_t)) : NULL;
+  if (nbits && !f->words) { free(f); return MO_CBITMAP_OOM; }
+  *out = f;
+  return MO_CBITMAP_OK;
+}
+
+int mo_cbitmap_add_fixed(void *filter, const void *key, size_t len, size_t elemsz,
+                         size_t nitem, const void *nullmap, size_t nullmaplen) {
+  if (!filter || (elemsz != 1 && elemsz != 2 && elemsz != 4 && elemsz != 8) ||
+      nitem > len / elemsz || (nitem && !key) ||
+      (nullmap && nitem && (nitem - 1) / 8 >= nullmaplen)) return MO_CBITMAP_INVALID_INPUT;
+  mo_cbitmap_t *f = filter;
+  const unsigned char *data = key;
+  // Validate the complete input before publishing any bits.
+  for (size_t i = 0; i < nitem; i++) {
+    if (nullmap && bitmap_test((uint64_t *)nullmap, i)) continue;
+    uint64_t value = mo_cbm_decode(data + i * elemsz, elemsz);
+    if (value < f->base || value - f->base >= f->nbits) return MO_CBITMAP_RANGE_TOO_LARGE;
+  }
+  for (size_t i = 0; i < nitem; i++) {
+    if (nullmap && bitmap_test((uint64_t *)nullmap, i)) continue;
+    bitmap_set(f->words, mo_cbm_decode(data + i * elemsz, elemsz) - f->base);
+  }
+  return MO_CBITMAP_OK;
+}
+
 void mo_cbitmap_test_fixed(void *f, const void *key, size_t len, size_t elemsz,
                            size_t nitem, const void *nullmap,
                            size_t nullmaplen, void *result) {

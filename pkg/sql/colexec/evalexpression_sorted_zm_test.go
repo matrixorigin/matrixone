@@ -33,7 +33,7 @@ import (
 
 func zmVarcharPayload(t *testing.T, mp *mpool.MPool, values ...string) []byte {
 	t.Helper()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer vec.Free(mp)
 	for _, value := range values {
 		require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
@@ -146,7 +146,7 @@ func TestEvaluateFilterByZoneMapNullAndOrderRules(t *testing.T) {
 
 	payload := func(t *testing.T, items ...string) []byte {
 		t.Helper()
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		defer vec.Free(mp)
 		for _, it := range items {
 			if it == "NULL" {
@@ -189,7 +189,7 @@ func TestZoneMapInVectorKeepsNullableInPruning(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendBytes(vec, []byte("c"), false, mp))
 	require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
@@ -212,7 +212,7 @@ func TestZoneMapInVectorDecodesSortedPayloadZeroCopy(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	src := vector.NewVec(types.T_varchar.ToType())
+	src := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer src.Free(mp)
 	for _, v := range []string{"aaa", "bbb", "ccc"} {
 		require.NoError(t, vector.AppendBytes(src, []byte(v), false, mp))
@@ -253,7 +253,7 @@ func TestZoneMapInVectorFailsOpenForUnsortedPayload(t *testing.T) {
 	require.True(t, ok, "prefix_in membership is order-independent")
 
 	// Sorted but unflagged still prunes: the O(n) check confirms the order.
-	unflagged := vector.NewVec(types.T_varchar.ToType())
+	unflagged := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer unflagged.Free(mp)
 	for _, v := range []string{"a", "b", "c"} {
 		require.NoError(t, vector.AppendBytes(unflagged, []byte(v), false, mp))
@@ -282,7 +282,7 @@ func TestEvaluateFilterByZoneMapKeepsBlockForUnflaggedFixedWidthIn(t *testing.T)
 	defer mpool.DeleteMPool(mp)
 	proc := testutil.NewProcess(t)
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer vec.Free(mp)
 	for _, n := range []int64{30, 10} {
 		require.NoError(t, vector.AppendFixed(vec, n, false, mp))
@@ -303,7 +303,7 @@ func TestEvaluateFilterByZoneMapKeepsBlockForUnflaggedFixedWidthIn(t *testing.T)
 		"block [5,15] must be kept: needle 10 is inside it")
 
 	// A flagged, genuinely ordered payload still prunes normally.
-	sorted := vector.NewVec(types.T_int64.ToType())
+	sorted := vector.NewVec(types.T_int64.ToType(), mp)
 	defer sorted.Free(mp)
 	for _, n := range []int64{10, 30} {
 		require.NoError(t, vector.AppendFixed(sorted, n, false, mp))
@@ -325,7 +325,7 @@ func TestEvaluateFilterByZoneMapKeepsBlockForUnflaggedArrayIn(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typ := types.T_array_float32.ToType()
 
-	payload := vector.NewVec(typ)
+	payload := vector.NewVec(typ, mp)
 	defer payload.Free(mp)
 	require.NoError(t, vector.AppendArray(payload, []float32{2}, false, mp))
 	require.NoError(t, vector.AppendArray(payload, []float32{1}, false, mp))
@@ -346,11 +346,11 @@ func TestEvaluateFilterByZoneMapKeepsBlockForUnflaggedArrayIn(t *testing.T) {
 		"block [[0.5],[1.5]] must be kept: needle [1.0] is inside it")
 
 	// The comparator-consistent flag keeps the ordinary pruning fast path.
-	ordered := vector.NewVec(typ)
+	ordered := vector.NewVec(typ, mp)
 	defer ordered.Free(mp)
 	require.NoError(t, vector.AppendArray(ordered, []float32{3}, false, mp))
 	require.NoError(t, vector.AppendArray(ordered, []float32{2}, false, mp))
-	ordered.InplaceSortAndCompact()
+	require.NoError(t, ordered.InplaceSortAndCompact(mp))
 	require.True(t, ordered.GetSorted())
 	require.False(t, zm.AnyIn(ordered),
 		"the direct ArrayCompare oracle must prune the disjoint block")
@@ -370,11 +370,11 @@ func TestZoneMapInVectorKeepsNarrowArraysConservative(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	vec := vector.NewVec(types.T_array_int8.ToType())
+	vec := vector.NewVec(types.T_array_int8.ToType(), mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendArray(vec, []int8{2}, false, mp))
 	require.NoError(t, vector.AppendArray(vec, []int8{1}, false, mp))
-	vec.InplaceSortAndCompact()
+	require.NoError(t, vec.InplaceSortAndCompact(mp))
 	require.True(t, vec.GetSorted(), "the control must carry sorted metadata")
 	data, err := vec.MarshalBinary()
 	require.NoError(t, err)
@@ -425,13 +425,13 @@ func TestEvaluateFilterByZoneMapKeepsBlockForPrefixNeedleOfAnother(t *testing.T)
 
 	for _, flagged := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unflagged", true: "flagged"}[flagged], func(t *testing.T) {
-			vec := vector.NewVec(types.T_varchar.ToType())
+			vec := vector.NewVec(types.T_varchar.ToType(), mp)
 			defer vec.Free(mp)
 			for _, s := range []string{"a", "ab"} {
 				require.NoError(t, vector.AppendBytes(vec, []byte(s), false, mp))
 			}
 			if flagged {
-				vec.InplaceSortAndCompact()
+				require.NoError(t, vec.InplaceSortAndCompact(mp))
 				require.True(t, vec.GetSorted(), "the payload really is flagged sorted")
 			}
 			data, err := vec.MarshalBinary()

@@ -73,7 +73,7 @@ DROP VIEW IF EXISTS v_utc_time_fsp;
 CREATE VIEW v_utc_time_fsp AS
 SELECT UTC_TIME(0) AS value0, UTC_TIME(3) AS value3, UTC_TIME(6) AS value6;
 DESC v_utc_time_fsp;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 value0  ¦  time  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 value3  ¦  time(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 value6  ¦  time(6)  ¦  NO  ¦    ¦  null  ¦    ¦  

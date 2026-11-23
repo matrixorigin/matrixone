@@ -52,7 +52,7 @@ func TestCompileSortRollupThroughProjectedOrderedSQL(t *testing.T) {
 		 (select c as v,b as y,a as x from select_test.bind_select order by x,y) e
 		 where e.y > 0) d group by d.x,d.y with rollup`, 1)
 	require.NoError(t, err)
-	p, err := plan2.BuildPlan(ctx, stmts[0], false)
+	p, err := plan2.BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(t, err)
 	plan2.CalcQueryDOP(p, 4, 1, plan2.ExecTypeAP_ONECN)
 	q := p.GetQuery()

@@ -71,7 +71,6 @@ show databases;
 Database
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 restore_fk_table
@@ -293,7 +292,6 @@ show databases;
 Database
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 restore_fk_table

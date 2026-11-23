@@ -92,7 +92,7 @@ func (op *PartitionDelete) Call(
 	}
 
 	if op.raw.ctr.resBat == nil {
-		op.raw.ctr.resBat = makeDelBatch(*input.Batch.GetVector(int32(op.raw.DeleteCtx.PrimaryKeyIdx)).GetType())
+		op.raw.ctr.resBat = makeDelBatch(*input.Batch.GetVector(int32(op.raw.DeleteCtx.PrimaryKeyIdx)).GetType(), proc.Mp())
 	} else {
 		op.raw.ctr.resBat.CleanOnlyData()
 	}

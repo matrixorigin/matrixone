@@ -176,7 +176,7 @@ func testNativeViewMetadataAccountRestore(t *testing.T, ctx context.Context, cn 
 	// 同名 source 在源账户变化，不能污染恢复目标的定义绑定与授权。
 	exec(source, "alter table schema_security.source modify column id bigint, algorithm=copy")
 	withNativeViewSchemaRead(t, targetCtx, cn, svc, "schema_security", restored, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
-		_, physical, err := compiler.Resolve("schema_security", "creation_env_v", nil)
+		_, physical, err := compiler.Resolve("schema_security", "creation_env_v", nil, nil)
 		require.NoError(t, err)
 		require.NotNil(t, physical)
 		require.EqualValues(t, types.T_int64, physical.Cols[0].Typ.Id, "恢复时首次生成的物理列也必须使用创建环境，而不只是事后修补 JSON")

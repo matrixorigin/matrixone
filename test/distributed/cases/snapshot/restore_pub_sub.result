@@ -84,7 +84,6 @@ show databases;
 Database
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 restore_pub_sub
@@ -291,7 +290,6 @@ show databases;
 Database
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 restore_pub_sub
@@ -469,7 +467,6 @@ show databases;
 Database
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 restore_pub_sub

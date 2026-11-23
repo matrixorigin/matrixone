@@ -32,7 +32,7 @@ drop table if exists t4;
 create table t4(a uuid default uuid());
 desc t4;
 Field    Type    Null    Key    Default    Extra    Comment
-a    uuid    YES        uuid()
+a    uuid    YES        uuid()    DEFAULT_GENERATED
 show create table t4;
 Table    Create Table
 t4    CREATE TABLE `t4` (\n  `a` uuid DEFAULT uuid()\n)
@@ -72,5 +72,5 @@ Field    Type    Null    Key    Default    Extra    Comment
 book_id    bigint    NO    PRI    null        
 user_id    bigint    NO    PRI    null        
 score    tinyint    YES        null        
-rated_at    datetime    YES        NOW()        
+rated_at    datetime    YES        NOW()    DEFAULT_GENERATED
 drop table ratings;

@@ -174,10 +174,19 @@ func TestBuildSecondaryIndexDefs_DuplicateColumn(t *testing.T) {
 func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
 	idxDefs, tblDefs, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
 	require.NoError(t, err)
-	require.Len(t, idxDefs, 2)
-	require.Len(t, tblDefs, 2)
+	require.Len(t, idxDefs, 3)
+	require.Len(t, tblDefs, 3)
 	require.Equal(t, catalog.Cagra_TblType_Metadata, tblDefs[0].TableType)
 	require.Equal(t, catalog.Cagra_TblType_Storage, tblDefs[1].TableType)
+	ignored := tblDefs[2]
+	require.Equal(t, catalog.IndexIgnored_TblType, ignored.TableType)
+	require.Equal(t, catalog.IndexIgnored_TblType, idxDefs[2].IndexAlgoTableType)
+	require.Equal(t, ignored.Name, idxDefs[2].IndexTableName)
+	require.Equal(t, []string{"vec"}, idxDefs[2].Parts)
+	require.Equal(t, catalog.IndexIgnored_TblCol_Pk, ignored.Pkey.PkeyColName)
+	require.Equal(t, int32(types.T_int64), ignored.Cols[0].Typ.Id)
+	require.Equal(t, []string{catalog.IndexIgnored_TblCol_Pk, catalog.IndexIgnored_TblCol_Code, catalog.IndexIgnored_TblCol_Reason, catalog.IndexIgnored_TblCol_Ts},
+		[]string{ignored.Cols[0].Name, ignored.Cols[1].Name, ignored.Cols[2].Name, ignored.Cols[3].Name})
 	// metadata: index_id, checksum, timestamp, filesize, then nrow and build_ts appended
 	// last so a reader that predates them keeps its positional 0..3.
 	require.Len(t, tblDefs[0].Cols, 6)
@@ -207,7 +216,7 @@ func f16ColMap(pkName, vecName string) map[string]*plan.ColDef {
 func TestBuildSecondaryIndexDefs_F16Base(t *testing.T) {
 	idxDefs, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), f16ColMap("id", "vec"), nil, "id")
 	require.NoError(t, err)
-	require.Len(t, idxDefs, 2)
+	require.Len(t, idxDefs, 3)
 }
 
 // TestBuildSecondaryIndexDefs_UnsupportedBase: only vecf32 / vecf16 are valid

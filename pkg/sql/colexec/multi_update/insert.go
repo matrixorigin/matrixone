@@ -30,23 +30,31 @@ import (
 
 //@todo add test case: only insert hidden table
 
+// insert_main_table writes the main-table leg of inputBatch. inputOwned
+// reports that inputBatch is the operator's own (a filtered copy), not the
+// child's batch. It returns the batch the remaining legs of the same target
+// use: under IGNORE the NOT NULL fill may replace inputBatch by the fill's
+// view of it, carrying the adjusted columns.
 func (update *MultiUpdate) insert_main_table(
 	proc *process.Process,
 	analyzer process.Analyzer,
 	tableIndex int,
-	inputBatch *batch.Batch) (err error) {
+	inputBatch *batch.Batch,
+	inputOwned bool,
+) (out *batch.Batch, err error) {
+	out = inputBatch
 	ctr := &update.ctr
 	updateCtx := update.MultiUpdateCtx[tableIndex]
 
 	// init buffer
 	if ctr.insertBuf[tableIndex] == nil {
-		bat := batch.NewOffHeapWithSize(len(updateCtx.InsertCols))
+		bat := batch.NewWithSize(len(updateCtx.InsertCols))
 		attrs := make([]string, 0, len(updateCtx.TableDef.Cols)-1)
 		for _, col := range updateCtx.TableDef.Cols {
 			if col.Name == catalog.Row_ID {
 				continue
 			}
-			bat.Vecs[len(attrs)] = vector.NewOffHeapVecWithType(plan.MakeTypeByPlan2Type(col.Typ))
+			bat.Vecs[len(attrs)] = vector.NewVec(plan.MakeTypeByPlan2Type(col.Typ), proc.Mp())
 			attrs = append(attrs, col.GetOriginCaseName())
 		}
 		bat.SetAttributes(attrs)
@@ -56,19 +64,28 @@ func (update *MultiUpdate) insert_main_table(
 	if updateCtx.SkipInsertOnNullPk {
 		pkColIdx, ok := mainTableInsertPkInputIdx(updateCtx)
 		if !ok || pkColIdx >= len(inputBatch.Vecs) {
-			return moerr.NewInternalError(proc.Ctx, "invalid main table insert pk column index")
+			return out, moerr.NewInternalError(proc.Ctx, "invalid main table insert pk column index")
 		}
 		if inputBatch.Vecs[pkColIdx].HasNull() {
-			return update.check_null_and_insert_main_table(proc, analyzer, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+			return out, update.check_null_and_insert_main_table(proc, analyzer, tableIndex, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
 		}
 	}
 
 	// preinsert: check not null column
-	for insertIdx, inputIdx := range updateCtx.InsertCols {
-		col := updateCtx.TableDef.Cols[insertIdx]
-		if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
-			if inputBatch.Vecs[inputIdx].HasNull() {
-				return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+	filledBatch, filled, _, fillErr := fillMainInsertNotNullForIgnore(
+		proc, update.ctr.ignoreFill(tableIndex), updateCtx, inputBatch, false,
+		update.insertNotNullFillOwned(), inputOwned)
+	if fillErr != nil {
+		return out, fillErr
+	}
+	inputBatch, out = filledBatch, filledBatch
+	if !filled {
+		for insertIdx, inputIdx := range updateCtx.InsertCols {
+			col := updateCtx.TableDef.Cols[insertIdx]
+			if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
+				if inputBatch.Vecs[inputIdx].HasNull() {
+					return out, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+				}
 			}
 		}
 	}
@@ -88,10 +105,10 @@ func (update *MultiUpdate) insert_unique_index_table(
 
 	// init buffer
 	if ctr.insertBuf[tableIndex] == nil {
-		ctr.insertBuf[tableIndex] = batch.NewOffHeapWithSize(2)
+		ctr.insertBuf[tableIndex] = batch.NewWithSize(2)
 		ctr.insertBuf[tableIndex].Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
-			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewOffHeapVecWithType(*inputBatch.Vecs[inputIdx].GetType())
+			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewVec(*inputBatch.Vecs[inputIdx].GetType(), proc.Mp())
 		}
 	}
 
@@ -107,6 +124,7 @@ func (update *MultiUpdate) insert_unique_index_table(
 func (update *MultiUpdate) check_null_and_insert_main_table(
 	proc *process.Process,
 	analyzer process.Analyzer,
+	tableIndex int,
 	updateCtx *MultiUpdateCtx,
 	inputBatch *batch.Batch,
 	insertBatch *batch.Batch,
@@ -135,8 +153,17 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 		return nil
 	}
 	insertBatch.SetRowCount(newRowCount)
-	if err = checkMainTableNotNull(proc, updateCtx, insertBatch); err != nil {
-		return err
+	// insertBatch is the operator's own buffer: the fill adjusts it in place.
+	_, filled, _, fillErr := fillMainInsertNotNullForIgnore(
+		proc, update.ctr.ignoreFill(tableIndex), updateCtx, insertBatch, true,
+		update.insertNotNullFillOwned(), true)
+	if fillErr != nil {
+		return fillErr
+	}
+	if !filled {
+		if err = checkMainTableNotNull(proc, updateCtx, insertBatch); err != nil {
+			return err
+		}
 	}
 	if err = checkZeroTemporalInStrictMode(update.RejectZeroTemporal, proc, insertBatch); err != nil {
 		return err
@@ -175,9 +202,9 @@ func (update *MultiUpdate) insert_secondary_index_table(
 			}
 		}
 
-		ctr.insertBuf[tableIndex] = batch.NewOffHeap(attrs)
+		ctr.insertBuf[tableIndex] = batch.New(attrs)
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
-			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewOffHeapVecWithType(*inputBatch.Vecs[inputIdx].GetType())
+			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewVec(*inputBatch.Vecs[inputIdx].GetType(), proc.Mp())
 		}
 	}
 
@@ -206,7 +233,7 @@ func (update *MultiUpdate) insert_table(
 	writeBatch := insertBatch
 	if info.isContiguous {
 		if info.refBatch == nil {
-			info.refBatch = batch.NewOffHeapWithSize(len(updateCtx.InsertCols))
+			info.refBatch = batch.NewWithSize(len(updateCtx.InsertCols))
 			info.refBatch.SetAttributes(insertBatch.Attrs)
 		}
 		for insertIdx, inputIdx := range updateCtx.InsertCols {

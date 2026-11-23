@@ -342,7 +342,7 @@ func TestTimestampAddSecondStoredSelection(t *testing.T) {
 				input := batch.NewWithSize(1)
 				defer input.Clean(proc.Mp())
 				typ := types.T(storage.Id).ToType()
-				input.Vecs[0] = vector.NewVec(typ)
+				input.Vecs[0] = vector.NewVec(typ, proc.Mp())
 				if typ.Oid == types.T_enum {
 					require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Enum(1), false, proc.Mp()))
 				} else {
@@ -376,9 +376,9 @@ func TestTimestampAddSecondStoredIntegerDomains(t *testing.T) {
 			require.NoError(t, err)
 			input := batch.NewWithSize(2)
 			defer input.Clean(proc.Mp())
-			input.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(input.Vecs[0], []bool{true, false, true}, nil, proc.Mp()))
-			input.Vecs[1] = vector.NewVec(typ)
+			input.Vecs[1] = vector.NewVec(typ, proc.Mp())
 			if oid == types.T_bool {
 				require.NoError(t, vector.AppendFixedList(input.Vecs[1], []bool{true, false, false}, []bool{false, false, true}, proc.Mp()))
 			} else {

@@ -1,0 +1,538 @@
+drop database if exists composite_index_range;
+create database composite_index_range;
+use composite_index_range;
+set @saved_max_dop=@@max_dop;
+set max_dop=1;
+create table t (k int primary key, a int, b int, key idx_ab(a,b), key idx_a(a));
+set @tid=(select rel_id from mo_catalog.mo_tables where relname='t' and reldatabase=database() limit 1);
+set @idx_ab=(select index_table_name from mo_catalog.mo_indexes where table_id=@tid and name='idx_ab' limit 1);
+set @idx_a=(select index_table_name from mo_catalog.mo_indexes where table_id=@tid and name='idx_a' limit 1);
+insert into t values (1,null,91),(2,9,null);
+select mo_ctl('dn','flush',concat(database(),'.t'));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), .t))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',concat(database(),'.',@idx_ab));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), ., @idx_ab))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',concat(database(),'.',@idx_a));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), ., @idx_a))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into t values (3,8,99),(4,8,100);
+select mo_ctl('dn','flush',concat(database(),'.t'));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), .t))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',concat(database(),'.',@idx_ab));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), ., @idx_ab))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',concat(database(),'.',@idx_a));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), ., @idx_a))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into t values (5,9,89),(6,9,90);
+select mo_ctl('dn','flush',concat(database(),'.t'));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), .t))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',concat(database(),'.',@idx_ab));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), ., @idx_ab))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',concat(database(),'.',@idx_a));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), ., @idx_a))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into t values (7,9,91),(8,9,91);
+select mo_ctl('dn','flush',concat(database(),'.t'));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), .t))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',concat(database(),'.',@idx_ab));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), ., @idx_ab))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',concat(database(),'.',@idx_a));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), ., @idx_a))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into t values (9,9,99),(10,9,100);
+select mo_ctl('dn','flush',concat(database(),'.t'));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), .t))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',concat(database(),'.',@idx_ab));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), ., @idx_ab))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',concat(database(),'.',@idx_a));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), ., @idx_a))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into t values (11,10,91),(12,10,99);
+select mo_ctl('dn','flush',concat(database(),'.t'));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), .t))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',concat(database(),'.',@idx_ab));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), ., @idx_ab))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn','flush',concat(database(),'.',@idx_a));
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, concat(database(), ., @idx_a))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+create table t_ctl (k int primary key, a int, b int);
+insert into t_ctl select * from t;
+select k,a,b from t force index(idx_ab) where a=9 and b>90 order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+7  ¦  9  ¦  91  𝄀
+8  ¦  9  ¦  91  𝄀
+9  ¦  9  ¦  99  𝄀
+10  ¦  9  ¦  100
+select k,a,b from t_ctl where a=9 and b>90 order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+7  ¦  9  ¦  91  𝄀
+8  ¦  9  ¦  91  𝄀
+9  ¦  9  ¦  99  𝄀
+10  ¦  9  ¦  100
+select k,a,b from t force index(idx_ab) where a=9 and b>=91 order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+7  ¦  9  ¦  91  𝄀
+8  ¦  9  ¦  91  𝄀
+9  ¦  9  ¦  99  𝄀
+10  ¦  9  ¦  100
+select k,a,b from t_ctl where a=9 and b>=91 order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+7  ¦  9  ¦  91  𝄀
+8  ¦  9  ¦  91  𝄀
+9  ¦  9  ¦  99  𝄀
+10  ¦  9  ¦  100
+select k,a,b from t force index(idx_ab) where a=9 and b<91 order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+5  ¦  9  ¦  89  𝄀
+6  ¦  9  ¦  90
+select k,a,b from t_ctl where a=9 and b<91 order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+5  ¦  9  ¦  89  𝄀
+6  ¦  9  ¦  90
+select k,a,b from t force index(idx_ab) where a=9 and b<=90 order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+5  ¦  9  ¦  89  𝄀
+6  ¦  9  ¦  90
+select k,a,b from t_ctl where a=9 and b<=90 order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+5  ¦  9  ¦  89  𝄀
+6  ¦  9  ¦  90
+select k,a,b from t force index(idx_ab) where a=9 and b between 90 and 99 order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+6  ¦  9  ¦  90  𝄀
+7  ¦  9  ¦  91  𝄀
+8  ¦  9  ¦  91  𝄀
+9  ¦  9  ¦  99
+select k,a,b from t_ctl where a=9 and b between 90 and 99 order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+6  ¦  9  ¦  90  𝄀
+7  ¦  9  ¦  91  𝄀
+8  ¦  9  ¦  91  𝄀
+9  ¦  9  ¦  99
+select k,a,b from t force index(idx_ab) where a=9 and b>90 and b<100 order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+7  ¦  9  ¦  91  𝄀
+8  ¦  9  ¦  91  𝄀
+9  ¦  9  ¦  99
+select k,a,b from t_ctl where a=9 and b>90 and b<100 order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+7  ¦  9  ¦  91  𝄀
+8  ¦  9  ¦  91  𝄀
+9  ¦  9  ¦  99
+select k,a,b from t force index(idx_ab) where 9=a and 90<b order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+7  ¦  9  ¦  91  𝄀
+8  ¦  9  ¦  91  𝄀
+9  ¦  9  ¦  99  𝄀
+10  ¦  9  ¦  100
+select k,a,b from t_ctl where 9=a and 90<b order by k;
+➤ k[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+7  ¦  9  ¦  91  𝄀
+8  ¦  9  ¦  91  𝄀
+9  ¦  9  ¦  99  𝄀
+10  ¦  9  ¦  100
+select k from t force index(idx_ab) where a=9 and b>100 order by k;
+➤ k[4,32,0]
+select k from t_ctl where a=9 and b>100 order by k;
+➤ k[4,32,0]
+select k from t force index(idx_ab) where a=9 and b=91 order by k;
+➤ k[4,32,0]  𝄀
+7  𝄀
+8
+select k from t_ctl where a=9 and b=91 order by k;
+➤ k[4,32,0]  𝄀
+7  𝄀
+8
+select k from t force index(idx_ab) where a=9 and b>100 and b<90 order by k;
+➤ k[4,32,0]
+select k from t_ctl where a=9 and b>100 and b<90 order by k;
+➤ k[4,32,0]
+select k from t force index(idx_ab) where a=null and b>90 order by k;
+➤ k[4,32,0]
+select k from t_ctl where a=null and b>90 order by k;
+➤ k[4,32,0]
+select k from t force index(idx_ab) where a=9 and b>null order by k;
+➤ k[4,32,0]
+select k from t_ctl where a=9 and b>null order by k;
+➤ k[4,32,0]
+select sum(k) from t force index(idx_ab) where a=9 and b>90;
+➤ sum(k)[-5,64,0]  𝄀
+34
+select sum(k) from t_ctl where a=9 and b>90;
+➤ sum(k)[-5,64,0]  𝄀
+34
+select sum(k) from t where a=9 and b>90;
+➤ sum(k)[-5,64,0]  𝄀
+34
+explain analyze select sum(k) from t force index(idx_ab) where a=9 and b>90;
+-- @regex("Index Table Scan on t[.]idx_ab[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=2\s+inputRows=4\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.01 KiB (min=64.01 KiB, max=64.01 KiB)  𝄀
+        Aggregate Functions: sum(__mo_index_pri_col)  𝄀
+        ->  Index Table Scan on t.idx_ab  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=2 inputRows=4 outputRows=4 (min=4, max=4) InputSize=112 bytes OutputSize=16 bytes ReadSize=377 bytes|0 bytes|0 bytes MemorySize=72 bytes (min=72 bytes, max=72 bytes)  𝄀
+              Filter Cond: prefix_in_range(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 1, INT)) > 90)  𝄀
+              Block Filter Cond: prefix_in_range(__mo_index_idx_col)
+explain analyze select sum(k) from t force index(idx_ab) where a=9 and b>100;
+-- @regex("Index Table Scan on t[.]idx_ab[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=0\s+inputRows=0\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: sum(__mo_index_pri_col)  𝄀
+        ->  Index Table Scan on t.idx_ab  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+              Filter Cond: prefix_in_range(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 1, INT)) > 100)  𝄀
+              Block Filter Cond: prefix_in_range(__mo_index_idx_col)
+select count(distinct a) from t force index(idx_a) where a between 8 and 9;
+➤ count(distinct a)[-5,64,0]  𝄀
+2
+select count(distinct a) from t_ctl where a between 8 and 9;
+➤ count(distinct a)[-5,64,0]  𝄀
+2
+explain analyze select count(distinct a) from t force index(idx_a) where a between 8 and 9;
+-- @regex("Index Table Scan on t[.]idx_a[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=5\s+inputRows=9\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: count(#[0,0])  𝄀
+        ->  Aggregate  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=9 outputRows=2 (min=2, max=2) InputSize=216 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.02 KiB (min=64.02 KiB, max=64.02 KiB)  𝄀
+              Group Key: serial_extract(__mo_index_idx_col, 0, INT))  𝄀
+              ->  Index Table Scan on t.idx_a  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=5 inputRows=9 outputRows=9 (min=9, max=9) InputSize=216 bytes OutputSize=216 bytes ReadSize=644 bytes|0 bytes|0 bytes MemorySize=105 bytes (min=105 bytes, max=105 bytes)  𝄀
+                    Filter Cond: prefix_between(__mo_index_idx_col)  𝄀
+                    Block Filter Cond: prefix_between(__mo_index_idx_col)
+select count(distinct a) from t force index(idx_a) where a is not null;
+➤ count(distinct a)[-5,64,0]  𝄀
+3
+select count(distinct a) from t_ctl where a is not null;
+➤ count(distinct a)[-5,64,0]  𝄀
+3
+explain analyze select count(distinct a) from t force index(idx_a) where a is not null;
+-- @regex("Index Table Scan on t[.]idx_a[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=6\s+inputRows=12\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=1 (min=1, max=1) InputSize=12 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: count(#[0,0])  𝄀
+        ->  Aggregate  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=11 outputRows=3 (min=3, max=3) InputSize=264 bytes OutputSize=12 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.02 KiB (min=64.02 KiB, max=64.02 KiB)  𝄀
+              Group Key: serial_extract(__mo_index_idx_col, 0, INT))  𝄀
+              ->  Index Table Scan on t.idx_a  𝄀
+                    Analyze: timeConsumed=0ms waitTime=1ms inputBlocks=6 inputRows=12 outputRows=11 (min=11, max=11) InputSize=288 bytes OutputSize=264 bytes ReadSize=385 bytes|0 bytes|0 bytes MemorySize=108 bytes (min=108 bytes, max=108 bytes)  𝄀
+                    Filter Cond: (serial_extract(__mo_index_idx_col, 0, INT)) IS NOT NULL)
+select count(*) from t t1 join t t2 on t1.a=t2.a where t1.a<9;
+➤ count(*)[-5,64,0]  𝄀
+4
+select count(*) from t_ctl t1 join t_ctl t2 on t1.a=t2.a where t1.a<9;
+➤ count(*)[-5,64,0]  𝄀
+4
+explain analyze select count(*) from t t1 join t t2 on t1.a=t2.a where t1.a<9;
+-- @regex("Index Table Scan on t[.]idx_a[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=2\s+inputRows=3\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Join  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=96 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.19 KiB (min=16.06 KiB, max=16.13 KiB)  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (serial_extract(__mo_index_idx_col, 0, INT)) = serial_extract(__mo_index_idx_col, 0, INT)))  𝄀
+              ->  Index Table Scan on t.idx_a  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=2 inputRows=3 outputRows=2 (min=2, max=2) InputSize=72 bytes OutputSize=48 bytes ReadSize=266 bytes|0 bytes|0 bytes MemorySize=102 bytes (min=102 bytes, max=102 bytes)  𝄀
+                    Filter Cond: (__mo_index_idx_col < '<opaque>'), (serial_extract(__mo_index_idx_col, 0, INT)) < 9)  𝄀
+                    Block Filter Cond: (__mo_index_idx_col < '<opaque>')  𝄀
+              ->  Index Table Scan on t.idx_a  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=2 inputRows=3 outputRows=2 (min=2, max=2) InputSize=72 bytes OutputSize=48 bytes ReadSize=266 bytes|0 bytes|0 bytes MemorySize=102 bytes (min=102 bytes, max=102 bytes)  𝄀
+                    Filter Cond: (__mo_index_idx_col < '<opaque>'), (serial_extract(__mo_index_idx_col, 0, INT)) < 9)  𝄀
+                    Block Filter Cond: (__mo_index_idx_col < '<opaque>')
+create table uq3 (k int primary key, a int, b int, c int, unique key uq_abc(a,b,c));
+create table uq3_ctl (k int primary key, a int, b int, c int);
+insert into uq3 values (1,9,91,null),(2,9,92,null),(3,9,93,1),(4,8,95,null),(5,9,89,null),(6,9,99,2),(7,9,94,null);
+insert into uq3_ctl values (1,9,91,null),(2,9,92,null),(3,9,93,1),(4,8,95,null),(5,9,89,null),(6,9,99,2),(7,9,94,null);
+select b from uq3 where a=9 and b>90 and b<100 order by b;
+➤ b[4,32,0]  𝄀
+91  𝄀
+92  𝄀
+93  𝄀
+94  𝄀
+99
+select b from uq3_ctl where a=9 and b>90 and b<100 order by b;
+➤ b[4,32,0]  𝄀
+91  𝄀
+92  𝄀
+93  𝄀
+94  𝄀
+99
+select b from uq3 where a=9 and b>90 and b<100 and c is not null order by b;
+➤ b[4,32,0]  𝄀
+93  𝄀
+99
+select b from uq3_ctl where a=9 and b>90 and b<100 and c is not null order by b;
+➤ b[4,32,0]  𝄀
+93  𝄀
+99
+select b from uq3 where a=9 and b>90 order by b;
+➤ b[4,32,0]  𝄀
+91  𝄀
+92  𝄀
+93  𝄀
+94  𝄀
+99
+select b from uq3_ctl where a=9 and b>90 order by b;
+➤ b[4,32,0]  𝄀
+91  𝄀
+92  𝄀
+93  𝄀
+94  𝄀
+99
+select b from uq3 where a=9 and b>90 and c is not null order by b;
+➤ b[4,32,0]  𝄀
+93  𝄀
+99
+select b from uq3_ctl where a=9 and b>90 and c is not null order by b;
+➤ b[4,32,0]  𝄀
+93  𝄀
+99
+create table bs (k int primary key, a varbinary(16), b int, key idx_ab(a,b));
+create table bs_ctl (k int primary key, a varbinary(16), b int);
+create table vs (k int primary key, a varchar(16), b int, key idx_ab(a,b));
+create table vs_ctl (k int primary key, a varchar(16), b int);
+insert into bs values (1,cast('a' as binary),91),(2,cast('a\0' as binary),92),(3,cast('a\0z' as binary),93),(4,cast('a' as binary),90),(5,cast('b' as binary),94),(6,null,95),(7,cast('a' as binary),null);
+insert into bs_ctl select * from bs;
+insert into vs select * from bs;
+insert into vs_ctl select * from bs;
+select hex(a),b from bs where a=cast('a' as binary) and b>90 order by b;
+➤ hex(a)[12,32,0]  ¦  b[4,32,0]  𝄀
+61  ¦  91
+select hex(a),b from bs_ctl where a=cast('a' as binary) and b>90 order by b;
+➤ hex(a)[12,32,0]  ¦  b[4,32,0]  𝄀
+61  ¦  91
+select hex(a),b from bs force index(idx_ab) where a=cast('a' as binary) and b>90 order by b;
+➤ hex(a)[12,32,0]  ¦  b[4,32,0]  𝄀
+61  ¦  91
+select hex(a),b from bs where a=cast('a' as binary) and b>=90 order by b;
+➤ hex(a)[12,32,0]  ¦  b[4,32,0]  𝄀
+61  ¦  90  𝄀
+61  ¦  91
+select hex(a),b from bs_ctl where a=cast('a' as binary) and b>=90 order by b;
+➤ hex(a)[12,32,0]  ¦  b[4,32,0]  𝄀
+61  ¦  90  𝄀
+61  ¦  91
+select hex(a),b from bs force index(idx_ab) where a=cast('a' as binary) and b>=90 order by b;
+➤ hex(a)[12,32,0]  ¦  b[4,32,0]  𝄀
+61  ¦  90  𝄀
+61  ¦  91
+select hex(a),b from vs where a='a' and b>90 order by b;
+➤ hex(a)[12,128,0]  ¦  b[4,32,0]  𝄀
+61  ¦  91
+select hex(a),b from vs_ctl where a='a' and b>90 order by b;
+➤ hex(a)[12,128,0]  ¦  b[4,32,0]  𝄀
+61  ¦  91
+select hex(a),b from vs force index(idx_ab) where a='a' and b>90 order by b;
+➤ hex(a)[12,128,0]  ¦  b[4,32,0]  𝄀
+61  ¦  91
+select hex(a),b from vs where a='a' and b>=90 order by b;
+➤ hex(a)[12,128,0]  ¦  b[4,32,0]  𝄀
+61  ¦  90  𝄀
+61  ¦  91
+select hex(a),b from vs_ctl where a='a' and b>=90 order by b;
+➤ hex(a)[12,128,0]  ¦  b[4,32,0]  𝄀
+61  ¦  90  𝄀
+61  ¦  91
+select hex(a),b from vs force index(idx_ab) where a='a' and b>=90 order by b;
+➤ hex(a)[12,128,0]  ¦  b[4,32,0]  𝄀
+61  ¦  90  𝄀
+61  ¦  91
+create table filter_errors (k int primary key, a int, b varchar(32) collate utf8mb4_bin, key ix(a,b));
+insert into filter_errors values (1,8,'x'),(2,9,'y');
+select a,b from filter_errors where a=99 and b>regexp_replace('x','[','y');
+➤ a[4,32,0]  ¦  b[12,32,0]
+select a,b from filter_errors where a=9 and b>'w' order by k;
+➤ a[4,32,0]  ¦  b[12,32,0]  𝄀
+9  ¦  y
+set max_dop=@saved_max_dop;
+drop database composite_index_range;

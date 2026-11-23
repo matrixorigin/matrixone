@@ -36,8 +36,9 @@ type orLikeStringBindingContext struct {
 	columnType types.T
 }
 
-func (ctx *orLikeStringBindingContext) Resolve(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
-	object, definition, err := ctx.MockCompilerContext.Resolve(db, table, snapshot)
+func (ctx *orLikeStringBindingContext) Resolve(db, table string, snapshot *plan.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
+	object, definition, err := ctx.MockCompilerContext.Resolve(db, table, snapshot, nil)
 	if err != nil || definition == nil {
 		return object, definition, err
 	}
@@ -73,7 +74,7 @@ func TestORLikeSubjectReusePublicBinding(t *testing.T) {
 			statement, err := mysql.ParseOne(proc.Ctx, query, 1)
 			require.NoError(t, err)
 			defer statement.Free()
-			built, err := plan2.BuildPlan(ctx, statement, false)
+			built, err := plan2.BuildPlan(ctx, statement, false, nil)
 			require.NoError(t, err)
 			var candidate *plan.Expr
 			var column *plan.Expr
@@ -128,7 +129,7 @@ func TestORLikeSubjectReusePublicBinding(t *testing.T) {
 			input := batch.NewWithSize(int(column.GetCol().ColPos) + 1)
 			defer input.Clean(proc.Mp())
 			values := []string{"ERROR", "ordinary", "TİMEOUT", "RETRY", ""}
-			input.Vecs[column.GetCol().ColPos] = vector.NewVec(test.oid.ToType())
+			input.Vecs[column.GetCol().ColPos] = vector.NewVec(test.oid.ToType(), proc.Mp())
 			for row, value := range values {
 				require.NoError(t, vector.AppendBytes(input.Vecs[column.GetCol().ColPos], []byte(value), row == 4, proc.Mp()))
 			}

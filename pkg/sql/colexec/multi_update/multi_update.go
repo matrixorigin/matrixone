@@ -143,6 +143,15 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			update.ctr.s3Writer = writer
 		} else {
 			update.ctr.s3Writer.refreshSelectorState(update)
+			// A reused delegate's persistent insert sinkers still carry
+			// the FIRST transaction's capacity hook — the cached plan
+			// keeps them and their pools alive across executions — so
+			// every next execution must re-arm their per-object
+			// admission on the CURRENT workspace BEFORE any spill can
+			// run: the first workspace is finalizing or finalized, and
+			// a reservation it holds can never be released by this
+			// transaction (issue #25590 round-35 review).
+			update.ctr.s3Writer.rebindWorkspaceCapacity(proc)
 		}
 
 	case UpdateFlushS3Info:
@@ -332,7 +341,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 		switch actionType(action) {
 		case actionDelete:
 			if batBufs[actionDelete] == nil {
-				batBufs[actionDelete] = batch.NewOffHeapEmpty()
+				batBufs[actionDelete] = batch.NewWithSize(0)
 			} else {
 				batBufs[actionDelete].CleanOnlyData()
 			}
@@ -359,7 +368,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 		case actionInsert:
 			if batBufs[actionInsert] == nil {
-				batBufs[actionInsert] = batch.NewOffHeapEmpty()
+				batBufs[actionInsert] = batch.NewWithSize(0)
 			} else {
 				batBufs[actionInsert].CleanOnlyData()
 			}
@@ -386,7 +395,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 		case actionUpdate:
 			if batBufs[actionUpdate] == nil {
-				batBufs[actionUpdate] = batch.NewOffHeapEmpty()
+				batBufs[actionUpdate] = batch.NewWithSize(0)
 			} else {
 				batBufs[actionUpdate].CleanOnlyData()
 			}
@@ -409,9 +418,12 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer process.Analyzer, bat *batch.Batch) (err error) {
 	targetBatches := make(map[int]*batch.Batch)
+	// views are targets replaced by an IGNORE fill's view of bat: they own
+	// nothing, so they are dropped, not cleaned.
+	views := make(map[int]bool)
 	defer func() {
-		for _, targetBatch := range targetBatches {
-			if targetBatch != bat {
+		for targetIdx, targetBatch := range targetBatches {
+			if targetBatch != bat && !views[targetIdx] {
 				targetBatch.Clean(proc.Mp())
 			}
 		}
@@ -455,7 +467,13 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer proces
 		tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
 		switch tableType {
 		case UpdateMainTable:
-			err = update.insert_main_table(proc, analyzer, i, contextBatch)
+			var out *batch.Batch
+			out, err = update.insert_main_table(proc, analyzer, i, contextBatch, contextBatch != bat)
+			if err == nil && out != contextBatch {
+				// The remaining legs of this target read the adjusted rows.
+				targetBatches[targetIdx] = out
+				views[targetIdx] = true
+			}
 		case UpdateUniqueIndexTable:
 			err = update.insert_unique_index_table(proc, analyzer, i, contextBatch)
 		case UpdateSecondaryIndexTable:
@@ -568,14 +586,18 @@ func filterTargetRows(
 		matchedSemanticAffectedRows += uint64(activeCount)
 	}
 
-	// The input can carry a build-side allocation account whose lifetime ends
-	// at the operator boundary. The filtered batch is independently owned by
-	// MULTI_UPDATE, so do not inherit that execution-local account.
-	filtered, err := input.CloneWithoutAllocationAccount(proc.Mp(), true)
+	// The input can be charged to a build-side allocation account whose
+	// lifetime ends at the operator boundary. The filtered batch is
+	// independently owned by MULTI_UPDATE and is copied through proc's pool, so
+	// it does not charge that execution-local account.
+	filtered, err := input.Clone(proc.Mp())
 	if err != nil {
 		return nil, false, 0, err
 	}
-	filtered.Shrink(selections, false)
+	if err := filtered.Shrink(selections, false, proc.Mp()); err != nil {
+		filtered.Clean(proc.Mp())
+		return nil, false, 0, err
+	}
 	filtered.SetRowCount(len(selections))
 	if seen == nil || filtered.RowCount() == 0 {
 		semanticAffectedRows := matchedSemanticAffectedRows
@@ -608,7 +630,10 @@ func filterTargetRows(
 			}
 		}
 	}
-	filtered.Shrink(physicalSelections, false)
+	if err := filtered.Shrink(physicalSelections, false, proc.Mp()); err != nil {
+		filtered.Clean(proc.Mp())
+		return nil, false, 0, err
+	}
 	filtered.SetRowCount(len(physicalSelections))
 	semanticAffectedRows := matchedSemanticAffectedRows
 	if updateCtx.ChangedRowsCol != nil {
@@ -665,11 +690,14 @@ func filterODKUPhysicalRows(
 			selections = append(selections, int64(row))
 		}
 	}
-	filtered, err := input.CloneWithoutAllocationAccount(proc.Mp(), true)
+	filtered, err := input.Clone(proc.Mp())
 	if err != nil {
 		return nil, false, 0, err
 	}
-	filtered.Shrink(selections, false)
+	if err := filtered.Shrink(selections, false, proc.Mp()); err != nil {
+		filtered.Clean(proc.Mp())
+		return nil, false, 0, err
+	}
 	filtered.SetRowCount(len(selections))
 	return filtered, true, affectedRows, nil
 }

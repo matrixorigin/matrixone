@@ -94,7 +94,7 @@ func TestPublicationViewBindingMarkerRefusesUdfBinding(t *testing.T) {
 		binder := NewDefaultBinder(
 			defines.WithPublicationViewBinding(context.Background()),
 			nil, nil, plan.Type{}, nil)
-		_, err := bindFuncExprImplUdf(&binder.baseBinder, "udf27767", udf, nil, nil, 0)
+		_, err := bindFuncExprImplUdf(&binder.baseBinder, "udf27767", udf, nil, nil, 0, zeroScalarArgumentScope{})
 		var veto *UdfDisallowedInPublicationViewBinding
 		require.ErrorAs(t, err, &veto)
 		require.Equal(t, "udf27767", veto.Name)
@@ -102,9 +102,26 @@ func TestPublicationViewBindingMarkerRefusesUdfBinding(t *testing.T) {
 			"user-defined function 'udf27767' cannot bind in publication view binding")
 	})
 
+	t.Run("publication policy precedes provenance guards", func(t *testing.T) {
+		markedContext := defines.WithPublicationViewBinding(t.Context())
+		compiler := NewMockCompilerContext(true, newPlanTestProcess(t))
+		compiler.SetContext(markedContext)
+		builder := &QueryBuilder{
+			compCtx:                     compiler,
+			qry:                         &plan.Query{},
+			zeroScalarRewriteGeneration: 1,
+		}
+		binder := &baseBinder{sysCtx: markedContext, builder: builder}
+		pythonUDF := &function.Udf{Body: "select 1", Language: string(tree.PYTHON)}
+		_, err := bindFuncExprImplUdf(binder, "udf27767", pythonUDF, nil, nil, 0, zeroScalarArgumentScope{})
+		var veto *UdfDisallowedInPublicationViewBinding
+		require.ErrorAs(t, err, &veto)
+		require.Equal(t, "udf27767", veto.Name)
+	})
+
 	t.Run("the same function binds outside the marker", func(t *testing.T) {
 		binder := NewDefaultBinder(context.Background(), nil, nil, plan.Type{}, nil)
-		expr, err := bindFuncExprImplUdf(&binder.baseBinder, "udf27767", udf, nil, nil, 0)
+		expr, err := bindFuncExprImplUdf(&binder.baseBinder, "udf27767", udf, nil, nil, 0, zeroScalarArgumentScope{})
 		require.NoError(t, err)
 		require.NotNil(t, expr, "ordinary binding keeps resolving user-defined functions")
 	})
@@ -176,7 +193,7 @@ func TestPublicationViewBindingMarkerStopsAtMetadataBoundary(t *testing.T) {
 		t.Cleanup(stmt.Free)
 		compiler := NewMockCompilerContext(true, proc)
 		compiler.SetContext(ctx)
-		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false)
+		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false, nil)
 		require.NoError(t, err)
 		return bound
 	}
@@ -298,7 +315,7 @@ func TestPublicationViewBindingMarkerSkipsComparisonFolds(t *testing.T) {
 		t.Cleanup(stmt.Free)
 		compiler := NewMockCompilerContext(true, proc)
 		compiler.SetContext(ctx)
-		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false)
+		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false, nil)
 		require.NoError(t, err)
 		return bound
 	}
@@ -412,7 +429,7 @@ func TestPublicationViewBindingMarkerSkipsStringLengthInference(t *testing.T) {
 		t.Cleanup(stmt.Free)
 		compiler := NewMockCompilerContext(true, proc)
 		compiler.SetContext(ctx)
-		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false)
+		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false, nil)
 		require.NoError(t, err)
 		return bound
 	}
@@ -514,7 +531,7 @@ func TestPublicationViewBindingMarkerRefusesCorrelatedAggregateSpineProof(t *tes
 		t.Cleanup(stmt.Free)
 		compiler := NewMockCompilerContext(true, proc)
 		compiler.SetContext(ctx)
-		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false)
+		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false, nil)
 		require.NoError(t, err)
 		return bound
 	}
@@ -687,7 +704,7 @@ func TestPublicationViewBindingMarkerPreservesConstantExpressionSRIDs(t *testing
 		t.Cleanup(stmt.Free)
 		compiler := NewMockCompilerContext(true, proc)
 		compiler.SetContext(ctx)
-		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false)
+		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1071,7 +1088,7 @@ func TestPublicationViewBindingMarkerKeepsProbeLiteralStatements(t *testing.T) {
 	} {
 		compiler := NewMockCompilerContext(true, proc)
 		compiler.SetContext(ctx)
-		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false)
+		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false, nil)
 		require.NoError(t, err)
 		limitSeen := false
 		for _, node := range bound.GetQuery().Nodes {

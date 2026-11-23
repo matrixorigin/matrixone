@@ -107,7 +107,7 @@ func TestCTASDecimalRoundingMetadataAtMaxPrecision(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			logicPlan, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			logicPlan, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 			cols := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
 			require.NotEmpty(t, cols)
@@ -123,7 +123,7 @@ func TestCTASDecimalRoundingMetadataAtMaxPrecision(t *testing.T) {
 			roundTripStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, roundTripSQL, 1)
 			require.NoError(t, err)
 			defer roundTripStmt.Free()
-			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), roundTripStmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), roundTripStmt, false, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -170,8 +170,8 @@ func TestDecimalRoundCarryFeedsArithmetic(t *testing.T) {
 			defer executor.Free()
 			input := batch.NewWithSize(2)
 			defer input.Clean(proc.Mp())
-			input.Vecs[0] = vector.NewVec(inputType)
-			input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+			input.Vecs[0] = vector.NewVec(inputType, proc.Mp())
+			input.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			for i, v := range []int64{999999999999999, -999999999999999, 0} {
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Decimal64(v), i == 2, proc.Mp()))
 				require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(-30), false, proc.Mp()))
@@ -206,8 +206,8 @@ func TestDecimalDirectedRoundingPositionFeedsArithmetic(t *testing.T) {
 					factorType := types.New(types.T_decimal64, 10, 0)
 					input := batch.NewWithSize(3)
 					t.Cleanup(func() { input.Clean(proc.Mp()) })
-					input.Vecs[0] = vector.NewVec(valueType)
-					input.Vecs[1] = vector.NewVec(factorType)
+					input.Vecs[0] = vector.NewVec(valueType, proc.Mp())
+					input.Vecs[1] = vector.NewVec(factorType, proc.Mp())
 					digitsVector, err := vector.NewConstFixed(types.T_int64.ToType(), tc.digits, 4, proc.Mp())
 					require.NoError(t, err)
 					input.Vecs[2] = digitsVector

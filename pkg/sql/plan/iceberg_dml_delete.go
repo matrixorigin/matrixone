@@ -39,6 +39,7 @@ func buildIcebergUpdatePlan(stmt *tree.Update, ctx CompilerContext, isPrepareStm
 	}
 
 	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, isPrepareStmt, false)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -123,6 +124,7 @@ func buildIcebergDeletePlan(stmt *tree.Delete, ctx CompilerContext, isPrepareStm
 	}
 
 	builder := NewQueryBuilder(plan.Query_DELETE, ctx, isPrepareStmt, false)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -210,7 +212,7 @@ func resolveIcebergUpdateTarget(ctx CompilerContext, stmt *tree.Update) (iceberg
 	if strings.TrimSpace(target.tableName) == "" {
 		return icebergDeleteTarget{}, moerr.NewInvalidInput(ctx.GetContext(), "Iceberg UPDATE requires a table name")
 	}
-	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil, nil)
 	if err != nil {
 		return icebergDeleteTarget{}, err
 	}
@@ -315,7 +317,7 @@ func resolveIcebergDeleteTarget(ctx CompilerContext, stmt *tree.Delete) (iceberg
 	if strings.TrimSpace(target.tableName) == "" {
 		return icebergDeleteTarget{}, moerr.NewInvalidInput(ctx.GetContext(), "Iceberg DELETE requires a table name")
 	}
-	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil, nil)
 	if err != nil {
 		return icebergDeleteTarget{}, err
 	}
@@ -378,6 +380,11 @@ func appendIcebergDMLMetadataProjection(ctx context.Context, query *plan.Query, 
 	if scan.TableDef == nil || scan.ExternScan == nil {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg DELETE scan is malformed")
 	}
+	targetRef := icebergDMLTargetRefFromRoot(query, rootID)
+	if !icebergDMLSameObjectRef(targetRef, scan.ObjRef) {
+		return nil, moerr.NewInvalidInput(ctx, "Iceberg DML scan does not match its write target")
+	}
+	scan.ExtraOptions = icebergapi.DMLTargetScanPlanExtraOptions
 	if preserveTableColumns {
 		ensureIcebergDMLScanProjectsTableColumns(scan, icebergDMLRootTargetTableDef(root))
 	}

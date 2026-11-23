@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/subscriptionmetadata"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -82,9 +83,23 @@ func (e *authorizationEpoch) Value(key any) any {
 		return e
 	case rewritePolicyRequestKey:
 		return &e.prepared
+	case subscriptionmetadata.AuthorizationSnapshotKey:
+		return e
 	default:
 		return e.ctx.Value(key)
 	}
+}
+
+// SubscriptionMetadataSnapshot keeps publication eligibility at the same A as
+// the statement's role checks, independently of the metadata scan's data T.
+func (e *authorizationEpoch) SubscriptionMetadataSnapshot(ctx context.Context) (*txnclient.SnapshotAdmission, error) {
+	eng := sessionCatalogEngine(e.owner)
+	if eng == nil {
+		return nil, moerr.NewInternalError(ctx, "missing subscription authorization engine")
+	}
+	// A nested trusted catalog executor may have changed execution identity;
+	// the admission still belongs to the original statement principal.
+	return e.snapshot(defines.AttachAccountId(ctx, e.identity.account), eng)
 }
 
 func authorizationEpochFor(ctx context.Context, ses *Session) *authorizationEpoch {

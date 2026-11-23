@@ -16,7 +16,10 @@ null
 select cast(col1 as int) from test01;
 Data truncation: data out of range: data type int32, value '20200113122059'
 select cast(col1 as decimal(20,10)) from test01;
-invalid input: 20200113122059.000000 beyond the range, can't be converted to Decimal128(20,10).
+➤ cast(col1 as decimal(20, 10))[3,20,10]  𝄀
+9999999999.9999999999  𝄀
+9999999999.9999999999  𝄀
+null
 drop table test01;
 drop table if exists test01;
 create table test01(col1 datetime(3));
@@ -31,7 +34,10 @@ null
 select cast(col1 as int) from test01;
 Data truncation: data out of range: data type int32, value '20200113122059'
 select cast(col1 as decimal(20,10)) from test01;
-invalid input: 20200113122059.123000 beyond the range, can't be converted to Decimal128(20,10).
+➤ cast(col1 as decimal(20, 10))[3,20,10]  𝄀
+9999999999.9999999999  𝄀
+9999999999.9999999999  𝄀
+null
 drop table test01;
 drop table if exists test02;
 create table test02(col1 date);
@@ -77,7 +83,10 @@ insert into test06 values(NULL);
 insert into test05 select * from test06;
 Data truncation: data out of range: data type int32, value '20200113122059'
 select cast(col1 as decimal(20,18)) from test06;
-invalid input: 20200113122059.000000 beyond the range, can't be converted to Decimal128(20,18).
+➤ cast(col1 as decimal(20, 18))[3,20,18]  𝄀
+99.999999999999999999  𝄀
+99.999999999999999999  𝄀
+null
 insert into test07 select * from test06;
 select * from test05;
 ➤ col1[4,32,0]
@@ -101,7 +110,10 @@ insert into test06 values(NULL);
 insert into test05 select * from test06;
 Data truncation: data out of range: data type int32, value '20200113122059'
 select cast(col1 as decimal(20,18)) from test06;
-invalid input: 20200113122059.123000 beyond the range, can't be converted to Decimal128(20,18).
+➤ cast(col1 as decimal(20, 18))[3,20,18]  𝄀
+99.999999999999999999  𝄀
+99.999999999999999999  𝄀
+null
 insert into test07 select * from test06;
 select * from test05;
 ➤ col1[4,32,0]
@@ -394,7 +406,10 @@ null
 select cast(col1 as int) from test03;
 Data truncation: data out of range: data type int32, value '19970113122100'
 select cast(col1 as decimal(20,18)) from test03;
-invalid input: 19970113122100.000000 beyond the range, can't be converted to Decimal128(20,18).
+➤ cast(col1 as decimal(20, 18))[3,20,18]  𝄀
+99.999999999999999999  𝄀
+99.999999999999999999  𝄀
+null
 drop table test03;
 drop table if exists test03;
 create table test03(col1 timestamp(5));
@@ -409,7 +424,10 @@ null
 select cast(col1 as int) from test03;
 Data truncation: data out of range: data type int32, value '19970113122059'
 select cast(col1 as decimal(20,18)) from test03;
-invalid input: 19970113122059.898610 beyond the range, can't be converted to Decimal128(20,18).
+➤ cast(col1 as decimal(20, 18))[3,20,18]  𝄀
+99.999999999999999999  𝄀
+99.999999999999999999  𝄀
+null
 drop table test03;
 drop table if exists test09;
 drop table if exists test10;
@@ -423,7 +441,10 @@ insert into test10 values(NULL);
 insert into test09 select * from test10;
 Data truncation: data out of range: data type int32, value '20221213122059'
 select cast(col1 as decimal(10,5)) from test10;
-invalid input: 20221213122059.000000 beyond the range, can't be converted to Decimal64(10,5).
+➤ cast(col1 as decimal(10, 5))[3,10,5]  𝄀
+99999.99999  𝄀
+99999.99999  𝄀
+null
 insert into test11 select * from test10;
 select * from test09;
 ➤ col1[4,32,0]
@@ -446,7 +467,10 @@ insert into test10 values(NULL);
 insert into test09 select * from test10;
 Data truncation: data out of range: data type int32, value '20221213122059'
 select cast(col1 as decimal(10,5)) from test10;
-invalid input: 20221213122059.213213 beyond the range, can't be converted to Decimal64(10,5).
+➤ cast(col1 as decimal(10, 5))[3,10,5]  𝄀
+99999.99999  𝄀
+99999.99999  𝄀
+null
 insert into test11 select * from test10;
 select * from test09;
 ➤ col1[4,32,0]

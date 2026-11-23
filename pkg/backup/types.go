@@ -229,6 +229,8 @@ type Config struct {
 
 	BackupType string
 	BackupTs   types.TS
+
+	copyFiles backupFileCopier
 }
 
 // metasGeneralFsMustBeSet denotes metas and generalFs must be ready

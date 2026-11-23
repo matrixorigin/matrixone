@@ -73,12 +73,14 @@ func (c *viewDescriptionDependencyContext) record(obj *ObjectRef, def *TableDef,
 }
 
 // ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
-func (c *viewDescriptionDependencyContext) ResolveWithoutTemporaryAlias(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *viewDescriptionDependencyContext) ResolveWithoutTemporaryAlias(_ string, _ string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
 }
 
-func (c *viewDescriptionDependencyContext) Resolve(db, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
-	obj, def, err := c.CompilerContext.Resolve(db, name, snapshot)
+func (c *viewDescriptionDependencyContext) Resolve(db, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
+	obj, def, err := c.CompilerContext.Resolve(db, name, snapshot, nil)
 	if err == nil && obj != nil && def != nil {
 		c.record(obj, def, snapshot)
 	}
@@ -181,20 +183,20 @@ func describeViewForMetadata(
 // View column snapshot, and no generated definition is written back.
 func viewDescriptionRelation(
 	ctx CompilerContext, def *TableDef, obj *ObjectRef, accountID uint32, databaseName, viewName string,
-) (string, []*ObjectRef, bool, error) {
+) (string, []*ColDef, []*ObjectRef, bool, error) {
 	cols, dependencies, dependsOnUdf, err := describeViewForMetadata(ctx, def, obj, accountID)
 	if err != nil {
-		return "", nil, false, err
+		return "", nil, nil, false, err
 	}
 	rows := make([]string, 0, len(cols))
 	for i, col := range cols {
 		if err := ctx.GetContext().Err(); err != nil {
-			return "", nil, false, err
+			return "", nil, nil, false, err
 		}
 		typ := MakeTypeByPlan2Type(col.Typ)
 		typeBytes, err := types.Encode(&typ)
 		if err != nil {
-			return "", nil, false, err
+			return "", nil, nil, false, err
 		}
 		defaultDef := col.Default
 		if defaultDef == nil {
@@ -202,7 +204,7 @@ func viewDescriptionRelation(
 		}
 		defaultBytes, err := types.Encode(defaultDef)
 		if err != nil {
-			return "", nil, false, err
+			return "", nil, nil, false, err
 		}
 		notNull := 0
 		if col.Typ.NotNullable {
@@ -216,5 +218,5 @@ func viewDescriptionRelation(
 	}
 	return "(select * from (values " + strings.Join(rows, ",") + ") as view_columns(" +
 		"account_id,att_relname_id,att_database,att_relname,attname,attnum,atttyp,attr_enum,attnotnull," +
-		"att_default,att_is_hidden,att_is_auto_increment,attr_has_generated,attr_generated,att_comment))", dependencies, dependsOnUdf, nil
+		"att_default,att_is_hidden,att_is_auto_increment,attr_has_generated,attr_generated,att_comment))", cols, dependencies, dependsOnUdf, nil
 }

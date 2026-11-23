@@ -261,7 +261,7 @@ func TestObjectWriterPropagatesMarshalError(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			invalid := vector.NewVec(types.T_text.ToType())
+			invalid := vector.NewVec(types.T_text.ToType(), mp)
 			invalid.SetLength(1) // Deliberately omit the required varlena descriptor.
 			bat := batch.NewWithSize(1)
 			bat.SetVector(0, invalid)
@@ -493,6 +493,23 @@ func TestWriteArena(t *testing.T) {
 		require.GreaterOrEqual(t, len(a.compressBuf), 200)
 	})
 
+	t.Run("compress capacity respects allocation boundary", func(t *testing.T) {
+		// Exercise the real GiB boundary without allocating a GiB buffer.
+		limit := int(mpool.MaxAllocationSize())
+		require.Equal(t, 1<<30, arenaCompressBufSize(1<<30))
+		require.Equal(t, 1<<30+1, arenaCompressBufSize(1<<30+1))
+		require.Equal(t, limit, arenaCompressBufSize(limit))
+		// An illegal request must still reach Alloc's existing failure path.
+		require.Greater(t, arenaCompressBufSize(limit+1), limit)
+		require.Equal(t, math.MaxInt, arenaCompressBufSize(math.MaxInt))
+
+		a := NewArena(64)
+		defer a.FreeBuffers()
+		_, err := a.compressBufChecked(limit + 1)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+		require.Panics(t, func() { a.CompressBuf(limit + 1) })
+	})
+
 	t.Run("zero-size arena falls back to exact make", func(t *testing.T) {
 		a := NewArena(0)
 		b := a.Alloc(10)
@@ -626,8 +643,8 @@ func TestBoolZoneMapPersistence(t *testing.T) {
 	defer service.Close(ctx)
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int8.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int8.ToType(), mp)
 	defer bat.Clean(mp)
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []bool{false, true}, nil, mp))
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int8{0, 1}, nil, mp))
@@ -687,10 +704,10 @@ func TestObjectWriterRejectsUnresolvedTypeBeforeMutation(t *testing.T) {
 				require.NoError(t, err)
 				bat := batch.NewWithSize(2)
 				defer bat.Clean(mp)
-				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(7), false, mp))
 				if flat {
-					bat.Vecs[1] = vector.NewVec(types.T_any.ToType())
+					bat.Vecs[1] = vector.NewVec(types.T_any.ToType(), mp)
 					require.NoError(t, vector.AppendNull(bat.Vecs[1], mp))
 				} else {
 					bat.Vecs[1] = vector.NewConstNull(types.T_any.ToType(), 1, mp)

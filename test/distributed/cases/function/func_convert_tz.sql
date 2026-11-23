@@ -39,8 +39,13 @@ select convert_tz('2023-11-06 10:28:00','+00:00', '11111') as dtime;
 select convert_tz('2023-11-06 10:28:00','+00:aa', '+08:00') as dtime;
 select convert_tz('2023-11','+00:00', '+08:00') as dtime;
 -- datetime,timestamp,date type
+-- This case checks DATE truncation in permissive mode. Strict mode rejects
+-- a DATE assignment whose source text contains a nonzero clock component.
+set @date_insert_sql_mode = @@sql_mode;
+set sql_mode = '';
 create table convert_table(c1 datetime,c2 date,c3 timestamp(3));
 insert into convert_table values('2010-09-26','2022-01-02 10:02:00','2021-05-02 12:02:00.0923'),('2011-02-20 10:02:00','2020-01-02','2021-05-02'),('2019-03-16 11:12:00','2022-01-02 10:02:00','2021-05-02 12:02:00.0923');
+set sql_mode = @date_insert_sql_mode;
 select convert_tz(c1,'+00:00', '+08:00'),c1 from convert_table;
 select convert_tz(c2,'+00:00', '+08:00'),c2 from convert_table;
 select convert_tz(c3,'+00:00', '+08:00'),c3 from convert_table;

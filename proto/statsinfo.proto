@@ -52,6 +52,22 @@ message ShuffleRange {
   double SampleRatio = 15;
 }
 
+// Optional row-distribution statistics collected by manual ANALYZE. Values are
+// byte-ordered prefixes (at most 64 bytes), including repeated and empty values.
+// SampleRows includes NULLs, which are omitted from Values.
+message ByteRangeDistribution {
+  uint32 Version = 1;
+  uint32 TypeId = 2;
+  uint32 Charset = 3;
+  uint32 CollationVersion = 4;
+  uint32 TableVersion = 5;
+  uint32 ColumnSeqnum = 6;
+  uint64 PopulationRows = 7;
+  uint64 SampleRows = 8;
+  bool CompleteSample = 9;
+  repeated bytes Values = 10;
+}
+
 message StatsInfo {
   map<string, double> NdvMap = 1;
   map<string, double> MinValMap = 2;
@@ -65,6 +81,7 @@ message StatsInfo {
   int64 ApproxObjectNumber = 10;
   double TableCnt = 11;
   string TableName = 12;
+  map<string, ByteRangeDistribution> ByteRangeMap = 14;
   reserved 13;
 //  int64 TimeSecond = 13;
 }

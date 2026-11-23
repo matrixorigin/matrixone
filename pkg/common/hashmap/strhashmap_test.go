@@ -62,8 +62,8 @@ func TestStrHashMapPreviewInsertMatchesPublication(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}()
 
-	existing := vector.NewVec(types.T_varchar.ToType())
-	input := vector.NewVec(types.T_varchar.ToType())
+	existing := vector.NewVec(types.T_varchar.ToType(), mp)
+	input := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer existing.Free(mp)
 	defer input.Free(mp)
 	require.NoError(t, vector.AppendBytes(existing, []byte("seven"), false, mp))
@@ -118,7 +118,7 @@ func TestStrHashMapPreviewInsertGrowsBeforePublication(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}()
 
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer input.Free(mp)
 	for i := 0; i < UnitLimit; i++ {
 		require.NoError(t, vector.AppendBytes(
@@ -159,7 +159,7 @@ func TestStrHashMapPreviewInsertNullableGrouping(t *testing.T) {
 			})
 			require.NoError(t, hashMap.SetGroupingAware())
 
-			input := vector.NewVec(typ)
+			input := vector.NewVec(typ, mp)
 			t.Cleanup(func() { input.Free(mp) })
 			require.NoError(t, vector.AppendBytes(input, []byte("abcdefghijklmnopqrstu"), false, mp))
 			require.NoError(t, vector.AppendBytes(input, nil, true, mp))
@@ -202,8 +202,8 @@ func TestStrHashMapRejectsCompositeJoinNaN(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}()
 
-	floats := vector.NewVec(types.T_float32.ToType())
-	discriminators := vector.NewVec(types.T_int32.ToType())
+	floats := vector.NewVec(types.T_float32.ToType(), mp)
+	discriminators := vector.NewVec(types.T_int32.ToType(), mp)
 	defer floats.Free(mp)
 	defer discriminators.Free(mp)
 	for _, value := range []float32{float32(math.NaN()), 7, float32(math.NaN())} {
@@ -242,8 +242,8 @@ func TestStrHashMapRejectsNaNWhenNullKeysParticipate(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}()
 
-	floats := vector.NewVec(types.T_float64.ToType())
-	discriminators := vector.NewVec(types.T_int32.ToType())
+	floats := vector.NewVec(types.T_float64.ToType(), mp)
+	discriminators := vector.NewVec(types.T_int32.ToType(), mp)
 	defer floats.Free(mp)
 	defer discriminators.Free(mp)
 	require.NoError(t, vector.AppendFixed(floats, math.NaN(), false, mp))
@@ -292,8 +292,8 @@ func TestStrHashMapCanonicalVarlenaSerialization(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			defer func() { require.Zero(t, mp.CurrNB()) }()
-			build := vector.NewVec(tt.typ)
-			probe := vector.NewVec(tt.typ)
+			build := vector.NewVec(tt.typ, mp)
+			probe := vector.NewVec(tt.typ, mp)
 			defer build.Free(mp)
 			defer probe.Free(mp)
 			require.NoError(t, vector.AppendBytes(build, tt.build, false, mp))
@@ -359,7 +359,7 @@ func TestStrHashMapCharKeysUsePadSpaceSemantics(t *testing.T) {
 				mp := mpool.MustNewZero()
 				defer func() { require.Zero(t, mp.CurrNB()) }()
 
-				build := vector.NewVec(test.typ)
+				build := vector.NewVec(test.typ, mp)
 				defer build.Free(mp)
 				for _, value := range []string{"MO      ", "MO  ", "NO      ", "        ", ""} {
 					require.NoError(t, vector.AppendBytes(build, []byte(value), false, mp))
@@ -412,7 +412,7 @@ func TestStrHashMapUnicodeKeysUseOneNonCollidingDomain(t *testing.T) {
 	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
 	// Keep malformed legacy bytes admissible while constructing the fixture,
 	// then restore the Unicode semantic metadata before hashing.
-	build := vector.NewVec(types.T_varchar.ToType())
+	build := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer build.Free(mp)
 	values := [][]byte{
 		[]byte("A"), []byte("a"), []byte("ß"), []byte("ss"), []byte("b"),
@@ -474,8 +474,8 @@ func TestStrHashMapCanonicalVarlenaVectorShapes(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Run("flat-null-offset", func(t *testing.T) {
 				mp := mpool.MustNewZero()
-				build := vector.NewVec(test.typ)
-				probe := vector.NewVec(test.typ)
+				build := vector.NewVec(test.typ, mp)
+				probe := vector.NewVec(test.typ, mp)
 				defer func() {
 					build.Free(mp)
 					probe.Free(mp)
@@ -543,8 +543,8 @@ func TestStrHashMapCanonicalVarlenaVectorShapes(t *testing.T) {
 
 			t.Run("grouping-aware", func(t *testing.T) {
 				mp := mpool.MustNewZero()
-				build := vector.NewVec(test.typ)
-				probe := vector.NewVec(test.typ)
+				build := vector.NewVec(test.typ, mp)
+				probe := vector.NewVec(test.typ, mp)
 				defer func() {
 					build.Free(mp)
 					probe.Free(mp)
@@ -681,10 +681,10 @@ func runIntHashMapFloat32CompositeFloatLastCase(
 	m := mpool.MustNewZero()
 	floatType := types.T_float32.ToType()
 	floatType.Scale = scale
-	buildFloat := vector.NewVec(floatType)
-	probeFloat := vector.NewVec(floatType)
-	buildDiscriminator := vector.NewVec(types.T_int32.ToType())
-	probeDiscriminator := vector.NewVec(types.T_int32.ToType())
+	buildFloat := vector.NewVec(floatType, m)
+	probeFloat := vector.NewVec(floatType, m)
+	buildDiscriminator := vector.NewVec(types.T_int32.ToType(), m)
+	probeDiscriminator := vector.NewVec(types.T_int32.ToType(), m)
 	vectors := []*vector.Vector{buildFloat, probeFloat, buildDiscriminator, probeDiscriminator}
 	defer func() {
 		for _, vec := range vectors {
@@ -810,8 +810,8 @@ func TestStringHashMapCanonicalizesFullyGroupedKeys(t *testing.T) {
 	require.NoError(t, hashMap.SetGroupingAware())
 	defer hashMap.Free()
 
-	build := vector.NewVec(types.T_int32.ToType())
-	probe := vector.NewVec(types.T_int32.ToType())
+	build := vector.NewVec(types.T_int32.ToType(), mp)
+	probe := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(build, int32(111), false, mp))
 	require.NoError(t, vector.AppendFixed(probe, int32(222), false, mp))
 	build.GetGrouping().Add(0)
@@ -878,7 +878,7 @@ func TestStringHashIteratorAccountedGrowthCapacityBoundary(t *testing.T) {
 			iterator.keyBufferMP = mp
 			iterator.keyBufferAllocation = allocation
 			iterator.keyBuffer = iterator.keyBuffer[:0]
-			vec := vector.NewVec(types.T_varchar.ToType())
+			vec := vector.NewVec(types.T_varchar.ToType(), mp)
 			require.NoError(t, vector.AppendBytes(
 				vec,
 				make([]byte, payloadSize),
@@ -917,7 +917,7 @@ func TestGroupingAwareStringHashMapSeparatesRawSentinelBytes(t *testing.T) {
 	require.NoError(t, hashMap.SetGroupingAware())
 	defer hashMap.Free()
 
-	raw := vector.NewVec(types.T_uint8.ToType())
+	raw := vector.NewVec(types.T_uint8.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(raw, uint8(2), false, mp))
 	grouping := vector.NewRollupConst(types.T_uint8.ToType(), 1, mp)
 	defer raw.Free(mp)
@@ -942,7 +942,7 @@ func TestGroupingAwareStringHashMapFlatFixedFastPath(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, hashMap.SetGroupingAware())
 
-		vec := vector.NewVec(types.T_int32.ToType())
+		vec := vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(
 			vec, []int32{7, 11, 13}, nil, mp))
 		itr := hashMap.NewIterator().(*strHashmapIterator)
@@ -983,7 +983,7 @@ func TestNullableStringHashMapTreatsGroupingRowsAsSentinel(t *testing.T) {
 	require.NoError(t, err)
 	defer hashMap.Free()
 
-	partial := vector.NewVec(types.T_int32.ToType())
+	partial := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(
 		partial,
 		[]int32{7, 7, 9},
@@ -1042,7 +1042,7 @@ func TestStringHashMapProbeGroupingDoesNotMatchRawKey(t *testing.T) {
 	hashMap, err := NewStrHashMap(false, mp)
 	require.NoError(t, err)
 	defer hashMap.Free()
-	raw := vector.NewVec(types.T_uint8.ToType())
+	raw := vector.NewVec(types.T_uint8.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(raw, uint8(2), false, mp))
 	grouping := vector.NewRollupConst(types.T_uint8.ToType(), 1, mp)
 	defer raw.Free(mp)
@@ -1061,7 +1061,7 @@ func TestGroupingAwareStringHashMapRoundTripRetainsKeyGrammar(t *testing.T) {
 	original, err := NewStrHashMap(false, mp)
 	require.NoError(t, err)
 	require.NoError(t, original.SetGroupingAware())
-	raw := vector.NewVec(types.T_uint8.ToType())
+	raw := vector.NewVec(types.T_uint8.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(raw, uint8(2), false, mp))
 	defer raw.Free(mp)
 	_, _, err = original.NewIterator().Insert(0, 1, []*vector.Vector{raw})
@@ -1087,8 +1087,8 @@ func TestStringHashMapWideVarlenaLengthsDoNotCollide(t *testing.T) {
 	defer hashMap.Free()
 
 	large := make([]byte, 1<<16)
-	left := vector.NewVec(types.T_binary.ToType())
-	right := vector.NewVec(types.T_binary.ToType())
+	left := vector.NewVec(types.T_binary.ToType(), mp)
+	right := vector.NewVec(types.T_binary.ToType(), mp)
 	require.NoError(t, vector.AppendBytesList(left, [][]byte{large, nil}, nil, mp))
 	require.NoError(t, vector.AppendBytesList(right, [][]byte{nil, large}, nil, mp))
 	defer left.Free(mp)
@@ -1107,8 +1107,8 @@ func TestStringHashMapConstAndFlatVarlenaUseSameKey(t *testing.T) {
 	for _, buildConst := range []bool{false, true} {
 		hashMap, err := NewStrHashMap(true, mp)
 		require.NoError(t, err)
-		build := vector.NewVec(types.T_varchar.ToType())
-		probe := vector.NewVec(types.T_varchar.ToType())
+		build := vector.NewVec(types.T_varchar.ToType(), mp)
+		probe := vector.NewVec(types.T_varchar.ToType(), mp)
 		if buildConst {
 			build, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte("abc"), 1, mp)
 			require.NoError(t, err)
@@ -1147,7 +1147,7 @@ func TestHashMapIteratorsRejectMalformedRowShapes(t *testing.T) {
 		},
 	} {
 		m, iterator := makeIterator()
-		short := vector.NewVec(types.T_int32.ToType())
+		short := vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(short, int32(1), false, mp))
 		for _, vecs := range [][]*vector.Vector{
 			nil,
@@ -1284,16 +1284,16 @@ func makeFloat64HashMapShapeVectors(
 	floatType := types.T_float64.ToType()
 	switch vectorKind {
 	case "flat":
-		build := vector.NewVec(floatType)
-		probe := vector.NewVec(floatType)
+		build := vector.NewVec(floatType, m)
+		probe := vector.NewVec(floatType, m)
 		require.NoError(t, vector.AppendFixed(build, float64(123), false, m))
 		require.NoError(t, vector.AppendFixed(build, float64(0), false, m))
 		require.NoError(t, vector.AppendFixed(probe, float64(456), false, m))
 		require.NoError(t, vector.AppendFixed(probe, math.Copysign(0, -1), false, m))
 		return build, probe
 	case "flat-null":
-		build := vector.NewVec(floatType)
-		probe := vector.NewVec(floatType)
+		build := vector.NewVec(floatType, m)
+		probe := vector.NewVec(floatType, m)
 		require.NoError(t, vector.AppendFixed(build, float64(0), false, m))
 		require.NoError(t, vector.AppendFixed(build, float64(99), true, m))
 		require.NoError(t, vector.AppendFixed(probe, math.Copysign(0, -1), false, m))
@@ -1322,16 +1322,16 @@ func makeFloat32HashMapShapeVectors(
 	floatType.Scale = 2
 	switch vectorKind {
 	case "flat":
-		build := vector.NewVec(floatType)
-		probe := vector.NewVec(floatType)
+		build := vector.NewVec(floatType, m)
+		probe := vector.NewVec(floatType, m)
 		require.NoError(t, vector.AppendFixed(build, float32(123), false, m))
 		require.NoError(t, vector.AppendFixed(build, float32(1.234), false, m))
 		require.NoError(t, vector.AppendFixed(probe, float32(456), false, m))
 		require.NoError(t, vector.AppendFixed(probe, float32(1.23), false, m))
 		return build, probe
 	case "flat-null":
-		build := vector.NewVec(floatType)
-		probe := vector.NewVec(floatType)
+		build := vector.NewVec(floatType, m)
+		probe := vector.NewVec(floatType, m)
 		require.NoError(t, vector.AppendFixed(build, float32(1.234), false, m))
 		require.NoError(t, vector.AppendFixed(build, float32(99), true, m))
 		require.NoError(t, vector.AppendFixed(probe, float32(1.23), false, m))
@@ -1339,8 +1339,8 @@ func makeFloat32HashMapShapeVectors(
 		return build, probe
 	case "flat-null-offset-unscaled":
 		floatType.Scale = 0
-		build := vector.NewVec(floatType)
-		probe := vector.NewVec(floatType)
+		build := vector.NewVec(floatType, m)
+		probe := vector.NewVec(floatType, m)
 		require.NoError(t, vector.AppendFixed(build, float32(123), false, m))
 		require.NoError(t, vector.AppendFixed(build, float32(1.25), false, m))
 		require.NoError(t, vector.AppendFixed(build, float32(99), true, m))
@@ -1381,7 +1381,7 @@ func makeFloatHashMapKeys(
 		discriminator, err = vector.NewConstFixed(intType, int64(7), floatVec.Length(), m)
 		require.NoError(t, err)
 	} else {
-		discriminator = vector.NewVec(intType)
+		discriminator = vector.NewVec(intType, m)
 		for row := 0; row < floatVec.Length(); row++ {
 			require.NoError(t, vector.AppendFixed(discriminator, int64(7), false, m))
 		}
@@ -1568,7 +1568,7 @@ func newVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 }
 
 func newInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int8) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -1592,7 +1592,7 @@ func newInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int8
 }
 
 func newInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int16) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -1616,7 +1616,7 @@ func newInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int
 }
 
 func newInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int32) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -1640,7 +1640,7 @@ func newInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int
 }
 
 func newInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int64) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -1664,7 +1664,7 @@ func newInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int
 }
 
 func newUInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []uint32) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -1688,7 +1688,7 @@ func newUInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []ui
 }
 
 func newDecimal64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Decimal64) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -1714,7 +1714,7 @@ func newDecimal64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs [
 }
 
 func newDecimal128Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Decimal128) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
@@ -1739,7 +1739,7 @@ func newDecimal128Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs 
 }
 
 func newStringVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []string) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if err := vector.AppendBytes(vec, []byte(vs[i]), false, m); err != nil {
@@ -1907,4 +1907,63 @@ func TestStrHashMap_MarshalUnmarshal(t *testing.T) {
 		}
 	})
 
+}
+
+func TestStrHashMapVecBlockKeysStayInReservedBuffer(t *testing.T) {
+	const dim = 768
+	row := make([]float32, dim)
+	for i := range row {
+		row[i] = float32(i%13) - 6
+	}
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		f, _ := oid.BlockScaledFormat()
+		cell, err := types.AppendBlockScaled(nil, f, row)
+		require.NoError(t, err)
+		for _, shape := range []string{"flat", "nullable", "const"} {
+			t.Run(fmt.Sprintf("%s/%s", oid, shape), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				typ := types.New(oid, dim, 0)
+				var vec *vector.Vector
+				if shape == "const" {
+					vec, err = vector.NewConstBytes(typ, cell, 3, mp)
+					require.NoError(t, err)
+				} else {
+					vec = vector.NewVec(typ, mp)
+					for i := 0; i < 3; i++ {
+						require.NoError(t, vector.AppendBytes(vec, cell, shape == "nullable" && i == 1, mp))
+					}
+				}
+				m, err := NewStrHashMap(shape == "nullable", mp)
+				require.NoError(t, err)
+				itr := m.NewIterator().(*strHashmapIterator)
+				require.NoError(t, itr.prepareHashKeys([]*vector.Vector{vec}, 0, 3))
+				buf := itr.keyBuffer
+				reserved := make([]int, 3)
+				for i := range reserved {
+					reserved[i] = cap(itr.keys[i])
+				}
+				itr.encodeHashKeys([]*vector.Vector{vec}, 0, 3)
+				// at reports the offset of key's first byte in buf, or -1 when key lies elsewhere
+				at := func(key []byte) int {
+					for j := range buf {
+						if &buf[j] == &key[0] {
+							return j
+						}
+					}
+					return -1
+				}
+				for i := 0; i < 3; i++ {
+					if shape == "nullable" && i == 1 {
+						continue
+					}
+					require.Greater(t, len(itr.keys[i]), len(cell), "row %d", i)
+					off := at(itr.keys[i])
+					require.True(t, off >= 0 && off+len(itr.keys[i]) <= len(buf), "row %d key left the accounted buffer", i)
+					require.Equal(t, reserved[i], cap(itr.keys[i]), "row %d", i)
+				}
+				m.Free()
+				vec.Free(mp)
+			})
+		}
+	}
 }

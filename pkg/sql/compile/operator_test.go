@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -98,6 +99,25 @@ func TestDupOperatorUnionAllMarker(t *testing.T) {
 	sequential := unionall.NewArgument().WithSequentialBranches(2)
 	defer sequential.Release()
 	require.Panics(t, func() { dupOperator(sequential, 0, 1) })
+}
+
+func TestCompleteKeyShuffleCloneAndRemoteBoundary(t *testing.T) {
+	c := NewMockCompile(t)
+	defer c.proc.Free()
+	source := shuffle.NewArgument()
+	defer source.Release()
+	source.BucketNum = 4
+	source.DrainAllBuckets = true
+	source.ShuffleType = int32(plan.ShuffleType_Hash)
+	source.ShuffleKeyColumns = []int32{0, 2}
+	clone := dupOperator(source, 0, 1).(*shuffle.Shuffle)
+	defer clone.Release()
+	defer clone.Free(c.proc, false, nil)
+	require.Equal(t, source.ShuffleKeyColumns, clone.ShuffleKeyColumns)
+	clone.ShuffleKeyColumns[0] = 1
+	require.Equal(t, int32(0), source.ShuffleKeyColumns[0])
+	_, _, err := convertToPipelineInstruction(source, c.proc, &scopeContext{}, 1)
+	require.ErrorContains(t, err, "coordinator-local")
 }
 
 func TestConstructMergeGroupCarriesEmptyGroupingSetMetadata(t *testing.T) {
@@ -423,7 +443,7 @@ func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
 func TestConstructAggregateConfigPreparedPercentile(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("0.25"), false, proc.Mp()))
 	defer params.Free(proc.Mp())
 	proc.SetPrepareParams(params)
@@ -481,7 +501,7 @@ func TestConstructAggregateConfigPreparedPercentileExpression(t *testing.T) {
 			original := plan2.DeepCopyExpr(bound.GetF().Args[1])
 
 			check := func(param []byte, isNull bool) ([]byte, error) {
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendBytes(params, param, isNull, proc.Mp()))
 				proc.SetPrepareParams(params)
 				baseline := proc.Mp().CurrNB()
@@ -522,7 +542,7 @@ func TestConstructAggregateConfigPreparedPercentileExpression(t *testing.T) {
 func TestConstructAggregateConfigPreparedPercentileExpressionDivisionByZero(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("50"), false, proc.Mp()))
 	defer params.Free(proc.Mp())
 	proc.SetPrepareParams(params)
@@ -580,7 +600,7 @@ func TestConstructAggregateConfigPreparedDecimalPercentilePreservesPrecision(t *
 			require.Equal(t, int32(types.T_decimal128), bound.GetF().Args[1].Typ.Id)
 
 			check := func(param string) ([]byte, error) {
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendBytes(params, []byte(param), false, proc.Mp()))
 				proc.SetPrepareParams(params)
 				baseline := proc.Mp().CurrNB()
@@ -632,7 +652,7 @@ func TestPreflightPercentileConfigsReturnsPreparedValueError(t *testing.T) {
 			node := &plan.Node{AggList: []*plan.Expr{bound}}
 
 			check := func(param []byte, isNull bool) error {
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendBytes(params, param, isNull, proc.Mp()))
 				proc.SetPrepareParams(params)
 				baseline := proc.Mp().CurrNB()
@@ -651,7 +671,7 @@ func TestPreflightPercentileConfigsReturnsPreparedValueError(t *testing.T) {
 			require.ErrorContains(t, err,
 				"percentile argument of "+test.function+" cannot be NULL")
 
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, []byte("0.25"), false, proc.Mp()))
 			proc.SetPrepareParams(params)
 			baseline := proc.Mp().CurrNB()
@@ -693,7 +713,7 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 			)
 			require.NoError(t, err)
 			defer stmt.Free()
-			queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+			queryPlan, err := plan2.BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 
 			var percentileFn *plan.Function
@@ -728,7 +748,7 @@ func TestConstructAggregateConfigApproxPercentileNormalizesStaticCast(t *testing
 		"select approx_percentile(0.5) within group (order by n_nationkey) from nation", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+	queryPlan, err := plan2.BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	var percentileFn *plan.Function
@@ -790,10 +810,63 @@ func TestDupHashBuildPreservesNullTracking(t *testing.T) {
 	source := hashbuild.NewArgument()
 	defer source.Release()
 	source.TrackNullKeys = true
+	source.AuxiliaryRowIdColIdx = 4
 
 	duplicated := dupOperator(source, 0, 1).(*hashbuild.HashBuild)
 	defer duplicated.Release()
 	require.True(t, duplicated.TrackNullKeys)
+	require.Equal(t, source.AuxiliaryRowIdColIdx, duplicated.AuxiliaryRowIdColIdx)
+}
+
+func TestAuxiliaryArbitrationRemoteCodec(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	ctx := &scopeContext{id: 1}
+	for _, buildMode := range []bool{false, true} {
+		t.Run(map[bool]string{false: "join", true: "build"}[buildMode], func(t *testing.T) {
+			intType := types.T_int32.ToType()
+			key := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			var original vm.Operator
+			if buildMode {
+				op := hashbuild.NewArgument()
+				op.Conditions = []*plan.Expr{key}
+				op.NeedHashMap, op.NeedBatches, op.NeedAllocateSels = true, true, true
+				op.IsDedup, op.OnDuplicateAction = true, plan.Node_IGNORE
+				op.DelColIdx, op.DedupDeleteMarkerColIdx, op.AuxiliaryRowIdColIdx = 1, 2, 4
+				original = op
+			} else {
+				op := dedupjoin.NewArgument()
+				op.Conditions = [][]*plan.Expr{{key}, {key}}
+				op.LeftTypes = []types.Type{intType}
+				op.RightTypes = []types.Type{intType, intType, types.T_bool.ToType(), intType}
+				op.Result = []colexec.ResultPos{colexec.NewResultPos(1, 3)}
+				op.OnDuplicateAction = plan.Node_IGNORE
+				op.DelColIdx, op.DedupDeleteMarkerColIdx, op.AuxiliaryRowIdColIdx = 1, 2, 4
+				original = op
+			}
+			defer original.Release()
+			_, instruction, err := convertToPipelineInstruction(original, proc, ctx, 1)
+			require.NoError(t, err)
+			data, err := instruction.Marshal()
+			require.NoError(t, err)
+			var wire pipeline.Instruction
+			require.NoError(t, wire.Unmarshal(data))
+			restored, err := convertToVmOperator(&wire, ctx, nil)
+			require.NoError(t, err)
+			defer restored.Release()
+			if buildMode {
+				op := restored.(*hashbuild.HashBuild)
+				require.Equal(t, int32(4), op.AuxiliaryRowIdColIdx)
+				require.Equal(t, int32(2), op.DedupDeleteMarkerColIdx)
+				require.Equal(t, int32(1), op.DelColIdx)
+			} else {
+				op := restored.(*dedupjoin.DedupJoin)
+				require.Equal(t, int32(4), op.AuxiliaryRowIdColIdx)
+				require.Equal(t, int32(2), op.DedupDeleteMarkerColIdx)
+				require.Equal(t, int32(1), op.DelColIdx)
+			}
+		})
+	}
 }
 
 func TestDupSetOperatorPreservesPhysicalEqualityKeys(t *testing.T) {
@@ -1559,6 +1632,7 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 
 func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 	op := dedupjoin.NewArgument()
+	op.AuxiliaryRowIdColIdx = 4
 
 	dupCtx := newOperatorDupContext()
 	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*dedupjoin.DedupJoin)
@@ -1566,8 +1640,11 @@ func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 
 	require.Nil(t, op.Mailbox, "duplicating must not mutate the reusable template")
 	require.Same(t, dup1.Mailbox, dup2.Mailbox)
+	require.Equal(t, op.AuxiliaryRowIdColIdx, dup1.AuxiliaryRowIdColIdx)
+	require.Equal(t, op.AuxiliaryRowIdColIdx, dup2.AuxiliaryRowIdColIdx)
 	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*dedupjoin.DedupJoin)
 	require.NotSame(t, dup1.Mailbox, nextGeneration.Mailbox)
+	require.Equal(t, op.AuxiliaryRowIdColIdx, nextGeneration.AuxiliaryRowIdColIdx)
 }
 
 func TestDupOperatorHashJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
@@ -1817,7 +1894,7 @@ func TestGetPercentileConfigRejectsInvalidVectors(t *testing.T) {
 	require.NoError(t, err)
 	defer mpool.DeleteMPool(mp)
 
-	flat := vector.NewVec(types.T_float64.ToType())
+	flat := vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(flat, 0.5, false, mp))
 	nullVec := vector.NewConstNull(types.T_float64.ToType(), 1, mp)
 	unsupported, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("0.5"), 1, mp)

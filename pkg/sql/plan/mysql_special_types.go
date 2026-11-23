@@ -881,6 +881,33 @@ func mysqlSpecialTypeFromProvenance(provenance OutputColumnProvenance) *plan.Typ
 	return DeepCopyType(&provenance.Source.Metadata.Typ)
 }
 
+func enumSetResultTypeFromProvenance(provenance OutputColumnProvenance) *plan.Type {
+	if provenance.EnumSetResultType != nil {
+		return DeepCopyType(provenance.EnumSetResultType)
+	}
+	return mysqlSpecialTypeFromProvenance(provenance)
+}
+
+// captureEnumSetResultTypes snapshots declared field identity before rewrites
+// can remove a display adapter (including empty plans). Ordering provenance is
+// deliberately not used: it can survive UNION even when field identity does not.
+func (builder *QueryBuilder) captureEnumSetResultTypes(ctx *BindContext) {
+	if builder.qry.StmtType != plan.Query_SELECT {
+		return
+	}
+	builder.qry.EnumSetResultTypes = nil
+	for i := range ctx.headings {
+		typ := enumSetResultTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i)))
+		if typ == nil {
+			continue
+		}
+		if builder.qry.EnumSetResultTypes == nil {
+			builder.qry.EnumSetResultTypes = make([]plan.Type, len(ctx.headings))
+		}
+		builder.qry.EnumSetResultTypes[i] = *typ
+	}
+}
+
 func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {
 	return left != nil && right != nil && left.Id == right.Id && left.Enumvalues == right.Enumvalues
 }
@@ -1429,20 +1456,28 @@ func wrapAstExprForMySQLSpecialType(ctx context.Context, targetType plan.Type, a
 		return astExpr, nil
 	}
 
-	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
-	boundExpr, err := binder.BindExpr(astExpr, 0, false)
-	if err != nil {
-		return nil, err
-	}
-
 	_, valueToIndex, indexValueToIndex, err := mysqlSpecialTypeFuncNames(&targetType)
 	if err != nil {
 		return nil, err
 	}
 
 	funcName := valueToIndex
-	if types.T(boundExpr.Typ.Id).IsInteger() {
-		funcName = indexValueToIndex
+	// The UPDATE assignment is first projected through a SELECT. A parameter
+	// marker must stay in that SELECT until its prepare context or execution
+	// binding is available; the standalone binder below has neither.
+	marker, isMarker := unwrapParenExpr(astExpr).(*tree.ParamExpr)
+	if isMarker {
+		astExpr = marker
+	}
+	if !isMarker || preparedSourceBindings(ctx) != nil {
+		binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+		boundExpr, bindErr := binder.BindExpr(astExpr, 0, false)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		if types.T(boundExpr.Typ.Id).IsInteger() {
+			funcName = indexValueToIndex
+		}
 	}
 
 	return &tree.FuncExpr{

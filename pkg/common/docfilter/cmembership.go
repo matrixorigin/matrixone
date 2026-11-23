@@ -19,17 +19,148 @@ package docfilter
 #include "../../../cgo/cbitmap.h"
 #include "../../../cgo/croaring.h"
 #include "../../../cgo/sorted64.h"
+static void *mo_cbitmap_create_keys(uint64_t base, uint64_t nbits) {
+  void *out = NULL;
+  if (mo_cbitmap_create(base, nbits, &out) != MO_CBITMAP_OK) return NULL;
+  return out;
+}
 */
 import "C"
 
 import (
+	"context"
 	"math"
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
+
+// NewForCKeys builds one exact native set from the complete payload. Global
+// cardinality/range choose the representation once; no whole-build Vector or
+// per-row cgo call is needed. The caller owns a payload reference until return.
+func NewForCKeys(ctx context.Context, keys *keycodec.KeyPayload, admission MemoryAdmission) (MembershipFilter, error) {
+	if keys == nil {
+		return nil, moerr.NewInvalidInputNoCtx("docfilter: missing runtime keys")
+	}
+	if keys.ChunkCount() == 1 {
+		var filter MembershipFilter
+		err := keys.Visit(ctx, func(v *vector.Vector) (err error) { filter, err = NewForC(v, admission); return err })
+		return filter, err
+	}
+	var rng integerRange
+	err := keys.Visit(ctx, func(v *vector.Vector) error {
+		r, ok := integerValueRange(v)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("docfilter: C membership needs integer keys")
+		}
+		if r.count == 0 {
+			return nil
+		}
+		if rng.count == 0 {
+			rng = r
+			return nil
+		}
+		rng.count += r.count
+		rng.min = min(rng.min, r.min)
+		rng.max = max(rng.max, r.max)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	base := uint64(0)
+	if CbitmapUseOffset {
+		base = rng.min
+	}
+	if bitCap := cbitmapBitCapForCount(rng.count); rng.count != 0 && bitCap != 0 && rng.max-base < bitCap {
+		span := rng.max - base + 1
+		release, err := acquireMemory(admission, int64(3*8+((span+63)/64)*8))
+		if err != nil {
+			return nil, err
+		}
+		ptr := C.mo_cbitmap_create_keys(C.uint64_t(base), C.uint64_t(span))
+		if ptr == nil {
+			if release != nil {
+				release()
+			}
+			return nil, moerr.NewInternalErrorNoCtx("cbitmap: allocation failed")
+		}
+		filter := &CbitmapFilter{ptr: ptr, refcnt: 1, memoryRelease: release}
+		err = keys.Visit(ctx, func(v *vector.Vector) error {
+			data, length, width, rows, nulls, nullLen := vecFixedArgs(v)
+			status := C.mo_cbitmap_add_fixed(ptr, data, length, width, rows, nulls, nullLen)
+			if status != C.MO_CBITMAP_OK {
+				return moerr.NewInternalErrorNoCtxf("cbitmap: chunk add failed with status %d", int(status))
+			}
+			return nil
+		})
+		if err != nil {
+			filter.Free()
+			return nil, err
+		}
+		return filter, nil
+	}
+	roaringBytes, roaringOK := croaringBuildUpperBound(rng)
+	sortedBytes, sortedOK := csorted64BuildUpperBound(keys.Rows())
+	if !sortedOK {
+		return nil, moerr.NewInvalidInputNoCtx("docfilter: membership size overflow")
+	}
+	if roaringOK && roaringBytes < sortedBytes {
+		release, err := acquireMemory(admission, roaringBytes)
+		if err != nil {
+			return nil, err
+		}
+		ptr := C.mo_croaring_create()
+		if ptr == nil {
+			if release != nil {
+				release()
+			}
+			return nil, moerr.NewInternalErrorNoCtx("croaring: allocation failed")
+		}
+		filter := &CRoaringFilter{ptr: ptr, refcnt: 1, memoryRelease: release}
+		err = keys.Visit(ctx, func(v *vector.Vector) error {
+			data, length, width, rows, nulls, nullLen := vecFixedArgs(v)
+			if !bool(C.mo_croaring_add_fixed(ptr, data, length, width, rows, nulls, nullLen)) {
+				return moerr.NewInternalErrorNoCtx("croaring: chunk add failed")
+			}
+			return nil
+		})
+		if err != nil {
+			filter.Free()
+			return nil, err
+		}
+		C.mo_croaring_run_optimize(ptr)
+		return filter, nil
+	}
+	release, err := acquireMemory(admission, sortedBytes)
+	if err != nil {
+		return nil, err
+	}
+	ptr := C.mo_sorted64_create(C.size_t(keys.Rows()))
+	if ptr == nil {
+		if release != nil {
+			release()
+		}
+		return nil, moerr.NewInternalErrorNoCtx("sorted64: allocation failed")
+	}
+	filter := &CSorted64Filter{ptr: ptr, refcnt: 1, memoryRelease: release}
+	err = keys.Visit(ctx, func(v *vector.Vector) error {
+		data, length, width, rows, nulls, nullLen := vecFixedArgs(v)
+		if !bool(C.mo_sorted64_add_fixed(ptr, C.size_t(keys.Rows()), data, length, width, rows, nulls, nullLen)) {
+			return moerr.NewInternalErrorNoCtx("sorted64: chunk add failed")
+		}
+		return nil
+	})
+	if err != nil {
+		filter.Free()
+		return nil, err
+	}
+	C.mo_sorted64_finalize(ptr)
+	return filter, nil
+}
 
 // Bytes a C-built roaring64 may allocate: per container (struct, array header, ART
 // nodes, allocator overhead; measured at most 96) and per key (2 in an array

@@ -662,8 +662,9 @@ func ewmNumericArgDomain(oid types.T) bool {
 	switch oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64, types.T_decimal64,
-		types.T_decimal128, types.T_decimal256:
+		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	}
 	return false
@@ -710,13 +711,20 @@ func ewmTypeCheck(inputs []types.Type, valueArgs int) checkResult {
 			}
 		}
 	case types.T_varchar, types.T_char:
-		hAfter = 1
-		if len(inputs) <= valueArgs+1 {
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		}
-		h := inputs[valueArgs+1].Oid
-		if h != types.T_any && h != types.T_text && !ewmNumericArgDomain(h) {
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		// A string-typed decay is only the tag form when the slot behind
+		// it can be a half-life (the same marker/numeric domains the
+		// T_text branch admits). Any other shape — a row-independent
+		// conditional (IFNULL(?, 0.5) lowers to CASE) whose prepared
+		// transport publishes VARCHAR — defers the decay-kind verdict to
+		// the per-execution configuration boundary, which parses the
+		// resolved value as the tag or a numeric alpha; the §7 literal
+		// rows keep their bind-time rejections in the window binder.
+		hAfter = 0
+		if len(inputs) > valueArgs+1 {
+			h := inputs[valueArgs+1].Oid
+			if h == types.T_any || h == types.T_text || ewmNumericArgDomain(h) {
+				hAfter = 1
+			}
 		}
 	default:
 		// numeric alpha decay shares the same classification
@@ -737,8 +745,9 @@ func ewmTypeCheck(inputs []types.Type, valueArgs int) checkResult {
 			// adjust / ignoreNA
 		case types.T_int16, types.T_int32, types.T_int64,
 			types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-			types.T_float32, types.T_float64, types.T_decimal64,
-			types.T_decimal128, types.T_decimal256:
+			types.T_float32, types.T_float64,
+			types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256:
 			// permit an integer-valued constant expression to flow; the
 			// per-execution boundary enforces the resolved kinds' values
 		default:
@@ -757,6 +766,22 @@ func checkValueWindowDomain(inputs []types.Type) checkResult {
 	if inputs[0].Oid == types.T_any {
 		targets := append([]types.Type(nil), inputs...)
 		targets[0] = types.T_text.ToType()
+		return newCheckResultWithCast(0, targets)
+	}
+	// Native BIT value-window input adopts the unsigned integer result
+	// domain (issue #32125): LAG/LEAD/FIRST_VALUE/LAST_VALUE/NTH_VALUE over
+	// BIT derive BIGINT UNSIGNED like MySQL, so the operator receives a
+	// genuinely cast uint64 vector and LENGTH/CTAS/VIEW consumers see a
+	// numeric column instead of raw BIT bytes. A three-argument
+	// LAG/LEAD default in the same BIT domain is coerced with the value
+	// argument, mirroring the default's conversion to the result type;
+	// non-BIT defaults, offsets, frames and NULL markers keep their types.
+	if inputs[0].Oid == types.T_bit {
+		targets := append([]types.Type(nil), inputs...)
+		targets[0] = types.T_uint64.ToType()
+		if len(inputs) >= 3 && inputs[2].Oid == types.T_bit {
+			targets[2] = types.T_uint64.ToType()
+		}
 		return newCheckResultWithCast(0, targets)
 	}
 	return newCheckResultWithSuccess(0)

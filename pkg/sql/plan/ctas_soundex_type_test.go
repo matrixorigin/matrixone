@@ -33,7 +33,7 @@ func TestCTASSoundexRetainsDeclaredCapacity(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 
 	var visible []*planpb.ColDef

@@ -173,6 +173,7 @@ func ConvertScalarWithContext(ctx context.Context, value bytejson.ByteJson, targ
 		return Result{Status: StatusStatementError, Err: err}
 	}
 
+	// typeswitch:partial JSON_TABLE targets; buildJSONTable admits no low-precision float type
 	switch target.Oid {
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
@@ -434,7 +435,7 @@ func AppendResult(vec *vector.Vector, result Result, mp *mpool.MPool) (err error
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, 1)
+			err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, 1))
 		}
 	}()
 	if result.Status == StatusJSONNull {
@@ -1208,6 +1209,7 @@ func truncateText(text string, target types.Type) (string, bool) {
 }
 
 func appendValueCompatible(oid types.T, value any) bool {
+	// typeswitch:partial JSON_TABLE targets; buildJSONTable admits no low-precision float type
 	switch oid {
 	case types.T_bool:
 		_, ok := value.(bool)

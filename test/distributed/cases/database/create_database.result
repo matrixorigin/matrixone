@@ -14,7 +14,6 @@ Database
 create_database
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 system
@@ -78,7 +77,6 @@ create_database
 db1
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 system

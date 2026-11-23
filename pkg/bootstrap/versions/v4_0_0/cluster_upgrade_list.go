@@ -51,7 +51,7 @@ var upg_create_mo_task_sql_task = versions.UpgradeEntry{
 	Schema:    catalog.MOTaskDB,
 	TableName: catalog.MOSQLTask,
 	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql:    frontend.MoTaskSQLTaskDDL,
+	UpgSql:    originalSQLTaskDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSQLTask)
 	},
@@ -61,7 +61,7 @@ var upg_create_mo_task_sql_task_run = versions.UpgradeEntry{
 	Schema:    catalog.MOTaskDB,
 	TableName: catalog.MOSQLTaskRun,
 	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql:    frontend.MoTaskSQLTaskRunDDL,
+	UpgSql:    originalSQLTaskRunDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSQLTaskRun)
 	},

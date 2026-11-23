@@ -260,35 +260,14 @@ func TestBitCountVarcharWithIsBin(t *testing.T) {
 		mp,
 	)
 	defer input.Free(mp)
-	input.SetIsBin(true)
 
 	result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
+	result.SetArgumentIsBin([]bool{true})
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(input.Length()))
 
 	require.NoError(t, BitCountNonBinaryString([]*vector.Vector{input}, result, proc, input.Length(), nil))
 	require.Equal(t, []uint64{7, 1, 0, 8}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
-}
-
-func TestBitCountVarcharUsesRowStringDomain(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	mp := proc.Mp()
-	input := testutil.MakeVarlenaVector(
-		[][]byte{[]byte("64"), []byte("64"), []byte("64")},
-		nil,
-		types.T_varchar.ToType(),
-		mp,
-	)
-	defer input.Free(mp)
-	require.NoError(t, input.SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, mp))
-	require.NoError(t, input.SetRuntimeStringDomainAtWithMP(1, types.RuntimeStringText, mp))
-
-	result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
-	defer result.Free()
-	require.NoError(t, result.PreExtendAndReset(input.Length()))
-
-	require.NoError(t, BitCountNonBinaryString([]*vector.Vector{input}, result, proc, input.Length(), nil))
-	require.Equal(t, []uint64{7, 1, 1}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
 }
 
 func TestBitCountTypeCheck(t *testing.T) {
@@ -324,17 +303,16 @@ func TestBitCountTypeCheck(t *testing.T) {
 
 func TestBitCountStringWarnings(t *testing.T) {
 	for _, tc := range []struct {
-		name                        string
-		values                      []string
-		want                        []uint64
-		nulls                       []bool
-		mask                        *FunctionSelectList
-		binary, rowBinary, constant bool
-		warnings                    int
+		name             string
+		values           []string
+		want             []uint64
+		nulls            []bool
+		mask             *FunctionSelectList
+		binary, constant bool
+		warnings         int
 	}{
 		{name: "text", values: []string{"3x", "2.9", "3 ", "", "bad", "3x"}, want: []uint64{2, 1, 2, 0, 0, 0}, nulls: []bool{false, false, false, false, false, true}, warnings: 3},
 		{name: "binary_literal", values: []string{"3x"}, want: []uint64{8}, binary: true},
-		{name: "runtime_domains", values: []string{"3x", "3x", "3"}, want: []uint64{8, 2, 2}, rowBinary: true, warnings: 1},
 		{name: "partial_selection", values: []string{"bad", "3x", "bad"}, want: []uint64{0, 2, 0}, mask: &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}}, warnings: 1},
 		{name: "constant_rows", values: []string{"3x"}, want: []uint64{2, 2, 2}, constant: true, warnings: 3},
 	} {
@@ -348,11 +326,7 @@ func TestBitCountStringWarnings(t *testing.T) {
 			}
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), tc.values, tc.nulls)}, NewFunctionTestResult(types.T_uint64.ToType(), false, tc.want, outputNulls), BitCountNonBinaryString).WithSelectList(tc.mask)
 			defer fc.Free()
-			fc.parameters[0].SetIsBin(tc.binary)
-			if tc.rowBinary {
-				require.NoError(t, fc.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
-				require.NoError(t, fc.parameters[0].SetRuntimeStringDomainAtWithMP(1, types.RuntimeStringText, proc.Mp()))
-			}
+			fc.result.SetArgumentIsBin([]bool{tc.binary})
 			if tc.constant {
 				fc.parameters[0].SetClass(vector.CONSTANT)
 				fc.fnLength = 3

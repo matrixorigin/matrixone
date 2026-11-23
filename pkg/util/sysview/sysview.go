@@ -17,12 +17,9 @@ package sysview
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -53,7 +50,7 @@ var (
 		InformationSchemaCharacterSetsDDL,
 		InformationSchemaCharacterSetsData,
 		InformationSchemaTriggersDDL,
-		InformationSchemaTablesV118DDL,
+		InformationSchemaTablesCurrentDDL,
 		InformationSchemaPartitionsDDL,
 		InformationSchemaViewsDDL,
 		// The current STATISTICS identity reports retained prefix lengths
@@ -79,70 +76,6 @@ var (
 	}
 )
 
-func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion126 {
-		return InitInformationSchemaSysTables
-	}
-
-	includeCheckConstraints := protocol >= defines.MORPCVersion16
-	includeCurrentRoles := protocol >= defines.MORPCVersion41
-	sqls := make([]string, 0, len(InitInformationSchemaSysTables))
-	for _, sql := range InitInformationSchemaSysTables {
-		switch sql {
-		case InformationSchemaSchemataDDL:
-			if protocol < defines.MORPCVersion118 {
-				sql = InformationSchemaSchemataLegacyDDL
-			}
-		case InformationSchemaTablesV118DDL:
-			if protocol < defines.MORPCVersion118 {
-				if protocol < defines.MORPCVersion46 {
-					sql = InformationSchemaTablesV41DDL
-				} else {
-					sql = InformationSchemaTablesDDL
-				}
-			}
-		case InformationSchemaColumnsDDL:
-			if protocol >= defines.MORPCVersion109 {
-				// Native Unicode collation identities are a separate v109
-				// contract from the v126 VIEWS function definitions.
-				sql = InformationSchemaColumnsDDL
-			} else if protocol >= defines.MORPCVersion100 {
-				sql = InformationSchemaColumnsV100DDL()
-			} else if protocol >= defines.MORPCVersion58 {
-				sql = InformationSchemaColumnsV58DDL()
-			} else if protocol >= defines.MORPCVersion46 {
-				sql = InformationSchemaColumnsV46DDL
-			} else {
-				sql = InformationSchemaColumnsV41DDL
-			}
-		case InformationSchemaViewsDDL:
-			sql = InformationSchemaViewsLegacyDDL
-		}
-		if !includeCheckConstraints {
-			switch sql {
-			case InformationSchemaCheckConstraintsDDL:
-				continue
-			case InformationSchemaTableConstraintsDDL:
-				sql = InformationSchemaTableConstraintsLegacyDDL
-			}
-		}
-		if !includeCurrentRoles {
-			sql = informationSchemaMetadataVisibilityCompatibilityDDL(sql)
-		}
-		sqls = append(sqls, sql)
-	}
-	return sqls
-}
-
-func informationSchemaMetadataVisibilityCompatibilityDDL(sql string) string {
-	return strings.Replace(
-		sql,
-		informationSchemaMetadataVisibilityCTE(),
-		informationSchemaMetadataVisibilityCompatibilityCTE(),
-		1,
-	)
-}
-
 func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 	if err := initMysqlTables(ctx, txn); err != nil {
 		return err
@@ -151,40 +84,6 @@ func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 		return err
 	}
 	return nil
-}
-
-// informationSchemaInitProtocol selects the catalog definition that this CN
-// is allowed to author during system bootstrap. A CN may advertise v126 before
-// its local catalog admission fence has completed; in that window the current
-// VIEWS definition would be rejected by persisted-expression admission. Keep
-// the VIEWS-specific predecessor while retaining the newer independent system
-// view contracts selected by their own protocol floors.
-func informationSchemaInitProtocol(txn executor.TxnExecutor) int64 {
-	protocol := int64(defines.MORPCLatestVersion)
-	if txn == nil || txn.Txn() == nil {
-		return protocol
-	}
-	rt := runtime.ServiceRuntime(txn.Txn().TxnOptions().CN)
-	if rt == nil {
-		return protocol
-	}
-	if value, present := rt.GetGlobalVariables(runtime.MOProtocolVersion); present {
-		if current, valid := value.(int64); valid {
-			protocol = current
-		}
-	}
-	if protocol >= defines.MORPCVersion126 {
-		if value, present := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor); present {
-			floor, valid := value.(int64)
-			if !valid || floor < defines.MORPCVersion126 {
-				// Defer only VIEWS. Main's database-default prerequisites are
-				// already present; TABLES is deferred separately below until
-				// post-admission publication by InitSystemViews.
-				return defines.MORPCVersion118
-			}
-		}
-	}
-	return protocol
 }
 
 // Initialize system tables under the `mysql` database for compatibility with MySQL
@@ -213,14 +112,6 @@ func initMysqlTables(ctx context.Context, txn executor.TxnExecutor) error {
 
 // Initialize the system view under the `information_schema` database for compatibility with MySQL
 func initInformationSchemaTables(ctx context.Context, txn executor.TxnExecutor) error {
-	return initInformationSchemaTablesForProtocol(ctx, txn, informationSchemaInitProtocol(txn))
-}
-
-func initInformationSchemaTablesForProtocol(
-	ctx context.Context,
-	txn executor.TxnExecutor,
-	protocol int64,
-) error {
 	_, err := txn.Exec(CreateDatabaseFormat+InformationDBConst, executor.StatementOption{})
 	if err != nil {
 		return err
@@ -234,11 +125,10 @@ func initInformationSchemaTablesForProtocol(
 	}()
 
 	begin := time.Now()
-	for _, sql := range InitInformationSchemaSysTablesForProtocol(protocol) {
-		// Bootstrap prerequisites precede the v118 table-collation fence.
-		// InitSystemViews publishes that consumer after catalog admission.
-		if sql == InformationSchemaTablesV118DDL {
-			sql = InformationSchemaTablesDDL
+	for _, sql := range InitInformationSchemaSysTables {
+		// These definitions require the post-admission authoring floor.
+		if sql == InformationSchemaTablesCurrentDDL || sql == InformationSchemaViewsDDL {
+			continue
 		}
 		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("[information_schema] init information_schema tables error: %v, sql: %s", err, sql))

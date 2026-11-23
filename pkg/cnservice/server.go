@@ -80,37 +80,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	rssCacheFamilyEvictTimeout   = 10 * time.Second
-	rssCacheAdmissionPressureTTL = 2 * time.Minute
-	rssCachePressureTargetOwner  = "cn-rss"
-	bootstrapRetryInterval       = 100 * time.Millisecond
-)
-
-var (
-	evictMemoryCachesToCapacityPercent = fileservice.EvictMemoryCachesToCapacityPercent
-)
-
-func makeRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
-	return func(ctx context.Context, targetPercent int64) {
-		memoryCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseRSSCacheEvict)
-		defer cancel()
-		evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
-	}
-}
-
-func setRSSCachePressureTarget(targetPercent int64) {
-	fileservice.SetMemoryCachePressureTargetPercentByOwner(
-		rssCachePressureTargetOwner,
-		targetPercent,
-		time.Now().Add(rssCacheAdmissionPressureTTL),
-	)
-}
-
-func clearRSSCachePressureTarget() {
-	fileservice.ClearMemoryCachePressureTargetByOwner(rssCachePressureTargetOwner)
-}
-
 func NewService(
 	cfg *Config,
 	ctx context.Context,
@@ -268,16 +237,12 @@ func NewService(
 		return nil, err
 	}
 
+	srv.rssPressure = rscthrottler.NewRSSPressureSource()
 	srv.CNMemoryThrottler = rscthrottler.NewMemThrottler(
 		"CNFlushS3",
 		90.0/100.0,
 		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
-		rscthrottler.WithRSSScavenging(),
-		rscthrottler.WithRSSCachePressureTarget(
-			setRSSCachePressureTarget,
-			clearRSSCachePressureTarget,
-		),
-		rscthrottler.WithRSSCacheEvictor(makeRSSCacheEvictor(rssCacheFamilyEvictTimeout)),
+		rscthrottler.WithRSSPressureSource(srv.rssPressure),
 	)
 
 	srv.pu.LockService = srv.lockService
@@ -523,9 +488,9 @@ func (s *service) StartContext(parent context.Context) (err error) {
 		if err != nil || complete {
 			return err
 		}
-		// Fresh derived schema also publishes the C03 TABLES function. Existing
-		// complete clusters keep the skip path above during a rolling upgrade.
-		if err = s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion118)); err != nil {
+		// Fresh derived schema publishes TABLES and VIEWS only after their
+		// persisted-expression authoring requirements are admitted.
+		if err = s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion126)); err != nil {
 			return err
 		}
 		return bootstrap.InitSystemViews(ctx, s.sqlExecutor)
@@ -609,6 +574,7 @@ func (s *service) startContext() context.Context {
 func (s *service) closeService() error {
 	s.closeOnce.Do(func() {
 		defer logutil.LogClose(s.logger, "cnservice")()
+		s.rssPressure.Close()
 
 		s.closeViewMetadataAdmission()
 		// Stop waits for any in-flight periodic heartbeat before teardown. Keep

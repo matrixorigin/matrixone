@@ -85,7 +85,7 @@ func TestParquet_StringToDate(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(types.T_date, 0, 0))
+			vec := vector.NewVec(types.New(types.T_date, 0, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{
 				Id:          int32(types.T_date),
@@ -114,7 +114,7 @@ func TestParquet_StringToDatetimeOptional(t *testing.T) {
 		{parquet.ByteArrayValue([]byte("2024-12-31 23:59:59.123456")).Level(0, 1, 0)},
 	})
 
-	vec := vector.NewVec(types.New(types.T_datetime, 0, 6))
+	vec := vector.NewVec(types.New(types.T_datetime, 0, 6), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_datetime), Scale: 6})
 	require.NotNil(t, mp)
@@ -182,7 +182,7 @@ func TestParquet_StringToTime(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(types.T_time, 0, tc.scale))
+			vec := vector.NewVec(types.New(types.T_time, 0, tc.scale), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{
 				Id:          int32(types.T_time),
@@ -254,7 +254,7 @@ func TestParquet_StringToTimestamp(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(types.T_timestamp, 0, tc.scale))
+			vec := vector.NewVec(types.New(types.T_timestamp, 0, tc.scale), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{
 				Id:          int32(types.T_timestamp),
@@ -327,7 +327,7 @@ func TestParquet_StringToDate_InvalidFormats(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(types.T_date, 0, 0))
+			vec := vector.NewVec(types.New(types.T_date, 0, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{
 				Id:          int32(types.T_date),
@@ -376,7 +376,7 @@ func TestParquet_StringToTime_InvalidFormats(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(types.T_time, 0, 0))
+			vec := vector.NewVec(types.New(types.T_time, 0, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{
 				Id:          int32(types.T_time),
@@ -428,7 +428,7 @@ func TestParquet_StringToTimestamp_InvalidFormats(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+			vec := vector.NewVec(types.New(types.T_timestamp, 0, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{
 				Id:          int32(types.T_timestamp),

@@ -106,6 +106,7 @@ func markNonMatchingNaNs(
 			oid != types.T_array_bf16 && oid != types.T_array_float16 {
 			continue
 		}
+
 		nulls := vec.GetNulls()
 		grouping := vec.GetGrouping()
 		isConst := vec.IsConst()

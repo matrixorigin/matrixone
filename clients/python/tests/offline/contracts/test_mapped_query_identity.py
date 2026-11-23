@@ -6,7 +6,20 @@ import enum
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from sqlalchemy import Column, Enum, Integer, JSON, String, TypeDecorator, create_engine, select
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    Enum,
+    Integer,
+    JSON,
+    MetaData,
+    Numeric,
+    String,
+    Table,
+    TypeDecorator,
+    create_engine,
+    select,
+)
 from sqlalchemy.orm import aliased, declarative_base
 from sqlalchemy.schema import CreateTable
 
@@ -30,6 +43,19 @@ class Encoded(TypeDecorator):
         if value is None:
             return None
         return value[len('encoded:') :] if value.startswith('encoded:') else value
+
+
+class WrappedInteger(TypeDecorator):
+    impl = Integer
+    cache_ok = True
+
+
+class AsyncDriverInteger(TypeDecorator):
+    impl = Integer
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        return Integer() if dialect.driver == 'aiomysql' else Numeric()
 
 
 class State(enum.Enum):
@@ -149,6 +175,89 @@ def test_simplified_types_and_primary_keys(definition, expected):
     table = simplified_table('typed', {'key': definition}, primary_key='key')
     ddl = str(CreateTable(table).compile(dialect=MatrixOneDialect()))
     assert expected in ddl and 'PRIMARY KEY' in ddl and table.c.key.primary_key
+    assert 'AUTO_INCREMENT' not in ddl
+
+
+def test_simplified_integer_primary_key_keeps_implicit_auto_increment():
+    table = simplified_table('typed', {'key': 'int'}, primary_key='key')
+    ddl = str(CreateTable(table).compile(dialect=MatrixOneDialect()))
+    assert 'INTEGER' in ddl and 'PRIMARY KEY' in ddl and 'AUTO_INCREMENT' in ddl
+
+
+@pytest.mark.parametrize(
+    'definition',
+    [
+        WrappedInteger,
+        WrappedInteger(),
+        Integer().with_variant(BigInteger(), 'matrixone'),
+    ],
+)
+def test_simplified_wrapped_integer_primary_key_keeps_implicit_auto_increment(definition):
+    table = simplified_table('typed', {'key': definition}, primary_key='key')
+    ddl = str(CreateTable(table).compile(dialect=MatrixOneDialect()))
+    assert 'PRIMARY KEY' in ddl and 'AUTO_INCREMENT' in ddl
+
+
+def test_simplified_dialect_integer_variant_keeps_sqlalchemy_autoincrement():
+    definition = Numeric().with_variant(Integer(), 'matrixone')
+    table = simplified_table('typed', {'key': definition}, primary_key='key')
+    control = Table('control', MetaData(), Column('key', definition, primary_key=True))
+    actual = str(CreateTable(table).compile(dialect=MatrixOneDialect()))
+    expected = str(CreateTable(control).compile(dialect=MatrixOneDialect()))
+    assert table.c.key.autoincrement == control.c.key.autoincrement == 'auto'
+    assert ('AUTO_INCREMENT' in actual) == ('AUTO_INCREMENT' in expected)
+
+
+def test_implicit_autoincrement_filter_preserves_column_comment():
+    table = Table(
+        'typed',
+        MetaData(),
+        Column('key', Numeric(), primary_key=True, comment='keep AUTO_INCREMENT text'),
+    )
+    ddl = str(CreateTable(table).compile(dialect=MatrixOneDialect()))
+    assert "COMMENT 'keep AUTO_INCREMENT text'" in ddl
+    assert ddl.count('AUTO_INCREMENT') == 1
+
+
+@pytest.mark.asyncio
+async def test_async_create_table_uses_actual_driver_for_implicit_auto_increment():
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from matrixone.sqlalchemy_ext.dialect import adapt_engine_dialect
+
+    sync_dialect = MatrixOneDialect()
+    sync_dialect.driver = 'pymysql'
+    sync_table = simplified_table('sync_typed', {'key': AsyncDriverInteger}, primary_key='key')
+    sync_ddl = str(CreateTable(sync_table).compile(dialect=sync_dialect))
+    assert 'INTEGER' not in sync_ddl and 'AUTO_INCREMENT' not in sync_ddl
+
+    dialect_owner = create_async_engine('mysql+aiomysql://')
+    adapt_engine_dialect(dialect_owner.sync_engine)
+    dialect = dialect_owner.sync_engine.dialect
+    emitted = []
+
+    class Connection:
+        async def execute(self, statement):
+            emitted.append(str(statement.compile(dialect=dialect)))
+
+    class Begin:
+        async def __aenter__(self):
+            return Connection()
+
+        async def __aexit__(self, *args):
+            pass
+
+    class Engine:
+        def begin(self):
+            return Begin()
+
+    client = AsyncClient()
+    client._engine = Engine()
+    try:
+        await client.create_table('typed', {'key': AsyncDriverInteger}, primary_key='key')
+    finally:
+        await dialect_owner.dispose()
+    assert len(emitted) == 1
+    assert 'INTEGER' in emitted[0] and 'PRIMARY KEY' in emitted[0] and 'AUTO_INCREMENT' in emitted[0]
 
 
 def test_unknown_primary_key_fails_instead_of_being_ignored():

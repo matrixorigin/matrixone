@@ -157,6 +157,7 @@ func main() {
 		runner.accessLifecycleCase,
 		runner.concurrentCreateMappingAndDropCase,
 		runner.appendReadAndTimeTravelCase,
+		runner.parquetCodecCase,
 		runner.emptyStringReadCase,
 		runner.partitionFilterCase,
 		runner.yearPartitionDateCase,
@@ -188,7 +189,8 @@ type caseRunner struct {
 }
 
 func (r *caseRunner) setup(ctx context.Context) error {
-	statements := []string{
+	statements := make([]string, 0, 12)
+	statements = append(statements,
 		fmt.Sprintf("DROP DATABASE IF EXISTS %s", ident(r.cfg.Database)),
 		fmt.Sprintf("DROP ICEBERG CATALOG IF EXISTS %s", ident(r.cfg.Catalog)),
 		fmt.Sprintf("CREATE DATABASE %s", ident(r.cfg.Database)),
@@ -223,6 +225,12 @@ func (r *caseRunner) setup(ctx context.Context) error {
   region TEXT
 ) ENGINE = ICEBERG WITH ('catalog'=%s,'namespace'=%s,'table'='mor_accounts','ref'='main','read_mode'='merge_on_read','write_mode'='merge_on_read')`,
 			ident(r.cfg.Database), ident("mor_accounts"), sqlString(r.cfg.Catalog), sqlString(r.cfg.Namespace)),
+	)
+	for _, name := range []string{"codec_default", "codec_zstd", "codec_uncompressed"} {
+		statements = append(statements, fmt.Sprintf(`CREATE EXTERNAL TABLE %s.%s (
+  order_id BIGINT, bucket INT, amount BIGINT, region TEXT
+) ENGINE = ICEBERG WITH ('catalog'=%s,'namespace'=%s,'table'=%s,'ref'='main','read_mode'='append_only','write_mode'='append_only')`,
+			ident(r.cfg.Database), ident(name), sqlString(r.cfg.Catalog), sqlString(r.cfg.Namespace), sqlString(name)))
 	}
 	for _, stmt := range statements {
 		if _, err := r.db.ExecContext(ctx, stmt); err != nil {
@@ -995,6 +1003,27 @@ func (r *caseRunner) appendReadAndTimeTravelCase(ctx context.Context) caseResult
 	return passedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, expected, actual, details)
 }
 
+// parquetCodecCase writes isolated tables for the independent footer/reader check.
+func (r *caseRunner) parquetCodecCase(ctx context.Context) caseResult {
+	var sqls, actual []string
+	expected := []string{"1\t1\t10\trepeat", "2\t1\t20\trepeat", "3\t2\t30\tNULL", "4\t2\t40\t"}
+	for _, name := range []string{"codec_default", "codec_zstd", "codec_uncompressed"} {
+		table := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident(name))
+		insert := fmt.Sprintf("INSERT INTO %s VALUES (1,1,10,'repeat'),(2,1,20,'repeat'),(3,2,30,NULL),(4,2,40,'')", table)
+		selectSQL := fmt.Sprintf("SELECT order_id,bucket,amount,region FROM %s ORDER BY order_id", table)
+		sqls = append(sqls, insert, selectSQL)
+		if _, err := r.db.ExecContext(ctx, insert); err != nil {
+			return failedCase("ICE-CI-E2E-026", "parquet-codec", sqls, expected, actual, err.Error())
+		}
+		rows, err := queryLines(ctx, r.db, selectSQL)
+		actual = append(actual, rows...)
+		if err != nil || !sameLines(expected, rows) {
+			return failedCase("ICE-CI-E2E-026", "parquet-codec", sqls, expected, rows, fmt.Sprintf("SQL readback mismatch: %v", err))
+		}
+	}
+	return passedCase("ICE-CI-E2E-026", "parquet-codec", sqls, expected, actual, nil)
+}
+
 func (r *caseRunner) emptyStringReadCase(ctx context.Context) caseResult {
 	table := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident("append_orders"))
 	sqls := []string{
@@ -1155,6 +1184,12 @@ func seedRESTTables(ctx context.Context, cfg localE2EConfig) error {
 		return err
 	}
 	for _, spec := range e2eTableSpecs(cfg.Namespace) {
+		properties := map[string]string{
+			"format-version": "2", "history.expire.min-snapshots-to-keep": "2", "owner": "matrixone-ci",
+		}
+		if spec.codec != "" {
+			properties["write.parquet.compression-codec"] = spec.codec
+		}
 		_, err := client.CreateTable(ctx, api.CreateTableRequest{
 			CatalogRequest: reqWithPrefix,
 			Namespace:      api.Namespace{cfg.Namespace},
@@ -1162,11 +1197,7 @@ func seedRESTTables(ctx context.Context, cfg localE2EConfig) error {
 			Schema:         spec.schema,
 			PartitionSpec:  spec.partitionSpec,
 			Location:       fmt.Sprintf("%s/%s/%s", strings.TrimRight(cfg.Warehouse, "/"), cfg.Namespace, spec.name),
-			Properties: map[string]string{
-				"format-version":                       "2",
-				"history.expire.min-snapshots-to-keep": "2",
-				"owner":                                "matrixone-ci",
-			},
+			Properties:     properties,
 		})
 		if err != nil {
 			return fmt.Errorf("create Iceberg table %s.%s: %w", cfg.Namespace, spec.name, err)
@@ -1177,6 +1208,7 @@ func seedRESTTables(ctx context.Context, cfg localE2EConfig) error {
 
 type e2eTableSpec struct {
 	name          string
+	codec         string
 	schema        api.Schema
 	partitionSpec api.PartitionSpec
 }
@@ -1209,6 +1241,9 @@ func e2eTableSpecs(namespace string) []e2eTableSpec {
 		{name: "partition_orders", schema: orderSchema, partitionSpec: partitioned},
 		{name: "year_partition_tiny", schema: yearPartitionSchema, partitionSpec: yearPartitioned},
 		{name: "mor_accounts", schema: accountSchema, partitionSpec: api.PartitionSpec{SpecID: 0}},
+		{name: "codec_default", schema: orderSchema, partitionSpec: api.PartitionSpec{SpecID: 0}},
+		{name: "codec_zstd", codec: "zstd", schema: orderSchema, partitionSpec: api.PartitionSpec{SpecID: 0}},
+		{name: "codec_uncompressed", codec: "uncompressed", schema: orderSchema, partitionSpec: api.PartitionSpec{SpecID: 0}},
 	}
 }
 

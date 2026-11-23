@@ -241,9 +241,9 @@ func TestIvfflatEmptyGeneration(t *testing.T) {
 		sqlproc := sqlexec.NewSqlProcess(proc)
 		sqlproc.RelationScanner = &scriptedRelationScanner{run: func(req sqlexec.RelationScanRequest) executor.Result {
 			bat := batch.NewWithSize(3)
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+			bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 2, 0), proc.Mp())
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(7), false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], id, false, mp))
 			require.NoError(t, vector.AppendArray(bat.Vecs[2], []float32{0, 0}, isNull, mp))
@@ -340,10 +340,10 @@ func TestIvfSearchSQLIncludesRequestedColumnsAndPushdown(t *testing.T) {
 		require.Nil(t, sqlproc.IvfMembershipFilter)
 
 		bat := batch.NewWithSize(4)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[3] = vector.NewVec(types.T_bool.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), sqlproc.Proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), sqlproc.Proc.Mp())
+		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), sqlproc.Proc.Mp())
+		bat.Vecs[3] = vector.NewVec(types.T_bool.ToType(), sqlproc.Proc.Mp())
 
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, sqlproc.Proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(1.25), false, sqlproc.Proc.Mp()))
@@ -411,8 +411,8 @@ func TestIvfSearchFloat64Overflow(t *testing.T) {
 	// and any outer predicate (#29040 / #29050), so Search must fail fast.
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), sqlproc.Proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), sqlproc.Proc.Mp())
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, sqlproc.Proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], math.Inf(1), false, sqlproc.Proc.Mp()))
 		bat.SetRowCount(1)
@@ -475,9 +475,9 @@ func TestIvfSearchIncludeModePreservesNullFlagsAndPushesIsNullFilter(t *testing.
 		capturedSQL = sql
 
 		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), sqlproc.Proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), sqlproc.Proc.Mp())
+		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), sqlproc.Proc.Mp())
 
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, sqlproc.Proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(1.25), false, sqlproc.Proc.Mp()))
@@ -537,9 +537,9 @@ func TestIvfSearchIncludeModeOversizedRoundLimit(t *testing.T) {
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		capturedSQL = sql
 		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), sqlproc.Proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), sqlproc.Proc.Mp())
+		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), sqlproc.Proc.Mp())
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, sqlproc.Proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(1.25), false, sqlproc.Proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int32(7), false, sqlproc.Proc.Mp()))
@@ -630,9 +630,9 @@ func TestIvfSearchSequentialCallsDoNotLeakQueryScopedRuntimeState(t *testing.T) 
 		switch len(capturedSQL) {
 		case 1:
 			bat := batch.NewWithSize(3)
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
-			bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), sqlproc.Proc.Mp())
+			bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), sqlproc.Proc.Mp())
+			bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), sqlproc.Proc.Mp())
 
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(7), false, sqlproc.Proc.Mp()))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(0.25), false, sqlproc.Proc.Mp()))
@@ -641,8 +641,8 @@ func TestIvfSearchSequentialCallsDoNotLeakQueryScopedRuntimeState(t *testing.T) 
 			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{bat}}, nil
 		case 2:
 			bat := batch.NewWithSize(2)
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), sqlproc.Proc.Mp())
+			bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), sqlproc.Proc.Mp())
 
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(8), false, sqlproc.Proc.Mp()))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(0.5000000001), false, sqlproc.Proc.Mp()))
@@ -721,13 +721,13 @@ func TestGetBloomFilterUsesRuntimeFilterPayloadForExactPk(t *testing.T) {
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{{UseMembershipFilter: true}}
 
-	keyVec := vector.NewVec(types.T_int64.ToType())
+	keyVec := vector.NewVec(types.T_int64.ToType(), m)
 	require.NoError(t, vector.AppendFixed(keyVec, int64(11), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(keyVec, int64(22), false, proc.Mp()))
 
 	rawPayload, err := keyVec.MarshalBinary()
 	require.NoError(t, err)
-	sqlproc.IvfRuntimeFilterData = rawPayload
+	sqlproc.IvfRuntimeFilterData = testutil.RuntimeKeyPayload(t, rawPayload)
 
 	idx := &IvfflatSearchIndex[float32]{Version: 3}
 	err = idx.getBloomFilter(sqlproc)
@@ -747,7 +747,7 @@ func TestIvfSearchIncludeModeConvertsRuntimePayloadBeforeRunSql(t *testing.T) {
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{{UseMembershipFilter: true}}
 
-	keyVec := vector.NewVec(types.T_int64.ToType())
+	keyVec := vector.NewVec(types.T_int64.ToType(), m)
 	require.NoError(t, vector.AppendFixed(keyVec, int64(42), false, proc.Mp()))
 	rawPayload, err := keyVec.MarshalBinary()
 	require.NoError(t, err)
@@ -759,9 +759,9 @@ func TestIvfSearchIncludeModeConvertsRuntimePayloadBeforeRunSql(t *testing.T) {
 		require.Equal(t, "42", sqlproc.ExactPkFilter)
 
 		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), m)
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), m)
+		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), m)
 
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, sqlproc.Proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(0.125), false, sqlproc.Proc.Mp()))
@@ -791,7 +791,7 @@ func TestIvfSearchIncludeModeConvertsRuntimePayloadBeforeRunSql(t *testing.T) {
 			RankedCentroidIDs: []int64{101},
 		},
 		SearchRoundLimit:  3,
-		RuntimeFilterData: rawPayload,
+		RuntimeFilterData: testutil.RuntimeKeyPayload(t, rawPayload),
 	}
 
 	idx := &IvfflatSearchIndex[float32]{Version: 7}

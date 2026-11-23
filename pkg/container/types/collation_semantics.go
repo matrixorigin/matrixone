@@ -144,11 +144,17 @@ func CompareStringValues(typ Type, left, right []byte) int {
 }
 
 // CompareStringOrderValues is the comparator used by SQL ORDER BY consumers.
-// Native Unicode identities use the same UCA key relation as scalar equality.
-// Legacy CHAR keeps the historical raw-byte order so TopN/merge ordering stays
-// aligned with full sort and peer partitioning; physical/storage callers keep
-// their existing raw-byte contract as well.
+// utf8mb4_general_ci orders by its case-folded weights so mixed-case text
+// interleaves the way MySQL's _ci collation requires; scalar equality for
+// that identity deliberately keeps the historical byte domain. Native Unicode
+// identities use the same UCA key relation as scalar equality. Binary and
+// legacy identities keep the historical raw-byte order so TopN/merge ordering
+// stays aligned with full sort and peer partitioning; physical/storage
+// callers keep their existing raw-byte contract as well.
 func CompareStringOrderValues(typ Type, left, right []byte) int {
+	if typ.Charset == CharsetUTF8 {
+		return collation.CompareGeneralCI(left, right)
+	}
 	if !IsUnicodeCollation(typ.Charset) {
 		return bytes.Compare(left, right)
 	}

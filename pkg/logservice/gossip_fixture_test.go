@@ -560,7 +560,8 @@ func TestGossipFixtureStartupRealBindCollision(t *testing.T) {
 				// this node. Inject once in the first generation that gets here.
 				if injectedAttempt == 0 && cfg.UUID == currentConfigs[1].UUID {
 					var err error
-					occupied, err = net.Listen("tcp4", cfg.GossipListenAddr())
+					// Match memberlist's address-family selection for wildcard listeners.
+					occupied, err = net.Listen("tcp", cfg.GossipListenAddr())
 					if err != nil {
 						return nil, fmt.Errorf("collision injection failed: %w", err)
 					}
@@ -611,6 +612,9 @@ func TestGossipFixtureStartupRealBindCollision(t *testing.T) {
 		require.LessOrEqual(t, attempts, maxGossipFixtureStartupAttempts)
 		require.Error(t, collisionErr)
 		require.True(t, isGossipFixtureBindCollision(collisionErr), "%v", collisionErr)
+		host, port, err := net.SplitHostPort(injectedConfigs[1].GossipListenAddr())
+		require.NoError(t, err)
+		require.Contains(t, collisionErr.Error(), fmt.Sprintf("Failed to start TCP listener on %q port %s", host, port))
 		require.True(t, reopenedNode)
 		t.Logf("real memberlist collision on attempt %d, recovered on attempt %d: %v", injectedAttempt, attempts, collisionErr)
 		require.Len(t, services, 2)

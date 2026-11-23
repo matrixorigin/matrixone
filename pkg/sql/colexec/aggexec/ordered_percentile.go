@@ -163,7 +163,7 @@ func PercentileDiscReturnType(args []types.Type) types.Type {
 // returns one of its input values and therefore does not require numeric
 // interpolation.
 func PercentileDiscSupportedType(typ types.T) bool {
-	if typ == types.T_json || typ.IsArrayRelate() {
+	if typ == types.T_json || typ.IsArray() {
 		return false
 	}
 	return mosort.IsSupportedType(typ)
@@ -378,9 +378,9 @@ func (exec *orderedPercentileDiscreteExec) newDiscreteVector(
 	typ types.Type,
 ) (*vector.Vector, error) {
 	if exec.allocation != nil {
-		return exec.allocation.newVector(typ)
+		return exec.allocation.newVector(typ, exec.mp)
 	}
-	return vector.NewOffHeapVecWithType(typ), nil
+	return vector.NewVec(typ, exec.mp), nil
 }
 
 func (exec *orderedPercentileDiscreteExec) restoreDiscreteValues(
@@ -404,11 +404,9 @@ func (exec *orderedPercentileDiscreteExec) restoreDiscreteValues(
 			}
 		}
 		payload := aggPayloadFromKey(&exec.aggInfo, key)
-		domain := types.RuntimeStringInherit
-		source := types.StringSourceExpression
-		encodedMetadata := false
 		if exec.argTypes[0].Oid.IsMySQLString() {
-			payload, domain, source, encodedMetadata, err = decodeAggStringMetadata(payload)
+			// The envelope's domain byte is retired and dropped.
+			payload, _, _, err = decodeAggStringMetadata(payload)
 			if err != nil {
 				return err
 			}
@@ -424,14 +422,6 @@ func (exec *orderedPercentileDiscreteExec) restoreDiscreteValues(
 		}
 		if err := values.SetRawBytesAt(index, payload, exec.mp); err != nil {
 			return err
-		}
-		if encodedMetadata {
-			if err := values.SetRuntimeStringDomainAtWithMP(index, domain, exec.mp); err != nil {
-				return err
-			}
-			if err := values.SetStringSourceAtWithMP(index, source, exec.mp); err != nil {
-				return err
-			}
 		}
 		index++
 		return nil
@@ -627,7 +617,7 @@ func (exec *orderedPercentileExec[T, R]) flushAccounted(ctx context.Context) (
 	defer freeAggregateResultsOnError(exec.mp, results, &retErr)
 	for chunk := range exec.accounted.state {
 		state := &exec.accounted.state[chunk]
-		result, err := exec.accounted.allocation.newVector(exec.retType)
+		result, err := exec.accounted.allocation.newVector(exec.retType, exec.mp)
 		if err != nil {
 			return nil, err
 		}
@@ -1072,7 +1062,7 @@ func (exec *orderedPercentileExec[T, R]) spillOrderedState(ctx context.Context) 
 	if groupCount > 0 {
 		exec.groups = make([]*Vectors[T], groupCount)
 		for i := range exec.groups {
-			exec.groups[i] = NewVectors[T](exec.argType)
+			exec.groups[i] = NewVectors[T](exec.argType, exec.mp)
 		}
 	}
 	return nil

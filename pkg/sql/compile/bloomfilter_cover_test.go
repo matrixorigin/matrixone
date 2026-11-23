@@ -90,7 +90,7 @@ func TestRemoteBuildReadersScopesMembershipFilterToIndexTable(t *testing.T) {
 			compile.e = capture
 			configureReaderPathTest(t, compile, scope)
 
-			readers, err := scope.buildReaders(compile)
+			readers, _, err := scope.buildReaders(compile)
 			require.NoError(t, err)
 			require.Len(t, readers, 1)
 			require.Equal(t, test.expected, capture.hint.MembershipFilterBytes)

@@ -49,9 +49,13 @@ Example, `a = [1,2,3]`, `b = [4,5,6]`:
 
 Common rules:
 
-- **Types.** `a` and `b` are `vecf32`, `vecf64`, `vecbf16`, `vecf16`, `vecint8` or `vecuint8`;
-  the overloads take two arguments of the same type. A `vecf32` and a `vecf64` argument are
-  also accepted together (one is cast to the other's type).
+- **Types.** `a` and `b` are `vecf32`, `vecf64`, `vecbf16`, `vecf16`, `vecint8`, `vecuint8`,
+  `vecf8` or `vecf4`; the overloads take two arguments of the same type. A `vecf32` and a
+  `vecf64` argument are also accepted together (one is cast to the other's type). A `vecf8` or
+  `vecf4` argument pairs with a `vecf8`, `vecf4`, `vecf32` or `vecf64` argument (a `vecf64`
+  argument is cast to `vecf32`); a text literal binds as `vecf32`. A `vecf8`/`vecf4` argument
+  with a `vecbf16`, `vecf16`, `vecint8` or `vecuint8` argument is rejected (`invalid argument
+  function l2_distance, bad value [VECF8 VECBF16]`).
 - **Precision** depends on the vector type:
   - `vecf32`, `vecf64`: every function except `l2_distance_sq` rounds its result into the
     float32 domain (`metric.RoundDistanceToElemDomain`), so a `vecf64` input gives a
@@ -64,43 +68,83 @@ Common rules:
     `[3,1]` and `[0,0]` is `3.1622776601683795` (the `vecf32` value is `3.1622776985168457`),
     and of `vecbf16` `[1.5,2.25,3]` and `[0.5,1,7]` it is `4.3084219849035215` (`vecf32`:
     `4.308422088623047`). `cosine_similarity` is computed in float32 for every type.
+  - `vecf8`, `vecf4`: the kernels decode the elements to float32 (`pkg/vectorindex/metric/
+    distance_func_vecblock*.go`); every function except `l2_distance_sq` rounds its result into
+    the float32 domain, as for `vecf32`. `l2_distance` of `vecf8` `[3,1]` and `[0,0]` is
+    `3.1622776985168457`, the `vecf32` value. `l2_distance_sq` of `vecf8` `[0]` and `vecf64`
+    `[3.1]` is `9.609999408721933`, the float64 square of the float32 `3.1` (the `vecf32` value
+    is `9.609999656677246`).
 - **NULL.** A NULL argument gives NULL.
 - **Dimension mismatch** is an error:
   - `cosine_similarity` on any type, and `cosine_distance`, `l2_distance`, `l2_distance_sq`
     and `l1_distance` on `vecf32`/`vecf64`: `invalid input: vector ops between different
     dimensions (2, 3) is not permitted.`
-  - `inner_product` on any type, and `cosine_distance`, `l2_distance`, `l2_distance_sq` and
-    `l1_distance` on `vecbf16`, `vecf16`, `vecint8` and `vecuint8`: `internal error: vector
-    dimension not matched`.
+  - `inner_product` on any type except `vecf8`/`vecf4`, and `cosine_distance`, `l2_distance`,
+    `l2_distance_sq` and `l1_distance` on `vecbf16`, `vecf16`, `vecint8` and `vecuint8`:
+    `internal error: vector dimension not matched`.
+  - every function on `vecf8`/`vecf4`, `inner_product` included: `invalid input: vector ops
+    between different dimensions (3, 2) is not permitted.`
 - **Overflow.** A result that overflows is an error, e.g. `l2_distance_sq('[1e20,0]',
   '[0,0]')`: `l2 distance: vector magnitude is too large, the result overflows the element
   domain`.
 - **Empty vector.** `'[]'` is rejected when the vector is parsed (`malformed vector input`).
 
+## `vecf8` and `vecf4`: block-scaled vectors
+
+`vecf8(N)` and `vecf4(N)` store each element in 8 or 4 bits with a scale shared by a block of
+elements (design: `docs/design/20260930-low-precision-vector-storage.md`):
+
+| Type | Element | Block | Block scale | Format |
+|---|---|---|---|---|
+| `vecf8(N)` | FP8 E4M3 | 32 | E8M0 | MXFP8 |
+| `vecf4(N)` | FP4 E2M1 | 16 | unsigned E4M3, and one global float32 scale per vector | NVFP4 |
+
+A value is quantized when it is stored or cast to the type, so it reads back rounded to its
+block: `CAST('[3000,-12,0.001,1000000]' AS vecf8(4))` is `[3072, -16, 0, 983040]` and as
+`vecf4(4)` is `[0, 0, 0, 999999.94]` (an element far below its block's maximum rounds to 0).
+
+The types have no arithmetic of their own: a function that computes on the values decodes them
+to `vecf32`, so its vector result is `vecf32` (or `vecf64` for `sqrt`), and a result is
+quantized again only when it is stored into a `vecf8`/`vecf4` column. The functions that copy
+a value (`coalesce`, `if`, `case`, `ANY_VALUE`) and `normalize_l2` return the argument's type.
+`vecblock_json(v)` returns the stored cell as text and `vecblock_binary(v)` as a `BLOB`; either
+casts back to the same cell without quantization:
+
+```sql
+SELECT vecblock_json(CAST('[1,2,3]' AS vecf8(3)));   -- {"g":1,"s":[0.0078125],"v":[128,256,384]}
+SELECT vecblock_json(CAST('[1,2,3]' AS vecf4(3)));   -- {"g":0.0011160715,"s":[448],"v":[2,4,6]}
+```
+
 ## Other vector functions and operators
 
-`T` is the argument's vector type.
+`T` is the argument's vector type. "All six" is `vecf32`, `vecf64`, `vecbf16`, `vecf16`,
+`vecint8` and `vecuint8`; "all eight" adds `vecf8` and `vecf4`.
 
 | Function or operator | Accepted types | Result |
 |---|---|---|
-| `summation(v)` | all six | `DOUBLE` |
-| `l1_norm(v)`, `l2_norm(v)` | all six | `DOUBLE` |
-| `vector_dims(v)` | all six | `BIGINT` |
-| `normalize_l2(v)` | all six | `T` for `vecf32`, `vecf64`, `vecbf16`, `vecf16`; **`vecf32` for `vecint8`, `vecuint8`**; a zero vector returns the zero vector |
-| `subvector(v, start[, len])` | all six | `T` |
-| `abs(v)` | `vecf32`, `vecf64` | `T` |
-| `sqrt(v)` | `vecf32`, `vecf64` | **`vecf64`** for both |
-| `+`, `-`, `*`, `/` (vector with vector, or vector with a number) | `vecf32`, `vecf64` | `T` |
-| `=`, `<>`, `<`, `<=`, `>`, `>=`, `IN` | all six | `BOOL` |
-| `coalesce`, `if`, `case` over one vector type | all six | `T` |
+| `summation(v)` | all eight | `DOUBLE` |
+| `l1_norm(v)`, `l2_norm(v)` | all eight | `DOUBLE` |
+| `vector_dims(v)` | all eight | `BIGINT` |
+| `normalize_l2(v)` | all eight | `T` for `vecf32`, `vecf64`, `vecbf16`, `vecf16`, `vecf8`, `vecf4`; **`vecf32` for `vecint8`, `vecuint8`**; a zero vector returns the zero vector |
+| `subvector(v, start[, len])` | all eight | `T`; **`vecf32` for `vecf8`, `vecf4`** |
+| `abs(v)` | `vecf32`, `vecf64`, `vecf8`, `vecf4` | `T`; **`vecf32` for `vecf8`, `vecf4`** |
+| `sqrt(v)` | `vecf32`, `vecf64`, `vecf8`, `vecf4` | **`vecf64`** for all four |
+| `+`, `-`, `*`, `/` (vector with vector, or vector with a number) | `vecf32`, `vecf64`, `vecf8`, `vecf4` | `T`; **`vecf32`** when an operand is `vecf8` or `vecf4` |
+| `=`, `<>`, `<`, `<=`, `>`, `>=`, `IN` | all eight | `BOOL`; a text literal compared with a `vecf8`/`vecf4` column is quantized to the column's type, so a row matches the text it was inserted from; two vector types are compared as their common type ([vector-common-type.md](vector-common-type.md)) |
+| `coalesce`, `if`, `ifnull`, `case`, `UNION` | all eight | `T` over one vector type; the common type over several ([vector-common-type.md](vector-common-type.md)) |
+| `nullif(a, b)` | all eight | the type of `a` |
+| `greatest`, `least` | all eight | as `coalesce`; **`vecf32`** for `vecf8`, `vecf4` |
 | `hex(v)`, `to_base64(v)` | `vecf32`, `vecf64` | `TEXT` |
 | `CAST(v AS vecf32(N) / vecf64(N) / vecbf16(N) / vecf16(N) / vecint8(N) / vecuint8(N))` | all six | the target type. To `vecint8`/`vecuint8` each element is rounded to the nearest integer and saturated (`[-300, 300, 1.6]` → `[-128, 127, 2]`); an element that overflows a float target is an error |
-| `COUNT(DISTINCT v)`, `GROUP BY v` | all six | |
-| `ANY_VALUE(v)` | all six | `T` |
+| `CAST(v AS vecf8(N) / vecf4(N))`, and `CAST` of a `vecf8`/`vecf4` | text, `vecf32`, `vecf8`, `vecf4`; a `vecf8`/`vecf4` also casts to `vecf64` | the target type; a cast between `vecf8`/`vecf4` and `vecbf16`, `vecf16`, `vecint8` or `vecuint8` is rejected (`invalid argument operator cast, bad value [VECF8 VECBF16]`); cast through `vecf32` |
+| `vecblock_json(v)`, `vecblock_binary(v)` | `vecf8`, `vecf4` | `TEXT`, `BLOB`: the stored cell |
+| `COUNT(DISTINCT v)`, `GROUP BY v` | all eight | |
+| `ANY_VALUE(v)` | all eight | `T` |
 | `MIN`, `MAX`, `SUM`, `AVG` over vectors | none | rejected (`invalid argument aggregate function`) |
 
 The narrow types (`vecbf16`, `vecf16`, `vecint8`, `vecuint8`) are rejected by `abs`, `sqrt`,
-the arithmetic operators, `hex` and `to_base64`; cast them to `vecf32` first.
+the arithmetic operators, `hex` and `to_base64`; cast them to `vecf32` first. `vecf8` and
+`vecf4` are rejected by `hex` and `to_base64`.
 
 ## Indexes: which function each `op_type` serves
 
@@ -127,6 +171,12 @@ Column types an index can be built on (with any `op_type` the index accepts):
 | HNSW | `vecf32`, `vecf64`, `vecbf16`, `vecf16`, `vecint8`, `vecuint8` |
 | CAGRA | `vecf32`, `vecf16` only |
 | IVF-PQ | `vecf32`, `vecf16` only |
+
+No index accepts a `vecf8` or `vecf4` column, and neither type can be a primary key or a
+secondary index key: `CREATE INDEX` on one is rejected (`not supported: HNSW only supports
+VECF32, VECF64, VECF16, VECBF16, VECINT8 and VECUINT8 column types`, and the matching messages
+of the other indexes). Their nearest-neighbour search is the `vector_matmul` aggregate, a batch
+top-k over the rows a query selects (see the design document).
 
 On a `vecint8`/`vecuint8` column, IVF-FLAT serves all five `op_type`s and HNSW serves
 `l2`, `l2sq`, `ip` and `cosine`.
@@ -181,8 +231,10 @@ Notes:
 ## Where it is implemented
 
 - SQL registration: `pkg/sql/plan/function/list_builtIn.go`.
-- Scalar functions: `pkg/sql/plan/function/func_binary.go`, `pkg/vectorize/moarray/external.go`.
-- Kernels: `pkg/vectorindex/metric/` (`InnerProduct` returns `-dot`).
+- Scalar functions: `pkg/sql/plan/function/func_binary.go`, `pkg/vectorize/moarray/external.go`;
+  `vecf8`/`vecf4`: `pkg/sql/plan/function/func_vecblock.go`.
+- Kernels: `pkg/vectorindex/metric/` (`InnerProduct` returns `-dot`); `vecf8`/`vecf4`:
+  `pkg/vectorindex/metric/distance_func_vecblock*.go`.
 - `op_type` mapping and score transforms: `pkg/vectorindex/metric/types.go`
   (`OpTypeServesDistFunc`, `DistanceTransformHnsw`, `DistanceTransformIvfflat`).
 - cuVS inner-product sign: `cgo/cuvs/index_base.hpp` (`transform_distance`).

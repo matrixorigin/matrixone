@@ -143,9 +143,11 @@ create fulltext2 index csidx on cs (body) include (tag);
 select id, tag from cs where match(body) against('fox') and tag = 'active' order by match(body) against('fox') desc, id;  -- only id 2
 ➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
 2  ¦  active
-select id, tag from cs where match(body) against('fox') and tag like 'Act%' order by match(body) against('fox') desc, id; -- only id 1
+select id, tag from cs where match(body) against('fox') and tag like 'Act%' order by match(body) against('fox') desc, id; -- ci fold: ids 1,2,3
 ➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
-1  ¦  Active
+1  ¦  Active  𝄀
+2  ¦  active  𝄀
+3  ¦  ACTIVE
 drop table cs;
 create table topk_docs (id bigint primary key, body text not null, prio int);
 insert into topk_docs values (1, 'fox rare rare', 1), (2, 'fox', null), (3, 'cat', null);

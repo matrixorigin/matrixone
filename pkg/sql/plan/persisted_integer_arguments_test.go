@@ -72,7 +72,7 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, fmt.Sprintf("create table t(a %s,g varchar(64) generated always as (%s) stored,check(length(%s)>=0))", tc.sqlType, call, call), 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			original := built.GetDdl().GetCreateTable().GetTableDef()
 			require.NotNil(t, original)
@@ -112,7 +112,7 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 			input := batch.NewWithSize(1)
 			defer input.Clean(proc.Mp())
 			if tc.decimal {
-				input.Vecs[0] = vector.NewVec(types.New(types.T_decimal128, 38, 1))
+				input.Vecs[0] = vector.NewVec(types.New(types.T_decimal128, 38, 1), proc.Mp())
 				values := []string{"1.5", "2.5"}
 				if tc.overflow {
 					values = []string{"9223372036854775808.0"}
@@ -124,7 +124,7 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 				}
 				input.SetRowCount(len(values))
 			} else {
-				input.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+				input.Vecs[0] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendFixedList(input.Vecs[0], []float64{1.5, 2.5}, nil, proc.Mp()))
 				input.SetRowCount(2)
 			}
@@ -169,7 +169,7 @@ func TestPersistedIntegerArgumentDefaultOrigin(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t(a varchar(64) default (substring_index('a.b.c.d','.',"+tc.source+")))", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			var def *planpb.Default
 			for _, col := range built.GetDdl().GetCreateTable().GetTableDef().Cols {

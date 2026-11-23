@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -64,6 +65,10 @@ type HnswSearch[T types.ArrayElement] struct {
 	// cdc_tail frames), captured at metadata read so it reflects the generation searched.
 	// 0 = unknown. See BuildTS.
 	buildTS int64
+
+	// superseded is set when a newer generation replaced this one: Destroy then releases the
+	// models' index-file holds without counting them as a use.
+	superseded bool
 }
 
 func NewHnswSearch[T types.ArrayElement](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch[T] {
@@ -270,10 +275,21 @@ func (s *HnswSearch[T]) Destroy() {
 	// metadata with a nil Index (and possibly a fetched Path), and a load abandoned between
 	// Preload and Load reaches here. HnswModel.Destroy nil-checks the handle and also releases
 	// the on-disk file and buffer, matching what LoadIndex's error path already does.
+	// The cache delivers OnCacheInvalidated before Destroy or not at all for this generation;
+	// a retry reuses this object for the next generation, so Destroy clears it.
+	superseded := s.superseded
+	s.superseded = false
 	for _, idx := range s.Indexes {
-		idx.Destroy()
+		idx.destroy(superseded)
 	}
 	s.Indexes = nil
+}
+
+// OnCacheInvalidated records that a newer generation replaced this one.
+func (s *HnswSearch[T]) OnCacheInvalidated(reason string) {
+	if reason == veccache.ReasonGenerationChanged {
+		s.superseded = true
+	}
 }
 
 // load metadata from database
@@ -486,12 +502,12 @@ func logMetadataProvenance(metatbl string, count int, rows, buildTS int64) {
 // The mmap is reclaimable page cache rather than allocation, so usearch's own figure omits it:
 // memory_usage() skips the node and vector bytes whenever viewed_file_ is set (index.hpp:
 // `if (!viewed_file_)`), reporting ~1.2% of the file. But it is not free, and it is not only
-// page cache. LoadIndexFromBuffer unlinks the spill file once View() has mapped it, so the
-// inode's blocks are held on the LOCAL fileservice volume until Destroy -- and since residency
-// is bounded by BYTES alone, the omission is what bounds admission. Charging only the
+// page cache. The mapped file stays on disk until Destroy: the index-file cache entry the model
+// holds, or the spill file LoadIndexFromBuffer unlinks once View() has mapped it -- and since
+// residency is bounded by BYTES alone, the omission is what bounds admission. Charging only the
 // bookkeeping lets one client hold N whole models for N distinct named-snapshot timestamps
-// while the governor sees a hundredth of them, filling the CN's scratch mount under a cap that
-// looks satisfied.
+// while the governor sees a hundredth of them, filling the CN's disk under a cap that looks
+// satisfied.
 //
 // So the file is charged too. It over-states heap, which is the honest trade: the number the
 // governor acts on is "bytes this entry keeps the CN from reusing", and for a viewed hnsw model

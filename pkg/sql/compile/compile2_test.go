@@ -519,7 +519,7 @@ func TestSelectMetaLockRequirementPlannerPaths(t *testing.T) {
 			statements, err := mysql.Parse(context.Background(), test.sql, 1)
 			require.NoError(t, err)
 			defer statements[0].Free()
-			built, err := plan2.BuildPlan(ctx, statements[0], false)
+			built, err := plan2.BuildPlan(ctx, statements[0], false, nil)
 			require.NoError(t, err)
 			if test.wantRetainedFilter {
 				// These optimizer outputs retain the abandoned original filter.
@@ -664,7 +664,7 @@ func TestSelectMetaLockRequirementReachability(t *testing.T) {
 func TestPreparedOuterLimitZeroMaterialization(t *testing.T) {
 	c := newLazyUnionAllTestCompile(t)
 	c.isPrepare = false
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), c.proc.Mp())
 	defer func() { c.proc.SetPrepareParams(nil); params.Free(c.proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("0"), false, c.proc.Mp()))
 	c.proc.SetPrepareParams(params)
@@ -739,7 +739,7 @@ func TestPreparedParenthesizedLimitZeroProducerOmission(t *testing.T) {
 		t.Run(tc.sql, func(t *testing.T) {
 			c := newLazyUnionAllTestCompile(t)
 			c.isPrepare = false
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), c.proc.Mp())
 			c.proc.SetPrepareParams(params)
 			defer func() { c.proc.SetPrepareParams(nil); params.Free(c.proc.Mp()) }()
 			stmts, err := mysql.Parse(c.proc.Ctx, tc.sql, 1)

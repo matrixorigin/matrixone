@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -187,7 +188,7 @@ func TestPreparedWindowFrameMarkers(t *testing.T) {
 	stmts, err := parsers.Parse(optimizer.CurrentContext().GetContext(), dialect.MYSQL, preparedWindowFrameSQL, 1)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
 	window := firstWindowSpec(t, queryPlan)
 	requirePreparedRowsFrameParam(t, window.Frame.Start.Val, 1)
@@ -202,7 +203,7 @@ func TestBuildPlanRejectsNegativeTemporalWindowBounds(t *testing.T) {
 			sql := "select sum(a) over (order by cast('2024-01-01' as timestamp) range between interval -1 " + unit + " preceding and current row) from select_test.bind_select"
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.ErrorContains(t, err, "frame start or end is negative")
 		})
 	}
@@ -241,7 +242,7 @@ func TestWindowFrameOrderingDiagnostics(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			if tc.wantErr == "" {
 				require.NoError(t, err)
 				return
@@ -296,7 +297,7 @@ func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			if !tc.wantErr {
 				require.NoError(t, err)
 				return
@@ -328,7 +329,7 @@ func TestLagLeadRejectInvalidConstantOffset(t *testing.T) {
 				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
 
-				_, err = BuildPlan(ctx, stmt, false)
+				_, err = BuildPlan(ctx, stmt, false, nil)
 				require.EqualError(t, err, "Incorrect arguments to "+name)
 				moErr, ok := err.(*moerr.Error)
 				require.True(t, ok)
@@ -342,7 +343,7 @@ func TestLagLeadRejectInvalidConstantOffset(t *testing.T) {
 				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
 
-				_, err = BuildPlan(ctx, stmt, false)
+				_, err = BuildPlan(ctx, stmt, false, nil)
 				require.NoError(t, err)
 			})
 		}
@@ -359,7 +360,7 @@ func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(ctx, stmt, true)
+	queryPlan, err := BuildPlan(ctx, stmt, true, nil)
 	require.NoError(t, err)
 
 	offset := firstWindowSpec(t, queryPlan).WindowFunc.GetF().Args[1]
@@ -393,7 +394,7 @@ func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
 	binaryFilled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
 		ParamValue{
 			Value:            "2",
-			PrepareParamKind: vector.PrepareParamInteger,
+			PrepareParamKind: types.StringConversionInteger,
 		},
 	})
 	require.NoError(t, err)
@@ -423,7 +424,7 @@ func TestPreparedWindowRangeFrameMarkers(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
 	window := firstWindowSpec(t, queryPlan)
 	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int64, 1)
@@ -441,7 +442,7 @@ func TestPreparedWindowRangeFrameMarkersInBothBounds(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
 	window := firstWindowSpec(t, queryPlan)
 	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int64, 1)
@@ -458,7 +459,7 @@ func TestPreparedWindowRangeFrameMarkerRequiresNumericOrder(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.ErrorContains(t, err, "parameterized RANGE frame requires a numeric ORDER BY expression")
 }
 
@@ -507,7 +508,7 @@ func TestWindowIntervalFrameRequiresTemporalRange(t *testing.T) {
 			stmts, err := parsers.Parse(optimizer.CurrentContext().GetContext(), dialect.MYSQL,
 				"select sum(n_nationkey) over (order by "+tc.order+" "+tc.frame+" interval "+value+" day preceding) from nation", 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.ErrorContains(t, err, tc.errorText)
 		}
 	}
@@ -525,7 +526,7 @@ func TestPreparedWindowNestedIntervalFrameMarkersAreUnsupported(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.ErrorContains(t, err, "prepared parameter markers in interval window frames")
 		})
 	}
@@ -655,7 +656,7 @@ func buildNamedWindowPlan(t *testing.T, sql string) (*planpb.Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	return BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+	return BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 }
 
 func TestNamedWindowSpecHelpers(t *testing.T) {
@@ -987,6 +988,24 @@ func TestNamedWindowValidationRetainsDependencies(t *testing.T) {
 		require.ElementsMatch(t, []string{"nation", "region"}, []string{dependencies[0].ObjName, dependencies[1].ObjName})
 	})
 
+	t.Run("folded correlated scalar", func(t *testing.T) {
+		queryPlan, err := buildNamedWindowPlan(t,
+			"select n.n_nationkey from nation n window unused_w as (order by null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0))")
+		require.NoError(t, err)
+		query := queryPlan.GetQuery()
+		require.False(t, queryHasReachableTable(query, "region"))
+		var retained bool
+		for _, node := range query.Nodes {
+			retained = retained || IsValidationPrivilegeCarrier(node) && node.GetObjRef().GetObjName() == "region"
+		}
+		require.True(t, retained, "the folded window source must still be authorized")
+		var dependency bool
+		for _, ref := range query.CatalogDependencies {
+			dependency = dependency || ref.ObjName == "region"
+		}
+		require.True(t, dependency, "the source must remain a catalog dependency")
+	})
+
 	t.Run("prepare schema invalidation", func(t *testing.T) {
 		logicPlan, err := runOneStmt(
 			NewMockOptimizer(false, newPlanTestProcess(t)), t,
@@ -1003,12 +1022,79 @@ func TestNamedWindowValidationRetainsDependencies(t *testing.T) {
 	})
 }
 
+func TestDependentPlanRetainsNamedWindowValidationPrivilegeCarriers(t *testing.T) {
+	queryPlan, err := buildNamedWindowPlan(t, `
+		SELECT n.n_nationkey,
+		       (SELECT n.n_regionkey FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey LIMIT 0)
+		  FROM nation n
+		 WINDOW unused_w AS (ORDER BY (SELECT c.c_custkey FROM customer c LIMIT 1))`)
+	require.NoError(t, err)
+	query := queryPlan.GetQuery()
+	require.NotNil(t, query.GetCorrelation(), "the correlated LIMIT 0 query uses the dependent-plan path")
+	require.False(t, queryHasReachableTable(query, "customer"), "the unused window source must remain non-executable")
+	var retained bool
+	for _, node := range query.GetNodes() {
+		if node.GetNodeType() == planpb.Node_TABLE_SCAN && node.GetObjRef().GetObjName() == "customer" {
+			retained = true
+			break
+		}
+	}
+	require.True(t, retained, "authorization must see the validation-only source carrier")
+}
+
+func TestOptimizerRetainsNamedWindowValidationPrivilegeCarriers(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		dependent bool
+	}{
+		{
+			name: "ordinary plan",
+			sql:  "SELECT n.n_nationkey FROM nation n WINDOW unused_w AS (ORDER BY (SELECT c.c_custkey FROM customer c LIMIT 1))",
+		},
+		{
+			name: "dependent plan",
+			sql: `SELECT n.n_nationkey,
+			       (SELECT n.n_regionkey FROM region r
+			         WHERE r.r_regionkey > n.n_regionkey LIMIT 0)
+			  FROM nation n
+			 WINDOW unused_w AS (ORDER BY (SELECT c.c_custkey FROM customer c LIMIT 1))`,
+			dependent: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
+			require.NoError(t, err)
+			if test.dependent {
+				require.NotNil(t, query.GetCorrelation())
+			} else {
+				require.Nil(t, query.GetCorrelation())
+			}
+			require.False(t, queryHasReachableTable(query, "customer"), "validation-only source must not execute")
+			var carrier *planpb.Node
+			for _, node := range query.GetNodes() {
+				if node.GetNodeType() == planpb.Node_TABLE_SCAN && node.GetObjRef().GetObjName() == "customer" {
+					carrier = node
+					break
+				}
+			}
+			require.NotNil(t, carrier, "optimizer must retain the authorization carrier")
+			require.Equal(t, validationPrivilegeCarrierExtraOptions, carrier.GetExtraOptions())
+		})
+	}
+}
+
 func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T) {
 	owner := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	validation := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	wideTable := &planpb.TableDef{
-		TableType: "ordinary",
-		Cols:      make([]*planpb.ColDef, 1024),
+		TableType: "ordinary", Name: "region", TblId: 42, Version: 7, DbName: "tpch", DbId: 3,
+		Cols: make([]*planpb.ColDef, 1024),
 	}
 	ordinary := &planpb.Node{
 		NodeType: planpb.Node_TABLE_SCAN,
@@ -1042,17 +1128,19 @@ func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T
 		},
 	)
 
-	appendWindowValidationPrivilegeScans(owner, validation)
-	require.Len(t, owner.windowValidationScans, 3)
+	mergeValidationPrivilegeCarriers(owner, validation)
+	require.Len(t, owner.validationPrivilegeCarriers, 3)
 
-	carriers := make(map[planpb.Node_NodeType]*planpb.Node)
-	for _, carrier := range owner.windowValidationScans {
-		carriers[carrier.NodeType] = carrier
+	carriers := make(map[string]*planpb.Node)
+	for _, carrier := range owner.validationPrivilegeCarriers {
+		carriers[carrier.GetObjRef().GetObjName()] = carrier
 		require.Empty(t, carrier.GetTableDef().GetCols())
 	}
-	require.Equal(t, "region", carriers[planpb.Node_TABLE_SCAN].GetObjRef().GetObjName())
-	require.Equal(t, int32(planpb.ExternType_MONGODB_TB), carriers[planpb.Node_EXTERNAL_SCAN].GetExternScan().GetType())
-	require.Equal(t, "table_changes", carriers[planpb.Node_FUNCTION_SCAN].GetTableDef().GetTblFunc().GetName())
+	require.Equal(t, planpb.Node_TABLE_SCAN, carriers["region"].GetNodeType())
+	require.Equal(t, uint32(7), carriers["region"].GetTableDef().GetVersion())
+	require.Equal(t, int32(planpb.ExternType_MONGODB_TB), carriers["events"].GetExternScan().GetType())
+	require.Equal(t, planpb.Node_FUNCTION_SCAN, carriers["nation"].GetNodeType())
+	require.Equal(t, "table_changes", carriers["nation"].GetTableDef().GetTblFunc().GetName())
 
 	// A different view path is a distinct authorization context, even for the
 	// same relation and snapshot.
@@ -1062,15 +1150,57 @@ func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T
 		TableDef: wideTable,
 		ViewPath: []*planpb.ViewStep{{DatabaseName: "tpch", ViewName: "region_view", Snapshot: &planpb.Snapshot{Tenant: &planpb.SnapshotTenant{}}}},
 	}}
-	appendWindowValidationPrivilegeScans(owner, validation)
-	require.Len(t, owner.windowValidationScans, 4)
+	mergeValidationPrivilegeCarriers(owner, validation)
+	require.Len(t, owner.validationPrivilegeCarriers, 4)
 	// An inner snapshot difference cannot disappear when compacting carriers.
 	validation.qry.Nodes[0].ViewPath[0].Snapshot.TS = &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7}
-	appendWindowValidationPrivilegeScans(owner, validation)
-	require.Len(t, owner.windowValidationScans, 5)
+	mergeValidationPrivilegeCarriers(owner, validation)
+	require.Len(t, owner.validationPrivilegeCarriers, 5)
 	validation.qry.Nodes[0].ViewPath[0].Snapshot.TS.LogicalTime = 8
-	require.Equal(t, uint32(7), owner.windowValidationScans[4].ViewPath[0].Snapshot.TS.LogicalTime)
+	require.Equal(t, uint32(7), owner.validationPrivilegeCarriers[4].ViewPath[0].Snapshot.TS.LogicalTime)
 
+}
+
+func TestWindowValidationPrivilegeCarrierExternalSelectScans(t *testing.T) {
+	for _, externType := range []planpb.ExternType{
+		planpb.ExternType_EXTERNAL_TB,
+		planpb.ExternType_MONGODB_TB,
+		planpb.ExternType_DATASTREAM_TB,
+		planpb.ExternType_FOREIGN_TB,
+		planpb.ExternType_ICEBERG_TB,
+		planpb.ExternType_KAFKA_TB,
+	} {
+		t.Run(externType.String(), func(t *testing.T) {
+			carrier := validationPrivilegeCarrier(&planpb.Node{
+				NodeType: planpb.Node_EXTERNAL_SCAN,
+				ObjRef:   &planpb.ObjectRef{SchemaName: "external_db", ObjName: "events"},
+				TableDef: &planpb.TableDef{
+					TableType: catalog.SystemExternalRel,
+					Cols:      make([]*planpb.ColDef, 4),
+				},
+				ExternScan: &planpb.ExternScan{Type: int32(externType)},
+			})
+			require.NotNil(t, carrier)
+			require.Equal(t, int32(externType), carrier.GetExternScan().GetType())
+			require.Equal(t, catalog.SystemExternalRel, carrier.GetTableDef().GetTableType())
+			require.Empty(t, carrier.GetTableDef().GetCols())
+		})
+	}
+
+	for _, externType := range []planpb.ExternType{
+		planpb.ExternType_LOAD,
+		planpb.ExternType_RESULT_SCAN,
+	} {
+		t.Run("exclude "+externType.String(), func(t *testing.T) {
+			carrier := validationPrivilegeCarrier(&planpb.Node{
+				NodeType:   planpb.Node_EXTERNAL_SCAN,
+				ObjRef:     &planpb.ObjectRef{SchemaName: "external_db", ObjName: "events"},
+				TableDef:   &planpb.TableDef{TableType: catalog.SystemExternalRel},
+				ExternScan: &planpb.ExternScan{Type: int32(externType)},
+			})
+			require.Nil(t, carrier)
+		})
+	}
 }
 
 func namedWindowsSQL(prefix string, count int) string {
@@ -1400,7 +1530,7 @@ func TestBuildPlanWindowDependencyValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(ctx, stmts[0], false)
+			_, err = BuildPlan(ctx, stmts[0], false, nil)
 			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
@@ -1413,7 +1543,7 @@ func TestBuildPlanWindowDependencyValidation(t *testing.T) {
 	for _, sql := range positiveSQL {
 		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(ctx, stmts[0], false)
+		_, err = BuildPlan(ctx, stmts[0], false, nil)
 		require.NoError(t, err, sql)
 	}
 }
@@ -2037,7 +2167,7 @@ func TestWindowScalarInputsAreLowered(t *testing.T) {
 			opt := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := parsers.Parse(opt.CurrentContext().GetContext(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
-			p, err := BuildPlan(opt.CurrentContext(), stmts[0], false)
+			p, err := BuildPlan(opt.CurrentContext(), stmts[0], false, nil)
 			require.NoError(t, err)
 			windows := allWindowSpecs(p)
 			require.NotEmpty(t, windows)
@@ -2071,7 +2201,7 @@ func TestScalarInputsRejectMultipleColumns(t *testing.T) {
 		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 		stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(ctx, stmts[0], false)
+		_, err = BuildPlan(ctx, stmts[0], false, nil)
 		require.ErrorContains(t, err, "subquery should return 1 column")
 	}
 	// Multi-column row comparisons and EXISTS do not consume a scalar value.
@@ -2083,7 +2213,7 @@ func TestScalarInputsRejectMultipleColumns(t *testing.T) {
 		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 		stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(ctx, stmts[0], false)
+		_, err = BuildPlan(ctx, stmts[0], false, nil)
 		require.NoError(t, err, sql)
 	}
 }

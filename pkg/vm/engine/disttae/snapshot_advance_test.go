@@ -40,7 +40,8 @@ func TestAdvanceSnapshotBranches(t *testing.T) {
 		op := mock_frontend.NewMockTxnOperator(ctrl)
 		op.EXPECT().EnterIncrStmt()
 		op.EXPECT().ExitIncrStmt()
-		op.EXPECT().Txn().Return(txn.TxnMeta{Isolation: txn.TxnIsolation_SI})
+		op.EXPECT().Txn().Return(txn.TxnMeta{Isolation: txn.TxnIsolation_SI}).AnyTimes()
+		op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 10}).AnyTimes()
 		op.EXPECT().UpdateSnapshot(ctx, target).Return(nil)
 
 		workspace := &Transaction{op: op}
@@ -56,7 +57,7 @@ func TestAdvanceSnapshotBranches(t *testing.T) {
 		op.EXPECT().EnterIncrStmt()
 		op.EXPECT().ExitIncrStmt()
 		op.EXPECT().Txn().Return(txn.TxnMeta{Isolation: txn.TxnIsolation_RC})
-		op.EXPECT().SnapshotTS().Return(initial)
+		op.EXPECT().SnapshotTS().Return(initial).AnyTimes()
 		op.EXPECT().UpdateSnapshot(ctx, target).Return(updateErr)
 
 		workspace := &Transaction{op: op}

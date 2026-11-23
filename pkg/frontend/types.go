@@ -27,7 +27,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -302,8 +301,14 @@ type PrepareStmt struct {
 	proc                      *process.Process
 	remapDb                   map[string]string
 	defaultDatabase           string
+	// A direct tenant-admin read of a physical index was admitted while this
+	// plan was bound. A caller-owned procedure must rebind before using it.
+	directIndexReadAdmitted bool
 
+	// params is owned by the statement; paramsMP is the pool it was created
+	// with (the executing process's pool) and is freed with.
 	params              *vector.Vector
+	paramsMP            *mpool.MPool
 	getFromSendLongData map[int]struct{}
 	// COM_STMT_SEND_LONG_DATA owns its chunks until EXECUTE materializes each
 	// parameter once. The pool must be the one that allocated the buffers,
@@ -373,23 +378,19 @@ type PrepareStmt struct {
 	fixedIntegerParamPositions []int32
 	hasPaginationParams        bool
 	hasLagLeadParams           bool
-	paramKinds                 []vector.PrepareParamKind
-	paramBinaryStrings         []bool
-	paramMetadata              []bool
+	paramKinds                 []types.StringConversionKind
 	// jsonComparisonParamPositions is computed once per prepared-plan
-	// generation. Only these parameters need an exact SQL type in Process
-	// metadata; paramConcreteTypes is a reusable execution buffer.
+	// generation; the protocol type decides those parameters' binding kind.
 	jsonComparisonParamPositions []int32
 	jsonMemberOfParamPositions   []int32
-	paramConcreteTypes           []types.T
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose
 	// runtime integer/decimal domain may require overload rebinding without
 	// rescanning the full plan for every EXECUTE.
 	numericOverloadParamPositions []int32
-	// temporalRuntimeParamPositions combines numeric-function and prepared
-	// GENERATE_SERIES endpoint positions. Only these markers retain a temporal
-	// COM_STMT_EXECUTE packet domain instead of generic text transport.
+	// temporalRuntimeParamPositions combines numeric-function, BIT_COUNT, and
+	// prepared GENERATE_SERIES endpoint positions. Only these markers retain a
+	// temporal COM_STMT_EXECUTE packet domain instead of generic text transport.
 	temporalRuntimeParamPositions []int32
 	// bitCountOverloadParamPositions owns BIT_COUNT's asymmetric prepared
 	// contract. Each marker starts with the binary-string default; after an
@@ -906,8 +907,8 @@ func (prepareStmt *PrepareStmt) Close() {
 		if prepareStmt.proc != nil && prepareStmt.proc.GetPrepareParams() == prepareStmt.params {
 			prepareStmt.proc.SetPrepareParams(nil)
 		}
-		prepareStmt.params.Free(prepareStmt.proc.Mp())
-		prepareStmt.params = nil
+		prepareStmt.params.Free(prepareStmt.paramsMP)
+		prepareStmt.params, prepareStmt.paramsMP = nil, nil
 	}
 
 	if prepareStmt.compile != nil {
@@ -991,8 +992,8 @@ func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 		if proc.GetPrepareParams() == prepareStmt.params {
 			proc.SetPrepareParams(nil)
 		}
-		prepareStmt.params.Free(proc.Mp())
-		prepareStmt.params = nil
+		prepareStmt.params.Free(prepareStmt.paramsMP)
+		prepareStmt.params, prepareStmt.paramsMP = nil, nil
 	}
 	for k := range prepareStmt.getFromSendLongData {
 		delete(prepareStmt.getFromSendLongData, k)
@@ -1110,7 +1111,6 @@ type FeSession interface {
 	GetProc() *process.Process
 	GetLastInsertID() uint64
 	GetSqlHelper() *SqlHelper
-	GetBuffer() *buffer.Buffer
 	GetStmtProfile() *process.StmtProfile
 	CopySeqToProc(proc *process.Process)
 	getQueryId(internal bool) []string
@@ -1191,6 +1191,9 @@ type ExecCtx struct {
 	// transaction-boundary policy and later execution use the same prepared AST.
 	// The statement is borrowed from the computation wrapper or prepare cache.
 	effectiveTxnStatement tree.Statement
+	// Set only when binding uses the direct-user physical-index read exception.
+	// PREPARE captures this in its handle, while EXECUTE refreshes it on rebind.
+	directIndexReadAdmitted bool
 	// deferReadOnlyOwnership marks that the pre-Create READ ONLY admission
 	// deferred an unqualified multi-source UPDATE verdict because no catalog
 	// transaction existed yet for owner resolution. executeStmtWithWorkspace
@@ -1359,7 +1362,6 @@ type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch, *perfcounter.Cou
 
 type feSessionImpl struct {
 	pool          *mpool.MPool
-	buf           *buffer.Buffer
 	stmtProfile   process.StmtProfile
 	tenant        *TenantInfo
 	txnHandler    *TxnHandler
@@ -1407,6 +1409,7 @@ type feSessionImpl struct {
 	uuid         uuid.UUID
 	debugStr     string
 	respr        Responser
+	resprMu      sync.RWMutex
 	runSQLTokens []uint64
 	//refreshed once
 	staticTxnInfo string
@@ -1484,8 +1487,10 @@ func (ses *feSessionImpl) currentRunSQLToken() uint64 {
 // Close releases all reference.
 // close txn handler also
 func (ses *feSessionImpl) Close() {
-	if ses.respr != nil && !ses.reserveConn {
-		ses.respr.Close()
+	if !ses.reserveConn {
+		if r := ses.GetResponser(); r != nil {
+			r.Close()
+		}
 	}
 	ses.Reset()
 }
@@ -1521,10 +1526,6 @@ func (ses *feSessionImpl) Reset() {
 	for _, bat := range ses.resultBatches {
 		bat.Clean(ses.pool)
 	}
-	if ses.buf != nil {
-		ses.buf.Free()
-		ses.buf = nil
-	}
 	ses.upstream = nil
 	ses.fromRealUser = false
 }
@@ -1539,16 +1540,16 @@ func (ses *feSessionImpl) Clear() {
 }
 
 func (ses *feSessionImpl) SetDatabaseName(db string) {
-	ses.respr.SetStr(DBNAME, db)
+	ses.GetResponser().SetStr(DBNAME, db)
 	ses.txnCompileCtx.SetDatabase(db)
 }
 
 func (ses *feSessionImpl) GetDatabaseName() string {
-	return ses.respr.GetStr(DBNAME)
+	return ses.GetResponser().GetStr(DBNAME)
 }
 
 func (ses *feSessionImpl) GetUserName() string {
-	return ses.respr.GetStr(USERNAME)
+	return ses.GetResponser().GetStr(USERNAME)
 }
 
 func (ses *feSessionImpl) SetMemPool(mp *mpool.MPool) {
@@ -1557,10 +1558,6 @@ func (ses *feSessionImpl) SetMemPool(mp *mpool.MPool) {
 
 func (ses *feSessionImpl) GetMemPool() *mpool.MPool {
 	return ses.pool
-}
-
-func (ses *feSessionImpl) GetBuffer() *buffer.Buffer {
-	return ses.buf
 }
 
 func (ses *feSessionImpl) GetStmtProfile() *process.StmtProfile {
@@ -1730,7 +1727,7 @@ func (ses *feSessionImpl) GetResultBatches() []*batch.Batch {
 func (ses *feSessionImpl) AppendResultBatch(bat *batch.Batch) error {
 	// Result batches belong to the session and can remain reachable after the
 	// producing statement has sealed its allocation account.
-	copied, err := bat.DupWithoutAllocationAccount(ses.pool)
+	copied, err := bat.Dup(ses.pool)
 	if err != nil {
 		return err
 	}
@@ -1825,6 +1822,13 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 
 	if name == "wait_timeout" || name == "interactive_timeout" {
 		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
+			return err
+		}
+	}
+	if name == "time_zone" {
+		// An unknown zone stored globally would fail every new session's
+		// initialization, so reject it here like SET SESSION does.
+		if _, _, err = resolveTimeZone(ctx, val); err != nil {
 			return err
 		}
 	}
@@ -1972,7 +1976,7 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	// These values shape bound defaults, constant-folded expressions, LOAD validation, planned index scan options,
 	// or the join/aggregate/sort spill thresholds baked into Node.SpillMem at plan-build time.
 	// Compare converted values so equivalent SET spellings retain warm plans.
-	planDependencyVariable := name == "sql_mode" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp" || name == "mo_pk_check_by_cn" ||
+	planDependencyVariable := name == "sql_mode" || name == "optimizer_hints" || name == "lc_time_names" || name == "time_zone" || name == "explicit_defaults_for_timestamp" || name == "mo_pk_check_by_cn" ||
 		name == "fulltext2_search_df_cutoff" || name == "fulltext2_threads_search" || name == "fulltext_bloom_filter_pushdown" ||
 		name == "join_spill_mem" || name == "agg_spill_mem" || name == "sort_spill_mem"
 	var oldPlanDependency interface{}
@@ -2189,12 +2193,24 @@ func (ses *feSessionImpl) GetUUIDString() string {
 }
 
 func (ses *feSessionImpl) ReplaceResponser(resper Responser) Responser {
+	ses.resprMu.Lock()
+	defer ses.resprMu.Unlock()
 	old := ses.respr
 	ses.respr = resper
 	return old
 }
 
+// setResponser is the single locked writer for the embedded Responser, used
+// by teardown/copy paths that previously wrote ses.respr directly.
+func (ses *feSessionImpl) setResponser(resper Responser) {
+	ses.resprMu.Lock()
+	defer ses.resprMu.Unlock()
+	ses.respr = resper
+}
+
 func (ses *feSessionImpl) GetResponser() Responser {
+	ses.resprMu.RLock()
+	defer ses.resprMu.RUnlock()
 	return ses.respr
 }
 

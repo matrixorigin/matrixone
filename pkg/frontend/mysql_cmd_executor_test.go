@@ -47,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -174,6 +173,23 @@ func TestDoComQueryParseErrorReplacesPreviousDiagnostics(t *testing.T) {
 	require.Equal(t, 1, info.length())
 	require.Equal(t, []uint16{1064}, info.codes)
 	require.NotContains(t, info.msgs, "stale diagnostic marker")
+	t.Run("restore outer statement after parse error", func(t *testing.T) {
+		previous := ses.GetStmtInfo()
+		t.Cleanup(func() { ses.SetTStmt(previous) })
+		outer := &motrace.StatementInfo{Statement: []byte("outer statement")}
+		ses.SetTStmt(outer)
+		ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		err := doComQuery(ses, execCtx, &UserInput{sql: "select from"})
+		require.Error(t, err)
+		require.Same(t, outer, ses.GetStmtInfo(), "a nested request must return the outer statement to its owner")
+		ses.appendErrorDiagnostic(1064, err.Error())
+		info := ses.diagnosticsSnapshot()
+		require.Equal(t, 1, info.length())
+		require.Equal(t, []uint16{1064}, info.codes)
+		require.NotContains(t, info.msgs, "stale diagnostic marker")
+	})
 }
 
 func TestDoComQueryParseErrorRedactsMongoDBSelector(t *testing.T) {
@@ -257,6 +273,31 @@ func TestDoComQueryStopsAfterStatementError(t *testing.T) {
 
 	err = doComQuery(ses, execCtx, &UserInput{sql: query})
 	require.ErrorContains(t, err, "first statement failed")
+}
+
+func TestDoComQueryRecordsSanitizedSchedulingFragments(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(nil)
+	ses.SetCmd(COM_QUERY)
+	execCtx.reqCtx = ctx
+
+	stop := errors.New("stop after recording")
+	var recorded string
+	stubs := gostub.Stub(&RecordStatement, func(ctx context.Context, _ *Session, _ *process.Process,
+		_ ComputationWrapper, _ time.Time, sql, _ string, _ bool) (context.Context, error) {
+		recorded = sql
+		return ctx, stop
+	})
+	defer stubs.Reset()
+
+	input := &UserInput{sql: "/* cloud_user */ create user test_record identified by 'dummy'"}
+	err := doComQuery(ses, execCtx, input)
+	require.ErrorIs(t, err, stop)
+	require.Equal(t, "create user test_record identified by '******'", recorded)
+	require.Nil(t, input.recordFragments)
 }
 
 func TestDoComQueryStageCatalogErrorOverridesStaleCache(t *testing.T) {
@@ -3812,7 +3853,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			bat := genBatch()
 			for i := 0; i < len(bat.Attrs); i++ {
 				for j := 0; j < bat.Vecs[0].Length(); j++ {
-					nulls.Add(bat.Vecs[i].GetNulls(), uint64(j))
+					bat.Vecs[i].GetNulls().Add(uint64(j))
 				}
 			}
 			return bat
@@ -3886,7 +3927,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 			for i := 0; i < len(bat.Attrs); i++ {
 				for j := 0; j < 1; j++ {
-					nulls.Add(bat.Vecs[i].GetNulls(), uint64(j))
+					bat.Vecs[i].GetNulls().Add(uint64(j))
 				}
 			}
 			return bat
@@ -3896,7 +3937,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.T_any.ToType()))
+		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.T_any.ToType(), mp))
 		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -3976,7 +4017,7 @@ func allocTestBatch(mp *mpool.MPool, attrName []string, tt []types.Type, batchSi
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
-		vec := vector.NewVec(tt[i])
+		vec := vector.NewVec(tt[i], mp)
 		if err := vec.PreExtend(batchSize, mp); err != nil {
 			panic(err)
 		}
@@ -4328,6 +4369,9 @@ func TestGetComputationWrapperKeepsExecutableCommentStatementWhole(t *testing.T)
 			records, err := sqlForRecordByStatement(ctx, input.sql)
 			require.NoError(t, err)
 			require.Len(t, records, len(cws))
+			actualRecords, err := input.sqlForRecord(ctx, sessionSQLModeForParser(ses), len(cws))
+			require.NoError(t, err)
+			require.Equal(t, records, actualRecords)
 			for i, cw := range cws {
 				text := cw.(interface{ SchedulingSQL() string }).SchedulingSQL()
 				stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, text, 1)
@@ -6079,7 +6123,7 @@ func Test_doResetClearsPreparedBinaryState(t *testing.T) {
 		prepareStmts: make(map[string]*PrepareStmt),
 	}
 	proc := testutil.NewProc(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("long-data"), false, proc.Mp()))
 	params.GetNulls().Set(0)
 
@@ -6088,6 +6132,7 @@ func Test_doResetClearsPreparedBinaryState(t *testing.T) {
 		Name:                stmtName,
 		proc:                proc,
 		params:              params,
+		paramsMP:            proc.Mp(),
 		getFromSendLongData: map[int]struct{}{0: {}},
 	}
 	defer prepareStmt.Close()
@@ -6173,12 +6218,12 @@ func TestExecRequestStmtCloseSuppressesDeallocateError(t *testing.T) {
 	oldBuild := buildPlanWithAuthorization
 	t.Cleanup(func() { buildPlanWithAuthorization = oldBuild })
 	deallocateCalled := false
-	buildPlanWithAuthorization = func(reqCtx context.Context, session FeSession, compiler plan.CompilerContext, statement tree.Statement) (*plan.Plan, error) {
+	buildPlanWithAuthorization = func(reqCtx context.Context, session FeSession, compiler plan.CompilerContext, statement tree.Statement, input *plan.PlanningInput) (*plan.Plan, error) {
 		if _, ok := statement.(*tree.Deallocate); ok {
 			deallocateCalled = true
 			return nil, errors.New("injected deallocate planning failure")
 		}
-		return oldBuild(reqCtx, session, compiler, statement)
+		return oldBuild(reqCtx, session, compiler, statement, input)
 	}
 
 	data := make([]byte, 4)
@@ -6209,7 +6254,7 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 	require.NoError(t, err)
 
 	proc := ses.GetProc()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("leftover"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("leftover"), false, proc.Mp()))
 	params.GetNulls().Set(1)
@@ -6220,6 +6265,7 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 		PrepareStmt:         stmts[0],
 		proc:                proc,
 		params:              params,
+		paramsMP:            proc.Mp(),
 		getFromSendLongData: map[int]struct{}{0: {}},
 	}
 	defer prepareStmt.Close()
@@ -6509,7 +6555,7 @@ func TestPreparedCursorLimitHonorsExplicitZero(t *testing.T) {
 func TestEstimatePreparedCursorBatchBytesIncludesArrayDisplay(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	vec := vector.NewVec(types.T_array_uint8.ToType())
+	vec := vector.NewVec(types.T_array_uint8.ToType(), mp)
 	values := make([]uint8, types.MaxArrayDimension)
 	for i := range values {
 		values[i] = 255
@@ -6565,7 +6611,7 @@ func TestEstimatePreparedCursorMaterializedBytesArrayAndDecimalFamilies(t *testi
 			case "int8":
 				oid = types.T_array_int8
 			}
-			vec := vector.NewVec(oid.ToType())
+			vec := vector.NewVec(oid.ToType(), mp)
 			require.NoError(t, tc.make(vec))
 			bat := batch.NewWithSize(1)
 			bat.Vecs[0] = vec
@@ -6586,7 +6632,7 @@ func TestEstimatePreparedCursorMaterializedBytesArrayAndDecimalFamilies(t *testi
 		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 4), text: "1234.5678"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(tc.typ)
+			vec := vector.NewVec(tc.typ, mp)
 			switch tc.typ.Oid {
 			case types.T_decimal64:
 				value, err := types.ParseDecimal64(tc.text, tc.typ.Width, tc.typ.Scale)
@@ -6616,7 +6662,7 @@ func TestPreparedCursorDecimal256MaterializationBoundAndRollback(t *testing.T) {
 	typ := types.New(types.T_decimal256, 65, 0)
 	value, err := types.ParseDecimal256(strings.Repeat("9", 65), typ.Width, typ.Scale)
 	require.NoError(t, err)
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vec
@@ -6668,7 +6714,7 @@ func TestPreparedCursorGeometryMaterializationBoundAndRollback(t *testing.T) {
 		{name: "geometry32", typ: types.T_geometry32, payload: line32},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(tc.typ.ToType())
+			vec := vector.NewVec(tc.typ.ToType(), mp)
 			require.NoError(t, vector.AppendBytes(vec, tc.payload, false, mp))
 			bat := batch.NewWithSize(1)
 			bat.Vecs[0] = vec
@@ -7955,7 +8001,7 @@ func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 		ctx context.Context,
 		_ FeSession,
 		compilerCtx plan.CompilerContext,
-		_ tree.Statement,
+		_ tree.Statement, _ *plan.PlanningInput,
 	) (*plan.Plan, error) {
 		checked = true
 		require.Same(t, currentExecCtx, compilerCtx.(*TxnCompilerContext).execCtx)
@@ -7982,7 +8028,7 @@ func TestPreparedOwnerPolicyBeforePlanning(t *testing.T) {
 			input := &UserInput{sql: "procedure body"}
 			execCtx := &ExecCtx{reqCtx: ctx, ses: ses, input: input, remapDb: map[string]string{"saved": "db"}}
 			planned := false
-			buildPlanWithAuthorization = func(_ context.Context, _ FeSession, _ plan.CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
+			buildPlanWithAuthorization = func(_ context.Context, _ FeSession, _ plan.CompilerContext, stmt tree.Statement, _ *plan.PlanningInput) (*plan.Plan, error) {
 				planned = true
 				policy := execCtx.input.rewritePolicy
 				require.True(t, policy.captured)
@@ -8026,7 +8072,7 @@ func TestPreparedOwnerPolicyBeforePlanning(t *testing.T) {
 		input := &UserInput{rewritePolicy: policy}
 		execCtx := &ExecCtx{reqCtx: ctx, input: input, rewriteEnabled: true,
 			sqlOfStmt: `/*+ {"rewrites":{"owner.t":"select id from owner.t where tenant = 1"}} */ prepare p from 'select id from owner.t'`}
-		buildPlanWithAuthorization = func(_ context.Context, _ FeSession, _ plan.CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
+		buildPlanWithAuthorization = func(_ context.Context, _ FeSession, _ plan.CompilerContext, stmt tree.Statement, _ *plan.PlanningInput) (*plan.Plan, error) {
 			require.Same(t, input, execCtx.input)
 			require.Same(t, policy, execCtx.input.rewritePolicy)
 			layers := stmt.(*tree.PrepareStmt).Stmt.(*tree.Select).RewriteOption.Rewrites["owner.t"]
@@ -8047,7 +8093,7 @@ func TestPreparedOwnerPolicyBeforePlanning(t *testing.T) {
 		bh.sql2err[getSqlForInheritedRoleIDsForRuleCache(0)] = failure
 		stub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer stub.Reset()
-		buildPlanWithAuthorization = func(context.Context, FeSession, plan.CompilerContext, tree.Statement) (*plan.Plan, error) {
+		buildPlanWithAuthorization = func(context.Context, FeSession, plan.CompilerContext, tree.Statement, *plan.PlanningInput) (*plan.Plan, error) {
 			t.Fatal("planning must not run after capture fails")
 			return nil, nil
 		}
@@ -8121,9 +8167,9 @@ func TestPreparedCreateViewUsesInnerRootSQL(t *testing.T) {
 		_ context.Context,
 		_ FeSession,
 		compilerCtx plan.CompilerContext,
-		stmt tree.Statement,
+		stmt tree.Statement, _ *plan.PlanningInput,
 	) (*plan.Plan, error) {
-		return plan.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
+		return plan.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false, nil)
 	}
 
 	for _, tt := range []struct {
@@ -8178,9 +8224,9 @@ func TestPrepareStringCreateViewUsesRewrittenInnerRootSQL(t *testing.T) {
 		_ context.Context,
 		_ FeSession,
 		compilerCtx plan.CompilerContext,
-		stmt tree.Statement,
+		stmt tree.Statement, _ *plan.PlanningInput,
 	) (*plan.Plan, error) {
-		return plan.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
+		return plan.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false, nil)
 	}
 
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
@@ -8627,12 +8673,10 @@ func TestPreparedSetExpressionPlanModeIsExplicit(t *testing.T) {
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ? + 1 from dual", 1)
 	require.NoError(t, err)
 
-	_, err = buildPlanWithPrepareMode(
-		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, false)
+	_, err = buildPlanWithPrepareMode(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, false, nil)
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")
 
-	preparedPlan, err := buildPlanWithPrepareMode(
-		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true)
+	preparedPlan, err := buildPlanWithPrepareMode(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, nil)
 	require.NoError(t, err)
 	require.True(t, preparedPlan.GetIsPrepare())
 	require.Equal(t, []int32{0}, queryParamPositions(preparedPlan.GetQuery()))
@@ -8645,7 +8689,7 @@ func TestBuildPlanWithPrepareModeAllowsMissingCompilerProcess(t *testing.T) {
 
 	compCtx := plan.NewEmptyCompilerContext(nil)
 	compCtx.SetContext(nil)
-	_, err = buildPlanWithPrepareMode(ctx, nil, compCtx, stmt, false)
+	_, err = buildPlanWithPrepareMode(ctx, nil, compCtx, stmt, false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, compCtx.GetContext())
 }
@@ -8660,8 +8704,7 @@ func TestPreparedSetExpressionPlanKeepsGlobalParserOrdinal(t *testing.T) {
 	require.Equal(t, 2, secondParam.Offset)
 	clause.Exprs = clause.Exprs[1:]
 
-	preparedPlan, err := buildPlanWithPrepareMode(
-		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true)
+	preparedPlan, err := buildPlanWithPrepareMode(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, []int32{1}, queryParamPositions(preparedPlan.GetQuery()))
 	require.Equal(t, 2, secondParam.Offset, "planning must not mutate the retained SET AST")
@@ -8689,8 +8732,7 @@ func TestPreparedSetExpressionPlanNormalizesAggregateAndWindowParams(t *testing.
 	} {
 		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
 		require.NoError(t, err)
-		preparedPlan, err := buildPlanWithPrepareMode(
-			ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true)
+		preparedPlan, err := buildPlanWithPrepareMode(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, nil)
 		require.NoError(t, err)
 		require.ElementsMatch(t, tc.want, queryParamPositions(preparedPlan.GetQuery()))
 	}
@@ -8706,7 +8748,7 @@ func TestPreparedSetExpressionRetryKeepsGlobalParserOrdinal(t *testing.T) {
 	clause.Exprs = clause.Exprs[1:]
 
 	retryPlan, err := buildPlanForCompileRetry(
-		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, nil)
+		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, []int32{1}, queryParamPositions(retryPlan.GetQuery()))
 	require.Equal(t, 2, secondParam.Offset)
@@ -8725,7 +8767,7 @@ func TestPreparedQueryRetryKeepsPrunedParserOrdinal(t *testing.T) {
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			retryPlan, err := buildPlanForCompileRetry(ctx, ses, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, false, nil)
+			retryPlan, err := buildPlanForCompileRetry(ctx, ses, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, false, nil, nil)
 			require.NoError(t, err)
 			require.Equal(t, []int32{1}, queryParamPositions(retryPlan.GetQuery()))
 		}()
@@ -8746,12 +8788,12 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 		plan.ParamValue{
 			Value:               "9007199254740992.0000000000",
 			IsBinaryProtocol:    true,
-			PrepareParamKind:    vector.PrepareParamDecimal,
+			PrepareParamKind:    types.StringConversionDecimal,
 			EnableNumericPrefix: true,
 		},
 	})
 	retryPlan, err := buildPlanForCompileRetry(
-		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, retry)
+		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, retry, nil)
 	require.NoError(t, err)
 	require.Empty(t, queryParamPositions(retryPlan.GetQuery()),
 		"definition-change retry returned the prepare-time parameterized plan: %s", retryPlan.String())
@@ -8778,7 +8820,7 @@ func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
 	compilerCtx := plan.NewMockCompilerContext(true, newPlanTestProcess(t))
 	compilerCtx.SetContext(ctx)
 	proc := compilerCtx.GetProcess()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("01:00:00"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
@@ -8799,21 +8841,21 @@ func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
 		{Position: 0, Type: types.T_text.ToType()},
 		{Position: 1, Type: types.T_int64.ToType()},
 	}
-	safe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry)
+	safe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry, nil)
 	require.NoError(t, err)
 	require.NotNil(t, safe.GetQuery())
 	require.Positive(t, scanFilters(safe.GetQuery()), "safe values must restore selective scans")
 
 	require.NoError(t, vector.SetStringAt(params, 0, "900:00:00", proc.Mp()))
 	retry.paramVals[0] = plan.ParamValue{Value: "900:00:00"}
-	unsafe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry)
+	unsafe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry, nil)
 	require.NoError(t, err)
 	require.NotNil(t, unsafe.GetQuery())
 	require.Zero(t, scanFilters(unsafe.GetQuery()), "warning-producing values keep the JOIN boundary")
 
 	require.NoError(t, vector.SetStringAt(params, 0, "01:00:00", proc.Mp()))
 	retry.paramVals[0] = plan.ParamValue{Value: "01:00:00"}
-	again, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry)
+	again, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry, nil)
 	require.NoError(t, err)
 	require.Positive(t, scanFilters(again.GetQuery()), "the earlier unsafe retry must not retain its barrier")
 
@@ -8838,7 +8880,7 @@ func TestBuildPlanForPreparedExpressionRetryPreservesBinaryRuntimeType(t *testin
 			IsBinaryProtocol: true,
 			RuntimeType:      types.T_int64.ToType(),
 			HasRuntimeType:   true,
-		}}))
+		}}), nil)
 	require.NoError(t, err)
 	require.Empty(t, queryParamPositions(retryPlan.GetQuery()), retryPlan.String())
 	root := retryPlan.GetQuery().Nodes[retryPlan.GetQuery().Steps[len(retryPlan.GetQuery().Steps)-1]]
@@ -9143,6 +9185,9 @@ func TestJsonPlanHandlerRefreshesTerminalResourceSummary(t *testing.T) {
 	require.Nil(t, unmarshaled.buffer)
 	require.Nil(t, unmarshaled.marshalHandler)
 	require.Nil(t, unmarshaled.Marshal(context.Background()))
+	unmarshaled.SetResourceSummary(summary)
+	var absent *jsonPlanHandler
+	absent.SetResourceSummary(summary)
 }
 
 func TestSchedulingTracePlanHandlerMarshalsLazilyOnce(t *testing.T) {
@@ -9533,7 +9578,7 @@ func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testin
 		context.Context,
 		FeSession,
 		plan.CompilerContext,
-		tree.Statement,
+		tree.Statement, *plan.PlanningInput,
 	) (*plan.Plan, error) {
 		return &plan.Plan{
 			Plan: &plan0.Plan_Query{
@@ -9581,7 +9626,7 @@ func TestDoExplainExecuteUsesPreparedSchedulingSQL(t *testing.T) {
 		context.Context,
 		FeSession,
 		plan.CompilerContext,
-		tree.Statement,
+		tree.Statement, *plan.PlanningInput,
 	) (*plan.Plan, error) {
 		return &plan.Plan{
 			Plan: &plan0.Plan_Query{
@@ -9631,7 +9676,7 @@ func TestDoExplainStmtKeepsSchedulingPreviewOptIn(t *testing.T) {
 		context.Context,
 		FeSession,
 		plan.CompilerContext,
-		tree.Statement,
+		tree.Statement, *plan.PlanningInput,
 	) (*plan.Plan, error) {
 		return &plan.Plan{
 			Plan: &plan0.Plan_Query{
@@ -9673,7 +9718,7 @@ func TestDoExplainStmtDoesNotSwallowRequestCancellation(t *testing.T) {
 		context.Context,
 		FeSession,
 		plan.CompilerContext,
-		tree.Statement,
+		tree.Statement, *plan.PlanningInput,
 	) (*plan.Plan, error) {
 		return &plan.Plan{
 			Plan: &plan0.Plan_Query{
@@ -10094,7 +10139,7 @@ func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, e
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return plan.BuildPlan(ctx, stmts[0], false)
+	return plan.BuildPlan(ctx, stmts[0], false, nil)
 }
 
 func Test_getSqlType(t *testing.T) {
@@ -10131,7 +10176,7 @@ func Test_getSqlType(t *testing.T) {
 			{wrapNativePrepareSQL("s", "/* cloud_nonuser */ select 1"), []string{constant.CloudNoUserSql}},
 		} {
 			t.Run(tc.sql, func(t *testing.T) {
-				fragments, sources, err := schedulingSQLByStatementWithSQLMode(context.Background(), tc.sql, "", false)
+				fragments, sources, _, err := schedulingSQLByStatementWithSQLMode(context.Background(), tc.sql, "", false, nil)
 				require.NoError(t, err)
 				require.Len(t, fragments, len(tc.want))
 				require.Equal(t, tc.want, sources)
@@ -10160,7 +10205,7 @@ func Test_getSqlType(t *testing.T) {
 				ses.SetTenantInfo(tc.tenant)
 				input := &UserInput{sql: tc.sql, isInternalInput: tc.internal}
 				require.True(t, input.isInternalSQLSource(ses))
-				_, sources, err := schedulingSQLByStatementWithSQLMode(context.Background(), "/* save_result */ select 1; /* cloud_nonuser */ select 2", "", input.isInternalSQLSource(ses))
+				_, sources, _, err := schedulingSQLByStatementWithSQLMode(context.Background(), "/* save_result */ select 1; /* cloud_nonuser */ select 2", "", input.isInternalSQLSource(ses), nil)
 				require.NoError(t, err)
 				require.Equal(t, []string{constant.InternalSql, constant.InternalSql}, sources)
 				input.genSqlSourceType(ses)
@@ -10197,7 +10242,7 @@ func Test_getSqlType(t *testing.T) {
 				_, err := sqlSourcesByFragment(context.Background(), "select 1", "", []mysql.SQLFragment{span}, internal)
 				require.ErrorContains(t, err, "SQL fragment is not in its input")
 			}
-			_, sources, err := schedulingSQLByStatementWithSQLMode(context.Background(), "/* benign */;", "", internal)
+			_, sources, _, err := schedulingSQLByStatementWithSQLMode(context.Background(), "/* benign */;", "", internal, nil)
 			require.NoError(t, err)
 			want := constant.ExternSql
 			if internal {
@@ -10294,7 +10339,7 @@ func TestProcessLoadLocal(t *testing.T) {
 			}
 		}(buffer)
 		ec := newTestExecCtx(context.Background(), ctrl)
-		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
@@ -10483,7 +10528,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {
 		proc.Ctx = ctx
 		ec.proc = proc
 
-		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer)
 		convey.So(err, convey.ShouldEqual, expected)
 		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 1)
 	})
@@ -10543,7 +10588,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorInLoop(t *testing.T) {
 		proc.Ctx = ctx
 		ec.proc = proc
 
-		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer)
 		convey.So(err, convey.ShouldEqual, expected)
 		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 2)
 		convey.So(buffer[:5], convey.ShouldResemble, []byte("hello"))
@@ -10620,7 +10665,7 @@ func TestProcessLoadLocal_NetworkTimeout(t *testing.T) {
 		}()
 
 		ec := newTestExecCtx(context.Background(), ctrl)
-		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer)
 
 		// Should return error containing "network read timeout"
 		convey.So(err, convey.ShouldNotBeNil)
@@ -10864,6 +10909,14 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 
 }
 
+func enableParseErrorTracer(t *testing.T) {
+	t.Helper()
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	t.Cleanup(func() { provider.SetEnable(wasEnabled) })
+	provider.SetEnable(true)
+}
+
 func Test_RecordParseErrorStatement(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -10892,7 +10945,7 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 		Ctx:  context.TODO(),
 	}
 
-	motrace.GetTracerProvider().SetEnable(true)
+	enableParseErrorTracer(t)
 	_, err := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, moerr.NewInternalErrorNoCtx("test"))
 	assert.Nil(t, err)
 
@@ -10910,6 +10963,24 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 	ses.finishResponseAccounting(context.TODO(), moerr.NewInternalErrorNoCtx("test"), true)
 	assert.Nil(t, ses.GetStmtInfo())
 
+}
+
+func TestRecordParseErrorStatementRestoresTracer(t *testing.T) {
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	t.Cleanup(func() { provider.SetEnable(wasEnabled) })
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("initial=%t", enabled), func(t *testing.T) {
+			provider.SetEnable(enabled)
+			require.True(t, t.Run("enable tracer", func(t *testing.T) {
+				enableParseErrorTracer(t)
+				require.Same(t, provider, motrace.GetTracerProvider())
+				require.True(t, provider.IsEnable())
+			}))
+			require.Same(t, provider, motrace.GetTracerProvider())
+			require.Equal(t, enabled, provider.IsEnable())
+		})
+	}
 }
 
 func Test_getExplainOption(t *testing.T) {
@@ -11941,11 +12012,15 @@ func Test_handleShowTableStatus(t *testing.T) {
 
 		var statsSQL, indexSQL string
 		execStub := gostub.Stub(&ExeSqlInBgSes, func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
+			probe := &process.Process{Ctx: reqCtx, Base: &process.BaseProcess{}}
 			switch {
 			case strings.Contains(sql, "mo_table_rows(db, tbl)"):
+				// The separate ordinary-table query does not inherit the index capability.
+				require.Error(t, process.CheckIndexRelationAccess(probe, catalog.IndexTableNamePrefix, "", 0))
 				statsSQL = sql
 				return []ExecResult{statsRet}, nil
 			case strings.Contains(sql, "mo_table_size(db, tbl)"):
+				require.NoError(t, process.CheckIndexRelationAccess(probe, catalog.IndexTableNamePrefix, "", 0))
 				indexSQL = sql
 				return []ExecResult{indexRet}, nil
 			default:
@@ -12379,7 +12454,7 @@ func Test_checkModify(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	resolveFn := func(schemaName, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	resolveFn := func(schemaName, tableName string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 		if schemaName == "err_db" {
 			return nil, nil, &moerr.Error{}
 		}
@@ -12464,7 +12539,7 @@ func Test_checkModify(t *testing.T) {
 
 func TestCheckModifyRebindsViewMetadataUdf(t *testing.T) {
 	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{ViewMetadataDependsOnUdf: true}}}
-	changed, err := checkModify(queryPlan, func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	changed, err := checkModify(queryPlan, func(string, string, *plan.Snapshot, *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 		t.Fatal("UDF-backed SHOW must rebind without relying on a table schema change")
 		return nil, nil, nil
 	})
@@ -12518,7 +12593,7 @@ func TestCheckModifyValidatesCatalogDependencies(t *testing.T) {
 			changed, err := checkModify(queryPlan, func(
 				databaseName string,
 				tableName string,
-				gotSnapshot *plan.Snapshot,
+				gotSnapshot *plan.Snapshot, borrowOutput *plan.TableResolution,
 			) (*plan.ObjectRef, *plan.TableDef, error) {
 				require.Equal(t, "test_db", databaseName)
 				require.Equal(t, "test_view", tableName)
@@ -12547,7 +12622,7 @@ func TestCheckModifyValidatesCatalogDependencies(t *testing.T) {
 		changed, err := checkModify(subscriptionPlan, func(
 			databaseName string,
 			tableName string,
-			gotSnapshot *plan.Snapshot,
+			gotSnapshot *plan.Snapshot, borrowOutput *plan.TableResolution,
 		) (*plan.ObjectRef, *plan.TableDef, error) {
 			require.Equal(t, "subscriber_alias", databaseName)
 			require.Equal(t, "scanless_view", tableName)
@@ -12996,12 +13071,12 @@ func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 			ses.SetDatabaseName("tpch")
 			ses.GetTxnCompileCtx().SetDatabase("tpch")
 			defer ses.GetTxnCompileCtx().Close()
-			_, table, err := base.Resolve("tpch", "nation", nil)
+			_, table, err := base.Resolve("tpch", "nation", nil, nil)
 			require.NoError(t, err)
 			installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
 			stmts, err := mysql.Parse(ec.reqCtx, tc.sql, 1)
 			require.NoError(t, err)
-			cached, err := plan.BuildPlan(ctx, stmts[0], false)
+			cached, err := plan.BuildPlan(ctx, stmts[0], false, nil)
 			require.NoError(t, err)
 			// Supply a real captured stats count, rather than relying on the TPCH
 			// mock's default estimate, and keep the schema/snapshot checks active.
@@ -13104,7 +13179,8 @@ func TestRecordStatementUTF8(t *testing.T) {
 						if tc.params != nil {
 							proc := testutil.NewProc(t)
 							prepared.proc = proc
-							prepared.params = vector.NewVec(types.T_text.ToType())
+							prepared.params = vector.NewVec(types.T_text.ToType(), proc.Mp())
+							prepared.paramsMP = proc.Mp()
 							defer prepared.Close()
 							for i, value := range tc.params {
 								require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), i == tc.nullIndex, proc.Mp()))
@@ -13235,8 +13311,8 @@ func TestPreparedCTASCompileRetryPreservesNamesAndParameters(t *testing.T) {
 	defer stmt.Free()
 	compiler := plan.NewMockCompilerContext(true, newPlanTestProcess(t))
 	compiler.SetContext(ctx)
-	params := vector.NewVec(types.T_text.ToType())
 	proc := compiler.GetProcess()
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
@@ -13244,7 +13320,7 @@ func TestPreparedCTASCompileRetryPreservesNamesAndParameters(t *testing.T) {
 	for _, value := range []int64{2, 7, 2} {
 		require.NoError(t, vector.SetStringAt(params, 0, fmt.Sprint(value), proc.Mp()))
 		retry := newPreparedExecutionRetry([]any{plan.ParamValue{Value: value}})
-		got, err := buildPlanForCompileRetry(ctx, ses, compiler, stmt, false, retry)
+		got, err := buildPlanForCompileRetry(ctx, ses, compiler, stmt, false, retry, nil)
 		require.NoError(t, err)
 		require.Empty(t, queryParamPositions(got.GetDdl().Query))
 		cols := got.GetDdl().GetCreateTable().TableDef.Cols
@@ -13254,4 +13330,56 @@ func TestPreparedCTASCompileRetryPreservesNamesAndParameters(t *testing.T) {
 		// Specialization retains each supplied value, rather than freezing the first retry.
 		require.Contains(t, got.GetDdl().Query.String(), fmt.Sprintf("sval:%q", fmt.Sprint(value)))
 	}
+}
+
+func TestTemporalCacheCancelledAfterDependencyCheckKeepsGeneration(t *testing.T) {
+	base := plan.NewMockCompilerContext(false, newPlanTestProcess(t))
+	ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
+	const sql = "select n_name from nation where n_nationkey=1"
+	ses, prepared, initialCW, ec := newPreparedExecuteEnvForSQLWithCompilerContext(t, 31619, sql, ctx)
+	defer prepared.Close()
+	defer initialCW.Free()
+	ses.SetDatabaseName("tpch")
+	ses.GetTxnCompileCtx().SetDatabase("tpch")
+	defer ses.GetTxnCompileCtx().Close()
+	_, table, err := base.Resolve("tpch", "nation", nil, nil)
+	require.NoError(t, err)
+	runCtx, cancel := context.WithCancelCause(ec.reqCtx)
+	defer cancel(nil)
+	cause := fmt.Errorf("stop after dependency validation")
+	observations := 0
+	installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo {
+		observations++
+		cancel(cause)
+		return ctx.stats
+	})
+	stmts, err := mysql.Parse(ec.reqCtx, sql, 1)
+	require.NoError(t, err)
+	cached, err := plan.BuildPlan(ctx, stmts[0], false, nil)
+	require.NoError(t, err)
+	for _, node := range cached.GetQuery().Nodes {
+		if node.NodeType == plan0.Node_TABLE_SCAN {
+			node.Stats.TableCnt = 128
+		}
+	}
+	input := &UserInput{sql: sql}
+	input.genHash()
+	ses.cachePlan(input.getHash(), stmts, []*plan0.Plan{cached})
+	defer ses.cleanCache()
+	ec.input = input
+	cws, err := GetComputationWrapper(ec, "tpch", "root", nil, ses.GetProc(), ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	cw := cws[0].(*TxnComputationWrapper)
+	defer cw.Free()
+	ec.cw, ec.cws, ec.stmt, ec.reqCtx = cw, cws, cw.GetAst(), runCtx
+	ec.proc = cw.proc
+	ses.GetTxnCompileCtx().SetExecCtx(ec)
+	originalAST := cw.GetAst()
+	err = checkCachedStatementPlan(ses, ec)
+	require.Same(t, cause, err)
+	require.Positive(t, observations, "ordinary stats admission is reached after dependency validation")
+	require.True(t, ses.isCached(input.getHash()), "stale rebuilding starts by removing this entry, before parsing")
+	require.Same(t, cached, cw.Plan())
+	require.Same(t, originalAST, cw.GetAst())
 }

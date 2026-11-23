@@ -83,6 +83,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -692,6 +693,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			if isRemote {
 				s.DataSource.BlockFilterList = plan2.DeepCopyExprList(dsc.Node.BlockFilterList)
 			}
+			s.DataSource.OrderBy = dsc.Node.OrderBy
 			s.DataSource.IndexReaderParam = dsc.Node.IndexReaderParam
 		}
 	}
@@ -924,6 +926,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			PreInsertSkCtx: t.PreInsertCtx,
 		}
 	case *shuffle.Shuffle:
+		if len(t.ShuffleKeyColumns) > 0 {
+			return ctxId, nil, moerr.NewInternalErrorNoCtx("complete-key shuffle is coordinator-local")
+		}
 		if proc != nil && proc.UsesCompleteStringShuffleHash() &&
 			t.ShuffleType == int32(plan.ShuffleType_Hash) && t.StringHashKey {
 			// This appended wire opcode is deliberately unknown to pre-v33
@@ -1037,6 +1042,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Offset = t.OffsetExpr
 	case *order.Order:
 		in.OrderBy = t.OrderBySpec
+		if t.ScanCutoffLimit > 0 && t.ScanCutoffTag > 0 {
+			// For Order, Limit is an optional witness-count hint, not an
+			// output limit. Only the executing scan scope may enable it.
+			in.Limit = plan2.MakePlan2Uint64ConstExprWithType(t.ScanCutoffLimit)
+			in.TopValueTag = t.ScanCutoffTag
+		}
 	case *partition.Partition:
 		in.OrderBy = t.OrderBySpecs
 		in.Limit = t.Limit
@@ -1055,14 +1066,22 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *productl2.Productl2:
 		relList, colList := getRelColList(t.Result)
+		ignored, err := productl2.EncodeIgnored(t.Ignored)
+		if err != nil {
+			return ctxId, nil, err
+		}
 		in.ProductL2 = &pipeline.ProductL2{
 			RelList:      relList,
 			ColList:      colList,
 			Expr:         t.OnExpr,
 			JoinMapTag:   t.JoinMapTag,
 			VectorOpType: t.VectorOpType,
+			Ignored:      ignored,
 		}
 	case *projection.Projection:
+		if t.ValuesWarningRow != 0 {
+			return -1, nil, moerr.NewInternalError(proc.Ctx, "VALUES warning projection must run on the coordinator")
+		}
 		in.ProjectList = t.ProjectList
 		in.ProjectionGroupingFlags = t.GroupingFlags
 		in.ProjectionGroupingSetCount = int32(t.GroupingSetCount)
@@ -1079,6 +1098,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
+		in.TopValueTag = t.TopValueTag
 		in.TopOrderedOutput = t.OrderedOutput
 	case *intersect.Intersect:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
@@ -1125,13 +1145,18 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ConnectorIndex: idx,
 		}
 	case *table_function.TableFunction:
+		maintenance, err := encodeIndexMaintenanceSpec(t.IndexMaintenance)
+		if err != nil {
+			return ctxId, nil, err
+		}
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:    t.Attrs,
-			Rets:     t.Rets,
-			Args:     t.Args,
-			Params:   t.Params,
-			Name:     t.FuncName,
-			IsSingle: t.IsSingle,
+			Attrs:            t.Attrs,
+			Rets:             t.Rets,
+			Args:             t.Args,
+			Params:           t.Params,
+			Name:             t.FuncName,
+			IsSingle:         t.IsSingle,
+			IndexMaintenance: maintenance,
 		}
 		in.Limit = t.Limit
 
@@ -1215,6 +1240,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DedupColName:              t.DedupColName,
 			DedupColTypes:             t.DedupColTypes,
 			DedupKeyExprs:             t.DedupKeyExprs,
+			AuxiliaryRowIdColIdx:      t.AuxiliaryRowIdColIdx,
 			DelColIdx:                 t.DelColIdx,
 			DedupDeleteMarkerColIdx:   t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList: t.DedupDeleteKeepColIdxList,
@@ -1250,6 +1276,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DedupColName:                    t.DedupColName,
 			DedupColTypes:                   t.DedupColTypes,
 			DedupKeyExprs:                   t.DedupKeyExprs,
+			AuxiliaryRowIdColIdx:            t.AuxiliaryRowIdColIdx,
 			DelColIdx:                       t.DelColIdx,
 			DedupDeleteMarkerColIdx:         t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList:       t.DedupDeleteKeepColIdxList,
@@ -1322,13 +1349,18 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			TxnOffset:       int64(t.TxnOffset),
 		}
 		if t.TableFunction != nil {
+			maintenance, err := encodeIndexMaintenanceSpec(t.TableFunction.IndexMaintenance)
+			if err != nil {
+				return ctxId, nil, err
+			}
 			in.TableFunction = &pipeline.TableFunction{
-				Attrs:    t.TableFunction.Attrs,
-				Rets:     t.TableFunction.Rets,
-				Args:     t.TableFunction.Args,
-				Params:   t.TableFunction.Params,
-				Name:     t.TableFunction.FuncName,
-				IsSingle: t.TableFunction.IsSingle,
+				Attrs:            t.TableFunction.Attrs,
+				Rets:             t.TableFunction.Rets,
+				Args:             t.TableFunction.Args,
+				Params:           t.TableFunction.Params,
+				Name:             t.TableFunction.FuncName,
+				IsSingle:         t.TableFunction.IsSingle,
+				IndexMaintenance: maintenance,
 			}
 		}
 	case *multi_update.MultiUpdate:
@@ -1691,6 +1723,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Order:
 		arg := order.NewArgument()
 		arg.OrderBySpec = opr.OrderBy
+		if value, ok := remoteOrderScanCutoffBound(opr.Limit); ok && opr.TopValueTag > 0 {
+			arg.ScanCutoffLimit = value
+			arg.ScanCutoffTag = opr.TopValueTag
+		}
 		op = arg
 	case vm.Partition:
 		arg := partition.NewArgument()
@@ -1716,6 +1752,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnExpr = t.Expr
 		arg.JoinMapTag = t.JoinMapTag
 		arg.VectorOpType = t.VectorOpType
+		ignored, err := productl2.DecodeIgnored(t.Ignored)
+		if err != nil {
+			return nil, err
+		}
+		arg.Ignored = ignored
 		op = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
@@ -1733,6 +1774,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		topArg := top.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
+		topArg.TopValueTag = opr.TopValueTag
 		if opr.TopOrderedOutput {
 			topArg.WithOrderedOutput()
 		}
@@ -1805,6 +1847,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.TableFunction:
+		maintenance, err := decodeIndexMaintenanceSpec(opr.TableFunction.GetIndexMaintenance())
+		if err != nil {
+			return nil, err
+		}
 		arg := table_function.NewArgument()
 		arg.Attrs = opr.TableFunction.Attrs
 		arg.Rets = opr.TableFunction.Rets
@@ -1812,6 +1858,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
 		arg.IsSingle = opr.TableFunction.IsSingle
+		arg.IndexMaintenance = maintenance
 		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
@@ -1873,7 +1920,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = value_scan.NewArgument()
 		op.(*value_scan.ValueScan).ProjectList = opr.ProjectList
 		if len(opr.ValueScan.BatchBlock) > 0 {
-			bat := batch.NewOffHeapEmpty()
+			bat := batch.NewWithSize(0)
 			if err := types.Decode([]byte(opr.ValueScan.BatchBlock), bat); err != nil {
 				return nil, err
 			}
@@ -1901,6 +1948,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DedupKeyExprs = t.DedupKeyExprs
+		arg.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -1926,6 +1974,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DedupKeyExprs = t.DedupKeyExprs
+		arg.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -1976,6 +2025,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.Apply:
+		var maintenance *executor.IndexMaintenanceSpec
+		if opr.TableFunction != nil {
+			var err error
+			maintenance, err = decodeIndexMaintenanceSpec(opr.TableFunction.GetIndexMaintenance())
+			if err != nil {
+				return nil, err
+			}
+		}
 		arg := apply.NewArgument()
 		t := opr.GetApply()
 		arg.ApplyType = int(t.ApplyType)
@@ -1992,6 +2049,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.TableFunction.FuncName = opr.TableFunction.Name
 			arg.TableFunction.Params = opr.TableFunction.Params
 			arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
+			arg.TableFunction.IndexMaintenance = maintenance
 		}
 		op = arg
 	case vm.MultiUpdate:
@@ -3280,7 +3338,7 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
-	bat := batch.NewOffHeapEmpty()
+	bat := batch.NewWithSize(0)
 	if err := bat.UnmarshalBinaryForPipeline(data, mp); err != nil {
 		bat.Clean(mp)
 		return nil, err

@@ -444,6 +444,9 @@ func TestLocalE2ESetupExecutesExpectedStatements(t *testing.T) {
 		"CREATE EXTERNAL TABLE",
 		"CREATE EXTERNAL TABLE",
 		"CREATE EXTERNAL TABLE",
+		"CREATE EXTERNAL TABLE",
+		"CREATE EXTERNAL TABLE",
+		"CREATE EXTERNAL TABLE",
 	} {
 		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 1))
 	}
@@ -2272,10 +2275,27 @@ func TestLocalE2ECaseFailurePaths(t *testing.T) {
 	}
 }
 
+func TestLocalE2EParquetCodecCase(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	for _, name := range []string{"codec_default", "codec_zstd", "codec_uncompressed"} {
+		mock.ExpectExec("INSERT INTO .*" + name).WillReturnResult(sqlmock.NewResult(0, 4))
+		mock.ExpectQuery("SELECT .*" + name).WillReturnRows(sqlmock.NewRows([]string{"order_id", "bucket", "amount", "region"}).
+			AddRow(1, 1, 10, "repeat").AddRow(2, 1, 20, "repeat").AddRow(3, 2, 30, nil).AddRow(4, 2, 40, ""))
+	}
+	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).parquetCodecCase(context.Background())
+	if result.Status != "passed" {
+		t.Fatalf("codec case failed: %+v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLocalE2ETableSpecs(t *testing.T) {
 	specs := e2eTableSpecs("ns")
-	if len(specs) != 4 {
-		t.Fatalf("expected 4 specs, got %d", len(specs))
+	if len(specs) != 7 {
+		t.Fatalf("expected 7 specs, got %d", len(specs))
 	}
 	if specs[1].partitionSpec.Fields[0].Name != "region" {
 		t.Fatalf("partition spec did not preserve region identity: %+v", specs[1].partitionSpec.Fields)
@@ -2285,6 +2305,11 @@ func TestLocalE2ETableSpecs(t *testing.T) {
 	}
 	if specs[3].schema.Fields[0].Name != "account_id" {
 		t.Fatalf("account schema mismatch: %+v", specs[3].schema.Fields)
+	}
+	for i, want := range []string{"", "zstd", "uncompressed"} {
+		if specs[i+4].codec != want {
+			t.Fatalf("codec table %s: got %q, want %q", specs[i+4].name, specs[i+4].codec, want)
+		}
 	}
 }
 

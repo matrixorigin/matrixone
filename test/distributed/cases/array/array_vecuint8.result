@@ -18,11 +18,11 @@ a    v
 2    [255, 254, 0, 128]
 3    [10, 20, 30, 40]
 insert into u8t values(4, "[300,0,0,0]");
-internal error: error while casting 300 to VECUINT8
+invalid input: error while casting 300 to VECUINT8
 insert into u8t values(5, "[-1,0,0,0]");
-internal error: error while casting -1 to VECUINT8
+invalid input: error while casting -1 to VECUINT8
 insert into u8t values(6, "[1.4,0,0,0]");
-internal error: error while casting 1.4 to VECUINT8
+invalid input: error while casting 1.4 to VECUINT8
 select cast(cast("[1.6,300,-5,200]" as vecf32(4)) as vecuint8(4));
 cast(cast([1.6,300,-5,200] as vecf32(4)) as vecuint8(4))
 [2, 255, 0, 200]
@@ -30,7 +30,7 @@ select cast("[1,2,3]" as vecuint8(3));
 cast([1,2,3] as vecuint8(3))
 [1, 2, 3]
 select cast("[1.4,2.6,-3.5]" as vecuint8(3));
-internal error: error while casting 1.4 to VECUINT8
+invalid input: error while casting 1.4 to VECUINT8
 select cast(v as vecf32(4)), cast(v as vecf64(4)) from u8t order by a;
 cast(v as vecf32(4))    cast(v as vecf64(4))
 [0, 1, 2, 3]    [0, 1, 2, 3]

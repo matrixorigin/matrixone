@@ -16,13 +16,38 @@ package plan
 
 import (
 	"context"
+	"testing"
+
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
+
+func TestDependentSetInputPreservesCaptureType(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	medium := types.T_int32.ToType().PlanType()
+	medium.Width = 24
+	integer := types.T_int32.ToType().PlanType()
+	integer.Width = 32
+	mock.ctxt.tables["m"] = &TableDef{Name: "m", TblId: 901, Cols: []*ColDef{
+		{Name: "k", Typ: medium}, {Name: "i", Typ: integer},
+	}, Name2ColIndex: map[string]int32{"k": 0, "i": 1}}
+	mock.ctxt.objects["m"] = &ObjectRef{SchemaName: "test", ObjName: "m", Obj: 901}
+	p, err := runOneStmt(mock, t, `SELECT o.k, 1 IN (
+		SELECT o.k FROM m a WHERE a.k = o.k UNION SELECT b.i FROM m b
+	) AS v FROM m o ORDER BY o.k`)
+	require.NoError(t, err)
+	q := p.GetQuery()
+	require.NoError(t, q.ValidateCorrelation())
+	require.Len(t, q.GetCorrelation().GetPrograms(), 1)
+	program := q.Correlation.Programs[0]
+	require.Len(t, program.InputTypes, 1)
+	require.Equal(t, medium.Width, program.InputTypes[0].Width)
+	require.Len(t, program.OutputTypes, 1)
+	require.Equal(t, integer.Width, program.OutputTypes[0].Width)
+}
 
 func TestDependentPreparedTypeEdges(t *testing.T) {
 	for _, sql := range []string{
@@ -35,7 +60,7 @@ func TestDependentPreparedTypeEdges(t *testing.T) {
 			stmts, err := mysql.Parse(context.Background(), sql, 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			prepared, err := BuildPlan(mock.CurrentContext(), stmts[0], true)
+			prepared, err := BuildPlan(mock.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			require.NotNil(t, prepared.GetQuery().Correlation)
 			_, params, err := ResetPreparePlan(mock.CurrentContext(), prepared)

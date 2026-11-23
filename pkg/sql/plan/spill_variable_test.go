@@ -105,7 +105,7 @@ func TestSetOperationCapturesAggregateSpillThreshold(t *testing.T) {
 					"select n_nationkey from nation "+tc.setOp+" select r_regionkey from region", 1)
 				require.NoError(t, err)
 				require.Len(t, stmts, 1)
-				p, err := BuildPlan(ctx, stmts[0], false)
+				p, err := BuildPlan(ctx, stmts[0], false, nil)
 				require.NoError(t, err)
 				query := p.GetQuery()
 				require.NotNil(t, query)

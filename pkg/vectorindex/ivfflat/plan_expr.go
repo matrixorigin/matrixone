@@ -105,7 +105,7 @@ func ivfAndExpr(ctx context.Context, exprs ...*plan.Expr) (*plan.Expr, error) {
 }
 
 func ivfInInt64Expr(ctx context.Context, mp *mpool.MPool, left *plan.Expr, values []int64) (*plan.Expr, error) {
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer vec.Free(mp)
 	if err := vector.AppendFixedList(vec, values, nil, mp); err != nil {
 		return nil, err
@@ -116,7 +116,9 @@ func ivfInInt64Expr(ctx context.Context, mp *mpool.MPool, left *plan.Expr, value
 	// this is not a live defect -- but it is the same shape as the prefix_in bug
 	// this file's sibling had, and sorting at the source removes the dependency
 	// on a downstream normalize that this function cannot see.
-	vec.InplaceSortAndCompact()
+	if err := vec.InplaceSortAndCompact(mp); err != nil {
+		return nil, err
+	}
 	data, err := vec.MarshalBinary()
 	if err != nil {
 		return nil, err

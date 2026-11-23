@@ -111,7 +111,11 @@ func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode, 
 	_, h.rel, insertTxn, err = pack.D.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
 	h.trackTxn(insertTxn)
-	insertBat := containers.ToCNBatch(catalog2.MockBatch(h.schema, rowCount))
+	// Copy the mock batch into pack.Mp, the pool the test grows and frees with.
+	mockBat := catalog2.MockBatch(h.schema, rowCount)
+	insertBat, err := containers.ToCNBatch(mockBat).Dup(pack.Mp)
+	require.NoError(t, err)
+	mockBat.Close()
 	defer insertBat.Clean(pack.Mp)
 	if len(stringKeys) > 0 {
 		insertBat.Vecs[0].Reset(h.schema.ColDefs[0].Type)
@@ -161,12 +165,13 @@ func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode, 
 	case snapshotAdvancePersistedTombstone:
 		h.writePersistedDeletes(uncommittedDeletes)
 	case snapshotAdvanceMixedTombstones:
+		// Windows are read-only references to uncommittedDeletes.
 		inMemory, err := uncommittedDeletes.Window(0, rowCount/4)
 		require.NoError(t, err)
-		defer inMemory.Clean(nil)
+		defer inMemory.FreeWindow()
 		persisted, err := uncommittedDeletes.Window(rowCount/4, rowCount/2)
 		require.NoError(t, err)
-		defer persisted.Clean(nil)
+		defer persisted.FreeWindow()
 		require.NoError(t, testutil.WriteToRelation(ctx, h.txn, h.rel, inMemory, true, true))
 		h.writePersistedDeletes(persisted)
 	default:
@@ -233,10 +238,10 @@ func (h *snapshotAdvanceHarness) collectDeletes(
 
 	deletes := batch.NewWithSize(2)
 	deletes.Attrs = []string{catalog.Row_ID, h.schema.GetPrimaryKey().Name}
-	deletes.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	deletes.Vecs[1] = vector.NewVec(h.schema.GetPrimaryKey().Type)
+	deletes.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), h.pack.Mp)
+	deletes.Vecs[1] = vector.NewVec(h.schema.GetPrimaryKey().Type, h.pack.Mp)
 
-	ret := testutil.EmptyBatchFromSchema(h.schema)
+	ret := testutil.EmptyBatchFromSchema(h.schema, h.pack.Mp)
 	defer ret.Clean(h.pack.Mp)
 	for deletes.RowCount() < limit {
 		done, err := reader.Read(
@@ -285,7 +290,7 @@ func (h *snapshotAdvanceHarness) writePersistedDeletes(deletes *batch.Batch) {
 
 	statsBat := batch.NewWithSize(1)
 	statsBat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
-	statsBat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	statsBat.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(h.t, vector.AppendBytes(
 		statsBat.Vecs[0], stats[0].Marshal(), false, h.pack.Mp,
 	))
@@ -318,7 +323,7 @@ func (h *snapshotAdvanceHarness) countRows(
 	require.NoError(h.t, err)
 	defer reader.Close()
 
-	ret := testutil.EmptyBatchFromSchema(h.schema)
+	ret := testutil.EmptyBatchFromSchema(h.schema, h.pack.Mp)
 	defer ret.Clean(h.pack.Mp)
 	rows := 0
 	for {
@@ -524,7 +529,7 @@ func TestRCLineageSnapshotPreservesUniqueReplacements(t *testing.T) {
 			replacements := batch.NewWithSize(1)
 			defer replacements.Clean(h.pack.Mp)
 			replacements.Attrs = []string{h.schema.GetPrimaryKey().Name}
-			replacements.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			replacements.Vecs[0] = vector.NewVec(types.T_int32.ToType(), h.pack.Mp)
 			for _, pk := range h.deletedPKs {
 				require.NoError(t, vector.AppendFixed(replacements.Vecs[0], pk, false, h.pack.Mp))
 			}

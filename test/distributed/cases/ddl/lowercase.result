@@ -158,9 +158,9 @@ SELECT * FROM t2 left join t3 ON (test03.t2.id= TEST03.t3.id) WHERE t2.id >= t3.
 id    word    id    word
 3    c    3    matched
 SELECT * FROM t2 left join t3 ON (test.t2.id= TEST03.t3.id) WHERE t2.id >= t3.id;
-invalid input: missing FROM-clause entry for table 't2'
+Unknown column 'test.t2.id' in 'on clause'
 SELECT * FROM t2 left join t3 ON (test03.t2.id= TEST.t3.id) WHERE t2.id >= t3.id;
-invalid input: missing FROM-clause entry for table 't3'
+Unknown column 'TEST.t3.id' in 'on clause'
 DELETE FROM t3 WHERE id = 3;
 SELECT * FROM t2 left join t3 ON (test03.t2.id= TEST03.t3.id) WHERE t2.id >= t3.id;
 id    word    id    word

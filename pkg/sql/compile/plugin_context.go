@@ -15,8 +15,13 @@
 package compile
 
 import (
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/maintenance"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -86,12 +91,61 @@ func (p *pluginCompileCtx) MainTableID() uint64              { return p.mainTabl
 func (p *pluginCompileCtx) MainExtra() *api.SchemaExtra      { return p.mainExtra }
 func (p *pluginCompileCtx) RunSql(sql string) error          { return p.c.runSql(sql) }
 
+func (p *pluginCompileCtx) RunIndexMaintenanceSQL(sql, function, indexName string) error {
+	if p.c == nil || p.c.proc == nil || p.originalTableDef == nil || p.dbSource == nil || indexName == "" {
+		return moerr.NewInvalidInputNoCtx("missing index maintenance compiler owner")
+	}
+	defs := p.originalTableDef.Indexes
+	if p.indexInfo != nil && p.indexInfo.TableDef != nil {
+		defs = p.indexInfo.TableDef.Indexes
+	}
+	group := make(map[string]*plan.IndexDef)
+	var algorithm string
+	for _, def := range defs {
+		if def == nil || def.IndexName != indexName {
+			continue
+		}
+		if def.IndexAlgoTableType == "" || group[def.IndexAlgoTableType] != nil || (algorithm != "" && !strings.EqualFold(algorithm, def.IndexAlgo)) {
+			return moerr.NewInvalidInputNoCtx("ambiguous index maintenance group")
+		}
+		algorithm = def.IndexAlgo
+		group[def.IndexAlgoTableType] = def
+	}
+	plugin, ok := indexplugin.Get(algorithm)
+	if !ok {
+		return moerr.NewInvalidInputNoCtx("missing index maintenance plugin")
+	}
+	descriptor, ok := plugin.Compile().(compileplugin.IndexMaintenanceDescriptor)
+	if !ok {
+		return moerr.NewInvalidInputNoCtx("missing index maintenance descriptor")
+	}
+	expected, err := descriptor.IndexMaintenanceRoles(function, group)
+	if err != nil {
+		return err
+	}
+	selected := maintenance.SelectDefinitions(group, expected)
+	if selected == nil {
+		return moerr.NewInvalidInputNoCtx("index maintenance roles do not match the owner")
+	}
+
+	spec, err := compileplugin.ResolveIndexMaintenanceSpec(p.c.proc.Ctx, p.qryDatabase, p.dbSource, p.originalTableDef.Name, p.mainTableID, function, selected)
+	if err != nil {
+		return err
+	}
+	res, err := p.c.runSqlWithResultAndMaintenance(sql, NoAccountId, executor.StatementOption{}, spec, descriptor)
+	if err != nil {
+		return err
+	}
+	res.Close()
+	return nil
+}
+
 // RunWithSourceReadCacheSkip runs fn with SkipMemoryCacheWrites attached to the
 // compile context, so block reads performed inside fn — notably an index build's
 // source-table scans (kmeans sample + entry assignment) — do NOT populate the
-// fileservice memory cache. The build reads the source once; queries never re-read
-// it (re-rank fetches only a handful of rows), so caching it would just evict the
-// index-entry blocks the queries actually hit. Mirrors the policy LOAD DATA
+// fileservice memory cache. The build reads the whole source once; queries read only
+// the candidate rows of it, so caching the build's reads would just evict the blocks
+// the queries hit. Mirrors the policy LOAD DATA
 // (external) already uses for one-shot bulk reads. runSqlWithResultAndOptions
 // reads c.proc.Ctx for the sub-execution, so
 // attaching the policy here propagates to every read in the build; it is restored

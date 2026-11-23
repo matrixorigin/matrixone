@@ -17,6 +17,8 @@ package test
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -108,7 +110,7 @@ func Test_BasicInsertDelete(t *testing.T) {
 				waitedDeletes = waitedDeletes[:rowsCount/2]
 				bat2 = batch.NewWithSize(1)
 				bat2.Attrs = append(bat2.Attrs, catalog.Row_ID)
-				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 				require.NoError(t, vector.AppendFixedList[types.Rowid](bat2.Vecs[0], waitedDeletes, nil, mp))
 				bat2.SetRowCount(len(waitedDeletes))
 			})
@@ -129,7 +131,7 @@ func Test_BasicInsertDelete(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 	require.NoError(t, err)
 
@@ -138,6 +140,7 @@ func Test_BasicInsertDelete(t *testing.T) {
 }
 
 func Test_BasicS3InsertDelete(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	var (
 		err          error
 		mp           *mpool.MPool
@@ -196,7 +199,7 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 	// read row id
 	tombstoneBat := batch.NewWithSize(1)
 	tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	{
 		reader, err := testutil.GetRelationReader(
 			ctx,
@@ -211,7 +214,7 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 
 		ret := batch.NewWithSize(1)
 		ret.Attrs = []string{catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -258,7 +261,7 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 	require.NoError(t, err)
 
@@ -389,7 +392,7 @@ func issue25557ReadRowCount(
 	reader, err := testutil.GetRelationReader(ctx, e, txn, relation, nil, mp, t)
 	require.NoError(t, err)
 	total := 0
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	for {
 		done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
 		require.NoError(t, err)
@@ -770,7 +773,7 @@ func Test_Issue25557ObjectCompactionNoDeadlock(t *testing.T) {
 
 			tombstoneBat = batch.NewWithSize(1)
 			tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
-			tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+			tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 
 			blk := objectio.DecodeBlockInfo(entry.Bat().GetVector(0).GetBytesAt(0))
 			for i := 0; i < deleteCnt; i++ {
@@ -810,7 +813,7 @@ func Test_Issue25557ObjectCompactionNoDeadlock(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 		_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 		require.NoError(t, err)
 		require.Equal(t, insertCnt-deleteCnt, ret.RowCount())
@@ -889,8 +892,8 @@ func Test_Issue25557MultiEntryDeleteDumpAtCommit(t *testing.T) {
 	deleteRows := 10
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, schema.GetPrimaryKey().Name}
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(schema.GetPrimaryKey().Type)
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(schema.GetPrimaryKey().Type, mp)
 
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
@@ -902,8 +905,8 @@ func Test_Issue25557MultiEntryDeleteDumpAtCommit(t *testing.T) {
 		ret := batch.NewWithSize(2)
 		ret.Attrs = []string{schema.GetPrimaryKey().Name, catalog.Row_ID}
 		ret.Vecs = []*vector.Vector{
-			vector.NewVec(schema.GetPrimaryKey().Type),
-			vector.NewVec(types.T_Rowid.ToType()),
+			vector.NewVec(schema.GetPrimaryKey().Type, mp),
+			vector.NewVec(types.T_Rowid.ToType(), mp),
 		}
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1025,8 +1028,8 @@ func Test_MultiTxnInsertDelete(t *testing.T) {
 	// read row id and pk data
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, schema.GetPrimaryKey().Name}
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
@@ -1044,7 +1047,7 @@ func Test_MultiTxnInsertDelete(t *testing.T) {
 
 		ret := batch.NewWithSize(2)
 		ret.Attrs = []string{schema.GetPrimaryKey().Name, catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type), vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type, mp), vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1110,7 +1113,7 @@ func Test_MultiTxnInsertDelete(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 	require.NoError(t, err)
 
@@ -1195,8 +1198,8 @@ func Test_MultiTxnS3InsertDelete(t *testing.T) {
 	// read row id and pk data
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, schema.GetPrimaryKey().Name}
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 
 	{
 		reader, err := testutil.GetRelationReader(
@@ -1212,7 +1215,7 @@ func Test_MultiTxnS3InsertDelete(t *testing.T) {
 
 		ret := batch.NewWithSize(2)
 		ret.Attrs = []string{schema.GetPrimaryKey().Name, catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type), vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type, mp), vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1263,7 +1266,7 @@ func Test_MultiTxnS3InsertDelete(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	cnt := 0
 	for {
 		done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1343,8 +1346,8 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 	// read row id and pk data
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, schema.GetPrimaryKey().Name}
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 
 	{
 		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
@@ -1362,7 +1365,7 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 
 		ret := batch.NewWithSize(2)
 		ret.Attrs = []string{schema.GetPrimaryKey().Name, catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type), vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type, mp), vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1429,7 +1432,7 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema)
+	ret := testutil.EmptyBatchFromSchema(schema, mp)
 	cnt := 0
 	for {
 		done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1521,7 +1524,7 @@ func Test_BasicRollbackStatement(t *testing.T) {
 				waitedDeletes = waitedDeletes[:rowsCount/2]
 				tombstoneBat = batch.NewWithSize(1)
 				tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
-				tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+				tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 				require.NoError(t, vector.AppendFixedList[types.Rowid](tombstoneBat.Vecs[0], waitedDeletes, nil, mp))
 				tombstoneBat.SetRowCount(len(waitedDeletes))
 			})
@@ -1551,7 +1554,7 @@ func Test_BasicRollbackStatement(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 	require.NoError(t, err)
 
@@ -1629,7 +1632,7 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 	// read row id
 	tombstoneBat := batch.NewWithSize(1)
 	tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	{
 		reader, err := testutil.GetRelationReader(
 			ctx,
@@ -1644,7 +1647,7 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 
 		ret := batch.NewWithSize(1)
 		ret.Attrs = []string{catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1696,7 +1699,7 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 	require.NoError(t, err)
 
@@ -1767,6 +1770,7 @@ func Test_RollbackDeleteAndDrop(t *testing.T) {
 // txn2 commit
 // read -> 10 rows
 func Test_MultiTxnRollbackStatement(t *testing.T) {
+	enableWorkspaceDebugForTest(t)
 	var (
 		err          error
 		mp           *mpool.MPool
@@ -1828,8 +1832,8 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 	// read row id and pk data
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, schema.GetPrimaryKey().Name}
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
@@ -1847,7 +1851,7 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 
 		ret := batch.NewWithSize(2)
 		ret.Attrs = []string{schema.GetPrimaryKey().Name, catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type), vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type, mp), vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1924,7 +1928,7 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 	require.NoError(t, err)
 
@@ -2014,8 +2018,8 @@ func Test_MultiTxnRollbackStatementS3(t *testing.T) {
 	// read row id and pk data
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, schema.GetPrimaryKey().Name}
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 
 	{
 		reader, err := testutil.GetRelationReader(
@@ -2031,7 +2035,7 @@ func Test_MultiTxnRollbackStatementS3(t *testing.T) {
 
 		ret := batch.NewWithSize(2)
 		ret.Attrs = []string{schema.GetPrimaryKey().Name, catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type), vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type, mp), vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -2093,7 +2097,7 @@ func Test_MultiTxnRollbackStatementS3(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	cnt := 0
 	for {
 		done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -2185,7 +2189,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 
 				bat2 = batch.NewWithSize(1)
 				bat2.Attrs = append(bat2.Attrs, catalog.Row_ID)
-				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 
 				blk := objectio.DecodeBlockInfo(entry.Bat().GetVector(0).GetBytesAt(0))
 				for i := 0; i < deleteCnt; i++ {
@@ -2213,7 +2217,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 		_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 		require.NoError(t, err)
 		require.Equal(t, insertCnt-deleteCnt, ret.RowCount())
@@ -2296,7 +2300,7 @@ func Test_BigDeleteWriteS3(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 		_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 		require.NoError(t, err)
 		//require.Equal(t, insertCnt-deleteCnt, ret.RowCount())
@@ -2368,15 +2372,15 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 
 	// read row id and pk data
 	tombstoneBat := batch.NewWithSize(2)
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), p.Mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), p.Mp)
 	{
 		txn, _, reader, err := testutil.GetTableTxnReader(
 			ctx, p.D, databaseName, tableName, nil, p.Mp, t,
 		)
 		require.NoError(t, err)
 
-		ret := testutil.EmptyBatchFromSchema(schema)
+		ret := testutil.EmptyBatchFromSchema(schema, p.Mp)
 
 		for {
 			done, err := reader.Read(ctx,
@@ -2439,7 +2443,7 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 
 		tbat := batch.NewWithSize(1)
 		tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
-		tbat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+		tbat.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 		err = vector.AppendBytes(tbat.Vecs[0], ss[0].Marshal(), false, p.Mp)
 		require.NoError(t, err)
 
@@ -2495,6 +2499,32 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 	}
 }
 
+// TestGCFiles pins the GC front doors' lossless ownership contract
+// (issue #25590) with two deterministic rounds over one workspace.
+//
+// The round-0 names are PARSEABLE but missing: LocalFS's deleteSingle —
+// like every storage tile — reports an absent file as the not-found
+// proof, so an accepted GC submission settles every name out of its
+// admission claim immediately. The queue stays empty through the whole
+// accepted round, whatever the worker's timing.
+//
+// The round-1 names carry the '#' path poison: fileservice's path
+// validation refuses them forever, so a refused submission must
+// transfer whole batches to the engine queue and keep them there
+// through a bounded drain pass.
+//
+// The park order is load-bearing: the engine submits background work —
+// the requeue path's scheduleUnpublishedPendingDrain goroutine and the
+// one-minute GC scheduler tick among them — into whatever pool is
+// CURRENT, at any moment, asynchronously. CI run 40918631620 caught the
+// old order racing exactly there: an engine-side submit took the
+// freshly reset pool's only worker inside the window between
+// ResetGCWorkerPool and the test's park Submit, and the park submit
+// failed with ants' ErrPoolOverload ("too many goroutines blocked on
+// submit or Nonblocking is set"). Parking the worker BEFORE the engine
+// sees the pool closes the window: no engine submitter can race a pool
+// it has not been handed, and after the handoff every engine submit
+// faces a busy nonblocking pool and transfers its names losslessly.
 func TestGCFiles(t *testing.T) {
 	var (
 		err error
@@ -2504,59 +2534,141 @@ func TestGCFiles(t *testing.T) {
 	defer p.Close()
 
 	var (
-		pool  *ants.Pool
-		files = make([]objectio.ObjectStats, 3)
+		pool    *ants.Pool
+		files   = make([]objectio.ObjectStats, 3)
+		release func()
 	)
 
-	objectio.SetObjectStatsObjectName(&files[0], objectio.ObjectName{0x1})
-	objectio.SetObjectStatsObjectName(&files[0], objectio.ObjectName{0x2})
-	objectio.SetObjectStatsObjectName(&files[0], objectio.ObjectName{0x3})
+	// Every synthetic name's visible 42-byte window is fully written —
+	// no padding holes — so its parseability rides on its payload alone.
+	buildName := func(round, i int, refused bool) objectio.ObjectName {
+		s := fmt.Sprintf("issue25590-gcfiles-j%d-i%d", round, i)
+		padding := objectio.NameStringLen - len(s)
+		if refused {
+			// '#' is outside fileservice's whitelist, so the storage
+			// keeps refusing this name on every drain pass.
+			s += strings.Repeat("z", padding-1) + "#"
+		} else {
+			s += strings.Repeat("z", padding)
+		}
+		require.Equal(t, objectio.NameStringLen, len(s))
+		raw := make([]byte, objectio.ObjectNameLen)
+		copy(
+			raw[objectio.NameStringOff:objectio.NameStringOff+objectio.NameStringLen],
+			s,
+		)
+		return raw
+	}
 
 	op := p.StartCNTxn()
 	txn := op.GetWorkspace().(*disttae.Transaction)
 
 	txn.GetProc()
 
+	want := make([]string, 0, len(files))
+	wantSeen := make(map[string]struct{}, len(files))
 	for j := 0; j < 2; j++ {
 		if j == 1 {
+			// Park the single worker of the fresh pool BEFORE the engine
+			// can see it; see the park-order contract above.
 			pool, err = ants.NewPool(1, ants.WithNonblocking(true))
 			require.NoError(t, err)
+			releaseCh := make(chan struct{})
+			release = sync.OnceFunc(func() { close(releaseCh) })
+			require.NoError(t, pool.Submit(func() { <-releaseCh }))
 			require.NoError(t, p.D.Engine.ResetGCWorkerPool(pool))
-			release := make(chan struct{})
-			require.NoError(t, pool.Submit(func() { <-release }))
-			defer close(release)
+			defer release()
+			// ResetGCWorkerPool has joined the round-0 pool workers: every
+			// accepted round-0 name settled on the not-found proof and
+			// retired its claim, so round 1 starts from an empty queue
+			// with no unretired capacity — the phase barrier that makes
+			// the round-1 ownership assertions deterministic.
+			queued, live, inFlight := p.D.Engine.InspectUnpublishedPendingForTest()
+			require.Empty(t, queued)
+			require.Zero(t, live)
+			require.Zero(t, inFlight)
 		}
 
+		for i := range files {
+			require.NoError(t, objectio.SetObjectStatsObjectName(
+				&files[i], buildName(j, i, j == 1)))
+		}
+		// The distinct names every GC call in this round hands over, the
+		// same string the engine's owners key on. Distinctness is itself
+		// the round's guard: a shared name would let a partial tail pass
+		// as a complete one.
+		want = want[:0]
+		clear(wantSeen)
+		for _, f := range files {
+			name := f.ObjectName().String()
+			if _, ok := wantSeen[name]; ok {
+				continue
+			}
+			wantSeen[name] = struct{}{}
+			want = append(want, name)
+		}
+		require.Len(t, want, len(files),
+			"the synthetic names must stay distinguishable")
+
 		err = txn.GCObjsByStats(files...)
+		// The lossless contract (issue #25590): neither an overloaded
+		// nonblocking pool nor any refused submission reports itself as
+		// the caller's error — the whole unsent tail transfers to the
+		// engine's unpublished-pending queue, and the queue owns every
+		// name.
+		require.NoError(t, err)
+		queued, _, _ := p.D.Engine.InspectUnpublishedPendingForTest()
 		if j == 1 {
-			require.Error(t, err)
+			require.ElementsMatch(t, want, queued)
 		} else {
-			require.NoError(t, err)
+			// The accepted round's names stay out of the queue through
+			// every settle window: they are owned by the accepted claims
+			// alone.
+			require.Empty(t, queued)
 		}
 
 		for i := range files {
 			objectio.SetObjectStatsBlkCnt(&files[i], 1)
 			objectio.SetObjectStatsRowCnt(&files[i], 1)
-			bat := colexec.AllocCNS3ResultBat(false)
-			colexec.ExpandObjectStatsToBatch(p.Mp, false, bat, true, files[i])
-			err = txn.WriteFile(
-				disttae.INSERT,
-				0, 0, 0,
-				"", "", "0x1",
-				bat, disttae.DNStore{},
-			)
+			func() {
+				bat := colexec.AllocCNS3ResultBat(false, p.Mp)
+				defer bat.Clean(p.Mp)
+				colexec.ExpandObjectStatsToBatch(p.Mp, false, bat, true, files[i])
+				err = txn.WriteFile(
+					disttae.INSERT,
+					0, 0, 0,
+					"", "", "0x1",
+					bat, disttae.DNStore{},
+				)
 
-			require.NoError(t, err)
-			bat.Clean(p.Mp)
+				require.NoError(t, err)
+			}()
 		}
 
-		err = txn.GCObjsByIdxRange(0, len(files)-1)
+		// Exactly this round's recorded writes — round 0 the first three
+		// entries, round 1 the appended three — so the recorded names the
+		// index-range GC hands over cannot carry the other round's class.
+		err = txn.GCObjsByIdxRange(j*len(files), j*len(files)+len(files)-1)
+		// The index-range GC carries the same lossless contract: the pool
+		// refusal transfers its unsent tail to the engine queue too.
+		require.NoError(t, err)
+		queued, _, _ = p.D.Engine.InspectUnpublishedPendingForTest()
 		if j == 1 {
-			require.Error(t, err)
+			require.ElementsMatch(t, want, queued)
 		} else {
-			require.NoError(t, err)
+			require.Empty(t, queued)
 		}
 	}
+
+	// Free the parked worker and prove the refusal never lost ownership:
+	// the storage keeps refusing the poisoned names, so one bounded
+	// engine drain pass returns the storage error it hit and keeps
+	// exactly the queued names for the next retry (issue #25590).
+	release()
+	err = p.D.Engine.DrainUnpublishedPendingForTest(context.Background())
+	require.Error(t, err)
+	queued, _, _ := p.D.Engine.InspectUnpublishedPendingForTest()
+	require.ElementsMatch(t, want, queued)
 }
 
 // Test_WorkspaceForceDumpOnGlobalAccumulation verifies that the workspace
@@ -2697,7 +2809,7 @@ func Test_WorkspaceForceDumpOnGlobalAccumulation(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 		totalRows := 0
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -2833,7 +2945,7 @@ func Test_WorkspaceForceDumpNoIncrStatement(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 		totalRows := 0
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)

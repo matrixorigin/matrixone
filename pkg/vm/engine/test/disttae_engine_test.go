@@ -272,6 +272,11 @@ func TestLogtailBasic(t *testing.T) {
 	require.NoError(t, txnop.Commit(p.Ctx))
 	catalogWriteTs := txnop.Txn().CommitTS
 
+	// Check before later writes: compacted logtail blocks can conservatively
+	// include tables written after the requested interval.
+	reader = logMgr.GetReader(minTs, types.TimestampToTS(catalogWriteTs))
+	require.False(t, reader.IsDirtyOnTable(dbID, tableID))
+
 	// drop the first db
 	txnop = p.StartCNTxn()
 	require.Nil(t, p.D.Engine.Delete(p.Ctx, "todrop", txnop))
@@ -343,8 +348,6 @@ func TestLogtailBasic(t *testing.T) {
 
 	firstWriteTs, lastWriteTs := writeTs[0], writeTs[len(writeTs)-1]
 
-	reader = logMgr.GetReader(minTs, types.TimestampToTS(catalogWriteTs))
-	require.False(t, reader.IsDirtyOnTable(dbID, tableID))
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
 	require.False(t, reader.IsDirtyOnTable(dbID, tableID-1))
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
@@ -354,7 +357,7 @@ func TestLogtailBasic(t *testing.T) {
 	// check Bat rows count consistency
 	check_same_rows := func(bat *api.Batch, expect int) {
 		for i, vec := range bat.Vecs {
-			col, err := vector.ProtoVectorToVector(vec)
+			col, err := vector.ProtoVectorToVector(vec, p.Mp)
 			require.NoError(t, err)
 			require.Equal(t, expect, col.Length(), "columns %d", i)
 		}
@@ -371,8 +374,8 @@ func TestLogtailBasic(t *testing.T) {
 
 	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
 	require.Equal(t, len(catalog2.SystemDBSchema.ColDefs)+1 /*commit ts*/, len(resp.Commands[2].Bat.Vecs))
-	check_same_rows(resp.Commands[2].Bat, 2)                                 // 2 db
-	datname, err := vector.ProtoVectorToVector(resp.Commands[2].Bat.Vecs[3]) // datname column
+	check_same_rows(resp.Commands[2].Bat, 2)                                       // 2 db
+	datname, err := vector.ProtoVectorToVector(resp.Commands[2].Bat.Vecs[3], p.Mp) // datname column
 	require.NoError(t, err)
 	require.Equal(t, "todrop", datname.UnsafeGetStringAt(0))
 	require.Equal(t, "db", datname.UnsafeGetStringAt(1))
@@ -393,8 +396,8 @@ func TestLogtailBasic(t *testing.T) {
 	require.Equal(t, 4, len(resp.Commands)) // data_mata, tombstone_meta, insert, delete
 	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
 	require.Equal(t, len(catalog2.SystemTableSchema.ColDefs)+1, len(resp.Commands[2].Bat.Vecs))
-	check_same_rows(resp.Commands[2].Bat, 2)                                 // 2 tables
-	relname, err := vector.ProtoVectorToVector(resp.Commands[2].Bat.Vecs[3]) // relname column
+	check_same_rows(resp.Commands[2].Bat, 2)                                       // 2 tables
+	relname, err := vector.ProtoVectorToVector(resp.Commands[2].Bat.Vecs[3], p.Mp) // relname column
 	require.NoError(t, err)
 	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(0))
 	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(1))
@@ -433,7 +436,7 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(insDataEntry.Bat, 99)                               // 99 rows, because the first write is excluded.
 	// test first user col, this is probably fragile, it depends on the details of MockSchema
 	// if something changes, delete this is okay.
-	firstCol, err := vector.ProtoVectorToVector(insDataEntry.Bat.Vecs[2]) // mock_0 column, int8 type
+	firstCol, err := vector.ProtoVectorToVector(insDataEntry.Bat.Vecs[2], p.Mp) // mock_0 column, int8 type
 	require.Equal(t, types.T_int8, firstCol.GetType().Oid)
 	require.NoError(t, err)
 
@@ -443,7 +446,7 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(delDataEntry.Bat, 10)
 
 	// check delete rowids are exactly what we want
-	rowids, err := vector.ProtoVectorToVector(delDataEntry.Bat.Vecs[0])
+	rowids, err := vector.ProtoVectorToVector(delDataEntry.Bat.Vecs[0], p.Mp)
 	require.NoError(t, err)
 	require.Equal(t, types.T_Rowid, rowids.GetType().Oid)
 	rowidMap := make(map[types.Rowid]int)
@@ -506,7 +509,7 @@ func TestAlterTableBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID},
 	}, true)
 
-	bat, _ := batch.ProtoBatchToBatch(resp.Commands[2].Bat)
+	bat, _ := batch.ProtoBatchToBatch(resp.Commands[2].Bat, p.Mp)
 	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Constraint)
 	require.Equal(t, 3, cstrCol.Length())
 	c1, err := cstr1.MarshalBinary()
@@ -659,9 +662,9 @@ func TestInProgressTransfer(t *testing.T) {
 		require.NoError(t, err)
 		rowid := objectio.NewRowid(&id.BlockID, row)
 
-		vec1 := vector.NewVec(types.T_Rowid.ToType())
+		vec1 := vector.NewVec(types.T_Rowid.ToType(), p.Mp)
 		require.NoError(t, vector.AppendFixed(vec1, rowid, false, p.Mp))
-		vec2 := vector.NewVec(types.T_int64.ToType())
+		vec2 := vector.NewVec(types.T_int64.ToType(), p.Mp)
 		require.NoError(t, vector.AppendFixed(vec2, int64(7), false, p.Mp))
 
 		delBatch := batch.NewWithSize(2)
@@ -1370,7 +1373,7 @@ func TestWorkspaceQuota2(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	cnt := 0
 	for {
 		ok, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1473,7 +1476,7 @@ func TestWorkspaceQuota3(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	cnt := 0
 	for {
 		ok, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1619,7 +1622,7 @@ func Test_SubUnsubTable(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { require.NoError(t, readTxn.Rollback(ctx)) }()
 		defer func() { require.NoError(t, reader.Close()) }()
-		result := testutil.EmptyBatchFromSchema(schema, 0)
+		result := testutil.EmptyBatchFromSchema(schema, mp, 0)
 		defer result.Clean(mp)
 		var got, want []int8
 		for i := 0; i < 10; i++ {

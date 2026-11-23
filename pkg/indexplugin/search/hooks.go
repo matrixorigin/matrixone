@@ -19,6 +19,7 @@
 package search
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -63,7 +64,7 @@ type Request struct {
 	AlgoValues       []AlgoValue
 	PreFilters       []*plan.Expr
 	DistanceRange    *plan.DistRange
-	MembershipFilter []byte
+	MembershipFilter *keycodec.KeyPayload
 	// HasMembershipFilter distinguishes an exact empty key set from the
 	// absence of a runtime membership predicate (for example RF PASS).
 	HasMembershipFilter bool

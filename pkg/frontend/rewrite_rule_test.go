@@ -891,7 +891,7 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 		defer freeStatements(stmts)
 		require.Len(t, stmts, 2)
 		require.NoError(t, parsers.AddRewriteHints(ctx, stmts, rewritten))
-		fragments, sources, err := schedulingSQLByStatementWithSQLMode(ctx, rewritten, "", false)
+		fragments, sources, _, err := schedulingSQLByStatementWithSQLMode(ctx, rewritten, "", false, nil)
 		require.NoError(t, err)
 		require.Len(t, fragments, 2)
 		require.Equal(t, []string{constant.ExternSql, constant.CloudUserSql}, sources)

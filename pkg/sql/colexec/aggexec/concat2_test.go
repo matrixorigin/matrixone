@@ -124,7 +124,7 @@ func TestGroupConcatH0OrderedSpillAndCancellation(t *testing.T) {
 	}
 
 	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"c", "a", "d", "b"})
-	orderKey := vector.NewVec(types.T_int64.ToType())
+	orderKey := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(orderKey, []int64{3, 1, 4, 2}, nil, mp))
 
 	exec := newExec(context.Background())
@@ -136,7 +136,7 @@ func TestGroupConcatH0OrderedSpillAndCancellation(t *testing.T) {
 	result, err := exec.FlushWithContext(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "a|b|c|d", string(result[0].GetBytesAt(0)))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 
 	exec = newExec(context.Background())
@@ -175,7 +175,7 @@ func TestGroupConcatGroupedOrderedSpillKeepsGroupAddressing(t *testing.T) {
 	ConfigureGroupConcatH0Spill(exec, groupConcatMinRunSize, context.Background(), nil, nil)
 
 	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"c", "b", "a", "d"})
-	orderKey := vector.NewVec(types.T_int64.ToType())
+	orderKey := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(orderKey, []int64{3, 2, 1, 4}, nil, mp))
 	require.NoError(t, exec.BatchFill(
 		0,
@@ -190,7 +190,7 @@ func TestGroupConcatGroupedOrderedSpillKeepsGroupAddressing(t *testing.T) {
 	require.Equal(t, "b,d", string(result[0].GetBytesAt(1)))
 	require.True(t, result[0].GetNulls().Contains(2))
 
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	values.Free(mp)
 	orderKey.Free(mp)
 	exec.Free()
@@ -199,7 +199,7 @@ func TestGroupConcatGroupedOrderedSpillKeepsGroupAddressing(t *testing.T) {
 
 func TestGroupConcatEnumOrderPayloadUsesFixedWidthStorage(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_enum.ToType())
+	vec := vector.NewVec(types.T_enum.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(vec, types.Enum(2), false, mp))
 	data := groupConcatFieldBytes(vec, 0, types.T_enum.ToType())
 	require.Len(t, data, types.T_enum.ToType().TypeSize())
@@ -243,7 +243,7 @@ func TestGroupConcatH0SpillBoundaries(t *testing.T) {
 	result, err := empty.FlushWithContext(nil)
 	require.NoError(t, err)
 	require.True(t, result[0].IsNull(0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	empty.Free()
 
 	createErr := errors.New("create spill run")
@@ -256,7 +256,7 @@ func TestGroupConcatH0SpillBoundaries(t *testing.T) {
 		nil,
 	)
 	value := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"x"})
-	key := vector.NewVec(types.T_int64.ToType())
+	key := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(key, int64(1), false, mp))
 	err = failing.BatchFill(0, []uint64{1}, []*vector.Vector{value, key})
 	require.NoError(t, err)
@@ -271,7 +271,7 @@ func TestGroupConcatH0SpillBoundaries(t *testing.T) {
 	result, err = FlushWithContext(nil, count)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	count.Free()
 }
 
@@ -467,7 +467,7 @@ func TestGroupConcatInputSpillBoundsRunsAndWriteAmplification(t *testing.T) {
 	require.LessOrEqual(t, spillRows, int64(rowCount*2))
 	require.Less(t, spillBytes, int64(rowCount*keySize*3))
 
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	valueVec.Free(mp)
 	keyVec.Free(mp)
 	exec.Free()
@@ -519,7 +519,7 @@ func TestGroupConcatGroupedDistinctSpillAndCancellation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "a,b", string(result[0].GetBytesAt(0)))
 	require.Equal(t, "c", string(result[0].GetBytesAt(1)))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	values.Free(mp)
 	keys.Free(mp)
 	exec.Free()
@@ -582,7 +582,7 @@ func TestGroupConcatSpillCompactsFanIn(t *testing.T) {
 	require.Equal(t, strings.Join(want, ","), string(result[0].GetBytesAt(0)))
 	require.LessOrEqual(t, len(exec.orderedSpillRuns[0]), groupConcatMergeFanIn)
 	require.Equal(t, 1, fileCreates)
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 	require.Zero(t, mp.CurrNB())
 }
@@ -631,13 +631,13 @@ func TestGroupConcatDistinctAndHelpers(t *testing.T) {
 	require.NoError(t, exec.GroupGrow(1))
 	require.NoError(t, exec.SetExtraInformation([]byte("|"), 0))
 
-	left := vector.NewVec(types.T_varchar.ToType())
+	left := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(left, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(left, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(left, nil, true, mp))
 	require.NoError(t, vector.AppendBytes(left, []byte("b"), false, mp))
 
-	right := vector.NewVec(types.T_int64.ToType())
+	right := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(right, []int64{1, 1, 9, 2}, nil, mp))
 
 	require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 1}, []*vector.Vector{left, right}))
@@ -669,7 +669,7 @@ func TestGroupConcatDistinctAndHelpers(t *testing.T) {
 
 	left.Free(mp)
 	right.Free(mp)
-	vecs[0].Free(mp)
+	vecs[0].Free(vecs[0].MPool())
 	exec.Free()
 }
 
@@ -704,7 +704,7 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 		require.NoError(t, exec.GroupGrow(1))
 		require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 20), 0))
 
-		values := vector.NewVec(geometryType)
+		values := vector.NewVec(geometryType, mp)
 		defer values.Free(mp)
 		require.NoError(t, vector.AppendBytes(values, wkb, false, mp))
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
@@ -712,7 +712,7 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 		results, err := exec.Flush()
 		require.NoError(t, err)
 		require.Len(t, results, 1)
-		defer results[0].Free(mp)
+		defer results[0].Free(results[0].MPool())
 		require.Equal(t, types.T_blob.ToType(), *results[0].GetType())
 		require.Equal(t, wkb[:20], results[0].GetBytesAt(0))
 	})
@@ -726,10 +726,10 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 		require.NoError(t, exec.GroupGrow(1))
 		require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 20), 0))
 
-		textValues := vector.NewVec(types.T_varchar.ToType())
+		textValues := vector.NewVec(types.T_varchar.ToType(), mp)
 		defer textValues.Free(mp)
 		require.NoError(t, vector.AppendBytes(textValues, []byte("x"), false, mp))
-		geometryValues := vector.NewVec(geometryType)
+		geometryValues := vector.NewVec(geometryType, mp)
 		defer geometryValues.Free(mp)
 		require.NoError(t, vector.AppendBytes(geometryValues, wkb, false, mp))
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{textValues, geometryValues}))
@@ -737,7 +737,7 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 		results, err := exec.Flush()
 		require.NoError(t, err)
 		require.Len(t, results, 1)
-		defer results[0].Free(mp)
+		defer results[0].Free(results[0].MPool())
 		require.Equal(t, types.T_blob.ToType(), *results[0].GetType())
 		expected := append([]byte("x"), wkb[:19]...)
 		require.Equal(t, expected, results[0].GetBytesAt(0))
@@ -776,7 +776,7 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 			require.Equal(t, tc.wkb[:20], scratch)
 			require.LessOrEqual(t, cap(scratch), 64)
 
-			values := vector.NewVec(tc.typ)
+			values := vector.NewVec(tc.typ, mp)
 			defer values.Free(mp)
 			require.NoError(t, vector.AppendBytes(values, tc.wkb, false, mp))
 			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
@@ -784,7 +784,7 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 			results, err := exec.Flush()
 			require.NoError(t, err)
 			require.Len(t, results, 1)
-			defer results[0].Free(mp)
+			defer results[0].Free(results[0].MPool())
 			require.Equal(t, types.T_blob.ToType(), *results[0].GetType())
 			require.Equal(t, tc.wkb[:20], results[0].GetBytesAt(0))
 		})
@@ -857,12 +857,12 @@ func TestGroupConcatLargeGeometryAcrossFinalizers(t *testing.T) {
 					}, nil)
 			}
 
-			values := vector.NewVec(typ)
+			values := vector.NewVec(typ, mp)
 			require.NoError(t, vector.AppendBytes(values, wkb, false, mp))
 			vectors := []*vector.Vector{values}
 			var orderKey *vector.Vector
 			if tc.ordered {
-				orderKey = vector.NewVec(types.T_int64.ToType())
+				orderKey = vector.NewVec(types.T_int64.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(orderKey, int64(1), false, mp))
 				vectors = append(vectors, orderKey)
 			}
@@ -881,7 +881,7 @@ func TestGroupConcatLargeGeometryAcrossFinalizers(t *testing.T) {
 			require.Equal(t, types.T_blob.ToType(), *results[0].GetType())
 			require.Equal(t, wkb[:20], results[0].GetBytesAt(0))
 
-			results[0].Free(mp)
+			results[0].Free(results[0].MPool())
 			values.Free(mp)
 			if orderKey != nil {
 				orderKey.Free(mp)
@@ -972,10 +972,10 @@ func TestGroupConcatLargeValuesAcrossOrderedSpill(t *testing.T) {
 					return file, err
 				}, nil)
 
-			values := vector.NewVec(tc.typ)
+			values := vector.NewVec(tc.typ, mp)
 			defer values.Free(mp)
 			require.NoError(t, vector.AppendBytes(values, tc.input, false, mp))
-			order := vector.NewVec(types.T_int64.ToType())
+			order := vector.NewVec(types.T_int64.ToType(), mp)
 			defer order.Free(mp)
 			require.NoError(t, vector.AppendFixed(order, int64(1), false, mp))
 			require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values, order}))
@@ -1057,14 +1057,14 @@ func TestGroupConcatVectorValuesAcrossFinalizers(t *testing.T) {
 			}
 			require.NoError(t, exec.GroupGrow(1))
 
-			values := vector.NewVec(valueType)
+			values := vector.NewVec(valueType, mp)
 			defer values.Free(mp)
 			for _, value := range tc.values {
 				require.NoError(t, vector.AppendBytes(values, value, false, mp))
 			}
 			vectors := []*vector.Vector{values}
 			if tc.ordered {
-				orderKeys := vector.NewVec(types.T_int64.ToType())
+				orderKeys := vector.NewVec(types.T_int64.ToType(), mp)
 				defer orderKeys.Free(mp)
 				require.NoError(t, vector.AppendFixedList(orderKeys, tc.keys, nil, mp))
 				vectors = append(vectors, orderKeys)
@@ -1078,7 +1078,7 @@ func TestGroupConcatVectorValuesAcrossFinalizers(t *testing.T) {
 			results, err := exec.Flush()
 			require.NoError(t, err)
 			require.Len(t, results, 1)
-			defer results[0].Free(mp)
+			defer results[0].Free(results[0].MPool())
 			require.Equal(t, tc.want, string(results[0].GetBytesAt(0)))
 		})
 	}
@@ -1098,7 +1098,7 @@ func TestGroupConcatMaxLenPreservesOpaqueBinaryCharset(t *testing.T) {
 	require.NoError(t, exec.SetExtraInformation(
 		EncodeGroupConcatConfig("", 2), 0))
 	require.NoError(t, exec.GroupGrow(1))
-	values := vector.NewVec(inputType)
+	values := vector.NewVec(inputType, mp)
 	require.NoError(t, vector.AppendBytes(
 		values, []byte{0xff, 0xfe, 0xfd}, false, mp))
 	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
@@ -1109,7 +1109,7 @@ func TestGroupConcatMaxLenPreservesOpaqueBinaryCharset(t *testing.T) {
 	require.Equal(t, resultType, *results[0].GetType())
 	require.Equal(t, []byte{0xff, 0xfe}, results[0].GetBytesAt(0))
 
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	values.Free(mp)
 	exec.Free()
 	require.Zero(t, mp.CurrNB())
@@ -1131,7 +1131,7 @@ func TestGroupConcatPreservesTextCharsetForNestedMin(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			inputType := types.NewWithCharset(types.T_varchar, 10, 0, test.charset)
-			input := vector.NewVec(inputType)
+			input := vector.NewVec(inputType, mp)
 			defer input.Free(mp)
 			require.NoError(t, vector.AppendBytes(input, []byte("a"), false, mp))
 			require.NoError(t, vector.AppendBytes(input, []byte("B"), false, mp))
@@ -1213,9 +1213,9 @@ func TestGroupConcatOrderByMultipleArguments(t *testing.T) {
 
 	left := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"b", "a"})
 	colon := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{":", ":"})
-	right := vector.NewVec(types.T_int64.ToType())
+	right := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(right, []int64{2, 1}, nil, mp))
-	orderKey := vector.NewVec(types.T_int64.ToType())
+	orderKey := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(orderKey, []int64{2, 1}, nil, mp))
 
 	require.NoError(t, exec.BatchFill(
@@ -1231,7 +1231,7 @@ func TestGroupConcatOrderByMultipleArguments(t *testing.T) {
 	colon.Free(mp)
 	right.Free(mp)
 	orderKey.Free(mp)
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 }
 
@@ -1259,14 +1259,14 @@ func TestGroupConcatOrderByMultipleKeysAndNullPlacement(t *testing.T) {
 	require.NoError(t, exec.GroupGrow(1))
 
 	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"null", "a", "b", "c"})
-	firstKey := vector.NewVec(types.T_int64.ToType())
+	firstKey := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(
 		firstKey,
 		[]int64{0, 1, 1, 2},
 		[]bool{true, false, false, false},
 		mp,
 	))
-	secondKey := vector.NewVec(types.T_int64.ToType())
+	secondKey := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(secondKey, []int64{0, 1, 3, 2}, nil, mp))
 
 	require.NoError(t, exec.BatchFill(
@@ -1281,7 +1281,7 @@ func TestGroupConcatOrderByMultipleKeysAndNullPlacement(t *testing.T) {
 	values.Free(mp)
 	firstKey.Free(mp)
 	secondKey.Free(mp)
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 }
 
@@ -1306,9 +1306,9 @@ func TestGroupConcatOrderedDistinctSortsBeforeDedup(t *testing.T) {
 	require.NoError(t, exec.GroupGrow(1))
 
 	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"a", "b", "a", "a"})
-	suffixes := vector.NewVec(types.T_int64.ToType())
+	suffixes := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(suffixes, []int64{1, 2, 1, 2}, nil, mp))
-	orderKey := vector.NewVec(types.T_int64.ToType())
+	orderKey := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(orderKey, []int64{4, 3, 1, 2}, nil, mp))
 
 	require.NoError(t, exec.BatchFill(
@@ -1325,7 +1325,7 @@ func TestGroupConcatOrderedDistinctSortsBeforeDedup(t *testing.T) {
 	values.Free(mp)
 	suffixes.Free(mp)
 	orderKey.Free(mp)
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 }
 
@@ -1348,7 +1348,7 @@ func TestGroupConcatOrderedDistinctKeepsOneCandidatePerTuple(t *testing.T) {
 	const rows = 1024
 	values, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("same"), rows, mp)
 	require.NoError(t, err)
-	orderKeys := vector.NewVec(types.T_int64.ToType())
+	orderKeys := vector.NewVec(types.T_int64.ToType(), mp)
 	keys := make([]int64, rows)
 	groups := make([]uint64, rows)
 	for i := range rows {
@@ -1370,7 +1370,7 @@ func TestGroupConcatOrderedDistinctKeepsOneCandidatePerTuple(t *testing.T) {
 
 	values.Free(mp)
 	orderKeys.Free(mp)
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 	require.Zero(t, mp.CurrNB())
 }
@@ -1393,10 +1393,10 @@ func TestGroupConcatOrderedDistinctCanMerge(t *testing.T) {
 	require.NoError(t, right.GroupGrow(1))
 
 	leftValue := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"b"})
-	leftKey := vector.NewVec(types.T_int64.ToType())
+	leftKey := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(leftKey, []int64{2}, nil, mp))
 	rightValue := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"a"})
-	rightKey := vector.NewVec(types.T_int64.ToType())
+	rightKey := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(rightKey, []int64{1}, nil, mp))
 
 	require.NoError(t, left.Fill(0, 0, []*vector.Vector{leftValue, leftKey}))
@@ -1410,7 +1410,7 @@ func TestGroupConcatOrderedDistinctCanMerge(t *testing.T) {
 	leftKey.Free(mp)
 	rightValue.Free(mp)
 	rightKey.Free(mp)
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	left.Free()
 	right.Free()
 }
@@ -1518,7 +1518,7 @@ func TestGroupConcatOrderedMaxLen(t *testing.T) {
 	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{
 		"ccc", "a", "bb", "ccc", "a", "bb",
 	})
-	orderKeys := vector.NewVec(types.T_int64.ToType())
+	orderKeys := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(
 		orderKeys, []int64{3, 1, 2, 6, 4, 5}, nil, mp))
 	require.NoError(t, exec.BatchFill(
@@ -1544,7 +1544,7 @@ func TestGroupConcatOrderedMaxLen(t *testing.T) {
 
 	values.Free(mp)
 	orderKeys.Free(mp)
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	exec.Free()
 	require.Zero(t, mp.CurrNB())
 }
@@ -1575,7 +1575,7 @@ func TestGroupConcatH0WarningCounterSkipsNullWithOrdering(t *testing.T) {
 
 			values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"aa", "", "bbb"})
 			values.SetNull(1)
-			orderKeys := vector.NewVec(types.T_int64.ToType())
+			orderKeys := vector.NewVec(types.T_int64.ToType(), mp)
 			require.NoError(t, vector.AppendFixedList(
 				orderKeys, []int64{1, 2, 3}, nil, mp))
 			if tc.spill {
@@ -1605,7 +1605,7 @@ func TestGroupConcatH0WarningCounterSkipsNullWithOrdering(t *testing.T) {
 			require.Equal(t, uint64(1), sink.total)
 			require.Equal(t, []string{"Row 2 was cut by GROUP_CONCAT()"}, sink.messages)
 
-			results[0].Free(mp)
+			results[0].Free(results[0].MPool())
 			values.Free(mp)
 			orderKeys.Free(mp)
 			exec.Free()
@@ -1634,7 +1634,7 @@ func TestGroupConcatMaxLen(t *testing.T) {
 	require.Equal(t, "aabbc", string(results[0].GetBytesAt(0)))
 
 	values.Free(mp)
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	exec.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
 }
@@ -1661,7 +1661,7 @@ func TestGroupConcatBatchFillOffsetKeepsWarningSourceRow(t *testing.T) {
 	ReportGroupConcatWarnings(exec, sink)
 	require.Equal(t, uint64(1), sink.total)
 	require.Equal(t, []string{"Row 3 was cut by GROUP_CONCAT()"}, sink.messages)
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	values.Free(mp)
 	exec.Free()
 	require.Zero(t, mp.CurrNB())
@@ -1700,7 +1700,7 @@ func TestGroupConcatMaxLenReportsWarningsOnce(t *testing.T) {
 	require.Equal(t, uint64(1), sink.total)
 	require.Len(t, sink.messages, 1)
 
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	values.Free(mp)
 	exec.Free()
 	require.Zero(t, mp.CurrNB())
@@ -1738,7 +1738,7 @@ func TestGroupConcatWarningRetentionLimitControlsPrefix(t *testing.T) {
 			if tc.want > 0 {
 				require.Equal(t, "Row 3 was cut by GROUP_CONCAT()", sink.messages[0])
 			}
-			results[0].Free(mp)
+			results[0].Free(results[0].MPool())
 			values.Free(mp)
 			exec.Free()
 			require.Zero(t, mp.CurrNB())
@@ -1766,7 +1766,7 @@ func TestGroupConcatWarningsCountOnlySinkReceivesAllRows(t *testing.T) {
 	require.Equal(t, uint64(1), sink.total)
 	ReportGroupConcatWarnings(exec, sink)
 	require.Equal(t, uint64(1), sink.total)
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	values.Free(mp)
 	exec.Free()
 	require.Zero(t, mp.CurrNB())
@@ -2069,13 +2069,13 @@ func TestGroupConcatWarningsAreDiscardedAfterFailedFinalization(t *testing.T) {
 	}, 0))
 	require.NoError(t, exec.GroupGrow(1))
 	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"aa", "bb", "cc"})
-	orderKeys := vector.NewVec(types.T_int64.ToType())
+	orderKeys := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(orderKeys, []int64{1, 2, 3}, nil, mp))
 	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, orderKeys}))
 
 	results, err := exec.FlushWithContext(context.Background())
 	require.NoError(t, err)
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 
 	// A cancelled generation must not expose warnings retained by the previous
 	// generation, even when callers inspect the executor after the failure.
@@ -2112,7 +2112,7 @@ func TestGroupConcatWarningsAreDiscardedWhenLaterGroupFinalizationFails(t *testi
 	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{
 		"aa", "bb", "cc", "aa", "bb", "cc",
 	})
-	orderKeys := vector.NewVec(types.T_int64.ToType())
+	orderKeys := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(
 		orderKeys, []int64{1, 2, 3, 4, 5, 6}, nil, mp))
 	require.NoError(t, exec.BatchFill(
@@ -2159,7 +2159,7 @@ func TestGroupConcatMaxLenCanTruncateSeparator(t *testing.T) {
 	require.Equal(t, "aa-", string(results[0].GetBytesAt(0)))
 
 	values.Free(mp)
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	exec.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
 }
@@ -2184,7 +2184,7 @@ func TestGroupConcatMaxLenKeepsTextWellFormed(t *testing.T) {
 	require.Equal(t, "你", string(results[0].GetBytesAt(0)))
 
 	values.Free(mp)
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	exec.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
 }
@@ -2266,7 +2266,7 @@ func TestGroupConcatMaxLenStopsAfterTruncatedUTF8Argument(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "你", string(results[0].GetBytesAt(0)))
 
-			results[0].Free(mp)
+			results[0].Free(results[0].MPool())
 			first.Free(mp)
 			second.Free(mp)
 			if orderKey != nil {
@@ -2298,7 +2298,7 @@ func TestGroupConcatMaxLenStopsAfterTruncatedSeparator(t *testing.T) {
 	require.Equal(t, "a", string(results[0].GetBytesAt(0)))
 
 	values.Free(mp)
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	exec.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
 }
@@ -2367,5 +2367,52 @@ func testGroupConcatOrderConfig(
 	return AggregateConfig{
 		Type: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
 		Data: config,
+	}
+}
+
+func TestGroupConcatAccountedDistinctModeIndependentOfOrder(t *testing.T) {
+	varchar := types.T_varchar.ToType()
+	for _, tc := range []struct {
+		name   string
+		params []types.Type
+		config any
+		want   bool
+	}{
+		{name: "unordered", params: []types.Type{varchar}, config: EncodeGroupConcatConfig(",", 1024), want: true},
+		{
+			name:   "ordered",
+			params: []types.Type{varchar, varchar},
+			config: testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+			want:   false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, account, allocation := newTestAggregateAllocation(t)
+
+			// configuration first, then the account
+			configFirst, err := MakeAgg(mp, AggIdOfGroupConcat, true, tc.params...)
+			require.NoError(t, err)
+			require.NoError(t, configFirst.SetExtraInformation(tc.config, 0))
+			require.NoError(t, configFirst.(*groupConcatExec).SetAllocationAccount(allocation))
+
+			// the shared factory: the account first, then the configuration
+			accountFirst, err := MakeGroupAgg(mp, AggIdOfGroupConcat, true, allocation, tc.config, tc.params...)
+			require.NoError(t, err)
+
+			for _, exec := range []AggFuncExec{configFirst, accountFirst} {
+				info := exec.(*groupConcatExec).aggInfo
+				require.Equal(t, tc.want, info.isDistinct)
+				require.Equal(t, tc.want, info.preserveDistinctInputOrder)
+				require.Equal(t, tc.want, info.distinctInputOrderSourceRow)
+			}
+
+			for _, exec := range []AggFuncExec{configFirst, accountFirst} {
+				exec.Free()
+				require.NoError(t, exec.(*groupConcatExec).ClearAllocationAccount(allocation))
+			}
+			finishTestAggregateAllocation(t, registry, account)
+			require.Zero(t, mp.CurrNB())
+		})
 	}
 }

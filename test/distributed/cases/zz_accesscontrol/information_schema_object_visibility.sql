@@ -271,6 +271,22 @@ where schema_name = 'metadata_visibility_show_db';
 
 grant show tables on database metadata_visibility_db to metadata_visibility_primary;
 grant show tables on database metadata_visibility_show_db to metadata_visibility_primary;
+
+-- The durable index identity still hides columns after a diagnostic rename.
+set @metadata_index = (select index_table_name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'metadata_visibility_db' and relname = 'hidden_table') and index_table_name is not null and index_table_name <> '' limit 1);
+set @metadata_rename = concat('alter table metadata_visibility_db.`', @metadata_index, '` rename to metadata_index_child');
+prepare metadata_rename from @metadata_rename;
+execute metadata_rename;
+deallocate prepare metadata_rename;
+-- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
+select count(*) = 0 as index_columns_hidden from information_schema.columns where table_schema = 'metadata_visibility_db' and table_name = 'metadata_index_child';
+select count(*) = 3 as base_columns_visible from information_schema.columns where table_schema = 'metadata_visibility_db' and table_name = 'hidden_table';
+-- @session
+set @metadata_restore = concat('alter table metadata_visibility_db.metadata_index_child rename to `', @metadata_index, '`');
+prepare metadata_restore from @metadata_restore;
+execute metadata_restore;
+deallocate prepare metadata_restore;
+
 -- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
 show tables from metadata_visibility_show_db;
 show full tables from metadata_visibility_db;

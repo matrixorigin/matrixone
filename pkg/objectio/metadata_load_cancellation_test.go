@@ -451,7 +451,7 @@ func TestDedupLoadLateWaiterSharesCompletedTakeover(t *testing.T) {
 			require.True(t, waitForDedupLoadCompletion(fastDone))
 			require.ErrorIs(t, fastErr, tc.loadErr)
 			require.Equal(t, int32(1), fastLoads.Load())
-			_, cached := metaCache.Get(context.Background(), key)
+			_, cached := getMeta(key)
 			require.Equal(t, tc.capacity > int64(len(value)) && tc.loadErr == nil, cached)
 
 			// A terminal cohort must not retain a negative cache or let an old
@@ -506,7 +506,7 @@ func TestDedupLoadRechecksCacheBeforeElection(t *testing.T) {
 	key[0] = 104
 	ctx := context.Background()
 	value := []byte("already cached metadata")
-	metaCache.Set(ctx, key, value, int64(len(value)))
+	metaCache.Set(key, value, int64(len(value)))
 	loads := 0
 	got, err := dedupLoad(ctx, key, func() ([]byte, error) {
 		loads++
@@ -542,7 +542,7 @@ func TestMetadataReadersKeepLiveWaiterAfterOwnerCancellation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() { bat.Clean(mp) })
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, mp))
 	bat.SetRowCount(1)

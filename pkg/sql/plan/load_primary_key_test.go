@@ -183,7 +183,7 @@ func TestLoadCompositePrimaryKeyValidationPlan(t *testing.T) {
 	create, err := mysql.ParseOne(t.Context(), "create table load_tuple(a int,b int,primary key(a,b))", 1)
 	require.NoError(t, err)
 	defer create.Free()
-	ddl, err := BuildPlan(ctx, create, false)
+	ddl, err := BuildPlan(ctx, create, false, nil)
 	require.NoError(t, err)
 	table := ddl.GetDdl().GetCreateTable().TableDef
 	table.TblId = 990030411
@@ -194,7 +194,7 @@ func TestLoadCompositePrimaryKeyValidationPlan(t *testing.T) {
 	stmt, err := mysql.ParseOne(t.Context(), "load data inline format='csv', data='1,1' into table load_tuple fields terminated by ','", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	pn, err := BuildPlan(ctx, stmt, false)
+	pn, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	found := false
 	for _, n := range pn.GetQuery().Nodes {
@@ -279,7 +279,7 @@ func TestLoadPrimaryKeyCheckSessionPolicy(t *testing.T) {
 				if legacy {
 					pn, err = buildLoad(stmt.(*tree.Load), &mock.ctxt, false)
 				} else {
-					pn, err = BuildPlan(&mock.ctxt, stmt, false)
+					pn, err = BuildPlan(&mock.ctxt, stmt, false, nil)
 				}
 				stmt.Free()
 				require.NoError(t, err)

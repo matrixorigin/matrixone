@@ -42,6 +42,18 @@ select * from generate_series('2020-02-29 23:59:59','2020-03-01 00:01:00', '1 mi
 select * from generate_series('2020-02-29 23:59:59','2020-03-01 00:00:10', '1 second') g;
 select * from generate_series('2020-02-29 23:59:59.124356','2020-02-29 23:59:59.124360', '1 microsecond') g;
 
+# Fixed-unit steps must not wrap during conversion to microseconds.
+select * from generate_series('2020-01-01 00:00:00', '2021-01-01 00:00:00', '288230376151711744 second') g;
+select * from generate_series('2020-01-01 00:00:00', '2021-01-01 00:00:00', '288230376151711744 minute') g;
+select * from generate_series('2020-01-01 00:00:00', '2021-01-01 00:00:00', '288230376151711744 hour') g;
+select * from generate_series('2020-01-01 00:00:00', '2021-01-01 00:00:00', '288230376151711744 day') g;
+select * from generate_series('2020-01-01 00:00:00', '2021-01-01 00:00:00', '288230376151711744 week') g;
+select * from generate_series('2021-01-01 00:00:00', '2020-01-01 00:00:00', '-288230376151711744 second') g;
+select * from generate_series('2021-01-01 00:00:00', '2020-01-01 00:00:00', '-288230376151711744 minute') g;
+select * from generate_series('2021-01-01 00:00:00', '2020-01-01 00:00:00', '-288230376151711744 hour') g;
+select * from generate_series('2021-01-01 00:00:00', '2020-01-01 00:00:00', '-288230376151711744 day') g;
+select * from generate_series('2021-01-01 00:00:00', '2020-01-01 00:00:00', '-288230376151711744 week') g;
+
 # Test one parameter
 select * from generate_series(5) g;
 

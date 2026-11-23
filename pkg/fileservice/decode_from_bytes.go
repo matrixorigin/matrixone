@@ -63,7 +63,7 @@ func validateByteDecode(ctx context.Context, v *IOVector, data []byte) error {
 
 func decodeEntryBytes(ctx context.Context, v *IOVector, data []byte, allocator CacheDataAllocator) error {
 	e := &v.Entries[0]
-	result, err := e.ToCacheData(ctx, bytes.NewReader(data), data, allocator)
+	result, err := e.ToCacheData(ctx, bytes.NewReader(data), data, e.allocatorForDecode(allocator))
 	if err == nil {
 		err = ctx.Err()
 	}
@@ -92,6 +92,7 @@ func (s *S3FS) DecodeFromBytes(ctx context.Context, v *IOVector, data []byte) (e
 	if _, err = parseFilePathAtService(v.FilePath, s.name); err != nil {
 		return err
 	}
+	v.resetCacheAdmission()
 	if err = s.ReadCache(ctx, v); err != nil || v.allDone() {
 		return err
 	}

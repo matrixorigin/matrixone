@@ -15,12 +15,15 @@
 package logservice
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -455,6 +458,279 @@ func (c *closeTrackingRPCClient) CloseBackend() error {
 	return nil
 }
 
+// The proxy keeps forwarding requests but drops responses after CONNECT has
+// succeeded. This models a blackholed established connection: APPEND may
+// commit even though its caller cannot learn the result.
+func startDroppingResponseProxy(t *testing.T, target string) (string, *atomic.Bool, func()) {
+	t.Helper()
+	address, drop, cleanup, _ := startDroppingResponseProxyWithDial(t, target, net.DialTimeout)
+	return address, drop, cleanup
+}
+
+func startDroppingResponseProxyWithDial(
+	t *testing.T,
+	target string,
+	dial func(string, string, time.Duration) (net.Conn, error),
+) (string, *atomic.Bool, func(), <-chan struct{}) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	var drop atomic.Bool
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	connections := make(map[net.Conn]struct{})
+	registrationClosed := make(chan struct{})
+	closing := false
+	register := func(clientConn, serverConn net.Conn) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if closing {
+			return false
+		}
+		connections[clientConn] = struct{}{}
+		connections[serverConn] = struct{}{}
+		return true
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			clientConn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			serverConn, err := dial("tcp", target, time.Second)
+			if err != nil {
+				clientConn.Close()
+				continue
+			}
+			if !register(clientConn, serverConn) {
+				clientConn.Close()
+				serverConn.Close()
+				continue
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() {
+					mu.Lock()
+					delete(connections, clientConn)
+					delete(connections, serverConn)
+					mu.Unlock()
+				}()
+				defer clientConn.Close()
+				defer serverConn.Close()
+				forwardDone := make(chan struct{})
+				go func() {
+					_, _ = io.Copy(serverConn, clientConn)
+					close(forwardDone)
+				}()
+				buf := make([]byte, 64*1024)
+				for {
+					n, err := serverConn.Read(buf)
+					if err != nil {
+						break
+					}
+					if !drop.Load() {
+						if _, err := clientConn.Write(buf[:n]); err != nil {
+							break
+						}
+					}
+				}
+				clientConn.Close()
+				serverConn.Close()
+				<-forwardDone
+			}()
+		}
+	}()
+	cleanup := func() {
+		listener.Close()
+		mu.Lock()
+		closing = true
+		close(registrationClosed)
+		for conn := range connections {
+			conn.Close()
+		}
+		mu.Unlock()
+		wg.Wait()
+	}
+	return listener.Addr().String(), &drop, cleanup, registrationClosed
+}
+
+func TestDroppingResponseProxyCleanupClosesLateDial(t *testing.T) {
+	proxyConn, peerConn := net.Pipe()
+	dialEntered := make(chan struct{})
+	releaseDial := make(chan struct{})
+	address, _, cleanup, registrationClosed := startDroppingResponseProxyWithDial(
+		t, "unused",
+		func(network, address string, timeout time.Duration) (net.Conn, error) {
+			close(dialEntered)
+			<-releaseDial
+			return proxyConn, nil
+		})
+	var cleanupOnce sync.Once
+	doCleanup := func() { cleanupOnce.Do(cleanup) }
+	defer doCleanup()
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseDial) }) }
+	defer release()
+	defer proxyConn.Close()
+	defer peerConn.Close()
+
+	clientConn, err := net.DialTimeout("tcp", address, time.Second)
+	require.NoError(t, err)
+	defer clientConn.Close()
+	select {
+	case <-dialEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("proxy did not start dialing the target")
+	}
+	cleanupDone := make(chan struct{})
+	go func() {
+		doCleanup()
+		close(cleanupDone)
+	}()
+	select {
+	case <-registrationClosed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("proxy cleanup did not close connection registration")
+	}
+	release()
+	select {
+	case <-cleanupDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("proxy cleanup did not close the late dial connection")
+	}
+}
+
+func TestReadRetriesBlackholedEstablishedConnection(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, s *Service, cfg ClientConfig, healthy Client) {
+		address, drop, cleanup := startDroppingResponseProxy(t, s.cfg.LogServiceServiceAddr())
+		defer cleanup()
+		cfg.ServiceAddresses = []string{address}
+		cfg.DiscoveryAddress = ""
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		throughProxy, err := NewClient(ctx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, throughProxy.Close()) }()
+
+		record := healthy.GetLogRecord(8)
+		copy(record.Data[12:], "read1234")
+		lsn, err := healthy.Append(ctx, record)
+		require.NoError(t, err)
+		_, _, err = throughProxy.Read(ctx, lsn, 1<<20)
+		require.NoError(t, err, "the established connection is healthy before isolation")
+
+		throughProxy.(*managedClient).cfg.ServiceAddresses = []string{s.cfg.LogServiceServiceAddr()}
+		drop.Store(true)
+		started := time.Now()
+		records, _, err := throughProxy.Read(ctx, lsn, 1<<20)
+		require.NoError(t, err)
+		require.Less(t, time.Since(started), 3*defaultLogServiceReadAttemptTimeout)
+		require.NoError(t, ctx.Err())
+		found := false
+		for _, got := range records {
+			if got.Lsn == lsn {
+				require.Equal(t, record.Data, got.Data)
+				found = true
+			}
+		}
+		require.True(t, found, "the acknowledged record must be returned after failover")
+	})
+}
+
+func TestGetTruncatedLsnRetriesBlackholedEstablishedConnection(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, s *Service, cfg ClientConfig, healthy Client) {
+		address, drop, cleanup := startDroppingResponseProxy(t, s.cfg.LogServiceServiceAddr())
+		defer cleanup()
+		cfg.ServiceAddresses = []string{address}
+		cfg.DiscoveryAddress = ""
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		throughProxy, err := NewClient(ctx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, throughProxy.Close()) }()
+
+		record := healthy.GetLogRecord(8)
+		lsn, err := healthy.Append(ctx, record)
+		require.NoError(t, err)
+		require.NoError(t, healthy.Truncate(ctx, lsn))
+		expected, err := healthy.GetTruncatedLsn(ctx)
+		require.NoError(t, err)
+		initial, err := throughProxy.GetTruncatedLsn(ctx)
+		require.NoError(t, err)
+		require.Equal(t, expected, initial, "the established connection is healthy before isolation")
+
+		throughProxy.(*managedClient).cfg.ServiceAddresses = []string{s.cfg.LogServiceServiceAddr()}
+		drop.Store(true)
+		started := time.Now()
+		got, err := throughProxy.GetTruncatedLsn(ctx)
+		require.NoError(t, err)
+		require.Equal(t, expected, got)
+		require.Less(t, time.Since(started), 3*defaultLogServiceReadAttemptTimeout)
+		require.NoError(t, ctx.Err())
+
+		// A short caller deadline must end a blackholed request without
+		// turning the child-attempt retry into an unbounded loop.
+		drop.Store(false)
+		cfg.ServiceAddresses = []string{address}
+		shortClient, err := NewClient(ctx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, shortClient.Close()) }()
+		_, err = shortClient.GetTruncatedLsn(ctx)
+		require.NoError(t, err)
+		drop.Store(true)
+		shortCtx, shortCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer shortCancel()
+		_, err = shortClient.GetTruncatedLsn(shortCtx)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+}
+
+func TestAppendBlackholedResponseReturnsUnknownBeforeCallerDeadline(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, s *Service, cfg ClientConfig, healthy Client) {
+		address, drop, cleanup := startDroppingResponseProxy(t, s.cfg.LogServiceServiceAddr())
+		defer cleanup()
+		cfg.ServiceAddresses = []string{address}
+		cfg.DiscoveryAddress = ""
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		throughProxy, err := NewClient(ctx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, throughProxy.Close()) }()
+		// After the unknown result, the next request may choose a live address.
+		throughProxy.(*managedClient).cfg.ServiceAddresses = []string{s.cfg.LogServiceServiceAddr()}
+		drop.Store(true)
+
+		record := throughProxy.GetLogRecord(8)
+		copy(record.Data[12:], "first123")
+		started := time.Now()
+		_, err = throughProxy.Append(ctx, record)
+		require.Error(t, err)
+		// The socket can first finish an idle read window and then one full
+		// request window. Both together must leave room to reconcile before
+		// the outer attempt deadline.
+		require.Less(t, time.Since(started), 3*defaultLogServiceBackendReadTimeout)
+		require.NoError(t, ctx.Err(), "the outer attempt still has time to reconcile")
+
+		records, _, err := healthy.Read(ctx, 1, 1<<20)
+		require.NoError(t, err)
+		committed := 0
+		for _, got := range records {
+			if bytes.Equal(got.Data, record.Data) {
+				committed++
+			}
+		}
+		require.Equal(t, 1, committed, "the client must not silently replay an ambiguous Append")
+
+		next := throughProxy.GetLogRecord(8)
+		copy(next.Data[12:], "next4567")
+		_, err = throughProxy.Append(ctx, next)
+		require.NoError(t, err)
+	})
+}
+
 func startHangingTCPServer(t *testing.T) (string, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -550,6 +826,13 @@ func TestClientAppend(t *testing.T) {
 		lsn, err = c.Append(ctx, rec)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(5), lsn)
+
+		walClient, err := NewClient(ctx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer walClient.Close()
+		lsn, err = walClient.(*managedClient).AppendWAL(ctx, rec)
+		require.NoError(t, err)
+		assert.Greater(t, lsn, uint64(5))
 	}
 	RunClientTest(t, false, nil, fn)
 }
@@ -696,12 +979,28 @@ func TestReadOnlyClientRejectWriteRequests(t *testing.T) {
 	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		rec := c.GetLogRecord(16)
 		rand.Read(rec.Payload())
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_, err := c.Append(ctx, rec)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		err = c.Truncate(ctx, 4)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+
+		psn, dsn, err := c.GetWALTruncate(ctx)
+		require.NoError(t, err)
+		writeCfg := cfg
+		writeCfg.ReadOnly = false
+		writer, err := NewClient(ctx, "", writeCfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, writer.Close()) }()
+		lsn, err := writer.Append(ctx, rec)
+		require.NoError(t, err)
+		err = c.TruncateWAL(ctx, lsn, dsn+1)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		gotPSN, gotDSN, err := c.GetWALTruncate(ctx)
+		require.NoError(t, err)
+		require.Equal(t, psn, gotPSN)
+		require.Equal(t, dsn, gotDSN)
 	}
 	RunClientTest(t, true, nil, fn)
 }
@@ -806,6 +1105,77 @@ func TestClientRequiredLsn(t *testing.T) {
 	RunClientTest(t, false, nil, fn)
 }
 
+func TestClientConditionalRequiredLsnReset(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, _ *Service, _ ClientConfig, c Client) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		leaderID, term, err := c.(StandbyClient).GetLeaderState(ctx)
+		require.NoError(t, err)
+		require.NotZero(t, leaderID)
+		require.NotZero(t, term)
+		require.NoError(t, c.SetRequiredLsn(ctx, 100))
+		lsn, revision, owner, err := c.GetRequiredLsnState(ctx)
+		require.NoError(t, err)
+		require.Equal(t, Lsn(100), lsn)
+		require.Zero(t, owner)
+		require.NoError(t, c.ClaimRequiredLsn(ctx, lsn, revision, 11, term, leaderID))
+		require.NoError(t, c.SetRequiredLsnIfCurrent(ctx, 0, 100, revision+1, 11))
+		lsn, revision, owner, err = c.GetRequiredLsnState(ctx)
+		require.NoError(t, err)
+		require.Zero(t, lsn)
+		require.Equal(t, uint64(11), owner)
+		require.NoError(t, c.ClaimRequiredLsn(ctx, 0, revision, 22, term, leaderID))
+		require.Error(t, c.SetRequiredLsnIfCurrent(ctx, 500, 0, revision, 11))
+		require.NoError(t, c.SetRequiredLsnIfCurrent(ctx, 1, 0, revision+1, 22))
+		require.Error(t, c.SetRequiredLsn(ctx, 500))
+		got, err := c.GetRequiredLsn(ctx)
+		require.NoError(t, err)
+		require.Equal(t, Lsn(1), got)
+	})
+}
+
+func TestManagedLSNOperationsLeaveIsolatedEstablishedConnection(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, _ *Service, cfg ClientConfig, _ Client) {
+		operations := []struct {
+			name string
+			call func(context.Context, Client) error
+		}{
+			{"latest", func(ctx context.Context, c Client) error {
+				_, err := c.GetLatestLsn(ctx)
+				return err
+			}},
+			{"required", func(ctx context.Context, c Client) error {
+				_, err := c.GetRequiredLsn(ctx)
+				return err
+			}},
+			{"set required", func(ctx context.Context, c Client) error {
+				return c.SetRequiredLsn(ctx, 100)
+			}},
+		}
+		for _, operation := range operations {
+			t.Run(operation.name, func(t *testing.T) {
+				address, drop, cleanup := startDroppingResponseProxy(t, cfg.ServiceAddresses[0])
+				defer cleanup()
+				proxyCfg := cfg
+				proxyCfg.ServiceAddresses = []string{address}
+				ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+				defer cancel()
+				client, err := NewClient(ctx, "", proxyCfg)
+				require.NoError(t, err)
+				defer client.Close()
+				_, err = client.GetRequiredLsn(ctx)
+				require.NoError(t, err)
+				drop.Store(true)
+				client.(*managedClient).cfg.ServiceAddresses = cfg.ServiceAddresses
+				start := time.Now()
+				require.NoError(t, operation.call(ctx, client))
+				require.Less(t, time.Since(start), 15*time.Second)
+				require.NoError(t, ctx.Err())
+			})
+		}
+	})
+}
+
 func TestClientGetLeaderID(t *testing.T) {
 	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		sc := c.(StandbyClient)
@@ -814,6 +1184,10 @@ func TestClientGetLeaderID(t *testing.T) {
 		leaderID, err := sc.GetLeaderID(ctx) // return the max index
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(2), leaderID)
+		stateLeaderID, term, err := sc.GetLeaderState(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, leaderID, stateLeaderID)
+		assert.NotZero(t, term)
 	}
 	RunClientTest(t, false, nil, fn)
 }

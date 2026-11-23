@@ -113,3 +113,70 @@ func (l *RefCounted) AccountedBytes() int64 {
 	}
 	return l.accounted
 }
+
+// TryDisown consumes the last reference without invoking its cleanup. Only the
+// original backing owner may use it to resume its original release authority.
+// The 1 -> 0 CAS excludes concurrent Retain; a failed attempt changes nothing.
+func (l *RefCounted) TryDisown() bool {
+	if l == nil || !l.refs.CompareAndSwap(1, 0) {
+		return false
+	}
+	l.mu.Lock()
+	l.data = nil
+	l.releaseOne = nil
+	l.mu.Unlock()
+	return true
+}
+
+// Keeper is implemented by lenders that keep borrowed backings alive for the
+// readers of the vectors that alias them (for example a batch.Batch).
+type Keeper interface {
+	HoldLease(lease BufferLease) error
+}
+
+// Holder keeps references to the leases whose bytes are aliased by vectors a
+// lender published. A Vector never retains or releases a lease; its owner (the
+// lender) holds one reference here and drops every reference when it reuses or
+// frees the published vectors. The zero value is ready to use. A Holder is not
+// safe for concurrent use; it belongs to its single owner.
+type Holder struct {
+	leases []BufferLease
+}
+
+// Hold retains one reference to lease until the next Release.
+func (h *Holder) Hold(lease BufferLease) error {
+	if h == nil || lease == nil {
+		return moerr.NewInternalErrorNoCtx("cannot hold a nil buffer lease")
+	}
+	if !lease.Retain() {
+		return moerr.NewInternalErrorNoCtx("buffer lease is already released")
+	}
+	h.leases = append(h.leases, lease)
+	return nil
+}
+
+// HoldLease makes a Holder a Keeper.
+func (h *Holder) HoldLease(lease BufferLease) error {
+	return h.Hold(lease)
+}
+
+// Release drops every held reference. It is idempotent and safe on a nil or
+// zero Holder.
+func (h *Holder) Release() {
+	if h == nil {
+		return
+	}
+	for i, lease := range h.leases {
+		h.leases[i] = nil
+		lease.Release()
+	}
+	h.leases = h.leases[:0]
+}
+
+// Len reports the number of held references.
+func (h *Holder) Len() int {
+	if h == nil {
+		return 0
+	}
+	return len(h.leases)
+}

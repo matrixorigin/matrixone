@@ -17,9 +17,8 @@ package table_function
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
-	"encoding/hex"
 	"fmt"
+	"hash/crc32"
 	"math"
 	"regexp"
 	"strconv"
@@ -178,8 +177,7 @@ func TestIndexFileChunksWriteRoundTrip(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Equal(t, int64(len(data)), size)
-			want := md5.Sum(data)
-			require.Equal(t, hex.EncodeToString(want[:]), sum)
+			require.Equal(t, fmt.Sprintf("%08x", crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli))), sum)
 			require.Equal(t, data, assembled)
 			require.Equal(t, (len(data)+indexfile.ChunkSize-1)/indexfile.ChunkSize, int(next-tc.first))
 			require.Equal(t, (int(next-tc.first)+indexfile.ChunksPerStatement-1)/indexfile.ChunksPerStatement, statements)

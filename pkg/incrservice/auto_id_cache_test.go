@@ -104,7 +104,7 @@ func TestEstimatedRowsDoNotConsumeDurableAutoIncrementRange(t *testing.T) {
 				defer first.close()
 				mp := mpool.MustNewZero()
 				insert := func(cache incrTableCache, rows int, hint int64) []int32 {
-					v := vector.NewVec(types.T_int32.ToType())
+					v := vector.NewVec(types.T_int32.ToType(), mp)
 					defer v.Free(mp)
 					for range rows {
 						require.NoError(t, vector.AppendFixed(v, int32(0), true, mp))
@@ -170,7 +170,7 @@ func TestAutoIDCacheDemandOnly(t *testing.T) {
 				require.NoError(t, c.maybeAllocate(ctx, 0, nil, false))
 				require.Empty(t, store.requests(), "estimate and low-water paths must not reserve IDs")
 				mp := mpool.MustNewZero()
-				v := vector.NewVec(types.T_int64.ToType())
+				v := vector.NewVec(types.T_int64.ToType(), mp)
 				for i, value := range tc.values {
 					require.NoError(t, vector.AppendFixed(v, value, tc.nulls[i], mp))
 				}
@@ -211,7 +211,7 @@ func TestAutoIDCacheExplicitSpanAndConcurrentDemand(t *testing.T) {
 					go func() {
 						defer wg.Done()
 						mp := mpool.MustNewZero()
-						v := vector.NewVec(types.T_uint64.ToType())
+						v := vector.NewVec(types.T_uint64.ToType(), mp)
 						err := vector.AppendFixed(v, uint64(0), true, mp)
 						<-start
 						var id uint64
@@ -271,7 +271,7 @@ func TestAutoIDCacheColdServicesAndProbe(t *testing.T) {
 		require.Empty(t, store.requests())
 		mp := mpool.MustNewZero()
 		for i, s := range []*service{first, second, first} {
-			v := vector.NewVec(types.T_uint64.ToType())
+			v := vector.NewVec(types.T_uint64.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(v, uint64(0), true, mp))
 			id, err := s.InsertValues(ctx, 42, 0, op, []*vector.Vector{v}, 1, 999999)
 			v.Free(mp)
@@ -291,7 +291,7 @@ func TestAutoIDCacheColdServicesAndProbe(t *testing.T) {
 		// A type-overflow failure can leave an owned raw tail. Its real
 		// allocation TS must win over a newer transaction snapshot.
 		require.NoError(t, store.UpdateMinValue(ctx, 42, "id", 255, nil))
-		v := vector.NewVec(types.T_uint8.ToType())
+		v := vector.NewVec(types.T_uint8.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(v, uint8(0), true, mp))
 		require.NoError(t, vector.AppendFixed(v, uint8(0), true, mp))
 		_, err = second.InsertValues(ctx, 42, 0, op, []*vector.Vector{v}, 2, 0)

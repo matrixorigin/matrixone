@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -39,6 +41,7 @@ type RuntimeFilterMessage struct {
 	Typ           int32
 	Card          int32
 	Data          []byte
+	Keys          *keycodec.KeyPayload // UNIQUEJOINKEYS only; Data is the IN wire format
 	memoryOnce    *sync.Once
 	memoryRelease func()
 }

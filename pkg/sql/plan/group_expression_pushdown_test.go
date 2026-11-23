@@ -138,7 +138,7 @@ func TestPushdownGroupingExpressionPreservesRowsAndSlots(t *testing.T) {
 			evaluate := func(expr *planpb.Expr, values []string) []string {
 				input := batch.NewWithSize(1)
 				defer input.Clean(proc.Mp())
-				input.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 64, 0))
+				input.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 64, 0), proc.Mp())
 				for _, value := range values {
 					require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(value), value == "", proc.Mp()))
 				}
@@ -268,7 +268,7 @@ func TestOptimizePushesGroupingExpressionBeforeJoin(t *testing.T) {
 	defer stmt.Free()
 	// This includes ConstantFold and node compaction after createQuery, not
 	// merely BuildPlan or direct invocation of the new rewrite.
-	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false, nil)
 	require.NoError(t, err)
 	wire, err := query.Marshal()
 	require.NoError(t, err)

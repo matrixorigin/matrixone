@@ -45,6 +45,17 @@ type profileShard struct {
 
 var globalProfileShards [numProfileShards]profileShard
 
+// profileTracked is the global count of live entries across all shards. It
+// backs a bounded empty-store fast path so that plain Free/Realloc retirement
+// of pointer-keyed records can skip the shard lock when no record can exist:
+// profiling disabled from start, or every recorded pointer already retired.
+// Invariant: profileTracked is always >= the number of live entries. Every
+// mutation happens inside the owning shard's critical section; Add(1) is
+// ordered before the map insert and Add(-1) after the map delete. Therefore a
+// load of 0 proves the shards are empty, and a transient overcount only costs
+// the full lookup, whose miss is a no-op nil.
+var profileTracked atomic.Int64
+
 // Accounted allocations already carry stable, bounded provenance. Reusing one
 // synthetic sample per owner/site avoids collecting and hashing the same
 // runtime stack for every vector growth in a hash build.
@@ -95,7 +106,14 @@ func profileRecordFree(ptr uintptr, sz int64) {
 // Detach address-keyed state before the physical allocator can reuse its address.
 // The caller owns the returned sample until rollback or successful retirement.
 func profileDetach(ptr uintptr) *malloc.HeapSampleValues {
-	if !profilingEnabled.Load() {
+	// Retirement is record-driven, not toggle-driven: a pointer recorded while
+	// profiling was on must still retire on Free/teardown/Realloc when
+	// profiling is turned off later, otherwise the released address keeps a
+	// phantom sample with stale inuse accounting. The empty-store count keeps
+	// the profiling-off default at one atomic read, exactly like the alloc
+	// direction's enabled gate; a non-empty store takes the same shard-lock
+	// lookup that the enabled path has always paid.
+	if profileTracked.Load() == 0 {
 		return nil
 	}
 	shard := getProfileShard(ptr)
@@ -103,6 +121,7 @@ func profileDetach(ptr uintptr) *malloc.HeapSampleValues {
 	values, ok := shard.m[ptr]
 	if ok {
 		delete(shard.m, ptr)
+		profileTracked.Add(-1)
 	}
 	shard.mu.Unlock()
 	return values
@@ -112,6 +131,9 @@ func profileRestore(ptr uintptr, values *malloc.HeapSampleValues) {
 	if values != nil {
 		shard := getProfileShard(ptr)
 		shard.mu.Lock()
+		if _, ok := shard.m[ptr]; !ok {
+			profileTracked.Add(1)
+		}
 		shard.m[ptr] = values
 		shard.mu.Unlock()
 	}

@@ -288,8 +288,8 @@ INSERT INTO t_sort_ci VALUES (7, 'banana');
 INSERT INTO t_sort_ci VALUES (8, 'Banana');
 INSERT INTO t_sort_ci VALUES (9, 'BANANA');
 
-SELECT * FROM t_sort_ci ORDER BY name;
-SELECT * FROM t_sort_ci ORDER BY name DESC;
+SELECT * FROM t_sort_ci ORDER BY name, id;
+SELECT * FROM t_sort_ci ORDER BY name DESC, id DESC;
 
 CREATE TABLE t_sort_bin (
     id INT PRIMARY KEY,
@@ -319,7 +319,7 @@ CREATE TABLE t_distinct_ci (
 INSERT INTO t_distinct_ci VALUES ('Apple'), ('apple'), ('APPLE');
 INSERT INTO t_distinct_ci VALUES ('Banana'), ('banana'), ('BANANA');
 
-SELECT DISTINCT name FROM t_distinct_ci ORDER BY name;
+SELECT DISTINCT name, CONVERT(name USING BINARY) AS nb FROM t_distinct_ci ORDER BY name, nb;
 SELECT COUNT(DISTINCT name) FROM t_distinct_ci;
 
 CREATE TABLE t_distinct_bin (
@@ -343,7 +343,7 @@ CREATE TABLE t_group_ci (
 INSERT INTO t_group_ci VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 INSERT INTO t_group_ci VALUES (4, 'Banana'), (5, 'banana'), (6, 'BANANA');
 
-SELECT name, COUNT(*) as cnt FROM t_group_ci GROUP BY name ORDER BY name;
+SELECT name, COUNT(*) as cnt FROM t_group_ci GROUP BY name ORDER BY name, CONVERT(name USING BINARY);
 
 CREATE TABLE t_group_bin (
     id INT,
@@ -439,15 +439,9 @@ CREATE TABLE t_union2_ci (
 INSERT INTO t_union1_ci VALUES ('Apple'), ('Banana');
 INSERT INTO t_union2_ci VALUES ('apple'), ('Cherry');
 
-SELECT name FROM t_union1_ci
-UNION
-SELECT name FROM t_union2_ci
-ORDER BY name;
+SELECT name FROM (SELECT name FROM t_union1_ci UNION SELECT name FROM t_union2_ci) AS u ORDER BY name, CONVERT(name USING BINARY);
 
-SELECT name FROM t_union1_ci
-UNION ALL
-SELECT name FROM t_union2_ci
-ORDER BY name;
+SELECT name FROM (SELECT name FROM t_union1_ci UNION ALL SELECT name FROM t_union2_ci) AS u ORDER BY name, CONVERT(name USING BINARY);
 
 -- @case
 -- @desc: Test string functions with different charsets

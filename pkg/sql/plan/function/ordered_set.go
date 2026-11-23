@@ -48,6 +48,13 @@ func orderedSetPercentileCheckWithMode(inputs []types.Type, continuous bool) che
 		finalTypes[1] = types.T_float64.ToType()
 		needCast = true
 	}
+	// bf16/float16/float8/float4 have no percentile path of their own; they run as float32
+	for i := range finalTypes {
+		if finalTypes[i].Oid.IsLowPrecisionFloat() {
+			finalTypes[i] = types.T_float32.ToType()
+			needCast = true
+		}
+	}
 	if !finalTypes[1].IsNumeric() {
 		return newCheckResultWithFailure(failedAggParametersWrong)
 	}

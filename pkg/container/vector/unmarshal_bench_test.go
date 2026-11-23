@@ -74,7 +74,7 @@ func BenchmarkVectorUnmarshalBinary(b *testing.B) {
 	}
 
 	for _, test := range cases {
-		source := NewVec(test.typ)
+		source := NewVec(test.typ, mp)
 		if err := test.build(source); err != nil {
 			b.Fatal(err)
 		}

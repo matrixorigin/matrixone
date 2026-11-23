@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -25,23 +26,93 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
+
+var sqlTaskAllocationMissing = logutil.Event{
+	Name: "task.sql.allocate.notfound", Message: "task not found during allocation, may have been completed or deleted",
+}
+
+var sqlTaskReceiptRetry = logutil.Event{
+	Name: "task.sql.receipt.retry", Message: "SQL task metadata recovery will retry",
+}
+
+var sqlTaskRetryIncomplete = logutil.Event{
+	Name: "task.sql.retry.incomplete", Message: "SQL task business retry did not execute",
+}
+
+var sqlTaskReceiptAbandoned = logutil.Event{
+	Name: "task.sql.receipt.abandoned", Message: "SQL task metadata receipts abandoned during shutdown",
+}
+
+var sqlTaskUnclaimedRetry = logutil.Event{
+	Name: "task.sql.unclaimed.retry", Message: "unclaimed SQL task completion deferred",
+}
 
 type taskService struct {
 	store      TaskStorage
 	cronParser cron.Parser
 	rt         runtime.Runtime
 
-	crons    crons
-	sqlCrons sqlTaskCrons
+	crons       crons
+	sqlCrons    sqlTaskCrons
+	sqlRecovery *sqlTaskRecovery
+}
+
+func (s *taskService) SQLTaskService() TaskService { return s }
+
+// Interfaces can hold a nil pointer (or another nil-capable concrete value).
+func isNilTaskValue(value any) bool {
+	if value == nil {
+		return true
+	}
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
+// SQL task recovery and SQL admission must address the same storage. A
+// decorator can forward the owner by embedding TaskService, but a decorator
+// that substitutes a different store must construct its own owning service.
+func sqlTaskServiceOwner(service TaskService) *taskService {
+	if service == nil {
+		return nil
+	}
+	if owner, ok := service.(*taskService); ok {
+		if owner == nil || owner.store == nil {
+			return nil
+		}
+		return owner
+	}
+	if isNilTaskValue(service) {
+		return nil
+	}
+	owner, ok := service.SQLTaskService().(*taskService)
+	if !ok || owner == nil {
+		return nil
+	}
+	store := service.GetStorage()
+	if store == nil || owner.store == nil || !reflect.ValueOf(store).Comparable() || !reflect.ValueOf(owner.store).Comparable() || store != owner.store {
+		return nil
+	}
+	return owner
 }
 
 // NewTaskService create a task service based on a task storage.
 func NewTaskService(
 	rt runtime.Runtime,
 	store TaskStorage) TaskService {
-	return &taskService{
+	if isNilTaskValue(store) {
+		store = nil
+	}
+	s := &taskService{
 		rt:    rt,
 		store: store,
 		cronParser: cron.NewParser(
@@ -53,6 +124,78 @@ func NewTaskService(
 				cron.Dow |
 				cron.Descriptor),
 	}
+	s.sqlRecovery = newSQLTaskRecovery(sqlTaskManualCapacity, sqlTaskScheduledCapacity(1), s.recoverSQLTaskReceipt)
+	return s
+}
+
+func (s *taskService) recoverSQLTaskReceipt(ctx context.Context, receipt *sqlTaskReceipt) bool {
+	resolved, err := s.store.PublishSQLTaskReceipt(ctx, receipt.SQLTaskReceiptRequest)
+	if err != nil {
+		v2.SQLTaskReceiptRetryCounter.Inc()
+		s.rt.Logger().WarnEventLazy(sqlTaskReceiptRetry, func() []zap.Field {
+			return []zap.Field{zap.Uint64("run-id", receipt.Run.RunID), zap.Uint64("async-id", receipt.Claim.ID),
+				zap.String("error", util.Abbreviate(err.Error(), 997))}
+		})
+	}
+	return err == nil && resolved
+}
+
+func (s *taskService) reportAbandonedSQLTaskReceipts(count int, sample []uint64) {
+	if count == 0 {
+		return
+	}
+	v2.SQLTaskReceiptAbandonedCounter.Add(float64(count))
+	s.rt.Logger().WarnEvent(sqlTaskReceiptAbandoned, zap.Int("count", count), zap.Uint64s("run-ids", sample))
+}
+
+func (s *taskService) abandonSQLTaskReceipt(receipt *sqlTaskReceipt) {
+	if s.sqlRecovery.release(receipt.credit) {
+		s.reportAbandonedSQLTaskReceipts(1, []uint64{receipt.Run.RunID})
+	}
+}
+
+func (s *taskService) finishUnclaimedSQLTask(caller context.Context, claim SQLTaskClaim, cause error, cleanupTaskID uint64) bool {
+	// Only the runner participates in the CAS. Parent/metadata can be invalid
+	// multibyte strings and are not retained by this path.
+	if claim.ID == 0 || len(claim.Runner) > 512 {
+		return false
+	}
+	guard := s.sqlRecovery.tryGuard(sqlTaskGuardKey{kind: 3, value: "unclaimed"}, 50)
+	if guard == nil {
+		return false
+	}
+	defer s.sqlRecovery.releaseGuard(guard)
+	ctx, cancel := context.WithTimeout(s.sqlRecovery.ctx, 5*time.Second)
+	defer cancel()
+	result := task.ExecuteResult{Code: task.ResultCode_Success}
+	if cause != nil {
+		result.Code, result.Error = task.ResultCode_Failed, util.Abbreviate(cause.Error(), 997)
+	}
+	logFailure := func(err error) bool {
+		if err != errSQLTaskStoreBusy {
+			deferFailedSQLTask(caller)
+		}
+		v2.SQLTaskUnclaimedFailureCounter.Inc()
+		s.rt.Logger().WarnEventLazy(sqlTaskUnclaimedRetry, func() []zap.Field {
+			return []zap.Field{zap.Uint64("async-id", claim.ID), zap.String("error", util.Abbreviate(err.Error(), 997))}
+		})
+		return false
+	}
+	if err := s.store.FinishSQLTaskUnclaimed(ctx, claim, result, time.Now().UnixMilli()); err != nil {
+		return logFailure(err)
+	}
+	if cleanupTaskID != 0 {
+		for {
+			deleted, err := deleteStaleSQLTaskBatch(ctx, s.store, cleanupTaskID)
+			if err != nil {
+				return logFailure(err)
+			}
+			if deleted < sqlTaskStaleBatchSize {
+				break
+			}
+		}
+	}
+	return true
 }
 
 func (s *taskService) CreateAsyncTask(ctx context.Context, value task.TaskMetadata) error {
@@ -143,10 +286,12 @@ func (s *taskService) Allocate(ctx context.Context, value task.AsyncTask, taskRu
 	if len(exists) == 0 {
 		// Task not found, it may have been completed and deleted by another scheduler
 		// or CN node. This is a normal race condition in distributed systems.
-		s.rt.Logger().Warn("task not found during allocation, may have been completed or deleted",
-			zap.Uint64("task-id", value.ID),
-			zap.String("task-metadata-id", value.Metadata.ID),
-			zap.String("task-runner", taskRunner))
+		fields := []zap.Field{zap.Uint64("task-id", value.ID), zap.String("task-metadata-id", value.Metadata.ID), zap.String("task-runner", taskRunner)}
+		if value.Metadata.Executor == task.TaskCode_SQLTask {
+			s.rt.Logger().WarnEvent(sqlTaskAllocationMissing, fields...)
+		} else {
+			s.rt.Logger().Warn(sqlTaskAllocationMissing.Message, fields...)
+		}
 		return moerr.NewInvalidTask(ctx, taskRunner, value.ID)
 	}
 	if len(exists) > 1 {
@@ -155,6 +300,7 @@ func (s *taskService) Allocate(ctx context.Context, value task.AsyncTask, taskRu
 	}
 
 	old := exists[0]
+	previousStatus := old.Status
 	switch old.Status {
 	case task.TaskStatus_Running:
 		old.Epoch++
@@ -172,6 +318,7 @@ func (s *taskService) Allocate(ctx context.Context, value task.AsyncTask, taskRu
 	n, err := s.store.UpdateAsyncTask(ctx,
 		[]task.AsyncTask{old},
 		WithTaskIDCond(EQ, old.ID),
+		WithTaskStatusCond(previousStatus),
 		WithTaskEpochCond(EQ, old.Epoch-1))
 	if err != nil {
 		return err
@@ -187,9 +334,6 @@ func (s *taskService) Complete(
 	taskRunner string,
 	value task.AsyncTask,
 	result task.ExecuteResult) error {
-	completeSQLTaskRun := value.Metadata.Executor == task.TaskCode_SQLTask &&
-		result.Code != task.ResultCode_Success
-
 	value.CompletedAt = time.Now().UnixMilli()
 	value.Status = task.TaskStatus_Completed
 	value.ExecuteResult = &result
@@ -202,58 +346,6 @@ func (s *taskService) Complete(
 	}
 	if n == 0 {
 		return moerr.NewInvalidTask(ctx, value.TaskRunner, value.ID)
-	}
-	if completeSQLTaskRun {
-		return s.completeFailedSQLTaskRun(ctx, taskRunner, value, result)
-	}
-	return nil
-}
-
-func (s *taskService) completeFailedSQLTaskRun(
-	ctx context.Context,
-	taskRunner string,
-	value task.AsyncTask,
-	result task.ExecuteResult,
-) error {
-	if value.Metadata.Executor != task.TaskCode_SQLTask || result.Code == task.ResultCode_Success {
-		return nil
-	}
-
-	spec := new(task.SQLTaskContext)
-	if err := spec.Unmarshal(value.Metadata.Context); err != nil {
-		return err
-	}
-
-	runs, err := s.store.QuerySQLTaskRun(ctx,
-		WithTaskIDCond(EQ, spec.TaskId),
-		WithAccountID(EQ, spec.AccountId),
-		WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning),
-		WithSQLTaskRunnerCond(EQ, taskRunner),
-	)
-	if err != nil {
-		return err
-	}
-
-	now := time.Now()
-	errMsg := result.Error
-	if errMsg == "" {
-		errMsg = "sql task async execution failed"
-	}
-	for _, run := range runs {
-		run.Status = SQLTaskStatusFailed
-		run.FinishedAt = now
-		if !run.StartedAt.IsZero() {
-			run.DurationSeconds = now.Sub(run.StartedAt).Seconds()
-		}
-		run.ErrorCode = int(result.Code)
-		run.ErrorMessage = errMsg
-		if _, err := s.store.UpdateSQLTaskRun(ctx,
-			[]SQLTaskRun{run},
-			WithSQLTaskRunIDCond(EQ, run.RunID),
-			WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning),
-			WithSQLTaskRunnerCond(EQ, taskRunner)); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -356,6 +448,11 @@ func (s *taskService) UpdateCDCTask(
 func (s *taskService) Close() error {
 	s.StopScheduleCronTask()
 	s.StopScheduleSQLTask()
+	count, sample := s.sqlRecovery.close()
+	s.reportAbandonedSQLTaskReceipts(count, sample)
+	if s.store == nil {
+		return nil
+	}
 	return s.store.Close()
 }
 

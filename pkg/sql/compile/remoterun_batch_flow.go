@@ -44,6 +44,10 @@ type pipelineBatchFlow struct {
 	// stoppedByReceiver distinguishes an internal StopSending from query or
 	// connection cancellation at the terminal-response drain boundary.
 	stoppedByReceiver bool
+	// noWindow marks the r17 run-scoped accounting flow: sequence
+	// stamps and acks are tracked, but reserve never imposes a credit
+	// window — a fresh stream carries no window request and gains none.
+	noWindow bool
 }
 
 func newPipelineBatchFlow(requestedCount uint32, requestedBytes uint64) *pipelineBatchFlow {
@@ -55,6 +59,22 @@ func newPipelineBatchFlow(requestedCount uint32, requestedBytes uint64) *pipelin
 		maxBytes: min(requestedBytes, pipelineBatchCreditBytes),
 		pending:  make(map[uint64]uint64),
 		changed:  make(chan struct{}),
+	}
+}
+
+// newRunScopedPipelineBatchFlow builds the r17 accounting-only flow for an
+// admitted run on a fresh (non-negotiated) stream (issue #25590 round-52
+// review): every emitted batch reserves a sequence, the recording side's
+// unchanged receive loops ack each one after their intake adoption, and the
+// settlement drains before any ownership transfer. No window is imposed:
+// reserve stamps every batch unconditionally, so the flow only sequences and
+// accounts. accepted() reports zeros, keeping the wire bytes identical to a
+// stream that never negotiated credits.
+func newRunScopedPipelineBatchFlow() *pipelineBatchFlow {
+	return &pipelineBatchFlow{
+		pending:  make(map[uint64]uint64),
+		changed:  make(chan struct{}),
+		noWindow: true,
 	}
 }
 
@@ -84,6 +104,16 @@ func (f *pipelineBatchFlow) reserve(
 			err := f.abortErr
 			f.mu.Unlock()
 			return 0, err
+		}
+		if f.noWindow {
+			// The run-scoped barrier sequences only; admission control
+			// stays the negotiated protocol's own machinery.
+			f.nextSeq++
+			seq := f.nextSeq
+			f.pending[seq] = size
+			f.bytes += size
+			f.mu.Unlock()
+			return seq, nil
 		}
 		countAvailable := uint32(len(f.pending)) < f.maxCount
 		bytesAvailable := f.bytes+size <= f.maxBytes || len(f.pending) == 0

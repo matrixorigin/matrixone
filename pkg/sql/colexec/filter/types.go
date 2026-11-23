@@ -15,6 +15,7 @@
 package filter
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -70,12 +71,17 @@ func (filter *Filter) Release() {
 }
 
 type container struct {
+	account                   *mpool.AllocationAccount
+	outputAllocation          *mpool.MPool
 	buf                       *batch.Batch
 	executors                 []colexec.ExpressionExecutor
 	bs                        vector.FunctionParameterWrapper[bool]
 	runtimeExecutors          []colexec.ExpressionExecutor
 	allExecutors              []colexec.ExpressionExecutor // = executors + runtimeExecutor, do not free this executors
 	subjectReuseAdmissionDone bool
+	selection                 selectionState
+	// flatSels is the compacting path's row-number scratch.
+	flatSels []int64
 }
 
 func (filter *Filter) SetRuntimeFilterExprs(proc *process.Process, exes []*plan.Expr) (err error) {
@@ -87,6 +93,9 @@ func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err erro
 	filter.ctr.resetExecutor()
 	filter.ctr.cleanRuntimeExecutor()
 	filter.RuntimeFilterExprs = nil
+	if filter.ctr.account != nil {
+		filter.Free(proc, pipelineFailed, err)
+	}
 }
 
 func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -94,7 +103,8 @@ func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error
 	filter.ctr.cleanRuntimeExecutor()
 	filter.ctr.allExecutors = nil
 	if filter.ctr.buf != nil {
-		filter.ctr.buf.Clean(proc.Mp())
+		filter.ctr.buf.Clean(filter.ctr.mp(proc))
+		filter.ctr.buf = nil
 	}
 	filter.RuntimeFilterExprs = nil
 }

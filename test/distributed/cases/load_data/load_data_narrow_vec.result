@@ -45,13 +45,13 @@ select id from nvec order by d desc, id;
 1
 create table nvec_oor(id int, c vecint8(3));
 load data infile '$resources/load_data/narrow_vec_int8_oor.csv' into table nvec_oor fields terminated by ',' ignore 1 lines;
-internal error: error while casting 200 to VECINT8
+invalid input: error while casting 200 to VECINT8
 select count(*) as cnt from nvec_oor;
 ➤ cnt[-5,64,0]  𝄀
 0
 create table nvec_frac(id int, c vecint8(3));
 load data infile '$resources/load_data/narrow_vec_int8_frac.csv' into table nvec_frac fields terminated by ',' ignore 1 lines;
-internal error: error while casting 0.5 to VECINT8
+invalid input: error while casting 0.5 to VECINT8
 select count(*) as cnt from nvec_frac;
 ➤ cnt[-5,64,0]  𝄀
 0

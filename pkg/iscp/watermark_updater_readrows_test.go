@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"testing/synctest"
 
@@ -33,6 +34,70 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestJobSpecWritesValidateRowBudget(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = oldExecWithResult })
+	ctx := context.WithValue(t.Context(), defines.TenantIDKey{}, uint32(7))
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	catalogErr := errors.New("catalog lookup stopped")
+	calls := 0
+	ExecWithResult = func(context.Context, string, string, client.TxnOperator, ...executor.StatementOption) (executor.Result, error) {
+		calls++
+		return executor.Result{}, catalogErr
+	}
+	id := &JobID{DBName: "db", TableName: "tbl", JobName: "job"}
+	for _, write := range []struct {
+		name string
+		call func(context.Context, *JobSpec) error
+	}{
+		{"register", func(ctx context.Context, spec *JobSpec) error {
+			_, err := RegisterJob(ctx, "", nil, spec, id, false)
+			return err
+		}},
+		{"update", func(ctx context.Context, spec *JobSpec) error {
+			return UpdateJobSpec(ctx, "", nil, id, spec)
+		}},
+	} {
+		t.Run(write.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name  string
+				kind  ConsumerType
+				job   uint16
+				rows  int
+				valid bool
+			}{
+				{"negative index target", ConsumerType_IndexSync, TriggerType_Default, -1, false},
+				{"implicit default with target", ConsumerType_CNConsumer, 0, 1, false},
+				{"timed ordinary job with target", ConsumerType_CNConsumer, TriggerType_Timed, 1, false},
+				{"legacy default", ConsumerType_CNConsumer, 0, 0, true},
+				{"default index opt-in", ConsumerType_IndexSync, TriggerType_Default, 1, true},
+				{"independent ordinary job", ConsumerType_CNConsumer, TriggerType_AlwaysUpdate, 1, true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					spec := JobSpec{
+						TriggerSpec:  TriggerSpec{JobType: tc.job, TargetRows: tc.rows},
+						ConsumerInfo: ConsumerInfo{ConsumerType: int8(tc.kind), InitSQL: "select 1"},
+					}
+					original := spec
+					calls = 0
+					err := write.call(ctx, &spec)
+					if tc.valid {
+						require.ErrorIs(t, err, catalogErr)
+						require.Equal(t, 1, calls)
+						return
+					}
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "got %v", err)
+					require.Zero(t, calls)
+					require.Equal(t, original, spec)
+					require.ErrorIs(t, write.call(canceledCtx, &spec), context.Canceled)
+					require.Zero(t, calls)
+				})
+			}
+		})
+	}
+}
 
 func TestExecWithResultStatementPolicy(t *testing.T) {
 	sid := t.Name()

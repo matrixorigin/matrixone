@@ -16,6 +16,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -86,6 +87,51 @@ func TestScanSnapshotDecisions(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestScanSnapshotDecisionsAcrossCatalogPagesAndRetry(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		data := []byte(testDecisionHeader + "\n" + testDecision + "\n")
+		require.NoError(t, fs.Write(t.Context(), fileservice.IOVector{FilePath: SnapshotUpgradeDecisionPath, Entries: []fileservice.IOEntry{{Size: int64(len(data)), Data: data}}}))
+		names := make([]string, 129)
+		for i := 0; i < len(names)-1; i++ {
+			names[i] = fmt.Sprintf("%03d", i)
+		}
+		names[len(names)-1] = "__mo_branch_42"
+		failure := errors.New("snapshot page unavailable")
+		pageIndex, requests := 0, 0
+		fail := true
+		exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.Contains(sql, "from mo_catalog.mo_snapshots where sname >"):
+				require.Contains(t, sql, "order by sname limit 32")
+				requests++
+				if fail && pageIndex == 2 {
+					return executor.Result{}, failure
+				}
+				start := pageIndex * snapshotCatalogPageSize
+				end := min(start+snapshotCatalogPageSize, len(names))
+				pageIndex++
+				return testCatalogSnapshotPageRows(t, names[start:end], "user"), nil
+			case strings.Contains(sql, "from mo_catalog.mo_branch_metadata where table_id"):
+				return testCatalogSnapshotEdge(t), nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected SQL %s", sql)
+			}
+		}, &testTxnOperator{})
+		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) {}, WithUpgradeDecisionFileService(fs))
+		t.Cleanup(s.stopper.Stop)
+		visits := 0
+		visit := func(snapshotDecisionRecord) error { visits++; return nil }
+		require.ErrorIs(t, s.scanSnapshotDecisions(t.Context(), visit), failure)
+		require.Zero(t, visits)
+		pageIndex, requests, fail = 0, 0, false
+		require.NoError(t, s.scanSnapshotDecisions(t.Context(), visit))
+		require.Equal(t, 5, requests)
+		require.Equal(t, 1, visits, "the decision on the last page must be visited")
+	})
 }
 
 func TestApplySnapshotDecisionPageRechecksOwnership(t *testing.T) {
@@ -171,6 +217,10 @@ func testCatalogUpgradeState(t *testing.T, state int32) executor.Result {
 }
 
 func testCatalogSnapshotPage(t *testing.T, name, kind string) executor.Result {
+	return testCatalogSnapshotPageRows(t, []string{name}, kind)
+}
+
+func testCatalogSnapshotPageRows(t *testing.T, names []string, kind string) executor.Result {
 	t.Helper()
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
@@ -179,10 +229,16 @@ func testCatalogSnapshotPage(t *testing.T, name, kind string) executor.Result {
 		typs[i] = types.T_varchar.ToType()
 	}
 	r := executor.NewMemResult(typs, mp)
-	r.NewBatchWithRowCount(1)
-	values := []string{"01a17d34-05f1-752c-acbd-52c7a8fe04fe", name, "123", "table", "sys", "db", "t", "9", kind}
-	for i, v := range values {
-		require.NoError(t, executor.AppendStringRows(r, i, []string{v}))
+	r.NewBatchWithRowCount(len(names))
+	for column, value := range []string{"01a17d34-05f1-752c-acbd-52c7a8fe04fe", "", "123", "table", "sys", "db", "t", "9", kind} {
+		values := make([]string, len(names))
+		for i := range names {
+			values[i] = value
+		}
+		if column == 1 {
+			copy(values, names)
+		}
+		require.NoError(t, executor.AppendStringRows(r, column, values))
 	}
 	return r.GetResult()
 }

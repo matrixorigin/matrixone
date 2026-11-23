@@ -383,6 +383,75 @@ func TestGetTypeFromAstAssignsExplicitStringCharset(t *testing.T) {
 	}
 }
 
+// TestGetTypeFromAstLowPrecFloat covers getTypeFromAst's disambiguation of the scalar
+// low-precision float types (#20567): they share MYSQL_TYPE_FLOAT and are resolved by
+// FamilyString, carrying no width/scale.
+func TestGetTypeFromAstLowPrecFloat(t *testing.T) {
+	for _, tc := range []struct {
+		def  string
+		want types.T
+	}{
+		{"bf16", types.T_bf16},
+		{"float16", types.T_float16},
+		{"float8", types.T_float8},
+		{"float4", types.T_float4},
+	} {
+		t.Run(tc.def, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (v "+tc.def+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), column.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.want), typ.Id)
+			require.Equal(t, int32(-1), typ.Scale)
+		})
+	}
+}
+
+func TestGetTypeFromAstVectorTypes(t *testing.T) {
+	for _, tc := range []struct {
+		def   string
+		want  types.T
+		width int32
+	}{
+		{"vecf32(3)", types.T_array_float32, 3},
+		{"vecf64(3)", types.T_array_float64, 3},
+		{"vecbf16(3)", types.T_array_bf16, 3},
+		{"vecf16(3)", types.T_array_float16, 3},
+		{"vecint8(3)", types.T_array_int8, 3},
+		{"vecuint8(3)", types.T_array_uint8, 3},
+		{"vecf8(3)", types.T_array_float8, 3},
+		{"vecf4(1024)", types.T_array_float4, 1024},
+		{"vecf8", types.T_array_float8, types.MaxArrayDimension},
+		{"vecf4(65535)", types.T_array_float4, types.MaxArrayDimension},
+	} {
+		t.Run(tc.def, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (v "+tc.def+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), column.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.want), typ.Id)
+			require.Equal(t, tc.width, typ.Width)
+		})
+	}
+	for _, def := range []string{"vecf8(65536)", "vecf4(0)"} {
+		t.Run(def, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (v "+def+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			_, err = getTypeFromAst(context.Background(), column.Type)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestGetTypeFromAstCharCastCharset(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -1260,7 +1329,7 @@ func TestExportedAssignmentCastUsesRuntimeSQLModeSemantics(t *testing.T) {
 		plan.Type{Id: int32(types.T_date)},
 	)
 	require.NoError(t, err)
-	require.Equal(t, "cast_strict", dateExpr.GetF().GetFunc().GetObjName())
+	require.Equal(t, "cast_assign", dateExpr.GetF().GetFunc().GetObjName())
 }
 
 func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
@@ -1593,6 +1662,32 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
+		binaryWant := "cast_assign"
+		if test.ignore {
+			binaryWant = "cast_ignore"
+		}
+		for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+			binaryTarget := plan.Type{Id: int32(oid), Width: 1}
+			require.True(t, useAssignmentStrictCast(binaryTarget))
+			require.True(t, useSqlModeStringAssignmentCast(binaryTarget))
+			require.True(t, needsSameTypeAssignmentCast(binaryTarget))
+			require.Equal(t, binaryWant, assignmentCastFunctionName(binaryTarget, test.ignore, proc))
+			same := MakePlan2StringConstExprWithType(string([]byte{0xc3, 0xa9}))
+			same.Typ = binaryTarget
+			projected, err := forceCastExpr2WithProcess(t.Context(), DeepCopyExpr(same), makeTypeByPlan2Type(binaryTarget),
+				&plan.Expr{Typ: binaryTarget, Expr: &plan.Expr_T{T: &plan.TargetType{}}}, test.ignore, proc)
+			require.NoError(t, err)
+			require.Equal(t, binaryWant, projected.GetF().GetFunc().GetObjName())
+			forced, err := forceAssignmentCastExprWithProcess(t.Context(), DeepCopyExpr(same), binaryTarget, test.ignore, proc)
+			require.NoError(t, err)
+			require.Equal(t, binaryWant, forced.GetF().GetFunc().GetObjName())
+			ddl, err := makePlan2AssignmentCastExpr(t.Context(), DeepCopyExpr(same), binaryTarget)
+			require.NoError(t, err)
+			require.Equal(t, "cast_strict", ddl.GetF().GetFunc().GetObjName())
+			stored, err := MakePlan2AssignmentCastExpr(t.Context(), DeepCopyExpr(same), binaryTarget)
+			require.NoError(t, err)
+			require.Equal(t, "cast_assign", stored.GetF().GetFunc().GetObjName())
+		}
 		blobTargetType := &plan.Expr{
 			Typ:  blobTarget,
 			Expr: &plan.Expr_T{T: &plan.TargetType{}},
@@ -1608,7 +1703,7 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, test.want, blobCasted.GetF().GetFunc().GetObjName())
 	}
-	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
 	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
 		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
 	}, false, proc))
@@ -1662,8 +1757,8 @@ func TestIgnoreConversionAssignmentCastTargets(t *testing.T) {
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
 	for _, target := range targets {
-		want := "cast"
-		if target.typ.Oid == types.T_date || target.typ.Oid == types.T_datetime || target.typ.Oid == types.T_timestamp {
+		want := "cast_ignore"
+		if target.typ.Oid == types.T_datetime || target.typ.Oid == types.T_timestamp {
 			want = "cast_strict"
 		}
 		require.Equal(t, want, assignmentCastFunctionName(makePlan2Type(&target.typ), true, proc), target.name)
@@ -1750,6 +1845,9 @@ func TestEmptyDomainTypeReplay(t *testing.T) {
 		domain, formatted string
 	}{
 		{"enum('')", types.T_enum, "", "ENUM('')"}, {"set('')", types.T_uint64, ",", "SET('')"}, {"set('   ')", types.T_uint64, ",", "SET('')"}, {"bigint unsigned", types.T_uint64, "", "BIGINT UNSIGNED"},
+		// ENUM labels lose trailing (not leading) spaces at CREATE, as in MySQL.
+		{"enum('   ')", types.T_enum, "", "ENUM('')"},
+		{"enum('a  ','  B ','c')", types.T_enum, "a,  B,c", "ENUM('a','  B','c')"},
 	} {
 		t.Run(tc.ddl, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(context.Background(), "create table t(v "+tc.ddl+")", 1)
@@ -1773,4 +1871,62 @@ func TestEmptyDomainTypeReplay(t *testing.T) {
 			require.Equal(t, typ, replayType)
 		})
 	}
+}
+
+func TestEnumDDLRejectsMembersEqualAfterTrim(t *testing.T) {
+	for _, ddl := range []string{
+		"enum(' ','red','')", "enum('a','a ')", "enum('a','A')", "enum('x  ','X')",
+	} {
+		t.Run(ddl, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t(v "+ddl+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = getTypeFromAst(context.Background(), stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+			require.ErrorContains(t, err, "duplicate enum member")
+		})
+	}
+	// Leading spaces are significant, so these are distinct members.
+	stmt, err := mysql.ParseOne(context.Background(), "create table t(v enum(' a','a'))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	typ, err := getTypeFromAst(context.Background(), stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+	require.NoError(t, err)
+	require.Equal(t, " a,a", typ.Enumvalues)
+}
+
+// Catalogs written before CREATE-time trimming may store ENUM domains that new
+// DDL rejects. LIKE/CLONE/COPY replay of such an unchanged column must keep the
+// stored labels and ordinals; a changed or new declaration is still normalized.
+func TestEnumReplayPreservesLegacyDomain(t *testing.T) {
+	legacy := &plan.TableDef{
+		Name: "t",
+		Cols: []*plan.ColDef{{ColId: 1, Name: "v", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: " ,red,"}}},
+	}
+	replayCtx := WithPersistedDDLReplay(context.Background(), legacy, legacy)
+	replay := ddlReplayForTable(replayCtx, "t")
+	require.NotNil(t, replay)
+
+	column := func(ddl string) (*tree.ColumnTableDef, func()) {
+		stmt, err := mysql.ParseOne(context.Background(), "create table t(v "+ddl+")", 1)
+		require.NoError(t, err)
+		return stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef), func() { stmt.Free() }
+	}
+
+	col, free := column("enum(' ','red','')")
+	defer free()
+	typ, err := getColumnTypeFromAst(replayCtx, col, uint32(types.CharsetUTF8), replay)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_enum), typ.Id)
+	require.Equal(t, " ,red,", typ.Enumvalues)
+
+	// The same declaration outside replay is a new domain.
+	_, err = getColumnTypeFromAst(context.Background(), col, uint32(types.CharsetUTF8), nil)
+	require.ErrorContains(t, err, "duplicate enum member")
+
+	// A changed declaration during replay is normalized as new metadata.
+	changed, freeChanged := column("enum('red  ','blue')")
+	defer freeChanged()
+	typ, err = getColumnTypeFromAst(replayCtx, changed, uint32(types.CharsetUTF8), replay)
+	require.NoError(t, err)
+	require.Equal(t, "red,blue", typ.Enumvalues)
 }

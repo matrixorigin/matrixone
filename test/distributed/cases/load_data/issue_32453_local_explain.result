@@ -1,0 +1,22 @@
+drop database if exists issue_32453_local_explain;
+create database issue_32453_local_explain;
+use issue_32453_local_explain;
+create table t(id int, s varchar(10));
+explain analyze load data local infile {'filepath'='$resources/load_data/issue_32453_local_explain.jsonl','format'='jsonline','jsondata'='object'} into table t;
+-- @regex("EXPLAIN ANALYZE LOAD DATA LOCAL INFILE is not supported", true)
+not supported: EXPLAIN ANALYZE LOAD DATA LOCAL INFILE is not supported
+explain phyplan load data local infile {'filepath'='$resources/load_data/issue_32453_local_explain.jsonl','format'='jsonline','jsondata'='object'} into table t;
+-- @regex("EXPLAIN PHYPLAN LOAD DATA LOCAL INFILE is not supported", true)
+not supported: EXPLAIN PHYPLAN LOAD DATA LOCAL INFILE is not supported
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+select count(*) from t;
+➤ count(*)[-5,64,0]  𝄀
+0
+load data local infile {'filepath'='$resources/load_data/issue_32453_local_explain.jsonl','format'='jsonline','jsondata'='object'} into table t;
+select id, s from t order by s;
+➤ id[4,32,0]  ¦  s[12,10,0]  𝄀
+-3  ¦  b  𝄀
+2  ¦  c
+drop database issue_32453_local_explain;

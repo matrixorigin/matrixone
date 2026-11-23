@@ -69,7 +69,7 @@ func TestUnsignedSubtractionModeBindsAtExpressionBoundary(t *testing.T) {
 					require.NoError(t, err)
 					defer stmt.Free()
 
-					built, err := BuildPlan(ctx, stmt, false)
+					built, err := BuildPlan(ctx, stmt, false, nil)
 					require.NoError(t, err)
 					projectExpr := firstProjectExpr(built)
 					require.NotNil(t, projectExpr)
@@ -96,7 +96,7 @@ func TestUnsignedSubtractionModeBindsExecutionDomain(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			expr := firstProjectExpr(built)
 			require.NotNil(t, expr)

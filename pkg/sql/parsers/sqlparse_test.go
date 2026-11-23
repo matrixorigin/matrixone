@@ -38,6 +38,84 @@ var (
 	}
 )
 
+func TestNumericExponentParsing(t *testing.T) {
+	ctx := context.Background()
+	for _, literal := range []string{
+		"1.5e", "1.e", ".5e", "1.5E", "1.5Efoo", "1.5e_", "1.5e数量",
+		"1.5e+", "1.5e-", "1.5e+foo", "1e+",
+	} {
+		t.Run(literal, func(t *testing.T) {
+			stmts, err := Parse(ctx, dialect.MYSQL, "select "+literal, 1)
+			for _, stmt := range stmts {
+				t.Cleanup(stmt.Free)
+			}
+			require.Error(t, err)
+			require.Empty(t, stmts)
+			positioned, ok := err.(mysql.PositionedErr)
+			require.True(t, ok, "%T: %v", err, err)
+			require.Contains(t, positioned.Near, literal)
+		})
+	}
+	for _, test := range []struct {
+		expression string
+		value      float64
+		alias      string
+		identifier bool
+	}{
+		{expression: "1.e5", value: 100000},
+		{expression: "1.5e38", value: 1.5e38},
+		{expression: "1.5e+2", value: 150},
+		{expression: ".5E-2", value: .005},
+		{expression: "1e", identifier: true},
+		{expression: "1efoo", identifier: true},
+		{expression: "1e数量", identifier: true},
+		{expression: "1.5 e", value: 1.5, alias: "e"},
+		{expression: "1.5/**/e", value: 1.5, alias: "e"},
+		{expression: "1.5 AS e", value: 1.5, alias: "e"},
+		{expression: "1.5foo", value: 1.5, alias: "foo"},
+		{expression: "1.5e1foo", value: 15, alias: "foo"},
+		{expression: "1.5 /* 1.5e */", value: 1.5},
+	} {
+		t.Run(test.expression, func(t *testing.T) {
+			stmts, err := Parse(ctx, dialect.MYSQL, "select "+test.expression, 1)
+			require.NoError(t, err)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+			require.Len(t, stmts, 1)
+			expr := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0]
+			require.Equal(t, test.alias, expr.As.Origin())
+			if test.identifier {
+				require.IsType(t, &tree.UnresolvedName{}, expr.Expr)
+				require.Equal(t, test.expression, expr.Expr.(*tree.UnresolvedName).ColNameOrigin())
+			} else {
+				require.IsType(t, &tree.NumVal{}, expr.Expr)
+				value, ok := expr.Expr.(*tree.NumVal).Float64()
+				require.True(t, ok)
+				require.Equal(t, test.value, value)
+			}
+		})
+	}
+	t.Run("ParseOne and quoted literal", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, dialect.MYSQL, "select .5E", 1)
+		if stmt != nil {
+			t.Cleanup(stmt.Free)
+		}
+		require.Error(t, err)
+		require.Nil(t, stmt)
+		require.IsType(t, mysql.PositionedErr{}, err)
+		stmt, err = ParseOne(ctx, dialect.MYSQL, "select '1.5e'", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		expr := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+		require.IsType(t, &tree.NumVal{}, expr)
+		require.Equal(t, tree.P_char, expr.(*tree.NumVal).ValType)
+		require.Equal(t, "1.5e", expr.(*tree.NumVal).String())
+	})
+}
+
 func TestMysql(t *testing.T) {
 	ctx := context.TODO()
 	if debugSQL.output == "" {

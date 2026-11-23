@@ -44,12 +44,14 @@ type MockBackend interface {
 		ctx context.Context, firstPSN, maxSize uint64,
 	) ([]logservice.LogRecord, uint64, error)
 	GetTruncatedLsn(ctx context.Context) (uint64, error)
+	GetWALTruncate(ctx context.Context) (psn, checkpointedDSN uint64, err error)
 
 	Append(
 		ctx context.Context,
 		buf logservice.LogRecord,
 	) (psn uint64, err error)
 	Truncate(ctx context.Context, psn uint64) error
+	TruncateWAL(ctx context.Context, psn, checkpointedDSN uint64) error
 }
 
 type BackendClient interface {
@@ -60,12 +62,14 @@ type BackendClient interface {
 		ctx context.Context, firstPSN, maxSize uint64,
 	) ([]logservice.LogRecord, uint64, error)
 	GetTruncatedLsn(ctx context.Context) (uint64, error)
+	GetWALTruncate(ctx context.Context) (psn, checkpointedDSN uint64, err error)
 
 	Append(
 		ctx context.Context,
 		buf logservice.LogRecord,
 	) (psn uint64, err error)
 	Truncate(ctx context.Context, psn uint64) error
+	TruncateWAL(ctx context.Context, psn, checkpointedDSN uint64) error
 }
 
 type writeTokenController struct {
@@ -129,6 +133,19 @@ func NewClient(
 	retryInterval time.Duration,
 	retryDuration time.Duration,
 ) (client *wrappedClient, err error) {
+	return newClientWithContext(context.Background(), factory, nil,
+		bufSize, retryTimes, retryInterval, retryDuration)
+}
+
+func newClientWithContext(
+	ctx context.Context,
+	factory LogServiceClientFactory,
+	contextFactory func(context.Context) (logservice.Client, error),
+	bufSize int,
+	retryTimes int,
+	retryInterval time.Duration,
+	retryDuration time.Duration,
+) (client *wrappedClient, err error) {
 	client = &wrappedClient{bufSize: bufSize}
 	var wrapped BackendClient
 	startTime := time.Now()
@@ -136,7 +153,19 @@ func NewClient(
 	// Standard retry logic: try up to retryTimes, respecting total duration
 	// First attempt doesn't count as a retry
 	for attempt := 0; attempt < retryTimes; attempt++ {
-		if wrapped, err = factory(); err == nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if contextFactory != nil {
+			wrapped, err = contextFactory(ctx)
+		} else {
+			wrapped, err = factory()
+		}
+		if err == nil {
+			if ctx.Err() != nil {
+				wrapped.Close()
+				return nil, ctx.Err()
+			}
 			// Success
 			client.wrapped = wrapped
 			// Read-only and idle pool clients need a connection, not a WAL
@@ -154,7 +183,14 @@ func NewClient(
 				logutil.Errorf("WAL-Replay retry timeout after %v, stopping retries", retryDuration)
 				break
 			}
-			time.Sleep(retryInterval)
+			timer := time.NewTimer(retryInterval)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			}
+			timer.Stop()
 		}
 	}
 
@@ -208,7 +244,13 @@ func (c *wrappedClient) Append(
 		ctx, cancel := context.WithTimeoutCause(
 			ctx, DefaultOneTryTimeout, timeoutCause,
 		)
-		psn, err = c.wrapped.Append(ctx, c.buf)
+		if walClient, ok := c.wrapped.(interface {
+			AppendWAL(context.Context, logservice.LogRecord) (uint64, error)
+		}); ok {
+			psn, err = walClient.AppendWAL(ctx, c.buf)
+		} else {
+			psn, err = c.wrapped.Append(ctx, c.buf)
+		}
 		cancel()
 		if err == nil {
 			break
@@ -322,6 +364,10 @@ func (c *clientPool) Close() {
 }
 
 func (c *clientPool) GetOnFly() (*wrappedClient, error) {
+	return c.GetOnFlyContext(context.Background())
+}
+
+func (c *clientPool) GetOnFlyContext(ctx context.Context) (*wrappedClient, error) {
 	c.cond.L.Lock()
 	if c.closed {
 		c.cond.L.Unlock()
@@ -329,7 +375,8 @@ func (c *clientPool) GetOnFly() (*wrappedClient, error) {
 	}
 	c.cond.L.Unlock()
 
-	client, err := NewClient(c.cfg.ClientFactory, c.cfg.ClientBufSize, c.cfg.ClientRetryTimes, c.cfg.ClientRetryInterval, c.cfg.ClientRetryDuration)
+	client, err := newClientWithContext(ctx, c.cfg.ClientFactory, c.cfg.contextClientFactory,
+		c.cfg.ClientBufSize, c.cfg.ClientRetryTimes, c.cfg.ClientRetryInterval, c.cfg.ClientRetryDuration)
 	if err != nil {
 		return nil, err
 	}
@@ -337,17 +384,35 @@ func (c *clientPool) GetOnFly() (*wrappedClient, error) {
 	c.cond.L.Lock()
 	closed := c.closed
 	c.cond.L.Unlock()
-	if closed {
+	if closed || ctx.Err() != nil {
 		client.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, ErrClientPoolClosed
 	}
 	return client, nil
 }
 
 func (c *clientPool) Get() (client *wrappedClient, err error) {
+	return c.GetContext(context.Background())
+}
+
+func (c *clientPool) GetContext(ctx context.Context) (client *wrappedClient, err error) {
+	if ctx.Done() != nil {
+		stopWakeup := context.AfterFunc(ctx, func() {
+			c.cond.L.Lock()
+			c.cond.Broadcast()
+			c.cond.L.Unlock()
+		})
+		defer stopWakeup()
+	}
 	c.cond.L.Lock()
 	defer c.cond.L.Unlock()
 	for {
+		if err = ctx.Err(); err != nil {
+			return nil, err
+		}
 		if c.closed {
 			err = ErrClientPoolClosed
 			return

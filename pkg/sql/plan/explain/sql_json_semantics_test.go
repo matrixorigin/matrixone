@@ -53,7 +53,7 @@ func TestSQLJSONPlannerLiteralVectorDifferentials(t *testing.T) {
 				require.NoError(t, err)
 				compiler := planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))
 				compiler.GetProcess().GetSessionInfo().TimeZone = time.UTC
-				query, err := planpkg.NewBaseOptimizer(compiler).Optimize(stmt, false)
+				query, err := planpkg.NewBaseOptimizer(compiler).Optimize(stmt, false, nil)
 				require.NoError(t, err)
 				var vectors int
 				var visit func(*plan.Expr)
@@ -192,7 +192,7 @@ func TestSQLJSONPlannerVectorLiteral(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), "select cast('"+value+"' as vecf32(3))", 1)
 			require.NoError(t, err)
-			query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
+			query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false, nil)
 			require.NoError(t, err)
 			var found bool
 			for _, node := range query.Nodes {
@@ -224,7 +224,7 @@ func TestSQLJSONPlannerRecursiveUnionMode(t *testing.T) {
 		t.Run(tc.mode, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), "with recursive r(n) as (select 1 "+tc.union+" select n+1 from r where n<10) select * from r", 1)
 			require.NoError(t, err)
-			query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
+			query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false, nil)
 			require.NoError(t, err)
 			var recursive *plan.Node
 			for _, node := range query.Nodes {
@@ -344,7 +344,7 @@ func TestSQLJSONPlannerSerializedPredicates(t *testing.T) {
 				sql := "select n_name from nation where " + fmt.Sprintf(form, "serial(cast("+value+" as decimal(38,0)))")
 				stmt, err := mysql.ParseOne(t.Context(), sql, 1)
 				require.NoError(t, err)
-				query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
+				query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false, nil)
 				require.NoError(t, err)
 				serialized := 0
 				var visit func(*plan.Expr)

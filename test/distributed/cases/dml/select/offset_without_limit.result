@@ -18,4 +18,104 @@ execute offset_without_limit_stmt using @skip_rows;
 ➤ id[4,32,0]  𝄀
 3
 deallocate prepare offset_without_limit_stmt;
+select id from offset_without_limit order by id desc limit 1;
+➤ id[4,32,0]  𝄀
+3
+select * from (select id from offset_without_limit order by id desc) d limit 1;
+➤ id[4,32,0]  𝄀
+3
+select * from (select id from offset_without_limit order by id desc) d limit 1 offset 1;
+➤ id[4,32,0]  𝄀
+2
+select * from (select id from offset_without_limit order by id desc) d offset 2;
+➤ id[4,32,0]  𝄀
+1
+select * from (select id from offset_without_limit order by id desc limit 1 offset 1) d limit 3;
+➤ id[4,32,0]  𝄀
+2
+select * from (select id from offset_without_limit order by id desc limit 2 offset 1) d limit 3 offset 1;
+➤ id[4,32,0]  𝄀
+1
+select * from (select id from offset_without_limit order by id desc limit 1) d limit 3 offset 1;
+➤ id[4,32,0]
+select * from (select id from offset_without_limit order by id desc) d limit 0;
+➤ id[4,32,0]
+select * from (select id from offset_without_limit order by id desc limit 3) d where id < 3 limit 1;
+➤ id[4,32,0]  𝄀
+2
+select count(*) from (select id from offset_without_limit order by id desc) d limit 1;
+➤ count(*)[-5,64,0]  𝄀
+3
+select * from (select id from offset_without_limit order by id desc) d order by id limit 1;
+➤ id[4,32,0]  𝄀
+1
+select * from (select distinct id % 2 as parity from offset_without_limit order by parity desc) d limit 1;
+➤ parity[-5,64,0]  𝄀
+1
+select distinct parity from (select id % 2 as parity from offset_without_limit order by parity desc limit 3) d limit 2;
+➤ parity[-5,64,0]  𝄀
+1  𝄀
+0
+select * from (select id, sum(id) over () as total from offset_without_limit order by id desc) d limit 1;
+➤ id[4,32,0]  ¦  total[-5,64,0]  𝄀
+3  ¦  6
+select id, sum(id) over () as total from (select id from offset_without_limit order by id desc limit 3) d limit 1;
+➤ id[4,32,0]  ¦  total[-5,64,0]  𝄀
+3  ¦  6
+prepare derived_sort_page from 'select * from (select id from offset_without_limit order by id desc) d limit ? offset ?';
+set @page_size = 1;
+set @page_offset = 0;
+execute derived_sort_page using @page_size, @page_offset;
+➤ id[4,32,0]  𝄀
+3
+set @page_size = 2;
+set @page_offset = 1;
+execute derived_sort_page using @page_size, @page_offset;
+➤ id[4,32,0]  𝄀
+2  𝄀
+1
+deallocate prepare derived_sort_page;
+prepare nested_sort_page from 'select * from (select id from offset_without_limit order by id desc limit ? offset 1) d limit ?';
+set @inner_size = 1;
+set @outer_size = 3;
+execute nested_sort_page using @inner_size, @outer_size;
+➤ id[4,32,0]  𝄀
+2
+set @inner_size = 2;
+execute nested_sort_page using @inner_size, @outer_size;
+➤ id[4,32,0]  𝄀
+2  𝄀
+1
+deallocate prepare nested_sort_page;
+with recursive r(n) as (select 1 union all select n + 1 from r where n < 3)
+select * from (select n from r order by n) d limit 0;
+➤ n[-5,64,0]
+with recursive r(n) as (select 1 union all select n + 1 from r where n < 3)
+select * from (select n from r order by n) d limit 0 offset 1;
+➤ n[-5,64,0]
+with recursive r(n) as (select 1 union all select n + 1 from r where n < 3)
+select * from (select n from r order by n limit 2 offset 1) d limit 0;
+➤ n[-5,64,0]
+with recursive r(n) as (select 1 union all select n + 1 from r where n < 3)
+select * from (select n from r order by n) d limit 2;
+➤ n[-5,64,0]  𝄀
+1  𝄀
+2
+prepare recursive_sort_page from 'with recursive r(n) as (select 1 union all select n + 1 from r where n < 3) select * from (select n from r order by n) d limit ?';
+set @recursive_page_size = 2;
+execute recursive_sort_page using @recursive_page_size;
+➤ n[-5,64,0]  𝄀
+1  𝄀
+2
+set @recursive_page_size = 0;
+execute recursive_sort_page using @recursive_page_size;
+➤ n[-5,64,0]
+set @recursive_page_size = 1;
+execute recursive_sort_page using @recursive_page_size;
+➤ n[-5,64,0]  𝄀
+1
+set @recursive_page_size = 0;
+execute recursive_sort_page using @recursive_page_size;
+➤ n[-5,64,0]
+deallocate prepare recursive_sort_page;
 drop table offset_without_limit;

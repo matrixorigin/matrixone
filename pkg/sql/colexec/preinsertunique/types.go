@@ -36,8 +36,8 @@ const (
 	preInsertUniqueAllocationSiteHashDescriptor
 	preInsertUniqueAllocationSiteRetainedData
 	preInsertUniqueAllocationSiteRetainedArea
-	preInsertUniqueAllocationSiteRetainedNulls
-	preInsertUniqueAllocationSiteRetainedGrouping
+	_ // reserved: was preInsertUniqueAllocationSiteRetainedNulls
+	_ // reserved: was preInsertUniqueAllocationSiteRetainedGrouping
 )
 
 type container struct {
@@ -46,7 +46,10 @@ type container struct {
 	acceptedIters   []hashmap.Iterator
 	acceptedKeyVecs [][]*vector.Vector
 	acceptedTarget  *vector.Vector
-	acceptedRows    []*vector.Vector
+	// acceptedMP is the retained view acceptedTarget and acceptedRows are
+	// created with.
+	acceptedMP   *mpool.MPool
+	acceptedRows []*vector.Vector
 	// INSERT ... SELECT can feed PRE_INSERT_UK in multiple batches. Keep
 	// generated candidates which were not consumed by accepted rows until the
 	// next batch, but only for this operator/statement. The stream stores
@@ -78,7 +81,7 @@ type PreInsertUnique struct {
 
 	allocationAccount  *mpool.AllocationAccount
 	hashAllocation     *hashtable.AllocationAccountSelection
-	retainedAllocation *vector.AllocationAccountSelection
+	retainedAllocation *mpool.AccountBinding
 
 	vm.OperatorBase
 }
@@ -116,13 +119,10 @@ func (preInsertUnique *PreInsertUnique) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
-	retainedAllocation, err := vector.NewAllocationAccountSelection(
+	retainedAllocation, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerDML,
 		preInsertUniqueAllocationSiteRetainedData,
-		preInsertUniqueAllocationSiteRetainedArea,
-		preInsertUniqueAllocationSiteRetainedNulls,
-		preInsertUniqueAllocationSiteRetainedGrouping,
 	)
 	if err != nil {
 		return err
@@ -214,15 +214,16 @@ func (preInsertUnique *PreInsertUnique) freeAcceptedState(proc *process.Process)
 	preInsertUnique.ctr.acceptedIters = nil
 	preInsertUnique.ctr.acceptedKeyVecs = nil
 	if preInsertUnique.ctr.acceptedTarget != nil {
-		preInsertUnique.ctr.acceptedTarget.Free(proc.Mp())
+		preInsertUnique.ctr.acceptedTarget.Free(preInsertUnique.ctr.acceptedMP)
 	}
 	preInsertUnique.ctr.acceptedTarget = nil
 	for i := range preInsertUnique.ctr.acceptedRows {
 		if preInsertUnique.ctr.acceptedRows[i] != nil {
-			preInsertUnique.ctr.acceptedRows[i].Free(proc.Mp())
+			preInsertUnique.ctr.acceptedRows[i].Free(preInsertUnique.ctr.acceptedMP)
 		}
 	}
 	preInsertUnique.ctr.acceptedRows = nil
+	preInsertUnique.ctr.acceptedMP = nil
 	preInsertUnique.ctr.autoIncrementCandidates.reset(proc.Mp())
 	if preInsertUnique.ctr.acceptedAutoIncrementValues != nil {
 		preInsertUnique.ctr.acceptedAutoIncrementValues.Free()

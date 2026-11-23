@@ -1,0 +1,16 @@
+query {
+  stmt_type: SELECT
+  steps: 0
+  nodes {
+    node_type: TABLE_SCAN
+    table_def { name: "__mo_index_secondary_fixture" }
+    obj_ref { schema_name: "tpch" obj_name: "__mo_index_secondary_fixture" }
+    parent_obj_ref { schema_name: "tpch" obj_name: "orders" }
+    index_scan_info {
+      is_index_scan: true
+      index_name: "idx_orders"
+      belong_to_table: "orders"
+      index_table_name: "__mo_index_secondary_fixture"
+    }
+  }
+}

@@ -54,8 +54,8 @@ import (
 func exportLifecycleFixture(t *testing.T, ctx context.Context, format string) (*ExportConfig, *backSession, *batch.Batch, *mpool.MPool) {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	bat := batch.NewOffHeapWithSize(1)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, mp))
 	bat.SetRowCount(1)
 	t.Cleanup(func() { bat.Clean(mp); require.Zero(t, mp.CurrNB()) })
@@ -362,6 +362,68 @@ func TestExportAuditPartialSplitFailureKeepsConfirmedLowerBoundAndAllowsReuse(t 
 	require.False(t, fs.closed.Load(), "the shared file service is borrowed")
 }
 
+// TestExportJSONLineNullRejectKeepsCompletedSplits pins the #31277 failure
+// semantics when file splitting has already published earlier batches: the
+// top-level JSON null rejection fails the statement loudly, splits completed
+// before the failing batch keep their faithful rows, the split active at the
+// rejection is never installed, and no published line silently rewrites the
+// JSON null as SQL NULL. Every export failure follows this
+// completed-progress contract (see
+// TestExportAuditPartialSplitFailureKeepsConfirmedLowerBoundAndAllowsReuse);
+// the rejection does not weaken it.
+func TestExportJSONLineNullRejectKeepsCompletedSplits(t *testing.T) {
+	mp := mpool.MustNewZero()
+	dir := t.TempDir()
+	mrs := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("value")
+	mrs.AddColumn(column)
+	ep := &ExportConfig{ctx: context.Background(), proc: sysFileAccessTestProcess(), userConfig: newDiffCSVUserConfig(), mrs: mrs}
+	ep.userConfig.ExportFormat = "jsonline"
+	ep.userConfig.FilePath = filepath.Join(dir, "out.jsonl")
+	// One 12-byte line exactly fills a split: the second batch rotates the
+	// first split out, and the third batch's rejection lands while the second
+	// split is active.
+	ep.userConfig.SplitSize = 12
+	initExportFileParam(ep, mrs)
+	ep.init()
+	defer ep.Close()
+	require.NoError(t, openNewFile(ep.ctx, ep, ep.mrs))
+
+	ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
+	convert := func(text string, index int32) {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_json.ToType(), mp)
+		defer bat.Clean(mp)
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], encodeJSONForExportTest(t, text), false, mp))
+		bat.SetRowCount(1)
+		constructJSONLine(ep.ctx, ses, bat, index, ep.ByteChan, ep)
+	}
+	convert("1", 1)
+	convert("2", 2)
+	convert("null", 3)
+	ep.Index.Store(3)
+
+	err := exportAllDataFromBatches(ep)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+	require.Contains(t, err.Error(), "top-level JSON null")
+	require.ErrorIs(t, ep.finish(err), err)
+	require.Zero(t, mp.CurrNB())
+
+	// The completed split keeps its faithful row.
+	completed, readErr := os.ReadFile(filepath.Join(dir, "out.jsonl"))
+	require.NoError(t, readErr)
+	require.Equal(t, "{\"value\":1}\n", string(completed))
+	// The active split is aborted: the row already written to it is never
+	// installed, and no further output exists.
+	_, statErr := os.Stat(filepath.Join(dir, "out.jsonl.1"))
+	require.True(t, os.IsNotExist(statErr), "the active split must not be installed: %v", statErr)
+	paths, globErr := filepath.Glob(filepath.Join(dir, "out.jsonl*"))
+	require.NoError(t, globErr)
+	require.Equal(t, []string{filepath.Join(dir, "out.jsonl")}, paths)
+}
+
 func TestExportAuditCountsCSVHeaderAndJSONLines(t *testing.T) {
 	for _, tc := range []struct {
 		name, format, payload, want string
@@ -398,7 +460,7 @@ func TestExportConversionFailure(t *testing.T) {
 			ep, ses, bat, mp := exportLifecycleFixture(t, context.Background(), format)
 			defer ep.Close()
 			bat.Clean(mp)
-			bat.Vecs = []*vector.Vector{vector.NewOffHeapVecWithType(types.T_TS.ToType())}
+			bat.Vecs = []*vector.Vector{vector.NewVec(types.T_TS.ToType(), mp)}
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTS(1, 1), false, mp))
 			bat.SetRowCount(1)
 			ep.Index.Store(1)
@@ -457,9 +519,9 @@ func TestExportStatementLifecycle(t *testing.T) {
 				col := &MysqlColumn{}
 				col.SetName("value")
 				col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-				source := batch.NewOffHeapWithSize(1)
+				source := batch.NewWithSize(1)
 				defer source.Clean(ses.pool)
-				source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+				source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.pool)
 				require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, ses.pool))
 				source.SetRowCount(1)
 				injected := errors.New("runner failed")
@@ -555,9 +617,9 @@ func TestExportStatementPanicAbortsAndKeepsReceiptIncomplete(t *testing.T) {
 				column := &MysqlColumn{}
 				column.SetName("value")
 				column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-				source := batch.NewOffHeapWithSize(1)
+				source := batch.NewWithSize(1)
 				defer source.Clean(ses.pool)
-				source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+				source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.pool)
 				require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, ses.pool))
 				source.SetRowCount(1)
 				injected := moerr.NewInvalidInputNoCtx("runner panic")
@@ -626,9 +688,9 @@ func TestExportJSONLineConversionFailureCompletesPipeWrite(t *testing.T) {
 	column := &MysqlColumn{}
 	column.SetName("value")
 	column.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	source := batch.NewOffHeapWithSize(1)
+	source := batch.NewWithSize(1)
 	defer source.Clean(ses.pool)
-	source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), ses.pool)
 	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte{'x', 0xff, 'y'}, false, ses.pool))
 	source.SetRowCount(1)
 

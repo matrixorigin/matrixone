@@ -205,7 +205,11 @@ func (a *Accountant) CacheBatch(proc *process.Process, analyzer process.Analyzer
 			return nil, err
 		}
 		if selectedRows != nil {
-			appBat.Shrink(selectedRows, false)
+			if err := appBat.Shrink(selectedRows, false, proc.Mp()); err != nil {
+				appBat.Clean(proc.Mp())
+				replacement.Rollback()
+				return nil, err
+			}
 		}
 		if err = replacement.Commit(appBat); err != nil {
 			appBat.Clean(proc.Mp())
@@ -231,7 +235,12 @@ func (a *Accountant) CacheBatch(proc *process.Process, analyzer process.Analyzer
 		appBat.Attrs = append(appBat.Attrs[:0], src.Attrs...)
 		appBat.SetRowCount(src.RowCount())
 		if selectedRows != nil {
-			appBat.Shrink(selectedRows, false)
+			if err := appBat.Shrink(selectedRows, false, proc.Mp()); err != nil {
+				appBat.Clean(proc.Mp())
+				(*freeBats)[index] = nil
+				replacement.Discard()
+				return nil, err
+			}
 		}
 		if err = replacement.Commit(appBat); err != nil {
 			appBat.Clean(proc.Mp())
@@ -249,7 +258,11 @@ func (a *Accountant) CacheBatch(proc *process.Process, analyzer process.Analyzer
 		return nil, err
 	}
 	if selectedRows != nil {
-		appBat.Shrink(selectedRows, false)
+		if err := appBat.Shrink(selectedRows, false, proc.Mp()); err != nil {
+			appBat.Clean(proc.Mp())
+			replacement.Rollback()
+			return nil, err
+		}
 	}
 	if err = replacement.Commit(appBat); err != nil {
 		appBat.Clean(proc.Mp())

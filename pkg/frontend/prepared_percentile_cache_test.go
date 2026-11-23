@@ -42,19 +42,20 @@ func TestShouldCachePrepareCompileRejectsPercentileParameter(t *testing.T) {
 			}},
 		}}}},
 	}}}
-	require.False(t, shouldCachePrepareCompile(prepared))
+	require.False(t, planReuse(false, prepared, preparedPhysicalCompile).reusable)
 	require.True(t, plan2.PreparedPlanHasPercentileParams(prepared))
 
 	prepared.GetQuery().Nodes[0].AggList[0].GetF().Args[1] =
 		plan2.MakePlan2Float64ConstExprWithType(0.5)
-	require.True(t, shouldCachePrepareCompile(prepared))
+	require.True(t, planReuse(false, prepared, preparedPhysicalCompile).reusable)
 }
 
 func TestPreparedPercentileDisablesMixedRuntimeSpecializationCache(t *testing.T) {
 	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 29464,
 		"select percentile_disc(?) within group (order by n), abs(?) from (select 1 as n union all select 3) t")
 	t.Cleanup(func() { cw.proc.SetPrepareParams(nil); prepared.Close() })
-	prepared.params = vector.NewVec(types.T_text.ToType())
+	prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepared.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(prepared.params, []byte("0.25"), false, cw.proc.Mp()))
 	require.NoError(t, vector.AppendBytes(prepared.params, []byte("-2"), false, cw.proc.Mp()))
 	prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0, byte(defines.MYSQL_TYPE_LONGLONG), 0}

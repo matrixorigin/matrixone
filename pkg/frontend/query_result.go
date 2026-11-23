@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -56,6 +57,11 @@ func getPathOfQueryResultFile(fileName string) string {
 
 func canSaveQueryResult(ctx context.Context, ses *Session) bool {
 	if ses.ast == nil {
+		return false
+	}
+	// A saved result is read back without the SELECT check on the table these show.
+	switch ses.ast.(type) {
+	case *tree.ShowIndexIgnored, *tree.ShowIndexStatus:
 		return false
 	}
 
@@ -217,10 +223,6 @@ func normalizeQueryResultBatchForWrite(
 			return nil, nil, err
 		}
 		cloned = append(cloned, dup)
-		// Prepared-parameter provenance is execution-only and is not part of the
-		// stable vector encoding. Drop it before extending the persisted logical
-		// length so a heterogeneous sidecar cannot grow with the result batch.
-		dup.SetPrepareParamKinds(nil)
 		if vec.IsConst() {
 			dup.SetLength(rowCount)
 		} else {
@@ -384,7 +386,7 @@ func saveQueryResult2(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.
 			if ses.queryRowCount == 0 && ses.blockIdx == 0 && ses.rs != nil && len(ses.rs.ResultCols) > 0 {
 				empty := batch.NewWithSize(len(ses.rs.ResultCols))
 				for i, col := range ses.rs.ResultCols {
-					empty.Vecs[i] = vector.NewVec(types.MustTypeFromPlan(col.Typ))
+					empty.Vecs[i] = vector.NewVec(types.MustTypeFromPlan(col.Typ), ses.GetMemPool())
 				}
 				empty.SetRowCount(0)
 				if err := saveBatch(newCtx, ses, empty); err != nil {
@@ -530,7 +532,7 @@ func abortPerformAttemptSavedResult(execCtx *ExecCtx) error {
 func trySaveQueryResult(ctx context.Context, ses *Session, mrs *MysqlResultSet) (err error) {
 	if canSaveQueryResult(ctx, ses) {
 		var data *batch.Batch
-		data, ses.rs, err = convertRowsIntoBatch(ses.GetMemPool(), mrs.Columns, mrs.Data)
+		data, ses.rs, err = convertRowsIntoBatchInLocation(ses.GetMemPool(), mrs.Columns, mrs.Data, ses.GetTimeZone())
 		defer cleanBatch(ses.GetMemPool(), data)
 		if err != nil {
 			return err
@@ -729,6 +731,9 @@ func getTablesFromPlan(p *plan.Plan) string {
 	cnt := 0
 	if q, ok := p.Plan.(*plan.Plan_Query); ok {
 		for _, n := range q.Query.Nodes {
+			if n == nil || plan2.IsValidationPrivilegeCarrier(n) || n.GetTableDef().GetName() == "" {
+				continue
+			}
 			if n.NodeType == plan.Node_EXTERNAL_SCAN || n.NodeType == plan.Node_TABLE_SCAN {
 				if cnt > 0 {
 					buf.WriteString(", ")
@@ -752,7 +757,7 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	}()
 	bat.SetAttributes(catalog.MetaColNames)
 	for i, t := range catalog.MetaColTypes {
-		bat.Vecs[i] = vector.NewVec(t)
+		bat.Vecs[i] = vector.NewVec(t, mp)
 	}
 	if err = vector.AppendFixed(bat.Vecs[catalog.QUERY_ID_IDX], types.Uuid(m.QueryId), false, mp); err != nil {
 		return nil, err
@@ -949,6 +954,10 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				if err != nil {
 					return err
 				}
+				err = setVecBlockExactText(tmpBatch, j, mrs.Data[0])
+				if err != nil {
+					return err
+				}
 				err = exportDataFromResultSetToCSVFile(exportParam)
 				if err != nil {
 					return err
@@ -1102,7 +1111,7 @@ func (result *QueryResult) FinishStage(execCtx *ExecCtx) error {
 	}
 	empty := batch.NewWithSize(len(ses.rs.ResultCols))
 	for i, col := range ses.rs.ResultCols {
-		empty.Vecs[i] = vector.NewVec(types.MustTypeFromPlan(col.Typ))
+		empty.Vecs[i] = vector.NewVec(types.MustTypeFromPlan(col.Typ), ses.proc.Mp())
 	}
 	defer empty.Clean(ses.proc.Mp())
 	empty.SetRowCount(0)

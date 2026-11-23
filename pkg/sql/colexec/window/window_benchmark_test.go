@@ -112,11 +112,14 @@ type windowHashAcceptancePipeline struct {
 
 func (p *windowHashAcceptancePipeline) free() {
 	p.window.Free(p.proc, false, nil)
+	colexec.FreeMockChildren(p.window)
 	p.partition.Free(p.proc, false, nil)
 	if p.order != nil {
 		p.order.Free(p.proc, false, nil)
+		colexec.FreeMockChildren(p.order)
 	}
 	p.child.Free(p.proc, false, nil)
+	colexec.FreeMockChildren(p.child)
 	p.proc.Free()
 }
 
@@ -202,11 +205,13 @@ func TestWindowHashPartitionAcceptanceConsumer(t *testing.T) {
 							break
 						}
 						rowsSeen += result.Batch.RowCount()
-						values := vector.MustFixedColWithTypeCheck[int64](
+						values := vector.MustFixedColWithTypeCheck[types.Decimal128](
 							result.Batch.Vecs[pipeline.valuePos+1],
 						)
 						for _, value := range values {
-							checksums[algorithm] += value
+							asInt, err := strconv.ParseInt(value.Format(0), 10, 64)
+							require.NoError(t, err)
+							checksums[algorithm] += asInt
 						}
 					}
 					require.Equal(t, 4096, rowsSeen)
@@ -253,7 +258,7 @@ func makeWindowHashAcceptanceInput(
 		bat := batch.NewWithSize(keyCount + 1)
 		for key := 0; key < keyCount; key++ {
 			if varlen {
-				vec := vector.NewVec(types.T_varchar.ToType())
+				vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				values := make([][]byte, partRows)
 				for row := range values {
 					values[row] = strconv.AppendInt(nil, int64((start+row)*7919+key*104729)%int64(ndv), 10)
@@ -263,7 +268,7 @@ func makeWindowHashAcceptanceInput(
 				}
 				bat.Vecs[key] = vec
 			} else {
-				vec := vector.NewVec(types.T_int32.ToType())
+				vec := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 				values := make([]int32, partRows)
 				for row := range values {
 					value := (int64(start)+int64(row))*7919 + int64(key)*104729
@@ -279,7 +284,7 @@ func makeWindowHashAcceptanceInput(
 		for row := range values {
 			values[row] = int32(start + row + 1)
 		}
-		bat.Vecs[valuePos] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[valuePos] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		if err := vector.AppendFixedList(bat.Vecs[valuePos], values, nil, proc.Mp()); err != nil {
 			t.Fatal(err)
 		}
@@ -332,6 +337,7 @@ func BenchmarkWindowFirstBatch(b *testing.B) {
 
 		arg.Reset(proc, false, nil)
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 		op.Free(proc, false, nil)
 		proc.Free()
 		if got := proc.Mp().CurrNB(); got != 0 {
@@ -384,7 +390,7 @@ func BenchmarkWindowBoundedRowsSum(b *testing.B) {
 				if err := arg.Prepare(proc); err != nil {
 					b.Fatal(err)
 				}
-				var last int64
+				var last types.Decimal128
 				for {
 					result, err := vm.Exec(arg, proc)
 					if err != nil {
@@ -393,15 +399,16 @@ func BenchmarkWindowBoundedRowsSum(b *testing.B) {
 					if result.Batch == nil {
 						break
 					}
-					values := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1])
+					values := vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[1])
 					last = values[len(values)-1]
 				}
-				if want := int64(width.bound + 1); last != want {
-					b.Fatalf("last sliding sum: got %d, want %d", last, want)
+				if want := types.Decimal128FromInt64(int64(width.bound + 1)); last != want {
+					b.Fatalf("last sliding sum: got %s, want %s", last.Format(0), want.Format(0))
 				}
 
 				arg.Reset(proc, false, nil)
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				op.Free(proc, false, nil)
 				proc.Free()
 				if got := proc.Mp().CurrNB(); got != 0 {
@@ -467,7 +474,7 @@ func BenchmarkWindowBoundedRangeAvg(b *testing.B) {
 					}
 					resultValues := vector.MustFixedColWithTypeCheck[float64](result)
 					last = resultValues[len(resultValues)-1]
-					result.Free(proc.Mp())
+					result.Free(result.MPool())
 				}
 				b.StopTimer()
 
@@ -564,7 +571,7 @@ func BenchmarkCumulativeMaxPartitionShapes(b *testing.B) {
 					if err != nil {
 						b.Fatal(err)
 					}
-					result.Free(proc.Mp())
+					result.Free(result.MPool())
 				}
 
 				input.Clean(proc.Mp())

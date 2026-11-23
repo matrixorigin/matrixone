@@ -101,7 +101,7 @@ func BenchmarkUnionBatchAreaProjectionWideVarchar(b *testing.B) {
 	input := batch.NewWithSize(32)
 	payload := make([]byte, 128)
 	for column := range input.Vecs {
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		for range nonSpillBenchmarkBatchRows {
 			if err := vector.AppendBytes(vec, payload, false, mp); err != nil {
 				b.Fatal(err)
@@ -301,7 +301,7 @@ func makeNonSpillBenchmarkBatches(
 	for batchIndex := range inputs {
 		input := batch.NewWithSize(columns)
 		for column := 0; column < columns; column++ {
-			vec := vector.NewVec(typ)
+			vec := vector.NewVec(typ, proc.Mp())
 			rowBase := batchIndex * nonSpillBenchmarkBatchRows
 			for row := 0; row < nonSpillBenchmarkBatchRows; row++ {
 				value := rowBase + row

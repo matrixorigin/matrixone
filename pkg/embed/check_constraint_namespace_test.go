@@ -84,15 +84,55 @@ func TestCheckConstraintNamespace(t *testing.T) {
 		}
 		const database = "check_namespace_review"
 		exec(t, "create database "+database)
-		exec(t, "use "+database)
 		defer func() {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cleanupCancel()
-			_, err := db.ExecContext(cleanupCtx, "drop snapshot if exists check_namespace_legacy")
-			require.NoError(t, err)
-			_, err = db.ExecContext(cleanupCtx, "drop database if exists "+database)
-			require.NoError(t, err)
+			for _, statement := range []string{"drop snapshot if exists check_namespace_legacy", "drop database if exists " + database} {
+				cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
+				_, err := db.ExecContext(cleanup, statement)
+				stop()
+				if err != nil {
+					t.Errorf("cleanup %s: %v", statement, err)
+					return // Preserve the snapshot-before-database cleanup dependency.
+				}
+			}
 		}()
+		exec(t, "use "+database)
+		// A restored allocator row may have no live lazy-GC owner. CHECK
+		// namespace admission must not depend on unrelated orphan reclamation.
+		legacyAllocatorColumn := "check_namespace_" + uuid.NewString()
+		legacyAllocatorKey := "table_id=18446744073709551591 and col_name='" + legacyAllocatorColumn + "'"
+		count(t, "select count(*) from mo_catalog.mo_tables where rel_id=18446744073709551591", 0)
+		count(t, "select count(*) from mo_catalog.mo_increment_columns where "+legacyAllocatorKey, 0)
+		catalogExec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+		inserted := false
+		defer func() {
+			if inserted {
+				verify, stopVerify := context.WithTimeout(context.Background(), 30*time.Second)
+				var remaining int
+				if err := conn.QueryRowContext(verify, "select count(*) from mo_catalog.mo_increment_columns where "+legacyAllocatorKey).Scan(&remaining); err != nil {
+					t.Errorf("verify historical allocator fixture: %v", err)
+				} else if remaining != 1 {
+					t.Errorf("historical allocator fixture disappeared: remaining=%d", remaining)
+				}
+				stopVerify()
+			}
+			// INSERT may have taken effect even when its response failed.
+			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+			defer stop()
+			res, err := catalogExec.Exec(defines.AttachAccountId(cleanup, 0),
+				"delete from mo_catalog.mo_increment_columns where "+legacyAllocatorKey,
+				executor.Options{}.WithWaitCommittedLogApplied())
+			if err != nil {
+				t.Errorf("clean historical allocator fixture: %v", err)
+			} else {
+				res.Close()
+			}
+		}()
+		seed, err := catalogExec.Exec(defines.AttachAccountId(ctx, 0),
+			"insert into mo_catalog.mo_increment_columns(table_id,col_name,col_index,offset,step) values(18446744073709551591,'"+legacyAllocatorColumn+"',0,0,1)",
+			executor.Options{}.WithWaitCommittedLogApplied())
+		require.NoError(t, err)
+		seed.Close()
+		inserted = true
 
 		t.Run("legacy SQL-only owners reject new claims", func(t *testing.T) {
 			defer func() {
@@ -274,9 +314,9 @@ func TestCheckConstraintNamespace(t *testing.T) {
 		t.Run("repeatable read preserves check authoring", func(t *testing.T) {
 			exec(t, "set session transaction_isolation='REPEATABLE-READ'")
 			defer exec(t, "set session transaction_isolation='READ-COMMITTED'")
-			// Drain known fixture cleanup once. Later unrelated commits remain
-			// legal; only a new autocommit transaction can recover their SI abort.
-			waitForCheckNamespaceCatalogCleanup(t, ctx, conn)
+			// Synchronize prior commits. Unrelated lazy allocator GC is not
+			// a CHECK namespace barrier; fresh SI execution handles stale reads.
+			syncCheckNamespaceCatalog(t, ctx, conn)
 			execSI := func(statement string) {
 				t.Helper()
 				require.NoError(t, execFreshSI(t, statement), statement)
@@ -416,7 +456,7 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			barrier := svc.GetEngine().(interface {
 				AcquireLogtailReadBarrier(context.Context) (timestamp.Timestamp, error)
 			})
-			waitForCheckNamespaceCatalogCleanup(t, ctx, conn)
+			syncCheckNamespaceCatalog(t, ctx, conn)
 			frontier, err := barrier.AcquireLogtailReadBarrier(ctx)
 			require.NoError(t, err)
 			if !moruntime.InTesting(cn.ServiceID()) {
@@ -596,7 +636,7 @@ func checkConcurrentConstraintClaim(t *testing.T, parent context.Context, owner 
 		exec(owner, "drop table if exists "+table)
 	}
 	if isolation == "REPEATABLE-READ" {
-		waitForCheckNamespaceCatalogCleanup(t, ctx, owner)
+		syncCheckNamespaceCatalog(t, ctx, owner)
 	}
 	exec(owner, "begin")
 	defer func() {
@@ -709,37 +749,12 @@ func checkConcurrentConstraintClaim(t *testing.T, parent context.Context, owner 
 	}
 }
 
-// waitForCheckNamespaceCatalogCleanup drains visible orphan allocator rows
-// from earlier fixture DROP/COPY statements. Neither this observation nor
-// SYNCCOMMIT excludes later/in-flight commits from a fresh SI execution.
-func waitForCheckNamespaceCatalogCleanup(t *testing.T, ctx context.Context, conn *sql.Conn) {
+// syncCheckNamespaceCatalog makes already committed fixture DDL visible.
+// Neither this fence nor allocator cleanup excludes future catalog commits.
+func syncCheckNamespaceCatalog(t *testing.T, ctx context.Context, conn *sql.Conn) {
 	t.Helper()
-	syncCommit := func() {
-		t.Helper()
-		_, err := conn.ExecContext(ctx, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
-		require.NoError(t, err)
-	}
-	syncCommit()
-	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		var pending int
-		// Allocator rows use physical rel_id. COPY may retain an old logical
-		// ID, which must not make its dropped physical allocator look live.
-		err := conn.QueryRowContext(waitCtx, "select count(*) from mo_catalog.mo_increment_columns i left join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.rel_id is null").Scan(&pending)
-		require.NoError(t, err)
-		if pending == 0 {
-			break
-		}
-		select {
-		case <-waitCtx.Done():
-			t.Fatalf("auto-increment cleanup still has %d orphan rows: %v", pending, waitCtx.Err())
-		case <-tick.C:
-		}
-	}
-	syncCommit()
+	_, err := conn.ExecContext(ctx, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
+	require.NoError(t, err)
 }
 
 // execCheckNamespaceSI is only for positive RR autocommit DDL assertions: no

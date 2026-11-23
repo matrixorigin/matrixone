@@ -70,6 +70,9 @@ dev = [
     "twine>=4.0.0",
     "tox>=3.24.0",
 ]
+torch = [
+    "torch>=2.9",
+]
 docs = [
     "sphinx>=4.0",
     "sphinx-rtd-theme>=1.0",

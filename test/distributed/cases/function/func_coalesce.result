@@ -205,7 +205,8 @@ SELECT CAST(COALESCE(a,a) AS TIME(6)) FROM t1;
 ➤ cast(COALESCE(a, a) as time(6))[92,17,0]  𝄀
 00:00:00
 SELECT ROUND(COALESCE(a,a)) FROM t1;
-invalid argument function round, bad value [DATE]
+➤ ROUND(COALESCE(a, a))[8,53,31]  𝄀
+2.0000101E7
 DROP TABLE t1;
 CREATE TABLE t1 (a DATETIME);
 INSERT INTO t1 VALUES ('2000-01-01 00:00:00');
@@ -225,7 +226,8 @@ SELECT CAST(COALESCE(a,a) AS TIME(6)) FROM t1;
 ➤ cast(COALESCE(a, a) as time(6))[92,17,0]  𝄀
 00:00:00
 SELECT ROUND(COALESCE(a,a)) FROM t1;
-invalid argument function round, bad value [DATETIME]
+➤ ROUND(COALESCE(a, a))[8,53,31]  𝄀
+2.0000101E13
 DROP TABLE t1;
 select coalesce(null);
 ➤ coalesce(null)[12,65535,0]  𝄀

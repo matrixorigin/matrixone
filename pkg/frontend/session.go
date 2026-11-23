@@ -34,7 +34,6 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -42,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -619,7 +617,7 @@ func (ses *Session) setUserDefinedVarWithKind(
 	value interface{},
 	sql string,
 	isBin bool,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 ) error {
 	return ses.setUserDefinedVarWithTypeAndKind(
 		name, value, sql, isBin, inferUserDefinedVarType(value), kind)
@@ -630,7 +628,7 @@ func (ses *Session) setUserDefinedVarWithKindAndReplayability(
 	value interface{},
 	sql string,
 	isBin bool,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 	replayable bool,
 ) error {
 	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
@@ -643,7 +641,7 @@ func (ses *Session) setUserDefinedVarWithTypeAndKind(
 	sql string,
 	isBin bool,
 	typ plan.Type,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 ) error {
 	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
 		name, value, sql, isBin, typ, kind, false)
@@ -655,7 +653,7 @@ func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
 	sql string,
 	isBin bool,
 	typ plan.Type,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 	replayable bool,
 	runtimeDomains ...types.RuntimeStringDomain,
 ) error {
@@ -2077,7 +2075,6 @@ func NewSession(
 	// owning transaction and cleaned at every terminal transaction outcome.
 	ses.seqObligations = process.NewSequenceObligationSet()
 
-	ses.buf = buffer.New()
 	ses.sqlHelper = &SqlHelper{ses: ses}
 	u, _ := util.FastUuid()
 	ses.uuid = uuid.UUID(u)
@@ -2288,7 +2285,7 @@ func (ses *Session) Close() {
 	defer ses.mu.Unlock()
 	ses.feSessionImpl.Close()
 	ses.feSessionImpl.Clear()
-	ses.respr = nil
+	ses.feSessionImpl.setResponser(nil)
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
@@ -2338,11 +2335,6 @@ func (ses *Session) Close() {
 
 	for _, bat := range ses.resultBatches {
 		bat.Clean(ses.pool)
-	}
-
-	if ses.buf != nil {
-		ses.buf.Free()
-		ses.buf = nil
 	}
 
 	//  The mpool cleanup must be placed at the end,
@@ -2756,7 +2748,7 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 		callback = fakeDataSetFetcher2
 	}
 
-	be := ses.InitBackExec(txnOp, ses.respr.GetStr(DBNAME), callback)
+	be := ses.InitBackExec(txnOp, ses.GetResponser().GetStr(DBNAME), callback)
 	//the derived statement execute in a shared transaction in background session
 	be.(*backExec).backSes.ReplaceDerivedStmt(true)
 	return be
@@ -3232,8 +3224,8 @@ func (ses *Session) getPrepareStmt(ctx context.Context, name string, allowInvali
 		return prepareStmt, nil
 	}
 	var connID uint32
-	if ses.respr != nil {
-		connID = ses.respr.GetU32(CONNID)
+	if r := ses.GetResponser(); r != nil {
+		connID = r.GetU32(CONNID)
 	}
 	ses.Errorf(ctx, "prepared statement '%s' does not exist on connection %d", name, connID)
 	return nil, moerr.NewInvalidStatef(ctx, "prepared statement '%s' does not exist", name)
@@ -4818,7 +4810,7 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 
 func (ses *Session) applySessionSysVarSideEffects(name string, value interface{}) {
 	switch strings.ToLower(name) {
-	case "optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
+	case "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
 		moruntime.ServiceRuntime(ses.service).SetGlobalVariables(strings.ToLower(name), value)
 	case "disable_agg_statement":
 		boolVal := InitSystemVariableBoolType("_")

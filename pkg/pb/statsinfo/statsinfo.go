@@ -31,6 +31,8 @@ func (sc *StatsInfo) Merge(newInfo *StatsInfo) {
 	if sc == nil || newInfo == nil {
 		return
 	}
+	// Aggregated partitions are not a uniform row sample of one population.
+	sc.ByteRangeMap = nil
 	// TODO: do not handle ShuffleRange for now.
 	// sc.ShuffleRangeMap = nil
 	sc.NdvMap = mergeMaps(sc.NdvMap, newInfo.NdvMap)

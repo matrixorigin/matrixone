@@ -35,7 +35,10 @@ func NewProjectionBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *
 func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if aliasExpr, projectPos, ok := b.ctx.isAliasExpansion(astExpr); ok {
 		if projectPos >= 0 && int(projectPos) < len(b.ctx.projects) {
-			return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+			if !aliasProjectionNeedsRebind(b.ctx.projects[projectPos]) {
+				return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+			}
+			aliasExpr = &tree.ParenExpr{Expr: cloneTreeExpr(aliasExpr.Expr)}
 		}
 		if b.havingBinder != nil {
 			previousHaving := b.havingBinder.bindingProjectedAlias

@@ -17,6 +17,7 @@ package table_function
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
@@ -161,6 +162,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = metaScanPrepare(proc, tblArg)
 	case "current_account":
 		tblArg.ctr.state, err = currentAccountPrepare(proc, tblArg)
+	case MoChangedTablesName:
+		tblArg.ctr.state, err = moChangedTablesPrepare(proc, tblArg)
 	case "change_watermark":
 		tblArg.ctr.state, err = changeWatermarkPrepare(proc, tblArg)
 	case "table_changes":
@@ -193,6 +196,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = fulltext2CompactPrepare(proc, tblArg)
 	case "stage_list":
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
+	case "desc_file":
+		tblArg.ctr.state, err = descFilePrepare(proc, tblArg)
 	case "moplugin_table":
 		tblArg.ctr.state, err = pluginPrepare(proc, tblArg)
 	case "hnsw_create":
@@ -238,11 +243,11 @@ func (tableFunction *TableFunction) cleanForPrepare(proc *process.Process) {
 	}
 }
 
-func (tableFunction *TableFunction) createResultBatch() *batch.Batch {
+func (tableFunction *TableFunction) createResultBatch(mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(tableFunction.Attrs))
 	bat.Attrs = tableFunction.Attrs
 	for i := range tableFunction.ctr.retSchema {
-		bat.Vecs[i] = vector.NewVec(tableFunction.ctr.retSchema[i])
+		bat.Vecs[i] = vector.NewVec(tableFunction.ctr.retSchema[i], mp)
 	}
 	return bat
 }

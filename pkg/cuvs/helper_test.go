@@ -18,7 +18,6 @@ package cuvs
 
 import (
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
@@ -34,7 +33,7 @@ func TestPinnedMemory(t *testing.T) {
 	}
 
 	// Verify we can write to it
-	slice := util.UnsafeSlice[byte](ptr, int(size))
+	slice := util.UnsafeToBytesWithLength(ptr, int(size))
 	for i := range slice {
 		slice[i] = byte(i % 256)
 	}
@@ -48,7 +47,7 @@ func TestPinnedMemory(t *testing.T) {
 func TestPinnedPool(t *testing.T) {
 	size := uint64(1024)
 	pool := &PinnedPool{
-		New: func() unsafe.Pointer {
+		New: func() *byte {
 			ptr, err := GpuAllocPinned(size)
 			if err != nil {
 				return nil

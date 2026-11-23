@@ -147,7 +147,7 @@ func numTest[T int32 | int64](t *testing.T, typ types.T) {
 		}
 
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 
 		var result []T
 		for {
@@ -289,7 +289,7 @@ func TestGenerateTimestamp(t *testing.T) {
 		}
 
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_datetime.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_datetime.ToType(), proc.Mp())
 		var res []types.Datetime
 
 		for {
@@ -391,12 +391,12 @@ func TestGenerateDatetimeSeriesRejectsInvalidNextStep(t *testing.T) {
 	}{
 		{
 			name:   "datetime",
-			newVec: func() *vector.Vector { return vector.NewVec(types.T_datetime.ToTypeWithScale(6)) },
+			newVec: func() *vector.Vector { return vector.NewVec(types.T_datetime.ToTypeWithScale(6), proc.Mp()) },
 			build:  buildNextDatetimeBatch,
 		},
 		{
 			name:   "string",
-			newVec: func() *vector.Vector { return vector.NewVec(types.T_varchar.ToType()) },
+			newVec: func() *vector.Vector { return vector.NewVec(types.T_varchar.ToType(), proc.Mp()) },
 			build:  buildNextDatetimeStringBatch,
 		},
 	} {
@@ -421,6 +421,74 @@ func TestGenerateDatetimeSeriesRejectsInvalidNextStep(t *testing.T) {
 			owner.reset(nil, proc)
 			require.Zero(t, owner.batch.RowCount())
 		})
+	}
+}
+
+func TestGenerateDatetimeSeriesRejectsFixedUnitStepOverflow(t *testing.T) {
+	proc := testutil.NewProc(t)
+	units := []struct {
+		name string
+		tp   types.IntervalType
+	}{
+		{name: "second", tp: types.Second},
+		{name: "minute", tp: types.Minute},
+		{name: "hour", tp: types.Hour},
+		{name: "day", tp: types.Day},
+		{name: "week", tp: types.Week},
+	}
+	builders := []struct {
+		name   string
+		newVec func() *vector.Vector
+		build  func(*genDatetimeState, *batch.Batch, int, *process.Process) error
+	}{
+		{
+			name:   "datetime",
+			newVec: func() *vector.Vector { return vector.NewVec(types.T_datetime.ToTypeWithScale(6), proc.Mp()) },
+			build:  buildNextDatetimeBatch,
+		},
+		{
+			name:   "varchar",
+			newVec: func() *vector.Vector { return vector.NewVec(types.T_varchar.ToType(), proc.Mp()) },
+			build:  buildNextDatetimeStringBatch,
+		},
+	}
+
+	for _, unit := range units {
+		for _, step := range []int64{1 << 58, -(1 << 58)} {
+			for _, builder := range builders {
+				name := unit.name + "/" + builder.name
+				if step < 0 {
+					name += "/negative"
+				} else {
+					name += "/positive"
+				}
+				t.Run(name, func(t *testing.T) {
+					start := types.DatetimeFromClock(2020, 1, 1, 0, 0, 0, 0)
+					end := types.DatetimeFromClock(2021, 1, 1, 0, 0, 0, 0)
+					if step < 0 {
+						start, end = end, start
+					}
+					state := &genDatetimeState{
+						start: start,
+						end:   end,
+						next:  start,
+						step:  step,
+						tp:    unit.tp,
+						scale: 6,
+					}
+					bat := batch.NewWithSize(1)
+					bat.Vecs[0] = builder.newVec()
+					owner := &generateSeriesArg{batch: bat}
+					t.Cleanup(func() { owner.free(nil, proc, false, nil) })
+
+					// A single-row call used to return nil with next unchanged,
+					// allowing the caller to request identical batches forever.
+					err := builder.build(state, bat, 1, proc)
+					require.Error(t, err)
+					require.Contains(t, err.Error(), "invalid step")
+				})
+			}
+		}
 	}
 }
 

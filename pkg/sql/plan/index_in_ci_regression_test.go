@@ -59,14 +59,17 @@ func TestIndexOnlyConstructionFailureKeepsOriginalScan(t *testing.T) {
 		Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 1, Selectivity: .01, Cost: 100},
 		FilterList: []*planpb.Expr{makeStringEqFilterExpr(tag, 1, "active")},
 	}
-	id := builder.appendNode(node, ctx)
+	scanID := builder.appendNode(node, ctx)
 	colMap := make(map[[2]int32]*planpb.Expr)
 	refs := map[[2]int32]int{{tag, 1}: 1}
 	match, ok := builder.matchRegularIndexOnlyScan(idx, node, builder.newEncodedRegularIndexCostContext(node, refs))
 	require.True(t, ok)
-	require.Equal(t, int32(-1), builder.applyRegularIndexOnlyScan(idx, node, colMap, &Snapshot{}, match))
-	got := builder.applyIndicesForFiltersRegularIndex(id, node, refs, colMap)
-	require.Equal(t, id, got)
+	id, err := builder.applyRegularIndexOnlyScan(idx, node, colMap, &Snapshot{}, match)
+	require.NoError(t, err)
+	require.Equal(t, int32(-1), id)
+	got, indexErr := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, colMap)
+	require.NoError(t, indexErr)
+	require.Equal(t, scanID, got)
 	require.Len(t, builder.qry.Nodes, 1)
 	require.Empty(t, colMap)
 	require.Equal(t, "=", node.FilterList[0].GetF().Func.ObjName)

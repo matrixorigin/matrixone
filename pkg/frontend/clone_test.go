@@ -1388,7 +1388,7 @@ func Test_rewriteCloneCreateSQL_UsesLocalOnlyInformationSchemaMetadataViews(t *t
 	}{
 		{
 			name:              "tables",
-			ddl:               sysview.InformationSchemaTablesDDL,
+			ddl:               sysview.InformationSchemaTablesCurrentDDL,
 			privateFunction:   "mo_subscription_tables()",
 			localCatalogToken: "from `__mo_visible_tables` as `tbl`",
 		},
@@ -1412,9 +1412,12 @@ func Test_rewriteCloneCreateSQL_UsesLocalOnlyInformationSchemaMetadataViews(t *t
 			require.NotContains(t, got, tc.privateFunction)
 			require.NotContains(t, got, " reg_match ")
 			require.Contains(t, got, "regexp_like(")
+			require.Contains(t, got, "mo_is_physical_index(")
 
-			_, err = rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next", 1)
+			clonedAgain, err := rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next", 1)
 			require.NoError(t, err)
+			require.Contains(t, clonedAgain, "mo_is_physical_index(")
+			require.NotContains(t, clonedAgain, tc.privateFunction)
 		})
 	}
 }

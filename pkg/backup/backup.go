@@ -48,6 +48,7 @@ func Backup(
 	if bs == nil {
 		return moerr.NewInternalError(ctx, "invalid backup start")
 	}
+	cfg.copyFiles = backupFileCopier{}
 	// step 1 : setup fileservice
 	//1.1 setup ETL fileservice for general usage
 	if !bs.IsS3 {
@@ -85,6 +86,7 @@ func Backup(
 			return err
 		}
 		cfg.Parallelism = s3Conf.parallelism
+		cfg.copyFiles.statSource = s3Conf.isMinio
 	}
 
 	if bs.BackupTs == "" {

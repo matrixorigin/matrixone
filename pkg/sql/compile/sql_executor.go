@@ -23,7 +23,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -63,7 +62,6 @@ type sqlExecutor struct {
 	qc          qclient.QueryClient
 	hakeeper    logservice.CNHAKeeperClient
 	us          udf.Service
-	buf         *buffer.Buffer
 	taskservice taskservice.TaskService
 }
 
@@ -140,7 +138,6 @@ func NewSQLExecutor(
 		hakeeper:    hakeeper,
 		us:          us,
 		mp:          mp,
-		buf:         buffer.New(),
 		taskservice: taskService,
 	}
 }
@@ -202,6 +199,23 @@ func (s *sqlExecutor) Exec(
 		}
 		return res, nil
 	}
+}
+
+func (s *sqlExecutor) BindIndexMaintenanceView(ctx context.Context, sql string, opts executor.Options) error {
+	policy := opts.IndexRelationPolicy()
+	if !opts.ExistsTxn() || opts.Txn() == nil || policy == nil || policy.Spec != nil || opts.IndexMaintenanceSpec() != nil || opts.IndexMaintenanceValidator() != nil {
+		return moerr.NewInvalidInputNoCtx("invalid index maintenance view probe")
+	}
+	txn, err := newTxnExecutor(ctx, s, opts)
+	if err != nil {
+		return err
+	}
+	result, err := txn.exec(sql, opts.StatementOption(), true)
+	if err != nil {
+		return err
+	}
+	result.Close()
+	return nil
 }
 
 func (s *sqlExecutor) ExecTxn(
@@ -303,10 +317,11 @@ func (s *sqlExecutor) adjustOptions(
 }
 
 type txnExecutor struct {
-	s        *sqlExecutor
-	ctx      context.Context
-	opts     executor.Options
-	database string
+	s                   *sqlExecutor
+	ctx                 context.Context
+	opts                executor.Options
+	database            string
+	maintenanceConsumed bool
 }
 
 func (exec *txnExecutor) newCompile(
@@ -362,6 +377,20 @@ func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption,
 ) (execResult executor.Result, retErr error) {
+	if exec.opts.IndexMaintenanceSpec() != nil {
+		if exec.maintenanceConsumed {
+			return executor.Result{}, moerr.NewInvalidInputNoCtx("index maintenance provenance is single-use")
+		}
+		exec.maintenanceConsumed = true
+	}
+	return exec.exec(sql, statementOption, false)
+}
+
+func (exec *txnExecutor) exec(
+	sql string,
+	statementOption executor.StatementOption,
+	bindIndexView bool,
+) (execResult executor.Result, retErr error) {
 	// Seal before returning to an owned or borrowed callback, even if it
 	// suppresses this error. Cleanup waits on the existing SQL-drain owner.
 	ownerTxn := exec.opts.Txn()
@@ -396,7 +425,7 @@ func (exec *txnExecutor) Exec(
 
 	parentCtx := exec.ctx
 	exec.ctx = markInternalJSONMergeWarningContext(
-		newInternalStatementContext(parentCtx))
+		newInternalStatementContext(defines.WithoutIndexMaintenanceViewBinding(parentCtx)))
 	defer func() {
 		// The fresh StatsInfo is statement-owned. Do not retain it in a
 		// long-lived transaction executor or build an unbounded context chain.
@@ -494,6 +523,35 @@ func (exec *txnExecutor) Exec(
 	if err != nil {
 		return executor.Result{}, err
 	}
+	if (bindIndexView || exec.opts.IndexMaintenanceSpec() != nil || exec.opts.IndexRelationPolicy() != nil) && len(stmts) != 1 {
+		return executor.Result{}, moerr.NewInvalidInputNoCtx("index maintenance SQL must contain one statement")
+	}
+	spec := exec.opts.IndexMaintenanceSpec()
+	validator := exec.opts.IndexMaintenanceValidator()
+	if (spec == nil) != (validator == nil) || (spec != nil && exec.opts.IndexRelationPolicy() != nil) {
+		return executor.Result{}, moerr.NewInvalidInputNoCtx("invalid index maintenance options")
+	}
+	var maintenanceLiterals []string
+	if spec != nil {
+		account, err := defines.GetAccountId(exec.ctx)
+		if err != nil || account != spec.AccountID {
+			return executor.Result{}, moerr.NewInvalidInputNoCtx("index maintenance account changed")
+		}
+		maintenanceLiterals, err = inspectIndexMaintenanceStatement(stmts[0], spec, validator)
+		if err != nil {
+			return executor.Result{}, err
+		}
+	}
+	if policy := exec.opts.IndexRelationPolicy(); policy != nil && policy.Spec != nil {
+		account, err := defines.GetAccountId(exec.ctx)
+		if err != nil || account != policy.Spec.AccountID {
+			return executor.Result{}, moerr.NewInvalidInputNoCtx("index maintenance policy account changed")
+		}
+		exec.ctx, err = plan.WithIndexMaintenanceSources(exec.ctx, stmts[0], policy.Spec)
+		if err != nil {
+			return executor.Result{}, err
+		}
+	}
 	if rewriteOption := getInternalExecutorRewriteOption(exec.ctx); rewriteOption != nil {
 		// CTAS carries the effective policy as typed AST state from the outer
 		// statement. Never recover execution semantics from redacted originSQL.
@@ -584,7 +642,7 @@ func (exec *txnExecutor) Exec(
 	// Install the explicitly propagated authenticated names before planning so
 	// SQL file admission and all downstream execution paths observe them.
 	proc.Base.SessionInfo.Account, proc.Base.SessionInfo.Role = statementOption.SessionIdentity()
-	proc.Base.SessionInfo.Buf = exec.s.buf
+	proc.Base.SessionInfo.User = statementOption.SessionUser()
 	proc.Base.SessionInfo.StorageEngine = exec.s.eng
 	proc.Base.QueryClient = exec.s.qc
 	defer func() {
@@ -593,6 +651,7 @@ func (exec *txnExecutor) Exec(
 
 	newCompileContext := func(ctx context.Context) *compilerContext {
 		cc := exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower)
+		cc.indexRelationPolicy = exec.opts.IndexRelationPolicy()
 		if statementOption.AllowMoColumnsUpdate() {
 			cc.SetContext(context.WithValue(cc.GetContext(), defines.MoColumnsUpdateKey{}, true))
 		}
@@ -601,8 +660,22 @@ func (exec *txnExecutor) Exec(
 	}
 	compileContext := newCompileContext(exec.ctx)
 	proc.Base.SessionInfo.CompilerContext = compileContext
+	if bindIndexView {
+		selectStmt, ok := stmts[0].(*tree.Select)
+		if !ok {
+			return executor.Result{}, moerr.NewInvalidInputNoCtx("index maintenance view probe requires SELECT")
+		}
+		if err := validateIndexMaintenanceViewProbe(selectStmt); err != nil {
+			return executor.Result{}, err
+		}
+		compileContext.SetContext(defines.WithIndexMaintenanceViewBinding(compileContext.GetContext()))
+		if err := plan.BindIndexMaintenanceView(compileContext, selectStmt); err != nil {
+			return executor.Result{}, err
+		}
+		return executor.Result{}, nil
+	}
 	buildPlan := func(ctx *compilerContext, prepared bool) (*plan.Plan, error) {
-		pn, err := plan.BuildPlan(ctx, stmts[0], prepared)
+		pn, err := plan.BuildPlan(ctx, stmts[0], prepared, nil)
 		if err == nil && statementOption.AllowMoColumnsUpdate() {
 			markMoColumnsUpdatePlan(pn)
 		}
@@ -615,11 +688,11 @@ func (exec *txnExecutor) Exec(
 	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 		//*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
-		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
+		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex, *tree.ShowIndexIgnored, *tree.ShowIndexStatus,
 		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 
 		opt := plan.NewBaseOptimizer(compileContext)
-		optimized, err := opt.Optimize(stmt, prepared)
+		optimized, err := opt.Optimize(stmt, prepared, nil)
 		if err == nil {
 			pn = &plan.Plan{
 				Plan: &plan.Plan_Query{
@@ -648,6 +721,8 @@ func (exec *txnExecutor) Exec(
 	}
 
 	c := exec.newCompile(proc, stmts[0], sql, receiveAt)
+	c.indexMaintenanceSpec = spec.Clone()
+	c.indexMaintenanceLiterals = maintenanceLiterals
 	c.runSqlToken = sqlToken
 	c.SetOriginSQL(sql)
 	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
@@ -722,7 +797,6 @@ func (exec *txnExecutor) Exec(
 				rows, err := cloneInternalExecutorResultBatch(
 					bat,
 					exec.s.mp,
-					streaming,
 				)
 				if err != nil {
 					return err
@@ -815,30 +889,11 @@ func resultCloneBytes(bat *batch.Batch, used, limit uint64) (uint64, error) {
 		if !charge(uint64(rows) * uint64(width)) {
 			return exceeded()
 		}
-		// Sidecars for flat vectors can expand to one entry per output row.
-		// Constants retain the exact source sidecars after broadcasting.
-		for _, n := range []int{len(vec.GetPrepareParamKinds()), len(vec.GetStringSources())} {
-			if n != 0 && !vec.IsConst() {
-				n = max(n, rows)
-			}
-			if !charge(uint64(n)) {
-				return exceeded()
-			}
-		}
-		if vec.HasBinaryStringMetadata() {
-			words := uint64(rows) / 64
-			if rows%64 != 0 {
-				words++
-			}
-			if words > ^uint64(0)/16 || !charge(words*16) {
-				return exceeded()
-			}
-		}
 		if !vec.GetType().IsVarlen() || rows == 0 || vec.IsConstNull() {
 			continue
 		}
 		values, area := vector.MustVarlenaRawData(vec)
-		if vec.VarlenaAreaIsDisjoint() && vec.AreaBackingKind() == vector.OwnedMPoolUnique {
+		if vec.VarlenaAreaIsDisjoint() && !vec.IsReadOnly() {
 			if !charge(uint64(len(area))) {
 				return exceeded()
 			}
@@ -867,9 +922,8 @@ func resultCloneBytes(bat *batch.Batch, used, limit uint64) (uint64, error) {
 func cloneInternalExecutorResultBatch(
 	bat *batch.Batch,
 	mp *mpool.MPool,
-	streaming bool,
 ) (*batch.Batch, error) {
-	return bat.CloneWithoutAllocationAccount(mp, streaming)
+	return bat.Clone(mp)
 }
 
 // publishInternalExecutorStreamResult transfers result ownership only after a
@@ -949,7 +1003,6 @@ func (exec *txnExecutor) LockTable(table string) error {
 	proc.Base.IsFrontend = exec.opts.IsFrontend()
 	applyExecutorLockWaitTimeout(proc, exec.opts)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
-	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {
 		proc.Free()
 	}()

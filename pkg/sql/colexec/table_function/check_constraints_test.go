@@ -103,9 +103,9 @@ func TestAppendCheckConstraintRowAllowsPrunedColumns(t *testing.T) {
 	defer proc.Free()
 
 	vectors := []*vector.Vector{
-		vector.NewVec(types.T_varchar.ToType()),
-		vector.NewVec(types.T_varchar.ToType()),
-		vector.NewVec(types.T_varchar.ToType()),
+		vector.NewVec(types.T_varchar.ToType(), mp),
+		vector.NewVec(types.T_varchar.ToType(), mp),
+		vector.NewVec(types.T_varchar.ToType(), mp),
 	}
 	for _, vec := range vectors {
 		defer vec.Free(mp)
@@ -147,15 +147,15 @@ func TestCollectCheckConstraintRowsFromResult(t *testing.T) {
 	})
 
 	short := batch.NewWithSize(1)
-	short.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	short.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(short.Vecs[0], []byte("ignored"), false, mp))
 	short.SetRowCount(1)
 
 	data := batch.NewWithSize(4)
-	data.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	data.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-	data.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-	data.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	data.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	data.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+	data.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
+	data.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp)
 	appendCatalogBytes := func(vec *vector.Vector, value []byte, isNull bool) {
 		require.NoError(t, vector.AppendBytes(vec, value, isNull, mp))
 	}
@@ -198,10 +198,10 @@ func TestCollectCheckConstraintRowsFromResultRejectsMalformedMetadata(t *testing
 	defer mpool.DeleteMPool(mp)
 
 	data := batch.NewWithSize(4)
-	data.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	data.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-	data.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-	data.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	data.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	data.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+	data.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
+	data.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(data.Vecs[0], []byte("bad"), false, mp))
 	require.NoError(t, vector.AppendBytes(data.Vecs[1], []byte("bad"), false, mp))
 	require.NoError(t, vector.AppendBytes(data.Vecs[2], nil, true, mp))
@@ -300,7 +300,7 @@ func TestCollectCheckConstraintRowsFromLegacyCatalogRows(t *testing.T) {
 	// SchemaExtra envelope and rows where extra_info itself is NULL.
 	data := batch.NewWithSize(4)
 	for i := range data.Vecs {
-		data.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+		data.Vecs[i] = vector.NewVec(types.T_varchar.ToType(), mp)
 	}
 	appendValue := func(vec *vector.Vector, value []byte, isNull bool) {
 		require.NoError(t, vector.AppendBytes(vec, value, isNull, mp))
@@ -348,7 +348,7 @@ func TestDecodeCheckConstraintBatchSkipsNonTableCreateSQLPayloads(t *testing.T) 
 
 	data := batch.NewWithSize(5)
 	for i := range data.Vecs {
-		data.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+		data.Vecs[i] = vector.NewVec(types.T_varchar.ToType(), mp)
 	}
 	appendValue := func(vec *vector.Vector, value []byte, isNull bool) {
 		require.NoError(t, vector.AppendBytes(vec, value, isNull, mp))

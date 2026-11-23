@@ -48,7 +48,7 @@ func StreamBatchProcess(
 	buffer containers.IBatchBuffer,
 	mp *mpool.MPool,
 ) error {
-	bat := buffer.Fetch()
+	bat := buffer.Fetch(mp)
 	defer buffer.Putback(bat, mp)
 	for {
 		bat.CleanOnlyData()

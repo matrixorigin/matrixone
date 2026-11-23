@@ -20,8 +20,8 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -45,18 +45,7 @@ func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	rbat := batch.NewWithSize(len(bat.Vecs))
 	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
 	for i, srcVec := range bat.Vecs {
-		var (
-			vec *vector.Vector
-			err error
-		)
-		if srcVec.AllocationAccountSelection() != nil {
-			// CopyBatch is an ownership boundary: the source keeps its physical
-			// account until Free, while the independent destination belongs to
-			// the generic downstream batch owner.
-			vec, err = srcVec.CloneToFlatCompactWithAllocation(proc.Mp(), nil)
-		} else {
-			vec, err = srcVec.CloneToFlatCompact(proc.Mp())
-		}
+		vec, err := srcVec.CloneToFlatCompact(proc.Mp())
 		if err != nil {
 			rbat.Clean(proc.Mp())
 			return nil, err
@@ -65,6 +54,27 @@ func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	}
 	rbat.SetRowCount(bat.RowCount())
 	return rbat, nil
+}
+
+// CopyBatchWithAllocation creates an independent off-heap copy charged through
+// mp, the destination owner's accounted view. A nil mp is CopyBatch. Later
+// growth of the copy must again go through the owner's view.
+func CopyBatchWithAllocation(bat *batch.Batch, proc *process.Process, mp *mpool.MPool) (*batch.Batch, error) {
+	if mp == nil {
+		return CopyBatch(bat, proc)
+	}
+	dst := batch.NewWithSize(len(bat.Vecs))
+	dst.Attrs = append(dst.Attrs, bat.Attrs...)
+	for i, src := range bat.Vecs {
+		v, err := src.CloneToFlatCompact(mp)
+		if err != nil {
+			dst.Clean(mp)
+			return nil, err
+		}
+		dst.SetVector(int32(i), v)
+	}
+	dst.SetRowCount(bat.RowCount())
+	return dst, nil
 }
 
 func TableIsLoggingTable(dbName string, tableName string) bool {

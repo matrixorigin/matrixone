@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -278,10 +279,11 @@ func (b *IvfpqBuild[B, Q]) PreparePersistence(ts int64, buildTS int64, provenanc
 //
 // Excludes the host-only members of each tar (ids.bin, INCLUDE blobs), which never
 // reach the GPU. Valid only after PreparePersistence, which packs and stamps the sizes.
-// PersistChunks runs only after preparation and any device admission succeeds.
-func (b *IvfpqBuild[B, Q]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+// PersistFiles runs only after preparation and any device admission succeeds. It writes each
+// model's index file in txn, running each statement with run.
+func (b *IvfpqBuild[B, Q]) PersistFiles(sqlproc *sqlexec.SqlProcess, txn client.TxnOperator, run func(sql string) error) error {
 	for _, idx := range b.indexes {
-		if err := idx.PersistChunks(writer); err != nil {
+		if err := idx.PersistFiles(sqlproc, txn, b.tblcfg, run); err != nil {
 			return err
 		}
 	}

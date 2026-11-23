@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
@@ -159,6 +160,9 @@ func (l Lock) tryHold(
 
 	// txn already hold the lock
 	if l.holders.contains(c.txn.txnID) {
+		if c.opts.KeepRows && !l.isLockRow() && !c.opts.ReuseOwnedRange {
+			return false, false, moerr.NewLockNeedUpgradeNoCtx()
+		}
 		// Re-entry is immediately compatible except for a Shared -> Exclusive
 		// promotion. That promotion is safe only after every other Shared holder
 		// has left; until then this holder must join the waiter graph.
@@ -170,6 +174,11 @@ func (l Lock) tryHold(
 		return true, false, nil
 	}
 
+	// Joining a foreign range would acquire every key in its span. Its last
+	// holder wakes the waiters and removes the range before they retry.
+	if c.opts.KeepRows && !l.isLockRow() {
+		return false, false, nil
+	}
 	if l.canHold(c) {
 		// The caller holds both the transaction mutex and the local lock-table
 		// mutex. Record the lock in the transaction before making the waiter a
@@ -323,10 +332,10 @@ func (l Lock) IterHolders(fn func(holder pb.WaitTxn) bool) {
 	}
 }
 
-// IterHolders iter which txn is waiting for this lock
+// IterWaiters visits transactions waiting for this lock until fn returns false.
 func (l Lock) IterWaiters(fn func(waiter pb.WaitTxn) bool) {
 	l.waiters.iter(func(w *waiter) bool {
-		return !fn(w.txn)
+		return fn(w.txn)
 	})
 }
 

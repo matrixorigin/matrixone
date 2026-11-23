@@ -218,7 +218,8 @@ func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector
 		op.init(parameters[0], parameters[1])
 	}
 
-	p := vector.GenerateFunctionStrParameter(parameters[0])
+	result.UseOptFunctionParamFrame(1)
+	p := vector.OptGetBytesParamFromWrapper(result, 0, parameters[0])
 	rs := vector.MustFunctionResult[bool](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p.GetStrValue(i)
@@ -247,7 +248,8 @@ func (op *opOperatorStrIn) operatorNotIn(parameters []*vector.Vector, result vec
 		op.init(parameters[0], parameters[1])
 	}
 
-	p := vector.GenerateFunctionStrParameter(parameters[0])
+	result.UseOptFunctionParamFrame(1)
+	p := vector.OptGetBytesParamFromWrapper(result, 0, parameters[0])
 	rs := vector.MustFunctionResult[bool](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p.GetStrValue(i)

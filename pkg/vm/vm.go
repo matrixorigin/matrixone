@@ -53,7 +53,11 @@ func Prepare(op Operator, proc *process.Process) error {
 			return err
 		}
 	}
-	return op.Prepare(proc)
+	if err := op.Prepare(proc); err != nil {
+		return err
+	}
+	configureSelectionChildren(op)
+	return nil
 }
 
 func ModifyOutputOpNodeIdx(rootOp Operator, proc *process.Process) {
@@ -64,4 +68,14 @@ func ModifyOutputOpNodeIdx(rootOp Operator, proc *process.Process) {
 		}
 		return nil
 	})
+}
+
+// Reset resets op after its producer work has stopped.
+func Reset(op Operator, proc *process.Process, failed bool, err error) {
+	op.Reset(proc, failed, err)
+}
+
+// Free releases op's resources.
+func Free(op Operator, proc *process.Process, failed bool, err error) {
+	op.Free(proc, failed, err)
 }

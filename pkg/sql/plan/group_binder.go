@@ -259,30 +259,27 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	// Do not interpret a numeric literal inside that expression as an ordinal a
 	// second time.
 	if isRoot && !reusesProjection {
-		if numVal, ok := astExpr.(*tree.NumVal); ok {
-			switch numVal.Kind() {
-			case tree.Int:
-				reusesProjection = true
-				colPos, _ := numVal.Int64()
-				if colPos < 1 || int(colPos) > len(b.selectList) {
-					return nil, moerr.NewSyntaxErrorf(b.GetContext(), "GROUP BY position %v is not in select list", colPos)
-				}
+		// A bare integer literal is a positional reference into the select list
+		// (MySQL ordinal). Every other literal -- string, decimal, float,
+		// boolean, NULL, ... -- is a legal constant GROUP BY key and falls
+		// through to the regular expression binding below, exactly like its
+		// parenthesized form and like a selected alias.
+		if numVal, ok := astExpr.(*tree.NumVal); ok && numVal.Kind() == tree.Int {
+			reusesProjection = true
+			colPos, _ := numVal.Int64()
+			if numVal.Negative() {
+				colPos = -colPos
+			}
+			if colPos < 1 || int(colPos) > len(b.selectList) {
+				return nil, moerr.NewSyntaxErrorf(b.GetContext(), "GROUP BY position %v is not in select list", colPos)
+			}
 
-				astExpr = b.selectList[colPos-1].Expr
-				if int(colPos) <= len(b.ctx.numericProjectionTypes) {
-					target := b.ctx.numericProjectionTypes[colPos-1]
-					if isNumericAssignmentTarget(target) {
-						numericTarget = &target
-					}
+			astExpr = b.selectList[colPos-1].Expr
+			if int(colPos) <= len(b.ctx.numericProjectionTypes) {
+				target := b.ctx.numericProjectionTypes[colPos-1]
+				if isNumericAssignmentTarget(target) {
+					numericTarget = &target
 				}
-
-			case tree.Unknown:
-				if numVal.ValType != tree.P_null {
-					return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in GROUP BY")
-				}
-
-			default:
-				return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in GROUP BY")
 			}
 		}
 	}

@@ -94,7 +94,7 @@ rows:
 	}
 
 	lastX := -1
-	var vals *[AggBatchSize]int64
+	var vals []int64
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
 		x := int(g >> aggBatchSizeShift)
@@ -237,7 +237,7 @@ rows:
 	}
 
 	lastX := -1
-	var vals *[AggBatchSize]int64
+	var vals []int64
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
 		x := int(g >> aggBatchSizeShift)
@@ -261,7 +261,7 @@ func (exec *countColumnExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) e
 // are scattered, so this does not alter COUNT's existing arithmetic semantics.
 func (ae *aggExec) countGroupsDirect(groups []uint64, offset int, input *vector.Vector) {
 	lastX := -1
-	var vals *[AggBatchSize]int64
+	var vals []int64
 	if input == nil {
 		for _, group := range groups {
 			if group == GroupNotMatched {
@@ -338,7 +338,7 @@ func (exec *countColumnExec) Flush() (_ []*vector.Vector, retErr error) {
 
 		for i := range vecs {
 			var err error
-			vecs[i], err = exec.allocation.newVector(types.T_int64.ToType())
+			vecs[i], err = exec.allocation.newVector(types.T_int64.ToType(), exec.mp)
 			if err != nil {
 				return nil, err
 			}

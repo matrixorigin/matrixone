@@ -85,7 +85,7 @@ func runIndicatorOnWindow(
 	if err := arg.Prepare(proc); err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	defer arg.ctr.freeIndicatorState(proc.Mp())
+	defer arg.ctr.freeIndicatorState(proc)
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = xVec
 	bat.SetRowCount(rows)
@@ -134,7 +134,7 @@ func runIndicatorOnWindow(
 				outNulls = append(outNulls, vec.IsNull(uint64(row)))
 			}
 		}
-		vec.Free(proc.Mp())
+		vec.Free(vec.MPool())
 	}
 	return out, outNulls, nil
 }
@@ -199,7 +199,7 @@ func assertSeqSlack(
 }
 
 func indMakeFloat64Vector(tb testing.TB, proc *process.Process, vals []float64, nulls []bool) *vector.Vector {
-	vec := vector.NewVec(types.T_float64.ToType())
+	vec := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 	for i := range vals {
 		isNull := nulls != nil && nulls[i]
 		if err := vector.AppendFixed(vec, vals[i], isNull, proc.Mp()); err != nil {
@@ -210,7 +210,7 @@ func indMakeFloat64Vector(tb testing.TB, proc *process.Process, vals []float64, 
 }
 
 func indMakeInt64Vector(tb testing.TB, proc *process.Process, vals []int64, nulls []bool) *vector.Vector {
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	for i := range vals {
 		isNull := nulls != nil && nulls[i]
 		if err := vector.AppendFixed(vec, vals[i], isNull, proc.Mp()); err != nil {
@@ -1283,9 +1283,9 @@ func TestIndicatorConstantStreamsAndLifeCycle(t *testing.T) {
 			}
 		}
 	}
-	first.Free(proc.Mp())
+	first.Free(first.MPool())
 	// second generation through the eval-entry free discipline
-	arg.ctr.freeIndicatorState(proc.Mp())
+	arg.ctr.freeIndicatorState(proc)
 	xVecB := indMakeFloat64Vector(t, proc, []float64{10, 10, 10}, nil)
 	batB := batch.NewWithSize(1)
 	batB.Vecs[0] = xVecB
@@ -1305,7 +1305,7 @@ func TestIndicatorConstantStreamsAndLifeCycle(t *testing.T) {
 		t.Fatalf("gen-2: got %v (nulls %v %v %v)", gotB,
 			second.IsNull(0), second.IsNull(1), second.IsNull(2))
 	}
-	second.Free(proc.Mp())
+	second.Free(second.MPool())
 	// Reset and Free discipline: both clear the evaluator slot
 	if evs := len(arg.ctr.indicatorEvals); evs != 1 {
 		t.Fatalf("expected one live evaluator, got %d", evs)
@@ -1315,6 +1315,7 @@ func TestIndicatorConstantStreamsAndLifeCycle(t *testing.T) {
 		t.Fatalf("Reset left %d evaluators alive", evs)
 	}
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	if evs := len(arg.ctr.indicatorEvals); evs != 0 {
 		t.Fatalf("Free left %d evaluators alive", evs)
 	}
@@ -1742,11 +1743,11 @@ func benchmarkIndicatorKernel(b *testing.B, name string, n, rows int) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		arg.ctr.freeIndicatorState(proc.Mp())
+		arg.ctr.freeIndicatorState(proc)
 		vec, err := arg.ctr.processIndicatorFuncRange(0, arg, proc, 0, rows)
 		if err != nil {
 			b.Fatal(err)
 		}
-		vec.Free(proc.Mp())
+		vec.Free(vec.MPool())
 	}
 }

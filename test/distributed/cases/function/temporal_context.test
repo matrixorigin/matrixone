@@ -1,0 +1,51 @@
+-- 时间类型在逻辑和数学上下文中使用其数值表示，不经过日期文本解析。
+drop database if exists temporal_context_regression;
+create database temporal_context_regression;
+use temporal_context_regression;
+set @temporal_context_tz = @@time_zone;
+set time_zone = '+00:00';
+create table temporal_context_values(id int, dc date, dt datetime(6), tm time(6), ts timestamp(6));
+insert into temporal_context_values values
+(1, '2024-01-02', '2024-01-02 03:04:05.125000', '12:34:56.125000', '2024-01-02 03:04:05.125000'),
+(2, '0001-01-01', '0001-01-01 00:00:00', '00:00:00.000001', '2024-01-02 03:04:05.125000'),
+(3, null, null, '-00:00:00.000001', null),
+(4, null, null, '00:00:00', null),
+(5, null, null, null, null);
+set @temporal_context_sql_mode = @@sql_mode;
+set sql_mode = '';
+insert into temporal_context_values values (6, '0000-00-00', '0000-00-00 00:00:00', '00:00:00', '0000-00-00 00:00:00');
+set sql_mode = @temporal_context_sql_mode;
+
+-- 覆盖列输入、逻辑运算、微小非零 TIME 和 NULL 三值逻辑。
+select id, not dc as nd, !dt as ndt, not tm as nt, not ts as nts from temporal_context_values order by id;
+select id, dc and 1 as a, dt or 0 as o, tm xor 1 as x from temporal_context_values order by id;
+select id, tm is true as t, tm is false as f, tm is not true as nt, tm is not false as nf from temporal_context_values order by id;
+select id, dc is true as d, dt is true as dt, ts is true as ts from temporal_context_values order by id;
+select id, tm and null as a, tm or null as o, tm xor null as x from temporal_context_values order by id;
+select id from temporal_context_values where not tm order by id;
+select id from temporal_context_values where dc and tm order by id;
+
+-- 数学函数保留小数秒并按 DOUBLE 域运算，而非先转整数或带分隔符的字符串。
+select id, truncate(dc, 0) as d, truncate(dt, -2) as dt, truncate(tm, 3) as tm from temporal_context_values order by id;
+select id, round(dt, -2) as dt, abs(dc) as d, sign(dc) as s from temporal_context_values order by id;
+select id, abs(tm) as a, sign(tm) as s, floor(tm) as f, ceil(tm) as c from temporal_context_values order by id;
+select id, floor(dt) as f, ceiling(ts) as c from temporal_context_values order by id;
+select id, sqrt(abs(tm)) as s from temporal_context_values where id in (2, 4, 5) order by id;
+select not cast('00:00:00.000001' as time(6)) as n, round(cast('12:59:59.6' as time(1)), 0) as r;
+
+-- TIMESTAMP 数值随会话时区变化，跨日进位来自时区转换而非数字加减。
+set time_zone = '+08:00';
+select id, floor(ts) as f from temporal_context_values where id = 1;
+
+-- 预处理语句复用：正负小数 TIME、零值及 NULL 保持相同上下文契约。
+prepare temporal_context_stmt from 'select not cast(? as time(6)) as n, abs(cast(? as time(6))) as a, floor(cast(? as time(6))) as f';
+set @temporal_context_arg = '-00:00:00.000001';
+execute temporal_context_stmt using @temporal_context_arg, @temporal_context_arg, @temporal_context_arg;
+set @temporal_context_arg = '00:00:00';
+execute temporal_context_stmt using @temporal_context_arg, @temporal_context_arg, @temporal_context_arg;
+set @temporal_context_arg = null;
+execute temporal_context_stmt using @temporal_context_arg, @temporal_context_arg, @temporal_context_arg;
+deallocate prepare temporal_context_stmt;
+
+drop database temporal_context_regression;
+set time_zone = @temporal_context_tz;

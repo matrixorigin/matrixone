@@ -49,7 +49,7 @@ func buildLoadNullIfTestPlan(t *testing.T, expression string, legacy bool) (*pla
 		}
 		result, err = buildLoad(load, ctx, false)
 	} else {
-		result, err = BuildPlan(ctx, statement, false)
+		result, err = BuildPlan(ctx, statement, false, nil)
 	}
 	// Replacing @v with the scan column must not modify the caller's AST.
 	require.Equal(t, before, tree.String(original, dialect.MYSQL))
@@ -97,7 +97,7 @@ func TestLoadNullIfCollatedPayloadPreservesRawDomain(t *testing.T) {
 			proc := newPlanTestProcess(t)
 			input := batch.NewWithSize(4)
 			defer input.Clean(proc.Mp())
-			input.Vecs[3] = vector.NewVec(types.New(types.T_text, types.MaxLongTextLen, 0))
+			input.Vecs[3] = vector.NewVec(types.New(types.T_text, types.MaxLongTextLen, 0), proc.Mp())
 			values := []string{"keep", strings.Repeat("x", types.MaxVarcharLen+1), "NULL", ""}
 			for i, value := range values {
 				require.NoError(t, vector.AppendBytes(input.Vecs[3], []byte(value), i == 3, proc.Mp()))
@@ -124,7 +124,7 @@ func TestExternalNullIfCollatedColumnRequiresProjection(t *testing.T) {
 		"create external table collated_nullif(s varchar(32)) infile{'filepath'='ignored.csv'} fields terminated by ',' set s=nullif(s,'sentinel') collate utf8mb4_bin", 1)
 	require.NoError(t, err)
 	defer statement.Free()
-	_, err = BuildPlan(ctx, statement, false)
+	_, err = BuildPlan(ctx, statement, false, nil)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 }

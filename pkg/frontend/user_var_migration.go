@@ -23,7 +23,6 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -57,7 +56,7 @@ func (ses *Session) hasUnreplayableMigrationUserVars() bool {
 
 func hasMigrationRuntimeSideEffect(name string) bool {
 	switch canonicalSystemVariableName(name) {
-	case "optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
+	case "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
 		return true
 	default:
 		return false
@@ -231,7 +230,7 @@ func decodeUserDefinedVars(
 		if _, exists := result[name]; exists {
 			return nil, moerr.NewInternalErrorf(ctx, "duplicate user variable %q in connection migration", name)
 		}
-		if item.PrepareParamKind > uint32(vector.PrepareParamBoolean) {
+		if item.PrepareParamKind > uint32(types.StringConversionBoolean) {
 			return nil, moerr.NewInternalErrorf(ctx, "invalid prepare parameter kind for user variable %q", name)
 		}
 		runtimeDomain := types.RuntimeStringDomain(item.RuntimeStringDomain)
@@ -259,7 +258,7 @@ func decodeUserDefinedVars(
 			Sql:                 item.Sql,
 			IsBin:               item.IsBin,
 			Type:                typ,
-			PrepareParamKind:    vector.PrepareParamKind(item.PrepareParamKind),
+			PrepareParamKind:    types.StringConversionKind(item.PrepareParamKind),
 			RuntimeStringDomain: runtimeDomain,
 			Replayable:          replayable && (value != nil || types.T(typ.Id) != types.T_any || regexpStringResult),
 		}
@@ -320,7 +319,9 @@ func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVar
 		var runtimeValue any
 		runtimeValuePresent := item.RuntimeValue != nil
 		if runtimeValuePresent {
-			if !hasMigrationRuntimeSideEffect(name) {
+			// Older sources may send optimizer_hints in RuntimeValue. Decode it
+			// for compatibility, but migration never applies it to CN runtime.
+			if name != "optimizer_hints" && !hasMigrationRuntimeSideEffect(name) {
 				return nil, moerr.NewInternalErrorf(ctx,
 					"runtime side effect is invalid for session system variable %q", name)
 			}
@@ -438,6 +439,8 @@ func encodeUserDefinedVarValue(ctx context.Context, value any, isBin bool) (*pla
 		return makeUserVarVectorLiteral(types.T_array_float16, types.ArrayToBytes(v), len(v)), nil
 	case []int8:
 		return makeUserVarVectorLiteral(types.T_array_int8, types.ArrayToBytes(v), len(v)), nil
+	case types.BlockScaledValue:
+		return makeUserVarVectorLiteral(v.Oid, v.Cell, types.BlockScaledDim(v.Cell)), nil
 	case []uint8:
 		return makeUserVarVectorLiteral(types.T_array_uint8, types.ArrayToBytes(v), len(v)), nil
 	default:
@@ -642,6 +645,20 @@ func decodeUserDefinedVarValue(ctx context.Context, expr *plan.Expr) (any, error
 			return nil, err
 		}
 		return types.BytesToArray[uint8](value), nil
+	case types.T_array_float8, types.T_array_float4:
+		value, ok := lit.Value.(*plan.Literal_VecVal)
+		if !ok {
+			return nil, moerr.NewInternalError(ctx, "invalid vector user variable value in connection migration")
+		}
+		cell := []byte(value.VecVal)
+		c, err := types.ParseBlockScaledCell(cell)
+		if err != nil {
+			return nil, err
+		}
+		if f, _ := types.T(expr.Typ.Id).BlockScaledFormat(); c.Format != f || expr.Typ.Width != int32(c.Dim) {
+			return nil, moerr.NewInternalError(ctx, "invalid vector user variable length in connection migration")
+		}
+		return types.BlockScaledValue{Oid: types.T(expr.Typ.Id), Cell: cell}, nil
 	default:
 		return nil, moerr.NewInternalErrorf(ctx, "unsupported user variable type %s in connection migration", types.T(expr.Typ.Id).String())
 	}

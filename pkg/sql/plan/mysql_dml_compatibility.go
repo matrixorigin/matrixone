@@ -829,7 +829,7 @@ func findMySQLDMLTargetInDirectTableExprExcept(
 		if dbName == "" {
 			dbName = ctx.DefaultDatabase()
 		}
-		objRef, tableDef, err := ctx.Resolve(dbName, string(tableExpr.ObjectName), nil)
+		objRef, tableDef, err := ctx.Resolve(dbName, string(tableExpr.ObjectName), nil, nil)
 		if err != nil || tableDef == nil {
 			return "", false
 		}

@@ -61,6 +61,14 @@ func TestOptionsTxnIsolation(t *testing.T) {
 	require.Len(t, opts.ExtraTxnOptions(), 1)
 }
 
+func TestOptionsAuthorizationSnapshot(t *testing.T) {
+	var base Options
+	options := base.WithAuthorizationSnapshot(nil)
+	require.Empty(t, base.ExtraTxnOptions())
+	require.Len(t, options.ExtraTxnOptions(), 1)
+	require.False(t, options.HasExistsTxn(), "the executor must own the independent authorization transaction")
+}
+
 func TestOptionsTxnMode(t *testing.T) {
 	var opts Options
 	require.False(t, opts.HasTxnMode())

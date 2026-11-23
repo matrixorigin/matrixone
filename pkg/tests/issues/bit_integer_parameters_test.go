@@ -24,14 +24,15 @@ import (
 	"testing"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/require"
 )
 
 // Reuse the existing prepared-source cluster. No additional service or table
 // is needed to observe the real SQL EXECUTE and COM_STMT source boundaries.
-func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql.DB, port int64) {
-	t.Run("binary source transitions", func(t *testing.T) {
+func testBitIntegerPreparedParameters(t *testing.T, db *sql.DB, port int64) {
+	runIssue25408Phase(t, "binary source transitions", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
@@ -54,11 +55,11 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			{nil, [4]string{}, true, false},
 			{float64(1.5), [4]string{"2", "02", "b", "NYNN"}, false, false},
 		} {
-			t.Run(fmt.Sprint(tc.input), func(t *testing.T) {
+			runIssue25408Subtest(t, fmt.Sprint(tc.input), func(t *testing.T) {
 				var got [4]sql.NullString
 				err := stmt.QueryRowContext(ctx, tc.input, tc.input, tc.input, tc.input).Scan(&got[0], &got[1], &got[2], &got[3])
 				if tc.wantErr {
-					require.Error(t, err)
+					requireIssue25408MySQLError(t, err, moerr.ER_DATA_OUT_OF_RANGE)
 					return
 				}
 				require.NoError(t, err)
@@ -69,13 +70,13 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			})
 		}
 	})
-	t.Run("CHAR source rounding domain", func(t *testing.T) {
+	runIssue25408Phase(t, "CHAR source rounding domain", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
 		_, err = conn.ExecContext(ctx, "prepare char_rounding from 'select hex(char(?))'")
 		require.NoError(t, err)
-		defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare char_rounding") }()
+		defer deallocateIssue25408(t, ctx, conn, "char_rounding")
 		for _, tc := range []struct{ source, want string }{
 			{"64.5e0", "40"},
 			{"cast(64.5 as decimal(3,1))", "41"},
@@ -99,16 +100,13 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			require.Equal(t, tc.want, got)
 		}
 	})
-	t.Run("SQL execute decimal and selector", func(t *testing.T) {
+	runIssue25408Phase(t, "SQL execute decimal and selector", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
 		_, err = conn.ExecContext(ctx, `prepare bit_parameter_source from 'select export_set(if(true,?,cast("18446744073709551615" as unsigned)),"Y","N","",4)'`)
 		require.NoError(t, err)
-		defer func() {
-			_, err := conn.ExecContext(ctx, "deallocate prepare bit_parameter_source")
-			require.NoError(t, err)
-		}()
+		defer deallocateIssue25408(t, ctx, conn, "bit_parameter_source")
 		for _, tc := range []struct {
 			source, want string
 			wantErr      bool
@@ -121,13 +119,13 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			{"cast('9223372036854775808' as decimal(20,0))", "", true},
 			{"true", "YNNN", false},
 		} {
-			t.Run(tc.source, func(t *testing.T) {
+			runIssue25408Subtest(t, tc.source, func(t *testing.T) {
 				_, err := conn.ExecContext(ctx, "set @bit_parameter_value="+tc.source)
 				require.NoError(t, err)
 				var got string
 				err = conn.QueryRowContext(ctx, "execute bit_parameter_source using @bit_parameter_value").Scan(&got)
 				if tc.wantErr {
-					require.Error(t, err)
+					requireIssue25408MySQLError(t, err, moerr.ER_DATA_OUT_OF_RANGE)
 					return
 				}
 				require.NoError(t, err)
@@ -135,16 +133,13 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			})
 		}
 	})
-	t.Run("SQL execute HEX numeric selector", func(t *testing.T) {
+	runIssue25408Phase(t, "SQL execute HEX numeric selector", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
 		_, err = conn.ExecContext(ctx, `prepare hex_numeric_selector from 'select hex(if(true,?,2.5e0))'`)
 		require.NoError(t, err)
-		defer func() {
-			_, err := conn.ExecContext(ctx, "deallocate prepare hex_numeric_selector")
-			require.NoError(t, err)
-		}()
+		defer deallocateIssue25408(t, ctx, conn, "hex_numeric_selector")
 		for _, tc := range []struct {
 			source, want string
 		}{
@@ -187,7 +182,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		require.NoError(t, conn.QueryRowContext(ctx, "execute hex_numeric_selector using @hex_selector_value").Scan(&got))
 		require.Equal(t, "312E35", got)
 	})
-	t.Run("IFNULL common value versus CASE source", func(t *testing.T) {
+	runIssue25408Phase(t, "IFNULL common value versus CASE source", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		for _, tc := range []struct {
 			query, want string
 		}{
@@ -199,7 +194,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			require.Equal(t, tc.want, got, tc.query)
 		}
 	})
-	t.Run("IFNULL common value across prepared consumers", func(t *testing.T) {
+	runIssue25408Phase(t, "IFNULL common value across prepared consumers", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
@@ -219,7 +214,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			{`select make_set(ifnull(cast(2.5 as decimal(20,1)),1.5e0),'a','b','c')`, "b", nil},
 			{`select export_set(ifnull(cast(2.5 as decimal(20,1)),1.5e0),'Y','N','',4)`, "NYNN", nil},
 		} {
-			t.Run(tc.query+fmt.Sprint(tc.input), func(t *testing.T) {
+			runIssue25408Subtest(t, tc.query+fmt.Sprint(tc.input), func(t *testing.T) {
 				stmt, err := conn.PrepareContext(ctx, tc.query)
 				require.NoError(t, err)
 				defer stmt.Close()
@@ -234,23 +229,20 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			})
 		}
 	})
-	t.Run("SQL EXECUTE IFNULL decimal common value", func(t *testing.T) {
+	runIssue25408Phase(t, "SQL EXECUTE IFNULL decimal common value", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
 		_, err = conn.ExecContext(ctx, `prepare hex_ifnull_common from 'select hex(ifnull(?,1.5e0))'`)
 		require.NoError(t, err)
-		defer func() {
-			_, err := conn.ExecContext(ctx, "deallocate prepare hex_ifnull_common")
-			require.NoError(t, err)
-		}()
+		defer deallocateIssue25408(t, ctx, conn, "hex_ifnull_common")
 		_, err = conn.ExecContext(ctx, `set @ifnull_value=cast(2.5 as decimal(20,1))`)
 		require.NoError(t, err)
 		var got string
 		require.NoError(t, conn.QueryRowContext(ctx, "execute hex_ifnull_common using @ifnull_value").Scan(&got))
 		require.Equal(t, "2", got)
 	})
-	t.Run("SQL EXECUTE IFNULL subquery common value", func(t *testing.T) {
+	runIssue25408Phase(t, "SQL EXECUTE IFNULL subquery common value", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
@@ -263,20 +255,17 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			{"make_set", `select make_set(ifnull((select ? from issue_25408_pagination.page order by id limit 1),1.5e0),"a","b","c")`, "b"},
 			{"export_set", `select export_set(ifnull((select ? from issue_25408_pagination.page order by id limit 1),1.5e0),"Y","N","",4)`, "NYNN"},
 		} {
-			t.Run(tc.name, func(t *testing.T) {
+			runIssue25408Subtest(t, tc.name, func(t *testing.T) {
 				_, err := conn.ExecContext(ctx, "prepare ifnull_subquery from '"+tc.query+"'")
 				require.NoError(t, err)
-				defer func() {
-					_, err := conn.ExecContext(ctx, "deallocate prepare ifnull_subquery")
-					require.NoError(t, err)
-				}()
+				defer deallocateIssue25408(t, ctx, conn, "ifnull_subquery")
 				var got string
 				require.NoError(t, conn.QueryRowContext(ctx, "execute ifnull_subquery using @ifnull_subquery_value").Scan(&got))
 				require.Equal(t, tc.want, got)
 			})
 		}
 	})
-	t.Run("SQL EXECUTE aggregate source domain", func(t *testing.T) {
+	runIssue25408Phase(t, "SQL EXECUTE aggregate source domain", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
@@ -290,13 +279,10 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			{`select hex(char((select max(?) from issue_25408_pagination.page)))`, "02", "01", "FFFFFFFE"},
 			{`select export_set((select min(?) from issue_25408_pagination.page),"Y","N","",4)`, "NYNN", "YNNN", "NYYY"},
 		} {
-			t.Run(tc.query, func(t *testing.T) {
+			runIssue25408Subtest(t, tc.query, func(t *testing.T) {
 				_, err := conn.ExecContext(ctx, "prepare aggregate_source from '"+tc.query+"'")
 				require.NoError(t, err)
-				defer func() {
-					_, err := conn.ExecContext(ctx, "deallocate prepare aggregate_source")
-					require.NoError(t, err)
-				}()
+				defer deallocateIssue25408(t, ctx, conn, "aggregate_source")
 				var got string
 				require.NoError(t, conn.QueryRowContext(ctx, "execute aggregate_source using @aggregate_value").Scan(&got))
 				require.Equal(t, tc.want, got)
@@ -310,13 +296,13 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 				require.Equal(t, tc.wantSigned, got)
 				_, err = conn.ExecContext(ctx, `set @aggregate_value=cast(9223372036854775808 as decimal(20,0))`)
 				require.NoError(t, err)
-				require.Error(t, conn.QueryRowContext(ctx, "execute aggregate_source using @aggregate_value").Scan(&got))
+				requireIssue25408MySQLError(t, conn.QueryRowContext(ctx, "execute aggregate_source using @aggregate_value").Scan(&got), moerr.ER_DATA_OUT_OF_RANGE)
 				_, err = conn.ExecContext(ctx, `set @aggregate_value=1.5e0`)
 				require.NoError(t, err)
 			})
 		}
 	})
-	t.Run("derived selector preserves common result", func(t *testing.T) {
+	runIssue25408Phase(t, "derived selector preserves common result", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
@@ -328,16 +314,13 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			{"case", `select hex(x) from (select case when true then 2.5 else 1.5e0 end as x) d`,
 				`select hex(x) from (select case when true then ? else ? end as x) d`},
 		} {
-			t.Run(tc.name, func(t *testing.T) {
+			runIssue25408Subtest(t, tc.name, func(t *testing.T) {
 				var direct string
 				require.NoError(t, conn.QueryRowContext(ctx, tc.direct).Scan(&direct))
 				require.Equal(t, "2", direct)
 				_, err := conn.ExecContext(ctx, "prepare derived_selector from '"+tc.prepared+"'")
 				require.NoError(t, err)
-				defer func() {
-					_, err := conn.ExecContext(ctx, "deallocate prepare derived_selector")
-					require.NoError(t, err)
-				}()
+				defer deallocateIssue25408(t, ctx, conn, "derived_selector")
 				_, err = conn.ExecContext(ctx, "set @selector_a=2.5,@selector_b=1.5e0")
 				require.NoError(t, err)
 				var got string
@@ -347,7 +330,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			})
 		}
 	})
-	t.Run("projected explicit cast keeps numeric producer domain", func(t *testing.T) {
+	runIssue25408Phase(t, "projected explicit cast keeps numeric producer domain", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
@@ -359,16 +342,13 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			{"char", `select hex(char(x)) from (select cast(1.5e0 as double) x) d`,
 				`select hex(char(x)) from (select cast(? as double) x) d`, "02"},
 		} {
-			t.Run(tc.name, func(t *testing.T) {
+			runIssue25408Subtest(t, tc.name, func(t *testing.T) {
 				var direct string
 				require.NoError(t, conn.QueryRowContext(ctx, tc.sql).Scan(&direct))
 				require.Equal(t, tc.want, direct)
 				_, err := conn.ExecContext(ctx, "prepare projected_cast from '"+tc.prepared+"'")
 				require.NoError(t, err)
-				defer func() {
-					_, err := conn.ExecContext(ctx, "deallocate prepare projected_cast")
-					require.NoError(t, err)
-				}()
+				defer deallocateIssue25408(t, ctx, conn, "projected_cast")
 				_, err = conn.ExecContext(ctx, "set @cast_source=1.5e0")
 				require.NoError(t, err)
 				var got string
@@ -384,7 +364,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			})
 		}
 	})
-	t.Run("direct explicit cast keeps consumer truncation", func(t *testing.T) {
+	runIssue25408Phase(t, "direct explicit cast keeps consumer truncation", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
@@ -398,7 +378,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		require.NoError(t, stmt.QueryRowContext(ctx, float64(1.5)).Scan(&got))
 		require.Equal(t, direct, got)
 	})
-	t.Run("COM_STMT NULLIF numeric comparison stays a predicate", func(t *testing.T) {
+	runIssue25408Phase(t, "COM_STMT NULLIF numeric comparison stays a predicate", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
@@ -414,26 +394,20 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		require.Equal(t, direct, got)
 		_, err = conn.ExecContext(ctx, `prepare nullif_numeric from 'select make_set(nullif(?,1.5),"a","b")'`)
 		require.NoError(t, err)
-		defer func() {
-			_, err := conn.ExecContext(ctx, "deallocate prepare nullif_numeric")
-			require.NoError(t, err)
-		}()
+		defer deallocateIssue25408(t, ctx, conn, "nullif_numeric")
 		_, err = conn.ExecContext(ctx, `set @nullif_numeric="abc"`)
 		require.NoError(t, err)
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"execute nullif_numeric using @nullif_numeric").Scan(&got))
 		require.Equal(t, direct, got)
 	})
-	t.Run("NULLIF predicate remains outside integer source", func(t *testing.T) {
+	runIssue25408Phase(t, "NULLIF predicate remains outside integer source", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
 		_, err = conn.ExecContext(ctx, `prepare nullif_source from 'select hex(nullif(?,?))'`)
 		require.NoError(t, err)
-		defer func() {
-			_, err := conn.ExecContext(ctx, "deallocate prepare nullif_source")
-			require.NoError(t, err)
-		}()
+		defer deallocateIssue25408(t, ctx, conn, "nullif_source")
 		for _, tc := range []struct {
 			first, second string
 			want          sql.NullString
@@ -451,7 +425,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			require.Equal(t, tc.want, got)
 		}
 	})
-	t.Run("COM_STMT NULLIF comparison source", func(t *testing.T) {
+	runIssue25408Phase(t, "COM_STMT NULLIF comparison source", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
@@ -472,16 +446,13 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			require.Equal(t, tc.want, got)
 		}
 	})
-	t.Run("SQL EXECUTE aggregate signed range", func(t *testing.T) {
+	runIssue25408Phase(t, "SQL EXECUTE aggregate signed range", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
 		_, err = conn.ExecContext(ctx, `prepare signed_aggregate from 'select make_set((select max(?) from issue_25408_pagination.page),"a","b")'`)
 		require.NoError(t, err)
-		defer func() {
-			_, err := conn.ExecContext(ctx, "deallocate prepare signed_aggregate")
-			require.NoError(t, err)
-		}()
+		defer deallocateIssue25408(t, ctx, conn, "signed_aggregate")
 		for _, tc := range []struct {
 			source, want string
 			wantErr      bool
@@ -495,14 +466,14 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			var got string
 			err = conn.QueryRowContext(ctx, "execute signed_aggregate using @signed_aggregate").Scan(&got)
 			if tc.wantErr {
-				require.Error(t, err)
+				requireIssue25408MySQLError(t, err, moerr.ER_DATA_OUT_OF_RANGE)
 				continue
 			}
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		}
 	})
-	t.Run("SQL EXECUTE IFNULL grouped subquery common value", func(t *testing.T) {
+	runIssue25408Phase(t, "SQL EXECUTE IFNULL grouped subquery common value", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
@@ -510,10 +481,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		require.NoError(t, err)
 		_, err = conn.ExecContext(ctx, `prepare grouped_ifnull from 'select hex(char(ifnull((select ? from issue_25408_pagination.page group by 1 limit 1),1.5e0)))'`)
 		require.NoError(t, err)
-		defer func() {
-			_, err := conn.ExecContext(ctx, "deallocate prepare grouped_ifnull")
-			require.NoError(t, err)
-		}()
+		defer deallocateIssue25408(t, ctx, conn, "grouped_ifnull")
 		var got string
 		require.NoError(t, conn.QueryRowContext(ctx, "execute grouped_ifnull using @grouped_value").Scan(&got))
 		require.Equal(t, "02", got)
@@ -526,7 +494,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		require.NoError(t, conn.QueryRowContext(ctx, "execute grouped_ifnull using @grouped_value").Scan(&got))
 		require.Equal(t, "FFFFFFFE", got)
 	})
-	t.Run("COM_STMT numeric and text coalesce", func(t *testing.T) {
+	runIssue25408Phase(t, "COM_STMT numeric and text coalesce", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
@@ -550,7 +518,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 				want  string
 			}{{"A", "41"}, {nil, "66616C6C6261636B"}}},
 		} {
-			t.Run(tc.query, func(t *testing.T) {
+			runIssue25408Subtest(t, tc.query, func(t *testing.T) {
 				stmt, err := conn.PrepareContext(ctx, tc.query)
 				require.NoError(t, err)
 				defer stmt.Close()
@@ -562,23 +530,20 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			})
 		}
 	})
-	t.Run("SQL execute binary coalesce", func(t *testing.T) {
+	runIssue25408Phase(t, "SQL execute binary coalesce", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
 		_, err = conn.ExecContext(ctx, `prepare hex_binary_coalesce from 'select hex(coalesce(?, binary \'fallback\'))'`)
 		require.NoError(t, err)
-		defer func() {
-			_, err := conn.ExecContext(ctx, "deallocate prepare hex_binary_coalesce")
-			require.NoError(t, err)
-		}()
+		defer deallocateIssue25408(t, ctx, conn, "hex_binary_coalesce")
 		_, err = conn.ExecContext(ctx, `set @hex_binary_value=binary 'A\0B'`)
 		require.NoError(t, err)
 		var got string
 		require.NoError(t, conn.QueryRowContext(ctx, "execute hex_binary_coalesce using @hex_binary_value").Scan(&got))
 		require.Equal(t, "410042", got)
 	})
-	t.Run("binary decimal descriptor", func(t *testing.T) {
+	runIssue25408Phase(t, "binary decimal descriptor", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 		var mu sync.Mutex
 		var wire *issue28989TemporalTypeConn
 		const network = "bitintegerdecimal"
@@ -597,9 +562,9 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		rawDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@%s(127.0.0.1:%d)/?interpolateParams=false", network, port))
 		require.NoError(t, err)
 		defer rawDB.Close()
-		rawDB.SetMaxOpenConns(1)
-		rawDB.SetMaxIdleConns(1)
-		stmt, err := rawDB.PrepareContext(ctx, `select export_set(?,"Y","N","",4)`) //nolint:sqlclosecheck // stmt closed via outer defer; not tracked across t.Run subtest closures
+		conn := issue25408Conn(t, ctx, rawDB)
+		defer conn.Close()
+		stmt, err := conn.PrepareContext(ctx, `select export_set(?,"Y","N","",4)`) //nolint:sqlclosecheck // stmt closed via outer defer; not tracked across t.Run subtest closures
 		require.NoError(t, err)
 		defer stmt.Close()
 		mu.Lock()
@@ -613,21 +578,21 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			{"1.40", "YNNN", false}, {"1.400", "YNNN", false}, {"1.5", "NYNN", false},
 			{"-1.5", "NYYY", false}, {"9223372036854775808", "", true}, {"2.5", "YYNN", false},
 		} {
-			t.Run(tc.decimal, func(t *testing.T) {
+			runIssue25408Subtest(t, tc.decimal, func(t *testing.T) {
 				payload := append([]byte{byte(len(tc.decimal))}, tc.decimal...)
 				captured.rewriteNext(defines.MYSQL_TYPE_NEWDECIMAL, payload)
 				var got string
 				err := stmt.QueryRowContext(ctx, "placeholder").Scan(&got)
 				require.True(t, captured.wasRewritten())
 				if tc.wantErr {
-					require.Error(t, err)
+					requireIssue25408MySQLError(t, err, moerr.ER_DATA_OUT_OF_RANGE)
 					return
 				}
 				require.NoError(t, err)
 				require.Equal(t, tc.want, got)
 			})
 		}
-		ifnullStmt, err := rawDB.PrepareContext(ctx, `select hex(ifnull(?,1.5e0))`)
+		ifnullStmt, err := conn.PrepareContext(ctx, `select hex(ifnull(?,1.5e0))`)
 		require.NoError(t, err)
 		defer ifnullStmt.Close()
 		captured.rewriteNext(defines.MYSQL_TYPE_NEWDECIMAL, []byte{3, '2', '.', '5'})
@@ -636,7 +601,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		require.True(t, captured.wasRewritten())
 		require.Equal(t, "2", got)
 
-		aggregateStmt, err := rawDB.PrepareContext(ctx,
+		aggregateStmt, err := conn.PrepareContext(ctx,
 			`select make_set((select max(?) from issue_25408_pagination.page),"a","b")`)
 		require.NoError(t, err)
 		defer aggregateStmt.Close()
@@ -646,6 +611,6 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		captured.rewriteNext(defines.MYSQL_TYPE_NEWDECIMAL, append([]byte{byte(len(decimal))}, decimal...))
 		err = aggregateStmt.QueryRowContext(ctx, "placeholder").Scan(&got)
 		require.True(t, captured.wasRewritten())
-		require.Error(t, err)
+		requireIssue25408MySQLError(t, err, moerr.ER_DATA_OUT_OF_RANGE)
 	})
 }

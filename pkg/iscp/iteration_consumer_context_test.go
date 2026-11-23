@@ -500,3 +500,59 @@ func TestRunISCPTaskIterationConsumersSiblingFailureDoesNotFailHealthyConsumer(t
 	require.NotZero(t, statuses[1].ErrorCode)
 	require.Contains(t, statuses[1].ErrorMsg, "sibling failed")
 }
+
+type fencedFailingIterationConsumer struct {
+	runtime *ISCPTaskExecutor
+	key     JobRuntimeKey
+}
+
+func (c fencedFailingIterationConsumer) Consume(context.Context, DataRetriever) error {
+	// Reproduce the interval after DDL publishes the fence and before it
+	// enumerates running handles. This failure can unregister first.
+	c.runtime.InstallJobFence(c.key, time.Minute)
+	return errors.New("fenced sibling failed")
+}
+
+func TestFencedConsumerFailureReleasesSharedReader(t *testing.T) {
+	exec := newRuntimeTestExecutor()
+	iter := testIterationContext("failing", "healthy")
+	key := NewJobRuntimeKey(iter.accountID, iter.tableID, iter.jobNames[0], iter.jobIDs[0])
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	step := 0
+	changes := &iterationChangesHandle{next: func(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+		step++
+		if step == 1 {
+			return tailGroupBatch(mp, 1, 20), nil, engine.ChangesHandle_Tail_done, nil
+		}
+		return nil, nil, engine.ChangesHandle_Tail_done, nil
+	}}
+	healthy := new(recordingTailConsumer)
+	statuses := []*JobStatus{{}, {}}
+	go func() {
+		defer close(done)
+		packer := types.NewPacker()
+		defer packer.Close()
+		runISCPTaskIterationConsumers(ctx, exec, iter, changes,
+			[]Consumer{fencedFailingIterationConsumer{runtime: exec, key: key}, healthy},
+			statuses, ISCPDataType_Tail, packer, mp, 1, 0, 1, 0)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the fenced sibling blocked the shared reader")
+	}
+	require.True(t, exec.IsJobFenced(key))
+	require.Len(t, healthy.groups, 1, "the live peer should receive its batch and complete")
+	require.Zero(t, statuses[1].ErrorCode)
+	require.Equal(t, "fenced sibling failed", statuses[0].ErrorMsg)
+	require.Zero(t, mp.CurrNB())
+}

@@ -140,7 +140,8 @@ func TestMysqlSinkerTransactionErrorReplaysWholeRange(t *testing.T) {
 			code  uint16
 			whole bool
 		}{
-			{"deadlock", 1213, true}, {"timeout statement rollback", 1205, false}, {"timeout transaction rollback", 1205, true},
+			{"deadlock", 1213, true}, {"MO deadlock", moerr.ErrDeadLockDetected, true},
+			{"timeout statement rollback", 1205, false}, {"timeout transaction rollback", 1205, true},
 		} {
 			for _, mode := range []string{"snapshot", "incremental"} {
 				t.Run(backend+"/"+fault.name+"/"+mode, func(t *testing.T) {
@@ -341,6 +342,8 @@ func TestExecutorTransactionalFailureAndStandaloneRetry(t *testing.T) {
 func TestMysqlSinkerPreservesClassifiedErrorCauses(t *testing.T) {
 	for _, cause := range []error{
 		&mysql.MySQLError{Number: 1213}, &gomysql.MySQLError{Number: 1205},
+		moerr.NewDeadLockDetectedNoCtx(),
+		&mysql.MySQLError{Number: moerr.ErrDeadLockDetected}, &gomysql.MySQLError{Number: moerr.ErrDeadLockDetected},
 		errors.Join(context.Canceled, context.DeadlineExceeded),
 		errors.Join(&OwnerFenceLostError{}, &mysql.MySQLError{Number: 2013}),
 	} {

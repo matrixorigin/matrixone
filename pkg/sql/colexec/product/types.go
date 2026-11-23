@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -38,15 +37,17 @@ type container struct {
 	buildBatIdx int
 	buildRowIdx int
 	rbat        *batch.Batch
-	inBat       *batch.Batch
-	mp          *message.JoinMap
+	// rbatMP is the pool rbat was created with (the result view).
+	rbatMP *mpool.MPool
+	inBat  *batch.Batch
+	mp     *message.JoinMap
 }
 
 const (
 	productAllocationSiteResultData mpool.AllocationSite = iota + 94
 	productAllocationSiteResultArea
-	productAllocationSiteResultNulls
-	productAllocationSiteResultGrouping
+	_ // reserved: was productAllocationSiteResultNulls
+	_ // reserved: was productAllocationSiteResultGrouping
 )
 
 type Product struct {
@@ -56,7 +57,7 @@ type Product struct {
 	JoinMapTag int32
 
 	allocationAccount *mpool.AllocationAccount
-	resultAllocation  *vector.AllocationAccountSelection
+	resultAllocation  *mpool.AccountBinding
 
 	vm.OperatorBase
 }
@@ -78,13 +79,10 @@ func (product *Product) SetAllocationAccount(
 	if product.allocationAccount == account {
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		productAllocationSiteResultData,
-		productAllocationSiteResultArea,
-		productAllocationSiteResultNulls,
-		productAllocationSiteResultGrouping,
 	)
 	if err != nil {
 		return err
@@ -149,8 +147,9 @@ func (product *Product) Free(proc *process.Process, pipelineFailed bool, err err
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(mp)
+		ctr.rbat.Clean(ctr.rbatMP)
 		ctr.rbat = nil
+		ctr.rbatMP = nil
 	}
 	if ctr.mp != nil {
 		ctr.mp.Free()

@@ -66,13 +66,13 @@ func TestIssueAccountCleanupIndependentBudgets(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 		for _, account := range []string{"first-account", "second-account"} {
 			mock.ExpectExec("drop account if exists " + sqlquote.Ident(account)).
-				WillDelayFor(35 * time.Second).WillReturnResult(sqlmock.NewResult(0, 1))
+				WillDelayFor(100 * time.Second).WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectQuery(issueAccountAbsentSQL).WithArgs(account).
-				WillDelayFor(5 * time.Second).WillReturnRows(sqlmock.NewRows([]string{"remaining"}).AddRow(0))
+				WillDelayFor(100 * time.Second).WillReturnRows(sqlmock.NewRows([]string{"remaining"}).AddRow(0))
 		}
 		started := time.Now()
 		require.NoError(t, cleanupIssueAccounts(db, "first-account", "second-account"))
-		require.Equal(t, 80*time.Second, time.Since(started), "must exceed the old shared 45-second cleanup budget")
+		require.Equal(t, 400*time.Second, time.Since(started), "valid cleanup can exceed either caller's workload budget")
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
@@ -129,4 +129,38 @@ func TestIssueAccountCleanupVerificationHasFreshBudget(t *testing.T) {
 		require.Equal(t, issueCleanupOperationTimeout+4*time.Second, time.Since(started))
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
+}
+
+func TestIssue28079RefreshCleanupPreservesUnknownOutcome(t *testing.T) {
+	for _, failure := range []string{"remaining account", "verification error"} {
+		t.Run(failure, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+				require.NoError(t, err)
+				defer db.Close()
+				mock.ExpectExec("drop account if exists `first`").
+					WillDelayFor(issueCleanupOperationTimeout + time.Second).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("drop account if exists `next`").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery(issueAccountAbsentSQL).WithArgs("next").
+					WillReturnRows(sqlmock.NewRows([]string{"remaining"}).AddRow(0))
+				query := mock.ExpectQuery("select count(*) from mo_catalog.mo_account where account_name in (?, ?)").
+					WithArgs("first", "next")
+				readErr := errors.New("catalog verification failed")
+				if failure == "verification error" {
+					query.WillReturnError(readErr)
+				} else {
+					query.WillReturnRows(sqlmock.NewRows([]string{"remaining"}).AddRow(1))
+				}
+				err = cleanupIssue28079RefreshAccounts(db, "first", "next")
+				require.ErrorIs(t, err, sqlmock.ErrCancelled, "preserve the unknown DROP result")
+				if failure == "verification error" {
+					require.ErrorIs(t, err, readErr)
+				} else {
+					require.ErrorContains(t, err, "left 1 rows")
+				}
+				require.NoError(t, mock.ExpectationsWereMet(), "later cleanup and verification must run without retrying DROP")
+			})
+		})
+	}
 }

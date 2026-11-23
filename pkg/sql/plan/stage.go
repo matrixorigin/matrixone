@@ -29,6 +29,30 @@ var (
 	}
 )
 
+var descFileColDefs = []*plan.ColDef{
+	{Name: "file", Typ: makeGeneratedPlan2Type(types.T_varchar, types.MaxVarcharLen, 0, false)},
+	{Name: "size", Typ: makeGeneratedPlan2Type(types.T_int64, 0, 0, false)},
+	{Name: "is_dir", Typ: makeGeneratedPlan2Type(types.T_bool, 0, 0, false)},
+}
+
+// buildDescFile builds desc_file(path): the name, size and directory flag of the file path names,
+// or of the entries of the directory or the files matching the pattern it names.
+func (builder *QueryBuilder) buildDescFile(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table",
+			TblFunc:   &plan.TableFunction{Name: "desc_file"},
+			Cols:      DeepCopyColDefList(descFileColDefs),
+		},
+		BindingTags:     []int32{builder.genNewBindTag()},
+		Children:        children,
+		TblFuncExprList: exprs,
+	}
+	return builder.appendNode(node, ctx), nil
+}
+
 func (builder *QueryBuilder) buildStageList(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	colDefs := DeepCopyColDefList(stageListColDefs)
 	node := &plan.Node{

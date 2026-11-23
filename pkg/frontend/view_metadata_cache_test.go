@@ -30,7 +30,7 @@ func TestViewMetadataCacheRetainsScanSnapshot(t *testing.T) {
 	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
 		NodeType: plan.Node_TABLE_SCAN, ObjRef: ref, TableDef: def, ScanSnapshot: snapshot,
 	}}}}}
-	changed, err := checkModify(p, func(db, name string, got *plan2.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	changed, err := checkModify(p, func(db, name string, got *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 		require.Equal(t, "db", db)
 		require.Equal(t, "src", name)
 		require.Equal(t, snapshot, got, "a current object must not replace a captured historical dependency")
@@ -62,7 +62,7 @@ func TestViewMetadataCacheValidatesResolutionIdentity(t *testing.T) {
 				tc.mutate(current, def)
 			}
 			p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{CatalogDependencies: []*plan.ObjectRef{ref}}}}
-			changed, err := checkModify(p, func(db, name string, _ *plan2.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+			changed, err := checkModify(p, func(db, name string, _ *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 				require.Equal(t, "sub", db)
 				require.Equal(t, "v", name)
 				return current, def, nil
@@ -79,7 +79,7 @@ func TestViewMetadataCacheRebindsPublisherOnlyDependencies(t *testing.T) {
 	// without an account-aware resolver, rebuild in the isolated binder.
 	ref := &plan.ObjectRef{SchemaName: "publisher_db", ObjName: "src", PubInfo: &plan.PubInfo{TenantId: 42}}
 	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{CatalogDependencies: []*plan.ObjectRef{ref}}}}
-	changed, err := checkModify(p, func(string, string, *plan2.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	changed, err := checkModify(p, func(string, string, *plan2.Snapshot, *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 		t.Fatal("must not resolve the publisher's physical database in the subscriber")
 		return nil, nil, nil
 	})
@@ -115,7 +115,7 @@ func TestViewMetadataCacheDeduplicatesResolutionNotEvidence(t *testing.T) {
 			}}}
 			calls := 0
 			for i := 1; i <= 2; i++ {
-				changed, err := checkModify(p, func(string, string, *plan2.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+				changed, err := checkModify(p, func(string, string, *plan2.Snapshot, *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 					calls++
 					return ref, def, nil
 				})
@@ -130,7 +130,7 @@ func TestViewMetadataCacheDeduplicatesResolutionNotEvidence(t *testing.T) {
 func TestViewMetadataCacheRejectsNewPublisherIdentity(t *testing.T) {
 	ref := &plan.ObjectRef{SchemaName: "db", ObjName: "v", Db: 2, Obj: 7, Server: 3}
 	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{CatalogDependencies: []*plan.ObjectRef{ref}}}}
-	changed, err := checkModify(p, func(string, string, *plan2.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	changed, err := checkModify(p, func(string, string, *plan2.Snapshot, *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 		current := plan2.DeepCopyObjectRef(ref)
 		current.PubInfo = &plan.PubInfo{TenantId: 42}
 		return current, &plan.TableDef{DbId: 2, TblId: 7, Version: 3}, nil

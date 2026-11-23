@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -59,7 +60,7 @@ func (e *fulltext2FlushSQLExecutor) Exec(_ context.Context, sql string, _ execut
 	upper := strings.ToUpper(strings.TrimSpace(sql))
 	if strings.HasPrefix(upper, "SELECT GREATEST") {
 		b := batch.NewWithSize(1)
-		b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), e.mp)
 		if err := vector.AppendFixed[int64](b.Vecs[0], e.nextChunk, false, e.mp); err != nil {
 			return executor.Result{}, err
 		}
@@ -183,6 +184,9 @@ func TestRunFulltext2RefreshesIdleCacheAfterNonEmptyCDCFlush(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	tx := executortest.NewMockTxnExecutor(ctrl)
 	exec.txn = tx
+	writeTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	writeTxn.EXPECT().Txn().Return(txn.TxnMeta{ID: []byte("ft2-flush")}).AnyTimes()
+	tx.EXPECT().Txn().Return(writeTxn).AnyTimes()
 	tx.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(sql string, opt executor.StatementOption) (executor.Result, error) {
 		if opt.HasParams() {
 			v, err := opt.Params(exec.mp)

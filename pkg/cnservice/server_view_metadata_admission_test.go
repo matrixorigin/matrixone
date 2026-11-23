@@ -32,6 +32,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -47,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1665,6 +1667,18 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 			failure := errors.New("derived view creation failed")
 			var s *service
 			var creates int
+			var created []string
+			viewName := func(sql string) string {
+				i := strings.Index(strings.ToUpper(sql), " VIEW ")
+				if i < 0 {
+					return sql
+				}
+				rest := sql[i+len(" VIEW "):]
+				if j := strings.Index(strings.ToUpper(rest), " AS "); j >= 0 {
+					rest = rest[:j]
+				}
+				return strings.TrimSpace(rest)
+			}
 			op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 			op.EXPECT().TxnOptions().DoAndReturn(func() txn.TxnOptions {
 				return txn.TxnOptions{CN: s.cfg.UUID}
@@ -1677,6 +1691,7 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 					require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
 					require.False(t, s.viewMetadataIngressReady.Load())
 					creates++
+					created = append(created, viewName(sql))
 					if fail {
 						return executor.Result{}, failure
 					}
@@ -1687,7 +1702,7 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 			s.sqlExecutor = exec
 			snapshot := *s.viewMetadataAdmission.Load()
 			snapshot.Ready = false
-			snapshot.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion118)
+			snapshot.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion126)
 			snapshot.CatalogFencedEpoch = 5
 			s.viewMetadataAdmission.Store(&snapshot)
 			t.Cleanup(func() { _ = s.Close() })
@@ -1697,11 +1712,101 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 				require.Equal(t, serviceClosed, s.lifecycle)
 				require.False(t, s.viewMetadataIngressReady.Load())
 				require.Equal(t, 1, creates)
+				require.Equal(t, []string{"information_schema.TABLES"}, created, "only the TABLES publish fails; the PARTITIONS rail and trace views never run")
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, 5, creates, "TABLES plus the four trace views")
+				require.Equal(t, 7, creates, "TABLES, VIEWS, PARTITIONS, and the four trace views")
+				require.Equal(t, "information_schema.TABLES", created[0], "the TABLES consumer publishes before the PARTITIONS refresh rail")
+				require.Equal(t, "information_schema.VIEWS", created[1])
+				require.Equal(t, "information_schema.`PARTITIONS`", created[2], "PARTITIONS reconciles before the four trace views")
 				require.True(t, s.viewMetadataIngressReady.Load())
 			}
+		})
+	}
+}
+
+func TestCNReconcilesStalePartitionsBeforeIngress(t *testing.T) {
+	for _, mode := range []string{"current", "stale", "read error", "replace error"} {
+		t.Run(mode, func(t *testing.T) {
+			failure := errors.New("partitions catalog operation failed")
+			var s *service
+			var current atomic.Bool
+			current.Store(mode == "current")
+			var creates atomic.Int32
+			oldPartitions := strings.Replace(sysview.InformationSchemaPartitionsDDL,
+				catalog.NonIndexRelationSQLPredicate("tbl"), "NOT startswith(`tbl`.`relname`, '__mo_index_')", 1)
+			require.NotEqual(t, sysview.InformationSchemaPartitionsDDL, oldPartitions)
+			stringResult := func(value string) executor.Result {
+				result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mpool.MustNewZero())
+				result.NewBatchWithRowCount(1)
+				executor.AppendStringRows(result, 0, []string{value})
+				return result.GetResult()
+			}
+			op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			op.EXPECT().TxnOptions().DoAndReturn(func() txn.TxnOptions {
+				return txn.TxnOptions{CN: s.cfg.UUID}
+			}).AnyTimes()
+			exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+				if sql == catalog.ViewMetadataLifecycleGateSQL {
+					return viewMetadataLifecycleGateTestResult(), nil
+				}
+				if strings.HasPrefix(sql, "select relkind from mo_catalog.mo_tables") {
+					return stringResult(catalog.SystemViewRel), nil
+				}
+				if strings.HasPrefix(sql, "SELECT tbl.rel_createsql") {
+					switch {
+					case strings.Contains(sql, "tbl.relname = 'TABLES'"):
+						return stringResult(sysview.InformationSchemaTablesCurrentDDL), nil
+					case strings.Contains(sql, "tbl.relname = 'VIEWS'"):
+						return stringResult(sysview.InformationSchemaViewsDDL), nil
+					case strings.Contains(sql, "tbl.relname = 'PARTITIONS'"):
+						if mode == "read error" {
+							return executor.Result{}, failure
+						}
+						if current.Load() {
+							return stringResult(sysview.InformationSchemaPartitionsDDL), nil
+						}
+						return stringResult(oldPartitions), nil
+					}
+				}
+				if strings.HasPrefix(sql, "CREATE VIEW ") || strings.HasPrefix(sql, "CREATE OR REPLACE VIEW ") {
+					require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
+					require.False(t, s.viewMetadataIngressReady.Load())
+					require.Contains(t, sql, "information_schema.`PARTITIONS`")
+					creates.Add(1)
+					if mode == "replace error" {
+						return executor.Result{}, failure
+					}
+					current.Store(true)
+				}
+				return executor.Result{}, nil
+			}, op)
+			s = newViewMetadataAdmissionStartService(t, &testBootService{}, exec, time.Second)
+			s.sqlExecutor = exec
+			snapshot := *s.viewMetadataAdmission.Load()
+			snapshot.Ready = false
+			snapshot.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion126)
+			snapshot.CatalogFencedEpoch = 5
+			s.viewMetadataAdmission.Store(&snapshot)
+			t.Cleanup(func() { _ = s.Close() })
+
+			err := s.Start()
+			if mode == "read error" || mode == "replace error" {
+				require.ErrorIs(t, err, failure)
+				require.Equal(t, serviceClosed, s.lifecycle)
+				require.False(t, s.viewMetadataIngressReady.Load())
+				return
+			}
+			require.NoError(t, err)
+			require.True(t, s.viewMetadataIngressReady.Load())
+			wantCreates := int32(0)
+			if mode == "stale" {
+				wantCreates = 1
+			}
+			require.Equal(t, wantCreates, creates.Load())
+			complete, err := bootstrap.SystemViewsExist(t.Context(), exec)
+			require.NoError(t, err)
+			require.True(t, complete)
 		})
 	}
 }
@@ -1804,6 +1909,23 @@ func (e existingSystemViewsTxn) Exec(sql string, opts executor.StatementOption) 
 		result.NewBatchWithRowCount(1)
 		executor.AppendStringRows(result, 0, []string{catalog.SystemViewRel})
 		return result.GetResult(), nil
+	}
+	if strings.HasPrefix(sql, "SELECT tbl.rel_createsql") {
+		definition := ""
+		switch {
+		case strings.Contains(sql, "tbl.relname = 'TABLES'"):
+			definition = sysview.InformationSchemaTablesCurrentDDL
+		case strings.Contains(sql, "tbl.relname = 'PARTITIONS'"):
+			definition = sysview.InformationSchemaPartitionsDDL
+		case strings.Contains(sql, "tbl.relname = 'VIEWS'"):
+			definition = sysview.InformationSchemaViewsDDL
+		}
+		if definition != "" {
+			result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mpool.MustNewZero())
+			result.NewBatchWithRowCount(1)
+			executor.AppendStringRows(result, 0, []string{definition})
+			return result.GetResult(), nil
+		}
 	}
 	return e.TxnExecutor.Exec(sql, opts)
 }

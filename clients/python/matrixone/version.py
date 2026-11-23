@@ -27,6 +27,7 @@ Features:
 """
 
 import functools
+import inspect
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -498,8 +499,7 @@ def requires_version(
     """
 
     def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def check_version(args) -> bool:
             owner = args[0] if args else None
             manager = getattr(owner, '_version_manager', None)
             if not isinstance(manager, VersionManager):
@@ -531,9 +531,23 @@ def requires_version(
                 else:
                     # Log warning and return None or default value
                     print(f"Warning: Feature '{feature}' is not available in current backend version")
-                    return None
+                    return False
 
-            return func(*args, **kwargs)
+            return True
+
+        if inspect.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def wrapper(*args, **kwargs):
+                if not check_version(args):
+                    return None
+                return await func(*args, **kwargs)
+
+        else:
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                if not check_version(args):
+                    return None
+                return func(*args, **kwargs)
 
         # Add metadata to the function
         wrapper._version_requirement = {

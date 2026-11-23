@@ -1,0 +1,98 @@
+set @saved_enable_privilege_cache = @@global.enable_privilege_cache;
+select @saved_enable_privilege_cache;
+➤ @saved_enable_privilege_cache[-1,16383,0]  𝄀
+1
+set global enable_privilege_cache = off;
+drop database if exists bare_grant_bvt;
+create database bare_grant_bvt;
+use bare_grant_bvt;
+create table tgt (a int);
+insert into tgt values (1), (2), (3);
+create table other (b int);
+insert into other values (7);
+drop role if exists r_bare;
+create role r_bare;
+drop user if exists u_bare;
+create user u_bare identified by '111' default role r_bare;
+grant connect on account * to r_bare;
+grant show databases on account * to r_bare;
+grant show tables on database bare_grant_bvt to r_bare;
+grant select on bare_grant_bvt.tgt to r_bare;
+use bare_grant_bvt;
+select a from tgt order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select * from other;
+internal error: do not have privilege to execute the statement
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+revoke select on bare_grant_bvt.tgt from r_bare;
+use bare_grant_bvt;
+select a from tgt;
+internal error: do not have privilege to execute the statement
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+use bare_grant_bvt;
+select a from tgt;
+internal error: do not have privilege to execute the statement
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+grant select on bare_grant_bvt.* to r_bare;
+use bare_grant_bvt;
+select a from tgt order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select * from other;
+➤ b[4,32,0]  𝄀
+7
+revoke select on bare_grant_bvt.* from r_bare;
+use bare_grant_bvt;
+select a from tgt;
+internal error: do not have privilege to execute the statement
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+grant select, insert, update on bare_grant_bvt.tgt to r_bare with grant option;
+use bare_grant_bvt;
+insert into tgt values (4);
+select a from tgt order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+revoke select, insert, update on table bare_grant_bvt.tgt from r_bare;
+use bare_grant_bvt;
+select a from tgt;
+internal error: do not have privilege to execute the statement
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+grant select on bare_grant_bvt.tgt to no_such_role;
+internal error: there is no role no_such_role
+use bare_grant_bvt;
+select a from tgt;
+internal error: do not have privilege to execute the statement
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+select count(*) from tgt;
+➤ count(*)[-5,64,0]  𝄀
+4
+select * from other;
+➤ b[4,32,0]  𝄀
+7
+drop user if exists u_bare;
+drop role if exists r_bare;
+drop database if exists bare_grant_bvt;
+set global enable_privilege_cache = @saved_enable_privilege_cache;
+select @@global.enable_privilege_cache;
+➤ @@global.enable_privilege_cache[-1,16383,0]  𝄀
+1

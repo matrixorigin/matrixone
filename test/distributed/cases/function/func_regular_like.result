@@ -257,7 +257,7 @@ HEX(REGEXP_SUBSTR(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) 
 REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'xb'), '^\\n$\\nx', 'm') AS crlf_assertion_sealed_m,
 REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'xb'), '^\\n\\nx', 'm') AS crlf_adjacent_run_m;
 crlf_sealed_single_m    crlf_exempt_run_m    crlf_exempt_run_instr_m    crlf_exempt_run_substr_m    crlf_assertion_sealed_m    crlf_adjacent_run_m
-0    1    3    0A78    0    1
+0    0    3    0A78    0    0
 SELECT REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b'), '(?=[\\s\\S])^b', 'm') AS r2_cr_m,
 REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b'), '(?=[\\s\\S])^b', 'mu') AS r2_cr_mu,
 REGEXP_LIKE(CONCAT('a', CONVERT(UNHEX('E280A8') USING utf8mb4), 'b'), '(?=[\\s\\S])^b', 'm') AS r2_ls_m,

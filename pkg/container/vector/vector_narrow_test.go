@@ -30,7 +30,7 @@ func exerciseNarrowArray[T types.ArrayElement](t *testing.T, oid types.T, a, b [
 	dim := int32(len(a))
 
 	// AppendArray (value + null) then AppendArrayList
-	vec := NewVec(types.New(oid, dim, 0))
+	vec := NewVec(types.New(oid, dim, 0), mp)
 	require.NoError(t, AppendArray[T](vec, a, false, mp))
 	require.NoError(t, AppendArray[T](vec, nil, true, mp)) // null row
 	require.NoError(t, AppendArrayList[T](vec, [][]T{a, b}, nil, mp))
@@ -50,32 +50,32 @@ func exerciseNarrowArray[T types.ArrayElement](t *testing.T, oid types.T, a, b [
 	cv.Free(mp)
 
 	// SetConstArray
-	sv := NewVec(types.New(oid, dim, 0))
+	sv := NewVec(types.New(oid, dim, 0), mp)
 	require.NoError(t, SetConstArray[T](sv, b, 3, mp))
 	require.Equal(t, b, GetArrayAt[T](sv, 0))
 	sv.Free(mp)
 
 	// single-row String()/RowToString — the len(col)==1 narrow branch
-	one := NewVec(types.New(oid, dim, 0))
+	one := NewVec(types.New(oid, dim, 0), mp)
 	require.NoError(t, AppendArray[T](one, a, false, mp))
 	_ = one.String()
 	_ = one.RowToString(0)
 	one.Free(mp)
 
 	// InplaceSort narrow branch (unsorted input with a duplicate)
-	srt := NewVec(types.New(oid, dim, 0))
+	srt := NewVec(types.New(oid, dim, 0), mp)
 	require.NoError(t, AppendArrayList[T](srt, [][]T{b, a, a}, nil, mp))
-	srt.InplaceSort()
+	require.NoError(t, srt.InplaceSort(mp))
 	srt.Free(mp)
 
 	// InplaceSortAndCompact narrow branch (sort + dedup)
-	cmp := NewVec(types.New(oid, dim, 0))
+	cmp := NewVec(types.New(oid, dim, 0), mp)
 	require.NoError(t, AppendArrayList[T](cmp, [][]T{b, a, a}, nil, mp))
-	cmp.InplaceSortAndCompact()
+	require.NoError(t, cmp.InplaceSortAndCompact(mp))
 	cmp.Free(mp)
 
 	// GetMinMaxValue narrow branch
-	mm := NewVec(types.New(oid, dim, 0))
+	mm := NewVec(types.New(oid, dim, 0), mp)
 	require.NoError(t, AppendArrayList[T](mm, [][]T{a, b}, nil, mp))
 	_, _, _ = mm.GetMinMaxValue()
 	mm.Free(mp)

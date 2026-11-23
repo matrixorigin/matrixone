@@ -186,7 +186,7 @@ func TestDecimalCheckedCarrierProductRetainsFollowingDomain(t *testing.T) {
 	input := batch.NewWithSize(3)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
 	for i, typ := range []types.Type{leftType, rightType, tailType} {
-		input.Vecs[i] = vector.NewVec(typ)
+		input.Vecs[i] = vector.NewVec(typ, proc.Mp())
 	}
 	left, err := types.ParseDecimal128("18000000000000000000", 20, 0)
 	require.NoError(t, err)

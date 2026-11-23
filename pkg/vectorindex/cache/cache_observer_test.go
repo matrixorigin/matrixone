@@ -421,3 +421,56 @@ func TestVectorIndexCacheEvictEntrySkipsRenewedTTLAfterHousekeepingCheck(t *test
 
 // BuildTS stubs (fulltext2 async-freshness interface method).
 func (m *observerMock) BuildTS() int64 { return 0 }
+
+type generationFlagMock struct {
+	MockSearch
+	started       chan struct{}
+	release       chan struct{}
+	superseded    bool
+	sawSuperseded bool
+	hookCalls     int
+}
+
+func (m *generationFlagMock) OnCacheInvalidated(reason string) {
+	if m.started != nil {
+		close(m.started)
+		<-m.release
+	}
+	m.hookCalls++
+	m.superseded = true
+}
+
+func (m *generationFlagMock) Destroy() {
+	m.sawSuperseded = m.superseded
+	m.superseded = false
+}
+
+func TestVectorIndexSearchFailedLoadDestroySkipsLaterInvalidation(t *testing.T) {
+	mock := &generationFlagMock{}
+	s := newVectorIndexSearch(mock)
+	s.destroyFailedLoad()
+	s.notifyCacheInvalidated(ReasonGenerationChanged)
+	require.Zero(t, mock.hookCalls)
+	require.False(t, mock.superseded)
+}
+
+func TestVectorIndexSearchFailedLoadDestroyWaitsForInFlightInvalidation(t *testing.T) {
+	mock := &generationFlagMock{started: make(chan struct{}), release: make(chan struct{})}
+	s := newVectorIndexSearch(mock)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		s.notifyCacheInvalidated(ReasonGenerationChanged)
+	}()
+	<-mock.started
+	go func() {
+		defer wg.Done()
+		s.destroyFailedLoad()
+	}()
+	close(mock.release)
+	wg.Wait()
+	require.Equal(t, 1, mock.hookCalls)
+	require.True(t, mock.sawSuperseded)
+	require.False(t, mock.superseded)
+}

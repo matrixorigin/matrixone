@@ -38,7 +38,7 @@ func BenchmarkStringSourceDeclarationBinding(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if _, err := BuildPlan(ctx, stmt, false); err != nil {
+				if _, err := BuildPlan(ctx, stmt, false, nil); err != nil {
 					b.Fatal(err)
 				}
 			}

@@ -286,6 +286,7 @@ func newIndicatorValueRowFn(name string, vec *vector.Vector, ctx context.Context
 			return v, true, nil
 		}
 	}
+	// typeswitch:partial bf16/float16/float8/float4 arguments are cast to float32 when the window function binds
 	switch oid := vec.GetType().Oid; oid {
 	case types.T_int8:
 		col := vector.MustFixedColNoTypeCheck[int8](vec)
@@ -345,6 +346,9 @@ type indicatorRowFn func(row int, position int) (float64, bool, error)
 // every eval entry, at Window.Reset and at Window.Free (design section 5.2,
 // the three lifecycle reset points).
 type indicatorEvaluator struct {
+	// mp is the pool prefix grows through: Window's accounted view when an
+	// account is bound, otherwise proc's pool.
+	mp       *mpool.MPool
 	kernel   indicatorKernel
 	n        int
 	funcName string
@@ -384,9 +388,9 @@ type indicatorEvaluator struct {
 
 // freeVectors releases every mpool-held vector of the evaluator and clears
 // the stage seed rings.
-func (ev *indicatorEvaluator) freeVectors(mp *mpool.MPool) {
+func (ev *indicatorEvaluator) freeVectors(free func(*vector.Vector)) {
 	if ev.prefix != nil {
-		ev.prefix.Free(mp)
+		free(ev.prefix)
 		ev.prefix = nil
 	}
 	for i := range ev.stageSeed {
@@ -758,10 +762,10 @@ func (ev *indicatorEvaluator) advanceTo(
 			return err
 		}
 		if ev.kernel == kernelCumPositiveStreak {
-			if err := vector.AppendFixed(ev.prefix, int64(val), false, proc.Mp()); err != nil {
+			if err := vector.AppendFixed(ev.prefix, int64(val), false, ev.mp); err != nil {
 				return err
 			}
-		} else if err := vector.AppendFixed(ev.prefix, val, !defined, proc.Mp()); err != nil {
+		} else if err := vector.AppendFixed(ev.prefix, val, !defined, ev.mp); err != nil {
 			return err
 		}
 	}
@@ -785,7 +789,12 @@ func (ctr *container) newIndicatorEvaluator(
 		funcName: funcName,
 		retType:  types.MustTypeFromPlan(w.WindowFunc.Typ),
 	}
-	prefixVec, err := ctr.allocation.NewVector(ev.retType)
+	mp, err := ctr.allocation.MP(proc)
+	if err != nil {
+		return nil, err
+	}
+	ev.mp = mp
+	prefixVec, err := ctr.allocation.NewVector(proc, ev.retType)
 	if err != nil {
 		return nil, err
 	}
@@ -793,14 +802,14 @@ func (ctr *container) newIndicatorEvaluator(
 	srcVec := ctr.aggVecs[idx].Vec[0]
 	srcRowFn, err := newIndicatorValueRowFn(funcName, srcVec, proc.Ctx)
 	if err != nil {
-		ev.freeVectors(proc.Mp())
+		ev.freeVectors(func(v *vector.Vector) { ctr.allocation.FreeVector(proc, v) })
 		return nil, err
 	}
 	ev.rowFn = srcRowFn
 	if kernel != kernelCumPositiveStreak {
 		nVal, ok := getInt64FromVec(ctr.aggVecs[idx].Vec[1], 0)
 		if !ok || int(nVal) < indicatorMinPeriod || int(nVal) > indicatorMaxPeriod {
-			ev.freeVectors(proc.Mp())
+			ev.freeVectors(func(v *vector.Vector) { ctr.allocation.FreeVector(proc, v) })
 			return nil, moerr.NewInvalidInputf(proc.Ctx,
 				"period argument of %s must be a constant integer in [1, 1024]", funcName)
 		}
@@ -889,13 +898,13 @@ func (ctr *container) processIndicatorFuncRange(
 	if err = ev.advanceTo(proc, outputEnd, ctr.ps, ctr.bat.RowCount()); err != nil {
 		return nil, err
 	}
-	localResult, err := ctr.allocation.NewVector(retType)
+	localResult, err := ctr.allocation.NewVector(proc, retType)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		if err != nil && localResult != nil {
-			localResult.Free(proc.Mp())
+			ctr.allocation.FreeVector(proc, localResult)
 			result = nil
 		}
 	}()
@@ -903,7 +912,7 @@ func (ctr *container) processIndicatorFuncRange(
 		if err = checkCanceled(proc, j-outputStart); err != nil {
 			return nil, err
 		}
-		if err = localResult.UnionOne(ev.prefix, int64(j), proc.Mp()); err != nil {
+		if err = localResult.UnionOne(ev.prefix, int64(j), ev.mp); err != nil {
 			return nil, err
 		}
 	}
@@ -950,10 +959,10 @@ func (ctr *container) validateIndicatorPeriods(idx int, ap *Window, proc *proces
 
 // freeIndicatorState releases the indicator evaluators of every window
 // expression at the three lifecycle reset points (eval entry, Reset, Free).
-func (ctr *container) freeIndicatorState(mp *mpool.MPool) {
+func (ctr *container) freeIndicatorState(proc *process.Process) {
 	for _, ev := range ctr.indicatorEvals {
 		if ev != nil {
-			ev.freeVectors(mp)
+			ev.freeVectors(func(v *vector.Vector) { ctr.allocation.FreeVector(proc, v) })
 		}
 	}
 	ctr.indicatorEvals = nil

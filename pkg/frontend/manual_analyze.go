@@ -26,9 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type boundAnalyzeTable struct {
+	statement       *process.Process
 	ctx             context.Context
 	columns         tree.IdentifierList
 	relation        engine.AnalyzableRelation
@@ -70,6 +72,7 @@ func handleAnalyzeStatsStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeSt
 	ses.SetMysqlResultSet(mrs)
 	addAnalyzeResultColumns(mrs)
 	for _, table := range tables {
+		table.statement = execCtx.proc
 		result, err := analyzeBoundTable(ses, stmt.FullScan, table, publisher)
 		if err != nil {
 			return err
@@ -115,10 +118,11 @@ func analyzeBoundTable(
 	seed := sha256.Sum256([]byte(fmt.Sprintf(
 		"manual-analyze-v1/%d/%d/%d", table.key.AccId, table.key.DatabaseID, table.key.TableID)))
 	result, err := table.relation.AnalyzeTable(table.ctx, engine.AnalyzeTableRequest{
-		Process:  ses.proc,
-		Columns:  identifiersToStrings(table.columns),
-		FullScan: fullScan,
-		Seed:     seed,
+		Process:         ses.proc,
+		ResourceProcess: table.statement,
+		Columns:         identifiersToStrings(table.columns),
+		FullScan:        fullScan,
+		Seed:            seed,
 	})
 	if err != nil {
 		return nil, err
@@ -167,7 +171,7 @@ func bindAnalyzeTables(
 		if dbName == "" {
 			return nil, moerr.NewNoDB(execCtx.reqCtx)
 		}
-		obj, tableDef, err := tcc.Resolve(dbName, string(entry.Table.Name()), nil)
+		obj, tableDef, err := tcc.Resolve(dbName, string(entry.Table.Name()), nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -186,7 +190,7 @@ func bindAnalyzeTables(
 			return nil, moerr.NewNotSupported(execCtx.reqCtx,
 				"ANALYZE TABLE cannot publish statistics for an account-filtered table")
 		}
-		physicalCtx, relation, err := tcc.getRelation(dbName, string(entry.Table.Name()), nil, nil)
+		physicalCtx, relation, err := tcc.getRelation(dbName, string(entry.Table.Name()), nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}

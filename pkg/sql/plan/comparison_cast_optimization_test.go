@@ -1847,7 +1847,7 @@ func TestDecimalFloatOptimizedFilterResults(t *testing.T) {
 				require.NoError(t, err)
 				proc := mock.ctxt.GetProcess()
 				input := batch.NewWithSize(1)
-				input.Vecs[0] = vector.NewVec(tc.column)
+				input.Vecs[0] = vector.NewVec(tc.column, proc.Mp())
 				defer input.Clean(proc.Mp())
 				if tc.column.Oid == types.T_float32 {
 					value, err := strconv.ParseFloat(tc.row, 32)

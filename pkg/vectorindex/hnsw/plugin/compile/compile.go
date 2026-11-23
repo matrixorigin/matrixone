@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/maintenance"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -81,7 +82,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		}
 	}
 
-	if len(indexDefs) != 2 && len(indexDefs) != 3 {
+	if len(indexDefs) < 2 || len(indexDefs) > 4 {
 		return moerr.NewInternalErrorNoCtx("invalid hnsw index table definition")
 	}
 	metaDef, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
@@ -141,7 +142,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 			return err
 		}
 		for _, sql := range sqls {
-			if err = ctx.RunSql(sql); err != nil {
+			if err = maintenance.RunSQL(ctx, sql, "hnsw_create", indexName); err != nil {
 				return err
 			}
 		}
@@ -209,6 +210,7 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 		catalog.HnswEfConstruction,
 		catalog.HnswEfSearch,
 		catalog.IndexAlgoParamMaxIndexCapacity,
+		catalog.IndexAlgoParamMaxBadRecords,
 	)
 }
 
@@ -257,6 +259,9 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 	if dict, ok := indexDefs[catalog.Hnsw_TblType_Dict]; ok {
 		sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, dict.IndexTableName)))
 	}
+	if ignored, ok := indexDefs[catalog.IndexIgnored_TblType]; ok {
+		sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, ignored.IndexTableName)))
+	}
 	return sqls, nil
 }
 
@@ -293,6 +298,14 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	if dict, ok := indexDefs[catalog.Hnsw_TblType_Dict]; ok {
 		cfg.DictTable = dict.IndexTableName
 	}
+	if ignored, ok := indexDefs[catalog.IndexIgnored_TblType]; ok {
+		cfg.IgnoredTable = ignored.IndexTableName
+	}
+	maxBadRecords, err := catalog.IndexParamMaxBadRecords(idx.IndexAlgoParams)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxBadRecords = maxBadRecords
 
 	threads, err := ctx.ResolveVariable("hnsw_threads_build", true, false)
 	if err != nil {

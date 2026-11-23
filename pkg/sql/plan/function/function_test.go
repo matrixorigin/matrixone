@@ -718,7 +718,8 @@ func TestMakeTimeReturnScale(t *testing.T) {
 func TestTimeArithmeticFloatDurationKeepsFractionalPrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, name := range []string{"addtime", "subtime"} {
-		for _, floatType := range []types.T{types.T_float32, types.T_float64} {
+		for _, floatType := range []types.T{types.T_float32, types.T_float64,
+			types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
 			result, err := GetFunctionByName(proc.Ctx, name, []types.Type{
 				types.T_time.ToType(), floatType.ToType(),
 			})
@@ -1111,9 +1112,9 @@ func TestMinConditionalStringsUsesPropagatedBinaryCollation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	narrowType := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
 	wideType := types.NewWithCharset(types.T_varchar, 80, 0, types.CharsetUTF8MB4Bin)
-	narrow := vector.NewVec(narrowType)
+	narrow := vector.NewVec(narrowType, proc.Mp())
 	defer narrow.Free(proc.Mp())
-	wide := vector.NewVec(wideType)
+	wide := vector.NewVec(wideType, proc.Mp())
 	defer wide.Free(proc.Mp())
 	for _, value := range []string{"a", "B"} {
 		require.NoError(t, vector.AppendBytes(narrow, []byte(value), false, proc.Mp()))
@@ -1199,7 +1200,7 @@ func TestDerivedStringFunctionsPreserveSourceCollation(t *testing.T) {
 func TestMinConvertUsingAndSubstringUseDerivedCollation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputType := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
-	input := vector.NewVec(inputType)
+	input := vector.NewVec(inputType, proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(input, []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(input, []byte("B"), false, proc.Mp()))
@@ -1259,7 +1260,7 @@ func TestMinConvertUsingAndSubstringUseDerivedCollation(t *testing.T) {
 func TestMinConcatUsesPropagatedBinaryCollation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputType := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
-	input := vector.NewVec(inputType)
+	input := vector.NewVec(inputType, proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(input, []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(input, []byte("B"), false, proc.Mp()))
@@ -1469,6 +1470,7 @@ func TestGetFunctionValueUnstableByID(t *testing.T) {
 		CONVERT: true, DATEDIFF: true, UNIX_TIMESTAMP: true,
 		EXTRACTVALUE: true, UPDATEXML: true, UNCOMPRESS: true, UNCOMPRESSED_LENGTH: true,
 		AES_ENCRYPT: true, AES_DECRYPT: true, CAST_ASSIGN: true, CAST_IGNORE: true,
+		CAST:                true, // TemporalCastIntegerOverload reads a statement-stable session mode.
 		CAST_INDEX_TO_VALUE: true, CAST_VALUE_TO_INDEX: true, CAST_INDEX_VALUE_TO_INDEX: true,
 		CAST_INDEX_TO_SET_VALUE: true, CAST_SET_VALUE_TO_INDEX: true, CAST_SET_INDEX_VALUE_TO_INDEX: true,
 		CAST_GEOMETRY_TO_SUBTYPE: true, CAST_JSON_TO_ARRAY: true, CAST_NANO_TO_TIMESTAMP: true,
@@ -1491,12 +1493,16 @@ func TestGetFunctionValueUnstableByID(t *testing.T) {
 		// Actual slice positions, not legacy overloadId labels, form wire IDs.
 		for index, ov := range fn.Overloads {
 			id := EncodeOverloadID(int32(fn.functionId), int32(index))
-			wantStable := stable[int32(fn.functionId)] && ov.IsVolatile()
+			// Temporal bound helpers are statement-stable real-time scalars, not
+			// legacy volatile/no-fold functions. Their own scalar policy is tested
+			// independently in TestZoneMapTemporalHelperScalarPolicy.
+			temporalScalar := fn.functionId == TEMPORAL_DATETIME_BOUND || fn.functionId == TEMPORAL_TIMESTAMP_BOUND
+			wantStable := temporalScalar || stable[int32(fn.functionId)] && ov.IsVolatile()
 			require.Equal(t, wantStable, ov.executionStable, "function %d overload %d", fn.functionId, index)
 			unstable, known := GetFunctionValueUnstableByID(id)
 			require.True(t, known)
 			require.Equal(t, ov.IsVolatile() && !wantStable, unstable, "function %d overload %d", fn.functionId, index)
-			if wantStable {
+			if wantStable && ov.IsVolatile() {
 				annotated++
 				require.True(t, ov.CannotFold(), "legacy execution restrictions must remain intact")
 				require.False(t, IsConstant(&plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: id}}}}, true))
@@ -2082,7 +2088,7 @@ func TestZoneMapMembershipDomain(t *testing.T) {
 	for _, oid := range []types.T{types.T_char, types.T_varchar} {
 		t.Run(oid.String(), func(t *testing.T) {
 			typ := plan.Type{Id: int32(oid), Width: 8}
-			v := vector.NewVec(types.New(oid, 8, 0))
+			v := vector.NewVec(types.New(oid, 8, 0), proc.Mp())
 			t.Cleanup(func() { v.Free(proc.Mp()) })
 			require.NoError(t, vector.AppendBytes(v, []byte("MO "), false, proc.Mp()))
 			data, err := v.MarshalBinary()

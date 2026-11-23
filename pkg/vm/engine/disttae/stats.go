@@ -235,6 +235,9 @@ type GlobalStats struct {
 
 	closeOnce sync.Once
 	workers   sync.WaitGroup
+	// Serializes installing every owned root with Close sealing startup.
+	startMu     sync.Mutex
+	startSealed bool
 
 	// engine is the global Engine instance.
 	engine *Engine
@@ -260,8 +263,7 @@ type GlobalStats struct {
 	// order; unrelated tables normally remain parallel.
 	refreshAdmission [optimizerStatsRefreshStripes]chan struct{}
 
-	// statsInfoMap is the global stats info in engine which
-	// contains all subscribed tables stats info.
+	// mu coordinates ordinary cache operations, producers, cleanup, and waiters.
 	mu struct {
 		sync.Mutex
 
@@ -269,7 +271,7 @@ type GlobalStats struct {
 		// If sync parameter is false, it is unuseful.
 		cond *sync.Cond
 
-		// statsInfoMap is the real stats info data.
+		// statsInfoMap contains the published statistics.
 		statsInfoMap map[pb.StatsInfoKey]*pb.StatsInfo
 
 		// tableDefVersions is present only for statistics that contain a
@@ -287,6 +289,11 @@ type GlobalStats struct {
 	KeyRouter client.KeyRouter[pb.StatsInfoKey]
 
 	concurrentExecutor ConcurrentExecutor
+
+	// observationMu protects the planner's optional scalar copy. Ordinary
+	// readers take mu. The planner uses only TryRLock here. Statistics and
+	// version mutations take mu and then observationMu, which is a leaf lock.
+	observationMu sync.RWMutex
 
 	// approxObjectNumUpdater is for test only currently.
 	approxObjectNumUpdater func() int64
@@ -309,6 +316,9 @@ type GlobalStats struct {
 	// afterAutomaticUpdateStarted is for deterministic producer-cancellation
 	// tests only. It runs after worker admission and before refresh admission.
 	afterAutomaticUpdateStarted func(pb.StatsInfoKey, *updateRecord)
+
+	// afterRootsStarted is a deterministic test barrier under startMu.
+	afterRootsStarted func()
 }
 
 func NewGlobalStats(
@@ -340,7 +350,6 @@ func NewGlobalStats(
 			s.Close()
 		}
 	}()
-	publish(s)
 	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
 	s.mu.tableDefVersions = make(map[pb.StatsInfoKey]uint32)
@@ -349,6 +358,7 @@ func NewGlobalStats(
 	// stop. Register it once per GlobalStats rather than once per cache miss.
 	context.AfterFunc(ownerCtx, s.notifyStatsWaiters)
 	s.initStatsRefreshAdmission()
+	publish(s)
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -360,19 +370,35 @@ func NewGlobalStats(
 	// This optimization reduces goroutine count significantly (e.g., 192 -> 120 in typical environments)
 	// while maintaining performance since updateWorker's actual concurrency is much lower.
 	executorConcurrency, updateWorkerConcurrency := globalStatsConcurrency(runtime.GOMAXPROCS(0), s.updateWorkerFactor)
-	s.concurrentExecutor = newConcurrentExecutor(executorConcurrency)
-	s.concurrentExecutor.Run(ownerCtx)
-	s.workers.Add(1)
-	go func() {
-		defer s.workers.Done()
-		s.logtailConsumer(ownerCtx)
+	started := func() bool {
+		s.startMu.Lock()
+		defer s.startMu.Unlock()
+		if s.startSealed {
+			return false
+		}
+		executor := newConcurrentExecutor(executorConcurrency)
+		executor.Run(ownerCtx)
+		s.concurrentExecutor = executor
+		s.workers.Add(1)
+		go func() {
+			defer s.workers.Done()
+			s.logtailConsumer(ownerCtx)
+		}()
+		s.spawnUpdateWorkers(ownerCtx, updateWorkerConcurrency)
+		s.workers.Add(1)
+		go func() {
+			defer s.workers.Done()
+			s.queueWatcher.run(ownerCtx)
+		}()
+		if s.afterRootsStarted != nil {
+			s.afterRootsStarted()
+		}
+		return true
 	}()
-	s.spawnUpdateWorkers(ownerCtx, updateWorkerConcurrency) // updateWorker内部已启动goroutines，不需要再用go
-	s.workers.Add(1)
-	go func() {
-		defer s.workers.Done()
-		s.queueWatcher.run(ownerCtx)
-	}()
+	if !started {
+		constructed = true
+		return s
+	}
 	logutil.Info(
 		"GlobalStats-Started",
 		zap.Int("exector-num", executorConcurrency),
@@ -403,12 +429,16 @@ func globalStatsConcurrency(gomaxprocs, updateWorkerFactor int) (executorConcurr
 // completion callback owned by this GlobalStats instance.
 func (gs *GlobalStats) Close() {
 	gs.closeOnce.Do(func() {
+		gs.startMu.Lock()
+		gs.startSealed = true
 		if gs.cancel != nil {
 			gs.cancel()
 		}
+		executor := gs.concurrentExecutor
+		gs.startMu.Unlock()
 		gs.notifyStatsWaiters()
 		gs.workers.Wait()
-		if waiter, ok := gs.concurrentExecutor.(interface{ Wait() }); ok {
+		if waiter, ok := executor.(interface{ Wait() }); ok {
 			waiter.Wait()
 		}
 	})
@@ -510,12 +540,14 @@ func (gs *GlobalStats) RemoveTid(tableID uint64) {
 	defer gs.mu.Unlock()
 	gs.updatingMu.Lock()
 	defer gs.updatingMu.Unlock()
+	gs.observationMu.Lock()
 	for key := range gs.mu.statsInfoMap {
 		if key.TableID == tableID {
 			delete(gs.mu.statsInfoMap, key)
 			delete(gs.mu.tableDefVersions, key)
 		}
 	}
+	gs.observationMu.Unlock()
 	for key := range gs.updatingMu.updating {
 		if key.TableID == tableID {
 			delete(gs.updatingMu.updating, key)
@@ -641,8 +673,10 @@ func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
 		return nil
 	}
 
+	gs.observationMu.Lock()
 	gs.mu.statsInfoMap[key] = remoteInfo
 	delete(gs.mu.tableDefVersions, key)
+	gs.observationMu.Unlock()
 	if gs.mu.cond != nil {
 		gs.mu.cond.Broadcast()
 	}
@@ -674,7 +708,8 @@ func (gs *GlobalStats) GetAtTableVersion(
 
 // statsInfoForTableVersionLocked distinguishes a true cache miss from a
 // schema-bound entry that this reader must not consume. A mismatched entry is
-// retained because an older snapshot reader may still match it.
+// retained because an older snapshot reader may still match it. The caller
+// holds mu or the observation read lock.
 func (gs *GlobalStats) statsInfoForTableVersionLocked(
 	key pb.StatsInfoKey,
 	tableDefVersion *uint32,
@@ -1309,11 +1344,30 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
+	gs.patchStatsCache(key, patch)
+	gs.broadcastStats(key)
+	gs.mu.cond.Broadcast()
+	return nil
+}
+
+// patchStatsCache updates one published value while the caller owns gs.mu.
+func (gs *GlobalStats) patchStatsCache(key pb.StatsInfoKey, patch *PatchArgs) {
+	gs.observationMu.Lock()
+	defer gs.observationMu.Unlock()
 
 	stats := gs.mu.statsInfoMap[key]
 	if stats == nil {
 		// Create new stats if not exists
 		stats = plan2.NewStatsInfo()
+		gs.mu.statsInfoMap[key] = stats
+	}
+
+	// Optional row distributions belong to one analyzed generation. Do not
+	// mutate a published object held by lock-free planning readers.
+	if len(stats.ByteRangeMap) > 0 {
+		source := *stats
+		source.ByteRangeMap = nil
+		stats = proto.Clone(&source).(*pb.StatsInfo)
 		gs.mu.statsInfoMap[key] = stats
 	}
 
@@ -1381,16 +1435,11 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 			sr.Uniform = *update.Uniform
 		}
 		if update.Result != nil {
-			sr.Result = update.Result
+			result := make([]float64, len(update.Result))
+			copy(result, update.Result)
+			sr.Result = result
 		}
 	}
-
-	gs.broadcastStats(key)
-
-	// Broadcast update
-	gs.mu.cond.Broadcast()
-
-	return nil
 }
 
 // broadcastStats send the table stats key to gossip manager.
@@ -1458,17 +1507,33 @@ func (gs *GlobalStats) completeAutomaticStatsCacheUpdate(
 		}
 		return false
 	}
-	if updated {
-		gs.mu.statsInfoMap[key] = stats
-		delete(gs.mu.tableDefVersions, key)
+	committed := func() bool {
+		if !updated {
+			if _, exists := gs.mu.statsInfoMap[key]; exists {
+				return false
+			}
+		}
+		gs.observationMu.Lock()
+		defer gs.observationMu.Unlock()
+		// The owner may stop while this writer waits for an observation.
+		if gs.ctx != nil && context.Cause(gs.ctx) != nil {
+			return false
+		}
+		if updated {
+			gs.mu.statsInfoMap[key] = stats
+			delete(gs.mu.tableDefVersions, key)
+		} else {
+			gs.mu.statsInfoMap[key] = nil
+		}
+		return true
+	}()
+	if committed && updated {
 		gs.broadcastStats(key)
-	} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
-		gs.mu.statsInfoMap[key] = nil
 	}
 	if gs.mu.cond != nil {
 		gs.mu.cond.Broadcast()
 	}
-	return updated
+	return committed && updated
 }
 
 func (gs *GlobalStats) coordinateStatsUpdateJob(job statsUpdateJob) {
@@ -1618,8 +1683,8 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	}
 
 	// Get table definition
-	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
-	if table == nil || table.TableDef == nil {
+	tableDef := gs.engine.GetLatestCatalogCache().ReadPlanTableDefByID(key.AccId, key.DatabaseID, key.TableID)
+	if tableDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("table not found")
 	}
 
@@ -1645,7 +1710,7 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := &updateStatsRequest{
 		statsInfo:       stats,
-		tableDef:        table.TableDef,
+		tableDef:        tableDef,
 		partitionState:  ps,
 		fs:              gs.engine.fs,
 		ts:              types.TimestampToTS(now),
@@ -1670,7 +1735,7 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	// Validate the observation against the schema snapshot that owned the
 	// collection. Publication below validates that same version again while
 	// holding the catalog change lock through the cache swap.
-	if err := applyStatsRefreshOptions(stats, table.TableDef, options); err != nil {
+	if err := applyStatsRefreshOptions(stats, tableDef, options); err != nil {
 		return nil, err
 	}
 
@@ -1744,9 +1809,8 @@ func (gs *GlobalStats) publishAnalyzedStats(
 			"manual statistics publication crossed subscription boundary for table %d", key.TableID)
 	}
 
-	table := gs.engine.GetLatestCatalogCache().GetTableById(
-		key.AccId, key.DatabaseID, key.TableID)
-	if table == nil || table.TableDef == nil {
+	tableDef := gs.engine.GetLatestCatalogCache().ReadPlanTableDefByID(key.AccId, key.DatabaseID, key.TableID)
+	if tableDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("table not found")
 	}
 	metadata := plan2.NewStatsInfo()
@@ -1757,7 +1821,7 @@ func (gs *GlobalStats) publishAnalyzedStats(
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := &updateStatsRequest{
 		statsInfo:       metadata,
-		tableDef:        table.TableDef,
+		tableDef:        tableDef,
 		partitionState:  ps,
 		fs:              gs.engine.fs,
 		ts:              types.TimestampToTS(now),
@@ -1801,7 +1865,9 @@ func composeAnalyzedStatsGeneration(metadata, collected *pb.StatsInfo) *pb.Stats
 	}
 	published := plan2.NewStatsInfo()
 	if metadata != nil {
-		published = proto.Clone(metadata).(*pb.StatsInfo)
+		source := *metadata
+		source.ByteRangeMap = nil
+		published = proto.Clone(&source).(*pb.StatsInfo)
 	}
 	if published.NdvMap == nil {
 		published.NdvMap = make(map[string]float64)
@@ -1825,6 +1891,16 @@ func composeAnalyzedStatsGeneration(metadata, collected *pb.StatsInfo) *pb.Stats
 		published.ShuffleRangeMap = make(map[string]*pb.ShuffleRange)
 	}
 
+	// A partial/manual collection must not inherit another population's sample.
+	published.ByteRangeMap = nil
+	if len(collected.ByteRangeMap) > 0 {
+		published.ByteRangeMap = make(map[string]*pb.ByteRangeDistribution, len(collected.ByteRangeMap))
+		for column, d := range collected.ByteRangeMap {
+			if d != nil {
+				published.ByteRangeMap[column] = proto.Clone(d).(*pb.ByteRangeDistribution)
+			}
+		}
+	}
 	published.TableName = collected.TableName
 	published.TableCnt = collected.TableCnt
 	published.BlockNumber = collected.BlockNumber
@@ -1913,6 +1989,7 @@ func applyStatsRefreshOptions(
 		stats.NdvMap = make(map[string]float64, len(options.ColumnNDVs)+1)
 	}
 	stats.TableName = tableDef.Name
+	stats.ByteRangeMap = nil
 	stats.TableCnt = rowCount
 	if _, hasFakePrimaryKey := knownColumns[catalog.FakePrimaryKeyColName]; options.TableRowCount != nil && hasFakePrimaryKey {
 		stats.NdvMap[catalog.FakePrimaryKeyColName] = rowCount
@@ -1952,7 +2029,7 @@ func (gs *GlobalStats) publishStatsForGeneration(
 ) (bool, error) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
-	published, err := gs.publishStatsForGenerationLocked(ctx, key, generation, stats)
+	published, err := gs.publishStatsForGenerationLocked(ctx, key, generation, stats, nil)
 	if published {
 		gs.broadcastStats(key)
 	}
@@ -1973,22 +2050,31 @@ func (gs *GlobalStats) publishStatsForGenerationLocked(
 	key pb.StatsInfoKey,
 	generation *updateRecord,
 	stats *pb.StatsInfo,
+	tableDefVersion *uint32,
 ) (bool, error) {
 	if generation == nil || stats == nil {
 		return false, nil
 	}
 	generationActive := gs.statsUpdateGenerationActive(key, generation)
-	// Generation validation is the last operation that can wait on another
-	// application lock. Check cancellation after it so a request canceled while
-	// waiting for updatingMu cannot cross the cache-swap commit point.
+	if !generationActive {
+		return false, gs.statsRefreshCancellationCause(ctx)
+	}
+	gs.observationMu.Lock()
+	defer gs.observationMu.Unlock()
+	// Both generation validation and cache acquisition can wait. Cancellation
+	// observed before the swap wins; a completed swap remains published.
 	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 		return false, cause
 	}
-	if !generationActive {
-		return false, nil
-	}
 	gs.mu.statsInfoMap[key] = stats
-	delete(gs.mu.tableDefVersions, key)
+	if tableDefVersion == nil {
+		delete(gs.mu.tableDefVersions, key)
+	} else {
+		if gs.mu.tableDefVersions == nil {
+			gs.mu.tableDefVersions = make(map[pb.StatsInfoKey]uint32)
+		}
+		gs.mu.tableDefVersions[key] = *tableDefVersion
+	}
 	return true, nil
 }
 
@@ -2024,13 +2110,7 @@ func (gs *GlobalStats) publishStatsForGenerationAtTableVersion(
 			gs.mu.Lock()
 			statsLocked = true
 			published, publicationErr = gs.publishStatsForGenerationLocked(
-				ctx, key, generation, stats)
-			if published {
-				if gs.mu.tableDefVersions == nil {
-					gs.mu.tableDefVersions = make(map[pb.StatsInfoKey]uint32)
-				}
-				gs.mu.tableDefVersions[key] = expectedVersion
-			}
+				ctx, key, generation, stats, &expectedVersion)
 		},
 	)
 	if statsLocked {
@@ -2071,9 +2151,8 @@ func (gs *GlobalStats) publishStatsForGenerationAtTableVersion(
 }
 
 func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay.PartitionState, key pb.StatsInfoKey, stats *pb.StatsInfo) (bool, float64) {
-	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
-	// table or its definition is nil, means that the table is created but not committed yet.
-	if table == nil || table.TableDef == nil {
+	tableDef := gs.engine.GetLatestCatalogCache().ReadPlanTableDefByID(key.AccId, key.DatabaseID, key.TableID)
+	if tableDef == nil {
 		logutil.Errorf("cannot get table by ID %v", key)
 		return false, 0
 	}
@@ -2093,7 +2172,7 @@ func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay
 	// the time used to init stats info is not need to be too precise.
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := newUpdateStatsRequest(
-		table.TableDef,
+		tableDef,
 		ps,
 		gs.engine.fs,
 		types.TimestampToTS(now),
@@ -2405,8 +2484,7 @@ func collectTableStats(
 				if !zoneMap.IsInited() {
 					continue
 				}
-				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMaxBuf())
-				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMinBuf())
+				index.MergeZM(info.ColumnZMs[idx], zoneMap)
 
 				// Update existing ShuffleRanges with current object's data
 				if info.ShuffleRanges[idx] != nil {
@@ -2490,11 +2568,11 @@ func CollectAndCalculateStats(ctx context.Context, req *updateStatsRequest, exec
 			}
 		}
 	}
-	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
-	info := plan2.NewTableStatsInfo(lenCols)
 	if req.approxObjectNum == 0 {
 		return 1.0, nil
 	}
+	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
+	info := plan2.NewTableStatsInfo(lenCols)
 	info.ApproxObjectNumber = req.approxObjectNum
 	baseTableDef := req.tableDef
 

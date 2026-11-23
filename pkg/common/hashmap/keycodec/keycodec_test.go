@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
+	"math/rand"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -56,22 +57,13 @@ func decimalByteJSON(text string) bytejson.ByteJson {
 
 func TestValidVectorsAcceptsBroadcastConstants(t *testing.T) {
 	mp := mpool.MustNewZero()
-	flat := vector.NewVec(types.T_int32.ToType())
-	short := vector.NewVec(types.T_int32.ToType())
+	flat := vector.NewVec(types.T_int32.ToType(), mp)
+	short := vector.NewVec(types.T_int32.ToType(), mp)
 	constant, err := vector.NewConstFixed(types.T_int32.ToType(), int32(7), 1, mp)
 	require.NoError(t, err)
 	constantNull := vector.NewConstNull(types.T_int32.ToType(), 1, mp)
 	emptyConstant := vector.NewConstNull(types.T_int32.ToType(), 0, mp)
 	groupingConstant := vector.NewRollupConst(types.T_int32.ToType(), 1, mp)
-	provenanceConstant, err := vector.NewConstFixed(types.T_int32.ToType(), int32(7), 2, mp)
-	require.NoError(t, err)
-	require.NoError(t, provenanceConstant.SetPrepareParamKindsWithMP(
-		[]vector.PrepareParamKind{
-			vector.PrepareParamInteger,
-			vector.PrepareParamFloat,
-		},
-		mp,
-	))
 	defer func() {
 		flat.Free(mp)
 		short.Free(mp)
@@ -79,7 +71,6 @@ func TestValidVectorsAcceptsBroadcastConstants(t *testing.T) {
 		constantNull.Free(mp)
 		emptyConstant.Free(mp)
 		groupingConstant.Free(mp)
-		provenanceConstant.Free(mp)
 		require.Zero(t, mp.CurrNB())
 	}()
 	require.NoError(t, vector.AppendFixedList(flat, []int32{1, 2, 3}, nil, mp))
@@ -99,7 +90,6 @@ func TestValidVectorsAcceptsBroadcastConstants(t *testing.T) {
 		{name: "empty const for rows", vecs: []*vector.Vector{emptyConstant}, rows: 1, want: false},
 		{name: "empty const for empty input", vecs: []*vector.Vector{emptyConstant}, rows: 0, want: true},
 		{name: "short grouping const", vecs: []*vector.Vector{groupingConstant}, rows: 3, want: false},
-		{name: "short provenance const", vecs: []*vector.Vector{provenanceConstant}, rows: 3, want: false},
 		{name: "nil vector", vecs: []*vector.Vector{nil}, rows: 3, want: false},
 		{name: "no vectors", rows: 3, want: false},
 		{name: "negative rows", vecs: []*vector.Vector{constant}, rows: -1, want: false},
@@ -469,14 +459,14 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	vecPositiveZero := types.ArrayToBytes([]float32{1, 2, 3, 0, 5, 6, 7, 8})
 	vecNegativeZero := types.ArrayToBytes([]float32{1, 2, 3, negativeZero, 5, 6, 7, 8})
 
-	jsonFlat := vector.NewVec(jsonType)
-	vecFlat := vector.NewVec(vecType)
-	charFlat := vector.NewVec(charType)
+	jsonFlat := vector.NewVec(jsonType, mp)
+	vecFlat := vector.NewVec(vecType, mp)
+	charFlat := vector.NewVec(charType, mp)
 	// Build the payload with the physical varchar type first.  Re-tagging it
 	// after append models a legacy/spilled vector whose semantic Unicode
 	// metadata is restored by the consumer; AppendBytes must still reject
 	// malformed values for a genuinely Unicode-typed vector.
-	unicodeFlat := vector.NewVec(types.T_varchar.ToType())
+	unicodeFlat := vector.NewVec(types.T_varchar.ToType(), mp)
 	jsonConst, err := vector.NewConstBytes(jsonType, jsonOnePointZero, 3, mp)
 	require.NoError(t, err)
 	vecConst, err := vector.NewConstBytes(vecType, vecNegativeZero, 3, mp)
@@ -550,11 +540,11 @@ func TestCanonicalBytesAtUsesGroupingEquality(t *testing.T) {
 	mp := mpool.MustNewZero()
 	floatType := types.T_float32.ToType()
 	floatType.Scale = 2
-	floats := vector.NewVec(floatType)
-	doubles := vector.NewVec(types.T_float64.ToType())
-	chars := vector.NewVec(types.New(types.T_char, 4, 0))
-	jsonValues := vector.NewVec(types.T_json.ToType())
-	unicodeValues := vector.NewVec(types.T_varchar.ToType())
+	floats := vector.NewVec(floatType, mp)
+	doubles := vector.NewVec(types.T_float64.ToType(), mp)
+	chars := vector.NewVec(types.New(types.T_char, 4, 0), mp)
+	jsonValues := vector.NewVec(types.T_json.ToType(), mp)
+	unicodeValues := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer func() {
 		floats.Free(mp)
 		doubles.Free(mp)
@@ -774,8 +764,8 @@ func TestComputeXXHashCanonicalVarlenaGroupingRows(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			left := vector.NewVec(test.typ)
-			right := vector.NewVec(test.typ)
+			left := vector.NewVec(test.typ, mp)
+			right := vector.NewVec(test.typ, mp)
 			defer left.Free(mp)
 			defer right.Free(mp)
 			for row := range test.left {
@@ -892,12 +882,12 @@ func TestComputeXXHashScaledFloat32Contract(t *testing.T) {
 	m := mpool.MustNewZero()
 	floatType := types.T_float32.ToType()
 	floatType.Scale = 2
-	vec := vector.NewVec(floatType)
-	nullable := vector.NewVec(floatType)
+	vec := vector.NewVec(floatType, m)
+	nullable := vector.NewVec(floatType, m)
 	constVec, err := vector.NewConstFixed(floatType, float32(1.23), 3, m)
 	require.NoError(t, err)
 	constNull := vector.NewConstNull(floatType, 3, m)
-	short := vector.NewVec(floatType)
+	short := vector.NewVec(floatType, m)
 	defer func() {
 		vec.Free(m)
 		nullable.Free(m)
@@ -943,8 +933,8 @@ func TestComputeXXHashCompositeScaledFloat32Contract(t *testing.T) {
 	m := mpool.MustNewZero()
 	floatType := types.T_float32.ToType()
 	floatType.Scale = 2
-	discriminators := vector.NewVec(types.T_int64.ToType())
-	floats := vector.NewVec(floatType)
+	discriminators := vector.NewVec(types.T_int64.ToType(), m)
+	floats := vector.NewVec(floatType, m)
 	defer func() {
 		discriminators.Free(m)
 		floats.Free(m)
@@ -980,7 +970,7 @@ func TestComputeXXHashCanonicalizesGroupingRows(t *testing.T) {
 			left:  []int64{11, 22, 33},
 			right: []int64{101, 22, 303},
 			newVec: func(values any) *vector.Vector {
-				vec := vector.NewVec(types.T_int64.ToType())
+				vec := vector.NewVec(types.T_int64.ToType(), mp)
 				require.NoError(t, vector.AppendFixedList(
 					vec, values.([]int64), nil, mp,
 				))
@@ -992,7 +982,7 @@ func TestComputeXXHashCanonicalizesGroupingRows(t *testing.T) {
 			left:  []float64{11, 22, 33},
 			right: []float64{101, 22, 303},
 			newVec: func(values any) *vector.Vector {
-				vec := vector.NewVec(types.T_float64.ToType())
+				vec := vector.NewVec(types.T_float64.ToType(), mp)
 				require.NoError(t, vector.AppendFixedList(
 					vec, values.([]float64), nil, mp,
 				))
@@ -1029,8 +1019,8 @@ func TestComputeXXHashCanonicalizesGroupingRows(t *testing.T) {
 
 func TestComputeXXHashDoesNotTreatStaleGroupingAsFull(t *testing.T) {
 	mp := mpool.MustNewZero()
-	left := vector.NewVec(types.T_int64.ToType())
-	right := vector.NewVec(types.T_int64.ToType())
+	left := vector.NewVec(types.T_int64.ToType(), mp)
+	right := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(left, int64(11), false, mp))
 	require.NoError(t, vector.AppendFixed(right, int64(22), false, mp))
 	left.GetGrouping().Add(5)
@@ -1043,4 +1033,62 @@ func TestComputeXXHashDoesNotTreatStaleGroupingAsFull(t *testing.T) {
 	left.Free(mp)
 	right.Free(mp)
 	require.Zero(t, mp.CurrNB())
+}
+
+// TestCanonicalVecBlockKeyMatchesEquality checks that vecf8/vecf4 equality keys agree with
+// SQL equality (the decoded values compared element-wise): cells that encode the same
+// values with other block or global scales share a key, and unequal cells do not.
+func TestCanonicalVecBlockKeyMatchesEquality(t *testing.T) {
+	cell := func(f types.BlockScaledFormat, v ...float32) []byte {
+		c, err := types.AppendBlockScaled(nil, f, v)
+		require.NoError(t, err)
+		return c
+	}
+	check := func(typ types.Type, a, b []byte) bool {
+		equal := types.CompareBlockScaledFromBytes(a, b, false) == 0
+		ka, kb := AppendCanonicalValue(nil, typ, a), AppendCanonicalValue(nil, typ, b)
+		require.Equal(t, equal, bytes.Equal(ka, kb), "%s %x %x", typ.Oid, a, b)
+		require.Equal(t, equal, CanonicalValuesEqual(typ, a, b))
+		require.Equal(t, len(ka), CanonicalValueSize(typ, a))
+		return equal
+	}
+	f8, f4 := types.T_array_float8.ToType(), types.T_array_float4.ToType()
+	// MXFP8: 447 is code 448 at scale 1, 449 is code 224 at scale 2; both decode to 448
+	a, b := cell(types.BlockScaledMXFP8, 447), cell(types.BlockScaledMXFP8, 449)
+	require.NotEqual(t, a, b)
+	require.True(t, check(f8, a, b))
+	// NVFP4: the globals differ by one ulp and the decoded values are equal
+	a, b = cell(types.BlockScaledNVFP4, 1.2031566), cell(types.BlockScaledNVFP4, 1.2031565)
+	require.NotEqual(t, a, b)
+	require.True(t, check(f4, a, b))
+	require.False(t, check(f8, cell(types.BlockScaledMXFP8, 1, 2), cell(types.BlockScaledMXFP8, 1, 3)))
+	require.False(t, check(f8, cell(types.BlockScaledMXFP8, 1, 2), cell(types.BlockScaledMXFP8, 1, 2, 0)))
+
+	// near-identical inputs often quantize to equal values under other scales
+	r := rand.New(rand.NewSource(20567))
+	for _, f := range []types.BlockScaledFormat{types.BlockScaledMXFP8, types.BlockScaledNVFP4} {
+		typ := f8
+		if f == types.BlockScaledNVFP4 {
+			typ = f4
+		}
+		equal := 0
+		for i := 0; i < 2000; i++ {
+			dim := 1 + r.Intn(40)
+			x := make([]float32, dim)
+			for k := range x {
+				x[k] = float32(r.NormFloat64() * math.Pow(10, float64(r.Intn(5)-2)))
+			}
+			y := append([]float32(nil), x...)
+			k := r.Intn(dim)
+			y[k] = math.Nextafter32(y[k], float32(math.Inf(1+r.Intn(2)*-2)))
+			if check(typ, cell(f, x...), cell(f, y...)) {
+				equal++
+			}
+		}
+		require.Positive(t, equal, "%s: the property is exercised with equal pairs", f)
+	}
+
+	// a malformed cell keeps its bytes
+	require.Equal(t, []byte{1, 2, 3}, AppendCanonicalValue(nil, f8, []byte{1, 2, 3}))
+	require.Equal(t, 3, CanonicalValueSize(f8, []byte{1, 2, 3}))
 }

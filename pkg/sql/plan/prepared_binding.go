@@ -17,13 +17,13 @@ package plan
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -399,7 +399,7 @@ func bindPreparedIntegerValue(ctx context.Context, column, source *Expr) (*Expr,
 	if binding.Type.Oid == types.T(source.Typ.Id) {
 		if value, ok := state.values[source.GetP().Pos].(ParamValue); ok &&
 			value.IsBinaryProtocol && !value.IsBin && !value.IsBinaryString &&
-			value.PrepareParamKind == vector.PrepareParamInteger {
+			value.PrepareParamKind == types.StringConversionInteger {
 			narrowed := DeepCopyExpr(source)
 			narrowed.Typ = converted.Typ
 			return narrowed, true, nil
@@ -561,7 +561,7 @@ func specializePreparedTemporalDecimalCasts(proc *process.Process, state *prepar
 		if warned || vec == nil || vec.Length() == 0 {
 			return nil
 		}
-		literal := rule.GetConstantValue(vec, false, 0)
+		literal := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(child, proc))
 		if literal != nil {
 			rule.PreserveFoldedDecimalLiteralSemantics(child, literal)
 			child.Expr = &plan.Expr_Lit{Lit: literal}
@@ -589,29 +589,6 @@ func (builder *QueryBuilder) preparedParameterDiagnosticsFree() bool {
 // reused. Keep that lifetime separate from PREPARE's unresolved-type mode.
 func (builder *QueryBuilder) isReusablePlan() bool {
 	return builder.isPrepareStatement || preparedBindingState(builder.GetContext()) != nil
-}
-
-// lowerPreparedSourceTransports runs after SQL binding and optimization. Keep
-// the physical representation compatible with existing readers and remote CNs
-// without letting transport casts participate in semantic type selection.
-func lowerPreparedSourceTransports(ctx context.Context, p *Plan) error {
-	return plan.VisitExpressionsInOwner(p, func(root *Expr) error {
-		return plan.VisitExprTree(root, func(expr *Expr) error {
-			if expr.GetP() == nil || types.T(expr.Typ.Id).IsMySQLString() || expr.Typ.Id == int32(types.T_any) {
-				return nil
-			}
-			source := &Expr{
-				Typ:  plan.Type{Id: int32(types.T_text)},
-				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: expr.GetP().Pos}},
-			}
-			physical, err := makePlan2CastExpr(ctx, source, expr.Typ)
-			if err != nil {
-				return err
-			}
-			*expr = *physical
-			return nil
-		})
-	})
 }
 
 // SQL EXECUTE exposes a bare marker as TEXT, even when its source domain is
@@ -692,11 +669,38 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		}
 	}
 	args = append([]*Expr(nil), args...)
+	// an IN list on a bf16/float16/float8/float4 operand expands to one comparison per item,
+	// each binding its own marker; the list keeps the narrowed items
+	lowPrecisionList := false
 	for i, source := range args {
 		if source == nil {
 			continue
 		}
 		if source.GetP() == nil {
+			if list := source.GetList(); list != nil && i == 1 && args[0] != nil &&
+				(name == "in" || name == "not_in") {
+				lowPrecisionList = types.T(args[0].Typ.Id).IsLowPrecisionFloat()
+				var items []*Expr
+				for j, item := range list.List {
+					converted, narrowed, err := narrowPreparedLowPrecisionOperand(ctx, state, item, args[0])
+					if err != nil {
+						return nil, err
+					}
+					if !narrowed {
+						continue
+					}
+					if items == nil {
+						items = append([]*Expr(nil), list.List...)
+					}
+					items[j] = converted
+				}
+				if items != nil {
+					copied := *source
+					copied.Expr = &plan.Expr_List{List: &plan.ExprList{List: items}}
+					args[i] = &copied
+					continue
+				}
+			}
 			if len(args) == 1 && types.T(source.Typ.Id).IsMySQLString() &&
 				(name == "sum" || name == "avg" || name == "abs" || name == "sign" || name == "sleep") {
 				// The source may be a projected marker, scalar subquery, or
@@ -714,13 +718,11 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		if !ok {
 			continue
 		}
-		if name == "member of" && i == 0 && binding.Type.Oid.IsArrayRelate() {
-			// MEMBER OF rejects SQL arrays with an argument-specific runtime
-			// error. Keep a direct prepared array in its TEXT transport form so
-			// the existing checker can report that error using source metadata.
-			args[i] = &Expr{Typ: makeSimplePlan2Type(types.T_text),
-				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: source.GetP().Pos}}}
-			continue
+		if name == "member of" && i == 0 &&
+			(binding.Type.Oid.IsArrayRelate() || binding.Type.Oid == types.T_bit) {
+			// MEMBER OF rejects SQL arrays. A protocol BIT parameter carries no
+			// width, so its JSON value would be ambiguous: reject it too.
+			return nil, moerr.NewInvalidTypeForJSON(ctx, 1, "member of")
 		}
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
 			args[1-i] != nil && args[1-i].Typ.Id == int32(types.T_float32) &&
@@ -733,6 +735,16 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				if castErr != nil {
 					return nil, castErr
 				}
+				args[i] = converted
+				continue
+			}
+		}
+		if len(args) == 2 && isPreparedNumericComparisonContext(name) && args[1-i] != nil {
+			converted, narrowed, castErr := narrowPreparedLowPrecisionOperand(ctx, state, source, args[1-i])
+			if castErr != nil {
+				return nil, castErr
+			}
+			if narrowed {
 				args[i] = converted
 				continue
 			}
@@ -888,6 +900,31 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				preparedSQLExecuteNumericResultConsumer(name) || isPreparedNumericComparisonContext(name)):
 			target = binding.NumericType
 		}
+		if name == "bit_count" && len(args) == 1 &&
+			(binding.Type.Oid == types.T_date || binding.Type.Oid == types.T_datetime ||
+				binding.Type.Oid == types.T_time || binding.Type.Oid == types.T_timestamp) {
+			// A remembered numeric target applies to later string executions.
+			// Native temporal values must reach bindIntegerFunctionArguments
+			// unchanged so their own rounding and calendar conversion win.
+			continue
+		}
+		if name == "bit_count" && len(args) == 1 && binding.Type.Oid.IsMySQLString() {
+			// typeswitch:partial Prepared BIT_COUNT numeric latches use canonical target types;
+			// other float-family members cannot be remembered numeric targets.
+			switch target.Oid {
+			case types.T_int64, types.T_uint64, types.T_float64, types.T_decimal256:
+				// A numeric latch changes later string executions to MySQL's
+				// numeric-prefix conversion. Generic CAST is strict and cannot
+				// represent that consumer-specific contract or its diagnostics.
+				converted, err := appendCastBeforeExprWithOverload(
+					ctx, source, makePlan2Type(&target), planfunction.PreparedBitCountCastOverload)
+				if err != nil {
+					return nil, err
+				}
+				args[i] = converted
+				continue
+			}
+		}
 		if target.Oid != types.T_any {
 			var err error
 			args[i], err = makePlan2CastExpr(ctx, source, makePlan2Type(&target))
@@ -906,6 +943,9 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				}
 			}
 		}
+	}
+	if lowPrecisionList || !isPreparedNumericPrefixFunction(name) {
+		return args, nil
 	}
 	positions := make(map[int]types.StringConversionKind)
 	prefixArgs := make([]bool, len(args))
@@ -976,6 +1016,163 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 	return bound, err
 }
 
+// narrowPreparedLowPrecisionOperand casts a marker compared with a
+// bf16/float16/float8/float4 column to that column's type, as a literal is,
+// when this execution's value is inside the type's finite range. Reading the
+// value keeps the plan out of the type-only cache. Other values, and other
+// peers, keep the wider comparison.
+func narrowPreparedLowPrecisionOperand(ctx context.Context, state *preparedSourceBindingState,
+	source *Expr, peerExpr *Expr) (*Expr, bool, error) {
+	if source == nil || source.GetP() == nil || peerExpr.GetCol() == nil {
+		return nil, false, nil
+	}
+	peer := peerExpr.Typ
+	peerOid := types.T(peer.Id)
+	if !peerOid.IsLowPrecisionFloat() {
+		return nil, false, nil
+	}
+	binding, ok := state.bindingForPosition(source.GetP().Pos)
+	if !ok || !(binding.Type.IsNumeric() || binding.Type.Oid.IsMySQLString()) {
+		return nil, false, nil
+	}
+	value, ok := preparedLowPrecisionValue(ctx, source)
+	if !ok || !value.fits(peerOid) {
+		return nil, false, nil
+	}
+	converted, err := makePlan2CastExpr(ctx, source, peer)
+	return converted, err == nil, err
+}
+
+var preparedDecimalNumeral = regexp.MustCompile(`^\s*[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?\s*$`)
+
+// lowPrecisionSource is a value narrowed to bf16/float16/float8/float4 as CAST narrows
+// it: f rounded to float32 (to odd from a wider value), d the value as float64.
+type lowPrecisionSource struct {
+	f float32
+	d float64
+}
+
+// fits reports whether CAST to oid accepts the value (types.RejectNarrowFloatInput).
+func (v lowPrecisionSource) fits(oid types.T) bool {
+	return types.RejectNarrowFloatInput(v.f, oid, v.d, nil) == nil
+}
+
+func lowPrecisionFloat64(v float64) lowPrecisionSource {
+	return lowPrecisionSource{f: types.Float32RoundToOdd(v), d: v}
+}
+
+func lowPrecisionInt(v int64) lowPrecisionSource {
+	return lowPrecisionSource{f: types.Float32RoundToOddInt(v), d: float64(v)}
+}
+
+func lowPrecisionUint(v uint64) lowPrecisionSource {
+	return lowPrecisionSource{f: types.Float32RoundToOddUint(v), d: float64(v)}
+}
+
+// lowPrecisionText is decimal numeral text rounded as CAST to bf16/float16/float8/float4
+// rounds it: to odd, from the text's exact value.
+func lowPrecisionText(text string) (lowPrecisionSource, bool) {
+	if !preparedDecimalNumeral.MatchString(text) {
+		return lowPrecisionSource{}, false
+	}
+	f, d, err := types.Float32RoundToOddString(text)
+	return lowPrecisionSource{f: f, d: d}, err == nil
+}
+
+// lowPrecisionLiteral is a numeric or decimal-numeral text literal as CAST to
+// bf16/float16/float8/float4 narrows it.
+func lowPrecisionLiteral(expr *Expr) (lowPrecisionSource, bool) {
+	// a decimal literal binds as CAST('<digits>' AS DECIMAL(w, s))
+	if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 {
+		lit := fn.Args[0].GetLit()
+		sval, isStr := lit.GetValue().(*plan.Literal_Sval)
+		if lit == nil || lit.Isnull || !isStr {
+			return lowPrecisionSource{}, false
+		}
+		switch t := expr.Typ; types.T(t.Id) {
+		case types.T_decimal64, types.T_decimal128:
+			d, err := types.ParseDecimal128(sval.Sval, t.Width, t.Scale)
+			if err != nil {
+				return lowPrecisionSource{}, false
+			}
+			return lowPrecisionText(d.Format(t.Scale))
+		case types.T_decimal256:
+			d, err := types.ParseDecimal256(sval.Sval, t.Width, t.Scale)
+			if err != nil {
+				return lowPrecisionSource{}, false
+			}
+			return lowPrecisionText(d.Format(t.Scale))
+		}
+		return lowPrecisionSource{}, false
+	}
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return lowPrecisionSource{}, false
+	}
+	switch v := lit.Value.(type) {
+	case *plan.Literal_Dval:
+		return lowPrecisionFloat64(v.Dval), true
+	case *plan.Literal_Fval:
+		return lowPrecisionSource{f: v.Fval, d: float64(v.Fval)}, true
+	case *plan.Literal_I8Val:
+		return lowPrecisionInt(int64(v.I8Val)), true
+	case *plan.Literal_I16Val:
+		return lowPrecisionInt(int64(v.I16Val)), true
+	case *plan.Literal_I32Val:
+		return lowPrecisionInt(int64(v.I32Val)), true
+	case *plan.Literal_I64Val:
+		return lowPrecisionInt(v.I64Val), true
+	case *plan.Literal_U8Val:
+		return lowPrecisionUint(uint64(v.U8Val)), true
+	case *plan.Literal_U16Val:
+		return lowPrecisionUint(uint64(v.U16Val)), true
+	case *plan.Literal_U32Val:
+		return lowPrecisionUint(uint64(v.U32Val)), true
+	case *plan.Literal_U64Val:
+		return lowPrecisionUint(v.U64Val), true
+	case *plan.Literal_Decimal64Val:
+		return lowPrecisionText(types.Decimal64(v.Decimal64Val.A).Format(expr.Typ.Scale))
+	case *plan.Literal_Decimal128Val:
+		d := types.Decimal128{B0_63: uint64(v.Decimal128Val.A), B64_127: uint64(v.Decimal128Val.B)}
+		return lowPrecisionText(d.Format(expr.Typ.Scale))
+	case *plan.Literal_Sval:
+		return lowPrecisionText(v.Sval)
+	}
+	return lowPrecisionSource{}, false
+}
+
+// preparedLowPrecisionValue is this execution's value of a marker -- a float, a signed or
+// unsigned integer, or text holding a decimal numeral -- as CAST to
+// bf16/float16/float8/float4 narrows it.
+func preparedLowPrecisionValue(ctx context.Context, expr *Expr) (lowPrecisionSource, bool) {
+	raw, present := preparedConfigurationValue(ctx, expr)
+	if !present {
+		return lowPrecisionSource{}, false
+	}
+	switch value := raw.(type) {
+	case float64:
+		return lowPrecisionFloat64(value), true
+	case float32:
+		return lowPrecisionSource{f: value, d: float64(value)}, true
+	case int64:
+		return lowPrecisionInt(value), true
+	case int32:
+		return lowPrecisionInt(int64(value)), true
+	case int:
+		return lowPrecisionInt(int64(value)), true
+	case uint64:
+		return lowPrecisionUint(value), true
+	case uint32:
+		return lowPrecisionUint(uint64(value)), true
+	case string:
+		return lowPrecisionText(value)
+	case []byte:
+		return lowPrecisionText(string(value))
+	default:
+		return lowPrecisionSource{}, false
+	}
+}
+
 func (state *preparedSourceBindingState) bindingForPosition(position int32) (PreparedSourceBinding, bool) {
 	for _, binding := range state.bindings {
 		if binding.Position == position {
@@ -1028,6 +1225,8 @@ func preparedUnderlyingSelect(stmt tree.Statement) bool {
 
 // BuildPreparedExecutionPlan binds SQL source domains before optimization.
 // The caller installs the current Process parameter vector before invoking it.
+// Prepared templates and bound execution plans keep their reusable-plan owner;
+// they do not receive an optional candidate planning input.
 func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	bindings []PreparedSourceBinding, values []any) (*PreparedExecutionPlan, error) {
 	previous := ctx.GetContext()
@@ -1043,7 +1242,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 	ctx.SetContext(planning)
 	defer ctx.SetContext(previous)
-	query, err := NewPrepareOptimizer(ctx).Optimize(stmt, false)
+	query, err := NewPrepareOptimizer(ctx).Optimize(stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1054,18 +1253,15 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		preparedBindingState(planning).fieldTypes = fieldTypes
 		preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 		ctx.SetContext(planning)
-		query, err = NewPrepareOptimizer(ctx).Optimize(stmt, false)
+		query, err = NewPrepareOptimizer(ctx).Optimize(stmt, false, nil)
 		if err != nil {
 			return nil, err
 		}
 	}
 	p := &Plan{Plan: &plan.Plan_Query{Query: query}, IsPrepare: true}
 	presentPreparedSQLResults(planning, query)
-	if err = lowerPreparedSourceTransports(planning, p); err != nil {
-		return nil, err
-	}
 	state := preparedBindingState(planning)
-	return &PreparedExecutionPlan{Plan: p, TemporalTypes: state.temporalTypes, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
+	return &PreparedExecutionPlan{TemporalTypes: state.temporalTypes, Plan: p, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
 		DiagnosticFree: state.diagnosticFree, ValueDependent: state.valueDependent}, nil
 }
 

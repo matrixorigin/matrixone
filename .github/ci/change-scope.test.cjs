@@ -88,8 +88,8 @@ test('empty, capped, incomplete, duplicate and malformed lists fail closed', () 
   assert.deepEqual(classify([file], 1, true), { scope: 'full', sdk_required: true });
 });
 
-function client({ files = [modified('pkg/a_test.go')], revisions, error = false } = {}) {
-  const pr = { number: 1, head: { sha: 'head' }, base: { sha: 'base' }, changed_files: 1 };
+function client({ files = [modified('pkg/a_test.go')], revisions, error = false, baseRef = 'main' } = {}) {
+  const pr = { number: 1, head: { sha: 'head' }, base: { sha: 'base', ref: baseRef }, changed_files: 1 };
   let calls = 0;
   return {
     context: { repo: { owner: 'owner', repo: 'repo' }, payload: { pull_request: pr } },
@@ -111,9 +111,16 @@ test('API failure falls back to full and both sides of pagination check the revi
   assert.deepEqual(await resolveScope(client({ error: true })), { scope: 'full', sdk_required: true });
   const { pr } = client();
   const movedHead = { ...pr, head: { sha: 'new' } };
-  const movedBase = { ...pr, base: { sha: 'new' } };
-  for (const revisions of [[movedHead], [pr, movedHead], [pr, movedBase]]) {
+  const movedBase = { ...pr, base: { ...pr.base, sha: 'new' } };
+  const retargeted = { ...pr, base: { ...pr.base, ref: '4.2-dev' } };
+  for (const revisions of [[movedHead], [pr, movedHead], [pr, movedBase],
+    [retargeted, retargeted], [pr, retargeted]]) {
     await assert.rejects(resolveScope(client({ revisions })), /revision changed/);
+  }
+  for (const baseRef of [undefined, null, '']) {
+    const fixture = client();
+    fixture.pr.base.ref = baseRef;
+    await assert.rejects(resolveScope(fixture), /Missing pull request base branch/);
   }
 });
 
@@ -134,11 +141,12 @@ function entrypointJobs() {
     .map(match => [match[1], match[2]]));
 }
 
-test('actual preflight script publishes the authoritative plan as strict string outputs', async () => {
+test('actual preflight applies main-only SDK policy to routing and the required check', async () => {
   const block = entrypointJobs().preflight;
   const script = block.match(/          script: \|\n([\s\S]*?)(?=      - id: plan)/)[1]
     .split('\n').map(line => line.slice(12)).join('\n');
-  for (const [paths, expected] of [
+  const sdkCondition = entrypointJobs()['python-sdk'].match(/^    if: \$\{\{ (.*) \}\}$/m)[1];
+  for (const [paths, expected, options = {}] of [
     [['BUILD.md', 'pkg/sql/README.md', 'docs/cn/source/index.rst'], { scope: 'docs', sdk_required: 'false' }],
     [['clients/python/pyproject.toml'], { scope: 'sdk', sdk_required: 'true' }],
     [['clients/python/client.py', '.agents/skills/mo-dev/SKILL.md'], { scope: 'sdk', sdk_required: 'true' }],
@@ -147,9 +155,22 @@ test('actual preflight script publishes the authoritative plan as strict string 
     [['test/distributed/cases/a.sql', 'pkg/sql/README.md'], { scope: 'bvt', sdk_required: 'false' }],
     [['pkg/testdata/input.md'], { scope: 'full', sdk_required: 'false' }],
     [['pkg/a.go'], { scope: 'full', sdk_required: 'false' }],
+    [['clients/python/client.py'], { scope: 'full', sdk_required: 'false' }, { baseRef: '4.2-dev' }],
+    [['.github/workflows/python-sdk.yml'], { scope: 'full', sdk_required: 'false' }, { baseRef: 'v4.2.8-hotfix' }],
+    [['clients/python/client.py', 'pkg/a.go'], { scope: 'full', sdk_required: 'false' }, { baseRef: '4.1-dev' }],
+    [['.github/ci/change-scope.cjs'], { scope: 'full', sdk_required: 'false' }, { baseRef: '4.2-dev' }],
+    [['.github/workflows/entrypoint.yaml'], { scope: 'full', sdk_required: 'false' }, { baseRef: 'v4.2.8-hotfix' }],
+    [['pkg/a_test.go'], { scope: 'full', sdk_required: 'true' }, { forceFull: true }],
+    [['pkg/a_test.go'], { scope: 'full', sdk_required: 'false' }, { baseRef: '4.2-dev', forceFull: true }],
+    [['pkg/a_test.go'], { scope: 'full', sdk_required: 'true' }, { error: true }],
+    [['pkg/a_test.go'], { scope: 'full', sdk_required: 'false' }, { baseRef: 'v4.2.8-hotfix', error: true }],
+    [['pkg/a_test.go'], { scope: 'full', sdk_required: 'false' }, { baseRef: '4.2-dev', count: 2 }],
+    [['README.md'], { scope: 'docs', sdk_required: 'false' }, { baseRef: '4.2-dev' }],
+    [['pkg/a_test.go'], { scope: 'ut', sdk_required: 'false' }, { baseRef: 'v4.2.8-hotfix' }],
+    [['test/distributed/cases/a.sql'], { scope: 'bvt', sdk_required: 'false' }, { baseRef: '4.1-dev' }],
   ]) {
-    const fixture = client({ files: paths.map(modified) });
-    fixture.pr.changed_files = paths.length;
+    const fixture = client({ ...options, files: paths.map(modified) });
+    fixture.pr.changed_files = options.count ?? paths.length;
     const outputs = {};
     const summary = { addHeading() { return this; }, addRaw() { return this; }, async write() {} };
     await runInNewContext(`(async () => { ${script} })()`, {
@@ -158,10 +179,18 @@ test('actual preflight script publishes the authoritative plan as strict string 
         assert.equal(path, './.github/ci/change-scope.cjs');
         return { resolveScope };
       },
-      process: { env: {} },
+      process: { env: { FORCE_FULL: String(options.forceFull === true) } },
       core: { setOutput: (name, value) => { outputs[name] = value; }, summary },
     });
-    assert.deepEqual(outputs, expected);
+    assert.deepEqual(outputs, expected, fixture.pr.base.ref + ': ' + paths.join(','));
+    const needs = results();
+    Object.assign(needs.preflight.outputs, outputs);
+    const sdkSelected = runInNewContext(sdkCondition, {
+      needs, github: { base_ref: fixture.pr.base.ref }, cancelled: () => false,
+    });
+    assert.equal(sdkSelected, expected.sdk_required === 'true');
+    needs['python-sdk'].result = sdkSelected ? 'success' : 'skipped';
+    assert.match(verifyResults(outputs.scope, needs), /all required jobs passed/);
   }
   assert.match(block, /sdk_required: \$\{\{ steps\.scope\.outputs\.sdk_required \}\}/);
 });

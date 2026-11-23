@@ -207,14 +207,14 @@ triggers  𝄀
 user_privileges  𝄀
 views
 desc key_column_usage;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 constraint_catalog  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-constraint_schema  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-constraint_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+constraint_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+constraint_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_catalog  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-table_schema  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-table_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-column_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+table_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+column_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  int unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 position_in_unique_constraint  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 referenced_table_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -223,7 +223,7 @@ referenced_column_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 select table_name, column_name from key_column_usage where table_schema = '__nonexistent_schema__' limit 2;
 ➤ table_name[12,64,0]  ¦  column_name[12,64,0]
 desc columns;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 table_catalog  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 table_schema  ¦  varchar(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  varchar(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -254,12 +254,12 @@ mo_account  ¦  admin_name  𝄀
 mo_account  ¦  comments  𝄀
 mo_account  ¦  create_version
 desc views;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 table_catalog  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 table_schema  ¦  varchar(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  varchar(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 view_definition  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-check_option  ¦  varchar(9)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+check_option  ¦  varchar(9)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 is_updatable  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 definer  ¦  varchar(401)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 security_type  ¦  varchar(7)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -272,7 +272,7 @@ system  ¦  log_info  ¦  root@localhost  𝄀
 system  ¦  span_info  ¦  root@localhost  𝄀
 system  ¦  sql_statement_hotspot  ¦  root@localhost
 desc profiling;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 QUERY_ID  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 SEQ  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 STATE  ¦  varchar(30)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
@@ -294,7 +294,7 @@ SOURCE_LINE  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦
 select seq, state from profiling;
 ➤ seq[4,32,0]  ¦  state[12,30,0]
 desc user_privileges;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 GRANTEE  ¦  varchar(292)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 TABLE_CATALOG  ¦  varchar(512)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 PRIVILEGE_TYPE  ¦  varchar(64)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
@@ -302,7 +302,7 @@ IS_GRANTABLE  ¦  varchar(3)  ¦  NO  ¦    ¦    ¦    ¦
 select grantee, table_catalog from user_privileges limit 2;
 ➤ grantee[12,292,0]  ¦  table_catalog[12,512,0]
 desc schemata;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 catalog_name  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 schema_name  ¦  varchar(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 default_character_set_name  ¦  varchar(7)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -314,7 +314,7 @@ select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' 
 def  ¦  mo_catalog  𝄀
 def  ¦  mo_task
 desc character_sets;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 CHARACTER_SET_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 DEFAULT_COLLATE_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 DESCRIPTION  ¦  varchar(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -325,7 +325,7 @@ binary  ¦  Binary pseudo charset  ¦  1  𝄀
 utf8  ¦  UTF-8 Unicode  ¦  4  𝄀
 utf8mb4  ¦  UTF-8 Unicode  ¦  4
 desc triggers;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 TRIGGER_CATALOG  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 TRIGGER_SCHEMA  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 TRIGGER_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -354,7 +354,7 @@ use mysql;
 select host, user from user limit 2;
 ➤ host[1,255,0]  ¦  user[1,32,0]
 desc db;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
@@ -380,7 +380,7 @@ Trigger_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦
 select db, user from db limit 5;
 ➤ db[1,64,0]  ¦  user[1,32,0]
 desc procs_priv;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
@@ -388,28 +388,28 @@ Routine_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Routine_type  ¦  varchar(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
 Proc_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦  
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦  
 select routine_name, routine_type from procs_priv limit 5;
 ➤ routine_name[1,64,0]  ¦  routine_type[12,10,0]
 desc columns_priv;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Column_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦    𝄀
 Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦  
 select table_name, column_name from columns_priv limit 5;
 ➤ table_name[1,64,0]  ¦  column_name[1,64,0]
 desc tables_priv;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦    𝄀
 Table_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦  
 select host, table_name from tables_priv limit 5;

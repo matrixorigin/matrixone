@@ -35,7 +35,6 @@ connectlogtail
 information_schema
 logtail_reconnect
 mo_catalog
-mo_debug
 mo_task
 mysql
 system

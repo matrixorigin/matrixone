@@ -29,23 +29,6 @@ bool Bitmap_Contains(uint64_t *p, uint64_t pos) {
     return false;
 }
 
-bool Bitmap_IsEmpty(uint64_t *p, uint64_t nbits) {
-    return bitmap_empty(p, nbits);
-}
-uint64_t Bitmap_Count(uint64_t *p, uint64_t nbits) {
-    return bitmap_count(p, nbits);
-}
-
-void Bitmap_And(uint64_t *dst, uint64_t *a, uint64_t *b, uint64_t nbits) {
-    bitmap_and(dst, a, b, nbits);
-}
-void Bitmap_Or(uint64_t *dst, uint64_t *a, uint64_t *b, uint64_t nbits) {
-    bitmap_or(dst, a, b, nbits);
-}
-void Bitmap_Not(uint64_t *dst, uint64_t *a, uint64_t nbits) {
-    bitmap_not(dst, a, nbits);
-}
-
 #define XCALL_L2DISTANCE_F32 0
 #define XCALL_L2DISTANCE_F64 1
 #define XCALL_L2DISTANCE_SQ_F32 2

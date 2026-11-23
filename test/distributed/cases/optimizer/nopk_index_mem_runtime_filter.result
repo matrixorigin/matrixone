@@ -13,6 +13,35 @@ select id,k,payload from t ignore index(idx_k) where k in (7,8) order by id;
 1  ¦  7  ¦  a  𝄀
 2  ¦  7  ¦  b  𝄀
 3  ¦  8  ¦  c
+create table members (k int);
+insert into members values (7),(7),(8),(null);
+select id,k,payload from t where k in (select k from members where k < 9) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  b  𝄀
+3  ¦  8  ¦  c
+select id,k,payload from t ignore index(idx_k) where k in (select k from members where k < 9) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  b  𝄀
+3  ¦  8  ¦  c
+select id,k,payload from t force index(idx_k) where k in (select k from members where k < 9) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  b  𝄀
+3  ¦  8  ¦  c
+select t.id,t.k,t.payload from t join (select distinct k from members where k < 9) m on t.k=m.k order by t.id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  b  𝄀
+3  ¦  8  ¦  c
+select id,k,payload from t where k in (select k from members) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  b  𝄀
+3  ¦  8  ¦  c
+select id,k,payload from t where k in (select k from members where k > 9) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]
 prepare idx_points from 'select id,k,payload from t force index(idx_k) where k in (?, ?) order by id';
 set @k1='7';
 set @k2='8';
@@ -56,4 +85,73 @@ select id,k,payload from t ignore index(idx_k) where k in (7,8) order by id;
 ➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
 1  ¦  7  ¦  a  𝄀
 2  ¦  7  ¦  updated
+select id,k,payload from t where k in (select k from members where k < 9) and payload = 'updated' order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+2  ¦  7  ¦  updated
+select id,k,payload from t ignore index(idx_k) where k in (select k from members where k < 9) and payload = 'updated' order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+2  ¦  7  ¦  updated
+select id,k,payload from t force index(idx_k) where k in (select k from members where k < 9) and payload = 'updated' order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+2  ¦  7  ¦  updated
+truncate table t;
+truncate table members;
+insert into t values (1,1,'{"x":1}');
+insert into t select result,10,'bad' from generate_series(2,10)g;
+insert into members values (1),(10),(10);
+select mo_ctl('dn', 'flush', 'nopk_index_mem_runtime_filter.t');
+➤ mo_ctl(dn, flush, nopk_index_mem_runtime_filter.t)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'flush', 'nopk_index_mem_runtime_filter.members');
+➤ mo_ctl(dn, flush, nopk_index_mem_runtime_filter.members)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table t(k) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+nopk_index_mem_runtime_filter.t  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  10  ¦  1  ¦  10  ¦  2  ¦  280  ¦  OK  ¦  q=1/1
+analyze table members(k) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+nopk_index_mem_runtime_filter.members  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  3  ¦  1  ¦  3  ¦  2  ¦  84  ¦  OK  ¦  q=1/1
+set @saved_join_in_limit = @@session.runtime_filter_limit_in;
+set runtime_filter_limit_in = 1;
+select count(*) from t where k in (select k from members where k < 2) and cast(payload as json) is not null;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from t force index(idx_k) where k in (select k from members where k < 2) and cast(payload as json) is not null;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from t where k in (select k from members where k < 2) and json_extract(payload, '$.x') is not null;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from t force index(idx_k) where k in (select k from members where k < 2) and json_extract(payload, '$.x') is not null;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from t where k in (select k from members where k < 2) and payload = '{"x":1}';
+➤ count(*)[-5,64,0]  𝄀
+1
+update t set payload = 'bad' where id = 1;
+select count(*) from t where k in (select k from members where k < 2) and cast(payload as json) is not null;
+invalid input: json text bad
+select count(*) from t where k in (select k from members where k < 2) and json_extract(payload, '$.x') is not null;
+invalid input: json text bad
+set runtime_filter_limit_in = cast(@saved_join_in_limit as signed);
+select @@session.runtime_filter_limit_in = @saved_join_in_limit as restored_limit;
+➤ restored_limit[-6,8,0]  𝄀
+1
+set @saved_join_in_limit = null;
 drop database nopk_index_mem_runtime_filter;

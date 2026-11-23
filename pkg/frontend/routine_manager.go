@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"sync"
@@ -35,9 +36,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
 type RoutineManager struct {
+	lockReadLimiter        *motrace.LockReadLimiter
 	mu                     sync.RWMutex
 	disconnectProbeMu      sync.Mutex
 	disconnectProbeScratch []activeClientRequest
@@ -402,12 +405,11 @@ func getConnectionInfo(rs *Conn) string {
 	return fmt.Sprintf("connection from %s", rs.RemoteAddress())
 }
 
-func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
+func (rm *RoutineManager) Handler(rs *Conn, msg []byte) (err error) {
 	logutil.Debugf("get request from %d:%s", rs.ID(), rs.RemoteAddress())
 	defer func() {
 		logutil.Debugf("request from %d:%s has been processed", rs.ID(), rs.RemoteAddress())
 	}()
-	var err error
 	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
@@ -429,8 +431,10 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 		return moerr.NewInternalError(ctx, "cannot process request as routine is closed or busy")
 	}
 	defer routine.mc.endRequest()
-	routine.setInProcessRequest(true)
-	defer routine.setInProcessRequest(false)
+	if !routine.beginClientRequest() {
+		return io.EOF
+	}
+	defer func() { err = routine.endClientRequest(err) }()
 	ses := routine.getSession()
 
 	//handle request
@@ -644,6 +648,7 @@ func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, er
 		ctx:               ctx,
 	}
 	rm := &RoutineManager{
+		lockReadLimiter:  motrace.NewLockReadLimiter(),
 		ctx:              ctx,
 		clients:          make(map[*Conn]*Routine),
 		routinesByConnID: make(map[uint32]*Routine),

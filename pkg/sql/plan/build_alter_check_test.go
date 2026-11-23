@@ -95,7 +95,7 @@ func TestAlterCheckUsesFinalCopyDefinition(t *testing.T) {
 			defer stmt.Free()
 			astBefore := tree.String(stmt, dialect.MYSQL)
 			for range 2 {
-				p, err := BuildPlan(&mock.ctxt, stmt, false)
+				p, err := BuildPlan(&mock.ctxt, stmt, false, nil)
 				require.NoError(t, err)
 				alter := p.GetDdl().GetAlterTable()
 				require.Equal(t, planpb.AlterTable_COPY, alter.AlgorithmType)
@@ -216,7 +216,7 @@ func TestAlterConstraintDropResolution(t *testing.T) {
 			defer stmt.Free()
 			astBefore := tree.String(stmt, dialect.MYSQL)
 			for range 2 {
-				p, err := BuildPlan(&mock.ctxt, stmt, false)
+				p, err := BuildPlan(&mock.ctxt, stmt, false, nil)
 				require.NoError(t, err)
 				alter := p.GetDdl().GetAlterTable()
 				require.Equal(t, planpb.AlterTable_INPLACE, alter.AlgorithmType)
@@ -364,7 +364,7 @@ func TestAlterConstraintUsesFinalCopyNamespace(t *testing.T) {
 			defer stmt.Free()
 			astBefore := tree.String(stmt, dialect.MYSQL)
 			for range 2 {
-				p, err := BuildPlan(&mock.ctxt, stmt, false)
+				p, err := BuildPlan(&mock.ctxt, stmt, false, nil)
 				if test.ambiguous {
 					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
 					require.ErrorContains(t, err, "ambiguous constraint name")
@@ -412,7 +412,7 @@ func TestAlterConstraintUsesFinalCopyNamespace(t *testing.T) {
 						require.Equal(t, test.want, options[i].(*tree.AlterOptionDrop).Typ)
 					}
 				}
-				_, err = BuildPlan(&mock.ctxt, stmt, false)
+				_, err = BuildPlan(&mock.ctxt, stmt, false, nil)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 				require.ErrorContains(t, err, "combined COPY DROP INDEX requires a functional index")
 				require.Equal(t, before, source)
@@ -500,7 +500,7 @@ func TestAlterConstraintUsesResolvedIndexAdmission(t *testing.T) {
 			defer stmt.Free()
 			astBefore := tree.String(stmt, dialect.MYSQL)
 			for range 2 {
-				p, err := BuildPlan(&mock.ctxt, stmt, false)
+				p, err := BuildPlan(&mock.ctxt, stmt, false, nil)
 				if test.reject {
 					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 					require.ErrorContains(t, err, "index mutation on native Unicode unique tables")
@@ -971,7 +971,7 @@ func TestAlterRenameRetainedCheckPreservesBoundPrecision(t *testing.T) {
 	createdStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ddl, 1)
 	require.NoError(t, err)
 	defer createdStmt.Free()
-	created, err := BuildPlan(divPrecisionCompilerContext{CompilerContext: &mock.ctxt, increment: 10}, createdStmt, false)
+	created, err := BuildPlan(divPrecisionCompilerContext{CompilerContext: &mock.ctxt, increment: 10}, createdStmt, false, nil)
 	require.NoError(t, err)
 	source := created.GetDdl().GetCreateTable().TableDef
 	source.TblId = 25387

@@ -1,0 +1,104 @@
+-- @suite
+-- @case
+-- @desc: correlated EXISTS/NOT EXISTS on ENUM/SET association keys (#31568)
+-- @label:bvt
+
+drop database if exists issue_31568_enum_set_corr;
+create database issue_31568_enum_set_corr;
+use issue_31568_enum_set_corr;
+
+-- These queries assert ONLY_FULL_GROUP_BY-compliant plans (MySQL's default
+-- mode, the mode the #31568 fix targets). mo-tester reuses one connection
+-- across the whole group, and dtype/enum.sql leaves a loose sql_mode behind,
+-- so pin the mode explicitly and restore the inherited value afterwards.
+set @issue_31568_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = default;
+
+create table enum_l(id int primary key,k enum('a','b'));
+create table enum_r(id int primary key,k enum('b','a'));
+insert into enum_l values(1,'a'),(2,'b'),(3,null);
+insert into enum_r values(1,'a'),(2,'b');
+
+-- correlated EXISTS/NOT EXISTS must plan and return MySQL-compatible rows.
+select l.id from enum_l l where not exists(select 1 from enum_r r where l.k=r.k) order by l.id;
+select l.id from enum_l l where exists(select 1 from enum_r r where l.k=r.k) order by l.id;
+
+-- explicit CHAR cast keeps the same result.
+select l.id from enum_l l where not exists(select 1 from enum_r r where cast(l.k as char)=cast(r.k as char)) order by l.id;
+
+-- same definitions on both sides.
+create table enum_r2(id int primary key,k enum('a','b'));
+insert into enum_r2 values(1,'a');
+select l.id from enum_l l where not exists(select 1 from enum_r2 r where l.k=r.k) order by l.id;
+select l.id from enum_l l where exists(select 1 from enum_r2 r where l.k=r.k) order by l.id;
+
+-- NULL outer key never matches.
+select l.id from enum_l l where not exists(select 1 from enum_r r where l.k=r.k or l.k is null) order by l.id;
+
+-- IN / NOT IN with a correlated free of ENUM keys but ENUM subquery column.
+select l.id from enum_l l where l.k in (select r.k from enum_r r) order by l.id;
+select l.id from enum_l l where l.k not in (select r.k from enum_r r) order by l.id;
+
+-- SET keys share the contract.
+create table set_l(id int primary key,k set('a','b'));
+create table set_r(id int primary key,k set('b','a'));
+insert into set_l values(1,'a'),(2,'b'),(3,null);
+insert into set_r values(1,'a'),(2,'b');
+select l.id from set_l l where not exists(select 1 from set_r r where l.k=r.k) order by l.id;
+select l.id from set_l l where exists(select 1 from set_r r where l.k=r.k) order by l.id;
+select l.id from set_l l where not exists(select 1 from set_r r where cast(l.k as char)=cast(r.k as char)) order by l.id;
+
+-- controls: LEFT JOIN anti-join and integer-key correlation keep working.
+select l.id from enum_l l left join enum_r r on l.k=r.k where r.id is null order by l.id;
+select l.id from enum_l l where not exists(select 1 from enum_r r where l.id=r.id) order by l.id;
+select l.id from enum_l l, enum_r r where l.id=r.id and cast(l.k as char)=cast(r.k as char) order by l.id;
+select l.id, r.k from enum_l l inner join enum_r r on l.k=r.k order by l.id;
+
+-- grouped subqueries: HAVING references the outer ENUM/SET key.
+select l.id from enum_l l where exists(select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+select l.id from enum_l l where not exists(select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+select l.id from enum_l l where l.k in (select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+select l.id from enum_l l where exists(select r.k from enum_r2 r group by r.k having r.k=l.k) order by l.id;
+
+-- outer primary key grouped: the outer ENUM key stays functionally dependent.
+select l.id from enum_l l group by l.id having exists(select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+
+-- INT-key control with the same grouped-HAVING shape.
+select l.id from enum_l l where exists(select r.id from enum_r r group by r.id having r.id=l.id) order by l.id;
+
+-- SET keys share the contract.
+select l.id from set_l l where exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
+select l.id from set_l l where not exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
+select l.id from set_l l group by l.id having exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
+
+-- direct outer-column aggregate arguments (#31568 review follow-up): the
+-- correlation cannot become an ordinary aggregate's argument, so planning
+-- fails with the same correlated-aggregate NYI as the INT twins instead of
+-- admitting a plan whose aggregate argument cannot be evaluated.
+select l.id, (select max(l.k) from enum_r r) from enum_l l;
+select l.id, (select count(l.k) from enum_r r) from enum_l l;
+select l.id from enum_l l where exists(select 1 from enum_r r group by r.id having max(l.k)='a');
+select l.id from enum_l l group by l.id having exists(select max(l.k) from enum_r r group by r.id);
+select l.id, (select max(l.k) from set_r r) from set_l l;
+select l.id, (select count(l.k) from set_r r) from set_l l;
+select l.id from set_l l where exists(select 1 from set_r r group by r.id having max(l.k)='a');
+select l.id from set_l l group by l.id having exists(select max(l.k) from set_r r group by r.id);
+-- INT twins of the same four shapes keep their existing bind-time rejection.
+select l.id, (select max(l.id) from enum_r r) from enum_l l;
+select l.id, (select count(l.id) from enum_r r) from enum_l l;
+select l.id from enum_l l where exists(select 1 from enum_r r group by r.id having max(l.id)=1);
+select l.id from enum_l l group by l.id having exists(select max(l.id) from enum_r r group by r.id);
+-- positive controls: a non-aggregate correlated scalar subquery in the
+-- projection keeps working end-to-end for ENUM/SET keys like the INT control.
+select l.id, (select r.id from enum_r r where l.k=r.k) from enum_l l order by l.id;
+select l.id, (select r.id from enum_r r where l.id=r.id) from enum_l l order by l.id;
+select l.id, (select r.id from set_r r where l.k=r.k) from set_l l order by l.id;
+
+-- after all the above, source data is intact and the connection is healthy.
+select 1, count(*) from enum_l;
+select 1, count(*) from enum_r;
+
+set session sql_mode = @issue_31568_saved_sql_mode;
+select @@sql_mode = @issue_31568_saved_sql_mode as restored;
+
+drop database if exists issue_31568_enum_set_corr;

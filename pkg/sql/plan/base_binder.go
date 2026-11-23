@@ -77,7 +77,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
-		expr, err = b.bindNumVal(exprImpl, b.defaultValueBindType())
+		expr, err = b.bindNumVal(exprImpl, b.numValDefaultBindType(exprImpl))
 	case *tree.TimeUnitExpr:
 		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
 		expr, err = b.bindNumVal(numVal, b.defaultValueBindType())
@@ -228,7 +228,15 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			// width validation and preserves the engine's admitted charset aliases.
 			charsetName := castType.InternalType.CastCharsetName
 			charsetLiteral := tree.NewNumVal(charsetName, charsetName, false, tree.P_char)
+			// A charset-explicit CAST into non-binary text is the same
+			// semantic boundary as the non-charset explicit cast below: bind
+			// the CONVERT source subtree under the same leaf-level protection
+			// so INSERT/REPLACE destination pre-coercion cannot erase the
+			// binary domain before conversion (NULL + Warning 1300).
+			suppressBinarySourceGuard := b.binaryLiteralUnderExplicitTextCast
+			b.binaryLiteralUnderExplicitTextCast = binarySourceGuardForCastSource(suppressBinarySourceGuard, typ)
 			expr, err = b.bindFuncExprImplByAstExpr("convert", []tree.Expr{exprImpl.Expr, charsetLiteral}, depth)
+			b.binaryLiteralUnderExplicitTextCast = suppressBinarySourceGuard
 			if err != nil {
 				return
 			}
@@ -264,7 +272,30 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			b.isGenericNumericFunctionRoot(exprImpl.Expr, depth, &typ) {
 			expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
 		} else {
+			// A user-written explicit CAST into non-binary-charset text is a
+			// semantic boundary for binary-domain literals: without
+			// protection, an INSERT/REPLACE value binder pre-coerces a binary
+			// source literal (x'FF', b'...', _binary X'FF', _binary '...') to
+			// the destination column type, erasing the binary domain before
+			// the explicit cast can apply its own conversion contract
+			// (invalid UTF-8 -> NULL + Warning 1300) — including literals
+			// nested inside source expressions such as IFNULL/COALESCE/CONCAT.
+			// Protection is a leaf-level gate (numValDefaultBindType): only
+			// binary-domain NumVal leaves (hex, bit and the _binary
+			// introducer forms) skip pre-coercion, so string literals, plain
+			// numeric literals, columns and non-literal expressions bind
+			// identically either way and keep the historical pre-coercion
+			// (CAST(X'3132' AS SIGNED) in VALUES stays 12, plain numeric text
+			// defaults keep folding). The innermost explicit cast owns its
+			// source subtree, except that a byte-preserving nested cast whose
+			// target stays in the binary domain (CAST(... AS BINARY), binary-
+			// charset CHAR) is transparent: it does not change the bytes an
+			// enclosing text cast converts, so an inherited guard passes
+			// through it unchanged (review5810535982).
+			suppress := b.binaryLiteralUnderExplicitTextCast
+			b.binaryLiteralUnderExplicitTextCast = binarySourceGuardForCastSource(suppress, typ)
 			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
+			b.binaryLiteralUnderExplicitTextCast = suppress
 		}
 		b.numericParamType = parentParamType
 		if err != nil {
@@ -303,7 +334,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			}
 		}
 		if useExplicitCastOverload(exprImpl.Type) {
-			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+			expr, err = appendTemporalIntegerCast(b.GetContext(), expr, typ, b)
 		} else {
 			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		}
@@ -466,6 +497,69 @@ func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
 		}
 		astExpr = paren.Expr
 	}
+}
+
+// explicitCastTargetsNonBinaryText reports whether an explicit CAST target is
+// non-binary-charset char/varchar/text — the conversion domain guarded by
+// func_cast.go binarySourceToText and mirrored by function.go
+// explicitBinaryToTextCastMaySynthesizeNull.
+func explicitCastTargetsNonBinaryText(typ Type) bool {
+	t := types.T(typ.Id)
+	if t != types.T_char && t != types.T_varchar && t != types.T_text {
+		return false
+	}
+	return typ.Charset != uint32(types.CharsetBinary)
+}
+
+// explicitCastKeepsBinaryDomain reports whether an explicit CAST target stays
+// in the binary domain (binary-charset char/varchar/text/binary/varbinary):
+// the cast keeps the raw source bytes, at most truncating or zero-padding
+// them to the target width, so an enclosing non-binary text cast's
+// conversion contract still applies to the same bytes.
+func explicitCastKeepsBinaryDomain(typ Type) bool {
+	switch types.T(typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text, types.T_varbinary, types.T_binary:
+	default:
+		return false
+	}
+	return typ.Charset == uint32(types.CharsetBinary)
+}
+
+// binarySourceGuardForCastSource derives the leaf-level binary-source guard
+// for the source subtree of an explicit CAST with target typ, given the
+// guard inherited from any enclosing explicit text cast. A non-binary-charset
+// text target opens the guard for its own source subtree. A binary-domain
+// target is byte-preserving, so an inherited guard passes through it
+// unchanged; any other target (numeric, temporal, ...) is a substantive
+// conversion boundary and closes the guard.
+func binarySourceGuardForCastSource(inherited bool, typ Type) bool {
+	if explicitCastTargetsNonBinaryText(typ) {
+		return true
+	}
+	return inherited && explicitCastKeepsBinaryDomain(typ)
+}
+
+// numValDefaultBindType applies the INSERT/REPLACE destination-column
+// pre-coercion to numeric literals, except that a binary-domain literal
+// (hex, bit, or a _binary introducer form) bound in the source subtree of an
+// explicit CAST into non-binary-charset text keeps its raw binary bytes:
+// defaultValueBindType would rewrite those leaves to the destination column
+// type and erase the binary domain before the explicit cast's conversion
+// contract (invalid UTF-8 -> NULL + Warning 1300) could apply. Plain numeric
+// literals, string literals and non-literal expressions are unaffected, so
+// folded text defaults and numeric-target casts keep the historical coercion.
+func (b *baseBinder) numValDefaultBindType(astExpr *tree.NumVal) Type {
+	if b.binaryLiteralUnderExplicitTextCast &&
+		(astExpr.ValType == tree.P_hexnum || astExpr.ValType == tree.P_bit ||
+			astExpr.ValType == tree.P_ScoreBinary || astExpr.ValType == tree.P_ScoreBinaryHexnum) {
+		// The _binary introducer forms share the hex/bit raw-bytes contract:
+		// pre-coercing them to the destination column type (including a
+		// nullable NUMERIC destination) is irreversible and would erase the
+		// binary domain before the explicit cast's NULL + Warning 1300
+		// conversion contract could apply.
+		return Type{}
+	}
+	return b.defaultValueBindType()
 }
 
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
@@ -708,11 +802,17 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	relPos := NotFound
 	colPos := NotFound
 	var typ *plan.Type
+	var resolvedBinding *Binding
 	localErrCtx := errutil.ContextWithNoReport(b.GetContext(), true)
+	// joinOnUnresolved holds the on-clause diagnostic this binder stored for
+	// an unresolved table qualifier, for the final delegated-lookup failure
+	// branch below.
+	var joinOnUnresolved error
 
 	if len(table) == 0 {
 		if binding, ok := b.ctx.bindingByCol[col]; ok {
 			if binding != nil {
+				resolvedBinding = binding
 				relPos = binding.tag
 				colPos = binding.colIdByName[col]
 				typ = DeepCopyType(binding.types[colPos])
@@ -759,6 +859,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	} else {
 		binding := b.resolveTableBinding(b.ctx, db, table)
 		if binding != nil {
+			resolvedBinding = binding
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
@@ -769,6 +870,19 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			} else {
 				err = moerr.NewBadFieldErrorf(localErrCtx, "invalid input: column '%s' does not exist", name)
 			}
+		} else if tb, ok := b.impl.(*TableBinder); ok && tb.joinOn && depth == 0 {
+			// A reference this JOIN ON predicate binds directly (depth 0)
+			// resolves only against the FROM bindings the clause already
+			// owns; a table qualifier that stays unresolved there is out of
+			// clause scope, which MySQL reports as an unknown on-clause
+			// column rather than a Postgres-style missing FROM entry. The
+			// parent-correlation walk below still gets its chance before
+			// this error surfaces. A lookup delegated into this binder at
+			// depth > 0 originates in another clause — a nested WHERE or
+			// SELECT inside the ON subquery — and keeps that clause's own
+			// diagnostic.
+			err = moerr.NewBadFieldError(localErrCtx, name, "on clause")
+			joinOnUnresolved = err
 		} else {
 			err = moerr.NewInvalidInputf(localErrCtx, "missing FROM-clause entry for table '%v'", table)
 		}
@@ -799,6 +913,21 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			columnPos: colPos,
 		})
 	}
+	var virtualRead *plan.Expr
+	_, physicalGeneratedRef := b.ctx.physicalGeneratedRefs[astExpr]
+	if colPos != NotFound {
+		if !physicalGeneratedRef {
+			virtualRead, _, err = b.ctx.bindVirtualTimestampRead(resolvedBinding, colPos, depth)
+			if err != nil {
+				return nil, err
+			}
+		} else if resolvedBinding != nil && resolvedBinding.virtualTimestampStaged {
+			// The staged read value occupies the ordinary column position; the
+			// passthrough half of the projection retains the writer-time OLD
+			// value needed for secondary-index maintenance.
+			colPos += int32(len(resolvedBinding.types))
+		}
+	}
 
 	preserveSpecialValue := typ != nil && b.mysqlSpecialTargetType != nil &&
 		typ.Enumvalues == b.mysqlSpecialTargetType.Enumvalues &&
@@ -807,7 +936,8 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	// ENUM and SET have distinct storage and display representations. Keep their
 	// display value by default. Numeric and bitwise expression binders explicitly
 	// enable raw storage binding so they follow MySQL's numeric semantics.
-	if !b.bindRawMySQLSpecialType && !preserveSpecialValue && isEnumOrSetPlanType(typ) {
+	_, physicalMySQLSpecialRef := b.ctx.physicalMySQLSpecialRefs[astExpr]
+	if !b.bindRawMySQLSpecialType && !physicalMySQLSpecialRef && !preserveSpecialValue && isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
 			return
@@ -832,21 +962,44 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			}
 			args[idx] = expr
 		}
-		args[len(args)-1] = &Expr{
+		// Keep correlation depth on the wrapped reference so an outer
+		// ENUM/SET column resolves through the outer scope instead of
+		// leaking a plain column reference into the subquery scope (#31568).
+		refRelPos, refColPos := relPos, colPos
+		if aggRelPos, aggColPos, ok := b.correlatedFullGroupByAggregateRef(relPos, colPos, col, typ); ok {
+			refRelPos, refColPos = aggRelPos, aggColPos
+		}
+		ref := &Expr{
 			Typ: *typ,
-			Expr: &plan.Expr_Col{
+			Expr: &plan.Expr_Corr{
+				Corr: &plan.CorrColRef{
+					RelPos: refRelPos,
+					ColPos: refColPos,
+					Depth:  depth,
+				},
+			},
+		}
+		if depth == 0 {
+			ref.Expr = &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: relPos,
 					ColPos: colPos,
 					Name:   col,
 				},
-			},
+			}
+		}
+		args[len(args)-1] = ref
+		if virtualRead != nil {
+			args[len(args)-1] = virtualRead
 		}
 
 		return BindFuncExprImplByPlanExpr(b.GetContext(), indexToValueFun, args)
 	}
 
 	if colPos != NotFound {
+		if virtualRead != nil {
+			return virtualRead, nil
+		}
 		expr = &plan.Expr{
 			Typ: *typ,
 		}
@@ -900,9 +1053,44 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	if err == nil {
 		b.ctx.isCorrelated = true
+	} else if joinOnUnresolved != nil && moerr.IsMoErrCode(err, moerr.ErrInvalidInput) &&
+		!b.joinOnNamespaceResolved(db, table) {
+		// The delegated lookup walks outward with the same qualified
+		// reference, and an InvalidInput it returns is not proof by
+		// itself: a binding context that owns the namespace can also
+		// return InvalidInput for a column-level failure, such as an
+		// ambiguous duplicate-named column. Substitute the on-clause
+		// diagnostic only when no binding context the delegation consults
+		// holds the table namespace itself: then every scope failed the
+		// same missing namespace lookup, and the innermost occurrence,
+		// this ON clause, owns the unknown-column class. Any parent error
+		// from an owned namespace, and every non-InvalidInput parent
+		// error, keeps the parent's own diagnostic; successful outer
+		// correlation above is untouched.
+		err = joinOnUnresolved
 	}
 
 	return
+}
+
+// joinOnNamespaceResolved reports whether any binding context that a
+// delegated parent lookup walks holds a binding for the qualified table
+// namespace: the binder-bearing ancestor chain, skipping the binder-less
+// contexts the parent delegation never binds against, with the same
+// per-context lazy default-database fallback as the delegated lookup. A
+// namespace owned by an outer context means that context binds against it,
+// so a delegated InvalidInput born there is a column-level failure of the
+// owned namespace rather than a missing namespace.
+func (b *baseBinder) joinOnNamespaceResolved(db, table string) bool {
+	for c := b.ctx.parent; c != nil; c = c.parent {
+		if c.binder == nil {
+			continue
+		}
+		if b.resolveTableBinding(c, db, table) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *baseBinder) correlatedGroupByColPos(depth int32, astName, table, col string) (int32, bool) {
@@ -1028,6 +1216,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	zeroScalarSourceSafe := !astExpr.Exists && zeroLimitScalarSourceSafe(astExpr.Select, subCtx)
+	udfResolutionCount := b.builder.udfResolutionCount
+	udfExpansionDepth := b.builder.udfExpansionDepth
 	b.builder.nextExistentialBlock++
 	subCtx.existentialBlock = b.builder.nextExistentialBlock
 	subCtx.subqueryNestingDepth = b.ctx.subqueryNestingDepth + 1
@@ -1050,6 +1241,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	var nodeID int32
 	var err error
+	zeroScalarGeneration := b.builder.zeroScalarRewriteGeneration
+	zeroScalarRetention := b.builder.zeroScalarRetentionGeneration
+	zeroScalarValidationSpecial := b.builder.zeroScalarValidationSpecialGeneration
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
 		nodeID, err = b.builder.bindSelect(subquery.Select, subCtx, false)
@@ -1064,6 +1258,49 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	default:
 		return nil, moerr.NewNYIf(b.GetContext(), "unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
+	}
+	if b.builder.zeroScalarRewriteGeneration != zeroScalarGeneration ||
+		b.builder.zeroScalarRetentionGeneration != zeroScalarRetention {
+		if b.builder.zeroScalarValidationSpecialGeneration != zeroScalarValidationSpecial {
+			return nil, moerr.NewNYI(b.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
+		}
+		sources, err := collectUDFArgumentAuthorizationSources(b.builder, nil, []int32{nodeID})
+		if err != nil {
+			return nil, err
+		}
+		// A control function folded while binding an affected wrapper might
+		// already be missing from the sources checked by the frontend.
+		if zeroLimitScalarHasControlFunction(astExpr.Select) {
+			controlRetained := false
+			for source := range sources {
+				if NodeHasMoCtrl(b.builder.qry.Nodes[source]) {
+					controlRetained = true
+					break
+				}
+			}
+			if !controlRetained {
+				return nil, moerr.NewNYI(b.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
+			}
+		}
+		if b.builder.zeroScalarPolicy == zeroScalarValidateOnly {
+			if err := b.builder.validateZeroScalarSpecialSources(sources); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := b.builder.retainZeroScalarAuthorizationSources(sources); err != nil {
+				return nil, err
+			}
+		}
+		if len(sources) != 0 {
+			b.builder.zeroScalarArgumentWrappers = append(b.builder.zeroScalarArgumentWrappers, nodeID)
+		}
+	}
+	subCtx.zeroScalarRootSourceSafe = zeroScalarSourceSafe && udfExpansionDepth == 0 &&
+		b.builder.udfExpansionDepth == 0 && b.builder.udfResolutionCount == udfResolutionCount
+	if subCtx.zeroScalarRootSourceSafe {
+		// Bound scalar references can later be copied into SQL UDF arguments.
+		// Keep this summary sticky for the lifetime of the statement.
+		b.builder.hasZeroScalarSourceCandidate = true
 	}
 
 	rowSize := int32(len(subCtx.results))
@@ -1188,6 +1425,25 @@ func (b *baseBinder) bindUnaryExprWithCurrentContext(astExpr *tree.UnaryExpr, de
 }
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if b.numericParamType != nil &&
+		(astExpr.Op == tree.PLUS || astExpr.Op == tree.MINUS) &&
+		(isSyntacticIntervalOperand(astExpr.Left) || isSyntacticIntervalOperand(astExpr.Right)) {
+		// `x +/- INTERVAL n unit` is temporal arithmetic rewriting into
+		// DATE_ADD/DATE_SUB: like that function's own argument boundary, its
+		// operands must keep their source domains even when an enclosing
+		// numeric expression has already installed a numeric context here.
+		// The inherited context is restored on every exit path, so the
+		// temporal result is still typed normally for the remaining outer
+		// numeric consumers.
+		inheritedParamType := b.numericParamType
+		inheritedSubqueryTarget := b.numericSubqueryTarget
+		b.numericParamType = nil
+		b.numericSubqueryTarget = nil
+		defer func() {
+			b.numericParamType = inheritedParamType
+			b.numericSubqueryTarget = inheritedSubqueryTarget
+		}()
+	}
 	if (isNumericBinaryOp(astExpr.Op) || isBitwiseBinaryOp(astExpr.Op)) &&
 		(b.mysqlSpecialTypeInAst(astExpr.Left) || b.mysqlSpecialTypeInAst(astExpr.Right)) {
 		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
@@ -1552,6 +1808,22 @@ func (b *baseBinder) numericAstTypesInternal(
 	return b.numericAstTypesInternalWithHint(astExpr, depth, resolveColumn, nil)
 }
 
+// isSyntacticIntervalOperand reports whether expr is the parser's
+// `INTERVAL <expr> <unit>` production, optionally parenthesized: the grammar
+// reduces that production to a two-argument function named interval whose
+// second argument is the time unit, and the interval rewrite binds exactly
+// this shape to the INTERVAL type. A function that merely shares the
+// spelling but carries another arity or argument shape is an ordinary
+// function call, not syntactic INTERVAL.
+func isSyntacticIntervalOperand(expr tree.Expr) bool {
+	funcExpr, ok := unwrapParenExpr(expr).(*tree.FuncExpr)
+	if !ok || len(funcExpr.Exprs) != 2 {
+		return false
+	}
+	_, secondIsUnit := funcExpr.Exprs[1].(*tree.TimeUnitExpr)
+	return secondIsUnit && numericAstFunctionName(funcExpr) == "interval"
+}
+
 func (b *baseBinder) numericAstTypesInternalWithHint(
 	astExpr tree.Expr,
 	depth int32,
@@ -1608,6 +1880,18 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
 	case *tree.BinaryExpr:
 		if !isNumericBinaryOp(expr.Op) {
+			return numericAstTypeScan{}, nil
+		}
+		// `x +/- INTERVAL n unit` is the operator spelling of DATE_ADD/
+		// DATE_SUB, not numeric arithmetic. Both operands must reach the
+		// operator binding with their own domains - date-like text, user
+		// variables, prepared markers, temporal columns - so the existing
+		// temporal rewrite can consume the source values. Establishing the
+		// default numeric context over the whole subtree here would
+		// prefix-convert date text to DOUBLE before that rewrite and fail
+		// the dispatch.
+		if (expr.Op == tree.PLUS || expr.Op == tree.MINUS) &&
+			(isSyntacticIntervalOperand(expr.Left) || isSyntacticIntervalOperand(expr.Right)) {
 			return numericAstTypeScan{}, nil
 		}
 		left, err := b.numericAstTypesInternalWithHint(expr.Left, depth, resolveColumn, hint)
@@ -3597,6 +3881,7 @@ func (b *baseBinder) bindPreparedNumericPrecisionFuncExpr(
 // name on the stored-function/UDF path. With IGNORE_SPACE disabled, MySQL does
 // not recognize that spelling as a native built-in call.
 func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	zeroScalarArgs := b.builder.beginZeroScalarArguments()
 	args := make([]*Expr, len(astArgs))
 	for i, arg := range astArgs {
 		expr, err := b.impl.BindExpr(arg, depth, false)
@@ -3613,11 +3898,11 @@ func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, d
 			name,
 		)
 	}
-	udf, err := b.builder.compCtx.ResolveUdf(name, args)
+	udf, err := b.resolveIndexViewUdf(name, args)
 	if err != nil {
 		return nil, err
 	}
-	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarArgs)
 }
 
 // bindGroupingFuncExpr binds GROUPING arguments directly to their registered
@@ -4360,6 +4645,52 @@ func (b *baseBinder) coerceJSONNumericAggregateArg(
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	expr, err := b.bindFuncExprImplByAstExprInner(name, astArgs, depth)
+	if err == nil && name == "coalesce" && b.builder != nil && isMixedDomainCoalesce(expr) {
+		b.builder.mixedDomainCoalesce = true
+	}
+	return expr, err
+}
+
+func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.Expr, depth int32) (boundExpr *plan.Expr, bindErr error) {
+	zeroScalarArgs := b.builder.beginZeroScalarArguments()
+	var requiredZeroScalarRoots map[int32]struct{}
+	builtinResult := false
+	defer func() {
+		if bindErr != nil || len(requiredZeroScalarRoots) == 0 {
+			return
+		}
+		missing := missingZeroScalarRoots(boundExpr, requiredZeroScalarRoots)
+		if len(missing) == 0 {
+			return
+		}
+		if !builtinResult || b.builder == nil || b.builder.zeroScalarPolicy == zeroScalarDisabled {
+			boundExpr = nil
+			bindErr = moerr.NewNYI(b.GetContext(), "function with a correlated scalar LIMIT 0 argument may discard its table dependency")
+			return
+		}
+		sources, err := collectUDFArgumentAuthorizationSources(b.builder, nil, missing)
+		if err == nil && len(sources) == 0 {
+			err = moerr.NewInternalError(b.GetContext(), "missing folded zero-limit scalar source")
+		}
+		if err == nil && b.builder.zeroScalarPolicy == zeroScalarValidateOnly {
+			// The validation owner collects ordinary bound sources itself.
+			// Special frontend checks require the original executable node.
+			err = b.builder.validateZeroScalarSpecialSources(sources)
+			if err == nil {
+				b.builder.zeroScalarRetentionGeneration++
+				return
+			}
+		}
+		if err == nil {
+			err = b.builder.retainZeroScalarAuthorizationSources(sources)
+		}
+		if err != nil {
+			boundExpr, bindErr = nil, err
+			return
+		}
+		b.builder.zeroScalarRetentionGeneration++
+	}()
 	previousFieldContext := b.preparedFieldArgumentContext
 	b.preparedFieldArgumentContext = previousFieldContext || name == "field"
 	defer func() { b.preparedFieldArgumentContext = previousFieldContext }()
@@ -4543,6 +4874,12 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.suppressDefaultValueBindType = true
 				b.inetNtoaNumericLiteralContext = true
 			}
+			if conditionalValueIndexes(name, len(astArgs)) != nil && isBinaryLiteralAst(arg) {
+				// A binary literal branch keeps its own COERCIBLE identity, so
+				// collation aggregation decides the conditional's string domain
+				// instead of the destination column type of a DEFAULT.
+				b.suppressDefaultValueBindType = true
+			}
 			if name == "timestampadd" && idx == 1 && timestampAddSecondUnit(args[:idx]) && !function.LegacyTimestampAddSecond(b.GetContext()) {
 				// SECOND consumes the source decimal value before integer coercion.
 				b.suppressDefaultValueBindType = true
@@ -4554,7 +4891,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 				expr, err = b.bindIntegerArgumentAst(arg, depth, target)
-			} else if function.IntegerArgumentSourceDependent(name, idx) {
+			} else if function.IntegerArgumentSourceDependent(name, idx) &&
+				!function.IntegerArgumentKeepsOperandBinding(name, idx) {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 				if function.IntegerArgumentUsesBitSources(name, idx) {
@@ -4602,6 +4940,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			args[idx] = expr
 		}
 	}
+	requiredZeroScalarRoots = zeroScalarSubqueryRoots(b.builder, args)
 	if name == "coalesce" && b.builder != nil && b.builder.isPrepareStatement &&
 		preparedSourceBindings(b.GetContext()) == nil {
 		var err error
@@ -4803,6 +5142,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 		}
 	}
+	if name == "between" && len(args) == 3 && b.builder != nil &&
+		containsVolatileFunction(args[0]) && args[0].AuxId >= 0 {
+		if _, expandRange := dateStringBetweenNormalization(args); expandRange {
+			// The DATE/string range expansion (normalizeDateStringComparisonArgs)
+			// rebinds its left operand in each of the two comparisons. Memoize it
+			// so a volatile source such as nextval still runs once, the same
+			// contract the IN expansion above uses.
+			if err := b.markVolatileInLeft(args[0]); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if state := preparedBindingState(b.GetContext()); state != nil &&
 		len(args) == 2 && isPreparedNumericComparisonContext(name) {
 		for i, source := range args {
@@ -4965,7 +5316,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			// Materialize temporal constants before relocation checks see their
 			// diagnostic flag, without folding unrelated enclosing functions.
 			// PREPARE retains sources for EXECUTE-time zero-date policy.
-			if !b.builder.isPrepareStatement && !defines.IsPublicationViewBinding(b.GetContext()) {
+			if !b.builder.isPrepareStatement && !defines.IsNoEvaluationViewBinding(b.GetContext()) {
 				proc := b.builder.compCtx.GetProcess()
 				e = foldTemporalTextConstant(proc, e)
 				if fn := e.GetF(); fn != nil {
@@ -4974,6 +5325,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					}
 				}
 			}
+			builtinResult = true
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -5007,6 +5359,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					return nil, err
 				}
 			}
+			builtinResult = true
 			return builtinExpr, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -5032,13 +5385,135 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			name,
 		)
 	}
-	cmpCtx := b.builder.compCtx
-	udf, err := cmpCtx.ResolveUdf(name, args)
+	udf, err := b.resolveIndexViewUdf(name, args)
 	if err != nil {
 		return nil, err
 	}
+	requiredZeroScalarRoots = nil // The UDF binder owns argument retention.
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarArgs)
+}
 
-	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+func (builder *QueryBuilder) validateZeroScalarSpecialSources(sources map[int32]struct{}) error {
+	for id := range sources {
+		if zeroScalarNodeLiveRequirements(builder.qry.Nodes[id]) != 0 {
+			return moerr.NewNYI(builder.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
+		}
+	}
+	return nil
+}
+
+func (b *baseBinder) resolveIndexViewUdf(name string, args []*Expr) (*function.Udf, error) {
+	compiler := b.builder.compCtx
+	if restricted, ok := compiler.(interface{ IndexMaintenanceRestricted() bool }); ok && restricted.IndexMaintenanceRestricted() {
+		if resolver, ok := compiler.(ViewUdfResolver); ok {
+			database := compiler.DefaultDatabase()
+			if b.ctx != nil && b.ctx.defaultDatabase != "" {
+				database = b.ctx.defaultDatabase
+			}
+			return resolver.ResolveViewUdf(name, args, database)
+		}
+	}
+	return compiler.ResolveUdf(name, args)
+}
+
+func zeroScalarSubqueryRoots(builder *QueryBuilder, args []*plan.Expr) map[int32]struct{} {
+	if builder == nil || !builder.hasZeroScalarSourceCandidate || len(args) == 0 {
+		return nil
+	}
+	var roots map[int32]struct{}
+	for _, arg := range args {
+		_ = visitExecutablePlanExprTree(arg, func(expr *plan.Expr) error {
+			sub := expr.GetSub()
+			if sub == nil || sub.Typ != plan.SubqueryRef_SCALAR || sub.Child != nil ||
+				sub.NodeId < 0 || int(sub.NodeId) >= len(builder.ctxByNode) {
+				return nil
+			}
+			ctx := builder.ctxByNode[sub.NodeId]
+			if ctx != nil && ctx.zeroScalarRootSourceSafe && builder.scalarRootZeroNeedsDependent(sub) {
+				if roots == nil {
+					roots = make(map[int32]struct{})
+				}
+				roots[sub.NodeId] = struct{}{}
+			}
+			return nil
+		})
+	}
+	return roots
+}
+
+func exprRetainsZeroScalarRoots(expr *plan.Expr, required map[int32]struct{}) bool {
+	return len(missingZeroScalarRoots(expr, required)) == 0
+}
+
+func missingZeroScalarRoots(expr *plan.Expr, required map[int32]struct{}) []int32 {
+	if len(required) == 0 {
+		return nil
+	}
+	retained := make(map[int32]struct{}, len(required))
+	_ = visitExecutablePlanExprTree(expr, func(candidate *plan.Expr) error {
+		if sub := candidate.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
+			if _, ok := required[sub.NodeId]; ok {
+				retained[sub.NodeId] = struct{}{}
+			}
+		}
+		return nil
+	})
+	var missing []int32
+	for root := range required {
+		if _, ok := retained[root]; !ok {
+			missing = append(missing, root)
+		}
+	}
+	return missing
+}
+
+func visitExecutablePlanExprTree(root *plan.Expr, visit func(*plan.Expr) error) error {
+	var local [16]*plan.Expr
+	pending := append(local[:0], root)
+	for len(pending) > 0 {
+		expr := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if expr == nil {
+			continue
+		}
+		if err := visit(expr); err != nil {
+			return err
+		}
+		if dependent := expr.GetDependent(); dependent != nil {
+			pending = append(pending, dependent.Comparison)
+			for i := len(dependent.Lhs) - 1; i >= 0; i-- {
+				pending = append(pending, dependent.Lhs[i])
+			}
+			for i := len(dependent.Inputs) - 1; i >= 0; i-- {
+				pending = append(pending, dependent.Inputs[i])
+			}
+		}
+		if window := expr.GetW(); window != nil {
+			for i := len(window.OrderBy) - 1; i >= 0; i-- {
+				if window.OrderBy[i] != nil {
+					pending = append(pending, window.OrderBy[i].Expr)
+				}
+			}
+			for i := len(window.PartitionBy) - 1; i >= 0; i-- {
+				pending = append(pending, window.PartitionBy[i])
+			}
+			pending = append(pending, window.WindowFunc)
+		}
+		if sub := expr.GetSub(); sub != nil {
+			pending = append(pending, sub.Child)
+		}
+		if list := expr.GetList(); list != nil {
+			for i := len(list.List) - 1; i >= 0; i-- {
+				pending = append(pending, list.List[i])
+			}
+		}
+		if fn := expr.GetF(); fn != nil {
+			for i := len(fn.Args) - 1; i >= 0; i-- {
+				pending = append(pending, fn.Args[i])
+			}
+		}
+	}
+	return nil
 }
 
 func applyIfNullCommonValueContract(expr *plan.Expr, args []*plan.Expr) {
@@ -5350,6 +5825,289 @@ func (e *UdfDisallowedInPublicationViewBinding) Error() string {
 		"user-defined function '%s' cannot bind in publication view binding", e.Name)
 }
 
+// isUDFArgumentAuthorizationSource mirrors the sources authenticated by the
+// frontend for SELECT statements. View references are tracked separately on
+// Query.ViewReferences and remain pinned when SQL UDF bodies are expanded.
+func isUDFArgumentAuthorizationSource(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	if node.NotCacheable || zeroScalarSavedResultRequirements(node) != 0 {
+		return true
+	}
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
+		return true
+	case plan.Node_EXTERNAL_SCAN:
+		return IsExternalScanRequiringSelectPrivilege(node)
+	case plan.Node_FUNCTION_SCAN:
+		tableDef := node.GetTableDef()
+		return tableDef != nil && tableDef.GetTblFunc() != nil &&
+			tableDef.GetTblFunc().GetName() == "table_changes"
+	default:
+		return false
+	}
+}
+
+// Saved results and control functions have frontend checks that require the
+// original node and its bound expressions, rather than a table carrier.
+func zeroScalarNodeLiveRequirements(node *plan.Node) zeroScalarLiveRequirement {
+	if node == nil {
+		return 0
+	}
+	required := zeroScalarSavedResultRequirements(node)
+	if NodeHasMoCtrl(node) {
+		required |= zeroScalarLiveControl
+	}
+	return required
+}
+
+func zeroScalarSavedResultRequirements(node *plan.Node) zeroScalarLiveRequirement {
+	if node == nil {
+		return 0
+	}
+	tableDef := node.GetTableDef()
+	if node.NodeType == plan.Node_EXTERNAL_SCAN && tableDef != nil && tableDef.GetTableType() == "query_result" ||
+		node.NodeType == plan.Node_FUNCTION_SCAN && tableDef != nil && tableDef.GetTblFunc() != nil && tableDef.GetTblFunc().GetName() == "meta_scan" {
+		return zeroScalarLiveSavedResult
+	}
+	return 0
+}
+
+func isMoCtrlFunctionExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.GetFunc() == nil {
+		return false
+	}
+	return fn.GetFunc().GetObjName() == "mo_ctl" || fn.GetFunc().GetObjName() == "fault_inject"
+}
+
+// collectUDFArgumentAuthorizationSources follows bound subquery and dependent-
+// program roots to their privilege-bearing sources. It is used only when
+// binding an argument applied the correlated root LIMIT 0 rewrite.
+func collectUDFArgumentAuthorizationSources(
+	builder *QueryBuilder,
+	exprs []*plan.Expr,
+	roots []int32,
+	observers ...func(*plan.Expr),
+) (map[int32]struct{}, error) {
+	if builder == nil || builder.qry == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing query for SQL UDF source validation")
+	}
+
+	pending := append([]int32(nil), roots...)
+	var visitNodeExpressions bool
+	var nodeHasControlCall bool
+	visitExpr := func(expr *plan.Expr) error {
+		return plan.VisitExprTree(expr, func(e *plan.Expr) error {
+			if visitNodeExpressions && isMoCtrlFunctionExpr(e) {
+				nodeHasControlCall = true
+			}
+			for _, observe := range observers {
+				observe(e)
+			}
+			if sub := e.GetSub(); sub != nil {
+				pending = append(pending, sub.NodeId)
+			}
+			if dependent := e.GetDependent(); dependent != nil {
+				spec := builder.qry.Correlation
+				if spec == nil || dependent.ProgramId == 0 || int(dependent.ProgramId) > len(spec.Programs) {
+					return moerr.NewInternalError(builder.GetContext(), "invalid SQL UDF dependent source")
+				}
+				program := spec.Programs[dependent.ProgramId-1]
+				if program == nil {
+					return moerr.NewInternalError(builder.GetContext(), "missing SQL UDF dependent program")
+				}
+				pending = append(pending, program.RootNode)
+			}
+			return nil
+		})
+	}
+	for _, expr := range exprs {
+		if err := visitExpr(expr); err != nil {
+			return nil, err
+		}
+	}
+
+	sources := make(map[int32]struct{})
+	visited := make(map[int32]struct{})
+	for len(pending) > 0 {
+		id := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if id < 0 || int(id) >= len(builder.qry.Nodes) || builder.qry.Nodes[id] == nil {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid SQL UDF source node")
+		}
+		if _, ok := visited[id]; ok {
+			continue
+		}
+		visited[id] = struct{}{}
+		node := builder.qry.Nodes[id]
+		if isUDFArgumentAuthorizationSource(node) {
+			sources[id] = struct{}{}
+		}
+		pending = append(pending, node.Children...)
+		for _, step := range node.SourceStep {
+			if step < 0 || int(step) >= len(builder.qry.Steps) {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid SQL UDF source step")
+			}
+			pending = append(pending, builder.qry.Steps[step])
+		}
+		nodeHasControlCall = false
+		visitNodeExpressions = true
+		err := plan.VisitExpressionsInOwner(node, visitExpr)
+		visitNodeExpressions = false
+		if err != nil {
+			return nil, err
+		}
+		if nodeHasControlCall {
+			sources[id] = struct{}{}
+		}
+	}
+	return sources, nil
+}
+
+// udfArgumentNeedsZeroScalarRemap checks only the repeated argument's graph.
+func udfArgumentNeedsZeroScalarRemap(builder *QueryBuilder, arg *plan.Expr) (bool, error) {
+	found := false
+	_, err := collectUDFArgumentAuthorizationSources(builder, []*plan.Expr{arg}, nil, func(e *plan.Expr) {
+		if sub := e.GetSub(); sub != nil && builder.scalarRootZeroNeedsDependent(sub) {
+			found = true
+		}
+		if dependent := e.GetDependent(); dependent != nil {
+			_, marked := builder.zeroScalarPrograms[dependent.ProgramId]
+			found = found || marked
+		}
+	})
+	return found, err
+}
+
+func udfArgsContainCorrelatedRootZero(builder *QueryBuilder, args []*plan.Expr) bool {
+	if builder == nil {
+		return false
+	}
+	for _, arg := range args {
+		if arg == nil {
+			continue
+		}
+		found := false
+		_ = plan.VisitExprTree(arg, func(expr *plan.Expr) error {
+			if sub := expr.GetSub(); sub != nil && builder.scalarRootZeroNeedsDependent(sub) {
+				found = true
+			}
+			return nil
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func validateUDFArgumentAuthorizationSources(
+	builder *QueryBuilder,
+	required map[int32]struct{},
+	result *plan.Expr,
+) error {
+	if builder == nil || builder.qry == nil {
+		return moerr.NewInternalErrorNoCtx("missing query for SQL UDF source validation")
+	}
+	if len(required) == 0 {
+		return moerr.NewNYI(builder.GetContext(), "SQL UDF with an untracked correlated scalar LIMIT 0 source")
+	}
+
+	bodySources, err := collectUDFArgumentAuthorizationSources(builder, []*plan.Expr{result}, nil)
+	if err != nil {
+		return err
+	}
+	missing := make(map[int32]struct{})
+	retainedByValidation := false
+	for source := range required {
+		if _, inBody := bodySources[source]; inBody {
+			continue
+		}
+		// Validation owners collect ordinary sources from the original bound
+		// nodes even when the UDF result no longer reaches them.
+		if builder.zeroScalarPolicy == zeroScalarValidateOnly &&
+			zeroScalarNodeLiveRequirements(builder.qry.Nodes[source]) == 0 {
+			retainedByValidation = true
+			continue
+		}
+		missing[source] = struct{}{}
+	}
+	if retainedByValidation {
+		// Notify enclosing wrappers and the named-window special-source check.
+		builder.zeroScalarRetentionGeneration++
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	// Only walk the retained statement plan when the returned expression
+	// itself does not retain every required authorization source.
+	retainedRoots := append([]int32(nil), builder.qry.Steps...)
+	if spec := builder.qry.Correlation; spec != nil {
+		for _, program := range spec.Programs {
+			if program == nil {
+				return moerr.NewInternalError(builder.GetContext(), "missing SQL UDF retained program")
+			}
+			retainedRoots = append(retainedRoots, program.RootNode)
+		}
+	}
+	retainedSources, err := collectUDFArgumentAuthorizationSources(builder, nil, retainedRoots)
+	if err != nil {
+		return err
+	}
+	for source := range missing {
+		if _, inPlan := retainedSources[source]; !inPlan {
+			if udfAuthorizationSourceHasRetainedCarrier(builder, source) {
+				continue
+			}
+			return moerr.NewNYI(builder.GetContext(), "SQL UDF with an unretained correlated scalar LIMIT 0 source")
+		}
+	}
+	return nil
+}
+
+func udfAuthorizationSourceHasRetainedCarrier(builder *QueryBuilder, source int32) bool {
+	if builder == nil || builder.qry == nil || source < 0 || int(source) >= len(builder.qry.Nodes) {
+		return false
+	}
+	expected := validationPrivilegeCarrier(builder.qry.Nodes[source])
+	if expected == nil {
+		return false
+	}
+	key := validationPrivilegeCarrierKey(expected)
+	if _, ok := builder.validationPrivilegeCarrierKeys[key]; ok {
+		return true
+	}
+	for _, carrier := range builder.validationPrivilegeCarriers {
+		if carrier != nil && validationPrivilegeCarrierKey(carrier) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// A call can prove provenance only from the work performed while binding its
+// own arguments. A folded wrapper may no longer appear in their bound trees.
+type zeroScalarArgumentScope struct {
+	rewriteGeneration uint64
+	argumentWrappers  int
+}
+
+func (builder *QueryBuilder) beginZeroScalarArguments() zeroScalarArgumentScope {
+	if builder == nil {
+		return zeroScalarArgumentScope{}
+	}
+	return zeroScalarArgumentScope{
+		rewriteGeneration: builder.zeroScalarRewriteGeneration,
+		argumentWrappers:  len(builder.zeroScalarArgumentWrappers),
+	}
+}
+
 func bindFuncExprImplUdf(
 	b *baseBinder,
 	name string,
@@ -5357,33 +6115,106 @@ func bindFuncExprImplUdf(
 	astArgs []tree.Expr,
 	boundArgs []*plan.Expr,
 	depth int32,
+	zeroScalarArgs zeroScalarArgumentScope,
 ) (*plan.Expr, error) {
 	if udf == nil {
 		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
 	}
 	if defines.IsPublicationViewBinding(b.GetContext()) {
-		// The binder reached user-defined function binding for this call -
-		// builtin resolution by name, arity and argument types did not claim
-		// it, and this account's catalog row did. A subscriber resolves the
-		// same call in its own catalog, where the function may be missing or
-		// carry another body, so the metadata binding refuses it outright and
-		// the caller reports the stable publication error.
+		// A selected UDF is forbidden during publication-view validation,
+		// regardless of its arguments or any planner rewrite they trigger.
 		return nil, &UdfDisallowedInPublicationViewBinding{Name: name}
 	}
-
+	requiresUDFSourceValidation := b.builder != nil &&
+		(b.builder.zeroScalarRewriteGeneration != zeroScalarArgs.rewriteGeneration ||
+			len(b.builder.zeroScalarArgumentWrappers) != zeroScalarArgs.argumentWrappers ||
+			udfArgsContainCorrelatedRootZero(b.builder, boundArgs))
+	var requiredSources map[int32]struct{}
+	if requiresUDFSourceValidation {
+		if udf.Language != string(tree.SQL) {
+			return nil, moerr.NewNYI(b.GetContext(), "non-SQL UDF with a correlated scalar LIMIT 0 argument")
+		}
+		// Capture the original authorization dependencies before binding the
+		// SQL UDF body can mutate or discard the bound argument graph.
+		var err error
+		argumentWrappers := b.builder.zeroScalarArgumentWrappers[zeroScalarArgs.argumentWrappers:]
+		requiredSources, err = collectUDFArgumentAuthorizationSources(b.builder, boundArgs, argumentWrappers)
+		if err != nil {
+			return nil, err
+		}
+	}
+	requiredRoots := zeroScalarSubqueryRoots(b.builder, boundArgs)
+	validateBoundResult := func(expr *plan.Expr) (*plan.Expr, error) {
+		if (b.builder == nil || b.builder.zeroScalarPolicy == zeroScalarDisabled) &&
+			!exprRetainsZeroScalarRoots(expr, requiredRoots) {
+			return nil, moerr.NewNYI(b.GetContext(), "function with a correlated scalar LIMIT 0 argument may discard its table dependency")
+		}
+		if requiresUDFSourceValidation {
+			if err := validateUDFArgumentAuthorizationSources(b.builder, requiredSources, expr); err != nil {
+				return nil, err
+			}
+		}
+		return expr, nil
+	}
+	if b.builder != nil {
+		b.builder.udfResolutionCount++
+		b.builder.udfExpansionDepth++
+		defer func() { b.builder.udfExpansionDepth-- }()
+	}
 	switch udf.Language {
 	case string(tree.SQL):
 		parserSQLMode := "PIPES_AS_CONCAT"
 		if udf.SQLMode != nil {
 			parserSQLMode = *udf.SQLMode
 		}
-		sql, udfArgs := b.expandSQLUdfArguments(udf.Body, boundArgs, parserSQLMode)
+		guardRemap := requiresUDFSourceValidation || b.builder != nil && len(b.builder.zeroScalarPrograms) > 0
+		sql, udfArgs, err := b.expandSQLUdfArguments(udf.Body, boundArgs, parserSQLMode, guardRemap)
+		if err != nil {
+			return nil, err
+		}
 		restoreUdfArgs := b.pushSQLUdfArguments(udfArgs)
 		defer restoreUdfArgs()
 		// if does not contain SELECT, an expression. In order to pass the parser,
 		// make it start with a 'SELECT'.
 
 		expressionBody := !strings.Contains(sql, "select")
+		if requiresUDFSourceValidation {
+			used := make(map[*plan.Expr]struct{}, len(udfArgs))
+			for _, arg := range udfArgs {
+				used[arg] = struct{}{}
+				if expressionBody {
+					continue
+				}
+				needsRemap, err := udfArgumentNeedsZeroScalarRemap(b.builder, arg)
+				if err != nil {
+					return nil, err
+				}
+				if needsRemap {
+					return nil, moerr.NewNYI(b.GetContext(), "SQL UDF query body with a correlated scalar LIMIT 0 argument")
+				}
+			}
+			var unused []*plan.Expr
+			for _, arg := range boundArgs {
+				if _, ok := used[arg]; !ok {
+					unused = append(unused, arg)
+				}
+			}
+			if len(unused) != 0 && b.builder.zeroScalarPolicy != zeroScalarDisabled {
+				sources, err := collectUDFArgumentAuthorizationSources(b.builder, unused, nil)
+				if err != nil {
+					return nil, err
+				}
+				if err := b.builder.validateZeroScalarSpecialSources(sources); err != nil {
+					return nil, err
+				}
+				if err := b.builder.retainZeroScalarAuthorizationSources(sources); err != nil {
+					return nil, err
+				}
+				if len(sources) != 0 {
+					b.builder.zeroScalarRetentionGeneration++
+				}
+			}
+		}
 		if expressionBody {
 			sql = "select " + sql
 		}
@@ -5412,9 +6243,17 @@ func bindFuncExprImplUdf(
 			}
 		}
 		if expressionBody {
-			return b.impl.BindExpr(bodyExpr, depth, false)
+			expr, err := b.impl.BindExpr(bodyExpr, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			return validateBoundResult(expr)
 		}
-		return b.impl.BindSubquery(tree.NewSubquery(substmts[0], false), false)
+		expr, err := b.impl.BindSubquery(tree.NewSubquery(substmts[0], false), false)
+		if err != nil {
+			return nil, err
+		}
+		return validateBoundResult(expr)
 	case string(tree.PYTHON):
 		expr, err := b.bindPythonUdf(udf, astArgs, depth)
 		if err != nil {
@@ -5433,9 +6272,9 @@ func bindFuncExprImplUdf(
 // name. Checking the entire body (including quotes and comments) is deliberately
 // conservative: absence from the raw text guarantees that no user-authored
 // identifier in the parsed tree can be captured by the marker.
-func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMode string) (string, map[string]*plan.Expr) {
+func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMode string, guardRemap bool) (string, map[string]*plan.Expr, error) {
 	if len(args) == 0 {
-		return sql, nil
+		return sql, nil, nil
 	}
 
 	var callID uint64
@@ -5447,8 +6286,17 @@ func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMod
 	markers := make(map[string]*plan.Expr, len(args))
 	markerByOrdinal := make(map[int]string, len(args))
 	foldedBody := strings.ToLower(sql)
+	var repeatedErr error
 	markerForOrdinal := func(ordinal int) string {
 		if name, ok := markerByOrdinal[ordinal]; ok {
+			if guardRemap && repeatedErr == nil {
+				needsRemap, err := udfArgumentNeedsZeroScalarRemap(b.builder, args[ordinal-1])
+				if err != nil {
+					repeatedErr = err
+				} else if needsRemap {
+					repeatedErr = moerr.NewNYI(b.GetContext(), "SQL UDF with a repeated correlated scalar LIMIT 0 argument")
+				}
+			}
 			return "`" + name + "`"
 		}
 
@@ -5462,7 +6310,7 @@ func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMod
 		return "`" + name + "`"
 	}
 	rewritten := replaceSQLUdfArgMarkers(sql, len(args), sqlMode, markerForOrdinal)
-	return rewritten, markers
+	return rewritten, markers, repeatedErr
 }
 
 func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerForOrdinal func(int) string) string {
@@ -5732,6 +6580,12 @@ func rewriteFindInSetSetProvenance(
 // Children were already bound; only the temporal call itself and casts added
 // by the current overload resolver need a warning-free materialization proof.
 func foldTemporalTextConstant(proc *process.Process, expr *Expr) *Expr {
+	// The enclosing integer consumer has not bound yet. Preserve an explicit
+	// temporal CAST's value owner through IF/CASE argument binding; ordinary
+	// optimizer folding can run after its integer policy has been lowered.
+	if temporalIntegerSource(expr) && isExplicitPreparedCast(expr) {
+		return expr
+	}
 	if !function.IsTemporalTextDiagnosticCall(expr) {
 		return expr
 	}
@@ -5794,7 +6648,7 @@ func bindFuncExprAndConstFoldInternal(
 	// argument types and picks the same overload; only the value
 	// materialization is left to the subscriber's own compile, which
 	// executes these folders as usual.
-	if !defines.IsPublicationViewBinding(ctx) {
+	if !defines.IsNoEvaluationViewBinding(ctx) {
 		foldFloatComparisonConstants(proc, name, args)
 		if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
 			return nil, err
@@ -5828,7 +6682,7 @@ func bindFuncExprAndConstFoldInternal(
 	// bound types and the binding verdict are exactly what an unmarked build
 	// starts from, and the subscriber's ordinary compile infers and folds as
 	// usual.
-	if !defines.IsPublicationViewBinding(ctx) {
+	if !defines.IsNoEvaluationViewBinding(ctx) {
 		annotateStringLengthSource(retExpr, proc)
 	}
 	if observer != nil {
@@ -5837,7 +6691,7 @@ func bindFuncExprAndConstFoldInternal(
 		}
 	}
 
-	if defines.IsPublicationViewBinding(ctx) {
+	if defines.IsNoEvaluationViewBinding(ctx) {
 		// Publication scope validation binds the persisted metadata of an
 		// existing view and must not evaluate any expression of it: the fold
 		// stages behind this switch - the executor-backed comparison folders
@@ -5883,6 +6737,10 @@ func bindFuncExprAndConstFoldInternal(
 
 	case "between":
 		if proc == nil {
+			goto between_fallback
+		}
+		// The between kernel has no vector implementation; vectors bind as >= and <=.
+		if types.T(retExpr.GetF().Args[0].Typ.Id).IsArray() {
 			goto between_fallback
 		}
 
@@ -6116,6 +6974,63 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 	return nil
 }
 
+// validateVectorMatmulArgs requires the topk, queries and options arguments of
+// vector_matmul to be non-null constants, parameters or variables.
+func validateVectorMatmulArgs(ctx context.Context, args []*Expr) error {
+	if len(args) != 4 && len(args) != 5 {
+		return moerr.NewInvalidInputf(ctx, "vector_matmul requires 4 or 5 arguments, got %d", len(args))
+	}
+	for _, i := range VectorMatmulConfigArgs(len(args)) {
+		arg := args[i]
+		if arg == nil || isNullExpr(arg) || !IsVectorMatmulConfigExpr(arg) {
+			return moerr.NewInvalidInput(ctx,
+				"topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables")
+		}
+	}
+	return nil
+}
+
+// VectorMatmulConfigArgs returns the positions of vector_matmul's configuration
+// arguments for a call with n arguments.
+func VectorMatmulConfigArgs(n int) []int {
+	if n == 5 {
+		return []int{0, 3, 4}
+	}
+	return []int{0, 3}
+}
+
+// IsVectorMatmulConfigExpr reports whether expr can be evaluated without an input row,
+// to the same value wherever it is evaluated: a constant, a prepared parameter, a variable,
+// or a function over them that is neither volatile nor real-time related.
+func IsVectorMatmulConfigExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if function.IsConstant(expr, false) {
+		return true
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+		return true
+	case *plan.Expr_F:
+		// a cast or other function over parameters, e.g. CAST(? AS BIGINT)
+		if e.F == nil || e.F.Func == nil {
+			return false
+		}
+		f, ok := function.GetFunctionByIdWithoutError(e.F.Func.GetObj())
+		if !ok || f.IsVolatile() || f.IsRealTimeRelated() {
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !IsVectorMatmulConfigExpr(arg) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // validateOrderedPercentileArgs enforces the scalar MVP contract for the
 // ordered-set percentile aggregates. The aggregate executor consumes the
 // percentile as compile-time configuration, while the first argument is the
@@ -6273,6 +7188,11 @@ func bindMixedInListComparison(
 	stringLeftNumericRight := leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool)
 	numericLeftStringRight := rightType.Oid.IsMySQLString() && (leftType.IsNumeric() || leftType.Oid == types.T_bool)
 	_, directStringRight := decimalStringLiteralValue(right)
+	// a bf16/float16/float8/float4 operand binds as a single comparison, which rounds a
+	// numeral text literal to the column type
+	if leftType.Oid.IsLowPrecisionFloat() {
+		numericLeftStringRight = false
+	}
 	if stringLeftNumericRight || (!exactSingleComparison && numericLeftStringRight && directStringRight) {
 		targetType := types.T_float64.ToType()
 		operands = []*Expr{left, right}
@@ -6286,9 +7206,6 @@ func bindMixedInListComparison(
 		left, right = operands[0], operands[1]
 	}
 	operands = []*Expr{left, right}
-	if err := adjustJsonDynamicParamType(ctx, operator, operands); err != nil {
-		return nil, err
-	}
 	return BindFuncExprImplByPlanExpr(ctx, operator, operands)
 }
 
@@ -7526,6 +8443,15 @@ func preparedBetweenHasMixedNumericText(ctx context.Context, args []*Expr) bool 
 	return hasText && hasNumericMarker || hasTextMarker && hasNumeric
 }
 
+func anyLowPrecisionFloat(argsType []types.Type) bool {
+	for _, typ := range argsType {
+		if typ.Oid.IsLowPrecisionFloat() {
+			return true
+		}
+	}
+	return false
+}
+
 func bindBetweenAsComparisons(ctx context.Context, args []*Expr) (*Expr, error) {
 	left, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*Expr{DeepCopyExpr(args[0]), args[1]})
 	if err != nil {
@@ -7587,7 +8513,22 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 	}
-	if name == "between" && preparedBetweenHasMixedNumericText(ctx, args) &&
+	if strings.EqualFold(name, "crc32") && len(args) == 1 && args[0] != nil &&
+		types.T(args[0].Typ.Id) == types.T_json {
+		// New JSON bindings hash the visible JSON document. Keep CRC32's
+		// original execution identity so old persisted calls still hash their
+		// original binary argument. An explicit TEXT cast preserves JSON string
+		// quoting and does not impose VARCHAR's expression-width limit.
+		target := types.T_text.ToType()
+		cast, castErr := appendExplicitCastBeforeExpr(ctx, args[0], makePlan2Type(&target))
+		if castErr != nil {
+			return nil, castErr
+		}
+		args = append([]*Expr(nil), args...)
+		args[0] = cast
+	}
+	if name == "between" && len(args) == 3 &&
+		(preparedBetweenHasMixedNumericText(ctx, args) || types.T(args[0].Typ.Id).IsLowPrecisionFloat()) &&
 		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {
 		return bindBetweenAsComparisons(ctx, args)
 	}
@@ -7595,6 +8536,7 @@ func bindFuncExprImplByPlanExpr(
 	if err != nil {
 		return nil, err
 	}
+	args = relabelCoercibleBinaryBranches(name, args)
 	// HEX/BIT literals have a VARCHAR-shaped type but an exact unsigned numeric
 	// domain. Preserve their provenance before either prepared consumers or the
 	// type-only SUM/AVG fallback converts strings to DOUBLE. Ordinary binary
@@ -7652,6 +8594,11 @@ func bindFuncExprImplByPlanExpr(
 			return nil, err
 		}
 	}
+	if name == NameVectorMatmul {
+		if err = validateVectorMatmulArgs(ctx, args); err != nil {
+			return nil, err
+		}
+	}
 	if name == NamePercentileCont || name == NamePercentileDisc {
 		if err = validateOrderedPercentileArgs(ctx, name, args); err != nil {
 			return nil, err
@@ -7687,6 +8634,13 @@ func bindFuncExprImplByPlanExpr(
 	}
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
+	}
+	dateRangeExpr, err := normalizeDateStringComparisonArgs(ctx, name, args)
+	if err != nil {
+		return nil, err
+	}
+	if dateRangeExpr != nil {
+		return dateRangeExpr, nil
 	}
 	if strings.EqualFold(name, "inet_ntoa") {
 		normalizeInetNtoaBinaryPlanLiteral(args)
@@ -7780,7 +8734,7 @@ func bindFuncExprImplByPlanExpr(
 		if err := convertValueIntoBool(name, args, false); err != nil {
 			return nil, err
 		}
-		if err := adjustJsonDynamicParamType(ctx, name, args); err != nil {
+		if err := quoteJSONComparisonStringParam(ctx, name, args); err != nil {
 			return nil, err
 		}
 
@@ -8067,6 +9021,12 @@ func bindFuncExprImplByPlanExpr(
 		if isNullExpr(args[1]) {
 			return args[1], nil
 		}
+	case "unary_plus":
+		// MySQL's parser drops unary plus, so +<temporal> keeps the operand's
+		// native value and type instead of looking for a numeric overload.
+		if len(args) == 1 && isUnaryPlusTemporalOperand(args[0]) {
+			return args[0], nil
+		}
 	case "unary_minus":
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
@@ -8277,7 +9237,10 @@ func bindFuncExprImplByPlanExpr(
 						}
 					}
 				}
-				if partitionIn || exactIntegerList || guardedInteger || checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
+				// bf16/float16/float8/float4 items stay in the OR list, whose equalities
+				// narrow in-range literals to the column type
+				if partitionIn || exactIntegerList || guardedInteger ||
+					(!typLeft.Oid.IsLowPrecisionFloat() && checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal)) {
 					// Keep the partition-IN coercion path unchanged. Ordinary IN can
 					// retain an already same-typed constant cast; casting UUID to UUID
 					// is both redundant and unsupported.
@@ -8583,7 +9546,11 @@ func bindFuncExprImplByPlanExpr(
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
-	case "=", "<", "<=", ">", ">=", "<>":
+	case "=", "<", "<=", ">", ">=", "<>", "!=", "<=>":
+		// != and <=> take this rounding only for bf16/float16/float8/float4 operands
+		if (name == "!=" || name == "<=>") && !anyLowPrecisionFloat(argsType) {
+			break
+		}
 		if len(args) == 2 && len(argsType) == 2 {
 			if len(argsCastType) == 0 {
 				argsCastType = []types.Type{argsType[0], argsType[1]}
@@ -8595,6 +9562,22 @@ func bindFuncExprImplByPlanExpr(
 				// Check if we can use column type to avoid casting it
 				canUse := func(colType, otherType types.Type, colExpr, otherExpr *plan.Expr) bool {
 					colOid, otherOid := colType.Oid, otherType.Oid
+
+					// bf16/float16/float8/float4: a numeric literal inside the type's finite
+					// range compares in the column's precision, rounded as a stored value is,
+					// so a value equals the literal it was inserted from
+					if colOid.IsLowPrecisionFloat() {
+						if otherExpr == nil {
+							return false
+						}
+						if !(otherOid.IsFloat() || otherOid.IsDecimal() || otherOid.IsInteger() || otherOid.IsMySQLString()) {
+							return false
+						}
+						// the literal rounded as the CAST that narrows it rounds it; a value that
+						// CAST rejects keeps the wide comparison
+						v, ok := lowPrecisionLiteral(otherExpr)
+						return ok && v.fits(colOid)
+					}
 
 					// For integers, check if constant value is within column type range
 					if colOid.IsInteger() && otherOid.IsInteger() {
@@ -9059,10 +10042,25 @@ func bindFuncExprImplByPlanExpr(
 		refineRepeatLiteralReturnType(args, &returnType)
 
 	case "substring", "substr", "mid":
-		refineSubstringLiteralReturnType(args, &returnType)
+		if argsType[0].Oid != types.T_blob {
+			refineSubstringLiteralReturnType(args, &returnType)
+		}
 
 	case "left", "right":
-		refineLeftRightLiteralReturnType(args, &returnType)
+		if argsType[0].Oid != types.T_blob {
+			refineLeftRightLiteralReturnType(args, &returnType)
+		}
+
+	case "hex":
+		// Keep the slice's BLOB type for its other consumers. HEX needs only
+		// its proven payload bound to choose the result's metadata.
+		if len(args) == 1 && argsType[0].Oid == types.T_blob {
+			if bounded, ok := boundedBinaryBlobSliceType(args[0]); ok {
+				if resolved, ok := function.GetFunctionByNameWithoutError(name, []types.Type{bounded}); ok {
+					returnType = resolved.GetReturnType()
+				}
+			}
+		}
 
 	case "lpad", "rpad":
 		refinePadLiteralReturnType(args, &returnType)
@@ -9254,7 +10252,6 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 	}
-
 	// Temporal precision is also the display width stored in derived schemas.
 	// Keep the two metadata fields aligned after unit-dependent refinement.
 	switch name {
@@ -9276,7 +10273,7 @@ func bindFuncExprImplByPlanExpr(
 	if err := setExpressionCollation(ctx, name, args, &Typ); err != nil {
 		return nil, err
 	}
-	if returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
+	if returnType.Oid == types.T_char || returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
 		for _, idx := range padSpaceValueArgumentIndexes(name, len(args)) {
 			if hasPadSpaceStringProvenance(args[idx]) {
 				Typ.PadSpace = true
@@ -9464,7 +10461,11 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 	// COALESCE 按转换成本选择的数值/布尔/时间重载会丢失字符串内容。
 	// 窗口必须保留两个分支的值域，不能因未使用的默认值改写源值。
 	// 先选未知容量的字符串域，再由调用方统一推导容量及 SQL LOB 子类型。
-	if !ret.Oid.IsMySQLString() && (valueArg.Oid.IsMySQLString() || defaultArg.Oid.IsMySQLString()) {
+	// BOOL 在 mixedStringNumericToVarchar 中按数值处理（issue #31294），
+	// 其 VARCHAR(65535) 结果同样不能收窄另一分支的 TEXT/BLOB 值域。
+	boolMixedString := (valueArg.Oid == types.T_bool && defaultArg.Oid.IsMySQLString()) ||
+		(defaultArg.Oid == types.T_bool && valueArg.Oid.IsMySQLString())
+	if (!ret.Oid.IsMySQLString() || boolMixedString) && (valueArg.Oid.IsMySQLString() || defaultArg.Oid.IsMySQLString()) {
 		if valueArg.Oid == types.T_blob || defaultArg.Oid == types.T_blob ||
 			valueArg.Oid == types.T_binary || defaultArg.Oid == types.T_binary ||
 			valueArg.Oid == types.T_varbinary || defaultArg.Oid == types.T_varbinary {
@@ -9686,11 +10687,6 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		return
 	}
 
-	sourceType := makeTypeByPlan2Expr(args[0])
-	if sourceType.Oid == types.T_blob {
-		return
-	}
-
 	if possibleStringDomainsForExpr(args[0]) != possibleStringDomainBinary {
 		if len(args) == 3 {
 			refineCharacterSliceLiteralWidth(args[0], args[2], returnType)
@@ -9737,16 +10733,32 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 	refineKnownStringResultType(returnType, bound, binary)
 }
 
+// boundedBinaryBlobSliceType obtains a byte bound without changing the slice
+// expression's declared BLOB type, or its overload and execution arguments.
+func boundedBinaryBlobSliceType(expr *plan.Expr) (types.Type, bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) == 0 ||
+		possibleStringDomainsForExpr(fn.Args[0]) != possibleStringDomainBinary {
+		return types.Type{}, false
+	}
+	bounded := types.T_blob.ToType()
+	switch strings.ToLower(fn.Func.GetObjName()) {
+	case "substring", "substr", "mid":
+		refineSubstringLiteralReturnType(fn.Args, &bounded)
+	case "left", "right":
+		refineLeftRightLiteralReturnType(fn.Args, &bounded)
+	default:
+		return types.Type{}, false
+	}
+	return bounded, bounded.Oid == types.T_varbinary
+}
+
 // refineLeftRightLiteralReturnType narrows LEFT/RIGHT when the requested
 // length is a constant.  The result cannot exceed either that length or the
 // source's proven bound; an unknown length keeps the overload's conservative
 // metadata.
 func refineLeftRightLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
 	if len(args) != 2 {
-		return
-	}
-	sourceType := makeTypeByPlan2Expr(args[0])
-	if sourceType.Oid == types.T_blob {
 		return
 	}
 	if possibleStringDomainsForExpr(args[0]) != possibleStringDomainBinary {
@@ -11065,9 +12077,7 @@ func foldFloatComparisonConstants(proc *process.Process, name string, args []*Ex
 		return
 	}
 	fold := func(column, candidate *Expr) *Expr {
-		if column.GetCol() == nil ||
-			(types.T(column.Typ.Id) != types.T_float32 && types.T(column.Typ.Id) != types.T_float64) ||
-			candidate.GetLit() != nil {
+		if column.GetCol() == nil || !types.T(column.Typ.Id).IsFloat() || candidate.GetLit() != nil {
 			return candidate
 		}
 		oid := types.T(candidate.Typ.Id)
@@ -11513,6 +12523,151 @@ func normalizeDecimalParamInArgs(ctx context.Context, name string, args []*Expr)
 	return nil
 }
 
+// MySQL compares DATE values with strings in the DATETIME domain, so the
+// string keeps any time-of-day it carries instead of being truncated to a
+// pure date. Binary comparisons and BETWEEN share one literal-eligibility
+// rule (isDateComparisonStringLiteral): character string literals and
+// binary-introducer (_binary'...') literals qualify, because MySQL coerces
+// both to DATETIME in temporal comparisons. A string keeps the DATE domain
+// (and its column/index fast path) only when both domains are proven
+// equivalent for it: the canonical
+// datetime parser accepts it with a zero time-of-day AND the DATE cast
+// parser accepts it with the same calendar date, because the DATE domain
+// then only drops that zero time portion and DATE promotes to midnight. Any
+// other datetime-parseable string literal promotes the comparison to
+// DATETIME(6); strings the datetime parser rejects keep the existing
+// DATE-domain behavior, including its error reporting.
+//
+// BETWEEN applies the same per-bound rule. When both bounds are datetime
+// parseable string literals and at least one promotes, both bounds cast to
+// DATETIME(6) and the fused range evaluates in one uniform domain. A fused
+// range cannot honor a promoting bound otherwise: its shared cast domain
+// would truncate that bound's time portion, while NOT BETWEEN — which
+// rewrites to two independent comparisons before function binding — would
+// preserve it, so a row could satisfy both expr BETWEEN a AND b and expr
+// NOT BETWEEN a AND b. The positive range therefore expands to the same
+// independent comparisons NOT BETWEEN uses, and each bound converts exactly
+// as it would in a standalone comparison. That expansion rebinds the left
+// operand in each comparison, so a volatile left operand (for example
+// nextval) must carry a binder-issued evaluation memo (markVolatileInLeft)
+// that shares one evaluation between both copies; without a memo the range
+// keeps its fused single-evaluation form. The returned expression replaces
+// the fused range; it is nil when the range keeps its original form.
+func normalizeDateStringComparisonArgs(ctx context.Context, name string, args []*Expr) (*Expr, error) {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		if len(args) != 2 {
+			return nil, nil
+		}
+		for _, pos := range []int{0, 1} {
+			if args[pos].Typ.Id != int32(types.T_date) || !isDateComparisonStringLiteral(args[1-pos]) {
+				continue
+			}
+			promote, _ := dateStringLiteralPromotion(args[1-pos])
+			if !promote {
+				return nil, nil
+			}
+			castExpr, err := appendCastBeforeExpr(ctx, args[1-pos], makePlan2Type(datetimeMaxScaleType()))
+			if err != nil {
+				return nil, err
+			}
+			args[1-pos] = castExpr
+			return nil, nil
+		}
+	case "between":
+		castBothBounds, expandRange := dateStringBetweenNormalization(args)
+		if castBothBounds {
+			for _, pos := range []int{1, 2} {
+				castExpr, err := appendCastBeforeExpr(ctx, args[pos], makePlan2Type(datetimeMaxScaleType()))
+				if err != nil {
+					return nil, err
+				}
+				args[pos] = castExpr
+			}
+			return nil, nil
+		}
+		if !expandRange {
+			return nil, nil
+		}
+		// The expanded range rebinds its left operand once per comparison. A
+		// volatile left operand must arrive with an evaluation memo assigned by
+		// the binder (markVolatileInLeft); without one the expansion would
+		// evaluate it twice, so the range keeps its fused single-evaluation
+		// form instead.
+		if containsVolatileFunction(args[0]) && args[0].AuxId >= 0 {
+			return nil, nil
+		}
+		return bindBetweenAsComparisons(ctx, args)
+	}
+	return nil, nil
+}
+
+// dateStringBetweenNormalization decides how a BETWEEN range with a
+// DATE-typed left operand and string-literal bounds normalizes (see
+// normalizeDateStringComparisonArgs). castBothBounds keeps the fused range
+// and casts both bounds to DATETIME(6), which is possible only when both
+// bounds are datetime parseable. expandRange rewrites the range to the same
+// independent comparisons NOT BETWEEN uses. The binder consults the same
+// decision so a volatile left operand receives an evaluation memo exactly
+// when the range will expand.
+func dateStringBetweenNormalization(args []*Expr) (castBothBounds bool, expandRange bool) {
+	if len(args) != 3 || args[0].Typ.Id != int32(types.T_date) {
+		return false, false
+	}
+	promote1, parseable1 := dateStringLiteralPromotion(args[1])
+	promote2, parseable2 := dateStringLiteralPromotion(args[2])
+	if !promote1 && !promote2 {
+		return false, false
+	}
+	if parseable1 && parseable2 {
+		return true, false
+	}
+	return false, true
+}
+
+// dateStringLiteralPromotion inspects an eligible string literal compared
+// with a DATE operand (character string or binary-introducer literal; see
+// isDateComparisonStringLiteral). promote is true when the string parses as a datetime
+// and the DATE domain would change the outcome: either the string carries a
+// non-zero time-of-day (which the DATE cast silently drops), or the DATE
+// cast parser rejects the string or parses it to a different calendar day
+// (for example the compact 'YYYYMMDDHHMMSS' form, which ParseDateCast
+// refuses). datetimeParseable reports whether the canonical datetime parser
+// accepts the string at all; BETWEEN consults it to decide whether both
+// bounds can share one DATETIME domain or the range must expand to
+// independent comparisons. Strings that fail the datetime parse keep the
+// existing DATE-domain behavior, including its error reporting.
+func dateStringLiteralPromotion(expr *Expr) (promote bool, datetimeParseable bool) {
+	if !isDateComparisonStringLiteral(expr) {
+		return false, false
+	}
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull || lit.IsBin {
+		return false, false
+	}
+	text, ok := lit.Value.(*plan.Literal_Sval)
+	if !ok {
+		return false, false
+	}
+	dt, err := types.ParseDatetime(text.Sval, 6)
+	if err != nil {
+		return false, false
+	}
+	if dt.Hour() != 0 || dt.Minute() != 0 || dt.Sec() != 0 || dt.MicroSec() != 0 {
+		return true, true
+	}
+	date, err := types.ParseDateCast(text.Sval)
+	if err != nil || date != dt.ToDate() {
+		return true, true
+	}
+	return false, true
+}
+
+func datetimeMaxScaleType() *types.Type {
+	datetimeType := types.T_datetime.ToTypeWithScale(6)
+	return &datetimeType
+}
+
 // MySQL compares scalar TIME expressions to strings as text, but converts a
 // constant string or direct prepared parameter to TIME(scale) when the TIME
 // side is a column.
@@ -11583,6 +12738,31 @@ func isCharacterStringLiteral(expr *Expr) bool {
 	return isCharacterStringType(expr.Typ.Id) && expr.GetLit() != nil
 }
 
+// isDateComparisonStringLiteral reports whether expr is a string literal
+// eligible for DATE comparison normalization. Character string literals
+// qualify; so do binary-introducer (_binary'...') literals, because MySQL
+// coerces their string content to DATETIME in temporal comparisons exactly
+// like character strings. Binary comparisons and BETWEEN share this one
+// rule so NOT BETWEEN stays the exact negation of BETWEEN.
+func isDateComparisonStringLiteral(expr *Expr) bool {
+	return isCharacterStringLiteral(expr) || isBinaryIntroducerStringLiteral(expr)
+}
+
+// isBinaryIntroducerStringLiteral reports whether expr is a _binary'...'
+// literal: a VARBINARY constant carrying string content. Hex and bit
+// literals (IsBin) are excluded.
+func isBinaryIntroducerStringLiteral(expr *Expr) bool {
+	if expr.Typ.Id != int32(types.T_varbinary) {
+		return false
+	}
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull || lit.IsBin {
+		return false
+	}
+	_, ok := lit.Value.(*plan.Literal_Sval)
+	return ok
+}
+
 func isCharacterStringLiteralOrDirectParam(expr *Expr) bool {
 	return isCharacterStringLiteral(expr) ||
 		(isCharacterStringType(expr.Typ.Id) && isDirectDynamicParam(expr))
@@ -11601,36 +12781,41 @@ func isCharacterStringType(typeID int32) bool {
 	}
 }
 
-func adjustJsonDynamicParamType(ctx context.Context, name string, args []*Expr) error {
-	paramFunction := ""
-	switch name {
-	case "<", "<=", ">", ">=":
-		paramFunction = function.JsonOrderingParamFunctionName
-	case "=", "<=>", "<>", "!=":
-		paramFunction = function.JsonComparisonParamFunctionName
-	default:
-		return nil
-	}
+// quoteJSONComparisonStringParam binds a string (or not yet typed) parameter
+// compared with a JSON value. Equality binds like the equivalent character
+// string literal, which compares the JSON operand as VARCHAR, in either
+// operand order. Other parameters and orderings bind as a JSON string.
+// Typed numeric and Boolean parameters need no rewrite: they bind like
+// literals of their type.
+func quoteJSONComparisonStringParam(ctx context.Context, name string, args []*Expr) error {
 	if len(args) != 2 {
 		return nil
 	}
-
-	// The private JSON adapter consumes the transport bytes and their Process
-	// type/kind metadata. A SQL cast back to TEXT would change direct Boolean
-	// parameters into numeric strings before the adapter can preserve them.
-	transport := func(expr *Expr) *Expr {
-		return &Expr{Typ: makeSimplePlan2Type(types.T_text), Expr: &plan.Expr_P{
-			P: &plan.ParamRef{Pos: expr.GetP().Pos},
-		}}
-	}
-	if args[0].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[1]) {
-		var err error
-		args[1], err = BindFuncExprImplByPlanExpr(ctx, paramFunction, []*Expr{transport(args[1])})
-		return err
-	}
-	if args[1].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[0]) {
-		var err error
-		args[0], err = BindFuncExprImplByPlanExpr(ctx, paramFunction, []*Expr{transport(args[0])})
+	for i := range args {
+		param, other := args[i], args[1-i]
+		if other.Typ.Id != int32(types.T_json) || !isDirectDynamicParam(param) {
+			continue
+		}
+		oid := types.T(param.Typ.Id)
+		if oid != types.T_any && !oid.IsMySQLString() {
+			continue
+		}
+		switch name {
+		case "=", "<=>", "<>", "!=":
+			switch oid {
+			case types.T_any, types.T_char, types.T_varchar, types.T_text, types.T_blob:
+				varcharType := types.T_varchar.ToType()
+				var err error
+				args[1-i], err = appendCastBeforeExpr(ctx, other, makePlan2Type(&varcharType))
+				return err
+			}
+		}
+		quoted, err := BindFuncExprImplByPlanExpr(ctx, "json_quote", []*Expr{param})
+		if err != nil {
+			return err
+		}
+		jsonType := types.T_json.ToType()
+		args[i], err = appendCastBeforeExpr(ctx, quoted, makePlan2Type(&jsonType))
 		return err
 	}
 	return nil
@@ -11768,7 +12953,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		expr := makePlan2StringConstExprWithType(val, isBin)
 		expr.GetLit().LiteralForm = form
 		if !typ.IsEmpty() {
-			isFloat := typ.Id == int32(types.T_float32) || typ.Id == int32(types.T_float64)
+			isFloat := types.T(typ.Id).IsFloat()
 			return appendCastBeforeExpr(b.GetContext(), expr, typ, isBin, isFloat)
 		}
 		return expr, nil
@@ -12076,6 +13261,7 @@ func isBitwiseAggregateConversionInput(t types.Type) bool {
 	case types.T_any,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_char, types.T_varchar, types.T_text,
 		types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_year:
 		return true
@@ -12090,9 +13276,11 @@ func appendBitwiseAggregateCastBeforeExpr(ctx context.Context, expr *Expr, toTyp
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
 	if expr != nil && types.T(expr.Typ.Id).IsDateRelate() &&
-		(types.T(toType.Id) == types.T_decimal256 || types.T(toType.Id).IsFloat()) {
-		// Temporal arithmetic already has exact casts to Decimal128. Preserve
-		// packed values and fractional seconds before widening or float conversion.
+		(types.T(toType.Id) == types.T_decimal256 ||
+			(types.T(toType.Id).IsFloat() && !function.IfTypeCastSupported(types.T(expr.Typ.Id), types.T(toType.Id)))) {
+		// Bridge widening and unsupported floating targets through Decimal128.
+		// Supported direct casts already preserve packed temporal values and
+		// fractions, without an intermediate vector or decimal text conversion.
 		intermediate := types.New(types.T_decimal128, 38, max(expr.Typ.Scale, 0))
 		var err error
 		expr, err = appendCastBeforeExprWithOverload(ctx, expr, makePlan2Type(&intermediate), 0)
@@ -12104,7 +13292,7 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 }
 
 func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
-	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
+	return appendTemporalIntegerCast(ctx, expr, toType, nil)
 }
 
 // appendSyntaxExplicitCastBeforeExpr records syntax provenance while retaining
@@ -12288,6 +13476,15 @@ func appendCastBeforeExprWithOverload(
 	// for 0xXXXX, if the value is over 1<<53-1, when covert it into float64,it will lost, so just change it into uint64
 	typ := toType
 	typ.PadSpace = false
+	if !typ.CollationCoercibilitySet && types.T(typ.Id).IsMySQLString() &&
+		types.StaticStringDomain(makeTypeByPlan2Type(typ)) == types.StringDomainBinary {
+		// A CAST result carries MySQL's IMPLICIT coercibility (2). Constant
+		// folding replaces this cast with a literal that keeps only this Typ,
+		// so without the stamp a folded CAST(x AS BINARY) drops to a coercible
+		// literal (4) and loses to a column's collation instead of tying with
+		// it byte-wise (issue #31175).
+		typ.CollationCoercibility, typ.CollationCoercibilitySet = 2, true
+	}
 	if overloadID <= 1 && fromPadSpace &&
 		(types.T(typ.Id) == types.T_varchar || types.T(typ.Id) == types.T_text) {
 		typ.PadSpace = true
@@ -12751,6 +13948,12 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	intervalType, err := types.IntervalTypeOf(intervalTypeStr)
 	if err != nil {
 		return nil, err
+	}
+	// a bf16, float16, float8 or float4 value is an interval as its float32 value
+	if types.T(firstExpr.Typ.Id).IsLowPrecisionFloat() {
+		if firstExpr, err = appendCastBeforeExpr(ctx, firstExpr, plan.Type{Id: int32(types.T_float32)}); err != nil {
+			return nil, err
+		}
 	}
 	markerDate := temporalDirectMarker(dateExpr)
 	if markerDate {
@@ -13454,13 +14657,18 @@ func (b *baseBinder) defaultValueBindType() plan.Type {
 	if b.integerArgumentSourceContext || b.suppressDefaultValueBindType {
 		return plan.Type{}
 	}
+	var typ plan.Type
 	if d, ok := b.impl.(*DefaultBinder); ok {
-		return d.typ
+		typ = d.typ
+	} else if r, ok := b.impl.(*ReplaceValueBinder); ok {
+		typ = r.typ
 	}
-	if r, ok := b.impl.(*ReplaceValueBinder); ok {
-		return r.typ
+	// A numeric, hex or bit literal is not a vector value: a vector column type is not
+	// its binding type, so CAST(X'...' AS BLOB) keeps the BLOB binary vector input.
+	if types.T(typ.Id).IsArray() {
+		return plan.Type{}
 	}
-	return plan.Type{}
+	return typ
 }
 
 func (b *baseBinder) defaultNumericOuterType() *plan.Type {
@@ -13469,4 +14677,12 @@ func (b *baseBinder) defaultNumericOuterType() *plan.Type {
 		return &typ
 	}
 	return nil
+}
+
+func isUnaryPlusTemporalOperand(expr *Expr) bool {
+	switch types.T(expr.Typ.Id) {
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+		return true
+	}
+	return false
 }

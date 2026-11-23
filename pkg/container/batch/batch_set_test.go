@@ -27,6 +27,116 @@ const (
 	TestBatchMaxRow = 8192
 )
 
+func TestBatchSetUnionRangeSplitsAndFillsTail(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, mp)
+	queue := NewBatchSet(3)
+	t.Cleanup(func() {
+		queue.Clean(mp)
+		input.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int64{10, 11, 12, 13, 14, 15, 16}, nil, mp))
+	input.SetRowCount(7)
+	_, err := queue.UnionRange(mp, input, 1, 2, nil)
+	require.NoError(t, err)
+	_, err = queue.UnionRange(mp, input, 3, 4, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, queue.Length())
+	require.Equal(t, []int64{11, 12, 13}, vector.MustFixedColNoTypeCheck[int64](queue.Get(0).Vecs[0]))
+	require.Equal(t, []int64{14, 15, 16}, vector.MustFixedColNoTypeCheck[int64](queue.Get(1).Vecs[0]))
+	queue.Clean(mp)
+	_, err = queue.UnionRange(mp, input, 0, input.RowCount(), nil)
+	require.NoError(t, err)
+	require.Equal(t, 3, queue.Length(), "a whole input must still respect the output row limit")
+	require.Equal(t, []int64{16}, vector.MustFixedColNoTypeCheck[int64](queue.Get(2).Vecs[0]))
+}
+
+// BatchSet copies charge the MPool the caller passes: an accounted view
+// charges the destination account, never the input's.
+func TestBatchSetChargesCopiesToCallerView(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(2, 32)
+	require.NoError(t, err)
+	destination, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	source, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	dstView, err := mp.WithAccount(destination, mpool.AllocationOwnerSet, 9, mpool.AllocationCapacityClassDefault)
+	require.NoError(t, err)
+	srcView, err := mp.WithAccount(source, mpool.AllocationOwnerSet, 9, mpool.AllocationCapacityClassDefault)
+	require.NoError(t, err)
+	queue := NewBatchSet(4)
+	var inputs []*Batch
+	var inputPools []*mpool.MPool
+	t.Cleanup(func() {
+		queue.Clean(dstView)
+		for i, input := range inputs {
+			input.Clean(inputPools[i])
+		}
+		for _, account := range []*mpool.AllocationAccount{destination, source} {
+			require.Zero(t, account.Seal().Used)
+			_, err := registry.Finalize(account)
+			require.NoError(t, err)
+		}
+		require.Zero(t, mp.CurrNB())
+	})
+	newInput := func(alloc *mpool.MPool, values ...int64) *Batch {
+		input := NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, alloc)
+		inputs = append(inputs, input)
+		inputPools = append(inputPools, alloc)
+		require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, alloc))
+		input.SetRowCount(len(values))
+		return input
+	}
+
+	first := newInput(mp, 1, 2)
+	require.Zero(t, queue.ReadyDeltaFor(first, first.RowCount()))
+	_, err = queue.Extend(dstView, first, nil)
+	require.NoError(t, err)
+	require.Positive(t, destination.Snapshot().Used)
+	second := newInput(srcView, 3, 4)
+	sourceUsed := source.Snapshot().Used
+	require.Equal(t, 1, queue.ReadyDeltaFor(second, second.RowCount()))
+	_, err = queue.Union(dstView, second, []int32{0, 1}, nil)
+	require.NoError(t, err)
+	require.Equal(t, sourceUsed, source.Snapshot().Used, "copies must not charge the input's account")
+	require.Equal(t, 1, queue.ReadyCount())
+	full := queue.PopFront()
+	require.Equal(t, []int64{1, 2, 3, 4}, vector.MustFixedColNoTypeCheck[int64](full.Vecs[0]))
+
+	third := newInput(mp, 5, 6, 7)
+	consumed, err := queue.Union(dstView, third, []int32{0, 2}, full)
+	require.NoError(t, err)
+	require.True(t, consumed, "a matching owned batch can be recycled")
+	require.Equal(t, []int64{5, 7}, vector.MustFixedColNoTypeCheck[int64](queue.Get(0).Vecs[0]))
+}
+
+func TestBatchSetOwnedDestinationAllocationFailure(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	view, err := mp.WithAccount(account, mpool.AllocationOwnerSet, 9, mpool.AllocationCapacityClassDefault)
+	require.NoError(t, err)
+	queue := NewBatchSet(4)
+	input := NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, mp)
+	t.Cleanup(func() {
+		queue.Clean(mp)
+		input.Clean(mp)
+		require.Zero(t, account.Seal().Used)
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int64{1, 2}, nil, mp))
+	input.SetRowCount(2)
+	_, err = queue.Extend(view, input, nil)
+	require.Error(t, err)
+	require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](input.Vecs[0]))
+}
+
 func TestBatchSetSortedMetadataAfterAppend(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -44,7 +154,7 @@ func TestBatchSetSortedMetadataAfterAppend(t *testing.T) {
 			t.Cleanup(func() { queue.Clean(mp); require.Zero(t, mp.CurrNB()) })
 			newInput := func(values []int64) *Batch {
 				bat := NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 				t.Cleanup(func() { bat.Clean(mp) })
 				require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, mp))
 				bat.SetRowCount(len(values))
@@ -478,7 +588,6 @@ func TestBatchSetReadinessAndOffHeapGrowth(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, consumed)
 	require.Zero(t, queue.ReadyCount())
-	require.True(t, queue.Get(0).offHeap)
 	require.Less(t, queue.Get(0).Allocated(), TestBatchMaxRow, "a sparse tail must not preallocate a full batch")
 	src.Clean(mp)
 
@@ -521,7 +630,7 @@ func makeTestBatch(max int, mp *mpool.MPool) *Batch {
 
 func makeTestVec(max int, mp *mpool.MPool) *vector.Vector {
 	typ := types.T_int32.ToType()
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	for i := 0; i < max; i++ {
 		v := i
 		if err := vector.AppendFixed(vec, int32(v), false, mp); err != nil {

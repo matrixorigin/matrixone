@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -48,7 +50,7 @@ const (
 //
 // The caller is responsible for deserializing the bytes and deciding how to use
 // them (e.g. exact pk IN filter vs a membership filter based on its own threshold).
-func WaitUniqueJoinKeys(sqlproc *SqlProcess) ([]byte, error) {
+func WaitUniqueJoinKeys(sqlproc *SqlProcess) (*keycodec.KeyPayload, error) {
 	data, status, err := waitUniqueJoinKeys(sqlproc, false)
 	if status != UniqueJoinKeysAvailable {
 		return nil, err
@@ -60,11 +62,11 @@ func WaitUniqueJoinKeys(sqlproc *SqlProcess) ([]byte, error) {
 // whose correctness depends on knowing whether the producer sent PASS or DROP.
 // The legacy WaitUniqueJoinKeys API intentionally retains its old fail-open
 // behavior for callers that only use an optional membership filter.
-func WaitUniqueJoinKeysWithStatus(sqlproc *SqlProcess) ([]byte, UniqueJoinKeysStatus, error) {
+func WaitUniqueJoinKeysWithStatus(sqlproc *SqlProcess) (*keycodec.KeyPayload, UniqueJoinKeysStatus, error) {
 	return waitUniqueJoinKeys(sqlproc, true)
 }
 
-func waitUniqueJoinKeys(sqlproc *SqlProcess, preserveStatus bool) ([]byte, UniqueJoinKeysStatus, error) {
+func waitUniqueJoinKeys(sqlproc *SqlProcess, preserveStatus bool) (*keycodec.KeyPayload, UniqueJoinKeysStatus, error) {
 	if sqlproc.Proc == nil {
 		return nil, UniqueJoinKeysNone, nil
 	}
@@ -94,7 +96,10 @@ func waitUniqueJoinKeys(sqlproc *SqlProcess, preserveStatus bool) ([]byte, Uniqu
 		}
 		switch m.Typ {
 		case message.RuntimeFilter_UNIQUEJOINKEYS:
-			return m.Data, UniqueJoinKeysAvailable, nil
+			if m.Keys == nil || !m.Keys.Retain() {
+				return nil, UniqueJoinKeysNone, moerr.NewInvalidStateNoCtx("runtime key payload was released")
+			}
+			return m.Keys, UniqueJoinKeysAvailable, nil
 		case message.RuntimeFilter_PASS:
 			if !preserveStatus {
 				continue
@@ -113,6 +118,18 @@ func waitUniqueJoinKeys(sqlproc *SqlProcess, preserveStatus bool) ([]byte, Uniqu
 
 // BuildExactPkFilter converts a vector of primary key values into a comma-separated
 // SQL literal string suitable for use in an IN (...) clause.
+func BuildExactPkFilterKeys(ctx context.Context, keys *keycodec.KeyPayload) (string, error) {
+	var parts []string
+	err := keys.Visit(ctx, func(v *vector.Vector) error {
+		part, err := BuildExactPkFilter(ctx, v)
+		if err == nil && part != "" {
+			parts = append(parts, part)
+		}
+		return err
+	})
+	return strings.Join(parts, ","), err
+}
+
 func BuildExactPkFilter(ctx context.Context, vec *vector.Vector) (string, error) {
 	var buf []byte
 	rowCount := vec.Length()

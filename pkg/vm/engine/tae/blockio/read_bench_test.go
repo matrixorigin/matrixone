@@ -121,8 +121,8 @@ func newLateMaterializationBenchmarkFixture(b *testing.B) *lateMaterializationBe
 	fs := testutil.NewSharedFS()
 	mp := mpool.MustNewZero()
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	input.Vecs[1] = vector.NewVec(types.T_text.ToType(), mp)
 	payload := makeBenchmarkPayload(lateMaterializationBenchmarkPayloadBytes)
 	for row := 0; row < lateMaterializationBenchmarkRows; row++ {
 		if err := vector.AppendFixed(input.Vecs[0], int32(row), false, mp); err != nil {
@@ -165,7 +165,7 @@ func (f *lateMaterializationBenchmarkFixture) read(late, all bool) (int, error) 
 	defer mpool.DeleteMPool(mp)
 	output := batch.NewWithSize(len(f.columns))
 	for i, typ := range f.colTypes {
-		output.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+		output.Vecs[i] = vector.NewVec(typ, mp)
 	}
 	defer output.Clean(mp)
 	cacheVectors := containers.NewVectors(len(f.columns) + 2)
@@ -183,7 +183,9 @@ func (f *lateMaterializationBenchmarkFixture) read(late, all bool) (int, error) 
 			}
 		}
 		for _, pos := range loaded {
-			bat.Vecs[pos].Shrink(sels, false)
+			if err := bat.Vecs[pos].Shrink(sels, false, mp); err != nil {
+				return engine.ReaderFilterResult{}, err
+			}
 		}
 		bat.SetRowCount(len(sels))
 		return engine.ReaderFilterResult{Sels: sels}, nil
@@ -374,8 +376,8 @@ func newVectorRangeTopNBenchmarkFixture(b *testing.B) *vectorRangeTopNBenchmarkF
 	mp := mpool.MustNewZero()
 	vectorType := types.New(types.T_array_float32, vectorRangeTopNBenchmarkDimensions, 0)
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	input.Vecs[1] = vector.NewVec(vectorType)
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	input.Vecs[1] = vector.NewVec(vectorType, mp)
 	entry := make([]float32, vectorRangeTopNBenchmarkDimensions)
 	for row := 0; row < vectorRangeTopNBenchmarkRows; row++ {
 		entry[0] = float32(row + 1)
@@ -453,7 +455,7 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
 	}()
 	output := batch.NewWithSize(len(f.columns))
 	for pos, typ := range f.columnTypes {
-		output.Vecs[pos] = vector.NewOffHeapVecWithType(typ)
+		output.Vecs[pos] = vector.NewVec(typ, mp)
 	}
 	defer output.Clean(mp)
 	cacheVectors := containers.NewVectors(len(f.columns) + 1)
@@ -471,7 +473,9 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
 			}
 		}
 		for _, pos := range loaded {
-			bat.Vecs[pos].Shrink(sels, false)
+			if err := bat.Vecs[pos].Shrink(sels, false, mp); err != nil {
+				return engine.ReaderFilterResult{}, err
+			}
 		}
 		bat.SetRowCount(len(sels))
 		return engine.ReaderFilterResult{Sels: sels}, nil
@@ -533,7 +537,7 @@ func (f *vectorRangeTopNBenchmarkFixture) read(storageTopK bool) (retErr error) 
 	}()
 	output := batch.NewWithSize(len(f.columns))
 	for i, typ := range f.columnTypes {
-		output.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+		output.Vecs[i] = vector.NewVec(typ, mp)
 	}
 	defer output.Clean(mp)
 	cacheVectors := containers.NewVectors(len(f.columns) + 1)

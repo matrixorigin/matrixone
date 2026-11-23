@@ -268,7 +268,7 @@ func resolveBranchCloneSource(ctx context.Context, ses *Session, bh BackgroundEx
 	tcc := InitTxnCompilerContext(ses.GetTxnCompileCtx().DefaultDatabase())
 	tcc.SetExecCtx(&ExecCtx{reqCtx: defines.AttachAccountId(ctx, source.account), ses: back.backSes, proc: proc})
 	defer tcc.Close()
-	ref, def, err := tcc.Resolve(source.database, source.table, source.snapshot)
+	ref, def, err := tcc.Resolve(source.database, source.table, source.snapshot, nil)
 	if err != nil {
 		return branchResolvedSource{}, err
 	}
@@ -449,7 +449,7 @@ func (a *lifecycleRCAdmission) admitBranchCloneRC(ctx context.Context, ses *Sess
 				return err
 			}
 			keys := batch.NewWithSize(1)
-			keys.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+			keys.Vecs[0] = vector.NewVec(types.T_uint64.ToType(), a.proc.Mp())
 			for _, root := range roots {
 				if err = vector.AppendFixed(keys.Vecs[0], root, false, a.proc.Mp()); err != nil {
 					keys.Vecs[0].Free(a.proc.Mp())
@@ -511,7 +511,7 @@ func (a *lifecycleRCAdmission) lockBranchSnapshotName(ctx context.Context, table
 
 func (a *lifecycleRCAdmission) lockSnapshotName(ctx context.Context, name string, ownerAccountID uint32) error {
 	keys := batch.NewWithSize(1)
-	keys.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	keys.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), a.proc.Mp())
 	if err := vector.AppendBytes(keys.Vecs[0], []byte(name), false, a.proc.Mp()); err != nil {
 		keys.Vecs[0].Free(a.proc.Mp())
 		return err
@@ -532,7 +532,7 @@ func compareBranchCloneSource(a, b branchCloneSource) int {
 func (a *lifecycleRCAdmission) lockBranchQuotaKey(ctx context.Context, account uint32) error {
 	// mo_feature_limit.account_id is BIGINT UNSIGNED, unlike the uint32
 	// account component in the mo_database/mo_tables primary keys.
-	columns := []*vector.Vector{vector.NewVec(types.T_uint64.ToType()), vector.NewVec(types.T_varchar.ToType()), vector.NewVec(types.T_varchar.ToType())}
+	columns := []*vector.Vector{vector.NewVec(types.T_uint64.ToType(), a.proc.Mp()), vector.NewVec(types.T_varchar.ToType(), a.proc.Mp()), vector.NewVec(types.T_varchar.ToType(), a.proc.Mp())}
 	defer func() {
 		for _, col := range columns {
 			col.Free(a.proc.Mp())

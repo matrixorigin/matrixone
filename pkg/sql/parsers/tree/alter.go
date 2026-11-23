@@ -929,6 +929,8 @@ type AlterOptionAlterReIndex struct {
 	KmeansTrainPercent       int64
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
+	MaxBadRecords            int64
+	MaxBadRecordsSet         bool
 	MaxPostingsCapacity      int64
 	PositionFree             bool
 	PositionFreeSet          bool
@@ -966,6 +968,8 @@ func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOpti
 	a.KmeansTrainPercent = option.KmeansTrainPercent
 	a.KmeansMaxIteration = option.KmeansMaxIteration
 	a.MaxIndexCapacity = option.MaxIndexCapacity
+	a.MaxBadRecords = option.MaxBadRecords
+	a.MaxBadRecordsSet = option.MaxBadRecordsSet
 	a.MaxPostingsCapacity = option.MaxPostingsCapacity
 	a.PositionFree = option.PositionFree
 	a.PositionFreeSet = option.PositionFreeSet
@@ -1017,6 +1021,9 @@ func (node *AlterOptionAlterReIndex) Format(ctx *FmtCtx) {
 	writeInt("kmeans_train_percent", node.KmeansTrainPercent)
 	writeInt("kmeans_max_iteration", node.KmeansMaxIteration)
 	writeInt("max_index_capacity", node.MaxIndexCapacity)
+	if node.MaxBadRecordsSet {
+		ctx.WriteString(fmt.Sprintf(" max_bad_records = %d", node.MaxBadRecords))
+	}
 	writeInt("max_postings_capacity", node.MaxPostingsCapacity)
 	writeInt("quantizer_train_limit", node.QuantizerTrainLimit)
 	if len(node.IncludeColumns) != 0 {

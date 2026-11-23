@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -64,7 +65,12 @@ type ManifestStats struct {
 //
 // dataDir is the base directory where .tae object files are stored
 // (e.g., the fileservice shared path).
-func GenerateManifest(table *catalog.TableEntry, dataDir string) ([]byte, error) {
+//
+// now is the snapshot bound and must come from the engine's timestamp owner
+// (DB.Runtime.Now, the same allocator that stamps commits). Commit stamps
+// ride the configured HLC, which can stay ahead of wall time, so a
+// wall-time bound can sit below committed object ends and hide them.
+func GenerateManifest(table *catalog.TableEntry, dataDir string, now types.TS) ([]byte, error) {
 	schema := table.GetLastestSchema(false)
 
 	// Build column list, skipping hidden/internal columns
@@ -95,9 +101,24 @@ func GenerateManifest(table *catalog.TableEntry, dataDir string) ([]byte, error)
 		}
 	}
 
-	// Enumerate visible objects using a mock "now" transaction
-	// (sees all committed objects, not MVCC-bound to a user txn)
-	readTxn := txnbase.MockTxnReaderWithNow()
+	// Enumerate the visible objects as a normal "now" reader.
+	//
+	// The object iterator classifies a reader with an empty txn context as
+	// a mock status reader: it skips an entry as soon as it has a delete
+	// counterpart — even one still uncommitted by an in-flight physical
+	// merge — and skips the merge's still-creating replacement. Applied to
+	// a merge in progress, that enumerated zero objects and the manifest
+	// reported a successful empty list for a nonempty table (#32215).
+	//
+	// Binding the now snapshot to a normal txn context makes the iterator
+	// apply real MVCC visibility instead: the sources of an uncommitted
+	// merge stay visible until the replacement commits, and the
+	// replacement only appears once its own commit is visible. The
+	// manifest therefore always enumerates one complete committed object
+	// generation.
+	// The bound is the caller-provided engine now; wall time must never be
+	// used here because the HLC that stamps commits can stay ahead of it.
+	readTxn := txnbase.NewTxn(nil, nil, []byte("tae-manifest-reader"), now, now)
 	it := table.MakeDataVisibleObjectIt(readTxn)
 	defer it.Release()
 
@@ -147,8 +168,8 @@ func GenerateManifest(table *catalog.TableEntry, dataDir string) ([]byte, error)
 }
 
 // GenerateManifestPretty is like GenerateManifest but produces indented JSON.
-func GenerateManifestPretty(table *catalog.TableEntry, dataDir string) ([]byte, error) {
-	data, err := GenerateManifest(table, dataDir)
+func GenerateManifestPretty(table *catalog.TableEntry, dataDir string, now types.TS) ([]byte, error) {
+	data, err := GenerateManifest(table, dataDir, now)
 	if err != nil {
 		return nil, err
 	}

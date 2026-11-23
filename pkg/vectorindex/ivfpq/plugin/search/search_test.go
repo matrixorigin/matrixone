@@ -15,6 +15,7 @@
 package search
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strconv"
 	"testing"
 
@@ -74,7 +75,7 @@ func TestNewSearchBuildsConfig(t *testing.T) {
 	require.Equal(t, uint64(5), s.limit)
 
 	s, err = newSearch(proc, ivfpqSpec(t, types.T_array_float32, `{"op_type":"vector_l2_ops"}`),
-		searchplugin.Request{QueryType: plan.Type{Id: int32(types.T_array_float32), Width: 3}})
+		searchplugin.Request{QueryPayload: types.ArrayToBytes([]float32{1, 2, 3}), QueryType: plan.Type{Id: int32(types.T_array_float32), Width: 3}})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), s.limit)
 	require.Equal(t, "[]", s.filterJSON)
@@ -230,4 +231,22 @@ func TestExplainSettings(t *testing.T) {
 	got, err = Hooks{}.ExplainSettings(malformed, false)
 	require.NoError(t, err)
 	require.Nil(t, got)
+}
+
+// A query vector the index cannot store is rejected.
+func TestNewSearchRejectsUnstorableQuery(t *testing.T) {
+	proc := testutil.NewProc(t)
+	req := ivfpqRequest(types.T_array_float32, 2)
+	req.QueryPayload = types.ArrayToBytes([]float32{100000, 1})
+	_, err := newSearch(proc, ivfpqSpec(t, types.T_array_float32, `{"op_type":"vector_l2_ops","quantization":"float16"}`), req)
+	code, _ := moerr.GetMoErrCode(err)
+	require.Equal(t, moerr.ErrIndexVectorOutOfRange, code, "%v", err)
+	// float32 storage holds it
+	_, err = newSearch(proc, ivfpqSpec(t, types.T_array_float32, `{"op_type":"vector_l2_ops"}`), req)
+	require.NoError(t, err)
+
+	req.QueryPayload = types.ArrayToBytes([]float32{1e20, 1})
+	_, err = newSearch(proc, ivfpqSpec(t, types.T_array_float32, `{"op_type":"vector_l2_ops"}`), req)
+	code, _ = moerr.GetMoErrCode(err)
+	require.Equal(t, moerr.ErrIndexVectorOutOfRange, code, "%v", err)
 }

@@ -70,7 +70,8 @@ func TestPreparedPublicationPatternBindings(t *testing.T) {
 						if prepared.params != nil {
 							prepared.params.Free(cw.proc.Mp())
 						}
-						prepared.params = vector.NewVec(types.T_text.ToType())
+						prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+						prepared.paramsMP = cw.proc.Mp()
 						value := ""
 						if tc.value != nil {
 							value = fmt.Sprint(tc.value)

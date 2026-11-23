@@ -36,6 +36,41 @@ func SupportsWindowPrefixSnapshot(exec AggFuncExec) bool {
 	return ok && !exec.IsDistinct()
 }
 
+// GrowWindowGroups initializes a fresh fixed-state window aggregate for its
+// known output size. Group's incremental growth keeps its normal allocation
+// policy; small windows need not allocate and clear 8192 state values each.
+func GrowWindowGroups(exec AggFuncExec, groups int) error {
+	if groups <= 0 || groups >= AggBatchSize || !SupportsWindowPrefixSnapshot(exec) {
+		return exec.GroupGrow(groups)
+	}
+	ae := exec.(windowPrefixState).windowPrefixState()
+	if len(ae.state) != 0 || len(ae.standby) != 0 || ae.chunkSize == 1 {
+		return exec.GroupGrow(groups)
+	}
+	var state aggState
+	if err := state.initWithAllocation(ae.mp, 0, int32(groups), &ae.aggInfo, true, ae.allocation); err != nil {
+		return err
+	}
+	defer func() { state.free(ae.mp) }()
+	// Keep the logical chunk address space and initial NULL bits unchanged.
+	// Later GroupGrow calls can extend the compact physical vectors safely.
+	if ae.emptyNull {
+		for _, vec := range state.vecs {
+			if err := vec.PreExtendNulls(AggBatchSize, ae.mp); err != nil {
+				return err
+			}
+			vec.SetAllNulls(AggBatchSize)
+		}
+	}
+	state.capacity = AggBatchSize
+	if _, _, err := state.grow(ae.mp, int32(groups), true); err != nil {
+		return err
+	}
+	ae.state = []aggState{state}
+	state = aggState{}
+	return nil
+}
+
 // SnapshotWindowPrefix copies a source group into an empty destination group.
 // The caller creates both executors with the same aggregate configuration.
 func SnapshotWindowPrefix(dst, src AggFuncExec, dstGroup, srcGroup int) error {

@@ -520,6 +520,76 @@ func TestDiskCacheOpenReaderCannotReindexEvictedPath(t *testing.T) {
 	}
 }
 
+// A reader that indexes a path again after it left the index, before its eviction starts,
+// keeps the file: the eviction removes a file only while its path is not indexed.
+func TestDiskCacheReindexBeforeEvictionStartKeepsFile(t *testing.T) {
+	tests := []struct {
+		name  string
+		evict func(context.Context, *DiskCache, string)
+	}{
+		{
+			name: "Delete",
+			evict: func(ctx context.Context, cache *DiskCache, diskPath string) {
+				cache.cache.Delete(ctx, diskPath)
+			},
+		},
+		{
+			name: "ForceEvict",
+			evict: func(ctx context.Context, cache *DiskCache, _ string) {
+				cache.cache.ForceEvictWithWait(ctx, cache.cache.Used())
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cache := newLifecycleTestDiskCache(t)
+			ctx := context.Background()
+			require.NoError(t, cache.SetFile(ctx, "foo", func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader("ab")), nil
+			}))
+			diskPath := cache.pathForFile("foo")
+
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			cache.beforeEvictionStart = func(path string) {
+				if path == diskPath {
+					close(entered)
+					<-release
+				}
+			}
+			evicted := make(chan struct{})
+			go func() {
+				defer close(evicted)
+				test.evict(ctx, cache, diskPath)
+			}()
+			select {
+			case <-entered:
+			case <-time.After(diskCacheLifecycleTestTimeout):
+				t.Fatal("the eviction did not start")
+			}
+			require.False(t, cache.cache.Contains(diskPath))
+
+			vector := &IOVector{FilePath: "foo", Entries: []IOEntry{{Offset: 1, Size: 1}}}
+			defer vector.Release()
+			require.NoError(t, cache.Read(ctx, vector))
+			require.True(t, vector.Entries[0].done)
+			require.Equal(t, []byte("b"), vector.Entries[0].Data)
+			require.True(t, cache.cache.Contains(diskPath), "the reader indexed the path again")
+
+			close(release)
+			select {
+			case <-evicted:
+			case <-time.After(diskCacheLifecycleTestTimeout):
+				t.Fatal("the eviction did not finish")
+			}
+			require.True(t, cache.cache.Contains(diskPath))
+			_, err := os.Stat(diskPath)
+			require.NoError(t, err, "the indexed file is kept")
+			require.False(t, cache.isUpdating(diskPath))
+		})
+	}
+}
+
 func TestDiskCacheCurrentReaderReindexesUntrackedPath(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
 	ctx := context.Background()

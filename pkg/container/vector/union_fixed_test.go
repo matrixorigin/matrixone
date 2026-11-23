@@ -24,6 +24,65 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUnionPlainFixedSelectionReuse(t *testing.T) {
+	for _, oid := range []types.T{types.T_uint32, types.T_uint64, types.T_float32, types.T_float64} {
+		for _, backing := range []string{"owned", "window", "lease"} {
+			for _, index32 := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/int32=%t", oid, backing, index32), func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+					src, dst := NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp)
+					t.Cleanup(func() { src.Free(mp); dst.Free(mp) })
+					require.NoError(t, src.PreExtend(4, mp))
+					src.SetLength(4)
+					width := src.typ.TypeSize()
+					for row := range 4 {
+						if width == 4 {
+							binary.LittleEndian.PutUint32(src.data[row*width:], []uint32{0x80000000, 0x7fc01234, 0xff800000, 0xffffffff}[row])
+						} else {
+							binary.LittleEndian.PutUint64(src.data[row*width:], []uint64{0x8000000000000000, 0x7ff8000000001234, 0xfff0000000000000, 0xffffffffffffffff}[row])
+						}
+					}
+					input := src
+					if backing != "owned" {
+						var err error
+						if backing == "window" {
+							input, err = src.Window(0, 4)
+						} else {
+							data, allocErr := mp.Alloc(4*width, true)
+							require.NoError(t, allocErr)
+							copy(data, src.data[:4*width])
+							input = NewVecWithData(oid.ToType(), 4, data, nil, nil)
+							// The test is the lender: it frees data after input.
+							t.Cleanup(func() { mp.Free(data) })
+						}
+						require.NoError(t, err)
+						t.Cleanup(func() { input.Free(mp) })
+					}
+					require.NoError(t, dst.PreExtend(8, mp))
+					for range 2 {
+						dst.CleanOnlyData()
+						before := mp.Stats().NumAlloc.Load()
+						if index32 {
+							require.NoError(t, dst.UnionInt32(input, []int32{3}, mp))
+							require.NoError(t, dst.UnionInt32(input, []int32{2, 0, 1, 1}, mp))
+						} else {
+							require.NoError(t, dst.Union(input, []int64{3}, mp))
+							require.NoError(t, dst.Union(input, []int64{2, 0, 1, 1}, mp))
+						}
+						require.Equal(t, before, mp.Stats().NumAlloc.Load())
+						require.Equal(t, 5, dst.Length())
+						for row, sourceRow := range []int{3, 2, 0, 1, 1} {
+							require.Equal(t, src.data[sourceRow*width:(sourceRow+1)*width], dst.data[row*width:(row+1)*width])
+							require.False(t, dst.IsNull(uint64(row)))
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestUnionFixedSelection(t *testing.T) {
 	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint32, types.T_uint64, types.T_float32, types.T_float64, types.T_date, types.T_datetime,
@@ -34,7 +93,7 @@ func TestUnionFixedSelection(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/int32=%t/nullable=%t", oid, index32, nullable), func(t *testing.T) {
 					mp := mpool.MustNewZero()
 					t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-					src, dst := NewVec(oid.ToType()), NewVec(oid.ToType())
+					src, dst := NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp)
 					t.Cleanup(func() { src.Free(mp); dst.Free(mp) })
 					require.NoError(t, src.PreExtend(4, mp))
 					src.SetLength(4)
@@ -58,7 +117,6 @@ func TestUnionFixedSelection(t *testing.T) {
 					if nullable {
 						src.GetNulls().Add(1)
 					}
-					require.NoError(t, src.SetStringSource(types.StringSourceLiteral))
 					view, err := src.Window(1, 4)
 					require.NoError(t, err)
 					t.Cleanup(func() { view.Free(mp) })
@@ -82,7 +140,6 @@ func TestUnionFixedSelection(t *testing.T) {
 							isNull := nullable && sourceRow == 1
 							require.Equal(t, isNull, dst.IsNull(uint64(row)))
 							require.Equal(t, sourceRow == 2, dst.GetGrouping().Contains(uint64(row)))
-							require.Equal(t, types.StringSourceLiteral, dst.GetStringSourceAt(row))
 							if !isNull {
 								require.Equal(t, expected[sourceRow], dst.data[row*width:(row+1)*width])
 							}

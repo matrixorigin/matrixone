@@ -319,7 +319,7 @@ func TestExactKeyEncodingRejectsUnprovableWireContracts(t *testing.T) {
 
 func TestMarshalExactFilterVectorUsesWireSizedBudget(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_int8.ToType())
+	vec := vector.NewVec(types.T_int8.ToType(), mp)
 	defer func() {
 		vec.Free(mp)
 		require.Zero(t, mp.CurrNB())
@@ -349,7 +349,7 @@ func TestMarshalExactFilterVectorUsesWireSizedBudget(t *testing.T) {
 
 func TestMarshalExactFilterVectorAdmissionFailsBeforeAllocation(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer func() {
 		vec.Free(mp)
 		require.Zero(t, mp.CurrNB())

@@ -1,0 +1,39 @@
+drop database if exists outer_count_preaggregation;
+create database outer_count_preaggregation;
+use outer_count_preaggregation;
+create table c(k int primary key);
+create table f(id int primary key, k int, v int, note varchar(20));
+insert into c values (1),(2),(3);
+insert into f values (1,1,5,'ok'),(2,1,null,'ok'),(3,1,7,'skip'),(4,2,null,'ok'),(5,99,9,'ok'),(6,null,9,'ok');
+select c.k, count(f.v) as n from c left join f on c.k=f.k and f.note<>'skip' group by c.k order by c.k;
+k    n
+1    1
+2    0
+3    0
+select c.k, coalesce(g.n,cast(0 as bigint)) as n from c left join (select k,count(v) as n from f where note<>'skip' group by k) g on c.k=g.k order by c.k;
+k    n
+1    1
+2    0
+3    0
+select c.k, count(*) as n from c left join f on c.k=f.k and f.note<>'skip' group by c.k order by c.k;
+k    n
+1    2
+2    1
+3    1
+select c.k, count(f.v) as n from c left join f on c.k=f.k where f.note<>'skip' group by c.k order by c.k;
+k    n
+1    1
+2    0
+create table bag(k int);
+insert into bag values (1),(1),(2);
+select c.k, count(f.v) as n from bag c left join f on c.k=f.k and f.note<>'skip' group by c.k order by c.k;
+k    n
+1    2
+2    0
+delete from f;
+select c.k, count(f.v) as n from c left join f on c.k=f.k group by c.k order by c.k;
+k    n
+1    0
+2    0
+3    0
+drop database outer_count_preaggregation;

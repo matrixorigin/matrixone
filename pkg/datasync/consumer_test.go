@@ -668,12 +668,19 @@ func TestCheckRole(t *testing.T) {
 
 func TestCleanState(t *testing.T) {
 	defer leaktest.AfterTest(t)()
+	makeLeader := func(t *testing.T, c *consumer) {
+		t.Helper()
+		c.logClient.(*mockLogClient).setLeaderID(2)
+		c.common.setShardReplicaID(logShardID, 2)
+		require.True(t, c.checkRole(context.Background()))
+	}
 
 	t.Run("log api error", func(t *testing.T) {
 		ctx := context.Background()
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
 		defer c.Close()
+		makeLeader(t, c)
 		count := 10
 		for i := 0; i < count; i++ {
 			lsn, err := c.logClient.write(ctx, nil)
@@ -697,6 +704,7 @@ func TestCleanState(t *testing.T) {
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
 		defer c.Close()
+		makeLeader(t, c)
 		count := 10
 		for i := 0; i < count; i++ {
 			lsn, err := c.logClient.write(ctx, nil)
@@ -720,6 +728,7 @@ func TestCleanState(t *testing.T) {
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
 		defer c.Close()
+		makeLeader(t, c)
 		count := 10
 		for i := 0; i < count; i++ {
 			lsn, err := c.logClient.write(ctx, nil)
@@ -731,6 +740,26 @@ func TestCleanState(t *testing.T) {
 		requiredLsn, err := c.logClient.getRequiredLsnWithRetry(ctx)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(0), requiredLsn)
+	})
+	t.Run("stale required LSN owner", func(t *testing.T) {
+		c := createTestConsumer(nil, nil)
+		defer c.Close()
+		makeLeader(t, c)
+		lc := c.logClient.(*mockLogClient)
+		require.NoError(t, lc.setRequiredLsn(context.Background(), 99))
+		lc.s.mu.Lock()
+		lc.s.values[logShardID].requiredOwner++
+		lc.s.values[logShardID].requiredRevision++
+		lc.s.mu.Unlock()
+		c.syncedLsn.Store(7)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		c.cleanState(ctx, time.Millisecond)
+		require.NoError(t, ctx.Err(), "a stale owner must stop cleanup without retrying")
+		require.Equal(t, uint64(7), c.syncedLsn.Load())
+		required, err := lc.getRequiredLsn(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, uint64(99), required)
 	})
 	t.Run("canceled before cleanup", func(t *testing.T) {
 		c := createTestConsumer(nil, nil)
@@ -757,6 +786,7 @@ func TestCleanState(t *testing.T) {
 		for _, fault := range []string{"getLatestLsn", "setRequiredLsn"} {
 			t.Run(fault, func(t *testing.T) {
 				c := createTestConsumer(nil, nil)
+				makeLeader(t, c)
 				parent, cancel := context.WithCancel(context.Background())
 				ctx := &cleanupWaitContext{Context: parent, waiting: make(chan struct{})}
 				var done chan struct{}
@@ -827,7 +857,7 @@ func TestCleanState(t *testing.T) {
 				wantRequired := 0
 				var wantSynced uint64
 				if fault == "setRequiredLsn" {
-					wantRequired, wantSynced = 1, 1
+					wantRequired = 1
 				}
 				require.Equal(t, wantRequired, requiredCalls)
 				require.Equal(t, wantSynced, c.syncedLsn.Load())
@@ -1432,7 +1462,7 @@ func TestConsumerStart(t *testing.T) {
 					wantLatest = 1
 				}
 				if phase == "required LSN" {
-					wantRequired, wantSynced = 1, 1
+					wantRequired = 1
 				}
 				require.Equal(t, wantLatest, latestCalls)
 				require.Equal(t, wantRequired, requiredCalls)
@@ -1455,7 +1485,7 @@ func TestConsumerStart(t *testing.T) {
 		lc.setLeaderID(10)
 		c.writeLsn.Store(1)
 		c.loopWorkInterval = time.Millisecond
-		leaderChecks := make(chan uint64)
+		leaderChecks := make(chan uint64, 16)
 		lc.getLeaderIDEvent = leaderChecks
 		readEntries := make(chan struct{}, 1)
 		lc.readEntriesEvent = readEntries
@@ -1520,6 +1550,121 @@ func TestConsumerStart(t *testing.T) {
 	})
 }
 
+type termFencedLogClient struct {
+	LogClient
+	term, ownerTerm uint64
+	claims          int
+	elected         bool
+	conflicted      chan struct{}
+	updated         chan struct{}
+}
+
+func (c *termFencedLogClient) claimRequiredLsn(ctx context.Context) error {
+	if err := c.LogClient.claimRequiredLsn(ctx); err != nil {
+		return err
+	}
+	c.ownerTerm = c.term
+	c.claims++
+	return nil
+}
+
+func (c *termFencedLogClient) setRequiredLsn(ctx context.Context, lsn uint64) error {
+	if !c.elected {
+		// The same replica wins a new term after the role check but before
+		// the required-LSN proposal commits.
+		c.term++
+		c.elected = true
+		close(c.conflicted)
+	}
+	if c.ownerTerm != c.term {
+		return errRequiredLsnConflict
+	}
+	if err := c.LogClient.setRequiredLsn(ctx, lsn); err != nil {
+		return err
+	}
+	select {
+	case c.updated <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (c *termFencedLogClient) setRequiredLsnWithRetry(ctx context.Context, lsn uint64) error {
+	return c.setRequiredLsn(ctx, lsn)
+}
+
+func (c *termFencedLogClient) resetRequiredLsn(ctx context.Context) error {
+	return c.setRequiredLsn(ctx, 0)
+}
+
+func TestConsumerReclaimsAfterSameLeaderReelection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := createTestConsumer(nil, nil)
+	require.NotNil(t, c)
+	c.common.setShardReplicaID(logShardID, 10)
+	base := c.logClient.(*mockLogClient)
+	base.setLeaderID(10)
+	require.NoError(t, base.setRequiredLsn(ctx, 1))
+	rec, fileName, err := genRecordWithLocation(0, 10)
+	require.NoError(t, err)
+	require.NoError(t, c.srcFS.Write(ctx, fileservice.IOVector{
+		FilePath: fileName,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 4, Data: []byte("test")}},
+	}))
+	_, err = base.write(ctx, rec.Data)
+	require.NoError(t, err)
+	c.writeLsn.Store(1)
+	c.loopWorkInterval = time.Millisecond
+	fenced := &termFencedLogClient{
+		LogClient: base, term: 1,
+		conflicted: make(chan struct{}), updated: make(chan struct{}, 1),
+	}
+	c.logClient = fenced
+	done := make(chan struct{})
+	go func() {
+		c.Start(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+			c.Close()
+		case <-time.After(5 * time.Second):
+			t.Error("consumer did not stop")
+		}
+	}()
+	select {
+	case <-fenced.conflicted:
+	case <-done:
+		t.Fatal("consumer exited before ownership conflict")
+	case <-time.After(5 * time.Second):
+		t.Fatal("consumer did not reach the ownership conflict")
+	}
+	select {
+	case <-fenced.updated:
+	case <-done:
+		t.Fatal("consumer exited before reclaiming ownership")
+	case <-time.After(5 * time.Second):
+		t.Fatal("consumer did not reclaim ownership")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("consumer did not stop after cancellation")
+	}
+	require.Equal(t, uint64(2), fenced.ownerTerm)
+	require.Equal(t, 2, fenced.claims)
+	leaderID, err := base.getLeaderID(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), leaderID)
+	required, err := base.getRequiredLsn(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, uint64(11), required)
+}
+
 func TestCreateConsumer(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	fs := newTestFS()
@@ -1553,6 +1698,10 @@ func (c *cancellationLogClient) getLatestLsnWithRetry(ctx context.Context) (uint
 
 func (c *cancellationLogClient) setRequiredLsnWithRetry(ctx context.Context, lsn uint64) error {
 	return c.setRequired(ctx, lsn)
+}
+
+func (c *cancellationLogClient) resetRequiredLsn(ctx context.Context) error {
+	return c.setRequired(ctx, 0)
 }
 
 // The mock RPCs do not observe Done. Arming after their error makes the next

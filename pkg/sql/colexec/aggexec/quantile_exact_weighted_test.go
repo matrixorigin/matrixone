@@ -47,12 +47,12 @@ func buildWeightedFixtureVecs(
 	t *testing.T, mp *mpool.MPool,
 ) (*vector.Vector, *vector.Vector) {
 	t.Helper()
-	values := vector.NewVec(types.T_float64.ToType())
+	values := vector.NewVec(types.T_float64.ToType(), mp)
 	for i := range issueFixtureValues {
 		require.NoError(t, vector.AppendFixed(
 			values, issueFixtureValues[i], issueFixtureValueNulls[i], mp))
 	}
-	weights := vector.NewVec(types.T_float64.ToType())
+	weights := vector.NewVec(types.T_float64.ToType(), mp)
 	for _, w := range issueFixtureWeights {
 		require.NoError(t, vector.AppendFixed(weights, w, false, mp))
 	}
@@ -92,12 +92,12 @@ func TestQuantileExactWeightedIssueFixture(t *testing.T) {
 	require.Len(t, results, 1)
 	require.False(t, results[0].IsNull(0))
 	require.Equal(t, 2.0, vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	exec.Free()
 
 	// The supported unweighted control on the same values interpolates to 3,
 	// so substituting it for the weighted aggregate cannot pass either check.
-	controlVec := vector.NewVec(types.T_float64.ToType())
+	controlVec := vector.NewVec(types.T_float64.ToType(), mp)
 	defer controlVec.Free(mp)
 	for i := range issueFixtureValues {
 		require.NoError(t, vector.AppendFixed(
@@ -127,7 +127,7 @@ func TestQuantileExactWeightedEmptyAndSkippedGroups(t *testing.T) {
 		types.T_float64.ToType(), types.T_float64.ToType(), "0.5")
 	require.NoError(t, exec.GroupGrow(2))
 
-	allNullValues := vector.NewVec(types.T_float64.ToType())
+	allNullValues := vector.NewVec(types.T_float64.ToType(), mp)
 	defer allNullValues.Free(mp)
 	for i := 0; i < 3; i++ {
 		// Untyped int literals would bind vector.AppendFixed's generic
@@ -136,7 +136,7 @@ func TestQuantileExactWeightedEmptyAndSkippedGroups(t *testing.T) {
 		// bit patterns into the weights. Keep the literals float64.
 		require.NoError(t, vector.AppendFixed(allNullValues, 0.0, true, mp))
 	}
-	weights := vector.NewVec(types.T_float64.ToType())
+	weights := vector.NewVec(types.T_float64.ToType(), mp)
 	defer weights.Free(mp)
 	for i := 0; i < 3; i++ {
 		require.NoError(t, vector.AppendFixed(weights, 1.0, false, mp))
@@ -150,7 +150,7 @@ func TestQuantileExactWeightedEmptyAndSkippedGroups(t *testing.T) {
 	require.Len(t, results, 1)
 	require.True(t, results[0].IsNull(0), "empty group must return NULL")
 	require.True(t, results[0].IsNull(1), "all-skipped group must return NULL")
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	exec.Free()
 }
 
@@ -205,12 +205,12 @@ func TestQuantileExactWeightedEndpoints(t *testing.T) {
 			mp := mpool.MustNewZero()
 			defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-			values := vector.NewVec(types.T_float64.ToType())
+			values := vector.NewVec(types.T_float64.ToType(), mp)
 			defer values.Free(mp)
 			for _, v := range tc.values {
 				require.NoError(t, vector.AppendFixed(values, v, false, mp))
 			}
-			weights := vector.NewVec(types.T_uint64.ToType())
+			weights := vector.NewVec(types.T_uint64.ToType(), mp)
 			defer weights.Free(mp)
 			for _, w := range tc.weights {
 				require.NoError(t, vector.AppendFixed(weights, w, false, mp))
@@ -224,7 +224,7 @@ func TestQuantileExactWeightedEndpoints(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.want,
 				vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
-			results[0].Free(mp)
+			results[0].Free(results[0].MPool())
 			exec.Free()
 		})
 	}
@@ -277,12 +277,12 @@ func TestQuantileExactWeightedThresholdArithmetic(t *testing.T) {
 			mp := mpool.MustNewZero()
 			defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-			values := vector.NewVec(types.T_float64.ToType())
+			values := vector.NewVec(types.T_float64.ToType(), mp)
 			defer values.Free(mp)
 			for _, v := range tc.values {
 				require.NoError(t, vector.AppendFixed(values, v, false, mp))
 			}
-			weights := vector.NewVec(types.T_uint64.ToType())
+			weights := vector.NewVec(types.T_uint64.ToType(), mp)
 			defer weights.Free(mp)
 			for _, w := range tc.weights {
 				require.NoError(t, vector.AppendFixed(weights, w, false, mp))
@@ -297,7 +297,7 @@ func TestQuantileExactWeightedThresholdArithmetic(t *testing.T) {
 			require.Equal(t, tc.want,
 				vector.GetFixedAtNoTypeCheck[float64](results[0], 0),
 				"level %q", tc.level)
-			results[0].Free(mp)
+			results[0].Free(results[0].MPool())
 			exec.Free()
 		})
 	}
@@ -312,11 +312,11 @@ func TestQuantileExactWeightedTypedWeights(t *testing.T) {
 		mp := mpool.MustNewZero()
 		defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-		values := vector.NewVec(types.T_int64.ToType())
+		values := vector.NewVec(types.T_int64.ToType(), mp)
 		defer values.Free(mp)
 		require.NoError(t, vector.AppendFixed[int64](values, 1, false, mp))
 		require.NoError(t, vector.AppendFixed[int64](values, 2, false, mp))
-		weights := vector.NewVec(types.T_uint64.ToType())
+		weights := vector.NewVec(types.T_uint64.ToType(), mp)
 		defer weights.Free(mp)
 		require.NoError(t, vector.AppendFixed[uint64](
 			weights, 9007199254740993, false, mp))
@@ -333,7 +333,7 @@ func TestQuantileExactWeightedTypedWeights(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1),
 			vector.GetFixedAtNoTypeCheck[int64](results[0], 0))
-		results[0].Free(mp)
+		results[0].Free(results[0].MPool())
 		exec.Free()
 	})
 
@@ -341,10 +341,10 @@ func TestQuantileExactWeightedTypedWeights(t *testing.T) {
 		mp := mpool.MustNewZero()
 		defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-		values := vector.NewVec(types.T_int64.ToType())
+		values := vector.NewVec(types.T_int64.ToType(), mp)
 		defer values.Free(mp)
 		require.NoError(t, vector.AppendFixed[int64](values, 7, false, mp))
-		weights := vector.NewVec(types.T_uint64.ToType())
+		weights := vector.NewVec(types.T_uint64.ToType(), mp)
 		defer weights.Free(mp)
 		require.NoError(t, vector.AppendFixed[uint64](
 			weights, math.MaxUint64, false, mp))
@@ -357,7 +357,7 @@ func TestQuantileExactWeightedTypedWeights(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(7),
 			vector.GetFixedAtNoTypeCheck[int64](results[0], 0))
-		results[0].Free(mp)
+		results[0].Free(results[0].MPool())
 		exec.Free()
 	})
 
@@ -365,11 +365,11 @@ func TestQuantileExactWeightedTypedWeights(t *testing.T) {
 		mp := mpool.MustNewZero()
 		defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-		values := vector.NewVec(types.T_float64.ToType())
+		values := vector.NewVec(types.T_float64.ToType(), mp)
 		defer values.Free(mp)
 		require.NoError(t, vector.AppendFixed(values, 2.0, false, mp))
 		require.NoError(t, vector.AppendFixed(values, 5.0, false, mp))
-		weights := vector.NewVec(types.T_float32.ToType())
+		weights := vector.NewVec(types.T_float32.ToType(), mp)
 		defer weights.Free(mp)
 		require.NoError(t, vector.AppendFixed[float32](weights, 3, false, mp))
 		require.NoError(t, vector.AppendFixed[float32](weights, 1, false, mp))
@@ -382,7 +382,7 @@ func TestQuantileExactWeightedTypedWeights(t *testing.T) {
 		results, err := exec.Flush()
 		require.NoError(t, err)
 		require.Equal(t, 2.0, vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
-		results[0].Free(mp)
+		results[0].Free(results[0].MPool())
 		exec.Free()
 	})
 
@@ -391,12 +391,12 @@ func TestQuantileExactWeightedTypedWeights(t *testing.T) {
 		defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
 		weightType := types.New(types.T_decimal128, 38, 18)
-		values := vector.NewVec(types.T_float64.ToType())
+		values := vector.NewVec(types.T_float64.ToType(), mp)
 		defer values.Free(mp)
 		require.NoError(t, vector.AppendFixed(values, 1.5, false, mp))
 		require.NoError(t, vector.AppendFixed(values, 9.5, false, mp))
 
-		weights := vector.NewVec(weightType)
+		weights := vector.NewVec(weightType, mp)
 		defer weights.Free(mp)
 		// 1.000000000000000001 is fractional in its own scale and must be
 		// rejected before any conversion; a FLOAT64 cast would read it as 1.
@@ -414,7 +414,7 @@ func TestQuantileExactWeightedTypedWeights(t *testing.T) {
 		exec.Free()
 
 		// The integral spelling is valid and finalizes exactly.
-		goodWeights := vector.NewVec(weightType)
+		goodWeights := vector.NewVec(weightType, mp)
 		defer goodWeights.Free(mp)
 		goodOne, parseErr := types.ParseDecimal128("1.000000000000000000", 38, 18)
 		require.NoError(t, parseErr)
@@ -431,7 +431,7 @@ func TestQuantileExactWeightedTypedWeights(t *testing.T) {
 		results, err := exec.Flush()
 		require.NoError(t, err)
 		require.Equal(t, 9.5, vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
-		results[0].Free(mp)
+		results[0].Free(results[0].MPool())
 		exec.Free()
 	})
 
@@ -457,10 +457,10 @@ func TestQuantileExactWeightedTypedWeights(t *testing.T) {
 				mp := mpool.MustNewZero()
 				defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-				values := vector.NewVec(types.T_float64.ToType())
+				values := vector.NewVec(types.T_float64.ToType(), mp)
 				defer values.Free(mp)
 				require.NoError(t, vector.AppendFixed(values, 1.0, false, mp))
-				weights := vector.NewVec(types.T_float64.ToType())
+				weights := vector.NewVec(types.T_float64.ToType(), mp)
 				defer weights.Free(mp)
 				tc.set(weights, mp)
 
@@ -479,10 +479,10 @@ func TestQuantileExactWeightedTypedWeights(t *testing.T) {
 		mp := mpool.MustNewZero()
 		defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-		values := vector.NewVec(types.T_int64.ToType())
+		values := vector.NewVec(types.T_int64.ToType(), mp)
 		defer values.Free(mp)
 		require.NoError(t, vector.AppendFixed[int64](values, 1, false, mp))
-		weights := vector.NewVec(types.T_int64.ToType())
+		weights := vector.NewVec(types.T_int64.ToType(), mp)
 		defer weights.Free(mp)
 		require.NoError(t, vector.AppendFixed[int64](weights, -2, false, mp))
 
@@ -520,7 +520,7 @@ func TestQuantileExactWeightedResultTypeIsValueType(t *testing.T) {
 			require.Len(t, results, 1)
 			require.True(t, results[0].GetType().Eq(valueType))
 			require.True(t, results[0].IsNull(0))
-			results[0].Free(mp)
+			results[0].Free(results[0].MPool())
 			exec.Free()
 		})
 	}
@@ -535,17 +535,18 @@ func TestQuantileExactWeightedTotalOverflow(t *testing.T) {
 
 	// Row 0 builds a normal group; rows 1 and 2 share a group whose total
 	// weight crosses the uint64 boundary.
-	values := vector.NewVec(types.T_int64.ToType())
+	values := vector.NewVec(types.T_int64.ToType(), mp)
 	defer values.Free(mp)
 	for _, v := range []int64{9, 1, 2} {
 		require.NoError(t, vector.AppendFixed[int64](values, v, false, mp))
 	}
-	weights := vector.NewVec(types.T_uint64.ToType())
+	weights := vector.NewVec(types.T_uint64.ToType(), mp)
 	defer weights.Free(mp)
 	require.NoError(t, vector.AppendFixed[uint64](weights, 1, false, mp))
 	require.NoError(t, vector.AppendFixed[uint64](
 		weights, math.MaxUint64, false, mp))
 	require.NoError(t, vector.AppendFixed[uint64](weights, 1, false, mp))
+	inputs := mp.CurrNB()
 
 	exec := makeWeightedExecForTest(t, mp, false,
 		types.T_int64.ToType(), types.T_uint64.ToType(), "0.5")
@@ -558,7 +559,7 @@ func TestQuantileExactWeightedTotalOverflow(t *testing.T) {
 	require.Nil(t, results,
 		"the error return must release the partially built group result")
 	exec.Free()
-	require.Equal(t, int64(0), mp.CurrNB(),
+	require.Equal(t, inputs, mp.CurrNB(),
 		"the abort must release exactly its partially built results")
 
 	// A fresh execution on a fresh executor succeeds and returns the
@@ -584,7 +585,7 @@ func singleRowVec[T types.FixedSizeTExceptStrType](
 	t *testing.T, mp *mpool.MPool, typ types.Type, value T,
 ) *vector.Vector {
 	t.Helper()
-	v := vector.NewVec(typ)
+	v := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendFixed(v, value, false, mp))
 	return v
 }
@@ -603,8 +604,8 @@ func TestQuantileExactWeightedMergeEquivalence(t *testing.T) {
 	singleRows := [][][2]int64{{{2, 2}, {4, 1}, {4, 3}, {-1, 2}}}[0]
 
 	buildVectors := func(rows [][2]int64) (values, weights *vector.Vector) {
-		values = vector.NewVec(types.T_int64.ToType())
-		weights = vector.NewVec(types.T_int64.ToType())
+		values = vector.NewVec(types.T_int64.ToType(), mp)
+		weights = vector.NewVec(types.T_int64.ToType(), mp)
 		for _, row := range rows {
 			require.NoError(t, vector.AppendFixed[int64](values, row[0], false, mp))
 			require.NoError(t, vector.AppendFixed[int64](weights, row[1], false, mp))
@@ -685,7 +686,7 @@ func TestQuantileExactWeightedIntermediateWireRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2.0, vector.GetFixedAtNoTypeCheck[float64](results[0], 0),
 		"the wired typed pair state must reproduce the fixture result")
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	source.Free()
 	target.Free()
 }
@@ -699,12 +700,12 @@ func TestQuantileExactWeightedDistinctTypedPairs(t *testing.T) {
 		mp := mpool.MustNewZero()
 		defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-		values := vector.NewVec(types.T_float64.ToType())
+		values := vector.NewVec(types.T_float64.ToType(), mp)
 		defer values.Free(mp)
 		for _, v := range []float64{2, 2, 4} {
 			require.NoError(t, vector.AppendFixed(values, v, false, mp))
 		}
-		weights := vector.NewVec(types.T_float32.ToType())
+		weights := vector.NewVec(types.T_float32.ToType(), mp)
 		defer weights.Free(mp)
 		for _, w := range []float32{2, 2, 1} {
 			require.NoError(t, vector.AppendFixed[float32](weights, w, false, mp))
@@ -726,7 +727,7 @@ func TestQuantileExactWeightedDistinctTypedPairs(t *testing.T) {
 		results, err := restored.Flush()
 		require.NoError(t, err)
 		require.Equal(t, 2.0, vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
-		results[0].Free(mp)
+		results[0].Free(results[0].MPool())
 		source.Free()
 		restored.Free()
 	})
@@ -736,12 +737,12 @@ func TestQuantileExactWeightedDistinctTypedPairs(t *testing.T) {
 		defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
 		weightType := types.New(types.T_decimal128, 38, 18)
-		values := vector.NewVec(types.T_float64.ToType())
+		values := vector.NewVec(types.T_float64.ToType(), mp)
 		defer values.Free(mp)
 		for _, v := range []float64{5, 5, 9} {
 			require.NoError(t, vector.AppendFixed(values, v, false, mp))
 		}
-		weights := vector.NewVec(weightType)
+		weights := vector.NewVec(weightType, mp)
 		defer weights.Free(mp)
 		decimalOne, err := types.ParseDecimal128("1.000000000000000000", 38, 18)
 		require.NoError(t, err)
@@ -757,7 +758,7 @@ func TestQuantileExactWeightedDistinctTypedPairs(t *testing.T) {
 		results, err := exec.Flush()
 		require.NoError(t, err)
 		require.Equal(t, 5.0, vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
-		results[0].Free(mp)
+		results[0].Free(results[0].MPool())
 		exec.Free()
 	})
 }
@@ -797,8 +798,8 @@ func fillWeightedLargeGroupInputs(
 	t *testing.T, mp *mpool.MPool,
 ) (*vector.Vector, *vector.Vector) {
 	t.Helper()
-	values := vector.NewVec(types.T_float64.ToType())
-	weights := vector.NewVec(types.T_float64.ToType())
+	values := vector.NewVec(types.T_float64.ToType(), mp)
+	weights := vector.NewVec(types.T_float64.ToType(), mp)
 	for i := 0; i < 4096; i++ {
 		require.NoError(t, vector.AppendFixed(values, float64(4096-i), false, mp))
 		require.NoError(t, vector.AppendFixed(weights, 1.0, false, mp))
@@ -815,8 +816,8 @@ func fillWeightedEqualGroupInputs(
 	t *testing.T, mp *mpool.MPool,
 ) (*vector.Vector, *vector.Vector) {
 	t.Helper()
-	values := vector.NewVec(types.T_float64.ToType())
-	weights := vector.NewVec(types.T_float64.ToType())
+	values := vector.NewVec(types.T_float64.ToType(), mp)
+	weights := vector.NewVec(types.T_float64.ToType(), mp)
 	for i := 0; i < 4096; i++ {
 		require.NoError(t, vector.AppendFixed(values, 42.0, false, mp))
 		require.NoError(t, vector.AppendFixed(weights, 1.0, false, mp))
@@ -886,7 +887,7 @@ func TestQuantileExactWeightedCancellation(t *testing.T) {
 				vector.GetFixedAtNoTypeCheck[float64](results[0], 1))
 		}
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 		exec.Free()
 		require.Equal(t, baseline, mp.CurrNB())
@@ -1018,7 +1019,7 @@ func TestQuantileExactWeightedEqualValuedCancellation(t *testing.T) {
 		vector.GetFixedAtNoTypeCheck[float64](results[0], 0),
 		"4096 equal values select that value at any weighted threshold")
 	for _, result := range results {
-		result.Free(mp)
+		result.Free(result.MPool())
 	}
 	exec.Free()
 	require.Equal(t, baseline, mp.CurrNB())
@@ -1104,7 +1105,7 @@ func TestQuantileExactWeightedFinalizationReportsNoErrorsOnValidPayloads(t *test
 		require.Equal(t, 2.0, vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
 		require.Zero(t, atomic.LoadInt32(&reported),
 			"a finalization over valid retained pairs must not construct or report any error")
-		results[0].Free(mp)
+		results[0].Free(results[0].MPool())
 		exec.Free()
 	})
 
@@ -1157,13 +1158,11 @@ func TestQuantileExactWeightedFlushOutputOwnership(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-	values := vector.NewVec(types.T_float64.ToType())
-	defer values.Free(mp)
+	values := vector.NewVec(types.T_float64.ToType(), mp)
 	for _, v := range []float64{2, 4, -1} {
 		require.NoError(t, vector.AppendFixed(values, v, false, mp))
 	}
-	weights := vector.NewVec(types.T_float64.ToType())
-	defer weights.Free(mp)
+	weights := vector.NewVec(types.T_float64.ToType(), mp)
 	for _, w := range []float64{2, 4, 2} {
 		require.NoError(t, vector.AppendFixed(weights, w, false, mp))
 	}
@@ -1203,7 +1202,9 @@ func TestQuantileExactWeightedFlushOutputOwnership(t *testing.T) {
 	}
 
 	// Caller-side release is the single release of the transferred output.
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
+	weights.Free(mp)
+	values.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
@@ -1281,7 +1282,7 @@ func TestQuantileSortSelectorsInterruptsInsideElementWork(t *testing.T) {
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
 	const rows = 1 << 16
-	values := vector.NewVec(types.T_int64.ToType())
+	values := vector.NewVec(types.T_int64.ToType(), mp)
 	defer values.Free(mp)
 	for i := 0; i < rows; i++ {
 		require.NoError(t, vector.AppendFixed(values, int64(rows-i), false, mp))
@@ -1357,7 +1358,7 @@ func TestQuantileSortSelectorsInterruptsEqualValuedWork(t *testing.T) {
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
 	const rows = 1 << 16
-	values := vector.NewVec(types.T_int64.ToType())
+	values := vector.NewVec(types.T_int64.ToType(), mp)
 	defer values.Free(mp)
 	for i := 0; i < rows; i++ {
 		require.NoError(t, vector.AppendFixed(values, int64(29944), false, mp))
@@ -1435,7 +1436,7 @@ func TestQuantileSortSelectorsMatchesSortByVectors(t *testing.T) {
 		env  func(t *testing.T) *vector.Vector
 	}{
 		{"int8", func(t *testing.T) *vector.Vector {
-			vec := vector.NewVec(types.T_int8.ToType())
+			vec := vector.NewVec(types.T_int8.ToType(), mp)
 			for i := 0; i < 517; i++ {
 				value := int8(rng.Intn(251) - 125)
 				if i == 0 {
@@ -1448,7 +1449,7 @@ func TestQuantileSortSelectorsMatchesSortByVectors(t *testing.T) {
 			return vec
 		}},
 		{"int16", func(t *testing.T) *vector.Vector {
-			vec := vector.NewVec(types.T_int16.ToType())
+			vec := vector.NewVec(types.T_int16.ToType(), mp)
 			for i := 0; i < 517; i++ {
 				var value int16
 				switch {
@@ -1464,7 +1465,7 @@ func TestQuantileSortSelectorsMatchesSortByVectors(t *testing.T) {
 			return vec
 		}},
 		{"int32", func(t *testing.T) *vector.Vector {
-			vec := vector.NewVec(types.T_int32.ToType())
+			vec := vector.NewVec(types.T_int32.ToType(), mp)
 			for i := 0; i < 517; i++ {
 				value := int32(rng.Int31())
 				if i&7 == 0 {
@@ -1475,7 +1476,7 @@ func TestQuantileSortSelectorsMatchesSortByVectors(t *testing.T) {
 			return vec
 		}},
 		{"int64", func(t *testing.T) *vector.Vector {
-			vec := vector.NewVec(types.T_int64.ToType())
+			vec := vector.NewVec(types.T_int64.ToType(), mp)
 			for i := 0; i < 517; i++ {
 				value := rng.Int63()
 				if i == 0 {
@@ -1490,7 +1491,7 @@ func TestQuantileSortSelectorsMatchesSortByVectors(t *testing.T) {
 			return vec
 		}},
 		{"uint8", func(t *testing.T) *vector.Vector {
-			vec := vector.NewVec(types.T_uint8.ToType())
+			vec := vector.NewVec(types.T_uint8.ToType(), mp)
 			for i := 0; i < 517; i++ {
 				value := uint8(rng.Intn(256))
 				if i == 0 {
@@ -1501,7 +1502,7 @@ func TestQuantileSortSelectorsMatchesSortByVectors(t *testing.T) {
 			return vec
 		}},
 		{"uint16", func(t *testing.T) *vector.Vector {
-			vec := vector.NewVec(types.T_uint16.ToType())
+			vec := vector.NewVec(types.T_uint16.ToType(), mp)
 			for i := 0; i < 517; i++ {
 				value := uint16(rng.Intn(65536))
 				if i == 0 {
@@ -1512,7 +1513,7 @@ func TestQuantileSortSelectorsMatchesSortByVectors(t *testing.T) {
 			return vec
 		}},
 		{"uint32", func(t *testing.T) *vector.Vector {
-			vec := vector.NewVec(types.T_uint32.ToType())
+			vec := vector.NewVec(types.T_uint32.ToType(), mp)
 			for i := 0; i < 517; i++ {
 				value := uint32(rng.Int31())
 				if i == 0 {
@@ -1523,7 +1524,7 @@ func TestQuantileSortSelectorsMatchesSortByVectors(t *testing.T) {
 			return vec
 		}},
 		{"uint64 and bit rows", func(t *testing.T) *vector.Vector {
-			vec := vector.NewVec(types.T_uint64.ToType())
+			vec := vector.NewVec(types.T_uint64.ToType(), mp)
 			for i := 0; i < 517; i++ {
 				value := rng.Uint64()
 				if i == 0 {
@@ -1536,7 +1537,7 @@ func TestQuantileSortSelectorsMatchesSortByVectors(t *testing.T) {
 			return vec
 		}},
 		{"float32", func(t *testing.T) *vector.Vector {
-			vec := vector.NewVec(types.T_float32.ToType())
+			vec := vector.NewVec(types.T_float32.ToType(), mp)
 			for _, value := range []float32{
 				float32(math.NaN()), float32(math.Inf(-1)),
 				float32(math.Inf(1)), -0.0, 0.0,
@@ -1551,7 +1552,7 @@ func TestQuantileSortSelectorsMatchesSortByVectors(t *testing.T) {
 			return vec
 		}},
 		{"float64", func(t *testing.T) *vector.Vector {
-			vec := vector.NewVec(types.T_float64.ToType())
+			vec := vector.NewVec(types.T_float64.ToType(), mp)
 			for _, value := range []float64{
 				math.NaN(), math.Inf(-1), math.Inf(1),
 				math.Float64frombits(0xfff8000000000001), // NaN with a high payload
@@ -1567,7 +1568,7 @@ func TestQuantileSortSelectorsMatchesSortByVectors(t *testing.T) {
 		}},
 		{"decimal64", func(t *testing.T) *vector.Vector {
 			typ := types.New(types.T_decimal64, 10, 2)
-			vec := vector.NewVec(typ)
+			vec := vector.NewVec(typ, mp)
 			for _, text := range []string{
 				"-99999999.99", "-1.25", "0.00", "0.00", "0.01", "1.25",
 				"1.25", "99999999.99",
@@ -1586,7 +1587,7 @@ func TestQuantileSortSelectorsMatchesSortByVectors(t *testing.T) {
 			return vec
 		}},
 		{"decimal128", func(t *testing.T) *vector.Vector {
-			vec := vector.NewVec(decimal128Type)
+			vec := vector.NewVec(decimal128Type, mp)
 			for _, text := range []string{
 				"-999999999999999999999999999999.9999",
 				"-1.5", "0", "0.0000", "0", "-1.5",
@@ -1732,8 +1733,7 @@ func TestQuantileExactWeightedFinalizeScratchHonorsDesignBudget(t *testing.T) {
 				require.NoError(t, err)
 				allocation, err := NewAllocationAccount(account,
 					mpool.AllocationOwnerGroup, AllocationAccountSites{
-						VectorData: 1, VectorArea: 2, VectorNulls: 3,
-						VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6})
+						VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6})
 				require.NoError(t, err)
 				exec, err := MakeGroupAgg(mp, AggIdOfQuantileExactWeighted, false,
 					allocation, EncodeQuantileExactWeightedConfig([]byte("0.5")),
@@ -1743,8 +1743,8 @@ func TestQuantileExactWeightedFinalizeScratchHonorsDesignBudget(t *testing.T) {
 				require.NoError(t, exec.GroupGrow(1))
 
 				// values 1..rows in descending input order, weight 1 each.
-				valueVec := vector.NewVec(tc.valueType)
-				weightVec := vector.NewVec(tc.weightType)
+				valueVec := vector.NewVec(tc.valueType, mp)
+				weightVec := vector.NewVec(tc.weightType, mp)
 				switch tc.valueType.Oid {
 				case types.T_int64:
 					vals := make([]int64, rows)
@@ -1799,7 +1799,7 @@ func TestQuantileExactWeightedFinalizeScratchHonorsDesignBudget(t *testing.T) {
 					}
 				}
 				for _, result := range results {
-					result.Free(mp)
+					result.Free(result.MPool())
 				}
 				exec.Free()
 				require.NoError(t, exec.ClearAllocationAccount(allocation))

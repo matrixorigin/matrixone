@@ -15,7 +15,6 @@
 package disttae
 
 import (
-	"bytes"
 	"context"
 	"math"
 	"math/rand"
@@ -40,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -68,7 +66,7 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 		entry := cmd.EntryList[0]
 		require.Equal(t, uint64(catalog.MO_CATALOG_ID), entry.DatabaseId)
 		require.Equal(t, uint64(catalog.MO_DATABASE_ID), entry.TableId)
-		bat, err := batch.ProtoBatchToBatch(entry.Bat)
+		bat, err := batch.ProtoBatchToBatch(entry.Bat, txn.proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, uint64(42), vector.GetFixedAtNoTypeCheck[uint64](bat.Vecs[catalog.MO_DATABASE_DAT_ID_IDX], 0))
 		require.Equal(t, "db", string(bat.Vecs[catalog.MO_DATABASE_DAT_NAME_IDX].GetBytesAt(0)))
@@ -152,7 +150,7 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 	t.Run("statement rollback removes create and tuple together", func(t *testing.T) {
 		txn := newCatalogCreateTxnForTest(t)
 		txn.isCCPRTxn = true
-		txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+		txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 		txn.tableCache = new(sync.Map)
 		txn.tableOps = newTableOps()
 		txn.batchSelectList = make(map[*batch.Batch][]int64)
@@ -234,7 +232,7 @@ func decodePrecommitWriteCmdForTest(t *testing.T, req txnpb.TxnRequest) *api.Pre
 func cleanTxnWritesForTest(txn *Transaction) {
 	for i := range txn.writes {
 		if txn.writes[i].bat != nil {
-			txn.writes[i].bat.Clean(txn.proc.Mp())
+			txn.writes[i].bat.Clean(txn.workspaceMP())
 			txn.writes[i].bat = nil
 		}
 	}
@@ -425,53 +423,53 @@ func TestWorkspaceFlushKeySeparatesAutoIncrEpochs(t *testing.T) {
 	require.Len(t, batches, 2)
 }
 
-func Test_GetUncommittedS3Tombstone(t *testing.T) {
-	var statsList []objectio.ObjectStats
-	for i := 0; i < 3; i++ {
-		row := types.RandomRowid()
-		stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), false, false, true)
-		objectio.SetObjectStatsRowCnt(stats, uint32(10+i*10))
-		statsList = append(statsList, *stats)
+func TestWorkspaceFlushedTombstoneOwnership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	rowID := types.RandomRowid()
+	stats := objectio.NewObjectStatsWithObjectID(rowID.BorrowObjectID(), false, false, true)
+	bat := batch.NewWithSize(1)
+	bat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+	bat.Vecs[0] = vector.NewVec(types.T_blob.ToType(), mp)
+	defer bat.Clean(mp)
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], stats[:], false, mp))
+	bat.SetRowCount(1)
+
+	var txn Transaction
+	a := Entry{typ: DELETE, tableId: 1, fileName: "tombstone", bat: bat}
+	b := Entry{typ: DELETE, tableId: 2, fileName: "tombstone", bat: bat}
+	duplicate := a
+	txn.accountWorkspaceEntryLocked(&a)
+	txn.accountWorkspaceEntryLocked(&duplicate)
+	txn.accountWorkspaceEntryLocked(&b)
+	collect := func(tableID uint64) []objectio.ObjectStats {
+		var result []objectio.ObjectStats
+		txn.flushedTombstones.forEach(tableID, func(stats objectio.ObjectStats) {
+			result = append(result, stats)
+		})
+		return result
 	}
-
-	txn := &Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
-	}
-
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[0], nil)
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[1], nil)
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[2], nil)
-
-	objectSlice := objectio.ObjectStatsSlice{}
-
-	require.NoError(t, txn.getUncommittedS3Tombstone(func(stats *objectio.ObjectStats) {
-		objectSlice.Append(stats[:])
-	}))
-	require.Equal(t, len(statsList), objectSlice.Len())
-
-	txn.cn_flushed_s3_tombstone_object_stats_list.Range(func(key, value any) bool {
-		ss := key.(objectio.ObjectStats)
-		found := false
-		for i := range objectSlice.Len() {
-			if bytes.Equal(ss[:], objectSlice.Get(i)[:]) {
-				found = true
-				break
-			}
-		}
-
-		require.True(t, found)
-		return true
-	})
+	require.Equal(t, []objectio.ObjectStats{*stats}, collect(1))
+	require.Equal(t, []objectio.ObjectStats{*stats}, collect(2))
+	require.Empty(t, collect(3))
+	txn.unaccountWorkspaceEntryLocked(&duplicate)
+	require.Equal(t, []objectio.ObjectStats{*stats}, collect(1))
+	txn.unaccountWorkspaceEntryLocked(&a)
+	require.Empty(t, collect(1))
+	require.Equal(t, []objectio.ObjectStats{*stats}, collect(2))
+	txn.unaccountWorkspaceEntryLocked(&b)
+	require.Empty(t, collect(2))
 }
 
 func Test_BatchAllocNewRowIds(t *testing.T) {
 	proc := testutil.NewProc(t)
+	proc.Base.Lim.Size = 64 << 20
 
 	t.Run("A", func(t *testing.T) {
 		txn := Transaction{
 			proc: proc,
 		}
 
+		defer txn.closeWorkspaceAllocation()
 		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 		for i := 0; i < 10; i++ {
@@ -484,7 +482,7 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 			require.Equal(t, int(0), int(rowIds[0].GetRowOffset()))
 			require.Equal(t, int(ll-1), int(rowIds[len(rowIds)-1].GetRowOffset()))
 
-			vec.Free(common.DefaultAllocator)
+			vec.Free(txn.workspaceMP())
 		}
 	})
 
@@ -493,6 +491,7 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 			proc: proc,
 		}
 
+		defer txn.closeWorkspaceAllocation()
 		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 		ll := options.DefaultBlockMaxRows*11 + 1
@@ -520,7 +519,7 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 		require.Equal(t, 12, len(mm1))
 		require.Equal(t, 1, len(mm2))
 
-		vec.Free(common.DefaultAllocator)
+		vec.Free(txn.workspaceMP())
 	})
 
 	t.Run("C", func(t *testing.T) {
@@ -528,6 +527,7 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 			proc: proc,
 		}
 
+		defer txn.closeWorkspaceAllocation()
 		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 		ll := math.MaxUint16
@@ -938,7 +938,7 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 		if i == 1 {
 			tableID = 1000
 		}
-		txn.appendWorkspaceEntryLocked(Entry{
+		appendWorkspaceEntryForTest(t, txn, Entry{
 			typ:          INSERT,
 			tableId:      tableID,
 			databaseId:   dbID,
@@ -948,7 +948,7 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 		})
 	}
 
-	txn.appendWorkspaceEntryLocked(Entry{
+	appendWorkspaceEntryForTest(t, txn, Entry{
 		typ:          INSERT,
 		tableId:      catalog.MO_TABLES_ID,
 		databaseId:   catalog.MO_CATALOG_ID,
@@ -957,7 +957,7 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 		note:         noteForCreate(criticalTableID, "critical"),
 		bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1}),
 	})
-	txn.appendWorkspaceEntryLocked(Entry{
+	appendWorkspaceEntryForTest(t, txn, Entry{
 		typ:          INSERT,
 		tableId:      criticalTableID,
 		databaseId:   dbID,
@@ -987,10 +987,10 @@ func TestMergeTxnWorkspaceDeduplicatesDeleteSelections(t *testing.T) {
 	bat := newInsertBatchWithRowIDForTest(t, proc, []int64{10, 20, 30, 40})
 	txn := &Transaction{
 		proc:            proc,
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 		batchSelectList: make(map[*batch.Batch][]int64),
 	}
-	txn.appendWorkspaceEntryLocked(Entry{
+	appendWorkspaceEntryForTest(t, txn, Entry{
 		typ:        INSERT,
 		tableId:    42,
 		databaseId: 7,
@@ -1024,16 +1024,16 @@ func TestIssue25589RollbackLastStatementRestoresWorkspaceAccounting(t *testing.T
 		tableOps:        newTableOps(),
 		databaseOps:     newDbOps(),
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 		isCCPRTxn:       true,
 	}
 
 	committed := newInsertBatchWithRowIDForTest(t, proc, []int64{1, 2})
 	rolledBack := newInsertBatchWithRowIDForTest(t, proc, []int64{3, 4, 5})
 	rolledBackDelete := newDeleteBatchForTest(t, proc, []int64{1, 2})
-	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: committed})
-	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: rolledBack})
-	txn.appendWorkspaceEntryLocked(Entry{typ: DELETE, databaseId: 7, tableId: 42, bat: rolledBackDelete})
+	appendWorkspaceEntryForTest(t, txn, Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: committed})
+	appendWorkspaceEntryForTest(t, txn, Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: rolledBack})
+	appendWorkspaceEntryForTest(t, txn, Entry{typ: DELETE, databaseId: 7, tableId: 42, bat: rolledBackDelete})
 	txn.statementID = 1
 	txn.offsets = []int{1}
 	require.True(t, txn.IsTableDeletedAtTxnClose(42))
@@ -1060,9 +1060,9 @@ func TestIssue25589MergeTxnWorkspaceRestoresAccountingForTablesInVain(t *testing
 		proc:            proc,
 		tablesInVain:    map[uint64]int{42: 1},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 	}
-	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat})
+	appendWorkspaceEntryForTest(t, txn, Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
 	require.Nil(t, txn.writes[0].bat)
@@ -1079,9 +1079,9 @@ func TestIssue25589MergeTxnWorkspaceRestoresAccountingAfterShrink(t *testing.T) 
 		proc:            proc,
 		tablesInVain:    make(map[uint64]int),
 		batchSelectList: map[*batch.Batch][]int64{bat: {1, 3}},
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 	}
-	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat})
+	appendWorkspaceEntryForTest(t, txn, Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
 	require.Equal(t, 2, bat.RowCount())
@@ -1099,12 +1099,12 @@ func TestIssue25589MergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *t
 		proc:            proc,
 		tablesInVain:    make(map[uint64]int),
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 	}
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 	for i := 0; i < 30; i++ {
-		txn.appendWorkspaceEntryLocked(Entry{
+		appendWorkspaceEntryForTest(t, txn, Entry{
 			typ:        INSERT,
 			databaseId: 7,
 			tableId:    42,
@@ -1113,6 +1113,10 @@ func TestIssue25589MergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *t
 	}
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	// Merge no longer self-compacts (failure-atomic admission, issue
+	// #25590): the statement callers run this right after the fallible
+	// dump; here nothing is dumped.
+	txn.compactNilWorkspaceSlotsLocked()
 	require.Len(t, txn.writes, 1)
 	require.Equal(t, 30, txn.writes[0].bat.RowCount())
 	require.Equal(t, uint64(txn.writes[0].bat.Size()), txn.workspaceSize)
@@ -1132,10 +1136,10 @@ func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
 	txn.tnStores = []DNStore{{}}
 	txn.batchSelectList = make(map[*batch.Batch][]int64)
 	txn.tablesInVain = make(map[uint64]int)
-	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
-	txn.cnObjsSummary = make(map[types.Objectid]Summary)
+	txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
+	txn.cnObjsSummary = make(map[uint64]map[types.Objectid]Summary)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
-	txn.appendWorkspaceEntryLocked(Entry{
+	appendWorkspaceEntryForTest(t, txn, Entry{
 		typ:          INSERT,
 		accountId:    1,
 		databaseId:   7,
@@ -1269,7 +1273,7 @@ func TestWriteFileLockedMarksPKCheckReady(t *testing.T) {
 	require.Equal(t, -1, txn.writes[0].pkCheckPos)
 
 	bat.Clean(proc.Mp())
-	txn.writes[0].bat.Clean(proc.Mp())
+	txn.writes[0].bat.Clean(txn.workspaceMP())
 }
 
 func newTxnOperatorForTest(t *testing.T) *mock_frontend.MockTxnOperator {
@@ -1340,7 +1344,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 
 	t.Run("int64_all_nulls_no_dup", func(t *testing.T) {
 		// All NULLs should never produce a duplicate
-		pk := vector.NewVec(types.T_int64.ToType())
+		pk := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp))
 		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp))
 		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp))
@@ -1354,7 +1358,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 
 	t.Run("int64_mixed_nulls_and_values", func(t *testing.T) {
 		// Two NULLs + two distinct values: no duplicate
-		pk := vector.NewVec(types.T_int64.ToType())
+		pk := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, int64(1), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, int64(2), false, mp))
@@ -1369,7 +1373,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 
 	t.Run("int64_real_dup_among_nulls", func(t *testing.T) {
 		// Real duplicate among NULLs should still be caught
-		pk := vector.NewVec(types.T_int64.ToType())
+		pk := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, int64(1), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp))  // NULL
 		require.NoError(t, vector.AppendFixed(pk, int64(1), false, mp)) // dup!
@@ -1383,7 +1387,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 
 	t.Run("varchar_nulls_no_dup", func(t *testing.T) {
 		// String type NULLs should be skipped
-		pk := vector.NewVec(types.T_varchar.ToType())
+		pk := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(pk, []byte("hello"), false, mp))
 		require.NoError(t, vector.AppendBytes(pk, nil, true, mp)) // NULL
 		require.NoError(t, vector.AppendBytes(pk, nil, true, mp)) // NULL
@@ -1398,7 +1402,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 
 	t.Run("varchar_null_empty_string_no_collision", func(t *testing.T) {
 		// NULL and empty string "" are different: NULL is skipped, "" is a value
-		pk := vector.NewVec(types.T_varchar.ToType())
+		pk := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(pk, nil, true, mp))         // NULL
 		require.NoError(t, vector.AppendBytes(pk, []byte(""), false, mp)) // empty string
 		require.NoError(t, vector.AppendBytes(pk, nil, true, mp))         // NULL
@@ -1412,7 +1416,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 
 	t.Run("partial_range_with_nulls", func(t *testing.T) {
 		// Test start/count range with NULLs
-		pk := vector.NewVec(types.T_int64.ToType())
+		pk := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, int64(10), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp)) // NULL at pos 1
 		require.NoError(t, vector.AppendFixed(pk, int64(20), false, mp))
@@ -1427,7 +1431,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("array_float32_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_array_float32.ToType())
+		pk := vector.NewVec(types.T_array_float32.ToType(), mp)
 		require.NoError(t, vector.AppendArray(pk, []float32{1.0, 2.0}, false, mp))
 		require.NoError(t, vector.AppendArray(pk, []float32{0}, true, mp))         // NULL
 		require.NoError(t, vector.AppendArray(pk, []float32{1.0, 2.0}, false, mp)) // dup!
@@ -1439,7 +1443,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("array_float32_all_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_array_float32.ToType())
+		pk := vector.NewVec(types.T_array_float32.ToType(), mp)
 		require.NoError(t, vector.AppendArray(pk, []float32{0}, true, mp))
 		require.NoError(t, vector.AppendArray(pk, []float32{0}, true, mp))
 
@@ -1451,7 +1455,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("array_float64_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_array_float64.ToType())
+		pk := vector.NewVec(types.T_array_float64.ToType(), mp)
 		require.NoError(t, vector.AppendArray(pk, []float64{1.0}, false, mp))
 		require.NoError(t, vector.AppendArray(pk, []float64{0}, true, mp)) // NULL
 		require.NoError(t, vector.AppendArray(pk, []float64{2.0}, false, mp))
@@ -1467,7 +1471,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	// These columns are rejected as primary keys at DDL admission, but checkPKDup
 	// still handles them defensively so it degrades to normal dedup, never panics.
 	t.Run("array_int8_dup_and_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_array_int8.ToType())
+		pk := vector.NewVec(types.T_array_int8.ToType(), mp)
 		require.NoError(t, vector.AppendArray(pk, []int8{1, 2, 3}, false, mp))
 		require.NoError(t, vector.AppendArray(pk, []int8{0}, true, mp)) // NULL
 		require.NoError(t, vector.AppendArray(pk, []int8{1, 2, 3}, false, mp))
@@ -1479,7 +1483,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("array_uint8_distinct", func(t *testing.T) {
-		pk := vector.NewVec(types.T_array_uint8.ToType())
+		pk := vector.NewVec(types.T_array_uint8.ToType(), mp)
 		require.NoError(t, vector.AppendArray(pk, []uint8{0, 1, 2, 3}, false, mp))
 		require.NoError(t, vector.AppendArray(pk, []uint8{255, 254, 0, 128}, false, mp))
 
@@ -1491,7 +1495,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("array_bf16_dup", func(t *testing.T) {
-		pk := vector.NewVec(types.T_array_bf16.ToType())
+		pk := vector.NewVec(types.T_array_bf16.ToType(), mp)
 		require.NoError(t, vector.AppendArray(pk, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(2.5)}, false, mp))
 		require.NoError(t, vector.AppendArray(pk, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(2.5)}, false, mp))
 
@@ -1502,7 +1506,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("array_float16_distinct", func(t *testing.T) {
-		pk := vector.NewVec(types.T_array_float16.ToType())
+		pk := vector.NewVec(types.T_array_float16.ToType(), mp)
 		require.NoError(t, vector.AppendArray(pk, []types.Float16{types.Float16FromFloat32(1), types.Float16FromFloat32(2)}, false, mp))
 		require.NoError(t, vector.AppendArray(pk, []types.Float16{types.Float16FromFloat32(3), types.Float16FromFloat32(4)}, false, mp))
 
@@ -1514,7 +1518,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("bool_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_bool.ToType())
+		pk := vector.NewVec(types.T_bool.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, true, false, mp))
 		require.NoError(t, vector.AppendFixed(pk, false, true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, false, false, mp))
@@ -1527,7 +1531,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("int8_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_int8.ToType())
+		pk := vector.NewVec(types.T_int8.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, int8(1), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, int8(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, int8(2), false, mp))
@@ -1540,7 +1544,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("int16_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_int16.ToType())
+		pk := vector.NewVec(types.T_int16.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, int16(1), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, int16(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, int16(2), false, mp))
@@ -1553,7 +1557,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("int32_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_int32.ToType())
+		pk := vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, int32(1), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, int32(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, int32(2), false, mp))
@@ -1566,7 +1570,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("uint8_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_uint8.ToType())
+		pk := vector.NewVec(types.T_uint8.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, uint8(1), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, uint8(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, uint8(2), false, mp))
@@ -1579,7 +1583,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("uint16_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_uint16.ToType())
+		pk := vector.NewVec(types.T_uint16.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, uint16(1), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, uint16(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, uint16(2), false, mp))
@@ -1592,7 +1596,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("uint32_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_uint32.ToType())
+		pk := vector.NewVec(types.T_uint32.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, uint32(1), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, uint32(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, uint32(2), false, mp))
@@ -1605,7 +1609,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("uint64_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_uint64.ToType())
+		pk := vector.NewVec(types.T_uint64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, uint64(1), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, uint64(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, uint64(2), false, mp))
@@ -1618,7 +1622,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("float32_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_float32.ToType())
+		pk := vector.NewVec(types.T_float32.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, float32(1.0), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, float32(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, float32(2.0), false, mp))
@@ -1631,7 +1635,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("float64_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_float64.ToType())
+		pk := vector.NewVec(types.T_float64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, float64(1.0), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, float64(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, float64(2.0), false, mp))
@@ -1644,7 +1648,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("date_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_date.ToType())
+		pk := vector.NewVec(types.T_date.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, types.Date(1), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, types.Date(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, types.Date(2), false, mp))
@@ -1657,7 +1661,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("datetime_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_datetime.ToType())
+		pk := vector.NewVec(types.T_datetime.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, types.Datetime(100), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, types.Datetime(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, types.Datetime(200), false, mp))
@@ -1670,7 +1674,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("uuid_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_uuid.ToType())
+		pk := vector.NewVec(types.T_uuid.ToType(), mp)
 		u1 := types.Uuid{1}
 		u2 := types.Uuid{2}
 		require.NoError(t, vector.AppendFixed(pk, u1, false, mp))
@@ -1687,7 +1691,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	t.Run("decimal64_nulls", func(t *testing.T) {
 		tp := types.T_decimal64.ToType()
 		tp.Scale = 2
-		pk := vector.NewVec(tp)
+		pk := vector.NewVec(tp, mp)
 		require.NoError(t, vector.AppendFixed(pk, types.Decimal64(100), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, types.Decimal64(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, types.Decimal64(200), false, mp))
@@ -1702,7 +1706,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	t.Run("decimal128_nulls", func(t *testing.T) {
 		tp := types.T_decimal128.ToType()
 		tp.Scale = 2
-		pk := vector.NewVec(tp)
+		pk := vector.NewVec(tp, mp)
 		d1 := types.Decimal128{B0_63: 100, B64_127: 0}
 		d2 := types.Decimal128{B0_63: 200, B64_127: 0}
 		require.NoError(t, vector.AppendFixed(pk, d1, false, mp))
@@ -1717,7 +1721,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("timestamp_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_timestamp.ToType())
+		pk := vector.NewVec(types.T_timestamp.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, types.Timestamp(100), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, types.Timestamp(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, types.Timestamp(200), false, mp))
@@ -1730,7 +1734,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("time_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_time.ToType())
+		pk := vector.NewVec(types.T_time.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, types.Time(100), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, types.Time(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, types.Time(200), false, mp))
@@ -1743,7 +1747,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("enum_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_enum.ToType())
+		pk := vector.NewVec(types.T_enum.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, types.Enum(1), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, types.Enum(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, types.Enum(2), false, mp))
@@ -1756,7 +1760,7 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 	})
 
 	t.Run("bit_nulls", func(t *testing.T) {
-		pk := vector.NewVec(types.T_bit.ToType())
+		pk := vector.NewVec(types.T_bit.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pk, uint64(1), false, mp))
 		require.NoError(t, vector.AppendFixed(pk, uint64(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(pk, uint64(2), false, mp))
@@ -1776,7 +1780,7 @@ func TestDupVectorWithoutNulls(t *testing.T) {
 	mp := proc.Mp()
 
 	t.Run("no_nulls", func(t *testing.T) {
-		v := vector.NewVec(types.T_int64.ToType())
+		v := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(v, int64(1), false, mp))
 		require.NoError(t, vector.AppendFixed(v, int64(2), false, mp))
 
@@ -1789,7 +1793,7 @@ func TestDupVectorWithoutNulls(t *testing.T) {
 	})
 
 	t.Run("some_nulls", func(t *testing.T) {
-		v := vector.NewVec(types.T_int64.ToType())
+		v := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(v, int64(1), false, mp))
 		require.NoError(t, vector.AppendFixed(v, int64(0), true, mp)) // NULL
 		require.NoError(t, vector.AppendFixed(v, int64(2), false, mp))
@@ -1804,7 +1808,7 @@ func TestDupVectorWithoutNulls(t *testing.T) {
 	})
 
 	t.Run("all_nulls", func(t *testing.T) {
-		v := vector.NewVec(types.T_int64.ToType())
+		v := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(v, int64(0), true, mp))
 		require.NoError(t, vector.AppendFixed(v, int64(0), true, mp))
 
@@ -1816,7 +1820,7 @@ func TestDupVectorWithoutNulls(t *testing.T) {
 	})
 
 	t.Run("varchar_with_nulls", func(t *testing.T) {
-		v := vector.NewVec(types.T_varchar.ToType())
+		v := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(v, []byte("hello"), false, mp))
 		require.NoError(t, vector.AppendBytes(v, nil, true, mp)) // NULL
 		require.NoError(t, vector.AppendBytes(v, []byte("world"), false, mp))
@@ -1846,36 +1850,29 @@ func TestDupVectorWithoutNullsLeavesSealedStatementOwner(t *testing.T) {
 			require.NoError(t, err)
 			account, err := registry.Open(1 << 20)
 			require.NoError(t, err)
-			selection, err := vector.NewAllocationAccountSelection(
+			selection, err := mp.WithAccount(
 				account,
 				mpool.AllocationOwner(1),
 				mpool.AllocationSite(1),
-				mpool.AllocationSite(2),
-				mpool.AllocationSite(3),
-				mpool.AllocationSite(4),
+				mpool.AllocationCapacityClassDefault,
 			)
 			require.NoError(t, err)
-			source, err := vector.NewOffHeapVecWithTypeAndAllocation(
-				types.T_int64.ToType(),
-				selection,
-			)
-			require.NoError(t, err)
-			require.NoError(t, vector.AppendFixed(source, int64(1), false, mp))
+			source := vector.NewVec(types.T_int64.ToType(), selection)
+			require.NoError(t, vector.AppendFixed(source, int64(1), false, selection))
 			if tc.withNulls {
-				require.NoError(t, vector.AppendFixed(source, int64(0), true, mp))
+				require.NoError(t, vector.AppendFixed(source, int64(0), true, selection))
 			}
-			require.NoError(t, vector.AppendFixed(source, int64(2), false, mp))
+			require.NoError(t, vector.AppendFixed(source, int64(2), false, selection))
 
 			used := account.Seal().Used
 			require.NotZero(t, used)
 			out, err := dupVectorWithoutNulls(source, mp)
 			require.NoError(t, err)
-			require.Nil(t, out.AllocationAccountSelection())
 			require.Equal(t, used, account.Snapshot().Used)
 			require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](out))
 
 			out.Free(mp)
-			source.Free(mp)
+			source.Free(selection)
 			require.Zero(t, account.Snapshot().Used)
 			_, err = registry.Finalize(account)
 			require.NoError(t, err)
@@ -1893,7 +1890,7 @@ func newInt64BatchForTest(
 	bat := batch.NewWithSize(len(cols))
 	bat.SetAttributes(attrs)
 	for i, vals := range cols {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(vec, vals, nil, proc.Mp()))
 		bat.Vecs[i] = vec
 	}
@@ -1915,11 +1912,11 @@ func newDeleteBatchForTest(
 	bat := batch.NewWithSize(2)
 	bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
 
-	rowidVec := vector.NewVec(types.T_Rowid.ToType())
+	rowidVec := vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(rowidVec, rowids, nil, proc.Mp()))
 	bat.Vecs[0] = rowidVec
 
-	pkVec := vector.NewVec(types.T_int64.ToType())
+	pkVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(pkVec, pks, nil, proc.Mp()))
 	bat.Vecs[1] = pkVec
 
@@ -1941,11 +1938,11 @@ func newInsertBatchWithRowIDForTest(
 	bat := batch.NewWithSize(2)
 	bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
 
-	rowidVec := vector.NewVec(types.T_Rowid.ToType())
+	rowidVec := vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(rowidVec, rowids, nil, proc.Mp()))
 	bat.Vecs[0] = rowidVec
 
-	pkVec := vector.NewVec(types.T_int64.ToType())
+	pkVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(pkVec, pks, nil, proc.Mp()))
 	bat.Vecs[1] = pkVec
 
@@ -1973,7 +1970,7 @@ func TestConcurrentCheckPKDup(t *testing.T) {
 		go func(goroutineID int) {
 			defer wg.Done()
 
-			pk := vector.NewVec(types.T_int64.ToType())
+			pk := vector.NewVec(types.T_int64.ToType(), mp)
 			for i := 0; i < rowsPerGoroutine; i++ {
 				isNull := (i % 5) == 0 // 20% NULLs
 				if isNull {
@@ -2024,7 +2021,7 @@ func TestConcurrentCheckPKDup_RealDupWithNulls(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			pk := vector.NewVec(types.T_int64.ToType())
+			pk := vector.NewVec(types.T_int64.ToType(), mp)
 			// [1, NULL, 2, NULL, 1] — contains real dup (1 appears twice)
 			vector.AppendFixed(pk, int64(1), false, mp)
 			vector.AppendFixed(pk, int64(0), true, mp)
@@ -2054,7 +2051,7 @@ func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
 	mp := proc.Mp()
 
 	// Original vector with NULLs
-	orig := vector.NewVec(types.T_int64.ToType())
+	orig := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(orig, int64(30), false, mp))
 	require.NoError(t, vector.AppendFixed(orig, int64(0), true, mp))
 	require.NoError(t, vector.AppendFixed(orig, int64(10), false, mp))
@@ -2078,7 +2075,7 @@ func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
 			require.False(t, dup.HasNull(), "filtered vector should have no NULLs")
 
 			// InplaceSort on the copy should not corrupt original
-			dup.InplaceSort()
+			require.NoError(t, dup.InplaceSort(mp))
 		}()
 	}
 
@@ -2228,7 +2225,7 @@ func newDumpableTxnForTest(t *testing.T) *Transaction {
 		// are still owned by the workspace; release them here.
 		for i := range txn.writes {
 			if txn.writes[i].bat != nil {
-				txn.writes[i].bat.Clean(proc.Mp())
+				txn.writes[i].bat.Clean(txn.workspaceMP())
 			}
 		}
 	})
@@ -2343,7 +2340,7 @@ func TestIssue25557_DumpDeleteBatchReentrantGetTableDoesNotDeadlock(t *testing.T
 	t.Cleanup(func() {
 		for i := range txn.writes {
 			if txn.writes[i].bat != nil {
-				txn.writes[i].bat.Clean(proc.Mp())
+				txn.writes[i].bat.Clean(txn.workspaceMP())
 			}
 		}
 	})

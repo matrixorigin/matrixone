@@ -24,7 +24,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -96,12 +95,11 @@ func recordAndDrainPending(st *process.SequenceRetryState, id process.WatchIdent
 	return st.ConsumePendings()
 }
 
-// requireArbAdmission runs the two-value arbitration verdict: the error
-// lane carries only the caller's own cancellation (v21 precedence, F2).
+// requireArbAdmission is for cases that do not select a terminal error.
 func requireArbAdmission(t *testing.T, c *Compile, retryState *process.SequenceRetryState, items []process.SequencePendingItem, err error) bool {
 	t.Helper()
 	admitted, arbErr := c.arbitrateSequenceRetryAdmission(retryState, items, err)
-	require.NoError(t, arbErr, "arbitration surfaces the caller's own cancellation only")
+	require.NoError(t, arbErr)
 	return admitted
 }
 
@@ -384,7 +382,6 @@ func (s *tier2RebuildSink) AbortAttempt(generation uint64, cause error) error {
 func TestCompileRunCarriesSequenceRetryStateAcrossRetryRebuilds(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().Buf = buffer.New()
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		if name == plan2.SQLSelectLimitVariable {
 			return ^uint64(0), nil
@@ -395,7 +392,7 @@ func TestCompileRunCarriesSequenceRetryStateAcrossRetryRebuilds(t *testing.T) {
 	compilerCtx.SetContext(ctx)
 	stmts, err := mysql.Parse(ctx, "select 1", 1)
 	require.NoError(t, err)
-	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
 	require.NoError(t, err)
 	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 
@@ -419,6 +416,19 @@ func TestCompileRunCarriesSequenceRetryStateAcrossRetryRebuilds(t *testing.T) {
 		identityOK:   true,
 	}
 	c.SetResultSink(sink)
+	// This select needs no internal SQL executor. Make prober construction
+	// fail explicitly so the original-pending fallback is deterministic.
+	rt := runtime.ServiceRuntime(proc.GetService())
+	oldExecutor, hadExecutor := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	unavailableExecutor := struct{}{}
+	rt.SetGlobalVariables(runtime.InternalSQLExecutor, unavailableExecutor)
+	t.Cleanup(func() {
+		if hadExecutor {
+			rt.SetGlobalVariables(runtime.InternalSQLExecutor, oldExecutor)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(runtime.InternalSQLExecutor, unavailableExecutor)
+		}
+	})
 	_, runErr := c.Run(0)
 
 	// The sticky window elapsed: the expiry decision terminated, the final
@@ -454,7 +464,6 @@ func TestCompileRunCarriesSequenceRetryStateAcrossRetryRebuilds(t *testing.T) {
 
 	c.Release()
 	proc.Free()
-	proc.GetSessionInfo().Buf.Free()
 }
 
 // tier2BarrierSink drives the publish-after-observation integration
@@ -549,7 +558,6 @@ func (s *tier2BarrierSink) AbortAttempt(generation uint64, cause error) error {
 func TestCompileRunPublishAfterObservationDeclinesRetry(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().Buf = buffer.New()
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		if name == plan2.SQLSelectLimitVariable {
 			return ^uint64(0), nil
@@ -560,7 +568,7 @@ func TestCompileRunPublishAfterObservationDeclinesRetry(t *testing.T) {
 	compilerCtx.SetContext(ctx)
 	stmts, err := mysql.Parse(ctx, "select 1", 1)
 	require.NoError(t, err)
-	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
 	require.NoError(t, err)
 	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 
@@ -631,7 +639,6 @@ func TestCompileRunPublishAfterObservationDeclinesRetry(t *testing.T) {
 
 	c.Release()
 	proc.Free()
-	proc.GetSessionInfo().Buf.Free()
 }
 
 // sequenceCancelProbeExecutor satisfies prober construction: the cancelled
@@ -663,7 +670,8 @@ func TestSequenceRetryArbitrationCallerCancellationWins(t *testing.T) {
 	})
 	proc.Ctx = context.WithValue(proc.Ctx, defines.EngineKey{}, newStubEngine())
 	callerCtx, cancel := context.WithCancel(proc.Ctx)
-	proc.Ctx = callerCtx
+	proc.ReplaceTopCtx(callerCtx)
+	proc.ResetQueryContext()
 
 	// Live but elapsed window with a contended watch entry: the expiry
 	// decision runs at the seam.

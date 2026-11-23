@@ -37,7 +37,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -886,6 +887,12 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	columns := getPreparedResultColumns(stmt, sessionTxnHaveDDL(mp.GetSession()))
 	directIntegerLengths := directIntegerResultLengths(stmt.PrepareStmt, columns)
 	numColumns := len(columns)
+	if _, showColumns := stmt.PrepareStmt.(*tree.ShowColumns); showColumns {
+		stmt.ColDefData, err = makeStatementColumnDefData(ctx, mp, stmt.PrepareStmt, columns)
+		if err != nil {
+			return err
+		}
+	}
 
 	var data []byte
 	// status ok
@@ -1008,10 +1015,19 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 	}
 	numParams := len(dcPrepare.Prepare.ParamTypes)
 
+	if stmt.params != nil && stmt.paramsMP != proc.Mp() {
+		// The parameter vector is rewritten through this execution's pool.
+		if stmt.proc.GetPrepareParams() == stmt.params {
+			stmt.proc.SetPrepareParams(nil)
+		}
+		stmt.params.Free(stmt.paramsMP)
+		stmt.params, stmt.paramsMP = nil, nil
+	}
 	if stmt.params == nil {
-		stmt.params = vector.NewVec(types.T_text.ToType())
+		stmt.params = vector.NewVec(types.T_text.ToType(), proc.Mp())
+		stmt.paramsMP = proc.Mp()
 		for i := 0; i < numParams; i++ {
-			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
+			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.Mp())
 			if err != nil {
 				return err
 			}
@@ -1498,7 +1514,7 @@ func (mp *MysqlProtocolImpl) writeStringFix(data []byte, pos int, value string, 
 // append a string with fixed length to the buffer
 // return the buffer
 func (mp *MysqlProtocolImpl) appendStringFix(value string, length int) error {
-	err := mp.append(util2.UnsafeStringToBytes(value[:length])...)
+	err := mp.append(commonutil.UnsafeStringToBytes(value[:length])...)
 	if err != nil {
 		return err
 	}

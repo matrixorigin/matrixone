@@ -17,15 +17,16 @@ package readutil
 import (
 	"context"
 	"fmt"
-	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"math/rand"
 	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
@@ -63,9 +64,9 @@ func TestRemoteDataSource_ApplyTombstones(t *testing.T) {
 
 	bat := batch.NewWithSize(3)
 	bat.Attrs = objectio.TombstoneAttrs_TN_Created
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), proc.Mp())
 
 	for i := 0; i < len(rowIds)/2; i++ {
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], rowIds[i], false, proc.Mp()))
@@ -363,7 +364,7 @@ func TestFastApplyDeletesByRowIds2(t *testing.T) {
 		"0196ce3f-ce26-7a59-8d9f-9336cc0c797e-0-0-7115", "0196ce3f-ce26-7a59-8d9f-9336cc0c797e-0-0-7234",
 	}
 
-	delRowIdVec := vector.NewVec(types.T_Rowid.ToType())
+	delRowIdVec := vector.NewVec(types.T_Rowid.ToType(), common.DefaultAllocator)
 
 	for _, rowStr := range rowStrs {
 		rowId, err := types.ParseRowIdFromString(rowStr)
@@ -540,9 +541,12 @@ func TestFastApplyDeletesByRowOffsets(t *testing.T) {
 // Count terminal calls after an explicit completion signal.
 type prefetchCountingFS struct {
 	fileservice.FileService
-	calls atomic.Int32
-	done  chan struct{}
+	calls   atomic.Int32
+	done    chan struct{}
+	evicted bool
 }
+
+func (fs *prefetchCountingFS) WholeObjectPreloadSkipped(string, uint64) bool { return fs.evicted }
 
 func (fs *prefetchCountingFS) PrefetchFile(context.Context, string) error {
 	fs.calls.Add(1)
@@ -562,9 +566,10 @@ func (ts *prefetchCountingTombstones) PrefetchTombstones(_ context.Context, _ st
 }
 func TestRemoteDataSourceFilteredPrefetchRetainsTombstones(t *testing.T) {
 	proc := testutil.NewProc(t)
-	for _, skip := range []bool{false, true} {
-		t.Run(fmt.Sprint(skip), func(t *testing.T) {
-			fs := &prefetchCountingFS{done: make(chan struct{}, 4)}
+	for _, mode := range []string{"scan", "skip", "narrow-evicted"} {
+		t.Run(mode, func(t *testing.T) {
+			skip := mode != "scan"
+			fs := &prefetchCountingFS{done: make(chan struct{}, 4), evicted: mode == "narrow-evicted"}
 			tombstones := &prefetchCountingTombstones{}
 			data := NewBlockListRelationData(0)
 			for i := 0; i < 4; i++ {
@@ -575,8 +580,11 @@ func TestRemoteDataSourceFilteredPrefetchRetainsTombstones(t *testing.T) {
 			require.NoError(t, data.AttachTombstones(tombstones))
 			ds := &RemoteDataSource{ctx: proc.Ctx, proc: proc, fs: fs, data: data}
 			ctx := proc.Ctx
-			if skip {
+			switch mode {
+			case "skip":
 				ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipFullFilePreloads)
+			case "narrow-evicted":
+				ctx = fileservice.WithFileServicePolicy(ctx, fileservice.NarrowRead)
 			}
 			rt.SetupServiceBasedRuntime(t.Name(), rt.DefaultRuntime())
 			proc.Base.LockService = &prefetchTestLockService{id: t.Name()}

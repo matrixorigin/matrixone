@@ -168,7 +168,7 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 						} else {
 							// The RPC response is released below. Give validated cache
 							// representations independent storage before sealing them.
-							owned := r.allocator.CopyToCacheData(ctx, cacheData.Data)
+							owned := entry.allocatorForDecode(r.allocator).CopyToCacheData(ctx, cacheData.Data)
 							validated, validateErr := entry.ValidateCacheData(owned)
 							if validateErr != nil || validated == nil {
 								owned.Release()

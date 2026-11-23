@@ -1,0 +1,143 @@
+drop database if exists composite_key_points;
+create database composite_key_points;
+use composite_key_points;
+
+create table t (
+  tenant varchar(16) not null,
+  session_id varchar(16) not null,
+  request_id varchar(16) not null,
+  payload int,
+  primary key (tenant, session_id, request_id),
+  key idx_payload (payload)
+);
+insert into t values
+  ('u','s','r1',1), ('u','s','r2',2), ('u','other','r1',3),
+  ('v','s','r1',4), ('u','é','空',5), ('u','s ','r1',6), ('u','other','r2',7);
+
+-- Different components vary together: do not form their Cartesian product.
+-- @regex("__mo_cpkey_col in",true)
+explain select session_id, request_id from t
+where tenant='u' and ((session_id='s' and request_id='r2') or (session_id='other' and request_id='r1'));
+select session_id, request_id from t
+where tenant='u' and ((session_id='s' and request_id='r2') or (session_id='other' and request_id='r1'))
+order by session_id, request_id;
+
+-- An incomplete OR arm must keep all rows that satisfy that arm.
+select session_id, request_id from t
+where tenant='u' and ((session_id='s' and request_id='r2') or session_id='other')
+order by session_id, request_id;
+
+-- Unicode and trailing spaces use the same equality as the SQL residual.
+select session_id, request_id from t
+where tenant='u' and ((session_id='é' and request_id='空') or (session_id='s ' and request_id='r1'))
+order by session_id, request_id;
+
+-- Local predicates on the nullable side must not remove unmatched left rows.
+create table outer_keys (id int primary key);
+insert into outer_keys values (1),(3),(999);
+-- @regex("__mo_cpkey_col in",true)
+explain select l.id,t.session_id from outer_keys l left join t
+on l.id=t.payload and t.tenant='u' and
+  ((t.session_id='s' and t.request_id='r1') or (t.session_id='other' and t.request_id='r1'));
+select l.id,t.session_id from outer_keys l left join t
+on l.id=t.payload and t.tenant='u' and
+  ((t.session_id='s' and t.request_id='r1') or (t.session_id='other' and t.request_id='r1'))
+order by l.id;
+
+-- An explicit secondary-index hint remains authoritative.
+-- @regex("Index Table Scan.*idx_payload",true)
+-- @regex("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]",false)
+explain select session_id from t force index(idx_payload)
+where payload=2 and tenant='u' and ((session_id='s' and request_id='r2') or (session_id='other' and request_id='r1'));
+select session_id from t force index(idx_payload)
+where payload=2 and tenant='u' and ((session_id='s' and request_id='r2') or (session_id='other' and request_id='r1'));
+-- @regex("Index Table Scan.*idx_payload",false)
+explain select session_id from t ignore index(idx_payload)
+where payload=2 and tenant='u' and ((session_id='s' and request_id='r2') or (session_id='other' and request_id='r1'));
+
+-- Rebinding a prepared query that chooses the secondary index keeps results.
+prepare indexed_points from 'select session_id,request_id from t force index(idx_payload) where payload=? and tenant=? and ((session_id=? and request_id=?) or (session_id=? and request_id=?)) order by session_id,request_id';
+set @payload=2, @tenant='u', @s1='s', @r1='r2', @s2='other', @r2='r1';
+execute indexed_points using @payload,@tenant,@s1,@r1,@s2,@r2;
+set @payload=3;
+execute indexed_points using @payload,@tenant,@s1,@r1,@s2,@r2;
+deallocate prepare indexed_points;
+
+prepare points from 'select session_id, request_id from t where tenant=? and ((session_id=? and request_id=?) or (session_id=? and request_id=?)) order by session_id, request_id';
+set @tenant='u', @s1='s', @r1='r1', @s2='other', @r2='r1';
+execute points using @tenant,@s1,@r1,@s2,@r2;
+set @s1=null, @s2='s', @r2='r2';
+execute points using @tenant,@s1,@r1,@s2,@r2;
+set @r2=null;
+execute points using @tenant,@s1,@r1,@s2,@r2;
+set @s1='s', @s2='other', @r2='r1';
+execute points using @tenant,@s1,@r1,@s2,@r2;
+deallocate prepare points;
+
+-- Updating indexed values must maintain the secondary index as well as rows.
+prepare update_points from 'update t set payload=case when session_id=? and request_id=? then 11 when session_id=? and request_id=? then 22 else payload end where tenant=? and ((session_id=? and request_id=?) or (session_id=? and request_id=?))';
+set @s1='s', @r1='r1', @s2='other', @r2='r1';
+execute update_points using @s1,@r1,@s2,@r2,@tenant,@s1,@r1,@s2,@r2;
+deallocate prepare update_points;
+select session_id,request_id,payload from t force index(idx_payload) where payload in (11,22) order by payload;
+
+-- Signed zeroes have distinct physical encodings but compare equal in SQL.
+create table float_keys (x double not null, g int not null, id int not null, primary key(x,g,id));
+insert into float_keys values (cast('-0' as double),1,1), (cast('0' as double),2,2);
+select count(distinct hex(serial(x))) as encodings from float_keys;
+select g,id from float_keys
+where x=cast(0 as double) and ((g=1 and id=1) or (g=2 and id=2)) order by g;
+
+-- Byte strings include embedded zeroes; dates and decimals retain their domains.
+create table binary_keys (a varbinary(8), b varbinary(8), id int, primary key(a,b,id));
+insert into binary_keys values (x'41',x'610062',1), (x'41',x'20',2);
+select hex(b),id from binary_keys
+where a=x'41' and ((b=x'610062' and id=1) or (b=x'20' and id=2)) order by id;
+create table char_keys (a char(4), b char(4), id int, primary key(a,b,id));
+insert into char_keys values ('u','s ',1), ('u','é',2);
+select hex(b),id from char_keys
+where a='u' and ((b='s ' and id=1) or (b='é' and id=2)) order by id;
+-- CHAR comparisons pad spaces on main; raw tuple bytes are not a safe point.
+select id from char_keys
+where a='u' and ((b='s' and id=1) or (b='é' and id=2)) order by id;
+select id from char_keys
+where a collate utf8mb4_unicode_ci='u' and
+  ((b collate utf8mb4_unicode_ci='s' and id=1) or (b collate utf8mb4_unicode_ci='é' and id=2)) order by id;
+create table typed_keys (tenant int, d date, v decimal(8,2), primary key(tenant,d,v));
+insert into typed_keys values (1,'2024-01-01',1.20), (1,'2024-01-02',2.30);
+select d,v from typed_keys where tenant=1 and
+  ((d=cast('2024-01-01' as date) and v=cast(1.20 as decimal(8,2))) or
+   (d=cast('2024-01-02' as date) and v=cast(2.30 as decimal(8,2)))) order by d;
+
+-- Join transitivity adds t.b=t.id after the initial key analysis. Keep the
+-- ordinary prefix and the complete residual while adding the point candidate.
+create table join_keys (a int, id int, b int, primary key(a,id));
+create table join_side (b int primary key);
+insert into join_keys values (1,1,1),(1,2,2),(1,3,9),(2,1,1);
+insert into join_side values (1),(2);
+-- @regex("prefix_eq[(]t[.]__mo_cpkey_col[)]",true)
+explain select t.id from join_keys t join join_side u on t.b=u.b and t.id=u.b
+where t.a=1 and ((t.id=1 and t.b=1) or (t.id=2 and t.b=2));
+select t.id from join_keys t join join_side u on t.b=u.b and t.id=u.b
+where t.a=1 and ((t.id=1 and t.b=1) or (t.id=2 and t.b=2)) order by t.id;
+
+-- The early IVF INCLUDE rewrite may replace the original scan. Both remaining
+-- base scans must retain their prefix filters and return the correct rows.
+create table vector_keys (
+  tenant varchar(16), session_id varchar(16), request_id varchar(16),
+  embedding vecf32(3), payload int, primary key(tenant,session_id,request_id)
+);
+insert into vector_keys values
+  ('u','s','r1','[1,2,3]',1), ('u','other','r1','[2,2,3]',2),
+  ('u','s','r2','[3,2,3]',3), ('v','s','r1','[4,2,3]',4), ('v','other','r1','[5,2,3]',5);
+create index idx_ivf using ivfflat on vector_keys(embedding)
+  lists=1 op_type 'vector_l2_ops' include(tenant);
+-- @regex("(?s)Vector Index Scan on idx_ivf.*Table Scan on composite_key_points[.]vector_keys.*prefix_eq[(].*Table Scan on composite_key_points[.]vector_keys.*prefix_eq[(]",true)
+explain select payload from vector_keys
+where tenant='u' and ((session_id='s' and request_id='r1') or (session_id='other' and request_id='r1'))
+order by l2_distance(embedding,'[1,2,3]') limit 2 by rank with option 'mode=include';
+select payload from vector_keys
+where tenant='u' and ((session_id='s' and request_id='r1') or (session_id='other' and request_id='r1'))
+order by l2_distance(embedding,'[1,2,3]') limit 2 by rank with option 'mode=include';
+
+drop database composite_key_points;

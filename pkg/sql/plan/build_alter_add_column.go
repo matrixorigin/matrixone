@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -278,8 +279,11 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
 	}
-	if types.T(colType.GetId()).IsArrayRelate() {
+	if types.T(colType.GetId()).IsArray() {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in primary key", columnName))
+	}
+	if err := lowPrecisionKeyError(ctx, colType.GetId(), columnName, "primary"); err != nil {
+		return err
 	}
 	if isSetPlanType(&colType) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("SET column '%s' cannot be in primary key", columnName))
@@ -312,7 +316,7 @@ func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName s
 	if isGeometryPlanType(&colType) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", columnName))
 	}
-	return nil
+	return lowPrecisionKeyError(ctx, colType.GetId(), columnName, "unique")
 }
 
 func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey *tree.UniqueIndex) (*plan.IndexDef, error) {
@@ -401,6 +405,8 @@ func DropColumn(
 		return false, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), colName)
 	}
 
+	primaryAffected := alterColumnIsPrimary(tableDef, column)
+
 	// A replacement keeps index bindings, but never the dropped column's source
 	// mapping. Genuine removals retain the existing index cleanup authority.
 	if preserveIndexes {
@@ -445,7 +451,7 @@ func DropColumn(
 
 	delete(alterCtx.alterColMap, colName)
 	delete(alterCtx.changColDefMap, column.ColId)
-	return column.Primary, nil
+	return primaryAffected, nil
 }
 
 func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dropCount int) error {
@@ -482,7 +488,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 				functionalOwners[part] = col
 			}
 		}
-		indexInfo.Parts = RemoveIf[string](indexInfo.Parts, func(t string) bool {
+		indexInfo.Parts = slices.DeleteFunc(indexInfo.Parts, func(t string) bool {
 			return catalog.ResolveAlias(t) == colName
 		})
 		for ordinal, part := range indexInfo.Parts {
@@ -547,7 +553,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 					if !dropIndex {
 						continue
 					}
-					tbInfo.Indexes = RemoveIf[*IndexDef](tbInfo.Indexes, func(def *IndexDef) bool {
+					tbInfo.Indexes = slices.DeleteFunc(tbInfo.Indexes, func(def *IndexDef) bool {
 						return def.IndexName == indexInfo.IndexName
 					})
 					i--
@@ -564,7 +570,7 @@ func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo 
 	if tbInfo.Pkey == nil || tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return nil
 	} else {
-		tbInfo.Pkey.Names = RemoveIf[string](tbInfo.Pkey.Names, func(t string) bool {
+		tbInfo.Pkey.Names = slices.DeleteFunc(tbInfo.Pkey.Names, func(t string) bool {
 			return t == colName
 		})
 
@@ -643,7 +649,7 @@ func handleDropColumnPosition(ctx context.Context, tableDef *TableDef, col *ColD
 			break
 		}
 	}
-	tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(t *ColDef) bool {
+	tableDef.Cols = slices.DeleteFunc(tableDef.Cols, func(t *ColDef) bool {
 		return t.Name == col.Name
 	})
 	if dropPos >= 0 {
@@ -662,7 +668,7 @@ func handleDropColumnWithClusterBy(ctx context.Context, copyTableDef *TableDef, 
 		} else {
 			clNames = []string{clusterBy.Name}
 		}
-		clNames = RemoveIf[string](clNames, func(t string) bool {
+		clNames = slices.DeleteFunc(clNames, func(t string) bool {
 			return t == originCol.Name
 		})
 

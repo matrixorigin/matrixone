@@ -73,9 +73,9 @@ func appendTestBatchToAtomic(
 	t.Helper()
 	t.Cleanup(atomic.Close) // Close is idempotent after command ownership is released.
 	bat := batch.NewWithSize(3)
-	idVec := vector.NewVec(types.T_int32.ToType())
-	nameVec := vector.NewVec(types.T_varchar.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
+	idVec := vector.NewVec(types.T_int32.ToType(), mp)
+	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
 	bat.Vecs[0] = idVec
 	bat.Vecs[1] = nameVec
 	bat.Vecs[2] = tsVec
@@ -405,9 +405,9 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 
 		// Add empty batch (must have same structure: [id, name, ts])
 		emptyBat := batch.NewWithSize(3)
-		emptyBat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		emptyBat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-		emptyBat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+		emptyBat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+		emptyBat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+		emptyBat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 		emptyBat.SetRowCount(0)
 		insertBatch.Append(packer, emptyBat, 2, 0) // tsColIdx=2, pkColIdx=0
 
@@ -752,9 +752,9 @@ func BenchmarkHandleInsertDeleteBatch(b *testing.B) {
 		insertBatch := NewAtomicBatch(mp)
 		packer := types.NewPacker()
 		bat := batch.NewWithSize(3)
-		idVec := vector.NewVec(types.T_int32.ToType())
-		nameVec := vector.NewVec(types.T_varchar.ToType())
-		tsVec := vector.NewVec(types.T_TS.ToType())
+		idVec := vector.NewVec(types.T_int32.ToType(), mp)
+		nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
+		tsVec := vector.NewVec(types.T_TS.ToType(), mp)
 		bat.Vecs[0], bat.Vecs[1], bat.Vecs[2] = idVec, nameVec, tsVec
 		if err = vector.AppendFixed(idVec, int32(1), false, mp); err != nil {
 			bat.Clean(mp)

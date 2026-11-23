@@ -57,8 +57,8 @@ func TestLegacyFloatStringMembership(t *testing.T) {
 			proc := compiler.GetProcess()
 			bat := batch.NewWithSize(2)
 			t.Cleanup(func() { bat.Clean(proc.Mp()) })
-			bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
+			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			for row := 0; row < 3; row++ {
 				a := -1.2345678901234567e-15
 				c := "-0.0000000000000012345678901234568"
@@ -112,7 +112,7 @@ func unaffectedFloatDefaults(tb testing.TB) (*MockCompilerContext, *planpb.Table
 	stmt, err := parsers.ParseOne(tb.Context(), dialect.MYSQL, "create table t("+strings.Join(cols, ",")+")", 1)
 	require.NoError(tb, err)
 	defer stmt.Free()
-	built, err := BuildPlan(compiler, stmt, false)
+	built, err := BuildPlan(compiler, stmt, false, nil)
 	require.NoError(tb, err)
 	def := built.GetDdl().GetCreateTable().GetTableDef()
 	defaults := 0

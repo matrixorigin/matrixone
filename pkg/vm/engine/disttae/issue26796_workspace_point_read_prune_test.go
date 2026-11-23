@@ -18,7 +18,6 @@ import (
 	"context"
 	"math/rand"
 	"strconv"
-	"sync"
 	"testing"
 
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -98,7 +97,6 @@ func newIssue26796TxnWithTable(
 		databaseOps:     newDbOps(),
 		deletedBlocks:   &deletedBlocks{},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 	}
 	op := newTxnOperatorForTestWithWorkspace(t, txn)
 	txn.op = op
@@ -130,8 +128,8 @@ func issue26796InsertOne(t *testing.T, txn *Transaction, pk, value int64) {
 	t.Helper()
 	bat := batch.NewWithSize(2)
 	bat.Attrs = []string{issue26796PKName, "value"}
-	bat.SetVector(0, vector.NewVec(types.T_int64.ToType()))
-	bat.SetVector(1, vector.NewVec(types.T_int64.ToType()))
+	bat.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
+	bat.SetVector(1, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.GetVector(0), pk, false, txn.proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.GetVector(1), value, false, txn.proc.Mp()))
 	bat.SetRowCount(1)
@@ -148,8 +146,8 @@ func issue26796InsertBatch(t *testing.T, txn *Transaction, pks ...int64) {
 	t.Helper()
 	bat := batch.NewWithSize(2)
 	bat.Attrs = []string{issue26796PKName, "value"}
-	bat.SetVector(0, vector.NewVec(types.T_int64.ToType()))
-	bat.SetVector(1, vector.NewVec(types.T_int64.ToType()))
+	bat.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
+	bat.SetVector(1, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 	for _, pk := range pks {
 		require.NoError(t, vector.AppendFixed(bat.GetVector(0), pk, false, txn.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.GetVector(1), pk, false, txn.proc.Mp()))
@@ -244,7 +242,7 @@ func issue26796PointReadTable(
 	}
 	outBatch := batch.NewWithSize(1)
 	outBatch.Attrs = []string{"value"}
-	outBatch.SetVector(0, vector.NewVec(types.T_int64.ToType()))
+	outBatch.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 	err := ls.filterInMemUnCommittedInserts(context.Background(), []uint16{1}, 0, txn.proc.Mp(), outBatch)
 	require.NoError(t, err)
 
@@ -459,8 +457,9 @@ func TestIssue26796WorkspaceMaintenanceWorkBounded(t *testing.T) {
 }
 
 // TestIssue26796WorkspaceMergingBoundsEntryCount documents that the workspace
-// merge, which runs at every statement boundary (IncrStatementID ->
-// mergeTxnWorkspaceLocked), keeps the entry count bounded during long
+// boundary maintenance, which runs at every statement boundary (IncrStatementID
+// -> mergeTxnWorkspaceLocked, then the post-dump compactNilWorkspaceSlotsLocked
+// that the #25590 boundary orders), keeps the entry count bounded during long
 // transactions, so the remaining per-statement growth driver on the unfixed
 // base is the per-row filter work this fix removes, not the entry count.
 func TestIssue26796WorkspaceMergingBoundsEntryCount(t *testing.T) {
@@ -472,6 +471,10 @@ func TestIssue26796WorkspaceMergingBoundsEntryCount(t *testing.T) {
 		issue26796InsertOne(t, txn, int64(c), int64(c))
 		txn.Lock()
 		require.NoError(t, txn.mergeTxnWorkspaceLocked(ctx))
+		// The production boundary compacts the retired nil slots right
+		// after the (trivially empty here) dump, inside the same critical
+		// section, before the next statement starts.
+		txn.compactNilWorkspaceSlotsLocked()
 		txn.Unlock()
 	}
 	require.LessOrEqual(t, len(txn.writes), 300,

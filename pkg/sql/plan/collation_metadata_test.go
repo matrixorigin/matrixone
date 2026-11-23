@@ -11,13 +11,14 @@
 package plan
 
 import (
+	"testing"
+
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestCollationMetadataShowCharsetUsesCatalog(t *testing.T) {
@@ -33,7 +34,7 @@ func TestCollationMetadataShowCharsetUsesCatalog(t *testing.T) {
 	for _, sql := range []string{"show charset", "show character set", "show charset like 'utf8%'", "show character set where Charset = 'utf8mb4'"} {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		p, err := BuildPlan(ctx, stmt, false)
+		p, err := BuildPlan(ctx, stmt, false, nil)
 		stmt.Free()
 		require.NoError(t, err)
 		require.Equal(t, []string{"Charset", "Description", "Default collation", "Maxlen"}, p.GetQuery().Headings)
@@ -55,7 +56,7 @@ func TestCollationMetadataPlannerAdmission(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select n_name from nation", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.ErrorContains(t, err, "disabled")
 }
 

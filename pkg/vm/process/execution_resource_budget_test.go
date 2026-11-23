@@ -38,6 +38,77 @@ type testPhysicalAllocation struct {
 	released   atomic.Bool
 }
 
+type testTransientAdmissionGuard struct {
+	mu       sync.Mutex
+	held     atomic.Bool
+	resolved atomic.Int32
+	stopped  atomic.Bool
+	budget   *ExecutionResourceBudget
+	dropErr  bool
+}
+
+func (g *testTransientAdmissionGuard) Lock() {
+	g.mu.Lock()
+	g.held.Store(true)
+}
+
+func (g *testTransientAdmissionGuard) Unlock() {
+	g.held.Store(false)
+	g.mu.Unlock()
+}
+
+func (g *testTransientAdmissionGuard) ResolveAdmissionFailure(err error, stopped bool) error {
+	// Snapshot takes the budget mutex, proving it was released before the
+	// owner's terminal result is resolved.
+	g.budget.Snapshot()
+	g.resolved.Add(1)
+	g.stopped.Store(stopped)
+	if g.dropErr {
+		return nil
+	}
+	return err
+}
+
+func TestGuardedTransientMemoryAdmission(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(4096, 1024)
+	guard := &testTransientAdmissionGuard{budget: budget}
+	budget.SetAggregateCapProvider(func() (uint64, error) {
+		if guard.held.Load() {
+			return 0, errors.New("provider ran under admission guard")
+		}
+		return 4096, nil
+	})
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	defer budget.Close()
+	reservation, err := generation.ReserveTransientMemoryGuarded(512, nil, guard)
+	require.NoError(t, err)
+	require.True(t, reservation.Release())
+	require.Zero(t, guard.resolved.Load())
+	done := make(chan struct{})
+	close(done)
+	result := make(chan error, 1)
+	go func() {
+		_, err := generation.ReserveTransientMemoryGuarded(2048, done, guard)
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, ErrExecutionResourceAdmission)
+	case <-time.After(5 * time.Second):
+		t.Fatal("guarded rejection did not release the budget mutex")
+	}
+	require.Equal(t, int32(1), guard.resolved.Load())
+	require.True(t, guard.stopped.Load())
+	require.False(t, guard.held.Load())
+	guard.dropErr = true
+	reservation, err = generation.ReserveTransientMemoryGuarded(2048, nil, guard)
+	require.Nil(t, reservation)
+	require.ErrorIs(t, err, ErrExecutionResourceAdmission)
+	require.Zero(t, generation.Used())
+}
+
 func TestExecutionResourceBudgetObserverDimensionsAreFixed(t *testing.T) {
 	components := [...]string{"memory", "recovery_memory", "spill_disk", "spill_fd"}
 	events := [...]string{"reserve", "release", "reconcile", "reject"}
@@ -102,6 +173,41 @@ func TestExecutionResourceBudgetPhysicalAllocationLimit(t *testing.T) {
 	if budget.AggregateUsed() != 0 || generation.Used() != 0 {
 		t.Fatal("physical allocation release leaked capacity")
 	}
+}
+
+func TestExecutionResourceGenerationAvailableMemory(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(100, 80)
+	first, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer first.Close()
+	second, err := budget.OpenGeneration(2)
+	require.NoError(t, err)
+	defer second.Close()
+
+	available, err := first.AvailableMemory()
+	require.NoError(t, err)
+	require.Equal(t, uint64(80), available)
+	require.NoError(t, first.AcquireAllocationCapacity(20))
+	require.NoError(t, second.AcquireAllocationCapacity(50))
+	available, err = first.AvailableMemory()
+	require.NoError(t, err)
+	require.Equal(t, uint64(30), available, "the shared CN limit is tighter than the query limit")
+	require.NoError(t, budget.UpdateAggregateCap(60))
+	available, err = first.AvailableMemory()
+	require.NoError(t, err, "a live CN cap may shrink below already admitted usage")
+	require.Zero(t, available)
+	require.NoError(t, budget.UpdateAggregateCap(100))
+	second.ReleaseAllocationCapacity(50)
+	available, err = first.AvailableMemory()
+	require.NoError(t, err)
+	require.Equal(t, uint64(60), available)
+	first.ReleaseAllocationCapacity(20)
+	first.Close()
+	_, err = first.AvailableMemory()
+	require.ErrorIs(t, err, ErrExecutionResourceClosed)
+	var missing *ExecutionResourceGeneration
+	_, err = missing.AvailableMemory()
+	require.ErrorIs(t, err, ErrExecutionResourceInvalid)
 }
 
 func TestExecutionResourceBudgetAdmissionIdentifiesResource(t *testing.T) {

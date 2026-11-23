@@ -475,7 +475,27 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	} else {
 		dependent = builder.rangeScalarNeedsDependent(nodeID, subquery, ctx, guarded)
 	}
+	rootZeroDependent := builder.scalarRootZeroNeedsDependent(subquery)
+	if rootZeroDependent {
+		switch builder.zeroScalarPolicy {
+		case zeroScalarExecutable, zeroScalarValidateOnly:
+			// Validation needs the full query shape for schema and semantic checks.
+			dependent = true
+		case zeroScalarRetainOnly:
+			// This owner preserves authorization metadata without changing the
+			// executable plan. Signal that the source closure must survive an
+			// outer expression fold, then let the existing scalar path bind it.
+			builder.zeroScalarRetentionGeneration++
+			rootZeroDependent = false
+		default:
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated scalar LIMIT 0 in a nested query may lose a table dependency")
+		}
+	}
 	if dependent {
+		if rootZeroDependent {
+			builder.zeroScalarRewriteGeneration++
+		}
 		if subquery.Child != nil && hasSubquery(subquery.Child) {
 			// The left operand has the same demand as the comparison. Hoisting
 			// it into a JOIN would evaluate even an unselected CASE branch.
@@ -486,6 +506,15 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			}
 		}
 		bound, err := builder.bindDependentSubquery(subquery)
+		if err == nil && rootZeroDependent {
+			if bound.GetDependent() == nil {
+				return 0, nil, moerr.NewInternalError(builder.GetContext(), "missing root-zero dependent program")
+			}
+			if builder.zeroScalarPrograms == nil {
+				builder.zeroScalarPrograms = make(map[uint32]struct{})
+			}
+			builder.zeroScalarPrograms[bound.GetDependent().ProgramId] = struct{}{}
+		}
 		return nodeID, bound, err
 	}
 	if subquery.Child != nil && hasSubquery(subquery.Child) {
@@ -1162,7 +1191,10 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 		// Lifting any visible volatile result across the join can change both
 		// its evaluation count and DISTINCT cardinality.  Keep this shape
 		// fail-closed until it can be decorrelated without moving evaluation.
-		if containsVolatileFunction(ctx.projects[i]) ||
+		// CAST9 is a pure, execution-stable conversion even though SQL-mode
+		// sensitivity forbids folding. Only this nullable, match-guarded lift
+		// may use that proof; diagnostic/unstable inputs remain inadmissible.
+		if containsVolatileFunctionImpl(ctx.projects[i], true) ||
 			(hasCorrCol(ctx.projects[i]) && !builder.casePreservesType(ctx.projects[i])) {
 			return unsafe()
 		}
@@ -1539,7 +1571,7 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 	}
 	if !legacyProof {
 		for _, predicate := range predicates {
-			if !existentialPredicateIsTotal(predicate, storedTextIsBounded) {
+			if !builder.existentialPredicateIsTotal(predicate, storedTextIsBounded) {
 				return false
 			}
 		}
@@ -1567,7 +1599,7 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 					return false
 				}
 				origin := node.ProjectList[col.ColPos]
-				if !(legacyProof && isTruncationSafePredicateValue(origin) || existentialValueIsTotal(origin, storedTextIsBounded)) || !inspect(origin) {
+				if !(legacyProof && isTruncationSafePredicateValue(origin) || builder.existentialValueIsTotal(origin, storedTextIsBounded)) || !inspect(origin) {
 					return false
 				}
 			}
@@ -1599,6 +1631,11 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 }
 
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
+	if outerPred == nil {
+		if root, marker, rewritten, rewriteErr := builder.tryExistentialDisjunction(left, right, joinPreds, negate, ctx); rewritten || rewriteErr != nil {
+			return root, marker, rewriteErr
+		}
+	}
 	markTag := builder.genNewBindTag()
 	existential := outerPred == nil
 
@@ -2119,7 +2156,7 @@ func (result *aggregateSpineEmptyResult) nullEquivalent(count int) bool {
 // empty. Unknown deterministic filters may retain or remove a singleton;
 // upper aggregates must make those possibilities converge before admission.
 func (builder *QueryBuilder) aggregateSpineOriginalEmpty(subID int32, ctx *BindContext) *aggregateSpineEmptyResult {
-	if builder.compCtx != nil && defines.IsPublicationViewBinding(builder.GetContext()) {
+	if builder.compCtx != nil && defines.IsNoEvaluationViewBinding(builder.GetContext()) {
 		// The empty-input proof evaluates substituted constant expressions of
 		// the stored definition through ConstantFold (foldAggregateSpineLiteral
 		// and substituteAggregateSpineEmptyExpr are this file's only fold
@@ -4928,7 +4965,8 @@ func correlatedPaginationPartitionTypeSupported(typ types.T) bool {
 		types.T_varbinary, types.T_json, types.T_text, types.T_datalink,
 		types.T_geometry,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
-		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false

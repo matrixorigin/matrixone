@@ -30,7 +30,7 @@ func tableDumpDDLCreate(t *testing.T, ctx CompilerContext, sql string) *planpb.T
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	value, err := BuildPlan(ctx, stmt, false)
+	value, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	return value.GetDdl().GetCreateTable().GetTableDef()
 }

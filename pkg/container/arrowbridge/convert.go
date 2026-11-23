@@ -45,9 +45,11 @@ type ConvertOptions struct {
 	Location *time.Location
 	// MaxPinAmplification overrides the LOAD varlen retention threshold.
 	MaxPinAmplification float64
-	// Allocation charges every materialized MO backing to the caller's
-	// statement account. Borrowed Arrow capacity is charged by its source lease.
-	Allocation *vector.AllocationAccountSelection
+	// Allocation, when set, is the accounted MPool view that charges every
+	// materialized MO backing to the caller's statement account; it is used in
+	// place of Convert's mp. Borrowed Arrow capacity is charged by its source
+	// lease.
+	Allocation *mpool.MPool
 	// ForceMaterialize is a verification/rollback switch used to compare the
 	// borrowed path with identical conversion semantics.
 	ForceMaterialize bool
@@ -71,15 +73,15 @@ type ConvertStats struct {
 	UnalignedFallbacks        int64
 }
 
-func newOutputVector(
-	typ types.Type,
-	selection *vector.AllocationAccountSelection,
-) (*vector.Vector, error) {
-	return vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
+func newOutputVector(typ types.Type, mp *mpool.MPool) (*vector.Vector, error) {
+	return vector.NewVec(typ, mp), nil
 }
 
-// Convert builds a complete batch transactionally. On any error every vector
-// and lease already installed in the partial batch is released.
+// Convert builds a complete batch transactionally. Borrowed columns alias
+// Arrow buffers whose references the returned batch holds (batch.HoldLease)
+// until it is cleaned or reuses its columns; a vector moved out of the batch
+// must be materialized first. On any error every vector and lease already
+// installed in the partial batch is released.
 func (p *Plan) Convert(
 	ctx context.Context,
 	record arrow.RecordBatch,
@@ -131,9 +133,12 @@ func (p *Plan) convert(
 	if options.MaxPinAmplification <= 0 {
 		options.MaxPinAmplification = DefaultMaxPinAmplification
 	}
+	if options.Allocation != nil {
+		mp = options.Allocation
+	}
 
 	rows := int(record.NumRows())
-	bat := batch.NewOffHeap(p.attrs)
+	bat := batch.New(p.attrs)
 	defer func() {
 		if err != nil {
 			bat.Clean(mp)
@@ -157,15 +162,15 @@ func (p *Plan) convert(
 		switch binding.kind {
 		case conversionBorrowFixed:
 			vec, columnStats, err = convertFixed(
-				ctx, column, binding.target.Type, mp, options.Allocation, options.ForceMaterialize, nullCount,
+				ctx, column, binding.target.Type, mp, options.ForceMaterialize, nullCount, bat,
 			)
 		case conversionBorrowVarlen:
 			vec, columnStats, err = convertVarlen(
 				ctx, column, binding.target.Type, mp, options.MaxPinAmplification,
-				options.Allocation, options.ForceMaterialize, nullCount,
+				options.ForceMaterialize, nullCount, bat,
 			)
 		default:
-			vec, columnStats, err = materializeConverted(ctx, column, binding, mp, options.Location, options.Allocation)
+			vec, columnStats, err = materializeConverted(ctx, column, binding, mp, options.Location)
 		}
 		if err != nil {
 			return nil, stats, err
@@ -311,9 +316,9 @@ func convertFixed(
 	column arrow.Array,
 	target types.Type,
 	mp *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
 	forceMaterialize bool,
 	nullCount int,
+	keeper bufferlease.Keeper,
 ) (*vector.Vector, ConvertStats, error) {
 	var stats ConvertStats
 	if column.DataType().ID() == arrow.TIME64 {
@@ -353,7 +358,7 @@ func convertFixed(
 	buffers := data.Buffers()
 	if len(buffers) < 2 || buffers[1] == nil {
 		if column.Len() == 0 {
-			vec, err := newOutputVector(target, selection)
+			vec, err := newOutputVector(target, mp)
 			return vec, stats, err
 		}
 		return nil, stats, moerr.NewInvalidInput(ctx, "Arrow fixed-width value buffer is missing")
@@ -370,27 +375,23 @@ func convertFixed(
 	}
 	view := values[start : start+length]
 	if forceMaterialize {
-		vec, stats, err := materializeFixedLayout(ctx, column, target, view, mp, selection)
+		vec, stats, err := materializeFixedLayout(ctx, column, target, view, mp)
 		stats.EligiblePayloadBytes = int64(length)
 		return vec, stats, err
 	}
 	if len(view) > 0 && uintptr(unsafe.Pointer(unsafe.SliceData(view)))%uintptr(min(width, 8)) != 0 {
-		vec, stats, err := materializeFixedLayout(ctx, column, target, view, mp, selection)
+		vec, stats, err := materializeFixedLayout(ctx, column, target, view, mp)
 		stats.EligiblePayloadBytes = int64(length)
 		stats.UnalignedFallbacks = 1
 		return vec, stats, err
 	}
 
-	lease, err := newArrayDataLease(data, view, int64(buffers[1].Cap()))
-	if err != nil {
+	if err := holdArrayData(keeper, data, view, int64(buffers[1].Cap())); err != nil {
 		return nil, stats, err
 	}
-	vec, err := vector.NewBorrowedFixedVectorWithAllocation(target, column.Len(), view, lease, selection)
-	lease.Release()
-	if err != nil {
-		return nil, stats, err
-	}
-	if err = installBorrowedValidity(column, vec, mp, nullCount); err != nil {
+	// A read-only reference vector over the Arrow buffer the keeper holds.
+	vec := vector.NewVecWithData(target, column.Len(), view, nil, nil)
+	if err := installValidity(column, vec, nullCount); err != nil {
 		vec.Free(mp)
 		return nil, stats, err
 	}
@@ -407,10 +408,9 @@ func materializeFixedLayout(
 	target types.Type,
 	view []byte,
 	mp *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
 ) (*vector.Vector, ConvertStats, error) {
 	stats := ConvertStats{MaterializedPayloadBytes: int64(len(view)), MaterializedColumns: 1}
-	vec, err := newOutputVector(target, selection)
+	vec, err := newOutputVector(target, mp)
 	if err != nil {
 		return nil, stats, err
 	}
@@ -435,11 +435,18 @@ func materializeFixedLayout(
 	return vec, stats, nil
 }
 
-func newArrayDataLease(
+// holdArrayData makes keeper (the output batch) the lender of view: it holds
+// a reference to the Arrow ArrayData until it drops or reuses its columns.
+// Vectors aliasing view hold no lease of their own.
+func holdArrayData(
+	keeper bufferlease.Keeper,
 	data arrow.ArrayData,
 	view []byte,
 	accounted int64,
-) (*bufferlease.RefCounted, error) {
+) error {
+	if keeper == nil {
+		return moerr.NewInternalErrorNoCtx("borrowed Arrow buffer has no lender")
+	}
 	// Arrow ArrayData is the physical lifetime root visible to this package. A
 	// File reader may in turn have attached a RangeLease to that object graph;
 	// retaining ArrayData therefore preserves both layers without teaching the
@@ -448,20 +455,18 @@ func newArrayDataLease(
 	lease, err := bufferlease.NewRefCounted(view, accounted, data.Release)
 	if err != nil {
 		data.Release()
-		return nil, err
+		return err
 	}
-	return lease, nil
+	// The keeper takes its own reference; ours is dropped here.
+	defer lease.Release()
+	return keeper.HoldLease(lease)
 }
 
-func installBorrowedValidity(column arrow.Array, vec *vector.Vector, mp *mpool.MPool, nullCount int) error {
+// installValidity converts the Arrow validity bitmap (1 = valid) into the
+// vector's null bitmap (1 = null) by flipping bits.
+func installValidity(column arrow.Array, vec *vector.Vector, nullCount int) error {
 	if nullCount == 0 {
 		return nil
-	}
-	// MO nulls use an inverted bitmap. Reserve the possible legacy-materialized
-	// bitmap before publishing the readonly Arrow validity view, so a later
-	// compatibility consumer cannot allocate outside statement admission.
-	if err := vec.PrepareBorrowedValidity(column.Len(), mp); err != nil {
-		return err
 	}
 	data := column.Data()
 	buffers := data.Buffers()
@@ -469,13 +474,11 @@ func installBorrowedValidity(column arrow.Array, vec *vector.Vector, mp *mpool.M
 		return moerr.NewInvalidInputNoCtx("Arrow validity buffer is missing")
 	}
 	validity := buffers[0].Bytes()
-	lease, err := newArrayDataLease(data, validity, int64(buffers[0].Cap()))
-	if err != nil {
-		return err
+	if data.Offset() < 0 || (data.Offset()+column.Len()+7)/8 > len(validity) {
+		return moerr.NewInvalidInputNoCtx("Arrow validity buffer is too short")
 	}
-	err = vec.GetNulls().InstallBorrowedValidity(validity, data.Offset(), column.Len(), nullCount, lease)
-	lease.Release()
-	return err
+	vec.GetNulls().GetBitmap().InitWithInvertedBits(validity, data.Offset(), column.Len())
+	return nil
 }
 
 type varlenView struct {
@@ -494,9 +497,9 @@ func convertVarlen(
 	target types.Type,
 	mp *mpool.MPool,
 	maxPinAmplification float64,
-	selection *vector.AllocationAccountSelection,
 	forceMaterialize bool,
 	nullCount int,
+	keeper bufferlease.Keeper,
 ) (*vector.Vector, ConvertStats, error) {
 	view, err := inspectVarlen(ctx, column)
 	if err != nil {
@@ -533,7 +536,7 @@ func convertVarlen(
 	// BINARY(N) assignment stores exactly N bytes, so any short value forces an
 	// owned, zero-padded image for the entire column.
 	if forceMaterialize || avoided == 0 || fixedBinaryPadRow {
-		vec, stats, err := materializeVarlen(ctx, column, target, view, mp, selection)
+		vec, stats, err := materializeVarlen(ctx, column, target, view, mp)
 		if !fixedBinaryPadRow {
 			stats.EligiblePayloadBytes = avoided
 		}
@@ -543,23 +546,36 @@ func convertVarlen(
 	// it with the useful bytes. A tiny slice of a large Arrow allocation should
 	// not remain pinned merely because its descriptor can be borrowed.
 	if float64(view.retainedCapacity)/float64(avoided) > maxPinAmplification {
-		vec, stats, err := materializeVarlen(ctx, column, target, view, mp, selection)
+		vec, stats, err := materializeVarlen(ctx, column, target, view, mp)
 		stats.EligiblePayloadBytes = avoided
 		stats.PinAmplificationFallbacks = 1
 		return vec, stats, err
 	}
 
-	vec, err := newOutputVector(target, selection)
+	// The vector is a read-only reference: its descriptors live in a buffer
+	// of mp handed to the keeper together with the Arrow values it points
+	// into, and both are released when the keeper drops its leases.
+	if keeper == nil {
+		return nil, ConvertStats{}, moerr.NewInternalErrorNoCtx("borrowed Arrow buffer has no lender")
+	}
+	descriptorBuf, err := mp.Alloc(column.Len()*types.VarlenaSize, true)
 	if err != nil {
 		return nil, ConvertStats{}, err
 	}
-	if err = vec.PreExtend(column.Len(), mp); err != nil {
-		// Keep failure transactional even when PreExtend performed partial work;
-		// Convert cannot clean this vector until it is installed in the batch.
-		vec.Free(mp)
+	for i := range descriptorBuf {
+		descriptorBuf[i] = 0
+	}
+	descriptorLease, err := bufferlease.NewRefCounted(descriptorBuf, int64(len(descriptorBuf)), func() { mp.Free(descriptorBuf) })
+	if err != nil {
+		mp.Free(descriptorBuf)
 		return nil, ConvertStats{}, err
 	}
-	vec.SetLength(column.Len())
+	err = keeper.HoldLease(descriptorLease)
+	descriptorLease.Release()
+	if err != nil {
+		return nil, ConvertStats{}, err
+	}
+	vec := vector.NewVecWithData(target, column.Len(), descriptorBuf, nil, nil)
 	descriptors := vector.MustFixedColNoTypeCheck[types.Varlena](vec)
 	for row := 0; row < column.Len(); row++ {
 		if column.IsNull(row) {
@@ -580,18 +596,13 @@ func convertVarlen(
 	}
 
 	data := column.Data()
-	lease, err := newArrayDataLease(data, view.values, view.retainedCapacity)
-	if err != nil {
+	if err = holdArrayData(keeper, data, view.values, view.retainedCapacity); err != nil {
 		vec.Free(mp)
 		return nil, ConvertStats{}, err
 	}
-	err = vec.InstallBorrowedArea(view.values, lease)
-	lease.Release()
-	if err != nil {
-		vec.Free(mp)
-		return nil, ConvertStats{}, err
-	}
-	if err = installBorrowedValidity(column, vec, mp, nullCount); err != nil {
+	vec.Free(nil)
+	vec = vector.NewVecWithData(target, column.Len(), descriptorBuf, view.values, nil)
+	if err = installValidity(column, vec, nullCount); err != nil {
 		vec.Free(mp)
 		return nil, ConvertStats{}, err
 	}
@@ -758,9 +769,8 @@ func materializeVarlen(
 	target types.Type,
 	view varlenView,
 	mp *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
 ) (*vector.Vector, ConvertStats, error) {
-	vec, err := newOutputVector(target, selection)
+	vec, err := newOutputVector(target, mp)
 	if err != nil {
 		return nil, ConvertStats{}, err
 	}
@@ -791,12 +801,11 @@ func materializeConverted(
 	binding columnPlan,
 	mp *mpool.MPool,
 	location *time.Location,
-	selection *vector.AllocationAccountSelection,
 ) (*vector.Vector, ConvertStats, error) {
 	if binding.kind == conversionMaterializeDictionary {
-		return materializeDictionary(ctx, column, binding, mp, location, selection)
+		return materializeDictionary(ctx, column, binding, mp, location)
 	}
-	vec, err := newOutputVector(binding.target.Type, selection)
+	vec, err := newOutputVector(binding.target.Type, mp)
 	if err != nil {
 		return nil, ConvertStats{}, err
 	}
@@ -1155,7 +1164,6 @@ func materializeDictionary(
 	binding columnPlan,
 	mp *mpool.MPool,
 	location *time.Location,
-	selection *vector.AllocationAccountSelection,
 ) (*vector.Vector, ConvertStats, error) {
 	dictionary, ok := column.(*array.Dictionary)
 	if !ok {
@@ -1167,7 +1175,7 @@ func materializeDictionary(
 		return nil, ConvertStats{}, moerr.NewInvalidInputf(ctx, "invalid Arrow Dictionary value type %s", values.DataType())
 	}
 
-	vec, err := newOutputVector(binding.target.Type, selection)
+	vec, err := newOutputVector(binding.target.Type, mp)
 	if err != nil {
 		return nil, ConvertStats{}, err
 	}
@@ -1464,6 +1472,14 @@ func appendDictionaryNull(vec *vector.Vector, target types.Type, mp *mpool.MPool
 		return vector.AppendFixed(vec, float32(0), true, mp)
 	case types.T_float64:
 		return vector.AppendFixed(vec, float64(0), true, mp)
+	case types.T_bf16:
+		return vector.AppendFixed(vec, types.BF16(0), true, mp)
+	case types.T_float16:
+		return vector.AppendFixed(vec, types.Float16(0), true, mp)
+	case types.T_float8:
+		return vector.AppendFixed(vec, types.Float8(0), true, mp)
+	case types.T_float4:
+		return vector.AppendFixed(vec, types.Float4(0), true, mp)
 	case types.T_year:
 		return vector.AppendFixed(vec, types.MoYear(0), true, mp)
 	case types.T_enum:

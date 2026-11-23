@@ -225,6 +225,18 @@ func Test_BuiltIn_RegexpReplaceCaptureTemplate(t *testing.T) {
 	require.NoError(t, err, "an out-of-range occurrence does not evaluate the replacement")
 	require.Equal(t, "a", got)
 
+	// Issue #31175 design r4: capture-bearing duplicate alternatives are
+	// never deduplicated — group numbering is user-observable through
+	// replacement references. On the case-fold path the rewrite retains
+	// both (ss) branches, so $3 resolves and the unmatched group expands
+	// empty, exactly like the unrewritten engine verdict.
+	t.Run("dedup_retains_capture_numbering", func(t *testing.T) {
+		got, err := op.regMap.regularReplaceWithMatchType(
+			"((ss)|(ss))", "ss", "[$1][$2][$3]", 1, 1, false, "i")
+		require.NoError(t, err)
+		require.Equal(t, "[ss][ss][]", got)
+	})
+
 	binarySubject := string([]byte{0x00, 0xff, 0xc3, 0x28})
 	got, err = op.regMap.regularReplaceWithMatchType(
 		".", binarySubject, "[$0]", 1, 0, true, "")
@@ -787,72 +799,64 @@ func Test_BuiltIn_RegexpPositionAnchorPolicies(t *testing.T) {
 	}
 }
 
-func Test_BuiltIn_RegexpUsesRowStringDomainAndSurvivesRebind(t *testing.T) {
+func Test_BuiltIn_RegexpUsesStaticStringDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	op := newOpBuiltInRegexp()
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"中中", "中中"}, nil),
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"中", "中"}, nil),
-		NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
+	for _, tc := range []struct {
+		name      string
+		subject   types.Type
+		wantInstr int64
+	}{
+		{name: "binary", subject: types.T_varbinary.ToType(), wantInstr: 4},
+		{name: "text", subject: types.T_varchar.ToType(), wantInstr: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(tc.subject, []string{"中中", "中中"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"中", "中"}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
+			}
+
+			instr := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{tc.wantInstr, tc.wantInstr}, nil),
+				op.builtInRegexpInstr)
+			defer instr.Free()
+			ok, info := instr.Run()
+			require.True(t, ok, info)
+
+			substr := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中", "中"}, nil),
+				op.builtInRegexpSubstr)
+			defer substr.Free()
+			ok, info = substr.Run()
+			require.True(t, ok, info)
+
+			replace := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(tc.subject, []string{"中中", "中中"}, nil),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"中", "中"}, nil),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"X", "X"}, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1}, nil),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中X", "中X"}, nil),
+				op.builtInRegexpReplace)
+			defer replace.Free()
+			ok, info = replace.Run()
+			require.True(t, ok, info)
+		})
 	}
-
-	instr := NewFunctionTestCase(proc, inputs,
-		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{4, 2}, nil),
-		op.builtInRegexpInstr)
-	defer instr.Free()
-	require.NoError(t, instr.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
-	ok, info := instr.Run()
-	require.True(t, ok, info)
-
-	substr := NewFunctionTestCase(proc, inputs,
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中", "中"}, nil),
-		op.builtInRegexpSubstr)
-	defer substr.Free()
-	require.NoError(t, substr.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
-	ok, info = substr.Run()
-	require.True(t, ok, info)
-	require.True(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
-	require.False(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(1))
-
-	// Reuse one operator and result wrapper as prepared execution does. Resetting
-	// the parameter domain must change semantics and clear the old result domain.
-	substr.parameters[0].SetIsBinaryString(false)
-	substr.expected.wanted = []string{"中", "中"}
-	ok, info = substr.Run()
-	require.True(t, ok, info)
-	require.False(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
-	require.False(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(1))
-
-	substr.parameters[0].SetIsBinaryString(true)
-	ok, info = substr.Run()
-	require.True(t, ok, info)
-	require.True(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
-
-	replace := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"中中", "中中"}, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"中", "中"}, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"X", "X"}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1}, nil),
-		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中X", "中X"}, nil),
-		op.builtInRegexpReplace)
-	defer replace.Free()
-	require.NoError(t, replace.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
-	ok, info = replace.Run()
-	require.True(t, ok, info)
-	require.True(t, replace.GetResultVectorDirectly().GetIsBinaryStringAt(0))
-	require.False(t, replace.GetResultVectorDirectly().GetIsBinaryStringAt(1))
 }
 
 func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	varchar := types.T_varchar.ToType()
-	setFirstRowBinary := func(t *testing.T, testCase *FunctionTestCase, parameter int) {
-		t.Helper()
-		require.NoError(t, testCase.parameters[parameter].SetRuntimeStringDomainAtWithMP(
-			0, types.RuntimeStringBinary, proc.Mp()))
+	varbinary := types.T_varbinary.ToType()
+	typeFor := func(binary bool) types.Type {
+		if binary {
+			return varbinary
+		}
+		return varchar
 	}
 
 	for _, tc := range []struct {
@@ -863,77 +867,77 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 		{name: "not_regexp", fn: newOpBuiltInRegexp().builtInNotRegMatch},
 		{name: "regexp_like", fn: newOpBuiltInRegexp().builtInRegexpLike},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			want := []bool{true, false}
-			if tc.name == "not_regexp" {
-				want = []bool{false, true}
-			}
-			testCase := NewFunctionTestCase(proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(varchar, []string{"中", "中"}, nil),
-					NewFunctionTestInput(varchar, []string{"..", ".."}, nil),
-				},
-				NewFunctionTestResult(types.T_bool.ToType(), false, want, nil), tc.fn)
-			defer testCase.Free()
-			setFirstRowBinary(t, &testCase, 1)
-			ok, info := testCase.Run()
-			require.True(t, ok, info)
-		})
+		for _, binary := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/binary=%v", tc.name, binary), func(t *testing.T) {
+				want := binary
+				if tc.name == "not_regexp" {
+					want = !want
+				}
+				testCase := NewFunctionTestCase(proc,
+					[]FunctionTestInput{
+						NewFunctionTestInput(varchar, []string{"中"}, nil),
+						NewFunctionTestInput(typeFor(binary), []string{".."}, nil),
+					},
+					NewFunctionTestResult(types.T_bool.ToType(), false, []bool{want}, nil), tc.fn)
+				defer testCase.Free()
+				ok, info := testCase.Run()
+				require.True(t, ok, info)
+			})
+		}
 	}
 
-	instr := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(varchar, []string{"中中", "中中"}, nil),
-			NewFunctionTestInput(varchar, []string{"中", "中"}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
-		},
-		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{4, 2}, nil),
-		newOpBuiltInRegexp().builtInRegexpInstr)
-	defer instr.Free()
-	setFirstRowBinary(t, &instr, 1)
-	ok, info := instr.Run()
-	require.True(t, ok, info)
+	for _, binary := range []bool{true, false} {
+		wantInstr := int64(2)
+		if binary {
+			wantInstr = 4
+		}
+		instr := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(varchar, []string{"中中"}, nil),
+				NewFunctionTestInput(typeFor(binary), []string{"中"}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, nil),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{wantInstr}, nil),
+			newOpBuiltInRegexp().builtInRegexpInstr)
+		ok, info := instr.Run()
+		require.True(t, ok, info)
+		instr.Free()
 
-	substr := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(varchar, []string{"中中", "中中"}, nil),
-			NewFunctionTestInput(varchar, []string{"中", "中"}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2}, nil),
-		},
-		NewFunctionTestResult(varchar, false, []string{"中", "中"}, nil),
-		newOpBuiltInRegexp().builtInRegexpSubstr)
-	defer substr.Free()
-	setFirstRowBinary(t, &substr, 1)
-	ok, info = substr.Run()
-	require.True(t, ok, info)
-	require.True(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(0))
-	require.False(t, substr.GetResultVectorDirectly().GetIsBinaryStringAt(1))
+		substr := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(varchar, []string{"中中"}, nil),
+				NewFunctionTestInput(typeFor(binary), []string{"中"}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, nil),
+			},
+			NewFunctionTestResult(varchar, false, []string{"中"}, nil),
+			newOpBuiltInRegexp().builtInRegexpSubstr)
+		ok, info = substr.Run()
+		require.True(t, ok, info)
+		substr.Free()
+	}
 
 	for _, tc := range []struct {
 		name            string
 		binaryParameter int
 		want            []string
-		wantBinary      bool
 	}{
-		{name: "subject selects binary matching", binaryParameter: 0, want: []string{"\xff\xff\xff", "X"}, wantBinary: true},
-		{name: "pattern selects binary matching", binaryParameter: 1, want: []string{"\xff\xff\xff", "X"}, wantBinary: true},
+		{name: "subject selects binary matching", binaryParameter: 0, want: []string{"\xff\xff\xff"}},
+		{name: "pattern selects binary matching", binaryParameter: 1, want: []string{"\xff\xff\xff"}},
 	} {
 		t.Run("regexp_replace_"+tc.name, func(t *testing.T) {
+			inputTypes := []types.Type{varchar, varchar, varbinary}
+			inputTypes[tc.binaryParameter] = varbinary
 			replace := NewFunctionTestCase(proc,
 				[]FunctionTestInput{
-					NewFunctionTestInput(varchar, []string{"中", "中"}, nil),
-					NewFunctionTestInput(varchar, []string{".", "."}, nil),
-					NewFunctionTestInput(varchar, []string{"\xff", "X"}, nil),
+					NewFunctionTestInput(inputTypes[0], []string{"中"}, nil),
+					NewFunctionTestInput(inputTypes[1], []string{"."}, nil),
+					NewFunctionTestInput(inputTypes[2], []string{"\xff"}, nil),
 				},
 				NewFunctionTestResult(varchar, false, tc.want, nil),
 				newOpBuiltInRegexp().builtInRegexpReplace)
 			defer replace.Free()
-			setFirstRowBinary(t, &replace, tc.binaryParameter)
-			setFirstRowBinary(t, &replace, 2)
 			ok, info := replace.Run()
 			require.True(t, ok, info)
-			require.Equal(t, tc.wantBinary, replace.GetResultVectorDirectly().GetIsBinaryStringAt(0))
-			require.False(t, replace.GetResultVectorDirectly().GetIsBinaryStringAt(1))
 		})
 	}
 
@@ -951,7 +955,7 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 			},
 		},
 		{
-			name: "five arguments", replacement: "中", want: "ä¸\u00ad",
+			name: "five arguments", replacement: "中", want: "ä¸­",
 			controlInputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
@@ -962,17 +966,15 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 			inputs := []FunctionTestInput{
 				NewFunctionTestInput(varchar, []string{"中"}, nil),
 				NewFunctionTestInput(varchar, []string{"."}, nil),
-				NewFunctionTestInput(varchar, []string{tc.replacement}, nil),
+				NewFunctionTestInput(varbinary, []string{tc.replacement}, nil),
 			}
 			inputs = append(inputs, tc.controlInputs...)
 			replace := NewFunctionTestCase(proc, inputs,
 				NewFunctionTestResult(varchar, false, []string{tc.want}, nil),
 				newOpBuiltInRegexp().builtInRegexpReplace)
 			defer replace.Free()
-			setFirstRowBinary(t, &replace, 2)
 			ok, info := replace.Run()
 			require.True(t, ok, info)
-			require.False(t, replace.GetResultVectorDirectly().GetIsBinaryStringAt(0))
 		})
 	}
 
@@ -983,15 +985,13 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 		[]FunctionTestInput{
 			NewFunctionTestInput(varchar, []string{"Ā"}, nil),
 			NewFunctionTestInput(varchar, []string{`\x{100}`}, nil),
-			NewFunctionTestInput(varchar, []string{"X"}, nil),
+			NewFunctionTestInput(varbinary, []string{"X"}, nil),
 		},
 		NewFunctionTestResult(varchar, false, []string{"X"}, nil),
 		newOpBuiltInRegexp().builtInRegexpReplace)
 	defer replaceWithUnicodePattern.Free()
-	setFirstRowBinary(t, &replaceWithUnicodePattern, 2)
-	ok, info = replaceWithUnicodePattern.Run()
+	ok, info := replaceWithUnicodePattern.Run()
 	require.True(t, ok, info)
-	require.False(t, replaceWithUnicodePattern.GetResultVectorDirectly().GetIsBinaryStringAt(0))
 }
 
 func TestRegexpBinaryBytesToText(t *testing.T) {
@@ -1047,7 +1047,7 @@ func TestRegexpBinaryBytesToText(t *testing.T) {
 	constantBinary, err := vector.NewConstBytes(types.T_blob.ToType(), []byte{0xff}, 2, proc.Mp())
 	require.NoError(t, err)
 	defer constantBinary.Free(proc.Mp())
-	converter := newRegexpReplacementDomainConverter(constantBinary)
+	converter := newRegexpReplacementDomainConverter(constantBinary, false)
 	require.True(t, converter.mayBeBinary)
 	require.True(t, converter.constant)
 	require.Equal(t, "\xff", converter.forMatchDomain("\xff", 0, true))
@@ -1061,7 +1061,7 @@ func TestRegexpBinaryBytesToText(t *testing.T) {
 	constantText, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("中"), 1, proc.Mp())
 	require.NoError(t, err)
 	defer constantText.Free(proc.Mp())
-	textConverter := newRegexpReplacementDomainConverter(constantText)
+	textConverter := newRegexpReplacementDomainConverter(constantText, false)
 	require.False(t, textConverter.mayBeBinary)
 	require.Equal(t, "中", textConverter.forMatchDomain("中", 0, false))
 	require.False(t, textConverter.constantTextConverted)
@@ -1741,35 +1741,26 @@ func Test_BuiltIn_RegularLike(t *testing.T) {
 
 }
 
-func Test_BuiltIn_RegexpLikeRebindsBinaryCaseSensitivity(t *testing.T) {
+func Test_BuiltIn_RegexpLikeBinaryCaseSensitivity(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	varchar := types.T_varchar.ToType()
-	testCase := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(varchar, []string{"É"}, nil),
-			NewFunctionTestInput(varchar, []string{"é"}, nil),
-			NewFunctionTestInput(varchar, []string{"i"}, nil),
-		},
-		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, nil),
-		newOpBuiltInRegexp().builtInRegexpLike)
-	defer testCase.Free()
-
-	testCase.parameters[0].SetIsBinaryString(true)
-	testCase.parameters[1].SetIsBinaryString(true)
-	ok, info := testCase.Run()
-	require.True(t, ok, info)
-
-	testCase.parameters[0].SetIsBinaryString(false)
-	testCase.parameters[1].SetIsBinaryString(false)
-	testCase.expected.wanted = []bool{true}
-	ok, info = testCase.Run()
-	require.True(t, ok, info)
-
-	testCase.parameters[0].SetIsBinaryString(true)
-	testCase.parameters[1].SetIsBinaryString(true)
-	testCase.expected.wanted = []bool{false}
-	ok, info = testCase.Run()
-	require.True(t, ok, info)
+	for _, tc := range []struct {
+		typ  types.Type
+		want bool
+	}{
+		{types.T_varbinary.ToType(), false},
+		{types.T_varchar.ToType(), true},
+	} {
+		testCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(tc.typ, []string{"É"}, nil),
+				NewFunctionTestInput(tc.typ, []string{"é"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"i"}, nil),
+			},
+			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{tc.want}, nil),
+			newOpBuiltInRegexp().builtInRegexpLike)
+		ok, info := testCase.RunAndFree()
+		require.True(t, ok, info, tc.typ.String())
+	}
 }
 
 func Test_BuiltIn_RegexpValueFunctionsRejectEmptyPattern(t *testing.T) {
@@ -1875,11 +1866,10 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 		t.Run("binary_pattern_null_subject/"+matchType, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, []FunctionTestInput{
 				nullText,
-				NewFunctionTestInput(text, []string{`^\x{100}`}, nil),
+				NewFunctionTestInput(types.T_varbinary.ToType(), []string{`^\x{100}`}, nil),
 				NewFunctionTestInput(text, []string{matchType}, nil),
 			}, NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil), newOpBuiltInRegexp().builtInRegexpLike)
 			defer tcc.Free()
-			require.NoError(t, tcc.parameters[1].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
 			_, err := tcc.DebugRun()
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "binary")
@@ -1887,10 +1877,9 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 	}
 	t.Run("valid_binary_pattern_null_subject", func(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, []FunctionTestInput{
-			nullText, NewFunctionTestInput(text, []string{`^a`}, nil),
+			nullText, NewFunctionTestInput(types.T_varbinary.ToType(), []string{`^a`}, nil),
 			NewFunctionTestInput(text, []string{"m"}, nil),
 		}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true}), newOpBuiltInRegexp().builtInRegexpLike)
-		require.NoError(t, tcc.parameters[1].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
 		ok, info := tcc.RunAndFree()
 		require.True(t, ok, info)
 	})
@@ -2430,20 +2419,22 @@ func Test_BuiltIn_RegularMatchForLikeOpWithEscape(t *testing.T) {
 	op := newOpBuiltInRegexp()
 
 	testCases := []struct {
-		name            string
-		pattern         string
-		value           string
-		escape          rune
-		escapeEnabled   bool
-		caseInsensitive bool
-		expected        bool
+		name          string
+		pattern       string
+		value         string
+		escape        rune
+		escapeEnabled bool
+		fold          likeFoldMode
+		expected      bool
 	}{
 		{name: "custom escape underscore", pattern: "a!_b", value: "a_b", escape: '!', escapeEnabled: true, expected: true},
 		{name: "custom escape percent", pattern: "a!%b", value: "a%b", escape: '!', escapeEnabled: true, expected: true},
 		{name: "empty escape", pattern: `a\_b`, value: `a\xb`, escapeEnabled: false, expected: true},
 		{name: "unicode escape", pattern: "a界_b", value: "a_b", escape: '界', escapeEnabled: true, expected: true},
-		{name: "ilike recognizes escape before folding", pattern: "aX_b", value: "A_B", escape: 'X', escapeEnabled: true, caseInsensitive: true, expected: true},
-		{name: "ilike lowercase escape spelling remains literal", pattern: "axb", value: "AXB", escape: 'X', escapeEnabled: true, caseInsensitive: true, expected: true},
+		{name: "ilike recognizes escape before folding", pattern: "aX_b", value: "A_B", escape: 'X', escapeEnabled: true, fold: likeFoldILike, expected: true},
+		{name: "ilike lowercase escape spelling remains literal", pattern: "axb", value: "AXB", escape: 'X', escapeEnabled: true, fold: likeFoldILike, expected: true},
+		{name: "ilike folds kelvin sign", pattern: "k_b", value: "K_B", escape: '!', escapeEnabled: true, fold: likeFoldILike, expected: true},
+		{name: "general ci folds accent weight", pattern: "a_b", value: "Á_B", escape: '!', escapeEnabled: true, fold: likeFoldGeneralCI, expected: true},
 	}
 
 	for _, tc := range testCases {
@@ -2453,7 +2444,7 @@ func Test_BuiltIn_RegularMatchForLikeOpWithEscape(t *testing.T) {
 				[]byte(tc.value),
 				tc.escape,
 				tc.escapeEnabled,
-				tc.caseInsensitive,
+				tc.fold,
 			)
 			require.NoError(t, err)
 			require.Equal(t, tc.expected, match)
@@ -2809,4 +2800,530 @@ func TestRegexpWideMultilineReviewFindings(t *testing.T) {
 	// literal matching is multiline-insensitive, so the exact RE2 path
 	// answers it on any subject size, with or without terminators.
 	require.True(t, like("a\rb", big+"\rb", "m", false), "constant pattern has no multiline-sensitive operators")
+}
+
+// Issue #31175: LIKE takes its default case sensitivity from the resolved
+// text collation of its subject operand, exactly as LOCATE/INSTR/POSITION
+// already do. Case-insensitive collations fold; the legacy byte identity and
+// binary string domains keep the byte matcher. ILIKE keeps its historical
+// fold-on-every-domain behavior.
+func Test_BuiltIn_LikeHonorsCollationCaseFolding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	text := types.T_varchar.ToType()
+	binary := types.T_varbinary.ToType()
+
+	run := func(t *testing.T, fn executeLogicOfOverload, inputs []FunctionTestInput, want []bool, wantNulls []bool) {
+		t.Helper()
+		tcc := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_bool.ToType(), false, want, wantNulls), fn)
+		succeed, errInfo := tcc.RunAndFree()
+		require.True(t, succeed, errInfo)
+	}
+
+	t.Run("row patterns fold", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"a", "ABC", "ab", "aB_c"}, nil),
+				NewFunctionTestInput(text, []string{"A", "abc", "a%", "a__c"}, nil),
+			},
+			[]bool{true, true, true, true}, nil)
+	})
+
+	t.Run("constant pattern folds", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"Alice", "BOB", "alice", "al"}, nil),
+				NewFunctionTestConstInput(text, []string{"ALICE%", "ALICE%", "ALICE%", "ALICE%"}, nil),
+			},
+			[]bool{true, false, true, false}, nil)
+	})
+
+	t.Run("escape folds only literal runes", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"a_b", "AXB"}, nil),
+				NewFunctionTestConstInput(text, []string{"A!_b", "A!_b"}, nil),
+				NewFunctionTestConstInput(text, []string{"!", "!"}, nil),
+			},
+			[]bool{true, false}, nil)
+	})
+
+	t.Run("unicode ci charset folds", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"Apple", "BOB"}, nil),
+				NewFunctionTestInput(ucaText, []string{"apple", "bo_"}, nil),
+			},
+			[]bool{true, true}, nil)
+	})
+
+	// MySQL's utf8mb4_general_ci wildcard matcher folds every supplementary
+	// character to the 0xFFFD replacement weight (my_tosort_unicode with
+	// maxchar 0xFFFF), so distinct supplementary characters compare equal
+	// there, while the UCA matcher keeps their code-point identity
+	// (my_uca_charcmp). Pin the general_ci parity as the control for the
+	// unicode_ci identity repair below (issue #31175 review).
+	t.Run("general ci like folds supplementary characters to one weight", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"\U0001F600", "\U0001F600", "x\U0001F600y", "\U0001F600", "\U0001F600\U0001F600", "\U0001F600"}, nil),
+				NewFunctionTestInput(text, []string{"\U0001F601", "_", "%\U0001F601%", "__", "_", "\uFFFD"}, nil),
+			},
+			[]bool{true, true, true, false, false, true}, nil)
+	})
+
+	// MySQL's my_uca_charcmp falls back to code-point identity when a
+	// character has no collation table weight (wc > maxchar or a weightless
+	// page): distinct supplementary characters never match, identical ones
+	// still do (issue #31175 review).
+	t.Run("unicode ci supplementary characters keep identity constant pattern", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"\U0001F600", "\U0001F601", "x\U0001F600y", "x\U0001F601y"}, nil),
+				NewFunctionTestConstInput(ucaText, []string{"%\U0001F600%", "%\U0001F600%", "%\U0001F600%", "%\U0001F600%"}, nil),
+			},
+			[]bool{true, false, true, false}, nil)
+	})
+
+	t.Run("unicode ci supplementary characters keep identity", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"\U0001F600", "\U0001F600", "x\U0001F600y", "x\U0001F600y", "\U0001F600", "\U0001F600", "\U00010400"}, nil),
+				NewFunctionTestInput(ucaText, []string{"\U0001F601", "_", "%\U0001F600%", "%\U0001F601%", "\uFFFD", "\U0001F600", "\U00010428"}, nil),
+			},
+			[]bool{false, true, true, false, false, true, false}, nil)
+	})
+
+	t.Run("legacy byte identity stays case sensitive", func(t *testing.T) {
+		legacy := types.T_varchar.ToType()
+		legacy.Charset = types.CharsetLegacy
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(legacy, []string{"a", "ABC"}, nil),
+				NewFunctionTestInput(legacy, []string{"A", "abc"}, nil),
+			},
+			[]bool{false, false}, nil)
+	})
+
+	t.Run("binary domain stays case sensitive", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(binary, []string{"a", "ABC"}, nil),
+				NewFunctionTestInput(binary, []string{"A", "abc"}, nil),
+			},
+			[]bool{false, false}, nil)
+	})
+
+	t.Run("constant multi percent pattern folds subject", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"David!", "xDyVz", "Da!"}, nil),
+				NewFunctionTestConstInput(text, []string{"%D%v%", "%D%v%", "%D%v%"}, nil),
+			},
+			[]bool{true, true, false}, nil)
+	})
+
+	// U+03A3/U+03C3/U+03C2 share one fold orbit: folding upward reaches
+	// U+03A3 from all three, matching LOCATE/INSTR/POSITION and the
+	// utf8mb4_general_ci weight 0x03A3, while lowercasing keeps the final
+	// sigma distinct (issue #31175 review).
+	t.Run("sigma family folds row pattern", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ς", "σ", "Σ"}, nil),
+				NewFunctionTestInput(text, []string{"Σ", "ς", "σ"}, nil),
+			},
+			[]bool{true, true, true}, nil)
+	})
+
+	t.Run("sigma family folds constant pattern", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ς", "σx", "Σ", "xσ"}, nil),
+				NewFunctionTestConstInput(text, []string{"Σ%", "Σ%", "Σ%", "Σ%"}, nil),
+			},
+			[]bool{true, true, true, false}, nil)
+	})
+
+	t.Run("sigma family folds constant multi percent", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ς", "xςy"}, nil),
+				NewFunctionTestConstInput(text, []string{"%Σ%", "%Σ%"}, nil),
+			},
+			[]bool{true, true}, nil)
+	})
+
+	t.Run("sigma family folds escaped literal", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"σ_ς", "σxς"}, nil),
+				NewFunctionTestConstInput(text, []string{"Σ!_Σ", "Σ!_Σ"}, nil),
+				NewFunctionTestConstInput(text, []string{"!", "!"}, nil),
+			},
+			[]bool{true, false}, nil)
+	})
+
+	t.Run("binary pattern operand forces byte match", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"Ab", "ab"}, nil),
+				NewFunctionTestInput(binary, []string{"a%", "a%"}, nil),
+			},
+			[]bool{false, true}, nil)
+	})
+
+	// Issue #31175 review: utf8mb4_general_ci LIKE compares per-character
+	// collation weights, folding accented and dotless-i pairs (á=a, ı=I,
+	// ß=s) without multi-character expansions.
+	t.Run("general ci folds collation weights row pattern", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"á", "ı", "ß", "ß", "œ", "æ"}, nil),
+				NewFunctionTestInput(text, []string{"a", "I", "s", "ss", "o", "a"}, nil),
+			},
+			[]bool{true, true, true, false, false, false}, nil)
+	})
+
+	t.Run("general ci folds collation weights constant pattern", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ax", "Áx", "bx"}, nil),
+				NewFunctionTestConstInput(text, []string{"á%", "á%", "á%"}, nil),
+			},
+			[]bool{true, true, false}, nil)
+	})
+
+	// Issue #31175 review: utf8mb4_unicode_ci LIKE compares one pattern
+	// character against one value character by UCA 4.0.0 primary weights
+	// (my_wildcmp_uca), so á=a while ı keeps its own weight and æ is not ae.
+	// LIKE never spans an expansion across characters: ß matches neither s
+	// nor ss, unlike the whole-key comparison in = and FIND_IN_SET.
+	t.Run("unicode ci compares per character weights row pattern", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"á", "ı", "ß", "ß", "œ", "æ", "ss"}, nil),
+				NewFunctionTestInput(ucaText, []string{"a", "I", "ss", "s", "oe", "ae", "ß"}, nil),
+			},
+			[]bool{true, false, false, false, false, false, false}, nil)
+	})
+
+	t.Run("unicode ci compares per character weights constant pattern", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"ß", "ss", "xss", "s"}, nil),
+				NewFunctionTestConstInput(ucaText, []string{"ss", "ss", "ss", "ss"}, nil),
+			},
+			[]bool{false, true, false, false}, nil)
+	})
+
+	t.Run("unicode ci underscore consumes one character", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"ß", "ss"}, nil),
+				NewFunctionTestConstInput(ucaText, []string{"_", "_"}, nil),
+			},
+			[]bool{true, false}, nil)
+	})
+
+	t.Run("unicode ci percent never splits an expansion", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"xßy", "xssy", "xsy"}, nil),
+				NewFunctionTestConstInput(ucaText, []string{"%ss%", "%ss%", "%ss%"}, nil),
+			},
+			[]bool{false, true, false}, nil)
+	})
+
+	t.Run("unicode ci escape folds per character weights", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		run(t, newOpBuiltInRegexp().likeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"á_b", "aXb"}, nil),
+				NewFunctionTestConstInput(ucaText, []string{"A!_b", "A!_b"}, nil),
+				NewFunctionTestConstInput(ucaText, []string{"!", "!"}, nil),
+			},
+			[]bool{true, false}, nil)
+	})
+
+	// Issue #31175 review: ILIKE keeps its complete Unicode simple-fold
+	// equivalence on every domain. The Kelvin and Angstrom signs fold with
+	// their letters through the constant, varying-pattern and ESCAPE paths,
+	// and the sigma orbit stays together.
+	t.Run("ilike folds kelvin angstrom sigma row pattern", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().iLikeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"K", "K", "Å", "Å", "ς", "Σ", "ı"}, nil),
+				NewFunctionTestInput(text, []string{"k", "K", "å", "Å", "Σ", "ς", "I"}, nil),
+			},
+			[]bool{true, true, true, true, true, true, false}, nil)
+	})
+
+	t.Run("ilike folds kelvin constant single character", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().iLikeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"K", "K", "x"}, nil),
+				NewFunctionTestConstInput(text, []string{"k", "k", "k"}, nil),
+			},
+			[]bool{true, true, false}, nil)
+	})
+
+	t.Run("ilike folds angstrom constant prefix", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().iLikeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"Ång", "ång", "x"}, nil),
+				NewFunctionTestConstInput(text, []string{"Å%", "Å%", "Å%"}, nil),
+			},
+			[]bool{true, true, false}, nil)
+	})
+
+	t.Run("ilike folds kelvin escaped literal", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().iLikeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"K_k", "kXk"}, nil),
+				NewFunctionTestConstInput(text, []string{"K!_K", "K!_K"}, nil),
+				NewFunctionTestConstInput(text, []string{"!", "!"}, nil),
+			},
+			[]bool{true, false}, nil)
+	})
+
+	t.Run("ilike folds sigma constant pattern", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().iLikeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ς", "σ", "x"}, nil),
+				NewFunctionTestConstInput(text, []string{"Σ", "Σ", "Σ"}, nil),
+			},
+			[]bool{true, true, false}, nil)
+	})
+
+	t.Run("ilike still folds binary domains", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().iLikeFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(binary, []string{"ABC"}, nil),
+				NewFunctionTestInput(binary, []string{"a_c"}, nil),
+			},
+			[]bool{true}, nil)
+	})
+}
+
+// Issue #31175: REGEXP/RLIKE and REGEXP_LIKE take their default case
+// sensitivity from the resolved text collation of the subject operand. An
+// explicit match_type case flag and a binary match domain still override
+// that default.
+func Test_BuiltIn_RegexpHonorsCollationCaseFolding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	text := types.T_varchar.ToType()
+	binary := types.T_varbinary.ToType()
+
+	run := func(t *testing.T, fn executeLogicOfOverload, inputs []FunctionTestInput, want []bool, wantNulls []bool) {
+		t.Helper()
+		tcc := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_bool.ToType(), false, want, wantNulls), fn)
+		succeed, errInfo := tcc.RunAndFree()
+		require.True(t, succeed, errInfo)
+	}
+
+	t.Run("reg match uniform path folds", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegMatch,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"abc", "abc", "ABC"}, nil),
+				NewFunctionTestInput(text, []string{"ABC", "[A-Z]+", "^a"}, nil),
+			},
+			[]bool{true, true, true}, nil)
+	})
+
+	t.Run("reg match row path folds and preserves null", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegMatch,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"abc", ""}, []bool{false, true}),
+				NewFunctionTestInput(text, []string{"ABC", "ABC"}, nil),
+			},
+			[]bool{true, false}, []bool{false, true})
+	})
+
+	t.Run("reg match binary domain stays case sensitive", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegMatch,
+			[]FunctionTestInput{
+				NewFunctionTestInput(binary, []string{"abc"}, nil),
+				NewFunctionTestInput(binary, []string{"ABC"}, nil),
+			},
+			[]bool{false}, nil)
+	})
+
+	// The sigma fold orbit (U+03A3/U+03C3/U+03C2) collapses under the
+	// engine's case-insensitive flag, matching MySQL's shared 0x03A3 weight.
+	t.Run("reg match sigma family folds", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegMatch,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ς", "σ"}, nil),
+				NewFunctionTestInput(text, []string{"Σ", "ς"}, nil),
+			},
+			[]bool{true, true}, nil)
+	})
+
+	t.Run("not reg match folds", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInNotRegMatch,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"abc", "zzz"}, nil),
+				NewFunctionTestInput(text, []string{"ABC", "ABC"}, nil),
+			},
+			[]bool{false, true}, nil)
+	})
+
+	t.Run("regexp like two args folds", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"abc"}, nil),
+				NewFunctionTestInput(text, []string{"ABC"}, nil),
+			},
+			[]bool{true}, nil)
+	})
+
+	t.Run("regexp like explicit c overrides collation", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"abc"}, nil),
+				NewFunctionTestInput(text, []string{"ABC"}, nil),
+				NewFunctionTestConstInput(text, []string{"c"}, nil),
+			},
+			[]bool{false}, nil)
+	})
+
+	t.Run("regexp like explicit i still folds binary domain", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(binary, []string{"abc"}, nil),
+				NewFunctionTestInput(binary, []string{"ABC"}, nil),
+				NewFunctionTestConstInput(binary, []string{"i"}, nil),
+			},
+			[]bool{true}, nil)
+	})
+
+	t.Run("regexp like non case flags keep collation default", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ABC"}, nil),
+				NewFunctionTestInput(text, []string{"^abc"}, nil),
+				NewFunctionTestConstInput(text, []string{"m"}, nil),
+			},
+			[]bool{true}, nil)
+	})
+
+	t.Run("regexp like multiline fold follows icu start ladder", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"a\r\nxb", "ABC"}, nil),
+				NewFunctionTestInput(text, []string{"^\nx", "^abc"}, nil),
+				NewFunctionTestConstInput(text, []string{"m", "m"}, nil),
+			},
+			[]bool{false, true}, nil)
+		// An explicit i compiles identically to the ci-collation default
+		// under m: the folded initial run leaves the CRLF-interior
+		// exemption ladder in both modes (issues #30210 and #31175).
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"a\r\nxb"}, nil),
+				NewFunctionTestInput(text, []string{"^\nx"}, nil),
+				NewFunctionTestConstInput(text, []string{"im"}, nil),
+			},
+			[]bool{false}, nil)
+	})
+
+	t.Run("regexp like null match type stays null", func(t *testing.T) {
+		run(t, newOpBuiltInRegexp().builtInRegexpLike,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"abc"}, nil),
+				NewFunctionTestInput(text, []string{"ABC"}, nil),
+				NewFunctionTestConstInput(text, []string{""}, []bool{true}),
+			},
+			[]bool{false}, []bool{true})
+	})
+}
+
+// Test_BuiltIn_UnicodeLikeResourceLimit pins the function-layer conversion
+// of the collation package's typed anchor-search work-bound error (issue
+// #31175 design, invariant 7): pkg/common/collation is stdlib-only and
+// reports *collation.LikeResourceLimitError, and unicodeLikeMatchFn
+// converts it to a moerr internal error whose message keeps the stable
+// SQL-visible prefix "LIKE pattern resource limit exceeded: ". The
+// fragmented pattern forces the over-mask-budget anchor fallback with a
+// one-character anchor against an all-'a' subject, crossing the
+// 4 x words x subjectChars total-work bound.
+func Test_BuiltIn_UnicodeLikeResourceLimit(t *testing.T) {
+	alphabet := "abcdefghijklmnopqrstuvwxyz0123456789" +
+		"αβγδεζηθικλμνξοπρστυφχψω" +
+		"абвгдежзийклмнопрстуфхцчшщъыьэюя"
+	var sb strings.Builder
+	sb.WriteByte('%')
+	sb.WriteString(strings.Repeat("a_", 15000))
+	for _, r := range alphabet {
+		sb.WriteRune(r)
+		sb.WriteByte('_')
+	}
+	sb.WriteByte('%')
+	matchFn := unicodeLikeMatchFn(context.Background(), false, '\\', true)
+	_, err := matchFn([]byte(strings.Repeat("a", 60000)), []byte(sb.String()))
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal),
+		"the resource-limit error must surface as a moerr internal error, got %v", err)
+	require.Contains(t, err.Error(),
+		"LIKE pattern resource limit exceeded: total anchor-search work bound")
+	// Below the bound the same matcher answers exactly: the pattern's exact
+	// occurrence matches and an anchor-free subject does not.
+	var middle strings.Builder
+	middle.WriteString(strings.Repeat("aX", 15000))
+	for _, r := range alphabet {
+		middle.WriteRune(r)
+		middle.WriteByte('X')
+	}
+	matched, err := matchFn([]byte("q"+middle.String()+"z"), []byte(sb.String()))
+	require.NoError(t, err)
+	require.True(t, matched)
+	matched, err = matchFn([]byte(strings.Repeat("b", 60000)), []byte(sb.String()))
+	require.NoError(t, err)
+	require.False(t, matched)
+}
+
+// Test_BuiltIn_LikeAllocationMeasurement records the representative
+// per-row allocations of the ci LIKE paths on constant patterns (the
+// independent r4 design review's P3 action): constant-pattern preparation
+// is cached per batch, and each row allocates O(subject length) storage —
+// the general_ci path's folded subject buffer and the unicode_ci path's
+// per-character subject weight slices. Informational: the figures back the
+// hot-path-cost contract in the design and carry no fixed byte bound.
+func Test_BuiltIn_LikeAllocationMeasurement(t *testing.T) {
+	subject := []byte("Die Strassenfestlichkeit")
+	asciiAllocs := testing.AllocsPerRun(200, func() {
+		if got := generalCILikeFold(subject); len(got) != len(subject) {
+			t.Fatalf("ASCII general_ci fold length drifted: %d", len(got))
+		}
+	})
+	t.Logf("general_ci LIKE subject fold: %.1f allocations/row for a %d-byte subject", asciiAllocs, len(subject))
+	unicodeSubject := []byte("Die Straßenfeste")
+	matchFn := unicodeLikeMatchFn(context.Background(), true, '\\', true)
+	if _, err := matchFn(unicodeSubject, []byte("%straßen%fest_")); err != nil {
+		t.Fatal(err)
+	}
+	unicodeAllocs := testing.AllocsPerRun(200, func() {
+		matched, err := matchFn(unicodeSubject, []byte("%straßen%fest_"))
+		if err != nil || !matched {
+			t.Fatalf("constant-pattern unicode_ci match must succeed: %v %v", matched, err)
+		}
+	})
+	t.Logf("unicode_ci LIKE constant-pattern match: %.1f allocations/row for a %d-byte subject", unicodeAllocs, len(unicodeSubject))
 }

@@ -39,8 +39,8 @@ func TestBuildSecondaryIndexDefsDict(t *testing.T) {
 	for _, q := range []string{"int8", "UINT8"} {
 		indexDefs, tableDefs, err := buildQuantized(t, types.T_array_float32, q)
 		require.NoError(t, err, q)
-		require.Len(t, indexDefs, 3, q)
-		require.Len(t, tableDefs, 3, q)
+		require.Len(t, indexDefs, 4, q)
+		require.Len(t, tableDefs, 4, q)
 		dict := tableDefs[2]
 		require.Equal(t, catalog.Hnsw_TblType_Dict, dict.TableType)
 		require.Equal(t, catalog.Hnsw_TblType_Dict, indexDefs[2].IndexAlgoTableType)
@@ -55,8 +55,9 @@ func TestBuildSecondaryIndexDefsDict(t *testing.T) {
 	for _, q := range []string{"", "float32", "float16", "bf16"} {
 		indexDefs, tableDefs, err := buildQuantized(t, types.T_array_float32, q)
 		require.NoError(t, err, q)
-		require.Len(t, indexDefs, 2, q)
-		require.Len(t, tableDefs, 2, q)
+		require.Len(t, indexDefs, 3, q)
+		require.Len(t, tableDefs, 3, q)
+		require.Equal(t, catalog.IndexIgnored_TblType, tableDefs[2].TableType, q)
 	}
 }
 

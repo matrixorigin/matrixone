@@ -160,7 +160,7 @@ func testLoadSetRejectedWithoutMutation(t *testing.T, assignments string, code u
 				if legacy {
 					built, err = buildLoad(load, ctx, false)
 				} else {
-					built, err = BuildPlan(ctx, load, false)
+					built, err = BuildPlan(ctx, load, false, nil)
 				}
 				require.Error(t, err, "pass %d", pass)
 				require.Nil(t, built)

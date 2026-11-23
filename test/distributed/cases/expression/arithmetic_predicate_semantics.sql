@@ -64,6 +64,8 @@ select count(*) as healthy from persisted_overflow;
 -- Fold support must not activate invalid quotient or decimal bounds.
 -- @session:id=1{
 use arithmetic_predicate_semantics;
+-- Restore on this session's CN, where optimizer_hints affects planning.
+set @saved_nested_hints=@@optimizer_hints;
 set optimizer_hints='blockFilter=1';
 create table reciprocal(v double);
 insert into reciprocal values(-1),(.1),(1);
@@ -93,6 +95,7 @@ select w from correlated where round(v+w,-1)=100;
 explain (analyze true, check '["outputRows=1", "Block Filter Cond"]') select w from correlated where round(v+w,-1)=100;
 set optimizer_hints='blockFilter=2';
 select w from correlated where round(v+w,-1)=100;
+set optimizer_hints=@saved_nested_hints;
 -- @session}
 set optimizer_hints=@saved_transpose_hints;
 drop database arithmetic_predicate_semantics;

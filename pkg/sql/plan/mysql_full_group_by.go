@@ -41,6 +41,22 @@ func (builder *QueryBuilder) mysqlFullGroupByAllowsColRef(ctx *BindContext, expr
 	return found && allowed
 }
 
+// displayWrappedCorrColRef extracts the nested correlated reference behind an
+// ENUM/SET index-to-value wrapper. Outer ENUM/SET keys bind as
+// cast_index_to_value(<members>, <reference>) (#31568), so their correlation
+// is visible only through the wrapper's final argument. Local keys wrap a
+// plain column reference and return no correlation here.
+func displayWrappedCorrColRef(expr *Expr) *pbplan.CorrColRef {
+	if !isEnumOrSetDisplayValueExpr(expr) {
+		return nil
+	}
+	args := expr.GetF().GetArgs()
+	if len(args) == 0 || args[len(args)-1] == nil {
+		return nil
+	}
+	return args[len(args)-1].GetCorr()
+}
+
 // mysqlFullGroupByAllowsExprColumns handles wrappers introduced while binding
 // a column, notably ENUM/SET index-to-value conversion. Every source column in
 // the wrapper must independently satisfy an ONLY_FULL_GROUP_BY exception.
@@ -156,12 +172,6 @@ func isMySQLFullGroupBySingleValueExpr(expr *Expr) bool {
 	case *pbplan.Expr_Lit, *pbplan.Expr_P, *pbplan.Expr_V, *pbplan.Expr_Vec, *pbplan.Expr_T:
 		return true
 	case *pbplan.Expr_F:
-		id, _ := function.DecodeOverloadID(e.F.Func.Obj)
-		if id == function.INTERNAL_JSON_COMPARISON_PARAM || id == function.INTERNAL_JSON_ORDERING_PARAM {
-			// Runtime numeric metadata can make distinct JSON values match one
-			// parameter. A stable payload does not prove a singleton JSON value.
-			return false
-		}
 		overload, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
 		if !ok || overload.IsVolatile() {
 			return false

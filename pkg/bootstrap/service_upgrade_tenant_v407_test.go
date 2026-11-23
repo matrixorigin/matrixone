@@ -102,7 +102,7 @@ func TestManualFinalReadyAccountDoesNotReplay(t *testing.T) {
 						return executor.Result{}, nil
 					}
 				}, &testTxnOperator{})
-				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
+				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, (*service).initUpgrade)
 				t.Cleanup(s.stopper.Stop)
 				err := s.UpgradeOneTenant(t.Context(), 7)
 				if mismatch {

@@ -246,7 +246,7 @@ func TestShowCreateCreatePlannerExternalTableMasksServiceArgumentCredentials(t *
 		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		statements, err := dmysql.Parse(mock.CurrentContext().GetContext(), ddl, 1)
 		require.NoError(t, err)
-		ddlPlan, err := BuildPlan(mock.CurrentContext(), statements[0], false)
+		ddlPlan, err := BuildPlan(mock.CurrentContext(), statements[0], false, nil)
 		require.NoError(t, err)
 		def = ddlPlan.Plan.(*plan.Plan_Ddl).Ddl.Definition.(*plan.DataDefinition_CreateTable).CreateTable.TableDef
 		// Production storage: the planner marshals the extern options into the

@@ -84,7 +84,7 @@ func prefixPostingRepresentations(t *testing.T, parser string) []*Segment {
 	require.NoError(t, err)
 	data, err := mmapReadOnly(f)
 	require.NoError(t, err)
-	mapped := &Segment{Id: "prefix-mmap", mmapData: data, mmapPath: f.Name()}
+	mapped := &Segment{Id: "prefix-mmap", mmapData: data}
 	t.Cleanup(mapped.Free)
 	require.NoError(t, mapped.decodeSegment(data))
 	require.NoError(t, f.Close())

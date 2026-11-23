@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -182,17 +183,21 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 			if err := h.processRow(row, bat, param, proc); err != nil {
 				for colIdx, vec := range bat.Vecs {
 					if vec != nil {
-						vec.RollbackAppend(checkpoints[colIdx], 1)
+						err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoints[colIdx], 1))
 					}
 				}
 				return err
 			}
 			if h.parquetBatchAtByteBudget(bat, rowsRead+1, param) {
 				if rowsRead > 0 {
+					var err error
 					for colIdx, vec := range bat.Vecs {
 						if vec != nil {
-							vec.RollbackAppend(checkpoints[colIdx], 1)
+							err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoints[colIdx], 1))
 						}
+					}
+					if err != nil {
+						return err
 					}
 					batchBoundary = true
 					break
@@ -269,12 +274,13 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 	eof := false
 	batchBoundary := false
 
-	rollbackRows := func(checkpoints []vector.AppendCheckpoint, attemptedRows int) {
+	rollbackRows := func(checkpoints []vector.AppendCheckpoint, attemptedRows int) (err error) {
 		for colIdx, vec := range bat.Vecs {
 			if vec != nil {
-				vec.RollbackAppend(checkpoints[colIdx], attemptedRows)
+				err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoints[colIdx], attemptedRows))
 			}
 		}
+		return err
 	}
 
 	for length < batchLimit && !h.parquetBatchAtByteBudget(bat, length, param) {
@@ -344,17 +350,14 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 		batchBytesBefore := h.physicalBatchSize(bat)
 		for _, row := range rowBuf[:n] {
 			if err := context.Cause(proc.Ctx); err != nil {
-				rollbackRows(checkpoints, n)
-				return err
+				return vector.JoinAppendRollbackError(err, rollbackRows(checkpoints, n))
 			}
 			if err := h.processNestedRow(row, bat, param, proc); err != nil {
-				rollbackRows(checkpoints, n)
-				return err
+				return vector.JoinAppendRollbackError(err, rollbackRows(checkpoints, n))
 			}
 		}
 		if _, err := h.mapCurrentPageRows(bat, param, mappingProc, int64(n)); err != nil {
-			rollbackRows(checkpoints, n)
-			return h.closePagesOnError(param.Ctx, err)
+			return h.closePagesOnError(param.Ctx, vector.JoinAppendRollbackError(err, rollbackRows(checkpoints, n)))
 		}
 
 		accepted := n
@@ -366,26 +369,25 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 				accepted = 0
 			}
 			if accepted < n {
-				rollbackRows(checkpoints, n)
+				if rollbackErr := rollbackRows(checkpoints, n); rollbackErr != nil {
+					return rollbackErr
+				}
 				warnings.Reset()
 				if accepted > 0 {
 					for _, row := range rowBuf[:accepted] {
 						if err := h.processNestedRow(row, bat, param, proc); err != nil {
-							rollbackRows(checkpoints, accepted)
-							return err
+							return vector.JoinAppendRollbackError(err, rollbackRows(checkpoints, accepted))
 						}
 					}
 					if _, err := h.mapCurrentPageRows(bat, param, mappingProc, int64(accepted)); err != nil {
-						rollbackRows(checkpoints, accepted)
-						return h.closePagesOnError(param.Ctx, err)
+						return h.closePagesOnError(param.Ctx, vector.JoinAppendRollbackError(err, rollbackRows(checkpoints, accepted)))
 					}
 				}
 				// The row reader has already decoded n rows. Rewind the unread
 				// suffix so the next batch starts at the same logical row as the
 				// scalar page offsets.
 				if err := h.rowReader.SeekToRow(rowStart + int64(length+accepted)); err != nil {
-					rollbackRows(checkpoints, accepted)
-					return moerr.ConvertGoError(param.Ctx, err)
+					return vector.JoinAppendRollbackError(moerr.ConvertGoError(param.Ctx, err), rollbackRows(checkpoints, accepted))
 				}
 				batchBoundary = true
 			}
@@ -493,14 +495,14 @@ func (h *ParquetHandler) processLeafValue(
 	}
 
 	if !found {
-		return appendNull(vec, def, proc)
+		return appendNull(vec, def, proc, h.outputPool(proc))
 	}
 	isNull, err := validateParquetLeafValue(proc.Ctx, col, value)
 	if err != nil {
 		return err
 	}
 	if isNull {
-		return appendNull(vec, def, proc)
+		return appendNull(vec, def, proc, h.outputPool(proc))
 	}
 
 	if !canAppendParquetRowLeafDirectly(types.T(def.Typ.Id), col.Type()) {
@@ -509,7 +511,7 @@ func (h *ParquetHandler) processLeafValue(
 		}
 		return mapParquetRowLeafWithPageMapper(value, col, mapper[0], vec, proc)
 	}
-	return appendLeafValue(value, col, vec, def, proc)
+	return appendLeafValue(value, col, vec, def, proc, h.outputPool(proc))
 }
 
 func canAppendParquetRowLeafDirectly(targetType types.T, sourceType parquet.Type) bool {
@@ -590,11 +592,11 @@ func validateParquetLeafValue(ctx context.Context, col *parquet.Column, value pa
 }
 
 // appendNull appends a NULL value to vector
-func appendNull(vec *vector.Vector, def *plan.ColDef, proc *process.Process) error {
+func appendNull(vec *vector.Vector, def *plan.ColDef, proc *process.Process, pool *mpool.MPool) error {
 	if def.NotNull {
 		return moerr.NewConstraintViolation(proc.Ctx, "NULL value not allowed")
 	}
-	return vector.AppendAny(vec, nil, true, proc.Mp())
+	return vector.AppendAny(vec, nil, true, pool)
 }
 
 // appendLeafValue appends a leaf value to vector
@@ -604,6 +606,7 @@ func appendLeafValue(
 	vec *vector.Vector,
 	def *plan.ColDef,
 	proc *process.Process,
+	pool *mpool.MPool,
 ) error {
 	targetType := types.T(def.Typ.Id)
 	st := col.Type()
@@ -614,7 +617,7 @@ func appendLeafValue(
 		if err != nil {
 			return err
 		}
-		return vector.AppendFixed(vec, value, false, proc.Mp())
+		return vector.AppendFixed(vec, value, false, pool)
 	case types.T_int8:
 		value, err := parquetRowValueToInt64(proc.Ctx, st, v)
 		if err != nil {
@@ -623,7 +626,7 @@ func appendLeafValue(
 		if value < math.MinInt8 || value > math.MaxInt8 {
 			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows TINYINT", value)
 		}
-		return vector.AppendFixed(vec, int8(value), false, proc.Mp())
+		return vector.AppendFixed(vec, int8(value), false, pool)
 	case types.T_int16:
 		value, err := parquetRowValueToInt64(proc.Ctx, st, v)
 		if err != nil {
@@ -632,7 +635,7 @@ func appendLeafValue(
 		if value < math.MinInt16 || value > math.MaxInt16 {
 			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows SMALLINT", value)
 		}
-		return vector.AppendFixed(vec, int16(value), false, proc.Mp())
+		return vector.AppendFixed(vec, int16(value), false, pool)
 	case types.T_int32:
 		value, err := parquetRowValueToInt64(proc.Ctx, st, v)
 		if err != nil {
@@ -641,13 +644,13 @@ func appendLeafValue(
 		if value < math.MinInt32 || value > math.MaxInt32 {
 			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows INT", value)
 		}
-		return vector.AppendFixed(vec, int32(value), false, proc.Mp())
+		return vector.AppendFixed(vec, int32(value), false, pool)
 	case types.T_int64:
 		value, err := parquetRowValueToInt64(proc.Ctx, st, v)
 		if err != nil {
 			return err
 		}
-		return vector.AppendFixed(vec, value, false, proc.Mp())
+		return vector.AppendFixed(vec, value, false, pool)
 	case types.T_uint8:
 		value, err := parquetRowValueToUint64(proc.Ctx, st, v)
 		if err != nil {
@@ -656,7 +659,7 @@ func appendLeafValue(
 		if value > math.MaxUint8 {
 			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows TINYINT UNSIGNED", value)
 		}
-		return vector.AppendFixed(vec, uint8(value), false, proc.Mp())
+		return vector.AppendFixed(vec, uint8(value), false, pool)
 	case types.T_uint16:
 		value, err := parquetRowValueToUint64(proc.Ctx, st, v)
 		if err != nil {
@@ -665,7 +668,7 @@ func appendLeafValue(
 		if value > math.MaxUint16 {
 			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows SMALLINT UNSIGNED", value)
 		}
-		return vector.AppendFixed(vec, uint16(value), false, proc.Mp())
+		return vector.AppendFixed(vec, uint16(value), false, pool)
 	case types.T_uint32:
 		value, err := parquetRowValueToUint64(proc.Ctx, st, v)
 		if err != nil {
@@ -674,28 +677,28 @@ func appendLeafValue(
 		if value > math.MaxUint32 {
 			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows INT UNSIGNED", value)
 		}
-		return vector.AppendFixed(vec, uint32(value), false, proc.Mp())
+		return vector.AppendFixed(vec, uint32(value), false, pool)
 	case types.T_uint64:
 		value, err := parquetRowValueToUint64(proc.Ctx, st, v)
 		if err != nil {
 			return err
 		}
-		return vector.AppendFixed(vec, value, false, proc.Mp())
+		return vector.AppendFixed(vec, value, false, pool)
 	case types.T_float32:
 		value, err := parquetValueToFloat32(proc.Ctx, st, v)
 		if err != nil {
 			return err
 		}
-		return vector.AppendFixed(vec, value, false, proc.Mp())
+		return vector.AppendFixed(vec, value, false, pool)
 	case types.T_float64:
 		value, err := parquetValueToFloat64(proc.Ctx, st, v)
 		if err != nil {
 			return err
 		}
-		return vector.AppendFixed(vec, value, false, proc.Mp())
+		return vector.AppendFixed(vec, value, false, pool)
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob,
 		types.T_binary, types.T_varbinary:
-		return appendParquetVarlenValue(proc.Ctx, vec, v.ByteArray(), false, proc, types.MustTypeFromPlan(def.Typ))
+		return appendParquetVarlenValue(proc.Ctx, vec, v.ByteArray(), false, pool, types.MustTypeFromPlan(def.Typ))
 	default:
 		return moerr.NewNYIf(proc.Ctx, "row mode convert to %s", targetType.String())
 	}
@@ -733,7 +736,7 @@ func (h *ParquetHandler) processNestedValue(
 		return mapper.listValuesMapper(mapper, colValues, 1, proc, vec)
 	}
 	if isNestedColumnNull(colValues, col) {
-		return appendNull(vec, def, proc)
+		return appendNull(vec, def, proc, h.outputPool(proc))
 	}
 
 	nested, err := reconstructNestedValue(proc.Ctx, col, colValues)
@@ -742,7 +745,7 @@ func (h *ParquetHandler) processNestedValue(
 			"failed to reconstruct nested column %s: %v", col.Name(), err)
 	}
 
-	return writeNestedToVector(nested, types.MustTypeFromPlan(def.Typ), vec, proc)
+	return writeNestedToVector(nested, types.MustTypeFromPlan(def.Typ), vec, proc, h.outputPool(proc))
 }
 
 func validateParquetNestedValues(ctx context.Context, col *parquet.Column, values []parquet.Value) error {
@@ -1422,7 +1425,7 @@ func parquetValueToGo(v parquet.Value) any {
 }
 
 // writeNestedToVector writes nested structure to vector
-func writeNestedToVector(nested any, targetType types.Type, vec *vector.Vector, proc *process.Process) error {
+func writeNestedToVector(nested any, targetType types.Type, vec *vector.Vector, proc *process.Process, pool *mpool.MPool) error {
 	bj, err := bytejson.CreateByteJSON(nested)
 	if err != nil {
 		return moerr.NewInternalErrorf(proc.Ctx, "failed to create JSON: %v", err)
@@ -1434,10 +1437,10 @@ func writeNestedToVector(nested any, targetType types.Type, vec *vector.Vector, 
 		if err != nil {
 			return moerr.NewInternalErrorf(proc.Ctx, "failed to encode JSON: %v", err)
 		}
-		return vector.AppendBytes(vec, jsonBytes, false, proc.Mp())
+		return vector.AppendBytes(vec, jsonBytes, false, pool)
 	case types.T_text, types.T_varchar, types.T_char:
 		jsonStr := bj.String()
-		return appendParquetVarlenValue(proc.Ctx, vec, []byte(jsonStr), false, proc, targetType)
+		return appendParquetVarlenValue(proc.Ctx, vec, []byte(jsonStr), false, pool, targetType)
 	default:
 		return moerr.NewInternalErrorf(proc.Ctx, "unsupported target type: %s", targetType.Oid.String())
 	}

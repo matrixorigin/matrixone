@@ -24,10 +24,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	fulltext2runtime "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/maintenance"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 )
@@ -126,7 +128,7 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 	}
 
 	// Fresh CREATE has no prior tail; build the base + register CDC.
-	return buildAndRegisterCDC(ctx, storeDef, metaDef, origTable, db, false)
+	return buildAndRegisterCDC(ctx, storeDef, metaDef, indexDefs[catalog.IndexIgnored_TblType], origTable, db, false)
 }
 
 // buildAndRegisterCDC (re)builds the tag=0 base from source and registers the
@@ -135,7 +137,7 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 // via RunFulltext2. The CDC task is dropped+recreated so a REINDEX re-entry does
 // not replay history over the fresh base. On REBUILD (clearTail) the prior tag=1
 // tail is discarded first — the fresh base already reflects every committed row.
-func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *plan.IndexDef, origTable *plan.TableDef, db string, clearTail bool) error {
+func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef, ignoredDef *plan.IndexDef, origTable *plan.TableDef, db string, clearTail bool) error {
 	if clearTail {
 		cfg := fulltext2.TableConfig{DbName: db, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
 		// REBUILD: clear the tail AND the prior tag=0 base(s) here. The create TVF also
@@ -150,10 +152,25 @@ func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *pl
 			}
 		}
 		cache.Cache.RemoveAllGenerations(storeDef.IndexTableName, "ddl")
+		// the rebuild records the ignored rows again
+		if ignoredDef != nil {
+			if err := ctx.RunSql("DELETE FROM " + sqlquote.QualifiedIdent(db, ignoredDef.IndexTableName) + " WHERE TRUE"); err != nil {
+				return err
+			}
+		}
 	}
 	// buildFromSource clears the prior tag=0 bases (idempotent) and rebuilds them.
-	if err := buildFromSource(ctx, storeDef, metaDef, origTable, db); err != nil {
+	if err := buildFromSource(ctx, storeDef, metaDef, origTable, db, ignoredDef); err != nil {
 		return err
+	}
+	if ignoredDef != nil {
+		rows, err := countTextRows(ctx, storeDef, origTable, db)
+		if err != nil {
+			return err
+		}
+		if err = compileplugin.CheckIgnoredRows(ctx, ignoredDef, db, rows); err != nil {
+			return err
+		}
 	}
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexFullText2Algo.ToString())
 	if err := ctx.DropIndexCdcTask(origTable, db, origTable.Name, storeDef.IndexName); err != nil {
@@ -163,6 +180,28 @@ func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *pl
 		return err
 	}
 	return registerFulltext2Idxcron(ctx, storeDef, db, origTable)
+}
+
+// countTextRows returns the number of source rows with an indexed column that is not NULL.
+func countTextRows(ctx compileplugin.CompileContext, storeDef *plan.IndexDef, origTable *plan.TableDef, db string) (int64, error) {
+	conds := make([]string, 0, len(storeDef.Parts))
+	for _, p := range storeDef.Parts {
+		conds = append(conds, sqlquote.Ident(p)+" IS NOT NULL")
+	}
+	rs, err := ctx.RunSqlWithResult(fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s",
+		sqlquote.QualifiedIdent(db, origTable.Name), strings.Join(conds, " OR ")))
+	if err != nil {
+		return 0, err
+	}
+	defer rs.Close()
+	var n int64
+	rs.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 {
+			n = vector.GetFixedAtNoTypeCheck[int64](cols[0], 0)
+		}
+		return false
+	})
+	return n, nil
 }
 
 // DefaultMaxIndexCapacity caps each tag=0 sub-index's doc count when the
@@ -180,7 +219,7 @@ const DefaultMaxPostingsCapacity = int64(8_000_000)
 // json → values, ngram/gojieba parser), Add's the tokens to a builder, and at
 // end() splits into capacity-bounded tag=0 bases and persists the chunk rows. No
 // segment assembly happens in this (compile) layer.
-func buildFromSource(ctx compileplugin.CompileContext, storeDef, metaDef *plan.IndexDef, origTable *plan.TableDef, db string) error {
+func buildFromSource(ctx compileplugin.CompileContext, storeDef, metaDef *plan.IndexDef, origTable *plan.TableDef, db string, ignoredDef *plan.IndexDef) error {
 	if len(storeDef.Parts) == 0 {
 		return moerr.NewInternalErrorNoCtx("fulltext2 index has no indexed column")
 	}
@@ -192,11 +231,11 @@ func buildFromSource(ctx compileplugin.CompileContext, storeDef, metaDef *plan.I
 	if err != nil {
 		return err
 	}
-	sql, err := genFulltext2BuildFromSourceSQL(origTable, storeDef, metaDef, db, capacity, postingCap, resolveFulltext2ThreadsBuild(ctx))
+	sql, err := genFulltext2BuildFromSourceSQL(origTable, storeDef, metaDef, db, capacity, postingCap, resolveFulltext2ThreadsBuild(ctx), ignoredDef)
 	if err != nil {
 		return err
 	}
-	return ctx.RunSql(sql)
+	return maintenance.RunSQL(ctx, sql, "fulltext2_create", storeDef.IndexName)
 }
 
 // resolveFulltext2ThreadsBuild reads the fulltext2_threads_build session variable. It only
@@ -272,7 +311,7 @@ func resolveFulltext2PositionFree(algoParams string) (bool, error) {
 }
 
 // genFulltext2BuildFromSourceSQL emits the CROSS APPLY fulltext2_create build SQL.
-func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef *plan.IndexDef, db string, capacity, postingCap, threadsBuild int64) (string, error) {
+func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef *plan.IndexDef, db string, capacity, postingCap, threadsBuild int64, ignoredDef *plan.IndexDef) (string, error) {
 	const srcAlias = "src"
 	positionFree, err := resolveFulltext2PositionFree(storeDef.IndexAlgoParams)
 	if err != nil {
@@ -293,6 +332,12 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 		PositionFree:    positionFree,
 		JSONNoKeys:      jsonNoKeys,
 		FromSource:      true,
+	}
+	if ignoredDef != nil {
+		cfg.IgnoredTable = ignoredDef.IndexTableName
+		if cfg.MaxBadRecords, err = catalog.IndexParamMaxBadRecords(ignoredDef.IndexAlgoParams); err != nil {
+			return "", err
+		}
 	}
 	cols := make([]string, 0, len(storeDef.Parts))
 	for _, p := range storeDef.Parts {
@@ -365,7 +410,7 @@ func (Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[strin
 	if merge {
 		return handleMergeCompact(ctx, storeDef, metaDef)
 	}
-	return buildAndRegisterCDC(ctx, storeDef, metaDef, ctx.OriginalTableDef(), ctx.QryDatabase(), true /* clear tail */)
+	return buildAndRegisterCDC(ctx, storeDef, metaDef, indexDefs[catalog.IndexIgnored_TblType], ctx.OriginalTableDef(), ctx.QryDatabase(), true /* clear tail */)
 }
 
 // handleMergeCompact folds the tag=1 CdcTail into the tag=0 base and drops dead
@@ -392,7 +437,7 @@ func handleMergeCompact(ctx compileplugin.CompileContext, storeDef, metaDef *pla
 		sqlquote.String(strconv.FormatInt(capacity, 10)),
 		sqlquote.String(strconv.FormatBool(positionFree)),
 		sqlquote.String(strconv.FormatInt(postingCap, 10)))
-	return ctx.RunSql(sql)
+	return maintenance.RunSQL(ctx, sql, "fulltext2_compact", storeDef.IndexName)
 }
 
 // RestoreInitSQL — the clone copies the storage+metadata rows; register CDC from
@@ -434,7 +479,8 @@ func (Hooks) AlterCopyInitSQL(ctx compileplugin.CompileContext, indexDefs map[st
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
 	pf, hasPF := alter.Params[catalog.IndexAlgoParamPositionFree]
 	pc, hasPC := alter.Params[catalog.IndexAlgoParamMaxPostingsCapacity]
-	if !hasPF && !hasPC {
+	mb, hasMB := alter.Params[catalog.IndexAlgoParamMaxBadRecords]
+	if !hasPF && !hasPC && !hasMB {
 		return old, nil // nothing fulltext2 honors on a reindex
 	}
 	merged := make(map[string]string, len(old)+1)
@@ -484,6 +530,9 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 	// NOT re-honored on a reindex — a pre-existing fulltext2 limitation, unchanged.)
 	if hasPC {
 		merged[catalog.IndexAlgoParamMaxPostingsCapacity] = pc
+	}
+	if hasMB {
+		merged[catalog.IndexAlgoParamMaxBadRecords] = mb
 	}
 	return merged, nil
 }

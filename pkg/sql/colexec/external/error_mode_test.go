@@ -94,9 +94,9 @@ func errorModeParam(t *testing.T, format string, jsonData string, keep int) (*Ex
 	}
 	resolveExternalErrorMode(param)
 
-	bat := batch.NewOffHeap(names)
+	bat := batch.New(names)
 	for i := range cols {
-		bat.Vecs[i] = vector.NewOffHeapVecWithType(makeType(&cols[i].Typ, false))
+		bat.Vecs[i] = vector.NewVec(makeType(&cols[i].Typ, false), proc.Mp())
 	}
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	return param, proc, bat
@@ -380,11 +380,14 @@ func TestJSONLineWhitespaceRecords(t *testing.T) {
 			if tc.name == "continuation" {
 				param.ErrorMode.Tolerate = false
 			}
-			r := &CsvReader{param: param, prevStr: tc.prevStr, ignoreLine: tc.ignore, reader: io.NopCloser(strings.NewReader(tc.content))}
+			r := &CsvReader{param: param, ignoreLine: tc.ignore, reader: io.NopCloser(strings.NewReader(tc.content))}
 			t.Cleanup(func() { require.NoError(t, r.Close()) })
 			parser, err := newCSVParserFromReader(param.Extern, r.reader)
 			require.NoError(t, err)
 			r.plh = &ParseLineHandler{csvReader: parser}
+			if tc.prevStr != "" {
+				require.NoError(t, r.pending.append(tc.prevStr, parser.MaxRecordSize()))
+			}
 			_, err = r.makeBatchRows(proc, bat)
 			require.NoError(t, err)
 			requireRows(t, bat, tc.want)
@@ -432,9 +435,9 @@ func kafkaErrorModeParam(t *testing.T, ks *plan.KafkaScan) (*ExternalParam, *pro
 		},
 	}
 	resolveExternalErrorMode(param)
-	bat := batch.NewOffHeap(names)
+	bat := batch.New(names)
 	for i := range cols {
-		bat.Vecs[i] = vector.NewOffHeapVecWithType(makeType(&cols[i].Typ, false))
+		bat.Vecs[i] = vector.NewVec(makeType(&cols[i].Typ, false), proc.Mp())
 	}
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	return param, proc, bat
@@ -525,9 +528,9 @@ func TestLookalikeUserColumnStillReadsItsData(t *testing.T) {
 	resolveExternalErrorMode(param)
 	require.False(t, param.ErrorMode.Tolerate, "a lookalike column must not switch tolerance on")
 
-	bat := batch.NewOffHeap([]string{"a", catalog.ExternalErrorMessage})
+	bat := batch.New([]string{"a", catalog.ExternalErrorMessage})
 	for i := range cols {
-		bat.Vecs[i] = vector.NewOffHeapVecWithType(makeType(&cols[i].Typ, false))
+		bat.Vecs[i] = vector.NewVec(makeType(&cols[i].Typ, false), proc.Mp())
 	}
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 

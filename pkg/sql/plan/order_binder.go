@@ -367,31 +367,30 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 		}
 	}
 
-	if numVal, ok := astExpr.(*tree.NumVal); ok {
-		switch numVal.Kind() {
-		case tree.Int:
-			colPos, _ := numVal.Int64()
-			if numVal.Negative() {
-				colPos = -colPos
-			}
-			if colPos < 1 || int(colPos) > len(b.ctx.projects) {
-				return nil, moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is not in select list", colPos)
-			}
-
-			colPos = colPos - 1
-			return &plan.Expr{
-				Typ: b.ctx.projects[colPos].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: b.ctx.projectTag,
-						ColPos: int32(colPos),
-					},
-				},
-			}, nil
-
-		default:
-			return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in ORDER BY")
+	// A bare integer literal in ORDER BY is a positional reference into the
+	// select list (MySQL ordinal). Every other literal -- string, decimal,
+	// float, boolean, NULL, ... -- is a legal constant expression and falls
+	// through to the regular expression binding below (and to the DISTINCT
+	// order contract there), exactly like its parenthesized form.
+	if numVal, ok := astExpr.(*tree.NumVal); ok && numVal.Kind() == tree.Int {
+		colPos, _ := numVal.Int64()
+		if numVal.Negative() {
+			colPos = -colPos
 		}
+		if colPos < 1 || int(colPos) > len(b.ctx.projects) {
+			return nil, moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is not in select list", colPos)
+		}
+
+		colPos = colPos - 1
+		return &plan.Expr{
+			Typ: b.ctx.projects[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.projectTag,
+					ColPos: int32(colPos),
+				},
+			},
+		}, nil
 	}
 
 	if b.ctx.isDistinct {

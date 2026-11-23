@@ -28,6 +28,7 @@ import (
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
@@ -84,10 +85,10 @@ func stubClassicSql(t *testing.T) *[]string {
 	return &sqls
 }
 
-func docScoreBatch() *batch.Batch {
+func docScoreBatch(mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_float32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_float32.ToType(), mp)
 	return bat
 }
 
@@ -126,7 +127,7 @@ func TestClassicReadReturnsTheSearchResult(t *testing.T) {
 	spec := classicSpec(t, ftplan.ScanOptions{SourceTable: "`db`.`src`", IndexTable: "`db`.`idx`", Mode: int64(tree.FULLTEXT_NL)})
 	r, err := Hooks{}.NewReader(proc, spec, searchplugin.Request{QueryPayload: []byte("apple")})
 	require.NoError(t, err)
-	out := docScoreBatch()
+	out := docScoreBatch(mp)
 	rows := 0
 	for {
 		end, err := r.Read(context.Background(), nil, nil, mp, out)
@@ -156,22 +157,22 @@ func TestClassicReadRejectsBeforeSearching(t *testing.T) {
 	for _, req := range []searchplugin.Request{
 		{QueryPayload: []byte("apple"), AlgoValues: []searchplugin.AlgoValue{boolGuard(true)}},
 		{},
-		{QueryPayload: []byte("apple"), HasMembershipFilter: true, MembershipFilter: []byte{1}},
 	} {
 		r, err := Hooks{}.NewReader(proc, spec, req)
 		require.NoError(t, err)
-		_, err = r.Read(context.Background(), nil, nil, mp, docScoreBatch())
+		_, err = r.Read(context.Background(), nil, nil, mp, docScoreBatch(mp))
 		require.Error(t, err)
 		require.NoError(t, r.Close())
 	}
 	require.Empty(t, *sqls, "a rejected search runs no SQL")
+	testutil.AssertInvalidRuntimeKeys(t, []byte{1})
 
 	// A subscribed source with an inconsistent index reference is rejected.
 	pub := classicSpec(t, ftplan.ScanOptions{SourceTable: "src", IndexTable: "idx"})
 	pub.SourceTable.PubInfo = &plan.PubInfo{TenantId: 42}
 	r, err := Hooks{}.NewReader(proc, pub, searchplugin.Request{QueryPayload: []byte("apple")})
 	require.NoError(t, err)
-	_, err = r.Read(context.Background(), nil, nil, mp, docScoreBatch())
+	_, err = r.Read(context.Background(), nil, nil, mp, docScoreBatch(mp))
 	require.ErrorContains(t, err, "trusted fulltext table references")
 }
 
@@ -182,7 +183,7 @@ func TestClassicReadPublisherAndMembership(t *testing.T) {
 	proc := newFTTestProcess(t, mp, fulltext.ALGO_TFIDF)
 	sqls := stubClassicSql(t)
 
-	keys := vector.NewVec(types.T_int32.ToType())
+	keys := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int32](keys, 5, false, mp))
 	data, err := keys.MarshalBinary()
 	require.NoError(t, err)
@@ -192,10 +193,10 @@ func TestClassicReadPublisherAndMembership(t *testing.T) {
 	spec.SourceTable = &plan.ObjectRef{SchemaName: "pub", ObjName: "src", SubscriptionName: "sub", PubInfo: pub}
 	spec.HiddenTables[0].Object = &plan.ObjectRef{SchemaName: "pub", ObjName: "idx", SubscriptionName: "sub", PubInfo: pub}
 	r, err := Hooks{}.NewReader(proc, spec, searchplugin.Request{
-		QueryPayload: []byte("apple"), HasMembershipFilter: true, MembershipFilter: data,
+		QueryPayload: []byte("apple"), HasMembershipFilter: true, MembershipFilter: testutil.RuntimeKeyPayload(t, data),
 	})
 	require.NoError(t, err)
-	_, err = r.Read(context.Background(), nil, nil, mp, docScoreBatch())
+	_, err = r.Read(context.Background(), nil, nil, mp, docScoreBatch(mp))
 	require.NoError(t, err)
 	require.Contains(t, (*sqls)[0], "`pub`.`idx`")
 	require.NotNil(t, r.(*reader).scan.MembershipFilter())

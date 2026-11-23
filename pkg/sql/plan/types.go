@@ -232,12 +232,14 @@ type CompilerContext interface {
 	// check if database exist
 	DatabaseExists(name string, snapshot *Snapshot) bool
 	// get table definition by database/schema
-	Resolve(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
+	Resolve(schemaName string, tableName string, snapshot *Snapshot, resolution *TableResolution) (*ObjectRef, *TableDef, error)
 	// ResolveWithoutTemporaryAlias skips session aliases for standalone RENAME TABLE.
 	// It retains catalog visibility, temporary ownership and access checks.
-	ResolveWithoutTemporaryAlias(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
+	ResolveWithoutTemporaryAlias(schemaName string, tableName string, snapshot *Snapshot, resolution *TableResolution) (*ObjectRef, *TableDef, error)
 	// get index table definition by an ObjectRef, will skip unnecessary subscription check
-	ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
+	ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot, resolution *TableResolution) (*ObjectRef, *TableDef, error)
+	// Revalidate borrowed ordinary results after synchronous planning/reentry.
+	BorrowedTableStillCurrent(*process.Process, *BorrowedTable) bool
 	// get table definition by table id
 	ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
 	// get the value of variable
@@ -364,9 +366,10 @@ type Rule interface {
 
 // BaseOptimizer is base optimizer, capable of handling only a few simple rules
 type BaseOptimizer struct {
-	qry   *Query
-	rules []Rule
-	ctx   CompilerContext
+	skipLocalDomains bool
+	qry              *Query
+	rules            []Rule
+	ctx              CompilerContext
 }
 
 type ViewData struct {
@@ -392,21 +395,32 @@ type updateTargetScope struct {
 }
 
 type QueryBuilder struct {
+	// mixedDomainCoalesce is set when the statement binds a binary-typed
+	// COALESCE that can return a text value; see coalesce_text_domain.go.
+	mixedDomainCoalesce bool
+
 	updateTargetScope *updateTargetScope
 
 	// DELETE owns these generated scan identities. Optimizer consumers must
 	// revalidate the binding and table after join rewrites.
-	deleteIndexScanTables map[int32]deleteIndexScan
-	integerPrecision      *integerPrecisionBuilder
-	correlationRouteNodes map[int32]bool
-	dependentRelations    map[int32]bool
-	preparedBindingProof  *bool
+	deleteIndexScanTables    map[int32]deleteIndexScan
+	planningInput            *PlanningInput
+	scanBorrows              []scanBorrow
+	borrowResolutionDisabled bool
+	originalIndexScan        originalIndexScan
+	integerPrecision         *integerPrecisionBuilder
+	correlationRouteNodes    map[int32]bool
+	dependentRelations       map[int32]bool
+	preparedBindingProof     *bool
 	// Deep existential regions are owned by a SQL block, never by a partially
 	// constructed node. The registry stays nil on the ordinary flattening path.
 	nextExistentialBlock    uint64
 	pendingExistentials     map[uint64]*pendingExistential
 	hadPendingExistentials  bool
 	existentialGateProjects map[int32]struct{}
+	// DML projects that must export physical columns for downstream consumers,
+	// including lock keys across CHECK/FK barriers and conflict-action slots.
+	materializedDMLProjects map[int32]struct{}
 
 	qry     *plan.Query
 	compCtx CompilerContext
@@ -442,22 +456,28 @@ type QueryBuilder struct {
 	// Synthetic scalar reaggregations preserve earlier scalar outputs as
 	// grouping keys. Each alias keeps its original column identity through
 	// final column pruning without changing the executable plan format.
-	scalarReaggAliases      map[int32][]scalarReaggAlias
-	headingProvenanceByNode map[int32]headingProvenanceMap
-	windowValidationScans   []*plan.Node
-	nameByColRef            map[[2]int32]string
-	protectedScans          map[int32]int
-	updateTargetScans       map[int32]struct{}
-	projectSpecialGuards    map[int32]*specialIndexGuard
+	scalarReaggAliases             map[int32][]scalarReaggAlias
+	headingProvenanceByNode        map[int32]headingProvenanceMap
+	validationPrivilegeCarriers    []*plan.Node
+	validationPrivilegeCarrierKeys map[string]struct{}
+	nameByColRef                   map[[2]int32]string
+	protectedScans                 map[int32]int
+	updateTargetScans              map[int32]struct{}
+	projectSpecialGuards           map[int32]*specialIndexGuard
 	// projectAnchoredSorts holds Top-K SORT node ids that a PROJECT directly above them
 	// will anchor the vector rewrite on. applyIndices walks children first, so without
 	// this the SORT-anchored entry point would claim the classic
 	// PROJECT -> SORT -> SCAN shape before the project ever ran, losing the project's
 	// column information and with it the index-only scan.
-	projectAnchoredSorts        map[int32]struct{}
-	setBitmapByDisplayNode      map[[2]int32]int32
-	indexHintsByScan            map[int32]*indexHintSet
-	indexHintOwnerByNode        map[int32]int32
+	projectAnchoredSorts   map[int32]struct{}
+	setBitmapByDisplayNode map[[2]int32]int32
+	indexHintsByScan       map[int32]*indexHintSet
+	indexHintOwnerByNode   map[int32]int32
+	// normalizedForcedJoins records INNER joins whose forced table was moved
+	// from build to probe before physical distribution planning. The marker is
+	// statement-local so applyIndicesForJoins can retain generic hint fallback
+	// only for joins whose orientation this rewrite changed.
+	normalizedForcedJoins       map[int32]struct{}
 	preserveSinkProjection      map[int32]struct{}
 	preserveLockProjection      map[int32]struct{}
 	preserveFilterProjection    map[int32]struct{}
@@ -514,9 +534,21 @@ type QueryBuilder struct {
 	// synthetic bindings must not make arbitrary carried estimates authoritative.
 	syntheticNDVCols map[[2]int32]struct{}
 
-	nextBindTag      int32
-	nextMsgTag       int32
-	nextSQLUdfCallID uint64
+	nextBindTag                 int32
+	nextMsgTag                  int32
+	nextSQLUdfCallID            uint64
+	udfResolutionCount          uint64
+	udfExpansionDepth           uint32
+	zeroScalarRewriteGeneration uint64
+	zeroScalarArgumentWrappers  []int32
+	// Tracks discarded scalar sources even when their carrier was deduplicated.
+	zeroScalarRetentionGeneration uint64
+	// Tracks special checks in isolated validation builders nested in a scalar.
+	zeroScalarValidationSpecialGeneration uint64
+	zeroScalarPrograms                    map[uint32]struct{}
+	zeroScalarPolicy                      zeroScalarPolicy
+	zeroScalarRequiredLiveNodes           map[int32]zeroScalarLiveRequirement
+	hasZeroScalarSourceCandidate          bool
 	// Negative AuxIds identify memoized expression sources across every bind
 	// context that can contribute expressions to this query.
 	nextVolatileExprMemoID int32
@@ -893,6 +925,14 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
+	builder *QueryBuilder
+	// Internal UPDATE/DELETE target projections need the persisted value for
+	// old secondary-index keys. The user predicate in the same SELECT still
+	// observes the session's virtual-column value.
+	physicalGeneratedRefs    map[*tree.UnresolvedName]struct{}
+	physicalMySQLSpecialRefs map[*tree.UnresolvedName]struct{}
+	// Tags whose rows can be NULL-extended by a join in this query block.
+	nullExtendedTags map[int32]bool
 	// The grouping/window rewrite owns this exact generated source. Neither
 	// field is inherited by NewBindContext: genuine SQL boundaries stay real.
 	integerPrecisionGeneratedSource     *tree.Select
@@ -1078,6 +1118,9 @@ type BindContext struct {
 	projectColByAst map[string]int32
 
 	projectByAst []SelectField
+	// sampledProjectFields means the visible fields came from a grouping
+	// branch whose SAMPLE executor can rearrange the physical slots.
+	sampledProjectFields bool
 	// projectSemanticKeys is populated only when preserveOrderSemanticKeys is
 	// set, keeping the ordinary-query projection path allocation-free.
 	projectSemanticKeys []string
@@ -1109,6 +1152,10 @@ type BindContext struct {
 	// names for its $n parameters; resolving those markers from a child query
 	// block turns the argument's column references into correlated references.
 	sqlUdfArgs map[string]*plan.Expr
+	// zeroScalarRootSourceSafe is set only after the original AST and the
+	// complete binding pass prove the narrow LIMIT 0 source has no hidden
+	// dependency or UDF expansion.
+	zeroScalarRootSourceSafe bool
 
 	// for join tables
 	bindingTree *BindingTreeNode
@@ -1239,6 +1286,13 @@ type baseBinder struct {
 	// resolves that literal.  Some functions, such as INET_NTOA, have a
 	// string-valued result but still preserve native numeric input overloads.
 	suppressDefaultValueBindType bool
+	// binaryLiteralUnderExplicitTextCast marks the source subtree of the
+	// innermost user-written explicit CAST when that cast targets
+	// non-binary-charset char/varchar/text. In that scope only hex/bit
+	// literals skip the destination-column pre-coercion so the explicit
+	// cast's own binary-to-text contract (invalid UTF-8 -> NULL + Warning
+	// 1300) can apply. See numValDefaultBindType.
+	binaryLiteralUnderExplicitTextCast bool
 	// inetNtoaNumericLiteralContext preserves HEX/BIT literal provenance until
 	// INET_NTOA can select its numeric overload.  Those literals are otherwise
 	// materialized as binary strings by the generic literal binder.
@@ -1294,10 +1348,16 @@ type OndupUpdateBinder struct {
 type TableBinder struct {
 	baseBinder
 	allowSubquery bool
+	// joinOn marks the binder that resolves a JOIN ON predicate: there, an
+	// unresolved table qualifier is out of clause scope, and the failure is
+	// classified per MySQL as an unknown on-clause column instead of a
+	// Postgres-style missing FROM entry.
+	joinOn bool
 }
 
 type WhereBinder struct {
 	baseBinder
+	preparedSetSubqueries map[*tree.Subquery][]int32
 }
 
 type GroupBinder struct {
@@ -1364,11 +1424,16 @@ const (
 )
 
 type Binding struct {
-	tag     int32
-	nodeId  int32
-	db      string
-	table   string
-	tableID uint64
+	tag    int32
+	nodeId int32
+	// A sequential UPDATE binds RHS expressions against a projection of the
+	// current row. Its generated columns still use the base table expression.
+	virtualTimestampTable  *plan.TableDef
+	virtualTimestampClass  []uint8
+	virtualTimestampStaged bool
+	db                     string
+	table                  string
+	tableID                uint64
 	// lower case: used for binding/lookup
 	cols []string
 	// original case: only for SELECT * display, must be same length as cols (or empty)

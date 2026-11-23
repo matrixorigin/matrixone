@@ -17,6 +17,8 @@ jobs:
       MO_MONGODB_REPORT_DIR: test/mongodb/reports/e2e-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: actions/setup-go@v5
         with:

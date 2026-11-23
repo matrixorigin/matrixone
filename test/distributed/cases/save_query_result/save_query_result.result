@@ -2465,3 +2465,66 @@ acc_save    admin    2024-11-21 07:19:49    open    null    5    65    0.0    0.
 set save_query_result = off;
 drop account acc_save;
 set save_query_result = off;
+set @saved_enable_privilege_cache = @@global.enable_privilege_cache;
+set global enable_privilege_cache = off;
+drop database if exists db_save_ctas;
+create database db_save_ctas;
+use db_save_ctas;
+create table ctas_priv_src(a int, b varchar(20));
+insert into ctas_priv_src values (1, 'alpha'), (2, 'beta'), (3, 'gamma');
+drop role if exists r_ctas_src;
+create role r_ctas_src;
+drop user if exists u_ctas;
+create user u_ctas identified by '111' default role r_ctas_src;
+grant connect on account * to r_ctas_src;
+grant show databases on account * to r_ctas_src;
+grant show tables on database db_save_ctas to r_ctas_src;
+grant create table on database db_save_ctas to r_ctas_src;
+grant select on table db_save_ctas.ctas_priv_src to r_ctas_src;
+use db_save_ctas;
+set save_query_result = on;
+/* save_result */select a, b from ctas_priv_src order by a desc;
+a	b
+3	gamma
+2	beta
+1	alpha
+set @saved_qid = last_query_id();
+set @ctas_sql = concat('create table ctas_priv_ok as select a, b from result_scan(''', @saved_qid, ''') as t');
+prepare ctas_priv_p from @ctas_sql;
+execute ctas_priv_p;
+deallocate prepare ctas_priv_p;
+/* save_result */select a, b from ctas_priv_src order by a desc;
+a	b
+3	gamma
+2	beta
+1	alpha
+revoke select on table db_save_ctas.ctas_priv_src from r_ctas_src;
+create table ctas_priv_denied as select a, b from result_scan(last_query_id()) t;
+internal error: do not have privilege to execute the statement
+create table ctas_priv_probe(a int);
+select a from ctas_priv_src;
+internal error: do not have privilege to execute the statement
+select count(*) from ctas_priv_ok;
+count(*)
+3
+select a, b from ctas_priv_ok order by a;
+a	b
+1	alpha
+2	beta
+3	gamma
+show create table ctas_priv_ok;
+Table	Create Table
+ctas_priv_ok	CREATE TABLE `ctas_priv_ok` (\n  `a` int DEFAULT NULL,\n  `b` varchar(20) DEFAULT NULL\n)
+show tables;
+Tables_in_db_save_ctas
+ctas_priv_ok
+ctas_priv_probe
+ctas_priv_src
+set save_query_result = off;
+drop user if exists u_ctas;
+drop role if exists r_ctas_src;
+drop database if exists db_save_ctas;
+set global enable_privilege_cache = @saved_enable_privilege_cache;
+select @@global.enable_privilege_cache = @saved_enable_privilege_cache as cache_snapshot_restored;
+cache_snapshot_restored
+1

@@ -96,37 +96,40 @@ func NewPlanReaders(proc *process.Process, spec *plan.IndexSearchScan, req searc
 	if distributed && (parallelism != 1 || spec.ScanWork.Objects < 2 || spec.ScanWork.Rows <= 0 || math.IsNaN(spec.ScanWork.Rows) || math.IsInf(spec.ScanWork.Rows, 0) || spec.ScanWork.VectorBytesPerRow <= 0 || math.IsNaN(spec.ScanWork.VectorBytesPerRow) || math.IsInf(spec.ScanWork.VectorBytesPerRow, 0) || spec.ScanWork.Blocks <= 0) {
 		return nil, moerr.NewInvalidInputNoCtx("distributed PRE requires one reader per logical partition and multiple objects")
 	}
-	if req.CandidateBudget == 0 || len(req.MembershipFilter) == 0 {
+	if req.CandidateBudget == 0 || req.MembershipFilter.Rows() == 0 {
 		readers := make([]engine.Reader, parallelism)
 		for i := range readers {
 			readers[i] = &planReader{initialized: true}
 		}
 		return readers, nil
 	}
-	var keys vector.Vector
-	if err := keys.UnmarshalBinary(req.MembershipFilter); err != nil {
+	keys := req.MembershipFilter
+	if err := keys.Visit(proc.Ctx, func(v *vector.Vector) error {
+		if v.HasNull() {
+			return moerr.NewInvalidInputNoCtx("PRE membership contains NULL")
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	defer keys.Free(nil)
 	pk := spec.SourceTableDef.GetPkey()
 	if pk == nil {
 		return nil, moerr.NewInvalidInputNoCtx("PRE source has no primary key")
 	}
 	pos, ok := spec.SourceTableDef.Name2ColIndex[pk.PkeyColName]
-	if !ok || pos < 0 || int(pos) >= len(spec.SourceTableDef.Cols) || keys.HasNull() ||
-		!types.MembershipKeyTypeCompatible(
-			keys.GetType().Oid, types.T(spec.SourceTableDef.Cols[pos].Typ.Id)) {
+	if !ok || pos < 0 || int(pos) >= len(spec.SourceTableDef.Cols) ||
+		!types.MembershipKeyTypeCompatible(keys.Type().Oid, types.T(spec.SourceTableDef.Cols[pos].Typ.Id)) {
 		return nil, moerr.NewInvalidInputNoCtx("PRE membership key type does not match the source primary key")
 	}
-	if (parallelism > 1 || distributed) && !docfilter.SupportsBitset(*keys.GetType()) {
+	if (parallelism > 1 || distributed) && !docfilter.SupportsBitset(keys.Type()) {
 		return nil, moerr.NewInvalidInputNoCtx("local PRE DOP requires an exact integer domain")
 	}
 	session := &planSearchGeneration{proc: proc.NewContextChildProc(0), snapshot: proc.GetTxnOperator(), parallelism: int32(parallelism)}
 	session.refs.Store(1) // construction owns one reference until all readers exist
 	defer session.release()
-	if docfilter.SupportsBitset(*keys.GetType()) && keys.Length() > 0 {
+	if docfilter.SupportsBitset(keys.Type()) && keys.Rows() > 0 {
 		admission := docfilter.AdmissionForService(proc.GetService())
-		payload, err := docfilter.BuildWithMemoryAdmission(&keys, admission)
+		payload, err := docfilter.BuildKeysWithMemoryAdmission(proc.Ctx, keys, admission)
 		if err != nil {
 			return nil, err
 		}
@@ -136,6 +139,11 @@ func NewPlanReaders(proc *process.Process, spec *plan.IndexSearchScan, req searc
 		}
 		if !session.membership.Exact() {
 			return nil, moerr.NewInvalidStateNoCtx("integer PRE domain is not exact")
+		}
+	} else if keys.Rows() > 0 {
+		session.membership, err = docfilter.NewExactKeys(proc.Ctx, keys, types.MustTypeFromPlan(spec.SourceTableDef.Cols[pos].Typ), docfilter.AdmissionForService(proc.GetService()))
+		if err != nil {
+			return nil, err
 		}
 	}
 	if snapshot := req.Identity.Snapshot; snapshot != nil && snapshot.TS != nil &&

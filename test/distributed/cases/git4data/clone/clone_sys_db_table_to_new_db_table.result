@@ -103,7 +103,7 @@ internal error: non-sys account cannot clone data from system database
 create database mo_task_new clone mo_task {snapshot = 'sp05'} to account acc03;
 internal error: non-sys account cannot clone data from system database
 create database mo_debug_new clone mo_debug {snapshot = 'sp05'} to account acc03;
-internal error: non-sys account cannot clone data from system database
+Unknown database mo_debug
 create database system_metrics_new clone system_metrics {snapshot = 'sp05'} to account acc03;
 internal error: non-sys account cannot clone data from system database
 drop snapshot if exists sp05;
@@ -120,7 +120,7 @@ internal error: do not have privilege to execute the statement
 drop account acc04;
 select count(*) from mo_catalog.mo_database;
 count(*)
-12
+11
 drop snapshot if exists sp06;
 create snapshot sp06 for account;
 drop database if exists mo_catalog_new;
@@ -191,10 +191,10 @@ mo_view_dependencies
 mo_view_refresh
 select count(*) from mo_catalog.mo_database;
 count(*)
-13
+12
 select count(*) from mo_catalog_new.mo_database;
 count(*)
-12
+11
 create database mo_catalog_new_new clone mo_catalog {snapshot = 'sp06'};
 use mo_catalog_new_new;
 show tables;

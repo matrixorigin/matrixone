@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -48,6 +49,18 @@ func (bj ByteJson) Unquote() (string, error) {
 // Ordinary SQL and binary storage must continue using Unquote and Marshal.
 func (bj ByteJson) UnquoteWithLegacyFloat() (string, error) {
 	return bj.unquote(true)
+}
+
+// AppendUnquotedScalar appends a bounded numeric or literal representation
+// using the same formatter as Unquote. Other types are left to Unquote.
+func (bj ByteJson) AppendUnquotedScalar(dst []byte, legacyFloat bool) ([]byte, bool, error) {
+	switch bj.Type {
+	case TpCodeInt64, TpCodeUint64, TpCodeFloat64, TpCodeLiteral:
+		out, err := bj.toWithFloatFormat(dst, legacyFloat)
+		return out, true, err
+	default:
+		return dst, false, nil
+	}
 }
 
 func (bj ByteJson) unquote(legacyFloat bool) (string, error) {
@@ -986,27 +999,82 @@ func (bj ByteJson) queryValByKeyExists(key []byte) (ByteJson, bool) {
 	return bj.getObjectVal(idx), true
 }
 
-func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
+var queryCollectorElementSize = uint64(reflect.TypeFor[ByteJson]().Size())
+
+type queryCollector struct {
+	values  []ByteJson
+	reserve func(uint64) (func(), error)
+	release func()
+	err     error
+}
+
+func (c *queryCollector) append(value ByteJson) {
+	if c.err != nil {
+		return
+	}
+	if c.reserve == nil {
+		c.values = append(c.values, value)
+		return
+	}
+	if len(c.values) == cap(c.values) {
+		capacity := cap(c.values) * 2
+		if capacity == 0 {
+			capacity = 1
+		}
+		if capacity < cap(c.values) || uint64(capacity) > uint64(math.MaxInt)/queryCollectorElementSize {
+			c.err = moerr.NewInvalidInputNoCtx("JSON query result size overflow")
+			return
+		}
+		release, err := c.reserve(uint64(capacity) * queryCollectorElementSize)
+		if err != nil {
+			if release != nil {
+				release()
+			}
+			c.err = err
+			return
+		}
+		values := make([]ByteJson, len(c.values), capacity)
+		copy(values, c.values)
+		if c.release != nil {
+			c.release()
+		}
+		c.values, c.release = values, release
+	}
+	c.values = append(c.values, value)
+}
+
+func (c *queryCollector) close() {
+	if c.release != nil {
+		c.release()
+		c.release = nil
+	}
+	c.values = nil
+}
+
+func (bj ByteJson) query(cur *queryCollector, path *Path) {
+	if cur.err != nil {
+		return
+	}
 	if path.empty() {
-		cur = append(cur, bj)
-		return cur
+		cur.append(bj)
+		return
 	}
 	sub, nPath := path.step()
 
 	if sub.tp == subPathDoubleStar {
-		cur = bj.query(cur, &nPath)
+		bj.query(cur, &nPath)
 		if bj.Type == TpCodeObject {
 			cnt := bj.GetElemCnt()
-			for i := 0; i < cnt; i++ {
-				cur = bj.getObjectVal(i).query(cur, path) // take care here, the argument is path,not nPath
+			for i := 0; i < cnt && cur.err == nil; i++ {
+				bj.getObjectVal(i).query(cur, path) // take care here, the argument is path,not nPath
 			}
 		} else if bj.Type == TpCodeArray {
 			cnt := bj.GetElemCnt()
-			for i := 0; i < cnt; i++ {
-				cur = bj.getArrayElem(i).query(cur, path) // take care here, the argument is path,not nPath
+			for i := 0; i < cnt && cur.err == nil; i++ {
+				bj.getArrayElem(i).query(cur, path) // take care here, the argument is path,not nPath
 			}
 		}
-		return cur
+		return
 	}
 
 	if bj.Type == TpCodeObject {
@@ -1014,24 +1082,24 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		case subPathIdx:
 			start, _, _ := sub.idx.genIndex(1)
 			if start == 0 {
-				cur = bj.query(cur, &nPath)
+				bj.query(cur, &nPath)
 			}
 		case subPathRange:
 			if sub.iRange.matchesIndex(0, 1) {
-				cur = bj.query(cur, &nPath)
+				bj.query(cur, &nPath)
 			}
 		case subPathKey:
 			tmp, exists := bj.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
 			if exists {
-				cur = tmp.query(cur, &nPath)
+				tmp.query(cur, &nPath)
 			}
 		case subPathKeyWildcard:
 			cnt := bj.GetElemCnt()
-			for i := 0; i < cnt; i++ {
-				cur = bj.getObjectVal(i).query(cur, &nPath)
+			for i := 0; i < cnt && cur.err == nil; i++ {
+				bj.getObjectVal(i).query(cur, &nPath)
 			}
 		}
-		return cur
+		return
 	}
 
 	if bj.Type == TpCodeArray {
@@ -1040,39 +1108,39 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		case subPathIdx:
 			idx, _, last := sub.idx.genIndex(cnt)
 			if last && idx < 0 || cnt <= idx {
-				return cur
+				return
 			}
 			if idx == subPathIdxALL {
-				for i := 0; i < cnt; i++ {
-					cur = bj.getArrayElem(i).query(cur, &nPath)
+				for i := 0; i < cnt && cur.err == nil; i++ {
+					bj.getArrayElem(i).query(cur, &nPath)
 				}
 			} else {
-				cur = bj.getArrayElem(idx).query(cur, &nPath)
+				bj.getArrayElem(idx).query(cur, &nPath)
 			}
 		case subPathRange:
 			if cnt == 0 {
-				return cur
+				return
 			}
 			se := sub.iRange.genRange(cnt)
 			if se[0] < 0 || se[1] < 0 {
-				return cur
+				return
 			}
-			for i := se[0]; i <= se[1]; i++ {
-				cur = bj.getArrayElem(i).query(cur, &nPath)
+			for i := se[0]; i <= se[1] && cur.err == nil; i++ {
+				bj.getArrayElem(i).query(cur, &nPath)
 			}
 		}
-		return cur
+		return
 	}
 	if sub.tp == subPathIdx {
 		idx, _, _ := sub.idx.genIndex(1)
 		if idx == 0 {
-			return bj.query(cur, &nPath)
+			bj.query(cur, &nPath)
+			return
 		}
 	}
 	if sub.tp == subPathRange && sub.iRange.matchesIndex(0, 1) {
-		return bj.query(cur, &nPath)
+		bj.query(cur, &nPath)
 	}
-	return cur
 }
 
 func (bj ByteJson) Query(paths []*Path) ByteJson {
@@ -1085,9 +1153,10 @@ func (bj ByteJson) Query(paths []*Path) ByteJson {
 func (bj ByteJson) QueryWithExists(paths []*Path) (ByteJson, bool) {
 	out := make([]ByteJson, 0, len(paths))
 	for _, path := range paths {
-		tmp := bj.query(nil, path)
-		if len(tmp) > 0 {
-			out = append(out, tmp...)
+		var tmp queryCollector
+		bj.query(&tmp, path)
+		if len(tmp.values) > 0 {
+			out = append(out, tmp.values...)
 		}
 	}
 	if len(out) == 0 {
@@ -1097,6 +1166,60 @@ func (bj ByteJson) QueryWithExists(paths []*Path) (ByteJson, bool) {
 		return out[0], true
 	}
 	return mergeToArray(out), true
+}
+
+// QueryWithMemory uses the ordinary JSON path semantics while reserving each
+// dynamic match buffer and the merged result before allocating it. Like
+// QueryWithExists, it does not validate the input document. The caller owns
+// the returned result reservation and must release it after the result is no
+// longer used; temporary match reservations are released before return.
+func (bj ByteJson) QueryWithMemory(path *Path, reserve func(uint64) (func(), error)) (ByteJson, bool, func(), error) {
+	if path == nil {
+		return Null, false, nil, moerr.NewInvalidInputNoCtx("invalid JSON query path")
+	}
+	if path.IsSimple() {
+		value, exists := bj.querySimpleExist(path, true)
+		return value, exists, nil, nil
+	}
+	collector := queryCollector{reserve: reserve}
+	defer collector.close()
+	bj.query(&collector, path)
+	if collector.err != nil {
+		return Null, false, nil, collector.err
+	}
+	if len(collector.values) == 0 {
+		return Null, false, nil, nil
+	}
+	if len(collector.values) == 1 && !path.mayReturnMultiple() {
+		return collector.values[0], true, nil, nil
+	}
+	if uint64(len(collector.values)) > (math.MaxUint32-headerSize)/valEntrySize {
+		return Null, false, nil, moerr.NewInvalidInputNoCtx("JSON query result size overflow")
+	}
+	total := uint64(headerSize) + uint64(len(collector.values))*valEntrySize
+	for _, value := range collector.values {
+		if value.Type != TpCodeLiteral {
+			if uint64(len(value.Data)) > math.MaxUint32-total {
+				return Null, false, nil, moerr.NewInvalidInputNoCtx("JSON query result size overflow")
+			}
+			total += uint64(len(value.Data))
+		}
+	}
+	if total > math.MaxUint32 || total > uint64(math.MaxInt) {
+		return Null, false, nil, moerr.NewInvalidInputNoCtx("JSON query result size overflow")
+	}
+	var release func()
+	if reserve != nil {
+		var err error
+		release, err = reserve(total)
+		if err != nil {
+			if release != nil {
+				release()
+			}
+			return Null, false, nil, err
+		}
+	}
+	return mergeToArray(collector.values), true, release, nil
 }
 
 // PathExists reports whether path selects at least one JSON value. A selected

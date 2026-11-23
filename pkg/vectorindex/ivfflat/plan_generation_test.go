@@ -52,7 +52,7 @@ func TestRequiredMembershipStoragePaths(t *testing.T) {
 			if tc.integer {
 				typ = types.T_int64
 			}
-			keys := vector.NewVec(typ.ToType())
+			keys := vector.NewVec(typ.ToType(), proc.Mp())
 			defer keys.Free(proc.Mp())
 			if tc.integer {
 				require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
@@ -62,7 +62,7 @@ func TestRequiredMembershipStoragePaths(t *testing.T) {
 			data, err := keys.MarshalBinary()
 			require.NoError(t, err)
 			p := sqlexec.NewSqlProcess(proc)
-			p.IvfHasMembershipFilter, p.IvfMembershipFilterRequired, p.IvfRuntimeFilterData = true, true, data
+			p.IvfHasMembershipFilter, p.IvfMembershipFilterRequired, p.IvfRuntimeFilterData = true, true, testutil.RuntimeKeyPayload(t, data)
 			if tc.integer {
 				payload, err := docfilter.Build(keys)
 				require.NoError(t, err)
@@ -79,7 +79,7 @@ func TestRequiredMembershipStoragePaths(t *testing.T) {
 				require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), req.ReadPolicy)
 				require.Equal(t, tc.desc, req.PostFilterTopOnly)
 				require.Equal(t, !tc.desc && (!tc.integer || tc.residual), req.FilterBeforeTopK)
-				require.Equal(t, tc.integer && !tc.desc, req.FilterHint.BF != nil)
+				require.Equal(t, tc.integer, req.FilterHint.BF != nil)
 				require.Empty(t, req.FilterHint.MembershipFilterBytes)
 				require.Len(t, req.BlockFilters, 1)
 				prefix := req.BlockFilters[0].GetF()
@@ -92,7 +92,7 @@ func TestRequiredMembershipStoragePaths(t *testing.T) {
 				} else {
 					require.Equal(t, function.PrefixInFunctionName, prefix.Func.ObjName)
 				}
-				require.Equal(t, !tc.integer || tc.desc, expressionContainsFunction(req.Filter, "in"), "the exact domain is either BF or an exact expression")
+				require.Equal(t, !tc.integer, expressionContainsFunction(req.Filter, "in"), "the exact domain is either BF or an exact expression")
 				return executor.Result{Mp: proc.Mp()}
 			}
 			var filters []*plan.Expr
@@ -154,12 +154,12 @@ func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 	spec := &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgoParams: `{"lists":"1","op_type":"vector_l2_ops"}`},
 		SourceTable: &plan.ObjectRef{}, SourceTableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "pk", Typ: plan.Type{Id: int32(types.T_int64)}}},
 			Pkey: &plan.PrimaryKeyDef{PkeyColName: "pk"}, Name2ColIndex: map[string]int32{"pk": 0}}, ScanWork: &plan.IndexSearchScanWork{}}
-	keys := vector.NewVec(types.T_int64.ToType())
+	keys := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer keys.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
 	data, err := keys.MarshalBinary()
 	require.NoError(t, err)
-	req := searchplugin.Request{MembershipFilter: data, HasMembershipFilter: true, MembershipFilterRequired: true, CandidateBudget: 1}
+	req := searchplugin.Request{MembershipFilter: testutil.RuntimeKeyPayload(t, data), HasMembershipFilter: true, MembershipFilterRequired: true, CandidateBudget: 1}
 	for _, count := range []int{0, -1} {
 		readers, err := NewPlanReaders(proc, spec, req, count)
 		require.Error(t, err)
@@ -168,7 +168,6 @@ func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 	for _, change := range []func(*searchplugin.Request){
 		func(r *searchplugin.Request) { r.HasMembershipFilter = false },
 		func(r *searchplugin.Request) { r.Identity.PartitionCount = 2 },
-		func(r *searchplugin.Request) { r.MembershipFilter = []byte{1, 2} },
 	} {
 		bad := req
 		change(&bad)

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 
 	moerrpb "github.com/matrixorigin/matrixone/pkg/pb/moerr"
@@ -174,6 +175,14 @@ const (
 	// (1051, "Unknown table") when DROP TABLE targets an absent table,
 	// keeping ErrNoSuchTable (1146) for query/DML lookups.
 	ErrDropNonExistsTable uint16 = 20345
+	// Reasons an index cannot store a row, and the limits on ignored rows.
+	ErrIndexVectorDimension   uint16 = 20346
+	ErrIndexVectorNonFinite   uint16 = 20347
+	ErrIndexVectorOutOfRange  uint16 = 20348
+	ErrIndexTooManyBadRecords uint16 = 20349
+	ErrIndexAllRowsBad        uint16 = 20350
+	ErrIndexInvalidJSON       uint16 = 20351
+	ErrIndexDatalink          uint16 = 20352
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -478,6 +487,18 @@ const (
 	// error is never silently retried.
 	ErrDataBranchConflict uint16 = 22501
 
+	// Group 18: change watch
+	// ErrSnapshotNotAfter is explicitly retriable by the client with a fresh
+	// transaction. It must never enter the SQL executor's statement retry loop.
+	ErrSnapshotNotAfter uint16 = 22601
+	// ErrChangeWatchHistoryUnavailable tells consumers to establish a new
+	// baseline with a NULL marker after the requested history is no longer provable.
+	ErrChangeWatchHistoryUnavailable uint16 = 22602
+	// ErrChangeWatchRetry tells the watch client to retry the same marker.
+	ErrChangeWatchRetry uint16 = 22603
+	// ErrChangeWatchCapacity means the requested watch exceeds a work limit.
+	ErrChangeWatchCapacity uint16 = 22604
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -535,6 +556,13 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrParseError:                   {ER_PARSE_ERROR, []string{"42000"}, "SQL parser error: %s"},
 	ErrConstraintViolation:          {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
 	ErrDuplicateCheckConstraintName: {ER_CHECK_CONSTRAINT_DUP_NAME, []string{MySQLDefaultSqlState}, "Duplicate check constraint name '%-.192s'"},
+	ErrIndexVectorDimension:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector dimension does not match the index: %s"},
+	ErrIndexVectorNonFinite:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector has a NaN or infinite element"},
+	ErrIndexVectorOutOfRange:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector element is out of the range the index stores: %s"},
+	ErrIndexTooManyBadRecords:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the index cannot store more than max_bad_records = %d rows; row %s: %s"},
+	ErrIndexAllRowsBad:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the index cannot store any of the %d rows; row %s: %s"},
+	ErrIndexInvalidJSON:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the text the index parses as JSON is not valid JSON: %s"},
+	ErrIndexDatalink:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the index cannot read the datalink: %s"},
 	// Truncating/dropping an FK-referenced parent is a defined user error, not
 	// an internal failure. Texts, SQLSTATEs and MySQL numbers mirror the
 	// upstream table in mysql_error_define.go (ER_TRUNCATE_ILLEGAL_FK 1701
@@ -603,7 +631,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrNoDB:                                     {ER_NO_DB_ERROR, []string{"3D000"}, "No database selected"},
 	ErrNoWorkingStore:                           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no working store"},
 	ErrNoHAKeeper:                               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot locate ha keeper"},
-	ErrInvalidTruncateLsn:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid truncate lsn, shard %d already truncated to %d"},
+	ErrInvalidTruncateLsn:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid truncate lsn for shard %d at boundary %d"},
 	ErrNotLeaseHolder:                           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not lease holder, current lease holder ID %d"},
 	ErrDBAlreadyExists:                          {ER_DB_CREATE_EXISTS, []string{MySQLDefaultSqlState}, "database %s already exists"},
 	ErrTableAlreadyExists:                       {ER_TABLE_EXISTS_ERROR, []string{"42S01"}, "table %s already exists"},
@@ -829,6 +857,12 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// pass the two conflicting sides and the pk as a single pre-formatted
 	// detail; the leading "conflict: " comes from this catalog template.
 	ErrDataBranchConflict: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "conflict: %s"},
+	// Keep the vendor-specific ERR packet number paired with SQLSTATE 40001.
+	ErrSnapshotNotAfter: {ErrSnapshotNotAfter, []string{"40001"}, "transaction snapshot must be after the requested watermark (retry with a new transaction)"},
+
+	ErrChangeWatchHistoryUnavailable: {ErrChangeWatchHistoryUnavailable, []string{MySQLDefaultSqlState}, "changed-table history unavailable: %s. Restart with a NULL marker"},
+	ErrChangeWatchRetry:              {ErrChangeWatchRetry, []string{MySQLDefaultSqlState}, "changed-table query interrupted: %s. Retry with the same marker"},
+	ErrChangeWatchCapacity:           {ErrChangeWatchCapacity, []string{MySQLDefaultSqlState}, "changed-table capacity exceeded: %s"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -896,6 +930,15 @@ func (e *Error) Display() string {
 		return e.message
 	}
 	return fmt.Sprintf("%s: %s", e.message, e.detail)
+}
+
+// MessageOf returns the message of code without its details.
+func MessageOf(code uint16) string {
+	item, ok := errorMsgRefer[code]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSuffix(item.errorMsgOrFormat, ": %s")
 }
 
 func (e *Error) ErrorCode() uint16 {
@@ -1468,8 +1511,24 @@ func NewInvalidTruncateLsn(ctx context.Context, shardId, idx uint64) *Error {
 	return newError(ctx, ErrInvalidTruncateLsn, shardId, idx)
 }
 
+// NewInvalidTruncateLsnWithMessage preserves the diagnostic sent by a remote
+// LogService while retaining the original MO error code and SQL metadata.
+func NewInvalidTruncateLsnWithMessage(ctx context.Context, message string) *Error {
+	err := NewInvalidTruncateLsn(ctx, 0, 0)
+	err.message = message
+	return err
+}
+
 func NewNotLeaseHolder(ctx context.Context, holderId uint64) *Error {
 	return newError(ctx, ErrNotLeaseHolder, holderId)
+}
+
+// NewNotLeaseHolderWithMessage preserves the diagnostic sent by a remote
+// LogService while retaining the original MO error code and SQL metadata.
+func NewNotLeaseHolderWithMessage(ctx context.Context, message string) *Error {
+	err := NewNotLeaseHolder(ctx, 0)
+	err.message = message
+	return err
 }
 
 func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {
@@ -2018,6 +2077,22 @@ func NewErrTooBigPrecision(ctx context.Context, precision int64, funcName string
 
 func NewCCPRReadOnly(ctx context.Context) *Error {
 	return newError(ctx, ErrCCPRReadOnly)
+}
+
+func NewSnapshotNotAfter(ctx context.Context) *Error {
+	return newError(ctx, ErrSnapshotNotAfter)
+}
+
+func NewChangeWatchHistoryUnavailable(ctx context.Context, detail string) *Error {
+	return newError(ctx, ErrChangeWatchHistoryUnavailable, detail)
+}
+
+func NewChangeWatchRetry(ctx context.Context, detail string) *Error {
+	return newError(ctx, ErrChangeWatchRetry, detail)
+}
+
+func NewChangeWatchCapacity(ctx context.Context, detail string) *Error {
+	return newError(ctx, ErrChangeWatchCapacity, detail)
 }
 
 // NewCantExecuteInReadOnlyTransaction reports MySQL ERROR 1792 (25006): a

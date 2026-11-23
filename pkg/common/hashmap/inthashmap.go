@@ -139,6 +139,7 @@ func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		}
 	}
 	for _, vec := range vecs {
+
 		switch vec.GetType().TypeSize() {
 		case 1:
 			fillKeys[uint8](itr, vec, 1, start, count)

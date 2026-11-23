@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -31,13 +32,14 @@ var _ vm.Operator = new(TableFunction)
 type TableFunction struct {
 	ctr container
 
-	Rets     []*plan.ColDef
-	Args     []*plan.Expr
-	Attrs    []string
-	Params   []byte
-	FuncName string
-	Limit    *plan.Expr
-	IsSingle bool
+	Rets             []*plan.ColDef
+	Args             []*plan.Expr
+	Attrs            []string
+	Params           []byte
+	FuncName         string
+	Limit            *plan.Expr
+	IsSingle         bool
+	IndexMaintenance *executor.IndexMaintenanceSpec
 
 	// Named-snapshot read timestamp from the FUNCTION_SCAN node (Node.ScanSnapshot). Set by
 	// the planner only, never from TVF arguments (#27941).
@@ -220,7 +222,7 @@ func (s *simpleOneBatchState) startPreamble(tf *TableFunction, proc *process.Pro
 	_ = nthRow
 	s.called = false
 	if s.batch == nil {
-		s.batch = tf.createResultBatch()
+		s.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		s.batch.CleanOnlyData()
 	}

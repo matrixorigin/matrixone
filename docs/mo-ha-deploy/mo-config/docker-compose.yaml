@@ -1,0 +1,30 @@
+services:
+  matrixone:
+    image: __MO_IMAGE__
+    container_name: matrixone
+    # 固定 hostname：dragonboat 的磁盘目录由 log.toml 的 explicit-hostname 决定，
+    # 两者必须一致；容器 hostname 也固定下来，便于排查
+    hostname: __MO_HOSTNAME__
+    # Pacemaker 控制启停，Docker 绝不能自动重启
+    restart: "no"
+    # 优雅关闭：给 /mo-service 足够时间 flush；缺省 10s 后 Docker 会直接 SIGKILL
+    stop_grace_period: 60s
+    # 固定工作目录：配置里的相对路径以 / 为基准（本 kit 已改用绝对路径，这里显式置防）
+    working_dir: /
+    entrypoint: ["/mo-service"]
+    command: ["-launch", "/etc/mo-conf/launch.toml", "-debug-http=:6060"]
+    ports:
+      - "__MO_BIND_IP__:__MO_PORT__:6001"
+    volumes:
+      - __DATA_DIR__:/mo-data
+      - __MO_DIR__/conf:/etc/mo-conf:ro
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    # 长期运行：限制容器日志，避免撑满系统盘
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"

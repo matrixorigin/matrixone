@@ -394,8 +394,6 @@ func (r *KafkaReader) parseOneMessage(ctx context.Context, param *ExternalParam,
 	if param.Extern.Format == tree.JSONLINE {
 		fields, err := r.csv.transJson2Lines(ctx, value, param.Attrs, param.Cols, param.Extern.JsonData)
 		if err != nil {
-			// no streaming-LOAD resume across message boundaries
-			r.csv.prevStr = ""
 			if errors.Is(err, io.ErrUnexpectedEOF) {
 				return nil, moerr.NewInvalidInputf(ctx,
 					"kafka message at offset %d is not a complete JSON object", msg.Offset)

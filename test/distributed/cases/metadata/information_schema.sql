@@ -126,4 +126,13 @@ from information_schema.columns
 where table_schema = 'information_schema_data_type_case' and table_name = 'default_probe'
   and column_name = 'mode_value';
 set sql_mode = @column_default_sql_mode;
+create view information_schema_data_type_case.type_probe_boolview as
+select c_tiny, c_tiny_unsigned, c_bool from information_schema_data_type_case.type_probe;
+select column_name, data_type, column_type
+from information_schema.columns
+where table_schema = 'information_schema_data_type_case'
+  and table_name = 'type_probe_boolview'
+  and column_name in ('c_tiny', 'c_tiny_unsigned', 'c_bool')
+order by ordinal_position;
+drop view information_schema_data_type_case.type_probe_boolview;
 drop database information_schema_data_type_case;

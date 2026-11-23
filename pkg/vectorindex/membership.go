@@ -15,9 +15,11 @@
 package vectorindex
 
 import (
+	"context"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,17 +32,9 @@ import (
 // cbitmap, CRoaring or sorted64) and charged to the CN memory admission. empty
 // reports an exact empty key set, an empty payload included; then filter is nil. The
 // caller frees filter.
-func BuildMembership(service, algo string, sourceTableDef *plan.TableDef, payload []byte) (
+func BuildMembership(ctx context.Context, service, algo string, sourceTableDef *plan.TableDef, keys *keycodec.KeyPayload) (
 	filter docfilter.MembershipFilter, count uint64, empty bool, err error) {
-	if len(payload) == 0 {
-		return nil, 0, true, nil
-	}
-	var keys vector.Vector
-	if err = keys.UnmarshalBinary(payload); err != nil {
-		return nil, 0, false, err
-	}
-	defer keys.Free(nil)
-	if keys.Length() == 0 {
+	if keys.Rows() == 0 {
 		return nil, 0, true, nil
 	}
 	pk := sourceTableDef.GetPkey()
@@ -48,12 +42,20 @@ func BuildMembership(service, algo string, sourceTableDef *plan.TableDef, payloa
 		return nil, 0, false, moerr.NewInvalidInputNoCtxf("%s membership search source has no primary key", algo)
 	}
 	pos, ok := sourceTableDef.Name2ColIndex[pk.PkeyColName]
-	if !ok || pos < 0 || int(pos) >= len(sourceTableDef.Cols) || keys.HasNull() ||
-		!types.MembershipKeyTypeCompatible(keys.GetType().Oid, types.T(sourceTableDef.Cols[pos].Typ.Id)) ||
-		!docfilter.SupportsBitset(*keys.GetType()) {
+	if !ok || pos < 0 || int(pos) >= len(sourceTableDef.Cols) ||
+		!types.MembershipKeyTypeCompatible(keys.Type().Oid, types.T(sourceTableDef.Cols[pos].Typ.Id)) ||
+		!docfilter.SupportsBitset(keys.Type()) {
 		return nil, 0, false, moerr.NewInvalidInputNoCtxf("%s membership key type does not match the source primary key", algo)
 	}
-	filter, err = docfilter.NewForC(&keys, docfilter.AdmissionForService(service))
+	if err = keys.Visit(ctx, func(v *vector.Vector) error {
+		if v.HasNull() {
+			return moerr.NewInvalidInputNoCtx("membership key payload contains NULL")
+		}
+		return nil
+	}); err != nil {
+		return nil, 0, false, err
+	}
+	filter, err = docfilter.NewForCKeys(ctx, keys, docfilter.AdmissionForService(service))
 	if err != nil {
 		return nil, 0, false, err
 	}
@@ -61,7 +63,7 @@ func BuildMembership(service, algo string, sourceTableDef *plan.TableDef, payloa
 		filter.Free()
 		return nil, 0, false, moerr.NewInvalidStateNoCtxf("%s membership filter is not exact", algo)
 	}
-	return filter, uint64(keys.Length()), false, nil
+	return filter, keys.Rows(), false, nil
 }
 
 // FilterMaskAdmissionBytes is the smallest filter-mask estimate AdmitFilterMask

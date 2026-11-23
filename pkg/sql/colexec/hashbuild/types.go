@@ -54,8 +54,8 @@ const (
 const (
 	HashBuildSpillAllocationSiteSelectedData mpool.AllocationSite = iota + 64
 	HashBuildSpillAllocationSiteSelectedArea
-	HashBuildSpillAllocationSiteSelectedNulls
-	HashBuildSpillAllocationSiteSelectedGrouping
+	_ // reserved: was HashBuildSpillAllocationSiteSelectedNulls
+	_ // reserved: was HashBuildSpillAllocationSiteSelectedGrouping
 	HashBuildSpillAllocationSiteHashValues
 	HashBuildSpillAllocationSiteRowIDs
 	HashBuildSpillAllocationSiteMarshalBuffer
@@ -67,8 +67,8 @@ const (
 	HashBuildAllocationSiteHashDescriptor
 	HashBuildAllocationSiteBatchData
 	HashBuildAllocationSiteBatchArea
-	HashBuildAllocationSiteBatchNulls
-	HashBuildAllocationSiteBatchGrouping
+	_ // reserved: was HashBuildAllocationSiteBatchNulls
+	_ // reserved: was HashBuildAllocationSiteBatchGrouping
 	HashBuildAllocationSiteGroupSels
 	HashBuildAllocationSiteHashIterator
 )
@@ -80,21 +80,23 @@ const (
 const (
 	HashBuildAllocationSiteUniqueKeyData mpool.AllocationSite = iota + 44
 	HashBuildAllocationSiteUniqueKeyArea
-	HashBuildAllocationSiteUniqueKeyNulls
-	HashBuildAllocationSiteUniqueKeyGrouping
+	_ // reserved: was HashBuildAllocationSiteUniqueKeyNulls
+	_ // reserved: was HashBuildAllocationSiteUniqueKeyGrouping
 	HashBuildAllocationSiteRuntimeFilterPayload
 	HashBuildAllocationSiteRuntimeFilterScratch
 	HashBuildAllocationSiteDedupIgnoreBitmap
 	HashBuildAllocationSiteDedupDeleteBitmap
 	HashBuildAllocationSiteDedupLastRows
 	HashBuildAllocationSiteDedupSurvivorRows
-	HashBuildAllocationSiteDedupSurvivorOwnsKey
+	HashBuildAllocationSiteDedupSurvivorPriority
 	HashBuildAllocationSiteDedupDiscardedRows
 	HashBuildAllocationSiteDedupDeleteOnlyData
 	HashBuildAllocationSiteDedupDeleteOnlyArea
-	HashBuildAllocationSiteDedupDeleteOnlyNulls
-	HashBuildAllocationSiteDedupDeleteOnlyGrouping
+	_ // reserved: was HashBuildAllocationSiteDedupDeleteOnlyNulls
+	_ // reserved: was HashBuildAllocationSiteDedupDeleteOnlyGrouping
 )
+
+const HashBuildAllocationSiteBatchRowEnds mpool.AllocationSite = 61
 
 type container struct {
 	state           int
@@ -135,7 +137,7 @@ type container struct {
 	spillBucketOffsets     [spillNumBuckets + 1]int32
 	spillBucketWriteRows   [spillNumBuckets]int64
 	spillKeyVecs           []*vector.Vector
-	spillBatchAllocation   *vector.AllocationAccountSelection
+	spillBatchAllocation   *mpool.AccountBinding
 	spillAllocationMP      *mpool.MPool
 	spillAccountedWrite    *mpool.AccountedBuffer
 	spillAccountedBuckets  [spillNumBuckets]*mpool.AccountedBuffer
@@ -495,7 +497,11 @@ type HashBuild struct {
 	JoinMapRefCnt                 int32
 	ShuffleIdx                    int32
 	RuntimeFilterSpec             *plan.RuntimeFilterSpec
-	SpillThreshold                int64
+	// OptionalRuntimeFilterMaxKeyBytes bounds each variable-length key component
+	// before copying. When positive, the optional filter's UpperLimit also bounds
+	// retained key count. Zero keeps ordinary runtime-filter collection unchanged.
+	OptionalRuntimeFilterMaxKeyBytes int
+	SpillThreshold                   int64
 
 	IsDedup                   bool
 	DedupBuildKeepLast        bool
@@ -504,6 +510,7 @@ type HashBuild struct {
 	DedupColName              string
 	DedupColTypes             []plan.Type
 	DedupKeyExprs             []*plan.Expr
+	AuxiliaryRowIdColIdx      int32
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
 
@@ -520,13 +527,10 @@ func (hashBuild *HashBuild) GetOperatorBase() *vm.OperatorBase {
 func (hashBuild *HashBuild) SetAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
-		HashBuildSpillAllocationSiteSelectedArea,
-		HashBuildSpillAllocationSiteSelectedNulls,
-		HashBuildSpillAllocationSiteSelectedGrouping,
 	)
 	if err != nil {
 		return err
@@ -565,13 +569,10 @@ func (hashBuild *HashBuild) installRecoveryCapacity(
 		_ = capacity.Close()
 		return err
 	}
-	selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(
+	selection, err := mpool.NewAccountBindingWithCapacityClass(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
-		HashBuildSpillAllocationSiteSelectedArea,
-		HashBuildSpillAllocationSiteSelectedNulls,
-		HashBuildSpillAllocationSiteSelectedGrouping,
 		class,
 	)
 	if err != nil {
@@ -621,13 +622,10 @@ func (hashBuild *HashBuild) releaseRecoveryCapacity(
 		ctr.spillBatchAllocation = nil
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
-		HashBuildSpillAllocationSiteSelectedArea,
-		HashBuildSpillAllocationSiteSelectedNulls,
-		HashBuildSpillAllocationSiteSelectedGrouping,
 	)
 	if err != nil {
 		ctr.spillBatchAllocation = nil
@@ -668,24 +666,18 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
-	batchSelection, err := vector.NewAllocationAccountSelection(
+	batchSelection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteBatchData,
-		HashBuildAllocationSiteBatchArea,
-		HashBuildAllocationSiteBatchNulls,
-		HashBuildAllocationSiteBatchGrouping,
 	)
 	if err != nil {
 		return err
 	}
-	uniqueKeySelection, err := vector.NewAllocationAccountSelection(
+	uniqueKeySelection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteUniqueKeyData,
-		HashBuildAllocationSiteUniqueKeyArea,
-		HashBuildAllocationSiteUniqueKeyNulls,
-		HashBuildAllocationSiteUniqueKeyGrouping,
 	)
 	if err != nil {
 		return err
@@ -740,8 +732,10 @@ func (hb *HashmapBuilder) ClearAllocationAccount(
 	}
 	if builder.IntHashMap != nil || builder.StrHashMap != nil ||
 		len(builder.Batches.Buf) != 0 || builder.Sels.Size() != 0 ||
+		builder.batchRowEnds != nil ||
 		len(builder.executors) != 0 || len(builder.curVecs) != 0 ||
-		len(builder.UniqueJoinKeys) != 0 ||
+		len(builder.uniqueKeys.first.vecs) != 0 ||
+		len(builder.uniqueKeys.rest) != 0 || builder.uniqueKeys.directory != nil ||
 		builder.IgnoreRows != nil || builder.DelRows != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
@@ -939,7 +933,7 @@ func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) err
 		return process.ErrExecutionResourceInvalid
 	}
 	if bat := hb.Batches.Buf[idx]; bat != nil {
-		bat.Clean(proc.Mp())
+		bat.Clean(hb.batchesPool(proc))
 	}
 	copy(hb.Batches.Buf[idx:], hb.Batches.Buf[idx+1:])
 	hb.Batches.Buf = hb.Batches.Buf[:len(hb.Batches.Buf)-1]
@@ -979,7 +973,7 @@ func (hb *HashmapBuilder) DrainCopiedBatches(
 			}
 		}
 		if bat != nil {
-			bat.Clean(proc.Mp())
+			bat.Clean(hb.batchesPool(proc))
 			hb.Batches.Buf[idx] = nil
 		}
 	}
@@ -1000,4 +994,12 @@ func (ctr *container) releaseMemoryGrowthParticipant() {
 	}
 	ctr.memoryGrowthParticipant.Release()
 	ctr.memoryGrowthParticipant = nil
+}
+
+// batchesPool is the pool the retained build batches were created with.
+func (hb *HashmapBuilder) batchesPool(proc *process.Process) *mpool.MPool {
+	if mp := hb.Batches.Pool(); mp != nil {
+		return mp
+	}
+	return proc.Mp()
 }

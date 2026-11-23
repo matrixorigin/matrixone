@@ -365,7 +365,7 @@ func TestBuildVectorSortContextFromSort_RejectsVolatileChildProjection(t *testin
 	// per ancestor, so a non-foldable distance expression must not block the rewrite.
 	t.Run("distance entry is exempt", func(t *testing.T) {
 		tc := newTopKPlan(t, 10, 2)
-		require.True(t, vectorChildProjectIsDetachable(tc.childNode, tc.sortNode.OrderBy[0].Expr))
+		require.True(t, vectorChildProjectIsDetachable(nil, tc.childNode, tc.sortNode.OrderBy[0].Expr))
 	})
 
 	// A PROJECT anchor keeps its remap on that one node (spliceVectorRewrite), so the

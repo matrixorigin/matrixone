@@ -14,6 +14,32 @@
 
 package moerr
 
+// FindTxnUnknown preserves an unknown commit outcome even when another
+// failure was wrapped or joined before it. Such an outcome must not be
+// treated as proof that a business transaction rolled back.
+func FindTxnUnknown(err error) *Error {
+	if e, ok := err.(*Error); ok && e != nil && e.ErrorCode() == ErrTxnUnknown {
+		return e
+	}
+	if custom, ok := err.(interface{ As(any) bool }); ok {
+		var e *Error
+		if custom.As(&e) && e != nil && e.ErrorCode() == ErrTxnUnknown {
+			return e
+		}
+	}
+	switch e := err.(type) {
+	case interface{ Unwrap() []error }:
+		for _, cause := range e.Unwrap() {
+			if unknown := FindTxnUnknown(cause); unknown != nil {
+				return unknown
+			}
+		}
+	case interface{ Unwrap() error }:
+		return FindTxnUnknown(e.Unwrap())
+	}
+	return nil
+}
+
 // wholeTxnRollbackCodes classifies infrastructure failures that doom the whole
 // owning transaction. The lock-wait-timeout family (ErrLockWaitTimeout,
 // ErrRemoteLockWaitTimeout) is deliberately NOT in this list: matching MySQL's

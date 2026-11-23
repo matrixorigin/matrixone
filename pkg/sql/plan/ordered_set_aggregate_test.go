@@ -86,7 +86,7 @@ func TestBuildOrderedSetAggregates(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
-			queryPlan, err := BuildPlan(ctx, stmt, false)
+			queryPlan, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 
 			fn := findAggregateByName(queryPlan.GetQuery(), tc.function)
@@ -117,7 +117,7 @@ func TestBuildArrayAggCompatibility(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
-			queryPlan, err := BuildPlan(ctx, stmt, false)
+			queryPlan, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 
 			var fn *planpb.Function
@@ -157,7 +157,7 @@ func TestBuildApproxPercentileWithinGroupPreservesOrdinaryForm(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
-			queryPlan, err := BuildPlan(ctx, stmt, false)
+			queryPlan, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			fn := findAggregateByName(queryPlan.GetQuery(), NameApproxPercentile)
 			require.NotNil(t, fn)
@@ -180,7 +180,7 @@ func TestBuildMedianWithinGroup(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
 
-			queryPlan, err := BuildPlan(ctx, stmt, false)
+			queryPlan, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			fn := findAggregateByName(queryPlan.GetQuery(), "median")
 			require.NotNil(t, fn)
@@ -194,7 +194,7 @@ func TestBuildPreparedMedianWithinGroup(t *testing.T) {
 		"select median() within group (order by cast(? as signed)) from select_test.bind_select", 1)
 	require.NoError(t, err)
 	t.Cleanup(stmt.Free)
-	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true, nil)
 	require.NoError(t, err)
 }
 
@@ -203,7 +203,7 @@ func TestMedianWithinGroupDoesNotDuplicateScalarSubqueryPlan(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+		queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 		require.NoError(t, err)
 		return queryPlan.GetQuery()
 	}
@@ -262,7 +262,7 @@ func TestBuildMedianWithinGroupRejectsInvalidShape(t *testing.T) {
 			}
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.ErrorContains(t, err, tc.buildError)
 		})
 	}
@@ -286,7 +286,7 @@ func BenchmarkBuildMedianForms(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				_, err = BuildPlan(ctx, stmt, false)
+				_, err = BuildPlan(ctx, stmt, false, nil)
 				stmt.Free()
 				if err != nil {
 					b.Fatal(err)
@@ -300,7 +300,7 @@ func TestBuildOrderedSetPercentileRejectsNonConstant(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select percentile_cont(b) within group (order by a) from select_test.bind_select", 1)
 	require.NoError(t, err)
-	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 	require.ErrorContains(t, err, "percentile argument of percentile_cont must be a non-null constant")
 }
 
@@ -331,7 +331,7 @@ func TestBuildApproxPercentileWithinGroupRejectsInvalidShape(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
@@ -373,7 +373,7 @@ func TestBuildOrderedSetPercentileRejectsInvalidWithinGroupShape(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			if tc.want == "" {
 				require.Error(t, err)
 			} else {
@@ -430,7 +430,7 @@ func TestBuildOrderedSetWindowFunctions(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
-			queryPlan, err := BuildPlan(ctx, stmt, false)
+			queryPlan, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 
 			fn := findWindowFunctionByName(queryPlan.GetQuery(), tc.function)
@@ -474,7 +474,7 @@ func TestBuildOrderedSetWindowRejectsInvalidShape(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
@@ -486,7 +486,7 @@ func TestBuildPreparedOrderedSetWindow(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(stmt.Free)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true, nil)
 	require.NoError(t, err)
 	fn := findWindowFunctionByName(queryPlan.GetQuery(), NamePercentileDisc)
 	require.NotNil(t, fn)
@@ -503,7 +503,7 @@ func TestPreparedOrderedSetWindowPlanRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(stmt.Free)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true, nil)
 	require.NoError(t, err)
 	original := queryPlan.GetQuery()
 	wire, err := original.Marshal()

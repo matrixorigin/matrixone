@@ -282,7 +282,6 @@ show databases;
 ➤ Database[12,5000,0]  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
-mo_debug  𝄀
 mo_task  𝄀
 mysql  𝄀
 system  𝄀

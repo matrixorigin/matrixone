@@ -205,7 +205,7 @@ func TestCompileBroadcastCompositeMarkExpressionsUseHashJoin(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
 
-	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false)
+	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false, nil)
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
@@ -288,7 +288,7 @@ func TestCompileNullableNotExistsAntiJoinUsesHashJoin(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
 
-	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false)
+	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false, nil)
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
@@ -323,6 +323,62 @@ func TestCompileNullableNotExistsAntiJoinUsesHashJoin(t *testing.T) {
 	require.Equal(t, plan.Node_ANTI, op.JoinType)
 	require.Len(t, op.EqConds[0], 1)
 	require.Len(t, op.EqConds[1], 1)
+}
+
+func TestCompileArithmeticExistenceUsesHashJoin(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		join      plan.Node_JoinType
+		count     int
+	}{
+		{"semi", `select n.n_name from tpch.nation n where exists (select 1 from tpch.region r where r.r_regionkey=n.n_regionkey-1)`, plan.Node_SEMI, 1},
+		{"anti", `select n.n_name from tpch.nation n where not exists (select 1 from tpch.region r where r.r_regionkey+1=n.n_regionkey)`, plan.Node_ANTI, 1},
+		{"mark", `select exists (select 1 from tpch.region r where r.r_regionkey=n.n_regionkey-1) from tpch.nation n`, plan.Node_MARK, 1},
+		{"compound", `select n.n_name from tpch.nation n where exists (select 1 from tpch.region r where r.r_regionkey*10+r.r_regionkey=n.n_regionkey*10+n.n_nationkey)`, plan.Node_SEMI, 1},
+		{"disjunction", `select exists (select 1 from tpch.region r where r.r_regionkey=n.n_regionkey-1 or r.r_regionkey=n.n_regionkey+1) from tpch.nation n`, plan.Node_MARK, 2},
+		{"negative disjunction", `select not exists (select 1 from tpch.region r where r.r_regionkey=n.n_regionkey-1 or r.r_regionkey=n.n_regionkey+1) from tpch.nation n`, plan.Node_MARK, 2},
+		{"nullable disjunction", `select exists (select 1 from tpch.region r where r.r_comment=n.n_comment or r.r_comment=n.n_name) from tpch.nation n`, plan.Node_MARK, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
+			statements, err := mysql.Parse(ctx.GetContext(), tc.sql, 1)
+			require.NoError(t, err)
+			require.Len(t, statements, 1)
+			p, err := plan2.BuildPlan(ctx, statements[0], false, nil)
+			require.NoError(t, err)
+			query := p.GetQuery()
+			var joins []*plan.Node
+			var visit func(int32)
+			visit = func(id int32) {
+				node := query.Nodes[id]
+				if node.NodeType == plan.Node_JOIN {
+					require.Equal(t, tc.join, node.JoinType)
+					joins = append(joins, node)
+				}
+				for _, child := range node.Children {
+					visit(child)
+				}
+			}
+			for _, root := range query.Steps {
+				visit(root)
+			}
+			require.Len(t, joins, tc.count)
+			for _, join := range joins {
+				join.Stats.HashmapStats.Shuffle = false
+				join.SendMsgList = []plan.MsgHeader{{MsgType: int32(message.MsgJoinMap), MsgTag: 1}}
+				c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}})
+				probe := newShuffleJoinTestScope(t, c.cnList[0], 1)
+				build := newShuffleJoinTestScope(t, c.cnList[0], 1)
+				result := c.compileJoin(join, query.Nodes[join.Children[0]], query.Nodes[join.Children[1]], []*Scope{probe}, []*Scope{build})
+				require.Len(t, result, 1)
+				op, ok := result[0].RootOp.(*hashjoin.HashJoin)
+				require.True(t, ok, "compiled %T, want HashJoin", result[0].RootOp)
+				require.Equal(t, tc.join, op.JoinType)
+				require.Len(t, op.EqConds[0], 1)
+				require.Len(t, op.EqConds[1], 1)
+			}
+		})
+	}
 }
 
 func TestCompileBroadcastMarkJoinSelectsPhysicalOperator(t *testing.T) {

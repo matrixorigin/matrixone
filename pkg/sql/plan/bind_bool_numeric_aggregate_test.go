@@ -51,7 +51,7 @@ func buildOneQuery(t *testing.T, ctx CompilerContext, sql string, prepare bool) 
 	require.NoError(t, err)
 	require.Len(t, stmts, 1)
 	defer stmts[0].Free()
-	return BuildPlan(ctx, stmts[0], prepare)
+	return BuildPlan(ctx, stmts[0], prepare, nil)
 }
 
 // firstAggregate returns the single aggregate of the built plan. It reads the

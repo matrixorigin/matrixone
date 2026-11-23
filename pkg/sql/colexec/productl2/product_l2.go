@@ -91,6 +91,9 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 
 				ctr.inBat = result.Batch
 				if ctr.inBat == nil {
+					if err := ctr.endIgnored(productl2); err != nil {
+						return result, err
+					}
 					ctr.state = End
 					continue
 				}
@@ -99,6 +102,11 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				if ctr.bat == nil {
+					// no centroid to assign a row to: the rows the index cannot store are still
+					// recorded
+					if _, err := ctr.leaveOut(ap, proc, ctr.inBat.Vecs[ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()]); err != nil {
+						return result, err
+					}
 					ctr.inBat = nil
 					continue
 				}
@@ -108,9 +116,9 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.rbat = batch.NewWithSize(len(productl2.Result))
 				for i, rp := range productl2.Result {
 					if rp.Rel == 0 {
-						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inBat.Vecs[rp.Pos].GetType())
+						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inBat.Vecs[rp.Pos].GetType(), proc.Mp())
 					} else {
-						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
+						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType(), proc.Mp())
 					}
 				}
 			} else {
@@ -190,9 +198,9 @@ func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyz
 	// AppendWithCopy clone inherit the producer's allocation selection.
 	for i := range batches {
 		if ctr.bat == nil {
-			ctr.bat = batch.NewOffHeapWithSize(len(batches[i].Vecs))
+			ctr.bat = batch.NewWithSize(len(batches[i].Vecs))
 			for j, source := range batches[i].Vecs {
-				ctr.bat.Vecs[j] = vector.NewOffHeapVecWithType(*source.GetType())
+				ctr.bat.Vecs[j] = vector.NewVec(*source.GetType(), proc.Mp())
 			}
 		}
 		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
@@ -269,7 +277,7 @@ func put1D[T any](pool *sync.Pool, v *[]T) {
 	pool.Put(v)
 }
 
-func newMat[T types.RealNumbers](ctr *container, ap *Productl2, probes [][]T, nullvec []T) ([][]T, error) {
+func newMat[T types.RealNumbers](ctr *container, ap *Productl2, probes [][]T, nullvec []T, leftOut []bool) ([][]T, error) {
 	probeCount := ctr.inBat.RowCount()
 	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
 	tblColVec := ctr.inBat.Vecs[tblColPos]
@@ -287,7 +295,7 @@ func newMat[T types.RealNumbers](ctr *container, ap *Productl2, probes [][]T, nu
 	_, toF32 := any(*new(T)).(float32)
 	oid := tblColVec.GetType().Oid
 	for j := 0; j < probeCount; j++ {
-		if tblColVec.IsNull(uint64(j)) {
+		if tblColVec.IsNull(uint64(j)) || leftOut != nil && leftOut[j] {
 			probes[j] = nullvec
 			continue
 		}
@@ -401,7 +409,11 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 		nullvec = any(*n).([]T)
 	}
 
-	probes, err := newMat[T](ctr, ap, probes, nullvec)
+	leftOut, err := ctr.leaveOut(ap, proc, tblColVec)
+	if err != nil {
+		return err
+	}
+	probes, err = newMat[T](ctr, ap, probes, nullvec, leftOut)
 	if err != nil {
 		return err
 	}
@@ -427,7 +439,9 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 	//os.Stderr.WriteString(fmt.Sprintf("distances %v\n", distances))
 
 	for j := 0; j < probeCount; j++ {
-
+		if leftOut != nil && leftOut[j] {
+			continue
+		}
 		if tblColVec.IsNull(uint64(j)) {
 			leastClusterIndex[j] = 0
 		}

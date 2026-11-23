@@ -19,10 +19,29 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPipelineContextError(t *testing.T) {
+	require.NoError(t, PipelineContextError(nil))
+	require.NoError(t, PipelineContextError(context.Background()))
+	for _, cause := range []error{ErrPipelineStopped, errors.New("producer failed")} {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		cancel(cause)
+		require.ErrorIs(t, PipelineContextError(ctx), cause)
+	}
+	diagnostic := errors.New("deadline diagnostic")
+	ctx, cancel := context.WithDeadlineCause(context.Background(), time.Now().Add(-time.Second), diagnostic)
+	defer cancel()
+	require.ErrorIs(t, PipelineContextError(ctx), context.DeadlineExceeded)
+	require.NotErrorIs(t, PipelineContextError(ctx), diagnostic)
+	normalized, _ := NormalizePipelineRunError(context.DeadlineExceeded, ctx, context.Background())
+	require.ErrorIs(t, normalized, context.DeadlineExceeded, "a pipeline deadline keeps its class even if the query context is still live")
+	require.NotErrorIs(t, normalized, diagnostic)
+}
 
 func TestPipelineFailureProvenance(t *testing.T) {
 	for _, err := range []error{context.Canceled, context.DeadlineExceeded, moerr.NewQueryInterrupted(context.Background())} {

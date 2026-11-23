@@ -301,8 +301,11 @@ func TestBuildFullTextIndexDefs_PositionFreeNonGojieba(t *testing.T) {
 func TestBuildFullTextIndexDefs_OK(t *testing.T) {
 	idxDefs, tblDefs, err := Hooks{}.BuildFullTextIndexDefs(newStubCompilerContext(), ftIndex("ft", "body"), textColMap("id", "body"), nil, "id")
 	require.NoError(t, err)
-	require.Len(t, idxDefs, 2)
-	require.Len(t, tblDefs, 2)
+	require.Len(t, idxDefs, 3)
+	require.Len(t, tblDefs, 3)
+	require.Equal(t, catalog.IndexIgnored_TblType, idxDefs[2].IndexAlgoTableType)
+	require.Equal(t, catalog.IndexIgnored_TblCol_Pk, tblDefs[2].Pkey.PkeyColName)
+	require.Equal(t, int32(types.T_varchar), tblDefs[2].Cols[0].Typ.Id, "the ignored rows are keyed by the source primary key")
 
 	// index defs: both stamped algo=fulltext2, told apart by IndexAlgoTableType.
 	algo := tree.INDEX_TYPE_FULLTEXT2.ToString()
@@ -327,7 +330,7 @@ func TestBuildFullTextIndexDefs_OK(t *testing.T) {
 func TestBuildFullTextIndexDefs_MultiColumnOK(t *testing.T) {
 	idxDefs, _, err := Hooks{}.BuildFullTextIndexDefs(newStubCompilerContext(), ftIndex("ft", "title", "body"), textColMap("id", "title", "body"), nil, "id")
 	require.NoError(t, err)
-	require.Len(t, idxDefs, 2)
+	require.Len(t, idxDefs, 3)
 	require.ElementsMatch(t, []string{"title", "body"}, idxDefs[0].Parts)
 }
 
@@ -356,7 +359,7 @@ func TestBuildFullTextIndexDefs_IncludeOK(t *testing.T) {
 	idxDefs, tblDefs, err := Hooks{}.BuildFullTextIndexDefs(
 		newStubCompilerContext(), ftIndexInclude("ft", "body", "status", "prio"), m, nil, "id")
 	require.NoError(t, err)
-	require.Len(t, idxDefs, 2)
+	require.Len(t, idxDefs, 3)
 
 	// IncludedColumns set on both defs (storage + metadata).
 	require.Equal(t, []string{"status", "prio"}, idxDefs[0].IncludedColumns)

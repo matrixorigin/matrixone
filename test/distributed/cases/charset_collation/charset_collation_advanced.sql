@@ -223,9 +223,9 @@ INSERT INTO t_agg_test VALUES (3, 'APPLE', 30);
 INSERT INTO t_agg_test VALUES (4, 'Banana', 40);
 INSERT INTO t_agg_test VALUES (5, 'banana', 50);
 
-SELECT category, SUM(value) as total FROM t_agg_test GROUP BY category ORDER BY category;
-SELECT category, AVG(value) as avg_val FROM t_agg_test GROUP BY category ORDER BY category;
-SELECT category, COUNT(*) as cnt FROM t_agg_test GROUP BY category ORDER BY category;
+SELECT category, SUM(value) as total FROM t_agg_test GROUP BY category ORDER BY category, CONVERT(category USING BINARY);
+SELECT category, AVG(value) as avg_val FROM t_agg_test GROUP BY category ORDER BY category, CONVERT(category USING BINARY);
+SELECT category, COUNT(*) as cnt FROM t_agg_test GROUP BY category ORDER BY category, CONVERT(category USING BINARY);
 
 -- @case
 -- @desc: Test subquery with different collations

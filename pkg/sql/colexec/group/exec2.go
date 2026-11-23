@@ -89,18 +89,15 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.diagnosticsLogged = false
 	group.ctr.state = vm.Build
 	if group.ctr.mp != nil {
-		group.ctr.free()
+		group.ctr.free(proc.Mp())
 	}
 	group.ctr.groupConcatSourceRowsUntrusted = proc != nil &&
 		!proc.GroupConcatSourceRowProvenanceTrusted()
-	group.ctr.prepareParamKind.Reset(group.Aggs)
 	group.ctr.aggExprs = group.Aggs
 	group.ctr.warningRetentionLimit = process.WarningDiagnosticRetentionLimitForProcess(proc)
 	group.ctr.warningRetentionSet = true
 	group.ctr.groupConcatWarnings.SetWarningBudget(
 		process.WarningDiagnosticBudgetForProcess(proc))
-	group.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
-		hasPrepareParamKindPreservingAgg(group.Aggs)
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
 	if group.ctr.allocationAccount != nil {
 		if err = group.ctr.mp.BindAllocationAccount(
@@ -110,6 +107,9 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		}
 		group.ctr.budget, err = proc.GetExecutionResourceBudget()
 		if err != nil {
+			return err
+		}
+		if err = group.ctr.bindAllocationViews(proc); err != nil {
 			return err
 		}
 		if err = group.ctr.installRecoveryCapacity(); err != nil {
@@ -311,7 +311,7 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			}
 			for i, arg := range ag.GetArgExpressions() {
 				// Most aggregate arguments need no specialization discovery.
-				if f := arg.GetF(); f != nil && f.Func != nil && f.Func.ObjName == "*" && types.T(arg.Typ.Id) == types.T_decimal128 {
+				if f := arg.GetF(); f != nil && f.Func != nil && (f.Func.ObjName == "+" || f.Func.ObjName == "-" || f.Func.ObjName == "*") && types.T(arg.Typ.Id).IsDecimal() {
 					e.Executor[i] = colexec.FuseDecimalAggregateArgument(arg, e.Executor[i])
 				}
 			}
@@ -373,6 +373,9 @@ func GetKeyWidth(id types.T, width0 int32, nullable bool) (width int) {
 		}
 		if id == types.T_array_bf16 || id == types.T_array_float16 {
 			width *= 2
+		}
+		if f, ok := id.BlockScaledFormat(); ok {
+			width = types.BlockScaledCellSize(f, width)
 		}
 		// T_array_int8 / T_array_uint8 are 1 byte/element -> width unchanged
 		// (width0 already counts).
@@ -558,13 +561,13 @@ func (group *Group) ensureRuntimeEmptyGroupingSet() error {
 	if len(group.ctr.aggList) != len(group.Aggs) {
 		group.ctr.aggList, err = group.ctr.makeAggList(group.Aggs)
 		if err != nil {
-			output.Clean(group.ctr.mp)
+			group.ctr.cleanGroupBatch(output)
 			return err
 		}
 	}
 	for _, agg := range group.ctr.aggList {
 		if err = agg.GroupGrow(1); err != nil {
-			output.Clean(group.ctr.mp)
+			group.ctr.cleanGroupBatch(output)
 			return err
 		}
 	}
@@ -654,10 +657,19 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		// here is a strange loop.   our hash table exposed something called
 		// hashmap.UnitLimit -- which limits per iteration insert mini batch size.
 		count := bat.RowCount()
-		evaluated := false
 		var hashBytesBefore int64
+		var compactHitRows int64
+		compactEligible := !group.DynamicGrouping && !group.ctr.groupingAware && !group.ctr.legacyH8CharSemantics &&
+			compactGroupExpressions(group.GroupBy)
 		if !group.ctr.hr.IsEmpty() {
 			hashBytesBefore = group.ctr.hr.Hash.Size()
+		}
+		if count > 0 {
+			if err = group.evaluateBuildInput(proc, bat); err != nil {
+				// A failed expression may already have side effects. There is
+				// no general safe way to replay a partially evaluated batch.
+				return false, err
+			}
 		}
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := min(count-i, hashmap.UnitLimit)
@@ -671,16 +683,6 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			}
 			for {
 				err = nil
-				if !evaluated {
-					if err = group.evaluateBuildInput(proc, bat); err != nil {
-						if retried, retryErr := group.retryBuildBatchAfterCapacity(proc, err); retried {
-							continue
-						} else {
-							return false, retryErr
-						}
-					}
-					evaluated = true
-				}
 				if group.ctr.hr.IsEmpty() {
 					err = group.ctr.buildHashTable(proc.Ctx, 0)
 					if err == nil {
@@ -690,14 +692,20 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 				if err == nil {
 					hashKeyVecs := group.ctr.hashKeyVectors(
 						group.ctr.groupByEvaluate.Vec)
-					err = group.ctr.hr.TxnItr.PreviewInsert(
-						i, n, hashKeyVecs,
-						group.ctr.hr.Hash.GroupCount(),
-						&group.ctr.hr.insertPlan)
-					if err == nil {
-						preview.values = group.ctr.hr.insertPlan.Values()
-						preview.inserted = group.ctr.hr.insertPlan.Inserted()
-						preview.newGroups = int(group.ctr.hr.insertPlan.NewGroups())
+					var compact bool
+					if compactEligible {
+						preview, compact, err = group.ctr.previewCompactGroups(hashKeyVecs, i, n)
+					}
+					if err == nil && !compact {
+						err = group.ctr.hr.TxnItr.PreviewInsert(
+							i, n, hashKeyVecs,
+							group.ctr.hr.Hash.GroupCount(),
+							&group.ctr.hr.insertPlan)
+						if err == nil {
+							preview.values = group.ctr.hr.insertPlan.Values()
+							preview.inserted = group.ctr.hr.insertPlan.Inserted()
+							preview.newGroups = int(group.ctr.hr.insertPlan.NewGroups())
+						}
 					}
 					if err == nil && preview.newGroups > 0 {
 						var growth uint64
@@ -711,7 +719,6 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 									proc, mpool.ErrAllocationAccountCapacity); !retried {
 									return false, retryErr
 								}
-								evaluated = false
 								continue
 							}
 						}
@@ -729,7 +736,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 					}
 					if err == nil {
 						err = group.ctr.hr.Hash.PreAlloc(
-							group.ctr.hr.insertPlan.NewGroups())
+							uint64(preview.newGroups))
 					}
 					if err == nil {
 						err = group.ctr.preflightBuildChunk(
@@ -788,11 +795,15 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 								return false, err
 							}
 						}
+						if preview.existingOnly {
+							compactHitRows += int64(n)
+						} else {
+							group.ctr.hr.publishCompactGroups(vals[:n])
+						}
 						break
 					}
 				}
 				if retried, retryErr := group.retryBuildBatchAfterCapacity(proc, err); retried {
-					evaluated = false
 					continue
 				} else {
 					return false, retryErr
@@ -800,6 +811,9 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			}
 		} // end of mini batch for loop
 
+		if compactHitRows > 0 {
+			group.OpAnalyzer.GetOpStats().AddExtraStat("GroupCompactLookupRows", compactHitRows)
+		}
 		observeHashGrowth(group.OpAnalyzer.GetOpStats(), "GroupHashBuild", hashBytesBefore, group.ctr.hr.Hash.Size())
 		// Prefer subdividing eligible exact DISTINCT keys before generic Group
 		// spill. A hot group's key set can make progress only on this axis.
@@ -913,20 +927,7 @@ func (group *Group) evaluateBuildInput(
 	proc *process.Process,
 	bat *batch.Batch,
 ) error {
-	if err := group.evaluateGroupByAndAggArgs(proc, bat); err != nil {
-		return err
-	}
-	for i := range group.Aggs {
-		if i >= len(group.ctr.aggArgEvaluate) ||
-			len(group.ctr.aggArgEvaluate[i].Vec) == 0 {
-			continue
-		}
-		arg := group.ctr.aggArgEvaluate[i].Vec[0]
-		if arg.Length() > 0 && !arg.AllNull() {
-			group.ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
-		}
-	}
-	return nil
+	return group.evaluateGroupByAndAggArgs(proc, bat)
 }
 
 func (group *Group) retryBuildBatchAfterCapacity(
@@ -948,7 +949,7 @@ func (group *Group) retryBuildBatchAfterCapacity(
 		return false, cause
 	}
 	before := group.ctr.hr.Hash.GroupCount()
-	bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil)
+	bytes, rows, err := group.ctr.spillDataToDiskWithInput(proc, group.OpAnalyzer, nil, true)
 	if err != nil {
 		return false, err
 	}
@@ -1055,23 +1056,27 @@ func (ctr *container) preflightBuildChunk(
 		}
 	}
 	preAllocateVectors := func(
-		destinations []*vector.Vector,
+		slot *groupByPreflight,
+		target *batch.Batch,
 		targetRows int,
 		flags []uint8,
 	) error {
-		for i, destination := range destinations {
+		slot.reset(target)
+		for i, destination := range target.Vecs {
 			if i >= len(vs) || vs[i] == nil {
 				return mpool.ErrAllocationAccountInvariant
 			}
-			if err := destination.PreExtendSelectedBatchValidated(
-				vs[i], offset, rows, flags, targetRows, ctr.mp,
-			); err != nil {
+			preflight, err := destination.PreExtendSelectedBatchValidated(
+				vs[i], offset, rows, flags, targetRows, ctr.groupByMP(),
+			)
+			if err != nil {
 				return err
 			}
+			slot.vecs[i] = preflight
 		}
 		return nil
 	}
-	cancelPreflight := cancelSelectedBatchPreflights
+	currentSlot, standbySlot := &ctr.groupByPreflights[0], &ctr.groupByPreflights[1]
 	var currentFlags, standbyFlags [hashmap.UnitLimit]uint8
 	currentRows, standbyRows := 0, 0
 	for row, flag := range insertList[:rows] {
@@ -1088,7 +1093,8 @@ func (ctr *container) preflightBuildChunk(
 	}
 	if currentRows > 0 {
 		if err := preAllocateVectors(
-			current.Vecs,
+			currentSlot,
+			current,
 			current.RowCount()+currentRows,
 			currentFlags[:rows],
 		); err != nil {
@@ -1096,17 +1102,18 @@ func (ctr *container) preflightBuildChunk(
 			return err
 		}
 	} else {
-		cancelPreflight(current.Vecs)
+		currentSlot.reset(nil)
 	}
 	if standbyRows == 0 && ctr.groupByStandby != nil {
-		cancelPreflight(ctr.groupByStandby.Vecs)
+		standbySlot.reset(nil)
 	}
 	if standbyRows > 0 {
 		if ctr.groupByStandby == nil {
 			return mpool.ErrAllocationAccountInvariant
 		}
 		if err := preAllocateVectors(
-			ctr.groupByStandby.Vecs,
+			standbySlot,
+			ctr.groupByStandby,
 			standbyRows,
 			standbyFlags[:rows],
 		); err != nil {
@@ -1123,20 +1130,11 @@ func (ctr *container) preflightBuildChunk(
 	return nil
 }
 
-func cancelSelectedBatchPreflights(vectors []*vector.Vector) {
-	for _, destination := range vectors {
-		destination.CancelSelectedBatchPreflight()
-	}
-}
-
+// cancelGroupByPreflights drops the selected-batch preflights of an
+// unpublished selection. It never releases admitted backing storage; a later
+// work unit may reuse that capacity.
 func (ctr *container) cancelGroupByPreflights() {
-	if len(ctr.groupByBatches) != 0 {
-		cancelSelectedBatchPreflights(
-			ctr.groupByBatches[len(ctr.groupByBatches)-1].Vecs)
-	}
-	if ctr.groupByStandby != nil {
-		cancelSelectedBatchPreflights(ctr.groupByStandby.Vecs)
-	}
+	ctr.clearGroupByPreflights()
 }
 
 func (ctr *container) boundedSpillReloadPreAlloc(bucketRows int64) uint64 {
@@ -1208,14 +1206,14 @@ func (ctr *container) createNewGroupByBatch(
 	return ctr.createNewGroupByBatchWithAllocation(
 		vs,
 		size,
-		ctr.groupByAllocation,
+		ctr.groupByMP(),
 	)
 }
 
 func (ctr *container) createNewGroupByBatchWithAllocation(
 	vs []*vector.Vector,
 	size int,
-	allocation *vector.AllocationAccountSelection,
+	mp *mpool.MPool,
 ) (*batch.Batch, error) {
 	// initialize the groupByTypes.   this is again very bad design.
 	// types should be resolved at plan time.
@@ -1225,16 +1223,12 @@ func (ctr *container) createNewGroupByBatchWithAllocation(
 		}
 	}
 
-	b := batch.NewOffHeapWithSize(len(ctr.groupByTypes))
+	b := batch.NewWithSize(len(ctr.groupByTypes))
 	for i, typ := range ctr.groupByTypes {
-		b.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+		b.Vecs[i] = vector.NewVec(typ, mp)
 	}
-	if err := b.SetAllocationAccount(allocation); err != nil {
-		b.Clean(ctr.mp)
-		return nil, err
-	}
-	if err := b.PreExtend(ctr.mp, size); err != nil {
-		b.Clean(ctr.mp)
+	if err := b.PreExtend(mp, size); err != nil {
+		ctr.cleanGroupBatch(b)
 		return nil, err
 	}
 	b.SetRowCount(0)
@@ -1243,13 +1237,11 @@ func (ctr *container) createNewGroupByBatchWithAllocation(
 
 // toIncrease is the exact selection count validated before hash publication.
 // Keep that count when splitting a chunk across output batches.
-func (ctr *container) appendGroupByBatchWithStringSources(
+func (ctr *container) appendGroupByBatch(
 	vs []*vector.Vector,
 	offset int,
 	insertList []uint8,
 	toIncrease int,
-	stringSources [][]types.StringSource,
-	stringSourceOffset int,
 ) error {
 	if toIncrease == 0 {
 		// A duplicate-only chunk must not create a fresh retained batch after
@@ -1284,20 +1276,14 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 	}
 
 	// there is enough space in the current batch to insert thisTime.
+	preflights := ctr.groupByPreflightsFor(currBatch)
 	for i, vec := range currBatch.Vecs {
-		var err error
-		if stringSources == nil {
-			err = vec.UnionBatchPreflighted(
-				vs[i], int64(offset), len(thisTime), thisTime, ctr.mp)
-		} else if i >= len(stringSources) || stringSourceOffset < 0 ||
-			stringSourceOffset+len(thisTime) > len(stringSources[i]) {
-			return mpool.ErrAllocationAccountInvariant
-		} else {
-			err = vec.UnionBatchPreflightedWithStringSourcesDeferredNormalization(
-				vs[i], int64(offset), len(thisTime), thisTime,
-				stringSources[i][stringSourceOffset:stringSourceOffset+len(thisTime)], ctr.mp)
+		var preflight *vector.SelectedBatchPreflight
+		if i < len(preflights) {
+			preflight = &preflights[i]
 		}
-		if err != nil {
+		if err := vec.UnionBatchPreflighted(
+			vs[i], int64(offset), len(thisTime), thisTime, preflight, ctr.groupByMP()); err != nil {
 			return err
 		}
 	}
@@ -1306,9 +1292,8 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 	if toIncrease > spaceLeft {
 		// there is not enough space in the current batch to insert thisTime.
 		// so we need to append the rest of the insertList to the next batch.
-		return ctr.appendGroupByBatchWithStringSources(
-			vs, offset+kth+1, insertList[kth+1:], toIncrease-spaceLeft, stringSources,
-			stringSourceOffset+kth+1)
+		return ctr.appendGroupByBatch(
+			vs, offset+kth+1, insertList[kth+1:], toIncrease-spaceLeft)
 	}
 	return nil
 }
@@ -1329,7 +1314,7 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 		// Generic reload can drain more exact keys, so finish its queue before
 		// consuming exact-key leaves. Those leaves remain deferred until EOF.
 		if group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) {
-			if group.ctr.spillBkts != nil && group.ctr.spillBkts.Len() != 0 {
+			if len(group.ctr.spillBkts) != 0 {
 				if _, err := group.ctr.loadSpilledData(proc, group.OpAnalyzer, group.Aggs); err != nil {
 					return vm.CancelResult, err
 				}
@@ -1350,7 +1335,7 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 			return vm.CancelResult, err
 		}
 		if !hasMore {
-			if group.ctr.spillBkts != nil && group.ctr.spillBkts.Len() != 0 {
+			if len(group.ctr.spillBkts) != 0 {
 				// Keep Eval until all generic spill buckets have been returned.
 				// Resetting or ending here would discard every remaining bucket.
 				group.ctr.state = vm.Eval
@@ -1419,12 +1404,7 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	if err := types.WriteInt32(writer, nAggs); err != nil {
 		return vm.CancelResult, false, err
 	}
-	var prepareParamKindSources []prepareParamKindRowsSource
-	if group.ctr.prepareParamKindWireV1 {
-		prepareParamKindSources = make(
-			[]prepareParamKindRowsSource, len(group.ctr.aggList))
-	}
-	for i, ag := range group.ctr.aggList {
+	for _, ag := range group.ctr.aggList {
 		aggexec.SetGroupConcatSourceRowWire(ag, groupConcatSourceRowWireEnabled(proc))
 		aggexec.SetGroupConcatSourceRowProvenanceWire(
 			ag, groupConcatSourceRowProvenanceWireEnabled(proc))
@@ -1447,34 +1427,7 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
 				"canonical DISTINCT argument keys require MORPCVersion79")
 		}
-		if vec := ag.PrepareParamKindVectorForChunk(curr); vec != nil &&
-			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
-			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
-				"aggregate binary-string metadata requires MORPCVersion18")
-		}
-		if vec := ag.PrepareParamKindVectorForChunk(curr); vec != nil &&
-			vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
-			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
-				"aggregate explicit-text metadata requires MORPCVersion23")
-		}
-		if err := saveAggregateChunkForProtocol(
-			ag, curr, writer, stringSourceWireEnabled(proc)); err != nil {
-			return vm.CancelResult, false, err
-		}
-		if !group.ctr.prepareParamKindWireV1 ||
-			!group.Aggs[i].PreservesFirstArgPrepareParamKind() {
-			continue
-		}
-		var err error
-		prepareParamKindSources[i], err = newPrepareParamKindRowsSource(
-			ag.PrepareParamKindVectorForChunk(curr), nil)
-		if err != nil {
-			return vm.CancelResult, false, err
-		}
-	}
-	if group.ctr.prepareParamKindWireV1 {
-		if err := writePrepareParamKindTrailer(proc.Ctx, writer, group.Aggs,
-			&group.ctr.prepareParamKind, prepareParamKindSources); err != nil {
+		if err := ag.SaveIntermediateResultOfChunk(curr, writer); err != nil {
 			return vm.CancelResult, false, err
 		}
 	}

@@ -38,6 +38,13 @@ func NewObjectBuffer(name string) *ObjectBuffer {
 	return buffer
 }
 
+// An object writer keeps its prepared entries valid until Sync returns.
+func newObjectWriterBuffer(name string) *ObjectBuffer {
+	buffer := NewObjectBuffer(name)
+	buffer.vector.Policy |= fileservice.ReplayDataForDiskCache
+	return buffer
+}
+
 func (b *ObjectBuffer) Write(buf []byte, items ...WriteOptions) (int, int) {
 	offset := int64(0)
 	le := len(b.vector.Entries)

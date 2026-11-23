@@ -29,7 +29,7 @@ func BenchmarkBatchUnmarshalReceiverReuse(b *testing.B) {
 			mp := mpool.MustNewZero()
 			source := NewWithSize(columnCount)
 			for i := range source.Vecs {
-				source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+				source.Vecs[i] = vector.NewVec(types.T_int64.ToType(), mp)
 				if err := vector.AppendFixed(source.Vecs[i], int64(i), false, mp); err != nil {
 					b.Fatal(err)
 				}

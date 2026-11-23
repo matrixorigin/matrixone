@@ -781,6 +781,7 @@ type service struct {
 	}
 
 	CNMemoryThrottler rscthrottler.RSCThrottler
+	rssPressure       *rscthrottler.RSSPressureSource
 }
 
 func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {

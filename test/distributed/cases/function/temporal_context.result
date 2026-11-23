@@ -1,0 +1,124 @@
+drop database if exists temporal_context_regression;
+create database temporal_context_regression;
+use temporal_context_regression;
+set @temporal_context_tz = @@time_zone;
+set time_zone = '+00:00';
+create table temporal_context_values(id int, dc date, dt datetime(6), tm time(6), ts timestamp(6));
+insert into temporal_context_values values
+(1, '2024-01-02', '2024-01-02 03:04:05.125000', '12:34:56.125000', '2024-01-02 03:04:05.125000'),
+(2, '0001-01-01', '0001-01-01 00:00:00', '00:00:00.000001', '2024-01-02 03:04:05.125000'),
+(3, null, null, '-00:00:00.000001', null),
+(4, null, null, '00:00:00', null),
+(5, null, null, null, null);
+set @temporal_context_sql_mode = @@sql_mode;
+set sql_mode = '';
+insert into temporal_context_values values (6, '0000-00-00', '0000-00-00 00:00:00', '00:00:00', '0000-00-00 00:00:00');
+set sql_mode = @temporal_context_sql_mode;
+select id, not dc as nd, !dt as ndt, not tm as nt, not ts as nts from temporal_context_values order by id;
+➤ id[4,32,0]  ¦  nd[-6,8,0]  ¦  ndt[-6,8,0]  ¦  nt[-6,8,0]  ¦  nts[-6,8,0]  𝄀
+1  ¦  0  ¦  0  ¦  0  ¦  0  𝄀
+2  ¦  0  ¦  0  ¦  0  ¦  0  𝄀
+3  ¦  null  ¦  null  ¦  0  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  1  ¦  null  𝄀
+5  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+6  ¦  1  ¦  1  ¦  1  ¦  1
+select id, dc and 1 as a, dt or 0 as o, tm xor 1 as x from temporal_context_values order by id;
+➤ id[4,32,0]  ¦  a[-6,8,0]  ¦  o[-6,8,0]  ¦  x[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  0  𝄀
+2  ¦  1  ¦  1  ¦  0  𝄀
+3  ¦  null  ¦  null  ¦  0  𝄀
+4  ¦  null  ¦  null  ¦  1  𝄀
+5  ¦  null  ¦  null  ¦  null  𝄀
+6  ¦  0  ¦  0  ¦  1
+select id, tm is true as t, tm is false as f, tm is not true as nt, tm is not false as nf from temporal_context_values order by id;
+➤ id[4,32,0]  ¦  t[-6,8,0]  ¦  f[-6,8,0]  ¦  nt[-6,8,0]  ¦  nf[-6,8,0]  𝄀
+1  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
+2  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
+3  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
+4  ¦  0  ¦  1  ¦  1  ¦  0  𝄀
+5  ¦  0  ¦  0  ¦  1  ¦  1  𝄀
+6  ¦  0  ¦  1  ¦  1  ¦  0
+select id, dc is true as d, dt is true as dt, ts is true as ts from temporal_context_values order by id;
+➤ id[4,32,0]  ¦  d[-6,8,0]  ¦  dt[-6,8,0]  ¦  ts[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1  ¦  1  𝄀
+3  ¦  0  ¦  0  ¦  0  𝄀
+4  ¦  0  ¦  0  ¦  0  𝄀
+5  ¦  0  ¦  0  ¦  0  𝄀
+6  ¦  0  ¦  0  ¦  0
+select id, tm and null as a, tm or null as o, tm xor null as x from temporal_context_values order by id;
+➤ id[4,32,0]  ¦  a[-6,8,0]  ¦  o[-6,8,0]  ¦  x[-6,8,0]  𝄀
+1  ¦  null  ¦  1  ¦  null  𝄀
+2  ¦  null  ¦  1  ¦  null  𝄀
+3  ¦  null  ¦  1  ¦  null  𝄀
+4  ¦  0  ¦  null  ¦  null  𝄀
+5  ¦  null  ¦  null  ¦  null  𝄀
+6  ¦  0  ¦  null  ¦  null
+select id from temporal_context_values where not tm order by id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+6
+select id from temporal_context_values where dc and tm order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id, truncate(dc, 0) as d, truncate(dt, -2) as dt, truncate(tm, 3) as tm from temporal_context_values order by id;
+➤ id[4,32,0]  ¦  d[8,53,31]  ¦  dt[8,53,31]  ¦  tm[8,53,31]  𝄀
+1  ¦  2.0240102E7  ¦  2.02401020304E13  ¦  123456.125  𝄀
+2  ¦  10101.0  ¦  1.0101E10  ¦  0.0  𝄀
+3  ¦  null  ¦  null  ¦  -0.0  𝄀
+4  ¦  null  ¦  null  ¦  0.0  𝄀
+5  ¦  null  ¦  null  ¦  null  𝄀
+6  ¦  0.0  ¦  0.0  ¦  0.0
+select id, round(dt, -2) as dt, abs(dc) as d, sign(dc) as s from temporal_context_values order by id;
+➤ id[4,32,0]  ¦  dt[8,53,31]  ¦  d[8,53,31]  ¦  s[-5,64,0]  𝄀
+1  ¦  2.02401020304E13  ¦  2.0240102E7  ¦  1  𝄀
+2  ¦  1.0101E10  ¦  10101.0  ¦  1  𝄀
+3  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null  𝄀
+5  ¦  null  ¦  null  ¦  null  𝄀
+6  ¦  0.0  ¦  0.0  ¦  0
+select id, abs(tm) as a, sign(tm) as s, floor(tm) as f, ceil(tm) as c from temporal_context_values order by id;
+➤ id[4,32,0]  ¦  a[8,53,31]  ¦  s[-5,64,0]  ¦  f[8,53,31]  ¦  c[8,53,31]  𝄀
+1  ¦  123456.125  ¦  1  ¦  123456.0  ¦  123457.0  𝄀
+2  ¦  1.0E-6  ¦  1  ¦  0.0  ¦  1.0  𝄀
+3  ¦  1.0E-6  ¦  -1  ¦  -1.0  ¦  -0.0  𝄀
+4  ¦  0.0  ¦  0  ¦  0.0  ¦  0.0  𝄀
+5  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+6  ¦  0.0  ¦  0  ¦  0.0  ¦  0.0
+select id, floor(dt) as f, ceiling(ts) as c from temporal_context_values order by id;
+➤ id[4,32,0]  ¦  f[8,53,31]  ¦  c[8,53,31]  𝄀
+1  ¦  2.0240102030405E13  ¦  2.0240102030406E13  𝄀
+2  ¦  1.0101E10  ¦  2.0240102030406E13  𝄀
+3  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  𝄀
+5  ¦  null  ¦  null  𝄀
+6  ¦  0.0  ¦  0.0
+select id, sqrt(abs(tm)) as s from temporal_context_values where id in (2, 4, 5) order by id;
+➤ id[4,32,0]  ¦  s[8,53,31]  𝄀
+2  ¦  0.001  𝄀
+4  ¦  0.0  𝄀
+5  ¦  null
+select not cast('00:00:00.000001' as time(6)) as n, round(cast('12:59:59.6' as time(1)), 0) as r;
+➤ n[-6,8,0]  ¦  r[8,53,31]  𝄀
+0  ¦  125960.0
+set time_zone = '+08:00';
+select id, floor(ts) as f from temporal_context_values where id = 1;
+➤ id[4,32,0]  ¦  f[8,53,31]  𝄀
+1  ¦  2.0240102110405E13
+prepare temporal_context_stmt from 'select not cast(? as time(6)) as n, abs(cast(? as time(6))) as a, floor(cast(? as time(6))) as f';
+set @temporal_context_arg = '-00:00:00.000001';
+execute temporal_context_stmt using @temporal_context_arg, @temporal_context_arg, @temporal_context_arg;
+➤ n[-6,8,0]  ¦  a[8,53,31]  ¦  f[8,53,31]  𝄀
+0  ¦  1.0E-6  ¦  -1.0
+set @temporal_context_arg = '00:00:00';
+execute temporal_context_stmt using @temporal_context_arg, @temporal_context_arg, @temporal_context_arg;
+➤ n[-6,8,0]  ¦  a[8,53,31]  ¦  f[8,53,31]  𝄀
+1  ¦  0.0  ¦  0.0
+set @temporal_context_arg = null;
+execute temporal_context_stmt using @temporal_context_arg, @temporal_context_arg, @temporal_context_arg;
+➤ n[-6,8,0]  ¦  a[8,53,31]  ¦  f[8,53,31]  𝄀
+null  ¦  null  ¦  null
+deallocate prepare temporal_context_stmt;
+drop database temporal_context_regression;
+set time_zone = @temporal_context_tz;

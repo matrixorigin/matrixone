@@ -144,7 +144,7 @@ type dependentJoinWorkCounter struct {
 	pairs *int
 }
 
-func (j *dependentJoinWorkCounter) BindDependent(factory colexec.DependentProgramFactory, allocation *vector.AllocationAccountSelection) {
+func (j *dependentJoinWorkCounter) BindDependent(factory colexec.DependentProgramFactory, allocation *mpool.MPool) {
 	j.JoinKernel.BindDependent(factory, allocation)
 	if join, ok := j.Join.(*loopjoin.LoopJoin); ok && join.PairCondition != nil {
 		pair := join.PairCondition
@@ -164,7 +164,7 @@ func TestDependentIndependentJoinWork(t *testing.T) {
 			stmts, err := mysql.Parse(proc.Ctx, "SELECT (SELECT (SELECT a.N_NATIONKEY)) FROM NATION a JOIN NATION b ON a.N_NATIONKEY=b.N_NATIONKEY", 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			query, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false)
+			query, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false, nil)
 			require.NoError(t, err)
 			require.NotNil(t, query.Correlation)
 			budget, err := proc.GetExecutionResourceBudget()
@@ -178,32 +178,32 @@ func TestDependentIndependentJoinWork(t *testing.T) {
 				_, err := registry.Finalize(account)
 				require.NoError(t, err)
 			}()
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65, 66, 67)
+			allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerDependent, 64, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			opened, closed, pairs, hashJoins := 0, 0, 0, 0
 			sourceCompiler := func(node *plan.Node) (dependent.SourceFactory, error) {
-				return func(p *process.Process, selection *vector.AllocationAccountSelection, _ *mpool.AllocationAccount) (dependent.Source, error) {
+				return func(p *process.Process, selection *mpool.MPool, _ *mpool.AllocationAccount) (dependent.Source, error) {
 					if node.NodeType == plan.Node_VALUE_SCAN {
 						opened++
 						return &dependentFixtureSource{batch: batch.EmptyForConstFoldBatch, rows: 1, close: func() { closed++ }}, nil
 					}
 					b := batch.NewWithSize(len(node.TableDef.Cols))
 					for i := range b.Vecs {
-						b.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), selection)
+						b.Vecs[i], err = vector.NewVec(types.T_int32.ToType(), dependentFixtureMP(p, selection)), nil
 						if err != nil {
-							b.Clean(p.Mp())
+							b.Clean(dependentFixtureMP(p, selection))
 							return nil, err
 						}
 						for key := int32(1); key <= size; key++ {
-							if err := vector.AppendFixed(b.Vecs[i], key, false, p.Mp()); err != nil {
-								b.Clean(p.Mp())
+							if err := vector.AppendFixed(b.Vecs[i], key, false, dependentFixtureMP(p, selection)); err != nil {
+								b.Clean(dependentFixtureMP(p, selection))
 								return nil, err
 							}
 						}
 					}
 					b.SetRowCount(int(size))
 					opened++
-					return &dependentFixtureSource{batch: b, rows: 1, close: func() { closed++; b.Clean(p.Mp()) }}, nil
+					return &dependentFixtureSource{batch: b, rows: 1, close: func() { closed++; b.Clean(dependentFixtureMP(p, selection)) }}, nil
 				}, nil
 			}
 			c := &Compile{proc: proc, stmt: stmts[0]}

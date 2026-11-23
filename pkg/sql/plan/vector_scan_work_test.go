@@ -157,9 +157,10 @@ func (c *scanWorkCompilerContext) GetContext() context.Context {
 	return c.CompilerContext.GetContext()
 }
 
-func (c *scanWorkCompilerContext) ResolveIndexTableByRef(source *plan.ObjectRef, name string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *scanWorkCompilerContext) ResolveIndexTableByRef(source *plan.ObjectRef, name string, snapshot *plan.Snapshot, borrowOutput *TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	if name != "entries" {
-		return c.CompilerContext.ResolveIndexTableByRef(source, name, snapshot)
+		return c.CompilerContext.ResolveIndexTableByRef(source, name, snapshot, nil)
 	}
 	c.calls++
 	require.Equal(c.t, c.source, source)

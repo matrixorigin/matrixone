@@ -5,7 +5,7 @@ create table t_auto_increment(id bigint auto_increment primary key, v int);
 alter table t_auto_increment alter column id set default 9;
 Invalid default value for 'id'
 desc t_auto_increment;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  bigint  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 v  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t_auto_increment(v) values (10);
@@ -16,7 +16,7 @@ create table t_generated(a int, g int as (a + 1) stored);
 alter table t_generated alter column g set default 9;
 invalid input: generated column 'g' cannot have a default value
 desc t_generated;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 g  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 insert into t_generated(a) values (10);
@@ -26,7 +26,7 @@ select * from t_generated;
 create table t_normal(a int, v int);
 alter table t_normal alter column v set default 9;
 desc t_normal;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 v  ¦  int  ¦  YES  ¦    ¦  9  ¦    ¦  
 insert into t_normal(a) values (10);

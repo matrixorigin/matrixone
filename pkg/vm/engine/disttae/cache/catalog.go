@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gogo/protobuf/proto"
 	"go.uber.org/zap"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -211,7 +212,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 		for _, item := range deletedCpkey {
 			cc.tables.cpkeyIndex.Delete(item)
 		}
-
 	}
 	{ // database cache gc
 		var prevAccountId uint32
@@ -442,6 +442,15 @@ func (cc *CatalogCache) GetTableById(aid uint32, databaseId, tblId uint64) *Tabl
 		aid, databaseId, tblId, types.MaxTs().ToTimestamp())
 }
 
+// ReadPlanTableDefByID captures the current planner definition under the same
+// guard as column publication. The returned graph is read-only and can outlive
+// the lock because catalog publication replaces the graph as a unit.
+func (cc *CatalogCache) ReadPlanTableDefByID(accountID uint32, databaseID, tableID uint64) *plan.TableDef {
+	cc.tableChange.RLock()
+	defer cc.tableChange.RUnlock()
+	return cc.GetTableById(accountID, databaseID, tableID).ReadPlanTableDef()
+}
+
 // WithTableVersion runs fn only when the current table identity still has the
 // expected schema version. The table-change read lock remains held through fn,
 // making the version check and the caller's publication one linearizable
@@ -648,6 +657,8 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 }
 
 func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
+	cc.tableChange.Lock()
+	defer cc.tableChange.Unlock()
 	cpks := bat.GetVector(MO_OFF + 0)
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	for i, ts := range timestamps {
@@ -808,6 +819,9 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 }
 
 func InitTableItemWithColumns(item *TableItem, cols Columns) {
+	if item.schema != nil && item.Constraint == nil {
+		item.Constraint = item.ConstraintBytes()
+	}
 	slices.SortFunc(cols, func(a, b catalog.Column) int { return cmp.Compare(a.Num, b.Num) })
 	coldefs := make([]engine.TableDef, 0, len(cols))
 	for i, col := range cols {
@@ -820,7 +834,52 @@ func InitTableItemWithColumns(item *TableItem, cols Columns) {
 		}
 		coldefs = append(coldefs, genTableDefOfColumn(col))
 	}
-	item.TableDef, item.Defs = getTableDef(item, coldefs)
+	item.Defs = buildCanonicalDefs(item, coldefs)
+	item.replayClusterKey = deriveReplayClusterKey(item)
+	item.schema = newCandidateSchema(item)
+	if item.schema != nil {
+		item.Defs = nil
+		item.Constraint = nil
+	}
+}
+
+// deriveReplayClusterKey uses the same validation as replay on a minimal view.
+func deriveReplayClusterKey(item *TableItem) *readutil.ClusterKeyDescriptor {
+	if item.Defs == nil || item.deleted {
+		return nil
+	}
+	hasCluster := false
+	for _, def := range item.Defs {
+		if a, ok := def.(*engine.AttributeDef); ok && a.Attr.ClusterBy {
+			hasCluster = true
+			break
+		}
+	}
+	if !hasCluster {
+		return nil
+	}
+	view := &plan.TableDef{TblId: item.Id, Version: item.Version}
+	for _, def := range item.Defs {
+		switch d := def.(type) {
+		case *engine.AttributeDef:
+			a := d.Attr
+			name := strings.ToLower(a.Name)
+			view.Cols = append(view.Cols, &plan.ColDef{Name: name, Hidden: a.IsHidden, ClusterBy: a.ClusterBy, Typ: plan.Type{Id: int32(a.Type.Oid)}, Seqnum: uint32(a.Seqnum)})
+			if a.ClusterBy {
+				view.ClusterBy = &plan.ClusterByDef{Name: name}
+			}
+		case *engine.ConstraintDef:
+			for _, c := range d.Cts {
+				if pk, ok := c.(*engine.PrimaryKeyDef); ok && pk.Pkey != nil {
+					view.Pkey = &plan.PrimaryKeyDef{PkeyColName: pk.Pkey.PkeyColName}
+				}
+			}
+		}
+	}
+	if key, ok := readutil.DeclaredClusterKey(view); ok {
+		return &key
+	}
+	return nil
 }
 
 func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
@@ -851,6 +910,8 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 }
 
 func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
+	cc.tableChange.Lock()
+	defer cc.tableChange.Unlock()
 	ParseDatabaseBatchAnd(bat, func(item *DatabaseItem) {
 		cc.databases.data.Set(item)
 		cc.databases.cpkeyIndex.Set(item)
@@ -936,9 +997,123 @@ func decodeColumnAttribute(col catalog.Column) (*engine.AttributeDef, error) {
 	return &engine.AttributeDef{Attr: attr}, nil
 }
 
-func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef, []engine.TableDef) {
+// projectColumns builds a planner-owned column projection from engine attributes.
+func projectColumns(tableName string, coldefs []engine.TableDef) ([]*plan.ColDef, map[string]int32, *plan.ClusterByDef) {
+	count := 0
+	for _, def := range coldefs {
+		if _, ok := def.(*engine.AttributeDef); ok {
+			count++
+		}
+	}
+	cols := make([]*plan.ColDef, 0, count)
+	colValues := make([]plan.ColDef, count)
+	defaults := make([]plan.Default, count)
 	var clusterByDef *plan.ClusterByDef
-	var cols []*plan.ColDef
+	i := int32(0)
+	name2index := make(map[string]int32, count)
+	for _, def := range coldefs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			name := strings.ToLower(attr.Attr.Name)
+			name2index[name] = i
+			col := &colValues[i]
+			*col = plan.ColDef{
+				ColId:      attr.Attr.ID,
+				Name:       name,
+				OriginName: attr.Attr.Name,
+				Typ: plan.Type{
+					Id:                int32(attr.Attr.Type.Oid),
+					Width:             attr.Attr.Type.Width,
+					Scale:             attr.Attr.Type.Scale,
+					AutoIncr:          attr.Attr.AutoIncrement,
+					Table:             tableName,
+					NotNullable:       attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+					Enumvalues:        attr.Attr.EnumVlaues,
+					Charset:           uint32(attr.Attr.Type.Charset),
+					CollationVersion:  uint32(attr.Attr.Type.CollationVersion),
+					NumericAttributes: uint32(attr.Attr.NumericAttributes),
+				},
+				Primary:      attr.Attr.Primary,
+				Default:      plan.CopyDefaultInto(&defaults[i], attr.Attr.Default),
+				OnUpdate:     cloneOnUpdate(attr.Attr.OnUpdate),
+				GeneratedCol: cloneGeneratedCol(attr.Attr.GeneratedCol),
+				Comment:      attr.Attr.Comment,
+				ClusterBy:    attr.Attr.ClusterBy,
+				Hidden:       attr.Attr.IsHidden,
+				Seqnum:       uint32(attr.Attr.Seqnum),
+			}
+			cols = append(cols, col)
+			if attr.Attr.ClusterBy {
+				clusterByDef = &plan.ClusterByDef{
+					Name: name,
+				}
+			}
+			i++
+		}
+	}
+
+	return cols, name2index, clusterByDef
+}
+
+func cloneOnUpdate(v *plan.OnUpdate) *plan.OnUpdate {
+	if v == nil {
+		return nil
+	}
+	return proto.Clone(v).(*plan.OnUpdate)
+}
+
+func cloneGeneratedCol(v *plan.GeneratedCol) *plan.GeneratedCol {
+	if v == nil {
+		return nil
+	}
+	return proto.Clone(v).(*plan.GeneratedCol)
+}
+
+// buildCanonicalDefs validates persisted metadata before publishing an engine schema.
+// It does not construct planner columns or retain planner-owned objects.
+func buildCanonicalDefs(item *TableItem, columns []engine.TableDef) []engine.TableDef {
+	var constraint *engine.ConstraintDef
+	if len(item.Constraint) > 0 {
+		constraint = &engine.ConstraintDef{}
+		if err := constraint.UnmarshalBinary(item.Constraint); err != nil {
+			logutil.Errorf("catalog-cache error: unmarshal table constraint information: %v-%v-%v, err: %v", item.AccountId, item.Id, item.Name, err)
+			return nil
+		}
+	}
+	if item.Partitioned > 0 {
+		partition := &plan.Partition{}
+		if err := partition.Unmarshal([]byte(item.Partition)); err != nil {
+			logutil.Errorf("catalog-cache error: unmarshal table partition information: %v-%v-%v, err: %v", item.AccountId, item.Id, item.Name, err)
+			return nil
+		}
+	}
+	return append(engineDefsHeader(item, constraint, len(columns)), columns...)
+}
+
+func engineDefsHeader(item *TableItem, constraint *engine.ConstraintDef, columnCount int) []engine.TableDef {
+	defs := make([]engine.TableDef, 0, columnCount+5)
+	if item.Comment != "" {
+		defs = append(defs, &engine.CommentDef{Comment: item.Comment})
+	}
+	if item.ViewDef != "" {
+		defs = append(defs, &engine.ViewDef{View: item.ViewDef})
+	}
+	if constraint != nil {
+		defs = append(defs, constraint)
+	}
+	if item.Partitioned > 0 {
+		defs = append(defs, &engine.PartitionDef{Partitioned: item.Partitioned, Partition: item.Partition})
+	}
+	props := &engine.PropertiesDef{Properties: []engine.Property{
+		{Key: catalog.SystemRelAttr_Kind, Value: item.Kind},
+		{Key: catalog.PropSchemaExtra, Value: string(api.MustMarshalTblExtra(item.ExtraInfo))},
+	}}
+	if item.CreateSql != "" {
+		props.Properties = append(props.Properties, engine.Property{Key: catalog.SystemRelAttr_CreateSQL, Value: item.CreateSql})
+	}
+	return append(defs, props)
+}
+
+func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef, []engine.TableDef) {
 	var defs []*plan.TableDef_DefType
 	var properties []*plan.Property
 	var TableType string
@@ -950,87 +1125,56 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	var refChildTbls []uint64
 	var partition *plan.Partition
 
-	tableDef := make([]engine.TableDef, 0)
-
-	i := int32(0)
-	name2index := make(map[string]int32)
-	for _, def := range coldefs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			name := strings.ToLower(attr.Attr.Name)
-			name2index[name] = i
-			cols = append(cols, &plan.ColDef{
-				ColId:      attr.Attr.ID,
-				Name:       name,
-				OriginName: attr.Attr.Name,
-				Typ: plan.Type{
-					Id:                int32(attr.Attr.Type.Oid),
-					Width:             attr.Attr.Type.Width,
-					Scale:             attr.Attr.Type.Scale,
-					AutoIncr:          attr.Attr.AutoIncrement,
-					Table:             tblItem.Name,
-					NotNullable:       attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-					Enumvalues:        attr.Attr.EnumVlaues,
-					Charset:           uint32(attr.Attr.Type.Charset),
-					CollationVersion:  uint32(attr.Attr.Type.CollationVersion),
-					NumericAttributes: uint32(attr.Attr.NumericAttributes),
-				},
-				Primary:      attr.Attr.Primary,
-				Default:      attr.Attr.Default,
-				OnUpdate:     attr.Attr.OnUpdate,
-				GeneratedCol: attr.Attr.GeneratedCol,
-				Comment:      attr.Attr.Comment,
-				ClusterBy:    attr.Attr.ClusterBy,
-				Hidden:       attr.Attr.IsHidden,
-				Seqnum:       uint32(attr.Attr.Seqnum),
-			})
-			if attr.Attr.ClusterBy {
-				clusterByDef = &plan.ClusterByDef{
-					Name: name,
-				}
-			}
-			i++
-		}
-	}
+	cols, name2index, clusterByDef := projectColumns(tblItem.Name, coldefs)
 
 	if tblItem.Comment != "" {
 		properties = append(properties, &plan.Property{
 			Key:   catalog.SystemRelAttr_Comment,
 			Value: tblItem.Comment,
 		})
-
-		tableDef = append(tableDef, &engine.CommentDef{Comment: tblItem.Comment})
 	}
 
 	if tblItem.ViewDef != "" {
 		viewSql = &plan.ViewDef{
 			View: tblItem.ViewDef,
 		}
-
-		tableDef = append(tableDef, &engine.ViewDef{View: tblItem.ViewDef})
 	}
 
-	if len(tblItem.Constraint) > 0 {
-		c := &engine.ConstraintDef{}
-		err := c.UnmarshalBinary(tblItem.Constraint)
-		if err != nil {
-			logutil.Errorf("catalog-cache error: unmarshal table constraint information: %v-%v-%v, err: %v",
-				tblItem.AccountId, tblItem.Id, tblItem.Name, err)
-			return nil, nil
+	for _, def := range coldefs {
+		c, ok := def.(*engine.ConstraintDef)
+		if !ok {
+			continue
 		}
-
-		tableDef = append(tableDef, c)
 		for _, ct := range c.Cts {
 			switch k := ct.(type) {
 			case *engine.IndexDef:
-				indexes = k.Indexes
+				indexes = make([]*plan.IndexDef, len(k.Indexes))
+				for i, v := range k.Indexes {
+					if v != nil {
+						indexes[i] = proto.Clone(v).(*plan.IndexDef)
+					}
+				}
 			case *engine.ForeignKeyDef:
-				foreignKeys = k.Fkeys
+				foreignKeys = make([]*plan.ForeignKeyDef, len(k.Fkeys))
+				for i, v := range k.Fkeys {
+					if v != nil {
+						foreignKeys[i] = proto.Clone(v).(*plan.ForeignKeyDef)
+					}
+				}
 			case *engine.RefChildTableDef:
-				refChildTbls = k.Tables
+				refChildTbls = append([]uint64(nil), k.Tables...)
 			case *engine.PrimaryKeyDef:
-				primarykey = k.Pkey
+				if k.Pkey != nil {
+					primarykey = proto.Clone(k.Pkey).(*plan.PrimaryKeyDef)
+				}
 			case *engine.StreamConfigsDef:
-				properties = append(properties, k.Configs...)
+				for _, v := range k.Configs {
+					if v == nil {
+						properties = append(properties, nil)
+					} else {
+						properties = catalog.AppendStreamConfigProperties(properties, []*plan.Property{proto.Clone(v).(*plan.Property)})
+					}
+				}
 			}
 		}
 	}
@@ -1043,11 +1187,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 				tblItem.AccountId, tblItem.Id, tblItem.Name, err)
 			return nil, nil
 		}
-
-		tableDef = append(tableDef, &engine.PartitionDef{
-			Partitioned: tblItem.Partitioned,
-			Partition:   tblItem.Partition,
-		})
 	}
 
 	properties = append(properties, &plan.Property{
@@ -1056,31 +1195,14 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	})
 	TableType = tblItem.Kind
 
-	props := &engine.PropertiesDef{}
-	props.Properties = append(props.Properties, engine.Property{
-		Key:   catalog.SystemRelAttr_Kind,
-		Value: TableType,
-	})
-	props.Properties = append(props.Properties, engine.Property{
-		Key:   catalog.PropSchemaExtra,
-		Value: string(api.MustMarshalTblExtra(tblItem.ExtraInfo)),
-	})
-
 	if tblItem.CreateSql != "" {
 		properties = append(properties, &plan.Property{
 			Key:   catalog.SystemRelAttr_CreateSQL,
 			Value: tblItem.CreateSql,
 		})
 		Createsql = tblItem.CreateSql
-
-		props.Properties = append(props.Properties, engine.Property{
-			Key:   catalog.SystemRelAttr_CreateSQL,
-			Value: Createsql,
-		})
 	}
 
-	tableDef = append(tableDef, props)
-	tableDef = append(tableDef, coldefs...)
 	if len(properties) > 0 {
 		defs = append(defs, &plan.TableDef_DefType{
 			Def: &plan.TableDef_DefType_Properties{
@@ -1096,6 +1218,13 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	}
 	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
 		clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
+	}
+
+	checks := make([]*plan.CheckDef, len(tblItem.ExtraInfo.GetChecks()))
+	for i, v := range tblItem.ExtraInfo.GetChecks() {
+		if v != nil {
+			checks[i] = proto.Clone(v).(*plan.CheckDef)
+		}
 	}
 
 	// IsTemporary is session state, not a projection of the durable marker.
@@ -1125,9 +1254,25 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		DefaultCharset:   tblItem.ExtraInfo.GetDefaultCharset(),
 		CollationVersion: tblItem.ExtraInfo.GetCollationVersion(),
 		KeyFormat:        tblItem.ExtraInfo.GetKeyFormat(),
-		Checks:           tblItem.ExtraInfo.GetChecks(),
+		Checks:           checks,
 		LogicalId:        tblItem.LogicalId,
-	}, tableDef
+	}, coldefs
+}
+
+// ReadPlanTableDef returns a read-only planner definition. Published items
+// share their immutable graph; legacy items reconstruct it from their definitions.
+func (item *TableItem) ReadPlanTableDef() *plan.TableDef {
+	if item == nil || item.deleted {
+		return nil
+	}
+	if item.schema != nil {
+		return item.schema.planner
+	}
+	if item.Defs == nil {
+		return nil
+	}
+	def, _ := getTableDef(item, item.Defs)
+	return def
 }
 
 // ReplayClusterKey copies one schema under the same publication guard as column
@@ -1148,8 +1293,11 @@ func (cc *CatalogCache) ReplayClusterKey(account uint32, dbID, tableID uint64, n
 		if item.deleted || item.Id != tableID {
 			return false
 		}
-		key, ok := readutil.DeclaredClusterKey(item.TableDef)
-		if ok && key.TableID == tableID && key.Version == item.Version {
+		if item.replayClusterKey != nil {
+			key := *item.replayClusterKey
+			if key.TableID != tableID || key.Version != item.Version {
+				return false
+			}
 			key.Effective = types.TimestampToTS(item.Ts)
 			key.Through = types.TimestampToTS(at)
 			result = &key

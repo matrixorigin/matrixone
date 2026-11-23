@@ -24,7 +24,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -67,9 +66,7 @@ func TestInternalSQLWarningAttemptOutcomes(t *testing.T) {
 			})
 			ctrl := gomock.NewController(t)
 			proc.Base.TxnClient, proc.Base.TxnOperator = newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
-			buf := buffer.New()
-			t.Cleanup(buf.Free)
-			internal := &sqlExecutor{addr: proc.GetService(), eng: newStubEngine(), mp: proc.Mp(), txnClient: proc.Base.TxnClient, buf: buf}
+			internal := &sqlExecutor{addr: proc.GetService(), eng: newStubEngine(), mp: proc.Mp(), txnClient: proc.Base.TxnClient}
 			rt := moruntime.ServiceRuntime(proc.GetService())
 			previous, existed := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
 			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, internal)
@@ -146,7 +143,7 @@ func TestGroupConcatWarningAttemptOutcomes(t *testing.T) {
 			stmts, err := mysql.Parse(ctx, sql, 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
 			require.NoError(t, err)
 			pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 			ctrl := gomock.NewController(t)
@@ -284,11 +281,11 @@ func TestStringAssignmentWarningAttemptDiscard(t *testing.T) {
 	attempt := newWarningAttempt(proc, false)
 	require.NotNil(t, attempt)
 
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer source.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(source, []byte("abcd"), false, proc.Mp()))
 	target := types.New(types.T_varchar, 3, 0)
-	destination := vector.NewVec(target)
+	destination := vector.NewVec(target, proc.Mp())
 	defer destination.Free(proc.Mp())
 	result := vector.NewFunctionResultWrapper(target, proc.Mp())
 	defer result.Free()
@@ -377,7 +374,7 @@ func TestPreparedGroupConcatFloorFreshAndRetryCompile(t *testing.T) {
 	stmts, err := mysql.Parse(ctx, sql, 1)
 	require.NoError(t, err)
 	defer stmts[0].Free()
-	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
 	require.NoError(t, err)
 	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 	ctrl := gomock.NewController(t)
@@ -406,7 +403,7 @@ func TestPreparedGroupConcatFloorFreshAndRetryCompile(t *testing.T) {
 		// retain the same statement-owned floor, independently of physical config.
 		for _, rebuild := range []bool{false, true} {
 			c.SetBuildPlanFunc(func(context.Context) (*plan.Plan, error) { return plan2.DeepCopyPlan(pn), nil })
-			retry, err := c.buildRetryCompile(rebuild)
+			retry, err := c.buildRetryCompile(rebuild, false, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.floor, retry.groupConcatMaxLenFloor)
 			_, err = retry.Run(0)

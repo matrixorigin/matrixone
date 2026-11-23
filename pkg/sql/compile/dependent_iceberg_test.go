@@ -76,7 +76,7 @@ func TestDependentIcebergInsert(t *testing.T) {
 			require.NoError(t, err)
 			defer stmts[0].Free()
 			optimizer := plan2.NewMockOptimizer(true, proc)
-			bound, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+			bound, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false, nil)
 			require.NoError(t, err)
 			q := bound.GetQuery()
 			td := &plan.TableDef{Name: "gold_orders", DbId: 1, TblId: 2, TableType: catalog.SystemExternalRel, Createsql: icebergInsertCreatesql(), Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}}}}
@@ -118,27 +118,27 @@ func TestDependentIcebergInsert(t *testing.T) {
 			defer func() { account.Seal(); _, err := registry.Finalize(account); require.NoError(t, err) }()
 			opened, closed := 0, 0
 			template, err := dependent.Compile(proc.Ctx, q, func(node *plan.Node) (dependent.SourceFactory, error) {
-				return func(child *process.Process, allocation *vector.AllocationAccountSelection, _ *mpool.AllocationAccount) (dependent.Source, error) {
+				return func(child *process.Process, allocation *mpool.MPool, _ *mpool.AllocationAccount) (dependent.Source, error) {
 					opened++
 					if node.NodeType == plan.Node_VALUE_SCAN {
 						return &dependentFixtureSource{batch: batch.EmptyForConstFoldBatch, rows: 1, close: func() { closed++ }}, nil
 					}
 					b := batch.NewWithSize(len(node.TableDef.Cols))
 					for i := range b.Vecs {
-						b.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), allocation)
+						b.Vecs[i], err = vector.NewVec(types.T_int32.ToType(), dependentFixtureMP(child, allocation)), nil
 						if err != nil {
-							b.Clean(child.Mp())
+							b.Clean(dependentFixtureMP(child, allocation))
 							return nil, err
 						}
 						for _, v := range []int32{11, 22} {
-							if err := vector.AppendFixed(b.Vecs[i], v, false, child.Mp()); err != nil {
-								b.Clean(child.Mp())
+							if err := vector.AppendFixed(b.Vecs[i], v, false, dependentFixtureMP(child, allocation)); err != nil {
+								b.Clean(dependentFixtureMP(child, allocation))
 								return nil, err
 							}
 						}
 					}
 					b.SetRowCount(2)
-					return &dependentFixtureSource{batch: b, rows: 1, close: func() { closed++; b.Clean(child.Mp()) }}, nil
+					return &dependentFixtureSource{batch: b, rows: 1, close: func() { closed++; b.Clean(dependentFixtureMP(child, allocation)) }}, nil
 				}, nil
 			}, c.compileDependentKernel)
 			require.NoError(t, err)
@@ -270,13 +270,13 @@ func (e *dependentIcebergCatalog) Exec(ctx context.Context, sql string, _ execut
 	for i, value := range values {
 		switch value := value.(type) {
 		case uint32:
-			b.Vecs[i] = vector.NewVec(types.T_uint32.ToType())
+			b.Vecs[i] = vector.NewVec(types.T_uint32.ToType(), e.proc.Mp())
 			require.NoError(e.t, vector.AppendFixed(b.Vecs[i], value, false, e.proc.Mp()))
 		case uint64:
-			b.Vecs[i] = vector.NewVec(types.T_uint64.ToType())
+			b.Vecs[i] = vector.NewVec(types.T_uint64.ToType(), e.proc.Mp())
 			require.NoError(e.t, vector.AppendFixed(b.Vecs[i], value, false, e.proc.Mp()))
 		case string:
-			b.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+			b.Vecs[i] = vector.NewVec(types.T_varchar.ToType(), e.proc.Mp())
 			require.NoError(e.t, vector.AppendBytes(b.Vecs[i], []byte(value), false, e.proc.Mp()))
 		}
 	}

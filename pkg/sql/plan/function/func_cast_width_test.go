@@ -17,10 +17,13 @@ package function
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
+	"github.com/RoaringBitmap/roaring/v2"
+	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -128,13 +131,13 @@ func TestZeroWidthCharVarcharAssignment(t *testing.T) {
 		var src *vector.Vector
 		switch sourceType {
 		case types.T_text:
-			src = vector.NewVec(types.T_text.ToType())
+			src = vector.NewVec(types.T_text.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendBytes(src, []byte(input), false, proc.Mp()))
 		case types.T_int64:
-			src = vector.NewVec(types.T_int64.ToType())
+			src = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixed(src, int64(1), false, proc.Mp()))
 		case types.T_bool:
-			src = vector.NewVec(types.T_bool.ToType())
+			src = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixed(src, true, false, proc.Mp()))
 		default:
 			t.Fatalf("unsupported zero-width test source %s", sourceType)
@@ -142,7 +145,7 @@ func TestZeroWidthCharVarcharAssignment(t *testing.T) {
 		defer src.Free(proc.Mp())
 
 		target := types.New(targetType, 0, 0)
-		dst := vector.NewVec(target)
+		dst := vector.NewVec(target, proc.Mp())
 		defer dst.Free(proc.Mp())
 		result := vector.NewFunctionResultWrapper(target, proc.Mp())
 		defer result.Free()
@@ -273,9 +276,9 @@ func TestIsStrictSqlMode(t *testing.T) {
 func castTextToVarchar3(t *testing.T, proc *process.Process, input string) (string, error) {
 	t.Helper()
 	vc3 := types.New(types.T_varchar, 3, 0)
-	src := vector.NewVec(types.T_text.ToType())
+	src := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(src, []byte(input), false, proc.Mp()))
-	dst := vector.NewVec(vc3)
+	dst := vector.NewVec(vc3, proc.Mp())
 	rs := vector.NewFunctionResultWrapper(vc3, proc.Mp())
 	defer rs.Free()
 	require.NoError(t, rs.PreExtendAndReset(1))
@@ -325,13 +328,151 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 
 	// DDL cast (NewStrictCast) never applies the trailing-space exemption.
 	proc := testutil.NewProcess(t)
-	src := vector.NewVec(types.T_text.ToType())
+	src := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(src, []byte("abc   "), false, proc.Mp()))
-	dst := vector.NewVec(types.New(types.T_varchar, 3, 0))
+	dst := vector.NewVec(types.New(types.T_varchar, 3, 0), proc.Mp())
 	rs := vector.NewFunctionResultWrapper(types.New(types.T_varchar, 3, 0), proc.Mp())
 	defer rs.Free()
 	require.NoError(t, rs.PreExtendAndReset(1))
 	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
+}
+
+func TestDecimalAssignmentChecksPrecisionInStrictMode(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sqlMode string
+	}{
+		{name: "strict", sqlMode: "STRICT_TRANS_TABLES"},
+		{name: "non-strict"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return tc.sqlMode, nil
+				}
+				return nil, nil
+			})
+			source := vector.NewVec(types.T_bool.ToType(), proc.Mp())
+			defer source.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixed(source, true, false, proc.Mp()))
+			targetType := types.New(types.T_decimal64, 1, 1)
+			target := vector.NewConstNull(targetType, 1, proc.Mp())
+			defer target.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			err := NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil)
+			if tc.sqlMode != "" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "0.9", vector.MustFixedColWithTypeCheck[types.Decimal64](result.GetResultVector())[0].Format(1))
+			}
+		})
+	}
+}
+
+func TestDateAssignmentKeepsZeroAndRejectsInvalidText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+	targetType := types.T_date.ToType()
+	target := vector.NewConstNull(targetType, 1, proc.Mp())
+	defer target.Free(proc.Mp())
+	for _, tc := range []struct {
+		value string
+		valid bool
+	}{
+		{"0000-00-00", true},
+		{"2020-00-00", false},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			source := testutil.MakeVarcharVector([]string{tc.value}, nil, proc.Mp())
+			defer source.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			err := NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil)
+			if tc.valid {
+				require.NoError(t, err)
+				require.Equal(t, types.ZeroDate, vector.MustFixedColWithTypeCheck[types.Date](result.GetResultVector())[0])
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestTypedBinaryAssignmentPreservesShortPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	targetType := types.New(types.T_binary, 4, 0)
+	source := vector.NewVec(targetType, proc.Mp())
+	defer source.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(source, []byte{'A', 'B'}, false, proc.Mp()))
+	target := vector.NewConstNull(targetType, 1, proc.Mp())
+	defer target.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil))
+	got, isNull := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+	require.False(t, isNull)
+	require.Equal(t, []byte{'A', 'B'}, got)
+}
+
+func TestAlterCopyCanNarrowDatetimeToDate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "STRICT_TRANS_TABLES", nil
+		}
+		return nil, nil
+	})
+	value, err := types.ParseDatetime("2024-01-02 11:22:33", 0)
+	require.NoError(t, err)
+	source := vector.NewVec(types.T_datetime.ToType(), proc.Mp())
+	defer source.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(source, value, false, proc.Mp()))
+	targetType := types.T_date.ToType()
+	target := vector.NewConstNull(targetType, 1, proc.Mp())
+	defer target.Free(proc.Mp())
+	run := func() error {
+		result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		return NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil)
+	}
+	require.Error(t, run())
+	proc.Ctx = context.WithValue(proc.Ctx, defines.AlterCopyOpt{}, &plan.AlterCopyOpt{})
+	require.NoError(t, run())
+}
+
+func TestStrictBinaryAssignmentRejectsOverWidthValue(t *testing.T) {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return "STRICT_TRANS_TABLES", nil
+				}
+				return nil, nil
+			})
+			source := testutil.MakeVarcharVector([]string{"ab"}, nil, proc.Mp())
+			defer source.Free(proc.Mp())
+			typ := types.New(oid, 1, 0)
+			target := vector.NewConstNull(typ, 1, proc.Mp())
+			defer target.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.Error(t, NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil))
+		})
+	}
 }
 
 func TestAssignStringWidthWarningDiagnostics(t *testing.T) {
@@ -347,6 +488,8 @@ func TestAssignStringWidthWarningDiagnostics(t *testing.T) {
 		{name: "varchar non-space overflow", target: types.T_varchar, input: "abcd", want: "abc", wantWarning: true},
 		{name: "varchar multibyte overflow", target: types.T_varchar, input: "你好世界", want: "你好世", wantWarning: true},
 		{name: "varchar trailing space overflow", target: types.T_varchar, input: "abc ", want: "abc", wantWarning: true},
+		{name: "binary byte overflow", target: types.T_binary, input: "abcd", want: "abc", wantWarning: true},
+		{name: "varbinary byte overflow", target: types.T_varbinary, input: "abcd", want: "abc", wantWarning: true},
 		{name: "char trailing space exemption", target: types.T_char, input: "abc ", want: "abc", wantWarning: false},
 	}
 
@@ -355,11 +498,11 @@ func TestAssignStringWidthWarningDiagnostics(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			session := &numericWarningSession{}
 			proc.Session = session
-			source := vector.NewVec(types.T_varchar.ToType())
+			source := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			defer source.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(source, []byte(tc.input), false, proc.Mp()))
 			target := types.New(tc.target, 3, 0)
-			destination := vector.NewVec(target)
+			destination := vector.NewVec(target, proc.Mp())
 			defer destination.Free(proc.Mp())
 			result := vector.NewFunctionResultWrapper(target, proc.Mp())
 			defer result.Free()
@@ -386,11 +529,11 @@ func TestAssignStringWidthWarningUsesExecutionAttemptSink(t *testing.T) {
 	sink := &numericWarningSession{}
 	proc.WarningSink = sink
 
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer source.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(source, []byte("abcd"), false, proc.Mp()))
 	target := types.New(types.T_varchar, 3, 0)
-	destination := vector.NewVec(target)
+	destination := vector.NewVec(target, proc.Mp())
 	defer destination.Free(proc.Mp())
 	result := vector.NewFunctionResultWrapper(target, proc.Mp())
 	defer result.Free()
@@ -440,12 +583,12 @@ func TestTinyTextAssignmentWidthUsesBytes(t *testing.T) {
 			return sqlMode, nil
 		})
 
-		src := vector.NewVec(types.T_text.ToType())
+		src := vector.NewVec(types.T_text.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(src, []byte(input), false, proc.Mp()))
 		defer src.Free(proc.Mp())
 
 		target := types.New(types.T_text, types.MaxTinyTextLen, 0)
-		dst := vector.NewVec(target)
+		dst := vector.NewVec(target, proc.Mp())
 		defer dst.Free(proc.Mp())
 		result := vector.NewFunctionResultWrapper(target, proc.Mp())
 		defer result.Free()
@@ -497,10 +640,10 @@ func TestTextBlobFamilyAssignmentWidthUsesBytes(t *testing.T) {
 		session := &numericWarningSession{}
 		proc.Session = session
 
-		src := vector.NewVec(sourceType)
+		src := vector.NewVec(sourceType, proc.Mp())
 		require.NoError(t, vector.AppendBytes(src, input, false, proc.Mp()))
 		defer src.Free(proc.Mp())
-		dst := vector.NewVec(targetType)
+		dst := vector.NewVec(targetType, proc.Mp())
 		defer dst.Free(proc.Mp())
 		result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
 		defer result.Free()
@@ -600,11 +743,11 @@ func TestAssignmentCastTypedSource(t *testing.T) {
 		proc *process.Process,
 		cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error,
 	) (string, error) {
-		src := vector.NewVec(types.T_int64.ToType())
+		src := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, int64(12345), false, proc.Mp()))
 		defer src.Free(proc.Mp())
 		target := types.New(types.T_varchar, 3, 0)
-		dst := vector.NewVec(target)
+		dst := vector.NewVec(target, proc.Mp())
 		defer dst.Free(proc.Mp())
 		result := vector.NewFunctionResultWrapper(target, proc.Mp())
 		defer result.Free()
@@ -681,11 +824,11 @@ func castGeometryToString(
 		src, err = vector.NewConstBytes(sourceType.ToType(), payload, 1, proc.Mp())
 		require.NoError(t, err)
 	} else {
-		src = vector.NewVec(sourceType.ToType())
+		src = vector.NewVec(sourceType.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(src, payload, false, proc.Mp()))
 	}
 	defer src.Free(proc.Mp())
-	dst := vector.NewVec(toType)
+	dst := vector.NewVec(toType, proc.Mp())
 	defer dst.Free(proc.Mp())
 	rs := vector.NewFunctionResultWrapper(toType, proc.Mp())
 	defer rs.Free()
@@ -881,11 +1024,11 @@ func TestJSONBlobAssignmentWidthWarning(t *testing.T) {
 		session := &numericWarningSession{}
 		proc.Session = session
 
-		source := vector.NewVec(types.T_json.ToType())
+		source := vector.NewVec(types.T_json.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(source, []byte(encoded), false, proc.Mp()))
 		defer source.Free(proc.Mp())
 		target := types.New(types.T_blob, types.MaxStringSize, 0)
-		destination := vector.NewVec(target)
+		destination := vector.NewVec(target, proc.Mp())
 		defer destination.Free(proc.Mp())
 		result := vector.NewFunctionResultWrapper(target, proc.Mp())
 		defer result.Free()
@@ -912,4 +1055,211 @@ func TestJSONBlobAssignmentWidthWarning(t *testing.T) {
 
 	_, _, err = run(t, "", NewStrictCast)
 	require.Error(t, err, "the old-protocol cast_strict fallback must enforce BLOB width")
+}
+
+// Binary assignment widths count bytes, even when a truncated payload is not
+// valid UTF-8. SQL mode/IGNORE belongs to the existing assignment cast owner.
+func TestCastBinaryAssignmentByteWidth(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+		for _, tc := range []struct {
+			name   string
+			input  string
+			strict bool
+			mode   castMode
+			want   string
+			error  bool
+		}{
+			{"strict_multibyte", "中", true, castModeStrictStringWidth, "", true},
+			{"strict_ascii", "abc", true, castModeStrictStringWidth, "", true},
+			{"nonstrict_multibyte", "中", false, castModeAssignment, string([]byte{0xe4, 0xb8}), false},
+			{"ignore_multibyte", "中", false, castModeAssignmentIgnore, string([]byte{0xe4, 0xb8}), false},
+			{"nonstrict_ascii", "abc", false, castModeAssignment, "ab", false},
+			{"strict_spaces_not_exempt", "ab ", true, castModeStrictStringWidth, "", true},
+			{"fits", "ab", true, castModeStrictStringWidth, "ab", false},
+		} {
+			t.Run(oid.String()+"/"+tc.name, func(t *testing.T) {
+				target := types.New(oid, 2, 0)
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.input}, nil)}, NewFunctionTestResult(target, false, []string{tc.want}, nil),
+					func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+						return strToStr(proc.Ctx, proc, vector.GenerateFunctionStrParameter(parameters[0]), result.(*vector.FunctionResult[types.Varlena]), length, target, tc.strict, true, true, tc.mode, selectList)
+					})
+				t.Cleanup(fc.Free)
+				actual, err := fc.DebugRun()
+				if tc.error {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrCastWidthExceeded), "%v", err)
+					return
+				}
+				require.NoError(t, err)
+				got, isNull := vector.GenerateFunctionStrParameter(actual).GetStrValue(0)
+				require.False(t, isNull)
+				require.Equal(t, []byte(tc.want), got)
+			})
+		}
+	}
+}
+
+func TestRegisteredCastOpaqueZeroWidthPreservesConsumerState(t *testing.T) {
+	sketch := hll.NewNoSparse()
+	sketch.Insert([]byte("a"))
+	sketch.Insert([]byte("b"))
+	sketch.Insert([]byte("b"))
+	hllState, err := sketch.MarshalBinary()
+	require.NoError(t, err)
+	bitmap := roaring.New()
+	bitmap.Add(1)
+	bitmap.Add(2)
+	bitmap.Add(2)
+	bitmapState, err := bitmap.MarshalBinary()
+	require.NoError(t, err)
+	for _, state := range []struct {
+		name, consumer string
+		data           []byte
+	}{{"HLL", "hll_cardinality", hllState}, {"bitmap", "bitmap_count", bitmapState}} {
+		for _, oid := range []types.T{types.T_blob, types.T_text, types.T_binary} {
+			t.Run(state.name+"/"+oid.String(), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				source := vector.NewVec(oid.ToType(), proc.Mp())
+				t.Cleanup(func() { source.Free(proc.Mp()) })
+				require.NoError(t, vector.AppendBytes(source, state.data, false, proc.Mp()))
+				targetType := types.T_varbinary.ToType()
+				targetType.Width = 0
+				target := vector.NewConstNull(targetType, 1, proc.Mp())
+				t.Cleanup(func() { target.Free(proc.Mp()) })
+				resolved, err := GetFunctionByName(proc.Ctx, "cast", []types.Type{oid.ToType(), targetType})
+				require.NoError(t, err)
+				converted, err := RunFunctionDirectly(proc, resolved.GetEncodedOverloadID(), []*vector.Vector{source, target}, 1)
+				require.NoError(t, err)
+				t.Cleanup(func() { converted.Free(proc.Mp()) })
+				got, isNull := vector.GenerateFunctionStrParameter(converted).GetStrValue(0)
+				require.False(t, isNull)
+				require.Equal(t, state.data, got)
+				consumer, err := GetFunctionByName(proc.Ctx, state.consumer, []types.Type{targetType})
+				require.NoError(t, err)
+				count, err := RunFunctionDirectly(proc, consumer.GetEncodedOverloadID(), []*vector.Vector{converted}, 1)
+				require.NoError(t, err)
+				t.Cleanup(func() { count.Free(proc.Mp()) })
+				require.Equal(t, uint64(2), vector.MustFixedColNoTypeCheck[uint64](count)[0])
+			})
+		}
+	}
+}
+
+func TestRegisteredCastZeroWidthSQLAssignment(t *testing.T) {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+		for _, tc := range []struct {
+			name, function, mode string
+			reject               bool
+		}{{"strict", "cast_assign", "STRICT_TRANS_TABLES", true}, {"nonstrict", "cast_assign", "", false}, {"IGNORE", "cast_ignore", "STRICT_TRANS_TABLES", false}} {
+			t.Run(oid.String()+"/"+tc.name, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return tc.mode, nil })
+				source := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+				t.Cleanup(func() { source.Free(proc.Mp()) })
+				require.NoError(t, vector.AppendBytes(source, []byte("x"), false, proc.Mp()))
+				targetType := types.New(oid, 0, 0)
+				target := vector.NewConstNull(targetType, 1, proc.Mp())
+				t.Cleanup(func() { target.Free(proc.Mp()) })
+				resolved, err := GetFunctionByName(proc.Ctx, tc.function, []types.Type{types.T_varchar.ToType(), targetType})
+				require.NoError(t, err)
+				value, err := RunFunctionDirectly(proc, resolved.GetEncodedOverloadID(), []*vector.Vector{source, target}, 1)
+				if tc.reject {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrCastWidthExceeded), "%v", err)
+					return
+				}
+				require.NoError(t, err)
+				t.Cleanup(func() { value.Free(proc.Mp()) })
+				got, isNull := vector.GenerateFunctionStrParameter(value).GetStrValue(0)
+				require.False(t, isNull)
+				require.Empty(t, got)
+			})
+		}
+	}
+}
+
+// Numeric column expressions must use the same assignment policy as literals:
+// reject overflow in strict mode, and retain truncated bytes with a warning in
+// non-strict/IGNORE mode. Explicit CAST keeps its separate truncation contract.
+func TestNumericBinaryAssignmentSQLModes(t *testing.T) {
+	inputs := []struct {
+		name  string
+		input FunctionTestInput
+		text  string
+	}{
+		{"int8", NewFunctionTestInput(types.T_int8.ToType(), []int8{-123, 0}, []bool{false, true}), "-123"},
+		{"int16", NewFunctionTestInput(types.T_int16.ToType(), []int16{-123, 0}, []bool{false, true}), "-123"},
+		{"int32", NewFunctionTestInput(types.T_int32.ToType(), []int32{-123, 0}, []bool{false, true}), "-123"},
+		{"int64", NewFunctionTestInput(types.T_int64.ToType(), []int64{-123, 0}, []bool{false, true}), "-123"},
+		{"uint8", NewFunctionTestInput(types.T_uint8.ToType(), []uint8{123, 0}, []bool{false, true}), "123"},
+		{"uint16", NewFunctionTestInput(types.T_uint16.ToType(), []uint16{123, 0}, []bool{false, true}), "123"},
+		{"uint32", NewFunctionTestInput(types.T_uint32.ToType(), []uint32{123, 0}, []bool{false, true}), "123"},
+		{"uint64", NewFunctionTestInput(types.T_uint64.ToType(), []uint64{123, 0}, []bool{false, true}), "123"},
+		{"float32", NewFunctionTestInput(types.T_float32.ToType(), []float32{123.5, 0}, []bool{false, true}), "123.5"},
+		{"float64", NewFunctionTestInput(types.T_float64.ToType(), []float64{123.5, 0}, []bool{false, true}), "123.5"},
+		{"decimal64", NewFunctionTestInput(types.New(types.T_decimal64, 10, 2), []types.Decimal64{12350, 0}, []bool{false, true}), "123.50"},
+		{"decimal128", NewFunctionTestInput(types.New(types.T_decimal128, 30, 2), []types.Decimal128{{B0_63: 12350}, {}}, []bool{false, true}), "123.50"},
+		{"decimal256", NewFunctionTestInput(types.New(types.T_decimal256, 65, 2), []types.Decimal256{{B0_63: 12350}, {}}, []bool{false, true}), "123.50"},
+	}
+	for _, input := range inputs {
+		for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+			for _, width := range []int32{0, 2, int32(len(input.text)), 8} {
+				for _, mode := range []string{"strict", "nonstrict", "ignore", "explicit"} {
+					if mode == "explicit" && oid != types.T_binary {
+						continue
+					}
+					t.Run(fmt.Sprintf("%s/%s/%d/%s", input.name, oid, width, mode), func(t *testing.T) {
+						proc := newMemoryFunctionTestProcess(t)
+						t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+						proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) {
+							if mode == "nonstrict" {
+								return "", nil
+							}
+							return "STRICT_TRANS_TABLES", nil
+						})
+						sink := &numericWarningSession{}
+						proc.WarningSink = sink
+						target := types.New(oid, width, 0)
+						cast := NewAssignCast
+						if mode == "ignore" {
+							cast = NewAssignIgnoreCast
+						}
+						if mode == "explicit" {
+							target.Scale = -1
+							cast = NewCast
+						}
+						fc := NewFunctionTestCase(proc, []FunctionTestInput{input.input, NewFunctionTestInput(target, []string{"", ""}, nil)}, NewFunctionTestResult(target, false, []string{"", ""}, nil), cast)
+						t.Cleanup(fc.Free)
+						actual, err := fc.DebugRun()
+						over := len(input.text) > int(width)
+						if mode == "strict" && over {
+							require.Error(t, err)
+							require.Empty(t, sink.warnings)
+							return
+						}
+						require.NoError(t, err)
+						want := input.text
+						if over {
+							want = want[:width]
+						}
+						if oid == types.T_binary {
+							want += strings.Repeat("\x00", int(width)-len(want))
+						}
+						values := vector.GenerateFunctionStrParameter(actual)
+						got, null := values.GetStrValue(0)
+						require.False(t, null)
+						require.Equal(t, []byte(want), got)
+						_, null = values.GetStrValue(1)
+						require.True(t, null)
+						if over && mode != "explicit" {
+							require.Len(t, sink.warnings, 1)
+							require.Equal(t, moerr.WARN_DATA_TRUNCATED, sink.warnings[0].code)
+						} else {
+							require.Empty(t, sink.warnings)
+						}
+					})
+				}
+			}
+		}
+	}
 }

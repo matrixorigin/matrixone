@@ -28,6 +28,7 @@ import (
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 )
@@ -179,10 +180,71 @@ func issue27907RewriteFirstParamAsBlob(data []byte, paramCount int) bool {
 	return false
 }
 
+const (
+	issue25408PhaseTimeout = 3 * time.Minute
+	issue25408CaseTimeout  = 30 * time.Second
+)
+
+// These scenarios share sessions and run synchronously; stop using them as
+// soon as a child fails.
+func runIssue25408Subtest(t *testing.T, name string, run func(*testing.T)) {
+	t.Helper()
+	if !t.Run(name, run) {
+		t.FailNow()
+	}
+}
+
+func runIssue25408Phase(t *testing.T, name string, timeout time.Duration, run func(*testing.T, context.Context)) {
+	t.Helper()
+	runIssue25408Subtest(t, name, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), timeout)
+		defer cancel()
+		run(t, ctx)
+	})
+}
+
+func issue25408Conn(t *testing.T, ctx context.Context, db *sql.DB) *sql.Conn {
+	t.Helper()
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	return conn
+}
+
+func execIssue25408(t *testing.T, ctx context.Context, conn *sql.Conn, statement string) {
+	t.Helper()
+	_, err := conn.ExecContext(ctx, statement)
+	require.NoErrorf(t, err, "exec failed: %s", statement)
+}
+
+func requireIssue25408MySQLError(t *testing.T, err error, code uint16) {
+	t.Helper()
+	var mysqlErr *mysqlDriver.MySQLError
+	require.ErrorAs(t, err, &mysqlErr)
+	require.Equal(t, code, mysqlErr.Number)
+}
+
+// A SQL PREPARE belongs to its pinned connection, including during cleanup.
+func deallocateIssue25408(t *testing.T, ctx context.Context, conn *sql.Conn, name string) {
+	t.Helper()
+	if t.Failed() {
+		// The fixture is quarantined on failure, including an uncertain SQL outcome.
+		return
+	}
+	if err := ctx.Err(); err != nil {
+		t.Errorf("prepare %s: work context ended before cleanup: %v", name, err)
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), issue25408CaseTimeout)
+	defer cancel()
+	if _, err := conn.ExecContext(cleanupCtx, "deallocate prepare "+name); err != nil {
+		t.Errorf("deallocate prepare %s: %v", name, err)
+	}
+}
+
 func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
+		setupCtx, cancelSetup := context.WithTimeout(t.Context(), issue25408PhaseTimeout)
+		defer cancelSetup()
 
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
@@ -192,21 +254,30 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 		defer db.Close()
 
 		const dbName = "issue_25408_pagination"
-		execSQLMaybe(t, ctx, db, "drop database if exists "+dbName)
+		execSQLRequire(t, setupCtx, db, "drop database if exists "+dbName)
 		defer func() {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if t.Failed() {
+				// A canceled SQL statement may still be finishing on the server.
+				// The shared fixture owner quarantines and closes failed runs.
+				return
+			}
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(t.Context()), issue25408CaseTimeout)
 			defer cleanupCancel()
-			execSQLMaybe(t, cleanupCtx, db, "drop database if exists "+dbName)
+			_, err := db.ExecContext(cleanupCtx, "drop database if exists "+dbName)
+			if err != nil {
+				t.Errorf("cleanup database %s: %v", dbName, err)
+			}
 		}()
-		execSQLRequire(t, ctx, db, "create database "+dbName)
-		execSQLRequire(t, ctx, db, "create table "+dbName+".page(id int)")
-		execSQLRequire(t, ctx, db, "insert into "+dbName+".page values (1),(2),(3)")
+		execSQLRequire(t, setupCtx, db, "create database "+dbName)
+		execSQLRequire(t, setupCtx, db, "create table "+dbName+".page(id int)")
+		execSQLRequire(t, setupCtx, db, "insert into "+dbName+".page values (1),(2),(3)")
+		cancelSetup()
 
-		t.Run("bit integer parameter domains", func(t *testing.T) {
-			testBitIntegerPreparedParameters(t, ctx, db, cn.GetServiceConfig().CN.Frontend.Port)
+		runIssue25408Subtest(t, "bit integer parameter domains", func(t *testing.T) {
+			testBitIntegerPreparedParameters(t, db, cn.GetServiceConfig().CN.Frontend.Port)
 		})
 
-		t.Run("integer source domains across protocols and writes", func(t *testing.T) {
+		runIssue25408Phase(t, "integer source domains across protocols and writes", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 			conn, connErr := db.Conn(ctx)
 			require.NoError(t, connErr)
 			defer conn.Close()
@@ -216,7 +287,7 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			require.NoError(t, connErr)
 			_, connErr = conn.ExecContext(ctx, "insert into "+dbName+".integer_peer values (42,1.5)")
 			require.NoError(t, connErr)
-			t.Run("binary cached source domain transitions", func(t *testing.T) {
+			runIssue25408Subtest(t, "binary cached source domain transitions", func(t *testing.T) {
 				stmt, err := conn.PrepareContext(ctx, `select substring_index("a.b.c.d",".",coalesce(?,0e0))`)
 				require.NoError(t, err)
 				defer stmt.Close()
@@ -281,11 +352,15 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				{"unfolded cast peer", "(select coalesce(?,cast(v as double)) from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
 				{"union right", "(select 0e0 where false union all select ?)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
 			} {
-				t.Run(tc.name, func(t *testing.T) {
+				runIssue25408Phase(t, tc.name, issue25408CaseTimeout, func(t *testing.T, ctx context.Context) {
+					// Both text-protocol cells use the same variables on this
+					// connection. Set them here so selecting either cell alone works.
+					_, err := conn.ExecContext(ctx, tc.assignment)
+					require.NoError(t, err)
 					expr := `substring_index("a.b.c.d",".",` + tc.source + `)`
 					for _, binary := range []bool{false, true} {
 						for _, write := range []bool{false, true} {
-							t.Run(fmt.Sprintf("binary=%v/write=%v", binary, write), func(t *testing.T) {
+							runIssue25408Subtest(t, fmt.Sprintf("binary=%v/write=%v", binary, write), func(t *testing.T) {
 								query := "select " + expr
 								// Each protocol writes its own row; resetting the whole
 								// table for every cell only adds unrelated transactions.
@@ -313,11 +388,9 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 									}
 									require.NoError(t, err)
 								} else {
-									_, err := conn.ExecContext(ctx, tc.assignment)
+									_, err := conn.ExecContext(ctx, "prepare integer_domain from '"+query+"'")
 									require.NoError(t, err)
-									_, err = conn.ExecContext(ctx, "prepare integer_domain from '"+query+"'")
-									require.NoError(t, err)
-									defer func() { _, err := conn.ExecContext(ctx, "deallocate prepare integer_domain"); require.NoError(t, err) }()
+									defer deallocateIssue25408(t, ctx, conn, "integer_domain")
 									execute := "execute integer_domain using @integer_a"
 									if len(tc.args) == 2 {
 										execute += ",@integer_b"
@@ -361,16 +434,19 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			require.NoError(t, rows.Scan(&value))
 			require.False(t, rows.Next())
 			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
 			return scalarObservation{
 				value:        value,
 				databaseType: columnTypes[0].DatabaseTypeName(),
 			}
 		}
 
-		t.Run("SQL PREPARE runtime numeric type reuse", func(t *testing.T) {
-			execSQLRequire(t, ctx, db,
+		runIssue25408Phase(t, "SQL PREPARE runtime numeric type reuse", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
+			conn := issue25408Conn(t, ctx, db)
+			defer conn.Close()
+			execIssue25408(t, ctx, conn,
 				"prepare issue25408_runtime from 'select ? + 1 as plus_one'")
-			defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_runtime")
+			defer deallocateIssue25408(t, ctx, conn, "issue25408_runtime")
 
 			for _, execution := range []struct {
 				assignment       string
@@ -390,8 +466,8 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 					assignment: "set @issue25408_runtime = -2", wantValue: "-1", wantDatabaseType: "BIGINT",
 				},
 			} {
-				execSQLRequire(t, ctx, db, execution.assignment)
-				preparedRows, preparedErr := db.QueryContext(
+				execIssue25408(t, ctx, conn, execution.assignment)
+				preparedRows, preparedErr := conn.QueryContext(
 					ctx, "execute issue25408_runtime using @issue25408_runtime")
 				require.NoError(t, preparedErr)
 				defer preparedRows.Close()
@@ -403,10 +479,12 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			}
 		})
 
-		t.Run("SQL PREPARE division binds source before provisional cast", func(t *testing.T) {
-			execSQLRequire(t, ctx, db,
+		runIssue25408Phase(t, "SQL PREPARE division binds source before provisional cast", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
+			conn := issue25408Conn(t, ctx, db)
+			defer conn.Close()
+			execIssue25408(t, ctx, conn,
 				"prepare issue25408_divide from 'select ? / 2 as quotient'")
-			defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_divide")
+			defer deallocateIssue25408(t, ctx, conn, "issue25408_divide")
 
 			for _, execution := range []struct {
 				assignment       string
@@ -418,8 +496,8 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 					wantDatabaseType: "DECIMAL"},
 				{assignment: "set @issue25408_divide = 3.5", wantValue: "1.75000", wantDatabaseType: "DECIMAL"},
 			} {
-				execSQLRequire(t, ctx, db, execution.assignment)
-				preparedRows, preparedErr := db.QueryContext(
+				execIssue25408(t, ctx, conn, execution.assignment)
+				preparedRows, preparedErr := conn.QueryContext(
 					ctx, "execute issue25408_divide using @issue25408_divide")
 				require.NoError(t, preparedErr)
 				defer preparedRows.Close()
@@ -431,7 +509,9 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			}
 		})
 
-		t.Run("SQL PREPARE nested numeric consumers retain decimal domain", func(t *testing.T) {
+		runIssue25408Phase(t, "SQL PREPARE nested numeric consumers retain decimal domain", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
+			conn := issue25408Conn(t, ctx, db)
+			defer conn.Close()
 			for _, test := range []struct {
 				name             string
 				expression       string
@@ -446,9 +526,9 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				{name: "abs", expression: "abs(? / 2)", directExpression: "abs(@issue25408_nested / 2)", wantValue: "4503599627370496.75000", wantDatabaseType: "DECIMAL"},
 				{name: "multiplication", expression: "(? / 2) * 3", directExpression: "(@issue25408_nested / 2) * 3", wantValue: "13510798882111490.25000", wantDatabaseType: "DECIMAL"},
 			} {
-				t.Run(test.name, func(t *testing.T) {
-					execSQLRequire(t, ctx, db, "set @issue25408_nested = 9007199254740993.5")
-					directRows, directErr := db.QueryContext(ctx, "select "+test.directExpression+" as result")
+				runIssue25408Subtest(t, test.name, func(t *testing.T) {
+					execIssue25408(t, ctx, conn, "set @issue25408_nested = 9007199254740993.5")
+					directRows, directErr := conn.QueryContext(ctx, "select "+test.directExpression+" as result")
 					require.NoError(t, directErr)
 					defer directRows.Close()
 					direct := observeScalar(t, directRows)
@@ -456,9 +536,9 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 					require.Equal(t, test.wantValue, direct.value)
 					require.Equal(t, test.wantDatabaseType, direct.databaseType)
 
-					execSQLRequire(t, ctx, db, "prepare issue25408_nested from 'select "+test.expression+" as result'")
-					defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_nested")
-					rows, queryErr := db.QueryContext(ctx, "execute issue25408_nested using @issue25408_nested")
+					execIssue25408(t, ctx, conn, "prepare issue25408_nested from 'select "+test.expression+" as result'")
+					defer deallocateIssue25408(t, ctx, conn, "issue25408_nested")
+					rows, queryErr := conn.QueryContext(ctx, "execute issue25408_nested using @issue25408_nested")
 					require.NoError(t, queryErr)
 					defer rows.Close()
 					observed := observeScalar(t, rows)
@@ -468,7 +548,9 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			}
 		})
 
-		t.Run("SQL PREPARE ABS preserves numeric peer provenance", func(t *testing.T) {
+		runIssue25408Phase(t, "SQL PREPARE ABS preserves numeric peer provenance", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
+			conn := issue25408Conn(t, ctx, db)
+			defer conn.Close()
 			for _, expression := range []struct {
 				name          string
 				prepared      string
@@ -480,22 +562,22 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				{name: "scientific fractional float peer", prepared: "abs(? + 1e-1)", direct: "abs(@issue25408_abs + 1e-1)", floatBoundary: true},
 				{name: "explicit double peer", prepared: "abs(? + cast(1 as double))", direct: "abs(@issue25408_abs + cast(1 as double))", floatBoundary: true},
 			} {
-				t.Run(expression.name, func(t *testing.T) {
-					execSQLRequire(t, ctx, db, "prepare issue25408_abs from 'select "+expression.prepared+" as result'")
-					defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_abs")
+				runIssue25408Subtest(t, expression.name, func(t *testing.T) {
+					execIssue25408(t, ctx, conn, "prepare issue25408_abs from 'select "+expression.prepared+" as result'")
+					defer deallocateIssue25408(t, ctx, conn, "issue25408_abs")
 					assignments := []string{"9007199254740993.5"}
 					if expression.floatBoundary {
 						assignments = append(assignments, "2", "'2'")
 					}
 					for _, assignment := range assignments {
-						execSQLRequire(t, ctx, db, "set @issue25408_abs = "+assignment)
-						directRows, directErr := db.QueryContext(ctx, "select "+expression.direct+" as result")
+						execIssue25408(t, ctx, conn, "set @issue25408_abs = "+assignment)
+						directRows, directErr := conn.QueryContext(ctx, "select "+expression.direct+" as result")
 						require.NoError(t, directErr)
 						defer directRows.Close()
 						direct := observeScalar(t, directRows)
 						require.NoError(t, directRows.Err())
 
-						preparedRows, preparedErr := db.QueryContext(ctx, "execute issue25408_abs using @issue25408_abs")
+						preparedRows, preparedErr := conn.QueryContext(ctx, "execute issue25408_abs using @issue25408_abs")
 						require.NoError(t, preparedErr)
 						defer preparedRows.Close()
 						prepared := observeScalar(t, preparedRows)
@@ -506,8 +588,10 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			}
 		})
 
-		t.Run("COM_STMT runtime numeric type reuse", func(t *testing.T) {
-			stmt, prepareErr := db.PrepareContext(ctx, "select ? + 1 as plus_one")
+		runIssue25408Phase(t, "COM_STMT runtime numeric type reuse", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
+			conn := issue25408Conn(t, ctx, db)
+			defer conn.Close()
+			stmt, prepareErr := conn.PrepareContext(ctx, "select ? + 1 as plus_one")
 			require.NoError(t, prepareErr)
 			defer stmt.Close()
 
@@ -531,9 +615,9 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			}
 		})
 
-		assertRows := func(t *testing.T, query string, want ...int) {
+		assertRows := func(t *testing.T, ctx context.Context, conn *sql.Conn, query string, want ...int) {
 			t.Helper()
-			rows, queryErr := db.QueryContext(ctx, query)
+			rows, queryErr := conn.QueryContext(ctx, query)
 			require.NoError(t, queryErr)
 			defer rows.Close()
 			var actual []int
@@ -545,51 +629,49 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			require.NoError(t, rows.Err())
 			require.Equal(t, want, actual)
 		}
-		assertMySQLError := func(t *testing.T, err error, number uint16) {
-			t.Helper()
-			require.Error(t, err)
-			mysqlErr, ok := err.(*mysqlDriver.MySQLError)
-			require.True(t, ok)
-			require.Equal(t, number, mysqlErr.Number)
-		}
+		runIssue25408Phase(t, "SQL PREPARE reuse", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
+			conn := issue25408Conn(t, ctx, db)
+			defer conn.Close()
+			execIssue25408(t, ctx, conn, "prepare issue25408_page from 'select id from "+dbName+".page order by id limit ? offset ?'")
+			defer deallocateIssue25408(t, ctx, conn, "issue25408_page")
 
-		t.Run("SQL PREPARE reuse", func(t *testing.T) {
-			execSQLRequire(t, ctx, db, "prepare issue25408_page from 'select id from "+dbName+".page order by id limit ? offset ?'")
-			defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_page")
+			execIssue25408(t, ctx, conn, "set @lim=2,@off=1")
+			assertRows(t, ctx, conn, "execute issue25408_page using @lim,@off", 2, 3)
+			execIssue25408(t, ctx, conn, "set @lim=null,@off=1")
+			assertRows(t, ctx, conn, "execute issue25408_page using @lim,@off")
+			execIssue25408(t, ctx, conn, "set @lim=2,@off=null")
+			assertRows(t, ctx, conn, "execute issue25408_page using @lim,@off", 1, 2)
+			execIssue25408(t, ctx, conn, "set @lim=true,@off=0")
+			assertRows(t, ctx, conn, "execute issue25408_page using @lim,@off", 1)
 
-			execSQLRequire(t, ctx, db, "set @lim=2,@off=1")
-			assertRows(t, "execute issue25408_page using @lim,@off", 2, 3)
-			execSQLRequire(t, ctx, db, "set @lim=null,@off=1")
-			assertRows(t, "execute issue25408_page using @lim,@off")
-			execSQLRequire(t, ctx, db, "set @lim=2,@off=null")
-			assertRows(t, "execute issue25408_page using @lim,@off", 1, 2)
-			execSQLRequire(t, ctx, db, "set @lim=true,@off=0")
-			assertRows(t, "execute issue25408_page using @lim,@off", 1)
-
-			execSQLRequire(t, ctx, db, "set @lim='1',@off=0")
-			_, err = db.ExecContext(ctx, "execute issue25408_page using @lim,@off")
-			assertMySQLError(t, err, 1210)
-			execSQLRequire(t, ctx, db, "set @lim=-1,@off=0")
-			_, err = db.ExecContext(ctx, "execute issue25408_page using @lim,@off")
-			assertMySQLError(t, err, 1690)
+			execIssue25408(t, ctx, conn, "set @lim='1',@off=0")
+			_, err = conn.ExecContext(ctx, "execute issue25408_page using @lim,@off")
+			requireIssue25408MySQLError(t, err, 1210)
+			execIssue25408(t, ctx, conn, "set @lim=-1,@off=0")
+			_, err = conn.ExecContext(ctx, "execute issue25408_page using @lim,@off")
+			requireIssue25408MySQLError(t, err, 1690)
 		})
 
 		for index, paginationSQL := range []string{
 			"select id from " + dbName + ".page order by id limit ? offset ?",
 			"select id from " + dbName + ".page order by id limit ?, ?",
 		} {
-			t.Run(fmt.Sprintf("SQL PREPARE error priority %d", index), func(t *testing.T) {
+			runIssue25408Phase(t, fmt.Sprintf("SQL PREPARE error priority %d", index), issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
+				conn := issue25408Conn(t, ctx, db)
+				defer conn.Close()
 				name := fmt.Sprintf("issue25408_priority_%d", index)
-				execSQLRequire(t, ctx, db, "prepare "+name+" from '"+paginationSQL+"'")
-				defer execSQLMaybe(t, context.Background(), db, "deallocate prepare "+name)
-				execSQLRequire(t, ctx, db, "set @first='1',@second=-1")
-				_, executeErr := db.ExecContext(ctx, "execute "+name+" using @first,@second")
-				assertMySQLError(t, executeErr, 1210)
+				execIssue25408(t, ctx, conn, "prepare "+name+" from '"+paginationSQL+"'")
+				defer deallocateIssue25408(t, ctx, conn, name)
+				execIssue25408(t, ctx, conn, "set @first='1',@second=-1")
+				_, executeErr := conn.ExecContext(ctx, "execute "+name+" using @first,@second")
+				requireIssue25408MySQLError(t, executeErr, 1210)
 			})
 		}
 
-		t.Run("COM_STMT and CTAS", func(t *testing.T) {
-			stmt, prepareErr := db.PrepareContext(ctx,
+		runIssue25408Phase(t, "COM_STMT and CTAS", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
+			conn := issue25408Conn(t, ctx, db)
+			defer conn.Close()
+			stmt, prepareErr := conn.PrepareContext(ctx,
 				"select id from "+dbName+".page order by id limit ? offset ?")
 			require.NoError(t, prepareErr)
 			defer stmt.Close()
@@ -619,19 +701,19 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				require.NoError(t, rows.Err())
 			}()
 			_, err = stmt.ExecContext(ctx, "1.0", int64(0))
-			assertMySQLError(t, err, 1210)
+			requireIssue25408MySQLError(t, err, 1210)
 			_, err = stmt.ExecContext(ctx, int64(-1), int64(0))
-			assertMySQLError(t, err, 1690)
+			requireIssue25408MySQLError(t, err, 1690)
 
-			ctas, prepareErr := db.PrepareContext(ctx,
+			ctas, prepareErr := conn.PrepareContext(ctx,
 				"create table "+dbName+".bad_page as select 1 limit ?")
 			require.NoError(t, prepareErr)
 			defer ctas.Close()
 			_, err = ctas.ExecContext(ctx, "1.0")
-			assertMySQLError(t, err, 1210)
+			requireIssue25408MySQLError(t, err, 1210)
 		})
 
-		t.Run("COM_STMT temporal descriptor remains temporal", func(t *testing.T) {
+		runIssue25408Phase(t, "COM_STMT temporal descriptor remains temporal", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 			var connMu sync.Mutex
 			var wireConn *issue28989TemporalTypeConn
 			mysqlDriver.RegisterDialContext("issue28989temporal", func(ctx context.Context, addr string) (net.Conn, error) {
@@ -652,11 +734,11 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				"dump:111@issue28989temporal(127.0.0.1:%d)/?interpolateParams=false",
 				cn.GetServiceConfig().CN.Frontend.Port))
 			require.NoError(t, openErr)
-			temporalDB.SetMaxOpenConns(1)
-			temporalDB.SetMaxIdleConns(1)
 			defer temporalDB.Close()
+			conn := issue25408Conn(t, ctx, temporalDB)
+			defer conn.Close()
 
-			stmt, prepareErr := temporalDB.PrepareContext(ctx,
+			stmt, prepareErr := conn.PrepareContext(ctx,
 				`select substring_index("a.b.c",".",?)`)
 			require.NoError(t, prepareErr)
 			defer stmt.Close()
@@ -673,8 +755,8 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			capturedConn.rewriteNext(defines.MYSQL_TYPE_DATE, []byte{4, 0xe8, 0x07, 1, 2})
 			var dateResult string
 			dateErr := stmt.QueryRowContext(ctx, "2024-01-02").Scan(&dateResult)
-			require.Error(t, dateErr)
-			require.NotErrorIs(t, dateErr, net.ErrClosed)
+			requireIssue25408MySQLError(t, dateErr, moerr.ErrInvalidInput)
+			require.ErrorContains(t, dateErr, "invalid integer argument cast signature")
 			require.True(t, capturedConn.wasRewritten(), "test did not emit MYSQL_TYPE_DATE")
 			// Prove the packet was valid and the cached statement remains reusable;
 			// a malformed rewrite could otherwise satisfy only the error assertion.
@@ -682,7 +764,7 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			require.Equal(t, "a.b.c", textResult)
 		})
 
-		t.Run("COM_STMT temporal values preserve wire semantics", func(t *testing.T) {
+		runIssue25408Phase(t, "COM_STMT temporal values preserve wire semantics", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 			var connMu sync.Mutex
 			var wireConn *issue28989TemporalTypeConn
 			mysqlDriver.RegisterDialContext("issue28989temporalvalues", func(ctx context.Context, addr string) (net.Conn, error) {
@@ -703,11 +785,11 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				"dump:111@issue28989temporalvalues(127.0.0.1:%d)/issue_25408_pagination?interpolateParams=false",
 				cn.GetServiceConfig().CN.Frontend.Port))
 			require.NoError(t, openErr)
-			temporalDB.SetMaxOpenConns(1)
-			temporalDB.SetMaxIdleConns(1)
 			defer temporalDB.Close()
+			conn := issue25408Conn(t, ctx, temporalDB)
+			defer conn.Close()
 
-			stmt, prepareErr := temporalDB.PrepareContext(ctx, "select cast(? as char)") //nolint:sqlclosecheck // closed via defer/helper; not tracked intraprocedurally
+			stmt, prepareErr := conn.PrepareContext(ctx, "select cast(? as char)") //nolint:sqlclosecheck // closed via defer/helper; not tracked intraprocedurally
 			require.NoError(t, prepareErr)
 			defer stmt.Close()
 			for _, test := range []struct {
@@ -723,7 +805,7 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				{name: "datetime fraction", mysqlType: defines.MYSQL_TYPE_DATETIME, payload: []byte{11, 0xe8, 0x07, 1, 2, 23, 59, 59, 0x1f, 0xa1, 0x07, 0}, want: "2024-01-02 23:59:59.499999"},
 				{name: "timestamp half second", mysqlType: defines.MYSQL_TYPE_TIMESTAMP, payload: []byte{11, 0xe8, 0x07, 1, 2, 23, 59, 59, 0x20, 0xa1, 0x07, 0}, want: "2024-01-02 23:59:59.500000"},
 			} {
-				t.Run(test.name, func(t *testing.T) {
+				runIssue25408Subtest(t, test.name, func(t *testing.T) {
 					connMu.Lock()
 					capturedConn := wireConn
 					connMu.Unlock()
@@ -736,10 +818,9 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				})
 			}
 
-			_, err := temporalDB.ExecContext(ctx, "create table issue28989_time(v time(6))")
+			_, err := conn.ExecContext(ctx, "create table issue28989_time(v time(6))")
 			require.NoError(t, err)
-			defer temporalDB.ExecContext(ctx, "drop table issue28989_time")
-			insertStmt, prepareErr := temporalDB.PrepareContext(ctx, "insert into issue28989_time values (?)")
+			insertStmt, prepareErr := conn.PrepareContext(ctx, "insert into issue28989_time values (?)")
 			require.NoError(t, prepareErr)
 			defer insertStmt.Close()
 			for _, payload := range [][]byte{
@@ -750,7 +831,7 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				_, err = insertStmt.ExecContext(ctx, "placeholder")
 				require.NoError(t, err)
 			}
-			rows, queryErr := temporalDB.QueryContext(ctx, "select cast(v as char) from issue28989_time order by v")
+			rows, queryErr := conn.QueryContext(ctx, "select cast(v as char) from issue28989_time order by v")
 			require.NoError(t, queryErr)
 			defer rows.Close()
 			var stored []string
@@ -760,6 +841,7 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				stored = append(stored, value)
 			}
 			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
 			require.Equal(t, []string{"11:22:33.499999", "11:22:33.500000"}, stored)
 
 			for _, test := range []struct {
@@ -780,26 +862,25 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 					want:    "2024-01-02 23:59:59.499999",
 				},
 			} {
-				t.Run(test.name+" insert", func(t *testing.T) {
+				runIssue25408Subtest(t, test.name+" insert", func(t *testing.T) {
 					table := "issue28989_" + test.name
-					_, err = temporalDB.ExecContext(ctx, fmt.Sprintf("create table %s(v %s)", table, test.column))
+					_, err = conn.ExecContext(ctx, fmt.Sprintf("create table %s(v %s)", table, test.column))
 					require.NoError(t, err)
-					defer temporalDB.ExecContext(ctx, "drop table "+table)
-					prepared, prepareErr := temporalDB.PrepareContext(ctx, "insert into "+table+" values (?)")
+					prepared, prepareErr := conn.PrepareContext(ctx, "insert into "+table+" values (?)")
 					require.NoError(t, prepareErr)
 					defer prepared.Close()
 					wireConn.rewriteNext(test.mysqlType, test.payload)
 					_, err = prepared.ExecContext(ctx, "placeholder")
 					require.NoError(t, err)
 					var got string
-					require.NoError(t, temporalDB.QueryRowContext(ctx,
+					require.NoError(t, conn.QueryRowContext(ctx,
 						"select cast(v as char) from "+table).Scan(&got))
 					require.Equal(t, test.want, got)
 				})
 			}
 		})
 
-		t.Run("Connector ODBC HAVING and pagination", func(t *testing.T) {
+		runIssue25408Phase(t, "Connector ODBC HAVING and pagination", issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 			var connMu sync.Mutex
 			var wireConn *issue27907ODBCTypeConn
 			mysqlDriver.RegisterDialContext("issue27907odbc", func(ctx context.Context, addr string) (net.Conn, error) {
@@ -820,9 +901,9 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				"dump:111@issue27907odbc(127.0.0.1:%d)/?interpolateParams=false",
 				cn.GetServiceConfig().CN.Frontend.Port))
 			require.NoError(t, openErr)
-			odbcDB.SetMaxOpenConns(1)
-			odbcDB.SetMaxIdleConns(1)
 			defer odbcDB.Close()
+			conn := issue25408Conn(t, ctx, odbcDB)
+			defer conn.Close()
 
 			for _, test := range []struct {
 				name string
@@ -842,8 +923,8 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 					args: []any{"0", "1", "1"},
 				},
 			} {
-				t.Run(test.name, func(t *testing.T) {
-					stmt, prepareErr := odbcDB.PrepareContext(ctx, test.sql)
+				runIssue25408Subtest(t, test.name, func(t *testing.T) {
+					stmt, prepareErr := conn.PrepareContext(ctx, test.sql)
 					require.NoError(t, prepareErr)
 					defer stmt.Close()
 
@@ -867,12 +948,12 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			"select id from " + dbName + ".page order by id limit ? offset ?",
 			"select id from " + dbName + ".page order by id limit ?, ?",
 		} {
-			t.Run(fmt.Sprintf("COM_STMT error priority %d", index), func(t *testing.T) {
+			runIssue25408Phase(t, fmt.Sprintf("COM_STMT error priority %d", index), issue25408PhaseTimeout, func(t *testing.T, ctx context.Context) {
 				stmt, prepareErr := db.PrepareContext(ctx, paginationSQL)
 				require.NoError(t, prepareErr)
 				defer stmt.Close()
 				_, executeErr := stmt.ExecContext(ctx, "1.0", int64(-1))
-				assertMySQLError(t, executeErr, 1210)
+				requireIssue25408MySQLError(t, executeErr, 1210)
 			})
 		}
 	})

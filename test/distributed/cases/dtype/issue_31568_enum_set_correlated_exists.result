@@ -1,0 +1,147 @@
+drop database if exists issue_31568_enum_set_corr;
+create database issue_31568_enum_set_corr;
+use issue_31568_enum_set_corr;
+set @issue_31568_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = default;
+create table enum_l(id int primary key,k enum('a','b'));
+create table enum_r(id int primary key,k enum('b','a'));
+insert into enum_l values(1,'a'),(2,'b'),(3,null);
+insert into enum_r values(1,'a'),(2,'b');
+select l.id from enum_l l where not exists(select 1 from enum_r r where l.k=r.k) order by l.id;
+➤ id[4,32,0]  𝄀
+3
+select l.id from enum_l l where exists(select 1 from enum_r r where l.k=r.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id from enum_l l where not exists(select 1 from enum_r r where cast(l.k as char)=cast(r.k as char)) order by l.id;
+➤ id[4,32,0]  𝄀
+3
+create table enum_r2(id int primary key,k enum('a','b'));
+insert into enum_r2 values(1,'a');
+select l.id from enum_l l where not exists(select 1 from enum_r2 r where l.k=r.k) order by l.id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select l.id from enum_l l where exists(select 1 from enum_r2 r where l.k=r.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1
+select l.id from enum_l l where not exists(select 1 from enum_r r where l.k=r.k or l.k is null) order by l.id;
+➤ id[4,32,0]
+select l.id from enum_l l where l.k in (select r.k from enum_r r) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id from enum_l l where l.k not in (select r.k from enum_r r) order by l.id;
+➤ id[4,32,0]
+create table set_l(id int primary key,k set('a','b'));
+create table set_r(id int primary key,k set('b','a'));
+insert into set_l values(1,'a'),(2,'b'),(3,null);
+insert into set_r values(1,'a'),(2,'b');
+select l.id from set_l l where not exists(select 1 from set_r r where l.k=r.k) order by l.id;
+➤ id[4,32,0]  𝄀
+3
+select l.id from set_l l where exists(select 1 from set_r r where l.k=r.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id from set_l l where not exists(select 1 from set_r r where cast(l.k as char)=cast(r.k as char)) order by l.id;
+➤ id[4,32,0]  𝄀
+3
+select l.id from enum_l l left join enum_r r on l.k=r.k where r.id is null order by l.id;
+➤ id[4,32,0]  𝄀
+3
+select l.id from enum_l l where not exists(select 1 from enum_r r where l.id=r.id) order by l.id;
+➤ id[4,32,0]  𝄀
+3
+select l.id from enum_l l, enum_r r where l.id=r.id and cast(l.k as char)=cast(r.k as char) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id, r.k from enum_l l inner join enum_r r on l.k=r.k order by l.id;
+➤ id[4,32,0]  ¦  k[12,65535,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b
+select l.id from enum_l l where exists(select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id from enum_l l where not exists(select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+3
+select l.id from enum_l l where l.k in (select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id from enum_l l where exists(select r.k from enum_r2 r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1
+select l.id from enum_l l group by l.id having exists(select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id from enum_l l where exists(select r.id from enum_r r group by r.id having r.id=l.id) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id from set_l l where exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id from set_l l where not exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+3
+select l.id from set_l l group by l.id having exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id, (select max(l.k) from enum_r r) from enum_l l;
+correlated columns in aggregate function is not yet implemented
+select l.id, (select count(l.k) from enum_r r) from enum_l l;
+correlated columns in aggregate function is not yet implemented
+select l.id from enum_l l where exists(select 1 from enum_r r group by r.id having max(l.k)='a');
+correlated columns in aggregate function is not yet implemented
+select l.id from enum_l l group by l.id having exists(select max(l.k) from enum_r r group by r.id);
+correlated columns in aggregate function is not yet implemented
+select l.id, (select max(l.k) from set_r r) from set_l l;
+correlated columns in aggregate function is not yet implemented
+select l.id, (select count(l.k) from set_r r) from set_l l;
+correlated columns in aggregate function is not yet implemented
+select l.id from set_l l where exists(select 1 from set_r r group by r.id having max(l.k)='a');
+correlated columns in aggregate function is not yet implemented
+select l.id from set_l l group by l.id having exists(select max(l.k) from set_r r group by r.id);
+correlated columns in aggregate function is not yet implemented
+select l.id, (select max(l.id) from enum_r r) from enum_l l;
+correlated columns in aggregate function is not yet implemented
+select l.id, (select count(l.id) from enum_r r) from enum_l l;
+correlated columns in aggregate function is not yet implemented
+select l.id from enum_l l where exists(select 1 from enum_r r group by r.id having max(l.id)=1);
+correlated columns in aggregate function is not yet implemented
+select l.id from enum_l l group by l.id having exists(select max(l.id) from enum_r r group by r.id);
+correlated columns in aggregate function is not yet implemented
+select l.id, (select r.id from enum_r r where l.k=r.k) from enum_l l order by l.id;
+➤ id[4,32,0]  ¦  (select r.id from enum_r as r where l.k = r.k)[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  null
+select l.id, (select r.id from enum_r r where l.id=r.id) from enum_l l order by l.id;
+➤ id[4,32,0]  ¦  (select r.id from enum_r as r where l.id = r.id)[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  null
+select l.id, (select r.id from set_r r where l.k=r.k) from set_l l order by l.id;
+➤ id[4,32,0]  ¦  (select r.id from set_r as r where l.k = r.k)[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  null
+select 1, count(*) from enum_l;
+➤ 1[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  3
+select 1, count(*) from enum_r;
+➤ 1[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  2
+set session sql_mode = @issue_31568_saved_sql_mode;
+select @@sql_mode = @issue_31568_saved_sql_mode as restored;
+➤ restored[-6,8,0]  𝄀
+1
+drop database if exists issue_31568_enum_set_corr;

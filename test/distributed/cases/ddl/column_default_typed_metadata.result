@@ -1,0 +1,206 @@
+drop database if exists column_default_typed_metadata;
+create database column_default_typed_metadata;
+use column_default_typed_metadata;
+create table t_typed (
+id int primary key,
+d decimal(10,4) default 1.2,
+b bit(8) default b'00110011',
+v varchar(10) default 'x',
+n int default null
+);
+show columns from t_typed;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+d  ¦  decimal(10,4)  ¦  YES  ¦    ¦  1.2000  ¦    ¦    𝄀
+b  ¦  bit(8)  ¦  YES  ¦    ¦  b'110011'  ¦    ¦    𝄀
+v  ¦  varchar(10)  ¦  YES  ¦    ¦  x  ¦    ¦    𝄀
+n  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+select column_name, column_default, extra from information_schema.columns
+where table_schema='column_default_typed_metadata' and table_name='t_typed'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_default[12,65535,0]  ¦  extra[12,24,0]  𝄀
+id  ¦  null  ¦    𝄀
+d  ¦  1.2000  ¦    𝄀
+b  ¦  b'110011'  ¦    𝄀
+v  ¦  x  ¦    𝄀
+n  ¦  null  ¦  
+insert into t_typed(id) values (1);
+select id, d, b+0, v, n from t_typed;
+➤ id[4,32,0]  ¦  d[3,10,4]  ¦  b + 0[3,38,0]  ¦  v[12,10,0]  ¦  n[4,32,0]  𝄀
+1  ¦  1.2000  ¦  51  ¦  x  ¦  null
+create table t_generated (
+id int primary key,
+ts timestamp(6) null default current_timestamp(6),
+i2 int default (1+2),
+d3 decimal(10,0) default 1.6
+);
+show columns from t_generated;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+ts  ¦  timestamp(6)  ¦  YES  ¦    ¦  current_timestamp(6)  ¦  DEFAULT_GENERATED  ¦    𝄀
+i2  ¦  int  ¦  YES  ¦    ¦  (1 + 2)  ¦  DEFAULT_GENERATED  ¦    𝄀
+d3  ¦  decimal(10,0)  ¦  YES  ¦    ¦  2  ¦    ¦  
+select column_name, column_default, extra from information_schema.columns
+where table_schema='column_default_typed_metadata' and table_name='t_generated'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_default[12,65535,0]  ¦  extra[12,24,0]  𝄀
+id  ¦  null  ¦    𝄀
+ts  ¦  current_timestamp(6)  ¦  DEFAULT_GENERATED  𝄀
+i2  ¦  (1 + 2)  ¦  DEFAULT_GENERATED  𝄀
+d3  ¦  2  ¦  
+insert into t_generated(id) values (1);
+select id, ts is not null, i2, d3 from t_generated;
+➤ id[4,32,0]  ¦  ts is not null[-6,8,0]  ¦  i2[4,32,0]  ¦  d3[3,10,0]  𝄀
+1  ¦  1  ¦  3  ¦  2
+create table t_attributed (
+id int primary key,
+du decimal(10,4) unsigned default 1.2,
+d40 decimal(40,4) default 1.2,
+ds decimal(10,4) unsigned default 1.2e0,
+dp decimal(10,4) unsigned default +1.2,
+db1 decimal(10,4) unsigned default b'00110011'
+);
+show columns from t_attributed;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+du  ¦  decimal(10,4)  ¦  YES  ¦    ¦  1.2000  ¦    ¦    𝄀
+d40  ¦  decimal(40,4)  ¦  YES  ¦    ¦  1.2000  ¦    ¦    𝄀
+ds  ¦  decimal(10,4)  ¦  YES  ¦    ¦  1.2000  ¦    ¦    𝄀
+dp  ¦  decimal(10,4)  ¦  YES  ¦    ¦  1.2000  ¦    ¦    𝄀
+db1  ¦  decimal(10,4)  ¦  YES  ¦    ¦  0.0051  ¦    ¦  
+select column_name, column_default, extra from information_schema.columns
+where table_schema='column_default_typed_metadata' and table_name='t_attributed'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_default[12,65535,0]  ¦  extra[12,24,0]  𝄀
+id  ¦  null  ¦    𝄀
+du  ¦  1.2000  ¦    𝄀
+d40  ¦  1.2000  ¦    𝄀
+ds  ¦  1.2000  ¦    𝄀
+dp  ¦  1.2000  ¦    𝄀
+db1  ¦  0.0051  ¦  
+insert into t_attributed(id) values (1);
+select id, du, d40, ds, dp, db1 from t_attributed;
+➤ id[4,32,0]  ¦  du[3,10,4]  ¦  d40[3,40,4]  ¦  ds[3,10,4]  ¦  dp[3,10,4]  ¦  db1[3,10,4]  𝄀
+1  ¦  1.2000  ¦  1.2000  ¦  1.2000  ¦  1.2000  ¦  0.0051
+create table t_u64boundary (
+id int primary key,
+u64max decimal(40,4) unsigned default 18446744073709551615,
+u64p1 decimal(40,4) unsigned default 18446744073709551616,
+u64p1q decimal(40,4) unsigned default '18446744073709551616',
+p64p1 decimal(40,4) default 18446744073709551616,
+bigu decimal(40,4) unsigned default 12345678901234567890.1,
+bign decimal(40,4) default -12345678901234567890.1
+);
+show columns from t_u64boundary;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+u64max  ¦  decimal(40,4)  ¦  YES  ¦    ¦  18446744073709551615.0000  ¦    ¦    𝄀
+u64p1  ¦  decimal(40,4)  ¦  YES  ¦    ¦  18446744073709551616.0000  ¦    ¦    𝄀
+u64p1q  ¦  decimal(40,4)  ¦  YES  ¦    ¦  18446744073709551616.0000  ¦    ¦    𝄀
+p64p1  ¦  decimal(40,4)  ¦  YES  ¦    ¦  18446744073709551616.0000  ¦    ¦    𝄀
+bigu  ¦  decimal(40,4)  ¦  YES  ¦    ¦  12345678901234567890.1000  ¦    ¦    𝄀
+bign  ¦  decimal(40,4)  ¦  YES  ¦    ¦  -12345678901234567890.1000  ¦    ¦  
+select column_name, column_default, extra from information_schema.columns
+where table_schema='column_default_typed_metadata' and table_name='t_u64boundary'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_default[12,65535,0]  ¦  extra[12,24,0]  𝄀
+id  ¦  null  ¦    𝄀
+u64max  ¦  18446744073709551615.0000  ¦    𝄀
+u64p1  ¦  18446744073709551616.0000  ¦    𝄀
+u64p1q  ¦  18446744073709551616.0000  ¦    𝄀
+p64p1  ¦  18446744073709551616.0000  ¦    𝄀
+bigu  ¦  12345678901234567890.1000  ¦    𝄀
+bign  ¦  -12345678901234567890.1000  ¦  
+insert into t_u64boundary(id) values (1);
+select id, u64max, u64p1, u64p1q, p64p1, bigu, bign from t_u64boundary;
+➤ id[4,32,0]  ¦  u64max[3,40,4]  ¦  u64p1[3,40,4]  ¦  u64p1q[3,40,4]  ¦  p64p1[3,40,4]  ¦  bigu[3,40,4]  ¦  bign[3,40,4]  𝄀
+1  ¦  18446744073709551615.0000  ¦  18446744073709551616.0000  ¦  18446744073709551616.0000  ¦  18446744073709551616.0000  ¦  12345678901234567890.1000  ¦  -12345678901234567890.1000
+create table t_expr (
+id int primary key,
+dc decimal(10,4) unsigned default cast(1.6 as decimal(10,0)),
+da decimal(10,4) default abs(1.2)
+);
+show columns from t_expr;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+dc  ¦  decimal(10,4)  ¦  YES  ¦    ¦  cast(1.6 as decimal(10))  ¦  DEFAULT_GENERATED  ¦    𝄀
+da  ¦  decimal(10,4)  ¦  YES  ¦    ¦  abs(1.2)  ¦  DEFAULT_GENERATED  ¦  
+select column_name, column_default, extra from information_schema.columns
+where table_schema='column_default_typed_metadata' and table_name='t_expr'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_default[12,65535,0]  ¦  extra[12,24,0]  𝄀
+id  ¦  null  ¦    𝄀
+dc  ¦  cast(1.6 as decimal(10))  ¦  DEFAULT_GENERATED  𝄀
+da  ¦  abs(1.2)  ¦  DEFAULT_GENERATED
+insert into t_expr(id) values (1);
+select id, dc, da from t_expr;
+➤ id[4,32,0]  ¦  dc[3,10,4]  ¦  da[3,10,4]  𝄀
+1  ¦  2.0000  ¦  1.2000
+create table t_colref (
+id int primary key,
+a int default 7,
+b int default a
+);
+show columns from t_colref;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+a  ¦  int  ¦  YES  ¦    ¦  7  ¦    ¦    𝄀
+b  ¦  int  ¦  YES  ¦    ¦  a  ¦  DEFAULT_GENERATED  ¦  
+select column_name, column_default, extra from information_schema.columns
+where table_schema='column_default_typed_metadata' and table_name='t_colref'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_default[12,65535,0]  ¦  extra[12,24,0]  𝄀
+id  ¦  null  ¦    𝄀
+a  ¦  7  ¦    𝄀
+b  ¦  a  ¦  DEFAULT_GENERATED
+insert into t_colref(id) values (1);
+select id, a, b from t_colref;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  7  ¦  7
+set time_zone = '+08:00';
+create table t_var (
+id int primary key,
+v varchar(64) default @@time_zone,
+w varchar(64) default (@@time_zone),
+v2 varchar(64) default '@@time_zone'
+);
+show columns from t_var;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+v  ¦  varchar(64)  ¦  YES  ¦    ¦  @@time_zone  ¦  DEFAULT_GENERATED  ¦    𝄀
+w  ¦  varchar(64)  ¦  YES  ¦    ¦  (@@time_zone)  ¦  DEFAULT_GENERATED  ¦    𝄀
+v2  ¦  varchar(64)  ¦  YES  ¦    ¦  @@time_zone  ¦    ¦  
+select column_name, column_default, extra from information_schema.columns
+where table_schema='column_default_typed_metadata' and table_name='t_var'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_default[12,65535,0]  ¦  extra[12,24,0]  𝄀
+id  ¦  null  ¦    𝄀
+v  ¦  @@time_zone  ¦  DEFAULT_GENERATED  𝄀
+w  ¦  (@@time_zone)  ¦  DEFAULT_GENERATED  𝄀
+v2  ¦  @@time_zone  ¦  
+insert into t_var(id) values (1);
+select id, v, w, v2 from t_var;
+➤ id[4,32,0]  ¦  v[12,64,0]  ¦  w[12,64,0]  ¦  v2[12,64,0]  𝄀
+1  ¦  +08:00  ¦  +08:00  ¦  @@time_zone
+alter table t_typed add column ad decimal(10,4) default 1.2;
+alter table t_generated add column ats timestamp(6) null default current_timestamp(6);
+create table t_typed_like like t_typed;
+show columns from t_typed_like;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+d  ¦  decimal(10,4)  ¦  YES  ¦    ¦  1.2000  ¦    ¦    𝄀
+b  ¦  bit(8)  ¦  YES  ¦    ¦  b'110011'  ¦    ¦    𝄀
+v  ¦  varchar(10)  ¦  YES  ¦    ¦  x  ¦    ¦    𝄀
+n  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ad  ¦  decimal(10,4)  ¦  YES  ¦    ¦  1.2000  ¦    ¦  
+select column_name, column_default, extra from information_schema.columns
+where table_schema='column_default_typed_metadata' and table_name='t_typed_like'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_default[12,65535,0]  ¦  extra[12,24,0]  𝄀
+id  ¦  null  ¦    𝄀
+d  ¦  1.2000  ¦    𝄀
+b  ¦  b'110011'  ¦    𝄀
+v  ¦  x  ¦    𝄀
+n  ¦  null  ¦    𝄀
+ad  ¦  1.2000  ¦  
+drop database column_default_typed_metadata;

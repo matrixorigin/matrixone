@@ -83,7 +83,6 @@ Database
 cluster_level_snapshot_restore_pub_sub
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 system

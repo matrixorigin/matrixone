@@ -61,6 +61,7 @@ func ScalarDivisionNeedsRowEvaluation(parameters []*vector.Vector, proc *process
 		// a proven nonzero scalar, so preserve their diagnostic evaluation too.
 		return true
 	}
+	// typeswitch:partial division operators admit only float32/float64 among floats
 	switch right.GetType().Oid {
 	case types.T_int8:
 		return vector.GetFixedAtNoTypeCheck[int8](right, 0) == 0
@@ -108,6 +109,7 @@ func appendDivisionByZeroWarnings(parameters []*vector.Vector, result *vector.Ve
 	}
 	// Inspect the denominator's actual physical type; mixed DIV operands can
 	// have different types. ARRAY/YEAR division retain their existing semantics.
+	// typeswitch:partial division operators admit only float32/float64 among floats
 	switch parameters[1].GetType().Oid {
 	case types.T_int8:
 		appendTypedDivisionByZeroWarnings[int8](parameters, result, proc, length, selectList)

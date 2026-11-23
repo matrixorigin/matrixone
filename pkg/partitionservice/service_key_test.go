@@ -108,3 +108,27 @@ func newTestKeyOption(
 		),
 	)
 }
+
+// TestKeyPartitionRejectsBlockScaledColumns checks that a vecf8 or vecf4 column is not a KEY
+// partition column, whose hash would split cells equal by decoded value; vecf32 is accepted.
+func TestKeyPartitionRejectsBlockScaledColumns(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *Service,
+			store PartitionStorage,
+		) {
+			for _, typ := range []types.T{types.T_array_float8, types.T_array_float4, types.T_array_float32} {
+				def := newTestTablePartitionDefine(1, []string{"c1"}, []types.T{typ}, 2, partition.PartitionMethod_Key)
+				stmt := newTestKeyOption(t, "C1", 2)
+				_, err := s.getMetadataByKeyType(stmt.PartitionOption, def)
+				if typ == types.T_array_float32 {
+					require.NoError(t, err)
+					continue
+				}
+				require.ErrorContains(t, err, "cannot be a partition key", typ.String())
+			}
+		},
+	)
+}

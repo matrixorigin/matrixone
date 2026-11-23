@@ -213,12 +213,16 @@ func (ctr *container) processEwmFuncRange(
 		}
 	}
 
-	vec, err := ctr.allocation.NewVector(types.T_float64.ToType())
+	vecMP, err := ctr.allocation.MP(proc)
 	if err != nil {
 		return nil, err
 	}
-	if err := vector.AppendFixedList(vec, values, nullList, proc.Mp()); err != nil {
-		vec.Free(proc.Mp())
+	vec, err := ctr.allocation.NewVector(proc, types.T_float64.ToType())
+	if err != nil {
+		return nil, err
+	}
+	if err := vector.AppendFixedList(vec, values, nullList, vecMP); err != nil {
+		ctr.allocation.FreeVector(proc, vec)
 		return nil, err
 	}
 	return vec, nil
@@ -599,6 +603,14 @@ func ewmKeyAt(keyVec *vector.Vector, row int) (ewm.KeyVal, error) {
 		return ewm.FloatKey(f), nil
 	case types.T_float64:
 		f := vector.MustFixedColWithTypeCheck[float64](keyVec)[ewmPhysIndex(keyVec, row)]
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return ewm.KeyVal{}, moerr.NewInvalidInputNoCtx(
+				"invalid input: ewm event-time ORDER BY keys must be finite")
+		}
+		return ewm.FloatKey(f), nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(keyVec, ewmPhysIndex(keyVec, row))
+		f := float64(v)
 		if math.IsNaN(f) || math.IsInf(f, 0) {
 			return ewm.KeyVal{}, moerr.NewInvalidInputNoCtx(
 				"invalid input: ewm event-time ORDER BY keys must be finite")

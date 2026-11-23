@@ -33,7 +33,7 @@ func TestXCallDistanceDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	newResult := func(vals []float64, nullAt int) *vector.Vector {
-		v := vector.NewVec(types.T_float64.ToType())
+		v := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 		for i, d := range vals {
 			if i == nullAt {
 				require.NoError(t, vector.AppendFixed(v, float64(0), true, proc.Mp()))

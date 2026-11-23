@@ -59,11 +59,11 @@ select count(*) from manual_events;
 count(*)
 1
 show task runs for sql_task_cron limit 1;
-run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-180087    sql_task_cron    MANUAL    SUCCESS    2026-04-13 18:03:27 +0800 CST    2026-04-13 18:03:27 +0800 CST    0.018038208    1    0    
+run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message    runner_cn
+180087    sql_task_cron    MANUAL    SUCCESS    2026-04-13 18:03:27 +0800 CST    2026-04-13 18:03:27 +0800 CST    0.018038208    1    0        ignored
 show task runs for sql_task_manual limit 1;
-run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-180088    sql_task_manual    MANUAL    SUCCESS    2026-04-13 18:03:27 +0800 CST    2026-04-13 18:03:27 +0800 CST    0.019812833    1    0    
+run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message    runner_cn
+180088    sql_task_manual    MANUAL    SUCCESS    2026-04-13 18:03:27 +0800 CST    2026-04-13 18:03:27 +0800 CST    0.019812833    1    0        ignored
 alter task sql_task_cron suspend;
 alter task sql_task_cron resume;
 execute task sql_task_cron;
@@ -185,10 +185,10 @@ select count(*) from validate_results;
 count(*)
 1
 show task runs for sql_task_validate limit 3;
-run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-180105    sql_task_validate    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.027703042    1    2
-180104    sql_task_validate    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.0283525    1    1
-180099    sql_task_validate    MANUAL    SKIPPED    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.012571208    1    0    
+run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message    runner_cn
+180105    sql_task_validate    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.027703042    1    2        ignored
+180104    sql_task_validate    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.0283525    1    1        ignored
+180099    sql_task_validate    MANUAL    SKIPPED    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.012571208    1    0        ignored
 insert into literal_source values
 (1, null, 0, 'UNKNOWN'),
 (2, 900, 10, 'PUMPING'),
@@ -262,9 +262,9 @@ tenant_task_never_run    CRON_TZ=UTC 0 0 0 1 1 *    1        0        2026-04-13
 tenant_task_show    CRON_TZ=UTC 0 0 0 1 1 *    1    0    0    30s    2026-04-13 18:03:43 +0800 CST    SUCCESS    2026-04-13 18:03:43 +0800 CST
 execute task tenant_task_show;
 show task runs for tenant_task_show limit 2;
-run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-180107    tenant_task_show    MANUAL    SKIPPED    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.00989425    1    0    
-180106    tenant_task_show    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.0225825    1    0    
+run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message    runner_cn
+180107    tenant_task_show    MANUAL    SKIPPED    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.00989425    1    0        ignored
+180106    tenant_task_show    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.0225825    1    0        ignored
 select count(*) from tenant_sink;
 count(*)
 1

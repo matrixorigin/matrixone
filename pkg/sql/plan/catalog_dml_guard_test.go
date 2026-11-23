@@ -56,11 +56,11 @@ func TestProtectedCatalogDMLReadSourceAndUpgradeCapability(t *testing.T) {
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.ErrorContains(t, err, "direct DML on mo_catalog.mo_columns")
 
 	ctx.SetContext(context.WithValue(ctx.GetContext(), defines.MoColumnsUpdateKey{}, true))
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	// The capability applies only to the internal UPDATE, never another table
@@ -71,12 +71,12 @@ func TestProtectedCatalogDMLReadSourceAndUpgradeCapability(t *testing.T) {
 	} {
 		other, parseErr := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, parseErr)
-		_, err = BuildPlan(ctx, other, false)
+		_, err = BuildPlan(ctx, other, false, nil)
 		other.Free()
 		require.ErrorContains(t, err, "direct DML on mo_catalog.")
 	}
 	ctx.SetContext(context.Background())
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.ErrorContains(t, err, "direct DML on mo_catalog.mo_columns")
 
 	require.NoError(t, checkCatalogDMLTarget(context.Background(), &ObjectRef{SchemaName: "user_db", ObjName: "mo_database"}, false))

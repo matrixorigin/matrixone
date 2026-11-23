@@ -560,7 +560,7 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 
 		// this sql always return one stmt
 		ctx := opt.CurrentContext()
-		logicPlan, err := plan.BuildPlan(ctx, stmt.Statement, false)
+		logicPlan, err := plan.BuildPlan(ctx, stmt.Statement, false, nil)
 		if err != nil {
 			t.Errorf("Build Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
 			return err

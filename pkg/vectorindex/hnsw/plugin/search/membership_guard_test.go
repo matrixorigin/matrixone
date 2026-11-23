@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,14 +41,14 @@ func membershipSpec() *plan.IndexSearchScan {
 	return spec
 }
 
-func membershipPayload(t *testing.T, typ types.Type, appendKeys func(*vector.Vector)) []byte {
+func membershipPayload(t *testing.T, typ types.Type, appendKeys func(*vector.Vector)) *keycodec.KeyPayload {
 	proc := testutil.NewProc(t)
-	v := vector.NewVec(typ)
+	v := vector.NewVec(typ, proc.Mp())
 	appendKeys(v)
 	defer v.Free(proc.Mp())
 	payload, err := v.MarshalBinary()
 	require.NoError(t, err)
-	return payload
+	return testutil.RuntimeKeyPayload(t, payload)
 }
 
 func TestNewReaderMembership(t *testing.T) {
@@ -74,7 +76,7 @@ func TestNewReaderMembership(t *testing.T) {
 	// int64 keys build an exact filter; Close frees it
 	r.MembershipFilter = membershipPayload(t, types.T_int64.ToType(), func(v *vector.Vector) {
 		for _, k := range []int64{3, 1, 2} {
-			require.NoError(t, vector.AppendFixed(v, k, false, proc.Mp()))
+			require.NoError(t, vector.AppendFixed(v, k, false, v.MPool()))
 		}
 	})
 	s, err = newSearcher(proc, membershipSpec(), r)
@@ -86,7 +88,7 @@ func TestNewReaderMembership(t *testing.T) {
 
 	// keys that do not match the primary key type are an error
 	r.MembershipFilter = membershipPayload(t, types.T_varchar.ToType(), func(v *vector.Vector) {
-		require.NoError(t, vector.AppendBytes(v, []byte("a"), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(v, []byte("a"), false, v.MPool()))
 	})
 	_, err = newSearcher(proc, membershipSpec(), r)
 	require.Error(t, err)
@@ -95,7 +97,7 @@ func TestNewReaderMembership(t *testing.T) {
 	spec := membershipSpec()
 	spec.SourceTableDef.Pkey = nil
 	r.MembershipFilter = membershipPayload(t, types.T_int64.ToType(), func(v *vector.Vector) {
-		require.NoError(t, vector.AppendFixed(v, int64(1), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(v, int64(1), false, v.MPool()))
 	})
 	_, err = newSearcher(proc, spec, r)
 	require.Error(t, err)
@@ -112,7 +114,7 @@ func TestNewReaderMembership(t *testing.T) {
 		r.HasMembershipFilter, r.MembershipFilterRequired = true, true
 		r.MembershipFilter = membershipPayload(t, types.T_int64.ToType(), func(v *vector.Vector) {
 			for i := int64(0); i < 5000; i++ {
-				require.NoError(t, vector.AppendFixed(v, 7+i*tc.step, false, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(v, 7+i*tc.step, false, v.MPool()))
 			}
 		})
 		s, err = newSearcher(proc, membershipSpec(), r)

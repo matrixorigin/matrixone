@@ -1,0 +1,56 @@
+drop table if exists t31232_inline_esc;
+create table t31232_inline_esc(id int primary key, s varchar(40));
+load data inline format='csv', data='1,row\\8\n2,a\\nb\n' into table t31232_inline_esc fields terminated by ',';
+select * from t31232_inline_esc order by id;
+➤ id[4,32,0]  ¦  s[12,40,0]  𝄀
+1  ¦  row\8  𝄀
+2  ¦  a\nb
+drop table t31232_inline_esc;
+drop table if exists t31232_inline_esc_empty;
+create table t31232_inline_esc_empty(id int primary key, s varchar(40));
+load data inline format='csv', data='1,row\\8\n2,a\\nb\n' into table t31232_inline_esc_empty fields terminated by ',' escaped by '';
+select * from t31232_inline_esc_empty order by id;
+➤ id[4,32,0]  ¦  s[12,40,0]  𝄀
+1  ¦  row\8  𝄀
+2  ¦  a\nb
+drop table t31232_inline_esc_empty;
+drop table if exists t31232_inline_esc_custom;
+create table t31232_inline_esc_custom(id int primary key, s varchar(40));
+load data inline format='csv', data='3,row\\8\n4,a|,b\n' into table t31232_inline_esc_custom fields terminated by ',' escaped by '|';
+select * from t31232_inline_esc_custom order by id;
+➤ id[4,32,0]  ¦  s[12,40,0]  𝄀
+3  ¦  row\8  𝄀
+4  ¦  a,b
+drop table t31232_inline_esc_custom;
+drop table if exists t31232_esc_omitted_inline;
+create table t31232_esc_omitted_inline(id int primary key, s varchar(40));
+load data inline format='csv', data='1,row\\8\n2,cept\\9z\n' into table t31232_esc_omitted_inline fields terminated by ',';
+select * from t31232_esc_omitted_inline order by id;
+➤ id[4,32,0]  ¦  s[12,40,0]  𝄀
+1  ¦  row\8  𝄀
+2  ¦  cept\9z
+drop table if exists t31232_esc_omitted_file;
+create table t31232_esc_omitted_file(id int primary key, s varchar(40));
+load data infile '$resources/load_data/issue_31232_esc_pair.csv' into table t31232_esc_omitted_file fields terminated by ',';
+select * from t31232_esc_omitted_file order by id;
+➤ id[4,32,0]  ¦  s[12,40,0]  𝄀
+1  ¦  row8  𝄀
+2  ¦  cept9z
+drop table t31232_esc_omitted_inline;
+drop table t31232_esc_omitted_file;
+drop table if exists t31232_esc_empty_inline;
+create table t31232_esc_empty_inline(id int primary key, s varchar(40));
+load data inline format='csv', data='1,row\\8\n2,cept\\9z\n' into table t31232_esc_empty_inline fields terminated by ',' escaped by '';
+select * from t31232_esc_empty_inline order by id;
+➤ id[4,32,0]  ¦  s[12,40,0]  𝄀
+1  ¦  row\8  𝄀
+2  ¦  cept\9z
+drop table if exists t31232_esc_empty_file;
+create table t31232_esc_empty_file(id int primary key, s varchar(40));
+load data infile '$resources/load_data/issue_31232_esc_pair.csv' into table t31232_esc_empty_file fields terminated by ',' escaped by '';
+select * from t31232_esc_empty_file order by id;
+➤ id[4,32,0]  ¦  s[12,40,0]  𝄀
+1  ¦  row\8  𝄀
+2  ¦  cept\9z
+drop table t31232_esc_empty_inline;
+drop table t31232_esc_empty_file;

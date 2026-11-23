@@ -19,12 +19,12 @@ import "github.com/prometheus/client_golang/prometheus"
 // trace.go observe motrace, mometric those packages' behavior
 
 func initTraceMetrics() {
+	registry.MustRegister(SlowLockDiagnosticsSuppressedCounter)
 	registry.MustRegister(traceCollectorDurationHistogram)
 	registry.MustRegister(traceCollectorSignalTotal)
 	registry.MustRegister(traceCollectorDiscardCounter)
 	registry.MustRegister(traceCollectorCollectHungCounter)
 	registry.MustRegister(traceCollectorDiscardItemCounter)
-	registry.MustRegister(traceCollectorStatusCounter)
 	registry.MustRegister(traceCollectorQueueLength)
 	registry.MustRegister(traceNegativeCUCounter)
 	registry.MustRegister(traceETLMergeCounter)
@@ -38,6 +38,13 @@ func initTraceMetrics() {
 }
 
 var (
+	SlowLockDiagnosticsSuppressedCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "mo",
+		Subsystem: "trace",
+		Name:      "slow_lock_diagnostics_suppressed_total",
+		Help:      "Terminal slow locking read diagnostics suppressed by the CN rate budget.",
+	})
+
 	traceCollectorDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
@@ -87,17 +94,6 @@ var (
 			Name:      "collector_discard_item_total",
 			Help:      "Count of trace collector discard item total.",
 		}, []string{"type"})
-
-	traceCollectorStatusCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "trace",
-			Name:      "collector_status_total",
-			Help:      "Count of trace collector discard total.",
-		}, []string{"type"})
-	TraceCollectorDisposedCounter = traceCollectorStatusCounter.WithLabelValues("disposed")
-	TraceCollectorTimeoutCounter  = traceCollectorStatusCounter.WithLabelValues("timeout")
-	TraceCollectorEmptyCounter    = traceCollectorStatusCounter.WithLabelValues("empty")
 
 	traceCollectorQueueLength = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{

@@ -184,7 +184,7 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 							if yes2 {
 								//At least there is one success
 								yes = false
-								for i, typ := range [3]PrivilegeType{mi.privilegeTyp, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+								for i, typ := range privilegeAlternatives(mi.privilegeTyp, mi.selectLock) {
 									if i > 0 && mi.objType != objectTypeTable {
 										break
 									}

@@ -15,11 +15,15 @@
 package disttae
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,7 +42,7 @@ func BenchmarkDeleteTableWritesSparseWorkspace(b *testing.B) {
 	workspace.SetSegment(colexec.TxnWorkspaceSegment)
 	bat := batch.NewWithSize(1)
 	bat.Attrs = []string{objectio.PhysicalAddr_Attr}
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(b, vector.AppendFixed(bat.Vecs[0], workspace, false, proc.Mp()))
 	bat.SetRowCount(1)
 	b.Cleanup(func() { bat.Clean(proc.Mp()) })
@@ -81,7 +85,7 @@ func BenchmarkDeleteTableWritesGuardBoundary(b *testing.B) {
 	workspace.SetSegment(colexec.TxnWorkspaceSegment)
 	bat := batch.NewWithSize(1)
 	bat.Attrs = []string{objectio.PhysicalAddr_Attr}
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(b, vector.AppendFixed(bat.Vecs[0], workspace, false, proc.Mp()))
 	bat.SetRowCount(1)
 	b.Cleanup(func() { bat.Clean(proc.Mp()) })
@@ -185,7 +189,7 @@ func BenchmarkDeleteTableWritesNamespaceGuard(b *testing.B) {
 	workspace.SetBlkOffset(2)
 	bat := batch.NewWithSize(1)
 	bat.Attrs = []string{objectio.PhysicalAddr_Attr}
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(b, vector.AppendFixed(bat.Vecs[0], workspace, false, proc.Mp()))
 	bat.SetRowCount(1)
 	b.Cleanup(func() { bat.Clean(proc.Mp()) })
@@ -246,7 +250,7 @@ func TestDeleteBatchPreservesMixedRowOwnership(t *testing.T) {
 	op := newTxnOperatorForTest(t)
 	txn := &Transaction{proc: proc, op: op, engine: &Engine{},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)}}
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}}
 	var memory, committed, spilled types.Rowid
 	memory.SetSegment(colexec.TxnWorkspaceSegment)
 	memory.SetRowOffset(1)
@@ -256,12 +260,13 @@ func TestDeleteBatchPreservesMixedRowOwnership(t *testing.T) {
 	segment[0] = 2
 	spilled.SetSegment(segment)
 	spilled.SetRowOffset(3)
-	server.PutCnSegment(op.Txn().ID, 42, spilled.BorrowSegmentID(), colexec.TxnWorkspaceUnCommitType)
-	t.Cleanup(func() { server.DeleteTxnSegmentIds(op.Txn().ID) })
+	server.PutCnSegment(&txn.workspaceSegments, op.Txn().ID, 42,
+		spilled.BorrowSegmentID(), colexec.TxnWorkspaceUnCommitType)
+	t.Cleanup(func() { server.RetireTxnWorkspaceSegments(&txn.workspaceSegments) })
 	makeBatch := func(ids ...types.Rowid) *batch.Batch {
 		bat := batch.NewWithSize(1)
 		bat.Attrs = []string{objectio.PhysicalAddr_Attr}
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], ids, nil, proc.Mp()))
 		bat.SetRowCount(len(ids))
 		t.Cleanup(func() { bat.Clean(proc.Mp()) })
@@ -270,11 +275,12 @@ func TestDeleteBatchPreservesMixedRowOwnership(t *testing.T) {
 	insert := makeBatch(memory)
 	txn.writes = []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: insert}}
 	for _, ids := range [][]types.Rowid{{committed, spilled}, {committed, spilled, memory}} {
-		out := txn.deleteBatch(makeBatch(ids...), 7, 42)
+		out, err := txn.deleteBatch(makeBatch(ids...), 7, 42, proc.Mp())
+		require.NoError(t, err)
 		require.Equal(t, []types.Rowid{committed}, vector.MustFixedColWithTypeCheck[types.Rowid](out.Vecs[0]))
 	}
 	require.Equal(t, []int64{0}, txn.batchSelectList[insert])
-	require.Equal(t, []int64{3, 3}, txn.deletedBlocks.offsets[spilled.CloneBlockID()])
+	require.Equal(t, []int64{3, 3}, txn.deletedBlocks.offsets[42][spilled.CloneBlockID()])
 }
 
 func TestDeleteTableWritesNamespaceGuard(t *testing.T) {
@@ -323,7 +329,7 @@ func TestDeleteTableWritesNamespaceGuard(t *testing.T) {
 				for i := 0; i < 8; i++ {
 					b := batch.NewWithSize(1)
 					b.Attrs = []string{objectio.PhysicalAddr_Attr}
-					b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+					b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 					require.NoError(t, vector.AppendFixedList(b.Vecs[0], []types.Rowid{rowID(true, 1, 0), hit, rowID(true, 1, 2)}, nil, proc.Mp()))
 					b.SetRowCount(3)
 					t.Cleanup(func() { b.Clean(proc.Mp()) })
@@ -385,4 +391,56 @@ func TestDeleteTableWritesNamespaceGuard(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBorrowedWorkspacePreparationFailurePreservesState(t *testing.T) {
+	proc := testutil.NewProc(t)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
+	require.NoError(t, err)
+	var rows [2]types.Rowid
+	rows[0].SetRowOffset(0)
+	rows[1].SetRowOffset(1)
+	data := types.EncodeSlice(rows[:])
+	lease, err := bufferlease.NewRefCounted(data, int64(cap(data)), nil)
+	require.NoError(t, err)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0], err = vector.NewVecWithData(types.T_Rowid.ToType(), len(rows), data, nil, nil), error(nil)
+	require.NoError(t, err)
+	bat.SetRowCount(len(rows))
+	defer func() {
+		bat.Clean(proc.Mp())
+		lease.Release()
+		account.Seal()
+		_, finalErr := registry.Finalize(account)
+		require.NoError(t, finalErr)
+	}()
+	txn := &Transaction{proc: proc, workspaceView: selection, writes: []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: bat}},
+		batchSelectList: map[*batch.Batch][]int64{bat: {1, 0}},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}}
+	txn.accountWorkspaceEntryLocked(&txn.writes[0])
+	beforeSize, beforeCount := txn.workspaceSize, txn.approximateInMemInsertCnt
+	retired, err := txn.shrinkWorkspaceEntryBatchLocked(0, txn.batchSelectList[bat])
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.False(t, retired)
+	require.Equal(t, beforeSize, txn.workspaceSize)
+	require.Equal(t, beforeCount, txn.approximateInMemInsertCnt)
+	require.Equal(t, []int64{1, 0}, txn.batchSelectList[bat])
+	require.Equal(t, 2, bat.RowCount())
+	require.Empty(t, txn.deletedBlocks.offsets)
+
+	err = txn.mergeTxnWorkspaceLocked(context.Background())
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Equal(t, beforeSize, txn.workspaceSize)
+	require.Equal(t, beforeCount, txn.approximateInMemInsertCnt)
+	require.Equal(t, []int64{1, 0}, txn.batchSelectList[bat])
+	require.Equal(t, 2, bat.RowCount())
+
+	// deleteBatch and txnTable.Delete mutate the caller's batch, which no
+	// longer carries the caller's allocation account; their materialization
+	// of borrowed data is unaccounted, so they have no capacity failure here.
+	require.Equal(t, 2, bat.RowCount())
 }

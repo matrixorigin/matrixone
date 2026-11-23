@@ -15,12 +15,13 @@
 package plan
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestInsertCTEPhysicalTarget(t *testing.T) {
@@ -56,7 +57,7 @@ func TestInsertCTEPhysicalTarget(t *testing.T) {
 					if legacy {
 						p, err = buildInsert(insert, mock.CurrentContext(), false, false)
 					} else {
-						p, err = BuildPlan(mock.CurrentContext(), statement, false)
+						p, err = BuildPlan(mock.CurrentContext(), statement, false, nil)
 					}
 					if legacy && tc.legacyError != "" {
 						require.ErrorContains(t, err, tc.legacyError)
@@ -114,7 +115,7 @@ func TestUpdateCTETargetNamespace(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			p, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			if tc.wantError != "" {
 				require.ErrorContains(t, err, tc.wantError)
 				require.False(t, moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML))
@@ -144,7 +145,7 @@ func TestInsertCTEFailedBindingPreservesSourceScope(t *testing.T) {
 			if legacy {
 				_, err = buildInsert(insert, mock.CurrentContext(), false, false)
 			} else {
-				_, err = BuildPlan(mock.CurrentContext(), stmt, false)
+				_, err = BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			}
 			require.ErrorContains(t, err, "missing_col")
 			require.Same(t, rows, insert.Rows)
@@ -232,7 +233,7 @@ func TestInsertCTEDeclarationScopeErrors(t *testing.T) {
 					if legacy {
 						_, err = buildInsert(insert, mock.CurrentContext(), false, false)
 					} else {
-						_, err = BuildPlan(mock.CurrentContext(), stmt, false)
+						_, err = BuildPlan(mock.CurrentContext(), stmt, false, nil)
 					}
 					require.ErrorContains(t, err, tc.wantError)
 					require.Same(t, rows, insert.Rows)

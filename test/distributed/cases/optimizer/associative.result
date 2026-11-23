@@ -26,7 +26,7 @@ AND job.status != 4
 AND job.status != 5
 AND t.uid = '019ac448-45b7-7545-9762-2a73f9ab129'
 AND f.table_id in (1);
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
         Group Key: t.id  𝄀
@@ -35,11 +35,13 @@ Project  𝄀
               Join Cond: (t.id = job.task_id), (t.id = f.task_id)  𝄀
               ->  Table Scan on associative.task  𝄀
                     Filter Cond: (t.uid = '019ac448-45b7-7545-9762-2a73f9ab129')  𝄀
+                    Block Filter Cond: (t.uid = '019ac448-45b7-7545-9762-2a73f9ab129')  𝄀
               ->  Join  𝄀
                     Join Type: INNER   hashOnPK  𝄀
                     Join Cond: (f.job_id = job.id)  𝄀
                     ->  Table Scan on associative.file  𝄀
                           Filter Cond: (f.table_id = 1)  𝄀
+                          Block Filter Cond: (f.table_id = 1)  𝄀
                     ->  Table Scan on associative.connector_job  𝄀
                           Filter Cond: (job.status <> 4), (job.status <> 5)
 CREATE TABLE `lineitem` (

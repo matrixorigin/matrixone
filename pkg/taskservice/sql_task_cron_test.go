@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -24,8 +25,40 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
+
+type failingSQLTaskQueryStorage struct {
+	TaskStorage
+	queries int
+}
+
+func (s *failingSQLTaskQueryStorage) QuerySQLTask(context.Context, ...Condition) ([]SQLTask, error) {
+	s.queries++
+	return nil, errors.New("injected metadata outage")
+}
+
+func TestSQLTaskCronBoundsQueryFailureLogs(t *testing.T) {
+	core, logs := observer.New(zapcore.ErrorLevel)
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "sql-task-log-test", zap.New(core))
+	store := &failingSQLTaskQueryStorage{TaskStorage: NewMemTaskStorage()}
+	svc := NewTaskService(rt, store).(*taskService)
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	before := testutil.ToFloat64(v2.SQLTaskCronQueryFailureCounter)
+	for id := uint64(1); id <= 100; id++ {
+		job := &sqlTaskCronJob{ctx: context.Background(), s: svc, task: SQLTask{TaskID: id}}
+		job.Run()
+	}
+	require.Equal(t, 100, store.queries)
+	require.GreaterOrEqual(t, testutil.ToFloat64(v2.SQLTaskCronQueryFailureCounter)-before, float64(100))
+	require.LessOrEqual(t, logs.FilterMessage("query sql task failed").Len(), 3)
+}
 
 func TestScheduleSQLTaskCatchUpPersistsTriggerState(t *testing.T) {
 	oldFetchInterval := fetchInterval
@@ -85,7 +118,7 @@ func TestScheduleSQLTaskCatchUpPersistsTriggerState(t *testing.T) {
 	runs, err := store.QueryAsyncTask(context.Background(), WithTaskParentTaskIDCond(EQ, fmt.Sprintf("sql-task:%d", sqlTask.TaskID)))
 	require.NoError(t, err)
 	require.Len(t, runs, 1)
-	require.Equal(t, "sql-task:1:1", runs[0].Metadata.ID)
+	require.Equal(t, "sqltask2:1:00000000000000000001", runs[0].Metadata.ID)
 }
 
 func TestScheduleSQLTaskSkipsManualOnlyTask(t *testing.T) {
@@ -178,14 +211,17 @@ func TestLoadSQLTasksAddsReplacesAndRemoves(t *testing.T) {
 	require.Len(t, ts.sqlCrons.jobs, 1)
 	require.Equal(t, sqlTask.CronExpr, ts.sqlCrons.jobs[sqlTask.TaskID].taskSnapshot().CronExpr)
 
-	sqlTask.CronExpr = "0 */2 * * * *"
-	mustUpdateTestSQLTask(t, store, 1, []SQLTask{sqlTask}, WithTaskIDCond(EQ, sqlTask.TaskID))
+	updated := sqlTask
+	updated.CronExpr = "0 */2 * * * *"
+	_, err := store.AlterSQLTask(context.Background(), sqlTask, updated, SQLTaskSetSchedule)
+	require.NoError(t, err)
+	sqlTask = mustGetTestSQLTask(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))[0]
 	ts.loadSQLTasks(context.Background())
 	require.Len(t, ts.sqlCrons.jobs, 1)
 	require.Equal(t, "0 */2 * * * *", ts.sqlCrons.jobs[sqlTask.TaskID].taskSnapshot().CronExpr)
 
-	sqlTask.Enabled = false
-	mustUpdateTestSQLTask(t, store, 1, []SQLTask{sqlTask}, WithTaskIDCond(EQ, sqlTask.TaskID))
+	_, err = store.AlterSQLTask(context.Background(), sqlTask, sqlTask, SQLTaskSuspend)
+	require.NoError(t, err)
 	ts.loadSQLTasks(context.Background())
 	require.Empty(t, ts.sqlCrons.jobs)
 }
@@ -220,9 +256,14 @@ func TestSQLTaskCronJobEdges(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, tasks)
 
-	sqlTask.Enabled = true
-	sqlTask.CronExpr = "bad cron"
-	mustUpdateTestSQLTask(t, store, 1, []SQLTask{sqlTask}, WithTaskIDCond(EQ, sqlTask.TaskID))
+	updated := sqlTask
+	updated.CronExpr = "bad cron"
+	_, err = store.AlterSQLTask(context.Background(), sqlTask, updated, SQLTaskSetSchedule)
+	require.NoError(t, err)
+	sqlTask = mustGetTestSQLTask(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))[0]
+	_, err = store.AlterSQLTask(context.Background(), sqlTask, sqlTask, SQLTaskResume)
+	require.NoError(t, err)
+	sqlTask = mustGetTestSQLTask(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))[0]
 	job.setTask(sqlTask)
 	job.Run()
 	tasks, err = store.QueryAsyncTask(context.Background())

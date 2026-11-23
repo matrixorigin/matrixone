@@ -63,7 +63,7 @@ func TestInternalAutoIncrementOwnsRelationNames(t *testing.T) {
 				insertCatalogTableForResetTest(t, eng, txn, 7, 10, 43, names.db, "next_table")
 
 				newInput := func(name string) *vector.Vector {
-					v := vector.NewVec(types.T_varchar.ToType())
+					v := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 					t.Cleanup(func() { v.Free(proc.Mp()) })
 					require.NoError(t, vector.AppendBytes(v, []byte(name), false, proc.Mp()))
 					if constant {

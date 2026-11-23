@@ -477,7 +477,8 @@ type resolveErrorCompilerContext struct {
 	err error
 }
 
-func (c *resolveErrorCompilerContext) Resolve(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *resolveErrorCompilerContext) Resolve(_ string, _ string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	return nil, nil, c.err
 }
 
@@ -485,7 +486,7 @@ type viewDependencyCompilerContext struct {
 	*MockCompilerContext
 	views    []string
 	snapshot *Snapshot
-	resolve  func(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
+	resolve  func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error)
 }
 
 func (c *viewDependencyCompilerContext) GetViews() []string {
@@ -503,9 +504,10 @@ func (c *viewDependencyCompilerContext) GetSnapshot() *Snapshot {
 func (c *viewDependencyCompilerContext) Resolve(
 	databaseName string,
 	tableName string,
-	snapshot *Snapshot,
+	snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
-	return c.resolve(databaseName, tableName, snapshot)
+	borrowOutput.Reset()
+	return c.resolve(databaseName, tableName, snapshot, nil)
 }
 
 func TestCollectPrepareDdlSchemas(t *testing.T) {
@@ -976,7 +978,7 @@ func TestCollectPrepareViewSchemasPreservesIdentity(t *testing.T) {
 			viewKey,
 		},
 	}
-	ctx.resolve = func(databaseName, tableName string, gotSnapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	ctx.resolve = func(databaseName, tableName string, gotSnapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 		require.Equal(t, "sub", databaseName)
 		require.Equal(t, "src_v", tableName)
 		require.NotSame(t, snapshot, gotSnapshot)
@@ -1004,7 +1006,7 @@ func TestCollectPrepareViewSchemasKeepsLogicalSubscriptions(t *testing.T) {
 		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		views:               []string{"subscription_one#v", "subscription_two#v"},
 	}
-	ctx.resolve = func(databaseName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+	ctx.resolve = func(databaseName, tableName string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 		return &ObjectRef{
 			SchemaName:       "publisher_db",
 			ObjName:          tableName,
@@ -1261,7 +1263,7 @@ func TestCollectPrepareViewSchemasRejectsInvalidDependencies(t *testing.T) {
 			ctx := &viewDependencyCompilerContext{
 				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				views:               []string{testCase.view},
-				resolve: func(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+				resolve: func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error) {
 					t.Fatal("invalid dependency must fail before resolution")
 					return nil, nil, nil
 				},
@@ -1277,14 +1279,14 @@ func TestCollectPrepareViewSchemasPropagatesResolutionFailures(t *testing.T) {
 	ctx := &viewDependencyCompilerContext{
 		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		views:               []string{"db#v"},
-		resolve: func(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+		resolve: func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error) {
 			return nil, nil, resolveErr
 		},
 	}
 	_, err := collectPrepareViewSchemas(ctx)
 	require.ErrorIs(t, err, resolveErr)
 
-	ctx.resolve = func(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+	ctx.resolve = func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error) {
 		return nil, nil, nil
 	}
 	_, err = collectPrepareViewSchemas(ctx)
@@ -1295,17 +1297,14 @@ func TestBuildPrepareClearsViewsFromPreviousStatement(t *testing.T) {
 	ctx := &viewDependencyCompilerContext{
 		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		views:               []string{"dropped_db#dropped_view"},
-		resolve: func(databaseName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+		resolve: func(databaseName, tableName string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 			require.NotEqual(t, "dropped_db", databaseName)
 			require.NotEqual(t, "dropped_view", tableName)
 			return nil, nil, nil
 		},
 	}
 
-	prepared, err := buildPrepare(
-		tree.NewPrepareString("s", "drop table if exists unrelated"),
-		ctx,
-	)
+	prepared, err := buildPrepare(tree.NewPrepareString("s", "drop table if exists unrelated"), ctx, nil)
 	require.NoError(t, err)
 	require.Empty(t, ctx.GetViews())
 	require.Len(t, prepared.GetDcl().GetPrepare().GetSchemas(), 1)
@@ -2793,10 +2792,8 @@ func TestFillValuesOfParamsPreservesSQLExecuteRuntimeStringDomain(t *testing.T) 
 		wantForm   planpb.StringLiteralForm
 		wantLength int64
 	}{
-		{
-			name: "static varbinary runtime text", sourceType: types.T_varbinary.ToType(),
-			domain: types.RuntimeStringText, wantForm: planpb.StringLiteralForm_STRING_LITERAL_TEXT, wantLength: 2,
-		},
+		// A static VARBINARY source can no longer carry a TEXT row: the static
+		// type is the only source of binary-vs-text semantics.
 		{
 			name: "static varchar runtime binary", sourceType: types.T_varchar.ToType(),
 			domain: types.RuntimeStringBinary, wantForm: planpb.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
@@ -3388,7 +3385,7 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		}
 		query := makeQuery(t, "=", []*planpb.Expr{intColumn, param(0)})
 		values := []any{ParamValue{
-			Value: "9.0", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
+			Value: "9.0", PrepareParamKind: types.StringConversionDecimal, EnableNumericPrefix: true,
 		}}
 		require.True(t, PreparedPlanNeedsNumericPrefixSpecialization(query, values))
 
@@ -3411,7 +3408,7 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		}
 		query := makeQuery(t, "=", []*planpb.Expr{floatColumn, param(0)})
 		require.False(t, PreparedPlanNeedsNumericPrefixSpecialization(query, []any{ParamValue{
-			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
+			Value: "1.2345678", PrepareParamKind: types.StringConversionDecimal, EnableNumericPrefix: true,
 		}}), query.String())
 	})
 
@@ -3583,10 +3580,10 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		query := makeQuery(t, "coalesce", []*planpb.Expr{param(0), param(1)})
 		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
 			ParamValue{
-				Value: "12.5", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
+				Value: "12.5", PrepareParamKind: types.StringConversionDecimal, EnableNumericPrefix: true,
 			},
 			ParamValue{
-				Value: int64(2), PrepareParamKind: vector.PrepareParamInteger, EnableNumericPrefix: true,
+				Value: int64(2), PrepareParamKind: types.StringConversionInteger, EnableNumericPrefix: true,
 			},
 		})
 		require.NoError(t, err)
@@ -3609,7 +3606,7 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
 			ParamValue{Value: "9007199254740992.0001tail", EnableNumericPrefix: true},
 			ParamValue{
-				Value: "9007199254740992.0002", PrepareParamKind: vector.PrepareParamFloat,
+				Value: "9007199254740992.0002", PrepareParamKind: types.StringConversionFloat,
 				EnableNumericPrefix: true,
 			},
 		})
@@ -3625,13 +3622,13 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		for _, test := range []struct {
 			name    string
 			value   any
-			kind    vector.PrepareParamKind
+			kind    types.StringConversionKind
 			wantOID types.T
 		}{
-			{name: "boolean", value: true, kind: vector.PrepareParamBoolean, wantOID: types.T_decimal128},
-			{name: "integer", value: int64(42), kind: vector.PrepareParamInteger, wantOID: types.T_decimal128},
-			{name: "decimal", value: "42.25", kind: vector.PrepareParamDecimal, wantOID: types.T_decimal128},
-			{name: "float", value: "42.25", kind: vector.PrepareParamFloat, wantOID: types.T_float64},
+			{name: "boolean", value: true, kind: types.StringConversionBoolean, wantOID: types.T_decimal128},
+			{name: "integer", value: int64(42), kind: types.StringConversionInteger, wantOID: types.T_decimal128},
+			{name: "decimal", value: "42.25", kind: types.StringConversionDecimal, wantOID: types.T_decimal128},
+			{name: "float", value: "42.25", kind: types.StringConversionFloat, wantOID: types.T_float64},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				query := makeQuery(t, "coalesce", []*planpb.Expr{param(0), decimalColumn()})
@@ -3813,7 +3810,7 @@ func TestRestorePreparedExactIntegerTextExecutesNormalization(t *testing.T) {
 			} else {
 				require.NotNil(t, restored.GetF().Args[0].GetP())
 			}
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			proc.SetPrepareParams(params)
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			value := "9007199254740993"

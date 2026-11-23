@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,7 +85,9 @@ func TestFreeBatches_WithBatches(t *testing.T) {
 	bat := containers.MockBatch(typs, 10, 0, nil)
 	cnBat := containers.ToCNBatch(bat)
 
-	freeBatches([]*batch.Batch{cnBat}, mp)
+	// MockBatch allocates from its default pool.
+	freeBatches([]*batch.Batch{cnBat}, cnBat.Vecs[0].MPool())
+	_ = mp
 }
 
 // ---------- SinkPool lifecycle tests ----------
@@ -111,6 +115,65 @@ type mockFileSinker struct {
 	closed     atomic.Bool
 	syncStart  chan struct{}
 	syncBlock  chan struct{}
+}
+
+type cancellablePoolSinker struct{ started chan struct{} }
+
+func (s *cancellablePoolSinker) Sink(context.Context, *batch.Batch) error { return nil }
+func (s *cancellablePoolSinker) Sync(ctx context.Context) (*objectio.ObjectStats, error) {
+	if s.started != nil {
+		close(s.started)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+func (*cancellablePoolSinker) Reset()       {}
+func (*cancellablePoolSinker) Close() error { return nil }
+
+func TestCancelAllSinkersBeforeDrainingSharedPool(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pool := NewSinkPool(1, 1)
+		ctxA, cancelA := context.WithCancel(context.Background())
+		ctxB, cancelB := context.WithCancel(context.Background())
+		a := &Sinker{}
+		b := &Sinker{}
+		a.pipe.enabled, b.pipe.enabled = true, true
+		a.pipe.result = &pipelineResult{ctx: ctxA, cancel: cancelA}
+		b.pipe.result = &pipelineResult{ctx: ctxB, cancel: cancelB}
+		defer func() {
+			a.CancelPending()
+			b.CancelPending()
+			pool.Close()
+		}()
+		started := make(chan struct{})
+		require.NoError(t, pool.Submit(&poolSinkJob{
+			result: b.pipe.result,
+			factory: func(*mpool.MPool, fileservice.FileService) FileSinker {
+				return &cancellablePoolSinker{started: started}
+			},
+		}))
+		<-started // B owns the only sync worker.
+		require.NoError(t, pool.Submit(&poolSinkJob{
+			result: a.pipe.result,
+			factory: func(*mpool.MPool, fileservice.FileService) FileSinker {
+				return &cancellablePoolSinker{}
+			},
+		}))
+		synctest.Wait()
+		require.Len(t, pool.syncChan, 1, "A must be queued behind B")
+		a.CancelPending()
+		done := make(chan struct{})
+		go func() { a.AbandonAndRetainableNames(); close(done) }()
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("A cannot drain while B owns the only sync worker")
+		default:
+		}
+		b.CancelPending()
+		<-done
+		b.AbandonAndRetainableNames()
+	})
 }
 
 func (m *mockFileSinker) Sink(_ context.Context, bat *batch.Batch) error {
@@ -157,7 +220,8 @@ func TestSinkPool_SubmitSuccess(t *testing.T) {
 	pool := NewSinkPool(2, 1)
 	defer pool.Close()
 
-	mp, err := mpool.NewMPool("test_submit", 0, mpool.NoFixed)
+	// The mock batches allocate from the default pool.
+	mp, err := common.DefaultAllocator, error(nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -185,7 +249,8 @@ func TestSinkPool_SubmitMultipleJobs(t *testing.T) {
 	pool := NewSinkPool(3, 2)
 	defer pool.Close()
 
-	mp, err := mpool.NewMPool("test_multi", 0, mpool.NoFixed)
+	// The mock batches allocate from the default pool.
+	mp, err := common.DefaultAllocator, error(nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -217,7 +282,8 @@ func TestSinkPool_SubmitSinkError(t *testing.T) {
 	pool := NewSinkPool(2, 1)
 	defer pool.Close()
 
-	mp, err := mpool.NewMPool("test_sink_err", 0, mpool.NoFixed)
+	// The mock batches allocate from the default pool.
+	mp, err := common.DefaultAllocator, error(nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -245,7 +311,8 @@ func TestSinkPool_SubmitSyncError(t *testing.T) {
 	pool := NewSinkPool(2, 1)
 	defer pool.Close()
 
-	mp, err := mpool.NewMPool("test_sync_err", 0, mpool.NoFixed)
+	// The mock batches allocate from the default pool.
+	mp, err := common.DefaultAllocator, error(nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -279,7 +346,8 @@ func TestSinkPool_SubmitAfterError(t *testing.T) {
 	pool := NewSinkPool(2, 1)
 	defer pool.Close()
 
-	mp, err := mpool.NewMPool("test_after_err", 0, mpool.NoFixed)
+	// The mock batches allocate from the default pool.
+	mp, err := common.DefaultAllocator, error(nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -307,7 +375,8 @@ func TestSinkPool_SubmitContextCancelled(t *testing.T) {
 	pool := NewSinkPool(1, 1)
 	defer pool.Close()
 
-	mp, err := mpool.NewMPool("test_ctx_cancel", 0, mpool.NoFixed)
+	// The mock batches allocate from the default pool.
+	mp, err := common.DefaultAllocator, error(nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -339,7 +408,8 @@ func TestSinkPool_WorkerSkipsOnError(t *testing.T) {
 		t.Run(map[bool]string{false: "failed_before_submit", true: "failed_while_queued"}[queued], func(t *testing.T) {
 			pool := NewSinkPool(1, 1)
 			defer pool.Close()
-			mp, err := mpool.NewMPool("test_skip_err", 0, mpool.NoFixed)
+			// The mock batches allocate from the default pool.
+			mp, err := common.DefaultAllocator, error(nil)
 			require.NoError(t, err)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
@@ -398,7 +468,8 @@ func TestSinkPool_SyncWorkerSkipsOnError(t *testing.T) {
 	pool := NewSinkPool(2, 1)
 	defer pool.Close()
 
-	mp, err := mpool.NewMPool("test_sync_skip", 0, mpool.NoFixed)
+	// The mock batches allocate from the default pool.
+	mp, err := common.DefaultAllocator, error(nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -473,7 +544,8 @@ func TestSinkPool_ConcurrentSubmit(t *testing.T) {
 	pool := NewSinkPool(4, 2)
 	defer pool.Close()
 
-	mp, err := mpool.NewMPool("test_concurrent", 0, mpool.NoFixed)
+	// The mock batches allocate from the default pool.
+	mp, err := common.DefaultAllocator, error(nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -724,7 +796,8 @@ func TestSinker_WithPipelineFlush_Reset(t *testing.T) {
 }
 
 func TestSinkPool_SubmitCloseRace(t *testing.T) {
-	mp, err := mpool.NewMPool("test_race", 0, mpool.NoFixed)
+	// The mock batches allocate from the default pool.
+	mp, err := common.DefaultAllocator, error(nil)
 	require.NoError(t, err)
 
 	typs := []types.Type{types.T_int32.ToType()}

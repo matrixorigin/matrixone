@@ -65,7 +65,7 @@ func TestTableCollationViewProtocol(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false, nil)
 	}
 	const authored = "create view collation_v as select internal_table_collation('') as c"
 	const legacy = "create view legacy_v as select 1 as c"

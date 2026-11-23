@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -143,6 +144,15 @@ func sequenceTableName(db, table string) string {
 // list is metadata, not an API with a fixed order, so inspect the relkind key
 // explicitly and fail closed on missing or conflicting markers.
 func requireSequence(ctx context.Context, rel engine.Relation) error {
+	if source, ok := rel.(interface{ ValidatedCatalogKind() (string, bool) }); ok {
+		if kind, valid := source.ValidatedCatalogKind(); valid {
+			if kind == catalog.SystemSequenceRel {
+				return nil
+			}
+			return moerr.NewInternalError(ctx, "Table input is not a sequence")
+		}
+	}
+
 	td, err := rel.TableDefs(ctx)
 	if err != nil {
 		return err
@@ -319,10 +329,39 @@ type nextvalBatch struct {
 	rows []int
 }
 
+// sequenceRelationName maps the raw string argument of nextval/currval/setval
+// onto the identifier form CREATE SEQUENCE stored it under, applying the
+// session's real lower_case_table_names policy (#31909): the parser folds the
+// identifiers of the CREATE statement under that same policy, while the
+// sequence functions receive an opaque string literal that bypasses that path
+// and misses the stored name. The mysql lexer folds identifiers only under
+// mode 1 (GetDbOrTblName), so mode 0 and mixed mode 2 keep the authored
+// spelling — only identifier resolution is normalized, and the allocation
+// identity, its session caches and all access checks keep keying on the real
+// relation ids.
+func sequenceRelationName(proc *process.Process, name string) string {
+	// Default matches the frontend's lower_case_table_names fallback (1).
+	lowerCaseTableNames := int64(1)
+	if resolve := proc.GetResolveVariableFunc(); resolve != nil {
+		if value, err := resolve("lower_case_table_names", true, false); err == nil {
+			if lctn, ok := value.(int64); ok {
+				lowerCaseTableNames = lctn
+			}
+		}
+	}
+	// tree.NewCStr folds every non-zero policy, but CREATE folds only mode 1;
+	// matching it keeps the mixed mode's created spelling resolvable.
+	if lowerCaseTableNames != 1 {
+		return name
+	}
+	return tree.NewCStr(name, 1).Compare()
+}
+
 // resolveNextval resolves and validates the sequence relation inside the
 // caller's transaction (preserving caller-visible errors) and captures the
 // generation identity the allocation route must match.
 func resolveNextval(tblname, db string, proc *process.Process, e engine.Engine, txn client.TxnOperator) (nextvalIdentity, error) {
+	tblname = sequenceRelationName(proc, tblname)
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
 		return nextvalIdentity{}, err
@@ -421,6 +460,7 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 // successful assignment clears the pass-scoped obligation (a deliberate
 // SETVAL boundary).
 func setval(tblname, setnum string, iscalled bool, db string, proc *process.Process, txn client.TxnOperator, e engine.Engine) (string, error) {
+	tblname = sequenceRelationName(proc, tblname)
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
 		return "", err
@@ -486,7 +526,7 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 				databasesByName[db] = dbHandler
 			}
 			var rel engine.Relation
-			rel, err = dbHandler.Relation(proc.Ctx, string(v), nil)
+			rel, err = dbHandler.Relation(proc.Ctx, sequenceRelationName(proc, string(v)), nil)
 			if err != nil {
 				return
 			}

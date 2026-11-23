@@ -62,7 +62,7 @@ func buildSQLSelectLimitTestQuery(t *testing.T, sql string) *planpb.Query {
 	require.NoError(t, err)
 	require.Len(t, stmts, 1)
 
-	queryPlan, err := BuildPlan(ctx, stmts[0], false)
+	queryPlan, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, queryPlan.GetQuery())
 	return queryPlan.GetQuery()

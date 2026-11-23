@@ -33,7 +33,7 @@ func TestPreparedDecimalFloatSingleSlotCache(t *testing.T) {
 	for _, first := range []string{"7", wide} {
 		t.Run(first, func(t *testing.T) {
 			base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
-			_, table, err := base.Resolve("tpch", "nation", nil)
+			_, table, err := base.Resolve("tpch", "nation", nil, nil)
 			require.NoError(t, err)
 			for _, col := range table.Cols {
 				if col.Name == "n_nationkey" {
@@ -61,7 +61,8 @@ func TestPreparedDecimalFloatSingleSlotCache(t *testing.T) {
 				if prepared.params != nil {
 					prepared.params.Free(cw.proc.Mp())
 				}
-				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+				prepared.paramsMP = cw.proc.Mp()
 				require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), null, cw.proc.Mp()))
 				prepared.ParamTypes = []byte{byte(source), 0}
 			}

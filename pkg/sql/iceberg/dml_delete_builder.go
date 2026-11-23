@@ -27,6 +27,7 @@ import (
 )
 
 type DMLDeleteActionStreamRequest struct {
+	ParquetOptions     icebergwrite.ParquetOptions
 	TableLocation      string
 	Schema             api.Schema
 	Base               dml.CommitBase
@@ -75,6 +76,7 @@ type DMLReplacementDataBatch struct {
 }
 
 type DMLMergeActionStreamRequest struct {
+	ParquetOptions                  icebergwrite.ParquetOptions
 	TableLocation                   string
 	Schema                          api.Schema
 	Base                            dml.CommitBase
@@ -94,6 +96,7 @@ type DMLMergeActionStreamRequest struct {
 }
 
 type DMLOverwriteActionStreamRequest struct {
+	ParquetOptions     icebergwrite.ParquetOptions
 	TableLocation      string
 	SnapshotID         int64
 	Schema             api.Schema
@@ -145,7 +148,7 @@ func BuildDMLUpdateActionStream(ctx context.Context, req DMLUpdateActionStreamRe
 	if len(appendedDataFiles) == 0 {
 		for idx, replacementBatch := range req.ReplacementBatches {
 			replacementBatch = replacementBatchWithSequence(replacementBatch, idx+1)
-			files, err := materializeDMLReplacementBatch(ctx, dml.OperationUpdate, req.Base, req.TableLocation, req.SnapshotID, req.Schema, replacementBatch, req.ObjectWriter)
+			files, err := materializeDMLReplacementBatch(ctx, dml.OperationUpdate, req.Base, req.TableLocation, req.SnapshotID, req.Schema, replacementBatch, req.ObjectWriter, req.ParquetOptions)
 			if err != nil {
 				return nil, err
 			}
@@ -153,7 +156,7 @@ func BuildDMLUpdateActionStream(ctx context.Context, req DMLUpdateActionStreamRe
 		}
 	}
 	if len(appendedDataFiles) == 0 {
-		files, err := materializeDMLReplacementBatch(ctx, dml.OperationUpdate, req.Base, req.TableLocation, req.SnapshotID, req.Schema, req.ReplacementBatch, req.ObjectWriter)
+		files, err := materializeDMLReplacementBatch(ctx, dml.OperationUpdate, req.Base, req.TableLocation, req.SnapshotID, req.Schema, req.ReplacementBatch, req.ObjectWriter, req.ParquetOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -234,7 +237,7 @@ func BuildDMLMergeActionStream(ctx context.Context, req DMLMergeActionStreamRequ
 	for _, replacementBatch := range req.MatchedUpdateReplacementBatches {
 		replacementBatch = replacementBatchWithSequence(replacementBatch, nextReplacementSeq)
 		nextReplacementSeq++
-		files, err := materializeDMLReplacementBatch(ctx, dml.OperationMerge, req.Base, req.TableLocation, req.SnapshotID, req.Schema, replacementBatch, req.ObjectWriter)
+		files, err := materializeDMLReplacementBatch(ctx, dml.OperationMerge, req.Base, req.TableLocation, req.SnapshotID, req.Schema, replacementBatch, req.ObjectWriter, req.ParquetOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -242,7 +245,7 @@ func BuildDMLMergeActionStream(ctx context.Context, req DMLMergeActionStreamRequ
 	}
 	if len(matchedUpdateReplacements) == 0 {
 		replacementBatch := replacementBatchWithSequence(req.MatchedUpdateReplacementBatch, nextReplacementSeq)
-		files, err := materializeDMLReplacementBatch(ctx, dml.OperationMerge, req.Base, req.TableLocation, req.SnapshotID, req.Schema, replacementBatch, req.ObjectWriter)
+		files, err := materializeDMLReplacementBatch(ctx, dml.OperationMerge, req.Base, req.TableLocation, req.SnapshotID, req.Schema, replacementBatch, req.ObjectWriter, req.ParquetOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -263,7 +266,7 @@ func BuildDMLMergeActionStream(ctx context.Context, req DMLMergeActionStreamRequ
 	for _, unmatchedBatch := range req.UnmatchedAppendBatches {
 		unmatchedBatch = replacementBatchWithSequence(unmatchedBatch, nextReplacementSeq)
 		nextReplacementSeq++
-		files, err := materializeDMLReplacementBatch(ctx, dml.OperationMerge, req.Base, req.TableLocation, req.SnapshotID, req.Schema, unmatchedBatch, req.ObjectWriter)
+		files, err := materializeDMLReplacementBatch(ctx, dml.OperationMerge, req.Base, req.TableLocation, req.SnapshotID, req.Schema, unmatchedBatch, req.ObjectWriter, req.ParquetOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -271,7 +274,7 @@ func BuildDMLMergeActionStream(ctx context.Context, req DMLMergeActionStreamRequ
 	}
 	if len(unmatchedAppends) == 0 {
 		unmatchedBatch := replacementBatchWithSequence(req.UnmatchedAppendBatch, nextReplacementSeq)
-		unmatchedBatchFiles, err := materializeDMLReplacementBatch(ctx, dml.OperationMerge, req.Base, req.TableLocation, req.SnapshotID, req.Schema, unmatchedBatch, req.ObjectWriter)
+		unmatchedBatchFiles, err := materializeDMLReplacementBatch(ctx, dml.OperationMerge, req.Base, req.TableLocation, req.SnapshotID, req.Schema, unmatchedBatch, req.ObjectWriter, req.ParquetOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -321,7 +324,7 @@ func BuildDMLOverwriteActionStream(ctx context.Context, req DMLOverwriteActionSt
 	if len(replacementFiles) == 0 {
 		for idx, replacementBatch := range req.ReplacementBatches {
 			replacementBatch = replacementBatchWithSequence(replacementBatch, idx+1)
-			files, err := materializeDMLReplacementBatch(ctx, dml.OperationOverwrite, req.Base, req.TableLocation, req.SnapshotID, req.Schema, replacementBatch, req.ObjectWriter)
+			files, err := materializeDMLReplacementBatch(ctx, dml.OperationOverwrite, req.Base, req.TableLocation, req.SnapshotID, req.Schema, replacementBatch, req.ObjectWriter, req.ParquetOptions)
 			if err != nil {
 				return nil, err
 			}
@@ -329,7 +332,7 @@ func BuildDMLOverwriteActionStream(ctx context.Context, req DMLOverwriteActionSt
 		}
 	}
 	if len(replacementFiles) == 0 {
-		files, err := materializeDMLReplacementBatch(ctx, dml.OperationOverwrite, req.Base, req.TableLocation, req.SnapshotID, req.Schema, req.ReplacementBatch, req.ReplacementBatch.ObjectWriter)
+		files, err := materializeDMLReplacementBatch(ctx, dml.OperationOverwrite, req.Base, req.TableLocation, req.SnapshotID, req.Schema, req.ReplacementBatch, req.ReplacementBatch.ObjectWriter, req.ParquetOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -535,7 +538,7 @@ func dmlAffectedDataFilesFromScanPlan(ctx context.Context, plan *api.IcebergScan
 	return files, nil
 }
 
-func materializeDMLReplacementBatch(ctx context.Context, operation dml.Operation, base dml.CommitBase, tableLocation string, snapshotID int64, schema api.Schema, replacement DMLReplacementDataBatch, fallbackWriter dml.DeleteObjectWriter) ([]api.DataFile, error) {
+func materializeDMLReplacementBatch(ctx context.Context, operation dml.Operation, base dml.CommitBase, tableLocation string, snapshotID int64, schema api.Schema, replacement DMLReplacementDataBatch, fallbackWriter dml.DeleteObjectWriter, options icebergwrite.ParquetOptions) ([]api.DataFile, error) {
 	if replacement.Batch == nil || replacement.Batch.RowCount() == 0 {
 		return nil, nil
 	}
@@ -547,6 +550,7 @@ func materializeDMLReplacementBatch(ctx context.Context, operation dml.Operation
 		replacement.ObjectWriter = fallbackWriter
 	}
 	return WriteDMLReplacementDataFiles(ctx, DMLReplacementDataFilesRequest{
+		ParquetOptions:      options,
 		TableLocation:       tableLocation,
 		Operation:           operation,
 		Base:                base,

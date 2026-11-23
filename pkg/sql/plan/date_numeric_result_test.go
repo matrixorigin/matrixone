@@ -56,7 +56,7 @@ func TestDateNumericSerializedExecution(t *testing.T) {
 				proc.Base.SessionInfo.DefaultWeekFormatSet = true
 				input := batch.NewWithSize(1)
 				defer input.Clean(proc.Mp())
-				input.Vecs[0] = vector.NewVec(tc.input.ToType())
+				input.Vecs[0] = vector.NewVec(tc.input.ToType(), proc.Mp())
 				dates := []types.Date{types.DateFromCalendar(2024, 12, 31), types.ZeroDate, types.DateFromCalendar(2025, 1, 1)}
 				for i, d := range dates {
 					if tc.input == types.T_date {
@@ -164,7 +164,7 @@ func TestDateNumericPersistedAdmissionAndFoldedView(t *testing.T) {
 					return nil, err
 				}
 				defer stmt.Free()
-				return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+				return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false, nil)
 			}
 			_, err := build(tc.required - 1)
 			require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", tc.required))

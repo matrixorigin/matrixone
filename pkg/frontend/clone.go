@@ -490,12 +490,12 @@ func cloneCatalogLockBatch(
 			}
 		}
 	}()
-	inputs[0] = vector.NewVec(types.T_uint32.ToType())
+	inputs[0] = vector.NewVec(types.T_uint32.ToType(), proc.Mp())
 	if err := vector.AppendFixed(inputs[0], accountID, false, proc.GetMPool()); err != nil {
 		return nil, err
 	}
 	for i, name := range names {
-		inputs[i+1] = vector.NewVec(types.T_varchar.ToType())
+		inputs[i+1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		if err := vector.AppendBytes(inputs[i+1], []byte(name), false, proc.GetMPool()); err != nil {
 			return nil, err
 		}
@@ -949,6 +949,11 @@ func handleCloneTable(
 			SrcTable: stmt.SrcTable, CreateTable: stmt.CreateTable, ToAccountOpt: stmt.ToAccountOpt,
 		})
 		if err != nil {
+			return
+		}
+	}
+	if resolvedAccounts == nil && stmt.ToAccountOpt != nil {
+		if err = checkCloneDestinationAtAccount(execCtx, ses, &stmt.CreateTable.Table, opAccountId, toAccountId); err != nil {
 			return
 		}
 	}
@@ -1660,9 +1665,9 @@ func rewriteCloneCreateSQLWithMode(sql, srcDBName, dstDBName string, lowerCaseTa
 		var localDDL string
 		switch {
 		case strings.EqualFold(string(createView.Name.ObjectName), "TABLES"):
-			localDDL = sysview.InformationSchemaTablesV41DDL
+			localDDL = sysview.InformationSchemaTablesLocalCurrentDDL
 		case strings.EqualFold(string(createView.Name.ObjectName), "COLUMNS"):
-			localDDL = sysview.InformationSchemaColumnsV41DDL
+			localDDL = sysview.InformationSchemaColumnsLocalCurrentDDL
 		}
 		if localDDL != "" {
 			localStmt, parseErr := parsers.ParseOne(context.Background(), dialect.MYSQL, localDDL, lowerCaseTableNames)

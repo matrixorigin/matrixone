@@ -16,12 +16,14 @@ package logtailreplay
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -48,9 +50,9 @@ func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 	newData := func(values []int32, timestamps []int64) *batch.Batch {
 		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType()) // added FIRST
-		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType()) // logical primary key
-		bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp) // added FIRST
+		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp) // logical primary key
+		bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 		for i, ts := range timestamps {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], values[i], false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(1), false, mp))
@@ -61,8 +63,8 @@ func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
 	}
 	newTombstone := func(timestamps []int64) *batch.Batch {
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 		for _, ts := range timestamps {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.BuildTS(ts, 0), false, mp))
@@ -74,7 +76,7 @@ func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
 	t.Run("insert delete cancels with added-first layout", func(t *testing.T) {
 		data := newData([]int32{7}, []int64{10})
 		tombstone := newTombstone([]int64{20})
-		require.NoError(t, filterBatch(data, tombstone, 1, false, false))
+		require.NoError(t, filterBatch(data, tombstone, 1, false, false, mp))
 		require.Zero(t, data.RowCount())
 		require.Zero(t, tombstone.RowCount())
 		data.Clean(mp)
@@ -87,7 +89,7 @@ func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
 		// final tombstone is the delete being tested and must remain as the
 		// latest net effect.
 		tombstone := newTombstone([]int64{5, 30})
-		require.NoError(t, filterBatch(data, tombstone, 1, false, false))
+		require.NoError(t, filterBatch(data, tombstone, 1, false, false, mp))
 		require.Zero(t, data.RowCount())
 		require.Equal(t, 1, tombstone.RowCount())
 		data.Clean(mp)
@@ -571,7 +573,7 @@ func TestCNObjectHandleCleansSourceAfterCopy(t *testing.T) {
 
 	source := batch.NewWithSize(1)
 	source.Attrs = []string{"id"}
-	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), sourceMP)
 	for i := 0; i < 200_000; i++ {
 		require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(i), false, sourceMP))
 	}
@@ -983,9 +985,9 @@ func newPartitionStateRangeRows(
 	state := NewPartitionState("", true, 42, false)
 	src := batch.NewWithSize(3)
 	src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk"})
-	src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	src.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
+	src.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
 	blockID := types.Blockid{}
 	for row := 0; row < rows; row++ {
 		rowOffset := uint32(row)
@@ -1022,10 +1024,10 @@ func newPartitionStateRangeWideRows(
 	state := NewPartitionState("", true, 42, false)
 	src := batch.NewWithSize(4)
 	src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk", "payload"})
-	src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-	src.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	src.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
+	src.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+	src.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp)
 	blockID := types.Blockid{}
 	commitTS := types.BuildTS(2, 1)
 	payload := []byte(strings.Repeat("x", payloadLen))
@@ -1050,13 +1052,13 @@ func TestBatchHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	src := batch.NewWithSize(1)
-	src.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	src.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(42), false, mp))
 	src.SetAttributes([]string{"value"})
 	src.SetRowCount(1)
 
 	dst := batch.NewWithSize(1)
-	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(dst.Vecs[0], types.BuildTS(1, 0), false, mp))
 	dst.SetAttributes([]string{"value"})
 	dst.SetRowCount(1)
@@ -1075,13 +1077,13 @@ func TestAObjectHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	current := batch.NewWithSize(1)
-	current.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	current.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(current.Vecs[0], int64(7), false, mp))
 	current.SetAttributes([]string{"value"})
 	current.SetRowCount(1)
 
 	dst := batch.NewWithSize(1)
-	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(dst.Vecs[0], types.BuildTS(2, 0), false, mp))
 	dst.SetAttributes([]string{"value"})
 	dst.SetRowCount(1)
@@ -1108,7 +1110,7 @@ func TestCNObjectHandleNextRetainsSourceOnSchemaBoundary(t *testing.T) {
 	defer mpool.DeleteMPool(outputMP)
 	source := batch.NewWithSize(1)
 	source.Attrs = []string{"value"}
-	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), sourceMP)
 	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, sourceMP))
 	source.SetRowCount(1)
 	h := &CNObjectHandle{
@@ -1118,7 +1120,7 @@ func TestCNObjectHandleNextRetainsSourceOnSchemaBoundary(t *testing.T) {
 	}
 	dst := batch.NewWithSize(1)
 	dst.Attrs = []string{"other"}
-	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType(), outputMP)
 	require.NoError(t, vector.AppendFixed(dst.Vecs[0], types.BuildTS(1, 0), false, outputMP))
 	dst.SetRowCount(1)
 	err := h.Next(context.Background(), &dst, outputMP)
@@ -1146,8 +1148,7 @@ func TestCNObjectHandleCloseReleasesRetainedSchemaBoundarySource(t *testing.T) {
 
 	source := batch.NewWithSize(1)
 	source.Attrs = []string{"value"}
-	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	source.Vecs[0].SetOffHeap(true)
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), sourceMP)
 	for row := 0; row < 4096; row++ {
 		require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(row), false, sourceMP))
 	}
@@ -1163,7 +1164,7 @@ func TestCNObjectHandleCloseReleasesRetainedSchemaBoundarySource(t *testing.T) {
 
 	dst := batch.NewWithSize(1)
 	dst.Attrs = []string{"other"}
-	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType(), outputMP)
 	require.NoError(t, vector.AppendFixed(dst.Vecs[0], types.BuildTS(1, 0), false, outputMP))
 	dst.SetRowCount(1)
 	err := handle.Next(context.Background(), &dst, outputMP)
@@ -1185,8 +1186,7 @@ func TestAObjectHandleCloseReleasesOwnedBatches(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 	newOwnedBatch := func(value int64) *batch.Batch {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[0].SetOffHeap(true)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
 		bat.SetRowCount(1)
 		return bat
@@ -1213,15 +1213,15 @@ func TestUpdateCNTombstoneBatch_IsIdempotent(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	bat := batch.NewWithSize(3)
-	rowid := vector.NewVec(types.T_Rowid.ToType())
+	rowid := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(rowid, types.Rowid{}, false, mp))
 	bat.Vecs[0] = rowid
 
-	pk := vector.NewVec(types.T_int64.ToType())
+	pk := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(pk, int64(1), false, mp))
 	bat.Vecs[1] = pk
 
-	commitTS := vector.NewVec(types.T_TS.ToType())
+	commitTS := vector.NewVec(types.T_TS.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(commitTS, types.BuildTS(10, 0), false, mp))
 	bat.Vecs[2] = commitTS
 	bat.SetRowCount(1)
@@ -1242,19 +1242,19 @@ func TestUpdateCNDataBatch_RemoveTSVector(t *testing.T) {
 	bat := batch.NewWithSize(3)
 
 	// Create an int64 vector (non-TS)
-	vec1 := vector.NewVec(types.T_int64.ToType())
+	vec1 := vector.NewVec(types.T_int64.ToType(), mp)
 	vector.AppendFixed(vec1, int64(1), false, mp)
 	vector.AppendFixed(vec1, int64(2), false, mp)
 	bat.Vecs[0] = vec1
 
 	// Create a T_TS vector (should be removed)
-	tsVec1 := vector.NewVec(types.T_TS.ToType())
+	tsVec1 := vector.NewVec(types.T_TS.ToType(), mp)
 	vector.AppendFixed(tsVec1, types.BuildTS(1, 0), false, mp)
 	vector.AppendFixed(tsVec1, types.BuildTS(2, 0), false, mp)
 	bat.Vecs[1] = tsVec1
 
 	// Create another int64 vector (non-TS)
-	vec2 := vector.NewVec(types.T_int64.ToType())
+	vec2 := vector.NewVec(types.T_int64.ToType(), mp)
 	vector.AppendFixed(vec2, int64(3), false, mp)
 	vector.AppendFixed(vec2, int64(4), false, mp)
 	bat.Vecs[2] = vec2
@@ -1291,12 +1291,12 @@ func TestUpdateCNDataBatch_NoTSVector(t *testing.T) {
 	// Create a batch without T_TS vectors
 	bat := batch.NewWithSize(2)
 
-	vec1 := vector.NewVec(types.T_int64.ToType())
+	vec1 := vector.NewVec(types.T_int64.ToType(), mp)
 	vector.AppendFixed(vec1, int64(1), false, mp)
 	vector.AppendFixed(vec1, int64(2), false, mp)
 	bat.Vecs[0] = vec1
 
-	vec2 := vector.NewVec(types.T_int64.ToType())
+	vec2 := vector.NewVec(types.T_int64.ToType(), mp)
 	vector.AppendFixed(vec2, int64(3), false, mp)
 	vector.AppendFixed(vec2, int64(4), false, mp)
 	bat.Vecs[1] = vec2
@@ -1324,8 +1324,8 @@ func TestAppendFromEntryDecimal256(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	typ := types.New(types.T_decimal256, 39, 4)
-	src := vector.NewVec(typ)
-	dst := vector.NewVec(typ)
+	src := vector.NewVec(typ, mp)
+	dst := vector.NewVec(typ, mp)
 	defer src.Free(mp)
 	defer dst.Free(mp)
 
@@ -1348,8 +1348,8 @@ func TestAppendFromEntryYear(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	typ := types.T_year.ToType()
-	src := vector.NewVec(typ)
-	dst := vector.NewVec(typ)
+	src := vector.NewVec(typ, mp)
+	dst := vector.NewVec(typ, mp)
 	defer src.Free(mp)
 	defer dst.Free(mp)
 
@@ -1371,8 +1371,8 @@ func TestAppendFromEntryGeometry(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	for _, typ := range []types.Type{types.T_geometry.ToType(), types.T_geometry32.ToType()} {
-		src := vector.NewVec(typ)
-		dst := vector.NewVec(typ)
+		src := vector.NewVec(typ, mp)
+		dst := vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytes(src, []byte{1, 2, 3}, false, mp))
 		require.NoError(t, vector.AppendBytes(src, nil, true, mp))
 
@@ -1393,23 +1393,23 @@ func TestUpdateDataBatch_PreservesTrailingColumnsWithoutRowid(t *testing.T) {
 	bat := batch.NewWithSize(4)
 	bat.SetAttributes([]string{"id", "created_at", "updated_at", objectio.DefaultCommitTS_Attr})
 
-	idVec := vector.NewVec(types.T_varchar.ToType())
+	idVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(idVec, []byte("row-1"), false, mp))
 	bat.Vecs[0] = idVec
 
-	createdAt := vector.NewVec(types.New(types.T_datetime, 0, 6))
+	createdAt := vector.NewVec(types.New(types.T_datetime, 0, 6), mp)
 	createdAtVal, err := types.ParseDatetime("2026-03-12 19:18:00.123456", 6)
 	require.NoError(t, err)
 	require.NoError(t, vector.AppendFixed(createdAt, createdAtVal, false, mp))
 	bat.Vecs[1] = createdAt
 
-	updatedAt := vector.NewVec(types.New(types.T_datetime, 0, 6))
+	updatedAt := vector.NewVec(types.New(types.T_datetime, 0, 6), mp)
 	updatedAtVal, err := types.ParseDatetime("2026-03-12 19:19:00.654321", 6)
 	require.NoError(t, err)
 	require.NoError(t, vector.AppendFixed(updatedAt, updatedAtVal, false, mp))
 	bat.Vecs[2] = updatedAt
 
-	commitTS := vector.NewVec(types.T_TS.ToType())
+	commitTS := vector.NewVec(types.T_TS.ToType(), mp)
 	tsVal := types.BuildTS(100, 0)
 	require.NoError(t, vector.AppendFixed(commitTS, tsVal, false, mp))
 	bat.Vecs[3] = commitTS
@@ -1435,17 +1435,17 @@ func TestUpdateDataBatch_RetainsSynthesizedRowID(t *testing.T) {
 	bat := batch.NewWithSize(3)
 	bat.SetAttributes([]string{"a", "b", objectio.DefaultCommitTS_Attr})
 
-	aVec := vector.NewVec(types.T_int32.ToType())
+	aVec := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(aVec, int32(4), false, mp))
 	require.NoError(t, vector.AppendFixed(aVec, int32(5), false, mp))
 	bat.Vecs[0] = aVec
 
-	bVec := vector.NewVec(types.T_int32.ToType())
+	bVec := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bVec, int32(40), false, mp))
 	require.NoError(t, vector.AppendFixed(bVec, int32(50), false, mp))
 	bat.Vecs[1] = bVec
 
-	tsVec := vector.NewVec(types.T_TS.ToType())
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(100, 0), false, mp))
 	require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(200, 0), false, mp))
 	bat.Vecs[2] = tsVec
@@ -1471,11 +1471,11 @@ func TestUpdatePersistedDataBatch_RetainsLeadingRowID(t *testing.T) {
 
 	bat := batch.NewWithSize(5)
 	bat.SetAttributes([]string{"a", "b", catalog.Row_ID, objectio.DefaultCommitTS_Attr, objectio.DefaultAbort_Attr})
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType())
-	bat.Vecs[4] = vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType(), mp)
+	bat.Vecs[4] = vector.NewVec(types.T_bool.ToType(), mp)
 	blk := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
 	for i, aborted := range []bool{false, true, false} {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(i+1), false, mp))
@@ -1688,8 +1688,8 @@ func TestAObjectHandleGetNextAObject_UsesCachedBatch(t *testing.T) {
 
 	makeDataBatch := func(value int64, ts types.TS) *batch.Batch {
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 		bat.Attrs = []string{"value", objectio.DefaultCommitTS_Attr}
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], ts, false, mp))
@@ -1763,6 +1763,7 @@ func TestBaseHandleGetObjectEntries_ClassifiesAndSorts(t *testing.T) {
 		tree.Iter(),
 		types.BuildTS(5, 0),
 		types.BuildTS(20, 0),
+		false,
 	)
 
 	require.Len(t, aobj, 1)
@@ -1774,13 +1775,28 @@ func TestBaseHandleGetObjectEntries_ClassifiesAndSorts(t *testing.T) {
 	require.Len(t, tnByCreateTS[types.BuildTS(9, 0)], 1)
 }
 
+func TestChangeHandlerDisableQuickForRowProbe(t *testing.T) {
+	data := &baseHandle{
+		aobjHandle:     &AObjectHandle{objects: []*objectio.ObjectEntry{{}}},
+		cnObjectHandle: &CNObjectHandle{},
+	}
+	tombstone := &baseHandle{aobjHandle: &AObjectHandle{}, cnObjectHandle: &CNObjectHandle{}}
+	ordinary := &ChangeHandler{dataHandle: data, tombstoneHandle: tombstone}
+	ordinary.decideMode()
+	require.True(t, ordinary.quick)
+
+	probe := &ChangeHandler{dataHandle: data, tombstoneHandle: tombstone, disableQuick: true}
+	probe.decideMode()
+	require.False(t, probe.quick)
+}
+
 func TestBaseHandleNextTS_SelectsEarliestHandle(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
 	makeBatchHandle := func(ts types.TS) *BatchHandle {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_TS.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], ts, false, mp))
 		bat.SetRowCount(1)
 		return &BatchHandle{batches: bat, batchLength: 1}
@@ -1788,7 +1804,7 @@ func TestBaseHandleNextTS_SelectsEarliestHandle(t *testing.T) {
 
 	makeAObjectHandle := func(ts types.TS) *AObjectHandle {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_TS.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], ts, false, mp))
 		bat.SetRowCount(1)
 		return &AObjectHandle{currentBatch: bat, batchLength: 1}
@@ -1849,40 +1865,40 @@ func TestBatchesShareAppendSchema(t *testing.T) {
 	})
 	t.Run("one nil", func(t *testing.T) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.True(t, batchesShareAppendSchema(bat, nil))
 		require.True(t, batchesShareAppendSchema(nil, bat))
 	})
 	t.Run("different vec count", func(t *testing.T) {
 		a := batch.NewWithSize(1)
-		a.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		a.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		b := batch.NewWithSize(2)
-		b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		b.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+		b.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 		require.False(t, batchesShareAppendSchema(a, b))
 	})
 	t.Run("same schema", func(t *testing.T) {
 		a := batch.NewWithSize(2)
-		a.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		a.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		a.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+		a.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 		b := batch.NewWithSize(2)
-		b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		b.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+		b.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 		require.True(t, batchesShareAppendSchema(a, b))
 	})
 	t.Run("different types", func(t *testing.T) {
 		a := batch.NewWithSize(1)
-		a.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		a.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		b := batch.NewWithSize(1)
-		b.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		b.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 		require.False(t, batchesShareAppendSchema(a, b))
 	})
 	t.Run("nil vec match", func(t *testing.T) {
 		a := batch.NewWithSize(2)
-		a.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		a.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		a.Vecs[1] = nil
 		b := batch.NewWithSize(2)
-		b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		b.Vecs[1] = nil
 		require.True(t, batchesShareAppendSchema(a, b))
 	})
@@ -1890,7 +1906,7 @@ func TestBatchesShareAppendSchema(t *testing.T) {
 		a := batch.NewWithSize(1)
 		a.Vecs[0] = nil
 		b := batch.NewWithSize(1)
-		b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.False(t, batchesShareAppendSchema(a, b))
 	})
 }
@@ -2630,9 +2646,9 @@ func TestBaseHandleClose(t *testing.T) {
 
 	t.Run("non nil with inMemoryHandle", func(t *testing.T) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_TS.ToType(), mp)
 		p := &baseHandle{
-			inMemoryHandle: &BatchHandle{batches: bat},
+			inMemoryHandle: &BatchHandle{batches: bat, mp: mp},
 		}
 		p.Close() // should not panic
 	})
@@ -2884,7 +2900,7 @@ func TestGetObjectEntries(t *testing.T) {
 
 	p := &baseHandle{changesHandle: &ChangeHandler{}}
 	iter := tree.Iter()
-	aobj, cnObj, tnByCreateTS, tnKeys := p.getObjectEntries(iter, start, end)
+	aobj, cnObj, tnByCreateTS, tnKeys := p.getObjectEntries(iter, start, end, false)
 	iter.Release()
 
 	require.Len(t, aobj, 1)
@@ -3059,9 +3075,9 @@ func writeTestObjectWithCommitTS(
 	)
 
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 
 	var blk types.Blockid
 	for i, ts := range tsValues {
@@ -3106,9 +3122,9 @@ func writeTestWideObjectWithCommitTS(
 	// direct writers are fail-closed; tests that need the new format opt in.
 	writer.SetChunkedColumnPolicy(func() bool { return true })
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 	payload := []byte(strings.Repeat("w", payloadBytes))
 	var blk types.Blockid
 	for i := 0; i < rows; i++ {
@@ -3155,10 +3171,10 @@ func writeTestObjectWithAbort(
 	)
 	writer.SetAppendable()
 	bat := batch.NewWithSize(4)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
-	bat.Vecs[3] = vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
+	bat.Vecs[3] = vector.NewVec(types.T_bool.ToType(), mp)
 	defer bat.Clean(mp)
 
 	var blk types.Blockid
@@ -3382,7 +3398,7 @@ func TestUpdateCNTombstoneBatch_NilGuard(t *testing.T) {
 
 	t.Run("missing pk vector", func(t *testing.T) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_TS.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTS(1, 0), false, mp))
 		err := updateCNTombstoneBatch(bat, types.BuildTS(2, 0), nil, false, mp)
 		require.Error(t, err)
@@ -3400,7 +3416,7 @@ func TestUpdateCNDataBatch_NilGuard(t *testing.T) {
 
 	t.Run("only ts column - no vectors after strip", func(t *testing.T) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_TS.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTS(1, 0), false, mp))
 		err := updateCNDataBatch(bat, types.BuildTS(2, 0), nil, false, mp)
 		require.Error(t, err)
@@ -3431,12 +3447,12 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 	t.Run("updateTombstoneBatch drops input rowid vec", func(t *testing.T) {
 		bat := batch.NewWithSize(3)
 		// Simulate a tombstone batch that happens to carry a rowid column.
-		ridVec := vector.NewVec(types.T_Rowid.ToType())
+		ridVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 		blk := types.Blockid{}
 		require.NoError(t, vector.AppendFixed(ridVec, types.NewRowid(&blk, 0), false, mp))
-		pkVec := vector.NewVec(types.T_int64.ToType())
+		pkVec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pkVec, int64(7), false, mp))
-		tsVec := vector.NewVec(types.T_TS.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(100, 0), false, mp))
 		bat.Vecs[0] = ridVec
 		bat.Vecs[1] = pkVec
@@ -3457,10 +3473,10 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 
 	t.Run("persisted tombstone drops and filters abort vec", func(t *testing.T) {
 		bat := batch.NewWithSize(4)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
-		bat.Vecs[3] = vector.NewVec(types.T_bool.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
+		bat.Vecs[3] = vector.NewVec(types.T_bool.ToType(), mp)
 		var blk types.Blockid
 		for i, aborted := range []bool{false, true} {
 			require.NoError(t, vector.AppendFixed(
@@ -3499,14 +3515,14 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 	t.Run("updateDataBatch drops input rowid vec", func(t *testing.T) {
 		bat := batch.NewWithSize(4)
 		bat.SetAttributes([]string{catalog.Row_ID, "a", "b", objectio.DefaultCommitTS_Attr})
-		ridVec := vector.NewVec(types.T_Rowid.ToType())
+		ridVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 		blk := types.Blockid{}
 		require.NoError(t, vector.AppendFixed(ridVec, types.NewRowid(&blk, 0), false, mp))
-		aVec := vector.NewVec(types.T_int32.ToType())
+		aVec := vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(aVec, int32(1), false, mp))
-		bVec := vector.NewVec(types.T_int32.ToType())
+		bVec := vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bVec, int32(10), false, mp))
-		tsVec := vector.NewVec(types.T_TS.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(100, 0), false, mp))
 		bat.Vecs[0] = ridVec
 		bat.Vecs[1] = aVec
@@ -3527,12 +3543,12 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 	t.Run("fillInDeleteBatch produces 2-col layout", func(t *testing.T) {
 		// RowEntry.Batch layout expected by fillInDeleteBatch: [Rowid, TS, pk]
 		src := batch.NewWithSize(3)
-		ridVec := vector.NewVec(types.T_Rowid.ToType())
+		ridVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 		blk := types.Blockid{}
 		require.NoError(t, vector.AppendFixed(ridVec, types.NewRowid(&blk, 0), false, mp))
-		tsSrc := vector.NewVec(types.T_TS.ToType())
+		tsSrc := vector.NewVec(types.T_TS.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(tsSrc, types.BuildTS(100, 0), false, mp))
-		pkVec := vector.NewVec(types.T_int64.ToType())
+		pkVec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pkVec, int64(42), false, mp))
 		src.Vecs[0] = ridVec
 		src.Vecs[1] = tsSrc
@@ -3555,7 +3571,7 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 
 	t.Run("fillInDeleteBatch reads compact retained delete", func(t *testing.T) {
 		src := batch.NewWithSize(1)
-		pkVec := vector.NewVec(types.T_int64.ToType())
+		pkVec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pkVec, int64(7), false, mp))
 		require.NoError(t, vector.AppendFixed(pkVec, int64(42), false, mp))
 		src.Vecs[0] = pkVec
@@ -3584,14 +3600,14 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		// RowEntry.Batch layout: [Rowid, TS, pk, val]; src.Attrs[2:] = [pk, val]
 		src := batch.NewWithSize(4)
 		src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk", "val"})
-		ridVec := vector.NewVec(types.T_Rowid.ToType())
+		ridVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 		blk := types.Blockid{}
 		require.NoError(t, vector.AppendFixed(ridVec, types.NewRowid(&blk, 0), false, mp))
-		tsSrc := vector.NewVec(types.T_TS.ToType())
+		tsSrc := vector.NewVec(types.T_TS.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(tsSrc, types.BuildTS(100, 0), false, mp))
-		pkVec := vector.NewVec(types.T_int64.ToType())
+		pkVec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(pkVec, int64(7), false, mp))
-		valVec := vector.NewVec(types.T_int64.ToType())
+		valVec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(valVec, int64(70), false, mp))
 		src.Vecs[0] = ridVec
 		src.Vecs[1] = tsSrc
@@ -3615,9 +3631,9 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 	t.Run("fillInInsertBatch reads rowid and time from compact retained insert", func(t *testing.T) {
 		src := batch.NewWithSize(3)
 		src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk"})
-		src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-		src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+		src.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
+		src.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(src.Vecs[2], int64(42), false, mp))
 		src.SetRowCount(1)
 		blk := types.Blockid{}
@@ -3637,7 +3653,7 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		src := batch.NewWithSize(5)
 		src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "id", "payload", "added"})
 		for i, typ := range []types.T{types.T_Rowid, types.T_TS, types.T_int32, types.T_int32, types.T_int32} {
-			src.Vecs[i] = vector.NewVec(typ.ToType())
+			src.Vecs[i] = vector.NewVec(typ.ToType(), mp)
 		}
 		blk := types.Blockid{}
 		require.NoError(t, vector.AppendFixed(src.Vecs[0], types.NewRowid(&blk, 0), false, mp))
@@ -3671,8 +3687,8 @@ type pkOp struct {
 func newPKBatch(t *testing.T, mp *mpool.MPool, ops []pkOp) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	for _, op := range ops {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], op.pk, false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.BuildTS(op.ts, 0), false, mp))
@@ -3698,7 +3714,7 @@ func splitPKOps(t *testing.T, mp *mpool.MPool, ops []pkOp, skipDeletes, keepTrai
 	defer dataBat.Clean(mp)
 	defer tombBat.Clean(mp)
 
-	require.NoError(t, filterBatch(dataBat, tombBat, 0, skipDeletes, keepTrailingDeletes))
+	require.NoError(t, filterBatch(dataBat, tombBat, 0, skipDeletes, keepTrailingDeletes, mp))
 	return remainingPKs(t, dataBat), remainingPKs(t, tombBat)
 }
 
@@ -3933,4 +3949,39 @@ func TestSelectRangeNetEffectRowsKeepsTrailingDeleteInRecovery(t *testing.T) {
 	keepFirst, keepLast = selectRangeNetEffectRows(single, single, false, false)
 	require.True(t, keepFirst)
 	require.False(t, keepLast)
+}
+
+type failingReplayOutput struct {
+	bat *batch.Batch
+	err error
+}
+
+func (h *failingReplayOutput) init(bool, *mpool.MPool) error { return nil }
+func (h *failingReplayOutput) IsEmpty() bool                 { return false }
+func (h *failingReplayOutput) Rows() int                     { return 1 }
+func (h *failingReplayOutput) NextTS() types.TS              { return types.TS{} }
+func (h *failingReplayOutput) Close()                        {}
+func (h *failingReplayOutput) Next(dst **batch.Batch, _ *mpool.MPool) error {
+	*dst = h.bat
+	return h.err
+}
+func (h *failingReplayOutput) QuickNext(dst **batch.Batch, mp *mpool.MPool) error {
+	return h.Next(dst, mp)
+}
+
+func TestChangeHandlerNextReleasesPartialOutputOnError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{1, 2}, nil, mp))
+	bat.SetRowCount(2)
+	failure := errors.New("injected replay failure")
+	handler := &ChangeHandler{quick: true, mp: mp, lastPrint: time.Now(), LogThreshold: time.Hour,
+		spillNetEffectData: &failingReplayOutput{bat: bat, err: failure}}
+	data, tombstone, _, err := handler.Next(context.Background(), mp)
+	require.ErrorIs(t, err, failure)
+	require.Nil(t, data)
+	require.Nil(t, tombstone)
+	require.Zero(t, mp.CurrNB())
 }

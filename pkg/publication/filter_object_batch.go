@@ -68,7 +68,7 @@ func readSingleBlockToBatch(
 	// Create vectors for this block
 	vecs := make([]*vector.Vector, len(cols))
 	for i, typ := range typs {
-		vecs[i] = vector.NewVec(typ)
+		vecs[i] = vector.NewVec(typ, mp)
 	}
 
 	for i, seqnum := range cols {

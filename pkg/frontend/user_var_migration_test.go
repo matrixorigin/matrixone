@@ -71,7 +71,7 @@ func TestUserDefinedVarMigrationRoundTrip(t *testing.T) {
 		"vec_value":       []float32{1, 2, 3},
 	}
 	for name, value := range values {
-		require.NoError(t, ses.setUserDefinedVarWithKind(name, value, "set @"+name+" = expression", name == "text_value", vector.PrepareParamDecimal))
+		require.NoError(t, ses.setUserDefinedVarWithKind(name, value, "set @"+name+" = expression", name == "text_value", types.StringConversionDecimal))
 	}
 
 	snapshot, err := ses.snapshotUserDefinedVars(context.Background())
@@ -91,7 +91,7 @@ func TestUserDefinedVarMigrationRoundTrip(t *testing.T) {
 		}
 		require.Equal(t, value, restored[name].Value)
 		require.Equal(t, "set @"+name+" = expression", restored[name].Sql)
-		require.Equal(t, vector.PrepareParamDecimal, restored[name].PrepareParamKind)
+		require.Equal(t, types.StringConversionDecimal, restored[name].PrepareParamKind)
 	}
 }
 
@@ -115,7 +115,7 @@ func TestUserDefinedVarMigrationPreservesType(t *testing.T) {
 	}
 	source := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
 	require.NoError(t, source.setUserDefinedVarWithTypeAndKind(
-		"amount", types.Decimal64(12345), "set @amount = 123.4500", false, typ, vector.PrepareParamDecimal))
+		"amount", types.Decimal64(12345), "set @amount = 123.4500", false, typ, types.StringConversionDecimal))
 
 	snapshot, err := source.snapshotUserDefinedVars(context.Background())
 	require.NoError(t, err)
@@ -156,7 +156,7 @@ func TestUserDefinedVarMigrationPreservesRuntimeStringDomain(t *testing.T) {
 
 	typ := plan.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)}
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-		"text_override", "你", "", false, typ, vector.PrepareParamNone,
+		"text_override", "你", "", false, typ, types.StringConversionString,
 		false, types.RuntimeStringText))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
@@ -184,12 +184,12 @@ func TestUserDefinedVarMigrationRoundTripsJSON(t *testing.T) {
 	encodedJSON, err := jsonValue.Marshal()
 	require.NoError(t, err)
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_json.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_json.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], encodedJSON, false, mp))
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
 	require.NoError(t, collector.capture(context.Background(), source, bat))
-	require.NoError(t, collector.apply(context.Background(), source, "select json_array(1, true, null) into @document"))
+	require.NoError(t, collector.apply(context.Background(), source, "select json_array(1, true, null) into @document", nil))
 	variable, err := source.GetUserDefinedVar("document")
 	require.NoError(t, err)
 	require.Equal(t, jsonValue, variable.Value)
@@ -344,6 +344,8 @@ func TestDecodeUserDefinedVarValueRejectsMalformedRepresentations(t *testing.T) 
 		types.T_array_float16,
 		types.T_array_int8,
 		types.T_array_uint8,
+		types.T_array_float8,
+		types.T_array_float4,
 	} {
 		_, err := decodeUserDefinedVarValue(context.Background(), &plan.Expr{
 			Typ:  plan.Type{Id: int32(typ), Width: 1},
@@ -553,7 +555,7 @@ func TestUserVariableNullRegexpHistoryMigration(t *testing.T) {
 					valueSQL = "'abc'"
 				}
 				require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-					"history", tc.previous, "set @history = "+valueSQL, false, inferUserDefinedVarType(tc.previous), vector.PrepareParamNone, true))
+					"history", tc.previous, "set @history = "+valueSQL, false, inferUserDefinedVarType(tc.previous), types.StringConversionString, true))
 			}
 			typ := plan.Type{Id: int32(tc.typed)}
 			assignmentSQL := "set @history = null"
@@ -572,7 +574,7 @@ func TestUserVariableNullRegexpHistoryMigration(t *testing.T) {
 				assignmentSQL = "set @history = cast(null as date)"
 			}
 			require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-				"history", nil, assignmentSQL, false, typ, vector.PrepareParamNone, true))
+				"history", nil, assignmentSQL, false, typ, types.StringConversionString, true))
 			require.Equal(t, !tc.wantReplay, ses.hasUnreplayableMigrationUserVars())
 			for i := 0; i < 3; i++ {
 				variable, err := ses.GetUserDefinedVar("history")
@@ -623,7 +625,7 @@ func TestUserVariableNullRegexpHistoryMigrationProtocol(t *testing.T) {
 		}
 	})
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-		"fresh", nil, "set @fresh = null", false, plan.Type{}, vector.PrepareParamNone, true))
+		"fresh", nil, "set @fresh = null", false, plan.Type{}, types.StringConversionString, true))
 	for _, version := range []int64{defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion107} {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
 		_, err := ses.snapshotUserDefinedVars(context.Background())

@@ -149,7 +149,7 @@ func TestCountDistinctSignedZeroUsesOneValue(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), vector.MustFixedColNoTypeCheck[int64](results[0])[0])
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 		exec.Free()
 	}
@@ -236,7 +236,7 @@ func TestCountDistinctFloat64SignedZeroSurvivesIntermediateMerge(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
 
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	target.Free()
 	other.Free()
 	require.Zero(t, mp.CurrNB())
@@ -290,7 +290,7 @@ func TestCountDistinctUsesCanonicalTypedKeys(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			values := vector.NewVec(tc.typ)
+			values := vector.NewVec(tc.typ, mp)
 			tc.fill(t, values, mp)
 			exec := newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{tc.typ})
 			require.NoError(t, exec.GroupGrow(1))
@@ -306,7 +306,7 @@ func TestCountDistinctUsesCanonicalTypedKeys(t *testing.T) {
 			require.Equal(t, tc.want,
 				vector.MustFixedColNoTypeCheck[int64](results[0])[0])
 			for _, result := range results {
-				result.Free(mp)
+				result.Free(result.MPool())
 			}
 			exec.Free()
 			values.Free(mp)
@@ -351,7 +351,7 @@ func TestCountDistinctFixedIndexCanonicalizesFloatNaNPeers(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, result, 1)
 		got := vector.GetFixedAtNoTypeCheck[int64](result[0], 0)
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		return got
 	}
 
@@ -468,7 +468,7 @@ func TestCountMultiColumnDistinct(t *testing.T) {
 
 		exec.Free()
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 		require.Equal(t, curNB, mp.CurrNB())
 	})
@@ -494,7 +494,7 @@ func TestCountMultiColumnDistinct(t *testing.T) {
 
 		exec.Free()
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 		require.Equal(t, curNB, mp.CurrNB())
 	})
@@ -521,7 +521,7 @@ func TestCountMultiColumnDistinct(t *testing.T) {
 
 		exec.Free()
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 		require.Equal(t, curNB, mp.CurrNB())
 	})
@@ -533,10 +533,6 @@ func TestCountMultiColumnDistinct(t *testing.T) {
 		colA2 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{10, 20, 30})
 		colB1 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{3, 4, 5})
 		colB2 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{30, 40, 50})
-		defer colA1.Free(mp)
-		defer colA2.Free(mp)
-		defer colB1.Free(mp)
-		defer colB2.Free(mp)
 
 		execA := newCountColumnExec(mp, AggIdOfCountColumn, true,
 			[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
@@ -561,8 +557,12 @@ func TestCountMultiColumnDistinct(t *testing.T) {
 		execA.Free()
 		execB.Free()
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
+		colA1.Free(mp)
+		colA2.Free(mp)
+		colB1.Free(mp)
+		colB2.Free(mp)
 		require.Equal(t, curNB, mp.CurrNB())
 	})
 
@@ -573,10 +573,6 @@ func TestCountMultiColumnDistinct(t *testing.T) {
 		colA2 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{10, 20, 30})
 		colB1 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{3, 4, 5})
 		colB2 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{30, 40, 50})
-		defer colA1.Free(mp)
-		defer colA2.Free(mp)
-		defer colB1.Free(mp)
-		defer colB2.Free(mp)
 
 		execA := newCountColumnExec(mp, AggIdOfCountColumn, true,
 			[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
@@ -606,8 +602,12 @@ func TestCountMultiColumnDistinct(t *testing.T) {
 
 		execB.Free()
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
+		colA1.Free(mp)
+		colA2.Free(mp)
+		colB1.Free(mp)
+		colB2.Free(mp)
 		require.Equal(t, curNB, mp.CurrNB())
 	})
 
@@ -625,8 +625,6 @@ func TestCountMultiColumnDistinct(t *testing.T) {
 		// row0: (big1,big2), row1: (big1,big2) dup, row2: (big1,big3) new → 2 distinct
 		lc1 := testutil.NewStringVector(3, textTyp, mp, false, nil, []string{big1, big1, big1})
 		lc2 := testutil.NewStringVector(3, textTyp, mp, false, nil, []string{big2, big2, big3})
-		defer lc1.Free(mp)
-		defer lc2.Free(mp)
 
 		exec := newCountColumnExec(mp, AggIdOfCountColumn, true,
 			[]types.Type{textTyp, textTyp})
@@ -641,8 +639,10 @@ func TestCountMultiColumnDistinct(t *testing.T) {
 
 		exec.Free()
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
+		lc1.Free(mp)
+		lc2.Free(mp)
 		require.Equal(t, curNB, mp.CurrNB())
 	})
 }
@@ -670,7 +670,7 @@ func TestCountDistinctBatchDeduplicatesWithinUnit(t *testing.T) {
 	require.Len(t, results, 1)
 	vals := vector.MustFixedColNoTypeCheck[int64](results[0])
 	require.Equal(t, []int64{17, 17}, vals)
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 }
 
 func TestCountDistinctFixedIndexChunksLargeBatch(t *testing.T) {
@@ -683,7 +683,6 @@ func TestCountDistinctFixedIndexChunksLargeBatch(t *testing.T) {
 		groups[i] = 1
 	}
 	vec := testutil.NewInt32Vector(rows, types.T_int32.ToType(), mp, false, nil, values)
-	defer vec.Free(mp)
 
 	exec := newCountColumnExec(
 		mp, AggIdOfCountColumn, true, []types.Type{types.T_int32.ToType()},
@@ -699,9 +698,10 @@ func TestCountDistinctFixedIndexChunksLargeBatch(t *testing.T) {
 		int64(hashmap.UnitLimit*2+1),
 		vector.GetFixedAtNoTypeCheck[int64](results[0], 0))
 	for _, result := range results {
-		result.Free(mp)
+		result.Free(result.MPool())
 	}
 	exec.Free()
+	vec.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
 
@@ -716,7 +716,7 @@ func TestCountDistinctFixedIndexBatchAndMerge(t *testing.T) {
 		return concrete
 	}
 	fill := func(exec *countColumnExec, values []int64) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		defer vec.Free(mp)
 		for _, value := range values {
 			require.NoError(t, vector.AppendFixed(vec, value, false, mp))
@@ -781,7 +781,7 @@ func TestCountDistinctFixedIndexBatchAndMerge(t *testing.T) {
 	require.NoError(t, crossChunk.GroupGrow(AggBatchSize+1))
 	require.True(t, crossChunk.state[0].distinctFixedDeferred)
 	require.True(t, crossChunk.state[1].distinctFixedDeferred)
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(vec, int64(42), false, mp))
 	require.NoError(t, vector.AppendFixed(vec, int64(42), false, mp))
 	groups := []uint64{1, AggBatchSize + 1}
@@ -862,7 +862,7 @@ func testAggExec(t *testing.T,
 					results, err := exec.Flush()
 					t.Cleanup(func() {
 						for _, result := range results {
-							result.Free(mp)
+							result.Free(result.MPool())
 						}
 					})
 					require.NoError(t, err)
@@ -927,7 +927,7 @@ func testAggExec(t *testing.T,
 					results, err := restored[0].Flush()
 					t.Cleanup(func() {
 						for _, result := range results {
-							result.Free(mp)
+							result.Free(result.MPool())
 						}
 					})
 					require.NoError(t, err)
@@ -1041,7 +1041,7 @@ func testAggExec(t *testing.T,
 					results, err := exec.Flush()
 					defer func() {
 						for _, result := range results {
-							result.Free(mp)
+							result.Free(result.MPool())
 						}
 					}()
 					require.NoError(t, err)
@@ -1175,7 +1175,7 @@ func TestCountDistinctUnmarshalAcrossAccountedArenaGrowth(t *testing.T) {
 			}()
 			require.NoError(t, source.GroupGrow(2))
 
-			input := vector.NewVec(tc.typ)
+			input := vector.NewVec(tc.typ, mp)
 			defer func() {
 				if input != nil {
 					input.Free(mp)
@@ -1212,7 +1212,7 @@ func TestCountDistinctUnmarshalAcrossAccountedArenaGrowth(t *testing.T) {
 			// Growth while restoring the second group relocates the first group's
 			// nodes too. Both ranges must still deduplicate existing values, and both
 			// insertion cursors must accept a new boundary key afterwards.
-			followup := vector.NewVec(tc.typ)
+			followup := vector.NewVec(tc.typ, mp)
 			defer followup.Free(mp)
 			for _, value := range []int{
 				0, tc.distinctRows - 1, tc.distinctRows, tc.distinctRows + 1,
@@ -1229,7 +1229,7 @@ func TestCountDistinctUnmarshalAcrossAccountedArenaGrowth(t *testing.T) {
 			results, err := target.Flush()
 			require.NoError(t, err)
 			require.Len(t, results, 1)
-			defer results[0].Free(mp)
+			defer results[0].Free(results[0].MPool())
 			require.Equal(t, 2, results[0].Length())
 			for group := range 2 {
 				require.Equal(t, int64(tc.distinctRows/2+1),

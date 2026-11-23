@@ -184,6 +184,13 @@ func getTableForDump(ctx context.Context, ses *Session, table *tree.TableName) (
 	if err != nil {
 		return "", "", nil, err
 	}
+	def := rel.GetTableDef(ctx)
+	if def == nil {
+		return "", "", nil, moerr.NewInternalError(ctx, "table definition is unavailable for index relation admission")
+	}
+	if err := checkResolvedIndexRelation(&ExecCtx{reqCtx: ctx, ses: ses}, tableName, def.Name, def.TableType, def.FeatureFlag); err != nil {
+		return "", "", nil, err
+	}
 	return dbName, tableName, rel, nil
 }
 
@@ -1196,9 +1203,9 @@ func dumpTableRelationObjects(
 		return result, nil, err
 	}
 	defer reader.Close()
-	dataBatch := colexec.AllocCNS3ResultBat(false)
+	dataBatch := colexec.AllocCNS3ResultBat(false, mp)
 	defer dataBatch.Clean(mp)
-	tombstoneBatch := colexec.AllocCNS3ResultBat(true)
+	tombstoneBatch := colexec.AllocCNS3ResultBat(true, mp)
 	defer tombstoneBatch.Clean(mp)
 	if _, err = reader.Read(ctx, nil, nil, mp, dataBatch); err != nil {
 		return result, nil, err
@@ -1497,8 +1504,8 @@ func submitTableDumpObjects(
 	if len(dataStats) != 0 {
 		bat := batch.NewWithSize(2)
 		bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
-		bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_binary.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_binary.ToType(), mp)
 		if err := colexec.ExpandObjectStatsToBatch(mp, false, bat, true, dataStats...); err != nil {
 			bat.Clean(mp)
 			return submitted, err
@@ -1513,7 +1520,7 @@ func submitTableDumpObjects(
 	if len(tombstoneStats) != 0 {
 		bat := batch.NewWithSize(1)
 		bat.SetAttributes([]string{catalog.ObjectMeta_ObjectStats})
-		bat.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_binary.ToType(), mp)
 		for i := range tombstoneStats {
 			if err := vector.AppendBytes(bat.Vecs[0], tombstoneStats[i].Marshal(), false, mp); err != nil {
 				bat.Clean(mp)

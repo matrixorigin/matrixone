@@ -43,6 +43,7 @@ func buildIcebergMergePlan(stmt *tree.Merge, ctx CompilerContext, isPrepareStmt 
 		return nil, err
 	}
 	builder := NewQueryBuilder(planpb.Query_MERGE, ctx, isPrepareStmt, false)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -138,7 +139,7 @@ func resolveIcebergMergeTarget(ctx CompilerContext, stmt *tree.Merge) (icebergDe
 	if strings.TrimSpace(target.tableName) == "" {
 		return icebergDeleteTarget{}, moerr.NewInvalidInput(ctx.GetContext(), "Iceberg MERGE requires a table name")
 	}
-	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, target.tableName, nil, nil)
 	if err != nil {
 		return icebergDeleteTarget{}, err
 	}

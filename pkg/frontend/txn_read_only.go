@@ -807,7 +807,7 @@ var resolveSourceColumnNames = func(ses FeSession, schemaName, tableName, defaul
 			dbName = ses.GetDatabaseName()
 		}
 	}
-	_, tableDef, err := ses.GetTxnCompileCtx().Resolve(dbName, tableName, nil)
+	_, tableDef, err := ses.GetTxnCompileCtx().Resolve(dbName, tableName, nil, nil)
 	if err != nil {
 		return nil, err
 	}

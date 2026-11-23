@@ -1,5 +1,6 @@
 
 SET experimental_hnsw_index = 1;
+drop snapshot if exists hnsw_empty_frontier;
 
 drop database if exists hnsw_cdc;
 create database if not exists hnsw_cdc;
@@ -8,23 +9,37 @@ use hnsw_cdc;
 -- Empty-index first-generation replay. Admit INSERT -> UPDATE on one PK and
 -- INSERT -> DELETE on another immediately after CREATE INDEX, before observing
 -- any ready generation. This retains the original race-sensitive lifecycle
--- without a sleep; metadata publication is the barrier and exact ANN results
--- reject a generation that lost or reordered either CDC transition.
+-- without a sleep; the committed CDC watermark is the barrier before the
+-- existing update, delete, and insert ANN assertions.
 create table t0_f64(a bigint primary key, b vecf64(3));
 create index idx0_f64 using hnsw on t0_f64(b) op_type "vector_l2_ops" M 64 EF_CONSTRUCTION 200 EF_SEARCH 200 ASYNC;
-insert into t0_f64 values (0, '[1,2,3]');
+insert into t0_f64 values (0, '[200,200,200]');
 update t0_f64 set b = '[4,5,6]' where a = 0;
 insert into t0_f64 values (1, '[2,3,4]');
 delete from t0_f64 where a = 1;
 insert into t0_f64 values (2, '[100,100,100]');
 
-set @t0_f64_meta = (select index_table_name from mo_catalog.mo_indexes where name = 'idx0_f64' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't0_f64') limit 1);
-set @wait_t0_sql = concat('select count(*) = 1 and min(filesize) > 0 as f64_empty_ready from `', database(), '`.`', @t0_f64_meta, '`');
+-- Capture a post-write HLC frontier. The snapshot also proves the final INSERT
+-- is visible at that frontier; a first nonempty index file is not sufficient.
+create snapshot hnsw_empty_frontier for table hnsw_cdc t0_f64;
+select count(*) as f64_snapshot_written from t0_f64 {snapshot='hnsw_empty_frontier'} where a=2;
+set @t0_f64_meta = (select index_table_name from mo_catalog.mo_indexes where name = 'idx0_f64' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where account_id = current_account_id() and reldatabase = 'hnsw_cdc' and relname = 't0_f64') limit 1);
+-- Require a nonempty model as well as progress beyond the final write. More
+-- than one valid model is allowed if CDC fills and rotates a model.
+set @wait_t0_sql = concat(
+  'select (select coalesce(min(filesize),0) > 0 from `hnsw_cdc`.`', @t0_f64_meta, '`) and ',
+  '(select count(*) = 1 from mo_catalog.mo_iscp_log j where j.account_id = current_account_id() ',
+  'and j.table_id = (select rel_id from mo_catalog.mo_tables where account_id = current_account_id() and reldatabase = ''hnsw_cdc'' and relname = ''t0_f64'') ',
+  'and j.job_name = ''index_idx0_f64'' and j.job_id = (select max(g.job_id) from mo_catalog.mo_iscp_log g where g.account_id = j.account_id and g.table_id = j.table_id and g.job_name = j.job_name) ',
+  'and j.drop_at is null and j.job_state = 3 and cast(json_unquote(json_extract(j.job_status,''$.Stage'')) as signed) = 1 ',
+  'and cast(json_unquote(json_extract(j.job_status,''$.ErrorCode'')) as signed) = 0 and cast(substring_index(j.watermark,''-'',1) as unsigned) > ',
+  '(select ts from mo_catalog.mo_snapshots where sname = ''hnsw_empty_frontier'')) as f64_empty_ready');
 prepare wait_t0 from @wait_t0_sql;
 -- @metacmp(false)
 -- @wait_expect(1, 120)
 execute wait_t0;
 deallocate prepare wait_t0;
+drop snapshot hnsw_empty_frontier;
 
 select case_name, a, b from ( select 'f64-empty-update' as case_name, a, b from (select * from t0_f64 order by l2_distance(b, '[4,5,6]') limit 1) q union all select 'f64-empty-delete', a, b from (select * from t0_f64 order by l2_distance(b, '[2,3,4]') limit 1) q union all select 'f64-empty-insert', a, b from (select * from t0_f64 order by l2_distance(b, '[100,100,100]') limit 1) q ) readiness order by case_name;
 drop table t0_f64;

@@ -1108,7 +1108,7 @@ func TestConstantTranspose(t *testing.T) {
 		require.Equal(t, before, input)
 		require.Equal(t, ">=", result.GetF().Args[1].GetF().Func.ObjName)
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(floatType)
+		bat.Vecs[0] = vector.NewVec(floatType, mp)
 		defer bat.Clean(mp)
 		for i, value := range []float64{1e-17, 2, 0, 0} {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, i == 3, mp))

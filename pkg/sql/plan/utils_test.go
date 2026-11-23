@@ -540,7 +540,7 @@ func TestIsPositivePreparedInteger(t *testing.T) {
 			name: "binary integer string",
 			value: ParamValue{
 				Value:            "2",
-				PrepareParamKind: vector.PrepareParamInteger,
+				PrepareParamKind: types.StringConversionInteger,
 			},
 			want: true,
 		},
@@ -548,28 +548,28 @@ func TestIsPositivePreparedInteger(t *testing.T) {
 			name: "binary integer zero",
 			value: ParamValue{
 				Value:            "0",
-				PrepareParamKind: vector.PrepareParamInteger,
+				PrepareParamKind: types.StringConversionInteger,
 			},
 		},
 		{
 			name: "binary integer negative",
 			value: ParamValue{
 				Value:            "-1",
-				PrepareParamKind: vector.PrepareParamInteger,
+				PrepareParamKind: types.StringConversionInteger,
 			},
 		},
 		{
 			name: "binary integer overflow",
 			value: ParamValue{
 				Value:            "9223372036854775808",
-				PrepareParamKind: vector.PrepareParamInteger,
+				PrepareParamKind: types.StringConversionInteger,
 			},
 		},
 		{
 			name: "binary integer malformed",
 			value: ParamValue{
 				Value:            "2.5",
-				PrepareParamKind: vector.PrepareParamInteger,
+				PrepareParamKind: types.StringConversionInteger,
 			},
 		},
 		{name: "ordinary string", value: "2"},
@@ -577,7 +577,7 @@ func TestIsPositivePreparedInteger(t *testing.T) {
 			name: "float provenance",
 			value: ParamValue{
 				Value:            int64(2),
-				PrepareParamKind: vector.PrepareParamFloat,
+				PrepareParamKind: types.StringConversionFloat,
 			},
 		},
 		{name: "float value", value: float64(2)},
@@ -647,13 +647,13 @@ func TestPreparedParamValueNumericReprepareType(t *testing.T) {
 		{name: "runtime integer widens", value: ParamValue{Value: "64", RuntimeType: types.T_int32.ToType(), HasRuntimeType: true}, want: types.T_int64.ToType(), ok: true},
 		{name: "unsigned integer preserves sign domain", value: ParamValue{Value: "64", RuntimeType: types.T_uint8.ToType(), HasRuntimeType: true}, want: types.T_uint64.ToType(), ok: true},
 		{name: "source decimal gets parameter envelope", value: ParamValue{Value: "64.5", SourceType: decimalType, HasSourceType: true}, want: wideDecimalType, ok: true},
-		{name: "integer kind fallback", value: ParamValue{Value: "64", PrepareParamKind: vector.PrepareParamInteger}, want: types.T_int64.ToType(), ok: true},
-		{name: "malformed integer keeps protocol domain", value: ParamValue{Value: "bad", PrepareParamKind: vector.PrepareParamInteger}, want: types.T_int64.ToType(), ok: true},
-		{name: "float kind fallback", value: ParamValue{Value: "1.5", PrepareParamKind: vector.PrepareParamFloat}, want: types.T_float64.ToType(), ok: true},
+		{name: "integer kind fallback", value: ParamValue{Value: "64", PrepareParamKind: types.StringConversionInteger}, want: types.T_int64.ToType(), ok: true},
+		{name: "malformed integer keeps protocol domain", value: ParamValue{Value: "bad", PrepareParamKind: types.StringConversionInteger}, want: types.T_int64.ToType(), ok: true},
+		{name: "float kind fallback", value: ParamValue{Value: "1.5", PrepareParamKind: types.StringConversionFloat}, want: types.T_float64.ToType(), ok: true},
 		{name: "float32 widens", value: ParamValue{Value: "1.5", RuntimeType: types.T_float32.ToType(), HasRuntimeType: true}, want: types.T_float64.ToType(), ok: true},
-		{name: "decimal kind gets parameter envelope", value: ParamValue{Value: "1.5", PrepareParamKind: vector.PrepareParamDecimal}, want: wideDecimalType, ok: true},
-		{name: "malformed decimal keeps protocol domain", value: ParamValue{Value: "bad", PrepareParamKind: vector.PrepareParamDecimal}, want: wideDecimalType, ok: true},
-		{name: "boolean becomes integer parameter", value: ParamValue{Value: "true", PrepareParamKind: vector.PrepareParamBoolean}, want: types.T_int64.ToType(), ok: true},
+		{name: "decimal kind gets parameter envelope", value: ParamValue{Value: "1.5", PrepareParamKind: types.StringConversionDecimal}, want: wideDecimalType, ok: true},
+		{name: "malformed decimal keeps protocol domain", value: ParamValue{Value: "bad", PrepareParamKind: types.StringConversionDecimal}, want: wideDecimalType, ok: true},
+		{name: "boolean becomes integer parameter", value: ParamValue{Value: "true", PrepareParamKind: types.StringConversionBoolean}, want: types.T_int64.ToType(), ok: true},
 		{name: "null has no type", value: ParamValue{RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}},
 		{name: "untyped text stays text", value: ParamValue{Value: "64"}},
 		{name: "primitive unsigned widens", value: uint16(64), want: types.T_uint64.ToType(), ok: true},
@@ -1411,7 +1411,7 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 	limitPlan := buildPreparedPlan(t, "select n_nationkey from nation limit ?")
 	t.Run("SQL source type does not replace limit domain", func(t *testing.T) {
 		value := ParamValue{
-			Value: int64(2), PrepareParamKind: vector.PrepareParamInteger,
+			Value: int64(2), PrepareParamKind: types.StringConversionInteger,
 			SourceType: types.New(types.T_decimal128, 1, 0), HasSourceType: true,
 		}
 		require.NoError(t, ValidatePreparedPaginationParams(context.Background(), limitPlan, []any{value}))
@@ -1441,20 +1441,20 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 		{name: "string", value: "3", wrongArgs: true},
 		{name: "float", value: float64(3), wrongArgs: true},
 		{name: "decimal", value: types.Decimal64(3), wrongArgs: true},
-		{name: "text integer", value: ParamValue{Value: int64(2), PrepareParamKind: vector.PrepareParamInteger}},
-		{name: "binary integer", value: ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger}},
-		{name: "binary uint64", value: ParamValue{Value: "18446744073709551615", PrepareParamKind: vector.PrepareParamInteger}},
-		{name: "runtime boolean", value: ParamValue{Value: true, PrepareParamKind: vector.PrepareParamBoolean}},
-		{name: "binary boolean", value: ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamBoolean}},
+		{name: "text integer", value: ParamValue{Value: int64(2), PrepareParamKind: types.StringConversionInteger}},
+		{name: "binary integer", value: ParamValue{Value: "2", PrepareParamKind: types.StringConversionInteger}},
+		{name: "binary uint64", value: ParamValue{Value: "18446744073709551615", PrepareParamKind: types.StringConversionInteger}},
+		{name: "runtime boolean", value: ParamValue{Value: true, PrepareParamKind: types.StringConversionBoolean}},
+		{name: "binary boolean", value: ParamValue{Value: "1", PrepareParamKind: types.StringConversionBoolean}},
 		{name: "wrapped text integer", value: ParamValue{Value: "2"}, wrongArgs: true},
 		{name: "binary protocol integer text", value: ParamValue{Value: "2", IsBinaryProtocol: true}},
 		{name: "binary protocol uint64 text", value: ParamValue{Value: "18446744073709551615", IsBinaryProtocol: true}},
 		{name: "binary protocol malformed text", value: ParamValue{Value: "two", IsBinaryProtocol: true}, wrongArgs: true},
 		{name: "binary protocol decimal text", value: ParamValue{Value: "2.0", IsBinaryProtocol: true}, wrongArgs: true},
-		{name: "binary float", value: ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamFloat}, wrongArgs: true},
-		{name: "binary decimal", value: ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamDecimal}, wrongArgs: true},
+		{name: "binary float", value: ParamValue{Value: "2", PrepareParamKind: types.StringConversionFloat}, wrongArgs: true},
+		{name: "binary decimal", value: ParamValue{Value: "2", PrepareParamKind: types.StringConversionDecimal}, wrongArgs: true},
 		{name: "negative signed", value: int64(-1), outOfRange: true},
-		{name: "negative binary", value: ParamValue{Value: "-1", PrepareParamKind: vector.PrepareParamInteger}, outOfRange: true},
+		{name: "negative binary", value: ParamValue{Value: "-1", PrepareParamKind: types.StringConversionInteger}, outOfRange: true},
 		{name: "negative binary protocol text", value: ParamValue{Value: "-1", IsBinaryProtocol: true}, outOfRange: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -3505,7 +3505,7 @@ func TestConstantTransposeArithmeticSemantics(t *testing.T) {
 			normalized, err := ConstantTranspose(DeepCopyExpr(source), proc)
 			require.NoError(t, err)
 			input := batch.NewWithSize(1)
-			input.Vecs[0] = vector.NewVec(typ)
+			input.Vecs[0] = vector.NewVec(typ, proc.Mp())
 			defer input.Clean(proc.Mp())
 			if tc.overflow {
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(math.MaxInt64), false, proc.Mp()))
@@ -3530,6 +3530,20 @@ func TestConstantTransposeArithmeticSemantics(t *testing.T) {
 				require.True(t, result.IsNull(3))
 			}
 		})
+	}
+}
+
+func TestValidateAndSetHivePartitionOptions_LowPrecisionFloat(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "p",
+	}
+	for _, id := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		ct := makeHivePlan(&plan.ColDef{Name: "p", Typ: plan.Type{Id: int32(id)}})
+		err := validateAndSetHivePartitionOptions(context.Background(), hiveInferenceProcess(t), stmt, ct)
+		require.ErrorContains(t, err, "partition column 'p' cannot be a "+id.String()+" type")
 	}
 }
 

@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,49 @@ func TestObjectStorageArguments(t *testing.T) {
 			}
 		}
 
+	})
+}
+
+func TestCSStorageArgumentsPreservePrefix(t *testing.T) {
+	t.Setenv("MO_CI_S3_PREFIX", "ci-ut/run-123")
+	t.Setenv("TEST_S3FS_CS", "name=cs,endpoint=https://example.invalid,bucket=test,key-id=id,key-secret=secret,is-minio=true")
+	for _, args := range objectStorageArgumentsForTest("test", t) {
+		if args.Name == "cs-s3" {
+			if !strings.HasPrefix(args.KeyPrefix, "ci-ut/run-123/") || !args.IsMinio || !args.NoBucketValidation {
+				t.Fatal("CS test storage is not isolated under the run prefix")
+			}
+			return
+		}
+	}
+	t.Fatal("CS test storage was not configured")
+}
+
+// prepareCITestStorage refuses a pre-existing fixture prefix and only cleans
+// objects underneath that exact run-specific prefix. Never operate on a bucket root.
+func prepareCITestStorage(t *testing.T, args ObjectStorageArguments) {
+	t.Helper()
+	root := os.Getenv("MO_CI_S3_PREFIX")
+	if !validCITestS3Prefix(root) || !validCITestS3Prefix(args.KeyPrefix) || !strings.HasPrefix(args.KeyPrefix, root+"/") {
+		t.Fatal("unsafe CS S3 fixture prefix")
+	}
+	prefix := args.KeyPrefix + "/"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	sdk, err := NewMinioSDK(ctx, args, nil)
+	if err != nil {
+		cancel()
+		t.Fatal(ciTestS3Error("initialize fixture", err))
+	}
+	if err := checkEmptyCITestPrefix(ctx, sdk.client, args.Bucket, prefix); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	cancel()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := cleanupCITestPrefix(ctx, sdk.client, args.Bucket, prefix); err != nil {
+			t.Error(err)
+		}
 	})
 }
 
@@ -141,15 +185,37 @@ func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []Obje
 		reader := csv.NewReader(strings.NewReader(value))
 		argStrs, err := reader.Read()
 		if err != nil {
+			if name == "TEST_S3FS_CS" {
+				t.Fatal("invalid TEST_S3FS_CS test specification")
+			}
 			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
 			continue
 		}
 		var args ObjectStorageArguments
 		if err := args.SetFromString(argStrs); err != nil {
+			if name == "TEST_S3FS_CS" {
+				t.Fatal("invalid TEST_S3FS_CS test specification")
+			}
 			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
 			continue
 		}
 		args.KeyPrefix = fmt.Sprintf("%v", rand.Int64())
+		if name == "TEST_S3FS_CS" {
+			prefix := os.Getenv("MO_CI_S3_PREFIX")
+			if !validCITestS3Prefix(prefix) {
+				t.Fatal("TEST_S3FS_CS requires a non-root, normalized MO_CI_S3_PREFIX")
+			}
+			if !args.IsMinio {
+				t.Fatal("TEST_S3FS_CS requires is-minio=true")
+			}
+			args.Name = "cs-s3"
+			args.KeyPrefix = path.Join(prefix, args.KeyPrefix)
+			// CI credentials deliberately allow ListBucket only with a ci-ut/
+			// prefix. HeadBucket has no prefix and is therefore denied. Validate
+			// the exact fixture prefix in prepareCITestStorage instead, without
+			// granting bucket-wide access or changing production SDK defaults.
+			args.NoBucketValidation = true
+		}
 
 		ret = append(ret, args)
 	}

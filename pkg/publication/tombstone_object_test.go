@@ -97,7 +97,7 @@ func TestRewriteTombstoneRowidsBatch_ZeroRows(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
 	defer mp.Free(nil)
-	bat := &batch.Batch{Vecs: []*vector.Vector{vector.NewVec(types.T_Rowid.ToType())}}
+	bat := &batch.Batch{Vecs: []*vector.Vector{vector.NewVec(types.T_Rowid.ToType(), mp)}}
 	bat.SetRowCount(0)
 	err = rewriteTombstoneRowidsBatch(context.Background(), bat, nil, mp)
 	assert.NoError(t, err)
@@ -111,7 +111,7 @@ func TestRewriteTombstoneRowidsBatch_NoMapping(t *testing.T) {
 	upstreamObjID := types.NewObjectid()
 	rid := types.NewRowIDWithObjectIDBlkNumAndRowID(upstreamObjID, 0, 7)
 
-	rowidVec := vector.NewVec(types.T_Rowid.ToType())
+	rowidVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(rowidVec, rid, false, mp))
 	bat := &batch.Batch{Vecs: []*vector.Vector{rowidVec}}
 	bat.SetRowCount(1)

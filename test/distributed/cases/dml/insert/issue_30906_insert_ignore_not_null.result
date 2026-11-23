@@ -1,0 +1,890 @@
+drop database if exists issue_30906_insert_ignore_not_null;
+create database issue_30906_insert_ignore_not_null;
+use issue_30906_insert_ignore_not_null;
+create table ig_issue(u int not null, nn int not null);
+insert ignore into ig_issue(u, nn) values(2, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'nn' cannot be null
+select * from ig_issue order by u;
+➤ u[4,32,0]  ¦  nn[4,32,0]  𝄀
+2  ¦  0
+insert ignore into ig_issue(u, nn) values(10, 10), (11, null), (12, 12);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'nn' cannot be null
+select * from ig_issue order by u;
+➤ u[4,32,0]  ¦  nn[4,32,0]  𝄀
+2  ¦  0  𝄀
+10  ¦  10  𝄀
+11  ¦  0  𝄀
+12  ¦  12
+insert ignore into ig_issue(u, nn) values(null, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'nn' cannot be null
+select * from ig_issue order by u;
+➤ u[4,32,0]  ¦  nn[4,32,0]  𝄀
+0  ¦  0  𝄀
+2  ¦  0  𝄀
+10  ¦  10  𝄀
+11  ¦  0  𝄀
+12  ¦  12
+insert into ig_issue(u, nn) values(40, null);
+constraint violation: Column 'nn' cannot be null
+select * from ig_issue order by u;
+➤ u[4,32,0]  ¦  nn[4,32,0]  𝄀
+0  ¦  0  𝄀
+2  ¦  0  𝄀
+10  ¦  10  𝄀
+11  ¦  0  𝄀
+12  ¦  12
+create table ig_types(
+i int not null,
+di int not null default 7,
+s varchar(8) not null,
+de decimal(5,2) not null,
+d date not null,
+dt datetime not null,
+ts timestamp not null,
+j json not null,
+e enum('a','b') not null
+);
+insert ignore into ig_types(i, di, s, de, d, dt, ts, j, e)
+values(null, null, null, null, null, null, null, null, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'i' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'di' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 's' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'de' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'd' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'dt' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'ts' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'j' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'e' cannot be null
+select i, di, s, de, d, dt, ts, j, e from ig_types;
+➤ i[4,32,0]  ¦  di[4,32,0]  ¦  s[12,8,0]  ¦  de[3,5,2]  ¦  d[91,10,0]  ¦  dt[93,19,0]  ¦  ts[93,19,0]  ¦  j[-1,2147483647,0]  ¦  e[12,65535,0]  𝄀
+0  ¦  0  ¦    ¦  0.00  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00  ¦  null  ¦  
+insert ignore into ig_types(i, di, s, de, d, dt, ts, j, e) values
+(1, null, 'two', null, '2024-02-03', null, '2024-02-03 04:05:06', '{"k":2}', null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'di' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'de' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'dt' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'e' cannot be null
+select i, di, s, de, d, dt, ts, e from ig_types order by i;
+➤ i[4,32,0]  ¦  di[4,32,0]  ¦  s[12,8,0]  ¦  de[3,5,2]  ¦  d[91,10,0]  ¦  dt[93,19,0]  ¦  ts[93,19,0]  ¦  e[12,65535,0]  𝄀
+0  ¦  0  ¦    ¦  0.00  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00  ¦    𝄀
+1  ¦  0  ¦  two  ¦  0.00  ¦  2024-02-03  ¦  0000-00-00 00:00:00  ¦  2024-02-03 04:05:06  ¦  
+create table ig_auto(id int not null auto_increment primary key, v int not null);
+insert ignore into ig_auto(v) values(1), (2);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+insert ignore into ig_auto values(null, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'v' cannot be null
+select * from ig_auto order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  0
+create table ig_mixed(
+id int primary key,
+u int unique,
+nn int not null,
+c int,
+constraint ig_c check(c > 0)
+);
+insert into ig_mixed values(1, 10, 1, 1);
+insert ignore into ig_mixed values
+(1, 11, 1, 1),      -- duplicate primary key: row skipped
+(2, 10, null, 2),   -- duplicate unique key: row skipped
+(3, 30, null, 3),   -- NULL in NOT NULL: row kept, nn adjusted to 0
+(4, 40, 4, 4),
+(5, 50, 5, 5);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'nn' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'nn' cannot be null  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '10' for key 'u'
+select * from ig_mixed order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  ¦  nn[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  10  ¦  1  ¦  1  𝄀
+3  ¦  30  ¦  0  ¦  3  𝄀
+4  ¦  40  ¦  4  ¦  4  𝄀
+5  ¦  50  ¦  5  ¦  5
+insert ignore into ig_mixed values(6, 60, null, -1);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'nn' cannot be null  𝄀
+Warning  ¦  3819  ¦  Check constraint 'ig_c' is violated
+select * from ig_mixed order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  ¦  nn[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  10  ¦  1  ¦  1  𝄀
+3  ¦  30  ¦  0  ¦  3  𝄀
+4  ¦  40  ¦  4  ¦  4  𝄀
+5  ¦  50  ¦  5  ¦  5
+create table ig_src(x int, y int);
+insert into ig_src values(1, 1), (2, null), (3, 3), (4, null);
+create table ig_from_select(a int not null, b int not null);
+insert ignore into ig_from_select select x, y from ig_src;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'b' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'b' cannot be null
+select * from ig_from_select order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  3  𝄀
+4  ¦  0
+create table ig_pk(id int primary key, nn int not null, v int);
+insert ignore into ig_pk values (1, 10, 100);
+insert ignore into ig_pk values (null, 20, 200), (2, null, 300), (null, null, 400);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'nn' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'nn' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null
+select * from ig_pk order by id, nn;
+➤ id[4,32,0]  ¦  nn[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  ¦  100  𝄀
+2  ¦  0  ¦  300
+insert ignore into ig_pk select null, 50, 500;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null
+select * from ig_pk order by id, nn;
+➤ id[4,32,0]  ¦  nn[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  ¦  100  𝄀
+2  ¦  0  ¦  300
+insert into ig_pk values(null, 1, 1);
+constraint violation: Column 'id' cannot be null
+select * from ig_pk order by id, nn;
+➤ id[4,32,0]  ¦  nn[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  ¦  100  𝄀
+2  ¦  0  ¦  300
+create table ig_uknn(c int unique not null, d int);
+insert ignore into ig_uknn values (null, 1), (null, 2), (5, 3), (5, 4);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'c' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'c' cannot be null  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '0' for key 'c'  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '5' for key 'c'
+select * from ig_uknn order by c;
+➤ c[4,32,0]  ¦  d[4,32,0]  𝄀
+0  ¦  1  𝄀
+5  ¦  3
+create table fk_par(id int primary key);
+create table fk_ch(id int primary key, pid int not null, constraint fk_pid foreign key (pid) references fk_par(id));
+insert into fk_par values (7);
+insert ignore into fk_ch values (3, 99);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select * from fk_ch order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]
+insert ignore into fk_ch values (1, null), (2, 7);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'pid' cannot be null
+select * from fk_ch order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+2  ¦  7
+select count(*) as orphans from fk_ch left join fk_par on fk_ch.pid = fk_par.id where fk_par.id is null;
+➤ orphans[-5,64,0]  𝄀
+0
+insert into fk_par values (0);
+insert ignore into fk_ch values (4, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'pid' cannot be null
+select * from fk_ch order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+2  ¦  7  𝄀
+4  ¦  0
+drop table fk_ch;
+create table fk_nullable(id int primary key, pid int, constraint fk_pid2 foreign key (pid) references fk_par(id));
+insert ignore into fk_nullable values (1, null), (2, 7);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select * from fk_nullable order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  7
+drop table fk_nullable;
+create table fk_uuid_par(id uuid primary key);
+create table fk_uuid_ch(id int primary key, pid uuid not null, constraint fk_uuid foreign key (pid) references fk_uuid_par(id));
+insert ignore into fk_uuid_ch values (1, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'pid' cannot be null
+select count(*) as uuid_rows from fk_uuid_ch;
+➤ uuid_rows[-5,64,0]  𝄀
+0
+insert ignore into fk_uuid_ch values (2, '123e4567-e89b-12d3-a456-426614174001');
+select count(*) as uuid_rows from fk_uuid_ch;
+➤ uuid_rows[-5,64,0]  𝄀
+0
+insert into fk_uuid_par values ('123e4567-e89b-12d3-a456-426614174000');
+insert ignore into fk_uuid_ch values (3, '123e4567-e89b-12d3-a456-426614174000');
+select * from fk_uuid_ch order by id;
+➤ id[4,32,0]  ¦  pid[12,-1,0]  𝄀
+3  ¦  123e4567-e89b-12d3-a456-426614174000
+drop table fk_uuid_ch;
+drop table fk_uuid_par;
+drop table fk_par;
+create table ig_geo(id int, g geometry not null);
+insert ignore into ig_geo values (1, null);
+constraint violation: Column 'g' cannot be null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  3819  ¦  constraint violation: Column 'g' cannot be null
+select id, st_astext(g) from ig_geo;
+➤ id[4,32,0]  ¦  st_astext(g)[12,65535,0]
+insert into ig_geo values (2, null);
+constraint violation: Column 'g' cannot be null
+select count(*) as geo_rows from ig_geo;
+➤ geo_rows[-5,64,0]  𝄀
+0
+insert ignore into ig_geo values (2, st_geomfromtext('point(1 1)'));
+select id, st_astext(g) from ig_geo;
+➤ id[4,32,0]  ¦  st_astext(g)[12,65535,0]  𝄀
+2  ¦  POINT(1 1)
+create table r4_uq(id int primary key, a int not null, b int, unique key r4u(a, b));
+insert ignore into r4_uq values (1, null, 7), (2, 0, 7);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '(0,7)' for key '(a,b)'
+select * from r4_uq order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  0  ¦  7
+insert ignore into r4_uq values (5, 0, 7);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '(0,7)' for key '(a,b)'
+select * from r4_uq order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  0  ¦  7
+create table r4_chk(id int primary key, a int not null check(a > 0));
+insert ignore into r4_chk values (1, null), (2, 5), (3, -1);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null  𝄀
+Warning  ¦  3819  ¦  Check constraint 'r4_chk_chk_1' is violated  𝄀
+Warning  ¦  3819  ¦  Check constraint 'r4_chk_chk_1' is violated
+select * from r4_chk order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+2  ¦  5
+create table r4_gc_s(a int not null, b int generated always as (a + 1) stored);
+insert ignore into r4_gc_s(a) values (null), (4);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select * from r4_gc_s order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+0  ¦  1  𝄀
+4  ¦  5
+create table r4_gc_v(a int not null, b int generated always as (a + 1) virtual);
+insert ignore into r4_gc_v(a) values (null), (4);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select * from r4_gc_v order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+0  ¦  1  𝄀
+4  ¦  5
+create table r4_fk_par(id int primary key);
+create table r4_fk_ch(id int primary key, pid int not null, constraint r4_fk foreign key (pid) references r4_fk_par(id));
+insert into r4_fk_par values (7);
+insert ignore into r4_fk_ch values (1, null), (2, 7);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'pid' cannot be null
+select * from r4_fk_ch order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+2  ¦  7
+select count(*) as orphans from r4_fk_ch left join r4_fk_par on r4_fk_ch.pid = r4_fk_par.id where r4_fk_par.id is null;
+➤ orphans[-5,64,0]  𝄀
+0
+insert into r4_fk_par values (0);
+insert ignore into r4_fk_ch values (3, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'pid' cannot be null
+select * from r4_fk_ch order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+2  ¦  7  𝄀
+3  ¦  0
+drop table r4_fk_ch;
+drop table r4_fk_par;
+create table r4_uuid_par(id uuid primary key);
+create table r4_uuid_ch(id int primary key, pid uuid not null, constraint r4_uuid_fk foreign key (pid) references r4_uuid_par(id));
+insert ignore into r4_uuid_ch values (1, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'pid' cannot be null
+select count(*) as uuid_rows from r4_uuid_ch;
+➤ uuid_rows[-5,64,0]  𝄀
+0
+insert into r4_uuid_par values ('00000000-0000-0000-0000-000000000000');
+insert ignore into r4_uuid_ch values (2, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'pid' cannot be null
+select id, pid from r4_uuid_ch order by id;
+➤ id[4,32,0]  ¦  pid[12,-1,0]  𝄀
+2  ¦  00000000-0000-0000-0000-000000000000
+drop table r4_uuid_ch;
+drop table r4_uuid_par;
+create table r4_pk(id int primary key, nn int not null, v int);
+insert ignore into r4_pk values (null, 20, 200), (2, null, 300), (null, null, 400);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'nn' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'nn' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null
+select * from r4_pk order by id;
+➤ id[4,32,0]  ¦  nn[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  0  ¦  300
+create table r6_f1t(a int, id int primary key);
+insert ignore into r6_f1t values (10, null), (20, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null
+select a, id from r6_f1t order by a, id;
+➤ a[4,32,0]  ¦  id[4,32,0]
+create table r6_f1c(a int, id int primary key);
+insert into r6_f1c values (1, 0);
+insert ignore into r6_f1c values (10, null), (20, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null
+select a, id from r6_f1c order by a, id;
+➤ a[4,32,0]  ¦  id[4,32,0]  𝄀
+1  ¦  0
+create table r6_f1k(id int primary key, a int);
+insert ignore into r6_f1k values (null, 10), (null, 20);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null
+select id, a from r6_f1k order by id, a;
+➤ id[4,32,0]  ¦  a[4,32,0]
+create table r6_f2u(id int primary key, a int not null check(a > 0), src int);
+insert into r6_f2u values (1, 7, null);
+update ignore r6_f2u set a = src;
+constraint violation: Column 'a' cannot be null
+update r6_f2u set a = src;
+constraint violation: Column 'a' cannot be null
+select id, a, src from r6_f2u order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  src[4,32,0]  𝄀
+1  ¦  7  ¦  null
+update ignore r6_f2u set a = 8;
+select id, a, src from r6_f2u order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  src[4,32,0]  𝄀
+1  ¦  8  ¦  null
+create table r6_f2g(id int primary key, a int not null, g int generated always as (a + 1) stored, src int);
+insert into r6_f2g(id, a, src) values (1, 7, null);
+update ignore r6_f2g set a = src;
+constraint violation: Column 'a' cannot be null
+select id, a, g, src from r6_f2g order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  ¦  src[4,32,0]  𝄀
+1  ¦  7  ¦  8  ¦  null
+update ignore r6_f2g set a = 8;
+select id, a, g, src from r6_f2g order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  ¦  src[4,32,0]  𝄀
+1  ¦  8  ¦  9  ¦  null
+create table r6_f3d(id int, d date not null, y int generated always as (year(d)) stored, yv int generated always as (year(d)) virtual);
+insert ignore into r6_f3d(id, d) values (1, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'd' cannot be null
+select id, d, y, yv from r6_f3d;
+➤ id[4,32,0]  ¦  d[91,10,0]  ¦  y[4,32,0]  ¦  yv[4,32,0]  𝄀
+1  ¦  0000-00-00  ¦  0  ¦  0
+create table r6_f3t(id int, dt datetime not null, yd int generated always as (year(dt)) stored, ts timestamp not null, ys int generated always as (year(ts)) stored);
+insert ignore into r6_f3t(id, dt, ts) values (1, null, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'dt' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'ts' cannot be null
+select id, dt, yd, ts, ys from r6_f3t;
+➤ id[4,32,0]  ¦  dt[93,19,0]  ¦  yd[4,32,0]  ¦  ts[93,19,0]  ¦  ys[4,32,0]  𝄀
+1  ¦  0000-00-00 00:00:00  ¦  0  ¦  0000-00-00 00:00:00  ¦  0
+create table r6_f4j(id int, j json not null, gj varchar(32) generated always as (cast(j as char(32))) stored);
+insert ignore into r6_f4j(id, j) values (1, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'j' cannot be null
+select id, j, gj from r6_f4j;
+➤ id[4,32,0]  ¦  j[-1,2147483647,0]  ¦  gj[12,32,0]  𝄀
+1  ¦  null  ¦  null
+create table r6_f4u(id int, u uuid not null, gu char(36) generated always as (cast(u as char(36))) stored);
+insert ignore into r6_f4u(id, u) values (1, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null
+select id, u, gu from r6_f4u;
+➤ id[4,32,0]  ¦  u[12,-1,0]  ¦  gu[1,36,0]  𝄀
+1  ¦  00000000-0000-0000-0000-000000000000  ¦  00000000-0000-0000-0000-000000000000
+create table r6_f5a(id int primary key, u int not null unique);
+insert ignore into r6_f5a values (null, 5), (1, 5);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null
+select id, u from r6_f5a order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  𝄀
+1  ¦  5
+create table r6_f5b(id int primary key, v int, constraint r6_c5b check(v > 0));
+insert ignore into r6_f5b values (null, 0);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null
+select id, v from r6_f5b order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]
+create table r6_f5p(id int primary key);
+create table r6_f5c(id int primary key, pid int not null, constraint r6_fk5 foreign key (pid) references r6_f5p(id));
+insert ignore into r6_f5c values (null, 42);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null
+select id, pid from r6_f5c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]
+select count(*) as r6_orphans from r6_f5c left join r6_f5p on r6_f5c.pid = r6_f5p.id where r6_f5p.id is null;
+➤ r6_orphans[-5,64,0]  𝄀
+0
+drop table r6_f5c;
+drop table r6_f5p;
+create table r7_src(x int);
+insert into r7_src values(10), (null), (12);
+create table r7_f1a(a int not null, b int);
+insert ignore into r7_f1a(a, b) select x, x from r7_src;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select 'f1a' as mark, a, b from r7_f1a order by a, b;
+➤ mark[12,3,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+f1a  ¦  0  ¦  null  𝄀
+f1a  ¦  10  ¦  10  𝄀
+f1a  ¦  12  ¦  12
+create table r7_f1b(a int not null, b int not null);
+insert ignore into r7_f1b(a, b) select x, x from r7_src;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'b' cannot be null
+select 'f1b' as mark, a, b from r7_f1b order by a, b;
+➤ mark[12,3,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+f1b  ¦  0  ¦  0  𝄀
+f1b  ¦  10  ¦  10  𝄀
+f1b  ¦  12  ¦  12
+create table r7_f1s(a int not null, b int);
+insert into r7_f1s(a, b) select x, x from r7_src;
+constraint violation: Column 'a' cannot be null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  3819  ¦  constraint violation: Column 'a' cannot be null
+select 'f1s' as mark, a, b from r7_f1s order by a, b;
+➤ mark[12,3,0]  ¦  a[4,32,0]  ¦  b[4,32,0]
+create table r7_f2_pp(id int primary key, a int, b int);
+create table r7_f2_src(id int, x int);
+insert into r7_f2_src values(null, 9), (1, 10), (2, 20);
+insert ignore into r7_f2_pp(id, a, b) select id, x, x from r7_f2_src;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'id' cannot be null
+select 'f2pk' as mark, id, a, b from r7_f2_pp order by id;
+➤ mark[12,4,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+f2pk  ¦  1  ¦  10  ¦  10  𝄀
+f2pk  ¦  2  ¦  20  ¦  20
+create table r8_t(a int not null, g int not null generated always as (nullif(a,0)) stored, h int generated always as (g+1) stored);
+insert ignore into r8_t(a) values(null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'g' cannot be null
+select 'r8_t' as mark, a, g, h from r8_t;
+➤ mark[12,4,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  ¦  h[4,32,0]  𝄀
+r8_t  ¦  0  ¦  0  ¦  1
+insert into r8_t(a) values(5);
+select 'r8_t_valid' as mark, a, g, h from r8_t order by a;
+➤ mark[12,10,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  ¦  h[4,32,0]  𝄀
+r8_t_valid  ¦  0  ¦  0  ¦  1  𝄀
+r8_t_valid  ¦  5  ¦  5  ¦  6
+create table r8_ts(a int not null, g int not null generated always as (nullif(a,0)) stored, h int generated always as (g+1) stored);
+insert into r8_ts(a) values(null);
+constraint violation: Column 'a' cannot be null
+create table r8_d(a int not null, b int default (a+1));
+insert ignore into r8_d(a) values(null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select 'r8_d' as mark, a, b from r8_d;
+➤ mark[12,4,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+r8_d  ¦  0  ¦  1
+insert into r8_d(a) values(5);
+select 'r8_d_valid' as mark, a, b from r8_d order by a;
+➤ mark[12,10,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+r8_d_valid  ¦  0  ¦  1  𝄀
+r8_d_valid  ¦  5  ¦  6
+create table r8_dnn(a int not null, b int not null default (a+1));
+insert ignore into r8_dnn(a) values(null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select 'r8_dnn' as mark, a, b from r8_dnn;
+➤ mark[12,6,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+r8_dnn  ¦  0  ¦  1
+create table r8_ds(a int not null, b int default (a+1));
+insert into r8_ds(a) values(null);
+constraint violation: Column 'a' cannot be null
+create table r8_fwd(b int default (a+1), a int not null, c int);
+insert ignore into r8_fwd(a) values(null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select 'r8_fwd' as mark, a, b, c from r8_fwd;
+➤ mark[12,6,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+r8_fwd  ¦  0  ¦  1  ¦  null
+insert ignore into r8_fwd(c) values(1);
+invalid input: invalid default value for column 'a'
+create table r9_pk(id int default 1 primary key, a int, g int not null generated always as (a+1) stored, check (g>0));
+insert ignore into r9_pk(a) values(null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'g' cannot be null  𝄀
+Warning  ¦  3819  ¦  Check constraint 'r9_pk_chk_1' is violated
+select 'r9_pk' as mark, id, a, g from r9_pk;
+➤ mark[12,5,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]
+create table r9_pkv(id int default 1 primary key, a int, g int not null generated always as (a+1) stored, check (g>0));
+insert ignore into r9_pkv(a) values(5);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select 'r9_pkv' as mark, id, a, g from r9_pkv;
+➤ mark[12,6,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  𝄀
+r9_pkv  ¦  1  ¦  5  ¦  6
+insert into r9_pk(a) values(null);
+constraint violation: Column 'g' cannot be null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  3819  ¦  constraint violation: Column 'g' cannot be null
+select 'r9_pk_strict' as mark, id, a, g from r9_pk;
+➤ mark[12,12,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]
+create table r9_t(a int, g int not null generated always as (a+1) stored, check (g>0));
+insert ignore into r9_t(a) values(null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'g' cannot be null  𝄀
+Warning  ¦  3819  ¦  Check constraint 'r9_t_chk_1' is violated
+select 'r9_t' as mark, a, g from r9_t;
+➤ mark[12,4,0]  ¦  a[4,32,0]  ¦  g[4,32,0]
+insert ignore into r9_t(a) values(5);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select 'r9_t_valid' as mark, a, g from r9_t;
+➤ mark[12,10,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  𝄀
+r9_t_valid  ¦  5  ¦  6
+insert into r9_t(a) values(null);
+constraint violation: Column 'g' cannot be null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  3819  ¦  constraint violation: Column 'g' cannot be null
+select 'r9_t_strict' as mark, a, g from r9_t order by a;
+➤ mark[12,11,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  𝄀
+r9_t_strict  ¦  5  ¦  6
+create table r9_dn(id int default 1 primary key, a int, b int not null default (a+1));
+insert ignore into r9_dn(a) values(null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'b' cannot be null
+select 'r9_dn' as mark, id, a, b from r9_dn;
+➤ mark[12,5,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+r9_dn  ¦  1  ¦  null  ¦  0
+insert ignore into r9_dn(a) values(5);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'
+select 'r9_dn_valid' as mark, id, a, b from r9_dn order by id;
+➤ mark[12,11,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+r9_dn_valid  ¦  1  ¦  null  ¦  0
+create table r9_uk(a int, g int not null generated always as (a+1) stored, unique key uk_g (g));
+insert ignore into r9_uk(a) values(null),(null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'g' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'g' cannot be null  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '0' for key 'g'
+select 'r9_uk' as mark, a, g from r9_uk;
+➤ mark[12,5,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  𝄀
+r9_uk  ¦  null  ¦  0
+insert ignore into r9_uk(a) values(4);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select 'r9_uk_valid' as mark, a, g from r9_uk;
+➤ mark[12,11,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  𝄀
+r9_uk_valid  ¦  null  ¦  0  𝄀
+r9_uk_valid  ¦  4  ¦  5
+create table r9_d(a int not null, b int default (a+1));
+insert ignore into r9_d(a,b) values(null, default);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select 'r9_d' as mark, a, b from r9_d;
+➤ mark[12,4,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+r9_d  ¦  0  ¦  1
+insert ignore into r9_d(a,b) values(null, default),(null, 0);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select 'r9_d_mixed' as mark, a, b from r9_d;
+➤ mark[12,10,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+r9_d_mixed  ¦  0  ¦  1  𝄀
+r9_d_mixed  ¦  0  ¦  1  𝄀
+r9_d_mixed  ¦  0  ¦  0
+insert ignore into r9_d(a,b) values(5, default);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select 'r9_d_valid' as mark, a, b from r9_d;
+➤ mark[12,10,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+r9_d_valid  ¦  0  ¦  1  𝄀
+r9_d_valid  ¦  0  ¦  1  𝄀
+r9_d_valid  ¦  0  ¦  0  𝄀
+r9_d_valid  ¦  5  ¦  6
+create table r9_ds(a int not null, b int default (a+1));
+insert into r9_ds(a,b) values(null, default);
+constraint violation: Column 'a' cannot be null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  3819  ¦  constraint violation: Column 'a' cannot be null
+select 'r9_ds' as mark, a, b from r9_ds;
+➤ mark[12,5,0]  ¦  a[4,32,0]  ¦  b[4,32,0]
+create table r9_dnn(a int not null, b int not null default (a+1));
+insert ignore into r9_dnn(a,b) values(null, default);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select 'r9_dnn' as mark, a, b from r9_dnn;
+➤ mark[12,6,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+r9_dnn  ¦  0  ¦  1
+create table r9_cl(a int not null, c int not null default (a*2), b int default (c+1));
+insert ignore into r9_cl(a,b) values(null, default);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select 'r9_cl' as mark, a, c, b from r9_cl;
+➤ mark[12,5,0]  ¦  a[4,32,0]  ¦  c[4,32,0]  ¦  b[4,32,0]  𝄀
+r9_cl  ¦  0  ¦  0  ¦  1
+create table r9_ad(a int not null default 7, b int default (a+1));
+insert ignore into r9_ad values (default, default);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select 'r9_ad' as mark, a, b from r9_ad;
+➤ mark[12,5,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+r9_ad  ¦  7  ¦  8
+insert ignore into r9_ad values ();
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select 'r9_ad_empty' as mark, a, b from r9_ad;
+➤ mark[12,11,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+r9_ad_empty  ¦  7  ¦  8  𝄀
+r9_ad_empty  ¦  7  ¦  8
+create table r10_dl(a int, d datalink not null);
+insert ignore into r10_dl values (1, null);
+constraint violation: Column 'd' cannot be null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  3819  ¦  constraint violation: Column 'd' cannot be null
+select 'r10_dl_null' as mark, a from r10_dl;
+➤ mark[12,11,0]  ¦  a[4,32,0]
+insert ignore into r10_dl values (2, 'file://$resources/load_data/time_date_1.csv');
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select 'r10_dl_valid' as mark, a, d = cast('file://$resources/load_data/time_date_1.csv' as datalink) as d_eq from r10_dl;
+➤ mark[12,12,0]  ¦  a[4,32,0]  ¦  d_eq[-6,8,0]  𝄀
+r10_dl_valid  ¦  2  ¦  1
+insert ignore into r10_dl values (3, null), (4, 'file://$resources/load_data/time_date_1.csv');
+constraint violation: Column 'd' cannot be null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  3819  ¦  constraint violation: Column 'd' cannot be null
+select 'r10_dl_mixed' as mark, a from r10_dl;
+➤ mark[12,12,0]  ¦  a[4,32,0]  𝄀
+r10_dl_mixed  ¦  2
+insert into r10_dl values (5, null);
+constraint violation: Column 'd' cannot be null
+select 'r10_dl_strict' as mark, a from r10_dl;
+➤ mark[12,13,0]  ¦  a[4,32,0]  𝄀
+r10_dl_strict  ¦  2
+drop table r10_dl;
+create table r10_ld_sfk(id int primary key auto_increment, a int not null, b int default (a+1), pid int, constraint sfk_ld foreign key (pid) references r10_ld_sfk(id));
+load data inline format='csv', data='1\n\\N\n2' ignore into table r10_ld_sfk fields terminated by ',' (a);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select 'r10_ld_sfk' as mark, id, a, b, pid from r10_ld_sfk order by a;
+➤ mark[12,10,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  pid[4,32,0]  𝄀
+r10_ld_sfk  ¦  2  ¦  0  ¦  1  ¦  null  𝄀
+r10_ld_sfk  ¦  1  ¦  1  ¦  2  ¦  null  𝄀
+r10_ld_sfk  ¦  3  ¦  2  ¦  3  ¦  null
+drop table r10_ld_sfk;
+create table r10_ldn_sfk(id int primary key auto_increment, a int not null, b int not null default (a+1), pid int, constraint sfk_ldn foreign key (pid) references r10_ldn_sfk(id));
+load data inline format='csv', data='1\n\\N\n2' ignore into table r10_ldn_sfk fields terminated by ',' (a);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select 'r10_ldn_sfk' as mark, id, a, b, pid from r10_ldn_sfk order by a;
+➤ mark[12,11,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  pid[4,32,0]  𝄀
+r10_ldn_sfk  ¦  2  ¦  0  ¦  1  ¦  null  𝄀
+r10_ldn_sfk  ¦  1  ¦  1  ¦  2  ¦  null  𝄀
+r10_ldn_sfk  ¦  3  ¦  2  ¦  3  ¦  null
+drop table r10_ldn_sfk;
+create table r10_lcl_sfk(id int primary key auto_increment, a int not null, c int not null default (a*2), b int default (c+1), pid int, constraint sfk_lcl foreign key (pid) references r10_lcl_sfk(id));
+load data inline format='csv', data='1\n\\N\n2' ignore into table r10_lcl_sfk fields terminated by ',' (a);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select 'r10_lcl_sfk' as mark, id, a, c, b, pid from r10_lcl_sfk order by a;
+➤ mark[12,11,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  c[4,32,0]  ¦  b[4,32,0]  ¦  pid[4,32,0]  𝄀
+r10_lcl_sfk  ¦  2  ¦  0  ¦  0  ¦  1  ¦  null  𝄀
+r10_lcl_sfk  ¦  1  ¦  1  ¦  2  ¦  3  ¦  null  𝄀
+r10_lcl_sfk  ¦  3  ¦  2  ¦  4  ¦  5  ¦  null
+drop table r10_lcl_sfk;
+create table r10_lds_sfk(id int primary key auto_increment, a int not null, b int default (a+1), pid int, constraint sfk_lds foreign key (pid) references r10_lds_sfk(id));
+load data inline format='csv', data='1\n\\N\n2' into table r10_lds_sfk fields terminated by ',' (a);
+constraint violation: Column 'a' cannot be null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  3819  ¦  constraint violation: Column 'a' cannot be null
+select 'r10_lds_sfk' as mark, id, a, b, pid from r10_lds_sfk order by a;
+➤ mark[12,11,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  pid[4,32,0]
+drop table r10_lds_sfk;
+create table r10_ldv_sfk(id int primary key auto_increment, a int not null, b int default (a+1), pid int, constraint sfk_ldv foreign key (pid) references r10_ldv_sfk(id));
+load data inline format='csv', data='5\n6\n7' ignore into table r10_ldv_sfk fields terminated by ',' (a);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select 'r10_ldv_sfk' as mark, id, a, b, pid from r10_ldv_sfk order by a;
+➤ mark[12,11,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  pid[4,32,0]  𝄀
+r10_ldv_sfk  ¦  1  ¦  5  ¦  6  ¦  null  𝄀
+r10_ldv_sfk  ¦  2  ¦  6  ¦  7  ¦  null  𝄀
+r10_ldv_sfk  ¦  3  ¦  7  ¦  8  ¦  null
+drop table r10_ldv_sfk;
+create table r10_ld_mod(a int not null, b int default (a+1));
+load data inline format='csv', data='1\n\\N\n2' ignore into table r10_ld_mod fields terminated by ',' (a);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'a' cannot be null
+select 'r10_ld_mod' as mark, a, b from r10_ld_mod order by a;
+➤ mark[12,10,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+r10_ld_mod  ¦  0  ¦  1  𝄀
+r10_ld_mod  ¦  1  ¦  2  𝄀
+r10_ld_mod  ¦  2  ¦  3
+drop table r10_ld_mod;
+create table r14_uknd(id int primary key, u bigint not null default (abs(null)), unique key uk_r14(u));
+insert ignore into r14_uknd(id) values (1),(2);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '0' for key 'u'
+select 'r14_uknd' as mark, id, u from r14_uknd order by id;
+➤ mark[12,8,0]  ¦  id[4,32,0]  ¦  u[-5,64,0]  𝄀
+r14_uknd  ¦  1  ¦  0
+insert into r14_uknd values (99, 0);
+Duplicate entry '0' for key 'u'
+insert ignore into r14_uknd(id) values (3);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '0' for key 'u'
+select 'r14_uknd_after' as mark, id, u from r14_uknd order by id;
+➤ mark[12,14,0]  ¦  id[4,32,0]  ¦  u[-5,64,0]  𝄀
+r14_uknd_after  ¦  1  ¦  0
+drop table r14_uknd;
+create table r14_nulld(id int primary key, u bigint default (abs(null)), unique key ukn_r14(u));
+insert ignore into r14_nulld(id) values (1),(2);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select 'r14_nulld' as mark, id, u from r14_nulld order by id;
+➤ mark[12,9,0]  ¦  id[4,32,0]  ¦  u[-5,64,0]  𝄀
+r14_nulld  ¦  1  ¦  null  𝄀
+r14_nulld  ¦  2  ¦  null
+drop table r14_nulld;
+create table r14_strictd(id int primary key, u bigint not null default (abs(null)), unique key uks_r14(u));
+insert into r14_strictd(id) values (1);
+constraint violation: Column 'u' cannot be null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  3819  ¦  constraint violation: Column 'u' cannot be null
+select 'r14_strictd' as mark, id from r14_strictd;
+➤ mark[12,11,0]  ¦  id[4,32,0]
+drop table r14_strictd;
+create table r14_cmpd(id int primary key, u bigint not null default (abs(null)), v bigint default (abs(null)), unique key uk_uv_r14(u,v));
+insert ignore into r14_cmpd(id) values (1),(2);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null
+insert ignore into r14_cmpd(id) values (5);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null
+select 'r14_cmpd' as mark, id, u, v from r14_cmpd order by id;
+➤ mark[12,8,0]  ¦  id[4,32,0]  ¦  u[-5,64,0]  ¦  v[-5,64,0]  𝄀
+r14_cmpd  ¦  1  ¦  0  ¦  null  𝄀
+r14_cmpd  ¦  2  ¦  0  ¦  null  𝄀
+r14_cmpd  ¦  5  ¦  0  ¦  null
+drop table r14_cmpd;
+create table r14_vcnd(id int primary key, u varchar(32) not null default (nullif('a','a')), unique key ukt_r14(u));
+insert ignore into r14_vcnd(id) values (1),(2);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '' for key 'u'
+select 'r14_vcnd' as mark, id, u from r14_vcnd order by id;
+➤ mark[12,8,0]  ¦  id[4,32,0]  ¦  u[12,32,0]  𝄀
+r14_vcnd  ¦  1  ¦  
+drop table r14_vcnd;
+create table r15_bin(id int primary key, b binary(2) not null, vb varbinary(4) not null);
+insert ignore into r15_bin(id, b, vb) values(1, null, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'b' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'vb' cannot be null
+insert into r15_bin values(2, '', '');
+select 'r15_bin' as mark, id, hex(b) as b_hex, length(b) as b_len,
+hex(vb) as vb_hex, length(vb) as vb_len from r15_bin order by id;
+➤ mark[12,7,0]  ¦  id[4,32,0]  ¦  b_hex[12,4,0]  ¦  b_len[-5,64,0]  ¦  vb_hex[12,8,0]  ¦  vb_len[-5,64,0]  𝄀
+r15_bin  ¦  1  ¦  0000  ¦  2  ¦    ¦  0  𝄀
+r15_bin  ¦  2  ¦  0000  ¦  2  ¦    ¦  0
+drop table r15_bin;
+create table r15_ld(id int primary key, u bigint not null default (abs(null)), b binary(2) not null default (''));
+load data inline format='csv', data='1\n2' ignore into table r15_ld fields terminated by ',' (id);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null
+select 'r15_ld' as mark, id, u, hex(b) as b_hex, length(b) as b_len from r15_ld order by id;
+➤ mark[12,6,0]  ¦  id[4,32,0]  ¦  u[-5,64,0]  ¦  b_hex[12,4,0]  ¦  b_len[-5,64,0]  𝄀
+r15_ld  ¦  1  ¦  0  ¦  0000  ¦  2  𝄀
+r15_ld  ¦  2  ¦  0  ¦  0000  ¦  2
+insert into r15_ld values(3, 1, '');
+select 'r15_ld_after' as mark, id, u, hex(b) as b_hex, length(b) as b_len from r15_ld order by id;
+➤ mark[12,12,0]  ¦  id[4,32,0]  ¦  u[-5,64,0]  ¦  b_hex[12,4,0]  ¦  b_len[-5,64,0]  𝄀
+r15_ld_after  ¦  1  ¦  0  ¦  0000  ¦  2  𝄀
+r15_ld_after  ¦  2  ¦  0  ¦  0000  ¦  2  𝄀
+r15_ld_after  ¦  3  ¦  1  ¦  0000  ¦  2
+drop table r15_ld;
+drop database issue_30906_insert_ignore_not_null;

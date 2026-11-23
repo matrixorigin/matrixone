@@ -31,7 +31,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1104,6 +1103,14 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 		_ = plan.VisitExpressionsInOwner(node, func(expr *plan.Expr) error {
 			fn := expr.GetF()
 			_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+				nestedFn := nested.GetF()
+				if nestedFn != nil && nestedFn.Func != nil &&
+					strings.EqualFold(nestedFn.Func.GetObjName(), "bit_count") &&
+					len(nestedFn.Args) == 1 && isPreparedNumericFallbackExpr(nestedFn.Args[0]) {
+					// BIT_COUNT's dedicated collector owns this fallback marker.
+					// Other consumers of the marker are still visited separately.
+					return nil
+				}
 				for _, source := range integerArgumentSources(nested) {
 					collectPreparedIntegerArgumentParamPositions(
 						query, int32(nodeID), source, positions,
@@ -1650,10 +1657,16 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]bool) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = true
+		if leaf, ok := leafByTag[exprImpl.Col.RelPos]; ok {
+			hyperEdge[leaf] = true
+		}
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
+			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
+		}
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
 			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
 		}
 	}
@@ -1664,6 +1677,8 @@ func getNumOfCharacters(str string) int {
 	return len(strRune)
 }
 
+// Preserve every input until binding and execution. SQL formatting is lossy,
+// and even identical inputs may produce different rows or have side effects.
 func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tree.Statement, unionTypes *[]plan.Node_NodeType) error {
 	switch leftStmt := stmt.Left.(type) {
 	case *tree.UnionClause:
@@ -1684,24 +1699,10 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	// right is not UNION always
 	switch rightStmt := stmt.Right.(type) {
 	case *tree.SelectClause:
-		if stmt.Type == tree.UNION && !stmt.All {
-			rightStr := tree.String(rightStmt, dialect.MYSQL)
-			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
-				return nil
-			}
-		}
-
 		*selects = append(*selects, rightStmt)
 	case *tree.ValuesClause:
 		*selects = append(*selects, rightStmt)
 	case *tree.ParenSelect:
-		if stmt.Type == tree.UNION && !stmt.All {
-			rightStr := tree.String(rightStmt.Select, dialect.MYSQL)
-			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
-				return nil
-			}
-		}
-
 		*selects = append(*selects, rightStmt.Select)
 	default:
 		return moerr.NewParseErrorf(ctx, "unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
@@ -1915,6 +1916,9 @@ func constantFoldWithPreparedExactSource(
 	spatialChecked bool,
 	jsonFeatureChecked bool,
 ) (*plan.Expr, error) {
+	if function.RequiresRuntimeEvaluation(expr) {
+		return expr, nil
+	}
 	if expr.Typ.Id == int32(types.T_interval) {
 		// INTERVAL is an executable argument type but has no standalone scalar
 		// constant-fold representation. Keep it unchanged so callers can fold an
@@ -1958,18 +1962,23 @@ func constantFoldWithPreparedExactSource(
 		}
 		isSerialized := rule.ContainsSerializedLiteral(exprList)
 
+		// LiteralVec has only a uniform source field. Keep mixed-owner lists
+		// structured so each scalar literal retains its identity.
+		listSource, uniform := rule.ListStringSource(exprList, proc)
+		if !uniform {
+			return expr, nil
+		}
 		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
 		if err != nil {
 			return nil, err
 		}
 		defer vec.Free(proc.Mp())
-		if vec.GetStringSources() != nil {
-			return expr, nil
-		}
 
 		// Nullable IN-lists must keep their null bitmap aligned with values.
 		if !vec.IsConstNull() && !vec.GetNulls().Any() {
-			vec.InplaceSortAndCompact()
+			if err := vec.InplaceSortAndCompact(proc.Mp()); err != nil {
+				return nil, err
+			}
 		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
@@ -1983,7 +1992,7 @@ func constantFoldWithPreparedExactSource(
 					Len:                       int32(vec.Length()),
 					Data:                      data,
 					IsSerialized:              isSerialized,
-					StringSource:              uint32(vec.GetStringSource()),
+					StringSource:              uint32(listSource),
 					DecimalLiteralRequiresV82: requiresDecimalProvenance,
 				},
 			},
@@ -2094,9 +2103,6 @@ func constantFoldWithPreparedExactSource(
 		if err != nil {
 			return nil, err
 		}
-		if vec.GetStringSources() != nil {
-			return expr, nil
-		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr, nil
@@ -2114,13 +2120,13 @@ func constantFoldWithPreparedExactSource(
 				Vec: &plan.LiteralVec{
 					Len:                       int32(vec.Length()),
 					Data:                      data,
-					StringSource:              uint32(vec.GetStringSource()),
+					StringSource:              uint32(rule.ExprStringSource(expr, proc)),
 					DecimalLiteralRequiresV82: requiresDecimalProvenance,
 				},
 			},
 		}, nil
 	}
-	c := rule.GetConstantValue(vec, false, 0)
+	c := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(expr, proc))
 	if c == nil {
 		constant, err := rule.MaterializeDecimal256Constant(proc, expr, vec)
 		if err != nil {
@@ -2133,9 +2139,6 @@ func constantFoldWithPreparedExactSource(
 	}
 	rule.PreserveFoldedLiteralStringDomain(expr, c)
 	rule.PreserveFoldedDecimalLiteralSemantics(expr, c)
-	if source := vec.GetStringSource(); source != types.StringSourceLiteral {
-		c.StringSource = uint32(source) + 1
-	}
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	// This annotation is itself PREPARE provenance. An enclosing expression
 	// can contain only ColRefs after relational binding, so a marker scan alone
@@ -3642,7 +3645,7 @@ func resetPreparePlan(
 	resolveIndexDependencies := func(getParamRule *GetParamRule) ([]*plan.ObjectRef, error) {
 		querySchemas := getParamRule.schemas
 		for _, dependency := range getParamRule.indexDependencies {
-			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot)
+			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -3757,6 +3760,9 @@ func resetPreparePlan(
 				}
 			}
 		}
+		if transientQuery != nil {
+			subqueryRoots.pending = append(subqueryRoots.pending, transientQuery.Steps...)
+		}
 		visitedRoots := make(map[int32]struct{})
 		for len(subqueryRoots.pending) > 0 {
 			root := subqueryRoots.pending[0]
@@ -3805,6 +3811,7 @@ func resetPreparePlan(
 			querySchemas = appendPrepareSchemas(
 				querySchemas, transientQuery.GetCatalogDependencies()...)
 		}
+		querySchemas = appendPrepareSchemas(nil, querySchemas...)
 		return querySchemas, getParamRule.paramTypes, nil
 	}
 
@@ -5383,13 +5390,6 @@ func collectPreparedJSONComparisonParamPositions(
 				}
 			}
 		}
-		if functionName == function.JsonComparisonParamFunctionName && len(impl.F.Args) == 1 {
-			if positions != nil {
-				if param := impl.F.Args[0].GetP(); param != nil {
-					positions[param.Pos] = struct{}{}
-				}
-			}
-		}
 		if functionName == function.JsonMemberOfFunctionName && len(impl.F.Args) == 2 {
 			if positions != nil {
 				if param := impl.F.Args[0].GetP(); param != nil {
@@ -5432,14 +5432,6 @@ func addPreparedJSONMemberOfParamPosition(expr *plan.Expr, positions map[int32]s
 		return
 	}
 	if param := expr.GetP(); param != nil {
-		positions[param.Pos] = struct{}{}
-		return
-	}
-	fn := expr.GetF()
-	if fn == nil || fn.GetFunc().GetObjName() != function.JsonComparisonParamFunctionName || len(fn.Args) != 1 {
-		return
-	}
-	if param := fn.Args[0].GetP(); param != nil {
 		positions[param.Pos] = struct{}{}
 	}
 }
@@ -5486,7 +5478,7 @@ func collectPreparedParamPositions(expr *Expr, positions map[int32]struct{}) {
 }
 
 func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
-	kind := vector.PrepareParamNone
+	kind := types.StringConversionString
 	isBinaryProtocol := false
 	if param, ok := value.(ParamValue); ok {
 		value = param.Value
@@ -5496,7 +5488,7 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 	if value == nil {
 		return true, false
 	}
-	if kind != vector.PrepareParamNone && kind != vector.PrepareParamInteger && kind != vector.PrepareParamBoolean {
+	if kind != types.StringConversionString && kind != types.StringConversionInteger && kind != types.StringConversionBoolean {
 		return false, false
 	}
 
@@ -5514,7 +5506,7 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 	case uint, uint8, uint16, uint32, uint64, types.MoYear, bool:
 		return true, false
 	case string:
-		if kind == vector.PrepareParamBoolean {
+		if kind == types.StringConversionBoolean {
 			return value == "0" || value == "1", false
 		}
 		// Connector/ODBC converts SQL_INTEGER and SQL_BIGINT values to their
@@ -5522,7 +5514,7 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 		// prepared statements. Accept that wire representation only when the
 		// value came from COM_STMT_EXECUTE. SQL PREPARE user variables and
 		// other non-binary-protocol text values keep the stricter validation.
-		if kind != vector.PrepareParamInteger && !isBinaryProtocol {
+		if kind != types.StringConversionInteger && !isBinaryProtocol {
 			return false, false
 		}
 		if strings.HasPrefix(value, "-") {
@@ -5567,18 +5559,18 @@ func PreparedParamValueNumericReprepareType(value any) (types.Type, bool) {
 			return preparedNumericReprepareType(param.SourceType)
 		}
 		switch param.PrepareParamKind {
-		case vector.PrepareParamInteger:
+		case types.StringConversionInteger:
 			if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(param.Value))); ok && typ.Oid.IsInteger() {
 				return preparedNumericReprepareType(typ)
 			}
 			// Preserve the protocol domain even for an internally malformed value;
 			// materialization remains responsible for returning the existing error.
 			return types.T_int64.ToType(), true
-		case vector.PrepareParamFloat:
+		case types.StringConversionFloat:
 			return types.T_float64.ToType(), true
-		case vector.PrepareParamDecimal:
+		case types.StringConversionDecimal:
 			return mysqlPreparedDecimalReprepareType(), true
-		case vector.PrepareParamBoolean:
+		case types.StringConversionBoolean:
 			return types.T_int64.ToType(), true
 		}
 		return PreparedParamValueNumericReprepareType(param.Value)
@@ -6382,12 +6374,12 @@ func preparedWindowArgumentParamPosition(expr *Expr) (int32, bool) {
 }
 
 func isPositivePreparedInteger(value any) bool {
-	kind := vector.PrepareParamNone
+	kind := types.StringConversionString
 	if paramValue, ok := value.(ParamValue); ok {
 		value = paramValue.Value
 		kind = paramValue.PrepareParamKind
 	}
-	if value == nil || kind != vector.PrepareParamNone && kind != vector.PrepareParamInteger {
+	if value == nil || kind != types.StringConversionString && kind != types.StringConversionInteger {
 		return false
 	}
 
@@ -6415,7 +6407,7 @@ func isPositivePreparedInteger(value any) bool {
 	case types.MoYear:
 		return value > 0
 	case string:
-		if kind != vector.PrepareParamInteger {
+		if kind != types.StringConversionInteger {
 			return false
 		}
 		parsed, err := strconv.ParseUint(value, 10, 63)
@@ -6665,15 +6657,15 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 }
 
 func isNonNegativePreparedInteger(value any) bool {
-	kind := vector.PrepareParamNone
+	kind := types.StringConversionString
 	if paramValue, ok := value.(ParamValue); ok {
 		value = paramValue.Value
 		kind = paramValue.PrepareParamKind
 	}
-	if value == nil || kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal {
+	if value == nil || kind == types.StringConversionFloat || kind == types.StringConversionDecimal {
 		return false
 	}
-	if kind == vector.PrepareParamBoolean {
+	if kind == types.StringConversionBoolean {
 		switch value := value.(type) {
 		case bool:
 			return true
@@ -6875,7 +6867,7 @@ func replaceParamValsWithSelection(
 			}
 			continue
 		}
-		if param.PrepareParamKind == vector.PrepareParamBoolean {
+		if param.PrepareParamKind == types.StringConversionBoolean {
 			// database/sql encodes bool as MYSQL_TYPE_TINY. Keep the Boolean
 			// literal for functions such as JSON_SET, but retain its numeric
 			// protocol domain while selecting comparison coercion.
@@ -7730,6 +7722,18 @@ func preparedSetOperationCommonType(
 		original := makeTypeByPlan2Expr(&plan.Expr{Typ: currentOutputType})
 		return original, original.Oid != types.T_any, nil
 	}
+	// Recompute the string domain and bound when EXECUTE replaces provisional
+	// input types. A raw binary-character output still belongs to the original
+	// grouping or expression producer rather than a materialized set column.
+	oldType := makeTypeByPlan2Type(currentOutputType)
+	if oldType.Oid.IsMySQLString() && !function.IsBinaryCharacterType(oldType) &&
+		slices.ContainsFunc(argTypes, function.IsBinaryCharacterType) {
+		target, err := setOperationMaterializedStringType(ctx, argExprs, currentOutputType)
+		if err != nil {
+			return types.Type{}, false, err
+		}
+		return makeTypeByPlan2Type(target), true, nil
+	}
 	if pureCharType, ok := setOperationPureCharCommonType(argTypes); ok {
 		return pureCharType, true, nil
 	}
@@ -8559,11 +8563,6 @@ func (set UnorderedSet[T]) Find(val T) bool {
 	return false
 }
 
-// RemoveIf removes the elements that pred is true.
-func RemoveIf[T any](data []T, pred func(t T) bool) []T {
-	return commonutil.RemoveIf(data, pred)
-}
-
 func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
 	if len(data) == 0 {
 		return false
@@ -8649,9 +8648,13 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 				if _, isTargetType := fn.Args[i].Expr.(*plan.Expr_T); isTargetType {
 					continue
 				}
-				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
+				original := fn.Args[i]
+				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, original, proc, false, true)
 				if foldErr != nil {
 					return false, foldErr
+				}
+				if original.GetCandidateFilter() {
+					folded.CandidateFilter = true
 				}
 				fn.Args[i] = folded
 				if _, ok := fn.Args[i].Expr.(*plan.Expr_Vec); ok {
@@ -8672,9 +8675,10 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 							Id: int32(newID),
 						},
 					},
-					AuxId:       fn.Args[i].AuxId,
-					Ndv:         fn.Args[i].Ndv,
-					Selectivity: fn.Args[i].Selectivity,
+					AuxId:           fn.Args[i].AuxId,
+					CandidateFilter: fn.Args[i].CandidateFilter,
+					Ndv:             fn.Args[i].Ndv,
+					Selectivity:     fn.Args[i].Selectivity,
 				}
 
 			}
@@ -8702,7 +8706,9 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			}
 			// Nullable folded lists must keep their null bitmap aligned with values.
 			if !vec.IsConstNull() && !vec.GetNulls().Any() {
-				vec.InplaceSortAndCompact()
+				if err := vec.InplaceSortAndCompact(proc.Mp()); err != nil {
+					return err
+				}
 			}
 			data, err = vec.MarshalBinary()
 			if err != nil {
@@ -8713,6 +8719,12 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 			if err != nil {
 				return err
+			}
+			// Timestamp functions can choose their result precision at execution
+			// time (for example NOW(?) uses the bound FSP). Storage comparisons
+			// must use the same precision as the row executor for this value.
+			if types.T(expr.Typ.Id) == types.T_timestamp && vec.GetType().Oid == types.T_timestamp {
+				expr.Typ.Scale = vec.GetType().Scale
 			}
 			data, _ = getConstantBytes(vec, false, 0)
 			ef.Fold.IsConst = true
@@ -8808,6 +8820,15 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 	case types.T_float64:
 		val := vector.MustFixedColNoTypeCheck[float64](vec)[row]
 		ret = types.EncodeFloat64(&val)
+
+	case types.T_bf16:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.BF16](vec)[row])
+	case types.T_float16:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.Float16](vec)[row])
+	case types.T_float8:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.Float8](vec)[row])
+	case types.T_float4:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.Float4](vec)[row])
 
 	case types.T_varchar, types.T_char,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:

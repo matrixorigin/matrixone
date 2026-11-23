@@ -50,14 +50,14 @@ func TestLinearSearchOffsetByValFactory_Varchar(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	// Build keys vector with varchar values
-	keys := vector.NewVec(types.T_varchar.ToType())
+	keys := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(keys, []byte("alice"), false, mp))
 	require.NoError(t, vector.AppendBytes(keys, []byte("bob"), false, mp))
 
 	searchFn := LinearSearchOffsetByValFactory(keys)
 
 	// Target vector that does NOT contain the keys
-	target := vector.NewVec(types.T_varchar.ToType())
+	target := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(target, []byte("charlie"), false, mp))
 	require.NoError(t, vector.AppendBytes(target, []byte("dave"), false, mp))
 
@@ -65,7 +65,7 @@ func TestLinearSearchOffsetByValFactory_Varchar(t *testing.T) {
 	require.Empty(t, hits, "should not match when target has different values")
 
 	// Target vector that contains one of the keys
-	target2 := vector.NewVec(types.T_varchar.ToType())
+	target2 := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(target2, []byte("charlie"), false, mp))
 	require.NoError(t, vector.AppendBytes(target2, []byte("bob"), false, mp))
 	require.NoError(t, vector.AppendBytes(target2, []byte("dave"), false, mp))
@@ -85,18 +85,18 @@ func TestLinearSearchOffsetByValFactory_Varchar(t *testing.T) {
 func narrowArrayLinearSearch[T types.ArrayElement](t *testing.T, mp *mpool.MPool, oid types.T, a, b, c []T) {
 	typ := types.New(oid, int32(len(a)), 0)
 
-	keys := vector.NewVec(typ)
+	keys := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendArray[T](keys, a, false, mp))
 	require.NoError(t, vector.AppendArray[T](keys, b, false, mp))
 	searchFn := LinearSearchOffsetByValFactory(keys)
 
 	// target with no matching key
-	target := vector.NewVec(typ)
+	target := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendArray[T](target, c, false, mp))
 	require.Empty(t, searchFn(target))
 
 	// target containing key b at index 1
-	target2 := vector.NewVec(typ)
+	target2 := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendArray[T](target2, c, false, mp))
 	require.NoError(t, vector.AppendArray[T](target2, b, false, mp))
 	require.Equal(t, []int64{1}, searchFn(target2))
@@ -125,19 +125,19 @@ func TestLinearSearchOffsetByValFactory_NarrowArray(t *testing.T) {
 func TestLinearSearchOffsetByValFactory_Int64(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	keys := vector.NewVec(types.T_int64.ToType())
+	keys := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(keys, int64(10), false, mp))
 	require.NoError(t, vector.AppendFixed(keys, int64(20), false, mp))
 
 	searchFn := LinearSearchOffsetByValFactory(keys)
 
-	target := vector.NewVec(types.T_int64.ToType())
+	target := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(target, int64(5), false, mp))
 	require.NoError(t, vector.AppendFixed(target, int64(15), false, mp))
 
 	require.Empty(t, searchFn(target))
 
-	target2 := vector.NewVec(types.T_int64.ToType())
+	target2 := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(target2, int64(20), false, mp))
 	require.NoError(t, vector.AppendFixed(target2, int64(30), false, mp))
 	require.NoError(t, vector.AppendFixed(target2, int64(10), false, mp))
@@ -163,7 +163,7 @@ func TestTombstonePKExistsInRange(t *testing.T) {
 	// Helper: write a CN tombstone object with given PK values, return its ObjectStats.
 	writeTombstone := func(pkValues []int32) objectio.ObjectStats {
 		writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, int32Type, -1)
-		bat := readutil.NewCNTombstoneBatch(&int32Type, objectio.HiddenColumnSelection_None)
+		bat := readutil.NewCNTombstoneBatch(&int32Type, objectio.HiddenColumnSelection_None, proc.Mp())
 		for _, pk := range pkValues {
 			vector.AppendFixed[types.Rowid](bat.Vecs[0], types.RandomRowid(), false, proc.GetMPool())
 			vector.AppendFixed[int32](bat.Vecs[1], pk, false, proc.GetMPool())
@@ -192,21 +192,21 @@ func TestTombstonePKExistsInRange(t *testing.T) {
 		CreateTime:  types.BuildTS(20, 0),
 	}, true))
 	// Case 1: search for PK=200, should find it
-	keys1 := vector.NewVec(int32Type)
+	keys1 := vector.NewVec(int32Type, proc.Mp())
 	require.NoError(t, vector.AppendFixed[int32](keys1, 200, false, proc.GetMPool()))
 	changed, _, err := tombstonePKExistsInRange(ctx, 0, pState, from, types.MaxTs(), keys1, int32Type, fs, proc.GetMPool())
 	require.NoError(t, err)
 	require.True(t, changed)
 
 	// Case 2: search for PK=999, should not find it
-	keys2 := vector.NewVec(int32Type)
+	keys2 := vector.NewVec(int32Type, proc.Mp())
 	require.NoError(t, vector.AppendFixed[int32](keys2, 999, false, proc.GetMPool()))
 	changed, _, err = tombstonePKExistsInRange(ctx, 0, pState, from, types.MaxTs(), keys2, int32Type, fs, proc.GetMPool())
 	require.NoError(t, err)
 	require.False(t, changed)
 
 	// Case 3: search for PK=500, should find it in second tombstone
-	keys3 := vector.NewVec(int32Type)
+	keys3 := vector.NewVec(int32Type, proc.Mp())
 	require.NoError(t, vector.AppendFixed[int32](keys3, 500, false, proc.GetMPool()))
 	changed, _, err = tombstonePKExistsInRange(ctx, 0, pState, from, types.MaxTs(), keys3, int32Type, fs, proc.GetMPool())
 	require.NoError(t, err)
@@ -239,9 +239,9 @@ func TestTombstonePKExistsInRangeVarcharScopedSearch(t *testing.T) {
 		fs,
 	)
 	tnBatch := batch.NewWithSize(3)
-	tnBatch.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tnBatch.Vecs[1] = vector.NewVec(varcharType)
-	tnBatch.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	tnBatch.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tnBatch.Vecs[1] = vector.NewVec(varcharType, mp)
+	tnBatch.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 	for row, value := range []string{"z", "needle", "a"} {
 		require.NoError(t, vector.AppendFixed(tnBatch.Vecs[0], makeRowid(uint32(row)), false, mp))
 		require.NoError(t, vector.AppendBytes(tnBatch.Vecs[1], []byte(value), false, mp))
@@ -265,7 +265,7 @@ func TestTombstonePKExistsInRangeVarcharScopedSearch(t *testing.T) {
 		ObjectStats: tnStats,
 		CreateTime:  types.BuildTS(40, 0),
 	}, true))
-	key := vector.NewVec(varcharType)
+	key := vector.NewVec(varcharType, mp)
 	require.NoError(t, vector.AppendBytes(key, []byte("needle"), false, mp))
 	baseline := mp.CurrNB()
 
@@ -301,7 +301,7 @@ func TestTombstonePKExistsInRangeVarcharScopedSearch(t *testing.T) {
 	require.Empty(t, reason)
 	require.Equal(t, baseline, mp.CurrNB())
 
-	missing := vector.NewVec(varcharType)
+	missing := vector.NewVec(varcharType, mp)
 	require.NoError(t, vector.AppendBytes(missing, []byte("missing"), false, mp))
 	changed, reason, err = tombstonePKExistsInRange(
 		ctx,
@@ -323,8 +323,8 @@ func TestTombstonePKExistsInRangeVarcharScopedSearch(t *testing.T) {
 		fs,
 	)
 	cnBatch := batch.NewWithSize(2)
-	cnBatch.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	cnBatch.Vecs[1] = vector.NewVec(varcharType)
+	cnBatch.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	cnBatch.Vecs[1] = vector.NewVec(varcharType, mp)
 	require.NoError(t, vector.AppendFixed(cnBatch.Vecs[0], makeRowid(3), false, mp))
 	require.NoError(t, vector.AppendBytes(cnBatch.Vecs[1], []byte("needle"), false, mp))
 	cnBatch.SetRowCount(1)
@@ -633,25 +633,26 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 }
 
 func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
+	const tableID uint64 = 42
 	delBlks := deletedBlocks{
-		offsets: map[types.Blockid][]int64{},
+		offsets: map[uint64]map[types.Blockid][]int64{},
 	}
 	for i := 0; i < 100; i++ {
 		row := types.RandomRowid()
 		bid, offset := row.Decode()
 
-		delBlks.offsets[*bid] = append(delBlks.offsets[*bid], int64(offset))
+		delBlks.addDeletedBlocks(tableID, bid, []int64{int64(offset)})
 	}
 
 	rowIds := make([]types.Rowid, 0)
 
-	delBlks.getDeletedRowIDs(func(row types.Rowid) {
+	delBlks.getDeletedRowIDs(tableID, func(row types.Rowid) {
 		rowIds = append(rowIds, row)
 	})
 
 	for i := range rowIds {
 		bid, offset := rowIds[i].Decode()
-		have, ok := delBlks.offsets[*bid]
+		have, ok := delBlks.offsets[tableID][*bid]
 		require.True(t, ok)
 		require.NotEqual(t, 0, len(have))
 
@@ -660,14 +661,20 @@ func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
 	}
 
 	selected := rowIds[0].CloneBlockID()
-	scoped := make([]types.Rowid, 0, len(delBlks.offsets[selected]))
-	delBlks.getDeletedRowIDsForBlocks([]types.Blockid{selected}, func(row types.Rowid) {
+	scoped := make([]types.Rowid, 0, len(delBlks.offsets[tableID][selected]))
+	delBlks.getDeletedRowIDsForBlocks(tableID, []types.Blockid{selected}, func(row types.Rowid) {
 		scoped = append(scoped, row)
 	})
-	require.Len(t, scoped, len(delBlks.offsets[selected]))
+	require.Len(t, scoped, len(delBlks.offsets[tableID][selected]))
 	for i := range scoped {
 		require.True(t, scoped[i].BorrowBlockID().EQ(&selected))
 	}
+
+	otherTableRows := make([]types.Rowid, 0)
+	delBlks.getDeletedRowIDs(tableID+1, func(row types.Rowid) {
+		otherTableRows = append(otherTableRows, row)
+	})
+	require.Empty(t, otherTableRows)
 }
 
 func TestConcurrentExecutor_Run(t *testing.T) {
@@ -1161,9 +1168,8 @@ func TestCollectAndCalculateStatsDoesNotApplyFailedObjectScan(t *testing.T) {
 func TestShrinkBatchWithRowids(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSchema(
-		false,
 		[]string{"rowid"},
-		[]types.Type{types.T_Rowid.ToType()},
+		[]types.Type{types.T_Rowid.ToType()}, mp,
 	)
 	defer bat.Clean(mp)
 
@@ -1175,7 +1181,7 @@ func TestShrinkBatchWithRowids(t *testing.T) {
 	}
 	bat.SetRowCount(10)
 
-	shrinkBatchWithRowids(bat, []int64{1, 3, 5, 7})
+	require.NoError(t, shrinkBatchWithRowids(bat, []int64{1, 3, 5, 7}, mp))
 	require.Equal(t, bat.RowCount(), 6)
 
 	rowids := vector.MustFixedColWithTypeCheck[objectio.Rowid](bat.Vecs[0])

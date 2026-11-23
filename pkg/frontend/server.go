@@ -844,13 +844,6 @@ func NewMOServer(
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	setRtMgr(service, rm)
-	rm.setBaseService(baseService)
-	if baseService != nil {
-		rm.setSessionMgr(baseService.SessionMgr())
-	}
-	// TODO asyncFlushBatch
-	unixAddr := pu.SV.GetUnixSocketAddress()
 	mo := &MOServer{
 		addr:    addr,
 		uaddr:   pu.SV.UnixSocketAddress,
@@ -859,6 +852,21 @@ func NewMOServer(
 		handler: rm.Handler,
 		service: service,
 	}
+	constructed := false
+	defer func() {
+		if !constructed {
+			if err := mo.Stop(); err != nil {
+				logutil.Errorf("failed to stop partially constructed frontend: %v", err)
+			}
+		}
+	}()
+	setRtMgr(service, rm)
+	rm.setBaseService(baseService)
+	if baseService != nil {
+		rm.setSessionMgr(baseService.SessionMgr())
+	}
+	// TODO asyncFlushBatch
+	unixAddr := pu.SV.GetUnixSocketAddress()
 	listenerTcp, err := net.Listen("tcp", addr)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
@@ -871,6 +879,7 @@ func NewMOServer(
 		}
 		mo.listeners = append(mo.listeners, listenerUnix)
 	}
+	constructed = true
 	return mo
 }
 
@@ -919,16 +928,15 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 
 	err = mo.rm.Handler(rs, msg)
 	if err != nil {
-		if skipClientQuit(err.Error()) {
+		if err == io.EOF || skipClientQuit(err.Error()) {
 			// COM_QUIT is terminal on the wire: the client has finished the
 			// session and waits for the server to close the connection, so
-			// the read loop must not keep waiting for a next command.
-			// Ending like a clean EOF lets handleConn close the connection
-			// and run the routine/session cleanup once, on the owning path.
+			// the read loop must not keep waiting for a next command. A killed
+			// request can also hand off a clean EOF after its response. Both
+			// paths let handleConn own connection and session cleanup.
 			return io.EOF
-		} else {
-			logutil.LogConnectionCloseEvent(frontendSessionHandleEvents, err)
 		}
+		logutil.LogConnectionCloseEvent(frontendSessionHandleEvents, err)
 		return err
 	}
 	return nil

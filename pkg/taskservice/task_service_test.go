@@ -22,11 +22,16 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type addAsyncErrStorage struct {
@@ -220,6 +225,24 @@ func TestAllocateWithNotExistTask(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 }
 
+func TestMissingSQLTaskAllocationLogsAreBounded(t *testing.T) {
+	core, logs := observer.New(zapcore.WarnLevel)
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "missing-sql-task-test", zap.New(core))
+	s := NewTaskService(rt, NewMemTaskStorage())
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	for id := uint64(1); id <= 100; id++ {
+		err := s.Allocate(context.Background(), task.AsyncTask{
+			ID: id, Metadata: task.TaskMetadata{Executor: task.TaskCode_SQLTask},
+		}, "cn1")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
+	}
+	require.LessOrEqual(t, logs.FilterMessage(sqlTaskAllocationMissing.Message).Len(), 3)
+	before := logs.FilterMessage(sqlTaskAllocationMissing.Message).Len()
+	err := s.Allocate(context.Background(), task.AsyncTask{ID: 101}, "cn1")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
+	require.Equal(t, before+1, logs.FilterMessage(sqlTaskAllocationMissing.Message).Len())
+}
+
 // TestAllocateWithTaskDeletedDuringAllocation simulates the race condition where
 // a task is deleted (completed and truncated) between queryTasks and Allocate.
 // This is the scenario that caused the FATAL error in production.
@@ -278,6 +301,35 @@ func TestAllocateWithInvalidEpoch(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 }
 
+func TestAllocateDoesNotReviveCompletedTask(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemTaskStorage().(*memTaskStorage)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+
+	require.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("allocation-race")))
+	created := mustGetTestAsyncTask(t, store, 1)[0]
+	require.NoError(t, s.Allocate(ctx, created, "old-runner"))
+	running := mustGetTestAsyncTask(t, store, 1)[0]
+
+	// Complete the old allocation after Allocate reads it but before its CAS.
+	// Completion does not advance the epoch, so an epoch-only CAS revives it.
+	var completeErr error
+	store.preUpdate = func() {
+		store.preUpdate = nil
+		completeErr = s.Complete(ctx, "old-runner", running, task.ExecuteResult{
+			Code: task.ResultCode_Success,
+		})
+	}
+	err := s.Allocate(ctx, running, "new-runner")
+	require.NoError(t, completeErr)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask), "allocation returned %v", err)
+	completed := mustGetTestAsyncTask(t, store, 1)[0]
+	require.Equal(t, task.TaskStatus_Completed, completed.Status)
+	require.Equal(t, running.Epoch, completed.Epoch)
+	require.Equal(t, "old-runner", completed.TaskRunner)
+}
+
 func TestCompleted(t *testing.T) {
 	store := NewMemTaskStorage()
 	s := NewTaskService(runtime.DefaultRuntime(), store)
@@ -301,7 +353,7 @@ func TestCompleted(t *testing.T) {
 	assert.Equal(t, task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"}, *v.ExecuteResult)
 }
 
-func TestCompleteSQLTaskAsyncFailureRepairsRunningRun(t *testing.T) {
+func TestCompleteSQLTaskAsyncFailureDoesNotGuessRunOwnership(t *testing.T) {
 	store := NewMemTaskStorage()
 	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
@@ -318,7 +370,7 @@ func TestCompleteSQLTaskAsyncFailureRepairsRunningRun(t *testing.T) {
 	run := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
 	run.StartedAt = time.Now().Add(-time.Minute)
 	run.RunnerCN = "r1"
-	runID, err := store.AcquireSQLTaskRun(ctx, sqlTask, run)
+	runID, err := store.AcquireSQLTaskRun(ctx, sqlTask, run, testSQLTaskAdmission(nil, 0))
 	assert.NoError(t, err)
 
 	asyncTask := newTaskFromMetadata(BuildSQLTaskMetadata(newSQLTaskContextForTest(sqlTask, SQLTaskTriggerScheduled)))
@@ -333,9 +385,9 @@ func TestCompleteSQLTaskAsyncFailureRepairsRunningRun(t *testing.T) {
 		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "heartbeat expired"}))
 
 	runs := mustGetTestSQLTaskRun(t, store, 1, WithSQLTaskRunIDCond(EQ, runID))
-	assert.Equal(t, SQLTaskStatusFailed, runs[0].Status)
-	assert.Equal(t, "heartbeat expired", runs[0].ErrorMessage)
-	assert.False(t, runs[0].FinishedAt.IsZero())
+	assert.Equal(t, SQLTaskStatusRunning, runs[0].Status)
+	assert.Empty(t, runs[0].ErrorMessage)
+	assert.True(t, runs[0].FinishedAt.IsZero())
 }
 
 func TestCompleteSQLTaskStaleRunnerDoesNotFailLiveRun(t *testing.T) {

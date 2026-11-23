@@ -135,6 +135,7 @@ func (node *AppendNode) ApplyCommit(id string) error {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
 	node.TxnMVCCNode.ApplyCommit(id)
+	node.mvcc.rangeIndex.complete(node)
 	listener := node.mvcc.GetAppendListener()
 	var err error
 	if listener != nil {
@@ -149,6 +150,7 @@ func (node *AppendNode) ApplyCommit(id string) error {
 func (node *AppendNode) ApplyRollback() (err error) {
 	node.mvcc.LockForCommit()
 	_, err = node.TxnMVCCNode.ApplyRollback()
+	node.mvcc.rangeIndex.complete(node)
 	node.mvcc.tryFinalizeCommitLocked()
 	node.mvcc.UnlockForCommit()
 	node.mvcc.NotifyFinalizedMax()

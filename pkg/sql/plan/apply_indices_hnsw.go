@@ -104,7 +104,7 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 			vecCtx.scanNode.BindingTags[0],
 		)
 	} else {
-		_, vecLitArg, found = builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+		_, vecLitArg, found = builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos, nodeBindingTag(vecCtx.scanNode))
 	}
 	if !found {
 		return nil, nil
@@ -393,7 +393,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID in
 	return builder.spliceVectorRewrite(vecCtx, nodeID, sortByID, remap, idxColMap), nil
 }
 
-func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPos int32) (key *plan.Expr, value *plan.Expr, found bool) {
+// nodeBindingTag returns the first binding tag of node, or -1 when it has none.
+func nodeBindingTag(node *plan.Node) int32 {
+	if node == nil || len(node.BindingTags) == 0 {
+		return -1
+	}
+	return node.BindingTags[0]
+}
+
+func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPos, scanTag int32) (key *plan.Expr, value *plan.Expr, found bool) {
 
 	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
 		return
@@ -433,7 +441,7 @@ func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPo
 
 	vecLitArg.Typ = vecColArg.Typ
 
-	if vecColArg.GetCol().ColPos != partPos {
+	if (scanTag >= 0 && vecColArg.GetCol().RelPos != scanTag) || vecColArg.GetCol().ColPos != partPos {
 		return
 	}
 

@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -173,6 +172,24 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 			pipelineFlush = true
 			sinkerOpts = append(sinkerOpts, ioutil.WithPipelineFlush())
 		}
+		// Bind this statement's writer to its workspace's per-object
+		// capacity admission (issue #25590 round-19 review): the
+		// SinkerOwner structural interface saves this package from
+		// importing the workspace's engine while the writer gains the
+		// SAME reservation-before-persistence gate the workspace dump
+		// carries — every object this writer spills reserves one
+		// in-flight unit under the bound BEFORE it goes durable, a
+		// saturated ledger refuses the spill, and the refused statement
+		// persists no orphan its metadata could never have recorded. A
+		// workspace (or test double) without the owner surface keeps an
+		// unhooked writer — exactly the pre-fix behavior.
+		if txnOp := proc.GetTxnOperator(); txnOp != nil {
+			if owner, ok := txnOp.GetWorkspace().(ioutil.SinkerOwner); ok {
+				if opt := owner.SinkerCapacityOption(); opt != nil {
+					sinkerOpts = append(sinkerOpts, opt)
+				}
+			}
+		}
 		s3Writer := colexec.NewCNS3DataWriterForService(
 			proc.GetService(), proc.Mp(), fs, insert.InsertCtx.TableDef, -1, false,
 			sinkerOpts...)
@@ -186,7 +203,7 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 		}
 
 		if insert.ctr.buf == nil {
-			insert.initBufForS3()
+			insert.initBufForS3(proc.Mp())
 		}
 	} else {
 		ref := insert.InsertCtx.Ref
@@ -232,7 +249,28 @@ func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
 
 // checkExternalNotNull rejects NULLs in NOT NULL columns. ctr.extCols is
 // aligned with InsertCtx.Attrs (and therefore with the leading batch vectors).
-func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Batch) error {
+// checkExternalNotNull enforces NOT NULL for the external path and returns
+// the batch to write. Under statement IGNORE the NULL cells are adjusted
+// instead: the operator writes its own view of the child's batch, whose
+// adjusted slots hold the fill's vectors; the child's batch and vectors are
+// never modified.
+func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
+	if len(insert.ctr.extCols) == 0 {
+		return bat, nil
+	}
+	if proc != nil && proc.GetStmtProfile() != nil &&
+		proc.GetStmtProfile().GetStatementIgnore() {
+		// A minimal external-insert plan runs no PreInsert, so this is the
+		// single NOT NULL gate. Under statement IGNORE apply the same rule
+		// PreInsert uses for normal tables: keep the row, set the implicit
+		// default of the column type, and warn per adjusted cell.
+		view := insert.ctr.extFill.View(bat)
+		if _, err := insert.ctr.extFill.Fill(
+			view.Vecs, insert.InsertCtx.Attrs, insert.ctr.extCols, nil, proc); err != nil {
+			return nil, err
+		}
+		return view, nil
+	}
 	for j, col := range insert.ctr.extCols {
 		if col == nil || j >= len(bat.Vecs) {
 			continue
@@ -244,11 +282,11 @@ func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Bat
 			continue
 		}
 		vec := bat.Vecs[j]
-		if vec.IsConstNull() || nulls.Any(vec.GetNulls()) {
-			return moerr.NewConstraintViolationf(proc.Ctx, "Column '%s' cannot be null", insert.InsertCtx.Attrs[j])
+		if vec.IsConstNull() || vec.GetNulls().Any() {
+			return nil, moerr.NewConstraintViolationf(proc.Ctx, "Column '%s' cannot be null", insert.InsertCtx.Attrs[j])
 		}
 	}
-	return nil
+	return bat, nil
 }
 
 // insert_external writes a batch into a writable external table's backing file.
@@ -283,11 +321,12 @@ func (insert *Insert) insert_external(proc *process.Process, analyzer process.An
 
 	// NOT NULL enforcement normally happens in the PreInsert operator, which the
 	// minimal external-insert plan does not run.
-	if err = insert.checkExternalNotNull(proc, input.Batch); err != nil {
+	out, err := insert.checkExternalNotNull(proc, input.Batch)
+	if err != nil {
 		return input, err
 	}
 	ctx := insert.externalWriterContext(proc.Ctx)
-	if err = insert.ctr.extWriter.WriteBatch(ctx, input.Batch, analyzer); err != nil {
+	if err = insert.ctr.extWriter.WriteBatch(ctx, out, analyzer); err != nil {
 		return input, err
 	}
 
@@ -487,7 +526,7 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 	blockInfoBat, err := process.MeasureFilesystemWait(analyzer, func() (*batch.Batch, error) {
-		return insert.ctr.s3Writer.SyncAndFillBlockInfoBat(newCtx)
+		return insert.ctr.s3Writer.SyncAndFillBlockInfoBat(newCtx, proc.Mp())
 	})
 	if err != nil {
 		return err
@@ -498,7 +537,7 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 		if err != nil {
 			return err
 		}
-		insert.ctr.s3Writer.ResetBlockInfoBat()
+		insert.ctr.s3Writer.ResetBlockInfoBat(proc.Mp())
 	}
 
 	insert.refreshAndReleaseS3MemGrant()
@@ -559,7 +598,7 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 	insert.ctr.buf.CleanOnlyData()
 	for i := range insert.ctr.buf.Attrs {
 		if insert.ctr.buf.Vecs[i] == nil {
-			insert.ctr.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
+			insert.ctr.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType(), proc.Mp())
 		}
 		if err := insert.ctr.buf.Vecs[i].UnionBatch(input.Batch.Vecs[i], 0, input.Batch.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
 			return input, err
@@ -609,7 +648,7 @@ func flushTailBatch(
 		return err
 	}
 
-	if bat, err = writer.FillBlockInfoBat(); err != nil {
+	if bat, err = writer.FillBlockInfoBat(proc.Mp()); err != nil {
 		return err
 	}
 
@@ -618,7 +657,7 @@ func flushTailBatch(
 		return err
 	}
 
-	writer.ResetBlockInfoBat()
+	writer.ResetBlockInfoBat(proc.Mp())
 
 	return nil
 }

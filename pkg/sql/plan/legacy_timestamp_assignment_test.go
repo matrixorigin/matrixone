@@ -64,7 +64,7 @@ func TestLegacyTimestampRuntimeNullAssignment(t *testing.T) {
 			// prepared executions do; no wall-clock sleep or RNG oracle.
 			for _, null := range []bool{true, false, true} {
 				b := batch.NewWithSize(1)
-				b.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+				b.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 				require.NoError(t, vector.AppendFixed(b.Vecs[0], literal, null, proc.Mp()))
 				b.SetRowCount(1)
 				executor.ResetForNextQuery()
@@ -135,7 +135,7 @@ func TestLegacyFirstTimestampDefinitionPolicy(t *testing.T) {
 			stmts, err := mysql.Parse(mock.ctxt.GetContext(), "CREATE TABLE timestamp_policy (id INT, "+tc.definition+", later_ts TIMESTAMP(6))", 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			p, err := BuildPlan(&mock.ctxt, stmts[0], false)
+			p, err := BuildPlan(&mock.ctxt, stmts[0], false, nil)
 			require.NoError(t, err)
 			cols := p.GetDdl().GetCreateTable().GetTableDef().Cols
 			require.Equal(t, tc.nullable, cols[1].Default.NullAbility)
@@ -186,7 +186,7 @@ func TestLegacyTimestampZeroAdmissionAndReplay(t *testing.T) {
 		stmts, err := mysql.Parse(mock.ctxt.GetContext(), "CREATE TABLE timestamp_policy ("+definition+")", 1)
 		require.NoError(t, err)
 		defer stmts[0].Free()
-		return BuildPlan(&mock.ctxt, stmts[0], false)
+		return BuildPlan(&mock.ctxt, stmts[0], false, nil)
 	}
 	for _, definition := range []string{
 		"ts TIMESTAMP DEFAULT '0000-00-00 00:00:00'",

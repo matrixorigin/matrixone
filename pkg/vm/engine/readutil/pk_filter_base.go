@@ -15,7 +15,6 @@
 package readutil
 
 import (
-	"bytes"
 	"fmt"
 	"math"
 	"math/bits"
@@ -161,7 +160,7 @@ func ConstructBasePKFilter(
 	if tablePrimaryKeyUsesUnicodeCollation(tblDef) || exprUsesUnicodeCollationColumn(expr, tblDef) {
 		return BasePKFilter{}, nil
 	}
-	filter, err = constructBaseSortKeyFilter(expr, tblDef, mp, cleanup, primaryKeySortKeyName(tblDef))
+	filter, err = constructBaseSortKeyFilter(expr, tblDef, mp, cleanup, primaryKeySortKeyName(tblDef), false)
 	if err != nil || !filter.Valid {
 		cleanup.run()
 		filter.cleanup = nil
@@ -193,7 +192,7 @@ func ConstructBaseClusterFilter(
 		return BasePKFilter{}, nil
 	}
 	cleanup := &basePKFilterCleanup{}
-	filter, err = constructBaseSortKeyFilter(expr, tblDef, mp, cleanup, name)
+	filter, err = constructBaseSortKeyFilter(expr, tblDef, mp, cleanup, name, false)
 	if err != nil || !filter.Valid {
 		cleanup.run()
 		filter.cleanup = nil
@@ -294,10 +293,12 @@ func constructBaseSortKeyFilter(
 	mp *mpool.MPool,
 	cleanup *basePKFilterCleanup,
 	sortKeyName string,
+	candidate bool,
 ) (filter BasePKFilter, err error) {
 	if expr == nil {
 		return
 	}
+	candidate = candidate || expr.CandidateFilter
 
 	defer func() {
 		// The serialized compound key columns -- __mo_cpkey_col and the
@@ -317,11 +318,18 @@ func constructBaseSortKeyFilter(
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
+		if exprImpl.F == nil || exprImpl.F.Func == nil {
+			return BasePKFilter{}, nil
+		}
+		if candidate && exprImpl.F.Func.ObjName != "and" && exprImpl.F.Func.ObjName != "or" &&
+			!candidateScalarFilterSafe(expr, tblDef, true) {
+			return BasePKFilter{}, nil
+		}
 		switch name := exprImpl.F.Func.ObjName; name {
 		case "and":
 			var filters []BasePKFilter
 			for idx := range exprImpl.F.Args {
-				ff, err := constructBaseSortKeyFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup, sortKeyName)
+				ff, err := constructBaseSortKeyFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup, sortKeyName, candidate)
 				if err != nil {
 					return BasePKFilter{}, err
 				}
@@ -370,7 +378,7 @@ func constructBaseSortKeyFilter(
 			)
 
 			for idx := range exprImpl.F.Args {
-				ff, err := constructBaseSortKeyFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup, sortKeyName)
+				ff, err := constructBaseSortKeyFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup, sortKeyName, candidate)
 				if err != nil {
 					return BasePKFilter{}, err
 				}
@@ -378,7 +386,6 @@ func constructBaseSortKeyFilter(
 					hasUnsupported = true
 					continue
 				}
-
 				filters1 = append(filters1, toDisjuncts(ff)...)
 				filters2 = append(filters2, ff)
 			}
@@ -620,7 +627,7 @@ func unmarshalPKInVector(data []byte) (ret *vector.Vector, err error) {
 	if err := validatePKInVectorEncoding(data); err != nil {
 		return nil, err
 	}
-	vec := vector.NewVec(types.T_any.ToType())
+	vec := vector.NewVec(types.T_any.ToType(), nil)
 	if err := vec.UnmarshalBinary(data); err != nil {
 		return nil, err
 	}
@@ -630,14 +637,31 @@ func unmarshalPKInVector(data []byte) (ret *vector.Vector, err error) {
 	if !vec.IsConst() && vec.GetSorted() && !vec.GetNulls().Any() {
 		return vec, nil
 	}
-	owned := vector.NewVec(types.T_any.ToType())
-	// Keep the mutable clone on the Go heap: search closures retain it after this
-	// function returns, and GC can reclaim it without adding another mpool owner.
-	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	return normalizePKInVectorPayload(data, mp)
+}
+
+func normalizePKInVectorPayload(data []byte, mp *mpool.MPool) (ret *vector.Vector, err error) {
+	// Decoding with a pool copies, so data is never mutated.
+	owned := vector.NewVec(types.T_any.ToType(), mp)
+	defer owned.Free(mp)
+	if err := owned.UnmarshalBinary(data); err != nil {
 		return nil, err
 	}
-	normalizePKInVector(owned)
-	return owned, nil
+	if err := normalizePKInVector(owned, mp); err != nil {
+		return nil, err
+	}
+	encoded, err := owned.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	// A read-only reference to encoded: the result outlives mp.
+	ret = vector.NewVec(types.T_any.ToType(), nil)
+	if err := ret.UnmarshalBinary(encoded); err != nil {
+		return nil, err
+	}
+	return ret, nil
 }
 
 func validatePKInVectorShape(vec *vector.Vector) (err error) {
@@ -776,7 +800,7 @@ func validatePKInNullEncoding(data []byte, logicalLength uint64) error {
 	return nil
 }
 
-func normalizePKInVector(vec *vector.Vector) {
+func normalizePKInVector(vec *vector.Vector, mp *mpool.MPool) error {
 	// A constant vector represents a repeated value, while IN is set-valued.
 	// Collapse its logical length before encoding it for workspace filtering;
 	// otherwise a corrupt or adversarial logical length can force an O(n)
@@ -789,7 +813,7 @@ func normalizePKInVector(vec *vector.Vector) {
 			vec.SetLength(1)
 		}
 		vec.SetSorted(true)
-		return
+		return nil
 	}
 	if vec.GetNulls().Any() {
 		sels := make([]int64, 0, vec.Length()-vec.GetNulls().Count())
@@ -798,9 +822,11 @@ func normalizePKInVector(vec *vector.Vector) {
 				sels = append(sels, int64(row))
 			}
 		}
-		vec.Shrink(sels, false)
+		if err := vec.Shrink(sels, false, mp); err != nil {
+			return err
+		}
 	}
-	vec.InplaceSortAndCompact()
+	return vec.InplaceSortAndCompact(mp)
 }
 
 func releaseUnreferencedMergedVectors(filters []BasePKFilter, keep *basePKFilterResource) {

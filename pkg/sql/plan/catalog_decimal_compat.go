@@ -19,6 +19,7 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,6 +31,12 @@ import (
 // ctx belongs to this compilation; proc.Ctx belongs to a pipeline and may have
 // been canceled by the preceding statement before the process is reused.
 func MigrateLegacyCatalogTableDef(ctx context.Context, proc *process.Process, tableDef *plan.TableDef) error {
+	// The HEX default repair below evaluates a reconstructed expression. These
+	// execution-expression repairs do not change the relation's column types,
+	// and must wait for ordinary compilation after a bind-only view probe.
+	if ctx != nil && defines.IsIndexMaintenanceViewBinding(ctx) {
+		return ctx.Err()
+	}
 	if err := MigrateLegacyHexTableDef(proc, tableDef); err != nil {
 		return err
 	}

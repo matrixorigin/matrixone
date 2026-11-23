@@ -95,7 +95,7 @@ func acquireAccountLifecycleSharedGateRows(
 			gateName = "snapshot"
 			relationName = catalog.MO_FEATURE_REGISTRY
 			lockBat = batch.NewWithSize(1)
-			vec := vector.NewVec(types.T_varchar.ToType())
+			vec := vector.NewVec(types.T_varchar.ToType(), lockProc.Mp())
 			if err := vector.AppendBytes(
 				vec,
 				[]byte(catalog.SnapshotLifecycleFeatureCode),

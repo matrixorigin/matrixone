@@ -433,3 +433,7 @@ func TestIvfpqHandleReindex_DelegatesToCreate(t *testing.T) {
 	err := Hooks{}.HandleReindex(newHandleCtx(true), ivfpqIndexDefs(), false, false)
 	require.NoError(t, err)
 }
+
+func (s *stubCompileContext) RunIndexMaintenanceSQL(sql, _ string, _ string) error {
+	return s.RunSql(sql)
+}

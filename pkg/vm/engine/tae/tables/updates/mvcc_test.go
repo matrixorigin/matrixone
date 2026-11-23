@@ -201,7 +201,7 @@ func TestGetVisibleRow(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(3), selection.MaxRow)
 	assert.True(t, visible)
-	assert.Equal(t, 1, selection.Holes.GetCardinality())
+	assert.Equal(t, 1, selection.Holes.Count())
 	assert.True(t, selection.Holes.Contains(1))
 
 	// ts=5 maxrow=3, holes={}
@@ -312,7 +312,7 @@ func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
 	assert.Equal(t, uint32(0), selection.MinRow)
 	assert.Equal(t, uint32(30), selection.MaxRow)
 	require.NotNil(t, selection.Holes)
-	assert.Equal(t, 10, selection.Holes.GetCardinality())
+	assert.Equal(t, 10, selection.Holes.Count())
 	assert.True(t, selection.Holes.Contains(10))
 	assert.True(t, selection.Holes.Contains(19))
 	assert.False(t, selection.Holes.Contains(9))
@@ -427,6 +427,15 @@ func TestCollectAppendWaitsForTxnPrepareTS(t *testing.T) {
 	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
 	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
 	h := NewAppendMVCCHandle(obj)
+	// Exercise the indexed path as well as the transaction prepare window.
+	for row := uint32(1); row <= 129; row++ {
+		node := NewEmptyAppendNode()
+		node.startRow, node.maxRow = row, row+1
+		node.Start = types.BuildTS(1, 0)
+		node.Prepare, node.End = node.Start, node.Start
+		h.OnReplayAppendNode(node)
+	}
+	warmAppendRangeHistory(t, h)
 
 	prepareTS := types.BuildTS(10, 0)
 	txn := &waitTrackingTxn{
@@ -461,11 +470,9 @@ func TestCollectAppendWaitsForTxnPrepareTS(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("range scan did not wait on the transaction prepare timestamp")
 	}
-	h.Lock()
-	node.Prepare = prepareTS
-	node.End = prepareTS
-	node.Txn = nil
-	h.Unlock()
+	txn.AsyncTxn.(*txnbase.Txn).CommitTS = prepareTS
+	require.NoError(t, node.PrepareCommit())
+	require.NoError(t, node.ApplyCommit(txn.GetID()))
 	releaseTxn()
 
 	result := <-done

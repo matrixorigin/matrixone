@@ -16,13 +16,16 @@ package logtail
 
 import (
 	"runtime"
+	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
-// Reader is a snapshot of all txn prepared between from and to.
-// Dirty tables/objects/blocks can be queried based on those txn
+// Reader queries transactions prepared between from and to.
+// Dirty-table results can include extra tables from compacted boundary blocks.
 type Reader struct {
 	from, to types.TS
 	table    *TxnTable
@@ -36,7 +39,9 @@ func mergeSummary(tree *model.Tree, summary *summary) {
 	}
 }
 
-// Merge all dirty table/object/block into one dirty tree
+// GetDirty merges dirty tables into a tree and returns the number of scanned
+// transactions. After block compaction, both may include entries outside the
+// requested range; retained in-range dirty tables must not be omitted.
 func (r *Reader) GetDirty() (tree *model.Tree, count int) {
 	tree = model.NewTree()
 	iterateOnCompact := false
@@ -102,5 +107,158 @@ func (r *Reader) GetMaxLSN() (maxLsn uint64) {
 			}
 			return true
 		})
+	return
+}
+
+// ForEachDirtyTable visits table identities in the reader's inclusive range.
+// A compacted block can contribute extra candidates when a window lies
+// between a table's first and last qualifying rows. The shared work budget
+// applies to every block, row, and identity visited.
+func (r *Reader) ForEachDirtyTable(charge func() error, visit func(model.TableRecord) error) (err error) {
+	consume := func() bool {
+		err = charge()
+		return err == nil
+	}
+	visitRecord := func(record model.TableRecord) bool {
+		if !consume() {
+			return false
+		}
+		err = visit(record)
+		return err == nil
+	}
+
+	bound := func(rows []*txnRow, cut types.TS, afterEqual bool) int {
+		return sort.Search(len(rows), func(i int) bool {
+			if err != nil || !consume() {
+				return true
+			}
+			ts := rows[i].GetPrepareTS()
+			return ts.GT(&cut) || (!afterEqual && ts.EQ(&cut))
+		})
+	}
+
+	if !consume() {
+		return err
+	}
+	snapshot := r.table.Snapshot()
+	pivot := &txnBlock{bornTS: r.from}
+	snapshot.Descend(pivot, func(blk BlockT) bool {
+		if consume() {
+			pivot.bornTS = blk.bornTS
+		}
+		return false
+	})
+	snapshot.Ascend(pivot, func(blk BlockT) bool {
+		if err != nil || !consume() || blk.bornTS.GT(&r.to) {
+			return false
+		}
+		summary := blk.summary.Load()
+		blk.RLock()
+		rows := blk.rows[:len(blk.rows)]
+		blk.RUnlock()
+		if summary != nil {
+			if len(rows) == 0 {
+				err = moerr.NewInternalErrorNoCtx("scoped changed-table history has an empty compacted block")
+				return false
+			}
+			if !consume() {
+				return false
+			}
+			first := rows[0].GetPrepareTS()
+			if !consume() {
+				return false
+			}
+			last := rows[len(rows)-1].GetPrepareTS()
+			if first.IsEmpty() || last.LT(&first) {
+				err = moerr.NewInternalErrorNoCtx("scoped changed-table history has an invalid compacted block range")
+				return false
+			}
+			if first.GT(&r.to) {
+				return false
+			}
+			if last.LT(&r.from) {
+				return true
+			}
+			if summary.offsetsOverflow {
+				err = moerr.NewInvalidInputNoCtx("scoped changed-table compacted block exceeds supported row positions")
+				return false
+			}
+			lower, upper := 0, len(rows)
+			if first.LT(&r.from) {
+				lower = bound(rows, r.from, false)
+			}
+			if err == nil && last.GT(&r.to) {
+				upper = bound(rows, r.to, true)
+			}
+			if err != nil {
+				return false
+			}
+			if lower < upper {
+				// Convert the half-open search result to inclusive one-based positions.
+				from, to := uint32(lower+1), uint32(upper)
+				for record, offsets := range summary.tids {
+					if !consume() {
+						return false
+					}
+					if offsets.first != 0 && offsets.last >= from && offsets.first <= to {
+						if err = visit(record); err != nil {
+							return false
+						}
+					}
+				}
+			}
+			return last.LE(&r.to)
+		}
+		for _, row := range rows {
+			if !consume() {
+				return false
+			}
+			ts := row.GetPrepareTS()
+			if ts.IsEmpty() {
+				err = moerr.NewInternalErrorNoCtx("scoped changed-table history has an empty transaction timestamp")
+				return false
+			}
+			if ts.GT(&r.to) {
+				return false
+			}
+			if ts.LT(&r.from) {
+				continue
+			}
+			switch row.GetTxnState(false) {
+			case txnif.TxnStateCommitted:
+			case txnif.TxnStateRollbacked:
+				continue
+			default:
+				err = moerr.NewInternalErrorNoCtx("scoped changed-table history contains an in-flight transaction")
+				return false
+			}
+			source := row.source.Load()
+			if source == nil {
+				// The row is already packed, but this scan did not see the block summary.
+				err = moerr.NewChangeWatchRetry(moerr.NoReportContext(), "scoped changed-table history changed during compaction")
+				return false
+			}
+			memo := source.GetMemo()
+			if memo == nil || memo.Tree == nil {
+				err = moerr.NewInternalErrorNoCtx("scoped changed-table history contains an invalid transaction memo")
+				return false
+			}
+			// Dedicated flush and merge transactions rewrite existing data.
+			// Their flag is not persisted in WAL, so replay remains conservative.
+			if memo.IsFlushOrMerge {
+				continue
+			}
+			for _, record := range memo.Tables {
+				if record == nil {
+					err = moerr.NewInternalErrorNoCtx("scoped changed-table history contains an invalid table")
+					return false
+				}
+				if !visitRecord(*record) {
+					return false
+				}
+			}
+		}
+		return true
+	})
 	return
 }

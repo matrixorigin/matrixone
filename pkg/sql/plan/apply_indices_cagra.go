@@ -82,7 +82,7 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
 	partType := vecCtx.scanNode.TableDef.Cols[partPos].Typ
-	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos, nodeBindingTag(vecCtx.scanNode))
 	if !found {
 		return nil, nil
 	}

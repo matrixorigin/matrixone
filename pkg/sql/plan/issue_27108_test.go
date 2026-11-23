@@ -42,7 +42,7 @@ func TestIssue27108UnionAllKeepsConstantFalseAboveGlobalAgg(t *testing.T) {
 		  AND check_id <> 'excluded'`, 1)
 	require.NoError(t, err)
 
-	query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
+	query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false, nil)
 	require.NoError(t, err)
 
 	var union *planpb.Node

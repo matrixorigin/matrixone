@@ -15,9 +15,13 @@
 package colexec
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -62,12 +67,12 @@ func TestCNS3DataWriterMemoryThresholdAndSyncAndFillBlockInfoBat(t *testing.T) {
 		err = writer.Write(proc.Ctx, bat)
 		require.NoError(t, err)
 
-		blockInfoBat, err := writer.SyncAndFillBlockInfoBat(proc.Ctx)
+		blockInfoBat, err := writer.SyncAndFillBlockInfoBat(proc.Ctx, proc.Mp())
 		require.NoError(t, err)
 		require.NotNil(t, blockInfoBat)
 		require.Greater(t, blockInfoBat.RowCount(), 0)
 
-		blockInfoBat, err = writer.SyncAndFillBlockInfoBat(proc.Ctx)
+		blockInfoBat, err = writer.SyncAndFillBlockInfoBat(proc.Ctx, proc.Mp())
 		require.NoError(t, err)
 		require.NotNil(t, blockInfoBat)
 		require.Equal(t, 0, blockInfoBat.RowCount())
@@ -114,7 +119,7 @@ func TestCNS3DataWriterChunkedColumnProtocolGateIsLive(t *testing.T) {
 	}
 	bat := batch.NewWithSize(1)
 	bat.Attrs = []string{"payload"}
-	bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+	bat.SetVector(0, vector.NewVec(types.T_text.ToType(), proc.Mp()))
 	payload := make([]byte, 20<<10)
 	for i := range 512 {
 		payload[0] = byte(i)
@@ -230,5 +235,137 @@ func testCNS3WriterTableDef() *plan.TableDef {
 			"b":            1,
 			catalog.Row_ID: 2,
 		},
+	}
+}
+
+func TestCNS3TombstoneMultipleObjectsReachConsumer(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
+	require.NoError(t, err)
+	pkType := types.T_text.ToType()
+	attrs, typs := objectio.GetTombstoneSchema(pkType, objectio.HiddenColumnSelection_None)
+	input := batch.NewWithSchema(attrs, typs, proc.Mp())
+	defer input.Clean(proc.Mp())
+	want := make(map[types.Rowid]string)
+	for i := 0; i < 4; i++ {
+		row := types.BuildTestRowid(1, int64(i))
+		value := fmt.Sprintf("%d:%s", i, strings.Repeat("x", 300))
+		want[row] = value
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], row, false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(value), false, proc.Mp()))
+	}
+	input.SetRowCount(len(want))
+	writer := NewCNS3TombstoneWriter(proc.Mp(), fs, pkType, 512)
+	defer writer.Close()
+	require.NoError(t, writer.Write(proc.Ctx, input))
+	stats, err := writer.Sync(proc.Ctx)
+	require.NoError(t, err)
+	require.Len(t, stats, len(want))
+	seen := make(map[types.Rowid]string)
+	for _, stat := range stats {
+		objectio.ForeachBlkInObjStatsList(false, nil, func(info objectio.BlockInfo, _ objectio.BlockObject) bool {
+			loc := objectio.Location(info.MetaLoc[:])
+			reader, err := ioutil.NewObjectReader(fs, loc)
+			require.NoError(t, err)
+			got, release, err := reader.LoadColumns(proc.Ctx, objectio.TombstoneSeqnums_CN_Created, typs, loc.ID(), proc.Mp())
+			require.NoError(t, err)
+			defer release()
+			for row, id := range vector.MustFixedColNoTypeCheck[types.Rowid](got.Vecs[0]) {
+				seen[id] = string(got.Vecs[1].GetBytesAt(row))
+			}
+			return true
+		}, stat)
+	}
+	require.Equal(t, want, seen)
+	blocks, err := writer.FillBlockInfoBat(proc.Mp())
+	require.NoError(t, err)
+	require.Equal(t, len(stats), blocks.RowCount())
+	actualNames := make([]string, 0, blocks.RowCount())
+	for i := 0; i < blocks.RowCount(); i++ {
+		var stat objectio.ObjectStats
+		stat.UnMarshal(blocks.Vecs[0].GetBytesAt(i))
+		actualNames = append(actualNames, stat.ObjectName().String())
+	}
+	wantNames := make([]string, 0, len(stats))
+	for _, stat := range stats {
+		wantNames = append(wantNames, stat.ObjectName().String())
+	}
+	require.ElementsMatch(t, wantNames, actualNames)
+}
+
+type cleanupDeadlineFS struct {
+	fileservice.FileService
+	failDelete bool
+	deletes    int
+	value      any
+	deadline   time.Time
+	contextErr error
+}
+
+type cleanupDeadlineKey struct{}
+
+func (f *cleanupDeadlineFS) Write(ctx context.Context, data fileservice.IOVector) error {
+	if err := f.FileService.Write(ctx, data); err != nil {
+		return err
+	}
+	return errors.New("injected post-commit failure")
+}
+func (f *cleanupDeadlineFS) Delete(ctx context.Context, paths ...string) error {
+	f.deletes++
+	f.value = ctx.Value(cleanupDeadlineKey{})
+	f.deadline, _ = ctx.Deadline()
+	f.contextErr = ctx.Err()
+	if f.failDelete {
+		return errors.New("delete unavailable")
+	}
+	return f.FileService.Delete(ctx, paths...)
+}
+
+func TestCNS3CleanupHonorsOriginalDeadline(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(fmt.Sprintf("expired=%v", expired), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			base, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
+			require.NoError(t, err)
+			fs := &cleanupDeadlineFS{FileService: base, failDelete: true}
+			writer := NewCNS3DataWriter(proc.Mp(), fs, testCNS3WriterTableDef(), 1, false)
+			defer writer.Close()
+			input := &batch.Batch{Attrs: []string{"a", "b"}, Vecs: []*vector.Vector{
+				testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+				testutil.MakeVarcharVector([]string{"value"}, nil, proc.Mp()),
+			}}
+			input.SetRowCount(1)
+			defer input.Clean(proc.Mp())
+			require.ErrorContains(t, writer.Write(context.Background(), input), "post-commit failure")
+			require.Len(t, writer.PendingUnpublishedRuns(), 1)
+			fs.failDelete = false
+			deadline := time.Now().Add(time.Minute)
+			if expired {
+				deadline = time.Now().Add(-time.Second)
+			}
+			ctx, cancel := context.WithDeadline(context.WithValue(context.Background(), cleanupDeadlineKey{}, "original value"), deadline)
+			cancel() // teardown is allowed to outlive cancellation, but not the deadline
+			priorDeletes := fs.deletes
+			started := time.Now()
+			err = writer.CleanupUnpublished(ctx)
+			if expired {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.Equal(t, priorDeletes, fs.deletes, "expired teardown must not invoke storage")
+				require.Len(t, writer.PendingUnpublishedRuns(), 1)
+				_, err = writer.RetryUnpublishedRuns(context.Background())
+				require.NoError(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, priorDeletes+1, fs.deletes)
+				require.Equal(t, "original value", fs.value)
+				require.NoError(t, fs.contextErr)
+				require.False(t, fs.deadline.Before(started))
+				require.False(t, fs.deadline.After(time.Now().Add(10*time.Second)))
+				require.False(t, fs.deadline.After(deadline))
+			}
+			require.Empty(t, writer.PendingUnpublishedRuns())
+		})
 	}
 }

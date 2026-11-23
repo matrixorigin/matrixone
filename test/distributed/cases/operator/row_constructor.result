@@ -728,4 +728,22 @@ prepared_v
 1
 deallocate prepare row_scalar_stmt;
 drop table row_scalar_28295;
+select row('a','b','c') = row('a','b','c') as row_equal,
+('a','b','c') = ('a','b','c') as tuple_equal;
+row_equal	tuple_equal
+1	1
+select row(1,2) < row(1,3) as row_less,
+(1,2) < (1,3) as tuple_less;
+row_less	tuple_less
+1	1
+select row(1,null) = row(1,null) as row_unknown,
+(1,null) = (1,null) as tuple_unknown;
+row_unknown	tuple_unknown
+null	null
+set @row_expr_arg=2;
+prepare row_expr_stmt from 'select row(1,?) = row(1,2) as row_prepared, (1,?) = (1,2) as tuple_prepared';
+execute row_expr_stmt using @row_expr_arg, @row_expr_arg;
+row_prepared	tuple_prepared
+1	1
+deallocate prepare row_expr_stmt;
 drop database test;

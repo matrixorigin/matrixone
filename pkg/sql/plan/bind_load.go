@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -45,15 +44,17 @@ func prepareLoadScan(param *tree.ExternParam, noCompress bool, ctx CompilerConte
 		param.Tail != nil && len(param.Tail.ColumnList) > 0
 	applyLoadParallelAdmission(param, offset, ctx.GetProcess().GetService())
 
-	param.Tail.ColumnList = nil
-	param.Tail.Assignments = nil
-	if param.ScanType != tree.INLINE {
-		json_byte, err := json.Marshal(param)
-		if err != nil {
-			return 0, err
-		}
-		tableDef.Createsql = string(json_byte)
+	// Serialize the reader-visible scan parameters through the copy-based
+	// transport helper so file-backed and INLINE loads use the same channel.
+	// The caller's binding state (column list, assignments) stays intact:
+	// PREPARE retains the AST and a rebuilt plan re-derives the scan column
+	// list and the assignment projection from it. marshalLoadSourceParam
+	// strips those consumed trees on the copy it serializes.
+	createsql, err := marshalLoadSourceParam(param)
+	if err != nil {
+		return 0, err
 	}
+	tableDef.Createsql = createsql
 	return offset, nil
 }
 
@@ -252,7 +253,6 @@ func (builder *QueryBuilder) bindExternalScan(
 	if err != nil {
 		return -1, nil, err
 	}
-
 	terminated, enclosedBy, escapedBy := loadFieldDelimiters(stmt.Param.Tail.Fields)
 
 	externalScanNode := &plan.Node{

@@ -1,0 +1,18 @@
+{
+  "base_commit": "ea184ad90624ae3dba8ced628ac019271a6c309c",
+  "generator": "TestGenerateLegacyNumericWidthLiteralDefaultFixture",
+  "go_version": "go1.27.1",
+  "generated_at": "2026-11-02T05:04:14Z",
+  "cases": {
+    "wide_decimal": "create table t(v varchar(3) default 1.25)",
+    "wide_int": "create table t(v varchar(3) default 12345)"
+  },
+  "stored_values": {
+    "wide_decimal": "1.2",
+    "wide_int": "123"
+  },
+  "fixtures": {
+    "wide_decimal": "EgF0Ii4SAXYgASoGCD0gA0ADOhsKEQoICD0QASADQAMSBVoDMS4yEgQxLjI1GAGaAQF2IiIIARIQX19tb19mYWtlX3BrX2NvbBgBKgQIHBgBMAE6AGgBWiQiEF9fbW9fZmFrZV9wa19jb2wqEF9fbW9fZmFrZV9wa19jb2zKAVEKTwoMCgdyZWxraW5kEgFyCj8KDXJlbF9jcmVhdGVzcWwSLmNyZWF0ZSB0YWJsZSBgdGAgKGB2YCB2YXJjaGFyKDMpIGRlZmF1bHQgMS4yNSm4AgM=",
+    "wide_int": "EgF0Ii8SAXYgASoGCD0gA0ADOhwKEQoICD0QASADQAMSBVoDMTIzEgUxMjM0NRgBmgEBdiIiCAESEF9fbW9fZmFrZV9wa19jb2wYASoECBwYATABOgBoAVokIhBfX21vX2Zha2VfcGtfY29sKhBfX21vX2Zha2VfcGtfY29sygFSClAKDAoHcmVsa2luZBIBcgpACg1yZWxfY3JlYXRlc3FsEi9jcmVhdGUgdGFibGUgYHRgIChgdmAgdmFyY2hhcigzKSBkZWZhdWx0IDEyMzQ1KbgCAw=="
+  }
+}

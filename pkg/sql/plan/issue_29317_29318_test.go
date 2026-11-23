@@ -31,7 +31,7 @@ import (
 func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 	decimal := func(value any) ParamValue {
 		return ParamValue{Value: value, SourceType: types.New(types.T_decimal128, 20, 0),
-			HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal}
+			HasSourceType: true, PrepareParamKind: types.StringConversionDecimal}
 	}
 	type sourceDomainCase struct {
 		name   string
@@ -46,7 +46,7 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			name: "greatest decimal and string", sql: "prepare p from 'select greatest(?, ?)'", fn: "greatest",
 			values: []ParamValue{
 				{Value: "2.0", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true,
-					PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true},
+					PrepareParamKind: types.StringConversionDecimal, EnableNumericPrefix: true},
 				{Value: "10", SourceType: types.T_varchar.ToType(), HasSourceType: true, EnableNumericPrefix: true},
 			},
 			want: []types.T{types.T_varchar, types.T_varchar},
@@ -176,7 +176,7 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			values: []ParamValue{
 				{Value: nil, SourceType: types.T_text.ToType(), HasSourceType: true},
 				{Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
-					HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal},
+					HasSourceType: true, PrepareParamKind: types.StringConversionDecimal},
 			},
 			want: []types.T{types.T_decimal128, types.T_decimal128},
 		},
@@ -196,7 +196,7 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			values: []ParamValue{
 				{Value: nil, SourceType: types.T_float64.ToType(), HasSourceType: true},
 				{Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
-					HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal},
+					HasSourceType: true, PrepareParamKind: types.StringConversionDecimal},
 			},
 			want: []types.T{types.T_float64, types.T_float64},
 		},
@@ -206,7 +206,7 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			values: []ParamValue{
 				{Value: nil, SourceType: types.T_any.ToType(), HasSourceType: true},
 				{Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
-					HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal},
+					HasSourceType: true, PrepareParamKind: types.StringConversionDecimal},
 			},
 			want: []types.T{types.T_decimal128, types.T_decimal128},
 		},
@@ -496,7 +496,7 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 				"numeric text with a complete decimal spelling should keep its exact domain")
 
 			decimalValue := ParamValue{
-				Value: "1.46", PrepareParamKind: vector.PrepareParamDecimal,
+				Value: "1.46", PrepareParamKind: types.StringConversionDecimal,
 			}
 			filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(
 				context.Background(), template, []any{decimalValue, int64(1)})
@@ -518,9 +518,7 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 				require.NoError(t, parseErr)
 				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				source := types.T_varchar.ToType()
-				bound, bindErr := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-					[]PreparedSourceBinding{{Position: 0, Type: source}},
-					[]any{ParamValue{Value: "1.46", SourceType: source, HasSourceType: true}})
+				bound, bindErr := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: source}}, []any{ParamValue{Value: "1.46", SourceType: source, HasSourceType: true}})
 				require.NoError(t, bindErr)
 				require.False(t, bound.ValueDependent,
 					"an explicit numeric cast fixes the overload without inspecting text: %s", valueExpr)
@@ -547,14 +545,12 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 					t.Cleanup(stmt.Free)
 					mock := NewMockOptimizer(false, newPlanTestProcess(t))
 					proc := mock.ctxt.GetProcess()
-					params := vector.NewVec(types.T_text.ToType())
+					params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 					t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
 					require.NoError(t, vector.AppendBytes(params, []byte("1.46"), false, proc.Mp()))
 					proc.SetPrepareParams(params)
 					source := types.T_varchar.ToType()
-					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-						[]PreparedSourceBinding{{Position: 0, Type: source}},
-						[]any{ParamValue{Value: "1.46", SourceType: source, HasSourceType: true, IsBinaryProtocol: true}})
+					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: source}}, []any{ParamValue{Value: "1.46", SourceType: source, HasSourceType: true, IsBinaryProtocol: true}})
 					require.NoError(t, err)
 					require.NotNil(t, findPlanFunctionExpr(bound.Plan, name))
 					narrowSourceCast := false

@@ -1,0 +1,82 @@
+DROP DATABASE IF EXISTS distinct_minmax_values;
+CREATE DATABASE distinct_minmax_values;
+USE distinct_minmax_values;
+CREATE TABLE values_by_group (g INT, c CHAR(8), v VARCHAR(8));
+INSERT INTO values_by_group VALUES
+(1, NULL, 'a '), (1, NULL, 'z  '), (1, NULL, NULL),
+(2, 'q', NULL), (3, NULL, NULL), (4, NULL, '');
+SET @saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = '';
+SELECT g,
+CONCAT('[', HEX(MIN(COALESCE(c, v))), ']') AS min_plain,
+CONCAT('[', HEX(MIN(DISTINCT COALESCE(c, v))), ']') AS min_distinct,
+CONCAT('[', HEX(MAX(COALESCE(c, v))), ']') AS max_plain,
+CONCAT('[', HEX(MAX(DISTINCT COALESCE(c, v))), ']') AS max_distinct
+FROM values_by_group GROUP BY g ORDER BY g;
+➤ g[4,32,0]  ¦  min_plain[12,66,0]  ¦  min_distinct[12,66,0]  ¦  max_plain[12,66,0]  ¦  max_distinct[12,66,0]  𝄀
+1  ¦  [6120]  ¦  [6120]  ¦  [7A2020]  ¦  [7A2020]  𝄀
+2  ¦  [71]  ¦  [71]  ¦  [71]  ¦  [71]  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  []  ¦  []  ¦  []  ¦  []
+SELECT HEX(MIN(COALESCE(c, v))), HEX(MIN(DISTINCT COALESCE(c, v))),
+HEX(MAX(COALESCE(c, v))), HEX(MAX(DISTINCT COALESCE(c, v)))
+FROM values_by_group WHERE 1 = 0;
+➤ HEX(MIN(COALESCE(c, v)))[12,64,0]  ¦  HEX(MIN(distinct COALESCE(c, v)))[12,64,0]  ¦  HEX(MAX(COALESCE(c, v)))[12,64,0]  ¦  HEX(MAX(distinct COALESCE(c, v)))[12,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null
+SELECT HEX(MIN(v)), HEX(MIN(DISTINCT v)), HEX(MAX(v)), HEX(MAX(DISTINCT v))
+FROM values_by_group WHERE g = 1;
+➤ HEX(MIN(v))[12,64,0]  ¦  HEX(MIN(distinct v))[12,64,0]  ¦  HEX(MAX(v))[12,64,0]  ¦  HEX(MAX(distinct v))[12,64,0]  𝄀
+6120  ¦  6120  ¦  7A2020  ¦  7A2020
+SELECT COUNT(DISTINCT COALESCE(c, v), g) FROM values_by_group;
+➤ COUNT(distinct COALESCE(c, v), g)[-5,64,0]  𝄀
+4
+SET SESSION sql_mode = 'PAD_CHAR_TO_FULL_LENGTH';
+SELECT HEX(MIN(COALESCE(c, v))), HEX(MIN(DISTINCT COALESCE(c, v))),
+HEX(MAX(COALESCE(c, v))), HEX(MAX(DISTINCT COALESCE(c, v)))
+FROM values_by_group WHERE g = 2;
+➤ HEX(MIN(COALESCE(c, v)))[12,64,0]  ¦  HEX(MIN(distinct COALESCE(c, v)))[12,64,0]  ¦  HEX(MAX(COALESCE(c, v)))[12,64,0]  ¦  HEX(MAX(distinct COALESCE(c, v)))[12,64,0]  𝄀
+7120202020202020  ¦  7120202020202020  ¦  7120202020202020  ¦  7120202020202020
+SET SESSION sql_mode = '';
+PREPARE p FROM 'SELECT HEX(MIN(DISTINCT COALESCE(c, ?))), HEX(MAX(DISTINCT COALESCE(c, ?))) FROM values_by_group WHERE g = 1';
+SET @arg = 'a ';
+EXECUTE p USING @arg, @arg;
+➤ HEX(MIN(distinct COALESCE(values_by_group.c, ?)))[-1,16383,0]  ¦  HEX(MAX(distinct COALESCE(values_by_group.c, ?)))[-1,16383,0]  𝄀
+6120  ¦  6120
+SET @arg = CAST('a ' AS BINARY);
+EXECUTE p USING @arg, @arg;
+➤ HEX(MIN(distinct COALESCE(values_by_group.c, ?)))[12,2040,0]  ¦  HEX(MAX(distinct COALESCE(values_by_group.c, ?)))[12,2040,0]  𝄀
+6120  ¦  6120
+SET @arg = NULL;
+EXECUTE p USING @arg, @arg;
+➤ HEX(MIN(distinct COALESCE(values_by_group.c, ?)))[12,64,0]  ¦  HEX(MAX(distinct COALESCE(values_by_group.c, ?)))[12,64,0]  𝄀
+null  ¦  null
+SET @arg = 10;
+EXECUTE p USING @arg, @arg;
+➤ HEX(MIN(distinct COALESCE(values_by_group.c, ?)))[12,160,0]  ¦  HEX(MAX(distinct COALESCE(values_by_group.c, ?)))[12,160,0]  𝄀
+3130  ¦  3130
+SET @arg = 'a ';
+EXECUTE p USING @arg, @arg;
+➤ HEX(MIN(distinct COALESCE(values_by_group.c, ?)))[-1,16383,0]  ¦  HEX(MAX(distinct COALESCE(values_by_group.c, ?)))[-1,16383,0]  𝄀
+6120  ¦  6120
+DEALLOCATE PREPARE p;
+CREATE SEQUENCE s;
+SELECT HEX(MIN(DISTINCT COALESCE(c, IF(NEXTVAL('s') <= 3, 'a ', 'z '))))
+FROM values_by_group WHERE g = 1;
+➤ HEX(MIN(distinct COALESCE(c, IF(NEXTVAL(s) <= 3, a , z ))))[12,64,0]  𝄀
+6120
+SELECT last_seq_num FROM s;
+➤ last_seq_num[-5,64,0]  𝄀
+3
+DROP SEQUENCE s;
+CREATE SEQUENCE s;
+SELECT LENGTH(MIN(COALESCE(c, IF(NEXTVAL('s') <= 3, 'a ', 'z ')))) AS plain_length,
+LENGTH(MIN(DISTINCT COALESCE(c, IF(NEXTVAL('s') <= 3, 'a ', 'z ')))) AS distinct_length
+FROM values_by_group WHERE g = 1;
+➤ plain_length[-5,64,0]  ¦  distinct_length[-5,64,0]  𝄀
+2  ¦  2
+SELECT last_seq_num FROM s;
+➤ last_seq_num[-5,64,0]  𝄀
+6
+DROP SEQUENCE s;
+SET SESSION sql_mode = @saved_sql_mode;
+DROP DATABASE distinct_minmax_values;

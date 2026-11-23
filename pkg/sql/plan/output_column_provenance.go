@@ -63,6 +63,9 @@ type SourceColumn struct {
 }
 
 type OutputColumnProvenance struct {
+	// Result-only field identity retained through internal ANY_VALUE lowering.
+	// This never restores schema/default source identity for an aggregate.
+	EnumSetResultType  *plan.Type
 	IntegerPrecisionID uint32
 	// Planner-local display length of a DECIMAL DIV expression, captured before
 	// optimization and carried only across transparent query boundaries.

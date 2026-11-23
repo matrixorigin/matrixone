@@ -194,4 +194,35 @@ func TestJoinWindowStagePlacement(t *testing.T) {
 	require.True(t, c.joinNeedsLocalWindow(node, []*Scope{remote}, []*Scope{local}))
 	node.Stats.HashmapStats.Shuffle = true
 	require.True(t, c.joinNeedsLocalWindow(node, []*Scope{local}, []*Scope{local}))
+	c.cnList = nodes[:1]
+	require.False(t, c.joinNeedsLocalWindow(node, []*Scope{local}, []*Scope{local}))
+	require.False(t, c.joinNeedsLocalWindow(node, []*Scope{parallel}, []*Scope{local}))
+	require.True(t, c.joinNeedsLocalWindow(node, []*Scope{local}, []*Scope{remote}))
+	pinned := makeScope(1)
+	pinned.RootOp.(*merge.Merge).SinkScan = true
+	local.PreScopes = append(local.PreScopes, pinned)
+	require.True(t, c.joinNeedsLocalWindow(node, []*Scope{local}, []*Scope{local}))
+	c.cnList = nodes[1:]
+	require.True(t, c.joinNeedsLocalWindow(node, []*Scope{local}, []*Scope{local}))
+}
+
+func TestCompileLocalShuffleKeepsWindowInputs(t *testing.T) {
+	const dop = int32(2)
+	nodes := engine.Nodes{{Id: "local", Addr: "local:6001", Mcpu: int(dop)}}
+	c := newCompileForShuffleJoinTest(t, nodes)
+	probe := c.compileWin(newRowNumberWindowNodeForTest(), []*Scope{newShuffleJoinTestScope(t, nodes[0], 1)})
+	build := c.compileWin(newRowNumberWindowNodeForTest(), []*Scope{newShuffleJoinTestScope(t, nodes[0], 1)})
+	join := newShuffleJoinTestNode(dop)
+	join.JoinType = plan.Node_OUTER
+	left := &plan.Node{Stats: &plan.Stats{Dop: dop}, ProjectList: []*plan.Expr{makeMarkJoinTestColumn(0, 0, true)}}
+	right := &plan.Node{Stats: &plan.Stats{Dop: dop}, ProjectList: []*plan.Expr{makeMarkJoinTestColumn(1, 0, true)}}
+	join.OnList = []*plan.Expr{makeMarkJoinTestCondition(t, "=", 0, true)}
+	result := c.compileJoin(join, left, right, probe, build)
+	t.Cleanup(func() { ReleaseScopes(result) })
+	require.True(t, join.Stats.HashmapStats.Shuffle)
+	require.Len(t, result, int(dop))
+	require.True(t, scopesContainOperator(result, vm.Window))
+	for _, scope := range result {
+		require.Equal(t, c.addr, scope.NodeInfo.Addr)
+	}
 }

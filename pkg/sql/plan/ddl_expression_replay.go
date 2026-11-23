@@ -34,8 +34,10 @@ type persistedDDLReplayKey struct{}
 // re-authoring unaffected computation using the current session.
 type persistedDDLReplay struct {
 	tableName string
-	columns   map[string]*replayedColumnExpressions
-	checks    map[string]*planpb.CheckDef
+	// target is borrowed and remains immutable while this replay is active.
+	target  *planpb.TableDef
+	columns map[string]*replayedColumnExpressions
+	checks  map[string]*planpb.CheckDef
 	// Inverse of the visible CREATE coordinates, used by in-place MODIFY.
 	rawPositions map[int32]int32
 	err          error
@@ -106,6 +108,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 	}
 	replay := &persistedDDLReplay{
 		tableName:    strings.ToLower(target.Name),
+		target:       target,
 		columns:      make(map[string]*replayedColumnExpressions),
 		checks:       make(map[string]*planpb.CheckDef),
 		rawPositions: make(map[int32]int32),
@@ -277,7 +280,18 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		unchanged := DeepCopyExpr(source)
 		remapGeneratedColExprPositions(unchanged, rawPositions)
 		if proto.Equal(raw, target) || proto.Equal(unchanged, target) {
-			return copyExpr(source, visiblePositions)
+			visible := copyExpr(source, visiblePositions)
+			// The CONVERT skeleton still carries the old expression. Retarget
+			// its binary assignment without rebinding the typed computation.
+			if (typ.Id == int32(types.T_binary) || typ.Id == int32(types.T_varbinary)) &&
+				!ctasSameDefaultType(source.Typ, typ) {
+				converted, err := convertedPersistedAssignment(ctx, visible, typ)
+				if err != nil {
+					replay.err = err
+				}
+				return converted
+			}
+			return visible
 		}
 		converted, err := convertedPersistedAssignment(ctx, raw, typ)
 		if err != nil || !proto.Equal(converted, target) {

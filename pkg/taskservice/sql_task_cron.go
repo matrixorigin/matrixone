@@ -17,6 +17,7 @@ package taskservice
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -27,6 +28,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+)
+
+var (
+	sqlTaskDiscoveryFailed = logutil.Event{
+		Name: "task.sql.discovery.failed", Message: "query sql tasks failed",
+	}
+	sqlTaskCronAddFailed = logutil.Event{
+		Name: "task.sql.cron.add.failed", Message: "failed to add sql task cron",
+	}
+	sqlTaskCronQueryFailed = logutil.Event{
+		Name: "task.sql.cron.query.failed", Message: "query sql task failed",
+	}
+	sqlTaskCronParseFailed = logutil.Event{
+		Name: "task.sql.cron.parse.failed", Message: "parse sql task cron failed",
+	}
+	sqlTaskCronTriggerFailed = logutil.Event{
+		Name: "task.sql.cron.trigger.failed", Message: "trigger sql task failed",
+	}
 )
 
 type sqlTaskCrons struct {
@@ -98,7 +118,10 @@ func (s *taskService) loadSQLTasks(ctx context.Context) {
 
 	tasks, err := s.store.QuerySQLTask(queryCtx, WithSQLTaskEnabled(true))
 	if err != nil {
-		s.rt.Logger().Error("query sql tasks failed", zap.Error(moerr.AttachCause(queryCtx, err)))
+		v2.SQLTaskDiscoveryFailureCounter.Inc()
+		s.rt.Logger().ErrorEventLazy(sqlTaskDiscoveryFailed, func() []zap.Field {
+			return []zap.Field{zap.Error(moerr.AttachCause(queryCtx, err))}
+		})
 		return
 	}
 
@@ -126,7 +149,8 @@ func (s *taskService) loadSQLTasks(ctx context.Context) {
 func (s *taskService) addSQLTask(ctx context.Context, sqlTask SQLTask) {
 	job, err := newSQLTaskCronJob(ctx, sqlTask, s)
 	if err != nil {
-		s.rt.Logger().Error("failed to add sql task cron", zap.Uint64("task-id", sqlTask.TaskID), zap.Error(err))
+		v2.SQLTaskCronAddFailureCounter.Inc()
+		s.rt.Logger().ErrorEvent(sqlTaskCronAddFailed, zap.Uint64("task-id", sqlTask.TaskID), zap.Error(err))
 		return
 	}
 	if sqlTask.NextFireTime > 0 && time.Now().After(time.UnixMilli(sqlTask.NextFireTime)) {
@@ -208,7 +232,10 @@ func (j *sqlTaskCronJob) Run() {
 	}
 	if err != nil || len(tasks) != 1 {
 		if err != nil {
-			j.s.rt.Logger().Error("query sql task failed", zap.Uint64("task-id", scheduled.TaskID), zap.Error(moerr.AttachCause(queryCtx, err)))
+			v2.SQLTaskCronQueryFailureCounter.Inc()
+			j.s.rt.Logger().ErrorEventLazy(sqlTaskCronQueryFailed, func() []zap.Field {
+				return []zap.Field{zap.Uint64("task-id", scheduled.TaskID), zap.Error(moerr.AttachCause(queryCtx, err))}
+			})
 		}
 		return
 	}
@@ -219,10 +246,17 @@ func (j *sqlTaskCronJob) Run() {
 
 	nextFireTime, err := NextSQLTaskFireTime(j.s.cronParser, current.CronExpr, current.Timezone, now)
 	if err != nil {
-		j.s.rt.Logger().Error("parse sql task cron failed", zap.Uint64("task-id", current.TaskID), zap.Error(err))
+		v2.SQLTaskCronParseFailureCounter.Inc()
+		j.s.rt.Logger().ErrorEvent(sqlTaskCronParseFailed, zap.Uint64("task-id", current.TaskID), zap.Error(err))
 		return
 	}
 
+	if current.TriggerCount >= math.MaxInt64 {
+		v2.SQLTaskCronTriggerFailureCounter.Inc()
+		j.s.rt.Logger().ErrorEvent(sqlTaskCronTriggerFailed, zap.Uint64("task-id", current.TaskID),
+			zap.Error(moerr.NewInvalidStateNoCtx("sql task trigger sequence exhausted")))
+		return
+	}
 	current.TriggerCount++
 	current.NextFireTime = nextFireTime
 	current.UpdatedAt = now
@@ -250,11 +284,18 @@ func (j *sqlTaskCronJob) Run() {
 	if j.ctx.Err() != nil {
 		return
 	}
-	if _, err := j.s.store.TriggerSQLTask(queryCtx, current, asyncTask); err != nil {
+	updated, err := j.s.store.TriggerSQLTask(queryCtx, current, asyncTask)
+	if err != nil {
 		if j.ctx.Err() != nil {
 			return
 		}
-		j.s.rt.Logger().Error("trigger sql task failed", zap.Uint64("task-id", current.TaskID), zap.Error(moerr.AttachCause(queryCtx, err)))
+		v2.SQLTaskCronTriggerFailureCounter.Inc()
+		j.s.rt.Logger().ErrorEventLazy(sqlTaskCronTriggerFailed, func() []zap.Field {
+			return []zap.Field{zap.Uint64("task-id", current.TaskID), zap.Error(moerr.AttachCause(queryCtx, err))}
+		})
+		return
+	}
+	if updated == 0 {
 		return
 	}
 	j.setTask(current)

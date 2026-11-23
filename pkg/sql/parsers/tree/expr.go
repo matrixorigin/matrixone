@@ -857,6 +857,9 @@ func (node Exprs) Format(ctx *FmtCtx) {
 		ctx.WriteString(prefix)
 		n.Format(ctx)
 		prefix = ", "
+		if ctx.compactArgLists {
+			prefix = ","
+		}
 	}
 }
 
@@ -2360,6 +2363,112 @@ func viewNameConstValue(expr Expr) (Expr, bool) {
 			return fn.Exprs[1], node.ValType == P_char && strings.Contains(node.origString, "\\")
 		default:
 			return nil, false
+		}
+	}
+}
+
+// CollectOuterSubqueries appends the subqueries in expression order, without
+// visiting the SELECT inside a subquery.
+func CollectOuterSubqueries(expr Expr, subqueries *[]*Subquery) {
+	if expr == nil {
+		return
+	}
+	switch current := expr.(type) {
+	case *Subquery:
+		*subqueries = append(*subqueries, current)
+	case *ComparisonExpr:
+		CollectOuterSubqueries(current.Left, subqueries)
+		CollectOuterSubqueries(current.Right, subqueries)
+	case *AndExpr:
+		CollectOuterSubqueries(current.Left, subqueries)
+		CollectOuterSubqueries(current.Right, subqueries)
+	case *OrExpr:
+		CollectOuterSubqueries(current.Left, subqueries)
+		CollectOuterSubqueries(current.Right, subqueries)
+	case *XorExpr:
+		CollectOuterSubqueries(current.Left, subqueries)
+		CollectOuterSubqueries(current.Right, subqueries)
+	case *BinaryExpr:
+		CollectOuterSubqueries(current.Left, subqueries)
+		CollectOuterSubqueries(current.Right, subqueries)
+	case *UnaryExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *NotExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *ParenExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *IsNullExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *IsNotNullExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *IsUnknownExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *IsNotUnknownExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *IsTrueExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *IsNotTrueExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *IsFalseExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *IsNotFalseExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *CastExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *CollateExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *BitCastExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *IntervalExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+	case *SerialExtractExpr:
+		CollectOuterSubqueries(current.SerialExpr, subqueries)
+		CollectOuterSubqueries(current.IndexExpr, subqueries)
+	case *FuncExpr:
+		for _, arg := range current.Exprs {
+			CollectOuterSubqueries(arg, subqueries)
+		}
+		for _, order := range current.OrderBy {
+			if order != nil {
+				CollectOuterSubqueries(order.Expr, subqueries)
+			}
+		}
+		if current.WindowSpec != nil {
+			for _, partition := range current.WindowSpec.PartitionBy {
+				CollectOuterSubqueries(partition, subqueries)
+			}
+			for _, order := range current.WindowSpec.OrderBy {
+				if order != nil {
+					CollectOuterSubqueries(order.Expr, subqueries)
+				}
+			}
+			if frame := current.WindowSpec.Frame; frame != nil {
+				if frame.Start != nil {
+					CollectOuterSubqueries(frame.Start.Expr, subqueries)
+				}
+				if frame.End != nil {
+					CollectOuterSubqueries(frame.End.Expr, subqueries)
+				}
+			}
+		}
+	case *Tuple:
+		for _, item := range current.Exprs {
+			CollectOuterSubqueries(item, subqueries)
+		}
+	case *RangeCond:
+		CollectOuterSubqueries(current.Left, subqueries)
+		CollectOuterSubqueries(current.From, subqueries)
+		CollectOuterSubqueries(current.To, subqueries)
+	case *CaseExpr:
+		CollectOuterSubqueries(current.Expr, subqueries)
+		for _, when := range current.Whens {
+			CollectOuterSubqueries(when.Cond, subqueries)
+			CollectOuterSubqueries(when.Val, subqueries)
+		}
+		CollectOuterSubqueries(current.Else, subqueries)
+	case *ExprList:
+		for _, item := range current.Exprs {
+			CollectOuterSubqueries(item, subqueries)
 		}
 	}
 }

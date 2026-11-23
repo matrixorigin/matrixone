@@ -16,9 +16,10 @@ package compile
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"

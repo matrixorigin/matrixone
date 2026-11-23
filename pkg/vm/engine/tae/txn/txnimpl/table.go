@@ -713,8 +713,22 @@ func (tbl *txnTable) recurTransferDelete(
 	//prepare for recursively transfer the deletes to the next target block.
 	if page2, ok = memo[*blockID]; !ok {
 		page2, err = tbl.store.rt.TransferTable.Pin(*newID)
+		// A missing page means the next hop of the transfer mapping has
+		// been TTL'ed: the delete cannot reach the live row through this
+		// chain. Convert the internal EOB table-miss sentinel into the same
+		// retryable r-w conflict reported by the first hop and by the
+		// file-backed path, instead of leaking an OK-class signal through
+		// commit (#32218).
 		if err != nil {
-			return err
+			logutil.Error(
+				"RECUR-TRANSFER-ERR-TO-RW",
+				zap.Error(err),
+				zap.String("id", newID.String()),
+				zap.String("txn", tbl.store.txn.String()),
+				zap.Int("depth", depth),
+				zap.String("phase", phase),
+			)
+			return moerr.NewTxnRWConflictNoCtx()
 		}
 		memo[*blockID] = page2
 	}
@@ -1563,9 +1577,9 @@ func (tbl *txnTable) findDeletesForCandidates(
 	copyBack := func() {
 		for i, ref := range refs {
 			if combined.IsNull(i) {
-				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), nil, true, common.WorkspaceAllocator)
+				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), nil, true, ref.rows.GetAllocator())
 			} else {
-				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), vector.GetFixedAtNoTypeCheck[types.Rowid](combined.GetDownstreamVector(), i), false, common.WorkspaceAllocator)
+				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), vector.GetFixedAtNoTypeCheck[types.Rowid](combined.GetDownstreamVector(), i), false, ref.rows.GetAllocator())
 			}
 		}
 	}
@@ -1596,7 +1610,7 @@ func (tbl *txnTable) findDeletes(
 	if err = index.BatchUpdateZM(keysZM, rowIDs.GetDownstreamVector()); err != nil {
 		return
 	}
-	tbl.contains(ctx, rowIDs, keysZM, common.WorkspaceAllocator)
+	tbl.contains(ctx, rowIDs, keysZM, rowIDs.GetAllocator())
 
 	// Dedup uses a PrepareTS-based upper fence. A delete that is still
 	// committing conflicts with the writer regardless of whether it prepared
@@ -1640,7 +1654,7 @@ retryScan:
 				tbl.store.txn,
 				rowIDs,
 				keysZM,
-				common.WorkspaceAllocator,
+				rowIDs.GetAllocator(),
 			)
 		})
 		if err != nil {

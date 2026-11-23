@@ -57,7 +57,7 @@ func TestLoadTimeFractionalParsing(t *testing.T) {
 					typ = types.T_varchar.ToType()
 				}
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(typ)
+				bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
 				defer bat.Clean(proc.Mp())
 				param := &ExternalParam{ExParamConst: ExParamConst{
 					Ctx:    context.Background(),
@@ -107,9 +107,9 @@ func TestLoadTimeTextAssignmentRange(t *testing.T) {
 					Cols:   []*plan.ColDef{{Name: "v", Typ: colType}},
 				}}
 				input := batch.NewWithSize(1)
-				input.Vecs[0] = vector.NewVec(makeType(&colType, loadTimeTextInput(param, types.T_time)))
+				input.Vecs[0] = vector.NewVec(makeType(&colType, loadTimeTextInput(param, types.T_time)), proc.Mp())
 				defer input.Clean(proc.Mp())
-				target := vector.NewVec(types.T_time.ToTypeWithScale(scale))
+				target := vector.NewVec(types.T_time.ToTypeWithScale(scale), proc.Mp())
 				defer target.Free(proc.Mp())
 				result := vector.NewFunctionResultWrapper(*target.GetType(), proc.Mp())
 				defer result.Free()
@@ -186,7 +186,7 @@ func TestParquetStringTimeAssignmentRange(t *testing.T) {
 					h := &ParquetHandler{timeAssignment: true}
 					mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_time), Scale: scale})
 					require.NotNil(t, mapper)
-					vec := vector.NewVec(types.T_time.ToTypeWithScale(scale))
+					vec := vector.NewVec(types.T_time.ToTypeWithScale(scale), proc.Mp())
 					defer vec.Free(proc.Mp())
 					for _, policy := range []string{"strict", "permissive", "ignore"} {
 						mode = ""
@@ -226,7 +226,7 @@ func TestParquetStringTimeAssignmentRange(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		var foreign ParquetHandler
 		mapper := foreign.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_time), Scale: 6})
-		vec := vector.NewVec(types.T_time.ToTypeWithScale(6))
+		vec := vector.NewVec(types.T_time.ToTypeWithScale(6), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.Error(t, mapper.mapping(page, proc, vec))
 		require.Zero(t, vec.Length())
@@ -254,7 +254,7 @@ func TestParquetTimeAssignmentHasNoVarcharCapacity(t *testing.T) {
 			proc.WarningSink = sink
 			h := &ParquetHandler{timeAssignment: true}
 			mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_time), Scale: 6})
-			vec := vector.NewVec(types.T_time.ToTypeWithScale(6))
+			vec := vector.NewVec(types.T_time.ToTypeWithScale(6), proc.Mp())
 			defer vec.Free(proc.Mp())
 			require.NoError(t, mapper.mapping(page, proc, vec))
 			require.Equal(t, []types.Time{tc.want}, vector.MustFixedColWithTypeCheck[types.Time](vec))
@@ -275,7 +275,7 @@ func TestParquetLoadTimeFractionalParsing(t *testing.T) {
 		h := &ParquetHandler{timeAssignment: load}
 		mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_time)})
 		require.NotNil(t, mapper)
-		vec := vector.NewVec(types.T_time.ToType())
+		vec := vector.NewVec(types.T_time.ToType(), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, mapper.mapping(page, proc, vec))
 		want := types.Time(3020400000000)
@@ -297,7 +297,7 @@ func TestParquetLoadTimestampTimePreservesPrecision(t *testing.T) {
 		h := &ParquetHandler{timeAssignment: load}
 		mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_time)})
 		require.NotNil(t, mapper)
-		vec := vector.NewVec(types.T_time.ToType())
+		vec := vector.NewVec(types.T_time.ToType(), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, mapper.mapping(page, proc, vec))
 		want := types.Time(1000000)

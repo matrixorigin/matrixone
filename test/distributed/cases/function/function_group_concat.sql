@@ -38,13 +38,13 @@ SELECT group_concat(a,NULL) FROM group_concat_01;
 -- Test of MO with options
 SELECT grp,group_concat(c separator ",") FROM group_concat_01 GROUP BY grp;
 SELECT grp,group_concat(c separator "---->") FROM group_concat_01 GROUP BY grp;
-SELECT grp,group_concat(c ORDER BY c) FROM group_concat_01 GROUP BY grp;
-SELECT grp,group_concat(c ORDER BY c DESC) FROM group_concat_01 GROUP BY grp;
+SELECT grp,group_concat(c ORDER BY c, a) FROM group_concat_01 GROUP BY grp;
+SELECT grp,group_concat(c ORDER BY c DESC, a DESC) FROM group_concat_01 GROUP BY grp;
 SELECT grp,group_concat(d ORDER BY a) FROM group_concat_01 GROUP BY grp;
 SELECT grp,group_concat(d ORDER BY a DESC) FROM group_concat_01 GROUP BY grp;
-SELECT grp,group_concat(c ORDER BY 1) FROM group_concat_01 GROUP BY grp;
-SELECT grp,group_concat(c ORDER BY c separator ",") FROM group_concat_01 GROUP BY grp;
-SELECT grp,group_concat(c ORDER BY c DESC separator ",") FROM group_concat_01 GROUP BY grp;
+SELECT grp,group_concat(c ORDER BY 1, a) FROM group_concat_01 GROUP BY grp;
+SELECT grp,group_concat(c ORDER BY c, a separator ",") FROM group_concat_01 GROUP BY grp;
+SELECT grp,group_concat(c ORDER BY c DESC, a DESC separator ",") FROM group_concat_01 GROUP BY grp;
 SELECT grp,group_concat(c ORDER BY grp DESC) FROM group_concat_01 GROUP BY grp ORDER BY grp;
 
 

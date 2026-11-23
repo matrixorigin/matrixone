@@ -549,6 +549,16 @@ type FunctionResultWrapper interface {
 	GetResultVector() *Vector
 	Free()
 	PreExtendAndReset(size int) error
+
+	// SetArgumentIsBin publishes, for each argument of the call, whether its
+	// value was spelled as a hex/bit literal or comes from a binary-flagged
+	// prepared parameter or user variable. The caller that produced the
+	// arguments owns this fact; vectors do not carry it. The slice is borrowed
+	// until the next call; nil means no argument is a binary literal.
+	SetArgumentIsBin(flags []bool)
+	// ArgumentIsBin reports the published flag of argument i, false when it
+	// was not published or i is out of range.
+	ArgumentIsBin(i int) bool
 }
 
 type reusableParameterWrapper interface{}
@@ -586,10 +596,10 @@ func OptGetBytesParamFromWrapper(wrapper FunctionResultWrapper, idx int, src *Ve
 var _ FunctionResultWrapper = &FunctionResult[int64]{}
 
 type FunctionResult[T types.FixedSizeT] struct {
-	typ        types.Type
-	vec        *Vector
-	mp         *mpool.MPool
-	allocation *AllocationAccountSelection
+	typ types.Type
+	vec *Vector
+	// mp allocates the result vectors; an accounted view charges them.
+	mp *mpool.MPool
 
 	isVarlena bool
 	cols      []T
@@ -600,7 +610,20 @@ type FunctionResult[T types.FixedSizeT] struct {
 	//  this field is for optimisation to reduce the allocation of FunctionParameterWrapper pointer.
 	// 	there are still many built-in functions don't use it now, and will be fixed in the future.
 	convenientParam []reusableParameterWrapper
+
+	// argumentIsBin is the caller-published binary-literal flag per argument.
+	argumentIsBin []bool
 }
+
+func (fr *FunctionResult[T]) SetArgumentIsBin(flags []bool) { fr.argumentIsBin = flags }
+
+func (fr *FunctionResult[T]) ArgumentIsBin(i int) bool {
+	return i >= 0 && i < len(fr.argumentIsBin) && fr.argumentIsBin[i]
+}
+
+// MPool returns the pool the result allocates through (an accounted view
+// when the result is charged to an account).
+func (fr *FunctionResult[T]) MPool() *mpool.MPool { return fr.mp }
 
 func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *FunctionResult[T] {
 	if fr, ok := wrapper.(*FunctionResult[T]); ok {
@@ -636,12 +659,24 @@ func (fr *FunctionResult[T]) getConvenientParamList() []reusableParameterWrapper
 }
 
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
+	return fr.preExtendAndReset(targetSize, true)
+}
+
+// PreExtendAndResetNonNull prepares an evaluation proven to emit no NULLs.
+// The caller must audit the kernel and its current runtime arguments; unknown
+// or nullable evaluations must use PreExtendAndReset instead. Value storage
+// stays accounted. An empty implicit validity bitmap needs no reservation.
+// Existing bitmap capacity remains owned for a later nullable evaluation.
+func (fr *FunctionResult[T]) PreExtendAndResetNonNull(targetSize int) error {
+	if targetSize < 0 {
+		return moerr.NewInvalidInputNoCtx("negative function result length")
+	}
+	return fr.preExtendAndReset(targetSize, false)
+}
+
+func (fr *FunctionResult[T]) preExtendAndReset(targetSize int, nullable bool) error {
 	if fr.vec == nil {
-		var err error
-		fr.vec, err = NewOffHeapVecWithTypeAndAllocation(fr.typ, fr.allocation)
-		if err != nil {
-			return err
-		}
+		fr.vec = NewVec(fr.typ, fr.mp)
 	}
 
 	oldLength := fr.vec.Length()
@@ -661,18 +696,11 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 			return err
 		}
 	}
-	if err := fr.vec.PreExtendNulls(targetSize, fr.mp); err != nil {
-		return err
-	}
 	if !wasConst {
 		fr.vec.ResetWithSameType()
 	}
-	if nullBitmap := fr.vec.nsp.GetBitmap(); nullBitmap.HasExternalStorage() {
-		// Allocation-accounted storage can outlive several evaluations and be
-		// larger than this result. Publish the current row domain explicitly so
-		// NULL unions never infer it from a reused source or physical capacity.
-		nullBitmap.TryExpandWithSize(targetSize)
-	}
+	// The null bitmap is allocated on the first NULL write, so a result that
+	// never holds NULL does not allocate one.
 
 	if !fr.isVarlena {
 		fr.length = 0
@@ -820,14 +848,6 @@ func (fr *FunctionResult[T]) Free() {
 	fr.convenientParam = nil
 }
 
-func (fr *FunctionResult[T]) setAllocation(selection *AllocationAccountSelection) {
-	fr.allocation = selection
-}
-
-type functionResultAllocationSetter interface {
-	setAllocation(*AllocationAccountSelection)
-}
-
 func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
 	if typ.IsVarlen() {
 		return newResultFunc[types.Varlena](typ, mp)
@@ -858,6 +878,14 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWra
 		return newResultFunc[float32](typ, mp)
 	case types.T_float64:
 		return newResultFunc[float64](typ, mp)
+	case types.T_bf16:
+		return newResultFunc[types.BF16](typ, mp)
+	case types.T_float16:
+		return newResultFunc[types.Float16](typ, mp)
+	case types.T_float8:
+		return newResultFunc[types.Float8](typ, mp)
+	case types.T_float4:
+		return newResultFunc[types.Float4](typ, mp)
 	case types.T_date:
 		return newResultFunc[types.Date](typ, mp)
 	case types.T_year:
@@ -886,26 +914,4 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWra
 		return newResultFunc[types.Enum](typ, mp)
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
-}
-
-// NewFunctionResultWrapperWithAllocation constructs a reusable result whose
-// current and future vectors allocate through selection. The selection stays
-// with the wrapper when EvalWithoutResultReusing transfers its current vector.
-func NewFunctionResultWrapperWithAllocation(
-	typ types.Type,
-	mp *mpool.MPool,
-	selection *AllocationAccountSelection,
-) (FunctionResultWrapper, error) {
-	if selection != nil {
-		if err := selection.validate(); err != nil {
-			return nil, err
-		}
-	}
-	result := NewFunctionResultWrapper(typ, mp)
-	setter, ok := result.(functionResultAllocationSetter)
-	if !ok {
-		return nil, mpool.ErrAllocationAccountInvariant
-	}
-	setter.setAllocation(selection)
-	return result, nil
 }

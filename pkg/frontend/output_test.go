@@ -47,7 +47,7 @@ func TestExtractRowFromVector(t *testing.T) {
 
 func TestConvertYearVectorToSlice(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_year.ToType())
+	vec := vector.NewVec(types.T_year.ToType(), mp)
 	for _, value := range []types.MoYear{0, 2024} {
 		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 	}
@@ -132,7 +132,7 @@ func TestExtractRowFromVectorNarrowVec(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			vec := vector.NewVec(c.oid.ToType())
+			vec := vector.NewVec(c.oid.ToType(), mp)
 			require.NoError(t, vector.AppendAny(vec, c.bytes, false, mp))
 
 			row := make([]any, 1)
@@ -180,7 +180,7 @@ func TestExtractRowFromVector2(t *testing.T) {
 	t.Run("A", func(t *testing.T) {
 		var (
 			vecf32 [][]float32
-			vec    = vector.NewVec(types.T_array_float32.ToType())
+			vec    = vector.NewVec(types.T_array_float32.ToType(), mp)
 		)
 
 		for i := 0; i < 10; i++ {
@@ -213,7 +213,7 @@ func TestExtractRowFromVector2(t *testing.T) {
 	t.Run("B", func(t *testing.T) {
 		var (
 			vecf64 [][]float64
-			vec    = vector.NewVec(types.T_array_float64.ToType())
+			vec    = vector.NewVec(types.T_array_float64.ToType(), mp)
 		)
 
 		for i := 0; i < 10; i++ {
@@ -330,7 +330,7 @@ func TestColumnSlicesGetDate(t *testing.T) {
 			name: "Normal T_date type",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_date, 0, 0))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_date, 0, 0), mp)
 				date := types.Date(types.DateFromCalendar(2024, 1, 15))
 				vector.AppendFixed(bat.Vecs[0], date, false, mp)
 				bat.SetRowCount(1)
@@ -353,7 +353,7 @@ func TestColumnSlicesGetDate(t *testing.T) {
 			name: "Normal T_datetime type",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0), mp)
 				dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 0)
 				vector.AppendFixed(bat.Vecs[0], dt, false, mp)
 				bat.SetRowCount(1)
@@ -399,7 +399,7 @@ func TestColumnSlicesGetDate(t *testing.T) {
 			name: "Invalid type (default case)",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0), mp)
 				vector.AppendFixed(bat.Vecs[0], int64(12345), false, mp)
 				bat.SetRowCount(1)
 
@@ -457,7 +457,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 			name: "Normal T_datetime type with scale 0",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0), mp)
 				dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 0)
 				vector.AppendFixed(bat.Vecs[0], dt, false, mp)
 				bat.SetRowCount(1)
@@ -479,7 +479,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 			name: "Normal T_datetime type with scale > 0 and MicroSec == 0",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6), mp)
 				dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 6)
 				vector.AppendFixed(bat.Vecs[0], dt, false, mp)
 				bat.SetRowCount(1)
@@ -501,7 +501,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 			name: "Normal T_datetime type with scale > 0 and MicroSec != 0",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6), mp)
 				dt, _ := types.ParseDatetime("2024-01-15 10:20:30.123456", 6)
 				vector.AppendFixed(bat.Vecs[0], dt, false, mp)
 				bat.SetRowCount(1)
@@ -546,7 +546,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 			name: "Invalid type (default case)",
 			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0), mp)
 				vector.AppendFixed(bat.Vecs[0], int64(12345), false, mp)
 				bat.SetRowCount(1)
 
@@ -599,7 +599,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, tc.scale))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, tc.scale), mp)
 			t.Cleanup(func() { bat.Clean(mp) })
 			dt, err := types.ParseDatetime("2024-01-15 10:20:30", tc.scale)
 			require.NoError(t, err)
@@ -618,7 +618,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 
 	t.Run("zero datetime caps corrupt scale", func(t *testing.T) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 1000))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 1000), mp)
 		t.Cleanup(func() { bat.Clean(mp) })
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.ZeroDatetime, false, mp))
 		bat.SetRowCount(1)
@@ -631,4 +631,97 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "0000-00-00 00:00:00.000000000", got)
 	})
+}
+
+// TestColumnSlicesLowPrecFloat verifies the MySQL result path presents the scalar
+// low-precision float types (bf16/float16/float8/float4) as float32 (#20567): the column
+// is widened into the float32 slice and the GetFloat32/GetFloat64 getters read it, so a
+// negative value (whose raw bits exceed a positive's) comes through with its true sign.
+func TestColumnSlicesLowPrecFloat(t *testing.T) {
+	ctx := context.TODO()
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	cases := []struct {
+		name string
+		oid  types.T
+		make func(float32) any
+	}{
+		{"bf16", types.T_bf16, func(f float32) any { return types.BF16FromFloat32(f) }},
+		{"float16", types.T_float16, func(f float32) any { return types.Float16FromFloat32(f) }},
+		{"float8", types.T_float8, func(f float32) any { return types.Float8FromFloat32(f) }},
+		{"float4", types.T_float4, func(f float32) any { return types.Float4FromFloat32(f) }},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(c.oid.ToType(), mp)
+			// -1.5 and 2.0 are exactly representable in all four formats.
+			switch c.oid {
+			case types.T_bf16:
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BF16FromFloat32(-1.5), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BF16FromFloat32(2.0), false, mp))
+			case types.T_float16:
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Float16FromFloat32(-1.5), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Float16FromFloat32(2.0), false, mp))
+			case types.T_float8:
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Float8FromFloat32(-1.5), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Float8FromFloat32(2.0), false, mp))
+			case types.T_float4:
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Float4FromFloat32(-1.5), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Float4FromFloat32(2.0), false, mp))
+			}
+			bat.SetRowCount(2)
+			defer bat.Clean(mp)
+
+			colSlices := &ColumnSlices{
+				ctx:             ctx,
+				colIdx2SliceIdx: make([]int, 1),
+				dataSet:         bat,
+			}
+			defer colSlices.Close()
+			require.NoError(t, convertVectorToSlice(ctx, nil, bat.Vecs[0], 0, colSlices))
+
+			// GetFloat32 reads the widened slice with the correct sign.
+			v0, err := colSlices.GetFloat32(0, 0)
+			require.NoError(t, err)
+			require.InDelta(t, float32(-1.5), v0, 1e-6)
+			v1, err := colSlices.GetFloat32(1, 0)
+			require.NoError(t, err)
+			require.InDelta(t, float32(2.0), v1, 1e-6)
+
+			// GetFloat64 widens the same slice.
+			d0, err := colSlices.GetFloat64(0, 0)
+			require.NoError(t, err)
+			require.InDelta(t, -1.5, d0, 1e-6)
+
+			// extractRowFromVector2 yields a float32 value.
+			row := make([]any, 1)
+			require.NoError(t, extractRowFromVector2(ctx, nil, bat.Vecs[0], 0, row, 0, false, colSlices))
+			f, ok := row[0].(float32)
+			require.True(t, ok, "expected float32, got %T", row[0])
+			require.InDelta(t, float32(-1.5), f, 1e-6)
+		})
+	}
+}
+
+func TestConvertFlatUntypedNullVectorToSlice(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := vector.NewConstNull(types.T_any.ToType(), 2, mp)
+	vec := vector.NewVec(types.T_any.ToType(), mp)
+	require.NoError(t, vec.UnionOne(source, 0, mp))
+	require.NoError(t, vec.UnionOne(source, 1, mp))
+	require.False(t, vec.IsConstNull())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	slices := &ColumnSlices{ctx: t.Context(), dataSet: bat, colIdx2SliceIdx: make([]int, 1)}
+	t.Cleanup(func() { source.Free(mp); bat.Clean(mp) })
+	t.Cleanup(slices.Close)
+	require.NoError(t, convertBatchToSlices(t.Context(), nil, bat, slices))
+	for i := range 2 {
+		row := make([]any, 1)
+		require.NoError(t, extractRowFromVector2(t.Context(), nil, vec, 0, row, i, false, slices))
+		require.Nil(t, row[0])
+	}
 }

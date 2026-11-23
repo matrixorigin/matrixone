@@ -46,12 +46,16 @@ func quoteIdent(ident string) string {
 // cuVS minimum graph size. Used to auto-populate IndexCapacity and to derive the
 // small-tail CDC cutoff; this non-NULL basis MUST match the build cursor, which
 // likewise advances only on non-NULL rows.
-func fetchSrcTableRowCount(proc *process.Process, runSql runSqlFunc, db, src, vecCol string) (int64, error) {
+func fetchSrcTableRowCount(proc *process.Process, runSql runSqlFunc, db, src, vecCol string, policies ...*executor.IndexRelationPolicy) (int64, error) {
 	sql := fmt.Sprintf("SELECT count(*) FROM %s.%s", quoteIdent(db), quoteIdent(src))
 	if vecCol != "" {
 		sql += fmt.Sprintf(" WHERE %s IS NOT NULL", quoteIdent(vecCol))
 	}
-	res, err := runSql(sqlexec.NewSqlProcess(proc), sql)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	if len(policies) > 0 {
+		sqlproc.IndexRelationPolicy = policies[0]
+	}
+	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return 0, err
 	}
@@ -211,6 +215,33 @@ func planCapacity(
 	return plan, nil
 }
 
+// minSubIndexRows returns the fewest rows a sub-index of a build must receive for cuVS to build
+// it: threshold, the minimum planCapacity checks; for a sharded build over numShards devices,
+// the rows whose split gives every shard threshold, since (n / numShards) &^ 31 >= threshold
+// exactly when n >= numShards * threshold rounded up to a multiple of 32.
+func minSubIndexRows(threshold int64, sharded bool, numShards int) int64 {
+	if sharded && numShards > 1 {
+		return int64(numShards) * ((threshold + 31) &^ 31)
+	}
+	return threshold
+}
+
+// reserveHeldRows lowers hostRowsFit, the rows of capacity host memory admits (0: not measured),
+// by the rows of hostPerRow bytes that holdRows held rows of heldRowBytes take: a build holds
+// them while the builder still holds its previous sub-index.
+func reserveHeldRows(hostRowsFit, holdRows int64, heldRowBytes, hostPerRow uint64, algo string) (int64, error) {
+	if hostRowsFit <= 0 || holdRows <= 0 || hostPerRow == 0 {
+		return hostRowsFit, nil
+	}
+	reserve := int64((uint64(holdRows)*heldRowBytes + hostPerRow - 1) / hostPerRow)
+	if reserve >= hostRowsFit {
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"%s: host memory admits %d rows, not the %d rows a build that leaves out rows holds; "+
+				"free memory on this node or run the build on a larger CN", algo, hostRowsFit, holdRows)
+	}
+	return hostRowsFit - reserve, nil
+}
+
 // kmeansPointsPerCentroid is the conventional floor for k-means to have enough
 // evidence per cluster. cuVS does not enforce it — validate_build_params only
 // checks rows >= n_lists — so a build can train 16 points per centroid, succeed,
@@ -296,10 +327,13 @@ func buildSnapshotTS(proc *process.Process) int64 {
 // metadataProvenance reports whether this index's metadata table already carries the appended
 // nrow/build_ts columns, so the writer names them only when they exist. See
 // sqlexec.HasProvenanceColumns for why a CN can meet either shape.
-func metadataProvenance(proc *process.Process, dbName, metadataTable string) bool {
+func metadataProvenance(proc *process.Process, dbName, metadataTable string, policies ...*executor.IndexRelationPolicy) bool {
 	if proc == nil {
 		return false
 	}
-	return sqlexec.HasProvenanceColumns(
-		sqlexec.NewSqlProcess(proc), dbName, metadataTable, catalog.IndexMetadata_TblCol_Build_Ts)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	if len(policies) > 0 {
+		sqlproc.IndexRelationPolicy = policies[0]
+	}
+	return sqlexec.HasProvenanceColumns(sqlproc, dbName, metadataTable, catalog.IndexMetadata_TblCol_Build_Ts)
 }

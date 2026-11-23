@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -310,6 +309,20 @@ func createPublicationWithTableSelection(ctx context.Context, bh BackgroundExec,
 	}
 
 	pubName := string(cp.Name)
+	var skippedRecipientLocks bool
+	if cp.IfNotExists {
+		// Use the early lookup only to avoid locking recipients for a no-op.
+		pub, err := getPubInfo(ctx, bh, pubName)
+		if err != nil {
+			return err
+		}
+		skippedRecipientLocks = pub != nil
+	}
+	if !skippedRecipientLocks {
+		if err = lockPublicationTargetAccounts(ctx, bh, subAccounts, cp.AccountsSet.All); err != nil {
+			return err
+		}
+	}
 	dbName := string(cp.Database)
 	comment := cp.Comment
 
@@ -380,14 +393,19 @@ func createPublicationWithTableSelection(ctx context.Context, bh BackgroundExec,
 	}
 
 	if cp.IfNotExists {
-		// Database resolution may switch ctx to the source account; the publication
-		// still belongs to the account that issued CREATE.
-		pubInfo, lookupErr := getPubInfo(defines.AttachAccountId(ctx, accountId), bh, pubName)
-		if lookupErr != nil {
-			return lookupErr
+		// Source validation can observe newer commits and switch to the source
+		// account. Decide the no-op now, using the publisher's namespace.
+		pub, err := getPubInfo(defines.AttachAccountId(ctx, accountId), bh, pubName)
+		if err != nil {
+			return err
 		}
-		if pubInfo != nil {
+		if pub != nil {
 			return nil
+		}
+		if skippedRecipientLocks {
+			// The original publication disappeared. Restart to lock recipients
+			// before the source database, as on every grant-writing path.
+			return moerr.NewTxnNeedRetry(ctx)
 		}
 	}
 
@@ -567,6 +585,13 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		}
 	}
 
+	all := pub.SubAccountsStr == pubsub.AccountAll
+	if ap.AccountsSet != nil {
+		all = ap.AccountsSet.All
+	}
+	if err = lockPublicationTargetAccounts(ctx, bh, newSubAccounts, all); err != nil {
+		return err
+	}
 	// alter comment
 	comment := pub.Comment
 	if ap.Comment != "" {
@@ -1927,9 +1952,11 @@ func showPublicationsLike(ctx context.Context, sp *tree.ShowPublications, proc *
 			return "", moerr.NewInvalidInput(ctx, "SHOW PUBLICATIONS LIKE parameter has no execution value")
 		}
 		params := proc.GetPrepareParams()
-		typ := proc.GetPrepareParamType(0)
+		typ := types.T_any
+		if typed := proc.GetTypedPrepareParam(0); typed != nil {
+			typ = typed.GetType().Oid
+		}
 		if params.IsNull(0) || !params.GetType().Oid.IsMySQLString() ||
-			proc.GetPrepareParamKind(0) != vector.PrepareParamNone ||
 			(typ != types.T_any && !typ.IsMySQLString()) {
 			return "", moerr.NewInvalidInput(ctx, "SHOW PUBLICATIONS LIKE parameter must be a non-NULL string")
 		}
@@ -1987,8 +2014,19 @@ func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublicat
 		if err != nil {
 			return err
 		}
+		missingAccounts := 0
 		for _, subInfo := range subscribedInfos {
-			subscribedAccountNames = append(subscribedAccountNames, accIdInfoMap[subInfo.SubAccountId].Name)
+			accountInfo := accIdInfoMap[subInfo.SubAccountId]
+			if accountInfo == nil {
+				// A stale subscription must not hide this or other publications.
+				// Do not fall back to the stored name: it may belong to a new ID.
+				missingAccounts++
+				continue
+			}
+			subscribedAccountNames = append(subscribedAccountNames, accountInfo.Name)
+		}
+		if missingAccounts > 0 {
+			ses.Warnf(ctx, "SHOW PUBLICATIONS: publication %q has %d subscribed account IDs absent from the account lookup; omitted from subscribed_accounts", pubInfo.PubName, missingAccounts)
 		}
 		slices.Sort(subscribedAccountNames)
 
@@ -2541,15 +2579,14 @@ func getDbIdAndType(ctx context.Context, bh BackgroundExec, dbName string) (dbId
 // runtime resolution keeps the publisher identity for such rows, which
 // fails closed.
 func publicationSourceOwnerAuthorized(publisherAccountID, ownerAccountID uint32, targetAccountIDs []uint32) bool {
-	if publisherAccountID == ownerAccountID || publisherAccountID == sysAccountID {
-		return true
-	}
+	ownerOnly := true
 	for _, targetAccountID := range targetAccountIDs {
 		if targetAccountID != ownerAccountID {
-			return false
+			ownerOnly = false
+			break
 		}
 	}
-	return true
+	return pubsub.PublicationSourceOwnerAuthorized(publisherAccountID, ownerAccountID, ownerOnly)
 }
 
 // publicationForeignSourceUnauthorizedError is the stable rejection of a
@@ -2914,6 +2951,43 @@ func insertMoSubs(ctx context.Context, bh BackgroundExec, subInfo *pubsub.SubInf
 	return bh.Exec(ctx, sql)
 }
 
+// Keep the resolved subscriber IDs alive through catalog fanout. A name can be
+// dropped and recreated between target selection and the mo_subs insert.
+func lockPublicationTargetAccounts(ctx context.Context, bh BackgroundExec, targets map[int32]*pubsub.AccountInfo, all bool) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	ids := make([]int32, 0, len(targets))
+	for id := range targets {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	sql := "select account_id from mo_catalog.mo_account where account_id in (" + pubsub.JoinAccountIds(ids) + ")"
+	var err error
+	if all {
+		err = bh.Exec(sysCtx, sql+" for share")
+	} else {
+		err = execWithExplicitPublicationAccountLocks(sysCtx, bh, sql, ids)
+	}
+	if err != nil {
+		return err
+	}
+	rs, err := getResultSet(sysCtx, bh)
+	if err != nil {
+		return err
+	}
+	var n uint64
+	for _, r := range rs {
+		n += r.GetRowCount()
+	}
+	if n != uint64(len(ids)) {
+		return moerr.NewTxnNeedRetry(ctx)
+	}
+	return nil
+}
+
 func batchInsertMoSubs(
 	ctx context.Context,
 	bh BackgroundExec,
@@ -3128,14 +3202,14 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 			err = dbErr
 			return
 		}
-		resolvePhysicalSource := uint32(accId) == sourceAccountID || accId == sysAccountID
+		resolvePhysicalSource := pubsub.PublicationSourceOwnerAuthorized(uint32(accId), sourceAccountID, false)
 		if !resolvePhysicalSource {
 			admitted, admErr := publicationTargetsAdmitForeignSource(newCtx, bh, pubInfo, sourceAccountID)
 			if admErr != nil {
 				err = admErr
 				return
 			}
-			resolvePhysicalSource = admitted
+			resolvePhysicalSource = pubsub.PublicationSourceOwnerAuthorized(uint32(accId), sourceAccountID, admitted)
 		}
 		if !resolvePhysicalSource {
 			// Keeping the publisher identity would silently resolve a
@@ -3215,15 +3289,14 @@ func checkSubscriptionValidForCreate(
 		// and owner-only target sets stay admitted, and a general publisher's
 		// row that would expose the owner's database beyond the owner is
 		// rejected here instead of creating an unusable subscription.
-		authorized := uint32(publisherAccountID) == physicalAccountID ||
-			publisherAccountID == sysAccountID
+		authorized := pubsub.PublicationSourceOwnerAuthorized(uint32(publisherAccountID), physicalAccountID, false)
 		if !authorized {
-			var admitErr error
-			authorized, admitErr = publicationTargetsAdmitForeignSource(ctx, bh, pubInfo, physicalAccountID)
+			ownerOnly, admitErr := publicationTargetsAdmitForeignSource(ctx, bh, pubInfo, physicalAccountID)
 			if admitErr != nil {
 				err = admitErr
 				return
 			}
+			authorized = pubsub.PublicationSourceOwnerAuthorized(uint32(publisherAccountID), physicalAccountID, ownerOnly)
 		}
 		if !authorized {
 			err = publicationForeignSourceUnauthorizedError(ctx, uint32(publisherAccountID), physicalAccountID, pubInfo.DbName)
@@ -3299,13 +3372,13 @@ func resolveSubscriptionSourceAccounts(
 			}
 			owners[pubInfo.DbId] = owner
 		}
-		resolveOwner := publisherAccountID == owner || publisherAccountID == sysAccountID
+		resolveOwner := pubsub.PublicationSourceOwnerAuthorized(publisherAccountID, owner, false)
 		if !resolveOwner {
 			admittedByTargets, admErr := publicationTargetsAdmitForeignSource(ctx, bh, pubInfo, owner)
 			if admErr != nil {
 				return nil, admErr
 			}
-			resolveOwner = admittedByTargets
+			resolveOwner = pubsub.PublicationSourceOwnerAuthorized(publisherAccountID, owner, admittedByTargets)
 		}
 		if !resolveOwner {
 			// An unauthorized foreign source must not enumerate through the
@@ -3328,6 +3401,20 @@ func checkSubscriptionValid(ctx context.Context, ses FeSession, dbName string, b
 	}
 
 	subInfo := subInfos[0]
+	// The alias was read at data T. Its publication is a current access
+	// boundary, not data: an older SI transaction must not revive membership,
+	// table scope or a withdrawn publication. Reuse the statement's admitted
+	// authorization snapshot and the canonical publication resolver.
+	if owner := upstreamUserSession(ses); owner != nil && authorizationEpochFor(ctx, owner) != nil {
+		authorityCtx := defines.AttachAccountId(ctx, owner.GetTenantInfo().GetTenantID())
+		opts, err := authorizationReadOption(authorityCtx, owner, &BackgroundExecOption{})
+		if err != nil {
+			return nil, err
+		}
+		authority := owner.GetBackgroundExec(authorityCtx, opts)
+		defer authority.Close()
+		bh = authority
+	}
 	return checkSubscriptionValidCommon(ctx, ses, subInfo.SubName, subInfo.PubAccountName, subInfo.PubName, bh)
 }
 

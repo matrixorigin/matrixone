@@ -17,6 +17,7 @@ package types
 import (
 	"bytes"
 	crand "crypto/rand"
+	"fmt"
 	"math"
 	"math/rand"
 	"sort"
@@ -1306,4 +1307,15 @@ func TestEncodeEnumKeepsStablePackedFormat(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, T_enum, typ)
 	require.Equal(t, Enum(2), el)
+}
+
+func TestNarrowFloatTupleStrings(t *testing.T) {
+	tp := Tuple{
+		BF16FromFloat32(-1.5), Float16FromFloat32(-1.5), Float8FromFloat32(-1.5), Float4FromFloat32(-1.5),
+	}
+	for _, v := range tp {
+		require.Equal(t, "-1.5", fmt.Sprintf("%v", v), "%T", v)
+	}
+	require.Equal(t, []string{"-1.5", "-1.5", "-1.5", "-1.5"}, tp.SQLStrings(nil))
+	require.Equal(t, "(-1.5,-1.5,-1.5,-1.5)", tp.ErrString(nil))
 }

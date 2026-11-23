@@ -15,16 +15,20 @@
 package objectio
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestObjectMetadataReadersRejectEmptyLocation(t *testing.T) {
@@ -53,6 +57,61 @@ func TestObjectMetadataReadersRejectEmptyLocation(t *testing.T) {
 
 			_, err = LoadBFWithMeta(ctx, nil, test.location, nil)
 			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+		})
+	}
+}
+
+func TestCheckedDataBlocks(t *testing.T) {
+	for _, version := range []uint16{IOET_ObjectMeta_V2, IOET_ObjectMeta_V3} {
+		_, raw := cachedColumnFixture(t)
+		DecodeIOEntryHeader(raw).Version = version
+		blocks, ok := ObjectMeta(raw).CheckedDataBlocks(2)
+		require.True(t, ok)
+		require.Len(t, blocks, 2)
+		require.Equal(t, uint16(1), blocks[1].GetID())
+		require.Equal(t, uint32(10), blocks[1].GetRows())
+	}
+
+	for _, scenario := range []string{
+		"header", "type", "location count", "missing data", "data offset", "block count",
+		"start block", "block index", "block offset", "block end", "block sequence", "column count",
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			_, raw := cachedColumnFixture(t)
+			expected := uint16(2)
+			meta := objectMetaV3(raw[IOEntryHeaderSize:])
+			data, ok := meta.DataMeta()
+			require.True(t, ok)
+			offset, length := data.BlockIndex().BlockMetaPos(1)
+			switch scenario {
+			case "header":
+				raw = raw[:IOEntryHeaderSize]
+			case "type":
+				DecodeIOEntryHeader(raw).Type = IOET_ColData
+			case "location count":
+				expected--
+			case "missing data":
+				meta.SetDataMetaCount(0)
+			case "data offset":
+				meta.SetDataMetaOffset(^uint32(0))
+			case "block count":
+				data.BlockHeader().SetSequence(1)
+			case "start block":
+				data.BlockHeader().SetStartID(1)
+			case "block index":
+				data.BlockIndex().SetBlockCount(1)
+			case "block offset":
+				data.BlockIndex().SetBlockMetaPos(1, offset-1, length)
+			case "block end":
+				data.BlockIndex().SetBlockMetaPos(1, offset, ^uint32(0))
+			case "block sequence":
+				data.GetBlockMeta(1).BlockHeader().SetSequence(0)
+			case "column count":
+				data.GetBlockMeta(1).BlockHeader().SetMetaColumnCount(2)
+			}
+			blocks, ok := ObjectMeta(raw).CheckedDataBlocks(expected)
+			require.False(t, ok)
+			require.Nil(t, blocks)
 		})
 	}
 }
@@ -366,7 +425,7 @@ func TestEvictCacheToCapacityPercent(t *testing.T) {
 	ctx := context.Background()
 	var key mataCacheKey
 	key[0] = 3
-	metaCache.Set(ctx, key, []byte("1234567890"), 10)
+	metaCache.Set(key, []byte("1234567890"), 10)
 
 	used := EvictCacheToCapacityPercent(ctx, 50)
 
@@ -386,7 +445,7 @@ func TestMetaCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
 	ctx := context.Background()
 	var existingKey mataCacheKey
 	existingKey[0] = 4
-	metaCache.Set(ctx, existingKey, []byte("12345"), 5)
+	metaCache.Set(existingKey, []byte("12345"), 5)
 
 	SetMetaCachePressureTargetPercent(50, time.Now().Add(time.Minute))
 
@@ -399,7 +458,7 @@ func TestMetaCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
 	assert.Equal(t, []byte("6"), v)
 	assert.Equal(t, int64(5), metaCache.Used())
 
-	_, ok := metaCache.Get(ctx, key)
+	_, ok := getMeta(key)
 	assert.False(t, ok)
 }
 
@@ -423,4 +482,59 @@ func TestMetaCachePressureAdmissionExpires(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("1"), v)
 	assert.Equal(t, int64(1), metaCache.Used())
+}
+
+func TestLoadObjectMetaChecksCachedAndLoadedHeader(t *testing.T) {
+	ctx := t.Context()
+	oldCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(1 << 20))
+	t.Cleanup(func() { metaCache = oldCache })
+	fs, err := fileservice.NewMemoryFS("header-test", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	valid := objectHeaderFixture(IOET_ObjectMeta_V1)
+	wrong := bytes.Clone(valid)
+	DecodeIOEntryHeader(wrong).Type = IOET_ColData
+	for n, raw := range [][]byte{nil, {1}, {1, 2, 3}, wrong, valid} {
+		for _, cached := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/cached=%v", n, cached), func(t *testing.T) {
+				id := NewObjectid()
+				name := BuildObjectNameWithObjectID(&id)
+				// Empty backing can only be supplied by cache: FS cannot read zero bytes.
+				if len(raw) == 0 && !cached {
+					return
+				}
+				if cached {
+					metaCache.Set(encodeCacheKey(*name.Short(), cacheKeyTypeMeta), raw, int64(len(raw)))
+				} else {
+					require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: name.String(), Entries: []fileservice.IOEntry{{Data: raw, Size: int64(len(raw))}}}))
+				}
+				extent := NewExtent(0, 0, uint32(len(raw)), uint32(len(raw)))
+				got, err := LoadObjectMetaByExtent(ctx, &name, &extent, false, 0, fs)
+				if n == 4 {
+					require.NoError(t, err)
+					require.Equal(t, raw, []byte(got))
+				} else {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+					require.Nil(t, got)
+				}
+			})
+		}
+	}
+}
+
+func objectHeaderFixture(version uint16) []byte {
+	data := BuildMetaData(2, 2)
+	data.BlockHeader().SetMaxSeqnum(1)
+	header := IOEntryHeader{Type: IOET_ObjMeta, Version: version}
+	raw := bytes.Clone(EncodeIOEntryHeader(&header))
+	if version == IOET_ObjectMeta_V1 {
+		return append(raw, data...)
+	}
+	prefix := buildObjectMetaV3()
+	prefix.SetDataMetaCount(2)
+	prefix.SetDataMetaOffset(metaHeaderLen + schemaCountLen)
+	raw = append(raw, prefix...)
+	raw = append(raw, 0, 0)
+	return append(raw, data...)
 }

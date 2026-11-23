@@ -184,8 +184,8 @@ func TestLateMaterializationCandidateUsesBlockPayload(t *testing.T) {
 	belowThreshold := types.New(types.T_varchar, 95, 0)
 	atThreshold := types.New(types.T_varchar, 96, 0)
 
-	require.False(t, isLateMaterializationCandidate(plan.MakePlan2Type(&belowThreshold)))
-	require.True(t, isLateMaterializationCandidate(plan.MakePlan2Type(&atThreshold)))
+	require.False(t, IsLateMaterializationCandidate(plan.MakePlan2Type(&belowThreshold)))
+	require.True(t, IsLateMaterializationCandidate(plan.MakePlan2Type(&atThreshold)))
 }
 
 func TestLateMaterializationFilterPreservesOriginalSelections(t *testing.T) {
@@ -204,11 +204,11 @@ func TestLateMaterializationFilterPreservesOriginalSelections(t *testing.T) {
 	require.Equal(t, []int{0}, scan.ctr.earlyColumns)
 	require.Equal(t, []int{1}, scan.ctr.lateColumns)
 
-	bat := batch.NewOffHeapWithSize(2)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(intType)
-	bat.Vecs[1] = vector.NewOffHeapVecWithType(textType)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(intType, scan.mp(proc))
+	bat.Vecs[1] = vector.NewVec(textType, scan.mp(proc))
 	for i := int32(0); i < 5; i++ {
-		require.NoError(t, vector.AppendFixed(bat.Vecs[0], i, false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], i, false, scan.mp(proc)))
 	}
 	bat.SetRowCount(5)
 
@@ -220,7 +220,7 @@ func TestLateMaterializationFilterPreservesOriginalSelections(t *testing.T) {
 	require.Equal(t, []int32{2, 3}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0]))
 	require.Zero(t, bat.Vecs[1].Length())
 
-	bat.Clean(proc.Mp())
+	bat.Clean(scan.mp(proc))
 	scan.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.GetMPool().CurrNB())
@@ -245,11 +245,11 @@ func TestLateMaterializationFilterSkipsUnloadedCharColumns(t *testing.T) {
 	require.Equal(t, []int{0}, scan.ctr.earlyColumns)
 	require.Equal(t, []int{1}, scan.ctr.lateColumns)
 
-	bat := batch.NewOffHeapWithSize(2)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(intType)
-	bat.Vecs[1] = vector.NewOffHeapVecWithType(charType)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(intType, scan.mp(proc))
+	bat.Vecs[1] = vector.NewVec(charType, scan.mp(proc))
 	for i := int32(0); i < 4; i++ {
-		require.NoError(t, vector.AppendFixed(bat.Vecs[0], i, false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], i, false, scan.mp(proc)))
 	}
 	bat.SetRowCount(4)
 
@@ -259,7 +259,7 @@ func TestLateMaterializationFilterSkipsUnloadedCharColumns(t *testing.T) {
 	require.Equal(t, 2, bat.RowCount())
 	require.Zero(t, bat.Vecs[1].Length(), "late CHAR vector must remain unloaded during filtering")
 
-	bat.Clean(proc.Mp())
+	bat.Clean(scan.mp(proc))
 	scan.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.GetMPool().CurrNB())
@@ -323,6 +323,61 @@ func TestTableScanUsesLateMaterializationReader(t *testing.T) {
 
 			scan.Reset(proc, false, nil)
 			require.True(t, reader.closed)
+		})
+	}
+}
+
+func TestProjectionColumnUses(t *testing.T) {
+	for _, shape := range []string{"mixed", "single-batch-tag", "forward-priority", "domain", "membership", "domain-pass", "unknown"} {
+		t.Run(shape, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+			require.NoError(t, err)
+			account, err := registry.Open(1 << 20)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+			})
+			allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
+			require.NoError(t, err)
+			typ := types.T_int32.ToType()
+			scan := &TableScan{Types: []pbplan.Type{typ.PlanType(), typ.PlanType(), typ.PlanType()}, OutputAllocation: allocation, FilterExprs: []*pbplan.Expr{lateTestCompare(t, ">", 1, 0)}}
+			scan.ProjectList = []*pbplan.Expr{lateTestCol(0, typ), lateTestCompare(t, ">", 1, 3)}
+			if shape == "single-batch-tag" {
+				scan.ProjectList[0].GetCol().RelPos = 7
+				scan.ProjectList[1].GetF().Args[0].GetCol().RelPos = 9
+			}
+			if shape == "forward-priority" {
+				scan.ProjectList = append(scan.ProjectList, lateTestCol(1, typ))
+			}
+			require.NoError(t, scan.PrepareProjection(proc))
+			t.Cleanup(func() { scan.FreeProjection(proc) })
+			if shape == "domain" || shape == "membership" || shape == "domain-pass" {
+				scan.ctr.domainProbes = []localDomainProbeState{{column: 2, pass: shape == "domain-pass"}}
+				if shape == "membership" {
+					scan.ctr.readerFilter = &engine.ReaderFilterRequest{Membership: &engine.ReaderMembershipFilter{}}
+				}
+			}
+			if shape == "unknown" {
+				// An expression form whose column use is not understood keeps
+				// every column owned.
+				scan.ProjectList[0] = &pbplan.Expr{Typ: typ.PlanType(), Expr: &pbplan.Expr_Sub{Sub: &pbplan.SubqueryRef{}}}
+			}
+			scan.prepareColumnUses()
+			if shape == "unknown" {
+				require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned, engine.ReaderColumnOwned}, scan.ctr.columnUses)
+				return
+			}
+			want := []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned, engine.ReaderColumnUnused}
+			if shape == "domain" || shape == "membership" {
+				want[2] = engine.ReaderColumnOwned
+			}
+			if shape == "membership" {
+				require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned, engine.ReaderColumnUnused}, scan.ctr.readerFilter.Membership.ColumnUses)
+			}
+			require.Equal(t, want, scan.ctr.columnUses)
 		})
 	}
 }

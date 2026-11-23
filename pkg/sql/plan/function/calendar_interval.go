@@ -112,6 +112,7 @@ func calendarIntervalOverloads() []overload {
 
 func calendarIntervalGetter(vec *vector.Vector) (func(uint64) (string, bool), error) {
 	scale := vec.GetType().Scale
+	// typeswitch:partial bf16/float16/float8/float4 intervals are cast to float32 by resetDateFunctionArgs
 	switch vec.GetType().Oid {
 	case types.T_char, types.T_varchar, types.T_text:
 		values := vector.GenerateFunctionStrParameter(vec)

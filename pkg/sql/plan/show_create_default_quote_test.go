@@ -66,7 +66,7 @@ func TestShowCreateTableStringDefaultRoundTrip(t *testing.T) {
 				}
 				stmt, err := mysql.ParseOneWithSQLMode(t.Context(), ddl, 1, mode)
 				require.NoError(t, err)
-				rebuilt, err := BuildPlan(&mock.ctxt, stmt, false)
+				rebuilt, err := BuildPlan(&mock.ctxt, stmt, false, nil)
 				stmt.Free()
 				require.NoError(t, err)
 				next := rebuilt.GetDdl().GetCreateTable().GetTableDef()
@@ -106,14 +106,14 @@ func TestAlterCopyDefaultUsesInternalParserMode(t *testing.T) {
 			for _, clause := range []string{"add added varchar(32) default " + literal, "modify v varchar(32) default " + literal} {
 				stmt, err := mysql.ParseOneWithSQLMode(t.Context(), "alter table mode_copy "+clause+", algorithm=copy", 1, mode)
 				require.NoError(t, err)
-				built, err := BuildPlan(&mock.ctxt, stmt, false)
+				built, err := BuildPlan(&mock.ctxt, stmt, false, nil)
 				stmt.Free()
 				require.NoError(t, err)
 				alter := built.GetDdl().GetAlterTable()
 				// Match the ordinary-mode parser used by the internal SQL executor.
 				replay, err := mysql.ParseOne(t.Context(), alter.CreateTmpTableSql, 1)
 				require.NoError(t, err, alter.CreateTmpTableSql)
-				rebuilt, err := BuildPlan(&mock.ctxt, replay, false)
+				rebuilt, err := BuildPlan(&mock.ctxt, replay, false, nil)
 				replay.Free()
 				require.NoError(t, err)
 				for _, col := range alter.CopyTableDef.Cols {

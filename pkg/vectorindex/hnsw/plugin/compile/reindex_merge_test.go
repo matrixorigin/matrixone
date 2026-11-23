@@ -32,3 +32,12 @@ func TestValidateReindexParams_RejectsMerge(t *testing.T) {
 		require.Contains(t, err.Error(), "ALTER ... REINDEX MERGE is not supported for a hnsw index")
 	}
 }
+
+// ALTER ... REINDEX MAX_BAD_RECORDS changes the limit of the index.
+func TestValidateReindexParams_MaxBadRecords(t *testing.T) {
+	old := map[string]string{catalog.IndexAlgoParamOpType: "vector_l2_ops", catalog.IndexAlgoParamMaxBadRecords: "0"}
+	got, err := Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{Params: map[string]string{catalog.IndexAlgoParamMaxBadRecords: "100"}})
+	require.NoError(t, err)
+	require.Equal(t, "100", got[catalog.IndexAlgoParamMaxBadRecords])
+	require.Equal(t, "0", old[catalog.IndexAlgoParamMaxBadRecords])
+}

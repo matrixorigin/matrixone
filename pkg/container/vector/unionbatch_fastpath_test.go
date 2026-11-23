@@ -16,13 +16,83 @@ package vector
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUnionInlineSelection(t *testing.T) {
+	for _, shape := range []string{"inline", "zero-area-noninline", "zero-area-noninline-empty-dest", "nullable", "mixed"} {
+		for _, index32 := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/int32=%t", shape, index32), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+				src, dst := NewVec(types.T_varchar.ToType(), mp), NewVec(types.T_varchar.ToType(), mp)
+				t.Cleanup(func() { src.Free(mp); dst.Free(mp) })
+				values := []string{"a", "b", strings.Repeat("c", types.VarlenaInlineSize), "d", "e", "f", "g", "h"}
+				emptyNonInline := strings.HasPrefix(shape, "zero-area-noninline")
+				if emptyNonInline {
+					values[1] = ""
+				} else if shape == "mixed" {
+					values[1] = strings.Repeat("b", types.VarlenaInlineSize+1)
+				}
+				for row, value := range values {
+					require.NoError(t, AppendBytes(src, []byte(value), shape == "nullable" && row == 4, mp))
+				}
+				if emptyNonInline {
+					// Zero area bytes alone do not prove inline descriptors.
+					MustFixedColNoTypeCheck[types.Varlena](src)[1].SetOffsetLen(0, 0)
+					require.Empty(t, src.area)
+				}
+				src.GetGrouping().Add(2)
+				// Consecutive runs, gaps, repetition and reversal share one
+				// append. The expected rows do not depend on the copy helper.
+				rows := []int64{1, 2, 3, 6, 6, 4, 0, 1, 2}
+				prefix := "prefix"
+				if shape == "zero-area-noninline" {
+					prefix = strings.Repeat("p", 64)
+				}
+				for range 2 {
+					dst.CleanOnlyData()
+					require.NoError(t, AppendBytes(dst, []byte(prefix), false, mp))
+					if index32 {
+						sels := make([]int32, len(rows))
+						for i, row := range rows {
+							sels[i] = int32(row)
+						}
+						require.NoError(t, dst.UnionInt32(src, sels, mp))
+					} else {
+						require.NoError(t, dst.Union(src, rows, mp))
+					}
+					require.Equal(t, prefix, dst.GetStringAt(0))
+					require.Equal(t, len(rows)+1, dst.Length())
+					for i, row := range rows {
+						isNull := shape == "nullable" && row == 4
+						require.Equal(t, isNull, dst.IsNull(uint64(i+1)))
+						require.Equal(t, row == 2, dst.GetGrouping().Contains(uint64(i+1)))
+						if !isNull {
+							require.Equal(t, values[row], dst.GetStringAt(i+1))
+							if emptyNonInline && row == 1 {
+								// The ordinary copy rebases even an empty non-inline
+								// payload after the destination's existing area.
+								offset, length := MustFixedColNoTypeCheck[types.Varlena](dst)[i+1].OffsetLen()
+								expectedOffset := uint32(0)
+								if shape == "zero-area-noninline" {
+									expectedOffset = uint32(len(prefix))
+								}
+								require.Equal(t, expectedOffset, offset)
+								require.Zero(t, length)
+							}
+						}
+					}
+				}
+			})
+		}
+	}
+}
 
 // TestUnionBatchVarlenFastPath exercises the full-append fast path: mixed inline
 // (short) + non-inline (long) values, unioned into a non-empty target so the
@@ -42,13 +112,13 @@ func TestUnionBatchVarlenFastPath(t *testing.T) {
 		return out
 	}()
 
-	w := NewVec(types.T_varchar.ToType())
+	w := NewVec(types.T_varchar.ToType(), mp)
 	for _, s := range src {
 		require.NoError(t, AppendBytes(w, []byte(s), false, mp))
 	}
 
 	// seed target with a few rows so baseOff != 0 on the batched union.
-	v := NewVec(types.T_varchar.ToType())
+	v := NewVec(types.T_varchar.ToType(), mp)
 	seed := []string{"seed-a", "seed-" + string(make([]byte, 900))}
 	for _, s := range seed {
 		require.NoError(t, AppendBytes(v, []byte(s), false, mp))
@@ -66,7 +136,7 @@ func TestUnionBatchVarlenFastPath(t *testing.T) {
 	}
 
 	// equivalence oracle: same union built via UnionOne (per-row, general path).
-	ref := NewVec(types.T_varchar.ToType())
+	ref := NewVec(types.T_varchar.ToType(), mp)
 	for _, s := range seed {
 		require.NoError(t, AppendBytes(ref, []byte(s), false, mp))
 	}
@@ -96,7 +166,7 @@ func TestUnionBatchVarlenContiguousRangeFastPath(t *testing.T) {
 		count = 173
 	)
 
-	src := NewVec(types.T_array_float32.ToType())
+	src := NewVec(types.T_array_float32.ToType(), mp)
 	for row := 0; row < rows; row++ {
 		isNull := row%29 == 0
 		value := make([]float32, dims)
@@ -107,13 +177,13 @@ func TestUnionBatchVarlenContiguousRangeFastPath(t *testing.T) {
 		}
 		require.NoError(t, AppendArray(src, value, isNull, mp))
 	}
-	nulls.Add(&src.gsp, uint64(start+3), uint64(start+count-1))
+	src.gsp.Add(uint64(start+3), uint64(start+count-1))
 
-	dst := NewVec(types.T_array_float32.ToType())
+	dst := NewVec(types.T_array_float32.ToType(), mp)
 	require.NoError(t, AppendArray(dst, []float32{1, 2, 3}, false, mp))
 	require.NoError(t, dst.UnionBatch(src, start, count, nil, mp))
 
-	ref := NewVec(types.T_array_float32.ToType())
+	ref := NewVec(types.T_array_float32.ToType(), mp)
 	require.NoError(t, AppendArray(ref, []float32{1, 2, 3}, false, mp))
 	for row := start; row < start+count; row++ {
 		require.NoError(t, ref.UnionOne(src, int64(row), mp))
@@ -153,17 +223,25 @@ func TestUnionBatchVarlenWindowCopiesOnlyLiveArea(t *testing.T) {
 		start = 101
 		count = 37
 	)
-	src := NewVec(types.T_array_float32.ToType())
+	src := NewVec(types.T_array_float32.ToType(), mp)
 	value := make([]float32, dims)
 	for row := 0; row < rows; row++ {
 		value[0] = float32(row)
 		require.NoError(t, AppendArray(src, value, false, mp))
 	}
-	window, err := src.Window(start, start+count)
+	// A cloned window copies only its rows' payload; a window is a read-only
+	// reference that retains the whole shared area.
+	owned, err := src.CloneWindow(start, start+count, mp)
 	require.NoError(t, err)
+	require.Len(t, owned.GetArea(), count*dims*4)
+	owned.Free(mp)
+	readonly := NewVecWithData(src.typ, src.Length(), src.data, src.area, nil)
+	window, err := readonly.Window(start, start+count)
+	require.NoError(t, err)
+	require.True(t, window.IsReadOnly())
 	require.Len(t, window.GetArea(), rows*dims*4)
 
-	dst := NewVec(types.T_array_float32.ToType())
+	dst := NewVec(types.T_array_float32.ToType(), mp)
 	require.NoError(t, dst.UnionBatch(window, 0, window.Length(), nil, mp))
 	require.Len(t, dst.GetArea(), count*dims*4)
 	for row := 0; row < count; row++ {
@@ -183,7 +261,7 @@ func TestUnionBatchVarlenWindowCopiesOnlyLiveArea(t *testing.T) {
 // per-row path and preserves its logical values.
 func TestUnionBatchVarlenRangeFallsBackForReorderedArea(t *testing.T) {
 	mp := mpool.MustNewZero()
-	src := NewVec(types.T_varchar.ToType())
+	src := NewVec(types.T_varchar.ToType(), mp)
 	for i := 0; i < 8; i++ {
 		require.NoError(t, AppendBytes(src,
 			[]byte(fmt.Sprintf("row-%d-", i)+string(make([]byte, 128))),
@@ -193,7 +271,7 @@ func TestUnionBatchVarlenRangeFallsBackForReorderedArea(t *testing.T) {
 	ToSliceNoTypeCheck(src, &headers)
 	headers[3], headers[4] = headers[4], headers[3]
 
-	dst := NewVec(types.T_varchar.ToType())
+	dst := NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, dst.UnionBatch(src, 2, 4, nil, mp))
 	require.Equal(t, 4, dst.Length())
 	for i := 0; i < 4; i++ {
@@ -238,31 +316,12 @@ func TestUnionBatchVarlenWindowAliasForcedGrowth(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestUnionBatchVarlenSelfAliasSparseFlagsPreservesMetadata(t *testing.T) {
-	mp := mpool.MustNewZero()
-	vec, values, isNull := newForcedGrowthAliasVector(t, mp)
-	selected := vec.Length() - 1
-	require.False(t, isNull[selected])
-	require.NoError(t, vec.SetIsBinaryStringAt(selected, true, mp))
-	flags := make([]uint8, vec.Length())
-	flags[selected] = 1
-	oldLength := vec.Length()
-
-	require.NoError(t, vec.UnionBatch(vec, 0, 1, flags, mp))
-	require.Equal(t, oldLength+1, vec.Length())
-	require.Equal(t, values[selected], string(vec.GetBytesAt(oldLength)))
-	require.True(t, vec.GetBinaryStringMetadataAt(oldLength))
-
-	vec.Free(mp)
-	require.Zero(t, mp.CurrNB())
-}
-
 func newForcedGrowthAliasVector(
 	t *testing.T,
 	mp *mpool.MPool,
 ) (*Vector, []string, []bool) {
 	t.Helper()
-	vec := NewVec(types.T_varchar.ToType())
+	vec := NewVec(types.T_varchar.ToType(), mp)
 	values := make([]string, 0, 128)
 	isNull := make([]bool, 0, 128)
 	for row := 0; row < 128; row++ {
@@ -283,7 +342,7 @@ func newForcedGrowthAliasVector(
 		selectedRows := len(values) - 1
 		if len(vec.area)+payloadBytes > cap(vec.area) &&
 			len(vec.data)+selectedRows*vec.typ.TypeSize() > cap(vec.data) {
-			nulls.Add(&vec.gsp, 2)
+			vec.gsp.Add(2)
 			return vec, values, isNull
 		}
 	}
@@ -346,7 +405,7 @@ func BenchmarkUnionBatchVarlenWindow768(b *testing.B) {
 		start = 4096
 		count = 8192
 	)
-	src := NewVec(types.T_array_float32.ToType())
+	src := NewVec(types.T_array_float32.ToType(), mp)
 	value := make([]float32, dims)
 	for row := 0; row < rows; row++ {
 		value[0] = float32(row)
@@ -359,7 +418,7 @@ func BenchmarkUnionBatchVarlenWindow768(b *testing.B) {
 		b.Fatal(err)
 	}
 	b.SetBytes(count * dims * 4)
-	dst := NewVec(types.T_array_float32.ToType())
+	dst := NewVec(types.T_array_float32.ToType(), mp)
 	if err := dst.UnionBatch(window, 0, count, nil, mp); err != nil {
 		b.Fatal(err)
 	}
@@ -398,7 +457,7 @@ func TestUnionBroadcastAndPregrow(t *testing.T) {
 			vals[i] = fmt.Sprintf("m%d-%s", i, string(make([]byte, 40))) // non-inline, mid
 		}
 	}
-	src := NewVec(types.T_varchar.ToType())
+	src := NewVec(types.T_varchar.ToType(), mp)
 	for i := 0; i < n; i++ {
 		require.NoError(t, AppendBytes(src, []byte(vals[i]), isNull[i], mp))
 	}
@@ -411,7 +470,7 @@ func TestUnionBroadcastAndPregrow(t *testing.T) {
 
 	// 1) Union (unionT sels-gather, pre-grow path) into a seeded target, reverse order.
 	{
-		v := NewVec(types.T_varchar.ToType())
+		v := NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, AppendBytes(v, []byte("seed"+string(make([]byte, 900))), false, mp))
 		sels := make([]int64, n)
 		for i := range sels {
@@ -433,7 +492,7 @@ func TestUnionBroadcastAndPregrow(t *testing.T) {
 
 	// 2) UnionMulti broadcast (varlen) of one non-inline row, large cnt.
 	{
-		v := NewVec(types.T_varchar.ToType())
+		v := NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, v.UnionMulti(src, 1, 333, mp)) // src[1] is non-inline
 		require.Equal(t, 333, v.Length())
 		for i := 0; i < 333; i++ {
@@ -443,7 +502,7 @@ func TestUnionBroadcastAndPregrow(t *testing.T) {
 
 	// 3) UnionBatch with nulls (general null branch + pre-grow), offset 0.
 	{
-		v := NewVec(types.T_varchar.ToType())
+		v := NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, v.UnionBatch(src, 0, n, nil, mp))
 		require.Equal(t, n, v.Length())
 		for i := 0; i < n; i++ {
@@ -457,7 +516,7 @@ func TestUnionBroadcastAndPregrow(t *testing.T) {
 
 	// 4) AppendMultiFixed broadcast (fillSlice on a fixed type), large cnt.
 	{
-		v := NewVec(types.T_int64.ToType())
+		v := NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, AppendMultiFixed(v, int64(0x1122334455667788), false, 1000, mp))
 		require.Equal(t, 1000, v.Length())
 		col := MustFixedColNoTypeCheck[int64](v)
@@ -503,43 +562,35 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 					defer mpool.DeleteMPool(mp)
 					require.Zero(t, mp.CurrNB())
 				})
-				source := NewVec(types.T_int64.ToType())
+				source := NewVec(types.T_int64.ToType(), mp)
 				defer source.Free(mp)
 				require.NoError(t, AppendFixedList(source, []int64{10, 11, 12, 13, 14, 15, 16}, nil, mp))
 				source.GetNulls().Add(test.nulls...)
 				source.GetGrouping().Add(1, 3, 6)
 				source.SetLength(5) // Retain stale bits outside the logical range.
-				source.SetPrepareParamKind(PrepareParamInteger)
-				require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
-				destination := NewVec(types.T_int64.ToType())
+				destination := NewVec(types.T_int64.ToType(), mp)
 				defer destination.Free(mp)
 				require.NoError(t, AppendFixed(destination, int64(99), false, mp))
 				if preflighted {
 					// The preflight API requires explicit flags, so this also
 					// checks the unchanged flagged-copy control.
 					flags := []uint8{1, 1, 1}
-					require.NoError(t, destination.PreExtendSelectedBatch(source, 2, 3, flags, 4, mp))
-					require.NoError(t, destination.UnionBatchPreflighted(source, 2, 3, flags, mp))
+					preflight, err := destination.PreExtendSelectedBatch(source, 2, 3, flags, 4, mp)
+					require.NoError(t, err)
+					require.NoError(t, destination.UnionBatchPreflighted(source, 2, 3, flags, &preflight, mp))
 				} else {
 					require.NoError(t, destination.UnionBatch(source, 2, 3, nil, mp))
 				}
 				require.Equal(t, 4, destination.Length())
 				require.Equal(t, int64(99), GetFixedAtNoTypeCheck[int64](destination, 0))
 				require.False(t, destination.IsNull(0))
-				require.Equal(t, types.StringSourceExpression, destination.GetStringSourceAt(0))
-				require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(0))
-				require.False(t, destination.GetIsBinaryStringAt(0))
 				for row := 1; row < 4; row++ {
 					isNull := test.name == "all" || test.name == "sparse" && row == 1
 					require.Equal(t, isNull, destination.IsNull(uint64(row)))
 					require.Equal(t, row == 2, destination.GetGrouping().Contains(uint64(row)))
-					require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(row))
-					require.False(t, destination.GetIsBinaryStringAt(row))
 					if !isNull {
 						require.Equal(t, int64(11+row), GetFixedAtNoTypeCheck[int64](destination, row))
-						require.Equal(t, PrepareParamInteger, destination.GetPrepareParamKindAt(row))
 					} else {
-						require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(row))
 					}
 				}
 				require.False(t, destination.GetNulls().Contains(5))
@@ -557,7 +608,7 @@ func TestUnionBatchNullFastPath(t *testing.T) {
 	mp := mpool.MustNewZero()
 	const n = 300
 	build := func() *Vector {
-		w := NewVec(types.T_varchar.ToType())
+		w := NewVec(types.T_varchar.ToType(), mp)
 		for i := 0; i < n; i++ {
 			var b []byte
 			null := false
@@ -574,18 +625,18 @@ func TestUnionBatchNullFastPath(t *testing.T) {
 			require.NoError(t, AppendBytes(w, b, null, mp))
 		}
 		// set a few grouping bits (independent of nulls)
-		nulls.Add(&w.gsp, 3, 7, 100, 299)
+		w.gsp.Add(3, 7, 100, 299)
 		return w
 	}
 	w := build()
 
 	// fast path: append all of w into a seeded (non-empty) target.
-	v := NewVec(types.T_varchar.ToType())
+	v := NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, AppendBytes(v, append([]byte("seed-"), make([]byte, 500)...), false, mp))
 	require.NoError(t, v.UnionBatch(w, 0, w.Length(), nil, mp))
 
 	// reference via per-row UnionOne.
-	ref := NewVec(types.T_varchar.ToType())
+	ref := NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, AppendBytes(ref, append([]byte("seed-"), make([]byte, 500)...), false, mp))
 	for i := 0; i < w.Length(); i++ {
 		require.NoError(t, ref.UnionOne(w, int64(i), mp))
@@ -604,11 +655,11 @@ func TestUnionBatchNullFastPath(t *testing.T) {
 
 	// edge: all-null source.
 	{
-		aw := NewVec(types.T_varchar.ToType())
+		aw := NewVec(types.T_varchar.ToType(), mp)
 		for i := 0; i < 50; i++ {
 			require.NoError(t, AppendBytes(aw, nil, true, mp))
 		}
-		av := NewVec(types.T_varchar.ToType())
+		av := NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, av.UnionBatch(aw, 0, aw.Length(), nil, mp))
 		require.Equal(t, 50, av.Length())
 		for i := 0; i < 50; i++ {
@@ -633,14 +684,14 @@ func TestUnionBatchNullFastPath(t *testing.T) {
 func TestUnionBatchFastPathStaleBitmapBits(t *testing.T) {
 	mp := mpool.MustNewZero()
 	build := func() *Vector {
-		w := NewVec(types.T_varchar.ToType())
+		w := NewVec(types.T_varchar.ToType(), mp)
 		for i := 0; i < 20; i++ {
 			require.NoError(t, AppendBytes(w, []byte(fmt.Sprintf("r%d", i)), false, mp))
 		}
 		// in-range bits (must propagate) plus stale bits >= the shrunk length
 		// (must be ignored, exactly as the per-row path ignores them).
-		nulls.Add(&w.nsp, 3, 15, 18)
-		nulls.Add(&w.gsp, 5, 12, 17)
+		w.nsp.Add(3, 15, 18)
+		w.gsp.Add(5, 12, 17)
 		w.SetLength(10) // length 10; bits 12,15,17,18 are now stale (>= length)
 		return w
 	}
@@ -648,12 +699,12 @@ func TestUnionBatchFastPathStaleBitmapBits(t *testing.T) {
 	require.Equal(t, 10, w.Length())
 
 	// fast path into a non-empty target (baseOff != 0 so the rebase runs too).
-	v := NewVec(types.T_varchar.ToType())
+	v := NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, AppendBytes(v, []byte("seed"), false, mp))
 	require.NoError(t, v.UnionBatch(w, 0, w.Length(), nil, mp)) // panics pre-fix
 
 	// reference: per-row UnionOne, which only consults [0,cnt).
-	ref := NewVec(types.T_varchar.ToType())
+	ref := NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, AppendBytes(ref, []byte("seed"), false, mp))
 	for i := 0; i < w.Length(); i++ {
 		require.NoError(t, ref.UnionOne(w, int64(i), mp))
@@ -692,7 +743,7 @@ func TestUnionBatchFastPathStaleBitmapBits(t *testing.T) {
 func TestUnionPregrowSkipsNullRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	const n = 32
-	w := NewVec(types.T_varchar.ToType())
+	w := NewVec(types.T_varchar.ToType(), mp)
 	for i := 0; i < n; i++ {
 		require.NoError(t, AppendBytes(w, []byte("x"), false, mp)) // inline: uses no area
 	}
@@ -703,12 +754,12 @@ func TestUnionPregrowSkipsNullRows(t *testing.T) {
 	const staleLen = 1 << 20 // 1 MiB of dead payload per null row
 	for i := 1; i < n; i += 2 {
 		wCol[i].SetOffsetLen(0, staleLen)
-		nulls.Add(&w.nsp, uint64(i))
+		w.nsp.Add(uint64(i))
 	}
 
 	// Union all rows (sels-gather -> the pre-grow path). Pre-fix this reserves
 	// ~(n/2)*staleLen of area for the dead null-slot payload.
-	v := NewVec(types.T_varchar.ToType())
+	v := NewVec(types.T_varchar.ToType(), mp)
 	sels := make([]int64, n)
 	for i := range sels {
 		sels[i] = int64(i)
@@ -737,7 +788,7 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-			src := NewVec(types.T_varchar.ToType())
+			src := NewVec(types.T_varchar.ToType(), mp)
 			t.Cleanup(func() { src.Free(mp) })
 			for i := 0; i < 8; i++ {
 				size := 64 + i
@@ -760,14 +811,13 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 				require.NoError(t, AppendBytes(src, value, i == 6, mp))
 			}
 			if kind == "null-dead-payload" {
-				nulls.Add(&src.nsp, 0)
+				src.nsp.Add(0)
 			}
 			if kind == "reordered" {
 				col := MustFixedColNoTypeCheck[types.Varlena](src)
 				col[2], col[4] = col[4], col[2]
 			}
-			nulls.Add(&src.gsp, 3)
-			require.NoError(t, src.SetStringSource(types.StringSourceLiteral))
+			src.gsp.Add(3)
 			input := src
 			offset, count := 0, 8
 			if kind == "offset" || kind == "reordered" {
@@ -792,10 +842,10 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 			}
 			state := newTestVectorAllocationAccount(t, 64*1024, 32)
 			t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
-			dst := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
-			t.Cleanup(func() { dst.Free(mp) })
-			require.NoError(t, AppendBytes(dst, []byte("prefix"), false, mp))
-			require.NoError(t, dst.SetStringSource(types.StringSourceExpression))
+			dmp := state.view(t, mp)
+			dst := newAccountedTestVector(t, types.T_varchar.ToType(), dmp)
+			t.Cleanup(func() { dst.Free(dmp) })
+			require.NoError(t, AppendBytes(dst, []byte("prefix"), false, dmp))
 			selected := 0
 			liveBytes := 0
 			for i, f := range flags {
@@ -807,9 +857,10 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 					liveBytes += len(input.GetBytesAt(offset + i))
 				}
 			}
-			require.NoError(t, dst.PreExtendSelectedBatch(input, offset, count, flags, 1+selected, mp))
+			preflight, err := dst.PreExtendSelectedBatch(input, offset, count, flags, 1+selected, dmp)
+			require.NoError(t, err)
 			admitted := state.account.Snapshot().Used
-			require.NoError(t, dst.UnionBatchPreflighted(input, int64(offset), count, flags, mp))
+			require.NoError(t, dst.UnionBatchPreflighted(input, int64(offset), count, flags, &preflight, dmp))
 			require.Equal(t, admitted, state.account.Snapshot().Used, "publication cannot allocate")
 			require.Len(t, dst.GetArea(), liveBytes, "only admitted live bytes may be copied")
 			next := 1
@@ -823,10 +874,8 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 				if !input.IsNull(uint64(row)) {
 					require.Equal(t, input.GetBytesAt(row), dst.GetBytesAt(next))
 				}
-				require.Equal(t, types.StringSourceLiteral, dst.GetStringSourceAt(next))
 				next++
 			}
-			require.Equal(t, types.StringSourceExpression, dst.GetStringSourceAt(0))
 		})
 	}
 }
@@ -835,8 +884,8 @@ func BenchmarkPreflightedVarlenSelection(b *testing.B) {
 	for _, stride := range []int{1, 2} {
 		b.Run(fmt.Sprintf("select-every-%d", stride), func(b *testing.B) {
 			mp := mpool.MustNewZero()
-			src := NewVec(types.T_varchar.ToType())
-			dst := NewVec(types.T_varchar.ToType())
+			src := NewVec(types.T_varchar.ToType(), mp)
+			dst := NewVec(types.T_varchar.ToType(), mp)
 			const rows = 256
 			flags := make([]uint8, rows)
 			selected := 0
@@ -850,10 +899,11 @@ func BenchmarkPreflightedVarlenSelection(b *testing.B) {
 			b.SetBytes(int64(selected * 128))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := dst.PreExtendSelectedBatch(src, 0, rows, flags, selected, mp); err != nil {
+				preflight, err := dst.PreExtendSelectedBatch(src, 0, rows, flags, selected, mp)
+				if err != nil {
 					b.Fatal(err)
 				}
-				if err := dst.UnionBatchPreflighted(src, 0, rows, flags, mp); err != nil {
+				if err := dst.UnionBatchPreflighted(src, 0, rows, flags, &preflight, mp); err != nil {
 					b.Fatal(err)
 				}
 				dst.CleanOnlyData()
@@ -862,6 +912,29 @@ func BenchmarkPreflightedVarlenSelection(b *testing.B) {
 			dst.Free(mp)
 			src.Free(mp)
 			require.Zero(b, mp.CurrNB())
+		})
+	}
+}
+
+func TestConstNullCleanAndUnionBatch(t *testing.T) {
+	for _, oid := range []types.T{types.T_any, types.T_int32, types.T_float64, types.T_text} {
+		t.Run(oid.String(), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			src := NewConstNull(oid.ToType(), 3, mp)
+			dst := NewConstNull(oid.ToType(), 3, mp)
+			defer func() { src.Free(mp); dst.Free(mp); require.Zero(t, mp.CurrNB()) }()
+			for _, length := range []int{3, 1, 0, 4} {
+				t.Run(fmt.Sprintf("length_%d", length), func(t *testing.T) {
+					src.SetLength(length)
+					dst.CleanOnlyData()
+					require.Zero(t, dst.Length(), "clean must remove logical rows even without a payload")
+					require.NoError(t, dst.UnionBatch(src, 0, length, nil, mp))
+					require.Equal(t, length, dst.Length())
+					for row := 0; row < dst.Length(); row++ {
+						require.True(t, dst.IsNull(uint64(row)))
+					}
+				})
+			}
 		})
 	}
 }

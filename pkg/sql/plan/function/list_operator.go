@@ -62,6 +62,12 @@ func integerComparisonDomain(inputs []types.Type) (types.Type, bool) {
 }
 
 func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Type) {
+	if left.Oid.IsArray() && right.Oid.IsArray() && left.Oid != right.Oid {
+		if target, _, ok := commonVectorType([]types.Type{left, right}); ok {
+			return true, target, target
+		}
+		return false, left, right
+	}
 	if target, ok := integerComparisonDomain([]types.Type{left, right}); ok {
 		return left.Oid != target.Oid || right.Oid != target.Oid, target, target
 	}
@@ -1297,6 +1303,48 @@ var supportedOperators = []FuncNew{
 					return newOpOperatorFixedIn[uint64]().operatorIn
 				},
 			},
+			// bf16/float16/float8/float4: stored values are canonical (one zero, no NaN), so
+			// equality of the codes is equality of the values
+			{
+				overloadId: 103,
+				args:       []types.T{types.T_bf16, types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.BF16]().operatorIn
+				},
+			},
+			{
+				overloadId: 104,
+				args:       []types.T{types.T_float16, types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float16]().operatorIn
+				},
+			},
+			{
+				overloadId: 105,
+				args:       []types.T{types.T_float8, types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float8]().operatorIn
+				},
+			},
+			{
+				overloadId: 106,
+				args:       []types.T{types.T_float4, types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float4]().operatorIn
+				},
+			},
 		},
 	},
 
@@ -1577,6 +1625,48 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpOperatorFixedIn[uint64]().operatorNotIn
+				},
+			},
+			// bf16/float16/float8/float4: stored values are canonical (one zero, no NaN), so
+			// equality of the codes is equality of the values
+			{
+				overloadId: 103,
+				args:       []types.T{types.T_bf16, types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.BF16]().operatorNotIn
+				},
+			},
+			{
+				overloadId: 104,
+				args:       []types.T{types.T_float16, types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float16]().operatorNotIn
+				},
+			},
+			{
+				overloadId: 105,
+				args:       []types.T{types.T_float8, types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float8]().operatorNotIn
+				},
+			},
+			{
+				overloadId: 106,
+				args:       []types.T{types.T_float4, types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float4]().operatorNotIn
 				},
 			},
 		},
@@ -1993,7 +2083,7 @@ var supportedOperators = []FuncNew{
 		functionId: UNARY_PLUS,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    unaryPlusMatch,
 
 		Overloads: []overload{
 			{
@@ -2233,10 +2323,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `unary_tilde`
 	{
-		functionId: UNARY_TILDE,
-		class:      plan.Function_STRICT,
-		layout:     UNARY_ARITHMETIC_OPERATOR,
-		checkFn:    unaryTildeTypeMatch,
+		functionId:        UNARY_TILDE,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter, keepsOperandBinding: true}},
+		class:             plan.Function_STRICT,
+		layout:            UNARY_ARITHMETIC_OPERATOR,
+		checkFn:           unaryTildeTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2695,6 +2786,62 @@ var supportedOperators = []FuncNew{
 					return CoalesceStr
 				},
 			},
+			{
+				overloadId: 32,
+				args:       []types.T{types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bf16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.BF16]
+				},
+			},
+			{
+				overloadId: 33,
+				args:       []types.T{types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float16]
+				},
+			},
+			{
+				overloadId: 34,
+				args:       []types.T{types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float8]
+				},
+			},
+			{
+				overloadId: 35,
+				args:       []types.T{types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float4.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float4]
+				},
+			},
+			{
+				overloadId: 36,
+				args:       []types.T{types.T_array_float8},
+				retType:    coalesceVectorReturnType,
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
+			{
+				overloadId: 37,
+				args:       []types.T{types.T_array_float4},
+				retType:    coalesceVectorReturnType,
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
 		},
 	},
 
@@ -2782,6 +2929,22 @@ var supportedOperators = []FuncNew{
 				overloadId: int(TemporalIntegerArgumentCastOverload),
 				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
 				newOp:      func() executeLogicOfOverload { return NewTemporalIntegerArgumentCast },
+			},
+			{
+				overloadId:      int(TemporalCastIntegerOverload),
+				volatile:        true,
+				executionStable: true,
+				retType:         func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:           func() executeLogicOfOverload { return NewTemporalCastInteger },
+			},
+			{
+				// Internal prepared BIT_COUNT string-to-latched-numeric conversion.
+				// User-written CAST and every other prepared consumer keep their
+				// existing conversion and diagnostic ownership.
+				overloadId:           int(PreparedBitCountCastOverload),
+				rowScopedDiagnostics: true,
+				retType:              func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:                func() executeLogicOfOverload { return NewPreparedBitCountCast },
 			},
 		},
 	},
@@ -3104,7 +3267,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISTRUE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3125,7 +3288,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISNOTTRUE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_NOT_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3146,7 +3309,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISFALSE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3167,7 +3330,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISNOTFALSE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_NOT_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3185,10 +3348,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `&`
 	{
-		functionId: OP_BIT_AND,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:        OP_BIT_AND,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3254,10 +3418,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `|`
 	{
-		functionId: OP_BIT_OR,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:        OP_BIT_OR,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3323,10 +3488,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `^`
 	{
-		functionId: OP_BIT_XOR,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:        OP_BIT_XOR,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3392,10 +3558,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `<<`
 	{
-		functionId: OP_BIT_SHIFT_LEFT,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    bitShiftTypeMatch,
+		functionId:        OP_BIT_SHIFT_LEFT,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           bitShiftTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3491,10 +3658,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `>>`
 	{
-		functionId: OP_BIT_SHIFT_RIGHT,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    bitShiftTypeMatch,
+		functionId:        OP_BIT_SHIFT_RIGHT,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           bitShiftTypeMatch,
 
 		Overloads: []overload{
 			{

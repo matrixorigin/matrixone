@@ -15,6 +15,8 @@
 package compile
 
 import (
+	"math"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,13 +27,64 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreparedPaginationScanBoundRebindAndOverflow(t *testing.T) {
+	c := newMergeTopFallbackTestCompile(t)
+	c.isPrepare = false
+	c.pn = &plan.Plan{IsPrepare: true}
+	params := vector.NewVec(types.T_text.ToType(), c.proc.Mp())
+	c.proc.SetPrepareParams(params)
+	t.Cleanup(func() {
+		c.proc.SetPrepareParams(nil)
+		params.Free(c.proc.Mp())
+		c.proc.Free()
+	})
+	param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	bound, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "cast", []*plan.Expr{param, target})
+	require.NoError(t, err)
+	node := &plan.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(5), Offset: bound}
+	for _, tc := range []struct {
+		value string
+		want  uint64
+		ok    bool
+	}{
+		{value: "500000", want: 500005, ok: true},
+		{value: "18446744073709551610", want: math.MaxUint64, ok: true},
+		{value: "18446744073709551611"},
+		{value: "18446744073709551616"},
+		{value: "-1"},
+		{value: "2", want: 7, ok: true},
+	} {
+		params.Reset(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, c.proc.Mp()))
+		got, ok := c.preparedPaginationScanBound(node)
+		require.Equal(t, tc.ok, ok, tc.value)
+		if ok {
+			require.Equal(t, tc.want, got, tc.value)
+		}
+	}
+	for _, tc := range []struct {
+		typ  types.T
+		want uint64
+	}{
+		{types.T_int16, math.MaxInt16}, {types.T_uint16, math.MaxUint16},
+		{types.T_int32, math.MaxInt32}, {types.T_uint32, math.MaxUint32},
+		{types.T_int64, math.MaxInt64}, {types.T_uint64, math.MaxUint64},
+	} {
+		maximum := uint64(math.MaxUint64)
+		require.True(t, preparedPaginationSourceDomain(tc.typ, &maximum, false))
+		require.Equal(t, tc.want, maximum, tc.typ)
+	}
+}
 
 func TestPreparedPaginationTopRebindsCurrentBounds(t *testing.T) {
 	c := newMergeTopFallbackTestCompile(t)
 	c.isPrepare = false
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), c.proc.Mp())
 	c.proc.SetPrepareParams(params)
 	t.Cleanup(func() {
 		c.proc.SetPrepareParams(nil)
@@ -123,7 +176,7 @@ func TestPreparedPaginationTopRebindsCurrentBounds(t *testing.T) {
 
 func TestPreparedPaginationTopBoundMatchesRuntimeConversion(t *testing.T) {
 	c := newMergeTopFallbackTestCompile(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), c.proc.Mp())
 	c.proc.SetPrepareParams(params)
 	t.Cleanup(func() {
 		c.proc.SetPrepareParams(nil)
@@ -139,20 +192,21 @@ func TestPreparedPaginationTopBoundMatchesRuntimeConversion(t *testing.T) {
 	for _, tc := range []struct {
 		name, value string
 		typ         types.T
-		kind        vector.PrepareParamKind
+		kind        types.StringConversionKind
 	}{
-		{name: "signed narrow", value: "127", typ: types.T_int8, kind: vector.PrepareParamInteger},
-		{name: "unsigned narrow", value: "255", typ: types.T_uint8, kind: vector.PrepareParamInteger},
-		{name: "signed large", value: "16384", typ: types.T_int64, kind: vector.PrepareParamInteger},
-		{name: "unsigned large", value: "16384", typ: types.T_uint64, kind: vector.PrepareParamInteger},
-		{name: "boolean false", value: "0", typ: types.T_bool, kind: vector.PrepareParamBoolean},
-		{name: "boolean true", value: "1", typ: types.T_bool, kind: vector.PrepareParamBoolean},
-		{name: "decimal text", value: "0007", typ: types.T_uint64, kind: vector.PrepareParamNone},
+		{name: "signed narrow", value: "127", typ: types.T_int8, kind: types.StringConversionInteger},
+		{name: "unsigned narrow", value: "255", typ: types.T_uint8, kind: types.StringConversionInteger},
+		{name: "signed large", value: "16384", typ: types.T_int64, kind: types.StringConversionInteger},
+		{name: "unsigned large", value: "16384", typ: types.T_uint64, kind: types.StringConversionInteger},
+		{name: "boolean false", value: "0", typ: types.T_bool, kind: types.StringConversionBoolean},
+		{name: "boolean true", value: "1", typ: types.T_bool, kind: types.StringConversionBoolean},
+		{name: "decimal text", value: "0007", typ: types.T_uint64, kind: types.StringConversionString},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			params.Reset(types.T_text.ToType())
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, c.proc.Mp()))
-			c.proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{tc.kind})
+			c.proc.SetPrepareParams(params)
+			installPaginationTypedParam(t, c.proc, tc.kind, tc.value)
 			param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
 			expr := cast(cast(param, tc.typ), types.T_uint64)
 			got, dynamic, ok := preparedPaginationTopBound(c.proc, expr)
@@ -172,7 +226,7 @@ func TestPreparedPaginationTopBoundMatchesRuntimeConversion(t *testing.T) {
 
 func TestPreparedPaginationTopBoundRejectsUnprovedConversions(t *testing.T) {
 	c := newMergeTopFallbackTestCompile(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), c.proc.Mp())
 	c.proc.SetPrepareParams(params)
 	t.Cleanup(func() {
 		c.proc.SetPrepareParams(nil)
@@ -200,13 +254,51 @@ func TestPreparedPaginationTopBoundRejectsUnprovedConversions(t *testing.T) {
 	_, _, ok = preparedPaginationTopBound(c.proc, limit)
 	require.False(t, ok, "explicit casts retain their runtime diagnostic owner")
 	limit.GetF().SyntaxExplicitCast = false
-	c.proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{vector.PrepareParamFloat})
+	c.proc.SetPrepareParams(params)
+	installPaginationTypedParam(t, c.proc, types.StringConversionFloat, "127")
 	_, _, ok = preparedPaginationTopBound(c.proc, limit)
 	require.False(t, ok, "float transport is not an integer conversion proof")
-	c.proc.SetPrepareParamsWithMetadata(params, []bool{true}, nil)
+	c.proc.SetPrepareParamsWithIsBin(params, []bool{true})
 	_, _, ok = preparedPaginationTopBound(c.proc, limit)
 	require.False(t, ok, "binary-number transport is not decimal text")
-	c.proc.SetPrepareParamsWithMetadata(params, nil, []bool{true})
+	c.proc.SetPrepareParams(params)
+	binaryTyped := vector.NewVec(types.T_varbinary.ToType(), c.proc.Mp())
+	require.NoError(t, vector.AppendBytes(binaryTyped, []byte("127"), false, c.proc.Mp()))
+	typed := batch.NewWithSize(1)
+	typed.Vecs[0] = binaryTyped
+	typed.SetRowCount(1)
+	c.proc.SetTypedPrepareParams(typed)
 	_, _, ok = preparedPaginationTopBound(c.proc, limit)
 	require.False(t, ok, "binary-string conversion retains its runtime owner")
+}
+
+// installPaginationTypedParam installs the typed value a binary-protocol
+// EXECUTE supplies for parameter 0; a string kind installs none.
+func installPaginationTypedParam(t *testing.T, proc *process.Process, kind types.StringConversionKind, value string) {
+	t.Helper()
+	var vec *vector.Vector
+	mp := proc.Mp()
+	switch kind {
+	case types.StringConversionString:
+		return
+	case types.StringConversionInteger:
+		n, err := strconv.ParseInt(value, 10, 64)
+		require.NoError(t, err)
+		vec = vector.NewVec(types.T_int64.ToType(), mp)
+		require.NoError(t, vector.AppendFixed(vec, n, false, mp))
+	case types.StringConversionBoolean:
+		vec = vector.NewVec(types.T_bool.ToType(), mp)
+		require.NoError(t, vector.AppendFixed(vec, value != "0", false, mp))
+	case types.StringConversionFloat:
+		f, err := strconv.ParseFloat(value, 64)
+		require.NoError(t, err)
+		vec = vector.NewVec(types.T_float64.ToType(), mp)
+		require.NoError(t, vector.AppendFixed(vec, f, false, mp))
+	default:
+		t.Fatalf("unsupported kind %v", kind)
+	}
+	typed := batch.NewWithSize(1)
+	typed.Vecs[0] = vec
+	typed.SetRowCount(1)
+	proc.SetTypedPrepareParams(typed)
 }

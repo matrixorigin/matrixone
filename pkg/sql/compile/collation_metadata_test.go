@@ -12,6 +12,7 @@ package compile
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,11 +38,11 @@ func TestCollationMetadataRemoteBatchAdmission(t *testing.T) {
 	for i, version := range []uint8{0, 1} {
 		typ := types.NewWithCharset(types.T_varchar, 8, 0, 3)
 		typ.CollationVersion = version
-		source.Vecs[i] = vector.NewVec(typ)
+		source.Vecs[i] = vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytes(source.Vecs[i], []byte("x"), false, mp))
 	}
 	source.SetRowCount(1)
-	data, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
+	data, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true)
 	require.NoError(t, err)
 	before := mp.CurrNB()
 	decoded, err := decodeBatch(mp, data)
@@ -92,7 +93,7 @@ func TestCollationMetadataExecutionBoundaries(t *testing.T) {
 	require.ErrorContains(t, err, "disabled")
 	require.Nil(t, literalVector)
 	// A legacy outer Type must not hide disabled metadata inside opaque bytes.
-	payload := vector.NewVec(types.MustTypeFromPlan(typ))
+	payload := vector.NewVec(types.MustTypeFromPlan(typ), c.proc.Mp())
 	data, err := payload.MarshalBinary()
 	require.NoError(t, err)
 	payload.Free(c.proc.Mp())
@@ -112,4 +113,30 @@ func TestCollationMetadataExecutionBoundaries(t *testing.T) {
 	// The transport codec can retain a known domain without admitting it.
 	runtime := types.MustTypeFromPlan(typ)
 	require.Equal(t, []types.Type{runtime}, convertToTypes(convertToPlanTypes([]types.Type{runtime})))
+}
+
+func TestDecodeBatchReleasesColumnsOnGroupingFailure(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := batch.NewWithSize(1)
+	t.Cleanup(func() { source.Clean(mp); require.Zero(t, mp.CurrNB()) })
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
+	for _, value := range []string{"one", "two"} {
+		require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte(value), false, mp))
+	}
+	source.Vecs[0].GetGrouping().Add(1)
+	source.SetRowCount(2)
+	encoded, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true)
+	require.NoError(t, err)
+	const groupingFooterSize = 16
+	end := len(encoded) - groupingFooterSize
+	start := end - int(binary.LittleEndian.Uint64(encoded[end+8:]))
+	before := mp.CurrNB()
+	binary.LittleEndian.PutUint64(encoded[start:], 3)
+	decoded, err := decodeBatch(mp, encoded)
+	if decoded != nil {
+		defer decoded.Clean(mp)
+	}
+	require.ErrorContains(t, err, "pipeline grouping row count mismatch")
+	require.Nil(t, decoded)
+	require.Equal(t, before, mp.CurrNB(), "decoder must release allocated state on failure")
 }

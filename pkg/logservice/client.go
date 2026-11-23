@@ -35,6 +35,17 @@ import (
 
 const (
 	defaultWriteSocketSize = 64 * 1024
+	// A healthy voter should be tried while the caller still has time after an
+	// established connection stops responding.
+	requiredLSNAttemptTimeout = 10 * time.Second
+	requiredLSNRetryDelay     = 100 * time.Millisecond
+	// Read and GetTruncatedLsn are safe to repeat after an isolated connection
+	// stops answering. This leaves room to try another replica within the WAL
+	// caller's deadline.
+	defaultLogServiceReadAttemptTimeout = 7 * time.Second
+	// A stalled established socket must fail before the WAL's one-minute
+	// attempt expires. A timed-out Append still has an unknown commit outcome.
+	defaultLogServiceBackendReadTimeout = 8 * time.Second
 )
 
 var (
@@ -93,6 +104,10 @@ type Client interface {
 	// for future appends, all future reads must start after the specified Lsn
 	// position.
 	Truncate(ctx context.Context, lsn Lsn) error
+	// TruncateWAL atomically records the physical PSN and the durable
+	// checkpointed DSN boundary for WAL replay.
+	TruncateWAL(ctx context.Context, psn, checkpointedDSN Lsn) error
+	GetWALTruncate(ctx context.Context) (psn, checkpointedDSN Lsn, err error)
 	// GetTruncatedLsn returns the largest Lsn value that has been specified for
 	// truncation.
 	GetTruncatedLsn(ctx context.Context) (Lsn, error)
@@ -104,6 +119,9 @@ type Client interface {
 	GetLatestLsn(ctx context.Context) (Lsn, error)
 	// SetRequiredLsn updates the required Lsn.
 	SetRequiredLsn(ctx context.Context, lsn Lsn) error
+	SetRequiredLsnIfCurrent(ctx context.Context, lsn, expectedLsn Lsn, revision, owner uint64) error
+	ClaimRequiredLsn(ctx context.Context, expectedLsn Lsn, revision, owner, leaderTerm, leaderID uint64) error
+	GetRequiredLsnState(ctx context.Context) (lsn Lsn, revision, owner uint64, err error)
 	// GetRequiredLsn returns the required Lsn, which is required by other shards or
 	// module. It is only a mark that other shards will read log entries from this value.
 	// If the log entries after it are removed, other shards read data from S3 storage.
@@ -113,6 +131,7 @@ type Client interface {
 type StandbyClient interface {
 	Client
 	GetLeaderID(ctx context.Context) (uint64, error)
+	GetLeaderState(ctx context.Context) (leaderID, term uint64, err error)
 }
 
 type managedClient struct {
@@ -225,6 +244,16 @@ func (c *managedClient) GetLogRecord(payloadLength int) pb.LogRecord {
 }
 
 func (c *managedClient) Append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
+	return c.appendWithMode(ctx, rec, false)
+}
+
+// AppendWAL bounds the proposal attempt for records whose logical DSN can
+// be reconciled after an unknown outcome.
+func (c *managedClient) AppendWAL(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
+	return c.appendWithMode(ctx, rec, true)
+}
+
+func (c *managedClient) appendWithMode(ctx context.Context, rec pb.LogRecord, wal bool) (Lsn, error) {
 	start := time.Now()
 	defer func() {
 		v2.LogServiceAppendDurationHistogram.Observe(time.Since(start).Seconds())
@@ -235,7 +264,7 @@ func (c *managedClient) Append(ctx context.Context, rec pb.LogRecord) (Lsn, erro
 		if err := c.prepareClient(ctx); err != nil {
 			return 0, err
 		}
-		v, err := c.client.append(ctx, rec)
+		v, err := c.client.append(ctx, rec, wal)
 		if err != nil {
 			c.resetClient()
 		}
@@ -252,9 +281,16 @@ func (c *managedClient) Read(ctx context.Context,
 		if err := c.prepareClient(ctx); err != nil {
 			return nil, 0, err
 		}
-		recs, v, err := c.client.read(ctx, firstLsn, maxSize)
+		attemptCtx, cancel := context.WithTimeout(ctx, defaultLogServiceReadAttemptTimeout)
+		recs, v, err := c.client.read(attemptCtx, firstLsn, maxSize)
+		attemptExpired := attemptCtx.Err() == context.DeadlineExceeded
+		cancel()
 		if err != nil {
 			c.resetClient()
+		}
+		if ctx.Err() == nil && err != nil &&
+			(attemptExpired || morpc.IsConnectionError(err)) {
+			continue
 		}
 		if c.isRetryableError(err) {
 			continue
@@ -295,14 +331,43 @@ func (c *managedClient) Truncate(ctx context.Context, lsn Lsn) error {
 	}
 }
 
+func (c *managedClient) TruncateWAL(ctx context.Context, psn, checkpointedDSN Lsn) error {
+	if err := c.prepareClient(ctx); err != nil {
+		return err
+	}
+	err := c.client.truncateWAL(ctx, psn, checkpointedDSN)
+	if err != nil {
+		c.resetClient()
+	}
+	return err
+}
+
+func (c *managedClient) GetWALTruncate(ctx context.Context) (Lsn, Lsn, error) {
+	if err := c.prepareClient(ctx); err != nil {
+		return 0, 0, err
+	}
+	psn, dsn, err := c.client.getWALTruncate(ctx)
+	if err != nil {
+		c.resetClient()
+	}
+	return psn, dsn, err
+}
+
 func (c *managedClient) GetTruncatedLsn(ctx context.Context) (Lsn, error) {
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			return 0, err
 		}
-		v, err := c.client.getTruncatedLsn(ctx)
+		attemptCtx, cancel := context.WithTimeout(ctx, defaultLogServiceReadAttemptTimeout)
+		v, err := c.client.getTruncatedLsn(attemptCtx)
+		attemptExpired := attemptCtx.Err() == context.DeadlineExceeded
+		cancel()
 		if err != nil {
 			c.resetClient()
+		}
+		if ctx.Err() == nil && err != nil &&
+			(attemptExpired || morpc.IsConnectionError(err)) {
+			continue
 		}
 		if c.isRetryableError(err) {
 			continue
@@ -328,50 +393,84 @@ func (c *managedClient) GetTSOTimestamp(ctx context.Context, count uint64) (uint
 }
 
 func (c *managedClient) GetLatestLsn(ctx context.Context) (Lsn, error) {
-	for {
-		if err := c.prepareClient(ctx); err != nil {
-			return 0, err
-		}
-		lsn, err := c.client.getLatestLsn(ctx)
-		if err != nil {
-			c.resetClient()
-		}
-		if c.isRetryableError(err) {
-			continue
-		}
-		return lsn, err
-	}
+	return c.retryRequiredLSNOperation(ctx, (*client).getLatestLsn)
 }
 
 func (c *managedClient) SetRequiredLsn(ctx context.Context, lsn Lsn) error {
-	for {
-		if err := c.prepareClient(ctx); err != nil {
-			return err
-		}
-		err := c.client.setRequiredLsn(ctx, lsn)
-		if err != nil {
-			c.resetClient()
-		}
-		if c.isRetryableError(err) {
-			continue
-		}
-		return err
-	}
+	_, err := c.retryRequiredLSNOperation(ctx, func(client *client, attempt context.Context) (Lsn, error) {
+		return 0, client.setRequiredLsn(attempt, lsn)
+	})
+	return err
+}
+
+func (c *managedClient) SetRequiredLsnIfCurrent(
+	ctx context.Context, lsn, expectedLsn Lsn, revision, owner uint64,
+) error {
+	_, err := c.retryRequiredLSNOperation(ctx, func(client *client, attempt context.Context) (Lsn, error) {
+		return 0, client.setRequiredLsnIfCurrent(attempt, lsn, expectedLsn, revision, owner)
+	})
+	return err
+}
+
+func (c *managedClient) ClaimRequiredLsn(
+	ctx context.Context, expectedLsn Lsn, revision, owner, leaderTerm, leaderID uint64,
+) error {
+	_, err := c.retryRequiredLSNOperation(ctx, func(client *client, attempt context.Context) (Lsn, error) {
+		return 0, client.claimRequiredLsn(attempt, expectedLsn, revision, owner, leaderTerm, leaderID)
+	})
+	return err
+}
+
+func (c *managedClient) GetRequiredLsnState(ctx context.Context) (Lsn, uint64, uint64, error) {
+	var revision, owner uint64
+	lsn, err := c.retryRequiredLSNOperation(ctx, func(client *client, attempt context.Context) (Lsn, error) {
+		value, rev, who, opErr := client.getRequiredLsnState(attempt)
+		revision = rev
+		owner = who
+		return value, opErr
+	})
+	return lsn, revision, owner, err
 }
 
 func (c *managedClient) GetRequiredLsn(ctx context.Context) (Lsn, error) {
+	return c.retryRequiredLSNOperation(ctx, (*client).getRequiredLsn)
+}
+
+// retryRequiredLSNOperation retries only reads and the same monotonic
+// required-LSN update. Other writes do not have this retry contract.
+func (c *managedClient) retryRequiredLSNOperation(
+	ctx context.Context,
+	operation func(*client, context.Context) (Lsn, error),
+) (Lsn, error) {
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		lsn, err := c.client.getRequiredLsn(ctx)
+		attempt, cancel := context.WithTimeout(ctx, requiredLSNAttemptTimeout)
+		err := c.prepareClient(attempt)
+		var lsn Lsn
+		if err == nil {
+			lsn, err = operation(c.client, attempt)
+		}
+		attemptExpired := attempt.Err() == context.DeadlineExceeded
+		cancel()
 		if err != nil {
 			c.resetClient()
 		}
-		if c.isRetryableError(err) {
-			continue
+		if err == nil || ctx.Err() != nil ||
+			(!attemptExpired && !c.isRetryableError(err) && !isTempError(err) &&
+				!moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) &&
+				!moerr.IsMoErrCode(err, moerr.ErrBackendClosed) &&
+				!moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect)) {
+			return lsn, err
 		}
-		return lsn, err
+		timer := time.NewTimer(requiredLSNRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return 0, ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
 
@@ -389,6 +488,17 @@ func (c *managedClient) GetLeaderID(ctx context.Context) (uint64, error) {
 		}
 		return leaderID, err
 	}
+}
+
+func (c *managedClient) GetLeaderState(ctx context.Context) (uint64, uint64, error) {
+	if err := c.prepareClient(ctx); err != nil {
+		return 0, 0, err
+	}
+	leaderID, term, err := c.client.getLeaderState(ctx)
+	if err != nil {
+		c.resetClient()
+	}
+	return leaderID, term, err
 }
 
 func (c *managedClient) isRetryableError(err error) bool {
@@ -528,7 +638,7 @@ func connectToLogServiceAddress(
 		c.respPool,
 		c.cfg.MaxMessageSize,
 		cfg.EnableCompress,
-		0,
+		defaultLogServiceBackendReadTimeout,
 		cfg.Tag,
 	)
 	if err != nil {
@@ -678,12 +788,12 @@ func (c *client) updateLeaseholderID(ctx context.Context, leaseholderID uint64) 
 	return c.doUpdateLeaseholderID(ctx, leaseholderID)
 }
 
-func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
+func (c *client) append(ctx context.Context, rec pb.LogRecord, wal bool) (Lsn, error) {
 	if c.readOnly() {
 		return 0, moerr.NewInvalidInput(ctx, "incompatible client")
 	}
 	// TODO: check piggybacked hint on whether we are connected to the leader node
-	return c.doAppend(ctx, rec)
+	return c.doAppend(ctx, rec, wal)
 }
 
 func (c *client) read(ctx context.Context,
@@ -722,8 +832,68 @@ func (c *client) getRequiredLsn(ctx context.Context) (Lsn, error) {
 	return c.doGetRequiredLsn(ctx)
 }
 
+func (c *client) setRequiredLsnIfCurrent(
+	ctx context.Context, lsn, expectedLsn Lsn, revision, owner uint64,
+) error {
+	_, _, err := c.request(ctx, pb.SET_REQUIRED_LSN_IF_CURRENT, nil, lsn, 0, time.Time{},
+		func(r *pb.LogRequest) {
+			r.ExpectedRequiredLsn = expectedLsn
+			r.RequiredLsnRevision = revision
+			r.RequiredLsnOwner = owner
+		})
+	return err
+}
+
+func (c *client) claimRequiredLsn(
+	ctx context.Context, expectedLsn Lsn, revision, owner, leaderTerm, leaderID uint64,
+) error {
+	_, _, err := c.request(ctx, pb.CLAIM_REQUIRED_LSN, nil, 0, 0, time.Time{},
+		func(r *pb.LogRequest) {
+			r.ExpectedRequiredLsn = expectedLsn
+			r.RequiredLsnRevision = revision
+			r.RequiredLsnOwner = owner
+			r.RequiredLsnLeaderTerm = leaderTerm
+			r.RequiredLsnLeaderID = leaderID
+		})
+	return err
+}
+
+func (c *client) getRequiredLsnState(ctx context.Context) (Lsn, uint64, uint64, error) {
+	resp, _, err := c.request(ctx, pb.GET_REQUIRED_LSN, nil, 0, 0, time.Time{})
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return resp.LogResponse.Lsn, resp.LogResponse.RequiredLsnRevision,
+		resp.LogResponse.RequiredLsnOwner, nil
+}
+
+func (c *client) truncateWAL(ctx context.Context, psn, checkpointedDSN Lsn) error {
+	if c.readOnly() {
+		return moerr.NewInvalidInput(ctx, "incompatible client")
+	}
+	_, _, err := c.request(ctx, pb.TRUNCATE_WAL, nil, psn, 0, time.Time{},
+		func(r *pb.LogRequest) { r.CheckpointedDSN = checkpointedDSN })
+	return err
+}
+
+func (c *client) getWALTruncate(ctx context.Context) (Lsn, Lsn, error) {
+	resp, _, err := c.request(ctx, pb.GET_TRUNCATE, nil, 0, 0, time.Time{})
+	if err != nil {
+		return 0, 0, err
+	}
+	return resp.LogResponse.Lsn, resp.LogResponse.CheckpointedDSN, nil
+}
+
 func (c *client) getLeaderID(ctx context.Context) (uint64, error) {
 	return c.doGetLeaderID(ctx)
+}
+
+func (c *client) getLeaderState(ctx context.Context) (uint64, uint64, error) {
+	resp, _, err := c.request(ctx, pb.GET_LEADER_ID, nil, 0, 0, time.Time{})
+	if err != nil {
+		return 0, 0, err
+	}
+	return resp.LogResponse.LeaderID, resp.LogResponse.LeaderTerm, nil
 }
 
 func (c *client) readOnly() bool {
@@ -743,7 +913,7 @@ func (c *client) connectReadOnly(ctx context.Context) error {
 
 func (c *client) request(ctx context.Context,
 	mt pb.MethodType, payload []byte, lsn Lsn,
-	maxSize uint64, ts time.Time) (pb.Response, []pb.LogRecord, error) {
+	maxSize uint64, ts time.Time, options ...func(*pb.LogRequest)) (pb.Response, []pb.LogRecord, error) {
 	ctx, span := trace.Debug(ctx, "client.request")
 	defer span.End()
 	tnID := c.cfg.TNReplicaID
@@ -760,6 +930,9 @@ func (c *client) request(ctx context.Context,
 			MaxSize: maxSize,
 			TS:      ts,
 		},
+	}
+	for _, option := range options {
+		option(&req.LogRequest)
 	}
 	r := c.pool.Get().(*RPCRequest)
 	defer r.Release()
@@ -834,8 +1007,12 @@ func (c *client) doUpdateLeaseholderID(ctx context.Context, leaseholderID uint64
 	return err
 }
 
-func (c *client) doAppend(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
-	resp, _, err := c.request(ctx, pb.APPEND, rec.Data, 0, 0, time.Time{})
+func (c *client) doAppend(ctx context.Context, rec pb.LogRecord, wal bool) (Lsn, error) {
+	method := pb.APPEND
+	if wal {
+		method = pb.APPEND_WAL
+	}
+	resp, _, err := c.request(ctx, method, rec.Data, 0, 0, time.Time{})
 	if err != nil {
 		return 0, err
 	}

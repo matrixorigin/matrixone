@@ -15,6 +15,10 @@
 package partitionservice
 
 import (
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -26,6 +30,29 @@ func (s *Service) getMetadataByRangeType(
 	def *plan.TableDef,
 ) (partition.PartitionMetadata, error) {
 	method := option.PartBy.PType.(*tree.RangeType)
+
+	// a range bound compared with a bf16/float16/float8/float4 column rounds to the column
+	// type, as a literal does, so a value rounding onto a bound has no partition
+	names := method.ColumnList
+	expr := method.Expr
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	if name, ok := expr.(*tree.UnresolvedName); ok {
+		names = append(names[:len(names):len(names)], name)
+	}
+	for _, name := range names {
+		for _, col := range def.Cols {
+			if t := types.T(col.Typ.Id); t.IsLowPrecisionFloat() && strings.EqualFold(col.Name, name.ColName()) {
+				return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtxf(
+					"%s column '%s' cannot be a RANGE partition column", t, name.ColNameOrigin())
+			}
+		}
+	}
 
 	ctx := tree.NewFmtCtx(
 		dialect.MYSQL,

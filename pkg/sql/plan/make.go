@@ -735,7 +735,7 @@ func makePlan2VecUint8ConstExprWithType(v string, l int32) *plan.Expr {
 var MakePlan2StringVecExprWithType = makePlan2StringVecExprWithType
 
 func makePlan2StringVecExprWithType(mp *mpool.MPool, vals ...string) *plan.Expr {
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, val := range vals {
 		vector.AppendBytes(vec, []byte(val), false, mp)
 	}
@@ -755,7 +755,7 @@ func makePlan2StringVecExprWithType(mp *mpool.MPool, vals ...string) *plan.Expr 
 var MakePlan2Int64VecExprWithType = makePlan2Int64VecExprWithType
 
 func makePlan2Int64VecExprWithType(mp *mpool.MPool, vals ...int64) *plan.Expr {
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, val := range vals {
 		vector.AppendFixed(vec, val, false, mp)
 	}
@@ -995,7 +995,7 @@ func makePlan2AssignmentCastExprForColumn(ctx context.Context, expr *Expr, targe
 		// assignment builders), mirroring the MEDIUMINT protocol gates.
 		return forceUnsignedDecimalAssignmentComposition(ctx, expr, targetType, "cast_assign", columnName)
 	}
-	if types.T(targetType.Id).IsArrayRelate() {
+	if types.T(targetType.Id).IsArray() {
 		// 生成列即使类型元数据相同，也必须校验实际载荷的维度。
 		return forceAssignmentCastExprWithName(ctx, expr, targetType, "cast")
 	}
@@ -1003,7 +1003,8 @@ func makePlan2AssignmentCastExprForColumn(ctx context.Context, expr *Expr, targe
 	if useAssignmentStrictCast(targetType) {
 		funcName = "cast_strict"
 	}
-	if targetType.Id == int32(types.T_blob) || targetType.Id == int32(types.T_text) {
+	if targetType.Id == int32(types.T_binary) || targetType.Id == int32(types.T_varbinary) ||
+		targetType.Id == int32(types.T_blob) || targetType.Id == int32(types.T_text) {
 		return forceAssignmentCastExprWithName(ctx, expr, targetType, funcName)
 	}
 	return makePlan2CastExprWithName(ctx, expr, targetType, funcName)
@@ -1013,7 +1014,7 @@ func makePlan2AssignmentCastExprForColumn(ctx context.Context, expr *Expr, targe
 // semantics. Stored procedure declarations and assignments use the same
 // conversion contract as values written to SQL columns.
 func MakePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
-	if isMediumIntPlanType(targetType) {
+	if isMediumIntPlanType(targetType) || targetType.Id == int32(types.T_binary) || targetType.Id == int32(types.T_varbinary) {
 		return forceAssignmentCastExprWithName(
 			ctx, expr, targetType, assignmentCastFunctionName(targetType, false, nil))
 	}

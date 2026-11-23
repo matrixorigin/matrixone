@@ -254,6 +254,6 @@ func databaseDefaultsAvailableAtSnapshot(ctx CompilerContext, snapshot *Snapshot
 	if !IsSnapshotValid(snapshot) {
 		return true, nil
 	}
-	_, def, err := ctx.Resolve(catalog.MO_CATALOG, catalog.MODatabaseDefaults, snapshot)
+	_, def, err := ctx.Resolve(catalog.MO_CATALOG, catalog.MODatabaseDefaults, snapshot, nil)
 	return def != nil, err
 }

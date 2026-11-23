@@ -210,18 +210,18 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		case cdc.CDCRequestOptions_StartTs:
 			if value != "" {
 				if startTs, err = CDCStrToTime(value, ses.timeZone); err != nil {
-					err = moerr.NewInternalErrorf(ctx, "invalid startTs: %s, supported timestamp format: `%s`, or `%s`", value, time.DateTime, time.RFC3339)
+					err = moerr.NewInternalErrorf(ctx, "invalid startTs: %s, supported timestamp format: `%s` (interpreted in the session time zone), or `%s` with an explicit offset", value, time.DateTime, time.RFC3339)
 					return
 				}
-				opts.StartTs = startTs.Format(time.RFC3339)
+				opts.StartTs = startTs.Format(time.RFC3339Nano)
 			}
 		case cdc.CDCRequestOptions_EndTs:
 			if value != "" {
 				if endTs, err = CDCStrToTime(value, ses.timeZone); err != nil {
-					err = moerr.NewInternalErrorf(ctx, "invalid endTs: %s, supported timestamp format: `%s`, or `%s`", value, time.DateTime, time.RFC3339)
+					err = moerr.NewInternalErrorf(ctx, "invalid endTs: %s, supported timestamp format: `%s` (interpreted in the session time zone), or `%s` with an explicit offset", value, time.DateTime, time.RFC3339)
 					return
 				}
-				opts.EndTs = endTs.Format(time.RFC3339)
+				opts.EndTs = endTs.Format(time.RFC3339Nano)
 			}
 		case cdc.CDCRequestOptions_MaxSqlLength:
 			if value != "" {

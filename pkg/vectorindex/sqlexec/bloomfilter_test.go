@@ -19,6 +19,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -27,6 +28,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/stretchr/testify/require"
 )
+
+func testUniqueKeyPayload(t *testing.T, values []byte) *keycodec.KeyPayload {
+	mp := mpool.MustNewZero()
+	v := vector.NewVec(types.T_uint8.ToType(), mp)
+	defer v.Free(mp)
+	require.NoError(t, vector.AppendFixedList(v, values, nil, mp))
+	data, err := v.MarshalBinary()
+	require.NoError(t, err)
+	return testutil.RuntimeKeyPayload(t, data)
+}
 
 // mockMessage is a mock Message type to test continue branch
 type mockMessage struct {
@@ -103,7 +114,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
 			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-			Data: expectedData,
+			Keys: testUniqueKeyPayload(t, expectedData),
 		}
 		message.SendMessage(rtMsg, mb)
 
@@ -115,7 +126,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		}
 
 		done := make(chan bool)
-		var result []byte
+		var result *keycodec.KeyPayload
 		var err error
 		go func() {
 			result, err = WaitUniqueJoinKeys(sqlproc)
@@ -125,7 +136,8 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		<-done
 
 		require.NoError(t, err)
-		require.Equal(t, expectedData, result)
+		require.Same(t, rtMsg.Keys, result)
+		result.Release()
 	})
 
 	t.Run("return nil when no matching message found", func(t *testing.T) {
@@ -178,7 +190,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
 			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-			Data: expectedData,
+			Keys: testUniqueKeyPayload(t, expectedData),
 		}
 		message.SendMessage(rtMsg, mb)
 
@@ -190,7 +202,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		}
 
 		done := make(chan bool)
-		var result []byte
+		var result *keycodec.KeyPayload
 		var err error
 		go func() {
 			result, err = WaitUniqueJoinKeys(sqlproc)
@@ -201,7 +213,8 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 
 		// Should skip the mock message and return the BLOOMFILTER data
 		require.NoError(t, err)
-		require.Equal(t, expectedData, result)
+		require.Same(t, rtMsg.Keys, result)
+		result.Release()
 	})
 
 	t.Run("skip non-BLOOMFILTER runtime filter types", func(t *testing.T) {
@@ -224,7 +237,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
 			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-			Data: expectedData,
+			Keys: testUniqueKeyPayload(t, expectedData),
 		}
 		message.SendMessage(rtMsg, mb)
 
@@ -236,7 +249,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		}
 
 		done := make(chan bool)
-		var result []byte
+		var result *keycodec.KeyPayload
 		var err error
 		go func() {
 			result, err = WaitUniqueJoinKeys(sqlproc)
@@ -247,7 +260,8 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 
 		// Should skip the PASS message and return the BLOOMFILTER data
 		require.NoError(t, err)
-		require.Equal(t, expectedData, result)
+		require.Same(t, rtMsg.Keys, result)
+		result.Release()
 	})
 }
 
@@ -267,9 +281,9 @@ func TestWaitUniqueJoinKeysWithStatus(t *testing.T) {
 		proc.SetMessageBoard(mb)
 		sqlproc := NewSqlProcess(proc)
 		tag := int32(899)
-		payload := []byte{1, 2, 3}
+		payload := testUniqueKeyPayload(t, []byte{1, 2, 3})
 		message.SendMessage(message.RuntimeFilterMessage{
-			Tag: tag, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Data: payload,
+			Tag: tag, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Keys: payload,
 		}, mb)
 		sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{{
 			Tag: tag, UseMembershipFilter: true,
@@ -277,7 +291,8 @@ func TestWaitUniqueJoinKeysWithStatus(t *testing.T) {
 
 		data, status, err := WaitUniqueJoinKeysWithStatus(sqlproc)
 		require.NoError(t, err)
-		require.Equal(t, payload, data)
+		defer data.Release()
+		require.Same(t, payload, data)
 		require.Equal(t, UniqueJoinKeysAvailable, status)
 	})
 
@@ -314,7 +329,7 @@ func TestBuildExactPkFilter(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("int64 values", func(t *testing.T) {
-		vec := vector.NewVec(types.New(types.T_int64, 8, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 8, 0), mp)
 		vector.AppendFixed(vec, int64(10), false, proc.Mp())
 		vector.AppendFixed(vec, int64(20), false, proc.Mp())
 		vector.AppendFixed(vec, int64(30), false, proc.Mp())
@@ -325,7 +340,7 @@ func TestBuildExactPkFilter(t *testing.T) {
 	})
 
 	t.Run("empty vector", func(t *testing.T) {
-		vec := vector.NewVec(types.New(types.T_int64, 8, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 8, 0), mp)
 
 		result, err := BuildExactPkFilter(ctx, vec)
 		require.NoError(t, err)
@@ -333,7 +348,7 @@ func TestBuildExactPkFilter(t *testing.T) {
 	})
 
 	t.Run("single value", func(t *testing.T) {
-		vec := vector.NewVec(types.New(types.T_int64, 8, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 8, 0), mp)
 		vector.AppendFixed(vec, int64(99), false, proc.Mp())
 
 		result, err := BuildExactPkFilter(ctx, vec)
@@ -342,7 +357,7 @@ func TestBuildExactPkFilter(t *testing.T) {
 	})
 
 	t.Run("varchar values", func(t *testing.T) {
-		vec := vector.NewVec(types.New(types.T_varchar, 128, 0))
+		vec := vector.NewVec(types.New(types.T_varchar, 128, 0), mp)
 		vector.AppendBytes(vec, []byte("hello"), false, proc.Mp())
 		vector.AppendBytes(vec, []byte("world"), false, proc.Mp())
 
@@ -352,7 +367,7 @@ func TestBuildExactPkFilter(t *testing.T) {
 	})
 
 	t.Run("with null values", func(t *testing.T) {
-		vec := vector.NewVec(types.New(types.T_int64, 8, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 8, 0), mp)
 		vector.AppendFixed(vec, int64(10), false, proc.Mp())
 		vector.AppendFixed(vec, int64(0), true, proc.Mp()) // null
 		vector.AppendFixed(vec, int64(30), false, proc.Mp())
@@ -417,7 +432,7 @@ func TestAppendVectorSQLLiteral(t *testing.T) {
 	})
 
 	t.Run("bit", func(t *testing.T) {
-		vec := vector.NewVec(types.New(types.T_bit, 10, 0))
+		vec := vector.NewVec(types.New(types.T_bit, 10, 0), mp)
 		vector.AppendFixed(vec, uint64(0x3FF), false, proc.Mp())
 		buf, err := AppendVectorSQLLiteral(ctx, vec, 0, nil)
 		require.NoError(t, err)
@@ -474,7 +489,7 @@ func TestAppendVectorSQLLiteral(t *testing.T) {
 	})
 
 	t.Run("binary", func(t *testing.T) {
-		vec := vector.NewVec(types.T_binary.ToType())
+		vec := vector.NewVec(types.T_binary.ToType(), mp)
 		vector.AppendBytes(vec, []byte{0xAB, 0xCD}, false, proc.Mp())
 		buf, _ := AppendVectorSQLLiteral(ctx, vec, 0, nil)
 		require.Equal(t, "x'abcd'", string(buf))
@@ -507,13 +522,13 @@ func TestAppendVectorSQLLiteral(t *testing.T) {
 
 	t.Run("decimal", func(t *testing.T) {
 		d64, _ := types.Decimal64FromFloat64(1.23, 10, 2)
-		vec64 := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		vec64 := vector.NewVec(types.New(types.T_decimal64, 10, 2), mp)
 		vector.AppendFixed(vec64, d64, false, proc.Mp())
 		buf, _ := AppendVectorSQLLiteral(ctx, vec64, 0, nil)
 		require.Equal(t, "'1.23'", string(buf))
 
 		d128, _ := types.Decimal128FromFloat64(1.23, 10, 2)
-		vec128 := vector.NewVec(types.New(types.T_decimal128, 10, 2))
+		vec128 := vector.NewVec(types.New(types.T_decimal128, 10, 2), mp)
 		vector.AppendFixed(vec128, d128, false, proc.Mp())
 		buf, _ = AppendVectorSQLLiteral(ctx, vec128, 0, nil)
 		require.Equal(t, "'1.23'", string(buf))
@@ -545,14 +560,14 @@ func TestAppendVectorSQLLiteral(t *testing.T) {
 	})
 
 	t.Run("enum", func(t *testing.T) {
-		vec := vector.NewVec(types.T_enum.ToType())
+		vec := vector.NewVec(types.T_enum.ToType(), mp)
 		vector.AppendFixed(vec, types.Enum(1), false, proc.Mp())
 		buf, _ := AppendVectorSQLLiteral(ctx, vec, 0, nil)
 		require.Equal(t, "'1'", string(buf))
 	})
 
 	t.Run("unsupported", func(t *testing.T) {
-		vec := vector.NewVec(types.T_any.ToType())
+		vec := vector.NewVec(types.T_any.ToType(), mp)
 		buf, err := AppendVectorSQLLiteral(ctx, vec, 0, nil)
 		require.Error(t, err)
 		require.Nil(t, buf)

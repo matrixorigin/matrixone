@@ -197,6 +197,10 @@ func TestRequiredLsn(t *testing.T) {
 			appendFn(i)
 		}
 
+		claimCtx, claimCancel := context.WithCancel(context.Background())
+		defer claimCancel()
+		require.NoError(t, lc.claimRequiredLsn(claimCtx))
+
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 		defer cancel()
 		require.NoError(t, lc.setRequiredLsn(ctx, 8))
@@ -214,16 +218,170 @@ func TestRequiredLsn(t *testing.T) {
 		lsn, err = lc.getRequiredLsn(ctx)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(100), lsn)
+
+		require.NoError(t, lc.resetRequiredLsn(ctx))
+		lsn, err = lc.getRequiredLsn(ctx)
+		require.NoError(t, err)
+		require.Zero(t, lsn)
 	}
 	logservice.RunClientTest(t, false, nil, fn)
 }
 
+// requiredStateClient models the replicated ownership state while allowing a
+// committed proposal's response to be lost before DataSync sees it.
+type requiredStateClient struct {
+	logservice.StandbyClient
+	lsn, revision, owner uint64
+	leaderID, term       uint64
+	loseClaimResponse    bool
+	loseSetResponse      bool
+	rejectClaim          bool
+	failReadback         bool
+	takeoverAfterSet     bool
+	changeResetReadback  bool
+	stateReads           int
+}
+
+func (c *requiredStateClient) GetLeaderState(context.Context) (uint64, uint64, error) {
+	return c.leaderID, c.term, nil
+}
+
+func (c *requiredStateClient) GetRequiredLsnState(context.Context) (logservice.Lsn, uint64, uint64, error) {
+	c.stateReads++
+	if c.failReadback && c.stateReads > 1 {
+		return 0, 0, 0, fakeError
+	}
+	if c.changeResetReadback && c.lsn == 0 && c.stateReads > 1 {
+		// Another owner claimed the shard between the reset and its readback.
+		c.owner++
+		c.revision++
+	}
+	return c.lsn, c.revision, c.owner, nil
+}
+
+func (c *requiredStateClient) ClaimRequiredLsn(
+	_ context.Context, expected logservice.Lsn, revision, owner, term, leaderID uint64,
+) error {
+	if c.rejectClaim {
+		return fakeError
+	}
+	if c.lsn != expected || c.revision != revision ||
+		c.term != term || c.leaderID != leaderID {
+		return errRequiredLsnConflict
+	}
+	c.owner = owner
+	c.revision++
+	if c.loseClaimResponse {
+		return fakeError
+	}
+	return nil
+}
+
+func (c *requiredStateClient) SetRequiredLsnIfCurrent(
+	_ context.Context, lsn, expected logservice.Lsn, revision, owner uint64,
+) error {
+	if c.lsn != expected || c.revision != revision || c.owner != owner {
+		return errRequiredLsnConflict
+	}
+	c.lsn = lsn
+	c.revision++
+	if c.takeoverAfterSet {
+		c.owner++
+		c.revision++
+		return fakeError
+	}
+	if c.loseSetResponse {
+		return fakeError
+	}
+	return nil
+}
+
+func TestRequiredLsnOwnershipAfterLostResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		loseClaimResponse   bool
+		loseSetResponse     bool
+		takeoverAfterSet    bool
+		changeResetReadback bool
+	}{
+		{name: "claim response lost", loseClaimResponse: true},
+		{name: "set response lost", loseSetResponse: true},
+		{name: "new owner after set", takeoverAfterSet: true},
+		{name: "new owner before reset readback", changeResetReadback: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &requiredStateClient{
+				leaderID: 2, term: 1,
+				loseClaimResponse:   tc.loseClaimResponse,
+				loseSetResponse:     tc.loseSetResponse,
+				takeoverAfterSet:    tc.takeoverAfterSet,
+				changeResetReadback: tc.changeResetReadback,
+			}
+			lc := &logClient{client: server}
+			ctx := context.Background()
+			require.NoError(t, lc.claimRequiredLsn(ctx))
+			require.NotZero(t, lc.requiredOwner)
+			if tc.takeoverAfterSet {
+				require.ErrorIs(t, lc.setRequiredLsn(ctx, 100), errRequiredLsnConflict)
+				require.NotEqual(t, lc.requiredRevision, server.revision)
+				return
+			}
+			require.NoError(t, lc.setRequiredLsn(ctx, 100))
+			if tc.changeResetReadback {
+				require.ErrorIs(t, lc.resetRequiredLsn(ctx), errRequiredLsnConflict)
+				require.NotEqual(t, lc.requiredOwner, server.owner)
+				return
+			}
+			require.NoError(t, lc.resetRequiredLsn(ctx))
+			require.Zero(t, server.lsn)
+		})
+	}
+}
+
+func TestRequiredLsnClaimRejectsStaleLeadership(t *testing.T) {
+	ctx := context.Background()
+	t.Run("no leader", func(t *testing.T) {
+		server := &requiredStateClient{term: 1}
+		lc := &logClient{client: server}
+		require.ErrorIs(t, lc.claimRequiredLsn(ctx), errRequiredLsnConflict)
+		require.Zero(t, server.revision)
+	})
+	t.Run("local replica is no longer leader", func(t *testing.T) {
+		server := &requiredStateClient{leaderID: 2, term: 1}
+		localReplicas := &sync.Map{}
+		localReplicas.Store(uint64(3), uint64(1))
+		lc := &logClient{common: common{shardReplicaID: localReplicas}, client: server, shardID: 3}
+		require.ErrorIs(t, lc.claimRequiredLsn(ctx), errRequiredLsnConflict)
+		require.Zero(t, server.revision)
+	})
+	t.Run("failed proposal did not commit", func(t *testing.T) {
+		server := &requiredStateClient{leaderID: 2, term: 1, rejectClaim: true}
+		lc := &logClient{client: server}
+		require.ErrorIs(t, lc.claimRequiredLsn(ctx), errRequiredLsnConflict)
+		require.Zero(t, lc.requiredOwner)
+		require.Zero(t, server.revision)
+	})
+}
+
+func TestRequiredLsnSetNeedsVerifiableCommit(t *testing.T) {
+	server := &requiredStateClient{leaderID: 2, term: 1, loseSetResponse: true}
+	lc := &logClient{client: server}
+	ctx := context.Background()
+	require.NoError(t, lc.claimRequiredLsn(ctx))
+	server.failReadback = true
+	require.ErrorIs(t, lc.setRequiredLsn(ctx, 100), fakeError)
+	require.Zero(t, lc.requiredLsn)
+	require.Equal(t, uint64(100), server.lsn)
+}
+
 type serverValue struct {
-	shardID      uint64
-	truncatedLsn uint64
-	latestLsn    uint64
-	requiredLsn  uint64
-	entries      []logservice.LogRecord
+	shardID          uint64
+	truncatedLsn     uint64
+	latestLsn        uint64
+	requiredLsn      uint64
+	requiredRevision uint64
+	requiredOwner    uint64
+	entries          []logservice.LogRecord
 	// fake error
 	fakeErr      map[string]struct{}
 	fakeErrCount map[string]int
@@ -249,6 +407,8 @@ type mockLogClient struct {
 	getLeaderIDEvent     chan<- uint64
 	readEntriesEvent     chan<- struct{}
 	getTruncatedLsnEvent chan<- struct{}
+	requiredRevision     uint64
+	requiredOwner        uint64
 }
 
 func newMockLogClient(s *mockLogServer, shardID uint64) LogClient {
@@ -375,7 +535,45 @@ func (m *mockLogClient) setRequiredLsn(_ context.Context, lsn uint64) error {
 	if m.shouldFakeErrorLocked("setRequiredLsn") {
 		return fakeError
 	}
-	m.s.values[m.shardID].requiredLsn = lsn
+	state := m.s.values[m.shardID]
+	if m.requiredOwner == 0 {
+		state.requiredOwner++
+		state.requiredRevision++
+		m.requiredOwner = state.requiredOwner
+		m.requiredRevision = state.requiredRevision
+	}
+	if state.requiredOwner != m.requiredOwner || state.requiredRevision != m.requiredRevision ||
+		(lsn != 0 && lsn < state.requiredLsn) {
+		return errRequiredLsnConflict
+	}
+	state.requiredLsn = lsn
+	state.requiredRevision++
+	m.requiredRevision++
+	return nil
+}
+
+func (m *mockLogClient) claimRequiredLsn(_ context.Context) error {
+	m.s.mu.Lock()
+	defer m.s.mu.Unlock()
+	state := m.s.values[m.shardID]
+	state.requiredOwner++
+	state.requiredRevision++
+	m.requiredOwner = state.requiredOwner
+	m.requiredRevision = state.requiredRevision
+	return nil
+}
+
+func (m *mockLogClient) resetRequiredLsn(ctx context.Context) error {
+	if err := m.setRequiredLsn(ctx, 0); err != nil {
+		return err
+	}
+	lsn, err := m.getRequiredLsn(ctx)
+	if err != nil {
+		return err
+	}
+	if lsn != 0 {
+		return errRequiredLsnConflict
+	}
 	return nil
 }
 
@@ -488,6 +686,32 @@ func (c *retryStandbyClient) SetRequiredLsn(ctx context.Context, lsn logservice.
 	return err
 }
 
+func (c *retryStandbyClient) SetRequiredLsnIfCurrent(ctx context.Context, lsn, expected logservice.Lsn, revision, owner uint64) error {
+	return c.SetRequiredLsn(ctx, lsn)
+}
+
+func (c *retryStandbyClient) ClaimRequiredLsn(ctx context.Context, expected logservice.Lsn, revision, owner, term, leaderID uint64) error {
+	_, err := c.call(ctx)
+	return err
+}
+
+func (c *retryStandbyClient) GetRequiredLsnState(ctx context.Context) (logservice.Lsn, uint64, uint64, error) {
+	return 0, 0, 0, fakeError
+}
+
+func (c *retryStandbyClient) GetLeaderState(context.Context) (uint64, uint64, error) {
+	return 2, 1, nil
+}
+
+func (c *retryStandbyClient) TruncateWAL(ctx context.Context, psn, dsn logservice.Lsn) error {
+	return c.Truncate(ctx, psn)
+}
+
+func (c *retryStandbyClient) GetWALTruncate(ctx context.Context) (logservice.Lsn, logservice.Lsn, error) {
+	psn, err := c.GetTruncatedLsn(ctx)
+	return psn, 0, err
+}
+
 func (c *retryStandbyClient) Close() error { return nil }
 
 func TestLogClientRetryContext(t *testing.T) {
@@ -512,7 +736,7 @@ func TestLogClientRetryContext(t *testing.T) {
 					ctx, cancel := context.WithCancel(context.Background())
 					defer cancel()
 					calls := 0
-					c := &logClient{client: &retryStandbyClient{call: func(context.Context) (uint64, error) {
+					c := &logClient{requiredOwner: 1, client: &retryStandbyClient{call: func(context.Context) (uint64, error) {
 						calls++
 						if calls == 1 && mode != "precanceled" {
 							if mode == "cancel on error" {

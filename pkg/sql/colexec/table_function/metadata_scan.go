@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -120,6 +121,11 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 	// When the source format is db_name.table_name.?index_name
 	// metadata_scan actually returns the metadata of the index table
 	if indexname != "" {
+		// This syntax explicitly requests the physical index, even though the
+		// first component names its base table.
+		if err := process.CheckIndexRelationAccess(proc, catalog.IndexTableNamePrefix, "", 0); err != nil {
+			return err
+		}
 		indexTableName, err := getIndexTableNameByIndexName(proc, dbname, tablename, indexname)
 		if err != nil {
 			return err
@@ -136,6 +142,9 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 
 	rel, err := db.Relation(proc.Ctx, tablename, nil)
 	if err != nil {
+		return err
+	}
+	if err := process.CheckIndexRelationDefinitionAccess(proc, rel.GetTableName(), rel.GetTableDef(proc.Ctx)); err != nil {
 		return err
 	}
 

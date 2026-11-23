@@ -37,17 +37,18 @@ type fieldRetryTestCompiler struct {
 	*preparedStatsTestCompiler
 	resolveErr error
 	missing    bool
-	resolve    func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error)
+	resolve    func(string, string, *plan.Snapshot, *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error)
 }
 
-func (c *fieldRetryTestCompiler) Resolve(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *fieldRetryTestCompiler) Resolve(db, table string, snapshot *plan.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	if c.resolve != nil {
-		return c.resolve(db, table, snapshot)
+		return c.resolve(db, table, snapshot, nil)
 	}
 	if c.resolveErr != nil || c.missing {
 		return nil, nil, c.resolveErr
 	}
-	ref, def, err := c.preparedStatsTestCompiler.Resolve(db, table, snapshot)
+	ref, def, err := c.preparedStatsTestCompiler.Resolve(db, table, snapshot, nil)
 	if err == nil && ref != nil && def != nil {
 		ref = proto.Clone(ref).(*plan.ObjectRef)
 		ref.Db, ref.Obj, ref.Server = int64(def.DbId), int64(def.TblId), int64(def.Version)
@@ -59,7 +60,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 	for _, name := range []string{"unchanged", "version", "object", "database", "publication", "missing", "resolve error", "captured facts", "captured nested facts", "nil dependency", "without history"} {
 		t.Run(name, func(t *testing.T) {
 			base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
-			_, table, err := base.Resolve("tpch", "nation", nil)
+			_, table, err := base.Resolve("tpch", "nation", nil, nil)
 			require.NoError(t, err)
 			table = plan2.DeepCopyTableDef(table, true)
 			table.DbId = 73
@@ -73,7 +74,8 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 			prepared.proc, ctx.proc = cw.proc, cw.proc
 			prepared.defaultDatabase = "tpch"
 			t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
-			prepared.params = vector.NewVec(types.T_text.ToType())
+			prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+			prepared.paramsMP = cw.proc.Mp()
 			require.NoError(t, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(prepared.params, []byte("a"), false, cw.proc.Mp()))
 			prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(defines.MYSQL_TYPE_VAR_STRING), 0}
@@ -127,8 +129,8 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 			case "database":
 				table.DbId++
 			case "publication":
-				ctx.resolve = func(db, name string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
-					ref, def, err := ctx.preparedStatsTestCompiler.Resolve(db, name, snapshot)
+				ctx.resolve = func(db, name string, snapshot *plan.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+					ref, def, err := ctx.preparedStatsTestCompiler.Resolve(db, name, snapshot, nil)
 					ref = proto.Clone(ref).(*plan.ObjectRef)
 					ref.PubInfo = &plan.PubInfo{TenantId: 72}
 					return ref, def, err
@@ -144,7 +146,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 				schemas[0].PubInfo.TenantId = 99
 				schemas[0].SubscriptionName = "mutated"
 				require.Equal(t, want, captured)
-				ctx.resolve = func(db, name string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+				ctx.resolve = func(db, name string, snapshot *plan.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 					require.Equal(t, plan2.DbNameOfObjRef(want), db)
 					require.Equal(t, want.Snapshot, snapshot, "validation must use the captured snapshot, not mutable handle metadata")
 					return nil, nil, sentinel
@@ -155,7 +157,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 				ctx.resolveErr = sentinel
 			}
 			originalContext := ctx.GetContext()
-			rebuilt, err := buildPlanForCompileRetry(ec.reqCtx, ses, ctx, prepared.PrepareStmt, false, retry)
+			rebuilt, err := buildPlanForCompileRetry(ec.reqCtx, ses, ctx, prepared.PrepareStmt, false, retry, nil)
 			require.Equal(t, originalContext, ctx.GetContext(), "retry must restore the compiler context, including on errors")
 			if history != nil {
 				require.Same(t, history, prepared.fieldTypes)
@@ -230,7 +232,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 			require.Equal(t, plan2.GetResultColumnsFromPlan(fresh.Plan), plan2.GetResultColumnsFromPlan(next))
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(cw.proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_varbinary.ToType(), cw.proc.Mp())
 			require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("a"), false, cw.proc.Mp()))
 			input.SetRowCount(1)
 			var expr *plan.Expr

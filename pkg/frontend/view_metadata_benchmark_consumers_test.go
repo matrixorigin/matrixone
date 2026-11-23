@@ -145,7 +145,7 @@ func planViewMetadataBench(ctx context.Context, cn embed.ServiceOperator, svc cn
 			}
 			var p *plan.Plan
 			if mode.legacy {
-				p, err = plan.BuildPlan(compiler, statements[0], false)
+				p, err = plan.BuildPlan(compiler, statements[0], false, nil)
 			} else {
 				request := compiler.NewViewSchemaRequest(ctx, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
 				defer request.Close()

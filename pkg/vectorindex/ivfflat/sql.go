@@ -20,12 +20,20 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
+
+func versionSQL(tblcfg vectorindex.IndexTableConfig) string {
+	return fmt.Sprintf("SELECT CAST(%s AS BIGINT) FROM %s WHERE %s = 'version'",
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_val),
+		sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.MetadataTable),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_key))
+}
 
 func GetVersion(sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig) (int64, error) {
 	if sqlproc != nil && sqlproc.RelationScanner != nil {
@@ -59,13 +67,7 @@ func GetVersion(sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig
 		return version, nil
 	}
 
-	sql := fmt.Sprintf("SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'",
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		tblcfg.DbName,
-		tblcfg.MetadataTable,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
-
-	res, err := runSql(sqlproc, sql)
+	res, err := runSql(sqlproc, versionSQL(tblcfg))
 	if err != nil {
 		return 0, err
 	}

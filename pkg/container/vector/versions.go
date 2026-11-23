@@ -72,51 +72,88 @@ func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
 	return nil
 }
 
+// UnmarshalBinaryV1 decodes the legacy encoding into memory allocated from
+// v's pool, or references data without copying when v is read-only. v must
+// not hold memory.
 func (v *Vector) UnmarshalBinaryV1(data []byte) error {
-	// Keep the legacy decoder contract for unrelated types. JSON needs complete
-	// admission before any decoded descriptor can become visible.
+	if len(data) > 0 && data[0] > LegacyRowBufferClass {
+		return moerr.NewInvalidInputNoCtx("invalid legacy vector representation")
+	}
+	if v.hasBackingStorage() {
+		return moerr.NewInternalErrorNoCtx("cannot replace vector storage without Free")
+	}
+	// JSON needs complete admission before any decoded descriptor can become
+	// visible; other types keep the legacy decoder contract.
+	validate := false
 	if len(data) >= 1+types.TSize {
 		typ, err := types.DecodeTypeChecked(data[1 : 1+types.TSize])
 		if err != nil {
 			return err
 		}
-		if typ.Oid != types.T_json {
-			return v.unmarshalBinaryV1(data)
+		validate = typ.Oid == types.T_json
+	}
+	if validate {
+		if err := validateJSONLegacyWire(data); err != nil {
+			return err
 		}
 	}
-	if err := validateJSONLegacyWire(data); err != nil {
-		return err
-	}
-	if v.allocationAccount != nil || v.hasOwnedBackingStorage() {
-		return allocationAccountInvalid("cannot replace owned vector storage with aliases")
-	}
+	// decoded aliases data and never escapes this call.
 	var decoded Vector
 	if err := decoded.unmarshalBinaryV1(data); err != nil {
 		return err
 	}
-	if err := validateVectorBinary(byte(decoded.class), decoded.typ, uint32(decoded.length), decoded.data, decoded.area, &decoded.nsp, true); err != nil {
-		return err
+	if validate {
+		if err := validateVectorBinary(byte(decoded.class), decoded.typ, uint32(decoded.length), decoded.data, decoded.area, &decoded.nsp, true); err != nil {
+			return err
+		}
 	}
-	*v = decoded
+	if v.mp == nil {
+		// Read-only: reference data without copying.
+		*v = decoded
+		return nil
+	}
+	return v.copyDecoded(&decoded)
+}
+
+// copyDecoded makes v an owned copy of decoded, a vector that aliases an
+// encoding. v must be empty.
+func (v *Vector) copyDecoded(decoded *Vector) (err error) {
+	w := NewVec(decoded.typ, v.mp)
+	defer func() {
+		if err != nil {
+			w.Free(v.mp)
+		}
+	}()
+	w.class = decoded.class
+	w.length = decoded.length
+	w.sorted = decoded.sorted
+	if len(decoded.data) > 0 {
+		if w.data, err = w.alloc(v.mp, len(decoded.data)); err != nil {
+			return err
+		}
+		copy(w.data, decoded.data)
+	}
+	if len(decoded.area) > 0 {
+		if w.area, err = w.alloc(v.mp, len(decoded.area)); err != nil {
+			return err
+		}
+		copy(w.area, decoded.area)
+	}
+	w.nsp.InitWith(&decoded.nsp)
+	*v = *w
 	return nil
 }
 
 func (v *Vector) unmarshalBinaryV1(data []byte) error {
 	if len(data) < 1+types.TSize {
-		return allocationAccountInvalid("short legacy vector type")
+		return moerr.NewInternalErrorNoCtx("short legacy vector type")
 	}
 	typ, err := types.DecodeTypeChecked(data[1 : 1+types.TSize])
 	if err != nil {
 		return err
 	}
-	v.areaDisjoint = false
-	if v.allocationAccount != nil {
-		return allocationAccountInvalid(
-			"cannot install aliases in an accounted vector",
-		)
-	}
 	// read class
-	v.class = int(data[0])
+	v.class = int(decodedPhysicalClass(data[0]))
 	data = data[1:]
 
 	// read typ
@@ -148,7 +185,8 @@ func (v *Vector) unmarshalBinaryV1(data []byte) error {
 	nspLen := types.DecodeUint32(data[:4])
 	data = data[4:]
 	if nspLen > 0 {
-		if err := v.nsp.ReadNoCopyV1(data[:nspLen]); err != nil {
+		// The null bitmap is private even for a read-only vector.
+		if err := v.nsp.ReadNoCopyV1(bytes.Clone(data[:nspLen])); err != nil {
 			return err
 		}
 		data = data[nspLen:]
@@ -157,17 +195,12 @@ func (v *Vector) unmarshalBinaryV1(data []byte) error {
 	}
 
 	v.sorted = types.DecodeBool(data[:1])
-	//data = data[1:]
-
-	v.cantFreeData = true
-	v.cantFreeArea = true
-	v.allocationAccount = nil
 
 	return nil
 }
 
 // Validate framing before the legacy alias decoder indexes it. The V1 bitmap
-// has a 4-byte empty flag followed by an 8-byte bit length and byte length.
+// has a 4-byte reserved word followed by an 8-byte bit length and byte length.
 func validateJSONLegacyWire(data []byte) error {
 	cursor := vectorBinaryCursor{data: data}
 	if _, err := cursor.read(1 + types.TSize + 4); err != nil {

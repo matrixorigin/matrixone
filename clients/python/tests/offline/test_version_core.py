@@ -21,9 +21,12 @@ Test suite for the version management framework core functionality
 (without external dependencies).
 """
 
-import unittest
-import sys
+import asyncio
+import inspect
 import os
+import sys
+import unittest
+from types import SimpleNamespace
 
 # Add the matrixone package to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
@@ -291,6 +294,94 @@ class TestVersionDecorator(unittest.TestCase):
             obj.legacy_method()
 
 
+class TestAsyncVersionDecorator(unittest.IsolatedAsyncioTestCase):
+    """The version gate must preserve native coroutine behavior."""
+
+    @staticmethod
+    def owner(version="1.0.0", nested=False):
+        manager = VersionManager()
+        manager.set_backend_version(version)
+        if nested:
+            return SimpleNamespace(client=SimpleNamespace(_version_manager=manager))
+        return SimpleNamespace(_version_manager=manager)
+
+    def test_public_async_manager_methods_remain_coroutine_functions(self):
+        from matrixone.clone import AsyncCloneManager
+        from matrixone.pitr import AsyncPitrManager
+        from matrixone.snapshot import AsyncSnapshotManager
+
+        for method in (
+            AsyncSnapshotManager.create,
+            AsyncCloneManager.clone_database,
+            AsyncPitrManager.create_cluster_pitr,
+        ):
+            with self.subTest(method=method.__qualname__):
+                self.assertTrue(inspect.iscoroutinefunction(method))
+
+    async def test_warning_mode_is_awaitable_and_skips_the_body(self):
+        calls = []
+
+        @requires_version(min_version="2.0.0", feature_name="async_warning_mode", raise_error=False)
+        async def operation(owner):
+            calls.append(owner)
+            return "executed"
+
+        self.assertTrue(inspect.iscoroutinefunction(operation))
+        self.assertIsNone(await operation(self.owner()))
+        self.assertEqual(calls, [])
+
+    async def test_version_error_is_collected_by_gather_for_direct_and_nested_managers(self):
+        for nested in (False, True):
+            peer_started = asyncio.Event()
+
+            @requires_version(
+                min_version="2.0.0",
+                feature_name=f"async_gather_{nested}",
+            )
+            async def operation(owner):
+                return "executed"
+
+            async def peer():
+                peer_started.set()
+                return "peer"
+
+            results = await asyncio.gather(
+                operation(self.owner(nested=nested)),
+                peer(),
+                return_exceptions=True,
+            )
+
+            self.assertIsInstance(results[0], VersionError)
+            self.assertEqual(results[1], "peer")
+            self.assertTrue(peer_started.is_set())
+
+    async def test_async_metadata_and_body_exceptions_are_preserved(self):
+        @requires_version(min_version="2.0.0", feature_name="async_body_error")
+        async def operation(owner):
+            """decorated coroutine"""
+            raise RuntimeError("body failed")
+
+        self.assertEqual(operation.__name__, "operation")
+        self.assertEqual(operation.__doc__, "decorated coroutine")
+        self.assertEqual(operation._version_requirement["min_version"], "2.0.0")
+
+        results = await asyncio.gather(
+            operation(self.owner(version="3.0.0")),
+            return_exceptions=True,
+        )
+        self.assertIsInstance(results[0], RuntimeError)
+
+    def test_synchronous_functions_remain_synchronous(self):
+        @requires_version(min_version="2.0.0", feature_name="sync_control")
+        def operation(owner):
+            return "executed"
+
+        self.assertFalse(inspect.iscoroutinefunction(operation))
+        self.assertEqual(operation(self.owner(version="3.0.0")), "executed")
+        with self.assertRaises(VersionError):
+            operation(self.owner())
+
+
 def run_tests():
     """Run all tests"""
     # Create test suite
@@ -302,6 +393,7 @@ def run_tests():
         TestVersionComparison,
         TestFeatureRequirements,
         TestVersionDecorator,
+        TestAsyncVersionDecorator,
     ]
 
     for test_class in test_classes:

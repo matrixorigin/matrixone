@@ -1132,6 +1132,7 @@ func TestServiceTruncate(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    100,
 				Lsn:     4,
 			},
 		}
@@ -1153,6 +1154,7 @@ func TestServiceTruncate(t *testing.T) {
 			Method: pb.TRUNCATE,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
+				TNID:    100,
 				Lsn:     3,
 			},
 		}

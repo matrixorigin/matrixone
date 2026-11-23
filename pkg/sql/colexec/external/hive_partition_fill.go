@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -103,7 +104,7 @@ func validatePartitionValue(strVal, colName string, colType tree.HivePartColType
 	if typ == types.T_any {
 		return nil
 	}
-	vec := vector.NewVec(types.NewWithCharset(typ, colType.Width, colType.Scale, uint8(colType.Charset)))
+	vec := vector.NewVec(types.NewWithCharset(typ, colType.Width, colType.Scale, uint8(colType.Charset)), proc.Mp())
 	col := &plan.ColDef{
 		Name: colName,
 		Typ: plan.Type{
@@ -124,7 +125,7 @@ func validatePartitionValue(strVal, colName string, colType tree.HivePartColType
 // fillVirtualColumns fills partition columns and __mo_filepath for a batch.
 func (h *ParquetHandler) fillVirtualColumns(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	rowCount := bat.RowCount()
-	mp := proc.Mp()
+	mp := param.outputPool(proc)
 
 	if h.filepathColIndex >= 0 {
 		vec := bat.Vecs[h.filepathColIndex]
@@ -143,7 +144,7 @@ func (h *ParquetHandler) fillVirtualColumns(bat *batch.Batch, param *ExternalPar
 func (h *ParquetHandler) fillPartitionColumns(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	partValues := param.currentPartValues
 	rowCount := bat.RowCount()
-	mp := proc.Mp()
+	mp := param.outputPool(proc)
 
 	// Error messages use the path relative to the DDL base so that BVT output
 	// is portable across machines (absolute filesystem paths would embed
@@ -177,7 +178,7 @@ func (h *ParquetHandler) fillPartitionColumns(bat *batch.Batch, param *ExternalP
 			continue
 		}
 
-		if err := fillConstantVector(vec, strVal, col, rowCount, proc, relPath); err != nil {
+		if err := fillConstantVectorWithPool(vec, strVal, col, rowCount, proc, mp, relPath); err != nil {
 			return err
 		}
 	}
@@ -190,7 +191,14 @@ func fillConstantVector(
 	vec *vector.Vector, strVal string, col *plan.ColDef,
 	rowCount int, proc *process.Process, filePath string,
 ) error {
-	mp := proc.Mp()
+	return fillConstantVectorWithPool(vec, strVal, col, rowCount, proc, proc.Mp(), filePath)
+}
+
+// fillConstantVectorWithPool is fillConstantVector allocating through mp.
+func fillConstantVectorWithPool(
+	vec *vector.Vector, strVal string, col *plan.ColDef,
+	rowCount int, proc *process.Process, mp *mpool.MPool, filePath string,
+) error {
 	typ := types.T(col.Typ.Id)
 
 	wrapErr := func(err error) error {
@@ -365,7 +373,8 @@ func fillConstantVector(
 
 	case types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
-		types.T_array_int8, types.T_array_uint8:
+		types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		return moerr.NewNotSupportedf(proc.Ctx,
 			"unsupported partition column type VECTOR for col=%s, path=%s", col.Name, filePath)
 

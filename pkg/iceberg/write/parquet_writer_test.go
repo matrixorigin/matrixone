@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,15 +39,15 @@ func TestParquetDataWriterWritesFieldIDsMetricsAndPartition(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id", "name", "created_at"})
-	idVec := vector.NewVec(types.T_int32.ToType())
+	idVec := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int32](idVec, 1, false, mp))
 	require.NoError(t, vector.AppendFixed[int32](idVec, 2, false, mp))
 	bat.Vecs[0] = idVec
-	nameVec := vector.NewVec(types.T_varchar.ToType())
+	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(nameVec, []byte("alice"), false, mp))
 	require.NoError(t, vector.AppendBytes(nameVec, []byte("bob"), true, mp))
 	bat.Vecs[1] = nameVec
-	dateVec := vector.NewVec(types.T_date.ToType())
+	dateVec := vector.NewVec(types.T_date.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[types.Date](dateVec, types.DateFromCalendar(2026, 6, 10), false, mp))
 	require.NoError(t, vector.AppendFixed[types.Date](dateVec, types.DateFromCalendar(2026, 6, 20), false, mp))
 	bat.Vecs[2] = dateVec
@@ -79,7 +80,7 @@ func TestParquetDataWriterWritesFieldIDsMetricsAndPartition(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, file.Root().Column("id").ID())
 	require.Equal(t, 2, file.Root().Column("name").ID())
-	requireParquetColumnPlainEncoded(t, file, "name")
+	requireParquetColumnDictionaryEncoded(t, file, "name")
 	require.Equal(t, int64(2), dataFile.RecordCount)
 	require.Equal(t, int64(buf.Len()), dataFile.FileSizeInBytes)
 	require.Equal(t, int64(2), dataFile.ValueCounts[1])
@@ -100,10 +101,10 @@ func TestParquetDataWriterWritesNullPartitionValue(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id", "region"})
-	idVec := vector.NewVec(types.T_int64.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](idVec, 1, false, mp))
 	bat.Vecs[0] = idVec
-	regionVec := vector.NewVec(types.T_varchar.ToType())
+	regionVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(regionVec, nil, true, mp))
 	bat.Vecs[1] = regionVec
 	bat.SetRowCount(1)
@@ -137,7 +138,7 @@ func TestParquetDataWriterFillsMissingNullableColumnWithNull(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id"})
-	idVec := vector.NewVec(types.T_int64.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](idVec, 1, false, mp))
 	bat.Vecs[0] = idVec
 	bat.SetRowCount(1)
@@ -172,7 +173,7 @@ func TestParquetDataWriterRejectsMissingRequiredColumn(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id"})
-	idVec := vector.NewVec(types.T_int64.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](idVec, 1, false, mp))
 	bat.Vecs[0] = idVec
 	bat.SetRowCount(1)
@@ -197,7 +198,7 @@ func TestParquetDataWriterRejectsMultiplePartitionsInOneFile(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"created_at"})
-	dateVec := vector.NewVec(types.T_date.ToType())
+	dateVec := vector.NewVec(types.T_date.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[types.Date](dateVec, types.DateFromCalendar(2026, 6, 20), false, mp))
 	require.NoError(t, vector.AppendFixed[types.Date](dateVec, types.DateFromCalendar(2026, 7, 1), false, mp))
 	bat.Vecs[0] = dateVec
@@ -224,13 +225,13 @@ func TestParquetDataWriterWritesTimestampBounds(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"event_time", "event_instant"})
-	datetimeVec := vector.NewVec(types.T_datetime.ToType())
+	datetimeVec := vector.NewVec(types.T_datetime.ToType(), mp)
 	dt1 := types.DatetimeFromClock(2026, 6, 10, 1, 2, 3, 123456)
 	dt2 := types.DatetimeFromClock(2026, 6, 10, 2, 3, 4, 654321)
 	require.NoError(t, vector.AppendFixed[types.Datetime](datetimeVec, dt2, false, mp))
 	require.NoError(t, vector.AppendFixed[types.Datetime](datetimeVec, dt1, false, mp))
 	bat.Vecs[0] = datetimeVec
-	timestampVec := vector.NewVec(types.T_timestamp.ToType())
+	timestampVec := vector.NewVec(types.T_timestamp.ToType(), mp)
 	ts1, err := types.ParseTimestamp(time.UTC, "2026-06-10 01:02:03.123456", 6)
 	require.NoError(t, err)
 	ts2, err := types.ParseTimestamp(time.UTC, "2026-06-10 02:03:04.654321", 6)
@@ -270,7 +271,7 @@ func TestParquetDataWriterWritesDecimalAndMOTimestamp(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"fare_amount", "pickup_time"})
-	fareVec := vector.NewVec(types.New(types.T_decimal64, 12, 2))
+	fareVec := vector.NewVec(types.New(types.T_decimal64, 12, 2), mp)
 	lowFare, err := types.ParseDecimal64("-5.67", 12, 2)
 	require.NoError(t, err)
 	highFare, err := types.ParseDecimal64("12.34", 12, 2)
@@ -278,7 +279,7 @@ func TestParquetDataWriterWritesDecimalAndMOTimestamp(t *testing.T) {
 	require.NoError(t, vector.AppendFixed[types.Decimal64](fareVec, highFare, false, mp))
 	require.NoError(t, vector.AppendFixed[types.Decimal64](fareVec, lowFare, false, mp))
 	bat.Vecs[0] = fareVec
-	pickupVec := vector.NewVec(types.T_timestamp.ToType())
+	pickupVec := vector.NewVec(types.T_timestamp.ToType(), mp)
 	ts1, err := types.ParseTimestamp(time.UTC, "2024-01-15 00:00:00.123456", 6)
 	require.NoError(t, err)
 	ts2, err := types.ParseTimestamp(time.UTC, "2024-01-15 01:02:03.654321", 6)
@@ -321,7 +322,7 @@ func TestParquetWriterPrimitiveConversionsAndBounds(t *testing.T) {
 	mp := mpool.MustNewZero()
 	loc := time.FixedZone("KSA", 3*3600)
 
-	boolVec := vector.NewVec(types.T_bool.ToType())
+	boolVec := vector.NewVec(types.T_bool.ToType(), mp)
 	defer boolVec.Free(mp)
 	require.NoError(t, vector.AppendFixed(boolVec, true, false, mp))
 	got, isNull, err := vectorValue(ctx, boolVec, 0, api.IcebergType{Kind: api.TypeBoolean}, loc)
@@ -329,7 +330,7 @@ func TestParquetWriterPrimitiveConversionsAndBounds(t *testing.T) {
 	require.False(t, isNull)
 	require.Equal(t, true, got)
 
-	int8Vec := vector.NewVec(types.T_int8.ToType())
+	int8Vec := vector.NewVec(types.T_int8.ToType(), mp)
 	defer int8Vec.Free(mp)
 	require.NoError(t, vector.AppendFixed(int8Vec, int8(-8), false, mp))
 	got, _, err = vectorValue(ctx, int8Vec, 0, api.IcebergType{Kind: api.TypeInt}, loc)
@@ -339,7 +340,7 @@ func TestParquetWriterPrimitiveConversionsAndBounds(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(-8), got)
 
-	int16Vec := vector.NewVec(types.T_int16.ToType())
+	int16Vec := vector.NewVec(types.T_int16.ToType(), mp)
 	defer int16Vec.Free(mp)
 	require.NoError(t, vector.AppendFixed(int16Vec, int16(-16), false, mp))
 	got, _, err = vectorValue(ctx, int16Vec, 0, api.IcebergType{Kind: api.TypeInt}, loc)
@@ -349,35 +350,35 @@ func TestParquetWriterPrimitiveConversionsAndBounds(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(-16), got)
 
-	int32Vec := vector.NewVec(types.T_int32.ToType())
+	int32Vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer int32Vec.Free(mp)
 	require.NoError(t, vector.AppendFixed(int32Vec, int32(32), false, mp))
 	got, _, err = vectorValue(ctx, int32Vec, 0, api.IcebergType{Kind: api.TypeLong}, loc)
 	require.NoError(t, err)
 	require.Equal(t, int64(32), got)
 
-	floatVec := vector.NewVec(types.T_float32.ToType())
+	floatVec := vector.NewVec(types.T_float32.ToType(), mp)
 	defer floatVec.Free(mp)
 	require.NoError(t, vector.AppendFixed(floatVec, float32(1.25), false, mp))
 	got, _, err = vectorValue(ctx, floatVec, 0, api.IcebergType{Kind: api.TypeFloat}, loc)
 	require.NoError(t, err)
 	require.Equal(t, float32(1.25), got)
 
-	doubleVec := vector.NewVec(types.T_float64.ToType())
+	doubleVec := vector.NewVec(types.T_float64.ToType(), mp)
 	defer doubleVec.Free(mp)
 	require.NoError(t, vector.AppendFixed(doubleVec, float64(2.5), false, mp))
 	got, _, err = vectorValue(ctx, doubleVec, 0, api.IcebergType{Kind: api.TypeDouble}, loc)
 	require.NoError(t, err)
 	require.Equal(t, float64(2.5), got)
 
-	textVec := vector.NewVec(types.T_text.ToType())
+	textVec := vector.NewVec(types.T_text.ToType(), mp)
 	defer textVec.Free(mp)
 	require.NoError(t, vector.AppendBytes(textVec, []byte("ksa"), false, mp))
 	got, _, err = vectorValue(ctx, textVec, 0, api.IcebergType{Kind: api.TypeString}, loc)
 	require.NoError(t, err)
 	require.Equal(t, "ksa", got)
 
-	nullVec := vector.NewVec(types.T_int32.ToType())
+	nullVec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer nullVec.Free(mp)
 	require.NoError(t, vector.AppendFixed(nullVec, int32(0), true, mp))
 	got, isNull, err = vectorValue(ctx, nullVec, 0, api.IcebergType{Kind: api.TypeInt}, loc)
@@ -503,8 +504,8 @@ func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id", "created_at"})
-	idVec := vector.NewVec(types.T_int32.ToType())
-	dateVec := vector.NewVec(types.T_date.ToType())
+	idVec := vector.NewVec(types.T_int32.ToType(), mp)
+	dateVec := vector.NewVec(types.T_date.ToType(), mp)
 	for i, date := range []types.Date{
 		types.DateFromCalendar(2026, 6, 20),
 		types.DateFromCalendar(2026, 6, 21),
@@ -528,6 +529,7 @@ func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {
 		PartitionSpec: api.PartitionSpec{SpecID: 7, Fields: []api.PartitionField{{
 			SourceID: 2, Name: "created_month", Transform: "month",
 		}}},
+		ParquetOptions:      ParquetOptions{codec: "gzip"},
 		TableLocation:       "s3://warehouse/sales/orders",
 		WriterID:            "stmt-1",
 		TargetFileSizeBytes: 1,
@@ -545,8 +547,13 @@ func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {
 		require.NotEmpty(t, factory.objects[file.FilePath])
 		require.True(t, strings.HasPrefix(file.FilePath, "s3://warehouse/sales/orders/data/created_month="))
 		seenPartitions[file.Partition["created_month"].(int32)] = true
-		_, err := parquet.OpenFile(bytes.NewReader(factory.objects[file.FilePath].Bytes()), file.FileSizeInBytes)
+		pf, err := parquet.OpenFile(bytes.NewReader(factory.objects[file.FilePath].Bytes()), file.FileSizeInBytes)
 		require.NoError(t, err)
+		for _, group := range pf.Metadata().RowGroups {
+			for _, column := range group.Columns {
+				require.Equal(t, "GZIP", column.MetaData.Codec.String())
+			}
+		}
 	}
 	require.True(t, seenPartitions[int32((2026-1970)*12+5)])
 	require.True(t, seenPartitions[int32((2026-1970)*12+6)])
@@ -556,8 +563,8 @@ func TestFanoutParquetDataWriterWritesNullPartitionValue(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id", "region"})
-	idVec := vector.NewVec(types.T_int64.ToType())
-	regionVec := vector.NewVec(types.T_varchar.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
+	regionVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, id := range []int64{1, 2} {
 		require.NoError(t, vector.AppendFixed[int64](idVec, id, false, mp))
 		require.NoError(t, vector.AppendBytes(regionVec, nil, true, mp))
@@ -596,7 +603,7 @@ func TestFanoutParquetDataWriterFillsMissingNullablePartitionValue(t *testing.T)
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id"})
-	idVec := vector.NewVec(types.T_int64.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, id := range []int64{1, 2} {
 		require.NoError(t, vector.AppendFixed[int64](idVec, id, false, mp))
 	}
@@ -634,7 +641,7 @@ func TestFanoutParquetDataWriterAbortsSinkWhenWriterInitializationFails(t *testi
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"unsupported"})
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](vec, 1, false, mp))
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)
@@ -660,8 +667,8 @@ func TestFanoutParquetDataWriterBoundsOpenPartitionWriters(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id", "region"})
-	idVec := vector.NewVec(types.T_int64.ToType())
-	regionVec := vector.NewVec(types.T_varchar.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
+	regionVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for idx, region := range []string{"a", "b", "c"} {
 		require.NoError(t, vector.AppendFixed[int64](idVec, int64(idx+1), false, mp))
 		require.NoError(t, vector.AppendBytes(regionVec, []byte(region), false, mp))
@@ -695,8 +702,9 @@ func TestFanoutParquetDataWriterBoundsOpenPartitionWriters(t *testing.T) {
 	require.Empty(t, writer.active)
 }
 
-func requireParquetColumnPlainEncoded(t *testing.T, file *parquet.File, path string) {
+func requireParquetColumnDictionaryEncoded(t *testing.T, file *parquet.File, path string) {
 	t.Helper()
+	found := 0
 	for _, rowGroup := range file.Metadata().RowGroups {
 		for _, column := range rowGroup.Columns {
 			if strings.Join(column.MetaData.PathInSchema, ".") != path {
@@ -706,12 +714,13 @@ func requireParquetColumnPlainEncoded(t *testing.T, file *parquet.File, path str
 			for _, encoding := range column.MetaData.Encoding {
 				encodings = append(encodings, encoding.String())
 			}
-			require.Contains(t, encodings, "PLAIN")
+			require.Contains(t, encodings, "RLE_DICTIONARY")
 			require.NotContains(t, encodings, "DELTA_LENGTH_BYTE_ARRAY")
-			return
+			require.Positive(t, column.MetaData.DictionaryPageOffset)
+			found++
 		}
 	}
-	require.Failf(t, "column not found", "column path %s was not found in parquet metadata", path)
+	require.Equal(t, len(file.Metadata().RowGroups), found, "column %s in every row group", path)
 }
 
 type memoryDataFileFactory struct {
@@ -747,4 +756,244 @@ func (s *abortTrackingDataFileSink) Abort() error {
 	s.aborted = true
 	s.Reset()
 	return nil
+}
+
+func TestParquetDataWriterCompressionAndDictionary(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"name"})
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
+	values := []string{"repeat", "repeat", "", "世界"}
+	for i := 0; i < 8193; i++ {
+		require.NoError(t, vector.AppendBytes(vec, []byte(values[i%len(values)]), i == 3, mp))
+	}
+	bat.Vecs[0] = vec
+	bat.SetRowCount(8193)
+	defer bat.Clean(mp)
+	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}}
+	for _, tc := range []struct {
+		name, value, codec string
+		absent             bool
+	}{
+		{"default", "", "ZSTD", true}, {"zstd", " ZsTd ", "ZSTD", false},
+		{"snappy", "snappy", "SNAPPY", false}, {"gzip", "gzip", "GZIP", false},
+		{"brotli", "brotli", "BROTLI", false}, {"lz4", "lz4", "LZ4_RAW", false},
+		{"uncompressed", "uncompressed", "UNCOMPRESSED", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			props := map[string]string{}
+			if !tc.absent {
+				props[parquetCompressionProperty] = tc.value
+			}
+			opts, err := ParseParquetOptions(props)
+			require.NoError(t, err)
+			var buf bytes.Buffer
+			writer, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "test.parquet", ParquetOptions: opts}, &buf)
+			require.NoError(t, err)
+			require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+			_, err = writer.Close(ctx)
+			require.NoError(t, err)
+			file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, len(file.Metadata().RowGroups), 2)
+			for _, group := range file.Metadata().RowGroups {
+				require.LessOrEqual(t, group.NumRows, int64(parquetWriteMaxRowsPerRowGroup))
+				for _, col := range group.Columns {
+					require.Equal(t, tc.codec, col.MetaData.Codec.String())
+				}
+			}
+			requireParquetColumnDictionaryEncoded(t, file, "name")
+			reader := parquet.NewGenericReader[struct {
+				Name *string `parquet:"name,optional"`
+			}](bytes.NewReader(buf.Bytes()))
+			defer reader.Close()
+			rows := make([]struct {
+				Name *string `parquet:"name,optional"`
+			}, 8193)
+			n, err := reader.Read(rows)
+			require.True(t, err == nil || err == io.EOF)
+			require.Equal(t, len(rows), n)
+			for i, row := range rows {
+				if i == 3 {
+					require.Nil(t, row.Name)
+				} else {
+					require.NotNil(t, row.Name)
+					require.Equal(t, values[i%len(values)], *row.Name)
+				}
+			}
+		})
+	}
+	for _, value := range []string{"", "  ", "lzo"} {
+		_, err := ParseParquetOptions(map[string]string{parquetCompressionProperty: value})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), parquetCompressionProperty)
+	}
+}
+
+func TestParquetDictionaryHighCardinalityAcrossRowGroups(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"name"})
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
+	for i := 0; i < 8193; i++ {
+		require.NoError(t, vector.AppendBytes(vec, []byte(strconv.Itoa(i)), false, mp))
+	}
+	bat.Vecs[0] = vec
+	bat.SetRowCount(8193)
+	defer bat.Clean(mp)
+	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}}
+	var buf bytes.Buffer
+	writer, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "unique.parquet"}, &buf)
+	require.NoError(t, err)
+	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	_, err = writer.Close(ctx)
+	require.NoError(t, err)
+	file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(file.Metadata().RowGroups), 2)
+	reader := parquet.NewGenericReader[struct {
+		Name *string `parquet:"name,optional"`
+	}](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+	rows := make([]struct {
+		Name *string `parquet:"name,optional"`
+	}, 8193)
+	n, err := reader.Read(rows)
+	require.True(t, err == nil || err == io.EOF)
+	require.Equal(t, len(rows), n)
+	for i, row := range rows {
+		require.NotNil(t, row.Name)
+		require.Equal(t, strconv.Itoa(i), *row.Name)
+	}
+}
+
+func TestParquetRowGroupStringBudget(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"a", "b"})
+	a, b := vector.NewVec(types.T_varchar.ToType(), mp), vector.NewVec(types.T_varchar.ToType(), mp)
+	// The first two rows exactly fill the aggregate budget; the third crosses it.
+	valuesA := []string{strings.Repeat("a", (1<<19)-8), "", "z", strings.Repeat("x", (1<<20)+1), "tail"}
+	valuesB := []string{strings.Repeat("b", (1<<19)-8), "", "", "", ""}
+	for i := range valuesA {
+		require.NoError(t, vector.AppendBytes(a, []byte(valuesA[i]), false, mp))
+		require.NoError(t, vector.AppendBytes(b, []byte(valuesB[i]), false, mp))
+	}
+	bat.Vecs[0], bat.Vecs[1] = a, b
+	bat.SetRowCount(len(valuesA))
+	defer bat.Clean(mp)
+	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "a", Type: api.IcebergType{Kind: api.TypeString}}, {ID: 2, Name: "b", Type: api.IcebergType{Kind: api.TypeString}}}}
+	var buf bytes.Buffer
+	w, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "budget.parquet"}, &buf)
+	require.NoError(t, err)
+	for _, indexes := range [][]int{{0}, {1, 2}, {3}, {4}} {
+		require.NoError(t, w.WriteRows(ctx, bat.Attrs, bat, indexes))
+	}
+	fileInfo, err := w.Close(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), fileInfo.RecordCount)
+	file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	counts := make([]int64, 0, len(file.Metadata().RowGroups))
+	for _, group := range file.Metadata().RowGroups {
+		counts = append(counts, group.NumRows)
+	}
+	require.Equal(t, []int64{2, 1, 1, 1}, counts)
+	reader := parquet.NewGenericReader[struct {
+		A string `parquet:"a,optional"`
+		B string `parquet:"b,optional"`
+	}](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+	rows := make([]struct {
+		A string `parquet:"a,optional"`
+		B string `parquet:"b,optional"`
+	}, 5)
+	n, err := reader.Read(rows)
+	require.True(t, err == nil || err == io.EOF)
+	require.Equal(t, 5, n)
+	for i := range rows {
+		require.Equal(t, valuesA[i], rows[i].A)
+		require.Equal(t, valuesB[i], rows[i].B)
+	}
+}
+
+type failingParquetSink struct{}
+
+func (failingParquetSink) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestParquetFlushFailureCannotCloseSuccessfully(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"name"})
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
+	require.NoError(t, vector.AppendBytes(vec, []byte(strings.Repeat("x", (1<<20)+1)), false, mp))
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}}
+	w, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "error.parquet", ParquetOptions: ParquetOptions{codec: "uncompressed"}}, failingParquetSink{})
+	require.NoError(t, err)
+	require.Error(t, w.WriteBatch(ctx, bat.Attrs, bat))
+	_, err = w.Close(ctx)
+	require.Error(t, err)
+}
+
+type qaFlushSink struct {
+	bytes.Buffer
+	fail    bool
+	cancel  context.CancelFunc
+	aborted bool
+}
+
+func (s *qaFlushSink) Write(p []byte) (int, error) {
+	if s.fail {
+		return 0, io.ErrClosedPipe
+	}
+	n, err := s.Buffer.Write(p)
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	return n, err
+}
+func (s *qaFlushSink) Close() error { return nil }
+func (s *qaFlushSink) Abort() error { s.aborted = true; s.Reset(); return nil }
+
+func TestFanoutFlushFailureAndCancellationAbort(t *testing.T) {
+	for _, mode := range []string{"failure", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			mp := mpool.MustNewZero()
+			bat := batch.New([]string{"name"})
+			vec := vector.NewVec(types.T_varchar.ToType(), mp)
+			// The first row forces a flush; the second observes cancellation after it.
+			require.NoError(t, vector.AppendBytes(vec, []byte(strings.Repeat("x", (1<<20)+1)), false, mp))
+			require.NoError(t, vector.AppendBytes(vec, []byte("tail"), false, mp))
+			bat.Vecs[0] = vec
+			bat.SetRowCount(2)
+			defer bat.Clean(mp)
+			sink := &qaFlushSink{fail: mode == "failure"}
+			if mode == "cancel" {
+				sink.cancel = cancel
+			}
+			w, err := NewFanoutParquetDataWriter(ctx, FanoutWriterConfig{
+				Schema:        api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}},
+				TableLocation: "s3://warehouse/test", ParquetOptions: ParquetOptions{codec: "uncompressed"},
+			}, DataFileOutputFactoryFunc(func(context.Context, string) (io.WriteCloser, error) { return sink, nil }))
+			require.NoError(t, err)
+			err = w.WriteBatch(ctx, bat.Attrs, bat)
+			require.Error(t, err)
+			if mode == "cancel" {
+				require.ErrorIs(t, err, context.Canceled)
+			}
+			require.NoError(t, w.Abort(context.Background()))
+			require.True(t, sink.aborted)
+			require.Empty(t, sink.Bytes())
+			require.Empty(t, w.OrphanPaths())
+			files, err := w.Close(context.Background())
+			require.NoError(t, err)
+			require.Empty(t, files)
+		})
+	}
 }

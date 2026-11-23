@@ -38,7 +38,7 @@ func TestIcebergDeleteBuildsDMLWriteIntent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse delete: %v", err)
 	}
-	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build Iceberg delete plan: %v", err)
 	}
@@ -68,6 +68,9 @@ func TestIcebergDeleteBuildsDMLWriteIntent(t *testing.T) {
 	}
 	if scan == nil {
 		t.Fatalf("expected Iceberg external scan")
+	}
+	if scan.GetExtraOptions() != icebergapi.DMLTargetScanPlanExtraOptions {
+		t.Fatalf("Iceberg DELETE target scan marker = %q", scan.GetExtraOptions())
 	}
 	if !tableDefHasCol(scan.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
 		!tableDefHasCol(scan.GetTableDef(), icebergapi.DMLRowOrdinalColumnName) {
@@ -111,7 +114,7 @@ func TestIcebergUpdateBuildsDMLWriteIntent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse update: %v", err)
 	}
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build Iceberg update plan: %v", err)
 	}
@@ -179,6 +182,9 @@ func TestIcebergUpdateBuildsDMLWriteIntent(t *testing.T) {
 	if scan == nil {
 		t.Fatalf("expected Iceberg external scan")
 	}
+	if scan.GetExtraOptions() != icebergapi.DMLTargetScanPlanExtraOptions {
+		t.Fatalf("Iceberg UPDATE target scan marker = %q", scan.GetExtraOptions())
+	}
 	if !tableDefHasCol(scan.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
 		!tableDefHasCol(scan.GetTableDef(), icebergapi.DMLRowOrdinalColumnName) {
 		t.Fatalf("scan table def is missing DML metadata columns: %+v", scan.GetTableDef())
@@ -207,7 +213,7 @@ func TestIcebergUpdateMissingValueColumnUsesBadFieldDiagnostic(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.Error(t, err)
 	moErr, ok := err.(*moerr.Error)
 	require.True(t, ok, "unexpected error type %T: %v", err, err)
@@ -235,7 +241,7 @@ func TestIcebergUpdateIgnoreUsesIgnoreAssignmentCast(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse update ignore: %v", err)
 	}
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build Iceberg update ignore plan: %v", err)
 	}
@@ -290,7 +296,7 @@ func TestIcebergUpdateRewritesDMLScanFilterColumnPositions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse update: %v", err)
 	}
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build Iceberg update plan: %v", err)
 	}
@@ -320,7 +326,7 @@ func TestIcebergMergeMatchedUpdateBuildsDMLWriteIntent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse merge: %v", err)
 	}
-	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build Iceberg merge plan: %v", err)
 	}
@@ -352,6 +358,9 @@ func TestIcebergMergeMatchedUpdateBuildsDMLWriteIntent(t *testing.T) {
 	if scan == nil {
 		t.Fatalf("expected Iceberg external scan")
 	}
+	if scan.GetExtraOptions() != icebergapi.DMLTargetScanPlanExtraOptions {
+		t.Fatalf("Iceberg MERGE target scan marker = %q", scan.GetExtraOptions())
+	}
 	if !tableDefHasCol(scan.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
 		!tableDefHasCol(scan.GetTableDef(), icebergapi.DMLRowOrdinalColumnName) {
 		t.Fatalf("scan table def is missing DML metadata columns: %+v", scan.GetTableDef())
@@ -366,7 +375,7 @@ func TestIcebergMergeMatchedDeleteBuildsDMLWriteIntent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse merge delete: %v", err)
 	}
-	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build Iceberg merge delete plan: %v", err)
 	}
@@ -393,7 +402,7 @@ func TestIcebergMergeMatchedUpdateAndNotMatchedInsertBuildsDMLWriteIntent(t *tes
 	if err != nil {
 		t.Fatalf("parse merge: %v", err)
 	}
-	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build Iceberg merge with insert plan: %v", err)
 	}
@@ -458,7 +467,7 @@ func TestIcebergMergeDefaultValuesAreExpanded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse merge default: %v", err)
 	}
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build Iceberg merge default plan: %v", err)
 	}
@@ -512,7 +521,7 @@ func TestIcebergMergeEmbeddedFourColumnProjectionShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse merge: %v", err)
 	}
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build Iceberg merge plan: %v", err)
 	}
@@ -545,7 +554,7 @@ func TestIcebergMergeWithIcebergSourceAnnotatesOnlyTargetScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse merge: %v", err)
 	}
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build Iceberg merge with Iceberg source plan: %v", err)
 	}
@@ -650,7 +659,7 @@ func TestIcebergMergeInsertColumnListExpandsOmittedColumnDefaults(t *testing.T) 
 	if err != nil {
 		t.Fatalf("parse merge insert defaults: %v", err)
 	}
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build Iceberg merge insert defaults plan: %v", err)
 	}
@@ -691,7 +700,7 @@ func TestIcebergMergeMatchedAndNotMatchedConditionsBuildNoopGuard(t *testing.T) 
 	if err != nil {
 		t.Fatalf("parse merge: %v", err)
 	}
-	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build conditional Iceberg merge plan: %v", err)
 	}
@@ -730,7 +739,7 @@ func TestIcebergMergeNotMatchedOnlyBuildsInsertWithNoopGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse merge: %v", err)
 	}
-	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build not-matched Iceberg merge plan: %v", err)
 	}
@@ -759,7 +768,7 @@ func TestIcebergMergeMultipleActionClausesBuildFirstMatchChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse merge: %v", err)
 	}
-	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false, nil)
 	if err != nil {
 		t.Fatalf("build multi-clause Iceberg merge plan: %v", err)
 	}
@@ -798,7 +807,7 @@ func TestIcebergReplaceStillFailsBeforeNativeFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse replace: %v", err)
 	}
-	_, err = BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	_, err = BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false, nil)
 	if err == nil || !strings.Contains(err.Error(), "Iceberg row-level DML is not implemented") {
 		t.Fatalf("expected Iceberg row-level DML error, got %v", err)
 	}
@@ -1059,7 +1068,7 @@ func TestIcebergUpdateTargetSchemaScope(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			if tc.reject {
 				require.ErrorContains(t, err, "unknown UPDATE target")
 			} else {

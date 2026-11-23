@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -56,21 +57,33 @@ func newTxnTableWithItem(
 	process *process.Process,
 	eng engine.Engine,
 ) *txnTable {
+	source := item.SchemaSource()
+	var defs []engine.TableDef
+	var wire []byte
+	if !source.Valid() {
+		var err error
+		defs, err = item.BuildEngineDefs()
+		if err != nil {
+			panic(err)
+		}
+		wire = item.ConstraintBytes()
+	}
 	tbl := &txnTable{
 		db:            db,
 		accountId:     item.AccountId,
 		tableId:       item.Id,
 		version:       item.Version,
 		tableName:     item.Name,
-		defs:          item.Defs,
-		tableDef:      item.TableDef,
+		source:        source,
+		defs:          defs,
+		tableDef:      item.ReadPlanTableDef(),
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
 		relKind:       item.Kind,
 		viewdef:       item.ViewDef,
 		comment:       item.Comment,
 		createSql:     item.CreateSql,
-		constraint:    item.Constraint,
+		constraint:    wire,
 		partitioned:   item.Partitioned,
 		partition:     item.Partition,
 		extraInfo:     item.ExtraInfo,
@@ -217,6 +230,12 @@ func (tbl *txnTableDelegate) Stats(
 		return transientTableStats(&stats, float64(^uint64(0))), nil
 	}
 
+	// A readonly remote owner cannot see this CN's delete/update workspace.
+	// The decoded response is owned here, so clearing its sample cannot mutate
+	// the published generation at either CN.
+	if len(stats.ByteRangeMap) > 0 && (!tbl.origin.getTxn().Readonly() || tbl.origin.db.op.IsSnapOp()) {
+		stats.ByteRangeMap = nil
+	}
 	return &stats, nil
 }
 
@@ -760,6 +779,7 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 		)
 	}
 
+	resource.LockReadPKFromContext(ctx).MarkRemotePKSubstagesUnavailable()
 	modify := false
 	keyVector := bat.GetVector(pkIndex)
 	err = tbl.forwardRead(
@@ -885,6 +905,13 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeUpserted(
 		return false, err
 	}
 	return modify, nil
+}
+
+func (tbl *txnTableDelegate) ValidatedCatalogKind() (string, bool) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.primary.ValidatedCatalogKind()
+	}
+	return tbl.origin.ValidatedCatalogKind()
 }
 
 func (tbl *txnTableDelegate) TableDefs(
@@ -1036,6 +1063,10 @@ func (tbl *txnTableDelegate) TableColumns(
 		return tbl.combined.tbl.TableColumns(ctx)
 	}
 	return tbl.origin.TableColumns(ctx)
+}
+
+func (tbl *txnTableDelegate) MaxAndMinValuesUsePlannerColumns() bool {
+	return !tbl.combined.is && tbl.origin.MaxAndMinValuesUsePlannerColumns()
 }
 
 func (tbl *txnTableDelegate) MaxAndMinValues(
@@ -1455,6 +1486,7 @@ func (r *shardingLocalReader) Read(
 			}
 			r.iteratePhase = InRemote
 		case InRemote:
+			var decodeErr error
 			err = r.tblDelegate.forwardRead(
 				ctx,
 				shardservice.ReadNext,
@@ -1463,20 +1495,14 @@ func (r *shardingLocalReader) Read(
 					param.ReadNextParam.Columns = cols
 				},
 				func(resp []byte) {
-					isEnd = types.DecodeBool(resp)
-					if isEnd {
-						return
-					}
-					resp = resp[1:]
-					l := types.DecodeUint32(resp)
-					resp = resp[4:]
-					if err := bat.UnmarshalBinaryWithAnyMp(resp[:l], mp); err != nil {
-						panic(err)
-					}
+					isEnd, decodeErr = decodeShardingReadBatch(ctx, resp, bat, mp)
 				},
 			)
 			if err != nil {
 				return false, err
+			}
+			if decodeErr != nil {
+				return false, decodeErr
 			}
 			if isEnd {
 				r.iteratePhase = InEnd
@@ -1531,4 +1557,29 @@ func (r *shardingLocalReader) GetOrderBy() []*plan.OrderBySpec {
 }
 
 func (r *shardingLocalReader) SetFilterZM(zm objectio.ZoneMap) {
+}
+
+// decodeShardingReadBatch admits the received mutable batch before handing it
+// to the consuming scan. Read-only qualification never crosses the wire.
+func decodeShardingReadBatch(ctx context.Context, response []byte, output *batch.Batch, mp *mpool.MPool) (bool, error) {
+	if len(response) < 1 {
+		return false, moerr.NewInvalidInputNoCtx("truncated sharding read response")
+	}
+	if types.DecodeBool(response) {
+		return true, nil
+	}
+	if len(response) < 5 {
+		return false, moerr.NewInvalidInputNoCtx("truncated sharding read batch length")
+	}
+	length := uint64(types.DecodeUint32(response[1:]))
+	if length > uint64(len(response)-5) {
+		return false, moerr.NewInvalidInputNoCtx("truncated sharding read batch")
+	}
+	if err := output.UnmarshalBinaryWithAnyMp(response[5:5+int(length)], mp); err != nil {
+		return false, err
+	}
+	if err := objectio.JSONReadSetFromContext(ctx).PublishMutableColumnsForEvaluation(output.Vecs, mp, output.RowCount()); err != nil {
+		return false, err
+	}
+	return false, nil
 }

@@ -47,8 +47,7 @@ func reusableSingleGroup(agg AggFuncExec) (singleGroupReuse, *aggExec, bool) {
 	}
 	for i, v := range s.vecs {
 		if v == nil || v.IsConst() || v.Length() != 1 || v.Capacity() < AggBatchSize ||
-			!v.GetType().Eq(state.stateTypes[i]) ||
-			!vector.AllocationAccountSelectionsEqual(v.AllocationAccountSelection(), state.allocation.vectorSelection()) {
+			!v.GetType().Eq(state.stateTypes[i]) {
 			return nil, nil, false
 		}
 	}
@@ -69,6 +68,15 @@ func SupportsSingleGroupReuse(aggs []GroupAggFuncExec) bool {
 	return true
 }
 
+// SupportsSingleGroupReuseInput reports whether an initialized aggregate can
+// reuse its state for this input. Rich MIN/MAX metadata must use BulkFill.
+func SupportsSingleGroupReuseInput(agg AggFuncExec, vectors []*vector.Vector) bool {
+	if check, ok := agg.(interface{ singleGroupReuseInput([]*vector.Vector) bool }); ok {
+		return check.singleGroupReuseInput(vectors)
+	}
+	return true
+}
+
 // AppendSingleGroupResultAndReset copies the completed value into dst, then
 // resets the live state without allocation. A successful newly created vector
 // belongs to the caller. On failure a new vector is freed here; an existing dst
@@ -82,13 +90,12 @@ func AppendSingleGroupResultAndReset(agg AggFuncExec, dst *vector.Vector) (*vect
 	created := dst == nil
 	if created {
 		var err error
-		dst, err = state.allocation.newVector(state.retType)
+		dst, err = state.allocation.newVector(state.retType, state.mp)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		if dst.IsConst() || !dst.GetType().Eq(state.retType) ||
-			!vector.AllocationAccountSelectionsEqual(dst.AllocationAccountSelection(), state.allocation.vectorSelection()) {
+		if dst.IsConst() || !dst.GetType().Eq(state.retType) {
 			return nil, moerr.NewInternalErrorNoCtx("invalid single-group result destination")
 		}
 		for _, v := range state.state[0].vecs {
@@ -121,6 +128,9 @@ func BulkFillSingleGroupRange(agg AggFuncExec, offset, rows int, vectors []*vect
 		(len(state.argTypes) != 1 || !vectors[0].GetType().Eq(state.argTypes[0])) {
 		return moerr.NewInternalErrorNoCtx("invalid single-group input type")
 	}
+	if !SupportsSingleGroupReuseInput(agg, vectors) {
+		return moerr.NewInternalErrorNoCtx("unsupported single-group input metadata")
+	}
 	return reuse.bulkFillSingleGroupRange(offset, rows, vectors)
 }
 
@@ -138,9 +148,11 @@ func (exec *countColumnExec) singleGroupReuseState() (*aggExec, bool) {
 	return &exec.aggExec, exec.extra == 0 && len(exec.argTypes) == 1 && len(exec.distinctContributions) == 0
 }
 
+// The appendSingleGroup* helpers write into the caller's dst, so they grow it
+// through dst's own pool.
 func appendSingleGroupCount(exec *aggExec, dst *vector.Vector) error {
 	counts := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[0])
-	if err := vector.AppendFixed(dst, counts[0], false, exec.mp); err != nil {
+	if err := vector.AppendFixed(dst, counts[0], false, dst.MPool()); err != nil {
 		return err
 	}
 	counts[0] = 0
@@ -185,6 +197,65 @@ func (exec *sumAvgExec[T, A]) singleGroupReuseState() (*aggExec, bool) {
 	return &exec.aggExec, true
 }
 
+func (exec *sumAvgDecExec[A, S]) singleGroupReuseState() (*aggExec, bool) {
+	if exec == nil || len(exec.argTypes) != 1 {
+		return nil, false
+	}
+	wantStates := 2
+	if exec.isSum {
+		wantStates = 1
+	}
+	stateType := sumAvgDecimalStateType[S](0).Oid
+	if len(exec.stateTypes) != wantStates || exec.stateTypes[0].Oid != stateType ||
+		exec.retType.Oid != stateType || (!exec.isSum && exec.stateTypes[1].Oid != types.T_int64) {
+		return nil, false
+	}
+	return &exec.aggExec, true
+}
+
+func (exec *sumAvgDecExec[A, S]) bulkFillSingleGroupRange(offset, rows int, vectors []*vector.Vector) error {
+	if exec.isSum {
+		return exec.bulkFillSumRange(0, offset, rows, vectors)
+	}
+	return exec.bulkFillAvgRange(0, offset, rows, vectors)
+}
+
+func (exec *sumAvgDecExec[A, S]) appendSingleGroupResult(dst *vector.Vector) error {
+	sumVec := exec.state[0].vecs[0]
+	sums := vector.MustFixedColNoTypeCheck[S](sumVec)
+	var err error
+	if exec.isSum {
+		if sumVec.IsNull(0) {
+			err = vector.AppendNull(dst, dst.MPool())
+		} else if err = validateDecimal256SumResult(sums[0], exec.retType); err == nil {
+			err = vector.AppendFixed(dst, sums[0], false, dst.MPool())
+		}
+	} else {
+		count := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0]
+		if count == 0 {
+			err = vector.AppendNull(dst, dst.MPool())
+		} else {
+			var avg S
+			avg, err = decAvg(sums[0], count, sumAvgDecimalArgScale(exec.argTypes[0]), exec.retType)
+			if err == nil {
+				err = vector.AppendFixed(dst, avg, false, dst.MPool())
+			}
+		}
+	}
+	if err != nil {
+		return err
+	}
+	var zero S
+	sums[0] = zero
+	if exec.isSum {
+		sumVec.SetNull(0)
+	} else {
+		vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0] = 0
+	}
+	exec.windowNonNullCount = 0
+	return nil
+}
+
 func (exec *sumAvgExec[T, A]) bulkFillSingleGroupRange(offset, rows int, vectors []*vector.Vector) error {
 	if exec.isSum {
 		return exec.bulkFillSumRange(0, offset, rows, vectors)
@@ -197,24 +268,24 @@ func (exec *sumAvgExec[T, A]) appendSingleGroupResult(dst *vector.Vector) error 
 	sums := vector.MustFixedColNoTypeCheck[T](sumVec)
 	var err error
 	if exec.isSum {
-		err = vector.AppendFixed(dst, sums[0], sumVec.IsNull(0), exec.mp)
+		err = vector.AppendFixed(dst, sums[0], sumVec.IsNull(0), dst.MPool())
 	} else {
 		count := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0]
 		if count == 0 {
-			err = vector.AppendNull(dst, exec.mp)
+			err = vector.AppendNull(dst, dst.MPool())
 		} else if !exec.exactAvg {
-			err = vector.AppendFixed(dst, float64(sums[0])/float64(count), false, exec.mp)
+			err = vector.AppendFixed(dst, float64(sums[0])/float64(count), false, dst.MPool())
 		} else if exec.retType.Oid == types.T_decimal256 {
 			var avg types.Decimal256
 			avg, err = decAvg(decimal256FromNativeSum(sums[0]), count, 0, exec.retType)
 			if err == nil {
-				err = appendNativeAvgResult(dst, avg, exec.mp)
+				err = appendNativeAvgResult(dst, avg, dst.MPool())
 			}
 		} else {
 			var avg types.Decimal128
 			avg, err = nativeIntegerAvg128(sums[0], count, exec.retType)
 			if err == nil {
-				err = appendNativeAvgResult(dst, avg, exec.mp)
+				err = appendNativeAvgResult(dst, avg, dst.MPool())
 			}
 		}
 	}
@@ -229,5 +300,71 @@ func (exec *sumAvgExec[T, A]) appendSingleGroupResult(dst *vector.Vector) error 
 		vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0] = 0
 	}
 	exec.windowNonNullCount = 0
+	return nil
+}
+
+func (exec *minMaxExecFixed[T]) singleGroupReuseState() (*aggExec, bool) {
+	if exec == nil || exec.hasExtra || exec.comp == nil || len(exec.state) != 1 ||
+		len(exec.state[0].vecs) != 1 || exec.state[0].vecs[0] == nil ||
+		len(exec.argTypes) != 1 || len(exec.stateTypes) != 1 ||
+		!exec.retType.Eq(exec.stateTypes[0]) || !exec.argTypes[0].Eq(exec.stateTypes[0]) {
+		return nil, false
+	}
+	return &exec.aggExec, true
+}
+
+func (exec *minMaxExecFixed[T]) singleGroupReuseInput(vectors []*vector.Vector) bool {
+	return len(vectors) == 1 && vectors[0] != nil
+}
+
+func (exec *minMaxExecFixed[T]) appendSingleGroupResult(dst *vector.Vector) error {
+	state := exec.state[0].vecs[0]
+	if err := dst.UnionOne(state, 0, dst.MPool()); err != nil {
+		return err
+	}
+	values := vector.MustFixedColNoTypeCheck[T](state)
+	var zero T
+	values[0] = zero
+	state.CleanOnlyData()
+	state.SetLength(1)
+	state.SetNull(0)
+	return nil
+}
+
+func (exec *minMaxExecFixed[T]) bulkFillSingleGroupRange(offset, rows int, vectors []*vector.Vector) error {
+	input := vectors[0]
+	state := exec.state[0].vecs[0]
+	values := vector.MustFixedColNoTypeCheck[T](input)
+	var winner T
+	found := false
+	for i := 0; i < rows; i++ {
+		row := offset + i
+		if input.IsNull(uint64(row)) {
+			continue
+		}
+		if input.IsConst() {
+			row = 0
+		}
+		value := values[row]
+		if !found || exec.comp(value, winner) < 0 {
+			winner = value
+			found = true
+		}
+	}
+	if !found {
+		return nil
+	}
+	current := vector.MustFixedColNoTypeCheck[T](state)
+	if state.IsNull(0) {
+		state.UnsetNull(0)
+		current[0] = winner
+	} else {
+		switch cmp := exec.comp(winner, current[0]); {
+		case cmp < 0:
+			current[0] = winner
+		case cmp > 0:
+			return nil
+		}
+	}
 	return nil
 }

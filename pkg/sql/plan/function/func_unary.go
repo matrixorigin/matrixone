@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/common/zipstream"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1036,8 +1037,8 @@ func BitCountDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
-	if !perRow && uniformBinary {
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
+	if uniformBinary {
 		return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
 	}
 	param := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -1058,7 +1059,7 @@ func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResul
 		}
 		var count uint64
 		var err error
-		binary := binaryStringAt(ivecs[0], int(row), uniformBinary, perRow)
+		binary := uniformBinary
 		if binary {
 			count = bitCountFromBinaryString(value)
 		} else {
@@ -1081,6 +1082,137 @@ func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResul
 
 func BitCountBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
+}
+
+// PreparedBitCountCastOverload is a binder-only conversion for a string
+// execution after BIT_COUNT has latched to a numeric parameter domain.
+const PreparedBitCountCastOverload int32 = 10
+
+func appendPreparedBitCountConversionWarning(proc *process.Process, value, typeName string) {
+	if proc == nil {
+		return
+	}
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	appender.AppendWarningDiagnostic(
+		moerr.ER_TRUNCATED_WRONG_VALUE,
+		fmt.Sprintf("Truncated incorrect %s value: '%-.128s'", typeName, trimASCIISpace(value)),
+	)
+}
+
+func preparedBitCountIntegerPrefix(prefix string) (int64, bool, error) {
+	rounded, err := parseMySQLDecimal256Prefix(prefix, 65, 0)
+	if err != nil {
+		return 0, false, err
+	}
+	integer, ok := new(big.Int).SetString(rounded.Format(0), 10)
+	if !ok {
+		return 0, false, strconv.ErrSyntax
+	}
+	if integer.IsInt64() {
+		return integer.Int64(), false, nil
+	}
+	if integer.Sign() < 0 {
+		return math.MinInt64, true, nil
+	}
+	return math.MaxInt64, true, nil
+}
+
+func preparedBitCountTextRows[T types.FixedSizeTExceptStrType](
+	source *vector.Vector, result *vector.FunctionResult[T], proc *process.Process, length int,
+	selectList *FunctionSelectList, convert func(string) (T, string, error),
+) error {
+	input := vector.GenerateFunctionStrParameter(source)
+	var zero T
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := result.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := input.GetStrValue(row)
+		if null {
+			if err := result.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		text := convertByteSliceToString(value)
+		trimmed := trimASCIISpace(text)
+		prefix, _, hasPrefix := scanDecimalFloatPrefix(trimmed)
+		if !hasPrefix {
+			appendPreparedBitCountConversionWarning(proc, text, "INTEGER")
+			if err := result.Append(zero, false); err != nil {
+				return err
+			}
+			continue
+		}
+		converted, warningType, err := convert(prefix)
+		if err != nil {
+			return err
+		}
+		if warningType == "" && prefix != trimmed {
+			warningType = "INTEGER"
+		}
+		if warningType != "" {
+			appendPreparedBitCountConversionWarning(proc, text, warningType)
+		}
+		if err = result.Append(converted, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// NewPreparedBitCountCast keeps prepared string reuse out of the generic
+// strict CAST contract. Integer latches round the exact decimal prefix and
+// saturate at signed BIGINT boundaries; DOUBLE and DECIMAL retain their own
+// later BIT_COUNT conversion rules.
+func NewPreparedBitCountCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(parameters) != 2 || !parameters[0].GetType().Oid.IsMySQLString() {
+		return moerr.NewInvalidInput(proc.Ctx, "prepared bit count cast requires a string value and numeric target")
+	}
+	source := parameters[0]
+	// typeswitch:partial Prepared BIT_COUNT numeric latches use canonical target types;
+	// other float-family members cannot reach this binder-only conversion.
+	switch target := result.GetResultVector().GetType(); target.Oid {
+	case types.T_int64:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[int64](result), proc, length, selectList, func(prefix string) (int64, string, error) {
+			value, outOfRange, err := preparedBitCountIntegerPrefix(prefix)
+			if outOfRange {
+				return value, "DECIMAL", err
+			}
+			return value, "", err
+		})
+	case types.T_uint64:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[uint64](result), proc, length, selectList, func(prefix string) (uint64, string, error) {
+			value, outOfRange, err := preparedBitCountIntegerPrefix(prefix)
+			if outOfRange {
+				return uint64(value), "DECIMAL", err
+			}
+			return uint64(value), "", err
+		})
+	case types.T_float64:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[float64](result), proc, length, selectList, func(prefix string) (float64, string, error) {
+			value, err := strconv.ParseFloat(prefix, 64)
+			if errors.Is(err, strconv.ErrRange) && math.IsInf(value, 0) {
+				// Retain the infinity for BIT_COUNT's existing floating conversion;
+				// the string conversion owns warning 1292.
+				return value, "INTEGER", nil
+			}
+			return value, "", err
+		})
+	case types.T_decimal256:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[types.Decimal256](result), proc, length, selectList, func(prefix string) (types.Decimal256, string, error) {
+			value, err := parseMySQLDecimal256Prefix(prefix, target.Width, target.Scale)
+			return value, "", err
+		})
+	default:
+		return moerr.NewInvalidInput(proc.Ctx, "prepared bit count cast requires an int64, uint64, float64, or decimal256 target")
+	}
 }
 
 func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1191,7 +1323,7 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			// ParseDatetime reports only invalid-input errors. Malformed strings
 			// share the input-NULL path without consulting the zero-date policy.
 			parsed, err = types.ParseDatetime(functionUtil.QuickBytesToStr(value), 6)
-			if err != nil && !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+			if err != nil && !result.ArgumentIsBin(0) && isTemporalTextSource(ivecs[0].GetType().Oid) {
 				appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
 			}
 			null = err != nil
@@ -1390,7 +1522,7 @@ func Empty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 
 func JsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	single := func(str string, row int) ([]byte, error) {
-		if ivecs[0].GetIsBinaryStringAt(row) {
+		if isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0)) {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_quote")
 		}
 		if !utf8.ValidString(str) {
@@ -1461,7 +1593,7 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		// NULL and masked rows.  Runtime binary provenance can vary within a
 		// VARCHAR vector, and a selected text row can override a static binary
 		// result type.
-		if ivecs[0].GetIsBinaryStringAt(row) {
+		if isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0)) {
 			return "", moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_unquote")
 		}
 		if ivecs[0].GetType().Oid.IsMySQLString() {
@@ -1485,7 +1617,8 @@ func QuoteString(str string) string {
 func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	parameter := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	isUTF8Text := isExplicitUTF8Charset(ivecs[0].GetType().Charset)
+	isJSON := ivecs[0].GetType().Oid == types.T_json
+	isUTF8Text := isJSON || isExplicitUTF8Charset(ivecs[0].GetType().Charset)
 	for row := uint64(0); row < uint64(length); row++ {
 		if selectList != nil && (selectList.IgnoreAllRow() ||
 			(!selectList.ShouldEvalAllRow() && selectList.Contains(row))) {
@@ -1494,7 +1627,10 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			}
 			continue
 		}
-		value, null := parameter.GetStrValue(row)
+		value, null, err := getJSONStringConsumerValue(proc.Ctx, parameter, row)
+		if err != nil {
+			return err
+		}
 		if null {
 			if err := rs.AppendBytes([]byte("NULL"), false); err != nil {
 				return err
@@ -1502,7 +1638,7 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			continue
 		}
 		if !utf8.Valid(value) {
-			isBinary := ivecs[0].GetIsBinaryStringAt(int(row))
+			isBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 			if isBinary {
 				return moerr.NewCannotConvertString(proc.Ctx, string(value), "binary", "utf8mb4")
 			}
@@ -5870,6 +6006,33 @@ func soundexTextString(str string) string {
 }
 
 func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if ivecs[0].GetType().Oid == types.T_json {
+		parameter := vector.GenerateFunctionStrParameter(ivecs[0])
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		for row := uint64(0); row < uint64(length); row++ {
+			if functionRowSkipped(selectList, row) {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			value, isNull, err := getJSONStringConsumerValue(proc.Ctx, parameter, row)
+			if err != nil {
+				return err
+			}
+			if isNull {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			resultValue := functionUtil.QuickStrToBytes(soundexTextString(functionUtil.QuickBytesToStr(value)))
+			if err := rs.AppendBytes(resultValue, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	textSoundex := SoundexString
 	if isExplicitUTF8Charset(ivecs[0].GetType().Charset) {
 		textSoundex = soundexTextString
@@ -6040,6 +6203,119 @@ func readLoadFileDatalinkContents(filePath string, proc *process.Process) ([]byt
 		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
 	}
 	return contents, nil
+}
+
+// ctxReader fails a Read once ctx is done.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
+}
+
+// unzipContents returns the decompressed bytes of the first file of the zip archive r, and
+// closes r.
+func unzipContents(r io.ReadCloser, proc *process.Process) ([]byte, error) {
+	zr, closeDecoder, err := zipstream.NewReader(proc.Ctx, ctxReader{ctx: proc.Ctx, r: r})
+	if err != nil {
+		r.Close()
+		return nil, err
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(zr, int64(types.MaxBlobLen)+1))
+	var closeErr error
+	if closeDecoder != nil {
+		closeErr = closeDecoder()
+	}
+	if err := r.Close(); closeErr == nil {
+		closeErr = err
+	}
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if len(contents) > types.MaxBlobLen {
+		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+	return contents, nil
+}
+
+func openUnzipFilePath(filePath string, proc *process.Process) (io.ReadCloser, error) {
+	path, err := fileservice.ParsePath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	return readFromParsedPath(process.SQLFileAccessContext(proc.Ctx, proc), filePath, path, proc.GetFileService(), 0, -1)
+}
+
+func openUnzipFileDatalink(filePath string, proc *process.Process) (io.ReadCloser, error) {
+	dl, err := datalink.NewDatalink(filePath, proc)
+	if err != nil {
+		return nil, err
+	}
+	return dl.NewReadCloser(proc)
+}
+
+// unzipFile returns unzip_file over the files open opens: the decompressed bytes of the first
+// file of each zip archive, as a blob.
+func unzipFile(open func(string, *process.Process) (io.ReadCloser, error)) func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error {
+	read := func(filePath string, proc *process.Process) ([]byte, error) {
+		r, err := open(filePath, proc)
+		if err != nil {
+			return nil, err
+		}
+		return unzipContents(r, proc)
+	}
+	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		if length == 0 {
+			return nil
+		}
+		if selectList.IgnoreAllRow() {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+		if ivecs[0].IsConst() {
+			filePath, isNull := ivec.GetStrValue(0)
+			if isNull {
+				rs.SetNullResult(uint64(length))
+				return nil
+			}
+			contents, err := read(util.UnsafeBytesToString(filePath), proc)
+			if err != nil {
+				return err
+			}
+			if len(contents) == 0 {
+				rs.SetNullResult(uint64(length))
+				return nil
+			}
+			return appendRepeatedBytesResultWithSelection(rs, contents, length, selectList)
+		}
+		for i := uint64(0); i < uint64(length); i++ {
+			filePath, isNull := ivec.GetStrValue(i)
+			if selectList.Contains(i) || isNull {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			contents, err := read(util.UnsafeBytesToString(filePath), proc)
+			if err != nil {
+				return err
+			}
+			if err := rs.AppendBytes(contents, len(contents) == 0); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 // LoadFileDatalink reads a file from the file service and returns the content as a blob.
@@ -6524,7 +6800,7 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		sels[j] = int64(j)
 	}
 
-	err := toVec.Union(fromVec, sels, proc.GetMPool())
+	err := toVec.Union(fromVec, sels, resultMPool(result, proc))
 	return err
 }
 
@@ -6534,7 +6810,7 @@ func builtInNameConst(parameters []*vector.Vector, result vector.FunctionResultW
 	toVec.Reset(*toVec.GetType())
 
 	for i := 0; i < length; i++ {
-		if err := toVec.UnionOne(fromVec, int64(i), proc.Mp()); err != nil {
+		if err := toVec.UnionOne(fromVec, int64(i), resultMPool(result, proc)); err != nil {
 			return err
 		}
 	}
@@ -8739,7 +9015,7 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -8755,13 +9031,13 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
 			resultVal, ok := inetAtonValue(ipStr)
 			if !ok {
 				// Invalid IP: return NULL for all rows
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 			} else {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
@@ -8914,38 +9190,6 @@ func InetNtoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		}, selectList)
 	default:
 		return moerr.NewInvalidInputNoCtxf("INET_NTOA does not support input type %s", argType.Oid.String())
-	}
-}
-
-func inetNtoaPreparedText(value []byte, kind vector.PrepareParamKind) (string, error) {
-	switch kind {
-	case vector.PrepareParamFloat:
-		floating, err := strconv.ParseFloat(string(value), 64)
-		if err != nil {
-			return "", err
-		}
-		return inetNtoaReal(floating)
-	case vector.PrepareParamDecimal:
-		integer, err := roundPreparedDecimalIntegerString(string(value))
-		if err != nil {
-			return "", err
-		}
-		number, err := strconv.ParseInt(integer, 10, 64)
-		if err != nil {
-			return "", err
-		}
-		return inetNtoaSigned(number)
-	case vector.PrepareParamBoolean:
-		switch strings.ToLower(string(value)) {
-		case "true", "1":
-			return inetNtoaUnsigned(1)
-		case "false", "0":
-			return inetNtoaUnsigned(0)
-		default:
-			return inetNtoaUnsigned(0)
-		}
-	default:
-		return inetNtoaSigned(parseMySQLIntegerPrefix(value))
 	}
 }
 
@@ -9114,10 +9358,6 @@ func InetNtoaDynamic(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			if null {
 				return "", true, nil
 			}
-			if kind := param.GetPrepareParamKindAt(int(i)); kind != vector.PrepareParamNone {
-				text, err := inetNtoaPreparedText(value, kind)
-				return text, err != nil, err
-			}
 			return appendSigned(parseMySQLIntegerPrefix(value), false)
 		}
 	case types.T_year:
@@ -9177,7 +9417,7 @@ func executeIPPredicate[T ipPredicateResult](
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -9193,7 +9433,7 @@ func executeIPPredicate[T ipPredicateResult](
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			var resultVal T
 			if predicate(v1) {
@@ -9356,7 +9596,7 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytes(parameters, result, proc, length, func(data []byte) []byte {
+	return jsonStringConsumerUnaryBytesToBytes(parameters, result, proc, length, func(data []byte) []byte {
 		sum := md5.Sum(data)
 		return []byte(hex.EncodeToString(sum[:]))
 	}, selectList)
@@ -9529,7 +9769,7 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 			data, null := source.GetStrValue(j)
 			if !null {
 				decodedSize := base64.StdEncoding.DecodedLen(len(data))
-				_ = rs.GetResultVector().PreExtendWithArea(length, decodedSize*length, proc.Mp())
+				_ = rs.GetResultVector().PreExtendWithArea(length, decodedSize*length, resultMPool(result, proc))
 				break
 			}
 		}
@@ -9761,7 +10001,10 @@ func Compress(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 			continue
 		}
 
-		data, null := source.GetStrValue(i)
+		data, null, err := getJSONStringConsumerValue(proc.Ctx, source, i)
+		if err != nil {
+			return err
+		}
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -9882,6 +10125,30 @@ func strLengthBinaryInt64(xs []byte) int64 {
 	return int64(len(xs))
 }
 
+// LengthBit evaluates the length family over a native BIT vector. MySQL
+// converts a BIT(M) value to its fixed-width binary string form
+// (Field_bit::val_str): ceil(M/8) big-endian bytes with leading zero bytes
+// preserved, in the single-byte binary charset, so LENGTH, OCTET_LENGTH and
+// CHAR_LENGTH all return the declared byte width for every non-NULL value.
+// The width M arrives on the input vector's type; a BIT type without a valid
+// declared width falls back to the value's minimal big-endian byte count.
+func LengthBit(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	width := ivecs[0].GetType().Width
+	if width >= 1 && width <= 64 {
+		widthBytes := int64((width + 7) / 8)
+		return opUnaryFixedToFixed[uint64, int64](ivecs, result, proc, length, func(uint64) int64 {
+			return widthBytes
+		}, selectList)
+	}
+	return opUnaryFixedToFixed[uint64, int64](ivecs, result, proc, length, func(v uint64) int64 {
+		n := int64(1)
+		for rest := v; rest >= 0x100; rest >>= 8 {
+			n++
+		}
+		return n
+	}, selectList)
+}
+
 func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	trim := func(value []byte) []byte { return bytes.TrimLeft(value, " ") }
 	return opUnaryBytesToBytesByStringDomain(ivecs, result, proc, length, trim, trim, selectList)
@@ -9895,7 +10162,7 @@ func Rtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	input := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -9910,7 +10177,7 @@ func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			}
 			continue
 		}
-		if binaryStringAt(ivecs[0], int(row), uniformBinary, perRow) {
+		if uniformBinary {
 			if err := rs.AppendBytesWithWriter(len(value), func(dst []byte) error {
 				for i := range value {
 					dst[len(value)-1-i] = value[i]
@@ -9925,7 +10192,7 @@ func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func reverse(str string) string {
@@ -9981,12 +10248,12 @@ func OctTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 // MySQL converts a string to its integer prefix before formatting it in base 8.
 // The empty string is NULL; a non-empty string without a numeric prefix is 0.
 func OctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	isBinaryLiteral := ivecs[0].GetIsBin()
+	isBinaryLiteral := result.ArgumentIsBin(0)
 	resultNulls := result.GetResultVector().GetNulls()
 	err := opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, func(v []byte, row int) (string, error) {
 		if len(v) == 0 {
 			if ivecs[0].IsConst() {
-				nulls.AddRange(resultNulls, 0, uint64(length))
+				resultNulls.AddRange(0, uint64(length))
 			} else {
 				resultNulls.Add(uint64(row))
 			}
@@ -10431,44 +10698,13 @@ func randomBytesTextLength(
 	row uint64,
 	proc *process.Process,
 ) (int64, error) {
-	kind := param.GetPrepareParamKindAt(int(row))
-	switch kind {
-	case vector.PrepareParamFloat, vector.PrepareParamDecimal:
-		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
-		// SQL PREPARE stores the value in a text transport vector. The source
-		// kind is the distinction between a string literal (integer prefix) and
-		// a numeric value (round-to-even for FLOAT, exact half-up for DECIMAL).
-		if kind == vector.PrepareParamDecimal {
-			integer, err := roundPreparedDecimalIntegerString(text)
-			if err != nil {
-				return 0, randomBytesRangeError(proc)
-			}
-			return randomBytesRoundedDecimalIntegerString(integer, proc)
-		}
-		floating, err := strconv.ParseFloat(text, 64)
-		if err != nil {
-			return 0, randomBytesRangeError(proc)
-		}
-		return randomBytesRoundedFloat(floating, proc)
-	case vector.PrepareParamBoolean:
-		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
-		boolean, err := strconv.ParseBool(text)
-		if err != nil {
-			return 0, randomBytesRangeError(proc)
-		}
-		if boolean {
-			return 1, nil
-		}
-		return 0, nil
-	default:
-		// Keep ordinary character values byte-oriented. In particular, MySQL
-		// only ignores ASCII whitespace before the numeric prefix; using
-		// strings.TrimSpace here would incorrectly accept Unicode whitespace.
-		return parseMySQLIntegerPrefix(value), nil
-	}
+	// Keep ordinary character values byte-oriented. In particular, MySQL
+	// only ignores ASCII whitespace before the numeric prefix; using
+	// strings.TrimSpace here would incorrectly accept Unicode whitespace.
+	return parseMySQLIntegerPrefix(value), nil
 }
 
-func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (randomBytesLengthGetter, error) {
+func makeRandomBytesLengthGetter(param *vector.Vector, paramIsBin bool, proc *process.Process) (randomBytesLengthGetter, error) {
 	if param == nil {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "function random_bytes", "nil argument")
 	}
@@ -10622,27 +10858,14 @@ func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (r
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary:
 		p := vector.GenerateFunctionStrParameter(param)
-		staticBinary := param.GetIsBin() ||
+		staticBinary := paramIsBin ||
 			types.StaticStringDomain(*param.GetType()) == types.StringDomainBinary
 		return func(i uint64) (int64, bool, error) {
 			value, null := p.GetStrValue(i)
 			if null {
 				return 0, true, nil
 			}
-			isBinary := staticBinary
-			switch param.GetRuntimeStringDomainAt(int(i)) {
-			case types.RuntimeStringText:
-				// A selected CASE/IF/COALESCE value can explicitly restore
-				// character semantics even when the common vector type is
-				// VARBINARY/BLOB.  The row-level override must win over the
-				// static type and any conservative vector summary.
-				isBinary = false
-			case types.RuntimeStringBinary:
-				isBinary = true
-			default:
-				isBinary = isBinary || param.GetIsBinaryStringAt(int(i))
-			}
-			if isBinary {
+			if staticBinary {
 				if len(value) == 0 {
 					return 0, false, moerr.NewInvalidArg(proc.Ctx, "cast to int", value)
 				}
@@ -10682,7 +10905,7 @@ func randomBytesWithReader(
 		return moerr.NewInvalidArg(proc.Ctx, "function random_bytes", fmt.Sprintf("expected 1 argument, got %d", len(parameters)))
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	getLength, err := makeRandomBytesLengthGetter(parameters[0], proc)
+	getLength, err := makeRandomBytesLengthGetter(parameters[0], result.ArgumentIsBin(0), proc)
 	if err != nil {
 		return err
 	}
@@ -13908,6 +14131,10 @@ func BitCast(
 	toType := parameters[1].GetType()
 	ctx := proc.Ctx
 
+	// stored bf16/float16/float8/float4 values are finite with a +0 zero; arbitrary bits are not
+	if toType.Oid.IsLowPrecisionFloat() {
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("bit_cast to %s", toType))
+	}
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
@@ -14011,7 +14238,7 @@ func SHA1Func(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
-	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+	return jsonStringConsumerUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		sum := sha1.Sum(v)
 		return []byte(hex.EncodeToString(sum[:]))
 	}, selectList)

@@ -66,7 +66,7 @@ func TestTableDumpHistoricalDecimalBoundPayload(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, fixture.SQL, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			fresh, err := sqlplan.BuildPlan(compiler, stmt, false)
+			fresh, err := sqlplan.BuildPlan(compiler, stmt, false, nil)
 			require.NoError(t, err)
 			target := fresh.GetDdl().GetCreateTable().GetTableDef()
 			if strings.HasPrefix(name, "between_") {

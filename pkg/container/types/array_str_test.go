@@ -16,7 +16,10 @@ package types
 
 import (
 	"math"
+	"strings"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func Test_unsafeStringAt(t *testing.T) {
@@ -196,5 +199,28 @@ func TestStringToArrayRejectsNarrowOverflow(t *testing.T) {
 	}
 	if _, err := StringToArray[BF16]("[70000,0,0]"); err != nil {
 		t.Errorf("bf16 [70000,...]: unexpected error %v", err)
+	}
+}
+
+// TestStringToArrayMalformedIsInvalidInput checks that each vector text parser
+// rejects malformed text with ErrInvalidInput.
+func TestStringToArrayMalformedIsInvalidInput(t *testing.T) {
+	tooLong := "[" + strings.Repeat("1,", MaxArrayDimension) + "1]"
+	parsers := map[string]func(string) error{
+		"StringToArray":   func(s string) error { _, err := StringToArray[float32](s); return err },
+		"StringToArrayV2": func(s string) error { _, err := StringToArrayV2[float32](s); return err },
+		"StringToArrayV3": func(s string) error { _, err := StringToArrayV3[float32](s); return err },
+	}
+	for name, parse := range parsers {
+		for _, in := range []string{"abc", "[1,,2]", "[1,2", "[1,]", "[1,2] 1", "[1,a,2]", "[1,nan,2]", tooLong} {
+			err := parse(in)
+			if !moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+				label := in
+				if len(label) > 16 {
+					label = label[:16] + "..."
+				}
+				t.Errorf("%s(%q): want ErrInvalidInput, got %v", name, label, err)
+			}
+		}
 	}
 }

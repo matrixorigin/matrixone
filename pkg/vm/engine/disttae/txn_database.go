@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -88,13 +89,6 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 }
 
 func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug(
-			"Transaction.Relation",
-			zap.String("txn", db.op.Txn().DebugString()),
-			zap.String("name", name),
-		)
-	})
 	txn := db.getTxn()
 	if _, err := txnIsValid(txn.op); err != nil {
 		return nil, err
@@ -185,8 +179,7 @@ func (db *txnDatabase) RelationExists(ctx context.Context, name string, proc any
 func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 	db.getTxn().beginCatalogMutation()
 	defer db.getTxn().endCatalogMutation()
-	_, err := db.deleteTable(ctx, name, false, false)
-	return err
+	return db.deleteTable(ctx, name, false, false)
 }
 
 // deleteTable deletes a table.
@@ -197,20 +190,19 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 // 2. useAlterNote means that the batch sent to TN will be just used
 // to insert into or delete from mo_tables and mo_columns,
 // rather than trigger an actual create or delete operation for table.
-func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bool, useAlterNote bool) ([]engine.TableDef, error) {
+func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bool, useAlterNote bool) error {
 	var id uint64
 	var rowid types.Rowid
 	var rowids []types.Rowid
 	var colPKs [][]byte
-	var defs []engine.TableDef
 	var packer *types.Packer
 	if db.op.IsSnapOp() {
-		return nil, moerr.NewInternalErrorNoCtx("delete table in snapshot transaction")
+		return moerr.NewInternalErrorNoCtx("delete table in snapshot transaction")
 	}
 
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	txn := db.getTxn()
 	putter := txn.engine.packerPool.Get(&packer)
@@ -219,7 +211,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	// 1. Get id and columns infortmation to prepate delete batch
 	rel, err := db.Relation(ctx, name, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	var toDelTbl *txnTable
@@ -232,7 +224,6 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 		panic("unknown relation type")
 	}
 
-	defs = toDelTbl.defs
 	id = toDelTbl.tableId
 	colPKs = getColPks(accountId, db.databaseName, name, toDelTbl.tableDef.Cols, packer)
 
@@ -246,13 +237,13 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			ctx,
 			catalog.MO_TABLES,
 		); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	res, err := execReadSql(ctx, db.op, sql, true)
 	rmFault()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer res.Close()
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
@@ -274,7 +265,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	// 1.2 table column rowids
 	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, sqlquote.String(db.databaseName), sqlquote.String(name), id), true)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer res.Close()
 	for _, b := range res.Batches {
@@ -302,9 +293,15 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 		bat, err := catalog.GenDropTableTuple(rowid, accountId, id, db.databaseId,
 			name, db.databaseName, txn.proc.Mp(), packer)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID); bat.RowCount() > 0 {
+		// WriteBatch copies the rows into the workspace; the batch stays ours.
+		defer bat.Clean(txn.proc.Mp())
+		bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.proc.Mp())
+		if err != nil {
+			return err
+		}
+		if bat.RowCount() > 0 {
 			// the deleted table is not created by this txn
 			note := noteForDrop(id, name)
 			if useAlterNote {
@@ -313,8 +310,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			if _, err := txn.WriteBatch(
 				DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 				catalog.MO_CATALOG, catalog.MO_TABLES, bat, txn.tnStores[0]); err != nil {
-				bat.Clean(txn.proc.Mp())
-				return nil, err
+				return err
 			}
 		}
 		if !forAlter {
@@ -332,10 +328,15 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 		// The logical_id index entry is written after mo_columns to maintain this ordering.
 		bat, err := catalog.GenDropColumnTuples(rowids, colPKs, txn.proc.Mp())
 		if err != nil {
-			return nil, err
+			return err
 		}
+		defer bat.Clean(txn.proc.Mp())
 
-		if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID); bat.RowCount() > 0 {
+		bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.proc.Mp())
+		if err != nil {
+			return err
+		}
+		if bat.RowCount() > 0 {
 			note := noteForDrop(id, name)
 			if useAlterNote {
 				note = noteForAlterDel(id, name)
@@ -343,8 +344,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			if _, err = txn.WriteBatch(
 				DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, txn.tnStores[0]); err != nil {
-				bat.Clean(txn.proc.Mp())
-				return nil, err
+				return err
 			}
 		}
 	}
@@ -353,7 +353,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 		// This must be after mo_columns to maintain entry ordering for TN's ParseEntryList
 		if !forAlter {
 			if err := db.syncLogicalIdIndexDelete(ctx, toDelTbl.logicalId); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
@@ -362,7 +362,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	key := genTableKey(accountId, name, db.databaseId, db.databaseName)
 	txn.tableCache.Delete(key)
 	txn.tableOps.addDeleteTable(key, txn.statementID, id)
-	return defs, nil
+	return nil
 }
 
 func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
@@ -556,8 +556,11 @@ func (db *txnDatabase) createWithID(
 		if err != nil {
 			return err
 		}
+		// WriteBatch copies the rows into the workspace; the batch stays ours.
+		defer bat.Clean(m)
 
-		compositePk = bat.Vecs[catalog.MO_TABLES_CPKEY_IDX].GetBytesAt(0)
+		// Clone: the key is used after bat is freed.
+		compositePk = bytes.Clone(bat.Vecs[catalog.MO_TABLES_CPKEY_IDX].GetBytesAt(0))
 
 		note := noteForCreate(tbl.tableId, tbl.tableName)
 		if useAlterNote {
@@ -566,7 +569,6 @@ func (db *txnDatabase) createWithID(
 		_, err = txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, txn.tnStores[0])
 		if err != nil {
-			bat.Clean(m)
 			return err
 		}
 	}
@@ -578,6 +580,7 @@ func (db *txnDatabase) createWithID(
 		if err != nil {
 			return err
 		}
+		defer bat.Clean(m)
 		note := noteForCreate(tbl.tableId, tbl.tableName)
 		if useAlterNote {
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
@@ -586,7 +589,6 @@ func (db *txnDatabase) createWithID(
 			INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, txn.tnStores[0])
 		if err != nil {
-			bat.Clean(m)
 			return err
 		}
 	}
@@ -752,16 +754,13 @@ func (db *txnDatabase) syncLogicalIdIndexInsert(
 	if err != nil {
 		return err
 	}
-	// Note: Do NOT clean bat here. WriteBatch stores the batch reference in txn.writes,
-	// and the batch lifecycle is managed by the transaction (cleaned on commit/rollback).
+	// WriteBatch copies the rows into the workspace; the batch stays ours.
+	defer bat.Clean(m)
 
 	note := fmt.Sprintf("sync logical_id index insert %d", logicalId)
 	_, err = txn.WriteBatch(
 		INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID,
 		catalog.MO_CATALOG, catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME, bat, txn.tnStores[0])
-	if err != nil {
-		bat.Clean(m)
-	}
 	return err
 }
 
@@ -796,14 +795,19 @@ func (db *txnDatabase) syncLogicalIdIndexDelete(
 	if err != nil {
 		return err
 	}
+	// WriteBatch copies the rows into the workspace; the batch stays ours.
+	defer bat.Clean(m)
 
 	// Use deleteBatch to filter out rows that were created in this txn (same pattern as deleteTable)
-	if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID); bat.RowCount() > 0 {
+	bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID, txn.proc.Mp())
+	if err != nil {
+		return err
+	}
+	if bat.RowCount() > 0 {
 		note := fmt.Sprintf("sync logical_id index delete %d", logicalId)
 		if _, err = txn.WriteBatch(
 			DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME, bat, txn.tnStores[0]); err != nil {
-			bat.Clean(m)
 			return err
 		}
 	}

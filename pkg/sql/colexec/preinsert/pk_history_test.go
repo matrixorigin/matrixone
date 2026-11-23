@@ -72,7 +72,7 @@ func TestGenAutoIncrColUnavailableHistoryRecovery(t *testing.T) {
 			pre.ctr.tblId = 42
 			bat := batch.NewWithSize(1)
 			defer bat.Clean(proc.Mp())
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(0), true, proc.Mp()))
 			bat.SetRowCount(1)
 			err := genAutoIncrCol(bat, proc, pre)

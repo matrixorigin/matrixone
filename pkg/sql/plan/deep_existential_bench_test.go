@@ -34,7 +34,7 @@ func BenchmarkExistentialPlanningControls(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				_, err = BuildPlan(ctx, stmts[0], false)
+				_, err = BuildPlan(ctx, stmts[0], false, nil)
 				stmts[0].Free()
 				if err != nil {
 					b.Fatal(err)

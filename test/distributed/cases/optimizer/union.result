@@ -6,33 +6,41 @@ drop table if exists t2;
 create table t1(c1 int primary key, c2 int, c3 int);
 create table t2(c1 int, c2 int, c3 int, primary key(c1,c2));
 explain select * from t1 union select * from t2;
-QUERY PLAN
-Project
-  ->  Union
-        ->  Project
-              ->  Table Scan on d1.t1
-        ->  Project
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Union  𝄀
+        ->  Project  𝄀
+              ->  Table Scan on d1.t1  𝄀
+        ->  Project  𝄀
               ->  Table Scan on d1.t2
 explain select * from t1 union select * from t1;
-QUERY PLAN
-Project
-  ->  Table Scan on d1.t1
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Union  𝄀
+        ->  Project  𝄀
+              ->  Table Scan on d1.t1  𝄀
+        ->  Project  𝄀
+              ->  Table Scan on d1.t1
 explain select * from t2 union select * from t2;
-QUERY PLAN
-Project
-  ->  Table Scan on d1.t2
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Union  𝄀
+        ->  Project  𝄀
+              ->  Table Scan on d1.t2  𝄀
+        ->  Project  𝄀
+              ->  Table Scan on d1.t2
 explain select c1 from t1 group by c1;
-QUERY PLAN
-Project
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
   ->  Table Scan on d1.t1
 explain select c1 from t2 group by c1;
-QUERY PLAN
-Project
-  ->  Aggregate
-        Group Key: t2.c1
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Group Key: t2.c1  𝄀
         ->  Table Scan on d1.t2
 explain select c1,c2 from t2 group by c1,c2;
-QUERY PLAN
-Project
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
   ->  Table Scan on d1.t2
 drop database if exists d1;

@@ -39,7 +39,7 @@ func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 	proc.SetMessageBoard(mb)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	keyvec := vector.NewVec(types.T_int64.ToType())
+	keyvec := vector.NewVec(types.T_int64.ToType(), m)
 	for i := 0; i < n; i++ {
 		require.NoError(t, vector.AppendFixed(keyvec, int64(i+1), false, m))
 	}
@@ -50,7 +50,7 @@ func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 	message.SendMessage(message.RuntimeFilterMessage{
 		Tag:  tag,
 		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-		Data: data,
+		Keys: testutil.RuntimeKeyPayload(t, data),
 	}, mb)
 	sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 		{Tag: tag, UseMembershipFilter: true},
@@ -100,7 +100,7 @@ func TestExactRelationMembershipScanThreshold(t *testing.T) {
 	makeSQLProc := func(t *testing.T, rows int) *sqlexec.SqlProcess {
 		t.Helper()
 		proc := testutil.NewProc(t)
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		for row := range rows {
 			require.NoError(t, vector.AppendFixed(vec, int64(row+1), false, proc.Mp()))
@@ -110,7 +110,7 @@ func TestExactRelationMembershipScanThreshold(t *testing.T) {
 		sqlproc := sqlexec.NewSqlProcess(proc)
 		sqlproc.RelationScanner = &scriptedRelationScanner{}
 		sqlproc.IvfHasMembershipFilter = true
-		sqlproc.IvfRuntimeFilterData = data
+		sqlproc.IvfRuntimeFilterData = testutil.RuntimeKeyPayload(t, data)
 		return sqlproc
 	}
 
@@ -131,7 +131,5 @@ func TestExactRelationMembershipScanThreshold(t *testing.T) {
 	require.False(t, exact)
 	require.True(t, empty)
 
-	sqlproc.IvfRuntimeFilterData = []byte("not-a-vector")
-	_, _, err = exactRelationMembershipScan(sqlproc)
-	require.Error(t, err)
+	testutil.AssertInvalidRuntimeKeys(t, []byte("not-a-vector"))
 }

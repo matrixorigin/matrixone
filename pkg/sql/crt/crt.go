@@ -31,6 +31,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/zipstream"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -206,7 +207,7 @@ func getUnCompressReader(ctx context.Context, compType string, filepath string, 
 		}
 		return decompressed(zd, func() error { zd.Close(); return nil }, r), nil
 	case tree.ZIP:
-		zr, closeDecoder, err := getZipReader(ctx, r)
+		zr, closeDecoder, err := zipstream.NewReader(ctx, r)
 		if err != nil {
 			return nil, err
 		}

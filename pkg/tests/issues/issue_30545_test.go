@@ -17,6 +17,7 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,8 +79,21 @@ func TestIssue30545ShowMetadataQuotedAndTemporaryTables(t *testing.T) {
 			require.NoError(t, err)
 			columnTypes, err := rows.ColumnTypes()
 			require.NoError(t, err)
-			for _, columnType := range columnTypes {
-				require.Equal(t, "VARCHAR", columnType.DatabaseTypeName(), statement)
+			wantColumns := []string{"Field", "Type", "Null", "Key", "Default", "Extra", "Comment"}
+			if strings.HasPrefix(strings.ToLower(statement), "show full ") {
+				wantColumns = []string{"Field", "Type", "Collation", "Null", "Key", "Default", "Extra", "Privileges", "Comment"}
+			}
+			require.Equal(t, wantColumns, columns, statement)
+			require.Len(t, columnTypes, len(wantColumns), statement)
+			// Independent client-visible contract: TEXT and STRING+ENUM_FLAG
+			// must not regress to the old uniform VARCHAR presentation.
+			wantTypes := map[string]string{
+				"Field": "VARCHAR", "Type": "TEXT", "Collation": "VARCHAR",
+				"Null": "VARCHAR", "Key": "ENUM", "Default": "TEXT",
+				"Extra": "VARCHAR", "Privileges": "VARCHAR", "Comment": "TEXT",
+			}
+			for i, columnType := range columnTypes {
+				require.Equal(t, wantTypes[columns[i]], columnType.DatabaseTypeName(), "%s column %s", statement, columns[i])
 			}
 			field := -1
 			for i, column := range columns {

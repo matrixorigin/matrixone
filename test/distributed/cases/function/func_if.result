@@ -513,4 +513,37 @@ ORDER BY ordinal_position;
 if_b  ¦  varbinary  ¦  varbinary(8)  𝄀
 case_b  ¦  varbinary  ¦  varbinary(8)
 DROP TABLE if_control_flow_binary_width_metadata;
+SELECT IF(1, 'x', TRUE) AS if_str_bool_t, IF(0, 'x', TRUE) AS if_str_bool_f, IF(0, TRUE, 'y') AS if_bool_str_f;
+➤ if_str_bool_t[12,65535,0]  ¦  if_str_bool_f[12,65535,0]  ¦  if_bool_str_f[12,65535,0]  𝄀
+x  ¦  1  ¦  y
+SELECT CASE WHEN 1 THEN 'x' ELSE FALSE END AS case_str_bool_t, CASE WHEN 0 THEN 'x' ELSE FALSE END AS case_str_bool_f;
+➤ case_str_bool_t[12,65535,0]  ¦  case_str_bool_f[12,65535,0]  𝄀
+x  ¦  0
+SELECT IF(1, 'true', FALSE) AS if_word_t, IF(0, 'true', FALSE) AS if_word_f;
+➤ if_word_t[12,65535,0]  ¦  if_word_f[12,65535,0]  𝄀
+true  ¦  0
+CREATE TABLE if_case_str_bool_t(id INT, s VARCHAR(10), b BOOL);
+INSERT INTO if_case_str_bool_t VALUES (1, 'abc', TRUE), (2, 'def', FALSE);
+SELECT id, IF(b, s, b) AS if_col, CASE WHEN b THEN s ELSE b END AS case_col FROM if_case_str_bool_t ORDER BY id;
+➤ id[4,32,0]  ¦  if_col[12,65535,0]  ¦  case_col[12,65535,0]  𝄀
+1  ¦  abc  ¦  abc  𝄀
+2  ¦  0  ¦  0
+SELECT IF(NULL, 'x', TRUE) AS if_null_cond;
+➤ if_null_cond[12,65535,0]  𝄀
+1
+SELECT IF(IF(1, NULL, FALSE) IS NULL, 'isnull', 'hasvalue') AS if_null_branch,
+IF(CASE WHEN 1 THEN NULL ELSE TRUE END IS NULL, 'isnull', 'hasvalue') AS case_null_branch;
+➤ if_null_branch[12,8,0]  ¦  case_null_branch[12,8,0]  𝄀
+isnull  ¦  isnull
+CREATE TABLE if_case_str_bool_meta AS
+SELECT IF(1, 'x', TRUE) AS if_b, CASE WHEN 1 THEN 'x' ELSE FALSE END AS case_b,
+IF(1, NULL, FALSE) AS if_null_branch, CASE WHEN 1 THEN NULL ELSE TRUE END AS case_null_branch;
+SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'if_case_str_bool_meta' ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  𝄀
+if_b  ¦  varchar  𝄀
+case_b  ¦  varchar  𝄀
+if_null_branch  ¦  tinyint  𝄀
+case_null_branch  ¦  tinyint
+DROP TABLE if_case_str_bool_meta;
+DROP TABLE if_case_str_bool_t;
 SET TIME_ZONE = "SYSTEM";

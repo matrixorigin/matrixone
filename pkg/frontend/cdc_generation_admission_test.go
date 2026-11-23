@@ -336,6 +336,10 @@ func TestCDCSourceGuardRetryContract(t *testing.T) {
 		retry bool
 	}{
 		{"snapshot advanced", moerr.NewTxnNeedRetryNoCtx(), true},
+		{"native deadlock", moerr.NewDeadLockDetectedNoCtx(), true},
+		{"production wire deadlock", &mysql.MySQLError{Number: moerr.ErrDeadLockDetected}, true},
+		{"upstream wire deadlock", &gomysql.MySQLError{Number: moerr.ErrDeadLockDetected}, true},
+		{"cancelled deadlock", errors.Join(context.Canceled, moerr.NewDeadLockDetectedNoCtx()), false},
 		{"definition changed", moerr.NewTxnNeedRetryWithDefChangedNoCtx(), true},
 		{"lock bind changed", moerr.NewLockTableBindChangedNoCtx(), true},
 		{"wire lock bind changed", &gomysql.MySQLError{Number: moerr.ErrLockTableBindChanged}, true},
@@ -392,6 +396,7 @@ func TestCDCTargetSetupRetryAdmission(t *testing.T) {
 		retry bool
 	}{
 		{"production wire timeout", &mysql.MySQLError{Number: 2013, Message: "target setup connection lost"}, true},
+		{"production wire deadlock", &mysql.MySQLError{Number: moerr.ErrDeadLockDetected}, true},
 		{"production wire syntax", &mysql.MySQLError{Number: 1064, Message: "target setup syntax error"}, false},
 		{"release deadline", context.DeadlineExceeded, true},
 		{"cancelled callback", &mysql.MySQLError{Number: 2013}, true},

@@ -343,8 +343,8 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 	}
 	outputTypes = append(outputTypes,
 		planpb.Type{Id: int32(types.T_int64), NotNullable: true})
-	inputRowSize, inputSizeKnown := materializedDeclaredRowSize(inputTypes)
-	outputRowSize, outputSizeKnown := materializedDeclaredRowSize(outputTypes)
+	inputRowSize, inputSizeKnown := MaterializedDeclaredRowSize(inputTypes)
+	outputRowSize, outputSizeKnown := MaterializedDeclaredRowSize(outputTypes)
 	if !inputSizeKnown || !outputSizeKnown {
 		return false
 	}
@@ -1015,11 +1015,11 @@ func (builder *QueryBuilder) subtreeMayExposeGroupingSentinel(nodeID int32, seen
 	return false
 }
 
-// materializedDeclaredRowSize returns a conservative retained-byte estimate for
+// MaterializedDeclaredRowSize returns a conservative retained-byte estimate for
 // a materialized row. Fixed-width values use their vector element width;
 // variable-width values include both the Varlena cell and declared payload
 // capacity. Missing capacities and unsupported/future types fail closed.
-func materializedDeclaredRowSize(rowTypes []planpb.Type) (float64, bool) {
+func MaterializedDeclaredRowSize(rowTypes []planpb.Type) (float64, bool) {
 	if len(rowTypes) == 0 {
 		return 0, false
 	}
@@ -1044,6 +1044,8 @@ func materializedDeclaredRowSize(rowTypes []planpb.Type) (float64, bool) {
 				types.T_array_bf16, types.T_array_float16,
 				types.T_array_int8, types.T_array_uint8:
 				payloadSize *= float64(types.New(oid, typ.Width, typ.Scale).GetArrayElementSize())
+			case types.T_array_float8, types.T_array_float4:
+				payloadSize = float64(types.New(oid, typ.Width, typ.Scale).ArrayCellBytes())
 			case types.T_json, types.T_blob, types.T_text,
 				types.T_binary, types.T_varbinary, types.T_datalink,
 				types.T_geometry, types.T_geometry32:

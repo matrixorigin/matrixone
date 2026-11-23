@@ -223,7 +223,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 				b.Fatal(err)
 			}
 			for _, result := range results {
-				result.Free(mp)
+				result.Free(result.MPool())
 			}
 			exec.Free()
 		}
@@ -262,7 +262,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 				b.Fatal(err)
 			}
 			for _, result := range results {
-				result.Free(mp)
+				result.Free(result.MPool())
 			}
 			exec.Free()
 		}
@@ -425,7 +425,7 @@ func BenchmarkCountDistinctSavedArguments(b *testing.B) {
 	)
 
 	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	for i := 0; i < rows; i++ {
 		if err := vector.AppendFixed(input, int64(i), false, mp); err != nil {
 			b.Fatal(err)
@@ -448,8 +448,7 @@ func BenchmarkCountDistinctSavedArguments(b *testing.B) {
 	}
 	allocation, err := NewAllocationAccount(
 		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-			VectorData: 1, VectorArea: 2, VectorNulls: 3,
-			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 		})
 	if err != nil {
 		b.Fatal(err)
@@ -512,8 +511,7 @@ func BenchmarkCountDistinctSavedArgumentMerge(b *testing.B) {
 	}
 	allocation, err := NewAllocationAccount(
 		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-			VectorData: 1, VectorArea: 2, VectorNulls: 3,
-			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 		})
 	if err != nil {
 		b.Fatal(err)
@@ -525,7 +523,7 @@ func BenchmarkCountDistinctSavedArgumentMerge(b *testing.B) {
 
 	sources := make([]AggFuncExec, sourceCount)
 	for sourceIndex := range sources {
-		input := vector.NewVec(types.T_int64.ToType())
+		input := vector.NewVec(types.T_int64.ToType(), mp)
 		for row := 0; row < rowsPerSource; row++ {
 			value := int64(sourceIndex*rowsPerSource + row)
 			if err = vector.AppendFixed(input, value, false, mp); err != nil {
@@ -617,14 +615,13 @@ func BenchmarkCountDistinctSavedArgumentUnmarshal(b *testing.B) {
 	}
 	allocation, err := NewAllocationAccount(
 		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-			VectorData: 1, VectorArea: 2, VectorNulls: 3,
-			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 		})
 	if err != nil {
 		b.Fatal(err)
 	}
 
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	for row := range rows {
 		if err = vector.AppendFixed(input, int64(row), false, mp); err != nil {
 			b.Fatal(err)
@@ -732,7 +729,7 @@ func BenchmarkArgumentPreflightCardinality(b *testing.B) {
 			if tc.varlen {
 				typ = types.T_varchar.ToType()
 			}
-			input := vector.NewVec(typ)
+			input := vector.NewVec(typ, mp)
 			if tc.varlen {
 				prefix := strings.Repeat("x", 1024)
 				for row := 0; row < hashmap.UnitLimit; row++ {
@@ -764,8 +761,7 @@ func BenchmarkArgumentPreflightCardinality(b *testing.B) {
 			}
 			allocation, err := NewAllocationAccount(
 				account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-					VectorData: 1, VectorArea: 2, VectorNulls: 3,
-					VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+					VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 				})
 			if err != nil {
 				b.Fatal(err)
@@ -1196,7 +1192,7 @@ func TestDecimal256Overflow(t *testing.T) {
 	halfMax := types.Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0) >> 1}
 
 	typ := types.New(types.T_decimal256, 38, 0)
-	vec := vector.NewOffHeapVecWithType(typ)
+	vec := vector.NewVec(typ, mp)
 	if err := vec.PreExtend(rows, mp); err != nil {
 		t.Fatal(err)
 	}
@@ -1234,7 +1230,7 @@ func TestDecimal256Overflow(t *testing.T) {
 func BenchmarkAccountedMedianRetainedInput(b *testing.B) {
 	const rows = 64 << 10
 	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	for i := 0; i < rows; i++ {
 		if err := vector.AppendFixed(input, int64(rows-i), false, mp); err != nil {
 			b.Fatal(err)
@@ -1270,8 +1266,7 @@ func BenchmarkAccountedMedianRetainedInput(b *testing.B) {
 			}
 			allocation, err := NewAllocationAccount(
 				account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-					VectorData: 1, VectorArea: 2, VectorNulls: 3,
-					VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+					VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 				})
 			if err != nil {
 				b.Fatal(err)
@@ -1327,7 +1322,7 @@ func BenchmarkAccountedMedianRetainedInput(b *testing.B) {
 						b.Fatal(flushErr)
 					}
 					for _, result := range results {
-						result.Free(mp)
+						result.Free(result.MPool())
 					}
 				}
 				b.StopTimer()

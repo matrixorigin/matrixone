@@ -51,9 +51,9 @@ func TestDecimalBoolBinaryOperatorSupportLikeInt64(t *testing.T) {
 				_, intErr := GetFunctionByName(ctx, name, intArgs)
 				_, boolErr := GetFunctionByName(ctx, name, boolArgs)
 				if intErr != nil {
-					// Pre-existing parity hole (INT64 / DECIMAL256 and
-					// INT64 div DECIMAL256 are not bound on main): BOOL keeps
-					// the same contract instead of binding wider than an int.
+					// Parity guard: BOOL never binds wider than an INT64
+					// operand, so any pairing the int row set rejects keeps
+					// rejecting the bool mirror too.
 					require.Error(t, boolErr, "%s %s %s", boolArgs[0].Oid, name, boolArgs[1].Oid)
 					continue
 				}
@@ -132,15 +132,6 @@ func TestDecimalBoolBinaryTargets(t *testing.T) {
 			check(tc.name+" "+name+" bool side", resolved.targetTypes[1],
 				rightPlain.Oid, rightPlain.Width, rightPlain.Scale)
 
-			if (name == "/" || name == "div") && tc.dec.Oid == types.T_decimal256 {
-				// BOOL before a DECIMAL256 dividend does not bind for the
-				// division operators; an INT64 operand in the same position
-				// does not bind either, so BOOL carries no extra limitation.
-				_, err = GetFunctionByName(ctx, name,
-					[]types.Type{types.T_int64.ToType(), tc.dec})
-				require.Error(t, err, "int64 %s %s", name, tc.name)
-				continue
-			}
 			resolved, err = GetFunctionByName(ctx, name, []types.Type{boolType, tc.dec})
 			require.NoError(t, err, "bool %s %s", name, tc.name)
 			require.True(t, resolved.needCast, "bool %s %s", name, tc.name)
@@ -413,6 +404,9 @@ func TestDecimalBoolDivisionPrecisionDerivation(t *testing.T) {
 		{"bool divisor increment 10", 10, []types.Type{d10s2, boolT}, types.New(types.T_decimal128, 20, 12)},
 		{"wide quotient promotes", 4, []types.Type{types.New(types.T_decimal128, 38, 0), boolT}, types.New(types.T_decimal256, 42, 4)},
 		{"wide divisor scale promotes", 4, []types.Type{boolT, types.New(types.T_decimal128, 38, 38)}, types.New(types.T_decimal256, 43, 4)},
+		{"bool dividend over decimal256", 4, []types.Type{boolT, types.New(types.T_decimal256, 60, 4)}, types.New(types.T_decimal256, 9, 4)},
+		{"bool dividend over wide decimal256", 4, []types.Type{boolT, types.New(types.T_decimal256, 65, 30)}, types.New(types.T_decimal256, 35, 4)},
+		{"decimal256 dividend by bool", 4, []types.Type{types.New(types.T_decimal256, 60, 4), boolT}, types.New(types.T_decimal256, 64, 8)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resolved, err := GetFunctionByName(
@@ -423,7 +417,8 @@ func TestDecimalBoolDivisionPrecisionDerivation(t *testing.T) {
 	}
 
 	// A DECIMAL dividend divides by BOOL with the same result type as by INT64.
-	for _, side := range []types.Type{d10s2, types.New(types.T_decimal128, 38, 0)} {
+	for _, side := range []types.Type{
+		d10s2, types.New(types.T_decimal128, 38, 0), types.New(types.T_decimal256, 60, 4)} {
 		boolDiv, err := GetFunctionByName(context.Background(), "/", []types.Type{side, boolT})
 		require.NoError(t, err)
 		intDiv, err := GetFunctionByName(context.Background(), "/", []types.Type{side, intT})
@@ -441,6 +436,7 @@ func TestDecimalBoolModAndIntegerDivMetadata(t *testing.T) {
 	intT := types.T_int64.ToType()
 	d10s2 := types.New(types.T_decimal64, 10, 2)
 	d30s4 := types.New(types.T_decimal128, 30, 4)
+	d60s4 := types.New(types.T_decimal256, 60, 4)
 
 	// max(decimal width, exact bool width), decimal scale preserved.
 	require.Equal(t,
@@ -453,6 +449,14 @@ func TestDecimalBoolModAndIntegerDivMetadata(t *testing.T) {
 	require.Equal(t,
 		types.New(types.T_decimal128, 19, 2),
 		DecimalModReturnType([]types.Type{d10s2, intT}, types.New(types.T_decimal128, 38, 2)))
+	// The DECIMAL256 mirror repeats the same derivation: the decimal operand
+	// keeps its own width and scale with the exact one-digit BOOL span beside it.
+	require.Equal(t,
+		types.New(types.T_decimal256, 60, 4),
+		DecimalModReturnType([]types.Type{boolT, d60s4}, types.T_decimal256.ToType()))
+	require.Equal(t,
+		types.New(types.T_decimal256, 60, 4),
+		DecimalModReturnType([]types.Type{d60s4, boolT}, types.T_decimal256.ToType()))
 
 	// Integer-division display derives from the dividend's precision and the
 	// divisor's scale, so BOOL and INT64 divisors agree exactly.
@@ -462,4 +466,13 @@ func TestDecimalBoolModAndIntegerDivMetadata(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, intDiv, boolDiv)
 	require.Equal(t, types.New(types.T_int64, 9, 0), boolDiv)
+
+	// A BOOL dividend keeps its exact 0/1 span against a DECIMAL256 divisor,
+	// while a wide DECIMAL256 dividend clamps at the BIGINT display domain.
+	boolDividend, ok := DecimalIntegerDivReturnType([]types.Type{boolT, d60s4})
+	require.True(t, ok)
+	require.Equal(t, types.New(types.T_int64, 6, 0), boolDividend)
+	decimalDividend, ok := DecimalIntegerDivReturnType([]types.Type{d60s4, boolT})
+	require.True(t, ok)
+	require.Equal(t, types.New(types.T_int64, 20, 0), decimalDividend)
 }

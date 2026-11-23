@@ -23,9 +23,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -290,7 +290,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
-			if !assertx.InEpsilonF64(want, get) {
+			if !util.InEpsilonF64(want, get) {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
 			}
@@ -337,6 +337,22 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 	defer vExpected.Free(fc.proc.Mp())
 	var i uint64
 	switch v.GetType().Oid {
+	case types.T_bf16:
+		if ok, info := compareFixedResult[types.BF16](fc, v, vExpected); !ok {
+			return ok, info
+		}
+	case types.T_float16:
+		if ok, info := compareFixedResult[types.Float16](fc, v, vExpected); !ok {
+			return ok, info
+		}
+	case types.T_float8:
+		if ok, info := compareFixedResult[types.Float8](fc, v, vExpected); !ok {
+			return ok, info
+		}
+	case types.T_float4:
+		if ok, info := compareFixedResult[types.Float4](fc, v, vExpected); !ok {
+			return ok, info
+		}
 	case types.T_geometry, types.T_geometry32:
 		// Geometry values are stored as WKB; expectations are written as WKT.
 		// Canonicalize both sides to WKT before comparing.
@@ -426,7 +442,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
 			}
-			if !assertx.InEpsilonF64Slice(types.BytesToArray[float64](want), types.BytesToArray[float64](get)) {
+			if !util.InEpsilonF64Slice(types.BytesToArray[float64](want), types.BytesToArray[float64](get)) {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, types.BytesToArray[float64](want), types.BytesToArray[float64](get))
 			}
@@ -535,8 +551,32 @@ func (fc *FunctionTestCase) Benchmark(b *testing.B) {
 	}
 }
 
+// compareFixedResult compares a fixed-width result vector with the expected one row by
+// row: NULL slots and values.
+func compareFixedResult[T types.FixedSizeTExceptStrType](fc *FunctionTestCase, v, vExpected *vector.Vector) (bool, string) {
+	r := vector.GenerateFunctionFixedTypeParameter[T](v)
+	s := vector.GenerateFunctionFixedTypeParameter[T](vExpected)
+	for i := uint64(0); i < uint64(fc.fnLength); i++ {
+		want, null1 := s.GetValue(i)
+		get, null2 := r.GetValue(i)
+		if null1 {
+			if null2 {
+				continue
+			}
+			return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+		}
+		if null2 {
+			return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+		}
+		if want != get {
+			return false, fmt.Sprintf("the %dth row expected %v, but get %v", i+1, want, get)
+		}
+	}
+	return true, ""
+}
+
 func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	owned := vec
 	defer func() {
 		if owned != nil {
@@ -651,6 +691,14 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_year:
 		values := val.([]types.MoYear)
 		err = vector.AppendFixedList(vec, values, nil, mp)
+	case types.T_bf16:
+		err = vector.AppendFixedList(vec, val.([]types.BF16), nil, mp)
+	case types.T_float16:
+		err = vector.AppendFixedList(vec, val.([]types.Float16), nil, mp)
+	case types.T_float8:
+		err = vector.AppendFixedList(vec, val.([]types.Float8), nil, mp)
+	case types.T_float4:
+		err = vector.AppendFixedList(vec, val.([]types.Float4), nil, mp)
 	default:
 		panic(fmt.Sprintf("function test framework do not support typ %s", typ))
 	}
@@ -859,10 +907,9 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, 0}, nil),
 		}, NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0}, nil), Sleep[uint64])
 		defer fc.Free()
-		selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+		selection, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 		require.NoError(t, err)
-		result, err := vector.NewFunctionResultWrapperWithAllocation(types.T_uint8.ToType(), mp, selection)
-		require.NoError(t, err)
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), selection)
 		fc.result.Free()
 		fc.result = result
 		value, debugErr := fc.DebugRun()

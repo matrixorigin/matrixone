@@ -43,7 +43,7 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 
 	// If beginning is not [ it is malformed.
 	if runes[strIdx] != '[' {
-		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
+		return nil, moerr.NewInvalidInputNoCtxf("malformed vector input: %s", str)
 	}
 
 	// skip [
@@ -62,7 +62,7 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 
 	for strIdx < strLen && runes[strIdx] != ']' {
 		if dim == MaxArrayDimension {
-			return nil, moerr.NewInternalErrorNoCtxf("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
+			return nil, moerr.NewInvalidInputNoCtxf("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
 		}
 		// skip space in the numStr, Eg:- "[  1, 2]"
 		for strIdx < strLen && unicode.IsSpace(runes[strIdx]) {
@@ -76,7 +76,7 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 
 		// this means that numStr is ""
 		if strIdx == commaPos {
-			return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
+			return nil, moerr.NewInvalidInputNoCtxf("malformed vector input: %s", str)
 		}
 
 		// convert numStr to T
@@ -104,12 +104,12 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 	// find next occurrence of "]" from strIdx.
 	endBracketPos := indexFrom(str, "]", strIdx)
 	if endBracketPos == -1 {
-		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
+		return nil, moerr.NewInvalidInputNoCtxf("malformed vector input: %s", str)
 	}
 
 	// if numStr is ""
 	if strIdx == endBracketPos {
-		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
+		return nil, moerr.NewInvalidInputNoCtxf("malformed vector input: %s", str)
 	}
 
 	// convert numStr to T and incr dim
@@ -131,7 +131,7 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 	// If after TrimEnd, there are still data in the str, then it is malformed.
 	// Eg:- [1,2,3] 1
 	if strIdx != strLen {
-		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
+		return nil, moerr.NewInvalidInputNoCtxf("malformed vector input: %s", str)
 	}
 
 	// return subarray of x based on the final dimension.
@@ -150,7 +150,7 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 
 	// If beginning is not [ it is malformed.
 	if unsafeStringAt(str, strIdx) != '[' {
-		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
+		return nil, moerr.NewInvalidInputNoCtxf("malformed vector input: %s", str)
 	}
 
 	// skip [
@@ -169,7 +169,7 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 
 	for strIdx < strLen && unsafeStringAt(str, strIdx) != ']' {
 		if dim == MaxArrayDimension {
-			return nil, moerr.NewInternalErrorNoCtxf("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
+			return nil, moerr.NewInvalidInputNoCtxf("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
 		}
 		// skip space in the numStr, Eg:- "[  1, 2]"
 		for strIdx < strLen && unicode.IsSpace(unsafeStringAt(str, strIdx)) {
@@ -183,7 +183,7 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 
 		// this means that numStr is ""
 		if strIdx == commaPos {
-			return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
+			return nil, moerr.NewInvalidInputNoCtxf("malformed vector input: %s", str)
 		}
 
 		// convert numStr to T
@@ -211,12 +211,12 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 	// find next occurrence of "]" from strIdx.
 	endBracketPos := indexFrom(str, "]", strIdx)
 	if endBracketPos == -1 {
-		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
+		return nil, moerr.NewInvalidInputNoCtxf("malformed vector input: %s", str)
 	}
 
 	// if numStr is ""
 	if strIdx == endBracketPos {
-		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
+		return nil, moerr.NewInvalidInputNoCtxf("malformed vector input: %s", str)
 	}
 
 	// convert numStr to T and incr dim
@@ -238,7 +238,7 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 	// If after TrimEnd, there are still data in the str, then it is malformed.
 	// Eg:- [1,2,3] 1
 	if strIdx != strLen {
-		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
+		return nil, moerr.NewInvalidInputNoCtxf("malformed vector input: %s", str)
 	}
 
 	// return subarray of x based on the final dimension.
@@ -266,7 +266,7 @@ func indexFrom(str, substr string, start int) int {
 // rejectNonFiniteArrayElem returns an error when a vector element is NaN or ±Inf.
 func rejectNonFiniteArrayElemWithContext(ctx context.Context, num float64) error {
 	if math.IsNaN(num) || math.IsInf(num, 0) {
-		return moerr.NewInternalErrorf(parseErrorContext(ctx), "vector element cannot be NaN or Inf: %v", num)
+		return moerr.NewInvalidInputf(parseErrorContext(ctx), "vector element cannot be NaN or Inf: %v", num)
 	}
 	return nil
 }
@@ -281,7 +281,7 @@ func stringToTWithContext[T ArrayElement](ctx context.Context, str string) (t T,
 	case float32:
 		num, err := strconv.ParseFloat(str, 32)
 		if err != nil {
-			return t, moerr.NewInternalErrorf(parseErrorContext(ctx), "error while casting %s to %s", str, T_float32.String())
+			return t, moerr.NewInvalidInputf(parseErrorContext(ctx), "error while casting %s to %s", str, T_float32.String())
 		}
 		if err = rejectNonFiniteArrayElemWithContext(ctx, num); err != nil {
 			return t, err
@@ -292,35 +292,40 @@ func stringToTWithContext[T ArrayElement](ctx context.Context, str string) (t T,
 	case float64:
 		num, err := strconv.ParseFloat(str, 64)
 		if err != nil {
-			return t, moerr.NewInternalErrorf(parseErrorContext(ctx), "error while casting %s to %s", str, T_float64.String())
+			return t, moerr.NewInvalidInputf(parseErrorContext(ctx), "error while casting %s to %s", str, T_float64.String())
 		}
 		if err = rejectNonFiniteArrayElemWithContext(ctx, num); err != nil {
 			return t, err
 		}
 		return *(*T)(unsafe.Pointer(&num)), nil
 	case BF16:
-		num, err := strconv.ParseFloat(str, 32)
+		// rounded once from the exact value of the text
+		num, v64, err := Float32RoundToOddString(str)
 		if err != nil {
-			return t, moerr.NewInternalErrorf(parseErrorContext(ctx), "error while casting %s to %s", str, T_array_bf16.String())
+			return t, moerr.NewInvalidInputf(parseErrorContext(ctx), "error while casting %s to %s", str, T_array_bf16.String())
 		}
-		bf := BF16FromFloat32(float32(num))
-		// Check the NARROWED value: a NaN/Inf literal, or a finite literal that overflows
-		// the 16-bit range (e.g. 3.4e38 for bf16), becomes ±Inf only after narrowing.
-		if err = rejectNonFiniteArrayElemWithContext(ctx, float64(bf.ToFloat32())); err != nil {
+		if err = rejectNonFiniteArrayElemWithContext(ctx, float64(num)); err != nil {
 			return t, err
 		}
+		// checked by the float32 value, as a scalar bf16 (RejectNarrowFloatInput)
+		if f := float32(v64); f > BF16MaxFinite || f < -BF16MaxFinite {
+			return t, moerr.NewOutOfRangef(parseErrorContext(ctx), T_array_bf16.String(), "element %s", str)
+		}
+		bf := BF16FromFloat32(num)
 		return *(*T)(unsafe.Pointer(&bf)), nil
 	case Float16:
-		num, err := strconv.ParseFloat(str, 32)
+		// rounded once from the exact value of the text
+		num, _, err := Float32RoundToOddString(str)
 		if err != nil {
-			return t, moerr.NewInternalErrorf(parseErrorContext(ctx), "error while casting %s to %s", str, T_array_float16.String())
+			return t, moerr.NewInvalidInputf(parseErrorContext(ctx), "error while casting %s to %s", str, T_array_float16.String())
 		}
-		h := Float16FromFloat32(float32(num))
-		// Check the NARROWED value: a NaN/Inf literal, or a finite literal that overflows
-		// the 16-bit range (e.g. 70000 for f16), becomes ±Inf only after narrowing.
-		if err = rejectNonFiniteArrayElemWithContext(ctx, float64(h.ToFloat32())); err != nil {
+		if err = rejectNonFiniteArrayElemWithContext(ctx, float64(num)); err != nil {
 			return t, err
 		}
+		if num > Float16MaxFinite || num < -Float16MaxFinite {
+			return t, moerr.NewOutOfRangef(parseErrorContext(ctx), T_array_float16.String(), "element %s", str)
+		}
+		h := Float16FromFloat32(num)
 		return *(*T)(unsafe.Pointer(&h)), nil
 	case int8:
 		// Strict: a vecint8 string literal must be an integer in [-128,127].
@@ -329,7 +334,7 @@ func stringToTWithContext[T ArrayElement](ctx context.Context, str string) (t T,
 		// round+clamp; only direct string parsing is strict.)
 		num, err := strconv.ParseInt(str, 10, 8)
 		if err != nil {
-			return t, moerr.NewInternalErrorf(parseErrorContext(ctx), "error while casting %s to %s", str, T_array_int8.String())
+			return t, moerr.NewInvalidInputf(parseErrorContext(ctx), "error while casting %s to %s", str, T_array_int8.String())
 		}
 		i8 := int8(num)
 		return *(*T)(unsafe.Pointer(&i8)), nil
@@ -340,7 +345,7 @@ func stringToTWithContext[T ArrayElement](ctx context.Context, str string) (t T,
 		// round+clamp; only direct string parsing is strict.)
 		num, err := strconv.ParseUint(str, 10, 8)
 		if err != nil {
-			return t, moerr.NewInternalErrorf(parseErrorContext(ctx), "error while casting %s to %s", str, T_array_uint8.String())
+			return t, moerr.NewInvalidInputf(parseErrorContext(ctx), "error while casting %s to %s", str, T_array_uint8.String())
 		}
 		u8 := uint8(num)
 		return *(*T)(unsafe.Pointer(&u8)), nil

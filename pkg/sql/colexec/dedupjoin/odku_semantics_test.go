@@ -39,10 +39,10 @@ func TestODKUResultTrackingRecordsGeneratedAndPerActionValidity(t *testing.T) {
 	defer proc.Free()
 	proc.ResetODKUResult()
 
-	marker := vector.NewVec(types.T_bool.ToType())
-	ordinal := vector.NewVec(types.T_uint64.ToType())
-	generatedID := vector.NewVec(types.T_int64.ToType())
-	targetID := vector.NewVec(types.T_int64.ToType())
+	marker := vector.NewVec(types.T_bool.ToType(), proc.Mp())
+	ordinal := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
+	generatedID := vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	targetID := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	for _, vec := range []*vector.Vector{marker, ordinal, generatedID, targetID} {
 		defer vec.Free(proc.Mp())
 	}
@@ -162,7 +162,7 @@ func TestODKUUint64AtAcceptsIntegerStorageDomains(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			vec := vector.NewVec(test.typ)
+			vec := vector.NewVec(test.typ, proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()) })
 			require.NoError(t, test.append(vec))
 			got, ok := odkuUint64At(vec, 0)
@@ -310,8 +310,8 @@ func TestODKUValueEqualityUsesSQLJSONAndScaledFloatSemantics(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	jsonLeft := vector.NewVec(types.T_json.ToType())
-	jsonRight := vector.NewVec(types.T_json.ToType())
+	jsonLeft := vector.NewVec(types.T_json.ToType(), proc.Mp())
+	jsonRight := vector.NewVec(types.T_json.ToType(), proc.Mp())
 	defer jsonLeft.Free(proc.Mp())
 	defer jsonRight.Free(proc.Mp())
 	one, err := bytejson.ParseJsonByteFromString("1")
@@ -325,8 +325,8 @@ func TestODKUValueEqualityUsesSQLJSONAndScaledFloatSemantics(t *testing.T) {
 
 	floatType := types.T_float32.ToType()
 	floatType.Scale = 2
-	floatLeft := vector.NewVec(floatType)
-	floatRight := vector.NewVec(floatType)
+	floatLeft := vector.NewVec(floatType, proc.Mp())
+	floatRight := vector.NewVec(floatType, proc.Mp())
 	defer floatLeft.Free(proc.Mp())
 	defer floatRight.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(floatLeft, float32(1.234), false, proc.Mp()))
@@ -336,46 +336,98 @@ func TestODKUValueEqualityUsesSQLJSONAndScaledFloatSemantics(t *testing.T) {
 }
 
 func TestODKUNoOpActionRestoresImplicitColumnsImmediately(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	storedValue := testutil.MakeInt64Vector([]int64{10}, nil, proc.Mp())
-	storedTimestamp := testutil.MakeInt64Vector([]int64{100}, nil, proc.Mp())
-	incomingValue := testutil.MakeInt64Vector([]int64{10}, nil, proc.Mp())
-	incomingTimestamp := testutil.MakeInt64Vector([]int64{101}, nil, proc.Mp())
-	for _, vec := range []*vector.Vector{storedValue, storedTimestamp, incomingValue, incomingTimestamp} {
-		defer vec.Free(proc.Mp())
+	type updateCase struct {
+		name                                     string
+		typ                                      types.Type
+		before, after                            any
+		beforeNull, afterNull, constant, changed bool
 	}
-	left := &batch.Batch{Vecs: []*vector.Vector{storedValue, storedTimestamp}}
-	right := &batch.Batch{Vecs: []*vector.Vector{incomingValue, incomingTimestamp}}
-	left.SetRowCount(1)
-	right.SetRowCount(1)
-	execs := make([]colexec.ExpressionExecutor, 2)
-	for i := range execs {
-		var err error
-		execs[i], err = colexec.NewExpressionExecutor(proc, &plan.Expr{
-			Typ:  plan.Type{Id: int32(types.T_int64)},
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: int32(i)}},
+	cases := []updateCase{{name: "integer", typ: types.T_int64.ToType(), before: int64(10), after: int64(10)}}
+	for _, format := range []types.BlockScaledFormat{types.BlockScaledMXFP8, types.BlockScaledNVFP4} {
+		oid := types.T_array_float8
+		if format == types.BlockScaledNVFP4 {
+			oid = types.T_array_float4
+		}
+		cell := func(text string) []byte {
+			value, err := types.BlockScaledFromJSON(format, text)
+			require.NoError(t, err)
+			return value
+		}
+		one := cell(`{"g":1,"s":[1],"v":[1]}`)
+		alias := cell(`{"g":1,"s":[2],"v":[0.5]}`)
+		require.NotEqual(t, one, alias)
+		for _, tc := range []updateCase{
+			{name: "different_encoding", before: one, after: alias},
+			{name: "identical_constant", before: one, after: one, constant: true},
+			{name: "changed_value", before: one, after: cell(`{"g":1,"s":[1],"v":[2]}`), changed: true},
+			{name: "signed_zero", before: cell(`{"g":1,"s":[1],"v":[0]}`), after: cell(`{"g":1,"s":[1],"v":[-0]}`)},
+			{name: "both_null", beforeNull: true, afterNull: true},
+			{name: "null_to_value", beforeNull: true, after: one, changed: true},
+			{name: "value_to_null", before: one, afterNull: true, changed: true},
+		} {
+			tc.name = oid.String() + "/" + tc.name
+			tc.typ = types.New(oid, 1, 0)
+			cases = append(cases, tc)
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			newValue := func(value any, isNull bool) *vector.Vector {
+				if tc.constant {
+					v, err := vector.NewConstBytes(tc.typ, value.([]byte), 1, proc.Mp())
+					require.NoError(t, err)
+					return v
+				}
+				v := vector.NewVec(tc.typ, proc.Mp())
+				require.NoError(t, vector.AppendAny(v, value, isNull, proc.Mp()))
+				return v
+			}
+			storedValue := newValue(tc.before, tc.beforeNull)
+			incomingValue := newValue(tc.after, tc.afterNull)
+			storedTimestamp := testutil.MakeInt64Vector([]int64{100}, nil, proc.Mp())
+			incomingTimestamp := testutil.MakeInt64Vector([]int64{101}, nil, proc.Mp())
+			for _, vec := range []*vector.Vector{storedValue, storedTimestamp, incomingValue, incomingTimestamp} {
+				defer vec.Free(proc.Mp())
+			}
+			left := &batch.Batch{Vecs: []*vector.Vector{storedValue, storedTimestamp}}
+			right := &batch.Batch{Vecs: []*vector.Vector{incomingValue, incomingTimestamp}}
+			left.SetRowCount(1)
+			right.SetRowCount(1)
+			execs := make([]colexec.ExpressionExecutor, 2)
+			for i, typ := range []types.Type{tc.typ, types.T_int64.ToType()} {
+				var err error
+				execs[i], err = colexec.NewExpressionExecutor(proc, &plan.Expr{
+					Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: int32(i)}},
+				})
+				require.NoError(t, err)
+				defer execs[i].Free()
+			}
+			ctr := &container{joinBat1: left, joinBat2: right, exprExecs: execs, stableCols: []int32{0, 1}}
+			defer ctr.cleanStableUpdateVecs(proc)
+			changed, err := ctr.applyUpdateExpressions(proc, []int32{0, 1}, []int32{0})
+			require.NoError(t, err)
+			require.Equal(t, tc.changed, changed)
+			if !tc.changed {
+				require.Same(t, storedValue, ctr.joinBat1.Vecs[0])
+				require.Same(t, storedTimestamp, ctr.joinBat1.Vecs[1], "no-op must restore implicit values immediately")
+			} else {
+				require.Equal(t, tc.afterNull, ctr.joinBat1.Vecs[0].IsNull(0))
+				if !tc.afterNull {
+					require.Equal(t, tc.after, ctr.joinBat1.Vecs[0].GetBytesAt(0))
+				}
+				require.Equal(t, int64(101), vector.GetFixedAtNoTypeCheck[int64](ctr.joinBat1.Vecs[1], 0))
+			}
 		})
-		require.NoError(t, err)
-		defer execs[i].Free()
 	}
-	ctr := &container{
-		joinBat1: left, joinBat2: right, exprExecs: execs, stableCols: []int32{0, 1},
-	}
-	defer ctr.cleanStableUpdateVecs(proc)
-	changed, err := ctr.applyUpdateExpressions(proc, []int32{0, 1}, []int32{0})
-	require.NoError(t, err)
-	require.False(t, changed)
-	require.Same(t, storedValue, ctr.joinBat1.Vecs[0])
-	require.Same(t, storedTimestamp, ctr.joinBat1.Vecs[1],
-		"a no-op action must not leak an implicit value into validation or the next action")
 }
 
 func TestODKUValueEqualityUsesSQLFloatSemantics(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	left := vector.NewVec(types.T_float64.ToType())
-	right := vector.NewVec(types.T_float64.ToType())
+	left := vector.NewVec(types.T_float64.ToType(), proc.Mp())
+	right := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 	defer left.Free(proc.Mp())
 	defer right.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(left, math.Copysign(0, -1), false, proc.Mp()))
@@ -388,8 +440,8 @@ func TestODKUValueEqualityUsesSQLFloatSemantics(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(right, math.Float64frombits(0x7ff8000000000002), false, proc.Mp()))
 	require.True(t, odkuValuesEqual(left, right), "all FLOAT NaN values are one SQL comparison peer")
 
-	float32Left := vector.NewVec(types.T_float32.ToType())
-	float32Right := vector.NewVec(types.T_float32.ToType())
+	float32Left := vector.NewVec(types.T_float32.ToType(), proc.Mp())
+	float32Right := vector.NewVec(types.T_float32.ToType(), proc.Mp())
 	defer float32Left.Free(proc.Mp())
 	defer float32Right.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(float32Left, math.Float32frombits(0x7fc00001), false, proc.Mp()))
@@ -430,8 +482,8 @@ func TestODKUValueEqualityUsesSQLNarrowVectorSemantics(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			left := vector.NewVec(tc.typ)
-			right := vector.NewVec(tc.typ)
+			left := vector.NewVec(tc.typ, proc.Mp())
+			right := vector.NewVec(tc.typ, proc.Mp())
 			defer left.Free(proc.Mp())
 			defer right.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(left, tc.left, false, proc.Mp()))
@@ -460,8 +512,8 @@ func TestODKUValueEqualityTreatsNullsAsEqualOnlyWhenBothAreNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	left := vector.NewVec(types.T_int32.ToType())
-	right := vector.NewVec(types.T_int32.ToType())
+	left := vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	right := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	defer left.Free(proc.Mp())
 	defer right.Free(proc.Mp())
 	require.NoError(t, vector.AppendNull(left, proc.Mp()))
@@ -495,8 +547,8 @@ func TestODKUValueEqualityUsesSQLStringSemantics(t *testing.T) {
 		{name: "VARCHAR preserves trailing spaces", typ: varcharType, equal: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			left := vector.NewVec(tc.typ)
-			right := vector.NewVec(tc.typ)
+			left := vector.NewVec(tc.typ, proc.Mp())
+			right := vector.NewVec(tc.typ, proc.Mp())
 			defer left.Free(proc.Mp())
 			defer right.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(left, []byte("a"), false, proc.Mp()))
@@ -510,8 +562,8 @@ func TestODKUSequentialValuesSurviveProbeAdvance(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	typ := types.T_int32.ToType()
-	leftValue := vector.NewVec(typ)
-	rightValue := vector.NewVec(typ)
+	leftValue := vector.NewVec(typ, proc.Mp())
+	rightValue := vector.NewVec(typ, proc.Mp())
 	defer leftValue.Free(proc.Mp())
 	defer rightValue.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(leftValue, int32(10), false, proc.Mp()))
@@ -566,10 +618,10 @@ func TestODKUPhysicalChangeSeparatesImplicitColumnsFromNoOp(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	typ := types.T_int64.ToType()
-	oldValue := vector.NewVec(typ)
-	oldTimestamp := vector.NewVec(typ)
-	finalValue := vector.NewVec(typ)
-	finalTimestamp := vector.NewVec(typ)
+	oldValue := vector.NewVec(typ, proc.Mp())
+	oldTimestamp := vector.NewVec(typ, proc.Mp())
+	finalValue := vector.NewVec(typ, proc.Mp())
+	finalTimestamp := vector.NewVec(typ, proc.Mp())
 	for _, vec := range []*vector.Vector{oldValue, oldTimestamp, finalValue, finalTimestamp} {
 		defer vec.Free(proc.Mp())
 	}
@@ -598,9 +650,9 @@ func TestODKUStableVectorPoolSurvivesJoinBatchWidthChange(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	baseline := proc.Mp().CurrNB()
 	typ := types.T_varchar.ToType()
-	first := vector.NewVec(typ)
-	second := vector.NewVec(typ)
-	extra := vector.NewVec(types.T_int32.ToType())
+	first := vector.NewVec(typ, proc.Mp())
+	second := vector.NewVec(typ, proc.Mp())
+	extra := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(first, []byte("first allocation"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(second, []byte("second allocation"), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(extra, int32(1), false, proc.Mp()))
@@ -629,7 +681,7 @@ func TestODKUOrdinalRejectsSignedIDReinterpretation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	for _, value := range []int64{-1, 1} {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(vec, value, false, proc.Mp()))
 		_, validID := odkuUint64At(vec, 0)
 		require.True(t, validID)

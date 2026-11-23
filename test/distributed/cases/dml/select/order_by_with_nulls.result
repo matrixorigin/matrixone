@@ -52,7 +52,10 @@ id    name    category_id    d
 3    ccc    1    2010-06-10 19:16:02
 4    ddd    1    2010-06-10 19:16:15
 SELECT * FROM t1 WHERE category_id = 1 ORDER BY TRUE;
-SQL syntax error: non-integer constant in ORDER BY
+id    name    category_id    d
+1    aaa    1    2010-06-10 19:14:37
+3    ccc    1    2010-06-10 19:16:02
+4    ddd    1    2010-06-10 19:16:15
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 (
 name VARCHAR(200),

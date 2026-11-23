@@ -65,7 +65,7 @@ func TestQ9JoinsFilteredBranchBeforeOrders(t *testing.T) {
 			stmts, err := mysql.Parse(ctx.GetContext(), string(sql), 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			query, err := NewBaseOptimizer(ctx).Optimize(stmts[0], false)
+			query, err := NewBaseOptimizer(ctx).Optimize(stmts[0], false, nil)
 			require.NoError(t, err)
 			var tables func(int32) []string
 			tables = func(id int32) []string {

@@ -19,9 +19,47 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestReaderDirtyTablesAcrossCompaction(t *testing.T) {
+	const dbID, firstTable, laterTable, absentTable = 1, 10, 11, 12
+	firstTS, laterTS := types.BuildTS(10, 0), types.BuildTS(20, 0)
+	table := NewTxnTable(2, func() types.TS { return types.TS{} })
+	for _, entry := range []struct {
+		ts      types.TS
+		tableID uint64
+	}{{firstTS, firstTable}, {laterTS, laterTable}} {
+		txn := &txnbase.Txn{TxnCtx: txnbase.NewEmptyTxnCtx()}
+		txn.PrepareTS = entry.ts
+		txn.State = txnif.TxnStateCommitted
+		txn.Memo.AddTable(dbID, entry.tableID)
+		require.NoError(t, table.AddTxn(txn))
+	}
+
+	first := &Reader{from: firstTS, to: firstTS, table: table}
+	later := &Reader{from: laterTS, to: laterTS, table: table}
+	require.True(t, first.IsDirtyOnTable(dbID, firstTable))
+	require.False(t, first.IsDirtyOnTable(dbID, laterTable))
+	require.True(t, later.IsDirtyOnTable(dbID, laterTable))
+
+	var block *txnBlock
+	table.Scan(func(b *txnBlock) bool {
+		block = b
+		return false
+	})
+	require.NotNil(t, block)
+	all, changed := block.TryCompact()
+	require.True(t, all)
+	require.True(t, changed)
+	require.True(t, first.IsDirtyOnTable(dbID, firstTable))
+	require.True(t, later.IsDirtyOnTable(dbID, laterTable))
+	require.False(t, first.IsDirtyOnTable(dbID, absentTable))
+	require.False(t, later.IsDirtyOnTable(dbID, absentTable))
+}
 
 func TestTxnTable1(t *testing.T) {
 	txnCnt := 22

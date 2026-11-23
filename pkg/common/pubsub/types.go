@@ -17,6 +17,7 @@ package pubsub
 import (
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 )
 
@@ -78,6 +79,13 @@ func (pubInfo *PubInfo) InSubAccounts(accountName string) bool {
 		}
 	}
 	return false
+}
+
+// PublicationSourceOwnerAuthorized is the common source-owner admission rule.
+// targetsOwnerOnly must be established from the current authorization catalog,
+// independently of the historical catalog used to read the admitted source.
+func PublicationSourceOwnerAuthorized(publisherID, ownerID uint32, targetsOwnerOnly bool) bool {
+	return publisherID == ownerID || publisherID == catalog.System_Account || targetsOwnerOnly
 }
 
 func (pubInfo *PubInfo) GetCreateSql() string {

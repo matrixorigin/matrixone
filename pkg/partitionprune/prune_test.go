@@ -50,8 +50,8 @@ func TestPrunePartitionByExpr(t *testing.T) {
 	defer proc.Free()
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(2), false, proc.Mp()))
@@ -163,8 +163,8 @@ func TestPrune(t *testing.T) {
 	defer proc.Free()
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(2), false, proc.Mp()))
@@ -406,7 +406,7 @@ func TestPruneRepeatedResolvedIdentity(t *testing.T) {
 				index := 2
 				if rowID {
 					bat = batch.NewWithSize(4)
-					bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+					bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 					require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Rowid{}, false, mp))
 					index++
 				}
@@ -416,7 +416,7 @@ func TestPruneRepeatedResolvedIdentity(t *testing.T) {
 					offset = 1
 				}
 				for i, v := range []int64{-1, 42, 1} {
-					bat.Vecs[i+offset] = vector.NewVec(types.T_int64.ToType())
+					bat.Vecs[i+offset] = vector.NewVec(types.T_int64.ToType(), mp)
 					require.NoError(t, vector.AppendFixed(bat.Vecs[i+offset], v, false, mp))
 				}
 				bat.SetRowCount(1)
@@ -480,11 +480,11 @@ func TestPrunePreservesOtherPartitionColumns(t *testing.T) {
 				bat := batch.NewWithSize(3 + offset)
 				defer bat.Clean(mp)
 				if rowID {
-					bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+					bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 					require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Rowid{}, false, mp))
 				}
 				for i, v := range []int64{-1, -100, 1} {
-					bat.Vecs[i+offset] = vector.NewVec(types.T_int64.ToType())
+					bat.Vecs[i+offset] = vector.NewVec(types.T_int64.ToType(), mp)
 					require.NoError(t, vector.AppendFixed(bat.Vecs[i+offset], v, false, mp))
 				}
 				bat.SetRowCount(1)

@@ -889,10 +889,15 @@ classifies it:
   sample or resolves as available (A3), young identities voting neither
   way (a set holding ONLY young identities renews once so each receives
   its first full observed interval); any committed-unchanged AND
-  unavailable terminal-eligible identity means no renewal. A declined arbitration surfaces the
-  named terminal of the FIRST-recorded pending entry — deterministic
-  insertion order; every entry is an equivalent surface of the same
-  statement's lock-wait/conflict exhaustion. This removes the v18
+  unavailable terminal-eligible identity means no renewal. An expiry
+  decision surfaces the named terminal of its selected watch identity and
+  that identity's recorded cause, even when the current generation's
+  first pending entry names a different sequence. Other admission declines,
+  or an expiry that cannot identify a target, surface the FIRST-recorded
+  pending entry. An observed caller cancellation takes precedence; otherwise
+  publication prevents replay and keeps the first pending error, while an
+  existing stamp or an expiry target selects that identity's terminal.
+  This removes the v18
   mis-correlation: an exhaustion on sequence A can no longer be shadowed
   by a later write from sequence B, and B's progress cannot renew A's
   window because the conjunctive rule probes both. Generic (non-sequence)

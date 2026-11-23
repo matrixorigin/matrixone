@@ -619,7 +619,7 @@ func makeInExpr(colPos int32, values []int32) *plan.Expr {
 func makeFoldInExprInt32(t *testing.T, colPos int32, nullFirst bool) *plan.Expr {
 	t.Helper()
 	mp := mpool.MustNewZeroNoFixed()
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	appendValue := func(value int32, isNull bool) {
 		require.NoError(t, vector.AppendFixed(vec, value, isNull, mp))
 	}
@@ -1194,7 +1194,7 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 						IsConst: false,
 						Data: func() []byte {
 							mp := mpool.MustNewZeroNoFixed()
-							vec := vector.NewVec(types.T_int64.ToType())
+							vec := vector.NewVec(types.T_int64.ToType(), mp)
 							require.NoError(t, vector.AppendFixed[int64](vec, int64(1), false, mp))
 							data, err := vec.MarshalBinary()
 							require.NoError(t, err)
@@ -1211,9 +1211,9 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 						Len: 1,
 						Data: func() []byte {
 							mp := mpool.MustNewZeroNoFixed()
-							vec := vector.NewVec(types.T_int64.ToType())
+							vec := vector.NewVec(types.T_int64.ToType(), mp)
 							require.NoError(t, vector.AppendFixed[int64](vec, int64(1), false, mp))
-							vec.InplaceSortAndCompact()
+							require.NoError(t, vec.InplaceSortAndCompact(mp))
 							data, err := vec.MarshalBinary()
 							require.NoError(t, err)
 							vec.Free(mp)
@@ -1237,6 +1237,8 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 }
 
 func TestNormalizePartitionValuePreservesEmptyScalar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	original := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_varchar)},
 		Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
@@ -1245,7 +1247,7 @@ func TestNormalizePartitionValuePreservesEmptyScalar(t *testing.T) {
 		}},
 	}
 
-	normalized, canPrune := normalizePartitionValue(original)
+	normalized, canPrune := normalizePartitionValue(original, mp)
 	require.True(t, canPrune)
 	require.NotNil(t, original.GetFold().Data)
 	require.Empty(t, original.GetFold().Data)
@@ -1303,7 +1305,7 @@ func TestConvertFoldExprToNormalRejectsInvalidVectors(t *testing.T) {
 
 	t.Run("payload type mismatch", func(t *testing.T) {
 		mp := mpool.MustNewZeroNoFixed()
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
 		data, err := vec.MarshalBinary()
 		require.NoError(t, err)
@@ -1334,7 +1336,7 @@ func TestConvertFoldExprToNormalFailsOpenOnNullableVectors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZeroNoFixed()
-			vec := vector.NewVec(tc.typ)
+			vec := vector.NewVec(tc.typ, mp)
 			appendValue := func(isNull bool) {
 				if tc.typ.Oid == types.T_varchar {
 					require.NoError(t, vector.AppendBytes(vec, []byte("keep"), isNull, mp))
@@ -1758,4 +1760,34 @@ func TestFilterRepeatedPartitionColumn(t *testing.T) {
 	root, err = mustReplaceCol(proc.Ctx, invalid, literal(1))
 	require.Error(t, err)
 	require.Nil(t, root)
+}
+
+func convertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, bool) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	normalized, ok, _ := convertFoldExprWithPool(expr, mp)
+	return normalized, ok
+}
+
+func TestFoldConversionAllocationFailureModes(t *testing.T) {
+	setup := mpool.MustNewZero()
+	defer mpool.DeleteMPool(setup)
+	vec := vector.NewVec(types.T_int64.ToType(), setup)
+	require.NoError(t, vector.AppendFixedList(vec, []int64{2, 1}, nil, setup))
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	vec.Free(setup)
+	expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{Data: data}}}
+	before := append([]byte(nil), data...)
+	limited, err := mpool.NewMPool(t.Name(), mpool.MB, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(limited)
+	padding, err := limited.Alloc(mpool.MB, true)
+	require.NoError(t, err)
+	defer limited.Free(padding)
+	_, ok := normalizePartitionValue(expr, limited)
+	require.False(t, ok)
+	_, err = convertFoldExprStrictWithPool(p.DeepCopyExpr(expr), limited)
+	require.Error(t, err)
+	require.Equal(t, before, data)
 }

@@ -1,0 +1,117 @@
+drop database if exists ft2_view_score;
+create database ft2_view_score;
+use ft2_view_score;
+set experimental_fulltext2_index = 1;
+create table docs(id bigint primary key, body text);
+insert into docs values (1,'needle anchor'),(2,'needle other'),(3,'anchor other'),(4,'needle anchor'),(5,'filler text');
+create fulltext2 index ft on docs(body);
+alter table docs alter reindex ft fulltext2 force_sync;
+create view v as select * from docs;
+create view v2 as select * from v;
+create view inside_v as select id, match(body) against('needle') as score from docs where match(body) against('needle');
+select id, match(body) against('needle') as score from docs where match(body) against('needle') order by id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+2  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+explain select id, match(body) against('needle') as score from v where match(body) against('needle') order by id;
+-- @regex("Fulltext Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: docs.id INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (docs.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ft2_view_score.docs  𝄀
+                    Runtime Filter Probe: docs.id  𝄀
+              ->  Fulltext Index Scan on ft  𝄀
+                    Fulltext Index: ft
+select id, match(body) against('needle') as score from v where match(body) against('needle') order by id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+2  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select id, match(body) against('needle') as score from v2 where match(body) against('needle') order by id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+2  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select id, match(body) against('needle') as score from (select * from docs) d where match(body) against('needle') order by id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+2  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+with d as (select * from docs) select id, match(body) against('needle') as score from d where match(body) against('needle') order by id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+2  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select x, match(b) against('needle') as score from (select id as x, body as b from docs) d where match(b) against('needle') order by x;
+➤ x[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+2  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select id, match(body) against('anchor') as score from v where match(body) against('needle') order by id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select id, round(match(body) against('needle'), 3) as score from v where match(body) against('needle') order by id;
+➤ id[-5,64,0]  ¦  score[8,53,31]  𝄀
+1  ¦  0.049  𝄀
+2  ¦  0.049  𝄀
+4  ¦  0.049
+select id, match(body) against('needle') as score from v where match(body) against('needle') order by score desc, id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+2  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select id, match(body) against('needle') as score from v where match(body) against('needle') order by id limit 2;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+2  ¦  0.049216866
+select id from v where match(body) against('needle') order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+4
+select id, match(body) against('needle') as score from v order by id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+2  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select * from inside_v order by id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.049216866  𝄀
+2  ¦  0.049216866  𝄀
+4  ¦  0.049216866
+select id, row_number() over (order by id) as rn from v where match(body) against('needle') order by id;
+➤ id[-5,64,0]  ¦  rn[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+4  ¦  3
+create table pdocs(id bigint primary key, body text);
+insert into pdocs values (1,'needle filler filler filler'),(2,'needle needle needle'),(3,'needle needle filler'),(4,'other text');
+create fulltext2 index pft on pdocs(body);
+alter table pdocs alter reindex pft fulltext2 force_sync;
+select id, match(body) against('needle') as score from pdocs where match(body) against('needle') limit 2;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+2  ¦  0.026016146  𝄀
+3  ¦  0.022299554
+select id, match(body) against('needle') as score from (select * from pdocs where match(body) against('needle') limit 2) d;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+2  ¦  0.026016146  𝄀
+3  ¦  0.022299554
+select id, match(body) against('needle') as score from (select * from pdocs where match(body) against('needle') limit 2) d order by id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+2  ¦  0.026016146  𝄀
+3  ¦  0.022299554
+select id, match(body) against('needle') as score from (select * from pdocs where match(body) against('needle') limit 1 offset 1) d;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+3  ¦  0.022299554
+select id from (select * from pdocs where match(body) against('needle') limit 2) d order by id;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+3
+drop database ft2_view_score;

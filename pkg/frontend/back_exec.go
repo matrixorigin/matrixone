@@ -25,7 +25,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -413,6 +412,10 @@ func doComQueryInBack(
 ) (retErr error) {
 	backSes.EnterFPrint(FPDoComQueryInBack)
 	defer backSes.ExitFPrint(FPDoComQueryInBack)
+	trustedIndexSQL := input != nil && input.isInternal() && !input.sameStatementAuthorization
+	if trustedIndexSQL {
+		execCtx.reqCtx = process.WithTrustedIndexRelationAccess(execCtx.reqCtx)
+	}
 	backSes.GetTxnCompileCtx().SetExecCtx(execCtx)
 	backSes.SetSql(input.getSql())
 
@@ -443,13 +446,12 @@ func doComQueryInBack(
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.Base.SessionInfo = process.SessionInfo{
-		User:          backSes.respr.GetStr(USERNAME),
+		User:          backSes.GetResponser().GetStr(USERNAME),
 		Host:          pu.SV.Host,
-		Database:      backSes.respr.GetStr(DBNAME),
+		Database:      backSes.GetResponser().GetStr(DBNAME),
 		Version:       makeServerVersion(pu, serverVersion.Load().(string)),
 		TimeZone:      backSes.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
-		Buf:           backSes.buf,
 		IsRestore:     backSes.GetRestore(),
 	}
 	proc.SetAffectedRows(backSes.lastAffectedRows)
@@ -465,7 +467,6 @@ func doComQueryInBack(
 	proc.SetResolveVariableTypeFunc(backSes.txnCompileCtx.ResolveVariableType)
 	proc.SetResolveVariableIsBinFunc(backSes.txnCompileCtx.ResolveVariableIsBin)
 	proc.SetResolveVariableStringDomainFunc(backSes.txnCompileCtx.ResolveVariableStringDomain)
-	proc.SetResolveVariablePrepareParamKindFunc(backSes.txnCompileCtx.ResolveVariablePrepareParamKind)
 	// backExec.Exec and ExecRestore reject multi-statement SQL before reaching
 	// this path, so one snapshot here covers the complete background statement.
 	refreshBackgroundStatementScopedSessionInfo(backSes, input, proc)
@@ -500,6 +501,9 @@ func doComQueryInBack(
 	execCtx.input = input
 
 	proc.Base.SessionInfo.User = userNameOnly
+	if !trustedIndexSQL {
+		stampHiddenIndexCaller(proc, hiddenIndexCaller(execCtx.reqCtx))
+	}
 	cws, err := GetComputationWrapperInBack(
 		execCtx, backSes.respr.GetStr(DBNAME),
 		input,
@@ -603,6 +607,15 @@ func doComQueryInBack(
 		execCtx.proc = proc
 		execCtx.ses = backSes
 		execCtx.cws = cws
+		effectiveStmt, defaultDatabase, resolveErr := effectiveStatementForTxn(execCtx.reqCtx, backSes, stmt)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		admissionCtx := *execCtx
+		admissionCtx.effectiveTxnDefaultDatabase = defaultDatabase
+		if err = checkFrontendIndexTargetWithCatalog(&admissionCtx, effectiveStmt); err != nil {
+			return err
+		}
 		err = executeStmtWithTxn(backSes, statsArr, execCtx)
 		if err != nil {
 			return err
@@ -716,7 +729,7 @@ func bindPublicationScopeSelect(execCtx *ExecCtx) error {
 	sel := execCtx.stmt.(*tree.Select)
 	tcc := execCtx.ses.GetTxnCompileCtx()
 	bind := func() (*plan2.Plan, error) {
-		return plan2.BuildPlan(tcc, sel, false)
+		return plan2.BuildPlan(tcc, sel, false, nil)
 	}
 	database := publicationProbeDatabase(sel)
 	if database == "" {
@@ -1039,6 +1052,7 @@ func executeStmtInSameSession(
 	ses *Session,
 	execCtx *ExecCtx,
 	stmt tree.Statement,
+	resper Responser,
 	preparedExpression bool,
 	preparedParamVals []any,
 	preparedBinaryExecute bool,
@@ -1064,10 +1078,8 @@ func executeStmtInSameSession(
 	// the result batch will be saved in the session.
 	// you can get the result batch by calling GetResultBatches()
 	ses.SetOutputCallback(batchFetcher)
-	//2. replace protocol by FakeProtocol.
-	// Any response yielded during running query will be dropped by the NullResp.
-	// The client will not receive any response from the NullResp.
-	prevProto := ses.ReplaceResponser(&NullResp{})
+	//2. Use the internal responder so query output never reaches the client.
+	prevProto := ses.ReplaceResponser(resper)
 	//3. replace the derived stmt
 	prevDerivedStmt := ses.ReplaceDerivedStmt(true)
 	// inherit database
@@ -1224,7 +1236,6 @@ func (backSes *backSession) initFeSes(
 	db string,
 	callBack outputCallBackFunc) *backSession {
 	backSes.pool = ses.GetMemPool()
-	backSes.buf = buffer.New()
 	backSes.stmtProfile = process.StmtProfile{}
 	backSes.tenant = nil
 	backSes.txnHandler = txnHandler
@@ -1236,7 +1247,7 @@ func (backSes *backSession) initFeSes(
 	backSes.derivedStmt = false
 	backSes.label = make(map[string]string)
 	backSes.timeZone = ses.GetTimeZone()
-	backSes.respr = defResper
+	backSes.setResponser(defResper)
 	backSes.service = ses.GetService()
 	if parent, ok := ses.(*backSession); ok {
 		backSes.parentBackSession = parent
@@ -1391,7 +1402,7 @@ func (backSes *backSession) getNextProcessId() string {
 		temporary method:
 		routineId + sqlCount
 	*/
-	routineId := backSes.respr.GetU32(CONNID)
+	routineId := backSes.GetResponser().GetU32(CONNID)
 	// Optimize: use strconv instead of fmt.Sprintf
 	var buf [24]byte
 	b := strconv.AppendUint(buf[:0], uint64(routineId), 10)

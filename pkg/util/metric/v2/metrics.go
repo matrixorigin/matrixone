@@ -107,6 +107,7 @@ func initTaskMetrics() {
 	registry.MustRegister(taskShortDurationHistogram)
 	registry.MustRegister(taskLongDurationHistogram)
 	registry.MustRegister(taskCheckpointRetryCounter)
+	registry.MustRegister(sqlTaskControlFailureCounter, sqlTaskPendingGauge)
 
 	registry.MustRegister(taskDNMergeStuffCounter)
 	registry.MustRegister(taskDNMergeDurationHistogram)
@@ -150,6 +151,8 @@ func initFileServiceMetrics() {
 	registry.MustRegister(FSDiskCacheEvictCounter)
 	registry.MustRegister(FSDiskCacheErrorCounter)
 	registry.MustRegister(FSDiskCacheAsyncUpdateDroppedCounter)
+	registry.MustRegister(FSDiskCacheDownloadReadCounter)
+	registry.MustRegister(FSDiskCacheDownloadDeclinedBytesCounter)
 	registry.MustRegister(FSDiskCacheAsyncCallbackPanicCounter)
 }
 
@@ -203,6 +206,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnCreateDurationHistogram)
 	registry.MustRegister(txnStatementDurationHistogram)
 	registry.MustRegister(txnLoadLogtailReadBarrierDurationHistogram)
+	registry.MustRegister(changeWatchDurationHistogram)
 	registry.MustRegister(txnLockDurationHistogram)
 	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)

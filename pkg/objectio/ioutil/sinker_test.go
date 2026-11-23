@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -48,19 +50,20 @@ func mockSchema(colCnt int, pkIdx int) ([]string, []types.Type, []uint16) {
 
 func TestSinkerWriteOwnedRejectsBorrowedBackingBeforeStaging(t *testing.T) {
 	data := types.EncodeSlice([]int64{7})
-	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	lease, err := bufferlease.NewRefCounted(data, int64(cap(data)), nil)
 	require.NoError(t, err)
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, data, lease)
+	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 1, data, nil, nil), error(nil)
 	require.NoError(t, err)
+	bat := batch.New([]string{"v"})
+	require.NoError(t, bat.HoldLease(lease))
 	lease.Release()
-	bat := batch.NewOffHeap([]string{"v"})
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)
 
 	owned, err := new(Sinker).WriteOwned(context.Background(), bat)
 	require.False(t, owned)
 	require.ErrorContains(t, err, "unique-owned vector backing")
-	require.True(t, vec.HasBorrowedBacking())
+	require.True(t, vec.IsReadOnly())
 	bat.Clean(nil)
 	require.Nil(t, lease.Bytes())
 }
@@ -236,4 +239,31 @@ func TestSinkerDeletePersistedAfterAmbiguousSyncFailure(t *testing.T) {
 	require.Equal(t, []string{fs.persisted}, files)
 	_, err = baseFS.StatFile(ctx, fs.persisted)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+}
+
+func TestSinkerResetDiscardsTransferredFailureNames(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProc(t)
+	baseFS, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { baseFS.Close(ctx) })
+	fs := &persistThenErrorFS{FileService: baseFS}
+	_, typs, _, sinker := makeTestSinker(proc.Mp(), fs)
+	t.Cleanup(func() { require.NoError(t, sinker.Close()) })
+	bat := containers.MockBatch(typs, 2, 2, nil)
+	t.Cleanup(bat.Close)
+	require.NoError(t, sinker.Write(ctx, containers.ToCNBatch(bat)))
+	require.ErrorContains(t, sinker.Sync(ctx), "injected post-persist sync failure")
+	owned := sinker.PersistedNames()
+	require.Equal(t, []string{fs.persisted}, owned)
+	require.Equal(t, owned, sinker.GetUnpublishedFiles())
+
+	sinker.Reset()
+	require.Empty(t, sinker.PersistedNames())
+	require.Empty(t, sinker.GetUnpublishedFiles())
+	require.Equal(t, []string{fs.persisted}, owned, "the transferred snapshot is independent")
+	_, err = baseFS.StatFile(ctx, fs.persisted)
+	require.NoError(t, err, "Reset must leave physical cleanup to the owner")
+	sinker.Reset()
+	require.Empty(t, sinker.PersistedNames())
 }

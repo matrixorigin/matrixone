@@ -56,7 +56,7 @@ type PrefixFn struct {
 type RowSelection struct {
 	MinRow uint32
 	MaxRow uint32
-	Holes  *nulls.Bitmap
+	Holes  *nulls.Nulls
 }
 
 func (s RowSelection) IsEmpty() bool { return s.MaxRow <= s.MinRow }
@@ -77,7 +77,7 @@ func (s *RowSelection) AddRange(start, end uint32) {
 	}
 	if start > s.MaxRow {
 		if s.Holes == nil {
-			s.Holes = &nulls.Bitmap{}
+			s.Holes = &nulls.Nulls{}
 		}
 		s.Holes.AddRange(uint64(s.MaxRow), uint64(start))
 	}
@@ -91,7 +91,7 @@ func (s *RowSelection) MakePrefix() {
 		return
 	}
 	if s.Holes == nil {
-		s.Holes = &nulls.Bitmap{}
+		s.Holes = &nulls.Nulls{}
 	}
 	s.Holes.AddRange(0, uint64(s.MinRow))
 	s.MinRow = 0
@@ -124,7 +124,7 @@ type SecondaryIndex interface {
 
 type StaticFilter interface {
 	MayContainsKey(key []byte) (bool, error)
-	MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Bitmap, error)
+	MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Nulls, error)
 	MayContainsAny(keys *vector.Vector, lowerBound int, upperBound int) bool
 
 	PrefixMayContainsKey(key []byte, prefixFnId uint8, level uint8) (bool, error)

@@ -33,8 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/s3fifo"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
@@ -76,7 +76,19 @@ var BlkReadStats = newBlockReadStats()
 
 type mataCacheKey [cacheKeyLen]byte
 
-var metaCache *fifocache.Cache[mataCacheKey, []byte]
+var metaCache *s3fifo.Cache[mataCacheKey, metaBytes]
+
+// metaBytes is cached object metadata; it has no reference count.
+type metaBytes []byte
+
+func (metaBytes) Retain()  {}
+func (metaBytes) Release() {}
+
+func getMeta(key mataCacheKey) ([]byte, bool) {
+	v, _, ok, _ := metaCache.Get(key, nil)
+	return v, ok
+}
+
 var onceInit sync.Once
 
 var (
@@ -197,29 +209,27 @@ func metaCachePressureTarget(capacity int64) (int64, bool) {
 	return capacity * percent / 100, true
 }
 
-func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, []byte] {
+func newMetaCache(capacity fscache.CapacityFunc) *s3fifo.Cache[mataCacheKey, metaBytes] {
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge("", "meta")
 	capacityBytes.Set(float64(capacity()))
-	ret := fifocache.New[mataCacheKey, []byte](
-		capacity,
-		shardMetaCacheKey,
-		func(_ context.Context, _ mataCacheKey, _ []byte, size int64, _ uint64) { // postSet
+	return s3fifo.New(s3fifo.Options[mataCacheKey, metaBytes]{
+		Capacity:  capacity,
+		Hash:      shardMetaCacheKey,
+		Admission: metaCachePressureTarget,
+		OnInsert: func(_ mataCacheKey, _ metaBytes, size int64, _ uint64) {
 			inuseBytes.Add(float64(size))
 			capacityBytes.Set(float64(capacity()))
 		},
-		nil,
-		func(_ context.Context, _ mataCacheKey, _ []byte, size int64, _ uint64) { // postEvict
+		OnRemove: func(_ mataCacheKey, _ metaBytes, size int64, _ uint64, _ s3fifo.Reason) {
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacity()))
-		})
-	ret.SetAdmissionTarget(metaCachePressureTarget)
-	return ret
+		},
+	})
 }
 
 func EvictCache(ctx context.Context) (target int64) {
-	ch := make(chan int64, 1)
-	metaCache.Evict(ctx, ch, 0)
-	target = <-ch
+	target = metaCache.Capacity()
+	metaCache.EvictTo(ctx, target)
 	logutil.Info("metadata cache forced evicted",
 		zap.Any("target", target),
 	)
@@ -243,7 +253,7 @@ func EvictCacheToCapacityPercent(ctx context.Context, percent int64) (used int64
 		zap.Int64("target", target),
 		zap.Int64("target-percent", percent),
 	)
-	used = metaCache.EvictToTargetWithWait(ctx, target)
+	used = metaCache.EvictTo(ctx, target)
 	metric.FSCachePressureMetaEvictCounter.Inc()
 	metric.FSCachePressureMetaEvictDuration.Observe(time.Since(start).Seconds())
 	logutil.Info("metadata cache pressure evicted",
@@ -275,10 +285,10 @@ func LoadObjectMetaByExtent(
 ) (meta ObjectMeta, err error) {
 	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*name.Short(), cacheKeyTypeMeta)
-	v, ok := metaCache.Get(ctx, key)
+	v, ok := getMeta(key)
 	if ok {
 		metric.FSReadHitMetaCounter.Add(1)
-		return MustObjectMeta(v), nil
+		return checkedObjectMeta(v)
 	}
 	if extent.Length() == 0 {
 		logutil.Warn("[LoadObjectMetaByExtent]",
@@ -291,8 +301,16 @@ func LoadObjectMetaByExtent(
 	if err != nil {
 		return
 	}
-	meta = MustObjectMeta(v)
-	return
+	return checkedObjectMeta(v)
+}
+
+// cached metadata and newly loaded metadata share the same checked boundary.
+// Keep MustObjectMeta for callers that explicitly require an assertion.
+func checkedObjectMeta(buffer []byte) (ObjectMeta, error) {
+	if len(buffer) < IOEntryHeaderSize || DecodeIOEntryHeader(buffer).Type != IOET_ObjMeta {
+		return nil, moerr.NewInvalidInputNoCtx("invalid object metadata header")
+	}
+	return ObjectMeta(buffer), nil
 }
 
 func validateLocation(ctx context.Context, location *Location) error {
@@ -313,7 +331,7 @@ func FastLoadBF(
 	}
 	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
-	v, ok := metaCache.Get(ctx, key)
+	v, ok := getMeta(key)
 	if ok {
 		metric.FSReadHitMetaCounter.Add(1)
 		return v, nil
@@ -336,7 +354,7 @@ func LoadBFWithMeta(
 	}
 	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
-	v, ok := metaCache.Get(ctx, key)
+	v, ok := getMeta(key)
 	if ok {
 		metric.FSReadHitMetaCounter.Add(1)
 		return v, nil
@@ -378,7 +396,7 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 		metaLoadMu.Lock()
 		// A previous miss may predate a completed load. Serialize this check
 		// with election so it cannot grant ownership after that publication.
-		if v, ok := metaCache.Get(ctx, key); ok {
+		if v, ok := getMeta(key); ok {
 			metaLoadMu.Unlock()
 			return v, nil
 		}
@@ -397,7 +415,7 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				if v, ok := metaCache.Get(ctx, key); ok {
+				if v, ok := getMeta(key); ok {
 					return v, nil
 				}
 				if pending.abandoned {
@@ -444,7 +462,7 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 			metric.FSCachePressureMetaSkipCounter.Inc()
 			return call.val, call.err
 		}
-		metaCache.Set(ctx, key, call.val, int64(len(call.val)))
+		metaCache.Set(key, call.val, int64(len(call.val)))
 	}
 	return call.val, call.err
 }

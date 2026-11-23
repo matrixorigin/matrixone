@@ -687,6 +687,18 @@ func cdcTargetColumnTypeMatches(source plan.Type, target, sinkType string, numer
 		return source.Scale < 0 && !numericScale.Valid ||
 			source.Scale >= 0 && numericScale.Valid && numericScale.Int64 == int64(source.Scale)
 	}
+	// A current-generation MO target renders its physical-BOOL COLUMN_TYPE as
+	// the raw alias tinyint(1) (issue #31749), while a native MO integer
+	// target never renders a display width: types.FormatSQLColumnType ignores
+	// integer widths. The exact raw token therefore identifies a physical
+	// BOOL target alone, and it must be gated before the normalized want==got
+	// comparison, which strips the display width and would admit every
+	// tinyint source as a false positive. Only a native BOOL source may sink
+	// into the alias; legacy MO 'boolean'/'bool' spellings keep the normalized
+	// path below, and MySQL keeps its display-width-tolerant final arm.
+	if sinkType == CDCSinkType_MO && strings.EqualFold(strings.TrimSpace(target), "tinyint(1)") {
+		return types.T(source.Id) == types.T_bool
+	}
 	if want == got {
 		return true
 	}

@@ -16,7 +16,6 @@ package sysview
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -59,50 +58,19 @@ func TestInitSchemaDefersViewsUntilAuthoringFence(t *testing.T) {
 		return executor.Result{}, nil
 	}, txnOperator)
 
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(0))
-	require.NoError(t, InitSchema(context.Background(), txnExecutor))
-	joined := strings.Join(statements, "\n")
-	require.Contains(t, joined, InformationSchemaViewsLegacyDDL)
-	require.NotContains(t, joined, "mo_view_definition(")
-	// The authoring fence defers only the VIEWS definitions. Information
-	// schema column, statistics and index metadata publish the corrected
-	// current identities unconditionally at every fence level.
-	require.Contains(t, statements, InformationSchemaColumnsDDL)
-	require.NotContains(t, statements, InformationSchemaColumnsV100DDL())
-	require.Contains(t, statements, InformationSchemaStatisticsPrefixSubPartDDL)
-	require.NotContains(t, statements, InformationSchemaStatisticsDDL)
-	require.Contains(t, statements, InformationSchemaSchemataDDL)
-	require.NotContains(t, statements, InformationSchemaSchemataLegacyDDL)
-	require.Contains(t, statements, InformationSchemaTablesDDL)
-	require.NotContains(t, statements, InformationSchemaTablesV118DDL)
-
-	for _, floor := range []int64{defines.MORPCVersion118, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion123} {
+	for _, floor := range []int64{0, defines.MORPCVersion126} {
 		statements = nil
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
 		require.NoError(t, InitSchema(context.Background(), txnExecutor))
-		require.Contains(t, statements, InformationSchemaViewsLegacyDDL)
+		require.NotContains(t, statements, InformationSchemaViewsLegacyDDL)
+		require.NotContains(t, statements, InformationSchemaViewsDDL)
+		require.NotContains(t, statements, InformationSchemaTablesDDL)
+		require.NotContains(t, statements, InformationSchemaTablesV118DDL)
+		require.NotContains(t, statements, InformationSchemaTablesCurrentDDL)
 		require.Contains(t, statements, InformationSchemaSchemataDDL)
 		require.Contains(t, statements, InformationSchemaColumnsDDL)
 		require.Contains(t, statements, InformationSchemaStatisticsPrefixSubPartDDL)
-		require.Contains(t, statements, InformationSchemaTablesDDL)
-		require.NotContains(t, statements, InformationSchemaTablesV118DDL,
-			"TABLES is published separately after bootstrap admission")
 	}
-
-	// Above the fence the bootstrap authors the parser-derived VIEWS
-	// definitions next to the same current identities.
-	statements = nil
-	rt.SetGlobalVariables(
-		moruntime.PersistedExpressionProtocolAuthoringFloor,
-		int64(defines.MORPCVersion126))
-	require.NoError(t, InitSchema(context.Background(), txnExecutor))
-	joined = strings.Join(statements, "\n")
-	require.Contains(t, joined, InformationSchemaViewsDDL)
-	require.Contains(t, joined, "mo_view_definition(")
-	require.Contains(t, statements, InformationSchemaColumnsDDL)
-	require.Contains(t, statements, InformationSchemaStatisticsPrefixSubPartDDL)
-	require.Contains(t, statements, InformationSchemaColumnsDDL)
-	require.NotContains(t, statements, InformationSchemaColumnsV110DDL())
-	require.Contains(t, statements, InformationSchemaStatisticsPrefixSubPartDDL)
-	require.NotContains(t, statements, InformationSchemaStatisticsDDL)
+	require.Contains(t, InitInformationSchemaSysTables, InformationSchemaViewsDDL)
+	require.Contains(t, InitInformationSchemaSysTables, InformationSchemaTablesCurrentDDL)
 }

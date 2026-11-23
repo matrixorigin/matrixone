@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -117,7 +116,7 @@ func TestDecodeDatabaseDefaults(t *testing.T) {
 				}
 				r = defaultsResult(t, mp, ids, revisions, versions)
 				if tc.null {
-					nulls.Add(r.Batches[0].Vecs[0].GetNulls(), 0)
+					r.Batches[0].Vecs[0].GetNulls().Add(0)
 				}
 			}
 			defer r.Close()
@@ -151,7 +150,7 @@ func TestDatabaseDefaultsPublicDDLPlans(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			copy := DeepCopyPlan(p)
 			var defaults *planpb.DatabaseDefaults
@@ -171,7 +170,7 @@ func TestDatabaseDefaultsPublicDDLPlans(t *testing.T) {
 	for _, sql := range []string{"alter database mo_catalog collate utf8mb4_bin", "alter database target collate unknown"} {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+		_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 		stmt.Free()
 		require.Error(t, err)
 	}
@@ -181,7 +180,7 @@ func TestDatabaseDefaultsPublicDDLPlans(t *testing.T) {
 			for _, sql := range []string{"alter database target collate utf8mb4_bin", "create database target collate utf8mb4_bin"} {
 				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
-				_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+				_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 				stmt.Free()
 				require.ErrorContains(t, err, "protocol version 118")
 			}
@@ -235,7 +234,7 @@ func TestCreateTableInheritsDatabaseDefaults(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			if tc.readError {
 				require.ErrorIs(t, err, injected)
 			} else {
@@ -282,7 +281,7 @@ func TestDatabaseDefaultsPreserveReplayedTableCollation(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 			require.Contains(t, sql, "COLLATE=utf8mb4_general_ci")
-			rebound, err := BuildPlan(&mock.ctxt, stmt, false)
+			rebound, err := BuildPlan(&mock.ctxt, stmt, false, nil)
 			require.NoError(t, err)
 			require.Equal(t, uint32(types.CharsetUTF8), rebound.GetDdl().GetCreateTable().TableDef.Cols[0].Typ.Charset)
 		})

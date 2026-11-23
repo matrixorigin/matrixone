@@ -86,7 +86,7 @@ func TestSavedQueryResultBitExport(t *testing.T) {
 		data := batch.NewWithSize(2)
 		defer data.Clean(proc.Mp())
 		for col, width := range []int32{8, 64} {
-			data.Vecs[col] = vector.NewVec(types.New(types.T_bit, width, 0))
+			data.Vecs[col] = vector.NewVec(types.New(types.T_bit, width, 0), proc.Mp())
 			for _, value := range []uint64{0, 1, 65, 255} {
 				require.NoError(t, vector.AppendFixed(data.Vecs[col], value, false, proc.Mp()))
 			}

@@ -125,7 +125,8 @@ and algo = 'hnsw'
 order by algo_table_type;
 ➤ algo[12,11,0]  ¦  algo_table_type[12,11,0]  𝄀
 hnsw  ¦  hnsw_index  𝄀
-hnsw  ¦  hnsw_meta
+hnsw  ¦  hnsw_meta  𝄀
+hnsw  ¦  ignored
 select id from vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
 ➤ id[-5,64,0]  𝄀
 1

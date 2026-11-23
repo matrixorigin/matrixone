@@ -15,12 +15,67 @@
 package compile
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
+
+func TestValidateIndexMaintenance(t *testing.T) {
+	spec := &executor.IndexMaintenanceSpec{
+		Function: "fulltext2_create", Database: "db", DatabaseID: 1, BaseName: "source", BaseID: 2,
+		Targets: []executor.IndexMaintenanceTarget{
+			{Role: catalog.FullText2Index_TblType_Storage, Name: "store", ID: 3},
+			{Role: catalog.FullText2Index_TblType_Metadata, Name: "meta", ID: 4},
+		},
+	}
+	cfg := fulltext2.TableConfig{DbName: "db", SrcTable: "source", IndexTable: "store", MetadataTable: "meta"}
+	encoded, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, (Hooks{}).ValidateIndexMaintenance("fulltext2_create", []string{"{}", string(encoded)}, spec))
+	cfg.IndexTable = "other"
+	encoded, err = json.Marshal(cfg)
+	require.NoError(t, err)
+	require.Error(t, (Hooks{}).ValidateIndexMaintenance("fulltext2_create", []string{"{}", string(encoded)}, spec))
+	spec.Function = "fulltext2_compact"
+	require.NoError(t, (Hooks{}).ValidateIndexMaintenance("fulltext2_compact", []string{"db", "store", "meta"}, spec))
+	require.Error(t, (Hooks{}).ValidateIndexMaintenance("fulltext2_compact", []string{"db", "meta", "store"}, spec))
+	defs := map[string]*plan.IndexDef{catalog.FullText2Index_TblType_Storage: {}, catalog.FullText2Index_TblType_Metadata: {}}
+	for _, function := range []string{"fulltext2_create", "fulltext2_compact"} {
+		roles, err := (Hooks{}).IndexMaintenanceRoles(function, defs)
+		require.NoError(t, err)
+		require.Equal(t, []string{catalog.FullText2Index_TblType_Storage, catalog.FullText2Index_TblType_Metadata}, roles)
+		_, err = (Hooks{}).IndexMaintenanceRoles(function, nil)
+		require.Error(t, err)
+	}
+
+	// fulltext2_create writes the ignored table of an index that has one; compaction does not.
+	defs[catalog.IndexIgnored_TblType] = &plan.IndexDef{}
+	roles, err := (Hooks{}).IndexMaintenanceRoles("fulltext2_create", defs)
+	require.NoError(t, err)
+	require.Equal(t, []string{catalog.FullText2Index_TblType_Storage, catalog.FullText2Index_TblType_Metadata, catalog.IndexIgnored_TblType}, roles)
+	roles, err = (Hooks{}).IndexMaintenanceRoles("fulltext2_compact", defs)
+	require.NoError(t, err)
+	require.Equal(t, []string{catalog.FullText2Index_TblType_Storage, catalog.FullText2Index_TblType_Metadata}, roles)
+
+	spec.Function = "fulltext2_create"
+	cfg.IndexTable, cfg.IgnoredTable = "store", "ignored"
+	encoded, err = json.Marshal(cfg)
+	require.NoError(t, err)
+	require.Error(t, (Hooks{}).ValidateIndexMaintenance("fulltext2_create", []string{"{}", string(encoded)}, spec),
+		"a config naming an ignored table needs it among the targets")
+	spec.Targets = append(spec.Targets, executor.IndexMaintenanceTarget{Role: catalog.IndexIgnored_TblType, Name: "ignored", ID: 5})
+	require.NoError(t, (Hooks{}).ValidateIndexMaintenance("fulltext2_create", []string{"{}", string(encoded)}, spec))
+	cfg.IgnoredTable = "other"
+	encoded, err = json.Marshal(cfg)
+	require.NoError(t, err)
+	require.Error(t, (Hooks{}).ValidateIndexMaintenance("fulltext2_create", []string{"{}", string(encoded)}, spec))
+}
 
 // TestValidateReindexParams covers the fulltext2 ALTER REINDEX param merge — in
 // particular that max_postings_capacity is APPLIED (not the silent no-op it was

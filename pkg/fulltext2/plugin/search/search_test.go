@@ -52,10 +52,10 @@ func int64ColumnBuffer(vals ...int64) *vectorindex.ColumnBuffer {
 }
 
 // pkScoreBatch is a [doc_id int64, score float32] output batch.
-func pkScoreBatch() *batch.Batch {
+func pkScoreBatch(mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_float32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_float32.ToType(), mp)
 	return bat
 }
 
@@ -199,7 +199,7 @@ func TestInitMapsOutputsByName(t *testing.T) {
 
 func TestApplyMembership(t *testing.T) {
 	proc := testutil.NewProc(t)
-	keys := vector.NewVec(types.T_int64.ToType())
+	keys := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed[int64](keys, 5, false, proc.Mp()))
 	data, err := keys.MarshalBinary()
 	require.NoError(t, err)
@@ -211,7 +211,7 @@ func TestApplyMembership(t *testing.T) {
 		wantFilter bool
 	}{
 		{"no membership filter keeps the limit", searchplugin.Request{}, 10, false},
-		{"exact keys filter inside the search", searchplugin.Request{HasMembershipFilter: true, MembershipFilter: data}, 10, true},
+		{"exact keys filter inside the search", searchplugin.Request{HasMembershipFilter: true, MembershipFilter: testutil.RuntimeKeyPayload(t, data)}, 10, true},
 		{"a membership filter without keys streams", searchplugin.Request{HasMembershipFilter: true}, 0, false},
 		{"a passed membership filter streams", searchplugin.Request{MembershipFilterPassed: true}, 0, false},
 	} {
@@ -223,8 +223,7 @@ func TestApplyMembership(t *testing.T) {
 		})
 	}
 
-	u := &reader{proc: proc, req: searchplugin.Request{HasMembershipFilter: true, MembershipFilter: []byte{1}}}
-	require.Error(t, u.applyMembership(), "a malformed key payload is rejected")
+	testutil.AssertInvalidRuntimeKeys(t, []byte{1})
 }
 
 func TestStartRejectsBeforeSearching(t *testing.T) {
@@ -243,12 +242,12 @@ func TestStartRejectsBeforeSearching(t *testing.T) {
 func TestReadReportsStartErrors(t *testing.T) {
 	proc := testutil.NewProc(t)
 	r := &reader{proc: proc, spec: &plan.IndexSearchScan{}}
-	_, err := r.Read(context.Background(), nil, nil, proc.Mp(), pkScoreBatch())
+	_, err := r.Read(context.Background(), nil, nil, proc.Mp(), pkScoreBatch(proc.Mp()))
 	require.ErrorContains(t, err, "config is empty")
 
 	r = &reader{proc: proc, spec: &plan.IndexSearchScan{},
 		opts: ft2plan.ScanOptions{Config: "{}", ScoreRange: "{not json"}}
-	_, err = r.Read(context.Background(), nil, nil, proc.Mp(), pkScoreBatch())
+	_, err = r.Read(context.Background(), nil, nil, proc.Mp(), pkScoreBatch(proc.Mp()))
 	require.ErrorContains(t, err, "invalid score range")
 }
 
@@ -266,7 +265,7 @@ func TestReadMaterialized(t *testing.T) {
 		},
 		pkVecIdx: 0, scoreVecIdx: 1,
 	}
-	out := pkScoreBatch()
+	out := pkScoreBatch(mp)
 	end, err := u.Read(context.Background(), nil, nil, mp, out)
 	require.NoError(t, err)
 	require.False(t, end)
@@ -308,10 +307,10 @@ func TestReadMaterializedCovered(t *testing.T) {
 		includeOut: []includeOut{{vecIdx: 2, segPos: 0, name: "prio"}, {vecIdx: 3, segPos: 5, name: "gone"}},
 	}
 	out := batch.NewWithSize(4)
-	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	out.Vecs[1] = vector.NewVec(types.T_float32.ToType())
-	out.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-	out.Vecs[3] = vector.NewVec(types.T_int64.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	out.Vecs[1] = vector.NewVec(types.T_float32.ToType(), mp)
+	out.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+	out.Vecs[3] = vector.NewVec(types.T_int64.ToType(), mp)
 	end, err := u.Read(context.Background(), nil, nil, mp, out)
 	require.NoError(t, err)
 	require.False(t, end)
@@ -327,7 +326,7 @@ func TestReadMaterializedCovered(t *testing.T) {
 func TestReadWithoutSearchOutputEnds(t *testing.T) {
 	proc := testutil.NewProc(t)
 	u := &reader{proc: proc, inited: true, started: true, limit: 10, pkVecIdx: 0, scoreVecIdx: 1}
-	end, err := u.Read(context.Background(), nil, nil, proc.Mp(), pkScoreBatch())
+	end, err := u.Read(context.Background(), nil, nil, proc.Mp(), pkScoreBatch(proc.Mp()))
 	require.NoError(t, err)
 	require.True(t, end)
 }
@@ -350,7 +349,7 @@ func TestReadStreaming(t *testing.T) {
 	u.streamCh <- &vectorindex.SearchOutput{Keys: int64ColumnBuffer(7, 8), Dists: []float32{1.5, 2.5}}
 	close(u.streamCh)
 	u.errCh <- nil
-	out := pkScoreBatch()
+	out := pkScoreBatch(mp)
 	end, err := u.Read(context.Background(), nil, nil, mp, out)
 	require.NoError(t, err)
 	require.False(t, end)
@@ -395,7 +394,7 @@ func TestReadStreamingPreservesSignedScores(t *testing.T) {
 	u.streamCh <- &vectorindex.SearchOutput{Keys: int64ColumnBuffer(3), Dists: []float32{0.75}}
 	close(u.streamCh)
 	u.errCh <- nil
-	out := pkScoreBatch()
+	out := pkScoreBatch(mp)
 	t.Cleanup(func() { out.Clean(mp) })
 	got := make(map[int64]float32)
 	for {
@@ -433,9 +432,9 @@ func TestReadStreamingCovered(t *testing.T) {
 	u.errCh <- nil
 
 	out := batch.NewWithSize(3)
-	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	out.Vecs[1] = vector.NewVec(types.T_float32.ToType())
-	out.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	out.Vecs[1] = vector.NewVec(types.T_float32.ToType(), mp)
+	out.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
 	end, err := u.Read(context.Background(), nil, nil, mp, out)
 	require.NoError(t, err)
 	require.False(t, end)
@@ -477,7 +476,7 @@ func captureTailSQL(t *testing.T, mp *mpool.MPool, pks ...[]int64) *string {
 		captured = sql
 		for _, rows := range pks {
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 			for _, pk := range rows {
 				require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], pk, false, mp))
 			}
@@ -501,9 +500,9 @@ func TestProbeTailStreams(t *testing.T) {
 	u := probeTailReader(proc)
 	u.includeOut = []includeOut{{vecIdx: 2, segPos: 0, name: "tag"}}
 	out := batch.NewWithSize(3)
-	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	out.Vecs[1] = vector.NewVec(types.T_float32.ToType())
-	out.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	out.Vecs[1] = vector.NewVec(types.T_float32.ToType(), mp)
+	out.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
 	n, err := u.emitProbeTail(mp, out)
 	require.NoError(t, err)
 	require.Equal(t, 2, n, "an empty streamed result is skipped")
@@ -533,7 +532,7 @@ func TestProbeTailCaughtUp(t *testing.T) {
 
 	u := probeTailReader(proc)
 	u.tailSearchedBuildTS = 2500
-	n, err := u.emitProbeTail(mp, pkScoreBatch())
+	n, err := u.emitProbeTail(mp, pkScoreBatch(mp))
 	require.NoError(t, err)
 	require.Zero(t, n)
 	require.Empty(t, *sql, "a caught-up generation must not run the tail query")
@@ -550,7 +549,7 @@ func TestProbeTailLogicalBoundary(t *testing.T) {
 	u := probeTailReader(proc)
 	u.tblcfg.ProbeTailBarLogical = 1
 	u.tailSearchedBuildTS = 2000
-	_, err := u.emitProbeTail(mp, pkScoreBatch())
+	_, err := u.emitProbeTail(mp, pkScoreBatch(mp))
 	require.NoError(t, err)
 	require.Contains(t, *sql, "table_changes")
 	require.Contains(t, *sql, "'2000-0'")
@@ -580,7 +579,7 @@ func TestProbeTailFallbacks(t *testing.T) {
 			sql := captureTailSQL(t, mp)
 			u := probeTailReader(proc)
 			tc.edit(u)
-			_, err := u.emitProbeTail(mp, pkScoreBatch())
+			_, err := u.emitProbeTail(mp, pkScoreBatch(mp))
 			require.NoError(t, err)
 			require.Equal(t, fallback, *sql)
 		})
@@ -596,7 +595,7 @@ func TestProbeTailRequiresSourceAndKey(t *testing.T) {
 	proc := testutil.NewProc(t)
 	u := probeTailReader(proc)
 	u.tblcfg.PKey = ""
-	_, err := u.emitProbeTail(proc.Mp(), pkScoreBatch())
+	_, err := u.emitProbeTail(proc.Mp(), pkScoreBatch(proc.Mp()))
 	require.ErrorContains(t, err, "requires source table and pk")
 }
 
@@ -611,7 +610,7 @@ func TestProbeTailStreamError(t *testing.T) {
 		return executor.Result{}, moerr.NewInternalErrorNoCtx("tail failed")
 	}
 	u := probeTailReader(proc)
-	_, err := u.emitProbeTail(mp, pkScoreBatch())
+	_, err := u.emitProbeTail(mp, pkScoreBatch(mp))
 	require.ErrorContains(t, err, "tail failed")
 }
 

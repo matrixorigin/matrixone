@@ -93,13 +93,15 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 			offset.ctr.buf.CleanOnlyData()
 		}
 		if offset.ctr.seen+uint64(length) > offset.ctr.offset {
-			sels := newSels(int64(offset.ctr.offset-offset.ctr.seen), int64(length)-int64(offset.ctr.offset-offset.ctr.seen), proc)
+			offset.ctr.sels = appendRowRange(offset.ctr.sels[:0], int64(offset.ctr.offset-offset.ctr.seen), int64(length)-int64(offset.ctr.offset-offset.ctr.seen))
 			offset.ctr.buf, err = offset.ctr.buf.AppendWithCopy(proc.Ctx, proc.GetMPool(), input.Batch)
 			if err != nil {
 				return vm.CancelResult, err
 			}
-			offset.ctr.buf.Shrink(sels, false)
-			vector.PutSels(sels)
+			err = offset.ctr.buf.Shrink(offset.ctr.sels, false, proc.Mp())
+			if err != nil {
+				return vm.CancelResult, err
+			}
 			offset.ctr.seen += uint64(length)
 
 			return vm.CallResult{Batch: offset.ctr.buf, Status: vm.ExecNext}, nil
@@ -108,10 +110,10 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func newSels(start, count int64, proc *process.Process) []int64 {
-	sels := vector.GetSels()
+// appendRowRange appends the count row numbers starting at start.
+func appendRowRange(sels []int64, start, count int64) []int64 {
 	for i := int64(0); i < count; i++ {
 		sels = append(sels, start+i)
 	}
-	return sels[:count]
+	return sels
 }

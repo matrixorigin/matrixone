@@ -1,0 +1,87 @@
+drop database if exists select_lock_priv;
+drop user if exists select_lock_reader;
+drop role if exists select_lock_role;
+drop role if exists select_lock_write_role;
+create database select_lock_priv;
+create table select_lock_priv.t1(id int primary key, v int);
+create table select_lock_priv.t2(id int primary key, v int);
+insert into select_lock_priv.t1 values(1, 10);
+insert into select_lock_priv.t2 values(1, 20);
+set @old_view_security_type = @@view_security_type;
+set view_security_type = 'INVOKER';
+create view select_lock_priv.v1 as select * from select_lock_priv.t1;
+set view_security_type = @old_view_security_type;
+create user select_lock_reader identified by '123456';
+create role select_lock_role;
+create role select_lock_write_role;
+grant select_lock_write_role to select_lock_role;
+grant select on table select_lock_priv.* to select_lock_role;
+grant select on view select_lock_priv.v1 to select_lock_role;
+grant select_lock_role to select_lock_reader;
+select id from select_lock_priv.t1;
+➤ id[4,32,0]  𝄀
+1
+select id from select_lock_priv.t1 for share;
+➤ id[4,32,0]  𝄀
+1
+select id from select_lock_priv.t1 lock in share mode;
+➤ id[4,32,0]  𝄀
+1
+begin;
+select id from select_lock_priv.t1 for update;
+internal error: do not have privilege to execute the statement
+begin;
+select id from select_lock_priv.t1 for update nowait;
+➤ id[4,32,0]  𝄀
+1
+rollback;
+rollback;
+select id from select_lock_priv.t1 where 1=0 for update;
+internal error: do not have privilege to execute the statement
+select id from select_lock_priv.t1 for update nowait;
+internal error: do not have privilege to execute the statement
+select id from select_lock_priv.t1 where id in (select id from select_lock_priv.t2 for update);
+internal error: do not have privilege to execute the statement
+select id from (select id from select_lock_priv.t1 for update) d;
+internal error: do not have privilege to execute the statement
+with d as (select id from select_lock_priv.t1 for update) select id from d;
+internal error: do not have privilege to execute the statement
+select id from select_lock_priv.v1 for update;
+internal error: do not have privilege to execute the statement
+grant update on table select_lock_priv.t1 to select_lock_write_role;
+select id from select_lock_priv.t1 for update;
+➤ id[4,32,0]  𝄀
+1
+select id from select_lock_priv.t1 where id in (select id from select_lock_priv.t2) for update;
+➤ id[4,32,0]  𝄀
+1
+select id from select_lock_priv.t1 where id in (select id from select_lock_priv.t2 for update);
+internal error: do not have privilege to execute the statement
+select t1.id from select_lock_priv.t1 join select_lock_priv.t2 on t1.id=t2.id for update;
+internal error: do not have privilege to execute the statement
+prepare lock_stmt from 'select id from select_lock_priv.t1 for update';
+execute lock_stmt;
+➤ id[4,32,0]  𝄀
+1
+revoke update on table select_lock_priv.t1 from select_lock_write_role;
+execute lock_stmt;
+internal error: do not have privilege to execute the statement
+grant delete on table select_lock_priv.t1 to select_lock_write_role;
+grant update on table select_lock_priv.t2 to select_lock_write_role;
+execute lock_stmt;
+➤ id[4,32,0]  𝄀
+1
+select t1.id from select_lock_priv.t1 join select_lock_priv.t2 on t1.id=t2.id for update;
+➤ id[4,32,0]  𝄀
+1
+select id from select_lock_priv.v1 for update;
+internal error: do not have privilege to execute the statement
+grant update on view select_lock_priv.v1 to select_lock_role;
+select id from select_lock_priv.v1 for update;
+➤ id[4,32,0]  𝄀
+1
+deallocate prepare lock_stmt;
+drop user select_lock_reader;
+drop role select_lock_role;
+drop role select_lock_write_role;
+drop database select_lock_priv;

@@ -1,0 +1,38 @@
+drop database if exists external_31232_meta;
+create database external_31232_meta;
+use external_31232_meta;
+drop table if exists e31232_ctrl;
+create external table e31232_ctrl(id int, s varchar(20), flag int) infile{'filepath'='$resources/load_data/issue_31232_inline_set.csv','format'='csv'} fields terminated by ',' set flag=nullif(flag,0);
+show create table e31232_ctrl;
+➤ Table[12,11,0]  ¦  Create Table[12,257,0]  𝄀
+e31232_ctrl  ¦  CREATE EXTERNAL TABLE `e31232_ctrl` (
+  `id` int DEFAULT NULL,
+  `s` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `flag` int DEFAULT NULL
+) INFILE{'FILEPATH'='$resources/load_data/issue_31232_inline_set.csv','FORMAT'='csv'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
+select id, s, ifnull(flag,'N') as flag_isnull from e31232_ctrl order by id;
+➤ id[4,32,0]  ¦  s[12,20,0]  ¦  flag_isnull[12,11,0]  𝄀
+1  ¦  alpha  ¦  N  𝄀
+2  ¦  beta  ¦  7
+drop table if exists e31232_ctrl;
+drop table if exists e31232_rowvar;
+create external table e31232_rowvar(id int, s varchar(20), flag int) infile{'filepath'='$resources/load_data/issue_31232_inline_set.csv','format'='csv'} fields terminated by ',' set flag=nullif(@v,'sentinel');
+show create table e31232_rowvar;
+➤ Table[12,13,0]  ¦  Create Table[12,259,0]  𝄀
+e31232_rowvar  ¦  CREATE EXTERNAL TABLE `e31232_rowvar` (
+  `id` int DEFAULT NULL,
+  `s` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `flag` int DEFAULT NULL
+) INFILE{'FILEPATH'='$resources/load_data/issue_31232_inline_set.csv','FORMAT'='csv'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
+select id, s, flag from e31232_rowvar order by id;
+➤ id[4,32,0]  ¦  s[12,20,0]  ¦  flag[4,32,0]  𝄀
+1  ¦  alpha  ¦  0  𝄀
+2  ¦  beta  ¦  7
+drop table if exists e31232_rowvar;
+select count(*) as residue from information_schema.tables where table_schema='external_31232_meta' and table_name like 'e31232%';
+➤ residue[-5,64,0]  𝄀
+0
+drop database external_31232_meta;
+select 'metadata_probe_done' as done_marker;
+➤ done_marker[12,19,0]  𝄀
+metadata_probe_done

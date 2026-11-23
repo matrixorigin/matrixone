@@ -83,7 +83,7 @@ import re
 from .._sql_literals import string_grammar_token
 from typing import TYPE_CHECKING, Any, List, Optional
 
-from sqlalchemy import Boolean
+from sqlalchemy import Float
 from sqlalchemy.sql import and_, or_, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.compiler import compiles
@@ -713,7 +713,7 @@ class FulltextQueryBuilder:
 
         # Add additional WHERE conditions
         if where_conditions:
-            where_parts.extend(where_conditions)
+            where_parts.extend(f"({condition})" for condition in where_conditions)
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
@@ -844,7 +844,9 @@ class FulltextFilter(ColumnElement):
         self.mode = mode
         self.query_builder = FulltextQueryBuilder()
         self._natural_query = None  # Store natural language query separately
-        self.type = Boolean()
+        # MATCH returns a relevance score, including when used as a predicate.
+        # Boolean result processing would collapse every nonzero score to True.
+        self.type = Float()
 
     def __bool__(self):
         """
@@ -1641,7 +1643,7 @@ class FulltextSearchBuilder:
         where_parts.append(fulltext_condition)
 
         # Add additional WHERE conditions
-        where_parts.extend(self._where_conditions)
+        where_parts.extend(f"({condition})" for condition in self._where_conditions)
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 

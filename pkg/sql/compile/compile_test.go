@@ -54,7 +54,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -66,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	orderop "github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	partitionop "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
@@ -86,7 +86,7 @@ import (
 func TestBroadcastJoinUsesHashAfterPreparedDiagnosticProof(t *testing.T) {
 	ctx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
@@ -308,6 +308,37 @@ func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
 	require.Equal(t, []*plan.Expr{stable}, filters)
 }
 
+func TestAppendTemporalStorageHintsKeepsRowFilterIndependent(t *testing.T) {
+	row := plan2.MakePlan2Int64ConstExprWithType(1)
+	unrelated := plan2.MakePlan2Int64ConstExprWithType(2)
+	helper := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
+		Obj: function.EncodeOverloadID(function.TEMPORAL_DATETIME_BOUND, 0), ObjName: "__mo_temporal_datetime_bound",
+	}, Args: []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(false)}}}}
+	helper.CandidateFilter = true
+	unmarked := plan2.DeepCopyExpr(helper)
+	unmarked.CandidateFilter = false
+	storage := make([]*plan.Expr, 1, 2)
+	storage[0] = row
+	result := appendCandidateStorageHints(storage, []*plan.Expr{unrelated, unmarked, helper})
+	require.Equal(t, []*plan.Expr{row, helper}, result)
+	require.Nil(t, storage[:2][1])
+	require.Equal(t, []*plan.Expr{row}, appendCandidateStorageHints(storage, nil))
+	staticHint := plan2.MakePlan2Int64ConstExprWithType(3)
+	staticHint.CandidateFilter = true
+	require.Equal(t, []*plan.Expr{row, staticHint}, appendCandidateStorageHints(storage, []*plan.Expr{staticHint}),
+		"a proved hint does not require a runtime-only function")
+	copy := plan2.DeepCopyExpr(helper)
+	copy.Selectivity = 0.25
+	copy.Ndv = 17
+	copy.GetF().Args[0].Selectivity = 0.7
+	require.Equal(t, []*plan.Expr{row, copy}, appendCandidateStorageHints([]*plan.Expr{row, copy}, []*plan.Expr{helper}),
+		"statistics differences must not forward the same candidate twice")
+	different := plan2.DeepCopyExpr(helper)
+	different.GetF().Args = []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(true)}
+	require.Len(t, appendCandidateStorageHints([]*plan.Expr{row, different}, []*plan.Expr{helper}), 3,
+		"different values must not be deduplicated")
+}
+
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -323,7 +354,6 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 			proc := testutil.NewProcess(t)
 			proc.Base.SessionInfo.ApplySQLSelectLimit = true
-			proc.GetSessionInfo().Buf = buffer.New()
 			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 				if name == plan2.SQLSelectLimitVariable {
 					return ^uint64(0), nil
@@ -334,7 +364,7 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			compilerCtx.SetContext(ctx)
 			stmts, err := mysql.Parse(ctx, "select ?", 1)
 			require.NoError(t, err)
-			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], true)
+			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], true, nil)
 			require.NoError(t, err)
 			pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}, IsPrepare: true}
 			_, _, err = plan2.ResetPreparePlan(compilerCtx, pn)
@@ -351,7 +381,7 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			proc.ReplaceTopCtx(ctx)
 
 			want := []byte{'A', 'B', 0, 0}
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, want, false, proc.Mp()))
 			proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
 
@@ -361,7 +391,12 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 					return nil
 				}
 				require.Len(t, bat.Vecs, 1)
-				require.True(t, bat.Vecs[0].GetIsBin(), "binary semantics were lost on evaluation %d", evaluations+1)
+				// Vectors carry no binary flag; the consumer derives it from the
+				// final projection and the execution's parameter metadata.
+				query := pn.GetQuery()
+				isBin, err := colexec.ExprIsBinLiteral(proc, query.Nodes[query.Steps[query.MainOutputStep()]].ProjectList[0])
+				require.NoError(t, err)
+				require.True(t, isBin, "binary semantics were lost on evaluation %d", evaluations+1)
 				require.Equal(t, want, bat.Vecs[0].GetBytesAt(0))
 				evaluations++
 				if evaluations <= 2 {
@@ -390,7 +425,6 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			}
 			c.Release()
 			proc.Free()
-			proc.GetSessionInfo().Buf.Free()
 
 		})
 	}
@@ -400,10 +434,8 @@ func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
 	proc.Base.SessionInfo.ApplySQLSelectLimit = true
-	proc.GetSessionInfo().Buf = buffer.New()
 	t.Cleanup(func() {
 		proc.Free()
-		proc.GetSessionInfo().Buf.Free()
 	})
 	limitValue := uint64(1)
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
@@ -418,7 +450,7 @@ func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
 	const sql = "select 1 union all select 2"
 	stmts, err := mysql.Parse(ctx, sql, 1)
 	require.NoError(t, err)
-	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
 	require.NoError(t, err)
 	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 
@@ -511,10 +543,8 @@ func TestSQLSelectLimitOperatorSelection(t *testing.T) {
 			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 			proc := testutil.NewProcess(t)
 			proc.Base.SessionInfo.ApplySQLSelectLimit = true
-			proc.GetSessionInfo().Buf = buffer.New()
 			t.Cleanup(func() {
 				proc.Free()
-				proc.GetSessionInfo().Buf.Free()
 			})
 			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 				if name == plan2.SQLSelectLimitVariable {
@@ -528,7 +558,7 @@ func TestSQLSelectLimitOperatorSelection(t *testing.T) {
 			const sql = "select 1 union all select 2"
 			stmts, err := mysql.Parse(ctx, sql, 1)
 			require.NoError(t, err)
-			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
 			require.NoError(t, err)
 			pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 
@@ -970,7 +1000,6 @@ func TestResultWriterCapturesExecutionGeneration(t *testing.T) {
 func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().Buf = buffer.New()
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		if name == plan2.SQLSelectLimitVariable {
 			return ^uint64(0), nil
@@ -981,7 +1010,7 @@ func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 	compilerCtx.SetContext(ctx)
 	stmts, err := mysql.Parse(ctx, "select 1", 1)
 	require.NoError(t, err)
-	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
 	require.NoError(t, err)
 	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 
@@ -1026,7 +1055,6 @@ func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 
 	c.Release()
 	proc.Free()
-	proc.GetSessionInfo().Buf.Free()
 }
 
 func TestApplyExecutorLockWaitTimeout(t *testing.T) {
@@ -2597,7 +2625,6 @@ func TestLockMeta_doLock(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = context.Background()
 	eng := mock_frontend.NewMockEngine(ctrl)
 
@@ -2647,7 +2674,7 @@ func TestCompileClearReleasesLockMetaBeforeProcess(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	c := allocateNewCompile(proc)
 	c.lockMeta = NewLockMeta()
-	c.lockMeta.lockMetaVecs = []*vector.Vector{vector.NewVec(types.T_uint32.ToType())}
+	c.lockMeta.lockMetaVecs = []*vector.Vector{vector.NewVec(types.T_uint32.ToType(), proc.Mp())}
 
 	require.NotPanics(t, c.clear)
 	require.Nil(t, c.proc)
@@ -2700,12 +2727,16 @@ func TestCompilePreparedApproxPercentilePreflightsBeforeChildScope(t *testing.T)
 			nodes := []*plan.Node{child, aggregate}
 
 			compileWithParam := func(param []byte, isNull bool) ([]*Scope, error) {
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), c.proc.Mp())
 				require.NoError(t, vector.AppendBytes(params, param, isNull, c.proc.Mp()))
 				c.proc.SetPrepareParams(params)
 				baseline := c.proc.Mp().CurrNB()
 				scopes, compileErr := c.compilePlanScope(0, 1, nodes)
-				require.Equal(t, baseline, c.proc.Mp().CurrNB())
+				if compileErr != nil {
+					// A rejected compile owns nothing; a compiled scope retains
+					// its value-scan batch until ReleaseScopes.
+					require.Equal(t, baseline, c.proc.Mp().CurrNB())
+				}
 				c.proc.SetPrepareParams(nil)
 				params.Free(c.proc.Mp())
 				return scopes, compileErr
@@ -3521,6 +3552,33 @@ func TestCompileShuffleJoinKeepsReusableLocalShuffle(t *testing.T) {
 		"reusing an existing probe partition must keep the single local fast path")
 }
 
+func TestCompileRecursiveProbeJoinUsesUnshuffledBroadcast(t *testing.T) {
+	nodes := engine.Nodes{
+		{Addr: "cn1:6001", Mcpu: 1},
+		{Addr: "cn2:6001", Mcpu: 1},
+	}
+	c := newCompileForShuffleJoinTest(t, nodes)
+	c.execType = plan2.ExecTypeAP_MULTICN
+
+	node := newShuffleJoinTestNode(1)
+	node.Stats.HashmapStats.Shuffle = false
+	node.Stats.HashmapStats.ShuffleColIdx = -1
+	left := &plan.Node{Stats: &plan.Stats{Outcnt: 10}}
+	right := &plan.Node{Stats: &plan.Stats{Outcnt: 20}}
+
+	probe := newShuffleJoinTestScope(t, nodes[0], 1)
+	probe.setRootOperator(mergerecursive.NewArgument())
+	build := newShuffleJoinTestScope(t, nodes[1], 1)
+
+	result := c.compileJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+	t.Cleanup(func() { ReleaseScopes(result) })
+
+	require.Len(t, result, 1)
+	require.Same(t, probe, result[0], "broadcast join keeps the recursive probe scope")
+	require.True(t, scopesContainOperator(result, vm.MergeRecursive))
+	require.False(t, scopesContainOperator(result, vm.Shuffle))
+}
+
 func TestCompileLocalShuffleJoinOnlySkipsProvenProbeShuffle(t *testing.T) {
 	const dop = int32(4)
 	tests := []struct {
@@ -4108,7 +4166,7 @@ func (c *distinctPreAggregationCompilerContext) GetStatsCache() *plan2.StatsCach
 func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 	base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 	base.SetContext(context.Background())
-	_, tableDef, err := base.Resolve("tpch", "lineitem", nil)
+	_, tableDef, err := base.Resolve("tpch", "lineitem", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, tableDef)
 
@@ -4143,7 +4201,7 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 			stats.NdvMap["l_orderkey"] = tc.ndv
 			statements, err := mysql.Parse(context.Background(), tc.sql, 1)
 			require.NoError(t, err)
-			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(statements[0], false)
+			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(statements[0], false, nil)
 			require.NoError(t, err)
 			plan2.CalcQueryDOP(&plan.Plan{Plan: &plan.Plan_Query{Query: query}}, 4, 1, plan2.ExecTypeAP_ONECN)
 			for _, parent := range query.Nodes {

@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -46,7 +47,7 @@ func TestParquetNestedProjectionPrunesUnprojectedColumns(t *testing.T) {
 
 	require.Equal(t, [][]string{{"z_nested", "v"}}, r.h.rowReader.Schema().Columns())
 
-	bat := vectorBatch([]types.Type{types.T_text.ToType()})
+	bat := vectorBatch([]types.Type{types.T_text.ToType()}, proc.Mp())
 	defer bat.Clean(proc.Mp())
 	finished, err := r.ReadBatch(context.Background(), bat, proc, nil)
 	require.NoError(t, err)
@@ -76,7 +77,7 @@ func TestParquetNestedAndScalarProjectionPrunesOtherColumns(t *testing.T) {
 		require.Nil(t, pages)
 	}
 
-	bat := vectorBatch([]types.Type{types.T_int32.ToType(), types.T_text.ToType()})
+	bat := vectorBatch([]types.Type{types.T_int32.ToType(), types.T_text.ToType()}, proc.Mp())
 	defer bat.Clean(proc.Mp())
 	finished, err := r.ReadBatch(context.Background(), bat, proc, nil)
 	require.NoError(t, err)
@@ -106,7 +107,7 @@ func BenchmarkParquetProjectedNestedColumn(b *testing.B) {
 					b.Fatal("projected parquet benchmark file is empty")
 				}
 
-				bat := vectorBatch([]types.Type{types.T_text.ToType()})
+				bat := vectorBatch([]types.Type{types.T_text.ToType()}, proc.Mp())
 				finished, err := r.ReadBatch(context.Background(), bat, proc, nil)
 				if err != nil {
 					b.Fatal(err)
@@ -192,7 +193,7 @@ func BenchmarkParquetWideMixedNestedProjection(b *testing.B) {
 				pageCols += int64(len(h.dataColIndices))
 
 				for !h.isFinished() {
-					bat := wideMixedNestedBatch()
+					bat := wideMixedNestedBatch(proc.Mp())
 					h.batchCnt = 1024
 					if err := h.getData(bat, param, proc); err != nil {
 						bat.Clean(proc.Mp())
@@ -362,13 +363,13 @@ func writeWideMixedNestedParquet(tb testing.TB, rowCount int) []byte {
 	return buf.Bytes()
 }
 
-func wideMixedNestedBatch() *batch.Batch {
+func wideMixedNestedBatch(mp *mpool.MPool) *batch.Batch {
 	columns := wideMixedNestedColumns()
 	typesList := make([]types.Type, len(columns))
 	for i, column := range columns {
 		typesList[i] = types.New(column.target, column.width, 0)
 	}
-	return vectorBatch(typesList)
+	return vectorBatch(typesList, mp)
 }
 
 func writeNestedProjectionParquet(tb testing.TB, rowCount, unprojectedColumns int) []byte {

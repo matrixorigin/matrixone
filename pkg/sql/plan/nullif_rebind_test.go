@@ -77,7 +77,7 @@ func TestExternalNullMapSurvivesPlanRebuild(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	for pass := range 20 {
-		built, err := BuildPlan(&mock.ctxt, stmt, false)
+		built, err := BuildPlan(&mock.ctxt, stmt, false, nil)
 		require.NoError(t, err)
 		var stored tree.ExternParam
 		var raw string

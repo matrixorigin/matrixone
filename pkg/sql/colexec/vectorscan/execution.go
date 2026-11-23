@@ -17,6 +17,7 @@
 package vectorscan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -142,7 +143,7 @@ func foldScalarExpr(expr **plan.Expr, proc *process.Process) error {
 	if vec == nil || vec.Length() == 0 {
 		return nil
 	}
-	lit := rule.GetConstantValue(vec, true, 0)
+	lit := rule.GetConstantValue(vec, true, 0, rule.ExprStringSource(*expr, proc))
 	if lit == nil {
 		return nil
 	}
@@ -210,7 +211,7 @@ func (b *Execution) RequestAt(row int, identity searchplugin.ScanIdentity) (req 
 		if vec.IsConst() {
 			at = 0
 		}
-		lit := rule.GetConstantValue(vec, true, at)
+		lit := rule.GetConstantValue(vec, true, at, rule.ExprStringSource(b.spec.AlgoExprs[i], nil))
 		if lit == nil {
 			return searchplugin.Request{}, false, moerr.NewInvalidInputNoCtxf(
 				"vector index algorithm expression %s did not evaluate to a constant", b.spec.AlgoExprNames[i])
@@ -286,7 +287,7 @@ func Identity(
 func RequestFromScalar(
 	spec *plan.IndexSearchScan,
 	identity searchplugin.ScanIdentity,
-	membership []byte,
+	membership *keycodec.KeyPayload,
 	hasMembership bool,
 	membershipRequired bool,
 ) (req searchplugin.Request, ok bool, err error) {
@@ -323,7 +324,7 @@ func RequestFromScalar(
 	req = requestForValues(spec, payload, spec.QueryPayload.Typ, limit, identity)
 	req.QueryIsNull = queryLit.Isnull
 	req.CollectExplainDiagnostics = true
-	req.MembershipFilter = append([]byte(nil), membership...)
+	req.MembershipFilter = membership
 	req.HasMembershipFilter = hasMembership
 	req.MembershipFilterRequired = membershipRequired
 	if len(spec.AlgoExprs) != len(spec.AlgoExprNames) {

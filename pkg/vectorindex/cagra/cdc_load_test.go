@@ -17,7 +17,6 @@
 package cagra
 
 import (
-	"context"
 	"os"
 	"strings"
 	"testing"
@@ -40,8 +39,8 @@ import (
 // loadCdcEventsFromDB expects.
 func makeCdcChunkBatch(proc *process.Process, chunks []cuvscdc.EventChunk) *batch.Batch {
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0))
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0), proc.Mp())
 	for _, ch := range chunks {
 		vector.AppendFixed[int64](bat.Vecs[0], ch.ChunkId, false, proc.Mp())
 		vector.AppendBytes(bat.Vecs[1], ch.Data, false, proc.Mp())
@@ -236,12 +235,7 @@ func TestLoadIndex_WithCdcDeltas(t *testing.T) {
 
 	// Inject mocks. Streaming returns the model tar; runSql dispatches on
 	// the SQL's tag.
-	origStream := runSql_streaming
-	runSql_streaming = func(ctx context.Context, sqlproc *sqlexec.SqlProcess, sql string, ch chan executor.Result, errChan chan error) (executor.Result, error) {
-		ch <- executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc, tarPath)}}
-		return executor.Result{}, nil
-	}
-	defer func() { runSql_streaming = origStream }()
+	swapIndexFiles(t).putFile(t, "cdc-deltas", tarPath)
 
 	origRunSql := runSql
 	runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {

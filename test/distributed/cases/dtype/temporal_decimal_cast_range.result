@@ -1,0 +1,45 @@
+select cast(cast('2024-01-02 03:04:05' as datetime) as decimal(12,2)) as datetime_clamped,
+cast(cast('2024-01-02' as date) as decimal(6,2)) as date_clamped,
+cast(cast('12:34:56' as time) as decimal(5,1)) as time_clamped;
+➤ datetime_clamped[3,12,2]  ¦  date_clamped[3,6,2]  ¦  time_clamped[3,5,1]  𝄀
+9999999999.99  ¦  9999.99  ¦  9999.9
+select cast(cast('-12:34:56' as time) as decimal(5,1)) as negative_time_clamped,
+cast(cast('12:34:56' as time) as decimal(6,2)) as time_final_scale_clamped,
+cast(cast('12:34:56.123456' as time(6)) as decimal(8,2)) as time_final_scale_fits;
+➤ negative_time_clamped[3,5,1]  ¦  time_final_scale_clamped[3,6,2]  ¦  time_final_scale_fits[3,8,2]  𝄀
+-9999.9  ¦  9999.99  ¦  123456.12
+select cast(cast('00:00:09.999999' as time(6)) as decimal(3,2)) as rounded_time_clamped,
+cast(cast('-00:00:09.999999' as time(6)) as decimal(3,2)) as rounded_negative_time_clamped,
+cast(cast('00:00:09.990000' as time(6)) as decimal(3,2)) as time_boundary;
+➤ rounded_time_clamped[3,3,2]  ¦  rounded_negative_time_clamped[3,3,2]  ¦  time_boundary[3,3,2]  𝄀
+9.99  ¦  -9.99  ¦  9.99
+select cast(cast('2024-01-02 03:04:05.123456' as datetime(6)) as decimal(20,2)) as datetime_wide,
+cast(cast('-12:34:56.123456' as time(6)) as decimal(20,6)) as negative_time_wide;
+➤ datetime_wide[3,20,2]  ¦  negative_time_wide[3,20,6]  𝄀
+20240102030405.12  ¦  -123456.123456
+set @temporal_decimal_saved_time_zone = @@session.time_zone;
+set time_zone = '+00:00';
+drop table if exists temporal_decimal_cast_range_t;
+create table temporal_decimal_cast_range_t(id int, d date, dt datetime(6), tm time(6), ts timestamp(6));
+insert into temporal_decimal_cast_range_t values
+(1, '2024-01-02', '2024-01-02 03:04:05.123456', '-12:34:56.123456', '2024-01-02 03:04:05.123456'),
+(2, null, null, null, null);
+select id, cast(d as decimal(6,2)) as d64, cast(dt as decimal(12,2)) as dt64,
+cast(tm as decimal(5,1)) as tm64, cast(ts as decimal(12,2)) as ts64
+from temporal_decimal_cast_range_t order by id;
+➤ id[4,32,0]  ¦  d64[3,6,2]  ¦  dt64[3,12,2]  ¦  tm64[3,5,1]  ¦  ts64[3,12,2]  𝄀
+1  ¦  9999.99  ¦  9999999999.99  ¦  -9999.9  ¦  9999999999.99  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null
+select id, cast(d as decimal(20,16)) as d128, cast(dt as decimal(20,16)) as dt128,
+cast(tm as decimal(20,16)) as tm128, cast(ts as decimal(20,16)) as ts128
+from temporal_decimal_cast_range_t order by id;
+➤ id[4,32,0]  ¦  d128[3,20,16]  ¦  dt128[3,20,16]  ¦  tm128[3,20,16]  ¦  ts128[3,20,16]  𝄀
+1  ¦  9999.9999999999999999  ¦  9999.9999999999999999  ¦  -9999.9999999999999999  ¦  9999.9999999999999999  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null
+set time_zone = '+08:00';
+select cast(ts as decimal(20,6)) as timestamp_session_zone
+from temporal_decimal_cast_range_t where id = 1;
+➤ timestamp_session_zone[3,20,6]  𝄀
+20240102110405.123456
+drop table temporal_decimal_cast_range_t;
+set time_zone = @temporal_decimal_saved_time_zone;

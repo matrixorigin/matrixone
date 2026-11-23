@@ -15,10 +15,13 @@
 package iceberg
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/parquet-go/parquet-go"
 
 	"github.com/stretchr/testify/require"
 
@@ -122,6 +125,7 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 
 	rawMeta := []byte(`{
 		"format-version": 2,
+		"properties": {"write.parquet.compression-codec": "uncompressed"},
 		"table-uuid": "gold-kpi-uuid",
 		"location": "s3://warehouse/writer/gold_kpi",
 		"last-sequence-number": 44,
@@ -265,6 +269,14 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 	require.Equal(t, int64(45), entries[0].SnapshotID)
 	require.Equal(t, int64(2), entries[0].DataFile.RecordCount)
 	require.True(t, strings.HasPrefix(entries[0].DataFile.FilePath, tableLocation+"/data/mo-append/"))
+	data := readAppendRuntimeMemoryFile(t, ctx, fs, entries[0].DataFile.FilePath)
+	file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+	for _, group := range file.Metadata().RowGroups {
+		for _, col := range group.Columns {
+			require.Equal(t, "UNCOMPRESSED", col.MetaData.Codec.String())
+		}
+	}
 }
 
 func TestWriteRuntimeCoordinatorFactoryDispatchesAppendAndDML(t *testing.T) {
@@ -300,9 +312,9 @@ func TestWriteRuntimeCoordinatorFactoryDispatchesAppendAndDML(t *testing.T) {
 func TestAppendRuntimeVisibleBatchFiltersExtraNamedColumns(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id", "__mo_rowid", "region"})
-	idVec := vector.NewVec(types.T_int64.ToType())
-	hiddenVec := vector.NewVec(types.T_int64.ToType())
-	regionVec := vector.NewVec(types.T_varchar.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
+	hiddenVec := vector.NewVec(types.T_int64.ToType(), mp)
+	regionVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](idVec, 1, false, mp))
 	require.NoError(t, vector.AppendFixed[int64](hiddenVec, 99, false, mp))
 	require.NoError(t, vector.AppendBytes(regionVec, []byte("ksa"), false, mp))
@@ -357,9 +369,9 @@ func TestAppendRuntimeVisibleBatchFiltersExtraNamedColumns(t *testing.T) {
 func TestAppendRuntimeVisibleBatchPreservesCaseSensitiveNames(t *testing.T) {
 	bat := batch.New([]string{"ID", "hidden", "id"})
 	bat.Vecs = []*vector.Vector{
-		vector.NewVec(types.T_int64.ToType()),
-		vector.NewVec(types.T_int64.ToType()),
-		vector.NewVec(types.T_int64.ToType()),
+		vector.NewVec(types.T_int64.ToType(), mpool.MustNewZero()),
+		vector.NewVec(types.T_int64.ToType(), mpool.MustNewZero()),
+		vector.NewVec(types.T_int64.ToType(), mpool.MustNewZero()),
 	}
 	visible, err := appendRuntimeVisibleBatch([]string{"ID", "id"}, bat)
 	require.NoError(t, err)
@@ -705,9 +717,9 @@ func appendGoldKPIBatch(t *testing.T) (*batch.Batch, *mpool.MPool) {
 	t.Helper()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id", "region", "amount"})
-	idVec := vector.NewVec(types.T_int64.ToType())
-	regionVec := vector.NewVec(types.T_varchar.ToType())
-	amountVec := vector.NewVec(types.T_int64.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
+	regionVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	amountVec := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, row := range []struct {
 		id     int64
 		region string

@@ -83,8 +83,13 @@ func (c *simpleCAllocatorMmapCache) put(slice []byte) bool {
 		return false
 	}
 
+	// Avoid preparing pages that cannot be cached. The final locked check
+	// below still handles concurrent insertions and runtime limit changes.
+	c.mu.Lock()
 	capacity := c.capacity()
-	if size > capacity {
+	fits := size <= capacity && c.bytes <= capacity-size
+	c.mu.Unlock()
+	if !fits {
 		return false
 	}
 
@@ -106,14 +111,17 @@ func (c *simpleCAllocatorMmapCache) put(slice []byte) bool {
 	c.bytes += size
 	c.lastPut = time.Now()
 	c.updateGaugeLocked()
+	// An armed timer is not reset here: expire re-arms itself from lastPut, so
+	// the idle deadline is unchanged and the free path stays cheap. Only the
+	// goroutine that armed the timer, or its own callback, touches it; this
+	// also keeps a timer armed inside a testing/synctest bubble from being
+	// reset from outside it, which the runtime treats as a fatal error.
 	if c.timer == nil {
 		c.timerGeneration++
 		generation := c.timerGeneration
 		c.timer = time.AfterFunc(c.idle, func() {
 			c.expire(generation)
 		})
-	} else {
-		c.timer.Reset(c.idle)
 	}
 	return true
 }

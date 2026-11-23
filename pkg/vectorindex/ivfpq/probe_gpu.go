@@ -17,8 +17,7 @@
 package ivfpq
 
 import (
-	"unsafe"
-
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -73,5 +72,5 @@ func probeRowsFitting[B, Q cuvs.VectorType](idxcfg vectorindex.IndexConfig, devi
 	// card -- but that is not what is being sized here.)
 	return cuvs.IvfPqRowsFitting(
 		uint64(idxcfg.CuvsIvfpq.Dimensions), uint64(bp.M), uint64(bp.BitsPerCode),
-		uint64(unsafe.Sizeof(*new(Q))), devices, mode)
+		uint64(util.UnsafeSizeOf[Q]()), devices, mode)
 }

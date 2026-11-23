@@ -41,7 +41,7 @@ func (c *viewSchemaPublishedRootFixture) ResolveViewSchemaRoot(database, name st
 	if database != "sub" || c.GetQueryingSubscription() != nil {
 		return nil, nil, fmt.Errorf("entry root must resolve subscriber alias without inherited subscription")
 	}
-	obj, def, err := c.viewSchemaCompilerContext.Resolve("pub", name, snapshot)
+	obj, def, err := c.viewSchemaCompilerContext.Resolve("pub", name, snapshot, nil)
 	if err == nil && obj != nil {
 		obj = plan.DeepCopyObjectRef(obj)
 		obj.PubInfo = &pb.PubInfo{TenantId: 23}

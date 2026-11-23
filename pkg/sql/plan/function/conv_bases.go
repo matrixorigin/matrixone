@@ -35,6 +35,10 @@ func convTypeCheck(overloads []overload, inputs []types.Type) checkResult {
 	}
 	casts := []types.Type{inputs[0], inputs[1], inputs[2]}
 	changed := false
+	if inputs[0].Oid.IsLowPrecisionFloat() {
+		casts[0] = types.T_float32.ToType()
+		changed = true
+	}
 	for i := 1; i < 3; i++ {
 		switch {
 		case inputs[i].Oid == types.T_uint64, inputs[i].Oid == types.T_int64:

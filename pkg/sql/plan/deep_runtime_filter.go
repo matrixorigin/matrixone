@@ -36,6 +36,15 @@ func newDeepRuntimeFilterTree(query *planpb.Query, root int32) *deepRuntimeFilte
 		query.Correlation != nil || len(query.Params) != 0 || len(query.BackgroundQueries) != 0 {
 		return nil
 	}
+	return newRuntimeFilterTree(query, root, deepRuntimeFilterOrdinaryNode)
+}
+
+// newRuntimeFilterTree validates a single, unshared plan tree and its existing
+// runtime-filter dependencies. Callers define which node kinds they support.
+func newRuntimeFilterTree(query *planpb.Query, root int32, allowed func(*planpb.Node) bool) *deepRuntimeFilterTree {
+	if query == nil {
+		return nil
+	}
 	tree := &deepRuntimeFilterTree{query: query, enter: make(map[int32]int), leave: make(map[int32]int)}
 	var walk func(int32, int) bool
 	walk = func(id int32, depth int) bool {
@@ -46,7 +55,7 @@ func newDeepRuntimeFilterTree(query *planpb.Query, root int32) *deepRuntimeFilte
 			return false
 		}
 		node := query.Nodes[id]
-		if !deepRuntimeFilterOrdinaryNode(node) {
+		if !allowed(node) {
 			return false
 		}
 		tree.enter[id] = len(tree.order)
@@ -82,14 +91,7 @@ func deepRuntimeFilterOrdinaryNode(node *planpb.Node) bool {
 	default:
 		return false
 	}
-	if len(node.SourceStep) != 0 || node.RecursiveSink || node.RecursiveCte ||
-		node.ExtraOptions != "" || node.FilterIsBarrier || node.RankOption != nil ||
-		node.SampleFunc != nil || node.IndexReaderParam != nil || node.IndexSearchScan != nil ||
-		len(node.LockTargets) != 0 || len(node.RecvMsgList) != 0 ||
-		node.DedupJoinCtx != nil || node.ExternScan != nil || node.RowsetData != nil ||
-		node.InsertCtx != nil || node.DeleteCtx != nil || node.PreInsertCtx != nil ||
-		node.PreInsertUkCtx != nil || node.PreInsertSkCtx != nil || node.PostDmlCtx != nil ||
-		len(node.UpdateCtxList) != 0 || node.Fuzzymessage != nil {
+	if !runtimeFilterOrdinaryContext(node) || len(node.LockTargets) != 0 || len(node.UpdateCtxList) != 0 {
 		return false
 	}
 	for _, header := range node.SendMsgList {
@@ -97,6 +99,19 @@ func deepRuntimeFilterOrdinaryNode(node *planpb.Node) bool {
 			return false
 		}
 	}
+	return runtimeFilterExpressionsIndependent(node)
+}
+
+func runtimeFilterOrdinaryContext(node *planpb.Node) bool {
+	return len(node.SourceStep) == 0 && !node.RecursiveSink && !node.RecursiveCte &&
+		node.ExtraOptions == "" && !node.FilterIsBarrier && node.RankOption == nil &&
+		node.SampleFunc == nil && node.IndexReaderParam == nil && node.IndexSearchScan == nil &&
+		len(node.RecvMsgList) == 0 && node.DedupJoinCtx == nil && node.ExternScan == nil && node.RowsetData == nil &&
+		node.InsertCtx == nil && node.DeleteCtx == nil && node.PreInsertCtx == nil &&
+		node.PreInsertUkCtx == nil && node.PreInsertSkCtx == nil && node.PostDmlCtx == nil && node.Fuzzymessage == nil
+}
+
+func runtimeFilterExpressionsIndependent(node *planpb.Node) bool {
 	valid, remaining := true, 4096
 	stop := moerr.GetOkStopCurrRecur()
 	owner := *node

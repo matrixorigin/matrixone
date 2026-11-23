@@ -159,6 +159,12 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 		return types.BytesToArrayToString[float32](v.([]byte))
 	case types.T_array_float64:
 		return types.BytesToArrayToString[float64](v.([]byte))
+	case types.T_array_float8, types.T_array_float4:
+		text, err := types.BlockScaledToString(v.([]byte))
+		if err != nil {
+			return err.Error()
+		}
+		return text
 	case types.T_array_bf16:
 		return types.BytesToArrayToString[types.BF16](v.([]byte))
 	case types.T_array_float16:
@@ -334,7 +340,7 @@ func ApiBatchToString(apiBat *api.Batch, printN int) string {
 	if apiBat == nil {
 		return ""
 	}
-	bat, _ := batch.ProtoBatchToBatch(apiBat)
+	bat, _ := batch.ProtoBatchToBatch(apiBat, nil)
 	return MoBatchToString(bat, printN)
 }
 

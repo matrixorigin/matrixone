@@ -37,7 +37,7 @@ func BenchmarkScalarExistingRoutes(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				stmt, err := mysql.ParseOne(b.Context(), tc.sql, 1)
 				require.NoError(b, err)
-				p, err := BuildPlan(ctx, stmt, false)
+				p, err := BuildPlan(ctx, stmt, false, nil)
 				stmt.Free()
 				require.NoError(b, err)
 				require.Nil(b, p.GetQuery().Correlation)

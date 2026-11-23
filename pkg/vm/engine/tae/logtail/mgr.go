@@ -83,11 +83,12 @@ func (cb *callback) call(from, to timestamp.Timestamp, closeCB func(), tails ...
 // - Truncate unneceessary txn handles according to GC timestamp
 type Manager struct {
 	txnbase.NoopCommitListener
-	table      *TxnTable
-	rt         *dbutils.Runtime
-	truncateMu sync.RWMutex
-	truncated  types.TS
-	nowClock   func() types.TS // nowClock is from TxnManager
+	table              *TxnTable
+	rt                 *dbutils.Runtime
+	truncateMu         sync.RWMutex
+	truncated          types.TS
+	replayHistoryFloor types.TS
+	nowClock           func() types.TS // nowClock is from TxnManager
 
 	maxCommittedLSN atomic.Uint64
 
@@ -479,13 +480,34 @@ func (mgr *Manager) OnEndPrepareWAL(txn txnif.AsyncTxn) {
 	mgr.logtailQueue.Enqueue(txn)
 }
 
-// GetReader get a snapshot of all txn prepared between from and to.
+// GetReader returns a reader for transactions prepared between from and to.
+// See GetDirty for the conservative results after block compaction.
 func (mgr *Manager) GetReader(from, to types.TS) *Reader {
 	return &Reader{
 		from:  from,
 		to:    to,
 		table: mgr.table,
 	}
+}
+
+// SetReplayHistoryFloor records the prefix which WAL replay can skip.
+func (mgr *Manager) SetReplayHistoryFloor(ts types.TS) {
+	mgr.truncateMu.Lock()
+	defer mgr.truncateMu.Unlock()
+	if ts.GT(&mgr.replayHistoryFloor) {
+		mgr.replayHistoryFloor = ts
+	}
+}
+
+// GetDirtyHistoryFloor is the inclusive prefix the in-memory logtail alone
+// does not prove complete. GC advances its frontier before removing blocks.
+func (mgr *Manager) GetDirtyHistoryFloor() types.TS {
+	mgr.truncateMu.RLock()
+	defer mgr.truncateMu.RUnlock()
+	if mgr.replayHistoryFloor.GT(&mgr.truncated) {
+		return mgr.replayHistoryFloor
+	}
+	return mgr.truncated
 }
 
 func (mgr *Manager) GetTruncateTS() types.TS {

@@ -63,7 +63,9 @@ func (tbl *txnTable) pkUpsertPersistedBetween(
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	keys.InplaceSort()
+	if err := keys.InplaceSort(tbl.proc.Load().GetMPool()); err != nil {
+		return false, err
+	}
 	def := tbl.tableDef
 	pkDef := def.Cols[tbl.primaryIdx]
 	pkSeq := uint16(pkDef.Seqnum)
