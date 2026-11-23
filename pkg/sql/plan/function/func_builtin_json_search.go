@@ -66,6 +66,7 @@ func jsonSearchCheckFn(_ []overload, inputs []types.Type) checkResult {
 
 func jsonSearchCheckPreparedInputs(
 	inputs []*vector.Vector,
+	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
 	selectList *FunctionSelectList,
@@ -74,7 +75,11 @@ func jsonSearchCheckPreparedInputs(
 		if input == nil || selectList != nil && selectList.IgnoreAllRow() {
 			continue
 		}
-		preparedType := input.GetPrepareParamType()
+		invalidType := !jsonSearchTypeSupported(*input.GetType(), argument == 0)
+		binaryInput := isBinaryStringVector(input, result.ArgumentIsBin(argument))
+		if !invalidType && !binaryInput {
+			continue
+		}
 		for row := 0; row < length; row++ {
 			if selectList != nil && selectList.Contains(uint64(row)) {
 				continue
@@ -86,16 +91,10 @@ func jsonSearchCheckPreparedInputs(
 			if input.IsNull(uint64(physicalRow)) {
 				continue
 			}
-			if input.GetIsBinaryStringAt(physicalRow) {
+			if binaryInput {
 				return moerr.NewInvalidJSONCharset(proc.Ctx, "binary")
 			}
-			if preparedType != types.T_any && !jsonSearchTypeSupported(preparedType.ToType(), argument == 0) {
-				return moerr.NewInvalidArg(proc.Ctx, "json_search argument", argument+1)
-			}
-			if preparedType == types.T_any &&
-				input.GetPrepareParamKindAt(physicalRow) != vector.PrepareParamNone {
-				return moerr.NewInvalidArg(proc.Ctx, "json_search argument", argument+1)
-			}
+			return moerr.NewInvalidArg(proc.Ctx, "json_search argument", argument+1)
 		}
 	}
 	return nil
@@ -176,7 +175,7 @@ func JSONSearch(
 	if len(parameters) < 3 {
 		return moerr.NewWrongArguments(proc.Ctx, "json_search")
 	}
-	if err := jsonSearchCheckPreparedInputs(parameters, proc, length, selectList); err != nil {
+	if err := jsonSearchCheckPreparedInputs(parameters, result, proc, length, selectList); err != nil {
 		return err
 	}
 

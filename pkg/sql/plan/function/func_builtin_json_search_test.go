@@ -252,11 +252,9 @@ func TestJSONSearchPreparedDomainRejectsNonText(t *testing.T) {
 	mode, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("one"), 1, proc.Mp())
 	require.NoError(t, err)
 	defer mode.Free(proc.Mp())
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
-	require.NoError(t, vector.AppendBytes(input, []byte("1"), false, proc.Mp()))
-	input.SetPrepareParamKind(vector.PrepareParamInteger)
-	input.SetPrepareParamType(types.T_int64)
+	require.NoError(t, vector.AppendFixed(input, int64(1), false, proc.Mp()))
 
 	result := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
 	defer result.Free()
@@ -279,10 +277,9 @@ func TestJSONSearchPreparedTextAndBinaryProvenance(t *testing.T) {
 	require.NoError(t, err)
 	defer mode.Free(proc.Mp())
 
-	term := vector.NewVec(types.T_varchar.ToType())
+	term := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer term.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(term, []byte("x"), false, proc.Mp()))
-	term.SetPrepareParamType(types.T_varchar)
 
 	result := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
 	defer result.Free()
@@ -293,25 +290,25 @@ func TestJSONSearchPreparedTextAndBinaryProvenance(t *testing.T) {
 
 	term.ResetWithSameType()
 	require.NoError(t, vector.AppendBytes(term, []byte("x"), false, proc.Mp()))
-	term.SetIsBinaryString(true)
+	result.SetArgumentIsBin([]bool{false, false, true})
 	require.NoError(t, result.PreExtendAndReset(1))
 	require.Error(t, JSONSearch(
 		[]*vector.Vector{document, mode, term}, result, proc, 1, nil))
 
-	term.ResetWithSameType()
-	require.NoError(t, vector.AppendBytes(term, nil, true, proc.Mp()))
-	term.SetPrepareParamType(types.T_int64)
+	nullTerm := vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
+	defer nullTerm.Free(proc.Mp())
+	result.SetArgumentIsBin(nil)
 	require.NoError(t, result.PreExtendAndReset(1))
 	require.NoError(t, JSONSearch(
-		[]*vector.Vector{document, mode, term}, result, proc, 1, nil))
+		[]*vector.Vector{document, mode, nullTerm}, result, proc, 1, nil))
 	require.True(t, result.GetResultVector().IsNull(0))
 }
 
 func TestJSONSearchErrorDoesNotPoisonReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	document := vector.NewVec(types.T_varchar.ToType())
-	mode := vector.NewVec(types.T_varchar.ToType())
-	term := vector.NewVec(types.T_varchar.ToType())
+	document := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+	mode := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+	term := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer document.Free(proc.Mp())
 	defer mode.Free(proc.Mp())
 	defer term.Free(proc.Mp())
