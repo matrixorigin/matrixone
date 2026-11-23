@@ -113,7 +113,8 @@ deep tracing, not awareness of in-scope changes that can interact with it.
 5. **Audit evidence.** Check selection, mode, revision, terminal status, and
    relevant inputs. Reuse author/CI evidence that meets the shared rules.
    In self mode, produce missing proof. In external mode, run checks needed
-   to fill a gap or resolve a concrete uncertainty.
+   to fill a gap or resolve a concrete uncertainty. When the executable-probes
+   trigger applies, produce the probes it requires; its failing probes are findings.
 6. **Converge once.** Verify every candidate against source and full closure,
    discard speculation, respect recorded decisions, then return one ranked
    finding/fix-or-decision list and final decision. Do not request another broad

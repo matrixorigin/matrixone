@@ -109,6 +109,9 @@ Then execute (do not shortcut):
    one wrong call) and **§5** (developer decisions are authoritative; severity LAST,
    calibrated to the merge bar; decision-log every won't-fix/known-gap with its
    reason; no finding without a concrete failure).
+   When **G-PROBE** applies, also run the
+   [executable probes](../../../.agents/skills/mo-self-review/references/executable-probes.md)
+   method §1–§7 over the whole PR delta; its failing probes are findings.
 3. Present a converged, ranked findings list, each with a **fix-or-decision-log
    recommendation** — not another review round.
 
