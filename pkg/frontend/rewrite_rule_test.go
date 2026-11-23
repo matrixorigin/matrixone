@@ -722,11 +722,16 @@ func TestLoadRuleCacheUsesValidatedLaterRuleForIneligibleEarlierRule(t *testing.
 		{"nested aggregate on invalid literal without where", `select coalesce(max('docs\'notes'), '') as n from db1.t1`, "", right, false},
 		{"join with invalid on and no where", `select x.a from db1.t1 x join db1.t1 y on x.code=y.code and y.code='docs\'notes'`, "", right, false},
 		{"derived table with invalid inner where", `select s.a from (select a from db1.t1 where code='docs\'notes') s`, "", right, false},
-		{"scalar on invalid literal without where", `select length('docs\'notes') as n from db1.t1`, "", right, true},
+		{"different projections with equal item counts", `select length('docs\'notes') as note_len from db1.t1`, "", right, false},
+		{"different expressions with matching aliases", `select length('docs\'notes') as n from db1.t1`, "", `select a as n from db1.t1 where a=2`, false},
+		{"different sources with matching projection structure", `select length('docs\'notes') as n from db1.t2`, "", `select length('plain') as n from db1.t1 where a=2`, false},
+		{"different function with opaque argument", `select length('docs\'notes') as n from db1.t1`, "", `select lower('plain') as n from db1.t1 where a=2`, false},
+		{"different function arity with opaque argument", `select concat('docs\'notes', a) as n from db1.t1`, "", `select concat('plain') as n from db1.t1 where a=2`, false},
+		{"escaped table alias is not a different base table", `select length('docs\'notes') from db1.t1 as 't\tn'`, "", `select length('plain') from db1.t1 as 't\tn' where a=2`, true},
 		{"distinct with invalid projection and no where", `select distinct 'docs\'notes' as n from db1.t1`, "", right, false},
 		{"set operation with no outer where", left + " union all " + right, "", right, false},
 		{"invalid having and no where", `select a from db1.t1 group by a having code='docs\'notes'`, "", right, false},
-		{"invalid projection alone is not structural proof", `select 'docs\'notes' as n from db1.t1`, "", right, true},
+		{"unreadable projection literal is not a value comparison", `select 'docs\'notes' as n from db1.t1`, "", `select 'plain' as n from db1.t1 where a=2`, true},
 		{"ineligible later rule", left, "", right + " order by a", false},
 		{"different projection names", left, "", "select a as n from db1.t1 where a = 2", false},
 		{"unfiltered later rule absorbs invalid predicate", left, "", "select a from db1.t1", false},
@@ -755,6 +760,26 @@ func TestLoadRuleCacheUsesValidatedLaterRuleForIneligibleEarlierRule(t *testing.
 			require.NoError(t, err)
 			require.Equal(t, map[string]string{"db1.t1": tc.right}, rules)
 		})
+	}
+}
+
+func TestMergeRewriteRulesUnreadableProjectionKeepsOtherParserModes(t *testing.T) {
+	const mode = "ANSI,NO_BACKSLASH_ESCAPES"
+	const earlier = `select "a", length('docs\'notes') as n from db1.t1`
+	for _, tc := range []struct {
+		later   string
+		wantErr bool
+	}{
+		{`select a, length('ok') as n from db1.t1 where a=2`, true},    // "a" is a column, not a different projection
+		{`select 'a', length('ok') as n from db1.t1 where a=2`, false}, // the single-quoted string is not that column
+	} {
+		got, err := mergeRewriteRulesWithSQLMode(t.Context(), earlier, tc.later, mode)
+		if tc.wantErr {
+			require.ErrorContains(t, err, "failed to parse rewrite rule")
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, tc.later, got)
+		}
 	}
 }
 

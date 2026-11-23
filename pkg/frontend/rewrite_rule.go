@@ -1288,13 +1288,12 @@ func trimRewriteRuleForMerge(rule string) string {
 }
 
 type rewriteRuleMergeShape struct {
-	stmt        *tree.Select
-	clause      *tree.SelectClause
-	source      string // original or predicate-neutralized SQL for comparison only
-	selectItems int    // syntactic projection items, before any star expansion
-	table       string
-	unfiltered  bool
-	predicate   mysql.WhereSource
+	stmt       *tree.Select
+	clause     *tree.SelectClause
+	source     string // original or predicate-neutralized SQL for comparison only
+	table      string
+	unfiltered bool
+	predicate  mysql.WhereSource
 }
 
 // Rewrite rules from active roles are a source-row visibility union: if any
@@ -1380,15 +1379,21 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 func laterRewriteRuleDeterminesResult(ctx context.Context, left, right, sqlMode string) bool {
 	// The selected rule must parse in the session mode. An alternate-mode
 	// parse of a discarded rule is only evidence about its merge shape.
-	r, rightOK := rewriteRuleShapeForPrecedence(ctx, right, sqlMode, nil)
-	if !rightOK {
+	stmt, err := mysql.ParseOneWithSQLMode(ctx, right, 1, sqlMode)
+	if err != nil {
 		return false
 	}
+	defer stmt.Free()
+	if rewriteRuleSelect(stmt) == nil {
+		return false
+	}
+	r, eligible := rewriteRuleMergeShapeForStatement(stmt)
 	// An incompatible rule wins outright; an unfiltered rule also supplies
 	// every row if the shapes are compatible. Neither needs the earlier shape.
-	if r == nil || r.unfiltered {
+	if !eligible || r.unfiltered {
 		return true
 	}
+	r.source = right
 	l, leftOK := rewriteRuleShapeForPrecedence(ctx, left, sqlMode, r)
 	if !leftOK {
 		return false
@@ -1403,10 +1408,7 @@ func laterRewriteRuleDeterminesResult(ctx context.Context, left, right, sqlMode 
 func rewriteRuleShapeForPrecedence(ctx context.Context, rule, sqlMode string, peer *rewriteRuleMergeShape) (*rewriteRuleMergeShape, bool) {
 	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, 1, sqlMode)
 	if err != nil {
-		if peer != nil {
-			return rewriteRuleCatalogShape(ctx, rule, sqlMode, peer.selectItems)
-		}
-		return nil, false
+		return rewriteRuleCatalogShape(ctx, rule, sqlMode, peer)
 	}
 	defer stmt.Free()
 	return rewriteRulePrecedenceShape(stmt, rule)
@@ -1420,7 +1422,7 @@ func rewriteRulePrecedenceShape(stmt tree.Statement, source string) (*rewriteRul
 			return nil, true
 		}
 		// Do not retain references to a freed parser tree.
-		return &rewriteRuleMergeShape{source: source, table: shape.table, selectItems: shape.selectItems, unfiltered: shape.unfiltered}, true
+		return &rewriteRuleMergeShape{source: source, table: shape.table, unfiltered: shape.unfiltered}, true
 	default:
 		return nil, false
 	}
@@ -1490,7 +1492,7 @@ func (s *rewriteRuleMergeShape) withoutProjection() *tree.Select {
 	return &stmt
 }
 
-func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string, peerItems int) (*rewriteRuleMergeShape, bool) {
+func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string, peer *rewriteRuleMergeShape) (*rewriteRuleMergeShape, bool) {
 	full, sources, err := mysql.ParseOneWithWhereSources(ctx, rule, 1, "")
 	if err != nil {
 		return nil, false
@@ -1501,10 +1503,10 @@ func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string, peerItem
 		return nil, false
 	}
 	shape, ok := rewriteRuleMergeShapeForSelect(s)
-	if !ok || shape.selectItems != peerItems {
-		// Ineligible shapes and different-length SELECT lists cannot merge,
-		// even without a WHERE. Equal length alone proves nothing about
-		// expression values; those must still be parsed in the reader's mode.
+	if !ok || len(shape.clause.Exprs) != len(peer.clause.Exprs) {
+		return nil, true
+	}
+	if rewriteRuleEscapedShapeIncompatible(ctx, rule, sqlMode, shape, peer) {
 		return nil, true
 	}
 	span := sources[shape.clause.Where]
@@ -1530,6 +1532,58 @@ func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string, peerItem
 	}
 	// Only the session-mode parse may supply a shape for comparison.
 	return rewriteRulePrecedenceShape(st, neutral)
+}
+
+// Compare syntax outside string values, never the values decoded by recovery.
+// A match here is inconclusive: it cannot authorize a rule or its predicate.
+func rewriteRuleEscapedShapeIncompatible(ctx context.Context, rule, mode string, catalog, peer *rewriteRuleMergeShape) bool {
+	flags := mysql.ParseSQLModeFlags(mode)
+	if !flags.Has(mysql.SQLModeNoBackslashEscapes) {
+		return false
+	}
+	shape := catalog
+	if flags != mysql.SQLModeFlags(mysql.SQLModeNoBackslashEscapes) {
+		// A double-quoted column, for instance, must not be mistaken for a
+		// string just because a different literal needs backslash escapes.
+		parts := slices.DeleteFunc(strings.Split(mode, ","), func(s string) bool {
+			return strings.EqualFold(strings.TrimSpace(s), "NO_BACKSLASH_ESCAPES")
+		})
+		stmt, err := mysql.ParseOneWithSQLMode(ctx, rule, 1, strings.Join(parts, ","))
+		if err != nil {
+			return false
+		}
+		defer stmt.Free()
+		var ok bool
+		shape, ok = rewriteRuleMergeShapeForStatement(stmt)
+		if !ok || len(shape.clause.Exprs) != len(peer.clause.Exprs) {
+			return true
+		}
+	}
+	// The base table's identifiers, unlike a string-valued alias or snapshot,
+	// do not use backslash string escapes. Respect the normal table key too.
+	base := func(s *rewriteRuleMergeShape) *tree.TableName {
+		t, _ := rewriteRuleSingleTableExpr(s.clause.From.Tables[0])
+		return t.Expr.(*tree.TableName)
+	}
+	if shape.table != peer.table {
+		a, b := base(shape), base(peer)
+		if !strings.EqualFold(string(a.Name()), string(b.Name())) || !strings.EqualFold(string(a.Schema()), string(b.Schema())) || !strings.EqualFold(string(a.Catalog()), string(b.Catalog())) {
+			return true
+		}
+	}
+	for i, x := range shape.clause.Exprs {
+		y := peer.clause.Exprs[i]
+		if reflect.TypeOf(x.Expr) != reflect.TypeOf(y.Expr) {
+			return true
+		}
+		if f, ok := x.Expr.(*tree.FuncExpr); ok {
+			g := y.Expr.(*tree.FuncExpr)
+			if rewriteFuncExprName(f) != rewriteFuncExprName(g) || len(f.Exprs) != len(g.Exprs) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func sameRewriteShape(ctx context.Context, l, r *rewriteRuleMergeShape, mode string) (bool, error) {
@@ -1618,11 +1672,10 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, 
 	}
 
 	return &rewriteRuleMergeShape{
-		stmt:        stmt,
-		clause:      clause,
-		table:       table,
-		selectItems: len(clause.Exprs),
-		unfiltered:  clause.Where == nil || clause.Where.Expr == nil,
+		stmt:       stmt,
+		clause:     clause,
+		table:      table,
+		unfiltered: clause.Where == nil || clause.Where.Expr == nil,
 	}, true
 }
 

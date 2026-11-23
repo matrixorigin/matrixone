@@ -522,6 +522,26 @@ alter role test_rule_role_dup_projection_a add rule "select a, length('docs\\'no
 select a from db1.t_dup order by a;
 -- @session
 
+-- One function call and one column cannot merge either, even on the same table.
+alter role test_rule_role_dup_projection_a add rule "select length('docs\\'notes') as note_len from db1.t_dup" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select a from db1.t_dup order by a;
+-- @session
+
+-- With matching projection structure, the source table alone can decide precedence.
+alter role test_rule_role_dup_projection_a add rule "select length('docs\\'notes') as n from db1.t1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select length('ok') as n from db1.t_dup where marker = 3" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select n from db1.t_dup;
+-- @session
+
+-- If only the unreadable literal differs, the earlier rule cannot be discarded.
+alter role test_rule_role_dup_projection_a add rule "select length('docs\\'notes') as n from db1.t_dup" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select n from db1.t_dup;
+-- @session
+alter role test_rule_role_dup_projection_b add rule 'select a from db1.t_dup where marker in (select 3 where 1=1) /* end */' on table db1.t_dup;
+
 -- A handle must not retain the wider interpretation of the same rule source.
 alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where 'x\\ty' = _utf8mb4 X'780979'" on table db1.t_dup;
 -- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
