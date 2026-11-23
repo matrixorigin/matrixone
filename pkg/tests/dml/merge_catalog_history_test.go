@@ -83,7 +83,7 @@ func TestDataBranchMergeWithCheckpointCatalog(t *testing.T) {
 		t.Logf("six-row customer rename with checkpoint catalog: %s", time.Since(start))
 		want := [][]string{{"1", "汉得"}, {"2", "two"}, {"3", "three"}, {"4", "four"}, {"5", "five"}, {"6", "six"}}
 		require.Equal(t, want, queryStringRows(t, ctx, db, "select id,name from customers order by id"))
-		// Repeating the merge must preserve every row and the already applied name.
+		// Repeating the merge must preserve every row and the applied data.
 		execSQLDB(t, ctx, db, "data branch merge preview into customers when conflict skip")
 		require.Equal(t, want, queryStringRows(t, ctx, db, "select id,name from customers order by id"))
 
@@ -91,6 +91,9 @@ func TestDataBranchMergeWithCheckpointCatalog(t *testing.T) {
 		execSQLDB(t, ctx, db, "data branch create table edits from customers")
 		execSQLDB(t, ctx, db, "update edits set name='branch' where id=2")
 		execSQLDB(t, ctx, db, "update customers set name='main' where id=2")
+		// An ALTER replaces the catalog row for the same table. The main
+		// change before that rewrite must remain in the conflict window.
+		execSQLDB(t, ctx, db, "alter table customers comment 'changed after the fork'")
 		execSQLDB(t, ctx, db, "delete from edits where id=3")
 		execSQLDB(t, ctx, db, "insert into edits values (7,'seven')")
 		execSQLDB(t, ctx, db, "data branch merge edits into customers when conflict skip")
