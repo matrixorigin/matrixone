@@ -73,6 +73,7 @@ logs, repeated summaries or the experiment/review chronology.
 | Change shape | Read |
 |---|---|
 | Shared state, cancellation, close/terminal paths, callbacks, retry/restart, pooling/reuse, async cleanup | [references/concurrency-lifecycle.md](references/concurrency-lifecycle.md) |
+| Concurrency, scheduling, caching, admission/budget or read-path change; a bot review that keeps finding transition bugs | [executable probes](../../../.agents/skills/mo-self-review/references/executable-probes.md) |
 
 ## Running this skill IS the review (don't retype the long prompt)
 
@@ -137,6 +138,7 @@ stream of nitpicks.
 | Gate | When | Action |
 |------|------|--------|
 | **G-SELF-REVIEW** | Before `git push`, before opening/updating a PR, or before declaring a change "done" | Run §1–§4 over the full diff, apply §5 convergence discipline, then check the §7 exit gate. Do not push until it passes. |
+| **G-PROBE** | The diff changes concurrency, scheduling, caching, admission/budgets or a read path | Run the [executable probes](../../../.agents/skills/mo-self-review/references/executable-probes.md) method over the whole PR delta: each finding and each cleared matrix cell needs a probe through a public entry point, a passing control, and red-on-old/green-on-fix runs. |
 | **G-RACE-STRESS** | The diff changes concurrency, lifecycle, shared/global state, background work, synchronization, or behavior with a credible race/timing failure mode | Apply the shared race protocol linked in §6. |
 
 Scope = committed changes vs merge-base, staged changes, unstaged changes, and
@@ -281,6 +283,7 @@ skill; for CGo build/test env and MO operator/format specifics, see **mo-dev**.
 □ every finding either FIXED or written to the decision log (§5.2)
 □ severity calibrated to the merge bar (§5.1) — zero open blockers
 □ every new/modified and directly affected Go behavioral unit test passed a proven non-empty focused run
+□ when G-PROBE applies, the probe matrix is derived, pruned cells are justified, and every probe ran red and green with its control
 □ when G-RACE-STRESS applies, the required scope and adaptive budget follow the shared race protocol
 □ every !race measurement-only test retains a race-tested functional counterpart when race validation applies
 □ evidence covers the changed behavior and satisfies the shared validity rules

@@ -88,6 +88,7 @@ deep tracing, not awareness of in-scope changes that can interact with it.
 | Credible shared-state/lifecycle/synchronization/timing failure mode | [../mo-dev/references/race-validation.md](../mo-dev/references/race-validation.md) |
 | Large/complex feature or major refactor; design review (RFC optional) | [../mo-dev/references/feature-design-review.md](../mo-dev/references/feature-design-review.md) |
 | Shared state, cancel/close, callbacks, retry/restart, pooling/reuse, async cleanup | [references/concurrency-lifecycle.md](references/concurrency-lifecycle.md) |
+| Concurrency, scheduling, caching, admission/budget or read-path change; a bot review that keeps finding transition bugs | [references/executable-probes.md](references/executable-probes.md) |
 | Production behavior or changed/added/removed/merged/optimized UT/BVT | [../mo-dev/references/testing-contract.md](../mo-dev/references/testing-contract.md) |
 | Planner/explain/rewrite correctness or a credible overfit in product behavior | [../mo-dev/references/counterexample-testing.md](../mo-dev/references/counterexample-testing.md) |
 | Changed persisted format or interpretation (including stored IDs or expression semantics), upgrade/restore, or protocol and plan encoding | [../mo-dev/references/upgrade-compatibility.md](../mo-dev/references/upgrade-compatibility.md) |
@@ -187,6 +188,9 @@ Use the testing contract for fixture reuse, independent oracles, UT/BVT depth
 and teardown. Apply the shared evidence checks to suspected overfit, lost test
 coverage and performance claims. For a proposed optimization, check work and
 results at the real entry point as well as the claimed faster phase.
+For a change in the executable-probes trigger, prove each transition finding, and
+each cleared probe-matrix cell, with a probe through a public entry point: a passing
+control, red on the old code and green on the fix.
 
 ## Convergence and decision
 
