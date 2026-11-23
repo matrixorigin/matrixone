@@ -159,6 +159,72 @@ execute chk_h3;
 select id from h2 order by id;
 select id from h3 order by id;
 
+-- I: REPLACE on a self-referencing table cascades to rows of the same table
+create table s (id int primary key, parent int, body text, a varchar(10), v vecf32(2), foreign key (parent) references s(id) on delete cascade);
+create fulltext index fts on s(body);
+create index ixs using ivfflat on s(v) lists=1 op_type 'vector_l2_ops';
+create index mss using master on s(a);
+insert into s values (1,null,'root','r','[1,0]'),(2,1,'kid','k','[0,1]'),(3,2,'gk','g','[1,1]'),(4,null,'solo','s','[2,2]');
+set @chk_s_ft = (select index_table_name from mo_catalog.mo_indexes where name = 'fts' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 's') limit 1);
+set @chk_s_ivf = (select index_table_name from mo_catalog.mo_indexes where name = 'ixs' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 's') limit 1);
+set @chk_s_ms = (select index_table_name from mo_catalog.mo_indexes where name = 'mss' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 's') limit 1);
+set @chk_s_sql = concat('select ''ft'' as idx, (select count(distinct doc_id) from `', database(), '`.`', @chk_s_ft, '` where doc_id not in (select id from s)) as orphan, (select count(*) from s where id not in (select doc_id from `', database(), '`.`', @chk_s_ft, '`)) as missing', ' union all ', 'select ''ivf'', (select count(*) from `', database(), '`.`', @chk_s_ivf, '` where __mo_index_pri_col not in (select id from s)), (select count(*) from s where id not in (select __mo_index_pri_col from `', database(), '`.`', @chk_s_ivf, '`))', ' union all ', 'select ''ms'', (select count(*) from `', database(), '`.`', @chk_s_ms, '` where __mo_index_pri_col not in (select id from s)), (select count(*) from s where id not in (select __mo_index_pri_col from `', database(), '`.`', @chk_s_ms, '`))', ' order by idx');
+prepare chk_s from @chk_s_sql;
+
+replace into s values (1,null,'newroot','r2','[3,3]');
+execute chk_s;
+select id, body from s order by id;
+replace into s values (4,null,'solo2','s2','[4,4]'), (5,4,'child5','c5','[5,5]');
+execute chk_s;
+select id, body from s order by id;
+replace into s values (4,null,'solo3','s3','[6,6]'), (5,4,'child5b','c6','[7,7]');
+execute chk_s;
+select id, body from s order by id;
+select id from s where match(body) against('child5b');
+
+-- J: self-referencing ON UPDATE CASCADE changes an indexed non-key column
+create table j (id int primary key, code varchar(10) unique, pcode varchar(10), body text, v vecf32(2),
+  foreign key (pcode) references j(code) on update cascade);
+create fulltext index ftj on j(body, pcode);
+create index ixj using ivfflat on j(v) lists=1 op_type 'vector_l2_ops';
+create index msj using master on j(pcode);
+insert into j values (1,'A',null,'root','[1,0]'),(2,'B','A','kid','[0,1]'),(3,'C','B','gk','[1,1]');
+set @chk_j_ft = (select index_table_name from mo_catalog.mo_indexes where name = 'ftj' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'j') limit 1);
+set @chk_j_ivf = (select index_table_name from mo_catalog.mo_indexes where name = 'ixj' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'j') limit 1);
+set @chk_j_ms = (select index_table_name from mo_catalog.mo_indexes where name = 'msj' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'j') limit 1);
+set @chk_j_sql = concat('select ''ft'' as idx, (select count(distinct doc_id) from `', database(), '`.`', @chk_j_ft, '` where doc_id not in (select id from j)) as orphan, (select count(*) from j where id not in (select doc_id from `', database(), '`.`', @chk_j_ft, '`)) as missing', ' union all ', 'select ''ivf'', (select count(*) from `', database(), '`.`', @chk_j_ivf, '` where __mo_index_pri_col not in (select id from j)), (select count(*) from j where id not in (select __mo_index_pri_col from `', database(), '`.`', @chk_j_ivf, '`))', ' union all ', 'select ''ms'', (select count(*) from `', database(), '`.`', @chk_j_ms, '` where __mo_index_pri_col not in (select id from j)), (select count(*) from j where id not in (select __mo_index_pri_col from `', database(), '`.`', @chk_j_ms, '`))', ' order by idx');
+prepare chk_j from @chk_j_sql;
+
+update j set code = 'Z' where code = 'A';
+execute chk_j;
+select id, pcode from j order by id;
+select id from j where match(body, pcode) against('Z');
+select count(*) from j where match(body, pcode) against('A');
+select id from j where pcode = 'Z';
+
+-- K: DELETE cascades to a child and sets NULL on a grandchild
+create table kp (id int primary key);
+create table kc (id int primary key, p int, foreign key (p) references kp(id) on delete cascade);
+create table kg (gid int primary key, pid int, body text, v vecf32(2), a varchar(10), foreign key (pid) references kc(id) on delete set null);
+create fulltext index ftk on kg(body, a);
+create index ixk using ivfflat on kg(v) lists=1 op_type 'vector_l2_ops';
+create index msk using master on kg(a);
+insert into kp values (1),(2);
+insert into kc values (10,1),(20,2);
+insert into kg values (100,10,'gx','[1,0]','g1'),(200,20,'gy','[0,1]','g2');
+set @chk_k_ft = (select index_table_name from mo_catalog.mo_indexes where name = 'ftk' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'kg') limit 1);
+set @chk_k_ivf = (select index_table_name from mo_catalog.mo_indexes where name = 'ixk' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'kg') limit 1);
+set @chk_k_ms = (select index_table_name from mo_catalog.mo_indexes where name = 'msk' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'kg') limit 1);
+set @chk_k_sql = concat('select ''ft'' as idx, (select count(distinct doc_id) from `', database(), '`.`', @chk_k_ft, '` where doc_id not in (select gid from kg)) as orphan, (select count(*) from kg where gid not in (select doc_id from `', database(), '`.`', @chk_k_ft, '`)) as missing', ' union all ', 'select ''ivf'', (select count(*) from `', database(), '`.`', @chk_k_ivf, '` where __mo_index_pri_col not in (select gid from kg)), (select count(*) from kg where gid not in (select __mo_index_pri_col from `', database(), '`.`', @chk_k_ivf, '`))', ' union all ', 'select ''ms'', (select count(*) from `', database(), '`.`', @chk_k_ms, '` where __mo_index_pri_col not in (select gid from kg)), (select count(*) from kg where gid not in (select __mo_index_pri_col from `', database(), '`.`', @chk_k_ms, '`))', ' order by idx');
+prepare chk_k from @chk_k_sql;
+
+delete from kp where id = 2;
+execute chk_k;
+select gid, pid from kg order by gid;
+select gid from kg where match(body, a) against('gy');
+select gid from kg where a = 'g2';
+select gid from kg order by l2_distance(v, '[0,1]') limit 1;
+
 set experimental_fulltext_index = 0;
 set experimental_ivf_index = 0;
 set experimental_hnsw_index = 0;

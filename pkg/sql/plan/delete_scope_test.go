@@ -393,9 +393,11 @@ func TestIrregularIndexDeleteJoinIsRowScoped(t *testing.T) {
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
 
+	fulltextTable := catalog.FullTextIndexTableNamePrefix + "docs_ft_body"
 	originDelete := false
 	joinScanned := false
 	fulltextDeleteCount := 0
+	fulltextScanFiltered := false
 	for _, node := range query.Nodes {
 		switch node.NodeType {
 		case planpb.Node_MULTI_UPDATE:
@@ -408,9 +410,12 @@ func TestIrregularIndexDeleteJoinIsRowScoped(t *testing.T) {
 			if node.TableDef != nil && node.TableDef.Name == "dept" {
 				joinScanned = true
 			}
+			if node.TableDef != nil && node.TableDef.Name == fulltextTable && len(node.RuntimeFilterProbeList) == 1 {
+				fulltextScanFiltered = true
+			}
 		case planpb.Node_DELETE:
 			if node.DeleteCtx != nil && node.DeleteCtx.TableDef != nil &&
-				node.DeleteCtx.TableDef.Name == catalog.FullTextIndexTableNamePrefix+"docs_ft_body" {
+				node.DeleteCtx.TableDef.Name == fulltextTable {
 				fulltextDeleteCount++
 			}
 		}
@@ -419,6 +424,7 @@ func TestIrregularIndexDeleteJoinIsRowScoped(t *testing.T) {
 	require.True(t, originDelete, "missing origin-table delete")
 	require.True(t, joinScanned, "a join must be evaluated before deleting target rows")
 	require.Equal(t, 1, fulltextDeleteCount, "row-scoped fulltext maintenance must not be skipped")
+	require.True(t, fulltextScanFiltered, "the fulltext index scan must be limited to the deleted keys")
 }
 
 func TestLegacyMultiTableDeleteNormalizesSpecialOldValues(t *testing.T) {

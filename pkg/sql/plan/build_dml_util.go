@@ -6163,61 +6163,6 @@ func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder,
 
 }
 
-// appendTaggedProjectUpdatedRowsForRebuild is appendProjectUpdatedRowsForRebuild
-// over a source scan tagged sourceTag; the projection is tagged projTag.
-func appendTaggedProjectUpdatedRowsForRebuild(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef,
-	lastNodeId, sourceTag, projTag int32, updateColPosMap map[string]int) int32 {
-	lastProject := builder.qry.Nodes[lastNodeId].ProjectList
-	projectProjection := make([]*Expr, len(tableDef.Cols))
-	for j, col := range tableDef.Cols {
-		sourcePos := j
-		if nIdx, ok := updateColPosMap[col.Name]; ok {
-			sourcePos = nIdx
-		}
-		projectProjection[j] = &plan.Expr{
-			Typ:  lastProject[sourcePos].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag, ColPos: int32(sourcePos)}},
-		}
-	}
-	return builder.appendNode(&Node{
-		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{lastNodeId},
-		ProjectList: projectProjection,
-		BindingTags: []int32{projTag},
-	}, bindCtx)
-}
-
-func appendProjectUpdatedRowsForRebuild(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, updateColPosMap map[string]int, rowIDSourcePos int) int32 {
-	lastProject := builder.qry.Nodes[lastNodeId].ProjectList
-	projectProjection := make([]*Expr, len(tableDef.Cols))
-	for j, col := range tableDef.Cols {
-		sourcePos := j
-		if nIdx, ok := updateColPosMap[col.Name]; ok {
-			sourcePos = nIdx
-		} else if col.Name == catalog.Row_ID && rowIDSourcePos >= 0 {
-			sourcePos = rowIDSourcePos
-		}
-
-		projectProjection[j] = &plan.Expr{
-			Typ: lastProject[sourcePos].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: int32(sourcePos),
-					Name:   col.Name,
-				},
-			},
-		}
-	}
-
-	projectNode := &Node{
-		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{lastNodeId},
-		ProjectList: projectProjection,
-	}
-	return builder.appendNode(projectNode, bindCtx)
-}
-
 func buildPreInsertRegularIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
 	sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef, idx int) error {
 
@@ -6755,6 +6700,35 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 	return nil
 }
 
+// appendProjectUpdatedRowsForRebuild projects the updated row image of an
+// UPDATE delete source in table column order: the new value of each updated
+// column and the old value of every other column. A zero sourceTag reads the
+// source positionally; otherwise the projection is tagged projTag.
+func appendProjectUpdatedRowsForRebuild(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef,
+	lastNodeId, sourceTag, projTag int32, updateColPosMap map[string]int) int32 {
+	lastProject := builder.qry.Nodes[lastNodeId].ProjectList
+	projectProjection := make([]*Expr, len(tableDef.Cols))
+	for j, col := range tableDef.Cols {
+		sourcePos := j
+		if nIdx, ok := updateColPosMap[col.Name]; ok {
+			sourcePos = nIdx
+		}
+		projectProjection[j] = &plan.Expr{
+			Typ:  lastProject[sourcePos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag, ColPos: int32(sourcePos), Name: col.Name}},
+		}
+	}
+	node := &Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeId},
+		ProjectList: projectProjection,
+	}
+	if sourceTag != 0 {
+		node.BindingTags = []int32{projTag}
+	}
+	return builder.appendNode(node, bindCtx)
+}
+
 // buildDeleteIrregularIndexPlans maintains the fulltext, IVF and master indexes of
 // delCtx.tableDef with the delete-by-pk and final-image insert sub-plans of the
 // modern DML planner. delCtx.sourceStep holds the table's old rows in column order,
@@ -6784,14 +6758,15 @@ func (builder *QueryBuilder) buildDeleteIrregularIndexPlans(bindCtx *BindContext
 	if isUpdate && len(rebuildTableDef.Indexes) > 0 {
 		var lastNodeID int32
 		if delCtx.sourceTag != 0 {
-			lastNodeID = appendSinkScanNodeWithTag(builder, bindCtx, delCtx.sourceStep, delCtx.sourceTag)
 			rebuildTag := builder.genNewBindTag()
-			lastNodeID = appendTaggedProjectUpdatedRowsForRebuild(builder, bindCtx, delCtx.tableDef,
+			lastNodeID = appendSinkScanNodeWithTag(builder, bindCtx, delCtx.sourceStep, delCtx.sourceTag)
+			lastNodeID = appendProjectUpdatedRowsForRebuild(builder, bindCtx, delCtx.tableDef,
 				lastNodeID, delCtx.sourceTag, rebuildTag, delCtx.updateColPosMap)
 			lastNodeID = appendSinkNodeWithTag(builder, bindCtx, lastNodeID, rebuildTag)
 		} else {
 			lastNodeID = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
-			lastNodeID = appendProjectUpdatedRowsForRebuild(builder, bindCtx, delCtx.tableDef, lastNodeID, delCtx.updateColPosMap, -1)
+			lastNodeID = appendProjectUpdatedRowsForRebuild(builder, bindCtx, delCtx.tableDef,
+				lastNodeID, 0, 0, delCtx.updateColPosMap)
 			lastNodeID = appendSinkNode(builder, bindCtx, lastNodeID)
 		}
 		if builder.preserveSinkProjection == nil {
@@ -6812,6 +6787,11 @@ func (builder *QueryBuilder) buildDeleteIrregularIndexPlans(bindCtx *BindContext
 	builder.irregularMaintInsertOnlySourceStep = -1
 	builder.irregularMaintSkipInsert = true
 	if deferred {
+		// createQuery must keep the primary key at its column position.
+		if builder.preserveSinkProjection == nil {
+			builder.preserveSinkProjection = make(map[int32]struct{})
+		}
+		builder.preserveSinkProjection[builder.qry.Steps[delCtx.sourceStep]] = struct{}{}
 		builder.queueIrregularUpdateMaint()
 		if rebuildStep >= 0 {
 			builder.irregularMaintObjRef = delCtx.objRef

@@ -539,7 +539,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 
 		var unsupportedIrregularRoute bool
 		inlineIrregularIndexes[i], unsupportedIrregularRoute, err = classifyIrregularIndexesForUpdate(
-			tableDef, dmlCtx.updateCol2Expr[i])
+			tableDef, withSelfForeignKeyActionColumns(tableDef, dmlCtx.updateCol2Expr[i]))
 		if err != nil {
 			return 0, err
 		}
@@ -5329,34 +5329,17 @@ func classifyIrregularIndexesForUpdate(
 		if err != nil {
 			return nil, false, err
 		}
-
-		p, ok := indexplugin.Get(idxDef.IndexAlgo)
-		if !ok {
-			if !isModernMaintainedIrregularAlgo(idxDef.IndexAlgo) {
-				if affected || pkUpdated {
-					return nil, true, nil
-				}
-				continue
-			}
-			if affected || pkUpdated {
-				affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] = true
-			}
-			continue
-		}
-		desc := p.Catalog().SyncDescriptor()
-		if desc.AlwaysAsync {
-			continue
-		}
-		async, err := catalog.IndexParamAsync(idxDef.IndexAlgoParams)
+		sync, maintained, err := syncIrregularIndex(idxDef)
 		if err != nil {
 			return nil, false, err
 		}
-		if async {
+		if !sync || !(affected || pkUpdated) {
 			continue
 		}
-		if affected || pkUpdated {
-			affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] = true
+		if !maintained {
+			return nil, true, nil
 		}
+		affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] = true
 	}
 
 	for _, idxDef := range tableDef.Indexes {
@@ -5366,6 +5349,48 @@ func classifyIrregularIndexesForUpdate(
 		inline = append(inline, idxDef)
 	}
 	return inline, false, nil
+}
+
+// withSelfForeignKeyActionColumns returns updateCols plus the columns that
+// self-referencing ON UPDATE CASCADE / SET NULL actions change on rows merged
+// into the same UPDATE, followed to a fixpoint.
+func withSelfForeignKeyActionColumns(tableDef *plan.TableDef, updateCols map[string]tree.Expr) map[string]tree.Expr {
+	if len(tableDef.Fkeys) == 0 {
+		return updateCols
+	}
+	colNames := make(map[uint64]string, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		colNames[col.ColId] = col.Name
+	}
+	cols := maps.Clone(updateCols)
+	for changed := true; changed; {
+		changed = false
+		for _, fk := range tableDef.Fkeys {
+			if fk.ForeignTbl != 0 && fk.ForeignTbl != tableDef.TblId {
+				continue
+			}
+			if fk.OnUpdate != plan.ForeignKeyDef_CASCADE && fk.OnUpdate != plan.ForeignKeyDef_SET_NULL {
+				continue
+			}
+			referenced := false
+			for _, colID := range fk.ForeignCols {
+				if _, ok := cols[colNames[colID]]; ok {
+					referenced = true
+					break
+				}
+			}
+			if !referenced {
+				continue
+			}
+			for _, colID := range fk.Cols {
+				if _, ok := cols[colNames[colID]]; !ok {
+					cols[colNames[colID]] = nil
+					changed = true
+				}
+			}
+		}
+	}
+	return cols
 }
 
 func updateHasMultipleSourceTables(stmt *tree.Update) bool {
