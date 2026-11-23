@@ -190,9 +190,14 @@ prefetch past its share reads its own bytes.
 Buffers are reused by power-of-two size up to 32 MiB; a buffer is reused only once its
 prefetch object ended and no read copies from it.
 
-An asynchronous disk-cache update writes its bytes to a cache file before it returns;
-only the file's publication is asynchronous, so no copy of the bytes waits in memory for
-it. With no publication slot free, the update waits for one. The written callbacks of
+An asynchronous disk-cache update without written callbacks writes its bytes to a cache
+file before it returns; only the file's publication is asynchronous, so no copy of the
+bytes waits in memory for it. An update with written callbacks keeps a copy of its bytes
+in memory, and its publication slot, until its callbacks ran; these copies hold at most
+64 MiB for each disk cache. With no publication slot or room free, an update waits for
+one, unless only callbacks returning can free it: then the update is dropped, as one
+larger than the room is (decision 2026-11-23: a callback that submits an update would
+otherwise wait for the slot it holds). The written callbacks of
 asynchronous updates run in the order the updates were submitted, whichever is
 published first; an update that publishes nothing holds no place in that order. A read
 that skips disk-cache reads reads object storage itself; it does not join a prefetch
