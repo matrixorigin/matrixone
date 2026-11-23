@@ -114,8 +114,7 @@ deep tracing, not awareness of in-scope changes that can interact with it.
    relevant inputs. Reuse author/CI evidence that meets the shared rules.
    In self mode, produce missing proof. In external mode, run checks needed
    to fill a gap or resolve a concrete uncertainty. When the executable-probes
-   trigger applies, produce the probes it requires; its failing probes are findings,
-   and a finding no probe can reach is reported as it allows.
+   trigger applies, prove its findings by its proof rule.
 6. **Converge once.** Verify every candidate against source and full closure,
    discard speculation, respect recorded decisions, then return one ranked
    finding/fix-or-decision list and final decision. Do not request another broad
@@ -190,11 +189,9 @@ Use the testing contract for fixture reuse, independent oracles, UT/BVT depth
 and teardown. Apply the shared evidence checks to suspected overfit, lost test
 coverage and performance claims. For a proposed optimization, check work and
 results at the real entry point as well as the claimed faster phase.
-For a change in the executable-probes trigger, prove each transition claim with
-the cheapest proof that settles it under the shared evidence rules, as the
-executable-probes reference defines: a probe that fails on the reviewed change while
-its control passes, or qualifying existing evidence; a finding needs no fix to be
-reported. Prove a fix by the same probe failing before it and passing after it.
+For a change in the executable-probes trigger, prove each transition claim by the
+executable-probes proof rule; a finding needs no fix to be reported. Prove a fix by a
+probe failing before it and passing after it.
 
 ## Convergence and decision
 

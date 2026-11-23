@@ -9,12 +9,13 @@ The mo-bot reviewer does not stop at reading the code. It **runs probes**: real 
 entry points, a storage fake gated per offset, budgets shrunk to a few units, and a
 passing control next to every failing probe. On one fileservice PR, each review round found 1–4
 new transition bugs this way. Running the same process before the push leaves the bot
-nothing to find. A transition claim, finding or cleared cell, needs the cheapest
-proof that settles it under the shared evidence rules: a probe, a qualifying existing
-test or result at the owning boundary, or, when neither exists nor can be built, a
-source trace under the first-principles proof marked "probe not built: <constraint>".
-A probe through a public entry point is required where caller behavior or
-reachability is still uncertain. Severity is calibrated as in the review contract.
+nothing to find.
+
+**Proof rule.** A transition claim, finding or cleared cell, needs the cheapest proof
+that settles it under the shared evidence rules: a source trace under the
+first-principles proof, a qualifying existing test or result, or a focused probe at the
+owning boundary. Escalate to a probe through a public entry point when reachability or
+caller behavior is still uncertain. Severity is calibrated as in the review contract.
 
 ## 1. Transition inventory (from the diff, not from memory)
 
@@ -68,8 +69,8 @@ cell was pruned.
 
 Every probe:
 
-1. **Drives a public entry point** (for example read, prefetch, delete, close,
-   submit, shutdown), in the mode its oracle needs (§7): `-race` for a data-race or
+1. **Drives the boundary the proof rule picks**: the owning one, or a public entry
+   point (for example read, prefetch, delete, close, submit, shutdown), in the mode its oracle needs (§7): `-race` for a data-race or
    ownership oracle; normal mode for a timing, allocation or other
    instrumentation-sensitive oracle, such as a deadline.
 2. **Synchronizes at the affected transition** so the test, not the scheduler, decides

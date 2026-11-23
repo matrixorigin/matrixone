@@ -81,9 +81,12 @@ the fix that closed it.
 - **Shape:** a tier's file is short, missing or unreadable; a request whose contract
   promises the data returns EOF or an I/O error although the source holds it, and the
   bad entry stays.
-- **Probe:** a truncated, a missing and an unopenable entry. Expect the source's bytes,
-  one backend read, and the entry recached. A cache-only read reports a miss instead.
-  Control: decoder and caller errors are still returned.
+- **Probe:** a truncated, a missing and an unopenable entry. Expect the bytes from the
+  next tier the request may use, and the bad entry not served again. Derive the
+  backend reads and any refill from the configured tiers and the request's policy: a
+  later cache tier may supply the bytes, a skip of cache writes refills nothing, and a
+  cache-only read reports a miss. Control: decoder and caller errors are still
+  returned.
 - **Fix:** record the tier reader's error; on a tier failure drop the entry and fall
   through.
 

@@ -111,8 +111,7 @@ Then execute (do not shortcut):
    reason; no finding without a concrete failure).
    When **G-PROBE** applies, also run the
    [executable probes](../../../.agents/skills/mo-self-review/references/executable-probes.md)
-   method §1–§7 over the whole PR delta; its failing probes are findings, and a finding
-   no probe can reach is reported as that method allows.
+   method §1–§7 over the whole PR delta; findings are proven by its proof rule.
 3. Present a converged, ranked findings list, each with a **fix-or-decision-log
    recommendation** — not another review round.
 
@@ -142,7 +141,7 @@ stream of nitpicks.
 | Gate | When | Action |
 |------|------|--------|
 | **G-SELF-REVIEW** | Before `git push`, before opening/updating a PR, or before declaring a change "done" | Run §1–§4 over the full diff, apply §5 convergence discipline, then check the §7 exit gate. Do not push until it passes. |
-| **G-PROBE** | An R2/R3 closure changes the behavior of concurrency, scheduling, caching, admission/budgets or a read path, or a bot review keeps finding transition bugs | Run the [executable probes](../../../.agents/skills/mo-self-review/references/executable-probes.md) method over the whole PR delta. Each transition claim needs the cheapest proof that settles it under the shared evidence rules, as that method defines; a fix needs its probe failing before it and passing after it. |
+| **G-PROBE** | An R2/R3 closure changes the behavior of concurrency, scheduling, caching, admission/budgets or a read path, or a bot review keeps finding transition bugs | Run the [executable probes](../../../.agents/skills/mo-self-review/references/executable-probes.md) method over the whole PR delta. Each transition claim is proven by that method's proof rule; a fix needs its probe failing before it and passing after it. |
 | **G-RACE-STRESS** | The diff changes concurrency, lifecycle, shared/global state, background work, synchronization, or behavior with a credible race/timing failure mode | Apply the shared race protocol linked in §6. |
 
 Scope = committed changes vs merge-base, staged changes, unstaged changes, and
