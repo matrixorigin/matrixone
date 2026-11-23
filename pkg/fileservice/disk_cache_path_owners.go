@@ -114,6 +114,18 @@ func (p *pathOwners) tryAcquire(path string, cleanup func() error) (*pathOwner, 
 	return p.ownLocked(path, cleanup), true
 }
 
+// acquireCurrent owns path when gen is its current read generation, ending the
+// generation.
+func (p *pathOwners) acquireCurrent(path string, gen uint64) (*pathOwner, bool) {
+	p.L.Lock()
+	defer p.L.Unlock()
+	if !p.currentLocked(path, gen) {
+		return nil, false
+	}
+	p.endReadsLocked(path)
+	return p.ownLocked(path, nil), true
+}
+
 // reindex owns path when gen is its current read generation, keeping the generation.
 func (p *pathOwners) reindex(path string, gen uint64) (*pathOwner, bool) {
 	p.L.Lock()

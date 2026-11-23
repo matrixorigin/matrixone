@@ -484,22 +484,92 @@ func TestIndexObjectOpenResourcesExhausted(t *testing.T) {
 	}
 }
 
-// An entry renamed out of its name is removed, even when deleting its files fails.
-func TestRemoveCacheDirRenamedIsRemoved(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "entry")
-	sub := filepath.Join(dir, "sub")
-	require.NoError(t, os.MkdirAll(sub, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(sub, "f"), nil, 0o644))
-	require.NoError(t, os.Chmod(sub, 0o500))
-	t.Cleanup(func() {
-		matches, _ := filepath.Glob(dir + "*")
-		for _, m := range matches {
-			_ = os.Chmod(filepath.Join(m, "sub"), 0o755)
-		}
-	})
-	require.NoError(t, removeCacheDir(dir))
-	_, err := os.Stat(dir)
-	require.True(t, os.IsNotExist(err))
+// A deleted entry whose files cannot be removed is gone, its files count against the
+// capacity, and the collector removes them once it can.
+func TestIndexFileCacheTrashRemovedOnceItCanBe(t *testing.T) {
+	for _, fault := range []bool{true, false} {
+		t.Run(map[bool]string{true: "fault", false: "control"}[fault], func(t *testing.T) {
+			fs, _, data := newIndexObjectFS(t, true)
+			cacheIndexObject(t, fs, "object", data)
+			diskPath, ok := fs.indexObjectCached("object")
+			require.True(t, ok)
+			d := fs.indexFileCache.disk
+			capacity := d.capacityFunc()
+			trashDirs := func() []string {
+				matches, err := filepath.Glob(diskPath + ".*" + cacheDirTrashSuffix)
+				require.NoError(t, err)
+				return matches
+			}
+			if fault {
+				require.NoError(t, os.Chmod(diskPath, 0o500))
+				t.Cleanup(func() {
+					for _, m := range trashDirs() {
+						_ = os.Chmod(m, 0o755)
+					}
+				})
+				if f, err := os.Create(filepath.Join(diskPath, "probe")); err == nil {
+					_ = f.Close()
+					t.Skip("permissions are not enforced")
+				}
+			}
+			require.NoError(t, fs.indexFileCache.Delete(context.Background(), IndexObjectEntry("object")))
+			_, err := os.Stat(diskPath)
+			require.True(t, os.IsNotExist(err))
+			_, ok = fs.indexObjectCached("object")
+			require.False(t, ok)
+			if !fault {
+				require.Empty(t, trashDirs())
+				require.Equal(t, capacity, d.capacityFunc())
+				return
+			}
+			trash := trashDirs()
+			require.Len(t, trash, 1)
+			require.Equal(t, int64(len(data)), d.trash.bytes.Load())
+			require.Equal(t, capacity-int64(len(data)), d.capacityFunc())
+			d.retryTrash()
+			require.Len(t, trashDirs(), 1, "the fault holds")
+			require.Equal(t, int64(len(data)), d.trash.bytes.Load())
+			require.NoError(t, os.Chmod(trash[0], 0o755))
+			d.retryTrash()
+			require.Empty(t, trashDirs())
+			require.Zero(t, d.trash.bytes.Load())
+			require.Equal(t, capacity, d.capacityFunc())
+		})
+	}
+}
+
+// A read whose open of a broken entry fails repairs only the entry it read: a
+// replacement published before its repair is kept.
+func TestIndexObjectStaleOpenRepairKeepsReplacement(t *testing.T) {
+	for _, replaced := range []bool{true, false} {
+		t.Run(map[bool]string{true: "replaced", false: "control"}[replaced], func(t *testing.T) {
+			fs, storage, data := newIndexObjectFS(t, true)
+			cacheIndexObject(t, fs, "object", data)
+			diskPath, ok := fs.indexObjectCached("object")
+			require.True(t, ok)
+			file := filepath.Join(diskPath, IndexObjectFile)
+			require.NoError(t, os.Remove(file))
+			require.NoError(t, os.Symlink(IndexObjectFile, file))
+			name := IndexObjectEntry("object")
+			_, gen, done, err := fs.indexFileCache.openEntryFile(context.Background(), name, IndexObjectFile)
+			require.Error(t, err)
+			require.NotNil(t, done)
+			if replaced {
+				storage.reads.Store(0)
+				require.Equal(t, data[2000:2010], readIndexObjectRange(t, fs, IndexFileObject, 2000, 10))
+				require.Equal(t, int64(1), storage.reads.Load(), "the read filled the entry again")
+			}
+			fs.indexFileCache.dropBroken(context.Background(), name, "", gen)
+			done()
+			_, cached := fs.indexObjectCached("object")
+			require.Equal(t, replaced, cached)
+			storage.reads.Store(0)
+			require.Equal(t, data[len(data)-10:], readIndexObjectRange(t, fs, IndexFileObject, int64(len(data)-10), 10))
+			if replaced {
+				require.Zero(t, storage.reads.Load(), "the replacement was dropped")
+			}
+		})
+	}
 }
 
 // The repair of a missing entry file is no delete of the object: it waits for no

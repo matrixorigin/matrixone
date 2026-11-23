@@ -54,7 +54,9 @@ type DiskCache struct {
 	ranges       cachedRanges
 	dirEntries   bool
 	// held counts the holds on entry directories.
-	held        dirHolds
+	held dirHolds
+	// trash holds the entry directories whose removal failed.
+	trash       cacheTrash
 	directoryMu sync.RWMutex
 	// diskFullEviction is held by the single eviction that responds to
 	// disk-full write failures.
@@ -199,7 +201,7 @@ func newDiskCache(
 			return n
 		}
 		// fallback
-		return capacity()
+		return max(capacity()-ret.trash.bytes.Load(), 0)
 	}
 
 	ret = &DiskCache{
