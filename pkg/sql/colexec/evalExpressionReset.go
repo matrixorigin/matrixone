@@ -403,6 +403,7 @@ func (expr *ParamExpressionExecutor) ResetForNextQuery() {
 		expr.typedVec = nil
 	}
 	expr.typedFolded = false
+	expr.typedFrom = nil
 	if expr.adapter != nil {
 		expr.adapter.ResetForNextQuery()
 	}

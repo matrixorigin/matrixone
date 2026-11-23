@@ -307,8 +307,14 @@ type PrepareStmt struct {
 
 	// params is owned by the statement; paramsMP is the pool it was created
 	// with (the executing process's pool) and is freed with.
-	params              *vector.Vector
-	paramsMP            *mpool.MPool
+	params   *vector.Vector
+	paramsMP *mpool.MPool
+	// typedParams is the typed form of params, owned by the statement and
+	// rewritten in place by every execution.
+	typedParams typedPrepareParams
+	// userParams holds SQL EXECUTE ... USING parameters, owned by the
+	// statement and rewritten in place by every execution.
+	userParams          executeUserParams
 	getFromSendLongData map[int]struct{}
 	// COM_STMT_SEND_LONG_DATA owns its chunks until EXECUTE materializes each
 	// parameter once. The pool must be the one that allocated the buffers,
@@ -910,6 +916,8 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.params.Free(prepareStmt.paramsMP)
 		prepareStmt.params, prepareStmt.paramsMP = nil, nil
 	}
+	prepareStmt.typedParams.release(prepareStmt.proc)
+	prepareStmt.userParams.release()
 
 	if prepareStmt.compile != nil {
 		prepareStmt.compile.FreeOperator()
