@@ -9,7 +9,8 @@ the fix that closed it.
   only when the consumer reaches it. A later unit ends but stays charged behind an
   earlier stalled one.
 - **Probe:** two units; gate the first and let the second finish. Charged bytes must
-  equal one unit, and a bystander must succeed within 2 s. Run both orders.
+  equal one unit, and a bystander that fits once the ended unit is released must not
+  wait for the stalled one. Run both orders.
 - **Fix:** release each unit when it ends; hold it only while copying from it, and read
   an ended unit's result from where it was published.
 
@@ -89,8 +90,9 @@ the fix that closed it.
 ## L. A wait before registration is invisible to lifecycle events
 - **Shape:** a unit waits for a slot before it registers, so delete has nothing to
   cancel.
-- **Probe:** fill the slots, start the unit, delete. It must return within 2 s with 0
-  opens. Control: the same event while it waits for a connection.
+- **Probe:** fill the slots, start the unit, delete. The unit must end and release its
+  worker while every slot stays held, with 0 opens. Control: the same event while it
+  waits for a connection.
 - **Fix:** the wait checks the unit's delete mark, and the event wakes waiters.
 
 ## M. A callback waits for capacity it holds

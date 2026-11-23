@@ -1,14 +1,18 @@
 # Executable probes
 
-Use this method when the diff changes concurrency, scheduling, caching, admission or
-budgets, or a read path, or when a bot review keeps finding new transition bugs.
+Use this method for R2/R3 closures (shared validation scope) that change the behavior
+of concurrency, scheduling, caching, admission or budgets, or a read path, and when a
+bot review keeps finding new transition bugs. R0 changes, such as comments or
+mechanical renames in those files, don't need it.
 
 The mo-bot reviewer does not stop at reading the code. It **runs probes**: real public
 entry points, a storage fake gated per offset, budgets shrunk to a few units, and a
 passing control next to every failing probe. On one fileservice PR, each review round found 1–4
 new transition bugs this way. Running the same process before the push leaves the bot
-nothing to find. A transition finding requires a probe that fails; severity is
-calibrated as in the review contract.
+nothing to find. A transition finding requires a probe that fails. When no probe can
+be built (a platform-gated or CGo/GPU package, or a window with no seam), report the
+finding traced from source under the first-principles proof, marked "probe not built:
+<constraint>". Severity is calibrated as in the review contract.
 
 ## 1. Transition inventory (from the diff, not from memory)
 
@@ -54,16 +58,17 @@ Cross the axes that apply to each item in §1:
 - **Scale:** the supported max input. Count goroutines, opens and charged bytes
   against the bound.
 
-Prune by first principles (a combination the code cannot reach), never by
-convenience. Write down why each cell was pruned.
+Prune a cell only when the code cannot reach it, or when it is equivalent to a cell
+already covered (state the equivalence); never by convenience. Write down why each
+cell was pruned.
 
 ## 3. Probe construction
 
 Every probe:
 
 1. **Drives a public entry point** (read, prefetch, delete, close), in the mode its
-   oracle needs (§7): `-race` for a timing or ownership oracle, normal mode when race
-   bookkeeping would change what the probe measures, such as allocations.
+   oracle needs (§7): `-race` for a data-race or ownership oracle; normal mode for a
+   timing, allocation or other instrumentation-sensitive oracle, such as a deadline.
 2. **Gates storage per offset** so the test, not the scheduler, decides completion
    order: one channel per unit. Reuse the package's existing storage fakes and helpers.
 3. **Asserts invariants after every transition**, not only the final result:
@@ -73,14 +78,17 @@ Every probe:
    - goroutines started against the bound;
    - updates of the caller's cache tiers;
    - queue bytes back to 0 after the scans end.
-4. **Adds a bystander:** an unrelated read with a tight deadline (≤ 2 s) while the probe
-   holds its stall; the same read without the stall is its control. This is what
-   catches pinning: "a completed unit stays charged and starves someone else".
+4. **Adds a bystander:** an unrelated read while the probe holds its stall, with the
+   budget sized so the bystander fits once the ended units are released. Its expected
+   wait follows the admission contract: it must not wait when only ended units hold
+   the budget, and may wait while live units hold it all. The same read without the
+   stall is its control. This is what catches pinning: "a completed unit stays charged
+   and starves someone else".
 5. **Pairs every failing probe with a control** in the same run that must succeed,
    such as a direct read that skips the cache, an exact read, or a live variant. If the control also fails, the fixture is broken, not the code.
 6. **Runs on the revisions its claim needs (§7).**
-   - A **finding** is a probe that fails on the reviewed change while its control
-     passes. When the claim is that the PR introduced the defect and the base supports
+   - A **finding** is a probe that fails on the reviewed change, as first reviewed
+     before any fix for it, while its control passes. When the claim is that the PR introduced the defect and the base supports
      the equivalent operation, the probe also passes on the base; for an entry point the PR
      adds, the source delta establishes where the behavior came from. A finding needs no
      fix to be reported.
