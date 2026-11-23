@@ -2731,6 +2731,10 @@ function run_race_test_batches_impl(){
     local partition_layout=contiguous
     if (( status == 0 && 10#${parallel} > 1 )); then
         partition_layout=roundrobin
+        if [[ "${package}" == github.com/matrixorigin/matrixone/pkg/tests/sqlintegration &&
+            "${batches}" == 4 && "${parallel}" == 4 ]]; then
+            partition_layout=cost-roundrobin
+        fi
     fi
     if (( status == 0 )); then
         partition_race_test_inventory "${inventory}" "${batches}" "${partition_layout}" || status=$?
