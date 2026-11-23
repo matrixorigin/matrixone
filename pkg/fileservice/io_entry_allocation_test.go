@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -107,4 +109,61 @@ func TestLocalFSReadBufferAllocationRollback(t *testing.T) {
 	require.Nil(t, vector.Entries[0].Data)
 	require.Nil(t, vector.Entries[0].releaseData)
 	require.False(t, vector.Entries[1].done)
+}
+
+func TestLocalFSReadPublishesReusedDataOnSuccess(t *testing.T) {
+	ctx := context.Background()
+	fs, err := NewLocalFS(ctx, "local", t.TempDir(), DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+
+	const path = "input"
+	require.NoError(t, fs.Write(ctx, IOVector{
+		FilePath: path,
+		Entries:  []IOEntry{{Size: 2, Data: []byte("xy")}},
+	}))
+
+	conversionErr := errors.New("cache conversion failed")
+	for _, tc := range []struct {
+		name    string
+		size    int64
+		convert func(context.Context, io.Reader, []byte, CacheDataAllocator) (fscache.Data, error)
+		wantErr error
+	}{
+		{name: "success", size: 2},
+		{name: "short_read", size: 3, wantErr: io.ErrUnexpectedEOF},
+		{
+			name: "conversion_error",
+			size: 2,
+			convert: func(context.Context, io.Reader, []byte, CacheDataAllocator) (fscache.Data, error) {
+				return nil, conversionErr
+			},
+			wantErr: conversionErr,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reserved := []byte("abc")[:1]
+			vector := &IOVector{
+				FilePath: path,
+				Entries:  []IOEntry{{Size: tc.size, Data: reserved, ToCacheData: tc.convert}},
+			}
+			t.Cleanup(vector.Release)
+
+			allocator := new(limitedReadAllocator)
+			readCtx := context.WithValue(ctx, ioEntryAllocatorKey{}, allocator)
+			err := fs.Read(readCtx, vector)
+			entry := &vector.Entries[0]
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				require.Len(t, entry.Data, len(reserved))
+				require.False(t, entry.done)
+				require.Nil(t, entry.CachedData)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, []byte("xy"), entry.Data)
+			}
+			require.Same(t, &reserved[0], &entry.Data[0])
+			require.Zero(t, allocator.calls)
+		})
+	}
 }
