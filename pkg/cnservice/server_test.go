@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -501,6 +502,8 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 			defer ctrl.Finish()
 			ls := mock_lock.NewMockLockService(ctrl)
 			ls.EXPECT().Close().Return(nil).Times(2)
+			txn := mock_frontend.NewMockTxnClient(ctrl)
+			txn.EXPECT().Close().Return(nil)
 			cfg := &Config{UUID: t.Name()}
 			cfg.Txn.Trace.BufferSize = 1
 			s := &service{
@@ -512,6 +515,7 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 				cancelMoServerFunc: func() {},
 				server:             closeOnlyRPCServer{},
 				lockService:        ls,
+				_txnClient:         txn,
 			}
 			s.options.traceDataPath = t.TempDir()
 

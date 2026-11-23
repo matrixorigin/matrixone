@@ -105,6 +105,50 @@ func TestMinioSDK(t *testing.T) {
 
 }
 
+func TestMinioBoundedReadResumesWithinRange(t *testing.T) {
+	// Truncate the first response after one byte. On retry the start must
+	// advance, but the inclusive end must remain unchanged.
+	requests := make(chan string, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rang := r.Header.Get("Range")
+		select {
+		case requests <- rang:
+		default:
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Last-Modified", time.Unix(1, 0).UTC().Format(http.TimeFormat))
+		switch rang {
+		case "bytes=1-3":
+			w.Header().Set("Content-Range", "bytes 1-3/5")
+			w.Header().Set("Content-Length", "3")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = io.WriteString(w, "b")
+		case "bytes=2-3":
+			w.Header().Set("Content-Range", "bytes 2-3/5")
+			w.Header().Set("Content-Length", "2")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = io.WriteString(w, "cd")
+		default:
+			http.Error(w, "unexpected range", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	sdk, err := NewMinioSDK(t.Context(), ObjectStorageArguments{Endpoint: server.URL, Bucket: "bucket", Region: "us-east-1", NoBucketValidation: true, NoDefaultCredentials: true}, nil)
+	require.NoError(t, err)
+	r, err := sdk.Read(t.Context(), "object", ptrTo[int64](1), ptrTo[int64](4))
+	require.NoError(t, err)
+	defer r.Close()
+	var first [1]byte
+	_, err = io.ReadFull(r, first[:])
+	require.NoError(t, err)
+	require.Equal(t, byte('b'), first[0])
+	rest, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "cd", string(rest))
+	require.Len(t, requests, 2)
+}
+
 func TestMinioPutObjectPhysicalAccounting(t *testing.T) {
 	var fail bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

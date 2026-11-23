@@ -1044,18 +1044,23 @@ func (s *service) destroyTables(ctx context.Context) {
 
 			for _, dc := range deletes {
 				ctx, cancel := context.WithTimeoutCause(defines.AttachAccountId(ctx, dc.accountID), time.Second*30, moerr.CauseDestroyTables)
-				if err := s.store.Delete(ctx, dc.tableID); err == nil {
-					s.mu.Lock()
-					delete(s.mu.destroyed, dc.tableID)
-					s.mu.Unlock()
-				}
+				commitTS, err := s.store.Delete(ctx, dc.tableID, dc.commitTS)
 				cancel()
+				s.mu.Lock()
+				if err == nil {
+					delete(s.mu.destroyed, dc.tableID)
+				} else if !commitTS.IsEmpty() {
+					dc.commitTS = commitTS
+					s.mu.destroyed[dc.tableID] = dc
+				}
+				s.mu.Unlock()
 			}
 		}
 	}
 }
 
 type deleteCtx struct {
+	commitTS  timestamp.Timestamp
 	accountID uint32
 	tableID   uint64
 }

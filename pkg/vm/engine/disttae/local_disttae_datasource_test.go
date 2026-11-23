@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -177,9 +176,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
 	defer closeFunc()
 
-	txnOp.AddWorkspace(&Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
-	})
+	txnOp.AddWorkspace(&Transaction{})
 
 	txnDB := txnDatabase{
 		op: txnOp,
@@ -233,7 +230,10 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		require.False(t, ss[0].IsZero())
 
 		//stats = append(stats, ss)
-		txnOp.GetWorkspace().(*Transaction).StashFlushedTombstones(ss[0])
+		stats := vector.NewVec(types.T_blob.ToType())
+		require.NoError(t, vector.AppendBytes(stats, ss[0][:], false, proc.GetMPool()))
+		txnOp.GetWorkspace().(*Transaction).flushedTombstones.adjust(txnTbl.tableId, stats, 1)
+		stats.Free(proc.GetMPool())
 	}
 
 	deletedMask := objectio.GetReusableBitmap()
@@ -260,7 +260,6 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	s3Bat.SetRowCount(8193)
 	s3Bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
 	txn := &Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 		op:            txnOp,
 		deletedBlocks: &deletedBlocks{},
 		writes: []Entry{

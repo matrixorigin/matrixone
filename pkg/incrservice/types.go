@@ -154,8 +154,9 @@ type IncrValueStore interface {
 	// the monotonic guard. Only called during ALTER TABLE AUTO_INCREMENT which holds an
 	// exclusive DDL lock, ensuring no concurrent inserts.
 	ForceSetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txnOp client.TxnOperator) error
-	// Delete remove metadata records from catalog.AutoIncrTableName.
-	Delete(ctx context.Context, tableID uint64) error
+	// Delete removes metadata and waits for local visibility. A nonempty
+	// timestamp on error identifies a committed delete; retry only its wait.
+	Delete(ctx context.Context, tableID uint64, commitTS timestamp.Timestamp) (timestamp.Timestamp, error)
 	// Close the store
 	Close()
 }

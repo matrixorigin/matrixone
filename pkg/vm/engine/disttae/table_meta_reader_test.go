@@ -604,7 +604,7 @@ func TestCloneTxnTablesInVainGCDeletesUnreferencedTxnLocalSharedObject(t *testin
 		},
 		op:              txnOp,
 		tablesInVain:    map[uint64]int{42: 1},
-		deletedBlocks:   &deletedBlocks{offsets: map[types.Blockid][]int64{}},
+		deletedBlocks:   &deletedBlocks{offsets: map[uint64]map[types.Blockid][]int64{}},
 		batchSelectList: make(map[*batch.Batch][]int64),
 	}
 	txnOp.AddWorkspace(txn)
@@ -651,7 +651,7 @@ func TestCloneTxnTablesInVainGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 		},
 		op:              txnOp,
 		tablesInVain:    map[uint64]int{42: 1},
-		deletedBlocks:   &deletedBlocks{offsets: map[types.Blockid][]int64{}},
+		deletedBlocks:   &deletedBlocks{offsets: map[uint64]map[types.Blockid][]int64{}},
 		batchSelectList: make(map[*batch.Batch][]int64),
 	}
 	txnOp.AddWorkspace(txn)
@@ -707,7 +707,7 @@ func TestCloneTxnUnknownCommitReleasesLocalStateWithoutObjectGC(t *testing.T) {
 		},
 		op:              txnOp,
 		tablesInVain:    make(map[uint64]int),
-		deletedBlocks:   &deletedBlocks{offsets: map[types.Blockid][]int64{}},
+		deletedBlocks:   &deletedBlocks{offsets: map[uint64]map[types.Blockid][]int64{}},
 		batchSelectList: make(map[*batch.Batch][]int64),
 	}
 	txnOp.AddWorkspace(txn)
