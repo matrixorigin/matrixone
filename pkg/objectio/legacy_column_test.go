@@ -169,6 +169,56 @@ func TestReadLegacyColumnWindowLZ4AndNone(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestMaterializeLegacyConstantColumnWindow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	fixed, err := vector.NewConstFixed(types.T_int64.ToType(), int64(17), 6, mp)
+	require.NoError(t, err)
+	defer fixed.Free(mp)
+	encoded := marshalLegacyTestColumn(t, fixed)
+	window, err := materializeLegacyColumnWindow(bytes.NewReader(encoded), int64(len(encoded)), 2, 3, mp)
+	require.NoError(t, err)
+	require.Equal(t, 3, window.Length())
+	for row := 0; row < 3; row++ {
+		require.Equal(t, int64(17), vector.GetFixedAtNoTypeCheck[int64](window, row))
+	}
+	window.Free(mp)
+
+	text, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("repeated value"), 6, mp)
+	require.NoError(t, err)
+	defer text.Free(mp)
+	encoded = marshalLegacyTestColumn(t, text)
+	window, err = materializeLegacyColumnWindow(bytes.NewReader(encoded), int64(len(encoded)), 1, 4, mp)
+	require.NoError(t, err)
+	require.Equal(t, 4, window.Length())
+	for row := 0; row < 4; row++ {
+		require.Equal(t, "repeated value", window.GetStringAt(row))
+	}
+	window.Free(mp)
+
+	nullValue := vector.NewConstNull(types.T_int64.ToType(), 6, mp)
+	defer nullValue.Free(mp)
+	encoded = marshalLegacyTestColumn(t, nullValue)
+	window, err = materializeLegacyColumnWindow(bytes.NewReader(encoded), int64(len(encoded)), 1, 4, mp)
+	require.NoError(t, err)
+	for row := 0; row < 4; row++ {
+		require.True(t, window.IsNull(uint64(row)))
+	}
+	window.Free(mp)
+
+	nullText := vector.NewConstNull(types.T_varchar.ToType(), 6, mp)
+	defer nullText.Free(mp)
+	encoded = marshalLegacyTestColumn(t, nullText)
+	window, err = materializeLegacyColumnWindow(bytes.NewReader(encoded), int64(len(encoded)), 2, 3, mp)
+	require.NoError(t, err)
+	require.Equal(t, 3, window.Length())
+	for row := 0; row < 3; row++ {
+		require.True(t, window.IsNull(uint64(row)))
+	}
+	window.Free(mp)
+}
+
 func TestReadLegacyColumnWindowDeduplicatesSharedVarlenaArea(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()

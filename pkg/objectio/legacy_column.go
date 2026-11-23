@@ -358,6 +358,11 @@ func materializeLegacyColumnWindow(
 	if offset < 0 || length <= 0 || offset > layout.rows-length {
 		return nil, moerr.NewInvalidInputNoCtx("legacy object column window is out of range")
 	}
+	// A constant vector with no data is a constant NULL. Its serialized
+	// metadata follows dataOffset immediately, so it must not be read as a value.
+	if layout.class == vector.CONSTANT && layout.dataLength == 0 {
+		return vector.NewConstNull(layout.typ, length, mp), nil
+	}
 	sourceNulls, err := readLegacyColumnNulls(source, layout)
 	if err != nil {
 		return nil, err
