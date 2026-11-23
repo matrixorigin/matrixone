@@ -281,8 +281,9 @@ func TestIOEntryReadErrorClearsAllocatedDataOwner(t *testing.T) {
 
 func TestIOEntryAllocatedDataErrorCleanupIsIdempotent(t *testing.T) {
 	entry := IOEntry{Size: 3}
-	finally := entry.prepareData(context.Background())
-	err := io.ErrUnexpectedEOF
+	finally, err := entry.prepareData(context.Background())
+	require.NoError(t, err)
+	err = io.ErrUnexpectedEOF
 
 	finally(&err)
 	finally(&err)
