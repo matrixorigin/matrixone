@@ -879,6 +879,50 @@ func TestUnixTimestampArgumentBounds(t *testing.T) {
 	}
 }
 
+func TestUnixTimestampSavedAndNewOverloadRanges(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	const future = "3001-01-20 00:00:00"
+	stamp, err := types.ParseTimestamp(time.UTC, future, 6)
+	require.NoError(t, err)
+	datetime, err := types.ParseDatetime(future, 6)
+	require.NoError(t, err)
+	decimalType := types.New(types.T_decimal128, 38, 6)
+	for _, tc := range []struct {
+		name       string
+		input      FunctionTestInput
+		resultType types.Type
+		old, now   any
+		oldFn      executeLogicOfOverload
+		newFn      executeLogicOfOverload
+	}{
+		{"timestamp", NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{stamp}, nil),
+			types.T_int64.ToType(), []int64{32536857600}, []int64{0}, builtInUnixTimestampLegacy, builtInUnixTimestamp},
+		{"datetime", NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, nil),
+			types.T_int64.ToType(), []int64{32536857600}, []int64{0}, builtInUnixTimestampDatetimeLegacy, builtInUnixTimestampDatetime},
+		{"varchar-int", NewFunctionTestInput(types.T_varchar.ToType(), []string{future}, nil),
+			types.T_int64.ToType(), []int64{32536857600}, []int64{0}, builtInUnixTimestampVarcharToInt64Legacy, builtInUnixTimestampVarcharToInt64},
+		{"varchar-decimal", NewFunctionTestInput(types.T_varchar.ToType(), []string{future}, nil),
+			decimalType, []types.Decimal128{mustDecimal128(t, "32536857600.000000", 38, 6)}, []types.Decimal128{{}},
+			builtInUnixTimestampVarcharToDecimal128Legacy, builtInUnixTimestampVarcharToDecimal128},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, binding := range []struct {
+				name string
+				fn   executeLogicOfOverload
+				want any
+			}{{"saved", tc.oldFn, tc.old}, {"new", tc.newFn, tc.now}} {
+				t.Run(binding.name, func(t *testing.T) {
+					caseUnderTest := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
+						NewFunctionTestResult(tc.resultType, false, binding.want, nil), binding.fn)
+					ok, info := caseUnderTest.RunAndFree()
+					require.True(t, ok, info)
+				})
+			}
+		})
+	}
+}
+
 func TestUnixTimestampTypedTimestampPreservesFraction(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC

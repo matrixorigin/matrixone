@@ -164,7 +164,8 @@ func TestTableDumpDefaultTimeZones(t *testing.T) {
 		{"varchar_expression", "varchar(64) default (from_unixtime(1704067200,'%Y-%m-%d %H:%i:%s'))", "UTC", true},
 		{"named_timezone", "timestamp default '1971-01-01 00:00:00'", "Africa/Monrovia", true},
 		{"numeric_expression", "int default (hour(from_unixtime(1704067200)))", "Pacific/Chatham", true},
-		{"unfolded_unix_timestamp", "bigint default (unix_timestamp('1971-01-01 00:00:00'))", "Africa/Monrovia", false},
+		// The saved overload generation and the current one have distinct bound trees.
+		{"unfolded_unix_timestamp", "bigint default (unix_timestamp('1971-01-01 00:00:00'))", "Africa/Monrovia", true},
 		{"dst_expression", "varchar(64) default (concat(from_unixtime(1704067200,'%H'),':',from_unixtime(1719792000,'%H')))", "America/New_York", true},
 		{"uuid_datetime", "uuid default (uuid(cast('2024-01-01 00:00:00' as datetime)))", "Africa/Monrovia", true},
 		{"datetime_literal", "datetime default '2024-01-01 00:00:00'", "UTC", false},
@@ -583,6 +584,38 @@ func TestTableDumpCurrentMonthAbbrevNonUTCCreation(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestTableDumpCurrentMonthAbbrevLargeExpressionNearZoneBoundary(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.FixedZone("creation zone", 13*3600+47*60)
+	proc.GetSessionInfo().LCTimeNames = "en_US"
+	compiler := NewMockCompilerContext(false, proc)
+	compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+		switch name {
+		case "lc_time_names":
+			return "en_US", nil
+		case "div_precision_increment":
+			return int64(0), nil
+		case "explicit_defaults_for_timestamp":
+			return true, nil
+		}
+		return "", nil
+	}
+	defaultSQL := "concat(date_format(from_unixtime(1709251200), '%b %Y-%m-%d %H:%i')" +
+		strings.Repeat(", 'x'", 290) + ")"
+	stmt, err := mysql.ParseOne(t.Context(), "create table t(a varchar(2048) default ("+defaultSQL+"))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false, nil)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef()
+	require.Contains(t, def.Cols[0].Default.Expr.GetLit().GetSval(), "Mar 2024-03-01 13:47")
+	before := proto.Clone(def)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	_, err = AnalyzeTableDumpBindings(compiler, def, def)
+	require.NoError(t, err)
+	require.True(t, proto.Equal(before, def))
 }
 
 func TestTableDumpSharedTimezoneWitnessAcrossDefaults(t *testing.T) {

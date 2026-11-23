@@ -840,7 +840,7 @@ func TestUnixTimestampDatetimeOverloadDoesNotAdmitTime(t *testing.T) {
 
 	current, err := GetFunctionByName(ctx, "unix_timestamp", []types.Type{types.T_datetime.ToTypeWithScale(6)})
 	require.NoError(t, err)
-	require.Equal(t, int32(4), current.overloadId)
+	require.Equal(t, int32(8), current.overloadId)
 	require.False(t, current.needCast)
 
 	legacy, err := GetFunctionByName(WithLegacyUnixTimestampDatetime(ctx), "unix_timestamp", []types.Type{types.T_datetime.ToTypeWithScale(6)})

@@ -264,6 +264,7 @@ const (
 	tableDumpBindingLegacyJapaneseMonthAbbrev tableDumpBindingMode = 1 << 5
 	tableDumpBindingPreTemporalNullability    tableDumpBindingMode = 1 << 7
 	tableDumpBindingPreUnixTimestampDatetime  tableDumpBindingMode = 1 << 8
+	tableDumpBindingPreUnixTimestampBounds    tableDumpBindingMode = 1 << 18
 	tableDumpBindingPreJSON                   tableDumpBindingMode = 1 << 6
 	tableDumpBindingPreIncompleteTemporal     tableDumpBindingMode = 1 << 10
 	tableDumpBindingDDLColumnScope            tableDumpBindingMode = 1 << 9
@@ -455,7 +456,7 @@ func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, ite
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability | tableDumpBindingLegacyJapaneseMonthAbbrev)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreUnixTimestampBounds | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability | tableDumpBindingLegacyJapaneseMonthAbbrev)
 	if mode&tableDumpBindingPreDecimalPrecision != 0 {
 		bindCtx = function.WithLegacyDecimalIntermediatePrecision(bindCtx)
 	}
@@ -479,6 +480,9 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	}
 	if mode&tableDumpBindingPreUnixTimestampDatetime != 0 {
 		bindCtx = function.WithLegacyUnixTimestampDatetime(bindCtx)
+	}
+	if mode&tableDumpBindingPreUnixTimestampBounds != 0 {
+		bindCtx = function.WithLegacyUnixTimestampOverloads(bindCtx)
 	}
 	if mode&tableDumpBindingPreIncompleteTemporal != 0 {
 		bindCtx = function.WithLegacyIncompleteTemporalStrings(bindCtx)
@@ -875,8 +879,8 @@ func matchTableDumpSessions(want *planpb.Expr, zone *time.Location, locale strin
 			if sessions[i].increment != sessions[j].increment {
 				return sessions[i].increment < sessions[j].increment
 			}
-			return sessions[i].mode&tableDumpBindingLegacyJapaneseMonthAbbrev != 0 &&
-				sessions[j].mode&tableDumpBindingLegacyJapaneseMonthAbbrev == 0
+			return sessions[i].mode&tableDumpBindingLegacyJapaneseMonthAbbrev == 0 &&
+				sessions[j].mode&tableDumpBindingLegacyJapaneseMonthAbbrev != 0
 		})
 	}
 	for _, search := range sessions {
@@ -1116,11 +1120,12 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				}
 			}
 			if visit.hasUnixTimestamp {
-				// Rebind complete pre-overload trees, including their implicit
-				// DATETIME -> TIMESTAMP cast, under each applicable earlier era.
+				// Rebind both released overload generations, including the
+				// pre-DATETIME implicit cast, under each applicable earlier era.
 				oldModes := append([]tableDumpBindingMode(nil), modes...)
 				for _, mode := range oldModes {
-					modes = append(modes, mode|tableDumpBindingPreUnixTimestampDatetime)
+					modes = append(modes, mode|tableDumpBindingPreUnixTimestampBounds,
+						mode|tableDumpBindingPreUnixTimestampDatetime)
 				}
 			}
 			if visit.hasIncompleteTemporal {

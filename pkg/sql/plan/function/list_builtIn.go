@@ -12576,7 +12576,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return builtInUnixTimestamp
+					return builtInUnixTimestampLegacy
 				},
 			},
 			{
@@ -12588,7 +12588,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return builtInUnixTimestampVarcharToInt64
+					return builtInUnixTimestampVarcharToInt64Legacy
 				},
 			},
 			{
@@ -12600,11 +12600,67 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return types.New(types.T_decimal128, 38, 6)
 				},
 				newOp: func() executeLogicOfOverload {
-					return builtInUnixTimestampVarcharToDecimal128
+					return builtInUnixTimestampVarcharToDecimal128Legacy
 				},
 			},
 			{
 				overloadId:      4,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					if parameters[0].Scale > 0 {
+						return types.New(types.T_decimal128, 38, 6)
+					}
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInUnixTimestampDatetimeLegacy
+				},
+			},
+			// IDs 0..4 belong to persisted expressions. New bindings use these
+			// range-corrected overloads without changing old defaults on upgrade.
+			{
+				overloadId:      5,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					if len(parameters) > 0 && parameters[0].Scale > 0 {
+						return types.New(types.T_decimal128, 38, 6)
+					}
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInUnixTimestamp
+				},
+			},
+			{
+				overloadId:      6,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInUnixTimestampVarcharToInt64
+				},
+			},
+			{
+				overloadId:      7,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_varchar, types.T_decimal128},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_decimal128, 38, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInUnixTimestampVarcharToDecimal128
+				},
+			},
+			{
+				overloadId:      8,
 				volatile:        true,
 				executionStable: true,
 				args:            []types.T{types.T_datetime},

@@ -3141,17 +3141,36 @@ func unswapUUIDTimeParts(u types.Uuid) types.Uuid {
 	}
 }
 
-// MySQL accepts UNIX_TIMESTAMP arguments from one second after the epoch up to
-// the last microsecond representable by FROM_UNIXTIME on 64-bit platforms.
-// Check microseconds so the lower fractional second and upper fractional
-// second have the same behavior for every input and result overload.
-func unixTimestampArgumentMicroseconds(value types.Timestamp) (int64, bool) {
+// Persisted defaults retain their bound overload ID across upgrades. Earlier
+// UNIX_TIMESTAMP overloads accepted every post-epoch value; new bindings use
+// the corrected MySQL range without changing those saved expressions.
+type unixTimestampBounds struct{ lower, upper int64 }
+
+func (bounds unixTimestampBounds) microseconds(value types.Timestamp) (int64, bool) {
 	unixMicro := int64(value) - int64(types.UnixToTimestamp(0))
-	return unixMicro, unixMicro >= types.MicroSecsPerSec &&
-		unixMicro <= maxUnixTimestampInt*types.MicroSecsPerSec+types.MicroSecsPerSec-1
+	return unixMicro, unixMicro >= bounds.lower && unixMicro <= bounds.upper
+}
+
+func currentUnixTimestampBounds() unixTimestampBounds {
+	return unixTimestampBounds{
+		lower: types.MicroSecsPerSec,
+		upper: maxUnixTimestampInt*types.MicroSecsPerSec + types.MicroSecsPerSec - 1,
+	}
+}
+
+func legacyUnixTimestampBounds() unixTimestampBounds {
+	return unixTimestampBounds{lower: 0, upper: math.MaxInt64}
 }
 
 func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return executeUnixTimestamp(parameters, result, proc, length, currentUnixTimestampBounds())
+}
+
+func builtInUnixTimestampLegacy(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return executeUnixTimestamp(parameters, result, proc, length, legacyUnixTimestampBounds())
+}
+
+func executeUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, bounds unixTimestampBounds) error {
 	if len(parameters) == 0 {
 		rs := vector.MustFunctionResult[int64](result)
 		// The executor stores the query timestamp here, including the session
@@ -3173,7 +3192,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 		var zero types.Decimal128
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetValue(i)
-			unixMicro, inRange := unixTimestampArgumentMicroseconds(v1)
+			unixMicro, inRange := bounds.microseconds(v1)
 			if null1 {
 				if err := rs.Append(zero, true); err != nil {
 					return err
@@ -3199,7 +3218,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
-		unixMicro, inRange := unixTimestampArgumentMicroseconds(v1)
+		unixMicro, inRange := bounds.microseconds(v1)
 		if null1 {
 			if err := rs.Append(0, true); err != nil {
 				return err
@@ -3225,6 +3244,14 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 // zone so a DST gap follows UNIX_TIMESTAMP's normalization policy instead of
 // the strict DATETIME-to-TIMESTAMP assignment cast.
 func builtInUnixTimestampDatetime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return executeUnixTimestampDatetime(parameters, result, proc, length, currentUnixTimestampBounds())
+}
+
+func builtInUnixTimestampDatetimeLegacy(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return executeUnixTimestampDatetime(parameters, result, proc, length, legacyUnixTimestampBounds())
+}
+
+func executeUnixTimestampDatetime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, bounds unixTimestampBounds) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
 	zone := proc.GetSessionInfo().TimeZone
 	if result.GetResultVector().GetType().Oid == types.T_decimal128 {
@@ -3237,7 +3264,7 @@ func builtInUnixTimestampDatetime(parameters []*vector.Vector, result vector.Fun
 				}
 				continue
 			}
-			unixMicro, inRange := unixTimestampArgumentMicroseconds(value.ToTimestamp(zone))
+			unixMicro, inRange := bounds.microseconds(value.ToTimestamp(zone))
 			if !inRange {
 				unixMicro = 0
 			}
@@ -3257,7 +3284,7 @@ func builtInUnixTimestampDatetime(parameters []*vector.Vector, result vector.Fun
 			}
 			continue
 		}
-		unixMicro, inRange := unixTimestampArgumentMicroseconds(value.ToTimestamp(zone))
+		unixMicro, inRange := bounds.microseconds(value.ToTimestamp(zone))
 		if !inRange {
 			unixMicro = 0
 		}
@@ -3277,6 +3304,14 @@ func parseTimestampForUnix(loc *time.Location, s string) (types.Timestamp, bool)
 }
 
 func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return executeUnixTimestampVarcharToInt64(parameters, result, proc, length, currentUnixTimestampBounds())
+}
+
+func builtInUnixTimestampVarcharToInt64Legacy(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return executeUnixTimestampVarcharToInt64(parameters, result, proc, length, legacyUnixTimestampBounds())
+}
+
+func executeUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, bounds unixTimestampBounds) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
 
@@ -3294,7 +3329,7 @@ func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vect
 				}
 				continue
 			}
-			unixMicro, inRange := unixTimestampArgumentMicroseconds(timestamp)
+			unixMicro, inRange := bounds.microseconds(timestamp)
 			if timestamp == types.ZeroTimestamp {
 				if err := rs.Append(0, true); err != nil {
 					return err
@@ -3334,7 +3369,7 @@ func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result ve
 				}
 				continue
 			}
-			unixMicro, inRange := unixTimestampArgumentMicroseconds(val)
+			unixMicro, inRange := currentUnixTimestampBounds().microseconds(val)
 			if val == types.ZeroTimestamp {
 				if err := rs.Append(0, true); err != nil {
 					return err
@@ -3355,6 +3390,14 @@ func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result ve
 }
 
 func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return executeUnixTimestampVarcharToDecimal128(parameters, result, proc, length, currentUnixTimestampBounds())
+}
+
+func builtInUnixTimestampVarcharToDecimal128Legacy(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return executeUnixTimestampVarcharToDecimal128(parameters, result, proc, length, legacyUnixTimestampBounds())
+}
+
+func executeUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, bounds unixTimestampBounds) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Decimal128](result)
 
@@ -3379,7 +3422,7 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 				}
 				continue
 			}
-			unixMicro, inRange := unixTimestampArgumentMicroseconds(timestamp)
+			unixMicro, inRange := bounds.microseconds(timestamp)
 			if !inRange {
 				if err := rs.Append(d, false); err != nil {
 					return err

@@ -24,6 +24,18 @@ type legacySpecialConsumerContextKey struct{}
 type legacyTimestampAddSecondContextKey struct{}
 type legacyDecimalIntegerDivContextKey struct{}
 type legacyUnixTimestampDatetimeContextKey struct{}
+type legacyUnixTimestampOverloadsContextKey struct{}
+
+// WithLegacyUnixTimestampOverloads reconstructs expressions bound before the
+// range-corrected UNIX_TIMESTAMP overloads were added.
+func WithLegacyUnixTimestampOverloads(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyUnixTimestampOverloadsContextKey{}, true)
+}
+
+func LegacyUnixTimestampOverloads(ctx context.Context) bool {
+	value, _ := ctx.Value(legacyUnixTimestampOverloadsContextKey{}).(bool)
+	return value
+}
 
 // WithLegacyUnixTimestampDatetime reconstructs pre-DATETIME-overload trees
 // only while verifying persisted table expressions during DUMP/LOAD.
