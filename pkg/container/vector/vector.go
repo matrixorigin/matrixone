@@ -1581,9 +1581,6 @@ func validateVectorBinary(
 				}
 				payloadLen = size
 			}
-			if err := validateJSONPayload(typ, values[i].GetByteSlice(area)); err != nil {
-				return err
-			}
 			if arrayElementSize > 0 && payloadLen%uint32(arrayElementSize) != 0 {
 				return moerr.NewInvalidInputNoCtx("invalid vector array payload size")
 			}
@@ -5534,9 +5531,6 @@ func AppendBytesWithWriter(vec *Vector, size int, mp *mpool.MPool, writer func([
 		}
 		value.SetOffsetLen(uint32(offset), uint32(size))
 	}
-	if err = validateJSONPayload(vec.typ, value.GetByteSlice(vec.area)); err != nil {
-		return err
-	}
 	if err = types.ValidateCollationValue(vec.typ, value.GetByteSlice(vec.area)); err != nil {
 		return err
 	}
@@ -7933,14 +7927,9 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 	if err := vec.checkMP(m); err != nil {
 		return err
 	}
-	if err := validateJSONPayload(vec.typ, *bs); err != nil {
-		return err
-	}
 	return buildVarlenaNoInline(vec, v1, bs, m)
 }
 
-// buildVarlenaNoInline copies bytes already admitted by a raw boundary or
-// borrowed from an immutable source vector of the same type.
 func buildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.MPool) error {
 	vlen := len(*bs)
 	area1 := vec.GetArea()
@@ -7969,9 +7958,6 @@ func buildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 
 func BuildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
 	if err := vec.checkMP(m); err != nil {
-		return err
-	}
-	if err := validateJSONValue(vec.typ, bj); err != nil {
 		return err
 	}
 	return buildVarlenaNoInlineFromByteJson(vec, v1, bj, m)
@@ -8031,9 +8017,6 @@ func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpo
 	if err := types.ValidateCollationValue(vec.typ, *bs); err != nil {
 		return err
 	}
-	if err := validateJSONPayload(vec.typ, *bs); err != nil {
-		return err
-	}
 	vlen := len(*bs)
 	if vlen <= types.VarlenaInlineSize {
 		// first clear varlena to 0
@@ -8050,9 +8033,6 @@ func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpo
 
 func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
 	if err := vec.checkMP(m); err != nil {
-		return err
-	}
-	if err := validateJSONValue(vec.typ, bj); err != nil {
 		return err
 	}
 	stored, err := bj.StorageCompatible()
@@ -8075,8 +8055,8 @@ func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJso
 	return buildVarlenaNoInlineFromByteJson(vec, v, bj, m)
 }
 
-// Validate the bytes emitted by the encoder before publishing the row. An
-// optional source validator cannot certify an arbitrary encoder's output.
+// BuildVarlenaFromByteJsonEncoded encodes enc directly into the vector. An
+// encoder whose source can be invalid validates it first.
 func BuildVarlenaFromByteJsonEncoded(
 	vec *Vector, v *types.Varlena, enc bytejson.ByteJsonDataEncoder, m *mpool.MPool,
 ) error {
@@ -8108,10 +8088,6 @@ func BuildVarlenaFromByteJsonEncoded(
 			return moerr.NewInternalErrorNoCtxf(
 				"bytejson encoder size mismatch: expected %d, got %d", len(dst), n,
 			)
-		}
-		if err := validateJSONPayload(vec.typ, v.GetByteSlice(nil)); err != nil {
-			*v = oldValue
-			return err
 		}
 		return nil
 	}
@@ -8146,10 +8122,6 @@ func BuildVarlenaFromByteJsonEncoded(
 		return moerr.NewInternalErrorNoCtxf(
 			"bytejson encoder size mismatch: expected %d, got %d", len(dst), n,
 		)
-	}
-	if err := validateJSONPayload(vec.typ, vec.area[oldAreaLen:int(newAreaLen)]); err != nil {
-		vec.area = vec.area[:oldAreaLen]
-		return err
 	}
 	v.SetOffsetLen(uint32(oldAreaLen), uint32(storageSize))
 	return nil
