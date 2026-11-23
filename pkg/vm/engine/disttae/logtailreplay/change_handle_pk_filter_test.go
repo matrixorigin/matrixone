@@ -125,6 +125,10 @@ type replayDispatchFS struct {
 	onFirstRead             sync.Once
 }
 
+func (*replayDispatchFS) SupportsReadCancellation() bool {
+	return true
+}
+
 func (fs *replayDispatchFS) Read(ctx context.Context, v *fileservice.IOVector) error {
 	if v.FilePath == fs.firstObject && len(v.Entries) > 1 {
 		fs.onFirstRead.Do(func() { close(fs.firstRead) })
@@ -190,6 +194,10 @@ type replayReadFailureFS struct {
 	missingErr      error
 	started         chan struct{}
 	stopped         chan struct{}
+}
+
+func (*replayReadFailureFS) SupportsReadCancellation() bool {
+	return true
 }
 
 func (fs *replayReadFailureFS) Read(ctx context.Context, v *fileservice.IOVector) error {
@@ -278,6 +286,88 @@ func TestHistoricalChangesCancelPendingReadsOnMissingFile(t *testing.T) {
 			default:
 				t.Fatal("replay returned before the canceled read finished")
 			}
+		})
+	}
+}
+
+type replayUninterruptibleFS struct {
+	fileservice.FileService
+	object   string
+	metadata bool
+	started  chan struct{}
+	release  chan struct{}
+	onRead   sync.Once
+}
+
+func (fs *replayUninterruptibleFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+	if v.FilePath == fs.object && (len(v.Entries) == 1) == fs.metadata {
+		fs.onRead.Do(func() { close(fs.started) })
+		<-fs.release
+	}
+	return fs.FileService.Read(ctx, v)
+}
+
+func TestHistoricalChangesAvoidUninterruptibleReadAhead(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		metadata bool
+	}{
+		{name: "later object metadata", metadata: true},
+		{name: "later object payload"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			mem, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			defer mem.Close(ctx)
+
+			ts := types.BuildTS(100, 0)
+			first := writeReplayTestObject(t, ctx, mp, mem, ts, 11)
+			later := writeReplayTestObject(t, ctx, mp, mem, ts.Next(), 11)
+			filter := &engine.PKFilter{Segments: [][]byte{index.NewZM(types.T_int32, 0)}, PrefetchObjectMeta: true}
+			key := int32(11)
+			index.UpdateZM(filter.Segments[0], types.EncodeInt32(&key))
+			ctx = engine.WithPKFilter(ctx, filter)
+			changes := &ChangeHandler{
+				pkFilter:                 filter,
+				enableCommitTSBlockPrune: true,
+				scheduler:                tasks.NewParallelJobScheduler(LoadParallism),
+			}
+			defer changes.scheduler.Stop()
+			fs := &replayUninterruptibleFS{
+				FileService: mem,
+				object:      later.ObjectName().String(),
+				metadata:    tc.metadata,
+				started:     make(chan struct{}),
+				release:     make(chan struct{}),
+			}
+			handle := NewAObjectHandle(ctx, &baseHandle{changesHandle: changes}, false, ts, ts.Next(),
+				[]*objectio.ObjectEntry{first, later}, fs, mp)
+			done := make(chan struct{})
+			defer func() {
+				close(fs.release)
+				<-done
+				for _, b := range handle.cache {
+					b.Clean(mp)
+				}
+			}()
+			go func() {
+				err = handle.prefetch(ctx)
+				close(done)
+			}()
+			select {
+			case <-fs.started:
+				t.Fatal("reading the first object waited on a later object")
+			case <-ctx.Done():
+				t.Fatal("the first object failed to make progress")
+			case <-done:
+				require.NoError(t, err)
+			}
+			require.NotEmpty(t, handle.cache)
+			require.Equal(t, []types.TS{ts}, vector.MustFixedColWithTypeCheck[types.TS](handle.cache[0].Vecs[2]))
 		})
 	}
 }

@@ -1586,9 +1586,7 @@ func (h *AObjectHandle) nextPrefetchTarget(
 			continue
 		}
 		blk = uint16(h.blkOffsetCursor)
-		changes := h.p.changesHandle
-		if metadata != nil && blk == 0 && changes.enableCommitTSBlockPrune &&
-			changes.pkFilter != nil && changes.pkFilter.PrefetchObjectMeta && h.needsBlockPlan(obj) {
+		if metadata != nil && blk == 0 && h.needsBlockPlan(obj) {
 			if err := h.awaitBlockPlan(ctx, metadata, obj); err != nil {
 				return nil, 0, false, err
 			}
@@ -1990,8 +1988,19 @@ func (h *AObjectHandle) prefetch(ctx context.Context) error {
 
 	readCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	var metadata aobjPlanPrefetch
-	defer h.finishBlockPlanPrefetch(&metadata)
+	width := LoadParallism
+	var metadata *aobjPlanPrefetch
+	changes := h.p.changesHandle
+	if changes.enableCommitTSBlockPrune && changes.pkFilter != nil && changes.pkFilter.PrefetchObjectMeta {
+		if fileservice.SupportsReadCancellation(h.fs) {
+			metadata = &aobjPlanPrefetch{}
+			defer h.finishBlockPlanPrefetch(metadata)
+		} else {
+			// An unrelated read must not delay the caller's snapshot fallback.
+			// Read one block at a time when we cannot cancel in-flight I/O.
+			width = 1
+		}
+	}
 
 	var blockIDs [LoadParallism]uint16
 	var groups [LoadParallism]aObjectReadGroup
@@ -2034,11 +2043,11 @@ func (h *AObjectHandle) prefetch(ctx context.Context) error {
 	}
 
 	groupCount := 0
-	for i := range blockIDs {
+	for i := range blockIDs[:width] {
 		if readCtx.Err() != nil {
 			break
 		}
-		obj, blk, ok, targetErr := h.nextPrefetchTarget(readCtx, &metadata)
+		obj, blk, ok, targetErr := h.nextPrefetchTarget(readCtx, metadata)
 		if targetErr != nil {
 			cancel(targetErr)
 			break

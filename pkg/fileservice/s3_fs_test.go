@@ -47,6 +47,15 @@ type objectStorageReadRange struct {
 	max *int64
 }
 
+func TestS3FSReadCancellationCapability(t *testing.T) {
+	require.True(t, SupportsReadCancellation(&S3FS{rawStorage: &AwsSDKv2{}}))
+	require.True(t, SupportsReadCancellation(&S3FS{rawStorage: &MinioSDK{}}))
+	require.True(t, SupportsReadCancellation(&S3FS{rawStorage: &AliyunSDK{}}))
+	require.True(t, SupportsReadCancellation(&S3FS{rawStorage: &QCloudSDK{}}))
+	require.False(t, SupportsReadCancellation(&S3FS{rawStorage: &HDFS{}}))
+	require.False(t, SupportsReadCancellation(&S3FS{rawStorage: &diskObjectStorage{}}))
+}
+
 type testObjectCopyStorage struct {
 	dummyObjectStorage
 	src     ObjectStorage

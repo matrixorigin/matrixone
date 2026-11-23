@@ -63,6 +63,10 @@ func (m *MemoryFS) Name() string {
 	return m.name
 }
 
+func (*MemoryFS) SupportsReadCancellation() bool {
+	return true
+}
+
 func (m *MemoryFS) Close(ctx context.Context) {
 }
 

@@ -336,6 +336,16 @@ func (s *S3FS) Name() string {
 	return s.name
 }
 
+func (s *S3FS) SupportsReadCancellation() bool {
+	switch s.rawStorage.(type) {
+	case *AwsSDKv2, *MinioSDK, *AliyunSDK, *QCloudSDK:
+		return true
+	default:
+		// In particular, HDFS Open and FileReader.Read do not take a context.
+		return false
+	}
+}
+
 func (s *S3FS) pathToKey(filePath string) string {
 	return pathpkg.Join(s.keyPrefix, filePath)
 }
