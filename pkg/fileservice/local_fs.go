@@ -788,8 +788,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 			}
 
 			dataEntry := &entry
-			readToEnd := entry.Size < 0
-			if readToEnd {
+			if entry.Size < 0 {
 				var data []byte
 				data, err = io.ReadAll(r)
 				if err != nil {
@@ -799,8 +798,10 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				entry.Size = int64(len(data))
 
 			} else {
-				// Rollback must clear the vector entry that owns the allocated data.
-				dataEntry = &vector.Entries[i]
+				if cap(entry.Data) < int(entry.Size) {
+					// Rollback must clear the vector entry that owns the allocated data.
+					dataEntry = &vector.Entries[i]
+				}
 				finally, prepareErr := dataEntry.prepareData(ctx)
 				if prepareErr != nil {
 					return prepareErr
@@ -821,7 +822,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 			}
 			fileWithChecksum.dontNeedContentRange(dataEntry.Offset, dataEntry.Size)
 
-			if readToEnd {
+			if dataEntry == &entry {
 				vector.Entries[i] = entry
 			}
 
