@@ -132,37 +132,56 @@ select id from t order by l2_distance(v, '[1,1,1]') limit 1;
 
 deallocate prepare check_t;
 
--- PK UPDATE: sync FULLTEXT / IVF_FLAT reject it today (#25617); MASTER supports it.
-create table pk_ft (id bigint primary key, body text, fulltext ft(body));
-insert into pk_ft values (1, 'alpha'), (2, 'beta');
-update pk_ft set id = 5 where id = 1;
-select id from pk_ft order by id;
-
-create table pk_ivf (id bigint primary key, v vecf32(3));
-create index ix using ivfflat on pk_ivf(v) lists = 1 op_type 'vector_l2_ops';
-insert into pk_ivf values (1, '[1,1,1]'), (2, '[2,2,2]');
-update pk_ivf set id = 5 where id = 1;
-select id from pk_ivf order by id;
-
-create table pk_ms (id bigint primary key, a varchar(10), b varchar(10));
-create index ms using master on pk_ms(a, b);
-insert into pk_ms values (1, 'x1', 'y1'), (2, 'x2', 'y2');
+-- PK UPDATE: entries are deleted by the old key and rebuilt under the new key.
+create table pk (id bigint primary key, body text, a varchar(10), b varchar(10), v vecf32(3));
+insert into pk values (1, 'alpha one', 'x1', 'y1', '[1,0,0]'), (2, 'beta two', 'x2', 'y2', '[0,1,0]');
+create fulltext index ft on pk(body);
+create index ix using ivfflat on pk(v) lists = 1 op_type 'vector_l2_ops';
+create index ms using master on pk(a, b);
+set @pk_ft = (select index_table_name from mo_catalog.mo_indexes
+    where name = 'ft' and algo = 'fulltext'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'pk')
+    limit 1);
+set @pk_ivf = (select index_table_name from mo_catalog.mo_indexes
+    where name = 'ix' and algo = 'ivfflat' and algo_table_type = 'entries'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'pk')
+    limit 1);
 set @pk_ms = (select index_table_name from mo_catalog.mo_indexes
     where name = 'ms' and algo = 'master'
-      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'pk_ms')
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'pk')
     limit 1);
-set @check_ms_sql = concat(
-    'select (select count(*) from `', database(), '`.`', @pk_ms, '` where __mo_index_pri_col not in (select id from pk_ms)) as orphan, ',
-    '(select count(*) from pk_ms where id not in (select __mo_index_pri_col from `', database(), '`.`', @pk_ms, '`)) as missing'
+set @check_pk_sql = concat(
+    'select ''ft'' as idx, ',
+    '(select count(distinct doc_id) from `', database(), '`.`', @pk_ft, '` where doc_id not in (select id from pk)) as orphan, ',
+    '(select count(*) from pk where id not in (select doc_id from `', database(), '`.`', @pk_ft, '`)) as missing ',
+    'union all select ''ivf'', ',
+    '(select count(*) from `', database(), '`.`', @pk_ivf, '` where __mo_index_pri_col not in (select id from pk)), ',
+    '(select count(*) from pk where id not in (select __mo_index_pri_col from `', database(), '`.`', @pk_ivf, '`)) ',
+    'union all select ''ms'', ',
+    '(select count(*) from `', database(), '`.`', @pk_ms, '` where __mo_index_pri_col not in (select id from pk)), ',
+    '(select count(*) from pk where id not in (select __mo_index_pri_col from `', database(), '`.`', @pk_ms, '`)) ',
+    'order by idx'
 );
-prepare check_ms from @check_ms_sql;
-update pk_ms set id = 5 where id = 1;
-execute check_ms;
+prepare check_pk from @check_pk_sql;
+update pk set id = 5 where id = 1;
+execute check_pk;
 -- swap keys inside one statement
-update pk_ms set id = 7 - id;
-execute check_ms;
-select id from pk_ms where a = 'x1' and b = 'y1';
-deallocate prepare check_ms;
+update pk set id = 7 - id;
+execute check_pk;
+select id from pk where match(body) against('alpha');
+select id from pk order by l2_distance(v, '[1,0,0]') limit 1;
+select id from pk where a = 'x1' and b = 'y1';
+-- a rolled-back PK UPDATE leaves the indexes untouched
+begin;
+update pk set id = 100 where id = 2;
+rollback;
+execute check_pk;
+-- PK and indexed values change together
+update pk set v = if(id = 2, '[0,0,1]', '[0,0,9]'), id = id + 10, body = concat(body, ' gamma');
+execute check_pk;
+select id from pk where match(body) against('gamma') order by id;
+select id from pk order by l2_distance(v, '[0,0,1]') limit 1;
+deallocate prepare check_pk;
 
 -- composite primary key: hidden tables store the serialized key
 create table ck (k1 varchar(10), k2 int, body text, a varchar(10), b varchar(10), primary key (k1, k2));

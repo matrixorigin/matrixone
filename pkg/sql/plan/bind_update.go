@@ -539,13 +539,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 
 		var unsupportedIrregularRoute bool
 		inlineIrregularIndexes[i], unsupportedIrregularRoute, err = classifyIrregularIndexesForUpdate(
-			builder.GetContext(), tableDef, dmlCtx.updateCol2Expr[i])
+			tableDef, dmlCtx.updateCol2Expr[i])
 		if err != nil {
-			if stmt.HasReturning() {
-				if feature := returningUpdatePlannerFeature(err); feature != "" {
-					return 0, returningNotSupported(builder, feature)
-				}
-			}
 			return 0, err
 		}
 		if unsupportedIrregularRoute {
@@ -5321,13 +5316,9 @@ func irregularIndexAffectedByUpdatedColumnNames(
 // from CDC-only indexes using plugin metadata. MASTER has no plugin, but shares
 // the modern synchronous maintenance pipeline with the plugin-backed indexes.
 // The bool return reports an affected irregular algorithm that has not migrated
-// to either mechanism. MASTER indexes delete
-// by the old source PK and rebuild from the final row image, so changing the
-// base-table PK is handled by the same maintenance pipeline. Plugin-backed
-// synchronous full-text/vector indexes retain their existing PK-update
-// restriction until their complete hidden-table groups support that contract.
+// to either mechanism. Synchronous indexes delete by the old source PK and
+// rebuild from the final row image, so a primary-key change affects every one.
 func classifyIrregularIndexesForUpdate(
-	ctx context.Context,
 	tableDef *plan.TableDef,
 	updateCols map[string]tree.Expr,
 ) (inline []*plan.IndexDef, unsupported bool, err error) {
@@ -5370,16 +5361,7 @@ func classifyIrregularIndexesForUpdate(
 		if async {
 			continue
 		}
-		if pkUpdated {
-			return nil, false, newUpdatePlannerRouteError(
-				updatePlannerRejected,
-				updateRouteReasonIrregularIndex,
-				moerr.NewUnsupportedDML(
-					ctx,
-					"update primary key on a table with a synchronous full-text/vector index"),
-			)
-		}
-		if affected {
+		if affected || pkUpdated {
 			affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] = true
 		}
 	}

@@ -63,10 +63,14 @@ select count(*) from indexed_t where match(body) against('updated');
 count(*)
 1
 update indexed_t set id = 2 where id = 1 returning id;
-not supported: DML RETURNING does not support primary-key UPDATE on synchronous full-text/vector index
-delete from indexed_t where id = 1 returning id, email, body;
+id
+2
+select id from indexed_t where match(body) against('updated');
+id
+2
+delete from indexed_t where id = 2 returning id, email, body;
 id    email    body
-1    a@example.com    updated base row
+2    a@example.com    updated base row
 select count(*) from indexed_t where match(body) against('updated');
 count(*)
 0
