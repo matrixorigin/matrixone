@@ -9,10 +9,12 @@ The mo-bot reviewer does not stop at reading the code. It **runs probes**: real 
 entry points, a storage fake gated per offset, budgets shrunk to a few units, and a
 passing control next to every failing probe. On one fileservice PR, each review round found 1–4
 new transition bugs this way. Running the same process before the push leaves the bot
-nothing to find. A transition finding requires a probe that fails. When no probe can
-be built (a platform-gated or CGo/GPU package, or a window with no seam), report the
-finding traced from source under the first-principles proof, marked "probe not built:
-<constraint>". Severity is calibrated as in the review contract.
+nothing to find. A transition claim, finding or cleared cell, needs the cheapest
+proof that settles it under the shared evidence rules: a probe, a qualifying existing
+test or result at the owning boundary, or, when neither exists nor can be built, a
+source trace under the first-principles proof marked "probe not built: <constraint>".
+A probe through a public entry point is required where caller behavior or
+reachability is still uncertain. Severity is calibrated as in the review contract.
 
 ## 1. Transition inventory (from the diff, not from memory)
 
@@ -88,7 +90,8 @@ Every probe:
    and starves someone else".
 5. **Pairs every failing probe with a control** in the same run that must succeed,
    such as a direct read that skips the cache, an exact read, or a live variant. If
-   the control also fails, the fixture is broken, not the code.
+   the control also fails, the comparison is inconclusive: the fixture or a path both
+   share is broken. Check the shared path, or compare both on the base.
 6. **Runs on the revisions its claim needs (§7).**
    - A **finding** is a probe that fails on the reviewed change, as first reviewed
      before any fix for it, while its control passes. When the claim is that the PR introduced the defect and the base supports
@@ -98,8 +101,7 @@ Every probe:
    - A **fix** is proven when the finding's probe fails on the revision before the fix
      and passes on the fixed revision; record both results.
    - A probe that clears a matrix cell may pass on every revision: it shows the
-     behavior is preserved. A cell may also be cleared by source evidence or retained
-     results that close its contract, under the shared evidence rules.
+     behavior is preserved.
 
 
 ## 4. Check-then-act windows
@@ -136,35 +138,15 @@ were class **A**.
 
 ## 7. Validation and report
 
-- **Reviewed change.** For an external review, the frozen PR head. For self-review,
-  the full in-scope change: commits, staged, unstaged and untracked files. Run it in
-  the working tree that holds it. To run it elsewhere, snapshot it without touching
-  the branch, the index or the working tree, list every in-scope path (`git status
-  --porcelain` shows the ones not committed), and check out the snapshot as a
-  revision:
-
-  ```sh
-  T=<scratch>/index; cp "$(git rev-parse --git-path index)" "$T"
-  GIT_INDEX_FILE=$T git add -- <in-scope paths>
-  c=$(git commit-tree "$(GIT_INDEX_FILE=$T git write-tree)" -p HEAD -m snapshot)
-  ```
-
-  Then compare each in-scope path's contents with the original (`cmp`); `git diff`
-  does not show untracked files.
-- **Other revisions.** Pick each one the claim needs (§3.6): the PR's merge-base for a
-  defect the PR introduces; the revision before a fix to prove the fix. Never assume
-  `HEAD~`. Check that the revision lacks or holds the change under test (`git diff
-  <rev> -- <files>` in the reviewed checkout).
-- **Isolation.** Check each other revision out in its own disposable worktree:
-  `git worktree add --detach <scratch-path> <rev>`, then confirm that
-  `git -C <scratch-path> rev-parse HEAD` is `<rev>` before testing. Copy in only the
-  probe test files and run there. Never overwrite files in the active checkout, and
-  don't use `git stash`, whose list every worktree shares. In zsh, loop over an
-  explicit word list; an unquoted `$VAR` holding several names is not split.
-- When the review is split into parallel agents (one per axis), give each its own
-  worktree the same way, and never build or test in a checkout another session is
-  using.
-
+- **Revisions.** Run each probe on exactly the revisions its claim needs (§3.6): the
+  reviewed change (the frozen PR head; in self-review, the full in-scope change,
+  including staged, unstaged and untracked files); the PR's merge-base for a defect
+  the PR introduces; the revision before a fix to prove the fix. Never assume `HEAD~`.
+- **Isolation.** Run each revision other than the working tree in its own disposable
+  checkout. Before testing, verify that the checkout holds exactly that revision or
+  change: the in-scope paths, their contents and their deletions, and nothing else.
+  Never alter the developer's checkout, branch, index or stash, and never build or
+  test in a checkout another session is using. Parallel agents each get their own.
 - Run each probe on the revisions of §3.6, in each completion order of its matrix cell.
   Choose the mode, the repetition budget and the package scope by the
   [race protocol](../../mo-dev/references/race-validation.md) and the

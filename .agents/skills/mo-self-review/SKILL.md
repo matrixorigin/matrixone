@@ -190,11 +190,11 @@ Use the testing contract for fixture reuse, independent oracles, UT/BVT depth
 and teardown. Apply the shared evidence checks to suspected overfit, lost test
 coverage and performance claims. For a proposed optimization, check work and
 results at the real entry point as well as the claimed faster phase.
-For a change in the executable-probes trigger, prove each transition finding with a
-probe through a public entry point that fails on the reviewed change before its fix (the PR head, or in self-review the full working change) while its control
-passes; a finding needs no fix to be reported. Prove a fix by the same probe failing
-before it and passing after it. Close each other matrix cell with a preservation probe
-or with evidence that meets the shared rules.
+For a change in the executable-probes trigger, prove each transition claim with
+the cheapest proof that settles it under the shared evidence rules, as the
+executable-probes reference defines: a probe that fails on the reviewed change while
+its control passes, or qualifying existing evidence; a finding needs no fix to be
+reported. Prove a fix by the same probe failing before it and passing after it.
 
 ## Convergence and decision
 
