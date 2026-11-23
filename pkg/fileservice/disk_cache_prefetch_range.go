@@ -22,6 +22,7 @@ import (
 	"io"
 	"math"
 	"math/bits"
+	"os"
 	pathpkg "path"
 	"slices"
 	"strings"
@@ -676,9 +677,11 @@ func (d *DiskCache) fetchRange(
 
 // run reads the range of f, registered, through its opener, caches the range when f
 // caches, and forgets f. It is canceled by a delete of the object or the closing of the
-// cache.
+// cache. The write callbacks of the range run once f ended.
 func (f *memoryPrefetchObject) run() {
 	d := f.d
+	updateCtx, written := deferWriteCallbacks(context.WithoutCancel(f.ctx))
+	defer written()
 	defer d.prefetchObjects.reads.Done()
 	defer f.cancelRead()
 	defer context.AfterFunc(f.closing, f.cancelRead)()
@@ -689,7 +692,7 @@ func (f *memoryPrefetchObject) run() {
 	}
 	f.fail(err)
 	if err == nil && !f.skipCache {
-		err = d.Update(context.WithoutCancel(f.ctx), &IOVector{
+		err = d.Update(updateCtx, &IOVector{
 			FilePath: f.filePath,
 			Policy:   f.policy,
 			Entries:  []IOEntry{{Offset: f.start, Size: int64(len(content)), Data: content, readDeletes: f.readDeletes}},
@@ -1122,16 +1125,33 @@ func (d *DiskCache) readCachedRange(ctx context.Context, r cachedRange, offset i
 	}
 	opened, ok := d.paths.open(ctx, r.diskPath, generation)
 	if !ok {
-		d.ranges.remove(r.diskPath)
 		d.paths.endRead(r.diskPath, generation)
+		d.dropCachedRange(ctx, r.diskPath)
 		return false
 	}
-	defer d.paths.close(r.diskPath, opened)
 	if _, err := opened.file.ReadAt(dst, offset-r.offset); err != nil {
+		d.paths.close(r.diskPath, opened)
+		d.dropCachedRange(ctx, r.diskPath)
 		return false
 	}
+	d.paths.close(r.diskPath, opened)
 	d.cache.Get(ctx, r.diskPath)
 	return true
+}
+
+// dropCachedRange removes the cached range at diskPath, whose file is missing, short or
+// unreadable, unless the path is being changed.
+func (d *DiskCache) dropCachedRange(ctx context.Context, diskPath string) {
+	owner, ok := d.paths.tryAcquire(diskPath, nil)
+	if !ok {
+		return
+	}
+	defer owner.release()
+	d.ranges.remove(diskPath)
+	if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
+		return
+	}
+	d.cache.Delete(ctx, diskPath)
 }
 
 // memoryPrefetchObject is a prefetch range being read from object storage into buf.

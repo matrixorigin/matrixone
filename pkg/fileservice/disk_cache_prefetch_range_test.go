@@ -1018,3 +1018,31 @@ func TestPrefetchFilesStopAfterDelete(t *testing.T) {
 	_, _, total := g.counts()
 	require.Equal(t, fs.diskCache.prefetchShare(), total, "no range starts after the delete")
 }
+
+// A read of a cached range whose file is short or removed returns storage's bytes, and
+// drops the range: the reads after it are served from the range cached again.
+func TestDiskCacheBadRangeFileIsDropped(t *testing.T) {
+	for _, mode := range []string{"truncate", "remove"} {
+		t.Run(mode, func(t *testing.T) {
+			fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
+			require.Equal(t, data[5000:5002], readRangeOf(t, fs, 0, 5000, 2))
+			rs := fs.diskCache.ranges.of(fs.diskCache.rangeObjectKey("object"))
+			require.Len(t, rs, 1)
+			if mode == "truncate" {
+				require.NoError(t, os.Truncate(rs[0].diskPath, 100))
+			} else {
+				require.NoError(t, os.Remove(rs[0].diskPath))
+			}
+			fs.diskCache.paths.closeKept()
+			require.Equal(t, data[6000:6010], readRangeOf(t, fs, SkipAllCache, 6000, 10), "control")
+			before := storage.reads.Load()
+			require.Equal(t, data[6000:6010], readRangeOf(t, fs, 0, 6000, 10))
+			require.Equal(t, before+1, storage.reads.Load())
+			for i := range 4 {
+				off := int64(6100 + 10*i)
+				require.Equal(t, data[off:off+10], readRangeOf(t, fs, 0, off, 10))
+			}
+			require.LessOrEqual(t, storage.reads.Load(), before+2, "the bad range is dropped and cached again")
+		})
+	}
+}

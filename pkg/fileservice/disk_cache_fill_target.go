@@ -113,3 +113,15 @@ type entryFillTarget struct {
 	filePath    string
 	readDeletes uint64
 }
+
+// deletedSinceRead reports whether the entry's object was deleted after the entry was read.
+func (t entryFillTarget) deletedSinceRead() bool {
+	if t.readDeletes == 0 {
+		return false
+	}
+	path, err := ParsePath(t.filePath)
+	if err != nil {
+		return false
+	}
+	return t.d.deletes.since(t.d.pathForFile(path.File), t.readDeletes-1)
+}

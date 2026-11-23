@@ -530,3 +530,60 @@ func TestCoveringSkipsPartNotBegun(t *testing.T) {
 	o.begin(1)
 	require.NotNil(t, covering(5, 6))
 }
+
+// A read whose async entry write waits for a publication slot returns once its object is
+// deleted, or once a slot is freed.
+func TestS3FSReadEntryWriteWaitingForPublicationSlotEndsOnDelete(t *testing.T) {
+	for _, ev := range []string{"delete", "slot freed"} {
+		t.Run(ev, func(t *testing.T) {
+			fs, storage, data := newPrefetchRangeFS(t, 0, 300<<10)
+			fs.storage = keepOnDeleteStorage{storage}
+			fs.SetAsyncUpdate(true)
+			ctx := context.Background()
+			a := &fs.diskCache.async
+			filled := 0
+			for len(a.slots) < cap(a.slots) {
+				a.slots <- struct{}{}
+				filled++
+			}
+			freeSlots := sync.OnceFunc(func() {
+				a.mu.Lock()
+				for range filled {
+					<-a.slots
+				}
+				a.wakeFreedLocked()
+				a.mu.Unlock()
+			})
+			t.Cleanup(freeSlots)
+			type res struct {
+				b   []byte
+				err error
+			}
+			done := make(chan res, 1)
+			go func() {
+				vec := &IOVector{FilePath: "object", Policy: SkipMemoryCache | SkipFullFilePreloads, Entries: []IOEntry{{Offset: 100, Size: 10}}}
+				err := fs.Read(ctx, vec)
+				b := append([]byte(nil), vec.Entries[0].Data...)
+				vec.Release()
+				done <- res{b, err}
+			}()
+			require.Eventually(t, func() bool {
+				a.mu.Lock()
+				defer a.mu.Unlock()
+				return a.mu.freed.ch != nil
+			}, 5*time.Second, time.Millisecond, "the read's entry write waits for a slot")
+			if ev == "delete" {
+				require.NoError(t, fs.Delete(ctx, "object"))
+			} else {
+				freeSlots()
+			}
+			select {
+			case r := <-done:
+				require.NoError(t, r.err)
+				require.Equal(t, data[100:110], r.b)
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s: the read still waits for a publication slot", ev)
+			}
+		})
+	}
+}

@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -511,4 +513,50 @@ func TestFlightTransitionBudgetWaiterContextEnds(t *testing.T) {
 func assertEventuallyBytes(t *testing.T, fs *S3FS, want int64) bool {
 	return assert.Eventually(t, func() bool { return prefetchBytes(fs) == want }, 2*time.Second, time.Millisecond,
 		"the buffer of the copied, ended flight is still charged: %d", prefetchBytes(fs))
+}
+
+// A write callback of a read whose flight caches its bytes can delete the object or
+// close the prefetches: the flight has ended when its callbacks run.
+func TestFlightWriteCallbackCallsDeleteOrClose(t *testing.T) {
+	for _, nested := range []string{"delete", "close", "direct update"} {
+		t.Run(nested, func(t *testing.T) {
+			const unit = 64 << 10
+			fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
+			fs.diskCache.prefetchFlightBytes = unit
+			returned := make(chan error, 1)
+			cb := func(string, IOEntry) {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				switch nested {
+				case "close":
+					fs.diskCache.closePrefetches(ctx)
+					returned <- ctx.Err()
+				default:
+					returned <- fs.Delete(ctx, "object")
+				}
+			}
+			ctx := OnDiskCacheWritten(context.Background(), cb)
+			if nested == "direct update" {
+				require.NoError(t, fs.diskCache.Update(ctx, &IOVector{FilePath: "object",
+					Entries: []IOEntry{{Offset: 0, Size: 10, Data: data[:10]}}}, false))
+			} else {
+				vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
+					Entries: []IOEntry{{Offset: 5, Size: 10}}}
+				// The callback may delete the object before the read copies its bytes.
+				if err := fs.Read(ctx, vec); err == nil {
+					require.Equal(t, data[5:15], vec.Entries[0].Data)
+					vec.Release()
+				} else {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
+				}
+			}
+			select {
+			case err := <-returned:
+				require.NoError(t, err, "the nested call waited for the flight running its callback")
+			case <-time.After(10 * time.Second):
+				t.Fatal("callback did not return")
+			}
+			require.Eventually(t, func() bool { return prefetchBytes(fs) == 0 }, 5*time.Second, time.Millisecond, "budget returns to 0")
+		})
+	}
 }

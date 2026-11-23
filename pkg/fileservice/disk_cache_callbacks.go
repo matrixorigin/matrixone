@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"time"
 )
@@ -97,4 +98,33 @@ func (d *DiskCacheCallbacks) Value(key any) any {
 		return d
 	}
 	return d.upstreamCtx.Value(key)
+}
+
+// deferWriteCallbacks returns ctx, whose write callbacks record copies of the entries
+// written instead of running, and the function running ctx's write callbacks on them.
+func deferWriteCallbacks(ctx context.Context) (context.Context, func()) {
+	callbacks, _ := ctx.Value(CtxKeyDiskCacheCallbacks).(*DiskCacheCallbacks)
+	if callbacks == nil || len(callbacks.OnWritten) == 0 {
+		return ctx, func() {}
+	}
+	type written struct {
+		filePath string
+		entry    IOEntry
+	}
+	var entries []written
+	record := &DiskCacheCallbacks{
+		OnWritten: []OnDiskCacheWrittenFunc{func(filePath string, entry IOEntry) {
+			entry.Data = bytes.Clone(entry.Data)
+			entries = append(entries, written{filePath, entry})
+		}},
+		OnEvict:     callbacks.OnEvict,
+		upstreamCtx: ctx,
+	}
+	return record, func() {
+		for _, w := range entries {
+			for _, fn := range callbacks.OnWritten {
+				fn(w.filePath, w.entry)
+			}
+		}
+	}
 }

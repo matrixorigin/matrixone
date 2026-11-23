@@ -161,12 +161,18 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 	if err != nil {
 		return nil
 	}
-	file, done, err := s.indexFileCache.openEntryFile(ctx, IndexObjectEntry(p.File), IndexObjectFile)
+	name := IndexObjectEntry(p.File)
+	file, done, err := s.indexFileCache.openEntryFile(ctx, name, IndexObjectFile)
 	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
-		return err
+		if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			// The entry cannot be opened: it is dropped and the entries are read from the
+			// other caches or storage.
+			_ = s.indexFileCache.Delete(ctx, name)
+		}
+		return nil
 	}
 	ended := false
 	end := func() {
@@ -194,7 +200,7 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 			// The entry's file is shorter than the object or unreadable: the entry is
 			// dropped and the entries not done are read from the other caches or storage.
 			end()
-			_ = s.indexFileCache.Delete(ctx, IndexObjectEntry(p.File))
+			_ = s.indexFileCache.Delete(ctx, name)
 			return nil
 		}
 		e.done = true

@@ -424,3 +424,35 @@ func TestIndexObjectShortCacheFileReadsStorage(t *testing.T) {
 	_, cached := fs.indexObjectCached("object")
 	require.True(t, cached, "a decoding error keeps the entry")
 }
+
+// An entry whose file cannot be opened is read from storage.
+func TestIndexObjectUnopenableEntryReadsStorage(t *testing.T) {
+	for _, what := range []string{"file", "dir"} {
+		t.Run(what, func(t *testing.T) {
+			fs, storage, data := newIndexObjectFS(t, true)
+			cacheIndexObject(t, fs, "object", data)
+			diskPath, ok := fs.indexObjectCached("object")
+			require.True(t, ok)
+			target := filepath.Join(diskPath, IndexObjectFile)
+			if what == "dir" {
+				target = diskPath
+			}
+			require.NoError(t, os.Chmod(target, 0))
+			t.Cleanup(func() {
+				matches, _ := filepath.Glob(diskPath + "*")
+				for _, m := range matches {
+					_ = os.Chmod(m, 0o755)
+					_ = os.Chmod(filepath.Join(m, IndexObjectFile), 0o644)
+				}
+			})
+			require.Equal(t, data[3000:3010], readIndexObjectRange(t, fs, IndexFileObject|SkipAllCache, 3000, 10))
+			storage.reads.Store(0)
+			vec := &IOVector{FilePath: "object", Policy: IndexFileObject | SkipMemoryCache, Entries: []IOEntry{{Offset: 2000, Size: 10}}}
+			err := fs.Read(context.Background(), vec)
+			require.NoError(t, err)
+			require.Equal(t, data[2000:2010], vec.Entries[0].Data)
+			vec.Release()
+			require.Equal(t, int64(1), storage.reads.Load())
+		})
+	}
+}
