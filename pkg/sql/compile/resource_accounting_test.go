@@ -211,6 +211,80 @@ func TestAddAllocationAccountTerminalRejectsMalformedOwnerEvidence(t *testing.T)
 	}
 }
 
+func TestPartialAnalysisUsesObservedLocalAndRemoteScopes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	local := &value_scan.ValueScan{}
+	local.Idx, local.IsFirst, local.IsLast = 0, true, true
+	local.OpAnalyzer = process.NewAnalyzer(0, true, true, "test_scan")
+	stats := local.OpAnalyzer.GetOpStats()
+	stats.CallNum, stats.InputRows, stats.InputSize = 1, 3, 90
+
+	stale := &value_scan.ValueScan{}
+	stale.Idx, stale.IsFirst = 1, true
+	stale.OpAnalyzer = process.NewAnalyzer(1, true, false, "stale")
+	stale.OpAnalyzer.GetOpStats().InputRows = 100
+
+	anal := &AnalyzeModule{qry: &plan.Query{Nodes: []*plan.Node{
+		{NodeType: plan.Node_TABLE_SCAN},
+		{NodeType: plan.Node_TABLE_SCAN},
+	}}}
+	run := &Compile{addr: "local:6001", proc: proc, anal: anal, scopes: []*Scope{
+		{Magic: Merge, RootOp: local, PreScopes: []*Scope{{Magic: Normal, RootOp: stale}, {Magic: Normal, RootOp: local}}},
+		{Magic: Remote, NodeInfo: engine.Node{Addr: "remote:6001"}, RootOp: stale},
+		{Magic: Remote, NodeInfo: engine.Node{Addr: "missing:6001"}, RootOp: stale},
+	}}
+	anal.AppendRemotePhyPlan(models.PhyPlan{LocalScope: []models.PhyScope{
+		{RootOperator: &models.PhyOperator{NodeIdx: 0, IsFirst: true, OpStats: &process.OperatorStats{CallNum: 1, InputRows: 2, InputSize: 55}}},
+	}})
+	run.capturePartialExecution(run, 2)
+	phy, qry := anal.GetPhyPlan(), anal.GetPartialExecutionQuery()
+	require.Equal(t, models.PartialExecutionCapture{
+		Interrupted: true, Attempt: 2, RemoteExpected: 2, RemoteObserved: 1, RemoteMissing: true,
+	}, phy.Partial)
+	require.EqualValues(t, 5, qry.Nodes[0].AnalyzeInfo.InputRows)
+	require.EqualValues(t, 145, qry.Nodes[0].AnalyzeInfo.InputSize)
+	require.Nil(t, qry.Nodes[1].AnalyzeInfo)
+	require.Nil(t, anal.qry.Nodes[0].AnalyzeInfo)
+	stats.Reset()
+	require.EqualValues(t, 3, phy.LocalScope[0].RootOperator.OpStats.InputRows)
+}
+
+func TestPartialAnalysisSnapshotConcurrentRemotePublish(t *testing.T) {
+	anal := &AnalyzeModule{qry: &plan.Query{Nodes: []*plan.Node{{NodeType: plan.Node_TABLE_SCAN}}}}
+	run := &Compile{anal: anal, addr: "local:6001"}
+	first := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	report := func() models.PhyPlan {
+		return models.PhyPlan{LocalScope: []models.PhyScope{{
+			RootOperator: &models.PhyOperator{NodeIdx: 0, IsFirst: true,
+				OpStats: &process.OperatorStats{CallNum: 1, InputRows: 1}},
+		}}}
+	}
+	go func() {
+		defer close(done)
+		anal.AppendRemotePhyPlan(report())
+		close(first)
+		<-release
+		for range 15 {
+			anal.AppendRemotePhyPlan(report())
+		}
+	}()
+	<-first
+	run.capturePartialExecution(run, 0)
+	before := anal.GetPhyPlan()
+	close(release)
+	run.capturePartialExecution(run, 0)
+	<-done
+	run.capturePartialExecution(run, 0)
+
+	require.EqualValues(t, 1, before.Partial.RemoteObserved)
+	require.Len(t, before.RemoteScope, 1)
+	after := anal.GetPhyPlan()
+	require.EqualValues(t, 16, after.Partial.RemoteObserved)
+	require.EqualValues(t, 16, anal.GetPartialExecutionQuery().Nodes[0].AnalyzeInfo.InputRows)
+}
+
 func TestExplainPhyBufferUsesPublishedCurrentAttempt(t *testing.T) {
 	root := resource.NewRoot(resource.ConnExternal)
 	require.True(t, root.MergeExecution(resource.ExecutionSummary{

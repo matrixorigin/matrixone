@@ -22,6 +22,7 @@ import (
 )
 
 type Projection struct {
+	jsonFrame        *ProjectionJSONFrame
 	inputAllocation  *mpool.MPool
 	projectBat       *batch.Batch
 	ProjectList      []*plan.Expr
@@ -46,7 +47,7 @@ func (projection *Projection) PrepareProjectionWithAllocation(
 	projection.inputAllocation = selection
 	projection.ProjectAllocSize = 0
 	if projection.ProjectExecutors == nil {
-		projection.ProjectExecutors, err = NewExpressionExecutorsFromPlanExpressionsWithAllocation(
+		projection.ProjectExecutors, projection.jsonFrame, err = NewProjectionExecutors(
 			proc, projection.ProjectList, selection)
 		if err != nil {
 			return
@@ -71,6 +72,10 @@ func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Pro
 		return bat, nil
 	}
 
+	if projection.jsonFrame != nil && !bat.HasSelection() {
+		projection.jsonFrame.Begin(bat)
+		defer projection.jsonFrame.End()
+	}
 	projection.projectBat.ShuffleIDX = bat.ShuffleIDX
 
 	for i := range projection.ProjectExecutors {
@@ -101,6 +106,10 @@ func (projection *Projection) EvalProjectionSelected(bat, physical *batch.Batch,
 	if len(projection.ProjectExecutors) == 0 || bat.IsEmpty() || bat.Last() {
 		return bat, nil
 	}
+	if projection.jsonFrame != nil {
+		projection.jsonFrame.Begin(physical)
+		defer projection.jsonFrame.End()
+	}
 	projection.projectBat.ShuffleIDX = bat.ShuffleIDX
 	for i := range projection.ProjectExecutors {
 		vec, err := projection.ProjectExecutors[i].Eval(proc, []*batch.Batch{physical}, mask)
@@ -130,6 +139,7 @@ func (projection *Projection) FreeProjection(proc *process.Process) {
 		}
 	}
 	projection.ProjectExecutors = nil
+	projection.jsonFrame = nil
 
 	if projection.projectBat != nil {
 		// Vectors are borrowed from the child/expression executors. Retire
