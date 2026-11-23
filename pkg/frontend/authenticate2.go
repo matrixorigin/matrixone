@@ -249,15 +249,8 @@ func hasMoCtrl(p *plan2.Plan) bool {
 		q := p.GetQuery()
 		if q.StmtType == plan.Query_INSERT || q.StmtType == plan.Query_SELECT {
 			for _, node := range q.Nodes {
-				if node != nil && node.NodeType == plan.Node_PROJECT {
-					//restrict :
-					//	select mo_ctrl ...
-					//	insert into ... select mo_ctrl ...
-					for _, proj := range node.ProjectList {
-						if plan2.HasMoCtrl(proj) {
-							return true
-						}
-					}
+				if plan2.ProjectHasMoCtrl(node) {
+					return true
 				}
 			}
 		}

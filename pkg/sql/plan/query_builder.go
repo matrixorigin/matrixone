@@ -3404,6 +3404,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
 	builder.hintQueryType()
+	if err := builder.finalizeZeroScalarAuthorizationSources(); err != nil {
+		return nil, err
+	}
 	return builder.qry, nil
 }
 

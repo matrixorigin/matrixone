@@ -29,7 +29,7 @@ import (
 )
 
 func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
-	return bindAndOptimizeSelectQueryWithValidator(stmtType, ctx, stmt, isPrepareStmt, skipStats, nil)
+	return bindAndOptimizeSelectQueryWithValidator(stmtType, ctx, stmt, isPrepareStmt, skipStats, true, nil)
 }
 
 func bindAndOptimizeSelectQueryWithValidator(
@@ -38,6 +38,7 @@ func bindAndOptimizeSelectQueryWithValidator(
 	stmt *tree.Select,
 	isPrepareStmt bool,
 	skipStats bool,
+	allowZeroScalarRewrite bool,
 	validate func(*Query, *BindContext) error,
 ) (*Plan, error) {
 	start := time.Now()
@@ -47,6 +48,9 @@ func bindAndOptimizeSelectQueryWithValidator(
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
+	if allowZeroScalarRewrite {
+		builder.zeroScalarRootCtx = bindCtx
+	}
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
