@@ -2661,8 +2661,14 @@ func (u *executeUserParams) release() {
 	*u = executeUserParams{}
 }
 
-// lend records that proc borrows the storage.
+// lend records that proc borrows the storage. A process that no longer
+// borrows it (freed, or rebound to other parameters) is forgotten, so an
+// owner that runs many executions, each on a fresh process, such as a stored
+// procedure, retains only the processes that still borrow the storage.
 func (u *executeUserParams) lend(proc *process.Process) {
+	u.borrowers = slices.DeleteFunc(u.borrowers, func(borrower *process.Process) bool {
+		return borrower != proc && (borrower == nil || borrower.GetPrepareParams() != u.vec)
+	})
 	if !slices.Contains(u.borrowers, proc) {
 		u.borrowers = append(u.borrowers, proc)
 	}

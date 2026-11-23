@@ -979,8 +979,10 @@ func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Proc
 		expr.typedVec = nil
 		expr.typedFolded = false
 	case &expr.textRef:
-		// The caller owns the result; the parameter itself stays shared.
-		return vec.Dup(expr.mp)
+		// The caller owns the result; the parameter itself stays shared. The
+		// reference keeps the whole TEXT transport area, which holds every
+		// parameter, so copy only this value.
+		return vector.NewConstBytes(*vec.GetType(), vec.GetBytesAt(0), vec.Length(), expr.mp)
 	default:
 		expr.vec = nil
 	}
