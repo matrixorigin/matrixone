@@ -108,7 +108,7 @@ func (builder *QueryBuilder) finishDeleteIndexMaintenance(query *plan.Query, bin
 		return builder.finishIrregularIndexMaintenance(query, bindCtx)
 	}
 	firstLateStep := len(query.Steps)
-	delCtx := &dmlPlanCtx{tableDef: maint.tableDef, sourceStep: maint.sourceStep}
+	delCtx := &dmlPlanCtx{objRef: maint.objRef, tableDef: maint.tableDef, sourceStep: maint.sourceStep}
 	for _, index := range maint.indexes {
 		objRef, tableDef, err := builder.compCtx.ResolveIndexTableByRef(maint.objRef, index.IndexTableName, bindCtx.snapshot)
 		if err != nil {
@@ -527,6 +527,8 @@ func (builder *QueryBuilder) buildDeleteIndexStep(
 	if err != nil {
 		return err
 	}
+	// Authorize this internal mutation against the table whose index it maintains.
+	builder.qry.Nodes[deleteID].ParentObjRef = DeepCopyObjectRef(delCtx.objRef)
 	builder.appendStep(deleteID)
 	return nil
 }

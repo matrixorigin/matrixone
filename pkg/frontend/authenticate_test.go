@@ -6193,6 +6193,88 @@ func TestExtractPrivilegeTipsFromPlanExternalInsertTarget(t *testing.T) {
 	}
 }
 
+func TestExtractPrivilegeTipsFromPlanDeleteTarget(t *testing.T) {
+	ref := func(db, name string, id int64) *plan.ObjectRef {
+		return &plan.ObjectRef{SchemaName: db, ObjName: name, Obj: id}
+	}
+	type wantTip struct {
+		db, table string
+		cluster   bool
+	}
+	for _, tc := range []struct {
+		name                           string
+		target, nodeRef, parent, base  *plan.ObjectRef
+		legacyBase, cluster, noBaseDef bool
+		want                           []wantTip
+	}{
+		{name: "base target", target: ref("db", "t", 1), want: []wantTip{{"db", "t", false}}},
+		{name: "unrelated node reference", target: ref("db", "t", 1), nodeRef: ref("db", "__mo_index_other", 0), want: []wantTip{{"db", "t", false}}},
+		{name: "explicit index target", target: ref("db", "__mo_index_target", 2), want: []wantTip{{"db", "__mo_index_target", false}}},
+		{name: "parent without base mutation", target: ref("db", "__mo_index_target", 2), parent: ref("db", "t", 1), want: []wantTip{{"db", "__mo_index_target", false}}},
+		{name: "unrelated parent on base target", target: ref("db", "t", 1), parent: ref("other", "parent", 0), want: []wantTip{{"db", "t", false}}},
+		{name: "modern index maintenance", target: ref("db", "__mo_index_target", 2), parent: ref("db", "t", 1), base: ref("db", "t", 1), want: []wantTip{{"db", "t", false}}},
+		{name: "legacy index maintenance", target: ref("db", "__mo_index_target", 2), parent: ref("db", "t", 1), base: ref("db", "t", 1), legacyBase: true, want: []wantTip{{"db", "t", false}}},
+		{name: "cluster base attributes", target: ref("db", "__mo_index_target", 2), parent: ref("db", "t", 1), base: ref("db", "t", 1), cluster: true, want: []wantTip{{"db", "t", true}}},
+		{name: "different object id", target: ref("db", "__mo_index_target", 2), parent: ref("db", "t", 3), base: ref("db", "t", 1), want: []wantTip{{"db", "t", false}, {"db", "__mo_index_target", false}}},
+		{name: "different database", target: ref("db", "__mo_index_target", 2), parent: ref("other", "t", 1), base: ref("db", "t", 1), want: []wantTip{{"db", "t", false}, {"db", "__mo_index_target", false}}},
+		{name: "different index database", target: ref("other", "__mo_index_target", 2), parent: ref("db", "t", 1), base: ref("db", "t", 1), want: []wantTip{{"db", "t", false}, {"other", "__mo_index_target", false}}},
+		{name: "missing parent id", target: ref("db", "__mo_index_target", 2), parent: ref("db", "t", 0), base: ref("db", "t", 1), want: []wantTip{{"db", "t", false}, {"db", "__mo_index_target", false}}},
+		{name: "missing base id", target: ref("db", "__mo_index_target", 2), parent: ref("db", "t", 1), base: ref("db", "t", 0), want: []wantTip{{"db", "t", false}, {"db", "__mo_index_target", false}}},
+		{name: "incomplete base mutation", target: ref("db", "__mo_index_target", 2), parent: ref("db", "t", 1), base: ref("db", "t", 1), noBaseDef: true, want: []wantTip{{"db", "__mo_index_target", false}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var nodes []*plan.Node
+			if tc.base != nil {
+				if tc.legacyBase {
+					nodes = append(nodes, &plan.Node{NodeType: plan.Node_DELETE, DeleteCtx: &plan.DeleteCtx{Ref: tc.base, IsClusterTable: tc.cluster}})
+				} else {
+					update := &plan.UpdateCtx{ObjRef: tc.base}
+					if !tc.noBaseDef {
+						update.TableDef = &plan.TableDef{}
+						if tc.cluster {
+							update.TableDef.TableType = catalog.SystemClusterRel
+						}
+					}
+					nodes = append(nodes, &plan.Node{NodeType: plan.Node_MULTI_UPDATE, UpdateCtxList: []*plan.UpdateCtx{update}})
+				}
+			}
+			nodes = append(nodes, &plan.Node{
+				NodeType: plan.Node_DELETE, ObjRef: tc.nodeRef, ParentObjRef: tc.parent,
+				DeleteCtx: &plan.DeleteCtx{Ref: tc.target},
+			})
+			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
+				StmtType: plan.Query_DELETE,
+				Nodes:    nodes,
+			}}}
+			tips := extractPrivilegeTipsFromPlan(p)
+			require.Len(t, tips, len(tc.want))
+			for i, want := range tc.want {
+				require.Equal(t, PrivilegeTypeDelete, tips[i].typ)
+				require.Equal(t, want.db, tips[i].databaseName)
+				require.Equal(t, want.table, tips[i].tableName)
+				require.Equal(t, want.cluster, tips[i].isClusterTable)
+			}
+		})
+	}
+}
+
+func TestExtractPrivilegeTipsFromPlanDeleteNodeInUpdate(t *testing.T) {
+	ref := &plan.ObjectRef{SchemaName: "db", ObjName: "__mo_index_target", Obj: 2}
+	parent := &plan.ObjectRef{SchemaName: "db", ObjName: "t", Obj: 1}
+	p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
+		StmtType: plan.Query_UPDATE,
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_DELETE, ParentObjRef: parent, DeleteCtx: &plan.DeleteCtx{Ref: ref},
+		}},
+	}}}
+	tips := extractPrivilegeTipsFromPlan(p)
+	require.Len(t, tips, 1)
+	require.Equal(t, PrivilegeTypeUpdate, tips[0].typ)
+	require.Equal(t, "__mo_index_target", tips[0].tableName)
+	p.GetQuery().Nodes[0].ObjRef = ref
+	require.Empty(t, extractPrivilegeTipsFromPlan(p))
+}
+
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement

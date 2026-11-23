@@ -7077,7 +7077,9 @@ func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *pl
 		// lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
 		var clusterTable bool
-		var scanTargetTables map[[2]string]struct{}
+		// Membership identifies scan targets; a non-nil value identifies a
+		// DELETE target that also contributes its own privilege tip.
+		var scanTargetTables map[[2]string]*plan.ObjectRef
 
 		switch q.StmtType {
 		case plan.Query_UPDATE:
@@ -7091,18 +7093,32 @@ func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *pl
 		}
 
 		if q.StmtType == plan.Query_UPDATE || q.StmtType == plan.Query_DELETE {
-			scanTargetTables = make(map[[2]string]struct{})
+			scanTargetTables = make(map[[2]string]*plan.ObjectRef)
 			for _, node := range q.Nodes {
 				switch node.NodeType {
 				case plan.Node_MULTI_UPDATE:
 					for _, updateCtx := range node.UpdateCtxList {
 						if updateCtx != nil && updateCtx.ObjRef != nil {
-							scanTargetTables[[2]string{updateCtx.ObjRef.GetSchemaName(), updateCtx.ObjRef.GetObjName()}] = struct{}{}
+							ref := updateCtx.ObjRef
+							key := [2]string{ref.GetSchemaName(), ref.GetObjName()}
+							if _, ok := scanTargetTables[key]; !ok {
+								scanTargetTables[key] = nil
+							}
+							if q.StmtType == plan.Query_DELETE && updateCtx.TableDef != nil && !isIndexTable(ref.GetObjName()) {
+								scanTargetTables[key] = ref
+							}
 						}
 					}
 				case plan.Node_DELETE:
 					if node.DeleteCtx != nil && node.DeleteCtx.Ref != nil {
-						scanTargetTables[[2]string{node.DeleteCtx.Ref.GetSchemaName(), node.DeleteCtx.Ref.GetObjName()}] = struct{}{}
+						ref := node.DeleteCtx.Ref
+						key := [2]string{ref.GetSchemaName(), ref.GetObjName()}
+						if _, ok := scanTargetTables[key]; !ok {
+							scanTargetTables[key] = nil
+						}
+						if q.StmtType == plan.Query_DELETE && node.ParentObjRef == nil && !isIndexTable(ref.GetObjName()) {
+							scanTargetTables[key] = ref
+						}
 					}
 				}
 			}
@@ -7289,23 +7305,37 @@ func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *pl
 			} else if node.NodeType == plan.Node_DELETE {
 				if node.DeleteCtx != nil && node.DeleteCtx.Ref != nil {
 					objRef := node.DeleteCtx.Ref
-					// do not check the privilege of the index table
+					if q.StmtType != plan.Query_DELETE && isIndexTable(node.ObjRef.GetObjName()) {
+						continue
+					}
+					coveredByParent := false
+					if parent := node.ParentObjRef; q.StmtType == plan.Query_DELETE && parent != nil &&
+						isIndexTable(objRef.GetObjName()) && parent.GetSchemaName() != "" &&
+						parent.GetSchemaName() == objRef.GetSchemaName() && parent.GetObjName() != "" && parent.GetObj() != 0 {
+						key := [2]string{parent.GetSchemaName(), parent.GetObjName()}
+						if target := scanTargetTables[key]; target != nil && parent.GetObj() == target.GetObj() {
+							// The base mutation already contributes the exact privilege tip,
+							// including its cluster and view attributes.
+							coveredByParent = true
+						}
+					}
+					if coveredByParent {
+						continue
+					}
 					originViews := node.GetOriginViews()
 					directView := node.GetDirectView()
 					scanSnapshot := node.GetScanSnapshot()
-					if !isIndexTable(node.ObjRef.GetObjName()) {
-						appendPt(privilegeTips{
-							typ:                   t,
-							objType:               objectTypeTable,
-							databaseName:          objRef.GetSchemaName(),
-							tableName:             objRef.GetObjName(),
-							isClusterTable:        node.DeleteCtx.IsClusterTable,
-							clusterTableOperation: clusterTableModify,
-							originViews:           originViews,
-							directView:            directView,
-							scanSnapshot:          scanSnapshot,
-						})
-					}
+					appendPt(privilegeTips{
+						typ:                   t,
+						objType:               objectTypeTable,
+						databaseName:          objRef.GetSchemaName(),
+						tableName:             objRef.GetObjName(),
+						isClusterTable:        node.DeleteCtx.IsClusterTable,
+						clusterTableOperation: clusterTableModify,
+						originViews:           originViews,
+						directView:            directView,
+						scanSnapshot:          scanSnapshot,
+					})
 				}
 			} else if node.NodeType == plan.Node_MULTI_UPDATE {
 				// The INSERT binder orders the statement target before its index updates.

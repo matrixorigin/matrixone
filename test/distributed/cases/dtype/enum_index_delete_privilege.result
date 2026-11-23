@@ -1,0 +1,96 @@
+drop database if exists enum_delete_priv;
+drop user if exists enum_delete_priv_user;
+drop role if exists enum_delete_priv_role;
+create database enum_delete_priv;
+create table enum_delete_priv.modern_t (id int primary key, e enum('red','green'), n int);
+insert into enum_delete_priv.modern_t values (1,'red',11);
+alter table enum_delete_priv.modern_t add key ie(e);
+alter table enum_delete_priv.modern_t add key inum(n);
+insert into enum_delete_priv.modern_t values (2,'green',12),(3,'green',13);
+create table enum_delete_priv.legacy_a (id int primary key, e enum('red','green'));
+create table enum_delete_priv.legacy_b (id int primary key, e enum('red','green'));
+insert into enum_delete_priv.legacy_a values (10,'red'),(11,'green');
+insert into enum_delete_priv.legacy_b values (10,'red'),(11,'green');
+alter table enum_delete_priv.legacy_a add key ie(e);
+alter table enum_delete_priv.legacy_b add key ie(e);
+create table enum_delete_priv.denied_t (id int primary key, e enum('red','green'), key ie(e));
+insert into enum_delete_priv.denied_t values (1,'red');
+create table enum_delete_priv.private_source (id int primary key);
+insert into enum_delete_priv.private_source values (3);
+create role enum_delete_priv_role;
+grant connect on account * to enum_delete_priv_role;
+grant select,delete on table enum_delete_priv.modern_t to enum_delete_priv_role;
+grant select,delete on table enum_delete_priv.legacy_a to enum_delete_priv_role;
+grant select on table enum_delete_priv.legacy_b to enum_delete_priv_role;
+grant select on table enum_delete_priv.denied_t to enum_delete_priv_role;
+create user enum_delete_priv_user identified by '111' default role enum_delete_priv_role;
+delete from enum_delete_priv.modern_t where id=1 returning id,n;
+➤ id[4,32,0]  ¦  n[4,32,0]  𝄀
+1  ¦  11
+delete from enum_delete_priv.denied_t where id=1;
+-- @regex("do not have privilege", true)
+internal error: do not have privilege to execute the statement
+delete a,b from enum_delete_priv.legacy_a a join enum_delete_priv.legacy_b b on a.id=b.id where a.id=10;
+-- @regex("do not have privilege", true)
+internal error: do not have privilege to execute the statement
+delete t from enum_delete_priv.modern_t t join enum_delete_priv.private_source s on t.id=s.id where t.id=3;
+-- @regex("do not have privilege", true)
+internal error: do not have privilege to execute the statement
+select id,e from enum_delete_priv.modern_t order by id;
+➤ id[4,32,0]  ¦  e[12,-1,0]  𝄀
+2  ¦  green  𝄀
+3  ¦  green
+select id,e from enum_delete_priv.denied_t order by id;
+➤ id[4,32,0]  ¦  e[12,-1,0]  𝄀
+1  ¦  red
+select id,e from enum_delete_priv.legacy_a order by id;
+➤ id[4,32,0]  ¦  e[12,-1,0]  𝄀
+10  ¦  red  𝄀
+11  ¦  green
+select id,e from enum_delete_priv.legacy_b order by id;
+➤ id[4,32,0]  ¦  e[12,-1,0]  𝄀
+10  ¦  red  𝄀
+11  ¦  green
+grant delete on table enum_delete_priv.legacy_b to enum_delete_priv_role;
+grant select on table enum_delete_priv.private_source to enum_delete_priv_role;
+delete a,b from enum_delete_priv.legacy_a a join enum_delete_priv.legacy_b b on a.id=b.id where a.id=10;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+2
+delete t from enum_delete_priv.modern_t t join enum_delete_priv.private_source s on t.id=s.id where t.id=3;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
+select id,e from enum_delete_priv.modern_t order by id;
+➤ id[4,32,0]  ¦  e[12,-1,0]  𝄀
+2  ¦  green
+select id,e from enum_delete_priv.legacy_a order by id;
+➤ id[4,32,0]  ¦  e[12,-1,0]  𝄀
+11  ¦  green
+select id,e from enum_delete_priv.legacy_b order by id;
+➤ id[4,32,0]  ¦  e[12,-1,0]  𝄀
+11  ¦  green
+set @idx=(select index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='enum_delete_priv' and relname='modern_t') and name='ie' limit 1);
+set @q=concat('select count(*) from enum_delete_priv.`',@idx,'`');
+prepare idx_count from @q;
+execute idx_count;
+➤ count(*)[-5,64,0]  𝄀
+1
+deallocate prepare idx_count;
+set @idx=(select index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='enum_delete_priv' and relname='legacy_a') and name='ie' limit 1);
+set @q=concat('select count(*) from enum_delete_priv.`',@idx,'`');
+prepare idx_count from @q;
+execute idx_count;
+➤ count(*)[-5,64,0]  𝄀
+1
+deallocate prepare idx_count;
+set @idx=(select index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='enum_delete_priv' and relname='legacy_b') and name='ie' limit 1);
+set @q=concat('select count(*) from enum_delete_priv.`',@idx,'`');
+prepare idx_count from @q;
+execute idx_count;
+➤ count(*)[-5,64,0]  𝄀
+1
+deallocate prepare idx_count;
+drop user enum_delete_priv_user;
+drop role enum_delete_priv_role;
+drop database enum_delete_priv;
