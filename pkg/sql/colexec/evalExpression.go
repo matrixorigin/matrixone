@@ -754,6 +754,9 @@ type ParamExpressionExecutor struct {
 	// typedFrom is the process's typed parameter typedVec was read from. A
 	// different one means new values were installed: typedVec is stale.
 	typedFrom *vector.Vector
+	// textRef is vec when vec references the TEXT transport, textFrom.
+	textRef  vector.Vector
+	textFrom *vector.Vector
 	// textFallback reads a non-string parameter from the TEXT transport when
 	// the process holds no typed value for it.
 	textFallback ExpressionExecutor
@@ -895,6 +898,10 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	if typed != nil || expr.typedFolded {
 		return expr.evalTyped(proc, typed, rowCount)
 	}
+	// A folded value belongs to the TEXT transport it was read from.
+	if expr.folded && proc.GetPrepareParams() != expr.textFrom {
+		expr.folded = false
+	}
 	if expr.folded {
 		if expr.foldedNull {
 			expr.null.SetLength(rowCount)
@@ -918,24 +925,35 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		}
 		expr.folded = true
 		expr.foldedNull = true
+		expr.textFrom = proc.GetPrepareParams()
 		expr.null.SetLength(rowCount)
 		return expr.null, nil
 	}
 
-	if expr.vec == nil {
-		expr.vec, err = newExpressionConstBytes(
-			expr.typ, val, 1, proc.Mp(), expr.allocation,
-		)
-	} else {
-		err = vector.SetConstBytes(expr.vec, val, 1, expr.mp)
+	// The value is a read-only reference to its row of the TEXT transport,
+	// which the prepared statement owns for the whole execution: reading a
+	// string parameter allocates nothing.
+	transport := proc.GetPrepareParams()
+	row := expr.pos
+	if transport.IsConst() {
+		row = 0
 	}
-	if err == nil {
-		expr.vecIsBin = proc.GetPrepareParamIsBin(expr.pos)
-		expr.folded = true
-		expr.foldedNull = false
-		expr.vec.SetLength(rowCount)
+	if expr.vec != nil && expr.vec != &expr.textRef {
+		expr.vec.Free(expr.mp)
 	}
-	return expr.vec, err
+	expr.vec = nil
+	if err = transport.WindowInto(&expr.textRef, row, row+1); err != nil {
+		return nil, err
+	}
+	expr.textRef.SetType(expr.typ)
+	expr.textRef.ToConst()
+	expr.vec = &expr.textRef
+	expr.vecIsBin = proc.GetPrepareParamIsBin(expr.pos)
+	expr.folded = true
+	expr.foldedNull = false
+	expr.textFrom = transport
+	expr.vec.SetLength(rowCount)
+	return expr.vec, nil
 }
 
 func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
@@ -960,6 +978,9 @@ func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Proc
 		}
 		expr.typedVec = nil
 		expr.typedFolded = false
+	case &expr.textRef:
+		// The caller owns the result; the parameter itself stays shared.
+		return vec.Dup(expr.mp)
 	default:
 		expr.vec = nil
 	}

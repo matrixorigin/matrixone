@@ -316,3 +316,68 @@ func TestParamExpressionExecutorTypedReadDoesNotAllocate(t *testing.T) {
 	// The shared value is untouched by the executors' row counts.
 	require.Equal(t, 1, typed.Length())
 }
+
+// A string parameter is a read-only reference to its row of the TEXT
+// transport: fresh executors read it without allocating.
+func TestParamExpressionExecutorStringReadDoesNotAllocate(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	state := proc.DetachPrepareParams()
+	t.Cleanup(func() { proc.RestorePrepareParams(state) })
+	t.Cleanup(func() { proc.SetPrepareParams(nil) })
+
+	long := "a string parameter longer than the inline varlena"
+	install := func(values ...string) {
+		params := vector.NewVec(types.T_text.ToType(), proc.Mp())
+		for _, v := range values {
+			require.NoError(t, vector.AppendBytes(params, []byte(v), false, proc.Mp()))
+		}
+		proc.SetOwnedPrepareParamsWithIsBin(params, nil)
+	}
+	install("short", long)
+	rows := batch.NewWithSize(0)
+	rows.SetRowCount(3)
+	newExecutor := func(pos int32, typ types.T) ExpressionExecutor {
+		executor, err := NewExpressionExecutor(proc, &plan.Expr{
+			Typ:  typ.ToType().PlanType(),
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
+		})
+		require.NoError(t, err)
+		return executor
+	}
+	read := func(pos int32, typ types.T, want string) {
+		executor := newExecutor(pos, typ)
+		defer executor.Free()
+		got, err := executor.Eval(proc, []*batch.Batch{rows}, nil)
+		require.NoError(t, err)
+		require.True(t, got.IsConst())
+		require.True(t, got.IsReadOnly())
+		require.Equal(t, 3, got.Length())
+		require.Equal(t, typ, got.GetType().Oid)
+		require.Equal(t, want, got.GetStringAt(0))
+	}
+	allocs := proc.Mp().Stats().NumAlloc.Load()
+	for range 3 {
+		read(0, types.T_varchar, "short")
+		read(1, types.T_varchar, long)
+		read(1, types.T_text, long)
+	}
+	require.Equal(t, allocs, proc.Mp().Stats().NumAlloc.Load())
+
+	// A caller that keeps the result gets its own copy.
+	executor := newExecutor(1, types.T_varchar)
+	defer executor.Free()
+	owned, err := executor.EvalWithoutResultReusing(proc, []*batch.Batch{rows}, nil)
+	require.NoError(t, err)
+	require.False(t, owned.IsReadOnly())
+	require.Equal(t, long, owned.GetStringAt(0))
+	owned.Free(proc.Mp())
+
+	// New TEXT parameters are read again, never through a stale reference.
+	_, err = executor.Eval(proc, []*batch.Batch{rows}, nil)
+	require.NoError(t, err)
+	install("next", "values")
+	got, err := executor.Eval(proc, []*batch.Batch{rows}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "values", got.GetStringAt(0))
+}
