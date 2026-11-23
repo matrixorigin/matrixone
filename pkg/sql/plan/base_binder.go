@@ -6894,7 +6894,7 @@ func validateNthValueArgs(ctx context.Context, proc *process.Process, args []*pl
 		return moerr.NewWrongArguments(ctx, "nth_value")
 	}
 
-	offset, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
+	offset, err := foldBoundConstant(ctx, args[1], proc)
 	if err != nil {
 		return err
 	}

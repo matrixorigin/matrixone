@@ -256,6 +256,46 @@ func TestWindowFrameOrderingDiagnostics(t *testing.T) {
 	}
 }
 
+func TestWindowJSONConstantFoldUsesRequestContext(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	previous, cancelPrevious := context.WithCancel(t.Context())
+	cancelPrevious()
+	proc.Ctx = previous
+	compiler := NewMockCompilerContext(true, proc)
+
+	const sizeExpr = `json_length(json_extract('{"n":[1]}', '$.n'))`
+	for _, tc := range []struct {
+		name, sql, message string
+	}{
+		{"nth_value", "select nth_value(v, " + sizeExpr + ") over (order by v) from (select 7 as v) as input", "context canceled"},
+		{"ema", "select ema(v, " + sizeExpr + ") over (order by v) from (select 7 as v) as input", "period argument of ema must be a constant integer in [1, 1024]"},
+		{"range frame", "select count(*) over (order by d range between interval " + sizeExpr +
+			" day preceding and current row) from (select cast('2024-01-01' as date) as d) as input", "context canceled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			compiler.SetContext(current)
+			build := func() (*Plan, error) {
+				t.Helper()
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				return BuildPlan(compiler, stmt, false, nil)
+			}
+			bound, err := build()
+			require.NoError(t, err)
+			require.NotNil(t, bound.GetQuery())
+			require.Same(t, previous, proc.Ctx)
+
+			cancel()
+			_, err = build()
+			require.ErrorContains(t, err, tc.message)
+			require.Same(t, previous, proc.Ctx)
+		})
+	}
+}
+
 func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	tests := []struct {

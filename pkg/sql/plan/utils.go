@@ -1907,6 +1907,10 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 }
 
 func foldBoundConstant(ctx context.Context, expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+	return ConstantFold(batch.EmptyForConstFoldBatch, expr, processForBoundExpr(ctx, expr, proc), false, true)
+}
+
+func processForBoundExpr(ctx context.Context, expr *plan.Expr, proc *process.Process) *process.Process {
 	if proc != nil && ctx != nil && containsJSONExtraction(expr) {
 		// A binder fold can run after the previous pipeline has stopped.
 		// Use the current request for this expression, including any JSON
@@ -1914,7 +1918,7 @@ func foldBoundConstant(ctx context.Context, expr *plan.Expr, proc *process.Proce
 		proc = proc.NewNoContextChildProc(0)
 		proc.Ctx = ctx
 	}
-	return ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+	return proc
 }
 
 func containsJSONExtraction(expr *plan.Expr) bool {

@@ -1388,7 +1388,7 @@ func validateIndicatorWindowSpec(
 	if defines.IsNoEvaluationViewBinding(ctx) {
 		return nil
 	}
-	period, ok := constantFoldedPeriod(fn.Args[1], proc)
+	period, ok := constantFoldedPeriod(ctx, fn.Args[1], proc)
 	if !ok || period < 1 || period > 1024 {
 		return moerr.NewInvalidInputf(ctx,
 			"period argument of %s must be a constant integer in [1, 1024]", funcName)
@@ -1410,14 +1410,14 @@ func validateIndicatorWindowSpec(
 // literal qualifies. The folded value decides admission only; the executed
 // period still flows through the argument expression's own evaluation and
 // the executor-side per-row validation.
-func constantFoldedPeriod(expr *plan.Expr, proc *process.Process) (int64, bool) {
+func constantFoldedPeriod(ctx context.Context, expr *plan.Expr, proc *process.Process) (int64, bool) {
 	if expr == nil {
 		return 0, false
 	}
 	folded := expr
 	if proc != nil {
 		var err error
-		folded, err = ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, false, true)
+		folded, err = foldBoundConstant(ctx, DeepCopyExpr(expr), proc)
 		if err != nil {
 			return 0, false
 		}
@@ -1892,6 +1892,7 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 		return e, nil
 	}
 
+	proc = processForBoundExpr(bindCtx, numberExpr, proc)
 	executor, err := colexec.NewExpressionExecutor(proc, numberExpr)
 	if err != nil {
 		return nil, err
