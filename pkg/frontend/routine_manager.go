@@ -38,9 +38,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
 type RoutineManager struct {
+	lockReadLimiter        *motrace.LockReadLimiter
 	mu                     sync.RWMutex
 	ctx                    context.Context
 	clients                map[*Conn]*Routine
@@ -627,6 +629,7 @@ func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, er
 		ctx:               ctx,
 	}
 	rm := &RoutineManager{
+		lockReadLimiter:  motrace.NewLockReadLimiter(),
 		ctx:              ctx,
 		clients:          make(map[*Conn]*Routine),
 		routinesByConnID: make(map[uint32]*Routine),

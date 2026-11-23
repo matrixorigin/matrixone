@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -3220,7 +3221,10 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	var snap *logtailreplay.PartitionState
 	if requireSubscribed {
 		var ready bool
+		observation := resource.LockReadPKFromContext(ctx)
+		start := observation.Start()
 		snap, ready, err = tbl.getPartitionStateForPKCheck(ctx, to)
+		observation.Finish(ctx, resource.LockReadPKReadiness, start, err)
 		if err != nil {
 			return false, err
 		}
