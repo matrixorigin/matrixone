@@ -5,7 +5,7 @@
   [#21791](https://github.com/matrixorigin/matrixone/issues/21791),
   [#33108](https://github.com/matrixorigin/matrixone/issues/33108)
 - Implementation PR: [#33110](https://github.com/matrixorigin/matrixone/pull/33110)
-- Design revision: 1
+- Design revision: 2
 - Contract revision: R1
 - Last updated: 2026-11-23
 
@@ -127,10 +127,18 @@ converge to the committed rows whichever planner route the statement took.
 | Foreign-key actions | ON DELETE CASCADE and SET NULL, ON UPDATE CASCADE and SET NULL, two SET NULL keys with CASCADE on one parent, self-referencing tables, multi-level cascades |
 | REPLACE | Cascade and SET NULL children, self-referencing tables, multi-level cascades |
 
-Known gap: REPLACE whose cascade reaches an ON DELETE SET NULL grandchild fails
-at planning even without any index (#33109). It is the only shape that could
-merge a non-disjoint SET NULL stream into a cascade stream, so the
-merged-stream rebuild is unreachable until #33109 is fixed.
+Known gaps, both present before this change and independent of index type:
+
+- REPLACE whose cascade reaches an ON DELETE SET NULL grandchild fails at
+  planning (#33109).
+- A legacy DELETE can reach one row through a CASCADE path and, through an
+  ON DELETE SET NULL that fires an ON UPDATE action, through an update stream
+  that is not proven disjoint. The streams merge, the row survives with the
+  updated value, and the merged owner drops the hidden entries of the updated
+  rows without rebuilding IVF_FLAT, MASTER or regular secondary indexes
+  (#33113). The fix belongs to the foreign-key action planner: an update
+  stream must exclude the rows a delete stream of the same statement removes.
+  It is out of scope here.
 
 ## Resource bounds
 
