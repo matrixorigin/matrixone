@@ -298,6 +298,12 @@ func TestPartialRestoreMaterializedViewOrder(t *testing.T) {
 		{name: "scalar", sql: "create view scalar as select (select max(id) from mv) as id"},
 		{name: "between", sql: "create view between_view as select id from src where id between (select min(id) from mv) and 10"},
 		{name: "join_on", sql: "create view join_view as select src.id from src join other on src.id = (select min(id) from mv)"},
+		{name: "is_true", sql: "create view truth as select id from src where exists(select 1 from mv) is true"},
+		{name: "is_not_true", sql: "create view truth as select id from src where exists(select 1 from mv) is not true"},
+		{name: "is_false", sql: "create view truth as select id from src where exists(select 1 from mv) is false"},
+		{name: "is_not_false", sql: "create view truth as select id from src where exists(select 1 from mv) is not false"},
+		{name: "is_unknown", sql: "create view truth as select id from src where exists(select 1 from mv) is unknown"},
+		{name: "is_not_unknown", sql: "create view truth as select id from src where exists(select 1 from mv) is not unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			info := &tableInfo{dbName: "db", tblName: tc.name, typ: view, createSql: tc.sql}

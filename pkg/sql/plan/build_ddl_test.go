@@ -2738,6 +2738,39 @@ func TestMaterializedViewIncrementalRejectsEnumSource(t *testing.T) {
 	require.NotEmpty(t, controlMV.Incremental)
 }
 
+func TestMaterializedViewIncrementalRejectsPartitionedSource(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	for _, def := range mock.ctxt.tables {
+		def.DbName = "tpch"
+		def.DbId = 1
+	}
+	nation := mock.ctxt.tables["nation"]
+	require.NotNil(t, nation)
+	nation.FeatureFlag |= features.Partitioned
+	query := "select n_regionkey k, count(*) c from nation group by n_regionkey"
+	_, err := runOneStmt(mock, t, "create materialized view mv_bad refresh fast on change as "+query)
+	require.ErrorContains(t, err, "MV_FAST_UNSUPPORTED_PARTITION_SOURCE")
+	p, err := runOneStmt(mock, t, "create materialized view mv_fallback refresh force on change as "+query)
+	require.NoError(t, err)
+	mv, err := mvdefinition.Decode(mvdefinition.PropertyValue(p.GetDdl().GetCreateView().GetTableDef(), mvdefinition.Property), false)
+	require.NoError(t, err)
+	require.Empty(t, mv.Incremental)
+}
+
+func TestMaterializedViewRefreshRejectsSessionOnlyBooleanSum(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	for _, def := range mock.ctxt.tables {
+		def.DbName = "tpch"
+		def.DbId = 1
+	}
+	mock.ctxt.SetSqlModeOverride("ENABLE_BOOL_SUMAVG")
+	query := "select n_regionkey k, sum(n_nationkey > 0) s from nation group by n_regionkey"
+	_, err := runOneStmt(mock, t, "create materialized view mv_bad refresh fast on change as "+query)
+	require.ErrorContains(t, err, "materialized view background refresh query cannot bind")
+	_, err = runOneStmt(mock, t, "create materialized view mv_control refresh fast on change as select n_regionkey k, sum(n_nationkey) s from nation group by n_regionkey")
+	require.NoError(t, err)
+}
+
 func TestMaterializedViewUnionAllIncrementalPlan(t *testing.T) {
 	parse := func(query string) *tree.Select {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, query, 1)

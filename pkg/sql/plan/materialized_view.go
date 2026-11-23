@@ -24,10 +24,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
+
+// Background refresh uses an internal compiler context without the defining
+// session's sql_mode. Check that the definition binds under those rules before
+// publishing a job that might otherwise remain uninitialized.
+type materializedViewRefreshCompilerContext struct{ CompilerContext }
+
+func (c materializedViewRefreshCompilerContext) ResolveVariable(name string, system, global bool) (any, error) {
+	if system && !global && strings.EqualFold(name, "sql_mode") {
+		return nil, nil
+	}
+	return c.CompilerContext.ResolveVariable(name, system, global)
+}
 
 // Direct FROM sources are the complete scheduling and snapshot boundary.
 // Nested queries and session inputs cannot participate until their dependencies
@@ -234,6 +247,11 @@ func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView,
 	// Re-render after source resolution so complete-refresh workers consume the
 	// same database binding accepted by CREATE, including cross-database joins.
 	d.RefreshSQL = materializedViewRefreshSQL(stmt.AsSource)
+	if stmt.RefreshTiming == tree.MaterializedViewRefreshOnChange {
+		if _, err := BuildPlan(materializedViewRefreshCompilerContext{ctx}, DeepCopySelect(stmt.AsSource), false, nil); err != nil {
+			return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view background refresh query cannot bind: %v", err)
+		}
+	}
 	incrementalSpec := ""
 	unsupportedSourceReason := ""
 	if stmt.RefreshTiming == tree.MaterializedViewRefreshOnChange && stmt.RefreshMethod != tree.MaterializedViewRefreshComplete {
@@ -352,6 +370,11 @@ func materializedViewIncrementalUnsupportedSourceReason(
 	def := sources[materializedViewSourceKey(desc.SourceDatabase, desc.SourceTable)]
 	if def == nil {
 		return "MV_FAST_UNSUPPORTED_SOURCE_TYPE"
+	}
+	// Partition parents use combined relations. Their current change reader
+	// cannot supply the row IDs needed to reconstruct deleted source rows.
+	if def.Partition != nil || features.IsPartitioned(def.FeatureFlag) {
+		return "MV_FAST_UNSUPPORTED_PARTITION_SOURCE"
 	}
 	hasDistinct := false
 	for _, agg := range desc.Aggregates {

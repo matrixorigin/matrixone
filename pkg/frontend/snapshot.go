@@ -2298,6 +2298,18 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 			walkExpr(e.Expr)
 		case *tree.IsNotNullExpr:
 			walkExpr(e.Expr)
+		case *tree.IsUnknownExpr:
+			walkExpr(e.Expr)
+		case *tree.IsNotUnknownExpr:
+			walkExpr(e.Expr)
+		case *tree.IsTrueExpr:
+			walkExpr(e.Expr)
+		case *tree.IsNotTrueExpr:
+			walkExpr(e.Expr)
+		case *tree.IsFalseExpr:
+			walkExpr(e.Expr)
+		case *tree.IsNotFalseExpr:
+			walkExpr(e.Expr)
 		case *tree.CastExpr:
 			walkExpr(e.Expr)
 		case *tree.BitCastExpr:
