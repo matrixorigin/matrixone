@@ -1337,9 +1337,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		builder.preserveSinkProjection[actionSinkID] = struct{}{}
 		actionStep := builder.appendStep(actionSinkID)
 
+		// tableDef keeps only regular indexes. A self-referencing action reuses
+		// delCtx.tableDef as its child and must maintain the irregular ones too.
+		actionTableDef := CloneTableDefForPlan(tableDef, true)
+		actionTableDef.Indexes = append(slices.Clone(tableDef.Indexes), irregularIndexes...)
 		delCtx := getDmlPlanCtx()
 		delCtx.objRef = objRef
-		delCtx.tableDef = tableDef
+		delCtx.tableDef = actionTableDef
 		delCtx.sourceStep = actionStep
 		delCtx.rowIdPos = int(tableDef.Name2ColIndex[catalog.Row_ID])
 		delCtx.allDelTableIDs = map[uint64]struct{}{tableDef.TblId: {}}

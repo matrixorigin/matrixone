@@ -45,18 +45,6 @@ func returningFallbackFeature(err error, fallback string) string {
 	return ""
 }
 
-func returningUpdatePlannerFeature(err error) string {
-	route, reason, routedErr := classifyUpdatePlannerError(err)
-	if route == updatePlannerRejected && reason == updateRouteReasonIrregularIndex &&
-		routedErr != nil && strings.Contains(
-		routedErr.Error(),
-		"update primary key on a table with a synchronous full-text/vector index",
-	) {
-		return "primary-key UPDATE on synchronous full-text/vector index"
-	}
-	return ""
-}
-
 func returningBaseTableExpr(expr tree.TableExpr) bool {
 	switch table := expr.(type) {
 	case *tree.TableName:

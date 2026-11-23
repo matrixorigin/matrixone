@@ -26,6 +26,7 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -1561,13 +1562,6 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 	if err := builder.validateModernUpdateParentRowClosure(parentTableDef, affectedFK); err != nil {
 		return err
 	}
-	_, hasIrregularIndex := getValidIndexes(childTableDef)
-	if hasIrregularIndex {
-		return moerr.NewNotSupported(
-			builder.GetContext(),
-			"parent foreign key action on child table with irregular indexes",
-		)
-	}
 	if childTableDef.Partition != nil {
 		return moerr.NewNotSupported(
 			builder.GetContext(),
@@ -2442,6 +2436,28 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		BindingTags: []int32{actionTag},
 		LockTargets: lockTargets,
 	}, bindCtx)
+	changedChildCols := make(map[string]tree.Expr, len(newChildExprs))
+	for pos := range newChildExprs {
+		changedChildCols[childTableDef.Cols[pos].Name] = nil
+	}
+	irregularIndexes, unsupportedIrregular, err := classifyIrregularIndexesForUpdate(childTableDef, changedChildCols)
+	if err != nil {
+		return err
+	}
+	if unsupportedIrregular {
+		return moerr.NewNotSupported(
+			builder.GetContext(),
+			"parent foreign key action on child table with irregular indexes",
+		)
+	}
+	if len(irregularIndexes) > 0 {
+		actionNodeID, err = builder.appendForeignKeyActionIrregularMaint(
+			bindCtx, actionNodeID, actionTag, actionProjection, childTableDef,
+			affectedFK.childObjRef, pkPos, deletePkPos, irregularIndexes)
+		if err != nil {
+			return err
+		}
+	}
 	actionNodeID = builder.appendNode(&plan.Node{
 		NodeType:      plan.Node_MULTI_UPDATE,
 		Children:      []int32{actionNodeID},
@@ -2451,6 +2467,57 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 	builder.appendStep(actionNodeID)
 	builder.qry.HasForeignKeyAction = true
 	return nil
+}
+
+// appendForeignKeyActionIrregularMaint materializes the locked action image of a
+// parent foreign key action and records the synchronous irregular-index
+// maintenance of the child rows: delete by the old primary key, then rebuild
+// from the final child image. It returns a scan of the image for MULTI_UPDATE.
+func (builder *QueryBuilder) appendForeignKeyActionIrregularMaint(
+	bindCtx *BindContext,
+	lockNodeID, actionTag int32,
+	actionProjection []*plan.Expr,
+	childTableDef *plan.TableDef,
+	childObjRef *plan.ObjectRef,
+	pkPos, deletePkPos int32,
+	indexes []*plan.IndexDef,
+) (int32, error) {
+	if builder.preserveLockProjection == nil {
+		builder.preserveLockProjection = make(map[int32]struct{})
+	}
+	builder.preserveLockProjection[lockNodeID] = struct{}{}
+	imageStep := builder.appendStep(appendSinkNodeWithTag(builder, bindCtx, lockNodeID, actionTag))
+
+	localProjList := make([]*plan.Expr, 0, len(childTableDef.Cols)+1)
+	for i := range childTableDef.Cols {
+		localProjList = append(localProjList, &plan.Expr{
+			Typ:  actionProjection[i].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: actionTag, ColPos: int32(i)}},
+		})
+	}
+	localDeletePkPos := pkPos
+	if deletePkPos != pkPos {
+		localDeletePkPos = int32(len(localProjList))
+		localProjList = append(localProjList, &plan.Expr{
+			Typ:  actionProjection[deletePkPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: actionTag, ColPos: deletePkPos}},
+		})
+	}
+	localProjTag := builder.genNewBindTag()
+	localProjID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{builder.appendTaggedSinkScan(bindCtx, imageStep, actionTag)},
+		ProjectList: localProjList,
+		BindingTags: []int32{localProjTag},
+	}, bindCtx)
+	if _, err := builder.appendOnDupIrregularMaintSource(
+		bindCtx, localProjID, localProjTag, localDeletePkPos, localProjList[localDeletePkPos].Typ,
+		-1, -1, -1, indexes, nil, -1, nil, childTableDef, childObjRef,
+	); err != nil {
+		return 0, err
+	}
+	builder.queueIrregularUpdateMaint()
+	return builder.appendTaggedSinkScan(bindCtx, imageStep, actionTag), nil
 }
 
 // appendUpdateSelfMutationRows converts the non-root self-cascade rows back to

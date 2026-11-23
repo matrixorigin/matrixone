@@ -295,19 +295,19 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 	dispatch.ctr = nil
 }
 
-// CleanupDeferredSpool reclaims spool cache memory after the paired Merge
-// cleanup has returned on a normal End path. The normal path drains queued
-// GetFromSpool signals; a cleanup-time timeout releases the current reference
-// and leaves no receiver goroutine that can read pending signals later.
+// CleanupDeferredSpool frees the spool's cached batches after the paired Merge
+// cleanup has returned on a normal End path. With an allocation account the
+// spool is kept until the account is drained, so FinalizeAfterConsumersQuiesced
+// can release slots whose GetFromSpool signals were bypassed by a typed
+// terminal signal.
 func (dispatch *Dispatch) CleanupDeferredSpool() {
 	if dispatch.cleanupSpool == nil {
 		return
 	}
+	dispatch.cleanupSpool.ReleaseCache()
 	if dispatch.allocationAccount != nil {
-		dispatch.cleanupSpool.ReleaseReusableCacheAfterProducerQuiesced()
 		return
 	}
-	dispatch.cleanupSpool.ForceCleanupAfterTerminalSignal()
 	dispatch.cleanupSpool = nil
 }
 
