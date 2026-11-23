@@ -511,7 +511,9 @@ func (c *cluster) unixSocketPath(index int) string {
 		}
 		return filepath.Join("/tmp", fmt.Sprintf("mo-test-%s-%s", c.socketID, name))
 	}
-	return filepath.Join(c.options.dataPath, name)
+	// Preserve literal path concatenation: cleaning a symlink/.. path can
+	// change the directory where the socket is created.
+	return c.options.dataPath + "/" + name
 }
 
 func (c *cluster) initCNConfigs(from int) error {

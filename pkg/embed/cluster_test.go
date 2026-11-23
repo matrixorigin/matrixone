@@ -97,6 +97,20 @@ func TestUnixSocketPath(t *testing.T) {
 	require.NotEqual(t, socket, other.unixSocketPath(3))
 }
 
+func TestUnixSocketPathPreservesNonTestingSymlinkParent(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "actual", "child")
+	require.NoError(t, os.MkdirAll(target, 0755))
+	require.NoError(t, os.Symlink(target, filepath.Join(root, "link")))
+
+	dataPath := filepath.Join(root, "link") + "/../data"
+	value := &cluster{}
+	value.options.dataPath = dataPath
+	socket := value.unixSocketPath(0)
+	require.Equal(t, dataPath+"/mysql0.sock", socket)
+	require.NotEqual(t, filepath.Join(dataPath, "mysql0.sock"), socket)
+}
+
 func TestUnixSocketPathAvoidsStaleFile(t *testing.T) {
 	old := &cluster{id: 42}
 	old.options.testing = true
