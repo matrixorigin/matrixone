@@ -46,13 +46,13 @@ rollback;
 select id from ft_sync where match(body) against('rollback') order by id;
 select id from ft_sync where match(body) against('new') order by id;
 
--- The synchronous-index PK rejection happens before locks or mutations and
--- must leave both the base identity and hidden payload unchanged.
-update ft_sync set id = 3, body = 'sync failed token' where id = 1;
+-- A synchronous-index PK update re-keys the hidden entries with the new payload
+-- and leaves nothing under the old key.
+update ft_sync set id = 3, body = 'sync rekeyed token' where id = 1;
 -- TEXT/VARCHAR JDBC width differs between direct CN and proxy; values remain exact.
 -- @metacmp(false)
 select id, k, body from ft_sync order by id;
-select id from ft_sync where match(body) against('failed') order by id;
+select id from ft_sync where match(body) against('rekeyed') order by id;
 select id from ft_sync where match(body) against('new') order by id;
 
 -- A single retry must observe all three independent initial indexes. Casting
