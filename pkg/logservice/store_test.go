@@ -1692,6 +1692,7 @@ func TestRequiredLsnTermAfterSnapshotAndRestart(t *testing.T) {
 	cfg := getStoreTestConfig()
 	cfg.FS = vfs.Default
 	cfg.DataDir = t.TempDir()
+	cfg.SnapshotExportDir = t.TempDir()
 	genCfg := func() Config { return cfg }
 	store, err := getTestStore(genCfg, true, nil)
 	require.NoError(t, err)
