@@ -43,7 +43,7 @@ func TestBatchClonePreservesPartialConstantGrouping(t *testing.T) {
 			source.Vecs[0].GetGrouping().Add(0, 2)
 			source.SetRowCount(5)
 			defer func() { source.Clean(mp); require.Zero(t, mp.CurrNB()) }()
-			cloned, err := source.Clone(mp, true)
+			cloned, err := source.Clone(mp)
 			require.NoError(t, err)
 			defer cloned.Clean(mp)
 			require.Equal(t, 5, cloned.RowCount())

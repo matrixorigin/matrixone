@@ -17,7 +17,6 @@ package group
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -115,16 +114,11 @@ func (s *sortRollupState) init(group *Group) error {
 				"sort rollup has no equality fast path for type %s", typ.String())
 		}
 		s.equalers[i] = equaler
-		rollup, err := vector.NewRollupConstWithAllocation(
+		rollup := vector.NewRollupConst(
 			typ,
 			1,
-			group.ctr.mp,
-			group.ctr.expressionAllocation,
+			group.ctr.rollupMP(),
 		)
-		if err != nil {
-			s.free(group.ctr.mp)
-			return err
-		}
 		s.rollupSources = append(s.rollupSources, rollup)
 	}
 
@@ -164,7 +158,7 @@ func (s *sortRollupState) init(group *Group) error {
 		for level := range s.levelAggs {
 			list, err := group.ctr.makeSingleGroupAggList(group.Aggs)
 			if err != nil {
-				s.free(group.ctr.mp)
+				s.free(&group.ctr)
 				return err
 			}
 			s.levelAggs[level] = list
@@ -179,16 +173,17 @@ func (s *sortRollupState) init(group *Group) error {
 	return nil
 }
 
-func (s *sortRollupState) free(mp *mpool.MPool) {
+// free releases the state; its vectors are operator data of ctr.
+func (s *sortRollupState) free(ctr *container) {
 	for i := range s.lastExprKeys {
 		if s.lastExprKeys[i] != nil {
-			s.lastExprKeys[i].Free(mp)
+			ctr.freeGroupVector(s.lastExprKeys[i])
 			s.lastExprKeys[i] = nil
 		}
 	}
 	for i := range s.rollupSources {
 		if s.rollupSources[i] != nil {
-			s.rollupSources[i].Free(mp)
+			ctr.freeGroupVector(s.rollupSources[i])
 			s.rollupSources[i] = nil
 		}
 	}
@@ -202,11 +197,11 @@ func (s *sortRollupState) free(mp *mpool.MPool) {
 		s.levelAggs[level] = nil
 	}
 	if s.output != nil {
-		s.output.Clean(mp)
+		ctr.cleanGroupBatch(s.output)
 		s.output = nil
 	}
 	if s.lastOutput != nil {
-		s.lastOutput.Clean(mp)
+		ctr.cleanGroupBatch(s.lastOutput)
 		s.lastOutput = nil
 	}
 	s.lastExprKeys = nil
@@ -368,18 +363,13 @@ func (s *sortRollupState) updateLastKeys(
 ) error {
 	for i := range group.GroupBy {
 		if s.lastExprKeys[i] == nil {
-			vec, err := vector.NewOffHeapVecWithTypeAndAllocation(
-				group.ctr.groupByEvaluate.Typ[i],
-				group.ctr.expressionAllocation,
+			s.lastExprKeys[i] = vector.NewVec(
+				group.ctr.groupByEvaluate.Typ[i], group.ctr.rollupMP(),
 			)
-			if err != nil {
-				return err
-			}
-			s.lastExprKeys[i] = vec
 		} else {
 			s.lastExprKeys[i].CleanOnlyData()
 		}
-		if err := s.lastExprKeys[i].UnionOne(keyVecs[i], int64(row), group.ctr.mp); err != nil {
+		if err := s.lastExprKeys[i].UnionOne(keyVecs[i], int64(row), group.ctr.rollupMP()); err != nil {
 			return err
 		}
 	}
@@ -400,23 +390,26 @@ func (s *sortRollupState) ensureOutput(group *Group) error {
 	return nil
 }
 
-func freeSortRollupVectors(vecs []*vector.Vector, mp *mpool.MPool) {
+// freeSortRollupVectors frees aggregate result vectors, each with the
+// operator pool it belongs to (the aggregates' views, not ctr.mp).
+func freeSortRollupVectors(vecs []*vector.Vector, ctr *container) {
 	for _, vec := range vecs {
-		if vec != nil {
-			vec.Free(mp)
-		}
+		ctr.freeGroupVector(vec)
 	}
 }
 
+// freeSortRollupArgWindows frees the owned argument windows. Each window is a
+// copy in its source argument vector's pool, so it is freed with that pool.
 func freeSortRollupArgWindows(
 	windows [][]*vector.Vector,
 	owned [][]bool,
-	mp *mpool.MPool,
+	sources [][]*vector.Vector,
 ) {
 	for i := range windows {
 		for j, vec := range windows[i] {
 			if vec != nil && i < len(owned) && j < len(owned[i]) && owned[i][j] {
-				vec.Free(mp)
+				// A window is a read-only reference: Free only drops it.
+				vec.Free(nil)
 			}
 		}
 	}
@@ -449,7 +442,7 @@ func (s *sortRollupState) appendOutputRow(
 		if source == nil {
 			return moerr.NewInternalErrorNoCtx("sort rollup output key is not initialized")
 		}
-		if err := s.output.Vecs[col].UnionOne(source, 0, group.ctr.mp); err != nil {
+		if err := s.output.Vecs[col].UnionOne(source, 0, group.ctr.groupByMP()); err != nil {
 			return err
 		}
 	}
@@ -473,29 +466,20 @@ func (s *sortRollupState) appendOutputRow(
 					// Take ownership before metadata or a later column can fail.
 					s.output.Vecs = append(s.output.Vecs, vec)
 				}
-				if err := vec.SetPrepareParamKindAtWithMP(
-					s.outputRows, group.ctr.prepareParamKind.Get(i), group.ctr.mp,
-				); err != nil {
-					return err
-				}
 				continue
 			}
 			vecs, err := aggexec.FlushWithContext(proc.Ctx, agg)
 			if err != nil {
-				freeSortRollupVectors(resultVecs, group.ctr.mp)
+				freeSortRollupVectors(resultVecs, &group.ctr)
 				return err
 			}
 			if len(vecs) != 1 || vecs[0] == nil || vecs[0].Length() != 1 {
-				freeSortRollupVectors(vecs, group.ctr.mp)
-				freeSortRollupVectors(resultVecs, group.ctr.mp)
+				freeSortRollupVectors(vecs, &group.ctr)
+				freeSortRollupVectors(resultVecs, &group.ctr)
 				return moerr.NewInternalErrorNoCtxf(
 					"sort rollup aggregate %d did not produce one result row", i)
 			}
-			vec := vecs[0]
-			if !vec.HasPrepareParamKind() {
-				vec.SetPrepareParamKind(group.ctr.prepareParamKind.Get(i))
-			}
-			resultVecs = append(resultVecs, vec)
+			resultVecs = append(resultVecs, vecs[0])
 		}
 	}
 
@@ -504,11 +488,14 @@ func (s *sortRollupState) appendOutputRow(
 			s.output.Vecs = append(s.output.Vecs, resultVecs...)
 		} else {
 			for i, vec := range resultVecs {
-				if err := s.output.Vecs[keyCount+i].UnionOne(vec, 0, group.ctr.mp); err != nil {
-					freeSortRollupVectors(resultVecs[i:], group.ctr.mp)
+				// The first row's flush vectors became the output columns, so
+				// they are in the aggregates' pool, not the group-by view.
+				dst := s.output.Vecs[keyCount+i]
+				if err := dst.UnionOne(vec, 0, group.ctr.ownPool(dst)); err != nil {
+					freeSortRollupVectors(resultVecs[i:], &group.ctr)
 					return err
 				}
-				vec.Free(group.ctr.mp)
+				group.ctr.freeGroupVector(vec)
 			}
 		}
 	}
@@ -635,7 +622,9 @@ func (group *Group) fillSortRollupLevels(
 
 	argWindows := make([][]*vector.Vector, len(group.ctr.aggArgEvaluate))
 	argWindowOwned := make([][]bool, len(group.ctr.aggArgEvaluate))
+	argSources := make([][]*vector.Vector, len(group.ctr.aggArgEvaluate))
 	for i, evaluated := range group.ctr.aggArgEvaluate {
+		argSources[i] = evaluated.Vec
 		argWindows[i] = make([]*vector.Vector, len(evaluated.Vec))
 		argWindowOwned[i] = make([]bool, len(evaluated.Vec))
 		for j, vec := range evaluated.Vec {
@@ -645,14 +634,9 @@ func (group *Group) fillSortRollupLevels(
 			}
 			var window *vector.Vector
 			var err error
-			if group.ctr.expressionAllocation != nil {
-				window, err = vec.WindowByLogicalRowsWithAllocation(
-					offset, end, group.ctr.mp, group.ctr.expressionAllocation)
-			} else {
-				window, err = vec.WindowByLogicalRows(offset, end)
-			}
+			window, err = vec.WindowByLogicalRows(offset, end)
 			if err != nil {
-				freeSortRollupArgWindows(argWindows, argWindowOwned, group.ctr.mp)
+				freeSortRollupArgWindows(argWindows, argWindowOwned, argSources)
 				return err
 			}
 			argWindows[i][j] = window
@@ -662,12 +646,12 @@ func (group *Group) fillSortRollupLevels(
 	for prefix := range s.levelAggs {
 		for i, agg := range s.levelAggs[prefix] {
 			if err := agg.BulkFill(0, argWindows[i]); err != nil {
-				freeSortRollupArgWindows(argWindows, argWindowOwned, group.ctr.mp)
+				freeSortRollupArgWindows(argWindows, argWindowOwned, argSources)
 				return err
 			}
 		}
 	}
-	freeSortRollupArgWindows(argWindows, argWindowOwned, group.ctr.mp)
+	freeSortRollupArgWindows(argWindows, argWindowOwned, argSources)
 	return nil
 }
 
@@ -787,7 +771,7 @@ func (group *Group) checkSortRollupCapacity(proc *process.Process) error {
 
 func (group *Group) prepareSortRollup(proc *process.Process) error {
 	if group.ctr.sortRollup != nil {
-		group.ctr.sortRollup.free(group.ctr.mp)
+		group.ctr.sortRollup.free(&group.ctr)
 	}
 	state := &sortRollupState{}
 	group.ctr.sortRollup = state
@@ -813,7 +797,7 @@ func (group *Group) releaseSortRollupOutput() {
 		group.ctr.sortRollup.lastOutput == nil {
 		return
 	}
-	group.ctr.sortRollup.lastOutput.Clean(group.ctr.mp)
+	group.ctr.cleanGroupBatch(group.ctr.sortRollup.lastOutput)
 	group.ctr.sortRollup.lastOutput = nil
 }
 

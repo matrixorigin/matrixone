@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"sync"
 )
 
 // AllocationAccountSites assigns physical aggregate storage to sites in the
@@ -31,16 +32,24 @@ type AllocationAccountSites struct {
 	ArgumentArena mpool.AllocationSite
 }
 
-// AllocationAccount is an immutable physical-allocation selection shared by
-// all state owned by one aggregate executor. The underlying MPool allocation
-// metadata remains the sole release owner.
+// AllocationAccount is an immutable physical-allocation descriptor shared by
+// all state owned by one aggregate executor. An executor that binds it builds
+// an accounted MPool view (see VectorMP) and allocates its state vectors
+// through that view. The underlying MPool allocation metadata remains the sole
+// release owner.
 type AllocationAccount struct {
 	account       *mpool.AllocationAccount
 	owner         mpool.AllocationOwner
 	sites         AllocationAccountSites
 	capacityClass mpool.AllocationCapacityClass
 
-	vectors *vector.AllocationAccountSelection
+	// viewMu guards the cached vector view. Every state vector of the
+	// aggregates sharing this descriptor is created with and operated
+	// through the same view pointer (#33019: a vector call's pool must be
+	// exactly the vector's pool).
+	viewMu   sync.Mutex
+	viewBase *mpool.MPool
+	view     *mpool.MPool
 }
 
 func NewAllocationAccount(
@@ -64,15 +73,12 @@ func NewAllocationAccountWithCapacityClass(
 	sites AllocationAccountSites,
 	capacityClass mpool.AllocationCapacityClass,
 ) (*AllocationAccount, error) {
-	vectors, err := vector.NewAllocationAccountSelectionWithCapacityClass(
-		account,
-		owner,
-		sites.VectorData,
-		sites.VectorArea,
-		capacityClass,
-	)
-	if err != nil {
-		return nil, err
+	if account == nil || account.Handle() == 0 ||
+		owner < mpool.AllocationOwnerMin ||
+		owner > mpool.AllocationOwnerCatalogMax ||
+		sites.VectorData < mpool.AllocationSiteMin ||
+		sites.VectorArea < mpool.AllocationSiteMin {
+		return nil, mpool.ErrAllocationAccountInvalid
 	}
 	if sites.ArgumentCount < mpool.AllocationSiteMin ||
 		sites.ArgumentArena < mpool.AllocationSiteMin ||
@@ -84,7 +90,6 @@ func NewAllocationAccountWithCapacityClass(
 		owner:         owner,
 		sites:         sites,
 		capacityClass: capacityClass,
-		vectors:       vectors,
 	}, nil
 }
 
@@ -94,18 +99,44 @@ func (a *AllocationAccount) sameGeneration(other *AllocationAccount) bool {
 		a.sites == other.sites && a.capacityClass == other.capacityClass
 }
 
-func (a *AllocationAccount) newVector(typ types.Type) (*vector.Vector, error) {
+// VectorMP returns an accounted view of mp that charges fresh vector
+// allocations to the aggregate's account at its VectorData site. A nil
+// descriptor returns mp unchanged.
+func (a *AllocationAccount) VectorMP(mp *mpool.MPool) (*mpool.MPool, error) {
 	if a == nil {
-		return vector.NewOffHeapVecWithType(typ), nil
+		return mp, nil
 	}
-	return vector.NewOffHeapVecWithTypeAndAllocation(typ, a.vectors)
+	if mp.IsView() {
+		return nil, mpool.ErrAllocationAccountInvariant
+	}
+	a.viewMu.Lock()
+	defer a.viewMu.Unlock()
+	if a.view != nil && a.viewBase == mp {
+		return a.view, nil
+	}
+	view, err := mp.WithAccount(a.account, a.owner, a.sites.VectorData, a.capacityClass)
+	if err != nil {
+		return nil, err
+	}
+	a.viewBase, a.view = mp, view
+	return view, nil
 }
 
-func (a *AllocationAccount) vectorSelection() *vector.AllocationAccountSelection {
-	if a == nil {
-		return nil
+// OwnsVectorMP reports whether mp is the cached vector view of this
+// descriptor, so an operator can free aggregate result vectors with it.
+func (a *AllocationAccount) OwnsVectorMP(mp *mpool.MPool) bool {
+	if a == nil || mp == nil {
+		return false
 	}
-	return a.vectors
+	a.viewMu.Lock()
+	defer a.viewMu.Unlock()
+	return a.view == mp
+}
+
+// newVector creates an empty state vector of mp. The owning executor grows it
+// through its accounted view of mp.
+func (a *AllocationAccount) newVector(typ types.Type, mp *mpool.MPool) (*vector.Vector, error) {
+	return vector.NewVec(typ, mp), nil
 }
 
 func (a *AllocationAccount) makeArgumentCounts(

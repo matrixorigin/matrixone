@@ -513,7 +513,7 @@ func TestStrictNestedIsNotNullKeepsMalformedIntermediateCandidate(t *testing.T) 
 	}}, 1024)
 	require.NoError(t, err)
 	mp := mpool.MustNewZero()
-	bat := converter.NewBatch()
+	bat := converter.NewBatch(mp)
 	defer bat.Clean(mp)
 
 	malformed, err := bson.Marshal(bson.D{{Key: "payload", Value: "not-a-document"}})
@@ -808,7 +808,7 @@ func TestConverterTypesMissingTryNullAndRollback(t *testing.T) {
 	}
 	converter, err := NewConverter(ctx, columns, 1024)
 	require.NoError(t, err)
-	bat := converter.NewBatch()
+	bat := converter.NewBatch(mp)
 	t.Cleanup(func() {
 		bat.Clean(mp)
 		require.Zero(t, mp.CurrNB())
@@ -859,7 +859,7 @@ func TestConverterRejectsNullForNotNullMapping(t *testing.T) {
 	converter, err := NewConverter(t.Context(), columns, 1024)
 	require.NoError(t, err)
 	mp := mpool.MustNewZero()
-	bat := converter.NewBatch()
+	bat := converter.NewBatch(mp)
 	t.Cleanup(func() {
 		bat.Clean(mp)
 		require.Zero(t, mp.CurrNB())
@@ -892,7 +892,7 @@ func TestConverterRejectsOversizeAndUnsupportedType(t *testing.T) {
 	require.NoError(t, err)
 	mp, err := mpool.NewMPool("mongodb-oversize-test", 0, mpool.NoFixed)
 	require.NoError(t, err)
-	bat := converter.NewBatch()
+	bat := converter.NewBatch(mp)
 	raw, err := bson.Marshal(bson.D{{Key: "x", Value: "larger-than-eight"}})
 	require.NoError(t, err)
 	require.Error(t, converter.AppendDocument(ctx, bat, raw, mp))
@@ -913,7 +913,7 @@ func TestConverterTemporalRangeScaleAndTryNull(t *testing.T) {
 			Name: "ts", TypeID: int32(types.T_timestamp), Scale: 0, Conversion: conversion,
 		}}, 1024)
 		require.NoError(t, err)
-		bat := converter.NewBatch()
+		bat := converter.NewBatch(mp)
 		for _, invalid := range invalidValues {
 			raw, marshalErr := bson.Marshal(bson.D{{Key: "ts", Value: invalid}})
 			require.NoError(t, marshalErr)
@@ -933,7 +933,7 @@ func TestConverterTemporalRangeScaleAndTryNull(t *testing.T) {
 		Name: "ts", TypeID: int32(types.T_timestamp), Scale: 0, Conversion: ConversionStrict,
 	}}, 1024)
 	require.NoError(t, err)
-	bat := converter.NewBatch()
+	bat := converter.NewBatch(mp)
 	instant := time.Date(2026, 7, 29, 10, 11, 12, 100*int(time.Millisecond), time.UTC)
 	raw, err := bson.Marshal(bson.D{{Key: "ts", Value: instant}})
 	require.NoError(t, err)
@@ -963,7 +963,7 @@ func TestConverterEnforcesDecodedVectorBudgetIncrementally(t *testing.T) {
 	raw, err := bson.Marshal(bson.D{{Key: "payload", Value: bson.Binary{Data: make([]byte, valueBytes)}}})
 	require.NoError(t, err)
 	mp := mpool.MustNewZero()
-	bat := converter.NewBatch()
+	bat := converter.NewBatch(mp)
 	err = converter.AppendDocumentWithBudget(t.Context(), bat, raw, mp, budget)
 	require.True(t, IsDecodedBatchBudgetExceeded(err), "unexpected conversion result: %v", err)
 	require.Zero(t, bat.RowCount())
@@ -980,7 +980,7 @@ func TestConverterVarcharWidthCountsUnicodeCharacters(t *testing.T) {
 	}, 1024)
 	require.NoError(t, err)
 	mp := mpool.MustNewZero()
-	bat := converter.NewBatch()
+	bat := converter.NewBatch(mp)
 
 	raw, err := bson.Marshal(bson.D{{Key: "value", Value: "你好"}})
 	require.NoError(t, err)
@@ -1001,7 +1001,7 @@ func TestConverterNestedPathDistinguishesMissingAndInvalidTraversal(t *testing.T
 		{Name: "value", Path: "reading.value", TypeID: int32(types.T_int64), Conversion: ConversionStrict},
 	}, 1024)
 	require.NoError(t, err)
-	bat := strict.NewBatch()
+	bat := strict.NewBatch(mp)
 
 	missing, err := bson.Marshal(bson.D{{Key: "other", Value: 1}})
 	require.NoError(t, err)
@@ -1021,7 +1021,7 @@ func TestConverterNestedPathDistinguishesMissingAndInvalidTraversal(t *testing.T
 		{Name: "value", Path: "reading.value", TypeID: int32(types.T_int64), Conversion: ConversionTryNull},
 	}, 1024)
 	require.NoError(t, err)
-	bat = tryNull.NewBatch()
+	bat = tryNull.NewBatch(mp)
 	raw, err := bson.Marshal(bson.D{{Key: "reading", Value: "scalar-parent"}})
 	require.NoError(t, err)
 	require.NoError(t, tryNull.AppendDocument(t.Context(), bat, raw, mp))
@@ -1044,7 +1044,7 @@ func TestConverterConversionErrorMetricCountsStrictAndTryNull(t *testing.T) {
 		Name: "value", Path: "value", TypeID: int32(types.T_int64),
 	}}, 1024)
 	require.NoError(t, err)
-	strictBatch := strict.NewBatch()
+	strictBatch := strict.NewBatch(mp)
 	t.Cleanup(func() { strictBatch.Clean(mp) })
 
 	strictBefore := testutil.ToFloat64(metric.MongoDBConversionErrorCounter)
@@ -1058,7 +1058,7 @@ func TestConverterConversionErrorMetricCountsStrictAndTryNull(t *testing.T) {
 		Name: "value", Path: "value", TypeID: int32(types.T_int64), Conversion: ConversionTryNull,
 	}}, 1024)
 	require.NoError(t, err)
-	tryNullBatch := tryNull.NewBatch()
+	tryNullBatch := tryNull.NewBatch(mp)
 	t.Cleanup(func() { tryNullBatch.Clean(mp) })
 
 	tryNullBefore := testutil.ToFloat64(metric.MongoDBConversionErrorCounter)
@@ -1076,10 +1076,7 @@ func TestConverterMpoolFailureLeavesNoPartialRow(t *testing.T) {
 	require.NoError(t, err)
 	mp, err := mpool.NewMPool("mongodb-oom-test", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
-	bat := converter.NewBatch()
-	for _, vec := range bat.Vecs {
-		vec.SetOffHeap(true)
-	}
+	bat := converter.NewBatch(mp)
 	raw, err := bson.Marshal(bson.D{
 		{Key: "first", Value: strings.Repeat("a", 700<<10)},
 		{Key: "second", Value: strings.Repeat("b", 700<<10)},
@@ -1102,8 +1099,7 @@ func TestConverterTryNullDoesNotSwallowMpoolFailure(t *testing.T) {
 	require.NoError(t, err)
 	mp, err := mpool.NewMPool("mongodb-try-null-oom-test", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
-	bat := converter.NewBatch()
-	bat.Vecs[0].SetOffHeap(true)
+	bat := converter.NewBatch(mp)
 	raw, err := bson.Marshal(bson.D{{Key: "value", Value: strings.Repeat("x", 1100<<10)}})
 	require.NoError(t, err)
 
@@ -1122,7 +1118,7 @@ func TestConverterTryNullStatementErrorLimits(t *testing.T) {
 	require.NoError(t, err)
 	converter.SetConversionErrorLimits(1, 1)
 	mp := mpool.MustNewZero()
-	bat := converter.NewBatch()
+	bat := converter.NewBatch(mp)
 	bad, err := bson.Marshal(bson.D{{Key: "value", Value: "not-an-int"}})
 	require.NoError(t, err)
 	require.NoError(t, converter.AppendDocument(t.Context(), bat, bad, mp))
@@ -1136,7 +1132,7 @@ func TestConverterTryNullStatementErrorLimits(t *testing.T) {
 	converter, err = NewConverter(t.Context(), columns, 1024)
 	require.NoError(t, err)
 	converter.SetConversionErrorLimits(1_000, 0.05)
-	bat = converter.NewBatch()
+	bat = converter.NewBatch(mp)
 	for range conversionErrorRateMinAttempts - 1 {
 		require.NoError(t, converter.AppendDocument(t.Context(), bat, bad, mp))
 	}
@@ -1172,7 +1168,7 @@ func TestConverterDecimalBinaryAndInternalJSONEncoding(t *testing.T) {
 		{Key: "document", Value: bson.D{{Key: "nested", Value: bson.A{1, "two"}}}},
 	})
 	require.NoError(t, err)
-	bat := converter.NewBatch()
+	bat := converter.NewBatch(mp)
 	require.NoError(t, converter.AppendDocument(ctx, bat, raw, mp))
 	require.Equal(t, "123.456", vector.GetFixedAtNoTypeCheck[types.Decimal128](bat.Vecs[0], 0).Format(3))
 	require.Equal(t, []byte{1, 2, 3}, bat.Vecs[1].GetBytesAt(0))
@@ -1205,7 +1201,7 @@ func TestConverterBinaryPreservesFixedLengthPadding(t *testing.T) {
 		{0x01, 0x02, 0x03, 0x04},
 	}
 	mp := mpool.MustNewZero()
-	bat := converter.NewBatch()
+	bat := converter.NewBatch(mp)
 	for _, value := range values {
 		raw, marshalErr := bson.Marshal(bson.D{{Key: "value", Value: bson.Binary{Data: value}}})
 		require.NoError(t, marshalErr)
@@ -1262,7 +1258,7 @@ func TestConverterJSONValues(t *testing.T) {
 			}}, 1024)
 			require.NoError(t, err)
 			mp := mpool.MustNewZero()
-			bat := converter.NewBatch()
+			bat := converter.NewBatch(mp)
 			t.Cleanup(func() {
 				bat.Clean(mp)
 				require.Zero(t, mp.CurrNB())
@@ -1355,7 +1351,7 @@ func TestConverterCoversSupportedScalarFamilies(t *testing.T) {
 		{Key: "blob", Value: bson.Binary{Data: []byte{3, 4}}},
 	})
 	require.NoError(t, err)
-	bat := converter.NewBatch()
+	bat := converter.NewBatch(mp)
 	require.NoError(t, converter.AppendDocument(t.Context(), bat, raw, mp))
 	require.Equal(t, 1, bat.RowCount())
 	require.True(t, vector.GetFixedAtNoTypeCheck[bool](bat.Vecs[0], 0))
@@ -1416,7 +1412,7 @@ func TestConverterRejectsInvalidMappingsAndScalarBounds(t *testing.T) {
 			require.NoError(t, err)
 			raw, err := bson.Marshal(bson.D{{Key: "value", Value: tc.value}})
 			require.NoError(t, err)
-			bat := converter.NewBatch()
+			bat := converter.NewBatch(mp)
 			require.Error(t, converter.AppendDocument(t.Context(), bat, raw, mp))
 			require.Zero(t, bat.RowCount())
 			bat.Clean(mp)

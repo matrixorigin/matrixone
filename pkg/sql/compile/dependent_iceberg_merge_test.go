@@ -142,7 +142,7 @@ func TestDependentIcebergMergeProjection(t *testing.T) {
 			defer func() { account.Seal(); _, err := registry.Finalize(account); require.NoError(t, err) }()
 			opened, closed := 0, 0
 			template, err := dependent.Compile(proc.Ctx, q, func(node *plan.Node) (dependent.SourceFactory, error) {
-				return func(child *process.Process, allocation *vector.AllocationAccountSelection, _ *mpool.AllocationAccount) (dependent.Source, error) {
+				return func(child *process.Process, allocation *mpool.MPool, _ *mpool.AllocationAccount) (dependent.Source, error) {
 					opened++
 					if node.NodeType == plan.Node_VALUE_SCAN {
 						return &dependentFixtureSource{batch: batch.EmptyForConstFoldBatch, rows: 1, close: func() { closed++ }}, nil
@@ -151,7 +151,7 @@ func TestDependentIcebergMergeProjection(t *testing.T) {
 					ok := false
 					defer func() {
 						if !ok {
-							b.Clean(child.Mp())
+							b.Clean(dependentFixtureMP(child, allocation))
 						}
 					}()
 					for i, col := range node.TableDef.Cols {
@@ -159,10 +159,7 @@ func TestDependentIcebergMergeProjection(t *testing.T) {
 						if err != nil {
 							return nil, err
 						}
-						b.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(typ, allocation)
-						if err != nil {
-							return nil, err
-						}
+						b.Vecs[i] = vector.NewVec(typ, dependentFixtureMP(child, allocation))
 						for row := 0; row < 2; row++ {
 							switch strings.ToLower(col.Name) {
 							case "id":
@@ -170,11 +167,11 @@ func TestDependentIcebergMergeProjection(t *testing.T) {
 								if node.TableDef.Name == "dim_orders" {
 									value++
 								}
-								err = vector.AppendFixed(b.Vecs[i], value, false, child.Mp())
+								err = vector.AppendFixed(b.Vecs[i], value, false, dependentFixtureMP(child, allocation))
 							case icebergapi.DMLDataFilePathColumnName:
-								err = vector.AppendBytes(b.Vecs[i], []byte("target.parquet"), false, child.Mp())
+								err = vector.AppendBytes(b.Vecs[i], []byte("target.parquet"), false, dependentFixtureMP(child, allocation))
 							case icebergapi.DMLRowOrdinalColumnName:
-								err = vector.AppendFixed(b.Vecs[i], int64(row), false, child.Mp())
+								err = vector.AppendFixed(b.Vecs[i], int64(row), false, dependentFixtureMP(child, allocation))
 							default:
 								return nil, fmt.Errorf("unexpected MERGE source column %s/%v", col.Name, typ)
 							}
@@ -185,7 +182,7 @@ func TestDependentIcebergMergeProjection(t *testing.T) {
 					}
 					b.SetRowCount(2)
 					ok = true
-					return &dependentFixtureSource{batch: b, rows: 1, close: func() { closed++; b.Clean(child.Mp()) }}, nil
+					return &dependentFixtureSource{batch: b, rows: 1, close: func() { closed++; b.Clean(dependentFixtureMP(child, allocation)) }}, nil
 				}, nil
 			}, c.compileDependentKernel)
 			require.NoError(t, err)

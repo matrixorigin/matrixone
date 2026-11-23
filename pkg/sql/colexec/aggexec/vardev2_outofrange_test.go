@@ -73,7 +73,7 @@ func TestVarianceOutOfRangeFinalize(t *testing.T) {
 
 	t.Run("legacy wire layout", func(t *testing.T) {
 		lmp := newAggExecTestPool(t)
-		legacyInput := vector.NewVec(param)
+		legacyInput := vector.NewVec(param, lmp)
 		t.Cleanup(func() { legacyInput.Free(lmp) })
 		require.NoError(t, vector.AppendFixedList(legacyInput, []float64{1e200, -1e200}, nil, lmp))
 		exec := makeVarPopExec(lmp, AggIdOfVarPop, false, param, true)
@@ -148,7 +148,7 @@ func TestVarianceLegacyInfInfNanSameSign(t *testing.T) {
 		lmp := newAggExecTestPool(t)
 		exec := makeVarPopExec(lmp, AggIdOfVarPop, false, param, true)
 		t.Cleanup(exec.Free)
-		input := vector.NewVec(param)
+		input := vector.NewVec(param, lmp)
 		t.Cleanup(func() { input.Free(lmp) })
 		require.NoError(t, vector.AppendFixedList(input, []float64{1e200, 1e200}, nil, lmp))
 		require.NoError(t, exec.GroupGrow(1))

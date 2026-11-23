@@ -63,9 +63,9 @@ func selectIntoOutfileConfig(terminated string, enclosed, escaped byte, starting
 
 func newIdNameBatch(t *testing.T, mp *mpool.MPool, rows ...any) *batch.Batch {
 	t.Helper()
-	bat := batch.NewOffHeapWithSize(2)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewOffHeapVecWithType(types.New(types.T_varchar, 65535, 0))
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 65535, 0), mp)
 	for i, row := range rows {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(i+1), false, mp))
 		if row == nil {
@@ -683,7 +683,7 @@ func TestConstructByteVectorTypesErrorPlumbing(t *testing.T) {
 		jsonBytes, err := types.EncodeJson(bytejson.Null)
 		require.NoError(t, err)
 		fixed := func(typ types.Type, v any) *vector.Vector {
-			vec := vector.NewOffHeapVecWithType(typ)
+			vec := vector.NewVec(typ, mp)
 			switch val := v.(type) {
 			case bool:
 				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
@@ -737,7 +737,7 @@ func TestConstructByteVectorTypesErrorPlumbing(t *testing.T) {
 			return vec
 		}
 		bytemap := func(typ types.Type, b []byte) *vector.Vector {
-			vec := vector.NewOffHeapVecWithType(typ)
+			vec := vector.NewVec(typ, mp)
 			require.NoError(t, vector.AppendBytes(vec, b, false, mp))
 			return vec
 		}
@@ -816,9 +816,9 @@ func TestConstructByteVectorTypesErrorPlumbing(t *testing.T) {
 	t.Run("guard failure on a non-last column aborts the batch", func(t *testing.T) {
 		bat := &batch.Batch{}
 		bat.Vecs = []*vector.Vector{
-			vector.NewOffHeapVecWithType(types.New(types.T_int32, 0, 0)),
-			vector.NewOffHeapVecWithType(types.New(types.T_varchar, 65535, 0)),
-			vector.NewOffHeapVecWithType(types.New(types.T_varchar, 65535, 0)),
+			vector.NewVec(types.New(types.T_int32, 0, 0), mp),
+			vector.NewVec(types.New(types.T_varchar, 65535, 0), mp),
+			vector.NewVec(types.New(types.T_varchar, 65535, 0), mp),
 		}
 		defer bat.Clean(mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
@@ -1268,9 +1268,9 @@ func TestOutfileNewlineEscapeByteEnclosesBinaryValues(t *testing.T) {
 	t.Run("batch writer encloses BIT", func(t *testing.T) {
 		mp := mpool.MustNewZero()
 		defer func() { require.Zero(t, mp.CurrNB()) }()
-		bat := batch.NewOffHeapWithSize(2)
-		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewOffHeapVecWithType(types.New(types.T_bit, 24, 0))
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_bit, 24, 0), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(6368354), false, mp))
 		bat.SetRowCount(1)
@@ -1592,9 +1592,9 @@ func TestOutfileEscapeEqualsEnclosureSimulation(t *testing.T) {
 	t.Run("batch writer aborts on a trailing-CR BIT value", func(t *testing.T) {
 		mp := mpool.MustNewZero()
 		defer func() { require.Zero(t, mp.CurrNB()) }()
-		bat := batch.NewOffHeapWithSize(2)
-		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewOffHeapVecWithType(types.New(types.T_bit, 16, 0))
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_bit, 16, 0), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(0x610D), false, mp)) // a CR
 		bat.SetRowCount(1)
@@ -1611,9 +1611,9 @@ func TestOutfileEscapeEqualsEnclosureSimulation(t *testing.T) {
 	t.Run("batch writer keeps a control-free BIT value", func(t *testing.T) {
 		mp := mpool.MustNewZero()
 		defer func() { require.Zero(t, mp.CurrNB()) }()
-		bat := batch.NewOffHeapWithSize(2)
-		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewOffHeapVecWithType(types.New(types.T_bit, 16, 0))
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_bit, 16, 0), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(0x6162), false, mp)) // ab
 		bat.SetRowCount(1)
@@ -1781,7 +1781,7 @@ func BenchmarkOutfileCSVRow(b *testing.B) {
 					emit := func() error { return exportDataFromResultSetToCSVFile(ep) }
 					if writer == "batch-128" {
 						mp := mpool.MustNewZero()
-						bat := batch.NewOffHeapWithSize(len(row))
+						bat := batch.NewWithSize(len(row))
 						b.Cleanup(func() {
 							bat.Clean(mp)
 							if mp.CurrNB() != 0 {
@@ -1789,7 +1789,7 @@ func BenchmarkOutfileCSVRow(b *testing.B) {
 							}
 						})
 						for col, val := range row {
-							bat.Vecs[col] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+							bat.Vecs[col] = vector.NewVec(types.T_varchar.ToType(), mp)
 							for range 128 {
 								var raw []byte
 								if val != nil {
@@ -1804,7 +1804,7 @@ func BenchmarkOutfileCSVRow(b *testing.B) {
 						ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
 						ch := make(chan *BatchByte, 1)
 						emit = func() error {
-							dup, err := bat.DupWithoutAllocationAccount(mp)
+							dup, err := bat.Dup(mp)
 							if err != nil {
 								return err
 							}
@@ -1948,10 +1948,10 @@ func TestOutfileNullMarkerTerminatorCollision(t *testing.T) {
 							if writer == "batch" {
 								mp := mpool.MustNewZero()
 								defer func() { require.Zero(t, mp.CurrNB()) }()
-								bat := batch.NewOffHeapWithSize(3)
+								bat := batch.NewWithSize(3)
 								defer bat.Clean(mp)
 								for i := range row {
-									bat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+									bat.Vecs[i] = vector.NewVec(types.T_int32.ToType(), mp)
 									require.NoError(t, vector.AppendFixed(bat.Vecs[i], int32(12+11*i), i == nullCol, mp))
 								}
 								bat.SetRowCount(1)

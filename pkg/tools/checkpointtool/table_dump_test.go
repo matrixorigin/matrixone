@@ -1345,12 +1345,12 @@ func TestWriteCSV_withData(t *testing.T) {
 
 func TestWriteProjectedCSVRowFromVecsFastPath(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vecInt := vector.NewVec(types.T_int64.ToType())
-	vecDecimal := vector.NewVec(types.T_decimal64.ToTypeWithScale(2))
-	vecDecimal128 := vector.NewVec(types.T_decimal128.ToTypeWithScale(5))
-	vecDate := vector.NewVec(types.T_date.ToType())
-	vecString := vector.NewVec(types.T_varchar.ToType())
-	vecNull := vector.NewVec(types.T_int32.ToType())
+	vecInt := vector.NewVec(types.T_int64.ToType(), mp)
+	vecDecimal := vector.NewVec(types.T_decimal64.ToTypeWithScale(2), mp)
+	vecDecimal128 := vector.NewVec(types.T_decimal128.ToTypeWithScale(5), mp)
+	vecDate := vector.NewVec(types.T_date.ToType(), mp)
+	vecString := vector.NewVec(types.T_varchar.ToType(), mp)
+	vecNull := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vecInt.Free(mp)
 	defer vecDecimal.Free(mp)
 	defer vecDecimal128.Free(mp)
@@ -1421,7 +1421,7 @@ func TestAppendCSVUnquotedVecValueScalarTypes(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(tc.typ)
+			vec := vector.NewVec(tc.typ, mp)
 			defer vec.Free(mp)
 			tc.fill(vec)
 			var buf bytes.Buffer
@@ -3099,7 +3099,7 @@ func TestWriteSQLLoadCSVRow_RoundTripsThroughCSVParser(t *testing.T) {
 
 func TestWriteSQLLoadCSVFieldFromVec_BitUsesPackedBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.New(types.T_bit, 1, 0))
+	vec := vector.NewVec(types.New(types.T_bit, 1, 0), mp)
 	require.NoError(t, vector.AppendFixed(vec, uint64(1), false, mp))
 
 	var buf bytes.Buffer
@@ -3109,7 +3109,7 @@ func TestWriteSQLLoadCSVFieldFromVec_BitUsesPackedBytes(t *testing.T) {
 
 func TestWriteSQLLoadCSVFieldFromVec_JSONUsesVisibleText(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_json.ToType())
+	vec := vector.NewVec(types.T_json.ToType(), mp)
 	bj, err := types.ParseStringToByteJson(`{"name":"mo","n":1}`)
 	require.NoError(t, err)
 	stored, err := types.EncodeJson(bj)
@@ -3123,9 +3123,9 @@ func TestWriteSQLLoadCSVFieldFromVec_JSONUsesVisibleText(t *testing.T) {
 
 func TestWriteSQLLoadCSVFieldFromVec_TemporalKeepsScale(t *testing.T) {
 	mp := mpool.MustNewZero()
-	timeVec := vector.NewVec(types.New(types.T_time, 0, 6))
-	datetimeVec := vector.NewVec(types.New(types.T_datetime, 0, 3))
-	timestampVec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+	timeVec := vector.NewVec(types.New(types.T_time, 0, 6), mp)
+	datetimeVec := vector.NewVec(types.New(types.T_datetime, 0, 3), mp)
+	timestampVec := vector.NewVec(types.New(types.T_timestamp, 0, 6), mp)
 	require.NoError(t, vector.AppendFixed(timeVec, types.TimeFromClock(false, 11, 22, 33, 123456), false, mp))
 	require.NoError(t, vector.AppendFixed(datetimeVec, types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123000), false, mp))
 	require.NoError(t, vector.AppendFixed(timestampVec, types.FromClockZone(time.Local, 2024, 1, 2, 3, 4, 5, 123456), false, mp))
@@ -3143,7 +3143,7 @@ func TestWriteSQLLoadCSVFieldFromVec_TemporalKeepsScale(t *testing.T) {
 
 func TestWriteSQLLoadCSVFieldFromVec_BinaryEscapesControlBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_blob.ToType())
+	vec := vector.NewVec(types.T_blob.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, []byte{'a', '\n', 0, '\r', '\t', 0x1a, '"', '\\'}, false, mp))
 
 	var buf bytes.Buffer
@@ -3157,13 +3157,13 @@ func TestWriteSQLLoadCSVFieldFromVec_NarrowVectorsQuoted(t *testing.T) {
 	// Every narrow vector type renders via RowToString as "[1, 2]" — the comma
 	// would split into a spurious CSV column if emitted unquoted. All four must
 	// go through the quoted path and round-trip back as a single field.
-	int8Vec := vector.NewVec(types.New(types.T_array_int8, 2, 0))
+	int8Vec := vector.NewVec(types.New(types.T_array_int8, 2, 0), mp)
 	require.NoError(t, vector.AppendArray[int8](int8Vec, []int8{1, 2}, false, mp))
-	uint8Vec := vector.NewVec(types.New(types.T_array_uint8, 2, 0))
+	uint8Vec := vector.NewVec(types.New(types.T_array_uint8, 2, 0), mp)
 	require.NoError(t, vector.AppendArray[uint8](uint8Vec, []uint8{3, 4}, false, mp))
-	bf16Vec := vector.NewVec(types.New(types.T_array_bf16, 2, 0))
+	bf16Vec := vector.NewVec(types.New(types.T_array_bf16, 2, 0), mp)
 	require.NoError(t, vector.AppendArray[types.BF16](bf16Vec, []types.BF16{types.BF16FromFloat32(1), types.BF16FromFloat32(2)}, false, mp))
-	f16Vec := vector.NewVec(types.New(types.T_array_float16, 2, 0))
+	f16Vec := vector.NewVec(types.New(types.T_array_float16, 2, 0), mp)
 	require.NoError(t, vector.AppendArray[types.Float16](f16Vec, []types.Float16{types.Float16FromFloat32(1), types.Float16FromFloat32(2)}, false, mp))
 
 	for _, vec := range []*vector.Vector{int8Vec, uint8Vec, bf16Vec, f16Vec} {
@@ -3215,7 +3215,7 @@ func TestWriteSQLLoadCSVFieldFromVec_VecBlockExactText(t *testing.T) {
 		}
 		cell, err := types.StringToBlockScaled(f, "[0.44547153, 1.7, -3.1, 0.02, 5.5]")
 		require.NoError(t, err)
-		vec := vector.NewVec(types.New(oid, 5, 0))
+		vec := vector.NewVec(types.New(oid, 5, 0), mp)
 		require.NoError(t, vector.AppendBytes(vec, cell, false, mp))
 
 		var buf bytes.Buffer
@@ -3243,7 +3243,7 @@ func TestWriteSQLLoadCSVFieldFromVec_LowPrecisionScalarRoundTrip(t *testing.T) {
 		{types.T_float4, []any{types.Float4(3), types.Float4(12), types.Float4(8), types.Float4(7), types.Float4(1)}},
 	} {
 		t.Run(tc.oid.String(), func(t *testing.T) {
-			stored := vector.NewVec(tc.oid.ToType())
+			stored := vector.NewVec(tc.oid.ToType(), proc.Mp())
 			t.Cleanup(func() { stored.Free(proc.Mp()) })
 			for _, value := range tc.values {
 				require.NoError(t, vector.AppendAny(stored, value, false, proc.Mp()))
@@ -3259,7 +3259,7 @@ func TestWriteSQLLoadCSVFieldFromVec_LowPrecisionScalarRoundTrip(t *testing.T) {
 				LinesTerminatedBy: "\n", Null: []string{`\N`}, UnescapedQuote: true,
 			}, strings.NewReader(buf.String()), csvparser.ReadBlockSize, false)
 			require.NoError(t, err)
-			loaded := vector.NewVec(tc.oid.ToType())
+			loaded := vector.NewVec(tc.oid.ToType(), proc.Mp())
 			t.Cleanup(func() { loaded.Free(proc.Mp()) })
 			require.NoError(t, loaded.PreExtend(stored.Length(), proc.Mp()))
 			loaded.SetLength(stored.Length())

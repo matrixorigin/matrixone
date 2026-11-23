@@ -862,7 +862,7 @@ func widenLowPrecFloatSlice[T types.LowPrecFloat](in []T) []float32 {
 }
 
 func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector, i int, colSlices *ColumnSlices) error {
-	if vec.IsConstNull() {
+	if vec.IsConstNull() || vec.GetType().Oid == types.T_any && vec.AllNull() {
 		return nil
 	}
 

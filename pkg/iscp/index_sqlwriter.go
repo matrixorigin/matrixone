@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -540,7 +541,9 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 	if skip, err := w.unstorable(key, v); skip || err != nil {
 		return err
 	}
-	w.cdc.Insert(key, v, nil)
+	// v is a zero-copy view of the change batch's vector memory, which is freed
+	// when the batch is released; the cdc buffer outlives it across batches.
+	w.cdc.Insert(key, slices.Clone(v), nil)
 	return nil
 }
 
@@ -589,7 +592,7 @@ func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
 		w.cdc.Delete(key)
 		return err
 	}
-	w.cdc.Upsert(key, v, nil)
+	w.cdc.Upsert(key, slices.Clone(v), nil)
 	return nil
 }
 

@@ -23,8 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -37,13 +41,13 @@ func TestSelectIntoUserVariablesCapturesAndAssignsOneRow(t *testing.T) {
 	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "out"}})
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(5), false, mp))
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
 
 	require.NoError(t, collector.capture(ctx, ses, bat))
-	require.NoError(t, collector.apply(ctx, ses, "select abs(-5) into @out"))
+	require.NoError(t, collector.apply(ctx, ses, "select abs(-5) into @out", nil))
 	variable, err := ses.GetUserDefinedVar("OUT")
 	require.NoError(t, err)
 	require.Equal(t, int64(5), variable.Value)
@@ -60,7 +64,7 @@ func TestSelectIntoUserVariablesRejectsArityMismatchOnZeroRows(t *testing.T) {
 	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "out1"}, {Name: "out2"}})
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat.SetRowCount(0)
 	defer bat.Clean(mp)
 
@@ -93,22 +97,30 @@ func TestSelectIntoUserVariablesPreservesBinaryFlagPerColumn(t *testing.T) {
 	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "bin_out"}, {Name: "text_out"}})
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_binary.ToType())
-	bat.Vecs[0].SetIsBin(true)
+	bat.Vecs[0] = vector.NewVec(types.T_binary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("AB\x00\x00"), false, mp))
-	require.NoError(t, bat.Vecs[0].SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("text"), false, mp))
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
 
 	require.NoError(t, collector.capture(ctx, ses, bat))
-	require.NoError(t, collector.apply(ctx, ses, "select x'41420000', 'text' into @bin_out, @text_out"))
+	// The flag comes from the final projection, not from the result vectors.
+	resultPlan := newResultColumnTestPlan(2)
+	projections := resultPlan.GetQuery().Nodes[0].ProjectList
+	projections[0] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_Sval{Sval: "AB\x00\x00"}, IsBin: true}}}
+	projections[1] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_Sval{Sval: "text"}}}}
+	resultIsBin, err := selectIntoResultIsBin(nil, resultPlan)
+	require.NoError(t, err)
+	require.Equal(t, []bool{true, false}, resultIsBin)
+	require.NoError(t, collector.apply(ctx, ses, "select x'41420000', 'text' into @bin_out, @text_out", resultIsBin))
 	binVar, err := ses.GetUserDefinedVar("bin_out")
 	require.NoError(t, err)
 	require.Equal(t, []byte("AB\x00\x00"), binVar.Value)
 	require.True(t, binVar.IsBin)
-	require.Equal(t, types.RuntimeStringText, binVar.RuntimeStringDomain)
+	require.Equal(t, types.RuntimeStringInherit, binVar.RuntimeStringDomain)
 	textVar, err := ses.GetUserDefinedVar("text_out")
 	require.NoError(t, err)
 	require.Equal(t, []byte("text"), textVar.Value)
@@ -132,7 +144,7 @@ func TestSelectIntoUserVariablesZeroOrManyRowsDoNotAssign(t *testing.T) {
 	require.NoError(t, ses.SetUserDefinedVar("out", "old", "set @out = 'old'"))
 
 	zeroRows := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "out"}})
-	require.NoError(t, zeroRows.apply(ctx, ses, "select value into @out from empty_table"))
+	require.NoError(t, zeroRows.apply(ctx, ses, "select value into @out from empty_table", nil))
 	variable, err := ses.GetUserDefinedVar("out")
 	require.NoError(t, err)
 	require.Equal(t, "old", variable.Value)
@@ -140,7 +152,7 @@ func TestSelectIntoUserVariablesZeroOrManyRowsDoNotAssign(t *testing.T) {
 	manyRows := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "out"}})
 	manyRows.row = []any{"new"}
 	manyRows.rowCount = 2
-	err = manyRows.apply(ctx, ses, "select value into @out from two_rows")
+	err = manyRows.apply(ctx, ses, "select value into @out from two_rows", nil)
 	require.ErrorContains(t, err, "Result consisted of more than one row")
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooManyRows))
 	variable, err = ses.GetUserDefinedVar("out")
@@ -157,7 +169,7 @@ func TestSelectIntoUserVariablesStopsOnSecondRowDuringCapture(t *testing.T) {
 	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "out"}})
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(2), false, mp))
 	bat.SetRowCount(2)
@@ -199,7 +211,7 @@ func TestSelectIntoUserVariablesZeroRowsAddsNoDataDiagnostic(t *testing.T) {
 	}
 	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "out"}})
 
-	require.NoError(t, collector.apply(ctx, ses, "select value from empty_table into @out"))
+	require.NoError(t, collector.apply(ctx, ses, "select value from empty_table into @out", nil))
 	info := ses.diagnosticsSnapshot()
 	require.Contains(t, info.codes, moerr.ER_SP_FETCH_NO_DATA)
 	require.Contains(t, info.msgs, "No data - zero rows fetched, selected, or processed")
@@ -252,7 +264,7 @@ func TestRetryDiscardOutputResetsSelectIntoCapture(t *testing.T) {
 
 	rowBatch := func(t *testing.T, value int64) *batch.Batch {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
 		bat.SetRowCount(1)
 		return bat
@@ -279,7 +291,7 @@ func TestRetryDiscardOutputResetsSelectIntoCapture(t *testing.T) {
 		defer retried.Clean(mp)
 		require.NoError(t, callback(retried, nil),
 			"the reset collector accepts the retried generation's single row")
-		require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select nextval('s') into @out"))
+		require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select nextval('s') into @out", nil))
 		variable, err := ses.GetUserDefinedVar("out")
 		require.NoError(t, err)
 		require.Equal(t, int64(8), variable.Value,
@@ -298,7 +310,7 @@ func TestRetryDiscardOutputResetsSelectIntoCapture(t *testing.T) {
 
 		// The retried generation produces no rows: the apply observes the
 		// zero state, warns, and leaves the previous value alone.
-		require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select nextval('s') into @out from empty_table"))
+		require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select nextval('s') into @out from empty_table", nil))
 		variable, err := ses.GetUserDefinedVar("out")
 		require.NoError(t, err)
 		require.Equal(t, "old", variable.Value,
@@ -328,4 +340,39 @@ func TestSelectIntoUserVariableNormalizesDisplayOnlyGeometryTypes(t *testing.T) 
 		require.Equal(t, []byte("POINT(1 2)"), value)
 		require.Equal(t, int32(types.T_varchar), planType.Id)
 	}
+}
+
+// SELECT ... INTO takes each variable's binary flag from the plan's final
+// projection: only a bare binary literal, binary parameter or binary user
+// variable there is binary; a function result or a column is not.
+func TestSelectIntoResultIsBinFromPlannedProjection(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.SetResolveVariableIsBinFunc(func(name string, _, _ bool) (bool, error) {
+		return name == "bin_src", nil
+	})
+	for _, tc := range []struct {
+		sql  string
+		want []bool
+	}{
+		{"select 0x41, X'41', b'01000001', 'A', 65", []bool{true, true, true, false, false}},
+		{"select concat(0x41), 0x41 + 0, cast(0x41 as char)", []bool{false, false, false}},
+		{"select @bin_src, @text_src", []bool{true, false}},
+		{"select 0x41, n_nationkey from nation limit 1", []bool{true, false}},
+		// The planner merges the derived table, so its literal is the final
+		// projection itself.
+		{"select a from (select 0x41 as a) d", []bool{true}},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			p, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true, proc), stmt, false, nil)
+			require.NoError(t, err)
+			got, err := selectIntoResultIsBin(proc, p)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+	got, err := selectIntoResultIsBin(proc, nil)
+	require.NoError(t, err)
+	require.Nil(t, got)
 }

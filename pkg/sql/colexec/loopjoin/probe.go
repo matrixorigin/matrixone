@@ -50,16 +50,20 @@ func (ctr *container) appendJoinedRow(
 	buildBat *batch.Batch,
 	buildRow int,
 ) error {
+	resMP, err := ap.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	for k, rp := range ap.ResultCols {
 		switch rp.Rel {
 		case 0:
 			if err := ctr.resBat.Vecs[k].UnionOne(
-				inBat.Vecs[rp.Pos], int64(probeRow), proc.Mp()); err != nil {
+				inBat.Vecs[rp.Pos], int64(probeRow), resMP); err != nil {
 				return err
 			}
 		case 1:
 			if err := ctr.resBat.Vecs[k].UnionOne(
-				buildBat.Vecs[rp.Pos], int64(buildRow), proc.Mp()); err != nil {
+				buildBat.Vecs[rp.Pos], int64(buildRow), resMP); err != nil {
 				return err
 			}
 		}
@@ -97,6 +101,10 @@ func (ctr *container) appendJoinedRange(
 	start int,
 	count int,
 ) error {
+	resMP, err := ap.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	if ctr.buildCopyBatch != buildBat || ctr.buildCopy == nil {
 		ctr.buildCopy = vector.GetUnionBatchFunction(buildBat.Vecs)
 		ctr.buildCopyBatch = buildBat
@@ -105,12 +113,12 @@ func (ctr *container) appendJoinedRange(
 		switch rp.Rel {
 		case 0:
 			if err := ctr.probeCopy(ctr.resBat.Vecs[k],
-				inBat.Vecs[rp.Pos], int64(probeRow), count, proc.Mp()); err != nil {
+				inBat.Vecs[rp.Pos], int64(probeRow), count, resMP); err != nil {
 				return err
 			}
 		case 1:
 			if err := ctr.buildCopy(ctr.resBat.Vecs[k],
-				buildBat.Vecs[rp.Pos], int64(start), count, nil, proc.Mp()); err != nil {
+				buildBat.Vecs[rp.Pos], int64(start), count, nil, resMP); err != nil {
 				return err
 			}
 		}
@@ -124,13 +132,17 @@ func (ctr *container) appendUnmatchedRow(
 	inBat *batch.Batch,
 	probeRow int,
 ) error {
+	resMP, err := ap.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	for k, rp := range ap.ResultCols {
 		if rp.Rel == 0 {
 			if err := ctr.resBat.Vecs[k].UnionOne(
-				inBat.Vecs[rp.Pos], int64(probeRow), proc.Mp()); err != nil {
+				inBat.Vecs[rp.Pos], int64(probeRow), resMP); err != nil {
 				return err
 			}
-		} else if err := ctr.resBat.Vecs[k].UnionNull(proc.Mp()); err != nil {
+		} else if err := ctr.resBat.Vecs[k].UnionNull(resMP); err != nil {
 			return err
 		}
 	}
@@ -145,14 +157,18 @@ func (ctr *container) appendMarkRow(
 	value bool,
 	isNull bool,
 ) error {
+	resMP, err := ap.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	for k, rp := range ap.ResultCols {
 		if rp.Rel == 0 {
 			if err := ctr.resBat.Vecs[k].UnionOne(
-				inBat.Vecs[rp.Pos], int64(probeRow), proc.Mp()); err != nil {
+				inBat.Vecs[rp.Pos], int64(probeRow), resMP); err != nil {
 				return err
 			}
 		} else if err := vector.AppendFixed(
-			ctr.resBat.Vecs[k], value, isNull, proc.Mp()); err != nil {
+			ctr.resBat.Vecs[k], value, isNull, resMP); err != nil {
 			return err
 		}
 	}
@@ -183,8 +199,7 @@ func (ctr *container) evalConditionWindow(
 	end = min(start+conditionWindowRowLimit(buildBat), buildBat.RowCount())
 	conditionInput := buildBat
 	if start != 0 || end != buildBat.RowCount() {
-		window, err = buildBat.WindowWithAllocation(
-			start, end, proc.Mp(), ap.conditionAllocation)
+		window, err = buildBat.Window(start, end)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -195,7 +210,7 @@ func (ctr *container) evalConditionWindow(
 	ownedWindow := window
 	defer func() {
 		if ownedWindow != nil {
-			ownedWindow.Clean(proc.Mp())
+			ownedWindow.FreeWindow()
 			window = nil
 		}
 	}()
@@ -394,6 +409,10 @@ func (ctr *container) probeScalarBuild(
 	build *batch.Batch,
 	result *vm.CallResult,
 ) error {
+	resMP, err := ap.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	inbat := ctr.inBat
 	start := ctr.probeIdx
 	end := min(start+colexec.DefaultBatchSize, inbat.RowCount())
@@ -414,12 +433,12 @@ func (ctr *container) probeScalarBuild(
 	for k, rp := range ap.ResultCols {
 		if rp.Rel == 0 {
 			if err := probeCopy(ctr.resBat.Vecs[k],
-				inbat.Vecs[rp.Pos], int64(start), count, nil, proc.Mp()); err != nil {
+				inbat.Vecs[rp.Pos], int64(start), count, nil, resMP); err != nil {
 				return err
 			}
 		} else if rp.Rel == 1 {
 			if err := buildCopy(ctr.resBat.Vecs[k],
-				build.Vecs[rp.Pos], 0, count, proc.Mp()); err != nil {
+				build.Vecs[rp.Pos], 0, count, resMP); err != nil {
 				return err
 			}
 		}

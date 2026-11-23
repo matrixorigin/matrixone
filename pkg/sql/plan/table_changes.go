@@ -81,15 +81,10 @@ func (builder *QueryBuilder) buildTableChanges(
 	if err := catalog.ValidateTableChangesSource(objectRef, sourceDef); err != nil {
 		return 0, err
 	}
-	if builder.isReusablePlan() {
-		// A FUNCTION_SCAN is not visited as a schema-bearing scan when a
-		// prepared plan is reset. Preserve the source identity and version so
-		// DDL invalidates and rebuilds table_changes' cached output schema.
-		builder.qry.CatalogDependencies = appendPrepareSchemas(
-			builder.qry.CatalogDependencies,
-			prepareSchemaRef(objectRef, sourceDef),
-		)
-	}
+	// The function's output schema is synthetic. Cached and prepared plans
+	// both depend on the underlying table's catalog identity and version.
+	builder.qry.CatalogDependencies = appendPrepareSchemas(
+		builder.qry.CatalogDependencies, prepareSchemaRef(objectRef, sourceDef))
 
 	cols := []*plan.ColDef{
 		varcharChangeColumn(catalog.TableChangesAttrChangeType),

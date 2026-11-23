@@ -681,8 +681,8 @@ func newReplacementExecutorBatch(t *testing.T) (*batch.Batch, func()) {
 	t.Helper()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id", "name"})
-	idVec := vector.NewVec(types.T_int32.ToType())
-	nameVec := vector.NewVec(types.T_varchar.ToType())
+	idVec := vector.NewVec(types.T_int32.ToType(), mp)
+	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	if err := vector.AppendFixed[int32](idVec, 42, false, mp); err != nil {
 		t.Fatalf("append replacement id: %v", err)
 	}

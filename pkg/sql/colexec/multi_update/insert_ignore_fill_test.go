@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbPlan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -52,6 +53,9 @@ func (s *multiUpdateIgnoreWarningSession) AppendWarningBatch(total uint64, codes
 		s.messages = append(s.messages, messages[i])
 	}
 }
+
+// mainErr keeps the error of insert_main_table.
+func mainErr(_ *batch.Batch, err error) error { return err }
 
 func newIgnoreProfiledProc(t *testing.T) (context.Context, *gomock.Controller, *process.Process, *multiUpdateIgnoreWarningSession) {
 	t.Helper()
@@ -144,7 +148,7 @@ func TestInsertMainTableIgnoreFillsInsteadOfAborting(t *testing.T) {
 		input := makeIgnoreFillInputBatch(proc.GetMPool(), false)
 		defer input.Clean(proc.GetMPool())
 
-		err := op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input)
+		err := mainErr(op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input, false))
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
 		require.Empty(t, *written)
@@ -161,7 +165,7 @@ func TestInsertMainTableIgnoreFillsInsteadOfAborting(t *testing.T) {
 		input := makeIgnoreFillInputBatch(proc.GetMPool(), false)
 		defer input.Clean(proc.GetMPool())
 
-		require.NoError(t, op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input))
+		require.NoError(t, mainErr(op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input, false)))
 		require.Len(t, *written, 1)
 		got := (*written)[0]
 		require.Equal(t, 3, got.RowCount())
@@ -191,7 +195,7 @@ func TestInsertMainTableIgnoreFillsAfterPkNullFilter(t *testing.T) {
 		[]int64{0, 2}, []uint64{0}, []int32{0, 0}, []uint64{0, 1})
 	defer input.Clean(mp)
 
-	require.NoError(t, op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input))
+	require.NoError(t, mainErr(op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input, false)))
 	require.Len(t, *written, 1)
 	got := (*written)[0]
 	require.Equal(t, 1, got.RowCount(), "the NULL PK row was filtered out")
@@ -219,7 +223,7 @@ func TestInsertMainTableIgnoreSkipsClusterByHelperColumns(t *testing.T) {
 	input := makeIgnoreFillInputBatch(proc.GetMPool(), true)
 	defer input.Clean(proc.GetMPool())
 
-	require.NoError(t, op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input))
+	require.NoError(t, mainErr(op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input, false)))
 	require.Len(t, *written, 1)
 	got := (*written)[0]
 	require.Equal(t, 3, got.RowCount())
@@ -323,7 +327,7 @@ func TestInsertMainTableIgnoreDropsNullPkRowsAndWarns(t *testing.T) {
 		input := makeIgnorePkDropInputBatch(proc.GetMPool())
 		defer input.Clean(proc.GetMPool())
 
-		err := op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input)
+		err := mainErr(op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input, false))
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
 		require.Empty(t, *written)
@@ -341,7 +345,7 @@ func TestInsertMainTableIgnoreDropsNullPkRowsAndWarns(t *testing.T) {
 		input := makeIgnorePkDropInputBatch(proc.GetMPool())
 		defer input.Clean(proc.GetMPool())
 
-		require.NoError(t, op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input))
+		require.NoError(t, mainErr(op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input, false)))
 		require.Len(t, *written, 1)
 		got := (*written)[0]
 		require.Equal(t, 1, got.RowCount(), "both NULL-key rows were dropped")
@@ -386,7 +390,7 @@ func TestInsertMainTableIgnoreDropsAllNullPkBatch(t *testing.T) {
 	input.SetRowCount(2)
 	defer input.Clean(mp)
 
-	require.NoError(t, op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input))
+	require.NoError(t, mainErr(op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input, false)))
 	require.Empty(t, *written, "no row survives the drop, nothing is written")
 	require.Equal(t, uint64(2), session.total)
 	require.Equal(t, []string{
@@ -454,7 +458,7 @@ func TestInsertMainTableIgnoreKeepsNullablePseudoPkColumn(t *testing.T) {
 	input.SetRowCount(2)
 	defer input.Clean(mp)
 
-	require.NoError(t, op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input))
+	require.NoError(t, mainErr(op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input, false)))
 	require.Len(t, written, 1)
 	got := written[0]
 	require.Equal(t, 2, got.RowCount(), "both nullable-slot rows survive")
@@ -507,8 +511,11 @@ func TestFillMainInsertNotNullForIgnoreSkipsUpdateLegs(t *testing.T) {
 	op, ctx, _ := newIgnoreFillPkDropHarness(t, ctrl)
 	input := makeIgnorePkDropInputBatch(mp)
 	defer input.Clean(mp)
-	filled, dropped, err := fillMainInsertNotNullForIgnore(proc, ctx, input, false, false)
+	var fill colexec.IgnoreFill
+	defer fill.Free()
+	out, filled, dropped, err := fillMainInsertNotNullForIgnore(proc, &fill, ctx, input, false, false, false)
 	require.NoError(t, err)
+	require.Same(t, input, out)
 	require.False(t, filled)
 	require.False(t, dropped)
 
@@ -582,7 +589,7 @@ func TestInsertMainTableIgnoreDropsNullPkRowsOffColumnZero(t *testing.T) {
 	input.SetRowCount(2)
 	defer input.Clean(mp)
 
-	require.NoError(t, op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input))
+	require.NoError(t, mainErr(op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input, false)))
 	require.Len(t, written, 1)
 	got := written[0]
 	require.Equal(t, 1, got.RowCount(), "only the NULL-key row was dropped")
@@ -649,7 +656,7 @@ func TestInsertMainTableIgnoreCompositePkMembersFollowFill(t *testing.T) {
 	input.SetRowCount(2)
 	defer input.Clean(mp)
 
-	require.NoError(t, op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input))
+	require.NoError(t, mainErr(op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input, false)))
 	require.Len(t, written, 1)
 	got := written[0]
 	require.Equal(t, 2, got.RowCount(), "composite keys keep every row")
@@ -660,4 +667,99 @@ func TestInsertMainTableIgnoreCompositePkMembersFollowFill(t *testing.T) {
 		"Column 'k2' cannot be null",
 	}, session.messages)
 	op.Free(proc, false, nil)
+}
+
+// ignoreFillWrittenRow is one row a mock relation observed at Write time.
+type ignoreFillWrittenRow struct {
+	null  []bool
+	value []int32
+}
+
+func captureInt32Rows(b *batch.Batch) []ignoreFillWrittenRow {
+	rows := make([]ignoreFillWrittenRow, 0, b.RowCount())
+	for r := 0; r < b.RowCount(); r++ {
+		row := ignoreFillWrittenRow{}
+		for _, vec := range b.Vecs {
+			row.null = append(row.null, vec.IsNull(uint64(r)))
+			row.value = append(row.value, vector.GetFixedAtNoTypeCheck[int32](vec, r))
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// TestUpdateOneBatchIgnoreFillLeavesChildBatchUntouched pins copy-on-adjust
+// for multi_update: the main-table leg's IGNORE fill must not modify the
+// child's input batch or vectors, yet every later leg of the same target (a
+// secondary index here) must see the adjusted rows, exactly like the main
+// table does.
+func TestUpdateOneBatchIgnoreFillLeavesChildBatchUntouched(t *testing.T) {
+	_, ctrl, proc, session := newIgnoreProfiledProc(t)
+	defer ctrl.Finish()
+	defer proc.Free()
+	mp := proc.GetMPool()
+
+	mainDef := &pbPlan.TableDef{Name: "t_ig_main", Cols: []*pbPlan.ColDef{
+		{ColId: 0, Name: "a", Typ: i32typ, Default: &pbPlan.Default{NullAbility: true}},
+		{ColId: 1, Name: "nn", Typ: i32typ, NotNull: true, Default: &pbPlan.Default{NullAbility: false}},
+	}, Pkey: &pbPlan.PrimaryKeyDef{}}
+	indexDef := &pbPlan.TableDef{Name: "t_ig_idx", Cols: []*pbPlan.ColDef{
+		{ColId: 0, Name: catalog.IndexTableIndexColName, Typ: i32typ},
+		{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: i32typ},
+	}}
+	mainCtx := &MultiUpdateCtx{TableDef: mainDef, InsertCols: []int{0, 1}}
+	indexCtx := &MultiUpdateCtx{TableDef: indexDef, InsertCols: []int{1, 0}}
+
+	newRel := func(sink *[][]ignoreFillWrittenRow) *mock_frontend.MockRelation {
+		rel := mock_frontend.NewMockRelation(ctrl)
+		rel.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, b *batch.Batch) error {
+				*sink = append(*sink, captureInt32Rows(b))
+				return nil
+			}).AnyTimes()
+		return rel
+	}
+	var mainRows, indexRows [][]ignoreFillWrittenRow
+	op := &MultiUpdate{
+		MultiUpdateCtx: []*MultiUpdateCtx{mainCtx, indexCtx},
+		ctr: container{
+			updateCtxInfos: map[string]*updateCtxInfo{
+				mainDef.Name: {
+					Source:       newRel(&mainRows),
+					tableType:    UpdateMainTable,
+					isContiguous: isContiguousMapping(mainCtx.InsertCols),
+				},
+				indexDef.Name: {
+					Source:       newRel(&indexRows),
+					tableType:    UpdateSecondaryIndexTable,
+					isContiguous: isContiguousMapping(indexCtx.InsertCols),
+				},
+			},
+			insertBuf: make([]*batch.Batch, 2),
+		},
+	}
+	op.addAffectedRowsFunc = op.doAddAffectedRows
+
+	input := makeIgnoreFillInputBatch(mp, false) // nn = (10, NULL, 12)
+	childNN := input.Vecs[1]
+	require.NoError(t, op.updateOneBatch(proc, process.NewTempAnalyzer(), input))
+
+	require.Same(t, childNN, input.Vecs[1], "the child's batch slot is unchanged")
+	require.True(t, childNN.IsNull(1), "the child's null bitmap is unchanged")
+	require.Equal(t, []int32{10, 7, 12}, vector.MustFixedColNoTypeCheck[int32](childNN),
+		"the child's values are unchanged")
+
+	require.Len(t, mainRows, 1)
+	require.Len(t, indexRows, 1)
+	for r, want := range []int32{10, 0, 12} {
+		require.False(t, mainRows[0][r].null[1], "main row %d is adjusted", r)
+		require.Equal(t, want, mainRows[0][r].value[1])
+		require.False(t, indexRows[0][r].null[0], "index row %d sees the adjusted key", r)
+		require.Equal(t, want, indexRows[0][r].value[0])
+	}
+	require.Equal(t, uint64(1), session.total)
+
+	op.Free(proc, false, nil)
+	input.Clean(mp)
+	require.Zero(t, mp.CurrNB(), "the fill's copies are released with the operator")
 }

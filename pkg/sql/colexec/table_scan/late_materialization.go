@@ -265,14 +265,22 @@ func (tableScan *TableScan) readBatch(
 	if tableScan.ctr.readerFilter != nil {
 		tableScan.prepareColumnUses()
 		tableScan.ctr.readerFilter.ColumnUses = tableScan.ctr.columnUses
+		tableScan.ctr.readerFilter.PublishSelection = nil
+		if tableScan.publishesSelection() {
+			tableScan.ctr.readerFilter.PublishSelection = &tableScan.ctr.selection.rows
+			tableScan.ctr.readerFilter.ColumnUses = tableScan.ctr.selection.borrowedUses(tableScan.ctr.columnUses)
+		}
 	}
+	// The reader allocates through proc's pool, so its internal buffers are
+	// not charged to the statement account. The output batch it fills is
+	// charged by a capacity lease once Call is about to emit it.
 	if !ok || tableScan.ctr.readerFilter == nil || readerSummaryEnabled {
 		return process.MeasureFilesystemWait(tableScan.OpAnalyzer, func() (bool, error) {
 			return tableScan.Reader.Read(
 				ctx,
 				tableScan.Attrs,
 				nil,
-				proc.Mp(),
+				tableScan.mp(proc),
 				tableScan.ctr.buf,
 			)
 		})
@@ -287,7 +295,7 @@ func (tableScan *TableScan) readBatch(
 				tableScan.Attrs,
 				tableScan.ctr.earlyColumns,
 				tableScan.ctr.readerFilter,
-				proc.Mp(),
+				tableScan.mp(proc),
 				tableScan.ctr.buf,
 			)
 		},

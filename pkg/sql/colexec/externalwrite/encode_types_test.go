@@ -28,14 +28,14 @@ import (
 
 // fixedCol builds a one-row vector of fixed type t holding v.
 func fixedCol[T any](t *testing.T, mp *mpool.MPool, typ types.Type, v T) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendFixed[T](vec, v, false, mp))
 	return vec
 }
 
 // bytesCol builds a one-row vector of bytes type typ holding v.
 func bytesCol(t *testing.T, mp *mpool.MPool, typ types.Type, v []byte) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendBytes(vec, v, false, mp))
 	return vec
 }
@@ -212,7 +212,7 @@ func TestEncodeJSONLineAllTypes(t *testing.T) {
 // TestCSVValueUnsupportedType ensures an unsupported column type errors.
 func TestCSVValueUnsupportedType(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_Rowid.ToType())
+	vec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[types.Rowid](vec, types.Rowid{}, false, mp))
 	defer vec.Free(mp)
 

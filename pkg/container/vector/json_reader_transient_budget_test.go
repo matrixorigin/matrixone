@@ -44,12 +44,12 @@ func TestJSONReaderTransientAdmissionCoversBacking(t *testing.T) {
 			large := jsonAdmissionValue(t, `{"keep":"`+strings.Repeat("x", 32<<10)+`"}`)
 			switch operation {
 			case "snapshot":
-				source := NewVec(types.T_json.ToType())
+				source := NewVec(types.T_json.ToType(), mp)
 				defer source.Free(mp)
 				require.NoError(t, AppendBytes(source, large, false, mp))
 				before := mp.CurrNB()
 				limit = 8192
-				reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 1, mp, nil, admission)
+				reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 1, mp, admission)
 				if reader != nil {
 					reader.Close()
 				}
@@ -58,13 +58,13 @@ func TestJSONReaderTransientAdmissionCoversBacking(t *testing.T) {
 				require.Equal(t, before, mp.CurrNB())
 			case "builder":
 				limit = 8192
-				builder, err := NewJSONReaderBuilder(mp, nil, admission)
+				builder, err := NewJSONReaderBuilder(mp, admission)
 				require.NoError(t, err)
 				defer builder.Close()
 				require.ErrorIs(t, builder.Append(large, false), want)
 				builder.Close()
 			case "select", "materialize":
-				builder, err := NewJSONReaderBuilder(mp, nil, admission)
+				builder, err := NewJSONReaderBuilder(mp, admission)
 				require.NoError(t, err)
 				defer builder.Close()
 				value := large
@@ -86,7 +86,7 @@ func TestJSONReaderTransientAdmissionCoversBacking(t *testing.T) {
 				} else {
 					materialized, err := reader.Materialize(mp)
 					if materialized != nil {
-						materialized.Free(mp)
+						materialized.Free(materialized.MPool())
 					}
 					require.ErrorIs(t, err, want)
 				}
@@ -98,7 +98,7 @@ func TestJSONReaderTransientAdmissionCoversBacking(t *testing.T) {
 	}
 }
 
-func TestJSONReaderTransientDictionaryAndMutableLifetime(t *testing.T) {
+func TestJSONReaderTransientMutableLifetime(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
 	want := errors.New("budget exhausted")
@@ -111,31 +111,29 @@ func TestJSONReaderTransientDictionaryAndMutableLifetime(t *testing.T) {
 		live += size
 		return func() { live -= size }, nil
 	}
-	source := NewVec(types.T_json.ToType())
+	source := NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	large := jsonAdmissionValue(t, `{"keep":"`+strings.Repeat("x", 16<<10)+`"}`)
 	require.NoError(t, AppendBytes(source, large, false, mp))
 	require.NoError(t, AppendBytes(source, nil, true, mp))
-	rows, err := NewRowSelection([]int64{0, 1, 0}, 2, mp, nil)
-	require.NoError(t, err)
-	defer rows.Release()
-	dict, err := source.SelectDictionary(rows, mp, nil)
-	require.NoError(t, err)
-	defer dict.Free(mp)
+	require.NoError(t, AppendBytes(source, large, false, mp))
 	limit = 8192
-	reader, invalid, err := TryNewJSONReaderSnapshotForRows(dict, 3, mp, nil, admission)
+	reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 3, mp, admission)
 	require.ErrorIs(t, err, want)
 	require.False(t, invalid)
 	require.Nil(t, reader)
 	require.Zero(t, live)
 	limit = 1 << 30
-	reader, invalid, err = TryNewJSONReaderSnapshotForRows(dict, 3, mp, nil, admission)
+	reader, invalid, err = TryNewJSONReaderSnapshotForRows(source, 3, mp, admission)
 	require.NoError(t, err)
 	require.False(t, invalid)
 	defer reader.Close()
 	materialized, err := reader.Materialize(mp)
 	require.NoError(t, err)
-	defer materialized.Free(mp)
+	// The result belongs to the reader's admission view; later writes go
+	// through the vector's own pool.
+	mmp := materialized.MPool()
+	defer materialized.Free(mmp)
 	reader.Close()
 	require.GreaterOrEqual(t, live, uint64(materialized.Allocated()))
 	require.Equal(t, large, materialized.GetBytesAt(0))
@@ -143,12 +141,12 @@ func TestJSONReaderTransientDictionaryAndMutableLifetime(t *testing.T) {
 	before := live
 	limit = live
 	tooLarge := jsonAdmissionValue(t, `{"keep":"`+strings.Repeat("y", 128<<10)+`"}`)
-	require.ErrorIs(t, AppendBytes(materialized, tooLarge, false, mp), want)
+	require.ErrorIs(t, AppendBytes(materialized, tooLarge, false, mmp), want)
 	require.Equal(t, before, live)
 	require.Equal(t, large, materialized.GetBytesAt(0))
 	materialized.ResetWithSameType()
 	require.Positive(t, live, "reset retains admitted backing")
-	materialized.Free(mp)
+	materialized.Free(mmp)
 	require.Zero(t, live)
 }
 
@@ -160,7 +158,7 @@ func TestJSONReaderTransientViewsRetainBacking(t *testing.T) {
 		live += size
 		return func() { live -= size }, nil
 	}
-	builder, err := NewJSONReaderBuilder(mp, nil, admission)
+	builder, err := NewJSONReaderBuilder(mp, admission)
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"k":123}`), false))
@@ -190,7 +188,7 @@ func TestJSONReaderTransientIndependentConcurrentReaders(t *testing.T) {
 		live.Add(int64(size))
 		return func() { live.Add(-int64(size)) }, nil
 	}
-	builder, err := NewJSONReaderBuilder(mp, nil, admission)
+	builder, err := NewJSONReaderBuilder(mp, admission)
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"k":123}`), false))

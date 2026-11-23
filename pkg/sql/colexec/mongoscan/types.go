@@ -19,9 +19,9 @@ import (
 	"errors"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -57,8 +57,10 @@ type container struct {
 // an explicit, validated __mo_query may opt into MongoDB filter or aggregation
 // semantics before conversion.
 type MongoScan struct {
-	Scan             *plan.MongoScan
-	OutputAllocation *vector.AllocationAccountSelection
+	Scan *plan.MongoScan
+	// OutputAllocation is the accounted view of the process pool that output
+	// vectors allocate through, or nil for unaccounted output.
+	OutputAllocation *mpool.MPool
 
 	// Dependencies is set only by unit tests and embedded deployments. Normal
 	// CN execution obtains the same object from the service runtime.
@@ -97,7 +99,7 @@ func (scan *MongoScan) Reset(proc *process.Process, _ bool, _ error) {
 	scan.closeResources(proc.Ctx)
 	scan.ctr.closeErr = nil
 	if scan.ctr.buf != nil {
-		scan.ctr.buf.Clean(proc.Mp())
+		scan.ctr.buf.Clean(scan.mp(proc))
 		scan.ctr.buf = nil
 	}
 	scan.ctr.converter = nil
@@ -117,7 +119,7 @@ func (scan *MongoScan) Reset(proc *process.Process, _ bool, _ error) {
 func (scan *MongoScan) Free(proc *process.Process, _ bool, _ error) {
 	scan.closeResources(proc.Ctx)
 	if scan.ctr.buf != nil {
-		scan.ctr.buf.Clean(proc.Mp())
+		scan.ctr.buf.Clean(scan.mp(proc))
 		scan.ctr.buf = nil
 	}
 	scan.ctr.converter = nil

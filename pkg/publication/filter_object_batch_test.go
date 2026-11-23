@@ -53,10 +53,10 @@ func TestConvertObjectToBatchSupportsChunkedColumnExtents(t *testing.T) {
 	writer.SetChunkedColumnPolicy(func() bool { return true })
 	writer.SetAppendable()
 	source := batch.NewWithSize(4)
-	source.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	source.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
-	source.Vecs[2] = vector.NewVec(types.T_TS.ToType())
-	source.Vecs[3] = vector.NewVec(types.T_bool.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	source.Vecs[1] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	source.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
+	source.Vecs[3] = vector.NewVec(types.T_bool.ToType(), mp)
 	payload := []byte(strings.Repeat("p", 3<<20))
 	var blk types.Blockid
 	for row := 0; row < 3; row++ {
@@ -152,7 +152,7 @@ func TestRewriteTombstoneRowidsBatch_NilAObjectMap(t *testing.T) {
 	require.NoError(t, err)
 	defer mp.Free(nil)
 
-	rowidVec := vector.NewVec(types.T_Rowid.ToType())
+	rowidVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	rid := types.BuildTestRowid(1, 2)
 	require.NoError(t, vector.AppendFixed(rowidVec, rid, false, mp))
 
@@ -177,7 +177,7 @@ func TestRewriteTombstoneRowidsBatch_WrongType(t *testing.T) {
 	require.NoError(t, err)
 	defer mp.Free(nil)
 
-	intVec := vector.NewVec(types.T_int32.ToType())
+	intVec := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(intVec, int32(1), false, mp))
 
 	bat := &batch.Batch{Vecs: []*vector.Vector{intVec}}
@@ -201,7 +201,7 @@ func TestRewriteTombstoneRowidsBatch_WithMapping(t *testing.T) {
 	// Create a rowid referencing the upstream object
 	rid := types.NewRowIDWithObjectIDBlkNumAndRowID(upstreamObjID, 0, 42)
 
-	rowidVec := vector.NewVec(types.T_Rowid.ToType())
+	rowidVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(rowidVec, rid, false, mp))
 
 	bat := &batch.Batch{Vecs: []*vector.Vector{rowidVec}}
@@ -355,7 +355,7 @@ func TestPublicationOffsetMapPreservesInteriorAbortProvenance(t *testing.T) {
 
 	upstreamObjID := types.NewObjectid()
 	deleteRowID := types.NewRowIDWithObjectIDBlkNumAndRowID(upstreamObjID, 0, 2)
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(rowIDVec, deleteRowID, false, mp))
 	tombstoneBatch := &batch.Batch{Vecs: []*vector.Vector{rowIDVec}}
 	tombstoneBatch.SetRowCount(1)

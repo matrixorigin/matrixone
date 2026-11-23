@@ -119,7 +119,7 @@ func allocationFailureCases(long string) []allocationFailureCase {
 			name: "json-array", groupCount: 2, id: AggIdOfJsonArrayAgg,
 			params: []types.Type{types.T_json.ToType()},
 			build: func(t *testing.T, mp *mpool.MPool, own func(*vector.Vector)) []*vector.Vector {
-				vec := vector.NewVec(types.T_json.ToType())
+				vec := vector.NewVec(types.T_json.ToType(), mp)
 				own(vec)
 				for _, value := range []any{long + "-a", int64(2), true, nil} {
 					require.NoError(t, vector.AppendBytes(vec, jsonValue(t, value), false, mp))
@@ -133,7 +133,7 @@ func allocationFailureCases(long string) []allocationFailureCase {
 			build: func(t *testing.T, mp *mpool.MPool, own func(*vector.Vector)) []*vector.Vector {
 				keys := buildVarlenVec(t, mp, types.T_varchar.ToType(),
 					[]string{"a", "b", "c", "d"}, own)
-				values := vector.NewVec(types.T_json.ToType())
+				values := vector.NewVec(types.T_json.ToType(), mp)
 				own(values)
 				for _, value := range []any{long + "-a", int64(2), true, nil} {
 					require.NoError(t, vector.AppendBytes(values, jsonValue(t, value), false, mp))
@@ -301,7 +301,7 @@ func attemptAggregateAllocation(t *testing.T, tc allocationFailureCase, vectors 
 	defer func() {
 		for _, result := range results {
 			if result != nil {
-				result.Free(mp)
+				result.Free(result.MPool())
 			}
 		}
 		for _, exec := range execs {

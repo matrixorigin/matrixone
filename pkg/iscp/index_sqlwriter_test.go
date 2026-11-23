@@ -604,3 +604,24 @@ func testHnswSqlWriterNarrow[T types.ArrayElement](t *testing.T, typ types.T, ve
 	require.Len(t, cdc.Data, 1)
 	require.Equal(t, vec, cdc.Data[0].Vec)
 }
+
+// The writer keeps its CDC entries across change batches, while the vectors
+// it is given are views of a batch's memory: an entry must not change when
+// that memory is reused.
+func TestHnswSqlWriterCopiesVectors(t *testing.T) {
+	ctx := t.Context()
+	tabledef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	writer, err := NewHnswSqlWriter("hnsw", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes)
+	require.NoError(t, err)
+	ins, ups := []float32{1, 2}, []float32{3, 4}
+	require.NoError(t, writer.Insert(ctx, []any{int64(1), ins, nil}))
+	require.NoError(t, writer.Upsert(ctx, []any{int64(2), ups, nil}))
+	ins[0], ups[0] = 99, 99
+	payload, err := writer.ToSql()
+	require.NoError(t, err)
+	var cdc vectorindex.VectorIndexCdc[float32]
+	require.NoError(t, sonic.Unmarshal(payload, &cdc))
+	require.Len(t, cdc.Data, 2)
+	require.Equal(t, []float32{1, 2}, cdc.Data[0].Vec)
+	require.Equal(t, []float32{3, 4}, cdc.Data[1].Vec)
+}

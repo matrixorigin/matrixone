@@ -25,6 +25,9 @@ func NewVectors(n int) Vectors {
 	return make([]vector.Vector, n)
 }
 
+// Free releases every vector. The vectors are read scratch filled through mp
+// (or read-only cache references, which Free only drops); a vector of any
+// other pool panics.
 func (vs Vectors) Free(mp *mpool.MPool) {
 	for i := range vs {
 		vs[i].Free(mp)

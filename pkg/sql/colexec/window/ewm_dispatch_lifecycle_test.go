@@ -55,8 +55,8 @@ func newEwmLifecycleArg(
 	t.Helper()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(2)
-	keyVec := vector.NewVec(types.T_int64.ToType())
-	xVec := vector.NewVec(types.T_float64.ToType())
+	keyVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	xVec := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 	for i := range x {
 		require.NoError(t, vector.AppendFixed(keyVec, keys[i], false, proc.Mp()))
 		isNull := xNulls != nil && xNulls[i]
@@ -66,7 +66,7 @@ func newEwmLifecycleArg(
 	bat.Vecs[1] = xVec
 	sampleVecs := []*vector.Vector{xVec}
 	if y != nil {
-		yVec := vector.NewVec(types.T_float64.ToType())
+		yVec := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 		for i := range y {
 			isNull := yNulls != nil && yNulls[i]
 			require.NoError(t, vector.AppendFixed(yVec, y[i], isNull, proc.Mp()))
@@ -113,6 +113,7 @@ func newEwmLifecycleArg(
 	t.Cleanup(func() {
 		bat.Clean(proc.Mp())
 		arg.Free(proc, true, nil)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -124,7 +125,7 @@ func runEwmRange(t *testing.T, arg *Window, proc *process.Process, start, end in
 	t.Helper()
 	vec, err := arg.ctr.processFuncRange(0, arg, proc, arg.OpAnalyzer, start, end)
 	require.NoError(t, err)
-	t.Cleanup(func() { vec.Free(proc.Mp()) })
+	t.Cleanup(func() { vec.Free(vec.MPool()) })
 	require.Equal(t, end-start, vec.Length())
 	col := vector.MustFixedColWithTypeCheck[float64](vec)
 	out := make([]float64, len(col))
@@ -138,7 +139,7 @@ func readEwmRange(t *testing.T, arg *Window, proc *process.Process, start, end i
 	t.Helper()
 	vec, err := arg.ctr.processFuncRange(0, arg, proc, arg.OpAnalyzer, start, end)
 	require.NoError(t, err)
-	t.Cleanup(func() { vec.Free(proc.Mp()) })
+	t.Cleanup(func() { vec.Free(vec.MPool()) })
 	require.Equal(t, end-start, vec.Length())
 	col := vector.MustFixedColWithTypeCheck[float64](vec)
 	values := make([]float64, len(col))
@@ -267,7 +268,7 @@ func TestEwmDispatchDecimalKeys(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			bat := batch.NewWithSize(2)
-			xVec := vector.NewVec(types.T_float64.ToType())
+			xVec := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixed(xVec, 2.0, false, proc.Mp()))
 			require.NoError(t, vector.AppendFixed(xVec, 4.0, false, proc.Mp()))
 			bat.Vecs[0] = keyVec
@@ -290,10 +291,11 @@ func TestEwmDispatchDecimalKeys(t *testing.T) {
 			t.Cleanup(func() {
 				bat.Clean(proc.Mp())
 				arg.Free(proc, true, nil)
+				colexec.FreeMockChildren(arg)
 			})
 			vec, err := arg.ctr.processFuncRange(0, arg, proc, arg.OpAnalyzer, 0, 2)
 			require.NoError(t, err)
-			t.Cleanup(func() { vec.Free(proc.Mp()) })
+			t.Cleanup(func() { vec.Free(vec.MPool()) })
 			require.Equal(t, []float64{2, 3.6},
 				vector.MustFixedColWithTypeCheck[float64](vec))
 		})

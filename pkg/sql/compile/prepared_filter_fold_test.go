@@ -127,7 +127,7 @@ func TestFilterScanStorageExprsUsesPreparedDiagnosticProof(t *testing.T) {
 	t.Cleanup(func() { proc.Free() })
 	warnings := &filterFoldWarningCounter{}
 	proc.WarningSink = warnings
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
 	t.Cleanup(func() {
@@ -234,7 +234,7 @@ func TestFilterScanStorageExprsUsesPreparedDiagnosticProof(t *testing.T) {
 func TestBuildFoldedFilterExprsRollsBackAndCanRetry(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	t.Cleanup(func() { proc.Free() })
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("not-a-decimal"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
 	t.Cleanup(func() {
@@ -326,7 +326,7 @@ func TestPrepareFoldedFilterExprsRefreshesCachedParameter(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	t.Cleanup(func() { proc.Free() })
 	paramType := types.T_varchar.ToType()
-	params := vector.NewVec(paramType)
+	params := vector.NewVec(paramType, proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("first"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
 	t.Cleanup(func() {
@@ -450,7 +450,7 @@ func TestPreparedDateFormatDiagnosticCandidates(t *testing.T) {
 	defer proc.Free()
 	sink := &filterFoldWarningCounter{}
 	proc.WarningSink = sink
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer params.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("bad"), false, proc.Mp()))
 	proc.SetPrepareParams(params)

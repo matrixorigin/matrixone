@@ -60,11 +60,18 @@ type spillWriteFlusher interface {
 }
 
 type container struct {
-	n     int // result vector number
-	state vm.CtrState
-	sels  []int64
-	poses []int32 // sorted list of attributes
-	cmps  []compare.Compare
+	// bufMP is the operator's own pool: retained rows, spill output and the
+	// accounted views all come from it.
+	bufMP *mpool.MPool
+	// batMP is the pool ctr.bat was created with.
+	batMP *mpool.MPool
+	// spillOutMP is the pool spill output batches are created with.
+	spillOutMP *mpool.MPool
+	n          int // result vector number
+	state      vm.CtrState
+	sels       []int64
+	poses      []int32 // sorted list of attributes
+	cmps       []compare.Compare
 
 	limit         uint64
 	limitExecutor colexec.ExpressionExecutor
@@ -75,10 +82,13 @@ type container struct {
 	bat                     *batch.Batch
 	buildBat                *batch.Batch //temp batch, do not need free or reset
 
-	allocationAccount      *mpool.AllocationAccount
-	retainedAllocation     *vector.AllocationAccountSelection
-	expressionAllocation   *vector.AllocationAccountSelection
-	outputAllocation       *vector.AllocationAccountSelection
+	allocationAccount *mpool.AllocationAccount
+	// Accounted views of allocationViewPool, built on first use because the
+	// account is bound before the operator knows its process pool.
+	allocationViewPool     *mpool.MPool
+	retainedAllocation     *mpool.MPool
+	expressionAllocation   *mpool.MPool
+	outputAllocation       *mpool.MPool
 	spillAllocation        *spillutil.SpillAllocationAccount
 	budget                 *process.ExecutionResourceGeneration
 	recoveryCapacity       *process.ExecutionRecoveryCapacity
@@ -205,15 +215,6 @@ func (ctr *container) setAllocationAccount(
 		len(ctr.rowRefs) != 0 || ctr.spillFile != nil || ctr.spillWriter != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	expression, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerTop,
-		topsites.TopExpressionData,
-		topsites.TopExpressionArea,
-	)
-	if err != nil {
-		return err
-	}
 	recoveryCapacity := process.NewExecutionRecoveryCapacitySlot()
 	recoveryClass, err := account.RegisterCapacityController(recoveryCapacity)
 	if err != nil {
@@ -222,26 +223,6 @@ func (ctr *container) setAllocationAccount(
 	rollbackRecovery := func(cause error) error {
 		_ = account.UnregisterCapacityController(recoveryClass, recoveryCapacity)
 		return cause
-	}
-	retained, err := vector.NewAllocationAccountSelectionWithCapacityClass(
-		account,
-		mpool.AllocationOwnerTop,
-		topsites.TopRetainedData,
-		topsites.TopRetainedArea,
-		recoveryClass,
-	)
-	if err != nil {
-		return rollbackRecovery(err)
-	}
-	output, err := vector.NewAllocationAccountSelectionWithCapacityClass(
-		account,
-		mpool.AllocationOwnerTop,
-		topsites.TopOutputData,
-		topsites.TopOutputArea,
-		recoveryClass,
-	)
-	if err != nil {
-		return rollbackRecovery(err)
 	}
 	spill, err := spillutil.NewSpillAllocationAccountWithCapacityClass(
 		account,
@@ -252,9 +233,10 @@ func (ctr *container) setAllocationAccount(
 		return rollbackRecovery(err)
 	}
 	ctr.allocationAccount = account
-	ctr.retainedAllocation = retained
-	ctr.expressionAllocation = expression
-	ctr.outputAllocation = output
+	ctr.allocationViewPool = nil
+	ctr.retainedAllocation = nil
+	ctr.expressionAllocation = nil
+	ctr.outputAllocation = nil
 	ctr.spillAllocation = spill
 	ctr.recoveryCapacity = recoveryCapacity
 	ctr.recoveryCapacityClass = recoveryClass
@@ -280,12 +262,125 @@ func (ctr *container) clearAllocationAccount(
 		return err
 	}
 	ctr.allocationAccount = nil
+	ctr.allocationViewPool = nil
 	ctr.retainedAllocation = nil
 	ctr.expressionAllocation = nil
 	ctr.outputAllocation = nil
 	ctr.spillAllocation = nil
 	ctr.budget = nil
 	return nil
+}
+
+// allocationViews builds the accounted views of mp the bound account charges
+// through. It is a no-op when no account is bound or the views already view mp.
+func (ctr *container) allocationViews(mp *mpool.MPool) error {
+	if ctr.allocationAccount == nil || mp == nil ||
+		(ctr.allocationViewPool == mp && ctr.retainedAllocation != nil) {
+		return nil
+	}
+	expression, err := mp.WithAccount(
+		ctr.allocationAccount,
+		mpool.AllocationOwnerTop,
+		topsites.TopExpressionData,
+		mpool.AllocationCapacityClassDefault,
+	)
+	if err != nil {
+		return err
+	}
+	retained, err := mp.WithAccount(
+		ctr.allocationAccount,
+		mpool.AllocationOwnerTop,
+		topsites.TopRetainedData,
+		ctr.recoveryCapacityClass,
+	)
+	if err != nil {
+		return err
+	}
+	output, err := mp.WithAccount(
+		ctr.allocationAccount,
+		mpool.AllocationOwnerTop,
+		topsites.TopOutputData,
+		ctr.recoveryCapacityClass,
+	)
+	if err != nil {
+		return err
+	}
+	ctr.allocationViewPool = mp
+	ctr.expressionAllocation = expression
+	ctr.retainedAllocation = retained
+	ctr.outputAllocation = output
+	return nil
+}
+
+// batPool returns the pool ctr.bat was created with (proc's pool when none).
+func (ctr *container) batPool(proc *process.Process) *mpool.MPool {
+	if ctr.batMP != nil {
+		return ctr.batMP
+	}
+	return proc.Mp()
+}
+
+// spillOutPool returns the pool spill output batches are created with.
+func (ctr *container) spillOutPool(proc *process.Process) *mpool.MPool {
+	if ctr.spillOutMP != nil {
+		return ctr.spillOutMP
+	}
+	if mp, err := ctr.outputMP(proc); err == nil {
+		return mp
+	}
+	return proc.Mp()
+}
+
+// ensureBufMP creates the operator's own pool.
+func (ctr *container) ensureBufMP(proc *process.Process) (err error) {
+	if ctr.bufMP == nil {
+		ctr.bufMP, err = colexec.NewOperatorMPool(proc, "top")
+	}
+	return err
+}
+
+// retainedMP returns the pool retained Top state allocates from: the retained
+// view of the operator's own pool, or the own pool when no account is bound.
+func (ctr *container) retainedMP(proc *process.Process) (*mpool.MPool, error) {
+	if err := ctr.ensureBufMP(proc); err != nil {
+		return nil, err
+	}
+	if ctr.allocationAccount == nil {
+		return ctr.bufMP, nil
+	}
+	if err := ctr.allocationViews(ctr.bufMP); err != nil {
+		return nil, err
+	}
+	return ctr.retainedAllocation, nil
+}
+
+// outputMP returns the pool spill output batches allocate from.
+func (ctr *container) outputMP(proc *process.Process) (*mpool.MPool, error) {
+	if err := ctr.ensureBufMP(proc); err != nil {
+		return nil, err
+	}
+	if ctr.allocationAccount == nil {
+		return ctr.bufMP, nil
+	}
+	if err := ctr.allocationViews(ctr.bufMP); err != nil {
+		return nil, err
+	}
+	return ctr.outputAllocation, nil
+}
+
+// copyCompareRow replaces dst row dstRow of cmp's retained vector with src
+// row srcRow, allocating any growth through mp.
+func copyCompareRow(
+	cmp compare.Compare,
+	src *vector.Vector,
+	srcRow, dstRow int64,
+	mp *mpool.MPool,
+	proc *process.Process,
+) error {
+	if !mp.IsView() {
+		return cmp.Copy(1, 0, srcRow, dstRow, proc)
+	}
+	return cmp.Vector().Copy(src, dstRow, srcRow, mp)
 }
 
 func (ctr *container) installRecoveryCapacity() error {
@@ -366,12 +461,12 @@ func (ctr *container) clearRecoveryCapacity(
 
 func (ctr *container) reset(proc *process.Process) {
 	if ctr.bat != nil {
-		ctr.bat.Clean(proc.Mp())
-		ctr.bat = nil
+		ctr.bat.Clean(ctr.batPool(proc))
+		ctr.bat, ctr.batMP = nil, nil
 	}
 	if ctr.spillOutBat != nil {
-		ctr.spillOutBat.Clean(proc.Mp())
-		ctr.spillOutBat = nil
+		ctr.spillOutBat.Clean(ctr.spillOutPool(proc))
+		ctr.spillOutBat, ctr.spillOutMP = nil, nil
 	}
 	ctr.cleanupSpill(proc)
 
@@ -410,12 +505,12 @@ func (ctr *container) reset(proc *process.Process) {
 
 func (ctr *container) free(proc *process.Process) {
 	if ctr.bat != nil {
-		ctr.bat.Clean(proc.Mp())
-		ctr.bat = nil
+		ctr.bat.Clean(ctr.batPool(proc))
+		ctr.bat, ctr.batMP = nil, nil
 	}
 	if ctr.spillOutBat != nil {
-		ctr.spillOutBat.Clean(proc.Mp())
-		ctr.spillOutBat = nil
+		ctr.spillOutBat.Clean(ctr.spillOutPool(proc))
+		ctr.spillOutBat, ctr.spillOutMP = nil, nil
 	}
 	ctr.cleanupSpill(proc)
 	for i, executor := range ctr.executorsForOrderColumn {
@@ -434,6 +529,9 @@ func (ctr *container) free(proc *process.Process) {
 	ctr.cmps = nil
 	ctr.budget = nil
 	_ = ctr.releaseRecoveryCapacity()
+	// Views of the deleted pool are rebuilt on the next pool.
+	ctr.allocationViewPool = nil
+	colexec.FreeOperatorMPool(&ctr.bufMP)
 }
 
 func (ctr *container) cleanupSpill(proc *process.Process) {

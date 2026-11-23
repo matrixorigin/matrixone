@@ -496,7 +496,7 @@ func appendRangeSpillRow(dst **batch.Batch, src *batch.Batch, row int, mp *mpool
 		*dst = batch.NewWithSize(len(src.Vecs))
 		(*dst).Attrs = append((*dst).Attrs, src.Attrs...)
 		for idx := range src.Vecs {
-			(*dst).Vecs[idx] = vector.NewVec(*src.Vecs[idx].GetType())
+			(*dst).Vecs[idx] = vector.NewVec(*src.Vecs[idx].GetType(), mp)
 		}
 	} else if !batchesShareAppendSchema(*dst, src) {
 		return moerr.GetOkExpectedEOB()
@@ -1439,7 +1439,7 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 		*bat = batch.NewWithSize(0)
 		(*bat).Attrs = append((*bat).Attrs, data.Attrs...)
 		for _, vec := range data.Vecs {
-			newVec := vector.NewVec(*vec.GetType())
+			newVec := vector.NewVec(*vec.GetType(), mp)
 			if err != nil {
 				return err
 			}
@@ -3092,6 +3092,7 @@ type ChangeHandler struct {
 	// from an earlier generation than the requested range start.
 	isRecoveryMode      bool
 	preserveAllVersions bool
+	disableQuick        bool
 	tombstoneHandle     *baseHandle
 	dataHandle          *baseHandle
 	coarseMaxRow        int
@@ -3346,6 +3347,7 @@ func NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 		debugLabel:               engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:              engine.RetainRowIDFromContext(ctx),
 		preserveAllVersions:      engine.CollectChangesPreserveAllVersionsFromContext(ctx),
+		disableQuick:             engine.CollectChangesDisableQuickFromContext(ctx),
 	}
 	defer func() {
 		if err != nil {
@@ -3438,6 +3440,7 @@ func newChangesHandlerWithCheckpointEntries(
 		debugLabel:          engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:         engine.RetainRowIDFromContext(ctx),
 		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
+		disableQuick:        engine.CollectChangesDisableQuickFromContext(ctx),
 	}
 	defer func() {
 		if err == nil {
@@ -3784,6 +3787,7 @@ func NewChangesHandler(
 		debugLabel:          engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:         engine.RetainRowIDFromContext(ctx),
 		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
+		disableQuick:        engine.CollectChangesDisableQuickFromContext(ctx),
 	}
 	defer func() {
 		if err != nil {
@@ -3839,6 +3843,9 @@ func (p *ChangeHandler) Close() error {
 	return nil
 }
 func (p *ChangeHandler) decideMode() {
+	if p.disableQuick {
+		return
+	}
 	if p.tombstoneHandle.IsEmpty() {
 		p.quick = true
 		return
@@ -4252,11 +4259,11 @@ func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 	return nil
 }
 
-func newDataBatchWithBatch(src *batch.Batch, retainRowID bool, logicalSeqnums []uint16) (data *batch.Batch) {
+func newDataBatchWithBatch(src *batch.Batch, retainRowID bool, logicalSeqnums []uint16, mp *mpool.MPool) (data *batch.Batch) {
 	data = batch.NewWithSize(0)
 	if retainRowID {
 		data.Attrs = append(data.Attrs, catalog.Row_ID)
-		data.Vecs = append(data.Vecs, vector.NewVec(types.T_Rowid.ToType()))
+		data.Vecs = append(data.Vecs, vector.NewVec(types.T_Rowid.ToType(), mp))
 	}
 	if len(logicalSeqnums) > 0 {
 		for _, seqnum := range logicalSeqnums {
@@ -4269,7 +4276,7 @@ func newDataBatchWithBatch(src *batch.Batch, retainRowID bool, logicalSeqnums []
 				attr = src.Attrs[idx]
 			}
 			data.Attrs = append(data.Attrs, attr)
-			data.Vecs = append(data.Vecs, vector.NewVec(*src.Vecs[idx].GetType()))
+			data.Vecs = append(data.Vecs, vector.NewVec(*src.Vecs[idx].GetType(), mp))
 		}
 	} else {
 		data.Attrs = append(data.Attrs, src.Attrs[2:]...)
@@ -4277,11 +4284,11 @@ func newDataBatchWithBatch(src *batch.Batch, retainRowID bool, logicalSeqnums []
 			if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
 				continue
 			}
-			data.Vecs = append(data.Vecs, vector.NewVec(*vec.GetType()))
+			data.Vecs = append(data.Vecs, vector.NewVec(*vec.GetType(), mp))
 		}
 	}
 	data.Attrs = append(data.Attrs, objectio.DefaultCommitTS_Attr)
-	newVec := vector.NewVec(types.T_TS.ToType())
+	newVec := vector.NewVec(types.T_TS.ToType(), mp)
 	data.Vecs = append(data.Vecs, newVec)
 	return
 }
@@ -4367,7 +4374,7 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 
 func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, logicalSeqnums []uint16, mp *mpool.MPool) {
 	if *bat == nil {
-		(*bat) = newDataBatchWithBatch(entry.Batch, retainRowID, logicalSeqnums)
+		(*bat) = newDataBatchWithBatch(entry.Batch, retainRowID, logicalSeqnums, mp)
 	}
 	dstOffset := 0
 	if retainRowID {
@@ -4419,12 +4426,12 @@ func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, mp 
 		(*bat) = batch.NewWithSize(vecCnt)
 		(*bat).SetAttributes(attrs)
 		if retainRowID {
-			(*bat).Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-			(*bat).Vecs[1] = vector.NewVec(*pkVec.GetType())
-			(*bat).Vecs[2] = vector.NewVec(types.T_TS.ToType())
+			(*bat).Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+			(*bat).Vecs[1] = vector.NewVec(*pkVec.GetType(), mp)
+			(*bat).Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 		} else {
-			(*bat).Vecs[0] = vector.NewVec(*pkVec.GetType())
-			(*bat).Vecs[1] = vector.NewVec(types.T_TS.ToType())
+			(*bat).Vecs[0] = vector.NewVec(*pkVec.GetType(), mp)
+			(*bat).Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 		}
 	}
 	pkIdx := 0
@@ -4614,7 +4621,7 @@ func prependRowIDVectorIfNeeded(bat *batch.Batch, blk *types.Blockid, mp *mpool.
 		}
 		return nil
 	}
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	for i := 0; i < bat.RowCount(); i++ {
 		if err := vector.AppendFixed(rowIDVec, types.NewRowid(blk, uint32(i)), false, mp); err != nil {
 			rowIDVec.Free(mp)
@@ -4639,6 +4646,11 @@ func updateTombstoneBatch(
 	retainRowID bool,
 	mp *mpool.MPool,
 ) error {
+	// The batch is rewritten in place: read-only (reference) columns, such
+	// as a no-copy decode of persisted data, are copied into mp first.
+	if err := bat.OwnReadOnlyVectors(mp); err != nil {
+		return err
+	}
 	if specialLayout != nil {
 		return updatePersistedTombstoneBatch(
 			bat, start, end, skipTS, sort, *specialLayout, seqnums, retainRowID, mp,
@@ -4818,6 +4830,11 @@ func updateDataBatch(
 	retainRowID bool,
 	mp *mpool.MPool,
 ) error {
+	// The batch is rewritten in place: read-only (reference) columns, such
+	// as a no-copy decode of persisted data, are copied into mp first.
+	if err := bat.OwnReadOnlyVectors(mp); err != nil {
+		return err
+	}
 	if specialLayout != nil {
 		return updatePersistedDataBatch(bat, start, end, blk, *specialLayout, seqnums, retainRowID, mp)
 	}
@@ -4956,7 +4973,7 @@ func updatePersistedDataBatch(
 		if blk == nil {
 			return moerr.NewInternalErrorNoCtx("persisted appendable object cannot synthesize rowid without block id")
 		}
-		rowIDVec = vector.NewVec(types.T_Rowid.ToType())
+		rowIDVec = vector.NewVec(types.T_Rowid.ToType(), mp)
 		for i := range commits {
 			if err := vector.AppendFixed(rowIDVec, types.NewRowid(blk, uint32(i)), false, mp); err != nil {
 				rowIDVec.Free(mp)

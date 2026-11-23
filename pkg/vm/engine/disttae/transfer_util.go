@@ -275,7 +275,7 @@ func (flow *TransferFlow) fillDefaults() {
 }
 
 func (flow *TransferFlow) getBuffer() *batch.Batch {
-	return flow.buffer.Fetch()
+	return flow.buffer.Fetch(flow.mp)
 }
 
 func (flow *TransferFlow) putBuffer(bat *batch.Batch) {

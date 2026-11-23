@@ -269,7 +269,7 @@ func literalVecText(ctx context.Context, literalVec *plan.LiteralVec, complete b
 			text, err = invalid()
 		}
 	}()
-	vec := vector.NewVec(types.T_any.ToType())
+	vec := vector.NewVec(types.T_any.ToType(), nil)
 	defer vec.Free(nil)
 	if err := vec.UnmarshalBinary(literalVec.Data); err != nil {
 		return invalid()

@@ -254,14 +254,10 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 	require.NoError(t, err)
 
 	source := makeInt32Batch(proc, []int32{1, 2, 3})
-	source.Vecs = append(source.Vecs, vector.NewVec(types.T_text.ToType()))
+	source.Vecs = append(source.Vecs, vector.NewVec(types.T_text.ToType(), proc.Mp()))
 	for _, value := range []string{"raw", "text", "plain"} {
 		require.NoError(t, vector.AppendBytes(source.Vecs[1], []byte(value), false, proc.Mp()))
 	}
-	require.NoError(t, source.Vecs[1].SetIsBinaryStringAt(0, true))
-	require.NoError(t, source.Vecs[1].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
-		vector.PrepareParamInteger, vector.PrepareParamNone, vector.PrepareParamFloat,
-	}, proc.Mp()))
 	defer source.Clean(proc.Mp())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
 	require.NoError(t, err)
@@ -276,17 +272,14 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 		fd:         writeBuildFile(proc, t.Name(), source),
 		allocation: allocation,
 	}
-	decoded, err := newSpillBatch(0, reader.allocation.decoded)
-	require.NoError(t, err)
+	decoded := newSpillBatch(0)
 	got, err := reader.ReadBatch(proc, decoded)
 	require.NoError(t, err)
 	require.Equal(t, 3, got.RowCount())
 	require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColNoTypeCheck[int32](got.Vecs[0]))
-	require.True(t, got.Vecs[1].GetIsBinaryStringAt(0))
-	require.False(t, got.Vecs[1].GetIsBinaryStringAt(1))
-	require.Equal(t, vector.PrepareParamInteger, got.Vecs[1].GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamFloat, got.Vecs[1].GetPrepareParamKindAt(2))
-	got.Clean(proc.Mp())
+	require.Equal(t, "raw", got.Vecs[1].GetStringAt(0))
+	require.Equal(t, "text", got.Vecs[1].GetStringAt(1))
+	cleanSpillBatch(got)
 	_, err = reader.ReadBatch(proc, decoded)
 	require.ErrorIs(t, err, io.EOF)
 	reader.Close()
@@ -300,8 +293,7 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 		fd:         makeCorruptBatchFile(t),
 		allocation: corruptState.allocation,
 	}
-	bad, err := newSpillBatch(0, corruptState.allocation.decoded)
-	require.NoError(t, err)
+	bad := newSpillBatch(0)
 	_, err = corrupt.ReadBatch(proc, bad)
 	require.Error(t, err)
 	corrupt.Close()
@@ -313,7 +305,7 @@ func TestBucketReaderRejectsSchemaChangeBeforeMerge(t *testing.T) {
 	defer proc.Free()
 
 	textBatch := batch.NewWithSize(1)
-	textBatch.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	textBatch.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(
 		textBatch.Vecs[0], []byte("x"), false, proc.Mp(),
 	))
@@ -333,9 +325,8 @@ func TestBucketReaderRejectsSchemaChangeBeforeMerge(t *testing.T) {
 		mergeRecords: true,
 		allocation:   state.allocation,
 	}
-	reuse, err := newSpillBatch(0, state.allocation.decoded)
-	require.NoError(t, err)
-	_, err = reader.ReadBatch(proc, reuse)
+	reuse := newSpillBatch(0)
+	_, err := reader.ReadBatch(proc, reuse)
 	require.ErrorContains(t, err, "spill batch schema changed")
 	reader.Close()
 	require.Zero(t, state.account.Snapshot().Used)
@@ -501,11 +492,12 @@ func TestSpillRejectsCompleteRecordTruncation(t *testing.T) {
 func TestSpillRejectsPhysicalTruncationBeforeFirstRecord(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	baseline := proc.Mp().CurrNB()
 	first := makeInt32Batch(proc, []int32{1})
 	second := makeInt32Batch(proc, []int32{2})
 	defer first.Clean(proc.Mp())
 	defer second.Clean(proc.Mp())
+	// The source batches stay live until the deferred cleanup.
+	baseline := proc.Mp().CurrNB()
 
 	file := writeBuildRecords(proc, t.Name(), first, second)
 	info, err := file.Stat()

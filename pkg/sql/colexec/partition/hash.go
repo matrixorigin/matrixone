@@ -272,7 +272,9 @@ func normalizeHashPartitionKeys(
 		if normalized == nil {
 			normalized = append([]*vector.Vector(nil), keys...)
 		}
-		view, err := key.WindowByLogicalRows(0, rows)
+		// Folding grouping into nulls modifies the key, so it needs a copy
+		// owned by mp; a window is a read-only reference.
+		view, err := key.CloneWindow(0, rows, mp)
 		if err != nil {
 			freeNormalizedHashPartitionKeys(owned, mp)
 			return nil, nil, err
@@ -288,6 +290,7 @@ func normalizeHashPartitionKeys(
 	return normalized, owned, nil
 }
 
+// freeNormalizedHashPartitionKeys frees the normalized key copies, owned by mp.
 func freeNormalizedHashPartitionKeys(keys []*vector.Vector, mp *mpool.MPool) {
 	for _, key := range keys {
 		key.Free(mp)
@@ -443,22 +446,7 @@ func (ctr *hashContainer) finalizeSortFallback(proc *process.Process, analyzer p
 // large, wide input, so cancellation must be observed during final copying too.
 func (ctr *hashContainer) shuffleRetained(proc *process.Process, analyzer process.Analyzer, selections []int64) (err error) {
 	attrs, attrTypes := ctr.retained.GetSchema()
-	materializing := batch.NewWithSchema(ctr.retained.HasAllocationAccount(), attrs, attrTypes)
-	if selection := ctr.retained.AllocationAccountSelection(); selection != nil {
-		if err = materializing.SetAllocationAccount(selection); err != nil {
-			materializing.Clean(proc.Mp())
-			return err
-		}
-	} else {
-		for i, vec := range ctr.retained.Vecs {
-			if selection := vec.AllocationAccountSelection(); selection != nil {
-				if err = materializing.Vecs[i].SetAllocationAccount(selection); err != nil {
-					materializing.Clean(proc.Mp())
-					return err
-				}
-			}
-		}
-	}
+	materializing := batch.NewWithSchema(attrs, attrTypes, proc.Mp())
 	ctr.materializing = materializing
 	ctr.accountMemory(analyzer)
 	defer func() {
@@ -656,7 +644,8 @@ func (ctr *hashContainer) freeGroupBoundaries(mp *mpool.MPool) {
 
 func (ctr *hashContainer) cleanOutput(proc *process.Process) {
 	if ctr.output != nil {
-		ctr.output.Clean(proc.Mp())
+		// output is a read-only window of ctr.retained.
+		ctr.output.FreeWindow()
 		ctr.output = nil
 	}
 }

@@ -22,6 +22,9 @@ import (
 // InitMyPipelineSpool return a simple pipeline spool for temporary plan.
 //
 // todo: use spool package after pipeline construct process is simple.
+//
+// The spool copies sent batches through mp; pass an accounted MPool view to
+// charge those copies to an allocation account.
 func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt uint32) *PipelineSpool {
 	bl := getBufferLength(receiverCnt)
 

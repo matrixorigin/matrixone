@@ -614,3 +614,55 @@ func benchmarkMergeOrderResident(b *testing.B, accounted bool) {
 		b.StartTimer()
 	}
 }
+
+// failAfterBatchesChild returns its batches, then fails instead of ending.
+type failAfterBatchesChild struct {
+	*colexec.MockOperator
+	err error
+}
+
+func (op *failAfterBatchesChild) Call(proc *process.Process) (vm.CallResult, error) {
+	result, err := op.MockOperator.Call(proc)
+	if err != nil || result.Batch != nil {
+		return result, err
+	}
+	return vm.CancelResult, op.err
+}
+
+// A pipeline that fails while batches are resident frees them on Reset/Free
+// with the pool they were created with (the retained view), not proc's pool.
+func TestAccountedMergeOrderFailedPipelineFreesResidentBatches(t *testing.T) {
+	for _, reset := range []bool{true, false} {
+		name := "free"
+		if reset {
+			name = "reset"
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			op := newAccountedMergeOrder()
+			state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
+			childErr := moerr.NewInternalErrorNoCtx("injected child failure")
+			op.AppendChild(&failAfterBatchesChild{
+				MockOperator: colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+					newValuesBatch(proc, []int8{3, 1}),
+					newValuesBatch(proc, []int8{2}),
+				}),
+				err: childErr,
+			})
+			require.NoError(t, op.Prepare(proc))
+			_, err := vm.Exec(op, proc)
+			require.ErrorIs(t, err, childErr)
+			require.NotEmpty(t, op.ctr.batchList)
+			require.Positive(t, state.account.Snapshot().Used)
+
+			op.Children[0].Free(proc, true, err)
+			if reset {
+				op.Reset(proc, true, err)
+			}
+			op.Free(proc, true, err)
+			finalizeMergeOrderTestAllocation(t, op, state)
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}

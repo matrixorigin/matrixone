@@ -70,7 +70,7 @@ func BenchmarkFloatDecimalVectors(b *testing.B) {
 						width = 38
 					}
 					target := types.New(oid, width, tc.scale)
-					from := vector.NewVec(types.T_float64.ToType())
+					from := vector.NewVec(types.T_float64.ToType(), mp)
 					defer from.Free(mp)
 					for row := 0; row < rows; row++ {
 						x := tc.values[(row/2)%len(tc.values)]

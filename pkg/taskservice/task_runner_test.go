@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -290,6 +292,186 @@ func TestRunTaskWithDisableRetry(t *testing.T) {
 	}, WithRunnerParallelism(2),
 		WithRunnerHeartbeatInterval(time.Millisecond),
 		WithRunnerFetchInterval(time.Millisecond))
+}
+
+type completionTaskService struct {
+	TaskService
+	complete func(context.Context, string, task.AsyncTask, task.ExecuteResult) error
+}
+
+func (s completionTaskService) Complete(ctx context.Context, runner string, value task.AsyncTask, result task.ExecuteResult) error {
+	return s.complete(ctx, runner, value, result)
+}
+
+func TestTaskRunnerStopWithFullCompletionQueue(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := NewMemTaskStorage().(*memTaskStorage)
+		service := NewTaskService(runtime.DefaultRuntime(), store)
+		defer func() { assert.NoError(t, service.Close()) }()
+
+		writing := make(chan struct{})
+		writeCanceled := make(chan struct{})
+		releaseWrite := make(chan struct{})
+		releaseWriter := sync.OnceFunc(func() { close(releaseWrite) })
+		r := NewTaskRunner("r1", completionTaskService{service, func(ctx context.Context, runner string, value task.AsyncTask, result task.ExecuteResult) error {
+			if value.Metadata.ID != "writing" {
+				return service.Complete(ctx, runner, value, result)
+			}
+			close(writing)
+			<-ctx.Done()
+			close(writeCanceled)
+			<-releaseWrite
+			return ctx.Err()
+		}}, nil, WithRunnerParallelism(1), WithRunnerMaxWaitTasks(1),
+			WithRunnerFetchInterval(time.Millisecond), WithRunnerRetryInterval(time.Hour)).(*taskRunner)
+		executed := make(chan uint64, 1)
+		r.RegisterExecutor(0, func(_ context.Context, value task.Task) error {
+			executed <- value.GetID()
+			return nil
+		})
+		r.RegisterExecutor(task.TaskCode_SQLTask, NewSQLTaskExecutor(func() ie.InternalExecutor {
+			return &fakeInternalExecutor{queryValues: []any{true}}
+		}, service, r.ID()).TaskExecutor())
+		require.NoError(t, r.Start())
+		defer func() {
+			releaseWriter()
+			assert.NoError(t, r.Stop())
+		}()
+		startTask := func(name string) uint64 {
+			mustAddTestAsyncTask(t, store, 1, newTestAsyncTask(name))
+			mustAllocTestTask(t, service, store, map[string]string{name: r.ID()})
+			select {
+			case id := <-executed:
+				synctest.Wait()
+				return id
+			case <-time.After(time.Second):
+				t.Fatal("task did not reach its executor")
+				return 0
+			}
+		}
+		startTask("writing")
+		select {
+		case <-writing:
+		default:
+			t.Fatal("completion writer did not start")
+		}
+		startTask("queued")
+		require.Len(t, r.doneC, 1)
+		publisherID := startTask("publishing")
+		assert.Empty(t, r.parallelismC, "blocked publisher must release its execution slot")
+		publisherTracked := func() bool {
+			r.runningTasks.RLock()
+			defer r.runningTasks.RUnlock()
+			_, ok := r.runningTasks.m[publisherID]
+			return ok
+		}
+		require.True(t, publisherTracked())
+
+		def := mustAddSQLTaskForExecutorTest(t, store, func(def *SQLTask) { def.TriggerCount = 1 })
+		parent := fmt.Sprintf("sql-task:%d", def.TaskID)
+		spec := newSQLTaskContextForTest(def, SQLTaskTriggerScheduled)
+		spec.TriggerCount = def.TriggerCount
+		firing := task.AsyncTask{
+			ParentTaskID: parent,
+			Metadata:     BuildSQLTaskMetadata(spec),
+			Status:       task.TaskStatus_Running,
+			TaskRunner:   r.ID(),
+			Epoch:        1,
+		}
+		mustAddTestAsyncTask(t, store, 1, firing)
+		time.Sleep(20 * time.Millisecond) // allow the real fetch loop to discover the firing
+		synctest.Wait()
+		persisted := mustGetTestAsyncTask(t, store, 1, WithTaskParentTaskIDCond(EQ, parent))[0]
+		assert.Equal(t, task.TaskStatus_Completed, persisted.Status, "SQL publication must progress while the generic writer is pinned")
+		if assert.NotNil(t, persisted.ExecuteResult) {
+			assert.Equal(t, task.ResultCode_Success, persisted.ExecuteResult.Code)
+		}
+		runs, err := store.QuerySQLTaskRun(context.Background())
+		if assert.NoError(t, err) && assert.Len(t, runs, 1) {
+			assert.Equal(t, SQLTaskStatusSuccess, runs[0].Status)
+		}
+
+		stopped := make(chan error, 1)
+		go func() { stopped <- r.Stop() }()
+		select {
+		case <-writeCanceled:
+		case <-time.After(time.Second):
+			t.Fatal("Stop did not cancel the completion write")
+		}
+		synctest.Wait()
+		if !assert.False(t, publisherTracked(), "publisher must exit even while Complete is still pinned") {
+			// Give a regressed, unconditional publisher space to exit so the
+			// test can report the failure and still join the stopper.
+			select {
+			case <-r.doneC:
+			default:
+			}
+		}
+		releaseWriter()
+		select {
+		case err := <-stopped:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("Stop did not finish after the canceled completion write returned")
+		}
+		require.Empty(t, r.doneC)
+		require.Empty(t, r.runningTasks.m)
+		for _, value := range mustGetTestAsyncTask(t, store, 3, WithTaskParentTaskIDCond(EQ, "")) {
+			require.Equal(t, task.TaskStatus_Running, value.Status)
+			require.Nil(t, value.ExecuteResult)
+		}
+	})
+}
+
+func TestTaskRunnerRetriesCompletionWithoutReexecuting(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := NewMemTaskStorage()
+		service := NewTaskService(runtime.DefaultRuntime(), store)
+		defer func() { assert.NoError(t, service.Close()) }()
+
+		writes := make(chan task.ExecuteResult, 2)
+		attempt := 0 // only the completion worker writes it
+		r := NewTaskRunner("r1", completionTaskService{service, func(ctx context.Context, runner string, value task.AsyncTask, result task.ExecuteResult) error {
+			attempt++
+			if attempt == 1 {
+				writes <- result
+				return moerr.NewInternalError(ctx, "temporary completion failure")
+			}
+			err := service.Complete(ctx, runner, value, result)
+			writes <- result
+			return err
+		}}, nil, WithRunnerParallelism(1), WithRunnerFetchInterval(time.Millisecond),
+			WithRunnerRetryInterval(10*time.Millisecond)).(*taskRunner)
+		executions := make(chan context.Context, 2)
+		r.RegisterExecutor(0, func(ctx context.Context, _ task.Task) error {
+			executions <- ctx
+			return moerr.NewInternalError(ctx, "task failed")
+		})
+		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("failed"))
+		mustAllocTestTask(t, service, store, map[string]string{"failed": r.ID()})
+		require.NoError(t, r.Start())
+		defer func() { assert.NoError(t, r.Stop()) }()
+
+		var results []task.ExecuteResult
+		for range 2 {
+			select {
+			case result := <-writes:
+				results = append(results, result)
+			case <-time.After(time.Second):
+				t.Fatal("completion did not retry")
+			}
+		}
+		synctest.Wait()
+		second := results[1]
+		require.Equal(t, results[0], second)
+		require.Equal(t, task.ResultCode_Failed, second.Code)
+		require.Contains(t, second.Error, "task failed")
+		value := mustGetTestAsyncTask(t, store, 1)[0]
+		require.Equal(t, task.TaskStatus_Completed, value.Status)
+		require.Equal(t, &second, value.ExecuteResult)
+		require.Len(t, executions, 1)
+		require.ErrorIs(t, (<-executions).Err(), context.Canceled)
+	})
 }
 
 func TestCancelRunningTask(t *testing.T) {

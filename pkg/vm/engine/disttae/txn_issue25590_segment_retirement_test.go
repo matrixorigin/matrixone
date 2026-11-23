@@ -73,7 +73,7 @@ func TestIssue25590FragmentSettlementRetiresOnlyOwnSegmentRegistrations(t *testi
 	probeStats := mockStatsList(t, 1)[0]
 	probeName := probeStats.ObjectName().String()
 	require.NoError(t, writeObjectToFS(ctx, failFS, probeName))
-	recBat := colexec.AllocCNS3ResultBat(false)
+	recBat := colexec.AllocCNS3ResultBat(false, mp)
 	defer recBat.Clean(mp)
 	require.NoError(t, colexec.ExpandObjectStatsToBatch(
 		mp, false, recBat, false, probeStats))
@@ -185,7 +185,7 @@ func TestIssue25590TransferredFragmentSettlementTearsDownLocalWorkspace(t *testi
 	for i := range stats {
 		probeStats := stats[i]
 		names = append(names, probeStats.ObjectName().String())
-		recBat := colexec.AllocCNS3ResultBat(false)
+		recBat := colexec.AllocCNS3ResultBat(false, mp)
 		bats = append(bats, recBat)
 		require.NoError(t, colexec.ExpandObjectStatsToBatch(
 			mp, false, recBat, false, probeStats))

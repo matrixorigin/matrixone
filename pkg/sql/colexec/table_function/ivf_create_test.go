@@ -158,7 +158,7 @@ func TestIvfCreateStart_Error(t *testing.T) {
 			tblCfg: defaultTblCfg,
 			sqlFn: func(p *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 				bat := batch.New([]string{"v"})
-				vec := vector.NewVec(types.T_int32.ToType())
+				vec := vector.NewVec(types.T_int32.ToType(), p.Proc.Mp())
 				vector.AppendFixed(vec, int32(1), false, p.Proc.Mp())
 				bat.SetVector(0, vec)
 				bat.SetRowCount(1)
@@ -174,7 +174,7 @@ func TestIvfCreateStart_Error(t *testing.T) {
 				bat := batch.New([]string{"v"})
 				typ := types.T_array_float32.ToType()
 				typ.Width = 2
-				vec := vector.NewVec(typ)
+				vec := vector.NewVec(typ, p.Proc.Mp())
 				vector.AppendBytes(vec, types.ArrayToBytes([]float32{1.0, 2.0}), false, p.Proc.Mp())
 				vector.AppendBytes(vec, types.ArrayToBytes([]float32{3.0}), false, p.Proc.Mp())
 				bat.SetVector(0, vec)
@@ -268,7 +268,7 @@ func TestIvfCreateEndUnstorableSample(t *testing.T) {
 				typ := tc.typ.ToType()
 				typ.Width = 2
 				bat := batch.New([]string{"v"})
-				vec := vector.NewVec(typ)
+				vec := vector.NewVec(typ, p.Proc.Mp())
 				bat.SetVector(0, vec)
 				for _, row := range tc.rows {
 					if err := vector.AppendBytes(vec, row, false, p.Proc.Mp()); err != nil {

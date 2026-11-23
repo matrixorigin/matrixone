@@ -206,12 +206,18 @@ func (sels *GroupSels) Get(k int32) []int32 {
 
 // JoinMap is used for join
 type JoinMap struct {
-	runtimeFilter_In  bool
-	valid             bool
-	hasNullKey        bool
-	rowCnt            int64 // for debug purpose
-	refCnt            int64
-	mpool             *mpool.MPool
+	runtimeFilter_In bool
+	valid            bool
+	hasNullKey       bool
+	rowCnt           int64 // for debug purpose
+	refCnt           int64
+	mpool            *mpool.MPool
+	// batchesMP is the pool the retained batches were created with; nil means
+	// mpool.
+	batchesMP *mpool.MPool
+	// ownedPool is the build operator's own pool, handed over with the
+	// batches; FreeMemory deletes it once the batches are freed.
+	ownedPool         *mpool.MPool
 	shm               *hashmap.StrHashMap
 	ihm               *hashmap.IntHashMap
 	sels              GroupSels
@@ -453,6 +459,18 @@ func NewJoinMap(sels GroupSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap
 	}
 }
 
+// SetBatchesPool records the pool the retained batches were created with, so
+// FreeMemory frees them with it.
+func (jm *JoinMap) SetBatchesPool(mp *mpool.MPool) {
+	jm.batchesMP = mp
+}
+
+// TakeOwnedPool hands the build operator's own pool to the JoinMap, which
+// deletes it in FreeMemory after freeing the batches allocated from it.
+func (jm *JoinMap) TakeOwnedPool(mp *mpool.MPool) {
+	jm.ownedPool = mp
+}
+
 func (jm *JoinMap) GetBatches() []*batch.Batch {
 	if jm == nil {
 		return nil
@@ -685,10 +703,18 @@ func (jm *JoinMap) FreeMemory() {
 		jm.shm.Free()
 		jm.shm = nil
 	}
+	batchesMP := jm.batchesMP
+	if batchesMP == nil {
+		batchesMP = jm.mpool
+	}
 	for i := range jm.batches {
-		jm.batches[i].Clean(jm.mpool)
+		jm.batches[i].Clean(batchesMP)
 	}
 	jm.batches = nil
+	if jm.ownedPool != nil {
+		mpool.DeleteMPool(jm.ownedPool)
+		jm.ownedPool = nil
+	}
 	jm.payloadColumnChecks = nil
 	mpool.FreeSlice(jm.mpool, jm.batchRowEnds)
 	jm.batchRowEnds = nil

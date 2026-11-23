@@ -173,10 +173,10 @@ func TestDependentMixedAsofFactoryExecution(t *testing.T) {
 	l := batch.NewWithSize(3)
 	r := batch.NewWithSize(3)
 	for _, b := range []*batch.Batch{l, r} {
-		b.Vecs[1] = vector.NewVec(types.T_timestamp.ToType())
-		b.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		b.Vecs[1] = vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
+		b.Vecs[2] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	}
-	l.Vecs[0] = vector.NewVec(types.T_json.ToType())
+	l.Vecs[0] = vector.NewVec(types.T_json.ToType(), proc.Mp())
 	j, err := types.ParseStringToByteJson("1")
 	require.NoError(t, err)
 	encoded, err := types.EncodeJson(j)

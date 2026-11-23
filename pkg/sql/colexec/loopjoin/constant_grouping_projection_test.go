@@ -40,9 +40,6 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 				bat.Vecs[0], err = vector.NewConstBytes(typ, []byte("constant payload"), 5, proc.Mp())
 				require.NoError(t, err)
 				bat.Vecs[0].GetGrouping().Add(0, 2)
-				bat.Vecs[0].SetPrepareParamKind(vector.PrepareParamInteger)
-				bat.Vecs[0].SetIsBinaryString(true)
-				require.NoError(t, bat.Vecs[0].SetStringSource(types.StringSourceLiteral))
 				bat.SetRowCount(5)
 				return bat
 			}
@@ -54,6 +51,7 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 			installLoopJoinTestAllocation(t, join)
 			defer func() {
 				join.Free(proc, false, nil)
+				freeTestChildren(join)
 				left.Clean(proc.Mp())
 				right.Clean(proc.Mp())
 				proc.Free()
@@ -88,9 +86,6 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 								require.Equal(t, sourceRow == 0 || sourceRow == 2, v.GetGrouping().Contains(uint64(row)), "side %d output row %d", side, seen)
 								require.False(t, v.IsNull(uint64(row)))
 								require.Equal(t, "constant payload", v.GetStringAt(row))
-								require.Equal(t, types.StringSourceLiteral, v.GetStringSourceAt(row))
-								require.Equal(t, vector.PrepareParamInteger, v.GetPrepareParamKindAt(row))
-								require.True(t, v.GetIsBinaryStringAt(row))
 							}
 							seen++
 						}
@@ -106,7 +101,7 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 				require.Nil(t, join.ctr.buildCopyBatch)
 				return
 			}
-			require.NoError(t, join.resetResultBat())
+			require.NoError(t, join.resetResultBat(proc))
 			if method == "range" {
 				join.ctr.setProbeBatch(left)
 				require.NoError(t, join.ctr.appendJoinedRange(join, proc, left, 2, right, 1, 4))
@@ -120,9 +115,6 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 					require.Equal(t, side == 0 || row == 1, v.GetGrouping().Contains(uint64(row)), "side %d row %d", side, row)
 					require.False(t, v.IsNull(uint64(row)))
 					require.Equal(t, "constant payload", v.GetStringAt(row))
-					require.Equal(t, types.StringSourceLiteral, v.GetStringSourceAt(row))
-					require.Equal(t, vector.PrepareParamInteger, v.GetPrepareParamKindAt(row))
-					require.True(t, v.GetIsBinaryStringAt(row))
 				}
 			}
 		})
@@ -140,27 +132,18 @@ func TestLoopJoinCopyBindingNewGeneration(t *testing.T) {
 	t.Cleanup(func() { join.Free(proc, false, nil); require.Zero(t, account.Snapshot().Used) })
 	flat := makeInt32LoopJoinBatch(proc.Mp(), []int32{11, 22, 33})
 	t.Cleanup(func() { flat.Clean(proc.Mp()) })
-	base, err := vector.FreezeVector(flat.Vecs[0], proc.Mp(), nil)
-	require.NoError(t, err)
-	t.Cleanup(base.Release)
-	rows, err := vector.NewRowSelection([]int64{2, 0, 1}, 3, proc.Mp(), nil)
-	require.NoError(t, err)
-	t.Cleanup(rows.Release)
-	dict, err := vector.NewDictionaryVector(base, rows, proc.Mp(), nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { dict.Free(proc.Mp()) })
-	// A reused batch header may present a different vector representation on
-	// the next input. Immutable build batches may also change during a probe.
+	other := makeInt32LoopJoinBatch(proc.Mp(), []int32{33, 11, 22})
+	t.Cleanup(func() { other.Clean(proc.Mp()) })
+	// A reused batch header may present a different vector on the next
+	// input. Immutable build batches may also change during a probe.
 	input := batch.NewWithSize(1)
 	input.SetRowCount(3)
-	selectedBuild := batch.NewWithSize(1)
-	selectedBuild.Vecs[0] = dict
-	selectedBuild.SetRowCount(3)
-	for _, source := range []*vector.Vector{flat.Vecs[0], dict, flat.Vecs[0]} {
+	selectedBuild := other
+	for _, source := range []*vector.Vector{flat.Vecs[0], other.Vecs[0], flat.Vecs[0]} {
 		input.Vecs[0] = source
 		join.ctr.setProbeBatch(input)
 		for _, build := range []*batch.Batch{flat, selectedBuild, flat} {
-			require.NoError(t, join.resetResultBat())
+			require.NoError(t, join.resetResultBat(proc))
 			require.NoError(t, join.ctr.appendJoinedRange(join, proc, input, 0, build, 0, 3))
 			for row := range 3 {
 				require.Equal(t, vector.GetFixedAtNoTypeCheck[int32](source, 0), vector.GetFixedAtNoTypeCheck[int32](join.ctr.resBat.Vecs[0], row))
@@ -175,6 +158,7 @@ func TestLoopJoinCopyBindingNewGeneration(t *testing.T) {
 	require.Zero(t, account.Snapshot().Used)
 	join.ctr.setProbeBatch(input)
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	require.Nil(t, join.ctr.probeCopy)
 	require.Nil(t, join.ctr.buildCopyBatch)
 }

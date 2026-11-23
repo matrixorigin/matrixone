@@ -45,7 +45,7 @@ func Test_getColData_Timestamp_WithSessionTimeZone(t *testing.T) {
 
 	// Create batch and vector
 	bat := batch.New([]string{"ts"})
-	vec := vector.NewVec(colType)
+	vec := vector.NewVec(colType, proc.Mp())
 	bat.Vecs[0] = vec
 
 	// Create ExternalParam
@@ -159,7 +159,7 @@ func Test_getColData_Timestamp_DifferentTimeZones(t *testing.T) {
 			colType.Scale = 0
 
 			bat := batch.New([]string{"ts"})
-			vec := vector.NewVec(colType)
+			vec := vector.NewVec(colType, proc.Mp())
 			bat.Vecs[0] = vec
 
 			param := &ExternalParam{
@@ -231,7 +231,7 @@ func Test_getColData_Timestamp_Consistency(t *testing.T) {
 			colType.Scale = 0
 
 			bat := batch.New([]string{"ts"})
-			vec := vector.NewVec(colType)
+			vec := vector.NewVec(colType, proc.Mp())
 			bat.Vecs[0] = vec
 
 			param := &ExternalParam{

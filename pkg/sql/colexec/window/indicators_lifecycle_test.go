@@ -197,6 +197,7 @@ func TestIndicatorOperatorEmitAcrossModes(t *testing.T) {
 	indAssertReference(t, "receiveAll", got, gotN, "ema", 3, vals, nil)
 
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -290,8 +291,10 @@ func TestIndicatorOperatorGenerationIsolationAfterReset(t *testing.T) {
 	indAssertReference(t, "round-2", got, gotN, "ema", 3, round2, nil)
 
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	child2.Free(proc, false, nil)
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -341,6 +344,7 @@ func TestIndicatorChunkedEmitAndLimitEarlyExit(t *testing.T) {
 	require.Len(t, got, rows)
 	indAssertReference(t, "two-chunk", got, gotN, "sma", 3, vals, nil)
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -433,8 +437,10 @@ func TestIndicatorOperatorFailureThenReuse(t *testing.T) {
 	indAssertReference(t, "post-failure partition", got, gotN, "mmaxdrawdown", 2, clean, nil)
 
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	childReuse.Free(proc, false, nil)
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -511,8 +517,10 @@ func TestIndicatorOperatorCancelMidGenerationThenReuse(t *testing.T) {
 	indAssertReference(t, "post-cancel reuse", got, gotN, "ema", 3, reuse, nil)
 
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	child2.Free(proc, false, nil)
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -594,6 +602,7 @@ func TestIndicatorScanCancellationLatency(t *testing.T) {
 	require.Equal(t, 32768, arg.ctr.indicatorEvals[0].prefix.Length(),
 		"the aborted scan must not append the aborted row to the prefix")
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -695,6 +704,7 @@ func TestIndicatorAllNullAndEmptyPartition(t *testing.T) {
 		got[4:], gotN[4:], "sma", 3, clean, nil)
 
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -751,7 +761,7 @@ func TestIndicatorStageSeedRingVerification(t *testing.T) {
 			for i := 0; i < tc.rows; i++ {
 				res, err := arg.ctr.processIndicatorFuncRange(0, arg, proc, i, i+1)
 				require.NoError(t, err)
-				res.Free(proc.Mp())
+				res.Free(res.MPool())
 				ev := arg.ctr.indicatorEvals[0]
 				for r := 0; r < rings; r++ {
 					switch ring := ev.stageSeed[r]; {

@@ -461,7 +461,7 @@ func TestORLikeSubjectReuseCoalesceStringDomains(t *testing.T) {
 			require.Equal(t, oid != types.T_blob, shared, "only registered text-family COALESCE overloads qualify")
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(oid.ToType())
+			input.Vecs[0] = vector.NewVec(oid.ToType(), proc.Mp())
 			values := []string{"ERROR", "ordinary", "TİMEOUT", "RETRY", ""}
 			if oid == types.T_blob {
 				// LOWER preserves bytes in the binary domain. Keep the fallback
@@ -670,7 +670,7 @@ func TestORLikeSubjectReuseAccountFailureAndBuildRollback(t *testing.T) {
 		_, err := registry.Finalize(account)
 		require.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	expression := orLikeTestExpression(t, proc, orLikeTestSubject(t, proc, true), 3)
 	executor, err := NewExpressionExecutorWithAllocation(proc, expression, selection)
@@ -689,7 +689,7 @@ func TestORLikeSubjectReuseAccountFailureAndBuildRollback(t *testing.T) {
 	result, err := executor.Eval(proc, []*batch.Batch{small}, nil)
 	require.NoError(t, err)
 	require.Equal(t, []bool{true, false}, vector.MustFixedColNoTypeCheck[bool](result))
-	require.Same(t, selection, canonical.resultVector.GetResultVector().AllocationAccountSelection())
+	requireAccountCovers(t, account, canonical.resultVector.GetResultVector())
 	invalid := orLikeTestLiteral("invalid")
 	invalid.GetLit().StringSource = 257
 	before := proc.Mp().CurrNB()

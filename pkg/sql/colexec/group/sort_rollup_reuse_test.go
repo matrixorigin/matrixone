@@ -53,7 +53,7 @@ func TestSortRollupLaterDecimalFinalizerFailure(t *testing.T) {
 	require.NoError(t, err)
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
-	input.Vecs[1] = vector.NewVec(typ)
+	input.Vecs[1] = vector.NewVec(typ, proc.Mp())
 	require.NoError(t, vector.AppendFixed(input.Vecs[1], max, false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(input.Vecs[1], types.Decimal256FromInt64(1), false, proc.Mp()))
 	input.SetRowCount(2)
@@ -121,15 +121,9 @@ func TestSortRollupSingleGroupReuseAndMixedFallback(t *testing.T) {
 				require.Equal(t, row == 1, out.Vecs[2].IsNull(uint64(row)))
 				require.Equal(t, row == 1, out.Vecs[3].IsNull(uint64(row)))
 				if row != 1 {
-					require.Equal(t, sum, vector.GetFixedAtNoTypeCheck[int64](out.Vecs[2], row))
+					require.Equal(t, types.Decimal128FromInt64(sum), vector.GetFixedAtNoTypeCheck[types.Decimal128](out.Vecs[2], row))
 					avg := vector.GetFixedAtNoTypeCheck[types.Decimal128](out.Vecs[3], row)
 					require.Equal(t, []string{"3.0000", "", "2.0000", "2.6667"}[row], avg.Format(out.Vecs[3].GetType().Scale))
-				}
-				for _, vec := range out.Vecs[1:4] {
-					if !vec.IsNull(uint64(row)) {
-						require.True(t, vec.HasPrepareParamKind())
-						require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKindAt(row))
-					}
 				}
 				switch name {
 				case "mixed-distinct":
@@ -233,7 +227,8 @@ func TestSortRollupAppendFailureAbortsAndReprepares(t *testing.T) {
 				} else {
 					require.Zero(t, s.outputRows)
 				}
-				oldSelection := s.output.Vecs[1].AllocationAccountSelection()
+				oldAccount := g.ctr.groupByAllocation.ViewAccount()
+				require.NotNil(t, oldAccount)
 				_, rejected := controller.snapshot()
 				require.True(t, rejected)
 				g.Reset(proc, true, err)
@@ -259,7 +254,8 @@ func TestSortRollupAppendFailureAbortsAndReprepares(t *testing.T) {
 				result, err = vm.Exec(g, proc)
 				require.NoError(t, err)
 				require.NotNil(t, result.Batch)
-				require.False(t, vector.AllocationAccountSelectionsEqual(oldSelection, result.Batch.Vecs[1].AllocationAccountSelection()))
+				require.NotSame(t, oldAccount, g.ctr.groupByAllocation.ViewAccount())
+				require.Same(t, allocation.account, g.ctr.groupByAllocation.ViewAccount())
 				require.Equal(t, []int64{1, 1}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1]))
 				for row := 0; row < 2; row++ {
 					require.Equal(t, types.Decimal128FromInt64(7), vector.GetFixedAtNoTypeCheck[types.Decimal128](result.Batch.Vecs[2], row))
@@ -357,7 +353,7 @@ func TestSortRollupCancellationRetainsPublishedOutputForCleanup(t *testing.T) {
 	}
 }
 
-func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T) {
+func TestSortRollupMinReuseAndFallbackAcrossBatches(t *testing.T) {
 	for _, sameGroup := range []bool{false, true} {
 		for _, forceFallback := range []bool{false, true} {
 			t.Run(fmt.Sprintf("same=%t/fallback=%t", sameGroup, forceFallback), func(t *testing.T) {
@@ -385,7 +381,6 @@ func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T)
 				second := batch.NewWithSize(3)
 				second.Vecs[0] = testutil.MakeInt32Vector([]int32{key}, nil, proc.Mp())
 				second.Vecs[1] = testutil.MakeInt32Vector([]int32{3}, nil, proc.Mp())
-				second.Vecs[1].SetPrepareParamKind(vector.PrepareParamFloat)
 				second.Vecs[2] = testutil.MakeInt64Vector([]int64{3}, nil, proc.Mp())
 				second.SetRowCount(1)
 				child.WithBatchs([]*batch.Batch{first, second})
@@ -396,7 +391,9 @@ func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T)
 				}
 				result, err := vm.Exec(g, proc)
 				require.NoError(t, err)
-				require.False(t, g.ctr.sortRollup.reuseSingleGroup)
+				// Fixed-width MIN input carries no per-row metadata that would
+				// force a downgrade, so reuse stays on unless forced off.
+				require.Equal(t, !forceFallback, g.ctr.sortRollup.reuseSingleGroup)
 				out := result.Batch
 				if sameGroup {
 					require.Equal(t, 2, out.RowCount())
@@ -405,8 +402,6 @@ func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T)
 					for row := 0; row < out.RowCount(); row++ {
 						require.Equal(t, "5.0000", vector.GetFixedAtNoTypeCheck[types.Decimal128](out.Vecs[3], row).Format(out.Vecs[3].GetType().Scale))
 					}
-					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(0))
-					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(1))
 				} else {
 					require.Equal(t, 3, out.RowCount())
 					require.Equal(t, []int32{7, 3, 3}, vector.MustFixedColNoTypeCheck[int32](out.Vecs[1]))
@@ -414,16 +409,13 @@ func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T)
 					for row, want := range []string{"7.0000", "3.0000", "5.0000"} {
 						require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal128](out.Vecs[3], row).Format(out.Vecs[3].GetType().Scale))
 					}
-					require.Equal(t, vector.PrepareParamNone, out.Vecs[1].GetPrepareParamKindAt(0))
-					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(1))
-					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(2))
 				}
 			})
 		}
 	}
 }
 
-func TestSortRollupMinDowngradeAtFullOutputBoundary(t *testing.T) {
+func TestSortRollupMinReuseAtFullOutputBoundary(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	child := colexec.NewMockOperator()
 	minAgg := aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(1, types.T_int32)}, nil)
@@ -452,7 +444,6 @@ func TestSortRollupMinDowngradeAtFullOutputBoundary(t *testing.T) {
 	second := batch.NewWithSize(3)
 	second.Vecs[0] = testutil.MakeInt32Vector([]int32{int32(aggBatchSize)}, nil, proc.Mp())
 	second.Vecs[1] = testutil.MakeInt32Vector([]int32{-1}, nil, proc.Mp())
-	second.Vecs[1].SetPrepareParamKind(vector.PrepareParamFloat)
 	second.Vecs[2] = testutil.MakeInt64Vector([]int64{-1}, nil, proc.Mp())
 	second.SetRowCount(1)
 	child.WithBatchs([]*batch.Batch{first, second})
@@ -463,16 +454,14 @@ func TestSortRollupMinDowngradeAtFullOutputBoundary(t *testing.T) {
 	for i := range keys {
 		require.Equal(t, int32(i), vector.GetFixedAtNoTypeCheck[int32](res.Batch.Vecs[1], i))
 		require.Equal(t, types.Decimal128FromInt64(int64(i)), vector.GetFixedAtNoTypeCheck[types.Decimal128](res.Batch.Vecs[2], i))
-		require.Equal(t, vector.PrepareParamNone, res.Batch.Vecs[1].GetPrepareParamKindAt(i))
 	}
-	require.False(t, g.ctr.sortRollup.reuseSingleGroup)
+	require.True(t, g.ctr.sortRollup.reuseSingleGroup)
 	res, err = vm.Exec(g, proc)
 	require.NoError(t, err)
 	require.Equal(t, 2, res.Batch.RowCount())
 	require.Equal(t, []int32{-1, -1}, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[1]))
 	require.Equal(t, types.Decimal128FromInt64(-1), vector.GetFixedAtNoTypeCheck[types.Decimal128](res.Batch.Vecs[2], 0))
 	require.Equal(t, types.Decimal128FromInt64(int64(aggBatchSize*(aggBatchSize-1)/2-1)), vector.GetFixedAtNoTypeCheck[types.Decimal128](res.Batch.Vecs[2], 1))
-	require.Equal(t, vector.PrepareParamFloat, res.Batch.Vecs[1].GetPrepareParamKindAt(0))
 	res, err = vm.Exec(g, proc)
 	require.NoError(t, err)
 	require.Nil(t, res.Batch)

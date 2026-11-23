@@ -197,8 +197,8 @@ func TestTransferTargetsRequireWorkspaceIntent(t *testing.T) {
 			fs := &transferPrefetchFS{FileService: proc.GetFileService(), calls: make(chan string, 10), readErr: errors.New("metadata read failed")}
 			bat := batch.NewWithSize(2)
 			t.Cleanup(func() { bat.Clean(proc.Mp()) })
-			bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
+			bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 			obj := stable
 			if name == "matching intent" {
 				obj = source

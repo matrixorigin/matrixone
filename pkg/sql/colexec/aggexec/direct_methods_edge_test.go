@@ -99,7 +99,7 @@ func assertJSONFixedValue[T types.FixedSizeTExceptStrType](
 	t *testing.T, mp *mpool.MPool, typ types.Type, value T,
 ) {
 	t.Helper()
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 	encoded, err := appendJSONAggregateValue(nil, vec, 0)
 	require.NoError(t, err)
@@ -111,7 +111,7 @@ func TestAggregateSingleRowAndMergeEntryPoints(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	t.Run("any", func(t *testing.T) {
-		input := vector.NewVec(types.T_varchar.ToType())
+		input := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytesList(input, [][]byte{[]byte("left"), []byte("right")}, nil, mp))
 		defer input.Free(mp)
 
@@ -128,7 +128,7 @@ func TestAggregateSingleRowAndMergeEntryPoints(t *testing.T) {
 	})
 
 	t.Run("fixed-bit-operation", func(t *testing.T) {
-		input := vector.NewVec(types.T_uint64.ToType())
+		input := vector.NewVec(types.T_uint64.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(input, []uint64{3, 5}, nil, mp))
 		defer input.Free(mp)
 
@@ -147,7 +147,7 @@ func TestAggregateSingleRowAndMergeEntryPoints(t *testing.T) {
 
 	t.Run("binary-bit-operation", func(t *testing.T) {
 		typ := types.New(types.T_binary, 2, 0)
-		input := vector.NewVec(typ)
+		input := vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytesList(input, [][]byte{{0x0f, 0xf0}, {0xf0, 0x0f}}, nil, mp))
 		defer input.Free(mp)
 
@@ -182,7 +182,7 @@ func TestAggregateSingleRowAndMergeEntryPoints(t *testing.T) {
 	})
 
 	t.Run("variance", func(t *testing.T) {
-		input := vector.NewVec(types.T_int64.ToType())
+		input := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(input, []int64{1, 2, 3}, nil, mp))
 		defer input.Free(mp)
 
@@ -200,7 +200,7 @@ func TestAggregateSingleRowAndMergeEntryPoints(t *testing.T) {
 	})
 
 	t.Run("median-bulk", func(t *testing.T) {
-		input := vector.NewVec(types.T_int64.ToType())
+		input := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(input, []int64{4, 1, 3, 2}, nil, mp))
 		defer input.Free(mp)
 		exec, err := MakeAgg(mp, AggIdOfMedian, false, types.T_int64.ToType())
@@ -212,7 +212,7 @@ func TestAggregateSingleRowAndMergeEntryPoints(t *testing.T) {
 	})
 
 	t.Run("group-concat-bulk", func(t *testing.T) {
-		input := vector.NewVec(types.T_varchar.ToType())
+		input := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytesList(input, [][]byte{[]byte("a"), []byte("b")}, nil, mp))
 		defer input.Free(mp)
 		exec, err := MakeAgg(mp, AggIdOfGroupConcat, false, types.T_varchar.ToType())
@@ -226,7 +226,7 @@ func TestAggregateSingleRowAndMergeEntryPoints(t *testing.T) {
 
 func TestHLLSingleRowAndBulkEntryPoints(t *testing.T) {
 	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(input, []int64{1, 2, 3}, nil, mp))
 	defer input.Free(mp)
 
@@ -264,7 +264,7 @@ func TestAccountedWideBinaryBitNeutralFlush(t *testing.T) {
 		require.NoError(t, owner.SetAllocationAccount(allocation))
 		require.NoError(t, exec.GroupGrow(2))
 
-		input := vector.NewVec(typ)
+		input := vector.NewVec(typ, mp)
 		value := bytes.Repeat([]byte{0x5a}, int(typ.Width))
 		require.NoError(t, vector.AppendBytes(input, value, false, mp))
 		require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
@@ -277,7 +277,7 @@ func TestAccountedWideBinaryBitNeutralFlush(t *testing.T) {
 		require.Equal(t, value, result[0].GetBytesAt(0))
 		require.Equal(t, bytes.Repeat([]byte{tc.neutral}, int(typ.Width)),
 			result[0].GetBytesAt(1))
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		exec.Free()
 		require.NoError(t, owner.ClearAllocationAccount(allocation))
 		finishTestAggregateAllocation(t, registry, account)
@@ -288,7 +288,7 @@ func TestAccountedWideBinaryBitNeutralFlush(t *testing.T) {
 func TestAggregateVectorWireFailureRollback(t *testing.T) {
 	mp := mpool.MustNewZero()
 	typ := types.T_int64.ToType()
-	source := NewVectors[int64](typ)
+	source := NewVectors[int64](typ, mp)
 	require.NoError(t, AppendMultiFixed(source, 7, false, 3, mp))
 	encoded, err := source.MarshalBinary()
 	require.NoError(t, err)
@@ -296,7 +296,7 @@ func TestAggregateVectorWireFailureRollback(t *testing.T) {
 
 	assertRejected := func(payload io.Reader) {
 		t.Helper()
-		target := NewVectors[int64](typ)
+		target := NewVectors[int64](typ, mp)
 		baseline := len(target.vecs)
 		require.Error(t, target.UnmarshalFromReader(payload, typ, mp))
 		require.Len(t, target.vecs, baseline)
@@ -425,7 +425,7 @@ func TestAccountedSumAndAverageFlushFamilies(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, result[0].IsNull(0))
 			require.True(t, result[0].IsNull(1))
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			exec.Free()
 			require.NoError(t, owner.ClearAllocationAccount(allocation))
 			finishTestAggregateAllocation(t, registry, account)
@@ -455,7 +455,7 @@ func TestAccountedOrderedPercentileResultModes(t *testing.T) {
 				EncodeOrderedPercentileConfig([]byte(tc.percentile), tc.aggID == AggIdOfPercentileDisc), 0))
 			require.NoError(t, exec.GroupGrow(2))
 
-			input := vector.NewVec(types.T_int64.ToType())
+			input := vector.NewVec(types.T_int64.ToType(), mp)
 			require.NoError(t, vector.AppendFixedList(input, []int64{10, 20, 30, 40}, nil, mp))
 			groups := []uint64{1, 1, 1, 1}
 			require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
@@ -471,7 +471,7 @@ func TestAccountedOrderedPercentileResultModes(t *testing.T) {
 				require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
 			}
 			require.True(t, result[0].IsNull(1))
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			exec.Free()
 			require.NoError(t, owner.ClearAllocationAccount(allocation))
 			finishTestAggregateAllocation(t, registry, account)
@@ -490,7 +490,7 @@ func TestAccountedDecimalMedianFlush(t *testing.T) {
 	require.NoError(t, owner.SetAllocationAccount(allocation))
 	require.NoError(t, exec.GroupGrow(2))
 
-	input := vector.NewVec(typ)
+	input := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendFixedList(
 		input, mustDecimal64s(t, "1.00", "2.00", "4.00", "8.00"), nil, mp))
 	groups := []uint64{1, 1, 1, 1}
@@ -503,7 +503,7 @@ func TestAccountedDecimalMedianFlush(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result[0].IsNull(0))
 	require.True(t, result[0].IsNull(1))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 	require.NoError(t, owner.ClearAllocationAccount(allocation))
 	finishTestAggregateAllocation(t, registry, account)
@@ -588,7 +588,7 @@ func TestJSONAggregateValueEncodingTypeMatrix(t *testing.T) {
 	for _, typ := range []types.Type{
 		types.T_char.ToType(), types.T_varchar.ToType(), types.T_text.ToType(),
 	} {
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytes(vec, []byte("text"), false, mp))
 		encoded, err := appendJSONAggregateValue(nil, vec, 0)
 		require.NoError(t, err)
@@ -598,25 +598,25 @@ func TestJSONAggregateValueEncodingTypeMatrix(t *testing.T) {
 	for _, typ := range []types.Type{
 		types.T_binary.ToType(), types.T_varbinary.ToType(), types.T_blob.ToType(),
 	} {
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytes(vec, []byte{1}, false, mp))
 		_, err := appendJSONAggregateValue(nil, vec, 0)
 		require.Error(t, err)
 		vec.Free(mp)
 	}
-	jsonVec := vector.NewVec(types.T_json.ToType())
+	jsonVec := vector.NewVec(types.T_json.ToType(), mp)
 	// Invalid JSON is rejected before it can reach the aggregate consumer.
 	require.Error(t, vector.AppendBytes(jsonVec, nil, false, mp))
 	require.Zero(t, jsonVec.Length())
 	jsonVec.Free(mp)
 
 	arrays := []*vector.Vector{
-		vector.NewVec(types.T_array_float32.ToType()),
-		vector.NewVec(types.T_array_float64.ToType()),
-		vector.NewVec(types.T_array_bf16.ToType()),
-		vector.NewVec(types.T_array_float16.ToType()),
-		vector.NewVec(types.T_array_int8.ToType()),
-		vector.NewVec(types.T_array_uint8.ToType()),
+		vector.NewVec(types.T_array_float32.ToType(), mp),
+		vector.NewVec(types.T_array_float64.ToType(), mp),
+		vector.NewVec(types.T_array_bf16.ToType(), mp),
+		vector.NewVec(types.T_array_float16.ToType(), mp),
+		vector.NewVec(types.T_array_int8.ToType(), mp),
+		vector.NewVec(types.T_array_uint8.ToType(), mp),
 	}
 	require.NoError(t, vector.AppendArrayList(arrays[0], [][]float32{{1, 2}}, nil, mp))
 	require.NoError(t, vector.AppendArrayList(arrays[1], [][]float64{{1, 2}}, nil, mp))
@@ -645,12 +645,10 @@ func TestNtileIntermediateRoundTripAndTruncation(t *testing.T) {
 		require.NoError(t, err)
 		return exec.(*ntileWindowExec)
 	}
-	input := vector.NewVec(types.T_int64.ToType())
-	buckets := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
+	buckets := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(input, []int64{10, 20}, nil, mp))
 	require.NoError(t, vector.AppendFixedList(buckets, []int64{2, 2}, nil, mp))
-	defer input.Free(mp)
-	defer buckets.Free(mp)
 
 	source := makeExec()
 	require.NoError(t, source.GroupGrow(2))
@@ -675,6 +673,8 @@ func TestNtileIntermediateRoundTripAndTruncation(t *testing.T) {
 	require.Equal(t, []i64Slice{{10}, {20}}, target.groups)
 	target.Free()
 	source.Free()
+	buckets.Free(mp)
+	input.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
 
@@ -717,10 +717,7 @@ func TestAggregateStatePrimitiveBoundaryMatrix(t *testing.T) {
 	require.True(t, info.usesOpaqueArgEncoding())
 	require.Contains(t, info.String(), "aggId: 7")
 
-	var nilExec *aggExec
-	require.Zero(t, nilExec.PrepareParamKindChunkCount())
 	exec := &aggExec{chunkSize: AggBatchSize, state: []aggState{{length: 2}, {length: 3}}}
-	require.Equal(t, 2, exec.PrepareParamKindChunkCount())
 	require.Equal(t, AggBatchSize, exec.getChunkSize())
 	exec.modifyChunkSize(1)
 	require.Equal(t, 1, exec.getChunkSize())
@@ -734,23 +731,6 @@ func TestAggregateStatePrimitiveBoundaryMatrix(t *testing.T) {
 	require.Equal(t, 5, exec.GetNumGroups())
 	require.Zero(t, exec.AdditionalMemorySize())
 	require.Panics(t, func() { exec.Size() })
-	require.Nil(t, exec.PrepareParamKindVectorForChunk(-1))
-	require.Nil(t, exec.PrepareParamKindVectorForChunk(2))
-
-	scalar := vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixedList(scalar, []int64{1, 2}, nil, mp))
-	exact := vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixedList(exact, []int64{1, 2}, nil, mp))
-	require.NoError(t, exact.SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
-		vector.PrepareParamInteger, vector.PrepareParamDecimal,
-	}, mp))
-	exec.state = []aggState{{vecs: []*vector.Vector{scalar}}, {vecs: []*vector.Vector{exact}}}
-	exec.SetPrepareParamKind(vector.PrepareParamBoolean)
-	require.Equal(t, vector.PrepareParamBoolean, scalar.GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamInteger, exact.GetPrepareParamKindAt(0))
-	require.Same(t, scalar, exec.PrepareParamKindVectorForChunk(0))
-	scalar.Free(mp)
-	exact.Free(mp)
 	exec.state = nil
 
 	var invalid aggState

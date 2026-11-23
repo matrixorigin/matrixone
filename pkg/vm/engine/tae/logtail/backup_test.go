@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -78,7 +77,7 @@ func TestBackupDataSinkerCleanupAfterWriteError(t *testing.T) {
 		mpool.DeleteMPool(mp)
 	}()
 
-	data := ckputil.NewObjectListBatch()
+	data := ckputil.NewObjectListBatch(mp)
 	defer data.Clean(mp)
 	stats := objectio.NewObjectStats()
 	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objectio.MockObjectName()))
@@ -266,14 +265,14 @@ func TestBackupTombstoneValidationRejectsMalformedColumns(t *testing.T) {
 			name:   "null commit timestamp",
 			layout: backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, 3),
 			mutate: func(bat *batch.Batch) {
-				nulls.Add(bat.Vecs[2].GetNulls(), 1)
+				bat.Vecs[2].GetNulls().Add(1)
 			},
 		},
 		{
 			name:   "null abort flag",
 			layout: backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, 3),
 			mutate: func(bat *batch.Batch) {
-				nulls.Add(bat.Vecs[3].GetNulls(), 1)
+				bat.Vecs[3].GetNulls().Add(1)
 			},
 		},
 	}
@@ -577,10 +576,10 @@ func newBackupTombstoneTestBatch(t *testing.T, pkType types.T, trailingTypes []t
 	t.Helper()
 
 	bat := batch.NewWithSize(len(objectio.TombstoneSeqnums_CN_Created) + len(trailingTypes))
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(pkType.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), common.DebugAllocator)
+	bat.Vecs[1] = vector.NewVec(pkType.ToType(), common.DebugAllocator)
 	for pos, typ := range trailingTypes {
-		bat.Vecs[len(objectio.TombstoneSeqnums_CN_Created)+pos] = vector.NewVec(typ.ToType())
+		bat.Vecs[len(objectio.TombstoneSeqnums_CN_Created)+pos] = vector.NewVec(typ.ToType(), common.DebugAllocator)
 	}
 
 	var deletedBlock, physicalBlock types.Blockid

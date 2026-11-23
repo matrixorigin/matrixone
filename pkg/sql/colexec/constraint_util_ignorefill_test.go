@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -58,6 +59,8 @@ func newIgnoreFillProc(t *testing.T) (*process.Process, *notNullWarningSession) 
 	return proc, session
 }
 
+func ownedAll(int) bool { return true }
+
 func notNullCol(name string, oid types.T) *plan.ColDef {
 	return &plan.ColDef{
 		Name: name,
@@ -78,10 +81,10 @@ func nullableCol(name string, oid types.T) *plan.ColDef {
 	}
 }
 
-// TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType pins the implicit
+// TestIgnoreFillAdjustsEveryFillableType pins the implicit
 // default written for each fillable column type. Every adjusted cell produces
 // one ER_BAD_NULL_ERROR warning carrying the MySQL message.
-func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
+func TestIgnoreFillAdjustsEveryFillableType(t *testing.T) {
 	proc, session := newIgnoreFillProc(t)
 	defer proc.Free()
 	mp := proc.Mp()
@@ -90,7 +93,7 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 	// so a single call proves both the implicit default and value retention.
 	// Uuid has no cheap non-null zero allocation here, so both of its cells
 	// are NULL and only the adjustment is asserted.
-	intVec := vector.NewVec(types.T_int32.ToType())
+	intVec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer intVec.Free(mp)
 	require.NoError(t, vector.AppendFixed(intVec, int32(7), false, mp))
 	require.NoError(t, vector.AppendAny(intVec, nil, true, mp))
@@ -110,45 +113,45 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 		}
 	})
 
-	floatVec := vector.NewVec(types.T_float64.ToType())
+	floatVec := vector.NewVec(types.T_float64.ToType(), mp)
 	fixedPair(floatVec, float64(3))
 	// The low-precision float family stores +0 as all-zero bits, so the
 	// implicit default of each is the zero of its Go type; kept values stay
 	// exactly representable per format (bf16 2, float16 3, float8 4,
 	// float4 6 is the largest finite float4 magnitude).
-	bf16Vec := vector.NewVec(types.T_bf16.ToType())
+	bf16Vec := vector.NewVec(types.T_bf16.ToType(), mp)
 	fixedPair(bf16Vec, types.BF16FromFloat32(2))
-	f16Vec := vector.NewVec(types.T_float16.ToType())
+	f16Vec := vector.NewVec(types.T_float16.ToType(), mp)
 	fixedPair(f16Vec, types.Float16FromFloat32(3))
-	f8Vec := vector.NewVec(types.T_float8.ToType())
+	f8Vec := vector.NewVec(types.T_float8.ToType(), mp)
 	fixedPair(f8Vec, types.Float8FromFloat32(4))
-	f4Vec := vector.NewVec(types.T_float4.ToType())
+	f4Vec := vector.NewVec(types.T_float4.ToType(), mp)
 	fixedPair(f4Vec, types.Float4FromFloat32(6))
-	decVec := vector.NewVec(types.T_decimal64.ToType())
+	decVec := vector.NewVec(types.T_decimal64.ToType(), mp)
 	fixedPair(decVec, types.Decimal64(3))
-	boolVec := vector.NewVec(types.T_bool.ToType())
+	boolVec := vector.NewVec(types.T_bool.ToType(), mp)
 	fixedPair(boolVec, true)
-	bitVec := vector.NewVec(types.T_bit.ToType())
+	bitVec := vector.NewVec(types.T_bit.ToType(), mp)
 	fixedPair(bitVec, uint64(5))
-	dateVec := vector.NewVec(types.T_date.ToType())
+	dateVec := vector.NewVec(types.T_date.ToType(), mp)
 	fixedPair(dateVec, types.Date(2500))
-	datetimeVec := vector.NewVec(types.T_datetime.ToType())
+	datetimeVec := vector.NewVec(types.T_datetime.ToType(), mp)
 	fixedPair(datetimeVec, types.Datetime(10))
-	timeVec := vector.NewVec(types.T_time.ToType())
+	timeVec := vector.NewVec(types.T_time.ToType(), mp)
 	fixedPair(timeVec, types.Time(30))
-	timestampVec := vector.NewVec(types.T_timestamp.ToType())
+	timestampVec := vector.NewVec(types.T_timestamp.ToType(), mp)
 	fixedPair(timestampVec, types.Timestamp(30))
-	yearVec := vector.NewVec(types.T_year.ToType())
+	yearVec := vector.NewVec(types.T_year.ToType(), mp)
 	fixedPair(yearVec, types.MoYear(2025))
-	enumVec := vector.NewVec(types.New(types.T_enum, 0, 0))
+	enumVec := vector.NewVec(types.New(types.T_enum, 0, 0), mp)
 	fixedPair(enumVec, types.Enum(2))
 
-	uuidVec := vector.NewVec(types.T_uuid.ToType())
+	uuidVec := vector.NewVec(types.T_uuid.ToType(), mp)
 	defer uuidVec.Free(mp)
 	require.NoError(t, vector.AppendAny(uuidVec, nil, true, mp))
 	require.NoError(t, vector.AppendAny(uuidVec, nil, true, mp))
 
-	varcharVec := vector.NewVec(types.T_varchar.ToType())
+	varcharVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer varcharVec.Free(mp)
 	require.NoError(t, vector.AppendBytes(varcharVec, []byte("me"), false, mp))
 	require.NoError(t, vector.AppendAny(varcharVec, nil, true, mp))
@@ -157,17 +160,17 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 	// assignment right-pads any shorter value with 0x00 to the declared
 	// width, so BINARY(2)'s implicit default is two zero bytes, while
 	// VARBINARY keeps the empty payload.
-	binVec := vector.NewVec(types.New(types.T_binary, 2, 0))
+	binVec := vector.NewVec(types.New(types.T_binary, 2, 0), mp)
 	defer binVec.Free(mp)
 	require.NoError(t, vector.AppendBytes(binVec, []byte{0x11, 0x22}, false, mp))
 	require.NoError(t, vector.AppendAny(binVec, nil, true, mp))
 
-	varbinVec := vector.NewVec(types.New(types.T_varbinary, 4, 0))
+	varbinVec := vector.NewVec(types.New(types.T_varbinary, 4, 0), mp)
 	defer varbinVec.Free(mp)
 	require.NoError(t, vector.AppendBytes(varbinVec, []byte("ab"), false, mp))
 	require.NoError(t, vector.AppendAny(varbinVec, nil, true, mp))
 
-	jsonVec := vector.NewVec(types.T_json.ToType())
+	jsonVec := vector.NewVec(types.T_json.ToType(), mp)
 	defer jsonVec.Free(mp)
 	jsonSeed, err := bytejson.ParseFromByteSlice([]byte(`{"k":1}`))
 	require.NoError(t, err)
@@ -223,9 +226,13 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 		notNullCol("j", types.T_json),
 	}
 
-	filled, err := BatchDataNotNullFillForIgnore(vecs, attrs, cols, proc)
+	// The caller owns every vector, so the fill adjusts them in place.
+	var fill IgnoreFill
+	defer fill.Free()
+	filled, err := fill.Fill(vecs, attrs, cols, ownedAll, proc)
 	require.NoError(t, err)
 	require.Len(t, filled, 20)
+	require.Same(t, intVec, vecs[0], "an owned vector is adjusted in place")
 	for _, vec := range vecs {
 		require.False(t, vec.GetNulls().Contains(0) || vec.GetNulls().Contains(1),
 			"adjusted vector still has NULLs")
@@ -290,19 +297,19 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 		session.warnings[0])
 }
 
-// TestBatchDataNotNullFillForIgnorePreservesNullableColumns proves the
+// TestIgnoreFillPreservesNullableColumns proves the
 // counterexample: a nullable column's NULLs are untouched, and no NULL row
 // was silently dropped or reclassified.
-func TestBatchDataNotNullFillForIgnorePreservesNullableColumns(t *testing.T) {
+func TestIgnoreFillPreservesNullableColumns(t *testing.T) {
 	proc, session := newIgnoreFillProc(t)
 	defer proc.Free()
 
-	nnVec := vector.NewVec(types.T_int64.ToType())
+	nnVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer nnVec.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixedList(nnVec, []int64{7, 7, 7}, nil, proc.Mp()))
 	nnVec.GetNulls().Add(1)
 
-	nullVec := vector.NewVec(types.T_int64.ToType())
+	nullVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer nullVec.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixedList(nullVec, []int64{1, 2, 3}, nil, proc.Mp()))
 	nullVec.GetNulls().Add(0)
@@ -312,7 +319,9 @@ func TestBatchDataNotNullFillForIgnorePreservesNullableColumns(t *testing.T) {
 	attrs := []string{"nn", "n"}
 	cols := []*plan.ColDef{notNullCol("nn", types.T_int64), nullableCol("n", types.T_int64)}
 
-	filled, err := BatchDataNotNullFillForIgnore(vecs, attrs, cols, proc)
+	var fill IgnoreFill
+	defer fill.Free()
+	filled, err := fill.Fill(vecs, attrs, cols, ownedAll, proc)
 	require.NoError(t, err)
 	require.Equal(t, []int{0}, filled)
 	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](nnVec, 0))
@@ -325,81 +334,87 @@ func TestBatchDataNotNullFillForIgnorePreservesNullableColumns(t *testing.T) {
 	require.Equal(t, uint64(1), session.total)
 }
 
-// TestBatchDataNotNullFillForIgnoreUnsupportedTypeKeepsViolation keeps the
+// TestIgnoreFillUnsupportedTypeKeepsViolation keeps the
 // strict-mode failure for a NOT NULL column whose type has no implicit
 // default, so IGNORE cannot trade the report for corrupted rows.
-func TestBatchDataNotNullFillForIgnoreUnsupportedTypeKeepsViolation(t *testing.T) {
+func TestIgnoreFillUnsupportedTypeKeepsViolation(t *testing.T) {
 	proc, session := newIgnoreFillProc(t)
 	defer proc.Free()
 
 	vecTyp := types.New(types.T_array_float32, 0, 0)
-	arrVec := vector.NewVec(vecTyp)
+	arrVec := vector.NewVec(vecTyp, proc.Mp())
 	defer arrVec.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(arrVec, []byte{0, 0, 0, 0, 0, 0, 0, 0}, true, proc.Mp()))
 
 	vecs := []*vector.Vector{arrVec}
 	cols := []*plan.ColDef{notNullCol("v", types.T_array_float32)}
-	_, err := BatchDataNotNullFillForIgnore(vecs, []string{"v"}, cols, proc)
+	var fill IgnoreFill
+	defer fill.Free()
+	_, err := fill.Fill(vecs, []string{"v"}, cols, nil, proc)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
 	require.Zero(t, session.total, "an aborted adjustment publishes no warnings")
 	require.True(t, arrVec.IsNull(0), "the unsupported NULL cell was left untouched")
 }
 
-// TestBatchDataNotNullFillForIgnoreDatalinkKeepsViolation pins the datalink
+// TestIgnoreFillDatalinkKeepsViolation pins the datalink
 // scoping of the IGNORE adjustment: a datalink value is a validated URL that
 // load_file can resolve, and the empty byte string the shared string-family
 // fill would store has no parsable scheme, so DATALINK keeps the geometry
 // contract - no implicit default at all. Under statement IGNORE the NULL cell
 // keeps the constraint violation instead of persisting a URL the datalink
 // functions cannot read back.
-func TestBatchDataNotNullFillForIgnoreDatalinkKeepsViolation(t *testing.T) {
+func TestIgnoreFillDatalinkKeepsViolation(t *testing.T) {
 	proc, session := newIgnoreFillProc(t)
 	defer proc.Free()
 
-	dlVec := vector.NewVec(types.T_datalink.ToType())
+	dlVec := vector.NewVec(types.T_datalink.ToType(), proc.Mp())
 	defer dlVec.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(dlVec, nil, true, proc.Mp()))
 
 	vecs := []*vector.Vector{dlVec}
 	cols := []*plan.ColDef{notNullCol("d", types.T_datalink)}
-	_, err := BatchDataNotNullFillForIgnore(vecs, []string{"d"}, cols, proc)
+	var fill IgnoreFill
+	defer fill.Free()
+	_, err := fill.Fill(vecs, []string{"d"}, cols, nil, proc)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
 	require.Zero(t, session.total, "an aborted adjustment publishes no warnings")
 	require.True(t, dlVec.IsNull(0), "the datalink NULL cell was left untouched")
 }
 
-// TestBatchDataNotNullFillForIgnoreGeometryKeepsViolation records the geometry
+// TestIgnoreFillGeometryKeepsViolation records the geometry
 // finding: the empty byte string is not a valid geometry payload, so a
 // GEOMETRY NOT NULL column has no implicit default. Under statement IGNORE
 // the NULL cell keeps the constraint violation instead of persisting a value
 // the geometry functions cannot read back (MySQL 8.0.44 rejects the row with
 // error 3673).
-func TestBatchDataNotNullFillForIgnoreGeometryKeepsViolation(t *testing.T) {
+func TestIgnoreFillGeometryKeepsViolation(t *testing.T) {
 	proc, session := newIgnoreFillProc(t)
 	defer proc.Free()
 
-	geoVec := vector.NewVec(types.T_geometry.ToType())
+	geoVec := vector.NewVec(types.T_geometry.ToType(), proc.Mp())
 	defer geoVec.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(geoVec, nil, true, proc.Mp()))
 
 	vecs := []*vector.Vector{geoVec}
 	cols := []*plan.ColDef{notNullCol("g", types.T_geometry)}
-	_, err := BatchDataNotNullFillForIgnore(vecs, []string{"g"}, cols, proc)
+	var fill IgnoreFill
+	defer fill.Free()
+	_, err := fill.Fill(vecs, []string{"g"}, cols, nil, proc)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
 	require.Zero(t, session.total, "an aborted adjustment publishes no warnings")
 	require.True(t, geoVec.IsNull(0), "the geometry NULL cell was left untouched")
 }
 
-// TestBatchDataNotNullFillForIgnoreReplacesConstNullBroadcasts pins the
+// TestIgnoreFillReplacesConstNullBroadcasts pins the
 // constant-NULL contract of the LOAD legs: a NOT NULL column whose folded
 // default projects as NewConstNull carries no backing storage, so the fill
 // replaces the broadcast with an equivalent constant of the implicit default
 // (the sanctioned NewConstFixed shape), keeps every logical row and reports
 // one ER_BAD_NULL_ERROR warning per adjusted row.
-func TestBatchDataNotNullFillForIgnoreReplacesConstNullBroadcasts(t *testing.T) {
+func TestIgnoreFillReplacesConstNullBroadcasts(t *testing.T) {
 	proc, session := newIgnoreFillProc(t)
 	defer proc.Free()
 	mp := proc.Mp()
@@ -412,13 +427,13 @@ func TestBatchDataNotNullFillForIgnoreReplacesConstNullBroadcasts(t *testing.T) 
 	// The BINARY(2) broadcast proves the padded value through the same
 	// shared rule the in-place fill uses.
 	binCn := vector.NewConstNull(types.New(types.T_binary, 2, 0), 2, mp)
-	// Every NOT NULL broadcast above gains a replacement the cleanup frees.
-	replacements := make([]*vector.Vector, 0, 2)
-	t.Cleanup(func() {
-		for _, vec := range replacements {
-			vec.Free(mp)
-		}
-	})
+	// The replacements are the fill's vectors: fill.Free releases them.
+	var fill IgnoreFill
+	defer func() {
+		fill.Free()
+		keepVec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
 
 	vecs := []*vector.Vector{cn, nbCn, keepVec, binCn}
 	attrs := []string{"a", "n", "k", "bn"}
@@ -435,7 +450,7 @@ func TestBatchDataNotNullFillForIgnoreReplacesConstNullBroadcasts(t *testing.T) 
 		},
 	}
 
-	filled, err := BatchDataNotNullFillForIgnore(vecs, attrs, cols, proc)
+	filled, err := fill.Fill(vecs, attrs, cols, nil, proc)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 3}, filled,
 		"the constant NULL broadcasts of NOT NULL columns were adjusted")
@@ -446,8 +461,9 @@ func TestBatchDataNotNullFillForIgnoreReplacesConstNullBroadcasts(t *testing.T) 
 		got := vecs[idx]
 		require.True(t, got.IsConst(),
 			"the replacement keeps the constant broadcast of the original")
-		replacements = append(replacements, got)
 	}
+	require.True(t, cn.IsConstNull(), "the caller's constant NULL is untouched")
+	require.True(t, binCn.IsConstNull(), "the caller's constant NULL is untouched")
 	require.NotSame(t, cn, vecs[0], "the constant NULL was replaced")
 	require.NotSame(t, binCn, vecs[3], "the constant NULL was replaced")
 	require.Equal(t, 3, vecs[0].Length(), "logical length is preserved")
@@ -473,17 +489,19 @@ func TestBatchDataNotNullFillForIgnoreReplacesConstNullBroadcasts(t *testing.T) 
 	}
 }
 
-// TestBatchDataNotNullFillForIgnoreConstNullWithoutDefaultKeepsViolation keeps
+// TestIgnoreFillConstNullWithoutDefaultKeepsViolation keeps
 // the strict-mode failure for a constant NULL of a type with no implicit
 // default: IGNORE cannot trade the report for corrupted rows.
-func TestBatchDataNotNullFillForIgnoreConstNullWithoutDefaultKeepsViolation(t *testing.T) {
+func TestIgnoreFillConstNullWithoutDefaultKeepsViolation(t *testing.T) {
 	proc, session := newIgnoreFillProc(t)
 	defer proc.Free()
 
 	geoCn := vector.NewConstNull(types.T_geometry.ToType(), 2, proc.Mp())
 	vecs := []*vector.Vector{geoCn}
 	cols := []*plan.ColDef{notNullCol("g", types.T_geometry)}
-	_, err := BatchDataNotNullFillForIgnore(vecs, []string{"g"}, cols, proc)
+	var fill IgnoreFill
+	defer fill.Free()
+	_, err := fill.Fill(vecs, []string{"g"}, cols, nil, proc)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
 	require.Zero(t, session.total, "an aborted adjustment publishes no warnings")
@@ -495,7 +513,7 @@ func TestBatchDataNotNullCheckStrictStillRejects(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
 
-	nnVec := vector.NewVec(types.T_int64.ToType())
+	nnVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer nnVec.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixedList(nnVec, []int64{7, 7}, nil, proc.Mp()))
 	nnVec.GetNulls().Add(0)
@@ -504,4 +522,91 @@ func TestBatchDataNotNullCheckStrictStillRejects(t *testing.T) {
 	err := BatchDataNotNullCheck([]*vector.Vector{nnVec}, []string{"nn"}, tableDef, proc.Ctx)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
+}
+
+// TestIgnoreFillCopiesVectorsTheCallerDoesNotOwn pins copy-on-adjust: a
+// vector the caller does not own (a child's vector passed through) keeps its
+// values and null bitmap; the adjusted rows are in the fill's own vector,
+// which takes the slot and is reused for the next batch.
+func TestIgnoreFillCopiesVectorsTheCallerDoesNotOwn(t *testing.T) {
+	proc, session := newIgnoreFillProc(t)
+	defer proc.Free()
+	mp := proc.Mp()
+
+	child := vector.NewVec(types.T_varchar.ToType(), mp)
+	require.NoError(t, vector.AppendBytes(child, []byte("kept"), false, mp))
+	require.NoError(t, vector.AppendAny(child, nil, true, mp))
+	var fill IgnoreFill
+	defer func() {
+		fill.Free()
+		child.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	cols := []*plan.ColDef{notNullCol("s", types.T_varchar)}
+	vecs := []*vector.Vector{child}
+	filled, err := fill.Fill(vecs, []string{"s"}, cols, nil, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int{0}, filled)
+	require.NotSame(t, child, vecs[0], "the child's vector is not adjusted in place")
+	require.True(t, child.IsNull(1), "the child's null bitmap is unchanged")
+	require.Equal(t, "kept", child.GetStringAt(0))
+	require.False(t, vecs[0].IsNull(1))
+	require.Equal(t, "kept", vecs[0].GetStringAt(0))
+	require.Equal(t, "", vecs[0].GetStringAt(1))
+	require.Equal(t, uint64(1), session.total)
+
+	// The next batch reuses the same fill vector.
+	first := vecs[0]
+	vecs = []*vector.Vector{child}
+	_, err = fill.Fill(vecs, []string{"s"}, cols, nil, proc)
+	require.NoError(t, err)
+	require.Same(t, first, vecs[0], "the fill's vector is created once per column")
+
+	// A read-only (borrowed) vector cannot be written in place at all, but
+	// the copy still adjusts its rows.
+	ro := vector.NewVecWithData(*child.GetType(), child.Length(), child.GetData(), child.GetArea(), nil)
+	ro.GetNulls().Add(1)
+	vecs = []*vector.Vector{ro}
+	_, err = fill.Fill(vecs, []string{"s"}, cols, nil, proc)
+	require.NoError(t, err)
+	require.True(t, ro.IsNull(1))
+	require.Equal(t, "", vecs[0].GetStringAt(1))
+	ro.Free(nil)
+}
+
+// TestIgnoreFillDropNullPkRowsCopiesForeignVectors pins that dropping NULL
+// key rows shrinks only vectors the caller or the fill owns; a child's vector
+// in a view is replaced by the fill's shrunk copy.
+func TestIgnoreFillDropNullPkRowsCopiesForeignVectors(t *testing.T) {
+	proc, session := newIgnoreFillProc(t)
+	defer proc.Free()
+	mp := proc.Mp()
+
+	pk := vector.NewVec(types.T_int64.ToType(), mp)
+	require.NoError(t, vector.AppendFixedList(pk, []int64{1, 0, 3}, nil, mp))
+	pk.GetNulls().Add(1)
+	child := batch.NewWithSize(2)
+	child.Vecs[0] = pk
+	child.Vecs[1] = pk // a repeated source reference shares one vector
+	child.SetRowCount(3)
+	var fill IgnoreFill
+	defer func() {
+		fill.Free()
+		pk.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	view := fill.View(child)
+	dropped, err := fill.DropNullPkRows(proc, view.Vecs[0], "id", view, nil)
+	require.NoError(t, err)
+	require.True(t, dropped)
+	require.Equal(t, 2, view.RowCount())
+	require.Same(t, view.Vecs[0], view.Vecs[1], "shared slots get one shrunk copy")
+	require.Equal(t, []int64{1, 3}, vector.MustFixedColNoTypeCheck[int64](view.Vecs[0]))
+	require.Same(t, pk, child.Vecs[0], "the child's batch slots are unchanged")
+	require.Equal(t, 3, child.RowCount())
+	require.Equal(t, 3, pk.Length(), "the child's vector is not shrunk")
+	require.True(t, pk.IsNull(1))
+	require.Equal(t, uint64(1), session.total)
 }

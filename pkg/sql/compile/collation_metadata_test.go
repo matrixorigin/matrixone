@@ -38,11 +38,11 @@ func TestCollationMetadataRemoteBatchAdmission(t *testing.T) {
 	for i, version := range []uint8{0, 1} {
 		typ := types.NewWithCharset(types.T_varchar, 8, 0, 3)
 		typ.CollationVersion = version
-		source.Vecs[i] = vector.NewVec(typ)
+		source.Vecs[i] = vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytes(source.Vecs[i], []byte("x"), false, mp))
 	}
 	source.SetRowCount(1)
-	data, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
+	data, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true)
 	require.NoError(t, err)
 	before := mp.CurrNB()
 	decoded, err := decodeBatch(mp, data)
@@ -93,7 +93,7 @@ func TestCollationMetadataExecutionBoundaries(t *testing.T) {
 	require.ErrorContains(t, err, "disabled")
 	require.Nil(t, literalVector)
 	// A legacy outer Type must not hide disabled metadata inside opaque bytes.
-	payload := vector.NewVec(types.MustTypeFromPlan(typ))
+	payload := vector.NewVec(types.MustTypeFromPlan(typ), c.proc.Mp())
 	data, err := payload.MarshalBinary()
 	require.NoError(t, err)
 	payload.Free(c.proc.Mp())
@@ -115,33 +115,22 @@ func TestCollationMetadataExecutionBoundaries(t *testing.T) {
 	require.Equal(t, []types.Type{runtime}, convertToTypes(convertToPlanTypes([]types.Type{runtime})))
 }
 
-func TestDecodeBatchReleasesProvenanceOnGroupingFailure(t *testing.T) {
+func TestDecodeBatchReleasesColumnsOnGroupingFailure(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := batch.NewWithSize(1)
 	t.Cleanup(func() { source.Clean(mp); require.Zero(t, mp.CurrNB()) })
-	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
 	for _, value := range []string{"one", "two"} {
 		require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte(value), false, mp))
 	}
-	require.NoError(t, source.Vecs[0].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamNone}, mp))
 	source.Vecs[0].GetGrouping().Add(1)
 	source.SetRowCount(2)
-	encoded, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
+	encoded, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true)
 	require.NoError(t, err)
 	const groupingFooterSize = 16
 	end := len(encoded) - groupingFooterSize
 	start := end - int(binary.LittleEndian.Uint64(encoded[end+8:]))
 	before := mp.CurrNB()
-	// The same provenance prefix must allocate before the later grouping error.
-	func() {
-		probe := batch.NewOffHeapEmpty()
-		defer probe.Clean(mp)
-		err = probe.UnmarshalBinaryWithPrepareParamKinds(encoded[:start], mp)
-		require.NoError(t, err)
-		require.NotEmpty(t, probe.Vecs[0].GetPrepareParamKinds())
-		require.Greater(t, mp.CurrNB(), before)
-	}()
-	require.Equal(t, before, mp.CurrNB())
 	binary.LittleEndian.PutUint64(encoded[start:], 3)
 	decoded, err := decodeBatch(mp, encoded)
 	if decoded != nil {
@@ -149,5 +138,5 @@ func TestDecodeBatchReleasesProvenanceOnGroupingFailure(t *testing.T) {
 	}
 	require.ErrorContains(t, err, "pipeline grouping row count mismatch")
 	require.Nil(t, decoded)
-	require.Equal(t, before, mp.CurrNB(), "decoder must release allocated provenance on failure")
+	require.Equal(t, before, mp.CurrNB(), "decoder must release allocated state on failure")
 }

@@ -80,11 +80,11 @@ func TestEvalCaseJsonConditionInDomain(t *testing.T) {
 		{name: "sql null selects else", data: encodeJSON(`"1"`), null: true},
 	}
 
-	condVec := vector.NewVec(types.T_json.ToType())
+	condVec := vector.NewVec(types.T_json.ToType(), proc.Mp())
 	defer condVec.Free(proc.Mp())
-	thenVec := vector.NewVec(types.T_int64.ToType())
+	thenVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer thenVec.Free(proc.Mp())
-	elseVec := vector.NewVec(types.T_int64.ToType())
+	elseVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer elseVec.Free(proc.Mp())
 	for i, cond := range conditions {
 		require.NoError(t, vector.AppendBytes(condVec, cond.data, cond.null, proc.Mp()))
@@ -141,13 +141,13 @@ func TestEvalCaseJsonConditionNeverDecodesJsonAsBoolInNativeMode(t *testing.T) {
 		return packed
 	}
 
-	condVec := vector.NewVec(types.T_json.ToType())
+	condVec := vector.NewVec(types.T_json.ToType(), proc.Mp())
 	defer condVec.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(condVec, encodeJSON(`2`), false, proc.Mp()))
-	thenVec := vector.NewVec(types.T_int64.ToType())
+	thenVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer thenVec.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(thenVec, int64(1), false, proc.Mp()))
-	elseVec := vector.NewVec(types.T_int64.ToType())
+	elseVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer elseVec.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(elseVec, int64(0), false, proc.Mp()))
 

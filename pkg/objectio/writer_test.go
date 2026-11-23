@@ -261,7 +261,7 @@ func TestObjectWriterPropagatesMarshalError(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			invalid := vector.NewVec(types.T_text.ToType())
+			invalid := vector.NewVec(types.T_text.ToType(), mp)
 			invalid.SetLength(1) // Deliberately omit the required varlena descriptor.
 			bat := batch.NewWithSize(1)
 			bat.SetVector(0, invalid)
@@ -643,8 +643,8 @@ func TestBoolZoneMapPersistence(t *testing.T) {
 	defer service.Close(ctx)
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int8.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int8.ToType(), mp)
 	defer bat.Clean(mp)
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []bool{false, true}, nil, mp))
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int8{0, 1}, nil, mp))
@@ -704,10 +704,10 @@ func TestObjectWriterRejectsUnresolvedTypeBeforeMutation(t *testing.T) {
 				require.NoError(t, err)
 				bat := batch.NewWithSize(2)
 				defer bat.Clean(mp)
-				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(7), false, mp))
 				if flat {
-					bat.Vecs[1] = vector.NewVec(types.T_any.ToType())
+					bat.Vecs[1] = vector.NewVec(types.T_any.ToType(), mp)
 					require.NoError(t, vector.AppendNull(bat.Vecs[1], mp))
 				} else {
 					bat.Vecs[1] = vector.NewConstNull(types.T_any.ToType(), 1, mp)

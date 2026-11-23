@@ -1364,7 +1364,7 @@ func (exec *groupConcatExec) FlushWithContext(ctx context.Context) (_ []*vector.
 	}()
 	for i, st := range exec.state {
 		var err error
-		vecs[i], err = exec.allocation.newVector(exec.retType)
+		vecs[i], err = exec.allocation.newVector(exec.retType, exec.mp)
 		if err != nil {
 			return nil, err
 		}
@@ -2427,7 +2427,7 @@ func (exec *groupConcatExec) restoreOrderVectors(
 
 	for i, typ := range orderTypes {
 		var err error
-		orderVectors[i], err = exec.allocation.newVector(typ)
+		orderVectors[i], err = exec.allocation.newVector(typ, exec.mp)
 		if err != nil {
 			freeOnError()
 			return nil, err

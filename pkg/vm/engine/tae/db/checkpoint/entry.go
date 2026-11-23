@@ -471,7 +471,7 @@ func (e *CheckpointEntry) GetTableByID(
 		return
 	}
 	totalLength := 0
-	data = ckputil.NewObjectListBatch()
+	data = ckputil.NewObjectListBatch(mp)
 	if err = reader.ConsumeCheckpointWithTableID(
 		ctx,
 		func(

@@ -23,10 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -50,7 +48,7 @@ func (r *emptyMembershipReader) ReadWithFilter(_ context.Context, _ []string, _ 
 	require.NoError(r.t, vector.AppendFixed(output.Vecs[0], int32(1), false, mp))
 	require.NoError(r.t, vector.AppendFixed(output.Vecs[1], int32(0), false, mp))
 	output.SetRowCount(1)
-	scratch, err := filter.MembershipScratch(2)
+	scratch, err := filter.MembershipScratch(2, mp)
 	require.NoError(r.t, err)
 	require.NoError(r.t, scratch.Physical.PreExtend(1, mp))
 	_, err = filter.Membership.Select(output, []int{0})
@@ -81,7 +79,7 @@ func TestMembershipRetiresBeforeEmptyBatchContinue(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+	allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	domain, _ := runtimefilter.NewLocalDomain(types.T_int32, 1000, 1, 1, 1000000)
 	t.Cleanup(domain.Close)
@@ -101,9 +99,6 @@ func TestMembershipRetiresBeforeEmptyBatchContinue(t *testing.T) {
 	scan.OutputAllocation = allocation
 	scan.LocalDomainProbes = []runtimefilter.LocalDomainBinding{{Domain: domain, Column: "key", ProbeNDV: 1000000}}
 	scan.SetAnalyzeControl(0, true)
-	consumer := &ownedColumnUseConsumer{MockOperator: colexec.NewMockOperator(), owned: true}
-	consumer.AppendChild(scan)
-	vm.ConfigureDictionaryBoundaries(consumer)
 	t.Cleanup(func() { scan.Free(proc, false, nil); scan.Release() })
 	require.NoError(t, scan.Prepare(proc))
 	scan.ctr.domainProbes[0].tested = runtimefilter.LocalDomainBatchRows - 1

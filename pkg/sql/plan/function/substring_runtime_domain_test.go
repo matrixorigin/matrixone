@@ -56,13 +56,13 @@ func BenchmarkSubstringASCII(b *testing.B) {
 	}
 }
 
-func TestSubstringExactBinaryRuntimeDomain(t *testing.T) {
+func TestSubstringExactBinaryStaticDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	mp := proc.Mp()
 	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
 		for _, arity := range []int{2, 3} {
 			t.Run(fmt.Sprintf("%s/%d", oid, arity), func(t *testing.T) {
-				input := makeBinaryStringTestInput(t, proc, oid.ToType(), [][]byte{[]byte("你好"), []byte("你好"), nil}, []types.RuntimeStringDomain{types.RuntimeStringText, types.RuntimeStringBinary, types.RuntimeStringText})
+				input := testutil.MakeVarlenaVector([][]byte{[]byte("你好"), []byte("你好"), nil}, nil, oid.ToType(), mp)
 				defer input.Free(mp)
 				input.GetNulls().Add(2)
 				two := makeBinaryStringInt64Input(t, proc, []int64{2, 2, 2})
@@ -78,8 +78,11 @@ func TestSubstringExactBinaryRuntimeDomain(t *testing.T) {
 				if oid == types.T_binary {
 					source = input
 				}
-				require.Equal(t, []byte("你好"), source.GetBytesAt(0))
-				require.Equal(t, types.RuntimeStringText, source.GetRuntimeStringDomainAt(0))
+				if oid == types.T_binary {
+					require.Equal(t, []byte("你好"), source.GetBytesAt(0))
+				} else {
+					require.Equal(t, []byte("你好")[:2], source.GetBytesAt(0), "LEFT on a binary string counts bytes")
+				}
 				inputs := []*vector.Vector{source, two}
 				if arity == 3 {
 					one := makeBinaryStringInt64Input(t, proc, []int64{1, 1, 1})
@@ -104,14 +107,12 @@ func TestSubstringExactBinaryRuntimeDomain(t *testing.T) {
 					wantOverload++
 				}
 				require.Equal(t, wantOverload, overloadIndex)
-				require.Equal(t, []byte("好"), output.GetBytesAt(0))
 				wantBinary := []byte{0xbd}
 				if oid == types.T_binary && arity == 2 {
 					wantBinary = []byte{0xbd, 0xa0, 0xe5, 0xa5, 0xbd}
 				}
+				require.Equal(t, wantBinary, output.GetBytesAt(0))
 				require.Equal(t, wantBinary, output.GetBytesAt(1))
-				require.Equal(t, types.RuntimeStringText, output.GetRuntimeStringDomainAt(0))
-				require.NotEqual(t, types.RuntimeStringText, output.GetRuntimeStringDomainAt(1))
 				require.True(t, output.IsNull(2))
 
 				overload, err := GetFunctionById(proc.Ctx, resolved.GetEncodedOverloadID())
@@ -121,8 +122,7 @@ func TestSubstringExactBinaryRuntimeDomain(t *testing.T) {
 				defer masked.Free()
 				require.NoError(t, masked.PreExtendAndReset(3))
 				require.NoError(t, exec(inputs, masked, proc, 3, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, false}}))
-				require.Equal(t, []byte("好"), masked.GetResultVector().GetBytesAt(0))
-				require.Equal(t, types.RuntimeStringText, masked.GetResultVector().GetRuntimeStringDomainAt(0))
+				require.Equal(t, wantBinary, masked.GetResultVector().GetBytesAt(0))
 				require.True(t, masked.GetResultVector().IsNull(1))
 				require.True(t, masked.GetResultVector().IsNull(2))
 			})

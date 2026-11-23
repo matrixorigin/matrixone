@@ -113,7 +113,9 @@ func TestAsofBuildLeftAcrossSpilledBuckets(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		budget, err := tc.proc.GetExecutionResourceBudget()
 		require.NoError(t, err)
 		require.Zero(t, budget.Used())
@@ -211,11 +213,12 @@ func TestEmptyProbeDoesNotPanic(t *testing.T) {
 
 	// Properly initialize resBat.
 	ctr.resBat = batch.NewWithSize(len(hashJoin.ResultCols))
+	ctr.resBatMP = proc.Mp()
 	for i, rp := range hashJoin.ResultCols {
 		if rp.Rel == 0 {
-			ctr.resBat.Vecs[i] = vector.NewVec(hashJoin.LeftTypes[rp.Pos])
+			ctr.resBat.Vecs[i] = vector.NewVec(hashJoin.LeftTypes[rp.Pos], proc.Mp())
 		} else {
-			ctr.resBat.Vecs[i] = vector.NewVec(hashJoin.RightTypes[rp.Pos])
+			ctr.resBat.Vecs[i] = vector.NewVec(hashJoin.RightTypes[rp.Pos], proc.Mp())
 		}
 	}
 
@@ -298,7 +301,9 @@ func TestShuffleJoinFiniteBudgetInitialSpillAndReSpill(t *testing.T) {
 	require.Greater(t, promtestutil.ToFloat64(metricv2.HashBuildSpillDepthCounter.WithLabelValues("respill", "2")), respillBefore)
 
 	tc.arg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.arg)
 	tc.barg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.barg)
 	budget, err := tc.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	require.Zero(t, budget.Used())
@@ -315,7 +320,9 @@ func TestShuffleJoinCompressedRowCountAcrossSpilledBuckets(t *testing.T) {
 	)
 	defer func() {
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		budget, err := tc.proc.GetExecutionResourceBudget()
 		require.NoError(t, err)
 		require.Zero(t, budget.Used())
@@ -389,7 +396,9 @@ func TestShuffleFullOuterSpillTracksBuildMatchesWithoutRightOrientation(t *testi
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		budget, err := tc.proc.GetExecutionResourceBudget()
 		require.NoError(t, err)
 		require.Zero(t, budget.Used())
@@ -587,7 +596,9 @@ func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
 			tc.arg.Reset(tc.proc, false, nil)
 			tc.barg.Reset(tc.proc, false, nil)
 			tc.arg.Free(tc.proc, false, nil)
+			freeTestChildren(tc.arg)
 			tc.barg.Free(tc.proc, false, nil)
+			freeTestChildren(tc.barg)
 			tc.proc.Free()
 			require.Zero(t, tc.proc.Mp().CurrNB())
 		})
@@ -629,6 +640,7 @@ func TestShuffleJoinHardBudgetRejectTransitionsToSpill(t *testing.T) {
 	tc.barg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 2000}
 	resetChildrenWithBatch(tc.arg, probe)
 	buildInput := colexec.NewMockOperator().WithBatchs([]*batch.Batch{build1, build2})
+	freeTestChildren(tc.barg)
 	tc.barg.Children = nil
 	tc.barg.AppendChild(buildInput)
 	oldAccount := tc.arg.allocationAccount
@@ -670,7 +682,9 @@ func TestShuffleJoinHardBudgetRejectTransitionsToSpill(t *testing.T) {
 	require.Greater(t, promtestutil.ToFloat64(metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1")), spillBefore)
 
 	tc.arg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.arg)
 	tc.barg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.barg)
 	require.Zero(t, budget.Used())
 	require.Zero(t, budget.SpillDiskUsed())
 	require.Zero(t, budget.SpillFDUsed())

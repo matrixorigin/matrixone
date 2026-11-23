@@ -119,7 +119,8 @@ func TestPreparedTemporalHistoryPublicationAndCache(t *testing.T) {
 		if prepared.params != nil {
 			prepared.params.Free(cw.proc.Mp())
 		}
-		prepared.params = vector.NewVec(types.T_text.ToType())
+		prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+		prepared.paramsMP = cw.proc.Mp()
 		require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), false, cw.proc.Mp()))
 		prepared.ParamTypes = []byte{byte(typ), 0}
 	}
@@ -219,7 +220,8 @@ func TestPreparedTemporalRetryDeclarationGeneration(t *testing.T) {
 			prepared.proc, ctx.proc = cw.proc, cw.proc
 			prepared.defaultDatabase = "tpch"
 			t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
-			prepared.params = vector.NewVec(types.T_text.ToType())
+			prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+			prepared.paramsMP = cw.proc.Mp()
 			require.NoError(t, vector.AppendBytes(prepared.params, []byte("2024-02-28 00:00:00"), false, cw.proc.Mp()))
 			prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
 			_, _, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)

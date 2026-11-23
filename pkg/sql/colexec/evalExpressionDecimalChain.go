@@ -242,7 +242,7 @@ func (e *decimalChainExecutor) allocateScratch(rows int) (err error) {
 	for i := 0; i < len(e.nodes)-1; i++ {
 		v := &e.nodes[i]
 		if v.scratch == nil {
-			v.scratch, err = newExpressionOffHeapVector(v.typ, e.root.allocation)
+			v.scratch, err = newExpressionOffHeapVector(v.typ, e.root.m)
 			if err != nil {
 				return err
 			}
@@ -294,19 +294,6 @@ func (e *decimalChainExecutor) Eval(p *process.Process, b []*batch.Batch, select
 		}
 		if !decimalChainSource(v.value, v.column, n) || v.value.IsConst() || v.value.HasNull() {
 			return e.root.Eval(p, b, selected)
-		}
-	}
-	var operands [5]*vector.Vector
-	for i := range e.inputs {
-		operands[i] = e.inputs[i].value
-	}
-	flat, normalizeErr := e.root.normalizeDictionaryParameters(operands[:len(e.inputs)], false)
-	if normalizeErr != nil {
-		return nil, normalizeErr
-	}
-	for i := range e.inputs {
-		if !e.inputs[i].constant {
-			e.inputs[i].value = flat[i]
 		}
 	}
 

@@ -73,10 +73,10 @@ func TestLegacyFloatStringRefinements(t *testing.T) {
 			t.Cleanup(exec.Free)
 			bat := batch.NewWithSize(inputs)
 			t.Cleanup(func() { bat.Clean(proc.Mp()) })
-			bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], -1.2345678901234567e-15, false, proc.Mp()))
 			if inputs == 2 {
-				bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+				bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(10), false, proc.Mp()))
 			}
 			bat.SetRowCount(1)

@@ -61,7 +61,7 @@ func TestVisibleAutoIDPrefetchCurrentDemand(t *testing.T) {
 					cc.consumedAutoRows = 500000
 					cc.ranges.updateTo(uint64(10001 - tc.left))
 					mp := internalPrefetchTestMP(t)
-					v := vector.NewVec(types.T_uint64.ToType())
+					v := vector.NewVec(types.T_uint64.ToType(), mp)
 					defer v.Free(mp)
 					values := make([]uint64, tc.rows)
 					// Manual IDs lie below every remaining candidate and cannot inflate demand.
@@ -135,14 +135,14 @@ func TestVisibleAutoIDPrefetchFailureDemand(t *testing.T) {
 				}
 				mp := internalPrefetchTestMP(t)
 				if phase == "manual_update" {
-					v := vector.NewVec(types.T_uint64.ToType())
+					v := vector.NewVec(types.T_uint64.ToType(), mp)
 					defer v.Free(mp)
 					require.NoError(t, vector.AppendFixedList(v, []uint64{1000000, 0, 0}, nil, mp))
 					v.GetNulls().AddRange(1, 3)
 					_, err = cc.insertAutoValues(ctx, 42, v, 3, nil)
 					require.ErrorIs(t, err, rejected)
 				} else {
-					v := vector.NewVec(types.T_int8.ToType())
+					v := vector.NewVec(types.T_int8.ToType(), mp)
 					defer v.Free(mp)
 					require.NoError(t, vector.AppendFixedList(v, []int8{0, 0}, nil, mp))
 					v.GetNulls().AddRange(0, 2)
@@ -197,7 +197,7 @@ func TestVisibleAutoIDPrefetchCancelAndRetire(t *testing.T) {
 		}
 	}()
 	mp := internalPrefetchTestMP(t)
-	v := vector.NewVec(types.T_uint64.ToType())
+	v := vector.NewVec(types.T_uint64.ToType(), mp)
 	defer v.Free(mp)
 	require.NoError(t, vector.AppendFixedList(v, []uint64{0, 0}, nil, mp))
 	v.GetNulls().AddRange(0, 2)
@@ -228,7 +228,7 @@ func TestVisibleAutoIDPrefetchSaturatesAndCountsOnlyAutomaticRows(t *testing.T) 
 		cc := &columnCache{col: AutoColumn{ColName: "id", Step: 1}, cfg: cfg, ranges: &ranges{step: 1}, consumedAutoRows: 5}
 		cc.ranges.add(1, 10001)
 		mp := internalPrefetchTestMP(t)
-		v := vector.NewVec(types.T_uint64.ToType())
+		v := vector.NewVec(types.T_uint64.ToType(), mp)
 		defer v.Free(mp)
 		require.NoError(t, vector.AppendFixedList(v, []uint64{0, 5, 0}, nil, mp))
 		v.GetNulls().Add(0, 2)

@@ -17,6 +17,8 @@ package window
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -44,6 +46,7 @@ func TestMaterializedRowNumberFitsOutputBudget(t *testing.T) {
 			require.NoError(t, w.SetAllocationAccount(account))
 			defer func() {
 				w.Free(proc, false, nil)
+				colexec.FreeMockChildren(w)
 				require.NoError(t, w.ClearAllocationAccount(account))
 			}()
 
@@ -55,7 +58,7 @@ func TestMaterializedRowNumberFitsOutputBudget(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, result)
 				func() {
-					defer result.Free(proc.Mp())
+					defer result.Free(result.MPool())
 					values := vector.MustFixedColWithTypeCheck[uint64](result)
 					require.Len(t, values, 8192)
 					require.Equal(t, uint64(1), values[0])

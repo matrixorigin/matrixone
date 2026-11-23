@@ -15,9 +15,10 @@
 package objectio
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func getLocation(name ObjectName) Location {

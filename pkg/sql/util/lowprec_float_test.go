@@ -33,7 +33,7 @@ func TestSetBytesToAnyVectorLowPrecisionFloat(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 	ctx := context.Background()
 	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
-		vec := vector.NewVec(oid.ToType())
+		vec := vector.NewVec(oid.ToType(), mp)
 		require.NoError(t, vec.PreExtend(1, mp))
 		vec.SetLength(1)
 		require.NoError(t, SetBytesToAnyVector(ctx, "1.5", 0, false, vec, proc))

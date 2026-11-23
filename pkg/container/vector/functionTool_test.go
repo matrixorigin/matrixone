@@ -49,7 +49,7 @@ func TestFunctionParamFrameGrowsAndPreservesWrappers(t *testing.T) {
 
 func TestAppendBytesWithWriterOwnsFinalAreaAndRollsBack(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	vec := NewVec(types.T_blob.ToType())
+	vec := NewVec(types.T_blob.ToType(), mp)
 	t.Cleanup(func() { vec.Free(mp) })
 
 	require.NoError(t, AppendBytesWithWriter(vec, 64, mp, func(dst []byte) error {
@@ -68,10 +68,11 @@ func TestAppendBytesWithWriterOwnsFinalAreaAndRollsBack(t *testing.T) {
 func TestAppendBytesWithWriterAdmitsDescriptorBeforeWriter(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1, 1)
 	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_blob.ToType(), state.selection)
+	dmp := state.view(t, mp)
+	vec := newAccountedTestVector(t, types.T_blob.ToType(), dmp)
 	called := false
 
-	err := AppendBytesWithWriter(vec, 1, mp, func([]byte) error {
+	err := AppendBytesWithWriter(vec, 1, dmp, func([]byte) error {
 		called = true
 		return nil
 	})
@@ -79,7 +80,7 @@ func TestAppendBytesWithWriterAdmitsDescriptorBeforeWriter(t *testing.T) {
 	require.False(t, called)
 	require.Zero(t, vec.Length())
 
-	vec.Free(mp)
+	vec.Free(dmp)
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
@@ -89,24 +90,19 @@ func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(
-		types.T_int64.ToType(), mp, selection,
-	)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_int64.ToType(), view)
 	require.NoError(t, wrapper.PreExtendAndReset(64))
 	transferred := wrapper.GetResultVector()
-	require.Same(t, selection, transferred.AllocationAccountSelection())
 	firstUsed := account.Snapshot().Used
 	require.Positive(t, firstUsed)
 
 	wrapper.SetResultVector(nil)
 	require.NoError(t, wrapper.PreExtendAndReset(64))
-	require.Same(t, selection, wrapper.GetResultVector().AllocationAccountSelection())
 	require.Greater(t, account.Snapshot().Used, firstUsed)
 
-	transferred.Free(mp)
+	transferred.Free(view)
 	wrapper.Free()
 	require.Zero(t, account.Snapshot().Used)
 }
@@ -117,12 +113,9 @@ func TestFunctionResultAllocationBoundsNullUnion(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(
-		types.T_int64.ToType(), mp, selection,
-	)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_int64.ToType(), view)
 	require.NoError(t, wrapper.PreExtendAndReset(1))
 	result := MustFunctionResult[int64](wrapper)
 	require.NoError(t, result.Append(42, false))
@@ -296,7 +289,7 @@ func BenchmarkGetStrValue1(b *testing.B) {
 	mp := mpool.MustNewZeroNoFixed()
 
 	vecSize := uint64(50000)
-	vec := NewVec(types.T_varchar.ToType())
+	vec := NewVec(types.T_varchar.ToType(), mp)
 	for i := uint64(0); i < vecSize; i++ {
 		err := appendOneBytes(vec, []byte("x"), false, mp)
 		require.NoError(b, err)
@@ -320,7 +313,7 @@ func BenchmarkGetStrValue2(b *testing.B) {
 	vecSize := uint64(50000)
 	t2 := types.T_varchar.ToType()
 	t2.Width = 10
-	vec2 := NewVec(t2)
+	vec2 := NewVec(t2, mp)
 	for i := uint64(0); i < vecSize; i++ {
 		err := appendOneBytes(vec2, []byte("x"), false, mp)
 		require.NoError(b, err)
@@ -540,7 +533,7 @@ func exerciseParameterReuse[T types.FixedSizeT](t *testing.T, typ types.Type, sc
 	t.Helper()
 	mp := mpool.MustNewZeroNoFixed()
 	func() {
-		v := NewVec(typ)
+		v := NewVec(typ, mp)
 		defer v.Free(mp)
 		require.NoError(t, appendValue(v, false, false, mp))
 		parameter := generate(v)
@@ -573,7 +566,7 @@ func exerciseParameterReuse[T types.FixedSizeT](t *testing.T, typ types.Type, sc
 		require.True(t, reuse(scalar, parameter))
 		check(parameter, scalar, 0, true, false)
 		// A NULL wrapper rejects both value shapes without changing its source.
-		constant := NewVec(typ)
+		constant := NewVec(typ, mp)
 		defer constant.Free(mp)
 		require.NoError(t, appendValue(constant, false, false, mp))
 		constant.SetClass(CONSTANT)
@@ -585,7 +578,7 @@ func exerciseParameterReuse[T types.FixedSizeT](t *testing.T, typ types.Type, sc
 		check(parameter, constant, 0, false, false)
 		changed := typ
 		changed.Width++
-		other := NewVec(changed)
+		other := NewVec(changed, mp)
 		defer other.Free(mp)
 		require.NoError(t, appendValue(other, false, true, mp))
 		require.NoError(t, appendValue(other, true, true, mp))
@@ -617,10 +610,9 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(types.T_bool.ToType(), mp, selection)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_bool.ToType(), view)
 	t.Cleanup(wrapper.Free)
 	result := MustFunctionResult[bool](wrapper)
 	require.NoError(t, result.PreExtendAndResetNonNull(0))
@@ -629,7 +621,6 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 	require.Error(t, result.PreExtendAndResetNonNull(-1))
 	require.Zero(t, result.vec.Length())
 	require.NoError(t, result.PreExtendAndResetNonNull(128))
-	require.Same(t, selection, result.vec.AllocationAccountSelection())
 	require.Positive(t, account.Snapshot().Used, "value storage is still charged")
 	require.Zero(t, result.vec.GetNulls().GetBitmap().CapWords(), "non-null preparation allocates no bitmap")
 	require.Len(t, result.cols, 128)
@@ -657,10 +648,9 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 	require.EqualValues(t, 512, result.vec.GetNulls().GetBitmap().Len())
 	transferred := wrapper.GetResultVector()
 	wrapper.SetResultVector(nil)
-	t.Cleanup(func() { transferred.Free(mp) })
+	t.Cleanup(func() { transferred.Free(view) })
 	require.NoError(t, result.PreExtendAndResetNonNull(8))
 	require.Zero(t, result.vec.GetNulls().GetBitmap().CapWords())
-	require.Same(t, selection, result.vec.AllocationAccountSelection())
 }
 
 func TestFunctionResultNonNullPreparationAdmitsValueAllocation(t *testing.T) {
@@ -675,10 +665,9 @@ func TestFunctionResultNonNullPreparationAdmitsValueAllocation(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(types.T_bool.ToType(), mp, selection)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_bool.ToType(), view)
 	t.Cleanup(wrapper.Free)
 	require.ErrorIs(t, MustFunctionResult[bool](wrapper).PreExtendAndResetNonNull(128), mpool.ErrAllocationAccountCapacity)
 	require.Zero(t, wrapper.GetResultVector().Length())

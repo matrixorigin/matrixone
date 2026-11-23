@@ -38,7 +38,7 @@ func TestPreparedBlockPredicatesSurviveRebinding(t *testing.T) {
 	tx.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	proc.Base.TxnOperator = tx
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
 	t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })

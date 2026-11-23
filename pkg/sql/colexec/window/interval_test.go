@@ -43,6 +43,7 @@ func TestWindowPrepareMaterializesIntervalBounds(t *testing.T) {
 	arg := makeWindowWithFrame(planned)
 	defer func() {
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	}()
@@ -124,7 +125,7 @@ func TestNullIntervalRangeBoundaries(t *testing.T) {
 		t.Run(typ.String(), func(t *testing.T) {
 			// Zero-valued temporal keys suffice: the NULL arithmetic must be
 			// decided before any date arithmetic or timestamp fold indexing.
-			vec := vector.NewVec(typ.ToType())
+			vec := vector.NewVec(typ.ToType(), proc.Mp())
 			defer vec.Free(proc.Mp())
 			for _, isNull := range []bool{false, true} {
 				vec.CleanOnlyData()
@@ -178,7 +179,7 @@ func BenchmarkNullIntervalRangePeers(b *testing.B) {
 				defer func() { proc.Free(); require.Zero(b, proc.Mp().CurrNB()) }()
 				bat := batch.NewWithSize(2)
 				defer bat.Clean(proc.Mp())
-				bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 				bat.Vecs[1] = vector.NewConstNull(types.T_datetime.ToType(), rows, proc.Mp())
 				for i := 0; i < rows; i++ {
 					require.NoError(b, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
@@ -197,10 +198,10 @@ func BenchmarkNullIntervalRangePeers(b *testing.B) {
 						defer ctr.freeRunningAgg()
 						result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, rows)
 						require.NoError(b, err)
-						defer result.Free(proc.Mp())
+						defer result.Free(result.MPool())
 						require.Equal(b, rows, result.Length())
-						for row, value := range vector.MustFixedColWithTypeCheck[int64](result) {
-							if result.IsNull(uint64(row)) || value != int64(rows) {
+						for row, value := range vector.MustFixedColWithTypeCheck[types.Decimal128](result) {
+							if result.IsNull(uint64(row)) || value != types.Decimal128FromInt64(int64(rows)) {
 								b.Fatalf("row %d: sum %v (NULL=%t), want %d", row, value, result.IsNull(uint64(row)), rows)
 							}
 						}
@@ -262,7 +263,7 @@ func TestNullIntervalSlidingAggregates(t *testing.T) {
 						defer func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) }()
 						bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 						defer bat.Clean(proc.Mp())
-						order := vector.NewVec(typ.ToType())
+						order := vector.NewVec(typ.ToType(), proc.Mp())
 						defer order.Free(proc.Mp())
 						for row := 0; row < 10; row++ {
 							pos := row % 5
@@ -308,7 +309,7 @@ func TestNullIntervalSlidingAggregates(t *testing.T) {
 							func() {
 								result, err := ctr.processAggregateFuncRange(0, arg, proc, output[0], output[1])
 								require.NoError(t, err)
-								defer result.Free(proc.Mp())
+								defer result.Free(result.MPool())
 								for i := 0; i < result.Length(); i++ {
 									row := output[0] + i
 									pos := row % 5
@@ -323,7 +324,7 @@ func TestNullIntervalSlidingAggregates(t *testing.T) {
 											want += 6
 										}
 										if name == "sum" {
-											require.Equal(t, want, vector.MustFixedColWithTypeCheck[int64](result)[i])
+											require.Equal(t, types.Decimal128FromInt64(want), vector.MustFixedColWithTypeCheck[types.Decimal128](result)[i])
 										} else {
 											require.Equal(t, float64(want)/2, types.Decimal128ToFloat64(vector.MustFixedColWithTypeCheck[types.Decimal128](result)[i], result.GetType().Scale))
 										}
@@ -360,7 +361,7 @@ func TestNullIntervalSlidingCancellationAndReuse(t *testing.T) {
 	defer ctr.freeRunningAgg()
 	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 1)
 	require.NoError(t, err)
-	first.Free(proc.Mp())
+	first.Free(first.MPool())
 	require.NotNil(t, ctr.runningAgg)
 	originalCtx := proc.Ctx
 	canceled, cancel := context.WithCancel(originalCtx)
@@ -373,8 +374,8 @@ func TestNullIntervalSlidingCancellationAndReuse(t *testing.T) {
 	proc.Ctx = originalCtx
 	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 3)
 	require.NoError(t, err)
-	defer result.Free(proc.Mp())
-	require.Equal(t, []int64{6, 6, 6}, vector.MustFixedColWithTypeCheck[int64](result))
+	defer result.Free(result.MPool())
+	require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(6), types.Decimal128FromInt64(6), types.Decimal128FromInt64(6)}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
 	require.Nil(t, ctr.runningAgg)
 }
 

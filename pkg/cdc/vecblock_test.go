@@ -29,7 +29,7 @@ func vecBlockTestVector(t *testing.T, oid types.T, values []float32, mp *mpool.M
 	f, _ := oid.BlockScaledFormat()
 	cell, err := types.AppendBlockScaled(nil, f, values)
 	require.NoError(t, err)
-	vec := vector.NewVec(types.New(oid, int32(len(values)), 0))
+	vec := vector.NewVec(types.New(oid, int32(len(values)), 0), mp)
 	require.NoError(t, vector.AppendBytes(vec, cell, false, mp))
 	require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
 	return vec
