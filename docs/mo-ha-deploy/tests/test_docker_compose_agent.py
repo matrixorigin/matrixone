@@ -60,6 +60,17 @@ case "$3" in
         ;;
     down)
         [ "${DOWN_ERROR:-0}" = 0 ] || exit "$DOWN_ERROR"
+        if [ -n "$STOP_BARRIER" ]; then
+            i=0
+            while [ ! -f "$STOP_BARRIER.started" ] && [ "$i" -lt 40 ]; do
+                i=$((i + 1))
+                sleep 0.02
+            done
+            if [ -f "$STOP_BARRIER.started" ] && [ ! -f "$STOP_BARRIER.finished" ]; then
+                printf 'down overlapped stop\\n' >> "$TRACE"
+            fi
+            touch "$STOP_BARRIER.seen"
+        fi
         [ "${DOWN_NO_EFFECT:-0}" = 1 ] || touch "$COMPOSE_STOPPED"
         ;;
     *) exit 99 ;;
@@ -75,6 +86,12 @@ case "$1" in
         for container in "$CONTAINERS"/*; do
             [ -f "$container" ] || continue
             id=${container##*/}
+            case "$id" in
+                *.after) continue ;;
+            esac
+            if [ -f "$container.after" ] && [ ! -f "$COMPOSE_STARTED" ]; then
+                continue
+            fi
             if [ "$5" = '{{.ID}} {{.Names}}' ] || [ "$4" = '{{.ID}} {{.Names}}' ]; then
                 IFS="$(printf '\\t')" read -r name rest < "$container"
                 printf '%s %s\\n' "$id" "$name"
@@ -82,7 +99,10 @@ case "$1" in
                 printf '%s\\t' "$id"
                 IFS= read -r labels < "$container"
                 state=running
-                [ ! -f "$TRACE.$id.stopped" ] || state=exited
+                case "$id" in
+                    former-init) state=exited ;;
+                    *) [ ! -f "$TRACE.$id.stopped" ] || state=exited ;;
+                esac
                 printf '%s\\t%s\\n' "$labels" "$state"
             fi
         done
@@ -117,18 +137,32 @@ case "$1" in
                     else echo 'false|exited|0||worker|'; fi ;;
                 init-exited) echo 'false|exited|0||init|' ;;
                 init-failed) echo 'false|exited|1||init|' ;;
+                init-running) echo 'true|running|0||init|' ;;
+                former-init) echo 'false|exited|0||init|' ;;
+                retired) echo 'false|exited|0||app|' ;;
+                retired-failed) echo 'false|exited|1||app|' ;;
                 invalid) echo unknown ;;
                 oneoff) echo 'false|exited|0|True|task|' ;;
                 task) echo 'true|running|0|True|app|' ;;
                 helper) echo 'true|running|0||helper|' ;;
                 worker) echo 'true|running|0||worker|' ;;
                 app) echo 'true|running|0||app|init:service_completed_successfully:false' ;;
+                app-plain) echo 'true|running|0||app|' ;;
                 *) echo 'true|running|0||app|' ;;
             esac
         done
         ;;
     stop)
         [ "${STOP_ERROR:-0}" = 0 ] || exit "$STOP_ERROR"
+        if [ -n "$STOP_BARRIER" ]; then
+            touch "$STOP_BARRIER.started"
+            i=0
+            while [ ! -f "$STOP_BARRIER.seen" ] && [ "$i" -lt 40 ]; do
+                i=$((i + 1))
+                sleep 0.02
+            done
+            touch "$STOP_BARRIER.finished"
+        fi
         shift
         for id do
             [ "${STOP_NO_EFFECT:-0}" = 1 ] || touch "$TRACE.$id.stopped"
@@ -163,8 +197,11 @@ class ResourceAgentTests(unittest.TestCase):
             stub.write_text(script)
             stub.chmod(0o700)
 
-    def add_container(self, name, project="", config="", oneoff="False", container_id="owned"):
-        (self.containers / container_id).write_text(f"{name}\t{project}\t{config}\t{oneoff}\n")
+    def add_container(self, name, project="", config="", oneoff="False", container_id="owned", after_up=False):
+        path = self.containers / container_id
+        path.write_text(f"{name}\t{project}\t{config}\t{oneoff}\n")
+        if after_up:
+            path.with_name(container_id + ".after").write_text("1\n")
 
     def action(self, action, expected, model=None, **settings):
         env = dict(
@@ -222,7 +259,11 @@ class ResourceAgentTests(unittest.TestCase):
         self.action("monitor", 7, COMPOSE_IDS="oneoff")
 
     def test_monitor_preserves_custom_initialization_service_behavior(self):
-        self.action("monitor", 0, SERVICES="app\ninit", COMPOSE_IDS="init-exited\napp")
+        model = {
+            "app": {"depends_on": {"init": {"condition": "service_completed_successfully"}}},
+            "init": {},
+        }
+        self.action("monitor", 0, model=model, SERVICES="app\ninit", COMPOSE_IDS="init-exited\napp")
 
     def test_missing_service_with_running_helper_or_orphan(self):
         for services in ("app\nhelper", "app"):
@@ -238,7 +279,34 @@ class ResourceAgentTests(unittest.TestCase):
         self.assert_no_mutation(self.action("monitor", 1, COMPOSE_IDS="running", CONFIG_ERROR="9"))
 
     def test_monitor_failed_initialization_service(self):
-        self.action("monitor", 1, SERVICES="app\ninit", COMPOSE_IDS="app\ninit-failed")
+        model = {
+            "app": {"depends_on": {"init": {"condition": "service_completed_successfully"}}},
+            "init": {},
+        }
+        self.action("monitor", 1, model=model, SERVICES="app\ninit", COMPOSE_IDS="app\ninit-failed")
+
+    def test_current_model_overrides_stale_completed_dependency_label(self):
+        model = {"app": {}, "init": {}}
+        self.add_container("init-1", "my-project", self.yaml, container_id="init-exited")
+        self.add_container("app-1", "my-project", self.yaml, container_id="app")
+        calls = self.action("monitor", 1, model=model, SERVICES="app\ninit", COMPOSE_IDS="init-exited\napp")
+        self.assert_no_mutation(calls)
+        calls = self.action(
+            "start",
+            0,
+            model=model,
+            SERVICES="app\ninit",
+            COMPOSE_IDS="init-exited\napp",
+            AFTER_UP_IDS="app\ninit-running",
+        )
+        self.assertIn("compose -f docker-compose.yaml up -d", calls)
+
+    def test_configured_initializer_can_exit_without_dependency_label(self):
+        model = {
+            "app": {"depends_on": {"init": {"condition": "service_completed_successfully"}}},
+            "init": {},
+        }
+        self.action("monitor", 0, model=model, SERVICES="app\ninit", COMPOSE_IDS="init-exited\napp-plain")
 
     def test_renamed_service_blocks_repair_even_with_matching_ownership(self):
         self.add_container("my-project-worker-1", "my-project", self.yaml, container_id="worker")
@@ -277,6 +345,13 @@ class ResourceAgentTests(unittest.TestCase):
         model = {"app": {"deploy": {"replicas": 2}}}
         self.action("monitor", 1, model=model, COMPOSE_IDS="app")
         self.action("monitor", 0, model=model, COMPOSE_IDS="app\nrunning")
+
+    def test_retired_replica_does_not_make_scaled_service_partial(self):
+        model = {"app": {"deploy": {"replicas": 1}}}
+        self.assert_no_mutation(self.action("monitor", 0, model=model, COMPOSE_IDS="app\nretired"))
+        self.assert_no_mutation(self.action("start", 0, model=model, COMPOSE_IDS="app\nretired"))
+        self.action("monitor", 1, model=model, COMPOSE_IDS="app\nrunning")
+        self.action("monitor", 0, model=model, COMPOSE_IDS="app\nretired-failed")
 
     def test_monitor_compose_failed(self):
         self.action("monitor", 1, COMPOSE_PS_ERROR="9")
@@ -331,7 +406,37 @@ class ResourceAgentTests(unittest.TestCase):
     def test_start_rejects_partial_project_when_ownership_is_uncertain(self):
         self.add_container("helper", "my-project", self.yaml, container_id="helper")
         self.add_container("old-app", "old-project", self.yaml, container_id="old")
+        self.assert_no_mutation(self.action("monitor", 1, SERVICES="app\nhelper", COMPOSE_IDS="helper"))
         self.assert_no_mutation(self.action("start", 1, SERVICES="app\nhelper", COMPOSE_IDS="helper"))
+
+    def test_inactive_former_project_is_not_an_ownership_conflict(self):
+        self.add_container("old-matrixone", "old-project", self.yaml, container_id="old")
+        (self.root / "trace.old.stopped").touch()
+        self.add_container("new-matrixone", "new-project", self.yaml, container_id="running")
+        self.assert_no_mutation(self.action("monitor", 0, COMPOSE_IDS="running"))
+        self.assert_no_mutation(self.action("start", 0, COMPOSE_IDS="running"))
+
+    def test_inactive_former_project_is_excluded_from_health(self):
+        self.add_container("old-init", "old-project", self.yaml, container_id="former-init")
+        self.add_container("app-1", "new-project", self.yaml, container_id="app-plain")
+        model = {
+            "app": {"depends_on": {"init": {"condition": "service_completed_successfully"}}},
+            "init": {},
+        }
+        self.action(
+            "monitor",
+            0,
+            model=model,
+            SERVICES="app\ninit",
+            COMPOSE_IDS="init-exited\napp-plain",
+        )
+
+    def test_start_accepts_replacement_after_former_project_exits(self):
+        self.add_container("old-matrixone", "old-project", self.yaml, container_id="old")
+        (self.root / "trace.old.stopped").touch()
+        self.add_container("new-matrixone", "new-project", self.yaml, container_id="running", after_up=True)
+        calls = self.action("start", 0, AFTER_UP_IDS="running")
+        self.assertIn("compose -f docker-compose.yaml up -d", calls)
 
     def test_start_inspect_failure_does_not_attempt_repair(self):
         self.assert_no_mutation(self.action("start", 1, COMPOSE_IDS="running", INSPECT_ERROR="9"))
@@ -467,6 +572,13 @@ class ResourceAgentTests(unittest.TestCase):
     def test_stop_missing_yaml_without_containers(self):
         self.yaml.unlink()
         self.assert_no_mutation(self.action("stop", 0))
+
+    def test_stop_overlaps_service_and_oneoff_shutdown(self):
+        self.add_container("app-task", "my-project", self.yaml, "True", container_id="task")
+        calls = self.action("stop", 0, COMPOSE_IDS="running", STOP_BARRIER=str(self.root / "barrier"))
+        self.assertIn("docker stop task", calls)
+        self.assertIn("down overlapped stop", calls)
+        self.assertIn("compose -f docker-compose.yaml down", calls)
 
     def test_stop_owned_oneoff_with_and_without_yaml(self):
         self.add_container("app-task", "my-project", self.yaml, "True", container_id="task")
