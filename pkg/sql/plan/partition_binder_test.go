@@ -39,6 +39,49 @@ func TestBuildPartitionDefs(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestPartitionJSONBoundsUseRequestContext(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	previous, cancelPrevious := context.WithCancel(t.Context())
+	cancelPrevious()
+	proc.Ctx = previous
+	compiler := NewMockCompilerContext(false, proc)
+
+	for _, tc := range []struct {
+		method, clause, invalid string
+	}{
+		{"range", "values less than", "must be strictly increasing"},
+		{"list", "values in", "values must be unique across partitions"},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			current, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			compiler.SetContext(current)
+			build := func(document string) (*Plan, error) {
+				t.Helper()
+				sql := "create table t (a int) partition by " + tc.method + " (a) (partition p0 " +
+					tc.clause + " (1), partition p1 " + tc.clause +
+					" (json_length(json_extract('" + document + "', '$.n'))))"
+				stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				return BuildPlan(compiler, stmt, false, nil)
+			}
+			p, err := build(`{"n":[1,2]}`)
+			require.NoError(t, err)
+			require.Len(t, p.GetDdl().GetCreateTable().GetTableDef().GetPartition().GetPartitionDefs(), 2)
+
+			_, err = build(`{"n":[1]}`)
+			require.ErrorContains(t, err, tc.invalid)
+			require.Same(t, previous, proc.Ctx)
+
+			cancel()
+			_, err = build(`{"n":[1,2]}`)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Same(t, previous, proc.Ctx)
+		})
+	}
+}
+
 func TestConstructListExpression(t *testing.T) {
 	ctx := context.Background()
 	sql := "create table t1 (a int) partition by list columns(a) (partition p1 values in (1, 2));"

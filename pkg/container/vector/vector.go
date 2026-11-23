@@ -6371,17 +6371,38 @@ func (v *Vector) window(start, end int, logicalRows bool) (*Vector, error) {
 	return v.readOnlyWindow(start, end), nil
 }
 
+// WindowInto is Window into a descriptor the caller already holds: w becomes a
+// read-only reference to [start, end) of v's memory without allocating a new
+// Vector. w must be read-only (a reference or a zero Vector); whatever it
+// referenced before is dropped.
+func (v *Vector) WindowInto(w *Vector, start, end int) error {
+	if !w.IsReadOnly() {
+		return moerr.NewInternalErrorNoCtx("vector window target owns memory")
+	}
+	if !v.validWindowRange(start, end, false) {
+		return moerr.NewInvalidInputNoCtx("invalid vector window")
+	}
+	v.readOnlyWindowInto(w, start, end)
+	return nil
+}
+
 // readOnlyWindow is a read-only reference to [start, end) of v's memory. Row
 // metadata is copied.
 func (v *Vector) readOnlyWindow(start, end int) *Vector {
-	w := &Vector{typ: v.typ, class: v.class, length: end - start, sorted: v.sorted}
+	w := &Vector{}
+	v.readOnlyWindowInto(w, start, end)
+	return w
+}
+
+func (v *Vector) readOnlyWindowInto(w *Vector, start, end int) {
+	*w = Vector{typ: v.typ, class: v.class, length: end - start, sorted: v.sorted}
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	if v.IsConst() {
 		if !v.IsConstNull() {
 			w.data = v.data
 		}
 		w.area = v.area
-		return w
+		return
 	}
 	if start != end {
 		w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
@@ -6389,7 +6410,6 @@ func (v *Vector) readOnlyWindow(start, end int) *Vector {
 	if v.typ.IsVarlen() {
 		w.area = v.area
 	}
-	return w
 }
 
 func (v *Vector) validWindowRange(start, end int, logicalRows bool) bool {

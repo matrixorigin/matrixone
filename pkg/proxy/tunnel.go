@@ -114,6 +114,9 @@ type tunnel struct {
 	respC chan []byte
 	// closeOnce controls the close function to close tunnel only once.
 	closeOnce sync.Once
+	// workers owns pipe generations and any running asynchronous transfer.
+	// Add is serialized with closing under mu; the handler waits after Close.
+	workers sync.WaitGroup
 	// cacheReuseReady is closed by the owning handler after all work from this
 	// tunnel generation has stopped. A cached backend must not execute commands
 	// for its next client before this barrier, or stale pipes can access the
@@ -956,21 +959,37 @@ func (t *tunnel) setError(err error) {
 
 // kickoff starts up the tunnel
 func (t *tunnel) kickoff() error {
-	csp, scp := t.getPipes()
+	t.mu.Lock()
+	if t.mu.closed {
+		t.mu.Unlock()
+		return errPipeClosed
+	}
+	csp, scp := t.mu.csp, t.mu.scp
+	t.workers.Add(2)
+	t.mu.Unlock()
+	// Neither direction may process traffic until both are running. In
+	// particular, an immediate QUIT must not cache the backend before s2c can
+	// be paused. The gate exists only while this generation starts.
+	ready := make(chan struct{})
+	defer close(ready)
 	go func() {
-		if err := csp.kickoff(t.ctx, scp); err != nil {
+		defer t.workers.Done()
+		if err := csp.kickoff(t.ctx, scp, ready); err != nil {
 			t.reportPipeError(err, codeClientDisconnect)
 		}
 	}()
 	go func() {
-		if err := scp.kickoff(t.ctx, csp); err != nil {
+		defer t.workers.Done()
+		if err := scp.kickoff(t.ctx, csp, ready); err != nil {
 			t.reportPipeError(err, codeServerDisconnect)
 		}
 	}()
 	if err := csp.waitReady(t.ctx); err != nil {
+		_ = t.Close()
 		return err
 	}
 	if err := scp.waitReady(t.ctx); err != nil {
+		_ = t.Close()
 		return err
 	}
 	return nil
@@ -1175,6 +1194,16 @@ func (t *tunnel) doReplaceConnection(ctx context.Context, sync bool) error {
 
 // transfer transfers the serverConn of tunnel to a new one.
 func (t *tunnel) transfer(ctx context.Context) error {
+	t.mu.Lock()
+	if t.mu.closed {
+		t.mu.Unlock()
+		t.finishTransferAttempt()
+		return errPipeClosed
+	}
+	t.workers.Add(1)
+	t.mu.Unlock()
+	defer t.workers.Done()
+
 	t.counterSet.connMigrationRequested.Add(1)
 	// Must check if it is safe to start the transfer.
 	if _, ok := t.admitTransfer(false); !ok {
@@ -1192,6 +1221,8 @@ func (t *tunnel) transfer(ctx context.Context) error {
 
 	ctx, cancel := context.WithTimeoutCause(ctx, defaultTransferTimeout, moerr.CauseTransfer)
 	defer cancel()
+	stopCancel := context.AfterFunc(t.ctx, cancel)
+	defer stopCancel()
 
 	csp, scp := t.getPipes()
 	// Pause pipes before the transfer.
@@ -1307,10 +1338,6 @@ func (t *tunnel) Close() error {
 		if t.ctxCancel != nil {
 			t.ctxCancel()
 		}
-		// Close the event channels.
-		close(t.reqC)
-		// close(t.respC)
-
 		// cc.Close() just only close the raw net connection, and it
 		// is closed in goetty module, so do NOT need to close it here:
 		// cc, sc := t.getConns()
@@ -1399,7 +1426,7 @@ func (t *tunnel) newPipe(name string, src, dst *MySQLConn) *pipe {
 }
 
 // kickoff starts up the pipe and the data would flow in it.
-func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
+func (p *pipe) kickoff(ctx context.Context, peer *pipe, ready <-chan struct{}) (e error) {
 	start := func() (bool, error) {
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -1570,6 +1597,13 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		return err
 	}
 	defer finish()
+	if ready != nil {
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 
 	for ctx.Err() == nil {
 		if p.name == pipeServerToClient && p.syncTransferArmed {
@@ -1601,7 +1635,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			}
 		}
 
-		handled, err := p.src.sendTo(p.dst)
+		handled, err := p.src.sendTo(ctx, p.dst)
 		if err != nil {
 			// finish publishes the terminal pipe state before waking a waiter.
 			// A failed write must not look like a successfully drained claim.
@@ -1793,43 +1827,6 @@ func (p *pipe) seal() error {
 	}
 	if p.mu.cond != nil {
 		p.mu.cond.Broadcast()
-	}
-	return nil
-}
-
-// waitStopped joins a pipe after seal. Unlike pause, a closed pipe is a valid
-// terminal state here and can never be restarted by a later generation.
-func (p *pipe) waitStopped(ctx context.Context) error {
-	if p == nil {
-		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if !p.mu.started {
-		return nil
-	}
-	if p.mu.cond == nil {
-		return errPipeClosed
-	}
-	stopCtxWatcher := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			p.mu.Lock()
-			p.mu.cond.Broadcast()
-			p.mu.Unlock()
-		case <-stopCtxWatcher:
-		}
-	}()
-	defer close(stopCtxWatcher)
-	for p.mu.started {
-		if ctx.Err() != nil {
-			return context.Cause(ctx)
-		}
-		p.mu.cond.Wait()
 	}
 	return nil
 }

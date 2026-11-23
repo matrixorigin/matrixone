@@ -41,12 +41,32 @@ func LoadColumnsData(
 	policy fileservice.Policy,
 ) (dataMeta objectio.ObjectDataMeta, release func(), fromCache bool, err error) {
 	var meta objectio.ObjectMeta
-	var vectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
-	name := location.Name().UnsafeString()
 	dataMeta = meta.MustGetMeta(objectio.SchemaData)
+	release, fromCache, err = LoadColumnsDataFromMeta(
+		ctx, dataMeta, columns, typs, fs, location, cacheVectors, m, policy,
+	)
+	return
+}
+
+// LoadColumnsDataFromMeta reads columns using the already loaded data metadata
+// for location. Its release and cache-vector ownership are the same as
+// LoadColumnsData.
+func LoadColumnsDataFromMeta(
+	ctx context.Context,
+	dataMeta objectio.ObjectDataMeta,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	cacheVectors containers.Vectors,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (release func(), fromCache bool, err error) {
+	var vectors fileservice.IOVector
+	name := location.Name().UnsafeString()
 	if vectors, err = objectio.ReadOneBlock(
 		ctx,
 		&dataMeta,
