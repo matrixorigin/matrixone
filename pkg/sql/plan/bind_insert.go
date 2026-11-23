@@ -47,6 +47,10 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// particular, a non-empty ODKU list still selects UPDATE while its input and
 	// assignment conversions use the IGNORE policy.
 	builder.isInsertIgnore = stmt.IsIgnore()
+	// The statement this builder owns is a write: shared expression binding
+	// must route conversion policy from this statement kind (also true while
+	// PREPARE builds the same write plan), not from the outer process profile.
+	builder.isBindingDMLWrite = true
 	// Keep the planner-owned assignment stream structurally independent from the
 	// AST so later plan rewrites cannot resize the statement's mutable slice.
 	astUpdateExprs := slices.Clone(stmt.GetOnDuplicateUpdate())

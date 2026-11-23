@@ -29,6 +29,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,6 +180,276 @@ func TestIssue31816InnerCastPrecisionThroughDML(t *testing.T) {
 			execOK(t, "insert into issue_31816_inner.txt select 3, v from (select cast(x'41' as decimal(5,1)) as v) s")
 			require.Equal(t, "65.0", valueOf(t, "plain_typed",
 				"select s from issue_31816_inner.txt where id = 3"))
+		})
+
+		typedMysql := func(t *testing.T, name string, err error, want ...string) {
+			t.Helper()
+			require.Error(t, err, name)
+			var merr *mysql.MySQLError
+			require.ErrorAs(t, err, &merr, name)
+			require.EqualValues(t, 20301, merr.Number, name)
+			for _, w := range want {
+				require.Contains(t, merr.Message, w, name)
+			}
+		}
+
+		t.Run("prepared_writes_keep_ignore_and_strict_policy", func(t *testing.T) {
+			freshWide(t, "")
+			execOK(t, "set session sql_mode='STRICT_TRANS_TABLES'")
+			stmtInsVals, perr := conn.PrepareContext(rootCtx,
+				"insert ignore into issue_31816_inner.wide values (1, cast(0x1000 as decimal(4,1)))")
+			require.NoError(t, perr, "prep_ins_vals_ignore")
+			defer stmtInsVals.Close()
+			_, xerr := stmtInsVals.ExecContext(rootCtx)
+			require.NoError(t, xerr, "exec_ins_vals_ignore")
+			require.Equal(t, []string{"1264"}, warnCodes(t, "prep_ins_vals_ignore"),
+				"a prepared INSERT IGNORE keeps the single out-of-range warning")
+			require.Equal(t, "999.90", valueOf(t, "prep_ins_vals_ignore",
+				"select d from issue_31816_inner.wide where id = 1"))
+
+			freshWide(t, "")
+			stmtInsSel, perr := conn.PrepareContext(rootCtx,
+				"insert ignore into issue_31816_inner.wide select 1, v from (select cast(0x1000 as decimal(4,1)) as v) s")
+			require.NoError(t, perr, "prep_ins_sel_ignore")
+			defer stmtInsSel.Close()
+			_, xerr = stmtInsSel.ExecContext(rootCtx)
+			require.NoError(t, xerr, "exec_ins_sel_ignore")
+			require.Equal(t, []string{"1264"}, warnCodes(t, "prep_ins_sel_ignore"))
+			require.Equal(t, "999.90", valueOf(t, "prep_ins_sel_ignore",
+				"select d from issue_31816_inner.wide where id = 1"))
+
+			freshWide(t, "12.30")
+			stmtUpd, perr := conn.PrepareContext(rootCtx,
+				"update ignore issue_31816_inner.wide set d = cast(0x1000 as decimal(4,1)) where id = 1")
+			require.NoError(t, perr, "prep_upd_ignore")
+			defer stmtUpd.Close()
+			_, xerr = stmtUpd.ExecContext(rootCtx)
+			require.NoError(t, xerr, "exec_upd_ignore")
+			require.Equal(t, []string{"1264"}, warnCodes(t, "prep_upd_ignore"))
+			require.Equal(t, "999.90", valueOf(t, "prep_upd_ignore",
+				"select d from issue_31816_inner.wide where id = 1"))
+
+			// The ordinary strict prepared write itself rejects at the inner
+			// bound, whether the typed profile surfaces at PREPARE or at
+			// EXECUTE, and the prior row stays intact.
+			var strictErr error
+			stmtStrict, perr := conn.PrepareContext(rootCtx,
+				"insert into issue_31816_inner.wide select 2, v from (select cast(0x1000 as decimal(4,1)) as v) s")
+			if perr != nil {
+				strictErr = perr
+			} else {
+				defer stmtStrict.Close()
+				_, strictErr = stmtStrict.ExecContext(rootCtx)
+			}
+			typedMysql(t, "prep_strict_write", strictErr, "4096", "Decimal64(4,1)", "beyond the range")
+			require.Equal(t, "999.90", valueOf(t, "prep_strict_prior_row",
+				"select d from issue_31816_inner.wide where id = 1"),
+				"the rejected prepared strict write must preserve the prior row")
+		})
+
+		t.Run("stored_view_rebind_keeps_released_coefficient_value", func(t *testing.T) {
+			execOK(t, "drop view if exists issue_31816_inner.vx")
+			execOK(t, "create view issue_31816_inner.vx as select cast(X'41' as decimal(4,4)) as vcol")
+			require.Equal(t, "0.0065", valueOf(t, "view_released_coefficient",
+				"select vcol from issue_31816_inner.vx"),
+				"a stored view definition rebinds with the released coefficient semantics")
+			require.Equal(t, "65.0000", valueOf(t, "direct_magnitude_control",
+				"select cast(X'41' as decimal(6,4))"),
+				"the interactive explicit query keeps the magnitude semantics")
+			var narrow sql.NullString
+			serr := conn.QueryRowContext(rootCtx, "select cast(X'41' as decimal(4,4))").Scan(&narrow)
+			typedMysql(t, "direct_narrow_error_control", serr, "65", "Decimal64(4,4)", "beyond the range")
+			execOK(t, "drop view issue_31816_inner.vx")
+		})
+
+		t.Run("folded_constant_keeps_not_null_metadata", func(t *testing.T) {
+			execOK(t, "drop table if exists issue_31816_inner.ctas_fold")
+			execOK(t, "create table issue_31816_inner.ctas_fold as select cast(X'41' as decimal(5,1)) as c, null as n")
+			var cNullable, nNullable string
+			query := "select is_nullable from information_schema.columns where table_schema='issue_31816_inner' and table_name='ctas_fold' and column_name="
+			require.NoError(t, conn.QueryRowContext(rootCtx, query+"'c'").Scan(&cNullable))
+			require.Equal(t, "NO", cNullable, "a provably non-null folded constant must create a NOT NULL CTAS column")
+			require.NoError(t, conn.QueryRowContext(rootCtx, query+"'n'").Scan(&nNullable))
+			require.Equal(t, "YES", nNullable, "the nullable control column must stay nullable")
+			rows, rerr := conn.QueryContext(rootCtx, "select cast(X'41' as decimal(5,1))")
+			require.NoError(t, rerr, "fold_metadata_query")
+			defer rows.Close()
+			cols, cerr := rows.ColumnTypes()
+			require.NoError(t, cerr, "fold_metadata_columns")
+			if len(cols) > 0 {
+				nullable, okAny := cols[0].Nullable()
+				t.Logf("issue31816 fold_metadata driver nullable=%v supported=%v", nullable, okAny)
+			}
+			require.NoError(t, rows.Err(), "fold_metadata_rows")
+		})
+
+		t.Run("stored_view_bytes_preserve_source_pinned_legacy_shape", func(t *testing.T) {
+			execOK(t, "drop view if exists issue_31816_inner.vx")
+			execOK(t, "create view issue_31816_inner.vx as select cast(X'41' as decimal(4,4)) as vcol")
+			// The released v4.2.8/hotfix writer marshalled ViewData{Stmt,
+			// DefaultDatabase, SQLMode, SecurityType} (pkg/sql/plan/
+			// build_ddl.go:215 at tag v4.2.8-hotfix-20261119); the current
+			// writer adds later fields but the stored statement itself is
+			// the preserved legacy payload. Read the catalog bytes back
+			// through the normal current storage and pin the statement text.
+			var createSQL sql.NullString
+			serr := conn.QueryRowContext(rootCtx,
+				"select rel_createsql from mo_catalog.mo_tables where relname = 'vx'").Scan(&createSQL)
+			require.NoError(t, serr, "stored_view_bytes")
+			require.True(t, createSQL.Valid, "stored_view_bytes_present")
+			require.Contains(t, strings.ToLower(createSQL.String), "cast(x'41' as decimal(4,4))",
+				"the catalog bytes must preserve the released source statement")
+			t.Logf("issue31816 legacy_viewdata_stmt=%q", createSQL.String)
+			require.Equal(t, "0.0065", valueOf(t, "legacy_rebind_coefficient",
+				"select vcol from issue_31816_inner.vx"))
+			execOK(t, "drop view issue_31816_inner.vx")
+		})
+
+		t.Run("delete_predicate_keeps_prior_write_conversion", func(t *testing.T) {
+			freshWide(t, "")
+			execOK(t, "insert into issue_31816_inner.wide values (1, 999.90), (2, 5.00)")
+			execOK(t, "set session sql_mode=''")
+			execOK(t, "delete from issue_31816_inner.wide where d = cast(0x1000 as decimal(4,1))")
+			require.Equal(t, []string{"1264", "1264"}, warnCodes(t, "del_radix_loose"),
+				"a loose DELETE predicate keeps the write conversion's established out-of-range warning for each scanned row (two rows here)")
+			require.Equal(t, "5.00", valueOf(t, "del_radix_loose_kept",
+				"select d from issue_31816_inner.wide where id = 2"),
+				"the non-matching control row must survive the clipped predicate delete")
+			var rows int
+			require.NoError(t, conn.QueryRowContext(rootCtx,
+				"select count(*) from issue_31816_inner.wide where id = 1").Scan(&rows))
+			require.Zero(t, rows, "the 999.90 row matches the clipped 999.9 predicate and is deleted")
+			execOK(t, "set session sql_mode='STRICT_TRANS_TABLES'")
+			freshWide(t, "")
+			execOK(t, "insert into issue_31816_inner.wide values (1, 999.90), (2, 5.00)")
+			requireTypedInnerOverflow(t, "del_radix_strict", execErr(t,
+				"delete from issue_31816_inner.wide where d = cast(0x1000 as decimal(4,1))",
+				"del_radix_strict"))
+			require.Equal(t, "999.90", valueOf(t, "del_radix_strict_kept",
+				"select d from issue_31816_inner.wide where id = 1"),
+				"the rejected strict DELETE must preserve every prior row")
+		})
+
+		t.Run("replace_writes_keep_prior_write_conversion", func(t *testing.T) {
+			freshWide(t, "")
+			execOK(t, "set session sql_mode='STRICT_TRANS_TABLES'")
+			requireTypedInnerOverflow(t, "rep_radix_strict", execErr(t,
+				"replace into issue_31816_inner.wide values (1, cast(0x1000 as decimal(4,1)))",
+				"rep_radix_strict"))
+			var rows int
+			require.NoError(t, conn.QueryRowContext(rootCtx,
+				"select count(*) from issue_31816_inner.wide").Scan(&rows))
+			require.Zero(t, rows, "the rejected strict REPLACE must not write")
+			execOK(t, "set session sql_mode=''")
+			execOK(t, "replace into issue_31816_inner.wide values (1, cast(0x1000 as decimal(4,1)))")
+			require.Equal(t, []string{"1264"}, warnCodes(t, "rep_radix_loose"))
+			require.Equal(t, "999.90", valueOf(t, "rep_radix_loose",
+				"select d from issue_31816_inner.wide where id = 1"))
+			execOK(t, "set session sql_mode='STRICT_TRANS_TABLES'")
+		})
+	})
+}
+
+// The folded-constant wire/CTAS oracle runs in its own bounded test: the
+// shared write-policy fixture keeps one 300-second root context for its own
+// subtests, and the direct-protocol oracle pair (DECIMAL64 + DECIMAL128
+// folds, CTAS metadata for both classes, ordinary-literal and NULL controls)
+// deserves its own equally bounded lifecycle instead of overflowing the
+// write fixture's budget.
+func TestIssue31816FoldedMetadataWireOracle(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		rootCtx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", port))
+		require.NoError(t, err)
+		defer db.Close()
+		defer func() {
+			dropCtx, dropCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer dropCancel()
+			if _, derr := db.ExecContext(dropCtx, "drop database if exists issue_31816_inner"); derr != nil {
+				t.Errorf("issue31816 fold cleanup drop failed: %v", derr)
+			}
+		}()
+		conn, err := db.Conn(rootCtx)
+		require.NoError(t, err)
+		defer conn.Close()
+		execOK := func(t *testing.T, stmt string) {
+			t.Helper()
+			_, err := conn.ExecContext(rootCtx, stmt)
+			require.NoError(t, err)
+		}
+		valueOf := func(t *testing.T, name, query string) string {
+			t.Helper()
+			var v sql.NullString
+			require.NoError(t, conn.QueryRowContext(rootCtx, query).Scan(&v), name)
+			return v.String
+		}
+		execOK(t, "create database if not exists issue_31816_inner")
+		t.Run("folded_metadata_wire_and_decimal128_oracles", func(t *testing.T) {
+			rows, rerr := conn.QueryContext(rootCtx, "select cast(X'41' as decimal(5,1))")
+			require.NoError(t, rerr, "wire_query")
+			defer rows.Close()
+			cols, cerr := rows.ColumnTypes()
+			require.NoError(t, cerr, "wire_columns")
+			require.Len(t, cols, 1, "wire_column_count")
+			nullable, okAny := cols[0].Nullable()
+			require.True(t, okAny, "wire_nullable_supported")
+			require.False(t, nullable, "the folded radix constant wire metadata must report NOT NULL")
+			require.Contains(t, cols[0].DatabaseTypeName(), "DECIMAL", "wire_type_name")
+			require.True(t, rows.Next(), "wire_row")
+			var direct sql.NullString
+			require.NoError(t, rows.Scan(&direct))
+			require.Equal(t, "65.0", direct.String, "wire_value")
+			require.NoError(t, rows.Err(), "wire_rows")
+			rows.Close()
+
+			// The DECIMAL128 fold branch gets its own direct wire oracle so
+			// both constant classes prove value, type and NOT NULL at the
+			// real MySQL-protocol consumer.
+			rows128, r128err := conn.QueryContext(rootCtx, "select cast(0xf4240 as decimal(20,4)) as w128")
+			require.NoError(t, r128err, "wire128_query")
+			defer rows128.Close()
+			cols128, c128err := rows128.ColumnTypes()
+			require.NoError(t, c128err, "wire128_columns")
+			require.Len(t, cols128, 1, "wire128_column_count")
+			nullable128, ok128 := cols128[0].Nullable()
+			require.True(t, ok128, "wire128_nullable_supported")
+			require.False(t, nullable128, "wire128_nullable")
+			require.Contains(t, cols128[0].DatabaseTypeName(), "DECIMAL", "wire128_type_name")
+			require.True(t, rows128.Next(), "wire128_row")
+			var direct128 sql.NullString
+			require.NoError(t, rows128.Scan(&direct128))
+			require.Equal(t, "1000000.0000", direct128.String, "wire128_value")
+			require.NoError(t, rows128.Err(), "wire128_rows")
+
+			// The shared test connection serializes one open result set at a
+			// time: the wire rows are closed above and the DECIMAL128 rows
+			// close here before the CTAS statements below.
+			rows128.Close()
+
+			execOK(t, "drop table if exists issue_31816_inner.ctas_wire")
+			execOK(t, "create table issue_31816_inner.ctas_wire as select cast(X'41' as decimal(5,1)) as c64, cast(0xf4240 as decimal(20,4)) as w128, cast(65 as decimal(5,1)) as oc, null as n")
+			query := "select is_nullable, data_type from information_schema.columns where table_schema='issue_31816_inner' and table_name='ctas_wire' and column_name="
+			var nullableFlag, typeStr string
+			for _, tc := range []struct{ col, wantNullable string }{{"c64", "NO"}, {"w128", "NO"}, {"oc", "NO"}, {"n", "YES"}} {
+				require.NoError(t, conn.QueryRowContext(rootCtx, query+"'"+tc.col+"'").Scan(&nullableFlag, &typeStr), tc.col)
+				require.Equal(t, tc.wantNullable, nullableFlag, tc.col)
+				t.Logf("issue31816 ctas_%s type=%v", tc.col, typeStr)
+			}
+			require.Equal(t, "65.0", valueOf(t, "ctas_c64_row", "select c64 from issue_31816_inner.ctas_wire"))
+			require.Equal(t, "1000000.0000", valueOf(t, "ctas_w128_row", "select w128 from issue_31816_inner.ctas_wire"))
+			require.Equal(t, "65.0", valueOf(t, "ctas_oc_row", "select oc from issue_31816_inner.ctas_wire"))
+			rows2, r2err := conn.QueryContext(rootCtx, "select n from issue_31816_inner.ctas_wire")
+			require.NoError(t, r2err, "ctas_null_query")
+			defer rows2.Close()
+			require.True(t, rows2.Next(), "ctas_null_row")
+			var nullCell sql.NullString
+			require.NoError(t, rows2.Scan(&nullCell))
+			require.False(t, nullCell.Valid, "the NULL control cell must stay NULL through CTAS")
+			require.NoError(t, rows2.Err(), "ctas_null_rows")
 		})
 	})
 }

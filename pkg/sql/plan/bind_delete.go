@@ -197,6 +197,14 @@ func (builder *QueryBuilder) normalizeDeleteOldValueProjectionAtNode(
 }
 
 func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, bindCtx *BindContext) (int32, error) {
+	// Mirror the INSERT/UPDATE forward path: the old radix-cast routing keyed
+	// on the process's DML profile, whose scope includes Delete.GetQueryType
+	// = DML. Record the same statement-kind provenance here so a reachable
+	// DELETE predicate keeps the prior write conversion (loose sessions clip
+	// with the established warning; strict sessions reject at the cast's own
+	// bound) instead of narrowing into scalar range rejection. DELETE has no
+	// statement-ignore bit in that routing, so none is recorded.
+	builder.isBindingDMLWrite = true
 	if len(stmt.Tables) != 1 {
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
 	}

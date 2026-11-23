@@ -221,7 +221,8 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
-		if types.T(typ.Id).IsDecimal() && !b.persistedFormatCompatibility {
+		if types.T(typ.Id).IsDecimal() && !b.persistedFormatCompatibility &&
+			!(b.ctx != nil && b.ctx.restoreViewMySQLSpecialTypes) {
 			// #31816: an explicit CAST is the same keyword boundary a direct
 			// assignment is, so a syntax-owned HEX/BIT literal operand has
 			// MySQL's unsigned integer value here too. Bind its bounded
@@ -237,22 +238,29 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			// policy in each checked mode (that policy is upstream-owned
 			// and untouched).
 			//
-			// Persisted-expression routes are deliberately out of scope:
-			// bindPersistedExpr (pkg/sql/plan/persisted_format.go) sets
-			// persistedFormatCompatibility while binding DEFAULT, ON
-			// UPDATE, generated, CHECK, functional-index and table-dump
-			// definitions, and those routes keep the historical
-			// coefficient binding so that a valid schema of any authoring
-			// era - including definitions published by prepatch planner
-			// builds - rebinds to the same bound tree; the frontend's
-			// export (pkg/frontend/table_dump.go:1306) and restored-dump
-			// verification (:1744) then accept genuine old schemas, while
-			// the dump analysis itself still rejects mismatched or
-			// corrupted manifests. The operand must itself be the radix
-			// literal (transparent parentheses are unwrapped), so opaque
-			// binary sources, columns, parameters, stored expressions and
-			// every non-DECIMAL target keep their existing binding
-			// unchanged.
+			// Persisted-expression and stored-view routes are deliberately
+			// out of scope: bindPersistedExpr (pkg/sql/plan/
+			// persisted_format.go) sets persistedFormatCompatibility while
+			// binding DEFAULT, ON UPDATE, generated, CHECK, functional-index
+			// and table-dump definitions, and a stored view's rebind carries
+			// its BindContext's restoreViewMySQLSpecialTypes. That flag is the
+			// persisted-view routing mark: view expansion sets it directly and
+			// the view-schema memo and select-building callers carry it
+			// (build/bindCtx wiring), with child contexts inheriting it. Both
+			// routes keep the historical coefficient binding so that a
+			// valid schema of any authoring era - including definitions
+			// published by prepatch planner builds, and stored views
+			// created before this change such as the released
+			// SELECT CAST(X'41' AS DECIMAL(4,4)) - rebinds to the same
+			// bound tree and keeps serving its recorded values; the
+			// frontend's export (pkg/frontend/table_dump.go:1306) and
+			// restored-dump verification (:1744) then accept genuine old
+			// schemas, while the dump analysis itself still rejects
+			// mismatched or corrupted manifests. The operand must itself
+			// be the radix literal (transparent parentheses are
+			// unwrapped), so opaque binary sources, columns, parameters,
+			// stored expressions and every non-DECIMAL target keep their
+			// existing binding unchanged.
 			if src := decimalRadixAssignmentSource(exprImpl.Expr); src != nil {
 				// Normalize only the radix operand's magnitude. The explicit
 				// CAST keeps its own declared precision and scale: a magnitude
@@ -271,10 +279,16 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 						if types.T(typ.Id) == types.T_decimal64 {
 							if d, perr := types.ParseDecimal64(digits, typ.Width, typ.Scale); perr == nil {
 								expr = MakePlan2Decimal64ExprWithType(d, &typ)
+								// A folded magnitude constant can never be
+								// NULL: keep NOT NULL metadata for inquiry
+								// results and CTAS columns, matching the
+								// ordinary literal cast convention.
+								expr.Typ.NotNullable = true
 								return
 							}
 						} else if d, perr := types.ParseDecimal128(digits, typ.Width, typ.Scale); perr == nil {
 							expr = MakePlan2Decimal128ExprWithType(d, &typ)
+							expr.Typ.NotNullable = true
 							return
 						}
 					}
@@ -288,13 +302,15 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				// sessions keep the established single out-of-range warning
 				// and the clipped value. Outside DML a standalone query keeps
 				// the typed overflow rejection over the magnitude operand.
-				if b.builder != nil && b.builder.compCtx != nil {
-					if proc := b.builder.compCtx.GetProcess(); proc != nil && proc.IsDMLStatement() {
-						// Statement-ignore provenance: INSERT IGNORE and
-						// UPDATE IGNORE each record their own bit on the
-						// builder (bindInsert/bindUpdate forward paths), so
-						// the shared radix cast uses whichever write is
-						// actually being bound.
+				if b.builder != nil && b.builder.isBindingDMLWrite && b.builder.compCtx != nil {
+					if proc := b.builder.compCtx.GetProcess(); proc != nil {
+						// The statement actually being bound is a write
+						// (bindInsert/bindUpdate forward paths record the
+						// kind on the builder, also when PREPARE builds the
+						// same write plan), so this cast rides the write's
+						// own conversion policy instead of the outer process
+						// profile. Statement-ignore provenance: INSERT IGNORE
+						// and UPDATE IGNORE each record their own bit.
 						statementIgnore := b.builder.isInsertIgnore || b.builder.isUpdateIgnore
 						expr, err = forceAssignmentCastExprWithProcess(
 							b.GetContext(), src, typ, statementIgnore, proc)

@@ -30,6 +30,11 @@ import (
 )
 
 func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContext) (int32, error) {
+	// The old radix-cast routing keyed on the process's DML profile, whose
+	// scope includes REPLACE. Record the same statement-kind provenance so a
+	// reachable REPLACE expression keeps the prior write conversion instead
+	// of narrowing into scalar range rejection.
+	builder.isBindingDMLWrite = true
 	dmlCtx := NewDMLContext()
 	// REPLACE has its own conflict handling; bypass the generic FK table rejection
 	// in ResolveTables so FK tables can use the modern operator-based path.
