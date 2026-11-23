@@ -141,7 +141,7 @@ func TestParameterizedPreparedPlanningUsesOrdinaryResolver(t *testing.T) {
 	defer stmt.Free()
 
 	proc := compiler.GetProcess()
-	params := vector.NewVec(types.T_varchar.ToType())
+	params := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer func() {
 		proc.SetPrepareParams(nil)
 		params.Free(proc.Mp())

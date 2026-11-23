@@ -48,7 +48,7 @@ func TestTopNullHeapRootNeverPublishes(t *testing.T) {
 			if tc.varlen {
 				typ = types.T_varbinary.ToType()
 			}
-			vec := vector.NewVec(typ)
+			vec := vector.NewVec(typ, mp)
 			defer vec.Free(mp)
 			if tc.varlen {
 				require.NoError(t, vector.AppendBytes(vec, nil, true, mp))

@@ -147,10 +147,10 @@ func newTestMaterializedSnapshotPartitionState(
 	t.Helper()
 
 	pState := logtailreplay.NewPartitionState("", false, 42, false)
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	idVec := vector.NewVec(types.T_int64.ToType())
-	payloadVec := vector.NewVec(types.T_int64.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
+	payloadVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer rowIDVec.Free(mp)
 	defer tsVec.Free(mp)
 	defer idVec.Free(mp)
@@ -193,7 +193,7 @@ func collectMaterializedSnapshotInt64Column(
 	out := batch.NewWithSize(len(attrs))
 	out.SetAttributes(attrs)
 	for i := range attrs {
-		out.Vecs[i] = vector.NewVec(colTypes[i])
+		out.Vecs[i] = vector.NewVec(colTypes[i], mp)
 	}
 	defer out.Clean(mp)
 

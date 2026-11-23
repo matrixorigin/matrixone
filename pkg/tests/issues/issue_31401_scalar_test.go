@@ -68,7 +68,11 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 	for _, mode := range []string{"ordinary", "pk", "allocator", "prepared", "defaults", "other_account", "broad_index", "initial_snapshot", "late_snapshot", "initial_pitr", "late_pitr", "late_branch", "tenant_snapshot", "upgrade_conflict", "initial_fk", "late_fk"} {
 		t.Run(mode, func(t *testing.T) {
 			runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-				fixture = cluster
+				if fixture != cluster {
+					// A failed subtest can replace the shared cluster generation.
+					fixture = cluster
+					systemSourceOwned, peerOwned = false, false
+				}
 				cn, err := cluster.GetCNService(0)
 				require.NoError(t, err)
 				t.Logf("embedded owner pid=%d config=%s/cn-0.toml data=%s", os.Getpid(), cn.GetServiceConfig().DataDir, cn.GetServiceConfig().DataDir)
@@ -107,30 +111,28 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 						// A failed child operation may still have an unknown result.
 						// The failed fixture owns shutdown instead of another parent DDL.
 						if !t.Failed() {
-							_ = cleanupSQL(sys.ExecContext, 20*time.Second, "drop account if exists issue31401_scalar")
+							// DROP ACCOUNT drops every tenant system table and
+							// database serially; under CI contention single
+							// steps take seconds, so 20s was not enough.
+							_ = cleanupSQL(sys.ExecContext, 2*time.Minute, "drop account if exists issue31401_scalar")
 						}
 					}()
 					db, err = sql.Open("mysql", fmt.Sprintf("issue31401_scalar#admin#accountadmin:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 					require.NoError(t, err)
 					defer db.Close()
 				}
-				var tenantSourceOwned bool
-				defer func() {
-					if tenantSourceOwned {
-						_ = cleanupSQL(db.ExecContext, 10*time.Second, "drop database if exists "+source)
-					}
-				}()
-				// The next selected child already resets both databases. Keep
-				// system resources until that reset, then clean the final pair once.
-				// Tenant source cleanup still precedes its dependent DROP ACCOUNT.
+				// Reset the source per mode. Reuse the system peer after each
+				// successful TRUNCATE, then clean owned system databases once.
+				// DROP ACCOUNT owns removal of the tenant's source database.
 				resetIssue277xxDatabase(t, ctx, db, source)
-				if tenant {
-					tenantSourceOwned = true
-				} else {
+				if !tenant {
 					systemSourceOwned = true
 				}
-				resetIssue277xxDatabase(t, ctx, sys, peer)
-				peerOwned = true
+				initializePeer := !peerOwned
+				if initializePeer {
+					resetIssue277xxDatabase(t, ctx, sys, peer)
+					peerOwned = true
+				}
 				definition := "id int,v int"
 				if mode == "pk" || mode == "other_account" || strings.HasSuffix(mode, "fk") || mode == "late_branch" {
 					definition = "id int primary key,v int"
@@ -177,7 +179,12 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 				if strings.HasPrefix(mode, "initial_") && mode != "initial_fk" || mode == "tenant_snapshot" {
 					protect()
 				}
-				execSQLRequire(t, ctx, sys, "create table "+peer+".t(id int)")
+				if initializePeer {
+					execSQLRequire(t, ctx, sys, "create table "+peer+".t(id int)")
+				} else {
+					// Each successful mode has joined its peer TRUNCATE.
+					require.Zero(t, queryIssue277xxInt(t, ctx, sys, "select count(*) from "+peer+".t"))
+				}
 				execSQLRequire(t, ctx, sys, "insert into "+peer+".t values(1)")
 				var registryID uint64
 				require.NoError(t, sys.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_feature_registry'").Scan(&registryID))

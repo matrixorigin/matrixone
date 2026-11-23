@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,6 +28,19 @@ import (
 )
 
 var allSupportedFunctions [1000]FuncNew
+
+// resultMPool returns the pool a function result allocates through. A result
+// wrapper built on an accounted MPool view charges its account; growing the
+// result vector directly must use that same pool, not proc's, or the charge
+// is lost. The wrapper exposes its pool through MPool() when available.
+func resultMPool(result vector.FunctionResultWrapper, proc *process.Process) *mpool.MPool {
+	if r, ok := result.(interface{ MPool() *mpool.MPool }); ok {
+		if mp := r.MPool(); mp != nil {
+			return mp
+		}
+	}
+	return proc.Mp()
+}
 
 // register all supported functions.
 func initAllSupportedFunctions() {
@@ -1129,7 +1143,7 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 	// The UUID extractors do so for non-RFC-4122 variants, and
 	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
 	case DIV, INTEGER_DIV, MOD,
-		POW, EXP, COT, ACOSH, ATANH,
+		POW, EXP, COT, DEGREES, ACOSH, ATANH,
 		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
 		REGEXP_SUBSTR,
 		INET6_ATON, INET_ATON, INET6_NTOA, ELT, UNHEX, CONV, MAKEDATE,
@@ -1367,10 +1381,7 @@ type executeRetainedBytesOfOverload func() uint64
 // an overload of a function.
 // stores all information about execution logic.
 type overload struct {
-	// dictionaryInput is opt-in: every execution path must use logical reads,
-	// including specialized/native branches and parameter wrapper raw access.
-	dictionaryInput func([]*vector.Vector) bool
-	overloadId      int
+	overloadId int
 
 	// args records some type information about this overload.
 	// in most case, it records, in order, which parameter types the overload required.
@@ -1424,12 +1435,6 @@ type overload struct {
 	rowScopedDiagnostics bool
 	// if realTimeRelated, overload cannot be folded when `Prepare`.
 	realTimeRelated bool
-}
-
-// DictionaryInputCapability admits only proven runtime argument shapes.
-// A nil capability requires explicit executor-owned normalization.
-func (ov *overload) DictionaryInputCapability() func([]*vector.Vector) bool {
-	return ov.dictionaryInput
 }
 
 // IsVolatile retains the legacy conservative evaluation policy. For value

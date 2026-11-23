@@ -2240,7 +2240,7 @@ func TestEncodeRowCoversManyTypes(t *testing.T) {
 	vecs := make([]*vector.Vector, len(specs))
 	indexes := make([]int, len(specs))
 	for i, spec := range specs {
-		vec := vector.NewVec(spec.typ)
+		vec := vector.NewVec(spec.typ, mp)
 		spec.append(vec)
 		vecs[i] = vec
 		indexes[i] = i
@@ -2283,14 +2283,14 @@ func collectInt64EncodedKeys(t *testing.T, bh BranchHashmap) map[int64][]byte {
 
 func buildInt64Vector(tb testing.TB, mp *mpool.MPool, values []int64) *vector.Vector {
 	tb.Helper()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(tb, vector.AppendFixedList(vec, values, nil, mp))
 	return vec
 }
 
 func buildStringVector(tb testing.TB, mp *mpool.MPool, values []string) *vector.Vector {
 	tb.Helper()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, v := range values {
 		require.NoError(tb, vector.AppendBytes(vec, []byte(v), false, mp))
 	}
@@ -2299,14 +2299,14 @@ func buildStringVector(tb testing.TB, mp *mpool.MPool, values []string) *vector.
 
 func buildInt32Vector(tb testing.TB, mp *mpool.MPool, values []int32) *vector.Vector {
 	tb.Helper()
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(tb, vector.AppendFixedList(vec, values, nil, mp))
 	return vec
 }
 
 func buildDecimal256Vector(tb testing.TB, mp *mpool.MPool, typ types.Type, values []types.Decimal256) *vector.Vector {
 	tb.Helper()
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	require.NoError(tb, vector.AppendFixedList(vec, values, nil, mp))
 	return vec
 }

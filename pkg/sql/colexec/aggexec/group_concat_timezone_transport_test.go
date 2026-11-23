@@ -16,14 +16,15 @@ package aggexec
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 func TestGroupConcatFinalizationAfterNamedTimeZoneDecode(t *testing.T) {
@@ -45,7 +46,7 @@ func TestGroupConcatFinalizationAfterNamedTimeZoneDecode(t *testing.T) {
 			defer agg.Free()
 			ConfigureGroupConcatTimeZone(agg, session.TimeZone)
 			require.NoError(t, agg.GroupGrow(1))
-			input := vector.NewVec(typ)
+			input := vector.NewVec(typ, mp)
 			defer input.Free(mp)
 			for _, date := range []string{"2024-01-01 00:00:00", "2024-07-01 00:00:00"} {
 				v, err := types.ParseTimestamp(time.UTC, date, 0)
@@ -56,7 +57,7 @@ func TestGroupConcatFinalizationAfterNamedTimeZoneDecode(t *testing.T) {
 			result, err := FlushWithContext(context.Background(), agg)
 			require.NoError(t, err)
 			require.Len(t, result, 1)
-			defer result[0].Free(mp)
+			defer result[0].Free(result[0].MPool())
 			require.Equal(t, test.want, string(result[0].GetBytesAt(0)))
 		})
 	}

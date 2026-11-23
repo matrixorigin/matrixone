@@ -57,8 +57,8 @@ func TestOptimisticRCWriteDependencies(t *testing.T) {
 			require.NoError(t, err)
 			metadata := batch.NewWithSize(2)
 			defer metadata.Clean(mp)
-			metadata.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-			metadata.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+			metadata.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+			metadata.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 			stats := writer.GetObjectStats()
 			require.NoError(t, vector.AppendBytes(metadata.Vecs[1], stats.Marshal(), false, mp))
 			metadata.SetRowCount(1)
@@ -82,7 +82,7 @@ func TestOptimisticRCSpilledDelete(t *testing.T) {
 	mp := tbl.proc.Load().Mp()
 	data := batch.NewWithSize(2)
 	defer data.Clean(mp)
-	data.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	data.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	var err error
 	data.Vecs[1], err = keys.Vecs[0].Dup(mp)
 	require.NoError(t, err)
@@ -99,7 +99,7 @@ func TestOptimisticRCSpilledDelete(t *testing.T) {
 	require.EqualValues(t, 2, stats.BlkCnt())
 	metadata := batch.NewWithSize(1)
 	defer metadata.Clean(mp)
-	metadata.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	metadata.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(metadata.Vecs[0], stats.Marshal(), false, mp))
 	metadata.SetRowCount(1)
 	e := Entry{typ: DELETE, tableId: tbl.tableId, bat: metadata, fileName: "cn-tombstone"}

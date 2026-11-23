@@ -26,7 +26,7 @@ import (
 // lpVec builds a vector of oid (bf16, float16, float8 or float4) from vals.
 func lpVec(t *testing.T, oid types.T, mp *mpool.MPool, vals ...float32) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(oid.ToType())
+	vec := vector.NewVec(oid.ToType(), mp)
 	for _, v := range vals {
 		var err error
 		switch oid {
@@ -53,7 +53,7 @@ func TestAppendFromEntryLowPrecisionFloat(t *testing.T) {
 	for _, oid := range lpTypes {
 		src := lpVec(t, oid, mp, 1.5, 2)
 		require.NoError(t, vector.AppendAny(src, nil, true, mp))
-		dst := vector.NewVec(oid.ToType())
+		dst := vector.NewVec(oid.ToType(), mp)
 		for i := 0; i < 3; i++ {
 			appendFromEntry(src, dst, i, mp)
 		}

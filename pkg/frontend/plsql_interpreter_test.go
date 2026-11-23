@@ -59,7 +59,7 @@ func TestStoredProcedureDecimalVariableEvaluation(t *testing.T) {
 	ses.GetTxnCompileCtx().execCtx = execCtx
 	execCtx.proc.SetResolveVariableFunc(ses.GetTxnCompileCtx().ResolveVariable)
 	execCtx.proc.SetResolveVariableIsBinFunc(ses.GetTxnCompileCtx().ResolveVariableIsBin)
-	execCtx.proc.SetResolveVariableBinaryStringFunc(ses.GetTxnCompileCtx().ResolveVariableBinaryString)
+	execCtx.proc.SetResolveVariableStringDomainFunc(ses.GetTxnCompileCtx().ResolveVariableStringDomain)
 
 	tests := []struct {
 		sql  string
@@ -91,7 +91,7 @@ func TestInterpreterCoercesDecimalDeclarationAndAssignment(t *testing.T) {
 	ses.GetTxnCompileCtx().execCtx = &ExecCtx{reqCtx: ctx, proc: proc, ses: ses}
 	proc.SetResolveVariableFunc(ses.GetTxnCompileCtx().ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.GetTxnCompileCtx().ResolveVariableIsBin)
-	proc.SetResolveVariableBinaryStringFunc(ses.GetTxnCompileCtx().ResolveVariableBinaryString)
+	proc.SetResolveVariableStringDomainFunc(ses.GetTxnCompileCtx().ResolveVariableStringDomain)
 
 	stmt, err := parsers.ParseOne(
 		ctx,
@@ -229,7 +229,7 @@ func TestInterpreterCoercesDecimalParameters(t *testing.T) {
 	ses.GetTxnCompileCtx().execCtx = &ExecCtx{reqCtx: ctx, proc: proc, ses: ses}
 	proc.SetResolveVariableFunc(ses.GetTxnCompileCtx().ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.GetTxnCompileCtx().ResolveVariableIsBin)
-	proc.SetResolveVariableBinaryStringFunc(ses.GetTxnCompileCtx().ResolveVariableBinaryString)
+	proc.SetResolveVariableStringDomainFunc(ses.GetTxnCompileCtx().ResolveVariableStringDomain)
 	require.NoError(t, ses.SetUserDefinedVar("io", "1.10", ""))
 
 	callStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "call p(outer_p, @io, @ov)", 1)

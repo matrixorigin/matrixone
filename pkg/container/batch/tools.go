@@ -15,6 +15,7 @@
 package batch
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
@@ -36,11 +37,13 @@ func BatchToProtoBatch(bat *Batch) (*api.Batch, error) {
 
 }
 
-func ProtoBatchToBatch(bat *api.Batch) (*Batch, error) {
+// ProtoBatchToBatch copies bat into vectors of mp. With a nil mp the vectors
+// are read-only references to bat's buffers.
+func ProtoBatchToBatch(bat *api.Batch, mp *mpool.MPool) (*Batch, error) {
 	rbat := NewWithSize(len(bat.Vecs))
 	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
 	for i, v := range bat.Vecs {
-		vec, err := vector.ProtoVectorToVector(v)
+		vec, err := vector.ProtoVectorToVector(v, mp)
 		if err != nil {
 			return nil, err
 		}

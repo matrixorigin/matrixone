@@ -68,7 +68,7 @@ func NewBitwiseAggregateCast(
 	case types.T_float32:
 		return bitwiseAggregateFloat32ToInt64(from, to, proc, length, selectList)
 	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-		tmp := vector.NewVec(types.T_float32.ToType())
+		tmp := vector.NewVec(types.T_float32.ToType(), proc.Mp())
 		defer tmp.Free(proc.Mp())
 		if err := materializeLowPrecAsFloat32(proc.Ctx, from, tmp, length, proc.Mp()); err != nil {
 			return err
@@ -80,7 +80,7 @@ func NewBitwiseAggregateCast(
 		// A stale prepared plan must not reinterpret a binary packet as a numeric
 		// string. The prepared visitor is responsible for rebinding the aggregate
 		// to the binary domain before this overload can execute.
-		if from.GetIsBin() {
+		if to.ArgumentIsBin(0) {
 			return moerr.NewInternalErrorNoCtx("binary value reached numeric bitwise aggregate cast")
 		}
 		return bitwiseAggregateStringToInt64(from, to, proc, length, selectList)

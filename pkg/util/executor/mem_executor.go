@@ -148,7 +148,7 @@ func appendCols[T any](
 	values []T,
 	mp *mpool.MPool) error {
 
-	col := vector.NewVec(tp)
+	col := vector.NewVec(tp, mp)
 	if err := vector.AppendFixedList(col, values, nil, mp); err != nil {
 		return err
 	}
@@ -163,7 +163,7 @@ func appendBytesCols(
 	values [][]byte,
 	mp *mpool.MPool) error {
 
-	col := vector.NewVec(tp)
+	col := vector.NewVec(tp, mp)
 	for _, v := range values {
 		if err := vector.AppendBytes(col, v[:], false, mp); err != nil {
 			return err
@@ -180,7 +180,7 @@ func appendStringCols(
 	values []string,
 	mp *mpool.MPool) error {
 
-	col := vector.NewVec(tp)
+	col := vector.NewVec(tp, mp)
 	for _, v := range values {
 		if err := vector.AppendBytes(col, []byte(v), false, mp); err != nil {
 			return err

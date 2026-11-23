@@ -80,7 +80,7 @@ func TestGetColDataKeepsEmptyEnumAndSetDistinctFromNull(t *testing.T) {
 						param.Extern.NullMap = map[string][]string{param.Attrs[0].ColName: {tc.val, strings.TrimSpace(tc.val)}}
 					}
 					bat := batch.NewWithSize(1)
-					bat.Vecs[0] = vector.NewVec(vecTyp)
+					bat.Vecs[0] = vector.NewVec(vecTyp, proc.Mp())
 					defer bat.Clean(proc.Mp())
 					require.NoError(t, getColData(bat, []csvparser.Field{field}, 0, param, proc.Mp(), param.Attrs[0], proc))
 					vec := bat.Vecs[0]
@@ -148,7 +148,7 @@ func TestGetColDataKeepsEmptyEnumAndSetDistinctFromNull(t *testing.T) {
 					vecTyp = types.T_varchar.ToType()
 				}
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(vecTyp)
+				bat.Vecs[0] = vector.NewVec(vecTyp, proc.Mp())
 				require.NoError(t, getColData(bat, []csvparser.Field{{Val: tc.val}}, 0, param, proc.Mp(), param.Attrs[0], proc))
 				name := mode + "/" + tc.val
 				require.False(t, bat.Vecs[0].GetNulls().Contains(0), name)
@@ -165,7 +165,7 @@ func TestGetColDataKeepsEmptyEnumAndSetDistinctFromNull(t *testing.T) {
 	// ENUM without a declared '' member keeps the previous behavior (NULL).
 	param := enumSetLoadParam(plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}, "strict")
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_enum.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_enum.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
 	require.NoError(t, getColData(bat, []csvparser.Field{{Val: ""}}, 0, param, proc.Mp(), param.Attrs[0], proc))
 	require.True(t, bat.Vecs[0].GetNulls().Contains(0))

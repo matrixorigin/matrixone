@@ -453,6 +453,9 @@ func appendErrorCategory(err error) string {
 	if err == nil {
 		return ""
 	}
+	if api.IsMemoryLimit(err) {
+		return string(api.ErrPlanningLimitExceeded)
+	}
 	var icebergErr *api.IcebergError
 	if stderrors.As(err, &icebergErr) {
 		return string(icebergErr.Code)

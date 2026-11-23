@@ -15,6 +15,7 @@
 package process
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -185,10 +186,15 @@ func TestExecutionMemoryRefreshPreservesPendingBacking(t *testing.T) {
 			available := uint64(300)
 			var duringSample func()
 			budget.memoryHeadroomProvider = func() (uint64, bool) {
+				observed := available
 				if duringSample != nil {
 					duringSample()
+					duringSample = nil
+					// The captured sample predates the new backing. The
+					// next observation includes its physical cost.
+					available -= 200
 				}
-				return available, true
+				return observed, true
 			}
 			budget.memoryHeadroomSafety = 100
 			budget.memoryHeadroomTTL = time.Second
@@ -401,4 +407,240 @@ func TestExecutionMemoryGrowthParticipantLifecycle(t *testing.T) {
 	require.Zero(t, generation.Snapshot().MemoryGrowthParticipants)
 	_, err = generation.RegisterMemoryGrowthParticipant()
 	require.ErrorIs(t, err, ErrExecutionResourceClosed)
+}
+
+func TestExecutionMemoryAdmissionConfirmsPhysicalHeadroom(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(1000, 800)
+	now := time.Unix(1, 0)
+	samples := 0
+	budget.memoryHeadroomProvider = func() (uint64, bool) {
+		samples++
+		if samples == 1 {
+			return 100, true
+		}
+		return 132, true
+	}
+	budget.memoryHeadroomSafety = 100
+	budget.memoryHeadroomTTL = time.Second
+	budget.memoryHeadroomNow = func() time.Time { return now }
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+
+	first, err := generation.ReserveTransientMemory(8)
+	require.NoError(t, err)
+	defer first.Release()
+
+	// The accounted scan-output path also consumes the confirmed window.
+	registry, err := generation.AllocationAccountRegistry()
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	account, err := registry.OpenWithController(800, generation)
+	require.NoError(t, err)
+	defer func() {
+		_, _, err := registry.CompleteTerminal(account)
+		require.NoError(t, err)
+	}()
+	view, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
+	require.NoError(t, err)
+	lease, err := view.ReservePinnedCapacity(24)
+	require.NoError(t, err)
+	defer lease.Release()
+	require.Equal(t, uint64(32), generation.Used())
+	require.Equal(t, 2, samples)
+	require.Zero(t, generation.Snapshot().RejectCount)
+	require.Equal(t, uint64(2), generation.Snapshot().ReserveCount)
+
+	_, err = generation.ReserveTransientMemory(1)
+	require.ErrorIs(t, err, ErrExecutionResourceAdmission)
+	require.Equal(t, 2, samples, "confirmed headroom cannot be renewed within its window")
+	lease.Release()
+	first.Release()
+	require.Zero(t, generation.Used())
+	require.Zero(t, registry.CommittedCapacity())
+}
+
+func TestExecutionMemoryAdmissionBoundsRejectedConfirmations(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		measured bool
+	}{
+		{name: "persistent pressure", measured: true},
+		{name: "unavailable confirmation"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const workers = 16
+			budget := MustNewExecutionResourceBudget(1000, 800)
+			now := time.Unix(1, 0)
+			samples := 0
+			budget.memoryHeadroomProvider = func() (uint64, bool) {
+				samples++
+				if samples%2 == 1 {
+					return 100, true
+				}
+				return 0, tc.measured
+			}
+			budget.memoryHeadroomSafety = 100
+			budget.memoryHeadroomTTL = time.Second
+			budget.memoryHeadroomNow = func() time.Time { return now }
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			defer generation.Close()
+
+			var wg sync.WaitGroup
+			var failures [workers]error
+			for i := range failures {
+				wg.Go(func() { _, failures[i] = generation.ReserveTransientMemory(8) })
+			}
+			wg.Wait()
+			for _, err := range failures {
+				require.ErrorIs(t, err, ErrExecutionResourceAdmission)
+				var rejection *ExecutionResourceError
+				require.ErrorAs(t, err, &rejection)
+				require.NotNil(t, rejection.PhysicalMemory)
+				pressure := rejection.PhysicalMemory
+				require.True(t, pressure.ConfirmationAttempted)
+				require.Zero(t, pressure.GrowthHeadroom)
+				if !tc.measured {
+					require.Equal(t, uint64(100), pressure.SampledAvailable)
+				}
+			}
+			for range workers {
+				_, err := generation.ReserveTransientMemory(8)
+				require.ErrorIs(t, err, ErrExecutionResourceAdmission)
+			}
+			require.Equal(t, 2, samples)
+			require.Zero(t, generation.Used())
+			require.Equal(t, uint64(2*workers), generation.Snapshot().RejectCount)
+
+			now = now.Add(time.Second)
+			_, err = generation.ReserveTransientMemory(8)
+			require.ErrorIs(t, err, ErrExecutionResourceAdmission)
+			require.Equal(t, 4, samples)
+		})
+	}
+}
+
+func TestExecutionMemoryAdmissionConfirmsOutsideTerminalGuard(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(1000, 800)
+	guard := &testTransientAdmissionGuard{budget: budget}
+	done := make(chan struct{})
+	samples := 0
+	providerRanUnderGuard := false
+	budget.memoryHeadroomTTL = time.Second
+	budget.memoryHeadroomProvider = func() (uint64, bool) {
+		providerRanUnderGuard = providerRanUnderGuard || guard.held.Load()
+		samples++
+		if samples == 2 {
+			close(done)
+		}
+		return 0, true
+	}
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+
+	reservation, err := generation.ReserveTransientMemoryGuarded(8, done, guard)
+	require.Nil(t, reservation)
+	require.ErrorIs(t, err, ErrExecutionResourceAdmission)
+	require.Equal(t, 2, samples)
+	require.False(t, providerRanUnderGuard)
+	require.True(t, guard.stopped.Load())
+	require.Equal(t, int32(1), guard.resolved.Load())
+	require.Zero(t, generation.Used())
+}
+
+type confirmationAdmissionGuard struct {
+	testTransientAdmissionGuard
+	locks           int
+	beforeReacquire func()
+}
+
+func (g *confirmationAdmissionGuard) Lock() {
+	g.locks++
+	if g.locks == 2 {
+		g.beforeReacquire()
+	}
+	g.testTransientAdmissionGuard.Lock()
+}
+
+func TestExecutionMemoryAdmissionRechecksCeilingAfterConfirmation(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(1000, 800)
+	now := time.Unix(1, 0)
+	samples := 0
+	budget.memoryHeadroomTTL = time.Second
+	budget.memoryHeadroomNow = func() time.Time { return now }
+	budget.memoryHeadroomProvider = func() (uint64, bool) {
+		samples++
+		if samples == 1 {
+			return 0, true
+		}
+		return 8, true
+	}
+	budget.capRefreshTTL = time.Second
+	budget.capNow = func() time.Time { return now }
+	ceilingErr := errors.New("ceiling unavailable")
+	budget.SetAggregateCapProvider(func() (uint64, error) { return 0, ceilingErr })
+	require.NoError(t, budget.UpdateAggregateCap(1000))
+	budget.sampleMemoryHeadroom()
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+
+	guard := &confirmationAdmissionGuard{
+		testTransientAdmissionGuard: testTransientAdmissionGuard{budget: budget},
+		beforeReacquire: func() {
+			_, _, _, err := budget.refreshAggregateCap(true, 0)
+			require.ErrorIs(t, err, ceilingErr)
+		},
+	}
+	reservation, err := generation.ReserveTransientMemoryGuarded(8, nil, guard)
+	require.Nil(t, reservation)
+	require.ErrorIs(t, err, ceilingErr)
+	require.Equal(t, 2, samples)
+	require.Zero(t, generation.Used())
+	require.Zero(t, generation.Snapshot().ReserveCount)
+}
+
+func TestExecutionMemoryAdmissionUsesNewerSampleAfterConfirmation(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(1000, 800)
+	now := time.Unix(1, 0)
+	samples := 0
+	budget.memoryHeadroomTTL = time.Second
+	budget.memoryHeadroomNow = func() time.Time { return now }
+	budget.memoryHeadroomProvider = func() (uint64, bool) {
+		samples++
+		switch samples {
+		case 2, 4:
+			return 8, true
+		default:
+			return 0, true
+		}
+	}
+	budget.sampleMemoryHeadroom()
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+
+	guard := &confirmationAdmissionGuard{
+		testTransientAdmissionGuard: testTransientAdmissionGuard{budget: budget},
+		beforeReacquire: func() {
+			now = now.Add(time.Second)
+			budget.sampleMemoryHeadroom()
+		},
+	}
+	reservation, err := generation.ReserveTransientMemoryGuarded(8, nil, guard)
+	require.Nil(t, reservation)
+	var rejection *ExecutionResourceError
+	require.ErrorAs(t, err, &rejection)
+	require.NotNil(t, rejection.PhysicalMemory)
+	require.False(t, rejection.PhysicalMemory.ConfirmationAttempted)
+	require.Equal(t, 3, samples, "one request cannot confirm indefinitely across windows")
+	require.Zero(t, generation.Used())
+
+	reservation, err = generation.ReserveTransientMemory(8)
+	require.NoError(t, err)
+	defer reservation.Release()
+	require.Equal(t, 4, samples, "the newer window retains its shared confirmation")
 }

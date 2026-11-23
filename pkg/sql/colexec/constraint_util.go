@@ -17,12 +17,12 @@ package colexec
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -34,8 +34,7 @@ import (
 
 func FilterRowIdForDel(proc *process.Process, retBat *batch.Batch, srcBat *batch.Batch,
 	idx int, primaryKeyIdx int) error {
-	sels := vector.GetSels()
-	defer vector.PutSels(sels)
+	var sels []int64
 	rowidVec := retBat.Vecs[0]
 	primaryVec := retBat.Vecs[1]
 	rowIdMap := make(map[types.Rowid]bool)
@@ -67,7 +66,7 @@ func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan
 			continue
 		}
 		nsp := vecs[j].GetNulls()
-		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility && nulls.Any(nsp) {
+		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility && nsp.Any() {
 			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", attrs[j]))
 		}
 	}
@@ -81,23 +80,145 @@ func ColForbidsNull(col *plan.ColDef) bool {
 	return col != nil && (col.NotNull || (col.Default != nil && !col.Default.NullAbility))
 }
 
-// BatchDataNotNullFillForIgnore adapts one batch to the IGNORE statement rule
-// for NOT NULL columns: each NULL cell is replaced with the implicit default
-// of its column type and reported as one ER_BAD_NULL_ERROR warning, matching
-// the value adjustment MySQL applies for INSERT/UPDATE/LOAD with IGNORE. The
-// row itself is kept. vec indices whose vectors were modified are returned so
-// selector pipelines can mirror the adjustment into their un-shrunk output.
-// A constant NULL broadcast carries no backing storage, so it is replaced by
-// an equivalent constant of the implicit default instead of being written
-// in place.
-// A NOT NULL column whose type has no implicit default keeps the
-// constraint-violation error: storing NULL would trade the report for corruption.
-func BatchDataNotNullFillForIgnore(
+// IgnoreFill adapts batches to the IGNORE statement rule for NOT NULL
+// columns: each NULL cell is replaced with the implicit default of its column
+// type and reported as one ER_BAD_NULL_ERROR warning, matching the value
+// adjustment MySQL applies for INSERT/UPDATE/LOAD with IGNORE. The row itself
+// is kept. A NOT NULL column whose type has no implicit default keeps the
+// constraint-violation error: storing NULL would trade the report for
+// corruption.
+//
+// IgnoreFill never modifies a vector its caller does not own. A column that
+// needs an adjustment is copied into a vector owned by the IgnoreFill - one
+// per column slot, created once and refilled for every batch - and the copy
+// is adjusted and installed into the caller's slot. Its vectors stay valid
+// until the next Fill, Free or the pool changes, which is the lifetime of the
+// caller's output batch. A vector the caller owns (owned reports so) is
+// adjusted in place through the caller's pool.
+type IgnoreFill struct {
+	mp       *mpool.MPool
+	vecs     []*vector.Vector
+	dropVecs []*vector.Vector
+	view     *batch.Batch
+}
+
+// View returns the IgnoreFill's reusable batch referencing bat's vectors, for
+// a caller that must replace columns of a batch it does not own: Fill and
+// DropNullPkRows then replace slots of the view, never of bat. It is valid
+// until the next View or Free, and while bat is.
+func (f *IgnoreFill) View(bat *batch.Batch) *batch.Batch {
+	if f.view == nil {
+		f.view = batch.NewWithSize(0)
+	}
+	bat.ViewInto(f.view)
+	return f.view
+}
+
+// owns reports whether vec is one of the IgnoreFill's vectors.
+func (f *IgnoreFill) owns(vec *vector.Vector) bool {
+	return slices.Contains(f.vecs, vec) || slices.Contains(f.dropVecs, vec)
+}
+
+// DropNullPkRows removes every row of bat whose pkVec cell is NULL, with one
+// ER_BAD_NULL_ERROR warning per dropped row, and reports whether rows were
+// dropped. bat must be the caller's own batch (or a View). A vector the
+// caller owns (owned reports its slot) or the IgnoreFill owns is shrunk in
+// place; any other vector is replaced, in every slot holding it, by the
+// IgnoreFill's copy of the kept rows.
+func (f *IgnoreFill) DropNullPkRows(
+	proc *process.Process,
+	pkVec *vector.Vector,
+	pkName string,
+	bat *batch.Batch,
+	owned func(int) bool,
+) (bool, error) {
+	if pkVec == nil || !pkVec.HasNull() {
+		return false, nil
+	}
+	if mp := proc.Mp(); f.mp != mp {
+		f.Free()
+		f.mp = mp
+	}
+	var warnings process.WarningAccumulator
+	warnings.SetWarningRetentionForProcess(proc)
+	defer warnings.Reset()
+
+	rowCount := int(bat.RowCount())
+	keep := make([]int64, 0, rowCount)
+	for row := 0; row < rowCount; row++ {
+		if pkVec.IsNull(uint64(row)) {
+			warnings.Add(moerr.ER_BAD_NULL_ERROR,
+				fmt.Sprintf("Column '%s' cannot be null", pkName))
+			continue
+		}
+		keep = append(keep, int64(row))
+	}
+	warnings.Flush(proc)
+	if len(keep) == rowCount {
+		return false, nil
+	}
+	// The row selection must reach every physical vector of the batch exactly
+	// once. Columns that share one physical vector (repeated plain source
+	// references of INSERT SELECT plans) keep consistent values this way, and
+	// no aliased slot applies the selection again to a vector that was already
+	// shrunk to the kept rows, which would read past its end.
+	done := make(map[*vector.Vector]*vector.Vector, len(bat.Vecs))
+	for slot, vec := range bat.Vecs {
+		if vec == nil {
+			continue
+		}
+		if replacement, ok := done[vec]; ok {
+			bat.Vecs[slot] = replacement
+			continue
+		}
+		if (owned != nil && owned(slot)) || f.owns(vec) {
+			if err := vec.Shrink(keep, false, f.mp); err != nil {
+				return false, err
+			}
+			done[vec] = vec
+			continue
+		}
+		for len(f.dropVecs) <= slot {
+			f.dropVecs = append(f.dropVecs, nil)
+		}
+		dst := f.dropVecs[slot]
+		if dst != nil && dst.GetType().Eq(*vec.GetType()) {
+			dst.CleanOnlyData()
+			dst.SetClass(vector.FLAT)
+		} else {
+			if dst != nil {
+				dst.Free(f.mp)
+			}
+			dst = vector.NewVec(*vec.GetType(), f.mp)
+			f.dropVecs[slot] = dst
+		}
+		if err := dst.Union(vec, keep, f.mp); err != nil {
+			return false, err
+		}
+		done[vec] = dst
+		bat.Vecs[slot] = dst
+	}
+	bat.SetRowCount(len(keep))
+	return true, nil
+}
+
+// Fill adjusts vecs (aligned with attrs and cols) in place of the caller's
+// slots and returns the indices of the adjusted slots. owned, when non-nil,
+// reports the slots whose vectors the caller owns and created with proc's
+// pool.
+func (f *IgnoreFill) Fill(
 	vecs []*vector.Vector,
 	attrs []string,
 	cols []*plan.ColDef,
+	owned func(int) bool,
 	proc *process.Process,
 ) ([]int, error) {
+	mp := proc.Mp()
+	if f.mp != mp {
+		// A reused operator may run with another process pool.
+		f.Free()
+		f.mp = mp
+	}
 	var warnings process.WarningAccumulator
 	warnings.SetWarningRetentionForProcess(proc)
 	defer warnings.Reset()
@@ -108,84 +229,132 @@ func BatchDataNotNullFillForIgnore(
 		if vec == nil || j >= len(cols) || j >= len(attrs) || !ColForbidsNull(cols[j]) {
 			continue
 		}
-		attr := attrs[j]
 		if vec.IsConst() {
-			// A constant vector broadcasts its single physical slot, and a
-			// constant NULL owns no backing storage at all (NewConstNull
-			// allocates no data), so the in-place setters below would fail
-			// on it: LOAD legs project an omitted column's folded NULL
-			// default straight into this helper. Replace the broadcast with
-			// a constant carrying the implicit default - the sanctioned
-			// NewConstFixed shape - so every logical row keeps its row and
-			// one warning is published per adjusted row.
-			if !vec.IsNull(0) || vec.Length() <= 0 {
+			if vec.Length() <= 0 || !vec.IsNull(0) {
 				continue
 			}
-			rows := vec.Length()
-			fillVec, ok, err := constImplicitNotNullDefaultVec(vec, rows, proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-			if !ok {
-				return nil, moerr.NewConstraintViolation(proc.Ctx,
-					fmt.Sprintf("Column '%s' cannot be null", attr))
-			}
-			for row := 0; row < rows; row++ {
-				warnings.Add(moerr.ER_BAD_NULL_ERROR,
-					fmt.Sprintf("Column '%s' cannot be null", attr))
-			}
-			vecs[j] = fillVec
-			filled = append(filled, j)
+		} else if !vec.GetNulls().Any() {
 			continue
 		}
-		slotCount := vec.Length()
-		adjusted := false
-		for slot := 0; slot < slotCount; slot++ {
-			if !vec.IsNull(uint64(slot)) {
-				continue
-			}
-			ok, err := setImplicitNotNullDefault(vec, slot, proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-			if !ok {
-				return nil, moerr.NewConstraintViolation(proc.Ctx,
-					fmt.Sprintf("Column '%s' cannot be null", attr))
-			}
-			nulls.Del(vec.GetNulls(), uint64(slot))
-			adjusted = true
+		attr := attrs[j]
+		target := vec
+		if owned == nil || !owned(j) {
+			target = f.vector(j, *vec.GetType())
+		}
+		adjusted, ok, err := fillImplicitNotNullDefaults(target, vec, mp)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, moerr.NewConstraintViolation(proc.Ctx,
+				fmt.Sprintf("Column '%s' cannot be null", attr))
+		}
+		for range adjusted {
 			warnings.Add(moerr.ER_BAD_NULL_ERROR,
 				fmt.Sprintf("Column '%s' cannot be null", attr))
 		}
-		if adjusted {
-			filled = append(filled, j)
-		}
+		vecs[j] = target
+		filled = append(filled, j)
 	}
 	warnings.Flush(proc)
 	return filled, nil
 }
 
-// constImplicitNotNullDefaultVec builds the replacement for a constant NULL
-// broadcast: one physical slot carrying the implicit default of the column
-// type, broadcast over the original logical length. The value comes from the
-// shared per-type rule, so the broadcast fill and the in-place fill can never
-// diverge. It reports false when the type has no implicit default.
-func constImplicitNotNullDefaultVec(vec *vector.Vector, rows int, mp *mpool.MPool) (*vector.Vector, bool, error) {
-	dst := vector.NewVec(*vec.GetType())
-	if err := vector.AppendAny(dst, nil, true, mp); err != nil {
-		dst.Free(mp)
-		return nil, false, err
+// vector returns the IgnoreFill's empty reusable vector for slot j.
+func (f *IgnoreFill) vector(j int, typ types.Type) *vector.Vector {
+	for len(f.vecs) <= j {
+		f.vecs = append(f.vecs, nil)
 	}
-	// The appended NULL slot is the cell the shared rule overwrites.
-	ok, err := setImplicitNotNullDefault(dst, 0, mp)
-	if err != nil || !ok {
-		dst.Free(mp)
-		return nil, ok, err
+	vec := f.vecs[j]
+	if vec != nil && vec.GetType().Eq(typ) {
+		vec.CleanOnlyData()
+		vec.SetClass(vector.FLAT)
+		return vec
 	}
-	nulls.Del(dst.GetNulls(), 0)
-	dst.ToConst()
-	dst.SetLength(rows)
-	return dst, true, nil
+	if vec != nil {
+		vec.Free(f.mp)
+	}
+	vec = vector.NewVec(typ, f.mp)
+	f.vecs[j] = vec
+	return vec
+}
+
+// Copy returns the IgnoreFill's vector for slot j holding a copy of src: a
+// caller that must change rows of a vector it does not own changes this copy
+// and installs it in its own slot instead.
+func (f *IgnoreFill) Copy(j int, src *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if mp := proc.Mp(); f.mp != mp {
+		f.Free()
+		f.mp = mp
+	}
+	dst := f.vector(j, *src.GetType())
+	if err := dst.UnionBatch(src, 0, src.Length(), nil, f.mp); err != nil {
+		return nil, err
+	}
+	return dst, nil
+}
+
+// Free releases the IgnoreFill's vectors.
+func (f *IgnoreFill) Free() {
+	for _, vec := range f.vecs {
+		if vec != nil {
+			vec.Free(f.mp)
+		}
+	}
+	for _, vec := range f.dropVecs {
+		if vec != nil {
+			vec.Free(f.mp)
+		}
+	}
+	f.vecs, f.dropVecs = nil, nil
+	f.view = nil
+	f.mp = nil
+}
+
+// fillImplicitNotNullDefaults makes target hold source's rows with every
+// NULL cell replaced by the implicit default of the type, and returns the
+// number of adjusted logical rows. target is source itself (owned by the
+// caller) or an empty vector of mp. A constant NULL broadcast carries no
+// backing storage, so it becomes an equivalent constant of the implicit
+// default. It reports false when the type has no implicit default.
+func fillImplicitNotNullDefaults(target, source *vector.Vector, mp *mpool.MPool) (int, bool, error) {
+	if source.IsConst() {
+		rows := source.Length()
+		if target == source {
+			target.CleanOnlyData()
+			target.SetClass(vector.FLAT)
+		}
+		if err := vector.AppendAny(target, nil, true, mp); err != nil {
+			return 0, false, err
+		}
+		// The appended NULL slot is the cell the shared rule overwrites.
+		ok, err := setImplicitNotNullDefault(target, 0, mp)
+		if err != nil || !ok {
+			return 0, ok, err
+		}
+		target.GetNulls().Del(0)
+		target.ToConst()
+		target.SetLength(rows)
+		return rows, true, nil
+	}
+	if target != source {
+		if err := target.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
+			return 0, false, err
+		}
+	}
+	adjusted := 0
+	for slot := 0; slot < target.Length(); slot++ {
+		if !target.IsNull(uint64(slot)) {
+			continue
+		}
+		ok, err := setImplicitNotNullDefault(target, slot, mp)
+		if err != nil || !ok {
+			return 0, ok, err
+		}
+		target.GetNulls().Del(uint64(slot))
+		adjusted++
+	}
+	return adjusted, true, nil
 }
 
 // setImplicitNotNullDefault overwrites one NULL cell with the implicit default
@@ -315,62 +484,6 @@ func IgnoreNullPkColumnIdx(tableDef *plan.TableDef) int {
 		return i
 	}
 	return -1
-}
-
-// DropNullPkRowsForIgnore removes from bat every row whose pkVec cell is
-// NULL, publishing one ER_BAD_NULL_ERROR warning per dropped row with
-// pkName, and reports whether any row was dropped. It is the shared body of
-// the pinned single-column NULL primary-key drop: the pre-insert pass calls
-// it before CHECK, unique and foreign-key consumers evaluate the batch, the
-// write-side backstop calls it for pipelines without that node (LOAD legs)
-// and for rows those consumers let through.
-func DropNullPkRowsForIgnore(
-	proc *process.Process,
-	pkVec *vector.Vector,
-	pkName string,
-	bat *batch.Batch,
-) (bool, error) {
-	if pkVec == nil || !pkVec.HasNull() {
-		return false, nil
-	}
-	var warnings process.WarningAccumulator
-	warnings.SetWarningRetentionForProcess(proc)
-	defer warnings.Reset()
-
-	rowCount := int(bat.RowCount())
-	keep := make([]int64, 0, rowCount)
-	for row := 0; row < rowCount; row++ {
-		if pkVec.IsNull(uint64(row)) {
-			warnings.Add(moerr.ER_BAD_NULL_ERROR,
-				fmt.Sprintf("Column '%s' cannot be null", pkName))
-			continue
-		}
-		keep = append(keep, int64(row))
-	}
-	warnings.Flush(proc)
-	if len(keep) == rowCount {
-		return false, nil
-	}
-	// The row selection must reach every physical vector of the batch exactly
-	// once. Columns that share one physical vector (repeated plain source
-	// references of INSERT SELECT plans) keep consistent values this way, and
-	// no aliased slot applies the selection again to a vector that was already
-	// shrunk to the kept rows, which would read past its end.
-	shrank := make(map[*vector.Vector]struct{}, len(bat.Vecs))
-	for _, vec := range bat.Vecs {
-		if vec == nil {
-			continue
-		}
-		if _, done := shrank[vec]; done {
-			continue
-		}
-		shrank[vec] = struct{}{}
-		if err := vec.Shrink(keep, false, proc.Mp()); err != nil {
-			return false, err
-		}
-	}
-	bat.SetRowCount(len(keep))
-	return true, nil
 }
 
 func getRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (engine.Relation, error) {

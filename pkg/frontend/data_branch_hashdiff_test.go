@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/panjf2000/ants/v2"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -150,8 +151,8 @@ func TestDataBranchUpdateRequiresNativeUpdate(t *testing.T) {
 	tblStuff.def.indexedSpecialUpdateIdxes = []int{1}
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType(), mp)
 	defer bat.Clean(mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(1), false, mp))
@@ -188,7 +189,7 @@ func TestSplitDataBranchBatchForNativeUpdate(t *testing.T) {
 	defer ctrl.Finish()
 
 	tblStuff := newTestBranchTableStuff(ctrl)
-	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 	defer tblStuff.retPool.releaseRetBatch(bat, false)
 	require.NoError(t, appendTupleToBat(
 		ses, bat, types.Tuple{int64(1), []byte("source-one"), []byte("h1")}, tblStuff,
@@ -218,7 +219,7 @@ func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 	mp := ses.proc.Mp()
 
 	t.Run("varchar accepts string and bytes", func(t *testing.T) {
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		defer vec.Free(mp)
 		require.NoError(t, vector.AppendBytes(vec, []byte("alice"), false, mp))
 
@@ -236,7 +237,7 @@ func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 	})
 
 	t.Run("json accepts raw bytes", func(t *testing.T) {
-		vec := vector.NewVec(types.T_json.ToType())
+		vec := vector.NewVec(types.T_json.ToType(), mp)
 		defer vec.Free(mp)
 		jsonVal, err := types.ParseStringToByteJson(`{"k":1}`)
 		require.NoError(t, err)
@@ -250,7 +251,7 @@ func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 	})
 
 	t.Run("geometry32 accepts raw bytes", func(t *testing.T) {
-		vec := vector.NewVec(types.T_geometry32.ToType())
+		vec := vector.NewVec(types.T_geometry32.ToType(), mp)
 		defer vec.Free(mp)
 		geometry32WKB := []byte{0x01, 0x02, 0x03, 0x04}
 		require.NoError(t, vector.AppendBytes(vec, geometry32WKB, false, mp))
@@ -261,7 +262,7 @@ func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 	})
 
 	t.Run("array accepts raw bytes", func(t *testing.T) {
-		vec := vector.NewVec(types.T_array_float32.ToType())
+		vec := vector.NewVec(types.T_array_float32.ToType(), mp)
 		defer vec.Free(mp)
 		val := []float32{1, 2}
 		require.NoError(t, vector.AppendArray(vec, val, false, mp))
@@ -272,7 +273,7 @@ func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 	})
 
 	t.Run("array float64 accepts raw bytes", func(t *testing.T) {
-		vec := vector.NewVec(types.T_array_float64.ToType())
+		vec := vector.NewVec(types.T_array_float64.ToType(), mp)
 		defer vec.Free(mp)
 		val := []float64{1, 2}
 		require.NoError(t, vector.AppendArray(vec, val, false, mp))
@@ -283,7 +284,7 @@ func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 	})
 
 	t.Run("rowid accepts raw bytes", func(t *testing.T) {
-		vec := vector.NewVec(types.T_Rowid.ToType())
+		vec := vector.NewVec(types.T_Rowid.ToType(), mp)
 		defer vec.Free(mp)
 		rowID := buildHashDiffRowID(t, 7)
 		require.NoError(t, vector.AppendFixed(vec, rowID, false, mp))
@@ -346,7 +347,7 @@ func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 	})
 
 	t.Run("enum accepts uint16", func(t *testing.T) {
-		vec := vector.NewVec(types.T_enum.ToType())
+		vec := vector.NewVec(types.T_enum.ToType(), mp)
 		defer vec.Free(mp)
 		require.NoError(t, vector.AppendFixed(vec, types.Enum(3), false, mp))
 
@@ -356,7 +357,7 @@ func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 	})
 
 	t.Run("null handling", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		defer vec.Free(mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))
 
@@ -462,8 +463,8 @@ func TestCheckConflictAndAppendToBat(t *testing.T) {
 	baseTuple := types.Tuple{int64(7), []byte("before"), []byte("base")}
 
 	t.Run("default appends both sides", func(t *testing.T) {
-		tarBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
-		baseBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+		tarBat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
+		baseBat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 		defer tblStuff.retPool.releaseRetBatch(tarBat, false)
 		defer tblStuff.retPool.releaseRetBatch(baseBat, false)
 
@@ -474,8 +475,8 @@ func TestCheckConflictAndAppendToBat(t *testing.T) {
 	})
 
 	t.Run("skip keeps both batches empty", func(t *testing.T) {
-		tarBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
-		baseBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+		tarBat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
+		baseBat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 		defer tblStuff.retPool.releaseRetBatch(tarBat, false)
 		defer tblStuff.retPool.releaseRetBatch(baseBat, false)
 
@@ -488,8 +489,8 @@ func TestCheckConflictAndAppendToBat(t *testing.T) {
 	})
 
 	t.Run("accept appends target only", func(t *testing.T) {
-		tarBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
-		baseBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+		tarBat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
+		baseBat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 		defer tblStuff.retPool.releaseRetBatch(tarBat, false)
 		defer tblStuff.retPool.releaseRetBatch(baseBat, false)
 
@@ -502,8 +503,8 @@ func TestCheckConflictAndAppendToBat(t *testing.T) {
 	})
 
 	t.Run("fail returns conflict error", func(t *testing.T) {
-		tarBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
-		baseBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+		tarBat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
+		baseBat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 		defer tblStuff.retPool.releaseRetBatch(tarBat, false)
 		defer tblStuff.retPool.releaseRetBatch(baseBat, false)
 
@@ -1009,7 +1010,7 @@ func TestRunLCAProbeWithReaderFallback_EarlyReturns(t *testing.T) {
 
 	t.Run("empty batch", func(t *testing.T) {
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 		defer tBat.Clean(ses.proc.Mp())
 
 		ret, err := runLCAProbeWithReaderFallback(
@@ -1056,7 +1057,7 @@ func TestRunLCAProbeWithReaderFallback_PrepareAndPropagateReaderError(t *testing
 	tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
 
 	tBat := batch.NewWithSize(1)
-	tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 	require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
 	require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(2), false, ses.proc.Mp()))
 	tBat.SetRowCount(2)
@@ -1072,6 +1073,57 @@ func TestRunLCAProbeWithReaderFallback_PrepareAndPropagateReaderError(t *testing
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "snapshot scan requires disttae relation")
 	ret.Close()
+}
+
+func TestRunLCAProbeWithReaderFallback_AllHitsPreserveInputOrder(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+	ctrl := gomock.NewController(t)
+	tblStuff := newTestBranchTableStuff(ctrl)
+	lcaRel := mock_frontend.NewMockRelation(ctrl)
+	lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("lca_tbl", "name"))
+	lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
+	tblStuff.lcaRel = lcaRel
+
+	keys := batch.NewWithSize(1)
+	defer keys.Clean(mp)
+	keys.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	require.NoError(t, vector.AppendFixedList(keys.Vecs[0], []int64{20, 10}, nil, mp))
+	keys.SetRowCount(2)
+
+	stub := gostub.Stub(&scanSnapshotRelationByIDWithFallback, func(
+		_ context.Context, _ string, _ *Session, _ uint64, _ types.TS, _ engine.Relation,
+		attrs []string, typs []types.Type, _ *plan.Expr, _ int, onBatch func(*batch.Batch) error,
+	) error {
+		require.Equal(t, []string{"id", "name", "hidden"}, attrs)
+		readBatch := batch.NewWithSize(len(attrs))
+		defer readBatch.Clean(mp)
+		for i, typ := range typs {
+			readBatch.Vecs[i] = vector.NewVec(typ, mp)
+		}
+		require.NoError(t, vector.AppendFixedList(readBatch.Vecs[0], []int64{10, 20}, nil, mp))
+		require.NoError(t, vector.AppendBytes(readBatch.Vecs[1], []byte("ten"), false, mp))
+		require.NoError(t, vector.AppendBytes(readBatch.Vecs[1], []byte("twenty"), false, mp))
+		require.NoError(t, vector.AppendBytes(readBatch.Vecs[2], nil, true, mp))
+		require.NoError(t, vector.AppendBytes(readBatch.Vecs[2], []byte("present"), false, mp))
+		readBatch.SetRowCount(2)
+		return onBatch(readBatch)
+	})
+	t.Cleanup(stub.Reset)
+
+	ret, err := runLCAProbeWithReaderFallback(ctx, ses, keys, tblStuff, types.BuildTS(10, 0))
+	require.NoError(t, err)
+	defer ret.Close()
+	require.Len(t, ret.Batches, 1)
+	out := ret.Batches[0]
+	require.Equal(t, 2, out.RowCount())
+	require.Equal(t, []int64{0, 1}, vector.MustFixedColNoTypeCheck[int64](out.Vecs[0]))
+	require.Equal(t, []int64{20, 10}, vector.MustFixedColNoTypeCheck[int64](out.Vecs[tblStuff.def.pkColIdx+1]))
+	require.Equal(t, "twenty", out.Vecs[2].GetStringAt(0))
+	require.Equal(t, "ten", out.Vecs[2].GetStringAt(1))
+	require.Equal(t, "present", out.Vecs[3].GetStringAt(0))
+	require.True(t, out.Vecs[3].IsNull(1))
 }
 
 func TestHandleDelsOnLCA_EarlyPaths(t *testing.T) {
@@ -1106,7 +1158,7 @@ func TestHandleDelsOnLCA_EarlyPaths(t *testing.T) {
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 		tBat.SetRowCount(0)
 		defer tBat.Clean(ses.proc.Mp())
 
@@ -1437,7 +1489,7 @@ func buildTestBranchHashmap(
 
 	vecs := make([]*vector.Vector, len(colTypes))
 	for i, typ := range colTypes {
-		vecs[i] = vector.NewVec(typ)
+		vecs[i] = vector.NewVec(typ, mp)
 		defer vecs[i].Free(mp)
 	}
 	for _, row := range rows {
@@ -1529,7 +1581,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 			Times(1)
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
 		tBat.SetRowCount(1)
 		defer tBat.Clean(ses.proc.Mp())
@@ -1572,7 +1624,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 			Times(1)
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
 		tBat.SetRowCount(1)
 		defer tBat.Clean(ses.proc.Mp())
@@ -1617,7 +1669,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 			Times(1)
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_float64.ToType(), ses.proc.Mp())
 		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], math.NaN(), false, ses.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], 1.25, false, ses.proc.Mp()))
 		tBat.SetRowCount(2)
@@ -1729,7 +1781,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 
 			tBat := batch.NewWithSize(1)
 			if composite {
-				tBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+				tBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), ses.proc.Mp())
 				packer := types.NewPacker()
 				defer packer.Close()
 				switch value := tc.value.(type) {
@@ -1743,7 +1795,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 				packer.EncodeInt64(7)
 				require.NoError(t, vector.AppendBytes(tBat.Vecs[0], packer.GetBuf(), false, ses.proc.Mp()))
 			} else {
-				tBat.Vecs[0] = vector.NewVec(tc.typ)
+				tBat.Vecs[0] = vector.NewVec(tc.typ, ses.proc.Mp())
 				switch value := tc.value.(type) {
 				case types.Datetime:
 					require.NoError(t, vector.AppendFixed(tBat.Vecs[0], value, false, ses.proc.Mp()))
@@ -1810,7 +1862,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 			Times(1)
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
 		tBat.SetRowCount(1)
 		defer tBat.Clean(ses.proc.Mp())
@@ -1885,7 +1937,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		bh.EXPECT().ClearExecResultSet().Times(1)
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
 		tBat.SetRowCount(1)
 		defer tBat.Clean(ses.proc.Mp())
@@ -1927,7 +1979,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		bh.EXPECT().ClearExecResultSet().Times(1)
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(2), false, ses.proc.Mp()))
 		tBat.SetRowCount(2)
@@ -1965,7 +2017,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(moerr.NewBadDBNoCtx("snapshot_gc")).Times(1)
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 		tBat.SetRowCount(0)
 		defer tBat.Clean(ses.proc.Mp())
 
@@ -2018,7 +2070,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(moerr.NewBadDBNoCtx("snapshot_gc")).Times(1)
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
 		tBat.SetRowCount(1)
 		defer tBat.Clean(ses.proc.Mp())
@@ -2066,7 +2118,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(wantErr).Times(1)
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_uint64.ToType(), ses.proc.Mp())
 		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], uint64(42), false, ses.proc.Mp()))
 		tBat.SetRowCount(1)
 		defer tBat.Clean(ses.proc.Mp())
@@ -2129,7 +2181,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		}).Times(1)
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_uint64.ToType(), ses.proc.Mp())
 		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], uint64(42), false, ses.proc.Mp()))
 		tBat.SetRowCount(1)
 		defer tBat.Clean(ses.proc.Mp())
@@ -2178,7 +2230,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		defer packer.Close()
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), ses.proc.Mp())
 		require.NoError(t, vector.AppendBytes(tBat.Vecs[0], packer.GetBuf(), false, ses.proc.Mp()))
 		tBat.SetRowCount(1)
 		defer tBat.Clean(ses.proc.Mp())
@@ -2874,11 +2926,11 @@ func TestHashDiff_HasLCADecimal256PKUpdateIsNotMisclassified(t *testing.T) {
 	mp := ses.proc.Mp()
 	tarData := batch.NewWithSize(5)
 	tarData.SetAttributes([]string{catalog.Row_ID, "id", "name", "hidden", "__commit_ts"})
-	tarData.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tarData.Vecs[1] = vector.NewVec(pkType)
-	tarData.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-	tarData.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
-	tarData.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
+	tarData.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tarData.Vecs[1] = vector.NewVec(pkType, mp)
+	tarData.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
+	tarData.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp)
+	tarData.Vecs[4] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(tarData.Vecs[0], newRowID, false, mp))
 	require.NoError(t, vector.AppendFixed(tarData.Vecs[1], kVal, false, mp))
 	require.NoError(t, vector.AppendBytes(tarData.Vecs[2], []byte("after"), false, mp))
@@ -2888,9 +2940,9 @@ func TestHashDiff_HasLCADecimal256PKUpdateIsNotMisclassified(t *testing.T) {
 
 	tarTombstone := batch.NewWithSize(3)
 	tarTombstone.SetAttributes([]string{catalog.Row_ID, "id", "__commit_ts"})
-	tarTombstone.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tarTombstone.Vecs[1] = vector.NewVec(pkType)
-	tarTombstone.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	tarTombstone.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tarTombstone.Vecs[1] = vector.NewVec(pkType, mp)
+	tarTombstone.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(tarTombstone.Vecs[0], oldRowID, false, mp))
 	require.NoError(t, vector.AppendFixed(tarTombstone.Vecs[1], kVal, false, mp))
 	require.NoError(t, vector.AppendBytes(tarTombstone.Vecs[2], commitTSBytes(types.BuildTS(12, 0)), false, mp))
@@ -2986,9 +3038,9 @@ func TestHashDiff_HasLCADecimal256PKDeleteIsReported(t *testing.T) {
 	oldRowID := buildHashDiffRowID(t, 0)
 	tarTombstone := batch.NewWithSize(3)
 	tarTombstone.SetAttributes([]string{catalog.Row_ID, "id", "__commit_ts"})
-	tarTombstone.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tarTombstone.Vecs[1] = vector.NewVec(pkType)
-	tarTombstone.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	tarTombstone.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), ses.proc.Mp())
+	tarTombstone.Vecs[1] = vector.NewVec(pkType, ses.proc.Mp())
+	tarTombstone.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), ses.proc.Mp())
 	require.NoError(t, vector.AppendFixed(tarTombstone.Vecs[0], oldRowID, false, ses.proc.Mp()))
 	require.NoError(t, vector.AppendFixed(tarTombstone.Vecs[1], kVal, false, ses.proc.Mp()))
 	require.NoError(t, vector.AppendBytes(tarTombstone.Vecs[2], commitTSBytes(types.BuildTS(12, 0)), false, ses.proc.Mp()))
@@ -3090,8 +3142,8 @@ func buildVisibleComparisonBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *b
 
 	bat := batch.NewWithSize(2)
 	bat.SetAttributes([]string{"id", "name"})
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 
 	for _, row := range rows {
 		require.Len(t, row, 2)
@@ -3109,7 +3161,7 @@ func buildIntDataBatch(t *testing.T, mp *mpool.MPool, attrs []string, colTypes [
 	bat := batch.NewWithSize(len(colTypes))
 	bat.SetAttributes(attrs)
 	for i, typ := range colTypes {
-		bat.Vecs[i] = vector.NewVec(typ)
+		bat.Vecs[i] = vector.NewVec(typ, mp)
 	}
 	for _, row := range rows {
 		require.Len(t, row, len(colTypes))
@@ -3220,11 +3272,11 @@ func buildHashDiffDataBatchWithRowIDs(t *testing.T, mp *mpool.MPool, rowIDs []ty
 
 	bat := batch.NewWithSize(5)
 	bat.SetAttributes([]string{catalog.Row_ID, "id", "name", "hidden", "__commit_ts"})
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType(), mp)
 
 	for rowIdx, row := range rows {
 		require.Len(t, row, 4)
@@ -3251,9 +3303,9 @@ func buildHashDiffTombstoneBatchWithRowIDs(t *testing.T, mp *mpool.MPool, rowIDs
 
 	bat := batch.NewWithSize(3)
 	bat.SetAttributes([]string{catalog.Row_ID, "id", "__commit_ts"})
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
 
 	for rowIdx, row := range rows {
 		require.Len(t, row, 2)
@@ -3340,8 +3392,8 @@ func TestAppendLCAProbeValue(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	t.Run("restores enum code from right join label", func(t *testing.T) {
-		src := vector.NewVec(types.T_varchar.ToType())
-		dst := vector.NewVec(types.T_enum.ToType())
+		src := vector.NewVec(types.T_varchar.ToType(), mp)
+		dst := vector.NewVec(types.T_enum.ToType(), mp)
 		defer src.Free(mp)
 		defer dst.Free(mp)
 
@@ -3351,8 +3403,8 @@ func TestAppendLCAProbeValue(t *testing.T) {
 	})
 
 	t.Run("rejects unsupported storage conversion", func(t *testing.T) {
-		src := vector.NewVec(types.T_varchar.ToType())
-		dst := vector.NewVec(types.T_int64.ToType())
+		src := vector.NewVec(types.T_varchar.ToType(), mp)
+		dst := vector.NewVec(types.T_int64.ToType(), mp)
 		defer src.Free(mp)
 		defer dst.Free(mp)
 
@@ -3363,8 +3415,8 @@ func TestAppendLCAProbeValue(t *testing.T) {
 	})
 
 	t.Run("rejects set display label instead of guessing its bitmap", func(t *testing.T) {
-		src := vector.NewVec(types.T_varchar.ToType())
-		dst := vector.NewVec(types.T_uint64.ToType())
+		src := vector.NewVec(types.T_varchar.ToType(), mp)
+		dst := vector.NewVec(types.T_uint64.ToType(), mp)
 		defer src.Free(mp)
 		defer dst.Free(mp)
 
@@ -3381,8 +3433,8 @@ func TestValidateLeadingRowID(t *testing.T) {
 		t.Helper()
 		bat := batch.NewWithSize(2)
 		bat.SetAttributes([]string{catalog.Row_ID, "id"})
-		bat.Vecs[0] = vector.NewVec(oid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(oid.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, mp))
 		bat.SetRowCount(1)
 		return bat
@@ -3414,8 +3466,8 @@ func TestValidateLeadingRowID(t *testing.T) {
 	t.Run("length mismatch", func(t *testing.T) {
 		bat := batch.NewWithSize(2)
 		bat.SetAttributes([]string{catalog.Row_ID, "id"})
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
 		uid, err := types.BuildUuid()
@@ -3480,9 +3532,9 @@ func TestProjectBaseBatchToTarget(t *testing.T) {
 	// Build a base-side data batch with 1 RowID + 2 columns [a, b]
 	baseBat := batch.NewWithSize(3)
 	baseBat.SetAttributes([]string{catalog.Row_ID, "a", "b"})
-	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	baseBat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	baseBat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
 
 	uid, err := types.BuildUuid()
 	require.NoError(t, err)
@@ -3544,10 +3596,10 @@ func TestProjectBaseBatchToTargetPreservesTrailingCommitTS(t *testing.T) {
 	baseline := mp.CurrNB()
 	baseBat := batch.NewWithSize(4)
 	baseBat.SetAttributes([]string{catalog.Row_ID, "a", "b", objectio.DefaultCommitTS_Attr})
-	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	baseBat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-	baseBat.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	baseBat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
+	baseBat.Vecs[3] = vector.NewVec(types.T_TS.ToType(), mp)
 
 	uid, err := types.BuildUuid()
 	require.NoError(t, err)
@@ -3598,9 +3650,9 @@ func TestProjectBaseBatchToTargetIfNeededForPureColumnReorder(t *testing.T) {
 	baseline := mp.CurrNB()
 	baseBat := batch.NewWithSize(3)
 	baseBat.SetAttributes([]string{catalog.Row_ID, "a", "b"})
-	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	baseBat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	baseBat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
 	uid, err := types.BuildUuid()
 	require.NoError(t, err)
 	blkID := objectio.NewBlockid(&uid, 0, 1)
@@ -3635,7 +3687,7 @@ func TestDataBranchSourceColToTargetIdxRejectsHistoricalTypeDrift(t *testing.T) 
 	}
 
 	_, err := dataBranchSourceColToTargetIdx(
-		sourceDef, targetDef, []string{"a", "c"}, []int{1},
+		sourceDef, targetDef, []string{"a", "c"}, []int{1}, false,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "historical data branch column a has a different type")
@@ -3658,7 +3710,7 @@ func TestDataBranchSourceColToTargetIdxSkipsTargetOnlyHistoricalTypeDrift(t *tes
 	}
 
 	mapping, err := dataBranchSourceColToTargetIdx(
-		sourceDef, targetDef, []string{"a", "c"}, []int{1},
+		sourceDef, targetDef, []string{"a", "c"}, []int{1}, false,
 	)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, -1}, mapping)
@@ -3673,9 +3725,9 @@ func TestDataBranchSourceColToTargetIdxSkipsTargetOnlyHistoricalTypeDrift(t *tes
 	}
 	source := batch.NewWithSize(3)
 	source.SetAttributes([]string{catalog.Row_ID, "a", "c"})
-	source.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	source.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	source.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	source.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(source.Vecs[0], buildHashDiffRowID(t, 0), false, mp))
 	require.NoError(t, vector.AppendFixed(source.Vecs[1], int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(source.Vecs[2], int32(70), false, mp))
@@ -3686,6 +3738,66 @@ func TestDataBranchSourceColToTargetIdxSkipsTargetOnlyHistoricalTypeDrift(t *tes
 	require.Equal(t, types.T_varchar, projected.Vecs[2].GetType().Oid)
 	projected.Clean(mp)
 	require.Equal(t, baseline, mp.CurrNB())
+}
+
+func TestDataBranchSourceColToTargetIdxExcludesBaseHistoricalTargetOnlyColumns(t *testing.T) {
+	// The historical base and the current target have the same schema, but
+	// x and y no longer exist on the current base.
+	def := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "x", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "y", ColId: 3, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "amount", ColId: 4, Seqnum: 3, Typ: plan.Type{Id: int32(types.T_decimal64), Width: 9, Scale: 2}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+	}
+	tblStuff := tableStuff{}
+	tblStuff.def.colNames = []string{"id", "x", "y", "amount"}
+	intType := types.T_int32.ToType()
+	decimalType := types.New(types.T_decimal64, 9, 2)
+	tblStuff.def.colTypes = []types.Type{intType, intType, intType, decimalType}
+	targetOnly := []int{1, 2}
+	targetMapping, err := dataBranchSourceColToTargetIdx(def, def, tblStuff.def.colNames, targetOnly, false)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 2, 3}, targetMapping)
+	require.False(t, dataBranchNeedsHistoricalProjection(targetMapping, len(tblStuff.def.colNames)))
+	baseMapping, err := dataBranchSourceColToTargetIdx(def, def, tblStuff.def.colNames, targetOnly, true)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, -1, -1, 3}, baseMapping)
+	require.True(t, dataBranchNeedsHistoricalProjection(baseMapping, len(tblStuff.def.colNames)))
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := batch.NewWithSize(6)
+	defer source.Clean(mp)
+	source.SetAttributes([]string{catalog.Row_ID, "id", "x", "y", "amount", objectio.DefaultCommitTS_Attr})
+	source.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	source.Vecs[1] = vector.NewVec(intType, mp)
+	source.Vecs[2] = vector.NewVec(intType, mp)
+	source.Vecs[3] = vector.NewVec(intType, mp)
+	source.Vecs[4] = vector.NewVec(decimalType, mp)
+	source.Vecs[5] = vector.NewVec(types.T_TS.ToType(), mp)
+	rowID := buildHashDiffRowID(t, 0)
+	commitTS := types.BuildTS(42, 7)
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], rowID, false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[1], int32(2), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[2], int32(77), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[3], int32(88), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[4], types.Decimal64(2000), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[5], commitTS, false, mp))
+	source.SetRowCount(1)
+
+	projected := projectDataBranchBatchToTarget(source, &tblStuff, baseMapping, mp)
+	defer projected.Clean(mp)
+	require.Equal(t, []string{catalog.Row_ID, "id", "x", "y", "amount", objectio.DefaultCommitTS_Attr}, projected.Attrs)
+	require.Equal(t, 1, projected.RowCount())
+	require.Equal(t, rowID, vector.GetFixedAtNoTypeCheck[types.Rowid](projected.Vecs[0], 0))
+	require.Equal(t, int32(2), vector.GetFixedAtNoTypeCheck[int32](projected.Vecs[1], 0))
+	require.True(t, projected.Vecs[2].IsConstNull())
+	require.True(t, projected.Vecs[3].IsConstNull())
+	require.Equal(t, types.Decimal64(2000), vector.GetFixedAtNoTypeCheck[types.Decimal64](projected.Vecs[4], 0))
+	require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](projected.Vecs[5], 0))
 }
 
 func TestDataBranchSourceColToTargetIdxAllowsCopyAlterIdentityReassignment(t *testing.T) {
@@ -3704,7 +3816,7 @@ func TestDataBranchSourceColToTargetIdxAllowsCopyAlterIdentityReassignment(t *te
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
 	}
 
-	mapping, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"}, nil)
+	mapping, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"}, nil, false)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1}, mapping)
 }
@@ -3726,7 +3838,7 @@ func TestDataBranchSourceColToTargetIdxPreservesRenamedPrimaryKeyIdentity(t *tes
 	}
 
 	mapping, err := dataBranchSourceColToTargetIdx(
-		sourceDef, targetDef, []string{"id_new", "payload"}, nil,
+		sourceDef, targetDef, []string{"id_new", "payload"}, nil, false,
 	)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1}, mapping)
@@ -3770,7 +3882,7 @@ func TestDataBranchSourceColToTargetIdxPreservesRebuiltCompositePrimaryKey(t *te
 	mapping, err := dataBranchSourceColToTargetIdx(
 		sourceDef, targetDef,
 		[]string{"select", "line item", "payload", catalog.CPrimaryKeyColName},
-		[]int{2},
+		[]int{2}, false,
 	)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1, 3}, mapping)
@@ -3793,7 +3905,7 @@ func TestDataBranchSourceColToTargetIdxPreservesRebuiltCompositePrimaryKey(t *te
 	_, err = dataBranchSourceColToTargetIdx(
 		sourceDef, targetDef,
 		[]string{"select", "line item", "payload", catalog.CPrimaryKeyColName},
-		[]int{2},
+		[]int{2}, false,
 	)
 	require.ErrorContains(t, err, "primary key is incompatible")
 
@@ -3803,7 +3915,7 @@ func TestDataBranchSourceColToTargetIdxPreservesRebuiltCompositePrimaryKey(t *te
 	mapping, err = dataBranchSourceColToTargetIdx(
 		sourceDef, targetDef,
 		[]string{"select", "line item", "payload", catalog.CPrimaryKeyColName},
-		[]int{2},
+		[]int{2}, false,
 	)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1, 3}, mapping)
@@ -3834,7 +3946,7 @@ func TestDataBranchSourceColToTargetIdxPreservesCompatibleAndReorderedColumns(t 
 	}
 
 	mapping, err := dataBranchSourceColToTargetIdx(
-		sourceDef, targetDef, []string{"a", "extra", "b", "renamed"}, []int{1, 3},
+		sourceDef, targetDef, []string{"a", "extra", "b", "renamed"}, []int{1, 3}, false,
 	)
 	require.NoError(t, err)
 	require.Equal(t, []int{-1, 2, 0, 1}, mapping,
@@ -3855,7 +3967,7 @@ func TestDataBranchSourceColToTargetIdxRejectsHistoricalPrimaryKeyDrift(t *testi
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
 	}
 
-	_, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"}, nil)
+	_, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"}, nil, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "historical data branch primary key is incompatible")
 }
@@ -3879,7 +3991,7 @@ func TestDataBranchSourceColToTargetIdxRejectsHistoricalFakePrimaryKeyDrift(t *t
 	}
 
 	_, err := dataBranchSourceColToTargetIdx(
-		sourceDef, targetDef, []string{"a", "b", catalog.FakePrimaryKeyColName}, nil,
+		sourceDef, targetDef, []string{"a", "b", catalog.FakePrimaryKeyColName}, nil, false,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "historical data branch fake primary key schema differs")
@@ -3900,10 +4012,10 @@ func TestHistoricalDataBranchChangesHandleSkipsHydrationAtBoundedGeneration(t *t
 
 	source := batch.NewWithSize(4)
 	source.SetAttributes([]string{catalog.Row_ID, "a", "b", objectio.DefaultCommitTS_Attr})
-	source.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	source.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-	source.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	source.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	source.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+	source.Vecs[3] = vector.NewVec(types.T_TS.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(source.Vecs[0], buildHashDiffRowID(t, 0), false, mp))
 	require.NoError(t, vector.AppendFixed(source.Vecs[1], int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(source.Vecs[2], int64(15), false, mp))
@@ -3937,11 +4049,11 @@ func TestOverlayDataBranchProbeResultHydratesTargetDefaults(t *testing.T) {
 	mp := ses.proc.Mp()
 
 	projected := batch.NewWithSize(5)
-	projected.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	projected.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	projected.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	projected.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	projected.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	projected.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
 	projected.Vecs[3] = vector.NewConstNull(types.T_int64.ToType(), 1, mp)
-	projected.Vecs[4] = vector.NewVec(types.T_TS.ToType())
+	projected.Vecs[4] = vector.NewVec(types.T_TS.ToType(), mp)
 	rowID := buildHashDiffRowID(t, 1)
 	require.NoError(t, vector.AppendFixed(projected.Vecs[0], rowID, false, mp))
 	require.NoError(t, vector.AppendFixed(projected.Vecs[1], int64(1), false, mp))
@@ -3952,10 +4064,10 @@ func TestOverlayDataBranchProbeResultHydratesTargetDefaults(t *testing.T) {
 	defer projected.Clean(mp)
 
 	probeBatch := batch.NewWithSize(4)
-	probeBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	probeBatch.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	probeBatch.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-	probeBatch.Vecs[3] = vector.NewVec(types.T_int64.ToType())
+	probeBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	probeBatch.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	probeBatch.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+	probeBatch.Vecs[3] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(probeBatch.Vecs[0], int64(0), false, mp))
 	require.NoError(t, vector.AppendFixed(probeBatch.Vecs[1], int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(probeBatch.Vecs[2], int64(11), false, mp))
@@ -3990,10 +4102,10 @@ func TestProjectBaseBatchToTargetMovesHiddenKeyColumns(t *testing.T) {
 	mp := ses.proc.Mp()
 	baseBat := batch.NewWithSize(4)
 	baseBat.SetAttributes([]string{catalog.Row_ID, "a", "b", catalog.CPrimaryKeyColName})
-	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	baseBat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-	baseBat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	baseBat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+	baseBat.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp)
 
 	uid, err := types.BuildUuid()
 	require.NoError(t, err)
@@ -4041,9 +4153,9 @@ func TestCompareRowInWrappedBatches_WithCommonIdxes(t *testing.T) {
 	// Batch1: [id=1, extra=999, name="same"]
 	bat1 := batch.NewWithSize(3)
 	bat1.SetAttributes([]string{"id", "extra", "name"})
-	bat1.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	bat1.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	bat1.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat1.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat1.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat1.Vecs[0], int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(bat1.Vecs[1], int64(999), false, mp))
 	require.NoError(t, vector.AppendBytes(bat1.Vecs[2], []byte("same"), false, mp))
@@ -4052,9 +4164,9 @@ func TestCompareRowInWrappedBatches_WithCommonIdxes(t *testing.T) {
 	// Batch2: [id=1, extra=0, name="same"] (extra differs but is target-only)
 	bat2 := batch.NewWithSize(3)
 	bat2.SetAttributes([]string{"id", "extra", "name"})
-	bat2.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat2.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	bat2.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	bat2.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat2.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat2.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat2.Vecs[0], int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(bat2.Vecs[1], int64(0), false, mp))
 	require.NoError(t, vector.AppendBytes(bat2.Vecs[2], []byte("same"), false, mp))
@@ -4079,9 +4191,9 @@ func TestCompareRowInWrappedBatches_WithCommonIdxes(t *testing.T) {
 	// Now test with a difference in a common column (name)
 	bat3 := batch.NewWithSize(3)
 	bat3.SetAttributes([]string{"id", "extra", "name"})
-	bat3.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat3.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	bat3.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	bat3.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat3.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat3.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat3.Vecs[0], int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(bat3.Vecs[1], int64(999), false, mp))
 	require.NoError(t, vector.AppendBytes(bat3.Vecs[2], []byte("different"), false, mp))

@@ -65,7 +65,7 @@ func captureIgnoredSql(t *testing.T) (*[]string, *int64) {
 			return executor.Result{}, nil
 		}
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], count, false, mp))
 		bat.SetRowCount(1)
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
@@ -183,7 +183,7 @@ func TestIgnoredRowsLoadIsBounded(t *testing.T) {
 	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		sqls = append(sqls, sql)
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		for i := 0; i < rows; i++ {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 		}

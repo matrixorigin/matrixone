@@ -404,7 +404,7 @@ func TestStCentroidResultNullTemplateConstBroadcastAndMaskedMalformed(t *testing
 		require.Equal(t, "POINT(1 2)", geo.WriteWKT(g))
 	}
 
-	input := vector.NewVec(types.T_geometry.ToType())
+	input := vector.NewVec(types.T_geometry.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(input, []byte("POINT(1 2)"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(input, []byte("LINESTRING(0 0)"), false, proc.Mp()))

@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,7 +30,7 @@ import (
 
 var (
 	cacheJSONVectorSize = reflect.TypeFor[vector.Vector]().Size()
-	cacheJSONLeaseSize  = reflect.TypeFor[vector.RefCountedBufferLease]().Size()
+	cacheJSONLeaseSize  = reflect.TypeFor[bufferlease.RefCounted]().Size()
 	cacheJSONReaderSize = reflect.TypeFor[cacheJSONReader]().Size()
 	cacheJSONResultSize = reflect.TypeFor[cacheJSONQueryResult]().Size()
 	cacheJSONCursorSize = reflect.TypeFor[cacheJSONCursor]().Size()
@@ -41,8 +42,8 @@ var (
 type cacheJSONReader struct {
 	rows        *vector.Vector
 	column      *vector.Vector
-	lease       *vector.RefCountedBufferLease
-	selection   *vector.AllocationAccountSelection
+	lease       *bufferlease.RefCounted
+	view        *mpool.MPool
 	start       int
 	length      int
 	repeated    bool
@@ -59,14 +60,13 @@ func IsPrivateJSONCacheReader(reader vector.JSONReader) bool {
 	return ok && private != nil && private.lease != nil
 }
 
-func newCacheJSONReader(data fscache.Data, marked validatedVectorCacheDataMarker, selection *vector.AllocationAccountSelection, capacity int64, releasePin func(), admission vector.JSONReaderMemoryAdmission) (vector.JSONReader, error) {
-	ownerMeta, err := vector.ReserveJSONReaderMetadata(selection, admission, vector.JSONReaderMetadataCapacity(cacheJSONVectorSize+cacheJSONLeaseSize))
+func newCacheJSONReader(data fscache.Data, marked validatedVectorCacheDataMarker, view *mpool.MPool, capacity int64, releasePin func(), admission vector.JSONReaderMemoryAdmission) (vector.JSONReader, error) {
+	ownerMeta, err := vector.ReserveJSONReaderMetadata(view, admission, vector.JSONReaderMetadataCapacity(cacheJSONVectorSize+cacheJSONLeaseSize))
 	if err != nil {
 		releasePin()
 		return nil, err
 	}
-	selection = vector.JSONReaderAllocationSelection(selection, admission)
-	releaseMeta, err := vector.ReserveJSONReaderMetadata(selection, admission, vector.JSONReaderMetadataCapacity(cacheJSONReaderSize))
+	releaseMeta, err := vector.ReserveJSONReaderMetadata(view, admission, vector.JSONReaderMetadataCapacity(cacheJSONReaderSize))
 	if err != nil {
 		if ownerMeta != nil {
 			ownerMeta()
@@ -98,7 +98,7 @@ func newCacheJSONReader(data fscache.Data, marked validatedVectorCacheDataMarker
 		}
 		return nil, moerr.NewInvalidInputNoCtx("JSON cache reader requires a JSON column")
 	}
-	lease, err := vector.NewRefCountedBufferLease(nil, capacity, release)
+	lease, err := bufferlease.NewRefCounted(nil, capacity, release)
 	if err != nil {
 		release()
 		if releaseMeta != nil {
@@ -106,7 +106,7 @@ func newCacheJSONReader(data fscache.Data, marked validatedVectorCacheDataMarker
 		}
 		return nil, err
 	}
-	return &cacheJSONReader{column: column, lease: lease, selection: selection, length: column.Length(), admission: admission, releaseMeta: releaseMeta}, nil
+	return &cacheJSONReader{column: column, lease: lease, view: view, length: column.Length(), admission: admission, releaseMeta: releaseMeta}, nil
 }
 
 func (r *cacheJSONReader) Length() int {
@@ -125,7 +125,7 @@ func (r *cacheJSONReader) Window(start, end int) (vector.JSONReader, error) {
 	if start < 0 || end < start || end > r.length {
 		return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader window")
 	}
-	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONReaderSize))
+	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.view, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONReaderSize))
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func (r *cacheJSONReader) Window(start, end int) (vector.JSONReader, error) {
 		}
 		return nil, io.ErrClosedPipe
 	}
-	return &cacheJSONReader{selection: r.selection, column: r.column, lease: r.lease, start: r.start + start, length: end - start, rows: r.rows, repeated: r.repeated, repeatedRow: r.repeatedRow, admission: r.admission, releaseMeta: releaseMeta}, nil
+	return &cacheJSONReader{view: r.view, column: r.column, lease: r.lease, start: r.start + start, length: end - start, rows: r.rows, repeated: r.repeated, repeatedRow: r.repeatedRow, admission: r.admission, releaseMeta: releaseMeta}, nil
 }
 
 // Repeat retains one physical row without constructing a batch-sized mapping.
@@ -147,7 +147,7 @@ func (r *cacheJSONReader) Repeat(row, length int) (vector.JSONReader, error) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader repeated row")
 	}
 	physicalRow := r.physicalRow(row)
-	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONReaderSize))
+	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.view, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONReaderSize))
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func (r *cacheJSONReader) Repeat(row, length int) (vector.JSONReader, error) {
 		}
 		return nil, io.ErrClosedPipe
 	}
-	return &cacheJSONReader{selection: r.selection, column: r.column, lease: r.lease, length: length, repeated: true, repeatedRow: physicalRow, admission: r.admission, releaseMeta: releaseMeta}, nil
+	return &cacheJSONReader{view: r.view, column: r.column, lease: r.lease, length: length, repeated: true, repeatedRow: physicalRow, admission: r.admission, releaseMeta: releaseMeta}, nil
 }
 
 // Select copies row indices into accounted private storage. It keeps no alias
@@ -174,7 +174,7 @@ func (r *cacheJSONReader) Select(rows []int64, mp *mpool.MPool) (vector.JSONRead
 			return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader selection")
 		}
 	}
-	ownerMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONVectorSize+cacheJSONLeaseSize))
+	ownerMeta, err := vector.ReserveJSONReaderMetadata(r.view, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONVectorSize+cacheJSONLeaseSize))
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +183,7 @@ func (r *cacheJSONReader) Select(rows []int64, mp *mpool.MPool) (vector.JSONRead
 			ownerMeta()
 		}
 	}()
-	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONReaderSize))
+	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.view, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONReaderSize))
 	if err != nil {
 		return nil, err
 	}
@@ -192,10 +192,10 @@ func (r *cacheJSONReader) Select(rows []int64, mp *mpool.MPool) (vector.JSONRead
 			releaseMeta()
 		}
 	}()
-	mapping, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), r.selection)
-	if err != nil {
+	if mp, err = r.allocationMP(mp); err != nil {
 		return nil, err
 	}
+	mapping := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, row := range rows {
 		if err = vector.AppendFixed(mapping, int64(r.physicalRow(int(row))), false, mp); err != nil {
 			mapping.Free(mp)
@@ -208,7 +208,7 @@ func (r *cacheJSONReader) Select(rows []int64, mp *mpool.MPool) (vector.JSONRead
 		return nil, io.ErrClosedPipe
 	}
 	ownedMeta := ownerMeta
-	lease, err := vector.NewRefCountedBufferLease(nil, int64(mapping.Allocated()), func() {
+	lease, err := bufferlease.NewRefCounted(nil, int64(mapping.Allocated()), func() {
 		mapping.Free(mp)
 		parent.Release()
 		if ownedMeta != nil {
@@ -220,10 +220,20 @@ func (r *cacheJSONReader) Select(rows []int64, mp *mpool.MPool) (vector.JSONRead
 		parent.Release()
 		return nil, err
 	}
-	reader := &cacheJSONReader{selection: r.selection, column: r.column, rows: mapping, lease: lease, length: len(rows), admission: r.admission, releaseMeta: releaseMeta}
+	reader := &cacheJSONReader{view: r.view, column: r.column, rows: mapping, lease: lease, length: len(rows), admission: r.admission, releaseMeta: releaseMeta}
 	ownerMeta = nil
 	releaseMeta = nil
 	return reader, nil
+}
+
+// allocationMP returns the MPool that charges a reader-owned allocation: the
+// reader's statement view when it has one, otherwise the caller's pool (a
+// transient admission view of it when the reader has an admission).
+func (r *cacheJSONReader) allocationMP(mp *mpool.MPool) (*mpool.MPool, error) {
+	if r.view.IsView() {
+		return r.view, nil
+	}
+	return vector.JSONReaderAllocationMP(mp, r.admission)
 }
 
 func (r *cacheJSONReader) physicalRow(row int) int {
@@ -245,10 +255,11 @@ func (r *cacheJSONReader) Materialize(mp *mpool.MPool) (*vector.Vector, error) {
 	if mp == nil {
 		return nil, moerr.NewInvalidInputNoCtx("JSON materialization requires a pool")
 	}
-	destination, err := vector.NewOffHeapVecWithTypeAndAllocation(*r.column.GetType(), r.selection)
+	mp, err := r.allocationMP(mp)
 	if err != nil {
 		return nil, err
 	}
+	destination := vector.NewVec(*r.column.GetType(), mp)
 	for row := 0; row < r.length; row++ {
 		physicalRow := r.physicalRow(row)
 		null := r.column.IsNull(uint64(physicalRow))
@@ -269,7 +280,7 @@ func (r *cacheJSONReader) Close() {
 		lease := r.lease
 		releaseMeta := r.releaseMeta
 		r.lease = nil
-		r.selection = nil
+		r.view = nil
 		r.admission = nil
 		r.releaseMeta = nil
 		// Row coordinates remain immutable for outstanding cursors. The
@@ -288,7 +299,7 @@ func (r *cacheJSONReader) Query(row int, path *bytejson.Path) (vector.JSONQueryR
 	if r == nil || r.lease == nil {
 		return nil, io.ErrClosedPipe
 	}
-	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONResultSize))
+	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.view, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONResultSize))
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +309,7 @@ func (r *cacheJSONReader) Query(row int, path *bytejson.Path) (vector.JSONQueryR
 		}
 		return nil, io.ErrClosedPipe
 	}
-	result := &cacheJSONQueryResult{lease: r.lease, releaseMeta: releaseMeta, selection: r.selection, admission: r.admission}
+	result := &cacheJSONQueryResult{lease: r.lease, releaseMeta: releaseMeta, view: r.view, admission: r.admission}
 	if err := r.fillQuery(row, path, result); err != nil {
 		result.Close()
 		return nil, err
@@ -344,7 +355,7 @@ func (r *cacheJSONReader) fillQuery(row int, path *bytejson.Path, result *cacheJ
 		return nil
 	}
 	result.value, result.exists, result.releaseValue, err = value.QueryWithMemory(path, func(size uint64) (func(), error) {
-		return vector.ReserveJSONReaderBacking(r.selection, r.admission, size)
+		return vector.ReserveJSONReaderBacking(r.view, r.admission, size)
 	})
 	return err
 }
@@ -353,7 +364,7 @@ func (r *cacheJSONReader) OpenCursor() (vector.JSONCursor, error) {
 	if r == nil || r.lease == nil {
 		return nil, io.ErrClosedPipe
 	}
-	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONCursorSize))
+	releaseMeta, err := vector.ReserveJSONReaderMetadata(r.view, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONCursorSize))
 	if err != nil {
 		return nil, err
 	}
@@ -364,8 +375,8 @@ func (r *cacheJSONReader) OpenCursor() (vector.JSONCursor, error) {
 		return nil, io.ErrClosedPipe
 	}
 	return &cacheJSONCursor{
-		reader:               cacheJSONReader{rows: r.rows, column: r.column, start: r.start, length: r.length, repeated: r.repeated, repeatedRow: r.repeatedRow, selection: r.selection, admission: r.admission},
-		cacheJSONQueryResult: cacheJSONQueryResult{lease: r.lease, releaseMeta: releaseMeta, selection: r.selection, admission: r.admission},
+		reader:               cacheJSONReader{rows: r.rows, column: r.column, start: r.start, length: r.length, repeated: r.repeated, repeatedRow: r.repeatedRow, view: r.view, admission: r.admission},
+		cacheJSONQueryResult: cacheJSONQueryResult{lease: r.lease, releaseMeta: releaseMeta, view: r.view, admission: r.admission},
 	}, nil
 }
 
@@ -395,10 +406,10 @@ type cacheJSONQueryResult struct {
 	value        bytejson.ByteJson
 	exists       bool
 	sqlNull      bool
-	lease        *vector.RefCountedBufferLease
+	lease        *bufferlease.RefCounted
 	releaseMeta  func()
 	releaseValue func()
-	selection    *vector.AllocationAccountSelection
+	view         *mpool.MPool
 	admission    vector.JSONReaderMemoryAdmission
 }
 
@@ -441,7 +452,7 @@ func (r *cacheJSONQueryResult) Close() {
 		r.clearValue()
 		r.lease = nil
 		r.releaseMeta = nil
-		r.selection = nil
+		r.view = nil
 		r.admission = nil
 		lease.Release()
 		if releaseMeta != nil {
@@ -508,7 +519,7 @@ func (r *cacheJSONQueryResult) TextWithLegacyFloat() (vector.JSONOwnedText, erro
 
 func (r *cacheJSONQueryResult) copyText(value bytejson.ByteJson, legacyFloat bool) (vector.JSONOwnedText, error) {
 	text, release, err := jsonread.CopyText(value, legacyFloat, func(size uint64) (func(), error) {
-		return vector.ReserveJSONReaderBacking(r.selection, r.admission, size)
+		return vector.ReserveJSONReaderBacking(r.view, r.admission, size)
 	})
 	if err != nil {
 		return vector.JSONOwnedText{}, err
@@ -612,7 +623,7 @@ func (r *cacheJSONReader) QueryTextAtPath(row int, path bytejson.Path, legacyFlo
 }
 
 func (r *cacheJSONReader) queryTextFromValue(value bytejson.ByteJson, path bytejson.Path, legacyFloat bool) (vector.JSONTextSelection, error) {
-	release, err := vector.ReserveJSONReaderMetadata(r.selection, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONResultSize))
+	release, err := vector.ReserveJSONReaderMetadata(r.view, r.admission, vector.JSONReaderMetadataCapacity(cacheJSONResultSize))
 	if err != nil {
 		return vector.JSONTextSelection{}, err
 	}
@@ -621,7 +632,7 @@ func (r *cacheJSONReader) queryTextFromValue(value bytejson.ByteJson, path bytej
 			release()
 		}
 	}()
-	result := cacheJSONQueryResult{lease: r.lease, selection: r.selection, admission: r.admission}
+	result := cacheJSONQueryResult{lease: r.lease, view: r.view, admission: r.admission}
 	defer result.clearValue()
 	return queryCacheTextFromValue(value, path, &result, legacyFloat)
 }
@@ -629,7 +640,7 @@ func (r *cacheJSONReader) queryTextFromValue(value bytejson.ByteJson, path bytej
 func queryCacheTextFromValue(value bytejson.ByteJson, path bytejson.Path, result *cacheJSONQueryResult, legacyFloat bool) (vector.JSONTextSelection, error) {
 	var err error
 	result.value, result.exists, result.releaseValue, err = value.QueryWithMemory(&path, func(size uint64) (func(), error) {
-		return vector.ReserveJSONReaderBacking(result.selection, result.admission, size)
+		return vector.ReserveJSONReaderBacking(result.view, result.admission, size)
 	})
 	if err != nil {
 		return vector.JSONTextSelection{}, err

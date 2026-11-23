@@ -129,6 +129,25 @@ func (dispatch *Dispatch) ActivatesAllocationAccountLifecycle() bool {
 	return false
 }
 
+// dispatchAllocationSiteSpool is the account site of the spool's copied batches.
+const dispatchAllocationSiteSpool mpool.AllocationSite = 64
+
+// spoolMP returns the pool the pipeline spool copies batches through. The
+// spool copy used to be charged to each source batch's allocation account;
+// vectors no longer carry one, so the spool charges the statement account
+// compile bound to this operator, or proc's pool when none is bound.
+func (dispatch *Dispatch) spoolMP(proc *process.Process) (*mpool.MPool, error) {
+	if dispatch.allocationAccount == nil {
+		return proc.Mp(), nil
+	}
+	return proc.Mp().WithAccount(
+		dispatch.allocationAccount,
+		mpool.AllocationOwnerSelection,
+		dispatchAllocationSiteSpool,
+		mpool.AllocationCapacityClassDefault,
+	)
+}
+
 func (dispatch *Dispatch) ClearAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {

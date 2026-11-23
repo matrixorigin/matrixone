@@ -2167,25 +2167,11 @@ func (exec *vectorMatmulExec) SaveIntermediateResult(cnt int64, flags [][]uint8,
 	return exec.aggExec.SaveIntermediateResult(cnt, flags, writer)
 }
 
-func (exec *vectorMatmulExec) SaveIntermediateResultWithStringSource(cnt int64, flags [][]uint8, writer io.Writer, includeStringSource bool) error {
-	if err := exec.drain(); err != nil {
-		return err
-	}
-	return exec.aggExec.SaveIntermediateResultWithStringSource(cnt, flags, writer, includeStringSource)
-}
-
 func (exec *vectorMatmulExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
 	if err := exec.drain(); err != nil {
 		return err
 	}
 	return exec.aggExec.SaveIntermediateResultOfChunk(chunk, writer)
-}
-
-func (exec *vectorMatmulExec) SaveIntermediateResultOfChunkWithStringSource(chunk int, writer io.Writer, includeStringSource bool) error {
-	if err := exec.drain(); err != nil {
-		return err
-	}
-	return exec.aggExec.SaveIntermediateResultOfChunkWithStringSource(chunk, writer, includeStringSource)
 }
 
 func (exec *vectorMatmulExec) SaveSpillIntermediateRows(chunk int, rows []int32, writer io.Writer) error {
@@ -2399,7 +2385,7 @@ func (exec *vectorMatmulExec) Flush() (_ []*vector.Vector, retErr error) {
 	enc := &vectorMatmulJSON{sorted: sorted}
 	empty := exec.emptyState()
 	for x, state := range exec.state {
-		result, err := exec.allocation.newVector(exec.retType)
+		result, err := exec.allocation.newVector(exec.retType, exec.mp)
 		if err != nil {
 			return nil, err
 		}

@@ -28,7 +28,7 @@ func TestJSONReaderWindowMetadataIsAccounted(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 128)
 	defer finalizeTestVectorAllocationAccount(t, state)
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	builder, err := NewJSONReaderBuilder(mp, state.selection)
+	builder, err := NewJSONReaderBuilder(state.view(t, mp))
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"keep":1}`), false))
@@ -47,7 +47,7 @@ func TestJSONReaderMetadataFollowsIndependentLifetimes(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 128)
 	defer finalizeTestVectorAllocationAccount(t, state)
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	builder, err := NewJSONReaderBuilder(mp, state.selection)
+	builder, err := NewJSONReaderBuilder(state.view(t, mp))
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"keep":1}`), false))
@@ -103,7 +103,7 @@ func TestJSONReaderMetadataAdmissionFailureIsAtomic(t *testing.T) {
 		live += capacity
 		return func() { live -= capacity }, nil
 	}
-	builder, err := NewJSONReaderBuilder(mp, nil, admission)
+	builder, err := NewJSONReaderBuilder(mp, admission)
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"keep":1}`), false))
@@ -146,7 +146,7 @@ func TestJSONReaderMetadataPublicationFailureReleasesOwner(t *testing.T) {
 				live += capacity
 				return func() { live -= capacity }, nil
 			}
-			builder, err := NewJSONReaderBuilder(mp, nil, admission)
+			builder, err := NewJSONReaderBuilder(mp, admission)
 			if failAt == 1 {
 				require.ErrorIs(t, err, want)
 				require.Nil(t, builder)
@@ -189,7 +189,7 @@ func TestJSONReaderMetadataSelectionTakesPrecedence(t *testing.T) {
 		calls++
 		return nil, errors.New("unexpected transient admission")
 	}
-	builder, err := NewJSONReaderBuilder(mp, state.selection, admission)
+	builder, err := NewJSONReaderBuilder(state.view(t, mp), admission)
 	require.NoError(t, err)
 	defer builder.Close()
 	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"keep":1}`), false))
@@ -213,11 +213,11 @@ func TestJSONReaderMetadataSelectionTakesPrecedence(t *testing.T) {
 func TestJSONReaderSnapshotAdmissionFailureIsTerminal(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := NewVec(types.T_json.ToType())
+	source := NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `{"keep":1}`), false, mp))
 	want := errors.New("statement budget rejected")
-	reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 1, mp, nil, func(uint64) (func(), error) {
+	reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 1, mp, func(uint64) (func(), error) {
 		return nil, want
 	})
 	require.ErrorIs(t, err, want)

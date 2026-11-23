@@ -195,9 +195,9 @@ type frameRow struct {
 // checksum gets the one its footer carries.
 func frameRowsBatch(t *testing.T, mp *mpool.MPool, rows []frameRow) *batch.Batch {
 	b := batch.NewWithSize(3)
-	b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	b.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	b.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	b.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	b.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, r := range rows {
 		checksum := r.checksum
 		if checksum == "" {

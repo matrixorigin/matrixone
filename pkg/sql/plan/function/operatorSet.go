@@ -319,6 +319,10 @@ func coalesceBinaryStringResult(overloads []overload, inputs []types.Type) (chec
 			continue
 		case types.T_binary, types.T_varbinary:
 			hasBinary = true
+		case types.T_char, types.T_varchar:
+			// MySQL gives a COALESCE over byte and character strings the
+			// binary string type, as it does IF and CASE. The type is the
+			// only carrier of that domain: vectors have no per-row domain.
 		default:
 			return checkResult{}, false
 		}
@@ -1043,7 +1047,7 @@ func newCaseConditionTruth(vec *vector.Vector) caseConditionTruth {
 
 func (c caseConditionTruth) truth(mode SQLCompatibilityMode, row uint64) (bool, error) {
 	if c.json != nil {
-		return IffConditionTruthyAt(c.json, row, mode)
+		return IffConditionTruthyAt(c.json, row, false, mode)
 	}
 	v, null := c.cond.GetValue(row)
 	return !null && v, nil
@@ -1465,7 +1469,11 @@ func iffCheckTypes(_ []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func IffConditionTruthyAt(vec *vector.Vector, row uint64, mode SQLCompatibilityMode) (bool, error) {
+// IffConditionTruthyAt evaluates a conditional's truth at row. isBin reports
+// that the condition value is a binary literal (see
+// vector.FunctionResultWrapper.ArgumentIsBin), which reads string bytes as an
+// unsigned number rather than as numeric text.
+func IffConditionTruthyAt(vec *vector.Vector, row uint64, isBin bool, mode SQLCompatibilityMode) (bool, error) {
 	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
 		return false, nil
 	}
@@ -1540,7 +1548,7 @@ func IffConditionTruthyAt(vec *vector.Vector, row uint64, mode SQLCompatibilityM
 	case types.T_decimal256:
 		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, int(row)).Compare(types.Decimal256{}) != 0, nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		value, err := parseBytesToFloat(vec.GetBytesAt(int(row)), vec.GetIsBin(), 64, mode)
+		value, err := parseBytesToFloat(vec.GetBytesAt(int(row)), isBin, 64, mode)
 		if err != nil {
 			return false, err
 		}
@@ -1620,6 +1628,7 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 
 	rs := vector.MustFunctionResult[T](result)
 	mode := CompatibilityModeFromProcess(proc)
+	conditionIsBin := result.ArgumentIsBin(0)
 	var zero T
 	for i := uint64(0); i < uint64(length); i++ {
 		if iffRowSkipped(selectList, i) {
@@ -1628,7 +1637,7 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 			}
 			continue
 		}
-		truth, err := IffConditionTruthyAt(vecs[0], i, mode)
+		truth, err := IffConditionTruthyAt(vecs[0], i, conditionIsBin, mode)
 		if err != nil {
 			return err
 		}
@@ -1651,6 +1660,7 @@ func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	mode := CompatibilityModeFromProcess(proc)
+	conditionIsBin := result.ArgumentIsBin(0)
 	for i := uint64(0); i < uint64(length); i++ {
 		if iffRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -1658,7 +1668,7 @@ func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			}
 			continue
 		}
-		truth, err := IffConditionTruthyAt(vecs[0], i, mode)
+		truth, err := IffConditionTruthyAt(vecs[0], i, conditionIsBin, mode)
 		if err != nil {
 			return err
 		}
@@ -1702,6 +1712,11 @@ func unaryMinusMatch(overloads []overload, inputs []types.Type) checkResult {
 		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 			// The low-precision floats widen losslessly to float32 (overload 4).
 			return newCheckResultWithCast(4, []types.Type{types.T_float32.ToType()})
+		case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+			// MySQL evaluates unary temporal negation in DOUBLE, unlike binary
+			// subtraction. The temporal-to-FLOAT64 cast preserves its numeric
+			// calendar representation and session-time-zone interpretation.
+			return newCheckResultWithCast(5, []types.Type{types.T_float64.ToType()})
 		}
 	}
 	return fixedTypeMatch(overloads, inputs)

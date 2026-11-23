@@ -1114,7 +1114,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					staticStringDomainForPlanType(fn.Args[0].Typ) == planStringDomainBinary { // JSON_DEPTH
 					features.JSONInputContracts = true
 				}
-				if id == 636 { // JSON_SEARCH
+				if id == 637 { // JSON_SEARCH
 					features.JSONSearch = true
 				}
 				special, err := isSpecialIntegerConsumer(fn, id, overload)

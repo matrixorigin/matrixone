@@ -30,7 +30,7 @@ import (
 func TestJSONCacheReaderDirectTextCopiesToAccountedResult(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := vector.NewVec(types.T_json.ToType())
+	source := vector.NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	long := strings.Repeat("x", 8192)
 	doc, err := types.ParseStringToByteJson(`{"keep":"text","number":123,"long":"` + long + `","arr":[1,2]}`)
@@ -48,7 +48,7 @@ func TestJSONCacheReaderDirectTextCopiesToAccountedResult(t *testing.T) {
 		live += n
 		return func() { live -= n }, nil
 	}
-	reader, err := OpenJSONReader(data, mp, nil, admission)
+	reader, err := OpenJSONReader(data, mp, admission)
 	require.NoError(t, err)
 	defer reader.Close()
 	direct, ok := reader.(vector.JSONDirectTextReader)
@@ -95,7 +95,7 @@ func TestJSONCacheReaderDirectTextCopiesToAccountedResult(t *testing.T) {
 func TestJSONCacheReaderQueryRespectsBudget(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := vector.NewVec(types.T_json.ToType())
+	source := vector.NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	doc, err := types.ParseStringToByteJson(`["` + strings.Repeat("x", 8192) + `","y"]`)
 	require.NoError(t, err)
@@ -112,7 +112,7 @@ func TestJSONCacheReaderQueryRespectsBudget(t *testing.T) {
 		live += n
 		return func() { live -= n }, nil
 	}
-	reader, err := OpenJSONReader(data, mp, nil, admission)
+	reader, err := OpenJSONReader(data, mp, admission)
 	require.NoError(t, err)
 	defer reader.Close()
 	_, ok := reader.(*cacheJSONReader)
@@ -149,7 +149,7 @@ func TestJSONCacheReaderQueryRespectsBudget(t *testing.T) {
 func TestJSONCacheReaderQueryBudgetLifecycle(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := vector.NewVec(types.T_json.ToType())
+	source := vector.NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	value := strings.Repeat("x", 128)
 	doc, err := types.ParseStringToByteJson(`["` + value + `","y"]`)
@@ -169,7 +169,7 @@ func TestJSONCacheReaderQueryBudgetLifecycle(t *testing.T) {
 		return func() { live -= n }, nil
 	}
 	defer func() { require.Zero(t, live) }()
-	reader, err := OpenJSONReader(data, mp, nil, admission)
+	reader, err := OpenJSONReader(data, mp, admission)
 	require.NoError(t, err)
 	defer reader.Close()
 	cursor, err := reader.OpenCursor()

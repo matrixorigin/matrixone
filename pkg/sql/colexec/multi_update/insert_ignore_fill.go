@@ -72,14 +72,29 @@ func (update *MultiUpdate) insertNotNullFillOwned() bool {
 // skipped exactly like the strict check does.
 func fillMainInsertNotNullForIgnore(
 	proc *process.Process,
+	fill *colexec.IgnoreFill,
 	updateCtx *MultiUpdateCtx,
 	bat *batch.Batch,
 	useInsertIdx bool,
 	insertOwned bool,
-) (filled, droppedRows bool, err error) {
+	batOwned bool,
+) (out *batch.Batch, filled, droppedRows bool, err error) {
 	if !insertOwned ||
 		proc == nil || proc.GetStmtProfile() == nil || !proc.GetStmtProfile().GetStatementIgnore() {
-		return false, false, nil
+		return bat, false, false, nil
+	}
+	// The fill and the drop never modify a batch or vector this operator does
+	// not own. batOwned reports that bat and its vectors are the operator's
+	// own (they are adjusted in place). Otherwise the operator works on the
+	// fill's view of bat: adjusted and shrunk columns replace slots of the
+	// view, and the caller uses out in place of bat from here on, so every
+	// later leg sees the adjusted rows.
+	out = bat
+	var owned func(int) bool
+	if batOwned {
+		owned = func(int) bool { return true }
+	} else {
+		out = fill.View(bat)
 	}
 	// The pinned drop key is resolved from TableDef.Pkey by name: ordinary
 	// INSERT plans never populate InsertPkColIdx (it stays a REPLACE-only
@@ -90,10 +105,10 @@ func fillMainInsertNotNullForIgnore(
 	// drop below.
 	pkColIdx := colexec.IgnoreNullPkColumnIdx(updateCtx.TableDef)
 	var (
-		vecs       = make([]*vector.Vector, 0, len(updateCtx.InsertCols))
-		attrs      = make([]string, 0, len(updateCtx.InsertCols))
-		cols       = make([]*plan.ColDef, 0, len(updateCtx.InsertCols))
-		constSlots [][2]int
+		vecs  = make([]*vector.Vector, 0, len(updateCtx.InsertCols))
+		attrs = make([]string, 0, len(updateCtx.InsertCols))
+		cols  = make([]*plan.ColDef, 0, len(updateCtx.InsertCols))
+		slots = make([]int, 0, len(updateCtx.InsertCols))
 	)
 	for insertIdx, inputIdx := range updateCtx.InsertCols {
 		if insertIdx >= len(updateCtx.TableDef.Cols) {
@@ -109,38 +124,36 @@ func fillMainInsertNotNullForIgnore(
 		if useInsertIdx {
 			inputIdx = insertIdx
 		}
-		if inputIdx < 0 || inputIdx >= len(bat.Vecs) || bat.Vecs[inputIdx] == nil {
+		if inputIdx < 0 || inputIdx >= len(out.Vecs) || out.Vecs[inputIdx] == nil {
 			continue
 		}
-		vecs = append(vecs, bat.Vecs[inputIdx])
+		vecs = append(vecs, out.Vecs[inputIdx])
 		attrs = append(attrs, col.Name)
 		cols = append(cols, col)
-		// vecs is a fresh list, so a constant NULL the shared fill replaces
-		// (it owns no backing storage) must be installed back into the
-		// batch the write legs read.
-		if bat.Vecs[inputIdx].IsConst() {
-			constSlots = append(constSlots, [2]int{len(vecs) - 1, inputIdx})
-		}
+		slots = append(slots, inputIdx)
 	}
-	if _, err := colexec.BatchDataNotNullFillForIgnore(vecs, attrs, cols, proc); err != nil {
-		return true, false, err
+	adjusted, err := fill.Fill(vecs, attrs, cols, owned, proc)
+	if err != nil {
+		return bat, false, false, err
 	}
-	for _, slot := range constSlots {
-		if vecs[slot[0]] != bat.Vecs[slot[1]] {
-			bat.Vecs[slot[1]] = vecs[slot[0]]
-		}
+	// vecs is a fresh list: install the adjusted vectors into out's slots.
+	for _, j := range adjusted {
+		out.Vecs[slots[j]] = vecs[j]
 	}
 	if pkColIdx < 0 {
-		return true, false, nil
+		return out, true, false, nil
 	}
 	inputIdx := updateCtx.InsertCols[pkColIdx]
 	if useInsertIdx {
 		inputIdx = pkColIdx
 	}
-	if inputIdx < 0 || inputIdx >= len(bat.Vecs) || bat.Vecs[inputIdx] == nil {
-		return true, false, nil
+	if inputIdx < 0 || inputIdx >= len(out.Vecs) || out.Vecs[inputIdx] == nil {
+		return out, true, false, nil
 	}
-	droppedRows, err = colexec.DropNullPkRowsForIgnore(
-		proc, bat.Vecs[inputIdx], updateCtx.TableDef.Cols[pkColIdx].Name, bat)
-	return true, droppedRows, err
+	droppedRows, err = fill.DropNullPkRows(
+		proc, out.Vecs[inputIdx], updateCtx.TableDef.Cols[pkColIdx].Name, out, owned)
+	if err != nil {
+		return bat, false, false, err
+	}
+	return out, true, droppedRows, nil
 }

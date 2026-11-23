@@ -27,7 +27,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -306,7 +305,10 @@ type PrepareStmt struct {
 	// plan was bound. A caller-owned procedure must rebind before using it.
 	directIndexReadAdmitted bool
 
+	// params is owned by the statement; paramsMP is the pool it was created
+	// with (the executing process's pool) and is freed with.
 	params              *vector.Vector
+	paramsMP            *mpool.MPool
 	getFromSendLongData map[int]struct{}
 	// COM_STMT_SEND_LONG_DATA owns its chunks until EXECUTE materializes each
 	// parameter once. The pool must be the one that allocated the buffers,
@@ -376,15 +378,11 @@ type PrepareStmt struct {
 	fixedIntegerParamPositions []int32
 	hasPaginationParams        bool
 	hasLagLeadParams           bool
-	paramKinds                 []vector.PrepareParamKind
-	paramBinaryStrings         []bool
-	paramMetadata              []bool
+	paramKinds                 []types.StringConversionKind
 	// jsonComparisonParamPositions is computed once per prepared-plan
-	// generation. Only these parameters need an exact SQL type in Process
-	// metadata; paramConcreteTypes is a reusable execution buffer.
+	// generation; the protocol type decides those parameters' binding kind.
 	jsonComparisonParamPositions []int32
 	jsonMemberOfParamPositions   []int32
-	paramConcreteTypes           []types.T
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose
 	// runtime integer/decimal domain may require overload rebinding without
@@ -909,8 +907,8 @@ func (prepareStmt *PrepareStmt) Close() {
 		if prepareStmt.proc != nil && prepareStmt.proc.GetPrepareParams() == prepareStmt.params {
 			prepareStmt.proc.SetPrepareParams(nil)
 		}
-		prepareStmt.params.Free(prepareStmt.proc.Mp())
-		prepareStmt.params = nil
+		prepareStmt.params.Free(prepareStmt.paramsMP)
+		prepareStmt.params, prepareStmt.paramsMP = nil, nil
 	}
 
 	if prepareStmt.compile != nil {
@@ -994,8 +992,8 @@ func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 		if proc.GetPrepareParams() == prepareStmt.params {
 			proc.SetPrepareParams(nil)
 		}
-		prepareStmt.params.Free(proc.Mp())
-		prepareStmt.params = nil
+		prepareStmt.params.Free(prepareStmt.paramsMP)
+		prepareStmt.params, prepareStmt.paramsMP = nil, nil
 	}
 	for k := range prepareStmt.getFromSendLongData {
 		delete(prepareStmt.getFromSendLongData, k)
@@ -1113,7 +1111,6 @@ type FeSession interface {
 	GetProc() *process.Process
 	GetLastInsertID() uint64
 	GetSqlHelper() *SqlHelper
-	GetBuffer() *buffer.Buffer
 	GetStmtProfile() *process.StmtProfile
 	CopySeqToProc(proc *process.Process)
 	getQueryId(internal bool) []string
@@ -1365,7 +1362,6 @@ type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch, *perfcounter.Cou
 
 type feSessionImpl struct {
 	pool          *mpool.MPool
-	buf           *buffer.Buffer
 	stmtProfile   process.StmtProfile
 	tenant        *TenantInfo
 	txnHandler    *TxnHandler
@@ -1530,10 +1526,6 @@ func (ses *feSessionImpl) Reset() {
 	for _, bat := range ses.resultBatches {
 		bat.Clean(ses.pool)
 	}
-	if ses.buf != nil {
-		ses.buf.Free()
-		ses.buf = nil
-	}
 	ses.upstream = nil
 	ses.fromRealUser = false
 }
@@ -1566,10 +1558,6 @@ func (ses *feSessionImpl) SetMemPool(mp *mpool.MPool) {
 
 func (ses *feSessionImpl) GetMemPool() *mpool.MPool {
 	return ses.pool
-}
-
-func (ses *feSessionImpl) GetBuffer() *buffer.Buffer {
-	return ses.buf
 }
 
 func (ses *feSessionImpl) GetStmtProfile() *process.StmtProfile {
@@ -1739,7 +1727,7 @@ func (ses *feSessionImpl) GetResultBatches() []*batch.Batch {
 func (ses *feSessionImpl) AppendResultBatch(bat *batch.Batch) error {
 	// Result batches belong to the session and can remain reachable after the
 	// producing statement has sealed its allocation account.
-	copied, err := bat.DupWithoutAllocationAccount(ses.pool)
+	copied, err := bat.Dup(ses.pool)
 	if err != nil {
 		return err
 	}

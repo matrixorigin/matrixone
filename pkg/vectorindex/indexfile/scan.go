@@ -116,7 +116,7 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 	mp := proc.Mp()
 	for _, r := range readers {
 		for {
-			bat, err := newScanBatch(tableDef)
+			bat, err := newScanBatch(tableDef, mp)
 			if err != nil {
 				return err
 			}
@@ -176,7 +176,7 @@ func forEachChunk(bat *batch.Batch, ref *Ref, fn func(chunkID int64, data []byte
 	return nil
 }
 
-func newScanBatch(tableDef *plan.TableDef) (*batch.Batch, error) {
+func newScanBatch(tableDef *plan.TableDef, mp *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(scanColumns))
 	bat.Attrs = append(bat.Attrs, scanColumns...)
 	for i, name := range scanColumns {
@@ -186,7 +186,7 @@ func newScanBatch(tableDef *plan.TableDef) (*batch.Batch, error) {
 			return nil, moerr.NewInternalErrorNoCtxf("index file: column %q not found in %s", name, tableDef.Name)
 		}
 		typ := tableDef.Cols[pos].Typ
-		bat.Vecs[i] = vector.NewVec(types.New(types.T(typ.Id), typ.Width, typ.Scale))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T(typ.Id), typ.Width, typ.Scale), mp)
 	}
 	return bat, nil
 }

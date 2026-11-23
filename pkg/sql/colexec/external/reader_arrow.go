@@ -44,9 +44,6 @@ import (
 const (
 	arrowRangeAllocationSite mpool.AllocationSite = 1
 	arrowVectorDataSite      mpool.AllocationSite = 3
-	arrowVectorAreaSite      mpool.AllocationSite = 4
-	arrowVectorNullsSite     mpool.AllocationSite = 5
-	arrowVectorGroupingSite  mpool.AllocationSite = 6
 	arrowMaxOutputRows                            = 100_000
 )
 
@@ -190,18 +187,24 @@ type ArrowReader struct {
 	pending               arrow.RecordBatch
 	rowOffset             int64
 	admission             fileservice.RangeReadAdmission
-	allocation            *vector.AllocationAccountSelection
+	allocation            *mpool.MPool
 	forceMaterialize      bool
 	conversionFingerprint [sha256.Size]byte
 	fingerprintSet        bool
+	// published is the batch the last PublishBatch returned. The reader owns
+	// it - its vectors are in allocation, or read-only references to Arrow
+	// buffers its leases keep alive - until the next PublishBatch or
+	// ReleaseBatch. Close (one file done) keeps it: it is still the
+	// operator's current output.
+	published *batch.Batch
 }
 
 func NewArrowReader(
 	param *ExternalParam,
-	_ *process.Process,
+	proc *process.Process,
 	account *mpool.AllocationAccount,
 ) (*ArrowReader, error) {
-	if param == nil || param.Extern == nil || account == nil {
+	if param == nil || param.Extern == nil || account == nil || proc == nil {
 		return nil, moerr.NewInvalidInputNoCtx("Arrow LOAD requires a statement allocation account")
 	}
 	if param.ArrowConversionPlanVersion != arrowbridge.ConversionPlanVersion {
@@ -223,13 +226,11 @@ func NewArrowReader(
 	if err != nil {
 		return nil, err
 	}
-	allocation, err := vector.NewAllocationAccountSelection(
+	allocation, err := proc.Mp().WithAccount(
 		account,
 		mpool.AllocationOwnerExternal,
 		arrowVectorDataSite,
-		arrowVectorAreaSite,
-		arrowVectorNullsSite,
-		arrowVectorGroupingSite,
+		mpool.AllocationCapacityClassDefault,
 	)
 	if err != nil {
 		return nil, err
@@ -482,18 +483,74 @@ func arrowObjectIdentity(
 	return &identity, nil
 }
 
+// ReadBatch is not supported: the Arrow reader owns its zero-copy batches and
+// hands them out through PublishBatch, so no caller-owned batch ever holds
+// reader-owned vectors.
 func (r *ArrowReader) ReadBatch(
 	ctx context.Context,
-	buf *batch.Batch,
+	_ *batch.Batch,
+	_ *process.Process,
+	_ process.Analyzer,
+) (bool, error) {
+	return false, moerr.NewInternalError(ctx, "Arrow reader publishes its batches; use PublishBatch")
+}
+
+// ReleaseBatch frees the last published batch. The operator calls it once
+// nothing reads that batch any more (Reset, Free).
+func (r *ArrowReader) ReleaseBatch() {
+	if r == nil || r.published == nil {
+		return
+	}
+	r.published.Clean(r.allocation)
+	r.published = nil
+}
+
+// PublishBatch converts the next window of the current record batch and
+// returns it. The batch is owned by the reader and valid until the next
+// PublishBatch or ReleaseBatch; the caller outputs it as is and never frees
+// or modifies its vectors.
+func (r *ArrowReader) PublishBatch(
+	ctx context.Context,
 	proc *process.Process,
 	_ process.Analyzer,
-) (_ bool, retErr error) {
+) (_ *batch.Batch, _ bool, retErr error) {
 	defer func() { observeArrowError(retErr) }()
-	if r == nil || r.reader == nil || r.plan == nil || r.pending == nil || buf == nil || proc == nil {
-		return false, moerr.NewInvalidInput(ctx, "Arrow reader is not open")
+	// The previous batch was consumed: the operator asks for the next one
+	// only after its output was processed.
+	r.ReleaseBatch()
+	if r == nil || r.reader == nil || r.plan == nil || r.pending == nil || proc == nil {
+		return nil, false, moerr.NewInvalidInput(ctx, "Arrow reader is not open")
 	}
+	converted, fileFinished, err := r.convertNext(ctx, proc)
+	if err != nil {
+		return nil, false, err
+	}
+	attrs := make([]string, len(r.param.Attrs))
+	for i, attr := range r.param.Attrs {
+		attrs[i] = attr.ColName
+	}
+	if len(converted.Vecs) != len(attrs) {
+		converted.Clean(r.allocation)
+		return nil, false, moerr.NewInternalErrorNoCtx("Arrow conversion produced an incompatible MatrixOne batch")
+	}
+	for i, vec := range converted.Vecs {
+		if vec == nil {
+			converted.Clean(r.allocation)
+			return nil, false, moerr.NewInternalErrorNoCtxf("Arrow conversion produced a nil vector at column %d", i)
+		}
+	}
+	converted.Attrs = attrs
+	r.published = converted
+	metric.ArrowLoadBatchCounter.Inc()
+	metric.ArrowLoadRowCounter.Add(float64(converted.RowCount()))
+	return converted, fileFinished, nil
+}
+
+// convertNext converts the next output window into a batch owned by the
+// reader and advances the read position.
+func (r *ArrowReader) convertNext(ctx context.Context, proc *process.Process) (*batch.Batch, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return false, err
+		return nil, false, err
 	}
 	record := r.pending
 	start := r.rowOffset
@@ -502,17 +559,17 @@ func (r *ArrowReader) ReadBatch(
 		// exactly once before output-window budgeting; later windows only pay
 		// their own conversion validation.
 		if err := r.plan.ValidateRecord(ctx, record); err != nil {
-			return false, err
+			return nil, false, err
 		}
 	}
 	maxRows := min(arrowMaxOutputRows, int(record.NumRows()-start))
 	rows, err := r.plan.MaxOutputRows(ctx, record, start, maxRows, r.param.maxBatchSize)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	end := start + int64(rows)
 	if start < 0 || start >= end {
-		return false, moerr.NewInvalidInput(ctx, "Arrow record batch has an invalid row window")
+		return nil, false, moerr.NewInvalidInput(ctx, "Arrow record batch has an invalid row window")
 	}
 	view := record
 	if start != 0 || end != record.NumRows() {
@@ -530,15 +587,15 @@ func (r *ArrowReader) ReadBatch(
 	})
 	observeArrowPhase(convertStart, "convert", err)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	observeArrowConvertStats(stats)
 	wireBudgetStart := time.Now()
-	converted, actualRows, err := fitArrowBatchToWireBudget(ctx, converted, r.param.maxBatchSize, proc.Mp())
+	converted, actualRows, err := fitArrowBatchToWireBudget(ctx, converted, r.param.maxBatchSize, r.allocation)
 	observeArrowPhase(wireBudgetStart, "wire_budget", err)
 	if err != nil {
-		converted.Clean(proc.Mp())
-		return false, err
+		converted.Clean(r.allocation)
+		return nil, false, err
 	}
 	if actualRows < rows {
 		rows = actualRows
@@ -550,8 +607,8 @@ func (r *ArrowReader) ReadBatch(
 	// must release the converted batch instead of publishing it after the hook.
 	objectio.WaitInjectedCtx(ctx, objectio.FJ_ArrowLoadRolloutWait)
 	if err := ctx.Err(); err != nil {
-		converted.Clean(proc.Mp())
-		return false, err
+		converted.Clean(r.allocation)
+		return nil, false, err
 	}
 	fileFinished := false
 	if end < record.NumRows() {
@@ -559,20 +616,11 @@ func (r *ArrowReader) ReadBatch(
 	} else {
 		fileFinished, err = r.advanceToNextNonEmptyRecord()
 		if err != nil {
-			converted.Clean(proc.Mp())
-			return false, err
+			converted.Clean(r.allocation)
+			return nil, false, err
 		}
 	}
-	publishStart := time.Now()
-	if err = replaceArrowBatch(buf, converted, proc.Mp()); err != nil {
-		observeArrowPhase(publishStart, "publish", err)
-		converted.Clean(proc.Mp())
-		return false, err
-	}
-	observeArrowPhase(publishStart, "publish", nil)
-	metric.ArrowLoadBatchCounter.Inc()
-	metric.ArrowLoadRowCounter.Add(float64(rows))
-	return fileFinished, nil
+	return converted, fileFinished, nil
 }
 
 func fitArrowBatchToWireBudget(
@@ -606,7 +654,7 @@ func fitArrowBatchToWireBudget(
 			return converted, 0, err
 		}
 		windowSize, sizeErr := window.MarshalBinarySize()
-		window.Clean(mp)
+		window.FreeWindow()
 		if sizeErr != nil {
 			return converted, 0, sizeErr
 		}
@@ -623,7 +671,7 @@ func fitArrowBatchToWireBudget(
 			return converted, 0, err
 		}
 		oneSize, sizeErr := one.MarshalBinarySize()
-		one.Clean(mp)
+		one.FreeWindow()
 		if sizeErr != nil {
 			return converted, 0, sizeErr
 		}
@@ -640,13 +688,15 @@ func fitArrowBatchToWireBudget(
 }
 
 // stableArrowBatchPrefix keeps the zero-copy contract column-local while
-// making a prefix independent of the source batch lifetime. Borrowed columns
-// retain their leased payloads; materialized columns copy only selected rows.
+// making a prefix independent of the source batch's vectors. Borrowed columns
+// become windows of their Arrow payloads and the source's Arrow references
+// move to the prefix (the caller cleans source next); materialized columns
+// copy only the selected rows.
 func stableArrowBatchPrefix(source *batch.Batch, rows int, mp *mpool.MPool) (_ *batch.Batch, err error) {
 	if source == nil || mp == nil || rows <= 0 || rows > source.RowCount() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid Arrow batch prefix")
 	}
-	stable := batch.NewOffHeap(append([]string(nil), source.Attrs...))
+	stable := batch.New(append([]string(nil), source.Attrs...))
 	stable.Recursive = source.Recursive
 	stable.ShuffleIDX = source.ShuffleIDX
 	defer func() {
@@ -659,30 +709,20 @@ func stableArrowBatchPrefix(source *batch.Batch, rows int, mp *mpool.MPool) (_ *
 			return nil, moerr.NewInvalidInputNoCtxf("Arrow source batch column %d is nil", index)
 		}
 		var snapshot *vector.Vector
-		if sourceVector.HasBorrowedBacking() {
-			snapshot, err = sourceVector.RetainedReadonlyWindowWithMP(0, rows, mp)
+		if sourceVector.IsReadOnly() {
+			// A read-only reference to the Arrow buffers source holds.
+			snapshot, err = sourceVector.WindowByLogicalRows(0, rows)
 		} else {
-			var window *vector.Vector
-			selection := sourceVector.AllocationAccountSelection()
-			if selection == nil {
-				window, err = sourceVector.WindowByLogicalRows(0, rows)
-			} else {
-				window, err = sourceVector.WindowByLogicalRowsWithAllocation(0, rows, mp, selection)
-			}
-			if err == nil {
-				if selection == nil {
-					snapshot, err = window.CloneToFlatCompact(mp)
-				} else {
-					snapshot, err = window.CloneToFlatCompactWithAllocation(mp, selection)
-				}
-				window.Free(mp)
-			}
+			snapshot, err = sourceVector.CloneWindow(0, rows, mp)
 		}
 		if err != nil {
 			return nil, err
 		}
 		stable.SetVector(int32(index), snapshot)
 	}
+	// The borrowed windows alias the Arrow buffers source holds; the prefix
+	// becomes their lender.
+	stable.MoveLeasesFrom(source)
 	stable.SetRowCount(rows)
 	return stable, nil
 }
@@ -756,23 +796,5 @@ func BuildArrowTargets(
 	return targets, nil
 }
 
-func replaceArrowBatch(dst, src *batch.Batch, mp *mpool.MPool) error {
-	if dst == nil || src == nil || len(dst.Vecs) != len(src.Vecs) {
-		return moerr.NewInternalErrorNoCtx("Arrow conversion produced an incompatible MatrixOne batch")
-	}
-	for i := range src.Vecs {
-		if src.Vecs[i] == nil {
-			return moerr.NewInternalErrorNoCtxf("Arrow conversion produced a nil vector at column %d", i)
-		}
-		if dst.Vecs[i] != nil {
-			dst.Vecs[i].Free(mp)
-		}
-		dst.SetVector(int32(i), src.Vecs[i])
-		src.SetVector(int32(i), nil)
-	}
-	dst.SetRowCount(src.RowCount())
-	src.Clean(mp)
-	return nil
-}
-
 var _ ExternalFileReader = (*ArrowReader)(nil)
+var _ BatchPublisher = (*ArrowReader)(nil)

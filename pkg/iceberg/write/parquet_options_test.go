@@ -112,7 +112,7 @@ func TestFanoutZstdOwnerAcrossRotation(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"part"})
-	v := vector.NewVec(types.T_int32.ToType())
+	v := vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 0; i < 10; i++ {
 		require.NoError(t, vector.AppendFixed[int32](v, int32(i), false, mp))
 	}

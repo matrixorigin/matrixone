@@ -74,7 +74,7 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64, exclusiveSnapshotGat
 		return nil, dag, nil
 	}
 	keys := batch.NewWithSize(1)
-	keys.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+	keys.Vecs[0] = vector.NewVec(types.T_uint64.ToType(), c.proc.Mp())
 	for _, id := range present {
 		if err = vector.AppendFixed(keys.Vecs[0], id, false, c.proc.Mp()); err != nil {
 			keys.Vecs[0].Free(c.proc.Mp())
@@ -214,7 +214,7 @@ func (c *Compile) compactExpiredAlterDataBranchLineageRC(deadTIDs []uint64) ([]u
 	batchSize := min(128, max(1, int(c.proc.GetLockService().GetConfig().MaxLockRowCount)))
 	for start := 0; start < len(selectedIDs); start += batchSize {
 		keys := batch.NewWithSize(1)
-		keys.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+		keys.Vecs[0] = vector.NewVec(types.T_uint64.ToType(), c.proc.Mp())
 		for _, id := range selectedIDs[start:min(start+batchSize, len(selectedIDs))] {
 			if err = vector.AppendFixed(keys.Vecs[0], id, false, c.proc.Mp()); err != nil {
 				keys.Vecs[0].Free(c.proc.Mp())
@@ -349,7 +349,7 @@ func (c *Compile) loadBranchReclaimComponentsRC(deadTIDs []uint64, waitPolicy ..
 		},
 		func(roots []uint64) error {
 			keys := batch.NewWithSize(1)
-			keys.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+			keys.Vecs[0] = vector.NewVec(types.T_uint64.ToType(), c.proc.Mp())
 			defer keys.Vecs[0].Free(c.proc.Mp())
 			for _, root := range roots {
 				if err := vector.AppendFixed(keys.Vecs[0], root, false, c.proc.Mp()); err != nil {
@@ -380,7 +380,7 @@ func (c *Compile) lockBranchSnapshotNamesRC(names []string) error {
 		return nil
 	}
 	keys := batch.NewWithSize(1)
-	keys.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	keys.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), c.proc.Mp())
 	defer keys.Vecs[0].Free(c.proc.Mp())
 	for _, name := range names {
 		if err := vector.AppendBytes(keys.Vecs[0], []byte(name), false, c.proc.Mp()); err != nil {

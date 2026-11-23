@@ -32,7 +32,11 @@ func (connector *Connector) String(buf *bytes.Buffer) {
 
 func (connector *Connector) Prepare(proc *process.Process) error {
 	if connector.ctr.sp == nil {
-		connector.ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), 1)
+		spoolMP, err := connector.spoolMP(proc)
+		if err != nil {
+			return err
+		}
+		connector.ctr.sp = pSpool.InitMyPipelineSpool(spoolMP, 1)
 	}
 
 	if connector.OpAnalyzer == nil {

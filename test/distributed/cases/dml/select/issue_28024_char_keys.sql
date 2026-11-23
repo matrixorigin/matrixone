@@ -1,0 +1,10 @@
+-- #28024: pure CHAR COALESCE/IFNULL keys keep PAD SPACE equality.
+drop database if exists issue_28024_char_keys;
+create database issue_28024_char_keys;
+use issue_28024_char_keys;
+create table t(v varchar(4));
+insert into t values ('a'),('a '),('b');
+select count(*) from (select distinct coalesce(cast(v as char(4)),cast('z' as char(4))) k from t) q;
+select count(*) from (select distinct ifnull(cast(v as char(4)),cast('z' as char(4))) k from t) q;
+select count(*) from t group by coalesce(cast(v as char(4)),cast('z' as char(4))) order by count(*) desc;
+drop database issue_28024_char_keys;

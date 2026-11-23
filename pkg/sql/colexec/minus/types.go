@@ -16,7 +16,6 @@ package minus
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -90,7 +89,7 @@ type container struct {
 func (minus *Minus) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	minus.ctr.state = buildingHashMap
 	// PREPARE retains the operator, not resources from the retired account.
-	if minus.ExpressionAllocation() != nil {
+	if minus.HasAllocationAccount() {
 		minus.Free(proc, pipelineFailed, err)
 		return
 	}
@@ -102,18 +101,13 @@ func (minus *Minus) Reset(proc *process.Process, pipelineFailed bool, err error)
 }
 
 func (minus *Minus) Free(proc *process.Process, pipelineFailed bool, err error) {
-	mp := proc.Mp()
-	minus.ctr.cleanBatch(mp)
+	if minus.ctr.bat != nil {
+		minus.CleanBatch(proc, minus.ctr.bat)
+		minus.ctr.bat = nil
+	}
 	minus.ctr.cleanHashMap()
 	minus.ctr.keyEvaluator.Free()
 	minus.FreeMetadata()
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
 }
 
 func (ctr *container) cleanHashMap() {

@@ -123,7 +123,7 @@ func TestIfUnsizedBinaryNullBoundEval(t *testing.T) {
 
 	newSrcBatch := func(t *testing.T, mp *mpool.MPool) *batch.Batch {
 		t.Helper()
-		idVec := vector.NewVec(idTyp)
+		idVec := vector.NewVec(idTyp, mp)
 		require.NoError(t, vector.AppendFixedList(idVec, []int32{1, 0}, nil, mp))
 		vVec := testutil.MakeVarlenaVector(
 			[][]byte{[]byte("hello-long"), []byte("hello-long")}, nil, vTyp, mp)

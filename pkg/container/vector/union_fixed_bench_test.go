@@ -30,7 +30,7 @@ func BenchmarkUnionFixedSelection(b *testing.B) {
 			for _, shape := range []string{"flat", "nullable", "constant"} {
 				b.Run(fmt.Sprintf("%s/rows=%d/%s", oid, rows, shape), func(b *testing.B) {
 					mp := mpool.MustNewZero()
-					src, dst := NewVec(oid.ToType()), NewVec(oid.ToType())
+					src, dst := NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp)
 					b.Cleanup(func() { src.Free(mp); dst.Free(mp) })
 					require.NoError(b, src.PreExtend(1024, mp))
 					src.SetLength(1024)
@@ -87,7 +87,7 @@ func BenchmarkUnionFixedSelectionDensity(b *testing.B) {
 				if width == 8 {
 					typ = types.T_uint64.ToType()
 				}
-				src, dst := NewOffHeapVecWithType(typ), NewOffHeapVecWithType(typ)
+				src, dst := NewVec(typ, mp), NewVec(typ, mp)
 				b.Cleanup(func() { src.Free(mp); dst.Free(mp) })
 				require.NoError(b, src.PreExtend(8192, mp))
 				src.SetLength(8192)

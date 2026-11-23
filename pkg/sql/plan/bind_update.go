@@ -189,6 +189,19 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 	return BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allEqual})
 }
 
+// Parameterized compound ENUM/SET values must bind in the UPDATE row scope;
+// normalization can then select the converter from the bound result type.
+func (builder *QueryBuilder) deferSpecialUpdateConversion(typ plan.Type, expr tree.Expr) bool {
+	if !isEnumOrSetPlanType(&typ) ||
+		(!builder.isReusablePlan() && preparedSourceBindings(builder.GetContext()) == nil) {
+		return false
+	}
+	if _, bare := unwrapParenExpr(expr).(*tree.ParamExpr); bare {
+		return false
+	}
+	return checkExprHasParamExpr([]tree.Expr{expr})
+}
+
 // normalizeUpdateAssignment resolves the value owned by an explicit assignment.
 // Callers choose the input row image: preceding values for sequential UPDATE,
 // original values for simultaneous joined UPDATE.
@@ -206,6 +219,8 @@ func (builder *QueryBuilder) normalizeUpdateAssignment(
 		if err != nil {
 			return nil, err
 		}
+	} else if radix := boundDecimalRadixAssignmentSource(rhs, col.Typ); radix != nil {
+		rhs = radix
 	}
 	rhs, err = builder.wrapLegacyTimestampAssignment(col, rhs)
 	if err != nil {
@@ -304,8 +319,8 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 		rhsBindCtx, rhsBinder := builder.newSequentialUpdateProjectionBinder(
 			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList, stageLegacy,
 		)
-		if useNumericAssignmentContext(tableDef.Cols[columnIndex].Typ, ignore) && !isPreparedAssignmentParam(builder, astExpr) {
-			target := tableDef.Cols[columnIndex].Typ
+		if target := tableDef.Cols[columnIndex].Typ; useNumericAssignmentContext(target, ignore) &&
+			!isPreparedAssignmentParam(builder, astExpr) && !builder.deferSpecialUpdateConversion(target, astExpr) {
 			rhsBinder.numericTargetType = &target
 		}
 		rhs, err := rhsBinder.BindExpr(astExpr, 0, true)
@@ -594,9 +609,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 				}
 			}
 
+			deferSpecial := false
 			for _, colDef := range tableDef.Cols {
 				if colDef.Name == colName {
-					if isEnumOrSetPlanType(&colDef.Typ) {
+					deferSpecial = builder.deferSpecialUpdateConversion(colDef.Typ, updateExpr)
+					if isEnumOrSetPlanType(&colDef.Typ) && !deferSpecial {
 						updateExpr, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), colDef.Typ, updateExpr)
 						if err != nil {
 							return 0, err
@@ -624,7 +641,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			}
 
 			oldPos := oldColName2Idx[alias+"."+colName]
-			if typ := tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ; useNumericAssignmentContext(typ, stmt.Ignore) && !isPreparedAssignmentParam(builder, updateExpr) {
+			if typ := tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ; useNumericAssignmentContext(typ, stmt.Ignore) && !deferSpecial && !isPreparedAssignmentParam(builder, updateExpr) {
 				updateNumericTargets[oldPos] = typ
 			}
 			newColName2Idx[alias+"."+colName] = oldPos

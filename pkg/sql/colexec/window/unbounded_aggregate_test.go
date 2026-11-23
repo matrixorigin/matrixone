@@ -75,8 +75,10 @@ func TestUnboundedAggregateChunkAndReuse(t *testing.T) {
 			var child *colexec.MockOperator
 			t.Cleanup(func() {
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				if child != nil {
 					child.Free(proc, false, nil)
+					colexec.FreeMockChildren(child)
 				}
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())
@@ -102,13 +104,13 @@ func TestUnboundedAggregateChunkAndReuse(t *testing.T) {
 					if result.Batch == nil {
 						break
 					}
-					got := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2])
+					got := vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[2])
 					for _, value := range got {
 						end := rows
 						if frame == "range" {
 							end = min((seen/3+1)*3, rows)
 						}
-						require.Equal(t, int64(end*(generation+1)), value, "row %d", seen)
+						require.Equal(t, types.Decimal128FromInt64(int64(end*(generation+1))), value, "row %d", seen)
 						seen++
 					}
 					// The first execution models LIMIT after one output chunk;
@@ -124,6 +126,7 @@ func TestUnboundedAggregateChunkAndReuse(t *testing.T) {
 				}
 				arg.Reset(proc, false, nil)
 				child.Free(proc, false, nil)
+				colexec.FreeMockChildren(child)
 				child = nil
 			}
 		})
@@ -143,7 +146,7 @@ func TestUnboundedTimestampRangeFoldAndMonotonic(t *testing.T) {
 			require.NoError(t, err)
 			proc.GetSessionInfo().TimeZone = location
 			const rows = 160
-			order := vector.NewVec(types.T_timestamp.ToType())
+			order := vector.NewVec(types.T_timestamp.ToType(), mp)
 			values := make([]int32, rows)
 			peers := make([]int64, 0, rows)
 			for i := range values {
@@ -183,7 +186,7 @@ func TestUnboundedTimestampRangeFoldAndMonotonic(t *testing.T) {
 			}
 			result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, end)
 			require.NoError(t, err)
-			got := vector.MustFixedColWithTypeCheck[int64](result)
+			got := vector.MustFixedColWithTypeCheck[types.Decimal128](result)
 			var prefix int64
 			for row, value := range got {
 				prefix += int64(values[row])
@@ -191,9 +194,9 @@ func TestUnboundedTimestampRangeFoldAndMonotonic(t *testing.T) {
 				if fold {
 					want = []int64{5 * 40, 15 * 40, 5 * 40, 15 * 40}[row/40]
 				}
-				require.Equal(t, want, value, "row %d", row)
+				require.Equal(t, types.Decimal128FromInt64(want), value, "row %d", row)
 			}
-			result.Free(mp)
+			result.Free(result.MPool())
 			if fold {
 				require.Nil(t, ctr.runningAgg)
 				return
@@ -201,11 +204,11 @@ func TestUnboundedTimestampRangeFoldAndMonotonic(t *testing.T) {
 			require.NotNil(t, ctr.runningAgg)
 			result, err = ctr.processAggregateFuncRange(0, arg, proc, end, rows)
 			require.NoError(t, err)
-			for row, value := range vector.MustFixedColWithTypeCheck[int64](result) {
+			for row, value := range vector.MustFixedColWithTypeCheck[types.Decimal128](result) {
 				prefix += int64(values[end+row])
-				require.Equal(t, prefix, value)
+				require.Equal(t, types.Decimal128FromInt64(prefix), value)
 			}
-			result.Free(mp)
+			result.Free(result.MPool())
 			require.Nil(t, ctr.runningAgg)
 		})
 	}
@@ -236,6 +239,7 @@ func TestUnboundedDistinctFullAndRange(t *testing.T) {
 			arg.AppendChild(child)
 			t.Cleanup(func() {
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				child.Free(proc, false, nil)
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())
@@ -243,12 +247,12 @@ func TestUnboundedDistinctFullAndRange(t *testing.T) {
 			require.NoError(t, arg.Prepare(proc))
 			result, err := vm.Exec(arg, proc)
 			require.NoError(t, err)
-			for row, value := range vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]) {
+			for row, value := range vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[2]) {
 				want := int64(6)
 				if frame == "range" && row < 2 {
 					want = []int64{1, 3}[row]
 				}
-				require.Equal(t, want, value, "row %d", row)
+				require.Equal(t, types.Decimal128FromInt64(want), value, "row %d", row)
 			}
 		})
 	}

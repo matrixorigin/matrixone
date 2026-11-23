@@ -42,8 +42,8 @@ func TestMalformedDatabaseCatalogEntryRollsBackEarlierDDL(t *testing.T) {
 	// not be dispatched as the four-column DROP DATABASE command.
 	bat := batch.NewWithSize(2)
 	bat.Attrs = []string{catalog2.Row_ID, "pk"}
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), h.m)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), h.m)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Rowid{}, false, h.m))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("key"), false, h.m))
 	bat.SetRowCount(1)

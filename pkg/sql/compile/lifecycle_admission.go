@@ -133,7 +133,7 @@ func (c *Compile) admitLifecycleRC(
 		return err
 	}
 	registryKeys := batch.NewWithSize(1)
-	registryKeys.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	registryKeys.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), c.proc.Mp())
 	if err = vector.AppendBytes(registryKeys.Vecs[0],
 		[]byte(catalog.SnapshotLifecycleFeatureCode), false, c.proc.Mp()); err != nil {
 		registryKeys.Vecs[0].Free(c.proc.Mp())

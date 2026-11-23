@@ -181,13 +181,13 @@ func TestGetDuplicatedRowsWindow(t *testing.T) {
 			defer mpool.DeleteMPool(mp)
 			idx := NewMutIndex(types.T_int32.ToType())
 			defer idx.Close()
-			keys := vector.NewVec(types.T_int32.ToType())
+			keys := vector.NewVec(types.T_int32.ToType(), mp)
 			defer keys.Free(mp)
 			require.NoError(t, vector.AppendFixed(keys, int32(7), false, mp))
 			for _, offset := range tc.offsets {
 				require.NoError(t, idx.BatchUpsert(keys, offset))
 			}
-			rows := vector.NewVec(types.T_Rowid.ToType())
+			rows := vector.NewVec(types.T_Rowid.ToType(), mp)
 			defer rows.Free(mp)
 			require.NoError(t, vector.AppendFixed(rows, types.Rowid{}, true, mp))
 			err := idx.GetDuplicatedRows(context.Background(), keys, index.NewZM(types.T_int32, 0), &types.Blockid{}, rows,

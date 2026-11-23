@@ -195,8 +195,8 @@ func TestDirectArenaWriterRoundTripMultipleColumns(t *testing.T) {
 
 	integerType, textType := types.T_int64.ToType(), types.T_text.ToType()
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(integerType)
-	bat.Vecs[1] = vector.NewVec(textType)
+	bat.Vecs[0] = vector.NewVec(integerType, mp)
+	bat.Vecs[1] = vector.NewVec(textType, mp)
 	t.Cleanup(func() { bat.Clean(mp) })
 	values := [][]byte{bytes.Repeat([]byte("alpha"), 800), nil, bytes.Repeat([]byte("beta"), 700)}
 	for i, value := range values {

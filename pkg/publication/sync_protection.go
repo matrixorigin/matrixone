@@ -303,7 +303,7 @@ func BuildBloomFilterFromObjectMap(objectMap map[objectio.ObjectId]*ObjectWithTa
 	bf := bloomfilter.New(int64(expectedItems), GetBloomFilterFalsePositiveRate())
 
 	// Add all object names (strings) to bloom filter
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for objID := range objectMap {
 		// Convert ObjectId to ObjectName string
 		objName := objectio.BuildObjectNameWithObjectID(&objID).String()

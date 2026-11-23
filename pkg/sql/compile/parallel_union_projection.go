@@ -113,16 +113,6 @@ func parallelUnionProjectionExprIsTotal(expr *plan.Expr, input []*plan.Expr) boo
 			return false
 		}
 		switch id {
-		case function.GROUPING:
-			if len(e.F.Args) == 0 || expr.Typ.Id != int32(types.T_int64) {
-				return false
-			}
-			for _, arg := range e.F.Args {
-				if arg.GetCol() == nil || !parallelUnionProjectionExprIsTotal(arg, input) {
-					return false
-				}
-			}
-			return true
 		case function.IFF:
 			if len(e.F.Args) != 3 {
 				return false

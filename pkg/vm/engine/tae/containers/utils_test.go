@@ -35,7 +35,7 @@ func TestOneSchemaBatchBuffer(t *testing.T) {
 
 	var bats []*batch.Batch
 	for i := 0; i < 10; i++ {
-		bat := buffer.FetchWithSchema(attr, typs)
+		bat := buffer.FetchWithSchema(attr, typs, mp)
 		bats = append(bats, bat)
 		require.NotNil(t, bat)
 	}
@@ -46,11 +46,11 @@ func TestOneSchemaBatchBuffer(t *testing.T) {
 
 	bats = bats[:0]
 	for i := 0; i < 10; i += 2 {
-		bat := buffer.FetchWithSchema(attr, typs)
+		bat := buffer.FetchWithSchema(attr, typs, mp)
 		require.NotNil(t, bat)
 		bats = append(bats, bat)
 
-		bat = buffer.Fetch()
+		bat = buffer.Fetch(mp)
 		require.NotNil(t, bat)
 		bats = append(bats, bat)
 	}
@@ -71,7 +71,7 @@ func TestGeneralBatchBuffer1(t *testing.T) {
 	attrs2 := []string{"a", "b", "c"}
 	typs2 := []types.Type{types.T_int64.ToType(), types.T_char.ToType(), types.T_int64.ToType()}
 
-	bat1 := buffer.FetchWithSchema(attrs1, typs1)
+	bat1 := buffer.FetchWithSchema(attrs1, typs1, mp)
 	require.NotNil(t, bat1)
 	curr, high, _, _ := buffer.Usage()
 	require.Equal(t, 0, curr)
@@ -93,7 +93,7 @@ func TestGeneralBatchBuffer1(t *testing.T) {
 	require.Equal(t, 2048, curr)
 	require.Equal(t, 2048, high)
 
-	bat2 := buffer.FetchWithSchema(attrs2, typs2)
+	bat2 := buffer.FetchWithSchema(attrs2, typs2, mp)
 
 	require.Equal(t, 1024, bat2.Vecs[0].Allocated())
 	require.Equal(t, 1024, bat2.Vecs[2].Allocated())
@@ -132,7 +132,7 @@ func TestNarrowArrayValue(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		vec := vector.NewVec(types.New(c.oid, 3, 0))
+		vec := vector.NewVec(types.New(c.oid, 3, 0), mp)
 		require.NoError(t, vector.AppendBytes(vec, c.initial, false, mp))
 
 		// read back (was panic "No Support")

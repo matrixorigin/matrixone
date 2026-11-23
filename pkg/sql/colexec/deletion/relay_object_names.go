@@ -94,7 +94,7 @@ func TryExtractRemoteDeleteObjectNames(
 	classes := vector.MustFixedColNoTypeCheck[int8](bat.Vecs[2])
 	data, area := vector.MustVarlenaRawData(bat.Vecs[1])
 	seen := make(map[string]struct{})
-	inner := batch.NewOffHeapEmpty()
+	inner := batch.NewWithSize(0)
 	defer inner.Clean(mp)
 	for i, class := range classes {
 		if class != int8(FlushDeltaLoc) {

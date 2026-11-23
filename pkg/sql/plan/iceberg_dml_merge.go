@@ -43,6 +43,7 @@ func buildIcebergMergePlan(stmt *tree.Merge, ctx CompilerContext, isPrepareStmt 
 		return nil, err
 	}
 	builder := NewQueryBuilder(planpb.Query_MERGE, ctx, isPrepareStmt, false)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()

@@ -156,7 +156,7 @@ func decimal256Multiply(parameters []*vector.Vector, result vector.FunctionResul
 	output := result.GetResultVector()
 	resultNulls := output.GetNulls()
 	if left.IsConstNull() || right.IsConstNull() {
-		nulls.AddRange(resultNulls, 0, uint64(length))
+		resultNulls.AddRange(0, uint64(length))
 		return nil
 	}
 	leftConstant, rightConstant := left.IsConst(), right.IsConst()
@@ -838,7 +838,7 @@ func maskUnselectedRows(rsNull *nulls.Nulls, selectList *FunctionSelectList, len
 		return false, false
 	}
 	if selectList.IgnoreAllRow() {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return true, false
 	}
 	if !selectList.ShouldEvalAllRow() {
@@ -1036,14 +1036,14 @@ func integerDivUnsignedDecimal256(parameters []*vector.Vector, result vector.Fun
 	if parameters[0].IsConst() {
 		_, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 	}
 	if parameters[1].IsConst() {
 		_, null2 := p2.GetValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 	}

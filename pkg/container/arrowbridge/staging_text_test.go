@@ -260,7 +260,7 @@ func TestAppendArrowStageTextValueScalarKinds(t *testing.T) {
 
 	check := func(t *testing.T, values arrow.Array, want string) {
 		t.Helper()
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, appendArrowStageTextValue(ctx, vec, values, 0, false, mp))
 		require.Equal(t, want, vec.GetStringAt(0))
 		vec.Free(mp)
@@ -327,7 +327,7 @@ func TestAppendArrowStageTextValueScalarKinds(t *testing.T) {
 	stringBuilder.AppendValues([]string{"x"}, nil)
 	strings := stringBuilder.NewArray()
 	stringBuilder.Release()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	err := appendArrowStageTextValue(ctx, vec, strings, 0, false, mp)
 	require.ErrorContains(t, err, "unsupported Arrow array")
 	require.Equal(t, 0, vec.Length())
@@ -443,7 +443,7 @@ func TestConvertStagedTextCanceledContext(t *testing.T) {
 	_, _, err = materializeConverted(ctx, values, columnPlan{
 		target: stagedTextTarget("v"),
 		kind:   conversionMaterializeText,
-	}, mp, nil, nil)
+	}, mp, nil)
 	require.Error(t, err, "a canceled context aborts the staged per-column loop")
 
 	record.Release()

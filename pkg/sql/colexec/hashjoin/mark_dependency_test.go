@@ -43,6 +43,7 @@ func TestHashMarkJoinBuildErrorStopsBeforeProbe(t *testing.T) {
 				}
 			}
 			probe := &countingBroadcastProbeChild{MockOperator: colexec.NewMockOperator()}
+			freeTestChildren(tc.arg)
 			tc.arg.Children = nil
 			tc.arg.AppendChild(probe)
 			var err error
@@ -50,8 +51,11 @@ func TestHashMarkJoinBuildErrorStopsBeforeProbe(t *testing.T) {
 				tc.arg.Reset(tc.proc, true, err)
 				probe.Reset(tc.proc, true, err)
 				tc.arg.Free(tc.proc, true, err)
+				freeTestChildren(tc.arg)
 				probe.Free(tc.proc, true, err)
+				freeTestChildren(probe)
 				tc.barg.Free(tc.proc, true, err)
+				freeTestChildren(tc.barg)
 				tc.proc.Free()
 				require.Zero(t, tc.proc.Mp().CurrNB())
 			}()
@@ -95,6 +99,7 @@ func TestHashMarkJoinBuildCancellationPreservesIdentity(t *testing.T) {
 				}
 			}
 			probe := &countingBroadcastProbeChild{MockOperator: colexec.NewMockOperator()}
+			freeTestChildren(tc.arg)
 			tc.arg.Children = nil
 			tc.arg.AppendChild(probe)
 			var err error
@@ -102,8 +107,11 @@ func TestHashMarkJoinBuildCancellationPreservesIdentity(t *testing.T) {
 				tc.arg.Reset(tc.proc, true, err)
 				probe.Reset(tc.proc, true, err)
 				tc.arg.Free(tc.proc, true, err)
+				freeTestChildren(tc.arg)
 				probe.Free(tc.proc, true, err)
+				freeTestChildren(probe)
 				tc.barg.Free(tc.proc, true, err)
+				freeTestChildren(tc.barg)
 				tc.proc.Free()
 				require.Zero(t, tc.proc.Mp().CurrNB())
 			}()
@@ -143,6 +151,7 @@ func TestHashMarkJoinWaitForBuildHonorsCancellation(t *testing.T) {
 				}
 			}
 			probe := &countingBroadcastProbeChild{MockOperator: colexec.NewMockOperator()}
+			freeTestChildren(tc.arg)
 			tc.arg.Children = nil
 			tc.arg.AppendChild(probe)
 			var err error
@@ -150,8 +159,11 @@ func TestHashMarkJoinWaitForBuildHonorsCancellation(t *testing.T) {
 				tc.arg.Reset(tc.proc, true, err)
 				probe.Reset(tc.proc, true, err)
 				tc.arg.Free(tc.proc, true, err)
+				freeTestChildren(tc.arg)
 				probe.Free(tc.proc, true, err)
+				freeTestChildren(probe)
 				tc.barg.Free(tc.proc, true, err)
+				freeTestChildren(tc.barg)
 				tc.proc.Free()
 				require.Zero(t, tc.proc.Mp().CurrNB())
 			}()

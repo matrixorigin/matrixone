@@ -96,7 +96,7 @@ func (f *adaptiveFixture) send(t *testing.T, branch int, values ...int64) {
 			bat.Clean(f.proc.Mp())
 		}
 	}()
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), f.proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, f.proc.Mp()))
 	bat.SetRowCount(len(values))
 	require.True(t, process.SendPipelineSignalWithContext(
@@ -306,7 +306,7 @@ func TestAdaptiveTopPreparedLimitReuse(t *testing.T) {
 	require.NoError(t, err)
 	for _, limit := range []uint64{0, 2, 1, 0, 2} {
 		func() {
-			params := vector.NewVec(types.T_varchar.ToType())
+			params := vector.NewVec(types.T_varchar.ToType(), f.proc.Mp())
 			defer params.Free(f.proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, []byte(strconv.FormatUint(limit, 10)), false, f.proc.Mp()))
 			f.proc.SetPrepareParams(params)

@@ -172,7 +172,7 @@ matches
 create or replace procedure typed_value(out v bigint unsigned) language 'starlark' $$out_v = 1 << 64$$;
 set @v=99;
 call typed_value(@v);
-Data truncation: data out of range: data type uint64, value '18446744073709551616'
+Data truncation: data out of range: data type BIGINT UNSIGNED, value 18446744073709551616
 select @v=99 as matches;
 matches
 1
@@ -516,7 +516,7 @@ matches
 create or replace procedure typed_value(inout v bigint unsigned) language 'starlark' $$out_v = 1 << 64$$;
 set @v=99;
 call typed_value(@v);
-Data truncation: data out of range: data type uint64, value '18446744073709551616'
+Data truncation: data out of range: data type BIGINT UNSIGNED, value 18446744073709551616
 select @v=99 as matches;
 matches
 1

@@ -33,38 +33,36 @@ type jsonReadSetKey struct{}
 // Vector addresses. Unsupported row transformations disable the entire scope.
 // Published handles are owned here until Close; consumers must retain them.
 type JSONReadSet struct {
-	selection          *vector.AllocationAccountSelection
-	transientSelection *vector.AllocationAccountSelection
-	cachePin           JSONCachePinAdmission
-	scopeMeta          func()
-	requested          []int
-	sequences          map[uint16]int
-	readers            map[int]vector.JSONReader
-	disabled           bool
+	view      *mpool.MPool
+	cachePin  JSONCachePinAdmission
+	scopeMeta func()
+	requested []int
+	sequences map[uint16]int
+	readers   map[int]vector.JSONReader
+	disabled  bool
 }
 
 // NewJSONReadSetWithAdmission reserves the read scope's control maps and slice
-// before publication. SQL callers must supply the statement selection or its
+// before publication. SQL callers must supply the statement view or its
 // transient-memory admission; no scope is prepared for empty demand.
-func NewJSONReadSetWithAdmission(columns []int, selection *vector.AllocationAccountSelection, admission vector.JSONReaderMemoryAdmission) (*JSONReadSet, error) {
+func NewJSONReadSetWithAdmission(columns []int, view *mpool.MPool, admission vector.JSONReaderMemoryAdmission) (*JSONReadSet, error) {
 	if len(columns) == 0 {
 		return nil, nil
 	}
-	if selection == nil && admission == nil {
+	if !view.IsView() && admission == nil {
 		return nil, moerr.NewInvalidInputNoCtx("JSON read scope requires statement accounting")
 	}
 	capacity, err := vector.JSONReaderContainerMetadataCapacity(jsonReadSetSize, len(columns))
 	if err != nil {
 		return nil, err
 	}
-	release, err := vector.ReserveJSONReaderMetadata(selection, admission, capacity)
+	release, err := vector.ReserveJSONReaderMetadata(view, admission, capacity)
 	if err != nil {
 		return nil, err
 	}
-	set := NewJSONReadSet(columns, selection)
+	set := NewJSONReadSet(columns, view)
 	set.cachePin = admission
 	set.scopeMeta = release
-	set.transientSelection = vector.JSONReaderAllocationSelection(selection, admission)
 	return set, nil
 }
 
@@ -73,8 +71,17 @@ func NewJSONReadSetWithAdmission(columns []int, selection *vector.AllocationAcco
 func (set *JSONReadSet) SetCachePinAdmission(admission JSONCachePinAdmission) {
 	if set != nil && !set.disabled {
 		set.cachePin = admission
-		set.transientSelection = vector.JSONReaderAllocationSelection(set.selection, admission)
 	}
+}
+
+// allocationMP returns the MPool that charges set-owned scratch: the statement
+// view when the set has one, otherwise the caller's pool (a transient
+// admission view of it when the set has a cache-pin admission).
+func (set *JSONReadSet) allocationMP(mp *mpool.MPool) (*mpool.MPool, error) {
+	if set.view.IsView() {
+		return set.view, nil
+	}
+	return vector.JSONReaderAllocationMP(mp, set.cachePin)
 }
 
 func (set *JSONReadSet) CachePinAdmission() JSONCachePinAdmission {
@@ -84,11 +91,10 @@ func (set *JSONReadSet) CachePinAdmission() JSONCachePinAdmission {
 	return set.cachePin
 }
 
-func NewJSONReadSet(columns []int, selections ...*vector.AllocationAccountSelection) *JSONReadSet {
+func NewJSONReadSet(columns []int, views ...*mpool.MPool) *JSONReadSet {
 	set := &JSONReadSet{requested: append([]int(nil), columns...), readers: make(map[int]vector.JSONReader)}
-	if len(selections) != 0 {
-		set.selection = selections[0]
-		set.transientSelection = selections[0]
+	if len(views) != 0 {
+		set.view = views[0]
 	}
 	return set
 }
@@ -168,7 +174,6 @@ func (set *JSONReadSet) Disable() {
 	set.sequences = nil
 	set.requested = nil
 	set.cachePin = nil
-	set.transientSelection = nil
 	if set.scopeMeta != nil {
 		set.scopeMeta()
 		set.scopeMeta = nil
@@ -215,18 +220,19 @@ func (set *JSONReadSet) ApplyDeletes(deleted []int64, mp *mpool.MPool) (err erro
 			return moerr.NewInvalidInputNoCtx("invalid JSON publication delete mapping")
 		}
 	}
-	kept, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), set.transientSelection)
+	allocMP, err := set.allocationMP(mp)
 	if err != nil {
 		return err
 	}
-	defer kept.Free(mp)
+	kept := vector.NewVec(types.T_int64.ToType(), allocMP)
+	defer kept.Free(allocMP)
 	nextDelete := 0
 	for row := 0; row < count; row++ {
 		if nextDelete < len(deleted) && int64(row) == deleted[nextDelete] {
 			nextDelete++
 			continue
 		}
-		if err = vector.AppendFixed(kept, int64(row), false, mp); err != nil {
+		if err = vector.AppendFixed(kept, int64(row), false, allocMP); err != nil {
 			return err
 		}
 	}
@@ -294,15 +300,15 @@ func (set *JSONReadSet) publishMutableColumns(columns []*vector.Vector, mp *mpoo
 		if set.readers[ordinal] != nil {
 			return moerr.NewInvalidInputNoCtx("JSON input version already published")
 		}
-		selection := set.selection
-		if selection == nil {
-			selection = columns[ordinal].AllocationAccountSelection()
+		snapshotMP := mp
+		if set.view.IsView() {
+			snapshotMP = set.view
 		}
 		rows := columns[ordinal].Length()
 		if len(rowDomain) != 0 {
 			rows = rowDomain[0]
 		}
-		reader, invalid, snapshotErr := vector.TryNewJSONReaderSnapshotForRows(columns[ordinal], rows, mp, selection, set.cachePin)
+		reader, invalid, snapshotErr := vector.TryNewJSONReaderSnapshotForRows(columns[ordinal], rows, snapshotMP, set.cachePin)
 		if snapshotErr != nil {
 			if deferInvalid && invalid {
 				set.Disable()

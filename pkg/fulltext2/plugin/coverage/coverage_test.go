@@ -59,8 +59,8 @@ func mockGate(t *testing.T, jobs []logRow, durableBuildTS int64) *string {
 		if strings.Contains(sql, "mo_iscp_log") {
 			iscpSQL = sql
 			bat := batch.NewWithSize(2)
-			bat.Vecs[0] = vector.NewVec(types.T_int8.ToType())      // job_state
-			bat.Vecs[1] = vector.NewVec(types.T_timestamp.ToType()) // drop_at
+			bat.Vecs[0] = vector.NewVec(types.T_int8.ToType(), mp)      // job_state
+			bat.Vecs[1] = vector.NewVec(types.T_timestamp.ToType(), mp) // drop_at
 			for _, r := range jobs {
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], r.state, false, mp))
 				require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.Timestamp(1), !r.dropped, mp))
@@ -70,7 +70,7 @@ func mockGate(t *testing.T, jobs []logRow, durableBuildTS int64) *string {
 		}
 		// metadata MAX(build_ts)
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], durableBuildTS, false, mp))
 		bat.SetRowCount(1)
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
@@ -247,7 +247,7 @@ func TestCoversSnapshotLookupError(t *testing.T) {
 			return executor.Result{}, moerr.NewInternalErrorNoCtx("boom")
 		}
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(200), false, mp))
 		bat.SetRowCount(1)
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil

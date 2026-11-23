@@ -965,7 +965,7 @@ func appendChangesAtCommitTS(dst **batch.Batch, src **batch.Batch, offset *int, 
 		count++
 	}
 	if *dst == nil {
-		*dst = newChangeBatch(*src)
+		*dst = newChangeBatch(*src, mp)
 	}
 	if err := (*dst).UnionWindow(*src, *offset, count, mp); err != nil {
 		return false, err
@@ -980,11 +980,11 @@ func appendChangesAtCommitTS(dst **batch.Batch, src **batch.Batch, offset *int, 
 	return true, nil
 }
 
-func newChangeBatch(src *batch.Batch) *batch.Batch {
+func newChangeBatch(src *batch.Batch, mp *mpool.MPool) *batch.Batch {
 	dst := batch.NewWithSize(len(src.Vecs))
 	dst.Attrs = append(dst.Attrs, src.Attrs...)
 	for i, vec := range src.Vecs {
-		dst.Vecs[i] = vector.NewVec(*vec.GetType())
+		dst.Vecs[i] = vector.NewVec(*vec.GetType(), mp)
 	}
 	return dst
 }

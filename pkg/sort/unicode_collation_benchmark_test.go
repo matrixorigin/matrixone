@@ -30,7 +30,7 @@ func TestUnicodeCollationSortConsumerRelease(t *testing.T) {
 			func() {
 				mp := mpool.MustNewZero()
 				defer mpool.DeleteMPool(mp)
-				vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, charset))
+				vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, charset), mp)
 				require.NoError(t, vector.AppendBytesList(vec, makeUnicodeConsumerValues(64, 64), nil, mp))
 				selectors := make([]int64, 64)
 				for i := range selectors {
@@ -64,7 +64,7 @@ func BenchmarkUnicodeCollationSortConsumers(b *testing.B) {
 		} {
 			b.Run(fmt.Sprintf("%s/%dB/%drows", tc.name, size, rows), func(b *testing.B) {
 				mp := mpool.MustNewZero()
-				vec := vector.NewVec(types.NewWithCharset(types.T_varchar, int32(size), 0, tc.charset))
+				vec := vector.NewVec(types.NewWithCharset(types.T_varchar, int32(size), 0, tc.charset), mp)
 				values := makeUnicodeConsumerValues(size, rows)
 				if err := vector.AppendBytesList(vec, values, nil, mp); err != nil {
 					b.Fatal(err)

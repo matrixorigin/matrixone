@@ -55,7 +55,7 @@ func TestDescFile(t *testing.T) {
 	}
 
 	// each row of a non-constant argument is described by its own call
-	rows := vector.NewVec(types.T_varchar.ToType())
+	rows := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer rows.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(rows, []byte("stage://docs/a.pdf"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(rows, []byte("stage://docs/"), false, proc.Mp()))

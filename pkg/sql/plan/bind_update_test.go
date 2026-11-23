@@ -46,7 +46,7 @@ func TestUpdateChangedRowsPredicateCastsMixedNumericRHS(t *testing.T) {
 		for _, project := range node.ProjectList {
 			require.NoError(t, planpb.VisitExprTree(project, func(expr *planpb.Expr) error {
 				fn := expr.GetF()
-				if fn != nil && fn.Func.GetObjName() == "cast" && expr.Typ.Id == int32(types.T_int32) && exprContainsFunc(expr, "case") {
+				if fn != nil && (fn.Func.GetObjName() == "cast" || fn.Func.GetObjName() == "cast_assign") && expr.Typ.Id == int32(types.T_int32) && exprContainsFunc(expr, "case") {
 					foundCast = true
 				}
 				if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "<=>" || len(fn.Args) != 2 {

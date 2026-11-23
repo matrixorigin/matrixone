@@ -127,7 +127,7 @@ func TestIntHashMapFloat32ZeroCountWithNonZeroStart(t *testing.T) {
 			m := mpool.MustNewZero()
 			typ := types.T_float32.ToType()
 			typ.Scale = scale
-			vec := vector.NewVec(typ)
+			vec := vector.NewVec(typ, m)
 			defer vec.Free(m)
 			vecs := []*vector.Vector{vec}
 
@@ -161,7 +161,7 @@ func TestIntHashMapIteratorReadWriteTransitions(t *testing.T) {
 			makeKeys := func(base int) []*vector.Vector {
 				vecs := make([]*vector.Vector, len(tc.types))
 				for j, typ := range tc.types {
-					vec := vector.NewVec(typ)
+					vec := vector.NewVec(typ, m)
 					vecs[j] = vec
 					t.Cleanup(func() { vec.Free(m) })
 					for i := 0; i < tc.count; i++ {
@@ -326,7 +326,7 @@ func BenchmarkIntHashMapFindFloat32(b *testing.B) {
 
 			typ := types.T_float32.ToType()
 			typ.Scale = scale
-			vec := vector.NewVec(typ)
+			vec := vector.NewVec(typ, m)
 			defer vec.Free(m)
 			for i := 0; i < count; i++ {
 				if err := vector.AppendFixed(vec, float32(i)+0.125, false, m); err != nil {

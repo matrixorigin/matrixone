@@ -88,7 +88,7 @@ func TestObjectWriterReservesPreparedEntries(t *testing.T) {
 			bat := batch.NewWithSize(width)
 			t.Cleanup(func() { bat.Clean(mp) })
 			for i := range bat.Vecs {
-				bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+				bat.Vecs[i] = vector.NewVec(types.T_int64.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(bat.Vecs[i], int64(i), false, mp))
 			}
 			bat.SetRowCount(1)

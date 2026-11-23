@@ -79,8 +79,8 @@ func swapRunStreamingSql(t *testing.T, fn func(context.Context, *sqlexec.SqlProc
 // docsAndBytesBatch is what baseDocCountAndBytes reads: SUM(nrow), SUM(filesize).
 func docsAndBytesBatch(mp *mpool.MPool, ndoc, bytes int64) *batch.Batch {
 	b := batch.NewWithSize(2)
-	b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	b.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	b.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	_ = vector.AppendFixed[int64](b.Vecs[0], ndoc, false, mp)
 	_ = vector.AppendFixed[int64](b.Vecs[1], bytes, false, mp)
 	b.SetRowCount(1)
@@ -89,9 +89,9 @@ func docsAndBytesBatch(mp *mpool.MPool, ndoc, bytes int64) *batch.Batch {
 
 func metaBatch(mp *mpool.MPool, checksum string, filesize, recency int64) *batch.Batch {
 	b := batch.NewWithSize(3)
-	b.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	b.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	b.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	b.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	b.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	b.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
 	_ = vector.AppendBytes(b.Vecs[0], []byte(checksum), false, mp)
 	_ = vector.AppendFixed[int64](b.Vecs[1], filesize, false, mp)
 	_ = vector.AppendFixed[int64](b.Vecs[2], recency, false, mp)
@@ -107,8 +107,8 @@ func chunkBatch(mp *mpool.MPool, buf []byte) *batch.Batch {
 		nchunks = 0
 	}
 	b := batch.NewWithSize(2)
-	b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	b.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	b.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	for i := 0; i < nchunks; i++ {
 		off := i * vectorindex.MaxChunkSize
 		end := off + vectorindex.MaxChunkSize
@@ -542,7 +542,7 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 // twoIdBatch renders a 2-row index_id enumerate result.
 func twoIdBatch(mp *mpool.MPool, a, b string) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	_ = vector.AppendBytes(bat.Vecs[0], []byte(a), false, mp)
 	_ = vector.AppendBytes(bat.Vecs[0], []byte(b), false, mp)
 	bat.SetRowCount(2)
@@ -634,8 +634,8 @@ func TestCompactSegmentsNoDelta(t *testing.T) {
 // tailChunkBatch renders forged (chunk_id, data) rows as the tail-data result batch.
 func tailChunkBatch(mp *mpool.MPool, chunks []TailChunk) *batch.Batch {
 	b := batch.NewWithSize(2)
-	b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	b.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	b.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, c := range chunks {
 		_ = vector.AppendFixed[int64](b.Vecs[0], c.ChunkId, false, mp)
 		_ = vector.AppendBytes(b.Vecs[1], c.Data, false, mp)

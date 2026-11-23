@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -55,13 +54,13 @@ func TestCountBatchDenseState(t *testing.T) {
 			if mode == "null" {
 				vec = vector.NewConstNull(typ, rows, mp)
 			} else {
-				vec = vector.NewVec(typ)
+				vec = vector.NewVec(typ, mp)
 			}
 			t.Cleanup(func() { vec.Free(mp) })
 			if mode != "null" {
 				require.NoError(t, vector.AppendFixedList(vec, make([]int64, rows), nil, mp))
 				if mode == "nullable" {
-					nulls.Add(vec.GetNulls(), 3, uint64(rows-2))
+					vec.GetNulls().Add(3, uint64(rows-2))
 				}
 				if mode == "constant" {
 					vec.ToConst()
@@ -91,7 +90,7 @@ func TestCountBatchDenseState(t *testing.T) {
 			}
 			results, err := exec.Flush()
 			for _, result := range results {
-				t.Cleanup(func() { result.Free(mp) })
+				t.Cleanup(func() { result.Free(result.MPool()) })
 			}
 			require.NoError(t, err)
 			start := 0

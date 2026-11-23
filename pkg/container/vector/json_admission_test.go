@@ -46,7 +46,7 @@ func TestJSONRawAdmissionRejectsMalformedBeforePublication(t *testing.T) {
 			for _, operation := range []string{"constant", "append", "bulk", "list", "string list", "replace", "set constant", "set encoded constant", "set typed constant", "writer", "bytejson", "encoder"} {
 				t.Run(operation, func(t *testing.T) {
 					mp := mpool.MustNewZero()
-					v := NewVec(types.T_json.ToType())
+					v := NewVec(types.T_json.ToType(), mp)
 					defer func() { v.Free(mp); require.Zero(t, mp.CurrNB()) }()
 					require.NoError(t, AppendBytes(v, good, false, mp))
 					before, err := v.MarshalBinary()
@@ -160,7 +160,7 @@ func TestJSONCheckedDecodeRejectsMalformedPayload(t *testing.T) {
 func testJSONCheckedDecodeRejectsPayload(t *testing.T, good, bad []byte) {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	source := NewVec(types.T_json.ToType())
+	source := NewVec(types.T_json.ToType(), mp)
 	defer func() { source.Free(mp); require.Zero(t, mp.CurrNB()) }()
 	require.Equal(t, len(good), len(bad))
 	require.NoError(t, AppendBytes(source, good, false, mp))
@@ -181,7 +181,7 @@ func testJSONCheckedDecodeRejectsPayload(t *testing.T, good, bad []byte) {
 	require.NoError(t, source.MarshalSelectedRowsTo(&validSelected, []int32{0}))
 	for _, mode := range []string{"binary", "copy", "reader", "legacy", "selected", "raw copy"} {
 		t.Run(mode, func(t *testing.T) {
-			target := NewVec(types.T_json.ToType())
+			target := NewVec(types.T_json.ToType(), mp)
 			defer target.Free(mp)
 			switch mode {
 			case "binary":
@@ -234,13 +234,13 @@ func testJSONCheckedDecodeRejectsPayload(t *testing.T, good, bad []byte) {
 
 func TestJSONAdmissionPreservesNullsAndValidatedCopies(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := NewVec(types.T_json.ToType())
+	source := NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	values := [][]byte{jsonAdmissionValue(t, `[0,0]`), nil, jsonAdmissionValue(t, `false`)}
 	require.NoError(t, AppendBytesList(source, values, []bool{false, true, false}, mp))
 	for _, mode := range []string{"union one", "union batch", "union all", "copy", "trusted decode"} {
 		t.Run(mode, func(t *testing.T) {
-			dst := NewVec(types.T_json.ToType())
+			dst := NewVec(types.T_json.ToType(), mp)
 			defer dst.Free(mp)
 			switch mode {
 			case "union one":
@@ -257,7 +257,7 @@ func TestJSONAdmissionPreservesNullsAndValidatedCopies(t *testing.T) {
 			case "trusted decode":
 				wire, err := source.MarshalBinary()
 				require.NoError(t, err)
-				checked := NewVec(types.T_json.ToType())
+				checked := NewVec(types.T_json.ToType(), mp)
 				defer checked.Free(mp)
 				require.NoError(t, checked.UnmarshalBinary(wire))
 				// The exact checked wire bytes remain immutable until both views die.
@@ -277,7 +277,7 @@ func BenchmarkJSONRawAdmission(b *testing.B) {
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			mp := mpool.MustNewZero()
-			v := NewVec(types.T_json.ToType())
+			v := NewVec(types.T_json.ToType(), mp)
 			defer v.Free(mp)
 			raw := jsonAdmissionValue(b, tc.text)
 			require.NoError(b, v.PreExtendWithArea(1, len(raw), mp))
@@ -296,19 +296,19 @@ func BenchmarkJSONRawAdmission(b *testing.B) {
 
 func TestJSONLegacyAdmissionRejectsTruncatedWire(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := NewVec(types.T_json.ToType())
+	source := NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `[0,0]`), false, mp))
 	require.NoError(t, AppendBytes(source, nil, true, mp))
 	var wire bytes.Buffer
 	require.NoError(t, source.MarshalBinaryWithBufferV1(&wire))
 	for end := 0; end < wire.Len(); end++ {
-		dst := NewVec(types.T_json.ToType())
+		dst := NewVec(types.T_json.ToType(), mp)
 		require.Error(t, dst.UnmarshalBinaryV1(wire.Bytes()[:end]))
 		require.Zero(t, dst.Length())
 		dst.Free(mp)
 	}
-	dst := NewVec(types.T_json.ToType())
+	dst := NewVec(types.T_json.ToType(), mp)
 	defer dst.Free(mp)
 	require.NoError(t, dst.UnmarshalBinaryV1(wire.Bytes()))
 	require.True(t, dst.IsNull(1))

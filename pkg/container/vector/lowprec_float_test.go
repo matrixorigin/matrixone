@@ -26,7 +26,7 @@ import (
 func TestGetLowPrecisionFloatAt(t *testing.T) {
 	mp := mpool.MustNewZero()
 	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
-		vec := NewVec(oid.ToType())
+		vec := NewVec(oid.ToType(), mp)
 		var err error
 		switch oid {
 		case types.T_bf16:
@@ -44,7 +44,7 @@ func TestGetLowPrecisionFloatAt(t *testing.T) {
 		require.Equal(t, float32(-0.5), f, oid.String())
 		vec.Free(mp)
 	}
-	vec := NewVec(types.T_float32.ToType())
+	vec := NewVec(types.T_float32.ToType(), mp)
 	require.NoError(t, AppendFixed(vec, float32(1), false, mp))
 	_, ok := GetLowPrecisionFloatAt(vec, 0)
 	require.False(t, ok)
@@ -58,7 +58,7 @@ func TestGetLowPrecisionFloatAt(t *testing.T) {
 func TestLowPrecisionFloatMarshalRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
 	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
-		vec := NewVec(oid.ToType())
+		vec := NewVec(oid.ToType(), mp)
 		for i, v := range []float32{1.5, -0.5, 0} {
 			var err error
 			switch oid {
@@ -75,7 +75,7 @@ func TestLowPrecisionFloatMarshalRoundTrip(t *testing.T) {
 		}
 		data, err := vec.MarshalBinary()
 		require.NoError(t, err)
-		got := NewVec(oid.ToType())
+		got := NewVec(oid.ToType(), mp)
 		require.NoError(t, got.UnmarshalBinary(data), oid.String())
 		require.Equal(t, 3, got.Length())
 		f, _ := GetLowPrecisionFloatAt(got, 1)
@@ -90,7 +90,7 @@ func testLowPrecisionFloatRowStrings[T types.LowPrecFloat](t *testing.T, oid typ
 	t.Run(oid.String(), func(t *testing.T) {
 		mp := mpool.MustNewZero()
 		t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-		vec := NewVec(oid.ToType())
+		vec := NewVec(oid.ToType(), mp)
 		t.Cleanup(func() { vec.Free(mp) })
 		require.NoError(t, AppendFixedList(vec, stored, nil, mp))
 		var zero T

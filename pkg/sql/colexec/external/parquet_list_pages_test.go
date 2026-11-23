@@ -101,7 +101,7 @@ func TestParquetListVectorAcrossV1Pages(t *testing.T) {
 	gotVectors := make([][]float32, 0, 8)
 	batches := 0
 	for {
-		bat := vectorBatch([]types.Type{types.T_int64.ToType(), types.New(types.T_array_float32, 64, 0)})
+		bat := vectorBatch([]types.Type{types.T_int64.ToType(), types.New(types.T_array_float32, 64, 0)}, proc.Mp())
 		finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 		require.NoError(t, err)
 		batches++
@@ -226,8 +226,8 @@ func TestParquetListVectorRowModePreservesSiblingMappers(t *testing.T) {
 		types.T_int32.ToType(),
 		types.T_json.ToType(),
 		types.New(types.T_array_float32, 2, 0),
-	})
-	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+	}, proc.Mp())
+	t.Cleanup(func() { bat.CleanOwned() })
 	finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 	require.NoError(t, err)
 	require.True(t, finished)
@@ -272,8 +272,8 @@ func TestParquetListVectorRowModeRollsBackWholeRow(t *testing.T) {
 	require.NoError(t, err)
 	defer reader.Close()
 
-	bat := vectorBatch([]types.Type{types.New(types.T_array_float32, 2, 0), types.T_json.ToType()})
-	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+	bat := vectorBatch([]types.Type{types.New(types.T_array_float32, 2, 0), types.T_json.ToType()}, proc.Mp())
+	t.Cleanup(func() { bat.CleanOwned() })
 	_, err = reader.ReadBatch(context.Background(), bat, proc, nil)
 	require.ErrorContains(t, err, "json text not-json")
 	require.Zero(t, bat.Vecs[0].Length())
@@ -304,8 +304,8 @@ func TestParquetListVectorRowModeEnforcesColDefNotNull(t *testing.T) {
 	require.NoError(t, err)
 	defer reader.Close()
 
-	bat := vectorBatch([]types.Type{types.New(types.T_array_float32, 2, 0)})
-	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+	bat := vectorBatch([]types.Type{types.New(types.T_array_float32, 2, 0)}, proc.Mp())
+	t.Cleanup(func() { bat.CleanOwned() })
 	_, err = reader.ReadBatch(context.Background(), bat, proc, nil)
 	require.ErrorContains(t, err, "NOT NULL")
 	require.Zero(t, bat.Vecs[0].Length())
@@ -343,7 +343,7 @@ func TestParquetListVectorRowModeRejectsMalformedNullRows(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			vec := vector.NewVec(types.T_array_float32.ToType())
+			vec := vector.NewVec(types.T_array_float32.ToType(), proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()) })
 			err := handler.processNestedValue(test.row, col, mapper, vec, &plan.ColDef{
 				Name: "emb",
@@ -391,7 +391,7 @@ func TestParquetListVectorRowMapperSupportsAllElementFamilies(t *testing.T) {
 			require.NotNil(t, mapper.listValuesMapper)
 			values, err := readParquetPageAllValues(proc.Ctx, page)
 			require.NoError(t, err)
-			vec := vector.NewVec(types.New(test.target, 2, 0))
+			vec := vector.NewVec(types.New(test.target, 2, 0), proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()) })
 			require.NoError(t, mapper.listValuesMapper(mapper, values, 1, proc, vec))
 			require.Equal(t, 1, vec.Length())
@@ -428,8 +428,8 @@ func TestParquetListVectorRowModeHonorsCancellation(t *testing.T) {
 	defer reader.Close()
 	cancel()
 
-	bat := vectorBatch([]types.Type{types.New(types.T_array_float32, 2, 0)})
-	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+	bat := vectorBatch([]types.Type{types.New(types.T_array_float32, 2, 0)}, proc.Mp())
+	t.Cleanup(func() { bat.CleanOwned() })
 	_, err = reader.ReadBatch(proc.Ctx, bat, proc, nil)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, bat.Vecs[0].Length())

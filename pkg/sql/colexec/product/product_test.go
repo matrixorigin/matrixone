@@ -33,7 +33,7 @@ import (
 
 func TestProductAllocationSiteLedger(t *testing.T) {
 	require.Equal(t, uint8(94), uint8(productAllocationSiteResultData))
-	require.Equal(t, uint8(97), uint8(productAllocationSiteResultGrouping))
+	require.Equal(t, uint8(95), uint8(productAllocationSiteResultArea))
 }
 
 // add unit tests for cases
@@ -64,7 +64,9 @@ func TestPrepare(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
 		t.Cleanup(func() {
 			tc.arg.Free(tc.proc, false, nil)
+			freeTestChildren(tc.arg)
 			tc.barg.Free(tc.proc, false, nil)
+			freeTestChildren(tc.barg)
 			require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
 		})
 		err := tc.arg.Prepare(tc.proc)
@@ -82,7 +84,9 @@ func TestProduct(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
 		t.Cleanup(func() {
 			tc.arg.Free(tc.proc, false, nil)
+			freeTestChildren(tc.arg)
 			tc.barg.Free(tc.proc, false, nil)
+			freeTestChildren(tc.barg)
 			require.Zero(t, tc.proc.Mp().CurrNB())
 			require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
 		})
@@ -97,7 +101,9 @@ func TestProduct(t *testing.T) {
 					tc.barg.Reset(tc.proc, false, nil)
 					usedAfterReset := tc.arg.allocationAccount.Snapshot().Used
 					probe.Free(tc.proc, false, nil)
+					freeTestChildren(probe)
 					build.Free(tc.proc, false, nil)
+					freeTestChildren(build)
 					tc.proc.GetMessageBoard().Reset()
 					require.Zero(t, usedAfterReset)
 					require.Zero(t, tc.proc.Mp().CurrNB())
@@ -152,6 +158,7 @@ func TestProductPassesRecursiveMarker(t *testing.T) {
 				probeBatches = append([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp())}, marker)
 			}
 			probe := colexec.NewMockOperator().WithBatchs(probeBatches)
+			freeTestChildren(tc.arg)
 			tc.arg.Children = nil
 			tc.arg.AppendChild(probe)
 			if test.emptyBuild {
@@ -161,8 +168,11 @@ func TestProductPassesRecursiveMarker(t *testing.T) {
 			}
 			defer func() {
 				tc.arg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.arg)
 				tc.barg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.barg)
 				probe.Free(tc.proc, false, nil)
+				freeTestChildren(probe)
 				tc.proc.Free()
 			}()
 
@@ -193,8 +203,10 @@ func TestProductConsumesMultipleBuildBatchesWithoutCopy(t *testing.T) {
 	probe := colexec.MakeMockBatchs(tc.proc.Mp())
 	build1 := colexec.MakeMockBatchs(tc.proc.Mp())
 	build2 := colexec.MakeMockBatchs(tc.proc.Mp())
+	freeTestChildren(tc.arg)
 	tc.arg.Children = nil
 	tc.arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probe}))
+	freeTestChildren(tc.barg)
 	tc.barg.Children = nil
 	tc.barg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{build1, build2}))
 
@@ -220,7 +232,9 @@ func TestProductConsumesMultipleBuildBatchesWithoutCopy(t *testing.T) {
 	tc.barg.Reset(tc.proc, false, nil)
 	require.Zero(t, tc.arg.allocationAccount.Snapshot().Used)
 	tc.arg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.arg)
 	tc.barg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.barg)
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
@@ -252,6 +266,7 @@ func newTestCase(t *testing.T, rp []colexec.ResultPos) productTestCase {
 func resetChildren(arg *Product, m *mpool.MPool) {
 	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	freeTestChildren(arg)
 	arg.Children = nil
 	arg.AppendChild(op)
 }
@@ -263,6 +278,7 @@ func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
 
 func resetHashBuildChildrenWithBatch(arg *hashbuild.HashBuild, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	freeTestChildren(arg)
 	arg.Children = nil
 	arg.AppendChild(op)
 }

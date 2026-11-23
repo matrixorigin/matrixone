@@ -16,6 +16,9 @@ package compile
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 func TestWeekRemoteSessionRoundTrip(t *testing.T) {
@@ -58,7 +59,7 @@ func TestWeekRemoteSessionRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	eval := func(p *process.Process) int32 {
 		input := batch.NewWithSize(1)
-		input.Vecs[0] = vector.NewVec(types.T_date.ToType())
+		input.Vecs[0] = vector.NewVec(types.T_date.ToType(), p.Mp())
 		defer input.Clean(p.Mp())
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], types.DateFromCalendar(2021, 1, 1), false, p.Mp()))
 		input.SetRowCount(1)

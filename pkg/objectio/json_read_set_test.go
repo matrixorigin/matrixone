@@ -44,7 +44,7 @@ func TestJSONReadSetMetadataAdmissionAndRelease(t *testing.T) {
 	defer set.Close()
 	initial := live
 	require.Positive(t, initial)
-	columns := []*vector.Vector{vector.NewVec(types.T_json.ToType()), vector.NewVec(types.T_json.ToType())}
+	columns := []*vector.Vector{vector.NewVec(types.T_json.ToType(), mp), vector.NewVec(types.T_json.ToType(), mp)}
 	defer func() {
 		for _, column := range columns {
 			column.Free(mp)
@@ -202,12 +202,12 @@ func TestJSONReadSetPublicationAllocationFailure(t *testing.T) {
 				require.Zero(t, controller.used)
 				require.NoError(t, account.UnregisterCapacityController(class, controller))
 			}()
-			selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(account, 1, 1, 2, 3, 4, class)
+			selection, err := mp.WithAccount(account, 1, 1, class)
 			require.NoError(t, err)
 			set := NewJSONReadSet([]int{0, 1}, selection)
 			defer set.Close()
 			if operation == "partial-publication" {
-				source := vector.NewVec(types.T_json.ToType())
+				source := vector.NewVec(types.T_json.ToType(), mp)
 				defer source.Free(mp)
 				value, err := types.ParseStringToByteJson("1")
 				require.NoError(t, err)
@@ -218,7 +218,7 @@ func TestJSONReadSetPublicationAllocationFailure(t *testing.T) {
 			} else {
 				set = NewJSONReadSet([]int{0}, selection)
 				defer set.Close()
-				builder, err := vector.NewJSONReaderBuilder(mp, selection)
+				builder, err := vector.NewJSONReaderBuilder(selection)
 				require.NoError(t, err)
 				defer builder.Close()
 				require.NoError(t, builder.Append(nil, true))
@@ -261,7 +261,7 @@ func TestJSONReadSetCanRebindAfterEmptyChild(t *testing.T) {
 func TestJSONReadSetDeclinesMalformedInputForEvaluation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	columns := []*vector.Vector{vector.NewVec(types.T_json.ToType()), vector.NewVec(types.T_json.ToType())}
+	columns := []*vector.Vector{vector.NewVec(types.T_json.ToType(), mp), vector.NewVec(types.T_json.ToType(), mp)}
 	defer columns[0].Free(mp)
 	defer columns[1].Free(mp)
 	doc, err := types.ParseStringToByteJson(`{"keep":1}`)

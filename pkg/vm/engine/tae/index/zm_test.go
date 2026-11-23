@@ -20,8 +20,9 @@ import (
 	"math/big"
 	"strconv"
 
-	"golang.org/x/exp/constraints"
 	"testing"
+
+	"golang.org/x/exp/constraints"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -54,7 +55,7 @@ func zonemapLowPrecCase[T types.LowPrecFloat](t *testing.T, oid types.T, from fu
 
 	// SubVecIn on a value-sorted column prunes by value. Use >3 rows so SubVecIn
 	// passes its small-vector early return and reaches the per-type bound search.
-	vec := vector.NewVec(oid.ToType())
+	vec := vector.NewVec(oid.ToType(), mp)
 	defer vec.Free(mp)
 	for _, f := range []float32{-3.0, -1.0, 0.5, 2.0} {
 		require.NoError(t, vector.AppendFixed(vec, from(f), false, mp))
@@ -66,7 +67,7 @@ func zonemapLowPrecCase[T types.LowPrecFloat](t *testing.T, oid types.T, from fu
 
 	// AnyIn prunes by value: no value of these sorted vectors lies in [-3, 2]
 	for _, outside := range [][]float32{{3, 4, 6}, {-6, -4}, {-6, 3, 4}} {
-		out := vector.NewVec(oid.ToType())
+		out := vector.NewVec(oid.ToType(), mp)
 		for _, f := range outside {
 			require.NoError(t, vector.AppendFixed(out, from(f), false, mp))
 		}
@@ -371,7 +372,7 @@ func TestVectorZM(t *testing.T) {
 	vec.Free(m)
 
 	zm = NewZM(types.T_uint16, 0)
-	vec = vector.NewVecFromReuse()
+	vec = vector.NewVec(types.T_uint16.ToType(), m)
 	vec, err = ZMToVector(zm, vec, m)
 
 	require.NoError(t, err)
@@ -388,7 +389,7 @@ func TestVectorZM(t *testing.T) {
 
 func TestZoneMapAnyInSkipsNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer vec.Free(mp)
 
 	require.NoError(t, vector.AppendBytes(vec, []byte("aaa"), false, mp))
@@ -408,7 +409,7 @@ func TestZoneMapAnyInSkipsNulls(t *testing.T) {
 
 func TestZoneMapAnyInSkipsNullsForFixedTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	require.NoError(t, vector.AppendFixed(vec, int32(1), false, mp))
@@ -428,7 +429,7 @@ func TestZoneMapAnyInSkipsNullsForFixedTypes(t *testing.T) {
 
 func TestZoneMapAnyInAllNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer vec.Free(mp)
 
 	require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
@@ -536,7 +537,7 @@ func newSortedFloatTestVector[T ~float32 | ~float64](
 	sortValues bool,
 ) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(oid.ToType())
+	vec := vector.NewVec(oid.ToType(), mp)
 	for _, value := range values {
 		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 	}
@@ -739,7 +740,7 @@ func TestPrefixInIsIndependentOfNeedleOrder(t *testing.T) {
 		{"ab", "a"},
 		{"x", "a", "ab"},
 	} {
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		for _, needle := range needles {
 			require.NoError(t, vector.AppendBytes(vec, []byte(needle), false, mp))
 		}
@@ -747,7 +748,7 @@ func TestPrefixInIsIndependentOfNeedleOrder(t *testing.T) {
 		vec.Free(mp)
 	}
 
-	miss := vector.NewVec(types.T_varchar.ToType())
+	miss := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer miss.Free(mp)
 	for _, needle := range []string{"x", "xy"} {
 		require.NoError(t, vector.AppendBytes(miss, []byte(needle), false, mp))

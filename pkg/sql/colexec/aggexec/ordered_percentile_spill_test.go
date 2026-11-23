@@ -98,14 +98,14 @@ func TestOrderedPercentileAccountedSpillBoundsAndTail(t *testing.T) {
 	require.Equal(t, 1024.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
 	require.Equal(t, 1024.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 1))
 	require.True(t, result[0].IsNull(2))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	require.Equal(t, int64(67*2048+1), spillRows)
 	require.Equal(t, spillRows*8, spillBytes)
 	// Repeated Flush reads the same published history, without duplicate tails.
 	result, err = exec.Flush()
 	require.NoError(t, err)
 	require.Equal(t, 1024.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	require.Equal(t, int64(67*2048+1), spillRows)
 }
 
@@ -124,7 +124,7 @@ func TestOrderedPercentileAccountedFillDoesNotSpillArenaFloor(t *testing.T) {
 	result, err := exec.Flush()
 	require.NoError(t, err)
 	require.Equal(t, int64(9), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 }
 
 func TestOrderedPercentileAccountedPartialMergeAndGuards(t *testing.T) {
@@ -167,7 +167,7 @@ func TestOrderedPercentileAccountedPartialMergeAndGuards(t *testing.T) {
 			result, err := dst.Flush()
 			require.NoError(t, err)
 			require.Equal(t, 1023.5, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			oldFile := dst.spillData
 			require.Error(t, dst.UnmarshalFromReader(bytes.NewReader(encoded.Bytes()[:5]), mp))
 			require.Same(t, oldFile, dst.spillData)
@@ -178,7 +178,7 @@ func TestOrderedPercentileAccountedPartialMergeAndGuards(t *testing.T) {
 			result, err = dst.Flush()
 			require.NoError(t, err)
 			require.Equal(t, 1023.5, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 		})
 	}
 }
@@ -225,7 +225,7 @@ func TestOrderedPercentileAccountedSpillFailures(t *testing.T) {
 			result, err := exec.Flush()
 			require.NoError(t, err)
 			require.Equal(t, []float64{1, 3}, vector.MustFixedColNoTypeCheck[float64](result[0]))
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			cancelled, stop := context.WithCancel(context.Background())
 			stop()
 			_, err = exec.FlushWithContext(cancelled)
@@ -311,7 +311,7 @@ func TestOrderedPercentileAccountedDecimalSpillMatchesResident(t *testing.T) {
 						result, err := exec.Flush()
 						require.NoError(t, err)
 						got[i] = vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0)
-						result[0].Free(mp)
+						result[0].Free(result[0].MPool())
 					}
 					require.Equal(t, got[0], got[1])
 				})

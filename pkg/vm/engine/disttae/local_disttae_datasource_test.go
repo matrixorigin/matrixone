@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -185,15 +184,14 @@ func TestCommittedReplayAdmitsOutputBeforeAdvancing(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			}()
-			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			selection, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
-			out := batch.NewOffHeapWithSize(1)
-			defer out.Clean(mp)
+			out := batch.NewWithSize(1)
+			defer out.Clean(selection)
 			out.Attrs = []string{"id"}
-			out.Vecs[0] = vector.NewOffHeapVecWithType(typ)
-			require.NoError(t, out.SetAllocationAccount(selection))
+			out.Vecs[0] = vector.NewVec(typ, selection)
 
-			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, mp, out)
+			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, selection, out)
 			if tc.name == "fits" {
 				require.NoError(t, err)
 				require.Equal(t, []int64{42, 43}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
@@ -222,8 +220,8 @@ func TestLocalCommittedInsertReadsTimeFromRowEntry(t *testing.T) {
 	defer ls.Close()
 	out := batch.NewWithSize(2)
 	out.SetAttributes([]string{"id", objectio.DefaultCommitTS_Attr})
-	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	out.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	out.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	defer out.Clean(mp)
 
 	require.NoError(t, ls.filterInMemCommittedInserts(
@@ -282,9 +280,8 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
 	defer closeFunc()
 
-	txnOp.AddWorkspace(&Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
-	})
+	txn := &Transaction{}
+	txnOp.AddWorkspace(txn)
 
 	txnDB := txnDatabase{
 		op: txnOp,
@@ -308,7 +305,6 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		pState: pState,
 	}
 
-	//var stats []objectio.ObjectStats
 	int32Type := types.T_int32.ToType()
 	var tombstoneRowIds []types.Rowid
 	for i := 0; i < 3; i++ {
@@ -317,7 +313,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 
 		bat := readutil.NewCNTombstoneBatch(
 			&int32Type,
-			objectio.HiddenColumnSelection_None,
+			objectio.HiddenColumnSelection_None, proc.Mp(),
 		)
 
 		for j := 0; j < 10; j++ {
@@ -337,13 +333,16 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		require.Equal(t, 1, len(ss))
 		require.False(t, ss[0].IsZero())
 
-		//stats = append(stats, ss)
-		txnOp.GetWorkspace().(*Transaction).StashFlushedTombstones(ss[0])
+		stats := vector.NewVec(types.T_blob.ToType(), proc.Mp())
+		require.NoError(t, vector.AppendBytes(stats, ss[0][:], false, proc.Mp()))
+		txn.flushedTombstones.adjust(txnTbl.tableId, stats, 1)
+		stats.Free(proc.Mp())
 	}
 
 	deletedMask := objectio.GetReusableBitmap()
 	defer deletedMask.Release()
 	for i := range tombstoneRowIds {
+		deletedMask.Clear()
 		bid := tombstoneRowIds[i].BorrowBlockID()
 		left, err := ls.applyWorkspaceFlushedS3Deletes(bid, nil, &deletedMask)
 		require.NoError(t, err)
@@ -365,8 +364,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	s3Bat.SetRowCount(8193)
 	s3Bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
 	txn := &Transaction{
-		proc: testutil.NewProc(t),
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+		proc:          testutil.NewProc(t),
 		op:            txnOp,
 		deletedBlocks: &deletedBlocks{},
 		writes: []Entry{
@@ -382,10 +380,10 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 
 	// This batch can be obtained by 'insert into db.t2 values (1);'
 	normalBat := batch.NewWithSize(1)
-	normalBat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	normalBat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), txn.proc.Mp())
 	m := mpool.MustNewZero()
 	normalBat.SetRowCount(1)
-	vector.AppendFixed(normalBat.Vecs[0], int32(1), false, m)
+	require.NoError(t, vector.AppendFixed(normalBat.Vecs[0], int32(1), false, txn.proc.Mp()))
 	_, err := txn.WriteBatch(INSERT, "", 0, 11, 23, "db", "t2", normalBat, DNStore{})
 	require.NoError(t, err)
 
@@ -406,7 +404,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	}
 
 	outBatch := batch.NewWithSize(1)
-	outBatch.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	outBatch.Vecs[0] = vector.NewVec(types.T_int32.ToType(), m)
 	err = ls.filterInMemUnCommittedInserts(ctx, []uint16{0}, -1, m, outBatch)
 	require.NoError(t, err)
 	require.Equal(t, 1, outBatch.RowCount())
@@ -453,14 +451,14 @@ func TestIvfWorkspaceReaderPreservesPhysicalPK(t *testing.T) {
 			defer in.Clean(mp)
 			out := batch.NewWithSize(len(cols))
 			defer out.Clean(mp)
-			in.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+			in.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(in.Vecs[0], types.Rowid{}, false, mp))
 			for i, col := range tableDef.Cols {
 				cols[i] = col.Name
 				tableDef.Name2ColIndex[col.Name] = int32(i)
 				typ := plan2.ExprType2Type(&col.Typ)
-				in.Vecs[i+1] = vector.NewVec(typ)
-				out.Vecs[i] = vector.NewVec(typ)
+				in.Vecs[i+1] = vector.NewVec(typ, mp)
+				out.Vecs[i] = vector.NewVec(typ, mp)
 			}
 			in.SetAttributes(append([]string{catalog.Row_ID}, cols...))
 			require.NoError(t, vector.AppendFixed(in.Vecs[1], int64(0), false, mp))
@@ -477,7 +475,7 @@ func TestIvfWorkspaceReaderPreservesPhysicalPK(t *testing.T) {
 			packer.Reset()
 			packer.EncodeInt64(0)
 			packer.EncodeInt64(tc.centroid)
-			prefixes := vector.NewVec(types.T_varchar.ToType())
+			prefixes := vector.NewVec(types.T_varchar.ToType(), mp)
 			defer prefixes.Free(mp)
 			require.NoError(t, vector.AppendBytes(prefixes, packer.GetBuf(), false, mp))
 			data, err := prefixes.MarshalBinary()
@@ -498,7 +496,7 @@ func TestIvfWorkspaceReaderPreservesPhysicalPK(t *testing.T) {
 				rangeSlice:      readutil.NewBlockListRelationData(0).GetBlockInfoSlice()}
 			hint := engine.FilterHint{}
 			if tc.membership {
-				keys := vector.NewVec(types.T_int32.ToType())
+				keys := vector.NewVec(types.T_int32.ToType(), mp)
 				defer keys.Free(mp)
 				for i := int32(0); i < 101; i++ {
 					require.NoError(t, vector.AppendFixed(keys, tc.memberStart+i, false, mp))
@@ -544,7 +542,7 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 	}
 
 	m := mpool.MustNewZero()
-	delVec := vector.NewVec(types.T_Rowid.ToType())
+	delVec := vector.NewVec(types.T_Rowid.ToType(), m)
 	for _, row := range rows1 {
 		require.NoError(t, vector.AppendFixed(delVec, row, false, m))
 	}
@@ -555,7 +553,7 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 	delBat.Vecs[0] = delVec
 	delBat.SetRowCount(len(rows1))
 
-	delVec2 := vector.NewVec(types.T_Rowid.ToType())
+	delVec2 := vector.NewVec(types.T_Rowid.ToType(), m)
 	for _, row := range rows2 {
 		require.NoError(t, vector.AppendFixed(delVec2, row, false, m))
 	}
@@ -971,7 +969,7 @@ func newWorkspaceDeleteBatch(t *testing.T, rows []types.Rowid) *batch.Batch {
 	t.Helper()
 
 	m := mpool.MustNewZero()
-	delVec := vector.NewVec(types.T_Rowid.ToType())
+	delVec := vector.NewVec(types.T_Rowid.ToType(), m)
 	for _, row := range rows {
 		require.NoError(t, vector.AppendFixed(delVec, row, false, m))
 	}

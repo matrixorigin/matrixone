@@ -54,8 +54,6 @@ func ValidVectors(vecs []*vector.Vector, rows int) bool {
 	return true
 }
 
-var groupingColumnHash = xxhash.Sum64([]byte{2})
-
 // Float32Codec holds the SQL comparison normalization for one FLOAT32 type.
 // Construct it once per vector so scale processing is not repeated per row.
 type Float32Codec struct {
@@ -649,15 +647,6 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 	}
 
 	for _, vec := range keyVecs {
-		if vec.IsDictionary() {
-			computeGroupingXXHash(vec, hashValues[:min(rowCount, vec.Length())])
-			continue
-		}
-
-		if vec.GetGrouping().GetBitmap().CountRange(0, uint64(rowCount)) > 0 {
-			computeGroupingXXHash(vec, hashValues)
-			continue
-		}
 		if types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString() {
 			charset := vec.GetType().Charset
 			computeCanonicalVarlenaXXHash(vec, hashValues, func(dst, value []byte) []byte {
@@ -793,45 +782,12 @@ func computeFloat32XXHash(vec *vector.Vector, hashValues []uint64) {
 	}
 }
 
-func computeGroupingXXHash(vec *vector.Vector, hashValues []uint64) {
-	rowCount := len(hashValues)
-	grouping := vec.GetGrouping()
-	nulls := vec.GetNulls()
-	var scratch []byte
-	for i := 0; i < rowCount; i++ {
-		if grouping.Contains(uint64(i)) {
-			hashValues[i] = HashCombine(hashValues[i], groupingColumnHash)
-			continue
-		}
-		if vec.IsConstNull() || nulls.Contains(uint64(i)) {
-			hashValues[i] = HashCombine(hashValues[i], 0)
-			continue
-		}
-		canonical, reusable := CanonicalBytesAt(vec, i, scratch[:0])
-		scratch = reusable
-		hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(canonical))
-	}
-}
-
 // CanonicalBytesAt returns the byte representation used by SQL grouping
 // equality. The caller owns null handling. canonical can alias vector storage;
 // reusable preserves scratch capacity for the next call even in that case.
 // Keeping this contract in keycodec prevents statistics, hash joins, and GROUP
 // BY from silently defining different equality domains.
 func CanonicalBytesAt(vec *vector.Vector, row int, scratch []byte) (canonical, reusable []byte) {
-	if vec.IsDictionary() {
-		// typeswitch:partial F32/F64 need logical reads; other representations use the general codec below.
-		switch vec.GetType().Oid {
-		case types.T_float32:
-			value := NewFloat32Codec(vec.GetType().Scale).CanonicalBytes(vector.GetFixedAtNoTypeCheck[float32](vec, row))
-			scratch = append(scratch, value[:]...)
-			return scratch, scratch
-		case types.T_float64:
-			value := CanonicalFloat64Bytes(vector.GetFixedAtNoTypeCheck[float64](vec, row))
-			scratch = append(scratch, value[:]...)
-			return scratch, scratch
-		}
-	}
 
 	if vec.IsConst() {
 		row = 0

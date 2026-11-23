@@ -88,6 +88,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	// INSERT IGNORE is a statement-level conversion policy and may coexist with
 	// an executable ODKU assignment list.
 	builder.isInsertIgnore = stmt.IsIgnore()

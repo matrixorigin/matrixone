@@ -43,7 +43,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -267,19 +266,6 @@ func prepareRemoteRunSendingDataWithProtocol(
 	remoteExecutionID uuid.UUID,
 	requiredProtocol *int64,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
-	// The output dispatch executes on the initiating CN and is stripped from
-	// the encoded scope below. Validate its consumers before losing that edge.
-	if queryNeedsGroupingTransport(s.Plan.GetQuery()) {
-		if output, ok := s.RootOp.(*dispatch.Dispatch); ok && len(output.RemoteRegs) > 0 {
-			workers := make(engine.Nodes, 0, len(output.RemoteRegs))
-			for _, dest := range output.RemoteRegs {
-				workers = append(workers, engine.Node{Addr: dest.NodeAddr})
-			}
-			if err = requireGroupingTransportWorkers(proc, workers); err != nil {
-				return nil, false, nil, false, err
-			}
-		}
-	}
 	if output, ok := s.RootOp.(*connector.Connector); ok &&
 		output.Reg != nil && output.Reg.OrderedStream &&
 		!supportsDistributedOrderedTop(proc.GetService()) {
@@ -973,7 +959,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		}
 
 		bat, err = decodeBatch(sender.mp, dataBuffer)
-		/* 		bat := batch.NewOffHeapEmpty()
+		/* 		bat := batch.NewWithSize(0)
 		   		if err := bat.UnmarshalBinary(dataBuffer); err != nil {
 		   			bat.Clean(sender.mp)
 		   			return bat, false, err

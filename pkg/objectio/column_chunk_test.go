@@ -39,7 +39,7 @@ func TestChunkedColumnRoundTripAndRangedRead(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	const rows = 640
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), mp)
 	for i := 0; i < rows; i++ {
 		value := strings.Repeat(string(rune('a'+i%20)), 20<<10)
 		require.NoError(t, vector.AppendBytes(source, []byte(value), false, mp))
@@ -202,7 +202,7 @@ func TestChunkedColumnSharedAreaFallsBackToLegacyWriter(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer constant.Free(mp)
-	shared := vector.NewVec(types.T_text.ToType())
+	shared := vector.NewVec(types.T_text.ToType(), mp)
 	require.NoError(t, shared.UnionBatch(constant, 0, constant.Length(), nil, mp))
 	require.False(t, shared.VarlenaAreaIsDisjoint())
 	fullSize, err := shared.MarshalBinarySize()
@@ -269,7 +269,7 @@ func TestChunkedColumnSharedAreaFallsBackToLegacyWriter(t *testing.T) {
 func TestChunkedColumnRejectsPayloadRowCountMismatch(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	source := vector.NewVec(types.T_int32.ToType())
+	source := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(source, int32(1), false, mp))
 	require.NoError(t, vector.AppendFixed(source, int32(2), false, mp))
 	defer source.Free(mp)
@@ -290,8 +290,8 @@ func TestChunkedColumnRejectsPayloadRowCountMismatch(t *testing.T) {
 
 func makeMixedTypeChunkedColumn(t *testing.T, mp *mpool.MPool) []byte {
 	t.Helper()
-	left := vector.NewVec(types.T_int64.ToType())
-	right := vector.NewVec(types.T_int32.ToType())
+	left := vector.NewVec(types.T_int64.ToType(), mp)
+	right := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(left, int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(right, int32(2), false, mp))
 	defer left.Free(mp)
@@ -346,7 +346,7 @@ func TestChunkedColumnRejectsMixedLogicalTypes(t *testing.T) {
 func TestChunkedColumnRejectsInvalidPayloadAndEmptySource(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	empty := vector.NewVec(types.T_int32.ToType())
+	empty := vector.NewVec(types.T_int32.ToType(), mp)
 	_, chunked, err := encodeChunkedColumn(empty)
 	require.Error(t, err)
 	require.False(t, chunked)

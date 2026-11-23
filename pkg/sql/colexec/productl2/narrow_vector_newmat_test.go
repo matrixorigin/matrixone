@@ -113,7 +113,7 @@ func TestNewMatDecodesNarrowProbeColumns(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(tc.typ)
+			vec := vector.NewVec(tc.typ, mp)
 			defer vec.Free(mp)
 			tc.fill(vec)
 
@@ -134,7 +134,7 @@ func TestNewMatDecodesNarrowProbeColumns(t *testing.T) {
 	// A NULL probe row must take the shared nullvec, not a decoded value —
 	// and nullvec is stamped [1,0,0,...] so a distance against it is defined.
 	t.Run("null row uses nullvec", func(t *testing.T) {
-		vec := vector.NewVec(types.T_array_int8.ToType())
+		vec := vector.NewVec(types.T_array_int8.ToType(), mp)
 		defer vec.Free(mp)
 		require.NoError(t, vector.AppendArrayList[int8](vec, [][]int8{{1, 2, 3}}, []bool{true}, mp))
 
@@ -154,7 +154,7 @@ func TestNewMatDecodesNarrowProbeColumns(t *testing.T) {
 
 	// f64 centroids reinterpret the base directly rather than widening.
 	t.Run("float64 centroids take the direct path", func(t *testing.T) {
-		vec := vector.NewVec(types.T_array_float64.ToType())
+		vec := vector.NewVec(types.T_array_float64.ToType(), mp)
 		defer vec.Free(mp)
 		require.NoError(t, vector.AppendArrayList[float64](vec, [][]float64{{1, -2, 3}}, nil, mp))
 
