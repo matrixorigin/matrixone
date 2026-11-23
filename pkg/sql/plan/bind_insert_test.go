@@ -126,10 +126,11 @@ func TestGetIrregularIndexes(t *testing.T) {
 func TestHasSyncIrregularIndex(t *testing.T) {
 	asyncParam := `{"async":"true"}`
 	cases := []struct {
-		name    string
-		indexes []*plan.IndexDef
-		want    bool
-		wantErr bool
+		name             string
+		indexes          []*plan.IndexDef
+		want             bool
+		wantUnmaintained bool
+		wantErr          bool
 	}{
 		{name: "no indexes"},
 		{name: "regular only", indexes: []*plan.IndexDef{
@@ -156,19 +157,23 @@ func TestHasSyncIrregularIndex(t *testing.T) {
 		{name: "master", want: true, indexes: []*plan.IndexDef{
 			{IndexAlgo: catalog.MOIndexMasterAlgo.ToString()},
 		}},
+		{name: "sync unknown irregular", want: true, wantUnmaintained: true, indexes: []*plan.IndexDef{
+			{IndexAlgo: "unknown_algo"},
+		}},
 		{name: "invalid async param", wantErr: true, indexes: []*plan.IndexDef{
 			{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), IndexAlgoParams: `{"async":1}`},
 		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := hasSyncIrregularIndex(&plan.TableDef{Indexes: c.indexes})
+			got, unmaintained, err := hasSyncIrregularIndex(&plan.TableDef{Indexes: c.indexes})
 			if c.wantErr {
 				assert.Error(t, err)
 				return
 			}
 			assert.NoError(t, err)
 			assert.Equal(t, c.want, got)
+			assert.Equal(t, c.wantUnmaintained, unmaintained)
 		})
 	}
 }

@@ -393,22 +393,31 @@ func TestIrregularIndexDeleteJoinIsRowScoped(t *testing.T) {
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
 
-	var originDelete *planpb.Node
+	originDelete := false
+	joinScanned := false
 	fulltextDeleteCount := 0
 	for _, node := range query.Nodes {
-		if node.NodeType != planpb.Node_DELETE || node.DeleteCtx == nil || node.DeleteCtx.TableDef == nil {
-			continue
-		}
-		switch node.DeleteCtx.TableDef.Name {
-		case "docs_ft":
-			originDelete = node
-		case catalog.FullTextIndexTableNamePrefix + "docs_ft_body":
-			fulltextDeleteCount++
+		switch node.NodeType {
+		case planpb.Node_MULTI_UPDATE:
+			for _, ctx := range node.UpdateCtxList {
+				if ctx.TableDef != nil && ctx.TableDef.Name == "docs_ft" && len(ctx.DeleteCols) > 0 {
+					originDelete = true
+				}
+			}
+		case planpb.Node_TABLE_SCAN:
+			if node.TableDef != nil && node.TableDef.Name == "dept" {
+				joinScanned = true
+			}
+		case planpb.Node_DELETE:
+			if node.DeleteCtx != nil && node.DeleteCtx.TableDef != nil &&
+				node.DeleteCtx.TableDef.Name == catalog.FullTextIndexTableNamePrefix+"docs_ft_body" {
+				fulltextDeleteCount++
+			}
 		}
 	}
 
-	require.NotNil(t, originDelete, "missing origin-table delete")
-	require.False(t, originDelete.DeleteCtx.CanTruncate, "a join must be evaluated before deleting target rows")
+	require.True(t, originDelete, "missing origin-table delete")
+	require.True(t, joinScanned, "a join must be evaluated before deleting target rows")
 	require.Equal(t, 1, fulltextDeleteCount, "row-scoped fulltext maintenance must not be skipped")
 }
 

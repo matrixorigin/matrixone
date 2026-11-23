@@ -273,21 +273,26 @@ func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrre
 }
 
 // hasSyncIrregularIndex reports whether tableDef has an irregular index that is
-// not maintained asynchronously by CDC.
-func hasSyncIrregularIndex(tableDef *plan.TableDef) (bool, error) {
+// not maintained asynchronously by CDC, and whether any such index lacks modern
+// in-statement maintenance.
+func hasSyncIrregularIndex(tableDef *plan.TableDef) (sync, unmaintained bool, err error) {
 	for _, idxDef := range tableDef.Indexes {
 		if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
 			continue
 		}
-		async, err := indexplugin.IsAsync(idxDef.IndexAlgo, idxDef.IndexAlgoParams)
-		if err != nil {
-			return false, err
+		async, asyncErr := indexplugin.IsAsync(idxDef.IndexAlgo, idxDef.IndexAlgoParams)
+		if asyncErr != nil {
+			return false, false, asyncErr
 		}
-		if !async {
-			return true, nil
+		if async {
+			continue
+		}
+		sync = true
+		if !isModernMaintainedIrregularAlgo(idxDef.IndexAlgo) {
+			unmaintained = true
 		}
 	}
-	return false, nil
+	return sync, unmaintained, nil
 }
 
 // isModernMaintainedIrregularAlgo reports whether an irregular index algorithm has
