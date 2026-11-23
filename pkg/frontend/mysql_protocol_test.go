@@ -3265,11 +3265,11 @@ func TestParseExecuteDataDecimalRebindsPreparedAbsExactly(t *testing.T) {
 		buildStringExecutePacket(proto, defines.MYSQL_TYPE_NEWDECIMAL, value), 0))
 	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}, prepareStmt.ParamTypes)
 	proc.SetPrepareParamsWithIsBin(prepareStmt.params, []bool{false})
-	values, err := preparedParamValues(proc, prepareStmt.ParamTypes,
+	values, err := preparedParamValues(proc, nil, prepareStmt.ParamTypes,
 		[]types.StringConversionKind{types.StringConversionDecimal})
 	require.NoError(t, err)
 	require.Len(t, values, 1)
-	param := values[0].(plan.ParamValue)
+	param := mustParamValue(values[0])
 	require.Equal(t, value, param.Value)
 	require.True(t, param.HasRuntimeType)
 	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
@@ -3352,7 +3352,7 @@ func TestParseExecuteDataBitCountMarkerUsesPacketDomain(t *testing.T) {
 			}()
 			require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, tc.packet(proto), 0))
 			proc.SetPrepareParamsWithIsBin(prepareStmt.params, []bool{false})
-			values, err := preparedParamValues(proc, prepareStmt.ParamTypes,
+			values, err := preparedParamValues(proc, nil, prepareStmt.ParamTypes,
 				[]types.StringConversionKind{tc.paramKind})
 			require.NoError(t, err)
 			runtimePlan, specialized, err := plan.FillValuesOfParamsInPlanWithSpecialization(

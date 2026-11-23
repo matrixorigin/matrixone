@@ -2703,7 +2703,7 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 			if len(c.preparedParamValues) > 0 {
 				semantic := make([]executor.ParamValue, len(values))
 				for i, value := range c.preparedParamValues {
-					param, ok := value.(plan2.ParamValue)
+					param, ok := plan2.AsParamValue(value)
 					if !ok {
 						return moerr.NewInternalErrorf(c.proc.Ctx,
 							"CTAS prepared parameter %d has no semantic value", i)

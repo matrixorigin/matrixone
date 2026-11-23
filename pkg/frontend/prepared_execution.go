@@ -38,7 +38,7 @@ func preparedExecutionBindings(ctx context.Context, values []any, protocolTypes 
 	for i, value := range values {
 		binding := &bindings[i]
 		binding.Position = int32(i)
-		param, ok := value.(plan2.ParamValue)
+		param, ok := plan2.AsParamValue(value)
 		if !ok {
 			binding.Type, _ = preparedConversionRuntimeType(value)
 			continue
@@ -112,7 +112,7 @@ func preparedExecutionBindingKey(bindings []plan2.PreparedSourceBinding, values 
 		writeType(binding.Type)
 		writeType(binding.NumericType)
 		writeType(binding.BitCountType)
-		if param, ok := values[i].(plan2.ParamValue); ok {
+		if param, ok := plan2.AsParamValue(values[i]); ok {
 			writeInt(int64(param.PrepareParamKind), ':')
 			writeBool(param.IsBinaryProtocol, ':')
 			writeBool(param.IsBin, ':')
@@ -243,7 +243,7 @@ func (prepareStmt *PrepareStmt) rememberIntegerArithmeticBindings(p *plan2.Plan,
 			continue
 		}
 		value := values[pos]
-		if param, ok := value.(plan2.ParamValue); ok {
+		if param, ok := plan2.AsParamValue(value); ok {
 			value = param.Value
 		}
 		if value == nil {

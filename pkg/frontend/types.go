@@ -314,7 +314,9 @@ type PrepareStmt struct {
 	typedParams typedPrepareParams
 	// userParams holds SQL EXECUTE ... USING parameters, owned by the
 	// statement and rewritten in place by every execution.
-	userParams          executeUserParams
+	userParams executeUserParams
+	// paramValues backs the planner's parameter values of an execution.
+	paramValues         plan2.ParamValueStore
 	getFromSendLongData map[int]struct{}
 	// COM_STMT_SEND_LONG_DATA owns its chunks until EXECUTE materializes each
 	// parameter once. The pool must be the one that allocated the buffers,

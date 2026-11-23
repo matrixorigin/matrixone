@@ -106,7 +106,7 @@ func (b *baseBinder) bindIntegerSourceAst(ast tree.Expr, depth int32, target typ
 		if _, direct := unwrapParenExpr(ast).(*tree.ParamExpr); direct {
 			state := preparedBindingState(b.GetContext())
 			if int(source.GetP().Pos) < len(state.values) {
-				if param, ok := state.values[source.GetP().Pos].(ParamValue); ok && !param.IsBinaryProtocol {
+				if param, ok := AsParamValue(state.values[source.GetP().Pos]); ok && !param.IsBinaryProtocol {
 					if value, present := preparedConfigurationValue(b.GetContext(), source); present && value != nil {
 						source, err = preparedCharSourceCast(b.GetContext(), source, fmt.Sprint(value))
 						if err != nil {
