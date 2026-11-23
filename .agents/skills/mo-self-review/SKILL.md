@@ -190,8 +190,7 @@ and teardown. Apply the shared evidence checks to suspected overfit, lost test
 coverage and performance claims. For a proposed optimization, check work and
 results at the real entry point as well as the claimed faster phase.
 For a change in the executable-probes trigger, prove each transition claim by the
-executable-probes proof rule; a finding needs no fix to be reported. Prove a fix by a
-probe failing before it and passing after it.
+executable-probes proof rule; a finding needs no fix to be reported. Prove a fix by the same rule.
 
 ## Convergence and decision
 

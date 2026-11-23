@@ -40,7 +40,9 @@ the fix that closed it.
 ## E. A new exit or join point bypasses a policy flag
 - **Shape:** a flag honored by the original path but not by a new join point or lookup.
 - **Probe:** each flag × entry point while work for the same target is active or
-  queued. The request must not wait for it or read from it.
+  queued. Derive the assertion from the operation the flag governs: a skip of cache
+  reads must not read cached bytes or wait for work that caches them, while a skip of
+  cache writes may still join work already under way.
 - **Fix:** apply the sibling's guard at each new point.
 
 ## F. A lifecycle event does not reach work in a pending state
@@ -58,8 +60,8 @@ the fix that closed it.
 
 ## H. A successful exit skips shared postconditions
 - **Shape:** an early `return nil` skips the step that updates the earlier tiers.
-- **Probe:** a caller tier that always misses; require one update for every way the
-  request can be served.
+- **Probe:** a caller tier that always misses; for every way the request can be
+  served, require the update its policy allows (none when it skips that tier).
 - **Fix:** route every success exit through one finisher; audit the returns.
 
 ## I. Check-then-act across two structures (TOCTOU)

@@ -99,8 +99,10 @@ Every probe:
      the equivalent operation, the probe also passes on the base; for an entry point the PR
      adds, the source delta establishes where the behavior came from. A finding needs no
      fix to be reported.
-   - A **fix** is proven when the finding's probe fails on the revision before the fix
-     and passes on the fixed revision; record both results.
+   - A **fix** is proven by the same proof rule. When the claim needs the comparison,
+     the finding's probe fails on the revision before the fix and passes on the fixed
+     revision; record both results. Otherwise a source trace of the correction and a
+     passing focused test of the invariant on the fixed revision suffice.
    - A probe that clears a matrix cell may pass on every revision: it shows the
      behavior is preserved.
 
