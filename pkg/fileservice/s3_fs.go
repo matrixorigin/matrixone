@@ -1024,7 +1024,8 @@ read_disk_cache:
 	}
 
 	// An exact read of bytes a flight is reading waits for them instead of reading them.
-	if s.diskCache != nil && vector.Policy.Any(ColumnPrefetch, ExactRead) && !vector.Policy.Any(SkipDiskCacheReads) {
+	flights := s.diskCache != nil && vector.Policy.Any(ColumnPrefetch, ExactRead) && !vector.Policy.Any(SkipDiskCacheReads)
+	if flights {
 		if path, perr := parseFilePathAtService(vector.FilePath, s.name); perr == nil {
 			if err := s.diskCache.readFromFlights(ctx, path.File, vector); err != nil {
 				finishFill()
@@ -1036,9 +1037,10 @@ read_disk_cache:
 		}
 	}
 
-	// A read that joined a download reads what it put in the disk cache. A flight caches its
-	// bytes before it ends, so the entries no flight held are cached.
-	if joined {
+	// A read that joined a download, or read the flights, reads the disk cache again: a
+	// flight caches its bytes before it ends, so the entries of one that ended since the
+	// disk cache was read are cached.
+	if joined || flights {
 		if err := readCache(ctx, s.diskCache, vector); err != nil {
 			return err
 		}
