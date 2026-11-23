@@ -15,12 +15,21 @@
 package runtime
 
 import (
+	"context"
 	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 )
+
+type methodVersionTestMethod int32
+
+func (methodVersionTestMethod) String() string { return "test" }
+
+type methodVersionTestRequest struct{ method methodVersionTestMethod }
+
+func (r methodVersionTestRequest) GetMethod() methodVersionTestMethod { return r.method }
 
 func TestRuntime(t *testing.T) {
 	rt := NewRuntime(metadata.ServiceType_CN, "cn0", nil)
@@ -38,6 +47,16 @@ func TestRuntime(t *testing.T) {
 	assert.True(t, rt.CompareAndDeleteGlobalVariables(k, v))
 	_, ok = rt.GetGlobalVariables(k)
 	assert.False(t, ok)
+}
+
+func TestCheckMethodVersionWithUnavailableRuntime(t *testing.T) {
+	err := CheckMethodVersionWithRuntime(
+		context.Background(),
+		nil,
+		map[methodVersionTestMethod]int64{1: 1},
+		methodVersionTestRequest{method: 1},
+	)
+	assert.ErrorContains(t, err, "service runtime is unavailable")
 }
 
 func TestServiceRuntimeRetirement(t *testing.T) {
