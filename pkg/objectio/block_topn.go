@@ -351,7 +351,7 @@ func (r *BlockTopNRead) readSources(ctx context.Context, meta *ObjectDataMeta, b
 		ToCacheData:       scopedChunkedConstructor}
 	var err error
 	r.block, err = readOneBlockWithMeta(ctx, meta, r.reader.name, blk, columns, typs, r.mp, r.reader.fs,
-		columnCacheConstructorFactory, policy, r.position, &entry, nil)
+		columnCacheConstructorFactory, policy, r.position, &entry)
 	if err != nil {
 		return err
 	}

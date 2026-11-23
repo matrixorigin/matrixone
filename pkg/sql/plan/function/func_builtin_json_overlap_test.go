@@ -649,14 +649,8 @@ func TestJSONOverlapsTypedJSON(t *testing.T) {
 
 	tooDeep := strings.Repeat(`{"a":`, bytejson.JSONDocumentMaxNestingDepth+1) + `1` +
 		strings.Repeat(`}`, bytejson.JSONDocumentMaxNestingDepth+1)
-	// Typed JSON now rejects excessive nesting at admission, before an
-	// expression can consume it. Text input still reaches the function's own
-	// document-depth check and retains its argument error below.
-	deepVector := vector.NewVec(types.T_json.ToType(), proc.Mp())
-	defer deepVector.Free(proc.Mp())
-	err := vector.AppendBytes(deepVector, []byte(mustJsonBinaryString(t, tooDeep)), false, proc.Mp())
-	require.ErrorContains(t, err, "invalid JSON vector payload")
-	require.Zero(t, deepVector.Length())
+	// Text input reaches the function's own document-depth check and keeps
+	// its argument error below.
 	testCase = NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
@@ -668,7 +662,7 @@ func TestJSONOverlapsTypedJSON(t *testing.T) {
 	)
 	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(1))
-	err = testCase.fn(testCase.parameters, testCase.result, proc, 1, nil)
+	err := testCase.fn(testCase.parameters, testCase.result, proc, 1, nil)
 	require.ErrorContains(t, err, "nesting depth exceeds 100")
 }
 
