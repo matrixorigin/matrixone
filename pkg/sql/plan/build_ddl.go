@@ -170,12 +170,12 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	var err error
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
-		stmtPlan, err = bindAndOptimizeSelectQueryWithValidator(plan.Query_SELECT, ctx, s.Select, false, true, validate)
+		stmtPlan, err = bindAndOptimizeSelectQueryWithValidator(plan.Query_SELECT, ctx, s.Select, false, true, false, validate)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		stmtPlan, err = bindAndOptimizeSelectQueryWithValidator(plan.Query_SELECT, ctx, stmt, false, true, validate)
+		stmtPlan, err = bindAndOptimizeSelectQueryWithValidator(plan.Query_SELECT, ctx, stmt, false, true, false, validate)
 		if err != nil {
 			return nil, err
 		}
