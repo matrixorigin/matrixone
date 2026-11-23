@@ -59,6 +59,33 @@ func TestAnyValueBatchMergeReturnsSetRawBytesAtError(t *testing.T) {
 	require.True(t, target.state[0].vecs[0].IsNull(0))
 }
 
+func TestAnyValuePreservesFirstPrepareParamKind(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(input, []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(input, []byte("9"), false, mp))
+	input.SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+	})
+	require.NoError(t, input.SetBinaryStringRowsWithMP([]bool{true, false}, mp))
+
+	exec := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+	defer func() {
+		input.Free(mp)
+		exec.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, vector.PrepareParamFloat, results[0].GetPrepareParamKindAt(0))
+	require.True(t, results[0].GetBinaryStringMetadataAt(0))
+	results[0].Free(mp)
+}
+
 func TestAnyValueIntermediateRoundTripAllStringSources(t *testing.T) {
 	for _, source := range []types.StringSource{
 		types.StringSourceExpression,

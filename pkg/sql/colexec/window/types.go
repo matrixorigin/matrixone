@@ -64,6 +64,8 @@ type container struct {
 	os      []int64 // Sorted partitions
 	aggVecs []colexec.ExprEvalVector
 
+	prepareParamKind aggexec.PrepareParamKindStates
+
 	// indicatorEvals caches one technical-indicator evaluation state per
 	// window expression (issue #29949). Each cached prefix belongs to
 	// exactly one materialized generation and is freed at every eval
@@ -205,6 +207,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	ctr.freeLocalRankIndex()
 	ctr.cleanOutput(proc.Mp())
 	ctr.resetParam()
+	ctr.prepareParamKind.Reset(nil)
 	ctr.resetVectors()
 	// Release aggregators here too: on an error exit from Call the normal
 	// freeAggFun() at the end of the eval loop is skipped, so batAggs would
@@ -249,6 +252,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr.orderVecs, ctr.aggVecs = nil, nil
 	ctr.clearSortState()
 	ctr.allocation.FreeMetadata()
+	ctr.prepareParamKind.Reset(nil)
 }
 
 func (ctr *container) resetParam() {

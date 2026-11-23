@@ -123,7 +123,7 @@ func TestDecodeBatchReleasesProvenanceOnGroupingFailure(t *testing.T) {
 	for _, value := range []string{"one", "two"} {
 		require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte(value), false, mp))
 	}
-	require.NoError(t, source.Vecs[0].SetStringSourcesWithMP([]types.StringSource{types.StringSourceCOMStmt, types.StringSourceSQLPrepare}, mp))
+	require.NoError(t, source.Vecs[0].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamNone}, mp))
 	source.Vecs[0].GetGrouping().Add(1)
 	source.SetRowCount(2)
 	encoded, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
@@ -136,9 +136,9 @@ func TestDecodeBatchReleasesProvenanceOnGroupingFailure(t *testing.T) {
 	func() {
 		probe := batch.NewOffHeapEmpty()
 		defer probe.Clean(mp)
-		err = probe.UnmarshalBinaryWithMetadata(encoded[:start], mp)
+		err = probe.UnmarshalBinaryWithPrepareParamKinds(encoded[:start], mp)
 		require.NoError(t, err)
-		require.NotEmpty(t, probe.Vecs[0].GetStringSources())
+		require.NotEmpty(t, probe.Vecs[0].GetPrepareParamKinds())
 		require.Greater(t, mp.CurrNB(), before)
 	}()
 	require.Equal(t, before, mp.CurrNB())

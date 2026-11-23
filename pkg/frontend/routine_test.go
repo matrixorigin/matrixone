@@ -39,7 +39,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -995,7 +995,7 @@ func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
 		"2026-08-07 04:20:01.123456",
 		"set @ts0 = (select updated_at from src limit 1)",
 		false,
-		types.StringConversionString,
+		vector.PrepareParamNone,
 		true,
 	))
 	rt := &Routine{mc: newMigrateController()}
@@ -1027,7 +1027,7 @@ func TestMigrateConnectionFromMarksPreparedUserStateUnreplayable(t *testing.T) {
 	// An empty SQL field models a value produced by a prepared SET. The typed
 	// snapshot is valid for v22, but the legacy raw replay stream cannot carry it.
 	require.NoError(t, ses.setUserDefinedVarWithKind(
-		"prepared", "value", "", false, types.StringConversionString))
+		"prepared", "value", "", false, vector.PrepareParamNone))
 
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
@@ -1060,7 +1060,7 @@ func TestMigrateConnectionFromFailsClosedWhenTypedSnapshotTooLarge(t *testing.T)
 		string(make([]byte, maxMigrateUserDefinedVarsSize)),
 		"",
 		false,
-		types.StringConversionString,
+		vector.PrepareParamNone,
 	))
 
 	rt := &Routine{mc: newMigrateController()}
@@ -1096,7 +1096,7 @@ func TestMigrateConnectionFromMarksTypedUserSnapshotTooLargeForLegacyReplay(t *t
 		string(make([]byte, maxMigrateUserDefinedVarsSize)),
 		"set @large = repeat('a', 16777216)",
 		false,
-		types.StringConversionString,
+		vector.PrepareParamNone,
 		true,
 	))
 

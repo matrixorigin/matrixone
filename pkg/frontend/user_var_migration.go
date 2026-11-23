@@ -23,6 +23,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -230,7 +231,7 @@ func decodeUserDefinedVars(
 		if _, exists := result[name]; exists {
 			return nil, moerr.NewInternalErrorf(ctx, "duplicate user variable %q in connection migration", name)
 		}
-		if item.PrepareParamKind > uint32(types.StringConversionBoolean) {
+		if item.PrepareParamKind > uint32(vector.PrepareParamBoolean) {
 			return nil, moerr.NewInternalErrorf(ctx, "invalid prepare parameter kind for user variable %q", name)
 		}
 		runtimeDomain := types.RuntimeStringDomain(item.RuntimeStringDomain)
@@ -258,7 +259,7 @@ func decodeUserDefinedVars(
 			Sql:                 item.Sql,
 			IsBin:               item.IsBin,
 			Type:                typ,
-			PrepareParamKind:    types.StringConversionKind(item.PrepareParamKind),
+			PrepareParamKind:    vector.PrepareParamKind(item.PrepareParamKind),
 			RuntimeStringDomain: runtimeDomain,
 			Replayable:          replayable && (value != nil || types.T(typ.Id) != types.T_any || regexpStringResult),
 		}

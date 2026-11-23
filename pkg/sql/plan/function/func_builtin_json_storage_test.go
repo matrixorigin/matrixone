@@ -291,11 +291,43 @@ func TestJsonStorageRejectsPreparedNonStringDomains(t *testing.T) {
 		succeed, info := fc.RunAndFree()
 		require.True(t, succeed, info)
 	}
+	for _, fn := range []executeLogicOfOverload{JsonStorageSize, JsonStorageFree} {
+		for _, tc := range []struct {
+			name string
+			typ  types.T
+			kind vector.PrepareParamKind
+		}{
+			{name: "integer", typ: types.T_int64, kind: vector.PrepareParamInteger},
+			{name: "unsigned", typ: types.T_uint64, kind: vector.PrepareParamInteger},
+			{name: "float", typ: types.T_float64, kind: vector.PrepareParamFloat},
+			{name: "decimal", typ: types.T_decimal128, kind: vector.PrepareParamDecimal},
+			{name: "boolean", typ: types.T_bool, kind: vector.PrepareParamBoolean},
+			{name: "enum", typ: types.T_enum, kind: vector.PrepareParamNone},
+			{name: "date", typ: types.T_date, kind: vector.PrepareParamNone},
+			{name: "uuid", typ: types.T_uuid, kind: vector.PrepareParamNone},
+			{name: "geometry", typ: types.T_geometry, kind: vector.PrepareParamNone},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				input := vector.NewVec(types.T_varchar.ToType())
+				defer input.Free(proc.Mp())
+				require.NoError(t, vector.AppendBytes(input, []byte("1"), false, proc.Mp()))
+				input.SetPrepareParamKind(tc.kind)
+				input.SetPrepareParamType(tc.typ)
+				result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+				defer result.Free()
+				require.NoError(t, result.PreExtendAndReset(1))
+				require.Error(t, fn([]*vector.Vector{input}, result, proc, 1, nil), tc.name)
+			})
+		}
+	}
+
 	fc := NewFunctionTestCase(proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"1"}, nil)},
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{9}, nil),
 		JsonStorageSize)
 	defer fc.Free()
+	fc.parameters[0].SetPrepareParamKind(vector.PrepareParamNone)
+	fc.parameters[0].SetPrepareParamType(types.T_varchar)
 	succeed, info := fc.Run()
 	require.True(t, succeed, info)
 }

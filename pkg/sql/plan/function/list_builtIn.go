@@ -1550,6 +1550,66 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// internal normalization for prepared JSON ordering parameters
+	{
+		functionId: INTERNAL_JSON_ORDERING_PARAM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedTypeMatchOnly(overloads, inputs, 1)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return normalizeJsonOrderingParam
+				},
+			},
+			{
+				// v128: numeric parameters retain their comparison category and domain.
+				overloadId: 1,
+				args:       []types.T{types.T_text},
+				retType:    func(parameters []types.Type) types.Type { return types.T_json.ToType() },
+				newOp:      func() executeLogicOfOverload { return normalizeJsonOrderingParam },
+			},
+		},
+	},
+
+	// internal normalization for prepared JSON equality parameters
+	{
+		functionId: INTERNAL_JSON_COMPARISON_PARAM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedTypeMatchOnly(overloads, inputs, 1)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return normalizeJsonComparisonParam
+				},
+			},
+			{
+				// v128: numeric parameters retain their comparison category and domain.
+				overloadId: 1,
+				args:       []types.T{types.T_text},
+				retType:    func(parameters []types.Type) types.Type { return types.T_json.ToType() },
+				newOp:      func() executeLogicOfOverload { return normalizeJsonComparisonParam },
+			},
+		},
+	},
+
 	// function `json_quote`
 	{
 		functionId: JSON_QUOTE,

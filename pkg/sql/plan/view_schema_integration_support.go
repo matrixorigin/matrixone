@@ -39,10 +39,12 @@ func (r *ViewSchemaRequest) BuildPreparedForIntegrationTest(stmt tree.Statement,
 		if params != nil {
 			n := params.Length()
 			isBin, binary := make([]bool, n), make([]bool, n)
+			kinds, paramTypes := make([]vector.PrepareParamKind, n), make([]types.T, n)
 			for i := range n {
 				isBin[i], binary[i] = parent.GetPrepareParamIsBin(i), parent.GetPrepareParamIsBinaryString(i)
+				kinds[i], paramTypes[i] = parent.GetPrepareParamKind(i), parent.GetPrepareParamType(i)
 			}
-			proc.SetPrepareParamsWithMetadata(params, isBin, binary)
+			proc.SetPrepareParamsWithTypedMeta(params, isBin, kinds, paramTypes, binary)
 			defer proc.SetPrepareParams(nil)
 		}
 		var buildErr error

@@ -390,16 +390,12 @@ func newExpressionExecutorWithAllocation(
 		return ce, nil
 
 	case *plan.Expr_P:
-		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
-		executor.allocation = selection
 		if typ.Oid != types.T_any && !typ.Oid.IsMySQLString() {
-			// ParamRef describes the SQL source domain. When the process has no
-			// typed value for it (for example a remote peer that only received
-			// the TEXT transport), read the TEXT value through a cast built in
-			// this expression's own context.
+			// ParamRef describes the SQL source domain. The process transports
+			// values as TEXT; adapt that representation inside the executor so
+			// transport casts cannot influence SQL overload or key selection.
 			cast, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{types.T_text.ToType(), typ})
 			if err != nil {
-				executor.Free()
 				return nil, err
 			}
 			physical := &plan.Expr{Typ: planExpr.Typ, Expr: &plan.Expr_F{F: &plan.Function{
@@ -409,12 +405,10 @@ func newExpressionExecutorWithAllocation(
 					{Typ: planExpr.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
 				},
 			}}}
-			executor.textFallback, err = newExpressionExecutorWithAllocation(proc, physical, selection, buildCtx, scope)
-			if err != nil {
-				executor.Free()
-				return nil, err
-			}
+			return newExpressionExecutorWithAllocation(proc, physical, selection, buildCtx, scope)
 		}
+		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
+		executor.allocation = selection
 		return executor, nil
 
 	case *plan.Expr_V:
@@ -710,6 +704,7 @@ type FunctionExpressionExecutor struct {
 	parameterResults         []*vector.Vector
 	parameterExecutor        []ExpressionExecutor
 	dictionaryState          *functionDictionaryState
+	flowControlKinds         []vector.PrepareParamKind
 	flowControlStringDomains []types.RuntimeStringDomain
 	flowControlStringSources []types.StringSource
 	iffNullResults           [2]*vector.Vector
@@ -750,98 +745,15 @@ type ParamExpressionExecutor struct {
 
 	folded     bool
 	foldedNull bool
-
-	// typedVec holds this execution's copy of a typed parameter whose source
-	// type equals typ.
-	typedVec    *vector.Vector
-	typedFolded bool
-	// textFallback reads a non-string parameter from the TEXT transport when
-	// the process holds no typed value for it.
-	textFallback ExpressionExecutor
-	// adapter casts a typed value whose source type (adapterSource) differs
-	// from typ.
-	adapter       ExpressionExecutor
-	adapterSource types.Type
-}
-
-func sameParamType(a, b types.Type) bool {
-	return a.Oid == b.Oid && a.Width == b.Width && a.Scale == b.Scale
-}
-
-// route picks the source of a non-string parameter for this execution: the
-// typed value itself (typed), or a cast adapter. Both nil means the TEXT
-// transport is read directly.
-func (expr *ParamExpressionExecutor) route(proc *process.Process) (typed *vector.Vector, adapter ExpressionExecutor, err error) {
-	if expr.typ.Oid == types.T_any || expr.typ.Oid.IsMySQLString() {
-		return nil, nil, nil
-	}
-	src := proc.GetTypedPrepareParam(expr.pos)
-	if src == nil || src.IsConstNull() || src.GetType().Oid.IsMySQLString() {
-		return nil, expr.textFallback, nil
-	}
-	if sameParamType(*src.GetType(), expr.typ) {
-		return src, nil, nil
-	}
-	source := *src.GetType()
-	if expr.adapter != nil {
-		if sameParamType(expr.adapterSource, source) {
-			return nil, expr.adapter, nil
-		}
-		expr.adapter.Free()
-		expr.adapter = nil
-	}
-	cast, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{source, expr.typ})
-	if err != nil {
-		return nil, nil, err
-	}
-	targetType := expr.typ.PlanType()
-	physical := &plan.Expr{Typ: targetType, Expr: &plan.Expr_F{F: &plan.Function{
-		Func: &plan.ObjectRef{ObjName: "cast", Obj: cast.GetEncodedOverloadID()},
-		Args: []*plan.Expr{
-			{Typ: source.PlanType(), Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(expr.pos)}}},
-			{Typ: targetType, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
-		},
-	}}}
-	expr.adapter, err = NewExpressionExecutorWithAllocation(proc, physical, expr.allocation)
-	if err != nil {
-		return nil, nil, err
-	}
-	expr.adapterSource = source
-	return nil, expr.adapter, nil
-}
-
-// evalTyped returns this execution's copy of a typed parameter.
-func (expr *ParamExpressionExecutor) evalTyped(src *vector.Vector, rowCount int) (*vector.Vector, error) {
-	if !expr.typedFolded {
-		if expr.typedVec != nil {
-			expr.typedVec.Free(expr.mp)
-			expr.typedVec = nil
-		}
-		vec, err := src.DupOffHeapWithAllocation(expr.mp, expr.allocation)
-		if err != nil {
-			return nil, err
-		}
-		expr.typedVec = vec
-		expr.typedFolded = true
-	}
-	expr.typedVec.SetLength(rowCount)
-	return expr.typedVec, nil
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	// A conversion owns the selection handling of its whole subtree.
-	typed, adapter, err := expr.route(proc)
-	if err != nil {
-		return nil, err
-	}
-	if adapter != nil {
-		return adapter.Eval(proc, batches, selectList)
-	}
 	// Scalar values stay physically constant, but their logical cardinality
 	// must follow the input batch for downstream materialization and shuffle.
 	rowCount := expressionRowCount(batches)
 	if noRowsSelected(selectList, rowCount) {
 		if expr.maskedNull == nil {
+			var err error
 			expr.maskedNull, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
 			if err != nil {
 				return nil, err
@@ -849,9 +761,6 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		}
 		expr.maskedNull.SetLength(rowCount)
 		return expr.maskedNull, nil
-	}
-	if typed != nil {
-		return expr.evalTyped(typed, rowCount)
 	}
 	if expr.folded {
 		if expr.foldedNull {
@@ -909,12 +818,14 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		if err != nil {
 			return nil, err
 		}
+		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
 		if params := proc.GetPrepareParams(); params != nil {
 			err = expr.vec.SetStringSource(params.GetStringSourceAt(expr.pos))
 		}
 		if err != nil {
 			return nil, err
 		}
+		expr.vec.SetPrepareParamType(proc.GetPrepareParamType(expr.pos))
 		expr.folded = true
 		expr.foldedNull = false
 		expr.vec.SetLength(rowCount)
@@ -923,24 +834,13 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 }
 
 func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
-	_, adapter, err := expr.route(proc)
-	if err != nil {
-		return nil, err
-	}
-	if adapter != nil {
-		return adapter.EvalWithoutResultReusing(proc, batches, nil)
-	}
 	vec, err := expr.Eval(proc, batches, nil)
 	if err != nil {
 		return nil, err
 	}
-	switch vec {
-	case expr.null:
+	if vec == expr.null {
 		expr.null = nil
-	case expr.typedVec:
-		expr.typedVec = nil
-		expr.typedFolded = false
-	default:
+	} else {
 		expr.vec = nil
 	}
 	expr.folded = false
@@ -964,18 +864,6 @@ func (expr *ParamExpressionExecutor) Free() {
 	if expr.maskedNull != nil {
 		expr.maskedNull.Free(expr.mp)
 		expr.maskedNull = nil
-	}
-	if expr.typedVec != nil {
-		expr.typedVec.Free(expr.mp)
-		expr.typedVec = nil
-	}
-	if expr.adapter != nil {
-		expr.adapter.Free()
-		expr.adapter = nil
-	}
-	if expr.textFallback != nil {
-		expr.textFallback.Free()
-		expr.textFallback = nil
 	}
 	reuse.Free[ParamExpressionExecutor](expr, nil)
 }
@@ -1048,6 +936,13 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
+	prepareParamKind := vector.PrepareParamNone
+	if resolveKind := proc.GetResolveVariablePrepareParamKindFunc(); resolveKind != nil {
+		prepareParamKind, err = resolveKind(expr.name, expr.system, expr.global)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	if val == nil {
 		if expr.null == nil {
@@ -1061,6 +956,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			if err != nil {
 				return nil, err
 			}
+			expr.null.SetPrepareParamKind(prepareParamKind)
 			err = expr.null.SetStringSource(types.StringSourceUserVariable)
 			expr.null.SetLength(rowCount)
 		}
@@ -1098,6 +994,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		if err != nil {
 			return nil, err
 		}
+		expr.vec.SetPrepareParamKind(prepareParamKind)
 		err = expr.vec.SetStringSource(types.StringSourceUserVariable)
 		expr.vec.SetLength(rowCount)
 	}
@@ -1282,7 +1179,7 @@ func expressionRowCount(batches []*batch.Batch) int {
 }
 
 func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
-	expr.resetFlowControlMetadata()
+	expr.resetFlowControlPrepareParamKind()
 	expr.parameterResults[0], err = expr.parameterExecutor[0].Eval(proc, batches, selectList)
 	if err != nil {
 		return err
@@ -1324,7 +1221,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		if err != nil {
 			return err
 		}
-		expr.observeFlowControlMetadata(expr.parameterResults[1], expr.parameterExecutor[1], trueBranch)
+		expr.observeFlowControlPrepareParamKind(expr.parameterResults[1], expr.parameterExecutor[1], trueBranch)
 	} else {
 		expr.parameterResults[1], err = expr.iffNullResult(0, rowCount)
 		if err != nil {
@@ -1336,7 +1233,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		if err != nil {
 			return err
 		}
-		expr.observeFlowControlMetadata(expr.parameterResults[2], expr.parameterExecutor[2], falseBranch)
+		expr.observeFlowControlPrepareParamKind(expr.parameterResults[2], expr.parameterExecutor[2], falseBranch)
 		return nil
 	}
 	expr.parameterResults[2], err = expr.iffNullResult(1, rowCount)
@@ -1396,13 +1293,31 @@ func hasSelectedRows(selectList []bool) bool {
 	return false
 }
 
-func (expr *FunctionExpressionExecutor) resetFlowControlMetadata() {
+func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
+	expr.flowControlKind = vector.PrepareParamNone
+	expr.flowControlKindSeen = false
+	if expr.flowControlKinds != nil {
+		expr.flowControlKinds = expr.flowControlKinds[:0]
+	}
 	if expr.flowControlStringDomains != nil {
 		expr.flowControlStringDomains = expr.flowControlStringDomains[:0]
 	}
 	if expr.flowControlStringSources != nil {
 		expr.flowControlStringSources = expr.flowControlStringSources[:0]
 	}
+}
+
+func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
+	if rows <= len(expr.flowControlKinds) {
+		return
+	}
+	old := len(expr.flowControlKinds)
+	if rows <= cap(expr.flowControlKinds) {
+		expr.flowControlKinds = expr.flowControlKinds[:rows]
+		clear(expr.flowControlKinds[old:])
+		return
+	}
+	expr.flowControlKinds = append(expr.flowControlKinds, make([]vector.PrepareParamKind, rows-old)...)
 }
 
 func (expr *FunctionExpressionExecutor) ensureFlowControlBinaryStringRows(rows int) {
@@ -1432,11 +1347,11 @@ func (expr *FunctionExpressionExecutor) ensureFlowControlStringSourceRows(rows i
 		expr.flowControlStringSources, make([]types.StringSource, rows-old)...)
 }
 
-// observeFlowControlMetadata inspects only rows that can reach one
+// observeFlowControlPrepareParamKind inspects only rows that can reach one
 // IF/CASE/COALESCE arm. Column executors intentionally return their full input
 // vector even under a row mask, so checking value.AllNull() would incorrectly
 // observe non-NULL values from inactive rows.
-func (expr *FunctionExpressionExecutor) observeFlowControlMetadata(
+func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	value *vector.Vector,
 	executor ExpressionExecutor,
 	selection []bool,
@@ -1447,17 +1362,30 @@ func (expr *FunctionExpressionExecutor) observeFlowControlMetadata(
 	}
 	resultDomain := types.StaticStringDomain(expr.resultType)
 	if !value.HasNull() && !value.HasBinaryStringMetadata() &&
+		value.GetPrepareParamKind() == vector.PrepareParamNone && len(value.GetPrepareParamKinds()) == 0 &&
 		!value.HasStringSourceMetadata() &&
 		types.StaticStringDomain(*value.GetType()) == resultDomain &&
-		len(expr.flowControlStringDomains) == 0 &&
-		len(expr.flowControlStringSources) == 0 {
-		// An ordinary arm contributes no row metadata.
+		len(expr.flowControlKinds) == 0 && len(expr.flowControlStringDomains) == 0 &&
+		len(expr.flowControlStringSources) == 0 &&
+		(!expr.flowControlKindSeen || expr.flowControlKind == vector.PrepareParamNone) {
+		// Materialization can mark ordinary values as observed None without
+		// adding row metadata. One selected value proves the uniform contribution;
+		// inactive arms must not observe a kind, even when their column is non-NULL.
+		selected := selection
+		if !value.IsConst() && len(selected) > value.Length() {
+			selected = selected[:value.Length()]
+		}
+		if hasSelectedRows(selected) {
+			expr.flowControlKind = vector.PrepareParamNone
+			expr.flowControlKindSeen = true
+		}
 		return
 	}
 	for row, selected := range selection {
 		if selected && (value.IsConst() || row < value.Length()) {
 			// Source follows selected-value only for COALESCE. IF/CASE (including
 			// IFNULL rewritten to CASE) are common-domain expressions and own it.
+			// Runtime domain and conversion kind remain independent axes.
 			if expr.fid == function.COALESCE {
 				source := value.GetStringSourceAt(row)
 				if source != types.StringSourceExpression || len(expr.flowControlStringSources) != 0 {
@@ -1484,6 +1412,20 @@ func (expr *FunctionExpressionExecutor) observeFlowControlMetadata(
 				expr.ensureFlowControlBinaryStringRows(len(selection))
 				expr.flowControlStringDomains[row] = domain
 			}
+			kind := value.GetPrepareParamKindAt(row)
+			if !expr.flowControlKindSeen {
+				expr.flowControlKind = kind
+				expr.flowControlKindSeen = true
+			} else if len(expr.flowControlKinds) == 0 && expr.flowControlKind != kind {
+				expr.ensureFlowControlPrepareParamRows(len(selection))
+				for i := range expr.flowControlKinds {
+					expr.flowControlKinds[i] = expr.flowControlKind
+				}
+				expr.flowControlKind = vector.PrepareParamNone
+			}
+			if len(expr.flowControlKinds) > 0 {
+				expr.flowControlKinds[row] = kind
+			}
 		}
 	}
 }
@@ -1507,7 +1449,7 @@ func flowControlSelectedValueSource(value *vector.Vector, executor ExpressionExe
 	}
 }
 
-func (expr *FunctionExpressionExecutor) applyFlowControlMetadata(
+func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 	result *vector.Vector,
 	rows int,
 	mp *mpool.MPool,
@@ -1526,6 +1468,16 @@ func (expr *FunctionExpressionExecutor) applyFlowControlMetadata(
 		if err := result.SetStringSourcesWithMP(expr.flowControlStringSources[:rows], mp); err != nil {
 			return err
 		}
+	}
+	if len(expr.flowControlKinds) == 0 {
+		if expr.flowControlKindSeen {
+			result.SetPrepareParamKind(expr.flowControlKind)
+		}
+		return nil
+	}
+	expr.ensureFlowControlPrepareParamRows(rows)
+	if err := result.SetPrepareParamKindsWithMP(expr.flowControlKinds[:rows], mp); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1581,14 +1533,7 @@ func scalarExpressionValue(executor ExpressionExecutor) (scalar, diagnostic bool
 		return scalarExpressionValue(source.executor)
 	case *FixedVectorExpressionExecutor:
 		return source.resultVector.IsConst(), false
-	case *ParamExpressionExecutor:
-		// The TEXT fallback carries the conversion's diagnostics; a typed value
-		// has none, so its analysis is the conservative one.
-		if source.textFallback != nil {
-			return scalarExpressionValue(source.textFallback)
-		}
-		return true, false
-	case *VarExpressionExecutor:
+	case *ParamExpressionExecutor, *VarExpressionExecutor:
 		return true, false
 	case *FunctionExpressionExecutor:
 		// CAST's row-evaluation flags protect diagnostics, rather than
@@ -1624,6 +1569,11 @@ func applyTransparentStringSource(
 	if result == nil || source == nil || rows <= 0 {
 		return nil
 	}
+	// An implicit cast changes the physical result type but does not change
+	// the source SQL domain. Preserve that domain alongside StringSource so
+	// consumers such as JSON_STORAGE can reject an ENUM value that travelled
+	// through the text transport instead of accepting it as VARCHAR.
+	result.SetPrepareParamType(source.GetPrepareParamType())
 	if source.GetStringSources() == nil {
 		return result.SetStringSource(source.GetStringSource())
 	}
@@ -1632,6 +1582,13 @@ func applyTransparentStringSource(
 		sources[row] = source.GetStringSourceAt(row)
 	}
 	return result.SetStringSourcesWithMP(sources, mp)
+}
+
+func (expr *FunctionExpressionExecutor) getFlowControlPrepareParamKind() vector.PrepareParamKind {
+	if !expr.flowControlKindSeen {
+		return vector.PrepareParamNone
+	}
+	return expr.flowControlKind
 }
 
 func (expr *FunctionExpressionExecutor) iffNullResult(index, length int) (*vector.Vector, error) {
@@ -1655,7 +1612,7 @@ func (expr *FunctionExpressionExecutor) iffNullResult(index, length int) (*vecto
 }
 
 func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
-	expr.resetFlowControlMetadata()
+	expr.resetFlowControlPrepareParamKind()
 	rowCount := expressionRowCount(batches)
 	mode := function.CompatibilityModeFromProcess(proc)
 	if len(expr.selectList1) < rowCount {
@@ -1724,10 +1681,10 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			if err != nil {
 				return err
 			}
-			expr.observeFlowControlMetadata(
+			expr.observeFlowControlPrepareParamKind(
 				expr.parameterResults[i+1], expr.parameterExecutor[i+1], selectedBranch)
 		} else {
-			expr.observeFlowControlMetadata(
+			expr.observeFlowControlPrepareParamKind(
 				expr.parameterResults[i], expr.parameterExecutor[i], remaining)
 		}
 	}
@@ -1735,7 +1692,7 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 }
 
 func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
-	expr.resetFlowControlMetadata()
+	expr.resetFlowControlPrepareParamKind()
 	rowCount := expressionRowCount(batches)
 	if len(expr.selectList1) < rowCount {
 		expr.selectList1 = make([]bool, rowCount)
@@ -1756,7 +1713,7 @@ func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batc
 		if err != nil {
 			return err
 		}
-		expr.observeFlowControlMetadata(
+		expr.observeFlowControlPrepareParamKind(
 			expr.parameterResults[i], expr.parameterExecutor[i], remaining)
 		for row := range remaining {
 			if remaining[row] && !expr.parameterResults[i].IsNull(uint64(row)) {
@@ -1806,13 +1763,6 @@ func isRowAlignedExpressionExecutor(executor ExpressionExecutor) bool {
 			return true
 		case *FunctionExpressionExecutor:
 			return !source.folded.canFold
-		case *ParamExpressionExecutor:
-			// A TEXT-transported parameter is evaluated by its conversion; a typed
-			// value is a constant, which the caller passes through unchanged.
-			if source.textFallback == nil {
-				return false
-			}
-			executor = source.textFallback
 		default:
 			return false
 		}
@@ -1899,6 +1849,10 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 
 	selectedResult := expr.selectedResult.GetResultVector()
 	runtimeType := *selectedResult.GetType()
+	runtimePrepareParamKind := selectedResult.GetPrepareParamKind()
+	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
+		runtimePrepareParamKind = expr.getFlowControlPrepareParamKind()
+	}
 
 	result := expr.resultVector.GetResultVector()
 	result.SetType(runtimeType)
@@ -1914,6 +1868,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		}
 		result.ToConst()
 		result.SetLength(rowCount)
+		result.SetPrepareParamKind(runtimePrepareParamKind)
 		selectedResult.CopyExpressionMetadataTo(result)
 		return result, nil
 	}
@@ -1922,11 +1877,12 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	// avoids at least three NULL-placeholder appends; keep dense masks on
 	// the existing append loop.
 	scatterFixed := selectedCount <= rowCount/4 && runtimeType.IsFixedLen() &&
+		runtimePrepareParamKind == vector.PrepareParamNone &&
 		!selectedResult.IsConst() && !selectedResult.IsDictionary() &&
 		selectedResult.DataBackingKind() == vector.OwnedMPoolUnique &&
 		result.DataBackingKind() == vector.OwnedMPoolUnique &&
 		!selectedResult.HasBorrowedBacking() && !result.HasBorrowedBacking() &&
-		!selectedResult.HasBinaryStringMetadata() &&
+		!selectedResult.HasPrepareParamKind() && !selectedResult.HasBinaryStringMetadata() &&
 		!selectedResult.HasStringSourceMetadata() && !selectedResult.HasGrouping() &&
 		cap(sourceData) > 0 && cap(destinationData) > 0 &&
 		&sourceData[:1][0] != &destinationData[:1][0]
@@ -1975,8 +1931,15 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	}
 
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
-		if err := expr.applyFlowControlMetadata(result, rowCount, proc.Mp()); err != nil {
+		if err := expr.applyFlowControlPrepareParamKinds(result, rowCount, proc.Mp()); err != nil {
 			return nil, err
+		}
+	} else {
+		// A selected function result may already carry exact row provenance
+		// from a type-preserving materialization. Keep that sidecar; the scalar
+		// summary is only the compatibility fallback for uniform results.
+		if len(result.GetPrepareParamKinds()) == 0 {
+			result.SetPrepareParamKind(runtimePrepareParamKind)
 		}
 	}
 	selectedResult.CopyExpressionMetadataTo(result)
@@ -2099,7 +2062,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
-		if err := expr.applyFlowControlMetadata(
+		if err := expr.applyFlowControlPrepareParamKinds(
 			expr.resultVector.GetResultVector(), rowCount, proc.Mp()); err != nil {
 			return nil, err
 		}

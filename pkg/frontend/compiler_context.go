@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -1450,7 +1451,7 @@ func (tcc *TxnCompilerContext) ResolveVariableBinaryString(
 func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	varName string,
 	isSystemVar, isGlobalVar bool,
-) (types.StringConversionKind, error) {
+) (vector.PrepareParamKind, error) {
 	if value, declaredType, hasDeclaredType, ok := resolveStoredProcedureVariableWithType(
 		tcc.execCtx.reqCtx, varName,
 	); ok {
@@ -1462,7 +1463,7 @@ func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	if isSystemVar {
 		value, err := tcc.ResolveVariable(varName, true, isGlobalVar)
 		if err != nil {
-			return types.StringConversionString, err
+			return vector.PrepareParamNone, err
 		}
 		return prepareParamKindFromValue(value), nil
 	}
@@ -1470,7 +1471,7 @@ func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	if err != nil {
 		// See ResolveVariable: an unassigned user variable is NULL and has no
 		// prepared-parameter conversion category.
-		return types.StringConversionString, nil
+		return vector.PrepareParamNone, nil
 	}
 	return udVar.PrepareParamKind, nil
 }

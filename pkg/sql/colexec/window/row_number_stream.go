@@ -90,6 +90,7 @@ func (window *Window) callRowNumber(proc *process.Process) (vm.CallResult, error
 				vec.Free(proc.Mp())
 				return vm.NewCallResult(), err
 			}
+			vec.SetPrepareParamKind(ctr.prepareParamKind.Get(0))
 			output.Vecs = append(output.Vecs, vec)
 			window.OpAnalyzer.Alloc(int64(vec.Size()))
 			ctr.rBat = output

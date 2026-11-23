@@ -25,6 +25,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -301,7 +302,7 @@ func TestPreparedBitCountDefaultsToBinaryAndSpecializesNumericValues(t *testing.
 	require.Equal(t, int32(types.T_varbinary), fn.GetF().Args[0].Typ.Id)
 
 	numericPlan, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, []any{
-		ParamValue{Value: "64", PrepareParamKind: types.StringConversionInteger},
+		ParamValue{Value: "64", PrepareParamKind: vector.PrepareParamInteger},
 	})
 	require.NoError(t, err)
 	require.True(t, specialized)
@@ -312,7 +313,7 @@ func TestPreparedBitCountDefaultsToBinaryAndSpecializesNumericValues(t *testing.
 	require.Equal(t, int32(types.T_int64), fn.GetF().Args[0].Typ.Id)
 
 	stringPlan, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, []any{
-		ParamValue{Value: "64", IsBinaryProtocol: true, PrepareParamKind: types.StringConversionString},
+		ParamValue{Value: "64", IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamNone},
 	})
 	require.NoError(t, err)
 	fn = findPlanFunctionExpr(stringPlan, "bit_count")
@@ -1277,7 +1278,7 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rule := NewResetParamRefRule(context.Background(), []*planpb.Expr{newLiteralParam(tc.value, false)})
-			rule.SetParamKinds([]types.StringConversionKind{types.StringConversionInteger})
+			rule.SetParamKinds([]vector.PrepareParamKind{vector.PrepareParamInteger})
 			bound, ok := rule.typedIntegerParamExpr(0)
 			require.True(t, ok)
 			require.Equal(t, int32(tc.want), bound.Typ.Id)
@@ -1286,14 +1287,14 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		param *planpb.Expr
-		kinds []types.StringConversionKind
+		kinds []vector.PrepareParamKind
 		pos   int32
 	}{
-		{name: "invalid text", param: newLiteralParam("bad", false), kinds: []types.StringConversionKind{types.StringConversionInteger}},
-		{name: "null", param: newLiteralParam("", true), kinds: []types.StringConversionKind{types.StringConversionInteger}},
-		{name: "empty", param: newLiteralParam("", false), kinds: []types.StringConversionKind{types.StringConversionInteger}},
-		{name: "wrong kind", param: newLiteralParam("1", false), kinds: []types.StringConversionKind{types.StringConversionFloat}},
-		{name: "bad position", param: newLiteralParam("1", false), kinds: []types.StringConversionKind{types.StringConversionInteger}, pos: 1},
+		{name: "invalid text", param: newLiteralParam("bad", false), kinds: []vector.PrepareParamKind{vector.PrepareParamInteger}},
+		{name: "null", param: newLiteralParam("", true), kinds: []vector.PrepareParamKind{vector.PrepareParamInteger}},
+		{name: "empty", param: newLiteralParam("", false), kinds: []vector.PrepareParamKind{vector.PrepareParamInteger}},
+		{name: "wrong kind", param: newLiteralParam("1", false), kinds: []vector.PrepareParamKind{vector.PrepareParamFloat}},
+		{name: "bad position", param: newLiteralParam("1", false), kinds: []vector.PrepareParamKind{vector.PrepareParamInteger}, pos: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rule := NewResetParamRefRule(context.Background(), []*planpb.Expr{tc.param})
@@ -1305,7 +1306,7 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 	}
 
 	rule := NewResetParamRefRule(context.Background(), []*planpb.Expr{newLiteralParam("-7", false)})
-	rule.SetParamKinds([]types.StringConversionKind{types.StringConversionInteger})
+	rule.SetParamKinds([]vector.PrepareParamKind{vector.PrepareParamInteger})
 	rebound, changed, err := rule.rebindPreparedIntegerExpr(paramExpr(0))
 	require.NoError(t, err)
 	require.True(t, changed)
@@ -1339,7 +1340,7 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 		decimalRule := NewResetParamRefRule(context.Background(), []*planpb.Expr{
 			newLiteralParam(decimalCase.value, false),
 		})
-		decimalRule.SetParamKinds([]types.StringConversionKind{types.StringConversionDecimal})
+		decimalRule.SetParamKinds([]vector.PrepareParamKind{vector.PrepareParamDecimal})
 		decimal, ok, err := decimalRule.typedDecimalParamExpr(0)
 		require.NoError(t, err)
 		require.True(t, ok)
@@ -1348,7 +1349,7 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 	decimalRule := NewResetParamRefRule(context.Background(), []*planpb.Expr{
 		newLiteralParam("12345678901234567890123456789012345.6789", false),
 	})
-	decimalRule.SetParamKinds([]types.StringConversionKind{types.StringConversionDecimal})
+	decimalRule.SetParamKinds([]vector.PrepareParamKind{vector.PrepareParamDecimal})
 	decimal, ok, err := decimalRule.typedDecimalParamExpr(0)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -1363,7 +1364,7 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, changed)
 	rule = NewResetParamRefRule(context.Background(), []*planpb.Expr{newLiteralParam("7", false)})
-	rule.SetParamKinds([]types.StringConversionKind{types.StringConversionInteger})
+	rule.SetParamKinds([]vector.PrepareParamKind{vector.PrepareParamInteger})
 	rebound, changed, err = rule.rebindPreparedIntegerExpr(deferredSubqueryArg)
 	require.NoError(t, err)
 	require.True(t, changed)
@@ -1404,10 +1405,10 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 	require.Contains(t, positions, int32(1))
 
 	integerRule := NewResetParamRefRule(context.Background(), []*planpb.Expr{newLiteralParam("1", false)})
-	integerRule.SetParamKinds([]types.StringConversionKind{types.StringConversionInteger})
+	integerRule.SetParamKinds([]vector.PrepareParamKind{vector.PrepareParamInteger})
 	require.True(t, integerRule.allIntegerParamRefs(paramExpr(0)))
 	require.False(t, integerRule.allIntegerParamRefs(literalExpr("1")))
-	integerRule.SetParamKinds([]types.StringConversionKind{types.StringConversionFloat})
+	integerRule.SetParamKinds([]vector.PrepareParamKind{vector.PrepareParamFloat})
 	require.False(t, integerRule.allIntegerParamRefs(paramExpr(0)))
 }
 
@@ -1455,7 +1456,7 @@ func TestPreparedNumericRuntimeLiteralRebindingHelpers(t *testing.T) {
 	floatRule := NewResetParamRefRule(ctx, nil)
 	floatRule.SetParamValues([]any{ParamValue{
 		Value:            -1.5,
-		PrepareParamKind: types.StringConversionFloat,
+		PrepareParamKind: vector.PrepareParamFloat,
 		HasRuntimeType:   true,
 		RuntimeType:      types.T_float64.ToType(),
 		RetainParamRef:   true,
@@ -1472,7 +1473,7 @@ func TestPreparedNumericRuntimeLiteralRebindingHelpers(t *testing.T) {
 			Value: &planpb.Literal_Bval{Bval: true},
 		}},
 	}})
-	boolRule.SetParamKinds([]types.StringConversionKind{types.StringConversionBoolean})
+	boolRule.SetParamKinds([]vector.PrepareParamKind{vector.PrepareParamBoolean})
 	runtimeType, ok := boolRule.runtimeParamType(0)
 	require.True(t, ok)
 	require.Equal(t, types.T_bool, runtimeType.Oid)
@@ -1532,7 +1533,7 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.NoError(t, err)
 	queryPlan := prepared.GetDcl().GetPrepare().Plan
 	filled, err := FillValuesOfParamsInPlan(ctx, queryPlan, []any{
-		ParamValue{Value: "-9007199254740993", PrepareParamKind: types.StringConversionInteger},
+		ParamValue{Value: "-9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
 	})
 	require.NoError(t, err)
 	fn := findPlanFunctionExpr(filled, "abs")
@@ -1547,8 +1548,8 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	queryPlan = prepared.GetDcl().GetPrepare().Plan
 	require.Equal(t, []int32{0, 1}, PreparedPlanNumericFallbackParamPositions(queryPlan))
 	filled, err = FillValuesOfParamsInPlan(ctx, queryPlan, []any{
-		ParamValue{Value: "-9007199254740993", PrepareParamKind: types.StringConversionInteger},
-		ParamValue{Value: "0", PrepareParamKind: types.StringConversionInteger},
+		ParamValue{Value: "-9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
+		ParamValue{Value: "0", PrepareParamKind: vector.PrepareParamInteger},
 	})
 	require.NoError(t, err)
 	fn = findPlanFunctionExpr(filled, "abs")
@@ -1560,8 +1561,8 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 		"prepare stmt_abs_multi_decimal from 'select abs(? + ?)'")
 	require.NoError(t, err)
 	filled, err = FillValuesOfParamsInPlan(ctx, prepared.GetDcl().GetPrepare().Plan, []any{
-		ParamValue{Value: "-9007199254740993", PrepareParamKind: types.StringConversionInteger},
-		ParamValue{Value: "0.5", PrepareParamKind: types.StringConversionDecimal},
+		ParamValue{Value: "-9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
+		ParamValue{Value: "0.5", PrepareParamKind: vector.PrepareParamDecimal},
 	})
 	require.NoError(t, err)
 	fn = findPlanFunctionExpr(filled, "abs")
@@ -1578,7 +1579,7 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 		prepared, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err)
 		filled, err = FillValuesOfParamsInPlan(ctx, prepared.GetDcl().GetPrepare().Plan, []any{
-			ParamValue{Value: "-9007199254740993", PrepareParamKind: types.StringConversionInteger},
+			ParamValue{Value: "-9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
 		})
 		require.NoError(t, err)
 		fn = findPlanFunctionExpr(filled, "abs")
@@ -1627,7 +1628,7 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 		"explicit cast overload was lost: original=%d copied=%d",
 		fn.GetF().Args[0].GetF().GetFunc().GetObj(), copiedFn.GetF().Args[0].GetF().GetFunc().GetObj())
 	filled, err = FillValuesOfParamsInPlan(ctx, queryPlan, []any{
-		ParamValue{Value: "9007199254740993", PrepareParamKind: types.StringConversionInteger},
+		ParamValue{Value: "9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
 	})
 	require.NoError(t, err)
 	fn = findPlanFunctionExpr(filled, "abs")
@@ -1642,7 +1643,7 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	filled, err = FillValuesOfParamsInPlan(ctx, prepared.GetDcl().GetPrepare().Plan, []any{
 		ParamValue{
 			Value:            "12345678901234567890123456789012345.6789",
-			PrepareParamKind: types.StringConversionDecimal,
+			PrepareParamKind: vector.PrepareParamDecimal,
 		},
 	})
 	require.NoError(t, err)
@@ -1662,7 +1663,7 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	queryPlan = prepared.GetDcl().GetPrepare().Plan
 	require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(queryPlan))
 	filled, err = FillValuesOfParamsInPlan(ctx, queryPlan, []any{
-		ParamValue{Value: "-9007199254740993", PrepareParamKind: types.StringConversionInteger},
+		ParamValue{Value: "-9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
 	})
 	require.NoError(t, err)
 	fn = findPlanFunctionExpr(filled, "abs")

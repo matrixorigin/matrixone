@@ -153,7 +153,7 @@ func TestGroupHashWideDeclaredWidths(t *testing.T) {
 				proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
 				version = defines.MORPCVersion77
 			}
-			setGroupProtocolVersionForTest(t, proc, version)
+			setPrepareParamKindProtocolVersion(t, proc, version)
 			groupBy := make([]*plan.Expr, len(test.keys))
 			for column, key := range test.keys {
 				groupBy[column] = colExpr(int32(column), key.typ)
@@ -194,7 +194,7 @@ func TestGroupWideDeclaredWidthsPartialMerge(t *testing.T) {
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-			setGroupProtocolVersionForTest(t, proc, version)
+			setPrepareParamKindProtocolVersion(t, proc, version)
 			keys := []declaredGroupKey{{typ: types.T_text, width: math.MaxInt32}, {typ: types.T_text, width: math.MaxInt32}}
 			groupBy := []*plan.Expr{colExpr(0, types.T_text), colExpr(1, types.T_text)}
 			for _, key := range groupBy {

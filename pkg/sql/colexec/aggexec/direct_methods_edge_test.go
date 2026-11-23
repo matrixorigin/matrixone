@@ -717,7 +717,10 @@ func TestAggregateStatePrimitiveBoundaryMatrix(t *testing.T) {
 	require.True(t, info.usesOpaqueArgEncoding())
 	require.Contains(t, info.String(), "aggId: 7")
 
+	var nilExec *aggExec
+	require.Zero(t, nilExec.PrepareParamKindChunkCount())
 	exec := &aggExec{chunkSize: AggBatchSize, state: []aggState{{length: 2}, {length: 3}}}
+	require.Equal(t, 2, exec.PrepareParamKindChunkCount())
 	require.Equal(t, AggBatchSize, exec.getChunkSize())
 	exec.modifyChunkSize(1)
 	require.Equal(t, 1, exec.getChunkSize())
@@ -731,6 +734,23 @@ func TestAggregateStatePrimitiveBoundaryMatrix(t *testing.T) {
 	require.Equal(t, 5, exec.GetNumGroups())
 	require.Zero(t, exec.AdditionalMemorySize())
 	require.Panics(t, func() { exec.Size() })
+	require.Nil(t, exec.PrepareParamKindVectorForChunk(-1))
+	require.Nil(t, exec.PrepareParamKindVectorForChunk(2))
+
+	scalar := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(scalar, []int64{1, 2}, nil, mp))
+	exact := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(exact, []int64{1, 2}, nil, mp))
+	require.NoError(t, exact.SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
+		vector.PrepareParamInteger, vector.PrepareParamDecimal,
+	}, mp))
+	exec.state = []aggState{{vecs: []*vector.Vector{scalar}}, {vecs: []*vector.Vector{exact}}}
+	exec.SetPrepareParamKind(vector.PrepareParamBoolean)
+	require.Equal(t, vector.PrepareParamBoolean, scalar.GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamInteger, exact.GetPrepareParamKindAt(0))
+	require.Same(t, scalar, exec.PrepareParamKindVectorForChunk(0))
+	scalar.Free(mp)
+	exact.Free(mp)
 	exec.state = nil
 
 	var invalid aggState

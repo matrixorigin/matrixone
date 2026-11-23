@@ -60,24 +60,25 @@ func isJSONNumber(value bytejson.ByteJson) bool {
 type jsonNumericPeer struct {
 	value       bytejson.ByteJson
 	typ         types.T
+	kind        vector.PrepareParamKind
 	floatValue  float64
 	parsed      bytejson.ParsedNumeric
 	parsedReady bool
 }
 
-func makeJSONNumericPeer(ctx context.Context, value bytejson.ByteJson, typ types.T) (jsonNumericPeer, error) {
-	peer := jsonNumericPeer{value: value, typ: typ}
+func makeJSONNumericPeer(ctx context.Context, value bytejson.ByteJson, typ types.T, kind vector.PrepareParamKind) (jsonNumericPeer, error) {
+	peer := jsonNumericPeer{value: value, typ: typ, kind: kind}
 	// Parameter metadata describes the peer, not the JSON data. A malformed
 	// numeric adapter payload must still fail, even for a nonnumeric JSON row.
 	if !isJSONNumber(value) {
 		return peer, jsonCastErr(ctx, typ)
 	}
 	var err error
-	peer.floatValue, err = checkJSONNumericDomain(ctx, value, typ)
+	peer.floatValue, err = checkJSONNumericDomain(ctx, value, typ, kind)
 	if err != nil {
 		return peer, err
 	}
-	if typ.IsDecimal() {
+	if typ.IsDecimal() || typ == types.T_any && kind == vector.PrepareParamDecimal {
 		var ok bool
 		peer.parsed, ok = bytejson.ParseNumeric(value)
 		if !ok {
@@ -90,7 +91,7 @@ func makeJSONNumericPeer(ctx context.Context, value bytejson.ByteJson, typ types
 
 // checkJSONNumericDomain validates the numeric peer's declared adapter domain.
 // JSON rows are converted separately without imposing the peer's range.
-func checkJSONNumericDomain(ctx context.Context, value bytejson.ByteJson, typ types.T) (float64, error) {
+func checkJSONNumericDomain(ctx context.Context, value bytejson.ByteJson, typ types.T, kind vector.PrepareParamKind) (float64, error) {
 	switch {
 	case typ.IsSignedInt():
 		v, _, ok := jsonToInt64Scalar(value)
@@ -120,9 +121,15 @@ func checkJSONNumericDomain(ctx context.Context, value bytejson.ByteJson, typ ty
 			return 0, jsonCastErr(ctx, typ)
 		}
 		return float64(lowPrecisionFloatValue(typ, f)), nil
-	case typ == types.T_float64:
+	case typ == types.T_float64 || typ == types.T_any && kind == vector.PrepareParamFloat:
 		v, _, err := preparedJSONFloatScalarWithLimit(ctx, value, types.T_float64, math.MaxFloat64, false)
 		return v, err
+	case typ == types.T_any && kind == vector.PrepareParamInteger:
+		if _, ok := bytejson.NumericToInt64(value); !ok {
+			if _, ok := bytejson.NumericToUint64(value); !ok {
+				return 0, jsonCastErr(ctx, types.T_int64)
+			}
+		}
 	}
 	return 0, nil
 }
@@ -151,7 +158,7 @@ func compareJSONNumeric(ctx context.Context, value bytejson.ByteJson, peer *json
 		// decide this comparison without scanning any container descendants.
 		return bytejson.CompareByteJsonTrusted(value, peer.value), false, nil
 	}
-	if peer.typ.IsFloat() {
+	if peer.typ.IsFloat() || peer.typ == types.T_any && peer.kind == vector.PrepareParamFloat {
 		floatValue, _, err := preparedJSONFloatScalarWithLimit(ctx, value, types.T_float64, math.MaxFloat64, false)
 		if err != nil {
 			return 0, false, err
@@ -267,7 +274,7 @@ func compareJSONNumericVectors(parameters []*vector.Vector, result vector.Functi
 		}
 		if !peerReady {
 			var err error
-			peer, err = makeJSONNumericPeer(proc.Ctx, comparisonNumericAt(numericVector, row, &scratch), numericVector.GetType().Oid)
+			peer, err = makeJSONNumericPeer(proc.Ctx, comparisonNumericAt(numericVector, row, &scratch), numericVector.GetType().Oid, vector.PrepareParamNone)
 			if err != nil {
 				return err
 			}

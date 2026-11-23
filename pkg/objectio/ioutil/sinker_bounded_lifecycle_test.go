@@ -579,6 +579,9 @@ func TestBoundedRunsPreserveTransientMetadataAtSink(t *testing.T) {
 			}
 			input.SetRowCount(4)
 			input.Vecs[1].GetGrouping().Add(1, 3)
+			require.NoError(t, input.Vecs[1].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
+				vector.PrepareParamFloat, vector.PrepareParamNone, vector.PrepareParamInteger, vector.PrepareParamFloat,
+			}, mp))
 			require.NoError(t, input.Vecs[1].SetStringSourcesWithMP([]types.StringSource{
 				types.StringSourceCOMStmt, types.StringSourceSQLPrepare, types.StringSourceExpression, types.StringSourceCOMStmt,
 			}, mp))
@@ -593,6 +596,7 @@ func TestBoundedRunsPreserveTransientMetadataAtSink(t *testing.T) {
 					require.False(t, seen[id])
 					seen[id] = true
 					require.Equal(t, input.Vecs[1].GetGrouping().Contains(uint64(original)), got.Vecs[1].GetGrouping().Contains(uint64(row)))
+					require.Equal(t, input.Vecs[1].GetPrepareParamKindAt(original), got.Vecs[1].GetPrepareParamKindAt(row))
 					require.Equal(t, input.Vecs[1].GetStringSourceAt(original), got.Vecs[1].GetStringSourceAt(row))
 					require.Equal(t, input.Vecs[1].GetRuntimeStringDomainAt(original), got.Vecs[1].GetRuntimeStringDomainAt(row))
 				}

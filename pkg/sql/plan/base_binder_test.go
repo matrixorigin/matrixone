@@ -1642,10 +1642,63 @@ func TestBindFuncExprImplByPlanExpr_JsonComparisonWithDynamicParam(t *testing.T)
 			},
 		}
 	}
+	requireExactJSONParam := func(t *testing.T, expr *plan.Expr, functionName string) *plan.Expr {
+		t.Helper()
+		require.Equal(t, int32(types.T_json), expr.Typ.Id)
+		normalize := expr.GetF()
+		require.NotNil(t, normalize)
+		require.Equal(t, functionName, normalize.GetFunc().GetObjName())
+		require.Len(t, normalize.GetArgs(), 1)
+		return normalize.GetArgs()[0]
+	}
+
+	t.Run("json on left", func(t *testing.T) {
+		param := makeParamExpr(0)
+		result, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{makeJsonExpr(), param})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_bool), result.Typ.Id)
+
+		args := result.GetF().Args
+		require.Len(t, args, 2)
+		require.Equal(t, int32(types.T_json), args[0].Typ.Id)
+		require.NotNil(t, args[0].GetCol())
+		paramArg := requireExactJSONParam(t, args[1], function.JsonOrderingParamFunctionName)
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
+	})
+
+	t.Run("json on right", func(t *testing.T) {
+		param := makeParamExpr(0)
+		result, err := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{param, makeJsonExpr()})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_bool), result.Typ.Id)
+
+		args := result.GetF().Args
+		require.Len(t, args, 2)
+		paramArg := requireExactJSONParam(t, args[0], function.JsonOrderingParamFunctionName)
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
+		require.Equal(t, int32(types.T_json), args[1].Typ.Id)
+		require.NotNil(t, args[1].GetCol())
+	})
 
 	t.Run("string literal remains rejected", func(t *testing.T) {
 		_, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{makeJsonExpr(), makePlan2StringConstExprWithType("1")})
 		require.Error(t, err)
+	})
+
+	t.Run("non-binary ordering comparison is ignored", func(t *testing.T) {
+		err := adjustJsonDynamicParamType(ctx, ">", []*plan.Expr{makeJsonExpr()})
+		require.NoError(t, err)
+	})
+
+	t.Run("equality preserves dynamic parameter type", func(t *testing.T) {
+		args := []*plan.Expr{makeJsonExpr(), makeParamExpr(0)}
+		err := adjustJsonDynamicParamType(ctx, "=", args)
+		require.NoError(t, err)
+		paramArg := requireExactJSONParam(t, args[1], function.JsonComparisonParamFunctionName)
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
 	})
 
 	t.Run("member of preserves the direct prepared parameter type", func(t *testing.T) {
@@ -1659,6 +1712,25 @@ func TestBindFuncExprImplByPlanExpr_JsonComparisonWithDynamicParam(t *testing.T)
 		// would eagerly convert/reject an operand before NULL/domain checks.
 		paramArg := result.GetF().Args[0]
 		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
+	})
+
+	for _, operator := range []string{"<=>", "!="} {
+		t.Run(operator+" preserves dynamic parameter type", func(t *testing.T) {
+			args := []*plan.Expr{makeJsonExpr(), makeParamExpr(0)}
+			err := adjustJsonDynamicParamType(ctx, operator, args)
+			require.NoError(t, err)
+			paramArg := requireExactJSONParam(t, args[1], function.JsonComparisonParamFunctionName)
+			require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+			require.NotNil(t, paramArg.GetP())
+		})
+	}
+
+	t.Run("NOT IN expansion preserves JSON parameter type", func(t *testing.T) {
+		result, err := bindMixedInListComparison(ctx, "!=", makeJsonExpr(), makeParamExpr(0), true)
+		require.NoError(t, err)
+		require.Len(t, result.GetF().Args, 2)
+		paramArg := requireExactJSONParam(t, result.GetF().Args[1], function.JsonComparisonParamFunctionName)
 		require.NotNil(t, paramArg.GetP())
 	})
 

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1926,11 +1927,9 @@ func showPublicationsLike(ctx context.Context, sp *tree.ShowPublications, proc *
 			return "", moerr.NewInvalidInput(ctx, "SHOW PUBLICATIONS LIKE parameter has no execution value")
 		}
 		params := proc.GetPrepareParams()
-		typ := types.T_any
-		if typed := proc.GetTypedPrepareParam(0); typed != nil {
-			typ = typed.GetType().Oid
-		}
+		typ := proc.GetPrepareParamType(0)
 		if params.IsNull(0) || !params.GetType().Oid.IsMySQLString() ||
+			proc.GetPrepareParamKind(0) != vector.PrepareParamNone ||
 			(typ != types.T_any && !typ.IsMySQLString()) {
 			return "", moerr.NewInvalidInput(ctx, "SHOW PUBLICATIONS LIKE parameter must be a non-NULL string")
 		}

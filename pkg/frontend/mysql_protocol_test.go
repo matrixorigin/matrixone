@@ -3175,8 +3175,11 @@ func TestParseExecuteDataPreparedJSONDecimalComparisonIsExact(t *testing.T) {
 	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
 		buildStringExecutePacket(
 			proto, defines.MYSQL_TYPE_NEWDECIMAL, "9007199254740993.1"), 0))
-	proc.SetPrepareParams(prepareStmt.params)
-	installTestTypedPrepareParams(t, proc, types.New(types.T_decimal128, 38, 1))
+	proc.SetPrepareParamsWithMeta(
+		prepareStmt.params,
+		nil,
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
 
 	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery()
 	require.NotEmpty(t, preparedPlan.Steps)
@@ -3193,28 +3196,22 @@ func TestParseExecuteDataPreparedJSONDecimalComparisonIsExact(t *testing.T) {
 		"COM_STMT_EXECUTE DECIMAL must not round adjacent exact values through FLOAT64")
 }
 
-// executeBinaryFloat32Prepared drives a COM_STMT_EXECUTE carrying FLOAT 0.1
-// through the production EXECUTE binding and evaluates the runtime projection.
-func executeBinaryFloat32Prepared(t *testing.T, connID uint32, query string) *vector.Vector {
-	t.Helper()
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, connID, query)
-	t.Cleanup(func() {
-		cw.proc.SetPrepareParams(nil)
-		prepareStmt.Close()
-	})
-	setSessionAlloc("", NewLeakCheckAllocator())
-	ioses, err := NewIOSession(&testConn{}, getPu(""), "")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ioses.Close() })
-	proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
-	proto.SetSession(ses)
+func TestParseExecuteDataMemberOfBinaryFloat32PreservesConcreteType(t *testing.T) {
+	const query = `select ? member of ('[0.10000000149011612]')`
+	ctx := context.Background()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, query)
+	defer func() {
+		proc.SetPrepareParams(nil)
+		prepareStmt.clearBinaryParamState(proc)
+	}()
 
 	// This is the binary COM_STMT_EXECUTE shape emitted for MYSQL_TYPE_FLOAT:
 	// no cursor, iteration-count 1, one non-NULL parameter, and a 4-byte
 	// IEEE-754 payload.  The parser stores the payload in the text transport
 	// vector, while ParamTypes retains the concrete wire domain.
 	require.NoError(t, proto.ParseExecuteData(
-		execCtx.reqCtx, cw.proc, prepareStmt, buildFloat32ExecutePacket(float32(0.1)), 0))
+		ctx, proc, prepareStmt,
+		buildFloat32ExecutePacket(float32(0.1)), 0))
 	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_FLOAT), 0}, prepareStmt.ParamTypes)
 	require.Equal(t, "0.1", prepareStmt.params.GetStringAt(0))
 	runtimeType, ok := binaryProtocolPrepareParamType(
@@ -3222,30 +3219,63 @@ func executeBinaryFloat32Prepared(t *testing.T, connID uint32, query string) *ve
 	require.True(t, ok)
 	require.Equal(t, types.T_float32, runtimeType.Oid)
 
-	_, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
-	if owned && stmt != nil {
-		t.Cleanup(stmt.Free)
-	}
-	require.NoError(t, err)
-	queryPlan := runtimePlan.GetQuery()
+	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	require.Equal(t, []int32{0}, plan.PreparedJSONComparisonParamPositions(preparedPlan))
+	proc.SetPrepareParamsWithTypedMeta(
+		prepareStmt.params,
+		nil,
+		[]vector.PrepareParamKind{vector.PrepareParamFloat},
+		[]types.T{types.T_float32},
+	)
+
+	queryPlan := preparedPlan.GetQuery()
 	projectNode := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]]
 	require.Len(t, projectNode.ProjectList, 1)
-	executor, err := colexec.NewExpressionExecutor(cw.proc, projectNode.ProjectList[0])
+	executor, err := colexec.NewExpressionExecutor(proc, projectNode.ProjectList[0])
 	require.NoError(t, err)
-	t.Cleanup(executor.Free)
-	result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	require.NoError(t, err)
-	return result
-}
-
-func TestParseExecuteDataMemberOfBinaryFloat32PreservesConcreteType(t *testing.T) {
-	result := executeBinaryFloat32Prepared(t, 3196, `select ? member of ('[0.10000000149011612]')`)
 	require.Equal(t, types.T_int64, result.GetType().Oid)
 	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result, 0))
 }
 
 func TestParseExecuteDataPreparedJSONArrayInsertBinaryFloat32PreservesConcreteType(t *testing.T) {
-	result := executeBinaryFloat32Prepared(t, 3236, `select json_array_insert('[0]', '$[0]', ?)`)
+	const query = `select json_array_insert('[0]', '$[0]', ?)`
+	ctx := context.Background()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, query)
+	defer func() {
+		proc.SetPrepareParams(nil)
+		prepareStmt.clearBinaryParamState(proc)
+	}()
+
+	require.NoError(t, proto.ParseExecuteData(
+		ctx, proc, prepareStmt,
+		buildFloat32ExecutePacket(float32(0.1)), 0))
+	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_FLOAT), 0}, prepareStmt.ParamTypes)
+	require.Equal(t, "0.1", prepareStmt.params.GetStringAt(0))
+	runtimeType, ok := binaryProtocolPrepareParamType(
+		defines.MYSQL_TYPE_FLOAT, false, prepareStmt.params.GetRawBytesAt(0))
+	require.True(t, ok)
+	require.Equal(t, types.T_float32, runtimeType.Oid)
+
+	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	require.Equal(t, []int32{0}, plan.PreparedJSONComparisonParamPositions(preparedPlan))
+	proc.SetPrepareParamsWithTypedMeta(
+		prepareStmt.params,
+		nil,
+		[]vector.PrepareParamKind{vector.PrepareParamFloat},
+		[]types.T{types.T_float32},
+	)
+
+	queryPlan := preparedPlan.GetQuery()
+	projectNode := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]]
+	require.Len(t, projectNode.ProjectList, 1)
+	executor, err := colexec.NewExpressionExecutor(proc, projectNode.ProjectList[0])
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
 	require.Equal(t, types.T_json, result.GetType().Oid)
 	require.False(t, result.IsNull(0))
 	require.Equal(t, `[0.10000000149011612, 0]`, types.DecodeJson(result.GetBytesAt(0)).String())
@@ -3263,9 +3293,12 @@ func TestParseExecuteDataDecimalRebindsPreparedAbsExactly(t *testing.T) {
 	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
 		buildStringExecutePacket(proto, defines.MYSQL_TYPE_NEWDECIMAL, value), 0))
 	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}, prepareStmt.ParamTypes)
-	proc.SetPrepareParamsWithIsBin(prepareStmt.params, []bool{false})
-	values, err := preparedParamValues(proc, prepareStmt.ParamTypes,
-		[]types.StringConversionKind{types.StringConversionDecimal})
+	proc.SetPrepareParamsWithMeta(
+		prepareStmt.params,
+		[]bool{false},
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+	values, err := preparedParamValues(proc, prepareStmt.ParamTypes)
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 	param := values[0].(plan.ParamValue)
@@ -3316,7 +3349,7 @@ func TestParseExecuteDataBitCountMarkerUsesPacketDomain(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		packet     func(*MysqlProtocolImpl) []byte
-		paramKind  types.StringConversionKind
+		paramKind  vector.PrepareParamKind
 		want       uint64
 		specialize bool
 	}{
@@ -3337,7 +3370,7 @@ func TestParseExecuteDataBitCountMarkerUsesPacketDomain(t *testing.T) {
 		{
 			name:       "integer rebinds numeric overload",
 			packet:     func(*MysqlProtocolImpl) []byte { return buildLongLongExecutePacket(64, false) },
-			paramKind:  types.StringConversionInteger,
+			paramKind:  vector.PrepareParamInteger,
 			want:       1,
 			specialize: true,
 		},
@@ -3350,9 +3383,10 @@ func TestParseExecuteDataBitCountMarkerUsesPacketDomain(t *testing.T) {
 				prepareStmt.Close()
 			}()
 			require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, tc.packet(proto), 0))
-			proc.SetPrepareParamsWithIsBin(prepareStmt.params, []bool{false})
-			values, err := preparedParamValues(proc, prepareStmt.ParamTypes,
-				[]types.StringConversionKind{tc.paramKind})
+			prepareStmt.params.SetPrepareParamKinds([]vector.PrepareParamKind{tc.paramKind})
+			proc.SetPrepareParamsWithMeta(
+				prepareStmt.params, []bool{false}, []vector.PrepareParamKind{tc.paramKind})
+			values, err := preparedParamValues(proc, prepareStmt.ParamTypes)
 			require.NoError(t, err)
 			runtimePlan, specialized, err := plan.FillValuesOfParamsInPlanWithSpecialization(
 				ctx, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
@@ -6871,19 +6905,4 @@ func Test_readTime_advancesPastMicroseconds(t *testing.T) {
 			convey.So(ok, convey.ShouldBeFalse)
 		})
 	})
-}
-
-// installTestTypedPrepareParams installs the typed parameter values a
-// binary-protocol EXECUTE derives from its bindings: parameter i is parsed
-// from the TEXT transport as typs[i].
-func installTestTypedPrepareParams(t *testing.T, proc *process.Process, typs ...types.Type) {
-	t.Helper()
-	bindings := make([]plan.PreparedSourceBinding, len(typs))
-	for i, typ := range typs {
-		bindings[i] = plan.PreparedSourceBinding{Position: int32(i), Type: typ}
-	}
-	require.NoError(t, installTypedPrepareParams(proc, bindings))
-	for i := range typs {
-		require.NotNil(t, proc.GetTypedPrepareParam(i), "parameter %d must carry a typed value", i)
-	}
 }

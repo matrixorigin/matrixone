@@ -29,6 +29,39 @@ const (
 	jsonMemberOfFunctionName = JsonMemberOfFunctionName
 )
 
+func preparedJSONMemberOfScalarValue(
+	ctx context.Context,
+	value []byte,
+	kind vector.PrepareParamKind,
+	paramType types.T,
+	binaryString bool,
+	protocolVersion int64,
+) (any, error) {
+	switch paramType {
+	case types.T_bit:
+		// COM_STMT_EXECUTE does not carry BIT(n)'s width, so a uint64 JSON
+		// number would silently lose the opaque byte/width contract.
+		return nil, moerr.NewNotSupportedf(
+			ctx, "prepared BIT parameters are not supported by MEMBER OF without width metadata")
+	case types.T_enum:
+		// ENUM values arriving through the prepared transport are already their
+		// display labels. Preserve the label even if a transport-side binary bit
+		// is present; the SQL domain is more specific than that transport flag.
+		return string(value), nil
+	case types.T_geometry, types.T_geometry32:
+		geoJSON, err := geometryToGeoJSONBytes(value)
+		if err != nil {
+			return nil, err
+		}
+		return types.ParseSliceToByteJson(geoJSON)
+	case types.T_uuid:
+		return string(value), nil
+	default:
+		return PreparedJSONScalarValue(
+			ctx, value, kind, paramType, binaryString, protocolVersion)
+	}
+}
+
 // MEMBER OF accepts SQL scalar values and JSON documents.  Native vector
 // values are SQL arrays, not JSON arrays, and MySQL rejects them as operands
 // instead of implicitly converting them to a JSON document.
@@ -50,12 +83,30 @@ func jsonMemberOfRightHasBinaryDomain(typ types.Type) bool {
 	}
 }
 
+// The right operand is a JSON document, not an arbitrary MySQL string.  In
+// particular, MySQL rejects BINARY/VARBINARY/BLOB and text values in the
+// binary charset before attempting to parse their bytes as JSON.
+func jsonMemberOfRightSupportsType(typ types.Type) bool {
+	if typ.Oid == types.T_json || typ.Oid == types.T_any {
+		return true
+	}
+	if typ.Oid != types.T_char && typ.Oid != types.T_varchar && typ.Oid != types.T_text {
+		return false
+	}
+	return !jsonMemberOfRightHasBinaryDomain(typ)
+}
+
 func jsonMemberOfRightIsBinary(parameter *vector.Vector, row int) bool {
 	if parameter == nil || parameter.IsNull(uint64(row)) {
 		return false
 	}
 	typ := *parameter.GetType()
 	if jsonMemberOfRightHasBinaryDomain(typ) {
+		return true
+	}
+	preparedType := parameter.GetPrepareParamType()
+	switch preparedType {
+	case types.T_binary, types.T_varbinary, types.T_blob:
 		return true
 	}
 	return parameter.GetIsBinaryStringAt(row)
@@ -71,7 +122,14 @@ func jsonMemberOfRightHasInvalidRuntimeType(parameter *vector.Vector, row int) b
 		return false
 	}
 	runtimeType := parameter.GetType().Oid
-	return runtimeType != types.T_any && runtimeType != types.T_json && !runtimeType.IsMySQLString()
+	if runtimeType != types.T_any && runtimeType != types.T_json && !runtimeType.IsMySQLString() {
+		return true
+	}
+	preparedType := parameter.GetPrepareParamType()
+	if preparedType != types.T_any {
+		return !jsonMemberOfRightSupportsType(preparedType.ToType())
+	}
+	return parameter.GetPrepareParamKindAt(row) != vector.PrepareParamNone
 }
 
 // jsonMemberOfLeftHasInvalidRuntimeType rejects a direct prepared value using
@@ -81,6 +139,14 @@ func jsonMemberOfRightHasInvalidRuntimeType(parameter *vector.Vector, row int) b
 func jsonMemberOfLeftHasInvalidRuntimeType(parameter *vector.Vector, row int) bool {
 	if parameter == nil || parameter.IsNull(uint64(row)) {
 		return false
+	}
+	if preparedType := parameter.GetPrepareParamType(); preparedType != types.T_any {
+		// The binary protocol does not carry BIT(n)'s declared width. Fail closed
+		// instead of comparing a width-dependent opaque value as uint64 JSON.
+		if preparedType == types.T_bit {
+			return true
+		}
+		return !jsonMemberOfLeftSupportsType(preparedType)
 	}
 	return !jsonMemberOfLeftSupportsType(parameter.GetType().Oid)
 }
@@ -165,10 +231,20 @@ func (operand *jsonMemberOfValueOperand) documentAt(row uint64, proc *process.Pr
 		if proc != nil && proc.Ctx != nil {
 			ctx = proc.Ctx
 		}
-		elem, err = jsonTextScalarValue(
+		kind := operand.parameter.GetPrepareParamKindAt(int(row))
+		paramType := operand.parameter.GetPrepareParamType()
+		if paramType == types.T_any && kind == vector.PrepareParamNone {
+			// A non-prepared binary/text vector has no prepared metadata. Use
+			// its concrete OID so static BINARY/VARBINARY/BLOB values retain
+			// their opaque JSON domain, while prepared text transport with a
+			// numeric/Boolean kind still follows that kind below.
+			paramType = operand.parameter.GetType().Oid
+		}
+		elem, err = preparedJSONMemberOfScalarValue(
 			ctx,
 			operand.parameter.GetBytesAt(int(row)),
-			operand.parameter.GetType().Oid,
+			kind,
+			paramType,
 			operand.parameter.GetIsBinaryStringAt(int(row)),
 			jsonSessionProtocolVersion(proc),
 		)
@@ -190,7 +266,8 @@ func (operand *jsonMemberOfValueOperand) documentAt(row uint64, proc *process.Pr
 	}
 	if err == nil {
 		operand.document, err = bytejson.CreateByteJSON(elem)
-		if err == nil && operand.parameter.GetType().Oid == types.T_json {
+		if err == nil && (operand.parameter.GetType().Oid == types.T_json ||
+			operand.parameter.GetPrepareParamType() == types.T_json) {
 			err = bytejson.ValidateJSONDocumentDepth(operand.document)
 		}
 	}

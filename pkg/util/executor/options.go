@@ -39,7 +39,7 @@ type ParamValue struct {
 	// It is intentionally separate from IsBin: a VAR_STRING parameter is a
 	// binary-protocol value without being a binary string literal.
 	IsBinaryProtocol bool
-	PrepareParamKind types.StringConversionKind
+	PrepareParamKind vector.PrepareParamKind
 	// SourceType is the logical type of a SQL EXECUTE USING user variable. It
 	// is deliberately separate from RuntimeType: SQL parameters are transported
 	// through a text vector. Selected functions with runtime-domain-sensitive

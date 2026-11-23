@@ -26,7 +26,7 @@ import (
 )
 
 func TestRollbackAppendRejectsBeforeMutation(t *testing.T) {
-	for _, name := range []string{"length", "area", "negative", "overflow", "string", "binary"} {
+	for _, name := range []string{"length", "area", "negative", "overflow", "prepared", "string", "binary"} {
 		t.Run(name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			v := NewVec(types.T_varchar.ToType())
@@ -44,6 +44,8 @@ func TestRollbackAppendRejectsBeforeMutation(t *testing.T) {
 				attempted = -1
 			case "overflow":
 				attempted = math.MaxInt
+			case "prepared":
+				cp.hadPrepareParamKinds = true
 			case "string":
 				cp.hadStringSources = true
 			case "binary":

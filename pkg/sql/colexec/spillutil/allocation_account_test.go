@@ -566,6 +566,7 @@ func TestSpillAllocationAccountScatterReducesBroadcastConstKey(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer constant.Free(proc.Mp())
+	constant.SetPrepareParamKind(vector.PrepareParamInteger)
 	source := testutil.NewBatchWithVectors([]*vector.Vector{
 		testutil.MakeInt64Vector(values, nil, proc.Mp()),
 	}, nil)

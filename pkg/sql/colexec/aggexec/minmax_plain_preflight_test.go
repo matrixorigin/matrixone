@@ -77,13 +77,16 @@ type fixedMetadataPreflightSnapshot struct {
 }
 
 type fixedMetadataPreflightVectorSnapshot struct {
-	length, capacity, sourceCapacity int
-	values                           []int64
-	nulls                            []bool
-	rowSources                       []types.StringSource
-	sourceSidecar                    bool
-	source                           types.StringSource
-	sources                          []types.StringSource
+	length, capacity, kindCapacity, sourceCapacity int
+	values                                         []int64
+	nulls                                          []bool
+	rowKinds                                       []vector.PrepareParamKind
+	rowSources                                     []types.StringSource
+	kind                                           vector.PrepareParamKind
+	seen, kindSidecar, sourceSidecar               bool
+	kinds                                          []vector.PrepareParamKind
+	source                                         types.StringSource
+	sources                                        []types.StringSource
 }
 
 func snapshotFixedMetadataPreflight(f *fixedMetadataPreflightFixture) fixedMetadataPreflightSnapshot {
@@ -93,13 +96,16 @@ func snapshotFixedMetadataPreflight(f *fixedMetadataPreflightFixture) fixedMetad
 			v := states[i].vecs[0]
 			s := fixedMetadataPreflightVectorSnapshot{
 				length: v.Length(), capacity: v.Capacity(),
-				sourceCapacity: cap(v.GetStringSources()),
-				values:         append([]int64(nil), vector.MustFixedColNoTypeCheck[int64](v)...),
-				sourceSidecar:  v.GetStringSources() != nil,
-				source:         v.GetStringSource(), sources: append([]types.StringSource(nil), v.GetStringSources()...),
+				kindCapacity: cap(v.GetPrepareParamKinds()), sourceCapacity: cap(v.GetStringSources()),
+				values: append([]int64(nil), vector.MustFixedColNoTypeCheck[int64](v)...),
+				kind:   v.GetPrepareParamKind(), seen: v.HasPrepareParamKind(),
+				kindSidecar: v.GetPrepareParamKinds() != nil, sourceSidecar: v.GetStringSources() != nil,
+				kinds:  append([]vector.PrepareParamKind(nil), v.GetPrepareParamKinds()...),
+				source: v.GetStringSource(), sources: append([]types.StringSource(nil), v.GetStringSources()...),
 			}
 			for row := 0; row < v.Length(); row++ {
 				s.nulls = append(s.nulls, v.IsNull(uint64(row)))
+				s.rowKinds = append(s.rowKinds, v.GetPrepareParamKindAt(row))
 				s.rowSources = append(s.rowSources, v.GetStringSourceAt(row))
 			}
 			result.vecs = append(result.vecs, s)
@@ -116,6 +122,7 @@ func requireFixedPreflightRowsUnchanged(t testing.TB, before, after fixedMetadat
 		require.Equal(t, v.length, after.vecs[i].length)
 		require.Equal(t, v.values, after.vecs[i].values)
 		require.Equal(t, v.nulls, after.vecs[i].nulls)
+		require.Equal(t, v.rowKinds, after.vecs[i].rowKinds)
 		require.Equal(t, v.rowSources, after.vecs[i].rowSources)
 	}
 }
@@ -128,8 +135,12 @@ func TestFixedMinMaxPlainMetadataPreflight(t *testing.T) {
 			seed := f.intInput(t, []int64{8, -2, 0}, []bool{false, false, true})
 			require.NoError(t, f.exec.BatchFill(0, []uint64{1, 2, 3}, []*vector.Vector{seed}))
 			target := f.base.state[0].vecs[0]
+			require.True(t, target.HasPrepareParamKind(), "ordinary fill observes None")
+			require.Equal(t, vector.PrepareParamNone, target.GetPrepareParamKind())
+			require.Nil(t, target.GetPrepareParamKinds())
 			require.False(t, target.HasStringSourceMetadata())
 			input := f.intInput(t, []int64{99, -5, 7, 7, 0, 100}, []bool{false, false, false, false, true, false})
+			input.SetPrepareParamKind(vector.PrepareParamNone)
 			groups := []uint64{1, 2, 2, AggBatchSize + 1, GroupNotMatched}
 			before := snapshotFixedMetadataPreflight(f)
 			used, calls := f.account.Snapshot().Used, f.controller.calls
@@ -154,6 +165,7 @@ func TestFixedMinMaxPlainMetadataPreflight(t *testing.T) {
 			require.Equal(t, want, vector.MustFixedColNoTypeCheck[int64](result[0])[:2])
 			require.True(t, result[0].IsNull(2))
 			for row := range 3 {
+				require.Equal(t, vector.PrepareParamNone, result[0].GetPrepareParamKindAt(row))
 				require.Equal(t, types.StringSourceExpression, result[0].GetStringSourceAt(row))
 			}
 		})
@@ -193,6 +205,7 @@ func TestFixedMinMaxPlainMetadataPreflightStandby(t *testing.T) {
 	require.Equal(t, []int64{3, 9}, vector.MustFixedColNoTypeCheck[int64](result[0]))
 	for row := range 2 {
 		require.False(t, result[0].IsNull(uint64(row)))
+		require.Equal(t, vector.PrepareParamNone, result[0].GetPrepareParamKindAt(row))
 	}
 }
 
@@ -238,24 +251,25 @@ func TestFixedMinMaxTargetShapePreflight(t *testing.T) {
 }
 
 func TestFixedMinMaxTargetMetadataPreflight(t *testing.T) {
-	for _, kind := range []string{"source-second-chunk", "empty-source-sidecar", "source"} {
+	for _, kind := range []string{"kind", "kind-second-chunk", "empty-kind-sidecar", "source"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newFixedMetadataPreflightFixture(t, AggIdOfMin, types.T_int64.ToType())
 			input := f.intInput(t, []int64{4, 4}, nil)
 			groups := []uint64{1}
 			future := 0
-			if kind == "empty-source-sidecar" {
+			if kind == "empty-kind-sidecar" {
 				future = 128
 				require.NoError(t, f.exec.PreAllocateGroups(future))
 				v := f.base.standby[0].vecs[0]
-				require.NoError(t, v.PreflightSetStringSourceAtLength(0, 2, types.StringSourceLiteral, f.mp))
-				require.NotNil(t, v.GetStringSources())
-				require.Empty(t, v.GetStringSources())
+				require.NoError(t, v.PreflightSetPrepareParamKindsAtLength([]int{0, 1},
+					[]vector.PrepareParamKind{vector.PrepareParamInteger, vector.PrepareParamFloat}, 2, f.mp))
+				require.NotNil(t, v.GetPrepareParamKinds())
+				require.Empty(t, v.GetPrepareParamKinds())
 				groups = []uint64{1, uint64(future)}
 			} else {
 				count := 2
 				first := uint64(1)
-				if kind == "source-second-chunk" {
+				if kind == "kind-second-chunk" {
 					count = AggBatchSize + 2
 					first = AggBatchSize + 1
 				}
@@ -266,7 +280,11 @@ func TestFixedMinMaxTargetMetadataPreflight(t *testing.T) {
 					groups = []uint64{1, first}
 				}
 				seed := f.intInput(t, []int64{5, 5}, nil)
-				require.NoError(t, seed.SetStringSource(types.StringSourceLiteral))
+				if kind == "source" {
+					require.NoError(t, seed.SetStringSource(types.StringSourceLiteral))
+				} else {
+					seed.SetPrepareParamKind(vector.PrepareParamFloat)
+				}
 				require.NoError(t, f.exec.BatchFill(0, []uint64{first, first + 1}, []*vector.Vector{seed}))
 			}
 			before := snapshotFixedMetadataPreflight(f)
@@ -293,12 +311,17 @@ func TestFixedMinMaxTargetMetadataPreflight(t *testing.T) {
 				v := f.base.state[x].vecs[0]
 				require.Equal(t, int64(4), vector.GetFixedAtNoTypeCheck[int64](v, int(y)))
 				require.False(t, v.IsNull(uint64(y)))
+				require.Equal(t, vector.PrepareParamNone, v.GetPrepareParamKindAt(int(y)))
 				require.Equal(t, types.StringSourceExpression, v.GetStringSourceAt(int(y)))
 			}
 			if future == 0 {
 				last := f.base.state[len(f.base.state)-1].vecs[0]
 				require.Equal(t, int64(5), vector.GetFixedAtNoTypeCheck[int64](last, 1))
-				require.Equal(t, types.StringSourceLiteral, last.GetStringSourceAt(1))
+				if kind == "source" {
+					require.Equal(t, types.StringSourceLiteral, last.GetStringSourceAt(1))
+				} else {
+					require.Equal(t, vector.PrepareParamFloat, last.GetPrepareParamKindAt(1))
+				}
 			}
 			for x := range f.base.state {
 				v := f.base.state[x].vecs[0]
@@ -341,9 +364,9 @@ func TestFixedMinMaxPlainConstPreflight(t *testing.T) {
 
 func BenchmarkFixedMinMaxPlainMetadataPreflight(b *testing.B) {
 	for _, tc := range []struct {
-		name                     string
-		groups                   int
-		constant, nulls, standby bool
+		name                           string
+		groups                         int
+		constant, nulls, standby, kind bool
 	}{
 		{name: "one-group", groups: 1},
 		{name: "alternating-32", groups: 32},
@@ -351,6 +374,7 @@ func BenchmarkFixedMinMaxPlainMetadataPreflight(b *testing.B) {
 		{name: "nulls", groups: 32, nulls: true},
 		{name: "constant", groups: 32, constant: true},
 		{name: "standby", groups: 32, standby: true},
+		{name: "metadata-fallback", groups: 32, kind: true},
 	} {
 		for _, fill := range []bool{false, true} {
 			if tc.standby && fill {
@@ -389,6 +413,14 @@ func BenchmarkFixedMinMaxPlainMetadataPreflight(b *testing.B) {
 						want[group], present[group] = value, true
 					}
 				}
+				kind := vector.PrepareParamNone
+				if tc.kind {
+					kind = vector.PrepareParamFloat
+				}
+				input.SetPrepareParamKind(kind)
+				require.True(b, input.HasPrepareParamKind())
+				require.Equal(b, kind, input.GetPrepareParamKind())
+				require.Nil(b, input.GetPrepareParamKinds())
 				require.False(b, input.HasStringSourceMetadata())
 				vectors := []*vector.Vector{input}
 				if tc.standby {
@@ -398,6 +430,20 @@ func BenchmarkFixedMinMaxPlainMetadataPreflight(b *testing.B) {
 					require.NoError(b, f.exec.PreflightBatchFill(0, groups, vectors))
 					require.NoError(b, f.exec.BatchFill(0, groups, vectors))
 					target := f.base.state[0].vecs[0]
+					require.True(b, target.HasPrepareParamKind(), "benchmark the observed steady state")
+					if tc.kind {
+						require.Equal(b, vector.PrepareParamNone, target.GetPrepareParamKind())
+						require.NotNil(b, target.GetPrepareParamKinds())
+						require.Len(b, target.GetPrepareParamKinds(), tc.groups)
+						for row, expected := range want {
+							require.False(b, target.IsNull(uint64(row)))
+							require.Equal(b, kind, target.GetPrepareParamKindAt(row))
+							require.Equal(b, expected, vector.GetFixedAtNoTypeCheck[float64](target, row))
+						}
+					} else {
+						require.Equal(b, kind, target.GetPrepareParamKind())
+						require.Nil(b, target.GetPrepareParamKinds())
+					}
 					require.False(b, target.HasStringSourceMetadata())
 				}
 				used, calls := f.account.Snapshot().Used, f.controller.calls
@@ -428,9 +474,12 @@ func BenchmarkFixedMinMaxPlainMetadataPreflight(b *testing.B) {
 				b.Cleanup(func() { result[0].Free(f.mp) })
 				for row := range want {
 					require.Equal(b, !present[row], result[0].IsNull(uint64(row)))
+					wantKind := vector.PrepareParamNone
 					if present[row] {
 						require.Equal(b, want[row], vector.GetFixedAtNoTypeCheck[float64](result[0], row))
+						wantKind = kind
 					}
+					require.Equal(b, wantKind, result[0].GetPrepareParamKindAt(row))
 					require.Equal(b, types.StringSourceExpression, result[0].GetStringSourceAt(row))
 				}
 			})

@@ -69,7 +69,9 @@ func TrySelectBetweenRows(parameters []*vector.Vector, proc *process.Process, le
 
 func plainBetweenSelectionDate(value *vector.Vector, literal bool) bool {
 	if value == nil || value.GetType().Oid != types.T_date || value.IsDictionary() ||
-		value.HasNull() || value.HasGrouping() || value.HasBinaryStringMetadata() {
+		value.HasNull() || value.HasGrouping() || value.HasBinaryStringMetadata() ||
+		value.GetPrepareParamKind() != vector.PrepareParamNone || len(value.GetPrepareParamKinds()) != 0 ||
+		value.GetPrepareParamType() != types.T_any || value.IsPreparedJSONComparisonParam() {
 		return false
 	}
 	// DATE literals carry scalar literal provenance. It has no effect on DATE

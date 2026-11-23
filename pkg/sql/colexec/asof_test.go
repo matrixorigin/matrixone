@@ -31,6 +31,8 @@ func TestMixedJSONNumericEquality(t *testing.T) {
 		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(id, 0), ObjName: "deliberately_not_the_identity"}, Args: args}}}
 	}
 	mixed := expr(function.EQUAL, col(types.T_json), col(types.T_int64))
+	adapter := expr(function.INTERNAL_JSON_COMPARISON_PARAM, col(types.T_any))
+	adapter.Typ = types.T_json.ToType().PlanType()
 	for _, tc := range []struct {
 		name string
 		e    *plan.Expr
@@ -41,6 +43,7 @@ func TestMixedJSONNumericEquality(t *testing.T) {
 		{"json_string", expr(function.EQUAL, col(types.T_json), col(types.T_varchar)), false},
 		{"not_equality", expr(function.GREAT_EQUAL, col(types.T_json), col(types.T_int64)), false},
 		{"nested_and", expr(function.AND, expr(function.EQUAL, col(types.T_int64), col(types.T_int64)), mixed), true},
+		{"prepared", expr(function.EQUAL, col(types.T_json), adapter), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, tc.want, HasMixedJSONNumericEquality(tc.e))

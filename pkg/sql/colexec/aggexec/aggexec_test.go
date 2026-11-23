@@ -322,6 +322,7 @@ func TestAggExecSpillDecodeUsesExactSourceCapacity(t *testing.T) {
 		require.Equal(t, float64(9), vector.GetFixedAtNoTypeCheck[float64](results[0], 2))
 		for row := range 3 {
 			require.Equal(t, row == 1, results[0].IsNull(uint64(row)))
+			require.Equal(t, vector.PrepareParamNone, results[0].GetPrepareParamKindAt(row))
 			require.Equal(t, types.StringSourceExpression, results[0].GetStringSourceAt(row))
 		}
 	})
@@ -675,4 +676,50 @@ func TestAggStateInitSaveArgCleanup(t *testing.T) {
 		require.NotNil(t, ag.vecs)
 		ag.free(mp)
 	})
+}
+
+func TestGroupGrowReturnsPrepareParamSidecarOOM(t *testing.T) {
+	const poolCapacity = int64(1024 * 1024)
+	mp, err := mpool.NewMPool("group-grow-prepare-param", poolCapacity, mpool.NoFixed)
+	require.NoError(t, err)
+
+	input := vector.NewVec(types.T_int64.ToType())
+	exec := makeMinMaxExec(mp, AggIdOfMin, true, types.T_int64.ToType())
+	var filler []byte
+	defer func() {
+		if filler != nil {
+			mp.Free(filler)
+		}
+		input.Free(mp)
+		exec.Free()
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	}()
+
+	require.NoError(t, exec.GroupGrow(2))
+	require.NoError(t, vector.AppendFixedList(input, []int64{1, 2}, nil, mp))
+	require.NoError(t, input.SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
+		vector.PrepareParamInteger,
+		vector.PrepareParamFloat,
+	}, mp))
+	require.NoError(t, exec.BatchFill(0, []uint64{1, 2}, []*vector.Vector{input}))
+
+	remaining := poolCapacity - mp.CurrNB()
+	require.Greater(t, remaining, int64(1))
+	filler, err = mp.Alloc(int(remaining-1), true)
+	require.NoError(t, err)
+
+	var growErr error
+	require.NotPanics(t, func() {
+		growErr = exec.GroupGrow(1)
+	})
+	require.Error(t, growErr)
+	require.Equal(t, 2, exec.(*minMaxExecFixed[int64]).GetNumGroups())
+
+	// Capacity-only work retained by the failed attempt is reusable; removing
+	// the pressure lets the same logical grow complete exactly once.
+	mp.Free(filler)
+	filler = nil
+	require.NoError(t, exec.GroupGrow(1))
+	require.Equal(t, 3, exec.(*minMaxExecFixed[int64]).GetNumGroups())
 }

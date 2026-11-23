@@ -229,9 +229,20 @@ func strToLowPrecFloat[Tr types.LowPrecFloat](
 		text := string(bs)
 		var f float32
 		var f64 float64
-		var err error
-		if f, f64, err = lowPrecTextValue(proc, text, isBinary, mode, cast); err != nil {
-			return err
+		if from.GetPrepareParamKindAt(i) == vector.PrepareParamBoolean {
+			// a prepared Boolean travels as canonical text and converts as FLOAT does
+			b, err := strconv.ParseBool(text)
+			if err != nil {
+				return moerr.NewInvalidArg(proc.Ctx, "prepared Boolean", text)
+			}
+			if b {
+				f, f64 = 1, 1
+			}
+		} else {
+			var err error
+			if f, f64, err = lowPrecTextValue(proc, text, isBinary, mode, cast); err != nil {
+				return err
+			}
 		}
 		input := any(strings.TrimSpace(text))
 		if isBinary {

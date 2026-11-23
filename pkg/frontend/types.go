@@ -375,12 +375,15 @@ type PrepareStmt struct {
 	fixedIntegerParamPositions []int32
 	hasPaginationParams        bool
 	hasLagLeadParams           bool
-	paramKinds                 []types.StringConversionKind
+	paramKinds                 []vector.PrepareParamKind
 	paramBinaryStrings         []bool
+	paramMetadata              []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
-	// generation; the protocol type decides those parameters' binding kind.
+	// generation. Only these parameters need an exact SQL type in Process
+	// metadata; paramConcreteTypes is a reusable execution buffer.
 	jsonComparisonParamPositions []int32
 	jsonMemberOfParamPositions   []int32
+	paramConcreteTypes           []types.T
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose
 	// runtime integer/decimal domain may require overload rebinding without

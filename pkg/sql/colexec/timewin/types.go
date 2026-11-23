@@ -94,6 +94,8 @@ type container struct {
 	group int
 	aggs  []aggexec.AggFuncExec
 
+	prepareParamKind aggexec.PrepareParamKindStates
+
 	wStart []types.Datetime
 	wEnd   []types.Datetime
 
@@ -256,6 +258,7 @@ func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err er
 	ctr.freeAgg()
 	ctr.aggs = nil
 	ctr.resetParam(timeWin)
+	ctr.prepareParamKind.Reset(nil)
 }
 
 func (timeWin *TimeWin) MakeIntervalAndSliding(interval, sliding *plan.Expr) error {
@@ -323,6 +326,7 @@ func (timeWin *TimeWin) Free(proc *process.Process, pipelineFailed bool, err err
 	ctr.freeAgg()
 	ctr.clearWindowBounds()
 	ctr.allocation.FreeMetadata()
+	ctr.prepareParamKind.Reset(nil)
 }
 
 func (ctr *container) resetExes() {

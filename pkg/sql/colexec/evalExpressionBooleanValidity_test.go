@@ -161,7 +161,7 @@ func TestNumericComparisonValidityWithoutDictionaryCapability(t *testing.T) {
 }
 
 func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
-	for _, shape := range []string{"constant", "grouping"} {
+	for _, shape := range []string{"constant", "grouping", "prepared-json"} {
 		t.Run(shape, func(t *testing.T) {
 			proc, allocation, _ := dependentTestAllocation(t)
 			input := batch.NewWithSize(2)
@@ -174,6 +174,8 @@ func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
 			input.SetRowCount(4)
 			if shape == "grouping" {
 				input.Vecs[0].GetGrouping().Add(1)
+			} else if shape == "prepared-json" {
+				input.Vecs[0].SetPreparedJSONComparisonParam()
 			}
 			cols := make([]*plan.Expr, 0, 2)
 			for side := range 2 {

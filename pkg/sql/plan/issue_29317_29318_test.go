@@ -31,7 +31,7 @@ import (
 func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 	decimal := func(value any) ParamValue {
 		return ParamValue{Value: value, SourceType: types.New(types.T_decimal128, 20, 0),
-			HasSourceType: true, PrepareParamKind: types.StringConversionDecimal}
+			HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal}
 	}
 	type sourceDomainCase struct {
 		name   string
@@ -46,7 +46,7 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			name: "greatest decimal and string", sql: "prepare p from 'select greatest(?, ?)'", fn: "greatest",
 			values: []ParamValue{
 				{Value: "2.0", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true,
-					PrepareParamKind: types.StringConversionDecimal, EnableNumericPrefix: true},
+					PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true},
 				{Value: "10", SourceType: types.T_varchar.ToType(), HasSourceType: true, EnableNumericPrefix: true},
 			},
 			want: []types.T{types.T_varchar, types.T_varchar},
@@ -176,7 +176,7 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			values: []ParamValue{
 				{Value: nil, SourceType: types.T_text.ToType(), HasSourceType: true},
 				{Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
-					HasSourceType: true, PrepareParamKind: types.StringConversionDecimal},
+					HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal},
 			},
 			want: []types.T{types.T_decimal128, types.T_decimal128},
 		},
@@ -196,7 +196,7 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			values: []ParamValue{
 				{Value: nil, SourceType: types.T_float64.ToType(), HasSourceType: true},
 				{Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
-					HasSourceType: true, PrepareParamKind: types.StringConversionDecimal},
+					HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal},
 			},
 			want: []types.T{types.T_float64, types.T_float64},
 		},
@@ -206,7 +206,7 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			values: []ParamValue{
 				{Value: nil, SourceType: types.T_any.ToType(), HasSourceType: true},
 				{Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
-					HasSourceType: true, PrepareParamKind: types.StringConversionDecimal},
+					HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal},
 			},
 			want: []types.T{types.T_decimal128, types.T_decimal128},
 		},
@@ -496,7 +496,7 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 				"numeric text with a complete decimal spelling should keep its exact domain")
 
 			decimalValue := ParamValue{
-				Value: "1.46", PrepareParamKind: types.StringConversionDecimal,
+				Value: "1.46", PrepareParamKind: vector.PrepareParamDecimal,
 			}
 			filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(
 				context.Background(), template, []any{decimalValue, int64(1)})

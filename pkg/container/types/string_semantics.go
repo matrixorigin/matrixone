@@ -105,32 +105,6 @@ const (
 	stringConversionKindMax = StringConversionBoolean
 )
 
-// StringConversionKindForType maps a SQL type to the conversion domain its
-// values take when rendered as text.
-func StringConversionKindForType(typ T) (StringConversionKind, bool) {
-	switch typ {
-	case T_int8, T_int16, T_int32, T_int64,
-		T_uint8, T_uint16, T_uint32, T_uint64,
-		T_bit, T_year:
-		return StringConversionInteger, true
-	case T_float32, T_float64, T_bf16, T_float16, T_float8, T_float4:
-		return StringConversionFloat, true
-	case T_decimal64, T_decimal128, T_decimal256:
-		return StringConversionDecimal, true
-	case T_bool:
-		return StringConversionBoolean, true
-	case T_char, T_varchar, T_text,
-		T_json, T_date, T_time, T_datetime, T_timestamp,
-		T_binary, T_varbinary, T_blob, T_enum,
-		T_geometry, T_geometry32, T_uuid,
-		T_array_float32, T_array_float64, T_array_bf16,
-		T_array_float16, T_array_int8, T_array_uint8, T_array_float8, T_array_float4:
-		return StringConversionString, true
-	default:
-		return StringConversionString, false
-	}
-}
-
 // StringNullKind distinguishes ordinary untyped NULL from a NULL carrying a
 // resolved SQL type. Parameter-marker source is retained independently.
 type StringNullKind uint8

@@ -3387,7 +3387,7 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		}
 		query := makeQuery(t, "=", []*planpb.Expr{intColumn, param(0)})
 		values := []any{ParamValue{
-			Value: "9.0", PrepareParamKind: types.StringConversionDecimal, EnableNumericPrefix: true,
+			Value: "9.0", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
 		}}
 		require.True(t, PreparedPlanNeedsNumericPrefixSpecialization(query, values))
 
@@ -3410,7 +3410,7 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		}
 		query := makeQuery(t, "=", []*planpb.Expr{floatColumn, param(0)})
 		require.False(t, PreparedPlanNeedsNumericPrefixSpecialization(query, []any{ParamValue{
-			Value: "1.2345678", PrepareParamKind: types.StringConversionDecimal, EnableNumericPrefix: true,
+			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
 		}}), query.String())
 	})
 
@@ -3582,10 +3582,10 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		query := makeQuery(t, "coalesce", []*planpb.Expr{param(0), param(1)})
 		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
 			ParamValue{
-				Value: "12.5", PrepareParamKind: types.StringConversionDecimal, EnableNumericPrefix: true,
+				Value: "12.5", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
 			},
 			ParamValue{
-				Value: int64(2), PrepareParamKind: types.StringConversionInteger, EnableNumericPrefix: true,
+				Value: int64(2), PrepareParamKind: vector.PrepareParamInteger, EnableNumericPrefix: true,
 			},
 		})
 		require.NoError(t, err)
@@ -3608,7 +3608,7 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
 			ParamValue{Value: "9007199254740992.0001tail", EnableNumericPrefix: true},
 			ParamValue{
-				Value: "9007199254740992.0002", PrepareParamKind: types.StringConversionFloat,
+				Value: "9007199254740992.0002", PrepareParamKind: vector.PrepareParamFloat,
 				EnableNumericPrefix: true,
 			},
 		})
@@ -3624,13 +3624,13 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		for _, test := range []struct {
 			name    string
 			value   any
-			kind    types.StringConversionKind
+			kind    vector.PrepareParamKind
 			wantOID types.T
 		}{
-			{name: "boolean", value: true, kind: types.StringConversionBoolean, wantOID: types.T_decimal128},
-			{name: "integer", value: int64(42), kind: types.StringConversionInteger, wantOID: types.T_decimal128},
-			{name: "decimal", value: "42.25", kind: types.StringConversionDecimal, wantOID: types.T_decimal128},
-			{name: "float", value: "42.25", kind: types.StringConversionFloat, wantOID: types.T_float64},
+			{name: "boolean", value: true, kind: vector.PrepareParamBoolean, wantOID: types.T_decimal128},
+			{name: "integer", value: int64(42), kind: vector.PrepareParamInteger, wantOID: types.T_decimal128},
+			{name: "decimal", value: "42.25", kind: vector.PrepareParamDecimal, wantOID: types.T_decimal128},
+			{name: "float", value: "42.25", kind: vector.PrepareParamFloat, wantOID: types.T_float64},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				query := makeQuery(t, "coalesce", []*planpb.Expr{param(0), decimalColumn()})

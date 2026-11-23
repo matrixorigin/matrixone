@@ -99,6 +99,15 @@ func TestJSONNumericComparisonProtocol(t *testing.T) {
 			}
 		})
 	}
+	for _, adapter := range []string{function.JsonComparisonParamFunctionName, function.JsonOrderingParamFunctionName} {
+		expr, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, adapter, []*planpb.Expr{{Typ: types.T_text.ToType().PlanType(), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}})
+		require.NoError(t, err)
+		_, overload := function.DecodeOverloadID(expr.GetF().Func.Obj)
+		require.Equal(t, int32(1), overload)
+		features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+		require.NoError(t, err)
+		require.True(t, features.JSONNumericComparisons)
+	}
 }
 
 func TestJSONNumericJoinConditionRemainsResidual(t *testing.T) {

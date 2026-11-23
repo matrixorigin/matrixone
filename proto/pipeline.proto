@@ -755,10 +755,6 @@ message PrepareParamInfo {
   repeated uint32 string_sources = 7;
   // Explicit per-parameter runtime string domains; gated by MORPC v58.
   repeated uint32 runtime_string_domains = 8;
-  // Parameters in their source SQL types: one encoded one-row vector per
-  // position, empty when that position has only the TEXT transport. A peer
-  // that ignores this field reads the TEXT transport instead.
-  repeated bytes typed_params = 9;
 }
 
 message ProcessInfo {

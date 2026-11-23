@@ -473,6 +473,11 @@ func (s *sortRollupState) appendOutputRow(
 					// Take ownership before metadata or a later column can fail.
 					s.output.Vecs = append(s.output.Vecs, vec)
 				}
+				if err := vec.SetPrepareParamKindAtWithMP(
+					s.outputRows, group.ctr.prepareParamKind.Get(i), group.ctr.mp,
+				); err != nil {
+					return err
+				}
 				continue
 			}
 			vecs, err := aggexec.FlushWithContext(proc.Ctx, agg)
@@ -486,7 +491,11 @@ func (s *sortRollupState) appendOutputRow(
 				return moerr.NewInternalErrorNoCtxf(
 					"sort rollup aggregate %d did not produce one result row", i)
 			}
-			resultVecs = append(resultVecs, vecs[0])
+			vec := vecs[0]
+			if !vec.HasPrepareParamKind() {
+				vec.SetPrepareParamKind(group.ctr.prepareParamKind.Get(i))
+			}
+			resultVecs = append(resultVecs, vec)
 		}
 	}
 

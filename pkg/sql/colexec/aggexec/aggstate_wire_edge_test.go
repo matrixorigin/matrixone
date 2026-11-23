@@ -333,6 +333,8 @@ func TestAccountedAggregateWireWriterFailuresAndPolicyEdges(t *testing.T) {
 	require.Error(t, exec.UnmarshalFromReader(nil, mp))
 	require.Error(t, exec.UnmarshalSpillFromReader(nil, mp))
 	require.Equal(t, 2, exec.GetNumGroups())
+	require.Nil(t, exec.PrepareParamKindVectorForChunk(-1))
+	require.Nil(t, exec.PrepareParamKindVectorForChunk(2))
 
 	input.Free(mp)
 	exec.Free()

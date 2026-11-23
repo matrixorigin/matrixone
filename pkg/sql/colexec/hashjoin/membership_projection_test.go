@@ -89,6 +89,7 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 					}
 				}
 				payload.GetGrouping().Add(2)
+				payload.SetPrepareParamKind(vector.PrepareParamInteger)
 				payload.SetIsBinaryString(true)
 				require.NoError(t, payload.SetStringSource(types.StringSourceLiteral))
 				build := makeInt32Batch(tc.proc, buildValues)
@@ -136,6 +137,7 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 								expected = "7"
 							}
 							require.Equal(t, expected, string(output.GetBytesAt(row)))
+							require.Equal(t, vector.PrepareParamInteger, output.GetPrepareParamKindAt(row))
 							require.True(t, output.GetIsBinaryStringAt(row))
 						}
 						next++

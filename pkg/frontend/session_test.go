@@ -36,7 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -833,7 +833,7 @@ func TestSession_Migrate(t *testing.T) {
 					Name:             "ts0",
 					Value:            plan2.MakePlan2StringConstExprWithType("2026-08-07 04:20:01.123456"),
 					Sql:              "set @ts0 = (select updated_at from src limit 1)",
-					PrepareParamKind: uint32(types.StringConversionString),
+					PrepareParamKind: uint32(vector.PrepareParamNone),
 				},
 				{
 					Name:  "mode",

@@ -1082,6 +1082,84 @@ func TestAccountedApproxPercentileDuplicateTargetMergePreflight(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestFixedMinMaxPreflightsMixedFuturePrepareParamKinds(t *testing.T) {
+	inputMp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		input, []int64{7, 9}, nil, inputMp))
+	require.NoError(t, input.SetPrepareParamKindsWithMP(
+		[]vector.PrepareParamKind{
+			vector.PrepareParamInteger,
+			vector.PrepareParamFloat,
+		}, inputMp))
+	defer func() {
+		input.Free(inputMp)
+		require.Zero(t, inputMp.CurrNB())
+	}()
+
+	run := func(limit uint64, publish bool) (before, after uint64, err error) {
+		mp := mpool.MustNewZero()
+		registry, registryErr := mpool.NewAllocationAccountRegistry(1, 512)
+		require.NoError(t, registryErr)
+		account, registryErr := registry.Open(limit)
+		require.NoError(t, registryErr)
+		allocation, registryErr := NewAllocationAccount(
+			account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+				VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
+			})
+		require.NoError(t, registryErr)
+		exec := makeMinMaxExec(
+			mp, AggIdOfMin, true, types.T_int64.ToType())
+		owner := exec.(AllocationAccountOwner)
+		require.NoError(t, owner.SetAllocationAccount(allocation))
+		defer func() {
+			exec.Free()
+			require.NoError(t, owner.ClearAllocationAccount(allocation))
+			finishTestAggregateAllocation(t, registry, account)
+			require.Zero(t, mp.CurrNB())
+		}()
+
+		if err = exec.PreAllocateGroups(2); err != nil {
+			return 0, account.Snapshot().Used, err
+		}
+		before = account.Snapshot().Used
+		preflight := exec.(BatchCapacityPreflight)
+		err = preflight.PreflightBatchFill(
+			0, []uint64{1, 2}, []*vector.Vector{input})
+		after = account.Snapshot().Used
+		if err != nil || !publish {
+			return before, after, err
+		}
+		require.NoError(t, exec.GroupGrow(2))
+		admitted := account.Snapshot().Used
+		require.NoError(t, exec.BatchFill(
+			0, []uint64{1, 2}, []*vector.Vector{input}))
+		require.Equal(t, admitted, account.Snapshot().Used,
+			"winner publication must not allocate after preflight")
+		results, flushErr := exec.Flush()
+		if flushErr != nil {
+			return before, account.Snapshot().Used, flushErr
+		}
+		require.Len(t, results, 1)
+		require.Equal(t, vector.PrepareParamInteger,
+			results[0].GetPrepareParamKindAt(0))
+		require.Equal(t, vector.PrepareParamFloat,
+			results[0].GetPrepareParamKindAt(1))
+		results[0].Free(mp)
+		return before, after, nil
+	}
+
+	before, exact, err := run(128<<20, true)
+	require.NoError(t, err)
+	require.Greater(t, exact, before)
+	_, exactAgain, err := run(exact, true)
+	require.NoError(t, err)
+	require.Equal(t, exact, exactAgain)
+	failedBefore, _, err := run(exact-1, false)
+	require.Equal(t, before, failedBefore)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+}
+
 func TestDistinctMergePreflightSkipsExistingAndWorkUnitDuplicates(t *testing.T) {
 	const sourceGroups = 16
 	payload := []byte(strings.Repeat("distinct-merge-", 4096))
@@ -1247,4 +1325,104 @@ func TestAccountedSavedArgumentsPreserveConstLogicalRows(t *testing.T) {
 	exec.Free()
 	require.NoError(t, owner.ClearAllocationAccount(allocation))
 	finishTestAggregateAllocation(t, registry, account)
+}
+
+func TestMaxByNullWinnerRetainsPreflightedPrepareParamCapacity(t *testing.T) {
+	run := func(limit uint64, publish bool) (uint64, error) {
+		mp := mpool.MustNewZero()
+		registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+		require.NoError(t, err)
+		account, err := registry.Open(limit)
+		require.NoError(t, err)
+		allocation, err := NewAllocationAccount(
+			account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+				VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
+			})
+		require.NoError(t, err)
+
+		exec := makeMaxByExec(mp, AggIdOfMaxBy, false, []types.Type{
+			types.T_text.ToType(), types.T_int64.ToType(), types.T_int64.ToType(),
+		}).(*maxByExec)
+		owner := any(exec).(AllocationAccountOwner)
+		require.NoError(t, owner.SetAllocationAccount(allocation))
+
+		initialValue := vector.NewVec(types.T_text.ToType())
+		initialOrder := vector.NewVec(types.T_int64.ToType())
+		initialTie := vector.NewVec(types.T_int64.ToType())
+		batchValue := vector.NewVec(types.T_text.ToType())
+		batchOrder := vector.NewVec(types.T_int64.ToType())
+		batchTie := vector.NewVec(types.T_int64.ToType())
+		inputs := []*vector.Vector{
+			initialValue, initialOrder, initialTie,
+			batchValue, batchOrder, batchTie,
+		}
+		defer func() {
+			for _, input := range inputs {
+				input.Free(mp)
+			}
+			exec.Free()
+			require.NoError(t, owner.ClearAllocationAccount(allocation))
+			finishTestAggregateAllocation(t, registry, account)
+			require.Zero(t, mp.CurrNB())
+		}()
+
+		require.NoError(t, vector.AppendBytes(
+			initialValue, []byte("initial"), false, mp))
+		initialValue.SetPrepareParamKind(vector.PrepareParamInteger)
+		require.NoError(t, vector.AppendFixed(initialOrder, int64(1), false, mp))
+		require.NoError(t, vector.AppendFixed(initialTie, int64(1), false, mp))
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.Fill(0, 0, []*vector.Vector{
+			initialValue, initialOrder, initialTie,
+		}))
+
+		require.NoError(t, vector.AppendBytes(batchValue, nil, true, mp))
+		require.NoError(t, vector.AppendBytes(batchValue, []byte("float"), false, mp))
+		require.NoError(t, vector.AppendBytes(batchValue, []byte("decimal"), false, mp))
+		require.NoError(t, batchValue.SetPrepareParamKindsWithMP(
+			[]vector.PrepareParamKind{
+				vector.PrepareParamNone,
+				vector.PrepareParamFloat,
+				vector.PrepareParamDecimal,
+			}, mp))
+		for _, order := range []int64{2, 3, 4} {
+			require.NoError(t, vector.AppendFixed(batchOrder, order, false, mp))
+			require.NoError(t, vector.AppendFixed(batchTie, order, false, mp))
+		}
+
+		preflight := any(exec).(BatchCapacityPreflight)
+		err = preflight.PreflightBatchFill(
+			0, []uint64{1, 1, 1},
+			[]*vector.Vector{batchValue, batchOrder, batchTie})
+		admitted := account.Snapshot().Used
+		if err != nil || !publish {
+			return admitted, err
+		}
+		require.NoError(t, exec.BatchFill(
+			0, []uint64{1, 1, 1},
+			[]*vector.Vector{batchValue, batchOrder, batchTie}))
+		require.LessOrEqual(t, account.Snapshot().Used, admitted)
+		require.Equal(t, admitted, account.Snapshot().Peak,
+			"winner publication must not allocate beyond admitted capacity")
+
+		results, flushErr := exec.Flush()
+		if flushErr != nil {
+			return admitted, flushErr
+		}
+		require.Len(t, results, 1)
+		require.Equal(t, "decimal", string(results[0].GetBytesAt(0)))
+		require.Equal(t, vector.PrepareParamDecimal,
+			results[0].GetPrepareParamKindAt(0))
+		results[0].Free(mp)
+		return admitted, nil
+	}
+
+	exact, err := run(128<<20, true)
+	require.NoError(t, err)
+	require.Positive(t, exact)
+	exactAgain, err := run(exact, true)
+	require.NoError(t, err)
+	require.Equal(t, exact, exactAgain)
+	_, err = run(exact-1, false)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -56,7 +57,7 @@ func preparedExecutionBindings(ctx context.Context, values []any, protocolTypes 
 					return nil, moerr.NewInvalidInput(ctx, "prepared parameter has no protocol source type")
 				}
 				mysqlType := defines.MysqlType(protocolTypes[i*2])
-				if param.PrepareParamKind == types.StringConversionBoolean {
+				if param.PrepareParamKind == vector.PrepareParamBoolean {
 					binding.Type = types.T_bool.ToType()
 				} else if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
 					binding.Type, binding.NumericType = param.DirectResultType, param.RuntimeType

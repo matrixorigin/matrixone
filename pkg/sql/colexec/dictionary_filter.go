@@ -414,7 +414,7 @@ func predicateBorrowsInputs(executor ExpressionExecutor) bool {
 			for _, bound := range e.parameterExecutor[1:] {
 				fixed, ok := bound.(*FixedVectorExpressionExecutor)
 				if !ok || fixed.resultVector == nil || !fixed.resultVector.IsConst() ||
-					fixed.resultVector.GetType().Oid != types.T_int64 || fixed.resultVector.HasGrouping() {
+					fixed.resultVector.GetType().Oid != types.T_int64 || fixed.resultVector.HasGrouping() || fixed.resultVector.IsPreparedJSONComparisonParam() {
 					return false
 				}
 			}

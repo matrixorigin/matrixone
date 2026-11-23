@@ -258,7 +258,7 @@ func TestDecimal128ValidityPreservesMultiplyOverflow(t *testing.T) {
 }
 
 func TestDecimal128ValidityMetadataFallback(t *testing.T) {
-	for _, shape := range []string{"cast-grouping"} {
+	for _, shape := range []string{"cast-grouping", "multiply-prepared-json"} {
 		t.Run(shape, func(t *testing.T) {
 			proc, allocation, _ := dependentTestAllocation(t)
 			typ := types.New(types.T_decimal64, 15, 2)
@@ -276,6 +276,8 @@ func TestDecimal128ValidityMetadataFallback(t *testing.T) {
 			if shape == "cast-grouping" {
 				expression = bindTestCast(t, proc, 0, col(0), types.New(types.T_decimal128, 38, 2))
 				input.Vecs[0].GetGrouping().Add(0)
+			} else {
+				input.Vecs[1].SetPreparedJSONComparisonParam()
 			}
 			executor, err := NewExpressionExecutorWithAllocation(proc, expression, allocation)
 			require.NoError(t, err)

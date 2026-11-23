@@ -2300,7 +2300,7 @@ func TestAccountedGroupMaxSpillDepthPreservesCapacityError(t *testing.T) {
 	input.Clean(proc.Mp())
 }
 
-func TestAccountedGroupSpillPreservesVarlenaNullKeys(t *testing.T) {
+func TestAccountedGroupSpillPreservesVarlenaNullAndPrepareKinds(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	const groups = 128
@@ -2316,6 +2316,8 @@ func TestAccountedGroupSpillPreservesVarlenaNullKeys(t *testing.T) {
 		require.NoError(t, vector.AppendBytes(input.Vecs[0], nil, true, proc.Mp()))
 		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("5"), false, proc.Mp()))
 	}
+	input.Vecs[0].SetPrepareParamKind(vector.PrepareParamDecimal)
+	input.Vecs[1].SetPrepareParamKind(vector.PrepareParamFloat)
 	input.SetRowCount(input.Vecs[0].Length())
 
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)},
@@ -2336,8 +2338,14 @@ func TestAccountedGroupSpillPreservesVarlenaNullKeys(t *testing.T) {
 			rows++
 			if result.Batch.Vecs[0].IsNull(uint64(row)) {
 				nulls++
+				require.Equal(t, vector.PrepareParamNone,
+					result.Batch.Vecs[0].GetPrepareParamKindAt(row))
+			} else {
+				require.Equal(t, vector.PrepareParamDecimal,
+					result.Batch.Vecs[0].GetPrepareParamKindAt(row))
 			}
-			require.Equal(t, "5", result.Batch.Vecs[1].GetStringAt(row))
+			require.Equal(t, vector.PrepareParamFloat,
+				result.Batch.Vecs[1].GetPrepareParamKindAt(row))
 		}
 	}
 	require.Equal(t, groups+1, rows)

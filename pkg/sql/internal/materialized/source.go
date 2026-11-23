@@ -1028,7 +1028,7 @@ func spillBatchSizeWithLimit(
 			return 0, 0, err
 		}
 	}
-	metadataBytes, metadataErr := bat.TransportMetadataSize()
+	metadataBytes, metadataErr := bat.PrepareParamKindMetadataSize()
 	if metadataErr != nil {
 		return 0, 0, metadataErr
 	}

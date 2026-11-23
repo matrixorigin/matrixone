@@ -34,12 +34,14 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	}
 	mergeGroup.ctr.groupConcatSourceRowsUntrusted = proc != nil &&
 		!proc.GroupConcatSourceRowProvenanceTrusted()
+	mergeGroup.ctr.prepareParamKind.Reset(mergeGroup.Aggs)
 	mergeGroup.ctr.aggExprs = mergeGroup.Aggs
 	mergeGroup.ctr.warningRetentionLimit = process.WarningDiagnosticRetentionLimitForProcess(proc)
 	mergeGroup.ctr.warningRetentionSet = true
 	mergeGroup.ctr.groupConcatWarnings.SetWarningBudget(
 		process.WarningDiagnosticBudgetForProcess(proc))
-	mergeGroup.ctr.rowMetadataTrailerWire = rowMetadataTrailerWireEnabled(proc)
+	mergeGroup.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
+		hasPrepareParamKindPreservingAgg(mergeGroup.Aggs)
 	mergeGroup.ctr.mp = mpool.MustNewNoLock("merge_group_mpool")
 	if mergeGroup.ctr.allocationAccount != nil {
 		var err error
@@ -578,17 +580,17 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 		if err := ctr.spillAggList[i].UnmarshalFromReader(reader, ctr.mp); err != nil {
 			return err
 		}
-		if vec := aggResultVectorForChunk(ctr.spillAggList[i], 0); vec != nil &&
+		if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
 			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
 			return moerr.NewInvalidStateNoCtx(
 				"aggregate binary-string metadata requires MORPCVersion18")
 		}
-		if vec := aggResultVectorForChunk(ctr.spillAggList[i], 0); vec != nil &&
+		if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
 			vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
 			return moerr.NewInvalidStateNoCtx(
 				"aggregate explicit-text metadata requires MORPCVersion23")
 		}
-		if vec := aggResultVectorForChunk(ctr.spillAggList[i], 0); vec != nil &&
+		if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
 			vec.HasStringSourceMetadata() && !stringSourceWireEnabled(proc) {
 			return moerr.NewInvalidStateNoCtx(
 				"aggregate string source metadata requires MORPCVersion37")
@@ -598,14 +600,13 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 			return err
 		}
 	}
-	if reader.Len() > 0 {
-		// Only older writers append the retired row-metadata trailer.
-		if !ctr.rowMetadataTrailerWire {
-			return moerr.NewInvalidStateNoCtx(
-				"aggregate row metadata trailer requires MORPCVersion12")
-		}
-		if err := mergeGroup.discardPartialRowMetadataTrailer(
-			proc, reader); err != nil {
+	if !ctr.prepareParamKindWireV1 && reader.Len() > 0 {
+		return moerr.NewInvalidStateNoCtx(
+			"prepared parameter aggregate trailer requires MORPCVersion12")
+	}
+	if ctr.prepareParamKindWireV1 && reader.Len() > 0 {
+		if err := mergeGroup.restorePartialPrepareParamKinds(
+			proc, reader, nAggs); err != nil {
 			return err
 		}
 	}
@@ -755,27 +756,43 @@ func validateMergeGroupColumnTypes(
 	return nil
 }
 
-func (mergeGroup *MergeGroup) discardPartialRowMetadataTrailer(
+func (mergeGroup *MergeGroup) restorePartialPrepareParamKinds(
 	proc *process.Process,
 	reader *bytes.Reader,
+	nAggs int32,
 ) error {
 	ctr := &mergeGroup.ctr
-	expectedRows := make([]int, len(ctr.spillAggList))
+	targets := make([]prepareParamKindRowsTarget, len(ctr.spillAggList))
 	for i, ag := range ctr.spillAggList {
-		expectedRows[i] = ag.GetNumGroups()
+		targets[i] = prepareParamKindChunkTarget(ag, 0)
 	}
-	if err := readRowMetadataTrailer(
+	summaries, err := readPrepareParamKindTrailer(
 		proc.Ctx,
 		reader,
-		expectedRows,
+		nAggs,
+		&ctr.prepareParamKind,
+		targets,
+		ctr.mp,
 		binaryStringWireEnabled(proc),
 		explicitTextWireEnabled(proc),
-	); err != nil {
+	)
+	if err != nil {
 		return err
 	}
 	if reader.Len() != 0 {
 		return moerr.NewInternalErrorNoCtx(
-			"unexpected aggregate row metadata trailer bytes")
+			"unexpected aggregate prepared parameter trailer bytes")
+	}
+	for i, agg := range ctr.spillAggList {
+		if i >= len(mergeGroup.Aggs) ||
+			!mergeGroup.Aggs[i].PreservesFirstArgPrepareParamKind() {
+			continue
+		}
+		if !summaries[i].rows {
+			if summaries[i].seen {
+				agg.SetPrepareParamKind(summaries[i].kind)
+			}
+		}
 	}
 	return nil
 }

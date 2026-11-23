@@ -530,7 +530,7 @@ func (s *fillSpill) writeRecord(
 	wire.Recursive = bat.Recursive
 	wire.ShuffleIDX = bat.ShuffleIDX
 	wire.SetRowCount(bat.RowCount())
-	payloadSize, err := wire.MarshalBinaryWithMetadataSize()
+	payloadSize, err := wire.MarshalBinaryWithPrepareParamKindsSize()
 	if err != nil {
 		return 0, err
 	}
@@ -541,7 +541,7 @@ func (s *fillSpill) writeRecord(
 	if err = writeFillBytes(file.writer, types.EncodeInt64(&size)); err != nil {
 		return 0, err
 	}
-	if err = wire.MarshalBinaryWithMetadataTo(file.writer); err != nil {
+	if err = wire.MarshalBinaryWithPrepareParamKindsTo(file.writer); err != nil {
 		return 0, err
 	}
 	if err = writeFillBytes(file.writer, types.EncodeInt64(&size)); err != nil {
@@ -617,7 +617,7 @@ func (s *fillSpill) readRecordReverse(
 		reuse.CleanOnlyData()
 	}
 	section := io.NewSectionReader(fd, start+8, size)
-	if err := reuse.UnmarshalFromReaderWithMetadataForSpill(section, size, mp); err != nil {
+	if err := reuse.UnmarshalFromReaderWithPrepareParamKindsForSpill(section, size, mp); err != nil {
 		if allocated {
 			reuse.Clean(mp)
 		}

@@ -217,7 +217,7 @@ func getExprValueWithPrepareMeta(
 	execCtx *ExecCtx,
 	preparedExpression bool,
 	materializedResult **plan.Expr,
-	prepareParamKind *types.StringConversionKind,
+	prepareParamKind *vector.PrepareParamKind,
 	runtimeDomain *types.RuntimeStringDomain,
 	isBin ...*bool,
 ) (interface{}, plan.Type, error) {
@@ -234,7 +234,7 @@ func getExprValueWithPrepareMeta(
 			*isBin[0] = false
 		}
 		if prepareParamKind != nil {
-			*prepareParamKind = types.StringConversionString
+			*prepareParamKind = vector.PrepareParamNone
 		}
 		return v.ColName(), plan.Type{Id: int32(types.T_text)}, nil
 	}
@@ -346,11 +346,14 @@ func getExprValueWithPrepareMeta(
 		*runtimeDomain = resultVec.GetRuntimeStringDomainAt(0)
 	}
 	if prepareParamKind != nil {
-		*prepareParamKind, err = transparentPrepareParamKind(e, ses)
-		if err != nil {
-			return nil, plan.Type{}, err
+		*prepareParamKind = resultVec.GetPrepareParamKind()
+		if *prepareParamKind == vector.PrepareParamNone {
+			*prepareParamKind, err = transparentPrepareParamKind(e, ses)
+			if err != nil {
+				return nil, plan.Type{}, err
+			}
 		}
-		if *prepareParamKind == types.StringConversionString {
+		if *prepareParamKind == vector.PrepareParamNone {
 			*prepareParamKind = prepareParamKindFromType(resultVec.GetType().Oid)
 		}
 	}
@@ -578,7 +581,7 @@ func getPreparedPlanExprValueWithSubqueries(
 	specializedExpr *plan.Expr,
 	ses *Session,
 	execCtx *ExecCtx,
-	prepareParamKind *types.StringConversionKind,
+	prepareParamKind *vector.PrepareParamKind,
 	runtimeDomain *types.RuntimeStringDomain,
 	isBin *bool,
 ) (interface{}, plan.Type, error) {
@@ -586,7 +589,7 @@ func getPreparedPlanExprValueWithSubqueries(
 	collectScalarSubqueries(astExpr, &subqueries)
 	replacements := make([]*plan.Expr, len(subqueries))
 	for i, subquery := range subqueries {
-		var subqueryKind types.StringConversionKind
+		var subqueryKind vector.PrepareParamKind
 		var subqueryIsBin bool
 		_, _, err := getExprValueWithPrepareMeta(
 			subquery, ses, execCtx, true, &replacements[i], &subqueryKind, nil, &subqueryIsBin)
@@ -621,7 +624,7 @@ func getPreparedPlanExprValueWithMeta(
 	expr *plan.Expr,
 	ses *Session,
 	execCtx *ExecCtx,
-	prepareParamKind *types.StringConversionKind,
+	prepareParamKind *vector.PrepareParamKind,
 	runtimeDomain *types.RuntimeStringDomain,
 	isBin *bool,
 ) (interface{}, plan.Type, error) {
@@ -646,7 +649,10 @@ func getPreparedPlanExprValueWithMeta(
 		*runtimeDomain = result.GetRuntimeStringDomainAt(0)
 	}
 	if prepareParamKind != nil {
-		*prepareParamKind = prepareParamKindFromType(result.GetType().Oid)
+		*prepareParamKind = result.GetPrepareParamKind()
+		if *prepareParamKind == vector.PrepareParamNone {
+			*prepareParamKind = prepareParamKindFromType(result.GetType().Oid)
+		}
 	}
 	value, err := getValueFromVector(execCtx.reqCtx, result, ses, expr)
 	return value, plan2.MakePlan2Type(result.GetType()), err
@@ -657,7 +663,7 @@ func getPreparedPlanExprValueWithMeta(
 // source conversion category even if projection materialization drops vector-
 // local metadata. Parentheses are transparent; casts and other expressions are
 // intentionally not, because their result type defines the conversion category.
-func transparentPrepareParamKind(e tree.Expr, ses *Session) (types.StringConversionKind, error) {
+func transparentPrepareParamKind(e tree.Expr, ses *Session) (vector.PrepareParamKind, error) {
 	for {
 		switch expr := e.(type) {
 		case *tree.ParenExpr:
@@ -667,19 +673,14 @@ func transparentPrepareParamKind(e tree.Expr, ses *Session) (types.StringConvers
 			// Parser ordinals are one-based; the normalized plan/process positions
 			// are zero-based (see decrementParamOrdinalRule).
 			if proc == nil || expr.Offset <= 0 {
-				return types.StringConversionString, nil
+				return vector.PrepareParamNone, nil
 			}
-			typed := proc.GetTypedPrepareParam(expr.Offset - 1)
-			if typed == nil {
-				return types.StringConversionString, nil
-			}
-			kind, _ := types.StringConversionKindForType(typed.GetType().Oid)
-			return kind, nil
+			return proc.GetPrepareParamKind(expr.Offset - 1), nil
 		case *tree.VarExpr:
 			return ses.GetTxnCompileCtx().ResolveVariablePrepareParamKind(
 				expr.Name, expr.System, expr.Global)
 		default:
-			return types.StringConversionString, nil
+			return vector.PrepareParamNone, nil
 		}
 	}
 }

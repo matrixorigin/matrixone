@@ -28,6 +28,24 @@ import (
 )
 
 func TestCapacityPreflightMetadataHelperBoundaries(t *testing.T) {
+	var events [hashmap.UnitLimit]prepareParamKindEvent
+	eventCount := 0
+	require.ErrorIs(t, addPrepareParamKindEvent(
+		&events, &eventCount, -1, 0, 0, vector.PrepareParamInteger),
+		mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, addPrepareParamKindEvent(
+		&events, &eventCount, 0, -1, 0, vector.PrepareParamInteger),
+		mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, addPrepareParamKindEvent(
+		&events, &eventCount, 0, 0, -1, vector.PrepareParamInteger),
+		mpool.ErrAllocationAccountInvalid)
+	require.NoError(t, addPrepareParamKindEvent(
+		&events, &eventCount, 0, 0, 0, vector.PrepareParamInteger))
+	eventCount = len(events)
+	require.ErrorIs(t, addPrepareParamKindEvent(
+		&events, &eventCount, 0, 0, 0, vector.PrepareParamInteger),
+		mpool.ErrAllocationAccountInvalid)
+
 	var areaNeeds [hashmap.UnitLimit]vectorAreaChunkCapacity
 	areaCount := 0
 	require.NoError(t, addVectorAreaCapacity(
@@ -116,6 +134,20 @@ func TestCapacityPreflightHelperApplicationAndJSONPaths(t *testing.T) {
 	anyAggregate := makeExec(AggIdOfAny, types.T_varchar.ToType())
 	require.NoError(t, anyAggregate.GroupGrow(1))
 	base := anyAggregate.(aggregateBaseCarrier).aggregateBase()
+	var events [hashmap.UnitLimit]prepareParamKindEvent
+	eventCount := 0
+	require.NoError(t, addPrepareParamKindEvent(
+		&events, &eventCount, 0, 0, 0, vector.PrepareParamInteger))
+	require.NoError(t, addPrepareParamKindEvent(
+		&events, &eventCount, 0, 0, 0, vector.PrepareParamFloat))
+	require.NoError(t, base.applyPrepareParamKindEvents(&events, eventCount))
+	events[0].chunk = 9
+	require.ErrorIs(t, base.applyPrepareParamKindEvents(&events, 1),
+		mpool.ErrAllocationAccountInvariant)
+	events[0] = prepareParamKindEvent{chunk: 0, column: 9, row: 0}
+	require.ErrorIs(t, base.applyPrepareParamKindEvents(&events, 1),
+		mpool.ErrAllocationAccountInvariant)
+
 	var sourceEvents [hashmap.UnitLimit]stringSourceEvent
 	sourceEvents[0] = stringSourceEvent{
 		chunk: 0, column: 0, row: 0, source: types.StringSourceLiteral,

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
@@ -42,25 +43,25 @@ func TestPreparedGetLockTimeoutPreservesRuntimeType(t *testing.T) {
 	}{
 		{
 			name:         "decimal half-up domain",
-			timeout:      ParamValue{Value: "0.5", PrepareParamKind: types.StringConversionDecimal},
+			timeout:      ParamValue{Value: "0.5", PrepareParamKind: vector.PrepareParamDecimal},
 			wantArgType:  types.T_decimal64,
 			wantOverload: 1,
 		},
 		{
 			name:         "double ties-to-even domain",
-			timeout:      ParamValue{Value: "0.5", PrepareParamKind: types.StringConversionFloat},
+			timeout:      ParamValue{Value: "0.5", PrepareParamKind: vector.PrepareParamFloat},
 			wantArgType:  types.T_float64,
 			wantOverload: 0,
 		},
 		{
 			name:         "integer keeps the historical double coercion",
-			timeout:      ParamValue{Value: "2", PrepareParamKind: types.StringConversionInteger},
+			timeout:      ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
 			wantArgType:  types.T_float64,
 			wantOverload: 0,
 		},
 		{
 			name:         "decimal after double does not reuse stale metadata",
-			timeout:      ParamValue{Value: "1.25", PrepareParamKind: types.StringConversionDecimal},
+			timeout:      ParamValue{Value: "1.25", PrepareParamKind: vector.PrepareParamDecimal},
 			wantArgType:  types.T_decimal64,
 			wantOverload: 1,
 		},
