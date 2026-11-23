@@ -97,6 +97,174 @@ func TestIcebergDeleteBuildsDMLWriteIntent(t *testing.T) {
 	}
 }
 
+// Review #6018431168: the specialized Iceberg DELETE builder must record the
+// statement's own DML write provenance so an explicit radix CAST inside a
+// WHERE predicate rides the write conversion policy when the plan executes:
+// a loose session clips at the cast's own declared bound with exactly one
+// 1264, while a strict statement keeps the typed 20301 rejection.
+func TestIcebergDeleteRadixCastWritePolicy(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	ctx.tables["gold_orders"].Cols = append(ctx.tables["gold_orders"].Cols,
+		&planpb.ColDef{
+			Name:    "d",
+			Typ:     planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2, Table: "gold_orders"},
+			Default: &planpb.Default{NullAbility: true},
+		},
+	)
+	proc := ctx.GetProcess()
+	require.NotNil(t, proc, "the Iceberg fixture must bind with a real process")
+	stmt, err := mysql.ParseOne(context.Background(),
+		"delete from gold_orders where d = cast(0x1000 as decimal(4,1))", 1)
+	require.NoError(t, err, "parse the specialized Iceberg DELETE")
+	p, err := buildIcebergDeletePlan(stmt.(*tree.Delete), ctx, false)
+	require.NoError(t, err, "the specialized Iceberg DELETE must plan")
+	query := p.GetQuery()
+	// Locate the whole equality predicate (the filter expr that owns the
+	// radix literal), the cast chain itself, and the column position it
+	// references, so the typed predicate can be executed over row values.
+	var predicateExpr, radixCast *Expr
+	var capPos int32
+	var search func(bucket, e *Expr) bool
+	search = func(bucket, e *Expr) bool {
+		if e == nil {
+			return false
+		}
+		if lit := e.GetLit(); lit != nil && lit.GetSval() == "4096" {
+			predicateExpr = bucket
+			return true
+		}
+		if f := e.GetF(); f != nil {
+			if bucket == nil {
+				bucket = e
+			}
+			for _, arg := range f.Args {
+				if search(bucket, arg) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, node := range query.GetNodes() {
+		for _, predicate := range append(append([]*Expr{}, node.GetFilterList()...), node.GetProjectList()...) {
+			if search(nil, predicate) {
+				break
+			}
+		}
+		if predicateExpr != nil {
+			break
+		}
+	}
+	require.NotNil(t, predicateExpr, "the delete predicate must stay a whole filter expression")
+	require.NotNil(t, predicateExpr.GetF(), "the predicate must stay an executable comparison")
+	// The literal sits at the innermost cast of the assignment chain
+	// (eq -> outer cast_ignore -> inner cast_ignore -> operand), so locate the
+	// cast node by full recursion rather than one level of args.
+	var locate func(e *Expr) *Expr
+	locate = func(e *Expr) *Expr {
+		if e == nil {
+			return nil
+		}
+		if f := e.GetF(); f != nil {
+			for _, subArg := range f.Args {
+				if subArg.GetLit() != nil && subArg.GetLit().GetSval() == "4096" {
+					return e
+				}
+				if found := locate(subArg); found != nil {
+					return found
+				}
+			}
+		}
+		return nil
+	}
+	for _, arg := range predicateExpr.GetF().Args {
+		if col := arg.GetCol(); col != nil {
+			capPos = col.ColPos
+		}
+		if found := locate(arg); found != nil {
+			radixCast = found
+		}
+	}
+	require.NotNil(t, radixCast, "the delete predicate must keep the bound radix cast")
+	require.NotNil(t, radixCast.GetF(), "the cast must stay an executable write-policy cast")
+	require.GreaterOrEqual(t, capPos, int32(0), "the predicate must reference the d column")
+	// executePredicate evaluates the typed whole predicate over decimal rows:
+	// the loose clip keeps the cap-matching row selectable while the
+	// nonmatching rows stay untouched; the strict mode rejects instead.
+	executePredicate := func(mode string, values []types.Decimal64, want []bool) {
+		executor, err := colexec.NewExpressionExecutor(proc, predicateExpr)
+		require.NoError(t, err, "must construct the whole-predicate executor")
+		defer executor.Free()
+		sink := &loadAssignmentWarningSink{}
+		proc.WarningSink = sink
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return mode, nil })
+		input := batch.NewWithSize(int(capPos) + 1)
+		for i := range input.Vecs {
+			if int32(i) == capPos {
+				input.Vecs[i] = vector.NewVec(types.T_decimal64.ToTypeWithScale(2), proc.Mp())
+			} else {
+				input.Vecs[i] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+			}
+		}
+		for _, v := range values {
+			require.NoError(t, vector.AppendFixed[types.Decimal64](input.Vecs[capPos], v, false, proc.Mp()))
+			for i := range input.Vecs {
+				if int32(i) != capPos {
+					require.NoError(t, vector.AppendFixed[int64](input.Vecs[i], 1, false, proc.Mp()))
+				}
+			}
+		}
+		input.SetRowCount(len(values))
+		defer func() {
+			for _, vec := range input.Vecs {
+				vec.Free(proc.Mp())
+			}
+		}()
+		result, evalErr := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, evalErr, "the whole predicate must execute")
+		require.Equal(t, len(want), result.Length(), "one selection per row")
+		require.Equal(t, want, vector.MustFixedColWithTypeCheck[bool](result),
+			"the typed predicate selects exactly the cap-matching rows")
+	}
+	// The loose row-selection oracle: the cap-matching row stays deletable
+	// while the in-range and nonmatching rows are not selected.
+	executePredicate("", []types.Decimal64{99990, 100, 4060}, []bool{true, false, false})
+
+	execute := func(mode string, check func(*vector.Vector, []uint16, error)) {
+		executor, cerr := colexec.NewExpressionExecutor(proc, radixCast)
+		require.NoError(t, cerr, "must construct the predicate cast executor")
+		defer executor.Free()
+		sink := &loadAssignmentWarningSink{}
+		proc.WarningSink = sink
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return mode, nil })
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewVec(types.T_decimal64.ToType(), proc.Mp())
+		require.NoError(t, vector.AppendFixed[types.Decimal64](input.Vecs[0], types.Decimal64(0), false, proc.Mp()))
+		input.SetRowCount(1)
+		defer input.Clean(proc.Mp())
+		result, evalErr := executor.Eval(proc, []*batch.Batch{input}, nil)
+		check(result, sink.codes, evalErr)
+	}
+
+	execute("", func(result *vector.Vector, codes []uint16, err error) {
+		require.NoError(t, err, "the loose predicate cast must execute")
+		require.NotNil(t, result)
+		require.Equal(t, int32(1), result.GetType().Scale, "the cast keeps its own declared scale")
+		require.Equal(t, int32(4), result.GetType().Width, "the cast keeps its own declared width")
+		require.Equal(t, types.Decimal64(9999),
+			vector.GetFixedAtWithTypeCheck[types.Decimal64](result, 0),
+			"the loose predicate clips at the cast's own bound 999.9")
+		require.Equal(t, []uint16{moerr.ER_WARN_DATA_OUT_OF_RANGE}, codes,
+			"the clipped predicate cast reports exactly one 1264")
+	})
+	execute("STRICT_TRANS_TABLES", func(result *vector.Vector, codes []uint16, err error) {
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput),
+			"the strict predicate keeps the typed 20301 rejection, got %v", err)
+		require.Nil(t, result, "a rejected predicate cast produces no value")
+		require.Empty(t, codes, "a typed rejection emits no warning")
+	})
+}
+
 // TestIcebergUpdateRadixCastWritePolicy evaluates the replacement expression
 // built by the specialized Iceberg UPDATE planner. It verifies that the inner
 // DECIMAL cast uses the statement's IGNORE or strict write policy.

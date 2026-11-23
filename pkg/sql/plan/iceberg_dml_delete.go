@@ -132,6 +132,13 @@ func buildIcebergDeletePlan(stmt *tree.Delete, ctx CompilerContext, isPrepareStm
 	}
 
 	builder := NewQueryBuilder(plan.Query_DELETE, ctx, isPrepareStmt, false)
+	// Mirror bindDelete: this builder owns a DML write, so an explicit radix
+	// CAST inside a DELETE predicate rides the statement's write conversion
+	// policy (a loose session clips at the cast's own bound with the
+	// established warning; a strict session rejects) instead of the
+	// standalone scalar range rejection. DELETE has no statement-ignore bit
+	// in that routing.
+	builder.isBindingDMLWrite = true
 	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {

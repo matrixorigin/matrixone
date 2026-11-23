@@ -547,3 +547,211 @@ func TestIssue31816StoredUdfBodyCompatibility(t *testing.T) {
 		})
 	})
 }
+
+// Review #6018431168 regressions: a release-authored procedure body keeps the
+// historical persisted-coefficient binding for syntax-owned radix literals;
+// the saved-UDF compatibility scope leaves FORMAT's overload alone; and the
+// legacy multi-target DELETE, INSERT ALL and specialized Iceberg DELETE keep
+// their statement-owned write conversion for an explicit radix CAST.
+func TestIssue31816Review6018431168Regressions(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		rootCtx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", port))
+		require.NoError(t, err)
+		defer db.Close()
+		defer func() {
+			dropCtx, dropCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer dropCancel()
+			if _, derr := db.ExecContext(dropCtx, "drop database if exists issue_31816_rv"); derr != nil {
+				t.Errorf("issue31816 rv cleanup drop failed: %v", derr)
+			}
+		}()
+		conn, err := db.Conn(rootCtx)
+		require.NoError(t, err)
+		defer conn.Close()
+		execOK := func(t *testing.T, stmt string) {
+			t.Helper()
+			_, err := conn.ExecContext(rootCtx, stmt)
+			require.NoError(t, err)
+		}
+		valueOf := func(t *testing.T, name, query string) string {
+			t.Helper()
+			var v sql.NullString
+			require.NoError(t, conn.QueryRowContext(rootCtx, query).Scan(&v), name)
+			require.True(t, v.Valid, name)
+			return v.String
+		}
+		execMode := func(t *testing.T, mode, stmt string) error {
+			t.Helper()
+			modeReset := "''"
+			if mode != "" {
+				modeReset = "'" + mode + "'"
+			}
+			_, modeErr := conn.ExecContext(rootCtx, "set sql_mode="+modeReset)
+			require.NoError(t, modeErr)
+			_, eerr := conn.ExecContext(rootCtx, stmt)
+			return eerr
+		}
+		execOK(t, "create database if not exists issue_31816_rv")
+		execOK(t, "use issue_31816_rv")
+
+		t.Run("procedure_saved_body_keeps_released_coefficient", func(t *testing.T) {
+			execOK(t, "drop procedure if exists p_narrow")
+			execOK(t, "create procedure p_narrow() 'select cast(X''41'' as decimal(4,4)) as v'")
+			require.Equal(t, "0.0065", valueOf(t, "proc_narrow", "call p_narrow()"),
+				"a release-authored narrow body keeps the released coefficient binding")
+			execOK(t, "drop procedure if exists p_wide")
+			execOK(t, "create procedure p_wide() 'select cast(X''41'' as decimal(6,4)) as v'")
+			require.Equal(t, "0.0065", valueOf(t, "proc_wide", "call p_wide()"),
+				"a release-authored wider body keeps the released coefficient binding")
+			execOK(t, "drop procedure if exists p_arg")
+			execOK(t, "create procedure p_arg(in x decimal(6,4)) 'select x as v'")
+			require.Equal(t, "65.0000", valueOf(t, "proc_call_site_arg",
+				"call p_arg(cast(X'41' as decimal(6,4)))"),
+				"the call-site argument expression keeps the direct magnitude route")
+			require.Equal(t, "65.0000", valueOf(t, "after_proc_body_direct",
+				"select cast(X'41' as decimal(6,4))"),
+				"the direct interactive route stays magnitude after saved-body execution")
+			execOK(t, "drop procedure if exists p_bad")
+			execOK(t, "create procedure p_bad() 'select nosuchcol from nosuchtable'")
+			_, berr := conn.ExecContext(rootCtx, "call p_bad()")
+			require.Error(t, berr, "a failing saved body surfaces its own error")
+			require.Equal(t, "65.0000", valueOf(t, "after_proc_error_direct",
+				"select cast(X'41' as decimal(6,4))"),
+				"the direct route stays magnitude after a failed saved-body call")
+		})
+
+		t.Run("compound_saved_body_cond_and_set", func(t *testing.T) {
+			// The compound saved body routes its DECLARE default, its SET arms
+			// and its reparsed IF condition through the procedure
+			// interpreter's own expression/condition owners, so every arm
+			// keeps the release coefficient binding for the radix literal.
+			execOK(t, "drop procedure if exists p_compound")
+			execOK(t, "create procedure p_compound() 'begin declare x decimal(4,4) default cast(X''41'' as decimal(4,4)); if x = 0.0065 then select 1 as hit; else select 0 as hit; end if; end'")
+			require.Equal(t, "1", valueOf(t, "compound_if_hit",
+				"call p_compound()"),
+				"the DECLARE default and the reparsed IF condition keep the release coefficient binding")
+			execOK(t, "drop procedure if exists p_setarm")
+			execOK(t, "create procedure p_setarm() 'begin declare x decimal(4,4); set x = cast(X''41'' as decimal(4,4)); select x as v; end'")
+			require.Equal(t, "0.0065", valueOf(t, "compound_set_arm",
+				"call p_setarm()"),
+				"the custom-variable SET arm keeps the release coefficient binding")
+			execOK(t, "drop procedure if exists p_userarm")
+			execOK(t, "create procedure p_userarm() 'begin set @u = cast(X''41'' as decimal(4,4)); select @u as v; end'")
+			require.Equal(t, "0.0065", valueOf(t, "compound_user_set_arm",
+				"call p_userarm()"),
+				"the user-variable SET arm keeps the release coefficient binding")
+			// Nested saved-body CALL: ExecuteSp latches the outer saved
+			// statement's context before the local scope, so the nested
+			// actual argument is itself release-authored saved text and
+			// keeps the observed saved-body coefficient binding. The
+			// top-level CALL site outside procedures stays magnitude
+			// (asserted above via p_arg).
+			execOK(t, "drop procedure if exists p_inner")
+			execOK(t, "create procedure p_inner(in x decimal(6,4)) 'begin select x as v; end'")
+			execOK(t, "drop procedure if exists p_nested")
+			execOK(t, "create procedure p_nested() 'begin call p_inner(cast(X''41'' as decimal(6,4))); end'")
+			require.Equal(t, "0.0065", valueOf(t, "nested_call_saved_text_arg",
+				"call p_nested()"),
+				"the nested saved-body actual argument keeps the observed saved-body coefficient binding")
+		})
+		t.Run("cond_direct_radix_and_bounded_repeat", func(t *testing.T) {
+			// The radix literal sits directly in the reparsed IF condition,
+			// so this CALL discriminates EvalCond's saved-body binding: with
+			// the marker removed the condition would bind the magnitude and
+			// miss the branch.
+			execOK(t, "drop procedure if exists p_cond")
+			execOK(t, "create procedure p_cond() 'begin if cast(X''41'' as decimal(4,4)) = 0.0065 then select 1 as hit; else select 0 as hit; end if; end'")
+			require.Equal(t, "1", valueOf(t, "cond_direct_radix_hit",
+				"call p_cond()"),
+				"a direct radix literal inside the IF condition keeps the release coefficient binding")
+			// Bounded context ownership: repeated SET evaluations in one
+			// procedure keep the value stable, so a retained wrapper chain
+			// would surface as corrupted scope reads instead of the reused
+			// result.
+			execOK(t, "drop procedure if exists p_repeat")
+			execOK(t, "create procedure p_repeat() 'begin declare i int default 0; declare x decimal(4,4); while i < 20 do set x = cast(X''41'' as decimal(4,4)); set i = i + 1; end while; select x as v; end'")
+			require.Equal(t, "0.0065", valueOf(t, "bounded_repeat_set_value",
+				"call p_repeat()"),
+				"repeated saved-body SET evaluations keep the release coefficient without scope corruption")
+			require.Equal(t, "65.0000", valueOf(t, "cond_subtest_direct_reuse",
+				"select cast(X'41' as decimal(6,4))"),
+				"the direct route stays magnitude after saved-condition execution")
+		})
+		t.Run("scalar_udf_format_keeps_overload", func(t *testing.T) {
+			execOK(t, "drop function if exists fsfmt ()")
+			execOK(t, "create function fsfmt () returns varchar language sql as 'format(2.5,0)'")
+			require.Equal(t, "3", valueOf(t, "udf_scalar_format", "select fsfmt()"),
+				"a scalar saved body keeps FORMAT's existing overload")
+			execOK(t, "drop function if exists fselfmt ()")
+			execOK(t, "create function fselfmt () returns varchar language sql as 'select format(2.5,0)'")
+			require.Equal(t, "3", valueOf(t, "udf_select_format", "select fselfmt()"),
+				"a SELECT saved body keeps FORMAT's existing overload")
+			require.Equal(t, "3", valueOf(t, "ordinary_format", "select format(2.5,0)"),
+				"an ordinary FORMAT control is unchanged")
+		})
+
+		t.Run("alternate_write_routes_keep_write_policy", func(t *testing.T) {
+			execOK(t, "drop table if exists wdel")
+			execOK(t, "drop table if exists wsrc")
+			execOK(t, "create table wdel(id int primary key, d decimal(10,2))")
+			execOK(t, "create table wsrc(id int primary key, x int)")
+			execOK(t, "insert into wdel values (1, 999.90), (2, 1.00), (3, 40.60)")
+			execOK(t, "insert into wsrc values (1, 1), (2, 2), (3, 3)")
+			deleteSQL := "delete wdel from wdel, wsrc where wdel.id = wsrc.id and wdel.d = cast(0x1000 as decimal(4,1))"
+			// Loose: the predicate clips at the CAST's own bound, so exactly the
+			// cap-matching row is deleted, the in-range and nonmatching rows
+			// survive, and the retained warning code is exactly 1264.
+			require.NoError(t, execMode(t, "", deleteSQL),
+				"a loose multi-target DELETE clips at the cast's own bound")
+			// The retained warning surface for these write routes is the direct
+			// @@warning_count read - the engine resets it on every subsequent
+			// statement and SHOW WARNINGS enumerates no rows for them (both
+			// observed in the phase receipts) - so read it immediately after
+			// the write, before the row-semantics queries. The clip warns once
+			// per joined row, so the three-row join retains three warnings.
+			var looseDeleteWarnings sql.NullString
+			require.NoError(t, conn.QueryRowContext(rootCtx, "select @@warning_count").Scan(&looseDeleteWarnings))
+			require.Equal(t, "3", looseDeleteWarnings.String,
+				"the loose multi-target DELETE retains the per-row clip warnings for its three joined rows")
+			require.Equal(t, "2", valueOf(t, "loose_delete_survivors",
+				"select count(*) from wdel"))
+			require.Equal(t, "0", valueOf(t, "loose_delete_matching_row_gone",
+				"select count(*) from wdel where d = 999.90"))
+			// Strict: the same statement keeps the typed rejection and leaves
+			// every row untouched (strict diagnostics stay separate from the
+			// loose range warning above).
+			strictDeleteErr := execMode(t, "STRICT_TRANS_TABLES", deleteSQL)
+			require.Error(t, strictDeleteErr, "a strict multi-target DELETE keeps the typed rejection")
+			var strictDeleteNum *mysql.MySQLError
+			require.ErrorAs(t, strictDeleteErr, &strictDeleteNum)
+			require.Equal(t, uint16(20301), strictDeleteNum.Number, "typed out-of-range rejection")
+			require.Equal(t, "2", valueOf(t, "strict_delete_rows_unchanged",
+				"select count(*) from wdel"))
+			// INSERT ALL rides the same write conversion in a loose session,
+			// storing the clipped value with exactly one 1264; strict rejects
+			// without inserting.
+			require.NoError(t, execMode(t, "",
+				"insert all into wdel(id, d) select 9, cast(0x1000 as decimal(4,1)) as d"),
+				"a loose INSERT ALL clips at the cast's own bound")
+			var looseInsertAllWarnings sql.NullString
+			require.NoError(t, conn.QueryRowContext(rootCtx, "select @@warning_count").Scan(&looseInsertAllWarnings))
+			require.Equal(t, "1", looseInsertAllWarnings.String,
+				"the loose INSERT ALL retains exactly one clip warning for its single written row")
+			require.Equal(t, "999.90", valueOf(t, "insert_all_clipped_row",
+				"select d from wdel where id = 9"))
+			strictInsertErr := execMode(t, "STRICT_TRANS_TABLES",
+				"insert all into wdel(id, d) select 10, cast(0x1000 as decimal(4,1)) as d")
+			require.Error(t, strictInsertErr, "a strict INSERT ALL keeps the typed rejection")
+			var strictInsertNum *mysql.MySQLError
+			require.ErrorAs(t, strictInsertErr, &strictInsertNum)
+			require.Equal(t, uint16(20301), strictInsertNum.Number, "typed out-of-range rejection")
+			require.Equal(t, "0", valueOf(t, "strict_insert_all_not_stored",
+				"select count(*) from wdel where id = 10"))
+		})
+	})
+}

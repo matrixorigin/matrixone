@@ -94,9 +94,22 @@ func (interpreter *Interpreter) storedProcedureContext() context.Context {
 }
 
 func (interpreter *Interpreter) evaluateStoredProcedureExpr(e tree.Expr, targetType *plan.Type) (interface{}, error) {
-	ctx := interpreter.storedProcedureContext()
-	interpreter.ctx = ctx
-	return interpreter.evaluateExprInContext(ctx, e, targetType)
+	// Bound ownership: keep only the base procedure-scoped context on the
+	// interpreter. storedProcedureContext returns interpreter.ctx while the
+	// variable-scope pointers are unchanged, so persisting a wrapped context
+	// here would retain one more wrapper on every repeated SET in a loop;
+	// the marker rides a temporary context handed to the evaluation alone
+	// (the same statement-local shape EvalCond uses), and the compile
+	// context is still restored by evaluateExprInContext's deferred
+	// cleanup.
+	interpreter.ctx = interpreter.storedProcedureContext()
+	savedBodyCtx := context.WithValue(interpreter.ctx, defines.SavedSpBodyKey{}, true)
+	// Static saved-body expressions - DECLARE defaults and both SET arms,
+	// including the @-variable arm routed through
+	// GetSimpleExprValueWithSpVar - are release-authored text, so a
+	// syntax-owned radix DECIMAL literal keeps the historical
+	// persisted-coefficient binding here.
+	return interpreter.evaluateExprInContext(savedBodyCtx, e, targetType)
 }
 
 func (interpreter *Interpreter) evaluateExprInContext(ctx context.Context, e tree.Expr, targetType *plan.Type) (interface{}, error) {
@@ -142,11 +155,16 @@ func (interpreter *Interpreter) GetStatementString(input tree.Statement) string 
 func (interpreter *Interpreter) executeSQL(sql string) (SpStatus, error) {
 	interpreter.bh.ClearExecResultSet()
 	interpreter.ctx = interpreter.storedProcedureContext()
-	if err := interpreter.bh.Exec(interpreter.ctx, sql); err != nil {
+	// executeSQL's only caller executes the procedure's persisted body text,
+	// so mark this compilation as a saved-body statement: a syntax-owned
+	// HEX/BIT literal inside it must keep the historical persisted-coefficient
+	// binding, while the CALL-site argument statements bind unchanged.
+	savedBodyCtx := context.WithValue(interpreter.ctx, defines.SavedSpBodyKey{}, true)
+	if err := interpreter.bh.Exec(savedBodyCtx, sql); err != nil {
 		return SpNotOk, err
 	}
 	interpreter.recordAffectedRows()
-	erArray, err := getResultSet(interpreter.ctx, interpreter.bh)
+	erArray, err := getResultSet(savedBodyCtx, interpreter.bh)
 	if err != nil {
 		return SpNotOk, err
 	}
@@ -294,11 +312,16 @@ func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
 
 	interpreter.bh.ClearExecResultSet()
 	interpreter.ctx = interpreter.storedProcedureContext()
-	err := interpreter.bh.Exec(interpreter.ctx, "select "+cond)
+	// IF/ELSEIF/WHILE/REPEAT/CASE conditions are the saved body's own
+	// release-authored text: keep the historical persisted-coefficient
+	// binding for a syntax-owned radix literal in the reparsed condition,
+	// through a statement-local context that ends with this evaluation.
+	savedBodyCtx := context.WithValue(interpreter.ctx, defines.SavedSpBodyKey{}, true)
+	err := interpreter.bh.Exec(savedBodyCtx, "select "+cond)
 	if err != nil {
 		return 0, err
 	}
-	erArray, err := getResultSet(interpreter.ctx, interpreter.bh)
+	erArray, err := getResultSet(savedBodyCtx, interpreter.bh)
 	if err != nil {
 		return 0, err
 	}

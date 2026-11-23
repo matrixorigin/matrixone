@@ -39,6 +39,13 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		return nil, err
 	}
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	// Mirror bindDelete: this legacy multi-target DELETE builder owns a DML
+	// write, so an explicit radix CAST inside a WHERE predicate rides the
+	// statement's write conversion policy (a loose session clips at the
+	// cast's own bound with the established warning; a strict session
+	// rejects) instead of the standalone scalar range rejection. DELETE has
+	// no statement-ignore bit in that routing.
+	builder.isBindingDMLWrite = true
 	builder.zeroScalarPolicy = zeroScalarRetainOnly
 
 	queryBindCtx := NewBindContext(builder, nil)

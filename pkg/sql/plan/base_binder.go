@@ -223,7 +223,8 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		if types.T(typ.Id).IsDecimal() && !b.persistedFormatCompatibility &&
 			!(b.ctx != nil && b.ctx.restoreViewMySQLSpecialTypes) &&
-			!(b.ctx != nil && b.ctx.persistedBodyCompatibility) {
+			!(b.ctx != nil && b.ctx.persistedBodyCompatibility) &&
+			b.GetContext().Value(defines.SavedSpBodyKey{}) == nil {
 			// #31816: an explicit CAST is the same keyword boundary a direct
 			// assignment is, so a syntax-owned HEX/BIT literal operand has
 			// MySQL's unsigned integer value here too. Bind its bounded
@@ -6343,21 +6344,21 @@ func bindFuncExprImplUdf(
 		}
 		// The saved SQL body is persisted catalog text, exactly like a
 		// stored DEFAULT or view: it was authored against the pre-upgrade
-		// binding, so it must rebind through the historical persisted
-		// expression semantics (bindPersistedExpr's compatibility mode)
-		// instead of the new magnitude route. Scope that mode to the body
-		// bind itself - the call-site argument expressions are already bound
-		// normally above - and restore the previous mode on every exit so
-		// nested UDF calls and later callers never see a stale flag.
-		previousPersistedMode := b.persistedFormatCompatibility
-		b.persistedFormatCompatibility = true
+		// binding, so a syntax-owned HEX/BIT literal inside it must keep the
+		// historical persisted-coefficient binding instead of the new
+		// magnitude route. The compatibility is scoped to the radix-literal
+		// gate through the bind-context mark only: setting the binder-level
+		// persisted format compatibility here would also redirect unrelated
+		// saved-body functions such as FORMAT to their legacy overloads. The
+		// call-site argument expressions are already bound normally above,
+		// and the mark is restored on every exit so nested UDF calls and
+		// later callers never see a stale flag.
 		var previousCtxMode bool
 		if b.ctx != nil {
 			previousCtxMode = b.ctx.persistedBodyCompatibility
 			b.ctx.persistedBodyCompatibility = true
 			defer func() { b.ctx.persistedBodyCompatibility = previousCtxMode }()
 		}
-		defer func() { b.persistedFormatCompatibility = previousPersistedMode }()
 		if expressionBody {
 			expr, err := b.impl.BindExpr(bodyExpr, depth, false)
 			if err != nil {
