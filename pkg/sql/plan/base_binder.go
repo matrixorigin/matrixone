@@ -333,7 +333,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				return
 			}
 		}
-		if releasedBitCountFloatOverload(types.T(typ.Id)) >= 0 && b.GetContext().Value(releasedBitCountDumpBindingKey{}) != nil {
+		var dumpPolicy *bitCountDumpBinding
+		if releasedBitCountFloatOverload(types.T(typ.Id)) >= 0 {
+			dumpPolicy = bitCountDumpPolicy(b.GetContext())
+		}
+		if dumpPolicy != nil && dumpPolicy.releaseCasts {
 			// The released SQL binder used the ordinary CAST overload for
 			// FLOAT/DOUBLE. Rebuild that input tree during dump verification.
 			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
@@ -5275,9 +5279,14 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 			return nil, err
 		}
 	}
-	if name == "bit_count" && len(args) == 1 && releasedBitCountFloatOverload(types.T(args[0].Typ.Id)) >= 0 &&
-		b.GetContext().Value(releasedBitCountDumpBindingKey{}) == nil {
-		return b.bindBitCountOperand(args[0])
+	if name == "bit_count" && len(args) == 1 && releasedBitCountFloatOverload(types.T(args[0].Typ.Id)) >= 0 {
+		policy := bitCountDumpPolicy(b.GetContext())
+		if policy == nil || !policy.legacy {
+			if policy != nil {
+				policy.sawFloat = true
+			}
+			return b.bindBitCountOperand(args[0])
+		}
 	}
 	var integerInputs []uint32
 	if b.builder != nil && b.builder.integerPrecision != nil {
@@ -9500,13 +9509,18 @@ func bindFuncExprImplByPlanExpr(
 	} else {
 		fGet, err = function.GetFunctionByName(ctx, name, lookupTypes)
 	}
-	if err == nil && name == "bit_count" && len(lookupTypes) == 1 && ctx.Value(releasedBitCountDumpBindingKey{}) != nil {
-		oid := lookupTypes[0].Oid
-		if coerced, ok := fGet.ShouldDoImplicitTypeCast(); ok {
-			oid = coerced[0].Oid
-		}
-		if overload := releasedBitCountFloatOverload(oid); overload >= 0 {
-			fGet, err = function.GetFunctionByNameWithOverload(ctx, name, lookupTypes, overload)
+	if err == nil && name == "bit_count" && len(lookupTypes) == 1 {
+		if policy := bitCountDumpPolicy(ctx); policy != nil {
+			oid := lookupTypes[0].Oid
+			if coerced, ok := fGet.ShouldDoImplicitTypeCast(); ok {
+				oid = coerced[0].Oid
+			}
+			if overload := releasedBitCountFloatOverload(oid); overload >= 0 {
+				policy.sawFloat = true
+				if policy.legacy {
+					fGet, err = function.GetFunctionByNameWithOverload(ctx, name, lookupTypes, overload)
+				}
+			}
 		}
 	}
 	if err != nil {

@@ -274,6 +274,62 @@ func TestTableDumpReleasedBitCountBindings(t *testing.T) {
 	require.ErrorContains(t, err, "cannot verify bound generated expression", "mixed modes have no SQL binding")
 }
 
+func TestTableDumpBitCountBindingSensitivity(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression string
+		sensitive        bool
+	}{
+		{"integer", "bit_count(i)", false},
+		{"integer outer double cast", "cast(bit_count(i) as double)", false},
+		{"integer outer float cast", "cast(bit_count(i) as float)", false},
+		{"integer calls in arithmetic", "cast(bit_count(i)+bit_count(i) as double)", false},
+		{"nested integer calls", "cast(bit_count(bit_count(i)) as double)", false},
+		{"integer call and sibling cast", "cast(bit_count(i) as double)+cast(i as double)", false},
+		// The merge-base verifier already found a nullability-era difference.
+		{"non-null integer", "cast(bit_count(n) as double)", true},
+		{"decimal", "cast(bit_count(c) as double)", false},
+		{"text", "cast(bit_count(s) as double)", false},
+		{"enum", "cast(bit_count(e) as double)", false},
+		{"float field", "bit_count(d)", true},
+		{"float explicit cast", "bit_count(cast(d as double))", true},
+		{"integer converted to float before count", "bit_count(cast(i as double))", true},
+		{"nested float count", "bit_count(cast(bit_count(i) as double))", true},
+		{"floating selector", "bit_count(if(i=1,d,cast(d as double)))", true},
+		{"mixed integer and float calls", "cast(bit_count(i) as double)+bit_count(d)", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+			ddl := "create table t (i int, n int not null, d double, c decimal(8,2), s varchar(8), e enum('red','blue'), g double generated always as (" + tc.expression + ") stored)"
+			table := tableDumpDDLCatalog(tableDumpDDLCreate(t, compiler, ddl))
+			for _, supplied := range []*pb.TableDef{nil, table} {
+				sensitive, err := AnalyzeTableDumpBindings(compiler, table, supplied)
+				require.NoError(t, err)
+				require.Equal(t, tc.sensitive, sensitive)
+			}
+		})
+	}
+}
+
+func TestTableDumpFoldedBitCountBindingSensitivity(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression string
+		sensitive        bool
+	}{
+		{"integer", "cast(bit_count(7) as double)", false},
+		{"float", "bit_count(cast(3.9 as double))", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+			ddl := "create table t (g double default (" + tc.expression + "))"
+			table := tableDumpDDLCatalog(tableDumpDDLCreate(t, compiler, ddl))
+			require.NotNil(t, table.Cols[0].Default.Expr.GetLit(), "the default must exercise a folded binding")
+			sensitive, err := AnalyzeTableDumpBindings(compiler, table, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.sensitive, sensitive)
+		})
+	}
+}
+
 func TestBitCountLowersReducedScalarSelector(t *testing.T) {
 	for _, tc := range []struct {
 		name, operand string

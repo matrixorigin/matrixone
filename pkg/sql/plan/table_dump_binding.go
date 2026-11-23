@@ -256,7 +256,8 @@ const (
 	tableDumpBindingPreIntegerDecimal        tableDumpBindingMode = 1 << 15
 	tableDumpBindingPreDecimalPrecision      tableDumpBindingMode = 1 << 16
 	tableDumpBindingPreTimeNullability       tableDumpBindingMode = 1 << 17
-	tableDumpBindingReleasedBitCount         tableDumpBindingMode = 1 << 18
+	tableDumpBindingLegacyBitCount           tableDumpBindingMode = 1 << 18
+	tableDumpBindingV428FloatCasts           tableDumpBindingMode = 1 << 19
 )
 
 const tableDumpBindingLegacyFloat tableDumpBindingMode = 1 << 11
@@ -265,13 +266,14 @@ const tableDumpBindingFrozenFloatDefaults tableDumpBindingMode = 1 << 13
 const tableDumpBindingPreJSONFolding tableDumpBindingMode = 1 << 14
 
 type tableDumpDefaultSession struct {
-	timeZone, locale, folded     bool
-	observed, incompleteTemporal bool
-	unfolded                     *planpb.Expr
-	budget                       *tableDumpBindingBudget
-	captureUnfolded              bool
-	floatFormatting              bool
-	opaqueJSONFolding            bool
+	timeZone, locale, folded       bool
+	observed, incompleteTemporal   bool
+	unfolded                       *planpb.Expr
+	budget                         *tableDumpBindingBudget
+	captureUnfolded                bool
+	floatFormatting                bool
+	opaqueJSONFolding              bool
+	observeBitCount, floatBitCount bool
 }
 
 // Inspect the unfolded source: folding removes the registry and width witness.
@@ -442,9 +444,14 @@ func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, ite
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability | tableDumpBindingReleasedBitCount)
-	if mode&tableDumpBindingReleasedBitCount != 0 {
-		bindCtx = context.WithValue(bindCtx, releasedBitCountDumpBindingKey{}, true)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability | tableDumpBindingLegacyBitCount | tableDumpBindingV428FloatCasts)
+	if session.observeBitCount || mode&tableDumpBindingLegacyBitCount != 0 {
+		policy := &bitCountDumpBinding{
+			legacy:       mode&tableDumpBindingLegacyBitCount != 0,
+			releaseCasts: mode&tableDumpBindingV428FloatCasts != 0,
+		}
+		bindCtx = context.WithValue(bindCtx, bitCountDumpBindingKey{}, policy)
+		defer func() { session.floatBitCount = session.floatBitCount || policy.sawFloat }()
 	}
 	if mode&tableDumpBindingPreDecimalPrecision != 0 {
 		bindCtx = function.WithLegacyDecimalIntermediatePrecision(bindCtx)
@@ -505,12 +512,12 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 			if session.budget == nil {
 				return nil, moerr.NewInternalError(bindCtx, "missing frozen default proof budget")
 			}
-			currentSession := &tableDumpDefaultSession{budget: session.budget, captureUnfolded: true}
+			currentSession := &tableDumpDefaultSession{budget: session.budget, captureUnfolded: true, observeBitCount: session.observeBitCount}
 			_, err := bindTableDumpExpression(ctx, def, item, ast, increment, mode&^tableDumpBindingFrozenFloatDefaults, currentSession)
 			if err != nil {
 				return nil, err
 			}
-			oldSession := &tableDumpDefaultSession{budget: session.budget, captureUnfolded: true}
+			oldSession := &tableDumpDefaultSession{budget: session.budget, captureUnfolded: true, observeBitCount: session.observeBitCount}
 			old, err := bindTableDumpExpression(ctx, def, item, ast, increment, (mode&^tableDumpBindingFrozenFloatDefaults)|tableDumpBindingLegacyFloat, oldSession)
 			if err != nil {
 				return nil, err
@@ -854,9 +861,10 @@ func ReconstructV428TableDumpBindings(ctx CompilerContext, target *planpb.TableD
 			return nil, false, moerr.NewInvalidInputNoCtx("table dump expression AST exceeds limit")
 		}
 		item := tableDumpExpression{kind: "generated", name: col.Name, col: target.Cols[i]}
-		bound, err := bindTableDumpExpression(ctx, target, item, ast, 0, tableDumpBindingReleasedBitCount, &tableDumpDefaultSession{})
+		releaseMode := tableDumpBindingLegacyBitCount | tableDumpBindingV428FloatCasts
+		bound, err := bindTableDumpExpression(ctx, target, item, ast, 0, releaseMode, &tableDumpDefaultSession{})
 		if err == nil && ddlScope != nil {
-			scope, declaration, mode := tableDumpBindingScope(target, ddlScope, item, tableDumpBindingReleasedBitCount|tableDumpBindingDDLColumnScope)
+			scope, declaration, mode := tableDumpBindingScope(target, ddlScope, item, releaseMode|tableDumpBindingDDLColumnScope)
 			var ddlBound *planpb.Expr
 			ddlBound, err = bindTableDumpExpression(ctx, scope, declaration, ast, 0, mode, &tableDumpDefaultSession{})
 			if err == nil && !sameTableDumpBoundExpression(bound, ddlBound) {
@@ -1085,13 +1093,22 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 		}
 		var matched bool
 		var parsed bool
-		for _, mode := range tableDumpParserModesForOrigin(item.origin) {
+		parserModes := tableDumpParserModesForOrigin(item.origin)
+		ordinaryParserModes := len(parserModes)
+		for parserIndex := 0; parserIndex < len(parserModes); parserIndex++ {
+			if err := ctx.GetContext().Err(); err != nil {
+				return false, err
+			}
+			mode := parserModes[parserIndex]
+			exactV428 := parserIndex >= ordinaryParserModes
 			stmt, ast, visit, err := parseTableDumpExpression(ctx.GetContext(), item.origin, mode)
 			if err != nil {
 				continue
 			}
 			parsed = true
-			budget.nodes += visit.nodes
+			if !exactV428 {
+				budget.nodes += visit.nodes
+			}
 			if budget.nodes > tableDumpMaxExpressionNodes {
 				stmt.Free()
 				return false, moerr.NewInvalidInputNoCtx("table dump expression AST exceeds limit")
@@ -1202,12 +1219,12 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					}
 				}
 			}
-			if visit.hasBitCount {
-				// Keep the applicable proof modes for other calls in the same
-				// expression. The only additional BIT_COUNT binding is the
-				// one shipped by 4.2.8.
-				for _, mode := range modes {
-					modes = append(modes, mode|tableDumpBindingReleasedBitCount)
+			if exactV428 {
+				// Only an unmatched supplied binding needs this additional
+				// whole-release witness; it must never make a fresh v1 target
+				// sensitive merely because an unrelated CAST changed eras.
+				for i := range modes {
+					modes[i] |= tableDumpBindingLegacyBitCount | tableDumpBindingV428FloatCasts
 				}
 			}
 			// All session witnesses share the ordinary cancellation and total
@@ -1255,6 +1272,9 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 						budget.rememberSession(proc.GetSessionInfo().TimeZone, proc.GetSessionInfo().LCTimeNames)
 					}
 				}()
+				if exactV428 {
+					return sameTableDumpBoundExpression(want, candidate), nil
+				}
 				if sameTableDumpBoundExpression(want, candidate) ||
 					mode&tableDumpBindingLegacyFloat != 0 && sameHistoricalFloatBoundExpression(want, candidate) {
 					return true, nil
@@ -1288,24 +1308,39 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			}
 			floatCandidatesAdded := false
 			foldingCandidatesAdded := false
+			bitCountCandidatesAdded := exactV428
 			// Give every cheap precision/era witness priority over a wrong
 			// precision's exhaustive session search. Retain flags, not trees.
 			var sessions []tableDumpSessionCandidate
 			var probes []*legacyFloatSessionProbe
 			probeKeys := make(map[string]int)
-			for increment := int64(0); increment <= maxIncrement; increment++ {
+			for increment := int64(0); increment <= maxIncrement && (!exactV428 || !matched); increment++ {
 				if err := ctx.GetContext().Err(); err != nil {
 					stmt.Free()
 					return false, err
 				}
 				needsIncompleteEra := true
-				for modeIndex := 0; modeIndex < len(modes); modeIndex++ {
+				for modeIndex := 0; modeIndex < len(modes) && (!exactV428 || !matched); modeIndex++ {
 					mode := modes[modeIndex]
 					if item.kind == "default" && mode&tableDumpBindingPreIncompleteTemporal != 0 && !needsIncompleteEra {
 						continue
 					}
-					dependency = tableDumpDefaultSession{captureUnfolded: item.kind == "default"}
+					dependency = tableDumpDefaultSession{captureUnfolded: item.kind == "default", observeBitCount: visit.hasBitCount}
 					candidate, err := bind(increment, mode, zone, locale)
+					if dependency.floatBitCount && !bitCountCandidatesAdded {
+						// Only resolved FLOAT/DOUBLE BIT_COUNT needs historical
+						// witnesses. The merge-base and v4.2.8 used the same
+						// registry entries but different float CAST bindings.
+						for _, era := range append([]tableDumpBindingMode(nil), eras...) {
+							eras = append(eras, era|tableDumpBindingLegacyBitCount,
+								era|tableDumpBindingLegacyBitCount|tableDumpBindingV428FloatCasts)
+						}
+						for _, era := range append([]tableDumpBindingMode(nil), modes...) {
+							modes = append(modes, era|tableDumpBindingLegacyBitCount,
+								era|tableDumpBindingLegacyBitCount|tableDumpBindingV428FloatCasts)
+						}
+						bitCountCandidatesAdded = true
+					}
 					if normalizedDecimal && dependency.floatFormatting && !integerDecimal {
 						// A persisted ALTER may already have removed the old casts.
 						// Expand once, only after the independent SQL binding confirms
@@ -1324,7 +1359,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 							modes = append(modes, era|tableDumpBindingPreIntegerDecimal)
 						}
 					}
-					if mode == tableDumpBindingCurrent && dependency.observed {
+					if mode&^(tableDumpBindingLegacyBitCount|tableDumpBindingV428FloatCasts) == tableDumpBindingCurrent && dependency.observed {
 						needsIncompleteEra = dependency.incompleteTemporal
 					}
 					if item.kind == "default" && dependency.opaqueJSONFolding && !foldingCandidatesAdded {
@@ -1450,7 +1485,15 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				}
 			}
 			stmt.Free()
+			if !matched && !exactV428 && supplied != nil && visit.hasBitCount && !bitCountCandidatesAdded {
+				// Keep verification of a persisted v4.2.8 integer BIT_COUNT
+				// tree, but try it only after every ordinary parser mode.
+				parserModes = append(parserModes, mode)
+			}
 			if matched {
+				if exactV428 {
+					sensitive = true
+				}
 				break
 			}
 		}

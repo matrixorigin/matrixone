@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "source_database": "bitcount_int_backup",
+  "source_table": "t",
+  "create_sql": "CREATE TABLE t (id INT PRIMARY KEY, i INT, s DOUBLE GENERATED ALWAYS AS (CAST(BIT_COUNT(i) AS DOUBLE)) STORED, v DOUBLE GENERATED ALWAYS AS (CAST(BIT_COUNT(i) AS DOUBLE)) VIRTUAL)",
+  "schema_hash": "47a5ae93d0cde40018afcbae7799f3c7c4f0a97b004c75143c7ff05a24c06cda",
+  "metadata_only": false,
+  "relations": [
+    {
+      "role": "main",
+      "source_table": "t",
+      "schema_hash": "47a5ae93d0cde40018afcbae7799f3c7c4f0a97b004c75143c7ff05a24c06cda",
+      "objects": [
+        {
+          "name": "01a20601-988f-7247-9ebd-eb86f78dff0c_00000",
+          "stats": "AaIGAZiPckeeveuG943/DAAAMDFhMjA2MDEtOTg4Zi03MjQ3LTllYmQtZWI4NmY3OGRmZjBjXzAwMDAwAXQCAACaAQAAJwcAAAQAAAABAAAAAQAAAAAAAAAKAAAAAAAAAAAAAAAAAAAAAAAAAAAABAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAS/Fk4EAAAFCwAAAg==",
+          "tombstone": false,
+          "size": 1102,
+          "sha256": "e23b3851b2bde9d60110a46b1dddf4466f0b74b499896ca179436eeb42097168",
+          "fixture_path": "objects/01a20601-988f-7247-9ebd-eb86f78dff0c_00000"
+        }
+      ]
+    }
+  ]
+}

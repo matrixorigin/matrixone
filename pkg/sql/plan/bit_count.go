@@ -23,8 +23,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-// Only table dump origin validation uses the released expression binding.
-type releasedBitCountDumpBindingKey struct{}
+// Table dump validation observes the resolved operand before constant folding.
+// Its historical policies apply to the complete rebound expression.
+type bitCountDumpBindingKey struct{}
+
+type bitCountDumpBinding struct {
+	legacy, releaseCasts, sawFloat bool
+}
+
+func bitCountDumpPolicy(ctx context.Context) *bitCountDumpBinding {
+	policy, _ := ctx.Value(bitCountDumpBindingKey{}).(*bitCountDumpBinding)
+	return policy
+}
 
 func releasedBitCountFloatOverload(oid types.T) int32 {
 	switch oid { // typeswitch:partial only native MySQL FLOAT and DOUBLE fields select the rounding overload.
