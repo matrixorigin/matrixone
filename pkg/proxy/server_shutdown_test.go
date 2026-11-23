@@ -360,7 +360,16 @@ func TestTunnelStartsBothPipesBeforeQuit(t *testing.T) {
 	defer backendPeer.Close()
 	defer backend.Close()
 	tun := newTunnel(context.Background(), runtime.DefaultRuntime().Logger(), newCounterSet(), withConnCacheEnabled(true))
-	t.Cleanup(func() { _ = tun.Close() })
+	t.Cleanup(func() {
+		_ = tun.Close()
+		done := make(chan struct{})
+		go func() { tun.workers.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("tunnel workers did not stop during cleanup")
+		}
+	})
 	clientConn := newMySQLConn(connClientName, client, 0, tun.reqC, tun.respC, true, 1)
 	serverConn := newMySQLConn(connServerName, backend, 0, tun.reqC, tun.respC, true, 2)
 	csp := tun.newPipe(pipeClientToServer, clientConn, serverConn)
@@ -385,11 +394,15 @@ func TestTunnelStartsBothPipesBeforeQuit(t *testing.T) {
 		t.Fatal("client pipe did not start")
 	}
 	go func() { _, _ = clientPeer.Write(makeQuitPacket()) }()
-	events := make(chan IEvent, 1)
+	events := make(chan IEvent)
 	go func() {
 		select {
 		case event := <-tun.reqC:
-			events <- event
+			select {
+			case events <- event:
+			case <-ctx.Done():
+				event.notify()
+			}
 		case <-ctx.Done():
 		}
 	}()
@@ -412,9 +425,11 @@ func TestTunnelStartsBothPipesBeforeQuit(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("QUIT was not delivered")
 	}
+	acknowledge := sync.OnceFunc(event.notify)
+	defer acknowledge()
 	// This is the pause used by QUIT before a backend enters the cache.
 	require.NoError(t, scp.pause(ctx))
-	event.notify()
+	acknowledge()
 	require.NoError(t, tun.Close())
 	done := make(chan struct{})
 	go func() { tun.workers.Wait(); close(done) }()
