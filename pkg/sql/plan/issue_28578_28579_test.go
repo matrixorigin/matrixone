@@ -63,7 +63,7 @@ func TestIssue28578UnsignedDividendRejectsNegativeQuotient(t *testing.T) {
 			name:     "decimal divisor",
 			wantLeft: types.T_decimal256,
 			sql:      "prepare issue28578_decimal from 'select cast(10 as unsigned) div cast(? as decimal(10, 2))'",
-			param:    ParamValue{Value: "-3.00", PrepareParamKind: types.StringConversionDecimal},
+			param:    ParamValue{Value: "-3.00", SourceType: decimalParamType("-3.00"), HasSourceType: true},
 		},
 	}
 

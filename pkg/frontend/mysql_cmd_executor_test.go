@@ -8786,9 +8786,9 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 			EnableNumericPrefix: true,
 		},
 		plan.ParamValue{
-			Value:               "9007199254740992.0000000000",
-			IsBinaryProtocol:    true,
-			PrepareParamKind:    types.StringConversionDecimal,
+			Value:            "9007199254740992.0000000000",
+			IsBinaryProtocol: true,
+			RuntimeType:      types.New(types.T_decimal128, 38, 10), HasRuntimeType: true,
 			EnableNumericPrefix: true,
 		},
 	})

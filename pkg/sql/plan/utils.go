@@ -6653,10 +6653,9 @@ func isNonNegativePreparedInteger(value any) bool {
 	if _, ok := value.(bool); ok {
 		return true
 	}
-	valid, negative := validatePreparedPaginationValue(ParamValue{
-		Value:            value,
-		PrepareParamKind: kind,
-	})
+	// Validate the bare value: the COM_STMT integer-text form accepted for
+	// LIMIT/OFFSET (see validatePreparedPaginationValue) is not accepted here.
+	valid, negative := validatePreparedPaginationValue(value)
 	return valid && !negative
 }
 

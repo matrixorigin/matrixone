@@ -312,7 +312,7 @@ func TestPreparedBitCountDefaultsToBinaryAndSpecializesNumericValues(t *testing.
 	require.Equal(t, int32(types.T_int64), fn.GetF().Args[0].Typ.Id)
 
 	stringPlan, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, []any{
-		ParamValue{Value: "64", IsBinaryProtocol: true, PrepareParamKind: types.StringConversionString},
+		ParamValue{Value: "64", IsBinaryProtocol: true},
 	})
 	require.NoError(t, err)
 	fn = findPlanFunctionExpr(stringPlan, "bit_count")
@@ -1454,11 +1454,10 @@ func TestPreparedNumericRuntimeLiteralRebindingHelpers(t *testing.T) {
 
 	floatRule := NewResetParamRefRule(ctx, nil)
 	floatRule.SetParamValues([]any{ParamValue{
-		Value:            -1.5,
-		PrepareParamKind: types.StringConversionFloat,
-		HasRuntimeType:   true,
-		RuntimeType:      types.T_float64.ToType(),
-		RetainParamRef:   true,
+		Value:          -1.5,
+		HasRuntimeType: true,
+		RuntimeType:    types.T_float64.ToType(),
+		RetainParamRef: true,
 	}})
 	bound, ok, err := floatRule.typedRuntimeParamExpr(0)
 	require.NoError(t, err)
@@ -1561,7 +1560,7 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.NoError(t, err)
 	filled, err = FillValuesOfParamsInPlan(ctx, prepared.GetDcl().GetPrepare().Plan, []any{
 		sqlIntParam(-9007199254740993),
-		ParamValue{Value: "0.5", PrepareParamKind: types.StringConversionDecimal},
+		ParamValue{Value: "0.5", SourceType: decimalParamType("0.5"), HasSourceType: true},
 	})
 	require.NoError(t, err)
 	fn = findPlanFunctionExpr(filled, "abs")
@@ -1641,8 +1640,8 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.NoError(t, err)
 	filled, err = FillValuesOfParamsInPlan(ctx, prepared.GetDcl().GetPrepare().Plan, []any{
 		ParamValue{
-			Value:            "12345678901234567890123456789012345.6789",
-			PrepareParamKind: types.StringConversionDecimal,
+			Value:      "12345678901234567890123456789012345.6789",
+			SourceType: decimalParamType("12345678901234567890123456789012345.6789"), HasSourceType: true,
 		},
 	})
 	require.NoError(t, err)

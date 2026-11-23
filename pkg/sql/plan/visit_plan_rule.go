@@ -2544,7 +2544,7 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 		return e, nil
 	}
 	// A sibling direct assignment marker must keep its runtime vector metadata
-	// (notably PrepareParamKind for BIT). Replacing it with a TEXT literal while
+	// (notably the BIT type). Replacing it with a TEXT literal while
 	// another assignment triggers specialization changes numeric values to bytes.
 	if fn := e.GetF(); fn != nil && len(fn.Args) == 2 && !types.T(e.Typ.Id).IsInteger() {
 		switch fn.Func.GetObjName() {
@@ -4116,36 +4116,14 @@ func preparedParamValueUsesStringDomain(value any) bool {
 	if !ok || param.Value == nil {
 		return false
 	}
-	// SQL EXECUTE uses the marker's string type as a transport placeholder. Its
-	// assignment-time PrepareParamKind is the stronger signal: a numeric user
-	// variable must keep the legacy SRID overload even when the marker itself
-	// was provisionally typed VARCHAR during PREPARE.
-	if !param.IsBinaryProtocol && ParamValueKind(param) != types.StringConversionString {
-		return false
+	// The parameter's own type decides, not the marker's: SQL EXECUTE
+	// transports user variables through a TEXT vector, so a numeric user
+	// variable keeps the legacy SRID overload even though the marker was
+	// provisionally typed VARCHAR during PREPARE. An untyped value is text.
+	if typ, ok := ParamValueType(param); ok {
+		return isStringBackedType(typ)
 	}
-	// SQL EXECUTE transports user variables through a TEXT vector. When the
-	// assignment was numeric, the transport type remains TEXT but the prepared
-	// parameter kind is the authoritative numeric domain. Do not reinterpret
-	// that neutral transport type as a length-unit string.
-	if param.HasRuntimeType {
-		return isStringBackedType(param.RuntimeType)
-	}
-	if param.HasSourceType {
-		if param.SourceType.Oid == types.T_text && ParamValueKind(param) != types.StringConversionString {
-			return false
-		}
-		return isStringBackedType(param.SourceType)
-	}
-	// An explicit non-string source/runtime type is authoritative even when
-	// PrepareParamKind is left at None (the SQL EXECUTE path does not attach a
-	// protocol category). Do not mistake a numeric SRID marker for a unit name.
-	if param.HasSourceType || param.HasRuntimeType {
-		return false
-	}
-	if param.IsBinaryProtocol {
-		return ParamValueKind(param) == types.StringConversionString
-	}
-	return ParamValueKind(param) == types.StringConversionString
+	return true
 }
 
 // preparedComparisonExactIntegerExpr keeps an exact integral text prefix in

@@ -96,13 +96,14 @@ func TestParamValueKind(t *testing.T) {
 	}{
 		{"protocol integer", comStmtIntParam(2), types.StringConversionInteger},
 		{"protocol float", comStmtFloatParam(1.5), types.StringConversionFloat},
-		{"protocol Boolean", ParamValue{Value: true, RuntimeType: types.T_bool.ToType(), HasRuntimeType: true, PrepareParamKind: types.StringConversionInteger}, types.StringConversionBoolean},
+		{"protocol Boolean", ParamValue{Value: true, RuntimeType: types.T_bool.ToType(), HasRuntimeType: true}, types.StringConversionBoolean},
 		{"protocol DECIMAL", ParamValue{Value: "15e-1", RuntimeType: types.New(types.T_decimal64, 2, 1), HasRuntimeType: true}, types.StringConversionDecimal},
 		{"runtime type wins over source type", ParamValue{RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, SourceType: types.T_float64.ToType(), HasSourceType: true}, types.StringConversionInteger},
 		{"SQL user variable", sqlFloatParam(2.5), types.StringConversionFloat},
-		{"text keeps the recorded kind", ParamValue{Value: "1", SourceType: types.T_text.ToType(), HasSourceType: true, PrepareParamKind: types.StringConversionInteger}, types.StringConversionInteger},
+		{"text is a string", ParamValue{Value: "1", SourceType: types.T_text.ToType(), HasSourceType: true}, types.StringConversionString},
 		{"temporal is text", ParamValue{Value: "2026-01-01", RuntimeType: types.T_date.ToType(), HasRuntimeType: true}, types.StringConversionString},
-		{"untyped NULL keeps the recorded kind", ParamValue{PrepareParamKind: types.StringConversionDecimal}, types.StringConversionDecimal},
+		{"typed NULL", ParamValue{SourceType: types.New(types.T_decimal128, 38, 0), HasSourceType: true}, types.StringConversionDecimal},
+		{"untyped NULL is a string", ParamValue{IsBinaryProtocol: true}, types.StringConversionString},
 	} {
 		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, ParamValueKind(tc.param)) })
 	}

@@ -108,17 +108,14 @@ func ParamValueType(p ParamValue) (types.Type, bool) {
 	return types.Type{}, false
 }
 
-// ParamValueKind is the conversion kind of a parameter: Integer, Float,
-// Decimal or Boolean when its type is one of those. A parameter whose type is
-// text, temporal or another non-numeric type, or that has no type (a NULL),
-// keeps the kind its producer recorded: a user variable copied from a system
-// variable (SET @v = @@var) holds the variable's text with the variable's
-// numeric kind.
+// ParamValueKind is the conversion kind of a parameter, derived from its type:
+// Integer, Float, Decimal or Boolean for those types, String for text,
+// temporal and other types. A parameter without a type (an untyped NULL) is
+// String: like MySQL, a NULL does not decide how a parameter is planned.
 func ParamValueKind(p ParamValue) types.StringConversionKind {
 	if typ, ok := ParamValueType(p); ok {
-		if kind, _ := types.StringConversionKindForType(typ.Oid); kind != types.StringConversionString {
-			return kind
-		}
+		kind, _ := types.StringConversionKindForType(typ.Oid)
+		return kind
 	}
-	return p.PrepareParamKind
+	return types.StringConversionString
 }

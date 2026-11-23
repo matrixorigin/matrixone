@@ -949,8 +949,8 @@ func TestPreparedLagLeadOffsetParameter(t *testing.T) {
 				float64(-1.5),
 				sqlIntParam(-1),
 				sqlFloatParam(-1.5),
-				ParamValue{Value: "-1.5", PrepareParamKind: types.StringConversionDecimal},
-				ParamValue{Value: "2", PrepareParamKind: types.StringConversionBoolean},
+				ParamValue{Value: "-1.5", SourceType: decimalParamType("-1.5"), HasSourceType: true},
+				ParamValue{Value: "2", SourceType: types.T_bool.ToType(), HasSourceType: true},
 			} {
 				_, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{invalid})
 				require.Error(t, err)

@@ -42,7 +42,7 @@ func TestPreparedGetLockTimeoutPreservesRuntimeType(t *testing.T) {
 	}{
 		{
 			name:         "decimal half-up domain",
-			timeout:      ParamValue{Value: "0.5", PrepareParamKind: types.StringConversionDecimal},
+			timeout:      ParamValue{Value: "0.5", SourceType: decimalParamType("0.5"), HasSourceType: true},
 			wantArgType:  types.T_decimal64,
 			wantOverload: 1,
 		},
@@ -60,7 +60,7 @@ func TestPreparedGetLockTimeoutPreservesRuntimeType(t *testing.T) {
 		},
 		{
 			name:         "decimal after double does not reuse stale metadata",
-			timeout:      ParamValue{Value: "1.25", PrepareParamKind: types.StringConversionDecimal},
+			timeout:      ParamValue{Value: "1.25", SourceType: decimalParamType("1.25"), HasSourceType: true},
 			wantArgType:  types.T_decimal64,
 			wantOverload: 1,
 		},

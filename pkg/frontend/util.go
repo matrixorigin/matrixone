@@ -199,7 +199,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 	if len(isBin) > 0 {
 		*isBin[0] = false
 	}
-	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, false, nil, nil, nil)
+	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, false, nil, nil)
 	return value, err
 }
 
@@ -223,7 +223,6 @@ func getExprValueWithPrepareMeta(
 	ses *Session,
 	execCtx *ExecCtx,
 	preparedExpression bool,
-	prepareParamKind *types.StringConversionKind,
 	runtimeDomain *types.RuntimeStringDomain,
 	leafIsBin *bool,
 ) (interface{}, plan.Type, error) {
@@ -236,9 +235,6 @@ func getExprValueWithPrepareMeta(
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
-		if prepareParamKind != nil {
-			*prepareParamKind = types.StringConversionString
-		}
 		return v.ColName(), plan.Type{Id: int32(types.T_text)}, nil
 	}
 
@@ -349,15 +345,6 @@ func getExprValueWithPrepareMeta(
 	if runtimeDomain != nil {
 		*runtimeDomain = types.RuntimeStringInherit
 	}
-	if prepareParamKind != nil {
-		*prepareParamKind, err = transparentPrepareParamKind(e, ses)
-		if err != nil {
-			return nil, plan.Type{}, err
-		}
-		if *prepareParamKind == types.StringConversionString {
-			*prepareParamKind = prepareParamKindFromType(resultVec.GetType().Oid)
-		}
-	}
 	resultType := plan2.MakePlan2Type(resultVec.GetType())
 	if planExpr != nil &&
 		(oid == types.T_decimal64 || oid == types.T_decimal128 || oid == types.T_decimal256) {
@@ -394,7 +381,6 @@ func getPreparedPlanExprValueWithMeta(
 	expr *plan.Expr,
 	ses *Session,
 	execCtx *ExecCtx,
-	prepareParamKind *types.StringConversionKind,
 	runtimeDomain *types.RuntimeStringDomain,
 	isBin *bool,
 ) (interface{}, plan.Type, error) {
@@ -420,43 +406,8 @@ func getPreparedPlanExprValueWithMeta(
 	if runtimeDomain != nil {
 		*runtimeDomain = types.RuntimeStringInherit
 	}
-	if prepareParamKind != nil {
-		*prepareParamKind = prepareParamKindFromType(result.GetType().Oid)
-	}
 	value, err := getValueFromVector(execCtx.reqCtx, result, ses, expr)
 	return value, plan2.MakePlan2Type(result.GetType()), err
-}
-
-// transparentPrepareParamKind closes the metadata boundary introduced by SET's
-// synthetic SELECT evaluation. A direct parameter or variable retains its
-// source conversion category even if projection materialization drops vector-
-// local metadata. Parentheses are transparent; casts and other expressions are
-// intentionally not, because their result type defines the conversion category.
-func transparentPrepareParamKind(e tree.Expr, ses *Session) (types.StringConversionKind, error) {
-	for {
-		switch expr := e.(type) {
-		case *tree.ParenExpr:
-			e = expr.Expr
-		case *tree.ParamExpr:
-			proc := ses.GetProc()
-			// Parser ordinals are one-based; the normalized plan/process positions
-			// are zero-based (see decrementParamOrdinalRule).
-			if proc == nil || expr.Offset <= 0 {
-				return types.StringConversionString, nil
-			}
-			typed := proc.GetTypedPrepareParam(expr.Offset - 1)
-			if typed == nil {
-				return types.StringConversionString, nil
-			}
-			kind, _ := types.StringConversionKindForType(typed.GetType().Oid)
-			return kind, nil
-		case *tree.VarExpr:
-			return ses.GetTxnCompileCtx().ResolveVariablePrepareParamKind(
-				expr.Name, expr.System, expr.Global)
-		default:
-			return types.StringConversionString, nil
-		}
-	}
 }
 
 // bindFrontendExpressionContext borrows only the pipeline context field for

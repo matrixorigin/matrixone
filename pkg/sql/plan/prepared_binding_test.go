@@ -1295,8 +1295,8 @@ func TestPreparedIntegerConsumerLoweringProvenance(t *testing.T) {
 	for _, value := range []ParamValue{
 		sqlIntParam(7),
 		{Value: "7", IsBinaryProtocol: true},
-		{Value: "7", IsBinaryProtocol: true, IsBin: true, PrepareParamKind: types.StringConversionInteger},
-		{Value: "7", IsBinaryProtocol: true, IsBinaryString: true, PrepareParamKind: types.StringConversionInteger},
+		{Value: "7", IsBinaryProtocol: true, IsBin: true, RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		{Value: "7", IsBinaryProtocol: true, IsBinaryString: true, RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
 	} {
 		ctx := withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}}, []any{value})
 		param := &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
@@ -1851,7 +1851,7 @@ func TestPreparedExplicitIntegerCastFilters(t *testing.T) {
 						}
 						require.NoError(t, vector.AppendBytes(params, []byte(value), tc.null, proc.Mp()))
 						if !tc.null {
-							values[i] = ParamValue{Value: value, IsBinaryProtocol: true, PrepareParamKind: types.StringConversionInteger}
+							values[i] = ParamValue{Value: value, IsBinaryProtocol: true, RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}
 						}
 					}
 					proc.SetPrepareParams(params)

@@ -176,7 +176,7 @@ func TestPreparedTimeArithmeticFillsAndExecutes(t *testing.T) {
 	} {
 		t.Run(tc.value, func(t *testing.T) {
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), preparePlan, []any{
-				ParamValue{Value: tc.value, PrepareParamKind: tc.kind},
+				sqlKindParam(tc.value, tc.kind),
 			})
 			require.NoError(t, err)
 
@@ -217,7 +217,7 @@ func TestPreparedTimeArithmeticAsIntegerArgument(t *testing.T) {
 				null  bool
 			}{
 				{"integer", sqlIntParam(0), false},
-				{"null", ParamValue{Value: nil, PrepareParamKind: types.StringConversionString}, true},
+				{"null", ParamValue{Value: nil}, true},
 				{"integer after null", sqlIntParam(0), false},
 			} {
 				t.Run(input.name, func(t *testing.T) {
@@ -377,14 +377,13 @@ func TestPreparedTimeArithmeticFallbackPreservesIntegerBoundary(t *testing.T) {
 				}
 				for i, value := range values {
 					t.Run(fmt.Sprintf("%d/%s", i, value), func(t *testing.T) {
-						param := ParamValue{Value: value, PrepareParamKind: types.StringConversionInteger}
+						param := ParamValue{Value: value, SourceType: types.T_int64.ToType(), HasSourceType: true}
 						sourceType, castType := types.T_int64.ToType(), "signed"
 						if tc.name == "unsigned" {
 							sourceType, castType = types.T_uint64.ToType(), "unsigned"
 						}
 						if tc.name == "decimal-parameter" {
 							sourceType, castType = types.New(types.T_decimal128, 20, 2), "decimal(20,2)"
-							param.PrepareParamKind = types.StringConversionDecimal
 						}
 						if binary {
 							param.IsBinaryProtocol = true
@@ -393,7 +392,7 @@ func TestPreparedTimeArithmeticFallbackPreservesIntegerBoundary(t *testing.T) {
 							param.SourceType, param.HasSourceType = sourceType, true
 						}
 						if value == "NULL" {
-							param = ParamValue{Value: nil, PrepareParamKind: types.StringConversionString}
+							param = ParamValue{Value: nil}
 						}
 						params := make([]any, strings.Count(tc.expression, "?"))
 						for j := range params {
@@ -569,7 +568,7 @@ func TestPreparedTimeArithmeticPreservesUnsignedDomain(t *testing.T) {
 	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
 		prepared.GetDcl().GetPrepare().Plan, []any{
 			ParamValue{
-				Value: "10", PrepareParamKind: types.StringConversionInteger,
+				Value:       "10",
 				RuntimeType: types.T_uint64.ToType(), HasRuntimeType: true,
 				IsBinaryProtocol: true,
 			},
@@ -612,16 +611,16 @@ func TestPreparedTimeArithmeticPreservesNullEnvelope(t *testing.T) {
 		id     types.T
 	}{
 		{name: "left null", values: []any{
-			ParamValue{Value: nil, PrepareParamKind: types.StringConversionString},
+			ParamValue{Value: nil},
 			sqlIntParam(2),
 		}, width: 38, id: types.T_decimal128},
 		{name: "right null", values: []any{
 			sqlIntParam(1),
-			ParamValue{Value: nil, PrepareParamKind: types.StringConversionString},
+			ParamValue{Value: nil},
 		}, width: 38, id: types.T_decimal128},
 		{name: "both null", values: []any{
-			ParamValue{Value: nil, PrepareParamKind: types.StringConversionString},
-			ParamValue{Value: nil, PrepareParamKind: types.StringConversionString},
+			ParamValue{Value: nil},
+			ParamValue{Value: nil},
 		}, width: 18, id: types.T_decimal64},
 		{name: "both integers", values: []any{
 			sqlIntParam(1),
@@ -652,7 +651,7 @@ func TestPreparedTimeArithmeticPreservesNullEnvelopeThroughAbs(t *testing.T) {
 	require.NoError(t, err)
 	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
 		context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{
-			ParamValue{Value: nil, PrepareParamKind: types.StringConversionString},
+			ParamValue{Value: nil},
 			sqlIntParam(2),
 		})
 	require.NoError(t, err)
@@ -669,7 +668,7 @@ func TestPreparedTimeArithmeticPreservesExplicitIntegerBoundary(t *testing.T) {
 	require.NoError(t, err)
 	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
 		context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{
-			ParamValue{Value: nil, PrepareParamKind: types.StringConversionString},
+			ParamValue{Value: nil},
 			sqlIntParam(2),
 		})
 	require.NoError(t, err)
@@ -737,7 +736,7 @@ func TestPreparedTimeArithmeticPositionScopeKeepsUnselectedMarkers(t *testing.T)
 	runtimePlan, specialized, err := FillValuesOfParamsInPlanWithSpecializationAtPositions(
 		context.Background(), preparePlan, []any{
 			ParamValue{Value: "7", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
-			ParamValue{Value: nil, PrepareParamKind: types.StringConversionString},
+			ParamValue{Value: nil},
 			sqlIntParam(2),
 		}, []int32{0})
 	require.NoError(t, err)
@@ -766,7 +765,7 @@ func TestPreparedTimeArithmeticPreservesExplicitDecimalAndNestedDomains(t *testi
 	for _, value := range []string{"10", "9223372036854775807"} {
 		filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
 			prepared.GetDcl().GetPrepare().Plan, []any{
-				ParamValue{Value: value, PrepareParamKind: types.StringConversionInteger},
+				ParamValue{Value: value, SourceType: types.T_int64.ToType(), HasSourceType: true},
 			})
 		require.NoError(t, err)
 		preparedExpr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
@@ -821,14 +820,14 @@ func TestPreparedTimeArithmeticTimeZeroFractionalParameter(t *testing.T) {
 		{
 			name: "text transport",
 			param: ParamValue{
-				Value: "1.2345678901234", PrepareParamKind: types.StringConversionDecimal,
+				Value: "1.2345678901234", SourceType: decimalParamType("1.2345678901234"), HasSourceType: true,
 			},
 			want: "1.2345678901234",
 		},
 		{
 			name: "SQL decimal source",
 			param: ParamValue{
-				Value: "1.2345678901234", PrepareParamKind: types.StringConversionDecimal,
+				Value:      "1.2345678901234",
 				SourceType: types.New(types.T_decimal64, 14, 13), HasSourceType: true,
 			},
 			want: "1.2345678901234",
@@ -836,7 +835,7 @@ func TestPreparedTimeArithmeticTimeZeroFractionalParameter(t *testing.T) {
 		{
 			name: "binary decimal source",
 			param: ParamValue{
-				Value: "1.2345678901234", PrepareParamKind: types.StringConversionDecimal,
+				Value:       "1.2345678901234",
 				RuntimeType: types.New(types.T_decimal64, 14, 13), HasRuntimeType: true,
 				IsBinaryProtocol: true,
 			},
@@ -845,7 +844,7 @@ func TestPreparedTimeArithmeticTimeZeroFractionalParameter(t *testing.T) {
 		{
 			name: "large integer transport",
 			param: ParamValue{
-				Value: "1000000", PrepareParamKind: types.StringConversionInteger,
+				Value: "1000000", SourceType: types.T_int64.ToType(), HasSourceType: true,
 			},
 			want: "1000000",
 		},

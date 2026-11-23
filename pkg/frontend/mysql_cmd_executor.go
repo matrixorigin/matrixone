@@ -1468,15 +1468,13 @@ func doSetVar(
 	var userVarIsBin bool
 	var userVarRuntimeDomain types.RuntimeStringDomain
 	var userVarType plan.Type
-	var userVarPrepareParamKind types.StringConversionKind
 	type evaluatedAssignment struct {
-		assign                  *tree.VarAssignmentExpr
-		value                   interface{}
-		setNamesCollation       string
-		userVarIsBin            bool
-		userVarRuntimeDomain    types.RuntimeStringDomain
-		valueType               plan.Type
-		userVarPrepareParamKind types.StringConversionKind
+		assign               *tree.VarAssignmentExpr
+		value                interface{}
+		setNamesCollation    string
+		userVarIsBin         bool
+		userVarRuntimeDomain types.RuntimeStringDomain
+		valueType            plan.Type
 	}
 	type systemVarReplayabilitySnapshot struct {
 		replayable bool
@@ -1518,7 +1516,6 @@ func doSetVar(
 	}
 	evaluateAssignment := func(index int, assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
-		prepareParamKind := types.StringConversionString
 		var value interface{}
 		var valueType plan.Type
 		var runtimeDomain types.RuntimeStringDomain
@@ -1539,16 +1536,16 @@ func doSetVar(
 				}
 				value, valueType, evalErr = getExprValueWithPrepareMeta(
 					assign.Value, ses, execCtx, true,
-					&prepareParamKind, &runtimeDomain, leafIsBin)
+					&runtimeDomain, leafIsBin)
 			} else {
 				value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
 					preparedItems[index].Value, ses, execCtx,
-					&prepareParamKind, &runtimeDomain, &isBin)
+					&runtimeDomain, &isBin)
 			}
 		} else {
 			value, valueType, evalErr = getExprValueWithPrepareMeta(
 				assign.Value, ses, execCtx, preparedExpression,
-				&prepareParamKind, &runtimeDomain, nil)
+				&runtimeDomain, nil)
 		}
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
@@ -1631,13 +1628,12 @@ func doSetVar(
 			}
 		}
 		return evaluatedAssignment{
-			assign:                  assign,
-			value:                   value,
-			setNamesCollation:       setNamesCollation,
-			userVarIsBin:            isBin,
-			userVarRuntimeDomain:    runtimeDomain,
-			valueType:               valueType,
-			userVarPrepareParamKind: prepareParamKind,
+			assign:               assign,
+			value:                value,
+			setNamesCollation:    setNamesCollation,
+			userVarIsBin:         isBin,
+			userVarRuntimeDomain: runtimeDomain,
+			valueType:            valueType,
 		}, nil
 	}
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
@@ -1676,8 +1672,8 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-				name, value, sql, userVarIsBin, userVarType, userVarPrepareParamKind,
+			err = ses.setUserDefinedVarWithTypeAndReplayability(
+				name, value, sql, userVarIsBin, userVarType,
 				!preparedExpression && sql != "" && execCtx.singleStatementQuery,
 				userVarRuntimeDomain)
 			if err != nil {
@@ -1741,7 +1737,6 @@ func doSetVar(
 		userVarIsBin = item.userVarIsBin
 		userVarRuntimeDomain = item.userVarRuntimeDomain
 		userVarType = item.valueType
-		userVarPrepareParamKind = item.userVarPrepareParamKind
 
 		//TODO : fix SET NAMES after parser is ready
 		if assign.SetNames {
@@ -6844,7 +6839,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		stmt := cw.GetAst()
 		// The assignment performed by SELECT ... INTO @var changes the
 		// variable's bind-time type.  Do not cache this statement after it has
-		// run; setUserDefinedVarWithTypeAndKind clears the existing cache, but
+		// run; setUserDefinedVarWithTypeAndReplayability clears the existing cache, but
 		// the outer request must also avoid writing this just-executed plan back.
 		if selectStmt, ok := stmt.(*tree.Select); ok && len(selectStmt.IntoVars) > 0 {
 			canCache = false

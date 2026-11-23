@@ -76,7 +76,7 @@ func TestFrontendExpressionContextScope(t *testing.T) {
 				ec := &ExecCtx{reqCtx: current, ses: ses, proc: ses.proc}
 				ses.txnCompileCtx.execCtx = ec
 				// These are the real prepared-SET and stored-procedure runtime consumers.
-				value, _, err := getPreparedPlanExprValueWithMeta(expr, ses, ec, nil, nil, nil)
+				value, _, err := getPreparedPlanExprValueWithMeta(expr, ses, ec, nil, nil)
 				if current.Err() != nil {
 					require.ErrorIs(t, err, current.Err())
 				} else {
@@ -110,7 +110,7 @@ func TestFrontendExpressionContextScope(t *testing.T) {
 	t.Run("restore on construction error and panic", func(t *testing.T) {
 		prior := ses.proc.Ctx
 		ec := &ExecCtx{reqCtx: context.Background(), ses: ses, proc: ses.proc}
-		_, _, err := getPreparedPlanExprValueWithMeta(&plan2.Expr{Typ: plan2.Type{Id: int32(types.T_bool)}}, ses, ec, nil, nil, nil)
+		_, _, err := getPreparedPlanExprValueWithMeta(&plan2.Expr{Typ: plan2.Type{Id: int32(types.T_bool)}}, ses, ec, nil, nil)
 		require.Error(t, err)
 		require.Same(t, prior, ses.proc.Ctx)
 		require.Panics(t, func() {
@@ -131,7 +131,7 @@ func TestFrontendExpressionContextScope(t *testing.T) {
 			require.ErrorIs(t, ses.proc.Ctx.Err(), context.Canceled)
 		}()
 		require.Same(t, prior, ses.proc.Ctx)
-		value, _, err := getPreparedPlanExprValueWithMeta(expr, ses, &ExecCtx{reqCtx: context.Background(), ses: ses, proc: ses.proc}, nil, nil, nil)
+		value, _, err := getPreparedPlanExprValueWithMeta(expr, ses, &ExecCtx{reqCtx: context.Background(), ses: ses, proc: ses.proc}, nil, nil)
 		require.NoError(t, err)
 		require.Equal(t, true, value)
 		require.Same(t, prior, ses.proc.Ctx)
@@ -170,7 +170,7 @@ func TestPreparedSetExprValueIsBin(t *testing.T) {
 		{"binary user variable", binVar, true},
 	} {
 		isBin := !tc.want
-		_, _, err := getPreparedPlanExprValueWithMeta(tc.expr, ses, ec, nil, nil, &isBin)
+		_, _, err := getPreparedPlanExprValueWithMeta(tc.expr, ses, ec, nil, &isBin)
 		require.NoError(t, err, tc.name)
 		require.Equal(t, tc.want, isBin, tc.name)
 	}

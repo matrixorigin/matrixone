@@ -1250,7 +1250,7 @@ func binaryProtocolPrepareParamConcreteType(
 
 // binaryProtocolPrepareParamIsBinaryString identifies protocol domains whose
 // payload is an opaque byte string rather than a character string.  The
-// binary-string sidecar is intentionally independent from PrepareParamKind so
+// binary-string sidecar is intentionally independent from the conversion kind so
 // a BLOB value cannot be reparsed as a numeric or JSON text value.
 func binaryProtocolPrepareParamIsBinaryString(mysqlType defines.MysqlType) bool {
 	switch mysqlType {
@@ -2332,8 +2332,9 @@ func preparedParamValues(proc *process.Process, store *plan2.ParamValueStore, pa
 			IsBinaryProtocol:    true,
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
+		kind := types.StringConversionString
 		if i < len(kinds) {
-			paramValue.PrepareParamKind = kinds[i]
+			kind = kinds[i]
 		}
 		if params.IsNull(uint64(i)) && i*2+1 < len(paramTypes) {
 			mysqlType := defines.MysqlType(paramTypes[i*2])
@@ -2372,7 +2373,7 @@ func preparedParamValues(proc *process.Process, store *plan2.ParamValueStore, pa
 			// ordinary TINYINT callers, but restore the Boolean semantic kind
 			// before constructing the execute-time literal.  Otherwise JSON
 			// functions receive an integer 0/1 and change the stored JSON type.
-			if paramValue.PrepareParamKind == types.StringConversionBoolean {
+			if kind == types.StringConversionBoolean {
 				paramValue.RuntimeType = types.T_bool.ToType()
 				paramValue.HasRuntimeType = true
 			} else if runtimeType, directResultType, materializedValue, hasDirectResultType, ok :=
@@ -2889,7 +2890,6 @@ func buildExecuteUserParamsInto(
 			Value:               param,
 			IsBin:               paramIsBin[i],
 			IsBinaryString:      paramBinaryString[i],
-			PrepareParamKind:    paramKinds[i],
 			RuntimeStringDomain: paramDomains[i],
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
