@@ -1,0 +1,157 @@
+drop database if exists grouping_fold;
+create database grouping_fold;
+use grouping_fold;
+create table t(a int, b int, c varchar(10));
+insert into t values (null, 1, 'x'), (1, 2, null), (1, 3, 'y'), (2, 4, 'x'), (null, 5, null);
+create table tn(a int not null, b int not null);
+insert into tn values (1, 10), (1, 20), (2, 30);
+create table tpk(id int primary key, k int);
+insert into tpk values (1, 30), (2, 10), (3, 20);
+create table te(a int, b int);
+select a, grouping(a), sum(b), count(*) from t group by a with rollup order by grouping(a), a;
+➤ a[4,32,0]  ¦  grouping(a)[-5,64,0]  ¦  sum(b)[3,32,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  0  ¦  6  ¦  2  𝄀
+1  ¦  0  ¦  5  ¦  2  𝄀
+2  ¦  0  ¦  4  ¦  1  𝄀
+null  ¦  1  ¦  15  ¦  5
+select a, c, grouping(a, c), grouping(c), sum(b) from t group by a, c with rollup order by grouping(a, c), a, c;
+➤ a[4,32,0]  ¦  c[12,10,0]  ¦  grouping(a, c)[-5,64,0]  ¦  grouping(c)[-5,64,0]  ¦  sum(b)[3,32,0]  𝄀
+null  ¦  null  ¦  0  ¦  0  ¦  5  𝄀
+null  ¦  x  ¦  0  ¦  0  ¦  1  𝄀
+1  ¦  null  ¦  0  ¦  0  ¦  2  𝄀
+1  ¦  y  ¦  0  ¦  0  ¦  3  𝄀
+2  ¦  x  ¦  0  ¦  0  ¦  4  𝄀
+null  ¦  null  ¦  1  ¦  1  ¦  6  𝄀
+1  ¦  null  ¦  1  ¦  1  ¦  5  𝄀
+2  ¦  null  ¦  1  ¦  1  ¦  4  𝄀
+null  ¦  null  ¦  3  ¦  1  ¦  15
+select a, grouping(a), sum(b) from tn group by a with rollup order by grouping(a), a;
+➤ a[4,32,0]  ¦  grouping(a)[-5,64,0]  ¦  sum(b)[3,32,0]  𝄀
+1  ¦  0  ¦  30  𝄀
+2  ¦  0  ¦  30  𝄀
+null  ¦  1  ¦  60
+select a, b is null, grouping(a), grouping(b), count(*) from tn group by a, b with rollup order by grouping(a), grouping(b), a, b;
+➤ a[4,32,0]  ¦  b is null[-6,8,0]  ¦  grouping(a)[-5,64,0]  ¦  grouping(b)[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  0  ¦  0  ¦  0  ¦  1  𝄀
+1  ¦  0  ¦  0  ¦  0  ¦  1  𝄀
+2  ¦  0  ¦  0  ¦  0  ¦  1  𝄀
+1  ¦  1  ¦  0  ¦  1  ¦  2  𝄀
+2  ¦  1  ¦  0  ¦  1  ¦  1  𝄀
+null  ¦  1  ¦  1  ¦  1  ¦  3
+select a, sum(b) from t group by a with rollup having grouping(a) = 0 order by a;
+➤ a[4,32,0]  ¦  sum(b)[3,32,0]  𝄀
+null  ¦  6  𝄀
+1  ¦  5  𝄀
+2  ¦  4
+select a, sum(b) from t group by a with rollup having grouping(a) = 1;
+➤ a[4,32,0]  ¦  sum(b)[3,32,0]  𝄀
+null  ¦  15
+select a, sum(b) from t group by a with rollup having grouping(a) = 1 and sum(b) > 100;
+➤ a[4,32,0]  ¦  sum(b)[3,32,0]
+select a, count(*) from te group by a with rollup;
+➤ a[4,32,0]  ¦  count(*)[-5,64,0]
+select a, count(*) from te group by a with rollup having grouping(a) = 0;
+➤ a[4,32,0]  ¦  count(*)[-5,64,0]
+select a, count(*) from te group by a with rollup having grouping(a) = 1;
+➤ a[4,32,0]  ¦  count(*)[-5,64,0]
+select a, b, count(*) from te group by cube(a, b);
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  null  ¦  0
+select a, c, grouping(a), grouping(c), grouping(a, c), count(*) from t group by cube(a, c) order by grouping(a, c), a, c;
+➤ a[4,32,0]  ¦  c[12,10,0]  ¦  grouping(a)[-5,64,0]  ¦  grouping(c)[-5,64,0]  ¦  grouping(a, c)[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  null  ¦  0  ¦  0  ¦  0  ¦  1  𝄀
+null  ¦  x  ¦  0  ¦  0  ¦  0  ¦  1  𝄀
+1  ¦  null  ¦  0  ¦  0  ¦  0  ¦  1  𝄀
+1  ¦  y  ¦  0  ¦  0  ¦  0  ¦  1  𝄀
+2  ¦  x  ¦  0  ¦  0  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  0  ¦  1  ¦  1  ¦  2  𝄀
+1  ¦  null  ¦  0  ¦  1  ¦  1  ¦  2  𝄀
+2  ¦  null  ¦  0  ¦  1  ¦  1  ¦  1  𝄀
+null  ¦  null  ¦  1  ¦  0  ¦  2  ¦  2  𝄀
+null  ¦  x  ¦  1  ¦  0  ¦  2  ¦  2  𝄀
+null  ¦  y  ¦  1  ¦  0  ¦  2  ¦  1  𝄀
+null  ¦  null  ¦  1  ¦  1  ¦  3  ¦  5
+select a, c, grouping(a, c), sum(b) from t group by grouping sets ((a), (c), ()) order by grouping(a, c), a, c;
+➤ a[4,32,0]  ¦  c[12,10,0]  ¦  grouping(a, c)[-5,64,0]  ¦  sum(b)[3,32,0]  𝄀
+null  ¦  null  ¦  1  ¦  6  𝄀
+1  ¦  null  ¦  1  ¦  5  𝄀
+2  ¦  null  ¦  1  ¦  4  𝄀
+null  ¦  null  ¦  2  ¦  7  𝄀
+null  ¦  x  ¦  2  ¦  5  𝄀
+null  ¦  y  ¦  2  ¦  3  𝄀
+null  ¦  null  ¦  3  ¦  15
+select distinct a from t group by a, b with rollup order by a;
+➤ a[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+select distinct a, grouping(a) from t group by a with rollup order by grouping(a), a;
+➤ a[4,32,0]  ¦  grouping(a)[-5,64,0]  𝄀
+null  ¦  0  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+null  ¦  1
+select ifnull(a, -1) k, grouping(a) g, sum(b) from t group by a with rollup order by g, k;
+➤ k[-5,64,0]  ¦  g[-5,64,0]  ¦  sum(b)[3,32,0]  𝄀
+-1  ¦  0  ¦  6  𝄀
+1  ¦  0  ¦  5  𝄀
+2  ¦  0  ¦  4  𝄀
+-1  ¦  1  ¦  15
+select a + 1, grouping(a) * 10 + 1, count(*) from t group by a with rollup order by 2, 1;
+➤ a + 1[-5,12,0]  ¦  grouping(a) * 10 + 1[-5,23,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  1  ¦  2  𝄀
+2  ¦  1  ¦  2  𝄀
+3  ¦  1  ¦  1  𝄀
+null  ¦  11  ¦  5
+select x.a, x.s, y.s from (select a, sum(b) s from t group by a with rollup) x join (select a, sum(b) s from t group by a with rollup) y on x.a = y.a order by x.a;
+➤ a[4,32,0]  ¦  s[3,32,0]  ¦  s[3,32,0]  𝄀
+1  ¦  5  ¦  5  𝄀
+2  ¦  4  ¦  4
+select count(*) from (select a, sum(b) s from t group by a with rollup) x where x.a is null;
+➤ count(*)[-5,64,0]  𝄀
+2
+select a, sum(b), rank() over (order by sum(b)) from t group by a with rollup order by a, 2;
+➤ a[4,32,0]  ¦  sum(b)[3,32,0]  ¦  rank() over (order by sum(b))[-5,64,0]  𝄀
+null  ¦  6  ¦  3  𝄀
+null  ¦  15  ¦  4  𝄀
+1  ¦  5  ¦  2  𝄀
+2  ¦  4  ¦  1
+set session rollup_algorithm = 'SORT';
+select a, sum(b), count(*) from t group by a with rollup order by a, 2;
+➤ a[4,32,0]  ¦  sum(b)[3,32,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  6  ¦  2  𝄀
+null  ¦  15  ¦  5  𝄀
+1  ¦  5  ¦  2  𝄀
+2  ¦  4  ¦  1
+select a, c, sum(b) from t group by a, c with rollup order by a, c, 3;
+➤ a[4,32,0]  ¦  c[12,10,0]  ¦  sum(b)[3,32,0]  𝄀
+null  ¦  null  ¦  5  𝄀
+null  ¦  null  ¦  6  𝄀
+null  ¦  null  ¦  15  𝄀
+null  ¦  x  ¦  1  𝄀
+1  ¦  null  ¦  2  𝄀
+1  ¦  null  ¦  5  𝄀
+1  ¦  y  ¦  3  𝄀
+2  ¦  null  ¦  4  𝄀
+2  ¦  x  ¦  4
+select a, grouping(a), sum(b) from t group by a with rollup order by grouping(a), a;
+➤ a[4,32,0]  ¦  grouping(a)[-5,64,0]  ¦  sum(b)[3,32,0]  𝄀
+null  ¦  0  ¦  6  𝄀
+1  ¦  0  ¦  5  𝄀
+2  ¦  0  ¦  4  𝄀
+null  ¦  1  ¦  15
+select a, count(*) from te group by a with rollup;
+➤ a[4,32,0]  ¦  count(*)[-5,64,0]
+set session rollup_algorithm = 'HASH';
+select k, id, grouping(k), grouping(id), count(*) from tpk group by id, k with rollup order by grouping(k), grouping(id), id;
+➤ k[4,32,0]  ¦  id[4,32,0]  ¦  grouping(k)[-5,64,0]  ¦  grouping(id)[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+30  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
+10  ¦  2  ¦  0  ¦  0  ¦  1  𝄀
+20  ¦  3  ¦  0  ¦  0  ¦  1  𝄀
+null  ¦  1  ¦  1  ¦  0  ¦  1  𝄀
+null  ¦  2  ¦  1  ¦  0  ¦  1  𝄀
+null  ¦  3  ¦  1  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  1  ¦  1  ¦  3
+select a from t where grouping(a) = 0 group by a with rollup;
+Invalid use of group function
+drop database grouping_fold;

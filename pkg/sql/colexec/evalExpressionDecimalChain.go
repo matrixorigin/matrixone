@@ -342,7 +342,7 @@ func decimalChainColumn(expr *plan.Expr, executor ExpressionExecutor) *ColumnExp
 	return col
 }
 func decimalChainSource(v *vector.Vector, col *ColumnExpressionExecutor, n int) bool {
-	if v == nil || v.HasGrouping() || v.Length() != n {
+	if v == nil || v.Length() != n {
 		return false
 	}
 	if v.IsConstNull() {

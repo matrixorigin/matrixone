@@ -39,16 +39,18 @@ import (
 func parallelUnionProjectionTestNodes(t *testing.T, c *Compile) []*plan.Node {
 	col := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
-	grouping, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "grouping", []*plan.Expr{col})
-	require.NoError(t, err)
+	// GROUPING is folded by the planner, so a projection over a grouping-set
+	// union only carries the key and constants.
+	grouping := plan2.MakePlan2Int64ConstExprWithType(0)
 	null := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
-	normalized, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "if", []*plan.Expr{grouping, null, col})
+	negated, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "if",
+		[]*plan.Expr{plan2.MakePlan2BoolConstExprWithType(false), null, col})
 	require.NoError(t, err)
 	nodes := []*plan.Node{
 		{NodeType: plan.Node_VALUE_SCAN, ProjectList: []*plan.Expr{plan2.MakePlan2Int64ConstExprWithType(7)}},
 		{NodeType: plan.Node_VALUE_SCAN, ProjectList: []*plan.Expr{plan2.MakePlan2Int64ConstExprWithType(8)}},
 		{NodeType: plan.Node_UNION_ALL, Children: []int32{0, 1}, ProjectList: []*plan.Expr{col}},
-		{NodeType: plan.Node_PROJECT, Children: []int32{2}, ProjectList: []*plan.Expr{normalized, grouping, col}},
+		{NodeType: plan.Node_PROJECT, Children: []int32{2}, ProjectList: []*plan.Expr{negated, grouping, col}},
 	}
 	for i, node := range nodes {
 		node.NodeId = int32(i)
@@ -172,12 +174,11 @@ func TestParallelUnionProjectionGuards(t *testing.T) {
 	}
 }
 
-func TestParallelUnionProjectionPreservesGroupingRows(t *testing.T) {
+func TestParallelUnionProjectionPreservesNullRows(t *testing.T) {
 	type row struct {
-		value       int64
-		null        bool
-		group       int64
-		rawGrouping bool
+		value int64
+		null  bool
+		group int64
 	}
 	for _, parallel := range []bool{false, true} {
 		c := newLazyUnionAllTestCompile(t)
@@ -205,8 +206,7 @@ func TestParallelUnionProjectionPreservesGroupingRows(t *testing.T) {
 				input.Clean(c.proc.Mp())
 			}
 		})
-		input.Vecs[0] = testutil.MakeInt64Vector([]int64{7, 7, 0, 0}, []uint64{2}, c.proc.Mp())
-		input.Vecs[0].GetGrouping().Add(3)
+		input.Vecs[0] = testutil.MakeInt64Vector([]int64{7, 7, 0, 0}, []uint64{2, 3}, c.proc.Mp())
 		input.SetRowCount(4)
 		left := newLazyUnionAllLeaf(c, colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
 		branches = append(branches, left)
@@ -227,7 +227,8 @@ func TestParallelUnionProjectionPreservesGroupingRows(t *testing.T) {
 				return nil
 			}
 			for i := 0; i < bat.RowCount(); i++ {
-				r := row{null: bat.Vecs[0].IsNull(uint64(i)), group: vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], i), rawGrouping: bat.Vecs[2].GetGrouping().Contains(uint64(i))}
+				r := row{null: bat.Vecs[0].IsNull(uint64(i)), group: vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 0)}
+				require.Equal(t, r.null, bat.Vecs[2].IsNull(uint64(i)))
 				if !r.null {
 					r.value = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], i)
 				}
@@ -238,6 +239,6 @@ func TestParallelUnionProjectionPreservesGroupingRows(t *testing.T) {
 		c.scopes = []*Scope{root}
 		c.InitPipelineContextToExecuteQuery()
 		require.NoError(t, root.MergeRun(c))
-		require.ElementsMatch(t, []row{{value: 7}, {value: 7}, {null: true}, {null: true, group: 1, rawGrouping: true}}, got)
+		require.ElementsMatch(t, []row{{value: 7}, {value: 7}, {null: true}, {null: true}}, got)
 	}
 }

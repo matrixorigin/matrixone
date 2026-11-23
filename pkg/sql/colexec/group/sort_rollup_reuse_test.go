@@ -117,7 +117,7 @@ func TestSortRollupSingleGroupReuseAndMixedFallback(t *testing.T) {
 			require.Equal(t, []int32{1, 2, 3, 0}, vector.MustFixedColNoTypeCheck[int32](out.Vecs[0]))
 			require.Equal(t, []int64{2, 1, 1, 4}, vector.MustFixedColNoTypeCheck[int64](out.Vecs[1]))
 			for row, sum := range []int64{6, 0, 2, 8} {
-				require.Equal(t, row == 3, out.Vecs[0].GetGrouping().Contains(uint64(row)))
+				require.Equal(t, row == 3, out.Vecs[0].IsNull(uint64(row)))
 				require.Equal(t, row == 1, out.Vecs[2].IsNull(uint64(row)))
 				require.Equal(t, row == 1, out.Vecs[3].IsNull(uint64(row)))
 				if row != 1 {

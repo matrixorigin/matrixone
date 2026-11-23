@@ -2093,7 +2093,6 @@ func TestColumnExpressionLifecycle(t *testing.T) {
 			require.Equal(t, typ, *vec.GetType())
 			require.Equal(t, length, vec.Length())
 			require.True(t, vec.IsConstNull())
-			require.False(t, vec.IsGrouping())
 			for row := 0; row < length; row++ {
 				require.True(t, vec.IsNull(uint64(row)))
 			}
@@ -2129,30 +2128,6 @@ func TestColumnExpressionLifecycle(t *testing.T) {
 		executor.Free()
 		executor = nil
 		checkNull(owned, types.T_int32.ToType(), 1)
-	})
-
-	t.Run("grouping borrowed", func(t *testing.T) {
-		checkExpressionStorageAfterCleanup(t, proc)
-		bat := batch.NewWithSize(1)
-		t.Cleanup(func() { bat.Clean(proc.Mp()) })
-		bat.Vecs[0] = vector.NewRollupConst(types.T_varchar.ToType(), 3, proc.Mp())
-		bat.SetRowCount(3)
-		executor, err := NewExpressionExecutor(proc, &plan.Expr{
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
-			Typ:  plan.Type{Id: int32(types.T_varchar)},
-		})
-		if executor != nil {
-			t.Cleanup(executor.Free)
-		}
-		require.NoError(t, err)
-		result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
-		require.NoError(t, err)
-		require.Same(t, bat.Vecs[0], result)
-		require.Equal(t, types.T_varchar.ToType(), *result.GetType())
-		require.Equal(t, 3, result.Length())
-		require.True(t, result.IsConstNull())
-		require.True(t, result.IsGrouping())
-		require.Equal(t, 3, result.GetGrouping().Count())
 	})
 
 	t.Run("relation error and recovery", func(t *testing.T) {

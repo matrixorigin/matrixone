@@ -904,7 +904,7 @@ func TestCompatibilityForV12PropagatesAppendError(t *testing.T) {
 			for _, column := range columns {
 				require.NoError(t, dest.Vecs[column].PreExtend(1, failureMP))
 				if column == ckputil.TableObjectsAttr_Accout_Idx {
-					require.NoError(t, dest.Vecs[column].PreExtendBitmap(1, failureMP))
+					require.NoError(t, dest.Vecs[column].PreExtendNulls(1, failureMP))
 				}
 			}
 			available := failureMP.Cap() - failureMP.CurrNB()

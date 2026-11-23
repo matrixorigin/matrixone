@@ -143,9 +143,6 @@ func MaterializeExactScan(ctx context.Context, entries []fileservice.IOEntry,
 		} else if n != v.Length() {
 			return stats, moerr.NewInvalidInputNoCtx("exact scan column lengths differ")
 		}
-		if v.HasGrouping() {
-			eligible = false
-		}
 	}
 	for _, row := range inputRows {
 		if row < 0 || row >= int64(n) {

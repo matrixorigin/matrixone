@@ -180,7 +180,7 @@ func (projection *Projection) emitRuntimeEmptyGroupingSet(proc *process.Process)
 	projection.freeExpandOwned(proc)
 	output := projection.ctr.expandBuf
 	for i := 0; i < groupCount; i++ {
-		vec := vector.NewRollupConst(planTypeToType(projection.ProjectList[i].Typ), 1, proc.Mp())
+		vec := vector.NewConstNull(planTypeToType(projection.ProjectList[i].Typ), 1, proc.Mp())
 		projection.ctr.expandOwned = append(projection.ctr.expandOwned, vec)
 		output.Vecs[i] = vec
 	}
@@ -220,7 +220,7 @@ func (projection *Projection) emitGroupingSet(proc *process.Process) (vm.CallRes
 			continue
 		}
 		typ := planTypeToType(projection.ProjectList[i].Typ)
-		vec := vector.NewRollupConst(typ, rowCount, proc.Mp())
+		vec := vector.NewConstNull(typ, rowCount, proc.Mp())
 		projection.ctr.expandOwned = append(projection.ctr.expandOwned, vec)
 		output.Vecs[i] = vec
 	}

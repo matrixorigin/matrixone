@@ -157,7 +157,7 @@ func TestNumericComparisonValidityWithoutDictionaryCapability(t *testing.T) {
 }
 
 func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
-	for _, shape := range []string{"constant", "grouping"} {
+	for _, shape := range []string{"constant"} {
 		t.Run(shape, func(t *testing.T) {
 			proc, allocation, _ := dependentTestAllocation(t)
 			input := batch.NewWithSize(2)
@@ -168,9 +168,6 @@ func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
 				require.NoError(t, err)
 			}
 			input.SetRowCount(4)
-			if shape == "grouping" {
-				input.Vecs[0].GetGrouping().Add(1)
-			}
 			cols := make([]*plan.Expr, 0, 2)
 			for side := range 2 {
 				cols = append(cols, &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(side)}}})
