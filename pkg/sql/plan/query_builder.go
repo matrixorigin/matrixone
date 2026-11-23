@@ -7048,13 +7048,12 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
-	if stmt != nil && stmt.Ep == nil {
-		// A consuming SELECT can itself be a whole parenthesized query
-		// expression whose wrappers each carry a pagination stage. bindSelect
-		// deliberately rejects multiple clause sets on one flattened select,
-		// so compose the same inside-out derived nest here: the consumer's
-		// WITH is hoisted onto the composed outermost level verbatim. Export
-		// targets keep the dedicated export binding.
+	if stmt != nil && stmt.Ep == nil && stmt.With != nil {
+		// Only a WITH-bearing consuming SELECT composes its parenthesized
+		// pagination stages here: its own WITH is hoisted verbatim onto the
+		// composed outermost level. An ordinary no-WITH statement keeps
+		// bindSelect's flatten-and-reject contract, so duplicate ORDER
+		// BY/LIMIT clause sets stay the documented syntax error.
 		if wrapped, pages, rewritten := ordinaryPaginationWrap(stmt); rewritten {
 			unregisterSyntheticPages := builder.registerSyntheticPages(pages)
 			defer unregisterSyntheticPages()

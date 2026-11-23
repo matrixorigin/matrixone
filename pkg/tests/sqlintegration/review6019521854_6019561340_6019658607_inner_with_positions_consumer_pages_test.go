@@ -252,6 +252,38 @@ func TestInnerWithPositionsConsumerAndReleasePages(t *testing.T) {
 			// planner level.
 			require.ErrorContains(t, lockErr, "syntax", "the SQL-level negative is the parser boundary: %v", lockErr)
 		})
+		t.Run("finding_94_ordinary_no_WITH_duplicate_clauses_stay_typed_errors", func(t *testing.T) {
+			// The upstream union.sql contract: an ordinary (no-WITH)
+			// parenthesized statement whose clause SETS duplicate ORDER BY or
+			// LIMIT through transparent nested parentheses is a syntax error,
+			// never a silently composed page nest. The consumer composition
+			// engages only for WITH-bearing statements.
+			for _, sqlText := range []string{
+				"(select a from t1 order by a) order by a",
+				"(((select a from t1 order by a))) order by a",
+				"(((select a from t1) order by a)) order by a",
+			} {
+				_, byErr := conn.ExecContext(ctx, sqlText)
+				require.Error(t, byErr, "duplicate ORDER BY must stay a typed syntax error: %s", sqlText)
+				require.ErrorContains(t, byErr, "multiple ORDER BY clauses not allowed", sqlText)
+			}
+			for _, sqlText := range []string{
+				"(select a from t1 limit 1) limit 1",
+				"(((select a from t1 limit 1))) limit 1",
+				"(((select a from t1) limit 1)) limit 1",
+			} {
+				_, lmErr := conn.ExecContext(ctx, sqlText)
+				require.Error(t, lmErr, "duplicate LIMIT must stay a typed syntax error: %s", sqlText)
+				require.ErrorContains(t, lmErr, "multiple LIMIT clauses not allowed", sqlText)
+			}
+		})
+		t.Run("finding_94_WITH_bearing_consumer_pagination_still_composes", func(t *testing.T) {
+			// The positive discriminator: the SAME nested page shapes under
+			// a WITH-bearing consumer compose inside out and return the
+			// paged rows, unchanged from the accepted closures.
+			expect(t, "WITH q AS (SELECT 1 AS a UNION ALL SELECT 2 AS a) ((SELECT a FROM q LIMIT 2) ORDER BY a DESC LIMIT 1)", []string{"2"})
+			twoCols(t, "WITH q(x, y) AS ((SELECT 1 AS a, 2 AS a LIMIT 2) LIMIT 1) SELECT x, y FROM q", [][2]string{{"1", "2"}})
+		})
 		t.Run("finding_2_multi_stage_positions_renamed_through_both_pages", func(t *testing.T) {
 			twoCols(t, "WITH q(x, y) AS ((SELECT 1 AS a, 2 AS a LIMIT 2) LIMIT 1) SELECT x, y FROM q", [][2]string{{"1", "2"}})
 		})
