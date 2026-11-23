@@ -2991,6 +2991,19 @@ func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) 
 	return paramTypes, nil
 }
 
+// ProjectHasMoCtrl identifies control calls checked by frontend authorization.
+func ProjectHasMoCtrl(node *plan.Node) bool {
+	if node == nil || node.NodeType != plan.Node_PROJECT {
+		return false
+	}
+	for _, expr := range node.ProjectList {
+		if expr != nil && HasMoCtrl(expr) {
+			return true
+		}
+	}
+	return false
+}
+
 // HasMoCtrl checks whether the expression has mo_ctrl(..,..,..)
 func HasMoCtrl(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {

@@ -13301,15 +13301,8 @@ func TestCheckpointV2(t *testing.T) {
 	assert.NoError(t, err)
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
-			_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
-			return
-		}, &objlistReplayer{},
-	)
-	for _, fn := range closeFn {
-		fn()
-	}
+	err = catalog2.ReplayFromSysTableObjects(ctx, readTxn, tables.ScanSysTable, &objlistReplayer{})
+	require.NoError(t, err)
 	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
 	assert.NoError(t, err)
 
@@ -13452,24 +13445,11 @@ func TestCheckpointCompatibility(t *testing.T) {
 	assert.NoError(t, err)
 	err = logtail.ReplayCheckpoint(ctx, catalog2, true, reader)
 	assert.NoError(t, err)
-	sortFunc := func(cols []containers.Vector, pkidx int) (err2 error) {
-		_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
-		return
-	}
-
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx,
-		readTxn,
-		tables.ReadSysTableBatch,
-		sortFunc,
-		&objlistReplayer{},
-	)
+	err = catalog2.ReplayFromSysTableObjects(ctx, readTxn, tables.ScanSysTable, &objlistReplayer{})
+	require.NoError(t, err)
 	assert.NoError(t, readTxn.Commit(ctx))
-	for _, fn := range closeFn {
-		fn()
-	}
 
 	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
 	assert.NoError(t, err)
