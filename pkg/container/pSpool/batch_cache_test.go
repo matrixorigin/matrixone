@@ -123,7 +123,7 @@ func TestCachedBatchCopiesMixedShapes(t *testing.T) {
 	}
 }
 
-func TestCachedBatchMixedShapeFailureReturnsBacking(t *testing.T) {
+func TestCachedBatchMixedShapeFailureReleasesBacking(t *testing.T) {
 	sourceMP := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { defer mpool.DeleteMPool(sourceMP); require.Zero(t, sourceMP.CurrNB()) })
 	seed := newSpoolSizeBatch(t, sourceMP, []int{64, 0, 8192}, true)
@@ -151,8 +151,8 @@ func TestCachedBatchMixedShapeFailureReturnsBacking(t *testing.T) {
 			cache.put(copied, id)
 		}
 		require.Error(t, err)
-		require.Len(t, cache.bats, 1)
-		require.LessOrEqual(t, mp.CurrNB(), int64(len(filler))+retained)
+		require.Empty(t, cache.bats, "a failed copy frees the idle cached backing")
+		require.Equal(t, int64(len(filler)), mp.CurrNB())
 	}
 	mp.Free(filler)
 	filler = nil

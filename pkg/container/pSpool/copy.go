@@ -66,14 +66,7 @@ func (c *batchCache) put(bat *batch.Batch, aliased bool) {
 	if aliased {
 		// Keep each vector once, at its first position, so a later copy can
 		// reuse every cached vector independently.
-		for i := 1; i < len(bat.Vecs); i++ {
-			for j := 0; j < i; j++ {
-				if bat.Vecs[i] != nil && bat.Vecs[j] == bat.Vecs[i] {
-					bat.Vecs[i] = nil
-					break
-				}
-			}
-		}
+		dedupVectors(bat.Vecs)
 	}
 	bat.DropExtraBuffer()
 	bat.ReleaseLeases()
@@ -100,6 +93,32 @@ func (c *batchCache) free() {
 	}
 }
 
+// reclaim frees the cached batches but keeps the cache open. It returns
+// whether it freed anything.
+func (c *batchCache) reclaim() bool {
+	c.mu.Lock()
+	bats := c.bats
+	c.bats = c.bats[:0:0]
+	c.mu.Unlock()
+	for _, bat := range bats {
+		bat.Clean(c.mp)
+	}
+	return len(bats) > 0
+}
+
+// dedupVectors clears every entry of vecs that repeats an earlier one, so
+// each shared vector is kept, and freed, once.
+func dedupVectors(vecs []*vector.Vector) {
+	for i := 1; i < len(vecs); i++ {
+		for j := 0; j < i; j++ {
+			if vecs[i] != nil && vecs[j] == vecs[i] {
+				vecs[i] = nil
+				break
+			}
+		}
+	}
+}
+
 // copyBatch returns a deep copy of src whose vectors are owned by the cache's
 // pool, whether the returned batch is owned by the spool (and must be given
 // back with put), and whether several of its columns share one vector.
@@ -111,12 +130,38 @@ func (c *batchCache) free() {
 // which ends at the producer's next call, before consumers read this copy.
 // A vector shared by several columns of src is copied once and shared by the
 // same columns of the copy.
+//
+// Cached vectors keep the backing sized for the column at their position in
+// an earlier batch, so a copy into them can be refused by a memory limit that
+// a fresh copy fits in (for example when two columns swap sizes). When a copy
+// that reused cached memory fails, all idle cached memory is freed and the
+// copy is retried once into fresh vectors.
 func (c *batchCache) copyBatch(src *batch.Batch) (dst *batch.Batch, owned, aliased bool, err error) {
 	if src == nil || src == batch.EmptyBatch || src == batch.CteEndBatch {
 		return src, false, false, nil
 	}
 
-	dst = c.get()
+	cached := c.get()
+	dst, aliased, err = c.copyInto(cached, src)
+	if err != nil {
+		reclaimed := c.reclaim()
+		if cached == nil && !reclaimed {
+			return nil, false, false, err
+		}
+		dst, aliased, err = c.copyInto(nil, src)
+		if err != nil {
+			return nil, false, false, err
+		}
+	}
+
+	dst.MoveExtraBufferFrom(src)
+	dst.SetRowCount(src.RowCount())
+	return dst, true, aliased, nil
+}
+
+// copyInto copies the vectors of src into dst, a cached batch or nil for a
+// fresh one. On error it frees dst and returns nil.
+func (c *batchCache) copyInto(dst, src *batch.Batch) (_ *batch.Batch, aliased bool, err error) {
 	if dst == nil {
 		dst = batch.NewWithSize(len(src.Vecs))
 	} else {
@@ -163,14 +208,14 @@ copyVectors:
 		if err != nil {
 			// Aliases are only made to earlier columns, so dst is consistent
 			// up to here; the uncopied suffix still holds cached vectors.
-			c.put(dst, aliased)
-			return nil, false, false, err
+			if aliased {
+				dedupVectors(dst.Vecs)
+			}
+			dst.Clean(c.mp)
+			return nil, false, err
 		}
 	}
-
-	dst.MoveExtraBufferFrom(src)
-	dst.SetRowCount(src.RowCount())
-	return dst, true, aliased, nil
+	return dst, aliased, nil
 }
 
 // reshape resizes a cached batch's vector slice to n columns, freeing the

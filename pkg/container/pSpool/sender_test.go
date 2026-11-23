@@ -15,6 +15,7 @@
 package pSpool
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -294,7 +295,7 @@ func TestCachedBatchChargesSpoolAllocationView(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestCachedBatchAllocationFailureReturnsCacheOwnership(t *testing.T) {
+func TestCachedBatchAllocationFailureReleasesCacheOwnership(t *testing.T) {
 	mp := mpool.MustNewZero()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 4)
 	require.NoError(t, err)
@@ -316,7 +317,7 @@ func TestCachedBatchAllocationFailureReturnsCacheOwnership(t *testing.T) {
 
 	_, _, _, err = cache.copyBatch(source)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	require.Len(t, cache.bats, 1)
+	require.Empty(t, cache.bats)
 	require.Equal(t, uint64(64), account.Snapshot().Used)
 
 	source.Clean(view)
@@ -966,4 +967,70 @@ func newSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.Batch {
 	require.NoError(t, vector.AppendFixedList[int64](src.Vecs[0], values, nil, mp))
 	src.SetRowCount(len(values))
 	return src
+}
+
+// Cached vectors keep backing sized for their column position. When two
+// varlen columns swap sizes, reusing that backing needs more memory than a
+// fresh copy; under an allocation account the spool must still admit the
+// batch, as a fresh spool would.
+func TestPipelineSpoolSwappedColumnSizesFitAllocationAccount(t *testing.T) {
+	const (
+		large = 256 << 10
+		small = 64 << 10
+	)
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { defer mpool.DeleteMPool(srcMP); require.Zero(t, srcMP.CurrNB()) })
+	newSource := func(sizes ...int) *batch.Batch {
+		source := batch.NewWithSize(len(sizes))
+		for i, size := range sizes {
+			source.Vecs[i] = vector.NewVec(types.T_text.ToType(), srcMP)
+			require.NoError(t, vector.AppendBytes(source.Vecs[i], bytes.Repeat([]byte{byte(i + 1)}, size), false, srcMP))
+		}
+		source.SetRowCount(1)
+		t.Cleanup(func() { source.Clean(srcMP) })
+		return source
+	}
+	first := newSource(large, small)
+	swapped := newSource(small, large)
+
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	account, err := registry.Open(384 << 10)
+	require.NoError(t, err)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
+	require.NoError(t, err)
+
+	send := func(sp *PipelineSpool, source *batch.Batch) {
+		t.Helper()
+		_, err := sp.SendBatch(context.Background(), 0, source, nil)
+		require.NoError(t, err)
+		got, info := sp.ReceiveBatch(0)
+		require.NoError(t, info)
+		for i, vec := range source.Vecs {
+			require.Equal(t, vec.GetBytesAt(0), got.Vecs[i].GetBytesAt(0))
+		}
+		sp.ReleaseCurrent(0)
+	}
+
+	// Control: a fresh spool admits the swapped batch.
+	fresh := InitMyPipelineSpool(view, 1)
+	send(fresh, swapped)
+	fresh.Abort(nil)
+	require.Zero(t, account.Snapshot().Used)
+
+	// A spool warmed by the first shape admits it too.
+	sp := InitMyPipelineSpool(view, 1)
+	send(sp, first)
+	send(sp, swapped)
+	// And keeps working, reusing the backing again for the same shape.
+	send(sp, swapped)
+	sp.Abort(nil)
+
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, mp.CurrNB())
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
 }

@@ -156,9 +156,9 @@ func TestCopyBatchFailureReleasesPartialCopy(t *testing.T) {
 	cache := newBatchCache(mp, 1)
 	_, _, _, err = cache.copyBatch(source)
 	require.Error(t, err)
-	require.Len(t, cache.bats, 1, "a failed copy returns its batch to the cache")
-	cache.free()
+	require.Empty(t, cache.bats, "a failed copy frees its batch")
 	require.Zero(t, mp.CurrNB())
+	cache.free()
 	require.Equal(t, bytes.Repeat([]byte{1}, 64), source.Vecs[0].GetBytesAt(0))
 }
 
