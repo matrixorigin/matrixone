@@ -18,13 +18,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -161,4 +167,106 @@ func TestCatalogReplayStreamsPersistedSystemTables(t *testing.T) {
 		}
 	}
 	require.NoError(t, txn.Commit(ctx))
+}
+
+type failingCatalogRead struct {
+	fileservice.FileService
+	object string
+	err    error
+	fail   atomic.Bool
+}
+
+func (fs *failingCatalogRead) Read(ctx context.Context, vec *fileservice.IOVector) error {
+	if fs.fail.Load() && strings.Contains(vec.FilePath, fs.object) {
+		return fs.err
+	}
+	return fs.FileService.Read(ctx, vec)
+}
+
+func TestCatalogReplayReadFailureReleasesPools(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	closed := false
+	defer func() {
+		if !closed {
+			_ = tae.Close()
+		}
+	}()
+	txn, err := tae.StartTxn(nil)
+	require.NoError(t, err)
+	dbh, err := testutil.CreateDatabase2(ctx, txn, "read_failure")
+	require.NoError(t, err)
+	for i := 0; i < 50; i++ {
+		schema := catalog.MockSchema(32, 0)
+		schema.Name = fmt.Sprintf("table_%03d", i)
+		_, err = testutil.CreateRelation2(ctx, txn, dbh, schema)
+		require.NoError(t, err)
+	}
+	require.NoError(t, txn.Commit(ctx))
+	require.NoError(t, tae.DB.ForceFlush(ctx, tae.TxnMgr.Now()))
+	require.NoError(t, tae.DB.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), 0))
+
+	txn, err = tae.StartTxn(nil)
+	require.NoError(t, err)
+	catDB, err := tae.Catalog.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	require.NoError(t, err)
+	columns, err := catDB.GetTableEntryByID(pkgcatalog.MO_COLUMNS_ID)
+	require.NoError(t, err)
+	it := columns.MakeDataVisibleObjectIt(txn)
+	require.True(t, it.Next())
+	object := it.Item().ObjectStats.ObjectName().String()
+	it.Release()
+	require.NoError(t, txn.Commit(ctx))
+	dir := tae.Dir
+	require.NoError(t, tae.Close())
+	closed = true
+
+	ioutil.Start("")
+	defer ioutil.Stop("")
+	opts := config.WithLongScanAndCKPOpts(nil).FillDefaults(dir)
+	want := errors.New("catalog column read failed")
+	fs := &failingCatalogRead{FileService: opts.Fs, object: object, err: want}
+	fs.fail.Store(true)
+	opts.Fs = fs
+	defer opts.Fs.Close(ctx)
+	defer opts.LocalFs.Close(ctx)
+	defer opts.TmpFs.Close(ctx)
+	for i := 0; i < 3; i++ {
+		failed, openErr := db.Open(ctx, dir, opts)
+		require.ErrorIs(t, openErr, want)
+		require.NotNil(t, failed)
+		require.Zero(t, failed.Runtime.VectorPool.Small.Allocated())
+		require.Zero(t, failed.Runtime.VectorPool.Transient.Allocated())
+	}
+
+	fs.fail.Store(false)
+	reopened, err := db.Open(ctx, dir, opts)
+	require.NoError(t, err)
+	reopenedClosed := false
+	defer func() {
+		if !reopenedClosed {
+			_ = reopened.Close()
+		}
+	}()
+	txn, err = reopened.StartTxn(nil)
+	require.NoError(t, err)
+	dbh, err = txn.GetDatabase("read_failure")
+	require.NoError(t, err)
+	_, err = dbh.GetRelationByName("table_049")
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctx))
+
+	// Closing the DB must not invalidate a vector still owned by a caller.
+	typ := types.T_int64.ToType()
+	held := reopened.Runtime.VectorPool.Small.GetVector(&typ)
+	defer held.Close()
+	held.Append(int64(42), false)
+	err = reopened.Close()
+	reopenedClosed = true
+	require.NoError(t, err)
+	require.Equal(t, int64(42), held.Get(0))
+	held.Close()
+	require.Zero(t, reopened.Runtime.VectorPool.Small.Allocated())
+	require.Zero(t, reopened.Runtime.VectorPool.Transient.Allocated())
 }
