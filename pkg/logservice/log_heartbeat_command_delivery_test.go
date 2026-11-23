@@ -25,6 +25,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func recordStartShardMembership(t *testing.T, ctx context.Context, s *Service, target string, replicaIDs ...uint64) pb.LogShardInfo {
+	t.Helper()
+	const peer = "log-start-membership-peer"
+	shard := pb.LogShardInfo{
+		ShardID:  80,
+		Epoch:    1,
+		Replicas: map[uint64]string{1: peer},
+	}
+	for _, replicaID := range replicaIDs {
+		shard.Replicas[replicaID] = target
+	}
+	peerHeartbeat := pb.LogStoreHeartbeat{
+		UUID:             peer,
+		StoreIncarnation: "membership-peer-disk",
+		Replicas:         []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 1}},
+	}
+	response := s.handleLogHeartbeat(ctx, pb.Request{Method: pb.LOG_HEARTBEAT, LogHeartbeat: &peerHeartbeat})
+	require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+	return shard
+}
+
 func TestLogHeartbeatRedeliversUnacknowledgedReplicaStart(t *testing.T) {
 	runServiceTest(t, true, true, func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -35,6 +56,7 @@ func TestLogHeartbeatRedeliversUnacknowledgedReplicaStart(t *testing.T) {
 		req := pb.Request{Method: pb.LOG_HEARTBEAT, LogHeartbeat: &hb}
 		registered := s.handleLogHeartbeat(ctx, req)
 		require.Equal(t, uint32(moerr.Ok), registered.ErrorCode)
+		shard := recordStartShardMembership(t, ctx, s, hb.UUID, 10)
 		state, err := s.store.getCheckerStateWithContext(ctx)
 		require.NoError(t, err)
 		commands := operator.NewController().Dispatch(
@@ -59,11 +81,8 @@ func TestLogHeartbeatRedeliversUnacknowledgedReplicaStart(t *testing.T) {
 		require.Equal(t, []pb.ScheduleCommand{command}, stored.Commands)
 		// The same replica ID in the wrong voting role is not completion.
 		hb.Replicas = append(hb.Replicas, pb.LogReplicaInfo{
-			LogShardInfo: pb.LogShardInfo{
-				ShardID: 80, Epoch: 1,
-				NonVotingReplicas: map[uint64]string{10: hb.UUID},
-			},
-			ReplicaID: 10, IsNonVoting: true,
+			LogShardInfo: shard,
+			ReplicaID:    10, IsNonVoting: true,
 		})
 		wrongRole := s.handleLogHeartbeat(ctx, pb.Request{Method: pb.LOG_HEARTBEAT, LogHeartbeat: &hb})
 		require.Equal(t, []pb.ScheduleCommand{command}, wrongRole.CommandBatch.Commands)
@@ -85,6 +104,7 @@ func TestLaterStopCancelsOnlyMatchingPendingLogStart(t *testing.T) {
 		hb.UUID = "log-start-stop"
 		req := pb.Request{Method: pb.LOG_HEARTBEAT, LogHeartbeat: &hb}
 		require.Equal(t, uint32(moerr.Ok), s.handleLogHeartbeat(ctx, req).ErrorCode)
+		recordStartShardMembership(t, ctx, s, hb.UUID, 10, 11)
 		start10 := pb.ScheduleCommand{
 			UUID: hb.UUID, ServiceType: pb.LogService,
 			ConfigChange: &pb.ConfigChange{
