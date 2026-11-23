@@ -181,18 +181,18 @@ func TestHistoricalChangesSubmitFinishedObjectBeforePlanningNext(t *testing.T) {
 	}
 }
 
-type replayReadFailureFS struct {
+type replayPendingReadFS struct {
 	fileservice.FileService
 	slowMetadata    bool
-	missingMetadata bool
+	currentMetadata bool
 	slowObject      string
-	missingObject   string
-	missingErr      error
+	currentObject   string
+	currentErr      error
 	started         chan struct{}
 	stopped         chan struct{}
 }
 
-func (fs *replayReadFailureFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+func (fs *replayPendingReadFS) Read(ctx context.Context, v *fileservice.IOVector) error {
 	metadata := len(v.Entries) == 1
 	switch {
 	case v.FilePath == fs.slowObject && metadata == fs.slowMetadata:
@@ -200,10 +200,12 @@ func (fs *replayReadFailureFS) Read(ctx context.Context, v *fileservice.IOVector
 		<-ctx.Done()
 		close(fs.stopped)
 		return ctx.Err()
-	case v.FilePath == fs.missingObject && metadata == fs.missingMetadata:
+	case v.FilePath == fs.currentObject && metadata == fs.currentMetadata:
 		select {
 		case <-fs.started:
-			return fs.missingErr
+			if fs.currentErr != nil {
+				return fs.currentErr
+			}
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -211,18 +213,20 @@ func (fs *replayReadFailureFS) Read(ctx context.Context, v *fileservice.IOVector
 	return fs.FileService.Read(ctx, v)
 }
 
-func TestHistoricalChangesCancelPendingReadsOnMissingFile(t *testing.T) {
+func TestHistoricalChangesStopsOutstandingPrefetch(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
-		missingFirst    bool
+		currentFirst    bool
 		slowMetadata    bool
-		missingMetadata bool
+		currentMetadata bool
+		completeWindow  bool
 	}{
-		{name: "missing block first", missingFirst: true},
+		{name: "missing block first", currentFirst: true},
 		{name: "missing block second"},
-		{name: "missing first object's metadata", slowMetadata: true, missingMetadata: true, missingFirst: true},
-		{name: "missing second object's metadata", slowMetadata: true, missingMetadata: true},
-		{name: "missing payload while later metadata is pending", slowMetadata: true, missingFirst: true},
+		{name: "missing first object's metadata", slowMetadata: true, currentMetadata: true, currentFirst: true},
+		{name: "missing second object's metadata", slowMetadata: true, currentMetadata: true},
+		{name: "missing payload while later metadata is pending", slowMetadata: true, currentFirst: true},
+		{name: "complete payload window while later metadata is pending", slowMetadata: true, currentFirst: true, completeWindow: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
@@ -235,28 +239,39 @@ func TestHistoricalChangesCancelPendingReadsOnMissingFile(t *testing.T) {
 
 			ts := types.BuildTS(100, 0)
 			slow := writeReplayTestObject(t, ctx, mp, mem, ts, 11)
-			missing := writeReplayTestObject(t, ctx, mp, mem, ts, 11)
-			objects := []*objectio.ObjectEntry{slow, missing}
+			keys := []int32{11}
+			var want []int64
+			if tc.completeWindow {
+				keys = make([]int32, LoadParallism)
+				for i := range keys {
+					keys[i] = 11
+					want = append(want, int64(i+1))
+				}
+			}
+			current := writeReplayTestObject(t, ctx, mp, mem, ts, keys...)
+			objects := []*objectio.ObjectEntry{slow, current}
 			if tc.slowMetadata {
-				// The blocked read is speculative, later than the missing
+				// The blocked read is speculative, later than the current
 				// object. A preceding valid plan must keep its replay order.
-				objects = []*objectio.ObjectEntry{missing, slow}
-				if !tc.missingFirst {
+				objects = []*objectio.ObjectEntry{current, slow}
+				if !tc.currentFirst {
 					first := writeReplayTestObject(t, ctx, mp, mem, ts, 11)
 					objects = append([]*objectio.ObjectEntry{first}, objects...)
 				}
-			} else if tc.missingFirst {
+			} else if tc.currentFirst {
 				objects[0], objects[1] = objects[1], objects[0]
 			}
-			fs := &replayReadFailureFS{
+			fs := &replayPendingReadFS{
 				FileService:     mem,
 				slowMetadata:    tc.slowMetadata,
-				missingMetadata: tc.missingMetadata,
+				currentMetadata: tc.currentMetadata,
 				slowObject:      slow.ObjectName().String(),
-				missingObject:   missing.ObjectName().String(),
-				missingErr:      moerr.NewFileNotFoundNoCtx(missing.ObjectName().String()),
+				currentObject:   current.ObjectName().String(),
 				started:         make(chan struct{}),
 				stopped:         make(chan struct{}),
+			}
+			if !tc.completeWindow {
+				fs.currentErr = moerr.NewFileNotFoundNoCtx(fs.currentObject)
 			}
 			zm := index.NewZM(types.T_int32, 0)
 			pk := int32(11)
@@ -270,9 +285,23 @@ func TestHistoricalChangesCancelPendingReadsOnMissingFile(t *testing.T) {
 			}
 			defer changes.scheduler.Stop()
 			handle := NewAObjectHandle(ctx, &baseHandle{changesHandle: changes}, false, ts, ts, objects, fs, mp)
-			err = handle.init(ctx, true)
+			err = handle.prefetch(ctx)
+			defer func() {
+				for _, b := range handle.cache {
+					b.Clean(mp)
+				}
+			}()
 			require.NoError(t, ctx.Err(), "the caller must still be able to read the snapshot")
-			require.ErrorIs(t, err, fs.missingErr)
+			if tc.completeWindow {
+				require.NoError(t, err)
+				var rows []int64
+				for _, b := range handle.cache {
+					rows = append(rows, vector.MustFixedColWithTypeCheck[int64](b.Vecs[1])...)
+				}
+				require.Equal(t, want, rows)
+			} else {
+				require.ErrorIs(t, err, fs.currentErr)
+			}
 			select {
 			case <-fs.stopped:
 			default:
