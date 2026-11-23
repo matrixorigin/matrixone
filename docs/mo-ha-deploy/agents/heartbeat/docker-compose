@@ -135,7 +135,7 @@ labeled_container_ids()
 	# its project name changes. An empty Compose result alone is inconclusive.
 	project_dir=$(CDPATH= cd "$(dirname "$CONFIG_FILE")" && pwd) || return "$OCF_ERR_GENERIC"
 	config_path=${project_dir%/}/${CONFIG_FILE##*/}
-	format='{{.ID}}{{"\t"}}{{.Names}}{{"\t"}}{{.Label "com.docker.compose.project"}}{{"\t"}}{{.Label "com.docker.compose.project.config_files"}}{{"\t"}}{{.Label "com.docker.compose.oneoff"}}'
+	format='{{.ID}}{{"\t"}}{{.Names}}{{"\t"}}{{.Label "com.docker.compose.project"}}{{"\t"}}{{.Label "com.docker.compose.project.config_files"}}{{"\t"}}{{.Label "com.docker.compose.oneoff"}}{{"\t"}}{{.State}}'
 	containers=$(docker ps --all --no-trunc --format "$format") || {
 		ocf_log err "failed to enumerate Docker containers for $config_path"
 		return "$OCF_ERR_GENERIC"
@@ -144,18 +144,19 @@ labeled_container_ids()
 	# Names only flag possible ownership conflicts. They cannot authorize
 	# stopping a container, even when it has the template name "matrixone".
 	if ! ids=$(printf '%s\n' "$containers" |
-		OCF_COMPOSE_CONFIG="$config_path" OCF_COMPOSE_DIR="${project_dir##*/}" awk -F '\t' '
+		OCF_COMPOSE_CONFIG="$config_path" OCF_COMPOSE_DIR="${project_dir##*/}" awk -F '\t' -v selection="$1" '
 		BEGIN {
 			prefix = tolower(ENVIRON["OCF_COMPOSE_DIR"])
 			gsub(/[^a-z0-9_-]/, "", prefix)
 			legacy = prefix
 			gsub(/[_-]/, "", legacy)
 		}
-		tolower($5) == "true" { next }
+		{ oneoff = (tolower($5) == "true") }
+		oneoff && (selection == "monitor" || $6 == "exited" || $6 == "created") { next }
 		$3 != "" && $4 == ENVIRON["OCF_COMPOSE_CONFIG"] {
 			if (project != "" && project != $3) ambiguous = 1
 			project = $3
-			print $1
+			if (selection == "active-oneoffs" ? oneoff : !oneoff) print $1
 			next
 		}
 		$2 == "matrixone" ||
@@ -172,7 +173,7 @@ labeled_container_ids()
 
 remove_containers()
 {
-	ids=$(labeled_container_ids) || return "$OCF_ERR_GENERIC"
+	ids=$(labeled_container_ids services) || return "$OCF_ERR_GENERIC"
 	failed=0
 	for id in $ids; do
 		# kill can fail for an already stopped container. rm without --force
@@ -188,6 +189,8 @@ remove_containers()
 
 docker_container_status()
 {
+	expected_services=$1
+	shift
 	[ "$#" -gt 0 ] || return "$OCF_NOT_RUNNING"
 	format='{{.State.Running}}|{{.State.Status}}|{{.State.ExitCode}}|{{index .Config.Labels "com.docker.compose.oneoff"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{index .Config.Labels "com.docker.compose.depends_on"}}'
 	states=$(docker inspect --format="$format" "$@") || {
@@ -197,10 +200,11 @@ docker_container_status()
 
 	# Compose records service_completed_successfully dependencies on the
 	# dependent container. Only a successful exit satisfies that condition.
-	printf '%s\n' "$states" | awk -F '[|]' -v not_running="$OCF_NOT_RUNNING" '
+	printf '%s\n' "$states" | OCF_EXPECTED_SERVICES="$expected_services" awk -F '[|]' -v not_running="$OCF_NOT_RUNNING" '
 		NF != 6 || ($1 != "true" && $1 != "false") { invalid = 1; next }
 		tolower($4) == "true" { next }
 		{
+			seen[$5] = 1
 			if ($1 == "true") running = 1
 			else if ($2 == "exited" && $3 == "0") exited[$5] = 1
 			else stopped = 1
@@ -215,6 +219,9 @@ docker_container_status()
 		END {
 			if (invalid) exit 2
 			if (!running) exit not_running
+			count = split(ENVIRON["OCF_EXPECTED_SERVICES"], services, "\n")
+			for (i = 1; i <= count; i++)
+				if (services[i] != "" && !(services[i] in seen)) stopped = 1
 			for (service in exited)
 				if (!(service in init)) stopped = 1
 			exit stopped ? 1 : 0
@@ -231,12 +238,17 @@ docker_container_status()
 
 docker_compose_status()
 {
+	services=
 	if [ -r "$CONFIG_FILE" ]; then
+		services=$(run_compose config --services) && [ -n "$services" ] || {
+			ocf_log err "cannot determine the configured services for $CONFIG_FILE"
+			return "$OCF_ERR_GENERIC"
+		}
 		compose_ids=$(run_compose ps -aq) || {
 			ocf_log err "failed to enumerate Compose containers for $CONFIG_FILE"
 			return "$OCF_ERR_GENERIC"
 		}
-		docker_container_status $compose_ids
+		docker_container_status "$services" $compose_ids
 		case "$?" in
 			"$OCF_SUCCESS") return "$OCF_SUCCESS" ;;
 			"$OCF_NOT_RUNNING") ;;
@@ -244,8 +256,8 @@ docker_compose_status()
 		esac
 	fi
 
-	ids=$(labeled_container_ids) || return "$OCF_ERR_GENERIC"
-	docker_container_status $ids
+	ids=$(labeled_container_ids monitor) || return "$OCF_ERR_GENERIC"
+	docker_container_status "$services" $ids
 }
 
 docker_compose_start()
@@ -271,7 +283,7 @@ docker_compose_start()
 
 confirm_containers_stopped()
 {
-	docker_container_status "$@"
+	docker_container_status "" "$@"
 	[ "$?" = "$OCF_NOT_RUNNING" ] && return "$OCF_SUCCESS"
 	ocf_log err "Compose containers could not be confirmed stopped"
 	return "$OCF_ERR_GENERIC"
@@ -287,7 +299,20 @@ docker_compose_stop()
 		remove_containers || return "$OCF_ERR_GENERIC"
 	fi
 
-	ids=$(labeled_container_ids) || return "$OCF_ERR_GENERIC"
+	# Compose down may leave compose run jobs accessing shared data. Only
+	# stop jobs with verified ownership and leave their containers intact.
+	jobs=$(labeled_container_ids active-oneoffs) || return "$OCF_ERR_GENERIC"
+	if [ -n "$jobs" ]; then
+		# A job started with --rm may disappear before docker stop. Verify
+		# the resulting state even if the command reports a missing ID.
+		docker stop $jobs >/dev/null
+		jobs=$(labeled_container_ids active-oneoffs) || return "$OCF_ERR_GENERIC"
+		if [ -n "$jobs" ]; then
+			ocf_log err "Compose one-off containers still active for $CONFIG_FILE: $jobs"
+			return "$OCF_ERR_GENERIC"
+		fi
+	fi
+	ids=$(labeled_container_ids services) || return "$OCF_ERR_GENERIC"
 	confirm_containers_stopped $ids
 }
 

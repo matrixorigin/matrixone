@@ -28,6 +28,11 @@ COMPOSE = """\
 #!/bin/sh
 printf 'compose %s\\n' "$*" >> "$TRACE"
 case "$3" in
+    config)
+        [ "$4" = --services ] || exit 99
+        [ "${CONFIG_ERROR:-0}" = 0 ] || exit "$CONFIG_ERROR"
+        printf '%s\\n' "$SERVICES"
+        ;;
     ps)
         [ "${COMPOSE_PS_ERROR:-0}" = 0 ] || exit "$COMPOSE_PS_ERROR"
         if [ -f "$COMPOSE_STOPPED" ]; then
@@ -70,7 +75,10 @@ case "$1" in
                 printf '%s %s\\n' "$id" "$name"
             else
                 printf '%s\\t' "$id"
-                cat "$container"
+                IFS= read -r labels < "$container"
+                state=running
+                [ ! -f "$TRACE.$id.stopped" ] || state=exited
+                printf '%s\\t%s\\n' "$labels" "$state"
             fi
         done
         ;;
@@ -92,9 +100,18 @@ case "$1" in
                 init-failed) echo 'false|exited|1||init|' ;;
                 invalid) echo unknown ;;
                 oneoff) echo 'false|exited|0|True|task|' ;;
+                task) echo 'true|running|0|True|app|' ;;
+                helper) echo 'true|running|0||helper|' ;;
                 app) echo 'true|running|0||app|init:service_completed_successfully:false' ;;
                 *) echo 'true|running|0||app|' ;;
             esac
+        done
+        ;;
+    stop)
+        [ "${STOP_ERROR:-0}" = 0 ] || exit "$STOP_ERROR"
+        shift
+        for id do
+            [ "${STOP_NO_EFFECT:-0}" = 1 ] || touch "$TRACE.$id.stopped"
         done
         ;;
     kill) exit 0 ;;
@@ -140,6 +157,7 @@ class ResourceAgentTests(unittest.TestCase):
             COMPOSE_STARTED=str(self.root / "started"),
             COMPOSE_STOPPED=str(self.root / "stopped"),
             CONTAINERS=str(self.containers),
+            SERVICES="app",
             AFTER_UP_IDS="running",
         )
         env.update(settings)
@@ -158,7 +176,7 @@ class ResourceAgentTests(unittest.TestCase):
     def assert_no_mutation(self, calls):
         self.assertFalse(
             any(
-                call.startswith(("docker kill ", "docker rm ")) or call.endswith(" up -d")
+                call.startswith(("docker kill ", "docker rm ", "docker stop ")) or call.endswith(" up -d")
                 for call in calls
             ),
             calls,
@@ -180,7 +198,20 @@ class ResourceAgentTests(unittest.TestCase):
         self.action("monitor", 7, COMPOSE_IDS="oneoff")
 
     def test_monitor_preserves_custom_initialization_service_behavior(self):
-        self.action("monitor", 0, COMPOSE_IDS="init-exited\napp")
+        self.action("monitor", 0, SERVICES="app\ninit", COMPOSE_IDS="init-exited\napp")
+
+    def test_missing_service_with_running_helper_or_orphan(self):
+        for services in ("app\nhelper", "app"):
+            with self.subTest(services=services):
+                self.action("monitor", 1, SERVICES=services, COMPOSE_IDS="helper\ntask")
+                self.action("start", 1, SERVICES=services, COMPOSE_IDS="helper\ntask")
+
+    def test_monitor_checks_expected_services_in_label_fallback(self):
+        self.add_container("my-project-helper-1", "my-project", self.yaml, container_id="helper")
+        self.assert_no_mutation(self.action("monitor", 1, SERVICES="app\nhelper"))
+
+    def test_monitor_cannot_read_effective_services(self):
+        self.assert_no_mutation(self.action("monitor", 1, COMPOSE_IDS="running", CONFIG_ERROR="9"))
 
     def test_monitor_failed_initialization_service(self):
         self.action("monitor", 1, COMPOSE_IDS="app\ninit-failed")
@@ -327,6 +358,12 @@ class ResourceAgentTests(unittest.TestCase):
         self.add_container("two-matrixone-1", "two", self.yaml, container_id="second")
         self.assert_no_mutation(self.action("stop", 1))
 
+    def test_stop_missing_yaml_with_oneoff_from_conflicting_project(self):
+        self.yaml.unlink()
+        self.add_container("matrixone", "one", self.yaml)
+        self.add_container("two-task", "two", self.yaml, "True", "task")
+        self.assert_no_mutation(self.action("stop", 1))
+
     def test_stop_missing_yaml_docker_failed(self):
         self.yaml.unlink()
         self.assert_no_mutation(self.action("stop", 1, DOCKER_PS_ERROR="9"))
@@ -334,6 +371,25 @@ class ResourceAgentTests(unittest.TestCase):
     def test_stop_missing_yaml_without_containers(self):
         self.yaml.unlink()
         self.assert_no_mutation(self.action("stop", 0))
+
+    def test_stop_owned_oneoff_with_and_without_yaml(self):
+        self.add_container("app-task", "my-project", self.yaml, "True", container_id="task")
+        self.add_container("foreign-task", "other", self.root / "other.yaml", "True", "foreign")
+        for readable in (True, False):
+            with self.subTest(readable=readable):
+                if not readable:
+                    self.yaml.unlink()
+                self.assertIn("docker stop task", self.action("stop", 0))
+                self.assertTrue((self.root / "trace.task.stopped").exists())
+                self.assertFalse((self.root / "trace.foreign.stopped").exists())
+                self.trace.write_text("")
+                self.assert_no_mutation(self.action("stop", 0))
+                (self.root / "trace.task.stopped").unlink()
+
+    def test_stop_cannot_confirm_oneoff_stopped(self):
+        self.add_container("app-task", "my-project", self.yaml, "True", container_id="task")
+        self.action("stop", 1, STOP_NO_EFFECT="1")
+        self.action("stop", 1, STOP_ERROR="9")
 
     def test_validate_missing_yaml(self):
         self.yaml.unlink()

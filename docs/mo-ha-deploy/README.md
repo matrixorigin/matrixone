@@ -54,6 +54,8 @@ sudo install -D -m 0755 agents/heartbeat/docker-compose /usr/lib/ocf/resource.d/
 
 如果 `p_mo` 仍使用 `ocf:heartbeat:docker-compose`，在维护窗口停用该资源并确认容器已停止。通过离线 CIB 将 `p_mo` 的 provider 改为 `matrixone`，保留现有资源参数和约束，校验后发布并重新启用 `p_mo`。
 
+停机或迁移时，资源代理也会停止能确认属于该配置的活动 `docker compose run` 任务，以便释放共享数据。请在维护前完成需要保留运行的任务。已经退出的临时容器会保留；使用 `--rm` 启动的任务由 Docker 自动清理。
+
 ## 三、验证
 
 ```bash
