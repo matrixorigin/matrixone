@@ -146,22 +146,6 @@ copyVectors:
 
 			destination.SetSorted(vec.GetSorted())
 		}
-		if vec.HasGrouping() {
-			groupingRows := vec.GetGrouping().GetBitmap().Len()
-			if groupingRows < 0 || groupingRows > int64(math.MaxInt) {
-				cb.CacheBatch(true, cacheID, dst)
-				return nil, false, 0, mpool.ErrAllocationAccountInvalid
-			}
-			if err = destination.PreExtendGrouping(
-				int(groupingRows),
-				cb.mp,
-			); err != nil {
-				cb.CacheBatch(true, cacheID, dst)
-				return nil, false, 0, err
-			}
-			destination.SetGrouping(vec.GetGrouping())
-		}
-
 		if !planned {
 			// range src and found the same vector.
 			for j := i + 1; j < len(src.Vecs); j++ {

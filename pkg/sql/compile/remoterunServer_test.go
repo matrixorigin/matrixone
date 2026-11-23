@@ -1002,7 +1002,9 @@ func TestMessageReceiverSendBatchCarriesStaticBinaryType(t *testing.T) {
 	require.Equal(t, "text", decoded.Vecs[0].GetStringAt(1))
 }
 
-func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
+// Rolled-up ROLLUP keys are plain NULL constants, so sending them needs no
+// protocol gate: any peer version receives the stable batch.
+func TestMessageReceiverSendBatchSendsRolledUpNullsUngated(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, _ := runtime.GetGlobalVariables(rt.MOProtocolVersion)
 	t.Cleanup(func() { runtime.SetGlobalVariables(rt.MOProtocolVersion, original) })
@@ -1010,7 +1012,7 @@ func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	bat := batch.NewWithSize(1)
 	t.Cleanup(func() { bat.Clean(mp) })
-	bat.Vecs[0] = vector.NewRollupConst(types.T_int32.ToType(), 2, mp)
+	bat.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 2, mp)
 	bat.SetRowCount(2)
 	ctrl := gomock.NewController(t)
 	session := mock_morpc.NewMockClientSession(ctrl)
@@ -1019,20 +1021,20 @@ func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
 		clientSession: session, messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
 		maxMessageSize: 1 << 20,
 	}
-	for _, version := range []any{nil, "unknown", int64(86)} {
-		runtime.SetGlobalVariables(rt.MOProtocolVersion, version)
-		require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion87")
-	}
+	versions := []any{nil, "unknown", int64(86), int64(87)}
 	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, message any) error {
 			decoded, err := decodeBatch(mp, message.(*pipeline.Message).Data)
 			require.NoError(t, err)
 			defer decoded.Clean(mp)
-			require.Equal(t, 2, decoded.Vecs[0].GetGrouping().Count())
+			require.Equal(t, 2, decoded.RowCount())
+			require.True(t, decoded.Vecs[0].IsConstNull())
 			return nil
-		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, int64(87))
-	require.NoError(t, receiver.sendBatch(bat))
+		}).Times(len(versions))
+	for _, version := range versions {
+		runtime.SetGlobalVariables(rt.MOProtocolVersion, version)
+		require.NoError(t, receiver.sendBatch(bat))
+	}
 }
 
 func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *testing.T) {

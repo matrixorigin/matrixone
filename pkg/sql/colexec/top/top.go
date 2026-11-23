@@ -1223,7 +1223,7 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 				if err := outputBat.Vecs[i].PreExtend(chunkSize, outputMP); err != nil {
 					return false, err
 				}
-				if err := outputBat.Vecs[i].PreExtendBitmap(chunkSize, outputMP); err != nil {
+				if err := outputBat.Vecs[i].PreExtendNulls(chunkSize, outputMP); err != nil {
 					return false, err
 				}
 				outputBat.Vecs[i].SetLength(chunkSize)

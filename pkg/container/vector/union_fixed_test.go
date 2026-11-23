@@ -113,7 +113,6 @@ func TestUnionFixedSelection(t *testing.T) {
 						}
 						copy(src.data[row*width:(row+1)*width], expected[row])
 					}
-					src.GetGrouping().Add(2)
 					if nullable {
 						src.GetNulls().Add(1)
 					}
@@ -139,7 +138,6 @@ func TestUnionFixedSelection(t *testing.T) {
 						for row, sourceRow := range []int{0, 3, 2, 2, 1} {
 							isNull := nullable && sourceRow == 1
 							require.Equal(t, isNull, dst.IsNull(uint64(row)))
-							require.Equal(t, sourceRow == 2, dst.GetGrouping().Contains(uint64(row)))
 							if !isNull {
 								require.Equal(t, expected[sourceRow], dst.data[row*width:(row+1)*width])
 							}

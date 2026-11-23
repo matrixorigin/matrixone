@@ -3468,12 +3468,11 @@ func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
-func TestWindowPartitionTopNSeparatesGroupingNullFromEmptyString(t *testing.T) {
+func TestWindowPartitionTopNSeparatesNullFromEmptyString(t *testing.T) {
 	proc := newWindowSpillProcess(t)
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
-	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"", "", ""}, nil, proc.Mp()))
-	input.Vecs[0].GetGrouping().Add(0)
+	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"", "", ""}, []bool{true, false, false}, proc.Mp()))
 	input.Vecs[1] = testutil.MakeInt32Vector([]int32{100, 30, 20}, nil, proc.Mp())
 	input.SetRowCount(3)
 

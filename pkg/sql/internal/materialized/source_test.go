@@ -426,9 +426,6 @@ func TestSharedMaterializedSourceSplitsOversizedSpillBatch(t *testing.T) {
 	for range 100 {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], payload, false, mp))
 	}
-	for row := 0; row < 100; row += 7 {
-		bat.Vecs[0].GetGrouping().Add(uint64(row))
-	}
 	bat.Vecs[0].SetSorted(true)
 	bat.SetRowCount(100)
 	t.Cleanup(func() { bat.Clean(mp) })
@@ -452,8 +449,6 @@ func TestSharedMaterializedSourceSplitsOversizedSpillBatch(t *testing.T) {
 		}
 		for row := 0; row < got.RowCount(); row++ {
 			require.Equal(t, payload, got.Vecs[0].GetBytesAt(row))
-			require.Equal(t, (rows+row)%7 == 0,
-				got.Vecs[0].GetGrouping().Contains(uint64(row)))
 		}
 		require.True(t, got.Vecs[0].GetSorted())
 		require.Positive(t, budget.account.Snapshot().Used)
@@ -716,53 +711,16 @@ func TestSpillBatchSizeMatchesEncoding(t *testing.T) {
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("materialized"), false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("spill"), false, mp))
-	bat.Vecs[0].GetGrouping().Add(1)
 	bat.SetRowCount(2)
 	t.Cleanup(func() { bat.Clean(mp) })
 
 	serialized, scratch, err := spillBatchSize(bat)
 	require.NoError(t, err)
 	var encoded bytes.Buffer
-	require.NoError(t, encoded.WriteByte(spillPayloadGrouping))
-	require.NoError(t, bat.MarshalBinaryWithGroupingTo(&encoded))
+	require.NoError(t, encoded.WriteByte(spillPayloadBatch))
+	require.NoError(t, bat.MarshalBinaryForSpillTo(&encoded))
 	require.Equal(t, uint64(encoded.Len()), serialized)
 	require.GreaterOrEqual(t, scratch, serialized)
-}
-
-func TestSharedMaterializedSourceSpillPreservesGroupingProvenance(t *testing.T) {
-	mp := mpool.MustNewZeroNoFixed()
-	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
-	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{0, 7}, []bool{true, false}, mp))
-	bat.Vecs[0].GetGrouping().Add(0)
-	bat.SetRowCount(2)
-	t.Cleanup(func() { bat.Clean(mp) })
-
-	serialized, scratch, err := spillBatchSize(bat)
-	require.NoError(t, err)
-	budget := newTestSpillBudget(
-		scratch,
-		uint64(spillBatchHeaderSize)+serialized,
-		1,
-	)
-	source := newSource(2, 0)
-	require.NoError(t, source.Begin(mp, budget.config(testSpillFactory(t.TempDir()))))
-	require.NoError(t, source.Append(bat))
-	source.Finish(nil)
-
-	for readerID := range 2 {
-		got, end, err := source.Next(context.Background(), readerID, 0)
-		require.NoError(t, err)
-		require.False(t, end)
-		require.Positive(t, budget.account.Snapshot().Used)
-		require.True(t, got.Vecs[0].GetNulls().Contains(0))
-		require.True(t, got.Vecs[0].GetGrouping().Contains(0))
-		require.False(t, got.Vecs[0].GetGrouping().Contains(1))
-		got.Clean(source.BatchMP())
-		require.Zero(t, budget.account.Snapshot().Used)
-		source.ReleaseReader(readerID)
-	}
 }
 
 func TestSharedMaterializedSourceStoresOnlyPositionalBatches(t *testing.T) {
