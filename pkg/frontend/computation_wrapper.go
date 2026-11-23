@@ -2389,11 +2389,12 @@ func preparedParamValues(proc *process.Process, store *plan2.ParamValueStore, pa
 				}
 				paramValue.DirectResultType = directResultType
 				paramValue.HasDirectResultType = hasDirectResultType
-				paramValue.MaterializedValue = materializedValue
 				if materializedValue != "" {
-					// The restored cached plan executes a typed ParamRef against this
-					// vector. Keep the raw packet spelling only in ParamValue provenance;
-					// otherwise the executor reparses input-sized leading zeroes.
+					// A DECIMAL is decoded once into its bounded canonical lexeme;
+					// the planner and the executor (which reads this vector) both use
+					// it, never the input-sized packet spelling. The visible scale of
+					// the spelling is already in DirectResultType.
+					paramValue.Value = materializedValue
 					if err = vector.SetStringAt(params, i, materializedValue, proc.Mp()); err != nil {
 						return nil, err
 					}

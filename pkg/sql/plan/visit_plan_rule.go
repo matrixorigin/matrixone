@@ -1233,12 +1233,6 @@ func (rule *ResetParamRefRule) preparedGeometrySRIDParamExpr(pos int, sourceIsNu
 			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
 		}, true, nil
 	}
-	if pos >= 0 && pos < len(rule.paramValues) {
-		if param, isParam := AsParamValue(rule.paramValues[pos]); isParam &&
-			value == nil && param.MaterializedValue != "" {
-			value = param.MaterializedValue
-		}
-	}
 	srid, isNull, err := geometrySRIDRuntimeValue(value)
 	if err != nil {
 		return nil, false, err
@@ -5117,12 +5111,8 @@ func (rule *ResetParamRefRule) preparedInetNtoaSourceExpr(pos int) (*Expr, bool,
 	if !hasSourceType || !isInetNtoaDomainSourceType(sourceType) {
 		return nil, false, nil
 	}
-	value := param.Value
-	if param.MaterializedValue != "" {
-		value = param.MaterializedValue
-	}
 	source, err := preparedRuntimeParamExpr(
-		rule.ctx, value, param.IsBin, sourceType)
+		rule.ctx, param.Value, param.IsBin, sourceType)
 	if err != nil {
 		return nil, false, err
 	}
@@ -5215,9 +5205,7 @@ func (rule *ResetParamRefRule) preparedRuntimeSourceExpr(pos int, preserveProtoc
 	}
 
 	value := param.Value
-	if param.MaterializedValue != "" {
-		value = param.MaterializedValue
-	} else if bytes, ok := value.([]byte); ok {
+	if bytes, ok := value.([]byte); ok {
 		value = string(bytes)
 	}
 	source, err := preparedRuntimeParamExpr(rule.ctx, value, param.IsBin, sourceType)
@@ -5326,9 +5314,6 @@ func isBitwiseAggregatePrivateCast(expr *plan.Expr) bool {
 }
 
 func preparedParamValueText(param ParamValue) string {
-	if param.MaterializedValue != "" {
-		return param.MaterializedValue
-	}
 	switch value := param.Value.(type) {
 	case []byte:
 		return string(value)

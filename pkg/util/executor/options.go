@@ -30,6 +30,10 @@ import (
 )
 
 type ParamValue struct {
+	// Value is the parameter's value: a native Go value for integer, float
+	// and Boolean parameters; for a COM_STMT DECIMAL, the bounded canonical
+	// lexeme the protocol scanner produced (the raw packet spelling is
+	// decoded once and never kept); otherwise its text.
 	Value any
 	IsBin bool
 	// IsBinaryString is the legacy binary-domain metadata retained for
@@ -69,10 +73,6 @@ type ParamValue struct {
 	// domain for lexemes whose only excess digits are removable trailing zeroes.
 	DirectResultType    types.Type
 	HasDirectResultType bool
-	// MaterializedValue is a bounded canonical DECIMAL lexeme produced by the
-	// protocol scanner. Typed literal construction uses it instead of reparsing
-	// the potentially max-packet-sized raw Value.
-	MaterializedValue string
 	// RetainParamRef records that a specialized query plan will be cached and
 	// therefore must retain this parameter as runtime provenance even when the
 	// parameter itself is unrelated to numeric-prefix specialization.

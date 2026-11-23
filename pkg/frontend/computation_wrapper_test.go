@@ -2212,12 +2212,13 @@ func TestPreparedParamValuesCarriesBothDecimalDomains(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, values, 1)
 			value, _ := plan2.AsParamValue(values[0])
-			require.Equal(t, test.value, value.Value)
+			// The packet spelling is decoded once: the planner sees the
+			// canonical lexeme, and the visible scale survives in DirectResultType.
+			require.Equal(t, test.canonical, value.Value)
 			require.Equal(t, test.normalized, value.RuntimeType)
 			require.True(t, value.HasRuntimeType)
 			require.Equal(t, test.visible, value.DirectResultType)
 			require.True(t, value.HasDirectResultType)
-			require.Equal(t, test.canonical, value.MaterializedValue)
 			require.Equal(t, test.canonical, cw.proc.GetPrepareParams().GetStringAt(0),
 				"the restored typed ParamRef must execute against the bounded canonical lexeme")
 		})
@@ -2701,7 +2702,10 @@ func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
 	require.Len(t, values, 1)
 	param, ok := plan2.AsParamValue(values[0])
 	require.True(t, ok)
-	require.Equal(t, value, param.Value)
+	// The packet spelling is decoded once into its canonical lexeme.
+	_, _, canonical, ok := plan2.PreparedDecimalRuntimeDomains(value)
+	require.True(t, ok)
+	require.Equal(t, canonical, param.Value)
 	require.Equal(t, types.StringConversionDecimal, param.PrepareParamKind)
 	require.True(t, param.HasRuntimeType)
 	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
@@ -2731,7 +2735,7 @@ func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
 	require.Equal(t, int32(types.T_decimal256), abs.Typ.Id)
 	require.Equal(t, int32(types.T_decimal256), abs.GetF().Args[0].Typ.Id)
 	require.Equal(t, "cast", abs.GetF().Args[0].GetF().Func.GetObjName())
-	require.Equal(t, value, abs.GetF().Args[0].GetF().Args[0].GetLit().GetSval())
+	require.Equal(t, canonical, abs.GetF().Args[0].GetF().Args[0].GetLit().GetSval())
 }
 
 func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {

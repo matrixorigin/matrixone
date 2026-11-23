@@ -948,8 +948,7 @@ func TestPreparedDecimalRuntimeDomainsCanonicalMaterialization(t *testing.T) {
 	}}}
 	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
 		context.Background(), planUnderTest, []any{ParamValue{
-			Value: raw, MaterializedValue: canonical,
-			RuntimeType: visible, HasRuntimeType: true,
+			Value: canonical, RuntimeType: visible, HasRuntimeType: true,
 			IsBinaryProtocol: true, RetainParamRef: true,
 		}})
 	require.NoError(t, err)
@@ -1033,8 +1032,7 @@ func BenchmarkPreparedDecimalDomainsAndMaterializationLargeLexeme(b *testing.B) 
 		}
 		candidate := DeepCopyPlan(template)
 		if _, err := replaceParamVals(ctx, candidate, []any{ParamValue{
-			Value: value, MaterializedValue: canonical,
-			RuntimeType: visible, HasRuntimeType: true,
+			Value: canonical, RuntimeType: visible, HasRuntimeType: true,
 			IsBinaryProtocol: true, RetainParamRef: true,
 		}}); err != nil {
 			b.Fatal(err)

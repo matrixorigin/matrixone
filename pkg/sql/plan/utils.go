@@ -4566,7 +4566,7 @@ func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int)
 }
 
 func preparedParamValueIsNull(param ParamValue) bool {
-	return param.Value == nil && param.MaterializedValue == ""
+	return param.Value == nil
 }
 
 func preparedGeometrySRIDParamPositionsInExpr(expr *plan.Expr) []int32 {
@@ -6715,9 +6715,6 @@ func replaceParamValsWithSelection(
 		runtimeStringDomain := types.RuntimeStringInherit
 		if param, ok := AsParamValue(val); ok {
 			val = param.Value
-			if param.MaterializedValue != "" {
-				val = param.MaterializedValue
-			}
 			isBin = param.IsBin
 			runtimeType = param.RuntimeType
 			hasRuntimeType = param.HasRuntimeType

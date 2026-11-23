@@ -164,9 +164,6 @@ func preparedConfigurationValue(ctx context.Context, expr *Expr) (any, bool) {
 	state.valueDependent = true
 	value := state.values[position]
 	if param, ok := AsParamValue(value); ok {
-		if param.MaterializedValue != "" {
-			return param.MaterializedValue, true
-		}
 		return param.Value, true
 	}
 	return value, true

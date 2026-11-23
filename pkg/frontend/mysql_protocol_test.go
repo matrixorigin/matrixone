@@ -3270,7 +3270,10 @@ func TestParseExecuteDataDecimalRebindsPreparedAbsExactly(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 	param := mustParamValue(values[0])
-	require.Equal(t, value, param.Value)
+	// The packet spelling is decoded once into its canonical lexeme.
+	_, _, canonical, ok := plan.PreparedDecimalRuntimeDomains(value)
+	require.True(t, ok)
+	require.Equal(t, canonical, param.Value)
 	require.True(t, param.HasRuntimeType)
 	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
 

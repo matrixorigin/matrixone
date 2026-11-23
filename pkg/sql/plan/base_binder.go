@@ -5186,9 +5186,6 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 				value := state.values[pos]
 				if param, ok := AsParamValue(value); ok {
 					value = param.Value
-					if param.MaterializedValue != "" {
-						value = param.MaterializedValue
-					}
 				}
 				if str, ok := value.(string); ok {
 					str = strings.TrimSpace(str)
