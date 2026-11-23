@@ -58,7 +58,7 @@ func (expr *FunctionExpressionExecutor) booleanProducesNoNulls() bool {
 		return false
 	}
 	for _, argument := range expr.parameterResults {
-		if argument == nil || argument.HasNull() || argument.HasGrouping() {
+		if argument == nil || argument.HasNull() {
 			return false
 		}
 		if logical && argument.GetType().Oid != types.T_bool {
@@ -137,7 +137,7 @@ func (expr *FunctionExpressionExecutor) decimal128ProducesNoNulls() bool {
 }
 
 func decimalValueIsNonNull(value *vector.Vector) bool {
-	return value != nil && !value.HasNull() && !value.HasGrouping()
+	return value != nil && !value.HasNull()
 }
 
 // fixedMembershipList identifies the execution-owned literal/runtime-filter
@@ -155,8 +155,7 @@ func (expr *FunctionExpressionExecutor) fixedMembershipList() *vector.Vector {
 	}
 	value := list.resultVector
 	oid := value.GetType().Oid
-	if !(oid.IsSignedInt() || oid.IsUnsignedInt() || oid.IsMySQLString()) ||
-		value.HasGrouping() {
+	if !(oid.IsSignedInt() || oid.IsUnsignedInt() || oid.IsMySQLString()) {
 		return nil
 	}
 	return value

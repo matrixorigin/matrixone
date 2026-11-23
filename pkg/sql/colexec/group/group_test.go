@@ -1102,7 +1102,7 @@ func TestGroupByWithSum(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
-func TestSortRollupProducesGroupingSentinelsAndAggregates(t *testing.T) {
+func TestSortRollupProducesNullRolledKeysAndAggregates(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	first := batch.NewWithSize(3)
@@ -1130,16 +1130,19 @@ func TestSortRollupProducesGroupingSentinelsAndAggregates(t *testing.T) {
 	}
 	actual := make(map[resultKey]types.Decimal128)
 	for _, result := range results {
-		as := vector.MustFixedColNoTypeCheck[int32](result.Vecs[0])
-		bs := vector.MustFixedColNoTypeCheck[int32](result.Vecs[1])
-		sums := vector.MustFixedColNoTypeCheck[types.Decimal128](result.Vecs[2])
 		for row := 0; row < result.RowCount(); row++ {
-			actual[resultKey{
-				a:     as[row],
-				b:     bs[row],
-				aRoll: result.Vecs[0].GetGrouping().Contains(uint64(row)),
-				bRoll: result.Vecs[1].GetGrouping().Contains(uint64(row)),
-			}] = sums[row]
+			// Input keys are never NULL, so a NULL key is a rolled-up key.
+			key := resultKey{
+				aRoll: result.Vecs[0].IsNull(uint64(row)),
+				bRoll: result.Vecs[1].IsNull(uint64(row)),
+			}
+			if !key.aRoll {
+				key.a = vector.GetFixedAtNoTypeCheck[int32](result.Vecs[0], row)
+			}
+			if !key.bRoll {
+				key.b = vector.GetFixedAtNoTypeCheck[int32](result.Vecs[1], row)
+			}
+			actual[key] = vector.GetFixedAtNoTypeCheck[types.Decimal128](result.Vecs[2], row)
 		}
 	}
 
@@ -1211,9 +1214,10 @@ func TestSortRollupEmptyInputAndNullRow(t *testing.T) {
 			counts := vector.MustFixedColNoTypeCheck[int64](result.Vecs[2])
 			for row := 0; row < result.RowCount(); row++ {
 				require.Equal(t, int64(1), counts[row])
+				// Source and rolled-up keys are both plain NULLs now.
 				require.True(t, result.Vecs[3].IsNull(uint64(row)))
-				require.Equal(t, row == 2, result.Vecs[0].GetGrouping().Contains(uint64(row)))
-				require.Equal(t, row >= 1, result.Vecs[1].GetGrouping().Contains(uint64(row)))
+				require.True(t, result.Vecs[0].IsNull(uint64(row)))
+				require.True(t, result.Vecs[1].IsNull(uint64(row)))
 			}
 		})
 	}
@@ -1274,7 +1278,7 @@ func TestSortRollupPropagatesChildYield(t *testing.T) {
 		keys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
 		counts := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1])
 		for row := 0; row < result.Batch.RowCount(); row++ {
-			if result.Batch.Vecs[0].GetGrouping().Contains(uint64(row)) {
+			if result.Batch.Vecs[0].IsNull(uint64(row)) {
 				require.Zero(t, total, "grand total must be published exactly once")
 				total = counts[row]
 			} else {
@@ -1391,7 +1395,7 @@ func TestSortRollupStreamsMultipleOutputBatches(t *testing.T) {
 				outputRows += result.RowCount()
 				counts := vector.MustFixedColNoTypeCheck[int64](result.Vecs[1])
 				for row := 0; row < result.RowCount(); row++ {
-					if result.Vecs[0].GetGrouping().Contains(uint64(row)) {
+					if result.Vecs[0].IsNull(uint64(row)) {
 						grandTotal = counts[row]
 					}
 				}
@@ -1455,7 +1459,7 @@ func TestSortRollupDoesNotRepeatCrossBatchBoundary(t *testing.T) {
 				keys := vector.MustFixedColNoTypeCheck[int32](result.Vecs[0])
 				counts := vector.MustFixedColNoTypeCheck[int64](result.Vecs[1])
 				for row := 0; row < result.RowCount(); row++ {
-					if result.Vecs[0].GetGrouping().Contains(uint64(row)) {
+					if result.Vecs[0].IsNull(uint64(row)) {
 						grandTotal = counts[row]
 					} else {
 						detailCounts[keys[row]]++
@@ -1535,60 +1539,6 @@ func TestSortRollupReclaimsPublishedOutputBatches(t *testing.T) {
 				"published output batches must not accumulate linearly")
 		})
 	}
-}
-
-func TestSortRollupDistinguishesInputNullFromRollupNull(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	input := batch.NewWithSize(3)
-	input.Vecs[0] = testutil.MakeInt32Vector(
-		[]int32{0, 0, 1, 2}, []uint64{0, 1}, proc.Mp())
-	input.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 1, 1}, nil, proc.Mp())
-	input.Vecs[2] = testutil.MakeInt32Vector([]int32{2, 3, 1, 4}, nil, proc.Mp())
-	input.SetRowCount(4)
-
-	g := newGroupOp(proc,
-		[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)},
-		[]aggexec.AggFuncExecExpression{sumAgg(2)})
-	g.SortRollup = true
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	g.AppendChild(child)
-	require.NoError(t, g.Prepare(proc))
-	results := collectSortRollupBatches(t, g, proc)
-
-	var inputNullDetail, inputNullSubtotal, grandTotal bool
-	for _, result := range results {
-		as := result.Vecs[0]
-		bs := vector.MustFixedColNoTypeCheck[int32](result.Vecs[1])
-		sums := vector.MustFixedColNoTypeCheck[types.Decimal128](result.Vecs[2])
-		for row := 0; row < result.RowCount(); row++ {
-			aRoll := as.GetGrouping().Contains(uint64(row))
-			bRoll := result.Vecs[1].GetGrouping().Contains(uint64(row))
-			if as.IsNull(uint64(row)) && !aRoll && !bRoll && bs[row] == 1 {
-				require.Equal(t, types.Decimal128FromInt64(2), sums[row])
-				inputNullDetail = true
-			}
-			if as.IsNull(uint64(row)) && !aRoll && bRoll {
-				require.Equal(t, types.Decimal128FromInt64(5), sums[row])
-				inputNullSubtotal = true
-			}
-			if aRoll && bRoll {
-				require.Equal(t, types.Decimal128FromInt64(10), sums[row])
-				grandTotal = true
-			}
-		}
-	}
-	require.True(t, inputNullDetail)
-	require.True(t, inputNullSubtotal)
-	require.True(t, grandTotal)
-	for _, result := range results {
-		result.Clean(proc.Mp())
-	}
-
-	g.Free(proc, false, nil)
-	child.Free(proc, false, nil)
-	proc.Free()
-	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestSortRollupRejectsUnprovenFloat32Equality(t *testing.T) {
@@ -2068,7 +2018,7 @@ func TestGroupRejectsInvalidReducedHashKey(t *testing.T) {
 	}
 }
 
-func TestGroupDynamicGroupingUsesGroupingAwareHash(t *testing.T) {
+func TestGroupDynamicGroupingForcesNullableKeys(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	g := newGroupOp(proc, []*plan.Expr{
 		colExpr(0, types.T_varchar), colExpr(1, types.T_varchar), colExpr(2, types.T_int64),
@@ -2076,7 +2026,7 @@ func TestGroupDynamicGroupingUsesGroupingAwareHash(t *testing.T) {
 	g.DynamicGrouping = true
 	require.NoError(t, g.Prepare(proc))
 	require.Equal(t, int32(HStr), g.ctr.mtyp)
-	require.True(t, g.ctr.groupingAware)
+	require.True(t, g.ctr.keyNullable)
 
 	g.Free(proc, false, nil)
 	proc.Free()
@@ -2196,10 +2146,10 @@ func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
 			}
 		}
 	})
-	// Mix a local partial with a remote partial: losing the latter's grouping
-	// bitmap would split the single empty identity into two hash domains.
+	// Mix a local partial with a remote partial: both must merge into the
+	// single empty grouping-set identity.
 	var wire bytes.Buffer
-	_, err := partials[1].MarshalBinaryForPipeline(&wire, true)
+	_, err := partials[1].MarshalBinaryWithBuffer(&wire, true)
 	require.NoError(t, err)
 	partials[1].Clean(proc.Mp())
 	partials[1] = batch.NewWithSize(0)
@@ -2220,7 +2170,7 @@ func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
 	outputs := collectBatches(t, merge, proc)
 	require.Len(t, outputs, 1)
 	require.Equal(t, 1, outputs[0].RowCount())
-	require.True(t, outputs[0].Vecs[0].GetGrouping().Contains(0))
+	require.True(t, outputs[0].Vecs[0].IsNull(0))
 	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[1], 0))
 	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[2], 0))
 	require.True(t, outputs[0].Vecs[3].IsNull(0))
@@ -2240,8 +2190,8 @@ func TestGroupCreatesLegacyEmptyGroupingSet(t *testing.T) {
 	outputs := collectBatches(t, group, proc)
 	require.Len(t, outputs, 1)
 	require.Equal(t, 1, outputs[0].RowCount())
-	require.True(t, outputs[0].Vecs[0].GetGrouping().Contains(0))
-	require.True(t, outputs[0].Vecs[1].GetGrouping().Contains(0))
+	require.True(t, outputs[0].Vecs[0].IsNull(0))
+	require.True(t, outputs[0].Vecs[1].IsNull(0))
 	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[2], 0))
 	require.True(t, outputs[0].Vecs[3].IsNull(0))
 
@@ -2267,7 +2217,7 @@ func TestMergeGroupCreatesEmptyGroupingSetsWithoutPartials(t *testing.T) {
 		require.Len(t, outputs, 1)
 		require.Equal(t, 2, outputs[0].RowCount())
 		for row := 0; row < outputs[0].RowCount(); row++ {
-			require.True(t, outputs[0].Vecs[0].GetGrouping().Contains(uint64(row)))
+			require.True(t, outputs[0].Vecs[0].IsNull(uint64(row)))
 			require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[2], row))
 			require.True(t, outputs[0].Vecs[3].IsNull(uint64(row)))
 		}
@@ -2300,8 +2250,8 @@ func TestMergeGroupCreatesLegacyEmptyGroupingSetWithoutPartials(t *testing.T) {
 	outputs := collectBatches(t, merge, proc)
 	require.Len(t, outputs, 1)
 	require.Equal(t, 1, outputs[0].RowCount())
-	require.True(t, outputs[0].Vecs[0].GetGrouping().Contains(0))
-	require.True(t, outputs[0].Vecs[1].GetGrouping().Contains(0))
+	require.True(t, outputs[0].Vecs[0].IsNull(0))
+	require.True(t, outputs[0].Vecs[1].IsNull(0))
 	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[2], 0))
 	require.True(t, outputs[0].Vecs[3].IsNull(0))
 
@@ -2378,7 +2328,7 @@ func TestMergeGroupUsesDeclaredGroupingDomainAcrossPartialBatches(t *testing.T) 
 
 		child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 		partialGroup := newGroupOp(proc, []*plan.Expr{
-			colExpr(0, types.T_varchar), colExpr(3, types.T_int64),
+			colExprWithType(0, *key.GetType()), colExpr(3, types.T_int64),
 		}, []aggexec.AggFuncExecExpression{sumAgg(1)})
 		partialGroup.NeedEval = false
 		partialGroup.DynamicGrouping = true
@@ -2392,12 +2342,13 @@ func TestMergeGroupUsesDeclaredGroupingDomainAcrossPartialBatches(t *testing.T) 
 		return partial
 	}
 
-	active := makePartial(
-		testutil.MakeVarcharVector([]string{"active"}, nil, proc.Mp()), 0, 2)
-	rolled := makePartial(
-		vector.NewRollupConst(types.T_varchar.ToType(), 1, proc.Mp()), 1, 3)
-	require.False(t, mergeGroupHashKeyHasGrouping(active.Vecs))
-	require.True(t, mergeGroupHashKeyHasGrouping(rolled.Vecs))
+	// Keep the key type identical to the group-by expression type; a
+	// rolled-up key is a plain NULL constant of that type.
+	keyType := types.T_varchar.ToType()
+	activeKey := vector.NewVec(keyType, proc.Mp())
+	require.NoError(t, vector.AppendBytes(activeKey, []byte("active"), false, proc.Mp()))
+	active := makePartial(activeKey, 0, 2)
+	rolled := makePartial(vector.NewConstNull(keyType, 1, proc.Mp()), 1, 3)
 
 	mergeChild := colexec.NewMockOperator().WithBatchs(
 		[]*batch.Batch{active, rolled})
@@ -3751,13 +3702,6 @@ func TestMergeGroupRejectsHashMetadataIncompatibleWithVectors(t *testing.T) {
 			),
 			want: "marks keys non-nullable",
 		},
-		{
-			name: "H8 metadata contains grouping key",
-			partial: makePartial(
-				vector.NewRollupConst(types.T_int32.ToType(), 1, proc.Mp()),
-			),
-			want: "cannot encode grouping key",
-		},
 	}
 
 	for _, test := range tests {
@@ -3775,18 +3719,6 @@ func TestMergeGroupRejectsHashMetadataIncompatibleWithVectors(t *testing.T) {
 			require.Empty(t, merge.ctr.groupByBatches)
 		})
 	}
-	rollup := vector.NewRollupConst(types.T_int32.ToType(), 1, proc.Mp())
-	require.NoError(t, validateMergeGroupHashMetadata(HStr, false, []*vector.Vector{rollup}))
-	rollup.Free(proc.Mp())
-	nullsOutsideGrouping := testutil.MakeInt32Vector(
-		[]int32{0, 0}, []uint64{0, 1}, proc.Mp())
-	nullsOutsideGrouping.GetGrouping().Add(0)
-	require.ErrorContains(t,
-		validateMergeGroupHashMetadata(
-			HStr, false, []*vector.Vector{nullsOutsideGrouping}),
-		"marks keys non-nullable",
-	)
-	nullsOutsideGrouping.Free(proc.Mp())
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
@@ -3814,7 +3746,9 @@ func TestMergeGroupAcceptsNotNullableGroupingPartial(t *testing.T) {
 	t.Cleanup(func() { partialGroup.Free(proc, false, nil) })
 	partialGroup.AppendChild(child)
 	require.NoError(t, partialGroup.Prepare(proc))
-	require.Equal(t, int32(HStr), partialGroup.ctr.mtyp)
+	// The rolled-up key is a NULL constant, so it must hash as nullable even
+	// though the source column is declared NOT NULL.
+	require.True(t, partialGroup.ctr.keyNullable)
 	partialOutputs := collectBatches(t, partialGroup, proc)
 	require.Len(t, partialOutputs, 1)
 	partial := cloneBatch(t, proc, partialOutputs[0])
@@ -3824,9 +3758,9 @@ func TestMergeGroupAcceptsNotNullableGroupingPartial(t *testing.T) {
 		}
 	})
 	// Exercise the actual cross-CN representation, including aggregate/hash
-	// metadata in ExtraBuf. Dup alone hides lost vector grouping provenance.
+	// metadata in ExtraBuf.
 	var wire bytes.Buffer
-	_, err := partial.MarshalBinaryForPipeline(&wire, true)
+	_, err := partial.MarshalBinaryWithBuffer(&wire, true)
 	require.NoError(t, err)
 	remotePartial := batch.NewWithSize(0)
 	t.Cleanup(func() {
@@ -3839,7 +3773,7 @@ func TestMergeGroupAcceptsNotNullableGroupingPartial(t *testing.T) {
 	partial = remotePartial
 	remotePartial = nil
 	require.True(t, partial.Vecs[0].GetNulls().Contains(0))
-	require.True(t, partial.Vecs[0].GetGrouping().Contains(0))
+	require.True(t, partial.Vecs[0].IsNull(0))
 
 	mergeChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
 	t.Cleanup(func() { mergeChild.Free(proc, false, nil) })

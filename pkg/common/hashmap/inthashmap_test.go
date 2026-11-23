@@ -110,26 +110,6 @@ func TestIntHashMapCharUsesPadSpaceEquality(t *testing.T) {
 	require.Equal(t, []uint64{1, 1, 1}, groups)
 }
 
-func TestIntHashMapProbeGroupingDoesNotMatchRawKey(t *testing.T) {
-	mp := mpool.MustNewZero()
-	hashMap, err := NewIntHashMap(false, mp)
-	require.NoError(t, err)
-	defer hashMap.Free()
-	raw := vector.NewVec(types.T_uint8.ToType(), mp)
-	require.NoError(t, vector.AppendFixed(raw, uint8(0), false, mp))
-	grouping := vector.NewRollupConst(types.T_uint8.ToType(), 1, mp)
-	defer raw.Free(mp)
-	defer grouping.Free(mp)
-
-	iterator := hashMap.NewIterator()
-	_, _, err = iterator.Insert(0, 1, []*vector.Vector{raw})
-	require.NoError(t, err)
-	values, zValues, err := iterator.Find(0, 1, []*vector.Vector{grouping})
-	require.NoError(t, err)
-	require.Equal(t, []uint64{0}, values)
-	require.Equal(t, []int64{0}, zValues)
-}
-
 func TestIntHashMapPreviewInsertMatchesPublication(t *testing.T) {
 	mp := mpool.MustNewZero()
 	hashMap, err := NewIntHashMap(false, mp)
@@ -362,28 +342,6 @@ func TestIntHashMapInsertPlanRejectsWrongOrInvalidatedIterator(t *testing.T) {
 	_, _, err = firstIterator.CommitPreview(&plan)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), first.GroupCount())
-}
-
-func TestIntHashMapPartialGroupingRowsDoNotMatchRawKeys(t *testing.T) {
-	mp := mpool.MustNewZero()
-	hashMap, err := NewIntHashMap(false, mp)
-	require.NoError(t, err)
-	defer hashMap.Free()
-	build := vector.NewVec(types.T_int32.ToType(), mp)
-	probe := vector.NewVec(types.T_int32.ToType(), mp)
-	require.NoError(t, vector.AppendFixedList(build, []int32{7, 8}, nil, mp))
-	require.NoError(t, vector.AppendFixedList(probe, []int32{7, 8}, nil, mp))
-	probe.GetGrouping().Add(0)
-	defer build.Free(mp)
-	defer probe.Free(mp)
-
-	iterator := hashMap.NewIterator()
-	_, _, err = iterator.Insert(0, 2, []*vector.Vector{build})
-	require.NoError(t, err)
-	values, zValues, err := iterator.Find(0, 2, []*vector.Vector{probe})
-	require.NoError(t, err)
-	require.Equal(t, []uint64{0, 2}, values)
-	require.Equal(t, []int64{0, 1}, zValues)
 }
 
 func TestIntHashMap_Iterator(t *testing.T) {

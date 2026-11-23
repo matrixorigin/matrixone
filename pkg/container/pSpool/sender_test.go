@@ -269,8 +269,6 @@ func TestCachedBatchChargesSpoolAllocationView(t *testing.T) {
 			false,
 			mp,
 		))
-		require.NoError(t, vec.PreExtendGrouping(1, mp))
-		vec.GetGrouping().Add(0)
 		source.SetRowCount(1)
 		return source
 	}
@@ -283,7 +281,6 @@ func TestCachedBatchChargesSpoolAllocationView(t *testing.T) {
 	first, useCache, cacheID, err := cache.GetCopiedBatch(firstSource)
 	require.NoError(t, err)
 	require.True(t, useCache)
-	require.True(t, first.Vecs[0].GetGrouping().Contains(0))
 	require.Equal(t, "first cached allocation payload", first.Vecs[0].GetStringAt(0))
 	require.Positive(t, account.Snapshot().Used)
 	cache.CacheBatch(useCache, cacheID, first)
@@ -293,7 +290,7 @@ func TestCachedBatchChargesSpoolAllocationView(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, useCache)
 	require.Greater(t, account.Snapshot().Used, beforeReuse)
-	require.True(t, second.Vecs[0].GetGrouping().Contains(0))
+	require.Equal(t, "second", second.Vecs[0].GetStringAt(0))
 	cache.CacheBatch(useCache, cacheID, second)
 	require.Equal(t, beforeReuse, account.Snapshot().Used)
 

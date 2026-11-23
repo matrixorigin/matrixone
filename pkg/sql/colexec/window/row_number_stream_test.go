@@ -86,12 +86,6 @@ func rowNumberInput(t *testing.T, proc *process.Process, view *mpool.MPool, star
 			require.NoError(t, err)
 		}
 	}
-	require.NoError(t, b.Vecs[1].PreExtendGrouping(n, mp))
-	for i := range n {
-		if i%5 == 2 {
-			b.Vecs[1].GetGrouping().Set(uint64(i))
-		}
-	}
 	b.SetRowCount(n)
 	return b
 }
@@ -160,7 +154,6 @@ func TestRowNumberStreamStreaming(t *testing.T) {
 							local = count - 3
 						}
 						require.Equal(t, local%3 == 1, result.Batch.Vecs[1].GetNulls().Contains(uint64(i)))
-						require.Equal(t, local%5 == 2, result.Batch.Vecs[1].GetGrouping().Contains(uint64(i)))
 						if local%3 != 1 {
 							require.Equal(t, strings.Repeat("x", 64), result.Batch.Vecs[1].GetStringAt(i))
 						}

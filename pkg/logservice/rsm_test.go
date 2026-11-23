@@ -16,7 +16,6 @@ package logservice
 
 import (
 	"bytes"
-	"errors"
 	"strings"
 	"testing"
 
@@ -383,11 +382,10 @@ func TestRequiredLsnUpdate(t *testing.T) {
 func TestRequiredLsnOwnerFencesResetAndDelayedAdvance(t *testing.T) {
 	s := newStateMachine(1, 2).(*stateMachine)
 	term := uint64(1)
-	s.entryTerm = func(uint64) (uint64, error) { return term, nil }
 	index := uint64(1)
 	apply := func(cmd []byte) sm.Result {
 		index++
-		result, err := s.Update(sm.Entry{Index: index, Cmd: cmd})
+		result, err := s.Update(sm.Entry{Index: index, Term: term, Cmd: cmd})
 		assert.NoError(t, err)
 		return result
 	}
@@ -432,7 +430,6 @@ func TestRequiredLsnLegacySnapshotsAgreeAfterDifferentReplay(t *testing.T) {
 		require.NoError(t, restored.RecoverFromSnapshot(&snapshot, nil, nil))
 		require.False(t, restored.state.RequiredLsnConditional)
 		require.Zero(t, restored.state.RequiredLsnOwner)
-		restored.entryTerm = func(uint64) (uint64, error) { return 1, nil }
 		return restored
 	}
 
@@ -450,7 +447,7 @@ func TestRequiredLsnLegacySnapshotsAgreeAfterDifferentReplay(t *testing.T) {
 
 	claim := getClaimRequiredLsnCmd(200, 200, 11, 1, 2)
 	for _, replica := range []*stateMachine{early, late} {
-		result, err = replica.Update(sm.Entry{Index: 16, Cmd: claim})
+		result, err = replica.Update(sm.Entry{Index: 16, Term: 1, Cmd: claim})
 		require.NoError(t, err)
 		require.Zero(t, result.Value)
 	}
@@ -461,11 +458,10 @@ func TestRequiredLsnLegacySnapshotsAgreeAfterDifferentReplay(t *testing.T) {
 func TestRequiredLsnRejectsStaleOwnerAtCommittedTerm(t *testing.T) {
 	s := newStateMachine(1, 2).(*stateMachine)
 	term := uint64(1)
-	s.entryTerm = func(uint64) (uint64, error) { return term, nil }
 	index := uint64(1)
 	apply := func(cmd []byte) sm.Result {
 		index++
-		result, err := s.Update(sm.Entry{Index: index, Cmd: cmd})
+		result, err := s.Update(sm.Entry{Index: index, Term: term, Cmd: cmd})
 		require.NoError(t, err)
 		return result
 	}
@@ -480,12 +476,17 @@ func TestRequiredLsnRejectsStaleOwnerAtCommittedTerm(t *testing.T) {
 	require.Zero(t, s.state.RequiredLsn)
 }
 
-func TestRequiredLsnTermLookupFailureDoesNotApplyClaim(t *testing.T) {
+func TestRequiredLsnMissingEntryTermDoesNotApply(t *testing.T) {
 	s := newStateMachine(1, 2).(*stateMachine)
-	s.entryTerm = func(uint64) (uint64, error) { return 0, errors.New("log reader unavailable") }
-	_, err := s.Update(sm.Entry{Index: 2, Cmd: getClaimRequiredLsnCmd(0, 0, 11, 1, 2)})
-	require.ErrorContains(t, err, "log reader unavailable")
-	require.Zero(t, s.state.RequiredLsnOwner)
+	for _, cmd := range [][]byte{
+		getClaimRequiredLsnCmd(0, 0, 11, 1, 2),
+		getSetRequiredLsnIfCurrentCmd(100, 0, 0, 11),
+	} {
+		_, err := s.Update(sm.Entry{Index: 2, Cmd: cmd})
+		require.ErrorContains(t, err, "missing Raft entry term for shard 1 index 2")
+		require.Zero(t, s.state.RequiredLsnOwner)
+		require.Zero(t, s.state.RequiredLsn)
+	}
 }
 
 func TestWALTruncatePreservesCheckpointedDSN(t *testing.T) {
