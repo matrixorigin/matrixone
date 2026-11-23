@@ -676,6 +676,9 @@ type QueryBuilder struct {
 	irregularMaintObjRef                  *plan.ObjectRef
 	irregularMaintSkipInsert              bool
 	irregularUpdateMaints                 []irregularUpdateMaintenance
+	// queryCreated is set once createQuery has run. Irregular-index
+	// maintenance planned before it is queued for finishIrregularIndexMaintenance.
+	queryCreated bool
 
 	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
 	// The mutation plan and the returning projection use independent SINK_SCAN
@@ -747,6 +750,7 @@ type irregularUpdateMaintenance struct {
 	valueChangedSourceSteps map[string]int32
 	tableDef                *plan.TableDef
 	objRef                  *plan.ObjectRef
+	skipInsert              bool
 }
 
 type OptimizerHints struct {

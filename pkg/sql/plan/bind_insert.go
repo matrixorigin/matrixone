@@ -1407,23 +1407,15 @@ func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, 
 	if len(builder.irregularMaintIndexes) == 0 && len(builder.irregularMaintInsertOnlyIndexes) == 0 && len(builder.irregularUpdateMaints) == 0 {
 		return nil
 	}
-	if len(builder.irregularUpdateMaints) > 0 {
-		for _, maint := range builder.irregularUpdateMaints {
-			builder.irregularMaintSourceStep = maint.sourceStep
-			builder.irregularMaintDeleteStep = maint.deleteStep
-			builder.irregularMaintDeletePkPos = maint.deletePkPos
-			builder.irregularMaintDeletePkTyp = maint.deletePkTyp
-			builder.irregularMaintIndexes = maint.indexes
-			builder.irregularMaintInsertOnlySourceStep = maint.insertOnlySourceStep
-			builder.irregularMaintInsertOnlyIndexes = maint.insertOnlyIndexes
-			builder.irregularMaintValueChangedSourceSteps = maint.valueChangedSourceSteps
-			builder.irregularMaintTableDef = maint.tableDef
-			builder.irregularMaintObjRef = maint.objRef
-			if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
-				return err
-			}
+	single := builder.saveIrregularMaint()
+	for _, maint := range builder.irregularUpdateMaints {
+		builder.restoreIrregularMaint(maint)
+		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
+			return err
 		}
-	} else if len(builder.irregularMaintIndexes) > 0 || len(builder.irregularMaintInsertOnlyIndexes) > 0 {
+	}
+	builder.restoreIrregularMaint(single)
+	if len(single.indexes) > 0 || len(single.insertOnlyIndexes) > 0 {
 		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
 			return err
 		}

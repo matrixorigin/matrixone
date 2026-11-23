@@ -2820,21 +2820,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 		if err != nil {
 			return 0, err
 		}
-		builder.irregularUpdateMaints = append(
-			builder.irregularUpdateMaints,
-			irregularUpdateMaintenance{
-				sourceStep:              builder.irregularMaintSourceStep,
-				deleteStep:              builder.irregularMaintDeleteStep,
-				deletePkPos:             builder.irregularMaintDeletePkPos,
-				deletePkTyp:             builder.irregularMaintDeletePkTyp,
-				indexes:                 builder.irregularMaintIndexes,
-				insertOnlySourceStep:    builder.irregularMaintInsertOnlySourceStep,
-				insertOnlyIndexes:       builder.irregularMaintInsertOnlyIndexes,
-				valueChangedSourceSteps: builder.irregularMaintValueChangedSourceSteps,
-				tableDef:                builder.irregularMaintTableDef,
-				objRef:                  builder.irregularMaintObjRef,
-			},
-		)
+		builder.queueIrregularUpdateMaint()
 	}
 
 	dmlNode := &plan.Node{
@@ -4928,6 +4914,13 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 	}
 	projectID := builder.appendNode(projectNode, bindCtx)
 	return projectID, projectNode, nil
+}
+
+// queueIrregularUpdateMaint moves the maintenance recorded in the builder's
+// single-target fields to the queue finishIrregularIndexMaintenance emits.
+func (builder *QueryBuilder) queueIrregularUpdateMaint() {
+	builder.irregularUpdateMaints = append(builder.irregularUpdateMaints, builder.saveIrregularMaint())
+	builder.restoreIrregularMaint(irregularUpdateMaintenance{sourceStep: -1, deleteStep: -1, insertOnlySourceStep: -1})
 }
 
 func buildIrregularUpdateTargetProjection(

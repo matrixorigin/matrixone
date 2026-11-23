@@ -130,6 +130,9 @@ type dmlPlanCtx struct {
 	// stream only preserves existing non-NULL keys; it cannot introduce a new
 	// non-NULL key that needs a duplicate-key check.
 	isConditionalFkSetNullAction bool
+	// disjointFkSetNullAction marks a FK SET NULL update whose rows exclude every
+	// row a CASCADE action of the same parent delete removes.
+	disjointFkSetNullAction bool
 	// isPostCreateQueryFkSetNullAction marks the direct-DELETE action stream
 	// appended after the root plan's createQuery pass. Its hidden-index joins
 	// must use the local positional ABI; REPLACE keeps the shared tagged ABI.
@@ -1034,7 +1037,11 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// same parent), we merge the delete sources with a UNION chain.  `deleteNode[tblId]`
 	// always stores the SINK node id of the current merged plan so every subsequent entry
 	// can follow the same code path regardless of how many times we merge.
-	if !delCtx.skipTargetDelete {
+	// A SET NULL stream that excludes the CASCADE-owned rows is disjoint from an
+	// already registered delete source. Merging would drop its index rebuild; it
+	// plans its own delete instead.
+	_, registered := builder.deleteNode[delCtx.tableDef.TblId]
+	if !delCtx.skipTargetDelete && !(registered && delCtx.disjointFkSetNullAction) {
 		if sinkNodeId, ok := builder.deleteNode[delCtx.tableDef.TblId]; ok {
 			step := getStepByNodeId(builder, sinkNodeId)
 			if step == -1 || delCtx.sourceStep == -1 {
@@ -1616,7 +1623,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							ProjectList: joinProjection, BindingTags: []int32{combinedTag},
 						}, bindCtx)
 					}
-					combinedNodeID, err = appendExcludeCascadeOwnedRows(combinedNodeID, combinedTag)
+					excludedNodeID, err := appendExcludeCascadeOwnedRows(combinedNodeID, combinedTag)
+					combinedCascadeExcluded := excludedNodeID != combinedNodeID
+					combinedNodeID = excludedNodeID
 					if err != nil {
 						return err
 					}
@@ -1886,6 +1895,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					// therefore needs the local positional index ABI. REPLACE owns a
 					// shared tagged action stream; keep its existing tagged layout.
 					upPlanCtx.isConditionalFkSetNullAction = true
+					upPlanCtx.disjointFkSetNullAction = combinedCascadeExcluded
 					upPlanCtx.isPostCreateQueryFkSetNullAction = localCombined
 					_, hadRegisteredDeleteSource := builder.deleteNode[childTableDef.TblId]
 					resetReferentialDeleteSource()
@@ -2341,10 +2351,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								return err
 							}
 						}
-						lastNodeId, err = appendExcludeCascadeOwnedRows(lastNodeId, childScanTag)
+						excludedNodeID, err := appendExcludeCascadeOwnedRows(lastNodeId, childScanTag)
 						if err != nil {
 							return err
 						}
+						cascadeExcluded := excludedNodeID != lastNodeId
+						lastNodeId = excludedNodeID
 						// inner join cannot dealwith null expr in projectList. so we append a project node
 						projectProjection := getProjectionByLastNode(builder, lastNodeId)
 						if delCtx.skipTargetDelete {
@@ -2402,6 +2414,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
 						upPlanCtx.preserveUpdateSourceProjection = delCtx.skipTargetDelete
+						upPlanCtx.disjointFkSetNullAction = cascadeExcluded
 						upPlanCtx.fkSetNullColumns = make(map[string]struct{}, len(fk.Cols))
 						for _, childColID := range fk.Cols {
 							upPlanCtx.fkSetNullColumns[childId2name[childColID]] = struct{}{}
@@ -3054,7 +3067,10 @@ func buildInsertPlansWithRelatedHiddenTable(
 			}
 		}
 
-		if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+		// An update planned before createQuery queues its fulltext rebuild with
+		// the delete-side maintenance (buildDeleteIrregularIndexPlans).
+		if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) &&
+			(updateColLength == 0 || builder.queryCreated) {
 			err = buildPreInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx, updateColPosMap)
 			if err != nil {
 				return err
@@ -5381,9 +5397,22 @@ func reduceSinkSinkScanNodes(qry *Query) {
 		collectSinkAndSinkScanMeta(qry, sinks, i, nodeId, -1)
 	}
 
-	// merge one sink to one sinkScan
+	// merge one sink to one sinkScan. A producer folds before its consumers: a
+	// consumer that folds first copies its children, which still reference the
+	// producer's sink scan.
+	sinkNodeIds := make([]int32, 0, len(sinks))
+	for sinkNodeId := range sinks {
+		sinkNodeIds = append(sinkNodeIds, sinkNodeId)
+	}
+	slices.SortFunc(sinkNodeIds, func(a, b int32) int {
+		if sinks[a].step != sinks[b].step {
+			return sinks[a].step - sinks[b].step
+		}
+		return int(a - b)
+	})
 	pointToNodeMap := make(map[int32][]*sinkScanMeta)
-	for sinkNodeId, meta := range sinks {
+	for _, sinkNodeId := range sinkNodeIds {
+		meta := sinks[sinkNodeId]
 		if len(meta.scans) == 1 &&
 			// A frozen main output is an execution root, not an interchangeable
 			// materialization slot. Preserve it when folding late DML sinks.
@@ -6134,6 +6163,30 @@ func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder,
 
 }
 
+// appendTaggedProjectUpdatedRowsForRebuild is appendProjectUpdatedRowsForRebuild
+// over a source scan tagged sourceTag; the projection is tagged projTag.
+func appendTaggedProjectUpdatedRowsForRebuild(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef,
+	lastNodeId, sourceTag, projTag int32, updateColPosMap map[string]int) int32 {
+	lastProject := builder.qry.Nodes[lastNodeId].ProjectList
+	projectProjection := make([]*Expr, len(tableDef.Cols))
+	for j, col := range tableDef.Cols {
+		sourcePos := j
+		if nIdx, ok := updateColPosMap[col.Name]; ok {
+			sourcePos = nIdx
+		}
+		projectProjection[j] = &plan.Expr{
+			Typ:  lastProject[sourcePos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag, ColPos: int32(sourcePos)}},
+		}
+	}
+	return builder.appendNode(&Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeId},
+		ProjectList: projectProjection,
+		BindingTags: []int32{projTag},
+	}, bindCtx)
+}
+
 func appendProjectUpdatedRowsForRebuild(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, updateColPosMap map[string]int, rowIDSourcePos int) int32 {
 	lastProject := builder.qry.Nodes[lastNodeId].ProjectList
 	projectProjection := make([]*Expr, len(tableDef.Cols))
@@ -6706,59 +6759,80 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 // delCtx.tableDef with the delete-by-pk and final-image insert sub-plans of the
 // modern DML planner. delCtx.sourceStep holds the table's old rows in column order,
 // followed by the new values of the updated columns when delCtx is an UPDATE.
-// Fulltext entries of updated rows are re-inserted by the update's insert plans.
+// After createQuery the sub-plans are appended directly and the update's insert
+// plans re-insert fulltext entries. Before createQuery (REPLACE foreign key
+// actions) the maintenance, fulltext included, is queued for
+// finishIrregularIndexMaintenance.
 func (builder *QueryBuilder) buildDeleteIrregularIndexPlans(bindCtx *BindContext, delCtx *dmlPlanCtx, indexes []*IndexDef) error {
 	saved := builder.saveIrregularMaint()
 	defer builder.restoreIrregularMaint(saved)
 
+	isUpdate := delCtx.updateColLength > 0
+	deferred := !builder.queryCreated
 	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
 	maintTableDef := *delCtx.tableDef
 	maintTableDef.Indexes = indexes
+	rebuildTableDef := maintTableDef
+	rebuildTableDef.Indexes = nil
+	for _, indexdef := range indexes {
+		if deferred || !catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+			rebuildTableDef.Indexes = append(rebuildTableDef.Indexes, indexdef)
+		}
+	}
+
+	rebuildStep := int32(-1)
+	if isUpdate && len(rebuildTableDef.Indexes) > 0 {
+		var lastNodeID int32
+		if delCtx.sourceTag != 0 {
+			lastNodeID = appendSinkScanNodeWithTag(builder, bindCtx, delCtx.sourceStep, delCtx.sourceTag)
+			rebuildTag := builder.genNewBindTag()
+			lastNodeID = appendTaggedProjectUpdatedRowsForRebuild(builder, bindCtx, delCtx.tableDef,
+				lastNodeID, delCtx.sourceTag, rebuildTag, delCtx.updateColPosMap)
+			lastNodeID = appendSinkNodeWithTag(builder, bindCtx, lastNodeID, rebuildTag)
+		} else {
+			lastNodeID = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+			lastNodeID = appendProjectUpdatedRowsForRebuild(builder, bindCtx, delCtx.tableDef, lastNodeID, delCtx.updateColPosMap, -1)
+			lastNodeID = appendSinkNode(builder, bindCtx, lastNodeID)
+		}
+		if builder.preserveSinkProjection == nil {
+			builder.preserveSinkProjection = make(map[int32]struct{})
+		}
+		builder.preserveSinkProjection[lastNodeID] = struct{}{}
+		rebuildStep = builder.appendStep(lastNodeID)
+	}
+
 	builder.irregularMaintObjRef = delCtx.objRef
 	builder.irregularMaintTableDef = &maintTableDef
+	builder.irregularMaintIndexes = indexes
 	builder.irregularMaintDeleteStep = delCtx.sourceStep
 	builder.irregularMaintDeletePkPos = int32(pkPos)
 	builder.irregularMaintDeletePkTyp = pkTyp
 	builder.irregularMaintValueChangedSourceSteps = nil
+	builder.irregularMaintInsertOnlyIndexes = nil
+	builder.irregularMaintInsertOnlySourceStep = -1
+	builder.irregularMaintSkipInsert = true
+	if deferred {
+		builder.queueIrregularUpdateMaint()
+		if rebuildStep >= 0 {
+			builder.irregularMaintObjRef = delCtx.objRef
+			builder.irregularMaintTableDef = &rebuildTableDef
+			builder.irregularMaintIndexes = rebuildTableDef.Indexes
+			builder.irregularMaintSourceStep = rebuildStep
+			builder.queueIrregularUpdateMaint()
+		}
+		return nil
+	}
 	if err := builder.buildIrregularIndexDeleteMaintenance(bindCtx); err != nil {
 		return err
 	}
-	if delCtx.updateColLength == 0 {
+	if rebuildStep < 0 {
 		return nil
 	}
-
-	rebuildTableDef := maintTableDef
-	rebuildTableDef.Indexes = nil
-	for _, indexdef := range indexes {
-		if !catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
-			rebuildTableDef.Indexes = append(rebuildTableDef.Indexes, indexdef)
-		}
-	}
-	if len(rebuildTableDef.Indexes) == 0 {
-		return nil
-	}
-	lastNodeID := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
-	lastNodeID = appendProjectUpdatedRowsForRebuild(builder, bindCtx, delCtx.tableDef, lastNodeID, delCtx.updateColPosMap, -1)
-	lastNodeID = appendSinkNode(builder, bindCtx, lastNodeID)
-	return builder.buildIrregularIndexInsertMaintenance(bindCtx, builder.appendStep(lastNodeID), &rebuildTableDef)
+	return builder.buildIrregularIndexInsertMaintenance(bindCtx, rebuildStep, &rebuildTableDef)
 }
 
-type irregularMaintState struct {
-	sourceStep              int32
-	deleteStep              int32
-	deletePkPos             int32
-	deletePkTyp             plan.Type
-	indexes                 []*plan.IndexDef
-	insertOnlySourceStep    int32
-	insertOnlyIndexes       []*plan.IndexDef
-	valueChangedSourceSteps map[string]int32
-	tableDef                *plan.TableDef
-	objRef                  *plan.ObjectRef
-	skipInsert              bool
-}
-
-func (builder *QueryBuilder) saveIrregularMaint() irregularMaintState {
-	return irregularMaintState{
+func (builder *QueryBuilder) saveIrregularMaint() irregularUpdateMaintenance {
+	return irregularUpdateMaintenance{
 		sourceStep:              builder.irregularMaintSourceStep,
 		deleteStep:              builder.irregularMaintDeleteStep,
 		deletePkPos:             builder.irregularMaintDeletePkPos,
@@ -6773,7 +6847,7 @@ func (builder *QueryBuilder) saveIrregularMaint() irregularMaintState {
 	}
 }
 
-func (builder *QueryBuilder) restoreIrregularMaint(s irregularMaintState) {
+func (builder *QueryBuilder) restoreIrregularMaint(s irregularUpdateMaintenance) {
 	builder.irregularMaintSourceStep = s.sourceStep
 	builder.irregularMaintDeleteStep = s.deleteStep
 	builder.irregularMaintDeletePkPos = s.deletePkPos
