@@ -111,6 +111,36 @@ func TestFrontendExpressionContextAcrossRequests(t *testing.T) {
 			})
 		}
 
+		t.Run("JSON defaults", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx, "create database frontend_context_defaults")
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_, err := conn.ExecContext(cleanupCtx, "drop database frontend_context_defaults")
+				require.NoError(t, err)
+			})
+
+			const defaultExpr = ` default (json_length(json_extract('{"n":[1]}', '$.n')))`
+			for _, ddl := range []string{
+				"create table frontend_context_defaults.t (id int, v int" + defaultExpr + ")",
+				"alter table frontend_context_defaults.t add column w int" + defaultExpr,
+				"alter table frontend_context_defaults.t modify column w mediumint" + defaultExpr,
+			} {
+				var one int
+				require.NoError(t, conn.QueryRowContext(ctx, "select 1").Scan(&one))
+				_, err := conn.ExecContext(ctx, ddl)
+				require.NoError(t, err, ddl)
+			}
+
+			_, err = conn.ExecContext(ctx, "insert into frontend_context_defaults.t(id) values (7)")
+			require.NoError(t, err)
+			var v, w int
+			require.NoError(t, conn.QueryRowContext(ctx, "select v, w from frontend_context_defaults.t").Scan(&v, &w))
+			require.Equal(t, 1, v)
+			require.Equal(t, 1, w)
+		})
+
 		t.Run("compiler ownership", func(t *testing.T) {
 			_, err := conn.ExecContext(ctx, "create database frontend_context_compile")
 			require.NoError(t, err)

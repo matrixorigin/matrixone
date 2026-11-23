@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -265,12 +266,12 @@ func TestWindowJSONConstantFoldUsesRequestContext(t *testing.T) {
 
 	const sizeExpr = `json_length(json_extract('{"n":[1]}', '$.n'))`
 	for _, tc := range []struct {
-		name, sql, message string
+		name, sql string
 	}{
-		{"nth_value", "select nth_value(v, " + sizeExpr + ") over (order by v) from (select 7 as v) as input", "context canceled"},
-		{"ema", "select ema(v, " + sizeExpr + ") over (order by v) from (select 7 as v) as input", "period argument of ema must be a constant integer in [1, 1024]"},
+		{"nth_value", "select nth_value(v, " + sizeExpr + ") over (order by v) from (select 7 as v) as input"},
+		{"ema", "select ema(v, " + sizeExpr + ") over (order by v) from (select 7 as v) as input"},
 		{"range frame", "select count(*) over (order by d range between interval " + sizeExpr +
-			" day preceding and current row) from (select cast('2024-01-01' as date) as d) as input", "context canceled"},
+			" day preceding and current row) from (select cast('2024-01-01' as date) as d) as input"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			current, cancel := context.WithCancel(t.Context())
@@ -290,7 +291,14 @@ func TestWindowJSONConstantFoldUsesRequestContext(t *testing.T) {
 
 			cancel()
 			_, err = build()
-			require.ErrorContains(t, err, tc.message)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Same(t, previous, proc.Ctx)
+
+			expired, cancelExpired := context.WithDeadline(t.Context(), time.Time{})
+			defer cancelExpired()
+			compiler.SetContext(expired)
+			_, err = build()
+			require.ErrorIs(t, err, context.DeadlineExceeded)
 			require.Same(t, previous, proc.Ctx)
 		})
 	}
