@@ -306,6 +306,7 @@ type QueryBuilder struct {
 	isPrepareStatement    bool
 	mysqlCompatible       bool
 	isForUpdate           bool // if it's a query plan for update
+	deleteIndexVariants   bool // legacy DELETE bound old rows in storage form
 	isRestore             bool
 	isRestoreByTs         bool
 	isSkipResolveTableDef bool
@@ -456,6 +457,9 @@ type aliasItem struct {
 
 type BindContext struct {
 	binder Binder
+
+	// DELETE's synthetic projection carries stored old-row values, not SQL display values.
+	deleteOldRowProjection bool
 
 	// mysqlSpecialOrderTypes records the storage type behind a visible ENUM/SET
 	// display value.  It is planner-local semantic provenance: only a pure

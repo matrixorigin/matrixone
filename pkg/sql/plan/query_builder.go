@@ -8643,6 +8643,11 @@ func bindProjectionList(
 	projectionBinder *ProjectionBinder,
 	selectList tree.SelectExprs) error {
 	ctx.binder = projectionBinder
+	if ctx.deleteOldRowProjection {
+		previous := projectionBinder.bindRawMySQLSpecialType
+		projectionBinder.bindRawMySQLSpecialType = true
+		defer func() { projectionBinder.bindRawMySQLSpecialType = previous }()
+	}
 
 	sampleRangeLeft, sampleRangeRight := ctx.sampleFunc.start, ctx.sampleFunc.start+ctx.sampleFunc.offset
 	if ctx.sampleFunc.hasSampleFunc {

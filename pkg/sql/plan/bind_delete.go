@@ -161,6 +161,8 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	selectCtx := NewBindContext(builder, bindCtx)
+	storedOldRows := canBindStoredDeleteRows(dmlCtx.tableDefs)
+	selectCtx.deleteOldRowProjection = storedOldRows
 	lastNodeID, err := builder.bindSelect(astSelect, selectCtx, false)
 	if err != nil {
 		return 0, err
@@ -226,7 +228,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		return builder.makeIndexPartExprFromInputExpr(inputExpr, partName, prefixLengths)
 	}
 
-	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
+	idxScanNodes := make([][][]*plan.Node, len(dmlCtx.tableDefs))
 
 	for i, tableDef := range dmlCtx.tableDefs {
 		validIndexes, hasIrregularIndex := getValidIndexes(tableDef)
@@ -236,7 +238,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		tableDef.Indexes = validIndexes
 
 		idxDefs := tableDef.Indexes
-		idxScanNodes[i] = make([]*plan.Node, len(idxDefs))
+		idxScanNodes[i] = make([][]*plan.Node, len(idxDefs))
 
 		for j, idxDef := range idxDefs {
 			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
@@ -249,17 +251,28 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 					idxTableDef.Name2ColIndex[col.Name] = int32(colIdx)
 				}
 			}
+			if storedOldRows && needsDeleteIndexKeyVariants(tableDef, idxDef) {
+				var scans []*plan.Node
+				lastNodeID, scans, err = builder.appendDeleteIndexVariantJoins(
+					bindCtx, lastNodeID, selectNodeTag, tableDef, idxDef, idxObjRef, idxTableDef, colName2Idx[i],
+				)
+				if err != nil {
+					return 0, err
+				}
+				idxScanNodes[i][j] = scans
+				continue
+			}
 			idxTag := builder.genNewBindTag()
 			builder.addNameByColRef(idxTag, idxTableDef)
-
-			idxScanNodes[i][j] = &plan.Node{
+			scanNode := &plan.Node{
 				NodeType:     plan.Node_TABLE_SCAN,
 				TableDef:     idxTableDef,
 				ObjRef:       idxObjRef,
 				BindingTags:  []int32{idxTag},
 				ScanSnapshot: bindCtx.snapshot,
 			}
-			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], bindCtx)
+			idxScanNodes[i][j] = []*plan.Node{scanNode}
+			idxTableNodeID := builder.appendNode(scanNode, bindCtx)
 
 			lookupColName := indexLookupColumnName(idxDef)
 			rightPkPos := idxTableDef.Name2ColIndex[lookupColName]
@@ -408,43 +421,42 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 
-		for j, idxNode := range idxScanNodes[i] {
-			if idxNode == nil {
-				continue
-			}
+		for j, indexScans := range idxScanNodes[i] {
+			for _, idxNode := range indexScans {
 
-			pkPos := idxNode.TableDef.Name2ColIndex[idxNode.TableDef.Pkey.PkeyColName]
-			rowIDPos := idxNode.TableDef.Name2ColIndex[catalog.Row_ID]
+				pkPos := idxNode.TableDef.Name2ColIndex[idxNode.TableDef.Pkey.PkeyColName]
+				rowIDPos := idxNode.TableDef.Name2ColIndex[catalog.Row_ID]
 
-			if tableDef.Indexes[j].Unique {
-				for _, col := range idxNode.TableDef.Cols {
-					if col.Name == idxNode.TableDef.Pkey.PkeyColName {
-						lockTargets = append(lockTargets, &plan.LockTarget{
-							TableId:            idxNode.TableDef.TblId,
-							ObjRef:             DeepCopyObjectRef(idxNode.ObjRef),
-							PrimaryColIdxInBat: pkPos,
-							PrimaryColRelPos:   idxNode.BindingTags[0],
-							PrimaryColTyp:      col.Typ,
-						})
-						break
+				if tableDef.Indexes[j].Unique {
+					for _, col := range idxNode.TableDef.Cols {
+						if col.Name == idxNode.TableDef.Pkey.PkeyColName {
+							lockTargets = append(lockTargets, &plan.LockTarget{
+								TableId:            idxNode.TableDef.TblId,
+								ObjRef:             DeepCopyObjectRef(idxNode.ObjRef),
+								PrimaryColIdxInBat: pkPos,
+								PrimaryColRelPos:   idxNode.BindingTags[0],
+								PrimaryColTyp:      col.Typ,
+							})
+							break
+						}
 					}
 				}
-			}
 
-			dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
-				TableDef: CloneTableDefForPlan(idxNode.TableDef, true),
-				ObjRef:   DeepCopyObjectRef(idxNode.ObjRef),
-				DeleteCols: []plan.ColRef{
-					{
-						RelPos: idxNode.BindingTags[0],
-						ColPos: rowIDPos,
+				dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
+					TableDef: CloneTableDefForPlan(idxNode.TableDef, true),
+					ObjRef:   DeepCopyObjectRef(idxNode.ObjRef),
+					DeleteCols: []plan.ColRef{
+						{
+							RelPos: idxNode.BindingTags[0],
+							ColPos: rowIDPos,
+						},
+						{
+							RelPos: idxNode.BindingTags[0],
+							ColPos: pkPos,
+						},
 					},
-					{
-						RelPos: idxNode.BindingTags[0],
-						ColPos: pkPos,
-					},
-				},
-			})
+				})
+			}
 		}
 	}
 

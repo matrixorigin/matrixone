@@ -17,12 +17,66 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDeleteIndexKeyRepresentations(t *testing.T) {
+	ctx := NewMockOptimizer(false).CurrentContext()
+	builder := NewQueryBuilder(planpb.Query_DELETE, ctx, false, true)
+	table := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+		{Name: "e", Typ: planpb.Type{Id: int32(types.T_enum), Enumvalues: "z,aa"}},
+		{Name: "s", Typ: planpb.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}},
+		{Name: "n", Typ: planpb.Type{Id: int32(types.T_uint64)}},
+	}, Pkey: &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}}
+	positions := map[string]int32{"id": 0, "e": 1, "s": 2, "n": 3}
+	for _, tc := range []struct {
+		name   string
+		parts  []string
+		unique bool
+		fn     string
+	}{
+		{"enum secondary", []string{"e", "id"}, false, "serial_full"},
+		{"set secondary", []string{"s", "id"}, false, "serial_full"},
+		{"enum composite unique", []string{"n", "e"}, true, "serial"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			index := &planpb.IndexDef{Parts: tc.parts, Unique: tc.unique}
+			require.True(t, needsDeleteIndexKeyVariants(table, index))
+			stored, display, err := builder.deleteIndexKeyVariants(table, index, positions, 17)
+			require.NoError(t, err)
+			require.Equal(t, tc.fn, stored.GetF().Func.ObjName)
+			require.Equal(t, tc.fn, display.GetF().Func.ObjName)
+			for i, name := range tc.parts {
+				if name != "e" && name != "s" {
+					require.NotNil(t, stored.GetF().Args[i].GetCol())
+					require.NotNil(t, display.GetF().Args[i].GetCol())
+					continue
+				}
+				require.NotNil(t, stored.GetF().Args[i].GetCol(), "stored key uses the physical column")
+				require.Equal(t, int32(types.T_varchar), display.GetF().Args[i].Typ.Id)
+				require.NotNil(t, display.GetF().Args[i].GetF(), "backfill key uses the displayed value")
+			}
+		})
+	}
+	require.False(t, needsDeleteIndexKeyVariants(table, &planpb.IndexDef{Parts: []string{"n", "id"}}))
+	require.False(t, needsDeleteIndexKeyVariants(table, &planpb.IndexDef{Parts: []string{"e"}, Unique: true}))
+	require.True(t, canBindStoredDeleteRows([]*planpb.TableDef{table}))
+	legacy := *table
+	legacy.Pkey = &planpb.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"e", "id"}}
+	require.False(t, canBindStoredDeleteRows([]*planpb.TableDef{&legacy}))
+	owner, err := builder.deleteIndexOwner(table, positions, 17)
+	require.NoError(t, err)
+	require.Equal(t, int32(0), owner.GetCol().ColPos)
+	_, _, err = builder.deleteIndexKeyVariants(table, &planpb.IndexDef{Parts: []string{"missing", catalog.Row_ID}}, positions, 17)
+	require.Error(t, err)
+}
 
 func TestIsUnrestrictedDelete(t *testing.T) {
 	tests := []struct {

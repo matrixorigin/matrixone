@@ -5403,6 +5403,10 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	if uniqueTableDef == nil {
 		return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, indexdef.IndexTableName)
 	}
+	if builder.deleteIndexVariants && !isUpdate && !delCtx.isDeleteWithoutFilters &&
+		canBindStoredDeleteRows([]*plan.TableDef{delCtx.tableDef}) && needsDeleteIndexKeyVariants(delCtx.tableDef, indexdef) {
+		return builder.buildDeleteIndexVariantsStep(bindCtx, delCtx, indexdef, uniqueObjRef, uniqueTableDef, posMap, isUk, isSK)
+	}
 	var lastNodeId int32
 	var uniqueDeleteIdx int
 	var uniqueTblPkPos int

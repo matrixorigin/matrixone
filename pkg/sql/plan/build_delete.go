@@ -40,8 +40,10 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		return nil, err
 	}
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	builder.deleteIndexVariants = canBindStoredDeleteRows(tblInfo.tableDefs)
 
 	queryBindCtx := NewBindContext(builder, nil)
+	queryBindCtx.deleteOldRowProjection = builder.deleteIndexVariants
 	lastNodeId, err := deleteToSelect(builder, queryBindCtx, stmt, true, tblInfo)
 	if err != nil {
 		return nil, err
