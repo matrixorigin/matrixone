@@ -21,8 +21,8 @@ pkg/common/hashmap/keycodec/keycodec.go	ExactRuntimeFilterEncodingForPair	float	
 pkg/common/hashmap/strhashmap.go	appendVarlenaHashKey	vector	1
 pkg/common/hashmap/strhashmap.go	encodeHashKeys	float	1
 pkg/common/hashmap/strhashmap.go	encodeHashKeys	vector	2
-pkg/common/hashmap/strhashmap.go	fillFlatFixedGroupingAwareStr	float	1
-pkg/common/hashmap/strhashmap.go	fillGroupingAwareStr	float	1
+pkg/common/hashmap/strhashmap.go	fillFlatFixedNullableStr	float	1
+pkg/common/hashmap/strhashmap.go	fillNullableStr	float	1
 pkg/container/arrowbridge/bind.go	validateLoadTargetType	float	1
 pkg/container/types/types.go	GetArrayElementSize	vector	1
 pkg/container/types/types.go	IsArrayRelate	vector chain	1

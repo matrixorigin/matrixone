@@ -757,7 +757,7 @@ func TestAccountedEmptyGroupingSetRowsReleaseAtOperatorFree(t *testing.T) {
 	})
 }
 
-func TestResetForSpillReleasesGroupingSentinel(t *testing.T) {
+func TestResetForSpillReleasesGroupingRollupConst(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	g := newGroupOp(proc, nil, nil)
@@ -765,7 +765,7 @@ func TestResetForSpillReleasesGroupingSentinel(t *testing.T) {
 	require.NoError(t, g.Prepare(proc))
 
 	before := allocation.account.Snapshot().Used
-	rollup := vector.NewRollupConst(
+	rollup := vector.NewConstNull(
 		types.T_int32.ToType(),
 		hashmap.UnitLimit,
 		g.ctr.rollupMP(),
@@ -1101,7 +1101,6 @@ func TestPreAllocateBuildChunkIncludesVectorBitmaps(t *testing.T) {
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = testutil.MakeInt32Vector(make([]int32, rows), nil, proc.Mp())
 	input.Vecs[0].GetNulls().Add(1)
-	input.Vecs[0].GetGrouping().Add(2)
 	input.SetRowCount(rows)
 
 	g := newGroupOp(
@@ -1122,16 +1121,11 @@ func TestPreAllocateBuildChunkIncludesVectorBitmaps(t *testing.T) {
 		destination.GetNulls().GetBitmap().CapWords(),
 		requiredWords,
 	)
-	require.GreaterOrEqual(t,
-		destination.GetGrouping().GetBitmap().CapWords(),
-		requiredWords,
-	)
 
 	before := allocation.account.Snapshot().Used
 	require.NoError(t, destination.UnionBatch(input.Vecs[0], 0, rows, nil, g.ctr.groupByMP()))
 	require.Equal(t, before, allocation.account.Snapshot().Used)
 	require.True(t, destination.GetNulls().Contains(1))
-	require.True(t, destination.GetGrouping().Contains(2))
 
 	g.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
@@ -2123,7 +2117,7 @@ func TestAccountedGroupingSetSpillPreservesSentinelDomain(t *testing.T) {
 		counts := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[2])
 		keys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
 		for row := range result.Batch.RowCount() {
-			require.True(t, result.Batch.Vecs[1].GetGrouping().Contains(uint64(row)))
+			require.True(t, result.Batch.Vecs[1].IsNull(uint64(row)))
 			require.Equal(t, int64(2), counts[row])
 			seen[keys[row]] = struct{}{}
 		}

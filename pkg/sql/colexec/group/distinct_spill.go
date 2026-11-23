@@ -1990,7 +1990,6 @@ func (ctr *container) finalizeGroupedDistinctLeaf(
 		false,
 		true,
 		true,
-		true,
 		0,
 		ctr.hashAllocation,
 		ctr.hashIterator,
@@ -2240,7 +2239,6 @@ func (ctr *container) writeCompactedDistinctContributions(
 		false,
 		true,
 		true,
-		true,
 		0,
 		ctr.hashAllocation,
 		ctr.hashIterator,
@@ -2355,7 +2353,7 @@ func (ctr *container) finalizeSingleGroupDistinctPartition(
 	var groupSet ResHashRelated
 	defer groupSet.Free0()
 	if err := groupSet.BuildHashTable(
-		proc.Ctx, ctr.mp, false, true, true, true, 0,
+		proc.Ctx, ctr.mp, false, true, true, 0,
 		ctr.hashAllocation, ctr.hashIterator); err != nil {
 		return false, err
 	}

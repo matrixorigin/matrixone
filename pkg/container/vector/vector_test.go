@@ -26,7 +26,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/rand"
@@ -71,25 +70,18 @@ func TestAppendCheckpointRollback(t *testing.T) {
 	defer vec.Free(mp)
 	first := strings.Repeat("a", 64)
 	require.NoError(t, AppendBytes(vec, []byte(first), false, mp))
-	vec.GetGrouping().Set(0)
 	vec.SetSorted(true)
 	checkpoint := vec.MakeAppendCheckpoint()
 
 	require.NoError(t, AppendBytes(vec, []byte(strings.Repeat("b", 96)), false, mp))
 	vec.GetNulls().Set(1)
-	vec.GetGrouping().Set(1)
-	// Grouping publication can precede a failed varlen copy and therefore can
-	// extend beyond the length reached by the copy itself.
-	vec.GetGrouping().Set(2)
 	vec.SetSorted(false)
 	vec.RollbackAppend(checkpoint, 2)
 
 	require.Equal(t, 1, vec.Length())
 	require.Equal(t, []string{first}, InefficientMustStrCol(vec))
+	require.False(t, vec.GetNulls().Contains(0))
 	require.False(t, vec.GetNulls().Contains(1))
-	require.True(t, vec.GetGrouping().Contains(0))
-	require.False(t, vec.GetGrouping().Contains(1))
-	require.False(t, vec.GetGrouping().Contains(2))
 	require.True(t, vec.GetSorted())
 }
 
@@ -1251,12 +1243,10 @@ func TestShrinkByMaskKeepsNullsAlignedWithOffset(t *testing.T) {
 			[]bool{false, false, false, true, false, true, false, false},
 			mp,
 		))
-		vec.GetGrouping().Add(3, 4)
 
 		require.NoError(t, vec.ShrinkByMask(&mask, true, 2, mp))
 		require.Equal(t, []int32{10, 11, 0, 0, 16, 17}, MustFixedColWithTypeCheck[int32](vec))
 		require.Equal(t, []uint64{2, 3}, vec.GetNulls().ToArray())
-		require.Equal(t, []uint64{2}, vec.GetGrouping().ToArray())
 	})
 
 	t.Run("select", func(t *testing.T) {
@@ -1268,12 +1258,10 @@ func TestShrinkByMaskKeepsNullsAlignedWithOffset(t *testing.T) {
 			[]bool{false, false, true, false, false, false, false, false},
 			mp,
 		))
-		vec.GetGrouping().Add(2, 4)
 
 		require.NoError(t, vec.ShrinkByMask(&mask, false, 2, mp))
 		require.Equal(t, []int32{0, 14}, MustFixedColWithTypeCheck[int32](vec))
 		require.Equal(t, []uint64{0}, vec.GetNulls().ToArray())
-		require.Equal(t, []uint64{0, 1}, vec.GetGrouping().ToArray())
 	})
 }
 
@@ -1559,17 +1547,16 @@ func TestShuffle(t *testing.T) {
 
 func TestCopy(t *testing.T) {
 	mp := mpool.MustNewZero()
-	{ // fixed grouping provenance
+	{ // fixed null provenance
 		dst := NewVec(types.T_int32.ToType(), mp)
 		src := NewVec(types.T_int32.ToType(), mp)
-		require.NoError(t, AppendFixedList(dst, []int32{0, 0}, nil, mp))
-		require.NoError(t, AppendFixedList(src, []int32{1, 2}, nil, mp))
-		src.GetGrouping().Add(0)
-		dst.GetGrouping().Add(1)
+		require.NoError(t, AppendFixedList(dst, []int32{0, 0}, []bool{false, true}, mp))
+		require.NoError(t, AppendFixedList(src, []int32{1, 2}, []bool{true, false}, mp))
 		require.NoError(t, dst.Copy(src, 0, 0, mp))
 		require.NoError(t, dst.Copy(src, 1, 1, mp))
-		require.True(t, dst.GetGrouping().Contains(0))
-		require.False(t, dst.GetGrouping().Contains(1))
+		require.True(t, dst.GetNulls().Contains(0))
+		require.False(t, dst.GetNulls().Contains(1))
+		require.Equal(t, int32(2), GetFixedAtNoTypeCheck[int32](dst, 1))
 		dst.Free(mp)
 		src.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -2759,42 +2746,13 @@ func TestSetFunction2(t *testing.T) {
 }
 
 func TestMisc(t *testing.T) {
-	vec := NewVec(types.T_int8.ToType(), mpool.MustNewZero())
-	var gsp nulls.Nulls
-	vec.SetGrouping(&gsp)
-	require.False(t, vec.HasGrouping())
-	gsp.Add(1, 3)
-	vec.SetGrouping(&gsp)
-	require.True(t, vec.HasGrouping())
-	require.True(t, vec.GetGrouping().Contains(1))
-	require.True(t, vec.GetGrouping().Contains(3))
-
 	mp := mpool.MustNewZero()
-	vec2 := NewRollupConst(types.T_int8.ToType(), 5, mp)
-	defer vec2.Free(mp)
-	vec3 := NewVec(types.T_int8.ToType(), mp)
-	defer vec3.Free(mp)
-	require.False(t, vec3.HasGrouping())
-	err := vec3.UnionOne(vec2, 0, mp)
-	require.NoError(t, err)
-	require.True(t, vec3.HasGrouping())
-	require.True(t, vec3.GetGrouping().Contains(0))
-
-	vec4 := NewVec(types.T_int8.ToType(), mp)
-	defer vec4.Free(mp)
-	err = vec4.UnionMulti(vec2, 1, 2, mp)
-	require.NoError(t, err)
-	require.True(t, vec4.HasGrouping())
-	require.True(t, vec4.GetGrouping().Contains(0))
-	require.True(t, vec4.GetGrouping().Contains(1))
-	require.False(t, vec4.GetGrouping().Contains(2))
-
 	vec5 := NewVec(types.T_int8.ToType(), mp)
 	defer vec5.Free(mp)
 	vec6 := NewConstNull(types.T_int8.ToType(), 5, mp)
 	defer vec6.Free(mp)
 
-	err = AppendFixed(vec5, int8(1), false, mp)
+	err := AppendFixed(vec5, int8(1), false, mp)
 	require.NoError(t, err)
 	err = vec5.UnionMulti(vec6, 1, 2, mp)
 	require.NoError(t, err)
@@ -2831,8 +2789,6 @@ func TestMisc(t *testing.T) {
 		types.T_datetime.ToType(),
 		types.T_timestamp.ToType(),
 	}
-	gsp.Clear()
-	gsp.Add(0, 1, 2)
 	for _, fType := range fixSizedTypes {
 		v1 := NewVec(fType, mp)
 		v2 := NewVec(fType, mp)
@@ -2846,7 +2802,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]int8, 3)
 			err = AppendFixedList[int8](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_int16:
 			vals := make([]int16, 2)
 			err = AppendFixedList[int16](v1, vals, []bool{true, true}, mp)
@@ -2854,7 +2809,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]int16, 3)
 			err = AppendFixedList[int16](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_int32:
 			vals := make([]int32, 2)
 			err = AppendFixedList[int32](v1, vals, []bool{true, true}, mp)
@@ -2862,7 +2816,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]int32, 3)
 			err = AppendFixedList[int32](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_int64:
 			vals := make([]int64, 2)
 			err = AppendFixedList[int64](v1, vals, []bool{true, true}, mp)
@@ -2870,7 +2823,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]int64, 3)
 			err = AppendFixedList[int64](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_uint8:
 			vals := make([]uint8, 2)
 			err = AppendFixedList[uint8](v1, vals, []bool{true, true}, mp)
@@ -2878,7 +2830,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]uint8, 3)
 			err = AppendFixedList[uint8](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_uint16:
 			vals := make([]uint16, 2)
 			err = AppendFixedList[uint16](v1, vals, []bool{true, true}, mp)
@@ -2886,7 +2837,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]uint16, 3)
 			err = AppendFixedList[uint16](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_uint32:
 			vals := make([]uint32, 2)
 			err = AppendFixedList[uint32](v1, vals, []bool{true, true}, mp)
@@ -2894,7 +2844,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]uint32, 3)
 			err = AppendFixedList[uint32](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_uint64:
 			vals := make([]uint64, 2)
 			err = AppendFixedList[uint64](v1, vals, []bool{true, true}, mp)
@@ -2902,7 +2851,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]uint64, 3)
 			err = AppendFixedList[uint64](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_float32:
 			vals := make([]float32, 2)
 			err = AppendFixedList[float32](v1, vals, []bool{true, true}, mp)
@@ -2910,7 +2858,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]float32, 3)
 			err = AppendFixedList[float32](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_float64:
 			vals := make([]float64, 2)
 			err = AppendFixedList[float64](v1, vals, []bool{true, true}, mp)
@@ -2918,7 +2865,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]float64, 3)
 			err = AppendFixedList[float64](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_bool:
 			vals := make([]bool, 2)
 			err = AppendFixedList[bool](v1, vals, []bool{true, true}, mp)
@@ -2926,7 +2872,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]bool, 3)
 			err = AppendFixedList[bool](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_bit:
 			vals := make([]uint64, 2)
 			err = AppendFixedList[uint64](v1, vals, []bool{true, true}, mp)
@@ -2934,7 +2879,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]uint64, 3)
 			err = AppendFixedList[uint64](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_Rowid:
 			vals := make([]types.Rowid, 2)
 			err = AppendFixedList[types.Rowid](v1, vals, []bool{true, true}, mp)
@@ -2942,7 +2886,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]types.Rowid, 3)
 			err = AppendFixedList[types.Rowid](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_TS:
 			vals := make([]types.TS, 2)
 			err = AppendFixedList[types.TS](v1, vals, []bool{true, true}, mp)
@@ -2950,7 +2893,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]types.TS, 3)
 			err = AppendFixedList[types.TS](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_uuid:
 			vals := make([]types.Uuid, 2)
 			err = AppendFixedList[types.Uuid](v1, vals, []bool{true, true}, mp)
@@ -2958,7 +2900,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]types.Uuid, 3)
 			err = AppendFixedList[types.Uuid](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_datetime:
 			vals := make([]types.Datetime, 2)
 			err = AppendFixedList[types.Datetime](v1, vals, []bool{true, true}, mp)
@@ -2966,7 +2907,6 @@ func TestMisc(t *testing.T) {
 			vals = make([]types.Datetime, 3)
 			err = AppendFixedList[types.Datetime](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		case types.T_timestamp:
 			vals := make([]types.Timestamp, 2)
 			err = AppendFixedList[types.Timestamp](v1, vals, []bool{true, true}, mp)
@@ -2974,14 +2914,12 @@ func TestMisc(t *testing.T) {
 			vals = make([]types.Timestamp, 3)
 			err = AppendFixedList[types.Timestamp](v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
-			v2.SetGrouping(&gsp)
 		}
 		union := GetUnionAllFunction(fType, mp)
 		err = union(v1, v2)
 		require.NoError(t, err)
 		require.Equal(t, 5, v1.Length())
 		require.Equal(t, 5, v1.GetNulls().Count())
-		require.Equal(t, 3, v1.GetGrouping().Count())
 	}
 }
 
@@ -4195,12 +4133,11 @@ func TestConstSetFunctionCopiesSelectedMetadata(t *testing.T) {
 	require.NoError(t, set(destination, nullSource, 0, 2))
 	require.True(t, destination.IsConstNull())
 
-	source.GetGrouping().Add(1)
 	require.NoError(t, set(destination, source, 1, 3))
-	require.True(t, destination.HasGrouping())
+	require.False(t, destination.IsConstNull())
+	require.Equal(t, "5", destination.GetStringAt(0))
 	require.NoError(t, set(destination, source, 1, 0))
 	require.Zero(t, destination.Length())
-	require.False(t, destination.HasGrouping())
 }
 
 func TestSelectedBatchPreflightProtocol(t *testing.T) {
@@ -4302,9 +4239,9 @@ func TestUnionAppendMetadataTransitions(t *testing.T) {
 				require.NoError(t, AppendBytesList(source, [][]byte{
 					[]byte("value"), nil, []byte(strings.Repeat("long", 16)),
 				}, []bool{false, true, false}, mp))
-				source.GetGrouping().Add(1)
 				changed, err := source.Dup(mp)
 				require.NoError(t, err)
+				changed.GetNulls().Add(0)
 				constant, err = NewConstBytes(types.T_varchar.ToType(), []byte("constant"), 4, mp)
 				require.NoError(t, err)
 				rows := []struct {
@@ -4328,8 +4265,6 @@ func TestUnionAppendMetadataTransitions(t *testing.T) {
 							if !isNull {
 								require.Equal(t, expected.vec.GetBytesAt(expected.row), destination.GetBytesAt(row))
 							}
-							require.Equal(t, expected.vec.GetGrouping().Contains(uint64(expected.row)),
-								destination.GetGrouping().Contains(uint64(row)))
 						}
 					}
 				}
@@ -4393,7 +4328,6 @@ func TestUnionOneEmptyMarkerSets(t *testing.T) {
 					require.NoError(t, destination.UnionOne(source, sel, mp))
 					require.Equal(t, source.data[int(sel)*tlen:(int(sel)+1)*tlen], destination.data[row*tlen:(row+1)*tlen])
 					require.False(t, destination.IsNull(uint64(row)))
-					require.False(t, destination.GetGrouping().Contains(uint64(row)))
 				}
 				require.Equal(t, 3, destination.Length())
 				require.Equal(t, capacity, len(destination.data), "append retains extendWithBitmaps' slice-to-cap contract")
@@ -4405,7 +4339,7 @@ func TestUnionOneEmptyMarkerSets(t *testing.T) {
 }
 
 func TestUnionOneSourceMarkerLookup(t *testing.T) {
-	for _, scenario := range []string{"source_null", "source_all_null", "source_grouping", "null_prefix", "grouping_prefix", "source_const", "source_const_null", "source_const_null_with_data", "destination_const", "nil_mpool"} {
+	for _, scenario := range []string{"source_null", "source_all_null", "null_prefix", "value_prefix", "source_const", "source_const_null", "source_const_null_with_data", "destination_const", "nil_mpool"} {
 		t.Run(scenario, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
@@ -4424,14 +4358,11 @@ func TestUnionOneSourceMarkerLookup(t *testing.T) {
 				for row := range source.Length() {
 					source.GetNulls().Set(uint64(row))
 				}
-			case "source_grouping":
-				source.GetGrouping().Set(1)
 			case "null_prefix":
 				require.NoError(t, AppendFixed(destination, int64(0), true, mp))
 				offset = 1
-			case "grouping_prefix":
+			case "value_prefix":
 				require.NoError(t, AppendFixed(destination, int64(44), false, mp))
-				destination.GetGrouping().Set(0)
 				offset = 1
 			case "source_const_null":
 				source.Free(mp)
@@ -4457,7 +4388,6 @@ func TestUnionOneSourceMarkerLookup(t *testing.T) {
 			for row, sel := range []int64{0, 1, 2} {
 				require.NoError(t, destination.UnionOne(source, sel, appendMP))
 				require.Equal(t, source.IsNull(uint64(sel)), destination.IsNull(uint64(row+offset)))
-				require.Equal(t, source.GetGrouping().Contains(uint64(sel)), destination.GetGrouping().Contains(uint64(row+offset)))
 				if !source.IsNull(uint64(sel)) {
 					// Assert physical row bytes as well as constant-class retention.
 					physicalSourceRow := int(sel)
@@ -4471,8 +4401,8 @@ func TestUnionOneSourceMarkerLookup(t *testing.T) {
 			if scenario == "null_prefix" {
 				require.True(t, destination.IsNull(0))
 			}
-			if scenario == "grouping_prefix" {
-				require.True(t, destination.GetGrouping().Contains(0))
+			if scenario == "value_prefix" {
+				require.False(t, destination.IsNull(0))
 				require.Equal(t, int64(44), GetFixedAtWithTypeCheck[int64](destination, 0))
 			}
 			if scenario == "destination_const" {

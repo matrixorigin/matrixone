@@ -626,6 +626,9 @@ type QueryBuilder struct {
 	// common input can be shared after CTE reuse has established any nested
 	// producer boundaries.
 	groupingSetCandidates []groupingSetCandidate
+	// groupingFlags records each aggregate group tag's active GROUP BY keys,
+	// for foldGroupingFunctions.
+	groupingFlags map[int32][]bool
 	// splitGroupingSetCoarseAggs marks the large coarser half of a direct
 	// ROLLUP split. Keep its partial aggregation local: shuffling a key that
 	// the coarser sets roll up creates a hot owner for those sets.

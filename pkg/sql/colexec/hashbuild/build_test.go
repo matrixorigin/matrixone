@@ -110,13 +110,10 @@ func TestBuild(t *testing.T) {
 		tc.marg.Reset(tc.proc, false, nil)
 		tc.proc.GetMessageBoard().Reset()
 
-		// Projection metadata must not leak from a previous execution generation.
-		tc.arg.ctr.autoSpillHasGrouping = true
 		err = tc.marg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		require.False(t, tc.arg.ctr.autoSpillHasGrouping)
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
@@ -2624,41 +2621,6 @@ func TestRuntimeFilterMarshalAccountedOneByteShortFallsBackToPass(t *testing.T) 
 	_, _, err = registry.CompleteTerminal(account)
 	require.NoError(t, err)
 	generation.Close()
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestRuntimeFilterWithGroupingKeyFallsBackToPass(t *testing.T) {
-	tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
-		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
-		Tag:                 105,
-		UpperLimit:          100,
-		UseMembershipFilter: true,
-	}
-	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
-	tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{
-		vector.NewRollupConst(types.T_int32.ToType(), 1, tc.proc.Mp()),
-	}
-	tc.arg.ctr.hashmapBuilder.uniqueKeys.first.mp = tc.proc.Mp()
-
-	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
-	receiver := message.NewMessageReceiver(
-		[]int32{tc.arg.RuntimeFilterSpec.Tag},
-		message.AddrBroadCastOnCurrentCN(),
-		tc.proc.GetMessageBoard(),
-	)
-	msgs, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
-	require.NoError(t, err)
-	require.False(t, done)
-	require.Len(t, msgs, 1)
-	runtimeFilter, ok := msgs[0].(message.RuntimeFilterMessage)
-	require.True(t, ok)
-	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
-	require.Empty(t, runtimeFilter.Data)
-	require.Nil(t, tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs)
-
-	tc.arg.Free(tc.proc, false, nil)
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }

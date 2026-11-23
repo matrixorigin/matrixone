@@ -1675,7 +1675,6 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	scatterFixed := selectedCount <= rowCount/4 && runtimeType.IsFixedLen() &&
 		!selectedResult.IsConst() &&
 		!selectedResult.IsReadOnly() && !result.IsReadOnly() &&
-		!selectedResult.HasGrouping() &&
 		cap(sourceData) > 0 && cap(destinationData) > 0 &&
 		&sourceData[:1][0] != &destinationData[:1][0]
 	if scatterFixed {
@@ -1943,10 +1942,7 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	}
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
-	// A grouping-set sentinel has no value payload and therefore also satisfies
-	// IsConstNull, but its grouping bitmap is semantically distinct from SQL
-	// NULL. Preserve it instead of normalizing it into the ordinary NULL cache.
-	if vec.IsConstNull() && !vec.IsGrouping() {
+	if vec.IsConstNull() {
 		var err error
 		vec, err = expr.getConstNullVec(expr.typ, vec.Length())
 		if err != nil {

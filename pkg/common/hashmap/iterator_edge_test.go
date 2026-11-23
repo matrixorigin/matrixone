@@ -38,9 +38,6 @@ func TestIteratorValidationAndNonMatchingHelpers(t *testing.T) {
 	require.ErrorIs(t, validateIteratorVectors([]*vector.Vector{plain}, 1, 2), mpool.ErrAllocationAccountInvalid)
 	require.NoError(t, validateIteratorVectors([]*vector.Vector{constant}, 12, 4))
 
-	plain.GetGrouping().Add(1)
-	require.True(t, hasGroupingInRange([]*vector.Vector{plain}, 0, 2))
-	require.True(t, rowHasGrouping([]*vector.Vector{plain}, 1))
 	plain.GetNulls().Add(0)
 	require.True(t, rowHasNull([]*vector.Vector{plain}, 0))
 	require.False(t, rowHasNull([]*vector.Vector{plain}, 1))
